@@ -92,8 +92,8 @@ password; nothing here needs it.
 Verified 2026-10-24 on the bench, `naut run` on the EPIC with the
 OptoMMP driver dialing the processor's own address (the manifest's
 `192.168.82.243`; `--manifest-host 127.0.0.1` writes loopback, which
-costs the same per request), the EPIC's own stack (Ignition Edge, PAC
-Control engine) still running beside it. DO11 read off the processor
+costs the same per request), the EPIC's own stack (PAC Control engine,
+groov View, Node-RED) still running beside it. DO11 read off the processor
 from the laptop every 100 ms went `0011111000001111100000111111000001111100`;
 zero driver errors in any run. One minute per row, CPU and RSS of the
 `naut` process from `/proc`, the scan time from the driver's status row
@@ -149,5 +149,5 @@ number renders as JSON `null`, the drivers mark such a tag's quality
 endpoint answers 500 with the encoder's reason instead of silence if
 anything else ever fails to render.
 
-The processor's Ignition Edge on 8088 and PAC Control engine on 22001
-are not touched.
+The processor's PAC Control engine on 22001, groov View and Node-RED
+are not touched. (There is no Ignition Edge on the bench unit.)
