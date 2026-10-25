@@ -20,17 +20,13 @@ best-effort numbers that chose it). On the controller: `naut.prev`,
 histogram) and `io/nautilus_io.stage2b` (before the CPU pin) are the
 previous binaries.
 
-**When this branch rebases onto plcnext-groov** (asked by that branch's
-session, 2026-10-24): its user guide
-`website/src/content/docs/guides/plcnext.md` calls the shm tier a design
-preview and lists start-on-boot as not done, and `docs/claims/plcnext.yaml`
-has no rows for this work. Update both in this branch's PR: `transport:
-shm`, `output-watchdog`, `naut plcnext shm --watch` (and `bench`); 0.03 ms
-vs 11 ms and naut 4 % vs 9 %; the keepalive crontab recipe; claims rows
-naming this branch's tests (the layout drift guard, TestDriverOverShm …).
-The best-effort vs SCHED_FIFO benchmark numbers go in the same PR, in the
-guide and the brief with their conditions stated; their claims rows can
-stay `tests: []` with a note until a bench nightly records them.
+**The guide and claims (done 2026-10-25):** plcnext-groov merged in
+(force push is blocked, so merge, not rebase);
+`website/src/content/docs/guides/plcnext.md` now documents `transport:
+shm`, `output-watchdog`, `naut plcnext shm` / `bench`, the numbers with
+their conditions, real-time priority and the boot recipe;
+`docs/claims/plcnext.yaml` has PLX-008…014 (the bench measurements at
+`tests: []` with a note until a bench nightly records them).
 Not yet: `naut-keepalive.sh` honouring a pause file
 (`/tmp/nautilus-bench.lease`, docs/design/bench-testing.md §4) waits on
 James's call on a bench nightly (§9).
