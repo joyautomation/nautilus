@@ -27,6 +27,12 @@ package optommp
 //	                    with a watchdog value go to it after 500 ms without
 //	                    a request; 0s turns it off, absent leaves it alone
 //
+// One more changes only nautilus's side:
+//
+//	priority: 20        run the driver on a thread of its own at SCHED_FIFO
+//	                    20 (Linux, needs CAP_SYS_NICE); keep it under
+//	                    mmpServer's own 30, which every request waits on
+//
 // A binding's point says what it reads (and, for outputs, writes):
 //
 //	di, do          channel state, bool (do is written)
@@ -122,6 +128,12 @@ type Manifest struct {
 	// configured go to it. 0s turns it off; nil leaves the unit's setting
 	// alone.
 	Watchdog *Duration `yaml:"watchdog"`
+	// Priority, when non-zero, runs the driver's loop on one locked thread
+	// at SCHED_FIFO this priority, its socket calls made blocking on that
+	// thread and its scans timed by the kernel's absolute sleep, so no
+	// normal-priority thread sits between a reply and the driver. Needs
+	// CAP_SYS_NICE; refused, the driver keeps the thread and says so.
+	Priority int `yaml:"priority"`
 	// Modules is the chassis as imported. The driver checks each slot's
 	// module type against it on connect and every few seconds after: a
 	// slot that is empty or holds another module makes its tags Bad.
@@ -239,6 +251,9 @@ func (m Manifest) Validate() error {
 		} else if w > 0 && m.Stream == 0 && m.ScanRate > 0 && w < 3*time.Duration(m.ScanRate) {
 			errs = append(errs, fmt.Errorf("watchdog %s is under three scans (%s each): it would trip in normal running", w, time.Duration(m.ScanRate)))
 		}
+	}
+	if m.Priority < 0 || m.Priority > 99 {
+		errs = append(errs, fmt.Errorf("priority %d (SCHED_FIFO priorities are 1–99; 0 or absent runs normally)", m.Priority))
 	}
 	if m.CustomArea || m.Stream > 0 {
 		n := len(planWords(m.Tags, true))

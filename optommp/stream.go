@@ -274,6 +274,70 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 	}
 	d.mu.Unlock()
 
+	last, stale := time.Now(), false
+	nextChassis := last.Add(d.chassis)
+	onPacket := func(p []byte) error {
+		img, err := d.decodeStream(p)
+		if err != nil {
+			d.fail(err)
+			return nil
+		}
+		now := time.Now()
+		if polled {
+			if gap := now.Sub(last).Microseconds(); gap > d.gapMaxUs.Load() {
+				d.gapMaxUs.Store(gap)
+			}
+		}
+		last, stale = now, false
+		n, err := d.deliver(c, img)
+		if err != nil {
+			return err
+		}
+		polled = true
+		d.requests.Store(int64(n))
+		us := time.Since(now).Microseconds()
+		d.scanUs.Store(us)
+		d.scanT.add(us)
+		return nil
+	}
+	onCheck := func() error {
+		idle := time.Since(last)
+		if idle > deadAfter {
+			return fmt.Errorf("optommp: communication timeout: missed incoming stream (none for %s)", idle.Round(time.Millisecond))
+		}
+		if idle > staleAfter && !stale {
+			stale = true
+			d.late.Add(1)
+			d.markStale()
+			d.log.Warn("optommp: stream late; tags Stale until it resumes", "host", d.m.Host, "idle", idle.Round(time.Millisecond))
+		}
+		return nil
+	}
+	onKeep := func() error {
+		if time.Now().Before(nextChassis) {
+			// Feed the watchdog: the stream itself is not a request.
+			_, err := c.ReadUint32(addrWatchdog)
+			return err
+		}
+		if err := d.checkChassis(c); err != nil {
+			return err
+		}
+		if err := d.verifyCustom(c); err != nil {
+			return err
+		}
+		nextChassis = time.Now().Add(d.chassis)
+		return nil
+	}
+	defer uc.Close()
+
+	if d.m.Priority > 0 {
+		if recv, closeFd, ok := udpReceiver(uc, time.Millisecond); ok {
+			defer closeFd()
+			err = d.streamRT(ctx, c, recv, onPacket, onCheck, onKeep, staleAfter/2, keepEvery)
+			return polled, err
+		}
+	}
+
 	pkts := make(chan []byte, 4)
 	go func() {
 		defer close(pkts)
@@ -292,14 +356,11 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 			}
 		}
 	}()
-	defer uc.Close()
 
 	check := time.NewTicker(staleAfter / 2)
 	defer check.Stop()
 	keep := time.NewTicker(keepEvery)
 	defer keep.Stop()
-	last, stale := time.Now(), false
-	nextChassis := last.Add(d.chassis)
 	for {
 		select {
 		case <-ctx.Done():
@@ -308,57 +369,66 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 			if !ok {
 				return polled, errors.New("optommp: stream socket closed")
 			}
-			img, err := d.decodeStream(p)
-			if err != nil {
-				d.fail(err)
-				continue
-			}
-			now := time.Now()
-			if polled {
-				if gap := now.Sub(last).Microseconds(); gap > d.gapMaxUs.Load() {
-					d.gapMaxUs.Store(gap)
-				}
-			}
-			last, stale = now, false
-			n, err := d.deliver(c, img)
-			if err != nil {
+			if err := onPacket(p); err != nil {
 				return polled, err
 			}
-			polled = true
-			d.requests.Store(int64(n))
-			d.scanUs.Store(time.Since(now).Microseconds())
 		case <-check.C:
-			idle := time.Since(last)
-			if idle > deadAfter {
-				return polled, fmt.Errorf("optommp: communication timeout: missed incoming stream (none for %s)", idle.Round(time.Millisecond))
-			}
-			if idle > staleAfter && !stale {
-				stale = true
-				d.late.Add(1)
-				d.markStale()
-				d.log.Warn("optommp: stream late; tags Stale until it resumes", "host", d.m.Host, "idle", idle.Round(time.Millisecond))
+			if err := onCheck(); err != nil {
+				return polled, err
 			}
 		case <-keep.C:
-			if time.Now().Before(nextChassis) {
-				// Feed the watchdog: the stream itself is not a request.
-				if _, err := c.ReadUint32(addrWatchdog); err != nil {
-					return polled, err
-				}
-				continue
-			}
-			if err := d.checkChassis(c); err != nil {
+			if err := onKeep(); err != nil {
 				return polled, err
 			}
-			if err := d.verifyCustom(c); err != nil {
-				return polled, err
-			}
-			nextChassis = time.Now().Add(d.chassis)
 		case <-d.kick:
 			if err := d.flush(c); err != nil {
 				return polled, err
 			}
 		}
 	}
+}
+
+// streamRT is streamLoop on the driver's own thread (priority:): wait in
+// the kernel for the next datagram, a millisecond at a time, and do the
+// staleness check, the keep-alive and any command between — no hand-off
+// to another goroutine, so nothing at normal priority sits in the path.
+func (d *Driver) streamRT(ctx context.Context, c *Client, recv func([]byte) (int, net.IP, error),
+	onPacket func([]byte) error, onCheck, onKeep func() error, checkEvery, keepEvery time.Duration) error {
+	buf := make([]byte, 2048)
+	now := time.Now()
+	nextCheck, nextKeep := now.Add(checkEvery), now.Add(keepEvery)
+	for ctx.Err() == nil {
+		n, from, err := recv(buf)
+		if err != nil {
+			return fmt.Errorf("optommp: stream socket: %w", err)
+		}
+		if n > 0 && from.Equal(d.streamFrom) {
+			if err := onPacket(buf[:n]); err != nil {
+				return err
+			}
+		}
+		now = time.Now()
+		if now.After(nextCheck) {
+			if err := onCheck(); err != nil {
+				return err
+			}
+			nextCheck = now.Add(checkEvery)
+		}
+		if now.After(nextKeep) {
+			if err := onKeep(); err != nil {
+				return err
+			}
+			nextKeep = now.Add(keepEvery)
+		}
+		select {
+		case <-d.kick:
+			if err := d.flush(c); err != nil {
+				return err
+			}
+		default:
+		}
+	}
+	return nil
 }
 
 // decodeStream checks one datagram's header and returns its words.

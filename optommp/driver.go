@@ -148,6 +148,9 @@ type Driver struct {
 	late      atomic.Uint64 // times the stream went quiet long enough to go Stale
 	gapMaxUs  atomic.Int64  // longest gap between datagrams
 	lastErr   atomic.Value  // string
+	schedErr  atomic.Value  // string: why priority: was refused, "" when applied
+	scanT     timing        // each scan's (or datagram's) handling time
+	wakeT     timing        // each polled scan's start after its slot
 
 	kick   chan struct{}
 	cancel context.CancelFunc
@@ -177,6 +180,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		kick:       make(chan struct{}, 1),
 	}
 	d.lastErr.Store("")
+	d.schedErr.Store("")
 	for _, o := range opts {
 		o(d)
 	}
@@ -261,11 +265,23 @@ func (d *Driver) Stop() {
 
 func (d *Driver) run(ctx context.Context) {
 	defer close(d.done)
+	if p := d.m.Priority; p > 0 {
+		// The whole loop, every session, on this one thread (rt_linux.go).
+		if err := rtThread(p); err != nil {
+			d.schedErr.Store(err.Error())
+			d.log.Warn("optommp: priority refused", "host", d.m.Host, "err", err)
+		} else {
+			d.log.Info("optommp: driver thread at SCHED_FIFO", "host", d.m.Host, "priority", p)
+		}
+	}
 	backoff := d.retryMin
 	for {
 		conn, err := d.dial(ctx)
 		polled := false
 		if err == nil {
+			if d.m.Priority > 0 {
+				conn = blockingConn(conn)
+			}
 			c := NewClient(conn, time.Duration(d.m.Timeout))
 			polled, err = d.session(ctx, c)
 			c.Close()
@@ -334,10 +350,19 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 		return d.streamLoop(ctx, c, uc)
 	}
 
-	tick := time.NewTicker(d.scanRate)
-	defer tick.Stop()
-	nextChassis := time.Now().Add(d.chassis)
+	// Scan k is due at start + k·scan-rate; how late each one starts is
+	// the wake-up lateness on the status row. With priority: the driver
+	// sleeps to the slot in the kernel; without, a ticker wakes it.
+	start := time.Now()
+	slot := start
+	var tick *time.Ticker
+	if d.m.Priority == 0 {
+		tick = time.NewTicker(d.scanRate)
+		defer tick.Stop()
+	}
+	nextChassis := start.Add(d.chassis)
 	for {
+		d.wakeT.add(time.Since(slot).Microseconds())
 		if err := d.poll(c); err != nil {
 			return polled, err
 		}
@@ -353,12 +378,23 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 			}
 			nextChassis = time.Now().Add(d.chassis)
 		}
+		if tick == nil {
+			// The next slot still ahead: a scan that overran skips the
+			// slots it missed rather than running them back to back.
+			for slot = slot.Add(d.scanRate); !time.Now().Before(slot); slot = slot.Add(d.scanRate) {
+			}
+			if ok, err := d.sleepTo(ctx, c, slot); !ok {
+				return polled, err
+			}
+			continue
+		}
 		for waiting := true; waiting; {
 			select {
 			case <-ctx.Done():
 				return polled, nil
 			case <-tick.C:
 				waiting = false
+				slot = start.Add(time.Since(start) / d.scanRate * d.scanRate)
 			case <-d.kick:
 				// A command: write it now, read on the next tick.
 				if err := d.flush(c); err != nil {
@@ -429,8 +465,34 @@ func (d *Driver) poll(c *Client) error {
 	}
 	n, err := d.deliver(c, img)
 	d.requests.Store(int64(reqs + n))
-	d.scanUs.Store(time.Since(t0).Microseconds())
+	us := time.Since(t0).Microseconds()
+	d.scanUs.Store(us)
+	d.scanT.add(us)
 	return err
+}
+
+// sleepTo waits on the driver's own thread until deadline, a millisecond
+// at a time in the kernel, writing any command that arrives meanwhile.
+// ok is false when ctx ended the wait or a write failed (err).
+func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time) (ok bool, err error) {
+	for {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return true, nil
+		}
+		if ctx.Err() != nil {
+			return false, nil
+		}
+		select {
+		case <-d.kick:
+			if err := d.flush(c); err != nil {
+				return false, err
+			}
+			continue
+		default:
+		}
+		nap(min(rem, time.Millisecond))
+	}
 }
 
 // fetch reads the scan's words: the packed areas one block read each, or
@@ -754,6 +816,15 @@ type Health struct {
 	// watchdog value enabled.
 	WatchdogMs     int64
 	Armed, Armable int
+	// ScanP99Us / ScanMaxUs are scan time over every scan (or datagram)
+	// since start; WakeP99Us / WakeMaxUs how late each polled scan started
+	// after its slot. A p99 is the upper edge of its 1-2-5 bucket.
+	ScanP99Us, ScanMaxUs int64
+	WakeP99Us, WakeMaxUs int64
+	// Priority is the manifest's SCHED_FIFO priority (0: normal);
+	// SchedError why the OS refused it, "" when applied.
+	Priority   int
+	SchedError string
 }
 
 func (d *Driver) mode() string {
@@ -793,6 +864,9 @@ func (d *Driver) Health() Health {
 	h.Tags = len(d.m.Tags)
 	h.Mode, h.Stream = d.mode(), time.Duration(d.m.Stream)
 	h.Late, h.GapMaxUs = d.late.Load(), d.gapMaxUs.Load()
+	h.ScanP99Us, h.ScanMaxUs = d.scanT.stats()
+	h.WakeP99Us, h.WakeMaxUs = d.wakeT.stats()
+	h.Priority, h.SchedError = d.m.Priority, d.schedErr.Load().(string)
 	return h
 }
 

@@ -626,6 +626,21 @@ func optommpStatus(h optommp.Health) server.DriverStatus {
 		}
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "scan", Value: float64(h.ScanUs) / 1000,
 			Text: fmt.Sprintf("%.2f ms, %d request(s) every %s%s", float64(h.ScanUs)/1000, h.Requests, h.ScanRate, how), Volatile: true})
+		if h.WakeMaxUs > 0 {
+			s.Metrics = append(s.Metrics, server.DriverMetric{Label: "wake", Value: float64(h.WakeP99Us) / 1000,
+				Text: fmt.Sprintf("p99 ≤ %.2f ms, max %.2f ms late", float64(h.WakeP99Us)/1000, float64(h.WakeMaxUs)/1000), Volatile: true})
+		}
+	}
+	if h.ScanMaxUs > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "scan p99", Value: float64(h.ScanP99Us) / 1000,
+			Text: fmt.Sprintf("p99 ≤ %.2f ms, max %.2f ms", float64(h.ScanP99Us)/1000, float64(h.ScanMaxUs)/1000), Volatile: true})
+	}
+	if h.Priority > 0 {
+		text := fmt.Sprintf("SCHED_FIFO %d", h.Priority)
+		if h.SchedError != "" {
+			text = "REFUSED — " + h.SchedError
+		}
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "priority", Value: float64(h.Priority), Text: text})
 	}
 	if h.WatchdogMs > 0 {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "watchdog", Value: float64(h.WatchdogMs),

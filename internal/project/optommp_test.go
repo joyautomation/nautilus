@@ -144,3 +144,21 @@ func TestOptommpStatusStreamAndWatchdog(t *testing.T) {
 		t.Error("no late count")
 	}
 }
+
+func TestOptommpStatusTimingAndPriority(t *testing.T) {
+	h := optommp.Health{Host: "10.0.0.5", Port: 2001, Connected: true, Mode: "poll", ScanRate: 20 * time.Millisecond,
+		ScanUs: 1500, Requests: 3, ScanP99Us: 5000, ScanMaxUs: 6100, WakeP99Us: 200, WakeMaxUs: 450, Priority: 20}
+	got := map[string]string{}
+	for _, m := range optommpStatus(h).Metrics {
+		got[m.Label] = m.Text
+	}
+	if got["scan p99"] != "p99 ≤ 5.00 ms, max 6.10 ms" || got["wake"] != "p99 ≤ 0.20 ms, max 0.45 ms late" || got["priority"] != "SCHED_FIFO 20" {
+		t.Errorf("metrics: %q", got)
+	}
+	h.SchedError = "SCHED_FIFO priority 20: operation not permitted"
+	for _, m := range optommpStatus(h).Metrics {
+		if m.Label == "priority" && !strings.HasPrefix(m.Text, "REFUSED — SCHED_FIFO priority 20") {
+			t.Errorf("refused priority shown as %q", m.Text)
+		}
+	}
+}
