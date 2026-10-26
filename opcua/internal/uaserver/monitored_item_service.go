@@ -150,6 +150,28 @@ func notify(sub *Subscription, val *ua.MonitoredItemNotification) {
 	}
 }
 
+// dropUnreported removes from q, a subscription's queue keyed by client
+// handle, every notification no item of that subscription is reporting
+// now: its item is Disabled or Sampling, or has been deleted.
+func (s *MonitoredItemService) dropUnreported(subID uint32, q map[uint32]*ua.MonitoredItemNotification) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	reporting := make(map[uint32]bool, len(s.Subs[subID]))
+	for _, item := range s.Subs[subID] {
+		if item == nil || item.Req == nil || item.Req.RequestedParameters == nil {
+			continue
+		}
+		if item.Mode == ua.MonitoringModeReporting {
+			reporting[item.Req.RequestedParameters.ClientHandle] = true
+		}
+	}
+	for h := range q {
+		if !reporting[h] {
+			delete(q, h)
+		}
+	}
+}
+
 func (s *MonitoredItemService) NextID() uint32 {
 	i := atomic.AddUint32(&s.id, 1)
 	if i == 0 {

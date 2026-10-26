@@ -266,7 +266,9 @@ func monitorable(srv *opcserver.Server, ns *namespace, item *ua.MonitoredItemCre
 
 // setMonitoringMode records each item's mode, which the sweep reads: a
 // Disabled or Sampling item is not reported to until it is Reporting
-// again, and then hears the current value first (Part 4 §5.12.4). An id
+// again, and then hears the current value first (Part 4 §5.12.4); what it
+// had queued but not yet published is dropped (uaserver's publish loop
+// checks each notification's item as it publishes). An id
 // that is not an item of the named subscription is Bad_MonitoredItemIdInvalid
 // in its own result; gopcua dereferenced it.
 func setMonitoringMode(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
@@ -300,6 +302,11 @@ func setMonitoringMode(srv *opcserver.Server, r ua.Request) (ua.Response, error)
 		results[i] = ua.StatusGood
 	}
 	mi.Mu.Unlock()
+	// A value queued while the item was Reporting is dropped at publish
+	// time if it is not Reporting now; the fence makes sure no publish
+	// checked before this change is still on its way when the client hears
+	// Good (black-box F-27, an intermittent notification after Disabled).
+	sub.Fence()
 	return &ua.SetMonitoringModeResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }
 
@@ -339,5 +346,6 @@ func deleteMonitoredItems(srv *opcserver.Server, r ua.Request) (ua.Response, err
 	for _, id := range gone {
 		mi.DeleteMonitoredItem(id) // takes the lock itself
 	}
+	sub.Fence() // as in setMonitoringMode: nothing of a deleted item is published after this answer
 	return &ua.DeleteMonitoredItemsResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }

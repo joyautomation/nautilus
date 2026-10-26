@@ -259,6 +259,7 @@ claims:
       - go ./opcua/server TestRevisePublishing
       - go ./opcua/server TestPublishingIntervalIsRevisedNotActedOn
       - go ./opcua/server TestMonitoringModeIsHonoured
+      - go ./opcua/server TestDisablingDropsWhatTheItemHadQueued
       - go ./opcua/server TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription
       - go ./opcua/server TestNewItemHearsTheCurrentValueOnce
       - go ./tools/blackbox TestBlackbox/001-F25-publish-interval-zero-crash

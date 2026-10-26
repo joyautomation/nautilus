@@ -303,6 +303,20 @@ type Subscription struct {
 	// done is closed when the background task returns. The task is the only reader of
 	// NotifyChannel, so once done is closed a send on NotifyChannel can never complete.
 	done chan struct{}
+
+	// publishMu is held from the moment a publish response's notifications
+	// are checked against their items' monitoring modes until it is sent.
+	publishMu sync.Mutex
+}
+
+// Fence returns once any publish response this subscription is composing
+// has been sent. A service that changes what an item reports
+// (SetMonitoringMode, DeleteMonitoredItems) calls it after the change and
+// before it answers, so nothing checked against the old state reaches the
+// client after the answer. It waits on at most one send.
+func (s *Subscription) Fence() {
+	s.publishMu.Lock()
+	s.publishMu.Unlock() //nolint:staticcheck // an empty critical section is the point
 }
 
 func NewSubscription() *Subscription {
@@ -465,6 +479,27 @@ func (s *Subscription) run() {
 		lifetime_counter = 0
 		keepalive_counter = 0
 
+		// What is published is what the items are reporting now: a
+		// notification queued before its item was set Disabled or Sampling,
+		// or deleted, is dropped rather than sent after the client was told
+		// the item had stopped (Part 4 §5.12.1.3, §5.12.4). publishMu makes
+		// the check and the send one step that Fence can wait for.
+		s.publishMu.Lock()
+		if mi := s.srv.srv.MonitoredItemService; mi != nil {
+			mi.dropUnreported(s.ID, publishQueue)
+		}
+		if len(publishQueue) == 0 {
+			err := s.keepalive(pubreq)
+			s.publishMu.Unlock()
+			if err != nil {
+				if s.srv.srv.cfg.logger != nil {
+					s.srv.srv.cfg.logger.Warn("problem sending keepalive to subscription #%d: %v", s.ID, err)
+				}
+				return
+			}
+			continue
+		}
+
 		s.SequenceID++
 		if s.SequenceID == 0 {
 			// per the spec, the sequence ID cannot be 0
@@ -519,6 +554,7 @@ func (s *Subscription) run() {
 			DiagnosticInfos:          []*ua.DiagnosticInfo{},
 		}
 		err := s.Channel.SendResponseWithContext(context.Background(), pubreq.ID, response)
+		s.publishMu.Unlock()
 		if err != nil {
 			if s.srv.srv.cfg.logger != nil {
 				s.srv.srv.cfg.logger.Error("problem sending channel response: %v", err)
