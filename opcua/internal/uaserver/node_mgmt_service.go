@@ -1,4 +1,4 @@
-package server
+package uaserver
 
 import (
 	"github.com/gopcua/opcua/ua"

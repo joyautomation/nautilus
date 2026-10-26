@@ -1,4 +1,4 @@
-package server
+package uaserver
 
 import (
 	"maps"
@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gopcua/opcua/id"
-	"github.com/gopcua/opcua/server/attrs"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/opcua/internal/uaserver/attrs"
 )
 
 // This namespaces give a convenient way to have data mapped to the OPC server
