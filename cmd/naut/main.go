@@ -65,6 +65,13 @@ Usage:
                           one node per UDT tag a kind can draw, laid out
                           on a grid; nobody types a node). naut check
                           holds every scene file to the tags and UDTs.
+  naut optommp <cmd>  Opto 22 groov EPIC/RIO tools: browse (the chassis the
+                          processor reports) and import (that chassis as an
+                          optommp manifest + tag file for the optommp driver,
+                          or --modbus for the processor's Modbus map).
+  naut plcnext <cmd>  Phoenix Contact PLCnext tools: browse (BusConductor
+                          state and the process image, on the controller)
+                          and tags (the tag file for a plcnext manifest).
   naut snmp <cmd>     SNMP tools: import | browse | serve | tags (switches, PDUs, UPSes)
   naut redfish <cmd>  Redfish tools: import | browse | serve | tags (server BMCs)
   naut prometheus <cmd>  node_exporter tools: import | browse | serve | tags (hosts)
@@ -126,6 +133,10 @@ func main() {
 		os.Exit(runSparkplug(os.Args[2:]))
 	case "modbus":
 		os.Exit(runModbus(os.Args[2:]))
+	case "optommp":
+		os.Exit(runOptommp(os.Args[2:]))
+	case "plcnext":
+		os.Exit(runPlcnext(os.Args[2:]))
 	case "snmp":
 		os.Exit(runSnmp(os.Args[2:]))
 	case "redfish":

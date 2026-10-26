@@ -1,0 +1,59 @@
+///////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright PHOENIX CONTACT Electronics GmbH
+//
+///////////////////////////////////////////////////////////////////////////////
+
+syntax = "proto3";
+package Arp.Plc.Grpc;
+
+option go_package = "github.com/joyautomation/nautilus/plcnext/gen/plc";
+
+enum DataType
+{
+    DT_None           = 0;
+    DT_Void           = 1;
+    DT_Bit            = 2;
+    DT_Boolean        = 3;
+    DT_UInt8          = 4;
+    DT_Int8           = 5;
+    DT_Char8          = 6;
+    DT_Char16         = 7;
+    DT_UInt16         = 8;
+    DT_Int16          = 9;
+    DT_UInt32         = 10;
+    DT_Int32          = 11;
+    DT_UInt64         = 12;
+    DT_Int64          = 13;
+    DT_Float32        = 14;
+    DT_Float64        = 15;
+    DT_Primitive      = 32;
+    DT_DateTime       = 33;
+    DT_IecTime        = 34;
+    DT_IecTime64      = 35;
+    DT_IecDate        = 36;
+    DT_IecDate64      = 37;
+    DT_IecDateTime    = 38;
+    DT_IecDateTime64  = 39;
+    DT_IecTimeOfDay   = 40;
+    DT_IecTimeOfDay64 = 41;
+    DT_StaticString   = 42;
+    DT_IecString      = 43;
+    DT_ClrString      = 44;
+    DT_String         = 45;
+    DT_Elementary     = 64;
+    DT_ArrayElement   = 65;
+    DT_Struct         = 66;
+    DT_Class          = 67;
+    DT_FunctionBlock  = 68;
+    DT_Subsystem      = 69;
+    DT_Program        = 70;
+    DT_Component      = 71;
+    DT_Library        = 72;
+    DT_Complex        = 254;
+    DT_Pointer        = 512;
+    DT_Array          = 1024;
+    DT_Enum           = 2048;
+    DT_Reference      = 4096;
+    DT_BaseTypeMask   = 255;
+}

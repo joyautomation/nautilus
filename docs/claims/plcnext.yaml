@@ -1,0 +1,138 @@
+page: website/src/content/docs/guides/plcnext.md
+title: Phoenix Contact PLCnext
+prefix: PLX
+claims:
+  - id: PLX-001
+    claim: >-
+      The driver reads only the image bytes its bindings reach, one element
+      name per byte (`Port[i]`), in one multi-item read per scan, and
+      flushes the output span as one write.
+    source: "#how-the-io-reaches-nautilus"
+    tests:
+      - go ./plcnext TestDriverAgainstFakeFirmware
+    partial: true
+    note: Against a fake of the firmware's data-access service; the firmware behaviour it models was measured on 2023.0.
+  - id: PLX-002
+    claim: >-
+      The driver brings the bus up through BusConductor with rising edges
+      on CONFIG_REQ and START_IO_REQ, and leaves a bus that is already
+      configured and running alone (no request edge on reconnect).
+    source: "#how-the-io-reaches-nautilus"
+    tests:
+      - go ./plcnext TestDriverAgainstFakeFirmware
+      - go ./plcnext TestHandshakeIsIdempotent
+  - id: PLX-003
+    claim: >-
+      A manifest that omits socket, inputs, outputs, run-port and
+      byte-order gets the defaults (the local socket, the PND_S1 mirrors,
+      the AXIO RUN bit, big-endian); `run-port: none` disables the RUN
+      check.
+    source: "#run-nautilus"
+    tests:
+      - go ./plcnext TestManifestParsesWithDefaults
+  - id: PLX-004
+    claim: >-
+      Bit and integer formats decode from and encode into the image at
+      the manifest's byte offsets.
+    source: "#run-nautilus"
+    tests:
+      - go ./plcnext TestCodec
+  - id: PLX-005
+    claim: >-
+      The bus RUN bit is the image's quality: when it drops, every input
+      is bad on a live connection.
+    source: "#what-it-does-not-do-yet"
+    tests:
+      - go ./plcnext TestDriverAgainstFakeFirmware
+  - id: PLX-006
+    claim: >-
+      Without BusConductor, or with a port the firmware does not answer
+      for, the driver reports the problem instead of running on a
+      half-bound image.
+    source: "#how-the-io-reaches-nautilus"
+    tests:
+      - go ./plcnext TestDriverWithoutBusConductorAndMissingPort
+  - id: PLX-007
+    claim: >-
+      On the bench controller the plcnext-bench project ran at about 9 %
+      of one core and 23 MB resident, with about 11 ms per scan's image
+      exchange over the local socket.
+    source: "#run-nautilus"
+    tests: []
+    note: >-
+      A bench measurement (2026-10-24), written up in
+      docs/design/open-controllers.md §3. No automated test yet; the
+      bench nightly is planned to record it per run.
+  - id: PLX-008
+    claim: >-
+      `transport` defaults to grpc and `output-watchdog` to 1s; `transport:
+      shm` with `output-watchdog: "0"` holds the last outputs, and an
+      unknown transport or an unparseable watchdog is refused.
+    source: "#faster-the-in-process-tier"
+    tests:
+      - go ./plcnext TestManifestTransport
+  - id: PLX-009
+    claim: >-
+      The Go driver and the C shim agree on the exchange page's layout:
+      every offset and flag in the shim's header is checked against the
+      driver's, in both directions.
+    source: "#faster-the-in-process-tier"
+    tests:
+      - go ./plcnext TestShmLayoutMatchesTheShimsHeader
+  - id: PLX-010
+    claim: >-
+      On transport shm the handshake goes over gRPC and the image through
+      the page: inputs in, outputs out to the frame, quality from the
+      shim's RUN bit, Stale when the shim stops cycling, a new handshake
+      when the shim restarts, and the output frame driven to zero once
+      the driver stops refreshing it.
+    source: "#faster-the-in-process-tier"
+    tests:
+      - go ./plcnext TestDriverOverShm
+    partial: true
+    note: >-
+      Against a Go fake of the shim that follows its header; the C shim's
+      own watchdog and restart were tried by hand on the bench
+      (2026-10-24, rt/plcnext-io/README.md Status).
+  - id: PLX-011
+    claim: >-
+      With no BusConductor to nudge, transport shm needs no gRPC; with no
+      page, the session fails saying so and the inputs stay not connected.
+    source: "#faster-the-in-process-tier"
+    tests:
+      - go ./plcnext TestShmWithoutBusConductorNeverDials
+      - go ./plcnext TestShmMissingPage
+  - id: PLX-012
+    claim: >-
+      On the bench controller, transport shm took 0.03–0.05 ms per scan for
+      the image against ~11 ms on grpc, and naut 4 % of one core against
+      9 % at a 50 ms scan.
+    source: "#faster-the-in-process-tier"
+    tests: []
+    note: >-
+      A bench measurement (2026-10-24), in rt/plcnext-io/README.md Status.
+      No automated test; the bench nightly (docs/design/bench-testing.md)
+      is planned to record it per run.
+  - id: PLX-013
+    claim: >-
+      Pinned to CPU 1, the shim was late (over 200 µs) in 0.13 % of cycles
+      quiet, 0.20 % beside two busy loops and 33 % under a stream into the
+      Ethernet best-effort; at SCHED_FIFO 80 none quiet or beside the busy
+      loops, and 3.2 % under the stream, none by more than 1 ms.
+    source: "#real-time-priority"
+    tests: []
+    note: >-
+      `naut plcnext bench` runs (2026-10-25, 3-minute windows, naut at a
+      50 ms scan on CPU 0, its task at FIFO 40), recorded in the
+      controller's bench.jsonl and in rt/plcnext-io/README.md. No automated
+      test until a bench nightly records them.
+  - id: PLX-014
+    claim: >-
+      With the keepalive crontab, naut starts at boot and is restarted
+      within a minute of a crash; after a reboot naut, the shim at FIFO 80
+      and the heartbeat came back with no hand on them.
+    source: "#start-on-boot"
+    tests: []
+    note: >-
+      Tried on the bench (2026-10-24 kill, 2026-10-25 reboot),
+      examples/plcnext-bench/README.md. No automated test.

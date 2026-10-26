@@ -23,4 +23,4 @@ tools/vscode-iec/.vscode-test/
 /nautilus
 /naut
 *.exe
-
+.env

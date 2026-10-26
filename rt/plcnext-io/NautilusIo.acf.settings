@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AcfSettingsDocument
+xmlns="http://www.phoenixcontact.com/schema/acfsettings"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xsi:schemaLocation="http://www.phoenixcontact.com/schema/acfsettings.xsd"
+schemaVersion="1.0" >
+
+<RscSettings path="/etc/plcnext/device/System/Rsc/Rsc.settings"/>
+
+<LogSettings logLevel="Info" logDir="logs" />
+
+<EnvironmentVariables>
+   <EnvironmentVariable name="ARP_BINARY_DIR" value="/usr/lib" />
+</EnvironmentVariables>
+
+</AcfSettingsDocument>

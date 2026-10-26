@@ -80,8 +80,9 @@ func TestBuildWarnsWhenEmbeddedProjectIsOver50MB(t *testing.T) {
 }
 
 // The release configuration promises macOS, Linux and Windows on amd64 and
-// arm64 with no runtime dependencies (CGO off) and a checksums.txt beside
-// the archives; the CLI must really compile for every one of those targets.
+// arm64, plus Linux on ARMv7, with no runtime dependencies (CGO off) and a
+// checksums.txt beside the archives; the CLI must really compile for every
+// one of those targets.
 func TestReleaseTargetsBuildWithoutCgo(t *testing.T) {
 	raw, err := os.ReadFile("../../.goreleaser.yaml")
 	if err != nil {
@@ -93,6 +94,11 @@ func TestReleaseTargetsBuildWithoutCgo(t *testing.T) {
 			Env    []string `yaml:"env"`
 			Goos   []string `yaml:"goos"`
 			Goarch []string `yaml:"goarch"`
+			Goarm  []string `yaml:"goarm"`
+			Ignore []struct {
+				Goos   string `yaml:"goos"`
+				Goarch string `yaml:"goarch"`
+			} `yaml:"ignore"`
 		} `yaml:"builds"`
 		Checksum struct {
 			Name string `yaml:"name_template"`
@@ -125,12 +131,30 @@ func TestReleaseTargetsBuildWithoutCgo(t *testing.T) {
 	if testing.Short() {
 		t.Skip("cross-compiles the CLI for every release target")
 	}
+	ignored := func(goos, goarch string) bool {
+		for _, ig := range b.Ignore {
+			if ig.Goos == goos && ig.Goarch == goarch {
+				return true
+			}
+		}
+		return false
+	}
 	for _, goos := range b.Goos {
 		for _, goarch := range b.Goarch {
-			t.Run(goos+"_"+goarch, func(t *testing.T) {
-				buildNautCLI(t, t.TempDir(), []string{
-					"CGO_ENABLED=0", "GOOS=" + goos, "GOARCH=" + goarch,
-				})
+			if ignored(goos, goarch) {
+				continue
+			}
+			env := []string{"CGO_ENABLED=0", "GOOS=" + goos, "GOARCH=" + goarch}
+			name := goos + "_" + goarch
+			if goarch == "arm" {
+				if len(b.Goarm) != 1 {
+					t.Fatalf("goarm %v: want exactly one ARM version", b.Goarm)
+				}
+				env = append(env, "GOARM="+b.Goarm[0])
+				name += "v" + b.Goarm[0]
+			}
+			t.Run(name, func(t *testing.T) {
+				buildNautCLI(t, t.TempDir(), env)
 			})
 		}
 	}

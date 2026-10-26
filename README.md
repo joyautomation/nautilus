@@ -64,9 +64,12 @@ examples/    four real plant projects — lift-station, batch-skid, remote-fleet
 
 **Platforms:** nautilus is one static binary with no runtime dependencies.
 Every release ships builds for **macOS** (Apple Silicon and Intel),
-**Linux** (x86-64 and arm64), and **Windows** (x86-64 and arm64); the
-controller it builds runs anywhere the same binary does, from a laptop to a
-Raspberry Pi to a Kubernetes pod. VS Code is the editor experience on all
+**Linux** (x86-64, arm64 and ARMv7), and **Windows** (x86-64 and arm64);
+the controller it builds runs anywhere the same binary does, from a laptop
+to a Raspberry Pi to a Kubernetes pod, and on vendor controllers that open
+their Linux: an Opto 22 groov EPIC and a Phoenix Contact PLCnext (see the
+[groov EPIC](https://nautilus.joyautomation.com/guides/groov-epic/) and
+[PLCnext](https://nautilus.joyautomation.com/guides/plcnext/) guides). VS Code is the editor experience on all
 three. The
 [release page](https://github.com/joyautomation/nautilus/releases/latest)
 has the archives and a `checksums.txt`.

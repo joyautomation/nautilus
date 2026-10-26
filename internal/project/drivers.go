@@ -9,6 +9,8 @@ import (
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
+	"github.com/joyautomation/nautilus/optommp"
+	"github.com/joyautomation/nautilus/plcnext"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/replay"
@@ -60,6 +62,10 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
 	case *prom.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
+	case *plcnext.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return plcnextStatus(drv.Health()) }}
+	case *optommp.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return optommpStatus(drv.Health()) }}
 	case *replay.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return replayStatus(drv.Health()) }}
 	case *nio.Multi:
@@ -585,6 +591,136 @@ func agoText(ms int64) string {
 	default:
 		return fmt.Sprintf("%.0fh", d.Hours()) // 2h
 	}
+}
+
+// plcnextStatus is the one-row status of the controller's own I/O: the
+// route (the firmware's socket, or the in-process shim's page), whether
+// BusConductor has the bus up, image sizes and round trip — and on
+// transport shm the shim's own cycle: input age, lateness, the output
+// generation it has applied.
+func plcnextStatus(h plcnext.Health) server.DriverStatus {
+	detail := h.Socket
+	if h.Transport == plcnext.TransportShm {
+		detail = "shm " + h.Shm
+	}
+	s := server.DriverStatus{Kind: "plcnext", Name: "plcnext", Detail: detail, LastError: h.LastError}
+	switch {
+	case h.Connected && h.Degraded != "":
+		s.State, s.Message = "error", h.Degraded
+	case h.Connected && h.Configured && h.Running:
+		s.State, s.Message = "connected", fmt.Sprintf("Axioline bus running, %d module(s)", h.Modules)
+	case h.Connected && h.Configured:
+		s.State, s.Message = "error", fmt.Sprintf("Axioline bus configured (%d module(s)) but not running: inputs are Bad", h.Modules)
+	case h.Connected:
+		s.State, s.Message = "connecting", "Configuring the Axioline bus"
+	case h.LastError != "":
+		s.State, s.Message = "error", "Not connected to the firmware"
+	default:
+		s.State, s.Message = "connecting", "Connecting to the firmware"
+	}
+	if h.Shim != nil && h.Shim.Watchdog {
+		s.State, s.Message = "error", "The shim's output watchdog lapsed: outputs are driven to zero"
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(h.Tags)},
+		{Label: "reads", Value: float64(h.Reads), Volatile: true},
+		{Label: "writes", Value: float64(h.Writes), Volatile: true},
+		{Label: "errors", Value: float64(h.Errors)},
+		{Label: "rtt", Value: float64(h.RTTus) / 1000, Text: fmt.Sprintf("%.2f ms", float64(h.RTTus)/1000), Volatile: true},
+		{Label: "i/o bytes", Value: float64(h.InBytes), Text: fmt.Sprintf("%d / %d", h.InBytes, h.OutBytes)},
+	}
+	// The card's tiles hold about nine characters of value and ten of
+	// label, so each shim fact is a short value under its own label;
+	// `naut plcnext shm` has the long form.
+	if sh := h.Shim; sh != nil {
+		sched := "normal"
+		if sh.FIFO {
+			sched = "FIFO"
+		}
+		latePct := 0.0
+		if sh.Cycles > 0 {
+			latePct = 100 * float64(sh.Late) / float64(sh.Cycles)
+		}
+		// The shim reads the outputs a cycle after this driver writes them,
+		// so one generation behind is current.
+		applied := "current"
+		if sh.Written > sh.Applied+1 {
+			applied = fmt.Sprintf("%d behind", sh.Written-sh.Applied)
+		}
+		s.Metrics = append(s.Metrics,
+			server.DriverMetric{Label: "input age", Value: float64(sh.InputAgeUs) / 1000, Text: fmt.Sprintf("%.2f ms", float64(sh.InputAgeUs)/1000), Volatile: true},
+			server.DriverMetric{Label: "shim cycle", Value: float64(sh.PeriodUs) / 1000, Text: fmt.Sprintf("%g ms", float64(sh.PeriodUs)/1000)},
+			server.DriverMetric{Label: "shim sched", Value: 0, Text: sched},
+			server.DriverMetric{Label: "shim late", Value: latePct, Text: fmt.Sprintf("%.2f %%", latePct), Volatile: true},
+			server.DriverMetric{Label: "shim worst", Value: float64(sh.WorstUs) / 1000, Text: fmt.Sprintf("%.1f ms", float64(sh.WorstUs)/1000), Volatile: true},
+			server.DriverMetric{Label: "outputs", Value: float64(sh.Written - min(sh.Applied, sh.Written)), Text: applied, Volatile: true},
+		)
+		if sh.Held > 0 {
+			s.Metrics = append(s.Metrics, server.DriverMetric{Label: "held reads", Value: float64(sh.Held), Volatile: true})
+		}
+	}
+	return s
+}
+
+// optommpStatus is the one-row status of a groov chassis: the processor
+// and firmware, whether every bound slot holds the module the manifest
+// names, and what a scan costs.
+func optommpStatus(h optommp.Health) server.DriverStatus {
+	s := server.DriverStatus{Kind: "optommp", Name: h.Host, LastError: h.LastError}
+	s.Detail = fmt.Sprintf("%s:%d", h.Host, h.Port)
+	if h.Unit != "" {
+		s.Detail = fmt.Sprintf("%s · firmware %s · %s", h.Unit, h.Firmware, s.Detail)
+	}
+	switch {
+	case h.Connected && h.Faults != "":
+		s.State, s.Message = "error", h.Faults
+	case h.Connected:
+		s.State, s.Message = "connected", fmt.Sprintf("%d module(s) as imported, %d of %d tags bad", h.Modules, h.BadTags, h.Tags)
+	case h.LastError != "":
+		s.State, s.Message = "error", "Not connected to the processor"
+	default:
+		s.State, s.Message = "connecting", "Connecting to the processor"
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(h.Tags)},
+		{Label: "bad", Value: float64(h.BadTags)},
+		{Label: "reads", Value: float64(h.Reads), Volatile: true},
+		{Label: "writes", Value: float64(h.Writes), Volatile: true},
+		{Label: "errors", Value: float64(h.Errors)},
+	}
+	switch h.Mode {
+	case "stream":
+		s.Metrics = append(s.Metrics,
+			server.DriverMetric{Label: "stream", Value: float64(h.GapMaxUs) / 1000, Text: fmt.Sprintf("every %s, longest gap %.1f ms", h.Stream, float64(h.GapMaxUs)/1000), Volatile: true},
+			server.DriverMetric{Label: "late", Value: float64(h.Late)})
+	default:
+		how := ""
+		if h.Mode == "custom area" {
+			how = " through the custom area"
+		}
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "scan", Value: float64(h.ScanUs) / 1000,
+			Text: fmt.Sprintf("%.2f ms, %d request(s) every %s%s", float64(h.ScanUs)/1000, h.Requests, h.ScanRate, how), Volatile: true})
+		if h.WakeMaxUs > 0 {
+			s.Metrics = append(s.Metrics, server.DriverMetric{Label: "wake", Value: float64(h.WakeP99Us) / 1000,
+				Text: fmt.Sprintf("p99 ≤ %.2f ms, max %.2f ms late", float64(h.WakeP99Us)/1000, float64(h.WakeMaxUs)/1000), Volatile: true})
+		}
+	}
+	if h.ScanMaxUs > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "scan p99", Value: float64(h.ScanP99Us) / 1000,
+			Text: fmt.Sprintf("p99 ≤ %.2f ms, max %.2f ms", float64(h.ScanP99Us)/1000, float64(h.ScanMaxUs)/1000), Volatile: true})
+	}
+	if h.Priority > 0 {
+		text := fmt.Sprintf("SCHED_FIFO %d", h.Priority)
+		if h.SchedError != "" {
+			text = "REFUSED — " + h.SchedError
+		}
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "priority", Value: float64(h.Priority), Text: text})
+	}
+	if h.WatchdogMs > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "watchdog", Value: float64(h.WatchdogMs),
+			Text: fmt.Sprintf("%d ms, %d of %d bound outputs have a watchdog value", h.WatchdogMs, h.Armed, h.Armable)})
+	}
+	return s
 }
 
 // replayStatus is a recording being played back. Only what changes when

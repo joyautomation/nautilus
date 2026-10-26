@@ -1,0 +1,57 @@
+///////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright PHOENIX CONTACT Electronics GmbH
+//
+///////////////////////////////////////////////////////////////////////////////
+
+syntax = "proto3";
+
+import "plc/gds/DataAccessError.proto";
+import "plc/gds/ReadItem.proto";
+import "plc/gds/WriteItem.proto";
+
+package Arp.Plc.Gds.Services.Grpc;
+
+option go_package = "github.com/joyautomation/nautilus/plcnext/gen/plc/gds";
+
+service IDataAccessService
+{
+  rpc ReadSingle(IDataAccessServiceReadSingleRequest) returns (IDataAccessServiceReadSingleResponse) {}
+  rpc Read(IDataAccessServiceReadRequest) returns (IDataAccessServiceReadResponse) {}
+  rpc WriteSingle(IDataAccessServiceWriteSingleRequest) returns (IDataAccessServiceWriteSingleResponse) {}
+  rpc Write(IDataAccessServiceWriteRequest) returns (IDataAccessServiceWriteResponse) {}
+}
+
+message IDataAccessServiceReadSingleRequest
+{
+   string portName = 1;
+}
+message IDataAccessServiceReadRequest
+{
+   repeated string portNames = 1;
+}
+message IDataAccessServiceWriteSingleRequest
+{
+   Arp.Plc.Gds.Services.Grpc.WriteItem data = 1;
+}
+message IDataAccessServiceWriteRequest
+{
+   repeated Arp.Plc.Gds.Services.Grpc.WriteItem data = 1;
+}
+
+message IDataAccessServiceReadSingleResponse
+{
+   Arp.Plc.Gds.Services.Grpc.ReadItem _ReturnValue = 1;
+}
+message IDataAccessServiceReadResponse
+{
+   repeated Arp.Plc.Gds.Services.Grpc.ReadItem _ReturnValue = 1;
+}
+message IDataAccessServiceWriteSingleResponse
+{
+   Arp.Plc.Gds.Services.Grpc.DataAccessError _ReturnValue = 1;
+}
+message IDataAccessServiceWriteResponse
+{
+   repeated Arp.Plc.Gds.Services.Grpc.DataAccessError _ReturnValue = 1;
+}

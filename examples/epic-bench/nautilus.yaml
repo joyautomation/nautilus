@@ -1,0 +1,46 @@
+# epic-bench — the office groov EPIC as nautilus I/O
+#
+# An Opto 22 GRV-EPIC-PR1 with four modules (24 DI, 12 DO, 12 ICTD
+# temperature inputs, 24 voltage inputs) driven by the nautilus runtime over
+# OptoMMP, the processor's own memory-mapped protocol — the same seam Opto's
+# own CODESYS runtime uses. Nothing runs on the EPIC but its stock firmware:
+# no PAC Control strategy, no CODESYS, no license. The chassis was imported,
+# not typed:
+#
+#   naut optommp browse --host 192.168.82.243     what the processor reports
+#   naut optommp import --host 192.168.82.243 --scan-rate 20ms --scratch-floats 1
+#                                                  → optommp_manifest.yaml + tags/optommp.yaml
+#
+#   naut check .     validate offline
+#   naut test  .     the acceptance suite, virtual time, no EPIC needed
+#   naut run   .     poll the EPIC for real: http://localhost:8086
+#
+# bench.st is deliberately small — a heartbeat on the last output, the
+# pushbuttons mirrored to the outputs, the two wired analog channels copied
+# onto named tags and the temperature published to the EPIC's scratchpad —
+# because the point of this project is the round trip, not the logic. The
+# same project runs on the EPIC itself; see README.md.
+name: epic-bench
+
+server:
+  addr: "localhost:8086"
+  online-edits: true
+
+driver:
+  type: optommp
+  manifest: optommp_manifest.yaml   # polls every 20 ms (the manifest's scan-rate)
+
+tasks:
+  - program: bench.st
+    scan: 20ms
+    dt-tag: BenchDtS
+
+tag-files:
+  - tags/optommp.yaml
+
+tags:
+  - { name: BenchDtS,      role: state, init: 0.0, unit: "s", desc: "Scan interval handed to bench.st" }
+  - { name: BlinkPeriodS,  role: setpoint, init: 1.0, unit: "s", desc: "Heartbeat period on slot 1 output 11" }
+  - { name: Blink,         role: state, init: false, desc: "Heartbeat state" }
+  - { name: BenchTempC,    role: state, init: 0.0, unit: "°C", desc: "ICTD probe on slot 2 channel 0" }
+  - { name: BenchVoltsV,   role: state, init: 0.0, unit: "V", desc: "Voltage input on slot 3 channel 0" }

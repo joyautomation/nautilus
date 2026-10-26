@@ -272,7 +272,9 @@ node.Start(ctx)
 
 The node passes the **Sparkplug TCK edge-node profile** — CI runs the
 `joyautomation/sparkplug-tck-go` harness against a live node on every push.
-MQTT and protobuf live only in this package. The runtime core's one
+MQTT and protobuf live only in this package (protobuf also in the PLCnext
+driver's generated gRPC stubs, for the firmware's data-access service).
+The runtime core's one
 dependency outside the Go standard library is `gopkg.in/yaml.v3`, which it
 uses to read the project manifest.
 

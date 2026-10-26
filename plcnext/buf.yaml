@@ -1,0 +1,12 @@
+# The PLCnext gRPC contract, vendored from github.com/PLCnext/gRPC (Phoenix
+# Contact, firmware 2023.0 LTS shape): only the Data Access service a
+# nautilus driver needs. Regenerate gen/ with `buf generate` here.
+version: v2
+modules:
+  - path: proto
+lint:
+  use: [STANDARD]
+  except: [ENUM_VALUE_PREFIX, ENUM_ZERO_VALUE_SUFFIX, PACKAGE_DIRECTORY_MATCH, FIELD_NOT_REQUIRED,
+           PACKAGE_VERSION_SUFFIX, SERVICE_SUFFIX, RPC_REQUEST_STANDARD_NAME, RPC_RESPONSE_STANDARD_NAME,
+           RPC_REQUEST_RESPONSE_UNIQUE, ENUM_VALUE_UPPER_SNAKE_CASE, FIELD_LOWER_SNAKE_CASE,
+           MESSAGE_PASCAL_CASE, PACKAGE_LOWER_SNAKE_CASE]

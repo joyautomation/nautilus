@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -812,6 +813,14 @@ func render(v ir.Value, names bool) any {
 	case ir.TypeBool:
 		return v.B
 	case ir.TypeReal:
+		// JSON has no NaN or infinity, and encoding/json refuses the whole
+		// document that holds one — so a single open-sensor channel (an
+		// Opto ICTD input with nothing wired reads NaN) would blank
+		// /api/state and every stream frame. Render it as null: the
+		// honest JSON for "not a number". The driver says why via quality.
+		if math.IsNaN(v.F) || math.IsInf(v.F, 0) {
+			return nil
+		}
 		return v.F
 	case ir.TypeInt, ir.TypeTime:
 		if names && v.Kind == ir.TypeInt && v.S != "" {
