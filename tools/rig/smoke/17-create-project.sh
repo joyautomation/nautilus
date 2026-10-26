@@ -57,6 +57,10 @@ btn_js() { echo "[...document.querySelectorAll('a.monaco-button, .monaco-button,
 QI_TITLE='(() => { const w = document.querySelector(".quick-input-widget"); return w && w.style.display !== "none" ? (w.querySelector(".quick-input-title")?.textContent.trim() ?? "") : null; })()'
 QI_PARENT="(($QI_TITLE) || '').includes('parent folder')"
 QI_ROWS='[...document.querySelectorAll(".quick-input-widget .quick-input-list .monaco-list-row")].map(r => r.getAttribute("aria-label") || r.textContent.trim())'
+# The quick input's text box, whether it holds the keyboard focus, and what is in it.
+QI_INPUT='document.querySelector(".quick-input-widget input")'
+QI_FOCUSED="document.activeElement === $QI_INPUT"
+qi_value() { pg "$QI_INPUT?.value ?? ''" | python3 -c 'import json,sys; print(json.load(sys.stdin))' 2>/dev/null || true; }
 qi_title() { pg "$QI_TITLE" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("" if v is None else v)' 2>/dev/null || true; }
 qi_rows() { pg "$QI_ROWS" | python3 -c 'import json,sys; print(" | ".join(json.load(sys.stdin)))' 2>/dev/null || true; }
 qi_row_js() { echo "[...document.querySelectorAll('.quick-input-widget .quick-input-list .monaco-list-row')].find(r => (r.getAttribute('aria-label') || r.textContent).trim().startsWith($(js_str "$1")))"; }
@@ -91,7 +95,18 @@ create_flow() {
   t=$(qi_title)
   [[ $t == "nautilus: Create Project" ]] || { fail "$lbl: no name input box after the folder (quick input: '${t:-none}')" "$png"; return 1; }
   pass "$lbl: name input box (\"nautilus: Create Project\")" "$png"
-  xdotool type --delay 40 "$name"; sleep 0.6; xdotool key Return; sleep 1.2
+  # On a cold, loaded window the Welcome page's webview can take the focus a
+  # moment after the box opens (the #405 mechanism): the box stays up, but the
+  # typing lands in the webview. Type only into the focused box, and say so
+  # when the focus had to be put back.
+  wait_pg "$QI_FOCUSED" 5 \
+    || { info "$lbl: the name box opened without the keyboard focus; focusing it"; pg "$QI_INPUT?.focus()" >/dev/null; sleep 0.4; }
+  xdotool type --delay 40 "$name"; sleep 0.6
+  if [[ $(qi_value) != "$name" ]]; then
+    info "$lbl: the name box read '$(qi_value)' after typing '$name'; focusing it and typing again"
+    pg "$QI_INPUT?.focus()" >/dev/null; sleep 0.4; key ctrl+a; xdotool type --delay 40 "$name"; sleep 0.6
+  fi
+  xdotool key Return; sleep 1.2
 
   wait_pg "($QI_TITLE || '').includes('template')" 10 || true
   rows=$(qi_rows); t=$(qi_title)
