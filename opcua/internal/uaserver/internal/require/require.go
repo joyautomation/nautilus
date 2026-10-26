@@ -58,6 +58,13 @@ func Equal(t testing.TB, want, got any, msgAndArgs ...any) {
 	}
 }
 
+func NotEqual(t testing.TB, notWant, got any, msgAndArgs ...any) {
+	t.Helper()
+	if equal(notWant, got) {
+		fail(t, fmt.Sprintf("should not be %#v", got), msgAndArgs)
+	}
+}
+
 func NoError(t testing.TB, err error, msgAndArgs ...any) {
 	t.Helper()
 	if err != nil {
