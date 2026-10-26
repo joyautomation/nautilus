@@ -29,8 +29,13 @@ func startSubscriptionTestServer(t *testing.T, ctx context.Context) (string, *op
 	require.NoError(t, ln.Close())
 
 	srv := New(EndPoint("127.0.0.1", port), EnableSecurity("None", ua.MessageSecurityModeNone))
-	require.NoError(t, srv.Start(ctx))
-	t.Cleanup(func() { _ = srv.Close() })
+	// The server runs until the test's cleanup, not until ctx ends: a test
+	// cancels ctx as it returns, before its cleanups run, and a server whose
+	// message loop has stopped leaves the client's CloseSession and the
+	// server's Close to their 10 s timeouts.
+	sctx, scancel := context.WithCancel(context.Background())
+	require.NoError(t, srv.Start(sctx))
+	t.Cleanup(func() { _ = srv.Close(); scancel() })
 	endpoint := fmt.Sprintf("opc.tcp://127.0.0.1:%d", port)
 
 	c, err := opcua.NewClient(endpoint, opcua.SecurityMode(ua.MessageSecurityModeNone))
