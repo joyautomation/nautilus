@@ -33,9 +33,8 @@
 // bytes nautilus left there into the output frame — or zeros, before
 // nautilus has written and after its outputs go stale.
 //
-// Build (from the repo root; zig is any recent release):
-//   zig cc -target arm-linux-gnueabihf.2.35 -mcpu=cortex_a9 -O2 -std=c11
-//          -o nautilus_io rt/plcnext-io/nautilus_io.c -ldl -lpthread
+// Build: rt/plcnext-io/build.sh (zig cc for arm-linux-gnueabihf.2.35); a
+// CLI release attaches the same build as nautilus-plcnext-io_<version>_linux_armv7.
 // (nautilus_io_shm.h beside it is the exchange page's layout.)
 
 #define _GNU_SOURCE
@@ -58,6 +57,10 @@
 #include <time.h>
 #include <unistd.h>
 #include <linux/limits.h>
+
+#ifndef NAUTILUS_IO_VERSION
+#define NAUTILUS_IO_VERSION "dev" // build.sh stamps the release version
+#endif
 
 // ── the firmware's C surface, declared by hand ──────────────────────────
 // Signatures follow Arp/Plc/AnsiC/{Io/FbIoSystem.h,Gds/DataLayout.h,
@@ -272,7 +275,7 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_term);
     if (argc != 2) { logln("usage: nautilus_io <relative path to .acf.settings>"); idle("bad arguments"); }
     snprintf(settings, sizeof settings, "%s/%s", exe, argv[1]);
-    logln("nautilus_io starting (pid %d, uid %d); settings %s", (int)getpid(), (int)getuid(), settings);
+    logln("nautilus_io %s starting (pid %d, uid %d); settings %s", NAUTILUS_IO_VERSION, (int)getpid(), (int)getuid(), settings);
 
     // Join the firmware as a module application.
     void *mod = dlopen("/usr/lib/libArp.System.Module.so", RTLD_NOW | RTLD_GLOBAL);

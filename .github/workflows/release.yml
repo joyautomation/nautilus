@@ -8,9 +8,9 @@ on:
 permissions:
   contents: write # create the GitHub Release and upload assets
 
-# A CLI release carries the CLI only. The extension has its own releases:
-# stable VSIXes are on the vscode-v* GitHub Releases (vscode-stable.yml) and
-# pre-releases ship from main (publish.yml). A VSIX built here would be main's
+# A CLI release carries the CLI only, plus the PLCnext shim it drives. The
+# extension has its own releases: stable VSIXes are on the vscode-v* GitHub
+# Releases (vscode-stable.yml) and pre-releases ship from main (publish.yml). A VSIX built here would be main's
 # package.json at tag time, which can predate the release PR's bump and then
 # names the wrong version (v0.16.0 carried a "0.13.2" that was 0.13.3 code).
 
@@ -62,3 +62,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/logixd.zip" "$RUNNER_TEMP/install-logixd.ps1" --clobber
+
+  # The PLCnext in-process tier (rt/plcnext-io): a C program the firmware's
+  # ACF starts, so it is not part of the Go build. Built with zig for the
+  # controller's glibc, packed with its ACF files and README, and attached
+  # beside the CLI's armv7 tarball; the version is stamped into its log.
+  plcnext-io:
+    name: PLCnext nautilus_io on the Release
+    runs-on: ubuntu-latest
+    needs: cli # the Release must exist before we upload to it
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with: {version: 0.17.0}
+      - name: Build and pack
+        run: VERSION="${GITHUB_REF_NAME#v}" rt/plcnext-io/build.sh -p "$RUNNER_TEMP/plcnext-io"
+      - name: Attach to the Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/plcnext-io/*.tar.gz "$RUNNER_TEMP"/plcnext-io/*.tar.gz.sha256 --clobber
