@@ -1,0 +1,57 @@
+# The bench AXC F 2152's local Axioline bus as BusConductor presents it in
+# its generic (auto-config) mode: one 512-byte input image and one
+# 512-byte output image, and EVERY module occupies its own frame length
+# in BOTH images, in bus order — a DO16 module takes two bytes of the
+# input image it never writes, a DI16 module takes two bytes of the
+# output image nobody reads. Measured on the bench 2026-10-24 with
+# `naut plcnext browse`: the analog module's channels sit at input bytes
+# 4..7 (not 2..5), which is where the device lengths 16, 16, 0, 32 bits
+# put them.
+#
+# The driver reads the images through their GDS mirrors,
+# Arp.Plc.Eclr/PND_S1_INPUTS and PND_S1_OUTPUTS (see controller/ and the
+# README for the connector that makes that so); socket, inputs, outputs,
+# run-port and byte-order take their defaults.
+bus-conductor: BcComponent1
+modules:
+  - { slot: 1, part: "AXL F DI16/4 1F", in: 2, out: 2, desc: "16 digital inputs (device 0x00400002, 16 bits)" }
+  - { slot: 2, part: "AXL F DO16/3 1F", in: 2, out: 2, desc: "16 digital outputs (device 0x00800002, 16 bits)" }
+  - { slot: 3, part: "(no process data)", desc: "device 0x00000100, 0 bits — a supply or bus module" }
+  - { slot: 4, part: "AXL F AI2 AO2 1H", in: 4, out: 4, desc: "2 analog inputs, 2 analog outputs (device 0x00200008, 32 bits)" }
+tags:
+  - { name: DI_00, dir: in, offset: 0, format: "bit:0",  desc: "slot 1 input 0" }
+  - { name: DI_01, dir: in, offset: 0, format: "bit:1",  desc: "slot 1 input 1" }
+  - { name: DI_02, dir: in, offset: 0, format: "bit:2",  desc: "slot 1 input 2" }
+  - { name: DI_03, dir: in, offset: 0, format: "bit:3",  desc: "slot 1 input 3" }
+  - { name: DI_04, dir: in, offset: 0, format: "bit:4",  desc: "slot 1 input 4" }
+  - { name: DI_05, dir: in, offset: 0, format: "bit:5",  desc: "slot 1 input 5" }
+  - { name: DI_06, dir: in, offset: 0, format: "bit:6",  desc: "slot 1 input 6" }
+  - { name: DI_07, dir: in, offset: 0, format: "bit:7",  desc: "slot 1 input 7" }
+  - { name: DI_08, dir: in, offset: 0, format: "bit:8",  desc: "slot 1 input 8" }
+  - { name: DI_09, dir: in, offset: 0, format: "bit:9",  desc: "slot 1 input 9" }
+  - { name: DI_10, dir: in, offset: 0, format: "bit:10", desc: "slot 1 input 10" }
+  - { name: DI_11, dir: in, offset: 0, format: "bit:11", desc: "slot 1 input 11" }
+  - { name: DI_12, dir: in, offset: 0, format: "bit:12", desc: "slot 1 input 12" }
+  - { name: DI_13, dir: in, offset: 0, format: "bit:13", desc: "slot 1 input 13" }
+  - { name: DI_14, dir: in, offset: 0, format: "bit:14", desc: "slot 1 input 14" }
+  - { name: DI_15, dir: in, offset: 0, format: "bit:15", desc: "slot 1 input 15" }
+  - { name: AI_00, dir: in, offset: 4, format: int16, desc: "slot 4 analog input 0, raw counts (0x8020 = supply missing)" }
+  - { name: AI_01, dir: in, offset: 6, format: int16, desc: "slot 4 analog input 1, raw counts" }
+  - { name: DO_00, dir: out, offset: 2, format: "bit:0",  init: false, desc: "slot 2 output 0" }
+  - { name: DO_01, dir: out, offset: 2, format: "bit:1",  init: false, desc: "slot 2 output 1" }
+  - { name: DO_02, dir: out, offset: 2, format: "bit:2",  init: false, desc: "slot 2 output 2" }
+  - { name: DO_03, dir: out, offset: 2, format: "bit:3",  init: false, desc: "slot 2 output 3" }
+  - { name: DO_04, dir: out, offset: 2, format: "bit:4",  init: false, desc: "slot 2 output 4" }
+  - { name: DO_05, dir: out, offset: 2, format: "bit:5",  init: false, desc: "slot 2 output 5" }
+  - { name: DO_06, dir: out, offset: 2, format: "bit:6",  init: false, desc: "slot 2 output 6" }
+  - { name: DO_07, dir: out, offset: 2, format: "bit:7",  init: false, desc: "slot 2 output 7" }
+  - { name: DO_08, dir: out, offset: 2, format: "bit:8",  init: false, desc: "slot 2 output 8" }
+  - { name: DO_09, dir: out, offset: 2, format: "bit:9",  init: false, desc: "slot 2 output 9" }
+  - { name: DO_10, dir: out, offset: 2, format: "bit:10", init: false, desc: "slot 2 output 10" }
+  - { name: DO_11, dir: out, offset: 2, format: "bit:11", init: false, desc: "slot 2 output 11" }
+  - { name: DO_12, dir: out, offset: 2, format: "bit:12", init: false, desc: "slot 2 output 12" }
+  - { name: DO_13, dir: out, offset: 2, format: "bit:13", init: false, desc: "slot 2 output 13" }
+  - { name: DO_14, dir: out, offset: 2, format: "bit:14", init: false, desc: "slot 2 output 14" }
+  - { name: DO_15, dir: out, offset: 2, format: "bit:15", init: false, desc: "slot 2 output 15 — heartbeat" }
+  - { name: AO_00, dir: out, offset: 4, format: int16, init: 0.0, desc: "slot 4 analog output 0, raw counts" }
+  - { name: AO_01, dir: out, offset: 6, format: int16, init: 0.0, desc: "slot 4 analog output 1, raw counts" }

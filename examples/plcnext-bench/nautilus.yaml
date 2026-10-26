@@ -1,0 +1,42 @@
+# plcnext-bench — the nautilus runtime ON the office PLCnext
+#
+# A Phoenix Contact AXC F 2152 (ARMv7, PREEMPT_RT Linux, firmware 2023.0)
+# with four Axioline modules on its local bus. The same `naut` binary,
+# cross-compiled for the controller, runs this project there and drives
+# the modules through the firmware's data-access socket; PLCnext Engineer
+# is not involved and no IEC program of Phoenix's runs. BusConductor
+# (Phoenix Contact's own open component) configures the bus at start.
+#
+#   naut check .                       validate offline, on the laptop
+#   naut test  .                       the acceptance suite, virtual time
+#   CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o naut-arm ./cmd/naut
+#   ./naut-arm build -o controller .   the project embedded on the ARM binary
+#   scp controller admin@192.168.82.216:/opt/plcnext/apps/nautilus/
+#   ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/controller
+#                                      dashboard + tag API on the controller's :8080
+#
+# README.md has what the controller needs first (the BusConductor files
+# and one runtime restart) and what has and has not been verified.
+name: plcnext-bench
+
+server:
+  addr: ":8080"
+  online-edits: true
+
+driver:
+  type: plcnext
+  manifest: plcnext_manifest.yaml
+  scan-rate: 50ms
+
+tasks:
+  - program: bench.st
+    scan: 50ms
+    dt-tag: BenchDtS
+
+tag-files:
+  - tags/plcnext.yaml
+
+tags:
+  - { name: BenchDtS,     role: state, init: 0.0, unit: "s", desc: "Scan interval handed to bench.st" }
+  - { name: BlinkPeriodS, role: setpoint, init: 1.0, unit: "s", desc: "Heartbeat period on slot 2 output 15" }
+  - { name: Blink,        role: state, init: false, desc: "Heartbeat state" }

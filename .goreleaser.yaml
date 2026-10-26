@@ -12,7 +12,13 @@ builds:
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
+    goarch: [amd64, arm64, arm]
+    # 32-bit ARM is for controllers: the groov EPIC and the PLCnext AXC F
+    # 2152 are both ARMv7 (hard float), and the binary runs on them as is.
+    goarm: ['7']
+    ignore:
+      - {goos: darwin, goarch: arm}
+      - {goos: windows, goarch: arm}
     ldflags:
       # -s -w strips debug info; -X injects the tag version into the CLI so
       # `naut version` matches the release.
@@ -24,7 +30,8 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # linux_armv7 for the ARM build; every other name is unchanged.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}"
 
 checksum:
   name_template: checksums.txt

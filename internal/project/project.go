@@ -31,6 +31,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/plcnext"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/replay"
@@ -1433,6 +1434,28 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			}
 			return prom.New(m, opts...)
 		}
+	case "plcnext":
+		// The runtime ON a Phoenix Contact PLCnext controller, driving its
+		// local Axioline I/O through the firmware's GDS over a Unix socket
+		// (brief docs/design/open-controllers.md). New never dials, so
+		// check and build pass on the laptop that cross-compiles for the
+		// controller; the socket only exists on the controller itself.
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver plcnext: manifest (the plcnext_manifest.yaml) is required")
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver plcnext: %w", err)
+		}
+		m, err := plcnext.ParseManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("driver plcnext: %s: %w", d.Manifest, err)
+		}
+		opts := []plcnext.Option{plcnext.WithLogger(slog.Default().With("driver", "plcnext"))}
+		if d.ScanRate != 0 {
+			opts = append(opts, plcnext.WithScanRate(time.Duration(d.ScanRate)))
+		}
+		return plcnext.New(m, opts...)
 	case "replay":
 		// A recording played back as live tags at a steerable clock: the
 		// baseline of a plant simulation. The recording itself is read on
@@ -1450,6 +1473,6 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus and replay — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus, plcnext and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }

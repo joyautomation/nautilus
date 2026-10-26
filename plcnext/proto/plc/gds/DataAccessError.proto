@@ -1,0 +1,28 @@
+///////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright PHOENIX CONTACT Electronics GmbH
+//
+///////////////////////////////////////////////////////////////////////////////
+
+syntax = "proto3";
+package Arp.Plc.Gds.Services.Grpc;
+
+option go_package = "github.com/joyautomation/nautilus/plcnext/gen/plc/gds";
+
+enum DataAccessError
+{
+    DAE_None                  = 0;
+    DAE_NotExists             = 1;
+    DAE_NotAuthorized         = 2;
+    DAE_TypeMismatch          = 3;
+    DAE_PortNameSyntaxError   = 4;
+    DAE_PortNameSemanticError = 5;
+    DAE_IndexOutOfRange       = 6;
+    DAE_NotImplemented        = 7;
+    DAE_NotSupported          = 8;
+    DAE_CurrentlyUnavailable  = 9;
+    DAE_UnvalidSubscription   = 10;
+    DAE_NoData                = 11;
+    DAE_InvalidConfig         = 12;
+    DAE_Unspecified           = 255;
+}

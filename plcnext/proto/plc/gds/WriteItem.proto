@@ -1,0 +1,19 @@
+///////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright PHOENIX CONTACT Electronics GmbH
+//
+///////////////////////////////////////////////////////////////////////////////
+
+syntax = "proto3";
+
+import "arptypes/ArpTypes.proto";
+
+package Arp.Plc.Gds.Services.Grpc;
+
+option go_package = "github.com/joyautomation/nautilus/plcnext/gen/plc/gds";
+
+message WriteItem
+{
+   string PortName = 1;
+   Arp.Type.Grpc.ObjectType Value = 2;
+}

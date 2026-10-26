@@ -1,0 +1,65 @@
+page: website/src/content/docs/guides/plcnext.md
+title: Phoenix Contact PLCnext
+prefix: PLX
+claims:
+  - id: PLX-001
+    claim: >-
+      The driver reads only the image bytes its bindings reach, one element
+      name per byte (`Port[i]`), in one multi-item read per scan, and
+      flushes the output span as one write.
+    source: "#how-the-io-reaches-nautilus"
+    tests:
+      - go ./plcnext TestDriverAgainstFakeFirmware
+    partial: true
+    note: Against a fake of the firmware's data-access service; the firmware behaviour it models was measured on 2023.0.
+  - id: PLX-002
+    claim: >-
+      The driver brings the bus up through BusConductor with rising edges
+      on CONFIG_REQ and START_IO_REQ, and leaves a bus that is already
+      configured and running alone (no request edge on reconnect).
+    source: "#how-the-io-reaches-nautilus"
+    tests:
+      - go ./plcnext TestDriverAgainstFakeFirmware
+      - go ./plcnext TestHandshakeIsIdempotent
+  - id: PLX-003
+    claim: >-
+      A manifest that omits socket, inputs, outputs, run-port and
+      byte-order gets the defaults (the local socket, the PND_S1 mirrors,
+      the AXIO RUN bit, big-endian); `run-port: none` disables the RUN
+      check.
+    source: "#run-nautilus"
+    tests:
+      - go ./plcnext TestManifestParsesWithDefaults
+  - id: PLX-004
+    claim: >-
+      Bit and integer formats decode from and encode into the image at
+      the manifest's byte offsets.
+    source: "#run-nautilus"
+    tests:
+      - go ./plcnext TestCodec
+  - id: PLX-005
+    claim: >-
+      The bus RUN bit is the image's quality: when it drops, every input
+      is bad on a live connection.
+    source: "#what-it-does-not-do-yet"
+    tests:
+      - go ./plcnext TestDriverAgainstFakeFirmware
+  - id: PLX-006
+    claim: >-
+      Without BusConductor, or with a port the firmware does not answer
+      for, the driver reports the problem instead of running on a
+      half-bound image.
+    source: "#how-the-io-reaches-nautilus"
+    tests:
+      - go ./plcnext TestDriverWithoutBusConductorAndMissingPort
+  - id: PLX-007
+    claim: >-
+      On the bench controller the plcnext-bench project ran at about 9 %
+      of one core and 23 MB resident, with about 11 ms per scan's image
+      exchange over the local socket.
+    source: "#run-nautilus"
+    tests: []
+    note: >-
+      A bench measurement (2026-10-24), written up in
+      docs/design/open-controllers.md §3. No automated test yet; the
+      bench nightly is planned to record it per run.

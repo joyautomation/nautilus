@@ -8,6 +8,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/plcnext"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/replay"
@@ -56,6 +57,8 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
 	case *prom.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
+	case *plcnext.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return plcnextStatus(drv.Health()) }}
 	case *replay.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return replayStatus(drv.Health()) }}
 	case *nio.Multi:
@@ -555,6 +558,33 @@ func agoText(ms int64) string {
 // someone acts is in it (speed, pause, a loaded or failed recording); the
 // clock's position moves every scan, so it rides as a Volatile metric and
 // never pushes the block onto a delta stream by itself.
+// plcnextStatus is the one-row status of the controller's own I/O: the
+// socket, whether BusConductor has the bus up, image sizes and round trip.
+func plcnextStatus(h plcnext.Health) server.DriverStatus {
+	s := server.DriverStatus{Kind: "plcnext", Name: "plcnext", Detail: h.Socket, LastError: h.LastError}
+	switch {
+	case h.Connected && h.Configured && h.Running:
+		s.State, s.Message = "connected", fmt.Sprintf("Axioline bus running, %d module(s)", h.Modules)
+	case h.Connected && h.Configured:
+		s.State, s.Message = "error", fmt.Sprintf("Axioline bus configured (%d module(s)) but not running: inputs are Bad", h.Modules)
+	case h.Connected:
+		s.State, s.Message = "connecting", "Configuring the Axioline bus"
+	case h.LastError != "":
+		s.State, s.Message = "error", "Not connected to the firmware"
+	default:
+		s.State, s.Message = "connecting", "Connecting to the firmware"
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(h.Tags)},
+		{Label: "reads", Value: float64(h.Reads), Volatile: true},
+		{Label: "writes", Value: float64(h.Writes), Volatile: true},
+		{Label: "errors", Value: float64(h.Errors)},
+		{Label: "rtt", Value: float64(h.RTTus) / 1000, Text: fmt.Sprintf("%.2f ms", float64(h.RTTus)/1000), Volatile: true},
+		{Label: "image", Value: float64(h.InBytes), Text: fmt.Sprintf("%d in / %d out bytes", h.InBytes, h.OutBytes)},
+	}
+	return s
+}
+
 func replayStatus(h replay.Health) server.DriverStatus {
 	s := server.DriverStatus{Kind: "replay", Name: "replay", Detail: h.History, LastError: h.LastError}
 	switch {

@@ -1,0 +1,20 @@
+///////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright PHOENIX CONTACT Electronics GmbH
+//
+///////////////////////////////////////////////////////////////////////////////
+
+syntax = "proto3";
+
+import "plc/gds/DataAccessError.proto";
+import "arptypes/ArpTypes.proto";
+
+package Arp.Plc.Gds.Services.Grpc;
+
+option go_package = "github.com/joyautomation/nautilus/plcnext/gen/plc/gds";
+
+message ReadItem
+{
+   Arp.Plc.Gds.Services.Grpc.DataAccessError Error = 1;
+   Arp.Type.Grpc.ObjectType Value = 2;
+}

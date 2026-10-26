@@ -247,7 +247,8 @@ claims:
       evidence there; skipped locally).
   - id: SPB-024
     claim: >-
-      MQTT and protobuf live only in the sparkplug package; the runtime
+      MQTT and protobuf live only in the sparkplug package (protobuf
+      also in the PLCnext driver's generated gRPC stubs); the runtime
       core's one dependency outside the Go standard library is
       gopkg.in/yaml.v3.
     source: "#conformance"

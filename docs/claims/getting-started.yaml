@@ -120,7 +120,7 @@ claims:
   - id: GS-012
     claim: >-
       One release build runs on macOS, Linux and Windows (amd64 and arm64)
-      with no runtime dependencies, and release archives ship a
+      and on Linux ARMv7, with no runtime dependencies, and release archives ship a
       checksums.txt.
     source: "#getting-started"
     tests:
