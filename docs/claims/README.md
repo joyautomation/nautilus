@@ -69,6 +69,11 @@ claims:
     The conformance corpus runs one subtest per feature and one per YAML
     test: `go ./lang/conformance TestConformance/<feature>/<yaml test name>`,
     or the whole feature with `go ./lang/conformance TestConformance/<feature>`.
+  - `go ./tools/blackbox TestBlackbox/<check id>` — one of the independent
+    tester's checks (`docs/design/blackbox.md`), a script a foreign client
+    wrote against the page and the spec without seeing the code. The
+    strongest reference a claim can carry; the id is the tester's, verbatim
+    from `tools/blackbox/checks.yaml`.
   - `naut <project root> <test name>` — a test in a project's
     `*_test.yaml`, which CI runs with `naut test -json` on nautilus: every
     project under `examples/`, `testdata/projects/` and

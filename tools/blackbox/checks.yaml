@@ -1,0 +1,8 @@
+# Checks imported from the black-box tester's runs, verbatim. Schema and the
+# import procedure: tools/blackbox/README.md. One subtest per entry with a
+# script; the rest are listed so the record of what the tester proposed is
+# complete. Empty until run 2026-10-22-001's retest delivers its checks/.
+oracles:
+  asyncua: 2.1.0
+  pymodbus: 3.16.1
+checks: []

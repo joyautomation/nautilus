@@ -504,6 +504,35 @@ jobs:
           name: evidence-prom
           path: evidence/
           retention-days: 14
+  blackbox-gate:
+    # The independent tester's checks (tools/blackbox, docs/design/blackbox.md):
+    # scripts a foreign client wrote against the public docs and the specs,
+    # imported verbatim and run against naut built from this PR. One subtest
+    # per check, so a claim can cite `go ./tools/blackbox TestBlackbox/<id>`.
+    # Skips, green, while the manifest has no gate checks.
+    name: Black-box — the tester's gate checks (foreign clients)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      # The oracle clients, pinned to the versions the runs recorded.
+      - run: pip install -r tools/blackbox/requirements.txt
+      - name: Gate checks
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_BLACKBOX_PYTHON="$(which python)" NAUTILUS_BLACKBOX_DISPOSITION=gate \
+            go test -json ./tools/blackbox -run TestBlackbox -v -timeout 600s | tee evidence/blackbox-gate.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-blackbox
+          path: evidence/
+          retention-days: 14
+
   runtime-evidence:
     # Joins every job's test results to the claims inventory (docs/claims)
     # and keeps the result for the docs site's /verified/runtime/ pages,
@@ -513,7 +542,7 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [go, sparkplug-tck, modbus-sim, snmp-sim, redfish-sim, prom-sim, postgres]
+    needs: [go, sparkplug-tck, modbus-sim, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
