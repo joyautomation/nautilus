@@ -159,6 +159,10 @@ realign its counts) is answered with the values the subscription has.
 `SetMonitoringMode` means what it answers: a `Disabled` or `Sampling`
 item is silent until it is `Reporting` again, and then hears the current
 value first; an item created `Disabled` is silent from the start.
+`CloseSession` with `deleteSubscriptions` set (what client libraries send
+by default) deletes the session's subscriptions and their items before it
+answers; without it they run on until their lifetime runs out. A
+subscription id is never issued twice.
 
 An item that cannot be monitored — a node id that is not a node, or a
 Value on an Object or the folder — is refused when it is created, with the

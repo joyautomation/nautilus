@@ -243,8 +243,16 @@ claims:
       silent from the start; and an item id that is not an item is refused
       in its own result. Items are booked without a blocking send, so a
       subscription that stops draining cannot freeze the server.
+      CloseSession with deleteSubscriptions deletes the session's
+      subscriptions and their items before it answers, and without it leaves
+      them to their lifetime; a subscription id is never issued twice.
     source: "#subscriptions"
     tests:
+      - go ./opcua/server TestCloseSessionHonoursDeleteSubscriptions
+      - go ./opcua/server TestSubscriptionIDsAreNeverReused
+      - go ./opcua/internal/uaserver TestCreateSubscriptionNeverReusesAnID
+      - go ./opcua/internal/uaserver TestServerAnswersAfterSubscriptionCancelledWithNotificationsQueued
+      - go ./tools/blackbox TestBlackbox/001-F13-closesession-deletes-subscriptions
       - go ./opcua/server TestRevisePublishing
       - go ./opcua/server TestPublishingIntervalIsRevisedNotActedOn
       - go ./opcua/server TestMonitoringModeIsHonoured
