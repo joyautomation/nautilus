@@ -17,12 +17,12 @@
 // What crosses the seam upward is io.Driver; Phoenix Contact's spellings
 // (GDS port names, Arp types, BusConductor's ports) stop here. The gRPC and
 // protobuf dependencies stay inside this package, the way gosnmp stays
-// inside snmp/ and paho inside sparkplug/. Timing is best-effort: the
-// firmware refreshes the arrays from the bus every 500 µs and the driver
-// polls them at its scan rate over a local socket (sub-millisecond on the
-// bench); the deterministic path, an Arp C-API program exchanging the GDS
-// buffer in the ESM cycle, is the documented next tier (docs/design/
-// open-controllers.md).
+// inside snmp/ and paho inside sparkplug/. Two routes for the bytes
+// (`transport`): grpc polls the mirrored arrays at the scan rate over the
+// local socket, best-effort; shm exchanges the Axioline frames with
+// rt/plcnext-io/nautilus_io, an ACF-started C process that touches them
+// through the firmware's ANSI-C API every millisecond, through a
+// shared-memory page (shm.go; docs/design/open-controllers.md §3.4).
 package plcnext
 
 import (
@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -55,6 +56,8 @@ const (
 	ByteOrderLittle   = "little"
 	DirIn             = "in"
 	DirOut            = "out"
+	TransportGRPC     = "grpc"
+	TransportShm      = "shm"
 	defaultTagFileHdr = "plcnext_manifest.yaml"
 )
 
@@ -62,6 +65,20 @@ const (
 // socket is, which GDS ports carry the process image, whether BusConductor
 // has to be nudged into configuring the bus, and the tag bindings.
 type Manifest struct {
+	// Transport is the bytes' route: "grpc" (default) polls the GDS
+	// mirror ports through the data-access service; "shm" exchanges the
+	// frames with rt/plcnext-io/nautilus_io through its shared-memory
+	// page, at the shim's 1 ms cycle. The bindings mean the same bytes
+	// either way; the BusConductor handshake runs over gRPC in both.
+	Transport string `yaml:"transport"`
+	// Shm is the shim's page (default DefaultShm), for transport shm.
+	Shm string `yaml:"shm"`
+	// OutputWatchdog is how old this driver's outputs may get in the page
+	// before the shim drives the output frame to zero (transport shm; a
+	// Go duration, default 1s, "0" holds the last outputs). The driver
+	// refreshes the page every scan, so a naut that stops — crash, kill,
+	// redeploy — is what trips it.
+	OutputWatchdog string `yaml:"output-watchdog"`
 	// Socket is the firmware's gRPC Unix socket (default DefaultSocket).
 	Socket string `yaml:"socket"`
 	// BusConductor names the BusConductor component instance whose ports
@@ -180,6 +197,15 @@ func ParseManifest(data []byte) (Manifest, error) {
 }
 
 func (m *Manifest) fillDefaults() {
+	if m.Transport == "" {
+		m.Transport = TransportGRPC
+	}
+	if m.Shm == "" {
+		m.Shm = DefaultShm
+	}
+	if m.OutputWatchdog == "" {
+		m.OutputWatchdog = DefaultOutputWatchdog.String()
+	}
 	if m.Socket == "" {
 		m.Socket = DefaultSocket
 	}
@@ -198,6 +224,15 @@ func (m *Manifest) fillDefaults() {
 	case "none":
 		m.RunPort = ""
 	}
+}
+
+// DefaultOutputWatchdog is the shim's grace for stale outputs.
+const DefaultOutputWatchdog = time.Second
+
+// watchdog is the validated OutputWatchdog.
+func (m Manifest) watchdog() time.Duration {
+	wd, _ := time.ParseDuration(m.OutputWatchdog)
+	return wd
 }
 
 // span is how many bytes of an image the bindings in that direction
@@ -223,6 +258,12 @@ func (m Manifest) Validate() error {
 	var errs []error
 	if m.ByteOrder != ByteOrderBig && m.ByteOrder != ByteOrderLittle {
 		errs = append(errs, fmt.Errorf("byte-order %q (want big or little)", m.ByteOrder))
+	}
+	if m.Transport != TransportGRPC && m.Transport != TransportShm {
+		errs = append(errs, fmt.Errorf("transport %q (want grpc or shm)", m.Transport))
+	}
+	if wd, err := time.ParseDuration(m.OutputWatchdog); err != nil || wd < 0 {
+		errs = append(errs, fmt.Errorf("output-watchdog %q (want a duration such as 1s, or 0 to hold the last outputs)", m.OutputWatchdog))
 	}
 	if len(m.Tags) == 0 {
 		errs = append(errs, fmt.Errorf("no tag bindings"))
