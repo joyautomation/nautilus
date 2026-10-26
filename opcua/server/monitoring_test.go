@@ -564,3 +564,58 @@ func TestServerAnswersAfterASubscriptionIsCancelledWithValuesOwed(t *testing.T) 
 	// The deadlock showed when the loop reached the next CreateSubscription.
 	createSub(10)
 }
+
+// Disabling an item during a burst of changes stops it at once: a value it
+// had queued but not yet published is dropped, not sent after the client
+// was told Good (Part 4 §5.12.1.3; black-box F-27, which failed once in CI
+// on one late notification). The publishing interval is long so a queued
+// value sits for up to 600 ms before it would go out; the 100 ms after
+// Good is for what was already on the wire.
+func TestDisablingDropsWhatTheItemHadQueued(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() { // Count moves every 2 ms
+		var n int64
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+				n++
+				rt.Tags().Set("Count", n)
+			}
+		}
+	}()
+	notify := make(chan *opcua.PublishNotificationData, 256)
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 600 * time.Millisecond}, notify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Cancel(ctx)
+	resp, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth, opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Count"), ua.AttributeIDValue, 1))
+	if err != nil || resp.Results[0].StatusCode != ua.StatusGood {
+		t.Fatalf("monitor: %v %v", err, resp)
+	}
+	item := resp.Results[0].MonitoredItemID
+	for round := range 2 {
+		// Wait for a publish, then let the burst queue values for a while.
+		if got := count(notify, 900*time.Millisecond); got[1] == 0 {
+			t.Fatalf("round %d: the Reporting item heard nothing", round)
+		}
+		time.Sleep(time.Duration(150+200*round) * time.Millisecond)
+		mode, err := sub.SetMonitoringMode(ctx, ua.MonitoringModeDisabled, item)
+		if err != nil || mode.Results[0] != ua.StatusGood {
+			t.Fatalf("round %d: SetMonitoringMode(Disabled): %v %v", round, err, mode)
+		}
+		count(notify, 100*time.Millisecond)
+		if got := count(notify, 800*time.Millisecond); got[1] != 0 {
+			t.Fatalf("round %d: Disabled, yet %d notification(s) in the next 800 ms", round, got[1])
+		}
+		if _, err := sub.SetMonitoringMode(ctx, ua.MonitoringModeReporting, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
