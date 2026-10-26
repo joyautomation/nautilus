@@ -8,10 +8,16 @@
 # 4..7 (not 2..5), which is where the device lengths 16, 16, 0, 32 bits
 # put them.
 #
-# The driver reads the images through their GDS mirrors,
-# Arp.Plc.Eclr/PND_S1_INPUTS and PND_S1_OUTPUTS (see controller/ and the
-# README for the connector that makes that so); socket, inputs, outputs,
-# run-port and byte-order take their defaults.
+# transport: shm — the bytes go through rt/plcnext-io's nautilus_io, the
+# ACF-started shim that touches the Axioline frames every millisecond
+# through the firmware's ANSI-C API, by way of its shared-memory page
+# (shm and output-watchdog take their defaults: /dev/shm/nautilus-plcnext-io,
+# 1s). The BusConductor handshake still runs over the firmware's gRPC
+# socket. `transport: grpc` (the default) instead reads the images through
+# their GDS mirrors, Arp.Plc.Eclr/PND_S1_INPUTS and PND_S1_OUTPUTS (see
+# controller/ and the README) — with the shim deployed it is the frame's
+# only writer, so on grpc the outputs no longer reach the bus.
+transport: shm
 bus-conductor: BcComponent1
 modules:
   - { slot: 1, part: "AXL F DI16/4 1F", in: 2, out: 2, desc: "16 digital inputs (device 0x00400002, 16 bits)" }

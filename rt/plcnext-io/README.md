@@ -30,17 +30,96 @@ Stage 1 — prove the path — is done:
   the ACF to load the ANSI-C library and for the PLC domain's first
   `Start*` callback, acquires `1:IN`, `1:OUT` and `DiagVars`
   (`DI4096`/`DO4096` at offset 0, `AXIO_DIAG_STATUS_REG_RUN` at 1.5);
-- 1 ms cycle: reads the first input bytes and logs them on change —
-  they match the GDS mirror the gRPC path reads byte for byte
-  (`00 00 00 00 80 20 80 20`); writes a 1 Hz heartbeat on the DO16
-  module's output 15 as the frame's only writer;
-- cost: ~2 % of one core, 17 MB resident; lateness at 1 ms best-effort
-  (SCHED_FIFO refused, see below): about 1 cycle in 1 500 later than
-  200 µs, worst 1.7 ms over 80 000 cycles with the bus running.
+- 1 ms cycle: reads the input frame — byte for byte what the GDS mirror
+  the gRPC path reads (`00 00 00 00 80 20 80 20`); is the output frame's
+  only writer;
+- cost: ~2–3 % of one core, 17 MB resident.
 
-Not yet: the shared-memory exchange with the Go runtime (stage 2), and
-a human confirming the DO16 LED blinks (the frame is written; the
-module's UP supply decides whether a channel switches).
+Stage 2 — nautilus's I/O through it — is done and running on the bench:
+
+- every cycle the shim publishes the input frame, the bus RUN bit (read
+  from `DiagVars` every cycle; it rises at the BusConductor handshake
+  exactly when the gRPC `AXIO_DIAG_STATUS_REG_RUN` does), its stamp and
+  lateness counters, and the bytes it wrote to the output frame, into
+  the exchange page; and writes into the output frame what nautilus left
+  in the page — zeros before nautilus has written, and zeros again once
+  nautilus's outputs are older than its watchdog (`output-watchdog`,
+  default 1 s);
+- the plcnext driver's `transport: shm` reads and writes that page
+  (`plcnext/shm.go`); `examples/plcnext-bench` runs on it. bench.st's
+  1 Hz heartbeat on DO16 output 15 shows in the shim's own view of the
+  frame (`naut plcnext shm --watch`, and the shim's log): output byte 2
+  toggles `00`/`80` every 500 ms, generation applied = generation
+  written;
+- killing naut (`kill -9`) drops the frame to zero 1 s later, in the
+  shim's log as `nautilus's outputs are older than 1000 ms`; a runtime
+  restart restarts the shim, and naut sees the new start stamp, ends its
+  session and runs the BusConductor handshake again by itself.
+
+| bench, `examples/plcnext-bench` | transport grpc | transport shm |
+|---|---:|---:|
+| route per scan | 2 gRPC round trips | 2 copies through the page |
+| time per scan for the image | ~11 ms | 0.03–0.05 ms |
+| input age when naut reads it | — (the mirror, refreshed every 500 µs, plus the RPC) | 0.1–1.1 ms |
+| naut CPU at a 50 ms scan | 9 % | 4.0 % |
+| naut CPU at a 5 ms scan | — (the RPC alone is 11 ms) | 21.5 % |
+| shim CPU | — | 2.8–2.9 % |
+| naut resident | 23 MB | 20 MB |
+
+Lateness, best-effort (SCHED_FIFO refused, below), measured with
+`naut plcnext bench` (2026-10-24, 3–5 min windows, naut at a 50 ms
+scan, late = more than 200 µs after the shim's 1 ms deadline):
+
+| shim / naut | quiet | two busy loops | stream over ssh |
+|---|---:|---:|---:|
+| both free (the firmware's default) | 0.2–2.8 % late, worst 5–13 ms | 2.2 %, worst 4.3 ms | 66.5 %, worst 25 ms |
+| naut stopped | 0.12 %, worst 0.25–2.4 ms | | |
+| shim CPU 0, naut CPU 1 | 16 %, worst 5.2 ms | 19 %, worst 1.3 ms | 33 %, worst 9.5 ms |
+| **shim CPU 1, naut CPU 0** | **0.13 %, worst 2.6 ms** | **0.20 %, worst 0.95 ms** | **33 %, worst 9.6 ms** |
+
+"Worst" is the worst 10 000-cycle window the bench saw. Percentiles are
+in `bench.jsonl`; for the pinned row, p99 ≤ 200 µs and p99.9 ≤ 500 µs
+quiet and under the busy loops.
+
+What it says. On a two-core controller the shim's lateness is mostly
+who shares its core. Left alone the scheduler keeps the shim's cycle on
+CPU 1 and lets naut's threads wander onto it; how often they do is why
+the unpinned quiet runs range from 0.2 % to 2.8 %; the "1 cycle in
+1 500" this page quoted before came from single 10 s windows and does
+not hold up. CPU 0 carries the
+firmware's periodic RT tasks (one ESM core, `T_Cyclic100`, the
+Profinet timers), and a best-effort shim there is late one cycle in
+six. CPU 1 carries the other ESM core and the network receive path
+(`stmmacRxTsk` at FIFO 95, eth0's IRQ thread at 50), so pinning
+best-effort cannot help much under heavy traffic: two busy loops are
+shut out, an ssh stream is not. That last column is what SCHED_FIFO is
+for. The bench pins both (`nautilus_io.cpu`, `naut.cpu`, below).
+
+With SCHED_FIFO (after the `setcap` below; shim on CPU 1, naut on CPU 0
+with its scan task at FIFO 40, same 3 min windows):
+
+| shim | quiet | two busy loops | stream over ssh |
+|---|---:|---:|---:|
+| pinned, best-effort (above) | 0.13 % late, worst 2.6 ms | 0.20 %, worst 0.95 ms | 33 %, worst 9.6 ms |
+| FIFO 50 | 0 late; p99 ≤ 50 µs, worst 55 µs | 0 late (1 over 100 µs); worst 118 µs | 0.21 % in one run, 20 % in the next; worst ≤ 1–2 ms |
+| **FIFO 80** | **0 late; p50 ≤ 10 µs, p99 ≤ 20 µs, worst 51 µs** | **0 late; p99.99 ≤ 100 µs, worst 154 µs** | **3.2 % in both runs; p99 ≤ 500 µs, worst ≤ 1 ms** |
+
+naut's own scan at FIFO 40 stays within 500 µs of its deadline quiet and
+under the busy loops (the FIFO 50 busy-loop run had a worst scan of
+≤ 10 ms), and
+within 1–2 ms under the stream.
+
+So the shim's default is 80. At 50 it ties with eth0's interrupt thread,
+and between equal FIFO priorities whoever runs first finishes first:
+the same load, measured twice, gave 0.2 % and 20 %. At 80 the result
+repeats to the hundredth of a percent, and what is left under a stream
+is the network receive task (`stmmacRxTsk`, FIFO 95) on the same core,
+which nothing under the ESM outranks. Nothing is late by more than a
+millisecond in any FIFO run: the 1 ms cycle holds; the 200 µs line does
+not, while someone streams into the controller's Ethernet.
+
+Not yet: a human confirming the DO16 LED blinks (the frame is written;
+the module's UP supply decides whether a channel switches).
 
 ## Three things the bench taught, each the hard way
 
@@ -91,21 +170,72 @@ have one writer: the project's `PCWE.gds.config` has no connector into
 
 ## Real-time priority
 
-`sched_setscheduler(SCHED_FIFO)` is refused: the firmware's own
-`Arp.System.Application` carries file capabilities
+Out of the box `sched_setscheduler(SCHED_FIFO)` is refused: the
+firmware's own `Arp.System.Application` carries file capabilities
 (`cap_sys_nice`, …) and its children do not inherit them. The ESM tasks
-run at FIFO 97–98 in that process. Giving `nautilus_io` the same needs
-`setcap cap_sys_nice+ep nautilus_io` as root, and `admin`'s sudo on a
-PLCnext is an allowlist without `setcap`. Until that is solved the
-cycle is best-effort, which the numbers above describe honestly; with
-it, the sample runtime's 1 ms cycle with sub-100 µs jitter is the
-expectation.
+run at FIFO 97–98 in that process. `nautilus_io` needs the same file
+capability, and `admin`'s sudo on a PLCnext is an allowlist without
+`setcap`, but it has `passwd`, which is Phoenix's documented way to a
+root login. So, once per binary, typed by the controller's owner:
 
-## Stage 2
+```sh
+ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/io/nautilus_io; setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut; getcap /opt/plcnext/apps/nautilus/io/nautilus_io /opt/plcnext/apps/nautilus/naut"; sudo passwd -l root'
+```
 
-`nautilus_io` becomes the I/O side of the plcnext driver: it exchanges
-the two frames with the Go runtime through the seqlock page
-`rt/fastloop` already defines (inputs out, outputs in, a scan counter
-and a monotonic stamp), and the driver gains `transport: shm` beside
-the gRPC path. The manifest, bindings and tag file do not change; only
-the bytes' route does.
+sets a root password, uses it once, and locks root again. A capability
+belongs to the file: copying a new build into place drops it, so the
+step is part of every deploy of either binary that should run FIFO.
+Without it both run best-effort and say so (the page's `NIO_ST_FIFO`,
+the log's `refused`, naut's `scan.sched`). naut needs it only for a
+task with `priority:`; the bench's scan task is at 40 once it is set.
+
+The shim asks for priority 80 — over the firmware's interrupt threads
+(50), under `T_Cyclic100` (82), its network receive task (95) and the
+ESM (97–98); the FIFO table above is why not 50. A `nautilus_io.prio`
+file beside the binary holding one number (1–96) asks for another; the
+page reports what was asked (`NIO_OFF_PRIO`) and whether it was granted
+(`NIO_ST_FIFO`).
+
+A `nautilus_io.cpu` file beside the binary pins the cycle to one CPU;
+that needs no capability. Use CPU 1, with naut on CPU 0 (`naut.cpu`
+beside naut, read by `naut-keepalive.sh`): the table above is why.
+
+To compare, `naut plcnext bench` on the controller measures one window
+from the page and naut's `/api/state`: the shim's lateness histogram
+(cumulative in the page, so a window is a difference), its worst
+10 000-cycle window, naut's scan lateness, and CPU.
+`examples/plcnext-bench/controller/bench-matrix.sh <mode> 5m` runs it
+quiet, under two busy loops, and under a stream over ssh, appending JSON
+lines to `/opt/plcnext/apps/nautilus/bench.jsonl` with the CPUs
+each side ran on; run it once best-effort and once after the `setcap`.
+
+## The exchange page
+
+`nautilus_io_shm.h` is the one definition; `plcnext/shm.go` mirrors it
+and a Go test reads the header and fails if they drift. One 4096-byte
+file, `/dev/shm/nautilus-plcnext-io`, little-endian, rt/fastloop's
+seqlock shape — two blocks, one writer each, sequence odd while
+writing, readers copy between two equal even reads with bounded
+retries, nobody waits:
+
+| offset | block | writer | what |
+|---|---|---|---|
+| 0 | header | shim, once | magic `NAUTPNIO`, version, period, frame length, pid, start stamp, late threshold |
+| 64 | inputs | shim, every cycle | status (PLC started, frames, RUN known, RUN, FIFO, watchdog), cycle stamp, input-frame stamp, cycles, late, worst, last, generation applied, torn |
+| 128 | | | input frame, 512 bytes |
+| 640 | | | the output frame as the shim wrote it this cycle, 512 bytes |
+| 2048 | outputs | naut, every scan | length owned (from 0; 0 = never written), stamp, generation, watchdog ms |
+| 2112 | | | output bytes, 512 |
+
+The shim creates the file 0666 as `plcnext_firmware` — the firmware's
+own `/dev/shm` segments are made the same way, and `admin` is in that
+group — and keeps nautilus's block across its own restart. naut never
+creates it: no page means no shim. Stamps are `CLOCK_MONOTONIC`, one
+clock for both. `naut plcnext shm [--watch 250ms]` prints the page
+without writing it.
+
+Quality on the Go side: Good while the shim's stamp and input frame are
+under 100 ms old and the PLC is started; Bad while the shim reads bus
+RUN false; Stale when it stops cycling (the mapping survives, so it
+recovers by itself); a new start stamp — the runtime restarted — ends
+the session so the handshake runs again.
