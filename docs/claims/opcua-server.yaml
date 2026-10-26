@@ -29,19 +29,19 @@ claims:
       written, every interface address for 0.0.0.0, the host name, loopback)
       and never the wildcard itself; a client may dial any of them, and
       GetEndpoints for an unknown URL returns every endpoint rather than none.
+      CreateSession's ServerEndpoints are the list GetEndpoints gives for the
+      same URL, so a client that reached the server through a name it was not
+      told about (a NAT address, a DNS alias) can open a session.
     source: "#serving-opc-ua"
     tests:
       - go ./tools/blackbox TestBlackbox/001-F17-endpoints-advertised
       - go ./tools/blackbox TestBlackbox/001-F24-advertises-0000
+      - go ./tools/blackbox TestBlackbox/001-F23-createsession-serverendpoints
       - go ./opcua/server TestEndpointHosts
       - go ./opcua/server TestEndpointsMatchEveryAliasAndFallBackToAll
       - go ./opcua/server TestWildcardIsNotAdvertised
-    partial: true
-    note: >-
-      A session through a name the server was not told about (a NAT address,
-      a DNS alias) gets the list from GetEndpoints but an empty
-      ServerEndpoints from CreateSession, which is gopcua's and cannot be
-      wrapped; #430.
+      - go ./opcua/server TestCreateSessionEndpointsAreTheDiscoveryList
+      - go ./opcua/internal/uaserver TestCreateSessionServerEndpointsForAnUnknownURL
 
   - id: OPC-002
     claim: >-
@@ -243,11 +243,20 @@ claims:
       silent from the start; and an item id that is not an item is refused
       in its own result. Items are booked without a blocking send, so a
       subscription that stops draining cannot freeze the server.
+      CloseSession with deleteSubscriptions deletes the session's
+      subscriptions and their items before it answers, and without it leaves
+      them to their lifetime; a subscription id is never issued twice.
     source: "#subscriptions"
     tests:
+      - go ./opcua/server TestCloseSessionHonoursDeleteSubscriptions
+      - go ./opcua/server TestSubscriptionIDsAreNeverReused
+      - go ./opcua/internal/uaserver TestCreateSubscriptionNeverReusesAnID
+      - go ./opcua/server TestServerAnswersAfterASubscriptionIsCancelledWithValuesOwed
+      - go ./tools/blackbox TestBlackbox/001-F13-closesession-deletes-subscriptions
       - go ./opcua/server TestRevisePublishing
       - go ./opcua/server TestPublishingIntervalIsRevisedNotActedOn
       - go ./opcua/server TestMonitoringModeIsHonoured
+      - go ./opcua/server TestDisablingDropsWhatTheItemHadQueued
       - go ./opcua/server TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription
       - go ./opcua/server TestNewItemHearsTheCurrentValueOnce
       - go ./tools/blackbox TestBlackbox/001-F25-publish-interval-zero-crash
