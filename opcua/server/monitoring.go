@@ -28,9 +28,9 @@ import (
 	"math"
 	"time"
 
-	opcserver "github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uasc"
+	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 )
 
 // maxPublishingInterval is the longest publishing interval a subscription

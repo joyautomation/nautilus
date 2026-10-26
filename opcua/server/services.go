@@ -40,9 +40,9 @@ import (
 	"time"
 
 	"github.com/gopcua/opcua/id"
-	opcserver "github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uasc"
+	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 )
 
 // endpointHosts decides where the server listens for the host an author

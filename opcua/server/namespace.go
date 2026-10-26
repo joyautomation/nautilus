@@ -27,9 +27,9 @@ import (
 	"time"
 
 	"github.com/gopcua/opcua/id"
-	opcserver "github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/lang/ir"
+	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 	"github.com/joyautomation/nautilus/runtime"
 )
 

@@ -3,9 +3,12 @@
 // gateway, UAExpert, a historian — can browse, read and subscribe to the
 // tags with no configuration on the nautilus side beyond the endpoint.
 //
-// The server is built on gopcua's server package for the protocol (secure
-// channel, sessions, services) and nothing else: the address space is this
-// package's own NameSpace over runtime.Tags (namespace.go), read on demand.
+// The server is built on opcua/internal/uaserver for the protocol (secure
+// channel, sessions, services) and nothing else: that is gopcua v0.9.1's
+// server package, copied in and ours to fix, over gopcua's encoding and
+// secure-channel layers. The address space is this package's own NameSpace
+// over runtime.Tags (namespace.go), read on demand. Comments here that say
+// "gopcua" mean that inherited code.
 //
 // It is read-only. Writes are refused with Bad_UserAccessDenied, because
 // the only thing a client can be today is anonymous; writes on a secure
@@ -32,9 +35,9 @@ import (
 	"time"
 
 	"github.com/gopcua/opcua/id"
-	opcserver "github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/lang/ir"
+	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
