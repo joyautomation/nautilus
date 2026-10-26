@@ -1,4 +1,4 @@
-package server
+package uaserver
 
 import (
 	"log"
@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/gopcua/opcua/id"
-	"github.com/gopcua/opcua/server/attrs"
-	"github.com/gopcua/opcua/server/refs"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/opcua/internal/uaserver/attrs"
+	"github.com/joyautomation/nautilus/opcua/internal/uaserver/refs"
 )
 
 type Attributes map[ua.AttributeID]*ua.DataValue

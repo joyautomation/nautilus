@@ -2,7 +2,7 @@
 // Use of this source code is governed by a MIT-style license that can be
 // found in the LICENSE file.
 
-package server
+package uaserver
 
 import (
 	"context"
@@ -22,8 +22,6 @@ import (
 	"github.com/gopcua/opcua/uacp"
 	"github.com/gopcua/opcua/uapolicy"
 )
-
-//go:generate go run ../cmd/predefined-nodes/main.go
 
 const defaultListenAddr = "opc.tcp://localhost:0"
 

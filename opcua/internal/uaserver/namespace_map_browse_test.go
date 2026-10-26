@@ -1,4 +1,4 @@
-package server
+package uaserver
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	"github.com/stretchr/testify/require"
+	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
 )
 
 // mapBrowseTestServer builds a server with a MapNamespace of tagCount tags and

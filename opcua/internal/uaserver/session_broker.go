@@ -1,4 +1,4 @@
-package server
+package uaserver
 
 import (
 	mrand "math/rand"

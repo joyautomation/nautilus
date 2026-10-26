@@ -1,10 +1,10 @@
-package server
+package uaserver
 
 import (
 	"testing"
 
 	"github.com/gopcua/opcua/ua"
-	"github.com/stretchr/testify/require"
+	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
 )
 
 // TestRegisterNodesIdentity checks that RegisterNodes echoes the requested

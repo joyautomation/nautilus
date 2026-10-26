@@ -1,11 +1,11 @@
-package server
+package uaserver
 
 import (
 	"time"
 
 	"github.com/gopcua/opcua/id"
-	"github.com/gopcua/opcua/server/attrs"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/opcua/internal/uaserver/attrs"
 )
 
 func CurrentTimeNode() *Node {

@@ -1,11 +1,11 @@
-package server
+package uaserver
 
 import (
 	"testing"
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	"github.com/stretchr/testify/require"
+	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
 )
 
 // TestDescriptionIsLocalizedText checks that nodes built by NewVariableNode
