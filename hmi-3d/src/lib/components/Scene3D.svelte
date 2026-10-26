@@ -13,9 +13,10 @@
 	// bundle holds at its Milestone 1 size.
 	import { T, useThrelte } from '@threlte/core';
 	import { Grid, OrbitControls, interactivity } from '@threlte/extras';
-	import { Color, NoToneMapping } from 'three';
+	import { Color, NoToneMapping, PMREMGenerator } from 'three';
+	import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 	import { getContext, setContext, type Component, type Snippet } from 'svelte';
-	import type { SceneCamera, SceneDoc, SceneEnvironment, SceneGrid, SceneLook, Vec3 } from '../scene.js';
+	import { docPorts, resolvePipePoints, type KindBoxes, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneGrid, type SceneLook, type Vec3 } from '../scene.js';
 	import { registryFor, type NodeRegistry, type NodeProps, type Box } from '../registry.js';
 	import type { AssetAlarm } from '../alarms.js';
 	import { SCENE, type PlacedNode, type SceneContext } from '../context.js';
@@ -38,6 +39,7 @@
 		grid,
 		environment,
 		placed = $bindable({}),
+		pick = true,
 		onpick,
 		oncontext,
 		children
@@ -61,6 +63,10 @@
 		/** Every placed node with an id, as they announce themselves — what
 		 * the inspector drawer reads. Bind it, or let it be. */
 		placed?: Record<string, PlacedNode>;
+		/** Whether nodes pick at all: the hover outline, the pointer cursor,
+		 * onpick. Off for a viewer that picks nothing, or a host that picks
+		 * parts inside one model itself (the kind editor). */
+		pick?: boolean;
 		/** A node was clicked (not dragged). Never fires for a click on nothing. */
 		onpick?: (id: string) => void;
 		/** A node was right-clicked; `event` is the browser's (clientX/Y). */
@@ -94,6 +100,26 @@
 	let ortho = $derived(cam.projection === 'orthographic');
 	let zoom = $derived($size.width / (cam.width ?? 6));
 
+	// Lit with no HDRI: a model's PBR materials have nothing to reflect
+	// under two lights alone, and a metal pump reads as black. three's
+	// RoomEnvironment — a lit room, generated, no asset — stands in as the
+	// environment until a document names one (James, 2026-10-22: "is there
+	// a reason lit is so dark?").
+	$effect(() => {
+		if (!lit || env) return;
+		const pmrem = new PMREMGenerator(renderer);
+		const tex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+		scene.environment = tex;
+		scene.environmentIntensity = 0.9;
+		invalidate();
+		return () => {
+			if (scene.environment === tex) scene.environment = null;
+			tex.dispose();
+			pmrem.dispose();
+			invalidate();
+		};
+	});
+
 	// Paper: the backdrop is the sheet itself, whatever the page behind the
 	// canvas is, and no tone mapping — the filmic curve exists to keep a
 	// lit scene's highlights, and would turn this look's whites grey. Both
@@ -119,7 +145,7 @@
 	// the flat look is for); one under a new name draws its model in that
 	// look's materials (GltfNode reads the view), so a station of modelled
 	// kinds is never a page of labels over nothing.
-	let hasModels = $derived(Object.values(doc?.kinds ?? {}).some((k) => k.model));
+	let hasModels = $derived(Object.values(doc?.kinds ?? {}).some((k) => typeof k !== 'string' && k.model));
 	let GltfNode = $state<Component<NodeProps> | null>(null);
 	$effect(() => {
 		if (hasModels && !GltfNode) import('./GltfNode.svelte').then((m) => (GltfNode = m.default as Component<NodeProps>));
@@ -135,8 +161,15 @@
 		canvas.style.cursor = '';
 	});
 
-	// Bounds a data kind reports once its model is loaded.
+	// Bounds a data kind reports once its model is loaded, and its parts'.
 	let autoBounds = $state<Record<string, Box>>({});
+	let partBoxes = $state<Record<string, Record<string, Box>>>({});
+	/** What a node's box-point ports resolve against. */
+	function boxesOf(id: string): KindBoxes | undefined {
+		const n = doc?.nodes.find((x) => x.id === id);
+		const d = n && effective[n.kind];
+		return { bounds: d ? (d.bounds === 'auto' ? autoBounds[id] : d.bounds) : autoBounds[id], parts: partBoxes[id] };
+	}
 	const FALLBACK: Box = { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] };
 
 	setContext<SceneContext>(SCENE, {
@@ -156,6 +189,9 @@
 		get hovered() {
 			return hovered;
 		},
+		get picks() {
+			return pick;
+		},
 		hover(id) {
 			hovered = id;
 			// The cursor says a click will do something.
@@ -168,6 +204,10 @@
 		boundsOf: (id, b) => (b === 'auto' ? (id !== undefined ? (autoBounds[id] ?? FALLBACK) : FALLBACK) : b),
 		reportBounds(id, box) {
 			if (id !== undefined) autoBounds[id] = box;
+		},
+		partsOf: (id) => (id !== undefined ? partBoxes[id] : undefined),
+		reportParts(id, parts) {
+			if (id !== undefined) partBoxes[id] = parts;
 		},
 		reportFailed(id) {
 			if (id !== undefined) failed[id] = true;
@@ -227,7 +267,13 @@
 	{/each}
 
 	{#each doc.pipes ?? [] as p, i (p.id ?? i)}
-		<Pipe points={p.points} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
+		<!-- An anchored end resolves through its node's pos / rot / scale and
+		     the port its kind declares (the document's entry first, then the
+		     registry's); a pipe whose anchor resolves to nothing is not drawn. -->
+		{@const pts = resolvePipePoints(p, doc.nodes, (k) => docPorts(doc, k) ?? effective[k]?.ports, boxesOf)}
+		{#if pts}
+			<Pipe points={pts} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
+		{/if}
 	{/each}
 
 	{#each doc.nodes as n (n.id)}

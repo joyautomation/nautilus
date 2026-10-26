@@ -5,7 +5,7 @@
 // document, only in-flight gestures (a drag's live position, the armed
 // kind, the selection).
 import { vscode } from '../vscodeApi';
-import type { SceneDoc, SceneLook, Vec3 } from '@joyautomation/nautilus-hmi-3d';
+import type { PipeAnchor, SceneDoc, SceneLook, Vec3 } from '@joyautomation/nautilus-hmi-3d';
 import { cloneSafe, opFailureMessage } from '../mimic/opPayload';
 
 /** Mirror of src/sceneOps.ts (extension host). Patch semantics: a key set
@@ -16,7 +16,7 @@ export type SceneOp =
 	| { type: 'moveNode'; id: string; pos: Vec3; rot?: Vec3 }
 	| { type: 'updateNode'; id: string; patch: Record<string, unknown> }
 	| { type: 'deleteNode'; id: string }
-	| { type: 'addPipe'; points: Vec3[]; id?: string; bind?: { flowing?: string } }
+	| { type: 'addPipe'; points?: Vec3[]; from?: PipeAnchor; to?: PipeAnchor; id?: string; bind?: { flowing?: string } }
 	| { type: 'setPipePoints'; index: number; points: Vec3[] }
 	| { type: 'deletePipe'; index: number }
 	| { type: 'setCamera'; pos: Vec3; target: Vec3 }
@@ -30,7 +30,12 @@ export type PaletteKind = {
 	members: string[];
 	source?: string;
 	parts?: number;
+	/** The kind file the entry names, relative to the scene (§3g). */
+	file?: string;
 };
+
+/** Mirror of src/sceneEditorLogic.ts's KindFileReport. */
+export type KindFileReport = { name: string; path: string; file?: string; error?: string };
 
 /** Mirror of src/sceneEditorLogic.ts's AssetReport: where each asset path
  * the document names was found (`file` absent = nowhere). */
@@ -54,11 +59,24 @@ export const ed = $state({
 	/** The palette: built-ins plus the document's own kinds. */
 	kinds: [] as PaletteKind[],
 	assets: [] as AssetReport[],
+	/** The kind files the document names, and what came of each. */
+	kindFiles: [] as KindFileReport[],
 	/** The selected node's id. */
 	selected: null as string | null,
 	tool: 'select' as Tool,
 	/** The kind armed for placement (tool === 'place'). */
 	placeKind: '',
+	/** A pipe being drawn: its first end, a port that was clicked. The next
+	 * port clicked is the other end. */
+	pipeFrom: null as PipeAnchor | null,
+	/** The port under the pointer on the stage. */
+	hoverPort: null as PipeAnchor | null,
+	/** The selected pipe (an index into doc.pipes): its points wear
+	 * handles on the stage. Selecting a pipe deselects the node. */
+	selectedPipe: null as number | null,
+	/** The selected point of that pipe (an index into its `points`): the
+	 * gizmo is on it; release posts setPipePoints. */
+	selectedVertex: null as number | null,
 	gizmo: 'translate' as Gizmo,
 	/** Mirrors `nautilus.scene.snapToGrid`. */
 	snapToGrid: true,
@@ -119,6 +137,11 @@ export function announceReady(): void {
 	vscode.postMessage({ type: 'sceneReady' });
 }
 
+/** Open a file-backed kind in the kind editor, beside the scene. */
+export function openKind(file: string): void {
+	vscode.postMessage({ type: 'openKind', value: file });
+}
+
 export function setSnapToGrid(value: boolean): void {
 	ed.snapToGrid = value;
 	vscode.postMessage({ type: 'setSnapToGrid', value });
@@ -138,6 +161,29 @@ export function armPlace(kind: string): void {
 export function disarm(): void {
 	ed.tool = 'select';
 	ed.placeKind = '';
+	ed.pipeFrom = null;
+}
+
+/** Select a pipe (its points get handles), or none. */
+export function selectPipe(index: number | null): void {
+	ed.selectedPipe = index;
+	ed.selectedVertex = null;
+	if (index !== null) ed.selected = null;
+}
+
+/** Drop the selected vertex from its pipe — when the run keeps at least
+ * two points counting the anchored ends; a shorter run is the pipe's
+ * delete, not a vertex's. */
+export function deleteSelectedVertex(): boolean {
+	const i = ed.selectedPipe;
+	const v = ed.selectedVertex;
+	const pipe = i !== null ? ed.doc?.pipes?.[i] : undefined;
+	if (!pipe || v === null) return false;
+	const points = (pipe.points ?? []).filter((_, k) => k !== v);
+	if (points.length + (pipe.from ? 1 : 0) + (pipe.to ? 1 : 0) < 2) return false;
+	postOp({ type: 'setPipePoints', index: i!, points });
+	ed.selectedVertex = null;
+	return true;
 }
 
 /** The grid pitch a drag snaps to, metres: the document's grid cell. */

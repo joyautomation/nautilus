@@ -298,7 +298,11 @@ func TestCheckDataKindsStructural(t *testing.T) {
 			{"mesh": "M", "spin": {"axis": "x", "revPerS": {"bind": "Speed"}}, "tint": {"bind": "Running", "on": "running"}},
 			{"mesh": "M", "scale": {"axis": "xyz", "to": {"bind": "Level"}}},
 			{"mesh": "M", "tint": {"bind": "Running"}},
-			{"mesh": "M", "emissive": {"bind": "Fault", "on": "critical", "intensity": -1}}
+			{"mesh": "M", "emissive": {"bind": "Fault", "on": "critical", "intensity": -1}},
+			{"mesh": "M", "visible": {"bind": "Fault", "blink": 0}},
+			{"mesh": "M", "pulse": {"bind": "Alarm", "hz": 0, "amount": 2}},
+			{"mesh": "M", "tint": {"bind": "T", "ramp": [[0, "a"], [1, "b"]], "blink": 1}},
+			{"mesh": "M", "pulse": {"bind": "!Alarm", "hz": 2, "amount": 0.5, "blink": 1}}
 		]}},
 		"environment": {"hdri": "env/x.png", "backdrop": "env/x.txt", "background": "wall", "intensity": -1, "fog": {"near": 5, "far": 2}},
 		"fixtures": [{"kind": "box", "pos": [0, 0, 0], "texture": {"map": "a.jpg"}}],
@@ -309,8 +313,9 @@ func TestCheckDataKindsStructural(t *testing.T) {
 		"/kinds/a/model:", "/kinds/b/model:", "/kinds/c/bounds:", "/kinds/c/labelAt:", "/kinds/c/status:",
 		"/kinds/d/drive: drives need a model",
 		"/kinds/e/drive/0/mesh:", "/kinds/e/drive/0/spin/axis:", "/kinds/e/drive/0/spin/revPerS/bind:",
-		"/kinds/e/drive/1: a drive has exactly one of spin, turn, scale, tint, emissive, visible",
+		"/kinds/e/drive/1: a drive has exactly one of spin, turn, scale, tint, emissive, visible, pulse",
 		"/kinds/e/drive/3/tint/on:", "/kinds/e/drive/4/emissive/intensity:",
+		"/kinds/e/drive/5/visible/blink:", "/kinds/e/drive/6/pulse/hz:", "/kinds/e/drive/6/pulse/amount:", "/kinds/e/drive/7/tint: on, off, threshold and blink are not with a ramp",
 		"/environment/hdri:", "/environment/backdrop:", "/environment/fog/far:", "/environment/background:", "/environment/intensity:",
 		"/fixtures/0/texture: only a plane",
 	} {
@@ -320,6 +325,9 @@ func TestCheckDataKindsStructural(t *testing.T) {
 	}
 	if strings.Contains(got, "/kinds/e/drive/2") {
 		t.Errorf("xyz is a valid scale axis:\n%s", got)
+	}
+	if strings.Contains(got, "/kinds/e/drive/8") {
+		t.Errorf("a pulse with a negated bind, a rate, an amount and a blink is valid:\n%s", got)
 	}
 	// A channel outside the vocabulary is an unknown field at parse time.
 	if _, err := Parse([]byte(`{"kinds": {"x": {"model": "m.glb", "drive": [{"mesh": "M", "wobble": {}}]}}, "nodes": []}`)); err == nil || !strings.Contains(err.Error(), "wobble") {
@@ -454,6 +462,14 @@ func TestBuiltinMatchesTheDataKinds(t *testing.T) {
 		}
 		if k.Model != "models/"+name+".glb" {
 			t.Errorf("%s model: %s", name, k.Model)
+		}
+		if strings.Join(sortedPortNames(k.Ports), ",") != strings.Join(sortedPortNames(b.Ports), ",") {
+			t.Errorf("%s ports: kinds.json %v, Builtin %v", name, sortedPortNames(k.Ports), sortedPortNames(b.Ports))
+		}
+		for pn, bp := range b.Ports {
+			if kp, ok := k.Ports[pn]; ok && (string(kp.At) != string(bp.At) || !reflect.DeepEqual(kp.Dir, bp.Dir)) {
+				t.Errorf("%s port %s: kinds.json %s %v, Builtin %s %v", name, pn, kp.At, kp.Dir, bp.At, bp.Dir)
+			}
 		}
 	}
 	if len(kinds) != len(Builtin) {
@@ -630,6 +646,9 @@ func TestKindContractMatchesTheSchema(t *testing.T) {
 	rt := reflect.TypeOf(Kind{})
 	for i := 0; i < rt.NumField(); i++ {
 		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if name == "-" {
+			continue // File: the path form of the entry, not a key
+		}
 		fromGo = append(fromGo, name)
 	}
 	sort.Strings(fromGo)
@@ -644,6 +663,244 @@ func TestKindContractMatchesTheSchema(t *testing.T) {
 	for _, f := range []string{"nodes", "pipes"} {
 		if _, ok := schema.Definitions.Assembly.Properties[f]; !ok {
 			t.Errorf("schema assembly has no property %q", f)
+		}
+	}
+}
+
+// A kind in a file of its own (design §3g, slice 2): the entry is a path,
+// resolved next to the scene file and then checked as if it were inline.
+func TestKindFilesResolveAndCheck(t *testing.T) {
+	d := parse(t, `{"kinds": {
+		"subpump": "hmi/src/lib/kinds/pump.kind.json",
+		"tank": {"type": "Tank"}
+	}, "nodes": [{"id": "P1", "kind": "subpump", "tag": "P1", "pos": [0, 0, 0]}]}`)
+	if got := d.Kinds["subpump"].DefinedBy(); got != "file" {
+		t.Fatalf("unresolved entry DefinedBy = %q, want file", got)
+	}
+	if kf := d.KindFiles(); len(kf) != 1 || kf[0] != [2]string{"/kinds/subpump", "hmi/src/lib/kinds/pump.kind.json"} {
+		t.Fatalf("KindFiles = %v", kf)
+	}
+	// Before resolution, Check holds the path only.
+	if errs, _ := Check(d, nil); len(errs) != 0 {
+		t.Fatalf("unresolved: %v", errs)
+	}
+	files := map[string]string{
+		"hmi/src/lib/kinds/pump.kind.json": `{"type": "Motor", "model": "models/pump.glb", "status": "{Running?run:stopped} {SpeedHz:0} Hz",
+			"drive": [{"mesh": "Impeller", "spin": {"axis": "y", "revPerS": {"bind": "SpeedHz", "scale": 0.0333}}}]}`,
+	}
+	read := func(p string) ([]byte, error) {
+		if s, ok := files[p]; ok {
+			return []byte(s), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	if errs := ResolveKindFiles(d, read); len(errs) != 0 {
+		t.Fatalf("resolve: %v", errs)
+	}
+	k := d.Kinds["subpump"]
+	if k.File != "hmi/src/lib/kinds/pump.kind.json" || k.Model != "models/pump.glb" || k.DefinedBy() != "model" {
+		t.Fatalf("resolved kind = %+v", k)
+	}
+	// The file's members reach the node check: P1 is a Motor with SpeedHz and Running.
+	tags := []TagInfo{{Name: "P1", TypeName: "Motor", Struct: udt("Motor", "Running:bool", "Fault:bool")}}
+	errs, _ := Check(d, tags)
+	if len(errs) != 1 || !strings.Contains(errs[0], `/nodes/0/tag: Motor "P1" has no member SpeedHz, which kind "subpump" reads`) {
+		t.Fatalf("resolved check: %v", errs)
+	}
+	// Assets see the model from the file.
+	if a := d.Assets(); len(a) != 1 || a[0][1] != "models/pump.glb" {
+		t.Fatalf("assets = %v", a)
+	}
+	// Encode writes the path back, not the file's content.
+	out, err := Encode(d)
+	if err != nil || !strings.Contains(string(out), `"subpump": "hmi/src/lib/kinds/pump.kind.json"`) || strings.Contains(string(out), "Impeller") {
+		t.Fatalf("encode: %v\n%s", err, out)
+	}
+}
+
+func TestKindFilesErrors(t *testing.T) {
+	d := parse(t, `{"kinds": {
+		"a": "/abs/a.kind.json",
+		"b": "hmi/b.json",
+		"c": "hmi/missing.kind.json",
+		"d": "hmi/bad.kind.json",
+		"e": "hmi/comp.kind.json",
+		"f": "hmi/unknown.kind.json"
+	}, "nodes": []}`)
+	files := map[string]string{
+		"hmi/bad.kind.json":     `{"model": `,
+		"hmi/comp.kind.json":    `{"component": "hmi/src/lib/Skid.svelte"}`,
+		"hmi/unknown.kind.json": `{"model": "models/x.glb", "colour": "red"}`,
+	}
+	read := func(p string) ([]byte, error) {
+		if s, ok := files[p]; ok {
+			return []byte(s), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	// Check alone refuses the malformed paths.
+	errs, _ := Check(d, nil)
+	if len(errs) != 2 || !strings.Contains(errs[0], "/kinds/a: a kind file is a {Name}.kind.json") || !strings.Contains(errs[1], "/kinds/b: a kind file is") {
+		t.Fatalf("check unresolved: %v", errs)
+	}
+	errs = ResolveKindFiles(d, read)
+	for _, want := range []string{
+		"/kinds/a: a kind file is a {Name}.kind.json",
+		"/kinds/b: a kind file is a {Name}.kind.json",
+		`/kinds/c: "hmi/missing.kind.json" was not found next to the scene file`,
+		"/kinds/d: hmi/bad.kind.json: ",
+		"/kinds/e: hmi/comp.kind.json holds a component kind",
+		`/kinds/f: hmi/unknown.kind.json: json: unknown field "colour"`,
+	} {
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing %q in %v", want, errs)
+		}
+	}
+	if len(errs) != 6 {
+		t.Errorf("got %d errors: %v", len(errs), errs)
+	}
+}
+
+func TestKindEntryRejectsUnknownFieldsInline(t *testing.T) {
+	if _, err := Parse([]byte(`{"kinds": {"pump": {"model": "models/p.glb", "colour": "red"}}, "nodes": []}`)); err == nil || !strings.Contains(err.Error(), "colour") {
+		t.Fatalf("want an unknown-field error, got %v", err)
+	}
+}
+
+// Ports on a kind and pipe ends anchored to them (design §3g, slice 3).
+func TestCheckPortsAndAnchors(t *testing.T) {
+	parse := func(src string) *Doc {
+		t.Helper()
+		d, err := Parse([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	ok := parse(`{
+		"kinds": {
+			"subpump": {"type": "Motor", "model": "models/subpump.glb", "ports": {"suction": {"at": [0, 0.1, 0.2], "dir": [0, 0, 1]}, "discharge": {"at": [0, 0.43, -0.5]}}},
+			"tank": {"ports": {"inlet": {"at": [0, 0.5, 0], "dir": [0, 1, 0]}}}
+		},
+		"nodes": [
+			{"id": "P101", "kind": "subpump", "pos": [1, 0, 2], "rot": [0, 90, 0]},
+			{"id": "T101", "kind": "tank", "pos": [3, 0, 0], "scale": 2},
+			{"id": "XV1", "kind": "valve", "pos": [0, 0, 0]}
+		],
+		"pipes": [
+			{"from": {"node": "P101", "port": "discharge"}, "to": {"node": "T101", "port": "inlet"}},
+			{"from": {"node": "XV1", "port": "out"}, "points": [[1, 1, 1]]}
+		]
+	}`)
+	if errs, _ := Check(ok, nil); len(errs) != 0 {
+		t.Fatalf("anchored pipes: %v", errs)
+	}
+	var inlet Vec
+	if err := json.Unmarshal(ok.EffectiveKinds()["tank"].Ports["inlet"].At, &inlet); err != nil || len(inlet) != 3 || inlet[1] != 0.5 {
+		t.Errorf("EffectiveKinds dropped the tank's ports: %v %v", inlet, err)
+	}
+	bad := parse(`{
+		"kinds": {"subpump": {"model": "models/subpump.glb", "ports": {"a/b": {"at": [0, 0, 0]}, "ok": {"at": [1], "dir": [0, 0, 0]}}}},
+		"nodes": [{"id": "P101", "kind": "subpump", "pos": [0, 0, 0]}],
+		"pipes": [
+			{"from": {"node": "P999", "port": "ok"}, "to": {"node": "P101", "port": "vent"}},
+			{"from": {"node": "P101", "port": "ok"}, "points": []},
+			{"from": {"node": "P101"}, "points": [[0, 0, 0], [1, 0, 0]]}
+		]
+	}`)
+	errs, _ := Check(bad, nil)
+	got := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"/kinds/subpump/ports/a/b: a port name",
+		"/kinds/subpump/ports/ok/at:",
+		"/kinds/subpump/ports/ok/dir:",
+		`/pipes/0/from/node: no node "P999" in this frame`,
+		`/pipes/0/to/port: kind "subpump" has no port "vent" (it has a/b, ok)`,
+		"/pipes/1/points: needs at least two points counting the anchored ends",
+		"/pipes/2/from/port: must name one of the node's kind's ports",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Encode keeps an anchor as written and a port's vectors on one line.
+	out, err := Encode(ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"from": {`, `"port": "discharge"`, `"at": [0, 0.43, -0.5]`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("Encode lost %q:\n%s", want, out)
+		}
+	}
+}
+
+// Box points (a port or a label at top / left / front of a part) and
+// colour ramps on an analog (design §3g).
+func TestCheckBoxPointsAndRamps(t *testing.T) {
+	parse := func(src string) *Doc {
+		t.Helper()
+		d, err := Parse([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	ok := parse(`{
+		"kinds": {"subpump": {"model": "models/p.glb", "labelAt": "top",
+			"ports": {"discharge": {"at": {"part": "Flange", "anchor": "top-front", "offset": [0, 0.01, 0]}}, "suction": {"at": [0, 0.1, 0.2]}},
+			"drive": [
+				{"mesh": "Shell", "tint": {"bind": "TempC", "ramp": [[20, "fluid"], [60, "#ffffff"], [90, "critical"]]}},
+				{"mesh": "Lamp", "emissive": {"bind": "Speed", "ramp": [[0, "stale"], [60, "running"]], "intensity": 2}}
+			]},
+			"well": {"model": "models/w.glb", "labelAt": {"part": "Lid", "anchor": "top"}}},
+		"nodes": [{"id": "P1", "kind": "subpump", "pos": [0, 0, 0]}]
+	}`)
+	if errs, _ := Check(ok, nil); len(errs) != 0 {
+		t.Fatalf("box points and ramps: %v", errs)
+	}
+	members := ok.EffectiveKinds()["subpump"].Members
+	if !contains(members, "TempC") || !contains(members, "Speed") {
+		t.Errorf("a ramp's bind is a member the kind reads: %v", members)
+	}
+	out, err := Encode(ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"labelAt": "top"`, `"anchor": "top-front"`, `"ramp": [`, `"fluid"`, `"offset": [0, 0.01, 0]`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("Encode lost %q:\n%s", want, out)
+		}
+	}
+	bad := parse(`{
+		"kinds": {"subpump": {"model": "models/p.glb", "labelAt": "up",
+			"ports": {"a": {"at": {"anchor": "top-bottom"}}, "b": {"at": {"anchor": "left", "offset": [1]}}, "c": {"at": "top"}},
+			"drive": [
+				{"mesh": "Shell", "tint": {"bind": "!TempC", "ramp": [[20, "fluid"]], "on": "x"}},
+				{"mesh": "Lamp", "emissive": {"bind": "Speed", "ramp": [[20, "fluid"], [10, "x"]]}}
+			]}},
+		"nodes": []
+	}`)
+	errs, _ := Check(bad, nil)
+	got := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"/kinds/subpump/labelAt:",
+		"/kinds/subpump/ports/a/at/anchor:",
+		"/kinds/subpump/ports/b/at/offset:",
+		"/kinds/subpump/ports/c/at:",
+		"/kinds/subpump/drive/0/tint/bind:",
+		"/kinds/subpump/drive/0/tint/ramp: must be at least two",
+		"/kinds/subpump/drive/0/tint: on, off, threshold and blink are not with a ramp",
+		"/kinds/subpump/drive/1/emissive/ramp/1: stops go up",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
 }

@@ -806,23 +806,211 @@ glass to the pump inside), and `sceneOps.test.ts` holds the reducer and its cano
 form. A window without WebGL gets a notice and the text editor, not an
 exception.
 
-**Slice 2 — one editor per kind.** A kind is the 3D twin of a mimic
-component, and James wants an editor per kind the way `.svelte` components
-got the preview pane (2026-10-15): one for a submersible pump, one for a
-valve, one for a flow meter. What there is to edit on a kind: its model
-(built elsewhere — Blender — and only *chosen* here), its **drives**
-(which named mesh spins, turns, scales, tints or shows, driven by which
-member), its `status` template, its `type` and `members`, and — new, for
-slice 3 — its **ports**. The pane renders the one kind on a turntable with
-sample member values (the 3D `preview.props`), lists the model's mesh
-names so a drive targets a real one, previews the status text, and places
-ports by clicking the model. Today a kind lives inline in the scene's
-`kinds` block; for a kind to be reused across scenes and have a file to
-open, a `kinds` entry may name a **`{Name}.kind.json`** (`"submersible-pump":
-"hmi/kinds/SubmersiblePump.kind.json"`), the same entry's keys in a file of
-its own, discovered by the palette like a mimic sidecar. That needs the
-contract in three places as always (TS, Go, schema, each with its sync
-test), and is why it is its own PR.
+**Slice 2 — one editor per kind (built).** A kind is the 3D twin of a
+mimic component, and James wants an editor per kind the way `.svelte`
+components got the preview pane (2026-10-15): one for a submersible pump,
+one for a valve, one for a flow meter. Built 2026-10-21 (PR "kind editor"):
+
+- **A kind in a file of its own.** A `kinds` entry may be the path of a
+  **`{Name}.kind.json`** relative to the scene file (`"submersible-pump":
+  "hmi/src/lib/kinds/submersible-pump.kind.json"`), holding the same keys
+  an inline entry does — `type`, `members`, `model`, `bounds`, `labelAt`,
+  `status`, `drive` — so one pump is declared once and placed in every
+  scene, and has a file to open. A component or an assembly stays inline,
+  where the scene can see it. The contract is in three places as always:
+  hmi-3d (`SceneKindEntry`, `isKindPath`, `inlineKindFiles(doc, modules)`
+  — the app globs `*.kind.json` into `modules` beside its `.svelte` files
+  and `SceneView` inlines them first; `validateKind` checks one file on
+  its own), `internal/scene` (`Kind.File`, a string entry parses as a
+  file; `ResolveKindFiles` reads it next to the scene in `naut check`;
+  `Encode` writes the path back) and the extension's schema (the `kinds`
+  entry is the contract *or* a path; `nautilus-kind.schema.json` for the
+  file is **derived** from the scene schema's `kindContract` by
+  `npm run gen:kind-schema`, held to it by a test). `examples/lift-station`
+  is the dogfood: its six kinds moved into `hmi/src/lib/kinds/`.
+- **The editor** (`nautilus.kindEditor`, `tools/vscode-iec/src/kindEditor.ts`,
+  the scene bundle mounted as the kind app from `<body data-scene-mode>`,
+  the way the mimic bundle hosts the component editor) opens
+  `*.kind.json` as the kind itself: ONE node of it on the stage, composed
+  into a one-node document under the kind's own name, so what is on stage
+  is exactly what a scene that places it would draw; a **turntable** on
+  the node's group (`T` toggles); the look toolbar. The model is loaded
+  once more for what the panel needs from it: its **named objects**, which
+  fill every drive row's mesh menu (a name the model lacks is flagged in
+  the row and in a banner), and its box, which frames the camera.
+  **Sample values** per member — a boolean where a tint / emissive /
+  visible or a `{X?a:b}` reads it, a number elsewhere, defaulting to on and
+  50 — drive the meshes and preview the `status` text; they are webview
+  state, never written. The panel edits `type`, `members`, `model`,
+  `status`, `labelAt`, `bounds`, and the drives as rows (mesh, channel,
+  the channel's few fields); every change is one op (`kindOps.ts`:
+  `setField`, `addDrive`, `updateDrive`, `deleteDrive`, `moveDrive`)
+  applied as one `WorkspaceEdit`, and the canonical form puts each drive
+  on one line, so a drive is a row in the editor and a row in the diff.
+  The scene editor's palette captions a file-backed kind `glTF · file`
+  with an **edit kind** link that opens it beside the scene; a kind file
+  the scene names but the host cannot read is named in a banner and its
+  nodes draw as the grey box.
+- **Verified** by `gesture-harness/kind.test.mjs` (the production bundle,
+  headless Chrome with software WebGL, the package's `valve.glb` handed
+  over as a data: URI: open, add a drive, a channel and a mesh change, a
+  typed field, a sample value changing the status preview without an op,
+  the turntable turning and holding, a model not found), `kindOps.test.ts`
+  for the reducer and its canonical form, `kindEditorLogic.test.ts` for
+  the model lookup (up from the kind file's folder through the scene
+  editor's roots), and rig smoke check 22 in a real VS Code.
+- **Click a part to pick it** (2026-10-22, James: "click-and-pick was
+  exactly what I was thinking"). The division of labour this editor is
+  for: AI does the open-ended work (a model from a picture, sensible part
+  names), a person does the small, frequent, must-be-deterministic
+  tweaks (this part turns this colour on this input, this one spins with
+  that speed) — and every such tweak begins with *which part*. So the
+  stage raycasts the model's meshes itself (`Mesh.prototype.raycast`,
+  past the renderer's no-raycast on glass and water: here a sight glass
+  IS a part someone may want a drive on), orders the hits the way the
+  scene does (`resolvePick`, exported: the frontmost opaque part over the
+  glass in front of it, and one deeper when the picked part is hit again,
+  so the impeller inside the volute is reachable), and names the nearest
+  named ancestor. The hovered and picked parts wear a box in the part's
+  own frame, added as its child so it turns, scales and hides with it;
+  the panel's **Parts** chips pick by name and hovering a chip or a drive
+  row lights the part; `kd.picked` is where **Add drive** starts and
+  where slice 3's ports will be placed. Pointer events go on the canvas's
+  wrapper, where OrbitControls captures the pointer. `Scene3D` takes
+  `pick={false}` so a host that picks parts itself gets no node-level
+  hover cage under them. K07 in the harness; rig check 22 clicks the
+  model.
+- **Ports and anchored pipes (slice 3a/3b, built 2026-10-22).** The
+  contract is as sketched below and in three places as always: a kind's
+  `ports` (`{ "discharge": { "at": [x, y, z], "dir": [x, y, z] } }`, the
+  point in the kind's frame and the direction a pipe leaves it, default
+  up) and a pipe's `from` / `to` (`{ "node", "port" }`), with `points` the
+  run between anchored ends (absent for a straight pipe) — hmi-3d
+  (`ScenePort`, `PipeAnchor`, `validateScene` holds an anchor to a node in
+  its frame and a port its kind has when known, `resolvePipePoints` /
+  `portInFrame` / `rotateXYZ` resolve through `pos` / `rot` / `scale`,
+  `routePorts` is the orthogonal route; a registry entry may carry
+  `ports`; `Scene3D` and `Node` draw a resolved run), `internal/scene`
+  (`Port`, `Anchor`, `checkPipeRun` in the document's and an assembly's
+  frame, `EffectiveKinds` carries ports) and the schema (`port`, `anchor`;
+  the derived kind schema follows). **In the kind editor** a click on a
+  part records where it landed and the surface's outward normal, in the
+  kind's frame (`kd.hit`); **Add port here** posts `setPort` there, named
+  after the part; ports are amber marks under the node's group (they turn
+  with it) and rows in the panel (`renamePort`, `setPort`, `deletePort`;
+  **here** moves a port to the last click). **In the scene editor** every
+  node's ports wear marks under the node's own group, so they follow the
+  gizmo live; a click on a port starts a pipe, a click on another ends
+  it: ONE `addPipe` with both anchors and `routePorts` between (Esc or the
+  ground cancels); the marks are raycast by the editor (the renderer's
+  picker knows nodes, not ports) and a click that hits one is kept from
+  the node pick behind it. Gotcha: a port at the top of a node sits under
+  its label, an HTML overlay whose own pointerdown stops at it (so a drag
+  on a label does not orbit) — the press is taken on the window in the
+  capture phase. **Built 2026-10-24:** vertex drag — a pipe selected in
+  the panel wears a handle per point of its own (not its anchored ends:
+  those belong to their nodes), a click on one puts the translate gizmo
+  on it, release posts ONE `setPipePoints`, `Del` drops the point (while
+  the run keeps two points counting the ends), `Esc` clears the point,
+  then the pipe; a re-route when an anchored node moves — a pipe anchored
+  at both ends whose run is still exactly what `routePorts` drew is
+  routed again from the node's new place in the SAME op as the move (a
+  batch), while a run someone tweaked is left alone, its first leg
+  stretching as a hand-laid pipe should; and ports on the built-in kinds
+  (tank `inlet` / `outlet`, pump `suction` / `discharge`, valve `in` /
+  `out`), in `BUILTIN_CONTRACT`, `models/kinds.json` and `internal/scene`'s
+  `Builtin`, held together by the contract tests on each side. The
+  lift-station kinds carry ports as box points (`top` of the pump's
+  `Flange`, `left` of a `FlangeIn`) and the example's pipes are anchored
+  to them (`naut check` resolves the words through the model's part
+  boxes offline, as before).
+- **A point by name, and a colour from a number** (James, 2026-10-22:
+  "what if I want a port to be top, left, center… relative to the surface?
+  (same question for the label)" and "the color variable based on an
+  analog"). A port's `at` and a kind's `labelAt` take a **box point**: `{
+  "part": "Flange", "anchor": "top-front", "offset": [0, 0.01, 0] }` on
+  a named part's box, or on the kind's bounds without `part` (`"labelAt":
+  "top"` as the bare word); anchor words are the six faces, `center`, or
+  two faces on different axes; `dir` defaults to the anchored face's
+  normal. The point is known once the model has loaded — `GltfNode`
+  reports each part's box (`onparts`), `Scene3D` keeps them per node
+  (`partsOf`), `Node` resolves the label and the pipes resolve their
+  anchors through `boxesOf`; `naut check` holds the words, not the
+  metres. The kind editor computes the part boxes itself (it loads the
+  model for the names already), the scene editor reads them off the
+  node's group once the renderer has the model on stage and lays marks
+  again as models arrive. In the panel every point has a mode menu
+  (metres · on the bounds · on a part) and **Add port at…** offers the
+  faces of the picked part. A `tint` or `emissive` drive may be a
+  **ramp** of `[value, colour]` stops (`rampAt` picks the two around the
+  value; `GltfNode` mixes them, so palette slots work in a ramp); the
+  drive row has a **ramp** tick and a stop editor, and the member reads
+  as a number. On scripting (James: "will it ever make sense to let users
+  script complex animations?"): the second rung already exists — a
+  component kind is a Svelte component on Threlte, the whole JavaScript
+  story in 3D; what is missing is **Eject to component**, writing a
+  .svelte from a kind file with its model and drives, to be built before
+  any expression language in JSON. **Built 2026-10-24:** the kind
+  editor's **Eject to component…** writes `{Name}.svelte` beside the kind
+  file (`kindEject.ts`: a `<script module>` exporting `kind: KindMeta`
+  with the type, members, bounds — the stage's measured box when the
+  file says `auto` — labelAt, ports and a `status` closure over
+  `formatStatus`; an instance script holding `model` and the `drive`
+  rows as data; `<ModelNode data={{ model, drive }} …/>`, hmi-3d's new
+  export that dynamic-imports `GltfNode` so the glTF loader stays a
+  chunk), then offers to re-point every scene naming the file at the
+  component (`{ "component", "type", "members" }` — what `componentRegistry`
+  and `naut check` hold a component kind to; the kind file stays, so a
+  text undo brings it back) and opens the `.svelte` beside. Nothing is
+  lost on the way out: the same drives apply, and the file is open ground
+  for anything Threlte. The lift-station page globs
+  `/src/lib/kinds/*.svelte` beside the kind files, so an ejected kind
+  joins the app the way a kind file did.
+- **One-click animations: blink and pulse** (James, 2026-10-22: "common
+  animations, like rotation based on an input, maybe pulsing"). Two
+  additions to the vocabulary, in all three places as always: a boolean
+  drive (`tint`, `emissive`, `visible`) may carry **`blink`**, a rate in
+  Hz — while the bool holds, the effect alternates with its off state
+  (the tint's `off` colour, no glow, hidden), half the period each way;
+  and a seventh channel, **`pulse`** (`{ "bind": "Alarm", "hz": 1,
+  "amount": 0.1 }`): the mesh breathes, its scale swinging 1 ± amount
+  about its own scale while the bool holds, back to the model's own when
+  it drops. `evalDrives` hands the component the on state with the off
+  state and the rate (`MeshState.blink`) or the pulse; `GltfNode` keeps a
+  clock in its `useTask` and repaints a blinking mesh only when its phase
+  changes (`blinkOn`, `pulseAt` exported, pure). Neither is a ramp's
+  partner: `blink` with a `ramp` is refused. In the kind editor every
+  boolean row has a **blink** field (Hz, blank = steady), a pulse row has
+  **Hz** and **±**, and two preset buttons — **Blink on {member}**,
+  **Pulse on {member}** — put a finished row on the picked part in one
+  click, reading the first member the kind already reads as a boolean
+  (a tint, a visible, a `{X?a:b}`), else the first member, else `Fault`;
+  the row is the same as one built by hand, tuned in place afterwards.
+  The built-in `visible` and `pulse` read as booleans in the sample
+  panel.
+- **The AI on-ramp** (James, 2026-10-22: "give users a suggestion or an
+  easy path to understand that AI is how they accomplish a certain
+  activity"). **Ask AI…** in the kind editor's header picks one of five
+  prompts about THIS file — a model from a picture (export rules: metres,
+  Y up, origin at the base, PascalCase parts, one mesh per thing a drive
+  targets), sensible part names (listing the model's current ones),
+  drives for the UDT's members (the vocabulary spelled out, starting
+  with the picked part), a variant of the kind, or a stub to finish — and
+  opens the editor's chat with it (`workbench.action.chat.open`,
+  partial, so it is read before it is sent); with no chat command it
+  goes to the clipboard and Claude Code's sidebar opens if it is
+  installed. The division of labour is in the placeholder: the tweaks
+  stay in the panel.
+- **Variants of a kind** (James, 2026-10-22, on the float switch: "sometimes
+  low (down) is active and high (up) is active"). Today: one kind per
+  variant, sharing the model — `float-switch-high.kind.json` and
+  `float-switch-low.kind.json` with the two `visible` drives inverted;
+  nothing new in the grammar, and the AI makes the second from the first.
+  Not by negating the bind on the node: that would flip the status text
+  too. When variants multiply: a kind declares `params` with defaults, a
+  node sets them in `props`, and a drive's boolean takes a `flip`
+  naming one (`{ "bind": "Tripped", "flip": "activeLow" }`) — small and
+  deterministic, added when it earns its place.
 
 **Slice 3 — pipes and connections.** The lesson of the lift station
 (2026-10-18) was that a connection must be a scene pipe, not a model part,

@@ -28,16 +28,26 @@ export { default as Pipe3D } from './components/Pipe3D.svelte';
 export { default as Halo } from './components/Halo.svelte';
 export { default as Label } from './components/Label.svelte';
 export { default as Fixture3D } from './components/Fixture3D.svelte';
+// A model with drives for a component of your own (an ejected kind).
+export { default as ModelNode } from './components/ModelNode.svelte';
 // GltfNode and Surroundings are deliberately NOT exported here: Scene3D
 // dynamic-imports them, and a static export would fold the glTF and HDRI
 // loaders back into the base bundle (§3c, §6).
 
 // The scene document: types, the validator, and the subscription list.
-export { validateScene, sceneTags, isBindingRef, isAssetPath, isComponentPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, LOOKS } from './scene.js';
+export { validateScene, validateKind, sceneTags, isBindingRef, isAssetPath, isComponentPath, isKindPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, docPorts, portInFrame, rotateXYZ, resolvePipePoints, resolvePoint, resolvePort, anchorPoint, anchorNormal, isAnchorWord, isBoxPoint, ANCHOR_WORDS, LOOKS } from './scene.js';
 export type {
 	SceneDoc,
 	SceneLook,
 	SceneKind,
+	ScenePort,
+	ScenePoint,
+	BoxPoint,
+	SceneBox,
+	KindBoxes,
+	PipeAnchor,
+	PipeFrame,
+	SceneKindEntry,
 	SceneAssembly,
 	SceneNode,
 	ScenePipe,
@@ -51,14 +61,14 @@ export type {
 } from './scene.js';
 
 // Kinds as data: the drive vocabulary, evaluated from the document.
-export { DRIVE_CHANNELS, evalDrives, evalNum, evalBool, driveMembers, validateDrives, formatStatus, statusMembers, propFor } from './drives.js';
-export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, Axis } from './drives.js';
+export { DRIVE_CHANNELS, evalDrives, evalNum, evalBool, rampAt, blinkOn, pulseAt, driveMembers, validateDrives, formatStatus, statusMembers, propFor } from './drives.js';
+export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, RampExpr, PulseDrive, Axis } from './drives.js';
 
 // Bindings: the mimic's grammar plus dotted paths, evaluated from the doc.
 export { resolveNodeBindings, resolveRefs, readPart, bindingsGood, readPath, member, num, flowing } from './bindings.js';
 
 // The registry: extend `builtinRegistry` with your own kinds.
-export { builtinRegistry, registryFor, tankKind, pumpKind, valveKind, kindOf, componentRegistry, matchModule, assemblyBounds } from './registry.js';
+export { builtinRegistry, registryFor, tankKind, pumpKind, valveKind, kindOf, componentRegistry, inlineKindFiles, matchModule, assemblyBounds } from './registry.js';
 export type { NodeKindDef, NodeProps, PanelProps, NodeRegistry, KindMeta, Box } from './registry.js';
 export { BUILTIN_CONTRACT, tankState, tankStatus, pumpState, pumpStatus, valveState, valveStatus } from './kinds.js';
 
@@ -71,6 +81,10 @@ export { default as AlarmKey } from './components/AlarmKey.svelte';
 
 // Colours from the theme, and the measurement sampler behind PerfHud.
 export { DEFAULT_PALETTE, paletteFromTheme, paperPalette } from './palette.js';
+export { resolvePick, seeThrough } from './pick.js';
+export { routePorts } from './route.js';
+export type { RouteEnd } from './route.js';
+export type { PickHit } from './pick.js';
 export { default as PaperOutlines } from './components/PaperOutlines.svelte';
 export type { Palette } from './palette.js';
 export { PerfSampler, PLAUSIBLE_E2E_MS } from './perf.svelte.js';

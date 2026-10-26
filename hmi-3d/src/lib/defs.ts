@@ -5,7 +5,7 @@
 // imported here, so the unit tests can bundle it; registry.ts adds the
 // built-ins and re-exports all of it.
 import type { Component } from 'svelte';
-import { kindMembers, type SceneAssembly, type SceneDoc, type SceneError, type SceneKind, type Vec3 } from './scene.js';
+import { kindMembers, type SceneAssembly, type SceneDoc, type SceneError, type SceneKind, type SceneKindEntry, type ScenePoint, type ScenePort, type Vec3 } from './scene.js';
 import { formatStatus } from './drives.js';
 
 /** What every kind's component receives. Static `props` and resolved `bind`
@@ -54,14 +54,23 @@ export interface NodeKindDef {
 	bounds: { size: Vec3; center: Vec3 } | 'auto';
 	/** Where the floating label sits, local space; on a data kind, absent =
 	 * the top centre of the bounds. */
-	labelAt?: Vec3;
+	labelAt?: ScenePoint | string;
 	/** The label's value text. Pure, so it is testable and matches the panel.
 	 * `over` is the node's resolved `bind` map (prop -> value), which wins
 	 * over the struct's member the way it does for the geometry, so a
 	 * flat-tag node's label says what its model shows. */
 	status?: (value: unknown, good: boolean, over?: Record<string, unknown>) => string;
+	/** Where pipes meet this kind, in its frame (§3g slice 3); a document's
+	 * `kinds` entry may add or override them. */
+	ports?: Record<string, ScenePort>;
 	/** The 2D faceplate the inspector drawer shows; absent = the member table only. */
 	panel?: Component<PanelProps>;
+	/** A stand-in, not a kind of its own: what an editor draws when a
+	 * model kind's file does not load. `registryFor` lays the model over
+	 * it in every look — only a real Svelte kind of the same name (a
+	 * built-in re-pointed at a model) keeps its primitives in flat and
+	 * paper. */
+	fallback?: boolean;
 }
 
 export type NodeRegistry = Record<string, NodeKindDef>;
@@ -100,6 +109,51 @@ export function matchModule(path: string, keys: Iterable<string>): string | unde
 }
 
 /**
+ * A document with its kind files inlined (§3g slice 2): every `kinds`
+ * entry that is a path (`hmi/src/lib/kinds/pump.kind.json`) is replaced by
+ * the object that file holds, found among the app's modules the way a
+ * component file is (`import.meta.glob` of the app's `*.kind.json`, eager
+ * — a JSON module's default export is the object). `sources` says which
+ * module each inlined kind came from. Errors carry the document's paths: a
+ * path no module matches, a module that is not an object. An entry that
+ * is not a path is left as it is; a document with no path entries comes
+ * back as it was.
+ */
+export function inlineKindFiles(
+	doc: SceneDoc,
+	modules: Record<string, unknown>
+): { doc: SceneDoc; errors: SceneError[]; sources: Record<string, string> } {
+	const errors: SceneError[] = [];
+	const sources: Record<string, string> = {};
+	const entries = Object.entries(doc.kinds ?? {});
+	if (!entries.some(([, k]) => typeof k === 'string')) return { doc, errors, sources };
+	const kinds: Record<string, SceneKindEntry> = {};
+	for (const [name, k] of entries) {
+		if (typeof k !== 'string') {
+			kinds[name] = k;
+			continue;
+		}
+		const p = `/kinds/${name}`;
+		const key = matchModule(k, Object.keys(modules));
+		if (key === undefined) {
+			errors.push({ path: p, message: `no module matches "${k}" (the app's modules: ${Object.keys(modules).join(', ') || 'none'})` });
+			kinds[name] = k;
+			continue;
+		}
+		const mod = modules[key] as { default?: unknown } | undefined;
+		const obj = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+		if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+			errors.push({ path: p, message: `${key} is not a kind: a kind file is an object ({ model, status, drive, ... })` });
+			kinds[name] = k;
+			continue;
+		}
+		kinds[name] = obj as SceneKind;
+		sources[name] = key;
+	}
+	return { doc: { ...doc, kinds }, errors, sources };
+}
+
+/**
  * The registry for a document whose `kinds` name component files (§3d):
  * `base` plus one entry per `component` kind, from the app's modules
  * (`import.meta.glob of the app's .svelte files, eager`) — the
@@ -117,7 +171,7 @@ export function componentRegistry(
 	const registry: NodeRegistry = { ...base };
 	const errors: SceneError[] = [];
 	for (const [name, k] of Object.entries(doc.kinds ?? {})) {
-		if (k.component === undefined) continue;
+		if (typeof k === 'string' || k.component === undefined) continue;
 		const p = `/kinds/${name}/component`;
 		const key = matchModule(k.component, Object.keys(modules));
 		if (key === undefined) {
@@ -191,10 +245,12 @@ export function assemblyBounds(a: SceneAssembly, registry: NodeRegistry): Box {
 export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Component<NodeProps> | null, lit = true): NodeRegistry {
 	const out: NodeRegistry = { ...registry };
 	for (const [name, k] of Object.entries(doc.kinds ?? {})) {
+		// A kind file not yet inlined (inlineKindFiles) defines nothing here.
+		if (typeof k === 'string') continue;
 		const base = registry[name];
 		const tpl = k.status;
 		const status = tpl ? (value: unknown, good: boolean, over?: Record<string, unknown>) => formatStatus(tpl, value, good, over) : base?.status;
-		if (k.model && gltf && (lit || !base)) {
+		if (k.model && gltf && (lit || !base || base.fallback)) {
 			out[name] = {
 				component: gltf,
 				data: k,
@@ -203,6 +259,7 @@ export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Compone
 				bounds: k.bounds && k.bounds !== 'auto' ? k.bounds : 'auto',
 				labelAt: k.labelAt,
 				status,
+				ports: k.ports ?? base?.ports,
 				panel: base?.panel
 			};
 		} else if (k.assembly) {
@@ -213,6 +270,7 @@ export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Compone
 				bounds: k.bounds && k.bounds !== 'auto' ? k.bounds : assemblyBounds(k.assembly, registry),
 				labelAt: k.labelAt,
 				status,
+				ports: k.ports ?? base?.ports,
 				panel: base?.panel
 			};
 		}

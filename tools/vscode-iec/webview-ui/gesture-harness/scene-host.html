@@ -57,6 +57,14 @@
 				return b ? { active: b.classList.contains('active'), ...vpCenter(b) } : null;
 			};
 			window.__footer = () => document.querySelector('footer')?.textContent.trim() ?? '';
+			// Ports on the stage (projected), the pipe being drawn, the panel's pipe rows.
+			window.__ports = () => (window.__nxScene ? window.__nxScene.ports() : []);
+			window.__pipeFrom = () => (window.__nxScene ? window.__nxScene.pipeFrom() : null);
+			window.__vertices = () => (window.__nxScene ? window.__nxScene.vertices() : []);
+			window.__selectedPipe = () => (window.__nxScene ? window.__nxScene.selectedPipe() : null);
+			window.__selectedVertex = () => (window.__nxScene ? window.__nxScene.selectedVertex() : null);
+			window.__pipeRowButton = (i) => { const b = document.querySelector('[data-kind=pipe-row][data-index="' + i + '"] .sel'); return b ? vpCenter(b) : null; };
+			window.__pipeRows = () => Array.from(document.querySelectorAll('[data-kind=pipe-row]')).map((r) => r.textContent.replace(/\s+/g, ' ').trim());
 			window.__ready = () => !!document.querySelector('[data-kind=palette-item]') && !!document.querySelector('.stage canvas');
 		</script>
 		<script src="./scene-editor.js"></script>

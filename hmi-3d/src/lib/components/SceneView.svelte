@@ -11,7 +11,7 @@
 	import type { RealtimeClient, AlarmClient, NautilusFrame } from '@joyautomation/nautilus-hmi';
 	import { readPath, resolveRefs } from '../bindings.js';
 	import { validateScene, refRoot, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneError, type SceneGrid, type SceneLook } from '../scene.js';
-	import { builtinRegistry, componentRegistry, type NodeRegistry } from '../registry.js';
+	import { builtinRegistry, componentRegistry, inlineKindFiles, type NodeRegistry } from '../registry.js';
 	import { worstAlarmByAsset, alarmAsset } from '../alarms.js';
 	import { DEFAULT_PALETTE, paletteFromTheme, paperPalette, type Palette } from '../palette.js';
 	import { PerfSampler } from '../perf.svelte.js';
@@ -89,13 +89,16 @@
 	const view = $state<ViewState>({ lit: true, paper: false });
 	setContext('hmi3d:view', view);
 
-	// Component kinds (§3d) join the registry from the app's modules; their
+	// Kind files (§3g) are inlined from the app's modules first, then
+	// component kinds (§3d) join the registry from the same modules; their
 	// errors — a path no module matches, a member the export reads that the
 	// document does not list — are listed with the document's.
-	let withComponents = $derived(doc && modules ? componentRegistry(doc, modules, registry) : { registry, errors: [] as SceneError[] });
+	let inlined = $derived(doc && modules ? inlineKindFiles(doc, modules) : { doc, errors: [] as SceneError[] });
+	let shown = $derived(inlined.doc);
+	let withComponents = $derived(shown && modules ? componentRegistry(shown, modules, registry) : { registry, errors: [] as SceneError[] });
 	let check = $derived.by(() => {
-		const errors = doc ? validateScene(doc, Object.keys(withComponents.registry)).errors : [];
-		errors.push(...withComponents.errors);
+		const errors = shown ? validateScene(shown, Object.keys(withComponents.registry)).errors : [];
+		errors.push(...inlined.errors, ...withComponents.errors);
 		return { ok: errors.length === 0, errors };
 	});
 	let tags = $derived((rt.frame?.tags ?? {}) as Record<string, unknown>);
@@ -166,7 +169,7 @@
 	{:else}
 		<Canvas>
 			<Scene3D
-				{doc}
+				doc={shown}
 				registry={withComponents.registry}
 				{tags}
 				isGood={(t) => rt.isGood(t)}
