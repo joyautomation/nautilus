@@ -148,13 +148,26 @@ else.
 
 ## Build and deploy
 
-```sh
-# any recent zig; the controller is glibc 2.35 armhf
-zig cc -target arm-linux-gnueabihf.2.35 -mcpu=cortex_a9 -O2 -std=c11 -Wall -Wextra \
-       -o nautilus_io rt/plcnext-io/nautilus_io.c -ldl -lpthread
+A CLI release attaches the build as
+`nautilus-plcnext-io_<version>_linux_armv7.tar.gz` (with a `.sha256`
+beside it): `nautilus_io`, the two ACF files and this README, under one
+directory. Unpack it and run the copy steps below from inside that
+directory, with the `dist/plcnext-io/` and `rt/plcnext-io/` prefixes
+dropped. To build it instead
+(zig on PATH, or `ZIG=`; the release uses zig 0.17.0):
 
+```sh
+rt/plcnext-io/build.sh            # → dist/plcnext-io/nautilus_io, version "dev"
+VERSION=0.19.0 rt/plcnext-io/build.sh -p   # also the release tarball + .sha256
+```
+
+It cross-compiles for the controller's glibc 2.35 armhf with warnings
+as errors, and stamps the version into the log's first line
+(`nautilus_io <version> starting …`). Then, from the repo root:
+
+```sh
 ssh admin@<plc> 'mkdir -p /opt/plcnext/apps/nautilus/io/logs && chmod 777 /opt/plcnext/apps/nautilus/io /opt/plcnext/apps/nautilus/io/logs'
-scp nautilus_io rt/plcnext-io/NautilusIo.acf.settings admin@<plc>:/opt/plcnext/apps/nautilus/io/
+scp dist/plcnext-io/nautilus_io rt/plcnext-io/NautilusIo.acf.settings admin@<plc>:/opt/plcnext/apps/nautilus/io/
 scp rt/plcnext-io/NautilusIo.acf.config admin@<plc>:/opt/plcnext/projects/<current project>/
 ssh admin@<plc> 'chmod 755 /opt/plcnext/apps/nautilus/io/nautilus_io; sudo /etc/init.d/plcnext restart'
 ```

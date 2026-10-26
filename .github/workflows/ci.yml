@@ -338,6 +338,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: goreleaser/goreleaser-action@v6
         with: {version: '~> v2', args: check}
+      # The PLCnext in-process tier is C, built by the release job with the
+      # same script; compiling it here (warnings are errors) keeps a break
+      # from surfacing first at tag time.
+      - uses: mlugg/setup-zig@v2
+        with: {version: 0.17.0}
+      - name: Build nautilus_io (PLCnext, ARMv7)
+        run: rt/plcnext-io/build.sh
   postgres:
     # The historian's Postgres store and the alarm journal's Postgres table
     # skip unless NAUTILUS_TEST_DATABASE_URL is set; here they run against a

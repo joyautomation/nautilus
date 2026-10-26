@@ -127,8 +127,10 @@ the firmware's own application framework starts, which reads and writes
 the Axioline frames every millisecond through the ANSI-C API the
 firmware ships (the way Phoenix Contact's `SampleRuntime` does, built
 with zig and no PLCnext SDK). It shares them with naut through a
-shared-memory page. Build and deploy it as `rt/plcnext-io/README.md`
-says; once it runs, it is the output frame's only writer, so the
+shared-memory page. Each CLI release attaches it built, as
+`nautilus-plcnext-io_<version>_linux_armv7.tar.gz` (the binary, its two
+ACF files and the README); deploy it as `rt/plcnext-io/README.md` says,
+or build it yourself with `rt/plcnext-io/build.sh`. Once it runs, it is the output frame's only writer, so the
 project's `PCWE.gds.config` must have no connector into `DO4096`. Then:
 
 ```yaml
