@@ -3,7 +3,6 @@ package uaserver
 import (
 	"crypto/rand"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/gopcua/opcua/ua"
@@ -59,15 +58,12 @@ func (s *SessionService) CreateSession(sc *uasc.SecureChannel, r ua.Request, req
 		return nil, ua.StatusBadInternalError
 	}
 
-	matching_endpoints := make([]*ua.EndpointDescription, 0)
-	reqTrimmedURL, _ := strings.CutSuffix(req.EndpointURL, "/")
-	for i := range s.srv.endpoints {
-		ep := s.srv.endpoints[i]
-		epTrimmedURL, _ := strings.CutSuffix(ep.EndpointURL, "/")
-		if epTrimmedURL == reqTrimmedURL {
-			matching_endpoints = append(matching_endpoints, ep)
-		}
-	}
+	// Part 4 §5.6.2: the endpoints available for the server, which the
+	// client checks against what GetEndpoints told it. endpointUrl only
+	// helps choose which URLs to return; a client that dialled an address
+	// the server does not know (NAT, an alias) must still get a list, or
+	// it refuses the session.
+	matching_endpoints := s.srv.endpointsFor(req.EndpointURL)
 
 	response := &ua.CreateSessionResponse{
 		ResponseHeader:        responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),

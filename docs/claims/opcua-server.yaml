@@ -29,19 +29,19 @@ claims:
       written, every interface address for 0.0.0.0, the host name, loopback)
       and never the wildcard itself; a client may dial any of them, and
       GetEndpoints for an unknown URL returns every endpoint rather than none.
+      CreateSession's ServerEndpoints are the list GetEndpoints gives for the
+      same URL, so a client that reached the server through a name it was not
+      told about (a NAT address, a DNS alias) can open a session.
     source: "#serving-opc-ua"
     tests:
       - go ./tools/blackbox TestBlackbox/001-F17-endpoints-advertised
       - go ./tools/blackbox TestBlackbox/001-F24-advertises-0000
+      - go ./tools/blackbox TestBlackbox/001-F23-createsession-serverendpoints
       - go ./opcua/server TestEndpointHosts
       - go ./opcua/server TestEndpointsMatchEveryAliasAndFallBackToAll
       - go ./opcua/server TestWildcardIsNotAdvertised
-    partial: true
-    note: >-
-      A session through a name the server was not told about (a NAT address,
-      a DNS alias) gets the list from GetEndpoints but an empty
-      ServerEndpoints from CreateSession, which is gopcua's and cannot be
-      wrapped; #430.
+      - go ./opcua/server TestCreateSessionEndpointsAreTheDiscoveryList
+      - go ./opcua/internal/uaserver TestCreateSessionServerEndpointsForAnUnknownURL
 
   - id: OPC-002
     claim: >-

@@ -48,6 +48,14 @@ type Server struct {
 
 	SubscriptionService  *SubscriptionService
 	MonitoredItemService *MonitoredItemService
+
+	// EndpointsFor, when set before Start, chooses the endpoints a client
+	// is told about for the endpointUrl it sent: the GetEndpoints answer
+	// and CreateSession's ServerEndpoints both, so the list a client
+	// verifies its session against is the one discovery gave it. Unset,
+	// both use the endpoints whose URL matches, ignoring case and a
+	// trailing slash, or every endpoint when none does.
+	EndpointsFor func(endpointURL string) []*ua.EndpointDescription
 }
 
 type serverConfig struct {
@@ -440,6 +448,26 @@ func (s *Server) initEndpoints() {
 	s.mu.Lock()
 	s.endpoints = endpoints
 	s.mu.Unlock()
+}
+
+// endpointsFor is the endpoint list for a client that sent endpointURL;
+// see EndpointsFor.
+func (s *Server) endpointsFor(endpointURL string) []*ua.EndpointDescription {
+	if s.EndpointsFor != nil {
+		return s.EndpointsFor(endpointURL)
+	}
+	all := s.Endpoints()
+	want := strings.ToLower(strings.TrimSuffix(endpointURL, "/"))
+	var match []*ua.EndpointDescription
+	for _, ep := range all {
+		if strings.ToLower(strings.TrimSuffix(ep.EndpointURL, "/")) == want {
+			match = append(match, ep)
+		}
+	}
+	if len(match) == 0 {
+		return all
+	}
+	return match
 }
 
 func (s *Server) Node(nid *ua.NodeID) *Node {
