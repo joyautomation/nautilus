@@ -1,7 +1,17 @@
 ---
-title: Serving OPC UA
+title: Serving OPC UA (preview)
 description: Expose a controller's tags to any OPC UA client — browse, read and subscribe, with faithful types, quality as status codes and source timestamps — from one manifest line.
 ---
+
+:::caution[Preview]
+Read-only, and still moving. The `opcua:` section and its `endpoint` are
+meant to stay as they are, but session and subscription handling is being
+reworked, and the limits named on this page (a never-delivered tag has no
+node, a quality-only change is not pushed, several subscription services
+are unsupported, a client must dial an advertised address) are tracked as
+issues and may change between releases. Try it against your client before
+you depend on it.
+:::
 
 An `opcua:` section in `nautilus.yaml` serves the controller's tag store as
 an **OPC UA address space**. Any OPC UA client — a SCADA gateway, a
