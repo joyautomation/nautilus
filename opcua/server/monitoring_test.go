@@ -423,3 +423,46 @@ func TestMonitoredItemHonoursIndexRange(t *testing.T) {
 		t.Errorf("Levels = %v", dv.Value.Value())
 	}
 }
+
+// A subscription id is never issued twice (#432). gopcua numbered them
+// len(Subs)+1, so with 1 and 2 live and 1 deleted the next was 2 again: it
+// replaced the live entry, and the cancelled subscription's own cleanup,
+// which deletes its id when its task returns, then took the new one with
+// it, so the client's next CreateMonitoredItems was refused.
+func TestSubscriptionIDsAreNeverReused(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	subscribe := func() *opcua.Subscription {
+		t.Helper()
+		sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond}, make(chan *opcua.PublishNotificationData, 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sub
+	}
+	a, b := subscribe(), subscribe()
+	if err := a.Cancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	n := subscribe()
+	if n.SubscriptionID == a.SubscriptionID || n.SubscriptionID == b.SubscriptionID {
+		t.Fatalf("ids a=%d b=%d, then new=%d: an id was issued again", a.SubscriptionID, b.SubscriptionID, n.SubscriptionID)
+	}
+	// Give a's task time to return and run its cleanup, then use both live
+	// subscriptions: neither may have gone with it.
+	time.Sleep(200 * time.Millisecond)
+	for i, sub := range []*opcua.Subscription{b, n} {
+		res, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth,
+			opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Level"), ua.AttributeIDValue, uint32(i+1)))
+		if err != nil {
+			t.Fatalf("subscription %d: %v", sub.SubscriptionID, err)
+		}
+		if st := res.Results[0].StatusCode; st != ua.StatusGood {
+			t.Fatalf("subscription %d: item %s", sub.SubscriptionID, st)
+		}
+	}
+	if st := s.Status(); st.Subscriptions != 2 || st.MonitoredItems != 2 {
+		t.Errorf("status %+v, want 2 subscriptions and 2 items", st)
+	}
+}
