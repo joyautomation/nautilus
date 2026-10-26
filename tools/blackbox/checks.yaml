@@ -322,7 +322,6 @@ checks:
   note: dials 127.0.1.1; skips unless the server is bound to 0.0.0.0
   expected_today: fail
   group: new findings of this run
-  open: '#430'
 - id: 001-F24-advertises-0000
   run: 2026-10-24-001
   finding: F-24

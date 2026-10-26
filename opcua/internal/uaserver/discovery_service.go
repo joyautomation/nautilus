@@ -1,8 +1,6 @@
 package uaserver
 
 import (
-	"strings"
-
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uasc"
 )
@@ -59,18 +57,9 @@ func (s *DiscoveryService) GetEndpoints(sc *uasc.SecureChannel, r ua.Request, re
 		return nil, err
 	}
 
-	requrl := strings.ToLower(req.EndpointURL)
-	matching_endpoints := make([]*ua.EndpointDescription, 0)
-	for i := range s.srv.endpoints {
-		ep := s.srv.endpoints[i]
-		if strings.ToLower(ep.EndpointURL) == requrl {
-			matching_endpoints = append(matching_endpoints, ep)
-		}
-	}
-
 	response := &ua.GetEndpointsResponse{
 		ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),
-		Endpoints:      matching_endpoints,
+		Endpoints:      s.srv.endpointsFor(req.EndpointURL),
 	}
 
 	return response, nil

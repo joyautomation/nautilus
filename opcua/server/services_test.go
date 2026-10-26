@@ -458,3 +458,64 @@ func TestWildcardIsNotAdvertised(t *testing.T) {
 		}
 	}
 }
+
+// CreateSession's ServerEndpoints are the list GetEndpoints gives for the
+// same URL, never empty and never the wildcard (#430, black-box F-23). A
+// client that dialled a name the server was not told about (a NAT address,
+// a DNS alias; here 127.0.1.1) got an empty list from gopcua's
+// CreateSession, which matched the URL exactly, and refused the session.
+func TestCreateSessionEndpointsAreTheDiscoveryList(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, err := New(rt, Options{Endpoint: "0.0.0.0:0", Name: "lift-station", Sweep: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	port := s.URL()[strings.LastIndex(s.URL(), ":"):]
+	c, err := opcua.NewClient("opc.tcp://127.0.0.1"+port, opcua.SecurityMode(ua.MessageSecurityModeNone), opcua.AuthAnonymous(), opcua.AutoReconnect(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		c.Close(cctx)
+	})
+	for _, url := range []string{"opc.tcp://127.0.1.1" + port, "opc.tcp://127.0.0.1" + port} {
+		var got *ua.CreateSessionResponse
+		err := c.Send(ctx, &ua.CreateSessionRequest{
+			ClientDescription:       &ua.ApplicationDescription{ApplicationURI: "urn:test", ApplicationName: ua.NewLocalizedText("test"), ApplicationType: ua.ApplicationTypeClient},
+			EndpointURL:             url,
+			SessionName:             "test",
+			ClientNonce:             make([]byte, 32),
+			RequestedSessionTimeout: 60000,
+		}, func(r ua.Response) error {
+			got = r.(*ua.CreateSessionResponse)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := getEndpoints(s.srv, &ua.GetEndpointsRequest{RequestHeader: &ua.RequestHeader{}, EndpointURL: url})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := urls(resp.(*ua.GetEndpointsResponse).Endpoints)
+		have := urls(got.ServerEndpoints)
+		if len(have) == 0 || strings.Join(have, " ") != strings.Join(want, " ") {
+			t.Errorf("CreateSession(%s).ServerEndpoints = %q, want GetEndpoints' %q", url, have, want)
+		}
+		for _, u := range have {
+			if wildcardURL(u) {
+				t.Errorf("CreateSession(%s) offers the wildcard: %q", url, have)
+			}
+		}
+	}
+}
