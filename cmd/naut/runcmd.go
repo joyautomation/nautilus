@@ -148,6 +148,21 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	go rt.Run(ctx)
 
+	// The OPC UA server, when the manifest asks for it: the tag store as
+	// an address space, read-only, fed by the store's change generations.
+	opc, err := proj.OPCUAServer(rt)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: opcua:", err)
+		return 1
+	}
+	if opc != nil {
+		if err := opc.Start(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "opcua:", err, "(continuing without it)")
+		} else {
+			defer opc.Stop()
+		}
+	}
+
 	// Sparkplug B retransmission, when the manifest asks for it.
 	spNode, err := proj.Sparkplug(rt)
 	if err != nil {
@@ -172,7 +187,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		sopts.HistorianURL = h
 	}
 	// Field-driver + Sparkplug status feed GET /api/drivers and the stream.
-	sopts.Drivers = proj.DriverStatus(spNode)
+	sopts.Drivers = proj.DriverStatus(spNode, opc)
 	if alarms != nil {
 		sopts.Alarms = alarms.Engine
 		sopts.AlarmShelveTimes = alarms.ShelveTimes
@@ -216,6 +231,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if sparkplugUp {
 		banner += " — sparkplug up"
+	}
+	if opc != nil && opc.Status().Listening {
+		banner += " — opc ua on " + opc.URL()
 	}
 	if alarms != nil {
 		banner += fmt.Sprintf(" — %d alarms", len(alarms.Defs))

@@ -20,6 +20,7 @@ Without `NAUTILUS_BLACKBOX_PYTHON` the test skips. Other knobs:
 | `NAUTILUS_BLACKBOX_PYTHON` | — | the interpreter with the oracle clients installed; required |
 | `NAUTILUS_BLACKBOX_NAUT` | built from this checkout | the binary under test (a release's, in blackbox-release.yml) |
 | `NAUTILUS_BLACKBOX_DISPOSITION` | `gate` | which disposition to run: `gate` or `release` |
+| `NAUTILUS_BLACKBOX_COVERDIR` | unset | build the SUT coverage-instrumented and collect its counters here (`go tool covdata percent -i=<dir>`) |
 
 Checks run one project at a time: the runner copies the project directory
 to a temp dir, starts `naut run` there, waits for the HTTP API, and runs
@@ -66,11 +67,21 @@ proposed.
 
 ## The loop
 
-`tools/blackbox/loop.sh <brief> [max rounds]` runs brief → tester → triage →
-retest unattended until the tester finds nothing new; `docs/design/blackbox.md`
-"The loop, unattended" says what each round does and when it stops. Env:
-`BB` (the blackbox repo), `DOCS` (the guide to hand over), `TESTER_FLAGS`,
-`DEV_FLAGS`, `KEEP=1`.
+Four steps (`docs/design/blackbox.md`): a person runs the brief, the
+development agent fixes and imports, the gate retests, repeat until green.
+Only the first step needs the tester.
+
+```sh
+label=$(tools/blackbox/handoff.sh website/src/content/docs/guides/opcua-server.md)
+(cd ../nautilus-blackbox && bin/brief.sh 001 "$label")   # watch it; hours
+# … process the run folder (triage, import, cite), then:
+NAUTILUS_BLACKBOX_PYTHON=$PWD/.venv/bin/python go test ./tools/blackbox -run TestBlackbox -v
+```
+
+A finding is `verified <commit>` when its check passes in the gate on that
+commit; the development agent writes that line. Coverage of the suite:
+the gate job prints per-package line coverage of the instrumented SUT and
+`go run ./tools/evidence blackbox` prints which claims cite a check.
 
 ## Importing a run
 
@@ -87,3 +98,4 @@ retest unattended until the tester finds nothing new; `docs/design/blackbox.md`
    does not provide: say which in `note`, do not edit the check.
 5. Cite the check from the claims it proves:
    `go ./tools/blackbox TestBlackbox/<id>` in `docs/claims/<page>.yaml`.
+   `go run ./tools/evidence blackbox` lists the claims still without one.

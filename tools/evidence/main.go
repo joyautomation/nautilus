@@ -26,6 +26,12 @@
 //	git diff --name-only BASE HEAD | go run ./tools/evidence drift [-github] [-summary f]
 //	    Warn about each documentation page that changed while its
 //	    docs/claims file did not. Never fails; CI runs it on PRs.
+//
+//	go run ./tools/evidence blackbox
+//	    Per claims file, how many claims cite one of the independent
+//	    tester's checks (go ./tools/blackbox TestBlackbox/<id>) and which
+//	    do not: the black-box suite's coverage of what the docs promise
+//	    (docs/design/blackbox.md). Never fails; the gate job prints it.
 package main
 
 import (
@@ -55,6 +61,8 @@ func main() {
 		err = runBuild(os.Args[2:])
 	case "drift":
 		err = runDrift(os.Args[2:], os.Stdin, os.Stdout)
+	case "blackbox":
+		err = runBlackbox(os.Args[2:], os.Stdout)
 	default:
 		usage()
 	}
@@ -65,7 +73,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: evidence check | cat | build | drift [flags]  (see go doc ./tools/evidence)")
+	fmt.Fprintln(os.Stderr, "usage: evidence check | cat | build | drift | blackbox [flags]  (see go doc ./tools/evidence)")
 	os.Exit(2)
 }
 

@@ -62,7 +62,7 @@ tags:
 	if _, err := runtime.New(p.Runtime); err != nil {
 		t.Fatalf("an optommp project must compile: %v", err)
 	}
-	fn := p.DriverStatus(nil)
+	fn := p.DriverStatus(nil, nil)
 	if fn == nil {
 		t.Fatal("DriverStatus must report an optommp driver")
 	}

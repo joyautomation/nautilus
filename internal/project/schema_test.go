@@ -119,6 +119,7 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		{"a tag", goKeys(TagConfig{}), schemaKeys(s.Definitions["tag"].Properties)},
 		{"the driver", goKeys(DriverConfig{}), schemaKeys(s.Definitions["driver"].Properties)},
 		{"sparkplug", goKeys(SparkplugConfig{}), schemaKeys(s.Definitions["sparkplug"].Properties)},
+		{"opcua", goKeys(OPCUAConfig{}), schemaKeys(s.Definitions["opcua"].Properties)},
 		{"an rbe class", goKeys(RBEConfig{}), schemaKeys(s.Definitions["rbe"].Properties)},
 		{"tag-meta", goKeys(MetaConfig{}), schemaKeys(s.Definitions["meta"].Properties)},
 		{"alarms", goKeys(AlarmsConfig{}), schemaKeys(s.Definitions["alarms"].Properties)},

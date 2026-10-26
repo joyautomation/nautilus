@@ -547,7 +547,7 @@ tags:
 	if got := drv.OutputNames(); !reflect.DeepEqual(got, []string{"W6__Rebirth"}) {
 		t.Fatalf("OutputNames = %v", got)
 	}
-	if fn := p.DriverStatus(nil); fn == nil {
+	if fn := p.DriverStatus(nil, nil); fn == nil {
 		t.Fatal("DriverStatus must report a sparkplug-host driver")
 	} else if sts := fn(); len(sts) != 1 || sts[0].Kind != "sparkplug-host" {
 		t.Fatalf("DriverStatus = %+v", sts)
@@ -650,7 +650,7 @@ tags:
 	if _, err := runtime.New(p.Runtime); err != nil {
 		t.Fatalf("a modbus project must compile: %v", err)
 	}
-	fn := p.DriverStatus(nil)
+	fn := p.DriverStatus(nil, nil)
 	if fn == nil {
 		t.Fatal("DriverStatus must report a modbus driver")
 	}
@@ -740,5 +740,59 @@ func TestModbusStatus(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("queued writes gauge missing")
+	}
+}
+
+// opcua: the section's presence turns the server on; its endpoint is
+// validated at load, so `naut check` refuses a bad one before anything
+// listens, and the server that Load's project builds does not listen
+// either until Start.
+func TestOPCUAConfig(t *testing.T) {
+	for _, extra := range []string{
+		"  {}\n", // a bare `opcua:` is YAML null, which is no section; {} is the default server
+		"  endpoint: opc.tcp://0.0.0.0:4840\n",
+		"  endpoint: localhost:4841\n",
+	} {
+		p, err := Load(fsys(manifest+"\nopcua:\n"+extra), "")
+		if err != nil {
+			t.Fatalf("%q: %v", extra, err)
+		}
+		if p.OPCUA == nil {
+			t.Fatalf("%q: no opcua section", extra)
+		}
+		rt, err := runtime.New(p.Runtime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := p.OPCUAServer(rt)
+		if err != nil || s == nil {
+			t.Fatalf("%q: server %v, %v", extra, s, err)
+		}
+		if st := s.Status(); st.Listening {
+			t.Errorf("%q: listening before Start", extra)
+		}
+	}
+	for extra, want := range map[string]string{
+		"  endpoint: http://localhost:4840\n":      "must be opc.tcp://host:port",
+		"  endpoint: localhost\n":                  "must be opc.tcp://host:port",
+		"  endpoint: opc.tcp://localhost:99999\n":  "no valid port",
+		"  endpoint: opc.tcp://localhost:4840/x\n": "no path",
+	} {
+		_, err := Load(fsys(manifest+"\nopcua:\n"+extra), "")
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %v, want one containing %q", extra, err, want)
+		}
+	}
+	// No section: no server.
+	p, err := Load(fsys(manifest), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(p.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, err := p.OPCUAServer(rt); err != nil || s != nil {
+		t.Errorf("no section: server %v, %v", s, err)
 	}
 }

@@ -413,6 +413,36 @@ jobs:
           name: evidence-modbus
           path: evidence/
           retention-days: 14
+  opcua-foreign:
+    name: OPC UA — foreign stack (asyncua)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      # Every other OPC UA test speaks gopcua to gopcua — the same codec on
+      # both ends. asyncua is the foreign implementation (someone else's
+      # decoder, browse, subscription and status handling) doing what a
+      # SCADA gateway does against the server. Pinned exactly; bump with
+      # opcua/server/testdata/foreign/asyncua_client.py.
+      - run: pip install 'asyncua==2.1.0'
+      # Discovery, browse Objects → project → tags → UDT members → array
+      # elements, typed reads with status and timestamps, a subscription
+      # that sees a change, and a refused write. Skipped without the env var.
+      - name: Foreign-stack test
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_OPCUA_PYTHON="$(which python)" \
+            go test -json ./opcua/server -run TestForeign -v -timeout 120s | tee evidence/opcua-foreign.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-opcua
+          path: evidence/
+          retention-days: 14
   snmp-sim:
     name: SNMP — foreign stack (snmpsim)
     runs-on: ubuntu-latest
@@ -525,7 +555,26 @@ jobs:
         run: |
           mkdir -p evidence
           NAUTILUS_BLACKBOX_PYTHON="$(which python)" NAUTILUS_BLACKBOX_DISPOSITION=gate \
+          NAUTILUS_BLACKBOX_COVERDIR="$PWD/evidence/blackbox-cover" \
             go test -json ./tools/blackbox -run TestBlackbox -v -timeout 600s | tee evidence/blackbox-gate.json | go run ./tools/evidence cat
+      - name: Coverage — how far the foreign client's checks reach
+        # The SUT was coverage-instrumented (NAUTILUS_BLACKBOX_COVERDIR); the
+        # counters say which code a client that never saw it exercised. Per
+        # package here, the full profile in the artifact; the tester cannot
+        # measure this and should not, the next brief is aimed with it.
+        if: always()
+        shell: bash
+        run: |
+          if [ -d evidence/blackbox-cover ] && [ -n "$(ls -A evidence/blackbox-cover)" ]; then
+            go tool covdata textfmt -i=evidence/blackbox-cover -o evidence/blackbox-cover.txt
+            go tool covdata percent -i=evidence/blackbox-cover | grep -vE '\s0\.0%' | sort
+            rm -r evidence/blackbox-cover
+          else
+            echo "no coverage data (no gate checks ran)"
+          fi
+      - name: Claims coverage — which promises a black-box check proves
+        if: always()
+        run: go run ./tools/evidence blackbox
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -542,7 +591,7 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [go, sparkplug-tck, modbus-sim, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    needs: [go, sparkplug-tck, modbus-sim, opcua-foreign, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:

@@ -31,6 +31,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
+	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
 	"github.com/joyautomation/nautilus/prom"
@@ -79,6 +80,7 @@ type Manifest struct {
 	// drivers: is an error. One entry behaves exactly like driver:.
 	Drivers   []DriverConfig   `yaml:"drivers"`
 	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
+	OPCUA     *OPCUAConfig     `yaml:"opcua"`
 	// Retain persists operator state (setpoints, online edits) across
 	// restarts; Redundancy elects one scanning leader among replicas.
 	// Both are wired by `naut run` — check/build/LSP only validate.
@@ -448,6 +450,9 @@ type Project struct {
 	// (see alarms.go) for the same reason Sparkplug is: Load must stay
 	// side-effect-free so check, build and the LSP can use it.
 	Alarms *AlarmsConfig
+
+	//OPCUA
+	OPCUA *OPCUAConfig
 }
 
 // RetainNames resolves the retain section's defaults against the project
@@ -799,6 +804,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if opts.Driver, drivers, err = buildDrivers(fsys, m); err != nil {
 		return nil, err
 	}
+	if m.OPCUA != nil && m.OPCUA.Endpoint != "" {
+		if _, _, err := opcuaserver.ParseEndpoint(m.OPCUA.Endpoint); err != nil {
+			return nil, err
+		}
+	}
 	if m.Sparkplug != nil {
 		switch m.Sparkplug.PrimaryHostOffline {
 		case "", "buffer":
@@ -869,6 +879,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		},
 		sparkplug:  m.Sparkplug,
 		drivers:    drivers,
+		OPCUA:      m.OPCUA,
 		Retain:     m.Retain,
 		Redundancy: m.Redundancy,
 		Alarms:     m.Alarms,
@@ -1496,4 +1507,25 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 	default:
 		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
+}
+
+// OPCUAConfig is the manifest's `opcua:` section: serve the tag store as an
+// OPC UA address space (read-only; see opcua/server). The section's
+// presence turns the server on, like `sparkplug:`.
+type OPCUAConfig struct {
+	// Endpoint is the listen address, "opc.tcp://host:port" (or
+	// "host:port"); the default is opc.tcp://localhost:4840 — loopback, so
+	// exposing a controller to the network is a line an author writes.
+	Endpoint string `yaml:"endpoint"`
+}
+
+// OPCUA builds the manifest's OPC UA server over a compiled runtime, or
+// (nil, nil) when the manifest has no opcua section. Nothing listens until
+// Start.
+func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) {
+	c := p.OPCUA
+	if c == nil {
+		return nil, nil
+	}
+	return opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name})
 }
