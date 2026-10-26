@@ -3,8 +3,8 @@ package server
 import (
 	"encoding/binary"
 
-	opcserver "github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
+	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 )
 
 // browseNodes is the Browse service: each node's references from its namespace,
