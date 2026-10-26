@@ -1,8 +1,6 @@
 package optommp
 
 import (
-	"encoding/binary"
-	"io"
 	"math"
 	"net"
 	"strings"
@@ -11,98 +9,18 @@ import (
 
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/codegen"
+	"github.com/joyautomation/nautilus/optommp/optommptest"
 )
 
-// fakeDevice answers OptoMMP block reads and writes from a sparse memory
-// map — the bench GRV-EPIC-PR1's chassis, as Scan saw it on 2026-10-23.
-type fakeDevice struct {
-	mem map[uint32]byte
-}
+// fakeDevice is the bench chassis in-process (optommptest).
+type fakeDevice = optommptest.Device
 
-func newBenchDevice() *fakeDevice {
-	d := &fakeDevice{mem: map[uint32]byte{}}
-	d.put(addrUnitDescription, []byte("GRV-EPIC-PR1"))
-	d.put(addrFirmware, []byte{3, 6, 1, 0})
-	module := func(slot int, mtype uint32, chans int, ctype uint32) {
-		for i := 0; i < chans; i++ {
-			row := addrChannelConfig + uint32(slot)*configModuleStride + uint32(i)*configChannelStride
-			d.putU32(row, mtype)
-			d.putU32(row+4, ctype)
-		}
-	}
-	module(0, 0x50000005, 24, 0x50000000) // GRV-IACDCTTL-24
-	module(1, 0x90000015, 12, 0x90000000) // GRV-ODCI-12
-	module(2, 0x6000001F, 12, 0x60000031) // GRV-IICTD-12, 12 of 24 rows configured
-	module(3, 0x60000002, 24, 0x60000024) // GRV-IV-24 at ±160 V
-	// Presence bits for the digital modules; state: DI 3 on, DO 11 on.
-	setBit := func(base uint32, bit int) {
-		w := base + uint32(bit/32)*4
-		v := binary.BigEndian.Uint32([]byte{d.mem[w], d.mem[w+1], d.mem[w+2], d.mem[w+3]})
-		d.putU32(w, v|1<<(uint(bit)%32))
-	}
-	for i := 0; i < 24; i++ {
-		setBit(addrPackedPresent, i)
-	}
-	for i := 0; i < 12; i++ {
-		setBit(addrPackedPresent, 32+i)
-	}
-	setBit(addrPackedState, 3)
-	setBit(addrPackedState, 32+11)
-	// Values: slot 2 ch 0 = 20.19 °C, slot 3 ch 0 = 8.4 V, the rest NaN.
-	for bit := 0; bit < MaxModules*MaxChannels; bit++ {
-		d.putU32(addrPackedValues+uint32(bit)*4, math.Float32bits(float32(math.NaN())))
-	}
-	d.putU32(addrPackedValues+(2*32+0)*4, math.Float32bits(20.19))
-	d.putU32(addrPackedValues+(3*32+0)*4, math.Float32bits(8.4))
-	return d
-}
-
-func (d *fakeDevice) put(addr uint32, b []byte) {
-	for i, v := range b {
-		d.mem[addr+uint32(i)] = v
-	}
-}
-
-func (d *fakeDevice) putU32(addr uint32, v uint32) {
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], v)
-	d.put(addr, b[:])
-}
-
-// serve answers one connection until it closes.
-func (d *fakeDevice) serve(conn net.Conn) {
-	defer conn.Close()
-	for {
-		var hdr [16]byte
-		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
-			return
-		}
-		addr := binary.BigEndian.Uint32(hdr[8:12])
-		n := int(binary.BigEndian.Uint16(hdr[12:14]))
-		switch hdr[3] >> 4 {
-		case tcodeReadBlockRequest:
-			resp := make([]byte, 16+n)
-			resp[3] = tcodeReadBlockResponse << 4
-			binary.BigEndian.PutUint16(resp[12:14], uint16(n))
-			for i := 0; i < n; i++ {
-				resp[16+i] = d.mem[addr+uint32(i)]
-			}
-			conn.Write(resp)
-		case tcodeWriteBlockRequest:
-			data := make([]byte, n)
-			io.ReadFull(conn, data)
-			d.put(addr, data)
-			resp := make([]byte, 12)
-			resp[3] = tcodeWriteResponse << 4
-			conn.Write(resp)
-		}
-	}
-}
+func newBenchDevice() *fakeDevice { return optommptest.NewBench() }
 
 func dialFake(t *testing.T, d *fakeDevice) *Client {
 	t.Helper()
 	a, b := net.Pipe()
-	go d.serve(b)
+	go d.Serve(b)
 	c := NewClient(a, 2*time.Second)
 	t.Cleanup(func() { c.Close() })
 	return c

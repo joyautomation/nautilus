@@ -31,6 +31,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
@@ -1456,6 +1457,26 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opts = append(opts, plcnext.WithScanRate(time.Duration(d.ScanRate)))
 		}
 		return plcnext.New(m, opts...)
+	case "optommp":
+		// An Opto 22 groov EPIC / groov RIO chassis over OptoMMP, from the
+		// processor's own LAN address or 127.0.0.1 when nautilus runs on
+		// it (brief docs/design/open-controllers.md §2). New never dials.
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver optommp: manifest (the optommp_manifest.yaml `naut optommp import` writes) is required")
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver optommp: %w", err)
+		}
+		m, err := optommp.ParseManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("driver optommp: %s: %w", d.Manifest, err)
+		}
+		opts := []optommp.Option{optommp.WithLogger(slog.Default().With("driver", "optommp"))}
+		if d.ScanRate != 0 {
+			opts = append(opts, optommp.WithScanRate(time.Duration(d.ScanRate)))
+		}
+		return optommp.New(m, opts...)
 	case "replay":
 		// A recording played back as live tags at a steerable clock: the
 		// baseline of a plant simulation. The recording itself is read on
@@ -1473,6 +1494,6 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus, plcnext and replay — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }
