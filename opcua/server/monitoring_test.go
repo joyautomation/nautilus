@@ -466,3 +466,53 @@ func TestSubscriptionIDsAreNeverReused(t *testing.T) {
 		t.Errorf("status %+v, want 2 subscriptions and 2 items", st)
 	}
 }
+
+// CloseSession honours deleteSubscriptions (Part 4 §5.6.4, #422): TRUE
+// deletes the session's subscriptions and their items before it answers;
+// FALSE leaves them to their own lifetime. gopcua ignored the flag, so a
+// client that closed its session left its subscriptions running, counted
+// on the driver row, until their lifetime ran out.
+func TestCloseSessionHonoursDeleteSubscriptions(t *testing.T) {
+	for _, del := range []bool{true, false} {
+		t.Run(fmt.Sprintf("deleteSubscriptions=%v", del), func(t *testing.T) {
+			rt, _ := newRuntime(t)
+			s, c := startServer(t, rt)
+			ctx := context.Background()
+			sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond, LifetimeCount: 6, MaxKeepAliveCount: 2}, make(chan *opcua.PublishNotificationData, 64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth,
+				opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Level"), ua.AttributeIDValue, 1),
+				opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Count"), ua.AttributeIDValue, 2)); err != nil {
+				t.Fatal(err)
+			}
+			if st := s.Status(); st.Subscriptions != 1 || st.MonitoredItems != 2 {
+				t.Fatalf("before close %+v", st)
+			}
+			if err := c.Send(ctx, &ua.CloseSessionRequest{DeleteSubscriptions: del}, func(r ua.Response) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			st := s.Status()
+			if del {
+				if st.Subscriptions != 0 || st.MonitoredItems != 0 {
+					t.Fatalf("after CloseSession(deleteSubscriptions=true) %+v, want nothing left", st)
+				}
+				return
+			}
+			if st.Subscriptions != 1 || st.MonitoredItems != 2 {
+				t.Fatalf("after CloseSession(deleteSubscriptions=false) %+v, want the subscription kept", st)
+			}
+			// Its lifetime then ends it, once nothing publishes for it. (The
+			// inherited publish loop counts the lifetime once per keep-alive
+			// period, not per publishing interval: 6 × 2 × 20 ms here.)
+			deadline := time.Now().Add(5 * time.Second)
+			for st := s.Status(); st.Subscriptions != 0 || st.MonitoredItems != 0; st = s.Status() {
+				if time.Now().After(deadline) {
+					t.Fatalf("kept subscription never expired: %+v", st)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
+	}
+}

@@ -208,7 +208,6 @@ checks:
   note: issue 422; leaves one subscription behind on the bug (expires after the default lifetime)
   expected_today: fail
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#422'
 - id: 001-F14-shutdown-with-session
   run: 2026-10-24-001
   finding: F-14

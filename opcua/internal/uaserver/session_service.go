@@ -139,12 +139,21 @@ func (s *SessionService) CloseSession(sc *uasc.SecureChannel, r ua.Request, reqI
 		return nil, err
 	}
 
+	sess := s.srv.sb.Session(req.RequestHeader.AuthenticationToken)
+
 	err = s.srv.sb.Close(req.RequestHeader.AuthenticationToken)
 	if err != nil {
 		return nil, ua.StatusBadSessionIDInvalid
 	}
 
-	//TODO: deal with 'delete subscriptions' field in request
+	// Part 4 §5.6.4: deleteSubscriptions TRUE deletes every subscription the
+	// session owns, with its monitored items, before the response; FALSE
+	// leaves them to run until their own lifetime expires (nothing publishes
+	// for them once the session is gone, so the lifetime counter does it).
+	if req.DeleteSubscriptions && sess != nil && s.srv.SubscriptionService != nil {
+		s.srv.SubscriptionService.DeleteSessionSubscriptions(sess)
+	}
+
 	response := &ua.CloseSessionResponse{
 		ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),
 	}

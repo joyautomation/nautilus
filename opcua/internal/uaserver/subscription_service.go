@@ -45,6 +45,28 @@ func (s *SubscriptionService) DeleteSubscription(id uint32) {
 
 }
 
+// DeleteSessionSubscriptions deletes every subscription sess owns, and their
+// monitored items, before it returns: CloseSession with deleteSubscriptions
+// set. The ids are collected under the lock and deleted after it, since
+// DeleteSubscription takes the lock itself.
+func (s *SubscriptionService) DeleteSessionSubscriptions(sess *session) {
+	if sess == nil || sess.AuthTokenID == nil {
+		return
+	}
+	token := sess.AuthTokenID.String()
+	s.Mu.Lock()
+	var ids []uint32
+	for id, sub := range s.Subs {
+		if sub != nil && sub.Session != nil && sub.Session.AuthTokenID != nil && sub.Session.AuthTokenID.String() == token {
+			ids = append(ids, id)
+		}
+	}
+	s.Mu.Unlock()
+	for _, id := range ids {
+		s.DeleteSubscription(id)
+	}
+}
+
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.2
 func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {
