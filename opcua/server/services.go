@@ -26,10 +26,10 @@
 //     SetMonitoringMode, DeleteMonitoredItems: monitoring.go, each for a
 //     crash, a freeze or a Good that meant nothing.
 //
-// gopcua honours a handler registered before Start and keeps it, so these
-// are installed between New and Start; the ones that need gopcua's own
-// bookkeeping (subscriptions, monitored items) work on its exported state
-// under its locks.
+// They are installed between New and Start, and uaserver (gopcua's server
+// package, copied in) no longer carries its own versions of them, so these
+// are the only ones; the ones that need its bookkeeping (subscriptions,
+// monitored items) work on its exported state under its locks.
 package server
 
 import (
@@ -126,8 +126,9 @@ func endpointURL(host string, port int) string {
 }
 
 // registerServices installs this package's service handlers on srv. It
-// must run before srv.Start: gopcua registers its own handlers there and
-// keeps whichever was first.
+// must run before srv.Start, which registers uaserver's own handlers and
+// keeps whichever was first; uaserver has none for these services, so one
+// not registered here is Bad_ServiceUnsupported.
 func registerServices(srv *opcserver.Server, ns *namespace) {
 	// CreateSession's ServerEndpoints are the list GetEndpoints gives, so a
 	// client that verifies one against the other finds them equal (#430).
