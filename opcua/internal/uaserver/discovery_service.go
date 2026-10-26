@@ -12,27 +12,6 @@ type DiscoveryService struct {
 	srv *Server
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.4.2
-func (s *DiscoveryService) FindServers(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	if s.srv.cfg.logger != nil {
-		s.srv.cfg.logger.Debug("Handling %T", r)
-	}
-
-	req, err := safeReq[*ua.FindServersRequest](r)
-	if err != nil {
-		return nil, err
-	}
-
-	response := &ua.FindServersResponse{
-		ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),
-		Servers: []*ua.ApplicationDescription{
-			s.srv.Endpoints()[0].Server,
-		},
-	}
-
-	return response, nil
-}
-
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.4.3
 func (s *DiscoveryService) FindServersOnNetwork(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {
@@ -44,25 +23,6 @@ func (s *DiscoveryService) FindServersOnNetwork(sc *uasc.SecureChannel, r ua.Req
 		return nil, err
 	}
 	return serviceUnsupported(req.RequestHeader), nil
-}
-
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.4.4
-func (s *DiscoveryService) GetEndpoints(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	if s.srv.cfg.logger != nil {
-		s.srv.cfg.logger.Debug("Handling %T", r)
-	}
-
-	req, err := safeReq[*ua.GetEndpointsRequest](r)
-	if err != nil {
-		return nil, err
-	}
-
-	response := &ua.GetEndpointsResponse{
-		ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),
-		Endpoints:      s.srv.endpointsFor(req.EndpointURL),
-	}
-
-	return response, nil
 }
 
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.4.5

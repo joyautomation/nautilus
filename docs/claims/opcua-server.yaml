@@ -251,7 +251,7 @@ claims:
       - go ./opcua/server TestCloseSessionHonoursDeleteSubscriptions
       - go ./opcua/server TestSubscriptionIDsAreNeverReused
       - go ./opcua/internal/uaserver TestCreateSubscriptionNeverReusesAnID
-      - go ./opcua/internal/uaserver TestServerAnswersAfterSubscriptionCancelledWithNotificationsQueued
+      - go ./opcua/server TestServerAnswersAfterASubscriptionIsCancelledWithValuesOwed
       - go ./tools/blackbox TestBlackbox/001-F13-closesession-deletes-subscriptions
       - go ./opcua/server TestRevisePublishing
       - go ./opcua/server TestPublishingIntervalIsRevisedNotActedOn

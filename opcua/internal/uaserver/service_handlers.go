@@ -16,12 +16,17 @@ import (
 type Handler func(*uasc.SecureChannel, ua.Request, uint32) (ua.Response, error)
 
 func (s *Server) initHandlers() {
+	// FindServers, GetEndpoints, Read, Write, Browse, BrowseNext,
+	// ModifySubscription, CreateMonitoredItems, SetMonitoringMode and
+	// DeleteMonitoredItems have no handler here: opcua/server registers its
+	// own before Start, and gopcua's versions of them, which it shadowed,
+	// were removed. Without a registration they answer
+	// Bad_ServiceUnsupported.
+
 	// s.registerHandlerFunc(id.ServiceFault_Encoding_DefaultBinary, handleServiceFault)
 
 	discovery := &DiscoveryService{s}
-	s.RegisterHandler(id.FindServersRequest_Encoding_DefaultBinary, discovery.FindServers)
 	s.RegisterHandler(id.FindServersOnNetworkRequest_Encoding_DefaultBinary, discovery.FindServersOnNetwork)
-	s.RegisterHandler(id.GetEndpointsRequest_Encoding_DefaultBinary, discovery.GetEndpoints)
 	s.RegisterHandler(id.RegisterServerRequest_Encoding_DefaultBinary, discovery.RegisterServer)
 	s.RegisterHandler(id.RegisterServer2Request_Encoding_DefaultBinary, discovery.RegisterServer2)
 
@@ -42,8 +47,6 @@ func (s *Server) initHandlers() {
 	s.RegisterHandler(id.DeleteReferencesRequest_Encoding_DefaultBinary, node.DeleteReferences)
 
 	view := &ViewService{s}
-	s.RegisterHandler(id.BrowseRequest_Encoding_DefaultBinary, view.Browse)
-	s.RegisterHandler(id.BrowseNextRequest_Encoding_DefaultBinary, view.BrowseNext)
 	s.RegisterHandler(id.TranslateBrowsePathsToNodeIDsRequest_Encoding_DefaultBinary, view.TranslateBrowsePathsToNodeIDs)
 	s.RegisterHandler(id.RegisterNodesRequest_Encoding_DefaultBinary, view.RegisterNodes)
 	s.RegisterHandler(id.UnregisterNodesRequest_Encoding_DefaultBinary, view.UnregisterNodes)
@@ -53,9 +56,7 @@ func (s *Server) initHandlers() {
 	s.RegisterHandler(id.QueryNextRequest_Encoding_DefaultBinary, query.QueryNext)
 
 	attr := &AttributeService{s}
-	s.RegisterHandler(id.ReadRequest_Encoding_DefaultBinary, attr.Read)
 	s.RegisterHandler(id.HistoryReadRequest_Encoding_DefaultBinary, attr.HistoryRead)
-	s.RegisterHandler(id.WriteRequest_Encoding_DefaultBinary, attr.Write)
 	s.RegisterHandler(id.HistoryUpdateRequest_Encoding_DefaultBinary, attr.HistoryUpdate)
 
 	method := &MethodService{s}
@@ -68,7 +69,6 @@ func (s *Server) initHandlers() {
 	}
 	s.SubscriptionService = sub
 	s.RegisterHandler(id.CreateSubscriptionRequest_Encoding_DefaultBinary, sub.CreateSubscription)
-	s.RegisterHandler(id.ModifySubscriptionRequest_Encoding_DefaultBinary, sub.ModifySubscription)
 	s.RegisterHandler(id.SetPublishingModeRequest_Encoding_DefaultBinary, sub.SetPublishingMode)
 	s.RegisterHandler(id.PublishRequest_Encoding_DefaultBinary, sub.Publish)
 	s.RegisterHandler(id.RepublishRequest_Encoding_DefaultBinary, sub.Republish)
@@ -83,13 +83,10 @@ func (s *Server) initHandlers() {
 	}
 	s.MonitoredItemService = item
 	// s.registerHandler(id.MonitoredItemCreateRequest_Encoding_DefaultBinary, item.MonitoredItemCreate)
-	s.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary, item.CreateMonitoredItems)
 	//s.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary, s.CreateMonitoredItems)
 	// s.registerHandler(id.MonitoredItemModifyRequest_Encoding_DefaultBinary, item.MonitoredItemModify)
 	s.RegisterHandler(id.ModifyMonitoredItemsRequest_Encoding_DefaultBinary, item.ModifyMonitoredItems)
-	s.RegisterHandler(id.SetMonitoringModeRequest_Encoding_DefaultBinary, item.SetMonitoringMode)
 	s.RegisterHandler(id.SetTriggeringRequest_Encoding_DefaultBinary, item.SetTriggering)
-	s.RegisterHandler(id.DeleteMonitoredItemsRequest_Encoding_DefaultBinary, item.DeleteMonitoredItems)
 }
 
 // This function allows you to overwrite a handler before you call start.

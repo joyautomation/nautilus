@@ -516,3 +516,51 @@ func TestCloseSessionHonoursDeleteSubscriptions(t *testing.T) {
 		})
 	}
 }
+
+// Cancelling a subscription while its items' first values are still owed
+// must not stop the server. Ported from gopcua PR #929's end-to-end test,
+// which caught the inherited stack deadlocking its one message loop here;
+// through nautilus the items on a Server-object node are each owed their
+// one value by a goroutine of createMonitoredItems, more of them than the
+// subscription's channel holds. The services are sent raw: gopcua's
+// client's own subscription bookkeeping (its publish loop pausing and
+// resuming as subscriptions come and go) can hang in the client, which is
+// not what this test is about.
+func TestServerAnswersAfterASubscriptionIsCancelledWithValuesOwed(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	node := ua.NewNumericNodeID(0, id.Server_ServerStatus_CurrentTime)
+	items := make([]*ua.MonitoredItemCreateRequest, 150)
+	for i := range items {
+		items[i] = opcua.NewMonitoredItemCreateRequestWithDefaults(node, ua.AttributeIDValue, uint32(i+1))
+	}
+	send := func(round int, what string, req ua.Request) ua.Response {
+		t.Helper()
+		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		var resp ua.Response
+		if err := c.Send(sctx, req, func(r ua.Response) error { resp = r; return nil }); err != nil {
+			t.Fatalf("round %d: %s: the server stopped answering: %v", round, what, err)
+		}
+		return resp
+	}
+	createSub := func(round int) uint32 {
+		t.Helper()
+		r := send(round, "CreateSubscription", &ua.CreateSubscriptionRequest{RequestedPublishingInterval: 100, RequestedLifetimeCount: 60, RequestedMaxKeepAliveCount: 20, PublishingEnabled: true})
+		return r.(*ua.CreateSubscriptionResponse).SubscriptionID
+	}
+	for round := range 10 {
+		subID := createSub(round)
+		send(round, "CreateMonitoredItems", &ua.CreateMonitoredItemsRequest{SubscriptionID: subID, TimestampsToReturn: ua.TimestampsToReturnBoth, ItemsToCreate: items})
+		send(round, "DeleteSubscriptions", &ua.DeleteSubscriptionsRequest{SubscriptionIDs: []uint32{subID}})
+		pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := opcua.GetEndpoints(pctx, s.URL())
+		pcancel()
+		if err != nil {
+			t.Fatalf("round %d: the server stopped answering after a subscription was cancelled: %v", round, err)
+		}
+	}
+	// The deadlock showed when the loop reached the next CreateSubscription.
+	createSub(10)
+}

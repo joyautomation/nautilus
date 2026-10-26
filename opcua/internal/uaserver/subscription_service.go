@@ -124,22 +124,6 @@ func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Re
 	return resp, nil
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.3
-func (s *SubscriptionService) ModifySubscription(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	if s.srv.cfg.logger != nil {
-		s.srv.cfg.logger.Debug("Handling %T", r)
-	}
-
-	req, err := safeReq[*ua.ModifySubscriptionRequest](r)
-	if err != nil {
-		return nil, err
-	}
-
-	// When this gets implemented, be sure to check the subscription session vs the request session!
-
-	return serviceUnsupported(req.RequestHeader), nil
-}
-
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.4
 func (s *SubscriptionService) SetPublishingMode(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {
