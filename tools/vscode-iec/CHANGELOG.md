@@ -5,26 +5,33 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-26
+
+Requires naut 0.19.0 or later for the items marked so; everything else
+works with naut 0.18.0.
+
 ### Added
 
-- **A 3D scene editor.** A `*.scene.json` now opens as the 3D view itself
-  (the same `@joyautomation/nautilus-hmi-3d` renderer the built HMI uses,
-  in its own webview bundle), with a palette of the document's kinds, a
-  move/turn gizmo on the selected node (`G` / `R`, snapped to the grid
-  cell and 15°, Shift for free), a panel that edits the node's fields by
-  number, `Del`, `Esc` and **Save view**. The toolbar switches the look
-  (lit, flat, paper) as a preview; **Use … as the scene's look** writes
-  it. A click picks through glass — the pump inside the wet well, not the
-  well — and clicking the same spot again cycles through what is stacked
-  there; a label picks its node. The JSON stays canonical: every
-  gesture is one text edit (undo is text undo; a move diffs as one `pos`
-  line), and a hand edit beside it re-renders live. Models, textures and
-  HDRIs resolve where `naut check` looks (next to the scene, `hmi/static/`,
-  `hmi/build/`); a missing file is named in a banner and draws as a grey
-  box, as does a component kind (the app builds those, not the editor).
-  Live values come from `nautilus.runtimeUrl` as the mimic's do. *Open
-  With → Text Editor* is a right-click away; a window without WebGL says
-  so instead of failing. Setting: `nautilus.scene.snapToGrid`.
+- **A 3D scene editor, a first version to play with.** It still needs
+  work, but it is already useful. A `*.scene.json` now opens as the 3D
+  view itself (the same `@joyautomation/nautilus-hmi-3d` renderer the
+  built HMI uses, in its own webview bundle), with a palette of the
+  document's kinds, a move/turn gizmo on the selected node (`G` / `R`,
+  snapped to the grid cell and 15°, Shift for free), a panel that edits
+  the node's fields by number, `Del`, `Esc` and **Save view**. The toolbar
+  switches the look (lit, flat, paper) as a preview; **Use … as the
+  scene's look** writes it. A click picks through glass — the pump inside
+  the wet well, not the well — and clicking the same spot again cycles
+  through what is stacked there; a label picks its node. The JSON stays
+  canonical: every gesture is one text edit (undo is text undo; a move
+  diffs as one `pos` line), and a hand edit beside it re-renders live.
+  Models, textures and HDRIs resolve where `naut check` looks (next to the
+  scene, `hmi/static/`, `hmi/build/`); a missing file is named in a banner
+  and draws as a grey box, as does a component kind (the app builds those,
+  not the editor). Live values come from `nautilus.runtimeUrl` as the
+  mimic's do. *Open With → Text Editor* is a right-click away; a window
+  without WebGL says so instead of failing. Setting:
+  `nautilus.scene.snapToGrid`.
 - **A multi-leg OR in one step, and a branch you can select (ladder).**
   Ctrl- or Shift-click several elements of one series (the rung, or one
   leg of a branch), then press `O` or the toolbar's **OR**: they become
@@ -34,7 +41,7 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   cuts it. With one element selected, `O` is `B` (a 2-leg OR around it).
   In the DOM a branch is `<g class="branch" data-kind="branch">` with an
   aria label ("OR branch, 3 legs") wrapping a `<g class="leg">` per leg,
-  so it is addressable from tests. Needs a `naut` newer than 0.18.0 (the
+  so it is addressable from tests. Needs naut 0.19.0 or later (the
   `wrapOr` op). (#91)
 - **Insert an FBD block right where you want it.** Double-click empty
   canvas: the **+ add** palette opens, and what you insert lands at that
@@ -45,7 +52,21 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   OPC UA address space (read-only: browse, read, subscribe) when the
   section is present; `endpoint` (default `opc.tcp://localhost:4840`) is
   its one key, with completion and hover. `naut check` refuses an endpoint
-  that is not `opc.tcp://host:port`. (#278)
+  that is not `opc.tcp://host:port`. Needs naut 0.19.0 or later. (#416)
+- **Manifest schema: `driver: {type: plcnext}` and `{type: optommp}`.**
+  Completion and validation for the two open-controller drivers (Phoenix
+  Contact PLCnext and Opto 22 groov EPIC), whose own manifests
+  `naut plcnext` and `naut optommp import` write. Needs naut 0.19.0 or
+  later. (#436, #437, #438)
+- **`target.logix.hardware` in `nautilus.yaml`.** Completion and
+  validation for the option that names the project's hardware
+  configuration: an L5X (`hardware.L5X`, written by `naut logix import
+  --project` from an export with I/O modules) whose `<Modules>` section
+  the Logix writer carries into the project unchanged, so tags with an
+  `alias:` of a rack point (`Local:1:I.Data.0`, `Remote1:1:I.Data.0`)
+  have their modules and the project builds and downloads. An alias of a
+  module the configuration lacks is refused at write time, naming the
+  module. Needs naut 0.19.0 or later. (#397)
 
 ### Fixed
 
@@ -68,9 +89,6 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   or zoom out from. Ctrl+0 and the fit button still fit everything. Pins
   are also easier to hit: a pin takes a press or a dropped wire within
   5 px of its dot. (#79)
-
-### Fixed
-
 - **Create Project…: Enter in the parent-folder step now accepts.** The step
   was VS Code's open dialog, which with `files.simpleDialog.enable` (VS Code
   for the web, remote setups) is a plain input where Enter navigates instead
@@ -106,16 +124,6 @@ division on a Logix target are written exactly or squiggle; and new
 tag's type, and a ladder rung with no coil must end at its last block.
 
 ### Added
-
-- **`target.logix.hardware` in `nautilus.yaml`.** Completion and
-  validation for the option that names the project's hardware
-  configuration: an L5X (`hardware.L5X`, written by `naut logix import
-  --project` from an export with I/O modules) whose `<Modules>` section
-  the Logix writer carries into the project unchanged, so tags with an
-  `alias:` of a rack point (`Local:1:I.Data.0`, `Remote1:1:I.Data.0`)
-  have their modules and the project builds and downloads. An alias of a
-  module the configuration lacks is refused at write time, naming the
-  module. Needs a `naut` newer than 0.18.0.
 
 - **`sparkplug.store-forward-file` in `nautilus.yaml`.** Completion and
   validation for the new option that journals the store-and-forward
