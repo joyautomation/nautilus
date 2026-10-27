@@ -1,8 +1,8 @@
 # plcnext-bench — the nautilus runtime on the office PLCnext
 
 A Phoenix Contact **AXC F 2152** (ARMv7, 2 cores, 512 MB, PREEMPT_RT
-Linux, firmware 2023.0 LTS) with four Axioline F modules on its local
-bus. The nautilus runtime runs **on the controller** and drives those
+Linux, firmware 2023.0 LTS) with four Axioline Smart Elements (DO16,
+DI16, an SC element, AI4 U) on one backplane on its local bus. The nautilus runtime runs **on the controller** and drives those
 modules; Phoenix Contact's IEC engine is idle and PLCnext Engineer is
 never opened. The image crosses through `rt/plcnext-io`'s in-process
 shim, which touches the Axioline frames through the firmware's ANSI-C
@@ -21,9 +21,9 @@ Engineer, which presents the whole process image as two 512-byte arrays.
 ACF-started shim that reads and writes the Axioline frames every
 millisecond through the firmware's own ANSI-C API, by way of its
 shared-memory page. BusConductor reports four modules, the bus runs,
-and `bench.st`'s 1 Hz heartbeat on the DO16 module's output 15 shows in
-the shim's own view of the output frame (`naut plcnext shm --watch`:
-byte 2 toggles `00`/`80` every 500 ms). The image costs 0.03–0.05 ms a
+and `bench.st`'s 1 Hz heartbeat blinks the DO16's output 16 LED (in the
+shim's own view of the output frame, `naut plcnext shm --watch`, byte 1
+toggles `00`/`80` every 500 ms). The image costs 0.03–0.05 ms a
 scan instead of an ~11 ms gRPC round trip, the inputs are 0.1–1.1 ms
 old when the program sees them, and naut uses 4 % of one core at the
 50 ms scan (9 % on gRPC) and 20 MB, beside the shim's 3 % and 17 MB, on
@@ -33,7 +33,8 @@ timing (rt/plcnext-io/README.md has the numbers), so the project stays
 at 50 ms.
 
 Fail-safe, tried on the bench: kill naut and the shim drives the output
-frame to zero 1 s later (`output-watchdog`); restart the plcnext runtime
+frame to zero 1 s later (`output-watchdog`), and the output 16 LED goes
+dark; the keepalive brings naut back at the next minute; restart the plcnext runtime
 and naut notices the shim's new start, runs the BusConductor handshake
 again and carries on.
 
@@ -42,11 +43,11 @@ images through the GDS mirror ports below. With the shim deployed the
 shim is the output frame's only writer, so on grpc the inputs still
 read but the outputs no longer reach the bus.
 
-Not yet seen with eyes: the DO16 LEDs. The output frame toggles, but a
-channel only switches when the module's UP supply is wired, and the bus
-reports "Supply missing (Up)" on slot 4 (so the analog module reads
-`0x8020`, Axioline's supply-missing marker, on both channels). Look at
-slot 2 while it runs; wire UP to slot 4 for the analogs.
+Seen with eyes (2026-10-27): the heartbeat on the DO16's LED, the
+fail-safe dropping it, and a switch on DI16 terminals 01–04 lighting the
+matching DO16 outputs through `bench.st`. The bus reports "Supply missing
+(Up)" on slot 4, so the AI4 U reads `0x8020`, Axioline's supply-missing
+marker, on all four channels until its supply is wired.
 
 ## How the image reaches the service
 
@@ -86,10 +87,16 @@ same shape and can replace it without touching the driver.
 | `BcComponent1/BusConductor.{CONFIG_REQ,CONFIGURED,START_IO_REQ,NUM_MODULES}` | the handshake |
 
 **Layout, measured:** in BusConductor's generic mode every module takes
-its frame length in BOTH images — DI16 2 bytes, DO16 2 bytes, the 0-bit
-device nothing, AI2/AO2 4 bytes — so inputs are DI16 @0, AI @4..7 and
-outputs are DO16 @2..3, AO @4..7. `plcnext_manifest.yaml` says so;
-`naut plcnext tags` derives `tags/plcnext.yaml` from it.
+its frame length in BOTH images, in bus order — DO16 2 bytes, DI16 2
+bytes, the SC element nothing, AI4 U 8 bytes — so outputs are DO16 @0..1
+and inputs are DI16 @2..3, AI @4..11. A digital module numbers its
+channels byte by byte (channel 01 is bit 0 of its first byte, channel 09
+bit 0 of its second), while a manifest's `bit:N` counts in a big-endian
+16-bit word, so channel n binds as `bit:((n+7) mod 16)`. Both were
+settled with eyes on the LEDs and a switch, not from the bytes alone: the
+first layout here, read from the device list, had the two digital
+modules swapped. `plcnext_manifest.yaml` says so; `naut plcnext tags`
+derives `tags/plcnext.yaml` from it.
 
 ## Deploy, from nothing
 
@@ -166,8 +173,8 @@ naut check .     # on the laptop: validates the manifest offline, no controller 
 naut test  .     # the acceptance suite in virtual time
 ```
 
-`bench.st` mirrors the sixteen inputs to fifteen outputs, puts a 1 Hz
-heartbeat on output 15, and echoes analog input 0 to analog output 0.
+`bench.st` mirrors inputs 01–15 to outputs 01–15 and puts a 1 Hz
+heartbeat on output 16. The four analog inputs are tags only.
 
 ## Timing, honestly
 

@@ -47,10 +47,10 @@ Stage 2 — nautilus's I/O through it — is done and running on the bench:
   default 1 s);
 - the plcnext driver's `transport: shm` reads and writes that page
   (`plcnext/shm.go`); `examples/plcnext-bench` runs on it. bench.st's
-  1 Hz heartbeat on DO16 output 15 shows in the shim's own view of the
-  frame (`naut plcnext shm --watch`, and the shim's log): output byte 2
-  toggles `00`/`80` every 500 ms, generation applied = generation
-  written;
+  1 Hz heartbeat blinks the DO16's output 16 LED and shows in the shim's
+  own view of the frame (`naut plcnext shm --watch`, and the shim's
+  log): output byte 1 toggles `00`/`80` every 500 ms, generation applied
+  = generation written;
 - killing naut (`kill -9`) drops the frame to zero 1 s later, in the
   shim's log as `nautilus's outputs are older than 1000 ms`; a runtime
   restart restarts the shim, and naut sees the new start stamp, ends its
@@ -118,8 +118,8 @@ which nothing under the ESM outranks. Nothing is late by more than a
 millisecond in any FIFO run: the 1 ms cycle holds; the 200 µs line does
 not, while someone streams into the controller's Ethernet.
 
-Not yet: a human confirming the DO16 LED blinks (the frame is written;
-the module's UP supply decides whether a channel switches).
+Seen with eyes (2026-10-27): the heartbeat LED, and the fail-safe
+taking it dark within a second of naut being killed.
 
 ## Three things the bench taught, each the hard way
 

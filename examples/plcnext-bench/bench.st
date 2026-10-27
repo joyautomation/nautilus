@@ -1,7 +1,7 @@
 PROGRAM Bench
 (* The round trip on the controller's own bus: sixteen inputs mirrored to
-   fifteen outputs, a heartbeat on the sixteenth, the first analog input
-   echoed to the first analog output. *)
+   fifteen outputs and a heartbeat on the sixteenth. The analog element
+   has inputs only (AI_00 … AI_03, read through the tag API). *)
 VAR_EXTERNAL
     DI_00 : BOOL;  DI_01 : BOOL;  DI_02 : BOOL;  DI_03 : BOOL;
     DI_04 : BOOL;  DI_05 : BOOL;  DI_06 : BOOL;  DI_07 : BOOL;
@@ -11,8 +11,6 @@ VAR_EXTERNAL
     DO_04 : BOOL;  DO_05 : BOOL;  DO_06 : BOOL;  DO_07 : BOOL;
     DO_08 : BOOL;  DO_09 : BOOL;  DO_10 : BOOL;  DO_11 : BOOL;
     DO_12 : BOOL;  DO_13 : BOOL;  DO_14 : BOOL;  DO_15 : BOOL;
-    AI_00 : REAL;  AI_01 : REAL;
-    AO_00 : REAL;  AO_01 : REAL;
     BenchDtS     : REAL;
     BlinkPeriodS : REAL;
     Blink        : BOOL;
@@ -32,7 +30,4 @@ DO_00 := DI_00;  DO_01 := DI_01;  DO_02 := DI_02;  DO_03 := DI_03;
 DO_04 := DI_04;  DO_05 := DI_05;  DO_06 := DI_06;  DO_07 := DI_07;
 DO_08 := DI_08;  DO_09 := DI_09;  DO_10 := DI_10;  DO_11 := DI_11;
 DO_12 := DI_12;  DO_13 := DI_13;  DO_14 := DI_14;
-
-AO_00 := AI_00;
-AO_01 := AI_01;
 END_PROGRAM
