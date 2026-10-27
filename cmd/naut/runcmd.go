@@ -77,6 +77,7 @@ func wireRedundancy(proj *project.Project, el runtime.Coordinator) {
 // built binary's embedded project) — it's where live git history capture
 // looks; a built binary carries its history in the archive instead.
 func runProject(fsys fs.FS, manifest, label, dir string) int {
+	useConsoleLog()
 	proj, err := project.Load(fsys, manifest)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run:", err)
@@ -244,7 +245,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if el != nil {
 		banner += " — redundancy: " + el.Status().Mode
 	}
-	fmt.Println(banner + " — Ctrl+C to stop")
+	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
 	<-ctx.Done()
 	return 0
 }
