@@ -16,6 +16,16 @@ package optommp
 // output or a scratchpad element one write each. WriteOutputs wakes the
 // loop, so a command does not wait for the next poll.
 //
+// Writing on change assumes the unit holds what it was last told, and two
+// things break that: a reconnect (the processor may have restarted, or
+// been without nautilus long enough for anything to happen), and the
+// communication watchdog, which drives outputs to their watchdog values
+// after a quiet spell and leaves them there. So every commanded output is
+// rewritten at the start of each session, and every digital and analog
+// output whenever the client's bound on the quiet spell (wire.go)
+// exceeds the unit's watchdog time — a stalled process, a network drop
+// TCP rode out, a scan that overran.
+//
 // With custom-area the scan is one read of the processor's custom data
 // area, its pointers naming every word the bindings need; with stream the
 // processor pushes that area over UDP and the driver sends only writes,
@@ -25,8 +35,12 @@ package optommp
 // Quality per tag: NotConnected until first delivered; Stale after the
 // socket drops; Bad when the slot is empty or holds another module than
 // the manifest says, when a digital channel is absent or its quality bit
-// is set, and when an analog value is NaN (the processor reports every
-// bad-quality analog reading as NaN); Good otherwise.
+// is set, when an analog value is NaN (the processor reports every
+// bad-quality analog reading as NaN), and when a digital output's state
+// has disagreed with its command for longer than a write takes to show
+// (readbackSettle); Good otherwise. An output tag's value is the program's
+// command — the runtime takes only inputs from a driver — so that last
+// case is how a module doing something else reaches the screen.
 
 import (
 	"context"
@@ -51,6 +65,11 @@ const (
 	// chassisEvery is how often the module types and channel-present mask
 	// are re-read: groov modules are hot-swappable.
 	chassisEvery = 5 * time.Second
+	// readbackSettle is how long after a write a digital output's state
+	// may still disagree with it before the tag goes Bad (at least three
+	// scans or stream intervals): long enough for the module to switch and
+	// for a datagram already in flight to be superseded.
+	readbackSettle = 250 * time.Millisecond
 )
 
 // Option configures New.
@@ -124,10 +143,13 @@ type Driver struct {
 	mu             sync.Mutex
 	in             map[string]any
 	quality        map[string]nio.Quality
-	commanded      map[string]any // last output value accepted
-	pending        map[string]any // accepted, not yet written
-	slotFault      map[int]string // slot → why its tags are Bad
-	absent         []byte         // channel-present mask as last read (nil: unknown)
+	commanded      map[string]any       // last output value accepted
+	pending        map[string]any       // accepted, not yet written
+	wrote          map[string]time.Time // when each output was last written
+	disagree       map[string]bool      // digital outputs whose state is not their command
+	quietTrip      bool                 // the last quiet check outran the watchdog
+	slotFault      map[int]string       // slot → why its tags are Bad
+	absent         []byte               // channel-present mask as last read (nil: unknown)
 	unit           string
 	firmware       string
 	watchdogMs     int64  // the unit's watchdog as last read; -1 before
@@ -175,6 +197,8 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		quality:    map[string]nio.Quality{},
 		commanded:  map[string]any{},
 		pending:    map[string]any{},
+		wrote:      map[string]time.Time{},
+		disagree:   map[string]bool{},
 		slotFault:  map[int]string{},
 		watchdogMs: -1,
 		kick:       make(chan struct{}, 1),
@@ -337,6 +361,16 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 	uc, err := d.configure(c)
 	if err != nil {
 		return false, err
+	}
+	if d.gateOpen() {
+		// The unit may have restarted, or its watchdog fired, since the
+		// last session: what it holds is not known to be what was written.
+		d.mu.Lock()
+		n := d.requeueLocked(false)
+		d.mu.Unlock()
+		if n > 0 {
+			d.log.Info("optommp: rewriting every commanded output on reconnect", "host", d.m.Host, "outputs", n)
+		}
 	}
 	defer func() {
 		if ctx.Err() != nil {
@@ -528,6 +562,14 @@ func (d *Driver) fetch(c *Client) (img []uint32, reqs int, err error) {
 // returns the requests that took.
 func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 	var clears []uint32
+	// A replica that is not writing has no command to hold the unit to.
+	checkOut := d.gateOpen()
+	now := time.Now()
+	type turn struct {
+		name     string
+		off, set bool
+	}
+	var turned []turn // digital outputs that began or stopped disagreeing
 	d.mu.Lock()
 	for i, b := range d.m.Tags {
 		r := d.plan.refs[i]
@@ -573,11 +615,29 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 				}
 			}
 		}
+		if b.Point == PointDO && checkOut {
+			off := d.disagreesLocked(b.Name, set, now)
+			if off != d.disagree[b.Name] {
+				d.disagree[b.Name] = off
+				turned = append(turned, turn{b.Name, off, set})
+			}
+			if off {
+				q = nio.Bad
+			}
+		}
 		d.in[b.Name] = v
 		d.quality[b.Name] = q
 	}
 	d.mu.Unlock()
 	d.reads.Add(1)
+	for _, t := range turned {
+		if t.off {
+			d.log.Warn("optommp: an output is not in its commanded state; its tag is Bad until it is",
+				"host", d.m.Host, "tag", t.name, "state", t.set)
+		} else {
+			d.log.Info("optommp: an output is in its commanded state again", "host", d.m.Host, "tag", t.name)
+		}
+	}
 
 	reqs := 0
 	for _, addr := range clears {
@@ -598,6 +658,7 @@ func (d *Driver) flush(c *Client) error {
 // flushCount writes every pending output and reports how many requests it
 // took. A failed write leaves the rest pending for the next session.
 func (d *Driver) flushCount(c *Client) (int, error) {
+	d.rearm(c)
 	d.mu.Lock()
 	if len(d.pending) == 0 {
 		d.mu.Unlock()
@@ -714,11 +775,82 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 			return i, err
 		}
 		d.writes.Add(1)
+		now := time.Now()
+		d.mu.Lock()
+		for _, name := range w.names {
+			d.wrote[name] = now
+		}
+		d.mu.Unlock()
 	}
 	if len(errs) > 0 {
 		d.fail(errors.Join(errs...))
 	}
 	return len(writes), nil
+}
+
+// rearm queues every digital and analog output the driver commands for
+// rewriting when the unit may have gone longer than its watchdog time
+// without a request (Client.quiet), so an output the watchdog moved goes
+// back to its command instead of waiting for the command to change. It
+// logs when that starts, not on every scan it lasts.
+func (d *Driver) rearm(c *Client) {
+	quiet := c.quiet()
+	d.mu.Lock()
+	wd := time.Duration(d.watchdogMs) * time.Millisecond
+	tripped := wd > 0 && quiet > wd
+	was := d.quietTrip
+	d.quietTrip = tripped
+	d.mu.Unlock()
+	if !tripped || !d.gateOpen() {
+		return
+	}
+	d.mu.Lock()
+	n := d.requeueLocked(true)
+	d.mu.Unlock()
+	if !was {
+		d.log.Warn("optommp: the unit may have gone longer than its watchdog without a request; rewriting every output in case it applied watchdog values",
+			"host", d.m.Host, "quiet", quiet.Round(time.Millisecond), "watchdog", wd, "outputs", n)
+	}
+}
+
+// requeueLocked queues every commanded output (watchdog: only the digital
+// and analog outputs, the points a watchdog moves) at its current command,
+// so the next flush writes it whether or not it changed. It returns how
+// many were not already queued.
+func (d *Driver) requeueLocked(watchdog bool) int {
+	n := 0
+	for name, v := range d.commanded {
+		if p := d.outputs[name].Point; watchdog && p != PointDO && p != PointAO {
+			continue
+		}
+		if _, queued := d.pending[name]; !queued {
+			n++
+		}
+		d.pending[name] = v
+	}
+	return n
+}
+
+// disagreesLocked reports whether a digital output's state as read (set)
+// is not its command, counting only a command written at least
+// readbackSettle (or three intervals) before now and not since replaced.
+func (d *Driver) disagreesLocked(name string, set bool, now time.Time) bool {
+	cmd, ok := d.commanded[name]
+	if !ok {
+		return false
+	}
+	if _, queued := d.pending[name]; queued {
+		return false
+	}
+	every := d.scanRate
+	if d.m.Stream > 0 {
+		every = time.Duration(d.m.Stream)
+	}
+	if now.Sub(d.wrote[name]) < max(readbackSettle, 3*every) {
+		return false
+	}
+	want, err := toBool(cmd)
+	return err == nil && want != set
 }
 
 func (d *Driver) fail(err error) {
@@ -749,9 +881,11 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 }
 
 // WriteOutputs is io.Driver. Nautilus owns the outputs it binds: the first
-// value handed over for a tag is written, and after that every change.
-// Commands are held across a disconnect and written on reconnect. While
-// the write gate is closed nothing is accepted.
+// value handed over for a tag is written, and after that every change —
+// plus every command again on reconnect, and the digital and analog ones
+// after the unit may have applied watchdog values (rearm). Commands are
+// held across a disconnect. While the write gate is closed nothing is
+// accepted, and nothing is rewritten.
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	if !d.gateOpen() {
 		return nil

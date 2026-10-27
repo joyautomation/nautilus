@@ -154,7 +154,10 @@ claims:
       - go ./optommp TestManifestCommOptionValidation
       - go ./internal/project TestOptommpStatusStreamAndWatchdog
     partial: true
-    note: Against the in-process fake only; not yet switched on on the bench unit.
+    note: >-
+      Against the in-process fake. On the bench unit (2026-10-27) a 1000 ms
+      watchdog tripped as described when naut was stopped with SIGSTOP;
+      that run is not automated.
   - id: EPIC-015
     claim: >-
       The runtime on the processor ran the epic-bench project (73 tags,
@@ -218,3 +221,30 @@ claims:
       binary CapEff 0x800000, and 0 without it. The bench binary also
       carries the file capability, so the running naut's CapEff came from
       that.
+  - id: EPIC-019
+    claim: >-
+      When the unit may have gone longer than its watchdog time without a
+      request (a stalled process, a network outage TCP rode out, an
+      overrun scan), the driver rewrites every digital and analog output
+      it commands, logging a warning once each time; a reconnect rewrites
+      every commanded output, scratchpad included.
+    source: "#the-communication-watchdog"
+    tests:
+      - go ./optommp TestDriverRewritesOutputsAfterAStall
+      - go ./optommp TestDriverRewritesEveryOutputOnReconnect
+    partial: true
+    note: >-
+      Against the in-process fake, which applies watchdog values when it
+      next sees a request. The stall is the driver's lock held with the
+      socket open, polling and streaming; the network-outage and overrun
+      cases go through the same bound (send to next answer) but have no
+      test of their own, and the warning's once-per-trip is not asserted.
+      The bench case it fixes (SIGSTOP 15 s, DO7 latched at its watchdog
+      value, 2026-10-27) has not been re-run with the fix.
+  - id: EPIC-020
+    claim: >-
+      A digital output still not in its commanded state 250 ms (or three
+      scans) after the write reads bad until it is.
+    source: "#quality-per-channel"
+    tests:
+      - go ./optommp TestDriverOutputNotInItsCommandedStateIsBad

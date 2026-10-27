@@ -2,9 +2,12 @@ package optommp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -209,5 +212,133 @@ func TestDriverWatchdogOffAndLeftAlone(t *testing.T) {
 	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
 	if got, h := dev.U32(fakeWatchdog), drv.Health(); got != 700 || h.WatchdogMs != 700 {
 		t.Errorf("no watchdog key: unit %d ms, health %d; want both 700", got, h.WatchdogMs)
+	}
+}
+
+// do07 reports DO07 on the bench's output module, at the device.
+func do07(dev *fakeDevice) bool { return dev.U32(addrDigitalPacked+digitalModuleStride)&(1<<7) != 0 }
+
+// The bench case: the driver stalls with its socket open (SIGSTOP on the
+// bench, here its lock held so no request goes out), the watchdog drives
+// DO07 to its watchdog value, and on resume the driver puts it back — its
+// command never changed, so writing on change alone would leave it there.
+func TestDriverRewritesOutputsAfterAStall(t *testing.T) {
+	for _, stream := range []time.Duration{0, 5 * time.Millisecond} {
+		t.Run(fmt.Sprintf("stream=%s", stream), func(t *testing.T) {
+			wd := 60 * time.Millisecond
+			dev := newBenchDevice()
+			dev.SetWatchdogValue(1, 7, 1) // DO07 on when the watchdog fires
+			m := benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond, Stream: stream, Watchdog: &wd})
+			start := startDriver
+			if stream > 0 {
+				start = startDriverTCP
+			}
+			drv := start(t, dev, m)
+			eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
+			drv.WriteOutputs(nio.Values{"EPIC_M1_DO07": false, "EPIC_M1_DO05": true})
+			eventually(t, "DO05 on", func() bool { return dev.U32(addrDigitalPacked+digitalModuleStride)&(1<<5) != 0 })
+
+			// Fed on time, nothing is rewritten.
+			writes := drv.Health().Writes
+			time.Sleep(5 * wd)
+			if dev.WatchdogTripped() || drv.Health().Writes != writes {
+				t.Fatalf("while fed: tripped %v, %d rewrites", dev.WatchdogTripped(), drv.Health().Writes-writes)
+			}
+
+			stalled := true
+			drv.mu.Lock()
+			t.Cleanup(func() {
+				if stalled {
+					drv.mu.Unlock()
+				}
+			})
+			eventually(t, "the watchdog to trip", dev.WatchdogTripped)
+			if !do07(dev) {
+				t.Fatal("the trip left DO07 off; the fake did not apply its watchdog value")
+			}
+			time.Sleep(wd)
+			stalled = false
+			drv.mu.Unlock()
+
+			eventually(t, "DO07 back to its command", func() bool { return !do07(dev) })
+			if dev.U32(addrDigitalPacked+digitalModuleStride)&(1<<5) == 0 {
+				t.Error("DO05 (no watchdog value) went off")
+			}
+			time.Sleep(2 * readbackSettle)
+			if q := drv.Quality()["EPIC_M1_DO07"]; q != nio.Good {
+				t.Errorf("DO07 quality after the rewrite: %s", q)
+			}
+		})
+	}
+}
+
+// A drop long enough to trip the watchdog: on reconnect every command is
+// written again, not only those raised while the processor was away.
+func TestDriverRewritesEveryOutputOnReconnect(t *testing.T) {
+	wd := 60 * time.Millisecond
+	dev := newBenchDevice()
+	dev.SetWatchdogValue(1, 7, 1)
+	var down atomic.Bool
+	drv, err := New(benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond, ScratchInts: 1, Watchdog: &wd}), WithScanRate(5*time.Millisecond),
+		WithDialer(func(context.Context) (net.Conn, error) {
+			if down.Load() {
+				return nil, errors.New("unreachable")
+			}
+			a, b := net.Pipe()
+			go dev.Serve(b)
+			return a, nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv.retryMin = 10 * time.Millisecond
+	drv.chassis = 20 * time.Millisecond
+	drv.Start(context.Background())
+	t.Cleanup(drv.Stop)
+	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
+	drv.WriteOutputs(nio.Values{"EPIC_M1_DO07": false, "EPIC_SP_I0": int64(42)})
+	eventually(t, "scratch int 0 written", func() bool { return dev.U32(addrScratchInts) == 42 })
+
+	down.Store(true)
+	dev.Drop()
+	eventually(t, "Stale after the drop", func() bool { return drv.Quality()["EPIC_M0_DI00"] == nio.Stale })
+	eventually(t, "the watchdog to trip", dev.WatchdogTripped)
+	dev.PutU32(addrScratchInts, 0) // as a processor restart would leave it
+	if !do07(dev) {
+		t.Fatal("the trip left DO07 off")
+	}
+	down.Store(false)
+	eventually(t, "DO07 back to its command", func() bool { return !do07(dev) })
+	eventually(t, "scratch int 0 rewritten", func() bool { return dev.U32(addrScratchInts) == 42 })
+}
+
+// An output that is not in its commanded state — another client switched
+// it, or a trip the driver could not see — reads Bad until it is again.
+func TestDriverOutputNotInItsCommandedStateIsBad(t *testing.T) {
+	dev := newBenchDevice()
+	drv := startDriver(t, dev, benchManifest(t, dev, ManifestOptions{}))
+	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
+	drv.WriteOutputs(nio.Values{"EPIC_M1_DO07": false})
+	time.Sleep(2 * readbackSettle)
+	if q := drv.Quality()["EPIC_M1_DO07"]; q != nio.Good {
+		t.Fatalf("DO07 in its commanded state: %s", q)
+	}
+
+	dev.SetDigital(1, 7, true)
+	eventually(t, "DO07 Bad", func() bool { return drv.Quality()["EPIC_M1_DO07"] == nio.Bad })
+	if v := value(t, drv, "EPIC_M1_DO07"); v != true {
+		t.Errorf("DO07 read back %v, want the module's true", v)
+	}
+	if q := drv.Quality()["EPIC_M1_DO06"]; q != nio.Good {
+		t.Errorf("DO06, never commanded: %s", q)
+	}
+	dev.SetDigital(1, 7, false)
+	eventually(t, "DO07 Good again", func() bool { return drv.Quality()["EPIC_M1_DO07"] == nio.Good })
+
+	// A new command that has not had time to show is not a disagreement.
+	drv.WriteOutputs(nio.Values{"EPIC_M1_DO07": true})
+	eventually(t, "DO07 on", func() bool { return do07(dev) })
+	if q := drv.Quality()["EPIC_M1_DO07"]; q != nio.Good {
+		t.Errorf("DO07 just commanded on: %s", q)
 	}
 }

@@ -57,10 +57,19 @@ func (e Error) Error() string {
 
 // Client is one TCP connection to a device. Requests are sequential; the
 // protocol has a transaction label but devices answer in order.
+//
+// It also keeps the bound the driver needs for the communication
+// watchdog. The device sees request n arrive somewhere between its send
+// and its answer, so the time from one request's send to the next one's
+// answer is the longest the device can have gone without a request
+// between them. A process stall, a network drop that TCP rides out and a
+// slow scan all show up in it; quiet reports the largest.
 type Client struct {
 	conn    net.Conn
 	timeout time.Duration
 	hdr     [16]byte
+	sent    time.Time     // when the last request went out (zero: none yet)
+	gap     time.Duration // the longest send-to-next-answer span since quiet
 }
 
 // Dial connects to host:port (port 0 means 2001).
@@ -126,7 +135,7 @@ func (c *Client) Write(addr uint32, data []byte) error {
 	pkt := make([]byte, 16+len(data))
 	header(pkt[:16], tcodeWriteBlockRequest, addr, len(data))
 	copy(pkt[16:], data)
-	c.conn.SetDeadline(time.Now().Add(c.timeout))
+	prev := c.send()
 	if _, err := c.conn.Write(pkt); err != nil {
 		return fmt.Errorf("optommp: %w", err)
 	}
@@ -135,6 +144,7 @@ func (c *Client) Write(addr uint32, data []byte) error {
 	if _, err := io.ReadFull(c.conn, resp); err != nil {
 		return fmt.Errorf("optommp: %w", err)
 	}
+	c.answered(prev)
 	if tc := resp[3] >> 4; tc != tcodeWriteResponse {
 		return fmt.Errorf("optommp: unexpected tcode %d in write response", tc)
 	}
@@ -146,7 +156,7 @@ func (c *Client) Write(addr uint32, data []byte) error {
 
 func (c *Client) readBlock(addr uint32, n int) ([]byte, error) {
 	header(c.hdr[:], tcodeReadBlockRequest, addr, n)
-	c.conn.SetDeadline(time.Now().Add(c.timeout))
+	prev := c.send()
 	if _, err := c.conn.Write(c.hdr[:]); err != nil {
 		return nil, fmt.Errorf("optommp: %w", err)
 	}
@@ -154,6 +164,7 @@ func (c *Client) readBlock(addr uint32, n int) ([]byte, error) {
 	if _, err := io.ReadFull(c.conn, resp[:]); err != nil {
 		return nil, fmt.Errorf("optommp: %w", err)
 	}
+	c.answered(prev)
 	if tc := resp[3] >> 4; tc != tcodeReadBlockResponse {
 		return nil, fmt.Errorf("optommp: unexpected tcode %d in read response", tc)
 	}
@@ -169,6 +180,38 @@ func (c *Client) readBlock(addr uint32, n int) ([]byte, error) {
 		return nil, fmt.Errorf("optommp: %w", err)
 	}
 	return data, nil
+}
+
+// send arms the deadline for a request about to go out and records when
+// it did; it returns when the request before it went out.
+func (c *Client) send() (prev time.Time) {
+	prev, c.sent = c.sent, time.Now()
+	c.conn.SetDeadline(c.sent.Add(c.timeout))
+	return prev
+}
+
+// answered records the span from the previous request's send (prev) to
+// this one's answer, now.
+func (c *Client) answered(prev time.Time) {
+	if prev.IsZero() {
+		return
+	}
+	if g := time.Since(prev); g > c.gap {
+		c.gap = g
+	}
+}
+
+// quiet is the longest the device may have gone without a request since
+// the last call: the largest send-to-next-answer span, or the time since
+// the last send when that is longer — a request about to go out arrives
+// no sooner than now. It starts over at each call.
+func (c *Client) quiet() time.Duration {
+	g := c.gap
+	c.gap = 0
+	if !c.sent.IsZero() {
+		g = max(g, time.Since(c.sent))
+	}
+	return g
 }
 
 // header fills a 16-byte request header: destination id 0, transaction
