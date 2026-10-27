@@ -587,8 +587,8 @@ Verified on the controller (2026-10-24): BusConductor configures the bus
 it to `RUN=true` (`ACT`, `RDY` true; `PF` true because slot 4 has no UP
 supply — see below), the GDS connectors deliver live data into the
 mirrored ports, and `naut run` of `examples/plcnext-bench` on the
-controller drove the DO16 module's output 15 at 1 Hz as read back from
-the output mirror, with the status row saying "Axioline bus running,
+controller drove a 1 Hz heartbeat as read back from the output mirror
+(into the wrong module's bytes, it turned out: see below), with the status row saying "Axioline bus running,
 4 module(s)". Cost on the dual-core ARM: 9 % of one core, 23 MB
 resident, beside a firmware that already idles at load 4–5. The gRPC
 round trip for 8 elements plus the RUN bit is ~11 ms, so the 50 ms
@@ -623,12 +623,19 @@ faster scan. `go test ./plcnext/` drives the shm transport against a
 fake shim on a real mapping and checks the Go layout against the C
 header.
 
-Not verified: a human looking at the DO16 LEDs (the output mirror
-toggles; the module's UP supply is what makes a channel actually
-switch, and the bus reports "Supply missing (Up)" on slot 4, so James's
-eyes on slot 2 are the next data point), analog values (slot 4 reads
-0x8020, Axioline's supply-missing marker, until UP is wired). A reboot
-is verified (§3.4).
+Seen with eyes (2026-10-27), and it corrected the layout: no LED
+blinked, because the bench's modules are Smart Elements on one
+backplane with the DO16 FIRST (outputs at bytes 0..1) and the DI16
+second (inputs at 2..3); the manifest, read from the device list, had
+them swapped, so the heartbeat had been going into the DI16's unused
+output bytes. Digital channels are also numbered byte by byte (channel
+01 = bit 0 of the first byte), so in the manifest's big-endian `bit:N`
+channel n is `bit:((n+7) mod 16)`. With both fixed: the heartbeat LED
+blinks, killing naut takes it dark within a second, and a switch on DI16
+terminals 01–04 lights the matching outputs through `bench.st`. Not
+verified: analog values (the AI4 U reads 0x8020, Axioline's
+supply-missing marker, on all four channels until its UP supply is
+wired). A reboot is verified (§3.4).
 
 ### 3.4 The tiers
 
@@ -691,9 +698,9 @@ is verified (§3.4).
 
 1. ~~James: restart the PLCnext runtime after the BusConductor restore,
    then on the controller `naut-arm plcnext browse` and the heartbeat
-   run.~~ Done 2026-10-24 (§3.3). Next on that side: James looks at the
-   DO16 LEDs while the heartbeat runs, wires UP to slot 4 so the analog
-   module reads. The boot start is proven (§3.4).
+   run.~~ Done 2026-10-24 (§3.3); LEDs and a switch checked 2026-10-27,
+   which corrected the layout. Next on that side: UP wired to slot 4
+   so the analog element reads. The boot start is proven (§3.4).
 2. ~~James: order the free `GROOV-LIC-SHELL`; then the EPIC run moves onto
    the EPIC.~~ Done 2026-10-24: the license was already on the unit, the
    shell is on, nautilus ran on the EPIC. Next on that side: a systemd

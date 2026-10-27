@@ -104,8 +104,13 @@ The manifest lists the modules in bus order and binds tags to byte
 offsets and bit or integer formats; `naut plcnext tags` writes the tag
 file from it. In BusConductor's generic mode **every module takes its
 frame length in both images**, in bus order: a DO16 takes two bytes of
-the input image it never writes. The example's manifest has the measured
-layout for its four modules.
+the input image it never writes. A digital module numbers its channels
+byte by byte, while `bit:N` counts in a big-endian 16-bit word, so
+channel n of a 16-channel module binds as `bit:((n+7) mod 16)` (channel
+01 is `bit:8`). The example's manifest has the measured layout for its
+four modules. Check a new layout with eyes on one output LED and one
+input before trusting it: the bytes alone do not say which module is
+which.
 
 `naut plcnext read <port>` and `naut plcnext write <port> <value>` read
 or write any GDS name the service will answer for, which is the way to

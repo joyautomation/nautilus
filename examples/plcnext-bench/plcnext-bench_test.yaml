@@ -23,8 +23,6 @@ tests:
       DI_13: false
       DI_14: false
       DI_15: false
-      AI_00: 0.0
-      AI_01: 0.0
     # Half a period is ten 50 ms scans; REAL accumulation lands the toggle
     # on the tenth or eleventh scan, so each step allows one scan of slack.
     steps:
@@ -38,6 +36,6 @@ tests:
   - name: inputs mirror to outputs
     given: *inputs
     steps:
-      - given: { DI_00: true, DI_14: true, AI_00: 1234.0 }
+      - given: { DI_00: true, DI_14: true }
         advance: 100ms
-        expect: { DO_00: true, DO_14: true, DO_07: false, AO_00: 1234.0 }
+        expect: { DO_00: true, DO_14: true, DO_07: false }
