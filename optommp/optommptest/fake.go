@@ -46,6 +46,8 @@ const (
 
 	configModuleStride  = 0x3000
 	configChannelStride = 0xC0
+	cfgWatchdogValue    = 0x24
+	cfgWatchdogEnable   = 0x28
 	digitalModuleStride = 0x10
 	momoModuleStride    = 8
 	valuesModuleStride  = 0x80
@@ -69,7 +71,10 @@ const (
 // and acts out the side effects the driver relies on, as the bench unit
 // did on 2026-10-24: must-on/must-off writes switch digital state and set
 // latches, read-and-clear reads clear them, scratchpad masks set bits, an
-// analog write lands in the packed values.
+// analog write lands in the packed values, and a watchdog trip drives
+// every channel whose watchdog value is enabled (config +0x28) to that
+// value (config +0x24, a float; non-zero is on for a digital channel) and
+// leaves it there until written.
 type Device struct {
 	mu   sync.Mutex
 	mem  map[uint32]byte
@@ -79,6 +84,7 @@ type Device struct {
 
 	lastReq  time.Time // when the last request arrived (watchdog)
 	tripped  bool      // the watchdog fired
+	applied  bool      // watchdog values applied for the current quiet spell
 	streams  int       // datagrams sent
 	paused   bool      // streaming withheld (a lost stream)
 	streamer bool      // the streaming goroutine is running
@@ -333,17 +339,47 @@ func (d *Device) feedWatchdog() {
 	now := time.Now()
 	d.checkWatchdog(now)
 	d.lastReq = now
+	d.applied = false
 }
 
+// checkWatchdog records a trip, and acts it out once per quiet spell. The
+// fake has no clock of its own, so a trip lands when it is next looked
+// at — a request or WatchdogTripped — which is all a client can observe.
 func (d *Device) checkWatchdog(now time.Time) {
 	wd := time.Duration(d.u32(addrWatchdog)) * time.Millisecond
 	if wd > 0 && !d.lastReq.IsZero() && now.Sub(d.lastReq) > wd {
 		d.tripped = true
+		if !d.applied {
+			d.applied = true
+			d.applyWatchdogValues()
+		}
+	}
+}
+
+// applyWatchdogValues drives every channel with its watchdog value enabled
+// to that value: a digital channel (on a slot whose packed quality is not
+// FFFFFFFF) switches, an analog one takes the value.
+func (d *Device) applyWatchdogValues() {
+	for slot := 0; slot < maxModules; slot++ {
+		digital := d.u32(addrDigitalPacked+uint32(slot)*digitalModuleStride+4) != 0xFFFFFFFF
+		for ch := 0; ch < maxChannels; ch++ {
+			row := addrChannelConfig + uint32(slot)*configModuleStride + uint32(ch)*configChannelStride
+			if d.u32(row+cfgWatchdogEnable) == 0 {
+				continue
+			}
+			v := d.u32(row + cfgWatchdogValue)
+			if digital {
+				d.setDigital(slot, ch, math.Float32frombits(v) != 0)
+			} else {
+				d.putU32(addrPackedValues+uint32(slot)*valuesModuleStride+uint32(ch)*4, v)
+			}
+		}
 	}
 }
 
 // WatchdogTripped reports whether the communication watchdog has fired:
 // a gap between requests (or since the last one) longer than its time.
+// A trip it finds is acted out (applyWatchdogValues) before it returns.
 func (d *Device) WatchdogTripped() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -392,6 +428,16 @@ func (d *Device) stream() {
 		}
 		time.Sleep(max(interval, time.Millisecond))
 	}
+}
+
+// SetWatchdogValue gives a channel a watchdog value (as groov Manage
+// would): v is the value, a digital channel's on being any non-zero.
+func (d *Device) SetWatchdogValue(slot, ch int, v float32) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	row := addrChannelConfig + uint32(slot)*configModuleStride + uint32(ch)*configChannelStride
+	d.putU32(row+cfgWatchdogValue, math.Float32bits(v))
+	d.putU32(row+cfgWatchdogEnable, 1)
 }
 
 // PauseStream withholds (true) or resumes (false) the stream's datagrams.

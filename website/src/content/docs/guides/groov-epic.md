@@ -95,8 +95,9 @@ values, the digital state with its quality mask and latches, and the
 scratchpad. Outputs go out when they change: every digital output in one
 must-on/must-off write that touches only the commanded channels, so
 another client's outputs on the same module are left alone. Outputs are
-read back, so `EPIC_M1_DO11` shows what the module is doing, not only
-what was asked.
+read back too. An output tag's value is what the program commands, but
+a digital output that the module has not switched to that value (another
+client, a watchdog trip, a fault) makes its tag **bad** until it does.
 
 The driver checks the chassis against the manifest on connect and every
 5 s after (groov modules hot-swap), and reconnects with backoff when the
@@ -113,6 +114,7 @@ Every tag carries a quality of its own:
 | not present on its module (the processor's channel-present mask) | bad |
 | flagged in the module's quality mask (digital) | bad |
 | an analog reading of **NaN** (an open ICTD probe, any unwired analog input) | bad |
+| a digital output still not in its commanded state 250 ms (or three scans) after the write | bad |
 | the connection is down, or a stream is late | stale |
 | never read since start | not connected |
 
@@ -181,6 +183,16 @@ manifest refuses a watchdog shorter than three scans, and while streaming
 the driver reads
 at a third of the watchdog time to keep it fed. It stays set after
 nautilus stops, which is the point.
+
+A tripped unit leaves its outputs at their watchdog values until
+something writes them, and nautilus otherwise writes an output only when
+its command changes. So it rewrites every digital and analog output it
+commands whenever the unit may have gone longer than the watchdog time
+without a request: a stalled process, a network outage TCP rode out, a
+scan that overran. It counts conservatively, from one request's send to
+the next one's answer, and logs a warning once each time it happens. A
+reconnect rewrites every commanded output, scratchpad included, because
+the processor may have restarted meanwhile.
 
 The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
@@ -308,8 +320,9 @@ errors.
   OptoMMP.
 - **Counter reset and analog min/max.** `_Count` reads a counter; clearing
   it, and the per-channel min/max the processor keeps, are not exposed.
-- **The watchdog on real outputs.** It is tested against an in-process
-  fake of the chassis, not yet switched on on the bench unit.
+- **The watchdog on real outputs.** It has tripped on the bench unit
+  (2026-10-27). The rewrite after a trip is tested against an in-process
+  fake of the chassis, not yet on the bench.
 - **groov RIO and SNAP PAC.** Both answer OptoMMP and should import the
   same way; neither has been tried.
 - **Support.** Opto 22 supports its own runtimes on its processor. A
