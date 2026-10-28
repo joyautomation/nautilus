@@ -5,7 +5,7 @@
 # The version is whatever tools/vscode-iec/package.json says when this runs;
 # vscode-stable.yml stamps the tag's version in first.
 name: Package the VS Code extension
-description: npm ci for hmi, webview-ui and the extension, then vsce package
+description: npm ci for hmi, hmi-3d, webview-ui and the extension, then vsce package
 inputs:
   pre-release:
     description: "'true' to package for the pre-release channel"
@@ -28,6 +28,12 @@ runs:
     - name: Build hmi (webview-ui's local dependency)
       shell: bash
       working-directory: hmi
+      run: npm ci && npm run package
+    # ...and hmi-3d the same way (file:../../../hmi-3d), for the scene
+    # editor's bundle.
+    - name: Build hmi-3d (webview-ui's local dependency)
+      shell: bash
+      working-directory: hmi-3d
       run: npm ci && npm run package
     - shell: bash
       working-directory: tools/vscode-iec
