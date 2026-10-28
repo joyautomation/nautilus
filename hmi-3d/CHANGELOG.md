@@ -1,5 +1,31 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.2.3 — 2026-10-28
+
+**Changed.** The `supermicro-sys-112b-wr` profile is measured, not
+estimated. A second unit was photographed on the bench, and the front
+and rear faces were rectified to true scale. The open chassis was shot
+straight down and corrected for each part's height.
+
+The positions the September profile had furthest out:
+- Bay columns sit on an 80.75 mm pitch, not 77 mm, so the fifth column
+  was 17 mm off. Rows are centred 11 and 28.5 mm up, and the carriers
+  are 76 × 17 mm and end at the backplane, 122 mm in.
+- The fixed front cover is 123 mm deep, not 150.
+- The low-profile card's SFPs moved about 25 mm and the full-height
+  card's about 22 mm. LAN1, LAN2 and the BMC port moved by a few
+  millimetres.
+- The DIMMA1–D1 bank sits 16 mm further out from the CPU. The CPU, the
+  DIMMs and the fan wall are 20–30 mm further forward.
+- The PSUs are 325 mm long, not 290. The power distribution cage and
+  the backplane moved to match.
+
+The rear now cuts eight openings instead of seven: LAN2 had been merged
+into slot 3's opening because the card was drawn over it. The racked AR
+codes (`blanks-left`, `blanks-right`) are two bay pitches apart, 161.5 mm
+instead of 154. The bench code moved 5 mm back so it stays on the
+front cover.
+
 ## 0.2.2 — 2026-10-20
 
 **Added.** `PlacedNode.object`: a placed node announces its root group

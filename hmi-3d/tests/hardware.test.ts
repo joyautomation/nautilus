@@ -44,10 +44,10 @@ describe('the SYS-112B-WR profile', () => {
 		for (const t of ['NODE1', 'NODE1_Drive_NVMe0', 'NODE1_Drive_NVMe3', 'NODE1_Drive_SATA0', 'NODE1_Drive_SATA4', 'NODE1_Pcie_Slot2', 'NODE1_Pcie_Slot3', 'NODE1_Dimm_A1', 'NODE1_Dimm_G1', 'NODE1_Cpu1', 'NODE1_Fan6', 'NODE1_PSU2'])
 			expect(tags).toContain(t);
 	});
-	it('carries its AR anchors: the bench label and the racked pair 154 mm apart', () => {
+	it('carries its AR anchors: the bench label and the racked pair two bay pitches apart', () => {
 		expect(profile.anchors?.lid?.size).toBe(100);
 		const l = profile.anchors!['blanks-left'].pos, r = profile.anchors!['blanks-right'].pos;
-		expect(r[0] - l[0]).toBe(154);
+		expect(r[0] - l[0]).toBe(161.5);
 		expect(anchorPayload(profile.anchors!['blanks-left'], 'NODE1')).toBe('NAUT:NODE1/L');
 	});
 	it('wants an anchor\'s up perpendicular to its normal', () => {
@@ -67,7 +67,7 @@ describe('resolveParts', () => {
 	});
 	it('converts millimetres to metres and keeps extras as props', () => {
 		const bay0 = parts.find((p) => p.partId === 'bay0')!;
-		expect(bay0.size).toEqual([0.074, 0.0185, 0.14]);
+		expect(bay0.size).toEqual([0.076, 0.017, 0.122]);
 		expect(bay0.props.bus).toBe('nvme');
 		expect(bay0.props.id).toBe(undefined);
 	});
@@ -234,10 +234,10 @@ describe('faceplates', () => {
 	it('a server is open at the front where its drive bays are', () => {
 		const f = faceHoles(profile, 'front');
 		expect(f.length).toBe(10);
-		expect(f.every((o) => Math.abs(o.w - 0.0734) < 1e-6)).toBe(true);
+		expect(f.every((o) => Math.abs(o.w - 0.0754) < 1e-6)).toBe(true);
 	});
 	it('its rear where the PSUs, ports and card brackets are; a port in its card’s bracket is one opening', () => {
-		expect(faceHoles(profile, 'rear').length).toBe(7);
+		expect(faceHoles(profile, 'rear').length).toBe(8);
 	});
 	it('a switch at the front, one opening per jack, none at the rear', () => {
 		expect(faceHoles(sw, 'front').length).toBe(28);
