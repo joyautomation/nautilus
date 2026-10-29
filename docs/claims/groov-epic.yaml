@@ -240,7 +240,11 @@ claims:
       cases go through the same bound (send to next answer) but have no
       test of their own, and the warning's once-per-trip is not asserted.
       The bench case it fixes (SIGSTOP 15 s, DO7 latched at its watchdog
-      value, 2026-10-27) has not been re-run with the fix.
+      value, 2026-10-27) was re-run by hand with the fix the same day: DO7
+      went to its watchdog value during the stop and was back to its
+      command within 1 s of SIGCONT, with the bad-tag count unchanged.
+      That run is not automated, and the bench has no analog output
+      module, so the analog rewrite is checked against the fake only.
   - id: EPIC-020
     claim: >-
       A digital output still not in its commanded state 250 ms (or three
