@@ -332,3 +332,118 @@ func TestShmMissingPage(t *testing.T) {
 		t.Errorf("quality %v", q)
 	}
 }
+
+// statusOf is the driver's status bindings as a program reads them.
+func statusOf(d *Driver) (online bool, outages, trips int64) {
+	v, _ := d.ReadInputs()
+	online, _ = v["AXC__Online"].(bool)
+	outages, _ = v["AXC__Outages"].(int64)
+	trips, _ = v["AXC__WatchdogTrips"].(int64)
+	return online, outages, trips
+}
+
+const statusManifest = `bus-conductor: ""
+output-watchdog: 150ms
+tags:
+  - {name: DI_00, dir: in, offset: 0, format: "bit:0"}
+  - {name: DO_00, dir: out, offset: 0, format: "bit:0"}
+  - {name: AXC__Online, status: online}
+  - {name: AXC__Outages, status: outages}
+  - {name: AXC__WatchdogTrips, status: watchdog-trips}
+`
+
+func startShmDriver(t *testing.T, path string) *Driver {
+	t.Helper()
+	m, err := ParseManifest([]byte("transport: shm\nshm: " + path + "\n" + statusManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(m, WithScanRate(5*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Start(context.Background())
+	t.Cleanup(d.Stop)
+	return d
+}
+
+// What a program sees of the shim: online while the image is fresh, an
+// outage for a stall, a watchdog trip when this driver's outputs went
+// stale in the page (its own stall), and one more for a shim restart.
+func TestShmStatusForTheProgram(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "page")
+	shim := startFakeShim(t, path)
+	d := startShmDriver(t, path)
+	eventually(t, "never online", func() bool { on, _, _ := statusOf(d); return on })
+	if err := d.WriteOutputs(nio.Values{"DO_00": true}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "DO_00 never reached the frame", func() bool { return shim.out(1) == 0x01 })
+	if q, said := d.Quality()["AXC__Online"]; said {
+		t.Errorf("a status binding has quality %s; it is the driver's own and always Good", q)
+	}
+
+	// The shim stalls: an outage, no trip (it is not applying anything).
+	shim.stalled.Store(true)
+	eventually(t, "a stall never took the driver offline", func() bool { on, _, _ := statusOf(d); return !on })
+	shim.stalled.Store(false)
+	eventually(t, "never online after the stall", func() bool { on, _, _ := statusOf(d); return on })
+	if _, outages, trips := statusOf(d); outages != 1 || trips != 0 {
+		t.Errorf("after a stall: outages %d trips %d; want 1 0", outages, trips)
+	}
+
+	// This driver stalls (its lock held, so no scan refreshes the page)
+	// past the watchdog: the shim zeroes the frame, and on resume the
+	// driver counts the trip once and puts DO_00 back.
+	d.mu.Lock()
+	eventually(t, "the shim's watchdog never fired", func() bool { return shim.out(1) == 0 })
+	d.mu.Unlock()
+	eventually(t, "DO_00 never came back", func() bool { return shim.out(1) == 0x01 })
+	time.Sleep(20 * time.Millisecond)
+	if _, outages, trips := statusOf(d); outages != 1 || trips != 1 {
+		t.Errorf("after the driver's own stall: outages %d trips %d; want 1 1", outages, trips)
+	}
+
+	// The shim restarts (the runtime under it did): an outage and a trip.
+	shim.restart()
+	eventuallyWithin(t, 10*time.Second, "never online after the shim restarted", func() bool {
+		on, outages, _ := statusOf(d)
+		return on && outages == 2
+	})
+	if _, _, trips := statusOf(d); trips != 2 {
+		t.Errorf("after a shim restart: trips %d, want 2", trips)
+	}
+	if h := d.Health(); !h.Online || h.Outages != 2 || h.WatchdogTrips != 2 {
+		t.Errorf("health: online %v outages %d trips %d", h.Online, h.Outages, h.WatchdogTrips)
+	}
+}
+
+// A naut that was killed and restarted finds the shim's watchdog bit set
+// for the outputs its predecessor left: a program that holds on the count
+// sees "restarted after a fault" from its first scans. A clean first start
+// on a fresh page is no trip.
+func TestShmRestartAfterAFaultIsATrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "page")
+	shim := startFakeShim(t, path)
+	first := startShmDriver(t, path)
+	if on, outages, trips := statusOf(first); on || outages != 0 || trips != 0 {
+		t.Errorf("before the first read: online %v outages %d trips %d", on, outages, trips)
+	}
+	eventually(t, "first driver never online", func() bool { on, _, _ := statusOf(first); return on })
+	if _, _, trips := statusOf(first); trips != 0 {
+		t.Fatalf("a clean start on a fresh page counted %d trips", trips)
+	}
+	first.WriteOutputs(nio.Values{"DO_00": true})
+	eventually(t, "DO_00 never reached the frame", func() bool { return shim.out(1) == 0x01 })
+	first.Stop()
+	eventually(t, "the frame was never dropped after the driver stopped", func() bool { return shim.out(1) == 0 })
+
+	second := startShmDriver(t, path)
+	eventually(t, "the restart's trip never showed", func() bool { _, _, trips := statusOf(second); return trips == 1 })
+	second.WriteOutputs(nio.Values{"DO_00": true})
+	eventually(t, "DO_00 never came back", func() bool { return shim.out(1) == 0x01 })
+	time.Sleep(20 * time.Millisecond)
+	if on, outages, trips := statusOf(second); !on || outages != 0 || trips != 1 {
+		t.Errorf("after the restart: online %v outages %d trips %d; want true 0 1", on, outages, trips)
+	}
+}

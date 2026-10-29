@@ -145,6 +145,10 @@ func TestDriverStreamLateIsStaleThenTimesOut(t *testing.T) {
 	if h := drv.Health(); h.Late != 1 || !h.Connected || h.LastError != "" {
 		t.Errorf("after a short gap: late %d connected %v error %q", h.Late, h.Connected, h.LastError)
 	}
+	// A late stream is an outage to a program: the inputs stopped.
+	if on, outages, trips := status(drv); !on || outages != 1 || trips != 0 {
+		t.Errorf("after a short gap: online %v outages %d trips %d; want true 1 0", on, outages, trips)
+	}
 
 	// A long one ends the session; the reconnect streams again.
 	dev.PauseStream(true)
@@ -153,6 +157,19 @@ func TestDriverStreamLateIsStaleThenTimesOut(t *testing.T) {
 	eventually(t, "Good after reconnect", func() bool {
 		return drv.Health().Connected && drv.Quality()["EPIC_M0_DI03"] == nio.Good
 	})
+	// Late, then dead: one more outage, not two.
+	if on, outages, _ := status(drv); !on || outages != 2 {
+		t.Errorf("after the reconnect: online %v outages %d; want true 2", on, outages)
+	}
+}
+
+// status is the driver's status points as a program reads them.
+func status(drv *Driver) (online bool, outages, trips int64) {
+	v, _ := drv.ReadInputs()
+	online, _ = v["EPIC__Online"].(bool)
+	outages, _ = v["EPIC__Outages"].(int64)
+	trips, _ = v["EPIC__WatchdogTrips"].(int64)
+	return online, outages, trips
 }
 
 func TestDriverStopPutsTheStreamConfigBack(t *testing.T) {
@@ -244,6 +261,9 @@ func TestDriverRewritesOutputsAfterAStall(t *testing.T) {
 			if dev.WatchdogTripped() || drv.Health().Writes != writes {
 				t.Fatalf("while fed: tripped %v, %d rewrites", dev.WatchdogTripped(), drv.Health().Writes-writes)
 			}
+			if on, outages, trips := status(drv); !on || outages != 0 || trips != 0 {
+				t.Fatalf("while fed: online %v outages %d trips %d", on, outages, trips)
+			}
 
 			stalled := true
 			drv.mu.Lock()
@@ -263,6 +283,13 @@ func TestDriverRewritesOutputsAfterAStall(t *testing.T) {
 			eventually(t, "DO07 back to its command", func() bool { return !do07(dev) })
 			if dev.U32(addrDigitalPacked+digitalModuleStride)&(1<<5) == 0 {
 				t.Error("DO05 (no watchdog value) went off")
+			}
+			// The program sees the trip, though the connection never dropped.
+			if _, _, trips := status(drv); trips != 1 {
+				t.Errorf("watchdog trips after one stall: %d, want 1", trips)
+			}
+			if _, outages, _ := status(drv); stream == 0 && outages != 0 {
+				t.Errorf("a stall with the socket open counted %d outages", outages)
 			}
 			time.Sleep(2 * readbackSettle)
 			if q := drv.Quality()["EPIC_M1_DO07"]; q != nio.Good {
@@ -310,6 +337,60 @@ func TestDriverRewritesEveryOutputOnReconnect(t *testing.T) {
 	down.Store(false)
 	eventually(t, "DO07 back to its command", func() bool { return !do07(dev) })
 	eventually(t, "scratch int 0 rewritten", func() bool { return dev.U32(addrScratchInts) == 42 })
+	// One drop, and the gap outran the watchdog: one outage, one trip.
+	if on, outages, trips := status(drv); !on || outages != 1 || trips != 1 {
+		t.Errorf("after the reconnect: online %v outages %d trips %d; want true 1 1", on, outages, trips)
+	}
+}
+
+// A drop shorter than the watchdog is an outage the program sees, and no
+// trip; with the watchdog off a long drop is no trip either.
+func TestDriverStatusOutageWithoutATrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wd   time.Duration
+		down time.Duration
+	}{
+		{"short drop", 2 * time.Second, 0},
+		{"watchdog off", 0, 100 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dev := newBenchDevice()
+			dev.SetWatchdogValue(1, 7, 1)
+			var down atomic.Bool
+			wd := tc.wd
+			drv, err := New(benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond, Watchdog: &wd}), WithScanRate(5*time.Millisecond),
+				WithDialer(func(context.Context) (net.Conn, error) {
+					if down.Load() {
+						return nil, errors.New("unreachable")
+					}
+					a, b := net.Pipe()
+					go dev.Serve(b)
+					return a, nil
+				}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			drv.retryMin = 10 * time.Millisecond
+			drv.chassis = 20 * time.Millisecond
+			drv.Start(context.Background())
+			t.Cleanup(drv.Stop)
+			eventually(t, "online", func() bool { on, _, _ := status(drv); return on })
+
+			down.Store(tc.down > 0)
+			dev.Drop()
+			eventually(t, "offline", func() bool { on, _, _ := status(drv); return !on })
+			time.Sleep(tc.down)
+			down.Store(false)
+			eventually(t, "online again", func() bool { on, _, _ := status(drv); return on })
+			if _, outages, trips := status(drv); outages != 1 || trips != 0 {
+				t.Errorf("outages %d trips %d; want 1 0", outages, trips)
+			}
+			if h := drv.Health(); !h.Online || h.Outages != 1 || h.WatchdogTrips != 0 {
+				t.Errorf("health: online %v outages %d trips %d", h.Online, h.Outages, h.WatchdogTrips)
+			}
+		})
+	}
 }
 
 // An output that is not in its commanded state — another client switched

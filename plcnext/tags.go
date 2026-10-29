@@ -22,6 +22,13 @@ func TagsYAML(m Manifest, tagsPath string) ([]byte, error) {
 	var tags []tagfile.Tag
 	for _, b := range m.Tags {
 		t := tagfile.Tag{Name: b.Name, Role: "input", Unit: b.Unit, Desc: b.Desc}
+		if b.Status != "" {
+			if t.Desc == "" {
+				t.Desc = statusDesc[b.Status]
+			}
+			tags = append(tags, t)
+			continue
+		}
 		if b.Dir == DirOut {
 			t.Role = "output"
 			t.Init = b.Init
@@ -41,6 +48,12 @@ func TagsYAML(m Manifest, tagsPath string) ([]byte, error) {
 		tags = append(tags, t)
 	}
 	return tagfile.Render(header, tags)
+}
+
+var statusDesc = map[string]string{
+	StatusOnline:        "the driver is exchanging the process image with the bus now (driver status)",
+	StatusOutages:       "times the driver lost the process image since nautilus started (driver status)",
+	StatusWatchdogTrips: "times the output frame was driven to zero without nautilus (driver status)",
 }
 
 // moduleAt finds the module whose span of the image holds the binding,

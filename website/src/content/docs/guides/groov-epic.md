@@ -198,6 +198,71 @@ The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
 trip when nautilus alone stops.
 
+## Holding outputs until an operator acknowledges
+
+Recovery is automatic: when the processor comes back, or after a
+watchdog trip, the driver puts every output back to its command, the
+way a standard PLC does. If a program should instead keep its outputs
+off until someone has looked, it can, because the driver reports its
+own status as three input tags. `naut optommp import` binds them on
+every import:
+
+| tag | type | what it is |
+|---|---|---|
+| `EPIC__Online` | BOOL | the driver is exchanging data with the processor now (a session is up and, when streaming, the stream is not late) |
+| `EPIC__Outages` | DINT | times `EPIC__Online` went false since nautilus started |
+| `EPIC__WatchdogTrips` | DINT | times the unit's watchdog may have driven outputs to their watchdog values: the driver went quiet for longer than the watchdog (the same check that triggers the rewrite above), or reconnected after a gap longer than it |
+
+```yaml
+# optommp_manifest.yaml (written by the import)
+  - { name: EPIC__Online, point: online }
+  - { name: EPIC__Outages, point: outages }
+  - { name: EPIC__WatchdogTrips, point: watchdog-trips }
+```
+
+They are delivered from the first scan, before the processor answers,
+and their quality is always good. The names end the same way on every
+driver that has them (`<id>__Online` is what the Modbus, SNMP and
+Sparkplug host drivers already deliver), so the logic does not change
+with the driver. The counters only go up, so a program that compares
+them with last scan's values never misses one. A seal-in that releases
+on an acknowledge:
+
+```iecst
+VAR_EXTERNAL
+    EPIC__Online        : BOOL;
+    EPIC__Outages       : DINT;
+    EPIC__WatchdogTrips : DINT;
+    OperatorAck         : BOOL;   (* a setpoint: the HMI's acknowledge button *)
+END_VAR
+VAR
+    held        : BOOL;
+    seenOutages : DINT;
+    seenTrips   : DINT;
+    ackEdge     : R_TRIG;
+END_VAR
+
+ackEdge(CLK := OperatorAck);
+IF ackEdge.Q AND EPIC__Online THEN
+    held := FALSE;                      (* released only once the I/O is back *)
+END_IF;
+IF EPIC__Outages <> seenOutages OR EPIC__WatchdogTrips <> seenTrips THEN
+    held := TRUE;                       (* sealed in on any new outage or trip *)
+END_IF;
+seenOutages := EPIC__Outages;
+seenTrips := EPIC__WatchdogTrips;
+
+Pump1_Run := Pump1_Cmd AND NOT held;
+```
+
+`examples/epic-bench` does this for its lamps with a function block,
+`lib/io_hold.st`, and tests it with `naut test`. To hold after every
+start of nautilus as well, add `FIRST_SCAN()` to the seal-in condition:
+a watchdog that fired while nautilus was not running is something the
+driver cannot see. A trip is counted only when the unit's watchdog is
+on, and whether an output actually moved depends on which outputs have a
+watchdog value in groov Manage, so the count means "may have".
+
 ## Run it on the processor
 
 ```sh
@@ -321,8 +386,12 @@ errors.
 - **Counter reset and analog min/max.** `_Count` reads a counter; clearing
   it, and the per-channel min/max the processor keeps, are not exposed.
 - **The watchdog on real outputs.** It has tripped on the bench unit
-  (2026-10-27). The rewrite after a trip is tested against an in-process
-  fake of the chassis, not yet on the bench.
+  (2026-10-27). The rewrite after a trip, and the status tags that count
+  it, are tested against an in-process fake of the chassis, not yet on
+  the bench.
+- **Holding outputs without a program.** The acknowledge lives in your
+  program; there is no manifest setting that keeps outputs at their
+  watchdog values until one is written.
 - **groov RIO and SNAP PAC.** Both answer OptoMMP and should import the
   same way; neither has been tried.
 - **Support.** Opto 22 supports its own runtimes on its processor. A

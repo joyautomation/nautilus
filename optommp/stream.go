@@ -288,6 +288,9 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 				d.gapMaxUs.Store(gap)
 			}
 		}
+		if stale {
+			d.setOnline(true)
+		}
 		last, stale = now, false
 		n, err := d.deliver(c, img)
 		if err != nil {
@@ -309,6 +312,7 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 			stale = true
 			d.late.Add(1)
 			d.markStale()
+			d.setOnline(false)
 			d.log.Warn("optommp: stream late; tags Stale until it resumes", "host", d.m.Host, "idle", idle.Round(time.Millisecond))
 		}
 		return nil

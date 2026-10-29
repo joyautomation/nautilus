@@ -86,3 +86,35 @@ func TestManifestTransport(t *testing.T) {
 		t.Fatalf("bad transport and watchdog not both reported: %v", err)
 	}
 }
+
+// Status bindings: inputs with no bytes behind them, validated as such and
+// rendered into the tag file.
+func TestManifestStatusBindings(t *testing.T) {
+	m, err := ParseManifest([]byte(benchManifest + `  - {name: AXC__Online, status: online}
+  - {name: AXC__Outages, status: outages}
+  - {name: AXC__WatchdogTrips, status: watchdog-trips}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.InputNames(); len(got) != 6 || got[0] != "AI_00" || got[1] != "AXC__Online" {
+		t.Errorf("inputs: %v", got)
+	}
+	if got := m.OutputNames(); len(got) != 3 {
+		t.Errorf("outputs: %v", got)
+	}
+	if in := m.span(DirIn); in != 4 {
+		t.Errorf("a status binding moved the input span to %d", in)
+	}
+	tags, err := TagsYAML(m, "tags/plcnext.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `- { name: AXC__WatchdogTrips, role: input, desc: "times the output frame was driven to zero without nautilus (driver status)" }`; !strings.Contains(string(tags), want+"\n") {
+		t.Errorf("tag file lacks\n%s\n%s", want, tags)
+	}
+	_, err = ParseManifest([]byte("tags:\n  - {name: A, status: sideways}\n  - {name: B, status: online, dir: in, offset: 2, format: int16}\n"))
+	if err == nil || !strings.Contains(err.Error(), `"sideways"`) || !strings.Contains(err.Error(), "tag B: a status binding takes no dir") {
+		t.Fatalf("bad status bindings not both reported: %v", err)
+	}
+}
