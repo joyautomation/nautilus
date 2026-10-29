@@ -339,8 +339,10 @@ Pump1_Run := Pump1_Cmd AND NOT held;
 ```
 
 `examples/plcnext-bench` does this for its outputs with
-`lib/io_hold.st`, and its `naut test` suite covers the hold, the
-acknowledge and the restart case.
+`lib/io_hold.st`, switched on by a `HoldAfterOutage` setpoint (off at
+start: with it on, every redeploy that outlasts the shim's 1 s watchdog
+holds until acknowledged), and its `naut test` suite covers the hold,
+the acknowledge, the restart case and the hold switched off.
 
 ## Start on boot
 

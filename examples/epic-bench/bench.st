@@ -7,8 +7,8 @@ PROGRAM Bench
    scratchpad float 0, where a PAC Control strategy or groov View on the
    same EPIC can read it.
 
-   After an outage — the EPIC unreachable, or its communication watchdog
-   tripped — the lamps stay dark until an operator writes BenchAck: the
+   With HoldAfterOutage on, after an outage — the EPIC unreachable, or its
+   communication watchdog tripped — the lamps stay dark until an operator writes BenchAck: the
    driver's status tags into IoHold (lib/io_hold.st). The heartbeat keeps
    blinking, so the program is visibly running while it holds. *)
 VAR_EXTERNAL
@@ -41,6 +41,7 @@ VAR_EXTERNAL
     EPIC__Online        : BOOL;   (* driver status *)
     EPIC__Outages       : DINT;
     EPIC__WatchdogTrips : DINT;
+    HoldAfterOutage : BOOL;
     BenchAck     : BOOL;
     BenchHeld    : BOOL;
     BenchDtS     : REAL;
@@ -64,7 +65,7 @@ EPIC_M1_DO11 := Blink;
 
 (* Held after an outage until acknowledged; BenchAck is a momentary
    button, cleared once read. *)
-hold(Online := EPIC__Online, Outages := EPIC__Outages, Trips := EPIC__WatchdogTrips, Ack := BenchAck);
+hold(Enable := HoldAfterOutage, Online := EPIC__Online, Outages := EPIC__Outages, Trips := EPIC__WatchdogTrips, Ack := BenchAck);
 BenchHeld := hold.Held;
 BenchAck := FALSE;
 

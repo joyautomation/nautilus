@@ -256,7 +256,9 @@ Pump1_Run := Pump1_Cmd AND NOT held;
 ```
 
 `examples/epic-bench` does this for its lamps with a function block,
-`lib/io_hold.st`, and tests it with `naut test`. To hold after every
+`lib/io_hold.st`, switched on by a `HoldAfterOutage` setpoint (off at
+start, so the bench recovers on its own unless asked not to), and tests
+it with `naut test`. To hold after every
 start of nautilus as well, add `FIRST_SCAN()` to the seal-in condition:
 a watchdog that fired while nautilus was not running is something the
 driver cannot see. A trip is counted only when the unit's watchdog is

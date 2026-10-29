@@ -47,7 +47,7 @@ tests:
   # (an outage) seals the outputs off; an acknowledge while the image is
   # still stale does nothing, one after it is fresh releases them.
   - name: an outage holds the outputs until it is acknowledged
-    given: *inputs
+    given: { <<: *inputs, HoldAfterOutage: true }
     steps:
       - given: { DI_03: true }
         advance: 100ms
@@ -70,11 +70,24 @@ tests:
   - name: a restart after a watchdog trip starts held
     given:
       <<: *inputs
+      HoldAfterOutage: true
       DI_03: true
       AXC__WatchdogTrips: 1
     steps:
       - advance: 100ms
         expect: { DO_03: false, BenchHeld: true }
       - given: { BenchAck: true }
+        advance: 100ms
+        expect: { DO_03: true, BenchHeld: false }
+
+  # HoldAfterOutage starts off: an outage drops nothing it did not have to,
+  # and switching the hold on afterwards does not hold for the old outage.
+  - name: with the hold off the outputs come back on their own
+    given: *inputs
+    steps:
+      - given: { DI_03: true, AXC__Online: false, AXC__Outages: 1 }
+        advance: 100ms
+        expect: { DO_03: true, BenchHeld: false }
+      - given: { AXC__Online: true, HoldAfterOutage: true }
         advance: 100ms
         expect: { DO_03: true, BenchHeld: false }

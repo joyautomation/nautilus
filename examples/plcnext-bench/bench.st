@@ -3,8 +3,8 @@ PROGRAM Bench
    fifteen outputs and a heartbeat on the sixteenth. The analog element
    has inputs only (AI_00 … AI_03, read through the tag API).
 
-   After an outage the fifteen mirrored outputs stay off until an operator
-   writes BenchAck: the driver's status tags into IoHold (lib/io_hold.st).
+   With HoldAfterOutage on, after an outage the fifteen mirrored outputs
+   stay off until an operator writes BenchAck: the driver's status tags into IoHold (lib/io_hold.st).
    On this controller that includes a naut restarted after the shim's
    output watchdog dropped the frame — the driver starts with
    AXC__WatchdogTrips = 1. The heartbeat keeps blinking meanwhile. *)
@@ -20,6 +20,7 @@ VAR_EXTERNAL
     AXC__Online        : BOOL;   (* driver status *)
     AXC__Outages       : DINT;
     AXC__WatchdogTrips : DINT;
+    HoldAfterOutage : BOOL;
     BenchAck     : BOOL;
     BenchHeld    : BOOL;
     BenchDtS     : REAL;
@@ -40,7 +41,7 @@ DO_15 := Blink;
 
 (* Held after an outage until acknowledged; BenchAck is a momentary
    button, cleared once read. *)
-hold(Online := AXC__Online, Outages := AXC__Outages, Trips := AXC__WatchdogTrips, Ack := BenchAck);
+hold(Enable := HoldAfterOutage, Online := AXC__Online, Outages := AXC__Outages, Trips := AXC__WatchdogTrips, Ack := BenchAck);
 BenchHeld := hold.Held;
 BenchAck := FALSE;
 

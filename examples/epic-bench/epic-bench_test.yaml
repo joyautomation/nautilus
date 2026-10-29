@@ -54,7 +54,7 @@ tests:
   # lamps dark, an acknowledge while the EPIC is still away does nothing,
   # and one after it is back releases them.
   - name: an outage holds the lamps until it is acknowledged
-    given: *inputs
+    given: { <<: *inputs, HoldAfterOutage: true }
     steps:
       - given: { EPIC_M0_DI00: true }
         advance: 100ms
@@ -75,7 +75,7 @@ tests:
   # A watchdog trip with the connection up (the driver stalled past the
   # unit's watchdog) holds just the same.
   - name: a watchdog trip holds the lamps too
-    given: *inputs
+    given: { <<: *inputs, HoldAfterOutage: true }
     steps:
       - given: { EPIC_M0_DI05: true }
         advance: 100ms
@@ -86,3 +86,15 @@ tests:
       - given: { BenchAck: true }
         advance: 100ms
         expect: { EPIC_M1_DO05: true, BenchHeld: false }
+
+  # HoldAfterOutage starts off: the lamps follow the buttons through an
+  # outage, and switching the hold on afterwards does not hold for it.
+  - name: with the hold off the lamps come back on their own
+    given: *inputs
+    steps:
+      - given: { EPIC_M0_DI00: true, EPIC__Online: false, EPIC__Outages: 1 }
+        advance: 100ms
+        expect: { EPIC_M1_DO00: true, BenchHeld: false }
+      - given: { EPIC__Online: true, HoldAfterOutage: true }
+        advance: 100ms
+        expect: { EPIC_M1_DO00: true, BenchHeld: false }

@@ -19,8 +19,13 @@ FUNCTION_BLOCK IoHold
    Online; an Ack while the I/O is still away does nothing. A count that is
    already above zero on the first scan holds too: on PLCnext, a naut that
    restarts after its outputs were dropped starts with WatchdogTrips = 1.
-   Add FIRST_SCAN() to Trip to hold after every start. *)
+   Add FIRST_SCAN() to Trip to hold after every start.
+
+   Enable FALSE turns the hold off without losing count: Held stays FALSE,
+   but the counters are still followed, so switching it on later does not
+   hold for an outage that was over before. *)
 VAR_INPUT
+    Enable  : BOOL := TRUE;
     Online  : BOOL;
     Outages : DINT;
     Trips   : DINT;
@@ -46,4 +51,7 @@ IF Outages <> seenOutages OR Trips <> seenTrips OR Trip THEN
 END_IF;
 seenOutages := Outages;
 seenTrips := Trips;
+IF NOT Enable THEN
+    Held := FALSE;
+END_IF;
 END_FUNCTION_BLOCK
