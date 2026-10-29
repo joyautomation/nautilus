@@ -64,7 +64,21 @@ regenerates them.
   `scanclass`). This is what `manifest:` names.
 - `tags/eip.yaml` — an ordinary tag file: `role: input`, or `role: output`
   for a binding matched by `--writable`, plus `type:` naming the UDT for
-  struct bindings. Compose it with `tag-files:`.
+  struct bindings, and the driver's [`__Online`
+  companion](#the-__online-companion) as a BOOL input. Compose it with
+  `tag-files:`.
+
+The companion is named after the driver the project will run this
+controller with, the way the loader names it. `--name` sets it. Otherwise
+the import reads `nautilus.yaml` in `--out` and takes the `eip` driver
+whose `host:` is `--host` (with or without a port): `eip` for a `driver:`
+section, the entry's `name:` (or `eip-2`, …) in a `drivers:` list. A
+project with one `eip` driver uses it whatever its host. A project with
+several and none on this host is an error that lists them; pass `--name`.
+With no `nautilus.yaml`, or no `eip` driver in it yet, the name is `eip`.
+The import prints the tag it used (`online tag: line2__Online (…)`), and the
+Go form puts `eip.WithOnlineTag("…")` in the wiring comment of
+`eip_manifest.go`.
 
 Useful flags: `--tags` selects device tags by comma-separated globs (default:
 every user tag **except** module I/O like `Local:1:I`, which needs an explicit
@@ -79,7 +93,9 @@ regenerating never argues with them.
 
 `naut eip tags eip_manifest.yaml -o tags/eip.yaml` re-derives **just the
 tag file** from the already-committed manifest — a pure function of the repo,
-no controller needed, so it runs in review or in CI. Its `-skip` takes the
+no controller needed, so it runs in review or in CI. It names the companion
+the same way, from `nautilus.yaml` in the working directory, finding the
+driver by its `manifest:` (or by `-host`), and takes `--name` too. Its `-skip` takes the
 same globs as `--tags-skip`, and a skip pattern matching nothing is an error
 rather than a silent regeneration of a hand-written tag.
 
@@ -171,12 +187,11 @@ The driver synthesizes one BOOL input for the controller's connection,
 named after the driver: `eip__Online` for a `driver:` section, or
 `<name>__Online` for a named entry in a `drivers:` list (`name: line2` gives
 `line2__Online`; characters an identifier can't hold become `_`, so the
-default `eip-2` gives `eip_2__Online`). Declare it like any other input:
-
-```yaml
-tags:
-  - { name: eip__Online, role: input }
-```
+default `eip-2` gives `eip_2__Online`). `naut eip import` and `naut eip
+tags` write it into `tags/eip.yaml` as a BOOL input, so it needs no
+declaration of its own (see [Generating the
+manifest](#generating-the-manifest-naut-eip-import) for how the import
+finds the name).
 
 It is true while the controller is connected **and** every scan class has
 completed a poll on this connection. It is false before the first connect,

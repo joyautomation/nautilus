@@ -68,13 +68,15 @@ claims:
   - id: EIP-006
     claim: >-
       The generated tag file gives output role to `--writable` matches and
-      input otherwise, names the UDT in `type:` for struct bindings only,
-      and says in its header that it is generated.
+      input otherwise, names the UDT in `type:` for struct bindings only (the
+      `__Online` companion, EIP-046, is typed BOOL), and says in its header
+      that it is generated.
     source: "#generating-the-manifest-naut-eip-import"
     tests:
       - go ./eip/codegen TestTagsYAMLDerivesRoles
       - go ./eip/codegen TestTagsYAMLEmitsTypeForUDTsOnly
       - go ./eip/codegen TestTagsYAMLHeader
+      - go ./eip/codegen TestTagsYAMLEmitsTheOnlineCompanion
   - id: EIP-007
     claim: >-
       `--tags-skip` leaves hand-declared tags out of the tag file, and a
@@ -501,3 +503,20 @@ claims:
       False-between-reconnect-and-first-full-read is not asserted; the
       manifest loader passing the name is asserted only through the naming
       function.
+  - id: EIP-046
+    claim: >-
+      `naut eip import` and `naut eip tags` write the driver's
+      `<name>__Online` companion into the tag file as a BOOL input, named
+      from `--name`, else from the eip driver in `nautilus.yaml` whose host:
+      (or, for `eip tags`, manifest:) matches, else the only eip driver, else
+      `eip`; several eip drivers with none matching is an error listing them.
+      The import prints the name it used, and the Go form puts
+      eip.WithOnlineTag in its wiring comment.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests:
+      - go ./cmd/naut TestEIPImportWritesTheOnlineCompanion
+      - go ./cmd/naut TestEIPImportAmbiguousDriverNeedsName
+      - go ./cmd/naut TestEIPTagsResolvesTheCompanionByManifest
+      - go ./internal/project TestEIPOnlineTagResolution
+      - go ./internal/project TestEIPOnlineTagAgreesWithLoad
+      - go ./eip/codegen TestTagsYAMLEmitsTheOnlineCompanion

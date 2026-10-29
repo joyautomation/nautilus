@@ -30,6 +30,9 @@ type Options struct {
 	// Host/Slot/Port are echoed into the generated wiring hint.
 	Host string
 	Slot int
+	// OnlineTag is the driver's connection-status input ("eip__Online"),
+	// echoed into the Go wiring hint as eip.WithOnlineTag; "" leaves it out.
+	OnlineTag string
 }
 
 // Output is the generated file set.
@@ -385,7 +388,11 @@ func renderManifestGo(m eip.Manifest, opts Options) string {
 	fmt.Fprintf(&sb, "package %s\n\n", opts.Package)
 	sb.WriteString("import \"github.com/joyautomation/nautilus/eip\"\n\n")
 	sb.WriteString("// EIPManifest binds this project to the controller's tags. Wire it up:\n//\n")
-	fmt.Fprintf(&sb, "//\tdriver, err := eip.New(%q, EIPManifest, eip.WithSlot(%d))\n", opts.Host, opts.Slot)
+	if opts.OnlineTag != "" {
+		fmt.Fprintf(&sb, "//\tdriver, err := eip.New(%q, EIPManifest, eip.WithSlot(%d), eip.WithOnlineTag(%q))\n", opts.Host, opts.Slot, opts.OnlineTag)
+	} else {
+		fmt.Fprintf(&sb, "//\tdriver, err := eip.New(%q, EIPManifest, eip.WithSlot(%d))\n", opts.Host, opts.Slot)
+	}
 	sb.WriteString("//\tdriver.Start(ctx)\n")
 	sb.WriteString("//\trt, err := runtime.New(runtime.Options{\n")
 	sb.WriteString("//\t\tProgram: program,\n//\t\tDriver:  driver,\n")

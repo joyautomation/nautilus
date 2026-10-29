@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/eip/codegen"
 	"github.com/joyautomation/nautilus/eip/logix"
+	"github.com/joyautomation/nautilus/internal/project"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,6 +38,9 @@ Import flags:
   --package    Go package for the manifest file (default "main")
   --format     Manifest format: "go" (eip_manifest.go, library projects)
                or "yaml" (eip_manifest.yaml, nautilus.yaml projects)
+  --name       The driver's name, for its <name>__Online status tag in the
+               tag file (default: the eip driver in --out's nautilus.yaml
+               whose host: matches, else "eip")
 `
 
 func runEIP(args []string) int {
@@ -91,11 +96,19 @@ func runEIPImport(args []string) int {
 	format := fs.String("format", "go", "manifest format: go (eip_manifest.go, for library projects) or yaml (eip_manifest.yaml, for nautilus.yaml manifest projects)")
 	tagsOut := fs.String("tags-out", "tags/eip.yaml", "tag file to emit (--format yaml only); compose it with tag-files:")
 	tagsSkip := fs.String("tags-skip", "", "comma-separated globs to leave OUT of the tag file, for tags the manifest declares by hand")
+	name := fs.String("name", "", "the driver's name, for its <name>__Online tag (default: from --out's nautilus.yaml, else eip)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *host == "" {
 		fmt.Fprintln(os.Stderr, "naut eip import: --host is required")
+		return 2
+	}
+	// Resolved before dialing: a project with several eip drivers and none
+	// on this host is an error, and it should not wait on a browse.
+	online, how, err := eipOnlineTag(*name, os.DirFS(*outDir), *host, "eip_manifest.yaml")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut eip import:", err)
 		return 2
 	}
 
@@ -123,6 +136,7 @@ func runEIPImport(args []string) int {
 		Package:          *pkg,
 		Host:             *host,
 		Slot:             *slot,
+		OnlineTag:        online,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut eip import:", err)
@@ -173,7 +187,7 @@ func runEIPImport(args []string) int {
 	tagsPath := ""
 	if *format == "yaml" {
 		tagsPath = filepath.Join(*outDir, *tagsOut)
-		if err := writeTagsFile(tagsPath, out.Manifest, *host, splitPatterns(*tagsSkip)); err != nil {
+		if err := writeTagsFile(tagsPath, out.Manifest, *host, online, splitPatterns(*tagsSkip)); err != nil {
 			fmt.Fprintln(os.Stderr, "naut eip import:", err)
 			return 1
 		}
@@ -183,13 +197,25 @@ func runEIPImport(args []string) int {
 	if tagsPath != "" {
 		fmt.Printf("wrote %s — compose it with `tag-files: [%s]`\n", tagsPath, *tagsOut)
 	}
+	fmt.Printf("online tag: %s (%s)\n", online, how)
 	return 0
+}
+
+// eipOnlineTag is the <driver name>__Online companion a generated tag file
+// carries: from --name when given, else from the project's nautilus.yaml
+// (project.EIPOnlineTag, which names drivers exactly as the loader does).
+// how says where the name came from, for the import to print.
+func eipOnlineTag(name string, projectDir iofs.FS, host, manifest string) (online, how string, err error) {
+	if name != "" {
+		return project.OnlineTagFor(name), "--name " + name, nil
+	}
+	return project.EIPOnlineTag(projectDir, host, manifest)
 }
 
 // writeTagsFile renders the manifest's bindings as a nautilus tag file,
 // creating the directory the path implies (tags/ by convention).
-func writeTagsFile(path string, m eip.Manifest, host string, skip []string) error {
-	raw, err := codegen.TagsYAML(m, host, skip)
+func writeTagsFile(path string, m eip.Manifest, host, online string, skip []string) error {
+	raw, err := codegen.TagsYAML(m, host, online, skip)
 	if err != nil {
 		return err
 	}
@@ -210,6 +236,7 @@ func runEIPTags(args []string) int {
 	out := fs.String("o", "tags/eip.yaml", "output tag file")
 	host := fs.String("host", "the controller", "host to name in the generated header")
 	skip := fs.String("skip", "", "comma-separated globs to leave OUT, for tags the manifest declares by hand")
+	name := fs.String("name", "", "the driver's name, for its <name>__Online tag (default: the eip driver in ./nautilus.yaml with this manifest or -host, else eip)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -229,12 +256,25 @@ func runEIPTags(args []string) int {
 		fmt.Fprintf(os.Stderr, "naut eip tags: %s: %v\n", fs.Arg(0), err)
 		return 1
 	}
-	if err := writeTagsFile(*out, m, *host, splitPatterns(*skip)); err != nil {
+	// The project is the working directory, where `naut eip tags` runs
+	// against a committed manifest; its driver is found by that manifest
+	// (or by -host when one was given).
+	matchHost := *host
+	if matchHost == "the controller" { // the header's placeholder, not a host
+		matchHost = ""
+	}
+	online, how, err := eipOnlineTag(*name, os.DirFS("."), matchHost, filepath.ToSlash(fs.Arg(0)))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut eip tags:", err)
+		return 2
+	}
+	if err := writeTagsFile(*out, m, *host, online, splitPatterns(*skip)); err != nil {
 		fmt.Fprintln(os.Stderr, "naut eip tags:", err)
 		return 1
 	}
 	fmt.Printf("wrote %s (%d tag bindings) — compose it with `tag-files: [%s]`\n",
 		*out, len(m.Tags), *out)
+	fmt.Printf("online tag: %s (%s)\n", online, how)
 	return 0
 }
 
