@@ -42,6 +42,54 @@ diagram, with live values on, externals with no backing tag are flagged —
 an amber *no tag* badge in the vars panel and on any chip that reads one —
 so you see this before the download, not after.)
 
+A faulting scan is counted on the diagnostics page (`logicErrors`,
+`lastError`) and written to naut's log on transitions, per task: one
+warning when a task starts faulting, with the error, and one info line
+when it recovers, with how many scans faulted and for how long. While it
+keeps faulting, a new error message is logged at most once a minute, so a
+flapping fault can't flood the log. A driver read or write that keeps
+failing (`ioErrors`, `lastIOError`) is logged the same way.
+
+### Inputs from a device that is down
+
+An `input` delivered by a **communications** driver is the exception: it is
+seeded, so a device that is down when the controller starts does not stop
+the programs that read its tags. This is how a Logix controller behaves.
+It keeps scanning with a consumed tag or a remote rack's inputs at their
+last (or initial) value, and the logic checks the connection's fault bit.
+
+| Driver | An input it has not delivered yet… | Status tag to check |
+| --- | --- | --- |
+| `modbus` | reads its `init:`, or the zero of its type | `<source>__Online` |
+| `eip` | reads its `init:`, or the zero of its type | `<driver name>__Online` (`eip__Online`) |
+| `sparkplug-host` | reads its `init:`, or the zero of its type | `<site>__Online`, `<site>_<device>__Online` |
+| `snmp`, `redfish`, `prometheus` | reads its `init:`, or the zero of its type | `<source>__Online` |
+| `plcnext`, `optommp` (local I/O) | faults the scan, as before | `<id>__Online` |
+| `replay`, `memory` | faults the scan, as before | — |
+
+The decision is per tag, by the driver that delivers it, so a `drivers:`
+list that mixes a Modbus skid with a controller's own I/O seeds only the
+Modbus tags. Local I/O keeps the loud fault: there, an input that never
+arrives means the configuration is wrong, not that a cable is out.
+
+The type of the zero is the tag's `type:`, else the type the programs
+declare the tag as, else the type the driver's binding delivers (a Modbus
+binding's format; an EtherNet/IP or Sparkplug binding's datatype). A tag
+none of those can type stays absent until its first delivery, and
+`naut check` warns about it. No program reads such a tag, since a program
+that read it would have declared its type.
+
+A seed is not a reading. Until the device answers, the driver reports the
+tag's quality as `notConnected`, which the HMI, the Sparkplug node and the
+OPC UA server all carry. Logic should check `__Online`:
+
+```
+Run := SkidRun AND Skid__Online;
+```
+
+Once a real value arrives it replaces the seed. After a disconnect a tag
+holds its last value (quality `stale`), as it always has.
+
 ## Tags in scope: the rules
 
 - **A manifest tag needs no declaration** in a PROGRAM — ST, ladder, FBD or
@@ -92,6 +140,12 @@ Tags: []runtime.TagDef{
     // doesn't deliver it, you want the loud fault, not a silent zero.
     // (The name must also appear in the driver's ReadInputs map.)
     runtime.Input("TempC", runtime.Desc("Tank temperature"), runtime.Unit("°C")),
+
+    // An input from a device that can be down (Modbus, EtherNet/IP, …):
+    // runtime.Comms() seeds it with its Init or the zero of its type, so
+    // the program runs until the device answers. The manifest loader sets
+    // this for you from the driver.
+    runtime.Input("FlowLps", runtime.Comms(), runtime.Unit("L/s")),
 
     // Operator setpoint / config: seeded so it exists from scan one;
     // the HMI or POST /api/tags writes it later.

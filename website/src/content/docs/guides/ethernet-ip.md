@@ -165,24 +165,54 @@ any other reason holds the binding's **last good value** for that cycle: a
 partial struct is never published. `/api/drivers` counts the bindings in leaf
 mode as `leaf structs`.
 
+## The `__Online` companion
+
+The driver synthesizes one BOOL input for the controller's connection,
+named after the driver: `eip__Online` for a `driver:` section, or
+`<name>__Online` for a named entry in a `drivers:` list (`name: line2` gives
+`line2__Online`; characters an identifier can't hold become `_`, so the
+default `eip-2` gives `eip_2__Online`). Declare it like any other input:
+
+```yaml
+tags:
+  - { name: eip__Online, role: input }
+```
+
+It is true while the controller is connected **and** every scan class has
+completed a poll on this connection. It is false before the first connect,
+while reconnecting, and between a reconnect and its first full read. It is
+the Logix connection-fault bit, inverted, and the tag to check before
+trusting this controller's values:
+
+```
+Permissive := eip__Online AND Line1_Ready;
+```
+
+A controller that is down when naut starts does not fault the programs
+that read its tags. Until the first poll each input reads as its `init:`,
+or the zero of its type, and its quality is `NotConnected` (see [Inputs
+from a device that is
+down](/guides/tag-model/#inputs-from-a-device-that-is-down)). Once started,
+the driver's read never fails: before this, a controller that was down at
+boot failed the whole input read, so in a `drivers:` list it starved every
+other driver's inputs too. Before `Start` the read still errors, so a
+driver that was never started fails loudly.
+
 ## Per-tag quality
 
-**The eip driver does not implement `io.QualityReporter`.** Unlike the Modbus
-and Sparkplug-host drivers it reports no per-tag verdict of its own, so
-quality comes entirely from the runtime's own derivation: while the last input
-read failed, every driver-bound input is `Stale`; otherwise every tag is
-`Good`.
+The driver implements `io.QualityReporter`, non-Good entries only:
 
-Be precise about what that covers, because `ReadInputs` fails only while the
-driver has **never** delivered a snapshot. Before the first successful poll —
-dialing, browsing, validating, or failing to connect at all — every input
-reads `Stale`. After a connection *drops*, the driver keeps serving its last
-snapshot, so those tags stay `Good` holding their last field values: the
-honest signal that the link is gone is the driver row on `/api/drivers`
-(`state`, `lastError`, `reconnects`), not tag quality. An HMI that interlocks
-on comms health should bind the driver status, not infer it from a tag. (A
-dotted path resolves to its root tag — a UDT arrives whole, so
-`P101.Drive.Speed` is exactly as trustworthy as `P101`.)
+- an input the controller has **never delivered** (not connected yet, or a
+  tag whose reads fail) is `NotConnected`;
+- an input with a value on file while the controller is **not connected**
+  is `Stale`: its last field value, held;
+- otherwise it is `Good` (omitted). The `__Online` companion is the
+  driver's own truth and is always Good.
+
+Before this, the eip driver reported no quality of its own. After a
+connection dropped, tags kept reading `Good` while holding their last
+values. A dotted path resolves to its root tag: a UDT arrives whole, so
+`P101.Drive.Speed` is exactly as trustworthy as `P101`.
 
 ## Writes
 
@@ -375,6 +405,7 @@ driver, err := eip.New("192.168.1.10", EIPManifest,
     eip.WithTagClass("slow", "*_Totals"),
     eip.WithTagClass(eip.NoPoll, "Line1Cmd*"),        // cataloged + writable, never polled
     eip.WithLogger(slog.Default().With("driver", "eip")),
+    eip.WithOnlineTag("eip__Online"),                 // the connection-status input
 )
 driver.Start(ctx)
 

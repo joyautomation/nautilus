@@ -528,6 +528,27 @@ func (s *Source) class(name string, interval time.Duration) *classRun {
 // __Online / __LastPollMs companions, sorted (io.Multi routing).
 func (b *Base) InputNames() []string { return append([]string(nil), b.inputs...) }
 
+// InputType names the IEC type an input delivers — for a manifest tag with
+// no type: that no program declares, so it can still start at the zero of
+// the right type before its source first answers (runtime.TagDef
+// DriverType): a struct tag's contract type (hw_types.st declares it),
+// BOOL for <id>__Online, LINT for <id>__LastPollMs (epoch milliseconds).
+// "" for a name the driver does not deliver.
+func (b *Base) InputType(name string) string {
+	if t, ok := b.tags[name]; ok {
+		return t.decl.Type
+	}
+	for _, s := range b.sources {
+		switch name {
+		case OnlineTagName(s.cfg.ID):
+			return "BOOL"
+		case LastPollTagName(s.cfg.ID):
+			return "LINT"
+		}
+	}
+	return ""
+}
+
 // OutputNames lists the command tags plus the sources' Enable tags.
 func (b *Base) OutputNames() []string { return append([]string(nil), b.outputs...) }
 
@@ -593,8 +614,9 @@ func (b *Base) ReadInputs() (nio.Values, error) {
 
 // ReadInputsInto refills dst with the latest snapshot: every delivered
 // struct tag, and the two companions per source. A tag never delivered is
-// absent, so a program reading it faults until the source answers — the
-// __Online companion is the guard (the sparkplug-host contract).
+// absent from the delivery — the runtime holds it at the zero of its type
+// (a protocol input, runtime.TagDef.Comms) and Quality says NotConnected —
+// and the __Online companion is the guard (the sparkplug-host contract).
 func (b *Base) ReadInputsInto(dst nio.Values) error {
 	for k := range dst {
 		delete(dst, k)

@@ -178,7 +178,12 @@ GasAlarm := GAS__Online AND GAS_CH1 > 250.0;
 ```
 
 not `GasAlarm := GAS_CH1 > 250.0` alone. Data tags stay absent from the
-snapshot until their block has been read at least once.
+driver's snapshot until their block has been read at least once. In the
+tag store they read as their `init:`, or the zero of their type, until
+then: a source that is down when the controller starts does not fault the
+programs that read its tags. Their quality is `NotConnected`
+meanwhile. See [Inputs from a device that is
+down](/guides/tag-model/#inputs-from-a-device-that-is-down).
 
 A source may also name an `enable:` tag — any BOOL the project already
 declares. While it is false the source is **parked**: no connection is
@@ -205,10 +210,11 @@ The refusal surfaces as `badBlocks` on the device row.
 **A transport failure** — dial refused, timeout, a short read, a response
 carrying the wrong unit id. The whole source is down: the driver drops the
 connection and reconnects with exponential backoff from `retrymin` (1s) to
-`retrymax` (60s), resetting on success. **Values hold.** Nothing is zeroed
-and nothing is invented; a tag delivered at least once reports `Stale` with
-its age, a tag never delivered reports `NotConnected`, and `<source>__Online`
-goes false.
+`retrymax` (60s), resetting on success. **Values hold.** The driver zeroes
+and invents nothing; a tag delivered at least once reports `Stale` with
+its age, a tag never delivered reports `NotConnected` (the tag store holds
+its `init:` or zero for the logic meanwhile), and `<source>__Online` goes
+false.
 
 Quality is reported through `io.QualityReporter`, non-Good entries only —
 a healthy plant reports an empty map. Quality is **source-scoped**: one

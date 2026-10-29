@@ -292,9 +292,10 @@ Two rules keep it affordable on a 10,000-tag controller:
   plant omits the field entirely, so quality costs a working controller
   zero bytes.
 - **A name in `quality` need not be in `tags`.** `notConnected` is exactly
-  the source that has never delivered a value, so there is nothing to
+  the source that has never delivered a value, so there may be nothing to
   publish under it — and the binding shows the reason rather than an
-  unexplained blank.
+  unexplained blank. (A protocol driver's input is seeded with its `init:`
+  or zero, so it does appear in `tags`, beside its `notConnected`.)
 
 ### Where it comes from
 

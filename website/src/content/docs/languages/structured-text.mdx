@@ -79,7 +79,8 @@ a value of that type: `init: TRUE` against `VAR_EXTERNAL Speed : REAL` is an
 error. (This Go-tier example's tags are declared in Go with no type, so
 the program states them.) Either way, naming a tag binds it in the tag store
 rather than creating it, and reading a tag nothing has ever written faults the
-scan with `undefined tag`. A `FUNCTION_BLOCK` sees no tag it does not declare
+scan with `undefined tag` (an input from a communications driver is seeded,
+so it reads as zero until its device answers). A `FUNCTION_BLOCK` sees no tag it does not declare
 in its own `VAR_EXTERNAL`. See [the tag model](/guides/tag-model/) for the
 rules and which role fits which name.
 

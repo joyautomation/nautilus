@@ -114,11 +114,14 @@ claims:
       - go ./tools/blackbox TestBlackbox/001-P-stale-quality
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestStatusOfQuality
+      - go ./opcua/server TestNeverDeliveredProtocolInputReadsBadNotConnected
     note: >-
       The mapping is tested on the status function and on store-held values.
-      A driver input never delivered has no node yet (#420), so
-      Bad_NotConnected is unobservable end to end, and a quality-only change
-      is not pushed to subscriptions (#419); the page says so.
+      A protocol input never delivered is seeded and reads Bad_NotConnected
+      (TestNeverDeliveredProtocolInputReadsBadNotConnected, over a Memory
+      driver reporting NotConnected); a local-I/O input never delivered still
+      has no node (#420), and a quality-only change is not pushed to
+      subscriptions (#419); the page says so.
     partial: true
 
   - id: OPC-006

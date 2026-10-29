@@ -222,9 +222,15 @@ every import:
 
 They are delivered from the first scan, before the processor answers,
 and their quality is always good. The names end the same way on every
-driver that has them (`<id>__Online` is what the Modbus, SNMP and
-Sparkplug host drivers already deliver), so the logic does not change
-with the driver. The counters only go up, so a program that compares
+driver that has them (`<id>__Online` is what the Modbus, EtherNet/IP,
+SNMP and Sparkplug host drivers deliver too), so the logic does not change
+with the driver.
+
+The EPIC's own I/O is local I/O, so a channel input the driver has not
+delivered yet still faults the scan that reads it (`undefined tag`). The
+protocol drivers' inputs read as zero until delivered instead; see
+[Inputs from a device that is
+down](/guides/tag-model/#inputs-from-a-device-that-is-down). The counters only go up, so a program that compares
 them with last scan's values never misses one. A seal-in that releases
 on an acknowledge:
 

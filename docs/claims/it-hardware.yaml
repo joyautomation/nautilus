@@ -181,7 +181,9 @@ claims:
     claim: >-
       `<id>__Online` is true while the source answered within `stale-after`;
       a device that stops answering keeps its last values marked Stale
-      (never a silent zero), and `__Online` goes false.
+      (never a silent zero), and `__Online` goes false. (A device that has
+      never answered leaves its tags at the zero of their type, NotConnected:
+      tag-model TAG-046.)
     source: "#quality-rates-and-companions"
     tests:
       - go ./hw TestBasePartialBadAndStale

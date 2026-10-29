@@ -298,6 +298,7 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error  { return d.base.ReadInput
 func (d *Driver) WriteOutputs(vals nio.Values) error   { return d.base.WriteOutputs(vals) }
 func (d *Driver) Quality() map[string]nio.Quality      { return d.base.Quality() }
 func (d *Driver) InputNames() []string                 { return d.base.InputNames() }
+func (d *Driver) InputType(name string) string         { return d.base.InputType(name) }
 func (d *Driver) OutputNames() []string                { return d.base.OutputNames() }
 func (d *Driver) ScanClasses() map[string][]string     { return d.base.ScanClasses() }
 func (d *Driver) SetWriteGate(gate func() bool)        { d.base.SetWriteGate(gate) }

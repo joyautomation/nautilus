@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/eip/logix"
@@ -69,6 +70,12 @@ type Driver struct {
 
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// onlineTag is the synthesized "<name>__Online" companion (WithOnlineTag),
+	// "" when the driver was built without one. started is set by Start:
+	// from then on ReadInputs delivers rather than errors (see ReadInputs).
+	onlineTag string
+	started   atomic.Bool
 }
 
 // Option configures New.
@@ -87,6 +94,18 @@ func WithScanRate(r time.Duration) Option { return func(d *Driver) { d.scanRate 
 
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option { return func(d *Driver) { d.log = l } }
+
+// WithOnlineTag names the driver's synthesized BOOL connection-status input,
+// conventionally "<driver name>__Online" (the manifest loader passes
+// exactly that: `eip__Online` for an unnamed driver). It is true while the
+// controller is connected and every scan class has completed a poll on this
+// connection, false otherwise — before the first connect, while
+// reconnecting, and between a reconnect and its first full read. It is the
+// tag a program checks before trusting this controller's values, the way
+// Logix logic checks a connection's fault bit; modbus's
+// "<source>__Online" and the Sparkplug host's "<site>__Online" are the
+// same idea. The name must not collide with a binding.
+func WithOnlineTag(name string) Option { return func(d *Driver) { d.onlineTag = name } }
 
 // DefaultClass is the scan class of every binding that isn't assigned one.
 // Its rate is WithScanRate.
@@ -175,6 +194,9 @@ func New(host string, m Manifest, opts ...Option) (*Driver, error) {
 		if b.Writable {
 			d.byName[b.Name] = b
 		}
+	}
+	if d.onlineTag != "" && seen[d.onlineTag] {
+		return nil, fmt.Errorf("eip: companion tag %q collides with a binding of the same name", d.onlineTag)
 	}
 	if err := d.resolveClasses(); err != nil {
 		return nil, err
@@ -265,8 +287,46 @@ func (d *Driver) InputNames() []string {
 			out = append(out, b.Name)
 		}
 	}
+	if d.onlineTag != "" {
+		out = append(out, d.onlineTag)
+	}
 	sort.Strings(out)
 	return out
+}
+
+// InputType names the IEC type an input delivers — for a manifest tag with
+// no type: that no program declares, so it can still start at the zero of
+// the right type (runtime.TagDef.DriverType). An elementary Logix type is
+// its IEC namesake, a UDT is the TYPE `naut eip import` generated for it,
+// an array is ARRAY[0..n-1] OF either, and the online companion is BOOL.
+// "" for a name the driver does not deliver or a Logix type IEC has no
+// spelling for.
+func (d *Driver) InputType(name string) string {
+	if name != "" && name == d.onlineTag {
+		return "BOOL"
+	}
+	for _, b := range d.manifest.Tags {
+		if b.Name != name {
+			continue
+		}
+		elem := b.Type
+		switch b.Type {
+		case "BOOL", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT",
+			"REAL", "LREAL", "BYTE", "WORD", "DWORD", "LWORD", "STRING":
+		default:
+			if _, isElem := elementaryCode(b.Type); isElem {
+				return "" // a Logix-only elementary (STIME, DATE, …)
+			}
+			if _, ok := d.defs[b.Type]; !ok {
+				return ""
+			}
+		}
+		if b.ArrayLen > 0 {
+			return fmt.Sprintf("ARRAY[0..%d] OF %s", b.ArrayLen-1, elem)
+		}
+		return elem
+	}
+	return ""
 }
 
 // OutputNames returns the nautilus tag names of writable bindings — for
@@ -285,6 +345,7 @@ func (d *Driver) OutputNames() []string {
 func (d *Driver) Start(ctx context.Context) {
 	ctx, d.cancel = context.WithCancel(ctx)
 	d.done = make(chan struct{})
+	d.started.Store(true)
 	go d.run(ctx)
 }
 
@@ -354,23 +415,72 @@ func (d *Driver) Health() Health {
 
 // ── io.Driver ────────────────────────────────────────────────────────────
 
-// ReadInputs returns the latest polled snapshot. While disconnected it
-// returns an error so the runtime holds last-known values.
+// ReadInputs returns the latest polled snapshot, plus the online companion
+// when the driver has one (WithOnlineTag).
+//
+// Before Start it errors ("not connected yet"), so a driver that was wired
+// up and never started fails loudly instead of scanning on nothing — the
+// Sparkplug host's and modbus's rule. Once started it never errors: a
+// controller that is down delivers what it last delivered (nothing, before
+// the first connect) with the companion false, and the runtime's per-tag
+// quality comes from Quality below. It used to error until the first
+// connect, which in a drivers: set failed the WHOLE merged read (io.Multi)
+// and so starved every other driver's inputs — the local I/O of a project
+// whose Logix partner happened to be down at boot stopped with it.
 func (d *Driver) ReadInputs() (nio.Values, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.connected && len(d.snapshot) == 0 {
+	if !d.started.Load() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
 		if d.lastErr != nil {
 			return nil, d.lastErr
 		}
 		return nil, fmt.Errorf("eip: %s not connected yet", d.host)
 	}
-	out := make(nio.Values, len(d.snapshot))
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make(nio.Values, len(d.snapshot)+1)
 	for k, v := range d.snapshot {
 		out[k] = v
 	}
+	if d.onlineTag != "" {
+		out[d.onlineTag] = d.connected && d.primed
+	}
 	return out, nil
 }
+
+// Quality reports, per tag, the non-Good verdicts (io.QualityReporter): a
+// binding never delivered is NotConnected, and one delivered while the
+// controller is not connected now is Stale — its last value, held. The
+// companion is the driver's own truth and always Good. Before this the
+// runtime could only infer staleness from a failed read, which this driver
+// stopped reporting once it had delivered anything: a controller that had
+// dropped read Good on every tag it had ever polled.
+func (d *Driver) Quality() map[string]nio.Quality {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out map[string]nio.Quality
+	for _, c := range d.classes {
+		for _, b := range c.bindings {
+			_, delivered := d.snapshot[b.Name]
+			var q nio.Quality
+			switch {
+			case !delivered:
+				q = nio.NotConnected
+			case !d.connected:
+				q = nio.Stale
+			default:
+				continue
+			}
+			if out == nil {
+				out = map[string]nio.Quality{}
+			}
+			out[b.Name] = q
+		}
+	}
+	return out
+}
+
+var _ nio.QualityReporter = (*Driver)(nil)
 
 // WriteOutputs queues changed values for the writer goroutine. Unknown or
 // non-writable names are ignored (the runtime hands us exactly the Outputs

@@ -289,17 +289,21 @@ claims:
       exponential growth, the cap or the reset.
   - id: MB-026
     claim: >-
-      A tag never delivered reports NotConnected rather than a made-up
-      value, and nothing is zeroed or invented while a source is down.
+      A tag never delivered reports NotConnected, and the driver zeroes or
+      invents no value while a source is down (the tag store holds the
+      tag's init: or zero for the logic until the first delivery).
     source: "#per-tag-quality"
     tests:
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
       - go ./modbus TestForeignLatencyAboveTimeoutReconnects
+      - go ./internal/project TestModbusDownReadsInitOrZeroWhileLocalIOStillFaults
     note: >-
       A never-delivered tag is NotConnected and absent from the inputs through
       repeated timeouts (TestForeignLatencyAboveTimeoutReconnects); values are
       held while a source is down
-      (TestSlaveDeathHoldsValuesQueuesWritesRecovers).
+      (TestSlaveDeathHoldsValuesQueuesWritesRecovers); the store-side seed
+      and its NotConnected quality with the source down
+      (TestModbusDownReadsInitOrZeroWhileLocalIOStillFaults).
   - id: MB-027
     claim: >-
       Quality is reported non-Good only (a healthy plant reports an empty

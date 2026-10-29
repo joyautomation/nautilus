@@ -106,14 +106,15 @@ claims:
     claim: >-
       runtime.Options.Tags states each tag's role once (Input, Output,
       Setpoint, State with Init/Desc/Unit), composes with the flat
-      Inputs/Outputs/Seed/Meta fields, and an Input is deliberately not
-      seeded.
+      Inputs/Outputs/Seed/Meta fields, and an Input is not seeded unless it
+      has an Init or is marked Comms().
     source: "#declaring-tags-one-entry-per-tag"
     tests:
       - go ./runtime TestTagDefs
       - go ./runtime TestRuntimeDrivesOutputs
       - go ./internal/project TestTypedInputStaysUnseeded
       - go ./runtime TestTagDefsComposeWithFlatFields
+      - go ./runtime TestCommsInputSeedsInitOrZeroOfItsType
   - id: TAG-012
     claim: >-
       type: accepts every IEC elementary type, a project TYPE (UDT or
@@ -483,3 +484,64 @@ claims:
       - go ./server TestFrameCarriesQuality
       - go ./server TestFrameOmitsQualityWhenEverythingIsGood
       - go ./server TestStreamFrameCarriesQuality
+  - id: TAG-046
+    claim: >-
+      An input delivered by a communications driver (modbus, eip,
+      sparkplug-host, snmp, redfish, prometheus) reads as its init:, or the
+      zero of its type, until the driver first delivers it, so a program that
+      reads it runs instead of faulting; an input delivered by plcnext,
+      optommp, replay or the memory loopback still faults the scan until
+      delivered. The decision is per tag, by the driver that delivers it, in
+      a drivers: list too.
+    source: "#inputs-from-a-device-that-is-down"
+    tests:
+      - go ./internal/project TestCommsClassificationIsPerTagByDriver
+      - go ./internal/project TestModbusDownReadsInitOrZeroWhileLocalIOStillFaults
+      - go ./internal/project TestBenchExamplesKeepLocalInputsStrict
+      - go ./internal/project TestSparkplugHostUnbirthedTagReadsZeroUntilBirth
+      - go ./runtime TestNonCommsInputStillFaultsUntilDelivered
+    partial: true
+    note: >-
+      Asserted end to end for modbus (down) beside optommp (up) and for the
+      Sparkplug host before a birth; eip, snmp, redfish and prometheus are
+      asserted only as classified Comms (the classification is one type
+      switch), not with a down device. replay and memory staying strict is
+      not asserted beyond the type switch.
+  - id: TAG-047
+    claim: >-
+      The zero's type is the tag's type:, else the type the programs declare
+      it as, else the type the driver's binding delivers; a protocol input
+      none of these can type stays absent until delivered and `naut check`
+      warns about it.
+    source: "#inputs-from-a-device-that-is-down"
+    tests:
+      - go ./runtime TestCommsInputSeedsInitOrZeroOfItsType
+      - go ./internal/project TestCommsClassificationIsPerTagByDriver
+      - go ./modbus TestInputTypeFollowsTheFormat
+      - go ./eip TestOnlineCompanionAndQuality
+      - go ./sparkplug/host TestInputTypeNamesTheIECType
+      - go ./hw TestBaseInputType
+      - go ./cmd/naut TestCheckWarnsOnUntypedCommsInput
+  - id: TAG-048
+    claim: >-
+      A seed is not a reading: until the device answers, the driver reports
+      the seeded tag notConnected; a real value replaces the seed, and after
+      that the last value holds across a disconnect.
+    source: "#inputs-from-a-device-that-is-down"
+    tests:
+      - go ./internal/project TestModbusDownReadsInitOrZeroWhileLocalIOStillFaults
+      - go ./internal/project TestSparkplugHostUnbirthedTagReadsZeroUntilBirth
+      - go ./runtime TestCommsSeedSurvivesPruningUntilARealValueReplacesIt
+      - go ./opcua/server TestNeverDeliveredProtocolInputReadsBadNotConnected
+  - id: TAG-049
+    claim: >-
+      A task that starts faulting is logged once (a warning with the error)
+      and once when it recovers (with the faulted scan count and duration),
+      not once per scan, for the main task and additional tasks alike; a
+      changed message while still faulting is logged at most once a minute;
+      a failing input read is logged the same way.
+    source: "#the-tag-model"
+    tests:
+      - go ./runtime TestLogicFaultTransitionsAreLoggedOncePerEpisode
+      - go ./runtime TestIOFaultTransitionsAreLoggedOncePerEpisode
+      - go ./runtime TestFaultTrackRateLimitsChangedMessages

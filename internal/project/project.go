@@ -356,7 +356,8 @@ type DriverConfig struct {
 	Type string `yaml:"type"`
 	// Name tells drivers in a drivers: list apart — in status rows, error
 	// messages, and logs. Defaults to the driver's type, deduped as
-	// "eip-2" when a type repeats. Inert on a lone driver: section.
+	// "eip-2" when a type repeats. On a lone driver: section it names only
+	// the Sparkplug device and eip's <name>__Online companion.
 	Name string `yaml:"name"`
 
 	// eip (manifest/scan-rate/scan-classes/tag-classes shared with modbus)
@@ -804,6 +805,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if opts.Driver, drivers, err = buildDrivers(fsys, m); err != nil {
 		return nil, err
 	}
+	// Protocol inputs read as their init (or zero) until first delivered;
+	// local I/O keeps the loud fault. Per tag, by its driver — comms.go.
+	markComms(opts.Tags, opts.Driver)
 	if m.OPCUA != nil && m.OPCUA.Endpoint != "" {
 		if _, _, err := opcuaserver.ParseEndpoint(m.OPCUA.Endpoint); err != nil {
 			return nil, err
@@ -1223,15 +1227,21 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		d, err := buildDriver(fsys, DriverConfig{})
 		return d, nil, err
 	case 1:
-		d, err := buildDriver(fsys, configs[0])
+		// The resolved name rides into buildDriver on the config: a driver
+		// that names a companion tag after itself (eip's <name>__Online)
+		// gets the same name its status row and Sparkplug device carry.
+		c := configs[0]
+		c.Name = nameOf(c)
+		d, err := buildDriver(fsys, c)
 		if err != nil {
 			return nil, nil, err
 		}
-		return d, []nio.NamedDriver{{Name: nameOf(configs[0]), Driver: d}}, nil
+		return d, []nio.NamedDriver{{Name: c.Name, Driver: d}}, nil
 	}
 	named := make([]nio.NamedDriver, 0, len(configs))
 	for i, c := range configs {
 		name := nameOf(c)
+		c.Name = name
 		d, err := buildDriver(fsys, c)
 		if err != nil {
 			return nil, nil, fmt.Errorf("drivers[%d] (%s): %w", i, name, err)
@@ -1268,7 +1278,10 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		if err := dec.Decode(&em); err != nil {
 			return nil, fmt.Errorf("driver eip: %s: %w", d.Manifest, err)
 		}
-		opts := []eip.Option{eip.WithSlot(d.Slot)}
+		// The controller's connection status, as a BOOL input the logic
+		// checks before trusting its values: "<driver name>__Online" —
+		// eip__Online for an unnamed driver: section.
+		opts := []eip.Option{eip.WithSlot(d.Slot), eip.WithOnlineTag(onlineTagFor(d.Name, "eip"))}
 		// "host:port" reaches a controller (or `naut logix emulate`) off
 		// the standard 44818 — a bare host keeps the default.
 		host := d.Host
@@ -1507,6 +1520,22 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 	default:
 		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
+}
+
+// onlineTagFor is a single-connection driver's online companion name:
+// "<name>__Online", its name reduced to an ST identifier ("eip-2" →
+// eip_2__Online) — fallback when the driver has no name of its own.
+func onlineTagFor(name, fallback string) string {
+	if name == "" {
+		name = fallback
+	}
+	b := []byte(name)
+	for i, c := range b {
+		if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' && i > 0) {
+			b[i] = '_'
+		}
+	}
+	return string(b) + "__Online"
 }
 
 // OPCUAConfig is the manifest's `opcua:` section: serve the tag store as an

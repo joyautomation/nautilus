@@ -247,14 +247,17 @@ claims:
       The status mapper test builds health without leaf counts.
   - id: EIP-024
     claim: >-
-      The eip driver reports no per-tag quality of its own: before the first
-      successful poll every input reads Stale (read error), and after a
-      connection drops the last snapshot keeps being served as Good.
+      The eip driver reports per-tag quality (io.QualityReporter): an input
+      never delivered is NotConnected, one with a value on file while the
+      controller is not connected is Stale, and the `__Online` companion is
+      always Good.
     source: "#per-tag-quality"
-    tests: []
+    tests:
+      - go ./eip TestOnlineCompanionAndQuality
+    partial: true
     note: >-
-      Neither the pre-first-poll Stale nor the post-drop Good-with-held
-      values is asserted by any test.
+      NotConnected while down and all-Good once connected are asserted;
+      Stale after a connection drops is not.
   - id: EIP-025
     claim: >-
       A dotted path resolves to its root tag, since a UDT arrives whole.
@@ -481,3 +484,20 @@ claims:
       WithScanClass, WithTagClass and ScanClasses are asserted;
       WithScanRate's value is not observable (the 250ms default would pass
       the same 5s wait).
+  - id: EIP-045
+    claim: >-
+      The driver delivers a BOOL `<driver name>__Online` input (eip__Online
+      for a driver: section) that is true while the controller is connected
+      and every scan class has polled on this connection; once started its
+      read never errors, so a controller that is down delivers the companion
+      false and no data tags, while before Start the read errors.
+    source: "#the-__online-companion"
+    tests:
+      - go ./eip TestOnlineCompanionAndQuality
+      - go ./eip TestOnlineCompanionCollision
+      - go ./internal/project TestOnlineTagFor
+    partial: true
+    note: >-
+      False-between-reconnect-and-first-full-read is not asserted; the
+      manifest loader passing the name is asserted only through the naming
+      function.
