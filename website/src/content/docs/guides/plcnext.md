@@ -101,16 +101,9 @@ driver:
 ```
 
 The manifest lists the modules in bus order and binds tags to byte
-offsets and bit or integer formats; `naut plcnext tags` writes the tag
-file from it. In BusConductor's generic mode **every module takes its
-frame length in both images**, in bus order: a DO16 takes two bytes of
-the input image it never writes. A digital module numbers its channels
-byte by byte, while `bit:N` counts in a big-endian 16-bit word, so
-channel n of a 16-channel module binds as `bit:((n+7) mod 16)` (channel
-01 is `bit:8`). The example's manifest has the measured layout for its
-four modules. Check a new layout with eyes on one output LED and one
-input before trusting it: the bytes alone do not say which module is
-which.
+offsets and channel, bit or integer formats; [Write the
+manifest](#write-the-manifest) says how, and how `naut plcnext import`
+writes it for you.
 
 `naut plcnext read <port>` and `naut plcnext write <port> <value>` read
 or write any GDS name the service will answer for, which is the way to
@@ -122,6 +115,87 @@ resident**. Each scan's exchange is one round trip over the local
 socket, about 11 ms for this manifest. That is remote-I/O-grade timing,
 the same tier as an Engineer program reading the GDS from a
 non-real-time thread.
+
+## Write the manifest
+
+In BusConductor's generic mode **every module takes its frame length in
+both images**, in bus order: a DO16 takes two bytes of the input image
+it never writes, and a DI16 two bytes of the output image. So a module's
+offset is the sum of the frame lengths before it, the same in both
+images.
+
+A digital module numbers its channels **byte by byte**: channel 01 is
+bit 0 of the module's first byte, channel 09 bit 0 of its second. The
+`ch:N` format is that number, with the module's first byte as the
+offset, so a binding reads like the terminal label:
+
+```yaml
+modules:
+  - { slot: 1, part: "AXL SE DO16/1", in: 2, out: 2 }
+  - { slot: 2, part: "AXL SE DI16/1", in: 2, out: 2 }
+tags:
+  - { name: DI_00, dir: in,  offset: 2, format: "ch:1" }    # DI16 terminal 01
+  - { name: DO_15, dir: out, offset: 0, format: "ch:16", init: false }   # DO16 terminal 16
+```
+
+`ch:01` is accepted too. With a module list, a channel that runs past
+its module (`ch:17` on a DI16) is refused by `naut check`. The older
+`bit:N` still works and means bit N of the big-endian 16-bit word at the
+offset, so channel n of a 16-channel module is `bit:((n+7) mod 16)`
+(channel 01 is `bit:8`): the same bits, harder to get right. Numbers
+are `uint8`, `int8`, `uint16`, `int16`, `uint32`, `int32` and `float32`,
+big-endian unless `byte-order: little`.
+
+### From the device list
+
+`naut plcnext import` writes the module list, every offset and a binding
+for every channel from the bus's **device list**: the Axioline device
+types in bus order, slot 1 next to the controller.
+
+```yaml
+# plcnext_devices.yaml
+devices:
+  - { type: 0x00400002, desc: "K2.1" }   # AXL SE DO16/1
+  - { type: 0x00800002, desc: "K2.2" }   # AXL SE DI16/1
+  - { type: 0x00000100 }                 # no process data
+  - { type: 0x00200008 }                 # AXL SE AI4 U
+```
+
+```sh
+naut plcnext import plcnext_devices.yaml --transport shm
+naut check .
+```
+
+It writes `plcnext_manifest.yaml` and `tags/plcnext.yaml` (and refuses
+to replace either if it holds something else, unless `--force`).
+Digital channels come out as `ch:N`, analog inputs as `int16` raw
+counts. The types it knows are the four on the bench unit:
+
+| device type | laid out as | bytes, both images |
+|---|---|---:|
+| `0x00400002` | AXL SE DO16/1, 16 digital outputs | 2 |
+| `0x00800002` | AXL SE DI16/1, 16 digital inputs | 2 |
+| `0x00000100` | no process data | 0 |
+| `0x00200008` | AXL SE AI4 U, 4 analog inputs | 8 |
+
+Any other type needs its frame length in bits (`length: 16`, as a TIC
+file's `DeviceLength` or the data sheet's process-data width gives it):
+the import lays it out so the modules after it land right, and leaves a
+commented example binding for you to finish. A device type names a
+process-data shape, not a part, so another module that reports one of
+these types gets the same layout under the bench part's name; `part:`
+in the list names it yourself. Types are always hexadecimal (`00400002`
+as a TIC file writes it means the same).
+
+**The firmware does not hand naut the device list.** BusConductor reads
+every device's type and publishes only how many there are
+(`NUM_MODULES`), and the Axioline master's own configuration RPCs answer
+`Unimplemented` on 2023.0. So the list is a file you write, from the
+modules' data sheets, the TIC files an earlier Engineer or IoConf
+project left, or the labels; `--check-bus`, run on the controller,
+compares its length with `NUM_MODULES` without touching the bus.
+Either way, check a new layout with eyes on one output LED and one input
+before trusting it: the bytes alone do not say which module is which.
 
 ## Faster: the in-process tier
 
@@ -232,8 +306,9 @@ back about a minute after the controller answered ssh.
   image: the bus `RUN` bit. False makes every input `bad`.
 - **Real-time priority without root.** `SCHED_FIFO` needs the owner's
   one-time root step, and again after every deploy of either binary.
-- **Import from a bus scan.** The manifest is written by hand from
-  `browse`; a `naut plcnext import` is planned.
+- **Import from a bus scan.** `naut plcnext import` works from a device
+  list you write; the firmware publishes only the module count, which
+  `--check-bus` compares. Neither has been run on the controller yet.
 - **Analog modules without their supply.** An Axioline module whose UP
   supply is not wired reports Axioline's supply-missing marker (`0x8020`)
   as its reading; the driver passes it through as a value.

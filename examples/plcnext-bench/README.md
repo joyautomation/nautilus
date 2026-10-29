@@ -91,12 +91,16 @@ its frame length in BOTH images, in bus order — DO16 2 bytes, DI16 2
 bytes, the SC element nothing, AI4 U 8 bytes — so outputs are DO16 @0..1
 and inputs are DI16 @2..3, AI @4..11. A digital module numbers its
 channels byte by byte (channel 01 is bit 0 of its first byte, channel 09
-bit 0 of its second), while a manifest's `bit:N` counts in a big-endian
-16-bit word, so channel n binds as `bit:((n+7) mod 16)`. Both were
-settled with eyes on the LEDs and a switch, not from the bytes alone: the
-first layout here, read from the device list, had the two digital
-modules swapped. `plcnext_manifest.yaml` says so; `naut plcnext tags`
-derives `tags/plcnext.yaml` from it.
+bit 0 of its second); the manifest binds them as `ch:N`, the number on
+the terminal, with the module's first byte as the offset (the older
+`bit:N` counts in a big-endian 16-bit word, where channel n is
+`bit:((n+7) mod 16)`). Both were settled with eyes on the LEDs and a
+switch, not from the bytes alone: the first layout here, read from the
+device list, had the two digital modules swapped. `plcnext_manifest.yaml`
+says so; `naut plcnext tags` derives `tags/plcnext.yaml` from it.
+`plcnext_devices.yaml` is the device list in bus order, and `naut plcnext
+import plcnext_devices.yaml --transport shm` generates the same modules
+and bindings from it (a test in `plcnext/` holds the two equal).
 
 ## Deploy, from nothing
 

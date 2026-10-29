@@ -26,7 +26,7 @@ func TagsYAML(m Manifest, tagsPath string) ([]byte, error) {
 			t.Role = "output"
 			t.Init = b.Init
 			if t.Init == nil {
-				if b.format().Kind == "bit" {
+				if b.format().Digital() {
 					t.Init = false
 				} else {
 					t.Init = 0.0
@@ -34,28 +34,9 @@ func TagsYAML(m Manifest, tagsPath string) ([]byte, error) {
 			}
 		}
 		if t.Desc == "" {
-			if mod, ok := m.moduleAt(b); ok {
-				t.Desc = fmt.Sprintf("%s (slot %d) %s byte %d %s", mod.Part, mod.Slot, b.Dir, b.Offset, b.Format)
-			}
+			t.Desc = m.describe(b)
 		}
 		tags = append(tags, t)
 	}
 	return tagfile.Render(header, tags)
-}
-
-// moduleAt finds the module whose span of the image holds the binding,
-// walking the modules in bus order and summing their byte counts.
-func (m Manifest) moduleAt(b Binding) (Module, bool) {
-	off := 0
-	for _, mod := range m.Modules {
-		n := mod.In
-		if b.Dir == DirOut {
-			n = mod.Out
-		}
-		if b.Offset >= off && b.Offset < off+n {
-			return mod, true
-		}
-		off += n
-	}
-	return Module{}, false
 }

@@ -50,7 +50,12 @@ Stage 2 — nautilus's I/O through it — is done and running on the bench:
   1 Hz heartbeat blinks the DO16's output 16 LED and shows in the shim's
   own view of the frame (`naut plcnext shm --watch`, and the shim's
   log): output byte 1 toggles `00`/`80` every 500 ms, generation applied
-  = generation written;
+  = generation written. That is the frame's own numbering: the DO16 is
+  the first module, so its bytes are 0..1, and a digital module numbers
+  its channels byte by byte, so output 16 is bit 7 of its second byte —
+  `format: "ch:16"` at `offset: 0` in the manifest, the channel as
+  printed on the module (the older `bit:7` binds the same bit). The
+  shim never interprets bytes; offsets and channels are the manifest's;
 - killing naut (`kill -9`) drops the frame to zero 1 s later, in the
   shim's log as `nautilus's outputs are older than 1000 ms`; a runtime
   restart restarts the shim, and naut sees the new start stamp, ends its

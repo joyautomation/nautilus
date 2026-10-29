@@ -1,0 +1,20 @@
+# The bench AXC F 2152's local bus, device by device in bus order (slot 1
+# is next to the controller) — the input to
+#
+#   naut plcnext import plcnext_devices.yaml --transport shm
+#
+# which lays out the modules and offsets and binds every channel. The
+# firmware does not hand naut this list (BusConductor publishes only
+# NUM_MODULES), so it is written here, from the device types the bus
+# reported to the 2025 tentacle-plcnext experiment (its TIC files'
+# DeviceType) and the panel labels. `--check-bus`, on the controller,
+# compares its length with NUM_MODULES. Types are hexadecimal.
+#
+# The hand-kept plcnext_manifest.yaml beside it is what this generates,
+# plus its comments and descriptions: the plcnext package's tests hold
+# the modules and bindings of the two equal.
+devices:
+  - { slot: 1, type: 0x00400002, desc: "K2.1" } # AXL SE DO16/1
+  - { slot: 2, type: 0x00800002, desc: "K2.2" } # AXL SE DI16/1
+  - { slot: 3, type: 0x00000100, desc: "K2.3" } # the SC element, no process data
+  - { slot: 4, type: 0x00200008 }               # AXL SE AI4 U

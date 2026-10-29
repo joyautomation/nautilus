@@ -6,7 +6,8 @@ package main
 // controller, where the socket is), read / write (any GDS name, to learn
 // what it is before a manifest binds it), shm (look at the in-process
 // shim's exchange page — what it read from the bus, what it wrote to it,
-// its cycle), and tags (derive the tag file from a committed
+// its cycle), import (a manifest and tag file from the bus's device list,
+// plcnext_import.go) and tags (derive the tag file from a committed
 // plcnext_manifest.yaml, anywhere).
 
 import (
@@ -52,8 +53,24 @@ Usage:
         shim's lateness percentiles and worst 10 s window, naut's scan
         lateness, and the CPU each used — for comparing runs (best-effort
         against SCHED_FIFO, quiet against loaded). --out appends a JSON line.
+  naut plcnext import <plcnext_devices.yaml> [--out .] [--transport grpc|shm] [--check-bus] [--force]
+        Anywhere: write plcnext_manifest.yaml + tags/plcnext.yaml from the
+        bus's device list (device types in bus order; the firmware does
+        not publish them, so the list is a file): every module at the sum
+        of the frame lengths before it, in both images, every channel of
+        a known module bound (digital as ch:N, the number on the module),
+        an unknown type laid out from its length and left to bind by
+        hand. --check-bus (on the controller) compares the list's length
+        with BusConductor's NUM_MODULES, without touching the bus.
   naut plcnext tags <plcnext_manifest.yaml> [-o tags/plcnext.yaml]
         Anywhere: derive the tag file from the committed manifest.
+
+Manifest formats: ch:N is channel N of the module whose first byte is the
+offset, as printed on its terminals (channel 01 is ch:1 — bit 0 of that
+byte; channel 09 is bit 0 of the next). bit:N is bit N of the 16-bit word
+at the offset in byte-order; on Axioline's big-endian image channel n of
+a 16-channel module is bit:((n+7) mod 16). Numbers: uint8 int8 uint16
+int16 uint32 int32 float32.
 
 Flags:
   --socket         The firmware's gRPC Unix socket (default /run/plcnext/grpc.sock)
@@ -87,6 +104,8 @@ func runPlcnext(args []string) int {
 		return runPlcnextShm(args[1:])
 	case "bench":
 		return runPlcnextBench(args[1:])
+	case "import":
+		return runPlcnextImport(args[1:])
 	case "tags":
 		return runPlcnextTags(args[1:])
 	default:

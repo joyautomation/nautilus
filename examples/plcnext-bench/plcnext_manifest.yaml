@@ -12,9 +12,15 @@
 # input bytes 4..11 (its output frame, by the both-images rule, at 4..11
 # too, unused). A digital module numbers its channels byte by byte:
 # channel 01 is bit 0 of the module's first byte, channel 09 bit 0 of its
-# second. bit:N counts in the 16-bit big-endian word at the offset, so
-# channel n is bit:((n+7) mod 16) — channel 01 is bit:8, channel 16
-# bit:7. The analogs are big-endian words, as the format assumes.
+# second. ch:N is that number, with the module's first byte as the
+# offset, so the format reads like the terminal label. (The older bit:N
+# counts in the 16-bit big-endian word at the offset, where channel n is
+# bit:((n+7) mod 16); it still works and binds the same bits.) The
+# analogs are big-endian words, as the format assumes.
+#
+# `naut plcnext import plcnext_devices.yaml --transport shm` generates
+# this layout from the device list beside it; this copy keeps the
+# comments, and the plcnext tests hold the two equal.
 #
 # transport: shm — the bytes go through rt/plcnext-io's nautilus_io, the
 # ACF-started shim that touches the Axioline frames every millisecond
@@ -33,39 +39,39 @@ modules:
   - { slot: 3, part: "(no process data)", desc: "K2.3, the SC element (device 0x00000100)" }
   - { slot: 4, part: "AXL SE AI4 U", in: 8, out: 8, desc: "4 analog voltage inputs (device 0x00200008)" }
 tags:
-  - { name: DI_00, dir: in, offset: 2, format: "bit:8",  desc: "slot 2 input 01" }
-  - { name: DI_01, dir: in, offset: 2, format: "bit:9",  desc: "slot 2 input 02" }
-  - { name: DI_02, dir: in, offset: 2, format: "bit:10", desc: "slot 2 input 03" }
-  - { name: DI_03, dir: in, offset: 2, format: "bit:11", desc: "slot 2 input 04" }
-  - { name: DI_04, dir: in, offset: 2, format: "bit:12", desc: "slot 2 input 05" }
-  - { name: DI_05, dir: in, offset: 2, format: "bit:13", desc: "slot 2 input 06" }
-  - { name: DI_06, dir: in, offset: 2, format: "bit:14", desc: "slot 2 input 07" }
-  - { name: DI_07, dir: in, offset: 2, format: "bit:15", desc: "slot 2 input 08" }
-  - { name: DI_08, dir: in, offset: 2, format: "bit:0",  desc: "slot 2 input 09" }
-  - { name: DI_09, dir: in, offset: 2, format: "bit:1",  desc: "slot 2 input 10" }
-  - { name: DI_10, dir: in, offset: 2, format: "bit:2",  desc: "slot 2 input 11" }
-  - { name: DI_11, dir: in, offset: 2, format: "bit:3",  desc: "slot 2 input 12" }
-  - { name: DI_12, dir: in, offset: 2, format: "bit:4",  desc: "slot 2 input 13" }
-  - { name: DI_13, dir: in, offset: 2, format: "bit:5",  desc: "slot 2 input 14" }
-  - { name: DI_14, dir: in, offset: 2, format: "bit:6",  desc: "slot 2 input 15" }
-  - { name: DI_15, dir: in, offset: 2, format: "bit:7",  desc: "slot 2 input 16" }
+  - { name: DI_00, dir: in, offset: 2, format: "ch:1",  desc: "slot 2 input 01" }
+  - { name: DI_01, dir: in, offset: 2, format: "ch:2",  desc: "slot 2 input 02" }
+  - { name: DI_02, dir: in, offset: 2, format: "ch:3",  desc: "slot 2 input 03" }
+  - { name: DI_03, dir: in, offset: 2, format: "ch:4",  desc: "slot 2 input 04" }
+  - { name: DI_04, dir: in, offset: 2, format: "ch:5",  desc: "slot 2 input 05" }
+  - { name: DI_05, dir: in, offset: 2, format: "ch:6",  desc: "slot 2 input 06" }
+  - { name: DI_06, dir: in, offset: 2, format: "ch:7",  desc: "slot 2 input 07" }
+  - { name: DI_07, dir: in, offset: 2, format: "ch:8",  desc: "slot 2 input 08" }
+  - { name: DI_08, dir: in, offset: 2, format: "ch:9",  desc: "slot 2 input 09" }
+  - { name: DI_09, dir: in, offset: 2, format: "ch:10", desc: "slot 2 input 10" }
+  - { name: DI_10, dir: in, offset: 2, format: "ch:11", desc: "slot 2 input 11" }
+  - { name: DI_11, dir: in, offset: 2, format: "ch:12", desc: "slot 2 input 12" }
+  - { name: DI_12, dir: in, offset: 2, format: "ch:13", desc: "slot 2 input 13" }
+  - { name: DI_13, dir: in, offset: 2, format: "ch:14", desc: "slot 2 input 14" }
+  - { name: DI_14, dir: in, offset: 2, format: "ch:15", desc: "slot 2 input 15" }
+  - { name: DI_15, dir: in, offset: 2, format: "ch:16", desc: "slot 2 input 16" }
   - { name: AI_00, dir: in, offset: 4, format: int16, desc: "slot 4 analog input 0, raw counts (0x8020 = supply missing)" }
   - { name: AI_01, dir: in, offset: 6, format: int16, desc: "slot 4 analog input 1, raw counts" }
   - { name: AI_02, dir: in, offset: 8, format: int16, desc: "slot 4 analog input 2, raw counts" }
   - { name: AI_03, dir: in, offset: 10, format: int16, desc: "slot 4 analog input 3, raw counts" }
-  - { name: DO_00, dir: out, offset: 0, format: "bit:8",  init: false, desc: "slot 1 output 01" }
-  - { name: DO_01, dir: out, offset: 0, format: "bit:9",  init: false, desc: "slot 1 output 02" }
-  - { name: DO_02, dir: out, offset: 0, format: "bit:10", init: false, desc: "slot 1 output 03" }
-  - { name: DO_03, dir: out, offset: 0, format: "bit:11", init: false, desc: "slot 1 output 04" }
-  - { name: DO_04, dir: out, offset: 0, format: "bit:12", init: false, desc: "slot 1 output 05" }
-  - { name: DO_05, dir: out, offset: 0, format: "bit:13", init: false, desc: "slot 1 output 06" }
-  - { name: DO_06, dir: out, offset: 0, format: "bit:14", init: false, desc: "slot 1 output 07" }
-  - { name: DO_07, dir: out, offset: 0, format: "bit:15", init: false, desc: "slot 1 output 08" }
-  - { name: DO_08, dir: out, offset: 0, format: "bit:0",  init: false, desc: "slot 1 output 09" }
-  - { name: DO_09, dir: out, offset: 0, format: "bit:1",  init: false, desc: "slot 1 output 10" }
-  - { name: DO_10, dir: out, offset: 0, format: "bit:2",  init: false, desc: "slot 1 output 11" }
-  - { name: DO_11, dir: out, offset: 0, format: "bit:3",  init: false, desc: "slot 1 output 12" }
-  - { name: DO_12, dir: out, offset: 0, format: "bit:4",  init: false, desc: "slot 1 output 13" }
-  - { name: DO_13, dir: out, offset: 0, format: "bit:5",  init: false, desc: "slot 1 output 14" }
-  - { name: DO_14, dir: out, offset: 0, format: "bit:6",  init: false, desc: "slot 1 output 15" }
-  - { name: DO_15, dir: out, offset: 0, format: "bit:7",  init: false, desc: "slot 1 output 16 — heartbeat" }
+  - { name: DO_00, dir: out, offset: 0, format: "ch:1",  init: false, desc: "slot 1 output 01" }
+  - { name: DO_01, dir: out, offset: 0, format: "ch:2",  init: false, desc: "slot 1 output 02" }
+  - { name: DO_02, dir: out, offset: 0, format: "ch:3",  init: false, desc: "slot 1 output 03" }
+  - { name: DO_03, dir: out, offset: 0, format: "ch:4",  init: false, desc: "slot 1 output 04" }
+  - { name: DO_04, dir: out, offset: 0, format: "ch:5",  init: false, desc: "slot 1 output 05" }
+  - { name: DO_05, dir: out, offset: 0, format: "ch:6",  init: false, desc: "slot 1 output 06" }
+  - { name: DO_06, dir: out, offset: 0, format: "ch:7",  init: false, desc: "slot 1 output 07" }
+  - { name: DO_07, dir: out, offset: 0, format: "ch:8",  init: false, desc: "slot 1 output 08" }
+  - { name: DO_08, dir: out, offset: 0, format: "ch:9",  init: false, desc: "slot 1 output 09" }
+  - { name: DO_09, dir: out, offset: 0, format: "ch:10", init: false, desc: "slot 1 output 10" }
+  - { name: DO_10, dir: out, offset: 0, format: "ch:11", init: false, desc: "slot 1 output 11" }
+  - { name: DO_11, dir: out, offset: 0, format: "ch:12", init: false, desc: "slot 1 output 12" }
+  - { name: DO_12, dir: out, offset: 0, format: "ch:13", init: false, desc: "slot 1 output 13" }
+  - { name: DO_13, dir: out, offset: 0, format: "ch:14", init: false, desc: "slot 1 output 14" }
+  - { name: DO_14, dir: out, offset: 0, format: "ch:15", init: false, desc: "slot 1 output 15" }
+  - { name: DO_15, dir: out, offset: 0, format: "ch:16", init: false, desc: "slot 1 output 16 — heartbeat" }

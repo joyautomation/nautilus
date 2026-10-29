@@ -551,13 +551,16 @@ plcnext/
                  scalars, Describe and WriteScalar for the CLI
   manifest.go    plcnext_manifest.yaml: socket, bus-conductor, inputs/outputs (the mirrored ports),
                  run-port, byte-order, modules (documentation), tags {name, dir, offset, format
-                 bit:N|int16|…, scale, bias}; span() = how many bytes the bindings reach
+                 ch:N|bit:N|int16|…, scale, bias}; span() = how many bytes the bindings reach
+  channel.go     the module a binding lands in, its channel number, ch:N past its module refused
+  busimport.go   device list (types in bus order) → modules, offsets, every channel bound;
+                 BusModules reads NUM_MODULES for `import --check-bus`
   codec.go       bindings ⇄ the byte image; bit writes merge into the kept output image
   driver.go      io.Driver + BatchReader + QualityReporter; New never dials; Start: dial →
                  conductBus (skip what is already configured/running; edge = low, 300 ms, high) →
                  poll loop; reconnect with backoff; Health for /api/drivers; Handshake for the CLI
   tags.go        tag file from the manifest
-cmd/naut/plcnext.go   naut plcnext browse | read | write (on the controller) | tags
+cmd/naut/plcnext.go   naut plcnext browse | read | write (on the controller) | import | tags
 internal/project      driver type "plcnext"; status row (connected / bus not running / …); schema enum
 examples/plcnext-bench/controller/   the three project files that differ from upstream BusConductor:
                  PCWE.gds.config (the two connectors), pcwe.plm.config (library path), PCWE.opcua.config
@@ -708,9 +711,20 @@ wired). A reboot is verified (§3.4).
    shell is on, nautilus ran on the EPIC. Next on that side: a systemd
    unit so it survives a reboot.
 3. Record both for N-90 (the three-controllers piece) while they are live.
-4. `naut plcnext import` from a bus scan (module list → manifest) once
-   BusConductor's `NUM_MODULES` and the image are readable, so the
-   offsets stop being hand-typed.
+4. ~~`naut plcnext import` from a bus scan (module list → manifest).~~
+   Built 2026-10-28, from a device list file rather than a scan: the
+   firmware publishes only `NUM_MODULES` (BusConductor's GDS struct is
+   CONFIG_REQ, CONFIG_MUST_MATCH, START_IO_REQ, CONFIGURED, NUM_MODULES;
+   it reads each device's type through the Axioline master and keeps
+   it), and `ReadConfiguration`/`AxioControl` answer `Unimplemented`
+   (§3.1). The import lays out offsets by the both-images rule, binds
+   digital channels as `ch:N` (the module's own channel number, so the
+   `bit:((n+7) mod 16)` trap of §3.3 cannot recur), and `--check-bus`
+   compares the list with `NUM_MODULES`. For the bench's four devices it
+   produces the eyes-checked manifest (a test holds them equal). Not yet
+   run on the controller. A real scan needs a path to the device types:
+   the ANSI-C surface the shim already uses, if it has one (unchecked —
+   never guess a signature), or a BusConductor that publishes them.
 5. ~~Decide whether tier 2 is wanted before anyone builds it.~~ Built:
    stages 1 and 2 run on the bench (§3.4), the shim at SCHED_FIFO since
    2026-10-25. Next on it: whether a deploy should carry the `setcap` step (today a capability is lost

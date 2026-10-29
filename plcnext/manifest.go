@@ -124,8 +124,11 @@ type Binding struct {
 	Dir string `yaml:"dir"`
 	// Offset is the byte offset inside the image.
 	Offset int `yaml:"offset"`
-	// Format is bit:N (bit N of the 16-bit word at Offset, N 0..15),
-	// uint8 int8 uint16 int16 uint32 int32 float32.
+	// Format is ch:N (digital channel N of the module whose first byte is
+	// Offset, numbered as on its terminals: channel 1 is bit 0 of that
+	// byte, channel 9 bit 0 of the next), bit:N (bit N of the 16-bit word
+	// at Offset in byte-order, N 0..15), or uint8 int8 uint16 int16
+	// uint32 int32 float32.
 	Format string `yaml:"format"`
 	// Scale/Offset-in-engineering-units: engineering = raw*Scale + Bias.
 	Scale float64 `yaml:"scale"`
@@ -138,13 +141,20 @@ type Binding struct {
 
 // Format is a parsed Binding.Format.
 type Format struct {
-	Kind string // bit uint8 int8 uint16 int16 uint32 int32 float32
+	Kind string // ch bit uint8 int8 uint16 int16 uint32 int32 float32
 	Bit  int    // for bit
+	Ch   int    // for ch: the 1-based channel
 }
 
-// Bytes is the span the format occupies in the image.
+// maxChannel is the highest ch:N a 512-byte image can hold.
+const maxChannel = 512 * 8
+
+// Bytes is the span the format occupies in the image, from the binding's
+// offset; for ch:N, up to and including the byte that holds the channel.
 func (f Format) Bytes() int {
 	switch f.Kind {
+	case "ch":
+		return (f.Ch-1)/8 + 1
 	case "uint8", "int8":
 		return 1
 	case "bit", "uint16", "int16":
@@ -154,19 +164,48 @@ func (f Format) Bytes() int {
 	}
 }
 
+// Digital reports whether the format is one bit (ch:N or bit:N).
+func (f Format) Digital() bool { return f.Kind == "ch" || f.Kind == "bit" }
+
 func (f Format) String() string {
-	if f.Kind == "bit" {
+	switch f.Kind {
+	case "ch":
+		return "ch:" + strconv.Itoa(f.Ch)
+	case "bit":
 		return "bit:" + strconv.Itoa(f.Bit)
 	}
 	return f.Kind
 }
 
-// ParseFormat parses a binding format.
+// bitAt is where a digital format's bit sits: its byte, relative to the
+// binding's offset, and the bit inside that byte. ch:N counts byte by
+// byte, the way an Axioline module numbers its channels, so the byte
+// order plays no part; bit:N counts in the 16-bit word at the offset, so
+// it does.
+func (f Format) bitAt(byteOrder string) (byteIdx, bit int) {
+	if f.Kind == "ch" {
+		return (f.Ch - 1) / 8, (f.Ch - 1) % 8
+	}
+	if byteOrder == ByteOrderLittle {
+		return f.Bit / 8, f.Bit % 8
+	}
+	return 1 - f.Bit/8, f.Bit % 8
+}
+
+// ParseFormat parses a binding format. ch:N takes leading zeros, so a
+// terminal labelled 01 can be written ch:01.
 func ParseFormat(s string) (Format, error) {
+	if strings.HasPrefix(s, "ch:") {
+		n, err := strconv.Atoi(strings.TrimPrefix(s, "ch:"))
+		if err != nil || n < 1 || n > maxChannel {
+			return Format{}, fmt.Errorf("format %q: want ch:1 or more — the channel number printed on the module, with the module's first byte as the offset (channel 01 is ch:1)", s)
+		}
+		return Format{Kind: "ch", Ch: n}, nil
+	}
 	if strings.HasPrefix(s, "bit:") {
 		n, err := strconv.Atoi(strings.TrimPrefix(s, "bit:"))
 		if err != nil || n < 0 || n > 15 {
-			return Format{}, fmt.Errorf("format %q: want bit:0 … bit:15", s)
+			return Format{}, fmt.Errorf("format %q: want bit:0 … bit:15, or ch:N for a module's channel N", s)
 		}
 		return Format{Kind: "bit", Bit: n}, nil
 	}
@@ -174,7 +213,7 @@ func ParseFormat(s string) (Format, error) {
 	case "uint8", "int8", "uint16", "int16", "uint32", "int32", "float32":
 		return Format{Kind: s}, nil
 	}
-	return Format{}, fmt.Errorf("format %q: want bit:N, uint8, int8, uint16, int16, uint32, int32 or float32", s)
+	return Format{}, fmt.Errorf("format %q: want ch:N (a digital module's channel N, as printed on it), bit:N, uint8, int8, uint16, int16, uint32, int32 or float32", s)
 }
 
 // ParseManifest decodes a plcnext_manifest.yaml with KnownFields semantics
@@ -293,8 +332,11 @@ func (m Manifest) Validate() error {
 		if b.Offset+f.Bytes() > 512 {
 			errs = append(errs, fmt.Errorf("tag %s: %s at offset %d runs past the 512-byte image", b.Name, f, b.Offset))
 		}
-		if f.Kind == "bit" && (b.Scale != 0 || b.Bias != 0) {
+		if f.Digital() && (b.Scale != 0 || b.Bias != 0) {
 			errs = append(errs, fmt.Errorf("tag %s: scale/bias on a bit", b.Name))
+		}
+		if err := m.channelInModule(b, f); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	for _, mod := range m.Modules {
