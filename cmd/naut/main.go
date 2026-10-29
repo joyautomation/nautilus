@@ -70,7 +70,8 @@ Usage:
                           optommp manifest + tag file for the optommp driver,
                           or --modbus for the processor's Modbus map).
   naut plcnext <cmd>  Phoenix Contact PLCnext tools: browse (BusConductor
-                          state and the process image, on the controller)
+                          state and the process image, on the controller),
+                          import (a manifest from the bus's device list)
                           and tags (the tag file for a plcnext manifest).
   naut snmp <cmd>     SNMP tools: import | browse | serve | tags (switches, PDUs, UPSes)
   naut redfish <cmd>  Redfish tools: import | browse | serve | tags (server BMCs)

@@ -34,7 +34,7 @@ claims:
     claim: >-
       Bit and integer formats decode from and encode into the image at
       the manifest's byte offsets.
-    source: "#run-nautilus"
+    source: "#write-the-manifest"
     tests:
       - go ./plcnext TestCodec
   - id: PLX-005
@@ -63,6 +63,68 @@ claims:
       A bench measurement (2026-10-24), written up in
       docs/design/open-controllers.md §3. No automated test yet; the
       bench nightly is planned to record it per run.
+  # PLX-020…024 sit here, in page order (Write the manifest); numbered
+  # past the end so a claim appended elsewhere in the meantime keeps its id.
+  - id: PLX-020
+    claim: >-
+      `ch:N` binds channel N of the module whose first byte is the offset,
+      byte by byte (channel 01 is bit 0 of that byte, channel 09 bit 0 of
+      the next); on a 16-channel module it binds the same bits as
+      `bit:((N+7) mod 16)`, and the bench manifest in either spelling reads
+      and writes the same bytes.
+    source: "#write-the-manifest"
+    tests:
+      - go ./plcnext TestChannelSpellingBindsTheSameBits
+      - go ./plcnext TestChannelSpellingSameOnTheWire
+    partial: true
+    note: >-
+      Against the fake data-access service. The bit:N spelling of the same
+      layout was checked with eyes on the bench (2026-10-27); the ch:N
+      spelling has not been run on the controller.
+  - id: PLX-021
+    claim: >-
+      `ch:01` is accepted as channel 1; `ch:0` and non-numbers are refused;
+      with a module list, a `ch:N` that runs past its module is refused,
+      while `bit:N` is checked exactly as before.
+    source: "#write-the-manifest"
+    tests:
+      - go ./plcnext TestChannelFormatParseAndErrors
+  - id: PLX-022
+    claim: >-
+      `naut plcnext import` lays the device list out in bus order with
+      every module's frame length in both images, binds every channel of
+      the types it knows (digital as `ch:N`, analog inputs as int16), and
+      for the bench unit's four devices produces the hand-corrected
+      manifest's modules and bindings.
+    source: "#from-the-device-list"
+    tests:
+      - go ./plcnext TestImportBenchEqualsHandManifest
+      - go ./cmd/naut TestPlcnextImportCLI
+    partial: true
+    note: >-
+      The generated layout equals the one checked with eyes on the bench
+      (2026-10-27); the import itself has not been run on the controller.
+  - id: PLX-023
+    claim: >-
+      A device type the import does not know is laid out from its
+      `length` in bits with a commented example binding; without a length,
+      or with one that is not whole bytes, the import refuses, naming the
+      slot; types are read as hexadecimal; and it will not replace a
+      manifest or tag file that holds something else without `--force`.
+    source: "#from-the-device-list"
+    tests:
+      - go ./plcnext TestImportUnknownDevicesAndMistakes
+      - go ./cmd/naut TestPlcnextImportCLI
+  - id: PLX-024
+    claim: >-
+      `--check-bus` reads BusConductor's CONFIGURED and NUM_MODULES and
+      writes nothing; an unconfigured bus is an error, and a count that
+      differs from the list is refused.
+    source: "#from-the-device-list"
+    tests:
+      - go ./plcnext TestBusModulesReadsTheCountWithoutTouchingTheBus
+    partial: true
+    note: Against the fake data-access service; not run on the controller.
   - id: PLX-008
     claim: >-
       `transport` defaults to grpc and `output-watchdog` to 1s; `transport:

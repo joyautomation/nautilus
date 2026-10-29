@@ -29,6 +29,9 @@ func decode(b Binding, img []byte, byteOrder string) (any, error) {
 	switch f.Kind {
 	case "bit":
 		return bo.Uint16(span)>>uint(f.Bit)&1 == 1, nil
+	case "ch":
+		i, bit := f.bitAt(byteOrder)
+		return span[i]>>uint(bit)&1 == 1, nil
 	case "uint8":
 		raw = float64(span[0])
 	case "int8":
@@ -73,6 +76,19 @@ func encode(b Binding, v any, img []byte, byteOrder string) error {
 			w &^= 1 << uint(f.Bit)
 		}
 		bo.PutUint16(span, w)
+		return nil
+	}
+	if f.Kind == "ch" {
+		on, err := truthy(v)
+		if err != nil {
+			return fmt.Errorf("tag %s: %w", b.Name, err)
+		}
+		i, bit := f.bitAt(byteOrder)
+		if on {
+			span[i] |= 1 << uint(bit)
+		} else {
+			span[i] &^= 1 << uint(bit)
+		}
 		return nil
 	}
 	x, err := number(v)
