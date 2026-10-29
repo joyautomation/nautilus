@@ -284,6 +284,9 @@ func (d *Driver) Quality() map[string]nio.Quality { return d.base.Quality() }
 // InputNames lists the struct tags and the per-source companions.
 func (d *Driver) InputNames() []string { return d.base.InputNames() }
 
+// InputType is Base's: see hw.Base.InputType.
+func (d *Driver) InputType(name string) string { return d.base.InputType(name) }
+
 // OutputNames lists the command tags and Enable tags.
 func (d *Driver) OutputNames() []string { return d.base.OutputNames() }
 

@@ -391,6 +391,80 @@ func (d *Driver) InputNames() []string {
 	return out
 }
 
+// InputType names the IEC type an input delivers — for a manifest tag with
+// no type: that no program declares, so it can still start at the zero of
+// the right type before its site births (runtime.TagDef.DriverType). A
+// Sparkplug datatype maps to the IEC type of the same width (the generated
+// ST's mapping), a Template to the TYPE generated for it, an array to
+// ARRAY[0..n-1] OF either; __Online companions are BOOL and __LastBirthMs
+// is LINT (epoch milliseconds). "" for a name the driver does not deliver
+// or a datatype IEC has no spelling for (DataSet, Bytes, File).
+func (d *Driver) InputType(name string) string {
+	for _, n := range d.manifest.Nodes {
+		switch name {
+		case "":
+		case n.OnlineTagName():
+			return "BOOL"
+		case n.BirthTagName():
+			return "LINT"
+		}
+		for _, dv := range n.Devices {
+			if name == n.DeviceOnlineTagName(dv) {
+				return "BOOL"
+			}
+		}
+	}
+	for _, b := range d.inputs {
+		if b.Name != name {
+			continue
+		}
+		elem := iecDatatype(b.Type)
+		if elem == "" {
+			if _, isStruct := d.defs[b.Type]; !isStruct {
+				return ""
+			}
+			elem = b.Type
+		}
+		if b.ArrayLen > 0 {
+			return fmt.Sprintf("ARRAY[0..%d] OF %s", b.ArrayLen-1, elem)
+		}
+		return elem
+	}
+	return ""
+}
+
+// iecDatatype is a Sparkplug datatype's IEC spelling — codegen's stType,
+// for the scalars — or "" for anything else.
+func iecDatatype(sparkplugType string) string {
+	switch sparkplugType {
+	case "Boolean":
+		return "BOOL"
+	case "Int8":
+		return "SINT"
+	case "Int16":
+		return "INT"
+	case "Int32":
+		return "DINT"
+	case "Int64", "DateTime":
+		return "LINT"
+	case "UInt8":
+		return "USINT"
+	case "UInt16":
+		return "UINT"
+	case "UInt32":
+		return "UDINT"
+	case "UInt64":
+		return "ULINT"
+	case "Float":
+		return "REAL"
+	case "Double":
+		return "LREAL"
+	case "String", "Text", "UUID":
+		return "STRING"
+	}
+	return ""
+}
+
 // OutputNames returns the tags the driver accepts writes for: the writable
 // bindings (NCMD/DCMD) plus the synthesized __Rebirth triggers — for
 // runtime.Options.Outputs.

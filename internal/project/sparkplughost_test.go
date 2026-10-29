@@ -7,7 +7,6 @@ package project
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -173,9 +172,12 @@ func hostProject(t *testing.T, url, extra string) *Project {
 }
 
 // SPH-017: until its site births, a data tag is absent from the driver's
-// snapshot, so a program that reads it faults its scan; a program that guards
-// on `__Online` (false from t=0) does not. After the birth neither faults.
-func TestSparkplugHostAbsentTagFaultsTheScanUntilBirth(t *testing.T) {
+// snapshot — but it is a protocol input, so the tag store holds it at the zero
+// of its type and a program that reads it RUNS, on 0.0, instead of faulting
+// every scan while the site is dark. `__Online` is present (false) from t=0,
+// and the driver's quality says NotConnected for the data tag meanwhile. After
+// the birth the delivered value replaces the seed.
+func TestSparkplugHostUnbirthedTagReadsZeroUntilBirth(t *testing.T) {
 	url := testBroker(t, nil)
 	files := hostDriverFiles(url, "  rebirth-on-start: false\n")
 	files["nautilus.yaml"] = &fstest.MapFile{Data: []byte(`name: central
@@ -248,10 +250,14 @@ END_PROGRAM
 		t.Fatal(err)
 	}
 	st := rt.Stats()
-	if st.LogicErrors != 1 {
-		t.Errorf("a program reading an unbirthed tag: LogicErrors = %d, want its scan faulted", st.LogicErrors)
-	} else if !strings.Contains(st.LastError, "Edge1_ZONE1_FIT_001") {
-		t.Errorf("fault %q does not name the absent tag", st.LastError)
+	if st.LogicErrors != 0 {
+		t.Errorf("a program reading an unbirthed protocol tag faulted: %d (%s) — it must run on the seed", st.LogicErrors, st.LastError)
+	}
+	if v := rt.Tags().Real("BareOut"); v != 0 {
+		t.Errorf("BareOut = %v before the birth, want the seeded 0", v)
+	}
+	if q := rt.TagQuality("Edge1_ZONE1_FIT_001"); q != nio.NotConnected {
+		t.Errorf("unbirthed tag quality = %v, want NotConnected (a seed is not a reading)", q)
 	}
 	if len(st.Tasks) != 1 || st.Tasks[0].LogicErrors != 0 {
 		t.Errorf("a program guarded on __Online must not fault before the birth: %+v", st.Tasks)
@@ -268,8 +274,8 @@ END_PROGRAM
 		t.Fatal(err)
 	}
 	st = rt.Stats()
-	if st.LogicErrors != 1 {
-		t.Errorf("after the birth the bare program still faults: LogicErrors = %d (%s)", st.LogicErrors, st.LastError)
+	if st.LogicErrors != 0 {
+		t.Errorf("after the birth the bare program faults: LogicErrors = %d (%s)", st.LogicErrors, st.LastError)
 	}
 	if st.Tasks[0].LogicErrors != 0 {
 		t.Errorf("guarded task faulted after the birth: %+v", st.Tasks[0])

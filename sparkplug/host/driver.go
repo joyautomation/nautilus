@@ -244,8 +244,9 @@ var _ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
 // __Online=false. Once Start has been called it never errors: Sparkplug's
 // last value *is* the value, so a death holds values rather than clearing
 // them, and quality rides on the synthesized companion tags. Data metrics
-// stay absent until first seen, which preserves "reads fault" for a site that
-// has never birthed.
+// stay absent from the delivery until first seen; the runtime holds them at
+// their init: or zero meanwhile (a protocol input, runtime.TagDef.Comms) and
+// Quality says NotConnected.
 //
 // Before Start it errors like eip, so a project wired up but never started
 // fails loudly rather than scanning zeros.
@@ -268,7 +269,7 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 // SAME DELIVERY, SAME SEMANTICS as ReadInputs — before Start it errors with
 // the identical "host: not connected yet", offline nodes are still in the
 // snapshot with __Online=false, and a data metric not yet seen is still
-// absent so the scan that reads it faults. dst is left holding exactly what
+// absent (the tag store holds its seed). dst is left holding exactly what
 // the driver holds, never a stale leftover.
 //
 // It deliberately carries no `var _ nio.BatchReader = (*Driver)(nil)`

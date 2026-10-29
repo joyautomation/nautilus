@@ -295,7 +295,11 @@ read the driver's status, bound in the manifest like any other tag:
 
 `naut plcnext tags` puts them in the tag file as inputs. `__Online`
 (BOOL) is true while the inputs are good: the image is fresh and the
-bus runs. `__Outages` (DINT) counts the times it went false.
+bus runs. The Axioline image is local I/O, so a channel input the driver
+has not delivered yet still faults the scan that reads it, unlike a
+protocol driver's input, which reads as zero until delivered (see [Inputs
+from a device that is
+down](/guides/tag-model/#inputs-from-a-device-that-is-down)). `__Outages` (DINT) counts the times it went false.
 `__WatchdogTrips` (DINT) counts the times the output frame went to zero
 without the driver choosing it: naut stalled for longer than
 `output-watchdog` between two writes to the page, the shim reported its

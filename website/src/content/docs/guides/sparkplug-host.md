@@ -146,16 +146,16 @@ declared in the manifest like anything else:
 - `<site>__Rebirth` — `BOOL` **output**; a rising edge sends NCMD Node
   Control/Rebirth to that site — the operator's forced-resync button.
 
-**Reads fault until first birth — guard on `__Online`.** A tag's data
+**Tags read zero until first birth — guard on `__Online`.** A tag's data
 stays *absent* from the driver's snapshot until the site has birthed at
-least once, and reading an absent tag faults the scan — correctly and
-loudly, the same contract every manifest project has for an unbound
-input. `__Online` itself is present from t=0 (`false` until the first
-birth), so interlock logic can gate on it safely before any data has
-ever arrived: `WellAlarm := W6__Online AND W6_Well_Level > 90.0`, never
-`WellAlarm := W6_Well_Level > 90.0` alone. Keep per-site logic in
-per-site tasks where practical — one dead site then faults one task, not
-the whole controller.
+least once. In the tag store it reads as its `init:`, or the zero of its
+type, meanwhile, so a site that is dark when the host starts does not
+fault the programs that read its tags (see [Inputs from a device that is
+down](/guides/tag-model/#inputs-from-a-device-that-is-down)); its quality
+is `NotConnected` until the birth. A zero is not a reading, so interlock
+logic gates on `__Online`, which is present from t=0 (`false` until the
+first birth): `WellAlarm := W6__Online AND W6_Well_Level > 90.0`, never
+`WellAlarm := W6_Well_Level > 90.0` alone.
 
 ## Per-tag quality
 

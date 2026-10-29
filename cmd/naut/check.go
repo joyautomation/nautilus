@@ -414,6 +414,19 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		return 1, 0
 	}
 
+	// A protocol input reads as its init: (or the zero of its type) until
+	// its device first answers — but only when some type is knowable for
+	// it. One with none stays absent until then, which faults nothing (no
+	// program reads it, or the program would have typed it) but leaves an
+	// HMI or a Sparkplug birth with no value for it. Say so, with the fix.
+	for _, name := range rt.UntypedCommsInputs() {
+		warns++
+		fmt.Printf("%s: warning: input %q comes from a communications driver but has no "+
+			"knowable type (no type:, no program declares it, the driver cannot say), "+
+			"so it has no value until the device first delivers one — give it a type: "+
+			"to have it read as zero until then\n", dir, name)
+	}
+
 	// Keyed by ir.NameKey: tag names are case-insensitive identifiers, so a
 	// program's `level` binds the manifest's Level.
 	declared := make(map[string]bool, len(proj.Runtime.Tags))

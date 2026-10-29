@@ -137,10 +137,15 @@ does: a member of a UDT keeps its own timestamp while a sibling member
 changes. `ServerTimestamp` is the time of the read.
 
 Three limits of the current server, found by its black-box runs and tracked
-as issues: a driver input that has never been delivered has no node until
-its first value arrives, so `Bad_NotConnected` cannot be observed and a
-client that browsed early must browse again
-([#420](https://github.com/joyautomation/nautilus/issues/420)); and a
+as issues: a local-I/O input (`plcnext`, `optommp`) that has never been
+delivered has no node until its first value arrives, and a client that
+browsed early must browse again
+([#420](https://github.com/joyautomation/nautilus/issues/420)). A protocol
+driver's input (Modbus, EtherNet/IP, Sparkplug host, the IT pollers) is
+seeded with its `init:` or zero (see [Inputs from a device that is
+down](/guides/tag-model/#inputs-from-a-device-that-is-down)), so it has a
+node from the start and reads `Bad_NotConnected` until the device answers;
+and a
 change of quality alone, with the value unchanged, is visible to a Read but
 not yet pushed to a subscription
 ([#419](https://github.com/joyautomation/nautilus/issues/419)); and a

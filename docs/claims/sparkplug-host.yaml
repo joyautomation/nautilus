@@ -145,12 +145,13 @@ claims:
   - id: SPH-017
     claim: >-
       A data tag stays absent from the driver's snapshot until its site has
-      birthed (so reading it faults the scan), while `__Online` is present
-      from t=0 as false.
+      birthed, and reads as its init: or the zero of its type meanwhile (a
+      program reading it runs; its quality is NotConnected), while
+      `__Online` is present from t=0 as false.
     source: "#the-online-rebirth-companions"
     tests:
       - go ./sparkplug/host TestStateNBirthAppliesValues
-      - go ./internal/project TestSparkplugHostAbsentTagFaultsTheScanUntilBirth
+      - go ./internal/project TestSparkplugHostUnbirthedTagReadsZeroUntilBirth
   - id: SPH-018
     claim: >-
       `Quality()` reports non-Good entries only: a binding never delivered

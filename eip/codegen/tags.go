@@ -37,9 +37,9 @@ var elementary = map[string]bool{
 //
 // skip holds path.Match globs for bindings to LEAVE OUT. A tag may be
 // declared once, so a project that needs to say something the import cannot
-// know — most often an `init:` on an input, so the logic runs before the
-// first poll instead of faulting — declares that tag by hand and skips it
-// here. That is the "narrow the generator's scope" escape hatch, and it
+// know — most often an `init:` on an input, so the logic sees that value
+// rather than the zero of its type before the first poll — declares that
+// tag by hand and skips it here. That is the "narrow the generator's scope" escape hatch, and it
 // exists so the alternative (an override that silently survives
 // regeneration) never has to.
 func TagsYAML(m eip.Manifest, host string, skip []string) ([]byte, error) {

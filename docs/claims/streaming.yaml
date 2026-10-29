@@ -273,6 +273,10 @@ claims:
     source: "#per-tag-quality"
     tests:
       - go ./server TestFrameCarriesQuality
+    note: >-
+      The page also notes that a protocol driver's input is seeded and so
+      appears in tags beside its notConnected; that is tag-model TAG-046 and
+      TAG-048, not this claim.
 
   - id: STR-030
     claim: The quality wire tokens are good, stale, bad and notConnected.

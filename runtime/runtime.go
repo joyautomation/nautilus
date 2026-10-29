@@ -154,6 +154,7 @@ type taskRun struct {
 	lastScan time.Time
 	stats    TaskStats
 	late     lateTracker // under mu, like stats
+	fault    faultTrack  // logic-fault transitions for the journal, under mu
 }
 
 // TagMeta is HMI-facing tag documentation: a human description and the
@@ -248,6 +249,19 @@ type Runtime struct {
 	lastScan time.Time
 	stats    ScanStats
 	late     lateTracker // the main task's, under mu like stats
+	// logicFault / ioFault are the main task's fault transitions for the
+	// journal (faultlog.go), under mu like the counters they shadow.
+	logicFault faultTrack
+	ioFault    faultTrack
+
+	// log receives the fault transitions; nil means slog.Default() at the
+	// time of the log call, so a process that installs its handler after
+	// New still gets them. Tests set it.
+	log *slog.Logger
+
+	// untypedComms names the Comms inputs New could not seed because no
+	// type was knowable for them — see expandTags and UntypedCommsInputs.
+	untypedComms []string
 }
 
 // onScanEntry is one registered OnScan observer, identified by an id so
@@ -400,7 +414,8 @@ func New(o Options) (*Runtime, error) {
 	if err := checkBindings(prog, tasks, o.Tags); err != nil {
 		return nil, err
 	}
-	if o, err = expandTags(o, types, unionGlobals(prog, tasks)); err != nil {
+	var untyped []string
+	if o, untyped, err = expandTags(o, types, unionGlobals(prog, tasks)); err != nil {
 		return nil, err
 	}
 
@@ -452,7 +467,7 @@ func New(o Options) (*Runtime, error) {
 		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
 		clock: o.Clock, types: types, tasks: tasks,
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
-		alwaysWrite: o.AlwaysWriteOutputs,
+		alwaysWrite: o.AlwaysWriteOutputs, untypedComms: untyped,
 	}
 	// Flag the output tags in the store so a write to one stamps the
 	// output generation Scan reads (see Tags.markOutputs).
@@ -979,7 +994,9 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	}
 	err := tr.prog.Run(r.tags)
 
-	execS := time.Since(t0).Seconds()
+	t1 := time.Now()
+	execS := t1.Sub(t0).Seconds()
+	msg := errText(err)
 	tr.mu.Lock()
 	tr.stats.Count++
 	tr.stats.LastMs = execS * 1000
@@ -988,9 +1005,12 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	}
 	if err != nil {
 		tr.stats.LogicErrors++
-		tr.stats.LastError = err.Error()
+		tr.stats.LastError = msg
 	}
+	ev := tr.fault.observe(msg, t1)
 	tr.mu.Unlock()
+	// After the unlock: Stats() takes tr.mu, and a log sink may be slow.
+	r.logFault(tr.name, "logic", ev)
 }
 
 // Scan executes one full cycle: read inputs, run the program, write outputs.
@@ -1109,9 +1129,23 @@ func lateUs(t0, due time.Time, periodS float64, target time.Duration) float64 {
 }
 
 // recordScan folds one cycle's timings into the diagnostics.
+//
+// It also decides the scan's fault transitions for the journal (faultlog.go)
+// under the same lock, and writes them after releasing it.
 func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bool, ioErr, logicErr error, lateUs float64) {
+	ioMsg, logicMsg := errText(ioErr), errText(logicErr)
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.recordScanLocked(t0, t1, t2, t3, periodS, first, ioMsg, logicMsg, lateUs)
+	ioEv := r.ioFault.observe(ioMsg, t3)
+	logicEv := r.logicFault.observe(logicMsg, t3)
+	r.mu.Unlock()
+	r.logFault(MainTaskName, "I/O", ioEv)
+	r.logFault(MainTaskName, "logic", logicEv)
+}
+
+// recordScanLocked is recordScan's bookkeeping; the caller holds r.mu. The
+// errors arrive as their messages ("" for none), built once by the caller.
+func (r *Runtime) recordScanLocked(t0, t1, t2, t3 time.Time, periodS float64, first bool, ioMsg, logicMsg string, lateUs float64) {
 	s := &r.stats
 
 	scanMs := t3.Sub(t0).Seconds() * 1000
@@ -1154,16 +1188,16 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 	}
 	s.Histogram[b]++
 
-	if ioErr != nil {
+	if ioMsg != "" {
 		s.IOErrors++
 		s.IOHealthy = false
-		s.LastIOError = ioErr.Error()
+		s.LastIOError = ioMsg
 	} else {
 		s.IOHealthy = true
 	}
-	if logicErr != nil {
+	if logicMsg != "" {
 		s.LogicErrors++
-		s.LastError = logicErr.Error()
+		s.LastError = logicMsg
 	}
 }
 
@@ -1204,6 +1238,17 @@ func (r *Runtime) Meta() map[string]TagMeta { return r.meta }
 
 // Inputs returns the driver-bound input tag names.
 func (r *Runtime) Inputs() []string { return r.inputs }
+
+// UntypedCommsInputs names the inputs a communications driver delivers
+// (TagDef.Comms) that New could NOT seed, because nothing said what type
+// they are: no type:, no program declaring them, no type from the driver's
+// binding. Each stays absent until its first delivery, exactly as every
+// input used to. No program reads one (a program that did would have
+// declared its type), so this is a report, not a fault — `naut check`
+// lists them so a project can add the type: and get the seed.
+func (r *Runtime) UntypedCommsInputs() []string {
+	return append([]string(nil), r.untypedComms...)
+}
 
 // Outputs returns the driver-bound output tag names.
 func (r *Runtime) Outputs() []string { return r.outputs }

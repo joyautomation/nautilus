@@ -411,6 +411,39 @@ func (d *Driver) InputNames() []string {
 	return append([]string(nil), d.inputs...)
 }
 
+// InputType names the IEC type an input delivers, from its binding's
+// format — what a manifest tag with no type: that no program declares
+// starts at the zero of until the first poll (runtime.TagDef.DriverType):
+// BOOL for coils, discretes, bool and bit:N; DINT for an unscaled integer
+// format, which is what the driver delivers (int64); REAL for a float
+// format or anything scaled. A source's __Online companion is BOOL. ""
+// for a name the driver does not deliver.
+func (d *Driver) InputType(name string) string {
+	for _, s := range d.sources {
+		if s.cfg.OnlineTagName() == name {
+			return "BOOL"
+		}
+	}
+	for _, t := range d.manifest.Tags {
+		if t.Name != name {
+			continue
+		}
+		f, err := t.format()
+		if err != nil {
+			return ""
+		}
+		switch {
+		case f.Kind == "bool" || f.Kind == "bit":
+			return "BOOL"
+		case f.integer() && (t.Scale == 0 || t.Scale == 1) && t.Offset == 0:
+			return "DINT"
+		default:
+			return "REAL"
+		}
+	}
+	return ""
+}
+
 // OutputNames returns the tags the driver accepts writes for: the writable
 // bindings plus each source's Enable tag — for runtime.Options.Outputs. An
 // Enable tag is a command to the DRIVER (park or wake the source), not a
@@ -469,8 +502,9 @@ func (d *Driver) Stop() {
 // included. Once Start has been called it never errors: a dead source holds
 // its last values (the tag store must never see a zero because a cable was
 // pulled) and quality rides on Quality() and the companions. A data tag
-// never delivered stays absent, which preserves "reads fault" for a source
-// that has never answered — __Online is the guard.
+// never delivered stays absent from the delivery: the runtime holds it at
+// its init: or zero (a protocol input, runtime.TagDef.Comms) and Quality
+// says NotConnected — __Online is the guard.
 //
 // Before Start it errors, so a project wired up but never started fails
 // loudly rather than scanning zeros.

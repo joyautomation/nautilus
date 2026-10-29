@@ -63,7 +63,9 @@ claims:
       - go ./runtime TestScanReadOfUnwrittenTagFaults
     note: >-
       A program reading a declared but never-written tag faults with
-      "undefined tag Level", and runs once the tag is written.
+      "undefined tag Level", and runs once the tag is written. The page's
+      aside that a communications driver's input is seeded (so it has been
+      written, by the seed) is tag-model TAG-046.
 
   - id: ST-006
     claim: >-
