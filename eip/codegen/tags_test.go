@@ -24,7 +24,7 @@ func tagsFixture() eip.Manifest {
 
 func render(t *testing.T, m eip.Manifest, skip ...string) string {
 	t.Helper()
-	raw, err := TagsYAML(m, "plc1", skip)
+	raw, err := TagsYAML(m, "plc1", "", skip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestTagsYAMLSkip(t *testing.T) {
 // renamed on the controller — which would silently regenerate a tag the
 // manifest also declares, and that collision is an error at load.
 func TestTagsYAMLRejectsStaleSkip(t *testing.T) {
-	_, err := TagsYAML(tagsFixture(), "plc1", []string{"Nonexistent*"})
+	_, err := TagsYAML(tagsFixture(), "plc1", "", []string{"Nonexistent*"})
 	if err == nil {
 		t.Fatal("a skip pattern matching nothing was accepted")
 	}
@@ -119,7 +119,30 @@ func TestTagsYAMLHeader(t *testing.T) {
 func TestTagsYAMLRejectsUndeclaredType(t *testing.T) {
 	m := tagsFixture()
 	m.Tags = append(m.Tags, eip.TagBinding{Name: "X", Device: "X", Type: "Ghost_UDT"})
-	if _, err := TagsYAML(m, "plc1", nil); err == nil {
+	if _, err := TagsYAML(m, "plc1", "", nil); err == nil {
 		t.Fatal("a binding naming an undeclared UDT was accepted")
+	}
+}
+
+// The driver's <name>__Online companion goes in as a BOOL input with a desc
+// saying to check it, so nobody declares it by hand; a skip pattern can
+// still leave it out, and "" omits it.
+func TestTagsYAMLEmitsTheOnlineCompanion(t *testing.T) {
+	raw, err := TagsYAML(tagsFixture(), "plc1", "line2__Online", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "- { name: line2__Online, role: input, type: BOOL, desc: ") {
+		t.Errorf("companion missing:\n%s", raw)
+	}
+	raw, err = TagsYAML(tagsFixture(), "plc1", "line2__Online", []string{"*__Online"})
+	if err != nil {
+		t.Fatalf("a skip pattern matching only the companion must count as used: %v", err)
+	}
+	if strings.Contains(string(raw), "name: line2__Online") {
+		t.Errorf("skipped companion still emitted:\n%s", raw)
+	}
+	if strings.Contains(render(t, tagsFixture()), "__Online") {
+		t.Error(`online "" still emitted a companion`)
 	}
 }

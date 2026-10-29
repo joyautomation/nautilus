@@ -5,6 +5,9 @@
 # Documentation belongs in nautilus.yaml's tag-meta:, not here — a
 # Logix controller keeps tag descriptions in its offline project file,
 # so the import cannot recover them and would overwrite yours.
+#
+# eip__Online is synthesized by the driver, true while the controller is
+# connected and polled: check it before trusting this controller's values.
 - { name: Line_Accept, role: input }
 - { name: Line_BatchId, role: output }
 - { name: Line_Fault, role: input }
@@ -12,3 +15,4 @@
 - { name: Line_Request, role: output }
 - { name: Line_Status, role: input, type: LineStatus }
 - { name: Line_TankLevel, role: input }
+- { name: eip__Online, role: input, type: BOOL, desc: "controller 127.0.0.1 connected and every scan class polled — interlock on this" }

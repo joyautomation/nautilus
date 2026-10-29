@@ -39,10 +39,16 @@ var elementary = map[string]bool{
 // declared once, so a project that needs to say something the import cannot
 // know — most often an `init:` on an input, so the logic sees that value
 // rather than the zero of its type before the first poll — declares that
-// tag by hand and skips it here. That is the "narrow the generator's scope" escape hatch, and it
-// exists so the alternative (an override that silently survives
-// regeneration) never has to.
-func TagsYAML(m eip.Manifest, host string, skip []string) ([]byte, error) {
+// tag by hand and skips it here. That is the "narrow the generator's scope"
+// escape hatch, and it exists so the alternative (an override that silently
+// survives regeneration) never has to.
+//
+// online is the driver's synthesized connection-status input,
+// "<driver name>__Online" (project.EIPOnlineTag works the name out the way
+// the loader will); it goes in as a BOOL input like any binding — skip
+// patterns apply to it too — so the logic can check it without anyone
+// declaring it by hand. "" leaves it out.
+func TagsYAML(m eip.Manifest, host, online string, skip []string) ([]byte, error) {
 	udt := map[string]bool{}
 	for _, t := range m.Types {
 		udt[t.Name] = true
@@ -56,6 +62,11 @@ func TagsYAML(m eip.Manifest, host string, skip []string) ([]byte, error) {
 		"Documentation belongs in nautilus.yaml's tag-meta:, not here — a",
 		"Logix controller keeps tag descriptions in its offline project file,",
 		"so the import cannot recover them and would overwrite yours.",
+	}
+	if online != "" {
+		header = append(header, "",
+			online+" is synthesized by the driver, true while the controller is",
+			"connected and polled: check it before trusting this controller's values.")
 	}
 	if len(skip) > 0 {
 		header = append(header, "",
@@ -93,6 +104,14 @@ func TagsYAML(m eip.Manifest, host string, skip []string) ([]byte, error) {
 			tag.Type = t.Type
 		}
 		out = append(out, tag)
+	}
+	if online != "" {
+		if matchesAny(online, skip) {
+			skipped++
+		} else {
+			out = append(out, tagfile.Tag{Name: online, Role: "input", Type: "BOOL",
+				Desc: "controller " + host + " connected and every scan class polled — interlock on this"})
+		}
 	}
 	// A skip pattern that matches nothing is almost always a stale exclusion
 	// left behind after a tag was renamed on the controller — which silently

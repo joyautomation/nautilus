@@ -1203,24 +1203,7 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		}
 		configs = []DriverConfig{m.Driver}
 	}
-	// Names default to the type, deduped "eip-2" — stable, predictable, and
-	// only needed once two drivers share a manifest. An explicit name that
-	// collides is caught by NewMulti, which checks the final set.
-	counts := map[string]int{}
-	nameOf := func(c DriverConfig) string {
-		if c.Name != "" {
-			return c.Name
-		}
-		base := strings.ToLower(c.Type)
-		if base == "" {
-			base = "memory"
-		}
-		counts[base]++
-		if n := counts[base]; n > 1 {
-			return fmt.Sprintf("%s-%d", base, n)
-		}
-		return base
-	}
+	names := driverNames(configs)
 	switch len(configs) {
 	case 0:
 		// No driver section at all: the memory loopback, as ever.
@@ -1231,7 +1214,7 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		// that names a companion tag after itself (eip's <name>__Online)
 		// gets the same name its status row and Sparkplug device carry.
 		c := configs[0]
-		c.Name = nameOf(c)
+		c.Name = names[0]
 		d, err := buildDriver(fsys, c)
 		if err != nil {
 			return nil, nil, err
@@ -1240,7 +1223,7 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 	}
 	named := make([]nio.NamedDriver, 0, len(configs))
 	for i, c := range configs {
-		name := nameOf(c)
+		name := names[i]
 		c.Name = name
 		d, err := buildDriver(fsys, c)
 		if err != nil {
@@ -1253,6 +1236,34 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		return nil, nil, fmt.Errorf("drivers: %w", err)
 	}
 	return multi, named, nil
+}
+
+// driverNames resolves each configured driver's name: its name: when it has
+// one, else its type, deduped "eip-2" — stable, predictable, and only needed
+// once two drivers share a manifest. An explicit name that collides is
+// caught by NewMulti, which checks the final set. Shared with
+// EIPOnlineTag, so `naut eip import` names the companion exactly as Load
+// will.
+func driverNames(configs []DriverConfig) []string {
+	counts := map[string]int{}
+	out := make([]string, len(configs))
+	for i, c := range configs {
+		if c.Name != "" {
+			out[i] = c.Name
+			continue
+		}
+		base := strings.ToLower(c.Type)
+		if base == "" {
+			base = "memory"
+		}
+		counts[base]++
+		if n := counts[base]; n > 1 {
+			out[i] = fmt.Sprintf("%s-%d", base, n)
+		} else {
+			out[i] = base
+		}
+	}
+	return out
 }
 
 func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
