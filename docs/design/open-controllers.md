@@ -433,7 +433,9 @@ priority. The 1-2-5 buckets are too coarse to separate scan times inside
 - **Watchdog values per channel.** The manifest sets the unit's watchdog
   time; which outputs it moves, and to what, stays groov Manage
   configuration (the driver reports how many bound outputs have one).
-  Not switched on on the bench yet (§2.3).
+  On the bench (2026-10-27) DO7 → on and DO11 → off are set, a 1 s
+  watchdog trips on a SIGSTOP of naut, and since #448 the driver puts the
+  outputs back within a second of the resume.
 - **The scan time itself.** Driver `priority:` (§2.3) makes the driver
   start on time; the 2–5 ms a scan takes is inside mmpServer and not
   ours to shorten. Going above mmpServer's 30 would starve the server
