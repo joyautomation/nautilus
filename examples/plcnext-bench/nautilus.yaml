@@ -42,3 +42,6 @@ tags:
   - { name: BenchDtS,     role: state, init: 0.0, unit: "s", desc: "Scan interval handed to bench.st" }
   - { name: BlinkPeriodS, role: setpoint, init: 1.0, unit: "s", desc: "Heartbeat period on the DO16's output 16" }
   - { name: Blink,        role: state, init: false, desc: "Heartbeat state" }
+  - { name: HoldAfterOutage, role: setpoint, init: false, desc: "Hold the mirrored outputs off after an outage until BenchAck (off: they come back on their own)" }
+  - { name: BenchAck,     role: setpoint, init: false, desc: "Operator acknowledge: release the outputs after an outage (momentary)" }
+  - { name: BenchHeld,    role: state, init: false, desc: "Outputs held off after an outage or watchdog trip until BenchAck" }

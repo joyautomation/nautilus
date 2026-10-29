@@ -659,7 +659,21 @@ func plcnextStatus(h plcnext.Health) server.DriverStatus {
 			s.Metrics = append(s.Metrics, server.DriverMetric{Label: "held reads", Value: float64(sh.Held), Volatile: true})
 		}
 	}
+	s.Metrics = append(s.Metrics, outageMetrics(h.Outages, h.WatchdogTrips)...)
 	return s
+}
+
+// outageMetrics are the counts a program reads through a driver's status
+// tags (<id>__Outages, <id>__WatchdogTrips), shown once there is one.
+func outageMetrics(outages, trips uint64) []server.DriverMetric {
+	var out []server.DriverMetric
+	if outages > 0 {
+		out = append(out, server.DriverMetric{Label: "outages", Value: float64(outages)})
+	}
+	if trips > 0 {
+		out = append(out, server.DriverMetric{Label: "wd trips", Value: float64(trips)})
+	}
+	return out
 }
 
 // optommpStatus is the one-row status of a groov chassis: the processor
@@ -720,6 +734,7 @@ func optommpStatus(h optommp.Health) server.DriverStatus {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "watchdog", Value: float64(h.WatchdogMs),
 			Text: fmt.Sprintf("%d ms, %d of %d bound outputs have a watchdog value", h.WatchdogMs, h.Armed, h.Armable)})
 	}
+	s.Metrics = append(s.Metrics, outageMetrics(h.Outages, h.WatchdogTrips)...)
 	return s
 }
 

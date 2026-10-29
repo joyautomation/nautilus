@@ -23,6 +23,9 @@ tests:
       DI_13: false
       DI_14: false
       DI_15: false
+      AXC__Online: true
+      AXC__Outages: 0
+      AXC__WatchdogTrips: 0
     # Half a period is ten 50 ms scans; REAL accumulation lands the toggle
     # on the tenth or eleventh scan, so each step allows one scan of slack.
     steps:
@@ -39,3 +42,52 @@ tests:
       - given: { DI_00: true, DI_14: true }
         advance: 100ms
         expect: { DO_00: true, DO_14: true, DO_07: false }
+
+  # The driver's status tags as a program sees them: a stall of the shim
+  # (an outage) seals the outputs off; an acknowledge while the image is
+  # still stale does nothing, one after it is fresh releases them.
+  - name: an outage holds the outputs until it is acknowledged
+    given: { <<: *inputs, HoldAfterOutage: true }
+    steps:
+      - given: { DI_03: true }
+        advance: 100ms
+        expect: { DO_03: true, BenchHeld: false }
+      - given: { AXC__Online: false, AXC__Outages: 1 }
+        advance: 100ms
+        expect: { DO_03: false, BenchHeld: true }
+      - given: { BenchAck: true }
+        advance: 100ms
+        expect: { DO_03: false, BenchHeld: true, BenchAck: false }
+      - given: { AXC__Online: true }
+        advance: 100ms
+        expect: { DO_03: false, BenchHeld: true }
+      - given: { BenchAck: true }
+        advance: 100ms
+        expect: { DO_03: true, BenchHeld: false }
+
+  # A naut restarted after the shim's watchdog dropped the frame starts
+  # with the trip already counted: held from the first scan.
+  - name: a restart after a watchdog trip starts held
+    given:
+      <<: *inputs
+      HoldAfterOutage: true
+      DI_03: true
+      AXC__WatchdogTrips: 1
+    steps:
+      - advance: 100ms
+        expect: { DO_03: false, BenchHeld: true }
+      - given: { BenchAck: true }
+        advance: 100ms
+        expect: { DO_03: true, BenchHeld: false }
+
+  # HoldAfterOutage starts off: an outage drops nothing it did not have to,
+  # and switching the hold on afterwards does not hold for the old outage.
+  - name: with the hold off the outputs come back on their own
+    given: *inputs
+    steps:
+      - given: { DI_03: true, AXC__Online: false, AXC__Outages: 1 }
+        advance: 100ms
+        expect: { DO_03: true, BenchHeld: false }
+      - given: { AXC__Online: true, HoldAfterOutage: true }
+        advance: 100ms
+        expect: { DO_03: true, BenchHeld: false }

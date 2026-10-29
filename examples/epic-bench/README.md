@@ -55,6 +55,13 @@ naut run   .     # poll the EPIC for real: dashboard + tag API on http://localho
 puts a 1 Hz heartbeat on output 11 (`BlinkPeriodS` is an operator
 setpoint), copies the two wired analog channels onto `BenchTempC` and
 `BenchVoltsV`, and publishes the temperature to scratchpad float 0.
+With the `HoldAfterOutage` setpoint on (it starts off, so the bench
+behaves as before), after an outage (the EPIC unreachable, the stream
+late, or its communication watchdog possibly tripped) the lamps stay
+dark until `BenchAck` is written: the driver's status tags `EPIC__Online`,
+`EPIC__Outages` and `EPIC__WatchdogTrips`, which the import binds, go
+into the `IoHold` block in `lib/io_hold.st`. That is tested in virtual
+time only, not yet on the bench.
 
 A scan is the fewest OptoMMP requests the bindings allow, because each
 one costs the same ≈ 0.75 ms inside the processor whatever its size: the

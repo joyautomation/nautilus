@@ -35,7 +35,7 @@ func TestPlcnextImportCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Modules) != 4 || len(m.Tags) != 36 || m.Transport != plcnext.TransportShm {
+	if len(m.Modules) != 4 || len(m.Tags) != 39 || m.Transport != plcnext.TransportShm {
 		t.Errorf("manifest: %d modules, %d tags, transport %s", len(m.Modules), len(m.Tags), m.Transport)
 	}
 	tags, err := os.ReadFile(filepath.Join(dir, "tags", "plcnext.yaml"))

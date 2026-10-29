@@ -18,8 +18,11 @@
 # bench.st is deliberately small — a heartbeat on the last output, the
 # pushbuttons mirrored to the outputs, the two wired analog channels copied
 # onto named tags and the temperature published to the EPIC's scratchpad —
-# because the point of this project is the round trip, not the logic. The
-# same project runs on the EPIC itself; see README.md.
+# because the point of this project is the round trip, not the logic. One
+# addition: with HoldAfterOutage on, after an outage the lamps stay dark
+# until BenchAck is written (lib/io_hold.st, the driver's EPIC__Online /
+# __Outages / __WatchdogTrips status tags). The same project runs on the
+# EPIC itself; see README.md.
 name: epic-bench
 
 server:
@@ -44,3 +47,6 @@ tags:
   - { name: Blink,         role: state, init: false, desc: "Heartbeat state" }
   - { name: BenchTempC,    role: state, init: 0.0, unit: "°C", desc: "ICTD probe on slot 2 channel 0" }
   - { name: BenchVoltsV,   role: state, init: 0.0, unit: "V", desc: "Voltage input on slot 3 channel 0" }
+  - { name: HoldAfterOutage, role: setpoint, init: false, desc: "Hold the lamps dark after an outage until BenchAck (off: they come back on their own)" }
+  - { name: BenchAck,      role: setpoint, init: false, desc: "Operator acknowledge: release the lamps after an outage (momentary)" }
+  - { name: BenchHeld,     role: state, init: false, desc: "Lamps held dark after an outage or watchdog trip until BenchAck" }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -108,8 +109,13 @@ func TestDriverNotConnectedBeforeFirstScan(t *testing.T) {
 	if q := drv.Quality()["EPIC_M0_DI00"]; q != nio.NotConnected {
 		t.Errorf("before Start: %s", q)
 	}
-	if v, _ := drv.ReadInputs(); len(v) != 0 {
-		t.Errorf("before Start the driver delivered %v", v)
+	// Only the driver's own status, which a program may read from scan one.
+	want := nio.Values{"EPIC__Online": false, "EPIC__Outages": int64(0), "EPIC__WatchdogTrips": int64(0)}
+	if v, _ := drv.ReadInputs(); !reflect.DeepEqual(v, want) {
+		t.Errorf("before Start the driver delivered %v, want %v", v, want)
+	}
+	if q, ok := drv.Quality()["EPIC__Online"]; ok {
+		t.Errorf("a status point has quality %s; it is the driver's own and always Good", q)
 	}
 }
 

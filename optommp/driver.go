@@ -41,6 +41,18 @@ package optommp
 // (readbackSettle); Good otherwise. An output tag's value is the program's
 // command — the runtime takes only inputs from a driver — so that last
 // case is how a module doing something else reaches the screen.
+//
+// Status for the program: the online, outages and watchdog-trips points
+// are the driver's own state, delivered as inputs from New on and always
+// Good, so a program can hold its outputs after an outage until an
+// operator acknowledges it (recovery itself stays automatic). online is
+// true while a session is up and, when streaming, the stream is not late;
+// outages counts its falls. watchdog-trips counts the times the unit's
+// watchdog (when on) may have fired: the rising edge of rearm's verdict
+// within a session, and a reconnect whose gap since the last request of
+// the session before outran the watchdog. A watchdog that fired while
+// nautilus itself was not running cannot be seen — a program covers that
+// with FIRST_SCAN().
 
 import (
 	"context"
@@ -139,6 +151,13 @@ type Driver struct {
 	custom   bool // fetch through the custom data area
 	outputs  map[string]Binding
 	expect   map[int]uint32 // slot → module type the manifest names
+	tags     []Binding      // the memory-map bindings, in manifest order
+	status   []Binding      // the driver's own status points
+
+	// Owned by the loop: when the last session's last request went out,
+	// and how long before the new session's first one that was.
+	lastSent     time.Time
+	reconnectGap time.Duration
 
 	mu             sync.Mutex
 	in             map[string]any
@@ -162,6 +181,9 @@ type Driver struct {
 	writeGate func() bool
 
 	connected atomic.Bool
+	online    atomic.Bool   // the status point: a session up, inputs fresh
+	outages   atomic.Uint64 // times online fell
+	trips     atomic.Uint64 // times the unit's watchdog may have fired
 	reads     atomic.Uint64
 	writes    atomic.Uint64
 	errs      atomic.Uint64
@@ -220,8 +242,15 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	for _, mod := range m.Modules {
 		d.expect[mod.Slot] = uint32(mod.Type)
 	}
+	for _, b := range m.Tags {
+		if b.isStatus() {
+			d.status = append(d.status, b)
+		} else {
+			d.tags = append(d.tags, b)
+		}
+	}
 	custom := m.CustomArea || m.Stream > 0
-	words := planWords(m.Tags, custom)
+	words := planWords(d.tags, custom)
 	index := make(map[uint32]int, len(words))
 	for i, w := range words {
 		index[w] = i
@@ -229,7 +258,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	p := scanPlan{words: words}
 	p.areas, p.src = packedAreas(words)
 	slots := map[int]bool{}
-	for _, b := range m.Tags {
+	for _, b := range d.tags {
 		d.quality[b.Name] = nio.NotConnected
 		if b.isOutput() {
 			d.outputs[b.Name] = b
@@ -306,15 +335,24 @@ func (d *Driver) run(ctx context.Context) {
 			if d.m.Priority > 0 {
 				conn = blockingConn(conn)
 			}
+			d.reconnectGap = 0
+			if !d.lastSent.IsZero() {
+				d.reconnectGap = time.Since(d.lastSent)
+			}
 			c := NewClient(conn, time.Duration(d.m.Timeout))
 			polled, err = d.session(ctx, c)
 			c.Close()
+			if !c.sent.IsZero() {
+				d.lastSent = c.sent
+			}
 		}
 		d.connected.Store(false)
 		d.markStale()
 		if ctx.Err() != nil {
+			d.online.Store(false) // a stop, not an outage
 			return
 		}
+		d.setOnline(false)
 		if polled {
 			backoff = d.retryMin
 		}
@@ -362,6 +400,16 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 	if err != nil {
 		return false, err
 	}
+	d.mu.Lock()
+	wd := time.Duration(d.watchdogMs) * time.Millisecond
+	d.mu.Unlock()
+	if wd > 0 && d.reconnectGap > wd {
+		// Nothing reached the unit between the last session's last request
+		// and this one's first: longer than its watchdog.
+		d.trips.Add(1)
+		d.log.Warn("optommp: reconnected after longer than the unit's watchdog; it may have applied watchdog values",
+			"host", d.m.Host, "gap", d.reconnectGap.Round(time.Millisecond), "watchdog", wd)
+	}
 	if d.gateOpen() {
 		// The unit may have restarted, or its watchdog fired, since the
 		// last session: what it holds is not known to be what was written.
@@ -378,8 +426,9 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 		}
 	}()
 	d.connected.Store(true)
+	d.setOnline(true)
 	d.log.Info("optommp: connected", "host", d.m.Host, "unit", unit, "firmware", fw,
-		"tags", len(d.m.Tags), "mode", d.mode())
+		"tags", len(d.tags), "mode", d.mode())
 	if uc != nil {
 		return d.streamLoop(ctx, c, uc)
 	}
@@ -571,7 +620,7 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 	}
 	var turned []turn // digital outputs that began or stopped disagreeing
 	d.mu.Lock()
-	for i, b := range d.m.Tags {
+	for i, b := range d.tags {
 		r := d.plan.refs[i]
 		w := img[r.val]
 		set := w>>r.bit&1 == 1
@@ -801,6 +850,9 @@ func (d *Driver) rearm(c *Client) {
 	was := d.quietTrip
 	d.quietTrip = tripped
 	d.mu.Unlock()
+	if tripped && !was {
+		d.trips.Add(1)
+	}
 	if !tripped || !d.gateOpen() {
 		return
 	}
@@ -858,6 +910,28 @@ func (d *Driver) fail(err error) {
 	d.lastErr.Store(err.Error())
 }
 
+// setOnline records whether the driver is exchanging data with the unit;
+// a fall is an outage.
+func (d *Driver) setOnline(up bool) {
+	if was := d.online.Swap(up); was && !up {
+		d.outages.Add(1)
+	}
+}
+
+// statusInto delivers the status points.
+func (d *Driver) statusInto(dst nio.Values) {
+	for _, b := range d.status {
+		switch b.Point {
+		case PointOnline:
+			dst[b.Name] = d.online.Load()
+		case PointOutages:
+			dst[b.Name] = int64(d.outages.Load())
+		case PointWatchdogTrips:
+			dst[b.Name] = int64(d.trips.Load())
+		}
+	}
+}
+
 // ReadInputs is io.Driver: the latest decoded values, never blocking on
 // the socket.
 func (d *Driver) ReadInputs() (nio.Values, error) {
@@ -871,12 +945,13 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 	defer d.mu.Unlock()
 	for k := range dst {
 		if _, ok := d.in[k]; !ok {
-			delete(dst, k)
+			delete(dst, k) // a status point is put back below
 		}
 	}
 	for k, v := range d.in {
 		dst[k] = v
 	}
+	d.statusInto(dst)
 	return nil
 }
 
@@ -959,6 +1034,10 @@ type Health struct {
 	// SchedError why the OS refused it, "" when applied.
 	Priority   int
 	SchedError string
+	// Online, Outages and WatchdogTrips are what the status points
+	// deliver (whether or not the manifest binds them).
+	Online                 bool
+	Outages, WatchdogTrips uint64
 }
 
 func (d *Driver) mode() string {
@@ -989,13 +1068,14 @@ func (d *Driver) Health() Health {
 	d.mu.Unlock()
 	h.Host, h.Port = d.m.Host, d.m.Port
 	h.Connected = d.connected.Load()
+	h.Online, h.Outages, h.WatchdogTrips = d.online.Load(), d.outages.Load(), d.trips.Load()
 	h.Modules = len(d.m.Modules)
 	h.Faults = strings.Join(faults, "; ")
 	h.Reads, h.Writes, h.Errors = d.reads.Load(), d.writes.Load(), d.errs.Load()
 	h.ScanUs, h.Requests = d.scanUs.Load(), d.requests.Load()
 	h.ScanRate = d.scanRate
 	h.LastError = d.lastErr.Load().(string)
-	h.Tags = len(d.m.Tags)
+	h.Tags = len(d.tags)
 	h.Mode, h.Stream = d.mode(), time.Duration(d.m.Stream)
 	h.Late, h.GapMaxUs = d.late.Load(), d.gapMaxUs.Load()
 	h.ScanP99Us, h.ScanMaxUs = d.scanT.stats()

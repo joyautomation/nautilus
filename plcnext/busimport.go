@@ -156,7 +156,13 @@ type ImportOptions struct {
 	BusConductor string
 	// Transport is written when not the default grpc.
 	Transport string
+	// ID prefixes the driver's status tags, <ID>__Online, <ID>__Outages
+	// and <ID>__WatchdogTrips (default DefaultImportID).
+	ID string
 }
+
+// DefaultImportID is the status tags' prefix when the import is given none.
+const DefaultImportID = "AXC"
 
 // ImportedModule is one module of the generated manifest, where it sits
 // and whether the table knew it.
@@ -260,6 +266,17 @@ func Import(l DeviceList, opts ImportOptions) (Imported, error) {
 			}
 		}
 	}
+	// The driver's own status, bound like the optommp import binds it, so
+	// a program can hold its outputs after an outage until acknowledged.
+	id := opts.ID
+	if id == "" {
+		id = DefaultImportID
+	}
+	for _, st := range []struct{ suffix, status string }{
+		{"__Online", StatusOnline}, {"__Outages", StatusOutages}, {"__WatchdogTrips", StatusWatchdogTrips},
+	} {
+		m.Tags = append(m.Tags, Binding{Name: id + st.suffix, Status: st.status})
+	}
 	out.Manifest = m
 	return out, nil
 }
@@ -316,6 +333,17 @@ func channelTags(im ImportedModule, dir string, qualify bool) []Binding {
 	return tags
 }
 
+// hasChannels reports whether any binding reaches the image (the status
+// bindings the import always writes do not).
+func hasChannels(m Manifest) bool {
+	for _, t := range m.Tags {
+		if t.Status == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // ImportedYAML renders the generated manifest: the modules in bus order,
 // a placeholder (commented) for every module the table does not know, and
 // the bindings in ch:N for the digital channels.
@@ -345,10 +373,14 @@ func ImportedYAML(imp Imported, command string) []byte {
 		fmt.Fprintf(&b, ", desc: %s }\n", quoteYAML(im.Desc))
 	}
 	b.WriteString("tags:\n")
-	if len(m.Tags) == 0 {
+	if !hasChannels(m) {
 		b.WriteString("  # none yet: bind the modules below by hand, then `naut check`\n")
 	}
 	for _, t := range m.Tags {
+		if t.Status != "" {
+			fmt.Fprintf(&b, "  - { name: %s, status: %s }\n", t.Name, t.Status)
+			continue
+		}
 		fmt.Fprintf(&b, "  - { name: %s, dir: %s, offset: %d, format: %s", t.Name, t.Dir, t.Offset, quoteYAML(t.Format))
 		if t.Init != nil {
 			fmt.Fprintf(&b, ", init: %v", t.Init)

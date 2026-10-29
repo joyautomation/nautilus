@@ -44,10 +44,20 @@ package optommp
 //	scratch-bit     scratchpad bit 0..63, bool
 //	scratch-int     scratchpad integer 0..1023, DINT
 //	scratch-float   scratchpad float 0..1023, REAL
+//	online          the driver is exchanging data with the processor now, BOOL
+//	outages         times online has gone false since nautilus started, DINT
+//	watchdog-trips  times the unit's communication watchdog may have
+//	                driven outputs to their watchdog values, DINT
 //
 // Scratchpad points are the processor's shared registers — the seam to a
 // PAC Control strategy, groov View or Node-RED on the same unit — and are
 // written when writable: true.
+//
+// The last three are the driver's own status, not memory-map words (no
+// slot, channel or index): a program reads them to hold its outputs after
+// an outage until an operator acknowledges it. `naut optommp import`
+// writes them as <ID>__Online, <ID>__Outages and <ID>__WatchdogTrips — the
+// names every driver with a status uses.
 
 import (
 	"bytes"
@@ -74,6 +84,11 @@ const (
 	PointScratchBit   = "scratch-bit"
 	PointScratchInt   = "scratch-int"
 	PointScratchFloat = "scratch-float"
+
+	// The driver's own status (driver.go, "Status for the program").
+	PointOnline        = "online"
+	PointOutages       = "outages"
+	PointWatchdogTrips = "watchdog-trips"
 )
 
 // Scratchpad sizes (form 1465, "Scratch Pad—Read/Write").
@@ -312,6 +327,11 @@ func (b Binding) validate() error {
 		return indexInRange(b.Index, ScratchInts)
 	case PointScratchFloat:
 		return indexInRange(b.Index, ScratchFloats)
+	case PointOnline, PointOutages, PointWatchdogTrips:
+		if b.Writable {
+			return fmt.Errorf("a %s point is read-only", b.Point)
+		}
+		return nil
 	case "":
 		return fmt.Errorf("point is required (%s)", strings.Join(allPoints, ", "))
 	}
@@ -319,7 +339,8 @@ func (b Binding) validate() error {
 }
 
 var allPoints = []string{PointDI, PointDO, PointAI, PointAO, PointCounter, PointOnLatch, PointOffLatch,
-	PointQuality, PointScratchBit, PointScratchInt, PointScratchFloat}
+	PointQuality, PointScratchBit, PointScratchInt, PointScratchFloat,
+	PointOnline, PointOutages, PointWatchdogTrips}
 
 func (b Binding) channelInRange() error {
 	if b.Slot < 0 || b.Slot >= MaxModules {
@@ -356,7 +377,17 @@ func (b Binding) isChannel() bool {
 	case PointScratchBit, PointScratchInt, PointScratchFloat:
 		return false
 	}
-	return true
+	return !b.isStatus()
+}
+
+// isStatus reports whether the binding is the driver's own status rather
+// than a word of the memory map.
+func (b Binding) isStatus() bool {
+	switch b.Point {
+	case PointOnline, PointOutages, PointWatchdogTrips:
+		return true
+	}
+	return false
 }
 
 // InputNames lists every bound tag the driver delivers, sorted: all of

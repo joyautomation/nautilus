@@ -23,12 +23,13 @@ func runPlcnextImport(args []string) int {
 	transport := fs.String("transport", plcnext.TransportGRPC, "the manifest's transport: grpc or shm")
 	component := fs.String("bus-conductor", plcnext.DefaultComponent, "BusConductor component instance (none: no handshake)")
 	checkBus := fs.Bool("check-bus", false, "on the controller: compare the list with BusConductor's NUM_MODULES")
+	id := fs.String("id", plcnext.DefaultImportID, "prefix of the driver's status tags (<id>__Online, __Outages, __WatchdogTrips)")
 	force := fs.Bool("force", false, "replace a manifest or tag file that holds something else")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: naut plcnext import [--out .] [--transport grpc|shm] [--check-bus] <plcnext_devices.yaml>")
+		fmt.Fprintln(os.Stderr, "usage: naut plcnext import [--out .] [--transport grpc|shm] [--id AXC] [--check-bus] [--force] <plcnext_devices.yaml>")
 		return 2
 	}
 	fail := func(err error) int {
@@ -62,7 +63,7 @@ func runPlcnextImport(args []string) int {
 		}
 		fmt.Printf("%s: NUM_MODULES=%d, the list's count\n", *component, n)
 	}
-	imp, err := plcnext.Import(list, plcnext.ImportOptions{BusConductor: *component, Transport: *transport})
+	imp, err := plcnext.Import(list, plcnext.ImportOptions{BusConductor: *component, Transport: *transport, ID: *id})
 	if err != nil {
 		return fail(err)
 	}

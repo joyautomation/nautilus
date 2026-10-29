@@ -76,3 +76,6 @@
 - { name: EPIC_M3_AI22, role: input, unit: "V", desc: "GRV-IV-24 slot 3 ch 22 — ±160 V (-160 to 160)" }
 - { name: EPIC_M3_AI23, role: input, unit: "V", desc: "GRV-IV-24 slot 3 ch 23 — ±160 V (-160 to 160)" }
 - { name: EPIC_SP_F0, role: output, init: 0.0, desc: "scratchpad float 0" }
+- { name: EPIC__Online, role: input, desc: "the driver is exchanging data with the processor now (driver status)" }
+- { name: EPIC__Outages, role: input, desc: "times the driver lost the processor since nautilus started (driver status)" }
+- { name: EPIC__WatchdogTrips, role: input, desc: "times the unit's watchdog may have driven outputs to their watchdog values (driver status)" }
