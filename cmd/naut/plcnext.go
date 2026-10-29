@@ -53,7 +53,7 @@ Usage:
         shim's lateness percentiles and worst 10 s window, naut's scan
         lateness, and the CPU each used — for comparing runs (best-effort
         against SCHED_FIFO, quiet against loaded). --out appends a JSON line.
-  naut plcnext import <plcnext_devices.yaml> [--out .] [--transport grpc|shm] [--check-bus] [--force]
+  naut plcnext import [--out .] [--transport grpc|shm] [--id AXC] [--check-bus] [--force] <plcnext_devices.yaml>
         Anywhere: write plcnext_manifest.yaml + tags/plcnext.yaml from the
         bus's device list (device types in bus order; the firmware does
         not publish them, so the list is a file): every module at the sum
@@ -61,7 +61,9 @@ Usage:
         a known module bound (digital as ch:N, the number on the module),
         an unknown type laid out from its length and left to bind by
         hand. --check-bus (on the controller) compares the list's length
-        with BusConductor's NUM_MODULES, without touching the bus.
+        with BusConductor's NUM_MODULES, without touching the bus. The
+        driver's status tags (<id>__Online, __Outages, __WatchdogTrips)
+        are always bound.
   naut plcnext tags <plcnext_manifest.yaml> [-o tags/plcnext.yaml]
         Anywhere: derive the tag file from the committed manifest.
 

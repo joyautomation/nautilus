@@ -72,7 +72,10 @@ Import flags:
 Tag names are <id>_M<slot>_<DI|DO|AI|AO><channel>: EPIC_M0_DI03 is slot 0
 channel 3, the same with or without --modbus. A digital channel with a
 feature configured in groov Manage (counter, totalizer …) also gets
-<tag>_Count. Outputs (DO, AO) are writable.
+<tag>_Count. Outputs (DO, AO) are writable. Every import (not --modbus)
+also binds the driver's own status, for a program that holds its outputs
+after an outage until an operator acknowledges it: <id>__Online (BOOL),
+<id>__Outages and <id>__WatchdogTrips (DINT counters since start).
 `
 
 func runOptommp(args []string) int {

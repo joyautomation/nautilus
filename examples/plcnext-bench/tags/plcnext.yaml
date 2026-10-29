@@ -6,6 +6,9 @@
 - { name: AI_01, role: input, desc: "slot 4 analog input 1, raw counts" }
 - { name: AI_02, role: input, desc: "slot 4 analog input 2, raw counts" }
 - { name: AI_03, role: input, desc: "slot 4 analog input 3, raw counts" }
+- { name: AXC__Online, role: input, desc: "the driver is exchanging the process image with the bus now (driver status)" }
+- { name: AXC__Outages, role: input, desc: "times the driver lost the process image since nautilus started (driver status)" }
+- { name: AXC__WatchdogTrips, role: input, desc: "times the output frame was driven to zero without nautilus (driver status)" }
 - { name: DI_00, role: input, desc: "slot 2 input 01" }
 - { name: DI_01, role: input, desc: "slot 2 input 02" }
 - { name: DI_02, role: input, desc: "slot 2 input 03" }

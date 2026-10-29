@@ -248,3 +248,52 @@ claims:
     source: "#quality-per-channel"
     tests:
       - go ./optommp TestDriverOutputNotInItsCommandedStateIsBad
+  - id: EPIC-021
+    claim: >-
+      `naut optommp import` binds three status tags, <id>__Online (BOOL),
+      <id>__Outages and <id>__WatchdogTrips (DINT), delivered from the
+      first scan with good quality; __Online is true while a session is up
+      and the stream (when streaming) is not late, and __Outages counts the
+      times it went false.
+    source: "#holding-outputs-until-an-operator-acknowledges"
+    tests:
+      - go ./optommp TestManifestRoundTrip
+      - go ./optommp TestDriverNotConnectedBeforeFirstScan
+      - go ./optommp TestDriverStatusOutageWithoutATrip
+      - go ./optommp TestDriverStreamLateIsStaleThenTimesOut
+    partial: true
+    note: >-
+      Against the in-process fake of the chassis (a dropped connection, a
+      late then dead stream). Not yet run against the bench unit.
+  - id: EPIC-022
+    claim: >-
+      <id>__WatchdogTrips counts the times the unit's watchdog may have
+      fired: the driver went quiet for longer than the watchdog, or
+      reconnected after a gap longer than it. Nothing is counted while the
+      watchdog is off, nor for a drop shorter than it.
+    source: "#holding-outputs-until-an-operator-acknowledges"
+    tests:
+      - go ./optommp TestDriverRewritesOutputsAfterAStall
+      - go ./optommp TestDriverRewritesEveryOutputOnReconnect
+      - go ./optommp TestDriverStatusOutageWithoutATrip
+    partial: true
+    note: >-
+      Against the in-process fake, which applies watchdog values when it
+      next sees a request; the stall is the driver's lock held with the
+      socket open, polling and streaming. The bench freeze (SIGSTOP past
+      the watchdog) has not been run with the counter.
+  - id: EPIC-023
+    claim: >-
+      A program can seal in a hold on any change of __Outages or
+      __WatchdogTrips and release it on an operator acknowledge once
+      __Online is true again; an acknowledge while the processor is still
+      away does nothing.
+    source: "#holding-outputs-until-an-operator-acknowledges"
+    tests:
+      - naut examples/epic-bench an outage holds the lamps until it is acknowledged
+      - naut examples/epic-bench a watchdog trip holds the lamps too
+    partial: true
+    note: >-
+      The example's program in virtual time, with the status tags given by
+      the test rather than delivered by the driver. The driver side is
+      EPIC-021 and EPIC-022.

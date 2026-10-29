@@ -83,3 +83,6 @@ tags:
   - { name: EPIC_M3_AI22, point: ai, slot: 3, channel: 22, type: "±160 V", unit: "V", lo: -160, hi: 160 }
   - { name: EPIC_M3_AI23, point: ai, slot: 3, channel: 23, type: "±160 V", unit: "V", lo: -160, hi: 160 }
   - { name: EPIC_SP_F0, point: scratch-float, index: 0, writable: true }
+  - { name: EPIC__Online, point: online }
+  - { name: EPIC__Outages, point: outages }
+  - { name: EPIC__WatchdogTrips, point: watchdog-trips }

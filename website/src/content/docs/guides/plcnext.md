@@ -279,6 +279,69 @@ At FIFO 80 nothing was late by more than a millisecond in any run, so the
 into the controller's Ethernet: the network receive task outranks the
 shim on its core.
 
+## Holding outputs until an operator acknowledges
+
+When the image is fresh again, after a stall, a lost connection or a
+restart, the driver drives the outputs to their commands again on its
+own. A program that should keep them off until someone has looked can
+read the driver's status, bound in the manifest like any other tag:
+
+```yaml
+# plcnext_manifest.yaml
+  - { name: AXC__Online, status: online }
+  - { name: AXC__Outages, status: outages }
+  - { name: AXC__WatchdogTrips, status: watchdog-trips }
+```
+
+`naut plcnext tags` puts them in the tag file as inputs. `__Online`
+(BOOL) is true while the inputs are good: the image is fresh and the
+bus runs. `__Outages` (DINT) counts the times it went false.
+`__WatchdogTrips` (DINT) counts the times the output frame went to zero
+without the driver choosing it: naut stalled for longer than
+`output-watchdog` between two writes to the page, the shim reported its
+watchdog had fired, or the shim restarted. A naut killed and restarted
+by the keepalive finds the shim's watchdog bit set by its predecessor's
+outputs, so it starts with `__WatchdogTrips` at 1: the program sees
+"restarted after a fault" from its first scans. A first start on a page
+no naut has written counts nothing. On `transport: grpc` there is no
+output watchdog, and the count stays 0.
+
+The values are there from the first scan, always with good quality, and
+named the same way on every driver that has them. The counters only go
+up, so a program compares them with last scan's values and seals in a
+hold:
+
+```iecst
+VAR_EXTERNAL
+    AXC__Online        : BOOL;
+    AXC__Outages       : DINT;
+    AXC__WatchdogTrips : DINT;
+    OperatorAck         : BOOL;   (* a setpoint: the HMI's acknowledge button *)
+END_VAR
+VAR
+    held        : BOOL;
+    seenOutages : DINT;
+    seenTrips   : DINT;
+    ackEdge     : R_TRIG;
+END_VAR
+
+ackEdge(CLK := OperatorAck);
+IF ackEdge.Q AND AXC__Online THEN
+    held := FALSE;                      (* released only once the I/O is back *)
+END_IF;
+IF AXC__Outages <> seenOutages OR AXC__WatchdogTrips <> seenTrips THEN
+    held := TRUE;                       (* sealed in on any new outage or trip *)
+END_IF;
+seenOutages := AXC__Outages;
+seenTrips := AXC__WatchdogTrips;
+
+Pump1_Run := Pump1_Cmd AND NOT held;
+```
+
+`examples/plcnext-bench` does this for its outputs with
+`lib/io_hold.st`, and its `naut test` suite covers the hold, the
+acknowledge and the restart case.
+
 ## Start on boot
 
 The controller has no systemd, and `admin` cannot write `/etc/init.d`,
@@ -304,6 +367,12 @@ back about a minute after the controller answered ssh.
 
 - **Per-channel quality.** The driver has one quality for the whole
   image: the bus `RUN` bit. False makes every input `bad`.
+- **The status tags on the controller.** `__Online`, `__Outages` and
+  `__WatchdogTrips` are tested against an in-process fake of the shim,
+  not yet on the bench unit.
+- **Holding outputs without a program.** The acknowledge lives in your
+  program; there is no manifest setting that keeps the frame at zero
+  until one is written.
 - **Real-time priority without root.** `SCHED_FIFO` needs the owner's
   one-time root step, and again after every deploy of either binary.
 - **Import from a bus scan.** `naut plcnext import` works from a device

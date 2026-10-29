@@ -29,8 +29,8 @@ func TestManifestRoundTrip(t *testing.T) {
 	if back.Modules[2].Type != 0x6000001F || back.Modules[2].Channels != 12 {
 		t.Errorf("slot 2: %+v", back.Modules[2])
 	}
-	// 24 DI (+2 latches each) + 12 DO + 12+24 AI (+1 quality each) + 2 scratch floats
-	if n := len(back.Tags); n != 24*3+12+36*2+2 {
+	// 24 DI (+2 latches each) + 12 DO + 12+24 AI (+1 quality each) + 2 scratch floats + 3 status
+	if n := len(back.Tags); n != 24*3+12+36*2+2+3 {
 		t.Errorf("tags: %d", n)
 	}
 	for _, want := range []string{
@@ -40,6 +40,9 @@ func TestManifestRoundTrip(t *testing.T) {
 		`  - { name: EPIC_M0_DI04_OnLatch, point: on-latch, slot: 0, channel: 4 }`,
 		`  - { name: EPIC_M3_AI00_Quality, point: quality, slot: 3, channel: 0 }`,
 		`  - { name: EPIC_SP_F1, point: scratch-float, index: 1, writable: true }`,
+		`  - { name: EPIC__Online, point: online }`,
+		`  - { name: EPIC__Outages, point: outages }`,
+		`  - { name: EPIC__WatchdogTrips, point: watchdog-trips }`,
 	} {
 		if !strings.Contains(string(raw), want+"\n") {
 			t.Errorf("manifest lacks\n%s\n%s", want, raw)
@@ -58,6 +61,8 @@ func TestManifestRoundTrip(t *testing.T) {
 		`- { name: EPIC_M2_AI00, role: input, unit: "°C", desc: "GRV-IICTD-12 slot 2 ch 0 — ICTD Temperature Probe (-270 to 150)" }`,
 		`- { name: EPIC_M0_DI04_OnLatch, role: input, desc: "GRV-IACDCTTL-24 slot 0 ch 4 — turned on since the previous scan" }`,
 		`- { name: EPIC_SP_F1, role: output, init: 0.0, desc: "scratchpad float 1" }`,
+		`- { name: EPIC__Online, role: input, desc: "the driver is exchanging data with the processor now (driver status)" }`,
+		`- { name: EPIC__Outages, role: input, desc: "times the driver lost the processor since nautilus started (driver status)" }`,
 	} {
 		if !strings.Contains(string(tags), want+"\n") {
 			t.Errorf("tag file lacks\n%s\n%s", want, tags)

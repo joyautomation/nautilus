@@ -34,6 +34,9 @@ func planWords(tags []Binding, custom bool) []uint32 {
 		}
 	}
 	for _, b := range tags {
+		if b.isStatus() {
+			continue // the driver's own, no word of the map
+		}
 		r := wordsFor(b, custom)
 		add(r.val)
 		if r.qual != 0 {

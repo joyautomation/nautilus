@@ -178,7 +178,13 @@ naut test  .     # the acceptance suite in virtual time
 ```
 
 `bench.st` mirrors inputs 01–15 to outputs 01–15 and puts a 1 Hz
-heartbeat on output 16. The four analog inputs are tags only.
+heartbeat on output 16. The four analog inputs are tags only. After an
+outage (a stalled or restarted shim, or a naut restarted after the
+shim's watchdog dropped the frame) the mirrored outputs stay off until
+`BenchAck` is written: the driver's status tags `AXC__Online`,
+`AXC__Outages` and `AXC__WatchdogTrips` go into the `IoHold` block in
+`lib/io_hold.st`. That is tested in virtual time only, not yet on the
+controller.
 
 ## Timing, honestly
 

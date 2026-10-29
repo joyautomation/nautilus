@@ -198,3 +198,52 @@ claims:
     note: >-
       Tried on the bench (2026-10-24 kill, 2026-10-25 reboot),
       examples/plcnext-bench/README.md. No automated test.
+  - id: PLX-015
+    claim: >-
+      A binding with `status: online`, `outages` or `watchdog-trips` is an
+      input with no bytes of the image behind it, delivered from the first
+      scan with good quality; online is true while the inputs are good, and
+      outages counts the times it went false (a stalled shim, a restart).
+    source: "#holding-outputs-until-an-operator-acknowledges"
+    tests:
+      - go ./plcnext TestManifestStatusBindings
+      - go ./plcnext TestShmStatusForTheProgram
+      - go ./plcnext TestShmRestartAfterAFaultIsATrip
+    partial: true
+    note: >-
+      Against the in-process fake shim (transport shm). A lost gRPC
+      connection or a stopped bus goes through the same online flag but has
+      no test of its own. Not yet run on the bench unit.
+  - id: PLX-016
+    claim: >-
+      watchdog-trips counts the times the output frame went to zero without
+      the driver choosing it: naut stalled for longer than output-watchdog
+      between two writes, the shim's watchdog bit rose, or the shim
+      restarted, once each. A naut restarted after its predecessor's
+      outputs went stale starts at 1; a first start on a fresh page counts
+      nothing.
+    source: "#holding-outputs-until-an-operator-acknowledges"
+    tests:
+      - go ./plcnext TestShmStatusForTheProgram
+      - go ./plcnext TestShmRestartAfterAFaultIsATrip
+    partial: true
+    note: >-
+      Against the in-process fake shim, which applies the C shim's
+      watchdog rule. The keepalive restart on the controller has not been
+      run with the counter, and the count staying 0 on transport grpc is
+      not asserted.
+  - id: PLX-017
+    claim: >-
+      A program can seal in a hold on any change of __Outages or
+      __WatchdogTrips and release it on an operator acknowledge once
+      __Online is true again, including a hold from the first scan after a
+      restart that found a trip.
+    source: "#holding-outputs-until-an-operator-acknowledges"
+    tests:
+      - naut examples/plcnext-bench an outage holds the outputs until it is acknowledged
+      - naut examples/plcnext-bench a restart after a watchdog trip starts held
+    partial: true
+    note: >-
+      The example's program in virtual time, with the status tags given by
+      the test rather than delivered by the driver. The driver side is
+      PLX-015 and PLX-016.

@@ -9,6 +9,19 @@ package plcnext
 // span if anything changed. On transport shm each scan is two copies in
 // and out of the shim's page (shm.go), the output one every scan so the
 // shim's watchdog sees this process alive.
+//
+// Status for the program: bindings with a status deliver the driver's own
+// state as inputs, from New on and always Good, so a program can hold its
+// outputs after an outage until an operator acknowledges it (recovery
+// itself stays automatic). online is true while the inputs are Good — a
+// session up, the image fresh, the bus running; outages counts its falls.
+// watchdog-trips counts the times the output frame went to zero without
+// this driver choosing it, as far as it can see: a write that came longer
+// than the shim's watchdog after the one before (this process stalled),
+// the shim's watchdog bit rising in the page (a naut that was killed and
+// restarted sees it on its first read), and the shim restarting (the
+// runtime under it did) — one count per episode. transport grpc has no
+// output watchdog, so its count stays 0.
 
 import (
 	"context"
@@ -76,6 +89,11 @@ type Driver struct {
 	shim     ShimState // transport shm: the page as last read
 	shimSeen bool
 	inAgeUs  int64 // … and how old its input frame was then
+	wdSeen   bool  // the shim's watchdog bit as last read (a trip counts once)
+
+	online  atomic.Bool   // the status: inputs Good
+	outages atomic.Uint64 // times online fell
+	trips   atomic.Uint64 // times the output frame went to zero without us
 
 	connected  atomic.Bool
 	configured atomic.Bool
@@ -152,10 +170,19 @@ func (d *Driver) run(ctx context.Context) {
 		if d.quality == nio.Good || d.quality == nio.Bad {
 			d.quality = nio.Stale
 		}
+		if errors.Is(err, errShimRestarted) {
+			// The runtime under the shim restarted: the frame was zero
+			// meanwhile. The watchdog bit a restarted shim may show for
+			// outputs this driver has not refreshed yet is the same trip.
+			d.trips.Add(1)
+			d.wdSeen = true
+		}
 		d.mu.Unlock()
 		if ctx.Err() != nil {
+			d.online.Store(false) // a stop, not an outage
 			return
 		}
+		d.setOnline(false)
 		if err != nil {
 			d.fail(err)
 			d.log.Warn("plcnext: session ended", "err", err, "retry", backoff)
@@ -404,6 +431,9 @@ func (g grpcImage) write(ctx context.Context, out []byte) error {
 
 func (grpcImage) everyScan() bool { return false }
 
+// errShimRestarted ends a session whose shim restarted under it.
+var errShimRestarted = errors.New("plcnext: shm: the shim restarted")
+
 // shmImage is the shim's page: a copy, never a wait. A shim that stalls
 // makes the inputs Stale until it cycles again, on the same mapping. A
 // shim that RESTARTED ends the session: the ACF restarts it with the
@@ -415,6 +445,10 @@ type shmImage struct {
 	watchdog time.Duration
 	st       ShimState
 	started  int64 // the shim's start stamp this session first saw
+	wroteNs  int64 // this session's last write to the page
+	// late: the last write came longer than the watchdog after the one
+	// before it, so the shim (cycling meanwhile) drove the frame to zero.
+	late time.Duration
 }
 
 func (s *shmImage) read(_ context.Context, n int) (reading, error) {
@@ -431,7 +465,7 @@ func (s *shmImage) read(_ context.Context, n int) (reading, error) {
 	case s.started == 0:
 		s.started = s.st.StartedNs
 	case s.st.StartedNs != s.started && s.st.StartedNs != 0:
-		return reading{}, fmt.Errorf("plcnext: shm: the shim restarted (now pid %d); handshaking again", s.st.PID)
+		return reading{}, fmt.Errorf("%w (now pid %d); handshaking again", errShimRestarted, s.st.PID)
 	}
 	now := monoNow()
 	if age := time.Duration(now - s.st.StampNs); age > shmStaleAfter {
@@ -451,7 +485,13 @@ func (s *shmImage) read(_ context.Context, n int) (reading, error) {
 }
 
 func (s *shmImage) write(_ context.Context, out []byte) error {
-	s.p.write(out, monoNow(), s.watchdog)
+	now := monoNow()
+	s.late = 0
+	if gap := time.Duration(now - s.wroteNs); s.wroteNs != 0 && s.watchdog > 0 && gap > s.watchdog {
+		s.late = gap
+	}
+	s.p.write(out, now, s.watchdog)
+	s.wroteNs = now
 	return nil
 }
 
@@ -487,6 +527,7 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 		}
 	}
 	d.quality = r.q
+	d.setOnline(r.q == nio.Good)
 	if r.cause != d.cause {
 		if r.cause != "" {
 			d.fail(errors.New(r.why))
@@ -502,6 +543,14 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 		d.shimSeen = true
 		if s.st.StampNs != 0 {
 			d.inAgeUs = (monoNow() - s.st.FrameNs) / 1000
+		}
+		if wd := s.st.Watchdog(); wd != d.wdSeen {
+			d.wdSeen = wd
+			if wd {
+				d.trips.Add(1)
+				d.log.Warn("plcnext: the shim drove the output frame to zero: this driver's outputs were older than its watchdog",
+					"watchdog_ms", s.st.WatchdogMs)
+			}
 		}
 	}
 	var flush []byte
@@ -519,6 +568,18 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 			return err
 		}
 		d.writes.Add(1)
+		if s, ok := im.(*shmImage); ok && s.late > 0 {
+			// This driver stalled between writes (a read taken before
+			// the stall shows no watchdog bit, so this is how it learns).
+			d.mu.Lock()
+			if !d.wdSeen {
+				d.trips.Add(1)
+				d.wdSeen = true // the bit a later read may still show is this trip
+				d.log.Warn("plcnext: this driver's outputs went longer than the shim's watchdog between writes; it drove the frame to zero meanwhile",
+					"gap", s.late.Round(time.Millisecond), "watchdog", s.watchdog)
+			}
+			d.mu.Unlock()
+		}
 	}
 	return nil
 }
@@ -526,6 +587,27 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 func (d *Driver) fail(err error) {
 	d.errs.Add(1)
 	d.lastErr.Store(err.Error())
+}
+
+// setOnline records whether the inputs are Good; a fall is an outage.
+func (d *Driver) setOnline(up bool) {
+	if was := d.online.Swap(up); was && !up {
+		d.outages.Add(1)
+	}
+}
+
+// statusInto delivers the status bindings.
+func (d *Driver) statusInto(dst nio.Values) {
+	for _, b := range d.m.Tags {
+		switch b.Status {
+		case StatusOnline:
+			dst[b.Name] = d.online.Load()
+		case StatusOutages:
+			dst[b.Name] = int64(d.outages.Load())
+		case StatusWatchdogTrips:
+			dst[b.Name] = int64(d.trips.Load())
+		}
+	}
 }
 
 // ReadInputs is io.Driver: the latest decoded image, never blocking on
@@ -547,6 +629,7 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 	for k, v := range d.in {
 		dst[k] = v
 	}
+	d.statusInto(dst)
 	return nil
 }
 
@@ -606,6 +689,10 @@ type Health struct {
 	// Shim is the in-process tier as last seen through its page
 	// (transport shm, once read); nil otherwise.
 	Shim *ShimHealth
+	// Online, Outages and WatchdogTrips are what the status bindings
+	// deliver (whether or not the manifest has any).
+	Online                 bool
+	Outages, WatchdogTrips uint64
 }
 
 // ShimHealth is rt/plcnext-io/nautilus_io's cycle as it reports it.
@@ -628,6 +715,7 @@ func (d *Driver) Health() Health {
 		Modules: int(d.modules.Load()), InBytes: d.inLen, OutBytes: d.outLen,
 		Reads: d.reads.Load(), Writes: d.writes.Load(), Errors: d.errs.Load(),
 		RTTus: d.rttUs.Load(), LastError: d.lastErr.Load().(string), Tags: len(d.m.Tags),
+		Online: d.online.Load(), Outages: d.outages.Load(), WatchdogTrips: d.trips.Load(),
 	}
 	if d.m.Transport == TransportShm {
 		h.Shm = d.m.Shm

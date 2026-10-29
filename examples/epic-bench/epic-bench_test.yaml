@@ -22,6 +22,9 @@ tests:
       EPIC_M0_DI10: false
       EPIC_M2_AI00: 0.0
       EPIC_M3_AI00: 0.0
+      EPIC__Online: true
+      EPIC__Outages: 0
+      EPIC__WatchdogTrips: 0
     steps:
       - advance: 600ms
         expect: { Blink: true, EPIC_M1_DO11: true }
@@ -46,3 +49,40 @@ tests:
       - given: { EPIC_M2_AI00: 21.5, EPIC_M3_AI00: 8.4 }
         advance: 200ms
         expect: { BenchTempC: 21.5, BenchVoltsV: 8.4, EPIC_SP_F0: 21.5 }
+
+  # The driver's status tags as a program sees them: an outage seals the
+  # lamps dark, an acknowledge while the EPIC is still away does nothing,
+  # and one after it is back releases them.
+  - name: an outage holds the lamps until it is acknowledged
+    given: *inputs
+    steps:
+      - given: { EPIC_M0_DI00: true }
+        advance: 100ms
+        expect: { EPIC_M1_DO00: true, BenchHeld: false }
+      - given: { EPIC__Online: false, EPIC__Outages: 1 }
+        advance: 100ms
+        expect: { EPIC_M1_DO00: false, BenchHeld: true }
+      - given: { BenchAck: true }
+        advance: 100ms
+        expect: { EPIC_M1_DO00: false, BenchHeld: true, BenchAck: false }
+      - given: { EPIC__Online: true }
+        advance: 200ms
+        expect: { EPIC_M1_DO00: false, BenchHeld: true }
+      - given: { BenchAck: true }
+        advance: 100ms
+        expect: { EPIC_M1_DO00: true, BenchHeld: false }
+
+  # A watchdog trip with the connection up (the driver stalled past the
+  # unit's watchdog) holds just the same.
+  - name: a watchdog trip holds the lamps too
+    given: *inputs
+    steps:
+      - given: { EPIC_M0_DI05: true }
+        advance: 100ms
+        expect: { EPIC_M1_DO05: true }
+      - given: { EPIC__WatchdogTrips: 1 }
+        advance: 100ms
+        expect: { EPIC_M1_DO05: false, BenchHeld: true }
+      - given: { BenchAck: true }
+        advance: 100ms
+        expect: { EPIC_M1_DO05: true, BenchHeld: false }

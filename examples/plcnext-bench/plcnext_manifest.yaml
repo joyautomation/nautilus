@@ -75,3 +75,8 @@ tags:
   - { name: DO_13, dir: out, offset: 0, format: "ch:14", init: false, desc: "slot 1 output 14" }
   - { name: DO_14, dir: out, offset: 0, format: "ch:15", init: false, desc: "slot 1 output 15" }
   - { name: DO_15, dir: out, offset: 0, format: "ch:16", init: false, desc: "slot 1 output 16 — heartbeat" }
+  # The driver's own status, for bench.st's hold-until-acknowledged
+  # (lib/io_hold.st): no bytes of either image behind these.
+  - { name: AXC__Online, status: online }
+  - { name: AXC__Outages, status: outages }
+  - { name: AXC__WatchdogTrips, status: watchdog-trips }

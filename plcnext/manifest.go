@@ -59,6 +59,15 @@ const (
 	TransportGRPC     = "grpc"
 	TransportShm      = "shm"
 	defaultTagFileHdr = "plcnext_manifest.yaml"
+
+	// A binding's status: the driver's own state rather than bytes of
+	// an image, for a program that holds its outputs after an outage
+	// until an operator acknowledges it (driver.go, "Status for the
+	// program"). Name them <id>__Online, <id>__Outages and
+	// <id>__WatchdogTrips, the names every driver with a status uses.
+	StatusOnline        = "online"         // BOOL: inputs fresh, bus running
+	StatusOutages       = "outages"        // DINT: times online went false
+	StatusWatchdogTrips = "watchdog-trips" // DINT: times the outputs were driven to zero
 )
 
 // Manifest is one controller's I/O surface: where the firmware's gRPC
@@ -117,9 +126,13 @@ type Module struct {
 	Desc string `yaml:"desc"`
 }
 
-// Binding maps one nautilus tag onto a span of the input or output image.
+// Binding maps one nautilus tag onto a span of the input or output image,
+// or onto one of the driver's status values (Status).
 type Binding struct {
 	Name string `yaml:"name"`
+	// Status, instead of dir/offset/format, binds the tag to the driver's
+	// own status: online, outages or watchdog-trips. An input.
+	Status string `yaml:"status"`
 	// Dir is "in" (polled from Inputs) or "out" (written to Outputs).
 	Dir string `yaml:"dir"`
 	// Offset is the byte offset inside the image.
@@ -318,6 +331,15 @@ func (m Manifest) Validate() error {
 			continue
 		}
 		seen[b.Name] = true
+		if b.Status != "" {
+			switch {
+			case b.Status != StatusOnline && b.Status != StatusOutages && b.Status != StatusWatchdogTrips:
+				errs = append(errs, fmt.Errorf("tag %s: status %q (want %s, %s or %s)", b.Name, b.Status, StatusOnline, StatusOutages, StatusWatchdogTrips))
+			case b.Dir != "" || b.Format != "" || b.Offset != 0 || b.Scale != 0 || b.Bias != 0 || b.Init != nil:
+				errs = append(errs, fmt.Errorf("tag %s: a status binding takes no dir, offset, format, scale, bias or init", b.Name))
+			}
+			continue
+		}
 		if b.Dir != DirIn && b.Dir != DirOut {
 			errs = append(errs, fmt.Errorf("tag %s: dir %q (want in or out)", b.Name, b.Dir))
 		}
@@ -357,7 +379,7 @@ func (m Manifest) OutputNames() []string { return m.names(DirOut) }
 func (m Manifest) names(dir string) []string {
 	var out []string
 	for _, b := range m.Tags {
-		if b.Dir == dir {
+		if b.Dir == dir || (dir == DirIn && b.Status != "") {
 			out = append(out, b.Name)
 		}
 	}

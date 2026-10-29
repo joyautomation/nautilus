@@ -7,7 +7,8 @@ package optommp
 // moves from one to the other without touching its programs. Optional tags
 // ride on the channel's name: _Count (a digital channel with a feature
 // configured), _OnLatch / _OffLatch, _Quality; scratchpad tags are
-// <ID>_SP_B<i> / _I<i> / _F<i>.
+// <ID>_SP_B<i> / _I<i> / _F<i>. Every import also binds the driver's own
+// status: <ID>__Online, <ID>__Outages and <ID>__WatchdogTrips.
 
 import (
 	"fmt"
@@ -16,6 +17,14 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/tagfile"
+)
+
+// The status tags' suffixes, the same on every driver that has them
+// (modbus, snmp and the Sparkplug host already deliver <id>__Online).
+const (
+	SuffixOnline        = "__Online"
+	SuffixOutages       = "__Outages"
+	SuffixWatchdogTrips = "__WatchdogTrips"
 )
 
 // ManifestOptions steer GenerateManifest.
@@ -115,6 +124,10 @@ func GenerateManifest(ch Chassis, o ManifestOptions) (Manifest, error) {
 	if len(m.Tags) == 0 {
 		return Manifest{}, fmt.Errorf("optommp: the chassis reports no configured I/O channel")
 	}
+	m.Tags = append(m.Tags,
+		Binding{Name: o.ID + SuffixOnline, Point: PointOnline},
+		Binding{Name: o.ID + SuffixOutages, Point: PointOutages},
+		Binding{Name: o.ID + SuffixWatchdogTrips, Point: PointWatchdogTrips})
 	v := m
 	v.fillDefaults()
 	if err := v.Validate(); err != nil {
@@ -168,6 +181,7 @@ func ManifestYAML(m Manifest, command string) []byte {
 		switch t.Point {
 		case PointScratchBit, PointScratchInt, PointScratchFloat:
 			fmt.Fprintf(&b, ", index: %d", t.Index)
+		case PointOnline, PointOutages, PointWatchdogTrips:
 		default:
 			fmt.Fprintf(&b, ", slot: %d, channel: %d", t.Slot, t.Channel)
 		}
@@ -235,6 +249,12 @@ func ManifestTagsYAML(m Manifest, command, tagsPath string) ([]byte, error) {
 			t.Desc = fmt.Sprintf("scratchpad integer %d", b.Index)
 		case PointScratchFloat:
 			t.Desc = fmt.Sprintf("scratchpad float %d", b.Index)
+		case PointOnline:
+			t.Desc = "the driver is exchanging data with the processor now (driver status)"
+		case PointOutages:
+			t.Desc = "times the driver lost the processor since nautilus started (driver status)"
+		case PointWatchdogTrips:
+			t.Desc = "times the unit's watchdog may have driven outputs to their watchdog values (driver status)"
 		}
 		if b.Desc != "" {
 			t.Desc = b.Desc + " — " + t.Desc
