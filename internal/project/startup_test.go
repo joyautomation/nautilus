@@ -51,7 +51,9 @@ func TestStartupWaitForIOConfig(t *testing.T) {
 }
 
 // End to end on a real driver that keeps its own image: an optommp
-// project, default wait. Before the unit answers, every scan is held —
+// project, default wait, with the driver's status tags (in its read from
+// New on, always Good) bound as inputs. Before the unit answers, every
+// scan is held —
 // the program does not run, nothing is written, the stats say which
 // driver it waits for — and the first scan after the first delivery runs
 // with FIRST_SCAN() TRUE and pushes the output.
@@ -66,6 +68,8 @@ tasks:
     scan: 50ms
 tags:
   - { name: EPIC_M0_DI03, role: input }
+  - { name: EPIC__Online, role: input }
+  - { name: EPIC__Outages, role: input }
   - { name: EPIC_M1_DO11, role: output, init: false }
   - { name: Firsts, role: state, init: 0 }
   - { name: Runs, role: state, init: 0 }
@@ -89,6 +93,8 @@ modules:
 tags:
   - { name: EPIC_M0_DI03, point: di, slot: 0, channel: 3 }
   - { name: EPIC_M1_DO11, point: do, slot: 1, channel: 11 }
+  - { name: EPIC__Online, point: online }
+  - { name: EPIC__Outages, point: outages }
 `, port))},
 	}
 	p, err := Load(files, "")
@@ -122,6 +128,11 @@ tags:
 	}
 	if drv.Health().Writes != 0 {
 		t.Fatal("an output was written during the hold")
+	}
+	// The driver's own status tags are in every read from New on; they
+	// reach the store (an HMI can show them) but are not a delivery.
+	if v, ok := rt.Tags().ReadPath("EPIC__Online"); !ok || v != false {
+		t.Fatalf("EPIC__Online = %v (%v), want the status tag's false in the store while held", v, ok)
 	}
 
 	drv.Start(context.Background())
