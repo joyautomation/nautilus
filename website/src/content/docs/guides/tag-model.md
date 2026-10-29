@@ -42,6 +42,11 @@ diagram, with live values on, externals with no backing tag are flagged —
 an amber *no tag* badge in the vars panel and on any chip that reads one —
 so you see this before the download, not after.)
 
+A field input is the one tag a seed cannot fix — its value is the field's
+— so at start-up the controller does not scan until its drivers have
+delivered once; see
+[Start-up: the first scan waits for the field](#start-up-the-first-scan-waits-for-the-field).
+
 ## Tags in scope: the rules
 
 - **A manifest tag needs no declaration** in a PROGRAM — ST, ladder, FBD or
@@ -447,3 +452,57 @@ nothing for it. The full model — the four values, where each comes from,
 and why an HMI must check `/api/meta`'s capability flag before drawing a
 quality badge — is in
 [Streaming and data quality](/guides/streaming/#per-tag-quality).
+
+## Start-up: the first scan waits for the field
+
+Inputs are never seeded, so a program that ran before its driver had read
+the field would fault on every input it reads, every scan, until the first
+delivery — and a PLCnext's bus takes 30 s and more to come up after a
+boot. So the controller does what a Siemens CPU does in its start-up,
+waiting for its modules' ready messages: it **holds the first scan until
+every field driver has delivered its inputs once**, for at most a
+monitoring time.
+
+```yaml
+startup:
+  wait-for-io: 60s   # the default; 0 does not wait
+```
+
+While it holds:
+
+- **the program does not run** — no task does — and **no output is
+  written** to any driver;
+- the input read is retried every scan, and what the drivers do deliver
+  (a `<source>__Online` companion, say) lands in the tag store, so the HMI
+  can show it;
+- the dashboard's status reads **waiting for I/O**, naming the drivers not
+  heard from yet, and `/api/state`'s `scan` block carries `waitingForIO:
+  true` with `waitingFor`, `waitingSinceMs` and `waitTimeoutMs`. Held
+  scans are not counted as scans.
+
+A driver has **delivered** when its first input read succeeds and, for a
+driver that polls the field in a loop of its own (EtherNet/IP, Modbus,
+PLCnext, groov EPIC, SNMP, Redfish, Prometheus), when that loop has heard
+from the field: every enabled source has answered once (a parked source is
+not waited for), a PLCnext image has been read from a running bus, an
+EtherNet/IP poll has read every scan class. Tags a driver makes up about
+itself — `__Online`, `__LastPoll`, status counters — are in its read from
+the start and are not a delivery. With several `drivers:`, every one of
+them must have delivered. A Sparkplug host and a replay driver deliver on
+their first read.
+
+The first scan that runs has `FIRST_SCAN()` TRUE, exactly as if there had
+been no wait. If the time runs out, the scan starts anyway, one WARN names
+the driver(s) that never delivered, and from then on nothing is different:
+an input that has never arrived faults the scan that reads it
+(`undefined tag DI_00`), as it always has. The hold happens once, when the
+controller starts scanning (on a [redundant](/guides/redundancy/) pair, when
+a replica first becomes leader); a driver that delivers and later fails is
+an ordinary I/O failure — inputs hold their last values and go stale.
+
+A project with no field driver, or whose driver has no inputs, never
+waits. `naut test` and the acceptance harness run on a stub driver that
+delivers on the first read, so tests are not slowed. In the Go tier the
+same hold is `runtime.Options.StartupWait`, which is zero (no wait) unless
+you set it; a driver that keeps its own image implements
+`io.DeliveryReporter` to say when the field has answered.

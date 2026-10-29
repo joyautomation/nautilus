@@ -115,6 +115,9 @@
       },
       "description": "Files holding additional alarm definitions and rules, each a bare YAML list. Mirrors `tag-files:` exactly, and for the same reason: a GENERATED alarm set stays a separate reviewable artifact. Read in order, then `alarms:` last. An id declared twice in any two sources is an error naming both."
     },
+    "startup": {
+      "$ref": "#/definitions/startup"
+    },
     "target": {
       "type": [
         "object",
@@ -228,6 +231,20 @@
     }
   },
   "definitions": {
+    "startup": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "How the controller begins scanning.",
+      "additionalProperties": false,
+      "properties": {
+        "wait-for-io": {
+          "$ref": "#/definitions/duration",
+          "description": "Hold the first scan until every field driver has delivered its inputs once, for at most this long: the program does not run and no output is written meanwhile, and the dashboard shows it waiting for I/O. After it the scan starts anyway and one WARN names the driver(s) that never delivered. 0 does not wait. Default: 60s. A project with no field driver never waits."
+        }
+      }
+    },
     "duration": {
       "type": "string",
       "pattern": "^([-+]?0|[-+]?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))+)$",

@@ -66,8 +66,8 @@ func TestPrimedMeansAWholeRead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new driver: %v", err)
 		}
-		if d.Health().Primed {
-			t.Fatal("primed before Start")
+		if d.Health().Primed || d.Delivered() {
+			t.Fatal("primed (or delivered) before Start")
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		d.Start(ctx)
@@ -76,8 +76,14 @@ func TestPrimedMeansAWholeRead(t *testing.T) {
 		deadline := time.Now().Add(5 * time.Second)
 		for {
 			connected := d.Health().Connected
+			// Delivered first: it only ever turns on, so if it was true here
+			// Primed (no reconnect in this test) is true when sampled next.
+			delivered := d.Delivered() // what the runtime's start-up hold waits on
 			primed := d.Health().Primed
 			vals, _ := d.ReadInputs()
+			if delivered && !primed {
+				t.Fatalf("denyStructRoots=%v: Delivered before the first whole read", deny)
+			}
 			if primed {
 				for _, name := range d.InputNames() {
 					if _, ok := vals[name]; !ok {
@@ -102,5 +108,8 @@ func TestPrimedMeansAWholeRead(t *testing.T) {
 		}
 		cancel()
 		d.Stop()
+		if !d.Delivered() {
+			t.Errorf("denyStructRoots=%v: Delivered cleared by Stop — it is a first-delivery latch", deny)
+		}
 	}
 }

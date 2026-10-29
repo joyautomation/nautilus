@@ -309,6 +309,14 @@ func TestBaseNeverAnsweredErrorsAtOnce(t *testing.T) {
 	if q := b.Quality(); q["SW1_Port01"] != nio.NotConnected {
 		t.Fatalf("quality = %v", q)
 	}
+	// Its reads succeed with only the companions in them; that is not a
+	// delivery (io.DeliveryReporter, the runtime's start-up hold).
+	if _, err := b.ReadInputs(); err != nil {
+		t.Fatal(err)
+	}
+	if b.Delivered() {
+		t.Fatal("Delivered from a source that never answered")
+	}
 }
 
 func TestBaseEnableParks(t *testing.T) {
@@ -330,6 +338,9 @@ func TestBaseEnableParks(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if h := b.Health(); h.Sources[0].State != "parked" || h.Polls != 0 {
 		t.Fatalf("with enable false at start: %+v polls=%d", h.Sources[0], h.Polls)
+	}
+	if !b.Delivered() {
+		t.Fatal("a parked source is nothing to wait for, but Delivered is false")
 	}
 	if err := b.WriteOutputs(nio.Values{"CFG_PollSwitch": true}); err != nil {
 		t.Fatal(err)
@@ -676,6 +687,9 @@ END_PROGRAM`,
 	defer b.Stop()
 	w.waitPoll(t, "SW1/default")
 	w.waitPoll(t, "SW1/slow")
+	if !b.Delivered() {
+		t.Fatal("polled, but Delivered is false")
+	}
 	rt.Scan()
 	if v, _ := rt.Tags().ReadPath("PortDown"); v != true {
 		t.Fatalf("PortDown = %v", v)

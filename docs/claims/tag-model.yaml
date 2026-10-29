@@ -483,3 +483,37 @@ claims:
       - go ./server TestFrameCarriesQuality
       - go ./server TestFrameOmitsQualityWhenEverythingIsGood
       - go ./server TestStreamFrameCarriesQuality
+  - id: TAG-046
+    claim: >-
+      At start-up the first scan is held until every field driver has
+      delivered its inputs once (its first successful read, and for a driver
+      that polls in a loop of its own, the field's first answer — its own
+      status tags do not count), for at most startup.wait-for-io (default
+      60s, 0 does not wait): while held no program runs, no output is
+      written, and the scan stats say waiting for I/O and name the drivers;
+      the first scan that runs has FIRST_SCAN() TRUE; on timeout the scan
+      starts anyway and one WARN names the drivers that never delivered; a
+      project with no driver or no driver inputs never waits.
+    source: "#start-up-the-first-scan-waits-for-the-field"
+    tests:
+      - go ./runtime TestStartupWaitHoldsUntilFirstDelivery
+      - go ./runtime TestStartupWaitIgnoresStatusTagsBeforeDelivery
+      - go ./runtime TestStartupWaitTimesOutAndNamesTheDriver
+      - go ./runtime TestStartupWaitZeroDoesNotWait
+      - go ./runtime TestStartupWaitSkippedWithoutDriverOrInputs
+      - go ./runtime TestStartupWaitHealthyDriverRunsFirstScan
+      - go ./runtime TestStartupWaitHoldsAdditionalTasks
+      - go ./runtime TestStartupWaitMultiWaitsForEveryChild
+      - go ./io TestMultiDeliveredAndPending
+      - go ./internal/project TestStartupWaitForIOConfig
+      - go ./internal/project TestStartupWaitHoldsAnOptommpProject
+      - go ./plcnext TestDeliveredWaitsForARunningBus
+      - go ./modbus TestDeliveredWaitsForEveryEnabledSource
+      - go ./eip TestPrimedMeansAWholeRead
+      - go ./hw TestBaseNeverAnsweredErrorsAtOnce
+      - go ./optommp TestDriverNotConnectedBeforeFirstScan
+    partial: true
+    note: >-
+      The dashboard's "waiting for I/O" wording (server/index.html and the
+      HMI kit's ScanDiagnostics) is not exercised by a test; the stats
+      fields it renders are.

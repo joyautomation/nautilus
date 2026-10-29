@@ -101,6 +101,25 @@ type Manifest struct {
 	// `naut check` also runs that target's rules, so a construct the
 	// target cannot take is a diagnostic on the keystroke that wrote it.
 	Target *TargetConfig `yaml:"target"`
+	// Startup tunes how the controller begins scanning.
+	Startup *StartupConfig `yaml:"startup"`
+}
+
+// DefaultWaitForIO is startup.wait-for-io when the manifest does not set
+// it: long enough for a controller's I/O to come up at boot (a PLCnext's
+// bus takes 30 s and more), short enough that a dead device does not keep
+// the program from ever running.
+const DefaultWaitForIO = 60 * time.Second
+
+// StartupConfig is the manifest's startup: section.
+type StartupConfig struct {
+	// WaitForIO holds the first scan until every field driver has
+	// delivered its inputs once, for at most this long; then the scan
+	// starts anyway and a WARN names the drivers that never delivered
+	// (runtime.Options.StartupWait). 0 does not wait. Absent:
+	// DefaultWaitForIO. A pointer so that 0 is a setting and an absent key
+	// is not.
+	WaitForIO *Duration `yaml:"wait-for-io"`
 }
 
 // TargetConfig is the deploy target. One kind at a time; logix is the
@@ -803,6 +822,16 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	var drivers []nio.NamedDriver
 	if opts.Driver, drivers, err = buildDrivers(fsys, m); err != nil {
 		return nil, err
+	}
+	opts.StartupWait = DefaultWaitForIO
+	if m.Startup != nil && m.Startup.WaitForIO != nil {
+		if *m.Startup.WaitForIO < 0 {
+			return nil, fmt.Errorf("startup.wait-for-io: %v is negative — 0 does not wait, a positive duration is the longest wait", time.Duration(*m.Startup.WaitForIO))
+		}
+		opts.StartupWait = time.Duration(*m.Startup.WaitForIO)
+	}
+	if len(drivers) == 1 {
+		opts.DriverName = drivers[0].Name
 	}
 	if m.OPCUA != nil && m.OPCUA.Endpoint != "" {
 		if _, _, err := opcuaserver.ParseEndpoint(m.OPCUA.Endpoint); err != nil {

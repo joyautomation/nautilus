@@ -184,6 +184,7 @@ type Driver struct {
 	online    atomic.Bool   // the status point: a session up, inputs fresh
 	outages   atomic.Uint64 // times online fell
 	trips     atomic.Uint64 // times the unit's watchdog may have fired
+	delivered atomic.Bool   // an image has been decoded once (Delivered)
 	reads     atomic.Uint64
 	writes    atomic.Uint64
 	errs      atomic.Uint64
@@ -678,6 +679,7 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 		d.quality[b.Name] = q
 	}
 	d.mu.Unlock()
+	d.delivered.Store(true)
 	d.reads.Add(1)
 	for _, t := range turned {
 		if t.off {
@@ -987,6 +989,11 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	}
 	return nil
 }
+
+// Delivered is io.DeliveryReporter: true once the unit has answered a poll
+// (or sent a stream datagram) and its image has been decoded. The driver's
+// own status tags are in the image from New on and are not a delivery.
+func (d *Driver) Delivered() bool { return d.delivered.Load() }
 
 // Quality is io.QualityReporter.
 func (d *Driver) Quality() map[string]nio.Quality {

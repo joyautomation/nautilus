@@ -293,10 +293,13 @@ func (m Manifest) Warnings() []string {
 func (d *Driver) Start(ctx context.Context) { d.base.Start(ctx) }
 func (d *Driver) Stop()                     { d.base.Stop() }
 
-func (d *Driver) ReadInputs() (nio.Values, error)      { return d.base.ReadInputs() }
-func (d *Driver) ReadInputsInto(dst nio.Values) error  { return d.base.ReadInputsInto(dst) }
-func (d *Driver) WriteOutputs(vals nio.Values) error   { return d.base.WriteOutputs(vals) }
-func (d *Driver) Quality() map[string]nio.Quality      { return d.base.Quality() }
+func (d *Driver) ReadInputs() (nio.Values, error)     { return d.base.ReadInputs() }
+func (d *Driver) ReadInputsInto(dst nio.Values) error { return d.base.ReadInputsInto(dst) }
+func (d *Driver) WriteOutputs(vals nio.Values) error  { return d.base.WriteOutputs(vals) }
+func (d *Driver) Quality() map[string]nio.Quality     { return d.base.Quality() }
+
+// Delivered is io.DeliveryReporter (see hw.Base.Delivered).
+func (d *Driver) Delivered() bool                      { return d.base.Delivered() }
 func (d *Driver) InputNames() []string                 { return d.base.InputNames() }
 func (d *Driver) OutputNames() []string                { return d.base.OutputNames() }
 func (d *Driver) ScanClasses() map[string][]string     { return d.base.ScanClasses() }

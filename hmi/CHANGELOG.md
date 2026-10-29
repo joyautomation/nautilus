@@ -1,5 +1,15 @@
 # Changelog — @joyautomation/nautilus-hmi
 
+## Unreleased
+
+### Added
+
+- **`<ScanDiagnostics>` shows the start-up hold.** While the controller
+  holds its first scan for the field drivers' first delivery (`startup:
+  wait-for-io`), the I/O pill reads *waiting for I/O* and names the drivers,
+  instead of a healthy or faulted I/O count. `ScanStats` gains the optional
+  `waitingForIO`, `waitingFor`, `waitingSinceMs` and `waitTimeoutMs`.
+
 ## 0.8.0 — 2026-10-15 (minor: additive, no breaking changes)
 
 ### Added

@@ -46,6 +46,10 @@ type Multi struct {
 	// stays.
 	mu      sync.Mutex
 	scratch []Values
+	// readOK is, per child, whether its part of the last read succeeded
+	// (under mu) — what Pending names a child by when the child cannot say
+	// for itself (no DeliveryReporter).
+	readOK []bool
 }
 
 // NewMulti composes drivers into one. Every child must be named, the names
@@ -64,6 +68,7 @@ func NewMulti(children ...NamedDriver) (*Multi, error) {
 		inOwner:  map[string]int{},
 		outOwner: map[string]int{},
 		scratch:  make([]Values, len(children)),
+		readOK:   make([]bool, len(children)),
 	}
 	seen := map[string]int{}
 	for i, c := range m.children {
@@ -157,9 +162,11 @@ func (m *Multi) ReadInputsInto(dst Values) error {
 				m.scratch[i] = Values{}
 			}
 			if err := br.ReadInputsInto(m.scratch[i]); err != nil {
+				m.readOK[i] = false
 				errs = append(errs, fmt.Errorf("driver %q: %w", c.Name, err))
 				continue
 			}
+			m.readOK[i] = true
 			for k, v := range m.scratch[i] {
 				dst[k] = v
 				delivered[k] = struct{}{}
@@ -168,9 +175,11 @@ func (m *Multi) ReadInputsInto(dst Values) error {
 		}
 		vals, err := c.Driver.ReadInputs()
 		if err != nil {
+			m.readOK[i] = false
 			errs = append(errs, fmt.Errorf("driver %q: %w", c.Name, err))
 			continue
 		}
+		m.readOK[i] = true
 		for k, v := range vals {
 			dst[k] = v
 			delivered[k] = struct{}{}
@@ -236,6 +245,35 @@ func (m *Multi) Quality() map[string]Quality {
 	return out
 }
 
+// Delivered is io.DeliveryReporter for the set: every child that reports
+// a delivery has delivered. A child that does not report one counts through
+// the read itself — a Multi read succeeds only when every child's does, so
+// a nil error from ReadInputsInto already says each such child answered.
+func (m *Multi) Delivered() bool {
+	for _, c := range m.children {
+		if !Delivered(c.Driver) {
+			return false
+		}
+	}
+	return true
+}
+
+// Pending names the children that have not delivered yet, in
+// configuration order: those whose own Delivered is false, and those whose
+// part of the last read failed. For the runtime's start-up hold, which
+// reports by name which driver it is still waiting for.
+func (m *Multi) Pending() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for i, c := range m.children {
+		if !m.readOK[i] || !Delivered(c.Driver) {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
 // Start fans out to every child with its own loop to launch (eip's poll
 // loop, a Sparkplug host's MQTT session); a child without Start has
 // nothing to start, exactly as `naut run` treats a lone driver.
@@ -279,6 +317,8 @@ var (
 	_ Driver          = (*Multi)(nil)
 	_ BatchReader     = (*Multi)(nil)
 	_ QualityReporter = (*Multi)(nil)
+
+	_ DeliveryReporter = (*Multi)(nil)
 
 	_ interface{ SetWriteGate(func() bool) } = (*Multi)(nil)
 )

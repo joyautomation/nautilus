@@ -5,6 +5,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **`startup: wait-for-io` in the manifest schema**: completion and hover
+  for the start-up hold — the first scan waits until every field driver
+  has delivered once, for at most this long (default `60s`, `0` does not
+  wait). Needs a naut that has it.
+
 ## [0.19.1] - 2026-10-26
 
 Requires naut 0.19.0 or later for the items marked so; everything else

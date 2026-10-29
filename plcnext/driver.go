@@ -98,6 +98,7 @@ type Driver struct {
 	connected  atomic.Bool
 	configured atomic.Bool
 	running    atomic.Bool
+	delivered  atomic.Bool // a Good image has been decoded once (Delivered)
 	modules    atomic.Int64
 	reads      atomic.Uint64
 	writes     atomic.Uint64
@@ -525,6 +526,9 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 			}
 			d.in[b.Name] = v
 		}
+		if r.q == nio.Good {
+			d.delivered.Store(true)
+		}
 	}
 	d.quality = r.q
 	d.setOnline(r.q == nio.Good)
@@ -654,6 +658,13 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	}
 	return errors.Join(errs...)
 }
+
+// Delivered is io.DeliveryReporter: true once an input image from a
+// running bus has been decoded. A frame the shim is not refreshing, a PLC
+// that is not started, or a bus that is not exchanging process data (Bad
+// bytes on a live socket) is not a delivery, so the runtime's start-up hold
+// keeps waiting through a controller's boot.
+func (d *Driver) Delivered() bool { return d.delivered.Load() }
 
 // Quality is io.QualityReporter: one source, so one quality for every
 // input — Good while the image is being refreshed and the bus runs, Bad

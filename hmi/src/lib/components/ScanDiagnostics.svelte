@@ -178,12 +178,19 @@
 			<span><i class="exec"></i>logic execute <b>{fmt(scan.execUs, 0)} µs</b></span>
 			<span><i class="write"></i>output write <b>{fmt(scan.writeMs, 2)} ms</b></span>
 			<span class="pillbox">
-				<StatusPill
-					kind={scan.ioHealthy ? 'good' : 'critical'}
-					label={scan.ioHealthy
-						? `I/O healthy · ${scan.ioErrors} errors`
-						: (scan.lastIOError ?? 'I/O fault')}
-				/>
+				{#if scan.waitingForIO}
+					<StatusPill
+						kind="warning"
+						label={`waiting for I/O — ${scan.waitingFor?.join(', ') || 'the field drivers'}`}
+					/>
+				{:else}
+					<StatusPill
+						kind={scan.ioHealthy ? 'good' : 'critical'}
+						label={scan.ioHealthy
+							? `I/O healthy · ${scan.ioErrors} errors`
+							: (scan.lastIOError ?? 'I/O fault')}
+					/>
+				{/if}
 			</span>
 		</div>
 	</div>

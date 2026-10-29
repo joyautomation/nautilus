@@ -115,6 +115,7 @@ func TestSchemaMatchesLoader(t *testing.T) {
 	}{
 		{"the manifest itself", goKeys(Manifest{}), schemaKeys(s.Properties)},
 		{"server", goKeys(ServerConfig{}), schemaKeys(s.Definitions["server"].Properties)},
+		{"startup", goKeys(StartupConfig{}), schemaKeys(s.Definitions["startup"].Properties)},
 		{"a task", goKeys(TaskConfig{}), schemaKeys(s.Definitions["task"].Properties)},
 		{"a tag", goKeys(TagConfig{}), schemaKeys(s.Definitions["tag"].Properties)},
 		{"the driver", goKeys(DriverConfig{}), schemaKeys(s.Definitions["driver"].Properties)},

@@ -71,6 +71,9 @@ func TestDriverReadsTheBenchChassis(t *testing.T) {
 	dev := newBenchDevice()
 	drv := startDriver(t, dev, benchManifest(t, dev, ManifestOptions{}))
 	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
+	if !drv.Delivered() {
+		t.Error("the unit has answered a scan but Delivered is false")
+	}
 
 	v, _ := drv.ReadInputs()
 	if v["EPIC_M0_DI03"] != true || v["EPIC_M0_DI02"] != false {
@@ -116,6 +119,12 @@ func TestDriverNotConnectedBeforeFirstScan(t *testing.T) {
 	}
 	if q, ok := drv.Quality()["EPIC__Online"]; ok {
 		t.Errorf("a status point has quality %s; it is the driver's own and always Good", q)
+	}
+	// Whatever the driver's image holds before the unit answers (its own
+	// status tags), it is not a delivery: the runtime's start-up hold keys
+	// on Delivered, not on a read that succeeds.
+	if drv.Delivered() {
+		t.Error("Delivered before the unit answered")
 	}
 }
 

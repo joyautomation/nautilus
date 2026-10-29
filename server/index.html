@@ -215,6 +215,8 @@
       .status.live .dot { background: var(--good); animation: pulse 1.6s ease-in-out infinite; }
       .status.stale { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 45%, transparent); }
       .status.stale .dot { background: var(--crit); }
+      .status.waiting { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+      .status.waiting .dot { background: var(--warn); }
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
       /* Three-way theme selector, matching the kit's ThemeSwitch: rigid
@@ -372,6 +374,7 @@
       .phlegend .io { margin-left: auto; font-weight: 600; }
       .phlegend .io.bad { color: var(--crit); }
       .phlegend .io.ok { color: var(--good); }
+      .phlegend .io.warn { color: var(--warn); }
 
       /* ── field-driver status cards ────────────────────────────────────── */
       .drivers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.7rem; margin-top: 0.75rem; }
@@ -1059,7 +1062,17 @@
         $("ph-exec-v").textContent = fmtMs(s.execUs, 0) + " µs";
         $("ph-write-v").textContent = fmtMs(s.writeMs, 2) + " ms";
         const io = $("ph-io");
-        if (s.ioHealthy) {
+        if (s.waitingForIO) {
+          // The start-up hold: the program has not run yet and nothing has
+          // been written, until every driver has delivered once.
+          const who = (s.waitingFor ?? []).join(", ") || "the field drivers";
+          const left = s.waitingSinceMs && s.waitTimeoutMs
+            ? Math.max(0, Math.ceil((s.waitingSinceMs + s.waitTimeoutMs - Date.now()) / 1000))
+            : null;
+          io.className = "io warn";
+          io.textContent = "WAITING FOR I/O — " + who + (left !== null ? ` · starts anyway in ${left} s` : "") +
+            (s.lastIOError && !s.ioHealthy ? " · " + s.lastIOError : "");
+        } else if (s.ioHealthy) {
           io.className = "io ok";
           io.textContent = "I/O healthy · " + (s.ioErrors ?? 0) + " errors";
         } else {
@@ -1204,7 +1217,10 @@
       es.onmessage = (e) => {
         try {
           render(JSON.parse(e.data));
-          setStatus("live", "live");
+          // Connected, but the controller is holding its first scan until
+          // the field drivers deliver (startup: wait-for-io).
+          if (lastScan && lastScan.waitingForIO) setStatus("waiting", "waiting for I/O");
+          else setStatus("live", "live");
         } catch {}
       };
       es.onerror = () => setStatus("stale", "reconnecting…");

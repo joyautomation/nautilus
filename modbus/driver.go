@@ -173,6 +173,7 @@ type source struct {
 	snapshot nio.Values // decoded values, held across disconnects
 	online   bool
 	answered bool   // a read succeeded on the current connection (resets backoff)
+	heard    bool   // a read has ever succeeded: answered, never cleared (Delivered)
 	state    string // parked | connecting | connected | error
 	sinceMs  int64
 	lastErr  error
@@ -882,7 +883,7 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 	}
 	br.excCount = 0
 	br.bad = false
-	s.answered = true
+	s.answered, s.heard = true, true
 	for _, t := range br.Bindings {
 		off := int(t.Address) - int(br.Start)
 		if regs != nil {
@@ -1138,6 +1139,24 @@ func coalesceCoils(ws []coilWrite) []coilRun {
 		end = int(w.addr) + 1
 	}
 	return runs
+}
+
+// Delivered is io.DeliveryReporter: true once every enabled source that
+// polls anything has answered a read at least once. ReadInputs succeeds
+// from Start on with only the __Online companions in it, which the
+// runtime's start-up hold must not mistake for the inputs having arrived.
+// A parked source (enable tag false) is not waited for: nothing will poll
+// it until it is enabled.
+func (d *Driver) Delivered() bool {
+	for _, s := range d.sources {
+		s.mu.Lock()
+		waiting := s.enabled && len(s.blocks) > 0 && !s.heard
+		s.mu.Unlock()
+		if waiting {
+			return false
+		}
+	}
+	return true
 }
 
 // ── source state helpers ─────────────────────────────────────────────────

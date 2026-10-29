@@ -1152,6 +1152,23 @@ func (b *Base) ConnectionUp(id string) bool {
 	return s.freshLocked(b.now())
 }
 
+// Delivered is io.DeliveryReporter: true once every enabled source has
+// answered a poll at least once. ReadInputs succeeds from the start with
+// only the __Online/__LastPoll companions in it, which the runtime's
+// start-up hold must not mistake for the inputs having arrived. A parked
+// source is not waited for.
+func (b *Base) Delivered() bool {
+	for _, s := range b.sources {
+		s.mu.Lock()
+		waiting := s.enabled && len(s.classes) > 0 && s.lastPoll.IsZero()
+		s.mu.Unlock()
+		if waiting {
+			return false
+		}
+	}
+	return true
+}
+
 // Health returns the current per-source states and counters.
 func (b *Base) Health() Health {
 	h := Health{Kind: b.kind, Polls: b.polls.Load(), Writes: b.writesN.Load(), Errors: b.errs.Load()}

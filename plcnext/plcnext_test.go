@@ -297,6 +297,9 @@ func TestDriverAgainstFakeFirmware(t *testing.T) {
 	if q := d.Quality()["DI_00"]; q != nio.NotConnected {
 		t.Fatalf("before Start: %v", q)
 	}
+	if d.Delivered() {
+		t.Fatal("Delivered before Start")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	d.Start(ctx)
@@ -323,6 +326,9 @@ func TestDriverAgainstFakeFirmware(t *testing.T) {
 	}
 	if q := d.Quality()["AI_00"]; q != nio.Good {
 		t.Errorf("quality %v", q)
+	}
+	if !d.Delivered() {
+		t.Error("inputs arrived but Delivered is false")
 	}
 	h := d.Health()
 	if !h.Connected || !h.Configured || !h.Running || h.Modules != 4 || h.InBytes != 4 || h.OutBytes != 4 {
@@ -371,6 +377,9 @@ func TestDriverAgainstFakeFirmware(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	if !d.Delivered() {
+		t.Error("Delivered cleared by a bus stop: it is a first-delivery latch")
+	}
 	f.setRun(true)
 	deadline = time.Now().Add(2 * time.Second)
 	for d.Quality()["DI_00"] != nio.Good {
@@ -409,6 +418,51 @@ func TestDriverWithoutBusConductorAndMissingPort(t *testing.T) {
 	}
 	if q := d.Quality()["DI_00"]; q != nio.NotConnected {
 		t.Errorf("quality %v, want NotConnected", q)
+	}
+	if d.Delivered() {
+		t.Error("Delivered with the input port missing")
+	}
+}
+
+// A bus that is not exchanging process data yet (a controller still
+// booting) delivers Bad bytes on a live socket: not a delivery, so the
+// runtime's start-up hold keeps waiting until the bus runs.
+func TestDeliveredWaitsForARunningBus(t *testing.T) {
+	f := newFakeGDS()
+	f.setRun(false)
+	addr := serve(t, f)
+	// No BusConductor: nothing here raises RUN; the PLC program does that.
+	m, err := ParseManifest([]byte("bus-conductor: \"\"\ntags:\n  - {name: DI_00, dir: in, offset: 0, format: \"bit:0\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(m, WithScanRate(10*time.Millisecond), WithDialer(func(ctx context.Context) (dataAccess, error) {
+		return Dial(ctx, addr)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for d.Health().Reads < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("never read: %+v", d.Health())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if d.Delivered() {
+		t.Fatalf("Delivered while the bus is not running (quality %v)", d.Quality()["DI_00"])
+	}
+	f.setRun(true)
+	deadline = time.Now().Add(5 * time.Second)
+	for !d.Delivered() {
+		if time.Now().After(deadline) {
+			t.Fatalf("never Delivered after the bus started: %+v", d.Health())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

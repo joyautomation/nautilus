@@ -55,6 +55,9 @@ type Driver struct {
 	// snapshot fills tag by tag during a poll, so before this a reader can
 	// see some of the first poll's tags and not the rest.
 	primed bool
+	// delivered is primed that never clears: the controller has answered a
+	// whole read once since the driver started (Delivered).
+	delivered bool
 	// leafModeN is len(leafMode), kept under mu for Health: the map itself
 	// belongs to the run goroutine, and Health is called from others (a
 	// Sparkplug device's health check, every tick).
@@ -352,6 +355,17 @@ func (d *Driver) Health() Health {
 	return h
 }
 
+// Delivered is io.DeliveryReporter: true once every scan class has
+// completed a poll (the first time Primed was set), and from then on.
+// ReadInputs succeeds as soon as the connection is up, part-way through
+// that first poll, which is what the runtime's start-up hold must not
+// mistake for the inputs having arrived.
+func (d *Driver) Delivered() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.delivered
+}
+
 // ── io.Driver ────────────────────────────────────────────────────────────
 
 // ReadInputs returns the latest polled snapshot. While disconnected it
@@ -560,7 +574,7 @@ func (d *Driver) serve(ctx context.Context, sess *session) {
 		c.next = time.Now().Add(c.rate)
 	}
 	d.mu.Lock()
-	d.primed = true
+	d.primed, d.delivered = true, true
 	d.mu.Unlock()
 	for {
 		wake := time.Duration(time.Hour)

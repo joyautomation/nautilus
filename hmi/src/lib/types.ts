@@ -107,6 +107,15 @@ export interface ScanStats {
 	logicErrors: number;
 	ioHealthy: boolean;
 	lastIOError?: string;
+	/** True while the first scan is held for the field drivers' first
+	 * delivery (`startup: wait-for-io`): the program has not run and no
+	 * output has been written. Absent once scanning has started. */
+	waitingForIO?: boolean;
+	/** The drivers the hold is still waiting for. */
+	waitingFor?: string[];
+	/** When the hold began (epoch ms) and how long it lasts at most. */
+	waitingSinceMs?: number;
+	waitTimeoutMs?: number;
 	/** Last 180 scan times, ms. */
 	recent: number[];
 	/** Last 180 actual scan periods, ms. */

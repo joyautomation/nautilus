@@ -324,6 +324,9 @@ func (d *Driver) WriteOutputs(v nio.Values) error { return d.base.WriteOutputs(v
 // Quality reports the non-Good tags (io.QualityReporter).
 func (d *Driver) Quality() map[string]nio.Quality { return d.base.Quality() }
 
+// Delivered is io.DeliveryReporter (see hw.Base.Delivered).
+func (d *Driver) Delivered() bool { return d.base.Delivered() }
+
 // InputNames lists the struct tags and the per-source companions.
 func (d *Driver) InputNames() []string { return d.base.InputNames() }
 

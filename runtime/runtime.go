@@ -98,6 +98,30 @@ type Options struct {
 	// frames, zero the dt clocks) on the edge where it becomes leader.
 	// leader.Elector satisfies this; nil means standalone, always leader.
 	Coordinator Coordinator
+	// StartupWait holds the first scan until the field driver has
+	// delivered its inputs once, for at most this long — a Siemens CPU's
+	// start-up waiting for its modules' ready messages, with the monitoring
+	// time. While it holds, the program does not run (no task does), no
+	// output is written to the driver, and ScanStats.WaitingForIO says so;
+	// the read is retried every scan. "Delivered" is the driver's first
+	// input read that returns nil AND, for a driver that keeps its own image
+	// (io.DeliveryReporter), its first real read of the field; for an
+	// io.Multi, every child's. When the time runs out the scan starts
+	// anyway, one WARN names the drivers that never delivered, and from
+	// then on nothing differs: an input that has never arrived faults the
+	// scan that reads it, as it always has. The hold happens once, at the
+	// start of this controller's scanning (on a redundant pair, the first
+	// scan after becoming leader); a driver that delivers and later fails
+	// is ordinary I/O failure, not this.
+	//
+	// Zero (the default here; manifests default to 60s) does not wait,
+	// and neither does a runtime with no driver or no driver-bound inputs.
+	// The timeout is measured on Clock when one is set.
+	StartupWait time.Duration
+	// DriverName is what the start-up hold calls a lone driver in its
+	// status and its WARN (an io.Multi names its own children). Default
+	// "driver".
+	DriverName string
 }
 
 // Task is one additional program in the resource: its source, its own
@@ -183,6 +207,15 @@ type Runtime struct {
 	coord       Coordinator
 	cpus        []int // main task thread placement, see Options.CPUs
 	prio        int
+
+	// The start-up hold (Options.StartupWait). holding is true until the
+	// driver first delivers or startWait runs out; atomic because every
+	// task's scan checks it. holdSince is when the first held scan was
+	// attempted, on the runtime's clock — under mainMu.
+	startWait  time.Duration
+	driverName string
+	holding    atomic.Bool
+	holdSince  time.Time
 
 	// retainSkipped remembers which retained tags retainState has already
 	// logged as unretainable (see retainable), so the 2-second saver names
@@ -323,6 +356,16 @@ type ScanStats struct {
 	Periods   []float64 `json:"periods"`   // last 180 actual periods, ms
 	Histogram []int     `json:"histogram"` // 2 ms buckets of scan time
 
+	// WaitingForIO is true while the first scan is held for the field
+	// drivers' first delivery (Options.StartupWait): the program has not
+	// run and no output has been written. WaitingFor names the drivers not
+	// heard from yet; WaitingSinceMs is when the hold began (epoch ms, 0
+	// before the first attempt) and WaitTimeoutMs how long it lasts at most.
+	WaitingForIO   bool     `json:"waitingForIO,omitempty"`
+	WaitingFor     []string `json:"waitingFor,omitempty"`
+	WaitingSinceMs int64    `json:"waitingSinceMs,omitempty"`
+	WaitTimeoutMs  float64  `json:"waitTimeoutMs,omitempty"`
+
 	// Additional tasks' health (empty when the resource runs one program).
 	Tasks []TaskStats `json:"tasks,omitempty"`
 }
@@ -462,6 +505,15 @@ func New(o Options) (*Runtime, error) {
 	r.cpus, r.prio = o.CPUs, o.Priority
 	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority}
 	r.stats.IOHealthy = true
+	r.startWait, r.driverName = o.StartupWait, o.DriverName
+	if r.driverName == "" {
+		r.driverName = "driver"
+	}
+	if o.StartupWait > 0 && o.Driver != nil && len(o.Inputs) > 0 {
+		r.holding.Store(true)
+		r.stats.WaitingForIO = true
+		r.stats.WaitTimeoutMs = o.StartupWait.Seconds() * 1000
+	}
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
 	r.stats.Histogram = make([]int, histBuckets)
@@ -961,6 +1013,11 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	if !r.gate() {
 		return
 	}
+	if r.holding.Load() {
+		// The start-up hold: no program runs until the main task's driver
+		// has delivered (or the wait ran out). See Options.StartupWait.
+		return
+	}
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	tr.mu.Lock()
@@ -1008,19 +1065,18 @@ func (r *Runtime) scanAt(due time.Time) {
 	}
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
-	r.mu.Lock()
-	dt := r.scan.Seconds()
-	first := r.lastScan.IsZero()
-	if !first {
-		dt = now.Sub(r.lastScan).Seconds()
-	}
-	r.lastScan = now
-	r.mu.Unlock()
 
 	// One main scan at a time (I/O buffers, observers); additional tasks
 	// run alongside, each isolated by its own Program.Run.
 	r.mainMu.Lock()
 	defer r.mainMu.Unlock()
+
+	// The start-up hold asks the driver whether it has delivered BEFORE
+	// reading, so a delivery that lands between the two is not mistaken
+	// for this read carrying it: the read that releases the hold is one
+	// taken after the driver said its image was whole.
+	hold := r.holding.Load()
+	ready := hold && r.driver != nil && nio.Delivered(r.driver)
 
 	// 1. inputs — on a read failure the scan runs on last-known values.
 	var ioErr error
@@ -1048,6 +1104,18 @@ func (r *Runtime) scanAt(due time.Time) {
 			r.tags.setMany(r.inputs, in)
 		}
 	}
+	if hold && !r.releaseHold(ready, ioErr, now) {
+		return // held: no logic, no outputs, no observers, not a scan
+	}
+
+	r.mu.Lock()
+	dt := r.scan.Seconds()
+	first := r.lastScan.IsZero()
+	if !first {
+		dt = now.Sub(r.lastScan).Seconds()
+	}
+	r.lastScan = now
+	r.mu.Unlock()
 	if r.dtTag != "" {
 		r.tags.SetReal(r.dtTag, dt)
 	}
@@ -1094,6 +1162,77 @@ func (r *Runtime) scanAt(due time.Time) {
 	r.fireOnScan()
 
 	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr, lateUs(t0, due, dt, r.scan))
+}
+
+// releaseHold decides one held scan (see Options.StartupWait): it ends
+// the hold when the driver has delivered — it said so before this read
+// (ready) and the read succeeded — or when the wait has run out, and
+// reports whether this scan goes on to run the program. A scan that stays
+// held records only the read's health, so the dashboard shows why it is
+// waiting. Under mainMu.
+func (r *Runtime) releaseHold(ready bool, ioErr error, now time.Time) bool {
+	if ready && ioErr == nil {
+		r.holding.Store(false)
+		r.endHold()
+		if !r.holdSince.IsZero() {
+			slog.Info("runtime: field I/O delivered; scanning starts", "waited", now.Sub(r.holdSince).Round(time.Millisecond))
+		}
+		return true
+	}
+	if r.holdSince.IsZero() {
+		r.holdSince = now
+		slog.Info("runtime: waiting for field I/O before the first scan", "waitingFor", r.pendingDrivers(), "timeout", r.startWait)
+	}
+	if now.Sub(r.holdSince) >= r.startWait {
+		pending := r.pendingDrivers()
+		r.holding.Store(false)
+		r.endHold()
+		slog.Warn("runtime: field I/O did not deliver within the start-up wait; scanning starts without it — inputs it has never delivered fault the scans that read them",
+			"drivers", pending, "waited", r.startWait, "lastError", errText(ioErr))
+		return true
+	}
+	pending := r.pendingDrivers()
+	r.mu.Lock()
+	s := &r.stats
+	s.WaitingFor = pending
+	s.WaitingSinceMs = r.holdSince.UnixMilli()
+	if ioErr != nil {
+		s.IOErrors++
+		s.IOHealthy = false
+		s.LastIOError = ioErr.Error()
+	} else {
+		s.IOHealthy = true
+	}
+	r.mu.Unlock()
+	return false
+}
+
+// endHold clears the hold from the diagnostics.
+func (r *Runtime) endHold() {
+	r.mu.Lock()
+	r.stats.WaitingForIO = false
+	r.stats.WaitingFor = nil
+	r.stats.WaitingSinceMs = 0
+	r.stats.WaitTimeoutMs = 0
+	r.mu.Unlock()
+}
+
+// pendingDrivers names the drivers the hold is still waiting for: an
+// io.Multi's children that have not delivered, or the lone driver.
+func (r *Runtime) pendingDrivers() []string {
+	if p, ok := r.driver.(interface{ Pending() []string }); ok {
+		if names := p.Pending(); len(names) > 0 {
+			return names
+		}
+	}
+	return []string{r.driverName}
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // lateUs is one lateness sample: the scan's start against its slot when
@@ -1184,6 +1323,7 @@ func (r *Runtime) Stats() ScanStats {
 	s.Recent = append([]float64(nil), r.stats.Recent...)
 	s.Periods = append([]float64(nil), r.stats.Periods...)
 	s.Histogram = append([]int(nil), r.stats.Histogram...)
+	s.WaitingFor = append([]string(nil), r.stats.WaitingFor...)
 	if len(r.stats.RetainDiscardedEdits) > 0 {
 		s.RetainDiscardedEdits = append([]string(nil), r.stats.RetainDiscardedEdits...)
 	}
