@@ -82,7 +82,11 @@ func CopyValue(v Value) Value {
 	return v
 }
 
-// Zero returns the IEC 61131-3 default value for t.
+// Zero returns the IEC 61131-3 default initial value for t: the zero of an
+// elementary type, an enumeration's declared initial member, and for a
+// STRUCT each member's declared initial value (`Temp : REAL := 72.5;`),
+// else the default of the member's own type — recursively, so a nested
+// struct and an array of structs carry their members' initial values too.
 func Zero(t *Type) Value {
 	if t == nil {
 		return Value{}
@@ -110,7 +114,7 @@ func Zero(t *Type) Value {
 	case TypeStruct:
 		f := make([]Value, len(t.Struct.Fields))
 		for i, fld := range t.Struct.Fields {
-			f[i] = Zero(fld.Type)
+			f[i] = fld.initial()
 		}
 		return Value{Kind: TypeStruct, Fld: f, Struct: t.Struct}
 	case TypeFB:
