@@ -15,7 +15,9 @@ import (
 //   - For a struct type, init must be a map[string]any (as the YAML
 //     decoder hands back a mapping node): named members are set, in the
 //     member's own type recursively for a nested struct; every member the
-//     map omits keeps Zero of its field type. A struct type given anything
+//     map omits keeps its type's initial value — the member's declared
+//     initial (`Temp : REAL := 72.5;`), else Zero of its field type — so
+//     init: overrides the TYPE's initial values member by member. A struct type given anything
 //     else (a scalar) is an error — struct tags need a mapping, not a
 //     bare value.
 //   - For a scalar type, init is the scalar itself (bool/int/int64/float64/
