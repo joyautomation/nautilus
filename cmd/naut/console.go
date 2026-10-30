@@ -178,8 +178,22 @@ func wrapBanner(banner string, width int) string {
 			b.WriteString(" — ")
 			col += 3
 		}
-		b.WriteString(p)
-		col += utf8.RuneCountInString(p)
+		// a part longer than the line (a URL with its label) wraps at
+		// its own spaces rather than mid-word
+		for j, w := range strings.Split(p, " ") {
+			n := utf8.RuneCountInString(w)
+			if j > 0 {
+				if col+1+n > width {
+					b.WriteString("\n  ")
+					col = 2
+				} else {
+					b.WriteString(" ")
+					col++
+				}
+			}
+			b.WriteString(w)
+			col += n
+		}
 	}
 	return b.String()
 }

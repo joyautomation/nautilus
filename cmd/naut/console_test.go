@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func consoleLine(t *testing.T, width int, log func(*slog.Logger)) string {
@@ -76,6 +77,19 @@ func TestWrapBanner(t *testing.T) {
 	want := "nautilus · line1\n  dashboard + tag API on http://localhost:18101\n  sparkplug up — Ctrl+C to stop"
 	if got := wrapBanner(b, 55); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	// Narrower than a section (the video rig's ~47-column pane): the
+	// section wraps at its own spaces, so the URL stays whole on a line
+	// instead of the terminal breaking it mid-word.
+	want = "nautilus · line1\n  dashboard + tag API on\n  http://localhost:18101 — sparkplug up\n  Ctrl+C to stop"
+	got := wrapBanner(b, 40)
+	if got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	for _, ln := range strings.Split(got, "\n") {
+		if utf8.RuneCountInString(ln) > 40 {
+			t.Fatalf("line %q is wider than 40", ln)
+		}
 	}
 }
 
