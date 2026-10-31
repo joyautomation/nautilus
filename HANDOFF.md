@@ -59,6 +59,8 @@ modbus/              Modbus TCP driver: wire, codec, block planner, per-source p
                      in-process slave, codegen for `naut modbus import|browse|serve|tags`
 opcua/server         OPC UA server (gopcua for the protocol, our own NameSpace over the tag
                      store): browse/read/subscribe, read-only; `opcua:` in the manifest
+opcua/internal/uaserver  the server stack under it: gopcua v0.9.1's server package, copied
+                     in (MIT) and ours to fix; gopcua's ua/uasc/uacp stay a dependency
 retain/, leader/, hist/  retained state (file/ConfigMap), Lease election, historian
 server/              tag API (state/SSE/write) + branded dashboard
 cmd/naut         CLI: new, run, build, check, test, lsp, pull

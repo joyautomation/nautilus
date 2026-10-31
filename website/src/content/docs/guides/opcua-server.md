@@ -36,11 +36,10 @@ is a line you write: `opc.tcp://0.0.0.0:4840` listens on every interface.
 An OPC UA client finds an endpoint by its exact URL, so the server
 advertises one per name it answers to: the host you wrote, every interface
 address when you wrote `0.0.0.0`, the machine's host name, and loopback. A
-client may dial any of them. One that asks about a URL the server never
-heard of (a NAT address, a DNS alias) is given the whole list by
-GetEndpoints, but the session itself has to be opened through one of the
-advertised names: there is no way yet to advertise a name the host does
-not know about ([#430](https://github.com/joyautomation/nautilus/issues/430)).
+client may dial any of them. One that reaches the server through a URL it
+never heard of (a NAT address, a DNS alias) is given the whole list, by
+GetEndpoints and again in the CreateSession answer, so it can open its
+session through the address it used.
 
 The server is **read-only**: a write is answered `Bad_UserAccessDenied`,
 never silently dropped. See [Security](#security) for why, and what comes
@@ -174,6 +173,10 @@ realign its counts) is answered with the values the subscription has.
 `SetMonitoringMode` means what it answers: a `Disabled` or `Sampling`
 item is silent until it is `Reporting` again, and then hears the current
 value first; an item created `Disabled` is silent from the start.
+`CloseSession` with `deleteSubscriptions` set (what client libraries send
+by default) deletes the session's subscriptions and their items before it
+answers; without it they run on until their lifetime runs out. A
+subscription id is never issued twice.
 
 An item that cannot be monitored — a node id that is not a node, or a
 Value on an Object or the folder — is refused when it is created, with the

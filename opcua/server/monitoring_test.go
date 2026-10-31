@@ -423,3 +423,199 @@ func TestMonitoredItemHonoursIndexRange(t *testing.T) {
 		t.Errorf("Levels = %v", dv.Value.Value())
 	}
 }
+
+// A subscription id is never issued twice (#432). gopcua numbered them
+// len(Subs)+1, so with 1 and 2 live and 1 deleted the next was 2 again: it
+// replaced the live entry, and the cancelled subscription's own cleanup,
+// which deletes its id when its task returns, then took the new one with
+// it, so the client's next CreateMonitoredItems was refused.
+func TestSubscriptionIDsAreNeverReused(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	subscribe := func() *opcua.Subscription {
+		t.Helper()
+		sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond}, make(chan *opcua.PublishNotificationData, 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sub
+	}
+	a, b := subscribe(), subscribe()
+	if err := a.Cancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	n := subscribe()
+	if n.SubscriptionID == a.SubscriptionID || n.SubscriptionID == b.SubscriptionID {
+		t.Fatalf("ids a=%d b=%d, then new=%d: an id was issued again", a.SubscriptionID, b.SubscriptionID, n.SubscriptionID)
+	}
+	// Give a's task time to return and run its cleanup, then use both live
+	// subscriptions: neither may have gone with it.
+	time.Sleep(200 * time.Millisecond)
+	for i, sub := range []*opcua.Subscription{b, n} {
+		res, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth,
+			opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Level"), ua.AttributeIDValue, uint32(i+1)))
+		if err != nil {
+			t.Fatalf("subscription %d: %v", sub.SubscriptionID, err)
+		}
+		if st := res.Results[0].StatusCode; st != ua.StatusGood {
+			t.Fatalf("subscription %d: item %s", sub.SubscriptionID, st)
+		}
+	}
+	if st := s.Status(); st.Subscriptions != 2 || st.MonitoredItems != 2 {
+		t.Errorf("status %+v, want 2 subscriptions and 2 items", st)
+	}
+}
+
+// CloseSession honours deleteSubscriptions (Part 4 §5.6.4, #422): TRUE
+// deletes the session's subscriptions and their items before it answers;
+// FALSE leaves them to their own lifetime. gopcua ignored the flag, so a
+// client that closed its session left its subscriptions running, counted
+// on the driver row, until their lifetime ran out.
+func TestCloseSessionHonoursDeleteSubscriptions(t *testing.T) {
+	for _, del := range []bool{true, false} {
+		t.Run(fmt.Sprintf("deleteSubscriptions=%v", del), func(t *testing.T) {
+			rt, _ := newRuntime(t)
+			s, c := startServer(t, rt)
+			ctx := context.Background()
+			sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond, LifetimeCount: 6, MaxKeepAliveCount: 2}, make(chan *opcua.PublishNotificationData, 64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth,
+				opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Level"), ua.AttributeIDValue, 1),
+				opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Count"), ua.AttributeIDValue, 2)); err != nil {
+				t.Fatal(err)
+			}
+			if st := s.Status(); st.Subscriptions != 1 || st.MonitoredItems != 2 {
+				t.Fatalf("before close %+v", st)
+			}
+			if err := c.Send(ctx, &ua.CloseSessionRequest{DeleteSubscriptions: del}, func(r ua.Response) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			st := s.Status()
+			if del {
+				if st.Subscriptions != 0 || st.MonitoredItems != 0 {
+					t.Fatalf("after CloseSession(deleteSubscriptions=true) %+v, want nothing left", st)
+				}
+				return
+			}
+			if st.Subscriptions != 1 || st.MonitoredItems != 2 {
+				t.Fatalf("after CloseSession(deleteSubscriptions=false) %+v, want the subscription kept", st)
+			}
+			// Its lifetime then ends it, once nothing publishes for it. (The
+			// inherited publish loop counts the lifetime once per keep-alive
+			// period, not per publishing interval: 6 × 2 × 20 ms here.)
+			deadline := time.Now().Add(5 * time.Second)
+			for st := s.Status(); st.Subscriptions != 0 || st.MonitoredItems != 0; st = s.Status() {
+				if time.Now().After(deadline) {
+					t.Fatalf("kept subscription never expired: %+v", st)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
+	}
+}
+
+// Cancelling a subscription while its items' first values are still owed
+// must not stop the server. Ported from gopcua PR #929's end-to-end test,
+// which caught the inherited stack deadlocking its one message loop here;
+// through nautilus the items on a Server-object node are each owed their
+// one value by a goroutine of createMonitoredItems, more of them than the
+// subscription's channel holds. The services are sent raw: gopcua's
+// client's own subscription bookkeeping (its publish loop pausing and
+// resuming as subscriptions come and go) can hang in the client, which is
+// not what this test is about.
+func TestServerAnswersAfterASubscriptionIsCancelledWithValuesOwed(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	node := ua.NewNumericNodeID(0, id.Server_ServerStatus_CurrentTime)
+	items := make([]*ua.MonitoredItemCreateRequest, 150)
+	for i := range items {
+		items[i] = opcua.NewMonitoredItemCreateRequestWithDefaults(node, ua.AttributeIDValue, uint32(i+1))
+	}
+	send := func(round int, what string, req ua.Request) ua.Response {
+		t.Helper()
+		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		var resp ua.Response
+		if err := c.Send(sctx, req, func(r ua.Response) error { resp = r; return nil }); err != nil {
+			t.Fatalf("round %d: %s: the server stopped answering: %v", round, what, err)
+		}
+		return resp
+	}
+	createSub := func(round int) uint32 {
+		t.Helper()
+		r := send(round, "CreateSubscription", &ua.CreateSubscriptionRequest{RequestedPublishingInterval: 100, RequestedLifetimeCount: 60, RequestedMaxKeepAliveCount: 20, PublishingEnabled: true})
+		return r.(*ua.CreateSubscriptionResponse).SubscriptionID
+	}
+	for round := range 10 {
+		subID := createSub(round)
+		send(round, "CreateMonitoredItems", &ua.CreateMonitoredItemsRequest{SubscriptionID: subID, TimestampsToReturn: ua.TimestampsToReturnBoth, ItemsToCreate: items})
+		send(round, "DeleteSubscriptions", &ua.DeleteSubscriptionsRequest{SubscriptionIDs: []uint32{subID}})
+		pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := opcua.GetEndpoints(pctx, s.URL())
+		pcancel()
+		if err != nil {
+			t.Fatalf("round %d: the server stopped answering after a subscription was cancelled: %v", round, err)
+		}
+	}
+	// The deadlock showed when the loop reached the next CreateSubscription.
+	createSub(10)
+}
+
+// Disabling an item during a burst of changes stops it at once: a value it
+// had queued but not yet published is dropped, not sent after the client
+// was told Good (Part 4 §5.12.1.3; black-box F-27, which failed once in CI
+// on one late notification). The publishing interval is long so a queued
+// value sits for up to 600 ms before it would go out; the 100 ms after
+// Good is for what was already on the wire.
+func TestDisablingDropsWhatTheItemHadQueued(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() { // Count moves every 2 ms
+		var n int64
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+				n++
+				rt.Tags().Set("Count", n)
+			}
+		}
+	}()
+	notify := make(chan *opcua.PublishNotificationData, 256)
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 600 * time.Millisecond}, notify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Cancel(ctx)
+	resp, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth, opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Count"), ua.AttributeIDValue, 1))
+	if err != nil || resp.Results[0].StatusCode != ua.StatusGood {
+		t.Fatalf("monitor: %v %v", err, resp)
+	}
+	item := resp.Results[0].MonitoredItemID
+	for round := range 2 {
+		// Wait for a publish, then let the burst queue values for a while.
+		if got := count(notify, 900*time.Millisecond); got[1] == 0 {
+			t.Fatalf("round %d: the Reporting item heard nothing", round)
+		}
+		time.Sleep(time.Duration(150+200*round) * time.Millisecond)
+		mode, err := sub.SetMonitoringMode(ctx, ua.MonitoringModeDisabled, item)
+		if err != nil || mode.Results[0] != ua.StatusGood {
+			t.Fatalf("round %d: SetMonitoringMode(Disabled): %v %v", round, err, mode)
+		}
+		count(notify, 100*time.Millisecond)
+		if got := count(notify, 800*time.Millisecond); got[1] != 0 {
+			t.Fatalf("round %d: Disabled, yet %d notification(s) in the next 800 ms", round, got[1])
+		}
+		if _, err := sub.SetMonitoringMode(ctx, ua.MonitoringModeReporting, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
