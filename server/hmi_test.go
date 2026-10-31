@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 // An /api/ path no route matches is a JSON 404, with or without server.hmi:
@@ -201,6 +202,44 @@ func TestHMINonSeekableFS(t *testing.T) {
 	}
 	if rec.Header().Get("Etag") == "" {
 		t.Fatal("no ETag on non-seekable FS")
+	}
+}
+
+// The redeploy regression: `naut run` serves hmi/build from the directory,
+// and a rebuild replaces its files in place under the same paths. The
+// content ETag was cached by path alone, so after the rebuild the server
+// sent the NEW bytes with the OLD ETag and answered a stale tab's
+// If-None-Match with 304 — the tab never saw the new build (or a model
+// regenerated under the same name) until a hard reload.
+func TestHMIETagFollowsRebuild(t *testing.T) {
+	hmi := testHMI()
+	hmi["models/pump.glb"] = &fstest.MapFile{Data: []byte("glTF v1"), ModTime: time.Unix(1_700_000_000, 0)}
+	h := New(newTestRuntime(t), Options{HMI: hmi}).Handler()
+
+	get := func(p string) (string, int) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		return rec.Header().Get("Etag"), rec.Code
+	}
+	first, _ := get("/models/pump.glb")
+	if first == "" {
+		t.Fatal("no ETag on the model")
+	}
+	// Rebuilt in place: new bytes, same path, later mod time.
+	hmi["models/pump.glb"] = &fstest.MapFile{Data: []byte("glTF v2 — a taller riser"), ModTime: time.Unix(1_700_000_060, 0)}
+	second, _ := get("/models/pump.glb")
+	if second == first {
+		t.Fatalf("ETag %s unchanged after the file was rebuilt", first)
+	}
+	req := httptest.NewRequest("GET", "/models/pump.glb", nil)
+	req.Header.Set("If-None-Match", first)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("stale If-None-Match %s after rebuild: code %d, want 200 with the new bytes", first, rec.Code)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("v2")) {
+		t.Fatalf("body after rebuild = %q, want the new bytes", rec.Body.String())
 	}
 }
 
