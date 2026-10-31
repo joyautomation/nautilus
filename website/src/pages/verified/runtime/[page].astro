@@ -67,9 +67,10 @@ const split = (ref: string) => ref.replace(/^(go|naut) /, '').split(/ (.*)/s);
                 const n = t.passed + t.failed + t.skipped;
                 return (
                   <li>
-                    <Badge text={t.status === 'missing' ? 'not reported' : t.status} variant={STATUS_VARIANT[t.status]} />{' '}
+                    <Badge text={t.status === 'missing' ? 'not reported' : t.status === 'release-only' ? 'release check, not yet run' : t.status} variant={STATUS_VARIANT[t.status]} />{' '}
                     <code>{name}</code> in {url ? <a href={url}><code>{dir.replace(/^\.\//, '')}</code></a> : <code>{dir}</code>}
                     {n > 1 && <span class="vf-muted"> ({t.passed} of {n} passed)</span>}
+                    {t.from && <span class="vf-muted"> (last {t.from} run)</span>}
                   </li>
                 );
               })}

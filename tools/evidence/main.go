@@ -21,7 +21,10 @@
 //	    any problem or a reference no job reported (CI uses it on main to
 //	    drive the rolling issue). -baseline <evidence.json> compares with an
 //	    earlier run and -summary <file> writes the comparison as markdown
-//	    (CI's PR job summary).
+//	    (CI's PR job summary). -release <dir> holds the last
+//	    blackbox-release run's go test -json: a cited black-box check
+//	    outside the gate takes its verdict from there, and without one reads
+//	    release-only, listed but not a problem.
 //
 //	git diff --name-only BASE HEAD | go run ./tools/evidence drift [-github] [-summary f]
 //	    Warn about each documentation page that changed while its
@@ -142,7 +145,8 @@ type Evidence struct {
 	Claims      []ClaimResult      `json:"claims"`
 	Verdicts    map[string]int     `json:"verdicts"`
 	Missing     []string           `json:"missing,omitempty"`
-	Problems    []string           `json:"problems,omitempty"` // claim files/refs that do not check
+	ReleaseOnly []string           `json:"releaseOnly,omitempty"` // black-box refs outside the gate no release run reported; informational
+	Problems    []string           `json:"problems,omitempty"`    // claim files/refs that do not check
 	Naut        map[string]Summary `json:"naut,omitempty"`
 }
 
@@ -199,6 +203,7 @@ func runBuild(args []string) error {
 	strict := fs.Bool("strict", false, "exit 1 on any claim problem or a reference no job reported")
 	baseline := fs.String("baseline", "", "an earlier evidence.json to compare with (optional)")
 	summary := fs.String("summary", "", "write the run's claims summary as markdown here (optional)")
+	release := fs.String("release", "", "the last blackbox-release run's go test -json files (optional; may not exist)")
 	fs.Parse(args)
 
 	files, problems, err := loadClaims(filepath.Join(*root, "docs", "claims"))
@@ -209,6 +214,22 @@ func runBuild(args []string) error {
 	res := newResults()
 	if err := res.readDir(*in); err != nil {
 		return err
+	}
+	// A manifest that does not parse is a claim problem like a broken claims
+	// file, not fatal: every black-box reference then reads as unknown.
+	disp, err := loadDispositions(*root)
+	if err != nil {
+		problems = append(problems, err.Error())
+	}
+	// The release run's results are kept apart from this build's: they are
+	// another commit's, and only answer the checks the gate does not run.
+	rel := newResults()
+	if *release != "" {
+		if _, err := os.Stat(*release); err == nil {
+			if err := rel.readDir(*release); err != nil {
+				return err
+			}
+		}
 	}
 	cov := map[string][2]int{}
 	if *cover != "" {
@@ -263,7 +284,7 @@ func runBuild(args []string) error {
 		return err
 	}
 
-	missing := map[string]bool{}
+	missing, releaseOnly := map[string]bool{}, map[string]bool{}
 	for _, f := range files {
 		for _, c := range f.Claims {
 			cr := ClaimResult{ID: c.ID, File: f.File, Claim: strings.TrimSpace(c.Claim), Source: c.Source, Partial: c.Partial, Note: strings.TrimSpace(c.Note), Refs: []RefResult{}}
@@ -273,9 +294,12 @@ func runBuild(args []string) error {
 					cr.Refs = append(cr.Refs, RefResult{Ref: strings.TrimSpace(t), Status: "missing"})
 					continue
 				}
-				rr := res.lookup(ref)
-				if rr.Status == "missing" {
+				rr := resolve(ref, res, rel, disp)
+				switch rr.Status {
+				case "missing":
 					missing[ref.Raw] = true
+				case ReleaseOnly:
+					releaseOnly[ref.Raw] = true
 				}
 				cr.Refs = append(cr.Refs, rr)
 			}
@@ -288,6 +312,10 @@ func runBuild(args []string) error {
 		ev.Missing = append(ev.Missing, m)
 	}
 	sort.Strings(ev.Missing)
+	for m := range releaseOnly {
+		ev.ReleaseOnly = append(ev.ReleaseOnly, m)
+	}
+	sort.Strings(ev.ReleaseOnly)
 
 	b, err := json.MarshalIndent(ev, "", " ")
 	if err != nil {
@@ -302,6 +330,9 @@ func runBuild(args []string) error {
 	}
 	if len(ev.Missing) > 0 {
 		fmt.Fprintf(os.Stderr, "%d reference(s) matched no test result:\n  %s\n", len(ev.Missing), strings.Join(ev.Missing, "\n  "))
+	}
+	if len(ev.ReleaseOnly) > 0 {
+		fmt.Printf("%d black-box reference(s) outside the gate, not yet run by blackbox-release (not a problem)\n", len(ev.ReleaseOnly))
 	}
 	if *summary != "" {
 		var base *Evidence
@@ -342,7 +373,11 @@ func summarize(ev, base *Evidence) string {
 		fmt.Fprintf(&b, "| %s | %s |\n", v, cell)
 	}
 	if len(ev.Problems)+len(ev.Missing) == 0 {
-		b.WriteString("\nEvery claim checks and every reference matched a test result.\n")
+		if len(ev.ReleaseOnly) == 0 {
+			b.WriteString("\nEvery claim checks and every reference matched a test result.\n")
+		} else {
+			b.WriteString("\nEvery claim checks and every reference matched a test result, release-only checks aside.\n")
+		}
 	}
 	list := func(title string, items []string) {
 		if len(items) == 0 {
@@ -359,6 +394,18 @@ func summarize(ev, base *Evidence) string {
 	}
 	list("Claim problems", ev.Problems)
 	list("References no job reported (renamed or removed test?)", ev.Missing)
+	// A release check that failed is a real failure even though no job of
+	// this run ran it; the claim already reads failing, this says why.
+	var relFailing []string
+	for _, c := range ev.Claims {
+		for _, r := range c.Refs {
+			if r.From != "" && r.Status == string(Fail) {
+				relFailing = append(relFailing, fmt.Sprintf("%s: %s", c.ID, r.Ref))
+			}
+		}
+	}
+	list("Failing in the last blackbox-release run", relFailing)
+	list("Release-only black-box checks, not yet run by blackbox-release (informational)", ev.ReleaseOnly)
 	if base != nil {
 		was := map[string]string{}
 		for _, c := range base.Claims {

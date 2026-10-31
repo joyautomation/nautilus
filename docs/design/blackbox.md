@@ -141,8 +141,14 @@ Dispositions map to jobs:
 | disposition | job | SUT |
 |---|---|---|
 | `gate` | ci.yml `blackbox-gate`, every PR | built from the PR, coverage-instrumented |
-| `release` | blackbox-release.yml, on a published CLI release | the release tarball, checksums verified |
+| `release` | blackbox-release.yml, after each CLI release; nightly on main | the release tarball, checksums verified; nightly, built from main |
 | `soak`, `manual`, `once` | none; listed in the manifest with `note` | — |
+
+A claim citing a check outside the gate takes its verdict from the most
+recent blackbox-release run (the runtime-evidence job downloads that run's
+artifact): a failure there makes the claim failing, and before any run the
+reference reads `release-only`, which is listed but is not a claim problem.
+A cited id that `checks.yaml` does not have is one.
 
 Changing a disposition on import (a `gate` check that needs a second of
 wall clock, a `release` check that turned out deterministic) is allowed

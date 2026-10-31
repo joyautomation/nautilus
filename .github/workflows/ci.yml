@@ -626,12 +626,30 @@ jobs:
           if [ -n "$id" ]; then
             gh run download "$id" --repo "$GITHUB_REPOSITORY" -n runtime-evidence -D "$RUNNER_TEMP/base" || echo "main's run $id has no runtime-evidence artifact"
           fi
+      # The black-box checks outside the gate run in blackbox-release.yml
+      # (nightly on main and on each CLI release), never in this workflow;
+      # the claims citing them take the verdict of its most recent run that
+      # left evidence. A failed run counts, so a release check that fails
+      # reads failing rather than an older pass. With none, those references
+      # read release-only, which is not a claim problem.
+      - name: The last blackbox-release run's evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for id in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow blackbox-release.yml --status completed --limit 10 \
+              --json databaseId,conclusion --jq '.[] | select(.conclusion == "success" or .conclusion == "failure") | .databaseId'); do
+            if gh run download "$id" --repo "$GITHUB_REPOSITORY" -p 'evidence-blackbox-release-*' -D "$RUNNER_TEMP/release"; then
+              echo "Release-check verdicts from blackbox-release run [$id]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id)." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+          echo "No blackbox-release run has left evidence yet: its checks read release-only." >> "$GITHUB_STEP_SUMMARY"
       - name: Build the evidence file
         run: |
           mkdir -p runtime-evidence
           base=()
           [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
-          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out \
+          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out -release "$RUNNER_TEMP/release" \
             -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
           cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload runtime evidence

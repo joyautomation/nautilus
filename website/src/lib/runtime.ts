@@ -9,7 +9,9 @@ export type Verdict = 'verified' | 'partial' | 'failing' | 'unrun' | 'gap';
 
 export interface RefResult {
   ref: string;
-  status: 'pass' | 'fail' | 'skip' | 'missing';
+  status: 'pass' | 'fail' | 'skip' | 'missing' | 'release-only';
+  /** "blackbox-release": the status is that workflow's last run's, not this build's. */
+  from?: string;
   passed: number;
   failed: number;
   skipped: number;
@@ -99,6 +101,7 @@ export const STATUS_VARIANT: Record<RefResult['status'], 'success' | 'danger' | 
   fail: 'danger',
   skip: 'note',
   missing: 'caution',
+  'release-only': 'note',
 };
 
 /** The /verified/runtime/<slug>/ page for a claims file. */

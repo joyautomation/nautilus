@@ -176,7 +176,8 @@ func (r *Results) readDir(dir string) error {
 // RefResult is how one reference fared.
 type RefResult struct {
 	Ref     string `json:"ref"`
-	Status  string `json:"status"` // pass, fail, skip, missing
+	Status  string `json:"status"`         // pass, fail, skip, missing, release-only
+	From    string `json:"from,omitempty"` // "blackbox-release": the status is that workflow's last run's, not this build's
 	Passed  int    `json:"passed"`
 	Failed  int    `json:"failed"`
 	Skipped int    `json:"skipped"`

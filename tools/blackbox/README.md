@@ -18,7 +18,7 @@ Without `NAUTILUS_BLACKBOX_PYTHON` the test skips. Other knobs:
 | env | default | meaning |
 |---|---|---|
 | `NAUTILUS_BLACKBOX_PYTHON` | — | the interpreter with the oracle clients installed; required |
-| `NAUTILUS_BLACKBOX_NAUT` | built from this checkout | the binary under test (a release's, in blackbox-release.yml) |
+| `NAUTILUS_BLACKBOX_NAUT` | built from this checkout | the binary under test (a release's, in blackbox-release.yml on a tag; its nightly builds main's) |
 | `NAUTILUS_BLACKBOX_DISPOSITION` | `gate` | which disposition to run: `gate` or `release` |
 | `NAUTILUS_BLACKBOX_COVERDIR` | unset | build the SUT coverage-instrumented and collect its counters here (`go tool covdata percent -i=<dir>`) |
 

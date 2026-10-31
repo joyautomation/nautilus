@@ -177,3 +177,110 @@ func TestSummarize(t *testing.T) {
 		t.Errorf("a clean run should say so:\n%s", clean)
 	}
 }
+
+// The gate job reports gate checks; the last blackbox-release run (nightly
+// on main, or a CLI release) reports the rest.
+const gateJSON = `{"Action":"pass","Package":"github.com/joyautomation/nautilus/tools/blackbox","Test":"TestBlackbox/001-F01-gate"}
+{"Action":"pass","Package":"github.com/joyautomation/nautilus/tools/blackbox","Test":"TestBlackbox"}
+`
+
+const releaseJSON = `{"Action":"pass","Package":"github.com/joyautomation/nautilus/tools/blackbox","Test":"TestBlackbox/001-P-rel-pass"}
+{"Action":"fail","Package":"github.com/joyautomation/nautilus/tools/blackbox","Test":"TestBlackbox/001-P-rel-fail"}
+{"Action":"fail","Package":"github.com/joyautomation/nautilus/tools/blackbox","Test":"TestBlackbox"}
+`
+
+func TestResolveBlackbox(t *testing.T) {
+	res, rel := newResults(), newResults()
+	if err := res.readGoJSON(strings.NewReader(gateJSON)); err != nil {
+		t.Fatal(err)
+	}
+	if err := rel.readGoJSON(strings.NewReader(releaseJSON)); err != nil {
+		t.Fatal(err)
+	}
+	disp := map[string]string{
+		"001-F01-gate":     "gate",
+		"001-P-rel-pass":   "release",
+		"001-P-rel-fail":   "release",
+		"001-P-rel-unrun":  "release",
+		"001-P-manual-one": "manual",
+	}
+	cases := []struct {
+		name, ref, status, from string
+	}{
+		{"gate ref, this run", "go ./tools/blackbox TestBlackbox/001-F01-gate", "pass", ""},
+		{"release ref with release evidence", "go ./tools/blackbox TestBlackbox/001-P-rel-pass", "pass", "blackbox-release"},
+		{"failed release check", "go ./tools/blackbox TestBlackbox/001-P-rel-fail", "fail", "blackbox-release"},
+		{"release ref without release evidence", "go ./tools/blackbox TestBlackbox/001-P-rel-unrun", ReleaseOnly, ""},
+		{"manual check, never run", "go ./tools/blackbox TestBlackbox/001-P-manual-one", ReleaseOnly, ""},
+		{"unknown id stays missing", "go ./tools/blackbox TestBlackbox/001-P-renamed", "missing", ""},
+		{"not a black-box ref", "go ./modbus TestA", "missing", ""},
+	}
+	for _, c := range cases {
+		ref, err := parseRef(c.ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := resolve(ref, res, rel, disp)
+		if got.Status != c.status || got.From != c.from {
+			t.Errorf("%s: got %s from %q, want %s from %q", c.name, got.Status, got.From, c.status, c.from)
+		}
+	}
+	// A release check that failed fails its claim; one not yet run leaves
+	// the claim unrun, which is not a problem.
+	if v := verdict(ClaimResult{Refs: []RefResult{{Status: "pass"}, {Status: "fail", From: "blackbox-release"}}}); v != "failing" {
+		t.Errorf("claim with a failed release check: %s, want failing", v)
+	}
+	if v := verdict(ClaimResult{Refs: []RefResult{{Status: ReleaseOnly}}}); v != "unrun" {
+		t.Errorf("claim with only a release-only check: %s, want unrun", v)
+	}
+}
+
+// A black-box reference must name a check the manifest has: a renamed id
+// is the case the "no job reported" warning exists for, so `check` catches
+// it before any run.
+func TestCheckBlackboxID(t *testing.T) {
+	root := t.TempDir()
+	dir := root + "/tools/blackbox"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		if err := os.WriteFile(dir+"/"+name, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("blackbox_test.go", "package blackbox\n\nfunc TestBlackbox(t *testing.T) {}\n")
+	write("checks.yaml", "checks:\n- id: 001-F01-gate\n  disposition: gate\n- id: 001-P-rel\n  disposition: release\n")
+	c := &checker{root: root, funcs: map[string]map[string]bool{}, suite: map[string]map[string]bool{}}
+	for _, ok := range []string{"TestBlackbox/001-F01-gate", "TestBlackbox/001-P-rel", "TestBlackbox"} {
+		r, _ := parseRef("go ./tools/blackbox " + ok)
+		c.checkRef("X-001", r)
+	}
+	if len(c.errs) != 0 {
+		t.Fatalf("known ids flagged: %v", c.errs)
+	}
+	r, _ := parseRef("go ./tools/blackbox TestBlackbox/001-P-renamed")
+	c.checkRef("X-001", r)
+	if len(c.errs) != 1 || !strings.Contains(c.errs[0], "no check 001-P-renamed in tools/blackbox/checks.yaml") {
+		t.Errorf("unknown id: %v", c.errs)
+	}
+}
+
+func TestSummarizeRelease(t *testing.T) {
+	ev := &Evidence{Verdicts: map[string]int{"failing": 1, "unrun": 1}, Claims: []ClaimResult{
+		{ID: "UA-001", Verdict: "failing", Refs: []RefResult{{Ref: "go ./tools/blackbox TestBlackbox/001-P-rel-fail", Status: "fail", From: "blackbox-release"}}},
+		{ID: "UA-002", Verdict: "unrun", Refs: []RefResult{{Ref: "go ./tools/blackbox TestBlackbox/001-P-rel-unrun", Status: ReleaseOnly}}},
+	}, ReleaseOnly: []string{"go ./tools/blackbox TestBlackbox/001-P-rel-unrun"}}
+	got := summarize(ev, nil)
+	for _, want := range []string{
+		"**Failing in the last blackbox-release run** (1)", "`UA-001: go ./tools/blackbox TestBlackbox/001-P-rel-fail`",
+		"(informational)** (1)", "release-only checks aside",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "References no job reported") {
+		t.Errorf("a release-only reference is not a missing one:\n%s", got)
+	}
+}

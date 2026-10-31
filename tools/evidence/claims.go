@@ -102,6 +102,7 @@ type checker struct {
 	root  string
 	funcs map[string]map[string]bool // package dir → declared Test funcs
 	suite map[string]map[string]bool // project dir → acceptance test names
+	disp  map[string]string          // black-box check id → disposition, read on first use
 	errs  []string
 }
 
@@ -224,6 +225,22 @@ func (c *checker) checkRef(at string, r Ref) {
 	top, sub, _ := strings.Cut(r.Test, "/")
 	if !c.testFuncs(r.Dir)[top] {
 		c.errorf("%s: %s: no func %s in %s/*_test.go", at, r.Raw, top, r.Dir)
+		return
+	}
+	// A black-box check runs in CI, or in blackbox-release.yml, only under
+	// the id the manifest gives it; any other id is never reported anywhere.
+	if id, ok := blackboxID(r); ok {
+		if c.disp == nil {
+			d, err := loadDispositions(c.root)
+			if err != nil {
+				c.errorf("%v", err)
+				d = map[string]string{}
+			}
+			c.disp = d
+		}
+		if _, known := c.disp[id]; !known {
+			c.errorf("%s: %s: no check %s in tools/blackbox/checks.yaml", at, r.Raw, id)
+		}
 		return
 	}
 	// The conformance corpus's subtests are its feature directories and
