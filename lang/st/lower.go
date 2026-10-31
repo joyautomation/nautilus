@@ -730,7 +730,11 @@ func (l *lowerer) collectTypes() error {
 				if err != nil {
 					return errAt(f.Pos, fmt.Errorf("TYPE %s field %q: %w", td.Name, f.Name, err))
 				}
-				t.Struct.Fields = append(t.Struct.Fields, ir.StructField{Name: f.Name, Type: ft})
+				init, err := l.fieldInit(f, ft)
+				if err != nil {
+					return errAt(f.Pos, fmt.Errorf("TYPE %s field %q initial: %w", td.Name, f.Name, err))
+				}
+				t.Struct.Fields = append(t.Struct.Fields, ir.StructField{Name: f.Name, Type: ft, Init: init})
 				t.Struct.FieldIndex[f.Name] = i
 			}
 		default:
@@ -742,6 +746,32 @@ func (l *lowerer) collectTypes() error {
 		}
 	}
 	return nil
+}
+
+// fieldInit folds a STRUCT member's declared initial value (`Temp : REAL :=
+// 72.5;`) to a Value of the member's type, or returns the zero Value (no
+// initial: the member takes the default of its type) when it has none.
+// Parsed and then dropped, the initial value left every member at zero —
+// a manifest tag of the type and a VAR of it alike (IEC 61131-3 has a
+// variable of a structured type start at its members' initial values).
+func (l *lowerer) fieldInit(f VarDecl, ft *ir.Type) (ir.Value, error) {
+	if f.Initial == nil {
+		return ir.Value{}, nil
+	}
+	if ft.Kind == ir.TypeFB {
+		return ir.Value{}, fmt.Errorf("a function-block member takes no initial value")
+	}
+	v, err := l.constValue(f.Initial, ft)
+	if err != nil {
+		return ir.Value{}, err
+	}
+	// The literal path folds a literal as itself; a member's value is
+	// published as its declared type, so a mismatch is an error here
+	// rather than a STRING riding in a REAL member.
+	if v.Kind != ft.Kind {
+		return ir.Value{}, fmt.Errorf("cannot initialise a %s with a %s", ft, v.Kind)
+	}
+	return v, nil
 }
 
 func (l *lowerer) resolveType(te TypeExpr) (*ir.Type, error) {
@@ -805,7 +835,11 @@ func (l *lowerer) resolveType(te TypeExpr) (*ir.Type, error) {
 			if err != nil {
 				return nil, err
 			}
-			def.Fields = append(def.Fields, ir.StructField{Name: f.Name, Type: ft})
+			init, err := l.fieldInit(f, ft)
+			if err != nil {
+				return nil, fmt.Errorf("STRUCT field %q initial: %w", f.Name, err)
+			}
+			def.Fields = append(def.Fields, ir.StructField{Name: f.Name, Type: ft, Init: init})
 			def.FieldIndex[f.Name] = i
 		}
 		return &ir.Type{Kind: ir.TypeStruct, Struct: def}, nil

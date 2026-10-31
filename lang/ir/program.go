@@ -58,8 +58,12 @@ func resetZero(dst *Value, t *Type) {
 		}
 	case TypeStruct:
 		if dst.Kind == TypeStruct && t.Struct != nil && len(dst.Fld) == len(t.Struct.Fields) {
-			for i := range dst.Fld {
-				resetZero(&dst.Fld[i], t.Struct.Fields[i].Type)
+			for i, fld := range t.Struct.Fields {
+				if fld.Init.Kind != TypeVoid {
+					dst.Fld[i] = CopyValue(fld.Init)
+					continue
+				}
+				resetZero(&dst.Fld[i], fld.Type)
 			}
 			dst.Struct = t.Struct
 			return

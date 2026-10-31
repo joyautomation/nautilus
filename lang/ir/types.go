@@ -288,6 +288,23 @@ type StructDef struct {
 type StructField struct {
 	Name string
 	Type *Type
+	// Init is the member's declared initial value (`Temp : REAL := 72.5;`
+	// inside the STRUCT); a zero Value.Kind means "use Zero(Type)", as on
+	// VarSlot and FBSlot. Every value of the struct type starts here —
+	// Zero(t) of the struct, so a manifest tag of the type, a VAR of it, an
+	// array element and a nested member alike — unless a manifest init:
+	// or a declaration's own initial value overrides the member.
+	Init Value
+}
+
+// initial is the member's starting value: Init when declared, else the
+// zero of its type (which, for a struct-typed member, is that struct's
+// own member initial values).
+func (f StructField) initial() Value {
+	if f.Init.Kind != TypeVoid {
+		return CopyValue(f.Init)
+	}
+	return Zero(f.Type)
 }
 
 // FBDef describes a function block type. Slots are laid out
