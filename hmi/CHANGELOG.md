@@ -1,5 +1,51 @@
 # Changelog — @joyautomation/nautilus-hmi
 
+## Unreleased (minor; one breaking change, below)
+
+### Added
+
+- **Mimic equipment resizes and lays itself out.** `MimicEquipment.height`
+  sits beside `width`; a built-in laid out to width × height grows its
+  body (the vessel, the valve body, the motor can) while text, scales and
+  actuators keep their size. At its own proportions a component still
+  scales exactly as before. `tracks()` and `fitBox()` (a CSS-grid-style
+  track split and the size/scale rule) are exported for your own
+  components, and `tankGeometry` / `valveGeometry` / `pumpGeometry` /
+  `builtinParts` for code that needs the built-ins' layout without a DOM.
+- **Ports anchored to a part of the drawing.** A port may name a `part`
+  (an element its component marks `data-part="body"`); its `x`/`y` are
+  then fractions of that part, so it stays on the valve body or the vessel
+  wall at any size. `partRect()` measures a part off the DOM; both
+  renderers use it. The built-ins' default ports are part-anchored now:
+  Tank on its `vessel`, Valve on its `body` (which runs the full width, so
+  the ports are on the body's ends), Pump on its `suction` and `discharge`
+  nozzles.
+- **Looks.** `MimicDoc.look` (`isa101`, the default, or `realistic`; a
+  `look` prop on `<Mimic>` overrides it) is passed to every component as
+  its `look` prop. ISA-101 is flat grey with state shown by fill (an open
+  valve or a running pump is solid); realistic is shaded steel and liquid
+  with coloured indicators.
+- **`--edge`, an outline token, and the equipment uses it.** Tank,
+  Pump and Pipe outlined their walls with `--axis`, a chart-axis grey at
+  about 1.5:1 on the dark card, so a stopped pump all but vanished.
+  `--edge` holds at least 3:1 on `--surface`, `--bg` and `--surface-2` in
+  both themes (a test checks it). A host that themed `--axis` to restyle
+  outlines should theme `--edge` instead; `--pipe-wall` / `--pipe-dead`
+  still override the pipe.
+- **`palette.css`**: the colour tokens on their own (`theme.css` imports
+  it), and `data-theme` now works on any element, so a subtree can show
+  the other theme. The bare-`:root` dark set is under `:where()`, so a
+  host's own `:root` overrides win regardless of import order.
+- **`<Heater>`**: an immersion element that glows with `powerPct`,
+  convection bubbles rising off it. Place it over a Tank.
+
+### Changed (breaking)
+
+- **`<Tank>` is a plain vessel.** `tempC` and `heaterPct` are gone (the
+  liquid no longer takes a temperature colour and the coil is the
+  separate `<Heater>`). A doc that bound them: bind the heater tag to a
+  Heater instance over the tank, and show the temperature in a label.
+
 ## 0.8.0 — 2026-10-15 (minor: additive, no breaking changes)
 
 ### Added

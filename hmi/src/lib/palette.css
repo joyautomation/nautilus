@@ -1,0 +1,89 @@
+/* nautilus HMI palette — the colour tokens alone, light & dark.
+
+   theme.css imports this; import it on its own when a host already owns its
+   base styles and only wants the kit's colours (the VS Code mimic editor
+   does, to preview a mimic exactly as operators will see it).
+
+   Bare :root is the dark set (under :where(), so any :root rule of the
+   host's wins without a specificity fight). [data-theme] works on <html>
+   AND on any element below it: `<div data-theme="light">` repaints just that
+   subtree, which is how a preview shows the other theme inside a page.
+
+   --axis is a chart axis — deliberately faint, never an outline. Equipment
+   outlines (vessel walls, pump casings, pipe walls) are --edge, which holds
+   at least 3:1 (WCAG non-text contrast) against --surface, --bg and
+   --surface-2 in both sets, so a stopped pump drawn as an outline is still
+   there at 03:00. */
+
+:where(:root),
+:root[data-theme='dark'],
+[data-theme='dark'] {
+	--bg: #0d0d0d;
+	--surface: #1a1a19;
+	--surface-2: #232321;
+	--border: rgba(255, 255, 255, 0.1);
+	--ink: #ffffff;
+	--ink-2: #c3c2b7;
+	--muted: #898781;
+	--grid: #2c2c2a;
+	--axis: #383835;
+	--edge: #7a7973;
+
+	/* categorical series (validated on --surface, dark) */
+	--s1: #3987e5; /* blue — primary series */
+	--s2: #c98500; /* yellow — secondary / setpoint */
+	--s3: #199e70; /* aqua — tertiary series */
+	--s5: #9085e9; /* violet */
+
+	/* status (RESERVED — process state and nothing else. Never chrome, never
+	   a chart series.) */
+	--good: #0ca30c;
+	--warn: #fab219;
+	--serious: #ec835a;
+	--crit: #d03b3b;
+
+	/* interaction tokens — the house cyan brand */
+	--hover: #2c2c2a;
+	--accent: #06b6d4; /* cyan-500 */
+	--primary-bg: #155e75;
+	--primary-border: #0e7490;
+	--primary-hover: #0891b2;
+
+	/* the ground a floating thing is seen against */
+	--overlay: color-mix(in srgb, var(--bg) 55%, transparent);
+	color-scheme: dark;
+}
+
+:root[data-theme='light'],
+[data-theme='light'] {
+	--bg: #f3f2ee;
+	--surface: #ffffff;
+	--surface-2: #e9e7e0;
+	--border: rgba(0, 0, 0, 0.13);
+	--ink: #1b1a17;
+	--ink-2: #45443d;
+	--muted: #74726a;
+	--grid: #e4e2da;
+	--axis: #c9c7bd;
+	--edge: #7e7c74;
+
+	/* categorical series (darker steps read on the light surface) */
+	--s1: #2a6fc9;
+	--s2: #9c6a00;
+	--s3: #157a55;
+	--s5: #6357cf;
+
+	--good: #0a8a0a;
+	--warn: #b07d0d;
+	--serious: #c85f38;
+	--crit: #c22f2f;
+
+	--hover: #e4e2da;
+	--accent: #0e7490; /* cyan-700 */
+	--primary-bg: #0e7490;
+	--primary-border: #22a3bd;
+	--primary-hover: #155e75;
+
+	--overlay: color-mix(in srgb, var(--bg) 55%, transparent);
+	color-scheme: light;
+}

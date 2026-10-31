@@ -62,7 +62,7 @@ Wire the realtime client to your runtime's SSE stream and render faceplates:
 </script>
 
 {#if rt.frame}
-	<Tank levelPct={rt.frame.level} tempC={rt.frame.tempC} heaterPct={rt.frame.heaterPct} label="T-101" />
+	<Tank levelPct={rt.frame.level} label="T-101" />
 	<Gauge value={rt.frame.tempC} min={0} max={100} unit="°C" label="Temp" />
 	<Trend series={[{ name: 'Level', color: 'var(--s1)', points: level.points }]} unit="%" />
 {/if}
@@ -256,8 +256,8 @@ the state. `state` is `'on' | 'off' | 'fault' | 'unknown'`, and `unknown` never 
 `off` — an absent point and a stopped pump mean opposite things.
 
 **`LevelTank`** — a level-only vessel with band marks, a percentage and a volume. (`Tank` is the
-heated-vessel twin: `tempC`, `heaterPct`, an animated coil. Both exist because they answer
-different questions.)
+mimic's vessel: a level and a 0–100 scale, laid out to any `width` × `height`. Heating is its own
+component, `Heater` — an element coil that glows with `powerPct` — placed over the tank.)
 
 For a network view you lay out yourself, the four glyph primitives — `TankGlyph`, `PumpGlyph`,
 `ValveGlyph`, `FlowLink` — render bare SVG `<g>` elements to drop inside your own `<svg>`.
@@ -465,6 +465,13 @@ after hydration, which is too late; put this in `app.html`'s `<head>`, after `%s
 </script>
 ```
 
+**Colours alone, or a subtree in the other theme.** The colour tokens live in `palette.css`, which
+`theme.css` imports; a host that owns its own base styles can import just
+`@joyautomation/nautilus-hmi/palette.css`. `data-theme` works on any element, not only `<html>`:
+`<div data-theme="light">` repaints that subtree, so a preview can show the light theme inside a
+dark page. The VS Code mimic editor does both, so its canvas shows a mimic in the colours operators
+will see.
+
 ### The layers
 
 | family | tokens |
@@ -474,6 +481,7 @@ after hydration, which is too late; put this in `app.html`'s `<head>`, after `%s
 | space | `--space-unit` `0.325rem`, and `--space-1 … --space-8` on it. Prefer these over literal px in anything that lays out; px survives only as a drawing dimension |
 | radii | `--radius` 10px (panels, cards, faceplates) · `--radius-sm` 6px (controls, inputs, chips) · `--radius-pill` |
 | ground | `--bg --surface --surface-2 --border --ink --ink-2 --muted --grid --axis --hover --overlay` |
+| outline | `--edge` — equipment outlines (vessel walls, casings, pipe walls), at least 3:1 on `--surface`, `--bg` and `--surface-2` in both sets. `--axis` is a chart axis and deliberately faint; never outline with it |
 | series | `--s1 --s2 --s3 --s5` — chart roles, validated per surface |
 | **safety (reserved)** | `--good --warn --serious --crit`. These mean **process state and nothing else** — never chrome, never a chart series |
 | brand | `--accent` (cyan-700 `#0e7490` light / cyan-500 `#06b6d4` dark) · `--primary-bg/-border/-hover` |

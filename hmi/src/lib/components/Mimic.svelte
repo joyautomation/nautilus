@@ -6,22 +6,26 @@
 	// built-ins are an easy button, not a wall.
 	import type { Component } from 'svelte';
 	import Tank from './Tank.svelte';
+	import Heater from './Heater.svelte';
 	import Pump from './Pump.svelte';
 	import Valve from './Valve.svelte';
 	import Gauge from './Gauge.svelte';
 	import Sparkline from './Sparkline.svelte';
 	import Pipe from './Pipe.svelte';
-	import { makeGetPort, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
-	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel } from '../mimic.js';
+	import { makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
 		doc,
 		tags = {},
 		registry = {},
 		onequipmentclick,
-		minScale = 0
+		minScale = 0,
+		look
 	}: {
 		doc: MimicDoc;
+		/** Override the doc's `look` (how the equipment is drawn). */
+		look?: MimicLook;
 		tags?: Record<string, unknown>;
 		/** Extra/override components addressable from equipment[].component. */
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,7 +45,7 @@
 	} = $props();
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const builtin: Record<string, Component<any>> = { Tank, Pump, Valve, Gauge, Sparkline };
+	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline };
 	const components = $derived({ ...builtin, ...registry });
 
 	// Scale the logical canvas to the container width (height follows),
@@ -71,8 +75,11 @@
 		return typeof v === 'number' && isFinite(v) ? v.toFixed(l.decimals ?? 1) : '—';
 	};
 
+	const drawLook = $derived(look ?? doc.look ?? 'isa101');
 	const eqProps = (eq: MimicEquipment): Record<string, unknown> => ({
+		look: drawLook,
 		...(eq.width !== undefined ? { width: eq.width } : {}),
+		...(eq.height !== undefined ? { height: eq.height } : {}),
 		...(eq.label !== undefined ? { label: eq.label } : {}),
 		...(eq.props ?? {}),
 		...resolveBindings(eq.bind, tags)
@@ -120,7 +127,8 @@
 		(id) => {
 			const eq = findEq(id);
 			return eq ? resolveRuntimePorts(eq) : undefined;
-		}
+		},
+		(id, part) => partRect(eqEls.get(id), part)
 	);
 	/** One routed path per pipe — recomputed whenever the doc changes OR any
 	 * equipment's measured box changes (moving/resizing an anchored end's
@@ -177,6 +185,7 @@
 					<button
 						type="button"
 						class="eq clickable"
+						class:behind={eq.behind}
 						style="left: {eq.x}px; top: {eq.y}px"
 						aria-label={eq.label ?? eq.id}
 						use:regEl={eq.id}
@@ -185,7 +194,7 @@
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</button>
 				{:else}
-					<div class="eq" style="left: {eq.x}px; top: {eq.y}px" use:regEl={eq.id}>
+					<div class="eq" class:behind={eq.behind} style="left: {eq.x}px; top: {eq.y}px" use:regEl={eq.id}>
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</div>
 				{/if}
@@ -244,6 +253,14 @@
 		position: absolute;
 		inset: 0;
 		overflow: hidden;
+		/* a `behind` equipment under it must still take its clicks */
+		pointer-events: none;
+	}
+	/* Under the pipe layer: the canvas's transform makes it the stacking
+	   context, so -1 paints above the canvas's own background and below
+	   every other layer. */
+	.eq.behind {
+		z-index: -1;
 	}
 	.eq {
 		position: absolute;

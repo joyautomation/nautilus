@@ -7,4 +7,4 @@
 	let s = $derived(tankState(value));
 </script>
 
-<Tank levelPct={s.level} tempC={s.tempC} {label} width={200} />
+<Tank levelPct={s.level} {label} width={200} />
