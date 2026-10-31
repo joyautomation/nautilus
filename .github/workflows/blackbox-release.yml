@@ -8,8 +8,9 @@
 #   claim citing a release check has a verdict between releases, and a
 #   release check main broke shows the next morning, not at the release.
 #
-# ci.yml's runtime-evidence job reads the most recent run's artifact (either
-# kind) for the claims that cite these checks (tools/evidence `-release`).
+# ci.yml's runtime-evidence job reads the most recent nightly (or untagged
+# dispatch) on main for the claims that cite these checks (tools/evidence
+# `-release`); a tag run is evidence for that release, not for main.
 # By hand: Actions → blackbox-release → Run workflow, with a tag or empty
 # for main.
 name: blackbox-release
@@ -45,10 +46,24 @@ jobs:
     env:
       # Empty on the nightly: the checks run against main's tree.
       TAG: ${{ github.event.workflow_run.head_branch || inputs.tag }}
+      # The artifact's suffix. Only an untagged run on main is `main`, the
+      # one main's claims read; a dispatch from another branch is not.
+      LABEL: ${{ github.event.workflow_run.head_branch || inputs.tag || (github.ref == 'refs/heads/main' && 'main') || 'branch' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      # First, so the artifact always exists and says which run and tree it
+      # is: a run that dies before any check reads as an error with a date
+      # in the claims job, not as an older run's verdicts.
+      - name: Record the run
+        run: |
+          mkdir -p evidence
+          jq -nc --arg id "$GITHUB_RUN_ID" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg event "$GITHUB_EVENT_NAME" --arg ref "${TAG:-${GITHUB_REF_NAME}@$(git rev-parse --short=8 HEAD)}" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: $id, url: $url, event: $event, ref: $ref, date: $date}' \
+            > evidence/release-run.json
+          cat evidence/release-run.json
       - uses: actions/setup-go@v5
         with: {go-version: '1.24'}
       - uses: actions/setup-python@v5
@@ -76,7 +91,6 @@ jobs:
       - name: Release checks
         shell: bash
         run: |
-          mkdir -p evidence
           NAUTILUS_BLACKBOX_PYTHON="$(which python)" NAUTILUS_BLACKBOX_DISPOSITION=release \
             go test -json ./tools/blackbox -run TestBlackbox -v -timeout 1800s | tee evidence/blackbox-release.json | go run ./tools/evidence cat
       # Kept when a check fails too: the claims citing it must read failing,
@@ -84,6 +98,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: evidence-blackbox-release-${{ env.TAG || 'main' }}
+          name: evidence-blackbox-release-${{ env.LABEL }}
           path: evidence/
           retention-days: 90

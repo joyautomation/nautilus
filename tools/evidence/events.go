@@ -153,7 +153,7 @@ func (r *Results) readDir(dir string) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		if !strings.HasSuffix(p, ".json") && !strings.HasSuffix(p, ".ndjson") {
+		if !strings.HasSuffix(p, ".json") && !strings.HasSuffix(p, ".ndjson") || d.Name() == releaseRunFile {
 			return nil
 		}
 		f, err := os.Open(p)
@@ -175,12 +175,14 @@ func (r *Results) readDir(dir string) error {
 
 // RefResult is how one reference fared.
 type RefResult struct {
-	Ref     string `json:"ref"`
-	Status  string `json:"status"`         // pass, fail, skip, missing, release-only
-	From    string `json:"from,omitempty"` // "blackbox-release": the status is that workflow's last run's, not this build's
-	Passed  int    `json:"passed"`
-	Failed  int    `json:"failed"`
-	Skipped int    `json:"skipped"`
+	Ref    string `json:"ref"`
+	Status string `json:"status"`         // pass, fail, skip, missing, release-only, unscheduled
+	From   string `json:"from,omitempty"` // "blackbox-release": the status is that run's (Evidence.Release), not this build's
+	// A black-box check outside the gate: release, soak, manual, once.
+	Disposition string `json:"disposition,omitempty"`
+	Passed      int    `json:"passed"`
+	Failed      int    `json:"failed"`
+	Skipped     int    `json:"skipped"`
 }
 
 // lookup resolves a reference against the results: the test itself and

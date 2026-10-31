@@ -626,24 +626,27 @@ jobs:
           if [ -n "$id" ]; then
             gh run download "$id" --repo "$GITHUB_REPOSITORY" -n runtime-evidence -D "$RUNNER_TEMP/base" || echo "main's run $id has no runtime-evidence artifact"
           fi
-      # The black-box checks outside the gate run in blackbox-release.yml
-      # (nightly on main and on each CLI release), never in this workflow;
-      # the claims citing them take the verdict of its most recent run that
-      # left evidence. A failed run counts, so a release check that fails
-      # reads failing rather than an older pass. With none, those references
-      # read release-only, which is not a claim problem.
-      - name: The last blackbox-release run's evidence
+      # The `release` black-box checks run in blackbox-release.yml, never in
+      # this workflow; the claims citing them take the verdicts of its most
+      # recent run against main (the nightly, or a dispatch on main with no
+      # tag: the artifact named -main). A tag run is evidence for that
+      # release, not for main, so it is never read here. A failed run
+      # counts, so a check that fails reads failing rather than an older
+      # pass, and one that left no results is reported by `evidence build`
+      # with its run and date. The summary names the run and its age.
+      - name: The last blackbox-release run on main
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for id in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow blackbox-release.yml --status completed --limit 10 \
-              --json databaseId,conclusion --jq '.[] | select(.conclusion == "success" or .conclusion == "failure") | .databaseId'); do
-            if gh run download "$id" --repo "$GITHUB_REPOSITORY" -p 'evidence-blackbox-release-*' -D "$RUNNER_TEMP/release"; then
-              echo "Release-check verdicts from blackbox-release run [$id]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id)." >> "$GITHUB_STEP_SUMMARY"
+          for id in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow blackbox-release.yml --branch main --status completed --limit 20 \
+              --json databaseId,conclusion,event \
+              --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | select(.conclusion == "success" or .conclusion == "failure") | .databaseId'); do
+            if gh run download "$id" --repo "$GITHUB_REPOSITORY" -n evidence-blackbox-release-main -D "$RUNNER_TEMP/release"; then
               exit 0
             fi
+            rm -rf "$RUNNER_TEMP/release" # a failed download must not read as an empty run
           done
-          echo "No blackbox-release run has left evidence yet: its checks read release-only." >> "$GITHUB_STEP_SUMMARY"
+          echo "No blackbox-release run on main has left evidence yet: its checks read release-only."
       - name: Build the evidence file
         run: |
           mkdir -p runtime-evidence

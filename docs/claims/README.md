@@ -75,8 +75,8 @@ claims:
     strongest reference a claim can carry; the id is the tester's, verbatim
     from `tools/blackbox/checks.yaml`. A `release` check runs in
     blackbox-release.yml (nightly on main and on each CLI release), not in
-    the build: its verdict is that workflow's last run's, and before one it
-    reads `release-only`, which is not a problem.
+    the build: its verdict is that workflow's last run on main, with its
+    date, and before one it reads `release-only`, which is not a problem.
   - `naut <project root> <test name>` — a test in a project's
     `*_test.yaml`, which CI runs with `naut test -json` on nautilus: every
     project under `examples/`, `testdata/projects/` and

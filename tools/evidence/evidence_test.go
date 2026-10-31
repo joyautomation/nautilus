@@ -211,7 +211,7 @@ func TestResolveBlackbox(t *testing.T) {
 		{"release ref with release evidence", "go ./tools/blackbox TestBlackbox/001-P-rel-pass", "pass", "blackbox-release"},
 		{"failed release check", "go ./tools/blackbox TestBlackbox/001-P-rel-fail", "fail", "blackbox-release"},
 		{"release ref without release evidence", "go ./tools/blackbox TestBlackbox/001-P-rel-unrun", ReleaseOnly, ""},
-		{"manual check, never run", "go ./tools/blackbox TestBlackbox/001-P-manual-one", ReleaseOnly, ""},
+		{"manual check, run by no job", "go ./tools/blackbox TestBlackbox/001-P-manual-one", Unscheduled, ""},
 		{"unknown id stays missing", "go ./tools/blackbox TestBlackbox/001-P-renamed", "missing", ""},
 		{"not a black-box ref", "go ./modbus TestA", "missing", ""},
 	}
@@ -282,5 +282,49 @@ func TestSummarizeRelease(t *testing.T) {
 	}
 	if strings.Contains(got, "References no job reported") {
 		t.Errorf("a release-only reference is not a missing one:\n%s", got)
+	}
+}
+
+// A release artifact carries the run it came from, and one with no check
+// results (the runner never built) is an error, not a quiet release-only.
+func TestReadRelease(t *testing.T) {
+	meta := `{"id":"77","url":"https://example.test/runs/77","event":"schedule","ref":"main@abcdef12","date":"2026-10-30T07:23:00Z"}`
+	write := func(files map[string]string) string {
+		dir := t.TempDir()
+		for name, body := range files {
+			if err := os.WriteFile(dir+"/"+name, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	rel, run, err := readRelease(write(map[string]string{"blackbox-release.json": releaseJSON, releaseRunFile: meta}))
+	if err != nil || run == nil || run.Ref != "main@abcdef12" || run.Date != "2026-10-30T07:23:00Z" {
+		t.Fatalf("good artifact: run %+v, err %v", run, err)
+	}
+	if rel.Go["./tools/blackbox"]["TestBlackbox/001-P-rel-pass"] != Pass {
+		t.Errorf("results not read: %v", rel.Go)
+	}
+	buildFail := `{"Action":"output","Package":"github.com/joyautomation/nautilus/tools/blackbox","Output":"# build failed\n"}
+{"Action":"fail","Package":"github.com/joyautomation/nautilus/tools/blackbox"}
+`
+	_, run, err = readRelease(write(map[string]string{"blackbox-release.json": buildFail, releaseRunFile: meta}))
+	if err == nil || run == nil || !strings.Contains(err.Error(), "https://example.test/runs/77") || !strings.Contains(err.Error(), "no check results") {
+		t.Errorf("empty run: run %+v, err %v; want an error naming the run", run, err)
+	}
+	if _, run, err = readRelease(t.TempDir() + "/none"); err != nil || run != nil {
+		t.Errorf("no artifact downloaded: run %+v, err %v; want neither", run, err)
+	}
+}
+
+func TestSummarizeReleaseAge(t *testing.T) {
+	run := &ReleaseRun{ID: "77", URL: "https://example.test/runs/77", Ref: "main@abcdef12", Date: "2026-10-30T07:23:00Z"}
+	fresh := summarize(&Evidence{GeneratedAt: "2026-10-31T09:00:00Z", Verdicts: map[string]int{}, Release: run}, nil)
+	if !strings.Contains(fresh, "run [77](https://example.test/runs/77) on `main@abcdef12`, 2026-10-30T07:23:00Z") || strings.Contains(fresh, "WARNING") {
+		t.Errorf("fresh release evidence:\n%s", fresh)
+	}
+	stale := summarize(&Evidence{GeneratedAt: "2026-11-12T09:00:00Z", Verdicts: map[string]int{}, Release: run}, nil)
+	if !strings.Contains(stale, "13 days old") {
+		t.Errorf("stale release evidence not flagged:\n%s", stale)
 	}
 }

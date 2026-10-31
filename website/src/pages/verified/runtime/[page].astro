@@ -4,7 +4,7 @@
 // with how that test fared in the last green CI run. Data: src/lib/runtime.ts.
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { Badge } from '@astrojs/starlight/components';
-import { STATUS_VARIANT, docsUrl, loadRuntime, pageSlug, refUrl, sourceUrl, verdictMeta } from '../../../lib/runtime';
+import { STATUS_VARIANT, docsUrl, loadRuntime, pageSlug, refUrl, sourceUrl, statusText, verdictMeta } from '../../../lib/runtime';
 import { commitUrl, formatDate, loadVerified } from '../../../lib/verified';
 import '../../../styles/verified.css';
 import { RUNTIME_LISTED } from '../../../lib/runtime-listed.mjs';
@@ -67,10 +67,14 @@ const split = (ref: string) => ref.replace(/^(go|naut) /, '').split(/ (.*)/s);
                 const n = t.passed + t.failed + t.skipped;
                 return (
                   <li>
-                    <Badge text={t.status === 'missing' ? 'not reported' : t.status === 'release-only' ? 'release check, not yet run' : t.status} variant={STATUS_VARIANT[t.status]} />{' '}
+                    <Badge text={statusText(t)} variant={STATUS_VARIANT[t.status]} />{' '}
                     <code>{name}</code> in {url ? <a href={url}><code>{dir.replace(/^\.\//, '')}</code></a> : <code>{dir}</code>}
                     {n > 1 && <span class="vf-muted"> ({t.passed} of {n} passed)</span>}
-                    {t.from && <span class="vf-muted"> (last {t.from} run)</span>}
+                    {t.from && r.release && (
+                      <span class="vf-muted">
+                        {' '}(<a href={r.release.url}>{t.from} run</a> on <code>{r.release.ref}</code>, {formatDate(r.release.date)})
+                      </span>
+                    )}
                   </li>
                 );
               })}
