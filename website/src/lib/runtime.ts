@@ -9,7 +9,11 @@ export type Verdict = 'verified' | 'partial' | 'failing' | 'unrun' | 'gap';
 
 export interface RefResult {
   ref: string;
-  status: 'pass' | 'fail' | 'skip' | 'missing';
+  status: 'pass' | 'fail' | 'skip' | 'missing' | 'release-only' | 'unscheduled';
+  /** "blackbox-release": the status is that run's (Runtime.release), not this build's. */
+  from?: string;
+  /** A black-box check outside the gate: release, soak, manual, once. */
+  disposition?: string;
   passed: number;
   failed: number;
   skipped: number;
@@ -72,6 +76,7 @@ export interface Runtime {
   claims: Claim[];
   verdicts: Partial<Record<Verdict, number>>;
   naut?: Record<string, { passed: number; failed: number }>;
+  release?: ReleaseRun;
 }
 
 let cached: Runtime | null | undefined;
@@ -99,7 +104,28 @@ export const STATUS_VARIANT: Record<RefResult['status'], 'success' | 'danger' | 
   fail: 'danger',
   skip: 'note',
   missing: 'caution',
+  'release-only': 'note',
+  unscheduled: 'note',
 };
+
+/** The blackbox-release run the release checks' verdicts come from. */
+export interface ReleaseRun {
+  id: string;
+  url: string;
+  event: string;
+  ref: string;
+  date: string;
+}
+
+/** What a reference's badge says. */
+export const statusText = (t: RefResult) =>
+  t.status === 'missing'
+    ? 'not reported'
+    : t.status === 'release-only'
+      ? 'release check, not yet run'
+      : t.status === 'unscheduled'
+        ? `${t.disposition ?? 'unscheduled'} check, not run in CI`
+        : t.status;
 
 /** The /verified/runtime/<slug>/ page for a claims file. */
 export const pageSlug = (p: Page) => p.file.replace(/\.yaml$/, '');

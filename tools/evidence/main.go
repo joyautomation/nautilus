@@ -21,7 +21,10 @@
 //	    any problem or a reference no job reported (CI uses it on main to
 //	    drive the rolling issue). -baseline <evidence.json> compares with an
 //	    earlier run and -summary <file> writes the comparison as markdown
-//	    (CI's PR job summary).
+//	    (CI's PR job summary). -release <dir> holds the last nightly
+//	    blackbox-release artifact (go test -json + release-run.json): a
+//	    cited `release` check takes its verdict and age from there, and
+//	    without one reads release-only, listed but not a problem.
 //
 //	git diff --name-only BASE HEAD | go run ./tools/evidence drift [-github] [-summary f]
 //	    Warn about each documentation page that changed while its
@@ -142,7 +145,10 @@ type Evidence struct {
 	Claims      []ClaimResult      `json:"claims"`
 	Verdicts    map[string]int     `json:"verdicts"`
 	Missing     []string           `json:"missing,omitempty"`
-	Problems    []string           `json:"problems,omitempty"` // claim files/refs that do not check
+	ReleaseOnly []string           `json:"releaseOnly,omitempty"` // release checks no release run reported; informational
+	Unscheduled []string           `json:"unscheduled,omitempty"` // soak/manual/once checks, which no job runs; informational
+	Release     *ReleaseRun        `json:"release,omitempty"`     // the run the release checks' verdicts come from
+	Problems    []string           `json:"problems,omitempty"`    // claim files/refs that do not check
 	Naut        map[string]Summary `json:"naut,omitempty"`
 }
 
@@ -199,6 +205,7 @@ func runBuild(args []string) error {
 	strict := fs.Bool("strict", false, "exit 1 on any claim problem or a reference no job reported")
 	baseline := fs.String("baseline", "", "an earlier evidence.json to compare with (optional)")
 	summary := fs.String("summary", "", "write the run's claims summary as markdown here (optional)")
+	release := fs.String("release", "", "the last blackbox-release run's go test -json files (optional; may not exist)")
 	fs.Parse(args)
 
 	files, problems, err := loadClaims(filepath.Join(*root, "docs", "claims"))
@@ -209,6 +216,21 @@ func runBuild(args []string) error {
 	res := newResults()
 	if err := res.readDir(*in); err != nil {
 		return err
+	}
+	// A manifest that does not parse is a claim problem like a broken claims
+	// file, not fatal: every black-box reference then reads as unknown.
+	disp, err := loadDispositions(*root)
+	if err != nil {
+		problems = append(problems, err.Error())
+	}
+	// The release run's results are kept apart from this build's: they are
+	// another commit's, and only answer the checks the gate does not run.
+	rel, relRun := newResults(), (*ReleaseRun)(nil)
+	if *release != "" {
+		rel, relRun, err = readRelease(*release)
+		if err != nil {
+			problems = append(problems, err.Error())
+		}
 	}
 	cov := map[string][2]int{}
 	if *cover != "" {
@@ -232,6 +254,7 @@ func runBuild(args []string) error {
 		Pages:       files,
 		Verdicts:    map[string]int{},
 		Problems:    problems,
+		Release:     relRun,
 	}
 	for _, p := range ev.Packages {
 		t := &ev.Totals
@@ -263,7 +286,7 @@ func runBuild(args []string) error {
 		return err
 	}
 
-	missing := map[string]bool{}
+	missing, releaseOnly, unscheduled := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, f := range files {
 		for _, c := range f.Claims {
 			cr := ClaimResult{ID: c.ID, File: f.File, Claim: strings.TrimSpace(c.Claim), Source: c.Source, Partial: c.Partial, Note: strings.TrimSpace(c.Note), Refs: []RefResult{}}
@@ -273,9 +296,14 @@ func runBuild(args []string) error {
 					cr.Refs = append(cr.Refs, RefResult{Ref: strings.TrimSpace(t), Status: "missing"})
 					continue
 				}
-				rr := res.lookup(ref)
-				if rr.Status == "missing" {
+				rr := resolve(ref, res, rel, disp)
+				switch rr.Status {
+				case "missing":
 					missing[ref.Raw] = true
+				case ReleaseOnly:
+					releaseOnly[ref.Raw] = true
+				case Unscheduled:
+					unscheduled[fmt.Sprintf("%s (%s)", ref.Raw, rr.Disposition)] = true
 				}
 				cr.Refs = append(cr.Refs, rr)
 			}
@@ -288,6 +316,14 @@ func runBuild(args []string) error {
 		ev.Missing = append(ev.Missing, m)
 	}
 	sort.Strings(ev.Missing)
+	for m := range releaseOnly {
+		ev.ReleaseOnly = append(ev.ReleaseOnly, m)
+	}
+	sort.Strings(ev.ReleaseOnly)
+	for m := range unscheduled {
+		ev.Unscheduled = append(ev.Unscheduled, m)
+	}
+	sort.Strings(ev.Unscheduled)
 
 	b, err := json.MarshalIndent(ev, "", " ")
 	if err != nil {
@@ -302,6 +338,9 @@ func runBuild(args []string) error {
 	}
 	if len(ev.Missing) > 0 {
 		fmt.Fprintf(os.Stderr, "%d reference(s) matched no test result:\n  %s\n", len(ev.Missing), strings.Join(ev.Missing, "\n  "))
+	}
+	if len(ev.ReleaseOnly) > 0 {
+		fmt.Printf("%d black-box reference(s) outside the gate, not yet run by blackbox-release (not a problem)\n", len(ev.ReleaseOnly))
 	}
 	if *summary != "" {
 		var base *Evidence
@@ -341,8 +380,19 @@ func summarize(ev, base *Evidence) string {
 		}
 		fmt.Fprintf(&b, "| %s | %s |\n", v, cell)
 	}
+	if ev.Release != nil {
+		r := ev.Release
+		fmt.Fprintf(&b, "\nRelease-check verdicts are from blackbox-release run [%s](%s) on `%s`, %s.\n", r.ID, r.URL, r.Ref, r.Date)
+		if age, ok := releaseAge(ev); ok && age > staleRelease {
+			fmt.Fprintf(&b, "\n> [!WARNING]\n> That run is %d days old: the nightly may have stopped (GitHub disables a schedule after 60 days without repository activity). Re-enable or run blackbox-release.\n", int(age.Hours()/24))
+		}
+	}
 	if len(ev.Problems)+len(ev.Missing) == 0 {
-		b.WriteString("\nEvery claim checks and every reference matched a test result.\n")
+		if len(ev.ReleaseOnly)+len(ev.Unscheduled) == 0 {
+			b.WriteString("\nEvery claim checks and every reference matched a test result.\n")
+		} else {
+			b.WriteString("\nEvery claim checks and every reference matched a test result, release-only checks aside.\n")
+		}
 	}
 	list := func(title string, items []string) {
 		if len(items) == 0 {
@@ -359,6 +409,19 @@ func summarize(ev, base *Evidence) string {
 	}
 	list("Claim problems", ev.Problems)
 	list("References no job reported (renamed or removed test?)", ev.Missing)
+	// A release check that failed is a real failure even though no job of
+	// this run ran it; the claim already reads failing, this says why.
+	var relFailing []string
+	for _, c := range ev.Claims {
+		for _, r := range c.Refs {
+			if r.From != "" && r.Status == string(Fail) {
+				relFailing = append(relFailing, fmt.Sprintf("%s: %s", c.ID, r.Ref))
+			}
+		}
+	}
+	list("Failing in the last blackbox-release run", relFailing)
+	list("Release-only black-box checks, not yet run by blackbox-release (informational)", ev.ReleaseOnly)
+	list("Black-box checks no job runs: soak, manual or once (informational)", ev.Unscheduled)
 	if base != nil {
 		was := map[string]string{}
 		for _, c := range base.Claims {
@@ -373,6 +436,19 @@ func summarize(ev, base *Evidence) string {
 		list("Verdicts changed since main", changed)
 	}
 	return b.String()
+}
+
+// staleRelease is the age past which release-check verdicts are flagged:
+// a week of missed nightlies is no longer an outage, it is a stopped job.
+const staleRelease = 7 * 24 * time.Hour
+
+func releaseAge(ev *Evidence) (time.Duration, bool) {
+	at, err1 := time.Parse(time.RFC3339, ev.Release.Date)
+	now, err2 := time.Parse(time.RFC3339, ev.GeneratedAt)
+	if err1 != nil || err2 != nil {
+		return 0, false
+	}
+	return now.Sub(at), true
 }
 
 func verdict(c ClaimResult) string {

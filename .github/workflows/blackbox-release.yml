@@ -1,33 +1,69 @@
-# The independent tester's `release` checks (tools/blackbox) against the
-# binary a CLI release actually published: the tarball from the GitHub
-# Release, checksums verified, never a rebuild. The runner and the checks are
-# taken from the released tag's tree. Runs when goreleaser publishes a CLI
-# release (release.yml); the extension's vscode-v* releases are skipped. By
-# hand: Actions → blackbox-release → Run workflow with a tag.
+# The independent tester's `release` checks (tools/blackbox), two ways:
+#
+# - On a CLI release: against the binary the release actually published,
+#   the tarball from the GitHub Release, checksums verified, never a
+#   rebuild. The runner and the checks are taken from the released tag's
+#   tree.
+# - Nightly against main: naut built from main's tree by the runner, so a
+#   claim citing a release check has a verdict between releases, and a
+#   release check main broke shows the next morning, not at the release.
+#
+# ci.yml's runtime-evidence job reads the most recent nightly (or untagged
+# dispatch) on main for the claims that cite these checks (tools/evidence
+# `-release`); a tag run is evidence for that release, not for main.
+# By hand: Actions → blackbox-release → Run workflow, with a tag or empty
+# for main.
 name: blackbox-release
 on:
-  release:
-    types: [published]
+  schedule:
+    - cron: '23 7 * * *' # daily, 07:23 UTC
+  # After the CLI release workflow has published the tag's Release. Not
+  # `release: published`: goreleaser creates the Release with GITHUB_TOKEN,
+  # and events made with GITHUB_TOKEN start no workflows, so that trigger
+  # never fired (v0.19.0 shipped without a run). For a tag push,
+  # workflow_run's head_branch is the tag.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
-        description: CLI release tag, e.g. v0.18.0
-        required: true
+        description: CLI release tag, e.g. v0.18.0; empty runs main's tree
+        required: false
 
 permissions:
   contents: read
 
 jobs:
   release-checks:
-    name: Black-box — the tester's release checks against the published CLI
-    if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'v') && !startsWith(github.event.release.tag_name, 'vscode-v'))
+    name: Black-box — the tester's release checks
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.repository == 'joyautomation/nautilus') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') && !startsWith(github.event.workflow_run.head_branch, 'vscode-v'))
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      # Empty on the nightly: the checks run against main's tree.
+      TAG: ${{ github.event.workflow_run.head_branch || inputs.tag }}
+      # The artifact's suffix. Only an untagged run on main is `main`, the
+      # one main's claims read; a dispatch from another branch is not.
+      LABEL: ${{ github.event.workflow_run.head_branch || inputs.tag || (github.ref == 'refs/heads/main' && 'main') || 'branch' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ env.TAG }}
+      # First, so the artifact always exists and says which run and tree it
+      # is: a run that dies before any check reads as an error with a date
+      # in the claims job, not as an older run's verdicts.
+      - name: Record the run
+        run: |
+          mkdir -p evidence
+          jq -nc --arg id "$GITHUB_RUN_ID" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg event "$GITHUB_EVENT_NAME" --arg ref "${TAG:-${GITHUB_REF_NAME}@$(git rev-parse --short=8 HEAD)}" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: $id, url: $url, event: $event, ref: $ref, date: $date}' \
+            > evidence/release-run.json
+          cat evidence/release-run.json
       - uses: actions/setup-go@v5
         with: {go-version: '1.24'}
       - uses: actions/setup-python@v5
@@ -35,7 +71,10 @@ jobs:
       - run: pip install -r tools/blackbox/requirements.txt
       # The same fetch the tester's operator does (nautilus-blackbox
       # bin/fetch.sh): the linux/amd64 asset, checked against checksums.txt.
+      # Without a tag NAUTILUS_BLACKBOX_NAUT stays unset and the runner
+      # builds naut from the checkout, as the gate job does.
       - name: Fetch the published binary
+        if: env.TAG != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,11 +91,13 @@ jobs:
       - name: Release checks
         shell: bash
         run: |
-          mkdir -p evidence
           NAUTILUS_BLACKBOX_PYTHON="$(which python)" NAUTILUS_BLACKBOX_DISPOSITION=release \
             go test -json ./tools/blackbox -run TestBlackbox -v -timeout 1800s | tee evidence/blackbox-release.json | go run ./tools/evidence cat
+      # Kept when a check fails too: the claims citing it must read failing,
+      # not fall back to an older run that passed.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: evidence-blackbox-release-${{ env.TAG }}
+          name: evidence-blackbox-release-${{ env.LABEL }}
           path: evidence/
           retention-days: 90

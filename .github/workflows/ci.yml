@@ -626,12 +626,33 @@ jobs:
           if [ -n "$id" ]; then
             gh run download "$id" --repo "$GITHUB_REPOSITORY" -n runtime-evidence -D "$RUNNER_TEMP/base" || echo "main's run $id has no runtime-evidence artifact"
           fi
+      # The `release` black-box checks run in blackbox-release.yml, never in
+      # this workflow; the claims citing them take the verdicts of its most
+      # recent run against main (the nightly, or a dispatch on main with no
+      # tag: the artifact named -main). A tag run is evidence for that
+      # release, not for main, so it is never read here. A failed run
+      # counts, so a check that fails reads failing rather than an older
+      # pass, and one that left no results is reported by `evidence build`
+      # with its run and date. The summary names the run and its age.
+      - name: The last blackbox-release run on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for id in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow blackbox-release.yml --branch main --status completed --limit 20 \
+              --json databaseId,conclusion,event \
+              --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | select(.conclusion == "success" or .conclusion == "failure") | .databaseId'); do
+            if gh run download "$id" --repo "$GITHUB_REPOSITORY" -n evidence-blackbox-release-main -D "$RUNNER_TEMP/release"; then
+              exit 0
+            fi
+            rm -rf "$RUNNER_TEMP/release" # a failed download must not read as an empty run
+          done
+          echo "No blackbox-release run on main has left evidence yet: its checks read release-only."
       - name: Build the evidence file
         run: |
           mkdir -p runtime-evidence
           base=()
           [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
-          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out \
+          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out -release "$RUNNER_TEMP/release" \
             -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
           cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload runtime evidence
