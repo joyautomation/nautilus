@@ -123,6 +123,38 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   `suction` / `discharge`, `in` / `out`), and `examples/lift-station`'s
   kinds carry ports as box points with the scene's pipes anchored to
   them.
+- **Mimic editor: resize equipment, pick a look, anchor ports to parts.**
+  The selected equipment has resize handles (right edge, bottom edge,
+  corner) and a **height** field beside **width**; the toolbar's **Look**
+  picks ISA-101 or realistic for every component. In ports mode, a
+  double-click on a part of the drawing (a vessel, a valve body) adds a
+  port anchored to that part, and dropping a dragged port on a part
+  anchors it there (off every part, to the box), so it stays put when the
+  equipment is resized. The component preview pane does the same. The
+  palette has
+  the kit's new **Heater**.
+- **Mimic editor: the canvas previews the HMI's own colours.** The canvas
+  (and the component preview pane's stage) used to repaint the kit's equipment in
+  VS Code theme colours, which flattered it: outlines that are faint on
+  the real HMI looked crisp in the editor. It now draws in the kit's
+  palette, on the kit's card colour, following VS Code's light/dark; the
+  toolbar's **Dark / Light** switch previews the other theme. That switch
+  is a view setting and never touches the file: the operator's screen
+  picks dark or light.
+- **Mimic editor: Shift-click to select several, drag to move them
+  together.** Shift-click (or Ctrl-click, as before) adds equipment or a
+  label to the selection or takes it out; dragging any of the selection
+  moves all of it, and a pipe between two selected instances moves whole,
+  bends and all. Arrow keys and Del act on the labels too. Shift-drag on
+  empty canvas draws a box and adds what lies wholly inside it; a
+  Shift-press on an item adds it and can drag the lot from the same press.
+- **Mimic editor: drag the canvas edge to resize it.** The canvas's right
+  edge, bottom edge and corner are handles (grid-snapped, the size shown
+  while you drag); the **canvas w / h** fields still take exact numbers.
+- **Mimic editor: zoom.** Ctrl+wheel or pinch zooms around the pointer,
+  Ctrl+= / Ctrl+- and the corner buttons step, Ctrl+0 (or the fit button)
+  fits the canvas to the pane width again, and a middle-drag pans — the
+  same gestures as the ladder and SFC editors.
 
 ### Fixed
 

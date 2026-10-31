@@ -182,14 +182,15 @@ no rig verb, no smoke check); per section below.
 | id | area | gesture | source of the claim | webview test | rig verb | smoke |
 |---|---|---|---|---|---|---|
 | M01 | Mimic | Click equipment, a pipe or a label to select it | "?" list MIMIC / Select / `Click` | gestures.test.mjs: clicking an anchored end selects the END, not the equipment underneath | mimic_eq_el / click_el | — |
-| M02 | Mimic | Add equipment to or remove it from the selection | "?" list MIMIC / Select / `Ctrl + click` | gestures.test.mjs: clipboard: Ctrl-click multi-selects | — | — |
+| M02 | Mimic | Add equipment or a label to the selection, or take it out | "?" list MIMIC / Select / `Shift / Ctrl + click` | gestures.test.mjs: clipboard: Ctrl-click multi-selects; mimic-group.test.mjs: G01 Shift-click adds equipment and a label and takes one out, Ctrl-click still toggles | — | — |
+| M20 | Mimic | Shift-drag on empty canvas box-selects what lies wholly inside | "?" list MIMIC / Select / `Shift + drag on empty canvas` | mimic-group.test.mjs: G06 box adds what is wholly inside, live; G07 a cut-through item is left out, an empty box leaves the selection; G08 Shift-click on empty canvas changes nothing; G09 Shift-press on an item adds it and drags the lot | — | — |
 | M03 | Mimic | Select all equipment | "?" list MIMIC / Select / `Ctrl + A` | gestures.test.mjs: clipboard: Ctrl+A selects all equipment; Del deletes it as ONE batch | — | — |
 | M04 | Mimic | Shift-click a pipe vertex to multi-select pipe points | "?" list MIMIC / Select / `Shift + click a vertex` | gestures.test.mjs: shift-click node multi-select + Delete (x3), shift-click MISSING a vertex (x2), shift-click a node TWICE, VISUAL: shift-click a vertex | — | — |
 | M05 | Mimic | Esc cancels the tool, leaves the ports editor, or deselects | "?" list MIMIC / Select / `Esc` | mimic-more.test.mjs: M05 Esc in pipe mode (draft discarded, then Select), in the ports editor, with equipment selected | — | — |
-| M06 | Mimic | Drag to move equipment, labels, pipe points | "?" list MIMIC / Edit / `Drag` | gestures.test.mjs: interior VERTEX drag — preview == commit; a parse error mid-edit locks the stale canvas: dragging equipment posts no op | g_drag, mimic_drop | — |
+| M06 | Mimic | Drag to move equipment, labels, pipe points; drag one of a selection to move them all | "?" list MIMIC / Edit / `Drag` | gestures.test.mjs: interior VERTEX drag — preview == commit; a parse error mid-edit locks the stale canvas: dragging equipment posts no op; mimic-group.test.mjs: G02 a group drag moves all live then posts ONE batch, the pipe between moves whole; G03 grabbed item grid-snaps, the rest keep their offsets; G04 press+release without a move selects just that one | g_drag, mimic_drop | — |
 | M07 | Mimic | Drag a pipe end onto a port to attach it, or off to detach | "?" list MIMIC / Edit / `Drag a pipe end` | gestures.test.mjs: terminal ATTACH; terminal DETACH; drag re-anchor; dragging a pipe END in Select shows the port dots | — | — |
 | M08 | Mimic | Nudge the selection (Shift = one grid step) | "?" list MIMIC / Edit / `Arrow keys` | gestures.test.mjs: ports-edit: ArrowRight nudges the selected port; mimic-more.test.mjs: M08 ArrowRight nudges the equipment by 1 px, Shift+ArrowRight by one grid step | — | — |
-| M09 | Mimic | Delete the selection (attached pipe ends kept, detached) | "?" list MIMIC / Edit / `Del / Backspace` | gestures.test.mjs: clipboard: Ctrl+A ... Del deletes it as ONE batch | — | — |
+| M09 | Mimic | Delete the selection (attached pipe ends kept, detached) | "?" list MIMIC / Edit / `Del / Backspace` | gestures.test.mjs: clipboard: Ctrl+A ... Del deletes it as ONE batch; mimic-group.test.mjs: G05 Del deletes equipment and labels in ONE batch | — | — |
 | M10 | Mimic | Copy, cut, paste equipment with props, bindings and pipes (into another mimic too) | "?" list MIMIC / Edit / `Ctrl + C / X / V` | gestures.test.mjs: clipboard: Ctrl-click multi-selects, Ctrl+C / Ctrl+V pastes ONE batch; Ctrl+X deletes the selection in one batch | — | 05 |
 | M11 | Mimic | Duplicate the selection in place | "?" list MIMIC / Edit / `Ctrl + D` | gestures.test.mjs: clipboard: Ctrl+D duplicates one instance | — | — |
 | M12 | Mimic | Press P to open the ports editor for the selected equipment | "?" list MIMIC / Edit / `P` | gestures.test.mjs: ports-edit tests (enterPortsMode presses p) | component_edit_ports | — |
@@ -199,6 +200,7 @@ no rig verb, no smoke check); per section below.
 | M16 | Mimic | Undo the last edit to the file from the diagram | "?" list MIMIC / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
 | M17 | Mimic | Redo | "?" list MIMIC / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | — |
 | M18 | Mimic | Save the file from the diagram | "?" list MIMIC / File / `Ctrl + S` | — | g_save | — |
+| M19 | Mimic | Drag the canvas's right edge, bottom edge or corner to resize it | "?" list MIMIC / Edit / `Drag the canvas edge` | mimic-resize.test.mjs: R05 corner drag resizes live, shows the size, posts one setCanvas; R06 right edge only width, bottom only height, no handles in pipe mode | — | — |
 
 ## Component (ports) editor (`?` list)
 

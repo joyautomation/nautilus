@@ -416,3 +416,31 @@ test("unknown fields in a hand-written doc survive a round-trip", () => {
   assert.deepEqual(d.extra, { note: "kept too" });
   assert.equal((d.equipment![0] as unknown as { custom: string }).custom, "kept");
 });
+
+test("setLook sets the doc's look after canvas; null clears it; an unknown look is refused", () => {
+  const out = apply(BASE, { type: "setLook", look: "realistic" });
+  assert.equal(doc(out).look, "realistic");
+  assert.deepEqual(Object.keys(JSON.parse(out)).slice(0, 3), ["name", "canvas", "look"]);
+  assert.equal(doc(apply(out, { type: "setLook", look: null })).look, undefined);
+  assert.match(refuse(BASE, { type: "setLook", look: "paper" as never }), /look must be one of/);
+});
+
+test("updateEquipment sets a height (written after width) and refuses a non-positive size", () => {
+  const out = apply(BASE, { type: "updateEquipment", id: "tank1", patch: { width: 200, height: 320 } });
+  const tank = JSON.parse(out).equipment[0];
+  assert.deepEqual(Object.keys(tank).slice(0, 6), ["id", "component", "x", "y", "width", "height"]);
+  assert.equal(tank.height, 320);
+  assert.equal(doc(apply(out, { type: "updateEquipment", id: "tank1", patch: { height: null } })).equipment![0].height, undefined);
+  assert.match(refuse(BASE, { type: "updateEquipment", id: "tank1", patch: { height: 0 } }), /height must be a positive number/);
+  assert.match(refuse(BASE, { type: "updateEquipment", id: "tank1", patch: { width: "wide" } }), /width must be a positive number/);
+});
+
+test("a port may anchor to a named part of the drawing; an empty part is refused", () => {
+  const out = apply(BASE, {
+    type: "setEquipmentPorts",
+    id: "tank1",
+    ports: [{ name: "in", part: "vessel", x: 0, y: 0.5 }],
+  });
+  assert.deepEqual(doc(out).equipment![0].ports, [{ name: "in", part: "vessel", x: 0, y: 0.5 }]);
+  assert.ok("error" in applyMimicOp(BASE, { type: "setEquipmentPorts", id: "tank1", ports: [{ name: "in", part: "", x: 0, y: 0 }] }));
+});

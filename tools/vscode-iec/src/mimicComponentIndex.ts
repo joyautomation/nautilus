@@ -28,7 +28,7 @@ export type PortDir = "left" | "right" | "up" | "down";
  * (MimicPipe.from/to). `dir` is the direction a pipe leaves the port;
  * absent = inferred from its edge position (hmi's inferPortDir). Names are
  * unique within a port list. */
-export type Port = { name: string; x: number; y: number; dir?: PortDir };
+export type Port = { name: string; x: number; y: number; dir?: PortDir; part?: string };
 
 /** What the component preview pane (componentPreview.ts) renders a
  * component with: sample props, the user-component counterpart of the
@@ -70,7 +70,8 @@ export function validatePortList(ports: unknown): ports is Port[] {
         isFinite((p as Port).x) &&
         typeof (p as Port).y === "number" &&
         isFinite((p as Port).y) &&
-        ((p as Port).dir === undefined || DIRS.has((p as Port).dir as string))
+        ((p as Port).dir === undefined || DIRS.has((p as Port).dir as string)) &&
+        ((p as Port).part === undefined || (typeof (p as Port).part === "string" && (p as Port).part !== ""))
     )
   ) {
     return false;

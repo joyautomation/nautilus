@@ -5,7 +5,8 @@
 	// gesture goes back as an op.
 	import ShortcutHelp from '../ShortcutHelp.svelte';
 	import { MIMIC_SHORTCUTS, hintLine } from '../shortcuts';
-	import { announceReady, ed, reopenAsText, setSnapToGrid, toggleLive } from './mimicState.svelte';
+	import { announceReady, ed, postOp, reopenAsText, setSnapToGrid, toggleLive } from './mimicState.svelte';
+	import { themeColorMode } from '../themeMode.svelte';
 	import EditorCanvas from './EditorCanvas.svelte';
 	import EquipPalette from './EquipPalette.svelte';
 	import PropsPanel from './PropsPanel.svelte';
@@ -68,7 +69,18 @@
 		if (gone) ed.selection = null;
 		else if (s.kind === 'multi') {
 			const left = s.ids.filter((id) => (d.equipment ?? []).some((e) => e.id === id));
-			if (left.length !== s.ids.length) ed.selection = left.length > 1 ? { kind: 'multi', ids: left } : left.length ? { kind: 'equipment', id: left[0] } : null;
+			const labels = (s.labels ?? []).filter((i) => !!(d.labels ?? [])[i]);
+			if (left.length !== s.ids.length || labels.length !== (s.labels ?? []).length) {
+				const n = left.length + labels.length;
+				ed.selection =
+					n > 1
+						? labels.length ? { kind: 'multi', ids: left, labels } : { kind: 'multi', ids: left }
+						: left.length
+							? { kind: 'equipment', id: left[0] }
+							: labels.length
+								? { kind: 'label', index: labels[0] }
+								: null;
+			}
 		}
 	});
 
@@ -102,6 +114,8 @@
 						: hintLine(MIMIC_SHORTCUTS)
 	);
 
+	const previewMode = $derived(ed.previewTheme ?? themeColorMode.mode);
+
 	function setTool(t: 'select' | 'pipe' | 'label') {
 		ed.tool = t;
 		ed.placeComponent = '';
@@ -125,6 +139,24 @@
 			title="Snap dragged equipment, labels and pipe vertices to the grid. Shift-arrow nudging always snaps regardless of this toggle."
 		>
 			Snap: {ed.snapToGrid ? 'On' : 'Off'}
+		</button>
+		<label class="look" title="The document's look — saved in the file; every equipment draws in it">
+			<span>Look</span>
+			<select
+				value={ed.doc?.look ?? 'isa101'}
+				disabled={!ed.doc}
+				onchange={(e) => postOp({ type: 'setLook', look: e.currentTarget.value === 'isa101' ? null : (e.currentTarget.value as 'realistic') })}
+			>
+				<option value="isa101">ISA-101</option>
+				<option value="realistic">Realistic</option>
+			</select>
+		</label>
+		<button
+			class="snap-toggle theme-toggle"
+			onclick={() => (ed.previewTheme = previewMode === 'dark' ? 'light' : 'dark')}
+			title="Preview the canvas in the HMI's {previewMode === 'dark' ? 'light' : 'dark'} theme. Only this view changes, not the file: the operator's screen picks dark or light itself"
+		>
+			{previewMode === 'dark' ? '◐ Dark' : '◑ Light'}
 		</button>
 		<span class="spacer"></span>
 		<ShortcutHelp groups={MIMIC_SHORTCUTS} />
@@ -239,6 +271,22 @@
 		background: var(--nx-sel-bg);
 		color: var(--nx-sel-ink);
 		border-color: var(--nx-sel-ink);
+	}
+	.look {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12px;
+		color: var(--nx-muted);
+	}
+	.look select {
+		font: inherit;
+		font-size: 12px;
+		color: var(--nx-ui-ink);
+		background: var(--nx-input-bg);
+		border: 1px solid var(--nx-border);
+		border-radius: 6px;
+		padding: 3px 6px;
 	}
 	.spacer {
 		flex: 1;

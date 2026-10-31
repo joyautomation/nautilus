@@ -2,13 +2,13 @@
 // the same modules the runtime <Mimic> renders, so the canvas is WYSIWYG.
 // (Custom registry components render as a placeholder chip here; they only
 // exist in the app that supplies them.)
-import { Gauge, Pump, Sparkline, Tank, Valve } from '@joyautomation/nautilus-hmi';
+import { Gauge, Heater, Pump, Sparkline, Tank, Valve } from '@joyautomation/nautilus-hmi';
 import type { Component } from 'svelte';
 import { PORTS } from './builtinPorts';
 export { PORTS };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const registry: Record<string, Component<any>> = { Tank, Pump, Valve, Gauge, Sparkline };
+export const registry: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline };
 export const registryNames = Object.keys(registry);
 
 /** Fallbacks merged UNDER doc props/bindings so every component renders on
@@ -16,7 +16,8 @@ export const registryNames = Object.keys(registry);
  * better mid-motion in the palette and on unbound equipment). */
 export const DEMO_PROPS: Record<string, Record<string, unknown>> = {
 	Sparkline: { values: [4, 6, 5, 8, 6, 9, 7, 8] },
-	Tank: { levelPct: 62, tempC: 65 },
+	Tank: { levelPct: 62 },
+	Heater: { powerPct: 60 },
 	Pump: { running: true },
 	Valve: { openPct: 70 },
 	Gauge: { value: 65, setpoint: 65 }
@@ -31,7 +32,8 @@ export const DEMO_PROPS: Record<string, Record<string, unknown>> = {
 
 /** Tag-bindable prop suggestions, per component (pipes use the "pipe" key). */
 export const BIND_HINTS: Record<string, string[]> = {
-	Tank: ['levelPct', 'tempC', 'heaterPct'],
+	Tank: ['levelPct'],
+	Heater: ['powerPct'],
 	Pump: ['running', 'speedPct'],
 	Valve: ['openPct'],
 	Gauge: ['value', 'setpoint'],

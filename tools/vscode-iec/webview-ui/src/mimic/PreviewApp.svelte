@@ -35,13 +35,16 @@
 	import PortsPanel from './PortsPanel.svelte';
 	import { hasUserComponent, setUserComponentDiagnostics } from './userComponentsState.svelte';
 	import { formatPropValue, isPropName, kindOf, parsePropInput } from './previewProps';
-	import { resolvedPortDir, type PortDir as HmiPortDir } from '@joyautomation/nautilus-hmi/mimic';
+	import { partRect, resolvedPortDir, type PortDir as HmiPortDir } from '@joyautomation/nautilus-hmi/mimic';
+	import { themeColorMode } from '../themeMode.svelte';
 	import {
+		dropPort,
 		fmtFraction,
+		movePort,
 		newPortAtFreeSlot,
 		newPortAtPoint,
 		roundPort,
-		toFraction,
+		smallestPartAt,
 		type Box,
 		type Port,
 		type PortDir
@@ -234,28 +237,43 @@
 	// the zoom to stay the same size on screen.
 	let portsMode = $state(false);
 	let boxEl = $state<HTMLDivElement | null>(null);
-	let drag = $state<{ index: number; fx: number; fy: number; moved: boolean } | null>(null);
+	let drag = $state<{ index: number; fx: number; fy: number; part?: string; moved: boolean } | null>(null);
 	let selected = $state<number | null>(null);
 	const TICK: Record<HmiPortDir, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
 	const TICK_LEN = 10;
 	const displayPorts = $derived(
-		ports.map((p, i) => (drag && drag.index === i ? { ...p, x: drag.fx, y: drag.fy } : p))
+		ports.map((p, i) => (drag && drag.index === i ? movePort(p, { x: drag.fx, y: drag.fy, part: drag.part }) : p))
 	);
+	/** The rectangle a port's fractions are of, in the render's own
+	 * (unscaled) pixels: its `part` of the drawing (measured off the DOM)
+	 * when it names one the render has, else the whole box. */
+	function portFrame(p: Pick<Port, 'part'>): Box {
+		const r = p.part && boxEl ? partRect(boxEl, p.part) : undefined;
+		return r ?? { x: 0, y: 0, w: box?.w ?? 0, h: box?.h ?? 0 };
+	}
+	/** Every named part of the render (`data-part`), as [name, frame]. */
+	function parts(): [string, Box][] {
+		if (!boxEl) return [];
+		const names = new Set([...boxEl.querySelectorAll<Element>('[data-part]')].map((n) => n.getAttribute('data-part')!));
+		return [...names].map((name) => [name, portFrame({ part: name })]);
+	}
 	const portsPx = $derived(
 		displayPorts.map((p) => {
-			const w = box?.w ?? 0;
-			const h = box?.h ?? 0;
+			const f = portFrame(p);
 			const dir = resolvedPortDir(p);
-			const x = p.x * w;
-			const y = p.y * h;
+			const x = f.x + p.x * f.w;
+			const y = f.y + p.y * f.h;
 			const [tx, ty] = dir ? TICK[dir] : [0, 0];
 			return { name: p.name, x, y, fx: p.x, fy: p.y, dir, tickX: x + (tx * TICK_LEN) / zoom, tickY: y + (ty * TICK_LEN) / zoom };
 		})
 	);
-	/** The box in its own (unscaled-fraction) space + the pointer in it. */
+	/** The box in the render's own (unscaled) pixels — the space portFrame
+	 * and parts() measure in — and the pointer in it, zoom divided out. */
 	function portSpace(e: { clientX: number; clientY: number }): { box: Box; pt: [number, number] } {
-		const r = boxEl!.getBoundingClientRect();
-		return { box: { x: 0, y: 0, w: r.width, h: r.height }, pt: [e.clientX - r.left, e.clientY - r.top] };
+		const el = boxEl!;
+		const r = el.getBoundingClientRect();
+		const k = el.offsetWidth ? r.width / el.offsetWidth : 1;
+		return { box: { x: 0, y: 0, w: el.offsetWidth, h: el.offsetHeight }, pt: [(e.clientX - r.left) / k, (e.clientY - r.top) / k] };
 	}
 	/** Every ports edit is the whole list to the host, which patches the
 	 * sidecar's `ports` key (same path as the standalone editor) and
@@ -277,7 +295,7 @@
 		(e.currentTarget as Element).setPointerCapture(e.pointerId);
 		selected = i;
 		const p = ports[i];
-		drag = { index: i, fx: p.x, fy: p.y, moved: false };
+		drag = { index: i, fx: p.x, fy: p.y, part: p.part, moved: false };
 	}
 	function portDelete(i: number) {
 		commitPorts(ports.filter((_, j) => j !== i));
@@ -288,8 +306,11 @@
 	function addPortAt(e: MouseEvent) {
 		if (!portsMode || !boxEl) return;
 		e.stopPropagation();
+		// On a part of the drawing the new port anchors to that part, as in
+		// the mimic editor's ports mode.
 		const { box: b, pt } = portSpace(e);
-		commitPorts([...ports, newPortAtPoint(b, pt, ports)]);
+		const hit = smallestPartAt(parts(), pt);
+		commitPorts([...ports, hit ? { ...newPortAtPoint(hit[1], pt, ports), part: hit[0] } : newPortAtPoint(b, pt, ports)]);
 	}
 	function addPortAtFreeSlot() {
 		commitPorts([...ports, newPortAtFreeSlot(ports)]);
@@ -313,11 +334,13 @@
 			onPortUp();
 			return;
 		}
+		// Over a part the port anchors to it; off every part, to the box.
 		const { box: b, pt } = portSpace(e);
-		const [fx, fy] = toFraction(b, pt);
-		if (fx !== drag.fx || fy !== drag.fy) {
-			drag.fx = fx;
-			drag.fy = fy;
+		const to = dropPort(b, parts(), pt);
+		if (to.x !== drag.fx || to.y !== drag.fy || to.part !== drag.part) {
+			drag.fx = to.x;
+			drag.fy = to.y;
+			drag.part = to.part;
 			drag.moved = true;
 		}
 	}
@@ -340,7 +363,9 @@
 		if (!drag) return;
 		if (drag.moved) {
 			const d = drag;
-			commitPorts(ports.map((p, i) => (i === d.index ? { ...p, x: d.fx, y: d.fy } : p)));
+			// A drag moves the dot (and may change its part); everything else
+			// the port carries (an explicit `dir`, …) is kept (#130).
+			commitPorts(ports.map((p, i) => (i === d.index ? movePort(p, { x: d.fx, y: d.fy, part: d.part }) : p)));
 		}
 		drag = null;
 	}
@@ -395,7 +420,7 @@
 			{#if available}
 				{#key version}
 					<div class="scale" style="transform: scale({zoom})">
-						<div class="box" bind:this={measureEl}>
+						<div class="box" data-theme={themeColorMode.mode} bind:this={measureEl}>
 							<div bind:this={boxEl}>
 								{#if builtin}
 									{@const C = registry[component]}
@@ -442,7 +467,7 @@
 									{/each}
 								</svg>
 								{#if drag}
-									<span class="coord" style="left: {drag.fx * box.w + 10 / zoom}px; top: {drag.fy * box.h - 20 / zoom}px; transform: scale({1 / zoom}); transform-origin: left top">
+									<span class="coord" style="left: {(portsPx[drag.index]?.x ?? 0) + 10 / zoom}px; top: {(portsPx[drag.index]?.y ?? 0) - 20 / zoom}px; transform: scale({1 / zoom}); transform-origin: left top">
 										{fmtFraction(drag.fx, drag.fy)}
 									</span>
 								{/if}
@@ -624,6 +649,9 @@
 	.box {
 		position: relative;
 		display: inline-block;
+		/* the kit's own palette (data-theme), on the HMI's card colour */
+		background-color: var(--surface);
+		border-radius: 6px;
 		/* a dot drag must not select the render's text under it, nor start
 		   a native drag of a selection (which cancels the pointer) */
 		user-select: none;

@@ -20,8 +20,11 @@
 	// the instance when explicitly toggled. The drag/add-by-edge-snap math
 	// is shared with the standalone *.component.json editor — see
 	// portsGestures.ts.
+	import { flushSync } from 'svelte';
 	import {
+		builtinParts,
 		makeGetPort,
+		partRect,
 		Pipe,
 		pointsToPath,
 		resolveBindings,
@@ -29,13 +32,14 @@
 		resolvePipeEndpoints,
 		routedPoints
 	} from '@joyautomation/nautilus-hmi';
-	import type { GetPort, MimicEquipment, MimicPipe, MimicPipeAnchor, PortDir } from '@joyautomation/nautilus-hmi';
+	import type { GetPort, MimicEquipment, MimicPipe, MimicPipeAnchor, PartRect, PortDir } from '@joyautomation/nautilus-hmi';
 	import { DEMO_PROPS, registry } from './registry';
 	import { resolvePorts, type Port } from './ports';
-	import { fmtFraction, newPortAtFreeSlot, newPortAtPoint, nudgePort, roundPort, toFraction } from './portsGestures';
+	import { dropPort, fmtFraction, movePort, newPortAtFreeSlot, newPortAtPoint, nudgePort, roundPort, smallestPartAt } from './portsGestures';
 	import { minInteriorPoints, nearestPort, resolveDraftFinish, type NamedPort } from './pipeDraft';
 	import { suggestRoute, type ObstacleRect } from './autoroute';
-	import { canvasBox, ed, GRID, postManifestOp, postOp, snap, type MimicOp } from './mimicState.svelte';
+	import { canvasBox, ed, GRID, postManifestOp, postOp, snap, type MimicOp, type Selection } from './mimicState.svelte';
+	import { themeColorMode } from '../themeMode.svelte';
 	import { clipEquipment, pasteOps, type MimicClip } from './mimicClip';
 	import { readClip, typingTarget, writeClip } from '../clipboard';
 	import PortsPanel from './PortsPanel.svelte';
@@ -43,19 +47,106 @@
 
 	const doc = $derived(ed.doc);
 
-	// ── scale to fit ────────────────────────────────────────────────────────
+	// ── scale: fit to the pane, or the user's zoom ──────────────────────────
+	// The canvas opens fitted to the pane's width and follows it as the pane
+	// resizes. Zooming (Ctrl+wheel / pinch around the pointer, Ctrl+= / -,
+	// the corner buttons) takes over until Fit (Ctrl+0) hands back to the
+	// pane — the same gestures as the ladder and SFC editors' ZoomPane.
 	let wrap = $state<HTMLDivElement | null>(null);
-	let scale = $state(1);
+	let fitScale = $state(1);
+	/** null: follow the pane (fit width); a number: the user's zoom. */
+	let zoom = $state<number | null>(null);
+	const scale = $derived(zoom ?? fitScale);
 	$effect(() => {
 		if (!wrap || !doc) return;
 		const el = wrap;
 		const w = doc.canvas.width;
-		const update = () => (scale = Math.min(1.5, Math.max(0.1, (el.clientWidth - 24) / w)));
+		const update = () => (fitScale = Math.min(1.5, Math.max(0.1, (el.clientWidth - 24) / w)));
 		update();
 		const ro = new ResizeObserver(update);
 		ro.observe(el);
 		return () => ro.disconnect();
 	});
+
+	const MIN_ZOOM = 0.1;
+	const MAX_ZOOM = 4;
+	const ZOOM_STEP = 1.2;
+	/** Zoom to `next`, keeping the canvas point under (cx, cy) — client
+	 * coordinates, the pane's centre when omitted — where it was. */
+	function zoomAt(next: number, cx?: number, cy?: number) {
+		const z0 = scale;
+		const z1 = Math.round(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next)) * 1000) / 1000;
+		if (!wrap || !canvasEl || z1 === z0) return;
+		const sr = wrap.getBoundingClientRect();
+		const px = cx ?? sr.left + wrap.clientWidth / 2;
+		const py = cy ?? sr.top + wrap.clientHeight / 2;
+		const r0 = canvasEl.getBoundingClientRect();
+		const ux = (px - r0.left) / z0;
+		const uy = (py - r0.top) / z0;
+		flushSync(() => (zoom = z1));
+		const r1 = canvasEl.getBoundingClientRect();
+		wrap.scrollLeft += r1.left + ux * z1 - px;
+		wrap.scrollTop += r1.top + uy * z1 - py;
+	}
+	const zoomIn = () => zoomAt(scale * ZOOM_STEP);
+	const zoomOut = () => zoomAt(scale / ZOOM_STEP);
+	function zoomFit() {
+		zoom = null;
+		if (wrap) wrap.scrollLeft = wrap.scrollTop = 0;
+	}
+
+	// Ctrl/Cmd+wheel and pinch (Chromium reports a pinch as ctrl+wheel).
+	// Non-passive: preventDefault keeps VS Code's own zoom out of it.
+	$effect(() => {
+		const el = wrap;
+		if (!el) return;
+		const onWheel = (ev: WheelEvent) => {
+			if (!(ev.ctrlKey || ev.metaKey)) return;
+			ev.preventDefault();
+			const unit = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 800 : 1;
+			const d = Math.max(-60, Math.min(60, ev.deltaY * unit));
+			zoomAt(scale * Math.exp(-d * 0.0025), ev.clientX, ev.clientY);
+		};
+		el.addEventListener('wheel', onWheel, { passive: false });
+		// Autoscroll's middle-click cursor would fight the pan.
+		const noAuto = (ev: MouseEvent) => ev.button === 1 && ev.preventDefault();
+		el.addEventListener('mousedown', noAuto);
+		return () => {
+			el.removeEventListener('wheel', onWheel);
+			el.removeEventListener('mousedown', noAuto);
+		};
+	});
+
+	/** Ctrl+= / Ctrl+- / Ctrl+0. On the document, so it runs (and stops
+	 * the key) before VS Code's window-level listener would replay it in
+	 * the workbench and zoom the whole window. */
+	function onZoomKey(ev: KeyboardEvent) {
+		if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || !doc || typingTarget(ev)) return;
+		let acted = true;
+		if (ev.key === '=' || ev.key === '+' || ev.code === 'NumpadAdd') zoomIn();
+		else if (ev.key === '-' || ev.key === '_' || ev.code === 'NumpadSubtract') zoomOut();
+		else if (ev.key === '0' || ev.code === 'Numpad0') zoomFit();
+		else acted = false;
+		if (acted) {
+			ev.preventDefault();
+			ev.stopPropagation();
+		}
+	}
+
+	// Middle-button drag pans (left-drag belongs to the editing gestures).
+	let pan: { x: number; y: number; sl: number; st: number } | null = null;
+	function panDown(ev: PointerEvent) {
+		if (ev.button !== 1 || !wrap) return;
+		ev.preventDefault();
+		pan = { x: ev.clientX, y: ev.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop };
+		wrap.setPointerCapture?.(ev.pointerId);
+	}
+	function panMove(ev: PointerEvent) {
+		if (!pan || !wrap) return;
+		wrap.scrollLeft = pan.sl - (ev.clientX - pan.x);
+		wrap.scrollTop = pan.st - (ev.clientY - pan.y);
+	}
+	const panUp = () => (pan = null);
 
 	let canvasEl = $state<HTMLDivElement | null>(null);
 	function pt(e: { clientX: number; clientY: number }): [number, number] {
@@ -67,8 +158,15 @@
 	// Rendered sizes come from the DOM (offsetWidth is in canvas units —
 	// the scale transform doesn't affect it).
 	const eqEls = new Map<string, HTMLElement>();
+	/** Bumped whenever an equipment's rendered box changes size — read by
+	 * pipeRouteInput() so an anchored pipe follows a resize (a width typed
+	 * in the panel, a resize-handle drag, a component that grows with its
+	 * props) without waiting for some other change to re-render it. */
+	let boxVersion = $state(0);
 	function regEl(node: HTMLElement, id: string) {
 		eqEls.set(id, node);
+		const ro = new ResizeObserver(() => boxVersion++);
+		ro.observe(node);
 		return {
 			update(next: string) {
 				eqEls.delete(id);
@@ -77,8 +175,33 @@
 			},
 			destroy() {
 				eqEls.delete(id);
+				ro.disconnect();
 			}
 		};
+	}
+
+	/** Where a named part of `eq`'s drawing sits in its box: measured off
+	 * the DOM (the element marked `data-part`), else the built-in drawing's
+	 * own layout (hmi's builtinParts) when it hasn't painted yet. */
+	function partOf(eq: MimicEquipment, part: string): PartRect | undefined {
+		const b = eqBox(eq);
+		return partRect(eqEls.get(eq.id), part) ?? builtinParts(eq.component, b, eq)?.[part];
+	}
+
+	/** The rectangle a port's fractions are OF, in canvas pixels: its part
+	 * when it names one the drawing has, else the whole box. */
+	function portFrame(eq: MimicEquipment, port: Pick<Port, 'part'>): { x: number; y: number; w: number; h: number } {
+		const b = eqBox(eq);
+		const r = port.part ? partOf(eq, port.part) : undefined;
+		return r ? { x: b.x + r.x, y: b.y + r.y, w: r.w, h: r.h } : b;
+	}
+
+	/** Every named part of `eq`'s rendered drawing, as [name, canvas frame]. */
+	function partsOf(eq: MimicEquipment): [string, { x: number; y: number; w: number; h: number }][] {
+		const el = eqEls.get(eq.id);
+		if (!el) return [];
+		const names = new Set([...el.querySelectorAll<Element>('[data-part]')].map((n) => n.getAttribute('data-part')!));
+		return [...names].map((name) => [name, portFrame(eq, { part: name })]);
 	}
 
 	/** `eq`'s rendered box — position from dispEq()'s SAME live-drag/settled
@@ -89,11 +212,12 @@
 	function eqBox(eq: MimicEquipment): { x: number; y: number; w: number; h: number } {
 		const el = eqEls.get(eq.id);
 		const pos = dispEq(eq);
+		const size = dispSize(eq);
 		return {
 			x: pos.x,
 			y: pos.y,
-			w: el?.offsetWidth || eq.width || 100,
-			h: el?.offsetHeight || 80
+			w: el?.offsetWidth || size.width || 100,
+			h: el?.offsetHeight || size.height || 80
 		};
 	}
 
@@ -119,31 +243,35 @@
 	function eqPorts(eq: MimicEquipment): PortPx[] {
 		const spec = resolvePorts(eq, ed.manifest);
 		if (!spec.length) return [];
-		const b = eqBox(eq);
-		return spec.map((p) => ({
-			name: p.name,
-			x: Math.round(b.x + p.x * b.w),
-			y: Math.round(b.y + p.y * b.h),
-			fx: p.x,
-			fy: p.y,
-			dir: resolvedPortDir(p)
-		}));
+		return spec.map((p) => {
+			const b = portFrame(eq, p);
+			return {
+				name: p.name,
+				x: Math.round(b.x + p.x * b.w),
+				y: Math.round(b.y + p.y * b.h),
+				fx: p.x,
+				fy: p.y,
+				dir: resolvedPortDir(p)
+			};
+		});
 	}
 
 	/** Ports currently shown by the ports editor for `eq` — the resolved set,
 	 * with the in-flight drag (if any) substituted in — as canvas pixels. */
 	function editingPortsPx(eq: MimicEquipment): PortPx[] {
-		const b = eqBox(eq);
 		const fr = resolvePorts(eq, ed.manifest).map((p) => ({ ...p }));
-		if (drag?.kind === 'port' && drag.id === eq.id) fr[drag.index] = { ...fr[drag.index], x: drag.fx, y: drag.fy };
-		return fr.map((p) => ({
-			name: p.name,
-			x: Math.round(b.x + p.x * b.w),
-			y: Math.round(b.y + p.y * b.h),
-			fx: p.x,
-			fy: p.y,
-			dir: resolvedPortDir(p)
-		}));
+		if (drag?.kind === 'port' && drag.id === eq.id) fr[drag.index] = movePort(fr[drag.index], { x: drag.fx, y: drag.fy, part: drag.part });
+		return fr.map((p) => {
+			const b = portFrame(eq, p);
+			return {
+				name: p.name,
+				x: Math.round(b.x + p.x * b.w),
+				y: Math.round(b.y + p.y * b.h),
+				fx: p.x,
+				fy: p.y,
+				dir: resolvedPortDir(p)
+			};
+		});
 	}
 
 	/** Direction-tick endpoint (unit vector * length) for a resolved port —
@@ -179,9 +307,13 @@
 	 * portsGestures.ts's newPortAtPoint for the projection/snap/auto-name math
 	 * (shared with the standalone *.component.json editor). */
 	function addPort(eq: MimicEquipment, raw: [number, number]) {
-		const b = eqBox(eq);
 		const existing = resolvePorts(eq, ed.manifest);
-		commitPorts(eq, [...existing, newPortAtPoint(b, raw, existing)]);
+		// On a part of the drawing (a vessel, a valve body), the new port
+		// anchors to that part, so it stays on it when the equipment is
+		// resized; elsewhere it's a fraction of the whole box as before.
+		const hit = smallestPartAt(partsOf(eq), raw);
+		const port = hit ? { ...newPortAtPoint(hit[1], raw, existing), part: hit[0] } : newPortAtPoint(eqBox(eq), raw, existing);
+		commitPorts(eq, [...existing, port]);
 	}
 
 	const PORT_SNAP = 14;
@@ -215,6 +347,10 @@
 		(id) => {
 			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
 			return eq ? resolvePorts(eq, ed.manifest) : undefined;
+		},
+		(id, part) => {
+			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
+			return eq ? partOf(eq, part) : undefined;
 		}
 	);
 
@@ -259,6 +395,7 @@
 	 * ANCHORED (stub and all); off any port it previews as a plain moved point.
 	 * Either way the OTHER end's anchor still resolves normally. */
 	function pipeRouteInput(p: MimicPipe): Pick<MimicPipe, 'points' | 'routing' | 'from' | 'to'> {
+		void boxVersion;
 		const interior = dispPts(p);
 		if (drag?.kind === 'anchor' && drag.id === p.id) {
 			const live: [number, number] = [drag.x, drag.y];
@@ -389,13 +526,15 @@
 	/** Delete equipment as ONE batch with any anchor materialization it
 	 * requires — so a delete gesture never leaves a dangling anchor ref
 	 * behind, per Feature 2's design rule. */
-	function deleteEquipmentWithAnchors(eqId: string | string[]) {
+	function deleteEquipmentWithAnchors(eqId: string | string[], labels: number[] = []) {
 		const ids = Array.isArray(eqId) ? eqId : [eqId];
 		// One pass over the whole set: a pipe between two deleted instances
 		// materializes both ends in ONE patch (two per-instance patches would
 		// each start from the original points and the second would win).
 		const matOps = materializeAnchorsFor(ids);
 		const dels: MimicOp[] = ids.map((id) => ({ type: 'deleteEquipment', id }));
+		// Highest index first, so each delete leaves the next index in place.
+		for (const index of [...labels].sort((a, b) => b - a)) dels.push({ type: 'deleteLabel', index });
 		const ops = [...matOps, ...dels];
 		postOp(ops.length > 1 ? { type: 'batch', ops } : ops[0]);
 	}
@@ -407,7 +546,59 @@
 		return s?.kind === 'equipment' ? [s.id] : s?.kind === 'multi' ? [...s.ids] : [];
 	}
 	function selectEquip(ids: string[]) {
-		ed.selection = ids.length > 1 ? { kind: 'multi', ids } : ids.length ? { kind: 'equipment', id: ids[0] } : null;
+		selectItems(ids, []);
+	}
+	/** The label indices the current selection covers. */
+	function selLabels(): number[] {
+		const s = ed.selection;
+		return s?.kind === 'label' ? [s.index] : s?.kind === 'multi' ? [...(s.labels ?? [])] : [];
+	}
+	/** Select these equipment ids and label indices: one item is a plain
+	 * equipment or label selection, more are a 'multi'. */
+	function selectItems(ids: string[], labels: number[]) {
+		if (ids.length + labels.length > 1) ed.selection = labels.length ? { kind: 'multi', ids, labels } : { kind: 'multi', ids };
+		else if (ids.length) ed.selection = { kind: 'equipment', id: ids[0] };
+		else if (labels.length) ed.selection = { kind: 'label', index: labels[0] };
+		else ed.selection = null;
+	}
+	/** Shift- or Ctrl/Cmd-click: add `item` to the selection or take it out.
+	 * A Shift-click mid a pipe-point selection is a missed vertex (BUG 1,
+	 * see pipeDown) and changes nothing. */
+	function toggleItem(e: PointerEvent, item: { id: string } | { index: number }): boolean {
+		if (!e.shiftKey && !e.ctrlKey && !e.metaKey) return false;
+		if (e.shiftKey && ed.selection?.kind === 'nodes') return true;
+		const ids = selEquipIds();
+		const labels = selLabels();
+		if ('id' in item) selectItems(ids.includes(item.id) ? ids.filter((x) => x !== item.id) : [...ids, item.id], labels);
+		else selectItems(ids, labels.includes(item.index) ? labels.filter((x) => x !== item.index) : [...labels, item.index]);
+		return true;
+	}
+	/** A press on an item of a several-item selection grabs them all. A
+	 * plain press released without a move then selects just that item; a
+	 * Shift/Ctrl press (`collapse` false) just added it and leaves it be. */
+	function groupDown(e: PointerEvent, hit: Selection, x: number, y: number, collapse = true): boolean {
+		const s = ed.selection;
+		if (s?.kind !== 'multi' || !doc) return false;
+		const inSel = hit.kind === 'equipment' ? s.ids.includes(hit.id) : hit.kind === 'label' && (s.labels ?? []).includes(hit.index);
+		if (!inSel) return false;
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		const [px, py] = pt(e);
+		const eqs = (doc.equipment ?? []).filter((q) => s.ids.includes(q.id));
+		drag = {
+			kind: 'group',
+			ids: [...s.ids],
+			labels: [...(s.labels ?? [])],
+			hit: collapse ? hit : null,
+			gx: px - x,
+			gy: py - y,
+			ax: x,
+			ay: y,
+			dx: 0,
+			dy: 0,
+			atts: eqs.flatMap((q) => attachmentsFor(q)),
+			moved: false
+		};
+		return true;
 	}
 	// Repeated pastes of the same clip cascade instead of stacking exactly.
 	let pasteKey = '';
@@ -454,10 +645,25 @@
 	type Drag =
 		| { kind: 'eq'; id: string; dx: number; dy: number; ox: number; oy: number; x: number; y: number; atts: Attach[]; moved: boolean }
 		| { kind: 'label'; index: number; dx: number; dy: number; x: number; y: number; moved: boolean }
+		/** Dragging a several-item selection by one of its items (`hit`):
+		 * `ax`/`ay` is that item's position at grab, `gx`/`gy` the pointer's
+		 * offset from it, `dx`/`dy` the live (grid-snapped) move. */
+		| { kind: 'group'; ids: string[]; labels: number[]; hit: Selection | null; gx: number; gy: number; ax: number; ay: number; dx: number; dy: number; atts: Attach[]; moved: boolean }
 		/** `index` is an INTERIOR index into the pipe's stored `points` — see
 		 * pipeHandlePoints()'s doc comment for the full-vs-interior index split. */
 		| { kind: 'vtx'; id: string; index: number; pts: [number, number][]; moved: boolean }
-		| { kind: 'port'; id: string; index: number; fx: number; fy: number; moved: boolean }
+		| { kind: 'port'; id: string; index: number; fx: number; fy: number; part?: string; moved: boolean }
+		/** Dragging a resize handle on the selected equipment: `edge` says
+		 * which sides move (e = right, s = bottom, se = both); `w0`/`h0` and
+		 * `px`/`py` are the box and pointer at grab time. */
+		| { kind: 'resize'; id: string; edge: 'e' | 's' | 'se'; px: number; py: number; w0: number; h0: number; w: number; h: number; moved: boolean }
+		/** Shift-drag on empty canvas: a selection box from (x0, y0) to (x1,
+		 * y1). What lies wholly inside it joins `base` (the selection at the
+		 * press); `orig` is restored while the box holds nothing. */
+		| { kind: 'box'; x0: number; y0: number; x1: number; y1: number; base: { ids: string[]; labels: number[] }; orig: Selection | null; moved: boolean }
+		/** Dragging the canvas's own right/bottom edge or corner — the same
+		 * shape as 'resize', committed as a setCanvas. */
+		| { kind: 'canvas'; edge: 'e' | 's' | 'se'; px: number; py: number; w0: number; h0: number; w: number; h: number; moved: boolean }
 		/** Dragging a pipe's terminal (start/end) handle — Feature 2's
 		 * attach/detach gesture. `x`/`y` track the live cursor (port-snapped
 		 * when near one); `port` is the port that snap currently lands on (null
@@ -477,14 +683,18 @@
 		eq: Record<string, { x: number; y: number }>;
 		pipes: Record<string, [number, number][]>;
 		labels: Record<number, { x: number; y: number }>;
+		sizes: Record<string, { width: number; height: number }>;
+		canvas: { width: number; height: number } | null;
 	}>(null);
 	let settleTimer: ReturnType<typeof setTimeout> | undefined;
 	function settle(part: {
 		eq?: Record<string, { x: number; y: number }>;
 		pipes?: Record<string, [number, number][]>;
 		labels?: Record<number, { x: number; y: number }>;
+		sizes?: Record<string, { width: number; height: number }>;
+		canvas?: { width: number; height: number };
 	}) {
-		settled = { eq: {}, pipes: {}, labels: {}, ...part };
+		settled = { eq: {}, pipes: {}, labels: {}, sizes: {}, canvas: null, ...part };
 		clearTimeout(settleTimer);
 		settleTimer = setTimeout(() => (settled = null), 1500);
 	}
@@ -504,7 +714,12 @@
 			Object.entries(s.labels).every(([i, p]) => {
 				const l = (d.labels ?? [])[+i];
 				return l && l.x === p.x && l.y === p.y;
-			});
+			}) &&
+			Object.entries(s.sizes).every(([id, z]) => {
+				const e = (d.equipment ?? []).find((e) => e.id === id);
+				return e && e.width === z.width && e.height === z.height;
+			}) &&
+			(!s.canvas || (d.canvas.width === s.canvas.width && d.canvas.height === s.canvas.height));
 		if (ok) {
 			settled = null;
 			clearTimeout(settleTimer);
@@ -529,11 +744,30 @@
 	const dispEq = (eq: MimicEquipment): { x: number; y: number } =>
 		drag?.kind === 'eq' && drag.id === eq.id
 			? { x: drag.x, y: drag.y }
-			: (settled?.eq[eq.id] ?? { x: eq.x, y: eq.y });
+			: drag?.kind === 'group' && drag.ids.includes(eq.id)
+				? { x: eq.x + drag.dx, y: eq.y + drag.dy }
+				: (settled?.eq[eq.id] ?? { x: eq.x, y: eq.y });
+	/** `eq`'s width/height as drawn: a live resize, else a committed one the
+	 * doc hasn't echoed yet, else the doc's own (either may be unset). */
+	const dispSize = (eq: MimicEquipment): { width?: number; height?: number } =>
+		drag?.kind === 'resize' && drag.id === eq.id
+			? { width: drag.w, height: drag.h }
+			: (settled?.sizes[eq.id] ?? { width: eq.width, height: eq.height });
+	/** The canvas size as drawn: a live edge drag, else a committed one the
+	 * doc hasn't echoed yet, else the doc's own. */
+	const canvasSize = $derived(
+		drag?.kind === 'canvas'
+			? { width: drag.w, height: drag.h }
+			: (settled?.canvas ?? doc?.canvas ?? { width: 0, height: 0 })
+	);
+	const cw = $derived(canvasSize.width);
+	const ch = $derived(canvasSize.height);
 	const dispLabel = (i: number, l: { x: number; y: number }): { x: number; y: number } =>
 		drag?.kind === 'label' && drag.index === i
 			? { x: drag.x, y: drag.y }
-			: (settled?.labels[i] ?? { x: l.x, y: l.y });
+			: drag?.kind === 'group' && drag.labels.includes(i)
+				? { x: l.x + drag.dx, y: l.y + drag.dy }
+				: (settled?.labels[i] ?? { x: l.x, y: l.y });
 	// A bound label's live value, formatted the way the runtime <Mimic>'s
 	// labelValue() does (same resolveBindings() path, `decimals` default 1),
 	// or null when the label has no bind or its tag hasn't resolved to a
@@ -549,31 +783,38 @@
 		if (drag?.kind === 'eq' && drag.atts.some((a) => a.pipeId === p.id)) {
 			return shiftedPoints(p, drag.atts, drag.x - drag.ox, drag.y - drag.oy);
 		}
+		if (drag?.kind === 'group' && (drag.dx || drag.dy)) {
+			const pts = groupPipePoints(p, drag.ids, drag.atts, drag.dx, drag.dy);
+			if (pts) return pts;
+		}
 		return settled?.pipes[p.id] ?? p.points;
 	};
 
-	const eqProps = (eq: MimicEquipment): Record<string, unknown> => ({
-		...(DEMO_PROPS[eq.component] ?? {}),
-		...(eq.width !== undefined ? { width: eq.width } : {}),
-		...(eq.label !== undefined ? { label: eq.label } : {}),
-		...(eq.props ?? {}),
-		...resolveBindings(eq.bind, ed.tags ?? {})
-	});
+	const eqProps = (eq: MimicEquipment): Record<string, unknown> => {
+		const size = dispSize(eq);
+		return {
+			look: doc?.look ?? 'isa101',
+			...(DEMO_PROPS[eq.component] ?? {}),
+			...(size.width !== undefined ? { width: size.width } : {}),
+			...(size.height !== undefined ? { height: size.height } : {}),
+			...(eq.label !== undefined ? { label: eq.label } : {}),
+			...(eq.props ?? {}),
+			...resolveBindings(eq.bind, ed.tags ?? {})
+		};
+	};
 
 	// ── equipment / label drags ─────────────────────────────────────────────
 	function eqDown(e: PointerEvent, eq: MimicEquipment) {
 		if (ed.tool !== 'select' || e.button !== 0) return;
 		e.stopPropagation();
-		// BUG 1: see pipeDown's identical guard — a shift-click stray-hitting
-		// equipment (easy when a pipe anchor sits right on its edge) must not
-		// clobber an in-progress node multi-selection on some other pipe.
-		if (e.shiftKey) return;
-		if (e.ctrlKey || e.metaKey) {
-			// Ctrl/Cmd-click toggles this instance in a multi-selection (no drag).
-			const cur = selEquipIds();
-			selectEquip(cur.includes(eq.id) ? cur.filter((id) => id !== eq.id) : [...cur, eq.id]);
+		// Shift/Ctrl/Cmd-click toggles this instance in the selection;
+		// toggleItem keeps BUG 1's guard for a node multi-selection. Added to
+		// a several-item selection, a drag from the same press moves them all.
+		if (toggleItem(e, { id: eq.id })) {
+			groupDown(e, { kind: 'equipment', id: eq.id }, eq.x, eq.y, false);
 			return;
 		}
+		if (groupDown(e, { kind: 'equipment', id: eq.id }, eq.x, eq.y)) return;
 		ed.selection = { kind: 'equipment', id: eq.id };
 		if (ed.portsEdit?.id === eq.id) return; // ports editor owns clicks on this box (see eqDblclick)
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -611,32 +852,55 @@
 		settle({ eq: { [eq.id]: { x: nx, y: ny } }, pipes: pipeSettle });
 	}
 
-	/** Nudge several instances as ONE batch: every move, plus each attached
-	 * pipe shifted once with ALL its attachments (a pipe between two moved
-	 * instances moves both ends in the same points list). */
-	function nudgeMany(ids: string[], dx: number, dy: number) {
-		if (!doc) return;
+	/** `p`'s points with the equipment `ids` moved by (dx, dy), or null when
+	 * the move doesn't touch it. A pipe whose two ends are both on moved
+	 * equipment (anchored or attached) moves whole, bends and all; one with
+	 * a single end on them stretches like a single-instance move. */
+	function groupPipePoints(p: MimicPipe, ids: string[], atts: Attach[], dx: number, dy: number): [number, number][] | null {
+		const last = p.points.length - 1;
+		const on = (anchor: MimicPipeAnchor | undefined, index: number) =>
+			anchor ? ids.includes(anchor.equip) : atts.some((a) => a.pipeId === p.id && a.index === index);
+		const from = on(p.from, 0);
+		const to = on(p.to, last);
+		if (from && to) return p.points.map(([x, y]) => [x + dx, y + dy]);
+		if (atts.some((a) => a.pipeId === p.id)) return shiftedPoints(p, atts, dx, dy);
+		return null;
+	}
+
+	/** Move several instances and labels as ONE batch: every move, plus each
+	 * pipe the move touches (see groupPipePoints). */
+	function moveGroup(ids: string[], labels: number[], dx: number, dy: number, atts?: Attach[]) {
+		if (!doc || (!dx && !dy)) return;
 		const eqs = (doc.equipment ?? []).filter((q) => ids.includes(q.id));
-		const atts = eqs.flatMap((q) => attachmentsFor(q));
+		atts ??= eqs.flatMap((q) => attachmentsFor(q));
 		const ops: MimicOp[] = eqs.map((q) => ({ type: 'moveEquipment', id: q.id, x: q.x + dx, y: q.y + dy }));
+		const labelSettle: Record<number, { x: number; y: number }> = {};
+		for (const i of labels) {
+			const l = (doc.labels ?? [])[i];
+			if (!l) continue;
+			ops.push({ type: 'updateLabel', index: i, patch: { x: l.x + dx, y: l.y + dy } });
+			labelSettle[i] = { x: l.x + dx, y: l.y + dy };
+		}
 		const pipeSettle: Record<string, [number, number][]> = {};
-		for (const pid of new Set(atts.map((a) => a.pipeId))) {
-			const p = (doc.pipes ?? []).find((pp) => pp.id === pid);
-			if (!p) continue;
-			const pts = shiftedPoints(p, atts, dx, dy);
-			ops.push({ type: 'setPipePoints', id: pid, points: pts });
-			pipeSettle[pid] = pts;
+		for (const p of doc.pipes ?? []) {
+			const pts = groupPipePoints(p, ids, atts, dx, dy);
+			if (!pts) continue;
+			ops.push({ type: 'setPipePoints', id: p.id, points: pts });
+			pipeSettle[p.id] = pts;
 		}
 		if (!ops.length) return;
 		postOp(ops.length > 1 ? { type: 'batch', ops } : ops[0]);
-		settle({ eq: Object.fromEntries(eqs.map((q) => [q.id, { x: q.x + dx, y: q.y + dy }])), pipes: pipeSettle });
+		settle({ eq: Object.fromEntries(eqs.map((q) => [q.id, { x: q.x + dx, y: q.y + dy }])), labels: labelSettle, pipes: pipeSettle });
 	}
 
 	function labelDown(e: PointerEvent, i: number, l: { x: number; y: number }) {
 		if (ed.tool !== 'select' || e.button !== 0) return;
 		e.stopPropagation();
-		// BUG 1: see pipeDown's identical guard.
-		if (e.shiftKey) return;
+		if (toggleItem(e, { index: i })) {
+			groupDown(e, { kind: 'label', index: i }, l.x, l.y, false);
+			return;
+		}
+		if (groupDown(e, { kind: 'label', index: i }, l.x, l.y)) return;
 		ed.selection = { kind: 'label', index: i };
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 		const [px, py] = pt(e);
@@ -809,8 +1073,39 @@
 		(e.currentTarget as Element).setPointerCapture(e.pointerId);
 		portsSelected = i;
 		const port = resolvePorts(eq, ed.manifest)[i];
-		drag = { kind: 'port', id: eq.id, index: i, fx: port?.x ?? 0.5, fy: port?.y ?? 0.5, moved: false };
+		drag = { kind: 'port', id: eq.id, index: i, fx: port?.x ?? 0.5, fy: port?.y ?? 0.5, part: port?.part, moved: false };
 	}
+
+	// ── resize handles (the selected equipment's right / bottom / corner) ──
+	const MIN_SIZE = 10;
+	function resizeDown(e: PointerEvent, eq: MimicEquipment, edge: 'e' | 's' | 'se') {
+		if (e.button !== 0) return;
+		e.stopPropagation();
+		(e.currentTarget as Element).setPointerCapture(e.pointerId);
+		// Start from the box as drawn, so a component with no height yet
+		// (natural proportions) resizes from exactly what's on screen.
+		const b = eqBox(eq);
+		const [px, py] = pt(e);
+		drag = { kind: 'resize', id: eq.id, edge, px, py, w0: Math.round(b.w), h0: Math.round(b.h), w: Math.round(b.w), h: Math.round(b.h), moved: false };
+	}
+	/** Smallest canvas an edge drag will make, canvas units. */
+	const MIN_CANVAS = 100;
+	function canvasResizeDown(e: PointerEvent, edge: 'e' | 's' | 'se') {
+		if (e.button !== 0 || !doc) return;
+		e.stopPropagation();
+		(e.currentTarget as Element).setPointerCapture(e.pointerId);
+		// Hold the current scale: in fit mode the canvas would otherwise
+		// rescale to the pane on drop and jump out from under the pointer.
+		// Fit (Ctrl+0) hands back to the pane.
+		zoom = scale;
+		// From the size as drawn, so a drag that follows one the doc hasn't
+		// echoed yet starts where the canvas is, not where it was.
+		const [px, py] = pt(e);
+		const { width: w, height: h } = canvasSize;
+		drag = { kind: 'canvas', edge, px, py, w0: w, h0: h, w, h, moved: false };
+	}
+	const resizable = (eq: MimicEquipment): boolean =>
+		ed.tool === 'select' && !ed.portsEdit && ed.selection?.kind === 'equipment' && ed.selection.id === eq.id;
 
 	/** Double-click on the equipment box itself (ports-edit mode) adds a
 	 * port; double-clicking an existing dot (see the port handle markup)
@@ -837,15 +1132,48 @@
 				drag.y = ny;
 				drag.moved = true;
 			}
+		} else if (drag.kind === 'box') {
+			[drag.x1, drag.y1] = pt(e);
+			// A few screen pixels of slop, so a shift-click stays a click.
+			if (!drag.moved && Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) * scale < 4) return;
+			drag.moved = true;
+			const hits = boxHits(drag);
+			if (!hits.ids.length && !hits.labels.length) ed.selection = drag.orig;
+			else
+				selectItems(
+					[...new Set([...drag.base.ids, ...hits.ids])],
+					[...new Set([...drag.base.labels, ...hits.labels])]
+				);
+		} else if (drag.kind === 'group') {
+			const [px, py] = pt(e);
+			const dx = snap(px - drag.gx) - drag.ax;
+			const dy = snap(py - drag.gy) - drag.ay;
+			if (dx !== drag.dx || dy !== drag.dy) {
+				drag.dx = dx;
+				drag.dy = dy;
+				drag.moved = true;
+			}
+		} else if (drag.kind === 'resize' || drag.kind === 'canvas') {
+			const [px, py] = pt(e);
+			const min = drag.kind === 'canvas' ? MIN_CANVAS : MIN_SIZE;
+			const w = drag.edge === 's' ? drag.w0 : Math.max(min, snap(drag.w0 + px - drag.px));
+			const h = drag.edge === 'e' ? drag.h0 : Math.max(min, snap(drag.h0 + py - drag.py));
+			if (w !== drag.w || h !== drag.h) {
+				drag.w = w;
+				drag.h = h;
+				drag.moved = true;
+			}
 		} else if (drag.kind === 'port') {
 			const id = drag.id;
 			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
 			if (eq) {
-				const b = eqBox(eq);
-				const [fx, fy] = toFraction(b, pt(e));
-				if (fx !== drag.fx || fy !== drag.fy) {
-					drag.fx = fx;
-					drag.fy = fy;
+				// Over a part of the drawing the port anchors to it; off every
+				// part it's a fraction of the box.
+				const to = dropPort(eqBox(eq), partsOf(eq), pt(e));
+				if (to.x !== drag.fx || to.y !== drag.fy || to.part !== drag.part) {
+					drag.fx = to.x;
+					drag.fy = to.y;
+					drag.part = to.part;
 					drag.moved = true;
 				}
 			}
@@ -910,10 +1238,26 @@
 
 	function onup() {
 		if (!drag) return;
+		if (drag.kind === 'box') {
+			drag = null;
+			return;
+		}
+		if (drag.kind === 'group') {
+			if (drag.moved) moveGroup(drag.ids, drag.labels, drag.dx, drag.dy, drag.atts);
+			else if (drag.hit) ed.selection = drag.hit;
+			drag = null;
+			return;
+		}
 		if (drag.moved) {
 			if (drag.kind === 'eq') {
 				const eq = (doc?.equipment ?? []).find((e) => e.id === (drag as { id: string }).id);
 				if (eq) postEqMove(eq, drag.atts, drag.x, drag.y);
+			} else if (drag.kind === 'resize') {
+				postOp({ type: 'updateEquipment', id: drag.id, patch: { width: drag.w, height: drag.h } });
+				settle({ sizes: { [drag.id]: { width: drag.w, height: drag.h } } });
+			} else if (drag.kind === 'canvas') {
+				postOp({ type: 'setCanvas', width: drag.w, height: drag.h });
+				settle({ canvas: { width: drag.w, height: drag.h } });
 			} else if (drag.kind === 'label') {
 				postOp({ type: 'updateLabel', index: drag.index, patch: { x: drag.x, y: drag.y } });
 				settle({ labels: { [drag.index]: { x: drag.x, y: drag.y } } });
@@ -922,7 +1266,7 @@
 				const eq = (doc?.equipment ?? []).find((e) => e.id === id);
 				if (eq) {
 					const ports = resolvePorts(eq, ed.manifest).map((p) => ({ ...p }));
-					ports[drag.index] = { ...ports[drag.index], x: drag.fx, y: drag.fy };
+					ports[drag.index] = movePort(ports[drag.index], { x: drag.fx, y: drag.fy, part: drag.part });
 					commitPorts(eq, ports);
 				}
 			} else if (drag.kind === 'anchor') {
@@ -984,6 +1328,24 @@
 		return Math.abs(s[0] - prev[0]) >= Math.abs(s[1] - prev[1]) ? [s[0], prev[1]] : [prev[0], s[1]];
 	}
 
+	function boxDown(e: PointerEvent, [x, y]: [number, number]) {
+		if (ed.portsEdit) return;
+		(e.currentTarget as Element).setPointerCapture(e.pointerId);
+		drag = { kind: 'box', x0: x, y0: y, x1: x, y1: y, base: { ids: selEquipIds(), labels: selLabels() }, orig: ed.selection, moved: false };
+	}
+	/** Equipment and labels lying wholly inside the box. */
+	function boxHits(b: { x0: number; y0: number; x1: number; y1: number }): { ids: string[]; labels: number[] } {
+		const [l, r] = [Math.min(b.x0, b.x1), Math.max(b.x0, b.x1)];
+		const [t, btm] = [Math.min(b.y0, b.y1), Math.max(b.y0, b.y1)];
+		const inside = (q: { x: number; y: number; w: number; h: number }) => q.x >= l && q.y >= t && q.x + q.w <= r && q.y + q.h <= btm;
+		const ids = (doc?.equipment ?? []).filter((q) => inside(eqBox(q))).map((q) => q.id);
+		const labels: number[] = [];
+		canvasEl?.querySelectorAll<HTMLElement>('.lbl[data-id]').forEach((el) => {
+			if (inside({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight })) labels.push(Number(el.dataset.id));
+		});
+		return { ids, labels };
+	}
+
 	function canvasDown(e: PointerEvent) {
 		if (e.button !== 0) return;
 		const p = pt(e);
@@ -1025,8 +1387,13 @@
 		// node multi-selection with no visual feedback — so by the time the
 		// user pressed Delete there was nothing left selected to delete.
 		// Shift is reserved for vtxDown's node-toggle gesture; everywhere
-		// else (here, pipeDown, midDown) it's a no-op, never a wipe.
-		if (e.shiftKey) return;
+		// else (here, pipeDown, midDown) it's a no-op, never a wipe. A
+		// Shift-DRAG here draws a selection box (boxDown); released without
+		// a move it is still that no-op.
+		if (e.shiftKey) {
+			boxDown(e, p);
+			return;
+		}
 		ed.selection = null;
 	}
 
@@ -1156,7 +1523,7 @@
 			const s = ed.selection;
 			ed.selection = null;
 			if (s.kind === 'equipment') deleteEquipmentWithAnchors(s.id);
-			else if (s.kind === 'multi') deleteEquipmentWithAnchors(s.ids);
+			else if (s.kind === 'multi') deleteEquipmentWithAnchors(s.ids, s.labels ?? []);
 			else if (s.kind === 'pipe') postOp({ type: 'deletePipe', id: s.id });
 			else if (s.kind === 'end') postOp({ type: 'deletePipe', id: s.pipeId });
 			else if (s.kind === 'nodes') {
@@ -1207,7 +1574,7 @@
 				const eq = (doc.equipment ?? []).find((q) => q.id === s.id);
 				if (eq) postEqMove(eq, attachmentsFor(eq), eq.x + dx, eq.y + dy);
 			} else if (s.kind === 'multi') {
-				nudgeMany(s.ids, dx, dy);
+				moveGroup(s.ids, s.labels ?? [], dx, dy);
 			} else if (s.kind === 'label') {
 				const l = (doc.labels ?? [])[s.index];
 				if (l) {
@@ -1241,6 +1608,7 @@
 		if (!s) return false;
 		if (kind === 'pipe' && s.kind === 'end') return s.pipeId === key;
 		if (kind === 'equipment' && s.kind === 'multi') return s.ids.includes(key as string);
+		if (kind === 'label' && s.kind === 'multi') return (s.labels ?? []).includes(key as number);
 		if (s.kind !== kind) return false;
 		return 'id' in s ? s.id === key : s.index === key;
 	};
@@ -1296,24 +1664,32 @@
 </script>
 
 <svelte:window onpointermove={onmove} onpointerup={onup} {onkeydown} />
+<svelte:document onkeydown={onZoomKey} />
 
-<div class="wrap" bind:this={wrap}>
+<div class="cpane">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="wrap" bind:this={wrap} onpointerdown={panDown} onpointermove={panMove} onpointerup={panUp} onpointercancel={panUp}>
 	{#if doc}
+		<!-- The scaled canvas's footprint: a transform doesn't change layout
+		     size, so this box gives the pane its scroll extent at any zoom
+		     (plus room for handles that sit just past the canvas edge). -->
+		<div class="sizer" class:sizing={drag?.kind === 'canvas'} style="width: {cw * scale + 12}px; height: {ch * scale + 12}px">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="canvas"
 			class:crosshair={ed.tool !== 'select'}
+			data-theme={ed.previewTheme ?? themeColorMode.mode}
 			bind:this={canvasEl}
-			style="width: {doc.canvas.width}px; height: {doc.canvas.height}px; transform: scale({scale}); --grid-px: {GRID}px"
+			style="width: {cw}px; height: {ch}px; transform: scale({scale}); --grid-px: {GRID}px"
 			onpointerdowncapture={onCanvasCapture}
 			onpointerdown={canvasDown}
 			ondblclick={() => ed.tool === 'pipe' && finishPipe()}
 		>
 			<svg
 				class="pipes"
-				width={doc.canvas.width}
-				height={doc.canvas.height}
-				viewBox="0 0 {doc.canvas.width} {doc.canvas.height}"
+				width={cw}
+				height={ch}
+				viewBox="0 0 {cw} {ch}"
 			>
 				<!-- Layered like the kit's Mimic: every wall, then every bore,
 				     then every flow overlay, so runs UNION at junctions instead
@@ -1414,12 +1790,24 @@
 					class:sel={selected('equipment', eq.id)}
 					class:dragging={drag?.kind === 'eq' && drag.id === eq.id}
 					class:portsedit={ed.portsEdit?.id === eq.id}
+					class:behind={eq.behind}
 					style="left: {pos.x}px; top: {pos.y}px"
 					use:regEl={eq.id}
 					onpointerdown={(e) => eqDown(e, eq)}
 					ondblclick={(e) => eqDblclick(e, eq)}
 				>
 					{#if C}<C {...eqProps(eq)} />{:else}<UserIsland name={eq.component} props={eqProps(eq)} />{/if}
+					{#if resizable(eq)}
+						{#each ['e', 's', 'se'] as const as edge (edge)}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="rs rs-{edge}"
+								style="--hs: {8 / scale}px"
+								title="drag to resize"
+								onpointerdown={(e) => resizeDown(e, eq, edge)}
+							></div>
+						{/each}
+					{/if}
 				</div>
 			{/each}
 
@@ -1437,9 +1825,9 @@
 			     proximity check, above. -->
 			<svg
 				class="pipe-handles"
-				width={doc.canvas.width}
-				height={doc.canvas.height}
-				viewBox="0 0 {doc.canvas.width} {doc.canvas.height}"
+				width={cw}
+				height={ch}
+				viewBox="0 0 {cw} {ch}"
 			>
 				{#each doc.pipes ?? [] as p (p.id)}
 					{#if pipeHandlesVisible(p.id)}
@@ -1537,9 +1925,9 @@
 				{#if peq}
 					<svg
 						class="portedit-handles"
-						width={doc.canvas.width}
-						height={doc.canvas.height}
-						viewBox="0 0 {doc.canvas.width} {doc.canvas.height}"
+						width={cw}
+						height={ch}
+						viewBox="0 0 {cw} {ch}"
 					>
 						{#each editingPortsPx(peq) as port, i (i)}
 							{#if port.dir}
@@ -1585,6 +1973,13 @@
 				>
 			{/each}
 
+			{#if drag?.kind === 'box' && drag.moved}
+				<div
+					class="selbox"
+					style="left: {Math.min(drag.x0, drag.x1)}px; top: {Math.min(drag.y0, drag.y1)}px; width: {Math.abs(drag.x1 - drag.x0)}px; height: {Math.abs(drag.y1 - drag.y0)}px; border-width: {1 / scale}px"
+				></div>
+			{/if}
+
 			{#if ed.tool === 'place' && ed.placeComponent && cursor}
 				{@const G = registry[ed.placeComponent]}
 				<div class="ghost" style="left: {cursor[0]}px; top: {cursor[1]}px">
@@ -1592,9 +1987,42 @@
 				</div>
 			{/if}
 		</div>
+		<!-- The canvas's own resize handles: in the sizer's margin just past
+		     the right/bottom edge (the canvas clips its children), in pane
+		     pixels, so they keep their size at any zoom. -->
+		{#if ed.tool === 'select' && !ed.portsEdit}
+			{#each ['e', 's', 'se'] as const as edge (edge)}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div
+					class="crs crs-{edge}"
+					style="--cx: {cw * scale}px; --cy: {ch * scale}px"
+					title="drag to resize the canvas"
+					onpointerdown={(e) => canvasResizeDown(e, edge)}
+				></div>
+			{/each}
+			{#if drag?.kind === 'canvas'}
+				<span class="csize" style="left: {cw * scale}px; top: {ch * scale}px">{cw} × {ch}</span>
+			{/if}
+		{/if}
+		</div>
 	{:else}
 		<p class="empty">waiting for document…</p>
 	{/if}
+</div>
+{#if doc}
+	<div class="zctl" role="toolbar" aria-label="mimic zoom">
+		<button title="Zoom in (Ctrl+= / Ctrl+wheel)" aria-label="zoom in" onclick={zoomIn} disabled={scale >= MAX_ZOOM}>
+			<svg viewBox="0 0 32 32"><path d="M32 18.133H18.133V32h-4.266V18.133H0v-4.266h13.867V0h4.266v13.867H32z" /></svg>
+		</button>
+		<button title="Zoom out (Ctrl+- / Ctrl+wheel)" aria-label="zoom out" onclick={zoomOut} disabled={scale <= MIN_ZOOM}>
+			<svg viewBox="0 0 32 5"><path d="M0 0h32v4.2H0z" /></svg>
+		</button>
+		<button title="Fit the canvas to the pane width (Ctrl+0)" aria-label="fit view" onclick={zoomFit}>
+			<svg viewBox="0 0 32 30"><path d="M3.692 4.63c0-.53.4-.938.939-.938h5.215V0H4.708C2.13 0 0 2.054 0 4.63v5.216h3.692V4.631zM27.354 0h-5.2v3.692h5.17c.53 0 .984.4.984.939v5.215H32V4.631A4.624 4.624 0 0027.354 0zm.954 24.83c0 .532-.4.94-.939.94h-5.215v3.768h5.215c2.577 0 4.631-2.13 4.631-4.707v-5.139h-3.692v5.139zm-23.677.94c-.531 0-.939-.4-.939-.94v-5.138H0v5.139c0 2.577 2.13 4.707 4.708 4.707h5.138V25.77H4.631z" /></svg>
+		</button>
+		<span class="zpct" title={zoom === null ? 'fitted to the pane width' : 'zoom level (this panel only, not saved to the file)'}>{Math.round(scale * 100)}%</span>
+	</div>
+{/if}
 </div>
 
 {#if portsEditEq}
@@ -1610,12 +2038,71 @@
 {/if}
 
 <style>
+	.cpane {
+		position: relative;
+		flex: 1;
+		min-width: 0;
+		display: flex;
+	}
 	.wrap {
 		flex: 1;
 		min-width: 0;
 		overflow: auto;
 		padding: 12px;
 		position: relative;
+	}
+	.sizer {
+		position: relative;
+		overflow: hidden;
+		/* room under the corner zoom controls to scroll the canvas clear */
+		margin-bottom: 110px;
+	}
+	/* Same spot and look as ZoomPane's controls (the ladder and SFC
+	   editors) and FBD's xyflow Controls. */
+	.zctl {
+		position: absolute;
+		left: 15px;
+		bottom: 15px;
+		z-index: 12;
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		box-shadow: var(--nx-shadow);
+		border: 1px solid var(--nx-border);
+		background: var(--nx-panel-bg);
+	}
+	.zctl button {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		width: 26px;
+		height: 26px;
+		padding: 4px;
+		border: none;
+		border-bottom: 1px solid var(--nx-border);
+		background: var(--nx-panel-bg);
+		color: var(--nx-ui-ink);
+		cursor: pointer;
+	}
+	.zctl button:hover {
+		background: var(--nx-ctl-hover);
+	}
+	.zctl button:disabled {
+		cursor: default;
+		opacity: 0.4;
+	}
+	.zctl svg {
+		width: 100%;
+		max-width: 12px;
+		max-height: 12px;
+		fill: currentColor;
+	}
+	.zpct {
+		font-size: 9px;
+		text-align: center;
+		padding: 2px 0;
+		color: var(--nx-muted);
+		font-variant-numeric: tabular-nums;
 	}
 	.canvas {
 		position: relative;
@@ -1624,6 +2111,8 @@
 		   caption text (the "P-101" under a pump turns into a blue
 		   highlight mid-move); every canvas text is edited in the inspector */
 		user-select: none;
+		/* the card the HMI page puts a mimic on, in the kit's own palette */
+		background-color: var(--surface);
 		background-image:
 			linear-gradient(to right, var(--grid) 1px, transparent 1px),
 			linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
@@ -1810,16 +2299,105 @@
 	.eq.dragging {
 		cursor: grabbing;
 	}
+	/* `behind` equipment (a wet well with pumps in it) paints under the
+	   pipe layer — see the runtime <Mimic>'s identical rule. */
+	.eq.behind {
+		z-index: -1;
+	}
 	.eq.sel {
 		outline: 2px solid var(--nx-accent);
 		outline-offset: 3px;
 		border-radius: 4px;
+	}
+	/* Resize handles sit on the selection outline (offset 3px): the right
+	   edge's middle, the bottom edge's middle, and the corner. --hs is a
+	   constant on-screen size (8px divided by the canvas scale). */
+	.rs {
+		position: absolute;
+		width: var(--hs);
+		height: var(--hs);
+		background: var(--nx-accent);
+		border: 1px solid var(--nx-bg, #1e1e1e);
+		border-radius: 2px;
+		box-sizing: border-box;
+	}
+	.rs-e {
+		right: calc(-4px - var(--hs) / 2);
+		top: calc(50% - var(--hs) / 2);
+		cursor: ew-resize;
+	}
+	.rs-s {
+		bottom: calc(-4px - var(--hs) / 2);
+		left: calc(50% - var(--hs) / 2);
+		cursor: ns-resize;
+	}
+	.rs-se {
+		right: calc(-4px - var(--hs) / 2);
+		bottom: calc(-4px - var(--hs) / 2);
+		cursor: nwse-resize;
+	}
+	/* Canvas edge handles: a strip along the right and bottom edges and a
+	   grip at the corner, quiet until hovered or dragged. */
+	.crs {
+		position: absolute;
+		box-sizing: border-box;
+	}
+	.crs-e {
+		left: var(--cx);
+		top: 0;
+		width: 8px;
+		height: var(--cy);
+		cursor: ew-resize;
+	}
+	.crs-s {
+		left: 0;
+		top: var(--cy);
+		width: var(--cx);
+		height: 8px;
+		cursor: ns-resize;
+	}
+	.crs-se {
+		left: var(--cx);
+		top: var(--cy);
+		width: 10px;
+		height: 10px;
+		cursor: nwse-resize;
+		border-right: 2px solid var(--nx-border);
+		border-bottom: 2px solid var(--nx-border);
+	}
+	.crs-e:hover,
+	.crs-s:hover,
+	.sizing .crs-e,
+	.sizing .crs-s {
+		background: color-mix(in srgb, var(--nx-accent) 35%, transparent);
+	}
+	.crs-se:hover,
+	.sizing .crs-se {
+		border-color: var(--nx-accent);
+	}
+	.csize {
+		position: absolute;
+		transform: translate(-100%, -100%) translate(-4px, -4px);
+		padding: 1px 5px;
+		font: 11px var(--vscode-editor-font-family, monospace);
+		background: var(--nx-accent);
+		color: var(--nx-bg, #1e1e1e);
+		border-radius: 3px;
+		pointer-events: none;
+		white-space: nowrap;
 	}
 	.eq.portsedit {
 		outline: 2px dashed var(--nx-sel-ink);
 		outline-offset: 3px;
 		border-radius: 4px;
 		cursor: copy;
+	}
+	.selbox {
+		position: absolute;
+		border: 1px dashed var(--nx-accent);
+		background: color-mix(in srgb, var(--nx-accent) 10%, transparent);
+		pointer-events: none;
+		box-sizing: border-box;
 	}
 	.lbl {
 		position: absolute;

@@ -17,8 +17,13 @@
             "minLength": 1,
             "description": "How a pipe end anchors to this port by name (a *.mimic.json pipe's from/to). Unique within the list."
           },
-          "x": { "type": "number", "minimum": 0, "maximum": 1, "description": "Fraction of the box width." },
-          "y": { "type": "number", "minimum": 0, "maximum": 1, "description": "Fraction of the box height." },
+          "part": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A part of the drawing (an element the component marks data-part=\"…\", e.g. a Tank's vessel or a Valve's body). x and y are then fractions of that part, so the port stays on it at any size. Absent = fractions of the whole box."
+          },
+          "x": { "type": "number", "minimum": 0, "maximum": 1, "description": "Fraction of the box width (of the part's, with part)." },
+          "y": { "type": "number", "minimum": 0, "maximum": 1, "description": "Fraction of the box height (of the part's, with part)." },
           "dir": {
             "type": "string",
             "enum": ["left", "right", "up", "down"],

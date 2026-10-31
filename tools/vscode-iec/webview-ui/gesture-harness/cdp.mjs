@@ -215,15 +215,16 @@ export class Browser {
 	}
 	// Decomposed press/move/release so a drag can be observed MID-flight
 	// (capture the DOM between move and release).
-	async mouseDown(x, y) {
+	// `modifiers` as for click(): a Shift-drag holds it on all three.
+	async mouseDown(x, y, { modifiers = 0 } = {}) {
 		await this.moveTo(x, y);
-		await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+		await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, modifiers });
 	}
-	async mouseMove(x, y, { buttons = 1 } = {}) {
-		await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons });
+	async mouseMove(x, y, { buttons = 1, modifiers = 0 } = {}) {
+		await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons, modifiers });
 	}
-	async mouseUp(x, y) {
-		await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+	async mouseUp(x, y, { modifiers = 0 } = {}) {
+		await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, modifiers });
 	}
 	async dblclick(x, y) {
 		await this.moveTo(x, y);

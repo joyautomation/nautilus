@@ -317,6 +317,18 @@
 				/>
 			</div>
 			<div class="field">
+				<span>height</span>
+				<input
+					class="nx-input"
+					type="number"
+					placeholder="auto"
+					value={eq.height ?? ''}
+					onchange={(e) => patchEq({ height: num(e.currentTarget.value) })}
+				/>
+			</div>
+		</div>
+		<div class="pair">
+			<div class="field">
 				<span>label</span>
 				<input
 					class="nx-input"
@@ -324,6 +336,10 @@
 					onchange={(e) => patchEq({ label: e.currentTarget.value === '' ? null : e.currentTarget.value })}
 				/>
 			</div>
+			<label class="field" title="Draw under the pipes, so equipment inside it shows its pipes (a wet well with pumps in it)">
+				<span>behind pipes</span>
+				<input type="checkbox" checked={!!eq.behind} onchange={(e) => patchEq({ behind: e.currentTarget.checked ? true : null })} />
+			</label>
 		</div>
 		<div class="field">
 			<span>ports</span>
@@ -512,9 +528,14 @@
 		</div>
 		<button class="del" onclick={deleteSel}>Delete label</button>
 	{:else if sel?.kind === 'multi'}
-		<h4>Equipment <span class="dim">· {sel.ids.length} selected</span></h4>
-		<p class="note">{sel.ids.join(', ')}</p>
-		<p class="note">Ctrl+C / Ctrl+X copy or cut them (with the pipes between them), Ctrl+V pastes, Ctrl+D duplicates, arrows nudge, Del deletes. Ctrl-click adds or removes one.</p>
+		{@const nl = sel.labels?.length ?? 0}
+		<h4>
+			Selection <span class="dim"
+				>· {sel.ids.length} equipment{#if nl}, {nl} label{nl === 1 ? '' : 's'}{/if}</span
+			>
+		</h4>
+		<p class="note">{[...sel.ids, ...(sel.labels ?? []).map((i) => doc?.labels?.[i]?.text ?? `label ${i}`)].join(', ')}</p>
+		<p class="note">Drag any of them to move them all (pipes between them move whole), arrows nudge, Del deletes. Ctrl+C / Ctrl+X copy or cut the equipment (with the pipes between them), Ctrl+V pastes, Ctrl+D duplicates. Shift- or Ctrl-click adds or removes one; Shift-drag on empty canvas boxes more in.</p>
 	{:else if sel?.kind === 'nodes'}
 		<h4>Nodes <span class="dim">· {sel.pipeId}</span></h4>
 		<p class="note">{sel.indices.length} point{sel.indices.length === 1 ? '' : 's'} selected on this pipe.</p>

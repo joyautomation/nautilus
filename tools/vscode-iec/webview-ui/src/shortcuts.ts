@@ -158,7 +158,8 @@ export const MIMIC_SHORTCUTS: ShortcutGroup[] = [
 		title: 'Select',
 		rows: [
 			{ keys: 'Click', does: 'Select equipment, a pipe or a label', hint: 'click selects' },
-			{ keys: 'Ctrl + click', does: 'Add equipment to or remove it from the selection', hint: 'Ctrl-click: multi-select' },
+			{ keys: 'Shift / Ctrl + click', does: 'Add equipment or a label to the selection, or take it out', hint: 'shift-click: multi-select' },
+			{ keys: 'Shift + drag on empty canvas', does: 'Box-select: add what lies wholly inside the box', hint: 'shift-drag: box select' },
 			{ keys: 'Ctrl + A', does: 'Select all equipment' },
 			{ keys: 'Shift + click a vertex', does: 'Multi-select pipe points', hint: 'shift-click a vertex: select points' },
 			{ keys: 'Esc', does: 'Cancel the current tool, leave the ports editor, or deselect', hint: 'Esc: cancel / deselect' }
@@ -167,8 +168,9 @@ export const MIMIC_SHORTCUTS: ShortcutGroup[] = [
 	{
 		title: 'Edit',
 		rows: [
-			{ keys: 'Drag', does: 'Move equipment, labels, pipe points', hint: 'drag moves' },
+			{ keys: 'Drag', does: 'Move equipment, labels, pipe points; drag one of a selection to move them all', hint: 'drag moves' },
 			{ keys: 'Drag a pipe end', does: 'Onto a port to attach it; off to detach', hint: 'drag a pipe end onto a port: attach' },
+			{ keys: 'Drag the canvas edge', does: 'Resize the canvas (right edge, bottom edge or corner)', hint: 'drag the canvas edge: resize' },
 			{ keys: 'Arrow keys', does: 'Nudge the selection (Shift = one grid step)', hint: 'arrows nudge' },
 			{ keys: 'Del / Backspace', does: 'Delete the selection (attached pipe ends are kept, detached)', hint: 'Del deletes' },
 			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste equipment with props, bindings and the pipes between them — into another mimic too', hint: 'Ctrl+C/X/V/D: copy cut paste duplicate' },
@@ -184,6 +186,7 @@ export const MIMIC_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Shift', does: 'Free angle while placing a point' }
 		]
 	},
+	viewGroup('Fit the canvas to the pane width (also the corner fit button)'),
 	FILE_GROUP
 ];
 
