@@ -715,13 +715,13 @@ test('restore: the mimic editor mounts with saved state, says ready, and renders
 	}
 });
 
-test('restore: the component editor mounts with saved state, says ready, and renders the doc', async () => {
-	const doc = { component: 'Tank', ports: [{ name: 'top', x: 0.5, y: 0 }] };
-	const ed = await Editor.open(BUNDLE, doc, { headless: HEADLESS, state: STALE_STATE, mode: 'component' });
+test('restore: the component preview pane mounts with saved state, says ready, and renders the doc', async () => {
+	const doc = { component: 'Tank', builtin: true, ports: [{ name: 'top', x: 0.5, y: 0 }] };
+	const ed = await Editor.open(BUNDLE, doc, { headless: HEADLESS, state: STALE_STATE, mode: 'preview' });
 	try {
 		const types = (await ed.b.eval('JSON.stringify(window.__posted().map((m) => m && m.type))').then(JSON.parse));
-		assert.ok(types.includes('componentReady'), `no componentReady in ${types}`);
-		assert.equal(await ed.b.eval(`document.querySelector('.name')?.textContent`), '· Tank');
+		assert.ok(types.includes('previewReady'), `no previewReady in ${types}`);
+		assert.equal(await ed.b.eval(`document.querySelector('header .title')?.textContent?.trim()`), 'Tank');
 		assert.ok(await ed.b.eval(`!!document.querySelector('circle.port')`), 'port dot not rendered');
 		assert.deepEqual(exceptions(ed), []);
 	} finally {

@@ -148,7 +148,7 @@
 
 	/** Direction-tick endpoint (unit vector * length) for a resolved port —
 	 * the small arrow drawn off a port dot showing its effective exit
-	 * direction (Feature 1). Shared constant with ComponentApp.svelte's own
+	 * direction (Feature 1). Shared constant with PreviewApp.svelte's own
 	 * copy (kept file-local rather than exported: it's presentation, not a
 	 * document-shape concern like PORT_STUB). */
 	const TICK_VEC: Record<PortDir, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
@@ -467,7 +467,7 @@
 		| { kind: 'anchor'; id: string; end: 'from' | 'to'; x: number; y: number; port: MimicPipeAnchor | null; moved: boolean };
 	let drag = $state<Drag | null>(null);
 	/** Row selection for the ports-edit side panel (PortsPanel, below) —
-	 * mirrors ComponentApp.svelte's `selected`. Reset whenever ed.portsEdit
+	 * mirrors PreviewApp.svelte's `selected`. Reset whenever ed.portsEdit
 	 * changes (see the $effect near the template). */
 	let portsSelected = $state<number | null>(null);
 
@@ -1785,8 +1785,8 @@
 	   already wired up, but every `.porthandle` — selected or not — used the
 	   sel-bg/sel-ink colors as its BASE style, so the toggle changed nothing
 	   visible; the panel-row <-> dot selection (0.9.13) had no dot-side
-	   effect. Mirrors ComponentApp.svelte's `.port.sel` (the standalone
-	   *.component.json editor's identical dot, which got this right): the
+	   effect. Mirrors PreviewApp.svelte's `.port.sel` (the preview
+	   pane's identical dot, which got this right): the
 	   SELECTED one goes fully opaque ink instead of the translucent sel-bg
 	   wash every dot already wears, so only it reads as "picked". */
 	.porthandle.sel {
@@ -1798,8 +1798,8 @@
 	}
 	/* A bare <svg> root is inline by default, reserving a few px of
 	   descender space below it inside `.eq` — the same offsetHeight-vs-
-	   rendered-box mismatch as the standalone component editor (see
-	   ComponentApp.svelte's ports fix), just without the placeholder's
+	   rendered-box mismatch the retired standalone component editor
+	   had in its ports, just without the placeholder's
 	   border/padding half of that bug (equipment here is always REAL
 	   content, never a fixed-size placeholder box). block makes eqBox()'s
 	   measurement match the visible shape exactly, so ports on the bottom

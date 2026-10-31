@@ -187,20 +187,6 @@ export const MIMIC_SHORTCUTS: ShortcutGroup[] = [
 	FILE_GROUP
 ];
 
-export const COMPONENT_SHORTCUTS: ShortcutGroup[] = [
-	{
-		title: 'Ports',
-		rows: [
-			{ keys: 'Drag a dot', does: 'Move the port', hint: 'drag a dot to move it' },
-			{ keys: 'Double-click a dot', does: 'Remove the port', hint: 'double-click a dot to remove' },
-			{ keys: 'Double-click the outline', does: 'Add a port there', hint: 'double-click the outline to add' },
-			{ keys: 'Click a dot or panel row', does: 'Select the port — the panel renames it and sets its exit direction' },
-			{ keys: 'Esc', does: 'Deselect', hint: 'Esc deselects' }
-		]
-	},
-	FILE_GROUP
-];
-
 /** The one-line toolbar hint for a table. */
 export function hintLine(groups: ShortcutGroup[]): string {
 	return groups

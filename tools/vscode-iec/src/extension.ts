@@ -27,9 +27,11 @@ import { SfcEditorProvider, SfcPreview } from "./sfcPreview";
 import { registerDiagramCommands } from "./diagramCommands";
 import { MimicEditorProvider } from "./mimicEditor";
 import { SceneEditorProvider } from "./sceneEditor";
-import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
+import { registerComponentPreview } from "./componentPreview";
+import { registerPagePreview } from "./pagePreview";
+import { registerCopyKitComponentCommand } from "./copyKitComponent";
 import { registerNewProjectCommand } from "./newProject";
 import { AcceptanceTests } from "./acceptanceTests";
 import { cliVersion, checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
@@ -144,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Title-bar hops between the text and the diagram editor.
   context.subscriptions.push(registerDiagramCommands());
   // User-authored Svelte components rendered for real inside the mimic/
-  // Component Editor webviews — gated on workspace trust (it compiles and
+  // component preview webviews — gated on workspace trust (it compiles and
   // runs the project's own code via esbuild + its svelte/compiler).
   const userComponents = new UserComponentManager(context);
   context.subscriptions.push(userComponents);
@@ -159,12 +161,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // "*.scene.json" opens as the 3D scene editor by default, for the same
   // reason (docs/design/spatial-hmi.md §3g).
   context.subscriptions.push(new SceneEditorProvider(context).register());
-  context.subscriptions.push(new ComponentEditorProvider(context, userComponents).register());
-  // Graphical port editing for BUILT-INS (Tank, Pump, ...), reusing the same
-  // Component Editor a project's own custom components get — shares the
-  // mimic editor's workspace-wide sidecar index so a sidecar created here
+  // "Edit Component Ports…": pick any component (built-in or custom) and
+  // edit its ports on its render in the component preview pane — shares the
+  // mimic editor's workspace-wide sidecar index so a sidecar written there
   // shows up in every open mimic panel immediately.
   context.subscriptions.push(registerEditComponentPortsCommand(mimic.componentIndex));
+  // "Open Component Preview": a `{Name}.svelte` rendered live beside its
+  // text editor, compiled from the buffer as you type; also the editor for
+  // a `{Name}.component.json` — opens as JSON, its preview button lands here
+  // (componentPreview.ts).
+  context.subscriptions.push(registerComponentPreview(context, userComponents, mimic.componentIndex));
+  // "Copy Kit Component to Project…": start a symbol of your own from one
+  // the kit ships — its .svelte copied into src/lib, sidecar seeded with
+  // the kit's ports, opened with the preview beside (copyKitComponent.ts).
+  context.subscriptions.push(registerCopyKitComponentCommand(mimic.componentIndex));
+  // "Preview HMI Page": a route served by the project's own `npm run dev`
+  // in VS Code's Simple Browser beside the text (pagePreview.ts).
+  context.subscriptions.push(registerPagePreview());
   context.subscriptions.push(registerNewProjectCommand());
 
   // Getting Started walkthrough: its own command (also reachable from the

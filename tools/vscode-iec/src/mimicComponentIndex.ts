@@ -30,14 +30,26 @@ export type PortDir = "left" | "right" | "up" | "down";
  * unique within a port list. */
 export type Port = { name: string; x: number; y: number; dir?: PortDir };
 
+/** What the component preview pane (componentPreview.ts) renders a
+ * component with: sample props, the user-component counterpart of the
+ * built-ins' DEMO_PROPS in webview-ui/src/mimic/registry.ts. Edited from
+ * the pane's props strip, or by hand — or written by whoever (a person, a
+ * script, an AI agent) authored the component, so it arrives with its own
+ * preview data. */
+export type ComponentPreviewEntry = {
+  props?: Record<string, unknown>;
+};
+
 export type ComponentManifestEntry = {
   /** Named fractions of the rendered box. Absent = no sidecar override for
    * this component (falls through to the built-in default). */
   ports?: Port[];
+  /** Sample props for the preview pane. Absent = rendered with none. */
+  preview?: ComponentPreviewEntry;
   // Reserved for future per-component metadata (defaults, bindHints,
   // palette, ...) — not implemented yet. Any such keys, present in a
   // hand-written or future-version file, pass through every read/patch/
-  // write cycle untouched; see applyComponentPortsEdit.
+  // write cycle untouched; see applyComponentEntryPatch.
   [key: string]: unknown;
 };
 
@@ -65,6 +77,31 @@ export function validatePortList(ports: unknown): ports is Port[] {
   }
   const names = (ports as Port[]).map((p) => p.name);
   return new Set(names).size === names.length;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Shape check for the sidecar's `preview` key: an object whose `props`,
+ * when present, is a plain map (values are whatever the component takes —
+ * numbers, strings, booleans, arrays, nested objects — nothing to check
+ * beyond "a map"). */
+export function validatePreviewEntry(preview: unknown): preview is ComponentPreviewEntry {
+  if (!isPlainObject(preview)) return false;
+  return preview.props === undefined || isPlainObject(preview.props);
+}
+
+/** "src/lib/HeatExchanger.svelte" -> "HeatExchanger"; null for anything
+ * that isn't a candidate component source (a SvelteKit `+page.svelte`,
+ * anything under src/routes — see isCandidateComponentSveltePath — or a
+ * non-.svelte path). The preview pane's "is this file previewable" test. */
+export function componentNameFromSveltePath(path: string): string | null {
+  if (!path.endsWith(".svelte")) return null;
+  if (!isCandidateComponentSveltePath(path)) return null;
+  const base = path.split(/[/\\]/).pop() ?? "";
+  const name = base.slice(0, -".svelte".length);
+  return name === "" ? null : name;
 }
 
 /** The resolved components map — same shape the webview has always
@@ -131,6 +168,9 @@ export function parseComponentEntryStrict(text: string): ComponentManifestEntry 
   const entry = raw as ComponentManifestEntry;
   if (entry.ports !== undefined && !validatePortList(entry.ports)) {
     throw new Error("ports must be a list of uniquely-named {name, x, y} fraction points");
+  }
+  if (entry.preview !== undefined && !validatePreviewEntry(entry.preview)) {
+    throw new Error("preview must be an object whose props (if any) is a map of prop name to value");
   }
   return entry;
 }
@@ -220,39 +260,73 @@ export function paletteCustomComponents(
   return [...out].sort();
 }
 
-/** Apply a ports edit to one sidecar's already-parsed entry — `ports: null`
- * deletes the key (every instance reverts to the built-in default); a
- * present value sets it. Any OTHER keys (future per-component metadata:
- * defaults, bindHints, palette, ...) pass through completely untouched —
- * this is a patch of just the `ports` key, never a full overwrite. */
+/** A per-key patch of a sidecar entry: a value sets that key, `null`
+ * deletes it. Keys not named pass through untouched. */
+export type ComponentEntryPatch = Record<string, unknown>;
+
+/** Apply a patch to one sidecar's already-parsed entry, key by key — a
+ * `null` deletes the key (e.g. `ports: null` reverts every instance to the
+ * built-in default), anything else sets it. Any OTHER keys (future
+ * per-component metadata: defaults, bindHints, palette, ...) pass through
+ * completely untouched — a patch of the named keys, never a full overwrite. */
+export function applyComponentEntryPatch(
+  entry: ComponentManifestEntry,
+  patch: ComponentEntryPatch
+): ComponentManifestEntry {
+  const next = { ...entry };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
+  return next;
+}
+
+/** The ports-only form of applyComponentEntryPatch, kept for its callers. */
 export function applyComponentPortsEdit(
   entry: ComponentManifestEntry,
   ports: Port[] | null
 ): ComponentManifestEntry {
-  const next = { ...entry };
-  if (ports === null) delete next.ports;
-  else next.ports = ports;
-  return next;
+  return applyComponentEntryPatch(entry, { ports });
 }
 
-/** Patch the `ports` key of a sidecar's CURRENT text (the open buffer's,
- * dirty or not — never a stale disk read). Strict: text that doesn't parse
- * as a sidecar entry refuses with a message instead of being treated as {}
- * — a half-typed hand edit must never be replaced wholesale by `{ports}`
- * (that silently threw away everything in the file). Empty text is a fresh
- * entry. Returns the new text, `null` when the result is empty (the caller
- * deletes the file, or no-ops if there wasn't one), or an error. */
-export function patchComponentPortsText(
+/** Patch named keys of a sidecar's CURRENT text (the open buffer's, dirty
+ * or not — never a stale disk read). Strict: text that doesn't parse as a
+ * sidecar entry refuses with a message instead of being treated as {} — a
+ * half-typed hand edit must never be replaced wholesale (that silently
+ * threw away everything in the file). Empty text is a fresh entry. Returns
+ * the new text, `null` when the result is empty (the caller deletes the
+ * file, or no-ops if there wasn't one), or an error. `what` names the edit
+ * in the error ("ports on the canvas", "preview props"). */
+export function patchComponentEntryText(
   text: string,
-  ports: Port[] | null
+  patch: ComponentEntryPatch,
+  what = "the sidecar"
 ): { text: string | null } | { error: string } {
   let entry: ComponentManifestEntry;
   try {
     entry = parseComponentEntryStrict(text);
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    return { error: `the sidecar isn't valid right now (${why}) — fix the JSON before editing ports on the canvas` };
+    return { error: `the sidecar isn't valid right now (${why}) — fix the JSON before editing ${what}` };
   }
-  const next = applyComponentPortsEdit(entry, ports);
+  const next = applyComponentEntryPatch(entry, patch);
   return { text: Object.keys(next).length === 0 ? null : formatComponentEntry(next) };
+}
+
+/** Patch just the `ports` key — see patchComponentEntryText. */
+export function patchComponentPortsText(
+  text: string,
+  ports: Port[] | null
+): { text: string | null } | { error: string } {
+  return patchComponentEntryText(text, { ports }, "ports on the canvas");
+}
+
+/** Patch just the `preview` key: `props` sets the preview's sample props;
+ * an empty map drops the whole `preview` key (nothing worth keeping). */
+export function patchComponentPreviewText(
+  text: string,
+  props: Record<string, unknown>
+): { text: string | null } | { error: string } {
+  const preview = Object.keys(props).length === 0 ? null : { props };
+  return patchComponentEntryText(text, { preview }, "preview props");
 }

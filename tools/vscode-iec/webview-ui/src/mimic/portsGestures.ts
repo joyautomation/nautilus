@@ -1,6 +1,6 @@
 // Pure math behind the ports-edit gesture — shared by the mimic editor's
 // ports mode (EditorCanvas.svelte, 'p' on a selected equipment instance)
-// and the standalone *.component.json editor (ComponentApp.svelte), so "drag a dot
+// and the component preview pane (PreviewApp.svelte), so "drag a dot
 // to move it" and "double-click the box to add one, snapped to the nearest
 // edge/quarter" behave identically in both places instead of being
 // reimplemented twice.

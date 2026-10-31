@@ -306,13 +306,17 @@ text: "SeqStep" }`), which passes any tag value through untouched.
 ### Custom components
 
 Three components live in `hmi/src/lib/`, each with a
-`{Name}.component.json` port sidecar so the extension's **Nautilus: Edit
-Component Ports…** command (and the mimic editor's `p` shortcut on a
-selected instance) has something to edit. The mimic editor's equipment
-palette lists a custom component whether or not it has a sidecar — a
-sidecar is still what gives an instance ports to wire a pipe to, so a
-ports-free drop from the palette is a component with nothing to connect
-until one is added:
+`{Name}.component.json` sidecar: its `ports`, so the extension's
+**Nautilus: Edit Component Ports…** command (and the mimic editor's `p`
+shortcut on a selected instance) has something to edit, and its
+`preview.props`, the sample values the extension's **Open Component
+Preview** pane renders the component with beside its `.svelte` (open
+`SubmersiblePump.svelte` and press the preview button in the editor
+title: a running pump at 48.5 Hz). The mimic editor's equipment palette
+lists a custom component whether or not it has a sidecar — a sidecar is
+still what gives an instance ports to wire a pipe to, so a ports-free drop
+from the palette is a component with nothing to connect until one is
+added:
 
 - **`SubmersiblePump.svelte`** — `running`/`speedHz`-driven, one
   `discharge` port on top (`dir: "up"`). Because a custom component's

@@ -42,15 +42,16 @@ export class Editor {
 
 	/** Open the bundle on `doc`. `state` seeds vscode.getState() before
 	 * mount (a panel restored by Reload Webviews / Reload Window);
-	 * `mode: 'component'` mounts the *.component.json editor instead, with
-	 * `doc` = { component, ports }. */
+	 * `mode: 'preview'` mounts the component preview pane instead (the
+	 * editor for a {Name}.component.json), with `doc` = the host's
+	 * previewDoc fields ({ component, builtin, ports, props, ... }). */
 	static async open(bundleDir, doc, { headless = true, state, mode = 'mimic' } = {}) {
 		// Stage host.html next to the chosen bundle so ./mimic-editor.js
 		// resolves to exactly the build under test.
 		const runDir = mkdtempSync(join(tmpdir(), 'mimic-run-'));
 		let html = readFileSync(join(HERE, 'host.html'), 'utf8');
 		if (state !== undefined) html = html.replace('window.__POSTED__ = [];', `window.__POSTED__ = []; window.__STATE__ = ${JSON.stringify(state)};`);
-		if (mode === 'component') html = html.replace('data-mimic-mode="mimic"', 'data-mimic-mode="component"');
+		if (mode === 'preview') html = html.replace('data-mimic-mode="mimic"', 'data-mimic-mode="preview"');
 		writeFileSync(join(runDir, 'host.html'), html);
 		copyFileSync(join(bundleDir, 'mimic-editor.js'), join(runDir, 'mimic-editor.js'));
 		copyFileSync(join(bundleDir, 'mimic-editor.css'), join(runDir, 'mimic-editor.css'));
@@ -60,13 +61,18 @@ export class Editor {
 		await b.navigate('file://' + join(runDir, 'host.html'));
 
 		// Wait for the bundle to mount + announce ready.
-		if (mode === 'component') {
+		if (mode === 'preview') {
 			for (let i = 0; i < 100; i++) {
-				if (await b.eval(`window.__posted().some((m) => m && m.type === 'componentReady')`)) break;
+				if (await b.eval(`window.__posted().some((m) => m && m.type === 'previewReady')`)) break;
 				await sleep(50);
 			}
-			await ed.deliver({ type: 'componentDoc', ...doc, title: 'harness.component.json' });
-			await sleep(200);
+			await ed.deliver({ type: 'previewDoc', sidecar: 'harness.component.json', hasSidecar: true, ...doc });
+			// The ports overlay draws once the render has been measured.
+			for (let i = 0; i < 100; i++) {
+				if (await b.eval(`!!document.querySelector('svg.ports')`)) break;
+				await sleep(50);
+			}
+			await sleep(100);
 			return ed;
 		}
 		// Wait for the bundle to say it is listening. NOT __ready(): that also

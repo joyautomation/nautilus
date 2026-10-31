@@ -1,3 +1,4 @@
 {
-	"ports": [{ "name": "in", "x": 0, "y": 0.5, "dir": "left" }]
+	"ports": [{ "name": "in", "x": 0, "y": 0.5, "dir": "left" }],
+	"preview": { "props": { "label": "FORCE MAIN" } }
 }

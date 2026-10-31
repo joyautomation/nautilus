@@ -143,8 +143,8 @@ export function docPipeBetween() {
 
 // ── restore: mount with saved webview state ────────────────────────────────
 // A restored panel (Developer: Reload Webviews, Reload Window) mounts with
-// vscode.getState() holding whatever it last had. The mimic/component
-// editors keep nothing there today — they re-handshake and the host
+// vscode.getState() holding whatever it last had. The mimic editor and the
+// preview pane keep nothing there today — they re-handshake and the host
 // re-sends the doc — but the mount must survive a non-empty state (an
 // older build's, or a future one's) and still say ready, or the host never
 // answers and the panel stays blank (the FBD editor's failure mode).
@@ -152,12 +152,14 @@ export const exceptions = (ed) => ed.console().filter((l) => l.startsWith('[exce
 
 export const STALE_STATE = { msg: { type: 'model', model: { name: 'x', nodes: [], edges: [] } }, zoom: { ld: 2 } };
 
-// ── component editor (*.component.json) ────────────────────────────────────
-// The mimic bundle also hosts the component editor (data-mimic-mode =
-// "component"); `doc` is { component, ports }. Its ops are `componentOp`
-// messages carrying the FULL ports list (not manifestOp / mimicOp).
-export async function withComponent(doc, fn) {
-	const ed = await Editor.open(BUNDLE, doc, { headless: HEADLESS, mode: 'component' });
+// ── component preview pane (the editor for a *.component.json) ───────────
+// The mimic bundle also hosts the preview pane (data-mimic-mode =
+// "preview"); `doc` is the host's previewDoc ({ component, builtin, ports,
+// ... }). A built-in renders from the kit's registry with no compile, so
+// the harness can drive it. Ports edits post `previewSetPorts` carrying the
+// FULL ports list (not manifestOp / mimicOp). Ports mode starts off.
+export async function withPreview(doc, fn) {
+	const ed = await Editor.open(BUNDLE, doc, { headless: HEADLESS, mode: 'preview' });
 	try {
 		return await fn(ed);
 	} finally {
@@ -165,5 +167,5 @@ export async function withComponent(doc, fn) {
 	}
 }
 
-export const componentOps = (ed) =>
-	ed.b.eval("JSON.stringify(window.__posted().filter((m) => m && m.type === 'componentOp').map((m) => m.ports))").then(JSON.parse);
+export const previewOps = (ed) =>
+	ed.b.eval("JSON.stringify(window.__posted().filter((m) => m && m.type === 'previewSetPorts').map((m) => m.ports))").then(JSON.parse);
