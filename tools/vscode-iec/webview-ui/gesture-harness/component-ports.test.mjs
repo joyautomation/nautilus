@@ -163,3 +163,33 @@ test('P07 component: redo — keys post nothing; the dot follows the doc the hos
 		assert.deepEqual(exceptions(ed), []);
 	});
 });
+
+// Part-anchored ports (the kit's data-part="…" elements): a dot dropped on a
+// part of the drawing anchors to it — its x/y become fractions of the part,
+// so it stays on the vessel wall when the equipment is resized.
+test('P08 component: a port dropped on a part of the drawing anchors to that part', async () => {
+	await withPreview(DOC(), async (ed) => {
+		await portsOn(ed);
+		const vessel = await ed.b.eval(
+			`(() => { const r = document.querySelector('.box [data-part="vessel"]').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`
+		);
+		const [inDot] = await dots(ed);
+		const tx = vessel.x + vessel.w / 2;
+		const ty = vessel.y + vessel.h / 2;
+		await ed.b.mouseDown(inDot.cx, inDot.cy);
+		await ed.b.mouseMove(inDot.cx + 20, inDot.cy);
+		await ed.b.mouseMove(tx, ty);
+		await ed.b.mouseUp(tx, ty);
+		await sleepMs(150);
+		const ops = await previewOps(ed);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		const moved = ops[0][0];
+		assert.equal(moved.part, 'vessel', JSON.stringify(moved));
+		assert.ok(Math.abs(moved.x - 0.5) < 0.02 && Math.abs(moved.y - 0.5) < 0.02, JSON.stringify(moved));
+		await ed.deliver(echo(ops[0]));
+		await sleepMs(150);
+		const dot = (await dots(ed))[0];
+		assert.ok(Math.abs(dot.cx - tx) < 2 && Math.abs(dot.cy - ty) < 2, JSON.stringify({ dot, tx, ty }));
+		assert.deepEqual(exceptions(ed), []);
+	});
+});
