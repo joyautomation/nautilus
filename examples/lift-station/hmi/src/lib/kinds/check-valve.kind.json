@@ -1,0 +1,7 @@
+{
+  "model": "models/check-valve.glb",
+  "ports": {
+    "inlet": { "at": { "part": "FlangeIn", "anchor": "left" } },
+    "outlet": { "at": { "part": "FlangeOut", "anchor": "right" } }
+  }
+}

@@ -4,7 +4,7 @@
 	// Document state arrives from the extension host (sceneDoc / sceneError
 	// / sceneTags / sceneConfig messages); every gesture goes back as an op.
 	import { LOOKS, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
-	import { announceReady, disarm, ed, missingAssets, postOp, reopenAsText, setSnapToGrid, stageLook, toggleLive } from './sceneState.svelte';
+	import { announceReady, deleteSelectedVertex, disarm, ed, missingAssets, postOp, reopenAsText, selectPipe, setSnapToGrid, stageLook, toggleLive } from './sceneState.svelte';
 	import KindPalette from './KindPalette.svelte';
 	import Stage3D from './Stage3D.svelte';
 	import NodePanel from './NodePanel.svelte';
@@ -17,6 +17,7 @@
 				rendered?: typeof ed.rendered;
 				kinds?: typeof ed.kinds;
 				assets?: typeof ed.assets;
+				kindFiles?: typeof ed.kindFiles;
 				title?: string;
 				message?: string;
 				tags?: Record<string, unknown> | null;
@@ -28,6 +29,7 @@
 				ed.rendered = m.rendered ?? m.doc;
 				ed.kinds = m.kinds ?? [];
 				ed.assets = m.assets ?? [];
+				ed.kindFiles = m.kindFiles ?? [];
 				ed.title = m.title ?? ed.title;
 				ed.error = '';
 			} else if (m?.type === 'sceneError') {
@@ -62,6 +64,14 @@
 		const d = ed.doc;
 		if (s && d && !d.nodes.some((n) => n.id === s)) ed.selected = null;
 	});
+	// And a selected pipe or vertex the document no longer has.
+	$effect(() => {
+		const i = ed.selectedPipe;
+		const v = ed.selectedVertex;
+		const pipe = i !== null ? ed.doc?.pipes?.[i] : undefined;
+		if (i !== null && !pipe) selectPipe(null);
+		else if (v !== null && !(pipe?.points ?? [])[v]) ed.selectedVertex = null;
+	});
 
 	function inField(e: KeyboardEvent): boolean {
 		const t = e.target as HTMLElement | null;
@@ -73,7 +83,9 @@
 				(e.target as HTMLElement).blur();
 				return;
 			}
-			if (ed.tool === 'place') disarm();
+			if (ed.tool === 'place' || ed.pipeFrom) disarm();
+			else if (ed.selectedVertex !== null) ed.selectedVertex = null;
+			else if (ed.selectedPipe !== null) selectPipe(null);
 			else ed.selected = null;
 			return;
 		}
@@ -82,17 +94,31 @@
 			e.preventDefault();
 			postOp({ type: 'deleteNode', id: ed.selected });
 			ed.selected = null;
+		} else if ((e.key === 'Delete' || e.key === 'Backspace') && ed.selectedPipe !== null) {
+			e.preventDefault();
+			if (ed.selectedVertex === null || !deleteSelectedVertex()) {
+				postOp({ type: 'deletePipe', index: ed.selectedPipe });
+				selectPipe(null);
+			}
 		} else if (e.key === 'g' || e.key === 'G') ed.gizmo = 'translate';
 		else if (e.key === 'r' || e.key === 'R') ed.gizmo = 'rotate';
 	}
 
 	const missing = $derived(missingAssets());
+	/** Kind files that did not inline: not found, or not a kind. */
+	const badKindFiles = $derived(ed.kindFiles.filter((f) => !f.file || f.error));
 	const hint = $derived(
 		ed.tool === 'place'
 			? `click the ground to place a ${ed.placeKind} · Shift = off-grid · Esc cancels`
-			: ed.selected
+			: ed.pipeFrom
+				? `pipe from ${ed.pipeFrom.node}.${ed.pipeFrom.port} · click another port to run it there · Esc cancels`
+				: ed.selectedVertex !== null
+					? `drag the gizmo to move the point · Shift = off-grid · Del removes the point · Esc`
+					: ed.selectedPipe !== null
+						? `pipe ${ed.doc?.pipes?.[ed.selectedPipe]?.id ?? '#' + ed.selectedPipe}: click a point on the stage to move it · Del deletes the pipe · Esc`
+						: ed.selected
 				? `drag the gizmo to move (G) or turn (R) · Shift = off-grid · Del deletes · Esc deselects`
-				: 'click a node to select it · drag to orbit, right-drag to pan, wheel to zoom · pick a kind on the left to place one'
+				: 'click a node to select it · click a port, then another, to run a pipe · drag to orbit, right-drag to pan, wheel to zoom · pick a kind on the left to place one'
 	);
 </script>
 
@@ -145,6 +171,14 @@
 			<div class="err" role="alert">
 				<span>JSON: {ed.error} — the scene is read-only until the text parses again</span>
 				<button class="reopen" onclick={reopenAsText}>Reopen as Text Editor</button>
+			</div>
+		{/if}
+		{#if badKindFiles.length}
+			<div class="warn" role="status">
+				<span>
+					{#each badKindFiles as f, i (f.name)}{i ? ' · ' : ''}<b>{f.name}</b>: {f.error ? `${f.path} — ${f.error}` : `${f.path} not found next to the scene file`}{/each}
+					— {badKindFiles.length === 1 ? 'the kind draws' : 'those kinds draw'} as a grey box until the file is right.
+				</span>
 			</div>
 		{/if}
 		{#if missing.length}

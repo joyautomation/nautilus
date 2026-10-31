@@ -1,46 +1,12 @@
 {
 	"name": "Lift station — wet well WW-101",
 	"kinds": {
-		"wet-well": {
-			"model": "models/wet-well.glb",
-			"status": "LIT-101 {Level:1} %",
-			"bounds": { "size": [3.0, 3.0, 3.0], "center": [0, 1.5, 0] },
-			"labelAt": [-0.2, 3.3, 1.2],
-			"drive": [{ "mesh": "Fluid", "scale": { "axis": "y", "to": { "bind": "Level", "scale": 0.0296, "min": 0.01, "max": 2.96 } } }]
-		},
-		"submersible-pump": {
-			"model": "models/submersible-pump.glb",
-			"status": "{Running?run:stopped} {SpeedHz:0} Hz",
-			"labelAt": [0, 1.5, 0],
-			"drive": [
-				{ "mesh": "Motor", "tint": { "bind": "Running", "on": "running" } },
-				{ "mesh": "Volute", "tint": { "bind": "Running", "on": "running" } },
-				{ "mesh": "Lamp", "emissive": { "bind": "Running", "on": "running", "intensity": 2 } },
-				{ "mesh": "Impeller", "spin": { "axis": "y", "revPerS": { "bind": "SpeedHz", "scale": 0.0333 } } }
-			]
-		},
-		"float-switch": {
-			"model": "models/float-switch.glb",
-			"status": "{Tripped?TRIPPED:clear}",
-			"bounds": { "size": [0.5, 0.5, 0.2], "center": [0.1, -0.22, 0] },
-			"labelAt": [0, 0.08, 0],
-			"drive": [
-				{ "mesh": "FloatUp", "visible": { "bind": "Tripped" } },
-				{ "mesh": "FloatDown", "visible": { "bind": "!Tripped" } },
-				{ "mesh": "FloatUp", "tint": { "bind": "Tripped", "on": "high" } }
-			]
-		},
-		"check-valve": { "model": "models/check-valve.glb" },
-		"flow-meter": {
-			"model": "models/flow-meter.glb",
-			"status": "{Flow:2} L/s",
-			"drive": [{ "mesh": "Display", "emissive": { "bind": "Flow", "threshold": 2, "on": "running", "intensity": 1.2 } }]
-		},
-		"force-main": {
-			"model": "models/force-main.glb",
-			"bounds": { "size": [0.6, 0.35, 0.35], "center": [0.28, 0, 0] },
-			"labelAt": [0.3, 0.3, 0]
-		}
+		"wet-well": "hmi/src/lib/kinds/wet-well.kind.json",
+		"submersible-pump": "hmi/src/lib/kinds/submersible-pump.kind.json",
+		"float-switch": "hmi/src/lib/kinds/float-switch.kind.json",
+		"check-valve": "hmi/src/lib/kinds/check-valve.kind.json",
+		"flow-meter": "hmi/src/lib/kinds/flow-meter.kind.json",
+		"force-main": "hmi/src/lib/kinds/force-main.kind.json"
 	},
 	"camera": { "pos": [5.4, 2.6, 7.8], "target": [1.7, -1.3, -0.3] },
 	"grid": { "pos": [1.8, -3.15, -0.3], "size": [9, 6], "cell": 0.5, "section": 1 },
@@ -64,12 +30,12 @@
 		{ "id": "TOPROC", "kind": "force-main", "label": "FORCE MAIN", "pos": [4.6, 0.45, -0.3] }
 	],
 	"pipes": [
-		{ "id": "p101-cv101", "points": [[0, -2.57, -0.8], [0, 0.45, -0.8], [2.0, 0.45, -0.8]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
-		{ "id": "cv101-header", "points": [[2.4, 0.45, -0.8], [2.9, 0.45, -0.8], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
-		{ "id": "p102-cv102", "points": [[1, -2.57, 0.2], [1, 0.45, 0.2], [2.0, 0.45, 0.2]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
-		{ "id": "cv102-header", "points": [[2.4, 0.45, 0.2], [2.9, 0.45, 0.2], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
-		{ "id": "header", "points": [[2.9, 0.45, -0.3], [3.47, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
-		{ "id": "force-main", "points": [[3.83, 0.45, -0.3], [4.6, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
-		{ "id": "lsll-cable", "points": [[-0.95, 0, -0.15], [-0.95, -2.42, -0.15]], "radius": 0.008 }
+		{ "id": "p101-cv101", "from": { "node": "P101", "port": "discharge" }, "to": { "node": "CV101", "port": "inlet" }, "points": [[0, 0.45, -0.8]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
+		{ "id": "cv101-header", "from": { "node": "CV101", "port": "outlet" }, "points": [[2.9, 0.45, -0.8], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
+		{ "id": "p102-cv102", "from": { "node": "P102", "port": "discharge" }, "to": { "node": "CV102", "port": "inlet" }, "points": [[1, 0.45, 0.2]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
+		{ "id": "cv102-header", "from": { "node": "CV102", "port": "outlet" }, "points": [[2.9, 0.45, 0.2], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
+		{ "id": "header", "to": { "node": "FIT101", "port": "inlet" }, "points": [[2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
+		{ "id": "force-main", "from": { "node": "FIT101", "port": "outlet" }, "to": { "node": "TOPROC", "port": "inlet" }, "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
+		{ "id": "lsll-cable", "to": { "node": "LSLL101", "port": "cable" }, "points": [[-0.95, 0, -0.15]], "radius": 0.008 }
 	]
 }

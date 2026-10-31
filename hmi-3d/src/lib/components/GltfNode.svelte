@@ -37,7 +37,7 @@
 	import { getContext, onDestroy } from 'svelte';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import type { ViewState } from './view.js';
-	import { evalDrives, type MeshState } from '../drives.js';
+	import { blinkOn, evalDrives, pulseAt, rampAt, type MeshState } from '../drives.js';
 	import type { SceneKind, Vec3 } from '../scene.js';
 	import type { NodeProps } from '../registry.js';
 
@@ -46,6 +46,7 @@
 		good = true,
 		data,
 		onbounds,
+		onparts,
 		onfail,
 		label: _label,
 		selected: _selected,
@@ -55,6 +56,9 @@
 		data: SceneKind;
 		/** The model's local box, once loaded — the halo and label use it. */
 		onbounds?: (b: { size: Vec3; center: Vec3 }) => void;
+		/** Each named part's box in the model's frame, once loaded — what a
+		 * box-point port or label resolves against. */
+		onparts?: (parts: Record<string, { size: Vec3; center: Vec3 }>) => void;
 		/** The model could not be loaded; Scene3D falls back to the Svelte kind. */
 		onfail?: (err: unknown) => void;
 	} = $props();
@@ -65,6 +69,7 @@
 	let root = $state<Object3D | null>(null);
 	const meshes = new Map<string, Object3D>();
 	const baseRot = new Map<Object3D, Euler>();
+	const baseScale = new Map<Object3D, Vector3>();
 	/** Materials this node cloned (so a tint on one pump never paints the next). */
 	const owned = new Map<Mesh, MeshStandardMaterial>();
 	const original = new Map<Mesh, Mesh['material']>();
@@ -136,6 +141,7 @@
 		original.clear();
 		meshes.clear();
 		baseRot.clear();
+		baseScale.clear();
 	}
 
 	$effect(() => {
@@ -161,6 +167,7 @@
 						if (mat && mat.transparent && mat.opacity < 1) o.raycast = () => {};
 					}
 					baseRot.set(o, o.rotation.clone());
+					baseScale.set(o, o.scale.clone());
 				});
 				clone.updateMatrixWorld(true);
 				const box = new Box3().setFromObject(clone);
@@ -169,6 +176,17 @@
 				box.getSize(size);
 				box.getCenter(center);
 				onbounds?.({ size: size.toArray() as Vec3, center: center.toArray() as Vec3 });
+				if (onparts) {
+					// The clone has no parent yet, so a world box is a box in the
+					// model's own frame — the node's.
+					const parts: Record<string, { size: Vec3; center: Vec3 }> = {};
+					for (const [name, o] of meshes) {
+						const b = new Box3().setFromObject(o);
+						if (b.isEmpty()) continue;
+						parts[name] = { size: b.getSize(new Vector3()).toArray() as Vec3, center: b.getCenter(new Vector3()).toArray() as Vec3 };
+					}
+					onparts(parts);
+				}
 				missing = new Set((data.drive ?? []).map((d) => d.mesh).filter((m) => !meshes.has(m)));
 				if (missing.size)
 					console.warn(`hmi-3d: ${url} has no mesh named ${[...missing].join(', ')} (it has ${[...meshes.keys()].join(', ')})`);
@@ -187,6 +205,14 @@
 
 	let states = $derived(evalDrives(data.drive, value, over as Record<string, unknown>));
 	let spins = $derived(states.filter((s) => s.spin && s.spin.radPerS !== 0));
+	// The states with a clock in them: a blink alternates with its off
+	// state, a pulse breathes — applied each frame while they hold.
+	let blinks = $derived(states.filter((s) => s.blink));
+	let pulses = $derived(states.filter((s) => s.pulse));
+	let clock = 0;
+	/** The phase each blinking mesh was last painted in, so a frame that
+	 * changes nothing paints nothing. */
+	const phase = new Map<string, boolean>();
 
 	// Apply everything but spin whenever the value (or quality) changes;
 	// a change of look drops the clones made for the last one first.
@@ -199,9 +225,16 @@
 			dropPaint();
 			painted = key;
 		}
+		phase.clear();
 		for (const s of states) apply(s);
 		applyQuality();
 	});
+
+	/** A ramp's colour at its value: the two stops around it, mixed. */
+	function mixed(r: { ramp: [number, string][]; value: number }): Color {
+		const { from, to, t } = rampAt(r.ramp, r.value);
+		return new Color(colour(from)).lerp(new Color(colour(to)), t);
+	}
 
 	function apply(s: MeshState) {
 		const o = meshes.get(s.mesh);
@@ -212,14 +245,21 @@
 			o.rotation[s.turn.axis] = base[s.turn.axis] + s.turn.rad;
 		}
 		if (s.scale) o.scale.set(...s.scale);
+		if (s.pulse === null) o.scale.copy(baseScale.get(o) ?? new Vector3(1, 1, 1));
 		if (s.visible !== undefined) o.visible = s.visible;
 		if (o instanceof Mesh && (s.tint !== undefined || s.emissive !== undefined)) {
 			const mat = ownMaterial(o);
 			if (!mat) return;
 			const srcMat = baseMaterial(o);
-			if (s.tint !== undefined) mat.color.set(s.tint ? colour(s.tint) : (srcMat?.color ?? new Color('#888')));
+			if (s.tint !== undefined) {
+				if (s.tint && typeof s.tint === 'object') mat.color.copy(mixed(s.tint));
+				else mat.color.set(s.tint ? colour(s.tint) : (srcMat?.color ?? new Color('#888')));
+			}
 			if (s.emissive !== undefined) {
-				if (s.emissive) {
+				if (s.emissive && 'ramp' in s.emissive) {
+					mat.emissive.copy(mixed(s.emissive));
+					mat.emissiveIntensity = s.emissive.intensity;
+				} else if (s.emissive) {
 					mat.emissive.set(colour(s.emissive.color));
 					mat.emissiveIntensity = s.emissive.intensity;
 				} else {
@@ -244,9 +284,20 @@
 
 	useTask((dt) => {
 		if (!root || !good) return;
+		clock += dt;
 		for (const s of spins) {
 			const o = meshes.get(s.mesh);
 			if (o) o.rotation[s.spin!.axis] += s.spin!.radPerS * dt;
+		}
+		for (const s of blinks) {
+			const on = blinkOn(s.blink!.hz, clock);
+			if (phase.get(s.mesh) === on) continue;
+			phase.set(s.mesh, on);
+			apply(on ? s : s.blink!.off);
+		}
+		for (const s of pulses) {
+			const o = meshes.get(s.mesh);
+			if (o) o.scale.copy(baseScale.get(o) ?? new Vector3(1, 1, 1)).multiplyScalar(pulseAt(s.pulse!, clock));
 		}
 	});
 

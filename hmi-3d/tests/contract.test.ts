@@ -30,7 +30,7 @@ describe('the drive vocabulary matches the extension schema', () => {
 		expect(Object.keys(schema.definitions.environment.properties).sort()).toEqual(['backdrop', 'background', 'floor', 'fog', 'hdri', 'intensity', 'shadows']);
 	});
 	it('the kind contract has the data-kind, component and assembly fields (§3c, §3d)', () => {
-		expect(Object.keys(schema.definitions.kindContract.properties).sort()).toEqual(['assembly', 'bounds', 'component', 'drive', 'labelAt', 'members', 'model', 'status', 'type']);
+		expect(Object.keys(schema.definitions.kindContract.properties).sort()).toEqual(['assembly', 'bounds', 'component', 'drive', 'labelAt', 'members', 'model', 'ports', 'status', 'type']);
 		expect(Object.keys(schema.definitions.assembly.properties).sort()).toEqual(['nodes', 'pipes']);
 	});
 	it('the schema accepts what validateScene accepts for a component kind and an assembly', () => {
@@ -51,6 +51,9 @@ describe('the built-ins as data (models/kinds.json)', () => {
 	it("reads only members the built-in's contract lists", () => {
 		for (const [name, k] of Object.entries(kinds))
 			for (const m of driveMembers(k.drive as Drive[])) expect(BUILTIN_CONTRACT[name].members ?? []).toContain(m);
+	});
+	it('carries the same ports as the contract (the pipe anchors a scene may name)', () => {
+		for (const [name, k] of Object.entries(kinds)) expect(k.ports).toEqual(BUILTIN_CONTRACT[name].ports);
 	});
 	it('validates as a scene', () => {
 		const doc = { kinds, nodes: [] };

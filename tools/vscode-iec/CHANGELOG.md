@@ -54,6 +54,75 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   and hover to see which `.svelte` drew what, click to open it at the
   line — in this window, local or Remote SSH. Works from a Remote SSH
   window (the port is forwarded). Needs workspace trust.
+- **A 3D kind editor, and kinds in files of their own.** A scene's
+  `kinds` entry may now be the path of a `{Name}.kind.json` relative to the
+  scene (`"pump": "hmi/src/lib/kinds/pump.kind.json"`), holding the same
+  keys an inline entry does, so one pump is declared once and placed in
+  every scene; the schema knows the file (`nautilus-kind.schema.json`,
+  derived from the scene schema's kind contract) and the scene editor
+  inlines it, captions the kind `glTF · file` and offers **edit kind**.
+  The file opens as the kind itself: its model on a turntable (`T`), in
+  any look; the model's named objects fill every drive row's mesh menu
+  and a name the model lacks is flagged; sample values per member drive
+  the meshes and preview the `status` text without touching the file;
+  `type`, `members`, `model`, `status`, `labelAt`, `bounds` and the
+  drives (mesh, channel, fields; **Add drive**, `×`) are edited beside it,
+  each change one text edit with one drive per line. `naut check` reads
+  the file next to the scene. `examples/lift-station`'s six kinds moved
+  into `hmi/src/lib/kinds/`. **Click a part on the model to pick it**:
+  the part under the pointer lights, a click picks it (again on the same
+  spot: the part behind), the panel names it with what it sits in and
+  its drives, **Add drive** starts on it, the **Parts** list picks by
+  name, and a hovered name or drive row lights its part; `Esc` clears.
+- **Ports and anchored pipes (design §3g, slice 3).** A kind declares
+  `ports` in its own frame; in the kind editor **Add port here** puts one
+  where the last click landed on the model, facing out of the surface,
+  and each port is a mark on the model and a row in the panel (rename,
+  `at`, `dir`, **here**, `×`). In the scene editor every node's ports
+  wear a mark that follows the gizmo; **click a port, then another** to
+  run a pipe — one `addPipe` anchored at both ends (`from` / `to` as
+  `{ node, port }`) with an orthogonal route between them as its points,
+  so the pipe follows its nodes when they move; the panel lists the
+  scene's pipes with `×`. `naut check` and the schema know ports and
+  anchors; `hmi-3d` resolves them.
+- **A point by name, and a colour from a number.** A port's `at` and the
+  kind's `labelAt` may be a place on a box — `{ "part": "Motor",
+  "anchor": "top" }`, or `"top"` for the bounds, with `offset` — resolved
+  once the model is loaded, so it survives a re-export; **Add port at…**
+  offers the faces of the picked part, and each row has a mode menu. A
+  tint or emissive drive may be a **ramp** of `[value, colour]` stops over
+  a number instead of on / off.
+- **Blink and pulse, in one click.** Two presets in the kind editor —
+  **Blink on {member}** (a glow on the picked part that flashes twice a
+  second while the member is true) and **Pulse on {member}** (the part
+  breathes, ±10 % once a second) — each a drive row like any other
+  afterwards: every boolean row (`tint`, `emissive`, `visible`) has a
+  **blink** field in Hz, and the new `pulse` channel has **Hz** and **±**
+  (`"pulse": { "bind": "Alarm", "hz": 1, "amount": 0.1 }`). The schema,
+  `naut check` and `hmi-3d` carry both.
+- **Eject to component…** (kind editor header): writes `{Name}.svelte`
+  beside the kind file — a `<script module>` exporting the contract
+  (`type`, `members`, `bounds`, `labelAt`, `ports`, `status`) and an
+  instance holding the model and the drive rows as data, rendered by
+  `hmi-3d`'s new `<ModelNode>` — offers to re-point every scene naming
+  the file at the component, and opens it beside. Nothing is lost on the
+  way out; the file is open ground for anything Threlte. The kind file
+  stays.
+- **Ask AI…** (kind editor header): picks one of five prompts about this
+  file — a model from a picture, sensible part names, drives for the
+  UDT's members, a variant of the kind, or a stub to finish — and opens
+  the editor's chat with it, or copies it (and opens Claude Code's
+  sidebar when it is installed).
+- **Vertex drag, and pipes that follow a move** (scene editor). Select a
+  pipe in the panel and its points wear handles on the stage; a click
+  on one puts the gizmo on it, a drag posts one `setPipePoints`, `Del`
+  drops the point, `Esc` clears the point then the pipe. Moving a node
+  whose anchored pipe still has the suggested run re-routes the run in
+  the same edit as the move; a run someone laid by hand is left alone.
+  The built-in tank, pump and valve have ports (`inlet` / `outlet`,
+  `suction` / `discharge`, `in` / `out`), and `examples/lift-station`'s
+  kinds carry ports as box points with the scene's pipes anchored to
+  them.
 
 ### Fixed
 

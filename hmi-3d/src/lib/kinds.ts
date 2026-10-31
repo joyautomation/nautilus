@@ -5,17 +5,20 @@
 // bound overrides too (`bind: { level: "LIT101_Level" }` on a node with no
 // struct tag), so a flat-tag project's label agrees with its geometry.
 import { member, num } from './bindings.js';
+import type { ScenePort } from './scene.js';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** The built-in kinds' contract (docs/design/spatial-hmi.md §3b): the UDT
- * each reads by default and the members it reads. registry.ts carries it
- * into the registry; internal/scene's Builtin must match. Pure, so a test
- * can hold models/kinds.json to it without loading a component. */
-export const BUILTIN_CONTRACT: Record<string, { type: string; members: string[] }> = {
-	tank: { type: 'Tank', members: ['Level', 'TempC'] },
-	pump: { type: 'Motor', members: ['Running', 'Fault', 'Speed'] },
-	valve: { type: 'Valve', members: ['Pos', 'Cmd'] }
+ * each reads by default, the members it reads, and where pipes meet it
+ * (its ports, in its frame: a pipe anchored `{ node, port }` resolves
+ * here). registry.ts carries it into the registry; internal/scene's
+ * Builtin and models/kinds.json must match. Pure, so a test can hold
+ * models/kinds.json to it without loading a component. */
+export const BUILTIN_CONTRACT: Record<string, { type: string; members: string[]; ports: Record<string, ScenePort> }> = {
+	tank: { type: 'Tank', members: ['Level', 'TempC'], ports: { inlet: { at: [0, 0.46, 0], dir: [0, 1, 0] }, outlet: { at: [0.25, 0, 0], dir: [1, 0, 0] } } },
+	pump: { type: 'Motor', members: ['Running', 'Fault', 'Speed'], ports: { suction: { at: [-0.21, 0.09, 0], dir: [-1, 0, 0] }, discharge: { at: [0, 0.21, 0], dir: [0, 1, 0] } } },
+	valve: { type: 'Valve', members: ['Pos', 'Cmd'], ports: { in: { at: [0, -0.08, 0], dir: [0, -1, 0] }, out: { at: [0, 0.08, 0], dir: [0, 1, 0] } } }
 };
 
 export interface TankState {

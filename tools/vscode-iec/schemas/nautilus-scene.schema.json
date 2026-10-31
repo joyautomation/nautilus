@@ -23,9 +23,18 @@
     "kinds": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/definitions/kindContract"
+        "oneOf": [
+          {
+            "$ref": "#/definitions/kindContract"
+          },
+          {
+            "type": "string",
+            "pattern": "^(?![a-zA-Z]+:)(?!/)(?!.*(^|/)\\.\\.(/|$)).+\\.kind\\.json$",
+            "description": "The path of a {Name}.kind.json holding the contract (docs/design/spatial-hmi.md §3g): a kind in a file of its own, relative to this scene file like a component (`hmi/src/lib/kinds/pump.kind.json`). The app hands SceneView the file through `modules`; `naut check` reads it next to the scene; the extension opens it in the kind editor."
+          }
+        ]
       },
-      "description": "The kind ↔ struct-type contract (docs/design/spatial-hmi.md §3b): overrides for the built-in kinds (tank → Tank, pump → Motor, valve → Valve) and declarations for kinds the app registers itself. Keyed by kind name. `naut check` holds every node of a declared kind to its `type` and `members`."
+      "description": "The kind ↔ struct-type contract (docs/design/spatial-hmi.md §3b): overrides for the built-in kinds (tank → Tank, pump → Motor, valve → Valve) and declarations for kinds the app registers itself. Keyed by kind name. `naut check` holds every node of a declared kind to its `type` and `members`. An entry is the contract inline, or the path of a `{Name}.kind.json` that holds it."
     },
     "environment": {
       "$ref": "#/definitions/environment",
@@ -148,12 +157,32 @@
           "description": "The halo / selection box: 'auto' (default; the loaded model's box) or an explicit local-space box."
         },
         "labelAt": {
-          "$ref": "#/definitions/vec3",
-          "description": "Where the label floats, local metres. Default: the top centre of the bounds."
+          "oneOf": [
+            {
+              "$ref": "#/definitions/vec3"
+            },
+            {
+              "$ref": "#/definitions/anchorWord"
+            },
+            {
+              "$ref": "#/definitions/boxPoint"
+            }
+          ],
+          "description": "Where the label floats: local metres, an anchor word on the bounds (top), or a place on a part's box. Default: the top centre of the bounds."
         },
         "status": {
           "type": "string",
           "description": "The label's value text as a template over members: `{Level:1} %` → `48.3 %`; `{Running?run:stopped}`. Reads `stale` when quality is bad."
+        },
+        "ports": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/port"
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "description": "Where pipes meet this kind, in its own frame: port name -> { at, dir? }."
         },
         "drive": {
           "type": "array",
@@ -425,21 +454,25 @@
     "pipe": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "points"
-      ],
       "properties": {
         "id": {
           "type": "string",
           "minLength": 1
         },
+        "from": {
+          "$ref": "#/definitions/anchor",
+          "description": "The first end, anchored to a node's port (instead of a first point)."
+        },
+        "to": {
+          "$ref": "#/definitions/anchor",
+          "description": "The last end, anchored to a node's port (instead of a last point)."
+        },
         "points": {
           "type": "array",
-          "minItems": 2,
           "items": {
             "$ref": "#/definitions/vec3"
           },
-          "description": "Polyline in scene metres, at least two points."
+          "description": "Polyline in scene metres: the whole run, or the run between anchored ends (may be absent with both ends anchored). At least two points counting the anchored ends."
         },
         "radius": {
           "type": "number",
@@ -461,7 +494,20 @@
           },
           "description": "A pipe binds only 'flowing'."
         }
-      }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "from",
+            "to"
+          ]
+        },
+        {
+          "required": [
+            "points"
+          ]
+        }
+      ]
     },
     "axis": {
       "enum": [
@@ -514,6 +560,11 @@
         "threshold": {
           "type": "number",
           "description": "A number counts as true above this. Default 0."
+        },
+        "blink": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "While true, the effect alternates at this rate (Hz): half the period on, half off. Not with a ramp."
         }
       }
     },
@@ -585,68 +636,189 @@
           "description": "Set the mesh's scale on that axis (a fluid whose origin is its base)."
         },
         "tint": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "bind",
-            "on"
-          ],
-          "properties": {
-            "bind": {
-              "type": "string",
-              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
-              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bind",
+                "on"
+              ],
+              "properties": {
+                "bind": {
+                  "type": "string",
+                  "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+                  "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+                },
+                "threshold": {
+                  "type": "number",
+                  "description": "A number counts as true above this. Default 0."
+                },
+                "on": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
+                },
+                "off": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour. Absent = the model's own colour."
+                },
+                "blink": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "While true, the effect alternates at this rate (Hz): half the period on, half off. Not with a ramp."
+                }
+              }
             },
-            "threshold": {
-              "type": "number",
-              "description": "A number counts as true above this. Default 0."
-            },
-            "on": {
-              "type": "string",
-              "minLength": 1,
-              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
-            },
-            "off": {
-              "type": "string",
-              "minLength": 1,
-              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour. Absent = the model's own colour."
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bind",
+                "ramp"
+              ],
+              "properties": {
+                "bind": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                  "description": "A member of the node's struct, read as a number."
+                },
+                "ramp": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    ]
+                  },
+                  "description": "Stops of [value, colour] in ascending value; the colour between two stops is interpolated, beyond the ends clamped. Colours are palette slots or CSS colours."
+                }
+              }
             }
-          },
-          "description": "The mesh's colour is `on` while true, else `off` or the model's own."
+          ],
+          "description": "The mesh's colour: `on` while true (else `off` or the model's own), or a `ramp` of colours over a number."
         },
         "emissive": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "bind",
-            "on"
-          ],
-          "properties": {
-            "bind": {
-              "type": "string",
-              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
-              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bind",
+                "on"
+              ],
+              "properties": {
+                "bind": {
+                  "type": "string",
+                  "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+                  "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+                },
+                "threshold": {
+                  "type": "number",
+                  "description": "A number counts as true above this. Default 0."
+                },
+                "on": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
+                },
+                "intensity": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Default 1."
+                },
+                "blink": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "While true, the effect alternates at this rate (Hz): half the period on, half off. Not with a ramp."
+                }
+              }
             },
-            "threshold": {
-              "type": "number",
-              "description": "A number counts as true above this. Default 0."
-            },
-            "on": {
-              "type": "string",
-              "minLength": 1,
-              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
-            },
-            "intensity": {
-              "type": "number",
-              "minimum": 0,
-              "description": "Default 1."
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bind",
+                "ramp"
+              ],
+              "properties": {
+                "bind": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                  "description": "A member of the node's struct, read as a number."
+                },
+                "ramp": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    ]
+                  },
+                  "description": "Stops of [value, colour] in ascending value; the colour between two stops is interpolated, beyond the ends clamped. Colours are palette slots or CSS colours."
+                },
+                "intensity": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Default 1."
+                }
+              }
             }
-          },
-          "description": "The mesh glows `on` while true."
+          ],
+          "description": "The mesh glows `on` while true, or a `ramp` of colours over a number."
         },
         "visible": {
           "$ref": "#/definitions/boolExpr",
           "description": "The mesh is shown while true."
+        },
+        "pulse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bind"
+          ],
+          "properties": {
+            "bind": {
+              "type": "string",
+              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+            },
+            "threshold": {
+              "type": "number",
+              "description": "A number counts as true above this. Default 0."
+            },
+            "hz": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Breaths per second. Default 1."
+            },
+            "amount": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "description": "How far the scale swings, as a fraction: 0.1 is 0.9 … 1.1. Default 0.1."
+            }
+          },
+          "description": "The mesh breathes while true: its scale swings by `amount` at `hz` about its own origin."
         }
       },
       "oneOf": [
@@ -679,9 +851,14 @@
           "required": [
             "visible"
           ]
+        },
+        {
+          "required": [
+            "pulse"
+          ]
         }
       ],
-      "description": "One mesh, one channel: spin, turn, scale, tint, emissive or visible. The vocabulary is fixed (docs/design/spatial-hmi.md §3c); a kind that needs more is a Svelte component in the registry."
+      "description": "One mesh, one channel: spin, turn, scale, tint, emissive, visible or pulse. The vocabulary is fixed (docs/design/spatial-hmi.md §3c); a kind that needs more is a Svelte component in the registry (or this kind, ejected to one)."
     },
     "environment": {
       "type": "object",
@@ -766,6 +943,83 @@
         }
       },
       "description": "PBR maps for a plane (a concrete floor). Loaded only in the lit look."
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ],
+      "properties": {
+        "at": {
+          "$ref": "#/definitions/point",
+          "description": "Where a pipe meets the kind: metres in the kind's own frame, or a place on a part's box (top of the Flange)."
+        },
+        "dir": {
+          "$ref": "#/definitions/vec3",
+          "description": "The direction a pipe leaves the port (unit vector). Default: out of the anchored face, else up."
+        }
+      },
+      "description": "A port on a kind (design §3g, slice 3): the point a pipe meets it and the direction a pipe leaves it, in the kind's frame."
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "port"
+      ],
+      "properties": {
+        "node": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The id of a node in this frame."
+        },
+        "port": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One of the node's kind's ports."
+        }
+      },
+      "description": "A pipe end anchored to a node's port, resolved through the node's pos / rot / scale so the pipe follows the node."
+    },
+    "anchorWord": {
+      "type": "string",
+      "pattern": "^(center|top|bottom|left|right|front|back)(-(top|bottom|left|right|front|back))?$",
+      "description": "A place on a box: a face — top, bottom, left (−x), right (+x), front (+z), back (−z) — center, or two faces on different axes joined (top-front)."
+    },
+    "boxPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchor"
+      ],
+      "properties": {
+        "part": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A named object in the model; absent = the kind's own bounds."
+        },
+        "anchor": {
+          "$ref": "#/definitions/anchorWord"
+        },
+        "offset": {
+          "$ref": "#/definitions/vec3",
+          "description": "Metres added to the anchored point."
+        }
+      },
+      "description": "A point named by where it sits on a box — a part's, or the kind's bounds — so it survives the model being re-exported."
+    },
+    "point": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/vec3"
+        },
+        {
+          "$ref": "#/definitions/boxPoint"
+        }
+      ],
+      "description": "A point in the kind's frame: metres, or a place on a box."
     }
   }
 }

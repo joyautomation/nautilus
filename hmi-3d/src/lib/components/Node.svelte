@@ -19,7 +19,7 @@
 	import { getContext, setContext, type Snippet } from 'svelte';
 	import { SCENE, NODE, type SceneContext, type NodeContext } from '../context.js';
 	import { readPath, readPart, resolveRefs, bindingsGood } from '../bindings.js';
-	import type { Vec3 } from '../scene.js';
+	import { resolvePipePoints, resolvePoint, type Vec3 } from '../scene.js';
 	import type { NodeProps, Box } from '../registry.js';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import Halo from './Halo.svelte';
@@ -95,9 +95,15 @@
 	let isSel = $derived(!parent && id !== undefined && scene?.selected === id);
 	let isHover = $derived(!parent && id !== undefined && scene?.hovered === id);
 	let bounds = $derived<Box>(box ?? (def && scene ? scene.boundsOf(id, def.bounds) : { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] }));
-	let labelAt = $derived<Vec3>(labelAtProp ?? def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
+	// The label: metres, or a place on the bounds or on a part's box (a
+	// box point resolves once the model has reported its parts; until then,
+	// and by default, the top of the bounds).
+	let labelAt = $derived<Vec3>(
+		labelAtProp ??
+			resolvePoint(def?.labelAt, { bounds, parts: scene?.partsOf(id) }) ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]
+	);
 	let nodeProps = $derived<NodeProps>({ value, good, label: title, selected: isSel, ...props, ...over });
-	let pickable = $derived(!parent && id !== undefined);
+	let pickable = $derived(!parent && id !== undefined && scene?.picks !== false);
 	/** The node's root group, announced with the node so an editor can
 	 * attach a gizmo to it. */
 	let group = $state<Group>();
@@ -181,7 +187,10 @@
 				<Self {...part} />
 			{/each}
 			{#each def.assembly.pipes ?? [] as p, i (p.id ?? i)}
-				<Pipe points={p.points} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
+				{@const pts = resolvePipePoints(p, def.assembly.nodes, (k) => scene.registry[k]?.ports)}
+				{#if pts}
+					<Pipe points={pts} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
+				{/if}
 			{/each}
 		{:else if def?.component}
 			{@const Model = def.component}
@@ -190,6 +199,7 @@
 					{...nodeProps}
 					data={def.data}
 					onbounds={(b: Box) => scene.reportBounds(id, b)}
+					onparts={(p: Record<string, Box>) => scene.reportParts(id, p)}
 					onfail={() => scene.reportFailed(id)}
 				/>
 			{:else}
