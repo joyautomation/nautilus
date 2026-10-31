@@ -142,8 +142,10 @@ server offers arrives unauthenticated, so the first secured session records
 its SHA-256 thumbprint in `pki-dir/trusted-servers/<host>_<port>.sha256`,
 and every later connection refuses a different certificate, naming both
 thumbprints and the file. If the server's certificate was replaced on
-purpose, delete that file and the next connection trusts the new one. The
-first connection is trusted as found, so make it on a network you trust.
+purpose, delete that file and the next connection trusts the new one. A
+pinned server that later offers only unsecured endpoints is refused too, so
+an endpoint list stripped down to None cannot take its place. The first
+connection is trusted as found, so make it on a network you trust.
 
 **A password is never sent on an unsecured channel.** With `username:` set,
 an endpoint whose policy or mode is `None` is refused, so an endpoint list

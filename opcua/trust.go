@@ -85,3 +85,9 @@ func firstLine(b []byte) []byte {
 	}
 	return b
 }
+
+// fileExists reports whether path names an existing file.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}

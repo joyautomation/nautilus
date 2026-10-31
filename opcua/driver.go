@@ -703,15 +703,18 @@ func (d *Driver) run(ctx context.Context) {
 
 		// Offline first: Close can take its timeout, and the values must
 		// not read Good meanwhile.
+		// The state row goes down with __Online, not after Close.
 		d.mu.Lock()
 		d.online, d.primed = false, false
 		answered := d.answered
 		d.mu.Unlock()
+		if ctx.Err() == nil {
+			d.setState("error", nil)
+		}
 		sess.Close()
 		if ctx.Err() != nil {
 			return
 		}
-		d.setState("error", nil)
 		if answered {
 			backoff = d.retryMin
 		}

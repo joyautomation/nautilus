@@ -234,10 +234,12 @@ claims:
       The first secured session pins the server certificate's SHA-256
       thumbprint in pki-dir/trusted-servers; a later connection offered a
       different certificate is refused with an error naming the pin file,
-      and deleting the file trusts the new certificate.
+      and deleting the file trusts the new certificate. A pinned server
+      offering only unsecured endpoints is refused rather than downgraded.
     source: "#security"
     tests:
       - go ./opcua TestServerCertificatePinnedOnFirstUse
+      - go ./opcua TestPinnedServerRefusesDowngradeToNone
 
   - id: UAC-021
     claim: >-

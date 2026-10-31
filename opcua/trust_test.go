@@ -77,6 +77,31 @@ func TestServerCertificatePinnedOnFirstUse(t *testing.T) {
 	sess.Close()
 }
 
+// Once a server is pinned, an endpoint list stripped down to None does not
+// get an unsecured session, even with security: left to "strongest offered".
+func TestPinnedServerRefusesDowngradeToNone(t *testing.T) {
+	port := freePort(t)
+	pki := t.TempDir()
+	ts := startServerWith(t, port, "urn:nautilus:test", 1, secureOpts(t, t.TempDir())...)
+	sess, err := Dial(context.Background(), ts.url, Connect{Security: Security{Policy: "Basic256Sha256", Mode: "SignAndEncrypt"}, PKIDir: pki, Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("first secured dial: %v", err)
+	}
+	sess.Close()
+	_ = ts.srv.Close()
+
+	plain := startServer(t, port)
+	if _, err := Dial(context.Background(), plain.url, Connect{PKIDir: pki, Timeout: 3 * time.Second}); err == nil || !strings.Contains(err.Error(), "refusing an unsecured session") {
+		t.Fatalf("a pinned server now offering only None: err = %v, want a refusal", err)
+	}
+	// Without a pin, the same unsecured server is fine for anonymous reads.
+	if sess, err := Dial(context.Background(), plain.url, Connect{PKIDir: t.TempDir(), Timeout: 3 * time.Second}); err != nil {
+		t.Fatalf("unpinned None dial: %v", err)
+	} else {
+		sess.Close()
+	}
+}
+
 // A UserName token is never sent on an unsecured channel: a server that
 // offers only None (or a list stripped down to None) is refused before any
 // credential leaves.

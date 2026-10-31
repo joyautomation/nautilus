@@ -104,6 +104,15 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 	if token == ua.UserTokenTypeUserName {
 		opts = append(opts, opcua.AuthUsername(c.Username, c.Password))
 	}
+	// A server once pinned on a secured endpoint never gets an unsecured
+	// session: an endpoint list stripped down to None is how a man in the
+	// middle would take a pinned server's place.
+	if ep.SecurityPolicyURI == ua.SecurityPolicyURINone && c.PKIDir != "" {
+		if file := PinFile(c.PKIDir, endpoint); fileExists(file) {
+			return nil, fmt.Errorf("refusing an unsecured session to %s: its server was pinned on a secured endpoint (%s). "+
+				"If the server was made unsecured on purpose, delete that file", endpoint, file)
+		}
+	}
 	pinNew := false
 	if ep.SecurityPolicyURI != ua.SecurityPolicyURINone {
 		if c.PKIDir == "" {
