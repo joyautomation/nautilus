@@ -121,13 +121,23 @@ const wheel = (ed, x, y, deltaY, modifiers = CTRL) => ed.b.send('Input.dispatchM
 test('Z01 Ctrl+wheel zooms in around the pointer: the point under it stays put', async () => {
 	await withEditor(twoTankDoc(), async (ed) => {
 		const p0 = await pct(ed);
-		const [cx, cy] = await eqCenter(ed, 'T2');
+		// Over T2, high on the canvas: zooming about a point keeps it put only
+		// while the pane can still scroll that far — a point low on a short
+		// canvas runs into the end of the scroll range (as in any scrolled
+		// zoom), which is not what this checks.
+		const [cx] = await eqCenter(ed, 'T2');
+		const [, cy] = await ed.toVp(0, 60);
+		const under = async () => {
+			const c = await ed.b.eval('JSON.stringify(window.__canvas())').then(JSON.parse);
+			return [(cx - c.left) / c.scale, (cy - c.top) / c.scale];
+		};
+		const u0 = await under();
 		await ed.b.moveTo(cx, cy);
 		for (let i = 0; i < 3; i++) await wheel(ed, cx, cy, -120);
 		await sleepMs(80);
 		assert.ok((await pct(ed)) > p0, `zoomed in from ${p0}%`);
-		const [x1, y1] = await eqCenter(ed, 'T2');
-		assert.ok(Math.abs(x1 - cx) < 2 && Math.abs(y1 - cy) < 2, `T2 stayed under the pointer: ${[cx, cy]} -> ${[x1, y1]}`);
+		const u1 = await under();
+		assert.ok(Math.abs(u1[0] - u0[0]) < 1.5 && Math.abs(u1[1] - u0[1]) < 1.5, `the canvas point under the pointer stayed: ${u0} -> ${u1}`);
 		// A plain wheel scrolls; it doesn't zoom.
 		const p1 = await pct(ed);
 		await wheel(ed, cx, cy, 120, 0);
@@ -165,6 +175,10 @@ test('Z02 Ctrl+= and the + button zoom in, Ctrl+- out, Ctrl+0 and the fit button
 test('Z03 zoomed in, dragging equipment still moves it by canvas units', async () => {
 	await withEditor(twoTankDoc(), async (ed) => {
 		for (let i = 0; i < 3; i++) await ed.b.pressKey('=', { code: 'Equal', keyCode: 187, modifiers: CTRL });
+		await sleepMs(60);
+		// Zooming about the pane's centre can carry T1 (near the left edge)
+		// out of the visible pane, under the palette; bring it into view.
+		await ed.b.eval(`document.querySelector('.eq[data-id="T1"]').scrollIntoView({ block: 'center', inline: 'center' }), true`);
 		await sleepMs(60);
 		await ed.selectEquipment('T1');
 		await ed.resetOps();

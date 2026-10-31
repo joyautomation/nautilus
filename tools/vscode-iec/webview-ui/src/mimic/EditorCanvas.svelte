@@ -2048,6 +2048,12 @@
 		flex: 1;
 		min-width: 0;
 		overflow: auto;
+		/* Fit-to-width reads clientWidth, which a vertical scrollbar takes
+		   ~15 px from; the fitted canvas's height decides whether that
+		   scrollbar shows. Without a reserved gutter the two chase each
+		   other (fit 110 % → scrollbar → 108 % → none → 110 % …) and the
+		   scale changes under the pointer mid-gesture. */
+		scrollbar-gutter: stable;
 		padding: 12px;
 		position: relative;
 	}
