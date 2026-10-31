@@ -769,17 +769,20 @@ func (s *Server) handleHMI() http.Handler {
 	// cached by path alone would answer a stale tab's If-None-Match with
 	// 304 forever after the rebuild — the new HTML, new models, never
 	// seen until a hard reload.
+	// One entry per path, replaced when the stamp moves, so a controller
+	// rebuilt all day keeps one hash per file rather than one per build.
+	type cached struct{ stamp, etag string }
 	var mu sync.Mutex
-	etags := map[string]string{}
+	etags := map[string]cached{}
 	etagFor := func(lookup string) string {
-		key := lookup
+		stamp := ""
 		if st, err := fs.Stat(s.hmi, lookup); err == nil {
-			key = fmt.Sprintf("%s|%d|%d", lookup, st.Size(), st.ModTime().UnixNano())
+			stamp = fmt.Sprintf("%d|%d", st.Size(), st.ModTime().UnixNano())
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if e, ok := etags[key]; ok {
-			return e
+		if c, ok := etags[lookup]; ok && c.stamp == stamp {
+			return c.etag
 		}
 		b, err := fs.ReadFile(s.hmi, lookup)
 		if err != nil {
@@ -787,7 +790,7 @@ func (s *Server) handleHMI() http.Handler {
 		}
 		sum := sha256.Sum256(b)
 		e := `"` + hex.EncodeToString(sum[:8]) + `"`
-		etags[key] = e
+		etags[lookup] = cached{stamp, e}
 		return e
 	}
 	serve := func(w http.ResponseWriter, r *http.Request, lookup string) {
