@@ -31,6 +31,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/opcua"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
@@ -342,8 +343,9 @@ type MetaConfig struct {
 // DriverConfig selects and configures the field driver. "memory" (the
 // default) is the loopback used for bring-up; "eip" polls an
 // Allen-Bradley Logix controller; "sparkplug-host" consumes a Sparkplug B
-// group as a host application; "modbus" polls a set of Modbus TCP sources.
-// Custom buses are the Go tier.
+// group as a host application; "modbus" polls a set of Modbus TCP sources;
+// "opcua" polls one OPC UA server as a client. Custom buses are the Go
+// tier.
 //
 // One flat struct serves every driver type, so `manifest` is shared: for
 // eip it is the imported Logix tag manifest, for sparkplug-host the
@@ -394,6 +396,16 @@ type DriverConfig struct {
 	// (default true) — births are not retained, so a host starting
 	// mid-stream sees nothing until it asks.
 	RebirthOnStart *bool `yaml:"rebirth-on-start"`
+
+	// opcua: the OPC UA CLIENT driver, polling one server (manifest,
+	// scan-rate, scan-classes and tag-classes shared with eip and modbus;
+	// username with sparkplug-host). Not the top-level opcua: section,
+	// which SERVES the tag store. The password is NEVER in the file — set
+	// NAUTILUS_OPCUA_PASSWORD.
+	Endpoint     string `yaml:"endpoint"`      // opc.tcp://host:4840
+	Security     string `yaml:"security"`      // policy: None, Basic256Sha256, … (default: strongest offered)
+	SecurityMode string `yaml:"security-mode"` // None, Sign, SignAndEncrypt (default: strongest of the policy)
+	PKIDir       string `yaml:"pki-dir"`       // client certificate dir, needed for any policy but None
 }
 
 // Duration parses "100ms" / "2s" yaml scalars.
@@ -1183,6 +1195,8 @@ func driverHealth(d nio.Driver) func() bool {
 		return func() bool { h := drv.Health(); return h.Connected && h.Primed }
 	case *sphost.Driver:
 		return func() bool { return drv.Status().Connected }
+	case *opcua.Driver:
+		return drv.Online
 	}
 	return nil
 }
@@ -1512,6 +1526,52 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opts = append(opts, optommp.WithScanRate(time.Duration(d.ScanRate)))
 		}
 		return optommp.New(m, opts...)
+	case "opcua":
+		// The OPC UA client: one server, polled per scan class (brief
+		// docs/design/opcua-client.md). opcua.New NEVER dials — it
+		// validates the manifest and parses every node id offline, the same
+		// split eip, modbus and sparkplug-host make.
+		if d.Endpoint == "" {
+			return nil, fmt.Errorf("driver opcua: endpoint is required (opc.tcp://host:4840)")
+		}
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver opcua: manifest (the opcua_manifest.yaml `naut opcua import` writes) is required")
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver opcua: %w", err)
+		}
+		om, err := opcua.ParseManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("driver opcua: %s: %w", d.Manifest, err)
+		}
+		// The session's status, as a BOOL input the logic checks before
+		// trusting its values: "<driver name>__Online" — opcua__Online for
+		// an unnamed driver: section, the rule eip keeps.
+		name := d.Name
+		if name == "" {
+			name = "opcua"
+		}
+		opts := []opcua.Option{
+			opcua.WithLogger(slog.Default().With("driver", name)),
+			opcua.WithName(name),
+			opcua.WithOnlineTag(onlineTagFor(d.Name, "opcua")),
+			opcua.WithSecurity(d.Security, d.SecurityMode),
+			opcua.WithPKIDir(d.PKIDir),
+		}
+		if d.Username != "" {
+			opts = append(opts, opcua.WithAuth(d.Username, os.Getenv("NAUTILUS_OPCUA_PASSWORD")))
+		}
+		if d.ScanRate != 0 {
+			opts = append(opts, opcua.WithScanRate(time.Duration(d.ScanRate)))
+		}
+		for name, rate := range d.ScanClasses {
+			opts = append(opts, opcua.WithScanClass(name, time.Duration(rate)))
+		}
+		for class, patterns := range d.TagClasses {
+			opts = append(opts, opcua.WithTagClass(class, patterns...))
+		}
+		return opcua.New(d.Endpoint, om, opts...)
 	case "replay":
 		// A recording played back as live tags at a steerable clock: the
 		// baseline of a plant simulation. The recording itself is read on
@@ -1529,7 +1589,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, opcua, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }
 

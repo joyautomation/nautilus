@@ -1,0 +1,223 @@
+page: website/src/content/docs/guides/opcua-client.md
+title: Reading OPC UA
+prefix: UAC
+claims:
+  - id: UAC-001
+    claim: >-
+      A driver: {type: opcua} section polls one OPC UA server's variables
+      into the tag store, and follows a value the server changes.
+    source: "#"
+    tests:
+      - go ./cmd/naut TestNautOPCUAClientImportAndRun
+      - go ./opcua TestReadsAndQuality
+    note: >-
+      Against gopcua's in-process server only; not yet run against
+      Ignition, Kepware, node-opcua or a PLC's embedded server.
+
+  - id: UAC-002
+    claim: >-
+      endpoint: and manifest: are required and a project missing either
+      fails naut check; the driver is built without dialing, and a
+      misspelled security: or security-mode: fails naut check.
+    source: "#"
+    tests:
+      - go ./internal/project TestSchemaRequiresWhatLoaderRequires
+      - go ./cmd/naut TestCheckOPCUAClientDriver
+      - go ./opcua TestNewNeverDials
+      - go ./opcua TestLoaderContract
+
+  - id: UAC-003
+    claim: >-
+      naut check warns, without failing, when username: is set and
+      NAUTILUS_OPCUA_PASSWORD is empty, and when there is no pki-dir: while
+      the security settings allow an endpoint that needs a certificate.
+    source: "#"
+    tests:
+      - go ./cmd/naut TestCheckOPCUAClientDriver
+      - go ./opcua TestLoaderContract
+    partial: true
+    note: >-
+      The password warning is asserted through naut check; the pki-dir
+      warning only on the driver's Warnings(), which naut check prints by
+      the same path.
+
+  - id: UAC-004
+    claim: >-
+      naut opcua import browses the server and writes opcua_manifest.yaml
+      and tags/opcua.yaml, byte-identical on re-run against an unchanged
+      server; tag names are the browse path joined with _ and sanitized to
+      an identifier; --tags keeps a subset.
+    source: "#generating-the-manifest-naut-opcua-import"
+    tests:
+      - go ./cmd/naut TestNautOPCUAClientImportAndRun
+      - go ./opcua/codegen TestGenerate
+
+  - id: UAC-005
+    claim: >-
+      Two nodes that would share a tag name are an error, and arrays and
+      variables whose type is not a scalar built-in are listed as skipped
+      with the reason.
+    source: "#generating-the-manifest-naut-opcua-import"
+    tests:
+      - go ./opcua/codegen TestGenerate
+
+  - id: UAC-006
+    claim: >-
+      The tag file declares the driver's <name>__Online companion, named
+      from --name, else the opcua driver in nautilus.yaml whose endpoint:
+      matches, then whose manifest: matches, then the only one, else
+      opcua__Online — the same name Load gives the driver.
+    source: "#generating-the-manifest-naut-opcua-import"
+    tests:
+      - go ./internal/project TestOPCUAOnlineTagResolution
+      - go ./internal/project TestOPCUAOnlineTagAgreesWithLoad
+      - go ./cmd/naut TestNautOPCUAClientImportAndRun
+      - go ./cmd/naut TestOPCUATagsCommand
+
+  - id: UAC-007
+    claim: >-
+      naut opcua browse prints the namespaces and a table of every variable
+      with its path, node id, type, access and description.
+    source: "#generating-the-manifest-naut-opcua-import"
+    tests:
+      - go ./cmd/naut TestNautOPCUAClientImportAndRun
+    partial: true
+    note: The namespace, path, type and access columns are asserted; node id and description are not.
+
+  - id: UAC-008
+    claim: >-
+      naut opcua tags re-derives the tag file from a committed manifest
+      without a server.
+    source: "#generating-the-manifest-naut-opcua-import"
+    tests:
+      - go ./cmd/naut TestOPCUATagsCommand
+
+  - id: UAC-009
+    claim: >-
+      None of naut opcua import, browse or tags writes to the server.
+    source: "#generating-the-manifest-naut-opcua-import"
+    tests: []
+    note: No test watches the server for writes during an import or browse.
+
+  - id: UAC-010
+    claim: >-
+      Each binding's namespace URI is resolved against the server's live
+      namespace table at connect, so a manifest whose ns= index is wrong
+      still reads the right node; a URI the server no longer has reads Bad.
+    source: "#namespaces-survive-a-renumbering"
+    tests:
+      - go ./opcua TestNamespaceRemap
+    partial: true
+    note: The remap is asserted; a URI missing from the server is not.
+
+  - id: UAC-011
+    claim: >-
+      Each scan class is one batched Read on its own timer, chunked to the
+      server's MaxNodesPerRead and halved on Bad_TooManyOperations.
+    source: "#polling-quality-and-__online"
+    tests:
+      - go ./opcua TestReadsAndQuality
+    partial: true
+    note: Polling is asserted; chunking, the advertised limit and halving are not.
+
+  - id: UAC-012
+    claim: >-
+      <name>__Online is true once the session is up and its scan classes
+      have been read, false while the server is unreachable, and named after
+      the driver (opcua__Online unnamed, opcua-2 as opcua_2__Online).
+    source: "#polling-quality-and-__online"
+    tests:
+      - go ./opcua TestReadsAndQuality
+      - go ./opcua TestReconnectAndStale
+      - go ./opcua TestLoaderContract
+      - go ./internal/project TestOPCUAClientServerDownReadsInitOrZero
+    partial: true
+    note: That it waits for every scan class (not just the session) is not asserted separately.
+
+  - id: UAC-013
+    claim: >-
+      A node the server refuses is Bad while the rest of its class keeps
+      delivering; Uncertain statuses count as not good.
+    source: "#polling-quality-and-__online"
+    tests:
+      - go ./opcua TestBadNodeIsBadNotFatal
+    partial: true
+    note: The Uncertain clause has no test.
+
+  - id: UAC-014
+    claim: >-
+      A transport failure reconnects with backoff while values hold with
+      Stale quality and __Online false; after the reconnect they are Good
+      again.
+    source: "#polling-quality-and-__online"
+    tests:
+      - go ./opcua TestReconnectAndStale
+    partial: true
+    note: The backoff ladder (1 s doubling to 60 s, reset on an answered read) is not asserted.
+
+  - id: UAC-015
+    claim: >-
+      Before the first delivery an input reads its init: or the zero of its
+      type with quality NotConnected, and a program reading it keeps
+      scanning while the server is down; the type follows the binding
+      (Boolean BOOL, up to Int32 DINT, UInt32/Int64/UInt64/DateTime LINT,
+      Float REAL, Double LREAL, String STRING).
+    source: "#polling-quality-and-__online"
+    tests:
+      - go ./internal/project TestOPCUAClientServerDownReadsInitOrZero
+      - go ./internal/project TestOPCUAClientDriverIsACommsDriver
+      - go ./opcua TestLoaderContract
+
+  - id: UAC-016
+    claim: >-
+      A binding is read-only unless the import marked it writable:
+      --writable defaults to none, never marks a node the server says is
+      read-only, and a writable binding is an output in the tag file; the
+      driver writes only writable bindings.
+    source: "#writes-are-opt-in-per-tag"
+    tests:
+      - go ./opcua/codegen TestGenerate
+      - go ./cmd/naut TestNautOPCUAClientImportAndRun
+      - go ./opcua TestWrites
+
+  - id: UAC-017
+    claim: >-
+      Writes are typed by the binding and a value that does not fit is
+      refused, never wrapped; the first snapshot after start is a baseline,
+      not a command; a command made while the session is down goes out on
+      reconnect; the write gate (redundancy leadership) holds commands back.
+    source: "#writes-are-opt-in-per-tag"
+    tests:
+      - go ./opcua TestValueCodec
+      - go ./opcua TestWrites
+      - go ./opcua TestReconnectAndStale
+      - go ./opcua TestWriteGate
+      - go ./cmd/naut TestNautOPCUAClientImportAndRun
+    partial: true
+    note: >-
+      Not asserted: that an unchanged value is not re-sent, and that a write
+      the server refuses on a healthy session is dropped rather than
+      retried. The gate is asserted on the driver; its wiring to leadership
+      is the one every driver shares.
+
+  - id: UAC-018
+    claim: >-
+      With security: and security-mode: left out the driver takes the
+      strongest endpoint the server offers; any policy but None uses a
+      self-signed client certificate generated into pki-dir with the
+      application URI as a URI SAN.
+    source: "#security"
+    tests:
+      - go ./opcua TestSelectEndpoint
+    partial: true
+    note: >-
+      Endpoint selection is asserted; certificate generation and any
+      session under a policy other than None are not exercised.
+
+  - id: UAC-019
+    claim: >-
+      The driver dials the endpoint: written even when the server
+      advertises a different address.
+    source: "#security"
+    tests: []
+    note: The test server advertises the address it is dialled on.

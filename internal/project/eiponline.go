@@ -31,9 +31,35 @@ import (
 // the tag file it writes exists, and a manifest that already names that
 // file would fail ReadManifest's tag-file composition.
 func EIPOnlineTag(fsys fs.FS, host, manifest string) (name, how string, err error) {
+	return onlineTagInProject(fsys, "eip", "host", host, manifest,
+		func(c DriverConfig) string { return c.Host },
+		func(a, b string) bool { return strings.EqualFold(a, b) }, sameHost,
+		"pass --name with the one this controller is")
+}
+
+// OPCUAOnlineTag is EIPOnlineTag for an opcua (client) driver, matched by
+// endpoint: — exactly, then ignoring case and a trailing slash — else by
+// manifest:, with the same fallbacks. `naut opcua import` and `naut opcua
+// tags` write the companion it names into the generated tag file.
+func OPCUAOnlineTag(fsys fs.FS, endpoint, manifest string) (name, how string, err error) {
+	trim := func(s string) string { return strings.TrimRight(strings.TrimSpace(s), "/") }
+	return onlineTagInProject(fsys, "opcua", "endpoint", endpoint, manifest,
+		func(c DriverConfig) string { return c.Endpoint },
+		func(a, b string) bool { return a == b },
+		func(a, b string) bool { return strings.EqualFold(trim(a), trim(b)) },
+		"pass --name with the one this server is")
+}
+
+// onlineTagInProject is the shared resolution behind EIPOnlineTag and
+// OPCUAOnlineTag: find the driver of type typ in the project's
+// nautilus.yaml that an import is for, by its address (exact, then loose)
+// or its manifest, and name its companion as Load will.
+func onlineTagInProject(fsys fs.FS, typ, key, addr, manifest string,
+	addrOf func(DriverConfig) string, exactAddr, looseAddr func(a, b string) bool,
+	hint string) (name, how string, err error) {
 	raw, err := fs.ReadFile(fsys, ManifestName)
 	if errors.Is(err, fs.ErrNotExist) {
-		return onlineTagFor("", "eip"), "no " + ManifestName + "; the default driver name", nil
+		return onlineTagFor("", typ), "no " + ManifestName + "; the default driver name", nil
 	}
 	if err != nil {
 		return "", "", err
@@ -51,46 +77,46 @@ func EIPOnlineTag(fsys fs.FS, host, manifest string) (name, how string, err erro
 	}
 	names := driverNames(configs)
 
-	type cand struct{ name, host, manifest string }
-	var eips []cand
+	type cand struct{ name, addr, manifest string }
+	var found []cand
 	for i, c := range configs {
-		if strings.ToLower(c.Type) == "eip" {
-			eips = append(eips, cand{names[i], c.Host, c.Manifest})
+		if strings.ToLower(c.Type) == typ {
+			found = append(found, cand{names[i], addrOf(c), c.Manifest})
 		}
 	}
 	pick := func(c cand, why string) (string, string, error) {
-		return onlineTagFor(c.name, "eip"), fmt.Sprintf("%s's eip driver %q (%s)", ManifestName, c.name, why), nil
+		return onlineTagFor(c.name, typ), fmt.Sprintf("%s's %s driver %q (%s)", ManifestName, typ, c.name, why), nil
 	}
-	if host != "" {
-		// An exact host first, so two emulators on one address told apart
-		// by port resolve to the right one; then host without port.
-		for _, exact := range []bool{true, false} {
-			for _, c := range eips {
-				if exact && strings.EqualFold(c.host, host) || !exact && sameHost(c.host, host) {
-					return pick(c, "host "+c.host)
+	if addr != "" {
+		// An exact address first, so two emulators on one address told
+		// apart by port resolve to the right one; then the loose match.
+		for _, match := range []func(a, b string) bool{exactAddr, looseAddr} {
+			for _, c := range found {
+				if match(c.addr, addr) {
+					return pick(c, key+" "+c.addr)
 				}
 			}
 		}
 	}
 	if manifest != "" {
-		for _, c := range eips {
+		for _, c := range found {
 			if c.manifest != "" && path.Clean(c.manifest) == path.Clean(manifest) {
 				return pick(c, "manifest "+c.manifest)
 			}
 		}
 	}
-	switch len(eips) {
+	switch len(found) {
 	case 0:
-		return onlineTagFor("", "eip"), "no eip driver in " + ManifestName + "; the default driver name", nil
+		return onlineTagFor("", typ), "no " + typ + " driver in " + ManifestName + "; the default driver name", nil
 	case 1:
-		return pick(eips[0], "the only one")
+		return pick(found[0], "the only one")
 	}
-	list := make([]string, len(eips))
-	for i, c := range eips {
-		list[i] = fmt.Sprintf("%s (host %s)", c.name, c.host)
+	list := make([]string, len(found))
+	for i, c := range found {
+		list[i] = fmt.Sprintf("%s (%s %s)", c.name, key, c.addr)
 	}
-	return "", "", fmt.Errorf("%s has %d eip drivers and none has host %s: %s — pass --name with the one this controller is",
-		ManifestName, len(eips), host, strings.Join(list, ", "))
+	return "", "", fmt.Errorf("%s has %d %s drivers and none has %s %s: %s — %s",
+		ManifestName, len(found), typ, key, addr, strings.Join(list, ", "), hint)
 }
 
 // sameHost compares two driver hosts, either of which may carry a port.
@@ -111,3 +137,6 @@ func sameHost(a, b string) bool {
 // (`naut eip import --name`): the same reduction to an identifier Load
 // applies, so the two cannot disagree.
 func OnlineTagFor(driverName string) string { return onlineTagFor(driverName, "eip") }
+
+// OPCUAOnlineTagFor is OnlineTagFor for `naut opcua import --name`.
+func OPCUAOnlineTagFor(driverName string) string { return onlineTagFor(driverName, "opcua") }

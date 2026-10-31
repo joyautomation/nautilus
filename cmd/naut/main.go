@@ -60,6 +60,10 @@ Usage:
                           tag file, offline), browse (read a live register
                           range raw + decoded), serve (bench slave for a
                           manifest), tags (re-derive the tag file).
+  naut opcua <cmd>    OPC UA client tools: import (browse a server →
+                          manifest + tag file for the opcua driver),
+                          browse (print its variables), tags (re-derive
+                          the tag file, no server).
   naut scene <cmd>    3D HMI scene tools: init (generate a starter
                           *.scene.json from the manifest's struct tags —
                           one node per UDT tag a kind can draw, laid out
@@ -134,6 +138,8 @@ func main() {
 		os.Exit(runSparkplug(os.Args[2:]))
 	case "modbus":
 		os.Exit(runModbus(os.Args[2:]))
+	case "opcua":
+		os.Exit(runOPCUA(os.Args[2:]))
 	case "optommp":
 		os.Exit(runOptommp(os.Args[2:]))
 	case "plcnext":

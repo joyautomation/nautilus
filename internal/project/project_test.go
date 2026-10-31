@@ -172,7 +172,7 @@ func TestLoadErrors(t *testing.T) {
 		{"bad role", "tasks:\n  - program: program.fbd\ntags:\n  - { name: X, role: writable, init: 1.0 }\n", "role must be"},
 		{"setpoint without init", "tasks:\n  - program: program.fbd\ntags:\n  - { name: S, role: setpoint }\n", "needs init"},
 		{"missing program", "tasks:\n  - program: nope.ld\n", "nope.ld"},
-		{"unknown driver", "tasks:\n  - program: program.fbd\ndriver: { type: opcua }\n", "Go tier"},
+		{"unknown driver", "tasks:\n  - program: program.fbd\ndriver: { type: bacnet }\n", "Go tier"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
