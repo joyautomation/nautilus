@@ -313,11 +313,21 @@
 			drag.moved = true;
 		}
 	}
-	/** The drop. Wired to the dot itself (pointerup, pointercancel,
-	 * lostpointercapture) as well as the window: under pointer capture the
+	/** The drop. Wired to the dot itself (pointerup, pointercancel, and
+	 * lostpointercapture with no button down) as well as the window: under pointer capture the
 	 * release is delivered to the captured element, and the capture can also
 	 * end without any pointerup at all. Idempotent — whichever fires first
 	 * commits, the rest find no drag. */
+	/** A capture lost while the button is still down is not a drop: Chromium
+	 * can drop the capture at the first move after the press (the gesture
+	 * harness catches it when the drag's coordinate tag mounts beside the
+	 * dot), and ending the drag there froze the dot where it was pressed.
+	 * The window's pointermove / pointerup carry the drag on; a native drag
+	 * of a selection still ends it through pointercancel. */
+	function onPortCaptureLost(e: PointerEvent) {
+		if (e.buttons & 1) return;
+		onPortUp();
+	}
 	function onPortUp() {
 		if (!drag) return;
 		if (drag.moved) {
@@ -414,7 +424,7 @@
 											onpointerdown={(e) => portDown(e, i)}
 											onpointerup={onPortUp}
 											onpointercancel={onPortUp}
-											onlostpointercapture={onPortUp}
+											onlostpointercapture={onPortCaptureLost}
 											ondblclick={(e) => {
 												e.stopPropagation();
 												if (portsMode) portDelete(i);

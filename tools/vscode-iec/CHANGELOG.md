@@ -64,8 +64,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   which cancelled the pointer and took the dot's capture with it — the
   dot stopped, or the drop never reached the sidecar. The gesture now
   cancels the selection and the native drag, and the dot commits the
-  drop on its own pointerup, pointercancel and lostpointercapture, not
-  only on the window's.
+  drop on its own pointerup and pointercancel, not only on the window's.
+  A capture lost while the button is still down is not a drop (Chromium
+  can lose it at the first move), so the drag carries on.
 
 ## [0.19.1] - 2026-10-26
 
