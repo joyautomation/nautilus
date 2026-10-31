@@ -5,7 +5,7 @@ covers it today. Written against `origin/main` at d3a4bdb (2026-10-03).
 
 Sources walked: `package.json` `contributes.commands` (28) and `menus`; the
 `?` shortcut tables in `webview-ui/src/shortcuts.ts` (`FBD_SHORTCUTS`,
-`LD_SHORTCUTS`, `SFC_SHORTCUTS`, `MIMIC_SHORTCUTS`, `COMPONENT_SHORTCUTS`;
+`LD_SHORTCUTS`, `SFC_SHORTCUTS`, `MIMIC_SHORTCUTS`;
 the toolbar hint and the `?` popover are both generated from these); the
 extension README and CHANGELOG feature claims; the two harness files in this
 directory; the rig verbs in `content/assets/capture/ex01-lift-station/fixtures/gestures.sh`;

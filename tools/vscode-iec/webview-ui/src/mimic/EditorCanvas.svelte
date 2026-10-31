@@ -1798,8 +1798,8 @@
 	}
 	/* A bare <svg> root is inline by default, reserving a few px of
 	   descender space below it inside `.eq` — the same offsetHeight-vs-
-	   rendered-box mismatch as the standalone component editor (see
-	   ComponentApp.svelte's ports fix), just without the placeholder's
+	   rendered-box mismatch the retired standalone component editor
+	   had in its ports, just without the placeholder's
 	   border/padding half of that bug (equipment here is always REAL
 	   content, never a fixed-size placeholder box). block makes eqBox()'s
 	   measurement match the visible shape exactly, so ports on the bottom

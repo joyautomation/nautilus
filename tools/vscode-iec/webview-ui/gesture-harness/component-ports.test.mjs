@@ -80,6 +80,29 @@ test('P01 component: dragging a port with an explicit dir keeps the dir (#130)',
 	});
 });
 
+test('P01 component: a release no pointerup reached drops the dot where it was; a buttonless mouse does not drag it on', async () => {
+	await withPreview(DOC(), async (ed) => {
+		await portsOn(ed);
+		const box = await boxRect(ed);
+		const [inDot] = await dots(ed);
+		// Drag to 1/4 across the top edge, then the button comes up where
+		// no pointerup reaches the webview (outside it, after Chromium
+		// dropped the capture): the next move arrives with no button down.
+		const ax = box.x + box.w * 0.25;
+		const ay = box.y;
+		await ed.b.mouseDown(inDot.cx, inDot.cy);
+		await ed.b.mouseMove(inDot.cx + 20, inDot.cy - 10);
+		await ed.b.mouseMove(ax, ay);
+		await ed.b.mouseMove(box.x + box.w * 0.75, box.y + box.h, { buttons: 0 });
+		await ed.b.mouseMove(box.x + box.w * 0.6, box.y + box.h * 0.8, { buttons: 0 });
+		await sleepMs(150);
+		const ops = await previewOps(ed);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.ok(Math.abs(ops[0][0].x - 0.25) < 0.01 && ops[0][0].y === 0, JSON.stringify(ops[0][0]));
+		assert.deepEqual(exceptions(ed), []);
+	});
+});
+
 test('P05 component: Esc deselects the selected port dot and posts nothing', async () => {
 	await withPreview(DOC(), async (ed) => {
 		await portsOn(ed);

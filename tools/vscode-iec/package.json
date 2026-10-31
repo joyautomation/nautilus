@@ -858,7 +858,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Rendering user-authored Svelte components inside the mimic/Component Editor compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces — the built-in kit components and placeholder chips still work fully."
+      "description": "Rendering user-authored Svelte components inside the mimic editor and the component preview compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces — the built-in kit components and placeholder chips still work fully."
     }
   },
   "scripts": {

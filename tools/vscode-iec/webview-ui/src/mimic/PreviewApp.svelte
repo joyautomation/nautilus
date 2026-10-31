@@ -305,6 +305,14 @@
 	}
 	function onPortMove(e: PointerEvent) {
 		if (!drag || !boxEl) return;
+		// No button down mid-drag: the release happened where no pointerup
+		// reached us (outside the webview, after Chromium dropped the
+		// capture). Drop where the dot is, rather than let it follow a
+		// buttonless mouse until the next click commits a stray position.
+		if (!(e.buttons & 1)) {
+			onPortUp();
+			return;
+		}
 		const { box: b, pt } = portSpace(e);
 		const [fx, fy] = toFraction(b, pt);
 		if (fx !== drag.fx || fy !== drag.fy) {
@@ -313,11 +321,6 @@
 			drag.moved = true;
 		}
 	}
-	/** The drop. Wired to the dot itself (pointerup, pointercancel, and
-	 * lostpointercapture with no button down) as well as the window: under pointer capture the
-	 * release is delivered to the captured element, and the capture can also
-	 * end without any pointerup at all. Idempotent — whichever fires first
-	 * commits, the rest find no drag. */
 	/** A capture lost while the button is still down is not a drop: Chromium
 	 * can drop the capture at the first move after the press (the gesture
 	 * harness catches it when the drag's coordinate tag mounts beside the
@@ -328,6 +331,11 @@
 		if (e.buttons & 1) return;
 		onPortUp();
 	}
+	/** The drop. Wired to the dot itself (pointerup, pointercancel, and
+	 * lostpointercapture with no button down) as well as the window: under pointer capture the
+	 * release is delivered to the captured element, and the capture can also
+	 * end without any pointerup at all. Idempotent — whichever fires first
+	 * commits, the rest find no drag. */
 	function onPortUp() {
 		if (!drag) return;
 		if (drag.moved) {
