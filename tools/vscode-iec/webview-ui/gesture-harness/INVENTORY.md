@@ -219,7 +219,7 @@ no rig verb, no smoke check); per section below.
 |---|---|---|---|---|---|---|
 | X01 | Extension | Open a diagram by default via workbench.editorAssociations | README Diagrams | — | — | 17 |
 | X02 | Extension | Open a *.mimic.json in the graphical editor (Open With → Text Editor to leave) | README HMI mimic editor | gestures.test.mjs: restore: the mimic editor mounts with saved state | — | — |
-| X03 | Extension | Open a component file in the component editor | README HMI mimic editor (ports) | gestures.test.mjs: restore: the component editor mounts with saved state | component_edit_ports | — |
+| X03 | Extension | Open a component file in the component editor | README HMI mimic editor (ports) | gestures.test.mjs: restore: the component preview pane mounts with saved state | component_edit_ports | — |
 | X04 | Extension | A 0-byte .fbd/.ld/.sfc opens with the Empty file banner; initialize or the first gesture writes a skeleton | CHANGELOG 0.10.0 | diagram.test.mjs: FBD: null arrays ... blank file offers initialize; Ladder: a blank file seeds with the file name | sfc_init | 09 |
 | X05 | Extension | A broken first load keeps its own chrome; a doc that never parsed offers Reopen as Text Editor | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder/SFC: a broken FIRST load keeps its own chrome; gestures.test.mjs: a doc that never parsed shows the error and Reopen as Text Editor | — | — |
 | X06 | Extension | A parse error mid-edit locks the stale canvas | CHANGELOG 0.10.0 | gestures.test.mjs: a parse error mid-edit locks the stale canvas | — | — |
