@@ -28,18 +28,20 @@ claims:
 
   - id: UAC-003
     claim: >-
-      naut check warns, without failing, when username: is set and
-      NAUTILUS_OPCUA_PASSWORD is empty, and when there is no pki-dir: while
-      the security settings allow an endpoint that needs a certificate.
+      A username: with security None fails naut check; naut check warns,
+      without failing, when username: is set and NAUTILUS_OPCUA_PASSWORD is
+      empty, when username: is set without security-mode Sign or
+      SignAndEncrypt, and when there is no pki-dir: while the security
+      settings allow an endpoint that needs a certificate.
     source: "#"
     tests:
       - go ./cmd/naut TestCheckOPCUAClientDriver
       - go ./opcua TestLoaderContract
     partial: true
     note: >-
-      The password warning is asserted through naut check; the pki-dir
-      warning only on the driver's Warnings(), which naut check prints by
-      the same path.
+      The None refusal and the password warning are asserted through naut
+      check; the security-mode and pki-dir warnings only on the driver's
+      Warnings(), which naut check prints by the same path.
 
   - id: UAC-004
     claim: >-
@@ -103,12 +105,16 @@ claims:
     claim: >-
       Each binding's namespace URI is resolved against the server's live
       namespace table at connect, so a manifest whose ns= index is wrong
-      still reads the right node; a URI the server no longer has reads Bad.
+      still reads the right node; a binding whose URI the server no longer
+      has is Bad and not read, even when another namespace now holds its
+      index with a node of the same id, and reads again once the URI is back.
     source: "#namespaces-survive-a-renumbering"
     tests:
       - go ./opcua TestNamespaceRemap
-    partial: true
-    note: The remap is asserted; a URI missing from the server is not.
+      - go ./opcua TestMissingNamespaceIsBadNotAnotherNode
+    note: >-
+      The page also says such a binding is not written; that is in the code
+      (flushWrites) but no test asserts it, and it is not part of this claim.
 
   - id: UAC-011
     claim: >-
@@ -147,11 +153,12 @@ claims:
   - id: UAC-014
     claim: >-
       A transport failure reconnects with backoff while values hold with
-      Stale quality and __Online false; after the reconnect they are Good
-      again.
+      Stale quality and __Online false; after a reconnect each value stays
+      Stale until the new session has read it, then is Good.
     source: "#polling-quality-and-__online"
     tests:
       - go ./opcua TestReconnectAndStale
+      - go ./opcua TestCarriedOverValueIsStaleUntilReadOnTheNewSession
     partial: true
     note: The backoff ladder (1 s doubling to 60 s, reset on an answered read) is not asserted.
 
@@ -185,20 +192,26 @@ claims:
       Writes are typed by the binding and a value that does not fit is
       refused, never wrapped; the first snapshot after start is a baseline,
       not a command; a command made while the session is down goes out on
-      reconnect; the write gate (redundancy leadership) holds commands back.
+      reconnect; a closed write gate holds commands back, including commands
+      queued during an outage when the gate has closed by the time the
+      session returns.
     source: "#writes-are-opt-in-per-tag"
     tests:
       - go ./opcua TestValueCodec
       - go ./opcua TestWrites
       - go ./opcua TestReconnectAndStale
       - go ./opcua TestWriteGate
+      - go ./opcua TestQueuedWriteRechecksTheGate
       - go ./cmd/naut TestNautOPCUAClientImportAndRun
     partial: true
     note: >-
-      Not asserted: that an unchanged value is not re-sent, and that a write
-      the server refuses on a healthy session is dropped rather than
-      retried. The gate is asserted on the driver; its wiring to leadership
-      is the one every driver shares.
+      TestValueCodec asserts the range check on the encoder (70000 into
+      Int16 refused); TestWrites asserts a wrongly typed value never reaches
+      the server. The gate is asserted on the driver with a test gate
+      function; its wiring to redundancy leadership (runcmd) is shared with
+      every driver and not exercised here. Not asserted: that an unchanged
+      value is not re-sent, and that a write the server refuses on a healthy
+      session is dropped rather than retried.
 
   - id: UAC-018
     claim: >-
@@ -209,10 +222,33 @@ claims:
     source: "#security"
     tests:
       - go ./opcua TestSelectEndpoint
+      - go ./opcua TestServerCertificatePinnedOnFirstUse
     partial: true
     note: >-
-      Endpoint selection is asserted; certificate generation and any
-      session under a policy other than None are not exercised.
+      Endpoint selection and a Basic256Sha256/SignAndEncrypt session with a
+      generated client certificate are asserted against gopcua's server,
+      which checks neither the client certificate's trust nor its URI SAN.
+
+  - id: UAC-020
+    claim: >-
+      The first secured session pins the server certificate's SHA-256
+      thumbprint in pki-dir/trusted-servers; a later connection offered a
+      different certificate is refused with an error naming the pin file,
+      and deleting the file trusts the new certificate.
+    source: "#security"
+    tests:
+      - go ./opcua TestServerCertificatePinnedOnFirstUse
+
+  - id: UAC-021
+    claim: >-
+      With username: set, an endpoint whose security policy or mode is None
+      is refused before any credential is sent, and a username: with
+      security None fails naut check.
+    source: "#security"
+    tests:
+      - go ./opcua TestUsernameRefusedOnUnsecuredEndpoint
+      - go ./opcua TestLoaderContract
+      - go ./cmd/naut TestCheckOPCUAClientDriver
 
   - id: UAC-019
     claim: >-

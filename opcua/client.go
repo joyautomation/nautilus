@@ -81,6 +81,15 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 	token := ua.UserTokenTypeAnonymous
 	if c.Username != "" {
 		token = ua.UserTokenTypeUserName
+		// A password is never sent on a channel that is neither signed
+		// nor encrypted: the server certificate that would protect it is
+		// unauthenticated there, so anyone in the path could harvest it.
+		// This is also what stops a stripped endpoint list from talking
+		// the "strongest offered" default down to None.
+		if ep.SecurityMode == ua.MessageSecurityModeNone || ep.SecurityPolicyURI == ua.SecurityPolicyURINone {
+			return nil, fmt.Errorf("refusing to send username %q on an unsecured endpoint (%s/%s): set security: and security-mode: Sign or SignAndEncrypt, or drop username: for anonymous access",
+				c.Username, policyName(ep.SecurityPolicyURI), modeName(ep.SecurityMode))
+		}
 	}
 	opts := []opcua.Option{
 		opcua.SecurityFromEndpoint(ep, token),
@@ -95,10 +104,16 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 	if token == ua.UserTokenTypeUserName {
 		opts = append(opts, opcua.AuthUsername(c.Username, c.Password))
 	}
+	pinNew := false
 	if ep.SecurityPolicyURI != ua.SecurityPolicyURINone {
 		if c.PKIDir == "" {
 			return nil, fmt.Errorf("endpoint %s needs a client certificate: set pki-dir", policyName(ep.SecurityPolicyURI))
 		}
+		pinned, err := checkPin(c.PKIDir, endpoint, ep.ServerCertificate)
+		if err != nil {
+			return nil, err
+		}
+		pinNew = !pinned
 		certFile, keyFile, err := EnsureCertificate(c.PKIDir, c.ApplicationURI)
 		if err != nil {
 			return nil, err
@@ -114,6 +129,12 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 	defer cancel2()
 	if err := client.Connect(cctx); err != nil {
 		return nil, fmt.Errorf("connect %s (%s/%s): %w", endpoint, policyName(ep.SecurityPolicyURI), modeName(ep.SecurityMode), err)
+	}
+	if pinNew {
+		if err := recordPin(c.PKIDir, endpoint, ep.ServerCertificate); err != nil {
+			_ = client.Close(context.Background())
+			return nil, fmt.Errorf("pin the server certificate: %w", err)
+		}
 	}
 	return &Session{Client: client, Endpoint: ep}, nil
 }

@@ -91,8 +91,12 @@ A node id carries a namespace *index*, and indexes are not stable: Ignition
 renumbers when a tag provider is added, Kepware when a channel is. The
 manifest records each binding's namespace **URI** (and the whole table at
 import); at connect the driver reads the live table and rewrites the index
-before the first read. A URI the server no longer has is logged once and the
-node reads Bad, which is the honest answer.
+before the first read. A URI the server no longer has is logged and the
+binding is Bad and neither read nor written until a connect finds the URI
+again: its old index may now belong to another namespace holding a node of
+the same id, and reading it would deliver someone else's value as Good. A
+class whose bindings are all unresolvable still reads ServerStatus/State
+on its schedule, so a dead session is noticed.
 
 ## 4. Quality
 
@@ -103,6 +107,7 @@ Per binding, from the per-node `StatusCode` of the last read:
 | up | Good | Good (omitted) |
 | up | Bad or Uncertain, or a non-scalar value | **Bad** — the session is fine, this node is not |
 | up | never answered yet | NotConnected |
+| up | delivered last session, not yet read on this one | **Stale** |
 | down | delivered before | **Stale** — the value holds, greyed |
 | down | never delivered | NotConnected |
 
@@ -115,7 +120,9 @@ is the driver's own truth and always Good.
 `WriteOutputs` keeps the sparkplug-host/modbus rules: gate (redundancy
 leadership), baseline (the first snapshot after Start is recorded, not
 sent), change (an unchanged value is not a command), last value per tag,
-queued across a disconnect and flushed on reconnect. Values are encoded as
+queued across a disconnect and flushed on reconnect — with the gate checked
+again at flush, so a replica that lost leadership while down drops what it
+queued (and forgets it, so the same value is a command once it leads again). Values are encoded as
 the binding's declared type with a range check — a 70000 into an Int16 is
 refused and logged, never wrapped. A per-node Bad write status is a refusal
 on a healthy session: dropped and reported, not re-queued forever.
@@ -223,3 +230,10 @@ communications driver delivers it yet.
 4. **Subscriptions** when a site has enough tags to justify them (§2).
 5. **A native client** behind the same package if the dependency ever
    becomes a problem — the test suite is the spec for it.
+6. **Server certificate trust.** gopcua v0.9.1 has no trust list, and the
+   server certificate arrives in the unauthenticated GetEndpoints reply.
+   The driver pins its SHA-256 thumbprint on first secured use
+   (`pki-dir/trusted-servers/`) and refuses a different one; a UserName
+   token is never sent on a None policy or mode, so a stripped endpoint
+   list cannot downgrade the default into sending a password in the clear.
+   The first connection is still trust-on-first-use.

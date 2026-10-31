@@ -11,6 +11,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,12 +52,22 @@ func freePort(t *testing.T) int {
 
 func startServer(t *testing.T, port int) *testServer {
 	t.Helper()
-	srv := server.New(
-		server.EnableSecurity("None", ua.MessageSecurityModeNone),
+	return startServerWith(t, port, "urn:nautilus:test", 12.5)
+}
+
+// startServerWith is startServer with the namespace URI and Speed's value
+// chosen, so a test can restart "the same" server with its namespace gone
+// and another namespace holding the same index and node ids.
+func startServerWith(t *testing.T, port int, nsURI string, speed float64, opts ...server.Option) *testServer {
+	t.Helper()
+	if len(opts) == 0 {
+		opts = []server.Option{server.EnableSecurity("None", ua.MessageSecurityModeNone)}
+	}
+	srv := server.New(append(opts,
 		server.EnableAuthMode(ua.UserTokenTypeAnonymous),
 		server.EndPoint("127.0.0.1", port),
-	)
-	ns := server.NewNodeNameSpace(srv, "urn:nautilus:test")
+	)...)
+	ns := server.NewNodeNameSpace(srv, nsURI)
 	plant := ns.AddNode(server.NewFolderNode(ua.NewStringNodeID(ns.ID(), "Plant"), "Plant"))
 	// gopcua routes a Browse by the node's namespace, so the ns=0 Objects
 	// folder (what every client starts from) must reference our folder.
@@ -70,7 +81,7 @@ func startServer(t *testing.T, port int) *testServer {
 		ts.vars[name] = n
 	}
 	const rd, rw = uint8(ua.AccessLevelTypeCurrentRead), uint8(ua.AccessLevelTypeCurrentRead | ua.AccessLevelTypeCurrentWrite)
-	add("Speed", 12.5, id.Double, rd)
+	add("Speed", speed, id.Double, rd)
 	add("Count", int32(7), id.Int32, rd)
 	add("Run", true, id.Boolean, rd)
 	add("Name", "pump-1", id.String, rd)
@@ -497,7 +508,8 @@ func TestLoaderContract(t *testing.T) {
 	if w := d.Warnings(); len(w) != 1 || !strings.Contains(w[0], "pki-dir") {
 		t.Errorf("warnings = %q, want one about pki-dir", w)
 	}
-	d, err = New("opc.tcp://192.0.2.1:4840", m, WithOnlineTag("Gateway__Online"), WithSecurity("None", ""), WithAuth("op", ""))
+	d, err = New("opc.tcp://192.0.2.1:4840", m, WithOnlineTag("Gateway__Online"),
+		WithSecurity("Basic256Sha256", "SignAndEncrypt"), WithPKIDir(t.TempDir()), WithAuth("op", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,6 +519,20 @@ func TestLoaderContract(t *testing.T) {
 	if w := d.Warnings(); len(w) != 1 || !strings.Contains(w[0], "NAUTILUS_OPCUA_PASSWORD") {
 		t.Errorf("warnings = %q, want one about the password", w)
 	}
+	// A username without a pinned secure mode is warned about; with
+	// security None it is refused outright.
+	d, err = New("opc.tcp://192.0.2.1:4840", m, WithPKIDir(t.TempDir()), WithAuth("op", "pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := d.Warnings(); len(w) != 1 || !strings.Contains(w[0], "Sign or SignAndEncrypt") {
+		t.Errorf("warnings = %q, want one about the unpinned security mode", w)
+	}
+	for _, sec := range [][2]string{{"None", ""}, {"Basic256Sha256", "None"}} {
+		if _, err := New("opc.tcp://192.0.2.1:4840", m, WithSecurity(sec[0], sec[1]), WithAuth("op", "pw")); err == nil || !strings.Contains(err.Error(), "unsecured") {
+			t.Errorf("username with security %q/%q: err = %v, want a refusal", sec[0], sec[1], err)
+		}
+	}
 	for _, sec := range [][2]string{{"Basic256Sha265", ""}, {"", "Encrypt"}} {
 		if _, err := New("opc.tcp://192.0.2.1:4840", m, WithSecurity(sec[0], sec[1])); err == nil {
 			t.Errorf("New accepted security %q/%q", sec[0], sec[1])
@@ -515,4 +541,104 @@ func TestLoaderContract(t *testing.T) {
 	if _, err := New("opc.tcp://192.0.2.1:4840", m, WithSecurity("aes128_sha256_rsaoaep", "SignAndEncrypt")); err != nil {
 		t.Errorf("New refused a valid policy spelling: %v", err)
 	}
+}
+
+// A binding whose namespace URI is gone from the server is Bad and not
+// read, even when another namespace now holds the same index with a node
+// of the same id — that node's value must never be delivered as ours. When
+// the URI comes back, the binding reads again.
+func TestMissingNamespaceIsBadNotAnotherNode(t *testing.T) {
+	port := freePort(t)
+	ts := startServer(t, port)
+	d := startDriver(t, ts.url, manifest(2))
+	waitFor(t, "first poll", func() bool { return read(t, d)["plant__Online"] == true })
+
+	_ = ts.srv.Close()
+	waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+	other := startServerWith(t, port, "urn:someone:else", 777)
+	if other.ns.ID() != ts.ns.ID() {
+		t.Fatalf("fixture: the other namespace took index %d, want %d", other.ns.ID(), ts.ns.ID())
+	}
+	waitFor(t, "reconnect", func() bool { return read(t, d)["plant__Online"] == true })
+	time.Sleep(200 * time.Millisecond) // several polls
+	if v := read(t, d)["Speed"]; v == 777.0 {
+		t.Fatal("the other namespace's Speed was delivered as ours")
+	}
+	if q := d.Quality(); q["Speed"] != nio.Bad || q["Count"] != nio.Bad {
+		t.Errorf("quality with the namespace gone = %v, want Bad", q)
+	}
+	if h := d.Health(); h.BadTags != 5 {
+		t.Errorf("health = %+v, want all 5 bindings bad", h)
+	}
+
+	_ = other.srv.Close()
+	waitFor(t, "offline again", func() bool { return read(t, d)["plant__Online"] == false })
+	back := startServerWith(t, port, "urn:nautilus:test", 33)
+	_ = back
+	waitFor(t, "the namespace back", func() bool { return read(t, d)["Speed"] == 33.0 })
+	waitFor(t, "good again", func() bool { return len(d.Quality()) == 0 })
+}
+
+// A value carried over from the last session is Stale until the new
+// session has read it, not Good from the moment the session is up.
+func TestCarriedOverValueIsStaleUntilReadOnTheNewSession(t *testing.T) {
+	d, err := New("opc.tcp://192.0.2.1:4840", manifest(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := d.byName["Speed"]
+	d.mu.Lock()
+	b.delivered = true
+	d.online, b.answered = true, false // up, not yet read on this session
+	d.mu.Unlock()
+	if q := d.Quality()["Speed"]; q != nio.Stale {
+		t.Errorf("up, not yet read: %v, want stale", q)
+	}
+	d.mu.Lock()
+	b.answered = true
+	d.mu.Unlock()
+	if q, ok := d.Quality()["Speed"]; ok {
+		t.Errorf("up and read: %v, want good", q)
+	}
+	d.mu.Lock()
+	d.online = false
+	d.mu.Unlock()
+	if q := d.Quality()["Speed"]; q != nio.Stale {
+		t.Errorf("down: %v, want stale", q)
+	}
+}
+
+// A command queued during an outage is not sent if the write gate has
+// closed by the time the session comes back (leadership lost while down);
+// once the gate reopens, the same value is a command again.
+func TestQueuedWriteRechecksTheGate(t *testing.T) {
+	port := freePort(t)
+	ts := startServer(t, port)
+	d := startDriver(t, ts.url, manifest(2))
+	waitFor(t, "first poll", func() bool { return read(t, d)["plant__Online"] == true })
+	var mu sync.Mutex
+	open := true
+	d.SetWriteGate(func() bool { mu.Lock(); defer mu.Unlock(); return open })
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
+
+	_ = ts.srv.Close()
+	waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 3.0}) // queued while leader
+	mu.Lock()
+	open = false // leadership lost while down
+	mu.Unlock()
+	ts2 := startServer(t, port)
+	waitFor(t, "reconnect", func() bool { return read(t, d)["plant__Online"] == true })
+	time.Sleep(150 * time.Millisecond)
+	if got := ts2.get(t, "Setpoint"); got != 0.0 {
+		t.Fatalf("a closed gate let a queued command through: Setpoint = %v", got)
+	}
+	if h := d.Health(); h.QueuedWrites != 0 {
+		t.Errorf("queued writes after the drop = %d", h.QueuedWrites)
+	}
+	mu.Lock()
+	open = true
+	mu.Unlock()
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 3.0})
+	waitFor(t, "the command once the gate reopens", func() bool { return ts2.get(t, "Setpoint") == 3.0 })
 }

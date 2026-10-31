@@ -225,6 +225,14 @@ type binding struct {
 	node      *ua.NodeID
 	bad       bool
 	delivered bool
+	// answered: the server has answered this binding on THIS session. A
+	// value carried over from the last session is Stale until it has.
+	answered bool
+	// missing: the binding's namespace URI is not in the server's live
+	// namespace table, so its node id cannot be resolved. It is Bad and is
+	// neither read nor written until a connect finds the URI again —
+	// reading the stale index could return another namespace's node.
+	missing bool
 }
 
 // scanClass is one poll group and its schedule, owned by the session loop.
@@ -275,8 +283,12 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 	if d.retryMax < d.retryMin {
 		d.retryMax = d.retryMin
 	}
-	if _, _, err := d.conn.Security.parse(); err != nil {
+	policyURI, mode, err := d.conn.Security.parse()
+	if err != nil {
 		return nil, fmt.Errorf("opcua: %w", err)
+	}
+	if d.conn.Username != "" && (policyURI == ua.SecurityPolicyURINone || mode == ua.MessageSecurityModeNone) {
+		return nil, fmt.Errorf("opcua: username %q with security None: a password is never sent on an unsecured channel — use Sign or SignAndEncrypt, or drop username", d.conn.Username)
 	}
 	d.conn.SessionName = "nautilus " + d.name
 	if d.onlineTag == "" {
@@ -441,6 +453,9 @@ func (d *Driver) Warnings() []string {
 	var out []string
 	if d.conn.Username != "" && d.conn.Password == "" {
 		out = append(out, fmt.Sprintf("opcua driver %q: username %q is set but NAUTILUS_OPCUA_PASSWORD is empty here", d.name, d.conn.Username))
+	}
+	if m := strings.ToLower(d.conn.Security.Mode); d.conn.Username != "" && m != "sign" && m != "signandencrypt" {
+		out = append(out, fmt.Sprintf("opcua driver %q: username %q without security-mode: Sign or SignAndEncrypt — the session is refused if the server offers only an unsecured endpoint, rather than send the password in the clear", d.name, d.conn.Username))
 	}
 	if d.conn.PKIDir == "" && !strings.EqualFold(d.conn.Security.Policy, "None") {
 		out = append(out, fmt.Sprintf("opcua driver %q: no pki-dir — the session is refused if the endpoint chosen needs a client certificate (any security policy but None)", d.name))
@@ -686,11 +701,13 @@ func (d *Driver) run(ctx context.Context) {
 		d.onConnect(ctx, sess)
 		d.serve(ctx, sess)
 
-		sess.Close()
+		// Offline first: Close can take its timeout, and the values must
+		// not read Good meanwhile.
 		d.mu.Lock()
 		d.online, d.primed = false, false
 		answered := d.answered
 		d.mu.Unlock()
+		sess.Close()
 		if ctx.Err() != nil {
 			return
 		}
@@ -740,16 +757,20 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 
 	d.mu.Lock()
 	remapped := 0
+	missing := 0
 	for _, b := range d.bindings {
-		b.bad = false
+		b.bad, b.answered, b.missing = false, false, false
 		if b.Namespace == "" {
 			continue
 		}
 		idx, ok := index[b.Namespace]
 		if !ok {
-			// Not on this server: the read will say so per node (Bad) and
-			// the log says why once.
-			d.log.Warn("opcua: namespace not on server", "driver", d.name, "tag", b.Name, "namespace", b.Namespace)
+			// Not on this server. The index the node id carries may now
+			// belong to another namespace with a node of the same id, so
+			// it is not read at all: Bad until the URI comes back.
+			b.bad, b.missing = true, true
+			missing++
+			d.log.Warn("opcua: namespace not on server; tag reads Bad", "driver", d.name, "tag", b.Name, "namespace", b.Namespace)
 			continue
 		}
 		if b.node.Namespace() != idx {
@@ -762,8 +783,12 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 	d.mu.Unlock()
 	d.setState("connected", nil)
 	d.log.Info("opcua: connected", "driver", d.name, "endpoint", d.endpoint,
-		"policy", info.policy, "mode", info.mode, "tags", len(d.bindings), "remapped", remapped, "maxNodes", info.maxNodes)
+		"policy", info.policy, "mode", info.mode, "tags", len(d.bindings), "remapped", remapped, "missing", missing, "maxNodes", info.maxNodes)
 }
+
+// serverStateNode is Server_ServerStatus_State (ns=0;i=2259), the liveness
+// read for a class none of whose bindings can be resolved.
+const serverStateNode = 2259
 
 // maxNodesPerReadNode is Server_ServerCapabilities_OperationLimits_
 // MaxNodesPerRead (Part 5 §6.3.11), ns=0;i=11705.
@@ -850,13 +875,41 @@ func (d *Driver) serve(ctx context.Context, sess *Session) {
 func (d *Driver) pollClass(ctx context.Context, sess *Session, c *scanClass) bool {
 	d.mu.Lock()
 	limit := d.server.maxNodes
+	// A binding whose namespace is missing is not read (see onConnect).
+	live := make([]*binding, 0, len(c.bindings))
+	for _, b := range c.bindings {
+		if !b.missing {
+			live = append(live, b)
+		}
+	}
 	d.mu.Unlock()
 	if limit <= 0 {
 		limit = 1
 	}
-	for start := 0; start < len(c.bindings); {
-		end := min(start+limit, len(c.bindings))
-		chunk := c.bindings[start:end]
+	if len(live) == 0 && len(c.bindings) > 0 {
+		// Every binding in the class is unresolvable. Still ask the server
+		// something on the class's schedule, so a dead session is noticed
+		// and __Online falls.
+		rctx, cancel := context.WithTimeout(ctx, d.conn.Timeout)
+		_, err := sess.Client.Read(rctx, &ua.ReadRequest{NodesToRead: []*ua.ReadValueID{{
+			NodeID: ua.NewNumericNodeID(0, serverStateNode), AttributeID: ua.AttributeIDValue}}})
+		cancel()
+		if err != nil {
+			d.errs.Add(1)
+			d.mu.Lock()
+			d.lastErr = err
+			d.retries++
+			d.mu.Unlock()
+			return false
+		}
+		d.mu.Lock()
+		d.answered = true
+		d.mu.Unlock()
+		return true
+	}
+	for start := 0; start < len(live); {
+		end := min(start+limit, len(live))
+		chunk := live[start:end]
 		ids := make([]*ua.ReadValueID, len(chunk))
 		d.mu.Lock()
 		for i, b := range chunk {
@@ -909,6 +962,7 @@ func (d *Driver) pollClass(ctx context.Context, sess *Session, c *scanClass) boo
 		d.answered = true
 		for i, b := range chunk {
 			dv := resp.Results[i]
+			b.answered = true
 			if dv == nil || !good(dv.Status) {
 				if !b.bad {
 					if dv != nil {
@@ -955,10 +1009,36 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 		limit = 1
 	}
 
+	// The gate is checked again here, not only when the command was
+	// queued: a replica that lost leadership during an outage must not
+	// send what it queued while it led. Dropped commands are forgotten
+	// (not recorded as written), so the same value is a command again
+	// once the gate reopens.
+	if !d.gateOpen() {
+		d.mu.Lock()
+		for name := range work {
+			delete(d.written, name)
+		}
+		d.mu.Unlock()
+		d.log.Warn("opcua: write gate closed; queued writes dropped", "driver", d.name, "count", len(work))
+		return true
+	}
+
 	var items []*ua.WriteValue
 	var names []string
 	for name, v := range work {
 		b := d.byName[name]
+		d.mu.Lock()
+		missing := b.missing
+		if missing {
+			delete(d.written, name)
+		}
+		d.mu.Unlock()
+		if missing {
+			d.errs.Add(1)
+			d.log.Warn("opcua: write dropped: namespace not on server", "driver", d.name, "tag", name, "namespace", b.Namespace)
+			continue
+		}
 		variant, err := toVariant(b.Type, v)
 		if err != nil {
 			d.errs.Add(1)

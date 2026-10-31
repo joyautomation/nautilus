@@ -74,8 +74,9 @@ func (d *Driver) Health() Health {
 //     value the tag store cannot hold, which is Bad (the session is fine,
 //     THIS node is not: unknown id, wrong namespace, a dead device behind
 //     a gateway, an array).
-//   - a tag delivered at least once whose session is now down is Stale:
-//     the value holds, greyed, with its age — never a silent zero.
+//   - a tag delivered at least once whose session is now down, or whose
+//     new session has not read it yet, is Stale: the value holds, greyed,
+//     with its age — never a silent zero.
 //   - a tag never delivered on a dead session, or never answered on a live
 //     one, is NotConnected.
 //
@@ -95,16 +96,14 @@ func (d *Driver) Quality() map[string]nio.Quality {
 			switch {
 			case d.online && b.bad:
 				mark(b.Name, nio.Bad)
-			case d.online:
-				if !b.delivered {
-					mark(b.Name, nio.NotConnected)
-				}
+			case d.online && b.answered:
+				// Good: the server answered it on this session.
+			case b.delivered:
+				// Down, or up but not yet read on this session: the value
+				// is the last one delivered, not a current reading.
+				mark(b.Name, nio.Stale)
 			default:
-				if b.delivered {
-					mark(b.Name, nio.Stale)
-				} else {
-					mark(b.Name, nio.NotConnected)
-				}
+				mark(b.Name, nio.NotConnected)
 			}
 		}
 	}

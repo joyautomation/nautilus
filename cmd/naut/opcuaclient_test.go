@@ -64,8 +64,8 @@ func TestOPCUAUsage(t *testing.T) {
 }
 
 // `naut check` holds an opcua driver to its required keys and its security
-// spellings, offline, and warns (without failing) about a username with no
-// password in the environment.
+// spellings, offline, refuses a username over security None, and warns
+// (without failing) about a username with no password in the environment.
 func TestCheckOPCUAClientDriver(t *testing.T) {
 	t.Setenv("NAUTILUS_OPCUA_PASSWORD", "")
 	manifest := "namespaces: [\"http://opcfoundation.org/UA/\", \"urn:x\"]\ntags:\n" +
@@ -74,7 +74,7 @@ func TestCheckOPCUAClientDriver(t *testing.T) {
 		return checkManifestYAML + "driver:\n  type: opcua\n  manifest: opcua_manifest.yaml\n" + extra
 	}
 	out, code := checkIn(t, map[string]string{
-		"nautilus.yaml":       driver("  endpoint: opc.tcp://192.0.2.1:4840\n  security: None\n  username: op\n"),
+		"nautilus.yaml":       driver("  endpoint: opc.tcp://192.0.2.1:4840\n  security: Basic256Sha256\n  security-mode: SignAndEncrypt\n  pki-dir: pki\n  username: op\n"),
 		"opcua_manifest.yaml": manifest,
 		"program.st":          programBinding("", ""),
 	})
@@ -85,9 +85,10 @@ func TestCheckOPCUAClientDriver(t *testing.T) {
 		t.Errorf("check did not warn about the missing password:\n%s", out)
 	}
 	for name, extra := range map[string]string{
-		"no endpoint": "",
-		"bad policy":  "  endpoint: opc.tcp://192.0.2.1:4840\n  security: Basic256Sha265\n",
-		"bad mode":    "  endpoint: opc.tcp://192.0.2.1:4840\n  security-mode: Encrypt\n",
+		"no endpoint":        "",
+		"bad policy":         "  endpoint: opc.tcp://192.0.2.1:4840\n  security: Basic256Sha265\n",
+		"bad mode":           "  endpoint: opc.tcp://192.0.2.1:4840\n  security-mode: Encrypt\n",
+		"username over None": "  endpoint: opc.tcp://192.0.2.1:4840\n  security: None\n  username: op\n",
 	} {
 		out, code := checkIn(t, map[string]string{
 			"nautilus.yaml":       driver(extra),

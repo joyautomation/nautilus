@@ -4,10 +4,10 @@ description: Poll an OPC UA server (an Ignition gateway, a PLC's embedded server
 ---
 
 :::caution[Preview]
-Tested against gopcua's in-process server only. It has not yet been run
-against Ignition, Kepware, node-opcua or a PLC's embedded server, and no
-session with a security policy other than `None` has been exercised end to
-end. Try it against your server before you depend on it.
+Tested against gopcua's in-process server only (including a
+`Basic256Sha256 / SignAndEncrypt` session). It has not yet been run against
+Ignition, Kepware, node-opcua or a PLC's embedded server. Try it against
+your server before you depend on it.
 :::
 
 A `driver: {type: opcua}` section makes nautilus an OPC UA **client**: it
@@ -37,10 +37,12 @@ tag-files: [tags/opcua.yaml]
 `naut check`, not `naut run`. The driver never dials while it is being
 built: it validates the manifest, parses every node id and checks the
 `security:` and `security-mode:` spellings offline, so `naut check` and
-`naut build` pass in CI with no server in sight. `naut check` warns when
-`username:` is set and `NAUTILUS_OPCUA_PASSWORD` is empty, and when there
-is no `pki-dir:` while the security settings allow an endpoint that needs a
-certificate. Several servers are several entries in a `drivers:` list,
+`naut build` pass in CI with no server in sight. A `username:` with
+`security: None` or `security-mode: None` fails `naut check` (see
+[Security](#security)). `naut check` warns when `username:` is set and
+`NAUTILUS_OPCUA_PASSWORD` is empty, when `username:` is set without
+`security-mode: Sign` or `SignAndEncrypt`, and when there is no `pki-dir:`
+while the security settings allow an endpoint that needs a certificate. Several servers are several entries in a `drivers:` list,
 each with its own `name:`.
 
 ## Generating the manifest: `naut opcua import`
@@ -78,8 +80,10 @@ A node id carries a namespace *index* (`ns=2;s=…`), and indexes are not
 stable: a server may renumber when a provider or channel is added. The
 manifest records each binding's namespace **URI**; at connect the driver
 reads the server's live namespace table and rewrites the index before the
-first read. A URI the server no longer has reads Bad, and the log says why
-once.
+first read. A binding whose URI the server no longer has is **Bad** and is
+not read or written at all (its old index may now belong to another
+namespace with a node of the same id), and the log says why. It reads
+again once a connect finds the URI.
 
 ## Polling, quality and `__Online`
 
@@ -96,7 +100,8 @@ server's advertised `MaxNodesPerRead` (halved if the server answers
   delivering. `Uncertain` statuses count as not good, on purpose.
 - A transport failure reconnects with backoff (1 s doubling to 60 s,
   reset once the server answers a read). Values hold, their quality goes
-  **Stale**, and `__Online` goes false.
+  **Stale**, and `__Online` goes false. After a reconnect each value stays
+  Stale until the new session has read it.
 - Before the first delivery an input reads as its `init:` or the zero of
   its type, and its quality is **NotConnected**. A program that reads a
   server's tags keeps scanning while the server is down, and checks
@@ -118,7 +123,9 @@ driver keeps: the first snapshot after start is a baseline, not a command;
 an unchanged value is not a command; a command made while the session is
 down goes out on reconnect (the last value per tag); a write the server
 refuses on a healthy session is dropped and reported, not retried forever.
-Under `redundancy:` only the leader writes.
+Under `redundancy:` only the leader writes, and leadership is checked
+again when queued commands go out: a replica that lost it during an outage
+drops what it queued.
 
 ## Security
 
@@ -129,6 +136,20 @@ first use, with the application URI as a URI SAN. The server must trust it
 (on Ignition: *Config > OPC UA > Security > Trusted Certificates*). The
 password for `username:` is never in the manifest: set
 `NAUTILUS_OPCUA_PASSWORD`.
+
+**The server's certificate is pinned on first use.** The certificate a
+server offers arrives unauthenticated, so the first secured session records
+its SHA-256 thumbprint in `pki-dir/trusted-servers/<host>_<port>.sha256`,
+and every later connection refuses a different certificate, naming both
+thumbprints and the file. If the server's certificate was replaced on
+purpose, delete that file and the next connection trusts the new one. The
+first connection is trusted as found, so make it on a network you trust.
+
+**A password is never sent on an unsecured channel.** With `username:` set,
+an endpoint whose policy or mode is `None` is refused, so an endpoint list
+stripped down to `None` cannot talk the "strongest offered" default into
+sending credentials in the clear. Pin `security-mode: Sign` or
+`SignAndEncrypt` whenever you set `username:`.
 
 The driver dials the `endpoint:` you wrote even when the server advertises
 a different address, so a server behind NAT or a VPN is reachable at the
