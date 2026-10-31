@@ -199,7 +199,7 @@ func setMetricValue(em *spb.Payload_Metric, dt spb.DataType, v any) error {
 		if !ok {
 			return typeErr("Template", v)
 		}
-		et, err := encodeTemplate(t)
+		et, err := encodeTemplate(t, em.GetTimestamp())
 		if err != nil {
 			return err
 		}
@@ -282,7 +282,12 @@ func decodeProperties(ps *spb.Payload_PropertySet) []Property {
 	return out
 }
 
-func encodeTemplate(t *Template) (*spb.Payload_Template, error) {
+// encodeTemplate writes a Template. A member with no timestamp of its own
+// takes ts, the enclosing metric's: Sparkplug 3.0
+// [tck-id-payloads-name-birth-data-requirement] wants one on every metric in
+// a BIRTH or DATA, members included, and Cirrus Link's MQTT Engine fails the
+// whole NBIRTH on a member without one (NPE in updateUdtTag).
+func encodeTemplate(t *Template, ts uint64) (*spb.Payload_Template, error) {
 	et := &spb.Payload_Template{IsDefinition: proto.Bool(t.IsDefinition)}
 	if t.TemplateRef != "" {
 		et.TemplateRef = proto.String(t.TemplateRef)
@@ -291,6 +296,9 @@ func encodeTemplate(t *Template) (*spb.Payload_Template, error) {
 		et.Version = proto.String(t.Version)
 	}
 	for _, m := range t.Metrics {
+		if m.Timestamp == 0 {
+			m.Timestamp = ts
+		}
 		em, err := encodeMetric(m)
 		if err != nil {
 			return nil, err

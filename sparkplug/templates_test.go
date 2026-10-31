@@ -3,6 +3,8 @@ package sparkplug
 import (
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
@@ -108,4 +110,59 @@ func names(ms []Metric) []string {
 		out[i] = m.Name
 	}
 	return out
+}
+
+// TestTemplateMembersTimestamped checks the wire: every metric inside a
+// Template — definition or instance, at every nesting depth — carries a
+// timestamp, the enclosing metric's when it has none of its own. Sparkplug
+// 3.0 [tck-id-payloads-name-birth-data-requirement]; MQTT Engine 5.0.2
+// fails the NBIRTH (NPE in updateUdtTag) on a member without one.
+func TestTemplateMembersTimestamped(t *testing.T) {
+	header := &ir.StructDef{Name: "Header_Type", Fields: []ir.StructField{
+		{Name: "Valid", Type: ir.BoolT},
+	}}
+	plt := &ir.StructDef{Name: "Plt_Type", Fields: []ir.StructField{
+		{Name: "Header", Type: &ir.Type{Kind: ir.TypeStruct, Struct: header}},
+		{Name: "Count", Type: ir.IntT},
+	}}
+	pltVal := ir.Value{Kind: ir.TypeStruct, Struct: plt, Fld: []ir.Value{
+		{Kind: ir.TypeStruct, Struct: header, Fld: []ir.Value{ir.BoolVal(true)}},
+		ir.IntVal(3),
+	}}
+	inst, err := MetricFromValue("TRS", pltVal, "Plt_Type")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.Timestamp = 100
+	// A member's own timestamp wins over the enclosing one.
+	inst.Value.(*Template).Metrics[1].Timestamp = 7
+	ms := []Metric{
+		{Name: "Plt_Type", Datatype: spb.DataType_Template, Timestamp: 100, Value: definitionTemplate(plt)},
+		inst,
+	}
+	b, err := Payload{Timestamp: 100, Metrics: ms}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pb spb.Payload
+	if err := proto.Unmarshal(b, &pb); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(path string, ms []*spb.Payload_Metric)
+	walk = func(path string, ms []*spb.Payload_Metric) {
+		for _, m := range ms {
+			p := path + "/" + m.GetName()
+			want := uint64(100)
+			if p == "/TRS/Count" {
+				want = 7
+			}
+			if m.Timestamp == nil || m.GetTimestamp() != want {
+				t.Errorf("%s timestamp = %v, want %d", p, m.Timestamp, want)
+			}
+			if tv := m.GetTemplateValue(); tv != nil {
+				walk(p, tv.GetMetrics())
+			}
+		}
+	}
+	walk("", pb.GetMetrics())
 }
