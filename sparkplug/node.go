@@ -466,6 +466,15 @@ func (n *Node) connectionLost(c mqtt.Client, e error) {
 		return
 	}
 	n.born = false
+	// The primary host's STATE is per connection: what the dead one heard
+	// says nothing about the broker the next one reaches (a broker
+	// restarted without persistence holds no retained STATE, and the host
+	// reconnects on its own schedule). Forget it, so onConnect waits for a
+	// STATE on the new connection before it births and drains the
+	// store-and-forward backlog (tck-id-message-flow-edge-node-birth-
+	// publish-phid-wait); a retained ONLINE still arrives on subscribe and
+	// births at once. hostTS stays: the timestamp guard spans connections.
+	n.hostOnline = false
 	close(n.lost)
 	n.lost = make(chan struct{})
 	owns := n.ownsClient

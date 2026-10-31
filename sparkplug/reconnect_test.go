@@ -245,3 +245,61 @@ func TestBrokerDropThenHostOfflineDisconnect(t *testing.T) {
 		t.Fatalf("on the host returning: %s bdSeq %d, want NBIRTH bdSeq 2", b.kind, b.bdSeq)
 	}
 }
+
+// A broker restarted without persistence comes back with no retained STATE,
+// and the primary host reconnects on its own schedule. The node must not
+// carry "host online" over from the connection it lost: it waits for a
+// STATE on the new connection before it births
+// (tck-id-message-flow-edge-node-birth-publish-phid-wait), and only then
+// replays its store-and-forward backlog. Before the fix it birthed on the
+// stale flag and drained the backlog into a broker no host was listening
+// on; the host's own reconnect then asked for a rebirth, so the console
+// showed two `born` lines with one bdSeq and the outage's history was gone.
+func TestBrokerDropWaitsForTheHostsStateBeforeBirth(t *testing.T) {
+	addr := testBroker(t)
+	px := linkcut.New(t, addr)
+	events := watchNode(t, addr)
+	setState := stateHost(t, addr)
+	n, rt := startProxiedNode(t, px.Addr(), Config{PrimaryHostID: "ScadaHost"}, WithStoreForward(100))
+
+	setState(true, 1000)
+	if b := nextOf(t, events, "NBIRTH", "NDEATH"); b.kind != "NBIRTH" || b.bdSeq != 0 {
+		t.Fatalf("first message %s bdSeq %d, want NBIRTH bdSeq 0", b.kind, b.bdSeq)
+	}
+	px.Cut()
+	if d := nextOf(t, events, "NBIRTH", "NDEATH"); d.kind != "NDEATH" || d.bdSeq != 0 {
+		t.Fatalf("after the drop: %s bdSeq %d, want NDEATH bdSeq 0", d.kind, d.bdSeq)
+	}
+	// The restart: no retained STATE left (an empty retained payload
+	// clears it), as a broker without persistence comes back.
+	clr := mqtt.NewClient(mqtt.NewClientOptions().AddBroker("tcp://" + addr).
+		SetClientID("state-clear").SetCleanSession(true))
+	if tok := clr.Connect(); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatalf("clear connect: %v", tok.Error())
+	}
+	if tok := clr.Publish("spBv1.0/STATE/ScadaHost", 1, true, []byte{}); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatalf("clear STATE: %v", tok.Error())
+	}
+	clr.Disconnect(50)
+	rt.Tags().Set("LevelSP", ir.RealVal(77))
+	waitFor(t, "the change to buffer", func() bool { return n.Status().StoreForward.Buffered >= 1 })
+
+	px.Restore()
+	waitFor(t, "the reconnect", func() bool { return n.Status().Connected })
+	noneOf(t, events, 500*time.Millisecond, "NBIRTH", "NDATA")
+	if st := n.Status(); st.Born || st.HostOnline || st.StoreForward.Buffered < 1 {
+		t.Fatalf("reconnected with no host: Born=%v HostOnline=%v Buffered=%d, want unborn, offline, still buffered",
+			st.Born, st.HostOnline, st.StoreForward.Buffered)
+	}
+
+	// The host comes back: one birth with the new session's bdSeq, then
+	// the backlog, historical, to a host that is there to hear it.
+	setState(true, 2000)
+	if b := nextOf(t, events, "NBIRTH", "NDEATH"); b.kind != "NBIRTH" || b.bdSeq != 1 {
+		t.Fatalf("after the host returned: %s bdSeq %d, want NBIRTH bdSeq 1", b.kind, b.bdSeq)
+	}
+	ev := nextOf(t, events, "NDATA", "NDEATH", "NBIRTH")
+	if ev.kind != "NDATA" || !ev.historical || ev.level != 77 {
+		t.Fatalf("after the birth: %+v, want the historical LevelSP 77", ev)
+	}
+}
