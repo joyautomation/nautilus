@@ -4,6 +4,7 @@
 		"wet-well": "hmi/src/lib/kinds/wet-well.kind.json",
 		"submersible-pump": "hmi/src/lib/kinds/submersible-pump.kind.json",
 		"float-switch": "hmi/src/lib/kinds/float-switch.kind.json",
+		"float-switch-low": "hmi/src/lib/kinds/float-switch-low.kind.json",
 		"check-valve": "hmi/src/lib/kinds/check-valve.kind.json",
 		"flow-meter": "hmi/src/lib/kinds/flow-meter.kind.json",
 		"force-main": "hmi/src/lib/kinds/force-main.kind.json"
@@ -21,7 +22,7 @@
 	"nodes": [
 		{ "id": "WW101", "kind": "wet-well", "label": "WW-101", "pos": [0, -3, 0], "bind": { "level": "LIT101_Level" } },
 		{ "id": "LSHH101", "kind": "float-switch", "label": "LSHH", "pos": [-0.95, 0, -0.8], "bind": { "tripped": "LSHH101" } },
-		{ "id": "LSLL101", "kind": "float-switch", "label": "LSLL", "pos": [-0.95, -2.42, -0.15], "bind": { "tripped": "LSLL101" } },
+		{ "id": "LSLL101", "kind": "float-switch-low", "label": "LSLL", "pos": [-0.95, -2.42, -0.15], "bind": { "tripped": "LSLL101" } },
 		{ "id": "P101", "kind": "submersible-pump", "label": "P-101", "pos": [-0.5, -3, -0.8], "rot": [0, -90, 0], "bind": { "running": "P101_Running", "speedHz": "P101_SpeedHz" } },
 		{ "id": "P102", "kind": "submersible-pump", "label": "P-102", "pos": [0.5, -3, 0.2], "rot": [0, -90, 0], "bind": { "running": "P102_Running", "speedHz": "P102_SpeedHz" } },
 		{ "id": "CV101", "kind": "check-valve", "label": "CV-101", "pos": [2.2, 0.45, -0.8] },

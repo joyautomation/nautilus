@@ -10,6 +10,6 @@
 </script>
 
 <svg viewBox="0 0 130 24" {width} role="img" aria-label={`flow to ${label}`}>
-	<path d="M 2 4 L 18 12 L 2 20 Z" fill="var(--axis, #383835)" />
+	<path d="M 2 4 L 18 12 L 2 20 Z" fill="var(--edge, #7a7973)" />
 	<text x="24" y="16" font-size="10" font-weight="600" fill="var(--muted, #8a887d)">{label}</text>
 </svg>
