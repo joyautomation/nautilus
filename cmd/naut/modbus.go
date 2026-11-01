@@ -306,7 +306,11 @@ func runModbusBrowse(args []string) int {
 		}
 	}
 
-	addr := net.JoinHostPort(*host, strconv.Itoa(*port))
+	addr, err := browseAddr(*host, *port)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut modbus browse:", err)
+		return 2
+	}
 	ctx := context.Background()
 	cl, err := modbus.Dial(ctx, addr, *timeout)
 	if err != nil {
@@ -671,4 +675,16 @@ func truthy(v any) bool {
 		return x != 0
 	}
 	return false
+}
+
+// browseAddr is the dial address for --host/--port.
+func browseAddr(host string, port int) (string, error) {
+	h, p, err := modbus.SplitHost(host)
+	if err != nil {
+		return "", err
+	}
+	if p == 0 {
+		p = port
+	}
+	return net.JoinHostPort(h, strconv.Itoa(p)), nil
 }

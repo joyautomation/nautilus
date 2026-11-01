@@ -78,7 +78,8 @@ func (s Source) Addr() string {
 	if port == 0 {
 		port = 502
 	}
-	return net.JoinHostPort(s.Host, strconv.Itoa(port))
+	host, _, _ := SplitHost(s.Host) // a hand-written "[::1]" is the bare address
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // TagBinding maps one nautilus tag onto a span of one source's table.

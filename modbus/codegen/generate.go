@@ -221,7 +221,7 @@ func ManifestYAML(m modbus.Manifest, command string) []byte {
 	b.WriteString("sources:\n")
 	for _, s := range m.Sources {
 		fmt.Fprintf(&b, "  - id: %s\n", s.ID)
-		fmt.Fprintf(&b, "    host: %s\n", s.Host)
+		fmt.Fprintf(&b, "    host: %s\n", yamlHost(s.Host))
 		if s.Port != 0 && s.Port != 502 {
 			fmt.Fprintf(&b, "    port: %d\n", s.Port)
 		}

@@ -56,12 +56,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"sort"
-	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/joyautomation/nautilus/modbus"
 )
 
 // DeviceMap is the parsed devices.yaml.
@@ -176,15 +176,16 @@ func ParseDeviceMap(raw []byte) (DeviceMap, error) {
 		in := &dm.Instances[i]
 		// host: 127.0.0.1:5020 carries its port; split it so the driver never
 		// dials host:5020:502 (#426). An explicit port: must agree.
-		if h, ps, err := net.SplitHostPort(in.Host); err == nil {
-			p, perr := strconv.Atoi(ps)
-			switch {
-			case perr != nil || p <= 0 || p > 65535:
-				errs = append(errs, fmt.Errorf("instance %s: host %q has an invalid port", in.ID, in.Host))
-			case in.Port != 0 && in.Port != p:
-				errs = append(errs, fmt.Errorf("instance %s: host %q carries port %d but port: is %d", in.ID, in.Host, p, in.Port))
-			default:
-				in.Host, in.Port = h, p
+		h, p, herr := modbus.SplitHost(in.Host)
+		switch {
+		case herr != nil:
+			errs = append(errs, fmt.Errorf("instance %s: %w", in.ID, herr))
+		case p != 0 && in.Port != 0 && in.Port != p:
+			errs = append(errs, fmt.Errorf("instance %s: host %q carries port %d but port: is %d", in.ID, in.Host, p, in.Port))
+		default:
+			in.Host = h
+			if p != 0 {
+				in.Port = p
 			}
 		}
 		if in.ID == "" {
