@@ -1,6 +1,7 @@
 // builtinComponents.ts is a hand-copy of three tables the extension host
 // cannot import (they live in the browser-side kit and the webview's
-// registry): the kit's BUILTIN_PORTS (hmi/src/lib/mimic.ts), and the
+// registry): the kit's BUILTIN_PORTS (hmi/src/lib/mimic.ts) and built-in
+// set (<Mimic>'s `builtin`, hmi/src/lib/components/Mimic.svelte), and the
 // webview registry's component set and DEMO_PROPS
 // (webview-ui/src/mimic/registry.ts). A copy drifts — #466 moved the kit's
 // default ports onto the parts of each drawing and the host kept the old
@@ -16,6 +17,7 @@ import { BUILTIN_COMPONENT_NAMES, BUILTIN_COMPONENT_PORTS, BUILTIN_DEMO_PROPS } 
 // Compiled to out/; the extension root is one up.
 const EXT = join(__dirname, "..");
 const KIT_MIMIC = join(EXT, "..", "..", "hmi", "src", "lib", "mimic.ts");
+const KIT_MIMIC_SVELTE = join(EXT, "..", "..", "hmi", "src", "lib", "components", "Mimic.svelte");
 const REGISTRY = join(EXT, "webview-ui", "src", "mimic", "registry.ts");
 
 /** The object literal assigned to `export const <name>…= {…};` in a TS
@@ -35,12 +37,34 @@ function literal(src: string, name: string): unknown {
   return new Function(`return (${src.slice(open, end + 1)});`)();
 }
 
+/** The names in a `{ A, B, … }` object shorthand assigned to `const <name>`,
+ * sorted, with any comments inside the braces ignored. */
+function shorthandNames(src: string, name: string): string[] {
+  const m = src.match(new RegExp(`const ${name}\\b[^=]*=\\s*\\{([^}]*)\\}`));
+  assert.ok(m, `no \`const ${name} = { … }\` in the source — the table moved`);
+  return m[1]
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort();
+}
+
+test("shorthandNames ignores comments inside the braces", () => {
+  const src = "const registry = {\n  Tank, // the vessel\n  /* pumps */ Pump,\n  Valve\n};";
+  assert.deepEqual(shorthandNames(src, "registry"), ["Pump", "Tank", "Valve"]);
+});
+
 test("BUILTIN_COMPONENT_NAMES are the webview registry's components", () => {
-  const src = readFileSync(REGISTRY, "utf8");
-  const m = src.match(/export const registry\b[^=]*=\s*\{([^}]*)\}/);
-  assert.ok(m, "no `export const registry = { … }` in registry.ts — the table moved");
-  const names = m[1].split(",").map((s) => s.trim()).filter(Boolean);
-  assert.deepEqual([...BUILTIN_COMPONENT_NAMES].sort(), [...names].sort());
+  assert.deepEqual([...BUILTIN_COMPONENT_NAMES].sort(), shorthandNames(readFileSync(REGISTRY, "utf8"), "registry"));
+});
+
+// The runtime <Mimic>'s own built-in set. LevelTank has default ports in
+// BUILTIN_PORTS but is deliberately not a built-in: it reaches a doc
+// through <Mimic>'s `registry` prop.
+test("BUILTIN_COMPONENT_NAMES are the kit's built-in components (<Mimic>'s `builtin`)", () => {
+  assert.deepEqual([...BUILTIN_COMPONENT_NAMES].sort(), shorthandNames(readFileSync(KIT_MIMIC_SVELTE, "utf8"), "builtin"));
 });
 
 test("BUILTIN_COMPONENT_PORTS match the kit's BUILTIN_PORTS (parts included)", () => {
