@@ -218,7 +218,7 @@ func initialValue(srv *opcserver.Server, item *opcserver.MonitoredItem) {
 		dv = indexRange(dv, rng)
 	}
 	select {
-	case item.Sub.NotifyChannel <- &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: dv}:
+	case item.Sub.NotifyChannel <- &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: wireValue(dv)}:
 	case <-time.After(5 * time.Second):
 	}
 }

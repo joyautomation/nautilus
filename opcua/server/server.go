@@ -520,7 +520,7 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 				continue
 			}
 		}
-		n := &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: told}
+		n := &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: wireValue(told)}
 		select {
 		case item.Sub.NotifyChannel <- n:
 			st.sent, st.dirty, st.last = now, false, mine

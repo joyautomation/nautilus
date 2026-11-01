@@ -31,6 +31,7 @@ func TestForeignAsyncuaClient(t *testing.T) {
 	}
 	rt, _ := newRuntime(t)
 	rt.Tags().Set("Elapsed", ir.TimeVal(1500))
+	rt.Tags().Set("Label", "")
 	if err := rt.Tags().SetPath("P101.Drive.Speed", 1750.5); err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +170,13 @@ func TestForeignAsyncuaClient(t *testing.T) {
 	}
 	if lv, ok := get("Levels", "value").([]any); !ok || len(lv) != 3 || lv[2] != 3.0 {
 		t.Errorf("Levels value %v", get("Levels", "value"))
+	}
+	// An empty String is "" to a decoder that tells it from null (#434).
+	if get("Label", "value") != "" || get("Label", "variant") != "String" {
+		t.Errorf("Label holding \"\" read as %v", get("Label"))
+	}
+	if get("LabelNotified", "value") != "" {
+		t.Errorf("Label holding \"\" notified as %v", get("LabelNotified"))
 	}
 	if get("unknown") != "BadNodeIdUnknown" {
 		t.Errorf("unknown node read: %v", get("unknown"))
