@@ -88,29 +88,39 @@ claims:
       - go ./opcua/server TestNamespaceDescriptionFromTagMeta
       - go ./opcua/server TestForeignAsyncuaClient
 
-  - id: OPC-016
+  - id: OPC-023
     claim: >-
       The server identifies itself as nautilus: every endpoint's
       ApplicationDescription carries ApplicationUri
-      urn:<host name>:joyautomation:nautilus:<project>, which is also the only
-      entry of the Server object's ServerArray, and ProductUri
-      urn:joyautomation:nautilus; ServerStatus.BuildInfo, the BuildInfo
-      variable and its children carry that ProductUri, Joy Automation,
-      Nautilus, the version naut version prints, the build's commit and its
-      date; ServiceLevel reads 255 while the server runs and Auditing false.
+      urn:joyautomation:nautilus:<project> (the name percent-encoded; the
+      same on every host and replica) or the manifest's
+      opcua.application-uri, which naut check refuses unless it is an
+      absolute URI; it is also the only entry of the Server object's
+      ServerArray. ProductUri is urn:joyautomation:nautilus.
+      ServerStatus.BuildInfo, the BuildInfo variable and its children carry
+      that ProductUri, Joy Automation, Nautilus, the version naut version
+      prints, the build's commit and its date. The Server object's variables
+      are the standard node set's, with their standard BrowseNames,
+      DataTypes, ValueRanks and HasComponent hierarchy (BuildInfo's fields
+      under BuildInfo, under ServerStatus); ServiceLevel reads 255 while the
+      server runs and Auditing false.
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestServerObjectDescribesNautilus
+      - go ./opcua/server TestApplicationURIIsStableAndOverridable
       - go ./opcua/server TestBinaryBuildIsNeverThePlaceholder
+      - go ./opcua/internal/uaserver TestApplicationURIOptionWinsOverTheCertificate
+      - go ./internal/project TestOPCUAConfig
       - go ./cmd/naut TestNautRunOPCUAReportsTheCLIVersion
     note: >-
       The tester's 001-F04b-server-identity-mandatory-vars proves everything
-      here except Auditing: it reads i=2268 (ServerCapabilities, an Object)
-      as Auditing, which is i=2994, so it cannot pass until the check is
-      corrected; it stays open under #424 until then. The Go test reads
+      it checks except Auditing: it reads i=2268 (ServerCapabilities, an
+      Object) as Auditing, which is i=2994, so it cannot pass until the check
+      is corrected; it stays open under #424 until then. The Go test reads
       i=2994. The build number and date come from the binary's VCS stamp;
       a binary built without one (-buildvcs=false) has no build number and
-      dates itself by the executable's modification time.
+      dates itself by the executable's modification time. OPC-016 to OPC-022
+      are reserved by docs/design/opcua-server-writes.md.
 
   - id: OPC-004
     claim: >-

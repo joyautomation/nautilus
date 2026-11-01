@@ -13,12 +13,12 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 )
 
 // `naut run`'s OPC UA server reports the CLI's own version, the one
 // `naut version` prints, as ServerStatus.BuildInfo.SoftwareVersion, and
-// advertises the project's ApplicationUri (nautilus#424, black-box F-04).
+// advertises the ApplicationUri the manifest's opcua.application-uri names
+// (nautilus#424, black-box F-04).
 func TestNautRunOPCUAReportsTheCLIVersion(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the CLI")
@@ -47,6 +47,7 @@ server:
   addr: "`+apiAddr+`"
 opcua:
   endpoint: "opc.tcp://`+opcAddr+`"
+  application-uri: urn:example:plant7:ident
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ opcua:
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := opcuaserver.ApplicationURI("ident")
+	want := "urn:example:plant7:ident"
 	for _, ep := range eps {
 		if ep.Server.ApplicationURI != want {
 			t.Errorf("endpoint %s ApplicationUri = %q, want %q", ep.EndpointURL, ep.Server.ApplicationURI, want)

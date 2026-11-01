@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +34,7 @@ func TestServerObjectDescribesNautilus(t *testing.T) {
 	}
 	t.Cleanup(s.Stop)
 	appURI := ApplicationURI("lift-station")
-	if !strings.HasPrefix(appURI, "urn:") || !strings.HasSuffix(appURI, ":joyautomation:nautilus:lift-station") {
+	if appURI != "urn:joyautomation:nautilus:lift-station" {
 		t.Fatalf("ApplicationURI = %q", appURI)
 	}
 
@@ -131,6 +130,71 @@ func TestServerObjectDescribesNautilus(t *testing.T) {
 		t.Errorf("ManufacturerName's BrowseName = %v", b.Value.Value())
 	}
 
+	// The address space is the standard's: BuildInfo's six fields hang
+	// under BuildInfo (they used to hang flat under ServerStatus, with
+	// BuildInfo childless), BuildInfo and the other fields of ServerStatus
+	// under ServerStatus, each by HasComponent and under its standard
+	// BrowseName.
+	children := func(parent uint32, want ...string) {
+		t.Helper()
+		got := browse(t, c, ua.NewNumericNodeID(0, parent))
+		names := make([]string, 0, len(got))
+		for n := range got {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+		slices.Sort(want)
+		if !slices.Equal(names, want) {
+			t.Errorf("i=%d's children %v, want %v", parent, names, want)
+		}
+		for _, r := range got {
+			if r.ReferenceTypeID.IntID() != id.HasComponent {
+				t.Errorf("i=%d → %s by %s, want HasComponent", parent, r.BrowseName.Name, r.ReferenceTypeID)
+			}
+		}
+	}
+	children(id.Server_ServerStatus_BuildInfo, "ProductUri", "ManufacturerName", "ProductName", "SoftwareVersion", "BuildNumber", "BuildDate")
+	children(id.Server_ServerStatus, "StartTime", "CurrentTime", "State", "BuildInfo", "SecondsTillShutdown", "ShutdownReason")
+	for nid, want := range map[uint32]string{
+		id.Server_ServerStatus:                           "ServerStatus",
+		id.Server_ServerStatus_State:                     "State",
+		id.Server_ServerStatus_BuildInfo_ProductURI:      "ProductUri",
+		id.Server_NamespaceArray:                         "NamespaceArray",
+		id.Server_ServerStatus_BuildInfo_SoftwareVersion: "SoftwareVersion",
+	} {
+		if b := read(t, c, ua.NewNumericNodeID(0, nid), ua.AttributeIDBrowseName); b.Status != ua.StatusGood || b.Value.Value().(*ua.QualifiedName).Name != want {
+			t.Errorf("i=%d BrowseName = %v %s, want %s", nid, b.Value.Value(), b.Status, want)
+		}
+		if nc := read(t, c, ua.NewNumericNodeID(0, nid), ua.AttributeIDNodeClass); nc.Value.Value() != int32(ua.NodeClassVariable) {
+			t.Errorf("i=%d NodeClass = %v, want Variable", nid, nc.Value.Value())
+		}
+	}
+	// And each Variable has the DataType and ValueRank the standard gives
+	// it (they answered Bad_AttributeIdInvalid).
+	for nid, want := range map[uint32]struct {
+		dt   uint32
+		rank int32
+	}{
+		id.Server_ServerArray:                       {id.String, 1},
+		id.Server_NamespaceArray:                    {id.String, 1},
+		id.Server_ServerStatus:                      {id.ServerStatusDataType, -1},
+		id.Server_ServerStatus_BuildInfo:            {id.BuildInfo, -1},
+		id.Server_ServerStatus_BuildInfo_ProductURI: {id.String, -1},
+		id.Server_ServerStatus_BuildInfo_BuildDate:  {id.UtcTime, -1},
+		id.Server_ServerStatus_SecondsTillShutdown:  {id.UInt32, -1},
+		id.Server_ServiceLevel:                      {id.Byte, -1},
+		id.Server_Auditing:                          {id.Boolean, -1},
+	} {
+		dt := read(t, c, ua.NewNumericNodeID(0, nid), ua.AttributeIDDataType)
+		if got, ok := dt.Value.Value().(*ua.NodeID); dt.Status != ua.StatusGood || !ok || got.IntID() != want.dt || got.Namespace() != 0 {
+			t.Errorf("i=%d DataType = %v %s, want i=%d", nid, dt.Value.Value(), dt.Status, want.dt)
+		}
+		vr := read(t, c, ua.NewNumericNodeID(0, nid), ua.AttributeIDValueRank)
+		if vr.Status != ua.StatusGood || vr.Value.Value() != want.rank {
+			t.Errorf("i=%d ValueRank = %v %s, want %d", nid, vr.Value.Value(), vr.Status, want.rank)
+		}
+	}
+
 	// The ServerType Mandatory variables.
 	if v := value(id.Server_ServerArray); !slices.Equal(asStrings(v), []string{appURI}) {
 		t.Errorf("ServerArray = %#v, want [%q]", v, appURI)
@@ -145,6 +209,54 @@ func TestServerObjectDescribesNautilus(t *testing.T) {
 
 // Unset, the version is the binary's own (a test binary's module version
 // is "dev" or a pseudo-version), never gopcua's placeholder.
+// The ApplicationUri names the controller, not the machine: the default
+// is the project's, percent-encoded so any project name makes a valid URI
+// (nautilus#424 review: a host name differed between a Deployment's
+// replicas and changed with every pod), and opcua.application-uri
+// replaces it.
+func TestApplicationURIIsStableAndOverridable(t *testing.T) {
+	for name, want := range map[string]string{
+		"lift-station": "urn:joyautomation:nautilus:lift-station",
+		"Lift Station": "urn:joyautomation:nautilus:Lift%20Station",
+		"a/b?c#d":      "urn:joyautomation:nautilus:a%2Fb%3Fc%23d",
+	} {
+		got := ApplicationURI(name)
+		if got != want {
+			t.Errorf("ApplicationURI(%q) = %q, want %q", name, got, want)
+		}
+		if err := CheckApplicationURI(got); err != nil {
+			t.Errorf("ApplicationURI(%q): %v", name, err)
+		}
+	}
+	for _, bad := range []string{"lift-station", "urn:", "urn:lift station", "://x"} {
+		if err := CheckApplicationURI(bad); err == nil {
+			t.Errorf("CheckApplicationURI(%q) passed", bad)
+		}
+	}
+	rt, _ := newRuntime(t)
+	if _, err := New(rt, Options{Name: "x", ApplicationURI: "not a uri"}); err == nil {
+		t.Error("New took a bad ApplicationURI")
+	}
+	s, err := New(rt, Options{Endpoint: "localhost:0", Name: "lift-station", ApplicationURI: "urn:acme:plant7:lift-station"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	eps, err := opcua.GetEndpoints(ctx, s.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range eps {
+		if ep.Server.ApplicationURI != "urn:acme:plant7:lift-station" {
+			t.Errorf("endpoint %s ApplicationUri = %q", ep.EndpointURL, ep.Server.ApplicationURI)
+		}
+	}
+}
+
 func TestBinaryBuildIsNeverThePlaceholder(t *testing.T) {
 	b := binaryBuild()
 	if b.version == "" || b.version == "0.0.0-dev" {

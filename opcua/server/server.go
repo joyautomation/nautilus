@@ -28,6 +28,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime/debug"
@@ -63,6 +64,9 @@ type Options struct {
 	// zero is DefaultSweep. It bounds how late a subscriber hears of a
 	// change, and is the MinimumSamplingInterval the server advertises.
 	Sweep time.Duration
+	// ApplicationURI is the server's ApplicationUri (Part 4 §7.1); empty is
+	// ApplicationURI(Name). It must be an absolute URI (CheckApplicationURI).
+	ApplicationURI string
 }
 
 // Server serves one runtime's tag store over OPC UA.
@@ -104,7 +108,22 @@ func New(rt *runtime.Runtime, o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if o.ApplicationURI == "" {
+		o.ApplicationURI = ApplicationURI(o.Name)
+	} else if err := CheckApplicationURI(o.ApplicationURI); err != nil {
+		return nil, err
+	}
 	return &Server{rt: rt, opts: o, host: host, port: port}, nil
+}
+
+// CheckApplicationURI is `naut check`'s test of opcua.application-uri: an
+// absolute URI (a scheme, then something), with no spaces.
+func CheckApplicationURI(uri string) error {
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme == "" || (u.Opaque == "" && u.Host == "" && u.Path == "") || strings.ContainsAny(uri, " \t\n") {
+		return fmt.Errorf("opcua.application-uri: %q must be an absolute URI, such as urn:example:lift-station", uri)
+	}
+	return nil
 }
 
 // ParseEndpoint splits an "opc.tcp://host:port" (or bare "host:port")
@@ -168,7 +187,7 @@ func (s *Server) Start(ctx context.Context) error {
 	opts := []opcserver.Option{
 		opcserver.EndPoint(listen, port),
 		opcserver.ServerName("Nautilus · " + s.opts.Name),
-		opcserver.ApplicationURI(ApplicationURI(s.opts.Name)),
+		opcserver.ApplicationURI(s.opts.ApplicationURI),
 		opcserver.ManufacturerName("Joy Automation"),
 		opcserver.ProductName("Nautilus"),
 		opcserver.ProductURI(ProductURI),
@@ -241,17 +260,19 @@ func (s *Server) SetSoftwareVersion(v string) {
 // and ServerStatus.BuildInfo.ProductUri.
 const ProductURI = "urn:joyautomation:nautilus"
 
-// ApplicationURI is the ApplicationUri of the server for project name on
-// this machine, urn:<host name>:joyautomation:nautilus:<project>: unique
-// per controller instance (Part 4 §7.1), and stable across restarts, so
+// ApplicationURI is the default ApplicationUri of the server for project
+// name: urn:joyautomation:nautilus:<project>, the project name
+// percent-encoded so any name makes a valid URI ("Lift Station" is
+// Lift%20Station). It names the controller, not the machine it runs on:
+// it is the same after a restart, on a new host, and on every replica of a
+// cluster Deployment, whose pods have generated host names but one
+// Service address and (with secure endpoints) one shared certificate, so
 // a client that keys its connection on it (a historian, a SCADA gateway)
-// finds the same server again.
+// finds the same server whichever replica answers. Two separate
+// controllers running a project of the same name on one network should
+// each set opcua.application-uri.
 func ApplicationURI(name string) string {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "localhost"
-	}
-	return "urn:" + host + ":joyautomation:nautilus:" + name
+	return "urn:joyautomation:nautilus:" + url.PathEscape(name)
 }
 
 // build is what ServerStatus.BuildInfo says about the binary.

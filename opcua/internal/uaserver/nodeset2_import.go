@@ -3,6 +3,8 @@ package uaserver
 import (
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 
 	"github.com/gopcua/opcua/schema"
 	"github.com/gopcua/opcua/ua"
@@ -21,7 +23,59 @@ func (srv *Server) ImportNodeSet(nodes *schema.UANodeSet) error {
 	if err != nil {
 		return fmt.Errorf("problem creating references: %w", err)
 	}
+	srv.variableTypesImportNodeSet(nodes)
 	return nil
+}
+
+// variableTypesImportNodeSet gives each Variable the DataType, ValueRank
+// and ArrayDimensions its node set declares (Part 3 §5.6.2: Mandatory on
+// every Variable). gopcua's import left them out, so a Read of them on a
+// standard variable answered Bad_AttributeIdInvalid. It runs after the
+// references: a ReferenceDescription built by AddRef takes its
+// TypeDefinition from DataType() when the target has one, and these
+// targets' TypeDefinition must stay their HasTypeDefinition.
+//
+// The node set omits ValueRank when it is -1 (Scalar), and the schema
+// reads an omitted attribute as 0; no Variable in the standard node set
+// declares ValueRank 0 (only two VariableTypes do), so 0 here is -1.
+func (srv *Server) variableTypesImportNodeSet(nodes *schema.UANodeSet) {
+	aliases := make(map[string]string)
+	for _, a := range nodes.Aliases.Alias {
+		aliases[a.AliasAttr] = a.Value
+	}
+	for _, v := range nodes.UAVariable {
+		n := srv.Node(ua.MustParseNodeID(v.NodeIdAttr))
+		if n == nil {
+			continue
+		}
+		dt := v.DataTypeAttr
+		if a, ok := aliases[dt]; ok {
+			dt = a
+		}
+		if dt == "" {
+			dt = "i=24" // BaseDataType, the attribute's default
+		}
+		if nid, err := ua.ParseNodeID(dt); err == nil {
+			n.attr[ua.AttributeIDDataType] = DataValueFromValue(nid)
+		}
+		rank := int32(v.ValueRankAttr)
+		if rank == 0 {
+			rank = -1
+		}
+		n.attr[ua.AttributeIDValueRank] = DataValueFromValue(rank)
+		if rank > 0 {
+			dims := make([]uint32, rank)
+			for i, d := range strings.Split(v.ArrayDimensionsAttr, ",") {
+				if i >= len(dims) {
+					break
+				}
+				if u, err := strconv.ParseUint(strings.TrimSpace(d), 10, 32); err == nil {
+					dims[i] = uint32(u)
+				}
+			}
+			n.attr[ua.AttributeIDArrayDimensions] = DataValueFromValue(dims)
+		}
+	}
 }
 
 func (srv *Server) namespacesImportNodeSet(nodes *schema.UANodeSet) error {

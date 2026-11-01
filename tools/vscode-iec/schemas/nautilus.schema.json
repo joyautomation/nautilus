@@ -720,6 +720,10 @@
           "type": "string",
           "default": "opc.tcp://localhost:4840",
           "description": "Listen address, opc.tcp://host:port (or host:port). Defaults to loopback: use opc.tcp://0.0.0.0:4840 to serve every interface."
+        },
+        "application-uri": {
+          "type": "string",
+          "description": "The server's ApplicationUri, the name an OPC UA client keys its connection on: an absolute URI. Defaults to urn:joyautomation:nautilus:<project>, the same on every host and replica; set it when two controllers run a project of the same name on one network."
         }
       }
     },

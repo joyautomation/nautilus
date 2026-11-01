@@ -37,20 +37,22 @@ func EndPoint(host string, port int) Option {
 	}
 }
 
-// Certificate sets the client X509 certificate in the secure channel configuration
-// and also detects and sets the ApplicationURI from the URI within the certificate
+// Certificate sets the server's X509 certificate in the secure channel
+// configuration, and the ApplicationURI from the URI in the certificate
+// unless an ApplicationURI option sets it, in either order: the explicit
+// option wins, and a certificate whose URI differs is the caller's to
+// refuse (Part 4 §7.1 has them match).
 func Certificate(cert []byte) Option {
 	return func(s *serverConfig) {
 		s.certificate = cert
-
-		// Extract the application URI from the certificate.
-		var appURI string
+		if s.explicitURI {
+			return
+		}
+		s.applicationURI = ""
 		x509cert, err := uapolicy.ParseCertificate(cert)
 		if err == nil && len(x509cert.URIs) > 0 {
-			appURI = x509cert.URIs[0].String()
+			s.applicationURI = x509cert.URIs[0].String()
 		}
-
-		s.applicationURI = appURI
 	}
 }
 
@@ -150,12 +152,13 @@ func SoftwareVersion(name string) Option {
 
 // ApplicationURI sets the server's ApplicationUri: the globally unique
 // name of this server instance (Part 4 §7.1), advertised in every
-// endpoint's ApplicationDescription and as the first entry of the Server
-// object's ServerArray. A Certificate option given after this one
-// replaces it with the URI in the certificate, which must match it.
+// endpoint's ApplicationDescription and as the only entry of the Server
+// object's ServerArray. It wins over the URI a Certificate option reads
+// from its certificate, whichever comes first.
 func ApplicationURI(uri string) Option {
 	return func(s *serverConfig) {
 		s.applicationURI = uri
+		s.explicitURI = true
 	}
 }
 

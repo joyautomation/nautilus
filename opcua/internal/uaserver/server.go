@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/schema"
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
@@ -62,6 +61,9 @@ type serverConfig struct {
 	privateKey     *rsa.PrivateKey
 	certificate    []byte
 	applicationURI string
+	// explicitURI: applicationURI came from the ApplicationURI option, and
+	// a Certificate option leaves it alone.
+	explicitURI bool
 
 	endpoints []string
 
@@ -167,14 +169,6 @@ func New(opts ...Option) *Server {
 	}
 	s.ImportNodeSet(&nodes)
 
-	s.namespaces[0].AddNode(CurrentTimeNode())
-	s.namespaces[0].AddNode(NamespacesNode(s))
-	for _, n := range ServerStatusNodes(s, s.namespaces[0].Node(ua.NewNumericNodeID(0, id.Server))) {
-		s.namespaces[0].AddNode(n)
-	}
-	for _, n := range ServerCapabilitiesNodes(s) {
-		s.namespaces[0].AddNode(n)
-	}
 	setServerObjectValues(s)
 
 	return s
