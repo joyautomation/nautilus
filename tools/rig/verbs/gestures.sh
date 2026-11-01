@@ -54,7 +54,9 @@
 #         gesture, broken in 0.11.1 — see the content repo's
 #         ex01-lift-station/GESTURE-FINDINGS.md)
 #   Ports component_edit_ports <Component> · component_add_port <name>
+#         component_set_port_dir <name> <dir|auto>
 #         component_move_port <name> <dx> <dy>   (drag the dot)
+#         (all in the component preview pane, beside the mimic)
 #   assert_file_contains <file> <ERE>         save, then grep
 #   LD+   ld_select_node · ld_add_contact_after · ld_wrap_branch · ld_add_leg
 #         ld_toggle_nc · ld_retag_fb_args · ld_edit_fb_args · ld_retag_placeholder
@@ -1516,7 +1518,7 @@ PY
 # under a beat's `set -euo pipefail` kills the beat instead of returning a
 # failure `g_err` could report, so the READ is retried, not the crash caught.
 # Every verb built on it — mimic_ids, mimic_eq_el, mimic_drop, mimic_bind(_at),
-# mimic_pipe(_direct), component_edit_ports — inherits the tolerance.
+# mimic_pipe(_direct) — inherits the tolerance.
 _mimic_json() {
   local f=$G_FILE i
   [[ $f == /* ]] || f=$PROJ/$f
@@ -1693,83 +1695,235 @@ PY2
 }
 
 # ── Component ports ─────────────────────────────────────────────────────────
+# "Nautilus: Edit Component Ports…" opens the COMPONENT PREVIEW PANE
+# (componentPreview.ts; webview PreviewApp.svelte + PortsPanel.svelte) beside
+# the active editor — the sidecar "Component Editor" these verbs drove first
+# is gone (#409). The pane renders the component, draws its ports over the
+# render as <circle class="port" data-id="<name>"> in `.stage svg.ports`, and
+# lists them in the ports panel: one `.row[data-kind=port]` per port (name
+# input, x/y readout, exit-direction <select>, ✕) and "+ Add port". The dots
+# take the pointer only in Ports mode (the header's "ports on/off" toggle).
+#
+# A built-in (Pump, Tank, …) renders from the kit with the kit's default
+# ports until the FIRST edit writes them all, plus the edit, to
+# {Name}.component.json next to the project's mimic: right after opening
+# there is no sidecar at all. The host writes the sidecar itself (a
+# WorkspaceEdit, saved since no tab shows the file), so each verb's READ
+# polls the file a beat after the gesture.
+#
+# The pane opens BESIDE the mimic editor, and the two webviews are the same
+# size and the same extension: every cdp question these verbs ask is sent to
+# the pane by its content (WEBVIEW_HAS, cdp.js), not to the largest webview.
+_COMP_PANE='header [data-kind=ports-toggle]'
+_COMP_ROWS='doc.querySelectorAll(".row[data-kind=port]")'
+_COMP_DOTS='doc.querySelectorAll(".stage svg.ports circle.port")'
 
-# component_edit_ports <Component> — "Nautilus: Edit Component Ports…",
-# pick the component: its *.component.json opens in the Component Editor
-# (created, prefilled with the built-in's default ports, if there is none).
-component_edit_ports() {
-  local comp=$1
-  G_WHAT="edit ports of $comp"
-  vs_cmd "Nautilus: Edit Component Ports" 2
-  g_type "$comp"; sleep 0.8; g_key Return
-  wait_js 'doc.querySelector(".stage .canvas, button.addbtn")' 15 || { g_err "the Component Editor did not open for $comp"; return 1; }
-  G_FILE=$(find "$PROJ" -name "$comp.component.json" -not -path '*/node_modules/*' | head -1)
-  [[ -n $G_FILE ]] || { g_err "no $comp.component.json was written"; return 1; }
-  sleep 1
+# _comp_sidecar — the open component's (G_COMP) sidecar, once one exists.
+_comp_sidecar() { find "$PROJ" -name "$G_COMP.component.json" -not -path '*/node_modules/*' 2>/dev/null | head -1; }
+
+# _comp_ports_mode — the header toggle on (Ports mode), if it is not already.
+_comp_ports_mode() {
+  js_true 'doc.querySelector("header [data-kind=ports-toggle].on")' && return 0
+  click_el "doc.querySelector('$_COMP_PANE')" || return 1
+  wait_js 'doc.querySelector("header [data-kind=ports-toggle].on")' 3 || { g_err "Ports mode did not turn on"; return 1; }
 }
 
-# component_add_port <name> — the ports panel's "+ Add port" (a new port at
-# a free slot on the outline), then its name field.
-component_add_port() {
-  local name=$1 n0
-  G_WHAT="port $name"
-  n0=$(js 'doc.querySelectorAll("input.nx-input.name").length')
-  click_button "+ Add port" || return 1
-  wait_js "doc.querySelectorAll('input.nx-input.name').length > $n0" 5 || { g_err "no new port row"; return 1; }
-  click_el '[...doc.querySelectorAll("input.nx-input.name")].pop()' || return 1
-  g_key ctrl+a; g_type "$name"; g_key Return; sleep 1
-  g_save
-  python3 - "$G_FILE" "$name" <<'PY' || { g_err "$(basename "$G_FILE") has no port $name"; return 1; }
+# _comp_measure — what the pane shows, as one JSON object, in WINDOW pixels:
+# the render's box (svg.ports), each named part of the drawing (the first
+# [data-part] of each name, as hmi's partRect measures it), each port dot's
+# centre, and each port's explicit exit direction from the panel ("" = auto).
+_comp_measure() {
+  local box names dots dirs pnames prects
+  box=$(el_box 'doc.querySelector(".stage svg.ports")') || { g_err "no ports overlay on the pane's render"; return 1; }
+  names=$(js "[...$_COMP_DOTS].map(c => c.dataset.id)")
+  dots=$(cdp rects "$_COMP_DOTS" 2>/dev/null) || true
+  dirs=$(js "Object.fromEntries([...$_COMP_ROWS].map(r => [r.dataset.id, r.querySelector('select')?.value ?? '']))")
+  pnames=$(js '[...new Set([...doc.querySelectorAll(".stage .box [data-part]")].map(e => e.getAttribute("data-part")))]')
+  prects=$(cdp rects "$pnames.map(n => doc.querySelector('.stage .box [data-part=\"' + n + '\"]'))" 2>/dev/null) || true
+  python3 - "$box" "$names" "$dots" "$dirs" "$pnames" "$prects" <<'PY'
 import json, sys
-sys.exit(0 if any(p.get("name") == sys.argv[2] for p in json.load(open(sys.argv[1])).get("ports", [])) else 1)
+box, names, dots, dirs, pnames, prects = sys.argv[1:7]
+rect = lambda l: [float(v) for v in l.split()[:4]]
+centre = lambda r: [r[0] + r[2] / 2, r[1] + r[3] / 2]
+names, pnames = json.loads(names), json.loads(pnames)
+dots = [centre(rect(l)) for l in dots.splitlines() if l.strip()]
+prects = [rect(l) for l in prects.splitlines() if l.strip()]
+print(json.dumps({"box": rect(box), "parts": dict(zip(pnames, prects)), "dots": dict(zip(names, dots)), "dirs": json.loads(dirs)}))
 PY
 }
 
-# component_move_port <name> <dx> <dy> — in the Component Editor (after
-# component_edit_ports), drag port <name>'s dot <dx>,<dy> WINDOW pixels.
-# ComponentApp.svelte: pointerdown on the dot captures the pointer, the
-# move tracks it as a fraction of the component's box (clamped to [0, 1]:
-# a port can sit inside the box, never outside), and the release commits
-# the whole port list through the same op as the ports panel.
-# Read back from the saved *.component.json: the port's x/y moved by about
-# the drag (as a fraction of the box's on-screen size, clamped), every
-# other port is unchanged, and an explicit `dir` (the direction a pipe
-# leaves the port) survives the move, as it does in the mimic editor's
-# ports mode (EditorCanvas.svelte) and the arrow-key nudge (nudgePort).
-component_move_port() {
-  local name=$1 dx=$2 dy=$3 dot before b bx by bw bh v p px py i
-  G_WHAT="move port $name by $dx,$dy"
-  [[ -n ${G_FILE:-} && $G_FILE == *.component.json ]] || { g_err "no Component Editor open (component_edit_ports first)"; return 1; }
-  dot="[...doc.querySelectorAll('circle.port')].find(c => c.dataset.id === $(_q "$name"))"
-  js_true "$dot" || { g_err "no port dot $name"; return 1; }
-  b=$(el_box 'doc.querySelector(".canvas .box")') || { g_err "no component box on the stage"; return 1; }
-  read -r bx by bw bh v <<<"$b"
+# component_edit_ports <Component> — "Nautilus: Edit Component Ports…",
+# pick the component: the preview pane opens on it, its ports drawn on the
+# render and listed in the panel (G_COMP names it for the verbs below).
+# READ: with a sidecar on disk, the pane shows exactly its ports; without
+# one, the pane says it shows the kit's defaults, and opening wrote nothing.
+component_edit_ports() {
+  local comp=$1 shown
+  local -x WEBVIEW_HAS=$_COMP_PANE
+  G_WHAT="edit ports of $comp"
+  vs_cmd "Nautilus: Edit Component Ports" 2
+  g_type "$comp"; sleep 0.8; g_key Return
+  wait_js "doc.querySelector('header .title')?.textContent.trim() === $(_q "$comp") && doc.querySelector('.stage svg.ports') && $_COMP_DOTS.length === $_COMP_ROWS.length" 15 \
+    || { g_err "the component preview pane did not open on $comp"; return 1; }
+  G_COMP=$comp
+  G_FILE=$(_comp_sidecar)
+  shown=$(js "[...$_COMP_ROWS].map(r => r.dataset.id)")
+  if [[ -n $G_FILE ]]; then
+    python3 - "$G_FILE" "$shown" <<'PY' >"$HOME/.g-why" || { g_err "$(cat "$HOME/.g-why")"; return 1; }
+import json, sys
+own = [p["name"] for p in json.load(open(sys.argv[1])).get("ports") or []]
+shown = json.loads(sys.argv[2])
+if own != shown: print(f"the pane shows ports {shown}, the sidecar has {own}"); sys.exit(1)
+PY
+  else
+    js_true '[...doc.querySelectorAll(".ports-panel .note")].some(n => /default ports/.test(n.textContent))' \
+      || { g_err "no $comp.component.json, yet the pane does not say it shows the kit's default ports (ports: $shown)"; return 1; }
+    sleep 1
+    [[ -z $(_comp_sidecar) ]] || { g_err "opening the pane wrote $comp.component.json before any edit"; return 1; }
+  fi
+}
+
+# component_add_port <name> — the ports panel's "+ Add port" (a new port at
+# a free slot on the outline, auto-named), then its name field: type, Enter.
+# READ: the sidecar (created by this first edit, for a built-in) has every
+# port the pane showed before, in order, plus <name>, and nothing else.
+component_add_port() {
+  local name=$1 before n0 i
+  local -x WEBVIEW_HAS=$_COMP_PANE
+  G_WHAT="port $name"
+  [[ -n ${G_COMP:-} ]] || { g_err "no component preview pane open (component_edit_ports first)"; return 1; }
+  before=$(js "[...$_COMP_ROWS].map(r => r.dataset.id)")
+  n0=$(js "$_COMP_ROWS.length")
+  click_button "+ Add port" || return 1
+  wait_js "$_COMP_ROWS.length > $n0" 5 || { g_err "no new port row"; return 1; }
+  click_el "[...doc.querySelectorAll('.row[data-kind=port] input.name')].pop()" || return 1
+  g_key ctrl+a; g_type "$name"; g_key Return; sleep 1
   g_save
-  before=$(cat "$G_FILE")
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    G_FILE=$(_comp_sidecar)
+    [[ -n $G_FILE ]] && python3 - "$G_FILE" "$before" "$name" <<'PY' >"$HOME/.g-why" && return 0
+import json, sys
+after = [p.get("name") for p in json.load(open(sys.argv[1])).get("ports") or []]
+before, name = json.loads(sys.argv[2]), sys.argv[3]
+if after != before + [name]: print(f"the sidecar's ports are {after}, not {before + [name]}"); sys.exit(1)
+PY
+    [[ -n $G_FILE ]] || echo "no $G_COMP.component.json was written" >"$HOME/.g-why"
+    sleep 1
+  done
+  g_err "$(cat "$HOME/.g-why")"
+}
+
+# component_set_port_dir <name> <left|right|up|down|auto> — the port row's
+# exit-direction <select> (the direction a pipe leaves the port; "auto"
+# clears it back to what the port's position implies). Focused from the
+# row's name field with Tab, then stepped with Up/Down: a closed <select>
+# takes the arrows without opening its popup (as _sfc_pick does).
+# READ: the sidecar's port has that `dir` (none for auto), the same x/y/part.
+component_set_port_dir() {
+  local name=$1 dir=$2 want row cur idx before i
+  local -x WEBVIEW_HAS=$_COMP_PANE
+  G_WHAT="dir of port $name → $dir"
+  [[ -n ${G_COMP:-} ]] || { g_err "no component preview pane open (component_edit_ports first)"; return 1; }
+  [[ $dir == auto ]] && want= || want=$dir
+  row="[...$_COMP_ROWS].find(r => r.dataset.id === $(_q "$name"))"
+  js_true "$row" || { g_err "no port row $name"; return 1; }
+  before=$(cat "$(_comp_sidecar)" 2>/dev/null || echo '{}')
+  click_el "$row.querySelector('input.name')" || return 1
+  g_key Tab; g_key Tab
+  wait_js "doc.activeElement === $row.querySelector('select')" 3 || { g_err "Tab did not reach port $name's direction select"; return 1; }
+  read -r cur idx <<<"$(js "(() => { const s = $row.querySelector('select'); return s.selectedIndex + ' ' + [...s.options].map(o => o.value).indexOf($(_q "$want")); })()" | tr -d '"')"
+  (( idx >= 0 )) || { g_err "no direction '$dir' in the select"; return 1; }
+  while (( cur < idx )); do g_key Down; ((cur++)); done
+  while (( cur > idx )); do g_key Up; ((cur--)); done
+  sleep 1
+  g_save
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    G_FILE=$(_comp_sidecar)
+    [[ -n $G_FILE ]] && python3 - "$G_FILE" "$before" "$name" "$want" <<'PY' >"$HOME/.g-why" && return 0
+import json, sys
+after = {p["name"]: p for p in json.load(open(sys.argv[1])).get("ports") or []}
+before = {p["name"]: p for p in json.loads(sys.argv[2]).get("ports") or []}
+name, want = sys.argv[3], sys.argv[4] or None
+if name not in after: print(f"port {name} is not in the sidecar"); sys.exit(1)
+if after[name].get("dir") != want: print(f"port {name}'s dir is {after[name].get('dir', 'absent')}, not {want or 'absent'}"); sys.exit(1)
+if name in before:
+    moved = [k for k in ("x", "y", "part") if before[name].get(k) != after[name].get(k)]
+    if moved: print(f"setting the dir also changed port {name}'s {', '.join(moved)}"); sys.exit(1)
+PY
+    [[ -n $G_FILE ]] || echo "no $G_COMP.component.json was written" >"$HOME/.g-why"
+    sleep 1
+  done
+  g_err "$(cat "$HOME/.g-why")"
+}
+
+# component_move_port <name> <dx> <dy> — in the preview pane (after
+# component_edit_ports), Ports mode on, drag port <name>'s dot <dx>,<dy>
+# WINDOW pixels. PreviewApp.svelte: pointerdown on the dot captures the
+# pointer; the move tracks it as a fraction of the part of the drawing under
+# it (dropPort: the smallest [data-part] there, which the port then names
+# as its `part`), or of the whole box off every part, clamped to [0, 1];
+# the release commits the whole port list (movePort keeps everything else
+# the port carries, an explicit `dir` included — #130).
+# READ, from the saved sidecar and the pane's own measurements: the port,
+# resolved through the frame it names (its part, or the box), sits where the
+# drag let go (clamped into that frame); a named part is under the drop
+# point, and a part-less port was dropped on no part; every other port is
+# where its dot was before, with the same dir; an explicit `dir` survived.
+component_move_port() {
+  local name=$1 dx=$2 dy=$3 dot m0 m1 p px py i
+  local -x WEBVIEW_HAS=$_COMP_PANE
+  G_WHAT="move port $name by $dx,$dy"
+  [[ -n ${G_COMP:-} ]] || { g_err "no component preview pane open (component_edit_ports first)"; return 1; }
+  dot="[...$_COMP_DOTS].find(c => c.dataset.id === $(_q "$name"))"
+  js_true "$dot" || { g_err "no port dot $name"; return 1; }
+  _comp_ports_mode || return 1
+  m0=$(_comp_measure) || return 1
   p=$(el_at "$dot") || { g_err "port $name is not on screen"; return 1; }
   read -r px py <<<"$p"
   g_drag "$px" "$py" $((px + dx)) $((py + dy))
   sleep 1
-  for i in 1 2 3; do
-    g_save
-    python3 - "$G_FILE" "$before" "$name" "$dx" "$dy" "$bw" "$bh" <<'PY' >"$HOME/.g-why" && return 0
+  g_save
+  for i in 1 2 3 4 5 6; do
+    G_FILE=$(_comp_sidecar)
+    m1=$(_comp_measure) || return 1
+    [[ -n $G_FILE ]] && python3 - "$G_FILE" "$m0" "$m1" "$name" $((px + dx)) $((py + dy)) <<'PY' >"$HOME/.g-why" && return 0
 import json, sys
-after = json.load(open(sys.argv[1])).get("ports", [])
-before = json.loads(sys.argv[2]).get("ports", [])
-name, dx, dy, bw, bh = sys.argv[3], *map(float, sys.argv[4:8])
-b = {p["name"]: p for p in before}; a = {p["name"]: p for p in after}
-if name not in a: print(f"port {name} is gone from the sidecar"); sys.exit(1)
-p0, p1 = b[name], a[name]
-clamp = lambda v: max(0.0, min(1.0, v))
-ex, ey = clamp(p0["x"] + dx / bw), clamp(p0["y"] + dy / bh)
-tol = lambda d, s: 0.02 + abs(d / s) * 0.15
-if abs(p1["x"] - ex) > tol(dx, bw) or abs(p1["y"] - ey) > tol(dy, bh):
-    print(f"port {name} is at {p1['x']},{p1['y']}, not ≈ {ex:.3f},{ey:.3f} (was {p0['x']},{p0['y']})"); sys.exit(1)
-others = [n for n in b if n != name and b[n] != a.get(n)]
-if others: print(f"the drag changed other ports too: {', '.join(others)}"); sys.exit(1)
-if "dir" in p0 and p1.get("dir") != p0["dir"]:
-    print(f"the move dropped port {name}'s dir \"{p0['dir']}\" (now {p1.get('dir', 'absent')}): x/y moved to {p1['x']},{p1['y']}"); sys.exit(1)
+after = {p["name"]: p for p in json.load(open(sys.argv[1])).get("ports") or []}
+m0, m1 = json.loads(sys.argv[2]), json.loads(sys.argv[3])
+name, drop = sys.argv[4], (float(sys.argv[5]), float(sys.argv[6]))
+TOL, SLOP = 4.0, 12.0   # window px: rounding + the drag's last step; the part hit's slop
+if set(after) != set(m0["dots"]):
+    print(f"the drag changed which ports there are: {sorted(m0['dots'])} → {sorted(after)}"); sys.exit(1)
+def frame(p):
+    if p.get("part"):
+        if p["part"] not in m1["parts"]: print(f"port {p['name']} names part {p['part']!r}, which the render does not have"); sys.exit(1)
+        return m1["parts"][p["part"]]
+    return m1["box"]
+def at(p):
+    f = frame(p); return (f[0] + p["x"] * f[2], f[1] + p["y"] * f[3])
+inside = lambda f, q, s: f[0] - s <= q[0] <= f[0] + f[2] + s and f[1] - s <= q[1] <= f[1] + f[3] + s
+p1 = after[name]; f = frame(p1)
+want = (min(max(drop[0], f[0]), f[0] + f[2]), min(max(drop[1], f[1]), f[1] + f[3]))
+got = at(p1)
+if abs(got[0] - want[0]) > TOL or abs(got[1] - want[1]) > TOL:
+    print(f"port {name} ({p1}) lands at {got[0]:.0f},{got[1]:.0f}, not at the drop {want[0]:.0f},{want[1]:.0f}"); sys.exit(1)
+if p1.get("part") and not inside(f, drop, SLOP):
+    print(f"port {name} anchored to part {p1['part']}, but the drop {drop} is not on it ({f})"); sys.exit(1)
+if not p1.get("part"):
+    on = [n for n, r in m1["parts"].items() if inside(r, drop, -1)]
+    if on: print(f"port {name} was dropped on part {on[0]} but anchors to the box"); sys.exit(1)
+for n, q in after.items():
+    if n == name: continue
+    g, w = at(q), m0["dots"][n]
+    if abs(g[0] - w[0]) > TOL or abs(g[1] - w[1]) > TOL:
+        print(f"the drag moved port {n} too: {w[0]:.0f},{w[1]:.0f} → {g[0]:.0f},{g[1]:.0f}"); sys.exit(1)
+    if (q.get("dir") or "") != m0["dirs"].get(n, ""):
+        print(f"the drag changed port {n}'s dir: {m0['dirs'].get(n) or 'auto'} → {q.get('dir') or 'auto'}"); sys.exit(1)
+d0 = m0["dirs"].get(name, "")
+if d0 and p1.get("dir") != d0:
+    print(f"the move dropped port {name}'s dir \"{d0}\" (now {p1.get('dir', 'absent')}): {p1}"); sys.exit(1)
 PY
+    [[ -n $G_FILE ]] || echo "no $G_COMP.component.json was written" >"$HOME/.g-why"
     sleep 1
   done
   g_err "$(cat "$HOME/.g-why")"

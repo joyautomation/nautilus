@@ -30,6 +30,10 @@
 // The active webview is the largest visible <iframe class="webview"> in the
 // workbench — with one editor group (ed_open_diagram guarantees it), that is
 // the diagram. WEBVIEW_MATCH=<substring> picks by the iframe's src instead.
+// WEBVIEW_HAS=<css selector> picks the largest visible webview whose content
+// document has that element: two webviews side by side (the mimic editor and
+// the component preview pane beside it) are the same size and the same
+// extension, so neither size nor src tells them apart.
 
 const PORT = process.env.CDP_PORT || '9229';
 // launch_vscode grabs from inside the CSD shadow margin; xdotool's
@@ -102,14 +106,22 @@ async function activeWebview(ts) {
 					vis: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' };
 			}).filter((f) => f.vis && f.src.includes(${JSON.stringify(match)}));
 			fr.sort((a, b) => b.w * b.h - a.w * a.h);
-			return { dpr: window.devicePixelRatio, frame: fr[0] || null, n: fr.length };
+			return { dpr: window.devicePixelRatio, frames: fr, n: fr.length };
 		})()`
 	);
-	if (!info.frame) throw new Error('no visible webview');
-	const id = new URL(info.frame.src).searchParams.get('id');
-	const cands = ts.filter((t) => t.type === 'iframe' && t.url.includes(id));
-	if (!cands.length) throw new Error('no CDP target for webview ' + id + ' (is VS Code started with --remote-debugging-port?)');
-	return { ...info, target: cands[0] };
+	if (!info.frames.length) throw new Error('no visible webview');
+	const has = process.env.WEBVIEW_HAS || '';
+	for (const frame of info.frames) {
+		const id = new URL(frame.src).searchParams.get('id');
+		const cands = ts.filter((t) => t.type === 'iframe' && t.url.includes(id));
+		if (!cands.length) {
+			if (has) continue;
+			throw new Error('no CDP target for webview ' + id + ' (is VS Code started with --remote-debugging-port?)');
+		}
+		if (has && !(await evalIn(cands[0], wrap(`!!doc.querySelector(${JSON.stringify(has)})`)).catch(() => false))) continue;
+		return { dpr: info.dpr, n: info.n, frame, target: cands[0] };
+	}
+	throw new Error('no visible webview has ' + has);
 }
 
 // Evaluate `body` with `doc` = the webview CONTENT document (the inner
