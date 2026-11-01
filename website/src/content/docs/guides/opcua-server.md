@@ -114,7 +114,9 @@ was declared as.
 | `ARRAY [..] OF` a scalar | an array of the element's type |
 
 An integer that does not fit its declared width — which a declared variable
-never produces — is sent as `Int64` rather than wrapped.
+never produces — is sent as `Int64` rather than wrapped. A `STRING` holding
+`''` is sent as an empty `String`, never a null one, alone or in an array, so
+a client that tells the two apart reads back the `''` the project holds.
 
 ## Quality and timestamps
 

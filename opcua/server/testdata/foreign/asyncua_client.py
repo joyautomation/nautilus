@@ -109,6 +109,17 @@ async def main(url, folder_name):
         pumps = await children_by_name(tags["Pumps"])
         report["Pumps"] = sorted(pumps)
 
+        # Label holds "": an empty String on the wire, which asyncua decodes
+        # as "", not a null one, which it decodes as None — by Read and by
+        # subscription (#434).
+        label = tags["Label"]
+        report["Label"] = describe(await label.read_data_value())
+        labels = Changes()
+        label_sub = await client.create_subscription(50, labels)
+        await label_sub.subscribe_data_change(label)
+        report["LabelNotified"] = await asyncio.wait_for(labels.queue.get(), 10)
+        await label_sub.delete()
+
         # A node that does not exist.
         try:
             await client.get_node(ua.NodeId("Nope", idx)).read_value()

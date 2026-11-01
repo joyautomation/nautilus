@@ -313,7 +313,7 @@ func readAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Resp
 		if n.IndexRange != "" {
 			dv = indexRange(dv, n.IndexRange)
 		}
-		results[i] = dv
+		results[i] = wireValue(dv) // "" as an empty String, not null (#434)
 	}
 	return &ua.ReadResponse{ResponseHeader: header(req.RequestHeader), Results: results}, nil
 }

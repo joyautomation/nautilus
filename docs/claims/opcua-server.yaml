@@ -93,10 +93,17 @@ claims:
       Each node's DataType is the declared IEC type: BOOL Boolean, the eight
       integer widths their OPC UA integer, an enumeration Int32, REAL/LREAL
       Double, TIME Duration in milliseconds, STRING String, and an array of
-      scalars an array of the element type.
+      scalars an array of the element type. A STRING holding '' is sent as an
+      empty String, not a null one, alone or in an array, by Read and by
+      subscription.
     source: "#types"
     tests:
       - go ./tools/blackbox TestBlackbox/001-P-type-table
+      - go ./tools/blackbox TestBlackbox/001-F37-empty-string-is-null
+      - go ./opcua/server TestEmptyStringIsReadAsEmptyNotNull
+      - go ./opcua/server TestEmptyStringIsNotifiedAsEmptyNotNull
+      - go ./opcua/server TestEmptyStringOfAServerNodeIsReadAsEmpty
+      - go ./opcua/server TestWireStringSurvivesTheEncoder
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestEveryIntegerWidthReadsAsItsOwnType
       - go ./opcua/server TestDataTypeFollowsTheDeclaredWidth

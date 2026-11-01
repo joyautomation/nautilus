@@ -851,7 +851,6 @@ checks:
   note: 'papercut. A String set to "" (HTTP says "") reads over OPC UA as a null String (None); in an array
     too. asyncua decodes '''' and null apart (control: evidence/scripts/asyncua-empty-string-control.py).'
   group: new findings of this run
-  open: '#434'
 - id: 001-P-monitoreditem-indexrange-edges
   run: 2026-10-24-001d
   pass: a monitored item's IndexRange is judged and applied as Read's — NoData on a scalar, Invalid when malformed; a String item hears its substring only when it changes; three items on one array each hear only their own slice; Disabled -> Reporting hears the slice; NamespaceArray '0' is a one-element slice
