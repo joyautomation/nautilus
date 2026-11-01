@@ -1714,12 +1714,30 @@ PY2
 # The pane opens BESIDE the mimic editor, and the two webviews are the same
 # size and the same extension: every cdp question these verbs ask is sent to
 # the pane by its content (WEBVIEW_HAS, cdp.js), not to the largest webview.
+# WEBVIEW_HAS is local to each verb; G_COMP and G_FILE (the sidecar) are not,
+# so a diagram verb after these needs ed_open_diagram again first.
 _COMP_PANE='header [data-kind=ports-toggle]'
 _COMP_ROWS='doc.querySelectorAll(".row[data-kind=port]")'
 _COMP_DOTS='doc.querySelectorAll(".stage svg.ports circle.port")'
 
 # _comp_sidecar — the open component's (G_COMP) sidecar, once one exists.
 _comp_sidecar() { find "$PROJ" -name "$G_COMP.component.json" -not -path '*/node_modules/*' 2>/dev/null | head -1; }
+
+# _comp_wait_dir <port> <dir|""> — poll (10 s) until the sidecar's <port>
+# has that exit direction ("" = none).
+_comp_wait_dir() {
+  local i f
+  for ((i = 0; i < 40; i++)); do
+    f=$(_comp_sidecar)
+    [[ -n $f ]] && python3 - "$f" "$1" "$2" <<'PY' 2>/dev/null && return 0
+import json, sys
+ps = {p["name"]: p for p in json.load(open(sys.argv[1])).get("ports") or []}
+sys.exit(0 if sys.argv[2] in ps and (ps[sys.argv[2]].get("dir") or "") == sys.argv[3] else 1)
+PY
+    sleep 0.25
+  done
+  return 1
+}
 
 # _comp_ports_mode — the header toggle on (Ports mode), if it is not already.
 _comp_ports_mode() {
@@ -1817,7 +1835,8 @@ PY
 # exit-direction <select> (the direction a pipe leaves the port; "auto"
 # clears it back to what the port's position implies). Focused from the
 # row's name field with Tab, then stepped with Up/Down: a closed <select>
-# takes the arrows without opening its popup (as _sfc_pick does).
+# takes the arrows without opening its popup (as _sfc_pick does). Every
+# step is a save; the verb waits for each to land before the next key.
 # READ: the sidecar's port has that `dir` (none for auto), the same x/y/part.
 component_set_port_dir() {
   local name=$1 dir=$2 want row cur idx before i
@@ -1833,9 +1852,14 @@ component_set_port_dir() {
   wait_js "doc.activeElement === $row.querySelector('select')" 3 || { g_err "Tab did not reach port $name's direction select"; return 1; }
   read -r cur idx <<<"$(js "(() => { const s = $row.querySelector('select'); return s.selectedIndex + ' ' + [...s.options].map(o => o.value).indexOf($(_q "$want")); })()" | tr -d '"')"
   (( idx >= 0 )) || { g_err "no direction '$dir' in the select"; return 1; }
-  while (( cur < idx )); do g_key Down; ((cur++)); done
-  while (( cur > idx )); do g_key Up; ((cur--)); done
-  sleep 1
+  # Each step is an edit the pane saves (the whole ports list): wait for the
+  # sidecar to show it before the next key, so the steps reach the file one
+  # at a time, in order, as a person stepping through the list would see them.
+  while (( cur != idx )); do
+    if (( cur < idx )); then g_key Down; ((cur++)); else g_key Up; ((cur--)); fi
+    _comp_wait_dir "$name" "$(js "$row.querySelector('select').value" | tr -d '"')" \
+      || { g_err "step $cur of port $name's direction select did not reach the sidecar"; return 1; }
+  done
   g_save
   for i in 1 2 3 4 5 6 7 8 9 10; do
     G_FILE=$(_comp_sidecar)
@@ -1868,9 +1892,10 @@ PY
 # resolved through the frame it names (its part, or the box), sits where the
 # drag let go (clamped into that frame); a named part is under the drop
 # point, and a part-less port was dropped on no part; every other port is
-# where its dot was before, with the same dir; an explicit `dir` survived.
+# exactly its saved record (or, before any sidecar, where its dot was with
+# the same dir); an explicit `dir` survived.
 component_move_port() {
-  local name=$1 dx=$2 dy=$3 dot m0 m1 p px py i
+  local name=$1 dx=$2 dy=$3 dot m0 m1 p px py i before
   local -x WEBVIEW_HAS=$_COMP_PANE
   G_WHAT="move port $name by $dx,$dy"
   [[ -n ${G_COMP:-} ]] || { g_err "no component preview pane open (component_edit_ports first)"; return 1; }
@@ -1878,6 +1903,7 @@ component_move_port() {
   js_true "$dot" || { g_err "no port dot $name"; return 1; }
   _comp_ports_mode || return 1
   m0=$(_comp_measure) || return 1
+  before=$(cat "$(_comp_sidecar)" 2>/dev/null || echo '{}')
   p=$(el_at "$dot") || { g_err "port $name is not on screen"; return 1; }
   read -r px py <<<"$p"
   g_drag "$px" "$py" $((px + dx)) $((py + dy))
@@ -1886,11 +1912,12 @@ component_move_port() {
   for i in 1 2 3 4 5 6; do
     G_FILE=$(_comp_sidecar)
     m1=$(_comp_measure) || return 1
-    [[ -n $G_FILE ]] && python3 - "$G_FILE" "$m0" "$m1" "$name" $((px + dx)) $((py + dy)) <<'PY' >"$HOME/.g-why" && return 0
+    [[ -n $G_FILE ]] && python3 - "$G_FILE" "$m0" "$m1" "$name" $((px + dx)) $((py + dy)) "$before" <<'PY' >"$HOME/.g-why" && return 0
 import json, sys
 after = {p["name"]: p for p in json.load(open(sys.argv[1])).get("ports") or []}
 m0, m1 = json.loads(sys.argv[2]), json.loads(sys.argv[3])
 name, drop = sys.argv[4], (float(sys.argv[5]), float(sys.argv[6]))
+saved = {p["name"]: p for p in json.loads(sys.argv[7]).get("ports") or []}
 TOL, SLOP = 4.0, 12.0   # window px: rounding + the drag's last step; the part hit's slop
 if set(after) != set(m0["dots"]):
     print(f"the drag changed which ports there are: {sorted(m0['dots'])} → {sorted(after)}"); sys.exit(1)
@@ -1914,6 +1941,12 @@ if not p1.get("part"):
     if on: print(f"port {name} was dropped on part {on[0]} but anchors to the box"); sys.exit(1)
 for n, q in after.items():
     if n == name: continue
+    # With a sidecar before the drag, every other port is exactly the record
+    # it was; without one (the kit's defaults on screen), it is where its dot
+    # was, with the same dir.
+    if saved:
+        if q != saved.get(n): print(f"the drag changed port {n} too: {saved.get(n)} → {q}"); sys.exit(1)
+        continue
     g, w = at(q), m0["dots"][n]
     if abs(g[0] - w[0]) > TOL or abs(g[1] - w[1]) > TOL:
         print(f"the drag moved port {n} too: {w[0]:.0f},{w[1]:.0f} → {g[0]:.0f},{g[1]:.0f}"); sys.exit(1)

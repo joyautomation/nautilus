@@ -15,7 +15,10 @@ const PORTS = () => [{ name: 'in', x: 0, y: 0.5 }, { name: 'out', x: 1, y: 0.5 }
 const DOC = () => ({ component: 'Tank', builtin: true, ports: PORTS() });
 // The same, with an explicit exit direction on `out` (regression for #130).
 const DOC_DIR = () => ({ component: 'Tank', builtin: true, ports: [{ name: 'in', x: 0, y: 0.5 }, { name: 'out', x: 1, y: 0.5, dir: 'up' }] });
-const echo = (ports) => ({ type: 'previewDoc', component: 'Tank', builtin: true, sidecar: 'harness.component.json', hasSidecar: true, ports });
+// The host's previewDoc. After a ports write it carries `ack`: the seq of
+// the previewSetPorts it confirms (a previewDoc for any other reason — a
+// text undo, a hand edit — carries none).
+const echo = (ports, ack) => ({ type: 'previewDoc', component: 'Tank', builtin: true, sidecar: 'harness.component.json', hasSidecar: true, ports, ...(ack === undefined ? {} : { ack }) });
 
 /** Ports mode starts off; its header toggle turns the dots into handles. */
 async function portsOn(ed) {
@@ -47,7 +50,7 @@ test('P01 component: dragging a port dot posts the port at its new fraction, and
 		assert.ok(Math.abs(ops[0][0].x - 0.75) < 0.01 && ops[0][0].y === 0, JSON.stringify(ops[0][0]));
 		assert.deepEqual(ops[0][1], { name: 'out', x: 1, y: 0.5 }, 'the other port is untouched');
 		// The host echoes the new doc back; the dot renders at the new spot.
-		await ed.deliver(echo(ops[0]));
+		await ed.deliver(echo(ops[0], 1));
 		await sleepMs(150);
 		const moved = (await dots(ed))[0];
 		assert.ok(Math.abs(moved.cx - tx) < 2 && Math.abs(moved.cy - ty) < 2, JSON.stringify({ moved, tx, ty }));
@@ -134,7 +137,7 @@ test('P07 component: redo — keys post nothing; the dot follows the doc the hos
 		await sleepMs(150);
 		const [edited] = await previewOps(ed);
 		assert.ok(Math.abs(edited[0].x - 0.5) < 0.01 && edited[0].y === 0);
-		await ed.deliver(echo(edited));
+		await ed.deliver(echo(edited, 1));
 		await sleepMs(100);
 		const atEdit = (await dots(ed))[0];
 		await ed.resetOps();
@@ -186,7 +189,7 @@ test('P08 component: a port dropped on a part of the drawing anchors to that par
 		const moved = ops[0][0];
 		assert.equal(moved.part, 'vessel', JSON.stringify(moved));
 		assert.ok(Math.abs(moved.x - 0.5) < 0.02 && Math.abs(moved.y - 0.5) < 0.02, JSON.stringify(moved));
-		await ed.deliver(echo(ops[0]));
+		await ed.deliver(echo(ops[0], 1));
 		await sleepMs(150);
 		const dot = (await dots(ed))[0];
 		assert.ok(Math.abs(dot.cx - tx) < 2 && Math.abs(dot.cy - ty) < 2, JSON.stringify({ dot, tx, ty }));
@@ -209,15 +212,22 @@ test('P01 component: in a narrow pane, a dot dragged toward the right edge lands
 		await portsOn(ed);
 		const box = await boxRect(ed);
 		const seal = (await dots(ed))[1];
-		const tx = box.x + box.w * 0.8;
+		// Nearly to the right edge: the readout beside the dot then reaches
+		// well past the stage, whatever spare room the stage has.
+		const tx = box.x + box.w * 0.98;
 		const ty = box.y + box.h * 0.3;
 		await ed.b.mouseDown(seal.cx, seal.cy);
 		for (let i = 1; i <= 10; i++) await ed.b.mouseMove(seal.cx + ((tx - seal.cx) * i) / 10, seal.cy + ((ty - seal.cy) * i) / 10);
 		await sleepMs(100);
 		const during = await boxRect(ed);
-		// the readout still shows, beside the pointer, while dragging
+		const stage = JSON.parse(
+			await ed.b.eval(`(() => { const s = document.querySelector('.stage'); return JSON.stringify({ sw: s.scrollWidth, cw: s.clientWidth, sh: s.scrollHeight, ch: s.clientHeight }); })()`)
+		);
+		assert.ok(stage.sw <= stage.cw && stage.sh <= stage.ch, 'the drag gives the stage nothing to scroll: ' + JSON.stringify(stage));
+		// the readout still shows, beside the pointer, while dragging (the
+		// pane's own one: PortsPanel's rows carry a span.coord too)
 		const tag = await ed.b.eval(
-			`(() => { const e = document.querySelector('.coord'); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, text: e.textContent.trim() }; })()`
+			`(() => { const e = document.querySelector('.pane > .coord'); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, text: e.textContent.trim() }; })()`
 		);
 		assert.ok(tag && /^0\.\d+, 0\.\d+$/.test(tag.text) && Math.abs(tag.x - tx - 10) < 3 && Math.abs(tag.y - ty + 20) < 3, 'readout beside the pointer: ' + JSON.stringify({ tag, tx, ty }));
 		await ed.b.mouseUp(tx, ty);
@@ -237,6 +247,43 @@ test('P01 component: in a narrow pane, a dot dragged toward the right edge lands
 			Math.abs(moved.x - fx) < 0.01 && Math.abs(moved.y - fy) < 0.01,
 			'the port lands at the release point: ' + JSON.stringify({ moved, fx, fy })
 		);
+		assert.deepEqual(exceptions(ed), []);
+	});
+});
+
+// Every ports edit posts the whole list and the host confirms each with a
+// previewDoc read back from the sidecar. Two quick edits (a dir stepped
+// twice from the keyboard, a rename right after a drag) put two writes in
+// flight; the confirmation of the FIRST can arrive after the second edit,
+// and it must not put the first edit's list back on screen — the next
+// edit would be built from it and silently undo the second.
+test('P09 component: a late confirmation of an earlier edit does not revert a newer one', async () => {
+	await withPreview(DOC(), async (ed) => {
+		const sel = `document.querySelectorAll('.row[data-kind=port] select')[1]`;
+		const down = () => ed.b.pressKey('ArrowDown', { code: 'ArrowDown', keyCode: 40 });
+		await ed.b.eval(`${sel}.focus(), true`);
+		await down(); // out: auto -> left   (edit 1)
+		await sleepMs(80);
+		await down(); // out: left -> right  (edit 2)
+		await sleepMs(80);
+		const ops = await previewOps(ed);
+		assert.deepEqual(ops.map((o) => o[1].dir), ['left', 'right'], JSON.stringify(ops));
+		// the host's confirmation of edit 1, late
+		await ed.deliver(echo(ops[0], 1));
+		await sleepMs(120);
+		assert.equal(await ed.b.eval(`${sel}.value`), 'right', 'the late confirmation of edit 1 put its dir back on screen');
+		await down(); // right -> up   (edit 3, built from what is on screen)
+		await sleepMs(80);
+		const after = await previewOps(ed);
+		assert.equal(after.length, 3, JSON.stringify(after));
+		assert.equal(after[2][1].dir, 'up', 'edit 3 was built from the stale list: ' + JSON.stringify(after[2]));
+		// once every edit is confirmed, the host's list is the truth again
+		await ed.deliver(echo(after[2], 3));
+		await sleepMs(120);
+		assert.equal(await ed.b.eval(`${sel}.value`), 'up');
+		await ed.deliver(echo(PORTS()));
+		await sleepMs(120);
+		assert.equal(await ed.b.eval(`${sel}.value`), '', 'a previewDoc with no edit in flight (a text undo) applies');
 		assert.deepEqual(exceptions(ed), []);
 	});
 });

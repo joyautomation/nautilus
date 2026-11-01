@@ -250,7 +250,7 @@ export class ComponentPreview implements vscode.Disposable {
       if (this.buildDebounce) clearTimeout(this.buildDebounce);
       if (this.docDebounce) clearTimeout(this.docDebounce);
     });
-    this.panel.webview.onDidReceiveMessage((msg: { type?: string; props?: unknown; ports?: unknown; message?: unknown }) => {
+    this.panel.webview.onDidReceiveMessage((msg: { type?: string; props?: unknown; ports?: unknown; seq?: unknown; message?: unknown }) => {
       switch (msg?.type) {
         case "previewLog":
           logPreview(`pane: ${String(msg.message)}`);
@@ -265,7 +265,7 @@ export class ComponentPreview implements vscode.Disposable {
           void this.writeProps(msg.props);
           return;
         case "previewSetPorts":
-          void this.writePorts(msg.ports);
+          void this.writePorts(msg.ports, typeof msg.seq === "number" ? msg.seq : undefined);
           return;
         case "openSidecar":
           void this.openSidecar();
@@ -284,7 +284,9 @@ export class ComponentPreview implements vscode.Disposable {
     this.docDebounce = setTimeout(() => void this.postDoc(), DOC_DEBOUNCE_MS);
   }
 
-  private async postDoc(): Promise<void> {
+  /** `ack`: the seq of the pane's ports write this doc confirms (read after
+   * that write), so the pane can tell it from an older re-read. */
+  private async postDoc(ack?: number): Promise<void> {
     const target = this.target;
     if (!this.panel || !target) return;
     const sidecar = await sidecarLocation(this.index, target.uri, target.name);
@@ -307,6 +309,7 @@ export class ComponentPreview implements vscode.Disposable {
       props,
       ports,
       portsInherited: inherited,
+      ...(ack === undefined ? {} : { ack }),
     });
   }
 
@@ -326,13 +329,18 @@ export class ComponentPreview implements vscode.Disposable {
 
   /** The ports overlay's edit: the whole list to the sidecar's `ports`
    * key, the same path the standalone *.component.json editor and the
-   * mimic editor's ports mode take. */
-  private async writePorts(ports: unknown): Promise<void> {
+   * mimic editor's ports mode take. Always answered with a previewDoc
+   * carrying `seq` as its `ack` — written, refused or failed — since the
+   * pane holds off the host's ports while an edit of its own is unconfirmed. */
+  private async writePorts(ports: unknown, seq?: number): Promise<void> {
     const target = this.target;
-    if (!target || !validatePortList(ports)) return;
-    const res = await writeComponentPortsEdit(this.index, target.uri, target.name, ports);
-    if (!res.ok && res.error) void vscode.window.showWarningMessage(`nautilus: ${res.error}`);
-    void this.postDoc();
+    try {
+      if (!target || !validatePortList(ports)) return;
+      const res = await writeComponentPortsEdit(this.index, target.uri, target.name, ports);
+      if (!res.ok && res.error) void vscode.window.showWarningMessage(`nautilus: ${res.error}`);
+    } finally {
+      void this.postDoc(seq);
+    }
   }
 
   private async openSidecar(): Promise<void> {

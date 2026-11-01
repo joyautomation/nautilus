@@ -295,6 +295,10 @@ vt component_add_port PASS component_add_port seal
 vt component_move_port PASS component_move_port seal 60 50
 vt component_set_port_dir PASS component_set_port_dir out up
 vt component_move_port-dir PASS component_move_port out -50 40
+# The component verbs leave G_COMP and G_FILE on Pump's sidecar (WEBVIEW_HAS
+# is local to each of them). A mimic verb added after this point must open
+# its diagram again first (ed_open_diagram resets G_FILE).
+G_COMP= G_FILE=
 
 # ── the files, as saved, and what the compiler makes of them ────────────────
 mkdir -p "$OUT_DIR/verbs-files"

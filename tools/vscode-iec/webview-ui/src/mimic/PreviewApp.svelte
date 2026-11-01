@@ -62,6 +62,12 @@
 	let ports = $state<Port[]>([]);
 	/** The ports shown are the kit's defaults (no sidecar `ports` yet). */
 	let portsInherited = $state(false);
+	/** Ports writes posted / confirmed by the host (previewDoc `ack`), for
+	 * the component last shown — see the previewDoc handler. Plain lets: they
+	 * gate what is rendered, they are not rendered. */
+	let portsSent = 0;
+	let portsAcked = 0;
+	let shownComponent = '';
 	/** Generation of the bundle currently mounted; keys the island. */
 	let version = $state(0);
 	let building = $state(false);
@@ -93,6 +99,7 @@
 				props?: Record<string, unknown>;
 				ports?: Port[];
 				portsInherited?: boolean;
+				ack?: number;
 				src?: string;
 				version?: number;
 				building?: boolean;
@@ -105,8 +112,25 @@
 				hasSidecar = !!m.hasSidecar;
 				builtin = !!m.builtin;
 				props = m.props ?? {};
-				ports = m.ports ?? [];
-				portsInherited = !!m.portsInherited;
+				// The host confirms each ports write with a previewDoc carrying
+				// its seq (`ack`). While an edit of ours is still unconfirmed, a
+				// previewDoc's ports are older than what is on screen — the
+				// confirmation of an EARLIER edit, or a re-read that raced the
+				// write — and taking them would put that older list back, and
+				// the next edit would be built from it (a dir stepped twice from
+				// the keyboard landed on the wrong value). The previewDoc that
+				// confirms the latest edit is read after its write: from there
+				// on the host's list is the truth again (a text undo, a hand
+				// edit of the sidecar). A new component starts over.
+				if (typeof m.ack === 'number') portsAcked = Math.max(portsAcked, m.ack);
+				if ((m.component ?? '') !== shownComponent) {
+					shownComponent = m.component ?? '';
+					portsSent = portsAcked = 0;
+				}
+				if (portsAcked >= portsSent) {
+					ports = m.ports ?? [];
+					portsInherited = !!m.portsInherited;
+				}
 				drag = null;
 				if (selected !== null && selected >= ports.length) selected = null;
 			} else if (m?.type === 'previewBundle' && m.src && m.version) {
@@ -281,7 +305,7 @@
 	 * the dot lands where it was dropped without waiting on the round trip. */
 	function commitPorts(next: Port[]) {
 		ports = next.map(roundPort);
-		vscode.postMessage({ type: 'previewSetPorts', ports: $state.snapshot(ports) });
+		vscode.postMessage({ type: 'previewSetPorts', ports: $state.snapshot(ports), seq: ++portsSent });
 	}
 	function portDown(e: PointerEvent, i: number) {
 		if (!portsMode || e.button !== 0) return;
@@ -650,9 +674,6 @@
 		display: grid;
 		place-items: center;
 		padding: 24px;
-		/* a scrollbar that comes and goes (zoomed past the pane) must not
-		   re-centre the render under a dragged dot */
-		scrollbar-gutter: stable both-edges;
 		background-color: var(--nx-bg);
 		background-image: radial-gradient(var(--nx-border) 1px, transparent 1px);
 		background-size: 16px 16px;
