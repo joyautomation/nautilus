@@ -63,8 +63,8 @@ func wireVariant(v *ua.Variant) *ua.Variant {
 }
 
 // emptyAsZero is val with each "" in it an Int32 0, and whether there was
-// any: a string, or a slice of them (the encoder walks nested slices, so
-// one of a multi-dimensional array works too).
+// any: a string, a slice of them, or a slice of those (a multi-dimensional
+// array), whose levels stay slices so the encoder walks into them.
 func emptyAsZero(val any) (any, bool) {
 	switch x := val.(type) {
 	case string:
@@ -87,12 +87,30 @@ func emptyAsZero(val any) (any, bool) {
 	if rv.Kind() != reflect.Slice {
 		return val, false
 	}
-	out, found := make([]any, rv.Len()), false
-	for i := range out {
-		e, ok := emptyAsZero(rv.Index(i).Interface())
-		out[i], found = e, found || ok
+	// A level above the strings: each element converted, gathered in a
+	// slice of the converted type ([][]any for a [][]string), never in a
+	// []any. The encoder walks into an element only when its kind is
+	// Slice, and an element of a []any is an Interface: it would write
+	// nothing for it.
+	if rv.Len() == 0 {
+		return val, false
 	}
-	return out, found
+	elems, found := make([]any, rv.Len()), false
+	for i := range elems {
+		e, ok := emptyAsZero(rv.Index(i).Interface())
+		elems[i], found = e, found || ok
+	}
+	// Every level is converted, found or not, so that sibling elements
+	// share a type ([]string always becomes []any above).
+	typ := reflect.TypeOf(elems[0])
+	out := reflect.MakeSlice(reflect.SliceOf(typ), len(elems), len(elems))
+	for i, e := range elems {
+		if reflect.TypeOf(e) != typ {
+			return val, false // a ragged shape the encoder could not write either
+		}
+		out.Index(i).Set(reflect.ValueOf(e))
+	}
+	return out.Interface(), found
 }
 
 // withValue is a copy of v with its unexported value replaced by val; its
@@ -134,6 +152,14 @@ func selfTest() (ok bool) {
 		}
 		return b
 	}
+	// A two-dimensional array is what gopcua writes for it with the one
+	// null length an empty one.
+	grid := [][]string{{"a", "b"}, {"", "c"}}
+	plain, err := ua.MustVariant(grid).Encode()
+	if err != nil {
+		return false
+	}
 	return bytes.Equal(encode(""), []byte{0x0c, 0, 0, 0, 0}) &&
-		bytes.Equal(encode([]string{"", "b"}), []byte{0x8c, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 'b'})
+		bytes.Equal(encode([]string{"", "b"}), []byte{0x8c, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 'b'}) &&
+		bytes.Equal(encode(grid), bytes.Replace(plain, []byte{0xff, 0xff, 0xff, 0xff}, []byte{0, 0, 0, 0}, 1))
 }

@@ -113,6 +113,26 @@ func TestWireStringSurvivesTheEncoder(t *testing.T) {
 			t.Errorf("%#v: the original Variant now holds %#v", tc.v, v.Value())
 		}
 	}
+	// A two-dimensional array: the same bytes gopcua writes for it, with
+	// the one null length an empty one. (Nothing of ours holds one yet; a
+	// node of gopcua's, or a written value, may.)
+	for _, grid := range []any{
+		[][]string{{"", "a"}, {"b", "c"}},
+		[][]string{{"a", "b"}, {"c", ""}},
+		[][][]string{{{"a"}, {"b"}}, {{""}, {"d"}}},
+	} {
+		plain, err := ua.MustVariant(grid).Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := bytes.Replace(plain, []byte{0xff, 0xff, 0xff, 0xff}, []byte{0, 0, 0, 0}, 1)
+		if got, err := wireVariant(ua.MustVariant(grid)).Encode(); err != nil || !bytes.Equal(got, want) {
+			t.Errorf("%#v: encoded % x (%v), want % x", grid, got, err, want)
+		}
+	}
+	if in := ua.MustVariant([][]string{{"a"}, {"b"}}); wireVariant(in) != in {
+		t.Errorf("a grid with no \"\" was copied")
+	}
 	// Values with no "" in them, and values of other types, are passed on
 	// as they are, not copied.
 	for _, v := range []any{"x", []string{"a", "b"}, []string{}, 3.5, int32(0), []byte{}} {
