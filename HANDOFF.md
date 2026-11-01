@@ -85,6 +85,7 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
 - `sparkplug-host.md` — the host application driver. **Built** (PR #6, merged 2026-09-10).
 - `modbus.md` — the Modbus TCP driver. **Built** (PR #8); generic port of the brief the driver was written against.
 - `spatial-hmi.md` — the 3D HMI package (`hmi-3d/`, `examples/spatial-rig`). **Milestone 1 built** (PR #65); panel-PC measurement open.
+- `context-map.md` — the bounded contexts, the import rules between them (checked by `internal/contextmap`), a draft core/supporting/generic split, and the glossary. **Proposal.** A brief names its context in one line (§6).
 
 ## Gotchas
 
