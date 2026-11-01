@@ -164,7 +164,7 @@ func TestSchemaDriverTypesAreImplemented(t *testing.T) {
 			t.Errorf("schema offers driver type %q but the loader does not recognise it", typ)
 		}
 	}
-	_, err := buildDriver(fstest.MapFS{}, DriverConfig{Type: "opcua"})
+	_, err := buildDriver(fstest.MapFS{}, DriverConfig{Type: "bacnet"})
 	if err == nil || !strings.Contains(err.Error(), unknown) {
 		t.Errorf("loader accepted a driver type the schema's enum does not offer: %v", err)
 	}
@@ -274,6 +274,29 @@ func TestSchemaRequiresWhatLoaderRequires(t *testing.T) {
 		t.Fatal("loader accepted a modbus driver with no manifest")
 	}
 	requires(t, "driver(modbus)", driverRequires(t, "modbus"), "manifest")
+
+	// opcua-client needs an endpoint and a manifest; opcua.New never
+	// dials either, so a complete config builds with no server in sight.
+	opcuaFS := fstest.MapFS{"opcua_manifest.yaml": &fstest.MapFile{Data: []byte(
+		"namespaces: [\"http://opcfoundation.org/UA/\", \"urn:x\"]\ntags:\n" +
+			"  - {name: T, nodeid: \"ns=1;s=T\", namespace: \"urn:x\", type: Double}\n")}}
+	opcuaCfg := DriverConfig{Type: "opcua-client", Endpoint: "opc.tcp://192.0.2.1:4840", Manifest: "opcua_manifest.yaml"}
+	if _, err := buildDriver(opcuaFS, opcuaCfg); err != nil {
+		t.Fatalf("a complete opcua driver must build offline: %v", err)
+	}
+	for _, key := range []string{"endpoint", "manifest"} {
+		cfg := opcuaCfg
+		switch key {
+		case "endpoint":
+			cfg.Endpoint = ""
+		case "manifest":
+			cfg.Manifest = ""
+		}
+		if _, err := buildDriver(opcuaFS, cfg); err == nil {
+			t.Fatalf("loader accepted an opcua driver with no %s", key)
+		}
+		requires(t, "driver(opcua-client)", driverRequires(t, "opcua-client"), key)
+	}
 
 	// The IT-hardware drivers: same contract as modbus — every check is
 	// offline (New never dials), manifest is the one required key. The

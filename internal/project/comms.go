@@ -4,6 +4,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
 	"github.com/joyautomation/nautilus/prom"
@@ -40,6 +41,7 @@ import (
 //	───────────────  ───────  ─────────────────────────────────────────
 //	modbus           comms    reads init/zero; <source>__Online
 //	eip              comms    reads init/zero; <driver name>__Online
+//	opcua-client     comms    reads init/zero; <driver name>__Online
 //	sparkplug-host   comms    reads init/zero; <site>__Online (+ device)
 //	snmp             comms    reads init/zero; <source>__Online
 //	redfish          comms    reads init/zero; <source>__Online
@@ -62,7 +64,7 @@ import (
 // manifest loader) are not.
 func commsDriver(d nio.Driver) bool {
 	switch d.(type) {
-	case *modbus.Driver, *eip.Driver, *sphost.Driver,
+	case *modbus.Driver, *eip.Driver, *sphost.Driver, *opcua.Driver,
 		*snmp.Driver, *redfish.Driver, *prom.Driver:
 		return true
 	case *plcnext.Driver, *optommp.Driver, *replay.Driver, *nio.Memory:

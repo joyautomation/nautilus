@@ -57,6 +57,8 @@ sparkplug/host       Sparkplug B host application driver + `naut sparkplug
                      import|browse|tags` codegen (TCK host profile in CI)
 modbus/              Modbus TCP driver: wire, codec, block planner, per-source polling,
                      in-process slave, codegen for `naut modbus import|browse|serve|tags`
+opcua/               OPC UA client driver (gopcua): manifest, session, polled reads per
+                     scan class, quality, browse + codegen for `naut opcua import|browse|tags`
 opcua/server         OPC UA server (gopcua for the protocol, our own NameSpace over the tag
                      store): browse/read/subscribe, read-only; `opcua:` in the manifest
 opcua/internal/uaserver  the server stack under it: gopcua v0.9.1's server package, copied
@@ -84,6 +86,7 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
 - `alarms.md` — the alarm subsystem. **Built** (see 2026-08-22 below).
 - `sparkplug-host.md` — the host application driver. **Built** (PR #6, merged 2026-09-10).
 - `modbus.md` — the Modbus TCP driver. **Built** (PR #8); generic port of the brief the driver was written against.
+- `opcua-client.md` — the OPC UA client driver (`driver: {type: opcua-client}`). **Built**, preview; tested against gopcua's server only. The dependency decision (gopcua) is in §1 so it is not re-argued.
 - `spatial-hmi.md` — the 3D HMI package (`hmi-3d/`, `examples/spatial-rig`). **Milestone 1 built** (PR #65); panel-PC measurement open.
 - `context-map.md` — the bounded contexts, the import rules between them (checked by `internal/contextmap`), a draft core/supporting/generic split, and the glossary. **Proposal.** A brief names its context in one line (§6).
 

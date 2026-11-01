@@ -8,6 +8,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/opcua"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
@@ -66,6 +67,8 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 		return []func() server.DriverStatus{func() server.DriverStatus { return plcnextStatus(drv.Health()) }}
 	case *optommp.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return optommpStatus(drv.Health()) }}
+	case *opcua.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return opcuaClientStatus(drv.Health()) }}
 	case *replay.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return replayStatus(drv.Health()) }}
 	case *nio.Multi:
@@ -461,6 +464,69 @@ func modbusSourceDetail(src modbus.SourceHealth) string {
 		return fmt.Sprintf("%d %s", src.Blocks, plural(src.Blocks, "block"))
 	case "parked":
 		return "parked"
+	case "error":
+		return "error — retrying"
+	default:
+		return "connecting"
+	}
+}
+
+// opcuaClientStatus adapts the OPC UA client driver's health: one row for
+// the server it polls (it is one session), the negotiated security in
+// Detail, the free-runners (RTT, retries, traffic) Volatile so a healthy
+// session never puts the block on a delta frame by itself. Kind "opcua-client" —
+// the server this project itself serves is "opcua-server" (opcuaStatus).
+func opcuaClientStatus(h opcua.Health) server.DriverStatus {
+	s := server.DriverStatus{
+		Kind:      "opcua-client",
+		Name:      h.Name,
+		Detail:    h.Endpoint,
+		SinceMs:   h.SinceMs,
+		LastError: h.LastError,
+	}
+	if h.Policy != "" {
+		s.Detail = fmt.Sprintf("%s · %s/%s", h.Endpoint, h.Policy, h.Mode)
+	}
+	switch {
+	case h.State == "connected" && h.BadTags > 0:
+		s.State = "degraded"
+		s.Message = fmt.Sprintf("%d of %d %s refused by the server — check node ids and namespaces", h.BadTags, h.Tags, plural(h.Tags, "tag"))
+	case h.State == "connected":
+		s.State = "connected"
+		s.Message = fmt.Sprintf("Polling %d %s in %d %s", h.Tags, plural(h.Tags, "tag"), h.Classes, plural(h.Classes, "scan class"))
+	case h.LastError != "":
+		s.State = "error"
+		s.Message = "Connect failed — retrying"
+	default:
+		s.State = "connecting"
+		s.Message = "Connecting to " + h.Endpoint
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(h.Tags), Text: fmt.Sprintf("%d / %d", h.Tags-h.BadTags, h.Tags)},
+		{Label: "rtt ms", Value: h.RTTMs, Volatile: true},
+		{Label: "reads", Value: float64(h.Reads), Volatile: true},
+		{Label: "writes", Value: float64(h.Writes), Volatile: true},
+		{Label: "errors", Value: float64(h.Errors), Volatile: true},
+	}
+	if h.QueuedWrites > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "queued writes", Value: float64(h.QueuedWrites)})
+	}
+	s.Devices = []server.DriverDevice{{ID: h.Name, Online: h.State == "connected", Detail: opcuaClientDetail(h)}}
+	s.Extra = map[string]any{"policy": h.Policy, "mode": h.Mode, "maxNodes": h.MaxNodes, "retries": h.Retries}
+	s.VolatileExtra = []string{"retries"}
+	return s
+}
+
+func opcuaClientDetail(h opcua.Health) string {
+	switch h.State {
+	case "connected":
+		if h.BadTags > 0 {
+			return fmt.Sprintf("%d %s · %d refused", h.Tags, plural(h.Tags, "tag"), h.BadTags)
+		}
+		if h.QueuedWrites > 0 {
+			return fmt.Sprintf("%d %s · %d queued", h.Tags, plural(h.Tags, "tag"), h.QueuedWrites)
+		}
+		return fmt.Sprintf("%d %s", h.Tags, plural(h.Tags, "tag"))
 	case "error":
 		return "error — retrying"
 	default:

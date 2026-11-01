@@ -34,6 +34,7 @@ io/          Driver seam — bring your own bus (Modbus, EtherNet/IP, OPC-UA, si
 eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
              tag browse + UDT import codegen, polling io.Driver, Logix emulator
 sparkplug/   Sparkplug B edge node (and host application) over MQTT
+opcua/       OPC UA client driver: polls a server's variables per scan class (gopcua)
 opcua/server OPC UA server: the tag store as an address space (browse, read, subscribe)
 retain/      retained-memory stores: file, Kubernetes ConfigMap
 leader/      redundancy: Kubernetes Lease leader election
@@ -139,7 +140,7 @@ The one binary is the whole toolchain: `naut new` (scaffold a
 project), `run`, `test`, `check` (the CI gate: compiles every program and
 cross-checks it against the manifest), `build`, `pull` (bring a controller's
 running program back into the repo), `lsp` (the language server the VS Code
-extension uses), and the `eip`, `modbus`, `sparkplug`, and `historian` tools.
+extension uses), and the `eip`, `modbus`, `opcua`, `sparkplug`, and `historian` tools.
 
 **2. Scaffold a project**
 
@@ -398,6 +399,33 @@ the bench needs no hardware. `examples/lift-station` runs a whole plant
 against it (`devices.yaml`, `modbus_manifest.yaml`), and the
 [Modbus TCP guide](https://nautilus.joyautomation.com/guides/modbus/) covers
 the rest.
+
+### Reading OPC UA servers (preview)
+
+A SCADA gateway, a PLC's embedded server or a Kepware exposes OPC UA, and
+`naut opcua import` turns a browse of one into a committed manifest and tag
+file:
+
+```sh
+naut opcua import --endpoint opc.tcp://10.0.0.5:4840 --root 'ns=2;s=[default]'
+```
+
+```yaml
+driver:
+  type: opcua-client
+  endpoint: opc.tcp://10.0.0.5:4840
+  manifest: opcua_manifest.yaml    # from `naut opcua import`
+  scan-rate: 1s
+tag-files: [tags/opcua.yaml]
+```
+
+Each scan class is one batched read; a node the server refuses is Bad while
+the rest keep delivering; namespace indexes are resolved by URI at connect,
+so a renumbered server still reads the right nodes. Every binding is
+read-only unless the import's `--writable` names it. This is the client; the
+`opcua:` section is the server. Tested against gopcua's in-process server
+only; the [OPC UA client guide](https://nautilus.joyautomation.com/guides/opcua-client/)
+covers the rest.
 
 #### More than one bus: `drivers:`
 
@@ -949,6 +977,10 @@ stable channel (pre-release tracks `main` for early fixes), the HMI kit on npm. 
   keep-alive `rewrite:` outputs, `naut modbus import|browse|serve|tags`
   codegen and commissioning tools, and an in-process slave plus a pymodbus
   foreign-stack run in CI
+- ✅ `opcua-client` — OPC UA client driver (preview): polled batched reads per scan
+  class, namespace URIs resolved at connect, per-tag quality, typed writes
+  opted into per tag, `naut opcua import|browse|tags`; tested against
+  gopcua's in-process server, not yet against Ignition or Kepware
 - ✅ `snmp`, `redfish`, `prom` on `hw` — IT hardware as tags: one UDT set
   (Server, Fan, PSU, TempSensor, Switch, SwitchPort, PDU, PDUOutlet, UPS)
   delivered by three drivers on a shared poll base (intervals, stale-after
