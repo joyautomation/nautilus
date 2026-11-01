@@ -73,18 +73,31 @@ func TestPublishingIntervalIsRevisedNotActedOn(t *testing.T) {
 		t.Errorf("lifetime 1 with keep-alive 10 revised to %d, want 30", resp.RevisedLifetimeCount)
 	}
 	// A client told a revised interval realigns its counts with
-	// ModifySubscription (asyncua does); it is answered with what the
-	// subscription has, not refused.
-	var mod *ua.ModifySubscriptionResponse
-	err = c.Send(ctx, &ua.ModifySubscriptionRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionID: resp.SubscriptionID, RequestedPublishingInterval: 5000, RequestedLifetimeCount: 60, RequestedMaxKeepAliveCount: 20}, func(v ua.Response) error {
-		mod, _ = v.(*ua.ModifySubscriptionResponse)
-		return nil
-	})
-	if err != nil || mod == nil {
-		t.Fatalf("ModifySubscription: %v", err)
-	}
-	if mod.RevisedPublishingInterval != 100 || mod.RevisedLifetimeCount != 30 || mod.RevisedMaxKeepAliveCount != 10 {
-		t.Errorf("ModifySubscription granted %v/%d/%d, want the subscription's own 100/30/10", mod.RevisedPublishingInterval, mod.RevisedLifetimeCount, mod.RevisedMaxKeepAliveCount)
+	// ModifySubscription (asyncua does); it is not refused, and its request
+	// is revised exactly as CreateSubscription's is (#433).
+	for _, m := range []struct {
+		ask                 float64
+		lifetime, keepalive uint32
+		want                float64
+		wantLifetime        uint32
+	}{
+		{0, 1, 10, sweep, 30},
+		{math.NaN(), 60, 20, sweep, 60},
+		{5000, 60, 20, 5000, 60},
+		{1e300, 100, 20, maxPublishingInterval, 100},
+	} {
+		var mod *ua.ModifySubscriptionResponse
+		err = c.Send(ctx, &ua.ModifySubscriptionRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionID: resp.SubscriptionID, RequestedPublishingInterval: m.ask, RequestedLifetimeCount: m.lifetime, RequestedMaxKeepAliveCount: m.keepalive}, func(v ua.Response) error {
+			mod, _ = v.(*ua.ModifySubscriptionResponse)
+			return nil
+		})
+		if err != nil || mod == nil {
+			t.Fatalf("ModifySubscription(%v): %v", m.ask, err)
+		}
+		if mod.RevisedPublishingInterval != m.want || mod.RevisedLifetimeCount != m.wantLifetime || mod.RevisedMaxKeepAliveCount != m.keepalive {
+			t.Errorf("ModifySubscription(%v/%d/%d) granted %v/%d/%d, want %v/%d/%d", m.ask, m.lifetime, m.keepalive,
+				mod.RevisedPublishingInterval, mod.RevisedLifetimeCount, mod.RevisedMaxKeepAliveCount, m.want, m.wantLifetime, m.keepalive)
+		}
 	}
 	if err := c.Send(ctx, &ua.ModifySubscriptionRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionID: 4242}, func(ua.Response) error { return nil }); !errors.Is(err, ua.StatusBadSubscriptionIDInvalid) {
 		t.Errorf("ModifySubscription of a subscription that is not there: %v", err)
@@ -617,5 +630,78 @@ func TestDisablingDropsWhatTheItemHadQueued(t *testing.T) {
 		if _, err := sub.SetMonitoringMode(ctx, ua.MonitoringModeReporting, item); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// F-34 (#433): ModifySubscription changes the rate a live subscription
+// publishes at, in both directions, and says so. It answered Good with the
+// subscription's own values and changed nothing: a client slowing a busy
+// subscription down was told Good and went on hearing it at the old rate.
+// The tag moves every few milliseconds throughout, so every publishing
+// cycle has a value to send and the count of notifications in a window is
+// the number of cycles in it.
+func TestModifySubscriptionChangesThePublishingRate(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	stop := make(chan struct{})
+	moved := make(chan struct{})
+	go func() {
+		defer close(moved)
+		for i := int64(0); ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(3 * time.Millisecond):
+				rt.Tags().Set("Count", i)
+			}
+		}
+	}()
+	defer func() { close(stop); <-moved }()
+
+	notify := make(chan *opcua.PublishNotificationData, 256)
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond}, notify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Cancel(ctx)
+	if _, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth,
+		opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Count"), ua.AttributeIDValue, 1),
+	); err != nil {
+		t.Fatal(err)
+	}
+	modify := func(ms float64) {
+		t.Helper()
+		var mod *ua.ModifySubscriptionResponse
+		err := c.Send(ctx, &ua.ModifySubscriptionRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionID: sub.SubscriptionID, RequestedPublishingInterval: ms, RequestedLifetimeCount: 300, RequestedMaxKeepAliveCount: 10}, func(v ua.Response) error {
+			mod, _ = v.(*ua.ModifySubscriptionResponse)
+			return nil
+		})
+		if err != nil || mod == nil {
+			t.Fatalf("ModifySubscription(%v): %v", ms, err)
+		}
+		if mod.RevisedPublishingInterval != ms || mod.RevisedLifetimeCount != 300 || mod.RevisedMaxKeepAliveCount != 10 {
+			t.Fatalf("ModifySubscription(%v) granted %v/%d/%d, want %v/300/10", ms, mod.RevisedPublishingInterval, mod.RevisedLifetimeCount, mod.RevisedMaxKeepAliveCount, ms)
+		}
+	}
+	window := 1500 * time.Millisecond
+	count(notify, 200*time.Millisecond) // the initial value, and the subscription settling
+	fast := count(notify, window)[1]
+
+	modify(300)                         // 1.5 s at 300 ms is 5 publishing cycles
+	count(notify, 300*time.Millisecond) // publishes from the old rate still on their way
+	slow := count(notify, window)[1]
+	t.Logf("notifications in %v: %d at 20 ms, %d at 300 ms", window, fast, slow)
+	if slow > 8 {
+		t.Errorf("after ModifySubscription(300): %d notifications in %v, want at most 8 (5 or 6 cycles, and slack); before it, at 20 ms, %d", slow, window, fast)
+	}
+	if fast < 3*slow || fast < 20 {
+		t.Errorf("at 20 ms: %d notifications in %v; at 300 ms: %d; want the first well above the second", fast, window, slow)
+	}
+
+	modify(20) // and back: the subscription speeds up again
+	count(notify, 300*time.Millisecond)
+	if again := count(notify, window)[1]; again < 3*slow || again < 20 {
+		t.Errorf("after ModifySubscription(20): %d notifications in %v, want well above the %d at 300 ms", again, window, slow)
 	}
 }

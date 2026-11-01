@@ -148,9 +148,8 @@ and a
 change of quality alone, with the value unchanged, is visible to a Read but
 not yet pushed to a subscription
 ([#419](https://github.com/joyautomation/nautilus/issues/419)); and a
-subscription's interval, counts and items are fixed once created, and it
-cannot be paused or moved to a new session (`ModifySubscription` answers
-with the values it has; `ModifyMonitoredItems`, `SetPublishingMode` and
+subscription's items are fixed once created, and it cannot be paused or
+moved to a new session (`ModifyMonitoredItems`, `SetPublishingMode` and
 `TransferSubscriptions`, like `TranslateBrowsePathsToNodeIds` and `Call`,
 answer `Bad_ServiceUnsupported`;
 [#431](https://github.com/joyautomation/nautilus/issues/431)).
@@ -168,8 +167,10 @@ reports the sweep; a requested sampling interval is revised to the nearest
 multiple of it, and the item is sampled at that rate. A requested publishing
 interval is revised the same way — `0` asks for the fastest and is granted
 the sweep; nothing slower than an hour is granted — rather than booked as
-asked, and a `ModifySubscription` that follows (asyncua sends one to
-realign its counts) is answered with the values the subscription has.
+asked. `ModifySubscription` changes a live subscription's publishing
+interval and its lifetime and keep-alive counts, revised the same way, and
+answers once the subscription runs at them: a client can slow a busy
+subscription down, or speed it up, without deleting and recreating it.
 `SetMonitoringMode` means what it answers: a `Disabled` or `Sampling`
 item is silent until it is `Reporting` again, and then hears the current
 value first; an item created `Disabled` is silent from the start.

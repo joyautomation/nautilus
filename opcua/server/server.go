@@ -548,7 +548,8 @@ func (r reading) equal(o reading) bool {
 // sampling is the interval an item was granted, the same arithmetic
 // CreateMonitoredItems answered with.
 func (s *Server) sampling(item *opcserver.MonitoredItem) time.Duration {
-	ms := reviseSampling(item.Req.RequestedParameters.SamplingInterval, item.Sub.RevisedPublishingInterval, s.opts.Sweep)
+	publishing, _, _ := item.Sub.Revised()
+	ms := reviseSampling(item.Req.RequestedParameters.SamplingInterval, publishing, s.opts.Sweep)
 	return time.Duration(ms * float64(time.Millisecond))
 }
 

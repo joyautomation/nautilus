@@ -72,23 +72,30 @@ func createSubscription(srv *opcserver.Server, ns *namespace, sc *uasc.SecureCha
 		return nil, ua.StatusBadSessionIDInvalid
 	}
 	req.RequestedPublishingInterval = revisePublishing(req.RequestedPublishingInterval, ns.sweep)
-	// Part 4 §5.13.2.2: the lifetime count is at least three keep-alives.
-	if floor := uint64(req.RequestedMaxKeepAliveCount) * 3; uint64(req.RequestedLifetimeCount) < floor {
-		req.RequestedLifetimeCount = uint32(min(floor, math.MaxUint32))
-	}
+	req.RequestedLifetimeCount = reviseLifetime(req.RequestedLifetimeCount, req.RequestedMaxKeepAliveCount)
 	return subs.CreateSubscription(sc, req, reqID)
 }
 
-// modifySubscription answers with what the subscription has. gopcua's
-// publish loop owns its ticker and its counts and reads them without a
-// lock, so nothing here changes them: the publishing interval and counts
-// are the ones granted at creation, and the response says so, which Part 4
-// §5.13.3 allows (the server revises the request to what it supports).
-// This exists because a client that is told a revised publishing interval
-// — asyncua, for one — modifies the subscription to realign its counts,
-// and gopcua's Bad_ServiceUnsupported there made every such subscription
-// fail outright.
-func modifySubscription(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
+// reviseLifetime is the lifetime count granted: what was asked, raised to
+// three keep-alives when it is less (Part 4 §5.13.2.2).
+func reviseLifetime(lifetime, keepalive uint32) uint32 {
+	if floor := uint64(keepalive) * 3; uint64(lifetime) < floor {
+		return uint32(min(floor, math.MaxUint32))
+	}
+	return lifetime
+}
+
+// modifySubscription changes a subscription's publishing interval and
+// counts (Part 4 §5.13.3), revised exactly as CreateSubscription revises
+// them, and answers once the subscription's publish loop runs at them: the
+// response is the values now in force. MaxNotificationsPerPublish and
+// Priority are not acted on, by this service or by CreateSubscription.
+//
+// Until #433 this answered with the values the subscription already had
+// and changed nothing, because gopcua's publish loop owned its ticker and
+// read its counts without a lock; uaserver's Subscription.Modify now hands
+// the change to that loop, which resets its ticker.
+func modifySubscription(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.ModifySubscriptionRequest)
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
@@ -97,11 +104,16 @@ func modifySubscription(srv *opcserver.Server, r ua.Request) (ua.Response, error
 	if code != ua.StatusGood {
 		return nil, code
 	}
+	interval := revisePublishing(req.RequestedPublishingInterval, ns.sweep)
+	lifetime := reviseLifetime(req.RequestedLifetimeCount, req.RequestedMaxKeepAliveCount)
+	if !sub.Modify(interval, lifetime, req.RequestedMaxKeepAliveCount) {
+		return nil, ua.StatusBadSubscriptionIDInvalid // its task returned: the subscription is gone
+	}
 	return &ua.ModifySubscriptionResponse{
 		ResponseHeader:            header(req.RequestHeader),
-		RevisedPublishingInterval: sub.RevisedPublishingInterval,
-		RevisedLifetimeCount:      sub.RevisedLifetimeCount,
-		RevisedMaxKeepAliveCount:  sub.RevisedMaxKeepAliveCount,
+		RevisedPublishingInterval: interval,
+		RevisedLifetimeCount:      lifetime,
+		RevisedMaxKeepAliveCount:  req.RequestedMaxKeepAliveCount,
 	}, nil
 }
 
@@ -154,6 +166,7 @@ func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureC
 	}
 	results := make([]*ua.MonitoredItemCreateResult, len(req.ItemsToCreate))
 	var foreign []*opcserver.MonitoredItem // outside the project namespace: owed one value, below
+	publishing, _, _ := sub.Revised()
 	mi.Mu.Lock()
 	for i, item := range req.ItemsToCreate {
 		if code := monitorable(srv, ns, item); code != ua.StatusGood {
@@ -168,7 +181,7 @@ func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureC
 		results[i] = &ua.MonitoredItemCreateResult{
 			StatusCode:              ua.StatusGood,
 			MonitoredItemID:         booked.ID,
-			RevisedSamplingInterval: reviseSampling(item.RequestedParameters.SamplingInterval, sub.RevisedPublishingInterval, ns.sweep),
+			RevisedSamplingInterval: reviseSampling(item.RequestedParameters.SamplingInterval, publishing, ns.sweep),
 			RevisedQueueSize:        1,
 			FilterResult:            ua.NewExtensionObject(nil),
 		}

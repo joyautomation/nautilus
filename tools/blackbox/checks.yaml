@@ -739,7 +739,6 @@ checks:
   note: 'papercut. ModifySubscription no longer Bad_ServiceUnsupported (F-31) but answers the current
     values and changes nothing; the guide says so. May be one with F-31 (nautilus#431).'
   group: new findings of this run
-  open: '#433'
 - id: 001-P-publish-interval-revised-range
   run: 2026-10-24-001c
   pass: every RequestedPublishingInterval (0, 1, 50, 99, -1, NaN, 100..3600000, 3600001, 1e9) is revised to a positive supported rate; the sweep for anything under it, an hour as the ceiling

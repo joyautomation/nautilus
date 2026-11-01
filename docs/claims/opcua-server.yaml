@@ -245,9 +245,10 @@ claims:
     claim: >-
       A requested publishing interval is revised to what the server supports
       (0 and anything below the sweep become the sweep, nothing slower than
-      an hour) rather than booked as asked, and a ModifySubscription that
-      follows is answered with the subscription's own values rather than
-      refused; SetMonitoringMode is honoured, a
+      an hour) rather than booked as asked, and a ModifySubscription changes
+      a live subscription's publishing interval and counts, revised the same
+      way, and the subscription publishes at the new rate from its next
+      cycle; SetMonitoringMode is honoured, a
       Disabled or Sampling item being silent until it is Reporting again and
       then hearing the current value first, and an item created Disabled
       silent from the start; and an item id that is not an item is refused
@@ -265,6 +266,9 @@ claims:
       - go ./tools/blackbox TestBlackbox/001-F13-closesession-deletes-subscriptions
       - go ./opcua/server TestRevisePublishing
       - go ./opcua/server TestPublishingIntervalIsRevisedNotActedOn
+      - go ./opcua/server TestModifySubscriptionChangesThePublishingRate
+      - go ./opcua/internal/uaserver TestModifyAfterTheTaskReturnedChangesNothing
+      - go ./tools/blackbox TestBlackbox/001-F34-modifysubscription-no-op
       - go ./opcua/server TestMonitoringModeIsHonoured
       - go ./opcua/server TestDisablingDropsWhatTheItemHadQueued
       - go ./opcua/server TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription
