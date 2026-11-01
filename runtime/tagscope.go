@@ -112,17 +112,18 @@ func typeOfInit(v any) *ir.Type {
 // resolved without lowering it: what a tag's type: resolves against
 // before any program has compiled. Best effort — a source that does not
 // parse contributes nothing here and reports its own error when it
-// compiles.
-func sourceTypes(src string) map[string]*ir.Type {
+// compiles. The error is why the table is empty; a caller that cannot
+// resolve a tag's type: should report it rather than blame the TYPEs.
+func sourceTypes(src string) (map[string]*ir.Type, error) {
 	prog, err := parseSource(src)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	types, err := st.Types(prog)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return types
+	return types, nil
 }
 
 // binding is one program's view of one tag.

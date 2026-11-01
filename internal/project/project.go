@@ -761,6 +761,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkSourcesParse(fsys, m); err != nil {
+		return nil, err
+	}
 
 	readProgram := func(t TaskConfig) (string, error) {
 		if t.Program == "" {
