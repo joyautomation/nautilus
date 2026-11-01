@@ -155,7 +155,7 @@ func registerServices(srv *opcserver.Server, ns *namespace) {
 		return createSubscription(srv, ns, sc, r, reqID)
 	})
 	srv.RegisterHandler(id.ModifySubscriptionRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
-		return modifySubscription(srv, r)
+		return modifySubscription(srv, ns, r)
 	})
 	srv.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 		return createMonitoredItems(srv, ns, sc, r, reqID)

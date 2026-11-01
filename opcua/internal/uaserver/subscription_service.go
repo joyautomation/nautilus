@@ -279,9 +279,13 @@ type PubReq struct {
 // MonitoredItems will send updates on the NotifyChannel to let the background task know that
 // an event has occured that needs to be published.
 type Subscription struct {
-	srv                       *SubscriptionService
-	Session                   *session
-	ID                        uint32
+	srv     *SubscriptionService
+	Session *session
+	ID      uint32
+	// The publishing interval and counts are set by CreateSubscription
+	// before Start and, after it, written only by the subscription's task
+	// (a ModifySubscription goes through Modify), under Mu. The task reads
+	// them without the lock; anything else reads them with Revised.
 	RevisedPublishingInterval float64
 	RevisedLifetimeCount      uint32
 	RevisedMaxKeepAliveCount  uint32
@@ -291,7 +295,10 @@ type Subscription struct {
 	T *time.Ticker
 
 	NotifyChannel chan *ua.MonitoredItemNotification
-	ModifyChannel chan *ua.ModifySubscriptionRequest
+
+	// modify carries a ModifySubscription to the task, which owns the
+	// ticker the publishing interval drives.
+	modify chan modification
 
 	// the running flag and shutdown channel are used to signal the background task that it should stop.
 	// multiple places can kill the subscription so make sure you check the running flag using the mutex
@@ -323,16 +330,66 @@ func NewSubscription() *Subscription {
 	return &Subscription{
 		//SeqNums:       map[uint32]struct{}{},
 		NotifyChannel: make(chan *ua.MonitoredItemNotification, 100),
-		ModifyChannel: make(chan *ua.ModifySubscriptionRequest, 2),
+		modify:        make(chan modification),
 		shutdown:      make(chan struct{}),
 		done:          make(chan struct{}),
 	}
 }
 
-func (s *Subscription) Update(req *ua.ModifySubscriptionRequest) {
-	s.RevisedPublishingInterval = req.RequestedPublishingInterval
-	s.RevisedLifetimeCount = req.RequestedLifetimeCount
-	s.RevisedMaxKeepAliveCount = req.RequestedMaxKeepAliveCount
+// modification is a ModifySubscription on its way to the task: the values
+// to apply, already revised to what the server supports, and a channel the
+// task closes once they are in force.
+type modification struct {
+	interval            float64
+	lifetime, keepalive uint32
+	applied             chan struct{}
+}
+
+// Revised returns the publishing interval (ms) and the lifetime and
+// keep-alive counts the subscription has now. Safe from any goroutine.
+func (s *Subscription) Revised() (interval float64, lifetime, keepalive uint32) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	return s.RevisedPublishingInterval, s.RevisedLifetimeCount, s.RevisedMaxKeepAliveCount
+}
+
+// Modify sets the publishing interval (ms, which must be positive and fit a
+// time.Duration) and the lifetime and keep-alive counts of a running
+// subscription: ModifySubscription, with the request already revised by the
+// caller. The task applies them between publishes and resets its ticker to
+// the new interval, so the next publishing cycle runs at it. Modify returns
+// once they are in force, or false, having changed nothing, when the task
+// has returned (the subscription is gone).
+//
+// gopcua's Update wrote the three fields from the caller's goroutine while
+// the task read them, and never reset the ticker, so a modified
+// subscription went on publishing at its old rate (black-box F-34, #433).
+func (s *Subscription) Modify(interval float64, lifetime, keepalive uint32) bool {
+	m := modification{interval: interval, lifetime: lifetime, keepalive: keepalive, applied: make(chan struct{})}
+	select {
+	case s.modify <- m:
+	case <-s.done:
+		return false
+	}
+	// The task closes applied before it can return, having taken m.
+	<-m.applied
+	return true
+}
+
+// apply is the task's half of Modify.
+func (s *Subscription) apply(m modification) {
+	s.Mu.Lock()
+	s.RevisedPublishingInterval = m.interval
+	s.RevisedLifetimeCount = m.lifetime
+	s.RevisedMaxKeepAliveCount = m.keepalive
+	s.Mu.Unlock()
+	s.T.Reset(publishingPeriod(m.interval))
+	close(m.applied)
+}
+
+// publishingPeriod is a publishing interval in milliseconds as a Duration.
+func publishingPeriod(ms float64) time.Duration {
+	return time.Duration(ms * float64(time.Millisecond))
 }
 
 func (s *Subscription) Start() {
@@ -389,8 +446,8 @@ func (s *Subscription) run() {
 
 	keepalive_counter := 0
 	lifetime_counter := 0
-	//TODO: if a sub is modified, this ticker time may need to change.
-	s.T = time.NewTicker(time.Millisecond * time.Duration(s.RevisedPublishingInterval))
+	// A ModifySubscription resets this ticker (apply), in either waiting state.
+	s.T = time.NewTicker(publishingPeriod(s.RevisedPublishingInterval))
 	defer s.T.Stop()
 
 	// This is the master run event loop.  It has effectively 3 states that it can be in.  The first two are designated with
@@ -447,8 +504,8 @@ func (s *Subscription) run() {
 				}
 				// we have things to publish so we'll break out to do that.
 				break L0
-			case update := <-s.ModifyChannel:
-				s.Update(update)
+			case m := <-s.modify:
+				s.apply(m)
 			}
 		}
 		var pubreq PubReq
@@ -464,7 +521,8 @@ func (s *Subscription) run() {
 				break L2
 			case newNotification := <-s.NotifyChannel:
 				publishQueue[newNotification.ClientHandle] = newNotification
-
+			case m := <-s.modify:
+				s.apply(m)
 			case <-s.T.C:
 				// we had another tick without a publish request.
 				lifetime_counter++
