@@ -71,7 +71,7 @@ func TestCheckOPCUAClientDriver(t *testing.T) {
 	manifest := "namespaces: [\"http://opcfoundation.org/UA/\", \"urn:x\"]\ntags:\n" +
 		"  - {name: Sensor, nodeid: \"ns=1;s=Sensor\", namespace: \"urn:x\", type: Double}\n"
 	driver := func(extra string) string {
-		return checkManifestYAML + "driver:\n  type: opcua\n  manifest: opcua_manifest.yaml\n" + extra
+		return checkManifestYAML + "driver:\n  type: opcua-client\n  manifest: opcua_manifest.yaml\n" + extra
 	}
 	out, code := checkIn(t, map[string]string{
 		"nautilus.yaml":       driver("  endpoint: opc.tcp://192.0.2.1:4840\n  security: Basic256Sha256\n  security-mode: SignAndEncrypt\n  pki-dir: pki\n  username: op\n"),

@@ -10,7 +10,7 @@ Ignition, Kepware, node-opcua or a PLC's embedded server. Try it against
 your server before you depend on it.
 :::
 
-A `driver: {type: opcua}` section makes nautilus an OPC UA **client**: it
+A `driver: {type: opcua-client}` section makes nautilus an OPC UA **client**: it
 polls one server's variables into the tag store. This is the opposite
 direction to the [`opcua:` section](/guides/opcua-server/), which *serves*
 this project's own tags to OPC UA clients; a project can do both.
@@ -20,7 +20,7 @@ file, the way `naut eip import` and `naut modbus import` do.
 
 ```yaml
 driver:
-  type: opcua
+  type: opcua-client
   endpoint: opc.tcp://10.0.0.5:4840
   security: Basic256Sha256        # default: the strongest the server offers
   security-mode: SignAndEncrypt   # default: the strongest mode of that policy
@@ -65,9 +65,9 @@ and arrays are listed as skipped, with the reason. `--tags` keeps a subset
 by glob.
 
 The tag file also declares the driver's `<name>__Online` companion. Its
-name comes from `--name` when given, else from the `opcua` driver in the
+name comes from `--name` when given, else from the `opcua-client` driver in the
 project's `nautilus.yaml` whose `endpoint:` matches (then whose `manifest:`
-matches, then the only one), else `opcua__Online`. The import prints which.
+matches, then the only one), else `opcua_client__Online`. The import prints which.
 
 `naut opcua browse --endpoint …` prints the namespaces and a table of every
 variable: path, node id, type, access, description. `naut opcua tags
@@ -93,8 +93,8 @@ server's advertised `MaxNodesPerRead` (halved if the server answers
 
 - `<name>__Online` (BOOL) is true once the session is up and every scan
   class has been read on it, false otherwise. Its name follows the driver's
-  `name:` (`opcua__Online` for an unnamed one; `opcua-2` becomes
-  `opcua_2__Online`).
+  `name:` (`opcua_client__Online` for an unnamed one; a second unnamed
+  one, `opcua-client-2`, gets `opcua_client_2__Online`).
 - A node the server refuses (unknown id, wrong namespace, a dead device
   behind a gateway, an array) is **Bad** while the rest of the class keeps
   delivering. `Uncertain` statuses count as not good, on purpose.

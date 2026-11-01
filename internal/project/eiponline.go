@@ -37,13 +37,13 @@ func EIPOnlineTag(fsys fs.FS, host, manifest string) (name, how string, err erro
 		"pass --name with the one this controller is")
 }
 
-// OPCUAOnlineTag is EIPOnlineTag for an opcua (client) driver, matched by
+// OPCUAOnlineTag is EIPOnlineTag for an opcua-client driver, matched by
 // endpoint: — exactly, then ignoring case and a trailing slash — else by
 // manifest:, with the same fallbacks. `naut opcua import` and `naut opcua
 // tags` write the companion it names into the generated tag file.
 func OPCUAOnlineTag(fsys fs.FS, endpoint, manifest string) (name, how string, err error) {
 	trim := func(s string) string { return strings.TrimRight(strings.TrimSpace(s), "/") }
-	return onlineTagInProject(fsys, "opcua", "endpoint", endpoint, manifest,
+	return onlineTagInProject(fsys, "opcua-client", "endpoint", endpoint, manifest,
 		func(c DriverConfig) string { return c.Endpoint },
 		func(a, b string) bool { return a == b },
 		func(a, b string) bool { return strings.EqualFold(trim(a), trim(b)) },
@@ -139,4 +139,4 @@ func sameHost(a, b string) bool {
 func OnlineTagFor(driverName string) string { return onlineTagFor(driverName, "eip") }
 
 // OPCUAOnlineTagFor is OnlineTagFor for `naut opcua import --name`.
-func OPCUAOnlineTagFor(driverName string) string { return onlineTagFor(driverName, "opcua") }
+func OPCUAOnlineTagFor(driverName string) string { return onlineTagFor(driverName, "opcua-client") }

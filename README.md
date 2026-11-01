@@ -412,7 +412,7 @@ naut opcua import --endpoint opc.tcp://10.0.0.5:4840 --root 'ns=2;s=[default]'
 
 ```yaml
 driver:
-  type: opcua
+  type: opcua-client
   endpoint: opc.tcp://10.0.0.5:4840
   manifest: opcua_manifest.yaml    # from `naut opcua import`
   scan-rate: 1s
@@ -977,7 +977,7 @@ stable channel (pre-release tracks `main` for early fixes), the HMI kit on npm. 
   keep-alive `rewrite:` outputs, `naut modbus import|browse|serve|tags`
   codegen and commissioning tools, and an in-process slave plus a pymodbus
   foreign-stack run in CI
-- ✅ `opcua` — OPC UA client driver (preview): polled batched reads per scan
+- ✅ `opcua-client` — OPC UA client driver (preview): polled batched reads per scan
   class, namespace URIs resolved at connect, per-tag quality, typed writes
   opted into per tag, `naut opcua import|browse|tags`; tested against
   gopcua's in-process server, not yet against Ignition or Kepware

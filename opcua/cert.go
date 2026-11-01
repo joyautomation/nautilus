@@ -40,19 +40,19 @@ func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err err
 		}
 	}
 	if err := os.MkdirAll(pkiDir, 0o700); err != nil {
-		return "", "", fmt.Errorf("opcua: create pki dir: %w", err)
+		return "", "", fmt.Errorf("opcua-client: create pki dir: %w", err)
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return "", "", fmt.Errorf("opcua: generate key: %w", err)
+		return "", "", fmt.Errorf("opcua-client: generate key: %w", err)
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return "", "", fmt.Errorf("opcua: serial: %w", err)
+		return "", "", fmt.Errorf("opcua-client: serial: %w", err)
 	}
 	uri, err := url.Parse(appURI)
 	if err != nil {
-		return "", "", fmt.Errorf("opcua: application uri %q: %w", appURI, err)
+		return "", "", fmt.Errorf("opcua-client: application uri %q: %w", appURI, err)
 	}
 	hostname, _ := os.Hostname()
 	dns := []string{"localhost"}
@@ -77,15 +77,15 @@ func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err err
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if err != nil {
-		return "", "", fmt.Errorf("opcua: create certificate: %w", err)
+		return "", "", fmt.Errorf("opcua-client: create certificate: %w", err)
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
-		return "", "", fmt.Errorf("opcua: write key: %w", err)
+		return "", "", fmt.Errorf("opcua-client: write key: %w", err)
 	}
 	if err := os.WriteFile(certFile, certPEM, 0o644); err != nil {
-		return "", "", fmt.Errorf("opcua: write certificate: %w", err)
+		return "", "", fmt.Errorf("opcua-client: write certificate: %w", err)
 	}
 	return certFile, keyFile, nil
 }

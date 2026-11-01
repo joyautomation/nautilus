@@ -6,12 +6,16 @@ Verified against gopcua's in-process server as a foreign implementation
 (§6). Not yet run against a production server; the first intended target is
 an Ignition gateway's OPC UA server.
 
-This is the CLIENT (`driver: {type: opcua}`): nautilus reads another
+The driver type is `opcua-client`, not `opcua`, so it cannot be mistaken
+for the `opcua:` server section; the CLI stays `naut opcua`, a tool
+namespace shared with the server.
+
+This is the CLIENT (`driver: {type: opcua-client}`): nautilus reads another
 server. The top-level `opcua:` section is the opposite direction, the
 read-only server in `opcua/server` (guides/opcua-server.md). The two
 share only the gopcua dependency.
 
-**Goal:** a **manifest-tier OPC UA client** (`driver: {type: opcua}`) plus
+**Goal:** a **manifest-tier OPC UA client** (`driver: {type: opcua-client}`) plus
 `naut opcua import|browse|tags`, mirroring `eip` and `modbus` end to end. OPC
 UA is what every SCADA gateway, most modern PLCs and every protocol converter
 expose, so it is the bus that reaches the equipment the other two cannot —
@@ -153,7 +157,7 @@ the server side.
 
 ```yaml
 drivers:
-  - type: opcua
+  - type: opcua-client
     name: gateway
     endpoint: opc.tcp://10.0.0.5:62541/discovery
     security: Basic256Sha256          # default: strongest offered
@@ -170,7 +174,7 @@ tag-files: [tags/opcua.yaml]
 `endpoint` and `manifest` are required (schema `allOf` branch + loader).
 `username` is the key sparkplug-host already has; `scan-rate`,
 `scan-classes`, `tag-classes` and `manifest` are eip's. The status card is
-one row per driver (one session, Kind `opcua`; the server's row is
+one row per driver (one session, Kind `opcua-client`; the server's row is
 `opcua-server`), security in the detail line, RTT and traffic Volatile.
 
 The driver keeps the contract every protocol driver on main keeps:
@@ -182,7 +186,7 @@ The driver keeps the contract every protocol driver on main keeps:
   UInt32/Int64/UInt64/DateTime LINT, Float REAL, Double LREAL, String
   STRING); never-delivered values report NotConnected.
 - **`<driver name>__Online`**, named by `project.onlineTagFor` as eip's is
-  (`opcua__Online` unnamed, `opcua-2` → `opcua_2__Online`), true once the
+  (`opcua_client__Online` unnamed, `opcua-client-2` → `opcua_client_2__Online`), true once the
   session is up and every scan class has been read on it ("primed", eip's
   rule). The same verdict is the Sparkplug device's health
   (`driverHealth`), so a DBIRTH never goes out half-filled.

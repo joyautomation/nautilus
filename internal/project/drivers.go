@@ -474,11 +474,11 @@ func modbusSourceDetail(src modbus.SourceHealth) string {
 // opcuaClientStatus adapts the OPC UA client driver's health: one row for
 // the server it polls (it is one session), the negotiated security in
 // Detail, the free-runners (RTT, retries, traffic) Volatile so a healthy
-// session never puts the block on a delta frame by itself. Kind "opcua" —
+// session never puts the block on a delta frame by itself. Kind "opcua-client" —
 // the server this project itself serves is "opcua-server" (opcuaStatus).
 func opcuaClientStatus(h opcua.Health) server.DriverStatus {
 	s := server.DriverStatus{
-		Kind:      "opcua",
+		Kind:      "opcua-client",
 		Name:      h.Name,
 		Detail:    h.Endpoint,
 		SinceMs:   h.SinceMs,

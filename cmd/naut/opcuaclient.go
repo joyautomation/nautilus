@@ -1,7 +1,7 @@
 package main
 
 // `naut opcua` is the commissioning side of the OPC UA CLIENT driver
-// (`driver: {type: opcua}`) — not the opcua: section, which serves this
+// (`driver: {type: opcua-client}`) — not the opcua: section, which serves this
 // project's own tags and needs no tooling. Subcommands: import
 // (browse a server → opcua_manifest.yaml + tags/opcua.yaml), browse (print
 // what a server exposes), and tags (re-derive the tag file from a committed
@@ -54,8 +54,8 @@ Connection flags (import and browse):
 
 Import flags:
   --name       Driver name; the companion tag is <name>__Online (default:
-               the opcua driver in --out's nautilus.yaml whose endpoint:
-               matches, else "opcua")
+               the opcua-client driver in --out's nautilus.yaml whose
+               endpoint: matches, else "opcua-client")
   --prefix     Prepended to every tag name
   --tags       Comma-separated glob patterns selecting generated tags
   --writable   Comma-separated globs marking (server-writable) tags writable.
@@ -156,7 +156,7 @@ func runOPCUAImport(args []string) int {
 	fs := flag.NewFlagSet("opcua import", flag.ContinueOnError)
 	var conn opcuaConn
 	conn.flags(fs)
-	name := fs.String("name", "", "driver name; the companion tag is <name>__Online (default: from nautilus.yaml, else opcua)")
+	name := fs.String("name", "", "driver name; the companion tag is <name>__Online (default: from nautilus.yaml, else opcua-client)")
 	prefix := fs.String("prefix", "", "prepended to every tag name")
 	tags := fs.String("tags", "", "comma-separated glob patterns selecting generated tags")
 	writable := fs.String("writable", "", "comma-separated globs marking tags writable")
@@ -253,7 +253,7 @@ func writeOPCUATagsFile(path string, m opcua.Manifest, command, onlineTag string
 func runOPCUATags(args []string) int {
 	fs := flag.NewFlagSet("opcua tags", flag.ContinueOnError)
 	out := fs.String("o", "tags/opcua.yaml", "output tag file")
-	name := fs.String("name", "", "driver name; the companion tag is <name>__Online (default: from ./nautilus.yaml, else opcua)")
+	name := fs.String("name", "", "driver name; the companion tag is <name>__Online (default: from ./nautilus.yaml, else opcua-client)")
 	skip := fs.String("skip", "", "comma-separated globs to leave OUT, for tags the project declares by hand")
 	if err := fs.Parse(args); err != nil {
 		return 2

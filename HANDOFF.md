@@ -86,7 +86,7 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
 - `alarms.md` — the alarm subsystem. **Built** (see 2026-08-22 below).
 - `sparkplug-host.md` — the host application driver. **Built** (PR #6, merged 2026-09-10).
 - `modbus.md` — the Modbus TCP driver. **Built** (PR #8); generic port of the brief the driver was written against.
-- `opcua-client.md` — the OPC UA client driver (`driver: {type: opcua}`). **Built**, preview; tested against gopcua's server only. The dependency decision (gopcua) is in §1 so it is not re-argued.
+- `opcua-client.md` — the OPC UA client driver (`driver: {type: opcua-client}`). **Built**, preview; tested against gopcua's server only. The dependency decision (gopcua) is in §1 so it is not re-argued.
 - `spatial-hmi.md` — the 3D HMI package (`hmi-3d/`, `examples/spatial-rig`). **Milestone 1 built** (PR #65); panel-PC measurement open.
 - `context-map.md` — the bounded contexts, the import rules between them (checked by `internal/contextmap`), a draft core/supporting/generic split, and the glossary. **Proposal.** A brief names its context in one line (§6).
 

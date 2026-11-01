@@ -41,7 +41,7 @@ import (
 //	───────────────  ───────  ─────────────────────────────────────────
 //	modbus           comms    reads init/zero; <source>__Online
 //	eip              comms    reads init/zero; <driver name>__Online
-//	opcua            comms    reads init/zero; <driver name>__Online
+//	opcua-client     comms    reads init/zero; <driver name>__Online
 //	sparkplug-host   comms    reads init/zero; <site>__Online (+ device)
 //	snmp             comms    reads init/zero; <source>__Online
 //	redfish          comms    reads init/zero; <source>__Online

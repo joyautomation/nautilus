@@ -476,7 +476,7 @@ func TestValueCodec(t *testing.T) {
 // driver names it, the IEC type each input seeds as, security typos caught
 // offline, and the check-time warnings.
 func TestLoaderContract(t *testing.T) {
-	for in, want := range map[string]string{"": "opcua__Online", "opcua-2": "opcua_2__Online", "Line 3": "Line_3__Online", "2nd": "_nd__Online"} {
+	for in, want := range map[string]string{"": "opcua_client__Online", "opcua-client-2": "opcua_client_2__Online", "Line 3": "Line_3__Online", "2nd": "_nd__Online"} {
 		if got := OnlineTagFor(in); got != want {
 			t.Errorf("OnlineTagFor(%q) = %q, want %q", in, got, want)
 		}

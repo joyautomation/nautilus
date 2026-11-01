@@ -45,7 +45,7 @@ const (
 	defaultMaxNodes = 500
 	// defaultName is the driver's identity when the project gives none —
 	// the companion tag is "<name>__Online".
-	defaultName = "opcua"
+	defaultName = "opcua-client"
 )
 
 // suffixOnline names the driver-synthesized companion: "<name>__Online" is
@@ -59,8 +59,8 @@ type Option func(*Driver)
 
 // WithName sets the driver's identity: the status row, the log fields,
 // and — unless WithOnlineTag names it — the companion tag
-// "<name>__Online", the name reduced to an identifier ("opcua-2" →
-// opcua_2__Online). Default "opcua".
+// "<name>__Online", the name reduced to an identifier ("opcua-client-2" →
+// opcua_client_2__Online). Default "opcua-client", the driver type.
 func WithName(name string) Option {
 	return func(d *Driver) {
 		if name != "" {
@@ -248,10 +248,10 @@ type scanClass struct {
 // call Start to begin polling.
 func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 	if endpoint == "" {
-		return nil, fmt.Errorf("opcua: endpoint is required (opc.tcp://host:4840)")
+		return nil, fmt.Errorf("opcua-client: endpoint is required (opc.tcp://host:4840)")
 	}
 	if err := m.Validate(); err != nil {
-		return nil, fmt.Errorf("opcua: manifest: %w", err)
+		return nil, fmt.Errorf("opcua-client: manifest: %w", err)
 	}
 	d := &Driver{
 		endpoint:   endpoint,
@@ -285,10 +285,10 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 	}
 	policyURI, mode, err := d.conn.Security.parse()
 	if err != nil {
-		return nil, fmt.Errorf("opcua: %w", err)
+		return nil, fmt.Errorf("opcua-client: %w", err)
 	}
 	if d.conn.Username != "" && (policyURI == ua.SecurityPolicyURINone || mode == ua.MessageSecurityModeNone) {
-		return nil, fmt.Errorf("opcua: username %q with security None: a password is never sent on an unsecured channel — use Sign or SignAndEncrypt, or drop username", d.conn.Username)
+		return nil, fmt.Errorf("opcua-client: username %q with security None: a password is never sent on an unsecured channel — use Sign or SignAndEncrypt, or drop username", d.conn.Username)
 	}
 	d.conn.SessionName = "nautilus " + d.name
 	if d.onlineTag == "" {
@@ -309,19 +309,19 @@ func (d *Driver) resolveClasses() error {
 		d.classRates[DefaultClass] = d.scanRate
 	}
 	if rate, ok := d.classRates[NoPoll]; ok {
-		return fmt.Errorf("opcua: scan class %q is reserved and cannot have a rate (%v)", NoPoll, rate)
+		return fmt.Errorf("opcua-client: scan class %q is reserved and cannot have a rate (%v)", NoPoll, rate)
 	}
 	for _, a := range d.assignments {
 		if a.class == NoPoll {
 			continue
 		}
 		if _, ok := d.classRates[a.class]; !ok {
-			return fmt.Errorf("opcua: WithTagClass(%q, ...) references an undefined scan class — add WithScanClass(%q, rate)", a.class, a.class)
+			return fmt.Errorf("opcua-client: WithTagClass(%q, ...) references an undefined scan class — add WithScanClass(%q, rate)", a.class, a.class)
 		}
 	}
 	for name, rate := range d.classRates {
 		if rate <= 0 {
-			return fmt.Errorf("opcua: scan class %q has non-positive rate %v", name, rate)
+			return fmt.Errorf("opcua-client: scan class %q has non-positive rate %v", name, rate)
 		}
 	}
 	return nil
@@ -334,11 +334,11 @@ func (d *Driver) buildBindings() error {
 	byClass := map[string]*scanClass{}
 	for _, t := range d.manifest.Tags {
 		if t.Name == online {
-			return fmt.Errorf("opcua: companion tag %q collides with a binding of the same name", online)
+			return fmt.Errorf("opcua-client: companion tag %q collides with a binding of the same name", online)
 		}
 		nid, err := ua.ParseNodeID(t.NodeID)
 		if err != nil {
-			return fmt.Errorf("opcua: tag %s: nodeid %q: %w", t.Name, t.NodeID, err)
+			return fmt.Errorf("opcua-client: tag %s: nodeid %q: %w", t.Name, t.NodeID, err)
 		}
 		b := &binding{TagBinding: t, node: nid}
 		class := t.ScanClass
@@ -357,7 +357,7 @@ func (d *Driver) buildBindings() error {
 		if class != NoPoll {
 			rate, ok := d.classRates[class]
 			if !ok {
-				return fmt.Errorf("opcua: binding %q names undefined scan class %q — add WithScanClass(%q, rate)", t.Name, class, class)
+				return fmt.Errorf("opcua-client: binding %q names undefined scan class %q — add WithScanClass(%q, rate)", t.Name, class, class)
 			}
 			sc := byClass[class]
 			if sc == nil {
@@ -452,13 +452,13 @@ func iecType(t string) string {
 func (d *Driver) Warnings() []string {
 	var out []string
 	if d.conn.Username != "" && d.conn.Password == "" {
-		out = append(out, fmt.Sprintf("opcua driver %q: username %q is set but NAUTILUS_OPCUA_PASSWORD is empty here", d.name, d.conn.Username))
+		out = append(out, fmt.Sprintf("opcua-client driver %q: username %q is set but NAUTILUS_OPCUA_PASSWORD is empty here", d.name, d.conn.Username))
 	}
 	if m := strings.ToLower(d.conn.Security.Mode); d.conn.Username != "" && m != "sign" && m != "signandencrypt" {
-		out = append(out, fmt.Sprintf("opcua driver %q: username %q without security-mode: Sign or SignAndEncrypt — the session is refused if the server offers only an unsecured endpoint, rather than send the password in the clear", d.name, d.conn.Username))
+		out = append(out, fmt.Sprintf("opcua-client driver %q: username %q without security-mode: Sign or SignAndEncrypt — the session is refused if the server offers only an unsecured endpoint, rather than send the password in the clear", d.name, d.conn.Username))
 	}
 	if d.conn.PKIDir == "" && !strings.EqualFold(d.conn.Security.Policy, "None") {
-		out = append(out, fmt.Sprintf("opcua driver %q: no pki-dir — the session is refused if the endpoint chosen needs a client certificate (any security policy but None)", d.name))
+		out = append(out, fmt.Sprintf("opcua-client driver %q: no pki-dir — the session is refused if the endpoint chosen needs a client certificate (any security policy but None)", d.name))
 	}
 	return out
 }
@@ -553,7 +553,7 @@ func (d *Driver) Stop() {
 // fails loudly rather than scanning zeros.
 func (d *Driver) ReadInputs() (nio.Values, error) {
 	if !d.started.Load() {
-		return nil, fmt.Errorf("opcua: not started yet")
+		return nil, fmt.Errorf("opcua-client: not started yet")
 	}
 	out := make(nio.Values, len(d.inputs))
 	d.snapshotInto(out)
@@ -564,10 +564,10 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 // (io.BatchReader).
 func (d *Driver) ReadInputsInto(dst nio.Values) error {
 	if !d.started.Load() {
-		return fmt.Errorf("opcua: not started yet")
+		return fmt.Errorf("opcua-client: not started yet")
 	}
 	if dst == nil {
-		return fmt.Errorf("opcua: ReadInputsInto needs a non-nil map to fill")
+		return fmt.Errorf("opcua-client: ReadInputsInto needs a non-nil map to fill")
 	}
 	n := d.snapshotInto(dst)
 	if len(dst) != n {
@@ -686,7 +686,7 @@ func (d *Driver) run(ctx context.Context) {
 			d.retries++
 			d.mu.Unlock()
 			d.setState("error", err)
-			d.log.Warn("opcua: connect failed", "driver", d.name, "endpoint", d.endpoint, "error", err, "retryIn", backoff)
+			d.log.Warn("opcua-client: connect failed", "driver", d.name, "endpoint", d.endpoint, "error", err, "retryIn", backoff)
 			select {
 			case <-ctx.Done():
 				return
@@ -718,7 +718,7 @@ func (d *Driver) run(ctx context.Context) {
 		if answered {
 			backoff = d.retryMin
 		}
-		d.log.Warn("opcua: session lost", "driver", d.name, "endpoint", d.endpoint, "retryIn", backoff)
+		d.log.Warn("opcua-client: session lost", "driver", d.name, "endpoint", d.endpoint, "retryIn", backoff)
 		select {
 		case <-ctx.Done():
 			return
@@ -773,7 +773,7 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 			// it is not read at all: Bad until the URI comes back.
 			b.bad, b.missing = true, true
 			missing++
-			d.log.Warn("opcua: namespace not on server; tag reads Bad", "driver", d.name, "tag", b.Name, "namespace", b.Namespace)
+			d.log.Warn("opcua-client: namespace not on server; tag reads Bad", "driver", d.name, "tag", b.Name, "namespace", b.Namespace)
 			continue
 		}
 		if b.node.Namespace() != idx {
@@ -785,7 +785,7 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 	d.online, d.answered, d.primed = true, false, false
 	d.mu.Unlock()
 	d.setState("connected", nil)
-	d.log.Info("opcua: connected", "driver", d.name, "endpoint", d.endpoint,
+	d.log.Info("opcua-client: connected", "driver", d.name, "endpoint", d.endpoint,
 		"policy", info.policy, "mode", info.mode, "tags", len(d.bindings), "remapped", remapped, "missing", missing, "maxNodes", info.maxNodes)
 }
 
@@ -935,7 +935,7 @@ func (d *Driver) pollClass(ctx context.Context, sess *Session, c *scanClass) boo
 				d.mu.Lock()
 				d.server.maxNodes = limit
 				d.mu.Unlock()
-				d.log.Warn("opcua: read too large, halving", "driver", d.name, "maxNodes", limit)
+				d.log.Warn("opcua-client: read too large, halving", "driver", d.name, "maxNodes", limit)
 				continue
 			}
 			d.errs.Add(1)
@@ -943,7 +943,7 @@ func (d *Driver) pollClass(ctx context.Context, sess *Session, c *scanClass) boo
 			d.lastErr = err
 			d.retries++
 			d.mu.Unlock()
-			d.log.Warn("opcua: read failed", "driver", d.name, "class", c.name, "error", err)
+			d.log.Warn("opcua-client: read failed", "driver", d.name, "class", c.name, "error", err)
 			return false
 		}
 		if len(resp.Results) != len(chunk) {
@@ -1023,7 +1023,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 			delete(d.written, name)
 		}
 		d.mu.Unlock()
-		d.log.Warn("opcua: write gate closed; queued writes dropped", "driver", d.name, "count", len(work))
+		d.log.Warn("opcua-client: write gate closed; queued writes dropped", "driver", d.name, "count", len(work))
 		return true
 	}
 
@@ -1039,7 +1039,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 		d.mu.Unlock()
 		if missing {
 			d.errs.Add(1)
-			d.log.Warn("opcua: write dropped: namespace not on server", "driver", d.name, "tag", name, "namespace", b.Namespace)
+			d.log.Warn("opcua-client: write dropped: namespace not on server", "driver", d.name, "tag", name, "namespace", b.Namespace)
 			continue
 		}
 		variant, err := toVariant(b.Type, v)
@@ -1048,7 +1048,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 			d.mu.Lock()
 			d.lastErr = fmt.Errorf("write %s: %w", name, err)
 			d.mu.Unlock()
-			d.log.Warn("opcua: write dropped", "driver", d.name, "tag", name, "error", err)
+			d.log.Warn("opcua-client: write dropped", "driver", d.name, "tag", name, "error", err)
 			continue
 		}
 		d.mu.Lock()
@@ -1084,7 +1084,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 				d.lastErr = fmt.Errorf("write %v: %w", names[start:end], err)
 				d.retries++
 				d.mu.Unlock()
-				d.log.Warn("opcua: write failed", "driver", d.name, "tags", names[start:end], "error", err)
+				d.log.Warn("opcua-client: write failed", "driver", d.name, "tags", names[start:end], "error", err)
 			}
 			requeue(start)
 			return false
@@ -1098,7 +1098,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 			d.mu.Lock()
 			d.lastErr = fmt.Errorf("write %s: %v", names[start+i], sc)
 			d.mu.Unlock()
-			d.log.Warn("opcua: write refused", "driver", d.name, "tag", names[start+i], "status", sc)
+			d.log.Warn("opcua-client: write refused", "driver", d.name, "tag", names[start+i], "status", sc)
 		}
 		start = end
 	}

@@ -4,7 +4,7 @@ prefix: UAC
 claims:
   - id: UAC-001
     claim: >-
-      A driver: {type: opcua} section polls one OPC UA server's variables
+      A driver: {type: opcua-client} section polls one OPC UA server's variables
       into the tag store, and follows a value the server changes.
     source: "#"
     tests:
@@ -66,9 +66,9 @@ claims:
   - id: UAC-006
     claim: >-
       The tag file declares the driver's <name>__Online companion, named
-      from --name, else the opcua driver in nautilus.yaml whose endpoint:
+      from --name, else the opcua-client driver in nautilus.yaml whose endpoint:
       matches, then whose manifest: matches, then the only one, else
-      opcua__Online — the same name Load gives the driver.
+      opcua_client__Online — the same name Load gives the driver.
     source: "#generating-the-manifest-naut-opcua-import"
     tests:
       - go ./internal/project TestOPCUAOnlineTagResolution
@@ -130,7 +130,8 @@ claims:
     claim: >-
       <name>__Online is true once the session is up and its scan classes
       have been read, false while the server is unreachable, and named after
-      the driver (opcua__Online unnamed, opcua-2 as opcua_2__Online).
+      the driver (opcua_client__Online unnamed, opcua-client-2 as
+      opcua_client_2__Online).
     source: "#polling-quality-and-__online"
     tests:
       - go ./opcua TestReadsAndQuality

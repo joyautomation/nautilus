@@ -275,12 +275,12 @@ func TestSchemaRequiresWhatLoaderRequires(t *testing.T) {
 	}
 	requires(t, "driver(modbus)", driverRequires(t, "modbus"), "manifest")
 
-	// opcua (the client) needs an endpoint and a manifest; opcua.New never
+	// opcua-client needs an endpoint and a manifest; opcua.New never
 	// dials either, so a complete config builds with no server in sight.
 	opcuaFS := fstest.MapFS{"opcua_manifest.yaml": &fstest.MapFile{Data: []byte(
 		"namespaces: [\"http://opcfoundation.org/UA/\", \"urn:x\"]\ntags:\n" +
 			"  - {name: T, nodeid: \"ns=1;s=T\", namespace: \"urn:x\", type: Double}\n")}}
-	opcuaCfg := DriverConfig{Type: "opcua", Endpoint: "opc.tcp://192.0.2.1:4840", Manifest: "opcua_manifest.yaml"}
+	opcuaCfg := DriverConfig{Type: "opcua-client", Endpoint: "opc.tcp://192.0.2.1:4840", Manifest: "opcua_manifest.yaml"}
 	if _, err := buildDriver(opcuaFS, opcuaCfg); err != nil {
 		t.Fatalf("a complete opcua driver must build offline: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestSchemaRequiresWhatLoaderRequires(t *testing.T) {
 		if _, err := buildDriver(opcuaFS, cfg); err == nil {
 			t.Fatalf("loader accepted an opcua driver with no %s", key)
 		}
-		requires(t, "driver(opcua)", driverRequires(t, "opcua"), key)
+		requires(t, "driver(opcua-client)", driverRequires(t, "opcua-client"), key)
 	}
 
 	// The IT-hardware drivers: same contract as modbus — every check is

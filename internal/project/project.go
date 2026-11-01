@@ -344,7 +344,7 @@ type MetaConfig struct {
 // default) is the loopback used for bring-up; "eip" polls an
 // Allen-Bradley Logix controller; "sparkplug-host" consumes a Sparkplug B
 // group as a host application; "modbus" polls a set of Modbus TCP sources;
-// "opcua" polls one OPC UA server as a client. Custom buses are the Go
+// "opcua-client" polls one OPC UA server. Custom buses are the Go
 // tier.
 //
 // One flat struct serves every driver type, so `manifest` is shared: for
@@ -397,7 +397,7 @@ type DriverConfig struct {
 	// mid-stream sees nothing until it asks.
 	RebirthOnStart *bool `yaml:"rebirth-on-start"`
 
-	// opcua: the OPC UA CLIENT driver, polling one server (manifest,
+	// opcua-client: the OPC UA client driver, polling one server (manifest,
 	// scan-rate, scan-classes and tag-classes shared with eip and modbus;
 	// username with sparkplug-host). Not the top-level opcua: section,
 	// which SERVES the tag store. The password is NEVER in the file — set
@@ -1526,36 +1526,36 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opts = append(opts, optommp.WithScanRate(time.Duration(d.ScanRate)))
 		}
 		return optommp.New(m, opts...)
-	case "opcua":
+	case "opcua-client":
 		// The OPC UA client: one server, polled per scan class (brief
 		// docs/design/opcua-client.md). opcua.New NEVER dials — it
 		// validates the manifest and parses every node id offline, the same
 		// split eip, modbus and sparkplug-host make.
 		if d.Endpoint == "" {
-			return nil, fmt.Errorf("driver opcua: endpoint is required (opc.tcp://host:4840)")
+			return nil, fmt.Errorf("driver opcua-client: endpoint is required (opc.tcp://host:4840)")
 		}
 		if d.Manifest == "" {
-			return nil, fmt.Errorf("driver opcua: manifest (the opcua_manifest.yaml `naut opcua import` writes) is required")
+			return nil, fmt.Errorf("driver opcua-client: manifest (the opcua_manifest.yaml `naut opcua import` writes) is required")
 		}
 		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
 		if err != nil {
-			return nil, fmt.Errorf("driver opcua: %w", err)
+			return nil, fmt.Errorf("driver opcua-client: %w", err)
 		}
 		om, err := opcua.ParseManifest(raw)
 		if err != nil {
-			return nil, fmt.Errorf("driver opcua: %s: %w", d.Manifest, err)
+			return nil, fmt.Errorf("driver opcua-client: %s: %w", d.Manifest, err)
 		}
 		// The session's status, as a BOOL input the logic checks before
-		// trusting its values: "<driver name>__Online" — opcua__Online for
+		// trusting its values: "<driver name>__Online" — opcua_client__Online for
 		// an unnamed driver: section, the rule eip keeps.
 		name := d.Name
 		if name == "" {
-			name = "opcua"
+			name = "opcua-client"
 		}
 		opts := []opcua.Option{
 			opcua.WithLogger(slog.Default().With("driver", name)),
 			opcua.WithName(name),
-			opcua.WithOnlineTag(onlineTagFor(d.Name, "opcua")),
+			opcua.WithOnlineTag(onlineTagFor(d.Name, "opcua-client")),
 			opcua.WithSecurity(d.Security, d.SecurityMode),
 			opcua.WithPKIDir(d.PKIDir),
 		}
@@ -1589,7 +1589,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, opcua, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, opcua-client, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }
 

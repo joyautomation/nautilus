@@ -105,9 +105,9 @@ func LoadManifest(r io.Reader) (Manifest, error) {
 	dec.KnownFields(true) // a typo is an error, not a silently dropped binding
 	if err := dec.Decode(&m); err != nil {
 		if errors.Is(err, io.EOF) {
-			return Manifest{}, fmt.Errorf("opcua: manifest is empty")
+			return Manifest{}, fmt.Errorf("opcua-client: manifest is empty")
 		}
-		return Manifest{}, fmt.Errorf("opcua: manifest: %w", err)
+		return Manifest{}, fmt.Errorf("opcua-client: manifest: %w", err)
 	}
 	return m, nil
 }

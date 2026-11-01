@@ -1,6 +1,6 @@
 package project
 
-// The OPC UA client driver (`type: opcua`) through the loader: it builds
+// The OPC UA client driver (`type: opcua-client`) through the loader: it builds
 // offline, names its companion as every single-connection driver does, is a
 // communications driver (its inputs read init/zero until delivered), shows
 // up as one status row and one Sparkplug device, and `naut opcua import`
@@ -36,22 +36,22 @@ tags:
   - { name: GW_Count, role: input }
   - { name: GW_Run, role: input, init: true }
   - { name: GW_SP, role: output, init: 0.0 }
-  - { name: opcua__Online, role: input }
+  - { name: opcua_client__Online, role: input }
   - { name: Level, role: state, init: -1.0 }
   - { name: Running, role: state, init: false }
   - { name: Ran, role: state, init: false }
 driver:
-  type: opcua
+  type: opcua-client
   endpoint: %s
   manifest: opcua_manifest.yaml
   scan-rate: 100ms
 `, endpoint))},
 		"opcua_manifest.yaml": &fstest.MapFile{Data: []byte(opcuaClientManifest)},
 		"main.st": &fstest.MapFile{Data: []byte(`PROGRAM Main
-VAR_EXTERNAL GW_Level : LREAL; GW_Run : BOOL; opcua__Online : BOOL;
+VAR_EXTERNAL GW_Level : LREAL; GW_Run : BOOL; opcua_client__Online : BOOL;
   Level : LREAL; Running : BOOL; Ran : BOOL; END_VAR
   Level := GW_Level;
-  Running := GW_Run AND opcua__Online;
+  Running := GW_Run AND opcua_client__Online;
   Ran := TRUE;
 END_PROGRAM
 `)},
@@ -68,7 +68,7 @@ func TestOPCUAClientDriverIsACommsDriver(t *testing.T) {
 		got[d.Name] = d
 	}
 	for name, want := range map[string]string{
-		"GW_Level": "LREAL", "GW_Count": "DINT", "GW_Run": "BOOL", "opcua__Online": "BOOL",
+		"GW_Level": "LREAL", "GW_Count": "DINT", "GW_Run": "BOOL", "opcua_client__Online": "BOOL",
 	} {
 		if !got[name].Comms {
 			t.Errorf("%s is not marked Comms", name)
@@ -81,22 +81,22 @@ func TestOPCUAClientDriverIsACommsDriver(t *testing.T) {
 		t.Error("an output was marked Comms")
 	}
 
-	// One status row, kind "opcua" (the served side is "opcua-server").
+	// One status row, kind "opcua-client" (the served side is "opcua-server").
 	rows := p.DriverStatus(nil, nil)()
-	if len(rows) != 1 || rows[0].Kind != "opcua" || rows[0].Name != "opcua" {
-		t.Fatalf("status rows = %+v, want one opcua row named opcua", rows)
+	if len(rows) != 1 || rows[0].Kind != "opcua-client" || rows[0].Name != "opcua-client" {
+		t.Fatalf("status rows = %+v, want one opcua-client row named opcua-client", rows)
 	}
 
 	// One Sparkplug device, named after the driver, carrying its inputs,
 	// unhealthy while the server is down.
-	devs, err := sparkplugDevices([]nio.NamedDriver{{Name: "opcua", Driver: p.Runtime.Driver}})
+	devs, err := sparkplugDevices([]nio.NamedDriver{{Name: "opcua-client", Driver: p.Runtime.Driver}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(devs) != 1 || devs[0].ID != "opcua" || devs[0].Health == nil || devs[0].Health() {
-		t.Fatalf("devices = %+v, want one opcua device, unhealthy before connect", devs)
+	if len(devs) != 1 || devs[0].ID != "opcua-client" || devs[0].Health == nil || devs[0].Health() {
+		t.Fatalf("devices = %+v, want one opcua-client device, unhealthy before connect", devs)
 	}
-	if !strings.Contains(strings.Join(devs[0].Tags, ","), "opcua__Online") {
+	if !strings.Contains(strings.Join(devs[0].Tags, ","), "opcua_client__Online") {
 		t.Errorf("device tags %v lack the companion", devs[0].Tags)
 	}
 }
@@ -131,7 +131,7 @@ func TestOPCUAClientServerDownReadsInitOrZero(t *testing.T) {
 		t.Error("the program did not run")
 	}
 	if tags.Bool("Running") {
-		t.Error("Running is true: the logic must see opcua__Online FALSE while the server is down")
+		t.Error("Running is true: the logic must see opcua_client__Online FALSE while the server is down")
 	}
 	if got := tags.Real("Level"); got != 0 {
 		t.Errorf("Level = %v, want the seeded 0", got)
@@ -145,23 +145,23 @@ func TestOPCUAClientServerDownReadsInitOrZero(t *testing.T) {
 }
 
 // OPCUAOnlineTag names the companion exactly as Load will: by endpoint,
-// then manifest, then the only opcua driver, else the default.
+// then manifest, then the only opcua-client driver, else the default.
 func TestOPCUAOnlineTagResolution(t *testing.T) {
 	two := "drivers:\n" +
 		"  - { type: modbus, manifest: m.yaml }\n" +
-		"  - { type: opcua, endpoint: 'opc.tcp://10.0.0.1:4840', manifest: a.yaml }\n" +
-		"  - { type: opcua, endpoint: 'opc.tcp://10.0.0.2:4840/', manifest: b.yaml }\n" +
-		"  - { type: opcua, name: Line 3, endpoint: 'opc.tcp://10.0.0.3:4840', manifest: c.yaml }\n"
+		"  - { type: opcua-client, endpoint: 'opc.tcp://10.0.0.1:4840', manifest: a.yaml }\n" +
+		"  - { type: opcua-client, endpoint: 'opc.tcp://10.0.0.2:4840/', manifest: b.yaml }\n" +
+		"  - { type: opcua-client, name: Line 3, endpoint: 'opc.tcp://10.0.0.3:4840', manifest: c.yaml }\n"
 	for _, tc := range []struct {
 		name, manifest, endpoint, file, want string
 	}{
-		{"no nautilus.yaml", "", "opc.tcp://10.0.0.1:4840", "", "opcua__Online"},
-		{"no opcua driver", "driver: { type: modbus, manifest: m.yaml }\n", "opc.tcp://x:4840", "", "opcua__Online"},
-		{"lone named driver, other endpoint", "driver: { type: opcua, name: gateway, endpoint: 'opc.tcp://a:4840', manifest: o.yaml }\n", "opc.tcp://b:4840", "", "gateway__Online"},
-		{"first of several", two, "opc.tcp://10.0.0.1:4840", "", "opcua__Online"},
-		{"deduped second, trailing slash", two, "opc.tcp://10.0.0.2:4840", "", "opcua_2__Online"},
+		{"no nautilus.yaml", "", "opc.tcp://10.0.0.1:4840", "", "opcua_client__Online"},
+		{"no opcua-client driver", "driver: { type: modbus, manifest: m.yaml }\n", "opc.tcp://x:4840", "", "opcua_client__Online"},
+		{"lone named driver, other endpoint", "driver: { type: opcua-client, name: gateway, endpoint: 'opc.tcp://a:4840', manifest: o.yaml }\n", "opc.tcp://b:4840", "", "gateway__Online"},
+		{"first of several", two, "opc.tcp://10.0.0.1:4840", "", "opcua_client__Online"},
+		{"deduped second, trailing slash", two, "opc.tcp://10.0.0.2:4840", "", "opcua_client_2__Online"},
 		{"named, reduced to an identifier", two, "opc.tcp://10.0.0.3:4840", "", "Line_3__Online"},
-		{"by manifest", two, "", "./b.yaml", "opcua_2__Online"},
+		{"by manifest", two, "", "./b.yaml", "opcua_client_2__Online"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fsys := fstest.MapFS{}
@@ -186,8 +186,8 @@ func TestOPCUAOnlineTagResolution(t *testing.T) {
 // The name the import resolves is one Load's drivers deliver.
 func TestOPCUAOnlineTagAgreesWithLoad(t *testing.T) {
 	files := fsys(multiBase() + "drivers:\n" +
-		"  - { type: opcua, endpoint: 'opc.tcp://192.0.2.1:4840', manifest: a.yaml }\n" +
-		"  - { type: opcua, endpoint: 'opc.tcp://192.0.2.2:4840', manifest: b.yaml }\n")
+		"  - { type: opcua-client, endpoint: 'opc.tcp://192.0.2.1:4840', manifest: a.yaml }\n" +
+		"  - { type: opcua-client, endpoint: 'opc.tcp://192.0.2.2:4840', manifest: b.yaml }\n")
 	files["a.yaml"] = &fstest.MapFile{Data: []byte("tags:\n  - {name: A, nodeid: \"ns=1;s=A\", type: Double}\n")}
 	files["b.yaml"] = &fstest.MapFile{Data: []byte("tags:\n  - {name: B, nodeid: \"ns=1;s=B\", type: Double}\n")}
 	p, err := Load(files, "")
@@ -198,8 +198,8 @@ func TestOPCUAOnlineTagAgreesWithLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want != "opcua_2__Online" {
-		t.Fatalf("resolved %q, want opcua_2__Online", want)
+	if want != "opcua_client_2__Online" {
+		t.Fatalf("resolved %q, want opcua_client_2__Online", want)
 	}
 	type owner interface{ InputNames() []string }
 	found := false

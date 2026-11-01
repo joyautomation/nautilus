@@ -75,7 +75,7 @@ tags:
 server:
   addr: "%s"
 driver:
-  type: opcua
+  type: opcua-client
   name: gateway
   endpoint: %s
   manifest: opcua_manifest.yaml
@@ -205,8 +205,8 @@ END_PROGRAM
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Kind != "opcua" || rows[0].Name != "gateway" || rows[0].State != "connected" {
-		t.Errorf("/api/drivers = %+v, want one connected opcua row named gateway", rows)
+	if len(rows) != 1 || rows[0].Kind != "opcua-client" || rows[0].Name != "gateway" || rows[0].State != "connected" {
+		t.Errorf("/api/drivers = %+v, want one connected opcua-client row named gateway", rows)
 	}
 }
 
