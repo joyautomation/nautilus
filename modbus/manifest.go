@@ -18,7 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,7 +78,8 @@ func (s Source) Addr() string {
 	if port == 0 {
 		port = 502
 	}
-	return fmt.Sprintf("%s:%d", s.Host, port)
+	host, _, _ := SplitHost(s.Host) // a hand-written "[::1]" is the bare address
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // TagBinding maps one nautilus tag onto a span of one source's table.
@@ -318,6 +321,8 @@ func (m Manifest) Validate() error {
 		ids = append(ids, s.ID)
 		if s.Host == "" {
 			errs = append(errs, fmt.Errorf("source %s: missing host", s.ID))
+		} else if _, _, err := net.SplitHostPort(s.Host); err == nil {
+			errs = append(errs, fmt.Errorf("source %s: host %q carries a port; use port: for it", s.ID, s.Host))
 		}
 		if s.WordOrder != "" && s.WordOrder != OrderBig && s.WordOrder != OrderLittle {
 			errs = append(errs, fmt.Errorf("source %s: wordorder %q (want big or little)", s.ID, s.WordOrder))

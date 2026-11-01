@@ -59,7 +59,12 @@ instances:
   - {id: TC_A, type: temp-controller, host: 192.168.10.10, unit-id: 1, enable-tag: CFG_HeatersOn, desc: zone A loop}
   - {id: TC_B, type: temp-controller, host: 192.168.10.10, unit-id: 2, enable-tag: CFG_HeatersOn, desc: zone B loop}
   - {id: GAS,  type: analyser,        host: 192.168.10.51, unit-id: 4, desc: stack analyser}
+  - {id: SIM,  type: analyser,        host: 127.0.0.1, port: 5020, unit-id: 4, desc: the bench simulator}
 ```
+
+A device type may set `port:` (default 502) and an instance overrides it; an
+instance's `host:` may also carry the port (`host: 127.0.0.1:5020`), which
+the import splits.
 
 Two loops on one host with different unit-ids is the gateway shape — an
 Anybus or a Moxa fronting several serial devices is one source per drop,
@@ -73,7 +78,7 @@ naut modbus import --map devices.yaml
 That emits **two committed, never-hand-edited files**, byte-identical on
 every re-run so a regeneration diffs cleanly:
 
-- `modbus_manifest.yaml` — `sources:` (host, `unitid`, `wordorder`,
+- `modbus_manifest.yaml` — `sources:` (`host`, `port` (default 502; the host alone, never `host:port`), `unitid`, `wordorder`,
   `timeout`, `enable`, `maxblock`) and `tags:` (source, table, address,
   format, scale, `writable`/`rewrite`/`writeonly`, `scanclass`). Decoded
   strictly — a misspelled key is an error with a did-you-mean, not a
@@ -289,7 +294,9 @@ naut modbus serve --manifest modbus_manifest.yaml --values seed.json --ramp
 inverts each binding's scaling and word order on the way into the registers,
 so you write `"GAS_CH1": 120.0`, not a pair of raw words. `--ramp` drifts
 the numeric inputs so trends look alive. `--listen` defaults to
-`127.0.0.1:5020`. Point the manifest's hosts at it and `naut run .`
+`127.0.0.1:5020`. Point an instance's `host:` at it (`host: 127.0.0.1:5020`,
+or `host: 127.0.0.1` with `port: 5020`; the import splits the former into
+the manifest's `host:` and `port:`) and `naut run .`
 polls the same plan `--plan` printed.
 
 `browse` is the commissioning poke — read a range from a live device (or

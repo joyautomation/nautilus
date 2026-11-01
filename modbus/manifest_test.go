@@ -143,6 +143,11 @@ func TestValidateErrors(t *testing.T) {
 			"source A: missing host",
 		},
 		{
+			"host carries a port",
+			"sources: [{id: A, host: \"127.0.0.1:5020\"}]\n",
+			"use port:",
+		},
+		{
 			"bad word order",
 			"sources: [{id: A, host: h, wordorder: middle}]\n",
 			`wordorder "middle"`,

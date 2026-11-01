@@ -60,6 +60,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/joyautomation/nautilus/modbus"
 )
 
 // DeviceMap is the parsed devices.yaml.
@@ -170,7 +172,22 @@ func ParseDeviceMap(raw []byte) (DeviceMap, error) {
 		}
 	}
 	ids := map[string]bool{}
-	for _, in := range dm.Instances {
+	for i := range dm.Instances {
+		in := &dm.Instances[i]
+		// host: 127.0.0.1:5020 carries its port; split it so the driver never
+		// dials host:5020:502 (#426). An explicit port: must agree.
+		h, p, herr := modbus.SplitHost(in.Host)
+		switch {
+		case herr != nil:
+			errs = append(errs, fmt.Errorf("instance %s: %w", in.ID, herr))
+		case p != 0 && in.Port != 0 && in.Port != p:
+			errs = append(errs, fmt.Errorf("instance %s: host %q carries port %d but port: is %d", in.ID, in.Host, p, in.Port))
+		default:
+			in.Host = h
+			if p != 0 {
+				in.Port = p
+			}
+		}
 		if in.ID == "" {
 			errs = append(errs, fmt.Errorf("instance with host %q: missing id", in.Host))
 			continue
