@@ -94,6 +94,17 @@ server enforces, with `Bad_TooManyOperations` past it — so a project of a
 few thousand tags is still one call. A Browse lists each reference once,
 the standard `Server` object's included.
 
+The server says it is nautilus. Its `ApplicationUri`, in every endpoint's
+description and as the only entry of the `Server` object's `ServerArray`,
+is `urn:<host name>:joyautomation:nautilus:<project>`: one per controller,
+the same after a restart, so a historian or SCADA gateway that keys its
+connection on it finds the same server again. `ServerStatus.BuildInfo`
+names the product (`ProductUri` `urn:joyautomation:nautilus`, Joy
+Automation, Nautilus), the version `naut version` prints, the commit it
+was built from as the build number, and that commit's date. `ServiceLevel`
+is 255 while the server runs, and `Auditing` is false: the server writes
+no audit events.
+
 ## Types
 
 The tag store holds every integer as 64 bits and every real as a double,

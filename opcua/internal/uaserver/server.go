@@ -68,7 +68,10 @@ type serverConfig struct {
 	applicationName  string
 	manufacturerName string
 	productName      string
+	productURI       string
 	softwareVersion  string
+	buildNumber      string
+	buildDate        time.Time
 
 	enabledSec  []security
 	enabledAuth []authMode
@@ -106,10 +109,11 @@ type security struct {
 func New(opts ...Option) *Server {
 	cfg := &serverConfig{
 		cap:              capabilities,
-		applicationName:  "GOPCUA",               // override with the ServerName option
-		manufacturerName: "The gopcua Team",      // override with the ManufacturerName option
-		productName:      "gopcua OPC/UA Server", // override with the ProductName option
-		softwareVersion:  "0.0.0-dev",            // override with the SoftwareVersion option
+		applicationName:  "GOPCUA",                          // override with the ServerName option
+		manufacturerName: "The gopcua Team",                 // override with the ManufacturerName option
+		productName:      "gopcua OPC/UA Server",            // override with the ProductName option
+		productURI:       "https://github.com/gopcua/opcua", // override with the ProductURI option
+		softwareVersion:  "0.0.0-dev",                       // override with the SoftwareVersion option
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -133,12 +137,12 @@ func New(opts ...Option) *Server {
 			CurrentTime: time.Now(),
 			State:       ua.ServerStateSuspended,
 			BuildInfo: &ua.BuildInfo{
-				ProductURI:       "https://github.com/gopcua/opcua",
+				ProductURI:       cfg.productURI,
 				ManufacturerName: cfg.manufacturerName,
 				ProductName:      cfg.productName,
-				SoftwareVersion:  "0.0.0-dev",
-				BuildNumber:      "",
-				BuildDate:        time.Time{},
+				SoftwareVersion:  cfg.softwareVersion,
+				BuildNumber:      cfg.buildNumber,
+				BuildDate:        cfg.buildDate,
 			},
 			SecondsTillShutdown: 0,
 			ShutdownReason:      &ua.LocalizedText{},
@@ -171,6 +175,7 @@ func New(opts ...Option) *Server {
 	for _, n := range ServerCapabilitiesNodes(s) {
 		s.namespaces[0].AddNode(n)
 	}
+	setServerObjectValues(s)
 
 	return s
 }
@@ -387,7 +392,7 @@ func (s *Server) initEndpoints() {
 				SecurityLevel: secLevel,
 				Server: &ua.ApplicationDescription{
 					ApplicationURI: s.cfg.applicationURI,
-					ProductURI:     "urn:github.com:gopcua:server",
+					ProductURI:     s.cfg.productURI,
 					ApplicationName: &ua.LocalizedText{
 						EncodingMask: ua.LocalizedTextText,
 						Text:         s.cfg.applicationName,

@@ -148,6 +148,39 @@ func SoftwareVersion(name string) Option {
 	}
 }
 
+// ApplicationURI sets the server's ApplicationUri: the globally unique
+// name of this server instance (Part 4 §7.1), advertised in every
+// endpoint's ApplicationDescription and as the first entry of the Server
+// object's ServerArray. A Certificate option given after this one
+// replaces it with the URI in the certificate, which must match it.
+func ApplicationURI(uri string) Option {
+	return func(s *serverConfig) {
+		s.applicationURI = uri
+	}
+}
+
+// ProductURI sets the product's URI: ApplicationDescription.ProductUri
+// and ServerStatus.BuildInfo.ProductUri.
+func ProductURI(uri string) Option {
+	return func(s *serverConfig) {
+		s.productURI = uri
+	}
+}
+
+// BuildNumber sets ServerStatus.BuildInfo.BuildNumber.
+func BuildNumber(n string) Option {
+	return func(s *serverConfig) {
+		s.buildNumber = n
+	}
+}
+
+// BuildDate sets ServerStatus.BuildInfo.BuildDate.
+func BuildDate(t time.Time) Option {
+	return func(s *serverConfig) {
+		s.buildDate = t
+	}
+}
+
 // this logger interface is used to allow the user to provide their own logger
 // it is compatible with slog.Logger
 type Logger interface {

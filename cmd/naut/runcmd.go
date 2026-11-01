@@ -26,6 +26,7 @@ import (
 	"syscall"
 
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/vcs"
 	"github.com/joyautomation/nautilus/leader"
@@ -157,6 +158,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		return 1
 	}
 	if opc != nil {
+		// BuildInfo.SoftwareVersion is the version `naut version` prints.
+		opc.SetSoftwareVersion(lsp.Version)
 		if err := opc.Start(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, "opcua:", err, "(continuing without it)")
 		} else {

@@ -28,7 +28,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +81,7 @@ type Server struct {
 	since   time.Time
 	lastErr error
 	url     string
+	version string
 }
 
 // New prepares a server. It validates the endpoint and dials nothing — the
@@ -158,11 +161,20 @@ func (s *Server) Start(ctx context.Context) error {
 	// gopcua listens on the first endpoint and advertises them all, and a
 	// client finds an endpoint only by its exact URL: the listener's own,
 	// then one per name it answers to (see endpointHosts).
+	build := binaryBuild()
+	if s.version != "" {
+		build.version = s.version
+	}
 	opts := []opcserver.Option{
 		opcserver.EndPoint(listen, port),
 		opcserver.ServerName("Nautilus · " + s.opts.Name),
+		opcserver.ApplicationURI(ApplicationURI(s.opts.Name)),
 		opcserver.ManufacturerName("Joy Automation"),
 		opcserver.ProductName("Nautilus"),
+		opcserver.ProductURI(ProductURI),
+		opcserver.SoftwareVersion(build.version),
+		opcserver.BuildNumber(build.number),
+		opcserver.BuildDate(build.date),
 		opcserver.EnableSecurity("None", ua.MessageSecurityModeNone),
 		opcserver.EnableAuthMode(ua.UserTokenTypeAnonymous),
 	}
@@ -213,6 +225,70 @@ func (s *Server) Start(ctx context.Context) error {
 	s.done = make(chan struct{})
 	go s.sweep(cctx, s.done)
 	return nil
+}
+
+// SetSoftwareVersion sets the version the server reports as
+// ServerStatus.BuildInfo.SoftwareVersion: the CLI passes its own, the one
+// `naut version` prints. Unset, it is the module version in the binary's
+// build info, or "dev". It takes effect at the next Start.
+func (s *Server) SetSoftwareVersion(v string) {
+	s.mu.Lock()
+	s.version = v
+	s.mu.Unlock()
+}
+
+// ProductURI names nautilus as a product: ApplicationDescription.ProductUri
+// and ServerStatus.BuildInfo.ProductUri.
+const ProductURI = "urn:joyautomation:nautilus"
+
+// ApplicationURI is the ApplicationUri of the server for project name on
+// this machine, urn:<host name>:joyautomation:nautilus:<project>: unique
+// per controller instance (Part 4 §7.1), and stable across restarts, so
+// a client that keys its connection on it (a historian, a SCADA gateway)
+// finds the same server again.
+func ApplicationURI(name string) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "localhost"
+	}
+	return "urn:" + host + ":joyautomation:nautilus:" + name
+}
+
+// build is what ServerStatus.BuildInfo says about the binary.
+type build struct {
+	version string    // SoftwareVersion
+	number  string    // BuildNumber: the commit, when the build recorded one
+	date    time.Time // BuildDate
+}
+
+// binaryBuild reads the running binary's build info: the module version
+// (or "dev"), the VCS revision as the build number, and the commit time as
+// the build date, falling back to the executable's modification time.
+func binaryBuild() build {
+	b := build{version: "dev"}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := strings.TrimPrefix(bi.Main.Version, "v"); v != "" && v != "(devel)" {
+			b.version = v
+		}
+		for _, kv := range bi.Settings {
+			switch kv.Key {
+			case "vcs.revision":
+				b.number = kv.Value
+			case "vcs.time":
+				if t, err := time.Parse(time.RFC3339, kv.Value); err == nil {
+					b.date = t
+				}
+			}
+		}
+	}
+	if b.date.IsZero() {
+		if exe, err := os.Executable(); err == nil {
+			if fi, err := os.Stat(exe); err == nil {
+				b.date = fi.ModTime()
+			}
+		}
+	}
+	return b
 }
 
 // Stop closes every session and the listener, and stops the sweep.

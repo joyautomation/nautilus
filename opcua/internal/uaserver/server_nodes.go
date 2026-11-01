@@ -125,7 +125,7 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 	mName := NewNode(
 		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_ManufacturerName),
 		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("ProductName")),
+			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("ManufacturerName")),
 			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
 		},
 		nil,
@@ -148,7 +148,7 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
 		},
 		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.applicationURI) },
+		func() *ua.DataValue { return DataValueFromValue(s.cfg.productURI) },
 	)
 
 	bInfo := NewNode(
@@ -158,7 +158,8 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
 		},
 		nil,
-		func() *ua.DataValue { return DataValueFromValue("") },
+		// The whole BuildInfo structure, as ServerStatus carries it.
+		func() *ua.DataValue { return DataValueFromValue(ua.NewExtensionObject(s.Status().BuildInfo)) },
 	)
 	sVersion := NewNode(
 		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_SoftwareVersion),
@@ -177,10 +178,10 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
 		},
 		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.softwareVersion) },
+		func() *ua.DataValue { return DataValueFromValue(s.cfg.buildNumber) },
 	)
 
-	ts := time.Now()
+	ts := s.Status().StartTime
 	bDate := NewNode(
 		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_BuildDate),
 		map[ua.AttributeID]*ua.DataValue{
@@ -188,7 +189,7 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
 		},
 		nil,
-		func() *ua.DataValue { return DataValueFromValue(ts) },
+		func() *ua.DataValue { return DataValueFromValue(s.cfg.buildDate) },
 	)
 	timeStart := NewNode(
 		ua.NewNumericNodeID(0, id.Server_ServerStatus_StartTime),
@@ -218,7 +219,7 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
 		},
 		nil,
-		func() *ua.DataValue { return DataValueFromValue(int32(0)) },
+		func() *ua.DataValue { return DataValueFromValue(uint32(0)) },
 	)
 	sReason := NewNode(
 		ua.NewNumericNodeID(0, id.Server_ServerStatus_ShutdownReason),
@@ -227,7 +228,7 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
 		},
 		nil,
-		func() *ua.DataValue { return DataValueFromValue(int32(0)) },
+		func() *ua.DataValue { return DataValueFromValue(&ua.LocalizedText{}) },
 	)
 
 	nodes := []*Node{sState, mName, pName, pURI, sVersion, bNumber, bDate, timeStart, timeCurrent, bInfo, sTillShutdown, sReason}
@@ -239,4 +240,30 @@ func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
 	nodes = append(nodes, sStatus)
 
 	return nodes
+}
+
+// setServerObjectValues gives the Server object's Mandatory variables that
+// the imported node set leaves without a value one (Part 5 §6.3.1,
+// ServerType): ServerArray, whose only entry is this server's
+// ApplicationUri; ServiceLevel, 255 (healthy) while the server runs and 0
+// (out of service) otherwise; and Auditing, false, as this server writes
+// no audit events. gopcua's original left them valueless, so a Read of
+// their Value answered Bad_AttributeIdInvalid (nautilus#424). The nodes
+// themselves stay the node set's, with its references and attributes.
+func setServerObjectValues(s *Server) {
+	set := func(nid uint32, f ValueFunc) {
+		if n := s.namespaces[0].Node(ua.NewNumericNodeID(0, nid)); n != nil {
+			n.val = f
+		}
+	}
+	set(id.Server_ServerArray, func() *ua.DataValue {
+		return DataValueFromValue([]string{s.cfg.applicationURI})
+	})
+	set(id.Server_ServiceLevel, func() *ua.DataValue {
+		if s.Status().State == ua.ServerStateRunning {
+			return DataValueFromValue(byte(255))
+		}
+		return DataValueFromValue(byte(0))
+	})
+	set(id.Server_Auditing, func() *ua.DataValue { return DataValueFromValue(false) })
 }
