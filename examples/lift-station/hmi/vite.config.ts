@@ -27,8 +27,10 @@ export default defineConfig(({ mode }) => {
 			// read/transform anything outside its own project root. Without
 			// this, `npm run dev` 403s on the import the moment it's
 			// requested (see the dogfood log). The hmi-3d checkout is the
-			// linked package's source.
-			fs: { allow: [path.resolve(__dirname, '..'), path.resolve(__dirname, '../../../hmi-3d')] },
+			// linked packages' source (hmi and hmi-3d are both file: links).
+			fs: {
+				allow: [path.resolve(__dirname, '..'), path.resolve(__dirname, '../../../hmi'), path.resolve(__dirname, '../../../hmi-3d')]
+			},
 			// Proxy /api to the controller so the browser sees one origin.
 			// changeOrigin rewrites Host but NOT the Origin header — the
 			// controller's same-origin write guard would still see the vite

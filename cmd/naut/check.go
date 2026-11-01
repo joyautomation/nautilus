@@ -388,6 +388,16 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: %s\n", dir, w)
 	}
 
+	// The served HMI predates an edit it compiles in (a mimic, a scene,
+	// its own code): what the operator sees is not what the files say.
+	if !proj.HMIMissing {
+		if src := project.StaleHMISource(os.DirFS(dir), proj.HMIDir); src != "" {
+			warns++
+			fmt.Printf("%s: warning: server.hmi: %s is older than %s — run npm run build in %s\n",
+				dir, proj.HMIDir, src, project.HMIBuildHint(proj.HMIDir))
+		}
+	}
+
 	// The first task's name: key is a footgun, not a choice: Load (like
 	// Sources, for a warm swap) assigns the first task runtime.MainTaskName
 	// unconditionally, so a manifest author who names it — e.g. expecting

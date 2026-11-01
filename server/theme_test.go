@@ -8,7 +8,7 @@ import (
 )
 
 // The dashboard's token layer is a hand-copy of the HMI kit's
-// (hmi/src/lib/theme.css): the kit is a Svelte/npm package the Go binary
+// (hmi/src/lib/palette.css, which theme.css imports): the kit is a Svelte/npm package the Go binary
 // can't import, and index.html is deliberately a single file with no build
 // step. A copy drifts — someone retunes the kit's surfaces for a customer's
 // panel and the controller's own landing page quietly stops matching the HMI
@@ -19,9 +19,9 @@ import (
 // adds --brand and a display face the kit has no use for, and the kit carries
 // component tokens the page doesn't. Only tokens present in both must agree.
 func TestThemeTokensMatchHMIKit(t *testing.T) {
-	kitCSS, err := os.ReadFile("../hmi/src/lib/theme.css")
+	kitCSS, err := os.ReadFile("../hmi/src/lib/palette.css")
 	if err != nil {
-		t.Skip("hmi/src/lib/theme.css not present — skipping token drift check")
+		t.Skip("hmi/src/lib/palette.css not present — skipping token drift check")
 	}
 
 	for _, theme := range []string{"dark", "light"} {
@@ -39,7 +39,7 @@ func TestThemeTokensMatchHMIKit(t *testing.T) {
 			shared++
 			if got != want {
 				t.Errorf("%s theme: %s is %q on the dashboard but %q in the HMI kit — "+
-					"re-copy the block from hmi/src/lib/theme.css, or change both", theme, name, got, want)
+					"re-copy the block from hmi/src/lib/palette.css, or change both", theme, name, got, want)
 			}
 		}
 		if shared < 10 {

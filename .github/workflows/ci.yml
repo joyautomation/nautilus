@@ -158,7 +158,12 @@ jobs:
       - run: npm ci && npm run check && npm run build
         working-directory: examples/well-site/hmi
       # examples/lift-station/hmi links the package the same way, for the
-      # /3d view it carries beside its mimic (lift-station.scene.json).
+      # /3d view it carries beside its mimic (lift-station.scene.json), and
+      # links the hmi kit too (file:../../../hmi, until its next release is
+      # on npm): build the kit's dist/ first, or nothing resolves it.
+      - name: Build hmi (lift-station's local dependency)
+        run: npm ci && npm run package
+        working-directory: hmi
       - run: npm ci && npm run check && npm run build
         working-directory: examples/lift-station/hmi
   vscode-iec:

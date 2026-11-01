@@ -111,7 +111,7 @@ key ctrl+c; sleep 0.5; key ctrl+v; sleep 2
 png=$(shot mimic-pasted)
 key ctrl+s; sleep 1.5
 ids=$(python3 -c "import json,sys; print(' '.join(e['id'] for e in json.load(open(sys.argv[1]))['equipment']))" "$PROJ/heated-tank.mimic.json")
-[[ $(wc -w <<<"$ids") == 4 ]] && pass "Mimic: copy/paste the tank → 4 equipment ($ids)" "$png" \
+[[ $(wc -w <<<"$ids") == 5 ]] && pass "Mimic: copy/paste the tank → 5 equipment ($ids)" "$png" \
   || fail "Mimic: equipment after paste: $ids" "$png"
 vs_cmd "View: Close All Editors" 1
 

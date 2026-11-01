@@ -1,5 +1,6 @@
 import { mount } from 'svelte';
 import '../theme.css';
+import '@joyautomation/nautilus-hmi/palette.css';
 import './mimic.css';
 import MimicApp from './MimicApp.svelte';
 import PreviewApp from './PreviewApp.svelte';

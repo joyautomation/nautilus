@@ -27,7 +27,7 @@
 			"y": 40,
 			"width": 220,
 			"label": "MT-201",
-			"bind": { "levelPct": "LT201_Level", "tempC": "TT201_Temp" }
+			"bind": { "levelPct": "LT201_Level" }
 		},
 		{
 			"id": "AG201",
@@ -102,6 +102,7 @@
 		{ "text": "TO LINE", "x": 770, "y": 165 },
 		{ "text": "Recipe", "x": 40, "y": 10, "bind": "Active.Name" },
 		{ "text": "Phase", "x": 250, "y": 10, "bind": "Batch.Phase" },
-		{ "text": "Batch", "x": 450, "y": 10, "bind": "Batch.Count", "decimals": 0 }
+		{ "text": "Batch", "x": 450, "y": 10, "bind": "Batch.Count", "decimals": 0 },
+		{ "text": "TT-201", "x": 650, "y": 10, "bind": "TT201_Temp", "unit": "°C", "decimals": 1 }
 	]
 }

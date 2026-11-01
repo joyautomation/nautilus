@@ -47,7 +47,7 @@
       }
 
       /* ── token layer ──────────────────────────────────────────────────
-         Mirrors the HMI kit's token layer (hmi/src/lib/theme.css) name for
+         Mirrors the HMI kit's colour tokens (hmi/src/lib/palette.css) name for
          name, so this page and any HMI built on the kit are the same surface.
          Nothing below this block hard-codes a colour: re-skinning the
          dashboard means editing these three blocks and nothing else.
@@ -83,6 +83,7 @@
         --muted: #898781;
         --grid: #2c2c2a;
         --axis: #383835;
+        --edge: #7a7973;
 
         --brand: #64d88a;
 
@@ -116,6 +117,7 @@
         --muted: #74726a;
         --grid: #e4e2da;
         --axis: #c9c7bd;
+        --edge: #7e7c74;
 
         --brand: #1f7a46;
 
@@ -135,13 +137,12 @@
         --primary-border: #22a3bd;
         --primary-hover: #155e75;
 
-        /* The kit's own doc comment mentions the light-theme attribute
-           selector in prose before its real light rule, so the token-drift
-           test's naive scan (theme_test.go) locks onto the kit's shared
-           type/space/motion block for the "light" side instead of the
-           color rule below. These are that block's tokens, copied verbatim
-           from hmi/src/lib/theme.css so the comparison stays meaningful
-           instead of failing on that false positive. */
+        /* The kit's shared type/space/motion tokens, copied verbatim from
+           hmi/src/lib/theme.css. They were put here when the token-drift
+           test (theme_test.go) read theme.css and its scan for the light
+           rule landed on that shared block; the kit's colours now live in
+           palette.css, which the test reads, so these are no longer
+           compared — keep them in step with theme.css by hand. */
         --font-2xs: 0.75rem;
         --font-xs: 0.8125rem;
         --font-sm: 0.875rem;

@@ -9,12 +9,15 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
+  dropPort,
   firstFreeSlot,
+  movePort,
   nextPortName,
   newPortAtFreeSlot,
   newPortAtPoint,
   nudgePort,
   roundPort,
+  smallestPartAt,
   type Port,
 } from "./portsGestures.ts";
 
@@ -88,4 +91,29 @@ test("nudgePort composes with roundPort exactly like the drag-then-commit path",
   const box = { x: 0, y: 0, w: 300, h: 300 };
   const nudged = nudgePort(box, { name: "p1", x: 0.5, y: 0.5 }, 1, 0);
   assert.deepEqual(roundPort(nudged), { name: "p1", x: 0.503, y: 0.5 });
+});
+
+// ── part-anchored ports: dropping re-anchors to the part under the cursor ──
+const BOX = { x: 100, y: 100, w: 60, h: 100 };
+const PARTS: [string, { x: number; y: number; w: number; h: number }][] = [
+  ["motor", { x: 110, y: 110, w: 30, h: 60 }],
+  ["flange", { x: 145, y: 150, w: 12, h: 2 }],
+];
+
+test("smallestPartAt: the smallest part under the point wins; a thin part has slop", () => {
+  assert.equal(smallestPartAt(PARTS, [120, 120])?.[0], "motor");
+  // 3px above a 2px-tall flange still hits it
+  assert.equal(smallestPartAt(PARTS, [150, 147])?.[0], "flange");
+  assert.equal(smallestPartAt(PARTS, [102, 195]), null);
+});
+
+test("dropPort: on a part, fractions of that part; off every part, of the box", () => {
+  assert.deepEqual(dropPort(BOX, PARTS, [125, 110]), { x: 0.5, y: 0, part: "motor" });
+  assert.deepEqual(dropPort(BOX, PARTS, [130, 200]), { x: 0.5, y: 1 });
+});
+
+test("movePort: replaces x/y/part, keeps name and dir, drops a stale part", () => {
+  const p: Port = { name: "discharge", x: 0.5, y: 0, part: "flange", dir: "up" };
+  assert.deepEqual(movePort(p, { x: 0.2, y: 1 }), { name: "discharge", x: 0.2, y: 1, dir: "up" });
+  assert.deepEqual(movePort(p, { x: 0, y: 0.5, part: "motor" }), { name: "discharge", x: 0, y: 0.5, dir: "up", part: "motor" });
 });

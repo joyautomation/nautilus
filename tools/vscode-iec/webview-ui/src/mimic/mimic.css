@@ -1,8 +1,14 @@
 /* Token bridge: the hmi kit components consume the HMI theme tokens
-   (--surface, --ink, --good, …); in the webview we remap every one of them
-   onto the --nx-* layer (which itself resolves to VS Code theme vars), so
-   equipment on the editor canvas follows the editor theme. Declared once,
-   here — kit components never see a raw --vscode-* var. */
+   (--surface, --ink, --good, …); in the webview chrome we remap every one of
+   them onto the --nx-* layer (which itself resolves to VS Code theme vars),
+   so a kit component in a panel or the palette follows the editor theme.
+   Declared once, here — kit components never see a raw --vscode-* var.
+
+   The CANVASES are the exception: they carry data-theme="dark|light" and
+   take the kit's own palette (palette.css, imported in main.ts), so a mimic
+   is previewed in the colours operators will see, not VS Code's. The
+   palette's bare-:root set is under :where(), so this bridge wins out here
+   without an ordering dependency. */
 :root {
 	--bg: var(--nx-bg);
 	--surface: var(--nx-panel-bg);
@@ -24,11 +30,14 @@
 	--crit: var(--nx-err);
 	--grid: color-mix(in srgb, var(--nx-ink) 7%, transparent);
 	--axis: var(--nx-muted);
+	--edge: var(--nx-muted);
 	--hover: var(--nx-hover);
 	--radius: 8px;
 	--primary-bg: var(--nx-btn-bg);
 	--primary-border: transparent;
 	--primary-hover: var(--nx-btn-bg);
+	/* the palette's bare-:root set says dark; the webview never asked */
+	color-scheme: normal;
 }
 
 html,

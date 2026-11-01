@@ -6,21 +6,38 @@
 // routing, and app logic stay ordinary SvelteKit; a mimic is one component
 // on a page, for the parts of an HMI that are genuinely spatial.
 
+import { builtinParts } from './drawings.js';
+
 /** One mimic document (typically a *.mimic.json file imported by a page). */
 export interface MimicDoc {
 	/** Optional display name. */
 	name?: string;
 	/** Logical canvas size; the renderer scales it to its container. */
 	canvas: { width: number; height: number };
+	/** How the equipment is drawn (see MimicLook). Default `isa101`; the
+	 * page may override it. */
+	look?: MimicLook;
 	equipment?: MimicEquipment[];
 	pipes?: MimicPipe[];
 	labels?: MimicLabel[];
 }
 
+/** How a mimic's equipment is drawn — every component takes it as its
+ * `look` prop. `isa101` (default): flat grey equipment, colour only for a
+ * live state or an abnormal one. `realistic`: shaded metal and liquid, the
+ * 2D cousin of the 3D scene's `lit` look. A component that has only one
+ * drawing ignores it. */
+export type MimicLook = 'isa101' | 'realistic';
+export const MIMIC_LOOKS: readonly MimicLook[] = ['isa101', 'realistic'];
+
 /** The direction a pipe LEAVES a port, in canvas space. */
 export type PortDir = 'left' | 'right' | 'up' | 'down';
 
-/** A named connection point, as a fraction of the rendered box. The name is
+/** A named connection point, as a fraction of the rendered box — or, with
+ * `part`, as a fraction of that PART of the drawing (an element the
+ * component marks `data-part="body"`), so the port stays on the valve body
+ * or the vessel wall however the equipment is resized. A part the drawing
+ * doesn't have falls back to the whole box. The name is
  * how a pipe end anchors to it explicitly (MimicPipe.from/to — see below).
  * `dir` is the direction a pipe leaves the port; when absent it's INFERRED
  * from the port's edge position (see inferPortDir) — explicit `dir` is only
@@ -32,6 +49,8 @@ export interface MimicPort {
 	x: number;
 	y: number;
 	dir?: PortDir;
+	/** The drawing's part `x`/`y` are fractions of (its `data-part` name). */
+	part?: string;
 }
 
 /** A port's exit direction, inferred from its position on the rendered
@@ -61,19 +80,17 @@ export function resolvedPortDir(port: Pick<MimicPort, 'x' | 'y' | 'dir'>): PortD
  * the runtime's instance -> builtin chain, resolveRuntimePorts() below —
  * agree on the builtin tier without duplicating the data). */
 export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
-	// Measured off each drawing's viewBox (the rendered box IS the svg — its
-	// label is drawn inside it), so a default port sits ON the equipment's
-	// connection, not on the box edge: Tank (220 x 260) on the vessel shell
-	// (x 34..186, y 20..222 — the right wall, not the level scale beside it);
-	// Pump (120 x 110) on the suction stub's mouth (x 0, y 58) and the
-	// discharge nozzle's top (x 58, y 6); Valve (90 x 80) on the body's flat
-	// ends (x 12 / 78, y 44). None of these sit exactly on a box edge, so
-	// inferPortDir() can't infer an exit direction — each carries its `dir`.
+	// Anchored to the part of each drawing the pipe actually meets (the
+	// `data-part` it marks), so a default port stays on the vessel wall, the
+	// valve body's ends, or a nozzle's mouth at any size: Tank's `vessel`,
+	// Valve's `body` (which runs the full width of the box), Pump's
+	// `suction` and `discharge` nozzles. Each sits on its part's edge, so
+	// inferPortDir() reads the exit direction off the fraction.
 	Tank: [
-		{ name: 'top', x: 0.5, y: 0.077, dir: 'up' },
-		{ name: 'left', x: 0.155, y: 0.465, dir: 'left' },
-		{ name: 'right', x: 0.845, y: 0.465, dir: 'right' },
-		{ name: 'bottom', x: 0.5, y: 0.854, dir: 'down' }
+		{ name: 'top', part: 'vessel', x: 0.5, y: 0 },
+		{ name: 'left', part: 'vessel', x: 0, y: 0.5 },
+		{ name: 'right', part: 'vessel', x: 1, y: 0.5 },
+		{ name: 'bottom', part: 'vessel', x: 0.5, y: 1 }
 	],
 	// The level-only reservoir (LevelTank) is not one of <Mimic>'s built-in
 	// components — it reaches a doc through the `registry` prop — but its
@@ -91,13 +108,14 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 		{ name: 'bottom', x: 0.5, y: 1 }
 	],
 	Pump: [
-		{ name: 'in', x: 0, y: 0.527, dir: 'left' },
-		{ name: 'out', x: 0.483, y: 0.055, dir: 'up' }
+		{ name: 'in', part: 'suction', x: 0, y: 0.5 },
+		{ name: 'out', part: 'discharge', x: 0.5, y: 0 }
 	],
 	Valve: [
-		{ name: 'in', x: 0.133, y: 0.55, dir: 'left' },
-		{ name: 'out', x: 0.867, y: 0.55, dir: 'right' }
+		{ name: 'in', part: 'body', x: 0, y: 0.5 },
+		{ name: 'out', part: 'body', x: 1, y: 0.5 }
 	],
+	Heater: [],
 	Gauge: [],
 	Sparkline: []
 };
@@ -130,6 +148,15 @@ export interface MimicEquipment {
 	y: number;
 	/** Rendered width in canvas units (component default when omitted). */
 	width?: number;
+	/** Rendered height in canvas units. Omitted = the component's own
+	 * proportions at `width`; set, the component lays its drawing out to
+	 * fill width x height (a taller vessel, a longer valve body) rather
+	 * than stretching it. */
+	height?: number;
+	/** Draw this equipment under the pipes: a wet well or a vessel with
+	 * equipment inside it, whose risers would otherwise vanish behind its
+	 * walls. Everything else draws over the pipes, as before. */
+	behind?: boolean;
 	label?: string;
 	/** Static props passed straight through. */
 	props?: Record<string, unknown>;
@@ -273,12 +300,44 @@ export interface ResolvedPort {
 	dir?: PortDir;
 }
 
+/** A rectangle inside an equipment's box, in canvas units relative to the
+ * box's top-left — where a named part of the drawing sits (see partRect). */
+export interface PartRect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
 /** A port fraction, in an equipment's box -> its absolute canvas position +
  * effective direction. The one place a {name, x, y, dir} port becomes
  * pixels, so every caller (editor ports-mode dots, pipe anchor resolution)
- * agrees. */
-export function portAbsolute(box: EquipmentBox, port: Pick<MimicPort, 'x' | 'y' | 'dir'>): ResolvedPort {
-	return { x: box.x + port.x * box.w, y: box.y + port.y * box.h, dir: resolvedPortDir(port) };
+ * agrees. `part` is where the port's `part` sits in the box (partRect());
+ * the fractions are then of that rectangle instead of the whole box. */
+export function portAbsolute(
+	box: EquipmentBox,
+	port: Pick<MimicPort, 'x' | 'y' | 'dir'>,
+	part?: PartRect
+): ResolvedPort {
+	const r = part ?? { x: 0, y: 0, w: box.w, h: box.h };
+	return { x: box.x + r.x + port.x * r.w, y: box.y + r.y + port.y * r.h, dir: resolvedPortDir(port) };
+}
+
+/** Where a drawing's part sits inside its equipment element, measured off
+ * the DOM: the first descendant marked `data-part="<name>"`, in the
+ * element's own (unscaled) units. Undefined when the drawing has no such
+ * part — a port naming it falls back to the whole box. Both renderers
+ * call this, so a part-anchored port lands identically in each. */
+export function partRect(el: HTMLElement | undefined, name: string): PartRect | undefined {
+	if (!el) return undefined;
+	const part = el.querySelector(`[data-part="${CSS.escape(name)}"]`);
+	if (!part) return undefined;
+	const box = el.getBoundingClientRect();
+	// The canvas is scaled with a CSS transform; offsetWidth is not.
+	const k = el.offsetWidth ? box.width / el.offsetWidth : 1;
+	if (!k) return undefined;
+	const r = part.getBoundingClientRect();
+	return { x: (r.left - box.left) / k, y: (r.top - box.top) / k, w: r.width / k, h: r.height / k };
 }
 
 /** Looks up one equipment's one named port, resolved to canvas pixels —
@@ -290,17 +349,20 @@ export type GetPort = (equip: string, port: string) => ResolvedPort | undefined;
  * renderers plug their own equipment/ports resolution into (the editor's
  * resolvePorts() instance -> sidecar -> builtin chain, or the runtime's
  * resolveRuntimePorts() instance -> builtin chain) without this module
- * needing to know about either. */
+ * needing to know about either. `getPart` finds a named part of an
+ * equipment's drawing (partRect() over its element); without it, or when
+ * it finds nothing, a part-anchored port resolves against the whole box. */
 export function makeGetPort(
 	getBox: (equip: string) => EquipmentBox | undefined,
-	getPorts: (equip: string) => MimicPort[] | undefined
+	getPorts: (equip: string) => MimicPort[] | undefined,
+	getPart?: (equip: string, part: string) => PartRect | undefined
 ): GetPort {
 	return (equip, port) => {
 		const box = getBox(equip);
 		if (!box) return undefined;
 		const p = (getPorts(equip) ?? []).find((p) => p.name === port);
 		if (!p) return undefined;
-		return portAbsolute(box, p);
+		return portAbsolute(box, p, p.part ? getPart?.(equip, p.part) : undefined);
 	};
 }
 
@@ -491,7 +553,7 @@ export interface AttachOptions {
 
 function defaultMeasure(eq: MimicEquipment): { width: number; height: number } {
 	const width = eq.width ?? 0;
-	const h = eq.props?.height;
+	const h = eq.height ?? eq.props?.height;
 	return { width, height: typeof h === 'number' ? h : width };
 }
 
@@ -536,7 +598,10 @@ export function attachPipeEnds(doc: MimicDoc, opts: AttachOptions): { doc: Mimic
 	for (const eq of doc.equipment ?? []) {
 		const { width, height } = measure(eq);
 		const box: EquipmentBox = { x: eq.x, y: eq.y, w: width, h: height };
-		for (const p of resolveRuntimePorts(eq)) all.push({ equip: eq.id, port: p.name, at: portAbsolute(box, p) });
+		const parts = builtinParts(eq.component, box, eq);
+		for (const p of resolveRuntimePorts(eq)) {
+			all.push({ equip: eq.id, port: p.name, at: portAbsolute(box, p, p.part ? parts?.[p.part] : undefined) });
+		}
 	}
 
 	const nearest = (x: number, y: number): PortHit | undefined => {
@@ -790,7 +855,7 @@ export function connectPorts(doc: MimicDoc, opts: ConnectOptions): { doc: MimicD
 				report.skipped.push({ equip: eq.id, port: name, reason: 'no such port' });
 				continue;
 			}
-			const at = portAbsolute(box, port);
+			const at = portAbsolute(box, port, port.part ? builtinParts(eq.component, box, eq)?.[port.part] : undefined);
 			const k = key(at.x, at.y);
 			if (done.has(k)) continue; // piped already, or an alias of one just piped
 			done.add(k);

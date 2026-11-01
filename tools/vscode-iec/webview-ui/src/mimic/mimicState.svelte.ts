@@ -13,6 +13,7 @@ export type MimicOp =
 	| { type: 'batch'; ops: MimicOp[] }
 	| { type: 'setName'; name?: string | null }
 	| { type: 'setCanvas'; width: number; height: number }
+	| { type: 'setLook'; look?: 'isa101' | 'realistic' | null }
 	| { type: 'addEquipment'; component: string; x: number; y: number; id?: string }
 	| { type: 'moveEquipment'; id: string; x: number; y: number }
 	| { type: 'updateEquipment'; id: string; patch: Record<string, unknown> }
@@ -52,9 +53,11 @@ export type Selection =
 	 * the pipe-selected highlight/handles keep working from it unchanged. */
 	| { kind: 'end'; pipeId: string; end: 'from' | 'to' }
 	| { kind: 'label'; index: number }
-	/** Several equipment instances (Ctrl/Cmd-click, Ctrl+A, or a paste of
-	 * more than one) — copy/cut/duplicate/delete/arrow-nudge act on all. */
-	| { kind: 'multi'; ids: string[] };
+	/** Several items (Shift- or Ctrl/Cmd-click, Ctrl+A, or a paste of more
+	 * than one): equipment `ids` plus label indices `labels`. A drag on any
+	 * of them, an arrow nudge and Del act on all; copy/cut/duplicate carry
+	 * the equipment. */
+	| { kind: 'multi'; ids: string[]; labels?: number[] };
 
 export type Tool = 'select' | 'pipe' | 'label' | 'place';
 
@@ -99,7 +102,11 @@ export const ed = $state({
 	 * toggle in MimicApp.svelte and setSnapToGrid() below). Defaults on
 	 * (existing behavior) until the host's first mimicConfig message.
 	 * Shift-arrow nudging ignores this — it always steps by GRID. */
-	snapToGrid: true
+	snapToGrid: true,
+	/** The HMI theme the canvas previews in (the toolbar's Dark/Light
+	 * switch); null follows VS Code's light/dark kind. A view setting only:
+	 * dark or light is the operator screen's choice, never the document's. */
+	previewTheme: null as 'dark' | 'light' | null
 });
 
 /** The canvas's DOM-measured box for an equipment id (EditorCanvas's

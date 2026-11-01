@@ -3,6 +3,7 @@
 
 // Visual / operator components
 export { default as Tank } from './components/Tank.svelte';
+export { default as Heater } from './components/Heater.svelte';
 export { default as LevelTank } from './components/LevelTank.svelte';
 export { default as Gauge } from './components/Gauge.svelte';
 export { default as ScaleBar } from './components/ScaleBar.svelte';
@@ -202,6 +203,9 @@ export type { Motion } from './motion.svelte.js';
 
 // Helpers & types
 export { tempColor } from './color.js';
+export { tracks, fitBox } from './layout.js';
+export { builtinParts, tankGeometry, valveGeometry, pumpGeometry } from './drawings.js';
+export type { Track, Span } from './layout.js';
 export {
 	pointsToPath,
 	resolveBindings,
@@ -212,8 +216,10 @@ export {
 	resolveRuntimePorts,
 	resolvePipeEndpoints,
 	portAbsolute,
+	partRect,
 	makeGetPort,
 	BUILTIN_PORTS,
+	MIMIC_LOOKS,
 	PORT_STUB,
 	attachPipeEnds,
 	connectPorts
@@ -224,6 +230,8 @@ export type {
 	MimicPipe,
 	MimicLabel,
 	MimicPort,
+	MimicLook,
+	PartRect,
 	MimicPipeAnchor,
 	PortDir,
 	EquipmentBox,

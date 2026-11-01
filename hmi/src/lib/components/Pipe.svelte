@@ -54,7 +54,7 @@
 			class="wall"
 			{d}
 			fill="none"
-			stroke="var(--pipe-wall, var(--axis, #383835))"
+			stroke="var(--pipe-wall, var(--edge, #7a7973))"
 			stroke-width="10"
 			stroke-linecap="round"
 		/>
@@ -98,7 +98,7 @@
 	   the plant put it. Colour is never the only cue (the dash pattern is the
 	   signal); `--pipe-dead` lets a host tie it to its own no-data token. */
 	.dead .wall {
-		stroke: var(--pipe-dead, var(--axis, #383835));
+		stroke: var(--pipe-dead, var(--edge, #7a7973));
 		stroke-dasharray: 4 7;
 		opacity: 0.5;
 	}

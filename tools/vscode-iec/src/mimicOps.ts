@@ -14,10 +14,16 @@
 export type MimicDoc = {
   name?: string;
   canvas: { width: number; height: number };
+  /** How the equipment is drawn — hmi's MimicLook. Absent = isa101. */
+  look?: MimicLook;
   equipment?: MimicEquipment[];
   pipes?: MimicPipe[];
   labels?: MimicLabel[];
 };
+/** Mirror of hmi/src/lib/mimic.ts's MimicLook / MIMIC_LOOKS. */
+export type MimicLook = "isa101" | "realistic";
+export const MIMIC_LOOKS: readonly MimicLook[] = ["isa101", "realistic"];
+
 /** The direction a pipe LEAVES a port. Mirror of hmi/src/lib/mimic.ts's
  * PortDir. */
 export type PortDir = "left" | "right" | "up" | "down";
@@ -30,7 +36,7 @@ export type PortDir = "left" | "right" | "up" | "down";
  * nowhere else since this reducer never needs to COMPUTE the inference,
  * only validate the explicit override's shape). Names are unique within a
  * port list. */
-export type Port = { name: string; x: number; y: number; dir?: PortDir };
+export type Port = { name: string; x: number; y: number; dir?: PortDir; part?: string };
 
 /** A pipe end's attachment to a named equipment port. Mirror of
  * hmi/src/lib/mimic.ts's MimicPipeAnchor. */
@@ -42,6 +48,10 @@ export type MimicEquipment = {
   x: number;
   y: number;
   width?: number;
+  /** Rendered height; absent = the component's own proportions. */
+  height?: number;
+  /** Drawn under the pipes (a vessel with equipment inside it). */
+  behind?: boolean;
   label?: string;
   props?: Record<string, unknown>;
   bind?: Record<string, string>;
@@ -84,6 +94,8 @@ export type MimicOp =
   | { type: "batch"; ops: MimicOp[] }
   | { type: "setName"; name?: string | null }
   | { type: "setCanvas"; width: number; height: number }
+  /** null / absent clears it (back to the default, isa101). */
+  | { type: "setLook"; look?: MimicLook | null }
   | { type: "addEquipment"; component: string; x: number; y: number; id?: string }
   | { type: "moveEquipment"; id: string; x: number; y: number }
   | { type: "updateEquipment"; id: string; patch: Record<string, unknown> }
@@ -156,6 +168,7 @@ export function formatMimic(doc: MimicDoc): string {
   const d: Record<string, unknown> = ordered(doc as Record<string, unknown>, [
     "name",
     "canvas",
+    "look",
     "equipment",
     "pipes",
     "labels",
@@ -168,7 +181,7 @@ export function formatMimic(doc: MimicDoc): string {
     }
     const order =
       key === "equipment"
-        ? ["id", "component", "x", "y", "width", "label", "props", "bind", "ports"]
+        ? ["id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports"]
         : key === "pipes"
           ? ["id", "points", "routing", "from", "to", "color", "props", "bind"]
           : ["text", "x", "y"];
@@ -264,7 +277,8 @@ function validPortList(ports: unknown): ports is Port[] {
         isFinite((p as Port).x) &&
         typeof (p as Port).y === "number" &&
         isFinite((p as Port).y) &&
-        ((p as Port).dir === undefined || DIRS.has((p as Port).dir as string))
+        ((p as Port).dir === undefined || DIRS.has((p as Port).dir as string)) &&
+        ((p as Port).part === undefined || (typeof (p as Port).part === "string" && (p as Port).part !== ""))
     )
   ) {
     return false;
@@ -310,6 +324,12 @@ function applyOpToDoc(doc: MimicDoc, op: MimicOp): string | undefined {
       doc.canvas = { width: op.width, height: op.height };
       break;
     }
+    case "setLook": {
+      if (op.look === null || op.look === undefined) delete doc.look;
+      else if (!MIMIC_LOOKS.includes(op.look)) return `look must be one of ${MIMIC_LOOKS.join(", ")}`;
+      else doc.look = op.look;
+      break;
+    }
     case "addEquipment": {
       const id = op.id ?? genId(doc, op.component.toLowerCase());
       if (idTaken(doc, id)) return `id "${id}" is already taken`;
@@ -330,6 +350,10 @@ function applyOpToDoc(doc: MimicDoc, op: MimicOp): string | undefined {
       if (rename !== undefined) {
         if (typeof rename !== "string" || rename === "") return "id must be a non-empty string";
         if (rename !== eq.id && idTaken(doc, rename)) return `id "${rename}" is already taken`;
+      }
+      for (const k of ["width", "height"]) {
+        const v = op.patch[k];
+        if (v !== undefined && v !== null && !(typeof v === "number" && v > 0)) return `${k} must be a positive number`;
       }
       const oldId = eq.id;
       applyPatch(eq as unknown as Record<string, unknown>, op.patch);

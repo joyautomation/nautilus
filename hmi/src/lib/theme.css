@@ -22,7 +22,10 @@
        import '@joyautomation/nautilus-hmi/fonts.css';   // optional
 
    Chart color roles follow a validated dataviz palette, with distinct steps
-   per surface (not an automatic flip). */
+   per surface (not an automatic flip). The colour tokens themselves live in
+   the sibling palette.css, imported here. */
+
+@import './palette.css';
 
 :root {
 	/* ── type ──────────────────────────────────────────────────────────────
@@ -87,75 +90,6 @@
 	--transition-slow: 0.15s ease;
 }
 
-:root,
-:root[data-theme='dark'] {
-	--bg: #0d0d0d;
-	--surface: #1a1a19;
-	--surface-2: #232321;
-	--border: rgba(255, 255, 255, 0.1);
-	--ink: #ffffff;
-	--ink-2: #c3c2b7;
-	--muted: #898781;
-	--grid: #2c2c2a;
-	--axis: #383835;
-
-	/* categorical series (validated on --surface, dark) */
-	--s1: #3987e5; /* blue — primary series */
-	--s2: #c98500; /* yellow — secondary / setpoint */
-	--s3: #199e70; /* aqua — tertiary series */
-	--s5: #9085e9; /* violet */
-
-	/* status (RESERVED — process state and nothing else. Never chrome, never
-	   a chart series.) */
-	--good: #0ca30c;
-	--warn: #fab219;
-	--serious: #ec835a;
-	--crit: #d03b3b;
-
-	/* interaction tokens — the house cyan brand */
-	--hover: #2c2c2a;
-	--accent: #06b6d4; /* cyan-500 */
-	--primary-bg: #155e75;
-	--primary-border: #0e7490;
-	--primary-hover: #0891b2;
-
-	/* the ground a floating thing is seen against */
-	--overlay: color-mix(in srgb, var(--bg) 55%, transparent);
-	color-scheme: dark;
-}
-
-:root[data-theme='light'] {
-	--bg: #f3f2ee;
-	--surface: #ffffff;
-	--surface-2: #e9e7e0;
-	--border: rgba(0, 0, 0, 0.13);
-	--ink: #1b1a17;
-	--ink-2: #45443d;
-	--muted: #74726a;
-	--grid: #e4e2da;
-	--axis: #c9c7bd;
-
-	/* categorical series (darker steps read on the light surface) */
-	--s1: #2a6fc9;
-	--s2: #9c6a00;
-	--s3: #157a55;
-	--s5: #6357cf;
-
-	--good: #0a8a0a;
-	--warn: #b07d0d;
-	--serious: #c85f38;
-	--crit: #c22f2f;
-
-	--hover: #e4e2da;
-	--accent: #0e7490; /* cyan-700 */
-	--primary-bg: #0e7490;
-	--primary-border: #22a3bd;
-	--primary-hover: #155e75;
-
-	--overlay: color-mix(in srgb, var(--bg) 55%, transparent);
-	color-scheme: light;
-}
-
 /* ── Meaning-carrying colour, named ────────────────────────────────────────
    A legacy HMI hard-codes a handful of colours that are NOT taste — they are
    the only place a fact is recorded. A 3.5px magenta border meant "this point
@@ -163,10 +97,14 @@
    Re-expressed here as roles on the reserved safety palette, so the fact
    survives a re-skin and the palette stays four colours deep.
 
+   Declared on [data-theme] too, not just :root: a var() resolves where it
+   is declared, so a light subtree inside a dark page needs its own copy.
+
    Trained on the originals? One line each restores them:
        --q-notpublished: #ff00ff;
        --q-simulated: #ff8c00;                                              */
-:root {
+:root,
+[data-theme] {
 	--q-good: var(--good); /* current value, healthy source */
 	--q-stale: var(--warn); /* was good, no longer refreshed — show it, and its age */
 	--q-bad: var(--crit); /* the source says the value is wrong */

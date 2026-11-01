@@ -229,6 +229,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if apiUp {
 		banner += hmiBannerSuffix(proj, addr, os.Stderr)
+		warnStaleHMI("naut run", fsys, proj, os.Stderr)
 	}
 	if sparkplugUp {
 		banner += " — sparkplug up"
@@ -289,6 +290,23 @@ func hmiBannerSuffix(proj *project.Project, addr string, stderr io.Writer) strin
 	default:
 		return " — dashboard + tag API on http://" + addr
 	}
+}
+
+// warnStaleHMI prints a one-line warning when a source the HMI compiles
+// in (its own code, the project's mimic and scene documents) changed after
+// server.hmi was last built — the served or embedded HMI is then the old
+// one. naut never runs the HMI's build itself: a controller has no Node.
+func warnStaleHMI(cmd string, fsys fs.FS, proj *project.Project, w io.Writer) {
+	if proj.HMIDir == "" || proj.HMIMissing {
+		return
+	}
+	src := project.StaleHMISource(fsys, proj.HMIDir)
+	if src == "" {
+		return
+	}
+	hint := project.HMIBuildHint(proj.HMIDir)
+	fmt.Fprintf(w, "%s: server.hmi: %s is older than %s — the HMI shows the last build; "+
+		"run npm run build in %s (or npm run dev there while editing)\n", cmd, proj.HMIDir, src, hint)
 }
 
 // selfAddr is what a standby needs to reach this replica: the pod IP from
@@ -404,6 +422,7 @@ func runBuild(args []string) int {
 				"%s) and rebuild to embed it\n",
 			proj.HMIDir, project.HMIBuildHint(proj.HMIDir))
 	}
+	warnStaleHMI("naut build", os.DirFS(dir), proj, os.Stderr)
 
 	name := *out
 	if name == "" {
