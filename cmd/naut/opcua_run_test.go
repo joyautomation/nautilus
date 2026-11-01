@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ END_PROGRAM
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	var stdout, stderr strings.Builder
+	var stdout, stderr lockedBuffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -269,7 +270,9 @@ opcua:
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	var stderr strings.Builder
+	// Not a strings.Builder: exec copies the child's stderr into it from
+	// its own goroutine while the test reads it, a data race under -race.
+	var stderr lockedBuffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -343,4 +346,24 @@ func names(m map[string]*ua.ReferenceDescription) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// lockedBuffer collects a child process's output for a test that reads it
+// while the process still runs: exec writes from its own copying
+// goroutine, so a bare strings.Builder is a data race.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

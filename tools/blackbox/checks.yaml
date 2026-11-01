@@ -220,7 +220,6 @@ checks:
   note: issue 423; starts its own instances on 8095/4855; 10 s per case on the bug
   expected_today: fail
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#423'
 - id: 001-F15-status-change-notified
   run: 2026-10-24-001
   finding: F-15

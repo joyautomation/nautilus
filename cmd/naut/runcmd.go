@@ -216,6 +216,12 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
 	} else {
 		apiUp = true
+		// The HTTP port is the first thing shutdown gives back: the
+		// deferred stops above (OPC UA sessions, the Sparkplug death
+		// certificate, a driver's teardown) run after this returns, and a
+		// `naut run` started again meanwhile must still get its port
+		// (nautilus#423).
+		defer ln.Close()
 		go func() {
 			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "tag api:", err)

@@ -22,6 +22,14 @@ type channelBroker struct {
 	mu sync.RWMutex
 	// s is a slice of all SecureChannels watched by the channelBroker
 	s map[uint32]*uasc.SecureChannel
+	// conns is the transport under each channel in s. Close closes
+	// these: a SecureChannel's own Close does not close its connection,
+	// so a channel's reader would stay blocked in a read until the client
+	// hung up.
+	conns map[uint32]*uacp.Conn
+	// closed is set by Close; a connection that registers after it is
+	// refused.
+	closed bool
 
 	// Next Secure Channel ID to issue to a client
 	secureChannelID uint32
@@ -40,6 +48,7 @@ func newChannelBroker(logger Logger) *channelBroker {
 	return &channelBroker{
 		endpoints:       make(map[string]*ua.EndpointDescription),
 		s:               make(map[uint32]*uasc.SecureChannel),
+		conns:           make(map[uint32]*uacp.Conn),
 		msgChan:         make(chan *uasc.MessageBody),
 		secureChannelID: uint32(rng.Int31()),
 		secureTokenID:   uint32(rng.Int31()),
@@ -82,12 +91,20 @@ func (c *channelBroker) RegisterConn(ctx context.Context, conn *uacp.Conn, local
 	}
 
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		conn.Close()
+		return io.EOF
+	}
 	c.s[secureChannelID] = sc
+	c.conns[secureChannelID] = conn
+	// Add under mu, before Close can see the channel, so Close's Wait
+	// always covers every channel it closed.
+	c.wg.Add(1)
 	if c.logger != nil {
 		c.logger.Info("Registered new channel (id %d) now at %d channels", secureChannelID, len(c.s))
 	}
 	c.mu.Unlock()
-	c.wg.Add(1)
 outer:
 	for {
 		select {
@@ -111,28 +128,56 @@ outer:
 				}
 				break outer
 			}
-			// todo(fs): honor ctx
-			c.msgChan <- msg
+			// The handoff honors ctx: once the server's context is
+			// cancelled nothing reads msgChan any more, and a send here
+			// would hold this channel (and Close's wait) forever.
+			select {
+			case c.msgChan <- msg:
+			case <-ctx.Done():
+				break outer
+			}
 		}
 	}
 
 	c.mu.Lock()
 	delete(c.s, secureChannelID)
+	delete(c.conns, secureChannelID)
 	c.mu.Unlock()
+	conn.Close()
 	c.wg.Done()
 
 	return nil
 }
 
-// Close gracefully closes all secure channels
-// todo(fs): use ctx
+// Close closes every secure channel and the connection under it, and
+// waits for each channel's reader to return. Closing the connection is
+// what makes that wait short: a SecureChannel's Close only sends a
+// CloseSecureChannel message, and its reader sits in a blocking read on
+// the connection until the client hangs up, which a client with a
+// session open does not do. gopcua's original closed only the channels,
+// so a shutdown with a session open always waited out its 10 s timeout
+// (nautilus#423).
 func (c *channelBroker) Close() error {
 	var err error
 	c.mu.Lock()
+	c.closed = true
+	chans := make([]*uasc.SecureChannel, 0, len(c.s))
 	for _, s := range c.s {
-		s.Close()
+		chans = append(chans, s)
+	}
+	conns := make([]*uacp.Conn, 0, len(c.conns))
+	for _, conn := range c.conns {
+		conns = append(conns, conn)
 	}
 	c.mu.Unlock()
+	// Outside mu: a channel's Close writes to its connection, and a
+	// client that stopped reading must not hold the broker's lock.
+	for _, s := range chans {
+		s.Close()
+	}
+	for _, conn := range conns {
+		conn.Close()
+	}
 
 	// Wait for all goroutines to finish or timeout
 	done := make(chan struct{})
@@ -142,7 +187,7 @@ func (c *channelBroker) Close() error {
 	}()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second): // todo(fs): magic number
+	case <-time.After(closeWait):
 		if c.logger != nil {
 			c.logger.Error("CloseAll: timed out waiting for channels to exit")
 		}
@@ -150,6 +195,10 @@ func (c *channelBroker) Close() error {
 
 	return err
 }
+
+// closeWait bounds Close's wait for the channel readers. With their
+// connections closed under them they return at once; this is a backstop.
+const closeWait = 2 * time.Second
 
 func (c *channelBroker) ReadMessage(ctx context.Context) *uasc.MessageBody {
 	select {

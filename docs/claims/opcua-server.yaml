@@ -225,14 +225,20 @@ claims:
       An endpoint already in use is reported on stderr at start ("continuing
       without it") and as an error on the opcua-server row; the controller
       runs regardless. Stop closes every session; a restart on the same
-      endpoint serves again.
+      endpoint serves again. Stopping naut run (Ctrl+C, SIGTERM) with
+      clients' sessions and subscriptions open closes their connections at
+      once, gives the HTTP port back first, and exits promptly, so naut run
+      started again straight away gets both ports.
     source: "#status"
     tests:
       - go ./tools/blackbox TestBlackbox/001-P-port-in-use
       - go ./tools/blackbox TestBlackbox/001-P-restart-under-subscriber
+      - go ./tools/blackbox TestBlackbox/001-F14-shutdown-with-session
       - go ./cmd/naut TestNautRunContinuesWhenOPCUAPortIsTaken
+      - go ./cmd/naut TestNautRunShutdownWithOPCUASessionIsPrompt
       - go ./opcua/server TestStartReportsAPortInUse
       - go ./opcua/server TestStopDropsClientsAndRestartReusesThePort
+      - go ./opcua/internal/uaserver TestCloseWithSessionOpenIsPrompt
 
   - id: OPC-014
     claim: >-
