@@ -206,3 +206,8 @@ row: the endpoint, whether it is listening, and how many subscriptions and
 monitored items clients hold. A port already in use is reported there and
 on stderr at start (`continuing without it`); the controller runs
 regardless.
+
+Stopping the controller (Ctrl+C, or SIGTERM from a service manager) closes
+every client's connection at once, sessions and subscriptions included, and
+gives the HTTP port back first: `naut run` started again straight away gets
+its dashboard, tag API and OPC UA endpoint.
