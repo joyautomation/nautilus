@@ -518,8 +518,13 @@ func peersOf(o Options) []st.PeerProgram {
 // the programs compile against this scope, so it cannot wait for them.
 func tagScopeFor(o Options) (TagScope, error) {
 	types := map[string]*ir.Type{}
+	var srcErr error // first source that would not parse: why a TYPE may be missing
 	add := func(src string) {
-		for n, t := range sourceTypes(src) {
+		ts, err := sourceTypes(src)
+		if err != nil && srcErr == nil {
+			srcErr = err
+		}
+		for n, t := range ts {
 			if _, _, dup := ir.Lookup(types, n); !dup {
 				types[n] = t
 			}
@@ -535,6 +540,11 @@ func tagScopeFor(o Options) (TagScope, error) {
 	}
 	scope, errs := ResolveTagScope(o.Tags, types)
 	if len(errs) > 0 {
+		if srcErr != nil {
+			// A source that does not parse declares no TYPE, so the tag's
+			// type cannot resolve: the parse error is the real problem.
+			return TagScope{}, srcErr
+		}
 		return TagScope{}, errs[0]
 	}
 	dt := func(name string) {

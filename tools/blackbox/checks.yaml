@@ -272,7 +272,6 @@ checks:
   note: issue 427
   expected_today: fail
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#427'
 - id: 001-F20-revised-sampling-interval
   run: 2026-10-24-001
   finding: F-20
