@@ -263,10 +263,16 @@ test('K04 samples: a sample value changes the status preview and posts nothing',
 
 test('K05 turntable: the model turns while on, holds while off', { skip: !MODEL_URI && 'no model' }, async () => {
 	await withKind(valveKind(), {}, async (k) => {
+		// Turning is a frame-by-frame animation: on a slow runner (software
+		// WebGL in CI) one frame can take longer than any fixed wait, so poll
+		// until the angle moves rather than sampling once after a sleep.
 		const a = await k.rotation();
-		await sleep(400);
-		const b = await k.rotation();
-		assert.ok(a !== null && b !== null && b !== a, `turning: ${a} -> ${b}`);
+		let b = a;
+		for (const until = Date.now() + 5000; b === a && Date.now() < until; ) {
+			await sleep(100);
+			b = await k.rotation();
+		}
+		assert.ok(a !== null && b !== null && b !== a, `turning: ${a} -> ${b} (5 s)`);
 		const btn = await k.button('Turntable');
 		assert.ok(btn.active);
 		await k.b.click(btn.cx, btn.cy);
