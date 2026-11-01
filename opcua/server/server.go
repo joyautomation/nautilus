@@ -18,7 +18,8 @@
 // Subscriptions are fed by the tag store's own change generations: a sweep
 // every Options.Sweep asks the store what moved since the last sweep (one
 // integer comparison per tag, nothing allocated at steady state) and
-// notifies only the monitored items that cover a changed tag.
+// notifies only the monitored items that cover a changed tag, or a tag
+// whose quality changed (a status change is a data change).
 package server
 
 import (
@@ -36,6 +37,7 @@ import (
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 	"github.com/joyautomation/nautilus/runtime"
@@ -305,7 +307,9 @@ func (s *Server) Status() Status {
 // the monitored items whose node covers a changed tag: the tag itself, or
 // a member of it — and whose reading actually differs from the one last
 // sent, since the store's generation is per tag and a member of a UDT
-// moves its idle siblings' generation without moving their values.
+// moves its idle siblings' generation without moving their values. A
+// monitored tag whose quality changed since the last tick is visited the
+// same way, since its status is part of what a subscriber is told (#419).
 //
 // The notifications are this package's, not gopcua's ChangeNotification:
 // that one sends on a subscription's channel while holding the monitored
@@ -328,6 +332,10 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 	live := map[string]struct{}{}    // the nodes monitored this tick, to prune last
 	items := map[*opcserver.MonitoredItem]*itemState{}
 	liveItems := map[*opcserver.MonitoredItem]struct{}{}
+	qual := map[string]nio.Quality{}     // the store's non-Good qualities this tick, by name key
+	lastQual := map[string]nio.Quality{} // each monitored root's quality as last seen
+	liveRoots := map[string]struct{}{}   // the roots monitored this tick, to prune lastQual
+	requal := map[string]struct{}{}      // roots whose quality moved this tick
 	t := time.NewTicker(s.opts.Sweep)
 	defer t.Stop()
 	for {
@@ -348,7 +356,36 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 		}
 		clear(live)
 		clear(liveItems)
-		for _, mon := range s.monitored() {
+		clear(liveRoots)
+		clear(requal)
+		mons := s.monitored()
+		// A quality change writes nothing to the store, so no generation
+		// moves with it; the default DataChangeFilter trigger is
+		// StatusValue (Part 4 §7.17.2), so it is a data change all the
+		// same (#419). Each monitored root's quality is compared with the
+		// one seen last tick. Quality reports only what is not Good, so a
+		// healthy plant costs one empty map here.
+		clear(qual)
+		if len(mons) > 0 {
+			for name, q := range s.rt.Quality() {
+				qual[ir.NameKey(name)] = q
+			}
+		}
+		for _, mon := range mons {
+			root, _ := ir.SplitAddress(mon.nid.StringID())
+			rk := ir.NameKey(root)
+			liveRoots[rk] = struct{}{}
+			if prev, seen := lastQual[rk]; seen && prev != qual[rk] {
+				requal[rk] = struct{}{}
+			}
+			lastQual[rk] = qual[rk]
+		}
+		for k := range lastQual {
+			if _, ok := liveRoots[k]; !ok {
+				delete(lastQual, k)
+			}
+		}
+		for _, mon := range mons {
 			live[mon.key] = struct{}{}
 			owed := false // an item new under monitoring, or back to Reporting, is owed the current value
 			for _, w := range mon.items {
@@ -358,9 +395,11 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 				}
 			}
 			root, _ := ir.SplitAddress(mon.nid.StringID())
-			_, moved := changed[ir.NameKey(root)]
+			rk := ir.NameKey(root)
+			_, moved := changed[rk]
+			_, requalified := requal[rk]
 			_, retry := pending[mon.key]
-			if !moved && !retry && !owed {
+			if !moved && !requalified && !retry && !owed {
 				continue
 			}
 			if s.notify(mon, last, retry, items, now) {

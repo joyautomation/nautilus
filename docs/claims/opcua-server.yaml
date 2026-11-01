@@ -123,13 +123,17 @@ claims:
       - go ./opcua/server TestStatusOfQuality
       - go ./opcua/server TestNeverDeliveredProtocolInputReadsBadNotConnected
       - go ./tools/blackbox TestBlackbox/001-F16-undelivered-tag-has-node
+      - go ./opcua/server TestQualityChangeIsNotified
     note: >-
       The mapping is tested on the status function and on store-held values.
       A protocol input never delivered is seeded and reads Bad_NotConnected
       (TestNeverDeliveredProtocolInputReadsBadNotConnected, over a Memory
-      driver reporting NotConnected); a local-I/O input never delivered still
-      has no node (#420), and a quality-only change is not pushed to
-      subscriptions (#419); the page says so.
+      driver reporting NotConnected); a quality-only change is pushed to a
+      subscriber (TestQualityChangeIsNotified; #419); a local-I/O input never
+      delivered still has no node (#420); the page says so. The black-box
+      check 001-F15-status-change-notified stays open: it creates its item
+      through asyncua's raw uaclient, so asyncua drops the notifications as
+      an unknown handle whatever the server sends.
     partial: true
 
   - id: OPC-006
@@ -165,6 +169,7 @@ claims:
       - go ./opcua/server TestSubscriptionCoversArraysElementsAndStaysQuiet
       - go ./opcua/server TestSubscriptionFollowsTheRunningProgram
       - go ./opcua/server TestThousandsOfMovingTagsUnderConcurrentClients
+      - go ./opcua/server TestQualityChangeIsNotified
       - go ./opcua/server TestForeignAsyncuaClient
     note: >-
       The 100 ms sweep cadence is not asserted (tests run a 20 ms sweep);
