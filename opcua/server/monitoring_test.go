@@ -688,19 +688,19 @@ func TestModifySubscriptionChangesThePublishingRate(t *testing.T) {
 	count(notify, 200*time.Millisecond) // the initial value, and the subscription settling
 	fast := count(notify, window)[1]
 
-	modify(300) // 1.5 s at 300 ms is 5 publishing cycles
-	count(notify, 50*time.Millisecond)
+	modify(300)                         // 1.5 s at 300 ms is 5 publishing cycles
+	count(notify, 300*time.Millisecond) // publishes from the old rate still on their way
 	slow := count(notify, window)[1]
 	t.Logf("notifications in %v: %d at 20 ms, %d at 300 ms", window, fast, slow)
-	if slow > 7 {
-		t.Errorf("after ModifySubscription(300): %d notifications in %v, want at most 7 (5 cycles); before it, at 20 ms, %d", slow, window, fast)
+	if slow > 8 {
+		t.Errorf("after ModifySubscription(300): %d notifications in %v, want at most 8 (5 or 6 cycles, and slack); before it, at 20 ms, %d", slow, window, fast)
 	}
 	if fast < 3*slow || fast < 20 {
 		t.Errorf("at 20 ms: %d notifications in %v; at 300 ms: %d; want the first well above the second", fast, window, slow)
 	}
 
 	modify(20) // and back: the subscription speeds up again
-	count(notify, 50*time.Millisecond)
+	count(notify, 300*time.Millisecond)
 	if again := count(notify, window)[1]; again < 3*slow || again < 20 {
 		t.Errorf("after ModifySubscription(20): %d notifications in %v, want well above the %d at 300 ms", again, window, slow)
 	}
