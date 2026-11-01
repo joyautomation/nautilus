@@ -168,6 +168,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   drop on its own pointerup and pointercancel, not only on the window's.
   A capture lost while the button is still down is not a drop (Chromium
   can lose it at the first move), so the drag carries on.
+- **A built-in's ports in the preview pane are the kit's.** "Edit
+  Component Ports…" on Tank, Pump or Valve showed (and the first edit wrote
+  into the project's `{Name}.component.json`) the box fractions the kit
+  used before its default ports moved onto the parts of each drawing — so
+  an override started from ports the runtime no longer draws. The pane now
+  starts from the kit's part-anchored ports; Heater is offered as a
+  built-in, and a copied kit component starts from the registry's own
+  sample props.
 
 ## [0.19.1] - 2026-10-26
 
