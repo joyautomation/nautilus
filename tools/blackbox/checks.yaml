@@ -248,7 +248,6 @@ checks:
   note: issue 420; the Bad_DeviceFailure half. The Bad_NotConnected half is 001-O-not-connected-before-device
   expected_today: fail
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#420'
 - id: 001-F18-modbus-import-host-port
   run: 2026-10-24-001
   finding: F-18
