@@ -372,6 +372,20 @@
 	function onKey(e: KeyboardEvent) {
 		if (e.key === 'Escape') selected = null;
 	}
+	/** Where the drag's coordinate readout goes, in VIEWPORT pixels: just
+	 * up and right of the dragged dot. The readout is position: fixed at the
+	 * pane's top level, outside the scaled box and the scrolling stage —
+	 * inside them it counted toward the stage's scrollable overflow, so a
+	 * dot dragged near the right edge of a narrow pane put up a scrollbar
+	 * mid-drag, the centred stage moved the box under the pointer, and the
+	 * dot landed off the cursor (#470/#471). */
+	function readoutAt(): { left: number; top: number } | null {
+		const p = drag ? portsPx[drag.index] : undefined;
+		if (!p || !boxEl) return null;
+		const r = boxEl.getBoundingClientRect();
+		const k = boxEl.offsetWidth ? r.width / boxEl.offsetWidth : 1;
+		return { left: r.left + p.x * k + 10, top: r.top + p.y * k - 20 };
+	}
 	const statusText = $derived(
 		builtin ? 'built-in' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
 	);
@@ -380,6 +394,12 @@
 <svelte:window onpointermove={onPortMove} onpointerup={onPortUp} onkeydown={onKey} />
 
 <div class="pane">
+	{#if drag}
+		{@const at = readoutAt()}
+		{#if at}
+			<span class="coord" style="left: {at.left}px; top: {at.top}px">{fmtFraction(drag.fx, drag.fy)}</span>
+		{/if}
+	{/if}
 	<header>
 		{#if builtin}
 			<span class="title" title="A kit component — rendered from the kit, no source here">{component}</span>
@@ -466,11 +486,6 @@
 										>
 									{/each}
 								</svg>
-								{#if drag}
-									<span class="coord" style="left: {(portsPx[drag.index]?.x ?? 0) + 10 / zoom}px; top: {(portsPx[drag.index]?.y ?? 0) - 20 / zoom}px; transform: scale({1 / zoom}); transform-origin: left top">
-										{fmtFraction(drag.fx, drag.fy)}
-									</span>
-								{/if}
 							{/if}
 						</div>
 					</div>
@@ -635,6 +650,9 @@
 		display: grid;
 		place-items: center;
 		padding: 24px;
+		/* a scrollbar that comes and goes (zoomed past the pane) must not
+		   re-centre the render under a dragged dot */
+		scrollbar-gutter: stable both-edges;
 		background-color: var(--nx-bg);
 		background-image: radial-gradient(var(--nx-border) 1px, transparent 1px);
 		background-size: 16px 16px;
@@ -708,7 +726,8 @@
 		pointer-events: none;
 	}
 	.coord {
-		position: absolute;
+		position: fixed;
+		z-index: 10;
 		font-size: 11px;
 		font-family: var(--nx-mono);
 		color: var(--nx-ink);

@@ -193,3 +193,50 @@ test('P08 component: a port dropped on a part of the drawing anchors to that par
 		assert.deepEqual(exceptions(ed), []);
 	});
 });
+
+// The drag's coordinate readout sits beside the dot. Dragged toward the
+// right edge of a NARROW pane (the pane opens beside the mimic editor, so
+// its stage is a few hundred px wide), the readout reached past the stage,
+// which is a centred `overflow: auto` grid: a scrollbar came up mid-drag,
+// the stage re-centred, the box moved under the pointer, and the release
+// was measured against the moved box — the dot landed off the cursor, and
+// jumped again when the readout unmounted (the nightly rig's
+// component_move_port, #470/#471). The readout must not reflow the stage.
+test('P01 component: in a narrow pane, a dot dragged toward the right edge lands at the release point (the readout does not reflow the stage)', async () => {
+	await withPreview({ component: 'Pump', builtin: true, ports: [{ name: 'in', x: 0, y: 0.5 }, { name: 'seal', x: 0.5, y: 0 }] }, async (ed) => {
+		await ed.b.eval(`document.body.style.width = '460px', true`);
+		await sleepMs(200);
+		await portsOn(ed);
+		const box = await boxRect(ed);
+		const seal = (await dots(ed))[1];
+		const tx = box.x + box.w * 0.8;
+		const ty = box.y + box.h * 0.3;
+		await ed.b.mouseDown(seal.cx, seal.cy);
+		for (let i = 1; i <= 10; i++) await ed.b.mouseMove(seal.cx + ((tx - seal.cx) * i) / 10, seal.cy + ((ty - seal.cy) * i) / 10);
+		await sleepMs(100);
+		const during = await boxRect(ed);
+		// the readout still shows, beside the pointer, while dragging
+		const tag = await ed.b.eval(
+			`(() => { const e = document.querySelector('.coord'); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, text: e.textContent.trim() }; })()`
+		);
+		assert.ok(tag && /^0\.\d+, 0\.\d+$/.test(tag.text) && Math.abs(tag.x - tx - 10) < 3 && Math.abs(tag.y - ty + 20) < 3, 'readout beside the pointer: ' + JSON.stringify({ tag, tx, ty }));
+		await ed.b.mouseUp(tx, ty);
+		await sleepMs(150);
+		const after = await boxRect(ed);
+		assert.ok(
+			Math.abs(during.x - box.x) < 0.5 && Math.abs(during.y - box.y) < 0.5,
+			'the box stays put while the dot is dragged: ' + JSON.stringify({ box, during })
+		);
+		const ops = await previewOps(ed);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		const moved = ops[0][1];
+		assert.equal(moved.name, 'seal');
+		const fx = (tx - after.x) / after.w;
+		const fy = (ty - after.y) / after.h;
+		assert.ok(
+			Math.abs(moved.x - fx) < 0.01 && Math.abs(moved.y - fy) < 0.01,
+			'the port lands at the release point: ' + JSON.stringify({ moved, fx, fy })
+		);
+		assert.deepEqual(exceptions(ed), []);
+	});
+});

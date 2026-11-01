@@ -176,6 +176,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   starts from the kit's part-anchored ports; Heater is offered as a
   built-in, and a copied kit component starts from the registry's own
   sample props.
+- **A port dot dragged toward the right of a narrow preview pane lands
+  under the cursor.** The coordinate readout beside a dragged dot ran past
+  the pane's stage, a scrollbar came up mid-drag, the render re-centred
+  under the pointer and the dot was dropped a few pixels off, then jumped
+  again when the readout went away. The readout now floats over the pane
+  without taking part in its layout, and the stage keeps its scrollbar
+  space either way.
 
 ## [0.19.1] - 2026-10-26
 
