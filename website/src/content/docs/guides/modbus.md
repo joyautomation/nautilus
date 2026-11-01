@@ -289,7 +289,9 @@ naut modbus serve --manifest modbus_manifest.yaml --values seed.json --ramp
 inverts each binding's scaling and word order on the way into the registers,
 so you write `"GAS_CH1": 120.0`, not a pair of raw words. `--ramp` drifts
 the numeric inputs so trends look alive. `--listen` defaults to
-`127.0.0.1:5020`. Point the manifest's hosts at it and `naut run .`
+`127.0.0.1:5020`. Point an instance's `host:` at it (`host: 127.0.0.1:5020`,
+or `host: 127.0.0.1` with `port: 5020`; the import splits the former into
+the manifest's `host:` and `port:`) and `naut run .`
 polls the same plan `--plan` printed.
 
 `browse` is the commissioning poke — read a range from a live device (or

@@ -261,7 +261,6 @@ checks:
   note: issue 426; imports into a copy on 8093/4853 and runs it 3 s
   expected_today: fail
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#426'
 - id: 001-F19-parse-error-message
   run: 2026-10-24-001
   finding: F-19
