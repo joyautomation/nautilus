@@ -7,8 +7,8 @@ description: Expose a controller's tags to any OPC UA client — browse, read an
 Read-only, and still moving. The `opcua:` section and its `endpoint` are
 meant to stay as they are, but session and subscription handling is being
 reworked, and the limits named on this page (a never-delivered tag has no
-node, a quality-only change is not pushed, several subscription services
-are unsupported, a client must dial an advertised address) are tracked as
+node, several subscription services are unsupported, a client must dial an
+advertised address) are tracked as
 issues and may change between releases. Try it against your client before
 you depend on it.
 :::
@@ -135,9 +135,12 @@ A member of a UDT is exactly as trustworthy as its tag. `SourceTimestamp`
 is the time the tag's current value was first seen — the server's start,
 for a value nothing has changed since — and moves only when the value
 does: a member of a UDT keeps its own timestamp while a sibling member
-changes. `ServerTimestamp` is the time of the read.
+changes. `ServerTimestamp` is the time of the read. A change of quality
+alone, with the value unchanged, is a data change: a subscriber hears the
+value go `Uncertain_LastUsableValue` when its source stops answering, and
+`Good` again when it comes back.
 
-Three limits of the current server, found by its black-box runs and tracked
+Two limits of the current server, found by its black-box runs and tracked
 as issues: a local-I/O input (`plcnext`, `optommp`) that has never been
 delivered has no node until its first value arrives, and a client that
 browsed early must browse again
@@ -146,11 +149,7 @@ driver's input (Modbus, EtherNet/IP, Sparkplug host, the IT pollers) is
 seeded with its `init:` or zero (see [Inputs from a device that is
 down](/guides/tag-model/#inputs-from-a-device-that-is-down)), so it has a
 node from the start and reads `Bad_NotConnected` until the device answers;
-and a
-change of quality alone, with the value unchanged, is visible to a Read but
-not yet pushed to a subscription
-([#419](https://github.com/joyautomation/nautilus/issues/419)); and a
-subscription's items are fixed once created, and it cannot be paused or
+and a subscription's items are fixed once created, and it cannot be paused or
 moved to a new session (`ModifyMonitoredItems`, `SetPublishingMode` and
 `TransferSubscriptions`, like `TranslateBrowsePathsToNodeIds` and `Call`,
 answer `Bad_ServiceUnsupported`;

@@ -12,6 +12,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	nio "github.com/joyautomation/nautilus/io"
 )
 
 // What the black-box run of 2026-10-24 (001b) found in the subscription and
@@ -703,5 +704,82 @@ func TestModifySubscriptionChangesThePublishingRate(t *testing.T) {
 	count(notify, 300*time.Millisecond)
 	if again := count(notify, window)[1]; again < 3*slow || again < 20 {
 		t.Errorf("after ModifySubscription(20): %d notifications in %v, want well above the %d at 300 ms", again, window, slow)
+	}
+}
+
+// F-15 (#419): a change of quality with the value unchanged is a data
+// change. The default DataChangeFilter trigger is StatusValue (Part 4
+// §7.17.2), so a subscriber hears the value go Uncertain when its source
+// goes stale, and Good again when it comes back — a member as well as a
+// tag, since a member is as good as its tag. The sweep followed only the
+// store's write generations, which a quality change does not move, so the
+// subscriber heard nothing and kept showing a dead reading as live.
+func TestQualityChangeIsNotified(t *testing.T) {
+	rt, mem := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	notify := make(chan *opcua.PublishNotificationData, 64)
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond}, notify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Cancel(ctx)
+	if _, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth,
+		opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Level"), ua.AttributeIDValue, 1),
+		opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("P101.Drive.Speed"), ua.AttributeIDValue, 2),
+		opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Count"), ua.AttributeIDValue, 3),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// next waits for the next notification to handle and returns its status
+	// and value.
+	next := func(handle uint32) (ua.StatusCode, any) {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case n := <-notify:
+				dc, ok := n.Value.(*ua.DataChangeNotification)
+				if !ok {
+					continue
+				}
+				for _, m := range dc.MonitoredItems {
+					if m.ClientHandle == handle {
+						return m.Value.Status, m.Value.Value.Value()
+					}
+				}
+			case <-deadline:
+				t.Fatalf("handle %d: no notification in 3 s", handle)
+			}
+		}
+	}
+	if st, v := next(1); st != ua.StatusGood || v != 3.5 {
+		t.Fatalf("Level initial: %s %v", st, v)
+	}
+	if got := count(notify, 200*time.Millisecond); got[1] != 0 {
+		t.Fatalf("Level notified %d more times with nothing changed", got[1])
+	}
+
+	for _, step := range []struct {
+		tag    string
+		q      nio.Quality
+		handle uint32
+		want   ua.StatusCode
+		value  any
+	}{
+		{"Level", nio.Stale, 1, ua.StatusUncertainLastUsableValue, 3.5},
+		{"Level", nio.Good, 1, ua.StatusGood, 3.5},
+		{"P101", nio.NotConnected, 2, ua.StatusBadNotConnected, 0.0},
+		{"P101", nio.Good, 2, ua.StatusGood, 0.0},
+		{"Count", nio.Bad, 3, ua.StatusBadDeviceFailure, int32(42)},
+	} {
+		mem.SetQuality(step.tag, step.q)
+		if st, v := next(step.handle); st != step.want || v != step.value {
+			t.Errorf("%s set %s: notified %s %v, want %s %v", step.tag, step.q, st, v, step.want, step.value)
+		}
+	}
+	// Once told, a quality that stays put is not told again.
+	if got := count(notify, 200*time.Millisecond); len(got) != 0 {
+		t.Errorf("notified %v with no quality or value changing", got)
 	}
 }
