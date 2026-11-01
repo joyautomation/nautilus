@@ -215,6 +215,11 @@ func (s *Server) Start(ctx context.Context) error {
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(maxNodesPerRead)))
 	}
+	// The fastest a value is sampled is the change sweep, the same
+	// MinimumSamplingInterval every tag advertises.
+	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_MinSupportedSampleRate)); n != nil {
+		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(float64(s.opts.Sweep)/float64(time.Millisecond)))
+	}
 	// Hang the project folder off ns=0's Objects, where every client
 	// starts browsing.
 	root, err := srv.Namespace(0)

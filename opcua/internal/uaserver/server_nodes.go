@@ -86,4 +86,29 @@ func setServerObjectValues(s *Server) {
 	set(id.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead, func() any {
 		return s.cfg.cap.OperationalLimits.MaxNodesPerRead
 	})
+
+	// ServerCapabilitiesType's Mandatory properties (Part 5 §6.3.2). No
+	// profile or locale is claimed, so both arrays are empty; the minimum
+	// sample rate is 0 (unspecified) until the embedding server sets its
+	// own; continuation points are stateless here, so there is no limit
+	// (0); and the server holds no software certificates.
+	set(id.Server_ServerCapabilities_ServerProfileArray, func() any { return []string{} })
+	set(id.Server_ServerCapabilities_LocaleIDArray, func() any { return []string{} })
+	set(id.Server_ServerCapabilities_MinSupportedSampleRate, func() any { return float64(0) })
+	set(id.Server_ServerCapabilities_MaxBrowseContinuationPoints, func() any { return uint16(0) })
+	set(id.Server_ServerCapabilities_MaxQueryContinuationPoints, func() any { return uint16(0) })
+	set(id.Server_ServerCapabilities_MaxHistoryContinuationPoints, func() any { return uint16(0) })
+	set(id.Server_ServerCapabilities_SoftwareCertificates, func() any { return []*ua.ExtensionObject{} })
+
+	// ServerType's Optional properties the node set instantiates: the
+	// ServerArray and NamespaceArray carry no version (0), the local time
+	// zone is the machine's, and no return from a shutdown is announced
+	// (MinDateTime, "unknown").
+	set(id.Server_URIsVersion, func() any { return uint32(0) })
+	set(id.Server_LocalTime, func() any {
+		now := time.Now()
+		_, off := now.Zone()
+		return ua.NewExtensionObject(&ua.TimeZoneDataType{Offset: int16(off / 60), DaylightSavingInOffset: now.IsDST()})
+	})
+	set(id.Server_EstimatedReturnTime, func() any { return time.Time{} })
 }

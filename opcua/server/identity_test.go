@@ -205,6 +205,36 @@ func TestServerObjectDescribesNautilus(t *testing.T) {
 	if v := value(id.Server_Auditing); v != false {
 		t.Errorf("Auditing = %#v, want false", v)
 	}
+
+	// ServerCapabilities' Mandatory properties, and the optional ServerType
+	// properties the node set instantiates, have values too.
+	for nid, want := range map[uint32]any{
+		id.Server_ServerCapabilities_MinSupportedSampleRate:       float64(DefaultSweep / time.Millisecond),
+		id.Server_ServerCapabilities_MaxBrowseContinuationPoints:  uint16(0),
+		id.Server_ServerCapabilities_MaxQueryContinuationPoints:   uint16(0),
+		id.Server_ServerCapabilities_MaxHistoryContinuationPoints: uint16(0),
+		id.Server_URIsVersion: uint32(0),
+	} {
+		if v := value(nid); v != want {
+			t.Errorf("i=%d = %#v, want %#v", nid, v, want)
+		}
+	}
+	for _, nid := range []uint32{id.Server_ServerCapabilities_ServerProfileArray, id.Server_ServerCapabilities_LocaleIDArray} {
+		if v, ok := value(nid).([]string); !ok || len(v) != 0 {
+			t.Errorf("i=%d = %#v, want an empty String array", nid, value(nid))
+		}
+	}
+	value(id.Server_ServerCapabilities_SoftwareCertificates)
+	if eo, ok := value(id.Server_LocalTime).(*ua.ExtensionObject); !ok {
+		t.Errorf("LocalTime is not a structure")
+	} else if tz, ok := eo.Value.(*ua.TimeZoneDataType); !ok {
+		t.Errorf("LocalTime holds %T", eo.Value)
+	} else if _, off := time.Now().Zone(); int(tz.Offset) != off/60 {
+		t.Errorf("LocalTime offset %d, want %d", tz.Offset, off/60)
+	}
+	if _, ok := value(id.Server_EstimatedReturnTime).(time.Time); !ok {
+		t.Errorf("EstimatedReturnTime is not a DateTime")
+	}
 }
 
 // Unset, the version is the binary's own (a test binary's module version
@@ -270,4 +300,43 @@ func TestBinaryBuildIsNeverThePlaceholder(t *testing.T) {
 func asStrings(v any) []string {
 	s, _ := v.([]string)
 	return s
+}
+
+// A reference's TypeDefinition is its target's type definition, never its
+// DataType. Browse took it from the target's DataType(), which fell back
+// to the HasTypeDefinition only for a node with no DataType attribute; once
+// the standard Variables had theirs (nautilus#424), browsing the Server
+// object said ServerStatus was a ServerStatusDataType (i=862) and
+// ServerArray a String (i=12) rather than a ServerStatusType (i=2138) and
+// a PropertyType (i=68). The project folder, a node with no references of
+// its own, keeps FolderType (i=61).
+func TestBrowseTypeDefinitionsAreTypes(t *testing.T) {
+	rt, _ := newRuntime(t)
+	_, c := startServer(t, rt)
+	server := browse(t, c, ua.NewNumericNodeID(0, id.Server))
+	for name, want := range map[string]uint32{
+		"ServerStatus":       id.ServerStatusType,
+		"ServerArray":        id.PropertyType,
+		"NamespaceArray":     id.PropertyType,
+		"ServiceLevel":       id.PropertyType,
+		"Auditing":           id.PropertyType,
+		"ServerCapabilities": id.ServerCapabilitiesType,
+	} {
+		r := server[name]
+		if r == nil {
+			t.Errorf("Server has no %s", name)
+			continue
+		}
+		if td := r.TypeDefinition; td == nil || td.NodeID.Namespace() != 0 || td.NodeID.IntID() != want {
+			t.Errorf("Server → %s TypeDefinition %v, want i=%d", name, td, want)
+		}
+	}
+	status := browse(t, c, ua.NewNumericNodeID(0, id.Server_ServerStatus))
+	if r := status["BuildInfo"]; r == nil || r.TypeDefinition.NodeID.IntID() != id.BuildInfoType {
+		t.Errorf("ServerStatus → BuildInfo %+v, want TypeDefinition i=%d", r, id.BuildInfoType)
+	}
+	folder := browse(t, c, ua.NewNumericNodeID(0, id.ObjectsFolder))["lift-station"]
+	if folder == nil || folder.TypeDefinition == nil || folder.TypeDefinition.NodeID.IntID() != id.FolderType {
+		t.Errorf("Objects → project folder %+v, want TypeDefinition FolderType (i=61)", folder)
+	}
 }

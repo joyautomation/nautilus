@@ -259,6 +259,24 @@ func (n *Node) SetDescription(text, locale string) {
 	n.attr[ua.AttributeIDDescription] = DataValueFromValue(&ua.LocalizedText{Text: text, Locale: locale})
 }
 
+// TypeDefinition is the node's type definition: the target of its forward
+// HasTypeDefinition reference, or nil when it has none. A
+// ReferenceDescription's TypeDefinition is this, not the DataType: a
+// Variable has both, and gopcua's code used DataType() for it, which gave
+// the type definition only for a node with no DataType attribute
+// (nautilus#424 gave the standard Variables theirs).
+func (n *Node) TypeDefinition() *ua.ExpandedNodeID {
+	if n == nil {
+		return nil
+	}
+	for _, r := range n.refs {
+		if r.ReferenceTypeID != nil && r.ReferenceTypeID.IntID() == id.HasTypeDefinition && r.IsForward {
+			return r.NodeID
+		}
+	}
+	return nil
+}
+
 func (n *Node) DataType() *ua.ExpandedNodeID {
 	if n == nil {
 		log.Printf("n was nil!")
@@ -354,6 +372,13 @@ const (
 func (n *Node) AddRef(o *Node, rt RefType, forward bool) {
 	//eoid := ua.NewNumericExpandedNodeID(o.ns.ID(), o.)
 	eoid := ua.NewExpandedNodeID(o.ID(), "", 0)
+	// The target's HasTypeDefinition; failing that, DataType(), which is
+	// where a node built without references keeps its type (opcua/server's
+	// project folder holds FolderType there).
+	tdef := o.TypeDefinition()
+	if tdef == nil {
+		tdef = o.DataType()
+	}
 
 	ref := ua.ReferenceDescription{
 		ReferenceTypeID: ua.NewNumericNodeID(0, uint32(rt)), //o.refs[0].ReferenceTypeID,
@@ -362,7 +387,7 @@ func (n *Node) AddRef(o *Node, rt RefType, forward bool) {
 		BrowseName:      o.BrowseName(),
 		DisplayName:     o.DisplayName(),
 		NodeClass:       o.NodeClass(),
-		TypeDefinition:  o.DataType(),
+		TypeDefinition:  tdef,
 	}
 	n.refs = append(n.refs, &ref)
 }

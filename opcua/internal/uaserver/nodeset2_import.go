@@ -30,10 +30,10 @@ func (srv *Server) ImportNodeSet(nodes *schema.UANodeSet) error {
 // variableTypesImportNodeSet gives each Variable the DataType, ValueRank
 // and ArrayDimensions its node set declares (Part 3 §5.6.2: Mandatory on
 // every Variable). gopcua's import left them out, so a Read of them on a
-// standard variable answered Bad_AttributeIdInvalid. It runs after the
-// references: a ReferenceDescription built by AddRef takes its
-// TypeDefinition from DataType() when the target has one, and these
-// targets' TypeDefinition must stay their HasTypeDefinition.
+// standard variable answered Bad_AttributeIdInvalid. A reference's
+// TypeDefinition, in AddRef and in Browse, is the target's
+// HasTypeDefinition (Node.TypeDefinition), so giving a Variable its
+// DataType does not change what a Browse says its type is.
 //
 // The node set omits ValueRank when it is -1 (Scalar), and the schema
 // reads an omitted attribute as 0; no Variable in the standard node set

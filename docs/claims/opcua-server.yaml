@@ -102,11 +102,16 @@ claims:
       prints, the build's commit and its date. The Server object's variables
       are the standard node set's, with their standard BrowseNames,
       DataTypes, ValueRanks and HasComponent hierarchy (BuildInfo's fields
-      under BuildInfo, under ServerStatus); ServiceLevel reads 255 while the
-      server runs and Auditing false.
+      under BuildInfo, under ServerStatus), and a Browse gives each
+      reference's TypeDefinition as its target's type definition
+      (ServerStatusType, PropertyType), never its DataType. ServiceLevel
+      reads 255 while the server runs and Auditing false; ServerCapabilities'
+      Mandatory properties have values (no profile or locale claimed, the
+      sweep as MinSupportedSampleRate, no continuation-point limit).
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestServerObjectDescribesNautilus
+      - go ./opcua/server TestBrowseTypeDefinitionsAreTypes
       - go ./opcua/server TestApplicationURIIsStableAndOverridable
       - go ./opcua/server TestBinaryBuildIsNeverThePlaceholder
       - go ./opcua/internal/uaserver TestApplicationURIOptionWinsOverTheCertificate
