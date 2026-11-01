@@ -16,7 +16,7 @@ import (
 // to notice is a tag typed with one of them: "this project declares no
 // TYPE", naming the wrong file (#427). Graphical sources are skipped: their
 // transpiler reports its own errors.
-func checkSourcesParse(fsys fs.FS, m Manifest) error {
+func checkSourcesParse(fsys fs.FS, m Manifest, libs []stproject.Library) error {
 	parse := func(name, src string) error {
 		if _, err := st.Parse(src); err != nil {
 			pos, ok := st.ParseErrorPos(err)
@@ -26,10 +26,6 @@ func checkSourcesParse(fsys fs.FS, m Manifest) error {
 			return fmt.Errorf("%s:%d:%d: %w", name, pos.Line, pos.Col, err)
 		}
 		return nil
-	}
-	libs, err := stproject.Libraries(fsys, nil)
-	if err != nil {
-		return err
 	}
 	for _, l := range libs {
 		if strings.EqualFold(path.Ext(l.Path), ".st") {

@@ -757,11 +757,15 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	// Libraries: every PROGRAM-less .st/.ld/.fbd in the project root and
 	// under lib/ — the same rule the editor, LSP, and pull use, so tooling
 	// agrees.
-	libs, err := libraries(fsys)
+	libFiles, err := stproject.Libraries(fsys, nil)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSourcesParse(fsys, m); err != nil {
+	libs := make([]string, len(libFiles))
+	for i, l := range libFiles {
+		libs[i] = l.ST
+	}
+	if err := checkSourcesParse(fsys, m, libFiles); err != nil {
 		return nil, err
 	}
 

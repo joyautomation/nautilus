@@ -28,7 +28,8 @@ END_PROGRAM
 	if strings.Contains(msg, "declares no TYPE") {
 		t.Errorf("the parse failure was reported as a missing TYPE: %v", err)
 	}
-	if !strings.Contains(msg, "4:") {
-		t.Errorf("error does not carry the parse error position: %v", err)
+	// Exactly the parser's own message: nothing about tags or types.
+	if want := `var decl: line 4: expected an identifier, got ":"`; msg != want {
+		t.Errorf("error = %q, want %q", msg, want)
 	}
 }
