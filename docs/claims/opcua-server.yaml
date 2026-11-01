@@ -115,6 +115,7 @@ claims:
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestStatusOfQuality
       - go ./opcua/server TestNeverDeliveredProtocolInputReadsBadNotConnected
+      - go ./tools/blackbox TestBlackbox/001-F16-undelivered-tag-has-node
     note: >-
       The mapping is tested on the status function and on store-held values.
       A protocol input never delivered is seeded and reads Bad_NotConnected
