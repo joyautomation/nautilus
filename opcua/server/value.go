@@ -23,6 +23,11 @@ type member struct {
 	addr string // "P101.Drive.Speed", "Levels[2]"
 	val  ir.Value
 	typ  *ir.Type // declared type when known; nil on an untyped walk
+	// absent marks a declared input no driver has delivered yet, so the
+	// store does not hold it (see namespace.undelivered): val is the zero
+	// of its declared type, there for the node's shape only. Its Value
+	// attribute carries no value, just a Bad status.
+	absent bool
 }
 
 // walk resolves segs (ir.PathSegments form: member names and "[n]") below
@@ -94,7 +99,7 @@ func children(m member) []member {
 				break
 			}
 			sf := v.Struct.Fields[i]
-			out = append(out, member{addr: m.addr + "." + sf.Name, val: f, typ: sf.Type})
+			out = append(out, member{addr: m.addr + "." + sf.Name, val: f, typ: sf.Type, absent: m.absent})
 		}
 		return out
 	case ir.TypeFB:
@@ -107,7 +112,7 @@ func children(m member) []member {
 			if i >= len(v.FB.Slots) || strings.HasPrefix(s.Name, "_") {
 				continue
 			}
-			out = append(out, member{addr: m.addr + "." + s.Name, val: v.FB.Slots[i], typ: s.Type})
+			out = append(out, member{addr: m.addr + "." + s.Name, val: v.FB.Slots[i], typ: s.Type, absent: m.absent})
 		}
 		return out
 	case ir.TypeArray:
@@ -121,7 +126,7 @@ func children(m member) []member {
 		}
 		out := make([]member, 0, len(v.Arr))
 		for i, e := range v.Arr {
-			out = append(out, member{addr: m.addr + "[" + strconv.Itoa(lo+i) + "]", val: e, typ: et})
+			out = append(out, member{addr: m.addr + "[" + strconv.Itoa(lo+i) + "]", val: e, typ: et, absent: m.absent})
 		}
 		return out
 	}

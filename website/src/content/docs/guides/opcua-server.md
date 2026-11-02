@@ -161,19 +161,23 @@ alone, with the value unchanged, is a data change: a subscriber hears the
 value go `Uncertain_LastUsableValue` when its source stops answering, and
 `Good` again when it comes back.
 
-Two limits of the current server, found by its black-box runs and tracked
-as issues: a local-I/O input (`plcnext`, `optommp`) that has never been
-delivered has no node until its first value arrives, and a client that
-browsed early must browse again
-([#420](https://github.com/joyautomation/nautilus/issues/420)). A protocol
+An input that has never been delivered still has a node. A protocol
 driver's input (Modbus, EtherNet/IP, Sparkplug host, the IT pollers) is
 seeded with its `init:` or zero (see [Inputs from a device that is
-down](/guides/tag-model/#inputs-from-a-device-that-is-down)), so it has a
-node from the start and reads `Bad_NotConnected` until the device answers;
-and a subscription's items are fixed once created, and it cannot be paused or
-moved to a new session (`ModifyMonitoredItems`, `SetPublishingMode` and
-`TransferSubscriptions`, like `TranslateBrowsePathsToNodeIds` and `Call`,
-answer `Bad_ServiceUnsupported`;
+down](/guides/tag-model/#inputs-from-a-device-that-is-down)), so it reads
+that seed with `Bad_NotConnected` until the device answers. A local-I/O
+input (`plcnext`, `optommp`) is not seeded, and a program that reads it
+before its first value still faults the scan. Its node is there from the
+start all the same: typed as declared, with no value, and `Bad_NotConnected`.
+The exception is an input whose type nothing declares (no `type:`, and no
+program reads it). It has no node until its first value arrives, so a
+client that browsed before then must browse again.
+
+One limit of the current server, found by its black-box runs and tracked as
+an issue: a subscription's items are fixed once created, and it cannot be
+paused or moved to a new session (`ModifyMonitoredItems`,
+`SetPublishingMode` and `TransferSubscriptions`, like
+`TranslateBrowsePathsToNodeIds` and `Call`, answer `Bad_ServiceUnsupported`;
 [#431](https://github.com/joyautomation/nautilus/issues/431)).
 
 ## Subscriptions

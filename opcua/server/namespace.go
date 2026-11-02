@@ -132,13 +132,53 @@ func (ns *namespace) resolve(nid *ua.NodeID) (member, bool) {
 	tags := ns.rt.Tags()
 	canon, ok := tags.Canonical(root)
 	if !ok {
-		return member{}, false
+		name, t, ok := ns.undelivered(root)
+		if !ok {
+			return member{}, false
+		}
+		m, ok := walk(name, ir.Zero(t), t, segs)
+		m.absent = true
+		return m, ok
 	}
 	v, err := tags.ReadGlobal(canon)
 	if err != nil {
 		return member{}, false
 	}
 	return walk(canon, v, tags.TypeOf(canon), segs)
+}
+
+// undelivered finds the declared input named root (in any casing) when the
+// store does not hold it yet, with the type it is declared as. An input a
+// communications driver delivers is seeded at start, so it is always in the
+// store; one a local-I/O driver (plcnext, optommp) delivers is not, so the
+// scan faults loudly on a read before the first delivery (runtime.TagDef
+// Comms). The address space still shows it from the start: a node of its
+// declared type whose Value is Bad_NotConnected (#420), so a client that
+// browses at connect sees every input it will ever have. An input whose type
+// nothing declares (no type:, no program reading it) has no shape to show
+// and stays absent until its first value.
+func (ns *namespace) undelivered(root string) (string, *ir.Type, bool) {
+	tags := ns.rt.Tags()
+	key := ir.NameKey(root)
+	for _, name := range ns.rt.Inputs() {
+		if ir.NameKey(name) != key {
+			continue
+		}
+		return undeliveredInput(tags, name)
+	}
+	return "", nil, false
+}
+
+// undeliveredInput is undelivered's test for one declared input name.
+func undeliveredInput(tags *runtime.Tags, name string) (string, *ir.Type, bool) {
+	if _, held := tags.Canonical(name); held {
+		return "", nil, false
+	}
+	t := tags.TypeOf(name)
+	if t == nil || t.Kind == ir.TypeFB {
+		return "", nil, false
+	}
+	return name, t, true
 }
 
 // nodeID is the node id a member is addressed by.
@@ -162,9 +202,23 @@ func (ns *namespace) roots() []member {
 	for name := range snap {
 		names = append(names, name)
 	}
+	// Declared inputs not delivered yet (undelivered) are roots too.
+	absent := map[string]*ir.Type{}
+	for _, name := range ns.rt.Inputs() {
+		if n, t, ok := undeliveredInput(tags, name); ok {
+			if _, dup := absent[n]; !dup {
+				absent[n] = t
+				names = append(names, n)
+			}
+		}
+	}
 	sort.Strings(names)
 	out := make([]member, 0, len(names))
 	for _, name := range names {
+		if t, ok := absent[name]; ok {
+			out = append(out, member{addr: name, val: ir.Zero(t), typ: t, absent: true})
+			continue
+		}
 		out = append(out, member{addr: name, val: snap[name], typ: tags.TypeOf(name)})
 	}
 	return out
@@ -436,6 +490,9 @@ func (ns *namespace) describe(m member) string {
 // quality as the status, and the time its current generation was first
 // seen as the SourceTimestamp.
 func (ns *namespace) readValue(m member) *ua.DataValue {
+	if m.absent {
+		return ns.absentValue(m)
+	}
 	v, err := variant(m)
 	if err != nil {
 		return status(ua.StatusBadAttributeIDInvalid)
@@ -456,6 +513,23 @@ func (ns *namespace) readValue(m member) *ua.DataValue {
 		}
 	}
 	return dv
+}
+
+// absentValue is the Value of an input not delivered yet: no value, and a
+// Bad status. That is Bad_NotConnected (the guide's "never delivered"), or
+// the driver's own Bad report for the tag when it has one; a Good or
+// Uncertain quality would claim a value there is none of.
+func (ns *namespace) absentValue(m member) *ua.DataValue {
+	root, _ := ir.SplitAddress(m.addr)
+	code := statusOf(ns.rt.TagQuality(root))
+	if code&0x80000000 == 0 {
+		code = ua.StatusBadNotConnected
+	}
+	return &ua.DataValue{
+		EncodingMask:    ua.DataValueStatusCode | ua.DataValueServerTimestamp,
+		Status:          code,
+		ServerTimestamp: time.Now(),
+	}
 }
 
 // memberStampAt returns the time the member at addr was first seen holding

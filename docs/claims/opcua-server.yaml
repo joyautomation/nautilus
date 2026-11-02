@@ -161,6 +161,7 @@ claims:
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestStatusOfQuality
       - go ./opcua/server TestNeverDeliveredProtocolInputReadsBadNotConnected
+      - go ./opcua/server TestNeverDeliveredLocalInputHasANode
       - go ./tools/blackbox TestBlackbox/001-F16-undelivered-tag-has-node
       - go ./opcua/server TestQualityChangeIsNotified
     note: >-
@@ -169,7 +170,9 @@ claims:
       (TestNeverDeliveredProtocolInputReadsBadNotConnected, over a Memory
       driver reporting NotConnected); a quality-only change is pushed to a
       subscriber (TestQualityChangeIsNotified; #419); a local-I/O input never
-      delivered still has no node (#420); the page says so. The black-box
+      delivered, which is not seeded, is a node of its declared type with no
+      value and Bad_NotConnected, and a subscriber hears it go Good on its
+      first delivery (TestNeverDeliveredLocalInputHasANode; #420). The black-box
       check 001-F15-status-change-notified stays open: it creates its item
       through asyncua's raw uaclient, so asyncua drops the notifications as
       an unknown handle whatever the server sends.

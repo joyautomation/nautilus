@@ -70,7 +70,10 @@ last (or initial) value, and the logic checks the connection's fault bit.
 The decision is per tag, by the driver that delivers it, so a `drivers:`
 list that mixes a Modbus skid with a controller's own I/O seeds only the
 Modbus tags. Local I/O keeps the loud fault: there, an input that never
-arrives means the configuration is wrong, not that a cable is out.
+arrives means the configuration is wrong, not that a cable is out. The
+fault is the scan's only: the [OPC UA server](/guides/opcua-server/) still
+shows such an input from the start, with no value and `Bad_NotConnected`,
+so a SCADA client sees the missing point rather than no point.
 
 The type of the zero is the tag's `type:`, else the type the programs
 declare the tag as, else the type the driver's binding delivers (a Modbus
