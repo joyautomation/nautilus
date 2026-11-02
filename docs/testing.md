@@ -155,6 +155,12 @@ of an [enumeration](functions.md#enumerations) takes its name (or integer) at
 any depth, the same as a whole enumerated tag, and a name that is no member
 fails the test with the members listed.
 
+A `TIME` tag takes an IEC literal or milliseconds, in `given:` and
+`expect:` alike: `given: { HiLevelDelay: T#8h }`,
+`expect: { HiLevelDelay: T#1h30m }`, or the same value as a number of
+milliseconds (`30000` is `T#30s`). Write the literal when you can; it is
+what the manifest's `init:` and the editors show.
+
 **Tests never open a socket.** Whatever `driver:` says — including `eip` —
 the test harness substitutes a stub, so a project bound to real hardware
 is fully testable on a laptop with nothing on the network.
@@ -165,7 +171,7 @@ Per tag, either a value or a matcher:
 
 | form | meaning |
 | --- | --- |
-| `PumpRun: true` | exact — BOOL, STRING, or a number |
+| `PumpRun: true` | exact — BOOL, STRING, or a number; a `TIME` tag takes a `T#` literal or milliseconds |
 | `{ near: 72.0, tol: 0.5 }` | within a tolerance (`tol` defaults to the file's `tolerance`) |
 | `{ gt: }` `{ ge: }` `{ lt: }` `{ le: }` | numeric bounds |
 | `{ between: [64.5, 65.5] }` | inclusive range |
