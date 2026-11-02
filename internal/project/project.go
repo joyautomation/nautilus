@@ -959,8 +959,10 @@ func libraries(fsys fs.FS) ([]string, error) {
 // it states. VAR_GLOBAL CONSTANT entries are constants, not tags.
 func gvlTags(libs []string, declared []runtime.TagDef) []runtime.TagDef {
 	have := make(map[string]bool, len(declared))
-	for _, d := range declared {
+	at := make(map[string]int, len(declared))
+	for i, d := range declared {
 		have[ir.NameKey(d.Name)] = true
+		at[ir.NameKey(d.Name)] = i
 	}
 	var out []runtime.TagDef
 	for _, src := range libs {
@@ -969,6 +971,11 @@ func gvlTags(libs []string, declared []runtime.TagDef) []runtime.TagDef {
 			continue // the library reports its own error when it compiles
 		}
 		for _, g := range st.FileGlobals(prog) {
+			if i, ok := at[ir.NameKey(g.Name)]; ok && g.Retain && !g.Constant {
+				// The manifest declares the global too: VAR_GLOBAL RETAIN
+				// still keeps it (a manifest line cannot un-retain it).
+				declared[i].Retain = true
+			}
 			if g.Constant || have[ir.NameKey(g.Name)] {
 				continue
 			}

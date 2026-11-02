@@ -347,6 +347,16 @@ func (r *Runtime) saveRetained(lastSaved []byte) []byte {
 	if r.coord != nil && !r.coord.IsLeader() {
 		return lastSaved
 	}
+	// Leading by the lease is not enough: until this runtime's own takeover
+	// has loaded the store (gate, before its next scan), its tags hold seeds
+	// and its frames are fresh, and saving them would overwrite what the
+	// takeover is about to load.
+	r.leadMu.Lock()
+	leading := r.leading
+	r.leadMu.Unlock()
+	if !leading {
+		return lastSaved
+	}
 	st := r.retainState()
 	enc, err := json.Marshal(st)
 	if err != nil || string(enc) == string(lastSaved) {

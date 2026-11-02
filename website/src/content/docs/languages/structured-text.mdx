@@ -162,10 +162,14 @@ scan, and a warm swap carries that state across an online edit by name and
 type. `RETAIN` is about restarts: with a [`retain:`
 section](/guides/redundancy/#retained-state) in the manifest, a program's
 `VAR RETAIN` variables survive a restart, a failover and a redeploy, as
-CODESYS's do. That includes a function block instance declared there, with
-its own variables (a built-in timer's elapsed time is not kept, so a retained
-`TON` starts timing again). A library's `VAR_GLOBAL RETAIN` keeps its globals
-the same way. Without a `retain:` section, `RETAIN` changes nothing.
+CODESYS's do. A function block instance declared there keeps all its
+variables, so a `CTU` keeps its count and its edge memory and a count input
+held through the restart does not count again. A timer or a `PID` (`TON`,
+`TOF`, `TP`, `PID`) keeps time against the controller's clock, so one declared
+`RETAIN` starts over. So does a function block inside an array or a struct. A
+`CONSTANT` is always its declared value. A library's `VAR_GLOBAL RETAIN` keeps
+its globals the same way. Without a `retain:` section, `RETAIN` changes
+nothing.
 
 ```iecst
 PROGRAM Pumps

@@ -311,15 +311,20 @@ claims:
   - id: RED-030
     claim: >-
       Beside the setpoints, the retain store keeps every tag marked retain:
-      true in the manifest or declared in a library's VAR_GLOBAL RETAIN, and
-      every program's VAR RETAIN variables; other state re-seeds. retain:
-      true on an input or an output is refused.
+      true in the manifest or declared in a library's VAR_GLOBAL RETAIN (even
+      when the manifest declares it too), and every program's VAR RETAIN
+      variables (see ST-024 for function block instances); other state
+      re-seeds. retain: true on an input or an output is refused. A runtime
+      saves nothing until its own takeover has loaded the store.
     source: "#retained-state"
     tests:
       - go ./runtime TestVarRetainAndRetainedStateSurviveARestart
       - go ./runtime TestRetainRefusedOnInputsAndOutputs
       - go ./internal/project TestRetainMarksTags
       - go ./internal/project TestRetainOnAnInputIsRefused
+      - go ./internal/project TestGVLRetainHoldsForAManifestDeclaredGlobal
+      - go ./runtime TestNoSaveBeforeTakeover
+      - go ./runtime TestExplicitRetainTagsKeepsMarkedTags
     note: >-
       The restart goes through the file store, so values make the JSON round
       trip a controller's do. Black-box finding 2026-11-01-002 F-05 asked for

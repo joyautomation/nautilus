@@ -280,15 +280,20 @@ claims:
     claim: >-
       Every program VAR and function block instance keeps its value scan to
       scan, RETAIN or not. With a retain: section, a program's VAR RETAIN
-      variables (a function block instance declared there with its own
-      variables) and a library's VAR_GLOBAL RETAIN globals survive a
-      restart; without one, RETAIN changes nothing.
+      variables and a library's VAR_GLOBAL RETAIN globals survive a restart;
+      a function block instance declared there keeps all its variables (a
+      CTU its count and edge memory), except a timer or PID, which starts
+      over, as does a function block inside an array or struct; a CONSTANT is
+      its declared value. Without a retain: section, RETAIN changes nothing.
     source: "#declarations"
     tests:
       - go ./lang/st TestParseVarRetainConstant
       - go ./lang/st TestRetainChangesNothingAtRuntime
       - go ./runtime TestVarRetainAndRetainedStateSurviveARestart
       - go ./runtime TestRestoreLocalsSkipsWhatNoLongerFits
+      - go ./runtime TestRetainedCounterDoesNotCountARestart
+      - go ./runtime TestRestoreKeepsWhatFitsAndRestoresNaN
+      - go ./runtime TestRetainedConstantIsNotKept
       - go ./internal/project TestRetainMarksTags
 
   - id: ST-025

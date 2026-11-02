@@ -40,3 +40,21 @@ func TestRetainOnAnInputIsRefused(t *testing.T) {
 		t.Fatalf("retain on an input: %v, want a refusal", err)
 	}
 }
+
+// A global a library declares VAR_GLOBAL RETAIN stays retained when the
+// manifest declares the tag as well: the manifest's line cannot un-retain it.
+func TestGVLRetainHoldsForAManifestDeclaredGlobal(t *testing.T) {
+	proj, err := Load(mapProject(map[string]string{
+		"nautilus.yaml": "tasks:\n  - program: p.st\ntags:\n  - { name: Starts, role: state, init: 0 }\n",
+		"gvl.st":        "VAR_GLOBAL RETAIN\n  Starts : DINT;\nEND_VAR\n",
+		"p.st":          "PROGRAM P\nVAR_EXTERNAL Starts : DINT; END_VAR\nStarts := Starts + 1;\nEND_PROGRAM\n",
+	}), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range proj.Runtime.Tags {
+		if d.Name == "Starts" && !d.Retain {
+			t.Error("Starts is VAR_GLOBAL RETAIN but not retained")
+		}
+	}
+}

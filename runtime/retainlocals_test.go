@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,5 +102,114 @@ func TestRetainRefusedOnInputsAndOutputs(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "never retained") {
 			t.Errorf("%s: %v, want a refusal", d.Name, err)
 		}
+	}
+}
+
+const edgeProgram = `PROGRAM Main
+VAR RETAIN starts : CTU; delay : TON; avg : REAL; k : DINT := 5; END_VAR
+VAR RETAIN CONSTANT kc : DINT := 5; END_VAR
+starts(CU := TRUE, PV := 100);
+delay(IN := TRUE, PT := T#1h);
+END_PROGRAM`
+
+// A retained CTU keeps its edge memory with its count: a count input held
+// TRUE through a restart does not count again (a start count would gain one
+// per restart). A TON keeps time against the clock, so it is not kept and
+// starts over.
+func TestRetainedCounterDoesNotCountARestart(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "retain.json")
+	mk := func() *Runtime {
+		rt, err := New(Options{Program: edgeProgram, Retain: retain.New("", file)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rt
+	}
+	rt := mk()
+	for range 3 {
+		rt.Scan()
+	}
+	saved := rt.prog.RetainedLocals()
+	if _, kept := saved["delay"]; kept {
+		t.Error("a TON was kept; its start time means nothing after a restart")
+	}
+	rt.saveRetained(nil)
+	rt2 := mk()
+	rt2.Scan()
+	c, _ := rt2.prog.Locals()["starts"].(map[string]any)
+	if c["CV"] != int64(1) {
+		t.Errorf("CTU CV after a restart with CU held = %v, want 1 (no false edge)", c["CV"])
+	}
+}
+
+// One member that no longer fits does not cost an FB its other members, and
+// a REAL kept as null (JSON's NaN) comes back NaN.
+func TestRestoreKeepsWhatFitsAndRestoresNaN(t *testing.T) {
+	rt := newRetainRuntime(t, nil)
+	errs := rt.prog.RestoreLocals(map[string]any{"rh": map[string]any{"hours": 7.0, "starts": "bad", "was": true}})
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "rh.starts") {
+		t.Errorf("errors %v, want one naming rh.starts", errs)
+	}
+	rh, _ := rt.prog.Locals()["rh"].(map[string]any)
+	if rh["hours"] != 7.0 || rh["was"] != true {
+		t.Errorf("rh = %v: the members that fit were not restored", rh)
+	}
+
+	rt2, err := New(Options{Program: edgeProgram})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := rt2.prog.RestoreLocals(map[string]any{"avg": nil}); len(errs) != 0 {
+		t.Fatalf("NaN: %v", errs)
+	}
+	rt2.prog.mu.Lock()
+	v := rt2.prog.frame.Slots[rt2.prog.prog.SlotIndex["avg"]]
+	rt2.prog.mu.Unlock()
+	if !math.IsNaN(v.F) {
+		t.Errorf("avg = %v, want NaN", v.F)
+	}
+}
+
+// A VAR RETAIN CONSTANT is its declaration's value: it is neither saved nor
+// restored.
+func TestRetainedConstantIsNotKept(t *testing.T) {
+	rt, err := New(Options{Program: edgeProgram})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	if _, kept := rt.prog.RetainedLocals()["kc"]; kept {
+		t.Error("a CONSTANT was kept")
+	}
+}
+
+// Before its own takeover has loaded the store, a runtime saves nothing:
+// its seeds and fresh frames would overwrite what the takeover will load.
+func TestNoSaveBeforeTakeover(t *testing.T) {
+	store := &fakeStore{state: retain.State{Tags: map[string]any{"Stats": 9.0}}}
+	rt := newRetainRuntime(t, store)
+	rt.saveRetained(nil)
+	if store.saves != 0 {
+		t.Fatalf("saved %d times before the first scan's takeover", store.saves)
+	}
+	rt.Scan()
+	if v, _ := rt.Tags().ReadGlobal("Stats"); v.I != 10 {
+		t.Errorf("Stats = %d, want the stored 9 + 1", v.I)
+	}
+}
+
+// An explicit RetainTags list replaces the setpoint default, not a tag's own
+// Retain mark.
+func TestExplicitRetainTagsKeepsMarkedTags(t *testing.T) {
+	rt, err := New(Options{
+		Program: retainMain, Libraries: []string{runHoursFB}, Retain: &fakeStore{},
+		Tags:       []TagDef{State("Stats", 0, Retained()), State("Scratch", 0)},
+		RetainTags: []string{"Scratch"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(rt.retainTags, "Stats") || !slices.Contains(rt.retainTags, "Scratch") {
+		t.Errorf("retained set %v, want Scratch and Stats", rt.retainTags)
 	}
 }

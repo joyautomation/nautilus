@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -465,7 +466,16 @@ func New(o Options) (*Runtime, error) {
 	for _, tr := range tasks {
 		seedDtTag(tr.dtTag)
 	}
-	retainTags := o.RetainTags
+	retainTags := append([]string(nil), o.RetainTags...)
+	if o.Retain != nil && len(o.RetainTags) > 0 {
+		// An explicit list replaces the setpoint default, but a tag marked
+		// Retain is kept whatever the list says (TagDef.Retain).
+		for _, d := range o.Tags {
+			if d.Retain && d.Name != "" && !slices.Contains(retainTags, d.Name) {
+				retainTags = append(retainTags, d.Name)
+			}
+		}
+	}
 	if o.Retain != nil && len(retainTags) == 0 {
 		// The default retained set is the operator-writable surface: every
 		// RoleSetpoint tag. State re-seeds, inputs re-read from the field,
