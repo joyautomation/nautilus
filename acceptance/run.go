@@ -446,6 +446,13 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		// what the struct actually has — fieldMissErr redoes that one walk
 		// purely to build the message, only on the (rare, already-failed)
 		// error path.
+		// The member comes back as the ir.Value it is, with its declared
+		// kind: ReadPath's plain Go value would turn a TIME into an INT and
+		// an enumeration into its number, so `P.Hold: T#8h` never compared
+		// as a TIME (#498).
+		if v, _, err := ir.FieldAt(root, r.rt.Tags().TypeOf(head), ir.PathSegments(rest), head); err == nil {
+			return v, nil
+		}
 		if v, ok := r.rt.Tags().ReadPath(name); ok {
 			return irValue(v)
 		}
@@ -561,6 +568,18 @@ func (r *testRun) apply(given map[string]any) error {
 			}
 			return fmt.Errorf("given: no tag %q in this project", key)
 		}
+		// A mapping for a struct tag is its members: it goes through the
+		// same per-field path as dotted names, so each leaf converts by its
+		// declared type and the members it does not name keep their values.
+		// It used to reach Tags.Set as a Go map, which the store cannot
+		// hold, and the whole write vanished without an error (#498).
+		if m, isMap := given[key].(map[string]any); isMap && r.isStruct(name) {
+			if fieldEdits[name] == nil {
+				fieldEdits[name] = map[string]any{}
+			}
+			flattenMembers("", m, fieldEdits[name])
+			continue
+		}
 		v, err := r.coerce(name, given[key])
 		if err != nil {
 			return fmt.Errorf("given: %w", err)
@@ -638,7 +657,12 @@ func (r *testRun) applyFields(tag string, edits map[string]any) error {
 		// so a `given:` path and an operator's POST resolve, coerce and fail
 		// identically — an enum member by name at any depth (#247), an
 		// array element by its declared index.
-		updated, err := ir.SetFieldTyped(base, rootT, ir.PathSegments(path), edits[path], tag)
+		segs := ir.PathSegments(path)
+		v, err := literalFor(base, rootT, segs, edits[path], tag+"."+path)
+		if err != nil {
+			return err
+		}
+		updated, err := ir.SetFieldTyped(base, rootT, segs, v, tag)
 		if err != nil {
 			return err
 		}
@@ -673,7 +697,11 @@ func declaredTypes(o runtime.Options) map[string]string {
 // does not convert is the test's error, naming the tag. An untyped tag
 // keeps the looser rule below: it has no declared type to hold the value to.
 func (r *testRun) coerce(name string, v any) (any, error) {
-	if t := r.rt.Tags().TypeOf(name); t != nil && t.Kind != ir.TypeStruct && t.Kind != ir.TypeArray && t.Kind != ir.TypeFB {
+	t := r.rt.Tags().TypeOf(name)
+	if t == nil {
+		t = r.memberType(name) // force: P.Hold: T#8h (#498)
+	}
+	if t != nil && t.Kind != ir.TypeStruct && t.Kind != ir.TypeArray && t.Kind != ir.TypeFB {
 		if _, isMap := v.(map[string]any); !isMap {
 			cv, err := ir.ScalarFromLiteral(t, v, name)
 			if err != nil {
@@ -683,6 +711,75 @@ func (r *testRun) coerce(name string, v any) (any, error) {
 		}
 	}
 	return r.coerceUntyped(name, v), nil
+}
+
+// memberType is the declared type of a dotted member path ("P.Hold",
+// "R.Steps[2].Mode"), nil when name is not one or the walk has no type.
+func (r *testRun) memberType(name string) *ir.Type {
+	head, rest, dotted := cutHead(name)
+	if !dotted {
+		return nil
+	}
+	root, err := r.rt.Tags().ReadGlobal(head)
+	if err != nil {
+		return nil
+	}
+	_, t, err := ir.FieldAt(root, r.rt.Tags().TypeOf(head), ir.PathSegments(rest), head)
+	if err != nil {
+		return nil
+	}
+	return t
+}
+
+// isStruct reports whether name is a struct tag: declared as one, or
+// holding one.
+func (r *testRun) isStruct(name string) bool {
+	if t := r.rt.Tags().TypeOf(name); t != nil {
+		return t.Kind == ir.TypeStruct
+	}
+	if _, typed := r.types[name]; typed {
+		return true
+	}
+	v, err := r.rt.Tags().ReadGlobal(name)
+	return err == nil && v.Kind == ir.TypeStruct
+}
+
+// flattenMembers turns a nested member mapping into dotted paths: {Speed:
+// 3, Drive: {Hold: T#1s}} → Speed, Drive.Hold. A list stays one value for
+// its array member, which ir.SetFieldTyped merges element by element.
+func flattenMembers(prefix string, m map[string]any, out map[string]any) {
+	for k, v := range m {
+		p := k
+		if prefix != "" {
+			p = prefix + "." + k
+		}
+		if sub, isMap := v.(map[string]any); isMap {
+			flattenMembers(p, sub, out)
+			continue
+		}
+		out[p] = v
+	}
+}
+
+// literalFor converts a member's written value by the rule its declared
+// type's init: seeds with (ir.ScalarFromLiteral), as a whole scalar tag's
+// given: does: T#1s on a TIME member, an enumeration member by name. A
+// member with no scalar declared type, or a mapping or list, is left to
+// ir.SetFieldTyped.
+func literalFor(base ir.Value, rootT *ir.Type, segs []string, v any, where string) (any, error) {
+	switch v.(type) {
+	case map[string]any, []any:
+		return v, nil
+	}
+	_, t, err := ir.FieldAt(base, rootT, segs, where)
+	if err != nil || t == nil {
+		return v, nil // SetFieldTyped reports a bad path in its own words
+	}
+	switch t.Kind {
+	case ir.TypeStruct, ir.TypeArray, ir.TypeFB:
+		return v, nil
+	}
+	return ir.ScalarFromLiteral(t, v, where)
 }
 
 // coerceUntyped converts by the kind the tag already holds, when it holds

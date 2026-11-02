@@ -145,7 +145,12 @@ which zero-fills the rest of that struct the first time a test touches it.
 Every dotted field named for the *same* tag in one `given` map composes
 onto a single copy of that tag's current value and is written once, so
 `{ P101.Running: true, P101.Speed: 12.5 }` sets both, regardless of key
-order — a map's keys are otherwise unordered.
+order — a map's keys are otherwise unordered. A mapping for the whole tag,
+`P101: { Running: true, Speed: 12.5 }`, is the same as naming each member:
+the members it names are set and the rest keep their values. A member's
+value converts by its declared type, exactly as a whole tag's does —
+`P101.Hold: T#8h` on a `TIME` member, an enumeration member by name — in
+`given:`, `force:` and `expect:` alike.
 
 An array element is `[n]` from the array's declared lower bound —
 `Recipe.Steps[2].Mode: Run` in `given:` and `expect:` alike. In a flow
