@@ -23,6 +23,13 @@ type member struct {
 	addr string // "P101.Drive.Speed", "Levels[2]"
 	val  ir.Value
 	typ  *ir.Type // declared type when known; nil on an untyped walk
+	// absent marks a declared input no driver has delivered yet, so the
+	// store does not hold it (see namespace.undelivered): val is the zero
+	// of its declared type, there for the node's shape only. Its Value
+	// attribute carries no value, just a Bad status. Only resolve sets it,
+	// and every Value read goes through resolve; the members Browse lists
+	// (children, roots) are only ever named, never read.
+	absent bool
 }
 
 // walk resolves segs (ir.PathSegments form: member names and "[n]") below
