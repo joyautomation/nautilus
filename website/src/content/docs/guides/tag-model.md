@@ -30,7 +30,9 @@ there are exactly four writers:
 2. a **driver** delivering it as an input each scan,
 3. an **operator** writing a tag the project declares through the HMI or
    `POST /api/tags` (a name nothing declares, a CONSTANT's included, is
-   refused with a 400 naming it, never created),
+   refused with a 400 naming it, never created). Inputs are read-only over
+   HTTP: the driver owns them, so a write to a `role: input` tag is refused.
+   To drive an input during bring-up, [force it](/guides/forcing/).
 4. the **program itself** assigning it (a coil write creates the tag).
 
 The one rule that bites: **writes create, reads fault.** Reading a tag
@@ -333,7 +335,9 @@ plant is already running on.
   element (`{"Steps": [{"Mode": "Run"}]}` sets the first step's mode).
 - **The role rule is the root tag's**, because the store holds whole tags. A
   member of a driver-owned `input` is refused — the driver replaces the whole
-  value before the next scan, so the edit could not survive one cycle.
+  value before the next scan, so the edit could not survive one cycle. The
+  same holds for a whole `input`: it is read-only over HTTP, and a
+  [force](/guides/forcing/) is how to drive one during bring-up.
   `setpoint`, `state` and `output` roots are writable; an output is exactly
   how a Sparkplug host commands an edge node, and a struct-typed output needs
   an `init:` so it exists before the first write.

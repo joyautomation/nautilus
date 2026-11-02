@@ -62,8 +62,12 @@ The pieces that make this first-class rather than a convention:
   by name and type — a `PI` keeps its integral through a live logic
   change, like a real controller.
 
-`naut new` scaffolds this shape: the PI controller ships in
-`blocks.st`, instantiated from `program.st`.
+`naut new` scaffolds this shape. The default `demo` template ships
+`blocks.st` with a `RateOfChange` block, which `program.fbd` instantiates like
+a built-in TON; the PI loop in that project is written inline in the
+diagram. The `minimal` template has no library file. The `sdk` template (a Go
+project) ships the `PI` block above in `blocks.st`, instantiated from
+`program.st`.
 
 ## Where library files live: the root and `lib/`
 

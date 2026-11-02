@@ -47,7 +47,13 @@ for (const page of pages) {
   const raw = readFileSync(page.src, 'utf8');
   const lines = raw.split('\n');
   const title = page.title ?? lines[0].replace(/^#\s*/, '').trim();
-  const body = dropSections(lines.slice(1).join('\n').trimStart(), page.dropSections);
+  // Sources link to their siblings as `functions.md#x`, which works on GitHub
+  // and 404s on the site. Point them at the page's route instead.
+  const siblings = pages.map((p) => p.dest.split('/').pop().replace(/\.md$/, ''));
+  const relink = (text) =>
+    text.replace(/\]\(([a-z][a-z0-9-]*)\.md(#[^)]*)?\)/g, (m, name, hash = '') =>
+      siblings.includes(name) ? `](/reference/${name}/${hash})` : m);
+  const body = relink(dropSections(lines.slice(1).join('\n').trimStart(), page.dropSections));
   const out = `---\ntitle: ${JSON.stringify(title)}\ndescription: ${JSON.stringify(page.description)}\n---\n\n${body}`;
   mkdirSync(dirname(page.dest), { recursive: true });
   writeFileSync(page.dest, out);

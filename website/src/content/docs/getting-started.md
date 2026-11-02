@@ -128,7 +128,11 @@ Open **http://localhost:8080** for the built-in live dashboard, or
 the tag table — click a value and type, or flip a BOOL with its toggle — so you
 can drive the loop before there is an HMI. Inputs and outputs stay read-only:
 the driver rewrites an input before every scan and the logic rewrites an output
-after, so an edit there would be discarded within a scan.
+after, so an edit there would be discarded within a scan. `POST /api/tags` to
+a `role: input` tag is refused for the same reason. To drive an input during
+bring-up, [force it](/guides/forcing/): `POST /api/forces` with
+`{"name": "LevelPct", "value": 65}` holds the value against the driver until you
+remove the force.
 
 ## 3. Develop in VS Code
 

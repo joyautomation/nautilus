@@ -602,8 +602,25 @@
       // Survives the per-frame re-render so the tree doesn't snap shut.
       const expanded = new Set();
 
-      function fmt(v) {
+      // begin:fmt
+      // A TIME value arrives as integer milliseconds; show it as the IEC
+      // literal the manifest and the editors use: T#30s, T#1h30m, T#250ms.
+      function fmtTime(ms) {
+        if (typeof ms !== "number" || !Number.isFinite(ms)) return String(ms);
+        let n = Math.round(Math.abs(ms));
+        const parts = [];
+        for (const [unit, size] of [["d", 86400000], ["h", 3600000], ["m", 60000], ["s", 1000], ["ms", 1]]) {
+          const q = Math.floor(n / size);
+          n -= q * size;
+          if (q > 0) parts.push(q + unit);
+        }
+        return "T#" + (ms < 0 ? "-" : "") + (parts.join("") || "0ms");
+      }
+
+      // `type` is the declared type name from /api/meta ("TIME", "REAL", …).
+      function fmt(v, type) {
         if (v === null || v === undefined) return "—";
+        if (type === "TIME" && typeof v === "number") return fmtTime(v);
         if (typeof v === "number") {
           if (Number.isInteger(v)) return String(v);
           const a = Math.abs(v);
@@ -613,6 +630,7 @@
         if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
         return String(v);
       }
+      // end:fmt
 
       const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
       const isCompound = (v) => v !== null && typeof v === "object";
@@ -777,7 +795,7 @@
 
       // rowModels flattens one tag (or member) and, when expanded, its
       // children — structs as .Field rows, arrays as [i] rows, to any depth.
-      function rowModels(out, label, v, path, depth, rootName, local, write) {
+      function rowModels(out, label, v, path, depth, rootName, local, write, ti) {
         // `root` is the top-level tag: meta, ownership and quality are all
         // properties of the whole tag, never of one member.
         //
@@ -788,10 +806,12 @@
         // to land: a driver- or logic-owned tag, a program local, or an
         // ARRAY element (the path syntax has no index form).
         const root = depth === 0 ? rootName : null;
+        // `ti` is the declared type (the /api/meta typeInfo) of this value,
+        // when the controller reports one; it follows members and elements.
         if (!isCompound(v)) {
           const canWrite = write !== null;
           out.push({
-            key: path, label, depth, root, write, local, value: v,
+            key: path, label, depth, root, write, local, value: v, type: ti && ti.type,
             kind: canWrite && typeof v === "boolean" ? "toggle"
               : canWrite && typeof v === "number" ? "num"
               : "plain",
@@ -808,9 +828,9 @@
                      : `{${n} field${n === 1 ? "" : "s"}}`,
         });
         if (open) {
-          if (arr) v.forEach((e, i) => rowModels(out, `[${i}]`, e, `${path}[${i}]`, depth + 1, rootName, local, null));
+          if (arr) v.forEach((e, i) => rowModels(out, `[${i}]`, e, `${path}[${i}]`, depth + 1, rootName, local, null, ti && ti.elem));
           else keys.forEach((k) => rowModels(out, "." + k, v[k], `${path}.${k}`, depth + 1, rootName, local,
-            write === null ? null : `${write}.${k}`));
+            write === null ? null : `${write}.${k}`, ti && ti.members && ti.members[k]));
         }
         return out;
       }
@@ -833,9 +853,11 @@
       function tableModel() {
         const out = [];
         Object.keys(lastTags).sort().forEach((n) =>
-          rowModels(out, n, lastTags[n], n, 0, n, false, writable(n) ? n : null));
+          rowModels(out, n, lastTags[n], n, 0, n, false, writable(n) ? n : null,
+            meta && meta.tags && meta.tags[n]));
         Object.keys(lastLocals).sort().forEach((n) =>
-          rowModels(out, n, lastLocals[n], "local:" + n, 0, null, true, null));
+          rowModels(out, n, lastLocals[n], "local:" + n, 0, null, true, null,
+            meta && meta.locals && meta.locals[n]));
         return out;
       }
 
@@ -849,18 +871,18 @@
         const note = err ? `<span class="write-err">${esc(err)}</span>` : "";
         if (m.kind === "toggle") {
           return `<td class="val"><span class="toggle${m.value ? " on" : ""}" data-write="${esc(m.write)}" title="click to toggle">` +
-            `<span class="track"><span class="knob"></span></span><span class="tv">${fmt(m.value)}</span></span>${note}</td>`;
+            `<span class="track"><span class="knob"></span></span><span class="tv">${fmt(m.value, m.type)}</span></span>${note}</td>`;
         }
         if (m.kind === "num") {
           return `<td class="val writable${err ? " has-err" : ""}" data-write="${esc(m.write)}" title="click to set">` +
-            `<span class="tv">${fmt(m.value)}</span>${note}</td>`;
+            `<span class="tv">${fmt(m.value, m.type)}</span>${note}</td>`;
         }
         if (m.kind === "summary") {
           return `<td class="val summary"><span class="tv">${esc(m.value)}</span></td>`;
         }
         const bool = typeof m.value === "boolean" ? (m.value ? " bool-true" : " bool-false") : "";
         const why = m.root !== null ? ownerOf(m.root) : "";
-        return `<td class="val${bool}"${why ? ` title="${esc(why)}"` : ""}><span class="tv">${fmt(m.value)}</span></td>`;
+        return `<td class="val${bool}"${why ? ` title="${esc(why)}"` : ""}><span class="tv">${fmt(m.value, m.type)}</span></td>`;
       }
 
       function rowHTML(m) {
@@ -891,7 +913,7 @@
           if (tv) tv.textContent = m.value;
           tr.classList.toggle("open", !!m.open);
         } else {
-          if (tv) tv.textContent = fmt(m.value);
+          if (tv) tv.textContent = fmt(m.value, m.type);
           if (m.kind === "toggle") {
             const t = td.querySelector(".toggle");
             if (t) t.classList.toggle("on", !!m.value);
