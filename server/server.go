@@ -1169,12 +1169,12 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		enum = true
 	}
 	member := isObject || isList || strings.ContainsAny(req.Name, ".[")
+	root, _ := ir.SplitAddress(req.Name)
+	if msg := s.refuseInputWrite(root, member); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
 	if member || enum {
-		root, _ := ir.SplitAddress(req.Name)
-		if msg := s.refuseMemberWrite(root); member && msg != "" {
-			http.Error(w, msg, http.StatusBadRequest)
-			return
-		}
 		if err := s.rt.Tags().SetPath(req.Name, req.Value); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -1235,27 +1235,34 @@ func (s *Server) declaredTag(name string) bool {
 	return false
 }
 
-// refuseMemberWrite reports why a member write to this root tag must not
-// proceed, or "" to allow it. The role rule is applied to the ROOT tag, not
-// to the member: the store holds whole tags, so writing P101.Cmd rewrites
-// P101.
+// refuseInputWrite reports why a write to this root tag must not proceed,
+// or "" to allow it. The role rule is applied to the ROOT tag, not to the
+// member: the store holds whole tags, so writing P101.Cmd rewrites P101.
 //
-// Only a driver-owned INPUT is refused. A whole-tag write to one is still
-// accepted (that is PLC forcing — it lands, and the driver takes the tag
-// back on the next scan, which is visible and self-correcting), but a MEMBER
-// write reads a base the driver replaces wholesale before the next scan, so
-// the edit cannot survive even one cycle: it is a lost update dressed up as
-// a command. Everything else stays writable — setpoints and state because
-// they are the operator's, and OUTPUTS because that is exactly how a
-// Sparkplug host commands an edge node: the operator writes the output tag
-// and the host driver publishes it as a command.
-func (s *Server) refuseMemberWrite(root string) string {
+// Only a driver-owned INPUT is refused, whole or by member. Its value is
+// the field's: a communications driver replaces it at its next delivery,
+// so the write is a lost update dressed up as a command, and a driver that
+// does not deliver every scan (the memory driver, a stalled device) lets
+// it stick, so the logic acts on a reading no instrument made while the
+// screen shows it as the field's (F-10). Holding an input is what a force
+// is for: visible in the force table, and released by name. Everything
+// else stays writable — setpoints and state because they are the
+// operator's, and OUTPUTS because that is exactly how a Sparkplug host
+// commands an edge node: the operator writes the output tag and the host
+// driver publishes it as a command.
+func (s *Server) refuseInputWrite(root string, member bool) string {
 	for _, in := range s.rt.Inputs() {
-		if strings.EqualFold(in, root) {
+		if !strings.EqualFold(in, root) {
+			continue
+		}
+		if member {
 			return "tag " + root + " is a driver-owned input: the driver replaces its whole " +
 				"value before every scan, so a member write would be discarded unread — " +
 				"write the setpoint or command tag the logic reads instead"
 		}
+		return "tag " + root + " is a driver-owned input: its value is the field's, " +
+			"so a write is refused — force it (POST /api/forces) to hold a value during " +
+			"bring-up, or write the setpoint or command tag the logic reads instead"
 	}
 	return ""
 }

@@ -157,6 +157,52 @@ func TestWriteMemberOfInputRootRefused(t *testing.T) {
 	}
 }
 
+// F-10: a whole-tag write to a driver-owned input is refused too, as the
+// docs say inputs are read-only. With the memory driver (or a device that
+// has stopped delivering) the value used to stick and the logic acted on a
+// reading no instrument made. A force is the way to hold an input during
+// bring-up, and it still takes; a setpoint stays writable.
+func TestWriteWholeInputRefusedForceStillHolds(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: `PROGRAM Main
+VAR_EXTERNAL Level : REAL; SP : REAL; END_VAR
+END_PROGRAM`,
+		Driver: nio.NewMemory(),
+		Tags: []runtime.TagDef{
+			runtime.Typed("Level", runtime.RoleInput, "REAL", runtime.Init(0.0)),
+			runtime.Setpoint("SP", 65.0),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(rt)
+
+	for _, name := range []string{"Level", "level"} {
+		rec := postTag(t, srv, `{"name": "`+name+`", "value": 42.5}`)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "driver-owned input") ||
+			!strings.Contains(rec.Body.String(), "/api/forces") {
+			t.Errorf("whole write to input %s = %d %q, want 400 naming the input and the force", name, rec.Code, rec.Body)
+		}
+	}
+	if v, err := rt.Tags().ReadGlobal("Level"); err == nil && v.F == 42.5 {
+		t.Errorf("Level = %v after a refused write", v.F)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/forces", bytes.NewBufferString(`{"name": "Level", "value": 42.5}`)))
+	if rec.Code != 200 {
+		t.Fatalf("force on an input = %d, body %s", rec.Code, rec.Body)
+	}
+	if v, err := rt.Tags().ReadGlobal("Level"); err != nil || v.F != 42.5 {
+		t.Errorf("forced Level = %v (%v), want 42.5", v.F, err)
+	}
+
+	if rec := postTag(t, srv, `{"name": "SP", "value": 70}`); rec.Code != 204 {
+		t.Errorf("setpoint write = %d, body %s", rec.Code, rec.Body)
+	}
+}
+
 // Every rejection carries its reason in the body, and none of them may
 // leave a tag behind.
 func TestWriteMemberErrorsAre400WithReason(t *testing.T) {
