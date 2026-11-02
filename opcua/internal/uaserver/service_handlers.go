@@ -107,7 +107,13 @@ func (s *Server) handleService(ctx context.Context, sc *uasc.SecureChannel, reqI
 
 	typeID := ua.ServiceTypeID(req)
 	h, ok := s.handlers[typeID]
-	if ok {
+	if code := s.sessionCheck(sc, typeID, req); code != ua.StatusOK {
+		var handle uint32
+		if hdr := req.Header(); hdr != nil {
+			handle = hdr.RequestHandle
+		}
+		resp = &ua.ServiceFault{ResponseHeader: responseHeader(handle, code)}
+	} else if ok {
 		resp, err = h(sc, req, reqID)
 	} else {
 		if typeID == 0 {
@@ -136,6 +142,43 @@ func (s *Server) handleService(ctx context.Context, sc *uasc.SecureChannel, reqI
 			s.cfg.logger.Warn("Error sending response: %s\n", err)
 		}
 	}
+}
+
+// sessionless are the services a client calls without a session: discovery (Part 4 §5.4) and
+// the two that make one (§5.6.2, §5.6.3; ActivateSession checks its session itself).
+var sessionless = map[uint16]bool{
+	id.FindServersRequest_Encoding_DefaultBinary:          true,
+	id.FindServersOnNetworkRequest_Encoding_DefaultBinary: true,
+	id.GetEndpointsRequest_Encoding_DefaultBinary:         true,
+	id.RegisterServerRequest_Encoding_DefaultBinary:       true,
+	id.RegisterServer2Request_Encoding_DefaultBinary:      true,
+	id.CreateSessionRequest_Encoding_DefaultBinary:        true,
+	id.ActivateSessionRequest_Encoding_DefaultBinary:      true,
+}
+
+// sessionCheck is the session gate every other service passes before its handler runs. The
+// request's authentication token must name a session (Bad_SessionIdInvalid), the request must
+// come on the channel that session is bound to (Bad_SecureChannelIdInvalid), and the session
+// must be activated (Bad_SessionNotActivated), except to close it.
+func (s *Server) sessionCheck(sc *uasc.SecureChannel, typeID uint16, req ua.Request) ua.StatusCode {
+	if sessionless[typeID] {
+		return ua.StatusOK
+	}
+	hdr := req.Header()
+	if hdr == nil || hdr.AuthenticationToken == nil {
+		return ua.StatusBadSessionIDInvalid
+	}
+	sess := s.sb.Session(hdr.AuthenticationToken)
+	if sess == nil {
+		return ua.StatusBadSessionIDInvalid
+	}
+	if !sess.boundTo(sc) {
+		return ua.StatusBadSecureChannelIDInvalid
+	}
+	if !sess.isActivated() && typeID != id.CloseSessionRequest_Encoding_DefaultBinary {
+		return ua.StatusBadSessionNotActivated
+	}
+	return ua.StatusOK
 }
 
 func responseHeader(reqID uint32, statusCode ua.StatusCode) *ua.ResponseHeader {

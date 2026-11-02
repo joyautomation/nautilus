@@ -41,6 +41,16 @@ type channelBroker struct {
 	// get funneled into for handling
 	msgChan chan *uasc.MessageBody
 	logger  Logger
+
+	// gone carries each channel whose reader has returned, after the channel has left s, to
+	// the server's message loop, which closes the sessions bound to it. It goes through the
+	// loop, not a callback on the reader's goroutine, so it is ordered after every request
+	// that channel handed over: the loop handles each request before it takes the next value,
+	// and a session cannot vanish between the session gate and the handler.
+	gone chan *uasc.SecureChannel
+	// quit is closed by Close, so a reader that returns once nothing reads gone any more does
+	// not wait for it.
+	quit chan struct{}
 }
 
 func newChannelBroker(logger Logger) *channelBroker {
@@ -50,6 +60,8 @@ func newChannelBroker(logger Logger) *channelBroker {
 		s:               make(map[uint32]*uasc.SecureChannel),
 		conns:           make(map[uint32]*uacp.Conn),
 		msgChan:         make(chan *uasc.MessageBody),
+		gone:            make(chan *uasc.SecureChannel),
+		quit:            make(chan struct{}),
 		secureChannelID: uint32(rng.Int31()),
 		secureTokenID:   uint32(rng.Int31()),
 		logger:          logger,
@@ -135,6 +147,8 @@ outer:
 			case c.msgChan <- msg:
 			case <-ctx.Done():
 				break outer
+			case <-c.quit: // Close: the loop may be held in a handler; don't wait for it
+				break outer
 			}
 		}
 	}
@@ -144,6 +158,11 @@ outer:
 	delete(c.conns, secureChannelID)
 	c.mu.Unlock()
 	conn.Close()
+	select {
+	case c.gone <- sc:
+	case <-ctx.Done():
+	case <-c.quit:
+	}
 	c.wg.Done()
 
 	return nil
@@ -160,6 +179,9 @@ outer:
 func (c *channelBroker) Close() error {
 	var err error
 	c.mu.Lock()
+	if !c.closed {
+		close(c.quit)
+	}
 	c.closed = true
 	chans := make([]*uasc.SecureChannel, 0, len(c.s))
 	for _, s := range c.s {
@@ -200,11 +222,15 @@ func (c *channelBroker) Close() error {
 // connections closed under them they return at once; this is a backstop.
 const closeWait = 2 * time.Second
 
-func (c *channelBroker) ReadMessage(ctx context.Context) *uasc.MessageBody {
+// ReadMessage returns the next request from any channel, or a channel that has gone (msg nil),
+// or neither once ctx is done.
+func (c *channelBroker) ReadMessage(ctx context.Context) (msg *uasc.MessageBody, gone *uasc.SecureChannel) {
 	select {
 	case <-ctx.Done():
-		return nil
+		return nil, nil
 	case msg := <-c.msgChan:
-		return msg
+		return msg, nil
+	case sc := <-c.gone:
+		return nil, sc
 	}
 }

@@ -97,6 +97,9 @@ func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Re
 	sub := NewSubscription()
 	sub.srv = s
 	sub.Session = s.srv.Session(r.Header())
+	if sub.Session == nil {
+		return nil, ua.StatusBadSessionIDInvalid // the gate checked; this is defensive
+	}
 	sub.Channel = sc
 	sub.ID = newsubid
 	sub.RevisedPublishingInterval = req.RequestedPublishingInterval
@@ -226,6 +229,9 @@ func (s *SubscriptionService) DeleteSubscriptions(sc *uasc.SecureChannel, r ua.R
 		return nil, err
 	}
 	session := s.srv.Session(req.Header())
+	if session == nil {
+		return nil, ua.StatusBadSessionIDInvalid // the gate checked; this is defensive
+	}
 
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -307,8 +313,8 @@ type Subscription struct {
 	running  bool
 	shutdown chan struct{}
 
-	// done is closed when the background task returns. The task is the only reader of
-	// NotifyChannel, so once done is closed a send on NotifyChannel can never complete.
+	// done is closed when the background task returns, so a Modify waiting for the task
+	// gives up instead of waiting forever.
 	done chan struct{}
 
 	// publishMu is held from the moment a publish response's notifications
@@ -440,8 +446,8 @@ func (s *Subscription) run() {
 		}
 		s.srv.DeleteSubscription(s.ID)
 	}()
-	// Deferred after the cleanup above so it runs first: senders blocked on NotifyChannel must be
-	// released before DeleteSubscription waits for the monitored item service lock they hold.
+	// Deferred after the cleanup above, so it runs first: a Modify that arrives meanwhile is
+	// released.
 	defer close(s.done)
 
 	keepalive_counter := 0

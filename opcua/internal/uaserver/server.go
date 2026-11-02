@@ -20,6 +20,7 @@ import (
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
 	"github.com/gopcua/opcua/uapolicy"
+	"github.com/gopcua/opcua/uasc"
 )
 
 const defaultListenAddr = "opc.tcp://localhost:0"
@@ -193,10 +194,6 @@ func (s *Server) Namespaces() []NameSpace {
 	return s.namespaces
 }
 
-func (s *Server) ChangeNotification(n *ua.NodeID) {
-	s.MonitoredItemService.ChangeNotification(n)
-}
-
 // for now, the address space of the server is split up into namespaces.
 // this means that when we look up a node, we need to ask the specific namespace
 // it belongs to for it instead of just a general lookup by ID
@@ -276,6 +273,18 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// channelClosed closes the sessions bound to a channel that has gone, with their
+// subscriptions. It runs on the message loop, after every request the channel sent. Part 4 §5.6.3 lets a session outlive its channel so that a client can
+// reactivate it on a new one; this server refuses that move until it can check the client's
+// certificate (opcua-server-writes §6, slice 2), so such a session is already unusable.
+func (s *Server) channelClosed(sc *uasc.SecureChannel) {
+	for _, sess := range s.sb.CloseChannel(sc) {
+		if s.SubscriptionService != nil {
+			s.SubscriptionService.DeleteSessionSubscriptions(sess)
+		}
+	}
+}
+
 func (s *Server) setServerState(state ua.ServerState) {
 	s.mu.Lock()
 	s.status.State = state
@@ -339,7 +348,11 @@ func (s *Server) acceptAndRegister(ctx context.Context, l *uacp.Listener) {
 // sends the message to the service handler
 func (s *Server) monitorConnections(ctx context.Context) {
 	for ctx.Err() == nil {
-		msg := s.cb.ReadMessage(ctx)
+		msg, gone := s.cb.ReadMessage(ctx)
+		if gone != nil {
+			s.channelClosed(gone)
+			continue
+		}
 		if msg == nil {
 			continue // ctx is likely done, ctx.Err will be non-nil
 		}

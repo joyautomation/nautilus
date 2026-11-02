@@ -19,8 +19,6 @@ type NodeNameSpace struct {
 	m               map[string]*Node
 	id              uint16
 	nodeid_sequence uint32
-
-	ExternalNotification chan *ua.NodeID
 }
 
 func (ns *NodeNameSpace) GetNextNodeID() uint32 {
@@ -32,11 +30,10 @@ func (ns *NodeNameSpace) GetNextNodeID() uint32 {
 
 func NewNodeNameSpace(srv *Server, name string) *NodeNameSpace {
 	ns := &NodeNameSpace{
-		srv:                  srv,
-		name:                 name,
-		nodes:                make([]*Node, 0),
-		m:                    make(map[string]*Node),
-		ExternalNotification: make(chan *ua.NodeID),
+		srv:   srv,
+		name:  name,
+		nodes: make([]*Node, 0),
+		m:     make(map[string]*Node),
 	}
 	srv.AddNamespace(ns)
 
@@ -63,12 +60,6 @@ func NewNodeNameSpace(srv *Server, name string) *NodeNameSpace {
 
 	return ns
 
-}
-
-// This function is to notify opc subscribers if a node was changed
-// without using the SetAttribute method
-func (s *NodeNameSpace) ChangeNotification(nodeid *ua.NodeID) {
-	s.srv.ChangeNotification(nodeid)
 }
 
 func (ns *NodeNameSpace) Name() string {
@@ -279,11 +270,5 @@ func (as *NodeNameSpace) SetAttribute(id *ua.NodeID, attr ua.AttributeID, val *u
 	if err != nil {
 		return ua.StatusBadAttributeIDInvalid
 	}
-	as.srv.ChangeNotification(id)
-	select {
-	case as.ExternalNotification <- id:
-	default:
-	}
-
 	return ua.StatusOK
 }

@@ -35,8 +35,12 @@ func (s *SessionService) CreateSession(sc *uasc.SecureChannel, r ua.Request, req
 		return nil, err
 	}
 
-	// New session
-	sess := s.srv.sb.NewSession()
+	// New session, bound to the channel that asked for it.
+	sess, err := s.srv.sb.NewSession(sc)
+	if err != nil {
+		log.Printf("error creating session authentication token")
+		return nil, ua.StatusBadInternalError
+	}
 
 	// Ensure session timeout is reasonable
 	sess.cfg.sessionTimeout = time.Duration(req.RequestedSessionTimeout) * time.Millisecond
@@ -98,6 +102,13 @@ func (s *SessionService) ActivateSession(sc *uasc.SecureChannel, r ua.Request, r
 	if sess == nil {
 		return nil, ua.StatusBadSessionIDInvalid
 	}
+	// Part 4 §5.6.3: the first activation must come on the channel that created the session.
+	// A later one may move the session to another channel only when the client proves it is
+	// the same application; with no certificate checks yet (slice 2) nothing can prove that,
+	// so every activation stays on the creating channel.
+	if !sess.boundTo(sc) {
+		return nil, ua.StatusBadSecureChannelIDInvalid
+	}
 
 	err = sc.VerifySessionSignature(sess.remoteCertificate, sess.serverNonce, req.ClientSignature.Signature)
 	if err != nil {
@@ -113,6 +124,7 @@ func (s *SessionService) ActivateSession(sc *uasc.SecureChannel, r ua.Request, r
 		return nil, ua.StatusBadInternalError
 	}
 	sess.serverNonce = nonce
+	sess.activate()
 
 	response := &ua.ActivateSessionResponse{
 		ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),

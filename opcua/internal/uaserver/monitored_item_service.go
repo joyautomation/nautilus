@@ -95,61 +95,6 @@ func (s *MonitoredItemService) DeleteSub(id uint32) {
 	}
 }
 
-func (s *MonitoredItemService) ChangeNotification(n *ua.NodeID) {
-
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
-	items, ok := s.Nodes[n.String()]
-
-	if !ok {
-		// this node isn't monitored - don't have to do anything.
-		return
-	}
-
-	ns, err := s.SubService.srv.Namespace(int(n.Namespace()))
-
-	for i := range items {
-		item := items[i]
-		if item == nil {
-			continue
-		}
-		val := new(ua.MonitoredItemNotification)
-		val.ClientHandle = item.Req.RequestedParameters.ClientHandle
-		if err != nil {
-			if s.SubService.srv.cfg.logger != nil {
-				s.SubService.srv.cfg.logger.Warn("error getting namespace %d: %v", n.Namespace(), err)
-			}
-			val.Value = &ua.DataValue{}
-			val.Value.Status = ua.StatusBad
-			val.Value.EncodingMask |= ua.DataValueStatusCode
-			notify(item.Sub, val)
-			continue
-		}
-		dv := ns.Attribute(n, item.Req.ItemToMonitor.AttributeID)
-		val.Value = dv
-		notify(item.Sub, val)
-	}
-
-}
-
-// notify hands val to the subscription's background task, or drops it once that task has
-// returned.
-//
-// ChangeNotification calls this while holding the monitored item service lock. A plain send
-// blocks forever once the task is gone, because nothing reads NotifyChannel any more, and
-// the task's own cleanup (DeleteSubscription -> DeleteSub) needs that same lock to remove the
-// items. DeleteSubscription also holds the subscription service lock meanwhile, which every
-// CreateSubscription waits for on the server's single message loop, so the whole server
-// stopped answering. The task returns on cancel, on lifetime expiry and on a failed send,
-// and the initial value notifications of a large CreateMonitoredItems are still queued when
-// a client cancels right away.
-func notify(sub *Subscription, val *ua.MonitoredItemNotification) {
-	select {
-	case sub.NotifyChannel <- val:
-	case <-sub.done:
-	}
-}
-
 // dropUnreported removes from q, a subscription's queue keyed by client
 // handle, every notification no item of that subscription is reporting
 // now: its item is Disabled or Sampling, or has been deleted.
