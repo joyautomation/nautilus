@@ -21,11 +21,15 @@ type manifestLoc struct {
 	// tags maps a tag's name key to where its `name:` value sits in the
 	// manifest, so a diagnostic about one tag can carry its line.
 	tags map[string][2]int
+	// dir and label are file's two halves: the project directory, and the
+	// manifest's name relative to it as the loader's own errors spell it
+	// ("nautilus.yaml", or "sites/bad.yaml" under -m).
+	dir, label string
 }
 
 func newManifestLoc(dir, manifestName string) manifestLoc {
 	label := manifestLabel(manifestName)
-	l := manifestLoc{file: filepath.Join(dir, filepath.FromSlash(label)), tags: map[string][2]int{}}
+	l := manifestLoc{file: filepath.Join(dir, filepath.FromSlash(label)), tags: map[string][2]int{}, dir: dir, label: label}
 	raw, err := os.ReadFile(l.file)
 	if err != nil {
 		return l
@@ -79,9 +83,9 @@ func tagNamedInError(err error) string {
 // already begin with the manifest's name, so repeating the file in front of
 // them would print it twice.
 func (l manifestLoc) say(err error) string {
-	if strings.HasPrefix(err.Error(), filepath.Base(l.file)+":") {
-		if d := filepath.Dir(l.file); d != "." {
-			return d + string(filepath.Separator) + err.Error()
+	if strings.HasPrefix(err.Error(), l.label+":") {
+		if l.dir != "" && l.dir != "." {
+			return filepath.Join(l.dir, err.Error()) // the label already names the file under dir
 		}
 		return err.Error()
 	}

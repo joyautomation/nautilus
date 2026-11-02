@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/internal/project"
 )
@@ -192,5 +195,89 @@ tags:
 	}
 	if !strings.Contains(out, "/nautilus.yaml:6:") {
 		t.Errorf("the init error should name nautilus.yaml:6, got:\n%s", out)
+	}
+}
+
+// A manifest the decoder refuses (an unknown key) is located at the file,
+// once: the loader's error already begins "nautilus.yaml:", and check used
+// to print the project directory in front of it (".: nautilus.yaml: …").
+func TestCheckLocatesAManifestDecodeError(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": "tasks:\n  - program: program.st\nbogus: 1\n",
+		"program.st":    "PROGRAM P\nEND_PROGRAM\n",
+	})
+	if code == 0 {
+		t.Fatalf("an unknown manifest key passed:\n%s", out)
+	}
+	line := ""
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "unmarshal errors") {
+			line = l
+			break
+		}
+	}
+	if !strings.Contains(line, "/nautilus.yaml:") || strings.Count(line, "nautilus.yaml") != 1 {
+		t.Errorf("the decode error should name nautilus.yaml once, got:\n%s", out)
+	}
+}
+
+// The built controller itself answers --help: main's hook, not just the
+// helpers above. Builds naut, builds a project with it, runs the result.
+func TestBuiltBinaryAnswersHelp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs a controller binary")
+	}
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go toolchain not on PATH")
+	}
+	dir := t.TempDir()
+	naut := filepath.Join(dir, "naut")
+	if out, err := exec.Command(goBin, "build", "-o", naut, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build ./cmd/naut: %v\n%s", err, out)
+	}
+	proj := filepath.Join(dir, "pumps")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"nautilus.yaml": "name: pumps\ntasks:\n  - program: main.st\n",
+		"main.st":       "PROGRAM Main\nEND_PROGRAM\n",
+	} {
+		if err := os.WriteFile(filepath.Join(proj, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := exec.Command(naut, "build")
+	build.Dir = proj
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("naut build: %v\n%s", err, out)
+	}
+	bin := filepath.Join(proj, "pumps")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	run := exec.CommandContext(ctx, bin, "--help")
+	run.Dir = dir
+	out, err := run.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("--help started the controller (still running after 10 s):\n%s", out)
+	}
+	if err != nil || !strings.Contains(string(out), "usage: pumps") {
+		t.Fatalf("--help: %v\n%s", err, out)
+	}
+}
+
+// Under -m the loader's errors begin with the manifest's own relative name
+// ("sites/bad.yaml:"); say puts the project directory in front of that name
+// once, not the whole path twice.
+func TestManifestLocSaysAnAlternateManifestOnce(t *testing.T) {
+	l := newManifestLoc("proj", "sites/bad.yaml")
+	got := l.say(errors.New("sites/bad.yaml: yaml: unmarshal errors"))
+	want := filepath.Join("proj", "sites", "bad.yaml") + ": yaml: unmarshal errors"
+	if got != want {
+		t.Errorf("say = %q, want %q", got, want)
+	}
+	if got := l.say(errors.New("no tasks")); got != filepath.Join("proj", "sites", "bad.yaml")+": no tasks" {
+		t.Errorf("an error without the name: %q", got)
 	}
 }
