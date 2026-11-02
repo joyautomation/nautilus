@@ -39,11 +39,14 @@ type TagScope struct {
 	// Typed holds the tags whose type: states their type — the ones an
 	// explicit declaration must agree with.
 	Typed map[string]*ir.Type
+	// Unresolved holds, for each tag whose type: names no type, why: a
+	// program that names the tag is told that, not that it has no type.
+	Unresolved map[string]error
 }
 
 // LowerOpts is the compile context a program in this project lowers with.
 func (s TagScope) LowerOpts() st.LowerOpts {
-	return st.LowerOpts{ImplicitGlobals: s.Implicit, TagTypes: s.Typed}
+	return st.LowerOpts{ImplicitGlobals: s.Implicit, TagTypes: s.Typed, TagTypeErrs: s.Unresolved}
 }
 
 // ResolveTagScope resolves tags against types, the project's TYPE table.
@@ -62,6 +65,10 @@ func ResolveTagScope(tags []TagDef, types map[string]*ir.Type) (TagScope, []erro
 			if err != nil {
 				errs = append(errs, fmt.Errorf("tag %s: %w", d.Name, err))
 				s.Implicit[d.Name] = nil
+				if s.Unresolved == nil {
+					s.Unresolved = map[string]error{}
+				}
+				s.Unresolved[d.Name] = err
 				continue
 			}
 			s.Implicit[d.Name], s.Typed[d.Name] = t, t

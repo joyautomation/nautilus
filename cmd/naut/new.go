@@ -101,8 +101,8 @@ func runNew(args []string) int {
 	language := fs.String("language", "st", "program language for minimal/sdk: st, fbd, ld, or sfc")
 	tmpl := fs.String("template", "", "project template: minimal, demo, sdk, or sdk-demo (default: demo)")
 	// Superseded by --template; kept working so documented one-liners and
-	// existing scripts don't break. Deliberately undocumented.
-	noGo := fs.Bool("no-go", false, "")
+	// existing scripts don't break. It is listed in --help, so it says so.
+	noGo := fs.Bool("no-go", false, "same as --template minimal (superseded by --template)")
 	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting")
 	deploy := fs.Bool("deploy", false, "add Dockerfile, k8s manifests, and a CD workflow (manifest templates)")
 	replace := fs.String("replace", "", "path to a local nautilus checkout; adds a filesystem replace directive so the project builds against it (for contributors, pre-publish)")

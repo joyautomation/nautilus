@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -481,7 +482,7 @@ func captureHistory(dir string) ([]byte, string) {
 		return nil, ""
 	}
 	if h == nil {
-		return nil, " — no git history embedded (not a repo)"
+		return nil, noHistoryNote(dir)
 	}
 	raw, err := json.Marshal(h)
 	if err != nil {
@@ -492,6 +493,16 @@ func captureHistory(dir string) ([]byte, string) {
 		note += " (working tree dirty)"
 	}
 	return raw, note
+}
+
+// noHistoryNote says why a build embeds no history. A directory `naut new`
+// just made is a repository with no commits yet, and calling that "not a
+// repo" sent people to run init in a directory that already has one.
+func noHistoryNote(dir string) string {
+	if err := exec.Command("git", "-C", dir, "rev-parse", "--git-dir").Run(); err == nil {
+		return " — no git history embedded (no commits yet)"
+	}
+	return " — no git history embedded (not a repo)"
 }
 
 // manifestMarker records which manifest a built binary loads, for projects
@@ -666,6 +677,41 @@ func embeddedOffset(r io.ReaderAt, size int64) (int64, bool) {
 		return 0, false
 	}
 	return off, true
+}
+
+// wantsHelp reports whether a built controller was asked for its usage. The
+// binary takes no arguments, so a person who types --help is asking what it
+// is, not asking it to start — and starting a controller (which also writes
+// retain.json into the working directory) is a poor answer.
+func wantsHelp(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "-h", "-help", "--help", "help":
+		return true
+	}
+	return false
+}
+
+// builtUsage is what a built controller prints for --help: how it is
+// configured, since it has no flags to list.
+func builtUsage(name string) string {
+	return "usage: " + name + `
+
+A controller built by naut build. It takes no arguments: running it starts
+the scan loop, the dashboard, and the tag API, using the project embedded in
+this file.
+
+Environment:
+  NAUTILUS_ADDR            listen address, overriding server.addr in the manifest
+  NAUTILUS_TOKEN           bearer token the tag API and dashboard require
+  NAUTILUS_HISTORIAN_URL   historian the dashboard queries for trends
+  NAUTILUS_CLI=1           run the naut command line instead of the controller
+
+Retained state (the manifest's retain: block) is written to retain.json in the
+working directory unless it targets a Kubernetes ConfigMap.
+`
 }
 
 // embeddedProject opens the project a `naut build` appended to this
