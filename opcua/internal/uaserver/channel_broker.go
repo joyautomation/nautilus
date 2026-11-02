@@ -157,6 +157,7 @@ outer:
 	delete(c.conns, secureChannelID)
 	c.mu.Unlock()
 	conn.Close()
+	sc.Release()
 	select {
 	case c.gone <- sc:
 	case <-ctx.Done():

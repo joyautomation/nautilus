@@ -182,6 +182,15 @@ type SecureChannel struct {
 	secOpened bool
 	sec       channelSecurity
 
+	// sendMu serialises every send on the channel, from taking a sequence
+	// number through writing the last chunk. Each instance has its own lock,
+	// but around a renewal two instances share one counter (seq), so a
+	// handler's response on the old token and the OPN response on the new
+	// one could otherwise take N and N+1 and reach the wire in either order,
+	// or interleave their chunks; a strict client closes the channel on a
+	// sequence number that goes backwards.
+	sendMu sync.Mutex
+
 	// endErr, on a client channel, is the status code of the transport
 	// Error message the server closed it with, for the requests still
 	// waiting on it to return in place of io.EOF.
@@ -191,6 +200,10 @@ type SecureChannel struct {
 	// closeConn closes the connection under a server channel whose token
 	// expired (expireUnlessRenewed); nil is s.c.Close. Tests replace it.
 	closeConn func()
+	// expiry is the newest token's expiry timer, replaced at each renewal
+	// and stopped by Release, so a closed channel is not kept alive by it.
+	expiryMu sync.Mutex
+	expiry   *time.Timer
 
 	closeOnce sync.Once
 }
@@ -840,7 +853,6 @@ func (s *SecureChannel) handleOpenSecureChannelRequest(reqID uint32, svc ua.Requ
 
 	instance := s.openingInstance
 	instance.algo = algo
-	instance.sc.requestID = req.RequestHeader.RequestHandle // todo(fs): is this correct?
 
 	nonce := make([]byte, instance.algo.NonceLength())
 	if _, err := rand.Read(nonce); err != nil {
@@ -911,6 +923,18 @@ func revisedLifetime(requested uint32) uint32 {
 		return maxLifetime
 	}
 	return requested
+}
+
+// Release stops a server channel's token-expiry timer. The broker calls it
+// when the channel's connection is gone, so the timer does not hold the
+// channel for up to an hour and a quarter after its client left.
+func (s *SecureChannel) Release() {
+	s.expiryMu.Lock()
+	defer s.expiryMu.Unlock()
+	if s.expiry != nil {
+		s.expiry.Stop()
+		s.expiry = nil
+	}
 }
 
 // opened reports whether a server channel has completed its first
@@ -985,7 +1009,12 @@ func (s *SecureChannel) expireUnlessRenewed(inst *channelInstance) {
 	if s.kind != server || inst.revisedLifetime <= 0 {
 		return
 	}
-	time.AfterFunc(inst.revisedLifetime+inst.revisedLifetime/4, func() {
+	s.expiryMu.Lock()
+	defer s.expiryMu.Unlock()
+	if s.expiry != nil {
+		s.expiry.Stop() // the previous token's: this one supersedes it
+	}
+	s.expiry = time.AfterFunc(inst.revisedLifetime+inst.revisedLifetime/4, func() {
 		s.instancesMu.Lock()
 		stale := s.activeInstance == inst
 		s.instancesMu.Unlock()
@@ -1105,6 +1134,8 @@ func (s *SecureChannel) renew(instance *channelInstance) error {
 	s.reqLocker.lock()
 	defer s.reqLocker.unlock()
 	s.pendingReq.Wait()
+	// Not sendMu: open sends the OPN itself, through sendAsyncWithTimeout,
+	// which takes it.
 	instance.Lock()
 	defer instance.Unlock()
 
@@ -1248,6 +1279,8 @@ func (s *SecureChannel) sendAsyncWithTimeout(
 	timeout time.Duration,
 ) (<-chan *MessageBody, error) {
 
+	s.sendMu.Lock() // one sender at a time across instances: see sendMu
+	defer s.sendMu.Unlock()
 	instance.Lock()
 	defer instance.Unlock()
 
@@ -1389,6 +1422,8 @@ func (s *SecureChannel) SendMsgWithContext(ctx context.Context, instance *channe
 	}
 
 	// we need to get a lock on the sequence number so we are sure to send them in the correct order.
+	s.sendMu.Lock() // one sender at a time across instances: see sendMu
+	defer s.sendMu.Unlock()
 	instance.Lock()
 	defer instance.Unlock()
 
@@ -1413,6 +1448,8 @@ func (s *SecureChannel) sendResponseWithContext(ctx context.Context, instance *c
 			return err
 		}
 	}
+	s.sendMu.Lock() // one sender at a time across instances: see sendMu
+	defer s.sendMu.Unlock()
 	instance.Lock()
 	defer instance.Unlock()
 

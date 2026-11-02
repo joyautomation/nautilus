@@ -58,12 +58,16 @@ func newChannelInstance(sc *SecureChannel) *channelInstance {
 
 func (c *channelInstance) nextSequenceNumber() uint32 {
 	if c.seq != nil {
-		n := c.seq.Add(1)
-		if n > math.MaxUint32-1023 {
-			c.seq.Store(1)
-			n = 1
+		for {
+			cur := c.seq.Load()
+			next := cur + 1
+			if next > math.MaxUint32-1023 {
+				next = 1 // Part 6 §6.7.2.4: wrap before 2^32-1024
+			}
+			if c.seq.CompareAndSwap(cur, next) {
+				return next
+			}
 		}
-		return n
 	}
 	// lock must be held
 	c.sequenceNumber++
