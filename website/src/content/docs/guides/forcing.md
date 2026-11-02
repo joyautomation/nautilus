@@ -80,7 +80,9 @@ Forces are deliberately short-lived:
   force table lives on the leader (a standby proxies the API to it). A
   takeover drops it, and so does a leader stepping down — a standby never
   saw the forces, and a flapping leader must not quietly resume holding
-  values nobody may still be watching.
+  values nobody may still be watching. A single controller has no
+  takeover to fear: a force made the moment it starts, before its first
+  scan, holds like any other.
 - **Audited.** Every force, removal, clear-all, step jump and fired
   transition leaves a line in the controller's log with the caller's
   address.

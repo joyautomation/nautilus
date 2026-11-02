@@ -1,12 +1,14 @@
 package runtime
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/retain"
 )
 
 // fieldDriver keeps the field's inputs and the outputs it was handed apart
@@ -479,5 +481,36 @@ func TestRetainSavesActualNotForced(t *testing.T) {
 	st := rt.retainState()
 	if got := st.Tags["SP"]; got != 70.0 {
 		t.Fatalf("retained SP = %v; want the actual 70, not the forced 99", got)
+	}
+}
+
+// A single controller with a retain store takes over on its first scan, but
+// it has no standby and no lease: a force made through the API before that
+// scan (the API answers first) holds, rather than being accepted and then
+// dropped. Brief 002's build check caught it: a level forced right after
+// start never reached the logic.
+func TestForceBeforeFirstScanHolds(t *testing.T) {
+	d := &fieldDriver{in: nio.Values{"StartPB": false, "StopPB": false, "Level": 10.0}}
+	rt, err := New(Options{
+		Program: sealInProgram,
+		Driver:  d,
+		Tags: []TagDef{
+			Input("StartPB", Init(false)), Input("StopPB", Init(false)), Input("Level", Init(10.0)),
+			Output("Motor", Init(false)), Output("Alarm", Init(false)),
+		},
+		Retain: retain.New("", filepath.Join(t.TempDir(), "retain.json")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Tags().Force("StartPB", true); err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan() // the first scan: takeover
+	if n := rt.Tags().ForceCount(); n != 1 {
+		t.Fatalf("the first scan dropped the force table (%d left)", n)
+	}
+	if !rt.Tags().Bool("Motor") {
+		t.Fatal("the forced StartPB never reached the logic")
 	}
 }

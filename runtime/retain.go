@@ -96,7 +96,15 @@ func (r *Runtime) takeover() {
 	// regained the lease must not quietly resume holding values nobody may
 	// still be watching. Dropped BEFORE the retained load so a restored
 	// value is not captured as a forced tag's "actual".
-	r.dropForces("takeover")
+	//
+	// Without a coordinator there is no standby and no lease: this takeover
+	// is the process's first scan, and runs once. A force already in the
+	// table was made against this very process (its API answers before the
+	// first scan) by someone still watching it, so it stays — dropping it
+	// would answer the POST with 200 and then quietly undo it.
+	if r.coord != nil {
+		r.dropForces("takeover")
+	}
 	if r.retainStore != nil {
 		if err := r.loadRetained(); err != nil {
 			r.noteRetainError(err)
