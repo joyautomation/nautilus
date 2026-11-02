@@ -72,7 +72,7 @@ no rig verb, no smoke check); per section below.
 | C21 | Extension (Diagram editor title) | Diff the SFC diagram against git HEAD | package.json command `nautilus.sfc.diff` | diagram.test.mjs: Restore: SFC mounts from a saved model (and diff) (renders a diff; not the command) | — | 04 |
 | C22 | Extension (Diagram editor title ... menu) | Diff the SFC diagram against the controller | package.json command `nautilus.sfc.diffController` | — | — | 04 (menu entry present only) |
 | C23 | Extension (Diagram editor title ... menu) | Diff the SFC diagram between git revisions | package.json command `nautilus.sfc.diffRevisions` | — | — | 04 (menu entry present only) |
-| C24 | Extension (Palette) | Edit the ports of a built-in component | package.json command `nautilus.editComponentPorts` | — | component_edit_ports (opens the editor on a component file; not via the command) | — |
+| C24 | Extension (Palette) | Edit the ports of a built-in component | package.json command `nautilus.editComponentPorts` | — | component_edit_ports (the command → the component preview pane on a built-in, kit default ports, nothing written until the first edit; selftest) | 20 (builtin) |
 | C25 | Extension (Palette; Get Started walkthrough) | Create a project (naut new) | package.json command `nautilus.newProject` | — | — | 17 |
 | C26 | Extension (Palette) | Open the Get Started walkthrough | package.json command `nautilus.getStarted` | — | — | 01 (auto-open, not the command) |
 | C27 | Extension (Text editor title; Palette) | Open a text file as a diagram editor (replaces the tab, keeps unsaved edits) | package.json command `nautilus.diagram.openAsDiagram` | — | ed_open_diagram | 04 |
@@ -193,7 +193,7 @@ no rig verb, no smoke check); per section below.
 | M09 | Mimic | Delete the selection (attached pipe ends kept, detached) | "?" list MIMIC / Edit / `Del / Backspace` | gestures.test.mjs: clipboard: Ctrl+A ... Del deletes it as ONE batch; mimic-group.test.mjs: G05 Del deletes equipment and labels in ONE batch | — | — |
 | M10 | Mimic | Copy, cut, paste equipment with props, bindings and pipes (into another mimic too) | "?" list MIMIC / Edit / `Ctrl + C / X / V` | gestures.test.mjs: clipboard: Ctrl-click multi-selects, Ctrl+C / Ctrl+V pastes ONE batch; Ctrl+X deletes the selection in one batch | — | 05 |
 | M11 | Mimic | Duplicate the selection in place | "?" list MIMIC / Edit / `Ctrl + D` | gestures.test.mjs: clipboard: Ctrl+D duplicates one instance | — | — |
-| M12 | Mimic | Press P to open the ports editor for the selected equipment | "?" list MIMIC / Edit / `P` | gestures.test.mjs: ports-edit tests (enterPortsMode presses p) | component_edit_ports | — |
+| M12 | Mimic | Press P to open the ports editor for the selected equipment | "?" list MIMIC / Edit / `P` | gestures.test.mjs: ports-edit tests (enterPortsMode presses p) | — (component_edit_ports is the palette command, C24) | — |
 | M13 | Mimic | Click to add a pipe point; starting or ending on a port dot anchors that end | "?" list MIMIC / + Pipe tool / `Click` | gestures.test.mjs: port dot -> port dot -> Enter commits an anchored pipe | mimic_pipe, mimic_pipe_direct | — |
 | M14 | Mimic | Enter or double-click finishes the pipe | "?" list MIMIC / + Pipe tool / `Enter / double-click` | gestures.test.mjs: Enter completes a BENT pipe onto a hovered port; floating control: two clicks + Enter | mimic_pipe | — |
 | M15 | Mimic | Hold Shift for a free angle while placing a point | "?" list MIMIC / + Pipe tool / `Shift` | mimic-more.test.mjs: M15 without Shift the second point is orthogonalised; holding Shift keeps the diagonal | — | — |
@@ -206,9 +206,9 @@ no rig verb, no smoke check); per section below.
 
 | id | area | gesture | source of the claim | webview test | rig verb | smoke |
 |---|---|---|---|---|---|---|
-| P01 | Component | Drag a port dot to move the port | "?" list COMP / Ports / `Drag a dot` | component-ports.test.mjs: P01 component: dragging a port dot posts the port at its new fraction, and the dot renders there | component_move_port (selftest; an explicit `dir` is dropped by the drag: XFAIL, #130) | — |
-| P02 | Component | Double-click a port dot to remove the port | "?" list COMP / Ports / `Double-click a dot` | — | component_add_port (add side only) | — |
-| P03 | Component | Double-click the outline to add a port there | "?" list COMP / Ports / `Double-click the outline` | — | component_add_port | — |
+| P01 | Component | Drag a port dot to move the port | "?" list COMP / Ports / `Drag a dot` | component-ports.test.mjs: P01 component: dragging a port dot posts the port at its new fraction, and the dot renders there | component_move_port (selftest, in the preview pane: the port lands at the drop on the part under it, others stay put, an explicit `dir` set with component_set_port_dir survives, #130) | 20 (ports-drag) |
+| P02 | Component | Double-click a port dot to remove the port | "?" list COMP / Ports / `Double-click a dot` | — | — | — |
+| P03 | Component | Double-click the outline to add a port there | "?" list COMP / Ports / `Double-click the outline` | — | — (component_add_port uses the panel's + Add port) | 20 (ports) |
 | P04 | Component | Click a port dot or panel row to select the port | "?" list COMP / Ports / `Click a dot or panel row` | gestures.test.mjs: ports-edit: a DEAD-CENTER click on a port dot selects the port; VISUAL: ports-edit dot selection (in the mimic editor's ports mode) | — | — |
 | P05 | Component | Esc deselects the port | "?" list COMP / Ports / `Esc` | component-ports.test.mjs: P05 component: Esc deselects the selected port dot and posts nothing | — | — |
 | P06 | Component | Undo the last edit to the file from the diagram | "?" list COMP / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
@@ -221,7 +221,7 @@ no rig verb, no smoke check); per section below.
 |---|---|---|---|---|---|---|
 | X01 | Extension | Open a diagram by default via workbench.editorAssociations | README Diagrams | — | — | 17 |
 | X02 | Extension | Open a *.mimic.json in the graphical editor (Open With → Text Editor to leave) | README HMI mimic editor | gestures.test.mjs: restore: the mimic editor mounts with saved state | — | — |
-| X03 | Extension | Open a component file in the component editor | README HMI mimic editor (ports) | gestures.test.mjs: restore: the component preview pane mounts with saved state | component_edit_ports | — |
+| X03 | Extension | Open a component file in the component editor | README HMI mimic editor (ports) | gestures.test.mjs: restore: the component preview pane mounts with saved state | — (component_edit_ports opens the pane from the command, C24) | 20 (sidecar: a .component.json opens as JSON; its title button opens the pane) |
 | X04 | Extension | A 0-byte .fbd/.ld/.sfc opens with the Empty file banner; initialize or the first gesture writes a skeleton | CHANGELOG 0.10.0 | diagram.test.mjs: FBD: null arrays ... blank file offers initialize; Ladder: a blank file seeds with the file name | sfc_init | 09 |
 | X05 | Extension | A broken first load keeps its own chrome; a doc that never parsed offers Reopen as Text Editor | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder/SFC: a broken FIRST load keeps its own chrome; gestures.test.mjs: a doc that never parsed shows the error and Reopen as Text Editor | — | — |
 | X06 | Extension | A parse error mid-edit locks the stale canvas | CHANGELOG 0.10.0 | gestures.test.mjs: a parse error mid-edit locks the stale canvas | — | — |

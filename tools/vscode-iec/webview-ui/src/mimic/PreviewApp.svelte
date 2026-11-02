@@ -62,6 +62,12 @@
 	let ports = $state<Port[]>([]);
 	/** The ports shown are the kit's defaults (no sidecar `ports` yet). */
 	let portsInherited = $state(false);
+	/** Ports writes posted / confirmed by the host (previewDoc `ack`), for
+	 * the component last shown — see the previewDoc handler. Plain lets: they
+	 * gate what is rendered, they are not rendered. */
+	let portsSent = 0;
+	let portsAcked = 0;
+	let shownComponent = '';
 	/** Generation of the bundle currently mounted; keys the island. */
 	let version = $state(0);
 	let building = $state(false);
@@ -93,6 +99,7 @@
 				props?: Record<string, unknown>;
 				ports?: Port[];
 				portsInherited?: boolean;
+				ack?: number;
 				src?: string;
 				version?: number;
 				building?: boolean;
@@ -105,8 +112,25 @@
 				hasSidecar = !!m.hasSidecar;
 				builtin = !!m.builtin;
 				props = m.props ?? {};
-				ports = m.ports ?? [];
-				portsInherited = !!m.portsInherited;
+				// The host confirms each ports write with a previewDoc carrying
+				// its seq (`ack`). While an edit of ours is still unconfirmed, a
+				// previewDoc's ports are older than what is on screen — the
+				// confirmation of an EARLIER edit, or a re-read that raced the
+				// write — and taking them would put that older list back, and
+				// the next edit would be built from it (a dir stepped twice from
+				// the keyboard landed on the wrong value). The previewDoc that
+				// confirms the latest edit is read after its write: from there
+				// on the host's list is the truth again (a text undo, a hand
+				// edit of the sidecar). A new component starts over.
+				if (typeof m.ack === 'number') portsAcked = Math.max(portsAcked, m.ack);
+				if ((m.component ?? '') !== shownComponent) {
+					shownComponent = m.component ?? '';
+					portsSent = portsAcked = 0;
+				}
+				if (portsAcked >= portsSent) {
+					ports = m.ports ?? [];
+					portsInherited = !!m.portsInherited;
+				}
 				drag = null;
 				if (selected !== null && selected >= ports.length) selected = null;
 			} else if (m?.type === 'previewBundle' && m.src && m.version) {
@@ -281,7 +305,7 @@
 	 * the dot lands where it was dropped without waiting on the round trip. */
 	function commitPorts(next: Port[]) {
 		ports = next.map(roundPort);
-		vscode.postMessage({ type: 'previewSetPorts', ports: $state.snapshot(ports) });
+		vscode.postMessage({ type: 'previewSetPorts', ports: $state.snapshot(ports), seq: ++portsSent });
 	}
 	function portDown(e: PointerEvent, i: number) {
 		if (!portsMode || e.button !== 0) return;
@@ -372,6 +396,20 @@
 	function onKey(e: KeyboardEvent) {
 		if (e.key === 'Escape') selected = null;
 	}
+	/** Where the drag's coordinate readout goes, in VIEWPORT pixels: just
+	 * up and right of the dragged dot. The readout is position: fixed at the
+	 * pane's top level, outside the scaled box and the scrolling stage —
+	 * inside them it counted toward the stage's scrollable overflow, so a
+	 * dot dragged near the right edge of a narrow pane put up a scrollbar
+	 * mid-drag, the centred stage moved the box under the pointer, and the
+	 * dot landed off the cursor (#470/#471). */
+	function readoutAt(): { left: number; top: number } | null {
+		const p = drag ? portsPx[drag.index] : undefined;
+		if (!p || !boxEl) return null;
+		const r = boxEl.getBoundingClientRect();
+		const k = boxEl.offsetWidth ? r.width / boxEl.offsetWidth : 1;
+		return { left: r.left + p.x * k + 10, top: r.top + p.y * k - 20 };
+	}
 	const statusText = $derived(
 		builtin ? 'built-in' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
 	);
@@ -380,6 +418,12 @@
 <svelte:window onpointermove={onPortMove} onpointerup={onPortUp} onkeydown={onKey} />
 
 <div class="pane">
+	{#if drag}
+		{@const at = readoutAt()}
+		{#if at}
+			<span class="coord" style="left: {at.left}px; top: {at.top}px">{fmtFraction(drag.fx, drag.fy)}</span>
+		{/if}
+	{/if}
 	<header>
 		{#if builtin}
 			<span class="title" title="A kit component — rendered from the kit, no source here">{component}</span>
@@ -466,11 +510,6 @@
 										>
 									{/each}
 								</svg>
-								{#if drag}
-									<span class="coord" style="left: {(portsPx[drag.index]?.x ?? 0) + 10 / zoom}px; top: {(portsPx[drag.index]?.y ?? 0) - 20 / zoom}px; transform: scale({1 / zoom}); transform-origin: left top">
-										{fmtFraction(drag.fx, drag.fy)}
-									</span>
-								{/if}
 							{/if}
 						</div>
 					</div>
@@ -708,7 +747,8 @@
 		pointer-events: none;
 	}
 	.coord {
-		position: absolute;
+		position: fixed;
+		z-index: 10;
 		font-size: 11px;
 		font-family: var(--nx-mono);
 		color: var(--nx-ink);

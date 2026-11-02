@@ -176,6 +176,19 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   starts from the kit's part-anchored ports; Heater is offered as a
   built-in, and a copied kit component starts from the registry's own
   sample props.
+- **A port dot dragged toward the right of a narrow preview pane lands
+  under the cursor.** The coordinate readout beside a dragged dot ran past
+  the pane's stage, a scrollbar came up mid-drag, the render re-centred
+  under the pointer and the dot was dropped a few pixels off, then jumped
+  again when the readout went away. The readout now floats over the pane
+  without taking part in its layout.
+- **Quick port edits in the preview pane stick.** Each edit saves the whole
+  ports list and the host answers with the file as saved. Two edits in a
+  row (a direction stepped twice from the keyboard, a rename right after a
+  drag) could have the answer to the FIRST arrive after the second, put the
+  older list back on screen, and the next edit was then built from it,
+  silently undoing the second. The pane now holds the host's ports back
+  until its latest edit is confirmed.
 
 ## [0.19.1] - 2026-10-26
 

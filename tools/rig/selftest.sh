@@ -9,6 +9,10 @@
 #     G_PACE=fast tools/rig/selftest.sh           # teleport the pointer (nightly)
 #     RIG_CLIPS=0 tools/rig/selftest.sh           # no per-verb clips (quicker)
 #     RIG_NAME=nautilus-verbs-$(hostname -s) RIG_KEEP=1 tools/rig/selftest.sh
+#     RIG_VERBS='mimic-|mimic_drop|component_' tools/rig/selftest.sh
+#                                                 # only the rows whose name
+#                                                 # matches (ERE) — a verb's
+#                                                 # prerequisites must match too
 #
 # On the host it brings up the rig container (lib/container.sh), puts naut on
 # PATH and the VSIX in, pushes lib.sh, the verbs (as ~/fixtures) and itself,
@@ -79,7 +83,7 @@ if [[ -z ${RIG_IN_CONTAINER:-} ]]; then
   echo "▸ self-test (G_PACE=${G_PACE:-human}${FRAME:+ $FRAME})"
   # NB: nothing in this command line may contain "vscode-rec" — lib.sh's
   # launch_vscode pkills by that string and would kill this shell.
-  rig_run "rm -rf ~/out; mkdir -p ~/out && cd ~ && DISPLAY=$RIG_DISPLAY $FRAME RIG_IN_CONTAINER=1 RIG_CLIPS=${RIG_CLIPS:-1} G_PACE=${G_PACE:-human} timeout 3600 bash ~/selftest.sh" \
+  rig_run "rm -rf ~/out; mkdir -p ~/out && cd ~ && DISPLAY=$RIG_DISPLAY $FRAME ${RIG_VERBS:+RIG_VERBS=$(printf %q "$RIG_VERBS")} RIG_IN_CONTAINER=1 RIG_CLIPS=${RIG_CLIPS:-1} G_PACE=${G_PACE:-human} timeout 3600 bash ~/selftest.sh" \
     || echo "  (selftest exited non-zero)"
 
   PULL=$(mktemp -d)
@@ -113,6 +117,7 @@ N=0
 # vt <name> <expect PASS|XFAIL> <verb> [args…] — run, snap, record.
 vt() {
   local name=$1 expect=$2 rc verdict err base; shift 2
+  [[ -z ${RIG_VERBS:-} || $name =~ $RIG_VERBS ]] || return 0
   N=$((N + 1))
   base=$(printf 'verbs-%02d-%s' "$N" "$name")
   # One review clip per verb, the verb through the snap (RIG_CLIPS=0: none).
@@ -278,14 +283,22 @@ vt mimic_bind PASS mimic_bind WW101 levelPct LevelPct
 vt mimic_pipe_direct PASS mimic_pipe_direct P101.out WW101.left
 vt mimic_pipe PASS mimic_pipe P101.out WW101.left
 
-# ── Component ports ─────────────────────────────────────────────────────────
+# ── Component ports: the preview pane, beside lift.mimic.json ───────────────
+# Pump is a built-in: the pane shows the kit's default ports, and the first
+# edit (+ Add port) writes Pump.component.json next to the mimic.
 vt component_edit_ports PASS component_edit_ports Pump
 vt component_add_port PASS component_add_port seal
-# Drag a dot (P01). seal (from + Add port) has no dir; Pump's default `out`
-# carries dir "up", which the move must keep, as the mimic editor's ports
-# mode does. XFAIL: the Component Editor's drag drops it (issue #130).
+# Drag a dot (P01). seal (from + Add port) has no dir. The kit's `out` has
+# none either since #466 (its direction is inferred off the discharge
+# nozzle's top edge), so it is given an explicit one first: the drag must
+# keep it, as the mimic editor's ports mode does (#130).
 vt component_move_port PASS component_move_port seal 60 50
+vt component_set_port_dir PASS component_set_port_dir out up
 vt component_move_port-dir PASS component_move_port out -50 40
+# The component verbs leave G_COMP and G_FILE on Pump's sidecar (WEBVIEW_HAS
+# is local to each of them). A mimic verb added after this point must open
+# its diagram again first (ed_open_diagram resets G_FILE).
+G_COMP= G_FILE=
 
 # ── the files, as saved, and what the compiler makes of them ────────────────
 mkdir -p "$OUT_DIR/verbs-files"
