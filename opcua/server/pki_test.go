@@ -322,18 +322,23 @@ func TestExpiredClientCertificateIsRefused(t *testing.T) {
 
 // The secure channel renews its token under the same security: a client
 // with a short channel lifetime keeps reading across several renewals.
+// gopcua's own client is the one here, on Basic256Sha256 with a 2 s
+// lifetime: on Aes256_Sha256_RsaPss with 1 s its renewal races itself
+// (go test -race points into gopcua's uasc renew, not the server) and
+// times out about half the time, while asyncua renews on that policy
+// without fault (TestForeignAsyncuaSecure).
 func TestSecureChannelRenews(t *testing.T) {
 	s, dir := startSecure(t)
 	const uri = "urn:test:renew"
 	der, key := clientCert(t, uri, time.Now().Add(-time.Hour), 24*time.Hour)
 	trust(t, dir, der)
-	ep := endpointFor(t, s, ua.SecurityPolicyURIAes256Sha256RsaPss, ua.MessageSecurityModeSignAndEncrypt)
-	c, err := secureConnect(s, ep, der, key, uri, opcua.Lifetime(time.Second))
+	ep := endpointFor(t, s, ua.SecurityPolicyURIBasic256Sha256, ua.MessageSecurityModeSignAndEncrypt)
+	c, err := secureConnect(s, ep, der, key, uri, opcua.Lifetime(2*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close(context.Background())
-	deadline := time.Now().Add(3500 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second) // two renewals at least
 	for time.Now().Before(deadline) {
 		dv := read(t, c, ua.NewNumericNodeID(0, id.Server_ServerStatus_State), ua.AttributeIDValue)
 		if dv.Status != ua.StatusGood {
