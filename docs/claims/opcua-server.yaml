@@ -5,7 +5,7 @@ claims:
   - id: OPC-001
     claim: >-
       An opcua: section serves the tag store as an OPC UA address space; the
-      section's presence turns the server on, endpoint is its only setting
+      section's presence turns the server on, endpoint is where it listens
       (default opc.tcp://localhost:4840, which listens on 127.0.0.1), and
       naut check refuses an endpoint that is not opc.tcp://host:port (a bare
       host:port is read as opc.tcp://host:port).
@@ -263,6 +263,69 @@ claims:
       - go ./opcua/server TestNamespaceAttributesOfFolderAndMembers
       - go ./cmd/naut TestNautRunServesOPCUA
       - go ./opcua/server TestForeignAsyncuaClient
+
+  - id: OPC-016
+    claim: >-
+      Each advertised address carries four endpoints: None (anonymous) and
+      Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under
+      SignAndEncrypt; Sign alone and the deprecated Basic128Rsa15 and
+      Basic256 are refused when a channel opens (Bad_SecurityPolicyRejected),
+      and a renewal must keep the security its channel opened with. On its
+      first start the server makes its certificate in the store opcua.pki
+      names (default ./pki): own/cert.der and own/private/key.pem (owner
+      only), RSA-2048, SHA-256, self-signed, valid five years, naming the
+      application-uri and every advertised host and address; a certificate
+      already there is kept, and its URI is the one announced. naut new
+      ignores /pki/ in git and naut build never embeds a certificate store.
+      The opcua-server status row carries the certificate's thumbprint and
+      expiry, and warns from 30 days before it expires.
+    source: "#endpoints"
+    tests:
+      - go ./opcua/server TestServerCertificateIsGeneratedAndKept
+      - go ./opcua/server TestUnofferedSecurityIsRejected
+      - go ./opcua/server TestSecureChannelRenews
+      - go ./opcua/server TestStatusWarnsBeforeTheCertificateExpires
+      - go ./opcua/internal/uasc TestCheckOpen
+      - go ./internal/project TestOPCUAStatusCarriesTheCertificate
+      - go ./cmd/naut TestEmitBinarySkipsDependencyTrees
+      - go ./opcua/server TestForeignAsyncuaSecure
+    note: >-
+      Unit and in-process client tests (gopcua's client, and the forked
+      uasc's own client side, which reports the server's refusal code where
+      gopcua's reads EOF), plus asyncua over all three policies, renewals
+      and the refusals (TestForeignAsyncuaSecure). No
+      black-box check covers the secure endpoints yet; the writes brief
+      (slice 3) will.
+
+  - id: OPC-017
+    claim: >-
+      A secured channel opens only from a client certificate in
+      trusted/certs (DER or PEM, any name): an untrusted one is refused with
+      Bad_CertificateUntrusted and filed in rejected/certs under its
+      thumbprint, one outside its validity period with
+      Bad_CertificateTimeInvalid. naut opcua certs lists the store, naut
+      opcua trust <thumbprint prefix of 16+ digits> moves a rejected
+      certificate to trusted/, and the next attempt connects without a
+      restart, since the trust list is read on every connection and every
+      renewal; a token lives an hour at most and a channel that does not
+      renew in time is closed; rejected/ keeps the newest 100. CreateSession on a secured channel must present the
+      channel's own certificate (Bad_SecurityChecksFailed) and the
+      ApplicationUri it names (Bad_CertificateUriInvalid). Sessions are
+      anonymous: another identity token is Bad_IdentityTokenInvalid. A
+      session belongs to the channel that created it: its token is 32
+      random bytes, and another connection presenting it is refused with
+      Bad_SecureChannelIdInvalid.
+    source: "#approving-a-client"
+    tests:
+      - go ./opcua/server TestUntrustedClientIsRefusedUntilTrusted
+      - go ./opcua/server TestExpiredClientCertificateIsRefused
+      - go ./opcua/server TestCreateSessionIsHeldToTheChannelCertificate
+      - go ./cmd/naut TestOPCUACertsAndTrust
+      - go ./opcua/internal/uaserver TestActivateSessionChecksTheIdentityToken
+      - go ./opcua/internal/uaserver TestSessionTokensAreRandomAndLong
+      - go ./opcua/internal/uaserver TestSessionTokensComeFromCryptoRand
+      - go ./opcua/internal/uaserver TestSessionTokenRefusedOnAnotherChannel
+      - go ./opcua/server TestForeignAsyncuaSecure
 
   - id: OPC-009
     claim: >-

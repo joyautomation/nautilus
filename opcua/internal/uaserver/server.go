@@ -20,7 +20,7 @@ import (
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
 	"github.com/gopcua/opcua/uapolicy"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 const defaultListenAddr = "opc.tcp://localhost:0"
@@ -78,6 +78,11 @@ type serverConfig struct {
 
 	enabledSec  []security
 	enabledAuth []authMode
+
+	// verifyPeer decides whether a client certificate is trusted, for
+	// channels under any policy but None (uasc.Config.VerifyPeer). Nil
+	// trusts every certificate.
+	verifyPeer func(cert []byte) error
 
 	cap ServerCapabilities
 
@@ -273,6 +278,27 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// channelConfig is a new channel's configuration. A channel may open only
+// with a security policy and mode one of the endpoints advertises (gopcua's
+// adopted whatever the client asked for), and, under any policy but None,
+// only with a client certificate the VerifyPeer option accepts.
+func (s *Server) channelConfig() *uasc.Config {
+	cfg := defaultChannelConfig()
+	cfg.Certificate = s.cfg.certificate
+	cfg.LocalKey = s.cfg.privateKey
+	enabled := append([]security(nil), s.cfg.enabledSec...)
+	cfg.Allow = func(policy string, mode ua.MessageSecurityMode) bool {
+		for _, sec := range enabled {
+			if sec.secPolicy == policy && sec.secMode == mode {
+				return true
+			}
+		}
+		return false
+	}
+	cfg.VerifyPeer = s.cfg.verifyPeer
+	return cfg
+}
+
 // channelClosed closes the sessions bound to a channel that has gone, with their
 // subscriptions. It runs on the message loop, after every request the channel sent. Part 4 §5.6.3 lets a session outlive its channel so that a client can
 // reactivate it on a new one; this server refuses that move until it can check the client's
@@ -336,7 +362,7 @@ func (s *Server) acceptAndRegister(ctx context.Context, l *uacp.Listener) {
 				}
 			}
 
-			go s.cb.RegisterConn(ctx, c, s.cfg.certificate, s.cfg.privateKey)
+			go s.cb.RegisterConn(ctx, c, s.channelConfig())
 			if s.cfg.logger != nil {
 				s.cfg.logger.Info("registered connection: %s", c.RemoteAddr())
 			}

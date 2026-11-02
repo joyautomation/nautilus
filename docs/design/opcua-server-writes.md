@@ -352,7 +352,13 @@ dispositions:
    reconnect left a dead one behind. The one change a real client sees: gopcua's
    reconnect used to reactivate its old session and now makes a new one. Slice 2, when it
    allows the move, closes an orphaned session at its timeout instead.
-2. **Secure channels, read-only.** Fork `uasc`, add the accessors, the OPN trust hook and
+2. **Secure channels, read-only.** As built: also a renewal guard (a renewal keeps
+   its channel's policy, mode and certificate), refusals sent as a transport Error
+   message so a client sees the code, the fork's client side reporting that code
+   instead of EOF, an anonymous token with an empty policyId accepted (gopcua's
+   client sends one), an expired certificate refused with
+   `Bad_CertificateTimeInvalid` (not filed as rejected), and `naut build` skipping
+   any certificate store. Fork `uasc`, add the accessors, the OPN trust hook and
    the policy/mode allowlist. Add the PKI with generation, trust and reject, `naut opcua
    certs` and `trust`, identity-token checks, the CreateSession certificate and URI
    checks, and the ApplicationURI and ProductURI (part of #424). Endpoints: `None` plus

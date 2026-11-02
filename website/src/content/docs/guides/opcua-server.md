@@ -24,12 +24,14 @@ configuration you re-enter on the client side.
 opcua:
   endpoint: opc.tcp://0.0.0.0:4840   # default opc.tcp://localhost:4840
   # application-uri: urn:acme:plant7:lift-station   # default urn:joyautomation:nautilus:<project>
+  # pki: /var/lib/nautilus/pki                     # default ./pki
 ```
 
 `naut run` (and a built binary) starts the server alongside the scan loop;
 the section's presence turns it on (`opcua: {}` serves on the default).
 `endpoint` is where it listens; `application-uri` is the name clients know
-it by ([below](#what-a-client-sees)). The endpoint defaults to the loopback interface —
+it by ([below](#what-a-client-sees)); `pki` is the certificate store the
+secure endpoints use ([Security](#security)). The endpoint defaults to the loopback interface —
 `localhost` listens on `127.0.0.1` — so putting a controller on the network
 is a line you write: `opc.tcp://0.0.0.0:4840` listens on every interface.
 `naut check` refuses an endpoint that is not `opc.tcp://host:port` (a bare
@@ -44,8 +46,9 @@ GetEndpoints and again in the CreateSession answer, so it can open its
 session through the address it used.
 
 The server is **read-only**: a write is answered `Bad_UserAccessDenied`,
-never silently dropped. See [Security](#security) for why, and what comes
-next.
+never silently dropped. It offers an unsecured endpoint and three secure
+ones, which open only to a client certificate you have approved; see
+[Security](#security).
 
 ## What a client sees
 
@@ -213,25 +216,143 @@ not created and left to fail inside a notification.
 
 ## Security
 
-The server offers the `None` security policy with anonymous sessions, and
-every node is read-only (`AccessLevel` is `CurrentRead`) — the standard
-`Server` object and its variables included, so no session can rewrite the
-`NamespaceArray` or `ServerStatus` other clients rely on. That is the
-combination that is safe to offer without a certificate store: anonymous
-clients can look, nobody can write.
+### Endpoints
 
-Writes are planned as a follow-up, and will land only on a secure channel
-(`Basic256Sha256`) from a client certificate the controller trusts, going
-through the same path as `POST /api/tags` — so the write token, forcing
-rules and member-write checks the HTTP API applies hold for OPC UA too.
-Until then, a controller that must take setpoints from a SCADA host should
-take them over [Sparkplug](/guides/sparkplug/) or the HTTP API.
+Each address the server advertises carries four endpoints:
+
+| Security policy | Mode | Who may open it |
+|---|---|---|
+| `None` | `None` | anyone, anonymously |
+| `Basic256Sha256` | `SignAndEncrypt` | a client whose certificate is trusted |
+| `Aes128_Sha256_RsaOaep` | `SignAndEncrypt` | the same |
+| `Aes256_Sha256_RsaPss` | `SignAndEncrypt` | the same |
+
+Nothing else is accepted. A client that asks for `Sign` without encryption,
+or for the deprecated `Basic128Rsa15` or `Basic256`, is refused with
+`Bad_SecurityPolicyRejected` when it opens its channel. A secure channel
+renews its keys under the security it opened with; a renewal that asks for
+other security is refused.
+
+Every node is read-only on every endpoint (`AccessLevel` is `CurrentRead`),
+including the standard `Server` object and its variables, so no session can
+rewrite the `NamespaceArray` or `ServerStatus` other clients rely on. The
+secure endpoints keep what a client reads private and tamper-proof on the
+wire. They grant no extra rights yet.
+
+### The certificate store
+
+The secure endpoints need a certificate. On its first start the server
+makes one in its certificate store, the directory `opcua.pki` names
+(default `./pki`, relative to the directory `naut run` starts in):
+
+```
+pki/
+  own/cert.der            the server's certificate
+  own/private/key.pem     its private key (readable by the owner only)
+  trusted/certs/          client certificates the server accepts
+  rejected/certs/         client certificates it refused
+```
+
+The certificate it makes is the kind OPC UA asks for: RSA-2048 with
+SHA-256, self-signed, valid five years. It names the server's
+`application-uri` and every host name and address the server advertises.
+A certificate already in `own/` is used as it is and never replaced, since
+a new certificate means every client has to trust the server again; its
+URI is the one the server announces. If the machine's name later changes,
+the server logs which names the certificate lacks. Empty `own/` and
+restart to make a new one.
+
+Keep the store out of version control. `naut new` puts `/pki/` in
+`.gitignore`, and `naut build` never embeds a certificate store, so a built
+binary carries no key. In a cluster, mount one store (a Secret) into every
+replica, so a client trusts one certificate whichever replica answers.
+
+### Approving a client
+
+A client's certificate must be in `trusted/certs/` before its secure
+channel opens. Approving a new SCADA or historian takes one refused attempt
+and one command:
+
+1. Point the client at a secure endpoint. The server refuses it with
+   `Bad_CertificateUntrusted` and files its certificate in
+   `rejected/certs/`, named by its thumbprint.
+2. On the controller, list the store:
+
+   ```
+   $ naut opcua certs
+   Server certificate (pki/own/cert.der)
+     thumbprint  90b78630b79b4acfa3e0c6a3132c050f7fcf8c4a
+     uri         urn:joyautomation:nautilus:lift-station
+     expires     2031-11-01
+   …
+   Rejected clients (pki/rejected/certs): 1
+     THUMBPRINT                                APPLICATION URI   SUBJECT   EXPIRES
+     5c1f0e7a…                                 urn:acme:scada    CN=SCADA  2027-03-01
+   ```
+
+   Compare the thumbprint with the one the client shows for its own
+   certificate.
+3. Approve it:
+
+   ```
+   $ naut opcua trust 5c1f0e7a9b3d2c41
+   ```
+
+   Give at least 16 hex digits, or paste the whole thumbprint. Anyone who
+   can reach the port can file a certificate in `rejected/`, so a short
+   prefix could match one made to imitate it. The server reads `trusted/`
+   on every connection, so the client's next attempt connects, with no
+   restart. `rejected/` keeps the 100 most recent refusals.
+
+Copying a certificate into `trusted/certs/` (DER or PEM, any file name)
+does the same. To withdraw trust, delete its file there: the client is
+refused on its next connection, and an open channel at its next key
+renewal. A channel's keys last an hour at most, and a channel that does not
+renew in time is closed, so a withdrawn client is cut off within about an
+hour and a quarter. A certificate outside its validity period is refused with
+`Bad_CertificateTimeInvalid`, trusted or not. There is no "accept
+everything" switch. `--pki DIR` points both commands at another store; by
+default they use the `opcua.pki` of the `nautilus.yaml` in the working
+directory, else `./pki`.
+
+The client must also present the certificate its channel was opened with
+when it creates its session, with the `ApplicationUri` that certificate
+names. A client that announces another URI is refused with
+`Bad_CertificateUriInvalid`. In asyncua:
+
+```python
+from asyncua import Client
+
+client = Client("opc.tcp://controller:4840")
+client.application_uri = "urn:acme:scada"   # the URI in client-cert.der
+await client.set_security_string(
+    "Basic256Sha256,SignAndEncrypt,client-cert.der,client-key.pem")
+async with client:
+    print(await client.nodes.server_state.read_value())
+```
+
+### Sessions
+
+Sessions are anonymous on every endpoint; no user names are offered yet. A
+session belongs to the channel that created it. Its authentication token is
+a random 32-byte value, and a request that presents it on any other
+connection is refused with `Bad_SecureChannelIdInvalid`. A client that loses
+its connection opens a new session.
+
+### Writes
+
+Writes are planned for a later release. They will land only for tags the
+manifest opens to OPC UA, and only on a secure channel from a trusted
+client certificate. Until then, a controller that must take setpoints from
+a SCADA host should take them over [Sparkplug](/guides/sparkplug/) or the
+HTTP API.
 
 ## Status
 
 The dashboard's driver cards and `GET /api/drivers` carry an `opcua-server`
-row: the endpoint, whether it is listening, and how many subscriptions and
-monitored items clients hold. A port already in use is reported there and
+row: the endpoint, whether it is listening, how many subscriptions and
+monitored items clients hold, and the server certificate's thumbprint and
+expiry, with a warning from 30 days before it expires. A port already in use is reported there and
 on stderr at start (`continuing without it`); the controller runs
 regardless.
 

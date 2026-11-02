@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -69,7 +70,28 @@ type Options struct {
 	// ApplicationURI is the server's ApplicationUri (Part 4 §7.1); empty is
 	// ApplicationURI(Name). It must be an absolute URI (CheckApplicationURI).
 	ApplicationURI string
+	// PKI is the certificate store directory (pki.go). Set, the server
+	// also offers the three secure endpoints, Basic256Sha256,
+	// Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss, each SignAndEncrypt
+	// only, with its own certificate from the store (generated on first
+	// start), and a secured channel opens only from a trusted client
+	// certificate. Empty offers None alone, as before (tests, Go
+	// compositions that want no files).
+	PKI string
 }
+
+// securePolicies are the policies the secure endpoints offer, each under
+// SignAndEncrypt only. Basic128Rsa15 and Basic256 are deprecated (Part 7)
+// and never offered; Sign without encryption is not offered either.
+var securePolicies = []string{
+	ua.SecurityPolicyURIBasic256Sha256,
+	ua.SecurityPolicyURIAes128Sha256RsaOaep,
+	ua.SecurityPolicyURIAes256Sha256RsaPss,
+}
+
+// certWarning is how long before the server certificate's expiry the status
+// row starts warning.
+const certWarning = 30 * 24 * time.Hour
 
 // Server serves one runtime's tag store over OPC UA.
 type Server struct {
@@ -88,6 +110,7 @@ type Server struct {
 	lastErr error
 	url     string
 	version string
+	cert    CertInfo // the server certificate, when PKI is set
 }
 
 // New prepares a server. It validates the endpoint and dials nothing — the
@@ -201,6 +224,14 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	for _, a := range aliases {
 		opts = append(opts, opcserver.EndPoint(a, port))
+	}
+	if s.opts.PKI != "" {
+		sec, err := s.secure(listen, aliases)
+		if err != nil {
+			s.lastErr = err
+			return err
+		}
+		opts = append(opts, sec...)
 	}
 	srv := opcserver.New(opts...)
 	ns := &namespace{
@@ -370,6 +401,50 @@ type Status struct {
 	Tags           int    `json:"tags"`
 	Subscriptions  int    `json:"subscriptions"`
 	MonitoredItems int    `json:"monitoredItems"`
+	// The server certificate, when secure endpoints are offered: its
+	// thumbprint, its expiry, and a warning from 30 days before it.
+	CertThumbprint string `json:"certThumbprint,omitempty"`
+	CertExpiresMs  int64  `json:"certExpiresMs,omitempty"`
+	CertWarning    string `json:"certWarning,omitempty"`
+}
+
+// secure loads (or on first start makes) the server's certificate from the
+// store and returns the options that offer the secure endpoints with it and
+// hold every secured channel to the store's trust list.
+func (s *Server) secure(listen string, aliases []string) ([]opcserver.Option, error) {
+	pki := PKI{Dir: s.opts.PKI}
+	hosts := append([]string{listen}, aliases...)
+	der, key, created, stale, err := pki.Own(s.opts.ApplicationURI, s.opts.Name, hosts)
+	if err != nil {
+		return nil, err
+	}
+	info, err := describeCert(der, pki.ownCert())
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case created:
+		slog.Info("opcua: generated the server certificate", "file", pki.ownCert(), "thumbprint", info.Thumbprint, "applicationUri", info.ApplicationURI)
+	case len(stale) > 0:
+		slog.Warn("opcua: the server certificate does not name every host it is reached by; clients that check host names may refuse it. Empty own/ to generate a new one (every client must trust it again)", "file", pki.ownCert(), "missing", strings.Join(stale, ", "))
+	}
+	appURI := s.opts.ApplicationURI
+	if info.ApplicationURI != "" && info.ApplicationURI != appURI {
+		// Part 4 §7.1: the ApplicationUri announced is the certificate's.
+		slog.Warn("opcua: the server certificate names another ApplicationURI; announcing the certificate's", "certificate", info.ApplicationURI, "configured", appURI, "file", pki.ownCert())
+		appURI = info.ApplicationURI
+	}
+	s.cert = info
+	opts := []opcserver.Option{
+		opcserver.ApplicationURI(appURI),
+		opcserver.Certificate(der),
+		opcserver.PrivateKey(key),
+		opcserver.VerifyPeer(pki.Verify),
+	}
+	for _, p := range securePolicies {
+		opts = append(opts, opcserver.EnableSecurity(p, ua.MessageSecurityModeSignAndEncrypt))
+	}
+	return opts, nil
 }
 
 // Status reports whether the server is listening, where, and what the
@@ -386,6 +461,17 @@ func (s *Server) Status() Status {
 	}
 	if s.lastErr != nil {
 		st.LastError = s.lastErr.Error()
+	}
+	if s.cert.Thumbprint != "" {
+		st.CertThumbprint = s.cert.Thumbprint
+		st.CertExpiresMs = s.cert.NotAfter.UnixMilli()
+		if left := time.Until(s.cert.NotAfter); left < certWarning {
+			if left <= 0 {
+				st.CertWarning = "the OPC UA server certificate has expired; clients will refuse it (empty pki/own to generate a new one, then trust it on each client)"
+			} else {
+				st.CertWarning = fmt.Sprintf("the OPC UA server certificate expires in %d days", int(left.Hours()/24)+1)
+			}
+		}
 	}
 	if s.srv != nil {
 		if sub := s.srv.SubscriptionService; sub != nil {

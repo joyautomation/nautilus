@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -138,5 +139,39 @@ func LessOrEqual[T cmp.Ordered](t testing.TB, a, b T, msgAndArgs ...any) {
 	t.Helper()
 	if !(a <= b) {
 		fail(t, fmt.Sprintf("%v is not less than or equal to %v", a, b), msgAndArgs)
+	}
+}
+
+// Fail stops the test with a message.
+func Fail(t testing.TB, failureMessage string, msgAndArgs ...any) {
+	t.Helper()
+	fail(t, failureMessage, msgAndArgs)
+}
+
+// EqualValues is Equal after converting got to want's type, when it converts
+// (testify's ObjectsAreEqualValues).
+func EqualValues(t testing.TB, want, got any, msgAndArgs ...any) {
+	t.Helper()
+	if equal(want, got) {
+		return
+	}
+	if want != nil && got != nil {
+		wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
+		if gv.Type().ConvertibleTo(wv.Type()) && reflect.DeepEqual(want, gv.Convert(wv.Type()).Interface()) {
+			return
+		}
+	}
+	fail(t, fmt.Sprintf("not equal values:\nwant %#v\n got %#v", want, got), msgAndArgs)
+}
+
+// ErrorContains requires an error whose message contains contains.
+func ErrorContains(t testing.TB, err error, contains string, msgAndArgs ...any) {
+	t.Helper()
+	if err == nil {
+		fail(t, fmt.Sprintf("want an error containing %q, got nil", contains), msgAndArgs)
+		return
+	}
+	if !strings.Contains(err.Error(), contains) {
+		fail(t, fmt.Sprintf("error %q does not contain %q", err.Error(), contains), msgAndArgs)
 	}
 }

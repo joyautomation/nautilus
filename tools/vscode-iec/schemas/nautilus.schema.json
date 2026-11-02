@@ -728,6 +728,11 @@
         "application-uri": {
           "type": "string",
           "description": "The server's ApplicationUri, the name an OPC UA client keys its connection on: an absolute URI. Defaults to urn:joyautomation:nautilus:<project>, the same on every host and replica; set it when two controllers run a project of the same name on one network."
+        },
+        "pki": {
+          "type": "string",
+          "default": "pki",
+          "description": "Certificate store directory, relative to the working directory: the server's own certificate and key (generated on first start) and the client certificates it trusts (trusted/certs) or has refused (rejected/certs). Approve a client with `naut opcua trust <thumbprint>`. Keep it out of git; `naut build` never embeds it."
         }
       }
     },

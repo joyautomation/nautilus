@@ -11,13 +11,14 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	"github.com/gopcua/opcua/uasc"
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
+	cuasc "github.com/gopcua/opcua/uasc" // the client side: gopcua's own
+	"github.com/joyautomation/nautilus/opcua/internal/require"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // channel opens a secure channel to endpoint with no session on it, so a test can send any
 // request with any authentication token.
-func channel(t *testing.T, ctx context.Context, endpoint string) *uasc.SecureChannel {
+func channel(t *testing.T, ctx context.Context, endpoint string) *cuasc.SecureChannel {
 	t.Helper()
 	return dial(t, ctx, endpoint).SecureChannel()
 }
@@ -33,7 +34,7 @@ func dial(t *testing.T, ctx context.Context, endpoint string) *opcua.Client {
 }
 
 // rawCreateSession creates a session on sc and returns its authentication token.
-func rawCreateSession(t *testing.T, ctx context.Context, sc *uasc.SecureChannel, endpoint string) *ua.NodeID {
+func rawCreateSession(t *testing.T, ctx context.Context, sc *cuasc.SecureChannel, endpoint string) *ua.NodeID {
 	t.Helper()
 	req := &ua.CreateSessionRequest{
 		ClientDescription:       &ua.ApplicationDescription{ApplicationURI: "urn:test", ApplicationName: ua.NewLocalizedText("test"), ApplicationType: ua.ApplicationTypeClient},
@@ -51,17 +52,17 @@ func rawCreateSession(t *testing.T, ctx context.Context, sc *uasc.SecureChannel,
 }
 
 // rawActivate activates the session tok names, anonymously, on sc.
-func rawActivate(ctx context.Context, sc *uasc.SecureChannel, tok *ua.NodeID) error {
+func rawActivate(ctx context.Context, sc *cuasc.SecureChannel, tok *ua.NodeID) error {
 	req := &ua.ActivateSessionRequest{
 		ClientSignature:    &ua.SignatureData{},
-		UserIdentityToken:  ua.NewExtensionObject(&ua.AnonymousIdentityToken{PolicyID: "Anonymous"}),
+		UserIdentityToken:  ua.NewExtensionObject(&ua.AnonymousIdentityToken{PolicyID: "anonymous_none"}),
 		UserTokenSignature: &ua.SignatureData{},
 	}
 	return sc.SendRequest(ctx, req, tok, func(ua.Response) error { return nil })
 }
 
 // rawRead reads the server's NamespaceArray on sc with tok as the authentication token.
-func rawRead(ctx context.Context, sc *uasc.SecureChannel, tok *ua.NodeID) error {
+func rawRead(ctx context.Context, sc *cuasc.SecureChannel, tok *ua.NodeID) error {
 	req := &ua.ReadRequest{
 		NodesToRead: []*ua.ReadValueID{{NodeID: ua.NewNumericNodeID(0, id.Server_NamespaceArray), AttributeID: ua.AttributeIDValue, DataEncoding: &ua.QualifiedName{}}},
 	}
@@ -252,4 +253,53 @@ func TestChannelCloseWaitsForItsRequests(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("the session outlived its channel")
+}
+
+// ActivateSession reads the user identity token: only anonymous is
+// advertised, so a UserName token, or an anonymous one naming a policy no
+// endpoint offers, is Bad_IdentityTokenInvalid. A null token and an empty
+// policyId (gopcua's client sends one) are anonymous. gopcua's server never
+// looked at the token.
+func TestActivateSessionChecksTheIdentityToken(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	endpoint, _ := startTestServer(t)
+	sc := channel(t, ctx, endpoint)
+	activate := func(tok any) error {
+		req := &ua.ActivateSessionRequest{ClientSignature: &ua.SignatureData{}, UserTokenSignature: &ua.SignatureData{}}
+		if tok != nil {
+			req.UserIdentityToken = ua.NewExtensionObject(tok)
+		} else {
+			req.UserIdentityToken = ua.NewExtensionObject(nil)
+		}
+		return sc.SendRequest(ctx, req, rawCreateSession(t, ctx, sc, endpoint), func(ua.Response) error { return nil })
+	}
+	for _, c := range []struct {
+		name string
+		tok  any
+		want error
+	}{
+		{"advertised anonymous", &ua.AnonymousIdentityToken{PolicyID: "anonymous_none"}, nil},
+		{"anonymous, empty policy", &ua.AnonymousIdentityToken{}, nil},
+		{"null token", nil, nil},
+		{"anonymous, unknown policy", &ua.AnonymousIdentityToken{PolicyID: "Anonymous"}, ua.StatusBadIdentityTokenInvalid},
+		{"user name", &ua.UserNameIdentityToken{PolicyID: "anonymous_none", UserName: "op", Password: []byte("x")}, ua.StatusBadIdentityTokenInvalid},
+	} {
+		if err := activate(c.tok); err != c.want {
+			t.Errorf("%s: %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
+// A token whose type the decoder did not know (a type id but no body) is not
+// a null token, so it is not anonymous.
+func TestMalformedIdentityTokenIsNotAnonymous(t *testing.T) {
+	srv := New(EndPoint("127.0.0.1", 0), EnableSecurity("None", ua.MessageSecurityModeNone), EnableAuthMode(ua.UserTokenTypeAnonymous))
+	srv.initEndpoints()
+	if _, code := srv.checkIdentity(&ua.ExtensionObject{TypeID: ua.NewFourByteExpandedNodeID(0, 321)}); code != ua.StatusBadIdentityTokenInvalid {
+		t.Errorf("a typed token with no body: %v, want Bad_IdentityTokenInvalid", code)
+	}
+	if id, code := srv.checkIdentity(ua.NewExtensionObject(nil)); code != ua.StatusOK || id != "anonymous" {
+		t.Errorf("a null token: %q %v, want anonymous", id, code)
+	}
 }

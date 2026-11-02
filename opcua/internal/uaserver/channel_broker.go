@@ -2,7 +2,6 @@ package uaserver
 
 import (
 	"context"
-	"crypto/rsa"
 	"io"
 	mrand "math/rand"
 	"sync"
@@ -10,7 +9,7 @@ import (
 
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 type channelBroker struct {
@@ -72,10 +71,10 @@ func newChannelBroker(logger Logger) *channelBroker {
 // of connections and starts waiting for data on it.  Data is pushed onto the broker's
 // Response channel
 // Blocks until the context is done, the connection closes, or a critical error
-func (c *channelBroker) RegisterConn(ctx context.Context, conn *uacp.Conn, localCert []byte, localKey *rsa.PrivateKey) error {
-	cfg := defaultChannelConfig()
-	cfg.Certificate = localCert
-	cfg.LocalKey = localKey
+//
+// cfg is the new channel's own configuration: the server's certificate and
+// key, and the hooks that decide which security it may open with.
+func (c *channelBroker) RegisterConn(ctx context.Context, conn *uacp.Conn, cfg *uasc.Config) error {
 
 	c.mu.Lock()
 	c.secureChannelID++
@@ -158,6 +157,7 @@ outer:
 	delete(c.conns, secureChannelID)
 	c.mu.Unlock()
 	conn.Close()
+	sc.Release()
 	select {
 	case c.gone <- sc:
 	case <-ctx.Done():

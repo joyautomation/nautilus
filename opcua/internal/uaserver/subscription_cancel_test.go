@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
+	"github.com/joyautomation/nautilus/opcua/internal/require"
 
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // startSubscriptionTestServer starts a server on a free port and returns its endpoint and a
@@ -36,7 +36,7 @@ func startTestServer(t *testing.T, setup ...func(*Server)) (string, *Server) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	require.NoError(t, ln.Close())
 
-	srv := New(EndPoint("127.0.0.1", port), EnableSecurity("None", ua.MessageSecurityModeNone))
+	srv := New(EndPoint("127.0.0.1", port), EnableSecurity("None", ua.MessageSecurityModeNone), EnableAuthMode(ua.UserTokenTypeAnonymous))
 	// This package leaves Read to the server that embeds it (opcua/server);
 	// the client's Connect reads the NamespaceArray, so the test registers
 	// the plainest Read there is.

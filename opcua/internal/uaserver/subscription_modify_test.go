@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
+	"github.com/joyautomation/nautilus/opcua/internal/require"
 )
 
 // A Modify that arrives after the subscription's task has returned changes

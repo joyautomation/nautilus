@@ -13,7 +13,7 @@ import (
 
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uapolicy"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // Option is an option function type to modify the configuration.
@@ -93,6 +93,15 @@ func EnableSecurity(secPolicy string, secMode ua.MessageSecurityMode) Option {
 
 		s.enabledSec = append(s.enabledSec, sec)
 	}
+}
+
+// VerifyPeer sets the check every secured channel's client certificate
+// must pass when the channel opens and at each renewal: a ua.StatusCode
+// error refuses the channel with that code (Bad_CertificateUntrusted for a
+// certificate not on the trust list). Without it every certificate is
+// trusted, as in gopcua.
+func VerifyPeer(fn func(cert []byte) error) Option {
+	return func(s *serverConfig) { s.verifyPeer = fn }
 }
 
 // EnableAuthMode registers a new user authentication mode to the server.

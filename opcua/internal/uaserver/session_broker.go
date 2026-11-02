@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gopcua/opcua/ua"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // authTokenLength is the size of a session's authentication token, in bytes. The token is the
@@ -35,6 +35,9 @@ type session struct {
 	// another channel (Part 4 §5.6.3, "transfer") is not supported; a client that lost its
 	// channel creates a new session.
 	channel *uasc.SecureChannel
+	// identity is who ActivateSession's user identity token says the user is:
+	// "anonymous", the only kind advertised (Part 4 §5.6.3).
+	identity string
 	// activated is set by the first successful ActivateSession. Until then the session can be
 	// activated or closed and nothing else.
 	activated bool

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/gopcua/opcua/ua"
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
+	"github.com/joyautomation/nautilus/opcua/internal/require"
 )
 
 // TestRegisterNodesIdentity checks that RegisterNodes echoes the requested

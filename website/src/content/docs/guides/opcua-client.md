@@ -133,7 +133,13 @@ drops what it queued.
 the driver takes the strongest endpoint the server offers. Any policy but
 `None` needs a client certificate, generated self-signed into `pki-dir` on
 first use, with the application URI as a URI SAN. The server must trust it
-(on Ignition: *Config > OPC UA > Security > Trusted Certificates*). The
+(on Ignition: *Config > OPC UA > Security > Trusted Certificates*; on
+another nautilus controller: `naut opcua trust <thumbprint>` there, see
+[Approving a client](/guides/opcua-server/#approving-a-client)). A nautilus
+server offers secure endpoints too, so a client left on the default picks
+one of them, and its first connection is refused until that server trusts
+its certificate. Set `security: None` only where an unsecured, read-only
+link is what you want. The
 password for `username:` is never in the manifest: set
 `NAUTILUS_OPCUA_PASSWORD`.
 
