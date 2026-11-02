@@ -36,7 +36,7 @@ func startTestServer(t *testing.T, setup ...func(*Server)) (string, *Server) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	require.NoError(t, ln.Close())
 
-	srv := New(EndPoint("127.0.0.1", port), EnableSecurity("None", ua.MessageSecurityModeNone))
+	srv := New(EndPoint("127.0.0.1", port), EnableSecurity("None", ua.MessageSecurityModeNone), EnableAuthMode(ua.UserTokenTypeAnonymous))
 	// This package leaves Read to the server that embeds it (opcua/server);
 	// the client's Connect reads the NamespaceArray, so the test registers
 	// the plainest Read there is.

@@ -45,6 +45,21 @@ type Config struct {
 	// This field shall be null if the Message is not encrypted.
 	Thumbprint []byte
 
+	// Allow, on a server channel, is the allowlist of security policy and
+	// mode pairs an OpenSecureChannel may ask for: anything it refuses is
+	// answered Bad_SecurityPolicyRejected and the channel closes. gopcua's
+	// server adopted whatever a client asked for, advertised or not. Nil
+	// allows every pair (the client side, and tests).
+	Allow func(policyURI string, mode ua.MessageSecurityMode) bool
+
+	// VerifyPeer, on a server channel, decides whether the client
+	// certificate of a channel that is not None is trusted: a ua.StatusCode
+	// error (Bad_CertificateUntrusted, Bad_CertificateInvalid, ...) refuses
+	// the channel with that code. It runs on every OpenSecureChannel,
+	// renewals too, so a certificate taken off the trust list stops at the
+	// channel's next renewal. Nil trusts every certificate, as gopcua did.
+	VerifyPeer func(cert []byte) error
+
 	// RemoteCertificate is the X.509 Certificate for the receiving instance.
 	// Used to encrypt the message chunks in the OpenSecureChannel phase.
 	RemoteCertificate []byte

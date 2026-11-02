@@ -95,6 +95,15 @@ func EnableSecurity(secPolicy string, secMode ua.MessageSecurityMode) Option {
 	}
 }
 
+// VerifyPeer sets the check every secured channel's client certificate
+// must pass when the channel opens and at each renewal: a ua.StatusCode
+// error refuses the channel with that code (Bad_CertificateUntrusted for a
+// certificate not on the trust list). Without it every certificate is
+// trusted, as in gopcua.
+func VerifyPeer(fn func(cert []byte) error) Option {
+	return func(s *serverConfig) { s.verifyPeer = fn }
+}
+
 // EnableAuthMode registers a new user authentication mode to the server.
 // All AuthModes except Anonymous require encryption by default, so EnableSecurity()
 // must also be called with at least one non-"None" SecurityPolicy

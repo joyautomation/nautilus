@@ -5,6 +5,7 @@
 package uasc
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -173,6 +174,20 @@ type SecureChannel struct {
 	// kind indicates whether this is a server or a client channel.
 	kind channelKind
 
+	// sec is the security a server channel was opened with: set by its
+	// first successful OpenSecureChannel, held to by every renewal, and
+	// read by handlers through the accessors (SecurityPolicyURI,
+	// SecurityMode, RemoteCertificate) from another goroutine.
+	secMu     sync.RWMutex
+	secOpened bool
+	sec       channelSecurity
+
+	// endErr, on a client channel, is the status code of the transport
+	// Error message the server closed it with, for the requests still
+	// waiting on it to return in place of io.EOF.
+	endMu  sync.Mutex
+	endErr error
+
 	closeOnce sync.Once
 }
 
@@ -265,6 +280,11 @@ func (s *SecureChannel) dispatcher() {
 			return
 		default:
 			msg := s.Receive(ctx)
+			if code, ok := msg.Err.(ua.StatusCode); ok {
+				s.endMu.Lock()
+				s.endErr = code
+				s.endMu.Unlock()
+			}
 			if msg.Err != nil {
 				select {
 				case <-s.closing:
@@ -329,6 +349,7 @@ func (s *SecureChannel) Receive(ctx context.Context) *MessageBody {
 			}
 
 			if err != nil {
+				s.refuse(err)
 				return &MessageBody{Err: err}
 			}
 
@@ -415,6 +436,7 @@ func (s *SecureChannel) Receive(ctx context.Context) *MessageBody {
 				err := s.handleOpenSecureChannelRequest(reqID, req)
 				if err != nil {
 					debug.Printf("uasc %d/%d: handling %T failed: %v", s.c.ID(), reqID, req, err)
+					s.refuse(err)
 					return &MessageBody{Err: err}
 				}
 				return &MessageBody{}
@@ -437,13 +459,16 @@ func (s *SecureChannel) Receive(ctx context.Context) *MessageBody {
 func (s *SecureChannel) readChunk() (*MessageChunk, error) {
 	// read a full message from the underlying conn.
 	b, err := s.c.Receive()
-	if err == io.EOF || len(b) == 0 {
-		return nil, io.EOF
-	}
-	// do not wrap this error since it hides conn error
+	// A transport Error message (Part 6 §7.1.2.5) is the peer's reason for
+	// closing: its status code, not an EOF. gopcua tested for an empty read
+	// first, and an Error message reads empty, so a client refused with
+	// Bad_CertificateUntrusted saw only EOF.
 	var uacperr *uacp.Error
 	if errors.As(err, &uacperr) {
-		return nil, err
+		return nil, ua.StatusCode(uacperr.ErrorCode)
+	}
+	if err == io.EOF || len(b) == 0 {
+		return nil, io.EOF
 	}
 	if err != nil {
 		return nil, errors.Errorf("sechan: read header failed: %s %#v", err, err)
@@ -488,7 +513,7 @@ func (s *SecureChannel) readChunk() (*MessageChunk, error) {
 
 			remoteCert, err := uapolicy.ParseCertificate(s.cfg.RemoteCertificate)
 			if err != nil {
-				return nil, err
+				return nil, ua.StatusBadCertificateInvalid
 			}
 			remoteKey, ok := remoteCert.PublicKey.(*rsa.PublicKey)
 			if !ok {
@@ -496,7 +521,7 @@ func (s *SecureChannel) readChunk() (*MessageChunk, error) {
 			}
 			algo, err := uapolicy.Asymmetric(s.cfg.SecurityPolicyURI, s.openingInstance.sc.cfg.LocalKey, remoteKey)
 			if err != nil {
-				return nil, err
+				return nil, ua.StatusBadSecurityPolicyRejected
 			}
 
 			s.openingInstance.algo = algo
@@ -746,6 +771,16 @@ func (s *SecureChannel) handleOpenSecureChannelRequest(reqID uint32, svc ua.Requ
 		return ua.StatusBadSecureChannelTokenUnknown
 	}
 
+	// The policy came from the OPN's security header (readChunk), the mode
+	// from the request; the certificate only counts under a real policy.
+	want := channelSecurity{policy: s.cfg.SecurityPolicyURI, mode: req.SecurityMode}
+	if want.policy != ua.SecurityPolicyURINone {
+		want.cert = s.cfg.RemoteCertificate
+	}
+	if err := s.checkOpen(want); err != nil {
+		return err
+	}
+
 	s.cfg.Lifetime = req.RequestedLifetime
 	s.cfg.SecurityMode = req.SecurityMode
 
@@ -829,7 +864,80 @@ func (s *SecureChannel) handleOpenSecureChannelRequest(reqID uint32, svc ua.Requ
 	s.activeInstance = instance
 	s.instancesMu.Unlock()
 
+	s.secMu.Lock()
+	s.secOpened, s.sec = true, want
+	s.secMu.Unlock()
+
 	return nil
+}
+
+// channelSecurity is the security policy, mode and client certificate a
+// server channel runs under.
+type channelSecurity struct {
+	policy string
+	mode   ua.MessageSecurityMode
+	cert   []byte
+}
+
+// checkOpen decides whether an OpenSecureChannel request may have the
+// security it asks for (want). A renewal keeps the security the channel was
+// opened with: gopcua re-read the policy from each OPN, so a renewal could
+// move a channel to None (Bad_SecurityChecksFailed here). Then the pair must
+// be one the server allows (Bad_SecurityPolicyRejected), and the client's
+// certificate one it trusts (VerifyPeer's code).
+func (s *SecureChannel) checkOpen(want channelSecurity) error {
+	s.secMu.RLock()
+	opened, had := s.secOpened, s.sec
+	s.secMu.RUnlock()
+	if opened && (want.policy != had.policy || want.mode != had.mode || !bytes.Equal(want.cert, had.cert)) {
+		return ua.StatusBadSecurityChecksFailed
+	}
+	if (want.policy == ua.SecurityPolicyURINone) != (want.mode == ua.MessageSecurityModeNone) || want.mode == ua.MessageSecurityModeInvalid {
+		return ua.StatusBadSecurityPolicyRejected
+	}
+	if s.cfg.Allow != nil && !s.cfg.Allow(want.policy, want.mode) {
+		return ua.StatusBadSecurityPolicyRejected
+	}
+	if want.policy != ua.SecurityPolicyURINone && s.cfg.VerifyPeer != nil {
+		if err := s.cfg.VerifyPeer(want.cert); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refuse tells the client why its channel is being closed, when err is a
+// status code: a transport Error message (Part 6 §7.1.2.5) before the close.
+// gopcua's server only closed, so a client refused for an untrusted
+// certificate saw a dropped connection, not Bad_CertificateUntrusted.
+func (s *SecureChannel) refuse(err error) {
+	if code, ok := err.(ua.StatusCode); ok && s.kind == server {
+		s.c.SendError(code)
+	}
+}
+
+// SecurityPolicyURI is the security policy a server channel was opened
+// with; "" before its first OpenSecureChannel.
+func (s *SecureChannel) SecurityPolicyURI() string {
+	s.secMu.RLock()
+	defer s.secMu.RUnlock()
+	return s.sec.policy
+}
+
+// SecurityMode is the message security mode a server channel was opened
+// with; Invalid before its first OpenSecureChannel.
+func (s *SecureChannel) SecurityMode() ua.MessageSecurityMode {
+	s.secMu.RLock()
+	defer s.secMu.RUnlock()
+	return s.sec.mode
+}
+
+// RemoteCertificate is the client certificate (DER) a server channel was
+// opened with, nil under None. It is the certificate VerifyPeer accepted.
+func (s *SecureChannel) RemoteCertificate() []byte {
+	s.secMu.RLock()
+	defer s.secMu.RUnlock()
+	return s.sec.cert
 }
 
 func (s *SecureChannel) scheduleRenewal(instance *channelInstance) {
@@ -936,6 +1044,12 @@ func (s *SecureChannel) sendRequestWithTimeout(
 		return ctx.Err()
 	case <-s.disconnected:
 		s.popHandler(reqID)
+		s.endMu.Lock()
+		err := s.endErr
+		s.endMu.Unlock()
+		if err != nil {
+			return err // the server said why it closed
+		}
 		return io.EOF
 	case msg := <-ch:
 		if msg.Err != nil {

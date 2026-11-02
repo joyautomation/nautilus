@@ -55,7 +55,7 @@ func rawCreateSession(t *testing.T, ctx context.Context, sc *cuasc.SecureChannel
 func rawActivate(ctx context.Context, sc *cuasc.SecureChannel, tok *ua.NodeID) error {
 	req := &ua.ActivateSessionRequest{
 		ClientSignature:    &ua.SignatureData{},
-		UserIdentityToken:  ua.NewExtensionObject(&ua.AnonymousIdentityToken{PolicyID: "Anonymous"}),
+		UserIdentityToken:  ua.NewExtensionObject(&ua.AnonymousIdentityToken{PolicyID: "anonymous_none"}),
 		UserTokenSignature: &ua.SignatureData{},
 	}
 	return sc.SendRequest(ctx, req, tok, func(ua.Response) error { return nil })
@@ -253,4 +253,40 @@ func TestChannelCloseWaitsForItsRequests(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("the session outlived its channel")
+}
+
+// ActivateSession reads the user identity token: only anonymous is
+// advertised, so a UserName token, or an anonymous one naming a policy no
+// endpoint offers, is Bad_IdentityTokenInvalid. A null token and an empty
+// policyId (gopcua's client sends one) are anonymous. gopcua's server never
+// looked at the token.
+func TestActivateSessionChecksTheIdentityToken(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	endpoint, _ := startTestServer(t)
+	sc := channel(t, ctx, endpoint)
+	activate := func(tok any) error {
+		req := &ua.ActivateSessionRequest{ClientSignature: &ua.SignatureData{}, UserTokenSignature: &ua.SignatureData{}}
+		if tok != nil {
+			req.UserIdentityToken = ua.NewExtensionObject(tok)
+		} else {
+			req.UserIdentityToken = ua.NewExtensionObject(nil)
+		}
+		return sc.SendRequest(ctx, req, rawCreateSession(t, ctx, sc, endpoint), func(ua.Response) error { return nil })
+	}
+	for _, c := range []struct {
+		name string
+		tok  any
+		want error
+	}{
+		{"advertised anonymous", &ua.AnonymousIdentityToken{PolicyID: "anonymous_none"}, nil},
+		{"anonymous, empty policy", &ua.AnonymousIdentityToken{}, nil},
+		{"null token", nil, nil},
+		{"anonymous, unknown policy", &ua.AnonymousIdentityToken{PolicyID: "Anonymous"}, ua.StatusBadIdentityTokenInvalid},
+		{"user name", &ua.UserNameIdentityToken{PolicyID: "anonymous_none", UserName: "op", Password: []byte("x")}, ua.StatusBadIdentityTokenInvalid},
+	} {
+		if err := activate(c.tok); err != c.want {
+			t.Errorf("%s: %v, want %v", c.name, err, c.want)
+		}
+	}
 }
