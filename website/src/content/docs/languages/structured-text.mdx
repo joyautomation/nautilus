@@ -157,10 +157,26 @@ Literals cover decimals and exponents (`1.5e3`), based integers (`16#FF`,
 durations (`T#5s`, `T#500ms`, `T#1h30m`). Comments are `(* … *)`, which
 nest, or `//` to end of line.
 
-`RETAIN` parses and changes nothing at runtime today. Every program `VAR` and
-function block instance already keeps its value from scan to scan, and a warm
-swap carries that state across an online edit by name and type. Persistence
-across a restart is configured per tag on the retain store.
+Every program `VAR` and function block instance keeps its value from scan to
+scan, and a warm swap carries that state across an online edit by name and
+type. `RETAIN` is about restarts: with a [`retain:`
+section](/guides/redundancy/#retained-state) in the manifest, a program's
+`VAR RETAIN` variables survive a restart, a failover and a redeploy, as
+CODESYS's do. That includes a function block instance declared there, with
+its own variables (a built-in timer's elapsed time is not kept, so a retained
+`TON` starts timing again). A library's `VAR_GLOBAL RETAIN` keeps its globals
+the same way. Without a `retain:` section, `RETAIN` changes nothing.
+
+```iecst
+PROGRAM Pumps
+VAR RETAIN
+  runHours : REAL;      (* survives a restart *)
+  p1Totals : RunHours;  (* an FB instance, with its own variables *)
+END_VAR
+VAR
+  lastLevel : REAL;     (* starts over *)
+END_VAR
+```
 
 ## Statements and expressions
 

@@ -307,3 +307,22 @@ claims:
     tests:
       - go ./runtime TestRetainedArrayLengthChange
       - go ./runtime TestRetainedStructTagRestoresBeforeFirstScan
+
+  - id: RED-030
+    claim: >-
+      Beside the setpoints, the retain store keeps every tag marked retain:
+      true in the manifest or declared in a library's VAR_GLOBAL RETAIN, and
+      every program's VAR RETAIN variables; other state re-seeds. retain:
+      true on an input or an output is refused.
+    source: "#retained-state"
+    tests:
+      - go ./runtime TestVarRetainAndRetainedStateSurviveARestart
+      - go ./runtime TestRetainRefusedOnInputsAndOutputs
+      - go ./internal/project TestRetainMarksTags
+      - go ./internal/project TestRetainOnAnInputIsRefused
+    note: >-
+      The restart goes through the file store, so values make the JSON round
+      trip a controller's do. Black-box finding 2026-11-01-002 F-05 asked for
+      this; its check assumes every state tag is kept and, by the decision
+      to make retention opt-in, passes only on a project that marks the tag
+      (it does, as a copy with retain: true on P1_Stats).

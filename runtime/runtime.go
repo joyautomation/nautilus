@@ -62,8 +62,9 @@ type Options struct {
 	Retain retain.Store
 	// RetainTags names the tags Retain persists. Empty means every
 	// RoleSetpoint tag from Tags — the operator-writable values are exactly
-	// what must survive a restart, while state/inputs re-derive from the
-	// field. Ignored when Retain is nil.
+	// what must survive a restart — plus every tag marked Retain (state the
+	// logic owns and must keep, TagDef.Retain). Other state re-seeds and
+	// inputs re-read from the field. Ignored when Retain is nil.
 	RetainTags []string
 	// AlwaysWriteOutputs restores the pre-generation behaviour: call the
 	// driver's WriteOutputs on EVERY scan, even when not one output tag
@@ -262,6 +263,10 @@ type Runtime struct {
 	// untypedComms names the Comms inputs New could not seed because no
 	// type was knowable for them — see expandTags and UntypedCommsInputs.
 	untypedComms []string
+
+	// pendingLocals are the VAR RETAIN locals loadRetained read, held for
+	// takeover to write back once it has reset the frames.
+	pendingLocals map[string]map[string]any
 }
 
 // onScanEntry is one registered OnScan observer, identified by an id so
@@ -414,6 +419,15 @@ func New(o Options) (*Runtime, error) {
 	if err := checkBindings(prog, tasks, o.Tags); err != nil {
 		return nil, err
 	}
+	for _, d := range o.Tags {
+		if d.Retain && (d.Role == RoleInput || d.Role == RoleOutput) {
+			what := "an input comes back from the field"
+			if d.Role == RoleOutput {
+				what = "an output comes back from the logic"
+			}
+			return nil, fmt.Errorf("tag %s: retain is for state the logic owns; %s on the first scan, so it is never retained", d.Name, what)
+		}
+	}
 	var untyped []string
 	if o, untyped, err = expandTags(o, types, unionGlobals(prog, tasks)); err != nil {
 		return nil, err
@@ -457,7 +471,7 @@ func New(o Options) (*Runtime, error) {
 		// RoleSetpoint tag. State re-seeds, inputs re-read from the field,
 		// outputs re-derive from logic — setpoints are what a restart loses.
 		for _, d := range o.Tags {
-			if d.Role == RoleSetpoint && d.Name != "" {
+			if (d.Role == RoleSetpoint || d.Retain) && d.Name != "" {
 				retainTags = append(retainTags, d.Name)
 			}
 		}

@@ -162,7 +162,10 @@ type FileGlobal struct {
 	Name     string
 	Datatype string
 	Constant bool
-	Pos      Pos
+	// Retain: the block is VAR_GLOBAL RETAIN (or PERSISTENT), so the global
+	// survives a restart in the retain store.
+	Retain bool
+	Pos    Pos
 }
 
 // FileGlobals lists the globals a parsed source's file-level VAR_GLOBAL
@@ -174,7 +177,7 @@ func FileGlobals(prog *Program) []FileGlobal {
 			continue
 		}
 		for _, vd := range vb.Variables {
-			out = append(out, FileGlobal{Name: vd.Name, Datatype: vd.Datatype, Constant: vb.Constant, Pos: vd.Pos})
+			out = append(out, FileGlobal{Name: vd.Name, Datatype: vd.Datatype, Constant: vb.Constant, Retain: vb.Retain, Pos: vd.Pos})
 		}
 	}
 	return out

@@ -322,6 +322,11 @@ type TagConfig struct {
 	// ("Local:1:I.Data.3"). The nautilus runtime ignores it: the tag is a
 	// tag. It is the one place a hardware address lives in a project.
 	Alias string `yaml:"alias"`
+	// Retain keeps the tag's value across a restart in the retain store,
+	// beside the setpoints (which are always kept): for state the logic
+	// owns, such as run hours or a start count. Needs a retain: section.
+	// An input or an output cannot be retained.
+	Retain bool `yaml:"retain"`
 }
 
 // MetaConfig is HMI documentation for a tag, kept separate from the tag's
@@ -968,7 +973,7 @@ func gvlTags(libs []string, declared []runtime.TagDef) []runtime.TagDef {
 				continue
 			}
 			have[ir.NameKey(g.Name)] = true
-			out = append(out, runtime.TagDef{Name: g.Name, Role: runtime.RoleState, GVL: true})
+			out = append(out, runtime.TagDef{Name: g.Name, Role: runtime.RoleState, GVL: true, Retain: g.Retain})
 		}
 	}
 	return out
@@ -1131,6 +1136,7 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 			return nil, fmt.Errorf("tag %s: role must be input, output, setpoint, or state (got %q)", t.Name, t.Role)
 		}
 		def.Type = t.Type
+		def.Retain = t.Retain
 		defs = append(defs, def)
 	}
 	return defs, nil
