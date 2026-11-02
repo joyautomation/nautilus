@@ -832,6 +832,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			return nil, err
 		}
 	}
+	if m.OPCUA != nil && m.OPCUA.ApplicationURI != "" {
+		if err := opcuaserver.CheckApplicationURI(m.OPCUA.ApplicationURI); err != nil {
+			return nil, err
+		}
+	}
 	if m.Sparkplug != nil {
 		switch m.Sparkplug.PrimaryHostOffline {
 		case "", "buffer":
@@ -1624,6 +1629,11 @@ type OPCUAConfig struct {
 	// "host:port"); the default is opc.tcp://localhost:4840 — loopback, so
 	// exposing a controller to the network is a line an author writes.
 	Endpoint string `yaml:"endpoint"`
+	// ApplicationURI is the server's ApplicationUri, the name an OPC UA
+	// client keys its connection on; the default is
+	// urn:joyautomation:nautilus:<project>. Set it when two controllers
+	// run a project of the same name on one network.
+	ApplicationURI string `yaml:"application-uri"`
 }
 
 // OPCUA builds the manifest's OPC UA server over a compiled runtime, or
@@ -1634,5 +1644,5 @@ func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) 
 	if c == nil {
 		return nil, nil
 	}
-	return opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name})
+	return opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI})
 }

@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/schema"
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
@@ -62,13 +61,19 @@ type serverConfig struct {
 	privateKey     *rsa.PrivateKey
 	certificate    []byte
 	applicationURI string
+	// explicitURI: applicationURI came from the ApplicationURI option, and
+	// a Certificate option leaves it alone.
+	explicitURI bool
 
 	endpoints []string
 
 	applicationName  string
 	manufacturerName string
 	productName      string
+	productURI       string
 	softwareVersion  string
+	buildNumber      string
+	buildDate        time.Time
 
 	enabledSec  []security
 	enabledAuth []authMode
@@ -106,10 +111,11 @@ type security struct {
 func New(opts ...Option) *Server {
 	cfg := &serverConfig{
 		cap:              capabilities,
-		applicationName:  "GOPCUA",               // override with the ServerName option
-		manufacturerName: "The gopcua Team",      // override with the ManufacturerName option
-		productName:      "gopcua OPC/UA Server", // override with the ProductName option
-		softwareVersion:  "0.0.0-dev",            // override with the SoftwareVersion option
+		applicationName:  "GOPCUA",                          // override with the ServerName option
+		manufacturerName: "The gopcua Team",                 // override with the ManufacturerName option
+		productName:      "gopcua OPC/UA Server",            // override with the ProductName option
+		productURI:       "https://github.com/gopcua/opcua", // override with the ProductURI option
+		softwareVersion:  "0.0.0-dev",                       // override with the SoftwareVersion option
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -133,12 +139,12 @@ func New(opts ...Option) *Server {
 			CurrentTime: time.Now(),
 			State:       ua.ServerStateSuspended,
 			BuildInfo: &ua.BuildInfo{
-				ProductURI:       "https://github.com/gopcua/opcua",
+				ProductURI:       cfg.productURI,
 				ManufacturerName: cfg.manufacturerName,
 				ProductName:      cfg.productName,
-				SoftwareVersion:  "0.0.0-dev",
-				BuildNumber:      "",
-				BuildDate:        time.Time{},
+				SoftwareVersion:  cfg.softwareVersion,
+				BuildNumber:      cfg.buildNumber,
+				BuildDate:        cfg.buildDate,
 			},
 			SecondsTillShutdown: 0,
 			ShutdownReason:      &ua.LocalizedText{},
@@ -163,14 +169,7 @@ func New(opts ...Option) *Server {
 	}
 	s.ImportNodeSet(&nodes)
 
-	s.namespaces[0].AddNode(CurrentTimeNode())
-	s.namespaces[0].AddNode(NamespacesNode(s))
-	for _, n := range ServerStatusNodes(s, s.namespaces[0].Node(ua.NewNumericNodeID(0, id.Server))) {
-		s.namespaces[0].AddNode(n)
-	}
-	for _, n := range ServerCapabilitiesNodes(s) {
-		s.namespaces[0].AddNode(n)
-	}
+	setServerObjectValues(s)
 
 	return s
 }
@@ -387,7 +386,7 @@ func (s *Server) initEndpoints() {
 				SecurityLevel: secLevel,
 				Server: &ua.ApplicationDescription{
 					ApplicationURI: s.cfg.applicationURI,
-					ProductURI:     "urn:github.com:gopcua:server",
+					ProductURI:     s.cfg.productURI,
 					ApplicationName: &ua.LocalizedText{
 						EncodingMask: ua.LocalizedTextText,
 						Text:         s.cfg.applicationName,

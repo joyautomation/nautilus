@@ -8,51 +8,6 @@ import (
 	"github.com/joyautomation/nautilus/opcua/internal/uaserver/attrs"
 )
 
-func CurrentTimeNode() *Node {
-	return NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_CurrentTime),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("CurrentTime")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(time.Now()) },
-	)
-}
-
-func NamespacesNode(s *Server) *Node {
-	return NewNode(
-		ua.NewNumericNodeID(0, id.Server_NamespaceArray),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("Namespaces")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassObject)),
-		},
-		nil,
-		func() *ua.DataValue {
-			n := s.Namespaces()
-			ns := make([]string, len(n))
-			for i := range ns {
-				ns[i] = n[i].Name()
-			}
-			return DataValueFromValue(ns)
-		},
-	)
-}
-
-func ServerCapabilitiesNodes(s *Server) []*Node {
-	var nodes []*Node
-	nodes = append(nodes, NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("MaxNodesPerRead")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.cap.OperationalLimits.MaxNodesPerRead) },
-	))
-	return nodes
-}
-
 func RootNode() *Node {
 	return NewNode(
 		ua.NewNumericNodeID(0, id.RootFolder),
@@ -66,177 +21,94 @@ func RootNode() *Node {
 	)
 }
 
-func ServerStatusNodes(s *Server, ServerNode *Node) []*Node {
-
-	/*
-		Server_ServerArray                                                                                                                                                    = 2254
-		Server_NamespaceArray                                                                                                                                                 = 2255
-		Server_ServerStatus_BuildInfo                                                                                                                                         = 2260
-		Server_ServerStatus_BuildInfo_ProductName                                                                                                                             = 2261
-		Server_ServerStatus_BuildInfo_ProductURI                                                                                                                              = 2262
-		Server_ServerStatus_BuildInfo_ManufacturerName                                                                                                                        = 2263
-		Server_ServerStatus_BuildInfo_SoftwareVersion                                                                                                                         = 2264
-		Server_ServerStatus_BuildInfo_BuildNumber                                                                                                                             = 2265
-		Server_ServerStatus_BuildInfo_BuildDate                                                                                                                               = 2266
-		Server_ServiceLevel                                                                                                                                                   = 2267
-		Server_ServerCapabilities                                                                                                                                             = 2268
-		Server_ServerCapabilities_ServerProfileArray                                                                                                                          = 2269
-		Server_ServerCapabilities_LocaleIDArray                                                                                                                               = 2271
-		Server_ServerCapabilities_MinSupportedSampleRate                                                                                                                      = 2272
-		Server_ServerDiagnostics                                                                                                                                              = 2274
-		Server_ServerDiagnostics_ServerDiagnosticsSummary                                                                                                                     = 2275
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_ServerViewCount                                                                                                     = 2276
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_CurrentSessionCount                                                                                                 = 2277
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_CumulatedSessionCount                                                                                               = 2278
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_SecurityRejectedSessionCount                                                                                        = 2279
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_SessionTimeoutCount                                                                                                 = 2281
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_SessionAbortCount                                                                                                   = 2282
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_PublishingIntervalCount                                                                                             = 2284
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_CurrentSubscriptionCount                                                                                            = 2285
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_CumulatedSubscriptionCount                                                                                          = 2286
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_SecurityRejectedRequestsCount                                                                                       = 2287
-		Server_ServerDiagnostics_ServerDiagnosticsSummary_RejectedRequestsCount                                                                                               = 2288
-		Server_ServerDiagnostics_SamplingIntervalDiagnosticsArray                                                                                                             = 2289
-		Server_ServerDiagnostics_SubscriptionDiagnosticsArray                                                                                                                 = 2290
-		Server_ServerDiagnostics_EnabledFlag                                                                                                                                  = 2294
-		Server_VendorServerInfo                                                                                                                                               = 2295
-		Server_ServerRedundancy                                                                                                                                               = 2296
-	*/
-
-	sStatus := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("Status")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(ua.NewExtensionObject(s.Status())) },
-	)
-
-	sState := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_State),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("ServerStatus")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(int32(s.Status().State)) },
-	)
-	mName := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_ManufacturerName),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("ProductName")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.manufacturerName) },
-	)
-	pName := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_ProductName),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("ProductName")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.productName) },
-	)
-
-	pURI := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_ProductURI),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("ProductURI")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.applicationURI) },
-	)
-
-	bInfo := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("BuildInfo")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue("") },
-	)
-	sVersion := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_SoftwareVersion),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("SoftwareVersion")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.softwareVersion) },
-	)
-
-	bNumber := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_BuildNumber),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("BuildNumber")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(s.cfg.softwareVersion) },
-	)
-
-	ts := time.Now()
-	bDate := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_BuildDate),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("BuildDate")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(ts) },
-	)
-	timeStart := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_StartTime),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("StartTime")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(ts) },
-	)
-	timeCurrent := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_CurrentTime),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("CurrentTime")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(time.Now()) },
-	)
-
-	//Server_ServerStatus_SecondsTillShutdown                                                                                                                               = 2992
-	//Server_ServerStatus_ShutdownReason                                                                                                                                    = 2993
-	sTillShutdown := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_SecondsTillShutdown),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("SecondsTillShutdown")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(int32(0)) },
-	)
-	sReason := NewNode(
-		ua.NewNumericNodeID(0, id.Server_ServerStatus_ShutdownReason),
-		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("ShutdownReason")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassVariable)),
-		},
-		nil,
-		func() *ua.DataValue { return DataValueFromValue(int32(0)) },
-	)
-
-	nodes := []*Node{sState, mName, pName, pURI, sVersion, bNumber, bDate, timeStart, timeCurrent, bInfo, sTillShutdown, sReason}
-	for i := range nodes {
-		sStatus.AddRef(nodes[i], id.HasComponent, true)
+// setServerObjectValues gives the Server object's variables their values.
+// The nodes are the standard node set's own (ImportNodeSet), so their
+// BrowseNames, DataTypes, ValueRanks and references are the standard's:
+// BuildInfo's six fields hang under BuildInfo, BuildInfo under
+// ServerStatus, and so on. gopcua's original replaced them with nodes of
+// its own, which got names wrong (ServerStatus was "Status", State was
+// "ServerStatus", ProductUri "ProductURI", ManufacturerName
+// "ProductName", NamespaceArray an Object called "Namespaces"), lost
+// every reference but a flat list under ServerStatus, and had no DataType
+// or ValueRank (nautilus#424).
+//
+// The Mandatory variables of ServerType (Part 5 §6.3.1) that gopcua left
+// valueless, so that a Read of their Value answered Bad_AttributeIdInvalid,
+// have values: ServerArray, whose only entry is this server's
+// ApplicationUri; ServiceLevel, 255 (healthy) while the server runs and 0
+// (out of service) otherwise; and Auditing, false, as this server writes
+// no audit events.
+func setServerObjectValues(s *Server) {
+	set := func(nid uint32, f func() any) {
+		if n := s.namespaces[0].Node(ua.NewNumericNodeID(0, nid)); n != nil {
+			n.val = func() *ua.DataValue { return DataValueFromValue(f()) }
+		}
 	}
-	ServerNode.AddRef(sStatus, id.HasComponent, true)
+	build := func() *ua.BuildInfo { return s.Status().BuildInfo }
 
-	nodes = append(nodes, sStatus)
+	set(id.Server_ServerArray, func() any { return []string{s.cfg.applicationURI} })
+	set(id.Server_NamespaceArray, func() any {
+		n := s.Namespaces()
+		ns := make([]string, len(n))
+		for i := range ns {
+			ns[i] = n[i].Name()
+		}
+		return ns
+	})
+	set(id.Server_ServiceLevel, func() any {
+		if s.Status().State == ua.ServerStateRunning {
+			return byte(255)
+		}
+		return byte(0)
+	})
+	set(id.Server_Auditing, func() any { return false })
 
-	return nodes
+	set(id.Server_ServerStatus, func() any { return ua.NewExtensionObject(s.Status()) })
+	set(id.Server_ServerStatus_StartTime, func() any { return s.Status().StartTime })
+	set(id.Server_ServerStatus_CurrentTime, func() any { return time.Now() })
+	set(id.Server_ServerStatus_State, func() any { return int32(s.Status().State) })
+	set(id.Server_ServerStatus_SecondsTillShutdown, func() any { return s.Status().SecondsTillShutdown })
+	set(id.Server_ServerStatus_ShutdownReason, func() any {
+		if r := s.Status().ShutdownReason; r != nil {
+			return r
+		}
+		return &ua.LocalizedText{}
+	})
+
+	set(id.Server_ServerStatus_BuildInfo, func() any { return ua.NewExtensionObject(build()) })
+	set(id.Server_ServerStatus_BuildInfo_ProductURI, func() any { return build().ProductURI })
+	set(id.Server_ServerStatus_BuildInfo_ManufacturerName, func() any { return build().ManufacturerName })
+	set(id.Server_ServerStatus_BuildInfo_ProductName, func() any { return build().ProductName })
+	set(id.Server_ServerStatus_BuildInfo_SoftwareVersion, func() any { return build().SoftwareVersion })
+	set(id.Server_ServerStatus_BuildInfo_BuildNumber, func() any { return build().BuildNumber })
+	set(id.Server_ServerStatus_BuildInfo_BuildDate, func() any { return build().BuildDate })
+
+	set(id.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead, func() any {
+		return s.cfg.cap.OperationalLimits.MaxNodesPerRead
+	})
+
+	// ServerCapabilitiesType's Mandatory properties (Part 5 §6.3.2). No
+	// profile or locale is claimed, so both arrays are empty; the minimum
+	// sample rate is 0 (unspecified) until the embedding server sets its
+	// own; continuation points are stateless here, so there is no limit
+	// (0); and the server holds no software certificates.
+	set(id.Server_ServerCapabilities_ServerProfileArray, func() any { return []string{} })
+	set(id.Server_ServerCapabilities_LocaleIDArray, func() any { return []string{} })
+	set(id.Server_ServerCapabilities_MinSupportedSampleRate, func() any { return float64(0) })
+	set(id.Server_ServerCapabilities_MaxBrowseContinuationPoints, func() any { return uint16(0) })
+	set(id.Server_ServerCapabilities_MaxQueryContinuationPoints, func() any { return uint16(0) })
+	set(id.Server_ServerCapabilities_MaxHistoryContinuationPoints, func() any { return uint16(0) })
+	set(id.Server_ServerCapabilities_SoftwareCertificates, func() any { return []*ua.ExtensionObject{} })
+
+	// ServerType's Optional properties the node set instantiates: the
+	// ServerArray and NamespaceArray carry no version (0), the local time
+	// zone is the machine's, and no return from a shutdown is announced
+	// (MinDateTime, "unknown").
+	set(id.Server_URIsVersion, func() any { return uint32(0) })
+	set(id.Server_LocalTime, func() any {
+		now := time.Now()
+		_, off := now.Zone()
+		return ua.NewExtensionObject(&ua.TimeZoneDataType{Offset: int16(off / 60), DaylightSavingInOffset: now.IsDST()})
+	})
+	set(id.Server_EstimatedReturnTime, func() any { return time.Time{} })
 }

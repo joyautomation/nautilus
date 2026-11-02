@@ -23,11 +23,13 @@ configuration you re-enter on the client side.
 ```yaml
 opcua:
   endpoint: opc.tcp://0.0.0.0:4840   # default opc.tcp://localhost:4840
+  # application-uri: urn:acme:plant7:lift-station   # default urn:joyautomation:nautilus:<project>
 ```
 
 `naut run` (and a built binary) starts the server alongside the scan loop;
-the section's presence turns it on (`opcua: {}` serves on the default), and
-`endpoint` is the only setting. It defaults to the loopback interface —
+the section's presence turns it on (`opcua: {}` serves on the default).
+`endpoint` is where it listens; `application-uri` is the name clients know
+it by ([below](#what-a-client-sees)). The endpoint defaults to the loopback interface —
 `localhost` listens on `127.0.0.1` — so putting a controller on the network
 is a line you write: `opc.tcp://0.0.0.0:4840` listens on every interface.
 `naut check` refuses an endpoint that is not `opc.tcp://host:port` (a bare
@@ -93,6 +95,25 @@ the `MaxNodesPerRead` the `Server` object advertises is the limit the
 server enforces, with `Bad_TooManyOperations` past it — so a project of a
 few thousand tags is still one call. A Browse lists each reference once,
 the standard `Server` object's included.
+
+The server says it is nautilus. Its `ApplicationUri`, in every endpoint's
+description and as the only entry of the `Server` object's `ServerArray`,
+is `urn:joyautomation:nautilus:<project>` (the name percent-encoded, so
+`Lift Station` is `Lift%20Station`). It names the controller, not the
+machine: it is the same after a restart, on a new host, and on every
+replica of a [cluster deployment](/guides/deployment/), so a historian or
+SCADA gateway that keys its connection on it finds the same server
+whichever replica answers. Two separate controllers running a project of
+the same name on one network should each set `opcua.application-uri` to a
+URI of their own; `naut check` refuses one that is not an absolute URI.
+The `Server` object's variables are the standard ones, with their
+standard names, data types and places under `ServerStatus` and
+`BuildInfo`. `ServerStatus.BuildInfo`
+names the product (`ProductUri` `urn:joyautomation:nautilus`, Joy
+Automation, Nautilus), the version `naut version` prints, the commit it
+was built from as the build number, and that commit's date. `ServiceLevel`
+is 255 while the server runs, and `Auditing` is false: the server writes
+no audit events.
 
 ## Types
 

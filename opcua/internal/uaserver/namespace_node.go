@@ -223,7 +223,15 @@ func (ns *NodeNameSpace) Browse(bd *ua.BrowseDescription) *ua.BrowseResult {
 			continue
 		}
 
-		td := ns.srv.Node(r.NodeID.NodeID)
+		// The target's type definition as it is now, or the one the
+		// reference was made with when the target has no HasTypeDefinition
+		// (the project folder, a node in another namespace). Never the
+		// target's DataType: a Variable's DataType is not its type
+		// definition.
+		tdef := ns.srv.Node(r.NodeID.NodeID).TypeDefinition()
+		if tdef == nil {
+			tdef = r.TypeDefinition
+		}
 
 		rf := &ua.ReferenceDescription{
 			ReferenceTypeID: r.ReferenceTypeID,
@@ -232,7 +240,7 @@ func (ns *NodeNameSpace) Browse(bd *ua.BrowseDescription) *ua.BrowseResult {
 			BrowseName:      r.BrowseName,
 			DisplayName:     r.DisplayName,
 			NodeClass:       r.NodeClass,
-			TypeDefinition:  td.DataType(),
+			TypeDefinition:  tdef,
 		}
 
 		if rf.ReferenceTypeID.IntID() == id.HasTypeDefinition && rf.IsForward {

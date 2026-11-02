@@ -752,6 +752,7 @@ func TestOPCUAConfig(t *testing.T) {
 		"  {}\n", // a bare `opcua:` is YAML null, which is no section; {} is the default server
 		"  endpoint: opc.tcp://0.0.0.0:4840\n",
 		"  endpoint: localhost:4841\n",
+		"  application-uri: urn:acme:plant7:lift-station\n",
 	} {
 		p, err := Load(fsys(manifest+"\nopcua:\n"+extra), "")
 		if err != nil {
@@ -777,6 +778,9 @@ func TestOPCUAConfig(t *testing.T) {
 		"  endpoint: localhost\n":                  "must be opc.tcp://host:port",
 		"  endpoint: opc.tcp://localhost:99999\n":  "no valid port",
 		"  endpoint: opc.tcp://localhost:4840/x\n": "no path",
+		"  application-uri: lift-station\n":        "must be an absolute URI",
+		"  application-uri: urn:lift station\n":    "must be an absolute URI",
+		"  application-uri: \"urn:\"\n":            "must be an absolute URI",
 	} {
 		_, err := Load(fsys(manifest+"\nopcua:\n"+extra), "")
 		if err == nil || !strings.Contains(err.Error(), want) {

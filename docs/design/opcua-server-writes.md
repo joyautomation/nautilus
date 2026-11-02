@@ -98,9 +98,10 @@ lifetime (§5).
   layout. In a cluster the directory is a mounted Secret shared by every replica, so a
   client trusts one certificate whichever replica answers.
 - **Server certificate.** Generated on first start when `own/` is empty: RSA-2048,
-  SHA-256, self-signed. Its SAN URI is the ApplicationURI
-  `urn:<host>:joyautomation:nautilus:<project>`. Today that URI is empty, and the
-  ProductURI says gopcua (`uaserver/server.go:389-390`, #424). Its DNS and IP SANs are
+  SHA-256, self-signed. Its SAN URI is the ApplicationURI: `opcua.application-uri`,
+  default `urn:joyautomation:nautilus:<project>`, which names the controller rather than
+  the host, so every replica sharing the certificate shares the URI too (#424; a
+  host-name URI would differ per pod). Its DNS and IP SANs are
   every name `endpointHosts` advertises (`opcua/server/services.go:61-113`). Key usages
   are as Part 6 requires. Validity is 5 years, with the expiry on the status row and a
   warning 30 days out. A certificate already in `own/` wins, and the ApplicationURI comes

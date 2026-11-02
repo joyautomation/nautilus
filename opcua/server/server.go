@@ -29,7 +29,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
+	"os"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +66,9 @@ type Options struct {
 	// zero is DefaultSweep. It bounds how late a subscriber hears of a
 	// change, and is the MinimumSamplingInterval the server advertises.
 	Sweep time.Duration
+	// ApplicationURI is the server's ApplicationUri (Part 4 §7.1); empty is
+	// ApplicationURI(Name). It must be an absolute URI (CheckApplicationURI).
+	ApplicationURI string
 }
 
 // Server serves one runtime's tag store over OPC UA.
@@ -81,6 +87,7 @@ type Server struct {
 	since   time.Time
 	lastErr error
 	url     string
+	version string
 }
 
 // New prepares a server. It validates the endpoint and dials nothing — the
@@ -103,7 +110,22 @@ func New(rt *runtime.Runtime, o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if o.ApplicationURI == "" {
+		o.ApplicationURI = ApplicationURI(o.Name)
+	} else if err := CheckApplicationURI(o.ApplicationURI); err != nil {
+		return nil, err
+	}
 	return &Server{rt: rt, opts: o, host: host, port: port}, nil
+}
+
+// CheckApplicationURI is `naut check`'s test of opcua.application-uri: an
+// absolute URI (a scheme, then something), with no spaces.
+func CheckApplicationURI(uri string) error {
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme == "" || (u.Opaque == "" && u.Host == "" && u.Path == "") || strings.ContainsAny(uri, " \t\n") {
+		return fmt.Errorf("opcua.application-uri: %q must be an absolute URI, such as urn:example:lift-station", uri)
+	}
+	return nil
 }
 
 // ParseEndpoint splits an "opc.tcp://host:port" (or bare "host:port")
@@ -160,11 +182,20 @@ func (s *Server) Start(ctx context.Context) error {
 	// gopcua listens on the first endpoint and advertises them all, and a
 	// client finds an endpoint only by its exact URL: the listener's own,
 	// then one per name it answers to (see endpointHosts).
+	build := binaryBuild()
+	if s.version != "" {
+		build.version = s.version
+	}
 	opts := []opcserver.Option{
 		opcserver.EndPoint(listen, port),
 		opcserver.ServerName("Nautilus · " + s.opts.Name),
+		opcserver.ApplicationURI(s.opts.ApplicationURI),
 		opcserver.ManufacturerName("Joy Automation"),
 		opcserver.ProductName("Nautilus"),
+		opcserver.ProductURI(ProductURI),
+		opcserver.SoftwareVersion(build.version),
+		opcserver.BuildNumber(build.number),
+		opcserver.BuildDate(build.date),
 		opcserver.EnableSecurity("None", ua.MessageSecurityModeNone),
 		opcserver.EnableAuthMode(ua.UserTokenTypeAnonymous),
 	}
@@ -185,6 +216,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// The Read limit advertised is the one readAttributes enforces.
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(maxNodesPerRead)))
+	}
+	// The fastest a value is sampled is the change sweep, the same
+	// MinimumSamplingInterval every tag advertises.
+	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_MinSupportedSampleRate)); n != nil {
+		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(float64(s.opts.Sweep)/float64(time.Millisecond)))
 	}
 	// Hang the project folder off ns=0's Objects, where every client
 	// starts browsing.
@@ -215,6 +251,72 @@ func (s *Server) Start(ctx context.Context) error {
 	s.done = make(chan struct{})
 	go s.sweep(cctx, s.done)
 	return nil
+}
+
+// SetSoftwareVersion sets the version the server reports as
+// ServerStatus.BuildInfo.SoftwareVersion: the CLI passes its own, the one
+// `naut version` prints. Unset, it is the module version in the binary's
+// build info, or "dev". It takes effect at the next Start.
+func (s *Server) SetSoftwareVersion(v string) {
+	s.mu.Lock()
+	s.version = v
+	s.mu.Unlock()
+}
+
+// ProductURI names nautilus as a product: ApplicationDescription.ProductUri
+// and ServerStatus.BuildInfo.ProductUri.
+const ProductURI = "urn:joyautomation:nautilus"
+
+// ApplicationURI is the default ApplicationUri of the server for project
+// name: urn:joyautomation:nautilus:<project>, the project name
+// percent-encoded so any name makes a valid URI ("Lift Station" is
+// Lift%20Station). It names the controller, not the machine it runs on:
+// it is the same after a restart, on a new host, and on every replica of a
+// cluster Deployment, whose pods have generated host names but one
+// Service address and (with secure endpoints) one shared certificate, so
+// a client that keys its connection on it (a historian, a SCADA gateway)
+// finds the same server whichever replica answers. Two separate
+// controllers running a project of the same name on one network should
+// each set opcua.application-uri.
+func ApplicationURI(name string) string {
+	return "urn:joyautomation:nautilus:" + url.PathEscape(name)
+}
+
+// build is what ServerStatus.BuildInfo says about the binary.
+type build struct {
+	version string    // SoftwareVersion
+	number  string    // BuildNumber: the commit, when the build recorded one
+	date    time.Time // BuildDate
+}
+
+// binaryBuild reads the running binary's build info: the module version
+// (or "dev"), the VCS revision as the build number, and the commit time as
+// the build date, falling back to the executable's modification time.
+func binaryBuild() build {
+	b := build{version: "dev"}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := strings.TrimPrefix(bi.Main.Version, "v"); v != "" && v != "(devel)" {
+			b.version = v
+		}
+		for _, kv := range bi.Settings {
+			switch kv.Key {
+			case "vcs.revision":
+				b.number = kv.Value
+			case "vcs.time":
+				if t, err := time.Parse(time.RFC3339, kv.Value); err == nil {
+					b.date = t
+				}
+			}
+		}
+	}
+	if b.date.IsZero() {
+		if exe, err := os.Executable(); err == nil {
+			if fi, err := os.Stat(exe); err == nil {
+				b.date = fi.ModTime()
+			}
+		}
+	}
+	return b
 }
 
 // Stop closes every session and the listener, and stops the sweep.
