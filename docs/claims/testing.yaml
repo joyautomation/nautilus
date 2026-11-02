@@ -386,3 +386,14 @@ claims:
       MainProgram_-prefixed names (the scenario passes, and a failure names
       MainProgram_RunCmd); a real controller's naming is verified on hardware
       only.
+  - id: TEST-033
+    claim: >-
+      A mapping for a whole struct tag in given: sets the members it names and
+      keeps the rest, and a member's value converts by its declared type (a
+      T# literal on a TIME member, an enumeration member by name) in given:,
+      force: and expect: alike; a value that does not convert is the test's
+      error, naming the member.
+    source: "#given-setting-the-world"
+    tests:
+      - go ./acceptance TestMemberLiteralsConvertByDeclaredType
+      - go ./acceptance TestMemberGivenNotOfItsTypeIsAnError

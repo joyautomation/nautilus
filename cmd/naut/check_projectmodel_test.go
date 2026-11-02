@@ -220,3 +220,41 @@ END_PROGRAM
 	assertGolden(t, out, code, 0, `program.st:5:21: warning: TON input PT: integer 30000 read as milliseconds where a TIME is expected; write T#30S
 naut check: 1 file(s), 0 with errors, 1 warning(s)`)
 }
+
+// F-16 in a library (#498): a FUNCTION_BLOCK in lib/ whose TIME input
+// defaults to an integer warns once, under the library file — not once per
+// program that instantiates it, and not under a program's name.
+func TestCheckGoldenLibraryIntegerPresetWarnsOnce(t *testing.T) {
+	out, code := checkGolden(t, map[string]string{
+		"nautilus.yaml": `tasks:
+  - program: a.st
+  - program: b.st
+tags:
+  - { name: Run, role: input, type: BOOL }
+  - { name: LampA, role: output, type: BOOL }
+  - { name: LampB, role: output, type: BOOL }
+`,
+		"lib/blinker.st": `FUNCTION_BLOCK Blinker
+VAR_INPUT EN : BOOL; Period : TIME := 750; END_VAR
+VAR_OUTPUT Q : BOOL; END_VAR
+VAR t : TON; END_VAR
+t(IN := EN AND NOT t.Q, PT := Period);
+Q := t.Q;
+END_FUNCTION_BLOCK
+`,
+		"a.st": `PROGRAM A
+VAR b : Blinker; END_VAR
+b(EN := Run);
+LampA := b.Q;
+END_PROGRAM
+`,
+		"b.st": `PROGRAM B
+VAR b : Blinker; END_VAR
+b(EN := Run);
+LampB := b.Q;
+END_PROGRAM
+`,
+	})
+	assertGolden(t, out, code, 0, `lib/blinker.st:2:39: warning: initial value: integer 750 read as milliseconds where a TIME is expected; write T#750MS
+naut check: 3 file(s), 0 with errors, 1 warning(s)`)
+}

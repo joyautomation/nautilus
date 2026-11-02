@@ -28,7 +28,8 @@ func lowerWarnings(t *testing.T, src string) []string {
 // milliseconds — IEC 61131-3 has no such conversion, and an author who
 // meant seconds gets a timer a thousand times short. Lowering warns where
 // it happens and names the literal that says the same thing; a T# literal
-// and an explicit TO_TIME are silent. A FUNCTION_BLOCK's declarations are
+// and an explicit TO_TIME are silent, and so is a REAL (only an integer
+// reads as milliseconds; #498). A FUNCTION_BLOCK's declarations are
 // lowered twice (signature, body) and still warn once.
 func TestIntegerWhereTimeIsExpectedWarns(t *testing.T) {
 	got := lowerWarnings(t, `
@@ -41,6 +42,7 @@ VAR
     t2 : TON;
     t3 : TON;
     t4 : TON;
+    t5 : TON;
     b  : Blinker;
     n  : DINT := 5;
     d  : TIME := 90000;
@@ -49,14 +51,15 @@ t1(IN := TRUE, PT := 30000);
 t2(IN := TRUE, PT := n);
 t3(IN := TRUE, PT := T#30S);
 t4(IN := TRUE, PT := TO_TIME(n));
+t5(IN := TRUE, PT := 1.5);
 b(Period := 250);
 END_PROGRAM`)
 	want := []string{
 		"3:28: initial value: integer 750 read as milliseconds where a TIME is expected; write T#750MS",
-		"13:18: initial value: integer 90000 read as milliseconds where a TIME is expected; write T#1M30S",
-		"15:22: TON input PT: integer 30000 read as milliseconds where a TIME is expected; write T#30S",
-		"16:22: TON input PT: n (a DINT) read as milliseconds where a TIME is expected; write a T# literal, or TO_TIME(n) if milliseconds are meant",
-		"19:13: Blinker input Period: integer 250 read as milliseconds where a TIME is expected; write T#250MS",
+		"14:18: initial value: integer 90000 read as milliseconds where a TIME is expected; write T#1M30S",
+		"16:22: TON input PT: integer 30000 read as milliseconds where a TIME is expected; write T#30S",
+		"17:22: TON input PT: n (a DINT) read as milliseconds where a TIME is expected; write a T# literal, or TO_TIME(n) if milliseconds are meant",
+		"21:13: Blinker input Period: integer 250 read as milliseconds where a TIME is expected; write T#250MS",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("warnings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
