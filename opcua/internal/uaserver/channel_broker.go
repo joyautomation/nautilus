@@ -147,6 +147,8 @@ outer:
 			case c.msgChan <- msg:
 			case <-ctx.Done():
 				break outer
+			case <-c.quit: // Close: the loop may be held in a handler; don't wait for it
+				break outer
 			}
 		}
 	}
