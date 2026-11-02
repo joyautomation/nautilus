@@ -20,7 +20,7 @@ func frontDoorTags(t *testing.T) *Tags {
 		tags.types[ir.NameKey(name)] = typ
 		_ = tags.WriteGlobal(name, v)
 	}
-	for _, n := range []string{"SINT", "INT", "DINT", "USINT", "UINT", "UDINT", "LINT", "ULINT", "BYTE", "WORD"} {
+	for _, n := range []string{"SINT", "INT", "DINT", "USINT", "UINT", "UDINT", "LINT", "ULINT", "BYTE", "WORD", "LWORD"} {
 		declare("I_"+n, ir.IntNamed(n), ir.IntVal(0))
 	}
 	declare("Flag", ir.BoolT, ir.BoolVal(false))
@@ -51,7 +51,10 @@ func TestFrontDoorConversions(t *testing.T) {
 		{"I_UDINT", float64(math.MaxUint32), ok}, {"I_UDINT", -1.0, ir.ErrOutOfRange},
 		{"I_BYTE", 255.0, ok}, {"I_BYTE", 300.0, ir.ErrOutOfRange}, {"I_WORD", 65536.0, ir.ErrOutOfRange},
 		{"I_LINT", int64(math.MinInt64), ok}, {"I_LINT", uint64(1 << 63), ir.ErrOutOfRange}, {"I_LINT", 1e19, ir.ErrOutOfRange},
-		{"I_ULINT", uint64(math.MaxInt64), ok}, {"I_ULINT", uint64(1 << 63), ir.ErrOutOfRange}, {"I_ULINT", -1.0, ir.ErrOutOfRange},
+		// ULINT and LWORD hold any 64-bit pattern, as the VM does (NOT of an
+		// LWORD 0 is -1 in the store): an operator can write back what reads.
+		{"I_ULINT", uint64(math.MaxInt64), ok}, {"I_ULINT", uint64(math.MaxUint64), ok}, {"I_ULINT", -1.0, ok},
+		{"I_LWORD", int64(-1), ok}, {"I_LWORD", uint64(1 << 63), ok},
 		{"I_INT", 2.5, ir.ErrTypeMismatch}, {"I_INT", true, ir.ErrTypeMismatch}, {"I_INT", "5", ir.ErrTypeMismatch},
 		{"Flag", true, ok}, {"Flag", 1.0, ir.ErrTypeMismatch},
 		{"SP", 1.5, ok}, {"SP", int64(7), ok}, {"SP", math.NaN(), ir.ErrOutOfRange}, {"SP", math.Inf(1), ir.ErrOutOfRange}, {"SP", "x", ir.ErrTypeMismatch}, {"SP", false, ir.ErrTypeMismatch},
@@ -145,5 +148,38 @@ func TestFrontDoorBatchIsAtomic(t *testing.T) {
 		if s["Lo"].F != s["Hi"].F {
 			t.Fatalf("snapshot straddled a request: Lo=%v Hi=%v", s["Lo"].F, s["Hi"].F)
 		}
+	}
+}
+
+// An enumeration member reached through a mapping or a list is held to
+// its members too, not only one addressed by path (#501 review).
+func TestFrontDoorEnumInsideMapAndList(t *testing.T) {
+	mode := &ir.EnumDef{Name: "Mode", Members: []ir.EnumMember{{Name: "Idle", Value: 0}, {Name: "Run", Value: 10}}}
+	mt := &ir.Type{Kind: ir.TypeInt, Enum: mode}
+	line := &ir.StructDef{Name: "Line", Fields: []ir.StructField{{Name: "M", Type: mt}}, FieldIndex: map[string]int{"M": 0}}
+	at := &ir.Type{Kind: ir.TypeArray, Elem: mt, ArrLen: 2}
+	tags := NewTags()
+	tags.types = map[string]*ir.Type{ir.NameKey("L"): {Kind: ir.TypeStruct, Struct: line}, ir.NameKey("Modes"): at}
+	_ = tags.WriteGlobal("L", ir.Value{Kind: ir.TypeStruct, Struct: line, Fld: []ir.Value{mode.Val(0)}})
+	_ = tags.WriteGlobal("Modes", ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{mode.Val(0), mode.Val(0)}})
+	errs := tags.Write([]WriteOp{
+		{"L", map[string]any{"M": 3.0}},
+		{"Modes", []any{10.0, 3.0}},
+		{"L", map[string]any{"M": "Run"}},
+		{"Modes", []any{"Run", 0.0}},
+	})
+	for i, want := range []error{ir.ErrOutOfRange, ir.ErrOutOfRange, nil, nil} {
+		if !errors.Is(errs[i], want) && !(want == nil && errs[i] == nil) {
+			t.Errorf("item %d: %v, want %v", i, errs[i], want)
+		}
+	}
+	if v, _ := tags.ReadPath("L.M"); v != "Run" {
+		t.Errorf("L.M = %v, want Run", v)
+	}
+	if v, _ := tags.ReadPath("Modes[0]"); v != "Run" {
+		t.Errorf("Modes[0] = %v, want Run", v)
+	}
+	if v, _ := tags.ReadPath("Modes[1]"); v != "Idle" {
+		t.Errorf("Modes[1] = %v, want Idle: the refused list must not land", v)
 	}
 }

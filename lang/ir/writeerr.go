@@ -41,6 +41,15 @@ func rangef(format string, a ...any) error {
 	return &writeErr{ErrOutOfRange, fmt.Sprintf(format, a...)}
 }
 
+// unsigned64 reports whether t is ULINT or LWORD.
+func unsigned64(t *Type) bool {
+	if t == nil || t.Kind != TypeInt || t.Enum != nil || t.Name == "" {
+		return false
+	}
+	c, ok := convTypeNamed(strings.ToUpper(t.Name))
+	return ok && c.class == ccInt && c.width == 64 && !c.signed
+}
+
 // checkFits refuses a converted scalar its declared type cannot hold: an
 // integer outside the width t names (every integer is an int64 in the
 // store, so nothing else would stop an INT from holding 70000), and a NaN
@@ -58,14 +67,8 @@ func checkFits(t *Type, v Value, sofar string) error {
 			return nil
 		}
 		c, ok := convTypeNamed(strings.ToUpper(t.Name))
-		if !ok || c.class != ccInt || c.width >= 64 && c.signed {
-			return nil
-		}
-		if c.width >= 64 { // ULINT/LWORD: the store is int64, so 0..2^63-1
-			if v.I < 0 {
-				return rangef("%s: %d is outside %s", sofar, v.I, intRangeText(c))
-			}
-			return nil
+		if !ok || c.class != ccInt || c.width >= 64 {
+			return nil // LINT is the store; ULINT/LWORD hold any 64-bit pattern
 		}
 		lo, hi := intRange(c)
 		if f := float64(v.I); f < lo || f >= hi {

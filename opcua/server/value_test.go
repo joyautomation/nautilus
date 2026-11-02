@@ -416,3 +416,29 @@ func TestDeclaredTypeOutlivesAStoredKind(t *testing.T) {
 		}
 	}
 }
+
+// A stored kind the declared type cannot carry without loss keeps its own
+// DataType, and one it can is sent as the declared type, so a Variant
+// always agrees with the DataType it is read under (#501 review: a BOOL a
+// driver fed an integer claimed Boolean and sent an Int64).
+func TestVariantAgreesWithDataTypeWhenKindsDiffer(t *testing.T) {
+	for _, tc := range []struct {
+		decl   *ir.Type
+		stored ir.Value
+		dt     uint32
+		want   any
+	}{
+		{ir.RealT, ir.IntVal(7), id.Double, 7.0},
+		{ir.TimeT, ir.IntVal(1000), id.Duration, 1000.0},
+		{&ir.Type{Kind: ir.TypeInt, Name: "DINT"}, ir.TimeVal(1500), id.Int32, int32(1500)},
+		{ir.BoolT, ir.IntVal(1), id.Int64, int64(1)},
+		{ir.StringT, ir.RealVal(2.5), id.Double, 2.5},
+	} {
+		m := member{addr: "X", val: tc.stored, typ: tc.decl}
+		dt := dataType(m)
+		got := scalar(tc.stored, dt)
+		if dt != tc.dt || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("declared %v holding %v: DataType i=%d Variant %v (%T), want i=%d %v (%T)", tc.decl.Kind, tc.stored.Kind, dt, got, got, tc.dt, tc.want, tc.want)
+		}
+	}
+}

@@ -327,11 +327,14 @@ plant is already running on.
 - **A value lands exactly as sent, or is refused.** An integer must fit its
   declared width: `70` on an `INT` lands, `70000` is a `400`
   (`tag Int1: 70000 is outside INT (-32768..32767)`), and so is `-1` on a
-  `UINT`. A fraction for an integer (`2.5`), a boolean for a `REAL`, or text
-  for anything but a `STRING` is a `422` on a whole tag (a `400` on a
-  member). A `TIME` takes whole milliseconds. A `REAL` takes no NaN or
-  infinity. The same rules apply to whole tags and members, and to an OPC UA
-  client's writes, because both go through the runtime's one write path.
+  `UINT`. A `ULINT` or `LWORD` takes any 64-bit pattern. A fraction for an
+  integer (`2.5`), a boolean for a `REAL`, or text for anything but a
+  `STRING` is a `422` on a whole tag (a `400` on a member). A `TIME` takes
+  whole milliseconds. The same rules hold for a whole tag, a member, every
+  member of an object `value` and every element of a list, and for an
+  output no scan has written yet. What the program itself produced is not
+  held to them: a retained value comes back after a restart exactly as the
+  program left it.
 - **An enumerated member takes its name** — `{"name": "Recipe.Mode",
   "value": "Run"}`, any case, `Mode#Run` qualified, or the member's integer —
   and stores the named value, exactly as a write of a whole enumerated tag

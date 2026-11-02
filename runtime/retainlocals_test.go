@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/retain"
 )
 
@@ -211,5 +212,53 @@ func TestExplicitRetainTagsKeepsMarkedTags(t *testing.T) {
 	}
 	if !slices.Contains(rt.retainTags, "Stats") || !slices.Contains(rt.retainTags, "Scratch") {
 		t.Errorf("retained set %v, want Scratch and Stats", rt.retainTags)
+	}
+}
+
+// What a program produced survives a restart as it was, even where it is
+// outside its declared width: the VM does not wrap an INT counted past
+// 32767, and NOT of an LWORD 0 sets the top bit (-1 in the store). Only a
+// client's write is held to the width (Tags.Write, PR #501's review); a
+// restore of the program's own state is not a client's write.
+func TestRetainKeepsWhatTheProgramProduced(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "retain.json")
+	const prog = `PROGRAM Main
+VAR RETAIN mask : LWORD; END_VAR
+VAR_EXTERNAL C : INT; W : LWORD; END_VAR
+IF mask = 0 THEN mask := NOT mask; W := NOT W; C := 32767; END_IF;
+END_PROGRAM`
+	mk := func() *Runtime {
+		rt, err := New(Options{
+			Program: prog,
+			Retain:  retain.New("", file),
+			Tags: []TagDef{
+				Typed("C", RoleState, "INT", Retained()),
+				Typed("W", RoleState, "LWORD", Retained()),
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rt
+	}
+	rt := mk()
+	rt.Scan()
+	if err := rt.Tags().Write([]WriteOp{{"C", 1.0}})[0]; err != nil {
+		t.Fatal(err)
+	}
+	// The program counts past the declared width, as a PLC's would not.
+	_ = rt.Tags().WriteGlobal("C", ir.IntVal(40000))
+	rt.saveRetained(nil)
+
+	rt2 := mk()
+	rt2.Scan()
+	if v, _ := rt2.Tags().ReadGlobal("C"); v.I != 40000 {
+		t.Errorf("C = %d after a restart, want the 40000 the program left", v.I)
+	}
+	if v, _ := rt2.Tags().ReadGlobal("W"); v.I != -1 {
+		t.Errorf("W = %d after a restart, want -1 (every bit set)", v.I)
+	}
+	if got := rt2.prog.Locals()["mask"]; got != int64(-1) {
+		t.Errorf("VAR RETAIN mask = %v after a restart, want -1", got)
 	}
 }

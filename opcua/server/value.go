@@ -189,8 +189,14 @@ func dataType(m member) uint32 {
 	// client reads once and builds its conversion on (Part 3 §5.6.2), so a
 	// stored value of another kind must not retype the node (#421: a REAL
 	// stored in an INT tag turned it into a Double for good).
+	//
+	// Only where the stored value converts to the declared type without
+	// loss (an integer into a Double or a Duration, a whole REAL into an
+	// integer — see scalar): a BOOL tag a driver fed an integer keeps the
+	// stored kind, so the Variant never disagrees with the DataType it
+	// claims.
 	kind := v.Kind
-	if t != nil && isScalarKind(t.Kind) {
+	if t != nil && isScalarKind(t.Kind) && converts(v.Kind, t.Kind) {
 		kind = t.Kind
 	}
 	switch kind {
@@ -215,6 +221,20 @@ func isIntType(dt uint32) bool {
 	switch dt {
 	case id.SByte, id.Byte, id.Int16, id.UInt16, id.Int32, id.UInt32, id.Int64, id.UInt64:
 		return true
+	}
+	return false
+}
+
+// converts reports whether scalar can send a stored kind as the declared
+// kind's DataType.
+func converts(stored, declared ir.TypeKind) bool {
+	switch {
+	case stored == declared:
+		return true
+	case stored == ir.TypeInt:
+		return declared == ir.TypeReal || declared == ir.TypeTime
+	case stored == ir.TypeReal, stored == ir.TypeTime:
+		return declared == ir.TypeInt
 	}
 	return false
 }
@@ -270,12 +290,17 @@ func scalar(v ir.Value, dt uint32) any {
 		}
 		return v.F
 	case ir.TypeTime:
+		if isIntType(dt) {
+			return scalar(ir.IntVal(v.I), dt) // a TIME delivered into an integer tag
+		}
 		return float64(v.I) // Duration: milliseconds as a Double
 	case ir.TypeString:
 		return v.S
 	case ir.TypeInt:
 		n := v.I
 		switch dt {
+		case id.Double, id.Duration:
+			return float64(n) // an integer delivered into a REAL or TIME tag
 		case id.SByte:
 			if n >= math.MinInt8 && n <= math.MaxInt8 {
 				return int8(n)

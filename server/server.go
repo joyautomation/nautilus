@@ -1196,7 +1196,13 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	switch req.Value.(type) {
 	case float64, bool:
 	case string:
-		if cur, err := s.rt.Tags().ReadGlobal(req.Name); err == nil && cur.Kind != ir.TypeString {
+		kind := ir.TypeVoid
+		if cur, err := s.rt.Tags().ReadGlobal(req.Name); err == nil {
+			kind = cur.Kind
+		} else if t := s.rt.Tags().TypeOf(req.Name); t != nil {
+			kind = t.Kind
+		}
+		if kind != ir.TypeString {
 			http.Error(w, "value must be a number or boolean (a string only to a STRING tag)", http.StatusUnprocessableEntity)
 			return
 		}
@@ -1214,14 +1220,23 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 // value is the wrong kind, as before the front door; 400 for everything
 // else, an out-of-range value included (#421: an INT took 70000).
 //
-// A declared tag the store has not seen yet (an undelivered output, which
-// has no value to take a type from) is written as it comes, the one case
-// with nothing to convert against.
+// A declared tag the store has not seen yet (an output no scan has written)
+// is written onto a zero of its declared type, by the same strict rule, so
+// it cannot be born retyped (#421 on the output a Sparkplug host commands
+// through). Only a tag with no declared type at all, which has nothing to
+// convert against, is written as it comes.
 func (s *Server) frontDoor(w http.ResponseWriter, req writeTagRequest, whole bool) {
 	err := s.rt.Tags().Write([]runtime.WriteOp{{Path: req.Name, Value: req.Value}})[0]
 	if whole && errors.Is(err, runtime.ErrUndefined) {
-		s.rt.Tags().Set(req.Name, req.Value)
-		err = nil
+		if t := s.rt.Tags().TypeOf(req.Name); t != nil {
+			var nv ir.Value
+			if nv, err = ir.SetFieldTypedStrict(ir.Zero(t), t, nil, req.Value, "tag "+req.Name); err == nil {
+				s.rt.Tags().Set(req.Name, nv)
+			}
+		} else {
+			s.rt.Tags().Set(req.Name, req.Value)
+			err = nil
+		}
 	}
 	switch {
 	case err == nil:

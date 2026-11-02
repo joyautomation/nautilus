@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -57,5 +58,46 @@ func TestWriteOutOfRangeIs400AndNeverRetypes(t *testing.T) {
 	}
 	if postTag(t, srv, `{"name":"Int1","value":5}`).Code != 204 || rt.Tags().All()["Int1"] != int64(5) {
 		t.Errorf("Int1 = 5 after the refusals: %#v, want int64 5", rt.Tags().All()["Int1"])
+	}
+}
+
+// An output no scan has written yet is not in the store, but it has a
+// declared type, and a write to it is held to that type like any other: it
+// cannot be born a REAL or a STRING (#501 review; #421 on the output a
+// Sparkplug host commands through).
+func TestWriteUndeliveredTypedOutputIsChecked(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Test\nEND_PROGRAM\n",
+		Driver:  nio.NewMemory(),
+		Tags: []runtime.TagDef{
+			runtime.Typed("Cmd", runtime.RoleOutput, "INT"),
+			runtime.Typed("Flag", runtime.RoleOutput, "BOOL"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tags().ReadGlobal("Cmd"); err == nil {
+		t.Skip("Cmd is seeded before any scan; the fallback is not reached")
+	}
+	srv := New(rt)
+	for _, tc := range []struct {
+		body string
+		code int
+	}{
+		{`{"name":"Cmd","value":70000}`, 400},
+		{`{"name":"Cmd","value":2.5}`, 422},
+		{`{"name":"Flag","value":"hello"}`, 422},
+		{`{"name":"Cmd","value":7}`, 204},
+	} {
+		if rec := postTag(t, srv, tc.body); rec.Code != tc.code {
+			t.Errorf("%s: %d %q, want %d", tc.body, rec.Code, rec.Body, tc.code)
+		}
+	}
+	if v, err := rt.Tags().ReadGlobal("Cmd"); err != nil || v.Kind != ir.TypeInt || v.I != 7 {
+		t.Errorf("Cmd = %v (%v), want INT 7", v, err)
+	}
+	if _, err := rt.Tags().ReadGlobal("Flag"); err == nil {
+		t.Errorf("Flag was created by a refused write")
 	}
 }

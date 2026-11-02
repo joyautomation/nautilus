@@ -1,10 +1,6 @@
 package runtime
 
-import (
-	"errors"
-
-	"github.com/joyautomation/nautilus/lang/ir"
-)
+import "errors"
 
 // The write front door: every write from outside a program — an operator's
 // POST /api/tags, an OPC UA client's Write — goes through Tags.Write, so
@@ -67,29 +63,7 @@ func (t *Tags) Write(ops []WriteOp) []error {
 			errs[i] = &ForcedError{Path: op.Path, Force: f}
 			continue
 		}
-		if typ, ok := t.targetTypeLocked(op.Path); ok {
-			if err := ir.EnumMemberOnly(typ, op.Value, "tag "+op.Path); err != nil {
-				errs[i] = err
-				continue
-			}
-		}
-		errs[i] = t.setPathLocked(op.Path, op.Value)
+		errs[i] = t.setPathLocked(op.Path, op.Value, true)
 	}
 	return errs
-}
-
-// targetTypeLocked is the declared type of what path addresses — a whole
-// tag's or a member's — when the walk has one. Caller holds t.mu.
-func (t *Tags) targetTypeLocked(path string) (*ir.Type, bool) {
-	if _, key, ok := t.lookupLocked(path); ok {
-		typ := t.types[ir.NameKey(key)]
-		return typ, typ != nil
-	}
-	root, segs := ir.SplitAddress(path)
-	cur, key, ok := t.lookupLocked(root)
-	if !ok || len(segs) == 0 {
-		return nil, false
-	}
-	_, typ, err := ir.FieldAt(cur.v, t.types[ir.NameKey(key)], segs, "tag "+key)
-	return typ, err == nil && typ != nil
 }
