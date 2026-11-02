@@ -166,6 +166,11 @@ type Base struct {
 	write       WriteFunc
 	onReconnect func(source string)
 	now         func() time.Time
+	// afterPoll, when set, is called once per class poll after its result
+	// or error has been applied — values merged, counters, Bad marks and
+	// the source state all visible to readers. Tests only (nil in
+	// production): a test that waits on the wire itself races the apply.
+	afterPoll func(source, class string)
 
 	sources  []*Source
 	bySource map[string]*Source
@@ -810,6 +815,13 @@ func sameScalar(a, b ir.Value) bool {
 	return false
 }
 
+// applied reports a class poll whose effect is now visible (afterPoll).
+func (b *Base) applied(source, class string) {
+	if b.afterPoll != nil {
+		b.afterPoll(source, class)
+	}
+}
+
 func (s *Source) wake() {
 	select {
 	case s.kick <- struct{}{}:
@@ -845,7 +857,7 @@ func (b *Base) run(ctx context.Context, s *Source) {
 			}
 			broke = false
 		}
-		failed := false
+		failed := ""
 		for _, c := range s.classes {
 			if c.next.After(now) {
 				continue
@@ -891,10 +903,11 @@ func (b *Base) run(ctx context.Context, s *Source) {
 				s.mu.Unlock()
 				c.next = b.now().Add(c.interval)
 				if !answered || failures >= failuresToError {
-					failed = true
+					failed = c.name // applied once the source state is "error", below
 					break
 				}
 				b.log.Warn(b.kind+": poll failed", "source", s.cfg.ID, "class", c.name, "error", err, "failures", c.failures)
+				b.applied(s.cfg.ID, c.name)
 				continue
 			}
 			done := b.now()
@@ -917,14 +930,16 @@ func (b *Base) run(ctx context.Context, s *Source) {
 			}
 			backoff = s.cfg.RetryMin
 			c.next = done.Add(c.interval)
+			b.applied(s.cfg.ID, c.name)
 		}
-		if failed {
+		if failed != "" {
 			s.mu.Lock()
 			err := s.lastErr
 			s.answered = false
 			s.mu.Unlock()
 			s.setState("error", err, b.now())
 			b.log.Warn(b.kind+": source down", "source", s.cfg.ID, "addr", s.cfg.Addr, "error", err, "retryIn", backoff)
+			b.applied(s.cfg.ID, failed)
 			select {
 			case <-ctx.Done():
 				return
