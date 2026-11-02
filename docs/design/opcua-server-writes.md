@@ -343,6 +343,11 @@ dispositions:
 1. **Dead path out, sessions bound.** Delete `ChangeNotification` (§3.6). Session tokens
    from `crypto/rand`. Sessions bound to their channel. Service calls require an
    activated session. Behaviour is unchanged for real clients. Run the 001 gate.
+   As built: the discovery services (FindServers, FindServersOnNetwork, GetEndpoints,
+   RegisterServer, RegisterServer2) stay sessionless, as Part 4 §5.4 has them, and
+   CloseSession works on a session not yet activated. A session never moves to another
+   channel (Part 4 §5.6.3 transfer) until slice 2 can check the client certificate; a
+   client that loses its channel creates a new session, as gopcua and asyncua already do.
 2. **Secure channels, read-only.** Fork `uasc`, add the accessors, the OPN trust hook and
    the policy/mode allowlist. Add the PKI with generation, trust and reject, `naut opcua
    certs` and `trust`, identity-token checks, the CreateSession certificate and URI

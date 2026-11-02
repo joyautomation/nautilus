@@ -413,9 +413,9 @@ func (s *Server) Status() Status {
 // monitored tag whose quality changed since the last tick is visited the
 // same way, since its status is part of what a subscriber is told (#419).
 //
-// The notifications are this package's, not gopcua's ChangeNotification:
-// that one sends on a subscription's channel while holding the monitored
-// item lock, and blocks when the channel is full — which, once the
+// The notifications are this package's. gopcua's ChangeNotification, now
+// deleted from uaserver, sent on a subscription's channel while holding the
+// monitored item lock, and blocked when the channel was full — which, once the
 // subscription's goroutine has gone (its deletion wants the same lock),
 // is a deadlock that takes the sweep, every Status call and every new
 // subscription with it. Here the send never blocks: a full channel marks

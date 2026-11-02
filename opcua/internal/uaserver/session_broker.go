@@ -1,14 +1,20 @@
 package uaserver
 
 import (
-	mrand "math/rand"
+	"crypto/rand"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/gopcua/opcua/ua"
+	"github.com/gopcua/opcua/uasc"
 )
+
+// authTokenLength is the size of a session's authentication token, in bytes. The token is the
+// session's only credential once it is activated (Part 4 §5.6.2), so it comes from crypto/rand
+// and is long enough not to be guessed.
+const authTokenLength = 32
 
 type session struct {
 	cfg sessionConfig
@@ -19,6 +25,38 @@ type session struct {
 	remoteCertificate []byte
 
 	PublishRequests chan PubReq
+
+	// mu guards channel and activated. Requests for one session can arrive from more than one
+	// goroutine (the message loop and a Publish's background task).
+	mu sync.Mutex
+	// channel is the secure channel the session was created on. ActivateSession must arrive on
+	// it, and every later request too: a token presented on another channel is refused, so a
+	// token seen on the wire cannot be replayed from a second connection. Moving a session to
+	// another channel (Part 4 §5.6.3, "transfer") is not supported; a client that lost its
+	// channel creates a new session.
+	channel *uasc.SecureChannel
+	// activated is set by the first successful ActivateSession. Until then the session can be
+	// activated or closed and nothing else.
+	activated bool
+}
+
+// boundTo reports whether sc is the channel the session was created on.
+func (s *session) boundTo(sc *uasc.SecureChannel) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.channel == sc
+}
+
+func (s *session) activate() {
+	s.mu.Lock()
+	s.activated = true
+	s.mu.Unlock()
+}
+
+func (s *session) isActivated() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activated
 }
 
 type sessionConfig struct {
@@ -41,18 +79,24 @@ func newSessionBroker(logger Logger) *sessionBroker {
 	}
 }
 
-func (sb *sessionBroker) NewSession() *session {
+// NewSession makes a session bound to sc, with a fresh random authentication token.
+func (sb *sessionBroker) NewSession(sc *uasc.SecureChannel) (*session, error) {
+	tok := make([]byte, authTokenLength)
+	if _, err := rand.Read(tok); err != nil {
+		return nil, err
+	}
 	s := &session{
 		ID:              ua.NewGUIDNodeID(1, uuid.New().String()),
-		AuthTokenID:     ua.NewNumericNodeID(0, uint32(mrand.Int31())),
+		AuthTokenID:     ua.NewByteStringNodeID(0, tok),
 		PublishRequests: make(chan PubReq, 100),
+		channel:         sc,
 	}
 
 	sb.mu.Lock()
 	sb.s[s.AuthTokenID.String()] = s
 	sb.mu.Unlock()
 
-	return s
+	return s, nil
 }
 
 func (sb *sessionBroker) Close(authToken *ua.NodeID) error {
