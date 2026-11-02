@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/joyautomation/nautilus/internal/lsp"
 )
@@ -108,6 +109,10 @@ func main() {
 	// rides embedded on the executable's tail, and running it hosts the
 	// scan loop directly (NAUTILUS_CLI=1 recovers the CLI).
 	if fsys, ok := embeddedProject(); ok {
+		if wantsHelp(os.Args[1:]) {
+			fmt.Print(builtUsage(filepath.Base(os.Args[0])))
+			os.Exit(0)
+		}
 		os.Exit(runProject(fsys, embeddedManifest(fsys), "built", ""))
 	}
 	if len(os.Args) < 2 {

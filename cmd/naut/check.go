@@ -92,6 +92,15 @@ func runCheck(args []string) int {
 	}
 
 	if len(files) == 0 {
+		// A manifest that cannot be read is the project's whole problem, and
+		// check is the CI gate: a tree with nothing to compile must not pass
+		// just because the file that names the programs is empty or malformed.
+		if dir, ok := manifestDir(paths, *manifest); ok {
+			if _, err := project.ReadManifest(os.DirFS(dir), *manifest); err != nil {
+				fmt.Fprintln(os.Stderr, "naut check:", err)
+				return 1
+			}
+		}
 		fmt.Fprintln(os.Stderr, "naut check: no .st, .fbd, .ld, or .sfc files found")
 		return 0
 	}
@@ -382,9 +391,10 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	if !ok {
 		return 0, 0 // not a manifest project; compiling the files was the whole job
 	}
+	loc := newManifestLoc(dir, manifestName)
 	proj, err := project.Load(os.DirFS(dir), manifestName)
 	if err != nil {
-		fmt.Printf("%s: %s\n", dir, err)
+		fmt.Println(loc.say(err))
 		return 1, 0
 	}
 
@@ -393,7 +403,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	// runs on laptops that have none of the secrets a controller will.
 	for _, w := range driverWarnings(proj.Runtime.Driver) {
 		warns++
-		fmt.Printf("%s: warning: %s\n", dir, w)
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 
 	// The served HMI predates an edit it compiles in (a mimic, a scene,
@@ -402,7 +412,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		if src := project.StaleHMISource(os.DirFS(dir), proj.HMIDir); src != "" {
 			warns++
 			fmt.Printf("%s: warning: server.hmi: %s is older than %s — run npm run build in %s\n",
-				dir, proj.HMIDir, src, project.HMIBuildHint(proj.HMIDir))
+				loc.file, proj.HMIDir, src, project.HMIBuildHint(proj.HMIDir))
 		}
 	}
 
@@ -421,14 +431,14 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: %s's first task names itself %q, but the first task "+
 			"is always %q — the name: key on it is ignored; drop it (or move the "+
 			"program to a later task if it should be named %q)\n",
-			dir, manifestLabel(manifestName), raw.Tasks[0].Name, runtime.MainTaskName, raw.Tasks[0].Name)
+			loc.file, manifestLabel(manifestName), raw.Tasks[0].Name, runtime.MainTaskName, raw.Tasks[0].Name)
 	}
 
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
 		// The per-file pass already reported real compile errors; reaching
 		// here means the composed resource failed for some other reason.
-		fmt.Printf("%s: %s\n", dir, err)
+		fmt.Printf("%s: %s\n", loc.tag(tagNamedInError(err)), err)
 		return 1, 0
 	}
 
@@ -442,7 +452,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: input %q comes from a communications driver but has no "+
 			"knowable type (no type:, no program declares it, the driver cannot say), "+
 			"so it has no value until the device first delivers one — give it a type: "+
-			"to have it read as zero until then\n", dir, name)
+			"to have it read as zero until then\n", loc.tag(name), name)
 	}
 
 	// Keyed by ir.NameKey: tag names are case-insensitive identifiers, so a
@@ -474,12 +484,12 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			errs++
 			fmt.Printf("%s: error: the programs read %q, which %s declares no tag for — "+
 				"an undeclared tag is never seeded and never driver-fed, so the first "+
-				"read faults the scan\n", dir, name, manifestLabel(manifestName))
+				"read faults the scan\n", loc.file, name, manifestLabel(manifestName))
 		default:
 			warns++
 			fmt.Printf("%s: warning: the programs write %q, which %s declares no tag for — "+
 				"it will reach an HMI with no unit and no description\n",
-				dir, name, manifestLabel(manifestName))
+				loc.file, name, manifestLabel(manifestName))
 		}
 	}
 
@@ -506,7 +516,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		warns++
 		fmt.Printf("%s: warning: %s declares %s %q, which no program binds — "+
 			"dead, or a stale generated entry\n",
-			dir, manifestLabel(manifestName), roleName(d.Role), d.Name)
+			loc.tag(d.Name), manifestLabel(manifestName), roleName(d.Role), d.Name)
 	}
 
 	// A tag-meta key that matched a tag was folded into that tag's own
@@ -519,7 +529,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		}
 		warns++
 		fmt.Printf("%s: warning: tag-meta documents %q, which is not a declared tag — "+
-			"documentation for a tag that does not exist reaches nothing\n", dir, key)
+			"documentation for a tag that does not exist reaches nothing\n", loc.file, key)
 	}
 
 	// Alarms: the rules really expand, the templates really interpolate,
@@ -528,21 +538,21 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	defs, aerrs, awarns, err := proj.CheckAlarms(rt)
 	if err != nil {
 		errs++
-		fmt.Printf("%s: error: alarms: %s\n", dir, err)
+		fmt.Printf("%s: error: alarms: %s\n", loc.file, err)
 		return errs, warns
 	}
 	for _, m := range aerrs {
 		errs++
-		fmt.Printf("%s: error: %s\n", dir, m)
+		fmt.Printf("%s: error: %s\n", loc.file, m)
 	}
 	for _, m := range awarns {
 		warns++
-		fmt.Printf("%s: warning: %s\n", dir, m)
+		fmt.Printf("%s: warning: %s\n", loc.file, m)
 	}
 	if proj.Alarms != nil {
 		// The count is the auditable half of "a few rules cover thousands
 		// of alarms": `naut alarms list` dumps what they became.
-		fmt.Printf("%s: %d alarm definitions\n", dir, len(defs))
+		fmt.Printf("%s: %d alarm definitions\n", loc.file, len(defs))
 	}
 
 	// Scenes: every *.scene.json at the root really binds struct tags the
@@ -551,19 +561,19 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	reports, serrs, swarns, err := proj.CheckScenes(os.DirFS(dir), rt)
 	if err != nil {
 		errs++
-		fmt.Printf("%s: error: scenes: %s\n", dir, err)
+		fmt.Printf("%s: error: scenes: %s\n", loc.file, err)
 		return errs, warns
 	}
 	for _, m := range serrs {
 		errs++
-		fmt.Printf("%s: error: %s\n", dir, m)
+		fmt.Printf("%s: error: %s\n", loc.file, m)
 	}
 	for _, m := range swarns {
 		warns++
-		fmt.Printf("%s: warning: %s\n", dir, m)
+		fmt.Printf("%s: warning: %s\n", loc.file, m)
 	}
 	for _, r := range reports {
-		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", dir, r.File, r.Nodes, r.Pipes)
+		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", loc.file, r.File, r.Nodes, r.Pipes)
 	}
 	return errs, warns
 }

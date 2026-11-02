@@ -640,6 +640,11 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil {
+		if errors.Is(err, io.EOF) {
+			// The decoder reports a file with no document as a bare EOF,
+			// which says nothing a person can act on.
+			return nil, fmt.Errorf("%s: the file is empty — a manifest needs at least a name: and a tasks: list (naut new writes one)", name)
+		}
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if !dialect.Known(m.Dialect) {
