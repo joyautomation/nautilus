@@ -84,7 +84,7 @@ func TestCheckGoldenShadowWarning(t *testing.T) {
 		"program.st":    "PROGRAM Main\nVAR\n    Level : REAL;\nEND_VAR\nLevel := 1.0;\nOut := Level;\nEND_PROGRAM\n",
 	})
 	assertGolden(t, out, code, 0, `program.st:3:5: warning: local Level shadows the project tag Level — this program reads and writes its own Level, not the tag; rename it, or drop the declaration to use the tag
-.: warning: nautilus.yaml declares state "Level", which no program binds — dead, or a stale generated entry
+nautilus.yaml:4:13: warning: nautilus.yaml declares state "Level", which no program binds — dead, or a stale generated entry
 naut check: 1 file(s), 0 with errors, 2 warning(s)`)
 }
 
