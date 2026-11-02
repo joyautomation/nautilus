@@ -171,7 +171,8 @@ claims:
       driver reporting NotConnected); a quality-only change is pushed to a
       subscriber (TestQualityChangeIsNotified; #419); a local-I/O input never
       delivered, which is not seeded, is a node of its declared type with no
-      value and Bad_NotConnected, and a subscriber hears it go Good on its
+      value and Bad_NotConnected (or the driver's own Bad status), listed
+      once, and a subscriber hears it go Good on its
       first delivery (TestNeverDeliveredLocalInputHasANode; #420). The black-box
       check 001-F15-status-change-notified stays open: it creates its item
       through asyncua's raw uaclient, so asyncua drops the notifications as

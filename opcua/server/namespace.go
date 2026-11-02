@@ -155,8 +155,9 @@ func (ns *namespace) resolve(nid *ua.NodeID) (member, bool) {
 // Comms). The address space still shows it from the start: a node of its
 // declared type whose Value is Bad_NotConnected (#420), so a client that
 // browses at connect sees every input it will ever have. An input whose type
-// nothing declares (no type:, no program reading it) has no shape to show
-// and stays absent until its first value.
+// nothing declares (no type:, no program declaring it) has no shape to show
+// and stays absent until its first value. Types are the store's as of New:
+// an online edit that first types an input does not add its node.
 func (ns *namespace) undelivered(root string) (string, *ir.Type, bool) {
 	tags := ns.rt.Tags()
 	key := ir.NameKey(root)
@@ -174,6 +175,13 @@ func undeliveredInput(tags *runtime.Tags, name string) (string, *ir.Type, bool) 
 	if _, held := tags.Canonical(name); held {
 		return "", nil, false
 	}
+	return typedInput(tags, name)
+}
+
+// typedInput is name with the type the store records for it, when that is
+// a type a node can show. An FB-typed input cannot be declared (an FB
+// instance must be a program local), so the FB test is defensive.
+func typedInput(tags *runtime.Tags, name string) (string, *ir.Type, bool) {
 	t := tags.TypeOf(name)
 	if t == nil || t.Kind == ir.TypeFB {
 		return "", nil, false
@@ -202,21 +210,31 @@ func (ns *namespace) roots() []member {
 	for name := range snap {
 		names = append(names, name)
 	}
-	// Declared inputs not delivered yet (undelivered) are roots too.
+	// Declared inputs not delivered yet (undelivered) are roots too. Held
+	// is judged against this same snapshot, so an input delivered meanwhile
+	// is in one list or the other, never neither; names fold case, as the
+	// store's do.
+	held := make(map[string]bool, len(snap))
+	for name := range snap {
+		held[ir.NameKey(name)] = true
+	}
 	absent := map[string]*ir.Type{}
 	for _, name := range ns.rt.Inputs() {
-		if n, t, ok := undeliveredInput(tags, name); ok {
-			if _, dup := absent[n]; !dup {
-				absent[n] = t
-				names = append(names, n)
-			}
+		k := ir.NameKey(name)
+		if held[k] {
+			continue
+		}
+		if n, t, ok := typedInput(tags, name); ok {
+			held[k] = true
+			absent[n] = t
+			names = append(names, n)
 		}
 	}
 	sort.Strings(names)
 	out := make([]member, 0, len(names))
 	for _, name := range names {
 		if t, ok := absent[name]; ok {
-			out = append(out, member{addr: name, val: ir.Zero(t), typ: t, absent: true})
+			out = append(out, member{addr: name, val: ir.Zero(t), typ: t})
 			continue
 		}
 		out = append(out, member{addr: name, val: snap[name], typ: tags.TypeOf(name)})

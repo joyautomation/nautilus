@@ -168,9 +168,10 @@ down](/guides/tag-model/#inputs-from-a-device-that-is-down)), so it reads
 that seed with `Bad_NotConnected` until the device answers. A local-I/O
 input (`plcnext`, `optommp`) is not seeded, and a program that reads it
 before its first value still faults the scan. Its node is there from the
-start all the same: typed as declared, with no value, and `Bad_NotConnected`.
+start all the same: typed as declared, with no value, and `Bad_NotConnected`
+(or the driver's own Bad status, when it reports one for the tag).
 The exception is an input whose type nothing declares (no `type:`, and no
-program reads it). It has no node until its first value arrives, so a
+program declares it). It has no node until its first value arrives, so a
 client that browsed before then must browse again.
 
 One limit of the current server, found by its black-box runs and tracked as

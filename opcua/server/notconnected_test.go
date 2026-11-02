@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,7 @@ Out := Level;
 END_PROGRAM`,
 		Driver: mem,
 		Scan:   20 * time.Millisecond,
+		Inputs: []string{"level"}, // the same input again, in another casing
 		Tags: []runtime.TagDef{
 			runtime.Input("Level"), // typed by the program
 			pump,                   // typed by type:
@@ -83,8 +85,11 @@ END_PROGRAM`,
 	}
 
 	folder := browse(t, c, ua.NewNumericNodeID(s.ns.id, folderID))
+	if n := listed(t, c, ua.NewNumericNodeID(s.ns.id, folderID), "level"); n != 1 {
+		t.Errorf("Level listed %d times under the folder before delivery, want 1", n)
+	}
 	for _, name := range []string{"Level", "P1"} {
-		if folder[name] == nil {
+		if listed(t, c, ua.NewNumericNodeID(s.ns.id, folderID), name) == 0 {
 			t.Errorf("no %s under the project folder before its first delivery", name)
 		}
 	}
@@ -141,6 +146,35 @@ END_PROGRAM`,
 	if dv := read(t, c, s.NodeID("Level"), ua.AttributeIDValue); dv.Status != ua.StatusGood || dv.Value.Value() != 4.5 {
 		t.Errorf("Level after delivery: %s %v", dv.Status, dv.Value)
 	}
+	if n := listed(t, c, ua.NewNumericNodeID(s.ns.id, folderID), "level"); n != 1 {
+		t.Errorf("Level listed %d times under the folder after delivery, want 1", n)
+	}
+}
+
+// listed counts the references below nid whose browse name is name, in any
+// casing (browse's map would hide a duplicate).
+func listed(t *testing.T, c *opcua.Client, nid *ua.NodeID, name string) int {
+	t.Helper()
+	resp, err := c.Browse(context.Background(), &ua.BrowseRequest{
+		NodesToBrowse: []*ua.BrowseDescription{{
+			NodeID:          nid,
+			BrowseDirection: ua.BrowseDirectionForward,
+			ReferenceTypeID: ua.NewNumericNodeID(0, id.HierarchicalReferences),
+			IncludeSubtypes: true,
+			NodeClassMask:   uint32(ua.NodeClassAll),
+			ResultMask:      uint32(ua.BrowseResultMaskAll),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("browse %s: %v", nid, err)
+	}
+	n := 0
+	for _, r := range resp.Results[0].References {
+		if strings.EqualFold(r.BrowseName.Name, name) {
+			n++
+		}
+	}
+	return n
 }
 
 // next is the next value notification on notify, within two seconds.
