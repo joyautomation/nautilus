@@ -295,16 +295,21 @@ and one command:
 3. Approve it:
 
    ```
-   $ naut opcua trust 5c1f0e7a
+   $ naut opcua trust 5c1f0e7a9b3d2c41
    ```
 
-   At least 8 hex digits are enough. The server reads `trusted/` on every
-   connection, so the client's next attempt connects, with no restart.
+   Give at least 16 hex digits, or paste the whole thumbprint. Anyone who
+   can reach the port can file a certificate in `rejected/`, so a short
+   prefix could match one made to imitate it. The server reads `trusted/`
+   on every connection, so the client's next attempt connects, with no
+   restart. `rejected/` keeps the 100 most recent refusals.
 
 Copying a certificate into `trusted/certs/` (DER or PEM, any file name)
 does the same. To withdraw trust, delete its file there: the client is
 refused on its next connection, and an open channel at its next key
-renewal. A certificate outside its validity period is refused with
+renewal. A channel's keys last an hour at most, and a channel that does not
+renew in time is closed, so a withdrawn client is cut off within about an
+hour and a quarter. A certificate outside its validity period is refused with
 `Bad_CertificateTimeInvalid`, trusted or not. There is no "accept
 everything" switch. `--pki DIR` points both commands at another store; by
 default they use the `opcua.pki` of the `nautilus.yaml` in the working

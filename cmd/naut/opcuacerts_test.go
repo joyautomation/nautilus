@@ -47,10 +47,10 @@ func TestOPCUACertsAndTrust(t *testing.T) {
 		}
 	}
 
-	if code := runOPCUATrust([]string{"--pki", dir, "abc"}); code != 1 {
-		t.Errorf("a 3-digit prefix: exit %d, want 1", code)
+	if code := runOPCUATrust([]string{"--pki", dir, thumb[:15]}); code != 1 {
+		t.Errorf("a 15-digit prefix: exit %d, want 1", code)
 	}
-	out = captureStdout(t, func() int { return runOPCUATrust([]string{"--pki", dir, strings.ToUpper(thumb[:8])}) })
+	out = captureStdout(t, func() int { return runOPCUATrust([]string{"--pki", dir, strings.ToUpper(thumb[:16])}) })
 	if !strings.Contains(out, "trusted "+thumb) {
 		t.Errorf("trust output:\n%s", out)
 	}
@@ -63,7 +63,15 @@ func TestOPCUACertsAndTrust(t *testing.T) {
 	if err := pki.Verify(der); err != nil {
 		t.Errorf("after trust, Verify: %v", err)
 	}
-	if code := runOPCUATrust([]string{"--pki", dir, thumb[:8]}); code != 1 {
+	if code := runOPCUATrust([]string{"--pki", dir, thumb[:16]}); code != 1 {
 		t.Errorf("trusting it again: exit %d, want 1 (already trusted)", code)
+	}
+}
+
+// A certificate's subject is chosen by whoever made it: escapes in it are
+// not passed to the terminal.
+func TestOPCUACertsEscapesControlCharacters(t *testing.T) {
+	if got := printable("CN=\x1b[2Jevil\x07"); got != "CN=?[2Jevil?" {
+		t.Errorf("printable = %q", got)
 	}
 }

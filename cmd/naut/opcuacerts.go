@@ -16,6 +16,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 
@@ -71,10 +72,10 @@ func runOPCUACerts(args []string) int {
 	if own != nil {
 		fmt.Printf("Server certificate (%s)\n", own.File)
 		fmt.Printf("  thumbprint  %s\n", own.Thumbprint)
-		fmt.Printf("  subject     %s\n", own.Subject)
-		fmt.Printf("  uri         %s\n", own.ApplicationURI)
+		fmt.Printf("  subject     %s\n", printable(own.Subject))
+		fmt.Printf("  uri         %s\n", printable(own.ApplicationURI))
 		fmt.Printf("  expires     %s\n", expiry(own.NotAfter, now))
-		fmt.Printf("  hosts       %s\n", strings.Join(append(append([]string(nil), own.DNSNames...), own.IPAddresses...), ", "))
+		fmt.Printf("  hosts       %s\n", printable(strings.Join(append(append([]string(nil), own.DNSNames...), own.IPAddresses...), ", ")))
 	} else {
 		fmt.Printf("Server certificate: none yet (the server makes one in %s on its first start)\n", filepath.Join(dir, "own"))
 	}
@@ -86,7 +87,7 @@ func runOPCUACerts(args []string) int {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "  THUMBPRINT\tAPPLICATION URI\tSUBJECT\tEXPIRES")
 		for _, c := range certs {
-			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", c.Thumbprint, c.ApplicationURI, c.Subject, expiry(c.NotAfter, now))
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject), expiry(c.NotAfter, now))
 		}
 		tw.Flush()
 		if hint != "" {
@@ -96,6 +97,19 @@ func runOPCUACerts(args []string) int {
 	list("Trusted clients", "trusted", trusted, "")
 	list("Rejected clients", "rejected", rejected, "Approve one with: naut opcua trust <thumbprint>")
 	return 0
+}
+
+// printable is s with every control or non-printable character shown as
+// "?": a certificate's subject and URI are chosen by whoever made it, and
+// rejected/ holds certificates from anyone who reached the port, so they
+// must not carry terminal escape sequences into the listing.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return '?'
+	}, s)
 }
 
 func expiry(t, now time.Time) string {
@@ -124,6 +138,6 @@ func runOPCUATrust(args []string) int {
 		fmt.Fprintf(os.Stderr, "naut opcua trust: %v\n", err)
 		return 1
 	}
-	fmt.Printf("trusted %s\n  %s\n  %s\nThe client can connect now; the server reads the trust list on every connection.\n", c.Thumbprint, c.ApplicationURI, c.Subject)
+	fmt.Printf("trusted %s\n  %s\n  %s\nThe client can connect now; the server reads the trust list on every connection.\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject))
 	return 0
 }

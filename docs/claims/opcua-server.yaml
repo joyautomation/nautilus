@@ -304,10 +304,11 @@ claims:
       Bad_CertificateUntrusted and filed in rejected/certs under its
       thumbprint, one outside its validity period with
       Bad_CertificateTimeInvalid. naut opcua certs lists the store, naut
-      opcua trust <thumbprint prefix of 8+ digits> moves a rejected
+      opcua trust <thumbprint prefix of 16+ digits> moves a rejected
       certificate to trusted/, and the next attempt connects without a
       restart, since the trust list is read on every connection and every
-      renewal. CreateSession on a secured channel must present the
+      renewal; a token lives an hour at most and a channel that does not
+      renew in time is closed; rejected/ keeps the newest 100. CreateSession on a secured channel must present the
       channel's own certificate (Bad_SecurityChecksFailed) and the
       ApplicationUri it names (Bad_CertificateUriInvalid). Sessions are
       anonymous: another identity token is Bad_IdentityTokenInvalid. A

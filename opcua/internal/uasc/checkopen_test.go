@@ -1,7 +1,9 @@
 package uasc
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gopcua/opcua/ua"
 )
@@ -66,5 +68,62 @@ func TestCheckOpen(t *testing.T) {
 	s.secOpened, s.sec = true, secure
 	if err := s.checkOpen(secure); err != nil || len(verified) != 1 {
 		t.Errorf("renewal: %v, verified %d certificates, want 1", err, len(verified))
+	}
+}
+
+// A renewal OPN is held to the channel's own policy and certificate before
+// anything is decrypted with it, and gets a new instance (a new token on the
+// same channel and sequence counter) rather than the live one's keys.
+func TestRenewalInstanceHoldsTheChannelSecurity(t *testing.T) {
+	active := &channelInstance{secureChannelID: 7, securityTokenID: 41, seq: new(atomic.Uint32)}
+	s := &SecureChannel{kind: server, cfg: &Config{}, activeInstance: active}
+	s.secOpened, s.sec = true, channelSecurity{policy: ua.SecurityPolicyURIBasic256Sha256, mode: ua.MessageSecurityModeSignAndEncrypt, cert: []byte("A")}
+	if _, err := s.renewalInstance(ua.SecurityPolicyURINone, nil); err != ua.StatusBadSecurityChecksFailed {
+		t.Errorf("renewal down to None: %v, want Bad_SecurityChecksFailed", err)
+	}
+	if _, err := s.renewalInstance(ua.SecurityPolicyURIBasic256Sha256, []byte("B")); err != ua.StatusBadSecurityChecksFailed {
+		t.Errorf("renewal with another certificate: %v, want Bad_SecurityChecksFailed", err)
+	}
+
+	s.sec = channelSecurity{policy: ua.SecurityPolicyURINone, mode: ua.MessageSecurityModeNone}
+	inst, err := s.renewalInstance(ua.SecurityPolicyURINone, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst == active || inst.secureChannelID != 7 || inst.securityTokenID != 42 || inst.seq != active.seq {
+		t.Errorf("renewal instance %+v: want a new instance, channel 7, token 42, the channel's counter", inst)
+	}
+}
+
+// The granted token lifetime is at most an hour.
+func TestRevisedLifetimeIsCapped(t *testing.T) {
+	for req, want := range map[uint32]uint32{0: maxLifetime, 1500: 1500, maxLifetime: maxLifetime, 50 * maxLifetime: maxLifetime} {
+		if got := revisedLifetime(req); got != want {
+			t.Errorf("revisedLifetime(%d) = %d, want %d", req, got, want)
+		}
+	}
+}
+
+// A server channel whose token runs out without a renewal is closed; one
+// that renewed is not.
+func TestTokenExpiryClosesAnUnrenewedChannel(t *testing.T) {
+	closed := make(chan struct{}, 1)
+	s := &SecureChannel{kind: server, closeConn: func() { closed <- struct{}{} }}
+	inst := &channelInstance{revisedLifetime: 40 * time.Millisecond}
+	s.activeInstance = inst
+	s.expireUnlessRenewed(inst)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("an expired, unrenewed channel was not closed")
+	}
+
+	renewed := &channelInstance{revisedLifetime: 40 * time.Millisecond}
+	s.activeInstance = renewed
+	s.expireUnlessRenewed(inst) // the old token's timer
+	select {
+	case <-closed:
+		t.Fatal("a renewed channel was closed when its old token expired")
+	case <-time.After(150 * time.Millisecond):
 	}
 }

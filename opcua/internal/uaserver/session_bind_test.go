@@ -290,3 +290,16 @@ func TestActivateSessionChecksTheIdentityToken(t *testing.T) {
 		}
 	}
 }
+
+// A token whose type the decoder did not know (a type id but no body) is not
+// a null token, so it is not anonymous.
+func TestMalformedIdentityTokenIsNotAnonymous(t *testing.T) {
+	srv := New(EndPoint("127.0.0.1", 0), EnableSecurity("None", ua.MessageSecurityModeNone), EnableAuthMode(ua.UserTokenTypeAnonymous))
+	srv.initEndpoints()
+	if _, code := srv.checkIdentity(&ua.ExtensionObject{TypeID: ua.NewFourByteExpandedNodeID(0, 321)}); code != ua.StatusBadIdentityTokenInvalid {
+		t.Errorf("a typed token with no body: %v, want Bad_IdentityTokenInvalid", code)
+	}
+	if id, code := srv.checkIdentity(ua.NewExtensionObject(nil)); code != ua.StatusOK || id != "anonymous" {
+		t.Errorf("a null token: %q %v, want anonymous", id, code)
+	}
+}

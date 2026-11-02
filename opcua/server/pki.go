@@ -39,8 +39,9 @@ import (
 )
 
 // DefaultPKI is the certificate store's directory when the manifest names
-// none: relative to the working directory, as bdseq and retain files are, so
-// it is never inside the project and `naut build` never embeds a key.
+// none: relative to the working directory, as bdseq and retain files are.
+// `naut run` from the project directory puts it in the project, so naut new
+// ignores /pki/ in git and naut build skips any certificate store.
 const DefaultPKI = "pki"
 
 // certValidity is how long a generated server certificate is valid.
@@ -276,10 +277,14 @@ func missingHosts(c *x509.Certificate, hosts []string) []string {
 // Bad_CertificateTimeInvalid; one not in trusted/ is written to rejected/
 // (once) and refused with Bad_CertificateUntrusted.
 func (p PKI) Verify(der []byte) error {
-	c, err := x509.ParseCertificate(der)
-	if err != nil {
+	// A client may send its certificate followed by its issuers (Part 6
+	// §6.7.2.3); the leaf is the one trusted, filed and named.
+	chain, err := x509.ParseCertificates(der)
+	if err != nil || len(chain) == 0 {
 		return ua.StatusBadCertificateInvalid
 	}
+	c := chain[0]
+	der = c.Raw
 	if _, ok := c.PublicKey.(*rsa.PublicKey); !ok {
 		return ua.StatusBadCertificateInvalid
 	}
@@ -322,9 +327,14 @@ func (p PKI) trusted(der []byte) bool {
 	return false
 }
 
-// reject writes der to rejected/ under its thumbprint, unless it is there.
-// A failure to write is not the client's business: the channel is refused
-// either way.
+// maxRejected is how many refused certificates rejected/ keeps: anyone who
+// can reach the port can file one per connection attempt, so the oldest go
+// once there are more.
+const maxRejected = 100
+
+// reject writes der to rejected/ under its thumbprint, unless it is there,
+// and trims the directory to the newest maxRejected. A failure to write is
+// not the client's business: the channel is refused either way.
 func (p PKI) reject(der []byte) {
 	if err := os.MkdirAll(p.rejectedDir(), 0o700); err != nil {
 		return
@@ -338,6 +348,28 @@ func (p PKI) reject(der []byte) {
 		return
 	}
 	_ = os.Rename(tmp, file)
+	p.trimRejected()
+}
+
+func (p PKI) trimRejected() {
+	ents, err := os.ReadDir(p.rejectedDir())
+	if err != nil || len(ents) <= maxRejected {
+		return
+	}
+	type aged struct {
+		name string
+		at   time.Time
+	}
+	var files []aged
+	for _, e := range ents {
+		if fi, err := e.Info(); err == nil && !e.IsDir() {
+			files = append(files, aged{e.Name(), fi.ModTime()})
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].at.After(files[j].at) })
+	for _, f := range files[min(maxRejected, len(files)):] {
+		_ = os.Remove(filepath.Join(p.rejectedDir(), f.name))
+	}
 }
 
 // Certs lists the store: the server's own certificate (nil before the first
@@ -396,14 +428,21 @@ func listCerts(dir string) ([]CertInfo, error) {
 	return out, nil
 }
 
+// minTrustPrefix is how many hex digits of a thumbprint Trust needs. Any
+// client can file a certificate in rejected/, and the thumbprint of the one
+// an operator means is visible on the wire (the OPN header is not
+// encrypted), so a short prefix is a target: 8 digits is 2^32 tries to
+// match, 16 is 2^64.
+const minTrustPrefix = 16
+
 // Trust approves the rejected certificate whose thumbprint starts with
-// prefix (at least 8 hex digits, any case): it moves from rejected/ to
-// trusted/. A prefix naming no rejected certificate, or more than one, is an
-// error; one already trusted is reported as such.
+// prefix (at least 16 hex digits, any case, colons allowed): it moves from
+// rejected/ to trusted/. A prefix naming no rejected certificate, or more
+// than one, is an error; one already trusted is reported as such.
 func (p PKI) Trust(prefix string) (CertInfo, error) {
 	prefix = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(prefix), ":", ""))
-	if len(prefix) < 8 {
-		return CertInfo{}, fmt.Errorf("give at least 8 hex digits of the thumbprint (naut opcua certs lists them)")
+	if len(prefix) < minTrustPrefix {
+		return CertInfo{}, fmt.Errorf("give at least %d hex digits of the thumbprint, ideally all 40 (naut opcua certs lists them): a shorter prefix is cheap for someone else to match", minTrustPrefix)
 	}
 	_, trusted, rejected, err := p.Certs()
 	if err != nil {

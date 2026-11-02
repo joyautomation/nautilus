@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gopcua/opcua/debug"
@@ -36,6 +37,12 @@ type channelInstance struct {
 	algo            *uapolicy.EncryptionAlgorithm
 	maxBodySize     uint32
 
+	// seq, on a server channel, is the channel's one sequence counter, shared
+	// by every instance a renewal makes, so numbers keep rising across a
+	// token change (Part 6 §6.7.2.4) whichever instance sends. Nil on a
+	// client channel, which counts per instance as gopcua did.
+	seq *atomic.Uint32
+
 	bytesSent uint64 // atomic.Load/Store - needs to be aligned for 32bit systems
 	// bytesReceived    uint64
 	messagesSent uint32 // atomic.Load/Store
@@ -50,6 +57,14 @@ func newChannelInstance(sc *SecureChannel) *channelInstance {
 }
 
 func (c *channelInstance) nextSequenceNumber() uint32 {
+	if c.seq != nil {
+		n := c.seq.Add(1)
+		if n > math.MaxUint32-1023 {
+			c.seq.Store(1)
+			n = 1
+		}
+		return n
+	}
 	// lock must be held
 	c.sequenceNumber++
 	if c.sequenceNumber > math.MaxUint32-1023 {

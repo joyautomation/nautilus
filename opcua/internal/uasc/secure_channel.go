@@ -188,6 +188,10 @@ type SecureChannel struct {
 	endMu  sync.Mutex
 	endErr error
 
+	// closeConn closes the connection under a server channel whose token
+	// expired (expireUnlessRenewed); nil is s.c.Close. Tests replace it.
+	closeConn func()
+
 	closeOnce sync.Once
 }
 
@@ -205,6 +209,8 @@ func NewServerSecureChannel(endpoint string, c *uacp.Conn, cfg *Config, errCh ch
 	s.openingInstance.secureChannelID = secureChannelID
 	s.openingInstance.sequenceNumber = sequenceNumber
 	s.openingInstance.securityTokenID = securityTokenID
+	s.openingInstance.seq = new(atomic.Uint32)
+	s.openingInstance.seq.Store(sequenceNumber)
 
 	return s, nil
 }
@@ -280,9 +286,10 @@ func (s *SecureChannel) dispatcher() {
 			return
 		default:
 			msg := s.Receive(ctx)
-			if code, ok := msg.Err.(ua.StatusCode); ok {
+			var te transportError
+			if errors.As(msg.Err, &te) {
 				s.endMu.Lock()
-				s.endErr = code
+				s.endErr = te.code
 				s.endMu.Unlock()
 			}
 			if msg.Err != nil {
@@ -465,7 +472,7 @@ func (s *SecureChannel) readChunk() (*MessageChunk, error) {
 	// Bad_CertificateUntrusted saw only EOF.
 	var uacperr *uacp.Error
 	if errors.As(err, &uacperr) {
-		return nil, ua.StatusCode(uacperr.ErrorCode)
+		return nil, transportError{ua.StatusCode(uacperr.ErrorCode)}
 	}
 	if err == io.EOF || len(b) == 0 {
 		return nil, io.EOF
@@ -499,32 +506,36 @@ func (s *SecureChannel) readChunk() (*MessageChunk, error) {
 			return nil, errors.Errorf("sechan: invalid state. openingInstance is nil.")
 		}
 
-		s.cfg.SecurityPolicyURI = m.SecurityPolicyURI
-		if m.SecurityPolicyURI != ua.SecurityPolicyURINone {
-			s.cfg.RemoteCertificate = m.AsymmetricSecurityHeader.SenderCertificate
-			// Re-derive the receiver thumbprint from the peer certificate
-			// learned in the inbound OPN. No-op for the client path, where
-			// Thumbprint is already set from the endpoint's ServerCertificate
-			// at session open.
-			if len(s.cfg.RemoteCertificate) > 0 {
-				s.cfg.Thumbprint = uapolicy.Thumbprint(s.cfg.RemoteCertificate)
-			}
-			debug.Printf("uasc %d: setting securityPolicy to %s", s.c.ID(), m.SecurityPolicyURI)
-
-			remoteCert, err := uapolicy.ParseCertificate(s.cfg.RemoteCertificate)
+		if s.kind == server && s.opened() {
+			// A renewal. The live channel instance and s.cfg are in use by
+			// the handlers on other goroutines, so nothing of them is
+			// written here: the OPN is checked against the channel's own
+			// security and decrypted with a new instance, which the
+			// handler installs beside the old one (handleOpenSecureChannelRequest).
+			inst, err := s.renewalInstance(m.SecurityPolicyURI, m.AsymmetricSecurityHeader.SenderCertificate)
 			if err != nil {
-				return nil, ua.StatusBadCertificateInvalid
+				return nil, err
 			}
-			remoteKey, ok := remoteCert.PublicKey.(*rsa.PublicKey)
-			if !ok {
-				return nil, ua.StatusBadCertificateInvalid
-			}
-			algo, err := uapolicy.Asymmetric(s.cfg.SecurityPolicyURI, s.openingInstance.sc.cfg.LocalKey, remoteKey)
-			if err != nil {
-				return nil, ua.StatusBadSecurityPolicyRejected
-			}
+			s.openingInstance = inst
+		} else {
+			s.cfg.SecurityPolicyURI = m.SecurityPolicyURI
+			if m.SecurityPolicyURI != ua.SecurityPolicyURINone {
+				s.cfg.RemoteCertificate = m.AsymmetricSecurityHeader.SenderCertificate
+				// Re-derive the receiver thumbprint from the peer certificate
+				// learned in the inbound OPN. No-op for the client path, where
+				// Thumbprint is already set from the endpoint's ServerCertificate
+				// at session open.
+				if len(s.cfg.RemoteCertificate) > 0 {
+					s.cfg.Thumbprint = uapolicy.Thumbprint(s.cfg.RemoteCertificate)
+				}
+				debug.Printf("uasc %d: setting securityPolicy to %s", s.c.ID(), m.SecurityPolicyURI)
 
-			s.openingInstance.algo = algo
+				algo, err := asymmetricFor(m.SecurityPolicyURI, s.openingInstance.sc.cfg.LocalKey, s.cfg.RemoteCertificate)
+				if err != nil {
+					return nil, err
+				}
+				s.openingInstance.algo = algo
+			}
 		}
 
 		decryptWith = s.openingInstance
@@ -772,17 +783,28 @@ func (s *SecureChannel) handleOpenSecureChannelRequest(reqID uint32, svc ua.Requ
 	}
 
 	// The policy came from the OPN's security header (readChunk), the mode
-	// from the request; the certificate only counts under a real policy.
+	// from the request; the certificate only counts under a real policy. A
+	// renewal's policy and certificate were held to the channel's own in
+	// readChunk, which left s.cfg alone.
+	renewal := s.opened()
 	want := channelSecurity{policy: s.cfg.SecurityPolicyURI, mode: req.SecurityMode}
 	if want.policy != ua.SecurityPolicyURINone {
 		want.cert = s.cfg.RemoteCertificate
+	}
+	if renewal {
+		s.secMu.RLock()
+		want.policy, want.cert = s.sec.policy, s.sec.cert
+		s.secMu.RUnlock()
 	}
 	if err := s.checkOpen(want); err != nil {
 		return err
 	}
 
-	s.cfg.Lifetime = req.RequestedLifetime
-	s.cfg.SecurityMode = req.SecurityMode
+	lifetime := revisedLifetime(req.RequestedLifetime)
+	if !renewal {
+		s.cfg.Lifetime = lifetime
+		s.cfg.SecurityMode = req.SecurityMode
+	}
 
 	// I had to do the encryption setup in the chunk decoding logic because you have to
 	// decrypt the thing before you even know you have an open message.
@@ -837,7 +859,7 @@ func (s *SecureChannel) handleOpenSecureChannelRequest(reqID uint32, svc ua.Requ
 			ChannelID:       instance.secureChannelID,
 			TokenID:         instance.securityTokenID,
 			CreatedAt:       s.timeNow(),
-			RevisedLifetime: req.RequestedLifetime,
+			RevisedLifetime: lifetime,
 		},
 		ServerNonce: nonce,
 	}
@@ -854,13 +876,18 @@ func (s *SecureChannel) handleOpenSecureChannelRequest(reqID uint32, svc ua.Requ
 	instance.SetMaximumBodySize(int(s.c.SendBufSize()))
 
 	instance.state = channelActive // todo(fs): is this correct?
+	instance.createdAt = s.timeNow()
+	instance.revisedLifetime = time.Duration(lifetime) * time.Millisecond
 	// s.setState(secureChannelOpen)
 
 	s.instancesMu.Lock()
-	s.instances[instance.secureChannelID] = append(
-		s.instances[instance.secureChannelID],
-		instance,
-	)
+	list := append(s.instances[instance.secureChannelID], instance)
+	if len(list) > 2 {
+		// A renewal keeps the token before it for the messages the client
+		// sent on it before switching (Part 6 §6.7.6); older ones are done.
+		list = append([]*channelInstance(nil), list[len(list)-2:]...)
+	}
+	s.instances[instance.secureChannelID] = list
 	s.activeInstance = instance
 	s.instancesMu.Unlock()
 
@@ -868,7 +895,109 @@ func (s *SecureChannel) handleOpenSecureChannelRequest(reqID uint32, svc ua.Requ
 	s.secOpened, s.sec = true, want
 	s.secMu.Unlock()
 
+	s.expireUnlessRenewed(instance)
 	return nil
+}
+
+// maxLifetime caps the token lifetime a server channel grants: a client
+// asking for weeks would otherwise keep its channel, and whatever trust it
+// was opened under, that long without ever renewing.
+const maxLifetime = uint32(time.Hour / time.Millisecond)
+
+// revisedLifetime is the token lifetime granted for a requested one: as
+// asked, at most an hour; zero (no preference) is an hour.
+func revisedLifetime(requested uint32) uint32 {
+	if requested == 0 || requested > maxLifetime {
+		return maxLifetime
+	}
+	return requested
+}
+
+// opened reports whether a server channel has completed its first
+// OpenSecureChannel, so that the next one is a renewal.
+func (s *SecureChannel) opened() bool {
+	s.secMu.RLock()
+	defer s.secMu.RUnlock()
+	return s.secOpened
+}
+
+// renewalInstance is the instance a renewal OPN is decrypted with and, once
+// the handler installs it, the channel's next token: the channel's own id,
+// a new token id, the shared sequence counter, and the asymmetric algorithm
+// for the policy and certificate the channel opened with. The OPN must ask
+// for that same policy and certificate (Bad_SecurityChecksFailed): gopcua
+// re-read both from every OPN into the live configuration.
+func (s *SecureChannel) renewalInstance(policy string, cert []byte) (*channelInstance, error) {
+	s.secMu.RLock()
+	had := s.sec
+	s.secMu.RUnlock()
+	if policy != had.policy {
+		return nil, ua.StatusBadSecurityChecksFailed
+	}
+	if policy != ua.SecurityPolicyURINone && !bytes.Equal(cert, had.cert) {
+		return nil, ua.StatusBadSecurityChecksFailed
+	}
+	active, err := s.getActiveChannelInstance()
+	if err != nil {
+		return nil, err
+	}
+	inst := newChannelInstance(s)
+	inst.secureChannelID = active.secureChannelID
+	inst.securityTokenID = active.securityTokenID + 1
+	inst.seq = active.seq
+	if policy != ua.SecurityPolicyURINone {
+		algo, err := asymmetricFor(policy, s.cfg.LocalKey, cert)
+		if err != nil {
+			return nil, err
+		}
+		inst.algo = algo
+	}
+	return inst, nil
+}
+
+// asymmetricFor is the OpenSecureChannel algorithm for policy between the
+// server's key and the client certificate cert: Bad_CertificateInvalid for
+// a certificate that does not parse or holds no RSA key,
+// Bad_SecurityPolicyRejected for a policy this stack does not implement.
+func asymmetricFor(policy string, local *rsa.PrivateKey, cert []byte) (*uapolicy.EncryptionAlgorithm, error) {
+	remoteCert, err := uapolicy.ParseCertificate(cert)
+	if err != nil {
+		return nil, ua.StatusBadCertificateInvalid
+	}
+	remoteKey, ok := remoteCert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, ua.StatusBadCertificateInvalid
+	}
+	algo, err := uapolicy.Asymmetric(policy, local, remoteKey)
+	if err != nil {
+		return nil, ua.StatusBadSecurityPolicyRejected
+	}
+	return algo, nil
+}
+
+// expireUnlessRenewed closes a server channel whose token runs out without
+// a renewal: a quarter past its lifetime, the grace Part 6 §6.7.6 allows,
+// the connection is closed if inst is still the newest token. Without it a
+// client that never renewed kept its channel, and the trust it was opened
+// under, for as long as it liked; with it, taking a certificate off the
+// trust list cuts its client off within an hour and a quarter at most.
+func (s *SecureChannel) expireUnlessRenewed(inst *channelInstance) {
+	if s.kind != server || inst.revisedLifetime <= 0 {
+		return
+	}
+	time.AfterFunc(inst.revisedLifetime+inst.revisedLifetime/4, func() {
+		s.instancesMu.Lock()
+		stale := s.activeInstance == inst
+		s.instancesMu.Unlock()
+		if stale {
+			debug.Printf("uasc: token %d expired without a renewal; closing", inst.securityTokenID)
+			if s.closeConn != nil {
+				s.closeConn()
+			} else {
+				s.c.Close()
+			}
+		}
+	})
 }
 
 // channelSecurity is the security policy, mode and client certificate a
@@ -905,6 +1034,15 @@ func (s *SecureChannel) checkOpen(want channelSecurity) error {
 	}
 	return nil
 }
+
+// transportError is a transport Error message from the peer (Part 6
+// §7.1.2.5): the status code it closed the connection with. Only this, not
+// an ordinary bad ServiceResult, is the reason a channel ended, so only this
+// is kept for the requests still waiting (endErr). errors.Is matches the code.
+type transportError struct{ code ua.StatusCode }
+
+func (e transportError) Error() string { return e.code.Error() }
+func (e transportError) Unwrap() error { return e.code }
 
 // refuse tells the client why its channel is being closed, when err is a
 // status code: a transport Error message (Part 6 §7.1.2.5) before the close.

@@ -93,7 +93,7 @@ func TestForeignAsyncuaSecure(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "rejected", "certs", Thumbprint(der)+".der")); err != nil {
 		t.Fatalf("asyncua's certificate is not in rejected/: %v", err)
 	}
-	if _, err := (PKI{Dir: dir}).Trust(Thumbprint(der)[:8]); err != nil {
+	if _, err := (PKI{Dir: dir}).Trust(Thumbprint(der)[:16]); err != nil {
 		t.Fatal(err)
 	}
 	fmt.Fprintln(stdin, "trusted")

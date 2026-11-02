@@ -297,7 +297,8 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		"pki/own/cert.der":          "CERT",
 		"pki/own/private/key.pem":   "-----BEGIN PRIVATE KEY-----",
 		"pki/trusted/certs/a.der":   "CERT",
-		"certs/own/private/key.pem": "-----BEGIN PRIVATE KEY-----", // a store under another name
+		"certs/own/private/key.pem": "-----BEGIN PRIVATE KEY-----",                                           // a store under another name
+		"opcua-client/key.pem":      "-----BEGIN RSA PRIVATE KEY-----\nMII\n-----END RSA PRIVATE KEY-----\n", // a flat client pki-dir
 	}
 	for name, body := range files {
 		p := filepath.Join(proj, filepath.FromSlash(name))
@@ -340,7 +341,7 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		t.Error("the hmi build output must still be embedded")
 	}
 	for name := range names {
-		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "pki/") || strings.HasPrefix(name, "certs/") {
+		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "pki/") || strings.HasPrefix(name, "certs/") || strings.HasSuffix(name, "key.pem") {
 			t.Errorf("archive contains %q, which should have been skipped", name)
 		}
 	}

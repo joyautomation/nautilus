@@ -109,9 +109,9 @@ func (s *SessionService) ActivateSession(sc *uasc.SecureChannel, r ua.Request, r
 		return nil, ua.StatusBadSessionIDInvalid
 	}
 	// Part 4 §5.6.3: the first activation must come on the channel that created the session.
-	// A later one may move the session to another channel only when the client proves it is
-	// the same application; with no certificate checks yet (slice 2) nothing can prove that,
-	// so every activation stays on the creating channel.
+	// A later one may move the session to another channel when the client proves it is the
+	// same application; this server does not support that move (a client that lost its
+	// channel creates a new session), so every activation stays on the creating channel.
 	if !sess.boundTo(sc) {
 		return nil, ua.StatusBadSecureChannelIDInvalid
 	}
@@ -204,13 +204,17 @@ func checkClientCertificate(sc *uasc.SecureChannel, req *ua.CreateSessionRequest
 	if sc.SecurityPolicyURI() == ua.SecurityPolicyURINone || sc.SecurityPolicyURI() == "" {
 		return ua.StatusOK
 	}
-	if len(req.ClientCertificate) == 0 || !bytes.Equal(req.ClientCertificate, sc.RemoteCertificate()) {
+	// Either may carry the client's issuers after its own certificate; the
+	// leaves are what must match.
+	sent, err := x509.ParseCertificates(req.ClientCertificate)
+	if err != nil || len(sent) == 0 {
 		return ua.StatusBadSecurityChecksFailed
 	}
-	cert, err := x509.ParseCertificate(req.ClientCertificate)
-	if err != nil {
-		return ua.StatusBadCertificateInvalid
+	chan_, err := x509.ParseCertificates(sc.RemoteCertificate())
+	if err != nil || len(chan_) == 0 || !bytes.Equal(sent[0].Raw, chan_[0].Raw) {
+		return ua.StatusBadSecurityChecksFailed
 	}
+	cert := sent[0]
 	uri := ""
 	if req.ClientDescription != nil {
 		uri = req.ClientDescription.ApplicationURI
@@ -230,8 +234,8 @@ func checkClientCertificate(sc *uasc.SecureChannel, req *ua.CreateSessionRequest
 // sends. Anything else is Bad_IdentityTokenInvalid; gopcua's server never
 // looked. It returns the identity recorded on the session.
 func (s *Server) checkIdentity(tok *ua.ExtensionObject) (string, ua.StatusCode) {
-	if tok == nil || tok.Value == nil {
-		return "anonymous", ua.StatusOK
+	if nullExtensionObject(tok) {
+		return "anonymous", ua.StatusOK // a null token (Part 4 §5.6.3)
 	}
 	anon, ok := tok.Value.(*ua.AnonymousIdentityToken)
 	if !ok {
@@ -248,4 +252,15 @@ func (s *Server) checkIdentity(tok *ua.ExtensionObject) (string, ua.StatusCode) 
 		}
 	}
 	return "", ua.StatusBadIdentityTokenInvalid
+}
+
+// nullExtensionObject reports an extension object with the null type id:
+// "no token", which Part 4 §5.6.3 treats as anonymous. One with a type but
+// no decoded body is not null.
+func nullExtensionObject(e *ua.ExtensionObject) bool {
+	if e == nil || e.TypeID == nil || e.TypeID.NodeID == nil {
+		return true
+	}
+	n := e.TypeID.NodeID
+	return n.Namespace() == 0 && n.Type() != ua.NodeIDTypeString && n.Type() != ua.NodeIDTypeGUID && n.Type() != ua.NodeIDTypeByteString && n.IntID() == 0
 }

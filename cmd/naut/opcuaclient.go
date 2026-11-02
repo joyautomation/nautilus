@@ -48,7 +48,7 @@ This project's own OPC UA server (the opcua: section):
         and has refused, with thumbprints and expiry.
   naut opcua trust [--pki DIR] <thumbprint>
         Approve a refused client: move its certificate from rejected/ to
-        trusted/. At least 8 hex digits; no restart needed.
+        trusted/. At least 16 hex digits; no restart needed.
   --pki defaults to opcua.pki in ./nautilus.yaml, else ./pki.
 
 Connection flags (import and browse):

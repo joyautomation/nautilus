@@ -260,7 +260,7 @@ func TestUntrustedClientIsRefusedUntilTrusted(t *testing.T) {
 		t.Fatalf("the refused certificate is not in rejected/: %v", err)
 	}
 
-	info, err := PKI{Dir: dir}.Trust(Thumbprint(der)[:10])
+	info, err := PKI{Dir: dir}.Trust(Thumbprint(der)[:16])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,19 +321,28 @@ func TestExpiredClientCertificateIsRefused(t *testing.T) {
 }
 
 // The secure channel renews its token under the same security: a client
-// with a short channel lifetime keeps reading across several renewals.
-// gopcua's own client is the one here, on Basic256Sha256 with a 2 s
-// lifetime: on Aes256_Sha256_RsaPss with 1 s its renewal races itself
-// (go test -race points into gopcua's uasc renew, not the server) and
-// times out about half the time, while asyncua renews on that policy
-// without fault (TestForeignAsyncuaSecure).
+// with a short channel lifetime keeps reading across several renewals. Each
+// renewal is a new token beside the old one; the live one is never touched
+// by the reader (it was: the reader wrote the renewal's keys into the live
+// instance while the handlers encrypted with it, and about half these runs
+// timed out mid-read).
+//
+// The client is gopcua's own, whose renewal races itself (go test -race
+// points into github.com/gopcua/opcua/uasc renew vs sendRequestWithTimeout,
+// never into this server), so under the race detector the test renews less
+// often, on Basic256Sha256 with a 2 s lifetime, and the server's side is
+// still checked for races.
 func TestSecureChannelRenews(t *testing.T) {
 	s, dir := startSecure(t)
 	const uri = "urn:test:renew"
 	der, key := clientCert(t, uri, time.Now().Add(-time.Hour), 24*time.Hour)
 	trust(t, dir, der)
-	ep := endpointFor(t, s, ua.SecurityPolicyURIBasic256Sha256, ua.MessageSecurityModeSignAndEncrypt)
-	c, err := secureConnect(s, ep, der, key, uri, opcua.Lifetime(2*time.Second))
+	policy, lifetime := ua.SecurityPolicyURIAes256Sha256RsaPss, time.Second
+	if raceEnabled {
+		policy, lifetime = ua.SecurityPolicyURIBasic256Sha256, 2*time.Second
+	}
+	ep := endpointFor(t, s, policy, ua.MessageSecurityModeSignAndEncrypt)
+	c, err := secureConnect(s, ep, der, key, uri, opcua.Lifetime(lifetime))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,5 +470,74 @@ func TestCreateSessionIsHeldToTheChannelCertificate(t *testing.T) {
 	}
 	if err := create(der, uri); err != nil {
 		t.Errorf("the channel's own certificate and URI: %v", err)
+	}
+}
+
+// A certificate followed by its issuer (a chain) is judged, filed and
+// trusted by its leaf.
+func TestVerifyUsesTheLeafOfAChain(t *testing.T) {
+	pki := PKI{Dir: filepath.Join(t.TempDir(), "pki")}
+	leaf, _ := clientCert(t, "urn:test:leaf", time.Now().Add(-time.Hour), 24*time.Hour)
+	issuer, _ := clientCert(t, "urn:test:issuer", time.Now().Add(-time.Hour), 24*time.Hour)
+	chain := append(append([]byte(nil), leaf...), issuer...)
+	if err := pki.Verify(chain); !errors.Is(err, ua.StatusBadCertificateUntrusted) {
+		t.Fatalf("an untrusted chain: %v, want Bad_CertificateUntrusted", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(pki.Dir, "rejected", "certs", Thumbprint(leaf)+".der"))
+	if err != nil || string(raw) != string(leaf) {
+		t.Fatalf("rejected/ does not hold the leaf under its thumbprint: %v", err)
+	}
+	if _, err := pki.Trust(Thumbprint(leaf)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pki.Verify(chain); err != nil {
+		t.Errorf("the trusted leaf's chain: %v", err)
+	}
+}
+
+// rejected/ keeps the newest 100: anyone who reaches the port can file one.
+func TestRejectedIsCapped(t *testing.T) {
+	pki := PKI{Dir: filepath.Join(t.TempDir(), "pki")}
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxRejected + 5 {
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(int64(i + 1)), Subject: pkix.Name{CommonName: "flood"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = pki.Verify(der)
+	}
+	ents, _ := os.ReadDir(filepath.Join(pki.Dir, "rejected", "certs"))
+	if len(ents) != maxRejected {
+		t.Errorf("rejected/ holds %d certificates, want %d", len(ents), maxRejected)
+	}
+}
+
+// Approving needs 16 hex digits of the thumbprint: a shorter prefix is cheap
+// to match with a certificate made for the purpose.
+func TestTrustNeedsSixteenDigits(t *testing.T) {
+	pki := PKI{Dir: filepath.Join(t.TempDir(), "pki")}
+	der, _ := clientCert(t, "urn:test:scada", time.Now().Add(-time.Hour), 24*time.Hour)
+	_ = pki.Verify(der)
+	if _, err := pki.Trust(Thumbprint(der)[:15]); err == nil {
+		t.Error("a 15-digit prefix was enough to trust")
+	}
+	if _, err := pki.Trust(Thumbprint(der)[:16]); err != nil {
+		t.Errorf("16 digits: %v", err)
+	}
+}
+
+// A certificate that does not parse is refused with Bad_CertificateInvalid,
+// said to the client (the refusal comes from the reader, before the OPN
+// handler).
+func TestUnparseableClientCertificateIsRefused(t *testing.T) {
+	s, _ := startSecure(t)
+	_, key := clientCert(t, "urn:test:junk", time.Now().Add(-time.Hour), 24*time.Hour)
+	ep := endpointFor(t, s, ua.SecurityPolicyURIBasic256Sha256, ua.MessageSecurityModeSignAndEncrypt)
+	if err := openChannel(t, s, ep, ep.SecurityPolicyURI, ep.SecurityMode, []byte("not a certificate"), key); !errors.Is(err, ua.StatusBadCertificateInvalid) {
+		t.Fatalf("junk certificate: %v, want Bad_CertificateInvalid", err)
 	}
 }
