@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
+	"github.com/joyautomation/nautilus/opcua/internal/require"
 
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // startSubscriptionTestServer starts a server on a free port and returns its endpoint and a

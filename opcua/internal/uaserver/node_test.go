@@ -5,7 +5,7 @@ import (
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
+	"github.com/joyautomation/nautilus/opcua/internal/require"
 )
 
 // TestDescriptionIsLocalizedText checks that nodes built by NewVariableNode

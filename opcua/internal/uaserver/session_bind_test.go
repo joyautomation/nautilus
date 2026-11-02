@@ -11,13 +11,14 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
-	"github.com/gopcua/opcua/uasc"
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/internal/require"
+	cuasc "github.com/gopcua/opcua/uasc" // the client side: gopcua's own
+	"github.com/joyautomation/nautilus/opcua/internal/require"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // channel opens a secure channel to endpoint with no session on it, so a test can send any
 // request with any authentication token.
-func channel(t *testing.T, ctx context.Context, endpoint string) *uasc.SecureChannel {
+func channel(t *testing.T, ctx context.Context, endpoint string) *cuasc.SecureChannel {
 	t.Helper()
 	return dial(t, ctx, endpoint).SecureChannel()
 }
@@ -33,7 +34,7 @@ func dial(t *testing.T, ctx context.Context, endpoint string) *opcua.Client {
 }
 
 // rawCreateSession creates a session on sc and returns its authentication token.
-func rawCreateSession(t *testing.T, ctx context.Context, sc *uasc.SecureChannel, endpoint string) *ua.NodeID {
+func rawCreateSession(t *testing.T, ctx context.Context, sc *cuasc.SecureChannel, endpoint string) *ua.NodeID {
 	t.Helper()
 	req := &ua.CreateSessionRequest{
 		ClientDescription:       &ua.ApplicationDescription{ApplicationURI: "urn:test", ApplicationName: ua.NewLocalizedText("test"), ApplicationType: ua.ApplicationTypeClient},
@@ -51,7 +52,7 @@ func rawCreateSession(t *testing.T, ctx context.Context, sc *uasc.SecureChannel,
 }
 
 // rawActivate activates the session tok names, anonymously, on sc.
-func rawActivate(ctx context.Context, sc *uasc.SecureChannel, tok *ua.NodeID) error {
+func rawActivate(ctx context.Context, sc *cuasc.SecureChannel, tok *ua.NodeID) error {
 	req := &ua.ActivateSessionRequest{
 		ClientSignature:    &ua.SignatureData{},
 		UserIdentityToken:  ua.NewExtensionObject(&ua.AnonymousIdentityToken{PolicyID: "Anonymous"}),
@@ -61,7 +62,7 @@ func rawActivate(ctx context.Context, sc *uasc.SecureChannel, tok *ua.NodeID) er
 }
 
 // rawRead reads the server's NamespaceArray on sc with tok as the authentication token.
-func rawRead(ctx context.Context, sc *uasc.SecureChannel, tok *ua.NodeID) error {
+func rawRead(ctx context.Context, sc *cuasc.SecureChannel, tok *ua.NodeID) error {
 	req := &ua.ReadRequest{
 		NodesToRead: []*ua.ReadValueID{{NodeID: ua.NewNumericNodeID(0, id.Server_NamespaceArray), AttributeID: ua.AttributeIDValue, DataEncoding: &ua.QualifiedName{}}},
 	}

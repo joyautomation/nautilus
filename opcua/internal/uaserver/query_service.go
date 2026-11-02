@@ -2,7 +2,7 @@ package uaserver
 
 import (
 	"github.com/gopcua/opcua/ua"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // QueryService implements the Query Service Set.

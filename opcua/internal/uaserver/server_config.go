@@ -13,7 +13,7 @@ import (
 
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uapolicy"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // Option is an option function type to modify the configuration.

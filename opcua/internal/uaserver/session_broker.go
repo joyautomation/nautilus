@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gopcua/opcua/ua"
-	"github.com/gopcua/opcua/uasc"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
 // authTokenLength is the size of a session's authentication token, in bytes. The token is the
