@@ -65,9 +65,9 @@ The pieces that make this first-class rather than a convention:
 `naut new` scaffolds this shape. The default `demo` template ships
 `blocks.st` with a `RateOfChange` block, which `program.fbd` instantiates like
 a built-in TON; the PI loop in that project is written inline in the
-diagram. The `minimal` template has no library file. The `sdk` template (a Go
-project) ships the `PI` block above in `blocks.st`, instantiated from
-`program.st`.
+diagram. The `sdk-demo` template (the tour as a Go project) ships the `PI`
+block above in `blocks.st`, instantiated from `program.st`. The `minimal` and
+`sdk` templates start blank, with no library file.
 
 ## Where library files live: the root and `lib/`
 

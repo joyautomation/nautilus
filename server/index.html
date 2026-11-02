@@ -614,7 +614,7 @@
           n -= q * size;
           if (q > 0) parts.push(q + unit);
         }
-        return "T#" + (ms < 0 ? "-" : "") + (parts.join("") || "0ms");
+        return "T#" + (Math.round(ms) < 0 ? "-" : "") + (parts.join("") || "0ms");
       }
 
       // `type` is the declared type name from /api/meta ("TIME", "REAL", …).
