@@ -174,3 +174,10 @@ claims:
     source: "#in-tests"
     tests:
       - go ./acceptance TestForceHoldsAgainstPlantAndLogic
+  - id: FRC-018
+    claim: >-
+      A single controller (no redundancy) keeps a force made before its
+      first scan.
+    source: "#lifetime"
+    tests:
+      - go ./runtime TestForceBeforeFirstScanHolds
