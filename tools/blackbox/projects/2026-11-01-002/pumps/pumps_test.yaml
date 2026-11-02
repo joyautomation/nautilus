@@ -1,0 +1,71 @@
+# Acceptance tests for the duplex pump station.
+tolerance: 0.001
+
+tests:
+  - name: lead starts first, lag joins, both stop at the stop level
+    steps:
+      - given: { LevelPct: 50.0 }
+        scans: 1
+        expect: { P1_Run: false, P2_Run: false, Station: Idle }
+      - given: { LevelPct: 65.0 }
+        scans: 1
+        expect: { P1_Run: true, P2_Run: false, Station: LeadRunning }
+      - given: { LevelPct: 85.0 }
+        scans: 1
+        expect: { P1_Run: true, P2_Run: true, Station: BothRunning }
+      - given: { LevelPct: 50.0 }      # between the bands: both hold
+        scans: 1
+        expect: { P1_Run: true, P2_Run: true }
+      - given: { LevelPct: 15.0 }
+        scans: 1
+        expect: { P1_Run: false, P2_Run: false, Station: Idle }
+
+  - name: the lead alternates on every pump-down
+    steps:
+      - expect: { Lead: Pump1 }
+      - given: { LevelPct: 65.0 }
+        scans: 1
+        expect: { P1_Run: true, P2_Run: false }
+      - given: { LevelPct: 15.0 }
+        scans: 1
+        expect: { P1_Run: false, P2_Run: false, Lead: Pump2, Cycles: 1 }
+      - given: { LevelPct: 65.0 }       # cycle 2: pump 2 leads
+        scans: 1
+        expect: { P1_Run: false, P2_Run: true }
+      - given: { LevelPct: 85.0 }       # ... and pump 1 is the lag
+        scans: 1
+        expect: { P1_Run: true, P2_Run: true }
+      - given: { LevelPct: 15.0 }
+        scans: 1
+        expect: { Lead: Pump1, Cycles: 2 }
+
+  - name: high-level alarm waits its full 30 s delay
+    given: { LevelPct: 95.0 }
+    steps:
+      - advance: 29.8s
+        expect: { HiLevelAlm: false }
+      - advance: 0.4s
+        expect: { HiLevelAlm: true }
+      - given: { LevelPct: 85.0 }
+        scans: 1
+        expect: { HiLevelAlm: false }
+
+  - name: a long alarm delay is walked exactly in virtual time
+    # Workaround (F-03): T#8h in given: is stored as the STRING "T#8h" and the
+    # TON fires on the first scan. A whole number of milliseconds works.
+    given: { HiLevelDelay: 28800000, LevelPct: 95.0 }   # 8 h
+    steps:
+      - advance: 7h59m59s
+        expect: { HiLevelAlm: false }
+      - advance: 2s
+        expect: { HiLevelAlm: true }
+
+  - name: run hours accumulate only on the running pump
+    given: { LevelPct: 65.0 }
+    steps:
+      - advance: 1h
+        expect:
+          P1_Stats.Starts: 1
+          P1_Stats.Hours: { near: 1.0 }
+          P2_Stats.Hours: 0.0
+          P2_Stats.Starts: 0

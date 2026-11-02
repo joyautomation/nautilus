@@ -8,6 +8,8 @@ oracles:
   cryptography: 50.0.2
   python: '3.12'
 projects:
+  projects/2026-11-01-002/pumps:
+    http: http://localhost:8080
   projects/2026-10-24-001/typed:
     http: http://localhost:8080
     opcua: opc.tcp://localhost:4840
@@ -873,3 +875,278 @@ checks:
   note: '~2 s. Characters rather than bytes is asserted from the guide ("A STRING is an array of characters"),
     not the spec. Writes Str1/StrArr and restores them.'
   group: edges of the fixes, newly checked
+# ---- run 2026-11-01-002 (brief 002, docs-first build, SUT v0.19.0), imported 2026-11-02 ----
+- id: 002-P-tour-scaffold-gates
+  run: 2026-11-01-002
+  pass: getting-started step 2 literally — naut new (tour), naut check, naut test, naut build all exit 0; ./my-plant
+    emitted
+  disposition: gate
+  surface: cli
+  oracle: website:/getting-started/
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-P-tour-scaffold-gates.sh
+  env: {}
+  note: '[project in the run: ''none (scaffolds its own in a temp dir)''; the runner needs one, and the check does
+    not use it]'
+  expected_today: pass (0.1 s)
+- id: 002-P-pumps-acceptance
+  run: 2026-11-01-002
+  pass: the duplex pump station's acceptance suite (lead/lag, alternation, 30 s alarm, 8 h delay in virtual time,
+    run hours) passes and naut check is clean
+  disposition: gate
+  surface: cli
+  oracle: the brief's plant; IEC 61131-3 TON/F_TRIG/R_TRIG/CTU semantics
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-P-pumps-acceptance.sh
+  env: {}
+  note: the 8 h test writes HiLevelDelay in milliseconds as a workaround for F-07
+  expected_today: pass (1.4 s)
+- id: 002-P-virtual-time-exact
+  run: 2026-11-01-002
+  pass: virtual time is exact — an input given at t=0 lands at scan 1, the 30 s TON is FALSE at 30.0 s and TRUE
+    at 30.1 s; 8 h of running is 8.0000 h
+  disposition: gate
+  surface: cli
+  oracle: website:/reference/testing/ ("Runs are deterministic… dt is exactly the configured period")
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-P-virtual-time-exact.sh
+  env: {}
+  expected_today: pass (1.3 s)
+- id: 002-P-api-live-reaction
+  run: 2026-11-01-002
+  pass: through POST /api/forces and POST /api/tags the running station starts the lead, adds the lag, stops both
+    and alternates; enum, member and undeclared-tag writes are refused with 400; a string to a TIME tag is 4xx;
+    /api/meta lists enum members
+  disposition: gate
+  surface: api
+  oracle: website:/guides/tag-model/ (member writes), /guides/forcing/
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-P-api-live-reaction.py
+  env: {}
+  expected_today: pass (3.1 s)
+- id: 002-P-force-alarm-delay-live
+  run: 2026-11-01-002
+  pass: on a running controller a forced high level raises HiLevelAlm only after the 2 s on-delay; a write to a
+    forced tag is 409
+  disposition: release
+  surface: api
+  oracle: website:/guides/forcing/; IEC 61131-3 TON
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-P-force-alarm-delay-live.py
+  env: {}
+  expected_today: pass (3.2 s, wall clock)
+- id: 002-P-build-self-contained
+  run: 2026-11-01-002
+  pass: the naut build binary, copied alone into an empty directory, serves the dashboard and /api/state with the
+    project's tags, enum names and locals, and its logic reacts to a forced level
+  disposition: gate
+  surface: cli
+  oracle: website:/getting-started/ ("emit ./my-plant — a self-contained controller binary")
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-P-build-self-contained.sh
+  env:
+    port: 18082
+  expected_today: pass (0.8 s)
+- id: 002-F01-new-help-flags-described
+  run: 2026-11-01-002
+  finding: F-01
+  disposition: gate
+  surface: cli
+  oracle: customer expectation
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F01-new-help-flags-described.sh
+  env: {}
+  note: '[project in the run: ''none''; the runner needs one, and the check does not use it]'
+  expected_today: 'fail ("undescribed: -no-go")'
+- id: 002-F02-build-repo-message
+  run: 2026-11-01-002
+  finding: F-02
+  disposition: gate
+  surface: cli
+  oracle: customer expectation
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F02-build-repo-message.sh
+  env: {}
+  note: '[project in the run: ''none (scaffolds its own)''; the runner needs one, and the check does not use it]'
+  expected_today: fail
+- id: 002-F04-testing-enum-link
+  run: 2026-11-01-002
+  finding: F-04
+  disposition: release
+  surface: website:/reference/testing/
+  oracle: the website
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F04-testing-enum-link.sh
+  env:
+    SUT_WEBSITE: https://nautilus.joyautomation.com (default)
+  note: 'needs network access to the website; it checks the published site, not the release [project in the run:
+    ''none''; the runner needs one, and the check does not use it]'
+  expected_today: fail (functions.md#enumerations → 404)
+- id: 002-F05-run-hours-survive-restart
+  run: 2026-11-01-002
+  finding: F-05
+  disposition: once
+  surface: cli
+  oracle: customer expectation (Logix tag retention, Codesys RETAIN/PERSISTENT, TIA retentive DB)
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F05-run-hours-survive-restart.sh
+  env:
+    port: 18081
+  note: 'guards a gap against expectation, not against the docs (the redundancy page documents that state re-seeds).
+    If the product rules this wontfix, retire the check rather than invert it was release. James''s decision (2026-11-02):
+    retention is opt-in, CODESYS-style (retain: true, VAR RETAIN; #494); this check expects every state tag kept
+    under retain: {} and fails on the project as written by design (it passes with retain: true on P1_Stats). For
+    the operator to rule on at reconciliation.'
+  expected_today: fail (P1_Stats {Hours 5.0008} before restart → {Hours 0} after)
+- id: 002-F06-check-empty-manifest
+  run: 2026-11-01-002
+  finding: F-06
+  disposition: gate
+  surface: cli
+  oracle: website:/getting-started/ ("naut check … the CI gate")
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F06-check-empty-manifest.sh
+  env: {}
+  note: '[project in the run: ''none''; the runner needs one, and the check does not use it]'
+  expected_today: fail
+- id: 002-F07-given-time-literal
+  run: 2026-11-01-002
+  finding: F-07
+  disposition: gate
+  surface: cli
+  oracle: website:/reference/testing/, /guides/tag-model/
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F07-given-time-literal.sh
+  env: {}
+  note: passes if the given sets 8 h or if naut test refuses the value naming HiLevelDelay
+  expected_today: fail (HiLevelAlm = true at 31 s)
+- id: 002-F08-expect-time-literal
+  run: 2026-11-01-002
+  finding: F-08
+  disposition: gate
+  surface: cli
+  oracle: website:/reference/testing/; customer expectation (Codesys/TIA)
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F08-expect-time-literal.sh
+  env: {}
+  expected_today: fail (HiLevelDelay = 30000, want "T#30s")
+- id: 002-F10-input-write-refused
+  run: 2026-11-01-002
+  finding: F-10
+  disposition: gate
+  surface: api
+  oracle: website:/getting-started/ (inputs read-only)
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F10-input-write-refused.py
+  env: {}
+  note: written to the docs as they stand. If the product side keeps the behaviour (memory-driver writes for bring-up)
+    and changes the page instead, retire this check and write one for the new wording
+  expected_today: fail (204, value kept)
+- id: 002-F12-built-binary-help
+  run: 2026-11-01-002
+  finding: F-12
+  disposition: gate
+  surface: cli
+  oracle: customer expectation
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F12-built-binary-help.sh
+  env:
+    port: 18080
+  expected_today: fail (still running after 3 s)
+- id: 002-F13-gitignore-build-output
+  run: 2026-11-01-002
+  finding: F-13
+  disposition: gate
+  surface: cli
+  oracle: customer expectation
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F13-gitignore-build-output.sh
+  env: {}
+  note: '[project in the run: ''none (scaffolds its own)''; the runner needs one, and the check does not use it]'
+  expected_today: fail (?? p, ?? retain.json)
+- id: 002-F14-scaffold-blocks-claim
+  run: 2026-11-01-002
+  finding: F-14
+  disposition: once
+  surface: website:/guides/blocks-and-tasks/
+  oracle: the website
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F14-scaffold-blocks-claim.sh
+  env: {}
+  note: 'encodes the page''s sentence. If the page is corrected rather than the scaffold, retire it [project in
+    the run: ''none (scaffolds its own)''; the runner needs one, and the check does not use it]'
+  expected_today: fail
+- id: 002-F15-manifest-diag-location
+  run: 2026-11-01-002
+  finding: F-15
+  disposition: gate
+  surface: cli
+  oracle: website:/languages/structured-text/ (Tooling, gcc-style diagnostics)
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F15-manifest-diag-location.sh
+  env: {}
+  expected_today: 'fail (".: tag Lead …")'
+- id: 002-F16-pt-integer-refused
+  run: 2026-11-01-002
+  finding: F-16
+  disposition: once
+  surface: cli
+  oracle: IEC 61131-3 (no implicit ANY_INT → TIME); website:/coming-from/studio-5000/
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F16-pt-integer-refused.sh
+  env: {}
+  expected_today: fail (0 errors)
+  note: 'was gate. James''s decision (2026-11-02): an integer where a TIME is expected keeps compiling and naut
+    check WARNS (#497); this check requires a non-zero exit, so it fails by design. Kept, not inverted, for the
+    operator to rule on at reconciliation.'
+- id: 002-F17-check-unknown-type-message
+  run: 2026-11-01-002
+  finding: F-17
+  disposition: gate
+  surface: cli
+  oracle: website:/guides/tag-model/; naut test's own message
+  project: projects/2026-11-01-002/pumps
+  script: checks/2026-11-01-002/002-F17-check-unknown-type-message.sh
+  env: {}
+  expected_today: fail
+- id: 002-M-tag-model-manifest-roles
+  run: 2026-11-01-002
+  finding: F-03
+  disposition: manual
+  surface: website:/guides/tag-model/
+  oracle: the website
+  project: projects/2026-11-01-002/pumps
+  env: {}
+  note: 'a reader of /guides/tag-model/ who has only nautilus.yaml can find how to pick role input/output/setpoint/state
+    without reading Go [project in the run: ''''; the runner needs one, and the check does not use it]'
+- id: 002-M-api-reference
+  run: 2026-11-01-002
+  finding: F-09
+  disposition: manual
+  surface: website
+  oracle: the website
+  project: projects/2026-11-01-002/pumps
+  env: {}
+  note: 'the site has one page listing every /api endpoint with its body, status codes and role rules, linked from
+    getting-started [project in the run: ''''; the runner needs one, and the check does not use it]'
+- id: 002-M-dashboard-time-display
+  run: 2026-11-01-002
+  finding: F-11
+  disposition: manual
+  surface: api (dashboard)
+  oracle: customer expectation
+  project: projects/2026-11-01-002/pumps
+  env: {}
+  note: 'open the dashboard of evidence/pumps; HiLevelDelay should read as a duration, not as 30000 with no unit
+    [project in the run: ''''; the runner needs one, and the check does not use it]'
+- id: 002-M-first-program-walkthrough
+  run: 2026-11-01-002
+  finding: F-18
+  disposition: manual
+  surface: website:/getting-started/
+  oracle: the brief; customer expectation
+  project: projects/2026-11-01-002/pumps
+  env: {}
+  note: 'a newcomer can go from `naut new x --template minimal` to an edited program with a tag, a timer and a passing
+    test using getting-started plus at most one linked page [project in the run: ''''; the runner needs one, and
+    the check does not use it]'

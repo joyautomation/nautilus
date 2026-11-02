@@ -10,6 +10,7 @@ claims:
       physics in Go).
     source: "#2-scaffold-a-project"
     tests:
+      - go ./tools/blackbox TestBlackbox/002-P-tour-scaffold-gates
       - go ./cmd/naut TestScaffoldVariants
       - go ./cmd/naut TestScaffoldTourDeclaresThreeTasksInThreeLanguages
       - go ./cmd/naut TestScaffoldMinimalIsOneTaskOneProgramOneTestFile
@@ -32,6 +33,9 @@ claims:
       it against the manifest.
     source: "#1-install-the-cli"
     tests:
+      - go ./tools/blackbox TestBlackbox/002-F06-check-empty-manifest
+      - go ./tools/blackbox TestBlackbox/002-F15-manifest-diag-location
+      - go ./tools/blackbox TestBlackbox/002-F17-check-unknown-type-message
       - go ./cmd/naut TestCheckReportsIdentifierColumn
       - go ./cmd/naut TestCheckFailsOnUndeclaredRead
       - go ./cmd/naut TestCheckWarnsOnUndeclaredWrite
@@ -42,6 +46,8 @@ claims:
       the project, with no Go toolchain anywhere.
     source: "#2-scaffold-a-project"
     tests:
+      - go ./tools/blackbox TestBlackbox/002-P-build-self-contained
+      - go ./tools/blackbox TestBlackbox/002-F12-built-binary-help
       - go ./cmd/naut TestBuildEmbedRoundTrip
       - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt
       - go ./cmd/naut TestBuiltControllerActivatesWarm
@@ -87,6 +93,7 @@ claims:
       input and the logic an output within a scan.
     source: "#2-scaffold-a-project"
     tests:
+      - go ./tools/blackbox TestBlackbox/002-F10-input-write-refused
       - go ./server TestDashboardSetpointsEditableInputsAndOutputsReadOnly
   - id: GS-009
     claim: >-
