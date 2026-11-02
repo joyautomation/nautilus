@@ -104,6 +104,14 @@ type TagDef struct {
 	// the type the programs declare it as; empty when the driver cannot
 	// say. Ignored for every other tag.
 	DriverType string
+	// Retain puts the tag in the retain store, beside every setpoint: its
+	// value survives a restart, a failover and a redeploy, as a CODESYS
+	// VAR RETAIN or a TIA retentive DB does. It is for state the logic
+	// owns and must not lose — run hours, start counts, a lead/lag pointer
+	// — set by the manifest's `retain: true` or a library's VAR_GLOBAL
+	// RETAIN. An input re-reads from the field and an output re-derives
+	// from the logic, so neither may be retained (New refuses it).
+	Retain bool
 }
 
 // TagOpt customizes a TagDef (Desc, Unit, Init).
@@ -125,6 +133,9 @@ func Init(v any) TagOpt { return func(d *TagDef) { d.Init = v } }
 // scans that read it until the first delivery — see TagDef.Comms. The
 // manifest loader decides this from the driver; a Go composition says it.
 func Comms() TagOpt { return func(d *TagDef) { d.Comms = true } }
+
+// Retained marks a tag for the retain store — see TagDef.Retain.
+func Retained() TagOpt { return func(d *TagDef) { d.Retain = true } }
 
 func newDef(name string, role TagRole, init any, opts []TagOpt) TagDef {
 	d := TagDef{Name: name, Role: role, Init: init}

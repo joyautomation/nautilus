@@ -28,11 +28,24 @@ retain:
   configmap: line1-retain  # in a cluster (default <name>-retain)
 ```
 
-- **What is saved:** every `role: setpoint` tag, plus the source of any
+- **What is saved:** every `role: setpoint` tag; every tag marked
+  `retain: true` in the manifest or declared in a library's `VAR_GLOBAL
+  RETAIN`; every program's `VAR RETAIN` variables; and the source of any
   program that differs from what shipped (an online edit). Nothing else —
-  inputs re-read from the field, state re-seeds, outputs re-derive from
-  logic. The PID does not persist its integral; it warm-starts from live
-  field values, the way a real changeover does.
+  inputs re-read from the field, other state re-seeds, outputs re-derive
+  from logic. The PID does not persist its integral; it warm-starts from
+  live field values, the way a real changeover does.
+- **Keeping state the logic owns:** run hours, start counts and a lead/lag
+  pointer are state, not setpoints, so mark them. A tag:
+
+  ```yaml
+  tags:
+    - { name: P1_Stats, role: state, type: PumpStats, retain: true }
+  ```
+
+  or a program variable, `VAR RETAIN runHours : REAL; END_VAR`. An input
+  or an output cannot be retained: one comes back from the field and the
+  other from the logic on the first scan.
 - **Any shape:** a setpoint can be a scalar, a struct (UDT), or an array —
   an array of scalars, an array of structs, or a multi-dimensional array.
   A setpoint table in an `ARRAY` survives a restart or a failover like a

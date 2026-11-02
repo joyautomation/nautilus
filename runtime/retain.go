@@ -106,6 +106,11 @@ func (r *Runtime) takeover() {
 	for _, tr := range r.tasks {
 		tr.prog.ResetFrame()
 	}
+	// Process state re-derives from the field, except what a program
+	// declared VAR RETAIN: it goes back into the fresh frames.
+	if err := r.restoreLocals(); err != nil {
+		r.noteRetainError(err)
+	}
 	// This replica has never written to the field, whatever its predecessor
 	// left in the store: the first scan as leader pushes the FULL output set
 	// rather than trusting a generation stamp the old leader's driver knows
@@ -261,6 +266,28 @@ func (r *Runtime) loadRetained() error {
 			errs = append(errs, fmt.Errorf("retained program for task %q: %w", task, err))
 		}
 	}
+	// VAR RETAIN locals are held for takeover, which writes them back after
+	// it resets the frames (restoreLocals).
+	r.pendingLocals = st.Locals
+	return errors.Join(errs...)
+}
+
+// restoreLocals writes the VAR RETAIN locals loadRetained read back into
+// whichever program each task now runs (a reapplied online edit replaced
+// the frame), by name, after takeover has reset every frame: a local the
+// program no longer declares RETAIN is skipped, one whose type changed
+// keeps its initial value and is reported.
+func (r *Runtime) restoreLocals() error {
+	locals := r.pendingLocals
+	r.pendingLocals = nil
+	var errs []error
+	for task, vals := range locals {
+		p := r.TaskProgram(task)
+		if p == nil {
+			continue // the task is gone; its locals went with it
+		}
+		errs = append(errs, p.RestoreLocals(vals)...)
+	}
 	return errors.Join(errs...)
 }
 
@@ -318,6 +345,16 @@ func (r *Runtime) retainSaver(ctx context.Context) {
 // Returns the encoding of what the store now holds.
 func (r *Runtime) saveRetained(lastSaved []byte) []byte {
 	if r.coord != nil && !r.coord.IsLeader() {
+		return lastSaved
+	}
+	// Leading by the lease is not enough: until this runtime's own takeover
+	// has loaded the store (gate, before its next scan), its tags hold seeds
+	// and its frames are fresh, and saving them would overwrite what the
+	// takeover is about to load.
+	r.leadMu.Lock()
+	leading := r.leading
+	r.leadMu.Unlock()
+	if !leading {
 		return lastSaved
 	}
 	st := r.retainState()
@@ -401,6 +438,20 @@ func (r *Runtime) retainState() retain.State {
 	record(MainTaskName, r.prog)
 	for _, tr := range r.tasks {
 		record(tr.name, tr.prog)
+	}
+	// VAR RETAIN locals, per task. The live frame: a forced value lives in
+	// the tag store, never in a program's own variables.
+	locals := func(task string, p *Program) {
+		if m := p.RetainedLocals(); len(m) > 0 {
+			if st.Locals == nil {
+				st.Locals = map[string]map[string]any{}
+			}
+			st.Locals[task] = m
+		}
+	}
+	locals(MainTaskName, r.prog)
+	for _, tr := range r.tasks {
+		locals(tr.name, tr.prog)
 	}
 	r.mu.Lock()
 	if len(r.discardedPrograms) > 0 {

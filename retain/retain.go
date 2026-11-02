@@ -38,6 +38,12 @@ type State struct {
 	// return-to-normal are deliberately absent; they re-derive from the
 	// field on the next scan.
 	Alarms map[string]AlarmRetain `json:"alarms,omitempty"`
+	// Locals are the VAR RETAIN variables of each task's program, keyed by
+	// task name, then by variable name, in the plain JSON form Tags uses (a
+	// function-block instance as a mapping of its variables). A store
+	// written before locals were retained has none, and every local starts
+	// at its initial value, as it always did.
+	Locals map[string]map[string]any `json:"locals,omitempty"`
 }
 
 // AlarmRetain is one alarm's retained operator state. Every field is
