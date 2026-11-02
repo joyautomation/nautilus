@@ -1634,6 +1634,13 @@ type OPCUAConfig struct {
 	// urn:joyautomation:nautilus:<project>. Set it when two controllers
 	// run a project of the same name on one network.
 	ApplicationURI string `yaml:"application-uri"`
+	// PKI is the certificate store directory: the server's own certificate
+	// and key (generated on first start), and the client certificates it
+	// trusts or has refused. Relative to the working directory; default
+	// ./pki. With it the server offers the secure endpoints too
+	// (Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under
+	// SignAndEncrypt), each open only to a trusted client certificate.
+	PKI string `yaml:"pki"`
 }
 
 // OPCUA builds the manifest's OPC UA server over a compiled runtime, or
@@ -1644,5 +1651,9 @@ func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) 
 	if c == nil {
 		return nil, nil
 	}
-	return opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI})
+	pki := c.PKI
+	if pki == "" {
+		pki = opcuaserver.DefaultPKI
+	}
+	return opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI, PKI: pki})
 }

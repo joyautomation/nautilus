@@ -522,6 +522,15 @@ func embeddedManifest(fsys fs.FS) string {
 // same reason: neither is a project source.
 var embedSkipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true}
 
+// isPKIStore reports whether dir is an OPC UA certificate store (it holds
+// own/private, where the server's private key lives): `naut run` from the
+// project directory makes ./pki there by default, and a key must never ride
+// along inside a built binary.
+func isPKIStore(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, "own", "private"))
+	return err == nil && fi.IsDir()
+}
+
 // emitBinary appends dir's project (plus manifest/history markers) onto a
 // copy of the runner at self, writing the result to out. It returns the
 // archive's uncompressed byte total — runBuild's size warning threshold —
@@ -555,7 +564,7 @@ func emitBinary(self, dir, out, manifest string, history []byte) (int64, error) 
 			return err
 		}
 		if d.IsDir() {
-			if embedSkipDirs[d.Name()] {
+			if embedSkipDirs[d.Name()] || isPKIStore(p) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -292,6 +292,12 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		"hmi/node_modules/pkg/index.js":        "module.exports = {}",
 		"hmi/node_modules/pkg/big-dep-tree.js": strings.Repeat("x", 10_000),
 		"vendor/some/pkg/pkg.go":               "package pkg",
+		// `naut run` from the project directory makes the OPC UA
+		// certificate store there: its private key must never ship.
+		"pki/own/cert.der":          "CERT",
+		"pki/own/private/key.pem":   "-----BEGIN PRIVATE KEY-----",
+		"pki/trusted/certs/a.der":   "CERT",
+		"certs/own/private/key.pem": "-----BEGIN PRIVATE KEY-----", // a store under another name
 	}
 	for name, body := range files {
 		p := filepath.Join(proj, filepath.FromSlash(name))
@@ -334,7 +340,7 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		t.Error("the hmi build output must still be embedded")
 	}
 	for name := range names {
-		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") {
+		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "pki/") || strings.HasPrefix(name, "certs/") {
 			t.Errorf("archive contains %q, which should have been skipped", name)
 		}
 	}

@@ -434,7 +434,8 @@ checks:
 - id: 001-P-security-none-anonymous
   run: 2026-10-24-001
   pass: policy None, mode None, anonymous token only
-  disposition: gate
+  disposition: once
+  note: "was gate. Superseded by OPC UA writes slice 2 (docs/design/opcua-server-writes.md §2.1, §7.4): every address now also offers Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under SignAndEncrypt beside None, so 'every endpoint is None/None' no longer holds by design. Its other half (anonymous tokens only) still passes. The new endpoint set is covered by OPC-016 (TestForeignAsyncuaSecure); the writes brief's tester checks will replace this one. For the operator to rule on at reconciliation."
   surface: opcua
   oracle: asyncua
   project: projects/2026-10-24-001/typed

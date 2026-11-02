@@ -571,6 +571,16 @@ func opcuaStatus(st opcuaserver.Status) server.DriverStatus {
 		{Label: "monitored items", Value: float64(st.MonitoredItems)},
 	}
 	s.Extra = map[string]any{"endpoint": st.Endpoint, "access": "read-only"}
+	if st.CertThumbprint != "" {
+		s.Extra["certThumbprint"] = st.CertThumbprint
+		s.Extra["certExpiresMs"] = st.CertExpiresMs
+	}
+	if st.CertWarning != "" {
+		s.Extra["certWarning"] = st.CertWarning
+		if s.State == "connected" {
+			s.Message += " · " + st.CertWarning
+		}
+	}
 	return s
 }
 

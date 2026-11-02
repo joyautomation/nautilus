@@ -1,8 +1,8 @@
 package main
 
-// `naut opcua` is the commissioning side of the OPC UA CLIENT driver
-// (`driver: {type: opcua-client}`) — not the opcua: section, which serves this
-// project's own tags and needs no tooling. Subcommands: import
+// `naut opcua` is, first, the commissioning side of the OPC UA CLIENT driver
+// (`driver: {type: opcua-client}`); its certs and trust subcommands manage the
+// SERVER's certificate store instead (opcuacerts.go). Client subcommands: import
 // (browse a server → opcua_manifest.yaml + tags/opcua.yaml), browse (print
 // what a server exposes), and tags (re-derive the tag file from a committed
 // manifest, no server needed). It mirrors `naut eip import|browse|tags`
@@ -42,6 +42,15 @@ Usage:
 
 Reads only. Nothing these commands do writes to the server.
 
+This project's own OPC UA server (the opcua: section):
+  naut opcua certs [--pki DIR]
+        List the server's certificate and the client certificates it trusts
+        and has refused, with thumbprints and expiry.
+  naut opcua trust [--pki DIR] <thumbprint>
+        Approve a refused client: move its certificate from rejected/ to
+        trusted/. At least 8 hex digits; no restart needed.
+  --pki defaults to opcua.pki in ./nautilus.yaml, else ./pki.
+
 Connection flags (import and browse):
   --endpoint   Server URL (required), e.g. opc.tcp://10.0.0.5:62541/discovery
   --security   Policy: None | Basic256Sha256 | … (default: strongest offered)
@@ -78,6 +87,10 @@ func runOPCUA(args []string) int {
 		return runOPCUABrowse(args[1:])
 	case "tags":
 		return runOPCUATags(args[1:])
+	case "certs":
+		return runOPCUACerts(args[1:])
+	case "trust":
+		return runOPCUATrust(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "naut opcua: unknown subcommand %q\n\n%s", args[0], opcuaUsage)
 		return 2
