@@ -262,6 +262,14 @@ func runCheck(args []string) int {
 				"this program reads and writes its own %s, not the tag; rename it, "+
 				"or drop the declaration to use the tag\n", f, line, col, vd.Name, vd.Name, vd.Name)
 		}
+		for _, w := range res.warns {
+			blankWarns++
+			line, col := mapLine(w.Pos.Line), w.Pos.Col
+			if lineMap != nil {
+				col = 1
+			}
+			fmt.Printf("%s:%d:%d: warning: %s\n", f, line, col, w.Msg)
+		}
 		// An FB instance named like a FUNCTION hides it in that POU (#336).
 		for _, sh := range st.InstancesShadowingFunctions(res.prog, res.composed) {
 			blankWarns++
@@ -639,6 +647,9 @@ type checkResult struct {
 	// composed is the library prelude and the file parsed together (prog
 	// when there is no prelude).
 	composed *st.Program
+	// warns are what the file's lowering accepted but flagged (an integer
+	// where a TIME is expected), positioned in the checked file.
+	warns []st.LowerWarning
 }
 
 // compileFile runs the same parse+lower pipeline as the LSP: the prelude
@@ -673,6 +684,15 @@ func compileFile(src, prelude string, segs []stproject.Segment, tags []runtime.T
 		opts = scope.LowerOpts()
 	}
 	opts.Peers = peers
+	var warns []st.LowerWarning
+	opts.Warn = func(w st.LowerWarning) {
+		// A warning inside the library prelude belongs to the library's
+		// own check, where it is reported in the library's coordinates.
+		if w.Pos.Line > preludeLines {
+			w.Pos.Line -= preludeLines
+			warns = append(warns, w)
+		}
+	}
 	if _, err := st.LowerWithOpts(lowerProg, opts); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}
 		msg := err.Error()
@@ -697,7 +717,7 @@ func compileFile(src, prelude string, segs []stproject.Segment, tags []runtime.T
 		}
 		return checkResult{failed: true, msg: msg, pos: pos}
 	}
-	return checkResult{prog: prog, composed: lowerProg}
+	return checkResult{prog: prog, composed: lowerProg, warns: warns}
 }
 
 // inLibDir reports whether f lies under the lib/ directory of a manifest

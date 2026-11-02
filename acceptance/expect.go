@@ -218,6 +218,16 @@ func (m Matcher) match(got ir.Value, defaultTol float64) (bool, string) {
 				// `st_State: Fill`. Names are identifiers: case-insensitive.
 				return strings.EqualFold(got.S, m.Str), m.Str
 			}
+			if got.Kind == ir.TypeTime {
+				// A TIME value, asserted by its literal (`T#30s`, `30s`),
+				// read by the rule a TIME tag's `init:` and `given:` use, so
+				// a test names a duration the way the manifest does.
+				ms, err := ir.ParseDuration(m.Str)
+				if err != nil {
+					return false, fmt.Sprintf("%q (not a TIME: %v)", m.Str, err)
+				}
+				return got.I == ms, fmt.Sprintf("%s (%d)", m.Str, ms)
+			}
 			return got.Kind == ir.TypeString && got.S == m.Str, fmt.Sprintf("%q", m.Str)
 		default:
 			return numOf(got) == m.Num, trim(m.Num)

@@ -47,7 +47,17 @@ type LowerOpts struct {
 	UserFuncs       map[string]*ir.FuncDef
 	ImplicitGlobals map[string]*ir.Type
 	TagTypes        map[string]*ir.Type
-	Types           map[string]*ir.Type
+	// TagTypeErrs says why a tag's stated type: did not resolve (a
+	// misspelt TYPE), keyed by tag name. Such a tag reaches ImplicitGlobals
+	// untyped; naming it then reports this reason rather than "no type",
+	// which would send the author to add the type: the tag already has.
+	TagTypeErrs map[string]error
+	Types       map[string]*ir.Type
+	// Warn, when set, receives what lowering accepts but a reader likely
+	// misreads (LowerWarning). Lowering carries on either way: these are
+	// programs that compile and run, and naut check prints them as
+	// warnings.
+	Warn func(LowerWarning)
 	// Peers are the project's other programs (the one being lowered may be
 	// among them; it is skipped). They put nothing in scope — they only let
 	// an undeclared identifier that names another program's variable say
@@ -115,7 +125,14 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	l.userFuncs = combinedFuncs
 	l.implicitGlobals = opts.ImplicitGlobals
 	l.tagTypes = opts.TagTypes
+	for name, err := range opts.TagTypeErrs {
+		if l.tagTypeErrs == nil {
+			l.tagTypeErrs = map[string]error{}
+		}
+		l.tagTypeErrs[ir.NameKey(name)] = err
+	}
 	l.peers = opts.Peers
+	l.warn = dedupWarn(opts.Warn)
 	// Seed the file's TYPE table with any the caller supplies (a separately
 	// compiled library), then resolve this file's own TYPE block. Both are
 	// in scope for the POUs below — a FUNCTION_BLOCK pin may name a UDT.
@@ -437,6 +454,8 @@ type lowerer struct {
 	implicitGlobals map[string]*ir.Type    // optional; PLC project vars surfaced as globals
 	tagTypes        map[string]*ir.Type    // optional; tags whose type the project states
 	untypedTags     map[string]string      // NameKey → spelling: project tags with no knowable type
+	tagTypeErrs     map[string]error       // NameKey → why the tag's stated type: did not resolve
+	warn            func(LowerWarning)     // optional; see LowerOpts.Warn
 	peers           []PeerProgram          // optional; the project's other programs, for diagnostics only
 	// returnSlot, when >= 0, marks the slot the bare function-name
 	// identifier should bind to inside a FUNCTION body so `Name := value`
@@ -507,6 +526,7 @@ func (l *lowerer) child(prog *Program) *lowerer {
 	c.types = l.types
 	c.enums = l.enums
 	c.fileConsts = l.fileConsts
+	c.warn = l.warn
 	for k, v := range l.fileConsts {
 		c.consts[k] = v
 	}
@@ -950,6 +970,7 @@ func evalConstValue(e Expression, t *ir.Type) (ir.Value, error) {
 // else — a named constant, an enumeration member, arithmetic on constants
 // (`N_TANKS * 2`) — is lowered and must fold to a constant.
 func (l *lowerer) constValue(e Expression, t *ir.Type) (ir.Value, error) {
+	l.warnIntLiteralAsTime(e, t, "initial value")
 	if t == nil || t.Enum == nil {
 		if v, err := evalConstValue(e, t); err == nil {
 			return v, nil
@@ -1477,6 +1498,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		if !assignable(def.Inputs[idx].Type, v.ExprType()) && (def.Inputs[idx].Type.Enum != nil || v.ExprType().Enum != nil) {
 			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
 		}
+		l.warnIntAsTime(na.Value, def.Inputs[idx].Type, v, fmt.Sprintf("%s input %s", def.Name, def.Inputs[idx].Name))
 		bindings = append(bindings, ir.FBInput{SlotIdx: idx, Value: v})
 	}
 	// Every VAR_IN_OUT must be bound at every call site: unlike an input it
@@ -1794,6 +1816,9 @@ func (l *lowerer) lowerIdent(n *IdentExpr) (ir.Expr, error) {
 			return nil, errName(n.Pos, name, fmt.Errorf("unfilled placeholder `_`: connect this pin or name its variable"))
 		}
 		if tag, isTag := l.untypedTags[ir.NameKey(name)]; isTag {
+			if why := l.tagTypeErrs[ir.NameKey(name)]; why != nil {
+				return nil, errName(n.Pos, name, fmt.Errorf("tag %s: %w", tag, why))
+			}
 			return nil, errName(n.Pos, name, fmt.Errorf("%q is a project tag with no type — give %s a type: (or an init:) in the manifest, or declare it in VAR_EXTERNAL", name, tag))
 		}
 		if hint := l.peerHint(name); hint != "" {

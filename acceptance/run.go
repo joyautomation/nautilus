@@ -534,7 +534,11 @@ func (r *testRun) forces(st *Step) error {
 		}
 	}
 	for _, name := range sortedKeys(st.Force) {
-		if err := r.rt.Tags().Force(name, r.coerce(name, st.Force[name])); err != nil {
+		v, err := r.coerce(name, st.Force[name])
+		if err != nil {
+			return fmt.Errorf("force: %w", err)
+		}
+		if err := r.rt.Tags().Force(name, v); err != nil {
 			return fmt.Errorf("force: %w", err)
 		}
 	}
@@ -557,7 +561,10 @@ func (r *testRun) apply(given map[string]any) error {
 			}
 			return fmt.Errorf("given: no tag %q in this project", key)
 		}
-		v := r.coerce(name, given[key])
+		v, err := r.coerce(name, given[key])
+		if err != nil {
+			return fmt.Errorf("given: %w", err)
+		}
 		if r.inputs[name] {
 			if err := r.drv.WriteOutputs(nio.Values{name: v}); err != nil {
 				return err
@@ -658,7 +665,29 @@ func declaredTypes(o runtime.Options) map[string]string {
 // coerce keeps a write in the tag's own type: YAML has one number kind, the
 // tag store distinguishes DINT from REAL, and silently retyping a tag
 // mid-test would be a nasty way to lose an afternoon.
-func (r *testRun) coerce(name string, v any) any {
+//
+// A tag with a declared scalar type converts by the rule its `init:` seeds
+// with (ir.ScalarFromLiteral), so `HiLevelDelay: T#8h` is eight hours on a
+// TIME tag, as it is in the manifest, and not the STRING "T#8h" that made
+// a TON with that preset time out on the first scan (F-07). A value that
+// does not convert is the test's error, naming the tag. An untyped tag
+// keeps the looser rule below: it has no declared type to hold the value to.
+func (r *testRun) coerce(name string, v any) (any, error) {
+	if t := r.rt.Tags().TypeOf(name); t != nil && t.Kind != ir.TypeStruct && t.Kind != ir.TypeArray && t.Kind != ir.TypeFB {
+		if _, isMap := v.(map[string]any); !isMap {
+			cv, err := ir.ScalarFromLiteral(t, v, name)
+			if err != nil {
+				return nil, err
+			}
+			return cv, nil
+		}
+	}
+	return r.coerceUntyped(name, v), nil
+}
+
+// coerceUntyped converts by the kind the tag already holds, when it holds
+// one: the rule for a tag no program or manifest gives a type.
+func (r *testRun) coerceUntyped(name string, v any) any {
 	cur, err := r.rt.Tags().ReadGlobal(name)
 	if err == nil {
 		switch cur.Kind {
