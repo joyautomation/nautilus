@@ -181,3 +181,4 @@ claims:
     source: "#lifetime"
     tests:
       - go ./runtime TestForceBeforeFirstScanHolds
+      - go ./tools/blackbox TestBlackbox/002-P-build-self-contained
