@@ -439,6 +439,9 @@ type UndefinedTagError struct{ Name string }
 
 func (e *UndefinedTagError) Error() string { return "undefined tag " + e.Name }
 
+// Is makes errors.Is(err, ErrUndefined) true.
+func (e *UndefinedTagError) Is(target error) bool { return target == ErrUndefined }
+
 // Typed accessors (zero value if absent).
 
 func (t *Tags) Real(name string) float64 {
@@ -552,11 +555,16 @@ func (t *Tags) setAny(name string, v any) {
 // No path ever creates a tag: an unknown root is an error, which is what
 // keeps a typo out of the tag store (and off the Sparkplug wire).
 func (t *Tags) SetPath(path string, v any) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.setPathLocked(path, v)
+}
+
+// setPathLocked is SetPath under a lock the caller holds.
+func (t *Tags) setPathLocked(path string, v any) error {
 	if path == "" {
 		return fmt.Errorf("no tag name")
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	// A tag whose own NAME contains a dot wins over member resolution.
 	// Nothing in nautilus creates one today, but a driver is free to name a
 	// tag after the field symbol it was read from, and such a tag must stay

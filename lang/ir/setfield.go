@@ -233,14 +233,14 @@ func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
 	}
 	if nv, ok := v.(Value); ok {
 		if cur.Kind != TypeVoid && nv.Kind != cur.Kind {
-			return Value{}, fmt.Errorf("%s: want %s, got %s", sofar, cur.Kind, nv.Kind)
+			return Value{}, mismatchf("%s: want %s, got %s", sofar, cur.Kind, nv.Kind)
 		}
 		return CopyValue(nv), nil
 	}
 	if cur.Kind == TypeStruct {
 		m, ok := asStringMap(v)
 		if !ok {
-			return Value{}, fmt.Errorf(
+			return Value{}, mismatchf(
 				"%s: %s is a struct — a write must be a mapping of member: value, not %s",
 				sofar, structName(cur), describeKind(v))
 		}
@@ -268,10 +268,10 @@ func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
 		// a null entry leaves that element.
 		list, ok := v.([]any)
 		if !ok {
-			return Value{}, fmt.Errorf("%s: an array is written as a list of elements, or one element by index (%s[n]), not %s", sofar, sofar, describeKind(v))
+			return Value{}, mismatchf("%s: an array is written as a list of elements, or one element by index (%s[n]), not %s", sofar, sofar, describeKind(v))
 		}
 		if len(list) > len(cur.Arr) {
-			return Value{}, fmt.Errorf("%s: %d values for an array of %d", sofar, len(list), len(cur.Arr))
+			return Value{}, rangef("%s: %d values for an array of %d", sofar, len(list), len(cur.Arr))
 		}
 		lo := 0
 		if t != nil && t.Kind == TypeArray {
@@ -290,7 +290,14 @@ func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
 		}
 		return out, nil
 	}
-	return coerceLeaf(cur, v, sofar)
+	nv, err := coerceLeaf(cur, v, sofar)
+	if err != nil {
+		return Value{}, err
+	}
+	if err := checkFits(t, nv, sofar); err != nil {
+		return Value{}, err
+	}
+	return nv, nil
 }
 
 // EnumFromAny converts a written value to the enumerated type t: a member
@@ -324,7 +331,7 @@ func EnumFromAny(t *Type, v any, sofar string) (Value, error) {
 	if i, ok := toInt(v); ok {
 		return t.Enum.Val(i), nil
 	}
-	return Value{}, fmt.Errorf("%s: want a member of %s (%s), got %s", sofar, t.Enum.Name, enumNames(t.Enum), describeKind(v))
+	return Value{}, mismatchf("%s: want a member of %s (%s), got %s", sofar, t.Enum.Name, enumNames(t.Enum), describeKind(v))
 }
 
 // coerceLeaf converts a written scalar to the kind the value already has.
@@ -336,27 +343,27 @@ func coerceLeaf(cur Value, v any, sofar string) (Value, error) {
 		if b, ok := v.(bool); ok {
 			return BoolVal(b), nil
 		}
-		return Value{}, fmt.Errorf("%s: want BOOL, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeBool, v, "%s: want BOOL, got %s", sofar, describeKind(v))
 	case TypeReal:
 		if f, ok := toFloat(v); ok {
 			return RealVal(f), nil
 		}
-		return Value{}, fmt.Errorf("%s: want REAL, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeReal, v, "%s: want REAL, got %s", sofar, describeKind(v))
 	case TypeInt:
 		if i, ok := toInt(v); ok {
 			return IntVal(i), nil
 		}
-		return Value{}, fmt.Errorf("%s: want INT, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeInt, v, "%s: want INT, got %s", sofar, describeKind(v))
 	case TypeTime:
 		if i, ok := toInt(v); ok {
 			return TimeVal(i), nil
 		}
-		return Value{}, fmt.Errorf("%s: want TIME (milliseconds), got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeTime, v, "%s: want TIME (milliseconds), got %s", sofar, describeKind(v))
 	case TypeString:
 		if s, ok := v.(string); ok {
 			return StringVal(s), nil
 		}
-		return Value{}, fmt.Errorf("%s: want STRING, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeString, v, "%s: want STRING, got %s", sofar, describeKind(v))
 	case TypeArray, TypeFB:
 		// No settled literal form for either in a write payload (an array
 		// needs indices, an FB instance is identity, not a value). Refuse

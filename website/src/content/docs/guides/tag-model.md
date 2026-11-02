@@ -324,11 +324,20 @@ plant is already running on.
 - **The leaf keeps its type.** A number lands on a `REAL` member as a REAL
   and on a `DINT` member as an integer; a mismatch is
   `tag ZONE15_PMP_015.START: want BOOL, got a number`, not a silent retype.
+- **A value lands exactly as sent, or is refused.** An integer must fit its
+  declared width: `70` on an `INT` lands, `70000` is a `400`
+  (`tag Int1: 70000 is outside INT (-32768..32767)`), and so is `-1` on a
+  `UINT`. A fraction for an integer (`2.5`), a boolean for a `REAL`, or text
+  for anything but a `STRING` is a `422` on a whole tag (a `400` on a
+  member). A `TIME` takes whole milliseconds. A `REAL` takes no NaN or
+  infinity. The same rules apply to whole tags and members, and to an OPC UA
+  client's writes, because both go through the runtime's one write path.
 - **An enumerated member takes its name** — `{"name": "Recipe.Mode",
   "value": "Run"}`, any case, `Mode#Run` qualified, or the member's integer —
   and stores the named value, exactly as a write of a whole enumerated tag
   does. A name that is no member is a `400` that lists them
-  (`tag Recipe.Mode: "Stop" is not a member of Mode (Idle, Run, Fault)`).
+  (`tag Recipe.Mode: "Stop" is not a member of Mode (Idle, Run, Fault)`),
+  and so is an integer no member has.
 - **An array element is `[n]`**, counted from the array's declared lower
   bound: `Recipe.Steps[2].Mode`, `Line[0].Speed`. An index outside the bounds
   is a `400` that gives them. A list `value` merges onto an array element by

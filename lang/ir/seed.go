@@ -274,9 +274,14 @@ func toInt(v any) (int64, bool) {
 	case int64:
 		return x, true
 	case uint64:
-		return int64(x), true
+		if x <= math.MaxInt64 {
+			return int64(x), true
+		}
 	case float64:
-		if x == float64(int64(x)) {
+		// The range test first: converting a float outside int64 is
+		// implementation-defined in Go (amd64 gives MinInt64, arm64
+		// saturates), so 2^63 must not get as far as the round trip.
+		if x >= -(1<<63) && x < 1<<63 && x == float64(int64(x)) {
 			return int64(x), true
 		}
 	}

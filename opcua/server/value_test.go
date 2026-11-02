@@ -391,3 +391,28 @@ func TestLeafName(t *testing.T) {
 		}
 	}
 }
+
+// #421 part 2: a value of another kind in the store (a REAL in an INT tag,
+// as an unchecked write once left there) does not retype the node. The
+// DataType stays the declared Int16; a whole number is sent as that
+// integer, and an out-of-width one as Int64, never as a Double.
+func TestDeclaredTypeOutlivesAStoredKind(t *testing.T) {
+	typ := &ir.Type{Kind: ir.TypeInt, Name: "INT"}
+	for _, tc := range []struct {
+		v    ir.Value
+		want any
+	}{
+		{ir.RealVal(5), int16(5)},
+		{ir.RealVal(70000), int64(70000)},
+		{ir.RealVal(2.5), 2.5},
+	} {
+		m := member{addr: "Int1", val: tc.v, typ: typ}
+		dt := dataType(m)
+		if dt != id.Int16 {
+			t.Fatalf("%v stored → DataType i=%d, want Int16 (i=%d)", tc.v.F, dt, id.Int16)
+		}
+		if got := scalar(tc.v, dt); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%v stored → %v (%T), want %v (%T)", tc.v.F, got, got, tc.want, tc.want)
+		}
+	}
+}

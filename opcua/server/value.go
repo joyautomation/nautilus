@@ -185,7 +185,15 @@ func dataType(m member) uint32 {
 		}
 		return id.BaseDataType
 	}
-	switch v.Kind {
+	// The declared type decides, when there is one: DataType is what a
+	// client reads once and builds its conversion on (Part 3 §5.6.2), so a
+	// stored value of another kind must not retype the node (#421: a REAL
+	// stored in an INT tag turned it into a Double for good).
+	kind := v.Kind
+	if t != nil && isScalarKind(t.Kind) {
+		kind = t.Kind
+	}
+	switch kind {
 	case ir.TypeBool:
 		return id.Boolean
 	case ir.TypeReal:
@@ -201,6 +209,22 @@ func dataType(m member) uint32 {
 		return intType(t)
 	}
 	return id.BaseDataType
+}
+
+func isIntType(dt uint32) bool {
+	switch dt {
+	case id.SByte, id.Byte, id.Int16, id.UInt16, id.Int32, id.UInt32, id.Int64, id.UInt64:
+		return true
+	}
+	return false
+}
+
+func isScalarKind(k ir.TypeKind) bool {
+	switch k {
+	case ir.TypeBool, ir.TypeReal, ir.TypeTime, ir.TypeString, ir.TypeInt:
+		return true
+	}
+	return false
 }
 
 // intType picks the OPC UA integer type for a declared IEC width.
@@ -237,6 +261,13 @@ func scalar(v ir.Value, dt uint32) any {
 	case ir.TypeBool:
 		return v.B
 	case ir.TypeReal:
+		// A whole number stored in an integer node (a driver that delivers
+		// floats) is sent as that integer, so the Variant agrees with the
+		// declared DataType; anything else stays a Double, which a client
+		// sees disagree, rather than being rounded where nobody can.
+		if isIntType(dt) && v.F == math.Trunc(v.F) && v.F >= -(1<<63) && v.F < 1<<63 {
+			return scalar(ir.IntVal(int64(v.F)), dt)
+		}
 		return v.F
 	case ir.TypeTime:
 		return float64(v.I) // Duration: milliseconds as a Double

@@ -332,6 +332,11 @@ func (t *Tags) ForceRevision() uint64 {
 func (t *Tags) ForcedOverlap(addr string) string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	return t.forcedOverlapLocked(addr)
+}
+
+// forcedOverlapLocked is ForcedOverlap under a lock the caller holds.
+func (t *Tags) forcedOverlapLocked(addr string) string {
 	if len(t.forces) == 0 {
 		return ""
 	}

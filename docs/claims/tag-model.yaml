@@ -545,3 +545,16 @@ claims:
       - go ./runtime TestLogicFaultTransitionsAreLoggedOncePerEpisode
       - go ./runtime TestIOFaultTransitionsAreLoggedOncePerEpisode
       - go ./runtime TestFaultTrackRateLimitsChangedMessages
+  - id: TAG-050
+    claim: >-
+      An operator write lands exactly as sent or is refused: an integer
+      outside its declared width is a 400, a fraction for an integer or a
+      boolean for a REAL is a 422 on a whole tag, a TIME takes whole
+      milliseconds, a REAL takes no NaN or infinity, and an enumeration takes
+      only a member's name or value. A refused write never changes the tag's
+      type.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestWriteOutOfRangeIs400AndNeverRetypes
+      - go ./runtime TestFrontDoorConversions
+      - go ./tools/blackbox TestBlackbox/001-F06-overflow-int64

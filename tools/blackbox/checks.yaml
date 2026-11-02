@@ -180,9 +180,8 @@ checks:
   env: {}
   note: issue 421. Writes Int1 through the HTTP API; on the bug the node's DataType flips to Double for good, so run it LAST
     and restart the server after
-  expected_today: fail
+  expected_today: pass
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#421'
 - id: 001-F11-enum-names
   run: 2026-10-24-001
   finding: F-11
