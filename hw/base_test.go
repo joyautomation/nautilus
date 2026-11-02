@@ -16,7 +16,10 @@ import (
 )
 
 // fakeWire is the protocol stand-in: a scripted PollFunc/WriteFunc with a
-// notification channel so tests wait for polls instead of sleeping.
+// notification channel so tests wait for polls instead of sleeping. The
+// notification comes from the Base (watch), not from poll: the wire
+// answering is not the Base having applied the answer, and a test that
+// reads right after waitPoll must see the poll's values and state.
 type fakeWire struct {
 	mu      sync.Mutex
 	results map[string]Result // key "source/class"
@@ -52,10 +55,6 @@ func (w *fakeWire) poll(ctx context.Context, source, class string) (Result, erro
 	err := w.fail[source+"/"+class]
 	res := w.results[source+"/"+class]
 	w.mu.Unlock()
-	select {
-	case w.polled <- source + "/" + class:
-	default:
-	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -72,6 +71,21 @@ func (w *fakeWire) write(ctx context.Context, source string, d WriteDecl, v ir.V
 	return nil
 }
 
+// watch makes each Base report its applied polls to waitPoll. Call it
+// before Start.
+func (w *fakeWire) watch(bs ...*Base) {
+	for _, b := range bs {
+		b.afterPoll = func(source, class string) {
+			select {
+			case w.polled <- source + "/" + class:
+			default:
+			}
+		}
+	}
+}
+
+// waitPoll returns once a poll of want ("source/class") has been applied
+// by a watched Base: its values, quality and source state are visible.
 func (w *fakeWire) waitPoll(t *testing.T, want string) {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
@@ -146,6 +160,7 @@ func TestBaseDeliversDerivesAndReports(t *testing.T) {
 	w.set("SW1", "slow", Result{Updates: []Update{{"SW1_Port01", "Name", ir.StringVal("Gi0/1")}, {"SW1_Port02", "Name", ir.StringVal("Gi0/2")}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "SW1/default")
@@ -210,6 +225,7 @@ func TestBasePartialBadAndStale(t *testing.T) {
 	w.set("SW1", "slow", Result{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "SW1/default")
@@ -296,6 +312,7 @@ func TestBaseNeverAnsweredErrorsAtOnce(t *testing.T) {
 	b, _ := NewBase(switchConfig(w))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "SW1/default")
@@ -325,6 +342,7 @@ func TestBaseEnableParks(t *testing.T) {
 	w.set("SW1", DefaultClass, Result{Updates: up("SW1_Port01", true, true, 0)})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	time.Sleep(30 * time.Millisecond)
@@ -377,6 +395,7 @@ func TestBaseWrites(t *testing.T) {
 	w.set("PDU1", DefaultClass, Result{Updates: []Update{{"PDU1_Outlet03", "On", ir.BoolVal(true)}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "PDU1/default")
@@ -498,6 +517,7 @@ func TestBaseWriteGateBehindMulti(t *testing.T) {
 	w.set("PDU2", DefaultClass, Result{Updates: []Update{{"PDU2_Outlet01", "On", ir.BoolVal(true)}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(a, b)
 	m.Start(ctx)
 	defer m.Stop()
 	w.waitPoll(t, "PDU1/default")
@@ -672,6 +692,7 @@ END_PROGRAM`,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "SW1/default")
@@ -710,6 +731,7 @@ func TestBaseOnlineMemberAndRequests(t *testing.T) {
 	w.set("SW1", DefaultClass, Result{Updates: []Update{{"SW1", "Name", ir.StringVal("sw1")}}, Requests: 7})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "SW1/default")
@@ -762,6 +784,7 @@ func TestBaseBadBeforeFirstDelivery(t *testing.T) {
 	w.set("SW1", "slow", Result{Bad: []string{"SW1_Port02"}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "SW1/default")
@@ -813,6 +836,7 @@ func TestBaseWriteKindNoWriteAndLatch(t *testing.T) {
 	w.set("N1", DefaultClass, Result{Updates: []Update{{"N1", "PowerOn", ir.BoolVal(true)}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "N1/default")
@@ -870,6 +894,7 @@ func TestBaseOnReconnect(t *testing.T) {
 	w.set("SW1", DefaultClass, Result{Updates: up("SW1_Port01", true, true, 0)})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	deadline := time.Now().Add(time.Second)
@@ -916,6 +941,7 @@ func TestBaseStaleCommandsDropped(t *testing.T) {
 	w.set("PDU1", DefaultClass, Result{Updates: []Update{{"PDU1_Outlet03", "On", ir.BoolVal(true)}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "PDU1/default")
@@ -975,6 +1001,7 @@ func TestBaseFailingClassGoesBad(t *testing.T) {
 	w.set("SW1", "slow", Result{Updates: up("SW1_Port02", true, true, 0)})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 	w.waitPoll(t, "SW1/slow")
@@ -1039,6 +1066,7 @@ func TestBaseConnections(t *testing.T) {
 	w.setErr("SW2", "slow", errors.New("timeout"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	w.watch(b)
 	b.Start(ctx)
 	defer b.Stop()
 
