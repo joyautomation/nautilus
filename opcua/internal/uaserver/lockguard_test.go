@@ -98,6 +98,24 @@ func earlyReturn(srv *Server, x bool) {
 	mi.Mu.Unlock()
 }
 
+func earlyReturnInCase(srv *Server, x int, done chan struct{}) {
+	mi := srv.MonitoredItemService
+	mi.Mu.Lock()
+	switch x {
+	case 1:
+		mi.Mu.Unlock()
+		return
+	}
+	select {
+	case <-done:
+		mi.Mu.Unlock()
+		return
+	default:
+	}
+	sub.NotifyChannel <- nil // want
+	mi.Mu.Unlock()
+}
+
 func alias(srv *Server) {
 	mi := srv.MonitoredItemService
 	ch := sub.NotifyChannel
@@ -347,13 +365,19 @@ func heldRanges(fd *ast.FuncDecl) [][2]token.Pos {
 		}
 		return fd.Body
 	}
-	block := func() *ast.BlockStmt {
+	// block is the innermost statement list: a block, or a switch or select case's body.
+	block := func() (list []ast.Stmt, isScope bool) {
 		for i := len(stack) - 1; i >= 0; i-- {
-			if b, ok := stack[i].(*ast.BlockStmt); ok {
-				return b
+			switch b := stack[i].(type) {
+			case *ast.BlockStmt:
+				return b.List, b == scope()
+			case *ast.CaseClause:
+				return b.Body, false
+			case *ast.CommClause:
+				return b.Body, false
 			}
 		}
-		return fd.Body
+		return fd.Body.List, true
 	}
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		if n == nil {
@@ -372,8 +396,8 @@ func heldRanges(fd *ast.FuncDecl) [][2]token.Pos {
 		case *ast.CallExpr:
 			if key, op := muOp(n, isMI); op != "" {
 				e := ev{pos: n.Pos(), scopeEnd: scope().End(), key: key, lock: op == "Lock"}
-				if b := block(); !e.lock && b != scope() && len(b.List) > 0 {
-					switch b.List[len(b.List)-1].(type) {
+				if list, isScope := block(); !e.lock && !isScope && len(list) > 0 {
+					switch list[len(list)-1].(type) {
 					case *ast.ReturnStmt, *ast.BranchStmt:
 						e.skip = true
 					}

@@ -28,8 +28,8 @@ func startSubscriptionTestServer(t *testing.T, ctx context.Context) (string, *op
 }
 
 // startTestServer starts a server with no security and a plain Read handler, and returns its
-// endpoint and the server.
-func startTestServer(t *testing.T) (string, *Server) {
+// endpoint and the server. Each setup runs before Start, where handlers can be registered.
+func startTestServer(t *testing.T, setup ...func(*Server)) (string, *Server) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -58,6 +58,9 @@ func startTestServer(t *testing.T) (string, *Server) {
 	// message loop has stopped leaves the client's CloseSession and the
 	// server's Close to their 10 s timeouts.
 	sctx, scancel := context.WithCancel(context.Background())
+	for _, f := range setup {
+		f(srv)
+	}
 	require.NoError(t, srv.Start(sctx))
 	t.Cleanup(func() { _ = srv.Close(); scancel() })
 	return fmt.Sprintf("opc.tcp://127.0.0.1:%d", port), srv

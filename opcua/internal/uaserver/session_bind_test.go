@@ -206,3 +206,50 @@ func TestSessionClosedWithItsChannel(t *testing.T) {
 	require.Equal(t, 0, subs(), "the dropped channel's subscription is still held")
 	require.NoError(t, rawRead(ctx, keep, kept), "the other client's session went too")
 }
+
+// A session is closed with its channel on the message loop, after every request the channel
+// sent, never while one of them is between the session gate and its handler's own lookup. The
+// first version closed it from the channel's reader, so a handler mid-request could find its
+// session gone (DeleteSubscriptions then dereferenced nil and took the server down).
+func TestChannelCloseWaitsForItsRequests(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	found := make(chan bool, 1)
+	endpoint, srv := startTestServer(t, func(srv *Server) {
+		srv.RegisterHandler(id.BrowseRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+			close(entered)
+			<-release
+			found <- srv.Session(r.Header()) != nil
+			return &ua.BrowseResponse{ResponseHeader: responseHeader(r.Header().RequestHandle, ua.StatusOK)}, nil
+		})
+	})
+
+	c := dial(t, ctx, endpoint)
+	sc := c.SecureChannel()
+	tok := rawCreateSession(t, ctx, sc, endpoint)
+	require.NoError(t, rawActivate(ctx, sc, tok))
+	go func() {
+		req := &ua.BrowseRequest{View: &ua.ViewDescription{ViewID: ua.NewTwoByteNodeID(0)}}
+		_ = sc.SendRequest(ctx, req, tok, func(ua.Response) error { return nil })
+	}()
+	<-entered
+	// The handler has passed the gate and holds the loop. Drop the connection under it and
+	// give the channel's reader time to see the end.
+	require.NoError(t, c.Close(ctx))
+	time.Sleep(300 * time.Millisecond)
+	close(release)
+	require.True(t, <-found, "the session was closed while its request was being handled")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.sb.mu.Lock()
+		n := len(srv.sb.s)
+		srv.sb.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the session outlived its channel")
+}

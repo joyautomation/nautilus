@@ -266,7 +266,6 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.cb == nil {
 		s.cb = newChannelBroker(s.cfg.logger)
 	}
-	s.cb.onClose = s.channelClosed
 
 	go s.acceptAndRegister(ctx, s.l)
 	go s.monitorConnections(ctx)
@@ -275,7 +274,7 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // channelClosed closes the sessions bound to a channel that has gone, with their
-// subscriptions. Part 4 §5.6.3 lets a session outlive its channel so that a client can
+// subscriptions. It runs on the message loop, after every request the channel sent. Part 4 §5.6.3 lets a session outlive its channel so that a client can
 // reactivate it on a new one; this server refuses that move until it can check the client's
 // certificate (opcua-server-writes §6, slice 2), so such a session is already unusable.
 func (s *Server) channelClosed(sc *uasc.SecureChannel) {
@@ -349,7 +348,11 @@ func (s *Server) acceptAndRegister(ctx context.Context, l *uacp.Listener) {
 // sends the message to the service handler
 func (s *Server) monitorConnections(ctx context.Context) {
 	for ctx.Err() == nil {
-		msg := s.cb.ReadMessage(ctx)
+		msg, gone := s.cb.ReadMessage(ctx)
+		if gone != nil {
+			s.channelClosed(gone)
+			continue
+		}
 		if msg == nil {
 			continue // ctx is likely done, ctx.Err will be non-nil
 		}
