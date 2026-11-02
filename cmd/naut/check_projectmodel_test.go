@@ -172,3 +172,51 @@ func TestCheckLibraryErrorAttributedWhenLibraryNotChecked(t *testing.T) {
 		t.Errorf("exit %d:\n%s", code, got)
 	}
 }
+
+// F-17: a tag whose type: misspells a TYPE is not a tag with no type. Its
+// use in a program reports what naut test, run and build report — the
+// type that does not resolve and the TYPEs the project does declare — so
+// the author fixes the spelling instead of adding a type: already there.
+func TestCheckGoldenMisspeltTagType(t *testing.T) {
+	out, code := checkGolden(t, map[string]string{
+		"nautilus.yaml": `tasks:
+  - program: program.st
+tags:
+  - { name: Lead, role: state, type: PumpSelect }
+`,
+		"program.st": `TYPE
+    PumpSel : (Pump1, Pump2);
+END_TYPE
+PROGRAM Main
+Lead := PumpSel#Pump2;
+END_PROGRAM
+`,
+	})
+	assertGolden(t, out, code, 1, `program.st:5:1: tag Lead: type PumpSelect is neither an IEC elementary type (BOOL, INT, DINT, REAL, TIME, STRING, …) nor a TYPE this project's ST declares (known: PumpSel) — unknown type "PumpSelect"
+naut check: 1 file(s), 1 with errors`)
+}
+
+// F-16: `PT := 30000` compiles, read as 30 s, and check says so as a
+// warning on the argument: an error would break every project that
+// carries the Logix PRE habit and runs as its author meant, while silence
+// lets `PT := 30` run a 30 ms timer for an author who meant seconds.
+func TestCheckGoldenIntegerPresetWarns(t *testing.T) {
+	out, code := checkGolden(t, map[string]string{
+		"nautilus.yaml": `tasks:
+  - program: program.st
+tags:
+  - { name: Run, role: input, type: BOOL }
+  - { name: Done, role: output, type: BOOL }
+`,
+		"program.st": `PROGRAM Main
+VAR
+    t1 : TON;
+END_VAR
+t1(IN := Run, PT := 30000);
+Done := t1.Q;
+END_PROGRAM
+`,
+	})
+	assertGolden(t, out, code, 0, `program.st:5:21: warning: TON input PT: integer 30000 read as milliseconds where a TIME is expected; write T#30S
+naut check: 1 file(s), 0 with errors, 1 warning(s)`)
+}

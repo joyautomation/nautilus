@@ -73,6 +73,24 @@ func seedFromInit(t *Type, init any, path string) (Value, error) {
 	return v, nil
 }
 
+// ScalarFromLiteral converts a manifest-style scalar — what YAML hands back
+// for `T#30s`, `Pump1`, `65` or `TRUE` — to the scalar type t, by the very
+// rule an `init:` seeds with. A test's `given:` and `force:` use it so that
+// a value the manifest accepts for a tag is accepted the same way in a
+// test, and a value that is not of the tag's type is an error naming path,
+// never a tag silently retyped to whatever the YAML decoder produced.
+// t must be a scalar (an elementary type or an enumeration); a struct,
+// array or FB is an error.
+func ScalarFromLiteral(t *Type, v any, path string) (Value, error) {
+	if t == nil {
+		return Value{}, fmt.Errorf("%s: no type to convert to", path)
+	}
+	if t.Kind == TypeStruct || t.Kind == TypeArray || t.Kind == TypeFB {
+		return Value{}, fmt.Errorf("%s: %s is not a scalar type", path, t.String())
+	}
+	return scalarFromInit(t, v, path)
+}
+
 // scalarFromInit converts a leaf init value to t's kind. Accepted Go shapes
 // mirror what a YAML decoder ever hands back for a scalar node.
 func scalarFromInit(t *Type, v any, path string) (Value, error) {
