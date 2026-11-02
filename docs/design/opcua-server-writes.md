@@ -348,6 +348,10 @@ dispositions:
    CloseSession works on a session not yet activated. A session never moves to another
    channel (Part 4 §5.6.3 transfer) until slice 2 can check the client certificate; a
    client that loses its channel creates a new session, as gopcua and asyncua already do.
+   So a session is closed, with its subscriptions, when its channel goes; otherwise each
+   reconnect left a dead one behind. The one change a real client sees: gopcua's
+   reconnect used to reactivate its old session and now makes a new one. Slice 2, when it
+   allows the move, closes an orphaned session at its timeout instead.
 2. **Secure channels, read-only.** Fork `uasc`, add the accessors, the OPN trust hook and
    the policy/mode allowlist. Add the PKI with generation, trust and reject, `naut opcua
    certs` and `trust`, identity-token checks, the CreateSession certificate and URI

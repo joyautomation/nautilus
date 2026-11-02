@@ -19,6 +19,18 @@ import (
 // connected client; both are closed when the test ends.
 func startSubscriptionTestServer(t *testing.T, ctx context.Context) (string, *opcua.Client) {
 	t.Helper()
+	endpoint, _ := startTestServer(t)
+	c, err := opcua.NewClient(endpoint, opcua.SecurityMode(ua.MessageSecurityModeNone))
+	require.NoError(t, err)
+	require.NoError(t, c.Connect(ctx))
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
+	return endpoint, c
+}
+
+// startTestServer starts a server with no security and a plain Read handler, and returns its
+// endpoint and the server.
+func startTestServer(t *testing.T) (string, *Server) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -48,13 +60,7 @@ func startSubscriptionTestServer(t *testing.T, ctx context.Context) (string, *op
 	sctx, scancel := context.WithCancel(context.Background())
 	require.NoError(t, srv.Start(sctx))
 	t.Cleanup(func() { _ = srv.Close(); scancel() })
-	endpoint := fmt.Sprintf("opc.tcp://127.0.0.1:%d", port)
-
-	c, err := opcua.NewClient(endpoint, opcua.SecurityMode(ua.MessageSecurityModeNone))
-	require.NoError(t, err)
-	require.NoError(t, c.Connect(ctx))
-	t.Cleanup(func() { _ = c.Close(context.Background()) })
-	return endpoint, c
+	return fmt.Sprintf("opc.tcp://127.0.0.1:%d", port), srv
 }
 
 // Subscription IDs used to be len(Subs)+1, so after a deletion a new subscription could get the

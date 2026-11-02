@@ -2,7 +2,11 @@ package uaserver
 
 import (
 	"context"
+	"go/parser"
+	"go/token"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
@@ -15,11 +19,17 @@ import (
 // request with any authentication token.
 func channel(t *testing.T, ctx context.Context, endpoint string) *uasc.SecureChannel {
 	t.Helper()
+	return dial(t, ctx, endpoint).SecureChannel()
+}
+
+// dial is channel, returning the client so a test can drop the connection.
+func dial(t *testing.T, ctx context.Context, endpoint string) *opcua.Client {
+	t.Helper()
 	c, err := opcua.NewClient(endpoint, opcua.SecurityPolicy(ua.SecurityPolicyURINone), opcua.SecurityMode(ua.MessageSecurityModeNone))
 	require.NoError(t, err)
 	require.NoError(t, c.Dial(ctx))
 	t.Cleanup(func() { _ = c.Close(context.Background()) })
-	return c.SecureChannel()
+	return c
 }
 
 // rawCreateSession creates a session on sc and returns its authentication token.
@@ -78,6 +88,27 @@ func TestSessionTokensAreRandomAndLong(t *testing.T) {
 
 func base64Len(n int) int { return (n + 2) / 3 * 4 }
 
+// The test above cannot tell crypto/rand from math/rand by the tokens alone, so it reads where
+// session_broker.go gets its randomness from.
+func TestSessionTokensComeFromCryptoRand(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "session_broker.go", nil, parser.ImportsOnly)
+	require.NoError(t, err)
+	imports := map[string]string{}
+	for _, imp := range f.Imports {
+		name := ""
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		imports[strings.Trim(imp.Path.Value, `"`)] = name
+	}
+	name, ok := imports["crypto/rand"]
+	require.True(t, ok, "session_broker.go does not import crypto/rand")
+	require.True(t, name == "" || name == "rand", "crypto/rand is imported as %q, so rand.Read may be another package", name)
+	_, weak := imports["math/rand"]
+	_, weak2 := imports["math/rand/v2"]
+	require.True(t, !weak && !weak2, "session_broker.go imports math/rand")
+}
+
 // A token presented on a channel other than the one its session was created and activated on
 // is refused, so a token read off the wire cannot be used from a second connection.
 func TestSessionTokenRefusedOnAnotherChannel(t *testing.T) {
@@ -131,4 +162,47 @@ func TestServiceCallsNeedAnActivatedSession(t *testing.T) {
 	tok2 := rawCreateSession(t, ctx, sc, endpoint)
 	require.NoError(t, sc.SendRequest(ctx, &ua.CloseSessionRequest{DeleteSubscriptions: true}, tok2, func(ua.Response) error { return nil }))
 	require.Equal(t, ua.StatusBadSessionIDInvalid, rawRead(ctx, sc, tok2))
+}
+
+// A session cannot move to another channel, so when its channel goes (a client's link drops and
+// it reconnects) the session and its subscriptions go with it. They were left behind for good:
+// one dead session, its channel and its subscriptions per reconnect.
+func TestSessionClosedWithItsChannel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	endpoint, srv := startTestServer(t)
+
+	sessions := func() int {
+		srv.sb.mu.Lock()
+		defer srv.sb.mu.Unlock()
+		return len(srv.sb.s)
+	}
+	subs := func() int {
+		srv.SubscriptionService.Mu.Lock()
+		defer srv.SubscriptionService.Mu.Unlock()
+		return len(srv.SubscriptionService.Subs)
+	}
+
+	keep := channel(t, ctx, endpoint) // a second client, whose session must survive
+	kept := rawCreateSession(t, ctx, keep, endpoint)
+	require.NoError(t, rawActivate(ctx, keep, kept))
+
+	c := dial(t, ctx, endpoint)
+	sc := c.SecureChannel()
+	tok := rawCreateSession(t, ctx, sc, endpoint)
+	require.NoError(t, rawActivate(ctx, sc, tok))
+	require.NoError(t, sc.SendRequest(ctx, &ua.CreateSubscriptionRequest{RequestedPublishingInterval: 100, RequestedLifetimeCount: 300, RequestedMaxKeepAliveCount: 10, PublishingEnabled: true}, tok, func(ua.Response) error { return nil }))
+	require.Equal(t, 2, sessions())
+	require.Equal(t, 1, subs())
+
+	// The client knows of no session (it was made raw), so Close sends no CloseSession: the
+	// connection just goes, as a dropped link does.
+	require.NoError(t, c.Close(ctx))
+	deadline := time.Now().Add(5 * time.Second)
+	for (sessions() != 1 || subs() != 0) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, 1, sessions(), "the dropped channel's session is still held")
+	require.Equal(t, 0, subs(), "the dropped channel's subscription is still held")
+	require.NoError(t, rawRead(ctx, keep, kept), "the other client's session went too")
 }

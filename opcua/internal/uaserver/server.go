@@ -20,6 +20,7 @@ import (
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
 	"github.com/gopcua/opcua/uapolicy"
+	"github.com/gopcua/opcua/uasc"
 )
 
 const defaultListenAddr = "opc.tcp://localhost:0"
@@ -265,11 +266,24 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.cb == nil {
 		s.cb = newChannelBroker(s.cfg.logger)
 	}
+	s.cb.onClose = s.channelClosed
 
 	go s.acceptAndRegister(ctx, s.l)
 	go s.monitorConnections(ctx)
 
 	return nil
+}
+
+// channelClosed closes the sessions bound to a channel that has gone, with their
+// subscriptions. Part 4 §5.6.3 lets a session outlive its channel so that a client can
+// reactivate it on a new one; this server refuses that move until it can check the client's
+// certificate (opcua-server-writes §6, slice 2), so such a session is already unusable.
+func (s *Server) channelClosed(sc *uasc.SecureChannel) {
+	for _, sess := range s.sb.CloseChannel(sc) {
+		if s.SubscriptionService != nil {
+			s.SubscriptionService.DeleteSessionSubscriptions(sess)
+		}
+	}
 }
 
 func (s *Server) setServerState(state ua.ServerState) {

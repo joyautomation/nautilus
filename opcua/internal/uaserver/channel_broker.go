@@ -41,6 +41,10 @@ type channelBroker struct {
 	// get funneled into for handling
 	msgChan chan *uasc.MessageBody
 	logger  Logger
+
+	// onClose, when set, is told each channel whose reader has returned, after the channel
+	// has left s. The server closes the sessions bound to it there.
+	onClose func(*uasc.SecureChannel)
 }
 
 func newChannelBroker(logger Logger) *channelBroker {
@@ -144,6 +148,9 @@ outer:
 	delete(c.conns, secureChannelID)
 	c.mu.Unlock()
 	conn.Close()
+	if c.onClose != nil {
+		c.onClose(sc)
+	}
 	c.wg.Done()
 
 	return nil

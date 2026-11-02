@@ -26,8 +26,8 @@ type session struct {
 
 	PublishRequests chan PubReq
 
-	// mu guards channel and activated. Requests for one session can arrive from more than one
-	// goroutine (the message loop and a Publish's background task).
+	// mu guards activated. Every request is handled on the server's one message loop, so this
+	// is defensive; channel is set at creation and never changes.
 	mu sync.Mutex
 	// channel is the secure channel the session was created on. ActivateSession must arrive on
 	// it, and every later request too: a token presented on another channel is refused, so a
@@ -97,6 +97,22 @@ func (sb *sessionBroker) NewSession(sc *uasc.SecureChannel) (*session, error) {
 	sb.mu.Unlock()
 
 	return s, nil
+}
+
+// CloseChannel removes every session bound to sc and returns them. A session cannot move to
+// another channel, so once its channel is gone nothing can use it again; without this, each
+// reconnect of a client left one dead session (and its channel) behind for good.
+func (sb *sessionBroker) CloseChannel(sc *uasc.SecureChannel) []*session {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	var out []*session
+	for k, s := range sb.s {
+		if s.boundTo(sc) {
+			out = append(out, s)
+			delete(sb.s, k)
+		}
+	}
+	return out
 }
 
 func (sb *sessionBroker) Close(authToken *ua.NodeID) error {
