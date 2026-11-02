@@ -90,3 +90,39 @@ func TestStructToTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The 32-bit int_value field means what its datatype says: a UInt32 at or
+// above 2^31 decodes as the unsigned value, an Int32 as a negative one, in
+// a metric and in a property alike (#501 review found the UInt32 one).
+func TestIntValueDecodesByDatatype(t *testing.T) {
+	p := Payload{Timestamp: 1, Metrics: []Metric{
+		{Name: "U32", Datatype: spb.DataType_UInt32, Value: int64(3000000000)},
+		{Name: "U16", Datatype: spb.DataType_UInt16, Value: int64(65535)},
+		{Name: "I32", Datatype: spb.DataType_Int32, Value: int64(-5)},
+		{Name: "I8", Datatype: spb.DataType_Int8, Value: int64(-128)},
+	}}
+	b, err := p.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodePayload(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int64{3000000000, 65535, -5, -128} {
+		if got.Metrics[i].Value != want {
+			t.Errorf("%s = %v, want %d", got.Metrics[i].Name, got.Metrics[i].Value, want)
+		}
+	}
+	u32, i32 := uint32(spb.DataType_UInt32), uint32(spb.DataType_Int32)
+	props := decodeProperties(&spb.Payload_PropertySet{
+		Keys: []string{"hi", "lo"},
+		Values: []*spb.Payload_PropertyValue{
+			{Type: &u32, Value: &spb.Payload_PropertyValue_IntValue{IntValue: 4000000000}},
+			{Type: &i32, Value: &spb.Payload_PropertyValue_IntValue{IntValue: uint32(0xFFFFFFFB)}},
+		},
+	})
+	if len(props) != 2 || props[0].Value != int64(4000000000) || props[1].Value != int64(-5) {
+		t.Errorf("properties = %+v, want hi 4000000000 (UInt32), lo -5 (Int32)", props)
+	}
+}

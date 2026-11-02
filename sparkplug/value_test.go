@@ -113,11 +113,12 @@ func TestValueFromMetricScalarWireRoundTrip(t *testing.T) {
 	}
 }
 
-// TestValueFromMetricUInt32SignExtends pins the known lossy leg: Int8..UInt32
-// all ride the 32-bit IntValue oneof and decodeMetric sign-extends from 32
-// bits, so an unsigned metric above 2^31 arrives negative. Pre-existing
-// parent-package behaviour, pinned here so a future fix is a deliberate change.
-func TestValueFromMetricUInt32SignExtends(t *testing.T) {
+// TestValueFromMetricUInt32IsUnsigned: Int8..UInt32 all ride the 32-bit
+// IntValue oneof, and decodeMetric reads it by the datatype — sign-extended
+// for Int8/16/32, unsigned for UInt8/16/32 — so an unsigned metric above
+// 2^31 arrives as itself. (This test used to pin the sign-extension as a
+// known lossy leg, so that its fix would be a deliberate change; it is.)
+func TestValueFromMetricUInt32IsUnsigned(t *testing.T) {
 	b, err := Payload{Metrics: []Metric{{Name: "m", Datatype: spb.DataType_UInt32, Value: int64(4000000000)}}}.Encode()
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -130,8 +131,8 @@ func TestValueFromMetricUInt32SignExtends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValueFromMetric: %v", err)
 	}
-	if got.I != -294967296 {
-		t.Fatalf("got %d, want the sign-extended -294967296", got.I)
+	if got.I != 4000000000 {
+		t.Fatalf("got %d, want 4000000000", got.I)
 	}
 }
 
