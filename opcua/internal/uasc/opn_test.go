@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopcua/opcua/uacp"
 	"github.com/gopcua/opcua/ua"
+	"github.com/gopcua/opcua/uacp"
 	"github.com/joyautomation/nautilus/opcua/internal/require"
 )
 
