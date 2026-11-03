@@ -118,6 +118,7 @@ claims:
       The project folder under Objects browses as a FolderType.
     source: "#what-a-client-sees"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-F04b-server-identity-mandatory-vars
       - go ./opcua/server TestServerObjectDescribesNautilus
       - go ./opcua/server TestBrowseTypeDefinitionsAreTypes
       - go ./opcua/server TestServerDiagnosticsFlagAndOptionalLimits
@@ -130,10 +131,8 @@ claims:
       - go ./cmd/naut TestNautRunOPCUAReportsTheCLIVersion
     note: >-
       The tester's 001-F04b-server-identity-mandatory-vars proves everything
-      it checks except Auditing: it reads i=2268 (ServerCapabilities, an
-      Object) as Auditing, which is i=2994, so it cannot pass until the check
-      is corrected; it stays open under #424 until then. The Go test reads
-      i=2994. The build number and date come from the binary's VCS stamp;
+      it checks, Auditing included: the copy imported from the reconciliation
+      retest (run 2026-11-03-001) reads it at i=2994, and passes. The build number and date come from the binary's VCS stamp;
       a binary built without one (-buildvcs=false) has no build number and
       dates itself by the executable's modification time.
 
@@ -292,7 +291,9 @@ claims:
       answered Bad_UserAccessDenied and does not land, and a write to another
       attribute or an Object is Bad_NotWritable. AccessLevel is CurrentRead
       on every node opcua.writable does not open, and the standard Server
-      object and its variables are read-only for every session.
+      object and its variables are read-only for every session: any write to
+      them, the Value included, is Bad_NotWritable. Their Variables answer
+      Historizing as false.
     source: "#security"
     tests:
       - go ./tools/blackbox TestBlackbox/001-P-read-only-tags

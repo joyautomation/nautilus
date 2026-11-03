@@ -457,8 +457,8 @@ func TestServerDiagnosticsLeftOutWhileDisabled(t *testing.T) {
 	}
 	got := write(t, c, &ua.WriteValue{NodeID: flag, AttributeID: ua.AttributeIDValue,
 		Value: &ua.DataValue{EncodingMask: ua.DataValueValue, Value: ua.MustVariant(true)}})
-	if got[0] == ua.StatusOK {
-		t.Error("a Write of true to EnabledFlag landed; it must be read-only")
+	if got[0] != ua.StatusBadNotWritable {
+		t.Errorf("a Write of true to EnabledFlag: %s, want Bad_NotWritable (read-only for every user)", got[0])
 	}
 	if dv := read(t, c, flag, ua.AttributeIDValue); val(dv) != false {
 		t.Errorf("EnabledFlag after the refused Write = %#v, want false", val(dv))

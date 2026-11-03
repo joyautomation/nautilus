@@ -472,7 +472,8 @@ YAML anchor.
 
 - **The `Value` of a scalar tag or a struct member.** Any other attribute,
   an Object (a UDT tag, an array of UDTs, the project folder) and the
-  standard `Server` object are `Bad_NotWritable`.
+  standard `Server` object and its variables are `Bad_NotWritable`, for
+  every session.
 - **Not an input, even when a pattern matches it.** The driver replaces an
   input before every scan, so a client's value would be lost unread
   (`Bad_NotWritable`). Open the setpoint the logic reads instead.
@@ -526,8 +527,8 @@ Each item of a Write gets its own status:
 | Case | Status |
 |---|---|
 | the node id is nothing | `Bad_NodeIdUnknown` |
-| the session is not a writer (the Value of any Variable) | `Bad_UserAccessDenied` |
-| not the `Value` attribute; an Object; a tag `opcua.writable` does not open; an input | `Bad_NotWritable` |
+| the session is not a writer (the Value of any project Variable) | `Bad_UserAccessDenied` |
+| not the `Value` attribute; an Object; a tag `opcua.writable` does not open; an input; any node of the standard `Server` object | `Bad_NotWritable` |
 | a conversion the table above refuses | `Bad_TypeMismatch` or `Bad_OutOfRange` |
 | an array or an `IndexRange`; an Uncertain or Bad status code | `Bad_WriteNotSupported` |
 | the address is [forced](/guides/forcing/) | `Bad_Locked` |

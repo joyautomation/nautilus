@@ -135,7 +135,10 @@ func TestProjectNamespaceIsIndexOne(t *testing.T) {
 
 // Nothing is writable, gopcua's Server object included: an anonymous
 // client that could rewrite NamespaceArray would break namespace-mapping
-// for every other client until restart.
+// for every other client until restart. No user may write the server's own
+// nodes, so every attribute, Value included, answers Bad_NotWritable, not
+// Bad_UserAccessDenied (nautilus#527), and its Variables answer the
+// Mandatory Historizing as false (nautilus#526).
 func TestServerObjectIsReadOnly(t *testing.T) {
 	rt, _ := newRuntime(t)
 	_, c := startServer(t, rt)
@@ -155,7 +158,7 @@ func TestServerObjectIsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []ua.StatusCode{ua.StatusBadUserAccessDenied, ua.StatusBadUserAccessDenied, ua.StatusBadNotWritable, ua.StatusBadNodeIDUnknown, ua.StatusBadNodeIDUnknown}
+	want := []ua.StatusCode{ua.StatusBadNotWritable, ua.StatusBadNotWritable, ua.StatusBadNotWritable, ua.StatusBadNodeIDUnknown, ua.StatusBadNodeIDUnknown}
 	for i, w := range want {
 		if resp.Results[i] != w {
 			t.Errorf("write %d: %s, want %s", i, resp.Results[i], w)
@@ -181,6 +184,21 @@ func TestServerObjectIsReadOnly(t *testing.T) {
 	}
 	if dv := read(t, c, ua.NewNumericNodeID(0, id.Server), ua.AttributeIDAccessLevel); dv.Status != ua.StatusBadAttributeIDInvalid {
 		t.Errorf("an Object answered AccessLevel: %v %s", dv.Value, dv.Status)
+	}
+	for name, n := range map[string]uint32{
+		"NamespaceArray": id.Server_NamespaceArray,
+		"ServerStatus":   id.Server_ServerStatus,
+		"ServiceLevel":   id.Server_ServiceLevel,
+		"State":          id.Server_ServerStatus_State,
+		"EnabledFlag":    id.Server_ServerDiagnostics_EnabledFlag,
+	} {
+		dv := read(t, c, ua.NewNumericNodeID(0, n), ua.AttributeIDHistorizing)
+		if dv.Status != ua.StatusGood || dv.Value == nil || dv.Value.Value() != false {
+			t.Errorf("%s Historizing: %s, want false", name, dv.Status)
+		}
+	}
+	if dv := read(t, c, ua.NewNumericNodeID(0, id.Server), ua.AttributeIDHistorizing); dv.Status != ua.StatusBadAttributeIDInvalid {
+		t.Errorf("an Object answered Historizing: %v %s", dv.Value, dv.Status)
 	}
 }
 
