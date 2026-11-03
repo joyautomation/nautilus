@@ -242,7 +242,7 @@ func renameTagInManifest(mpath, name, newName string) (map[string][]TextEdit, er
 				edits = append(edits, TextEdit{Range: scalarRange(n), NewText: newName})
 			}
 		}
-		for _, item := range seqItems(mappingValue(doc, "tags")) {
+		for _, item := range tagItems(doc) {
 			hit(mappingValue(item, "name"))
 		}
 		for _, item := range seqItems(mappingValue(doc, "tasks")) {
@@ -301,6 +301,15 @@ func seqItems(n *yaml.Node) []*yaml.Node {
 		return nil
 	}
 	return n.Content
+}
+
+// tagItems is a YAML file's tag entries: the tags: list of a manifest, or
+// the whole of a tag-file, which is a bare list (project.composeTags).
+func tagItems(doc *yaml.Node) []*yaml.Node {
+	if doc != nil && doc.Kind == yaml.SequenceNode {
+		return doc.Content
+	}
+	return seqItems(mappingValue(doc, "tags"))
 }
 
 func yamlStringSeq(n *yaml.Node) []string {

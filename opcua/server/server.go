@@ -263,6 +263,7 @@ func (s *Server) Start(ctx context.Context) error {
 		stamps:  map[string]stamp{},
 		mstamps: map[string]mstamp{},
 		w:       s.w,
+		enums:   collectEnums(s.rt),
 	}
 	srv.AddNamespace(ns)
 	registerServices(srv, ns)
@@ -317,6 +318,11 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("opcua: gopcua has no Objects folder")
 	}
 	objects.AddRef(ns.folderNode(), opcserver.RefTypeIDOrganizes, true)
+	// Each enumeration the project declares is a DataType under ns=0's
+	// Enumeration, where a client looks for the member names (#425).
+	if enumeration := root.Node(ua.NewNumericNodeID(0, id.Enumeration)); enumeration != nil {
+		ns.hangEnums(enumeration)
+	}
 
 	cctx, cancel := context.WithCancel(ctx)
 	if err := srv.Start(cctx); err != nil {

@@ -123,13 +123,13 @@ func runCheck(args []string) int {
 	}
 	tagsFor := map[string][]runtime.TagDef{}
 	tagsErr := map[string]error{} // root → why its manifest's tags can't be read
-	tagsSaid := map[string]bool{} // manifest dir → its error is printed
+	tagsSaid := map[string]bool{} // manifest dir → its error is printed (a directory reads one manifest)
 	projectTags := func(f string) []runtime.TagDef {
 		root := stproject.ProjectRoot(f)
 		if defs, ok := tagsFor[root]; ok {
 			return defs
 		}
-		defs, mdir, err := project.TagDefsForErr(f)
+		defs, mdir, mname, err := project.TagDefsForErr(f, *manifest)
 		tagsFor[root] = defs
 		if err != nil {
 			// Reported once per project, on the manifest. Its programs are
@@ -144,7 +144,7 @@ func runCheck(args []string) int {
 						shown = rel
 					}
 				}
-				fmt.Println(newManifestLoc(shown, "").say(err))
+				fmt.Println(newManifestLoc(shown, mname).say(err))
 			}
 		}
 		return defs

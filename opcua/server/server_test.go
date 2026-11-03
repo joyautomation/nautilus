@@ -228,7 +228,8 @@ func TestReadsCarryTypesQualityAndTimestamps(t *testing.T) {
 		{"Level", id.Double, 3.5},
 		{"Label", id.String, "Pump 1"},
 		{"Elapsed", id.Duration, 1500.0},
-		{"State", id.Int32, int32(10)},
+		// State, an enumeration, reads Int32 10 too; its DataType is the
+		// enumeration's own node (TestEnumerationTagsCarryTheirDataType).
 		{"P101.Drive.Speed", id.Double, 1750.5},
 		{"P101.Running", id.Boolean, false},
 		{"p101.drive.speed", id.Double, 1750.5}, // IEC names are case-insensitive

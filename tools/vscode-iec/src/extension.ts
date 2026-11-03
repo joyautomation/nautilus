@@ -368,6 +368,13 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
       { language: "yaml", pattern: "**/*_test.yaml" },
       { language: "plaintext", pattern: "**/*_test.yaml" },
     ],
+    // nautilus.yaml and its tag-files are never sent as documents, but the
+    // server reports their tag errors and every program's tags come from
+    // them: a save, fix or delete must reach it. Tag-files may be named
+    // anything, so all YAML is watched and the server keeps what matters.
+    synchronize: {
+      fileEvents: watchedYaml(context),
+    },
   };
 
   client = new LanguageClient(
@@ -388,6 +395,13 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
     // wrong, or a CLI too old to have `lsp`.
     showCliMissing(cliPath, `"${cliPath} lsp" failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/** The YAML watcher handed to the language client's fileEvents. */
+function watchedYaml(context: vscode.ExtensionContext): vscode.FileSystemWatcher {
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{yaml,yml}");
+  context.subscriptions.push(watcher);
+  return watcher;
 }
 
 export function deactivate(): Thenable<void> | undefined {

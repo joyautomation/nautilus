@@ -779,6 +779,24 @@ func sameType(a, b *ir.Type) bool {
 	case a == nil || b == nil || a.Kind != b.Kind:
 		return false
 	}
+	// An enumeration is its members, names and values: two tasks declaring
+	// Mode as (Idle, Run := 10, Fault) and as (Off, On, Tripped) disagree
+	// on what Mode#Run means, and OPC UA serves one EnumDefinition per name.
+	if (a.Enum == nil) != (b.Enum == nil) {
+		return false
+	}
+	if a.Enum != nil {
+		if !ir.SameName(a.Enum.Name, b.Enum.Name) || len(a.Enum.Members) != len(b.Enum.Members) ||
+			a.Enum.Default != b.Enum.Default { // and where a tag of it starts
+			return false
+		}
+		for i, m := range a.Enum.Members {
+			if !ir.SameName(m.Name, b.Enum.Members[i].Name) || m.Value != b.Enum.Members[i].Value {
+				return false
+			}
+		}
+		return true
+	}
 	switch a.Kind {
 	case ir.TypeStruct:
 		if a.Struct == nil || b.Struct == nil {

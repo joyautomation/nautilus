@@ -53,3 +53,33 @@ func TestCheckReportsAManifestTagErrorNotUndeclaredTags(t *testing.T) {
 		})
 	}
 }
+
+// `naut check -m field.yaml` scopes the programs by field.yaml's tags,
+// not nautilus.yaml's (#518): a project with a broken nautilus.yaml and a
+// good field.yaml checks clean under -m field.yaml, and the reverse
+// reports field.yaml, by name.
+func TestCheckReadsTagsFromTheDashMManifest(t *testing.T) {
+	dir := t.TempDir()
+	head := "name: lift-station\ntasks:\n  - program: main.st\n    scan: 100ms\ntags:\n" +
+		"  - { name: Level, role: input, type: REAL, init: 42.0 }\n" +
+		"  - { name: PumpRun, role: output, type: BOOL, init: false }\n"
+	files := map[string]string{
+		"nautilus.yaml": head + "  - { name: X, role: command, type: BOOL }\n",
+		"field.yaml":    head,
+		"broken.yaml":   head + "  - { name: Y, role: setpoint }\n",
+		"main.st":       "PROGRAM Main\nPumpRun := Level > 50.0;\nEND_PROGRAM\n",
+	}
+	for n, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, code := capture(t, func() int { return runCheck([]string{"-m", "field.yaml", dir}) })
+	if code != 0 {
+		t.Fatalf("naut check -m field.yaml failed on nautilus.yaml's tags (exit %d):\n%s", code, out)
+	}
+	out, code = capture(t, func() int { return runCheck([]string{"-m", "broken.yaml", dir}) })
+	if code == 0 || !strings.Contains(out, "broken.yaml") || !strings.Contains(out, "tag Y") || strings.Contains(out, "tag X") {
+		t.Fatalf("naut check -m broken.yaml does not report broken.yaml's tag Y (exit %d):\n%s", code, out)
+	}
+}
