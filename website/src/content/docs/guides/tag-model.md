@@ -329,8 +329,10 @@ plant is already running on.
   (`tag Int1: 70000 is outside INT (-32768..32767)`), and so is `-1` on a
   `UINT`. A `ULINT` or `LWORD` takes any 64-bit pattern. A fraction for an
   integer (`2.5`), a boolean for a `REAL`, or text for anything but a
-  `STRING` is a `422` on a whole tag (a `400` on a member). A `TIME` takes
-  whole milliseconds. The same rules hold for a whole tag, a member, every
+  `STRING` or a `TIME` is a `422` on a whole tag (a `400` on a member). A
+  `TIME` takes whole milliseconds or its IEC literal, as `init:` and a
+  test's `given:` do: `"T#1m30s"`, `"TIME#500ms"`. A string that is no
+  duration is a `400` that says why. The same rules hold for a whole tag, a member, every
   member of an object `value` and every element of a list, and for an
   output no scan has written yet. What the program itself produced is not
   held to them: a retained value comes back after a restart exactly as the

@@ -22,7 +22,8 @@ re-applied every scan until it is removed.
 
 A forced value is coerced like any write: an enumerated member or tag takes
 its member name (`Run`), and a name that is no member is refused with the
-list of members.
+list of members; a `TIME` takes milliseconds or its IEC literal (`"T#45s"`),
+and a string that is no duration is refused with the reason.
 
 The controller records what the tag *would* hold — the driver's latest
 reading, the logic's latest write — and the force table shows it beside the

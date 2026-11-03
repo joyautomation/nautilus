@@ -391,10 +391,21 @@ func coerceLeaf(cur Value, v any, sofar string) (Value, error) {
 		}
 		return Value{}, wantErr(TypeInt, v, "%s: want INT, got %s", sofar, describeKind(v))
 	case TypeTime:
+		// A TIME takes a whole number of milliseconds, or the literal a
+		// manifest's init: and a test's given: take (T#30s, TIME#1m30s,
+		// 500ms), read by the same ParseDuration. A string that is no
+		// duration is refused with what is wrong with it.
+		if s, ok := v.(string); ok {
+			ms, err := ParseDuration(s)
+			if err != nil {
+				return Value{}, fmt.Errorf("%s: %q is not a TIME literal: %v (write T#30s, T#1m30s, or a number of milliseconds)", sofar, s, err)
+			}
+			return TimeVal(ms), nil
+		}
 		if i, ok := toInt(v); ok {
 			return TimeVal(i), nil
 		}
-		return Value{}, wantErr(TypeTime, v, "%s: want TIME (milliseconds), got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeTime, v, "%s: want TIME (T#30s or milliseconds), got %s", sofar, describeKind(v))
 	case TypeString:
 		if s, ok := v.(string); ok {
 			return StringVal(s), nil
