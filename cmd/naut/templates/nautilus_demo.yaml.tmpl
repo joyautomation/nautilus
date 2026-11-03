@@ -42,7 +42,9 @@ tasks:
     scan: 200ms
 
 # Tags by role: input (driver → tag), output (tag → driver),
-# setpoint (operator-writable, exists from scan one), state (retained).
+# setpoint (operator-writable, exists from scan one, kept across a restart
+# by a retain: section), state (logic-owned; kept only with retain: true
+# and a retain: section).
 # unit/desc feed the dashboard's tag table and GET /api/meta.
 tags:
   # process values — owned by the sim task here. For real I/O, delete the

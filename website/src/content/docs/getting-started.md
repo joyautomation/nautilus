@@ -88,7 +88,8 @@ naut build      # emit ./my-plant — a self-contained controller binary
 ```
 
 `nautilus.yaml` declares the tasks (one program file each, any language,
-own scan rates), the tags by role, the server, and the field driver.
+own scan rates), the tags by [role](/guides/tag-model/#which-role-fits-which-job),
+the server, and the field driver.
 `naut build` emits one deployable binary, with no Go toolchain anywhere.
 
 `*_test.yaml` holds the acceptance tests, and they run against a **virtual
@@ -130,7 +131,8 @@ does.
 Open **http://localhost:8080** for the built-in live dashboard, or
 `GET /api/state` for the raw tag snapshot. Setpoints are click-to-set right in
 the tag table — click a value and type, or flip a BOOL with its toggle — so you
-can drive the loop before there is an HMI. Inputs and outputs stay read-only:
+can drive the loop before there is an HMI. Inputs and outputs stay read-only in
+the dashboard:
 the driver rewrites an input before every scan and the logic rewrites an output
 after, so an edit there would be discarded within a scan. `POST /api/tags` to
 a `role: input` tag is refused for the same reason. To drive an input during
@@ -187,7 +189,9 @@ force-driven controller to a built binary, on one page.
   controller from VS Code, and pull field edits back into git.
 - [Testing](/reference/testing/) — virtual time, and the `*_test.yaml`
   format for asserting on timers and loop responses.
-- [The tag model](/guides/tag-model/) — how tags come to exist, which role
-  fits which job, and the one rule that bites.
+- [The tag model](/guides/tag-model/) — [which role fits which
+  job](/guides/tag-model/#which-role-fits-which-job) (`input`, `output`,
+  `setpoint` or `state`), how tags come to exist, and the one rule that
+  bites.
 - [Language reference](/reference/functions/) — evaluation semantics and
   every built-in operator, function, and function block.
