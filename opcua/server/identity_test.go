@@ -340,3 +340,34 @@ func TestBrowseTypeDefinitionsAreTypes(t *testing.T) {
 		t.Errorf("Objects → project folder %+v, want TypeDefinition FolderType (i=61)", folder)
 	}
 }
+
+// The Server object's ServerDiagnostics.EnabledFlag (Mandatory) reads a
+// value, false (diagnostics are off), not Bad_AttributeIdInvalid. The
+// optional MaxArrayLength and MaxStringLength are left out, as Part 5 asks
+// of a server that sets no such limit: not browsable under
+// ServerCapabilities, and unknown to Read (nautilus#485).
+func TestServerDiagnosticsFlagAndOptionalLimits(t *testing.T) {
+	rt, _ := newRuntime(t)
+	_, c := startServer(t, rt)
+	dv := read(t, c, ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag), ua.AttributeIDValue)
+	if dv.Status != ua.StatusOK {
+		t.Errorf("ServerDiagnostics.EnabledFlag: %s, want a value", dv.Status)
+	} else if got := dv.Value.Value(); got != false {
+		t.Errorf("ServerDiagnostics.EnabledFlag = %#v, want false", got)
+	}
+	caps := browse(t, c, ua.NewNumericNodeID(0, id.Server_ServerCapabilities))
+	if caps["MinSupportedSampleRate"] == nil {
+		t.Fatalf("precondition: ServerCapabilities browses without MinSupportedSampleRate: %v", caps)
+	}
+	for name, nid := range map[string]uint32{
+		"MaxArrayLength":  id.Server_ServerCapabilities_MaxArrayLength,
+		"MaxStringLength": id.Server_ServerCapabilities_MaxStringLength,
+	} {
+		if caps[name] != nil {
+			t.Errorf("ServerCapabilities still lists %s", name)
+		}
+		if dv := read(t, c, ua.NewNumericNodeID(0, nid), ua.AttributeIDValue); dv.Status != ua.StatusBadNodeIDUnknown {
+			t.Errorf("Read %s: %s, want Bad_NodeIdUnknown", name, dv.Status)
+		}
+	}
+}

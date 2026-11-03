@@ -39,3 +39,38 @@ func TestDataTypeSurvivesClientWrite(t *testing.T) {
 	require.NotNil(t, dt.NodeID)
 	require.Equal(t, uint32(id.Int32), dt.NodeID.IntID())
 }
+
+// AddRef to a Variable that has a DataType but no HasTypeDefinition gives
+// the reference the null NodeId as its TypeDefinition, never the DataType
+// (nautilus#485): a Variable's DataType is not its type definition, and
+// passing it off as one is the bug #479's second review caught in Browse.
+// A target with a HasTypeDefinition keeps it.
+func TestAddRefNeverUsesTheDataTypeAsTypeDefinition(t *testing.T) {
+	parent := NewFolderNode(ua.NewNumericNodeID(1, 200), "parent")
+	v := NewVariableNode(ua.NewNumericNodeID(1, 201), "level", float64(1.5))
+	if v.TypeDefinition() != nil {
+		t.Fatalf("precondition: NewVariableNode now has a HasTypeDefinition %v", v.TypeDefinition())
+	}
+	if dt := v.DataType(); dt == nil || dt.NodeID.IntID() == 0 {
+		t.Fatalf("precondition: the variable has no DataType (%v)", dt)
+	}
+	typed := NewNode(ua.NewNumericNodeID(1, 202), map[ua.AttributeID]*ua.DataValue{
+		ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassObject)),
+		ua.AttributeIDBrowseName: DataValueFromValue(&ua.QualifiedName{NamespaceIndex: 1, Name: "typed"}),
+	}, References{{
+		ReferenceTypeID: ua.NewNumericNodeID(0, id.HasTypeDefinition),
+		IsForward:       true,
+		NodeID:          ua.NewNumericExpandedNodeID(0, id.FolderType),
+	}}, nil)
+
+	before := len(parent.refs)
+	parent.AddRef(v, RefTypeIDOrganizes, true)
+	parent.AddRef(typed, RefTypeIDOrganizes, true)
+	got := parent.refs[before:]
+	if td := got[0].TypeDefinition; td == nil || td.NodeID.Namespace() != 0 || td.NodeID.IntID() != 0 {
+		t.Errorf("reference to a variable with no type definition: TypeDefinition %v, want the null NodeId (its DataType is %v)", td, v.DataType())
+	}
+	if td := got[1].TypeDefinition; td == nil || td.NodeID.IntID() != id.FolderType {
+		t.Errorf("reference to a typed object: TypeDefinition %v, want FolderType (i=%d)", td, id.FolderType)
+	}
+}
