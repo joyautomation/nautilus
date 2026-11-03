@@ -341,29 +341,33 @@ func TestBrowseTypeDefinitionsAreTypes(t *testing.T) {
 	}
 }
 
-// The Server object's ServerDiagnostics.EnabledFlag (Mandatory) and the
-// optional MaxArrayLength and MaxStringLength read as values, not
-// Bad_AttributeIdInvalid (nautilus#485): diagnostics are off, and the
-// server sets no array or string limit of its own (0).
-func TestServerDiagnosticsAndLimitsHaveValues(t *testing.T) {
+// The Server object's ServerDiagnostics.EnabledFlag (Mandatory) reads a
+// value, false (diagnostics are off), not Bad_AttributeIdInvalid. The
+// optional MaxArrayLength and MaxStringLength are left out, as Part 5 asks
+// of a server that sets no such limit: not browsable under
+// ServerCapabilities, and unknown to Read (nautilus#485).
+func TestServerDiagnosticsFlagAndOptionalLimits(t *testing.T) {
 	rt, _ := newRuntime(t)
 	_, c := startServer(t, rt)
-	for _, tc := range []struct {
-		name string
-		nid  uint32
-		want any
-	}{
-		{"ServerDiagnostics.EnabledFlag", id.Server_ServerDiagnostics_EnabledFlag, false},
-		{"ServerCapabilities.MaxArrayLength", id.Server_ServerCapabilities_MaxArrayLength, uint32(0)},
-		{"ServerCapabilities.MaxStringLength", id.Server_ServerCapabilities_MaxStringLength, uint32(0)},
+	dv := read(t, c, ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag), ua.AttributeIDValue)
+	if dv.Status != ua.StatusOK {
+		t.Errorf("ServerDiagnostics.EnabledFlag: %s, want a value", dv.Status)
+	} else if got := dv.Value.Value(); got != false {
+		t.Errorf("ServerDiagnostics.EnabledFlag = %#v, want false", got)
+	}
+	caps := browse(t, c, ua.NewNumericNodeID(0, id.Server_ServerCapabilities))
+	if caps["MinSupportedSampleRate"] == nil {
+		t.Fatalf("precondition: ServerCapabilities browses without MinSupportedSampleRate: %v", caps)
+	}
+	for name, nid := range map[string]uint32{
+		"MaxArrayLength":  id.Server_ServerCapabilities_MaxArrayLength,
+		"MaxStringLength": id.Server_ServerCapabilities_MaxStringLength,
 	} {
-		dv := read(t, c, ua.NewNumericNodeID(0, tc.nid), ua.AttributeIDValue)
-		if dv.Status != ua.StatusOK {
-			t.Errorf("%s: %s, want a value", tc.name, dv.Status)
-			continue
+		if caps[name] != nil {
+			t.Errorf("ServerCapabilities still lists %s", name)
 		}
-		if got := dv.Value.Value(); got != tc.want {
-			t.Errorf("%s = %#v, want %#v", tc.name, got, tc.want)
+		if dv := read(t, c, ua.NewNumericNodeID(0, nid), ua.AttributeIDValue); dv.Status != ua.StatusBadNodeIDUnknown {
+			t.Errorf("Read %s: %s, want Bad_NodeIdUnknown", name, dv.Status)
 		}
 	}
 }

@@ -2,14 +2,11 @@ package uaserver
 
 import (
 	"log"
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/opcua/internal/uaserver/attrs"
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/refs"
 )
 
 type Attributes map[ua.AttributeID]*ua.DataValue
@@ -331,35 +328,6 @@ func (n *Node) NodeClass() ua.NodeClass {
 	}
 	return ua.NodeClass(vi32)
 
-}
-
-func (n *Node) AddObject(o *Node) *Node {
-	nn := &Node{
-		id:   o.id,
-		attr: maps.Clone(o.attr),
-		refs: slices.Clone(o.refs),
-	}
-	if n.attr == nil {
-		n.attr = Attributes{}
-	}
-	nn.SetNodeClass(ua.NodeClassObject)
-	n.refs = append(n.refs, refs.Organizes(nn.id, nn.BrowseName().Name, nn.DisplayName().Text, nn.DataType()))
-	return n.ns.AddNode(nn)
-}
-
-func (n *Node) AddVariable(o *Node) *Node {
-	nn := &Node{
-		id:   o.id,
-		attr: maps.Clone(o.attr),
-		refs: slices.Clone(o.refs),
-		val:  o.val,
-	}
-	if n.attr == nil {
-		n.attr = Attributes{}
-	}
-	nn.SetNodeClass(ua.NodeClassVariable)
-	n.refs = append(n.refs, refs.Organizes(nn.id, nn.BrowseName().Name, nn.DisplayName().Text, nn.DataType()))
-	return nn
 }
 
 type RefType int

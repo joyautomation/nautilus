@@ -284,11 +284,15 @@ func (s *Server) Start(ctx context.Context) error {
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(false))
 	}
-	// No array or string limit of the server's own: 0 is "no limit"
-	// (Part 5, ServerCapabilitiesType). The message size bounds both.
-	for _, nid := range []uint32{id.Server_ServerCapabilities_MaxArrayLength, id.Server_ServerCapabilities_MaxStringLength} {
-		if n := srv.Node(ua.NewNumericNodeID(0, nid)); n != nil {
-			n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(0)))
+	// MaxArrayLength and MaxStringLength are optional, and the server sets
+	// no limit of its own (the message size bounds both). Part 5 says a
+	// server that does not impose such a limit leaves the property out, so
+	// it is left out rather than served without a value (nautilus#485).
+	if root, err := srv.Namespace(0); err == nil {
+		if nns, ok := root.(*opcserver.NodeNameSpace); ok {
+			for _, nid := range []uint32{id.Server_ServerCapabilities_MaxArrayLength, id.Server_ServerCapabilities_MaxStringLength} {
+				nns.RemoveNode(ua.NewNumericNodeID(0, nid))
+			}
 		}
 	}
 	// Hang the project folder off ns=0's Objects, where every client
