@@ -27,7 +27,6 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -127,8 +126,18 @@ func (s *Server) handleAlarmJournal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, journalResponse{Events: events, Truncated: truncated})
 }
 
+// maxJournalScan caps the raw journal rows one GET /api/alarms/journal may
+// read while looking for a page of state=/q= matches. The journal GET is a
+// read, so it is unauthenticated, and a selective filter over a long range
+// would otherwise walk the whole journal: the file journal re-reads its
+// whole file on every pass, and Postgres ships each pass's rows across the
+// wire. Past the cap the page is what was found and truncated is true:
+// narrow the range or filter by site/priority/id/kind (which the journal
+// applies itself) to see further.
+const maxJournalScan = 100_000
+
 // journalPage answers one journal page: the newest `limit` events that
-// match every filter, and whether more matching events exist in the range.
+// match every filter, and whether more may exist in the range.
 //
 // state= and q= are applied here rather than in alarm.Filter: a state is a
 // property of the event's OUTCOME and a text search is a UI affordance, and
@@ -137,14 +146,21 @@ func (s *Server) handleAlarmJournal(w http.ResponseWriter, r *http.Request) {
 // would cut BEFORE they apply, and a filtered page would come back short
 // with more matches behind it. Instead the journal is asked for one more
 // event than the page holds, filtered, and asked again for twice as many
-// while the filters leave the page short and the journal had more to give.
-// The extra event is what makes `truncated` a fact rather than a guess:
-// it is true only when a matching event exists beyond the page.
+// while the filters leave the page short and the journal had more to give,
+// up to maxJournalScan rows in one pass (under 3×maxJournalScan read over
+// the whole request, since each pass re-reads from the newest event).
+//
+// truncated is true when a matching event exists beyond the page, or when
+// the scan stopped at maxJournalScan with rows still unread (so matches may
+// exist beyond it). It is false only when the journal ran out.
+//
+// A journal that returns fewer rows than it was asked for is read as
+// exhausted. A MultiJournal that fails over from its durable sink to the
+// ring between two passes can therefore end the loop on the ring's shorter
+// answer and give a short page with truncated false; the next request
+// (against whichever journal is then answering) is consistent again.
 func (s *Server) journalPage(from, to time.Time, f alarm.Filter, limit int, states []string, text string) ([]alarm.Event, bool, error) {
-	n := limit
-	if n < math.MaxInt {
-		n++
-	}
+	n := min(limit, maxJournalScan-1) + 1
 	for {
 		f.Limit = n
 		raw, err := s.alarms.Journal(from, to, f)
@@ -161,11 +177,11 @@ func (s *Server) journalPage(from, to time.Time, f alarm.Filter, limit int, stat
 			// the filters is all there is.
 			return events, false, nil
 		}
-		if n > math.MaxInt/2 {
-			n = math.MaxInt
-		} else {
-			n *= 2
+		if n >= maxJournalScan {
+			// Rows remain unread past the cap; matches may be among them.
+			return events, true, nil
 		}
+		n = min(n*2, maxJournalScan)
 	}
 }
 

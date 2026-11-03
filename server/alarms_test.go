@@ -406,3 +406,74 @@ func TestJournalFiltersBeforeTheLimit(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// countingJournal holds `total` events, none of them the test alarm's, and
+// records how many rows each query asked for and got back.
+type countingJournal struct {
+	total         int
+	asked, served []int
+}
+
+func (c *countingJournal) Append(alarm.Event) error { return nil }
+
+func (c *countingJournal) Query(_, _ time.Time, f alarm.Filter) ([]alarm.Event, error) {
+	n := min(f.Limit, c.total)
+	c.asked = append(c.asked, f.Limit)
+	c.served = append(c.served, n)
+	out := make([]alarm.Event, n)
+	for i := range out {
+		out[i] = alarm.Event{TS: int64(c.total - i), ID: "LoFlow", Name: "Low flow", Kind: "active", State: "unack-active"}
+	}
+	return out, nil
+}
+
+// A q= that matches nothing in a long journal stops at maxJournalScan raw
+// rows instead of walking the whole journal, and says truncated: the rows
+// past the cap were never read, so matches may be among them.
+func TestJournalScanStopsAtTheCap(t *testing.T) {
+	jrn := &countingJournal{total: 4 * maxJournalScan}
+	eng, err := alarm.New(alarm.Options{
+		Defs: []alarm.Def{{ID: "HiTemp", Tag: "HiTempAlm", Name: "High temperature",
+			Priority: alarm.High, AckRequired: true, AutoClear: true}},
+		Read:    func(string) (any, bool) { return false, true },
+		Journal: jrn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	srv := New(newTestRuntime(t), Options{Alarms: eng})
+
+	rec := do(t, srv, "GET", "/api/alarms/journal?q=temp&limit=10", "")
+	if rec.Code != 200 {
+		t.Fatalf("journal = %d %s", rec.Code, rec.Body)
+	}
+	var out journalResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Events) != 0 || !out.Truncated {
+		t.Errorf("journal = %d events, truncated %v; want 0 events, truncated (rows remain past the cap)", len(out.Events), out.Truncated)
+	}
+	maxAsked, servedTotal := 0, 0
+	for i := range jrn.asked {
+		maxAsked = max(maxAsked, jrn.asked[i])
+		servedTotal += jrn.served[i]
+	}
+	if maxAsked != maxJournalScan {
+		t.Errorf("largest query asked for %d rows (queries %v), want exactly the cap %d", maxAsked, jrn.asked, maxJournalScan)
+	}
+	// Doubling up to the cap reads under 2×cap before the last pass and
+	// the cap on it: 3×cap bounds the whole request.
+	if servedTotal > 3*maxJournalScan {
+		t.Errorf("read %d rows over %d queries, want at most 3×%d", servedTotal, len(jrn.asked), maxJournalScan)
+	}
+
+	// Under the cap the journal running out still means "nothing more".
+	jrn.total, jrn.asked, jrn.served = 50, nil, nil
+	rec = do(t, srv, "GET", "/api/alarms/journal?q=temp&limit=10", "")
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Events) != 0 || out.Truncated {
+		t.Errorf("exhausted journal = %d events, truncated %v; want 0, false", len(out.Events), out.Truncated)
+	}
+}
