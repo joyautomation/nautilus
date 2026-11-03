@@ -48,7 +48,8 @@ END_PROGRAM`,
 // driver delivers, and accepts writes for, its binding's exact spelling, and
 // the tag store matches exactly, so the tag would never receive a value
 // (input) or never reach the device (output), silently (#544). Exact
-// spellings, and companions spelled as the driver spells them, stay quiet.
+// spellings, companions spelled as the driver spells them, and state tags
+// stay quiet.
 func TestCheckRefusesACaseOnlyBindingMatch(t *testing.T) {
 	out, code := checkIn(t, map[string]string{
 		"nautilus.yaml": `
@@ -63,6 +64,7 @@ tags:
   - { name: m1_runcmd, role: output, init: false }
   - { name: M1__Online, role: input, type: BOOL }
   - { name: Total, role: state, init: 0.0 }
+  - { name: m2_kw, role: state, init: 0.0 }
 `,
 		"modbus_manifest.yaml": `sources:
   - id: M1
@@ -72,6 +74,7 @@ tags:
   - {name: M1_KW, source: M1, table: holding, address: 0, format: float32}
   - {name: M1_Volts, source: M1, table: holding, address: 2, format: float32}
   - {name: M1_RunCmd, source: M1, table: holding, address: 10, format: bit:0, writable: true}
+  - {name: M2_KW, source: M1, table: holding, address: 4, format: float32}
 `,
 		"program.st": `PROGRAM Main
 VAR_EXTERNAL m1_kw : REAL; M1_Volts : REAL; m1_runcmd : BOOL; M1__Online : BOOL; Total : REAL; END_VAR
@@ -92,7 +95,9 @@ END_PROGRAM`,
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	for _, quiet := range []string{`tag "M1_Volts"`, `tag "M1__Online"`} {
+	// A state tag never takes driver delivery, so one beside an undeclared
+	// binding of the same name is not reported.
+	for _, quiet := range []string{`tag "M1_Volts"`, `tag "M1__Online"`, `tag "m2_kw"`} {
 		if strings.Contains(out, quiet) {
 			t.Errorf("an exact spelling was reported (%s):\n%s", quiet, out)
 		}

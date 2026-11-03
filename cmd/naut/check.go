@@ -793,8 +793,8 @@ type caseMismatch struct {
 	never        string // what the tag would never do: receive values / reach the device
 }
 
-// caseOnlyBindings finds the declared tags that no driver binding names
-// exactly but one names in another case. A tag the driver names exactly is
+// caseOnlyBindings finds the declared inputs and outputs that no driver
+// binding names exactly but one names in another case. A tag the driver names exactly is
 // fine even if another binding differs only in case from it.
 func caseOnlyBindings(tags []runtime.TagDef, d nio.Driver) []caseMismatch {
 	type namer interface {
@@ -815,6 +815,11 @@ func caseOnlyBindings(tags []runtime.TagDef, d nio.Driver) []caseMismatch {
 	}
 	var out []caseMismatch
 	for _, t := range tags {
+		// Only inputs and outputs meet the driver; a state or setpoint tag
+		// beside an undeclared binding of the same name is not wired to it.
+		if t.Role != runtime.RoleInput && t.Role != runtime.RoleOutput {
+			continue
+		}
 		if exact[t.Name] {
 			continue
 		}
