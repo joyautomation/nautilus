@@ -365,12 +365,12 @@ func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl clie
 	case n.NodeID.Namespace() != ns.id:
 		// gopcua's Server object and its variables: read-only for every
 		// session (an anonymous rewrite of NamespaceArray would break
-		// every other client's namespace mapping).
-		switch {
-		case srv.Node(n.NodeID) == nil:
+		// every other client's namespace mapping). No user may write them,
+		// and their AccessLevel says so, so the answer is Bad_NotWritable
+		// for every attribute, not Bad_UserAccessDenied, which Part 4
+		// keeps for a refusal by the user's rights (nautilus#527).
+		if srv.Node(n.NodeID) == nil {
 			return ua.StatusBadNodeIDUnknown, member{}, nil, "no such node"
-		case n.AttributeID == ua.AttributeIDValue:
-			return ua.StatusBadUserAccessDenied, member{}, nil, "the server's own nodes are read-only"
 		}
 		return ua.StatusBadNotWritable, member{}, nil, "the server's own nodes are read-only"
 	case ns.isFolder(n.NodeID):

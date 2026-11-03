@@ -354,9 +354,10 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 }
 
 // accessAttribute answers the access attributes Part 3 §5.2 makes
-// mandatory on every node — WriteMask and UserWriteMask on all, AccessLevel
-// and UserAccessLevel on Variables — for a built-in node that has none:
-// read-only, like everything this server serves. Any other attribute, or a
+// mandatory on every node — WriteMask and UserWriteMask on all,
+// AccessLevel, UserAccessLevel and Historizing on Variables — for a
+// built-in node that has none: read-only, like everything this server
+// serves. Any other attribute, or a
 // node id that is not a node, keeps the answer it had.
 func accessAttribute(srv *opcserver.Server, nid *ua.NodeID, attr ua.AttributeID, had *ua.DataValue) *ua.DataValue {
 	node := srv.Node(nid)
@@ -373,11 +374,23 @@ func accessAttribute(srv *opcserver.Server, nid *ua.NodeID, attr ua.AttributeID,
 			return value(executable(nid))
 		}
 	case ua.AttributeIDAccessLevel, ua.AttributeIDUserAccessLevel:
-		// gopcua's built-in variables do not all carry a NodeClass; one
-		// that answers a Value is a Variable whatever it says.
-		if _, err := node.Attribute(ua.AttributeIDValue); err == nil || node.NodeClass() == ua.NodeClassVariable {
+		if isVariable(node) {
 			return value(uint8(ua.AccessLevelTypeCurrentRead))
+		}
+	case ua.AttributeIDHistorizing:
+		// Mandatory on a Variable (Part 3 §5.6); the server keeps no
+		// history of its own nodes (nautilus#526).
+		if isVariable(node) {
+			return value(false)
 		}
 	}
 	return had
+}
+
+// isVariable reports whether a built-in node is a Variable. gopcua's
+// built-in variables do not all carry a NodeClass; one that answers a
+// Value is a Variable whatever it says.
+func isVariable(node *opcserver.Node) bool {
+	_, err := node.Attribute(ua.AttributeIDValue)
+	return err == nil || node.NodeClass() == ua.NodeClassVariable
 }

@@ -240,7 +240,7 @@ func TestWriteStatusTable(t *testing.T) {
 		value any
 	}{
 		{"no such node", wv("Nope", 1.0), ua.StatusBadNodeIDUnknown, "", nil},
-		{"server object", &ua.WriteValue{NodeID: ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_ProductName), AttributeID: ua.AttributeIDValue, Value: &ua.DataValue{EncodingMask: ua.DataValueValue, Value: ua.MustVariant("x")}}, ua.StatusBadUserAccessDenied, "", nil},
+		{"server object", &ua.WriteValue{NodeID: ua.NewNumericNodeID(0, id.Server_ServerStatus_BuildInfo_ProductName), AttributeID: ua.AttributeIDValue, Value: &ua.DataValue{EncodingMask: ua.DataValueValue, Value: ua.MustVariant("x")}}, ua.StatusBadNotWritable, "", nil},
 		{"not the Value attribute", desc, ua.StatusBadNotWritable, "", nil},
 		{"an Object", wv("P101", 1.0), ua.StatusBadNotWritable, "", nil},
 		{"the folder", &ua.WriteValue{NodeID: ua.NewNumericNodeID(1, folderID), AttributeID: ua.AttributeIDValue, Value: &ua.DataValue{EncodingMask: ua.DataValueValue, Value: ua.MustVariant(1.0)}}, ua.StatusBadNotWritable, "", nil},
