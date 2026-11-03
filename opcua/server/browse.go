@@ -25,6 +25,9 @@ func browseNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 	if len(req.NodesToBrowse) == 0 {
 		return nil, ua.StatusBadNothingToDo
 	}
+	if len(req.NodesToBrowse) > maxNodesPerBrowse {
+		return nil, ua.StatusBadTooManyOperations
+	}
 	results := make([]*ua.BrowseResult, len(req.NodesToBrowse))
 	for i, bd := range req.NodesToBrowse {
 		results[i] = browsePage(srv, bd, 0, req.RequestedMaxReferencesPerNode)
@@ -41,6 +44,9 @@ func browseNextNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 	}
 	if len(req.ContinuationPoints) == 0 {
 		return nil, ua.StatusBadNothingToDo
+	}
+	if len(req.ContinuationPoints) > maxNodesPerBrowse { // MaxNodesPerBrowse covers BrowseNext too
+		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.BrowseResult, len(req.ContinuationPoints))
 	for i, cp := range req.ContinuationPoints {
@@ -137,6 +143,28 @@ func decodeContinuation(cp []byte) (bd *ua.BrowseDescription, offset, max uint32
 	return bd, offset, max, true
 }
 
+// Every service runs on the server's one message loop, so a request that
+// asks for a great deal of work holds up every other client's requests
+// meanwhile. These limits bound that; each is advertised in the Server
+// object's OperationLimits (server.go), and a request past one is
+// Bad_TooManyOperations. A Browse of an ns=0 node with many references
+// (the Server object) costs about a millisecond, a project node far less;
+// a path element about a twentieth of that.
+const (
+	// maxNodesPerBrowse is the most nodes one Browse, or continuation
+	// points one BrowseNext, may name: a client building its tree browses
+	// a few at a time, and a thousand is room for one that does the whole
+	// project in one call.
+	maxNodesPerBrowse = 1000
+	// maxNodesPerTranslate is the most browse paths one
+	// TranslateBrowsePathsToNodeIds may carry.
+	maxNodesPerTranslate = 100
+	// maxPathElements is the most elements one browse path may have; a
+	// longer one is Bad_QueryTooComplex in its own result. The deepest
+	// path into a project is a few levels of UDTs and arrays.
+	maxPathElements = 32
+)
+
 // translateBrowsePaths is the TranslateBrowsePathsToNodeIds service (Part
 // 4 §5.9.4): each path is walked from its starting node one element at a
 // time, over the references a Browse lists — the same references, in ns=0
@@ -150,9 +178,11 @@ func decodeContinuation(cp []byte) (bd *ua.BrowseDescription, offset, max uint32
 // server).
 //
 // A path with no elements is Bad_NothingToDo, an element other than the
-// last without a target name Bad_BrowseNameInvalid, a starting node that
-// is not there Bad_NodeIdUnknown, and a path that reaches nothing
-// Bad_NoMatch, each in its own result.
+// last without a target name Bad_BrowseNameInvalid, one of more than
+// maxPathElements elements Bad_QueryTooComplex, a starting node that is
+// not there Bad_NodeIdUnknown, and a path that reaches nothing
+// Bad_NoMatch, each in its own result; more than maxNodesPerTranslate
+// paths is Bad_TooManyOperations for the request.
 func translateBrowsePaths(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.TranslateBrowsePathsToNodeIDsRequest)
 	if !ok {
@@ -160,6 +190,9 @@ func translateBrowsePaths(srv *opcserver.Server, r ua.Request) (ua.Response, err
 	}
 	if len(req.BrowsePaths) == 0 {
 		return nil, ua.StatusBadNothingToDo
+	}
+	if len(req.BrowsePaths) > maxNodesPerTranslate {
+		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.BrowsePathResult, len(req.BrowsePaths))
 	for i, p := range req.BrowsePaths {
@@ -182,6 +215,9 @@ func translatePath(srv *opcserver.Server, p *ua.BrowsePath) *ua.BrowsePathResult
 	}
 	if len(elems) == 0 {
 		return fail(ua.StatusBadNothingToDo)
+	}
+	if len(elems) > maxPathElements {
+		return fail(ua.StatusBadQueryTooComplex)
 	}
 	for i, el := range elems {
 		if el == nil || (i < len(elems)-1 && (el.TargetName == nil || el.TargetName.Name == "")) {

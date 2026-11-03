@@ -274,6 +274,17 @@ func (s *Server) Start(ctx context.Context) error {
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerWrite)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(maxNodesPerWrite)))
 	}
+	// And the Browse, TranslateBrowsePathsToNodeIds and Call limits their
+	// services enforce (browse.go, method.go).
+	for limit, n := range map[uint32]uint32{
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerBrowse:                        maxNodesPerBrowse,
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerTranslateBrowsePathsToNodeIDs: maxNodesPerTranslate,
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerMethodCall:                    maxNodesPerMethodCall,
+	} {
+		if node := srv.Node(ua.NewNumericNodeID(0, limit)); node != nil {
+			node.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(n))
+		}
+	}
 	// The fastest a value is sampled is the change sweep, the same
 	// MinimumSamplingInterval every tag advertises.
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_MinSupportedSampleRate)); n != nil {

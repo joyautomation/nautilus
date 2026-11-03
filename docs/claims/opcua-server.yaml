@@ -564,10 +564,15 @@ claims:
       subscriptions (Bad_UserAccessDenied for another's),
       SetSubscriptionDurable and RequestServerStateChange are
       Bad_NotExecutable with Executable false, and a method that is not the
-      object's is Bad_MethodInvalid.
+      object's is Bad_MethodInvalid. A Browse or BrowseNext names at most
+      1 000 nodes, a TranslateBrowsePathsToNodeIds at most 100 paths (of at
+      most 32 elements, Bad_QueryTooComplex past that), a Call at most 100
+      methods, each limit advertised in OperationLimits and
+      Bad_TooManyOperations past it.
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestTranslateBrowsePathsFollowsBrowse
+      - go ./opcua/server TestOperationLimitsAreAdvertisedAndEnforced
       - go ./opcua/server TestCallAnswersEachMethod
       - go ./tools/blackbox TestBlackbox/001-F31-services-unsupported
 
@@ -583,13 +588,17 @@ claims:
       on a signed channel (same ApplicationUri), refuses a session on None
       or another application with Bad_UserAccessDenied, sends current
       values when asked, and tells the old session
-      Good_SubscriptionTransferred.
+      Good_SubscriptionTransferred, never a session that has taken the
+      subscription back; a client on None claiming the application's
+      ApplicationUri is not that application.
     source: "#subscriptions"
     tests:
       - go ./opcua/server TestModifyMonitoredItemsResamplesAndRehandles
       - go ./opcua/server TestSetPublishingModeHoldsAndResumes
       - go ./opcua/server TestTransferSubscriptionsToTheSameApplication
       - go ./opcua/server TestTransferSubscriptionsAfterCloseSession
+      - go ./opcua/server TestTransferredBackIsNotReportedTransferred
+      - go ./opcua/server TestNoneClientClaimingAnApplicationUriIsNotIt
       - go ./opcua/internal/uaserver TestMayTransfer
       - go ./opcua/internal/uaserver TestChangesAfterTheTaskReturnedChangeNothing
       - go ./tools/blackbox TestBlackbox/001-F31-services-unsupported

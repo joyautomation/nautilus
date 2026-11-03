@@ -39,7 +39,7 @@ func TestChangesAfterTheTaskReturnedChangeNothing(t *testing.T) {
 	s.Session = owner
 	close(s.done)
 	got := make(chan bool, 2)
-	go func() { got <- s.SetPublishing(false); got <- s.Transfer(&session{}, nil, false) }()
+	go func() { got <- s.SetPublishing(false); _, ok := s.Transfer(&session{}, nil); got <- ok }()
 	for range 2 {
 		select {
 		case ok := <-got:

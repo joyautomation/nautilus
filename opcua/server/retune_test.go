@@ -9,6 +9,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -442,6 +443,9 @@ func TestTranslateBrowsePathsFollowsBrowse(t *testing.T) {
 		{"no such tag", objects, []*ua.RelativePathElement{hier(1, "lift-station"), hier(1, "Nope")}, ua.StatusBadNoMatch},
 		{"no such start", ua.NewStringNodeID(1, "Nope"), []*ua.RelativePathElement{hier(1, "x")}, ua.StatusBadNodeIDUnknown},
 		{"no elements", objects, nil, ua.StatusBadNothingToDo},
+		// An abstract type without subtypes matches exactly, so nothing
+		// (#521): in ns=0 this used to panic in suitableRefType.
+		{"an abstract type without subtypes, ns=0", objects, []*ua.RelativePathElement{{ReferenceTypeID: ua.NewNumericNodeID(0, id.HierarchicalReferences), TargetName: &ua.QualifiedName{Name: "Server"}}}, ua.StatusBadNoMatch},
 		{"an unnamed step before the last", objects, []*ua.RelativePathElement{{ReferenceTypeID: ua.NewNumericNodeID(0, id.Organizes), TargetName: &ua.QualifiedName{}}, hier(1, "Level")}, ua.StatusBadBrowseNameInvalid},
 	} {
 		if r := translate(t, c, tc.start, tc.path...); r.StatusCode != tc.want {
@@ -569,4 +573,168 @@ func equalU32(v any, want []uint32) bool {
 		}
 	}
 	return true
+}
+
+// A subscription transferred away and taken back is its owner's again:
+// the notice of the first move is for the session that lost it, never for
+// one that owns it. A Publish already waiting when the subscription moves
+// is answered with the notice at once; otherwise the next one is, and no
+// goroutine waits for it. (The first version parked a goroutine on the old
+// session's Publish queue for up to a minute, so A, having taken its
+// subscription back, had its next Publish answered "transferred".)
+func TestTransferredBackIsNotReportedTransferred(t *testing.T) {
+	f := startWritable(t)
+	a, b := f.connect(t), f.connect(t)
+	subID, _ := rawSubscription(t, a, 40, true, ua.NewStringNodeID(1, "Speed"), 7)
+	if v, _, ok := publish(t, a, subID, 2*time.Second); !ok || len(v[7]) == 0 {
+		t.Fatalf("A's first publish: %v %v", ok, v)
+	}
+	transfer := func(c *opcua.Client) {
+		t.Helper()
+		resp, err := send[*ua.TransferSubscriptionsResponse](t, c, &ua.TransferSubscriptionsRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionIDs: []uint32{subID}})
+		if err != nil || resp.Results[0].StatusCode != ua.StatusGood {
+			t.Fatalf("transfer: %v %v", err, resp)
+		}
+	}
+	transfer(b) // A to B: A has no Publish waiting, so it keeps the notice
+	transfer(a) // and back: the notice is no longer true
+	for i := range 4 {
+		f.rt.Tags().Set("Speed", float64(100+i))
+		v, st, ok := publish(t, a, subID, 2*time.Second)
+		if st != nil {
+			t.Fatalf("publish %d of the owner A: told %s", i, st.Status)
+		}
+		if !ok || len(v[7]) == 0 {
+			t.Fatalf("publish %d of the owner A: %v %v, want Speed", i, ok, v)
+		}
+	}
+	// B lost it when A took it back, and its next Publish says so.
+	if _, st, ok := publish(t, b, subID, 2*time.Second); !ok || st == nil || st.Status != ua.StatusGoodSubscriptionTransferred {
+		t.Errorf("B's next publish: %v %v, want Good_SubscriptionTransferred", ok, st)
+	}
+
+	// A Publish already waiting is the one answered. The keep-alive is
+	// made long, so nothing of A's own answers it first.
+	if _, err := send[*ua.ModifySubscriptionResponse](t, a, &ua.ModifySubscriptionRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionID: subID, RequestedPublishingInterval: 1000, RequestedLifetimeCount: 100, RequestedMaxKeepAliveCount: 10}); err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan *ua.StatusChangeNotification, 1)
+	go func() {
+		_, st, _ := publish(t, a, subID, 3*time.Second)
+		waiting <- st
+	}()
+	time.Sleep(200 * time.Millisecond) // A's Publish is queued, and the subscription is idle
+	if v, _, ok := publish(t, b, subID, 100*time.Millisecond); ok {
+		t.Fatalf("B, owning nothing, was answered: %v", v)
+	}
+	transfer(b)
+	select {
+	case st := <-waiting:
+		if st == nil || st.Status != ua.StatusGoodSubscriptionTransferred {
+			t.Errorf("A's waiting publish: %v, want Good_SubscriptionTransferred", st)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("A's waiting publish was not answered")
+	}
+}
+
+// The Browse, TranslateBrowsePathsToNodeIds and Call limits are the ones
+// the Server object advertises, and a request past one is
+// Bad_TooManyOperations; a browse path longer than maxPathElements is
+// Bad_QueryTooComplex. All of them run on the one message loop, so an
+// unbounded request from any client (2 500 paths held up another client's
+// Read for 2.7 s in review) held up everyone.
+func TestOperationLimitsAreAdvertisedAndEnforced(t *testing.T) {
+	rt, _ := newRuntime(t)
+	_, c := startServer(t, rt)
+	for nid, want := range map[uint32]uint32{
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerBrowse:                        maxNodesPerBrowse,
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerTranslateBrowsePathsToNodeIDs: maxNodesPerTranslate,
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerMethodCall:                    maxNodesPerMethodCall,
+	} {
+		if dv := read(t, c, ua.NewNumericNodeID(0, nid), ua.AttributeIDValue); dv.Status != ua.StatusGood || dv.Value == nil || dv.Value.Value() != want {
+			t.Errorf("i=%d: %s %v, want %d", nid, dv.Status, dv.Value, want)
+		}
+	}
+	objects := ua.NewNumericNodeID(0, id.ObjectsFolder)
+	browses := func(n int) []*ua.BrowseDescription {
+		out := make([]*ua.BrowseDescription, n)
+		for i := range out {
+			out[i] = &ua.BrowseDescription{NodeID: objects, BrowseDirection: ua.BrowseDirectionForward, ReferenceTypeID: ua.NewNumericNodeID(0, id.Organizes), ResultMask: uint32(ua.BrowseResultMaskAll)}
+		}
+		return out
+	}
+	paths := func(n, elems int) []*ua.BrowsePath {
+		out := make([]*ua.BrowsePath, n)
+		for i := range out {
+			var el []*ua.RelativePathElement
+			for j := 0; j < elems; j++ {
+				if j%2 == 0 {
+					el = append(el, hier(0, "Server"))
+				} else {
+					el = append(el, &ua.RelativePathElement{ReferenceTypeID: ua.NewNumericNodeID(0, id.Organizes), IsInverse: true, TargetName: &ua.QualifiedName{Name: "Objects"}})
+				}
+			}
+			out[i] = &ua.BrowsePath{StartingNode: objects, RelativePath: &ua.RelativePath{Elements: el}}
+		}
+		return out
+	}
+	calls := func(n int) []*ua.CallMethodRequest {
+		out := make([]*ua.CallMethodRequest, n)
+		for i := range out {
+			out[i] = &ua.CallMethodRequest{ObjectID: ua.NewNumericNodeID(0, id.Server), MethodID: ua.NewNumericNodeID(0, id.Server_SetSubscriptionDurable)}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name string
+		req  ua.Request
+		want error
+	}{
+		{"Browse at the limit", &ua.BrowseRequest{RequestHeader: &ua.RequestHeader{}, View: &ua.ViewDescription{ViewID: ua.NewTwoByteNodeID(0)}, NodesToBrowse: browses(maxNodesPerBrowse)}, nil},
+		{"Browse past it", &ua.BrowseRequest{RequestHeader: &ua.RequestHeader{}, View: &ua.ViewDescription{ViewID: ua.NewTwoByteNodeID(0)}, NodesToBrowse: browses(maxNodesPerBrowse + 1)}, ua.StatusBadTooManyOperations},
+		{"BrowseNext past it", &ua.BrowseNextRequest{RequestHeader: &ua.RequestHeader{}, ContinuationPoints: make([][]byte, maxNodesPerBrowse+1)}, ua.StatusBadTooManyOperations},
+		{"Translate at the limit", &ua.TranslateBrowsePathsToNodeIDsRequest{RequestHeader: &ua.RequestHeader{}, BrowsePaths: paths(maxNodesPerTranslate, 2)}, nil},
+		{"Translate past it", &ua.TranslateBrowsePathsToNodeIDsRequest{RequestHeader: &ua.RequestHeader{}, BrowsePaths: paths(maxNodesPerTranslate+1, 2)}, ua.StatusBadTooManyOperations},
+		{"Call at the limit", &ua.CallRequest{RequestHeader: &ua.RequestHeader{}, MethodsToCall: calls(maxNodesPerMethodCall)}, nil},
+		{"Call past it", &ua.CallRequest{RequestHeader: &ua.RequestHeader{}, MethodsToCall: calls(maxNodesPerMethodCall + 1)}, ua.StatusBadTooManyOperations},
+	} {
+		_, err := send[ua.Response](t, c, tc.req)
+		if !errors.Is(err, tc.want) && !(tc.want == nil && err == nil) {
+			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	for _, n := range []int{maxPathElements, maxPathElements + 1} {
+		want := ua.StatusGood
+		if n > maxPathElements {
+			want = ua.StatusBadQueryTooComplex
+		}
+		if r := translate(t, c, objects, paths(1, n)[0].RelativePath.Elements...); r.StatusCode != want {
+			t.Errorf("a path of %d elements: %s, want %s", n, r.StatusCode, want)
+		}
+	}
+}
+
+// A client on None that claims the trusted application's ApplicationUri is
+// not that application: nothing holds its claim to a certificate, so it
+// cannot take the application's subscription over, nor read its items or
+// have its data resent.
+func TestNoneClientClaimingAnApplicationUriIsNotIt(t *testing.T) {
+	f := startWritable(t)
+	owner := f.connect(t)
+	subID, _ := rawSubscription(t, owner, 40, true, ua.NewStringNodeID(1, "Speed"), 7)
+	forged := f.connectAnonymous(t, opcua.ApplicationURI(writerURI))
+	resp, err := send[*ua.TransferSubscriptionsResponse](t, forged, &ua.TransferSubscriptionsRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionIDs: []uint32{subID}})
+	if err != nil || resp.Results[0].StatusCode != ua.StatusBadUserAccessDenied {
+		t.Errorf("TransferSubscriptions from None claiming %s: %v %v, want Bad_UserAccessDenied", writerURI, err, resp)
+	}
+	for _, m := range []uint32{id.Server_GetMonitoredItems, id.Server_ResendData} {
+		if r := call(t, forged, id.Server, m, ua.MustVariant(subID)); r.StatusCode != ua.StatusBadUserAccessDenied {
+			t.Errorf("%s from None claiming the application: %s, want Bad_UserAccessDenied", fmt.Sprint("i=", m), r.StatusCode)
+		}
+	}
+	// And the subscription is still the owner's.
+	if v, _, ok := publish(t, owner, subID, 2*time.Second); !ok || len(v[7]) == 0 {
+		t.Errorf("the owner after the attempts: %v %v", ok, v)
+	}
 }

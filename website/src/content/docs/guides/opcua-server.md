@@ -101,7 +101,12 @@ name up to 10 000 nodes —
 the `MaxNodesPerRead` the `Server` object advertises is the limit the
 server enforces, with `Bad_TooManyOperations` past it — so a project of a
 few thousand tags is still one call. A Browse lists each reference once,
-the standard `Server` object's included.
+the standard `Server` object's included. The server answers one request at
+a time, so the services that can be asked for a great deal of work are
+bounded, each limit advertised in the `Server` object's `OperationLimits`
+and refused past it with `Bad_TooManyOperations`: a Browse (or BrowseNext)
+names at most 1 000 nodes, a `TranslateBrowsePathsToNodeIds` at most 100
+paths, and a `Call` at most 100 methods.
 
 `TranslateBrowsePathsToNodeIds` resolves a path of browse names over the
 same references a Browse lists, so `Objects/1:<project>/1:P101/1:Drive/1:Speed`
@@ -109,7 +114,7 @@ is `ns=1;s=P101.Drive.Speed` (asyncua's `get_child` is this service). A
 name is compared exactly, case included, as OPC UA compares qualified
 names: `1:level` does not find the tag Browse lists as `Level`, though a
 node id of either spelling reads it. A path that reaches nothing is
-`Bad_NoMatch`.
+`Bad_NoMatch`, and one of more than 32 elements `Bad_QueryTooComplex`.
 
 `Call` answers each method it is asked for. The address space has no
 methods of its own; of the four the `Server` object carries,
@@ -248,7 +253,9 @@ asking for a subscription the session already has is `Bad_NothingToDo`.
 The new session's publishes carry the subscription from then on — with
 each reporting item's current value first, when it asks for
 `sendInitialValues` — and the old session, if it is still open, is told
-`Good_SubscriptionTransferred` and can no longer use it. No message is kept
+`Good_SubscriptionTransferred` (in answer to a Publish it has waiting, or
+else its next one) and can no longer use it. A session that takes a
+subscription back is not told it has lost it. No message is kept
 for retransmission, so the transfer returns no available sequence numbers.
 A session ends with its connection here (see [Sessions](#sessions)), so
 what can be transferred is a subscription whose session is still open or

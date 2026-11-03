@@ -26,7 +26,7 @@ type session struct {
 
 	PublishRequests chan PubReq
 
-	// mu guards activated. Every request is handled on the server's one message loop, so this
+	// mu guards activated and notices. Every request is handled on the server's one message loop, so this
 	// is defensive; channel is set at creation and never changes.
 	mu sync.Mutex
 	// channel is the secure channel the session was created on. ActivateSession must arrive on
@@ -48,6 +48,10 @@ type session struct {
 	// activated is set by the first successful ActivateSession. Until then the session can be
 	// activated or closed and nothing else.
 	activated bool
+	// notices are the subscriptions (id to the notice's sequence number) moved to another
+	// session that this one has not been told of yet: the next Publish it sends is answered
+	// with one (SubscriptionService.noticeFor). Guarded by mu.
+	notices map[uint32]uint32
 }
 
 // mayTransfer is whether a subscription of the session from may be transferred to the session
@@ -70,6 +74,39 @@ func mayTransfer(from, to *session) ua.StatusCode {
 		}
 	}
 	return ua.StatusOK
+}
+
+// keepNotice keeps a notice that subscription id has moved, for the session's next Publish.
+func (s *session) keepNotice(id, seq uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notices == nil {
+		s.notices = map[uint32]uint32{}
+	}
+	s.notices[id] = seq
+}
+
+// dropNotice forgets a kept notice about subscription id.
+func (s *session) dropNotice(id uint32) {
+	s.mu.Lock()
+	delete(s.notices, id)
+	s.mu.Unlock()
+}
+
+// takeNotice removes and returns one kept notice, the lowest subscription id first.
+func (s *session) takeNotice() (id, seq uint32, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.notices {
+		if !ok || k < id {
+			id, ok = k, true
+		}
+	}
+	if ok {
+		seq = s.notices[id]
+		delete(s.notices, id)
+	}
+	return id, seq, ok
 }
 
 // boundTo reports whether sc is the channel the session was created on.

@@ -21,6 +21,13 @@ import (
 	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 )
 
+// maxNodesPerMethodCall is the most method calls one Call may carry,
+// advertised in the Server object's OperationLimits (server.go); past it
+// the request is Bad_TooManyOperations. Each call is judged with a few
+// Browses (the object, its type and supertypes), so a hundred is a tenth
+// of a second at worst on the server's one message loop.
+const maxNodesPerMethodCall = 100
+
 // method is an implemented method: its input arguments in, its output
 // arguments or a status out, for the session that sent hdr.
 type method func(srv *opcserver.Server, ns *namespace, hdr *ua.RequestHeader, args []*ua.Variant) *ua.CallMethodResult
@@ -67,6 +74,9 @@ func callMethods(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Respons
 	}
 	if len(req.MethodsToCall) == 0 {
 		return nil, ua.StatusBadNothingToDo
+	}
+	if len(req.MethodsToCall) > maxNodesPerMethodCall {
+		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.CallMethodResult, len(req.MethodsToCall))
 	for i, m := range req.MethodsToCall {

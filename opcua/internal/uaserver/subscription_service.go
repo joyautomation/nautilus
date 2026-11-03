@@ -165,6 +165,11 @@ func (s *SubscriptionService) Publish(sc *uasc.SecureChannel, r ua.Request, reqI
 		return response, nil
 	}
 
+	// A subscription moved to another session is news this session is owed first.
+	if notice := s.noticeFor(session, req.RequestHeader); notice != nil {
+		return notice, nil
+	}
+
 	select {
 	case session.PublishRequests <- PubReq{Req: req, ID: reqID}:
 	default:
@@ -196,9 +201,8 @@ func (s *SubscriptionService) Republish(sc *uasc.SecureChannel, r ua.Request, re
 // (Bad_SubscriptionIdInvalid), not be the session's already (Bad_NothingToDo), and the
 // session must act for the same user as the one that owns it (Bad_UserAccessDenied; see
 // mayTransfer). The publish loop takes the change between publishes, as it takes a
-// ModifySubscription; the old session, when it is still open, is sent a
-// StatusChangeNotification with Good_SubscriptionTransferred on its next Publish. What it
-// returns is the subscription, now the new session's, to resend initial values to.
+// ModifySubscription; the old session, when it is still open, is told (tellTransferred).
+// What it returns is the subscription, now the new session's, to resend initial values to.
 func (s *SubscriptionService) Transfer(sc *uasc.SecureChannel, hdr *ua.RequestHeader, id uint32) (*Subscription, ua.StatusCode) {
 	to := s.srv.Session(hdr)
 	if to == nil {
@@ -220,11 +224,64 @@ func (s *SubscriptionService) Transfer(sc *uasc.SecureChannel, hdr *ua.RequestHe
 	// The old session hears of the move only while it is open: a closed one (CloseSession
 	// with deleteSubscriptions false, the usual way a subscription is handed on) has no one
 	// to tell.
-	notifyOld := from != nil && from.AuthTokenID != nil && s.srv.sb.Session(from.AuthTokenID) == from
-	if !sub.Transfer(to, sc, notifyOld) {
+	seq, ok := sub.Transfer(to, sc)
+	if !ok {
 		return nil, ua.StatusBadSubscriptionIDInvalid // its task returned: the subscription is gone
 	}
+	// A notice the new owner was owed for this subscription (it had it before, lost it, and
+	// has taken it back) is not true any more.
+	to.dropNotice(id)
+	if from != nil && from.AuthTokenID != nil && s.srv.sb.Session(from.AuthTokenID) == from {
+		s.tellTransferred(from, id, seq)
+	}
 	return sub, ua.StatusOK
+}
+
+// tellTransferred tells the session from that subscription id has moved to another session:
+// a StatusChangeNotification with Good_SubscriptionTransferred (Part 4 §5.14.7), in answer
+// to a Publish of from's that is already waiting, or else kept on the session for its next
+// one (Publish). Nothing waits for it: a session that never publishes again is never told,
+// and the notice goes with the session. It runs on the message loop, as Publish does.
+func (s *SubscriptionService) tellTransferred(from *session, id, seq uint32) {
+	select {
+	case pubreq := <-from.PublishRequests:
+		_ = from.channel.SendResponseWithContext(context.Background(), pubreq.ID, transferNotice(pubreq.Req.RequestHeader, id, seq))
+	default:
+		from.keepNotice(id, seq)
+	}
+}
+
+// noticeFor answers a Publish of sess with a notice it is owed, if it has one that is still
+// true: the subscription is not the session's (it may have taken it back since, or the
+// subscription may be gone). Notices that are no longer true are dropped.
+func (s *SubscriptionService) noticeFor(sess *session, hdr *ua.RequestHeader) ua.Response {
+	for {
+		id, seq, ok := sess.takeNotice()
+		if !ok {
+			return nil
+		}
+		s.Mu.Lock()
+		sub := s.Subs[id]
+		s.Mu.Unlock()
+		if sub != nil && sub.OwnedBy(sess) {
+			continue
+		}
+		return transferNotice(hdr, id, seq)
+	}
+}
+
+// transferNotice is the Publish response that tells a session subscription id has moved.
+func transferNotice(hdr *ua.RequestHeader, id, seq uint32) *ua.PublishResponse {
+	eo := ua.NewExtensionObject(&ua.StatusChangeNotification{Status: ua.StatusGoodSubscriptionTransferred, DiagnosticInfo: &ua.DiagnosticInfo{}})
+	eo.UpdateMask()
+	return &ua.PublishResponse{
+		ResponseHeader:           responseHeader(hdr.RequestHandle, ua.StatusOK),
+		SubscriptionID:           id,
+		NotificationMessage:      &ua.NotificationMessage{SequenceNumber: seq, PublishTime: time.Now(), NotificationData: []*ua.ExtensionObject{eo}},
+		AvailableSequenceNumbers: []uint32{},
+		Results:                  []ua.StatusCode{},
+		DiagnosticInfos:          []*ua.DiagnosticInfo{},
+	}
 }
 
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.8
@@ -424,46 +481,21 @@ func (s *Subscription) SetPublishing(enabled bool) bool {
 }
 
 // Transfer gives the subscription to the session to, publishing on its channel ch, and
-// returns once the publish loop has taken it (false when the subscription is gone). What the
-// loop holds for the subscription is published to the new session. With notifyOld, the old
-// session is sent a StatusChangeNotification carrying Good_SubscriptionTransferred in answer
-// to its next Publish (Part 4 §5.14.7), from a goroutine that gives up after a minute.
-func (s *Subscription) Transfer(to *session, ch *uasc.SecureChannel, notifyOld bool) bool {
-	return s.change(func() {
+// returns once the publish loop has taken it (ok false when the subscription is gone). What
+// the loop holds for the subscription is published to the new session. seq is the sequence
+// number for the old session's notice of the move: the next one, not taken, as a keep-alive
+// carries it, so the new session sees no gap.
+func (s *Subscription) Transfer(to *session, ch *uasc.SecureChannel) (seq uint32, ok bool) {
+	ok = s.change(func() {
 		s.Mu.Lock()
-		old, oldCh := s.Session, s.Channel
 		s.Session, s.Channel = to, ch
 		s.Mu.Unlock()
-		if notifyOld && old != nil && oldCh != nil {
-			// The status change carries the next sequence number without taking it, as a
-			// keep-alive does, so the new session sees no gap.
-			go transferred(old, oldCh, s.ID, s.SequenceID+1)
+		seq = s.SequenceID + 1
+		if seq == 0 {
+			seq = 1
 		}
 	})
-}
-
-// transferred answers the old session's next Publish with the news that subscription id has
-// moved to another session.
-func transferred(old *session, ch *uasc.SecureChannel, id, seq uint32) {
-	var pubreq PubReq
-	select {
-	case pubreq = <-old.PublishRequests:
-	case <-time.After(time.Minute):
-		return
-	}
-	if seq == 0 {
-		seq = 1
-	}
-	eo := ua.NewExtensionObject(&ua.StatusChangeNotification{Status: ua.StatusGoodSubscriptionTransferred, DiagnosticInfo: &ua.DiagnosticInfo{}})
-	eo.UpdateMask()
-	_ = ch.SendResponseWithContext(context.Background(), pubreq.ID, &ua.PublishResponse{
-		ResponseHeader:           responseHeader(pubreq.Req.RequestHeader.RequestHandle, ua.StatusOK),
-		SubscriptionID:           id,
-		NotificationMessage:      &ua.NotificationMessage{SequenceNumber: seq, PublishTime: time.Now(), NotificationData: []*ua.ExtensionObject{eo}},
-		AvailableSequenceNumbers: []uint32{},
-		Results:                  []ua.StatusCode{},
-		DiagnosticInfos:          []*ua.DiagnosticInfo{},
-	})
+	return seq, ok
 }
 
 // Revised returns the publishing interval (ms) and the lifetime and
