@@ -131,7 +131,7 @@ func (n *Node) writeCommand(name string, v any) error {
 	if serr != nil {
 		return serr
 	}
-	tags.Set(name, nv)
+	tags.Set(tags.DeclaredOutputName(name), nv)
 	return nil
 }
 
@@ -228,6 +228,17 @@ func (n *Node) commandTemplate(m Metric) {
 				continue
 			}
 			p := path + "." + mm.Name
+			// A member name is a name: an index ("Levels[1]") would be an
+			// element write past the array refusal, and a dot a path the
+			// node never births.
+			if strings.ContainsRune(mm.Name, '[') {
+				n.refuseCommand(arrayWriteRefusal, p)
+				continue
+			}
+			if strings.ContainsRune(mm.Name, '.') {
+				n.refuseCommand("a member name with a dot", p)
+				continue
+			}
 			if sub, ok := mm.Value.(*Template); ok {
 				if sub != nil {
 					walk(p, sub)
@@ -250,7 +261,7 @@ func (n *Node) commandTemplate(m Metric) {
 	for i, err := range tags.Write(ops) {
 		if err != nil {
 			reason := writeRefusal(err)
-			if errors.Is(err, runtime.ErrUndefined) {
+			if strings.Contains(err.Error(), "unknown member") { // ir's error for it is untyped
 				reason = "a member the type does not have"
 			}
 			n.refuseCommand(reason, ops[i].Path, "member", leaves[i].Name, "type", prev.Struct.Name,
@@ -260,14 +271,6 @@ func (n *Node) commandTemplate(m Metric) {
 		written++
 	}
 	n.log.Debug("sparkplug: template command write", "tag", m.Name, "members", written)
-}
-
-// templateMembers is the member count of a template metric, for logging.
-func templateMembers(m Metric) []Metric {
-	if t, ok := m.Value.(*Template); ok && t != nil {
-		return t.Metrics
-	}
-	return nil
 }
 
 // warnCommandOnce logs a command diagnostic the first time its reason is seen,

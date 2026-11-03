@@ -424,9 +424,15 @@ func TestCommandToADeclaredOutputNotYetWritten(t *testing.T) {
 	if _, err := tags.ReadGlobal("Cmd"); err == nil {
 		t.Error("a String command created the REAL output Cmd")
 	}
-	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Cmd", Datatype: spb.DataType_Double, Value: 2.5}}})
+	// Spelled in another case, as a host may: the tag is still created
+	// under its declared name.
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "cmd", Datatype: spb.DataType_Double, Value: 2.5}}})
 	if v, err := tags.ReadGlobal("Cmd"); err != nil || v.Kind != ir.TypeReal || v.F != 2.5 {
 		t.Errorf("Cmd after a Double 2.5 command = %+v (%v), want REAL 2.5", v, err)
+	}
+	snap := tags.Snapshot()
+	if _, ok := snap["Cmd"]; !ok {
+		t.Errorf("the output is stored under the host's spelling, not its declared name Cmd: %v", snapKeys(snap))
 	}
 	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Nope", Datatype: spb.DataType_Double, Value: 1.0}}})
 	if _, err := tags.ReadGlobal("Nope"); err == nil {
@@ -437,4 +443,56 @@ func TestCommandToADeclaredOutputNotYetWritten(t *testing.T) {
 // tmplCmd is a Template command metric for a UDT tag carrying several leaves.
 func tmplCmd(metric, ref string, leaves ...Metric) Metric {
 	return Metric{Name: metric, Datatype: spb.DataType_Template, Value: &Template{TemplateRef: ref, Metrics: leaves}}
+}
+
+func snapKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// A template member named with an index is an element write, refused like
+// every array write: the array refusal looked only at the metric's own
+// name, so T1{"Levels[1]": 42} wrote the element.
+func TestTemplateMemberWithAnIndexIsRefused(t *testing.T) {
+	const types = `
+TYPE
+	Tank : STRUCT
+		Levels : ARRAY[0..3] OF REAL;
+		Fill : BOOL;
+	END_STRUCT;
+END_TYPE
+`
+	const prog = "PROGRAM Main\nVAR_EXTERNAL\n\tT1 : Tank;\nEND_VAR\nEND_PROGRAM\n"
+	rt, err := runtime.New(runtime.Options{
+		Program: prog, Libraries: []string{types}, Driver: nio.NewMemory(), Scan: 50 * time.Millisecond,
+		Tags: []runtime.TagDef{runtime.Typed("T1", runtime.RoleState, "Tank")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))}, WithWritable("*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{
+		tmplCmd("T1", "Tank",
+			Metric{Name: "Levels[1]", Datatype: spb.DataType_Double, Value: 42.0},
+			Metric{Name: "Fill", Datatype: spb.DataType_Boolean, Value: true}),
+	}})
+	if v, ok := rt.Tags().ReadPath("T1.Levels[1]"); !ok || v != 0.0 {
+		t.Errorf("T1.Levels[1] = %v (found %v), want 0: an indexed template member wrote the element", v, ok)
+	}
+	if v, _ := rt.Tags().ReadPath("T1.Fill"); v != true {
+		t.Errorf("T1.Fill = %v, want true: the refused member took the others with it", v)
+	}
+	if got := n.Status().CommandsRefused; got != 1 {
+		t.Errorf("CommandsRefused = %d, want 1 (Levels[1])", got)
+	}
+	if !strings.Contains(buf.String(), "array") {
+		t.Errorf("the refusal does not say it is an array write:\n%s", buf.String())
+	}
 }

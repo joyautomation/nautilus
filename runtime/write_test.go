@@ -183,3 +183,23 @@ func TestFrontDoorEnumInsideMapAndList(t *testing.T) {
 		t.Errorf("Modes[1] = %v, want Idle: the refused list must not land", v)
 	}
 }
+
+// An output no scan has written yet, created by a write spelled in another
+// case, takes its declared spelling and stays an output: its changes keep
+// reaching the driver (outNames is keyed by the declared spelling).
+func TestDeclaredOutputNameKeepsTheOutputFlag(t *testing.T) {
+	tags := NewTags()
+	tags.markOutputs([]string{"Cmd"})
+	if got := tags.DeclaredOutputName("cmd"); got != "Cmd" {
+		t.Fatalf("DeclaredOutputName(cmd) = %q, want Cmd", got)
+	}
+	if got := tags.DeclaredOutputName("Other"); got != "Other" {
+		t.Errorf("DeclaredOutputName(Other) = %q, want it unchanged", got)
+	}
+	tags.Set(tags.DeclaredOutputName("cmd"), 1.0)
+	g := tags.outputGeneration()
+	tags.Set("Cmd", 2.0)
+	if tags.outputGeneration() == g {
+		t.Error("a change to Cmd did not move the output generation: it lost its output flag")
+	}
+}
