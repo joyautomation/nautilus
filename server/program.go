@@ -203,10 +203,12 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 }
 
 // authorizeProgramEdit gates program mutations: the OnlineEdits switch
-// first, then the same write authorization as tag writes.
+// first, then the same write authorization as tag writes. The refusal names
+// the manifest key, which is what a user sets; Options.OnlineEdits is how
+// naut run passes it in.
 func (s *Server) authorizeProgramEdit(r *http.Request) (int, string) {
 	if !s.onlineEdits {
-		return http.StatusForbidden, "online edits are disabled on this controller (server.Options.OnlineEdits)"
+		return http.StatusForbidden, "online edits are disabled on this controller (set server.online-edits: true in nautilus.yaml)"
 	}
 	return s.authorizeWrite(r)
 }
