@@ -94,24 +94,5 @@ func isIntLiteral(e Expression) bool {
 // timeLiteral writes ms as the ST duration literal an author would:
 // 30000 → T#30S, 90000 → T#1M30S, 250 → T#250MS.
 func timeLiteral(ms int64) string {
-	var b strings.Builder
-	b.WriteString("T#")
-	if ms < 0 {
-		b.WriteByte('-')
-		ms = -ms
-	}
-	if ms == 0 {
-		b.WriteString("0S")
-		return b.String()
-	}
-	for _, u := range []struct {
-		name string
-		ms   int64
-	}{{"D", 86400000}, {"H", 3600000}, {"M", 60000}, {"S", 1000}, {"MS", 1}} {
-		if ms >= u.ms {
-			fmt.Fprintf(&b, "%d%s", ms/u.ms, u.name)
-			ms %= u.ms
-		}
-	}
-	return b.String()
+	return strings.ToUpper(ir.FormatDuration(ms))
 }

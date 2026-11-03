@@ -225,3 +225,20 @@ func TestSeedTimeAndArray(t *testing.T) {
 		t.Errorf("bad element: %v, want the path init[2]", err)
 	}
 }
+
+// FormatDuration writes the literal a person would, and ParseDuration
+// reads it back to the same milliseconds.
+func TestFormatDurationRoundTrips(t *testing.T) {
+	for ms, want := range map[int64]string{
+		0: "T#0s", 250: "T#250ms", 30000: "T#30s", 90000: "T#1m30s", 120000: "T#2m",
+		3600000: "T#1h", 90061001: "T#1d1h1m1s1ms", -1500: "T#-1s500ms",
+	} {
+		got := FormatDuration(ms)
+		if got != want {
+			t.Errorf("FormatDuration(%d) = %q, want %q", ms, got, want)
+		}
+		if back, err := ParseDuration(got); err != nil || back != ms {
+			t.Errorf("ParseDuration(%q) = %d, %v, want %d", got, back, err, ms)
+		}
+	}
+}

@@ -325,6 +325,9 @@ The location is the assertion that broke — the tag or expression inside
 `file:line` lands on it; the step it belongs to is named alongside, with
 the step's own first line when that differs.
 
+Values read the way the test writes them: a `TIME` shows as its literal
+(`Delay = T#2m, want T#1m30s`), an enumeration as its member name.
+
 The trajectory is the point. Here the loop is fine and still converging —
 the 20 s contract was too tight, which the numbers say and a bare
 pass/fail wouldn't.

@@ -240,6 +240,32 @@ func ParseDuration(s string) (int64, error) {
 	return int64(math.Round(total)), nil
 }
 
+// FormatDuration writes ms as the IEC duration literal a person would,
+// ParseDuration's inverse: 30000 → T#30s, 90000 → T#1m30s, 250 → T#250ms,
+// 0 → T#0s.
+func FormatDuration(ms int64) string {
+	var b strings.Builder
+	b.WriteString("T#")
+	if ms < 0 {
+		b.WriteByte('-')
+		ms = -ms
+	}
+	if ms == 0 {
+		b.WriteString("0s")
+		return b.String()
+	}
+	for _, u := range []struct {
+		name string
+		ms   int64
+	}{{"d", 86400000}, {"h", 3600000}, {"m", 60000}, {"s", 1000}, {"ms", 1}} {
+		if ms >= u.ms {
+			fmt.Fprintf(&b, "%d%s", ms/u.ms, u.name)
+			ms %= u.ms
+		}
+	}
+	return b.String()
+}
+
 // asStringMap normalizes what a YAML decoder hands back for a mapping node
 // targeting `any`: gopkg.in/yaml.v3 always produces map[string]any for a
 // mapping with string (or stringable) keys.
