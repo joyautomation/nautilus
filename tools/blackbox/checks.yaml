@@ -194,9 +194,8 @@ checks:
   script: checks/2026-10-24-001/001-F11-enum-names.py
   env: {}
   note: issue 425 (gap); states the Part 8 expectation, stronger than the guide
-  expected_today: fail
+  expected_today: pass
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#425'
 - id: 001-F13-closesession-deletes-subscriptions
   run: 2026-10-24-001
   finding: F-13
@@ -390,13 +389,13 @@ checks:
 - id: 001-P-type-table
   run: 2026-10-24-001
   pass: the guide's type table row by row with init values
-  disposition: gate
+  disposition: once
   surface: opcua
   oracle: asyncua
   project: projects/2026-10-24-001/typed
   script: checks/2026-10-24-001/001-P-type-table.py
   env: {}
-  note: fails after 001-F06 has run on a build with the bug
+  note: "was gate. Superseded by the fix for F-11 (nautilus#425): an enumeration's DataType is now its own Enumeration subtype (ns=1;s=type:Mode), not i=6, so its rows for Mode1 and P101.State (want i=6) fail by design while every other row still passes. The new enumeration row is covered by 001-F11-enum-names and the opcua/server enumeration tests (OPC-024); the other rows by TestReadsCarryTypesQualityAndTimestamps and TestEveryIntegerWidthReadsAsItsOwnType. For the operator to rule on at reconciliation (the tester's check could read the enumeration's DataType as a subtype of Enumeration). Also: fails after 001-F06 has run on a build with the bug."
   expected_today: pass
   group: what passed (the regression suite)
 - id: 001-P-read-only-tags

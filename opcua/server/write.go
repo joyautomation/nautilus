@@ -376,6 +376,9 @@ func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl clie
 	case ns.isFolder(n.NodeID):
 		return ua.StatusBadNotWritable, member{}, nil, "the project folder is an Object"
 	}
+	if _, _, ok := ns.enumAt(n.NodeID); ok {
+		return ua.StatusBadNotWritable, member{}, nil, "an enumeration's DataType and its members are the project's TYPE, read-only"
+	}
 	m, ok := ns.resolve(n.NodeID)
 	if !ok {
 		return ua.StatusBadNodeIDUnknown, member{}, nil, "no such tag or member"
