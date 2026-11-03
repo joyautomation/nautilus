@@ -279,6 +279,22 @@ func (s *Server) Start(ctx context.Context) error {
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_MinSupportedSampleRate)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(float64(s.opts.Sweep)/float64(time.Millisecond)))
 	}
+	// Diagnostics are not collected, and ServerDiagnostics says so: its
+	// mandatory EnabledFlag reads false rather than failing (nautilus#485).
+	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag)); n != nil {
+		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(false))
+	}
+	// MaxArrayLength and MaxStringLength are optional, and the server sets
+	// no limit of its own (the message size bounds both). Part 5 says a
+	// server that does not impose such a limit leaves the property out, so
+	// it is left out rather than served without a value (nautilus#485).
+	if root, err := srv.Namespace(0); err == nil {
+		if nns, ok := root.(*opcserver.NodeNameSpace); ok {
+			for _, nid := range []uint32{id.Server_ServerCapabilities_MaxArrayLength, id.Server_ServerCapabilities_MaxStringLength} {
+				nns.RemoveNode(ua.NewNumericNodeID(0, nid))
+			}
+		}
+	}
 	// Hang the project folder off ns=0's Objects, where every client
 	// starts browsing.
 	root, err := srv.Namespace(0)

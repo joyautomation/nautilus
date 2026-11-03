@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -306,5 +307,173 @@ func TestParseTimeAcceptsBothForms(t *testing.T) {
 	}
 	if _, err := parseTime("half past four", time.Time{}); err == nil {
 		t.Error("parseTime accepted prose")
+	}
+}
+
+// An id that names no alarm is a 404 on every operator verb, not a 404 on
+// ack and a 400 on shelve and unshelve. A refusal about an alarm that does
+// exist (unshelving one that is not shelved) stays a 400.
+func TestUnknownAlarmIs404OnEveryVerb(t *testing.T) {
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
+	srv, eng := alarmServer(t, cond)
+	eng.Evaluate()
+
+	for _, tc := range []struct{ path, body string }{
+		{"/api/alarms/ack", `{"ids":["NoSuchAlarm"],"by":"operator1"}`},
+		{"/api/alarms/shelve", `{"id":"NoSuchAlarm","seconds":600,"by":"operator1"}`},
+		{"/api/alarms/unshelve", `{"id":"NoSuchAlarm","by":"operator1"}`},
+	} {
+		rec := do(t, srv, "POST", tc.path, tc.body)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `no alarm "NoSuchAlarm"`) {
+			t.Errorf("POST %s for an unknown id = %d %q, want 404 naming it", tc.path, rec.Code, rec.Body)
+		}
+	}
+
+	rec := do(t, srv, "POST", "/api/alarms/unshelve", `{"id":"HiTemp","by":"operator1"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not shelved") {
+		t.Errorf("unshelve of an alarm that is not shelved = %d %q, want 400", rec.Code, rec.Body)
+	}
+	rec = do(t, srv, "POST", "/api/alarms/shelve", `{"id":"HiTemp","until":"2020-01-01T00:00:00Z","by":"operator1"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("shelve into the past = %d %q, want 400", rec.Code, rec.Body)
+	}
+}
+
+// The journal's state= and q= filters apply before the page limit, so a
+// filtered page is full when enough events match, and `truncated` means
+// exactly "more matching events exist than this page holds".
+func TestJournalFiltersBeforeTheLimit(t *testing.T) {
+	cond := map[string]any{"HiTempAlm": false, "LoFlowAlm": false}
+	srv, eng := alarmServer(t, cond)
+
+	// Five activations of each alarm, each followed by a return. The
+	// journal interleaves them, newest first: LoFlow's events sit on top
+	// of every HiTemp event, so a limit applied before q=temp sees
+	// mostly LoFlow.
+	for i := 0; i < 5; i++ {
+		cond["HiTempAlm"] = true
+		eng.Evaluate()
+		cond["HiTempAlm"] = false
+		eng.Evaluate()
+		cond["LoFlowAlm"] = true
+		eng.Evaluate()
+		cond["LoFlowAlm"] = false
+		eng.Evaluate()
+	}
+	page := func(query string) journalResponse {
+		t.Helper()
+		rec := do(t, srv, "GET", "/api/alarms/journal?"+query, "")
+		if rec.Code != 200 {
+			t.Fatalf("journal?%s = %d %s", query, rec.Code, rec.Body)
+		}
+		var out journalResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	all := page("q=temp")
+	if len(all.Events) < 4 || all.Truncated {
+		t.Fatalf("q=temp with no limit = %d events, truncated %v; want every HiTemp event, not truncated", len(all.Events), all.Truncated)
+	}
+	matches := len(all.Events)
+
+	for _, tc := range []struct {
+		query string
+		want  int
+		trunc bool
+	}{
+		{"q=temp&limit=3", 3, true},                            // full page, more behind it
+		{"q=temp&limit=" + itoa(matches-1), matches - 1, true}, // one short of all
+		{"q=temp&limit=" + itoa(matches), matches, false},      // exactly all: nothing more
+		{"q=temp&limit=" + itoa(matches+5), matches, false},    // room to spare
+		{"limit=1&id=HiTemp", 1, true},                         // unfiltered paths keep working
+	} {
+		got := page(tc.query)
+		if len(got.Events) != tc.want || got.Truncated != tc.trunc {
+			t.Errorf("journal?%s = %d events, truncated %v; want %d, %v", tc.query, len(got.Events), got.Truncated, tc.want, tc.trunc)
+		}
+		for _, e := range got.Events {
+			if e.ID != "HiTemp" {
+				t.Errorf("journal?%s returned %s, which does not match", tc.query, e.ID)
+			}
+		}
+	}
+	// state= is a post-filter too: a page of returns is full.
+	if got := page("state=unack-rtn&limit=2"); len(got.Events) != 2 || !got.Truncated {
+		t.Errorf("state=unack-rtn&limit=2 = %+v", got)
+	}
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+// countingJournal holds `total` events, none of them the test alarm's, and
+// records how many rows each query asked for and got back.
+type countingJournal struct {
+	total         int
+	asked, served []int
+}
+
+func (c *countingJournal) Append(alarm.Event) error { return nil }
+
+func (c *countingJournal) Query(_, _ time.Time, f alarm.Filter) ([]alarm.Event, error) {
+	n := min(f.Limit, c.total)
+	c.asked = append(c.asked, f.Limit)
+	c.served = append(c.served, n)
+	out := make([]alarm.Event, n)
+	for i := range out {
+		out[i] = alarm.Event{TS: int64(c.total - i), ID: "LoFlow", Name: "Low flow", Kind: "active", State: "unack-active"}
+	}
+	return out, nil
+}
+
+// A q= that matches nothing in a long journal stops at maxJournalScan raw
+// rows instead of walking the whole journal, and says truncated: the rows
+// past the cap were never read, so matches may be among them.
+func TestJournalScanStopsAtTheCap(t *testing.T) {
+	jrn := &countingJournal{total: 4 * maxJournalScan}
+	eng, err := alarm.New(alarm.Options{
+		Defs: []alarm.Def{{ID: "HiTemp", Tag: "HiTempAlm", Name: "High temperature",
+			Priority: alarm.High, AckRequired: true, AutoClear: true}},
+		Read:    func(string) (any, bool) { return false, true },
+		Journal: jrn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	srv := New(newTestRuntime(t), Options{Alarms: eng})
+
+	rec := do(t, srv, "GET", "/api/alarms/journal?q=temp&limit=10", "")
+	if rec.Code != 200 {
+		t.Fatalf("journal = %d %s", rec.Code, rec.Body)
+	}
+	var out journalResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Events) != 0 || !out.Truncated {
+		t.Errorf("journal = %d events, truncated %v; want 0 events, truncated (rows remain past the cap)", len(out.Events), out.Truncated)
+	}
+	maxAsked, servedTotal := 0, 0
+	for i := range jrn.asked {
+		maxAsked = max(maxAsked, jrn.asked[i])
+		servedTotal += jrn.served[i]
+	}
+	if maxAsked != maxJournalScan {
+		t.Errorf("largest query asked for %d rows (queries %v), want exactly the cap %d", maxAsked, jrn.asked, maxJournalScan)
+	}
+	// Doubling up to the cap reads under 2×cap before the last pass and
+	// the cap on it: 3×cap bounds the whole request.
+	if servedTotal > 3*maxJournalScan {
+		t.Errorf("read %d rows over %d queries, want at most 3×%d", servedTotal, len(jrn.asked), maxJournalScan)
+	}
+
+	// Under the cap the journal running out still means "nothing more".
+	jrn.total, jrn.asked, jrn.served = 50, nil, nil
+	rec = do(t, srv, "GET", "/api/alarms/journal?q=temp&limit=10", "")
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Events) != 0 || out.Truncated {
+		t.Errorf("exhausted journal = %d events, truncated %v; want 0, false", len(out.Events), out.Truncated)
 	}
 }

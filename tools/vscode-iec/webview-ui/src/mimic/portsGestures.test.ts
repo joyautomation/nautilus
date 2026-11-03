@@ -14,6 +14,7 @@ import {
   movePort,
   nextPortName,
   newPortAtFreeSlot,
+  SLOT_CLEARANCE,
   newPortAtPoint,
   nudgePort,
   roundPort,
@@ -116,4 +117,43 @@ test("movePort: replaces x/y/part, keeps name and dir, drops a stale part", () =
   const p: Port = { name: "discharge", x: 0.5, y: 0, part: "flange", dir: "up" };
   assert.deepEqual(movePort(p, { x: 0.2, y: 1 }), { name: "discharge", x: 0.2, y: 1, dir: "up" });
   assert.deepEqual(movePort(p, { x: 0, y: 0.5, part: "motor" }), { name: "discharge", x: 0, y: 0.5, dir: "up", part: "motor" });
+});
+
+// nautilus#477: a slot is taken by a dot that renders on it, not only by a
+// port at exactly its fractions.
+test("firstFreeSlot: a port a few pixels off a slot takes it (the rig's Pump)", () => {
+  const box = { x: 0, y: 0, w: 120, h: 110 };
+  // Pump's `out` at the host's old defaults: ~2 px across, ~6 px down from top-mid.
+  const out: Port = { name: "out", x: 0.483, y: 0.055 };
+  assert.deepEqual(firstFreeSlot([out], box), [1, 0.5]);
+  assert.deepEqual(newPortAtFreeSlot([out], box), { name: "p1", x: 1, y: 0.5 });
+});
+
+test("firstFreeSlot: judged in the part's frame where a port names a part", () => {
+  const box = { x: 0, y: 0, w: 100, h: 100 };
+  const parts: [string, typeof box][] = [
+    ["nozzle", { x: 40, y: 0, w: 20, h: 10 }],
+    ["body", { x: 20, y: 40, w: 60, h: 40 }],
+  ];
+  // Top-mid of the nozzle renders at (50, 0): the box's top-mid slot.
+  assert.deepEqual(firstFreeSlot([{ name: "n", x: 1, y: 0.5, part: "nozzle" }], box, parts), [1, 0.5]);
+  assert.deepEqual(firstFreeSlot([{ name: "n", x: 0.5, y: 0, part: "nozzle" }], box, parts), [1, 0.5]);
+  // Top-mid of the body has the same fractions but renders at (50, 40),
+  // well inside the box: the box's top-mid slot is still free.
+  assert.deepEqual(firstFreeSlot([{ name: "b", x: 0.5, y: 0, part: "body" }], box, parts), [0.5, 0]);
+});
+
+test("firstFreeSlot: a port well clear of every slot leaves them all free", () => {
+  const box = { x: 10, y: 20, w: 200, h: 100 };
+  assert.deepEqual(firstFreeSlot([{ name: "c", x: 0.5, y: 0.5 }], box), [0.5, 0]);
+  assert.deepEqual(firstFreeSlot([{ name: "t", x: 0.45, y: 0 }], box), [1, 0.5]); // 10 px off top-mid
+  assert.deepEqual(firstFreeSlot([{ name: "t", x: 0.42, y: 0 }], box), [0.5, 0]); // 16 px off: clear
+});
+
+test("firstFreeSlot: the clearance follows the zoom (dots keep their screen size)", () => {
+  const box = { x: 0, y: 0, w: 200, h: 100 };
+  const near: Port = { name: "t", x: 0.42, y: 0 }; // 16 render px off top-mid
+  assert.deepEqual(firstFreeSlot([near], box), [0.5, 0]); // zoom 1: clear
+  assert.deepEqual(firstFreeSlot([near], box, [], SLOT_CLEARANCE / 0.5), [1, 0.5]); // zoom 0.5: 16 render px is 8 on screen, taken
+  assert.deepEqual(newPortAtFreeSlot([near], box, [], SLOT_CLEARANCE / 0.5), { name: "p1", x: 1, y: 0.5 });
 });

@@ -35,7 +35,7 @@
 	import type { GetPort, MimicEquipment, MimicPipe, MimicPipeAnchor, PartRect, PortDir } from '@joyautomation/nautilus-hmi';
 	import { DEMO_PROPS, registry } from './registry';
 	import { resolvePorts, type Port } from './ports';
-	import { dropPort, fmtFraction, movePort, newPortAtFreeSlot, newPortAtPoint, nudgePort, roundPort, smallestPartAt } from './portsGestures';
+	import { dropPort, fmtFraction, movePort, newPortAtFreeSlot, newPortAtPoint, nudgePort, roundPort, SLOT_CLEARANCE, smallestPartAt, type Box } from './portsGestures';
 	import { minInteriorPoints, nearestPort, resolveDraftFinish, type NamedPort } from './pipeDraft';
 	import { suggestRoute, type ObstacleRect } from './autoroute';
 	import { canvasBox, ed, GRID, postManifestOp, postOp, snap, type MimicOp, type Selection } from './mimicState.svelte';
@@ -1659,7 +1659,10 @@
 	}
 	function addPortAtFreeSlotEC(eq: MimicEquipment) {
 		const existing = resolvePorts(eq, ed.manifest);
-		commitPorts(eq, [...existing, newPortAtFreeSlot(existing)]);
+		// Each port's part as its dot draws it: the painted part, else the
+		// built-in drawing's layout (portFrame), so an unpainted part counts.
+		const parts: [string, Box][] = [...partsOf(eq), ...existing.filter((p) => p.part).map((p): [string, Box] => [p.part!, portFrame(eq, p)])];
+		commitPorts(eq, [...existing, newPortAtFreeSlot(existing, eqBox(eq), parts, SLOT_CLEARANCE / scale)]);
 	}
 </script>
 

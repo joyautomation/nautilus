@@ -283,13 +283,15 @@ claims:
     source: "#the-api"
     tests:
       - go ./server TestJournalQuery
+      - go ./server TestJournalFiltersBeforeTheLimit
       - go ./alarm TestJournalFiltering
     partial: true
     note: >-
-      Over HTTP only kind, site and q are asserted (plus a malformed from
-      rejected). Priority, id, the from/to range and limit are asserted only
-      on the ring journal. The state filter is not asserted anywhere.
-      TestParseTimeAcceptsBothForms removed (a parse helper, not a filter).
+      Over HTTP kind, site, id, q, state and limit are asserted (plus a
+      malformed from rejected), including that state and q apply before the
+      limit. Priority and the from/to range are asserted only on the ring
+      journal. TestParseTimeAcceptsBothForms removed (a parse helper, not a
+      filter).
 
   - id: ALM-026
     claim: >-

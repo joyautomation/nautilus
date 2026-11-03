@@ -20,10 +20,15 @@ re-applied every scan until it is removed.
 | an **output** or **state** tag | the forced value is laid back over whatever the logic wrote, so the driver is handed the forced value |
 | a **struct member** (`P101.Speed`, `Recipe.Steps[2].Mode`) | only that member is held; the rest of the struct follows its writers |
 
-A forced value is coerced like any write: an enumerated member or tag takes
-its member name (`Run`), and a name that is no member is refused with the
-list of members; a `TIME` takes milliseconds or its IEC literal (`"T#45s"`),
-and a string that is no duration is refused with the reason.
+A forced value is checked and converted like any write: an enumerated
+member or tag takes its member name (`Run`), and a name that is no member
+is refused with the list of members; a `TIME` takes milliseconds or its IEC
+literal (`"T#45s"`), and a string that is no duration is refused with the
+reason. A value the tag's type cannot hold (`70000` for an `INT`, a string
+for a `REAL`, a fraction for an integer) is refused with a `400` and
+nothing is forced. An acceptance test's `force:` is the exception: it may
+hold a value the program itself can produce, such as an `INT` counted past
+32767.
 
 The controller records what the tag *would* hold — the driver's latest
 reading, the logic's latest write — and the force table shows it beside the

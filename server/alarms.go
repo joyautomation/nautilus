@@ -71,9 +71,9 @@ func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// journalResponse is GET /api/alarms/journal. Truncated says the limit cut
-// the result, so a journal page can offer "narrow the range" instead of
-// silently showing a window that isn't the whole story.
+// journalResponse is GET /api/alarms/journal. Truncated says more events
+// match than the page holds, so a journal page can offer "narrow the range"
+// instead of silently showing a window that isn't the whole story.
 type journalResponse struct {
 	Events    []alarm.Event `json:"events"`
 	Truncated bool          `json:"truncated"`
@@ -111,25 +111,78 @@ func (s *Server) handleAlarmJournal(w http.ResponseWriter, r *http.Request) {
 		Priorities: csv(q.Get("priority")),
 		IDs:        csv(q.Get("id")),
 		Kinds:      csv(q.Get("kind")),
-		Limit:      limit,
 	}
-	events, err := s.alarms.Journal(from, to, f)
+	if limit <= 0 {
+		limit = alarm.DefaultQueryLimit
+	}
+	events, truncated, err := s.journalPage(from, to, f, limit, csv(q.Get("state")), q.Get("q"))
 	if err != nil {
 		http.Error(w, "journal: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	// state= and q= are applied here rather than in alarm.Filter: a state
-	// is a property of the event's OUTCOME and a text search is a UI
-	// affordance, and neither belongs in an interface three journal
-	// implementations (ring, file, Postgres) each have to reimplement.
-	events = filterEvents(events, csv(q.Get("state")), q.Get("q"))
 	if events == nil {
 		events = []alarm.Event{}
 	}
-	writeJSON(w, http.StatusOK, journalResponse{
-		Events:    events,
-		Truncated: len(events) >= f.Limit && f.Limit > 0 || len(events) >= alarm.DefaultQueryLimit,
-	})
+	writeJSON(w, http.StatusOK, journalResponse{Events: events, Truncated: truncated})
+}
+
+// maxJournalScan caps the raw journal rows one GET /api/alarms/journal may
+// read while looking for a page of state=/q= matches. The journal GET is a
+// read, so it is unauthenticated, and a selective filter over a long range
+// would otherwise walk the whole journal: the file journal re-reads its
+// whole file on every pass, and Postgres ships each pass's rows across the
+// wire. Past the cap the page is what was found and truncated is true:
+// narrow the range or filter by site/priority/id/kind (which the journal
+// applies itself) to see further.
+const maxJournalScan = 100_000
+
+// journalPage answers one journal page: the newest `limit` events that
+// match every filter, and whether more may exist in the range.
+//
+// state= and q= are applied here rather than in alarm.Filter: a state is a
+// property of the event's OUTCOME and a text search is a UI affordance, and
+// neither belongs in an interface three journal implementations (ring,
+// file, Postgres) each have to reimplement. So the journal's own limit
+// would cut BEFORE they apply, and a filtered page would come back short
+// with more matches behind it. Instead the journal is asked for one more
+// event than the page holds, filtered, and asked again for twice as many
+// while the filters leave the page short and the journal had more to give,
+// up to maxJournalScan rows in one pass (under 3×maxJournalScan read over
+// the whole request, since each pass re-reads from the newest event).
+//
+// truncated is true when a matching event exists beyond the page, or when
+// the scan stopped at maxJournalScan with rows still unread (so matches may
+// exist beyond it). It is false only when the journal ran out.
+//
+// A journal that returns fewer rows than it was asked for is read as
+// exhausted. A MultiJournal that fails over from its durable sink to the
+// ring between two passes can therefore end the loop on the ring's shorter
+// answer and give a short page with truncated false; the next request
+// (against whichever journal is then answering) is consistent again.
+func (s *Server) journalPage(from, to time.Time, f alarm.Filter, limit int, states []string, text string) ([]alarm.Event, bool, error) {
+	n := min(limit, maxJournalScan-1) + 1
+	for {
+		f.Limit = n
+		raw, err := s.alarms.Journal(from, to, f)
+		if err != nil {
+			return nil, false, err
+		}
+		got := len(raw)
+		events := filterEvents(raw, states, text)
+		if len(events) > limit {
+			return events[:limit], true, nil
+		}
+		if got < n {
+			// The journal returned everything in the range: what passed
+			// the filters is all there is.
+			return events, false, nil
+		}
+		if n >= maxJournalScan {
+			// Rows remain unread past the cap; matches may be among them.
+			return events, true, nil
+		}
+		n = min(n*2, maxJournalScan)
+	}
 }
 
 // filterEvents applies the two filters the Journal interface deliberately
@@ -241,7 +294,7 @@ func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.alarms.Shelve(req.ID, until, req.By); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
 	s.writeAlarmRecord(w, req.ID)
@@ -266,10 +319,20 @@ func (s *Server) handleAlarmUnshelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.alarms.Unshelve(req.ID, req.By); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
 	s.writeAlarmRecord(w, req.ID)
+}
+
+// alarmErrStatus maps an engine refusal to a status: an id that names no
+// alarm is a 404, as it is on ack; anything else (not shelvable, a shelf
+// deadline in the past, not shelved) is a request the alarm refused, a 400.
+func alarmErrStatus(err error) int {
+	if errors.Is(err, alarm.ErrNoAlarm) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
 }
 
 // writeAlarmRecord answers a shelve/unshelve with the row as it now
