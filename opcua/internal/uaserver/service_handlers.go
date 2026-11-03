@@ -6,6 +6,7 @@ package uaserver
 
 import (
 	"context"
+	"runtime/debug"
 	"time"
 
 	"github.com/gopcua/opcua/id"
@@ -114,7 +115,7 @@ func (s *Server) handleService(ctx context.Context, sc *uasc.SecureChannel, reqI
 		}
 		resp = &ua.ServiceFault{ResponseHeader: responseHeader(handle, code)}
 	} else if ok {
-		resp, err = h(sc, req, reqID)
+		resp, err = s.callHandler(h, sc, req, reqID)
 	} else {
 		if typeID == 0 {
 			if s.cfg.logger != nil {
@@ -142,6 +143,24 @@ func (s *Server) handleService(ctx context.Context, sc *uasc.SecureChannel, reqI
 			s.cfg.logger.Warn("Error sending response: %s\n", err)
 		}
 	}
+}
+
+// callHandler runs one service handler, turning a panic into a
+// Bad_InternalError fault for that request. The handlers run on the
+// server's message loop, so an unrecovered panic in any of them, from one
+// malformed request by any client (an anonymous one on the None endpoint
+// included), would end the whole controller process, not just answer that
+// request badly.
+func (s *Server) callHandler(h Handler, sc *uasc.SecureChannel, req ua.Request, reqID uint32) (resp ua.Response, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if s.cfg.logger != nil {
+				s.cfg.logger.Error("opcua: %T handler panicked: %v\n%s", req, p, debug.Stack())
+			}
+			resp, err = nil, ua.StatusBadInternalError
+		}
+	}()
+	return h(sc, req, reqID)
 }
 
 // sessionless are the services a client calls without a session: discovery (Part 4 §5.4) and
