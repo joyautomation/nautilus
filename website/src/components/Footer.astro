@@ -1,0 +1,25 @@
+---
+// Starlight's footer plus one line about who builds and supports nautilus.
+// GA (11-03): the docs had ~150 engaged visits a month and sent none to
+// joyautomation.com; nothing on the docs said who is behind them.
+import Default from '@astrojs/starlight/components/Footer.astro';
+---
+
+<Default />
+<p class="maker">
+	nautilus is free and open source (Apache 2.0), built by Joy Automation. For implementation or
+	support on your site, see <a href="https://joyautomation.com/services">Joy Automation services</a>.
+</p>
+
+<style>
+	.maker {
+		margin-top: 1.5rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--sl-color-hairline);
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	.maker a {
+		color: var(--sl-color-text-accent);
+	}
+</style>
