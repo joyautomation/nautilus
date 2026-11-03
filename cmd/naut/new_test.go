@@ -275,3 +275,28 @@ func TestScaffoldedManifestProjectsPass(t *testing.T) {
 		})
 	}
 }
+
+// A name and a template on the command line are the whole answer:
+// `naut new my-plant --template minimal` writes the project without opening
+// the form, in a terminal or not. A name alone, or a template alone, still
+// prompts for the rest; --no-input and no terminal never prompt.
+func TestNewNameAndTemplateSkipTheForm(t *testing.T) {
+	for _, tc := range []struct {
+		noInput, tty  bool
+		name          string
+		templateGiven bool
+		want          bool
+	}{
+		{false, true, "my-plant", true, false}, // naut new my-plant --template minimal
+		{false, true, "my-plant", false, true}, // naut new my-plant: which template?
+		{false, true, "", true, true},          // naut new --template minimal: which name?
+		{false, true, "", false, true},         // naut new
+		{true, true, "my-plant", false, false}, // --no-input
+		{false, false, "my-plant", false, false},
+	} {
+		if got := wantForm(tc.noInput, tc.tty, tc.name, tc.templateGiven); got != tc.want {
+			t.Errorf("wantForm(noInput=%v, tty=%v, name=%q, template=%v) = %v, want %v",
+				tc.noInput, tc.tty, tc.name, tc.templateGiven, got, tc.want)
+		}
+	}
+}

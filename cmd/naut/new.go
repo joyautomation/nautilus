@@ -93,8 +93,8 @@ var identRE = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
 // runNew scaffolds a nautilus controller project, sv-create style: prompt
 // for whatever wasn't given on the command line, then write the tree.
-// --no-input — or having no terminal to prompt on — skips the prompts and
-// takes the defaults.
+// --no-input, having no terminal to prompt on, or a name and a --template
+// on the command line skip the prompts and take the defaults.
 func runNew(args []string) int {
 	fs := flag.NewFlagSet("new", flag.ContinueOnError)
 	module := fs.String("module", "", "Go module path (sdk templates only; default: name)")
@@ -103,7 +103,7 @@ func runNew(args []string) int {
 	// Superseded by --template; kept working so documented one-liners and
 	// existing scripts don't break. It is listed in --help, so it says so.
 	noGo := fs.Bool("no-go", false, "same as --template minimal (superseded by --template)")
-	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting")
+	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting (a name and --template already skip the prompts)")
 	deploy := fs.Bool("deploy", false, "add Dockerfile, k8s manifests, and a CD workflow (manifest templates)")
 	replace := fs.String("replace", "", "path to a local nautilus checkout; adds a filesystem replace directive so the project builds against it (for contributors, pre-publish)")
 	if err := fs.Parse(args); err != nil {
@@ -157,7 +157,8 @@ func runNew(args []string) int {
 		sc.Replace = abs
 	}
 
-	if *noInput || !stdinIsTTY() {
+	templateGiven := *tmpl != "" || *noGo
+	if !wantForm(*noInput, stdinIsTTY(), sc.Name, templateGiven) {
 		// No terminal to prompt on (CI, docker, piped input) behaves like
 		// --no-input, so the documented one-liners work headlessly.
 		if sc.Name == "" {
@@ -217,6 +218,21 @@ func runNew(args []string) int {
   compile diagnostics and live tag values in program.%s while it runs.
 `, sc.Name, sc.Name, dep, sc.Language)
 	return 0
+}
+
+// wantForm reports whether naut new opens the interactive form. It does not
+// with --no-input or with no terminal to prompt on, and it does not when
+// the command line already names the project and its template:
+// `naut new my-plant --template minimal` reads as a one-liner, and is one.
+// Everything else the form asks has a default the flags set — the language
+// (--language, st), the Go module (the name), and the features (CI
+// workflow, VS Code setup and git init on; --deploy off) — so the form
+// would only ask the person to press enter through it.
+func wantForm(noInput, tty bool, name string, templateGiven bool) bool {
+	if noInput || !tty {
+		return false
+	}
+	return name == "" || !templateGiven
 }
 
 // stdinIsTTY reports whether there's a terminal to prompt on — without one,
