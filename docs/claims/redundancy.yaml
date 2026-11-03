@@ -350,6 +350,7 @@ claims:
       - go ./runtime TestRunSavesOnceMoreOnAnOrderlyStop
       - go ./runtime TestRunStandbyDoesNotSaveOnStop
       - go ./runtime TestRunLostLeaseDoesNotSaveOnStop
+      - go ./runtime TestRunLogsAFailedLastSave
       - go ./tools/blackbox TestBlackbox/002-F19-retain-saved-on-orderly-stop
     note: >-
       The runtime tests stop Run well inside the first save interval. The

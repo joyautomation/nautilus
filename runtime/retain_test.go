@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -837,4 +838,41 @@ func waitUntil(t *testing.T, cond func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// The last save's failure is logged: a tick's failure is retried and shown
+// in the diagnostics, but nothing follows the last save and the diagnostics
+// end with the process.
+func TestRunLogsAFailedLastSave(t *testing.T) {
+	store := &fakeStore{}
+	rt := newRetained(t, store, nil)
+	var logged strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedWriter{w: &logged}, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	waitUntil(t, func() bool { v, err := rt.Tags().ReadGlobal("Count"); return err == nil && v.I > 0 })
+	rt.Tags().Set("SP", 42.0)
+	store.mu.Lock()
+	store.fail = true
+	store.mu.Unlock()
+	cancel()
+	<-done
+	if out := logged.String(); !strings.Contains(out, "last retain save before stopping failed") || !strings.Contains(out, "store down") {
+		t.Fatalf("no log line for the failed last save; log:\n%s", out)
+	}
+}
+
+// lockedWriter serializes writes from the scan and test goroutines.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  *strings.Builder
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

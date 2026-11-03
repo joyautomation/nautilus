@@ -64,8 +64,9 @@ retain:
 - **When:** every 2 seconds, only when something changed, and only by the
   leader. An orderly stop (Ctrl+C, or SIGTERM from systemd or Kubernetes)
   saves once more after the last scan, so what was written before the stop
-  is kept; it waits up to 5 seconds for that save, and a store that fails or
-  hangs is logged. A hard kill can lose at most 2 seconds of operator input.
+  is kept. It waits up to 5 seconds for that save, and logs it when the
+  save fails or does not finish in time. A hard kill can lose at most 2
+  seconds of operator input.
 - **Load order:** retained values are applied before the first scan and
   win over the manifest's `init:` seeds — what the operator set last
   outlives what the project file said first.

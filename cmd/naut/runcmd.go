@@ -297,7 +297,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 }
 
 // runStopTimeout bounds how long an orderly stop waits for the scan loop's
-// last scan and retain save, leaving the driver teardown after it room
+// last scan and retain save (a ConfigMap save already under way can take
+// longer, up to its PUT and POST timeouts; the exit then cuts it short), leaving the driver teardown after it room
 // inside a supervisor's stop timeout: the groov EPIC unit's
 // TimeoutStopSec=10, Kubernetes' 30 s grace period, systemd's default 90 s.
 const runStopTimeout = 5 * time.Second

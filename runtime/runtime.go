@@ -938,7 +938,20 @@ func (r *Runtime) Run(ctx context.Context) {
 	})
 	loops.Wait()
 	if saved != nil {
+		r.mu.Lock()
+		errsBefore := r.stats.RetainErrors
+		r.mu.Unlock()
 		r.saveRetained(<-saved)
+		// A failed tick is retried and shows in the diagnostics; the last
+		// save has no next tick and the diagnostics end with the process,
+		// so its failure is logged.
+		r.mu.Lock()
+		failed, why := r.stats.RetainErrors > errsBefore, r.stats.LastRetainError
+		r.mu.Unlock()
+		if failed {
+			slog.Error("runtime: the last retain save before stopping failed; changes since the last saved tick are lost",
+				"store", r.retainStore.Kind(), "error", why)
+		}
 	}
 }
 
