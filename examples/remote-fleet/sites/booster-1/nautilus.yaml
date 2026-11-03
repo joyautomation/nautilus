@@ -74,8 +74,9 @@ drivers:
 
 # Sparkplug B: publishes this node's tags to the "Water" group as
 # "Booster1". Each field connection is its own Sparkplug DEVICE: the flow
-# meter's tags (FM1_FlowLps, FM1__Online) ride device "FM1", named after
-# its Modbus source, DBIRTH/DDEATH tracking that meter's connection. The
+# meter's tag (FM1_FlowLps) rides device "FM1", named after its Modbus
+# source, and DBIRTH/DDEATH track that meter's connection, which a host
+# sees as Booster1_FM1__Online. The
 # node is read-only except for `writable:` — the pump speed setpoints the
 # fleet's dispatch commands.
 sparkplug:
