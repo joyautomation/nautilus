@@ -3,7 +3,12 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.19.2] - 2026-11-03
+
+Requires a `naut` built from main (after 0.19.0) for the items that
+`naut check` or the language server answer: the kind, port and pipe checks,
+and tag errors shown on `nautilus.yaml`. Everything else works with naut
+0.19.0.
 
 ### Added
 
@@ -158,6 +163,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Create Project…: the name box has the focus from the start.** Run from
+  the Welcome page, the first step sometimes opened with the focus left on
+  the page behind it, so typing went nowhere until you clicked the box. The
+  steps are now one quick input that is never closed between them, so the
+  focus stays on it. (#443)
+- **Create Project…: Browse works with the simple file dialog.** With
+  `files.simpleDialog.enable` on, the parent-folder step's Browse button
+  ended Create Project instead of opening the picker. Browse now opens the
+  folder picker: "Create project here" on a folder creates the project there,
+  and Escape brings you back to the step. (#528)
 - **A tag error in `nautilus.yaml` is shown on `nautilus.yaml`.** If the
   language server could not read a tag (an unknown `role:`, or a setpoint
   with neither `init:` nor `type:`), it used to drop every tag. Each
