@@ -7,9 +7,12 @@ package sparkplug
 
 import (
 	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
@@ -341,4 +344,97 @@ func TestCommandWritesGoThroughTheFrontDoor(t *testing.T) {
 	if !strings.Contains(buf.String(), "the tag is forced") {
 		t.Errorf("log does not mention the force:\n%s", buf.String())
 	}
+}
+
+// A template command is one front-door write per member it carries, so a
+// member is judged exactly as the same member sent by its member path:
+// a value its type cannot hold is refused (before, a String into the REAL
+// Speed was stored as 0), and a forced member is refused without taking
+// the template's other members with it.
+func TestTemplateCommandMembersGoThroughTheFrontDoor(t *testing.T) {
+	var buf bytes.Buffer
+	n := newCommandNode(t, &buf, WithWritable("Motor1"))
+	tags := n.rt.Tags()
+
+	n.applyCommand("", Payload{Metrics: []Metric{
+		tmplCmd("Motor1", "Motor",
+			Metric{Name: "Speed", Datatype: spb.DataType_String, Value: "fast"},
+			Metric{Name: "START", Datatype: spb.DataType_Boolean, Value: true}),
+	}})
+	if s := fld(t, motor1(t, n), "Speed"); s.Kind != ir.TypeReal || s.F != 1450 {
+		t.Errorf("Motor1.Speed after a String member = %+v, want REAL 1450", s)
+	}
+	if !fld(t, motor1(t, n), "START").B {
+		t.Error("Motor1.START was not written: one refused member took the others with it")
+	}
+	if got := n.Status().CommandsRefused; got != 1 {
+		t.Errorf("CommandsRefused = %d, want 1 (Speed)", got)
+	}
+
+	if err := tags.Force("Motor1.Speed", 10.0); err != nil {
+		t.Fatal(err)
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{
+		tmplCmd("Motor1", "Motor",
+			Metric{Name: "Speed", Datatype: spb.DataType_Double, Value: 99.0},
+			Metric{Name: "START", Datatype: spb.DataType_Boolean, Value: false}),
+	}})
+	if fld(t, motor1(t, n), "START").B {
+		t.Error("Motor1.START still true: a forced member refused the whole template")
+	}
+	tags.Unforce("Motor1.Speed")
+	if s := fld(t, motor1(t, n), "Speed").F; s != 1450 {
+		t.Errorf("Motor1.Speed after a command while forced, then unforced = %v, want 1450", s)
+	}
+	if !strings.Contains(buf.String(), "the tag is forced") {
+		t.Errorf("log does not mention the force:\n%s", buf.String())
+	}
+}
+
+// A declared output no scan has written yet is not in the store. A command
+// to it is written onto a zero of its declared type, by the same strict
+// rule, as an HTTP write is; a wrong type is refused; and a name that is
+// not declared at all is refused rather than created (before, an NCMD for
+// "Nope" made a junk tag).
+func TestCommandToADeclaredOutputNotYetWritten(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program:   cmdProgramST,
+		Libraries: []string{cmdTypesST},
+		Driver:    nio.NewMemory(),
+		Scan:      50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.State("SpeedSP", 12.5),
+			runtime.Typed("Motor1", runtime.RoleState, "Motor"),
+			runtime.Typed("Cmd", runtime.RoleOutput, "REAL"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))}, WithWritable("*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := rt.Tags()
+	if _, err := tags.ReadGlobal("Cmd"); err == nil {
+		t.Fatal("precondition: Cmd is already in the store")
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Cmd", Datatype: spb.DataType_String, Value: "go"}}})
+	if _, err := tags.ReadGlobal("Cmd"); err == nil {
+		t.Error("a String command created the REAL output Cmd")
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Cmd", Datatype: spb.DataType_Double, Value: 2.5}}})
+	if v, err := tags.ReadGlobal("Cmd"); err != nil || v.Kind != ir.TypeReal || v.F != 2.5 {
+		t.Errorf("Cmd after a Double 2.5 command = %+v (%v), want REAL 2.5", v, err)
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Nope", Datatype: spb.DataType_Double, Value: 1.0}}})
+	if _, err := tags.ReadGlobal("Nope"); err == nil {
+		t.Error("a command for an undeclared name created a tag")
+	}
+}
+
+// tmplCmd is a Template command metric for a UDT tag carrying several leaves.
+func tmplCmd(metric, ref string, leaves ...Metric) Metric {
+	return Metric{Name: metric, Datatype: spb.DataType_Template, Value: &Template{TemplateRef: ref, Metrics: leaves}}
 }

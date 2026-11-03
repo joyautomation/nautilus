@@ -50,11 +50,9 @@ func (n *Node) applyCommand(device string, payload Payload) {
 	}
 	// Remaining metrics are writes into the tag store. A metric named after
 	// a TEMPLATE MEMBER ("P101/Speed" flattened to "P101.Speed" by the host)
-	// resolves through Tags.Set to that member of the UDT tag and
-	// read-modify-writes the whole struct; a name that resolves to nothing
-	// is dropped rather than stored, so a host's typo can no longer create a
-	// junk top-level tag that the next NBIRTH would publish back at it.
-	tags := n.rt.Tags()
+	// is written to that member of the UDT tag; a name that resolves to
+	// nothing is refused rather than stored, so a host's typo cannot create
+	// a junk top-level tag that the next NBIRTH would publish back at it.
 	for _, m := range payload.Metrics {
 		if m.Name == "" || m.IsNull || m.Name == "Node Control/Rebirth" {
 			continue
@@ -105,13 +103,36 @@ func (n *Node) applyCommand(device string, payload Payload) {
 			// The runtime's one write front door, as HTTP and OPC UA use:
 			// a value the tag's declared type cannot hold is refused, never
 			// stored as a new type, and a forced tag keeps its force.
-			if err := tags.Write([]runtime.WriteOp{{Path: m.Name, Value: v}})[0]; err != nil {
+			if err := n.writeCommand(m.Name, v); err != nil {
 				n.refuseCommand(writeRefusal(err), m.Name, "datatype", m.Datatype.String(), "error", err)
 				continue
 			}
 			n.log.Debug("sparkplug: command write", "tag", m.Name, "value", m.Value)
 		}
 	}
+}
+
+// writeCommand writes one scalar command through the runtime's write front
+// door. A declared tag the store does not hold yet (an output no scan has
+// written) is written onto a zero of its declared type by the same strict
+// rule, as an HTTP write is, so it cannot be born retyped. A name with no
+// declared type is refused: the node never births such a tag.
+func (n *Node) writeCommand(name string, v any) error {
+	tags := n.rt.Tags()
+	err := tags.Write([]runtime.WriteOp{{Path: name, Value: v}})[0]
+	if !errors.Is(err, runtime.ErrUndefined) || strings.ContainsRune(name, '.') {
+		return err
+	}
+	t := tags.TypeOf(name)
+	if t == nil {
+		return err
+	}
+	nv, serr := ir.SetFieldTypedStrict(ir.Zero(t), t, nil, v, "tag "+name)
+	if serr != nil {
+		return serr
+	}
+	tags.Set(name, nv)
+	return nil
 }
 
 // writeRefusal is the logged reason for a command the runtime's write
@@ -179,44 +200,66 @@ func deviceLabel(device string) string {
 	return device
 }
 
-// commandTemplate merges a Template command metric into the struct tag it
-// names, member by member (ValueFromMetricInto with the tag's CURRENT value as
-// prev). Members the template does not carry keep the value the edge holds;
-// members the tag's type does not know are logged once and ignored.
-//
-// The read-modify-write is not atomic against a concurrent scan — the tag
-// store has no set-one-field primitive here — which is the same window a
-// whole-tag command write already has, and a scan writing the same struct
-// field an operator is commanding is a program bug either way.
+// commandTemplate writes a Template command metric into the struct tag it
+// names, one front-door write per leaf member it carries ("Motor1.Speed",
+// "Motor1.Drive.Torque"), all in one Tags.Write: they land under one lock,
+// so a scan sees them together, and each is judged on its own, exactly as
+// the same member sent by its member path would be. A member the type
+// cannot hold, a forced member and a member the type does not have are
+// refused one by one; the template's other members still apply. Members
+// the template does not carry keep the value the edge holds.
 func (n *Node) commandTemplate(m Metric) {
 	tags := n.rt.Tags()
 	prev, err := tags.ReadGlobal(m.Name)
 	if err != nil {
-		n.warnCommandOnce("unknown:"+m.Name,
-			"sparkplug: template command for a tag this node does not have", "tag", m.Name)
+		n.refuseCommand("a template for a tag this node does not have", m.Name)
 		return
 	}
 	if prev.Kind != ir.TypeStruct || prev.Struct == nil {
-		n.warnCommandOnce("notstruct:"+m.Name,
-			"sparkplug: template command for a tag that is not a UDT", "tag", m.Name, "kind", prev.Kind)
+		n.refuseCommand("a template for a tag that is not a UDT", m.Name, "kind", prev.Kind)
 		return
 	}
-	merged, unknown, err := ValueFromMetricInto(m, prev)
-	if err != nil {
-		n.warnCommandOnce("merge:"+m.Name,
-			"sparkplug: template command rejected", "tag", m.Name, "error", err)
-		return
+	var ops []runtime.WriteOp
+	var leaves []Metric
+	var walk func(path string, t *Template)
+	walk = func(path string, t *Template) {
+		for _, mm := range t.Metrics {
+			if mm.Name == "" || mm.IsNull {
+				continue
+			}
+			p := path + "." + mm.Name
+			if sub, ok := mm.Value.(*Template); ok {
+				if sub != nil {
+					walk(p, sub)
+				}
+				continue
+			}
+			v, ok := commandValue(mm)
+			if !ok {
+				n.refuseCommand("the value does not fit the tag's type", p, "datatype", mm.Datatype.String())
+				continue
+			}
+			ops = append(ops, runtime.WriteOp{Path: p, Value: v})
+			leaves = append(leaves, mm)
+		}
 	}
-	for _, u := range unknown {
-		n.warnCommandOnce("member:"+m.Name+"."+u,
-			"sparkplug: template command names a member the type does not have; ignored",
-			"tag", m.Name, "member", u, "type", prev.Struct.Name)
+	if t, _ := m.Value.(*Template); t != nil {
+		walk(m.Name, t)
 	}
-	if err := tags.Write([]runtime.WriteOp{{Path: m.Name, Value: merged}})[0]; err != nil {
-		n.refuseCommand(writeRefusal(err), m.Name, "error", err)
-		return
+	written := 0
+	for i, err := range tags.Write(ops) {
+		if err != nil {
+			reason := writeRefusal(err)
+			if errors.Is(err, runtime.ErrUndefined) {
+				reason = "a member the type does not have"
+			}
+			n.refuseCommand(reason, ops[i].Path, "member", leaves[i].Name, "type", prev.Struct.Name,
+				"datatype", leaves[i].Datatype.String(), "error", err)
+			continue
+		}
+		written++
 	}
-	n.log.Debug("sparkplug: template command write", "tag", m.Name, "members", len(templateMembers(m)))
+	n.log.Debug("sparkplug: template command write", "tag", m.Name, "members", written)
 }
 
 // templateMembers is the member count of a template metric, for logging.

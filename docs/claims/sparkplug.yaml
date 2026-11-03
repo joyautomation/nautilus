@@ -28,12 +28,17 @@ claims:
       command overwrites the tag in the store for the program to act on.
       It goes through the same write path as HTTP and OPC UA writes: a
       value the tag's declared type cannot hold is refused, never stored as
-      a new type, and a forced tag's command is refused.
+      a new type, and a forced tag's command is refused. A template command
+      is judged member by member the same way; its other members still
+      apply. A declared output no scan has written yet takes a command
+      typed by its declaration; an undeclared name is refused, not created.
     source: "#"
     tests:
       - go ./sparkplug TestWriteGateOpensMatchingTagsOnly
       - go ./sparkplug TestCommandScalarStillReplaces
       - go ./sparkplug TestCommandWritesGoThroughTheFrontDoor
+      - go ./sparkplug TestTemplateCommandMembersGoThroughTheFrontDoor
+      - go ./sparkplug TestCommandToADeclaredOutputNotYetWritten
   - id: SPB-005
     claim: >-
       `Node Control/Rebirth` is honored: the node answers the command with
