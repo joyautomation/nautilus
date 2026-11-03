@@ -84,7 +84,8 @@ naut build      # emit ./my-plant — a self-contained controller binary
 ```
 
 `nautilus.yaml` declares the tasks (one program file each, any language,
-own scan rates), the tags by role, the server, and the field driver.
+own scan rates), the tags by [role](/guides/tag-model/#which-role-fits-which-job),
+the server, and the field driver.
 `naut build` emits one deployable binary, with no Go toolchain anywhere.
 
 `*_test.yaml` holds the acceptance tests, and they run against a **virtual
@@ -175,7 +176,9 @@ full path (`which naut`), or launch VS Code from a terminal with `code .`.
   controller from VS Code, and pull field edits back into git.
 - [Testing](/reference/testing/) — virtual time, and the `*_test.yaml`
   format for asserting on timers and loop responses.
-- [The tag model](/guides/tag-model/) — how tags come to exist, which role
-  fits which job, and the one rule that bites.
+- [The tag model](/guides/tag-model/) — [which role fits which
+  job](/guides/tag-model/#which-role-fits-which-job) (`input`, `output`,
+  `setpoint` or `state`), how tags come to exist, and the one rule that
+  bites.
 - [Language reference](/reference/functions/) — evaluation semantics and
   every built-in operator, function, and function block.

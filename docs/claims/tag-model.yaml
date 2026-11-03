@@ -21,7 +21,7 @@ claims:
       from scan one), a driver input, an operator write through the HMI or
       POST /api/tags to a declared tag (an undeclared name is refused), or
       the program assigning it (a coil write creates the tag).
-    source: "#the-tag-model"
+    source: "#how-a-tag-comes-to-exist"
     tests:
       - go ./runtime TestTagDefs
       - go ./server TestWriteTag
@@ -31,7 +31,7 @@ claims:
     claim: >-
       Reading a tag nobody has ever written stops the scan with "undefined
       tag <name>" instead of running on a silent zero.
-    source: "#the-tag-model"
+    source: "#how-a-tag-comes-to-exist"
     tests:
       - go ./runtime TestScanReadOfUnwrittenTagFaults
   - id: TAG-004
@@ -540,7 +540,7 @@ claims:
       not once per scan, for the main task and additional tasks alike; a
       changed message while still faulting is logged at most once a minute;
       a failing input read is logged the same way.
-    source: "#the-tag-model"
+    source: "#how-a-tag-comes-to-exist"
     tests:
       - go ./runtime TestLogicFaultTransitionsAreLoggedOncePerEpisode
       - go ./runtime TestIOFaultTransitionsAreLoggedOncePerEpisode
