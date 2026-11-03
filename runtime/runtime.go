@@ -895,12 +895,23 @@ func (r *Runtime) ProgramByPOU(pou string) (*Program, string) {
 // loop per additional task. With a Coordinator, a standby's tickers still
 // fire but every scan gates out before touching I/O or logic; with a Retain
 // store, a saver goroutine flushes changed state alongside the loops.
+//
+// Run returns once every loop has finished its last scan. With a Retain
+// store it saves once more before returning, under the same leader check as
+// every tick, so an orderly stop (SIGTERM, Ctrl+C) keeps what changed since
+// the saver's last tick; only a hard kill can lose up to saveInterval
+// (nautilus#531).
 func (r *Runtime) Run(ctx context.Context) {
+	var saved chan []byte
 	if r.retainStore != nil {
-		go r.retainSaver(ctx)
+		saved = make(chan []byte, 1)
+		go func() { saved <- r.retainSaver(ctx) }()
 	}
+	var loops sync.WaitGroup
 	for _, tr := range r.tasks {
+		loops.Add(1)
 		go func(tr *taskRun) {
+			defer loops.Done()
 			runLoop(ctx, tr.scan, func(due time.Time) { r.scanTaskAt(tr, due) }, func(k uint64) {
 				tr.mu.Lock()
 				tr.late.missed += k
@@ -925,6 +936,10 @@ func (r *Runtime) Run(ctx context.Context) {
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
+	loops.Wait()
+	if saved != nil {
+		r.saveRetained(<-saved)
+	}
 }
 
 // schedResult is the SchedStats for a placement request and its outcome.

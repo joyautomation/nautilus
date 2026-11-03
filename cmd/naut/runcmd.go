@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/internal/lsp"
@@ -157,7 +158,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			s.Start(ctx)
 		}
 	}
-	go rt.Run(ctx)
+	// Run returns after the last scan and, with a retain store, its last
+	// save; the stop below waits for it, so an orderly stop keeps a
+	// setpoint written just before it (nautilus#531).
+	runDone := make(chan struct{})
+	go func() { rt.Run(ctx); close(runDone) }()
 
 	// The OPC UA server, when the manifest asks for it: the tag store as
 	// an address space, fed by the store's change generations; writable
@@ -267,8 +272,22 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
 	<-ctx.Done()
+	// Wait for the last scan and the last retain save before the deferred
+	// teardown (the lease release, driver stops) runs, but not forever: a
+	// store that hangs (an unreachable Kubernetes API) must not hold the
+	// process past a supervisor's stop timeout.
+	select {
+	case <-runDone:
+	case <-time.After(runStopTimeout):
+		fmt.Fprintf(os.Stderr, "naut run: the scan loop did not stop within %s; exiting without its last retain save\n", runStopTimeout)
+	}
 	return 0
 }
+
+// runStopTimeout bounds how long an orderly stop waits for the scan loop's
+// last scan and retain save. systemd's default stop timeout is 90 s and
+// Kubernetes' grace period 30 s, so 10 s leaves them room.
+const runStopTimeout = 10 * time.Second
 
 // startAlarms builds the project's alarm engine over rt, before the scan
 // loop starts: the engine registers itself on the runtime's post-scan

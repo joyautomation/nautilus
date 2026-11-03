@@ -1,10 +1,12 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/retain"
@@ -755,5 +757,63 @@ END_PROGRAM`,
 	}
 	if got := read("Calls"); got != 1 {
 		t.Errorf("Calls = %d after a second takeover, want 1: a plain VAR restarts from its declaration", got)
+	}
+}
+
+// An orderly stop (Run's context cancelled: SIGTERM, Ctrl+C) saves once
+// more after the last scan, so a setpoint written less than a save interval
+// before the stop survives the restart. The saver used to return on the
+// cancel with nothing written: the operator's last write was accepted, was
+// live, and came back as the old value (nautilus#531, black-box F-19).
+func TestRunSavesOnceMoreOnAnOrderlyStop(t *testing.T) {
+	store := &fakeStore{}
+	rt := newRetained(t, store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	waitUntil(t, func() bool { v, err := rt.Tags().ReadGlobal("Count"); return err == nil && v.I > 0 }) // the takeover has run
+	rt.Tags().Set("SP", 42.0)
+	cancel() // well inside the first save interval
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if got := store.state.Tags["SP"]; got != 42.0 {
+		t.Fatalf("store holds SP = %v after the stop (saves: %d), want the 42 written just before it", got, store.saves)
+	}
+}
+
+// A replica that is not leading writes nothing on its way out either: the
+// last save is the saver's tick, with the same leader check, or a stopping
+// standby would overwrite the leader's state with its own seeds.
+func TestRunStandbyDoesNotSaveOnStop(t *testing.T) {
+	store := &fakeStore{}
+	rt := newRetained(t, store, &flag{lead: false})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond) // a few gated scans
+	rt.Tags().Set("SP", 42.0)
+	cancel()
+	<-done
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.saves != 0 {
+		t.Fatalf("a standby saved %d time(s) on stop: %+v", store.saves, store.state)
+	}
+}
+
+// waitUntil polls cond for up to five seconds.
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 5 s")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

@@ -62,7 +62,9 @@ retain:
   OF TON`, or a struct with a TON member, as a tag's type, whether the
   manifest or a program's `VAR_EXTERNAL` declares it.
 - **When:** every 2 seconds, only when something changed, and only by the
-  leader. A hard kill can lose at most 2 seconds of operator input.
+  leader. An orderly stop (Ctrl+C, or SIGTERM from systemd or Kubernetes)
+  saves once more after the last scan, so it loses nothing. A hard kill can
+  lose at most 2 seconds of operator input.
 - **Load order:** retained values are applied before the first scan and
   win over the manifest's `init:` seeds — what the operator set last
   outlives what the project file said first.

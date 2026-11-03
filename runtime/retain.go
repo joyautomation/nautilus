@@ -21,7 +21,7 @@ type Coordinator interface {
 }
 
 // saveInterval paces the retain saver. Two seconds bounds how much operator
-// input a hard kill can lose, while keeping a busy HMI session from turning
+// input a hard kill can lose (an orderly stop saves once more, see Run), while keeping a busy HMI session from turning
 // every slider drag into a ConfigMap write.
 const saveInterval = 2 * time.Second
 
@@ -333,15 +333,16 @@ func (r *Runtime) discardRetainedEdit(task, src, base, build string) {
 // rather than dirty flags: writes reach the tag store from operator APIs,
 // field drivers, and logic alike, and a comparison catches all of them
 // without threading a flag through every path. A failed save keeps the old
-// encoding so the next tick retries.
-func (r *Runtime) retainSaver(ctx context.Context) {
+// encoding so the next tick retries. On the context's end it returns the
+// encoding the store holds, for Run's last save after the final scan.
+func (r *Runtime) retainSaver(ctx context.Context) []byte {
 	t := time.NewTicker(saveInterval)
 	defer t.Stop()
 	var lastSaved []byte
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return lastSaved
 		case <-t.C:
 			lastSaved = r.saveRetained(lastSaved)
 		}
