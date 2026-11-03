@@ -93,8 +93,9 @@ async function nextStep<T>(prev: vscode.QuickInput, step: () => Promise<Step<T> 
   return shown;
 }
 
-/** Shows `input` and resolves with what `accept` returns: an answer leaves the
- * input up for the next step, `undefined` keeps waiting. Hiding it (Escape)
+/** Shows `input`; `wire` hooks its events and calls `answer` once the step
+ * has its value, which resolves with the input still up for the next step
+ * (until then the step keeps waiting). Hiding it (Escape)
  * resolves undefined and disposes it. Once answered, the hide that showing
  * the next step causes is ignored. */
 function runStep<T>(input: vscode.QuickInput,
