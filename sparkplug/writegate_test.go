@@ -7,9 +7,13 @@ package sparkplug
 
 import (
 	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
@@ -290,4 +294,315 @@ func newRuntimeForGate(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	var buf bytes.Buffer
 	return newCommandNode(t, &buf).rt
+}
+
+// A command goes through the runtime's write front door, as HTTP and OPC
+// UA writes do: a value the tag's declared type cannot hold is refused,
+// never stored as a new type, and a forced tag keeps its force. Before,
+// an NCMD carrying a String for the REAL SpeedSP turned it into a STRING
+// tag, and a Boolean then into a BOOL.
+func TestCommandWritesGoThroughTheFrontDoor(t *testing.T) {
+	var buf bytes.Buffer
+	n := newCommandNode(t, &buf, WithWritable("SpeedSP", "Motor1.*"))
+	tags := n.rt.Tags()
+
+	for _, m := range []Metric{
+		{Name: "SpeedSP", Datatype: spb.DataType_String, Value: "fast"},
+		{Name: "SpeedSP", Datatype: spb.DataType_Boolean, Value: true},
+		{Name: "Motor1.Speed", Datatype: spb.DataType_String, Value: "fast"},
+	} {
+		n.applyCommand("", Payload{Metrics: []Metric{m}})
+	}
+	if v, err := tags.ReadGlobal("SpeedSP"); err != nil || v.Kind != ir.TypeReal || v.F != 12.5 {
+		t.Errorf("SpeedSP after a String and a Boolean command = %+v (%v), want REAL 12.5", v, err)
+	}
+	if fld(t, motor1(t, n), "Speed").Kind != ir.TypeReal || fld(t, motor1(t, n), "Speed").F != 1450 {
+		t.Errorf("Motor1.Speed after a String command = %+v, want REAL 1450", fld(t, motor1(t, n), "Speed"))
+	}
+	if got := n.Status().CommandsRefused; got != 3 {
+		t.Errorf("CommandsRefused = %d, want 3", got)
+	}
+	if !strings.Contains(buf.String(), "does not fit the tag's type") {
+		t.Errorf("log does not say why:\n%s", buf.String())
+	}
+
+	// A value the type holds is still written: an integer into a REAL.
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "SpeedSP", Datatype: spb.DataType_Int64, Value: int64(40)}}})
+	if v := speedSP(t, n); v != 40 {
+		t.Errorf("SpeedSP after an Int64 40 command = %v, want 40", v)
+	}
+
+	// A forced tag is not written underneath its force.
+	if err := tags.Force("SpeedSP", 7.0); err != nil {
+		t.Fatal(err)
+	}
+	n.applyCommand("", setSpeedSP(99))
+	tags.Unforce("SpeedSP")
+	if v := speedSP(t, n); v != 40 {
+		t.Errorf("SpeedSP after a command while forced, then unforced = %v, want 40 (the command refused)", v)
+	}
+	if !strings.Contains(buf.String(), "the tag is forced") {
+		t.Errorf("log does not mention the force:\n%s", buf.String())
+	}
+}
+
+// A template command is one front-door write per member it carries, so a
+// member is judged exactly as the same member sent by its member path:
+// a value its type cannot hold is refused (before, a String into the REAL
+// Speed was stored as 0), and a forced member is refused without taking
+// the template's other members with it.
+func TestTemplateCommandMembersGoThroughTheFrontDoor(t *testing.T) {
+	var buf bytes.Buffer
+	n := newCommandNode(t, &buf, WithWritable("Motor1"))
+	tags := n.rt.Tags()
+
+	n.applyCommand("", Payload{Metrics: []Metric{
+		tmplCmd("Motor1", "Motor",
+			Metric{Name: "Speed", Datatype: spb.DataType_String, Value: "fast"},
+			Metric{Name: "START", Datatype: spb.DataType_Boolean, Value: true}),
+	}})
+	if s := fld(t, motor1(t, n), "Speed"); s.Kind != ir.TypeReal || s.F != 1450 {
+		t.Errorf("Motor1.Speed after a String member = %+v, want REAL 1450", s)
+	}
+	if !fld(t, motor1(t, n), "START").B {
+		t.Error("Motor1.START was not written: one refused member took the others with it")
+	}
+	if got := n.Status().CommandsRefused; got != 1 {
+		t.Errorf("CommandsRefused = %d, want 1 (Speed)", got)
+	}
+
+	if err := tags.Force("Motor1.Speed", 10.0); err != nil {
+		t.Fatal(err)
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{
+		tmplCmd("Motor1", "Motor",
+			Metric{Name: "Speed", Datatype: spb.DataType_Double, Value: 99.0},
+			Metric{Name: "START", Datatype: spb.DataType_Boolean, Value: false}),
+	}})
+	if fld(t, motor1(t, n), "START").B {
+		t.Error("Motor1.START still true: a forced member refused the whole template")
+	}
+	tags.Unforce("Motor1.Speed")
+	if s := fld(t, motor1(t, n), "Speed").F; s != 1450 {
+		t.Errorf("Motor1.Speed after a command while forced, then unforced = %v, want 1450", s)
+	}
+	if !strings.Contains(buf.String(), "the tag is forced") {
+		t.Errorf("log does not mention the force:\n%s", buf.String())
+	}
+}
+
+// A declared output no scan has written yet is not in the store. A command
+// to it is written onto a zero of its declared type, by the same strict
+// rule, as an HTTP write is; a wrong type is refused; and a name that is
+// not declared at all is refused rather than created (before, an NCMD for
+// "Nope" made a junk tag).
+func TestCommandToADeclaredOutputNotYetWritten(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program:   cmdProgramST,
+		Libraries: []string{cmdTypesST},
+		Driver:    nio.NewMemory(),
+		Scan:      50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.State("SpeedSP", 12.5),
+			runtime.Typed("Motor1", runtime.RoleState, "Motor"),
+			runtime.Typed("Cmd", runtime.RoleOutput, "REAL"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))}, WithWritable("*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := rt.Tags()
+	if _, err := tags.ReadGlobal("Cmd"); err == nil {
+		t.Fatal("precondition: Cmd is already in the store")
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Cmd", Datatype: spb.DataType_String, Value: "go"}}})
+	if _, err := tags.ReadGlobal("Cmd"); err == nil {
+		t.Error("a String command created the REAL output Cmd")
+	}
+	// Spelled in another case, as a host may: the tag is still created
+	// under its declared name.
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "cmd", Datatype: spb.DataType_Double, Value: 2.5}}})
+	if v, err := tags.ReadGlobal("Cmd"); err != nil || v.Kind != ir.TypeReal || v.F != 2.5 {
+		t.Errorf("Cmd after a Double 2.5 command = %+v (%v), want REAL 2.5", v, err)
+	}
+	snap := tags.Snapshot()
+	if _, ok := snap["Cmd"]; !ok {
+		t.Errorf("the output is stored under the host's spelling, not its declared name Cmd: %v", snapKeys(snap))
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Nope", Datatype: spb.DataType_Double, Value: 1.0}}})
+	if _, err := tags.ReadGlobal("Nope"); err == nil {
+		t.Error("a command for an undeclared name created a tag")
+	}
+}
+
+// tmplCmd is a Template command metric for a UDT tag carrying several leaves.
+func tmplCmd(metric, ref string, leaves ...Metric) Metric {
+	return Metric{Name: metric, Datatype: spb.DataType_Template, Value: &Template{TemplateRef: ref, Metrics: leaves}}
+}
+
+func snapKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// A template member named with an index is an element write, refused like
+// every array write: the array refusal looked only at the metric's own
+// name, so T1{"Levels[1]": 42} wrote the element.
+func TestTemplateMemberWithAnIndexIsRefused(t *testing.T) {
+	const types = `
+TYPE
+	Tank : STRUCT
+		Levels : ARRAY[0..3] OF REAL;
+		Fill : BOOL;
+	END_STRUCT;
+END_TYPE
+`
+	const prog = "PROGRAM Main\nVAR_EXTERNAL\n\tT1 : Tank;\nEND_VAR\nEND_PROGRAM\n"
+	rt, err := runtime.New(runtime.Options{
+		Program: prog, Libraries: []string{types}, Driver: nio.NewMemory(), Scan: 50 * time.Millisecond,
+		Tags: []runtime.TagDef{runtime.Typed("T1", runtime.RoleState, "Tank")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))}, WithWritable("*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{
+		tmplCmd("T1", "Tank",
+			Metric{Name: "Levels[1]", Datatype: spb.DataType_Double, Value: 42.0},
+			Metric{Name: "Fill", Datatype: spb.DataType_Boolean, Value: true}),
+	}})
+	if v, ok := rt.Tags().ReadPath("T1.Levels[1]"); !ok || v != 0.0 {
+		t.Errorf("T1.Levels[1] = %v (found %v), want 0: an indexed template member wrote the element", v, ok)
+	}
+	if v, _ := rt.Tags().ReadPath("T1.Fill"); v != true {
+		t.Errorf("T1.Fill = %v, want true: the refused member took the others with it", v)
+	}
+	if got := n.Status().CommandsRefused; got != 1 {
+		t.Errorf("CommandsRefused = %d, want 1 (Levels[1])", got)
+	}
+	if !strings.Contains(buf.String(), "array") {
+		t.Errorf("the refusal does not say it is an array write:\n%s", buf.String())
+	}
+}
+
+// A String metric is only for a STRING tag (or an enumeration, by member
+// name), as OPC UA refuses a String Variant for any other node: the node
+// births nothing else as a String, so "T#5s" or "42" for a TIME or a REAL
+// is the wrong type, not text to parse.
+func TestStringCommandOnlyForAStringTag(t *testing.T) {
+	const types = `
+TYPE
+	Batch : STRUCT
+		Name : STRING;
+		Hold : TIME;
+	END_STRUCT;
+END_TYPE
+`
+	const prog = "PROGRAM Main\nVAR_EXTERNAL\n\tB1 : Batch;\n\tRecipe : STRING;\n\tHold : TIME;\nEND_VAR\nEND_PROGRAM\n"
+	rt, err := runtime.New(runtime.Options{
+		Program: prog, Libraries: []string{types}, Driver: nio.NewMemory(), Scan: 50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.Typed("B1", runtime.RoleState, "Batch"),
+			runtime.State("Recipe", "plain"),
+			runtime.Typed("Hold", runtime.RoleSetpoint, "TIME"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))}, WithWritable("*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := rt.Tags()
+	n.applyCommand("", Payload{Metrics: []Metric{
+		{Name: "Recipe", Datatype: spb.DataType_String, Value: "spicy"},
+		{Name: "Hold", Datatype: spb.DataType_String, Value: "5000"},
+		tmplCmd("B1", "Batch",
+			Metric{Name: "Name", Datatype: spb.DataType_String, Value: "lot 7"},
+			Metric{Name: "Hold", Datatype: spb.DataType_String, Value: "5000"}),
+	}})
+	if v, _ := tags.ReadPath("Recipe"); v != "spicy" {
+		t.Errorf("Recipe = %v, want spicy: a String metric for a STRING tag is written", v)
+	}
+	if v, _ := tags.ReadPath("B1.Name"); v != "lot 7" {
+		t.Errorf("B1.Name = %v, want lot 7", v)
+	}
+	if v, err := tags.ReadGlobal("Hold"); err == nil && v.Kind != ir.TypeTime {
+		t.Errorf("Hold is now %v: a String metric retyped the TIME tag", v.Kind)
+	}
+	if v, _ := tags.ReadPath("Hold"); v == int64(5000) {
+		t.Error("Hold = 5000: a String metric was parsed into a TIME tag")
+	}
+	if v, _ := tags.ReadPath("B1.Hold"); v == int64(5000) {
+		t.Error("B1.Hold = 5000: a String member was parsed into a TIME member")
+	}
+	if got := n.Status().CommandsRefused; got != 2 {
+		t.Errorf("CommandsRefused = %d, want 2 (Hold, B1.Hold)", got)
+	}
+	// Refused for being a String, before any parsing: the reason names it.
+	if !strings.Contains(buf.String(), "a String metric") {
+		t.Errorf("the scalar refusal does not say it is a String metric for a non-STRING tag:\n%s", buf.String())
+	}
+}
+
+// A command to an input is refused, as HTTP and OPC UA refuse it, whatever
+// sparkplug.writable opens: the driver replaces an input before every scan,
+// so the write would be discarded unread. A device carries only its
+// connection's inputs, so this is what a DCMD to one now gets.
+func TestCommandToAnInputIsRefused(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Main\nVAR_EXTERNAL\n\tLevel : REAL;\n\tFlow : REAL;\n\tLevelSP : REAL;\nEND_VAR\nEND_PROGRAM\n",
+		Driver:  nio.NewMemory(), Scan: 50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.Input("Level", runtime.Init(4.5)),
+			runtime.Input("Flow", runtime.Init(1.0)),
+			runtime.Setpoint("LevelSP", 50.0),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))},
+		WithWritable("*"), WithDevice(Device{ID: "plc1", Tags: []string{"Flow"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := func(name string, v float64) Payload {
+		return Payload{Metrics: []Metric{{Name: name, Datatype: spb.DataType_Double, Value: v}}}
+	}
+	n.applyCommand("", cmd("Level", 99))    // a node-level input
+	n.applyCommand("", cmd("level", 99))    // in another case
+	n.applyCommand("plc1", cmd("Flow", 99)) // a device's input, by DCMD
+	n.applyCommand("", cmd("LevelSP", 60))  // a setpoint: written
+	tags := rt.Tags()
+	if v := tags.Real("Level"); v != 4.5 {
+		t.Errorf("Level = %v, want 4.5: a command wrote an input", v)
+	}
+	if v := tags.Real("Flow"); v != 1.0 {
+		t.Errorf("Flow = %v, want 1.0: a DCMD wrote the device's input", v)
+	}
+	if v := tags.Real("LevelSP"); v != 60 {
+		t.Errorf("LevelSP = %v, want 60: a setpoint command must still land", v)
+	}
+	if got := n.Status().CommandsRefused; got != 3 {
+		t.Errorf("CommandsRefused = %d, want 3", got)
+	}
+	if !strings.Contains(buf.String(), "an input") {
+		t.Errorf("the refusal does not say the tag is an input:\n%s", buf.String())
+	}
 }

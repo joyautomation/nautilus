@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -8,9 +9,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"flag"
 	"math/big"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -339,7 +342,22 @@ func TestExpiredClientCertificateIsRefused(t *testing.T) {
 // never into this server), so under the race detector the test renews less
 // often, on Basic256Sha256 with a 2 s lifetime, and the server's side is
 // still checked for races.
+//
+// That race can also panic: renew waits on a sync.WaitGroup that every
+// request adds to, and nothing stops a request adding while a woken Wait has
+// yet to return ("sync: WaitGroup is reused before previous Wait has
+// returned", in the renewal goroutine, where no test can recover it). It
+// killed the whole package's test binary in CI. So the test runs in a child
+// process (this test binary, re-run for this test alone): the child's panic
+// is that child's, and a run that dies of exactly that panic is run again.
+// Any other failure fails the test as before, and the child is the same
+// binary, so under -race the server is still race-checked and under -cover
+// its coverage still counts.
 func TestSecureChannelRenews(t *testing.T) {
+	if os.Getenv(renewChildEnv) == "" {
+		runRenewalChild(t)
+		return
+	}
 	s, dir := startSecure(t)
 	const uri = "urn:test:renew"
 	der, key := clientCert(t, uri, time.Now().Add(-time.Hour), 24*time.Hour)
@@ -362,6 +380,53 @@ func TestSecureChannelRenews(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// renewChildEnv marks the child process TestSecureChannelRenews runs in.
+const renewChildEnv = "NAUTILUS_TEST_RENEW_CHILD"
+
+// runRenewalChild runs TestSecureChannelRenews in a child process and fails
+// t as the child failed, running it again (three tries in all) only when the
+// child died of gopcua's renewal WaitGroup panic.
+func runRenewalChild(t *testing.T) {
+	t.Helper()
+	args := []string{"-test.run=^TestSecureChannelRenews$", "-test.count=1", "-test.v"}
+	// Under -cover the child writes its counters where the parent's are
+	// merged from.
+	if f := flag.Lookup("test.gocoverdir"); f != nil && f.Value.String() != "" {
+		args = append(args, "-test.gocoverdir="+f.Value.String())
+	}
+	const tries = 3
+	for try := 1; try <= tries; try++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		cmd := exec.CommandContext(ctx, os.Args[0], args...)
+		cmd.Env = append(os.Environ(), renewChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err == nil && bytes.Contains(out, []byte("--- PASS: TestSecureChannelRenews")) {
+			return
+		}
+		if !gopcuaRenewalPanic(out) {
+			t.Fatalf("child run: %v\n%s", err, out)
+		}
+		t.Logf("try %d of %d: gopcua's client renewal panicked on its own WaitGroup (not this server):\n%s", try, tries, panicLines(out))
+	}
+	t.Fatalf("gopcua's client renewal panicked in all %d tries", tries)
+}
+
+// gopcuaRenewalPanic reports whether out is a process dying of gopcua's
+// secure channel WaitGroup misuse: a sync.WaitGroup panic whose goroutine is
+// in github.com/gopcua/opcua/uasc's SecureChannel.
+func gopcuaRenewalPanic(out []byte) bool {
+	i := bytes.Index(out, []byte("panic: sync: WaitGroup"))
+	return i >= 0 && bytes.Contains(out[i:], []byte("github.com/gopcua/opcua/uasc.(*SecureChannel)"))
+}
+
+// panicLines is the panic message and the frames under it.
+func panicLines(out []byte) string {
+	s := string(out[bytes.Index(out, []byte("panic: ")):])
+	lines := strings.SplitN(s, "\n", 12)
+	return strings.Join(lines[:len(lines)-1], "\n")
 }
 
 // The status row warns 30 days before the server certificate expires.

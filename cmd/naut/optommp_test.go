@@ -79,6 +79,21 @@ END_PROGRAM
 	if out, code := capture(t, func() int { return runCheck([]string{dir}) }); code != 0 {
 		t.Fatalf("naut check on the imported project exited %d:\n%s", code, out)
 	}
+
+	// The tag file types every tag, so a program reads them with no
+	// VAR_EXTERNAL at all: a channel, a latch, the scratchpad, the
+	// driver's status.
+	bare := `PROGRAM Main
+VAR n : UDINT; END_VAR
+EPIC_M1_DO00 := EPIC_M0_DI03 OR EPIC_M0_DI00_OnLatch;
+EPIC_SP_F0 := EPIC_M2_AI00 * 2.0;
+IF EPIC__Online THEN n := EPIC__Outages; END_IF;
+END_PROGRAM
+`
+	os.WriteFile(filepath.Join(dir, "main.st"), []byte(bare), 0o644)
+	if out, code := capture(t, func() int { return runCheck([]string{dir}) }); code != 0 {
+		t.Fatalf("naut check with no VAR_EXTERNAL exited %d:\n%s", code, out)
+	}
 }
 
 func TestOptommpImportModbus(t *testing.T) {

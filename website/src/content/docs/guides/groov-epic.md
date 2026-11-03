@@ -51,9 +51,10 @@ naut optommp import --host <epic>   # writes optommp_manifest.yaml + tags/optomm
 
 `browse` reads what the processor itself reports: module type and channel
 type per slot, the channel-present mask, the current values. `import`
-turns that into a driver manifest and a tag file, one tag per channel,
-named `<id>_M<slot>_<Kind><ch>` (`EPIC_M1_DO11` is slot 1, digital output
-11). Outputs are writable bindings. Re-run it after changing a module or
+turns that into a driver manifest and a tag file, one typed tag per
+channel (BOOL for digital, REAL for analog, so a program reads them
+without `VAR_EXTERNAL`), named `<id>_M<slot>_<Kind><ch>`
+(`EPIC_M1_DO11` is slot 1, digital output 11). Outputs are writable bindings. Re-run it after changing a module or
 a channel type in groov Manage; the output is byte-identical when nothing
 changed, so the diff shows exactly what moved.
 

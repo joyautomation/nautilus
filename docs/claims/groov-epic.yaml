@@ -21,7 +21,8 @@ claims:
     claim: >-
       `naut optommp import` writes an optommp driver manifest and a tag
       file that load and check as a project: one tag per channel named
-      <id>_M<slot>_<Kind><ch>, outputs writable, with _Count, _OnLatch /
+      <id>_M<slot>_<Kind><ch>, outputs writable, each tag typed from its
+      point so a program needs no VAR_EXTERNAL, with _Count, _OnLatch /
       _OffLatch, _Quality and scratchpad tags on request.
     source: "#import-the-chassis"
     tests:

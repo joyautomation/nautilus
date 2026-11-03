@@ -399,6 +399,33 @@ func (t TagBinding) format() (Format, error) {
 	return ParseFormat(t.Format)
 }
 
+// IECType names the IEC elementary type that holds what this binding
+// delivers, for a generated tag file's type: BOOL for a coil, a discrete,
+// bool and bit:N; the integer of the register's own width and sign for an
+// unscaled integer (int16 INT, uint16 UINT, int32 DINT, uint32 UDINT);
+// REAL for float32 and LREAL for float64; and REAL for a scaled or offset
+// integer, whose engineering value has a fraction. "" for a format that
+// does not parse.
+func (t TagBinding) IECType() string {
+	f, err := t.format()
+	if err != nil {
+		return ""
+	}
+	scaled := (t.Scale != 0 && t.Scale != 1) || t.Offset != 0
+	switch f.Kind {
+	case "bool", "bit":
+		return "BOOL"
+	case "float64":
+		return "LREAL"
+	case "float32":
+		return "REAL"
+	}
+	if scaled {
+		return "REAL"
+	}
+	return map[string]string{"int16": "INT", "uint16": "UINT", "int32": "DINT", "uint32": "UDINT"}[f.Kind]
+}
+
 // overlapErrors flags bindings on the same (source, table) whose register
 // spans intersect incoherently. Two bindings MAY share an address when both
 // are single-word — a status word read as uint16 alongside its bit:N flags,

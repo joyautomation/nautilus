@@ -26,7 +26,9 @@ tasks:
     scan: 100ms
 
 # Tags by role: input (driver → tag), output (tag → driver),
-# setpoint (operator-writable, exists from scan one), state (retained).
+# setpoint (operator-writable, exists from scan one, kept across a restart
+# by a retain: section), state (logic-owned; kept only with retain: true
+# and a retain: section).
 # An input needs init (its value until the driver supplies it) — a READ of
 # a tag that was never written faults the scan, on purpose. type: is the
 # tag's data type (BOOL, INT, DINT, REAL, TIME, STRING, or a TYPE your ST

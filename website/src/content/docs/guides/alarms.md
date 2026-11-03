@@ -182,7 +182,9 @@ POST /api/alarms/shelve    {"id":"…","seconds":1800,"by":"operator1"}
 POST /api/alarms/unshelve  {"id":"…","by":"operator1"}
 ```
 
-Reads are ungated like every other read. Writes go through the same
+Responses and status codes are in the
+[HTTP API](/guides/http-api/#alarms) reference. Reads are ungated like
+every other read. Writes go through the same
 authorization as a tag write — `Authorization: Bearer` or
 `X-Nautilus-Token`, same-origin by default — and a standby forwards them
 to the leader exactly the way it forwards a tag write.
