@@ -159,13 +159,36 @@ logic gates on `__Online`, which is present from t=0 (`false` until the
 first birth): `WellAlarm := W6__Online AND W6_Well_Level > 90.0`, never
 `WellAlarm := W6_Well_Level > 90.0` alone.
 
+The manifest names each companion. `naut sparkplug import` writes the
+names on every node and device; a hand-written manifest can leave them
+out to get the defaults above, or set one to rename a companion:
+
+```yaml
+nodes:
+    - edgenode: W6
+      onlinetag: W6__Online
+      outagestag: W6__Outages
+      birthtag: W6__LastBirthMs
+      rebirthtag: W6__Rebirth
+      devices:
+        - { device: PLC1, onlinetag: W6_PLC1__Online, outagestag: W6_PLC1__Outages }
+```
+
+A binding may not take a companion's name.
+
 **`__Outages` counts the falls of `__Online`.** The first birth is not an
 outage, and a site that has not birthed yet has had none. A site counts
 one on each NDEATH that matches its birth; a late will from an old
 session does not count. A device counts one on its DDEATH and on its
-node's NDEATH. A node rebirth takes the node's devices offline until each
-one's DBIRTH, so it counts one for each device that was online; the node's
-own count does not change. The counters only go up, so a program that
+node's NDEATH. A device that is already offline does not count again.
+
+**A rebirth counts as an outage for each device that was online.** A node
+rebirth takes the node's devices offline until each one's DBIRTH, so
+their `__Online` falls. That is true whether the host asked for the
+rebirth after a sequence gap or an operator pulsed `__Rebirth`. The
+node's own count does not change, because the node stays online.
+
+The counters only go up, so a program that
 compares them with last scan's values never misses an outage between
 scans. A program uses them to hold its outputs after an outage until an
 operator acknowledges it; see [Holding outputs until an operator
@@ -191,9 +214,10 @@ fully-birthed fleet reports an empty map. A tag never named in it is Good.
 
 Only data (read-only) bindings get a verdict. Writable bindings — plain
 outputs, member outputs, and the
-`__Online`/`__Outages`/`__LastBirthMs`/`__Rebirth` companions — are host-authored, not field readings, and are always Good;
-`__Online` (etc.) already **is** the quality signal for the tags around
-it, so `Quality()` never puts a verdict on top of a verdict.
+`__Online`/`__Outages`/`__LastBirthMs`/`__Rebirth` companions — are
+host-authored, not field readings, and are always Good; `__Online` (etc.)
+already **is** the quality signal for the tags around it, so `Quality()`
+never puts a verdict on top of a verdict.
 
 ## Writes: DCMD/NCMD
 

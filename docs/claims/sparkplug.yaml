@@ -130,19 +130,21 @@ claims:
   - id: SPB-015
     claim: >-
       Every field connection publishes as its own Sparkplug device under
-      the edge node, carrying the input tags it delivers (its `__Online`
-      companion included, and `__Outages` for a modbus source or a
-      Sparkplug host); computed tags, program state, outputs and every
-      tag of the `memory` loopback publish at node level.
+      the edge node, carrying the input tags it delivers that the project
+      declares; a companion such as `__Online` or `__Outages` is in the
+      device's DBIRTH only when the project declares it; computed tags,
+      program state, outputs and every tag of the `memory` loopback publish
+      at node level.
     source: "#devices-and-connection-health"
     tests:
       - go ./sparkplug TestMetricsSplitBetweenDevicesAndTheNode
       - go ./internal/project TestSparkplugDevicePerConnection
+      - go ./internal/project TestSparkplugDeviceCarriesOnlyDeclaredTags
       - go ./internal/project TestSparkplugMemoryMakesNoDevice
     partial: true
     note: >-
-      One device per connection carrying its inputs, `__Online` and
-      (modbus, sparkplug-host) `__Outages`, the
+      One device per connection carrying its declared inputs (an
+      undeclared companion left out, a declared one kept), the
       memory loopback making none, and tags outside a device's list riding
       the NBIRTH are asserted. That outputs publish at node level is not, and
       the code disagrees for modbus: a writable binding that is also polled

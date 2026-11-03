@@ -146,6 +146,7 @@ func TestOutagesStartingOfflineIsNotAnOutage(t *testing.T) {
 // as an outage; waking it does not.
 func TestOutagesParkingCounts(t *testing.T) {
 	srv := newSlave(t)
+	srv.Unit(1).SetHolding(0, 3)
 	src := fastSource("DEV", srv.Addr())
 	src.Enable = "DEV_En"
 	m := Manifest{
@@ -158,7 +159,7 @@ func TestOutagesParkingCounts(t *testing.T) {
 	}
 	startDriver(t, d)
 	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
-	waitFor(t, "connect", func() bool { return read()["DEV__Online"] == true })
+	waitFor(t, "first read", func() bool { return read()["PV"] == int64(3) })
 
 	if err := d.WriteOutputs(nio.Values{"DEV_En": false}); err != nil {
 		t.Fatal(err)
@@ -173,6 +174,72 @@ func TestOutagesParkingCounts(t *testing.T) {
 	waitFor(t, "unparked", func() bool { return read()["DEV__Online"] == true })
 	if got := read()["DEV__Outages"]; got != int64(1) {
 		t.Fatalf("waking the source changed __Outages to %#v, want int64(1)", got)
+	}
+}
+
+// A gateway that accepts TCP and never answers is not a device that went
+// away: the driver reconnects to it over and over, and none of those
+// connections counts as an outage.
+func TestOutagesSilentGatewayDoesNotCount(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var mu sync.Mutex
+	accepted := 0
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			accepted++
+			mu.Unlock()
+			t.Cleanup(func() { _ = c.Close() }) // read nothing, answer nothing
+		}
+	}()
+
+	src := fastSource("DEV", ln.Addr().String())
+	src.Timeout = 30 * time.Millisecond
+	m := Manifest{
+		Sources: []Source{src},
+		Tags:    []TagBinding{{Name: "PV", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"}},
+	}
+	d, err := New(m, WithScanRate(15*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "several connections to the silent gateway", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return accepted >= 4
+	})
+	if v, _ := d.ReadInputs(); v["DEV__Outages"] != int64(0) {
+		t.Fatalf("a gateway that never answered: __Outages = %#v, want int64(0)", v["DEV__Outages"])
+	}
+}
+
+// Stopping the driver takes __Online false, but a stop is not an outage.
+func TestOutagesStopIsNotAnOutage(t *testing.T) {
+	srv := newSlave(t)
+	srv.Unit(1).SetHolding(0, 3)
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", srv.Addr())},
+		Tags:    []TagBinding{{Name: "PV", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"}},
+	}
+	d, err := New(m, WithScanRate(15*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "first read", func() bool { v, _ := d.ReadInputs(); return v["PV"] != nil })
+	d.Stop()
+	v, _ := d.ReadInputs()
+	if v["DEV__Online"] != false || v["DEV__Outages"] != int64(0) {
+		t.Fatalf("after Stop: __Online = %#v, __Outages = %#v, want false and int64(0)", v["DEV__Online"], v["DEV__Outages"])
 	}
 }
 

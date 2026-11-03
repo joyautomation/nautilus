@@ -210,7 +210,11 @@ in `OutputNames()` alongside the writable bindings.
 Each source also gets `<source>__Outages`, a DINT input: the number of
 times `__Online` has gone false since nautilus started. The first connect
 is not an outage, and a source that has not connected yet has had none.
-Parking a source with `enable:` counts, because `__Online` goes false.
+A fall counts only when the device had answered a read on that
+connection, so a gateway that accepts the connection and never replies
+does not count, however often the driver reconnects. Stopping nautilus
+does not count. Parking a source with `enable:` counts, because
+`__Online` goes false.
 The counter only goes up, so a program that compares it with last scan's
 value never misses an outage between scans. A program uses it to hold its
 outputs after an outage until an operator acknowledges it; see [Holding

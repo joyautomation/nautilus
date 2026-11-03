@@ -578,12 +578,17 @@ claims:
       `Start` with good quality: the times `__Online` has gone false since
       nautilus started. The first connect is not an outage, a source that
       has not connected yet has had none, and each later fall adds one,
-      parking with `enable:` included. A binding may not take the name.
+      parking with `enable:` included. A fall counts only when the device
+      had answered a read on that connection (a gateway that accepts and
+      never replies does not count), and stopping nautilus does not count.
+      A binding may not take the name.
     source: "#the-__online-companion-and-enable"
     tests:
       - go ./modbus TestOutagesCountsEachFallNotTheFirstConnect
       - go ./modbus TestOutagesStartingOfflineIsNotAnOutage
       - go ./modbus TestOutagesParkingCounts
+      - go ./modbus TestOutagesSilentGatewayDoesNotCount
+      - go ./modbus TestOutagesStopIsNotAnOutage
       - go ./modbus TestOutagesCompanionCollidesWithABinding
       - go ./modbus TestConnectionsSplitBySource
     partial: true

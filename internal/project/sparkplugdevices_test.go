@@ -158,3 +158,55 @@ func TestSparkplugWritableReachesTheNode(t *testing.T) {
 		t.Fatalf("err = %v, want the bad writable pattern named", err)
 	}
 }
+
+// A device publishes only the tags the project declares. The runtime never
+// writes an undeclared input into the tag store, so a companion no tag file
+// names (M2__Online, the __Outages counters) would only hold the DBIRTH
+// back for its wait and then be missing from it anyway. A companion the
+// project does declare (M1__Online here) is published as before.
+func TestSparkplugDeviceCarriesOnlyDeclaredTags(t *testing.T) {
+	files := collectorFiles("", "tag-files: [tags/dev.yaml]\n")
+	files["tags/dev.yaml"] = &fstest.MapFile{Data: []byte(`- { name: M1_KW, role: input }
+- { name: M1_PF, role: input }
+- { name: M1__Online, role: input }
+- { name: M2_KW, role: input }
+- { name: W1_Level, role: input }
+`)}
+	p, err := Load(files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(p.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devs, err := sparkplugDevices(p.drivers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, d := range declaredOnly(devs, rt.Inputs()) {
+		got[d.ID] = d.Tags
+	}
+	want := map[string][]string{
+		"M1":             {"M1_KW", "M1_PF", "M1__Online"},
+		"M2":             {"M2_KW"},
+		"sparkplug-host": {"W1_Level"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("device tags = %v, want %v", got, want)
+	}
+
+	// The edge node is built with the filtered lists.
+	node, err := p.Sparkplug(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, d := range node.Status().Devices {
+		counts[d.ID] = d.Tags
+	}
+	if want := map[string]int{"M1": 3, "M2": 1, "sparkplug-host": 1}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("node device tag counts = %v, want %v", counts, want)
+	}
+}

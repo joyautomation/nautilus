@@ -560,7 +560,7 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range devices {
+	for _, d := range declaredOnly(devices, rt.Inputs()) {
 		opts = append(opts, sparkplug.WithDevice(d))
 	}
 	opts = append(opts, sparkplug.WithWritable(c.Writable...))
@@ -612,6 +612,31 @@ func sparkplugDevices(drivers []nio.NamedDriver) ([]sparkplug.Device, error) {
 		}
 	}
 	return out, nil
+}
+
+// declaredOnly keeps, of each device's tags, the ones the project declares
+// as inputs. The runtime writes only declared inputs into the tag store, so
+// an undeclared tag (a driver companion such as <source>__Outages that no
+// tag file names) would never arrive: the device would wait out its birth
+// delay for it and be born without it anyway. Left out, it neither delays
+// the DBIRTH nor appears in it.
+func declaredOnly(devs []sparkplug.Device, declared []string) []sparkplug.Device {
+	in := make(map[string]bool, len(declared))
+	for _, name := range declared {
+		in[name] = true
+	}
+	out := make([]sparkplug.Device, len(devs))
+	for i, d := range devs {
+		var tags []string
+		for _, name := range d.Tags {
+			if in[name] {
+				tags = append(tags, name)
+			}
+		}
+		d.Tags = tags
+		out[i] = d
+	}
+	return out
 }
 
 // hasProgramDecl reports whether src contains a PROGRAM declaration,

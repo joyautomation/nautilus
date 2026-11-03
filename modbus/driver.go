@@ -47,8 +47,9 @@ const suffixOnline = "__Online"
 
 // suffixOutages names the second per-source companion: "<source>__Outages"
 // is a DINT input counting the times __Online has gone false since the
-// driver started. The first connect is not an outage, and neither is
-// starting offline. A program compares it with last scan's value to latch
+// driver started, after the device had answered on that connection. The
+// first connect is not an outage, and neither is starting offline, a
+// connection the device never answered on, or Stop. A program compares it with last scan's value to latch
 // an outage it might otherwise miss between scans (issue #449; optommp and
 // plcnext deliver the same name).
 const suffixOutages = "__Outages"
@@ -516,9 +517,10 @@ func (d *Driver) Stop() {
 // ── io.Driver ────────────────────────────────────────────────────────────
 
 // ReadInputs merges the latest per-source snapshots, __Online and
-// __Outages companions included. Once Start has been called it never errors: a dead source holds
-// its last values (the tag store must never see a zero because a cable was
-// pulled) and quality rides on Quality() and the companions. A data tag
+// __Outages companions included. Once Start has been called it never
+// errors: a dead source holds its last values (the tag store must never see
+// a zero because a cable was pulled) and quality rides on Quality() and the
+// companions. A data tag
 // never delivered stays absent from the delivery: the runtime holds it at
 // its init: or zero (a protocol input, runtime.TagDef.Comms) and Quality
 // says NotConnected — __Online is the guard.
@@ -736,8 +738,7 @@ func (d *Driver) run(ctx context.Context, s *source) {
 			continue
 		}
 		s.mu.Lock()
-		s.setOnlineLocked(true)
-		s.answered = false
+		s.online, s.answered = true, false
 		s.mu.Unlock()
 		s.setState("connected", nil)
 		d.log.Info("modbus: connected", "source", s.cfg.ID, "addr", s.cfg.Addr(), "blocks", len(s.blocks))
@@ -746,8 +747,11 @@ func (d *Driver) run(ctx context.Context, s *source) {
 
 		_ = c.Close()
 		s.mu.Lock()
-		s.setOnlineLocked(false)
 		answered := s.answered
+		// An outage is losing a device that was talking: a connection the
+		// device never answered on (a gateway that accepts TCP and stays
+		// silent) is not one, and neither is the driver stopping.
+		s.goOfflineLocked(answered && ctx.Err() == nil)
 		s.mu.Unlock()
 		if ctx.Err() != nil || !s.isEnabled() {
 			continue // shutting down, or parking: no wait, no escalation
@@ -1219,17 +1223,18 @@ func (s *source) setState(state string, err error) {
 
 func (s *source) setOnline(on bool) {
 	s.mu.Lock()
-	s.setOnlineLocked(on)
+	s.online = on
 	s.mu.Unlock()
 }
 
-// setOnlineLocked records whether the source is connected; a fall is an
-// outage (__Outages). Caller holds s.mu.
-func (s *source) setOnlineLocked(on bool) {
-	if s.online && !on {
+// goOfflineLocked takes the source offline, counting an outage
+// (__Outages) when outage is true and the source was online. Caller holds
+// s.mu.
+func (s *source) goOfflineLocked(outage bool) {
+	if s.online && outage {
 		s.outages++
 	}
-	s.online = on
+	s.online = false
 }
 
 // Interface conformance — the same trio io.Memory proves.

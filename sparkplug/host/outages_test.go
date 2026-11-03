@@ -51,7 +51,8 @@ func TestOutagesNodeCountsEachDeath(t *testing.T) {
 
 // <site>_<device>__Outages counts the device's falls: a DDEATH, its node's
 // NDEATH, and a node rebirth that darks it until its DBIRTH. A device that
-// is already offline does not count twice.
+// is already offline does not count again: not for a second DDEATH, a
+// node death or a rebirth.
 func TestOutagesDeviceCountsEachFall(t *testing.T) {
 	d, _ := newTestDriver(t, testManifest(), Config{})
 	if got := outagesOf(t, d, "W6_PLC1__Outages"); got != int64(0) {
@@ -75,6 +76,10 @@ func TestOutagesDeviceCountsEachFall(t *testing.T) {
 		{"spBv1.0/G/NBIRTH/W6", enc(t, nbirth(2)), 2, 1}, // already dark: no second count
 		{"spBv1.0/G/DBIRTH/W6/PLC1", enc(t, data(1, boolean("Pump/Run", true))), 2, 1},
 		{"spBv1.0/G/NBIRTH/W6", enc(t, nbirth(3)), 3, 1}, // a rebirth darks a live device
+		{"spBv1.0/G/DBIRTH/W6/PLC1", enc(t, data(1, boolean("Pump/Run", true))), 3, 1},
+		{"spBv1.0/G/DDEATH/W6/PLC1", enc(t, data(2)), 4, 1},
+		{"spBv1.0/G/DDEATH/W6/PLC1", enc(t, data(3)), 4, 1}, // a repeated DDEATH counts once
+		{"spBv1.0/G/NDEATH/W6", enc(t, ndeath(3)), 4, 2},    // the device was already dark
 	}
 	for _, s := range steps {
 		d.handleMessage(s.topic, s.payload)
