@@ -164,7 +164,7 @@ func (n *Node) publishPassLocked(now time.Time) (msgs []sfRecord, deviceEvents [
 			if n.known[name] {
 				continue // already birthed — the overwhelmingly common case
 			}
-			if dev, owned := n.tagOwner[name]; owned && dev != "" && !n.devHealth[dev] {
+			if dev, owned := n.ownerOf(name); owned && dev != "" && !n.devHealth[dev] {
 				continue
 			}
 			n.scheduleRebirthLocked()
@@ -263,7 +263,7 @@ func (n *Node) refreshShapeLocked(tags *runtime.Tags) {
 			continue // NoPublish: not a metric, not our business
 		}
 		n.tagRBE[name] = rbe
-		owner := n.tagOwner[name]
+		owner, _ := n.ownerOf(name)
 		n.ownerName[owner] = append(n.ownerName[owner], name)
 		kept = append(kept, name)
 	}

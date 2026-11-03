@@ -63,7 +63,7 @@ type Node struct {
 	cli mqtt.Client
 
 	devices  []Device
-	tagOwner map[string]string // tag -> device id ("" = node level)
+	tagOwner map[string]string // ir.NameKey(tag) -> device id; use ownerOf
 	writable []string          // WithWritable patterns; empty = every write refused
 	flatten  bool              // WithFlattenUDTs: UDT members as plain metrics, no Templates
 
@@ -262,10 +262,10 @@ func New(rt *runtime.Runtime, cfg Config, opts ...Option) (*Node, error) {
 		}
 		seen[d.ID] = true
 		for _, t := range d.Tags {
-			if other, dup := n.tagOwner[t]; dup {
+			if other, dup := n.ownerOf(t); dup {
 				return nil, fmt.Errorf("sparkplug: tag %q is on both device %q and device %q — a tag publishes on exactly one", t, other, d.ID)
 			}
-			n.tagOwner[t] = d.ID
+			n.tagOwner[ir.NameKey(t)] = d.ID
 		}
 	}
 	return n, nil
@@ -803,4 +803,14 @@ func (n *Node) Status() Status {
 		})
 	}
 	return s
+}
+
+// ownerOf is the device a tag publishes on ("" at node level) and whether
+// the tag is on a device at all. Tag names are case-insensitive, as the
+// store's are: keying the table by the configured spelling let a command
+// for "speedsp" miss plc1's SpeedSP and write it from an NCMD (#506
+// review).
+func (n *Node) ownerOf(tag string) (string, bool) {
+	dev, ok := n.tagOwner[ir.NameKey(tag)]
+	return dev, ok
 }

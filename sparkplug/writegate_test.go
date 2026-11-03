@@ -220,6 +220,28 @@ func TestCommandReachesOnlyItsOwnDevice(t *testing.T) {
 	}
 }
 
+// Tag names are case-insensitive, so the device check is too: an NCMD for
+// "speedsp" or "motor1.START" names plc1's tags and is refused, not
+// written from node level (#506 review).
+func TestCommandDeviceCheckIgnoresCase(t *testing.T) {
+	var buf bytes.Buffer
+	n := newCommandNode(t, &buf, WithWritable("*"),
+		WithDevice(Device{ID: "plc1", Tags: []string{"SpeedSP", "Motor1"}}))
+	n.applyCommand("", Payload{Metrics: []Metric{
+		{Name: "speedsp", Datatype: spb.DataType_Double, Value: 77.0},
+		{Name: "motor1.START", Datatype: spb.DataType_Boolean, Value: true},
+	}})
+	if v := speedSP(t, n); v == 77 {
+		t.Error("an NCMD for speedsp wrote plc1's SpeedSP")
+	}
+	if fld(t, motor1(t, n), "START").B {
+		t.Error("an NCMD for motor1.START wrote plc1's Motor1")
+	}
+	if got := n.Status().CommandsRefused; got != 2 {
+		t.Errorf("CommandsRefused = %d, want 2", got)
+	}
+}
+
 func TestCommandDevice(t *testing.T) {
 	for topic, want := range map[string]string{
 		"spBv1.0/G/NCMD/E":        "",

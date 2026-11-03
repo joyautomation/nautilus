@@ -64,7 +64,7 @@ func (n *Node) applyCommand(device string, payload Payload) {
 			// check and the write gate see the tag and member path.
 			m.Name = memberPath(m.Name)
 		}
-		if owner := n.tagOwner[rootTag(m.Name)]; owner != device {
+		if owner, _ := n.ownerOf(rootTag(m.Name)); owner != device {
 			n.refuseCommand("addressed to the wrong device", m.Name,
 				"addressedTo", deviceLabel(device), "publishedOn", deviceLabel(owner))
 			continue
