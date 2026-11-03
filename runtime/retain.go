@@ -21,8 +21,9 @@ type Coordinator interface {
 }
 
 // saveInterval paces the retain saver. Two seconds bounds how much operator
-// input a hard kill can lose (an orderly stop saves once more, see Run), while keeping a busy HMI session from turning
-// every slider drag into a ConfigMap write.
+// input a hard kill can lose (an orderly stop saves once more, see Run),
+// while keeping a busy HMI session from turning every slider drag into a
+// ConfigMap write.
 const saveInterval = 2 * time.Second
 
 // SetAlarms registers the alarm engine as retained operator state, so

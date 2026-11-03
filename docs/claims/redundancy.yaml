@@ -338,18 +338,23 @@ claims:
       (it does, as a copy with retain: true on P1_Stats).
 
   - id: RED-031
+    partial: true
     claim: >-
       An orderly stop (Ctrl+C, or SIGTERM from systemd or Kubernetes) saves
-      the retain store once more after the last scan, so it loses nothing;
-      only a hard kill can lose up to the 2-second save interval. A replica
-      that is not leading writes nothing on its way out.
+      the retain store once more after the last scan, so what was written
+      before the stop is kept; only a hard kill can lose up to the 2-second
+      save interval. A replica that is not leading, or has lost the lease,
+      writes nothing on its way out.
     source: "#retained-state"
     tests:
       - go ./runtime TestRunSavesOnceMoreOnAnOrderlyStop
       - go ./runtime TestRunStandbyDoesNotSaveOnStop
+      - go ./runtime TestRunLostLeaseDoesNotSaveOnStop
       - go ./tools/blackbox TestBlackbox/002-F19-retain-saved-on-orderly-stop
     note: >-
       The runtime tests stop Run well inside the first save interval. The
       black-box check (release; black-box finding 2026-11-03-002 F-19, #531)
       runs naut itself and writes a setpoint over HTTP 0.2 s before SIGTERM
-      and before SIGINT, then restarts and reads it back.
+      and before SIGINT, then restarts and reads it back. Not asserted: that
+      the elector keeps renewing the lease until the final save and only
+      then releases it (cmd/naut/runcmd.go), and the 5 s bound on the wait.

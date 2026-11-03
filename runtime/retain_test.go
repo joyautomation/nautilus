@@ -806,6 +806,27 @@ func TestRunStandbyDoesNotSaveOnStop(t *testing.T) {
 	}
 }
 
+// A leader that has lost the lease since its last scan (the elector stepped
+// down, no scan has run since) writes nothing on its way out either: its
+// takeover still says leading, so only the coordinator's answer stops a
+// last-writer-wins save over the new leader's state.
+func TestRunLostLeaseDoesNotSaveOnStop(t *testing.T) {
+	store := &fakeStore{}
+	lease := &flag{lead: true}
+	rt := newRetained(t, store, lease)
+	rt.Scan() // the takeover: this replica now leads
+	rt.Tags().Set("SP", 42.0)
+	lease.lead = false
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // stopped before any further scan
+	rt.Run(ctx)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.saves != 0 {
+		t.Fatalf("a replica that lost the lease saved %d time(s) on stop: %+v", store.saves, store.state)
+	}
+}
+
 // waitUntil polls cond for up to five seconds.
 func waitUntil(t *testing.T, cond func() bool) {
 	t.Helper()

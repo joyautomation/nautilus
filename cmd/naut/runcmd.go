@@ -133,10 +133,22 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if el != nil {
-		go el.Run(ctx)
-		// On shutdown, hand the lease over instead of letting it expire:
-		// a standby takes over on its next tick rather than 4s later.
-		defer el.Release()
+		// The elector runs on its own context, not the signal's: it keeps
+		// renewing the lease through the last scan and the last retain save
+		// that follow a stop, so no standby takes over and loads the store
+		// before this replica's final save lands (nautilus#531). On the
+		// way out it stops renewing, then hands the lease over instead of
+		// letting it expire: a standby takes over on its next tick rather
+		// than 4s later. Release waits for the loop, so a renew in flight
+		// cannot re-claim the lease after it was given up.
+		elCtx, elCancel := context.WithCancel(context.Background())
+		elDone := make(chan struct{})
+		go func() { el.Run(elCtx); close(elDone) }()
+		defer func() {
+			elCancel()
+			<-elDone
+			el.Release()
+		}()
 	}
 	// Drivers with their own polling loop (eip, sparkplug-host) start here;
 	// the loopback memory driver has nothing to start.
@@ -285,9 +297,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 }
 
 // runStopTimeout bounds how long an orderly stop waits for the scan loop's
-// last scan and retain save. systemd's default stop timeout is 90 s and
-// Kubernetes' grace period 30 s, so 10 s leaves them room.
-const runStopTimeout = 10 * time.Second
+// last scan and retain save, leaving the driver teardown after it room
+// inside a supervisor's stop timeout: the groov EPIC unit's
+// TimeoutStopSec=10, Kubernetes' 30 s grace period, systemd's default 90 s.
+const runStopTimeout = 5 * time.Second
 
 // startAlarms builds the project's alarm engine over rt, before the scan
 // loop starts: the engine registers itself on the runtime's post-scan
