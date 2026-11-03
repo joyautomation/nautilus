@@ -100,6 +100,7 @@ async function nextStep<T>(prev: vscode.QuickInput, step: () => Promise<Step<T> 
  * the next step causes is ignored. */
 function runStep<T>(input: vscode.QuickInput,
   wire: (answer: (value: T) => void) => void,
+  keepOnHide?: () => boolean,
 ): Promise<Step<T> | undefined> {
   input.ignoreFocusOut = true;
   return new Promise((resolve) => {
@@ -110,7 +111,7 @@ function runStep<T>(input: vscode.QuickInput,
       resolve({ value, input });
     });
     input.onDidHide(() => {
-      if (done) return;
+      if (done || keepOnHide?.()) return;
       done = true;
       input.dispose();
       resolve(undefined);
@@ -181,6 +182,11 @@ function pickParentFolder(): Promise<Step<vscode.Uri> | undefined> {
   box.prompt = "Folder to create the project in (Enter to accept, or browse)";
   box.value = base;
   box.buttons = [browse];
+  // The simple file dialog (files.simpleDialog.enable: the web, serve-web,
+  // remote) is itself a quick input: Browse hides this box under it, and that
+  // hide must not cancel the flow (#528). The box comes back if the dialog
+  // is cancelled; a picked folder answers the step.
+  let browsing = false;
   return runStep(box, (answer) => {
     let seq = 0;
     box.onDidChangeValue(async (text) => {
@@ -197,17 +203,29 @@ function pickParentFolder(): Promise<Step<vscode.Uri> | undefined> {
       answer(vscode.Uri.file(resolveParentInput(box.value, home, base)!));
     });
     box.onDidTriggerButton(async () => {
-      const picked = await vscode.window.showOpenDialog({
-        canSelectFiles: false,
-        canSelectFolders: true,
-        canSelectMany: false,
-        defaultUri: vscode.Uri.file(resolveParentInput(box.value, home, base) ?? base),
-        openLabel: "Create project here",
-        title: "nautilus: choose a parent folder for the new project",
-      });
+      if (browsing) return; // one dialog at a time
+      browsing = true;
+      let picked: vscode.Uri[] | undefined;
+      try {
+        picked = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+          defaultUri: vscode.Uri.file(resolveParentInput(box.value, home, base) ?? base),
+          openLabel: "Create project here",
+          title: "nautilus: choose a parent folder for the new project",
+        });
+      } catch {
+        // A dialog that fails (a remote file system error) is a cancel: the
+        // box comes back, rather than the flow waiting on a hidden box.
+        picked = undefined;
+      } finally {
+        browsing = false;
+      }
       if (picked?.[0]) answer(picked[0]);
+      else box.show(); // back from a cancelled simple dialog; a no-op if it stayed up
     });
-  });
+  }, () => browsing);
 }
 
 async function createProject(parent: vscode.Uri, name: string, template: string,
