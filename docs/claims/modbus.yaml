@@ -49,18 +49,25 @@ claims:
   - id: MB-005
     claim: >-
       The generated tag file gives each tag the right role (input or output)
-      and `--tags-skip` leaves hand-declared tags out of it.
+      and an IEC type from its register format (int16 INT, uint16 UINT,
+      int32 DINT, uint32 UDINT, float32 REAL, float64 LREAL, a scaled
+      integer REAL, a coil, discrete, bool or bit:N BOOL), so a program reads
+      it without VAR_EXTERNAL and `naut check` passes; `--tags-skip` leaves
+      hand-declared tags out of it.
     source: "#generating-the-manifest-naut-modbus-import"
     tests:
       - go ./modbus/codegen TestTagsYAMLRolesAndSkip
+      - go ./modbus TestIECTypeFollowsTheFormat
+      - go ./cmd/naut TestModbusImportTypesTagsForCheck
   - id: MB-006
     claim: >-
       `naut modbus tags` re-derives the tag file from a committed manifest
-      byte for byte with `--map`, and without `--map` keeps names and roles
-      and drops the unit/desc/init columns.
+      byte for byte with `--map`, and without `--map` keeps names, roles and
+      types and drops the unit/desc/init columns.
     source: "#generating-the-manifest-naut-modbus-import"
     tests:
       - go ./cmd/naut TestModbusTagsRederives
+      - go ./cmd/naut TestModbusTagsHeaderCommandRuns
   - id: MB-007
     claim: >-
       The planner coalesces bindings on the same source, table and scan

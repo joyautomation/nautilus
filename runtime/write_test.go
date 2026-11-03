@@ -38,6 +38,7 @@ func frontDoorTags(t *testing.T) *Tags {
 // exactly as sent, or is refused with the kind a protocol maps to its code.
 func TestFrontDoorConversions(t *testing.T) {
 	ok := error(nil)
+	refused := errors.New("any refusal") // refused, with no protocol kind
 	for _, tc := range []struct {
 		path string
 		v    any
@@ -58,9 +59,10 @@ func TestFrontDoorConversions(t *testing.T) {
 		{"I_INT", 2.5, ir.ErrTypeMismatch}, {"I_INT", true, ir.ErrTypeMismatch}, {"I_INT", "5", ir.ErrTypeMismatch},
 		{"Flag", true, ok}, {"Flag", 1.0, ir.ErrTypeMismatch},
 		{"SP", 1.5, ok}, {"SP", int64(7), ok}, {"SP", math.NaN(), ir.ErrOutOfRange}, {"SP", math.Inf(1), ir.ErrOutOfRange}, {"SP", "x", ir.ErrTypeMismatch}, {"SP", false, ir.ErrTypeMismatch},
-		{"Delay", 1500.0, ok}, {"Delay", 1500.5, ir.ErrOutOfRange}, {"Delay", "T#1s", ir.ErrTypeMismatch},
+		{"Delay", 1500.0, ok}, {"Delay", 1500.5, ir.ErrOutOfRange}, {"Delay", "T#1s", ok}, {"Delay", "TIME#1m30s", ok}, {"Delay", "T#1x", ir.ErrTypeMismatch}, {"Delay", "soon", ir.ErrTypeMismatch},
+		{"Delay", "T#1.5ms", ir.ErrOutOfRange}, {"Delay", "T#1us", ir.ErrOutOfRange}, {"Delay", "T#106751991168d", ir.ErrOutOfRange}, {"Delay", 1e300, ir.ErrOutOfRange},
 		{"Name", "", ok}, {"Name", "batch 7", ok}, {"Name", 7.0, ir.ErrTypeMismatch},
-		{"Mode", "Run", ok}, {"Mode", 10.0, ok}, {"Mode", 3.0, ir.ErrOutOfRange}, {"Mode", "Walk", nil /* any error */},
+		{"Mode", "Run", ok}, {"Mode", 10.0, ok}, {"Mode", 3.0, ir.ErrOutOfRange}, {"Mode", "Walk", refused},
 		{"P1.Speed", 60.0, ok}, {"P1.Count", 40000.0, ir.ErrOutOfRange}, {"P1.Count", 4.0, ok},
 		{"Nope", 1.0, ErrUndefined},
 	} {
@@ -68,11 +70,10 @@ func TestFrontDoorConversions(t *testing.T) {
 		before, _ := tags.ReadPath(tc.path)
 		err := tags.Write([]WriteOp{{Path: tc.path, Value: tc.v}})[0]
 		switch {
-		case tc.path == "Mode" && tc.v == "Walk":
+		case tc.want == refused:
 			if err == nil {
-				t.Errorf("Mode = %q landed; want refused", tc.v)
+				t.Errorf("%s = %q landed; want refused", tc.path, tc.v)
 			}
-			continue
 		case tc.want == nil && err != nil:
 			t.Errorf("%s = %v (%T): %v, want it to land", tc.path, tc.v, tc.v, err)
 		case tc.want != nil && !errors.Is(err, tc.want):
@@ -181,5 +182,41 @@ func TestFrontDoorEnumInsideMapAndList(t *testing.T) {
 	}
 	if v, _ := tags.ReadPath("Modes[1]"); v != "Idle" {
 		t.Errorf("Modes[1] = %v, want Idle: the refused list must not land", v)
+	}
+}
+
+// An operator's force is checked as a write is: what Write refuses, Force
+// refuses with the same error, and nothing is forced. Before, a force of
+// 70000 on an INT was held and served. ForceLenient, which acceptance
+// tests' force: uses, still takes a value the program itself can produce.
+func TestForceIsCheckedAsAWriteIs(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		v    any
+		want error
+	}{
+		{"I_INT", 70000.0, ir.ErrOutOfRange},
+		{"I_USINT", -1.0, ir.ErrOutOfRange},
+		{"SP", math.NaN(), ir.ErrOutOfRange},
+		{"SP", "x", ir.ErrTypeMismatch},
+		{"Mode", 3.0, ir.ErrOutOfRange},
+		{"P1.Count", 40000.0, ir.ErrOutOfRange},
+		{"I_INT", 2.5, ir.ErrTypeMismatch},
+	} {
+		tags := frontDoorTags(t)
+		err := tags.Force(tc.path, tc.v)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("Force(%s, %v) = %v, want %v", tc.path, tc.v, err, tc.want)
+		}
+		if f := tags.Forces(); len(f) != 0 {
+			t.Errorf("Force(%s, %v) was refused but left forces %v", tc.path, tc.v, f)
+		}
+	}
+	tags := frontDoorTags(t)
+	if err := tags.Force("I_INT", 1234.0); err != nil {
+		t.Fatalf("an in-range force: %v", err)
+	}
+	if err := tags.ForceLenient("P1.Count", 40000.0); err != nil {
+		t.Errorf("ForceLenient(P1.Count, 40000) = %v, want it held as the VM would hold it", err)
 	}
 }

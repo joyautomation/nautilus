@@ -545,7 +545,7 @@ func (r *testRun) forces(st *Step) error {
 		if err != nil {
 			return fmt.Errorf("force: %w", err)
 		}
-		if err := r.rt.Tags().Force(name, v); err != nil {
+		if err := r.rt.Tags().ForceLenient(name, v); err != nil {
 			return fmt.Errorf("force: %w", err)
 		}
 	}

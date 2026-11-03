@@ -328,9 +328,16 @@ func TestWriteGateLeaderReassertsStateOverAStaleDeath(t *testing.T) {
 	if tok := other.Publish(stateTopic("h-pair"), 1, true, late); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
 		t.Fatal(tok.Error())
 	}
+	// The watcher hears both, in either order: the broker fans the late
+	// death out to its subscribers one by one, in map order, so when the
+	// leader hears it first, its re-assert can reach the watcher before the
+	// death itself does (nautilus#418). The retained STATE below is what
+	// settles which came last at the broker.
 	waitUntil(t, "the leader to re-assert", func() bool { return len(w.states(t)) == 3 })
-	if s := w.states(t)[2]; s != birth {
-		t.Fatalf("re-asserted %+v, want the session's own birth %+v", s, birth)
+	heard := w.states(t)[1:]
+	lateState := stateBody{Online: false, Timestamp: birth.Timestamp - 5000}
+	if !(heard[0] == lateState && heard[1] == birth) && !(heard[0] == birth && heard[1] == lateState) {
+		t.Fatalf("after the late death the watcher heard %+v, want the death %+v and the re-asserted birth %+v", heard, lateState, birth)
 	}
 	if got := retainedState(t, addr, "late-pair", "h-pair"); got != birth {
 		t.Fatalf("retained STATE = %+v, want the leader's birth %+v", got, birth)

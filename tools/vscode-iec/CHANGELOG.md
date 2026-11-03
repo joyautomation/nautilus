@@ -158,6 +158,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **"Online edits disabled" names the setting to change.** Download
+  Program to Controller on a controller with online edits off said
+  `(server.Options.OnlineEdits)`, a Go field; it now says to set
+  `server.online-edits: true` in `nautilus.yaml`, as the controller's own
+  refusal does.
 - **A port dot can be dragged after a double-click added it.** In the
   sidecar editor (and the new preview pane) the double-click that adds a
   port left the render's text selected; the next drag on a dot then

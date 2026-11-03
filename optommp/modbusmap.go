@@ -81,6 +81,7 @@ func Generate(ch Chassis, opts MapOptions) (Output, error) {
 				continue
 			}
 			b.Name, b.Source = name, opts.ID
+			tag.Type = b.IECType() // as naut modbus import types it
 			out.Manifest.Tags = append(out.Manifest.Tags, b)
 			out.Tags = append(out.Tags, tag)
 		}
