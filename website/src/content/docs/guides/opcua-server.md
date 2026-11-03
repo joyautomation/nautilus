@@ -7,8 +7,7 @@ description: Expose a controller's tags to any OPC UA client — browse, read an
 Still moving. The `opcua:` section and its `endpoint` are
 meant to stay as they are, but session and subscription handling is being
 reworked, and the limits named on this page (a never-delivered tag has no
-node, several subscription services are unsupported, a client must dial an
-advertised address) are tracked as
+node, a client must dial an advertised address) are tracked as
 issues and may change between releases. Try it against your client before
 you depend on it.
 :::
@@ -104,6 +103,23 @@ server enforces, with `Bad_TooManyOperations` past it — so a project of a
 few thousand tags is still one call. A Browse lists each reference once,
 the standard `Server` object's included.
 
+`TranslateBrowsePathsToNodeIds` resolves a path of browse names over the
+same references a Browse lists, so `Objects/1:<project>/1:P101/1:Drive/1:Speed`
+is `ns=1;s=P101.Drive.Speed` (asyncua's `get_child` is this service). A
+name is compared exactly, case included, as OPC UA compares qualified
+names: `1:level` does not find the tag Browse lists as `Level`, though a
+node id of either spelling reads it. A path that reaches nothing is
+`Bad_NoMatch`.
+
+`Call` answers each method it is asked for. The address space has no
+methods of its own; of the four the `Server` object carries,
+`GetMonitoredItems` (a subscription's server and client handles) and
+`ResendData` (every reporting item of a subscription sent its current value
+in the next cycle) run, for the calling session's own subscriptions
+(another session's is `Bad_UserAccessDenied`).
+`SetSubscriptionDurable` and `RequestServerStateChange` are
+`Bad_NotExecutable`, and their `Executable` attribute reads false.
+
 The server says it is nautilus. Its `ApplicationUri`, in every endpoint's
 description and as the only entry of the `Server` object's `ServerArray`,
 is `urn:joyautomation:nautilus:<project>` (the name percent-encoded, so
@@ -186,13 +202,6 @@ The exception is an input whose type nothing declares (no `type:`, and no
 program declares it). It has no node until its first value arrives, so a
 client that browsed before then must browse again.
 
-One limit of the current server, found by its black-box runs and tracked as
-an issue: a subscription's items are fixed once created, and it cannot be
-paused or moved to a new session (`ModifyMonitoredItems`,
-`SetPublishingMode` and `TransferSubscriptions`, like
-`TranslateBrowsePathsToNodeIds` and `Call`, answer `Bad_ServiceUnsupported`;
-[#431](https://github.com/joyautomation/nautilus/issues/431)).
-
 ## Subscriptions
 
 A client may create subscriptions and monitor any Variable. The server
@@ -210,6 +219,14 @@ asked. `ModifySubscription` changes a live subscription's publishing
 interval and its lifetime and keep-alive counts, revised the same way, and
 answers once the subscription runs at them: a client can slow a busy
 subscription down, or speed it up, without deleting and recreating it.
+`ModifyMonitoredItems` changes an item's sampling interval and client
+handle, revised as `CreateMonitoredItems` revises them (the queue size is
+always 1, and a filter is not acted on, there or here); the item is sampled
+at the new interval from then on, and an item given a new client handle
+hears its current value under it. `SetPublishingMode` pauses a
+subscription: while publishing is off it sends keep-alives only, and keeps
+the latest value of each item for when it is turned back on. A
+subscription created with `PublishingEnabled` false starts paused.
 `SetMonitoringMode` means what it answers: a `Disabled` or `Sampling`
 item is silent until it is `Reporting` again, and then hears the current
 value first; an item created `Disabled` is silent from the start.
@@ -217,6 +234,26 @@ value first; an item created `Disabled` is silent from the start.
 by default) deletes the session's subscriptions and their items before it
 answers; without it they run on until their lifetime runs out. A
 subscription id is never issued twice.
+
+`TransferSubscriptions` moves a subscription to another session of the
+same client — typically a client that closed its session with
+`deleteSubscriptions` false, or lost it, and opened a new one. Every
+session here is anonymous, and OPC UA's rule for an anonymous user is that
+only the same client application may take a subscription over, which
+only a signed channel can show: both sessions must be on a
+`SignAndEncrypt` endpoint (a [trusted
+certificate](#security)) with the same `ApplicationUri`. A session on
+`None`, or another application, is refused with `Bad_UserAccessDenied`;
+asking for a subscription the session already has is `Bad_NothingToDo`.
+The new session's publishes carry the subscription from then on — with
+each reporting item's current value first, when it asks for
+`sendInitialValues` — and the old session, if it is still open, is told
+`Good_SubscriptionTransferred` and can no longer use it. No message is kept
+for retransmission, so the transfer returns no available sequence numbers.
+A session ends with its connection here (see [Sessions](#sessions)), so
+what can be transferred is a subscription whose session is still open or
+was closed with `deleteSubscriptions` false; a connection that drops takes
+its session's subscriptions with it.
 
 An item that cannot be monitored — a node id that is not a node, or a
 Value on an Object or the folder — is refused when it is created, with the

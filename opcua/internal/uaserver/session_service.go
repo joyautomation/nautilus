@@ -61,6 +61,14 @@ func (s *SessionService) CreateSession(sc *uasc.SecureChannel, r ua.Request, req
 	}
 	sess.serverNonce = nonce
 	sess.remoteCertificate = req.ClientCertificate
+	// checkClientCertificate held a signed channel's ApplicationUri to the certificate's, so
+	// it names the client application; TransferSubscriptions relies on that (mayTransfer).
+	if signs(sc) {
+		sess.secured = true
+		if req.ClientDescription != nil {
+			sess.applicationURI = req.ClientDescription.ApplicationURI
+		}
+	}
 
 	sig, alg, err := sc.NewSessionSignature(req.ClientCertificate, req.ClientNonce)
 	if err != nil {
@@ -225,6 +233,16 @@ func checkClientCertificate(sc *uasc.SecureChannel, req *ua.CreateSessionRequest
 		}
 	}
 	return ua.StatusBadCertificateURIInvalid
+}
+
+// signs reports whether a channel signs its messages: a policy other than None, in Sign or
+// SignAndEncrypt.
+func signs(sc *uasc.SecureChannel) bool {
+	if p := sc.SecurityPolicyURI(); p == "" || p == ua.SecurityPolicyURINone {
+		return false
+	}
+	m := sc.SecurityMode()
+	return m == ua.MessageSecurityModeSign || m == ua.MessageSecurityModeSignAndEncrypt
 }
 
 // checkIdentity reads ActivateSession's user identity token. Only anonymous

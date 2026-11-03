@@ -130,21 +130,16 @@ type MonitoredItem struct {
 	Sub *Subscription
 	Req *ua.MonitoredItemCreateRequest
 
-	//TODO: use this
+	// Mode is the item's MonitoringMode, which SetMonitoringMode changes. Req and Mode are
+	// written under MonitoredItemService.Mu (CreateMonitoredItems, ModifyMonitoredItems
+	// replaces Req whole) and read under it; the sweep copies them out.
 	Mode ua.MonitoringMode
-}
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.3
-func (s *MonitoredItemService) ModifyMonitoredItems(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	if s.SubService.srv.cfg.logger != nil {
-		s.SubService.srv.cfg.logger.Debug("Handling %T", r)
-	}
-
-	req, err := safeReq[*ua.ModifyMonitoredItemsRequest](r)
-	if err != nil {
-		return nil, err
-	}
-	return serviceUnsupported(req.RequestHeader), nil
+	// Resend is bumped, under MonitoredItemService.Mu, when the item is owed its current
+	// value whether or not it has changed: TransferSubscriptions with sendInitialValues, the
+	// Server object's ResendData method, a ModifyMonitoredItems that changes its client
+	// handle. The sweep sends the value when it sees the count move.
+	Resend uint32
 }
 
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.5

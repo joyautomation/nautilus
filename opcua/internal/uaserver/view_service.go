@@ -93,19 +93,6 @@ func getSubRefs(srv *Server, nid *ua.NodeID) []*ua.NodeID {
 	return refs
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.8.4
-func (s *ViewService) TranslateBrowsePathsToNodeIDs(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	if s.srv.cfg.logger != nil {
-		s.srv.cfg.logger.Debug("Handling %T", r)
-	}
-
-	req, err := safeReq[*ua.TranslateBrowsePathsToNodeIDsRequest](r)
-	if err != nil {
-		return nil, err
-	}
-	return serviceUnsupported(req.RequestHeader), nil
-}
-
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.8.5
 func (s *ViewService) RegisterNodes(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {

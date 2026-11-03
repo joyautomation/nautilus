@@ -57,7 +57,7 @@ func (s *SubscriptionService) DeleteSessionSubscriptions(sess *session) {
 	s.Mu.Lock()
 	var ids []uint32
 	for id, sub := range s.Subs {
-		if sub != nil && sub.Session != nil && sub.Session.AuthTokenID != nil && sub.Session.AuthTokenID.String() == token {
+		if sub != nil && sub.ownedByToken(token) {
 			ids = append(ids, id)
 		}
 	}
@@ -105,6 +105,7 @@ func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Re
 	sub.RevisedPublishingInterval = req.RequestedPublishingInterval
 	sub.RevisedLifetimeCount = req.RequestedLifetimeCount
 	sub.RevisedMaxKeepAliveCount = req.RequestedMaxKeepAliveCount
+	sub.publishingEnabled = req.PublishingEnabled
 
 	s.Subs[newsubid] = sub
 	sub.running = true
@@ -125,20 +126,6 @@ func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Re
 		RevisedMaxKeepAliveCount:  req.RequestedMaxKeepAliveCount,
 	}
 	return resp, nil
-}
-
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.4
-func (s *SubscriptionService) SetPublishingMode(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	if s.srv.cfg.logger != nil {
-		s.srv.cfg.logger.Debug("Handling %T", r)
-	}
-
-	req, err := safeReq[*ua.SetPublishingModeRequest](r)
-	if err != nil {
-		return nil, err
-	}
-	// When this gets implemented, be sure to check the subscription session vs the request session!
-	return serviceUnsupported(req.RequestHeader), nil
 }
 
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.5
@@ -204,18 +191,40 @@ func (s *SubscriptionService) Republish(sc *uasc.SecureChannel, r ua.Request, re
 	return serviceUnsupported(req.RequestHeader), nil
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.7
-func (s *SubscriptionService) TransferSubscriptions(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	if s.srv.cfg.logger != nil {
-		s.srv.cfg.logger.Debug("Handling %T", r)
+// Transfer moves the subscription id to the session that sent hdr, on its channel sc: the
+// TransferSubscriptions service for one id (Part 4 §5.14.7). The subscription must exist
+// (Bad_SubscriptionIdInvalid), not be the session's already (Bad_NothingToDo), and the
+// session must act for the same user as the one that owns it (Bad_UserAccessDenied; see
+// mayTransfer). The publish loop takes the change between publishes, as it takes a
+// ModifySubscription; the old session, when it is still open, is sent a
+// StatusChangeNotification with Good_SubscriptionTransferred on its next Publish. What it
+// returns is the subscription, now the new session's, to resend initial values to.
+func (s *SubscriptionService) Transfer(sc *uasc.SecureChannel, hdr *ua.RequestHeader, id uint32) (*Subscription, ua.StatusCode) {
+	to := s.srv.Session(hdr)
+	if to == nil {
+		return nil, ua.StatusBadSessionIDInvalid // the gate checked; this is defensive
 	}
-
-	req, err := safeReq[*ua.TransferSubscriptionsRequest](r)
-	if err != nil {
-		return nil, err
+	s.Mu.Lock()
+	sub := s.Subs[id]
+	s.Mu.Unlock()
+	if sub == nil {
+		return nil, ua.StatusBadSubscriptionIDInvalid
 	}
-	// When this gets implemented, be sure to check the subscription session vs the request session!
-	return serviceUnsupported(req.RequestHeader), nil
+	from, _ := sub.Owner()
+	if from == to {
+		return nil, ua.StatusBadNothingToDo
+	}
+	if code := mayTransfer(from, to); code != ua.StatusOK {
+		return nil, code
+	}
+	// The old session hears of the move only while it is open: a closed one (CloseSession
+	// with deleteSubscriptions false, the usual way a subscription is handed on) has no one
+	// to tell.
+	notifyOld := from != nil && from.AuthTokenID != nil && s.srv.sb.Session(from.AuthTokenID) == from
+	if !sub.Transfer(to, sc, notifyOld) {
+		return nil, ua.StatusBadSubscriptionIDInvalid // its task returned: the subscription is gone
+	}
+	return sub, ua.StatusOK
 }
 
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.8
@@ -248,7 +257,7 @@ func (s *SubscriptionService) DeleteSubscriptions(sc *uasc.SecureChannel, r ua.R
 			results[i] = ua.StatusBadSubscriptionIDInvalid
 			continue
 		}
-		if session.AuthTokenID.String() != sub.Session.AuthTokenID.String() {
+		if !sub.OwnedBy(session) {
 			results[i] = ua.StatusBadSessionIDInvalid
 			continue
 		}
@@ -285,9 +294,8 @@ type PubReq struct {
 // MonitoredItems will send updates on the NotifyChannel to let the background task know that
 // an event has occured that needs to be published.
 type Subscription struct {
-	srv     *SubscriptionService
-	Session *session
-	ID      uint32
+	srv *SubscriptionService
+	ID  uint32
 	// The publishing interval and counts are set by CreateSubscription
 	// before Start and, after it, written only by the subscription's task
 	// (a ModifySubscription goes through Modify), under Mu. The task reads
@@ -295,16 +303,27 @@ type Subscription struct {
 	RevisedPublishingInterval float64
 	RevisedLifetimeCount      uint32
 	RevisedMaxKeepAliveCount  uint32
-	Channel                   *uasc.SecureChannel
-	SequenceID                uint32
+	// Session and Channel are the session that owns the subscription and the channel its
+	// publish responses go out on. Like the counts above they are set before Start and then
+	// written only by the task (a TransferSubscriptions goes through Transfer), under Mu;
+	// anything else reads them with Owner or OwnedBy.
+	Session *session
+	Channel *uasc.SecureChannel
+	// publishingEnabled is SetPublishingMode's flag (CreateSubscription's at first): while it
+	// is false the task sends keep-alives only and holds what its items report (Part 4
+	// §5.14.4). Owned like the counts.
+	publishingEnabled bool
+
+	SequenceID uint32
 	//SeqNums                   map[uint32]struct{}
 	T *time.Ticker
 
 	NotifyChannel chan *ua.MonitoredItemNotification
 
-	// modify carries a ModifySubscription to the task, which owns the
-	// ticker the publishing interval drives.
-	modify chan modification
+	// ops carries a change to the task, which owns the ticker the publishing interval
+	// drives and the fields the publish loop reads: ModifySubscription, SetPublishingMode,
+	// TransferSubscriptions.
+	ops chan taskOp
 
 	// the running flag and shutdown channel are used to signal the background task that it should stop.
 	// multiple places can kill the subscription so make sure you check the running flag using the mutex
@@ -313,7 +332,7 @@ type Subscription struct {
 	running  bool
 	shutdown chan struct{}
 
-	// done is closed when the background task returns, so a Modify waiting for the task
+	// done is closed when the background task returns, so a change waiting for the task
 	// gives up instead of waiting forever.
 	done chan struct{}
 
@@ -336,19 +355,115 @@ func NewSubscription() *Subscription {
 	return &Subscription{
 		//SeqNums:       map[uint32]struct{}{},
 		NotifyChannel: make(chan *ua.MonitoredItemNotification, 100),
-		modify:        make(chan modification),
+		ops:           make(chan taskOp),
 		shutdown:      make(chan struct{}),
 		done:          make(chan struct{}),
 	}
 }
 
-// modification is a ModifySubscription on its way to the task: the values
-// to apply, already revised to what the server supports, and a channel the
-// task closes once they are in force.
-type modification struct {
-	interval            float64
-	lifetime, keepalive uint32
-	applied             chan struct{}
+// taskOp is a change on its way to the task: what to do, run on the task's goroutine between
+// publishes, and a channel the task closes once it is done.
+type taskOp struct {
+	do      func()
+	applied chan struct{}
+}
+
+// change runs do on the task and returns once it has run, or false, having run nothing, when
+// the task has returned (the subscription is gone).
+func (s *Subscription) change(do func()) bool {
+	op := taskOp{do: do, applied: make(chan struct{})}
+	select {
+	case s.ops <- op:
+	case <-s.done:
+		return false
+	}
+	// The task closes applied before it can return, having taken op.
+	<-op.applied
+	return true
+}
+
+// Owner is the session that owns the subscription and the channel it publishes on. Safe from
+// any goroutine.
+func (s *Subscription) Owner() (*session, *uasc.SecureChannel) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	return s.Session, s.Channel
+}
+
+// OwnedBy reports whether sess owns the subscription. Subscription ids are per session
+// (Part 4 §5.14), so to any other session the subscription is not there.
+func (s *Subscription) OwnedBy(sess *session) bool {
+	if sess == nil || sess.AuthTokenID == nil {
+		return false
+	}
+	return s.ownedByToken(sess.AuthTokenID.String())
+}
+
+func (s *Subscription) ownedByToken(token string) bool {
+	owner, _ := s.Owner()
+	return owner != nil && owner.AuthTokenID != nil && owner.AuthTokenID.String() == token
+}
+
+// PublishingEnabled reports SetPublishingMode's flag. Safe from any goroutine.
+func (s *Subscription) PublishingEnabled() bool {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	return s.publishingEnabled
+}
+
+// SetPublishing turns publishing on or off (SetPublishingMode, Part 4 §5.14.4) and returns
+// once the publish loop has taken it, or false when the subscription is gone. Disabled, the
+// loop goes on counting keep-alives and lifetimes and sends keep-alives, and keeps the latest
+// notification of each item for when it is enabled again.
+func (s *Subscription) SetPublishing(enabled bool) bool {
+	return s.change(func() {
+		s.Mu.Lock()
+		s.publishingEnabled = enabled
+		s.Mu.Unlock()
+	})
+}
+
+// Transfer gives the subscription to the session to, publishing on its channel ch, and
+// returns once the publish loop has taken it (false when the subscription is gone). What the
+// loop holds for the subscription is published to the new session. With notifyOld, the old
+// session is sent a StatusChangeNotification carrying Good_SubscriptionTransferred in answer
+// to its next Publish (Part 4 §5.14.7), from a goroutine that gives up after a minute.
+func (s *Subscription) Transfer(to *session, ch *uasc.SecureChannel, notifyOld bool) bool {
+	return s.change(func() {
+		s.Mu.Lock()
+		old, oldCh := s.Session, s.Channel
+		s.Session, s.Channel = to, ch
+		s.Mu.Unlock()
+		if notifyOld && old != nil && oldCh != nil {
+			// The status change carries the next sequence number without taking it, as a
+			// keep-alive does, so the new session sees no gap.
+			go transferred(old, oldCh, s.ID, s.SequenceID+1)
+		}
+	})
+}
+
+// transferred answers the old session's next Publish with the news that subscription id has
+// moved to another session.
+func transferred(old *session, ch *uasc.SecureChannel, id, seq uint32) {
+	var pubreq PubReq
+	select {
+	case pubreq = <-old.PublishRequests:
+	case <-time.After(time.Minute):
+		return
+	}
+	if seq == 0 {
+		seq = 1
+	}
+	eo := ua.NewExtensionObject(&ua.StatusChangeNotification{Status: ua.StatusGoodSubscriptionTransferred, DiagnosticInfo: &ua.DiagnosticInfo{}})
+	eo.UpdateMask()
+	_ = ch.SendResponseWithContext(context.Background(), pubreq.ID, &ua.PublishResponse{
+		ResponseHeader:           responseHeader(pubreq.Req.RequestHeader.RequestHandle, ua.StatusOK),
+		SubscriptionID:           id,
+		NotificationMessage:      &ua.NotificationMessage{SequenceNumber: seq, PublishTime: time.Now(), NotificationData: []*ua.ExtensionObject{eo}},
+		AvailableSequenceNumbers: []uint32{},
+		Results:                  []ua.StatusCode{},
+		DiagnosticInfos:          []*ua.DiagnosticInfo{},
+	})
 }
 
 // Revised returns the publishing interval (ms) and the lifetime and
@@ -371,26 +486,14 @@ func (s *Subscription) Revised() (interval float64, lifetime, keepalive uint32) 
 // the task read them, and never reset the ticker, so a modified
 // subscription went on publishing at its old rate (black-box F-34, #433).
 func (s *Subscription) Modify(interval float64, lifetime, keepalive uint32) bool {
-	m := modification{interval: interval, lifetime: lifetime, keepalive: keepalive, applied: make(chan struct{})}
-	select {
-	case s.modify <- m:
-	case <-s.done:
-		return false
-	}
-	// The task closes applied before it can return, having taken m.
-	<-m.applied
-	return true
-}
-
-// apply is the task's half of Modify.
-func (s *Subscription) apply(m modification) {
-	s.Mu.Lock()
-	s.RevisedPublishingInterval = m.interval
-	s.RevisedLifetimeCount = m.lifetime
-	s.RevisedMaxKeepAliveCount = m.keepalive
-	s.Mu.Unlock()
-	s.T.Reset(publishingPeriod(m.interval))
-	close(m.applied)
+	return s.change(func() {
+		s.Mu.Lock()
+		s.RevisedPublishingInterval = interval
+		s.RevisedLifetimeCount = lifetime
+		s.RevisedMaxKeepAliveCount = keepalive
+		s.Mu.Unlock()
+		s.T.Reset(publishingPeriod(interval))
+	})
 }
 
 // publishingPeriod is a publishing interval in milliseconds as a Duration.
@@ -446,13 +549,13 @@ func (s *Subscription) run() {
 		}
 		s.srv.DeleteSubscription(s.ID)
 	}()
-	// Deferred after the cleanup above, so it runs first: a Modify that arrives meanwhile is
+	// Deferred after the cleanup above, so it runs first: a change that arrives meanwhile is
 	// released.
 	defer close(s.done)
 
 	keepalive_counter := 0
 	lifetime_counter := 0
-	// A ModifySubscription resets this ticker (apply), in either waiting state.
+	// A ModifySubscription resets this ticker (Modify), in either waiting state.
 	s.T = time.NewTicker(publishingPeriod(s.RevisedPublishingInterval))
 	defer s.T.Stop()
 
@@ -468,9 +571,12 @@ func (s *Subscription) run() {
 	// get a publish request, we'll continue to count intervals without a publish request.
 	//
 	// In L0 and L2, If we get to the lifetime count without a publish request, we'll kill the subscription.
+	// The latest notification of each item, kept across a disabled spell (SetPublishingMode)
+	// and emptied once it is published.
+	publishQueue := make(map[uint32]*ua.MonitoredItemNotification)
+cycle:
 	for {
 		// we don't need to do anything if we don't have at least one thing to publish so lets get that first
-		publishQueue := make(map[uint32]*ua.MonitoredItemNotification)
 
 		// Collect notifications until our publication interval is ready
 	L0:
@@ -481,8 +587,9 @@ func (s *Subscription) run() {
 			case newNotification := <-s.NotifyChannel:
 				publishQueue[newNotification.ClientHandle] = newNotification
 			case <-s.T.C:
-				if len(publishQueue) == 0 {
-					// nothing to publish, increment the keepalive counter and send a keepalive if it
+				if len(publishQueue) == 0 || !s.publishingEnabled {
+					// nothing to publish (or publishing is disabled, and what there is waits for
+					// it), increment the keepalive counter and send a keepalive if it
 					// has been enough intervals.
 					keepalive_counter++
 					if keepalive_counter > int(s.RevisedMaxKeepAliveCount) {
@@ -510,8 +617,9 @@ func (s *Subscription) run() {
 				}
 				// we have things to publish so we'll break out to do that.
 				break L0
-			case m := <-s.modify:
-				s.apply(m)
+			case op := <-s.ops:
+				op.do()
+				close(op.applied)
 			}
 		}
 		var pubreq PubReq
@@ -527,8 +635,14 @@ func (s *Subscription) run() {
 				break L2
 			case newNotification := <-s.NotifyChannel:
 				publishQueue[newNotification.ClientHandle] = newNotification
-			case m := <-s.modify:
-				s.apply(m)
+			case op := <-s.ops:
+				op.do()
+				close(op.applied)
+				if !s.publishingEnabled {
+					// Disabled while waiting to publish: nothing goes out until it is enabled
+					// again, and what was waiting waits with it.
+					continue cycle
+				}
 			case <-s.T.C:
 				// we had another tick without a publish request.
 				lifetime_counter++
@@ -629,6 +743,7 @@ func (s *Subscription) run() {
 		if s.srv.srv.cfg.logger != nil {
 			s.srv.srv.cfg.logger.Debug("Published %d items OK for %d", len(publishQueue), s.ID)
 		}
+		publishQueue = make(map[uint32]*ua.MonitoredItemNotification)
 		// wait till we've got a publish request.
 	}
 }

@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/binary"
+	"math"
 
+	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
 	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 )
@@ -133,4 +135,103 @@ func decodeContinuation(cp []byte) (bd *ua.BrowseDescription, offset, max uint32
 		return nil, 0, 0, false
 	}
 	return bd, offset, max, true
+}
+
+// translateBrowsePaths is the TranslateBrowsePathsToNodeIds service (Part
+// 4 §5.9.4): each path is walked from its starting node one element at a
+// time, over the references a Browse lists — the same references, in ns=0
+// and in the project namespace alike, filtered the same way by reference
+// type, subtypes and direction. A target name matches a reference's
+// BrowseName exactly, namespace index and name, case and all (Part 3
+// §8.3: a QualifiedName is compared as it is), so `1:Level` finds the tag
+// Browse lists as Level and `1:level` does not, though a node id of
+// either spelling reads it. Every node a path reaches is a target, fully
+// resolved (RemainingPathIndex is the maximum, nothing is in another
+// server).
+//
+// A path with no elements is Bad_NothingToDo, an element other than the
+// last without a target name Bad_BrowseNameInvalid, a starting node that
+// is not there Bad_NodeIdUnknown, and a path that reaches nothing
+// Bad_NoMatch, each in its own result.
+func translateBrowsePaths(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
+	req, ok := r.(*ua.TranslateBrowsePathsToNodeIDsRequest)
+	if !ok {
+		return nil, ua.StatusBadRequestTypeInvalid
+	}
+	if len(req.BrowsePaths) == 0 {
+		return nil, ua.StatusBadNothingToDo
+	}
+	results := make([]*ua.BrowsePathResult, len(req.BrowsePaths))
+	for i, p := range req.BrowsePaths {
+		results[i] = translatePath(srv, p)
+	}
+	return &ua.TranslateBrowsePathsToNodeIDsResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
+}
+
+// translatePath walks one browse path.
+func translatePath(srv *opcserver.Server, p *ua.BrowsePath) *ua.BrowsePathResult {
+	fail := func(code ua.StatusCode) *ua.BrowsePathResult {
+		return &ua.BrowsePathResult{StatusCode: code, Targets: []*ua.BrowsePathTarget{}}
+	}
+	if p == nil || p.StartingNode == nil {
+		return fail(ua.StatusBadNodeIDInvalid)
+	}
+	var elems []*ua.RelativePathElement
+	if p.RelativePath != nil {
+		elems = p.RelativePath.Elements
+	}
+	if len(elems) == 0 {
+		return fail(ua.StatusBadNothingToDo)
+	}
+	for i, el := range elems {
+		if el == nil || (i < len(elems)-1 && (el.TargetName == nil || el.TargetName.Name == "")) {
+			return fail(ua.StatusBadBrowseNameInvalid)
+		}
+	}
+	// The starting node must be there; a Browse of it says so.
+	if res := browsePage(srv, &ua.BrowseDescription{NodeID: p.StartingNode, BrowseDirection: ua.BrowseDirectionForward, ReferenceTypeID: ua.NewNumericNodeID(0, id.HasTypeDefinition), ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0); res.StatusCode != ua.StatusGood {
+		return fail(res.StatusCode)
+	}
+	current := []*ua.NodeID{p.StartingNode}
+	for _, el := range elems {
+		dir := ua.BrowseDirectionForward
+		if el.IsInverse {
+			dir = ua.BrowseDirectionInverse
+		}
+		refType, subtypes := el.ReferenceTypeID, el.IncludeSubtypes
+		if refType == nil || isNS0(refType, 0) {
+			// No reference type: every reference (Part 4 §7.31), subtypes or not.
+			refType, subtypes = ua.NewNumericNodeID(0, id.References), true
+		}
+		anyName := el.TargetName == nil || el.TargetName.Name == "" // the last element only, checked above
+		var next []*ua.NodeID
+		seen := map[string]bool{}
+		for _, from := range current {
+			res := browsePage(srv, &ua.BrowseDescription{NodeID: from, BrowseDirection: dir, ReferenceTypeID: refType, IncludeSubtypes: subtypes, ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0)
+			if res.StatusCode != ua.StatusGood {
+				continue
+			}
+			for _, ref := range res.References {
+				if ref.NodeID == nil || ref.NodeID.NodeID == nil {
+					continue
+				}
+				if !anyName && (ref.BrowseName == nil || ref.BrowseName.NamespaceIndex != el.TargetName.NamespaceIndex || ref.BrowseName.Name != el.TargetName.Name) {
+					continue
+				}
+				if k := ref.NodeID.NodeID.String(); !seen[k] {
+					seen[k] = true
+					next = append(next, ref.NodeID.NodeID)
+				}
+			}
+		}
+		if len(next) == 0 {
+			return fail(ua.StatusBadNoMatch)
+		}
+		current = next
+	}
+	targets := make([]*ua.BrowsePathTarget, len(current))
+	for i, nid := range current {
+		targets[i] = &ua.BrowsePathTarget{TargetID: ua.NewExpandedNodeID(nid, "", 0), RemainingPathIndex: math.MaxUint32}
+	}
+	return &ua.BrowsePathResult{StatusCode: ua.StatusGood, Targets: targets}
 }
