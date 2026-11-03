@@ -34,42 +34,116 @@ export const NEW_PROJECT_TIMEOUT_MS = 30_000;
 
 export function registerNewProjectCommand(): vscode.Disposable {
   return vscode.commands.registerCommand("nautilus.newProject", async () => {
+    // The steps are one quick input that never closes between them: each step
+    // is shown BEFORE the previous one is disposed (showing a quick input
+    // while another is up swaps it in place). Closing it between steps would
+    // hand the focus back to whatever had it before the command ran; on a
+    // fresh window that is the Welcome page, whose step media is a webview
+    // that takes the focus a moment later, so the next box opened without the
+    // keyboard focus and typing went to the webview (#405, #443). Every step
+    // still ignores focus-out, so a webview that does grab focus cannot close
+    // one.
     const parent = await pickParentFolder();
     if (!parent) return;
 
-    // Every step after the first ignores focus-out. When the parent-folder box
-    // closes, VS Code hands focus back to whatever had it before the command
-    // ran; on a fresh window that is the Welcome page, whose step media is a
-    // webview that takes focus a moment later and would close a focus-sensitive
-    // step as soon as it opened (rig smoke 17, palette flow on a cold window).
-    const name = await vscode.window.showInputBox({
-      title: "nautilus: Create Project",
-      prompt: "Directory and program name for the new controller",
-      placeHolder: "water-plant",
-      validateInput: validateProjectName,
-      ignoreFocusOut: true,
-    });
+    const name = await nextStep(parent.input, pickName);
     if (!name) return;
 
-    const template = await vscode.window.showQuickPick(NEW_PROJECT_TEMPLATES, {
-      title: "nautilus: Create Project — template",
-      placeHolder: "Demo is the fastest way to see everything working",
-      ignoreFocusOut: true,
-    });
+    const template = await nextStep(name.input, () =>
+      pickOne(NEW_PROJECT_TEMPLATES, {
+        title: "nautilus: Create Project — template",
+        placeholder: "Demo is the fastest way to see everything working",
+      })
+    );
     if (!template) return;
 
     let language: string | undefined;
-    if (templateTakesLanguage(template.template)) {
-      const picked = await vscode.window.showQuickPick(NEW_PROJECT_LANGUAGES, {
-        title: "nautilus: Create Project — program language",
-        placeHolder: "The language of the first program (you can add the others later)",
-        ignoreFocusOut: true,
-      });
+    let last: vscode.QuickInput = template.input;
+    if (templateTakesLanguage(template.value.template)) {
+      const picked = await nextStep(template.input, () =>
+        pickOne(NEW_PROJECT_LANGUAGES, {
+          title: "nautilus: Create Project — program language",
+          placeholder: "The language of the first program (you can add the others later)",
+        })
+      );
       if (!picked) return;
-      language = picked.language;
+      language = picked.value.language;
+      last = picked.input;
     }
+    last.dispose();
 
-    await createProject(parent, name.trim(), template.template, language);
+    await createProject(parent.value, name.value.trim(), template.value.template, language);
+  });
+}
+
+/** One step's answer, with its quick input still up: the next step is shown
+ * before this one is disposed (see registerNewProjectCommand). */
+interface Step<T> {
+  value: T;
+  input: vscode.QuickInput;
+}
+
+/** Runs `step`, then disposes `prev`, which the step's own input has
+ * already replaced on screen. A step that was cancelled has disposed its
+ * own input, so nothing is left up. */
+async function nextStep<T>(prev: vscode.QuickInput, step: () => Promise<Step<T> | undefined>,
+): Promise<Step<T> | undefined> {
+  const shown = step();
+  prev.dispose();
+  return shown;
+}
+
+/** Shows `input` and resolves with what `accept` returns: an answer leaves the
+ * input up for the next step, `undefined` keeps waiting. Hiding it (Escape)
+ * resolves undefined and disposes it. Once answered, the hide that showing
+ * the next step causes is ignored. */
+function runStep<T>(input: vscode.QuickInput,
+  wire: (answer: (value: T) => void) => void,
+): Promise<Step<T> | undefined> {
+  input.ignoreFocusOut = true;
+  return new Promise((resolve) => {
+    let done = false;
+    wire((value) => {
+      if (done) return;
+      done = true;
+      resolve({ value, input });
+    });
+    input.onDidHide(() => {
+      if (done) return;
+      done = true;
+      input.dispose();
+      resolve(undefined);
+    });
+    input.show();
+  });
+}
+
+function pickName(): Promise<Step<string> | undefined> {
+  const box = vscode.window.createInputBox();
+  box.title = "nautilus: Create Project";
+  box.prompt = "Directory and program name for the new controller";
+  box.placeholder = "water-plant";
+  return runStep(box, (answer) => {
+    box.onDidChangeValue((text) => { box.validationMessage = validateProjectName(text); });
+    box.onDidAccept(() => {
+      const problem = validateProjectName(box.value);
+      box.validationMessage = problem;
+      if (!problem) answer(box.value);
+    });
+  });
+}
+
+function pickOne<T extends vscode.QuickPickItem>(items: T[], opts: { title: string; placeholder: string },
+): Promise<Step<T> | undefined> {
+  const pick = vscode.window.createQuickPick<T>();
+  pick.title = opts.title;
+  pick.placeholder = opts.placeholder;
+  pick.items = items;
+  return runStep(pick, (answer) => {
+    pick.onDidAccept(() => {
+      const chosen = pick.selectedItems[0] ?? pick.activeItems[0];
+      if (chosen) answer(chosen);
+    });
   });
 }
 
@@ -79,7 +153,7 @@ export function registerNewProjectCommand(): vscode.Disposable {
  * setups) the open dialog is a plain filter input where Enter navigates
  * instead of confirming "Create project here" (#86), and the extension has
  * no hook into that. An input box behaves the same in every dialog mode. */
-async function pickParentFolder(): Promise<vscode.Uri | undefined> {
+function pickParentFolder(): Promise<Step<vscode.Uri> | undefined> {
   const home = os.homedir();
   const base = vscode.workspace.workspaceFolders?.[0]?.uri.scheme === "file"
     ? vscode.workspace.workspaceFolders[0].uri.fsPath
@@ -106,15 +180,7 @@ async function pickParentFolder(): Promise<vscode.Uri | undefined> {
   box.prompt = "Folder to create the project in (Enter to accept, or browse)";
   box.value = base;
   box.buttons = [browse];
-  box.ignoreFocusOut = true;
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (uri: vscode.Uri | undefined) => {
-      if (done) return;
-      done = true;
-      box.dispose();
-      resolve(uri);
-    };
+  return runStep(box, (answer) => {
     let seq = 0;
     box.onDidChangeValue(async (text) => {
       const mine = ++seq;
@@ -127,7 +193,7 @@ async function pickParentFolder(): Promise<vscode.Uri | undefined> {
         box.validationMessage = problem;
         return;
       }
-      finish(vscode.Uri.file(resolveParentInput(box.value, home, base)!));
+      answer(vscode.Uri.file(resolveParentInput(box.value, home, base)!));
     });
     box.onDidTriggerButton(async () => {
       const picked = await vscode.window.showOpenDialog({
@@ -138,10 +204,8 @@ async function pickParentFolder(): Promise<vscode.Uri | undefined> {
         openLabel: "Create project here",
         title: "nautilus: choose a parent folder for the new project",
       });
-      if (picked?.[0]) finish(picked[0]);
+      if (picked?.[0]) answer(picked[0]);
     });
-    box.onDidHide(() => finish(undefined));
-    box.show();
   });
 }
 
