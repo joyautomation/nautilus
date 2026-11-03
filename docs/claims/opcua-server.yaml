@@ -135,14 +135,19 @@ claims:
   - id: OPC-004
     claim: >-
       Each node's DataType is the declared IEC type: BOOL Boolean, the eight
-      integer widths their OPC UA integer, an enumeration Int32, REAL/LREAL
+      integer widths their OPC UA integer, an enumeration its own
+      enumeration DataType with an Int32 value (OPC-024), REAL/LREAL
       Double, TIME Duration in milliseconds, STRING String, and an array of
       scalars an array of the element type. A STRING holding '' is sent as an
       empty String, not a null one, alone or in an array, by Read and by
       subscription.
     source: "#types"
+    note: >-
+      The tester's 001-P-type-table check is no longer cited: it encodes the
+      old enumeration row (DataType i=6) and was retired from the gate when
+      enumerations got their own DataType (nautilus#425), pending the
+      operator's ruling. Its other rows are what the Go tests below read.
     tests:
-      - go ./tools/blackbox TestBlackbox/001-P-type-table
       - go ./tools/blackbox TestBlackbox/001-F37-empty-string-is-null
       - go ./opcua/server TestEmptyStringIsReadAsEmptyNotNull
       - go ./opcua/server TestEmptyStringIsNotifiedAsEmptyNotNull
@@ -154,6 +159,25 @@ claims:
       - go ./opcua/server TestScalarConvertsInRangeAndWidensOutOfRange
       - go ./opcua/server TestVariantEncodesArraysOfEachKind
       - go ./opcua/server TestForeignAsyncuaClient
+
+  - id: OPC-024
+    claim: >-
+      Each enumeration the project declares is a DataType node in the
+      project namespace (ns=1;s=type:<Name>), a subtype of Enumeration
+      browsable under Types / DataTypes / BaseDataType / Enumeration, with a
+      DataTypeDefinition listing every member and its value and one property
+      naming them: EnumStrings when the values are 0..n-1, EnumValues
+      otherwise. A tag, UDT member or array of the enumeration has that node
+      as its DataType and an Int32 value, the member's. The type nodes are
+      read-only.
+    source: "#enumerations"
+    tests:
+      - go ./tools/blackbox TestBlackbox/001-F11-enum-names
+      - go ./opcua/server TestEnumerationIsADataTypeUnderEnumeration
+      - go ./opcua/server TestEnumValuesAndEnumStrings
+      - go ./opcua/server TestEnumerationTagsCarryTheirDataType
+      - go ./opcua/server TestEnumerationWritesKeepWorking
+      - go ./opcua/server TestDenseEnumerations
 
   - id: OPC-005
     claim: >-
@@ -384,8 +408,8 @@ claims:
       the declared width (Bad_OutOfRange outside it), never a Float or Double
       (Bad_TypeMismatch); a ULINT or LWORD any 64-bit pattern; a Double node
       a Float, a Double or an integer within ±2^53, never NaN, infinity or
-      an integer past ±2^53 (Bad_OutOfRange); an enumeration's Int32 node
-      only a member's value (Bad_OutOfRange); a Duration node a Double or an
+      an integer past ±2^53 (Bad_OutOfRange); an enumeration node (an
+      Int32) only a member's value (Bad_OutOfRange); a Duration node a Double or an
       integer of whole milliseconds (Bad_OutOfRange for a fraction); a
       String node a String, a null String written as ''. An absent
       StatusCode, or one whose severity is Good (GoodClamped included), is a
@@ -397,6 +421,7 @@ claims:
     source: "#conversions"
     tests:
       - go ./opcua/server TestWriteStatusTable
+      - go ./opcua/server TestEnumerationWritesKeepWorking
       - go ./opcua/server TestMaxNodesPerWriteIsAdvertisedAndEnforced
       - go ./opcua/server TestForeignAsyncuaSecure
       - go ./runtime TestFrontDoorConversions

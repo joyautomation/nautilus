@@ -12,6 +12,7 @@
 //	ns=1;s=P101.Drive.Speed   a member of a UDT tag
 //	ns=1;s=Levels[2]          an element of an array of structs
 //	ns=1;i=1                  the project folder under Objects
+//	ns=1;s=type:Mode          an enumeration's DataType (enums.go)
 //
 // A struct, an FB instance and an array of either are Objects with one
 // child per member; a scalar and an array of scalars are Variables. Tag
@@ -61,6 +62,10 @@ type namespace struct {
 	// w is the server's write policy: what opcua.writable opens, which
 	// sets a Variable's AccessLevel, and what the Write service consults.
 	w *writeAccess
+
+	// enums is the project's enumerations, each served as a DataType node
+	// (enums.go), as of Start.
+	enums enumTypes
 }
 
 type mstamp struct {
@@ -254,7 +259,11 @@ func (ns *namespace) Browse(bd *ua.BrowseDescription) *ua.BrowseResult {
 		return &ua.BrowseResult{StatusCode: ua.StatusBadNodeIDInvalid}
 	}
 	var refs []*ua.ReferenceDescription
+	if d, prop, ok := ns.enumAt(bd.NodeID); ok {
+		refs = ns.enumBrowse(d, prop)
+	}
 	switch {
+	case refs != nil:
 	case ns.isFolder(bd.NodeID):
 		refs = append(refs, ns.typeRef(id.FolderType))
 		// The folder hangs off ns=0's Objects, and says so backwards.
@@ -404,9 +413,11 @@ func wantRef(bd *ua.BrowseDescription, r *ua.ReferenceDescription) bool {
 	case id.References:
 		return true
 	case id.HierarchicalReferences:
-		return have == id.HasComponent || have == id.Organizes
-	case id.HasChild, id.Aggregates:
-		return have == id.HasComponent
+		return have == id.HasComponent || have == id.Organizes || have == id.HasSubtype || have == id.HasProperty
+	case id.HasChild:
+		return have == id.HasComponent || have == id.HasSubtype || have == id.HasProperty
+	case id.Aggregates:
+		return have == id.HasComponent || have == id.HasProperty
 	case id.NonHierarchicalReferences:
 		return have == id.HasTypeDefinition
 	}
@@ -418,6 +429,9 @@ func wantRef(bd *ua.BrowseDescription, r *ua.ReferenceDescription) bool {
 func (ns *namespace) Attribute(nid *ua.NodeID, attr ua.AttributeID) *ua.DataValue {
 	if ns.isFolder(nid) {
 		return ns.folderAttribute(attr)
+	}
+	if d, prop, ok := ns.enumAt(nid); ok {
+		return ns.enumAttribute(d, prop, attr)
 	}
 	m, ok := ns.resolve(nid)
 	if !ok {
@@ -453,7 +467,7 @@ func (ns *namespace) Attribute(nid *ua.NodeID, attr ua.AttributeID) *ua.DataValu
 	case ua.AttributeIDValue:
 		return ns.readValue(m)
 	case ua.AttributeIDDataType:
-		return value(ua.NewNumericNodeID(0, dataType(m)))
+		return value(ns.dataTypeID(m))
 	case ua.AttributeIDValueRank:
 		if m.val.Kind == ir.TypeArray {
 			return value(int32(1))
@@ -607,7 +621,7 @@ func (ns *namespace) stampAt(root string, gen uint64, now time.Time) time.Time {
 // session: Bad_UserAccessDenied on a Variable's Value, Bad_NotWritable on
 // anything else.
 func (ns *namespace) SetAttribute(nid *ua.NodeID, attr ua.AttributeID, _ *ua.DataValue) ua.StatusCode {
-	if ns.isFolder(nid) {
+	if _, _, isEnum := ns.enumAt(nid); isEnum || ns.isFolder(nid) {
 		return ua.StatusBadNotWritable
 	}
 	m, ok := ns.resolve(nid)

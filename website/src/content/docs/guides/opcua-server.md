@@ -140,7 +140,7 @@ was declared as.
 | `INT` / `UINT`, `WORD` | `Int16` / `UInt16` |
 | `DINT` / `UDINT`, `DWORD` | `Int32` / `UInt32` |
 | `LINT` / `ULINT`, `LWORD` | `Int64` / `UInt64` |
-| an enumeration | `Int32` (the member's value) |
+| an enumeration | the enumeration's own DataType; the value is an `Int32`, the member's value (see [Enumerations](#enumerations)) |
 | `REAL`, `LREAL` | `Double` |
 | `TIME` | `Duration` (a `Double` of milliseconds) |
 | `STRING` | `String` |
@@ -150,6 +150,29 @@ An integer that does not fit its declared width — which a declared variable
 never produces — is sent as `Int64` rather than wrapped. A `STRING` holding
 `''` is sent as an empty `String`, never a null one, alone or in an array, so
 a client that tells the two apart reads back the `''` the project holds.
+
+### Enumerations
+
+Each enumeration the project declares is served as an OPC UA enumeration
+DataType, so a client shows the member names that the HTTP API and the
+dashboard show. Take `TYPE Mode : (Idle, Run := 10, Fault) := Idle; END_TYPE`:
+
+- `Mode` is a DataType node, `ns=1;s=type:Mode`, a subtype of the standard
+  `Enumeration`. It sits where the standard puts it, under
+  `Types / DataTypes / BaseDataType / Enumeration`.
+- Its `DataTypeDefinition` lists every member and its value:
+  `Idle` 0, `Run` 10, `Fault` 11.
+- It has one property naming the members. When the values run 0, 1, …, n-1,
+  that is `EnumStrings`, an array of names indexed by value. Otherwise it is
+  `EnumValues`, a list of value and name pairs, as `Mode`'s is.
+- A tag, a UDT member or an array declared as `Mode` has `ns=1;s=type:Mode`
+  as its `DataType`. Its value is still an `Int32`, the member's value, so
+  `Mode1` reads `10`, and a client that knows the type shows `Run`.
+
+asyncua builds Python enums from these with
+`await client.load_data_type_definitions()`, and UAExpert shows the names
+beside the values. The type nodes are read-only, and the set is the
+project's enumerations at the time the server starts.
 
 ## Quality and timestamps
 
@@ -424,7 +447,7 @@ truncated or retyped.
 | `Boolean` | `Boolean` | anything else: `Bad_TypeMismatch` |
 | `SByte` … `Int64`, `Byte` … `UInt64` | any integer type, checked against the declared width | `Float`, `Double`: `Bad_TypeMismatch`; outside the declared width: `Bad_OutOfRange` |
 | `Double` (`REAL`, `LREAL`) | `Float`, `Double`; an integer within ±2^53 | NaN or infinity, an integer past ±2^53: `Bad_OutOfRange` |
-| `Int32` (an enumeration) | an integer that is a member's value | any other integer: `Bad_OutOfRange` |
+| an enumeration (an `Int32`) | an integer that is a member's value | any other integer: `Bad_OutOfRange` |
 | `Duration` (`TIME`) | a `Double` or an integer, in whole milliseconds | a fraction of a millisecond: `Bad_OutOfRange` |
 | `String` | `String`; a null `String` is written as `''` | anything else: `Bad_TypeMismatch` |
 
