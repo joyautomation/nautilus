@@ -132,6 +132,7 @@ func TestForeignDecodesEverySeededValue(t *testing.T) {
 			want[k] = v
 		}
 		want[src.OnlineTagName()] = true
+		want[src.OutagesTagName()] = int64(0)
 	}
 	d, err := New(m, WithScanRate(50*time.Millisecond))
 	if err != nil {
@@ -347,7 +348,8 @@ func TestForeignExceptionMarksOnlyThatBlock(t *testing.T) {
 	waitFor(t, "good blocks delivered, absent blocks Bad", func() bool {
 		v, _ := d.ReadInputs()
 		q := d.Quality()
-		return len(v) == len(want)+1 && q["ABSENT_REG"] == nio.Bad && q["ABSENT_COIL"] == nio.Bad
+		// The tags plus the source's two companions, __Online and __Outages.
+		return len(v) == len(want)+2 && q["ABSENT_REG"] == nio.Bad && q["ABSENT_COIL"] == nio.Bad
 	})
 	v, _ := d.ReadInputs()
 	for name, w := range want {
@@ -357,6 +359,9 @@ func TestForeignExceptionMarksOnlyThatBlock(t *testing.T) {
 	}
 	if v[src.OnlineTagName()] != true {
 		t.Error("an exception must not take the source offline")
+	}
+	if v[src.OutagesTagName()] != int64(0) {
+		t.Errorf("an exception is not an outage: %s = %v", src.OutagesTagName(), v[src.OutagesTagName()])
 	}
 	if _, ok := v["ABSENT_REG"]; ok {
 		t.Error("a never-answered tag must stay absent, not read as zero")
