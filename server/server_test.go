@@ -312,3 +312,33 @@ func TestMetaEndpoint(t *testing.T) {
 		t.Errorf("ScanTargetMs = %v, want 100", m.ScanTargetMs)
 	}
 }
+
+// A browser page on another origin preflights every non-simple request. The
+// preflight has to allow each method a route answers, or the browser never
+// sends the request: PUT /api/program (an online edit) and DELETE
+// /api/forces/{name} as well as the GETs and POSTs.
+func TestCORSPreflightAllowsEveryMethodTheAPIServes(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{OnlineEdits: true})
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/api/state"},
+		{"POST", "/api/tags"},
+		{"PUT", "/api/program"},
+		{"DELETE", "/api/forces/Level"},
+	} {
+		rec := call(t, srv, "OPTIONS", tc.path, "", func(r *http.Request) {
+			r.Header.Set("Origin", "http://hmi.example.test")
+			r.Header.Set("Access-Control-Request-Method", tc.method)
+		})
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("preflight for %s %s = %d, want 204", tc.method, tc.path, rec.Code)
+		}
+		allowed := strings.Split(rec.Header().Get("Access-Control-Allow-Methods"), ",")
+		ok := false
+		for _, m := range allowed {
+			ok = ok || strings.TrimSpace(m) == tc.method
+		}
+		if !ok {
+			t.Errorf("preflight for %s %s allows %q, not %s", tc.method, tc.path, rec.Header().Get("Access-Control-Allow-Methods"), tc.method)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package uaserver
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,6 +91,26 @@ func (as *NodeNameSpace) AddNode(n *Node) *Node {
 
 	as.m[k] = n
 	return n
+}
+
+// RemoveNode takes a node out of the namespace, and every reference to it
+// out of the namespace's other nodes, so a Browse no longer lists it and a
+// Read names an unknown node. For leaving out an optional node of the
+// standard node set that the server cannot honestly fill in (a limit it
+// does not know): Part 5 says such a component "shall not be included".
+// Call it before the server starts: it edits other nodes' references
+// under the namespace lock only, not each node's own.
+func (as *NodeNameSpace) RemoveNode(nid *ua.NodeID) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	k := nid.String()
+	delete(as.m, k)
+	as.nodes = slices.DeleteFunc(as.nodes, func(n *Node) bool { return n.ID().String() == k })
+	for _, n := range as.nodes {
+		n.refs = slices.DeleteFunc(n.refs, func(r *ua.ReferenceDescription) bool {
+			return r.NodeID != nil && r.NodeID.NodeID != nil && r.NodeID.NodeID.String() == k
+		})
+	}
 }
 
 func (as *NodeNameSpace) AddNewVariableNode(name string, value any) *Node {

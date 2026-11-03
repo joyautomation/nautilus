@@ -2,14 +2,11 @@ package uaserver
 
 import (
 	"log"
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/opcua/internal/uaserver/attrs"
-	"github.com/joyautomation/nautilus/opcua/internal/uaserver/refs"
 )
 
 type Attributes map[ua.AttributeID]*ua.DataValue
@@ -333,35 +330,6 @@ func (n *Node) NodeClass() ua.NodeClass {
 
 }
 
-func (n *Node) AddObject(o *Node) *Node {
-	nn := &Node{
-		id:   o.id,
-		attr: maps.Clone(o.attr),
-		refs: slices.Clone(o.refs),
-	}
-	if n.attr == nil {
-		n.attr = Attributes{}
-	}
-	nn.SetNodeClass(ua.NodeClassObject)
-	n.refs = append(n.refs, refs.Organizes(nn.id, nn.BrowseName().Name, nn.DisplayName().Text, nn.DataType()))
-	return n.ns.AddNode(nn)
-}
-
-func (n *Node) AddVariable(o *Node) *Node {
-	nn := &Node{
-		id:   o.id,
-		attr: maps.Clone(o.attr),
-		refs: slices.Clone(o.refs),
-		val:  o.val,
-	}
-	if n.attr == nil {
-		n.attr = Attributes{}
-	}
-	nn.SetNodeClass(ua.NodeClassVariable)
-	n.refs = append(n.refs, refs.Organizes(nn.id, nn.BrowseName().Name, nn.DisplayName().Text, nn.DataType()))
-	return nn
-}
-
 type RefType int
 
 const (
@@ -372,12 +340,13 @@ const (
 func (n *Node) AddRef(o *Node, rt RefType, forward bool) {
 	//eoid := ua.NewNumericExpandedNodeID(o.ns.ID(), o.)
 	eoid := ua.NewExpandedNodeID(o.ID(), "", 0)
-	// The target's HasTypeDefinition; failing that, DataType(), which is
-	// where a node built without references keeps its type (opcua/server's
-	// project folder holds FolderType there).
+	// The target's HasTypeDefinition; failing that, the null NodeId, never
+	// its DataType: a Variable's DataType is not its type definition
+	// (nautilus#485). Browse resolves the target's type again when it
+	// answers, so a type added after this reference still shows.
 	tdef := o.TypeDefinition()
 	if tdef == nil {
-		tdef = o.DataType()
+		tdef = ua.NewTwoByteExpandedNodeID(0)
 	}
 
 	ref := ua.ReferenceDescription{

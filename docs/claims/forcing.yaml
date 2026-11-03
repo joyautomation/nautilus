@@ -33,11 +33,17 @@ claims:
     claim: >-
       A forced value is coerced like any write: an enumerated tag or member
       takes its member name, and a name that is no member is refused with the
-      list of members.
+      list of members; a TIME takes milliseconds or its IEC literal (T#45s),
+      and a string that is no duration is refused with the reason. A value
+      the tag's type cannot hold (out of an integer type's range, a string
+      for a REAL, NaN) is refused and nothing is forced; an acceptance
+      test's force: may still hold a value the program can produce.
     source: "#what-a-force-does"
     tests:
       - go ./runtime TestForceEnumMemberByName
       - go ./server TestForceEnumMemberByPath
+      - go ./server TestForceTimeTakesIECLiteral
+      - go ./runtime TestForceIsCheckedAsAWriteIs
   - id: FRC-005
     claim: >-
       The force table records the actual value the tag would hold (the

@@ -2,6 +2,7 @@ package alarm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -486,6 +487,11 @@ func (e *Engine) Missing() int {
 	return e.missing
 }
 
+// ErrNoAlarm is the error Ack, Shelve, Unshelve and Rename wrap when an id
+// names no alarm, so a caller can tell "no such alarm" (an HTTP 404) from
+// a refusal about one that exists (a 400). The message reads `no alarm "X"`.
+var ErrNoAlarm = errors.New("no alarm")
+
 // Ack acknowledges alarms and returns how many actually changed. A nil or
 // ["*"] id list means all, which is the "acknowledge everything" button.
 //
@@ -515,7 +521,7 @@ func (e *Engine) Ack(ids []string, by string) (int, error) {
 	for _, id := range ids {
 		i, ok := e.byID[id]
 		if !ok {
-			return 0, fmt.Errorf("no alarm %q", id)
+			return 0, fmt.Errorf("%w %q", ErrNoAlarm, id)
 		}
 		idx = append(idx, i)
 	}
@@ -537,7 +543,7 @@ func (e *Engine) Shelve(id string, until time.Time, by string) error {
 	defer e.mu.Unlock()
 	i, ok := e.byID[id]
 	if !ok {
-		return fmt.Errorf("no alarm %q", id)
+		return fmt.Errorf("%w %q", ErrNoAlarm, id)
 	}
 	in := &e.inst[i]
 	if !in.def.Shelvable {
@@ -562,7 +568,7 @@ func (e *Engine) Unshelve(id string, by string) error {
 	defer e.mu.Unlock()
 	i, ok := e.byID[id]
 	if !ok {
-		return fmt.Errorf("no alarm %q", id)
+		return fmt.Errorf("%w %q", ErrNoAlarm, id)
 	}
 	in := &e.inst[i]
 	if in.shelfUntil.IsZero() {
@@ -589,7 +595,7 @@ func (e *Engine) Rename(id, name string) error {
 	defer e.mu.Unlock()
 	i, ok := e.byID[id]
 	if !ok {
-		return fmt.Errorf("no alarm %q", id)
+		return fmt.Errorf("%w %q", ErrNoAlarm, id)
 	}
 	in := &e.inst[i]
 	if name == in.def.Name {

@@ -792,7 +792,9 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			// Every method a route below answers: PUT is the online-edit
+			// push (PUT /api/program), DELETE the per-tag unforce.
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			// Allow the auth headers so an authorized cross-origin writer's
 			// preflight succeeds; Content-Type for JSON bodies.
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
@@ -1268,7 +1270,8 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	}
 	// Whole-tag scalar write. JSON numbers decode to float64; booleans to
 	// bool; a string is taken only by a tag that already holds a STRING (a
-	// recipe name, a scenario), so a typo cannot turn a REAL into text.
+	// recipe name, a scenario), so a typo cannot turn a REAL into text, or
+	// by a TIME, which reads it as a duration literal (T#1m30s).
 	// Anything else is refused here rather than answered 204 for a write
 	// that didn't happen.
 	// The name must be a declared tag. A write to anything else would create
@@ -1288,8 +1291,10 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		} else if t := s.rt.Tags().TypeOf(req.Name); t != nil {
 			kind = t.Kind
 		}
-		if kind != ir.TypeString {
-			http.Error(w, "value must be a number or boolean (a string only to a STRING tag)", http.StatusUnprocessableEntity)
+		// A TIME takes its IEC literal (T#1m30s) as well as milliseconds;
+		// the front door parses it and answers a malformed one with a 400.
+		if kind != ir.TypeString && kind != ir.TypeTime {
+			http.Error(w, "value must be a number or boolean (a string only to a STRING tag, or a T# literal to a TIME)", http.StatusUnprocessableEntity)
 			return
 		}
 	default:

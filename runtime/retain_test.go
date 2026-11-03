@@ -711,3 +711,49 @@ func TestNoAlarmRetainerLeavesTheStateAlone(t *testing.T) {
 		t.Errorf("a runtime with no alarm engine saved %+v", got)
 	}
 }
+
+// Nothing re-seeds a tag at takeover. An unretained state tag is not
+// carried between replicas, so a new leader keeps its OWN copy: its seed if
+// it never led, what it held when it last led otherwise. Only a restart
+// starts the tag from its seed, because the process is new. A plain VAR
+// restarts from its declaration at every takeover (the frame resets).
+func TestTakeoverKeepsUnretainedStateTags(t *testing.T) {
+	coord := &flag{lead: false}
+	rt, err := New(Options{
+		Program: `PROGRAM P
+VAR n : INT; END_VAR
+VAR_EXTERNAL Total : DINT; Calls : INT; END_VAR
+n := n + 1;
+Calls := n;
+Total := Total + 1;
+END_PROGRAM`,
+		Tags:        []TagDef{State("Total", int64(10)), State("Calls", int64(0))},
+		Retain:      &fakeStore{},
+		Coordinator: coord,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) int64 { v, _ := rt.Tags().ReadGlobal(name); return v.I }
+
+	// A standby that has never led holds the seed, and takes over from it.
+	rt.Scan()
+	coord.lead = true
+	rt.Scan()
+	rt.Scan()
+	if got := read("Total"); got != 12 {
+		t.Fatalf("Total = %d after first leading for 2 scans from seed 10, want 12", got)
+	}
+	// Step down, then lead again: Total carries on from this replica's own
+	// copy (12), not from the seed (10); the plain VAR n starts over.
+	coord.lead = false
+	rt.Scan()
+	coord.lead = true
+	rt.Scan()
+	if got := read("Total"); got != 13 {
+		t.Errorf("Total = %d after a second takeover, want 13: nothing re-seeds a tag at takeover", got)
+	}
+	if got := read("Calls"); got != 1 {
+		t.Errorf("Calls = %d after a second takeover, want 1: a plain VAR restarts from its declaration", got)
+	}
+}

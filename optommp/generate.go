@@ -227,7 +227,9 @@ func ManifestTagsYAML(m Manifest, command, tagsPath string) ([]byte, error) {
 	}
 	var tags []tagfile.Tag
 	for _, b := range m.Tags {
-		t := tagfile.Tag{Name: b.Name, Role: "input", Unit: b.Unit}
+		// Typed from the point, so a program reads the tag without a
+		// VAR_EXTERNAL (naut check refuses a project tag with no type).
+		t := tagfile.Tag{Name: b.Name, Role: "input", Type: b.IECType(), Unit: b.Unit}
 		where := fmt.Sprintf("%s slot %d ch %d", parts[b.Slot], b.Slot, b.Channel)
 		switch b.Point {
 		case PointDI, PointDO, PointAI, PointAO:

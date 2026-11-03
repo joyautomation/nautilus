@@ -550,7 +550,10 @@ claims:
       An operator write lands exactly as sent or is refused: an integer
       outside its declared width is a 400 (a ULINT or LWORD takes any 64-bit
       pattern), a fraction for an integer or a boolean for a REAL is a 422 on
-      a whole tag, a TIME takes whole milliseconds, and an enumeration takes
+      a whole tag, a TIME takes whole milliseconds or its IEC literal
+      (T#1m30s; a malformed one is the wrong kind of value, one finer than a
+      millisecond or past int64 a 400, never rounded or wrapped), and an
+      enumeration takes
       only a member's name or value, through a path, an object or a list
       alike, and for an output no scan has written yet. A refused write never
       changes the tag's type. A retained value comes back as the program
@@ -559,6 +562,8 @@ claims:
     tests:
       - go ./server TestWriteOutOfRangeIs400AndNeverRetypes
       - go ./server TestWriteUndeliveredTypedOutputIsChecked
+      - go ./server TestWriteTimeTakesIECLiteral
+      - go ./lang/ir TestParseDurationRangeAndRounding
       - go ./runtime TestFrontDoorConversions
       - go ./runtime TestFrontDoorEnumInsideMapAndList
       - go ./runtime TestRetainKeepsWhatTheProgramProduced
