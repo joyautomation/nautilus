@@ -585,7 +585,7 @@ claims:
       - go ./tools/blackbox TestBlackbox/001-F30-maxnodesperread-enforced
       - go ./tools/blackbox TestBlackbox/001-P-read-limit-boundary
 
-  - id: OPC-024
+  - id: OPC-026
     claim: >-
       TranslateBrowsePathsToNodeIds resolves a path of browse names over the
       references a Browse lists, in the project namespace and in ns=0, a
@@ -607,7 +607,7 @@ claims:
       - go ./opcua/server TestCallAnswersEachMethod
       - go ./tools/blackbox TestBlackbox/001-F31-services-unsupported
 
-  - id: OPC-025
+  - id: OPC-027
     claim: >-
       ModifyMonitoredItems changes an item's sampling interval and client
       handle, revised as CreateMonitoredItems revises them, and the item is
