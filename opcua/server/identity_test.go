@@ -371,3 +371,71 @@ func TestServerDiagnosticsFlagAndOptionalLimits(t *testing.T) {
 		}
 	}
 }
+
+// With diagnostics off, the static diagnostic nodes under ServerDiagnostics
+// are left out, as Part 5 §6.3.3 allows ("the Server can return
+// Bad_NodeIdUnknown for all static diagnostic Nodes except the EnabledFlag
+// Property"): the Summary and its twelve counters, the sampling-interval
+// and subscription arrays, and SessionsDiagnosticsSummary with its two
+// arrays. They answered Bad_AttributeIdInvalid on Value (nautilus#485).
+// ServerDiagnostics itself stays (Mandatory in ServerType) with EnabledFlag
+// as its only child, and EnabledFlag is read-only, as §6.3.3 asks when
+// collection is not supported.
+func TestServerDiagnosticsLeftOutWhileDisabled(t *testing.T) {
+	rt, _ := newRuntime(t)
+	_, c := startServer(t, rt)
+
+	if browse(t, c, ua.NewNumericNodeID(0, id.Server))["ServerDiagnostics"] == nil {
+		t.Fatal("the Server object no longer lists ServerDiagnostics (Mandatory)")
+	}
+	// Everything left under ServerDiagnostics, at any depth.
+	var left []string
+	var walk func(nid *ua.NodeID, path string)
+	walk = func(nid *ua.NodeID, path string) {
+		for name, ref := range browse(t, c, nid) {
+			left = append(left, path+name)
+			walk(ref.NodeID.NodeID, path+name+".")
+		}
+	}
+	walk(ua.NewNumericNodeID(0, id.Server_ServerDiagnostics), "")
+	if !slices.Equal(left, []string{"EnabledFlag"}) {
+		t.Errorf("ServerDiagnostics browses to %v, want only EnabledFlag", left)
+	}
+
+	// The node ids by number (Part 6 NodeIds.csv), not by the list the
+	// server removes, so a node dropped from that list shows here.
+	for _, n := range []uint32{
+		2275,                                                                   // ServerDiagnosticsSummary
+		2276, 2277, 2278, 2279, 3705, 2281, 2282, 2284, 2285, 2286, 2287, 2288, // its counters
+		2289,       // SamplingIntervalDiagnosticsArray
+		2290,       // SubscriptionDiagnosticsArray
+		3706,       // SessionsDiagnosticsSummary
+		3707, 3708, // SessionDiagnosticsArray, SessionSecurityDiagnosticsArray
+	} {
+		nid := ua.NewNumericNodeID(0, n)
+		for _, attr := range []ua.AttributeID{ua.AttributeIDValue, ua.AttributeIDBrowseName} {
+			if dv := read(t, c, nid, attr); dv.Status != ua.StatusBadNodeIDUnknown {
+				t.Errorf("Read %s attribute %d: %s, want Bad_NodeIdUnknown", nid, attr, dv.Status)
+			}
+		}
+	}
+
+	flag := ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag)
+	if dv := read(t, c, flag, ua.AttributeIDValue); dv.Status != ua.StatusOK || dv.Value.Value() != false {
+		t.Errorf("EnabledFlag: %s %v, want false", dv.Status, dv.Value)
+	}
+	for _, attr := range []ua.AttributeID{ua.AttributeIDAccessLevel, ua.AttributeIDUserAccessLevel} {
+		dv := read(t, c, flag, attr)
+		if dv.Status != ua.StatusOK || dv.Value.Value() != uint8(ua.AccessLevelTypeCurrentRead) {
+			t.Errorf("EnabledFlag attribute %d: %s %v, want CurrentRead only", attr, dv.Status, dv.Value)
+		}
+	}
+	got := write(t, c, &ua.WriteValue{NodeID: flag, AttributeID: ua.AttributeIDValue,
+		Value: &ua.DataValue{EncodingMask: ua.DataValueValue, Value: ua.MustVariant(true)}})
+	if got[0] == ua.StatusOK {
+		t.Error("a Write of true to EnabledFlag landed; it must be read-only")
+	}
+	if dv := read(t, c, flag, ua.AttributeIDValue); dv.Value.Value() != false {
+		t.Errorf("EnabledFlag after the refused Write = %v, want false", dv.Value)
+	}
+}

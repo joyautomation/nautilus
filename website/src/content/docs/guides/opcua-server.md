@@ -143,7 +143,10 @@ Automation, Nautilus), the version `naut version` prints, the commit it
 was built from as the build number, and that commit's date. `ServiceLevel`
 is 255 while the server runs, and `Auditing` is false: the server writes
 no audit events. `ServerDiagnostics.EnabledFlag` is false too, because the
-server collects no diagnostics. `ServerCapabilities` has no
+server collects no diagnostics, and it is read-only. So `ServerDiagnostics`
+holds only that flag: the standard lets a server with diagnostics off leave
+out the summary counters and the session and subscription arrays, and
+reading one answers `Bad_NodeIdUnknown`. `ServerCapabilities` has no
 `MaxArrayLength` or `MaxStringLength`: the server sets no such limit of its
 own (the message size bounds both), and the standard asks a server in that
 case to leave them out.

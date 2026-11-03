@@ -110,13 +110,17 @@ claims:
       sweep as MinSupportedSampleRate, no continuation-point limit); the
       optional MaxArrayLength and MaxStringLength are left out, as Part 5
       asks of a server that sets no such limit; ServerDiagnostics.EnabledFlag
-      reads false (no diagnostics collected).
+      reads false (no diagnostics collected) and is read-only, and the static
+      diagnostic nodes (the Summary and its counters, the subscription,
+      sampling-interval and session arrays) are left out, as Part 5 §6.3.3
+      allows with diagnostics off.
       The project folder under Objects browses as a FolderType.
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestServerObjectDescribesNautilus
       - go ./opcua/server TestBrowseTypeDefinitionsAreTypes
       - go ./opcua/server TestServerDiagnosticsFlagAndOptionalLimits
+      - go ./opcua/server TestServerDiagnosticsLeftOutWhileDisabled
       - go ./opcua/internal/uaserver TestAddRefNeverUsesTheDataTypeAsTypeDefinition
       - go ./opcua/server TestApplicationURIIsStableAndOverridable
       - go ./opcua/server TestBinaryBuildIsNeverThePlaceholder
