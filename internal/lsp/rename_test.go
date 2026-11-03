@@ -168,7 +168,7 @@ tags:
     role: setpoint
     init: 68.0
 tag-meta:
-  TempC: { hmi: gauge }
+  TempC: { unit: degC }
 `
 
 const renameProgram = `PROGRAM Main
@@ -252,7 +252,7 @@ func TestRenameTagAcrossProject(t *testing.T) {
 	manifest := applyEdits(renameManifest, we.Changes[pathToURI(filepath.Join(dir, "nautilus.yaml"))])
 	for _, want := range []string{
 		`- { name: TankTempC,   role: state,`,    // flow-style name
-		"tag-meta:\n  TankTempC: { hmi: gauge }", // tag-meta key
+		"tag-meta:\n  TankTempC: { unit: degC }", // tag-meta key
 		`name: "HiTempSP"`,                       // untouched neighbour keeps its quotes
 		"dt-tag: ScanDtS",                        // a different tag's dt-tag untouched
 	} {

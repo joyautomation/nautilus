@@ -158,6 +158,17 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **A tag error in `nautilus.yaml` is shown on `nautilus.yaml`.** A tag
+  the language server could not read (an unknown `role:`, a setpoint with
+  neither `init:` nor `type:`) used to take every tag out of scope, so each
+  program said its first tag was an undeclared identifier and the manifest
+  showed nothing. The error now appears in Problems on that tag's
+  `name:` (in `nautilus.yaml` or the tag-file declaring it), the other
+  tags stay in scope, and a program using the bad tag is not blamed for
+  it. A manifest that does not read at all (an unknown field, bad YAML) is
+  shown the same way, on the line YAML names. The manifest's problems
+  refresh as its programs are analyzed, so a fix shows on the next
+  keystroke in any of them.
 - **"Online edits disabled" names the setting to change.** Download
   Program to Controller on a controller with online edits off said
   `(server.Options.OnlineEdits)`, a Go field; it now says to set

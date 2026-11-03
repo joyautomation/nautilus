@@ -44,9 +44,12 @@ type Server struct {
 	// libDiags: library URI → reporting document URI → the errors that
 	// document's compile found inside that library (publishLibDiags).
 	libDiags map[string]map[string][]Diagnostic
-	statics  []CompletionItem
-	exited   bool
-	shutdown bool
+	// manifestDiags: manifest path → file URI → the diagnostics last
+	// published there about the manifest's tags (publishManifestDiags).
+	manifestDiags map[string]map[string][]Diagnostic
+	statics       []CompletionItem
+	exited        bool
+	shutdown      bool
 }
 
 // document is the server's copy of an open editor buffer plus the analysis
@@ -189,6 +192,9 @@ func (s *Server) setDocument(uri, text string) {
 		URI: uri, Diagnostics: nonNil(diags),
 	})
 	s.publishLibDiags(uri, doc.an.libDiags)
+	if isFile {
+		s.publishManifestDiags(path)
+	}
 }
 
 // envFor is the project a document at path compiles in: its libraries
@@ -203,6 +209,7 @@ func (s *Server) envFor(uri, path string) env {
 		preludeLines: strings.Count(prelude, "\n"),
 		segs:         segs,
 		tags:         projectTagDefs(path),
+		manifest:     manifestFor(path),
 	}
 }
 

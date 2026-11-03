@@ -123,28 +123,28 @@ func runCheck(args []string) int {
 	}
 	tagsFor := map[string][]runtime.TagDef{}
 	tagsErr := map[string]error{} // root → why its manifest's tags can't be read
-	tagsSaid := map[string]bool{} // manifest dir → its error is printed
+	tagsSaid := map[string]bool{} // manifest path → its error is printed
 	projectTags := func(f string) []runtime.TagDef {
 		root := stproject.ProjectRoot(f)
 		if defs, ok := tagsFor[root]; ok {
 			return defs
 		}
-		defs, mdir, err := project.TagDefsForErr(f)
+		defs, mdir, mname, err := project.TagDefsForErr(f, *manifest)
 		tagsFor[root] = defs
 		if err != nil {
 			// Reported once per project, on the manifest. Its programs are
 			// not compiled against an empty tag set: that would only say
 			// each tag they use is undeclared, and hide this.
 			tagsErr[root] = err
-			if !tagsSaid[mdir] { // once per manifest, however many directories its programs are in
-				tagsSaid[mdir] = true
+			if key := filepath.Join(mdir, mname); !tagsSaid[key] { // once per manifest, however many directories its programs are in
+				tagsSaid[key] = true
 				shown := mdir
 				if wd, werr := os.Getwd(); werr == nil && wd != string(filepath.Separator) {
 					if rel, rerr := filepath.Rel(wd, mdir); rerr == nil && !strings.HasPrefix(rel, "..") {
 						shown = rel
 					}
 				}
-				fmt.Println(newManifestLoc(shown, "").say(err))
+				fmt.Println(newManifestLoc(shown, mname).say(err))
 			}
 		}
 		return defs

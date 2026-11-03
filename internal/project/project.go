@@ -1035,41 +1035,54 @@ func TagDefs(m *Manifest) ([]runtime.TagDef, error) {
 // its directory or the nearest one above it) and returns its TagDefs; nil
 // when the file is in no project, or the manifest does not read.
 func TagDefsFor(file string) []runtime.TagDef {
-	defs, _, _ := TagDefsForErr(file)
+	defs, _, _, _ := TagDefsForErr(file, "")
 	return defs
 }
 
 // TagDefsForErr is TagDefsFor with the reason it has nothing: the
-// governing manifest's directory and the error reading it or its tags
-// (an unknown role, a setpoint with neither init nor type). No manifest
-// above file is no error. `naut check` reports the error rather than
-// compiling the programs against no tags, which only says each tag they
-// use is undeclared.
-func TagDefsForErr(file string) (defs []runtime.TagDef, manifestDir string, err error) {
+// governing manifest's directory and name, and the error reading it or
+// its tags (an unknown role, a setpoint with neither init nor type). No
+// manifest above file is no error. `naut check` reports the error rather
+// than compiling the programs against no tags, which only says each tag
+// they use is undeclared.
+//
+// manifestName selects the manifest as `-m` does ("" is nautilus.yaml):
+// the nearest directory holding it or nautilus.yaml is the project, and
+// it is read through manifestName when it has that file — so `naut check
+// -m field.yaml` scopes the programs by field.yaml's tags, and a nested
+// project without a field.yaml still by its own nautilus.yaml.
+func TagDefsForErr(file, manifestName string) (defs []runtime.TagDef, manifestDir, manifest string, err error) {
 	abs, err := filepath.Abs(file)
 	if err != nil {
-		return nil, "", nil
+		return nil, "", "", nil
+	}
+	names := []string{ManifestName}
+	if manifestName != "" && manifestName != ManifestName {
+		names = []string{manifestName, ManifestName}
 	}
 	dir := filepath.Dir(abs)
 	for range 32 {
-		if fi, err := os.Stat(filepath.Join(dir, ManifestName)); err == nil && !fi.IsDir() {
-			m, err := ReadManifest(os.DirFS(dir), "")
+		for _, name := range names {
+			if fi, err := os.Stat(filepath.Join(dir, filepath.FromSlash(name))); err != nil || fi.IsDir() {
+				continue
+			}
+			m, err := ReadManifest(os.DirFS(dir), name)
 			if err != nil {
-				return nil, dir, err
+				return nil, dir, name, err
 			}
 			defs, err := TagDefs(m)
 			if err != nil {
-				return nil, dir, err
+				return nil, dir, name, err
 			}
-			return defs, dir, nil
+			return defs, dir, name, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil, "", nil
+			return nil, "", "", nil
 		}
 		dir = parent
 	}
-	return nil, "", nil
+	return nil, "", "", nil
 }
 
 // PeersFor is the programs of the project governing file — every task's

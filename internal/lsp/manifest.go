@@ -18,7 +18,10 @@ package lsp
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -51,6 +54,39 @@ type manifestEntry struct {
 	// programs are checked against the Logix writer's rules as they are
 	// typed, the same rules `naut check` runs for such a project.
 	logix bool
+	// badTags are the tags whose declarations cannot be read (an unknown
+	// role, a setpoint with neither init nor type): left out of defs, and
+	// reported on the manifest instead of as undeclared in every program
+	// that uses them (#518).
+	badTags []badTag
+	// readErr: the manifest itself does not read. The entry is then the
+	// last good one (stale is false) or empty (stale is true: no tag is
+	// known at all).
+	readErr error
+	stale   bool
+}
+
+// badTag is one tag declaration the compiler cannot scope, and why.
+type badTag struct {
+	name string
+	err  error
+}
+
+// unreadTag reports whether name is a tag the manifest declares but whose
+// declaration does not read — so a program naming it is not at fault.
+func (e *manifestEntry) unreadTag(name string) bool {
+	if e == nil || name == "" {
+		return false
+	}
+	if e.stale {
+		return true // nothing is known: any undeclared name may be a tag
+	}
+	for _, b := range e.badTags {
+		if b.name != "" && strings.EqualFold(b.name, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // modOf is the newest modtime among the manifest and its tag-files: a
@@ -111,6 +147,110 @@ func projectTags(path string) []ProjectTag {
 	return nil
 }
 
+// manifestDiagnostics is what the manifest governing a program says is
+// wrong with its tags, keyed by the file URI to show it on: each tag that
+// does not read on its tags[].name (in nautilus.yaml or the tag-file
+// declaring it), and a manifest that does not read at all on the line its
+// error names. nil when there is nothing to say.
+func manifestDiagnostics(mpath string, e *manifestEntry) map[string][]Diagnostic {
+	if e == nil || (e.readErr == nil && len(e.badTags) == 0) {
+		return nil
+	}
+	out := map[string][]Diagnostic{}
+	add := func(file string, r Range, msg string) {
+		uri := pathToURI(file)
+		out[uri] = append(out[uri], Diagnostic{Range: r, Severity: SeverityError, Source: "nautilus", Message: msg})
+	}
+	if e.readErr != nil {
+		add(mpath, manifestErrRange(mpath, e.readErr), e.readErr.Error())
+	}
+	for _, b := range e.badTags {
+		file, r := mpath, manifestErrRange(mpath, nil)
+		if b.name != "" {
+			if f, rr, ok := firstDecl(manifestTagDecls(mpath, b.name)); ok {
+				file, r = f, rr
+			}
+		}
+		add(file, r, b.err.Error())
+	}
+	return out
+}
+
+// firstDecl is the first declaration in a manifestTagDecls result, in
+// file order.
+func firstDecl(decls map[string]map[Range]bool) (string, Range, bool) {
+	files := make([]string, 0, len(decls))
+	for f := range decls {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
+		var best Range
+		found := false
+		for r := range decls[f] {
+			if !found || r.Start.Line < best.Start.Line {
+				best, found = r, true
+			}
+		}
+		if found {
+			return f, best, true
+		}
+	}
+	return "", Range{}, false
+}
+
+var yamlLineRe = regexp.MustCompile(`\bline (\d+)\b`)
+
+// manifestErrRange places a manifest-level error: on the line a YAML
+// error in the manifest names, else on the manifest's first line.
+func manifestErrRange(mpath string, err error) Range {
+	text := ""
+	if raw, rerr := os.ReadFile(mpath); rerr == nil {
+		text = string(raw)
+	}
+	line := 1
+	if err != nil && strings.HasPrefix(err.Error(), filepath.Base(mpath)+":") {
+		if m := yamlLineRe.FindStringSubmatch(err.Error()); m != nil {
+			if n, cerr := strconv.Atoi(m[1]); cerr == nil && n >= 1 {
+				line = n
+			}
+		}
+	}
+	return lineRange(text, line)
+}
+
+// publishManifestDiags publishes the manifest's own diagnostics (#518) for
+// the project governing path, and clears the ones it published before that
+// no longer hold. The editor does not send nautilus.yaml to the server, so
+// this runs as the project's programs are analyzed: a save of the manifest
+// shows on the next keystroke in any of them.
+func (s *Server) publishManifestDiags(path string) {
+	mpath, ok := findManifest(path)
+	if !ok {
+		return
+	}
+	found := manifestDiagnostics(mpath, manifestFor(path))
+	if s.manifestDiags == nil {
+		s.manifestDiags = map[string]map[string][]Diagnostic{}
+	}
+	prev := s.manifestDiags[mpath]
+	for uri, ds := range found {
+		if !reflect.DeepEqual(prev[uri], ds) {
+			s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{URI: uri, Diagnostics: ds})
+		}
+	}
+	for uri := range prev {
+		if _, still := found[uri]; !still {
+			s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{URI: uri, Diagnostics: []Diagnostic{}})
+		}
+	}
+	if len(found) == 0 {
+		delete(s.manifestDiags, mpath)
+		return
+	}
+	s.manifestDiags[mpath] = found
+}
+
 // projectTagDefs is projectTags as the compiler sees them: the tags every
 // program in the project has in scope without declaring them (#177/#210),
 // for runtime.ResolveTagScope.
@@ -139,18 +279,21 @@ func manifestFor(path string) *manifestEntry {
 	if hadPrev && prev.mod == modOf(mpath, prev.files) {
 		return prev
 	}
-	tags, defs, files, logix, err := readTags(mpath)
+	tags, defs, bad, files, logix, err := readTags(mpath)
 	if err != nil {
 		// A manifest being edited is invalid for most of the keystrokes it
 		// takes to add a tag. Serving the last good answer beats completion
 		// blinking out mid-edit — and the failure is deliberately NOT
-		// cached, so the next keystroke retries.
+		// cached, so the next keystroke retries. The error rides along, for
+		// the diagnostic on the manifest.
 		if hadPrev {
-			return prev
+			e := *prev
+			e.readErr = err
+			return &e
 		}
-		return nil
+		return &manifestEntry{readErr: err, stale: true}
 	}
-	e := &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags, defs: defs, logix: logix}
+	e := &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags, defs: defs, badTags: bad, logix: logix}
 	manifests.entries[mpath] = e
 	return e
 }
@@ -189,13 +332,33 @@ func manifestTagLocation(uri, name string) (Location, bool) {
 
 // readTags returns the manifest's composed tags and the tag-files they came
 // from (as paths, for the cache's modtime check).
-func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []string, bool, error) {
+//
+// A tag whose declaration does not read is left out of defs and returned
+// in bad; the rest are still in scope. `naut check` refuses the whole
+// project instead, but an editor is answering hover and completion on a
+// keystroke: one bad tag must not take every other tag's type with it.
+func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []badTag, []string, bool, error) {
 	dir := filepath.Dir(mpath)
 	m, err := project.ReadManifest(os.DirFS(dir), "")
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, err
 	}
-	defs, _ := project.TagDefs(m)
+	defs, err := project.TagDefs(m)
+	var bad []badTag
+	if err != nil {
+		good := make([]project.TagConfig, 0, len(m.Tags))
+		for _, t := range m.Tags {
+			if _, terr := project.TagDefs(&project.Manifest{Tags: []project.TagConfig{t}}); terr != nil {
+				bad = append(bad, badTag{name: t.Name, err: terr})
+				continue
+			}
+			good = append(good, t)
+		}
+		if len(bad) == 0 {
+			bad = []badTag{{err: err}} // not one tag's fault; still said, on the manifest
+		}
+		defs, _ = project.TagDefs(&project.Manifest{Tags: good, Tasks: m.Tasks})
+	}
 	files := make([]string, 0, len(m.TagFiles))
 	for _, f := range m.TagFiles {
 		files = append(files, filepath.Join(dir, filepath.FromSlash(f)))
@@ -221,7 +384,7 @@ func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []string, bool, err
 			Desc: t.Desc,
 		})
 	}
-	return out, defs, files, m.Target != nil && m.Target.Logix != nil, nil
+	return out, defs, bad, files, m.Target != nil && m.Target.Logix != nil, nil
 }
 
 // iecTypeOf infers a tag's IEC type from its declared initial value. The
