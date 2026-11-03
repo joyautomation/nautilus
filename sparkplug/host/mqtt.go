@@ -184,11 +184,16 @@ func (d *Driver) run(ctx context.Context) {
 		}
 		backoff = backoffMin
 
-		d.serve(ctx, lost)
+		dropped := d.serve(ctx, lost) && ctx.Err() == nil && !d.isStopping()
 
 		d.mu.Lock()
 		d.connected = false
 		d.pub = nil
+		if dropped {
+			// The host can no longer see its nodes: every one goes offline
+			// now, as an NDEATH would take it (#540).
+			d.brokerLostLocked()
+		}
 		d.mu.Unlock()
 		// Death-before-DISCONNECT: Stop publishes the certificate and only
 		// then cancels, so by the time we get here the wire is already clear.
@@ -206,7 +211,11 @@ func (d *Driver) run(ctx context.Context) {
 // disconnect — a clean DISCONNECT discards the will, so without it the
 // retained STATE would keep naming this replica's session online. See
 // publishDemotionDeath for why it carries the session timestamp.
-func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
+//
+// It reports true when the broker connection was lost, the one ending the
+// host did not choose: Stop and a leadership change reconnect on purpose,
+// and their nodes keep their state until the births that follow.
+func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 	// What the session was opened as (will or no will), not a fresh sample:
 	// leadership that moved between CONNECT and here is a change too.
 	d.mu.Lock()
@@ -217,10 +226,10 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-lost:
 			d.log.Warn("host: connection lost", "broker", d.cfg.BrokerURL)
-			return
+			return true
 		case <-t.C:
 			if d.mayPublish() != wasLeader {
 				d.log.Info("host: leadership changed; reconnecting to refresh STATE",
@@ -228,7 +237,7 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
 				if wasLeader {
 					d.publishDemotionDeath()
 				}
-				return
+				return false
 			}
 		}
 	}
@@ -284,6 +293,12 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 	if err := tok.Error(); err != nil {
 		return nil, nil, fmt.Errorf("host: connect %s: %w", d.cfg.BrokerURL, err)
 	}
+	// A new session: its messages are current again (brokerLostLocked
+	// stopped the last one's). Cleared before SUBSCRIBE, so a birth that
+	// answers our STATE birth is never dropped.
+	d.mu.Lock()
+	d.brokerLost = false
+	d.mu.Unlock()
 
 	p := &pahoPub{cli: cli}
 	if err := d.subscribe(cli); err != nil {

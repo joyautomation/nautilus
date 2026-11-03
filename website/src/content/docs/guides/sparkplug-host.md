@@ -140,7 +140,8 @@ one arrives — the same contract the runtime already has for a driver read
 failure. So quality rides on separate, driver-synthesized companions,
 declared in the manifest like anything else:
 
-- `<site>__Online` — `BOOL`, true from NBIRTH to the matching NDEATH.
+- `<site>__Online` — `BOOL`, true from NBIRTH to the matching NDEATH, or
+  until the host loses its broker connection.
 - `<site>_<device>__Online` — the same, per device.
 - `<site>__Outages` and `<site>_<device>__Outages` — `DINT`, the number of
   times the matching `__Online` has gone false since nautilus started.
@@ -182,6 +183,17 @@ one on each NDEATH that matches its birth; a late will from an old
 session does not count. A device counts one on its DDEATH and on its
 node's NDEATH. A device that is already offline does not count again.
 
+**Losing the broker takes every site offline.** `__Online` means the host
+can reach the site now, as it does for every other driver. When the host
+loses its own broker connection, every site and device it tracks goes
+`__Online` false at once and counts one outage, as if each had sent an
+NDEATH. Their data reads `Stale` straight away, without waiting for
+`stale-after`. On reconnect the host asks every site to rebirth (unless
+`rebirth-on-start` is off; then the first data a site sends asks for it).
+Each site and device comes back online at its next birth. That birth does
+not count again, because the site is already offline. Stopping nautilus
+counts nothing, and neither does a host that has not connected yet.
+
 **A rebirth counts as an outage for each device that was online.** A node
 rebirth takes the node's devices offline until each one's DBIRTH, so
 their `__Online` falls. That is true whether the host asked for the
@@ -206,8 +218,9 @@ fully-birthed fleet reports an empty map. A tag never named in it is Good.
   `NotConnected`. The driver cannot tell "hasn't happened yet" from "will
   never happen", so both read the same: nothing to show.
 - A binding with a value on file whose site is not currently online — an
-  `NDEATH`, a site gone quiet past `StaleAfter`, or (for a device-scoped
-  metric) a `DDEATH` on just that device — is `Stale`. The value is real,
+  `NDEATH`, the host's own broker connection lost, a site gone quiet past
+  `StaleAfter`, or (for a device-scoped metric) a `DDEATH` on just that
+  device — is `Stale`. The value is real,
   just old.
 - A binding whose site is online and has delivered its metric is `Good`
   (omitted).
@@ -325,7 +338,9 @@ So the driver reads its output set as follows.
 - **A reconnect replays nothing.** Change detection tracks the runtime's
   output tags, not the broker session, so it survives a dropped
   connection intact. Commands genuinely raised while the broker was away
-  are still queued and go out on reconnect.
+  are still queued. Losing the broker took every site offline, so they go
+  out as each site births again after the reconnect, like any command to
+  a dark site.
 - **`__Rebirth` follows the same rule.** Only a rising edge is a command,
   and a `__Rebirth` that is already TRUE on the first scan is baseline,
   not an edge: a value held TRUE (or retained) across a restart does not

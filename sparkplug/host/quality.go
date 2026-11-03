@@ -44,7 +44,8 @@ import nio "github.com/joyautomation/nautilus/io"
 //     other way — see recordUnknownLocked), so both read the same to an
 //     HMI: there is nothing here to show.
 //   - a value EXISTS, but its source is not currently online: the node
-//     died (NDEATH), the node has gone quiet longer than StaleAfter
+//     died (NDEATH), the host lost its broker connection (brokerLostLocked
+//     takes every node offline), the node has gone quiet longer than StaleAfter
 //     (sweepStale), or — for a device-scoped metric — just that device
 //     died (DDEATH) while the node itself stayed up → Stale. The value is
 //     real, it is just old.
