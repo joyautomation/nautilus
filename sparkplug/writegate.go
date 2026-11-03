@@ -2,8 +2,9 @@ package sparkplug
 
 import (
 	"fmt"
-	"path"
 	"strings"
+
+	"github.com/joyautomation/nautilus/internal/writable"
 )
 
 // The write gate (docs/design/edge-collector.md §6). An edge node is
@@ -30,30 +31,16 @@ func WithWritable(patterns ...string) Option {
 // validateWritable rejects a malformed pattern at New, rather than letting
 // it silently match nothing.
 func validateWritable(patterns []string) error {
-	for _, p := range patterns {
-		if _, err := path.Match(p, ""); err != nil {
-			return fmt.Errorf("sparkplug: writable pattern %q: %w", p, err)
-		}
+	if err := writable.Patterns(patterns).Validate(); err != nil {
+		return fmt.Errorf("sparkplug: %w", err)
 	}
 	return nil
 }
 
 // writeAllowed reports whether a command may write the tag or member at p:
-// p itself, or any dotted ancestor of it, matches a writable pattern.
-func (n *Node) writeAllowed(p string) bool {
-	for {
-		for _, pat := range n.writable {
-			if ok, _ := path.Match(pat, p); ok {
-				return true
-			}
-		}
-		i := strings.LastIndexByte(p, '.')
-		if i < 0 {
-			return false
-		}
-		p = p[:i]
-	}
-}
+// p itself, or any dotted ancestor of it, matches a writable pattern (the
+// rule internal/writable shares with opcua.writable).
+func (n *Node) writeAllowed(p string) bool { return writable.Patterns(n.writable).Allows(p) }
 
 // writableTemplate prunes a Template command metric to the members a write
 // may reach, at any depth, and returns the dotted paths it dropped. The
