@@ -44,8 +44,8 @@ What each role does at run time:
 | --- | --- | --- | --- | --- |
 | **Written by** | the driver, before every scan | the program; the driver sends it to the field after the scan | the operator; the program may too | the program; the operator may too |
 | **`POST /api/tags`** | refused with a `400`; [force it](/guides/forcing/) instead | accepted (`204`), but the program's next write to it replaces the value | accepted (`204`) | accepted (`204`) |
-| **Built-in dashboard** | read-only | read-only | click to set | click to set |
-| **OPC UA client write** | refused (`Bad_NotWritable`), even when `opcua.writable` matches it | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client |
+| **Built-in dashboard** | read-only | read-only | click to set a number or a BOOL (a STRING, an enumerated value or an array element stays read-only) | click to set a number or a BOOL (a STRING, an enumerated value or an array element stays read-only) |
+| **OPC UA client write** | refused, even when `opcua.writable` matches it (`Bad_NotWritable` to a trusted writer session; any other session gets `Bad_UserAccessDenied` first, as for every tag) | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client |
 | **Kept across a restart** (needs a `retain:` section) | never; `retain: true` is a load error | never; `retain: true` is a load error | always | only with `retain: true` |
 | **Seeded from `init:`** | only when it has an `init:`, or when a [communications driver](#inputs-from-a-device-that-is-down) delivers it (then the zero of its type); otherwise a read before the first delivery faults the scan | only when it has an `init:`; otherwise it exists from its first write | always: its `init:`, else the zero of its `type:` | always: its `init:`, else the zero of its `type:` |
 | **On a standby replica** | not read: a standby does no field I/O | not written: a standby runs no logic | not changed there: writes go to the leader | not changed there: a standby runs no logic |
@@ -76,21 +76,27 @@ tags:
   - { name: RunHours,   role: state,    type: REAL, retain: true }
 ```
 
-```
-PumpRun := (Level > StartLevel OR PumpRun) AND Level > StopLevel;
-HighLevel := Level > 90.0;
-IF PumpRun THEN
-  RunHours := RunHours + 0.1 / 3600.0;   (* 100 ms scan *)
-END_IF;
+```iecst
+PROGRAM Main
+  PumpRun := (Level > StartLevel OR PumpRun) AND Level > StopLevel;
+  HighLevel := Level > 90.0;
+  IF PumpRun THEN
+    RunHours := RunHours + 0.1 / 3600.0;   (* 100 ms scan *)
+  END_IF;
+END_PROGRAM
 ```
 
 - **`Level` is an `input`.** The level transmitter's value, delivered by
   the driver binding that names it ([Modbus](/guides/modbus/),
-  [EtherNet/IP](/guides/ethernet-ip/), …). The program only reads it. To
-  hold it at a value during bring-up, force it. With no `driver:`, the
-  `memory` loopback delivers nothing for `Level` and the first scan stops
-  with `undefined tag Level`; give it an `init:` to try the example
-  without hardware.
+  [EtherNet/IP](/guides/ethernet-ip/), …). The program only reads it.
+  With no `driver:`, the `memory` loopback delivers nothing for `Level`
+  and the first scan stops with `undefined tag Level`; give it an `init:`
+  to try the example without hardware. To hold it at a value during
+  bring-up, [force it](/guides/forcing/). A force needs the tag to exist:
+  an input nothing has delivered and no `init:` seeds is refused with
+  `400 undefined tag Level`. With an `init:`, or once a communications
+  driver has seeded or delivered it, `POST /api/forces` with
+  `{"name": "Level", "value": 70}` holds it.
 - **`PumpRun` is an `output`.** The program writes it and the driver sends
   it to the starter. The program also reads it back (the seal-in), so it
   has an `init:`; without one, the first scan stops with `undefined tag

@@ -127,7 +127,8 @@ does.
 Open **http://localhost:8080** for the built-in live dashboard, or
 `GET /api/state` for the raw tag snapshot. Setpoints are click-to-set right in
 the tag table — click a value and type, or flip a BOOL with its toggle — so you
-can drive the loop before there is an HMI. Inputs and outputs stay read-only:
+can drive the loop before there is an HMI. Inputs and outputs stay read-only in
+the dashboard:
 the driver rewrites an input before every scan and the logic rewrites an output
 after, so an edit there would be discarded within a scan. `POST /api/tags` to
 a `role: input` tag is refused for the same reason. To drive an input during
