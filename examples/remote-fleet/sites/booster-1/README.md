@@ -19,9 +19,10 @@ naut run   .    # dashboard + tag API on http://localhost:8093
 and the Sparkplug DEVICE publish are both already released. See
 `../../README.md` for the fleet-wide version check.
 
-`naut run .` alone shows the Modbus driver **offline** (`FM1_FlowLps`
-reading 0.0 with quality `notConnected`, the driver panel red) until
-`naut modbus serve` (below) is brought up alongside it; this is deliberate, not a rough edge (see
+`naut run .` alone shows the Modbus driver red and retrying
+(`FM1_FlowLps` reading 0.0 with quality `notConnected`) until
+`naut modbus serve` (below) is brought up alongside it; this is
+deliberate, not a rough edge (see
 `sim.st`'s own header: "the flow meter is real either way"), the same
 choice this codebase makes everywhere a field driver has nothing to talk
 to yet. There is no memory-only `bench.yaml` here the way `field.yaml`
