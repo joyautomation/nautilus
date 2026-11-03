@@ -73,7 +73,7 @@ func TestEmptyStringIsReadAsEmptyNotNull(t *testing.T) {
 		{NodeID: s.NodeID("Full"), AttributeID: ua.AttributeIDValue},
 		{NodeID: s.NodeID("StrArr"), AttributeID: ua.AttributeIDValue, IndexRange: "0"},
 	}}
-	resp, err := readAttributes(s.srv, s.ns, req)
+	resp, err := readAttributes(s.srv, s.ns, nil, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestEmptyStringOfAServerNodeIsReadAsEmpty(t *testing.T) {
 	node.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(""))
 	req := &ua.ReadRequest{RequestHeader: &ua.RequestHeader{}, NodesToRead: []*ua.ReadValueID{{NodeID: nid, AttributeID: ua.AttributeIDValue}}}
 	for range 2 { // twice: the first must not have changed what the node holds
-		resp, err := readAttributes(s.srv, s.ns, req)
+		resp, err := readAttributes(s.srv, s.ns, nil, req)
 		if err != nil {
 			t.Fatal(err)
 		}

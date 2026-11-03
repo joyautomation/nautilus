@@ -569,8 +569,22 @@ func opcuaStatus(st opcuaserver.Status) server.DriverStatus {
 		{Label: "tags", Value: float64(st.Tags)},
 		{Label: "subscriptions", Value: float64(st.Subscriptions)},
 		{Label: "monitored items", Value: float64(st.MonitoredItems)},
+		{Label: "writes", Value: float64(st.Writes)},
+		{Label: "writes refused", Value: float64(st.WritesRefused)},
 	}
-	s.Extra = map[string]any{"endpoint": st.Endpoint, "access": "read-only"}
+	// Writable only when opcua.writable opens something, and then only to
+	// a trusted client on a SignAndEncrypt channel.
+	access := "read-only"
+	if len(st.Writable) > 0 {
+		access = "writable by trusted clients"
+	}
+	s.Extra = map[string]any{"endpoint": st.Endpoint, "access": access, "writes": st.Writes, "writesRefused": st.WritesRefused}
+	if len(st.Writable) > 0 {
+		s.Extra["writable"] = st.Writable
+	}
+	if st.Standby {
+		s.Extra["standby"] = true
+	}
 	if st.CertThumbprint != "" {
 		s.Extra["certThumbprint"] = st.CertThumbprint
 		s.Extra["certExpiresMs"] = st.CertExpiresMs

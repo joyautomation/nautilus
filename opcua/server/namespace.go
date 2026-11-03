@@ -57,6 +57,10 @@ type namespace struct {
 	// sibling's generation moves with it; a member's SourceTimestamp holds
 	// unless its own value changed.
 	mstamps map[string]mstamp
+
+	// w is the server's write policy: what opcua.writable opens, which
+	// sets a Variable's AccessLevel, and what the Write service consults.
+	w *writeAccess
 }
 
 type mstamp struct {
@@ -459,10 +463,15 @@ func (ns *namespace) Attribute(nid *ua.NodeID, attr ua.AttributeID) *ua.DataValu
 			return value([]uint32{uint32(len(m.val.Arr))})
 		}
 		return value([]uint32{})
-	case ua.AttributeIDAccessLevel, ua.AttributeIDUserAccessLevel:
+	case ua.AttributeIDAccessLevel:
+		return value(uint8(ns.accessLevel(m)))
+	case ua.AttributeIDUserAccessLevel:
+		// Per session: the Read handler answers it for the session asking
+		// (readAttributes); with no session in hand, read-only.
 		return value(uint8(ua.AccessLevelTypeCurrentRead))
 	case ua.AttributeIDAccessLevelEx:
-		return value(uint32(ua.AccessLevelExTypeCurrentRead))
+		// Its low eight bits are AccessLevel's (Part 3 §5.6.2).
+		return value(uint32(ns.accessLevel(m)))
 	case ua.AttributeIDMinimumSamplingInterval:
 		return value(float64(ns.sweep / time.Millisecond))
 	case ua.AttributeIDHistorizing:
@@ -590,12 +599,12 @@ func (ns *namespace) stampAt(root string, gen uint64, now time.Time) time.Time {
 	return now
 }
 
-// SetAttribute is the Write service's landing point. This namespace is
-// read-only: a write to a Value is refused as an access-denied — an
-// anonymous session has no business writing a controller, and until
-// writes ride a secure channel from a trusted client (a follow-up) every
-// session is anonymous — and a write to any other attribute as not
-// writable. Either way the client is told; nothing is silently dropped.
+// SetAttribute is the NameSpace interface's write, which carries no
+// session. The Write service does not come here: it needs the session to
+// know a writer (writeAttributes, write.go). Without one nobody is a
+// writer, so this refuses as the Write service refuses an anonymous
+// session: Bad_UserAccessDenied on a Variable's Value, Bad_NotWritable on
+// anything else.
 func (ns *namespace) SetAttribute(nid *ua.NodeID, attr ua.AttributeID, _ *ua.DataValue) ua.StatusCode {
 	if ns.isFolder(nid) {
 		return ua.StatusBadNotWritable

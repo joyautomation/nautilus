@@ -10,10 +10,10 @@
 // over runtime.Tags (namespace.go), read on demand. Comments here that say
 // "gopcua" mean that inherited code.
 //
-// It is read-only. Writes are refused with Bad_UserAccessDenied, because
-// the only thing a client can be today is anonymous; writes on a secure
-// channel from a trusted client certificate, routed through the same path
-// as POST /api/tags, are the planned follow-up.
+// It is read-only unless Options.Writable opens tags, and then only to a
+// writer session: one on a SignAndEncrypt channel from a client
+// certificate in the trust list. A write goes through the runtime's one
+// write front door, the same as POST /api/tags (write.go).
 //
 // Subscriptions are fed by the tag store's own change generations: a sweep
 // every Options.Sweep asks the store what moved since the last sweep (one
@@ -41,6 +41,7 @@ import (
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/writable"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
@@ -78,6 +79,14 @@ type Options struct {
 	// certificate. Empty offers None alone, as before (tests, Go
 	// compositions that want no files).
 	PKI string
+	// Writable opens the tags and members these globs match to Write from
+	// a writer session (internal/writable: the rule sparkplug.writable
+	// uses). Inputs never are. Empty: every write is refused. A writer
+	// needs a secure endpoint, so without PKI nothing is writable.
+	Writable []string
+	// Logger takes the write audit (an Info line per landed write, a Warn
+	// once per client, node and reason for a refusal); nil is slog.Default.
+	Logger *slog.Logger
 }
 
 // securePolicies are the policies the secure endpoints offer, each under
@@ -111,6 +120,8 @@ type Server struct {
 	url     string
 	version string
 	cert    CertInfo // the server certificate, when PKI is set
+
+	w *writeAccess // the write policy and audit; outlives Stop/Start
 }
 
 // New prepares a server. It validates the endpoint and dials nothing — the
@@ -138,7 +149,17 @@ func New(rt *runtime.Runtime, o Options) (*Server, error) {
 	} else if err := CheckApplicationURI(o.ApplicationURI); err != nil {
 		return nil, err
 	}
-	return &Server{rt: rt, opts: o, host: host, port: port}, nil
+	if err := writable.Patterns(o.Writable).Validate(); err != nil {
+		return nil, fmt.Errorf("opcua.%w", err)
+	}
+	w := &writeAccess{patterns: writable.Patterns(o.Writable), log: o.Logger}
+	if w.log == nil {
+		w.log = slog.Default()
+	}
+	if o.PKI != "" {
+		w.pki = &PKI{Dir: o.PKI}
+	}
+	return &Server{rt: rt, opts: o, host: host, port: port, w: w}, nil
 }
 
 // CheckApplicationURI is `naut check`'s test of opcua.application-uri: an
@@ -241,12 +262,17 @@ func (s *Server) Start(ctx context.Context) error {
 		sweep:   s.opts.Sweep,
 		stamps:  map[string]stamp{},
 		mstamps: map[string]mstamp{},
+		w:       s.w,
 	}
 	srv.AddNamespace(ns)
 	registerServices(srv, ns)
 	// The Read limit advertised is the one readAttributes enforces.
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(maxNodesPerRead)))
+	}
+	// And the Write limit writeAttributes enforces.
+	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerWrite)); n != nil {
+		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(maxNodesPerWrite)))
 	}
 	// The fastest a value is sampled is the change sweep, the same
 	// MinimumSamplingInterval every tag advertises.
@@ -406,6 +432,15 @@ type Status struct {
 	CertThumbprint string `json:"certThumbprint,omitempty"`
 	CertExpiresMs  int64  `json:"certExpiresMs,omitempty"`
 	CertWarning    string `json:"certWarning,omitempty"`
+	// Writable is opcua.writable; empty is a read-only server.
+	Writable []string `json:"writable,omitempty"`
+	// Writes counts the items a client wrote that landed, WritesRefused
+	// the items refused, since the process started.
+	Writes        uint64 `json:"writes"`
+	WritesRefused uint64 `json:"writesRefused"`
+	// Standby is true while the write gate (SetWriteGate) says this replica
+	// is not the leader: every write is refused with Bad_InvalidState.
+	Standby bool `json:"standby,omitempty"`
 }
 
 // secure loads (or on first start makes) the server's certificate from the
@@ -452,7 +487,8 @@ func (s *Server) secure(listen string, aliases []string) ([]opcserver.Option, er
 func (s *Server) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := Status{Endpoint: s.url, Listening: s.up, Tags: len(s.rt.Tags().AppendNames(nil))}
+	st := Status{Endpoint: s.url, Listening: s.up, Tags: len(s.rt.Tags().AppendNames(nil)),
+		Writable: s.opts.Writable, Writes: s.w.writes.Load(), WritesRefused: s.w.refused.Load(), Standby: !s.w.leader()}
 	if st.Endpoint == "" {
 		st.Endpoint = "opc.tcp://" + net.JoinHostPort(s.host, strconv.Itoa(s.port))
 	}

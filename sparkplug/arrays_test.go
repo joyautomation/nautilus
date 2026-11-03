@@ -655,6 +655,36 @@ func TestArrayCommandsRefused(t *testing.T) {
 	}
 }
 
+// An element of an array, named by index, is refused like a whole-array
+// command: the node never births an indexed metric, and a pattern naming
+// the array (which opens its members since the shared matcher walks "[n]")
+// must not turn into element writes over Sparkplug (#506 review).
+func TestArrayElementCommandRefused(t *testing.T) {
+	var buf bytes.Buffer
+	n, _ := newArrayNode(t, &buf)
+	n.writable = []string{"Levels"}
+	n.applyCommand("", Payload{Metrics: []Metric{
+		{Name: "Levels[1]", Datatype: spb.DataType_Double, Value: 99.0},
+	}})
+	if got := n.Status().CommandsRefused; got != 1 {
+		t.Errorf("CommandsRefused = %d, want 1", got)
+	}
+	if !strings.Contains(buf.String(), "array writes are not supported") || !strings.Contains(buf.String(), "tag=Levels[1]") {
+		t.Errorf("log lacks the array refusal for Levels[1]:\n%s", buf.String())
+	}
+	if lv := n.rt.Tags().Snapshot()["Levels"]; lv.Arr[1].F == 99 {
+		t.Errorf("Levels[1] written: %+v", lv)
+	}
+}
+
+func TestRootTagCutsAtMemberAndElement(t *testing.T) {
+	for in, want := range map[string]string{"Motor1.START": "Motor1", "Levels[1]": "Levels", "Drives[0].Speed": "Drives", "Plain": "Plain"} {
+		if got := rootTag(in); got != want {
+			t.Errorf("rootTag(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func slogTo(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }

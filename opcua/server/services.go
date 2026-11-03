@@ -11,7 +11,8 @@
 //     for a URL it does not know gets the whole list, as Part 4 §5.4.4 says.
 //   - Write: gopcua's built-in Server object accepted anonymous writes to
 //     NamespaceArray, ProductName, ServerStatus… and kept them for every
-//     session. Nothing is writable here; the Server object included.
+//     session. The Server object is read-only; tags are writable only as
+//     write.go says.
 //   - Read: a node id in a namespace the server does not have answered the
 //     bare Bad; it is Bad_NodeIdUnknown. The four access attributes Part 3
 //     makes mandatory, which gopcua's built-in nodes lack, read as read-only.
@@ -139,11 +140,11 @@ func registerServices(srv *opcserver.Server, ns *namespace) {
 	srv.RegisterHandler(id.FindServersRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return findServers(srv, r)
 	})
-	srv.RegisterHandler(id.ReadRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
-		return readAttributes(srv, ns, r)
+	srv.RegisterHandler(id.ReadRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return readAttributes(srv, ns, sc, r)
 	})
-	srv.RegisterHandler(id.WriteRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
-		return writeAttributes(srv, ns, r)
+	srv.RegisterHandler(id.WriteRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return writeAttributes(srv, ns, sc, r)
 	})
 	srv.RegisterHandler(id.BrowseRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return browseNodes(srv, r)
@@ -279,9 +280,12 @@ const maxNodesPerRead = 10000
 
 // readAttributes is the Read service: each node's attribute from its
 // namespace, Bad_NodeIdUnknown for a namespace the server does not have,
-// the access attributes filled in where gopcua's nodes lack them, and an
-// IndexRange applied to the value.
-func readAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Response, error) {
+// the access attributes filled in where gopcua's nodes lack them, a tag's
+// UserAccessLevel answered for the session asking (a writer's channel sees
+// CurrentWrite where the node has it), and an IndexRange applied to the
+// value. The request came through the session gate, so sc is the
+// session's own channel.
+func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.ReadRequest)
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
@@ -293,6 +297,7 @@ func readAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Resp
 		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.DataValue, len(req.NodesToRead))
+	var writer *bool // the session's write standing, when an item asks
 	for i, n := range req.NodesToRead {
 		if n == nil || n.NodeID == nil {
 			results[i] = status(ua.StatusBadNodeIDInvalid)
@@ -309,6 +314,17 @@ func readAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Resp
 		}
 		if dv.Status == ua.StatusBadAttributeIDInvalid && n.NodeID.Namespace() != ns.id {
 			dv = accessAttribute(srv, n.NodeID, n.AttributeID, dv)
+		}
+		if n.AttributeID == ua.AttributeIDUserAccessLevel && n.NodeID.Namespace() == ns.id && dv.Status == ua.StatusGood {
+			if writer == nil {
+				// As the Write service judges it, once per request: a
+				// certificate since untrusted or expired reads CurrentRead.
+				w := ns.w.channelWriter(sc) && ns.w.who(srv, sc, req.RequestHeader).writer
+				writer = &w
+			}
+			if lvl, ok := ns.userAccessLevel(n.NodeID, *writer); ok {
+				dv = value(uint8(lvl))
+			}
 		}
 		if n.IndexRange != "" {
 			dv = indexRange(dv, n.IndexRange)
@@ -339,33 +355,4 @@ func accessAttribute(srv *opcserver.Server, nid *ua.NodeID, attr ua.AttributeID,
 		}
 	}
 	return had
-}
-
-// writeAttributes is the Write service. The project's nodes refuse as the
-// namespace says (Bad_UserAccessDenied on a value, Bad_NotWritable on the
-// rest); every other node the server has — gopcua's Server object and its
-// variables — is refused the same way; a node id that is nothing is
-// Bad_NodeIdUnknown. gopcua's own Write would let an anonymous session
-// rewrite NamespaceArray or ServerStatus for every other client.
-func writeAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Response, error) {
-	req, ok := r.(*ua.WriteRequest)
-	if !ok {
-		return nil, ua.StatusBadRequestTypeInvalid
-	}
-	results := make([]ua.StatusCode, len(req.NodesToWrite))
-	for i, n := range req.NodesToWrite {
-		switch {
-		case n == nil || n.NodeID == nil:
-			results[i] = ua.StatusBadNodeIDInvalid
-		case n.NodeID.Namespace() == ns.id:
-			results[i] = ns.SetAttribute(n.NodeID, n.AttributeID, n.Value)
-		case srv.Node(n.NodeID) == nil:
-			results[i] = ua.StatusBadNodeIDUnknown
-		case n.AttributeID == ua.AttributeIDValue:
-			results[i] = ua.StatusBadUserAccessDenied
-		default:
-			results[i] = ua.StatusBadNotWritable
-		}
-	}
-	return &ua.WriteResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }

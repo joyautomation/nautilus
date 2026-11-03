@@ -281,7 +281,7 @@ func (n *Node) partition(snap map[string]ir.Value) (node []string, dev map[strin
 		if _, ok := n.rbeFor(name); !ok {
 			continue // NoPublish
 		}
-		if owner := n.tagOwner[name]; owner != "" {
+		if owner, _ := n.ownerOf(name); owner != "" {
 			dev[owner] = append(dev[owner], name)
 		} else {
 			node = append(node, name)

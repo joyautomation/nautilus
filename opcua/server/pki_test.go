@@ -28,9 +28,16 @@ import (
 // directory, and returns it with that directory.
 func startSecure(t *testing.T) (*Server, string) {
 	t.Helper()
+	return startSecureWith(t, Options{})
+}
+
+// startSecureWith is startSecure with more options (Writable, Logger).
+func startSecureWith(t *testing.T, o Options) (*Server, string) {
+	t.Helper()
 	rt, _ := newRuntime(t)
 	dir := filepath.Join(t.TempDir(), "pki")
-	s, err := New(rt, Options{Endpoint: "localhost:0", Name: "lift-station", Sweep: 20 * time.Millisecond, PKI: dir})
+	o.Endpoint, o.Name, o.Sweep, o.PKI = "localhost:0", "lift-station", 20*time.Millisecond, dir
+	s, err := New(rt, o)
 	if err != nil {
 		t.Fatal(err)
 	}

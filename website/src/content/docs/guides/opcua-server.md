@@ -1,10 +1,10 @@
 ---
 title: Serving OPC UA (preview)
-description: Expose a controller's tags to any OPC UA client — browse, read and subscribe, with faithful types, quality as status codes and source timestamps — from one manifest line.
+description: Expose a controller's tags to any OPC UA client — browse, read and subscribe, with faithful types, quality as status codes and source timestamps — from one manifest line, and let a trusted SCADA client write the setpoints you open to it.
 ---
 
 :::caution[Preview]
-Read-only, and still moving. The `opcua:` section and its `endpoint` are
+Still moving. The `opcua:` section and its `endpoint` are
 meant to stay as they are, but session and subscription handling is being
 reworked, and the limits named on this page (a never-delivered tag has no
 node, several subscription services are unsupported, a client must dial an
@@ -25,13 +25,15 @@ opcua:
   endpoint: opc.tcp://0.0.0.0:4840   # default opc.tcp://localhost:4840
   # application-uri: urn:acme:plant7:lift-station   # default urn:joyautomation:nautilus:<project>
   # pki: /var/lib/nautilus/pki                     # default ./pki
+  # writable: ["*_SP", "Pump*.SpeedSP"]             # default: nothing is writable
 ```
 
 `naut run` (and a built binary) starts the server alongside the scan loop;
 the section's presence turns it on (`opcua: {}` serves on the default).
 `endpoint` is where it listens; `application-uri` is the name clients know
 it by ([below](#what-a-client-sees)); `pki` is the certificate store the
-secure endpoints use ([Security](#security)). The endpoint defaults to the loopback interface —
+secure endpoints use ([Security](#security)); `writable` names the tags a
+trusted client may write ([Writes](#writes)). The endpoint defaults to the loopback interface —
 `localhost` listens on `127.0.0.1` — so putting a controller on the network
 is a line you write: `opc.tcp://0.0.0.0:4840` listens on every interface.
 `naut check` refuses an endpoint that is not `opc.tcp://host:port` (a bare
@@ -45,10 +47,13 @@ never heard of (a NAT address, a DNS alias) is given the whole list, by
 GetEndpoints and again in the CreateSession answer, so it can open its
 session through the address it used.
 
-The server is **read-only**: a write is answered `Bad_UserAccessDenied`,
-never silently dropped. It offers an unsecured endpoint and three secure
-ones, which open only to a client certificate you have approved; see
-[Security](#security).
+The server is **read-only unless you open tags to writes**, and then only
+to a client you trust. It offers an unsecured endpoint and three secure
+ones, which open only to a client certificate you have approved; anyone
+may read on the unsecured one, and only a trusted client on a secure one
+may write the tags `opcua.writable` names. A refused write is answered
+with a status code that says why, never silently dropped. See
+[Security](#security) and [Writes](#writes).
 
 ## What a client sees
 
@@ -233,11 +238,19 @@ or for the deprecated `Basic128Rsa15` or `Basic256`, is refused with
 renews its keys under the security it opened with; a renewal that asks for
 other security is refused.
 
-Every node is read-only on every endpoint (`AccessLevel` is `CurrentRead`),
-including the standard `Server` object and its variables, so no session can
-rewrite the `NamespaceArray` or `ServerStatus` other clients rely on. The
-secure endpoints keep what a client reads private and tamper-proof on the
-wire. They grant no extra rights yet.
+The secure endpoints keep what a client reads and writes private and
+tamper-proof on the wire, and they are the only way to write:
+
+| Session | Read, browse, subscribe | Write a tag `opcua.writable` opens |
+|---|---|---|
+| anonymous on `None` | yes | no: `Bad_UserAccessDenied` |
+| on a `SignAndEncrypt` endpoint, from a trusted certificate | yes | **yes** |
+
+A client certificate sent on the `None` endpoint makes no difference: the
+channel is not secured, so the session is not a writer. The standard
+`Server` object and its variables are read-only for every session, so no
+client can rewrite the `NamespaceArray` or `ServerStatus` other clients
+rely on.
 
 ### The certificate store
 
@@ -305,11 +318,14 @@ and one command:
    restart. `rejected/` keeps the 100 most recent refusals.
 
 Copying a certificate into `trusted/certs/` (DER or PEM, any file name)
-does the same. To withdraw trust, delete its file there: the client is
-refused on its next connection, and an open channel at its next key
-renewal. A channel's keys last an hour at most, and a channel that does not
-renew in time is closed, so a withdrawn client is cut off within about an
-hour and a quarter. A certificate outside its validity period is refused with
+does the same. To withdraw trust, delete its file there. The client can
+write nothing from its next Write on, even on the channel it already has:
+for every Write request the server reads `trusted/` again and checks that
+the certificate is still within its validity period, and if not answers
+every item `Bad_UserAccessDenied`. It is refused on its next connection, and an
+open channel is closed at its next key renewal. A channel's keys last an
+hour at most, and a channel that does not renew in time is closed, so a
+withdrawn client can go on reading for about an hour and a quarter. A certificate outside its validity period is refused with
 `Bad_CertificateTimeInvalid`, trusted or not. There is no "accept
 everything" switch. `--pki DIR` points both commands at another store; by
 default they use the `opcua.pki` of the `nautilus.yaml` in the working
@@ -339,20 +355,187 @@ a random 32-byte value, and a request that presents it on any other
 connection is refused with `Bad_SecureChannelIdInvalid`. A client that loses
 its connection opens a new session.
 
-### Writes
+## Writes
 
-Writes are planned for a later release. They will land only for tags the
-manifest opens to OPC UA, and only on a secure channel from a trusted
-client certificate. Until then, a controller that must take setpoints from
-a SCADA host should take them over [Sparkplug](/guides/sparkplug/) or the
-HTTP API.
+A trusted client may write the tags you open to it. Nothing is writable
+until you list it under `opcua.writable`:
+
+```yaml
+opcua:
+  endpoint: opc.tcp://0.0.0.0:4840
+  writable: ["*_SP", "Pump*.SpeedSP", "Recipe"]
+```
+
+Each entry is a glob over a tag name or a UDT member's path, matched in
+the tag's declared casing. A pattern that matches a tag opens the tag and
+everything below it, through members and array elements alike: `Recipe`
+opens `ns=1;s=Recipe.Steps`, and `Drives`, an array of UDTs, opens
+`ns=1;s=Drives[0].Speed`. One that matches a member opens that member and
+everything below it: `Pump*.SpeedSP` opens `ns=1;s=Pump1.SpeedSP`, not
+`Pump1.Running`. In a glob `[ ]` is a set of characters, so to name one
+element, escape its brackets, in single quotes (in double quotes YAML
+reads `\[` as an escape and refuses the file): `'Drives\[0\]'`. These
+are the same globs, with the same rule, as
+[`sparkplug.writable`](/guides/sparkplug/), but the list is separate:
+opening a setpoint to your SCADA over OPC UA does not open it to everyone
+who can publish to the MQTT broker. If you want one list for both, use a
+YAML anchor.
+
+`naut check` refuses a malformed glob. It warns about three things:
+
+- a pattern that matches nothing, which is usually a typo or a renamed tag;
+- a pattern that matches only inputs;
+- a pattern that opens only arrays, or Objects with no scalar member,
+  which are not writable until array writes land;
+- an output it opens that a program writes.
+
+### What may be written
+
+- **The `Value` of a scalar tag or a struct member.** Any other attribute,
+  an Object (a UDT tag, an array of UDTs, the project folder) and the
+  standard `Server` object are `Bad_NotWritable`.
+- **Not an input, even when a pattern matches it.** The driver replaces an
+  input before every scan, so a client's value would be lost unread
+  (`Bad_NotWritable`). Open the setpoint the logic reads instead.
+- **An output when it is matched.** That is how a project that commands
+  another controller passes a value through. A program that writes the same
+  output overwrites the client's value at its next commit.
+- **Not arrays yet.** A whole array, or any write with an `IndexRange`, is
+  `Bad_WriteNotSupported`.
+
+`AccessLevel` tells a client what it may write: `CurrentRead` and
+`CurrentWrite` on a scalar `opcua.writable` opens (not an input, not an
+array), `CurrentRead` elsewhere. `UserAccessLevel` is answered for the
+session asking: the same as `AccessLevel` for a writer, `CurrentRead` for
+anyone else, including a client whose certificate has been withdrawn or
+has expired. `AccessLevelEx` follows `AccessLevel`.
+
+### Conversions
+
+A write lands exactly as sent, or is refused. Nothing is wrapped,
+truncated or retyped.
+
+| Node `DataType` | Accepted | Refused |
+|---|---|---|
+| `Boolean` | `Boolean` | anything else: `Bad_TypeMismatch` |
+| `SByte` … `Int64`, `Byte` … `UInt64` | any integer type, checked against the declared width | `Float`, `Double`: `Bad_TypeMismatch`; outside the declared width: `Bad_OutOfRange` |
+| `Double` (`REAL`, `LREAL`) | `Float`, `Double`; an integer within ±2^53 | NaN or infinity, an integer past ±2^53: `Bad_OutOfRange` |
+| `Int32` (an enumeration) | an integer that is a member's value | any other integer: `Bad_OutOfRange` |
+| `Duration` (`TIME`) | a `Double` or an integer, in whole milliseconds | a fraction of a millisecond: `Bad_OutOfRange` |
+| `String` | `String`; a null `String` is written as `''` | anything else: `Bad_TypeMismatch` |
+
+The server accepts any integer type for an integer node, not only the
+node's own `DataType`. Clients such as asyncua send a plain Python `5` as
+`Int64`, and the declared width is what decides whether the value fits.
+A `ULINT` or `LWORD` takes any 64-bit pattern, so a value you read from
+one can be written back.
+
+**Status code and timestamps.** A `DataValue` with no status code, or one
+whose severity is Good (`Good`, `GoodClamped` and the other Good codes),
+is a plain write. An Uncertain or Bad status code is
+`Bad_WriteNotSupported`, because a tag's quality is its source's, not a
+client's. Source and server timestamps are accepted and **ignored**. The
+server dates the change itself, when the sweep sees it, as it does for
+every other write. OPC UA allows a server to refuse timestamps with
+`Bad_WriteNotSupported`, but most clients send one by default (asyncua's
+`write_value` always does), so refusing them would refuse ordinary writes.
+
+### Status codes
+
+Each item of a Write gets its own status:
+
+| Case | Status |
+|---|---|
+| the node id is nothing | `Bad_NodeIdUnknown` |
+| the session is not a writer (the Value of any Variable) | `Bad_UserAccessDenied` |
+| not the `Value` attribute; an Object; a tag `opcua.writable` does not open; an input | `Bad_NotWritable` |
+| a conversion the table above refuses | `Bad_TypeMismatch` or `Bad_OutOfRange` |
+| an array or an `IndexRange`; an Uncertain or Bad status code | `Bad_WriteNotSupported` |
+| the address is [forced](/guides/forcing/) | `Bad_Locked` |
+| this replica is a standby | `Bad_InvalidState` |
+| written | `Good` |
+
+A Write may name up to 10 000 nodes: the `MaxNodesPerWrite` the `Server`
+object advertises is the limit the server enforces, and a Write naming more
+is refused whole with `Bad_TooManyOperations`.
+
+`Good` means the value is in the tag store, not that the logic has acted
+on it, just like a `204` from `POST /api/tags`.
+
+### When a write takes effect
+
+The value is in the store when the response goes out. The scan in progress
+runs on its own snapshot and does not see it; the next scan does. If a
+program writes the same tag, its commit wins. The items of one Write request
+land together, under one lock, so a scan sees all of them or none: a high
+and a low limit written in one request never straddle a scan. A refused
+item does not hold back the others.
+
+A subscriber hears the new value as it hears any change, within one sweep
+plus its publishing interval, whichever session it belongs to. A written
+setpoint is [retained](/guides/redundancy/#retained-state) like one
+written over HTTP, when the manifest has a `retain:` section.
+
+A [forced](/guides/forcing/) address holds its forced value against every
+writer, so a write to it, to a member of it, or to the tag that holds it
+is refused with `Bad_Locked`. Change or remove the force first.
+
+With [redundancy](/guides/redundancy/#redundancy), only the leader takes
+writes. A standby's store is stale and does not scan, so it answers every
+write `Bad_InvalidState`. The replica is asked once per request, so a
+request lands whole or not at all if leadership moves while it is
+answered, and its `opcua-server` row says it is a standby.
+Unlike the HTTP API, a standby cannot pass an OPC UA write on to the
+leader. A client that is answered `Bad_InvalidState` should reconnect, and
+a Service that spreads connections over the replicas can land it on a
+standby again.
+
+### Audit
+
+Every landed item is logged on the console as an `opcua: write` line naming
+the node, the old and the new value, the session, the client's
+`ApplicationUri`, the first 16 digits of its certificate thumbprint and its
+address. A refused item is an `opcua: write refused` warning with the
+status and the reason. A trusted client's refusal on a node it may know
+is logged once per client, node and reason. Every other refusal (an
+anonymous client's, a node id that is nothing) is one line per client and
+reason, saying how many items of the first such request were refused
+for that reason: those node ids are whatever the client chose to send.
+Past 64 lines in an hour a client's refusals are only counted, and one
+line says so; the next hour it is heard from again. A client retrying every second, or
+sending thousands of junk node ids, does not flood the log. The `opcua-server`
+row counts both (`writes`, `writes refused`).
+
+### Writing from asyncua
+
+With the client's certificate trusted ([Approving a
+client](#approving-a-client)), asyncua's ordinary `write_value` works:
+
+```python
+from asyncua import Client, ua
+
+client = Client("opc.tcp://controller:4840")
+client.application_uri = "urn:acme:scada"   # the URI in client-cert.der
+await client.set_security_string(
+    "Basic256Sha256,SignAndEncrypt,client-cert.der,client-key.pem")
+async with client:
+    await client.get_node("ns=1;s=Level_SP").write_value(4.25)        # REAL
+    await client.get_node("ns=1;s=Pump1.SpeedSP").write_value(1450)   # DINT: any integer type
+    await client.get_node("ns=1;s=Mode_SP").write_value(
+        ua.Variant(10, ua.VariantType.Int32))                          # an enumeration member's value
+    await client.get_node("ns=1;s=Delay_SP").write_value(1500.0)      # TIME, in ms
+```
+
+A refused write raises `ua.UaStatusCodeError` carrying the status code.
 
 ## Status
 
 The dashboard's driver cards and `GET /api/drivers` carry an `opcua-server`
 row: the endpoint, whether it is listening, how many subscriptions and
-monitored items clients hold, and the server certificate's thumbprint and
-expiry, with a warning from 30 days before it expires. A port already in use is reported there and
+monitored items clients hold, whether it is writable, how many writes
+landed and how many were refused, whether this replica is a standby, and
+the server certificate's thumbprint and expiry, with a warning from 30
+days before it expires. A port already in use is reported there and
 on stderr at start (`continuing without it`); the controller runs
 regardless.
 

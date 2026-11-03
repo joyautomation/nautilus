@@ -183,13 +183,30 @@ the common case. Accepting any integer width is for clients like asyncua, whose
 | attribute other than Value; Object node; tag not matched; input | `Bad_NotWritable` |
 | matched tag, session not a writer | `Bad_UserAccessDenied` |
 | conversion, per §3.2 | `Bad_TypeMismatch` / `Bad_OutOfRange` |
-| DataValue carries a StatusCode or timestamps; `IndexRange` or an array before slice 4 | `Bad_WriteNotSupported` (Part 4 §5.10.4) |
+| DataValue carries a StatusCode whose severity is not Good; `IndexRange` or an array before slice 4 | `Bad_WriteNotSupported` (Part 4 §5.10.4) |
 | forced address | `Bad_Locked`; the audit line names the force |
 | this replica is a standby | `Bad_InvalidState` |
 | more nodes than `MaxNodesPerWrite` | `Bad_TooManyOperations`. The limit is advertised and enforced, like `MaxNodesPerRead` (`services.go:273-294`) |
 | written | `Good` |
 
 `Good` means stored, not acted on by the logic, as with HTTP's 204.
+
+**Changed 2026-11-02 (James, slice 3b): the DataValue row.** It first read "DataValue carries
+a StatusCode or timestamps". asyncua 2.1.0's `write_value` always sends a Good StatusCode and a
+SourceTimestamp (EncodingMask 0x07), and even `ua.DataValue(ua.Variant(v, type))` sends the
+Good StatusCode, so the row as written refused every asyncua write. The rule now follows what
+common clients send: an absent StatusCode, or one whose severity is Good (`GoodClamped` and the
+other Good subcodes included, after review), means "not specified"; an Uncertain or Bad one is
+`Bad_WriteNotSupported`; source and server timestamps (and their picoseconds) are accepted and
+ignored, the server stamping the change when the sweep sees it. Part 4 lets a server refuse
+timestamps, but refusing them would refuse ordinary writes. The guide says so.
+
+**As built, the order of the checks** puts the session before the tag: a session that is not a
+writer is answered `Bad_UserAccessDenied` for the Value of any Variable, matched or not, and
+only a writer learns `Bad_NotWritable` for an unmatched tag or an input. An anonymous client
+therefore sees exactly what it saw before writes existed (black-box gate
+`001-P-read-only-tags` expects `Bad_UserAccessDenied` for unmatched tags), and an Object or
+another attribute stays `Bad_NotWritable` for everyone.
 
 ### 3.4 Timing, retain, standby
 
@@ -364,7 +381,26 @@ dispositions:
    checks, and the ApplicationURI and ProductURI (part of #424). Endpoints: `None` plus
    the three secure policies under SignAndEncrypt. Everything still reads `CurrentRead`.
    Guide **Security** rewrite, OPC-016 and OPC-017, and the asyncua secure-channel test.
-3. **Writes to opted-in tags.** `opcua.writable`, the shared matcher, the runtime front
+3. **Writes to opted-in tags.** As built in two PRs: 3a the runtime front door with HTTP on
+   it; 3b the rest, with these additions, all 2026-11-02. The trust list is read again on
+   every Write request, so a certificate removed from `trusted/` stops writing on its open
+   channel (every item `Bad_UserAccessDenied`); reads are unchanged. `AccessLevelEx` follows
+   the node's `AccessLevel` (Part 3 has its low byte equal `AccessLevel`), not the session;
+   only `UserAccessLevel` is per session. The standby gate rides on `project.Project.WriteGate`,
+   set by `wireRedundancy` and installed by `OPCUAServer`, because the server is built after
+   the elector is wired. `MaxNodesPerWrite` is 10 000, like `MaxNodesPerRead`. The shared
+   matcher is `internal/writable`; after review its ancestor walk cuts at array indices too, so
+   a pattern on an array of UDTs opens `Drives[0].Speed` (Sparkplug shares it unchanged in
+   meaning: its arrays are refused anyway). Also after review: the standby gate is asked once
+   per request, before the batch; the per-request certificate check includes the validity
+   period and fails closed on a certificate that does not parse, and the Read handler's
+   `UserAccessLevel` uses the same check; a matched array advertises `CurrentRead` until
+   slice 4; and refusals from a non-writer, or for an unknown node id, are logged once per
+   client and reason (with the item count), a writer's per node, and each client has a budget
+   of 64 lines. A Double node refuses an integer past ±2^53
+   (`Bad_OutOfRange`), and a ULINT or LWORD node takes any 64-bit pattern, as 3a's front door
+   does.
+   `opcua.writable`, the shared matcher, the runtime front
    door with HTTP moved onto it (closing #421), the Write handler, per-session
    `UserAccessLevel`, the status-code table, forces, the standby gate, batch atomicity,
    the audit log and counters. Scalars and struct members only. Guide **Writes**,
