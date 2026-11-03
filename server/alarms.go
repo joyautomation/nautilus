@@ -27,6 +27,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -71,9 +72,9 @@ func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// journalResponse is GET /api/alarms/journal. Truncated says the limit cut
-// the result, so a journal page can offer "narrow the range" instead of
-// silently showing a window that isn't the whole story.
+// journalResponse is GET /api/alarms/journal. Truncated says more events
+// match than the page holds, so a journal page can offer "narrow the range"
+// instead of silently showing a window that isn't the whole story.
 type journalResponse struct {
 	Events    []alarm.Event `json:"events"`
 	Truncated bool          `json:"truncated"`
@@ -111,25 +112,61 @@ func (s *Server) handleAlarmJournal(w http.ResponseWriter, r *http.Request) {
 		Priorities: csv(q.Get("priority")),
 		IDs:        csv(q.Get("id")),
 		Kinds:      csv(q.Get("kind")),
-		Limit:      limit,
 	}
-	events, err := s.alarms.Journal(from, to, f)
+	if limit <= 0 {
+		limit = alarm.DefaultQueryLimit
+	}
+	events, truncated, err := s.journalPage(from, to, f, limit, csv(q.Get("state")), q.Get("q"))
 	if err != nil {
 		http.Error(w, "journal: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	// state= and q= are applied here rather than in alarm.Filter: a state
-	// is a property of the event's OUTCOME and a text search is a UI
-	// affordance, and neither belongs in an interface three journal
-	// implementations (ring, file, Postgres) each have to reimplement.
-	events = filterEvents(events, csv(q.Get("state")), q.Get("q"))
 	if events == nil {
 		events = []alarm.Event{}
 	}
-	writeJSON(w, http.StatusOK, journalResponse{
-		Events:    events,
-		Truncated: len(events) >= f.Limit && f.Limit > 0 || len(events) >= alarm.DefaultQueryLimit,
-	})
+	writeJSON(w, http.StatusOK, journalResponse{Events: events, Truncated: truncated})
+}
+
+// journalPage answers one journal page: the newest `limit` events that
+// match every filter, and whether more matching events exist in the range.
+//
+// state= and q= are applied here rather than in alarm.Filter: a state is a
+// property of the event's OUTCOME and a text search is a UI affordance, and
+// neither belongs in an interface three journal implementations (ring,
+// file, Postgres) each have to reimplement. So the journal's own limit
+// would cut BEFORE they apply, and a filtered page would come back short
+// with more matches behind it. Instead the journal is asked for one more
+// event than the page holds, filtered, and asked again for twice as many
+// while the filters leave the page short and the journal had more to give.
+// The extra event is what makes `truncated` a fact rather than a guess:
+// it is true only when a matching event exists beyond the page.
+func (s *Server) journalPage(from, to time.Time, f alarm.Filter, limit int, states []string, text string) ([]alarm.Event, bool, error) {
+	n := limit
+	if n < math.MaxInt {
+		n++
+	}
+	for {
+		f.Limit = n
+		raw, err := s.alarms.Journal(from, to, f)
+		if err != nil {
+			return nil, false, err
+		}
+		got := len(raw)
+		events := filterEvents(raw, states, text)
+		if len(events) > limit {
+			return events[:limit], true, nil
+		}
+		if got < n {
+			// The journal returned everything in the range: what passed
+			// the filters is all there is.
+			return events, false, nil
+		}
+		if n > math.MaxInt/2 {
+			n = math.MaxInt
+		} else {
+			n *= 2
+		}
+	}
 }
 
 // filterEvents applies the two filters the Journal interface deliberately
@@ -241,7 +278,7 @@ func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.alarms.Shelve(req.ID, until, req.By); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
 	s.writeAlarmRecord(w, req.ID)
@@ -266,10 +303,20 @@ func (s *Server) handleAlarmUnshelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.alarms.Unshelve(req.ID, req.By); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
 	s.writeAlarmRecord(w, req.ID)
+}
+
+// alarmErrStatus maps an engine refusal to a status: an id that names no
+// alarm is a 404, as it is on ack; anything else (not shelvable, a shelf
+// deadline in the past, not shelved) is a request the alarm refused, a 400.
+func alarmErrStatus(err error) int {
+	if errors.Is(err, alarm.ErrNoAlarm) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
 }
 
 // writeAlarmRecord answers a shelve/unshelve with the row as it now
