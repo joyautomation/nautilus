@@ -111,10 +111,11 @@ func (ns *namespace) folderNode() *opcserver.Node {
 			ua.AttributeIDBrowseName:    opcserver.DataValueFromValue(ns.qualified(ns.title)),
 			ua.AttributeIDDisplayName:   opcserver.DataValueFromValue(text(ns.title)),
 			ua.AttributeIDDescription:   opcserver.DataValueFromValue(text("Nautilus controller " + ns.title + ": its tag store")),
-			ua.AttributeIDDataType:      opcserver.DataValueFromValue(ua.NewNumericExpandedNodeID(0, id.FolderType)),
 			ua.AttributeIDEventNotifier: opcserver.DataValueFromValue(uint8(0)),
 		},
-		nil, nil,
+		// Its type, as a reference: what Objects' reference to the folder
+		// reports as its TypeDefinition (an Object has no DataType).
+		opcserver.References{ns.typeRef(id.FolderType)}, nil,
 	)
 }
 

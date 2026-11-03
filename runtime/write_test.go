@@ -184,6 +184,42 @@ func TestFrontDoorEnumInsideMapAndList(t *testing.T) {
 	}
 }
 
+// An operator's force is checked as a write is: what Write refuses, Force
+// refuses with the same error, and nothing is forced. Before, a force of
+// 70000 on an INT was held and served. ForceLenient, which acceptance
+// tests' force: uses, still takes a value the program itself can produce.
+func TestForceIsCheckedAsAWriteIs(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		v    any
+		want error
+	}{
+		{"I_INT", 70000.0, ir.ErrOutOfRange},
+		{"I_USINT", -1.0, ir.ErrOutOfRange},
+		{"SP", math.NaN(), ir.ErrOutOfRange},
+		{"SP", "x", ir.ErrTypeMismatch},
+		{"Mode", 3.0, ir.ErrOutOfRange},
+		{"P1.Count", 40000.0, ir.ErrOutOfRange},
+		{"I_INT", 2.5, ir.ErrTypeMismatch},
+	} {
+		tags := frontDoorTags(t)
+		err := tags.Force(tc.path, tc.v)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("Force(%s, %v) = %v, want %v", tc.path, tc.v, err, tc.want)
+		}
+		if f := tags.Forces(); len(f) != 0 {
+			t.Errorf("Force(%s, %v) was refused but left forces %v", tc.path, tc.v, f)
+		}
+	}
+	tags := frontDoorTags(t)
+	if err := tags.Force("I_INT", 1234.0); err != nil {
+		t.Fatalf("an in-range force: %v", err)
+	}
+	if err := tags.ForceLenient("P1.Count", 40000.0); err != nil {
+		t.Errorf("ForceLenient(P1.Count, 40000) = %v, want it held as the VM would hold it", err)
+	}
+}
+
 // An output no scan has written yet, created by a write spelled in another
 // case, takes its declared spelling and stays an output: its changes keep
 // reaching the driver (outNames is keyed by the declared spelling).

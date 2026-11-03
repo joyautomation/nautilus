@@ -149,11 +149,25 @@ func declaredPath(v ir.Value, path []string) []string {
 }
 
 // Force holds a tag — or one member of a struct tag, by dotted path — at v
-// until Unforce. v is coerced to the type already there exactly as a SetPath
-// write would be, and an address or value SetPath would refuse is refused
-// here with the same message. Forcing an address that is already forced
-// changes its value.
+// until Unforce. v is checked and converted exactly as a Write would be:
+// a value the declared type cannot hold (out of an INT's range, a string
+// for a REAL, NaN, a number that is no enumeration member) is refused with
+// the same error, so an operator's force can never put a value in the
+// store that a write could not. Forcing an address that is
+// already forced changes its value.
 func (t *Tags) Force(addr string, v any) error {
+	return t.force(addr, v, true)
+}
+
+// ForceLenient is Force with the lenient conversion retain and given: use:
+// an acceptance test's force: may hold a tag at a value the program itself
+// can produce, such as an INT counted past 32767, which the VM does not
+// wrap.
+func (t *Tags) ForceLenient(addr string, v any) error {
+	return t.force(addr, v, false)
+}
+
+func (t *Tags) force(addr string, v any, strict bool) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	root, path, tv, err := t.resolveForceAddr(addr)
@@ -171,7 +185,11 @@ func (t *Tags) Force(addr string, v any) error {
 	// Validate and coerce through the very routine every write uses, then
 	// read the coerced leaf back so the entry stores a typed value.
 	rootT := t.types[ir.NameKey(root)]
-	nv, err := ir.SetFieldTyped(base, rootT, path, v, "tag "+root)
+	set := ir.SetFieldTyped
+	if strict {
+		set = ir.SetFieldTypedStrict
+	}
+	nv, err := set(base, rootT, path, v, "tag "+root)
 	if err != nil {
 		return err
 	}

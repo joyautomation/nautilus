@@ -1035,30 +1035,41 @@ func TagDefs(m *Manifest) ([]runtime.TagDef, error) {
 // its directory or the nearest one above it) and returns its TagDefs; nil
 // when the file is in no project, or the manifest does not read.
 func TagDefsFor(file string) []runtime.TagDef {
+	defs, _, _ := TagDefsForErr(file)
+	return defs
+}
+
+// TagDefsForErr is TagDefsFor with the reason it has nothing: the
+// governing manifest's directory and the error reading it or its tags
+// (an unknown role, a setpoint with neither init nor type). No manifest
+// above file is no error. `naut check` reports the error rather than
+// compiling the programs against no tags, which only says each tag they
+// use is undeclared.
+func TagDefsForErr(file string) (defs []runtime.TagDef, manifestDir string, err error) {
 	abs, err := filepath.Abs(file)
 	if err != nil {
-		return nil
+		return nil, "", nil
 	}
 	dir := filepath.Dir(abs)
 	for range 32 {
 		if fi, err := os.Stat(filepath.Join(dir, ManifestName)); err == nil && !fi.IsDir() {
 			m, err := ReadManifest(os.DirFS(dir), "")
 			if err != nil {
-				return nil
+				return nil, dir, err
 			}
 			defs, err := TagDefs(m)
 			if err != nil {
-				return nil
+				return nil, dir, err
 			}
-			return defs
+			return defs, dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil
+			return nil, "", nil
 		}
 		dir = parent
 	}
-	return nil
+	return nil, "", nil
 }
 
 // PeersFor is the programs of the project governing file — every task's

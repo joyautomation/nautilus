@@ -7,7 +7,7 @@
 //   PUT  <runtimeUrl>/api/program           {source, baseHash} → swap
 //   POST <runtimeUrl>/api/program/rollback  one-step stateful undo
 //
-// The controller must opt in (server.Options.OnlineEdits) — production
+// The controller must opt in (server.online-edits in nautilus.yaml) — production
 // controllers keep it off. Edits are ephemeral: a restart reverts to the
 // deployed program; committing the file is what makes an edit permanent.
 //
@@ -426,7 +426,7 @@ export class OnlineEdit implements vscode.Disposable {
     }
     if (!info.editable) {
       void notifyError(
-        "nautilus: this controller has online edits disabled (server.Options.OnlineEdits)"
+        "nautilus: this controller has online edits disabled (set server.online-edits: true in nautilus.yaml)"
       );
       return;
     }
