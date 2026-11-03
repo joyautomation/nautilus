@@ -3,8 +3,8 @@ package ir
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -192,9 +192,38 @@ func arrayFromInit(t *Type, init any, path string) (Value, error) {
 // ParseDuration reads an IEC duration — `T#1h2m3s4ms`, `TIME#500ms`,
 // `LTIME#2s`, or the same without the prefix, case-insensitive, with `_`
 // separators and a leading `-` allowed, and a fraction on the last unit
-// (`1.5s`) — into milliseconds. Unlike the ST lexer's reader it refuses
-// what it cannot read: a manifest value is not checked by a parser first.
+// (`1.5s`) — into milliseconds, rounding a fraction of a millisecond to
+// the nearest. Unlike the ST lexer's reader it refuses what it cannot
+// read: a manifest value is not checked by a parser first. A duration
+// past what a TIME holds (int64 milliseconds) is refused with
+// ErrOutOfRange.
 func ParseDuration(s string) (int64, error) {
+	ms, _, err := parseDurationExact(s)
+	return ms, err
+}
+
+// ParseDurationWhole is ParseDuration for a write from outside a program:
+// a literal finer than a millisecond (`T#1.5ms`, `T#1us`) is refused with
+// ErrOutOfRange rather than rounded, the way the number 1.5 is.
+func ParseDurationWhole(s string) (int64, error) {
+	ms, whole, err := parseDurationExact(s)
+	if err == nil && !whole {
+		return 0, rangef("finer than the millisecond a TIME holds")
+	}
+	return ms, err
+}
+
+// msPerUnit is each duration unit in milliseconds, exactly.
+var msPerUnit = map[string]*big.Rat{
+	"d": big.NewRat(86400000, 1), "h": big.NewRat(3600000, 1), "m": big.NewRat(60000, 1),
+	"s": big.NewRat(1000, 1), "ms": big.NewRat(1, 1), "us": big.NewRat(1, 1000), "ns": big.NewRat(1, 1000000),
+}
+
+// parseDurationExact sums the duration in exact decimal arithmetic, so a
+// sum near the int64 limit neither loses digits nor wraps, and reports
+// whether it was a whole number of milliseconds before rounding. A
+// malformed literal is ErrTypeMismatch; one past int64 is ErrOutOfRange.
+func parseDurationExact(s string) (ms int64, whole bool, err error) {
 	raw := strings.TrimSpace(s)
 	low := strings.ToLower(raw)
 	for _, p := range []string{"ltime#", "time#", "lt#", "t#"} {
@@ -207,60 +236,74 @@ func ParseDuration(s string) (int64, error) {
 	neg := strings.HasPrefix(low, "-")
 	low = strings.TrimPrefix(low, "-")
 	if low == "" {
-		return 0, fmt.Errorf("not a duration")
+		return 0, false, mismatchf("not a duration")
 	}
-	units := map[string]float64{"d": 86400000, "h": 3600000, "m": 60000, "s": 1000, "ms": 1, "us": 0.001, "ns": 0.000001}
-	var total float64
+	total := new(big.Rat)
 	for i := 0; i < len(low); {
 		j := i
 		for j < len(low) && (low[j] >= '0' && low[j] <= '9' || low[j] == '.') {
 			j++
 		}
 		if j == i {
-			return 0, fmt.Errorf("not a duration (a number then d, h, m, s or ms)")
+			return 0, false, mismatchf("not a duration (a number then d, h, m, s or ms)")
 		}
-		num, err := strconv.ParseFloat(low[i:j], 64)
-		if err != nil {
-			return 0, fmt.Errorf("not a duration")
+		num, ok := new(big.Rat).SetString(low[i:j])
+		if !ok {
+			return 0, false, mismatchf("not a duration")
 		}
 		k := j
 		for k < len(low) && low[k] >= 'a' && low[k] <= 'z' {
 			k++
 		}
-		scale, ok := units[low[j:k]]
+		scale, ok := msPerUnit[low[j:k]]
 		if !ok {
-			return 0, fmt.Errorf("not a duration (unit %q; use d, h, m, s or ms)", low[j:k])
+			return 0, false, mismatchf("not a duration (unit %q; use d, h, m, s or ms)", low[j:k])
 		}
-		total += num * scale
+		total.Add(total, num.Mul(num, scale))
 		i = k
 	}
 	if neg {
-		total = -total
+		total.Neg(total)
 	}
-	return int64(math.Round(total)), nil
+	whole = total.IsInt()
+	// Round half away from zero, as math.Round does.
+	q, r := new(big.Int).QuoRem(total.Num(), total.Denom(), new(big.Int))
+	if twice := new(big.Int).Abs(r); twice.Lsh(twice, 1).Cmp(total.Denom()) >= 0 {
+		if total.Sign() < 0 {
+			q.Sub(q, big.NewInt(1))
+		} else {
+			q.Add(q, big.NewInt(1))
+		}
+	}
+	if !q.IsInt64() {
+		return 0, false, rangef("longer than a TIME holds (%s to %s)", FormatDuration(math.MinInt64), FormatDuration(math.MaxInt64))
+	}
+	return q.Int64(), whole, nil
 }
 
 // FormatDuration writes ms as the IEC duration literal a person would,
 // ParseDuration's inverse: 30000 → T#30s, 90000 → T#1m30s, 250 → T#250ms,
-// 0 → T#0s.
+// 0 → T#0s. Every int64 round-trips, the extremes included.
 func FormatDuration(ms int64) string {
 	var b strings.Builder
 	b.WriteString("T#")
+	// The magnitude as a uint64: -MinInt64 does not fit an int64.
+	u := uint64(ms)
 	if ms < 0 {
 		b.WriteByte('-')
-		ms = -ms
+		u = -u
 	}
-	if ms == 0 {
+	if u == 0 {
 		b.WriteString("0s")
 		return b.String()
 	}
-	for _, u := range []struct {
+	for _, unit := range []struct {
 		name string
-		ms   int64
+		ms   uint64
 	}{{"d", 86400000}, {"h", 3600000}, {"m", 60000}, {"s", 1000}, {"ms", 1}} {
-		if ms >= u.ms {
-			fmt.Fprintf(&b, "%d%s", ms/u.ms, u.name)
-			ms %= u.ms
+		if u >= unit.ms {
+			fmt.Fprintf(&b, "%d%s", u/unit.ms, unit.name)
+			u %= unit.ms
 		}
 	}
 	return b.String()

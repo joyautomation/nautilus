@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -14,8 +15,10 @@ import (
 // milliseconds: POST /api/tags {"value":"T#1m"} and POST /api/forces
 // {"value":"T#45s"} both land. Before, the first was a 422 ("value must be
 // a number or boolean") and the second a 400 ("want TIME (milliseconds),
-// got a string"). A malformed literal is a 400 that says what is wrong, and
-// a STRING tag still takes any string as text.
+// got a string"). A malformed literal is the wrong kind of value (422 on a
+// whole tag, 400 on a member, as text to a REAL is); a literal finer than a
+// millisecond or past int64 is out of range (400), as the same number is,
+// never rounded or wrapped. A STRING tag still takes any string as text.
 func newTimeRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	rt, err := runtime.New(runtime.Options{
@@ -68,6 +71,11 @@ func TestWriteTimeTakesIECLiteral(t *testing.T) {
 		{`{"name":"Delay","value":"T#250ms"}`, "Delay", 250},
 		{`{"name":"Step.Hold","value":"T#1h"}`, "Step.Hold", 3600000},
 		{`{"name":"Step","value":{"Hold":"T#5s"}}`, "Step.Hold", 5000},
+		{`{"name":"Delay","value":"T#1.5s"}`, "Delay", 1500},
+		{`{"name":"Delay","value":"T#2000us"}`, "Delay", 2},
+		// The extremes land exactly: no float rounding on the way.
+		{`{"name":"Delay","value":"T#9223372036854775807ms"}`, "Delay", math.MaxInt64},
+		{`{"name":"Delay","value":"T#-106751991167d7h12m55s808ms"}`, "Delay", math.MinInt64},
 	} {
 		if rec := postTag(t, srv, tc.body); rec.Code != 204 {
 			t.Errorf("%s: %d %q, want 204", tc.body, rec.Code, rec.Body)
@@ -78,18 +86,31 @@ func TestWriteTimeTakesIECLiteral(t *testing.T) {
 		}
 	}
 
-	// A malformed literal is a 400 naming the problem, and lands nothing.
-	for _, tc := range []struct{ body, msg string }{
-		{`{"name":"MinRun","value":"T#1x"}`, `"T#1x" is not a TIME literal`},
-		{`{"name":"MinRun","value":"soon"}`, `"soon" is not a TIME literal`},
-		{`{"name":"Step.Hold","value":"T#"}`, `"T#" is not a TIME literal`},
-		// A fraction of a millisecond is finer than a TIME holds: a 400
-		// (out of range) on a whole tag, unlike a fraction to an INT (422).
-		{`{"name":"MinRun","value":2.5}`, `2.5 is not a whole number of milliseconds`},
+	// A refused value names the problem and lands nothing.
+	for _, tc := range []struct {
+		body string
+		code int
+		msg  string
+	}{
+		{`{"name":"MinRun","value":"T#1x"}`, 422, `"T#1x" is not a TIME literal`},
+		{`{"name":"MinRun","value":"soon"}`, 422, `"soon" is not a TIME literal`},
+		{`{"name":"Step.Hold","value":"T#"}`, 400, `"T#" is not a TIME literal`},
+		// Past int64 milliseconds: refused, not wrapped to a negative.
+		{`{"name":"MinRun","value":"T#106751991168d"}`, 400, `"T#106751991168d" is longer than a TIME holds`},
+		{`{"name":"MinRun","value":"T#9223372036854775808ms"}`, 400, `longer than a TIME holds`},
+		{`{"name":"Step.Hold","value":"T#-106751991168d"}`, 400, `longer than a TIME holds`},
+		// Finer than a millisecond: refused, not rounded, as 2.5 is.
+		{`{"name":"MinRun","value":"T#1.5ms"}`, 400, `"T#1.5ms" is finer than the millisecond a TIME holds`},
+		{`{"name":"MinRun","value":"T#0.4ms"}`, 400, `finer than the millisecond`},
+		{`{"name":"MinRun","value":"T#1us"}`, 400, `finer than the millisecond`},
+		// A fraction of a millisecond as a number: out of range, a 400,
+		// unlike a fraction to an INT (422).
+		{`{"name":"MinRun","value":2.5}`, 400, `2.5 is not a whole number of milliseconds`},
+		{`{"name":"MinRun","value":1e300}`, 400, `1e+300 milliseconds is out of range for a TIME`},
 	} {
 		rec := postTag(t, srv, tc.body)
-		if rec.Code != 400 || !strings.Contains(rec.Body.String(), tc.msg) {
-			t.Errorf("%s: %d %q, want 400 containing %q", tc.body, rec.Code, rec.Body, tc.msg)
+		if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.msg) {
+			t.Errorf("%s: %d %q, want %d containing %q", tc.body, rec.Code, rec.Body, tc.code, tc.msg)
 		}
 	}
 	if got := timeMs(t, rt, "MinRun"); got != 45000 {
@@ -120,8 +141,17 @@ func TestForceTimeTakesIECLiteral(t *testing.T) {
 	if got := timeMs(t, rt, "Step.Hold"); got != 90000 {
 		t.Errorf("Step.Hold = %d under a force of T#1m30s, want 90000", got)
 	}
-	rec := call(t, srv, "POST", "/api/forces", `{"name":"MinRun","value":"T#forever"}`)
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), `"T#forever" is not a TIME literal`) {
-		t.Errorf("force T#forever: %d %q, want 400 naming the literal", rec.Code, rec.Body)
+	for body, msg := range map[string]string{
+		`{"name":"MinRun","value":"T#forever"}`:       `"T#forever" is not a TIME literal`,
+		`{"name":"MinRun","value":"T#106751991168d"}`: `longer than a TIME holds`,
+		`{"name":"Step.Hold","value":"T#1.5ms"}`:      `finer than the millisecond`,
+	} {
+		rec := call(t, srv, "POST", "/api/forces", body)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), msg) {
+			t.Errorf("force %s: %d %q, want 400 containing %q", body, rec.Code, rec.Body, msg)
+		}
+	}
+	if got := timeMs(t, rt, "MinRun"); got != 45000 {
+		t.Errorf("MinRun = %d under the force after refused forces, want 45000", got)
 	}
 }

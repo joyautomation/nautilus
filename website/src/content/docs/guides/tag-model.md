@@ -332,7 +332,10 @@ plant is already running on.
   `STRING` or a `TIME` is a `422` on a whole tag (a `400` on a member). A
   `TIME` takes whole milliseconds or its IEC literal, as `init:` and a
   test's `given:` do: `"T#1m30s"`, `"TIME#500ms"`. A string that is no
-  duration is a `400` that says why. The same rules hold for a whole tag, a member, every
+  duration is the wrong kind of value, like text for a `REAL`. A literal
+  finer than a millisecond (`"T#1.5ms"`) or longer than a `TIME` holds is
+  a `400`, as `2.5` is: a write is never rounded or wrapped (`init:`
+  rounds to the millisecond). The same rules hold for a whole tag, a member, every
   member of an object `value` and every element of a list, and for an
   output no scan has written yet. What the program itself produced is not
   held to them: a retained value comes back after a restart exactly as the

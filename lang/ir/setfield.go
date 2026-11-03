@@ -1,7 +1,9 @@
 package ir
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -393,12 +395,18 @@ func coerceLeaf(cur Value, v any, sofar string) (Value, error) {
 	case TypeTime:
 		// A TIME takes a whole number of milliseconds, or the literal a
 		// manifest's init: and a test's given: take (T#30s, TIME#1m30s,
-		// 500ms), read by the same ParseDuration. A string that is no
-		// duration is refused with what is wrong with it.
+		// 500ms). A string that is no duration is the wrong kind of value
+		// (ErrTypeMismatch); a duration finer than a millisecond or past
+		// int64 is out of range (ErrOutOfRange), as the same number is.
+		// Unlike init:, a write is not rounded: it lands exactly or not at
+		// all.
 		if s, ok := v.(string); ok {
-			ms, err := ParseDuration(s)
-			if err != nil {
-				return Value{}, fmt.Errorf("%s: %q is not a TIME literal: %v (write T#30s, T#1m30s, or a number of milliseconds)", sofar, s, err)
+			ms, err := ParseDurationWhole(s)
+			switch {
+			case errors.Is(err, ErrOutOfRange):
+				return Value{}, rangef("%s: %q is %v", sofar, s, err)
+			case err != nil:
+				return Value{}, mismatchf("%s: %q is not a TIME literal: %v (write T#30s, T#1m30s, or a number of milliseconds)", sofar, s, err)
 			}
 			return TimeVal(ms), nil
 		}
@@ -407,8 +415,11 @@ func coerceLeaf(cur Value, v any, sofar string) (Value, error) {
 		}
 		if f, ok := toFloat(v); ok {
 			// Out of range, not a mismatch: a number is the right kind of
-			// thing, finer than a TIME's millisecond (OPC UA's Bad_OutOfRange).
-			return Value{}, rangef("%s: %v is not a whole number of milliseconds a TIME can hold", sofar, f)
+			// thing (OPC UA's Bad_OutOfRange).
+			if f != math.Trunc(f) {
+				return Value{}, rangef("%s: %v is not a whole number of milliseconds a TIME can hold", sofar, f)
+			}
+			return Value{}, rangef("%s: %v milliseconds is out of range for a TIME (%s to %s)", sofar, f, FormatDuration(math.MinInt64), FormatDuration(math.MaxInt64))
 		}
 		return Value{}, wantErr(TypeTime, v, "%s: want TIME (T#30s or milliseconds), got %s", sofar, describeKind(v))
 	case TypeString:

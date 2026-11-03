@@ -1,6 +1,8 @@
 package ir
 
 import (
+	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -232,6 +234,7 @@ func TestFormatDurationRoundTrips(t *testing.T) {
 	for ms, want := range map[int64]string{
 		0: "T#0s", 250: "T#250ms", 30000: "T#30s", 90000: "T#1m30s", 120000: "T#2m",
 		3600000: "T#1h", 90061001: "T#1d1h1m1s1ms", -1500: "T#-1s500ms",
+		math.MaxInt64: "T#106751991167d7h12m55s807ms", math.MinInt64: "T#-106751991167d7h12m55s808ms",
 	} {
 		got := FormatDuration(ms)
 		if got != want {
@@ -240,5 +243,37 @@ func TestFormatDurationRoundTrips(t *testing.T) {
 		if back, err := ParseDuration(got); err != nil || back != ms {
 			t.Errorf("ParseDuration(%q) = %d, %v, want %d", got, back, err, ms)
 		}
+	}
+}
+
+// A duration past int64 milliseconds is refused as out of range wherever it
+// is read (init:, given:, a write), never wrapped; init: still rounds a
+// fraction of a millisecond to the nearest, and a write (ParseDurationWhole)
+// refuses it.
+func TestParseDurationRangeAndRounding(t *testing.T) {
+	for _, s := range []string{"T#106751991168d", "T#9223372036854775808ms", "T#-9223372036854775809ms"} {
+		if ms, err := ParseDuration(s); !errors.Is(err, ErrOutOfRange) {
+			t.Errorf("ParseDuration(%q) = %d, %v; want ErrOutOfRange", s, ms, err)
+		}
+	}
+	for s, want := range map[string]int64{"T#1.5ms": 2, "T#0.4ms": 0, "T#-1.5ms": -2, "T#1us": 0, "T#1.0005s": 1001} {
+		if ms, err := ParseDuration(s); err != nil || ms != want {
+			t.Errorf("ParseDuration(%q) = %d, %v; want %d (rounded, as init: always did)", s, ms, err, want)
+		}
+		if _, err := ParseDurationWhole(s); !errors.Is(err, ErrOutOfRange) {
+			t.Errorf("ParseDurationWhole(%q): %v, want ErrOutOfRange", s, err)
+		}
+	}
+	for s, want := range map[string]int64{"T#1.5s": 1500, "T#2000us": 2, "T#3000000ns": 3, "T#0.001s": 1} {
+		if ms, err := ParseDurationWhole(s); err != nil || ms != want {
+			t.Errorf("ParseDurationWhole(%q) = %d, %v; want %d", s, ms, err, want)
+		}
+	}
+	if _, err := ParseDuration("T#1x"); !errors.Is(err, ErrTypeMismatch) {
+		t.Errorf("ParseDuration(T#1x): %v, want ErrTypeMismatch", err)
+	}
+	v, err := SeedFromInit(TimeT, "T#1.5ms")
+	if err != nil || v.I != 2 {
+		t.Errorf("init: T#1.5ms = %v, %v; want 2 ms (init: rounds)", v.I, err)
 	}
 }
