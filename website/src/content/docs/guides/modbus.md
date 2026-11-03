@@ -101,7 +101,7 @@ has to remember it. Useful flags: `--instance` for one instance id,
 tags the project declares by hand out of the tag file, `--out` and
 `--tags-out` for paths, `--plan` to print the block plan.
 
-`naut modbus tags modbus_manifest.yaml --map devices.yaml` re-derives
+`naut modbus tags --map devices.yaml modbus_manifest.yaml` re-derives
 just the tag file from an already-committed manifest. Without `--map` it
 still works; the unit/desc/init columns, which only the map knows, are
 dropped.

@@ -67,6 +67,7 @@ claims:
     source: "#generating-the-manifest-naut-modbus-import"
     tests:
       - go ./cmd/naut TestModbusTagsRederives
+      - go ./cmd/naut TestModbusTagsHeaderCommandRuns
   - id: MB-007
     claim: >-
       The planner coalesces bindings on the same source, table and scan

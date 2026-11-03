@@ -352,3 +352,41 @@ END_PROGRAM
 		t.Errorf("naut check on an imported project exited %d:\n%s", code, buf.String())
 	}
 }
+
+// The tag file's header names the command that re-derives it; that command,
+// run as written from the project directory, works and reproduces the file.
+// (It used to put --map after the manifest, where the flag parser stops.)
+func TestModbusTagsHeaderCommandRuns(t *testing.T) {
+	dir := t.TempDir()
+	raw, err := os.ReadFile(modbusTestdata("devices.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "devices.yaml"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, tags, _ := importInto(t, dir)
+	var header strings.Builder
+	for _, line := range strings.Split(tags, "\n") {
+		if !strings.HasPrefix(line, "#") {
+			break
+		}
+		header.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "#")) + " ")
+	}
+	_, after, ok := strings.Cut(header.String(), "`naut modbus tags")
+	cmd, _, ok2 := strings.Cut(after, "`")
+	if !ok || !ok2 {
+		t.Fatalf("no `naut modbus tags …` command in the header:\n%s", header.String())
+	}
+	if err := os.Remove(filepath.Join(dir, "tags", "modbus.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	args := append([]string{"tags"}, strings.Fields(cmd)...)
+	if out, code := captureModbus(t, args...); code != 0 {
+		t.Fatalf("naut modbus %s (from the header) exited %d:\n%s", strings.Join(args, " "), code, out)
+	}
+	if got := read(t, filepath.Join(dir, "tags", "modbus.yaml")); got != tags {
+		t.Errorf("the header's command re-derived a different file:\n%s", got)
+	}
+}
