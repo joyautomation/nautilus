@@ -297,6 +297,7 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.DataValue, len(req.NodesToRead))
+	var writer *bool // the session's write standing, when an item asks
 	for i, n := range req.NodesToRead {
 		if n == nil || n.NodeID == nil {
 			results[i] = status(ua.StatusBadNodeIDInvalid)
@@ -315,7 +316,13 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 			dv = accessAttribute(srv, n.NodeID, n.AttributeID, dv)
 		}
 		if n.AttributeID == ua.AttributeIDUserAccessLevel && n.NodeID.Namespace() == ns.id && dv.Status == ua.StatusGood {
-			if lvl, ok := ns.userAccessLevel(n.NodeID, ns.w.channelWriter(sc)); ok {
+			if writer == nil {
+				// As the Write service judges it, once per request: a
+				// certificate since untrusted or expired reads CurrentRead.
+				w := ns.w.channelWriter(sc) && ns.w.who(srv, sc, req.RequestHeader).writer
+				writer = &w
+			}
+			if lvl, ok := ns.userAccessLevel(n.NodeID, *writer); ok {
 				dv = value(uint8(lvl))
 			}
 		}

@@ -3,10 +3,12 @@
 // Write) each hold a list of these patterns, matched the same way, so the
 // two lists cannot drift in meaning (docs/design/opcua-server-writes.md §1).
 //
-// A pattern is a glob (path.Match) over a tag name or a member's dotted
-// path ("TempSP", "Pump*.SpeedSP", "Motor1.START"). A pattern that matches
-// a tag opens all of its members; one that matches a member opens that
-// member and everything below it. An empty list opens nothing.
+// A pattern is a glob (path.Match) over a tag name or a member's path
+// ("TempSP", "Pump*.SpeedSP", "Motor1.START", "Drives[0].Speed"). A
+// pattern that matches a tag opens all of its members; one that matches a
+// member opens that member and everything below it. Below means through
+// struct members and array elements alike: "Drives" opens
+// "Drives[0].Speed". An empty list opens nothing.
 package writable
 
 import (
@@ -30,13 +32,14 @@ func (ps Patterns) Validate() error {
 }
 
 // Allows reports whether the tag or member at p may be written: p itself,
-// or any dotted ancestor of it, matches a pattern.
+// or any ancestor of it, matches a pattern. An ancestor ends at a member
+// separator or an array index: "Drives[0].Speed", "Drives[0]", "Drives".
 func (ps Patterns) Allows(p string) bool {
 	for {
 		if ps.matchOne(p) {
 			return true
 		}
-		i := strings.LastIndexByte(p, '.')
+		i := strings.LastIndexAny(p, ".[")
 		if i < 0 {
 			return false
 		}

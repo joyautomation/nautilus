@@ -41,6 +41,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
@@ -60,6 +61,15 @@ const maxNodesPerWrite = 10000
 // unbounded map.
 const maxWarned = 4096
 
+// refusalBudget is the most refusal lines one client (by certificate, else
+// by host) gets in the log: after it, one line says the rest are only
+// counted. A writer's refusals name each node it may know, so a writer
+// probing the whole address space would otherwise log a line per node.
+const refusalBudget = 64
+
+// maxLoggedNode is how much of a client-supplied node id a log line quotes.
+const maxLoggedNode = 96
+
 // writeAccess is the server's write policy and its bookkeeping: what is
 // writable, who is a writer, the standby gate, the counters and the
 // refusal log. It outlives a Stop/Start, so the counters do too.
@@ -75,6 +85,8 @@ type writeAccess struct {
 
 	mu     sync.Mutex
 	warned map[string]struct{}
+	lines  map[string]int // refusal lines logged per client key
+	budget int            // refusalBudget; tests lower it
 }
 
 // client is who sent a request, as the audit names it.
@@ -83,8 +95,9 @@ type client struct {
 	uri        string // the ApplicationURI in the client certificate
 	thumbprint string // short: the first 16 hex digits
 	remote     string
-	writer     bool // a SignAndEncrypt channel from a trusted certificate
-	revoked    bool // a writer's channel whose certificate is no longer trusted
+	writer     bool   // a SignAndEncrypt channel from a trusted, valid certificate
+	revoked    bool   // a writer's channel whose certificate no longer is
+	why        string // why revoked
 }
 
 // channelWriter reports whether sc is a writer's channel: SignAndEncrypt
@@ -99,31 +112,65 @@ func (w *writeAccess) channelWriter(sc *uasc.SecureChannel) bool {
 	return sc.SecurityMode() == ua.MessageSecurityModeSignAndEncrypt && p != "" && p != ua.SecurityPolicyURINone && len(sc.RemoteCertificate()) > 0
 }
 
-// who identifies the client of a request on sc. recheck reads the trust
-// list again (once per Write request) for a writer's channel.
-func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua.RequestHeader, recheck bool) client {
+// who identifies the client of a request on sc. For a writer's channel it
+// also checks the certificate again, once per request: still in the trust
+// list, and within its validity period now (the channel opened when it
+// was). A certificate that fails is revoked: the session writes nothing,
+// and reads UserAccessLevel CurrentRead. One that cannot be parsed is no
+// writer's.
+func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua.RequestHeader) client {
 	c := client{writer: w.channelWriter(sc)}
 	if hdr != nil && srv != nil {
 		if sess := srv.Session(hdr); sess != nil && sess.ID != nil {
 			c.session = sess.ID.String()
 		}
 	}
-	if sc != nil {
-		if a := sc.RemoteAddr(); a != nil {
-			c.remote = a.String()
+	if sc == nil {
+		return c
+	}
+	if a := sc.RemoteAddr(); a != nil {
+		c.remote = a.String()
+	}
+	leaf := leafCert(sc.RemoteCertificate())
+	if leaf != nil {
+		c.thumbprint = Thumbprint(leaf.Raw)[:16]
+		if len(leaf.URIs) > 0 {
+			c.uri = leaf.URIs[0].String()
 		}
-		if certs, err := x509.ParseCertificates(sc.RemoteCertificate()); err == nil && len(certs) > 0 {
-			leaf := certs[0]
-			c.thumbprint = Thumbprint(leaf.Raw)[:16]
-			if len(leaf.URIs) > 0 {
-				c.uri = leaf.URIs[0].String()
-			}
-			if c.writer && recheck && !w.pki.trusted(leaf.Raw) {
-				c.writer, c.revoked = false, true
-			}
+	}
+	if c.writer {
+		if why := certStanding(leaf, w.pki.trusted, time.Now()); why != "" {
+			c.writer, c.revoked, c.why = false, true, why
 		}
 	}
 	return c
+}
+
+// leafCert is the first certificate of a DER chain, nil when it does not
+// parse.
+func leafCert(der []byte) *x509.Certificate {
+	certs, err := x509.ParseCertificates(der)
+	if err != nil || len(certs) == 0 {
+		return nil
+	}
+	return certs[0]
+}
+
+// certStanding is "" when a writer's certificate may still write at now:
+// readable, within its validity period, and in the trust list. Otherwise
+// it says why not. It fails closed.
+func certStanding(leaf *x509.Certificate, trusted func(der []byte) bool, now time.Time) string {
+	switch {
+	case leaf == nil:
+		return "the channel's client certificate cannot be read"
+	case now.Before(leaf.NotBefore):
+		return "the client certificate is not valid yet"
+	case now.After(leaf.NotAfter):
+		return "the client certificate has expired"
+	case trusted == nil || !trusted(leaf.Raw):
+		return "the client certificate is no longer trusted"
+	}
+	return ""
 }
 
 // key names the client for the refusal log: its certificate, else its host.
@@ -159,11 +206,14 @@ func (s *Server) SetWriteGate(leader func() bool) {
 	s.w.gate.Store(&leader)
 }
 
-// writableMember reports whether m may be written by a writer: a Variable
-// whose address (or an ancestor's) matches opcua.writable, under a root
-// that is not an input. It is the node's AccessLevel CurrentWrite bit.
+// writableMember reports whether m may be written by a writer: a scalar
+// Variable whose address (or an ancestor's) matches opcua.writable, under a
+// root that is not an input. It is the node's AccessLevel CurrentWrite bit.
+// An array is not, matched or not, until array writes land (slice 4): its
+// every write is Bad_WriteNotSupported, and a CurrentWrite would say
+// otherwise.
 func (ns *namespace) writableMember(m member) bool {
-	if ns.w == nil || len(ns.w.patterns) == 0 || m.absent || isObject(m) {
+	if ns.w == nil || len(ns.w.patterns) == 0 || m.absent || isObject(m) || m.val.Kind == ir.TypeArray {
 		return false
 	}
 	root, _ := ir.SplitAddress(m.addr)
@@ -221,7 +271,7 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		return nil, ua.StatusBadTooManyOperations
 	}
 	w := ns.w
-	cl := w.who(srv, sc, req.RequestHeader, true)
+	cl := w.who(srv, sc, req.RequestHeader)
 	results := make([]ua.StatusCode, len(req.NodesToWrite))
 	details := make([]string, len(req.NodesToWrite))
 	var (
@@ -229,16 +279,18 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		at    []int    // ops[k] is item at[k]
 		olds  []member // what each op's node held before
 		paths = make([]string, len(req.NodesToWrite))
+		addrs = make([]string, len(req.NodesToWrite)) // the resolved address, when there is one
 	)
 	for i, n := range req.NodesToWrite {
 		if n != nil && n.NodeID != nil {
 			paths[i] = n.NodeID.String()
 		}
 		if cl.revoked {
-			results[i], details[i] = ua.StatusBadUserAccessDenied, "the client certificate is no longer trusted"
+			results[i], details[i] = ua.StatusBadUserAccessDenied, cl.why
 			continue
 		}
 		code, m, val, detail := ns.checkWrite(srv, n, cl)
+		addrs[i] = m.addr
 		if code != ua.StatusGood {
 			results[i], details[i] = code, detail
 			continue
@@ -246,6 +298,14 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		ops = append(ops, runtime.WriteOp{Path: m.addr, Value: val})
 		at = append(at, i)
 		olds = append(olds, m)
+	}
+	// The standby gate is asked once, for the whole batch: a request lands
+	// whole or not at all when leadership moves while it is answered.
+	if len(ops) > 0 && !w.leader() {
+		for _, i := range at {
+			results[i], details[i] = ua.StatusBadInvalidState, "this replica is a standby"
+		}
+		ops, at = nil, nil
 	}
 	if len(ops) > 0 {
 		for k, err := range ns.rt.Tags().Write(ops) {
@@ -267,17 +327,28 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		w.log.Info("opcua: write", "node", paths[i], "old", shown(olds[k]), "new", shown(after),
 			"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
 	}
+	var refused []refusal
 	for i, code := range results {
-		if code != ua.StatusGood {
-			w.refuse(cl, paths[i], code, details[i])
+		if code == ua.StatusGood {
+			continue
 		}
+		r := refusal{node: paths[i], code: code, detail: details[i]}
+		// A writer is told about the nodes it may know, one line each; every
+		// other refusal (a non-writer's, an unknown node id's) is a summary,
+		// since its node ids are whatever the client chose to send.
+		if cl.writer && addrs[i] != "" && code != ua.StatusBadNodeIDUnknown && code != ua.StatusBadNodeIDInvalid {
+			r.node, r.known = ns.nodeID(member{addr: addrs[i]}).String(), true
+		}
+		refused = append(refused, r)
 	}
+	w.refuse(cl, refused)
 	return &ua.WriteResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }
 
 // checkWrite runs one item's protocol checks, in the order §3.3 implies:
 // what the node is, then who is asking, then whether this tag is open,
-// then the replica, then the shape of the DataValue, then the conversion.
+// then the shape of the DataValue, then the conversion. The replica is
+// asked once per request, by writeAttributes, before the batch.
 // It returns Good with the member and the value for the front door, or the
 // refusal and a line for the log.
 func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl client) (ua.StatusCode, member, any, string) {
@@ -321,9 +392,6 @@ func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl clie
 	if !ns.w.patterns.Allows(m.addr) {
 		return ua.StatusBadNotWritable, m, nil, "not matched by opcua.writable"
 	}
-	if !ns.w.leader() {
-		return ua.StatusBadInvalidState, m, nil, "this replica is a standby"
-	}
 	if n.IndexRange != "" || m.val.Kind == ir.TypeArray {
 		return ua.StatusBadWriteNotSupported, m, nil, "array writes are not supported"
 	}
@@ -339,7 +407,9 @@ func fromVariant(m member, dv *ua.DataValue) (any, ua.StatusCode, string) {
 	if dv == nil || dv.EncodingMask&ua.DataValueValue == 0 || dv.Value == nil {
 		return nil, ua.StatusBadTypeMismatch, "no value"
 	}
-	if dv.EncodingMask&ua.DataValueStatusCode != 0 && dv.Status != ua.StatusGood {
+	// A Good status of any subcode (GoodClamped…) is no status to keep; an
+	// Uncertain or Bad one would be a quality the store cannot hold.
+	if dv.EncodingMask&ua.DataValueStatusCode != 0 && dv.Status&severityMask != 0 {
 		return nil, ua.StatusBadWriteNotSupported, "a StatusCode cannot be written"
 	}
 	v := dv.Value
@@ -456,24 +526,95 @@ func frontDoorStatus(err error) ua.StatusCode {
 	return ua.StatusBadNotWritable
 }
 
-// refuse counts a refused item and logs it once per client, node and
-// reason, so a client retrying every second does not flood the log.
-func (w *writeAccess) refuse(cl client, node string, code ua.StatusCode, detail string) {
-	w.refused.Add(1)
-	reason := statusName(code)
-	k := cl.key() + "|" + node + "|" + reason
-	w.mu.Lock()
-	if w.warned == nil || len(w.warned) >= maxWarned {
-		w.warned = map[string]struct{}{}
-	}
-	_, seen := w.warned[k]
-	w.warned[k] = struct{}{}
-	w.mu.Unlock()
-	if seen {
+// severityMask is a StatusCode's severity bits: 00 is Good.
+const severityMask = 0xC0000000
+
+// refusal is one refused item, for the log.
+type refusal struct {
+	node   string // the canonical node id when known, else the client's
+	code   ua.StatusCode
+	detail string
+	known  bool // a writer's refusal on a node it may know: logged per node
+}
+
+// refuse counts a request's refused items and logs them without letting a
+// client flood the log. A writer's refusal on a node it may know is one
+// line per client, node and reason. Everything else is a summary per
+// client and reason, logged once, naming how many items the request had
+// and one node id (cut short): an anonymous client sending thousands of
+// junk node ids costs a line, not thousands. Past refusalBudget lines a
+// client's refusals are only counted.
+func (w *writeAccess) refuse(cl client, rs []refusal) {
+	if len(rs) == 0 {
 		return
 	}
-	w.log.Warn("opcua: write refused", "node", node, "status", reason, "reason", detail,
-		"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+	w.refused.Add(uint64(len(rs)))
+	type group struct {
+		n     int
+		first refusal
+	}
+	var order []string
+	groups := map[string]*group{}
+	for _, r := range rs {
+		reason := statusName(r.code)
+		if r.known {
+			w.warnOnce(cl, cl.key()+"|"+r.node+"|"+reason, func() {
+				w.log.Warn("opcua: write refused", "node", r.node, "status", reason, "reason", r.detail,
+					"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+			})
+			continue
+		}
+		g := groups[reason]
+		if g == nil {
+			g = &group{first: r}
+			groups[reason] = g
+			order = append(order, reason)
+		}
+		g.n++
+	}
+	for _, reason := range order {
+		g := groups[reason]
+		w.warnOnce(cl, cl.key()+"|"+reason, func() {
+			w.log.Warn("opcua: write refused", "node", clip(g.first.node), "items", g.n, "status", reason, "reason", g.first.detail,
+				"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+		})
+	}
+}
+
+// warnOnce runs emit unless key was logged before or the client is past
+// its budget.
+func (w *writeAccess) warnOnce(cl client, key string, emit func()) {
+	w.mu.Lock()
+	if w.warned == nil || len(w.warned) >= maxWarned || len(w.lines) >= maxWarned {
+		w.warned, w.lines = map[string]struct{}{}, map[string]int{}
+	}
+	if _, seen := w.warned[key]; seen {
+		w.mu.Unlock()
+		return
+	}
+	w.warned[key] = struct{}{}
+	budget := w.budget
+	if budget <= 0 {
+		budget = refusalBudget
+	}
+	n := w.lines[cl.key()] + 1
+	w.lines[cl.key()] = n
+	w.mu.Unlock()
+	switch {
+	case n <= budget:
+		emit()
+	case n == budget+1:
+		w.log.Warn("opcua: write refusals from this client are no longer logged, only counted (writesRefused)",
+			"client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+	}
+}
+
+// clip cuts a client-supplied node id for the log.
+func clip(s string) string {
+	if len(s) > maxLoggedNode {
+		return s[:maxLoggedNode] + "…"
+	}
+	return s
 }
 
 // statusName is a status code's name, "BadTypeMismatch".

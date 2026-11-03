@@ -21,6 +21,26 @@ func TestAllowsAMatchAndEverythingBelowIt(t *testing.T) {
 			t.Errorf("Allows(%q) = %v, want %v", p, got, want)
 		}
 	}
+	// Array elements are below their array: a pattern on an array of
+	// structs opens every element and member, one on an element its
+	// members. A glob's [ ] is a character class, so an element is named
+	// with the brackets escaped.
+	ps = Patterns{"Drives", `Pumps\[2\]`, "Line.Steps"}
+	cases = map[string]bool{
+		"Drives[0]":            true,
+		"Drives[0].Speed":      true,
+		"Drives[0].Inner[3].X": true,
+		"Pumps[2].SpeedSP":     true,
+		"Pumps[1].SpeedSP":     false,
+		"Line.Steps[4].Mode":   true,
+		"Line.Other[0]":        false,
+		"DrivesB[0].Speed":     false,
+	}
+	for p, want := range cases {
+		if got := ps.Allows(p); got != want {
+			t.Errorf("Allows(%q) = %v, want %v", p, got, want)
+		}
+	}
 	if (Patterns{}).Allows("Anything") {
 		t.Error("an empty list opens something")
 	}

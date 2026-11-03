@@ -320,8 +320,9 @@ and one command:
 Copying a certificate into `trusted/certs/` (DER or PEM, any file name)
 does the same. To withdraw trust, delete its file there. The client can
 write nothing from its next Write on, even on the channel it already has:
-the server reads `trusted/` again for every Write request, and answers every
-item `Bad_UserAccessDenied`. It is refused on its next connection, and an
+for every Write request the server reads `trusted/` again and checks that
+the certificate is still within its validity period, and if not answers
+every item `Bad_UserAccessDenied`. It is refused on its next connection, and an
 open channel is closed at its next key renewal. A channel's keys last an
 hour at most, and a channel that does not renew in time is closed, so a
 withdrawn client can go on reading for about an hour and a quarter. A certificate outside its validity period is refused with
@@ -365,11 +366,14 @@ opcua:
   writable: ["*_SP", "Pump*.SpeedSP", "Recipe"]
 ```
 
-Each entry is a glob over a tag name or a UDT member's dotted path,
-matched in the tag's declared casing. A pattern that matches a tag opens
-the tag and all its members: `Recipe` opens `ns=1;s=Recipe.Steps`. One that
-matches a member opens that member and everything below it:
-`Pump*.SpeedSP` opens `ns=1;s=Pump1.SpeedSP`, not `Pump1.Running`. These
+Each entry is a glob over a tag name or a UDT member's path, matched in
+the tag's declared casing. A pattern that matches a tag opens the tag and
+everything below it, through members and array elements alike: `Recipe`
+opens `ns=1;s=Recipe.Steps`, and `Drives`, an array of UDTs, opens
+`ns=1;s=Drives[0].Speed`. One that matches a member opens that member and
+everything below it: `Pump*.SpeedSP` opens `ns=1;s=Pump1.SpeedSP`, not
+`Pump1.Running`. In a glob `[ ]` is a set of characters, so to name one
+element, escape its brackets: `'Drives\[0\]'`. These
 are the same globs, with the same rule, as
 [`sparkplug.writable`](/guides/sparkplug/), but the list is separate:
 opening a setpoint to your SCADA over OPC UA does not open it to everyone
@@ -380,6 +384,8 @@ YAML anchor.
 
 - a pattern that matches nothing, which is usually a typo or a renamed tag;
 - a pattern that matches only inputs;
+- a pattern that opens only arrays, or Objects with no scalar member,
+  which are not writable until array writes land;
 - an output it opens that a program writes.
 
 ### What may be written
@@ -397,10 +403,11 @@ YAML anchor.
   `Bad_WriteNotSupported`.
 
 `AccessLevel` tells a client what it may write: `CurrentRead` and
-`CurrentWrite` on a tag `opcua.writable` opens (not an input),
-`CurrentRead` elsewhere. `UserAccessLevel` is answered for the session
-asking: the same as `AccessLevel` for a writer, `CurrentRead` for anyone
-else. `AccessLevelEx` follows `AccessLevel`.
+`CurrentWrite` on a scalar `opcua.writable` opens (not an input, not an
+array), `CurrentRead` elsewhere. `UserAccessLevel` is answered for the
+session asking: the same as `AccessLevel` for a writer, `CurrentRead` for
+anyone else, including a client whose certificate has been withdrawn or
+has expired. `AccessLevelEx` follows `AccessLevel`.
 
 ### Conversions
 
@@ -422,8 +429,9 @@ node's own `DataType`. Clients such as asyncua send a plain Python `5` as
 A `ULINT` or `LWORD` takes any 64-bit pattern, so a value you read from
 one can be written back.
 
-**Status code and timestamps.** A `DataValue` whose status code is `Good`,
-or which has none, is a plain write. Any other status code is
+**Status code and timestamps.** A `DataValue` with no status code, or one
+whose severity is Good (`Good`, `GoodClamped` and the other Good codes),
+is a plain write. An Uncertain or Bad status code is
 `Bad_WriteNotSupported`, because a tag's quality is its source's, not a
 client's. Source and server timestamps are accepted and **ignored**. The
 server dates the change itself, when the sweep sees it, as it does for
@@ -441,7 +449,7 @@ Each item of a Write gets its own status:
 | the session is not a writer (the Value of any Variable) | `Bad_UserAccessDenied` |
 | not the `Value` attribute; an Object; a tag `opcua.writable` does not open; an input | `Bad_NotWritable` |
 | a conversion the table above refuses | `Bad_TypeMismatch` or `Bad_OutOfRange` |
-| an array or an `IndexRange`; a status code other than `Good` | `Bad_WriteNotSupported` |
+| an array or an `IndexRange`; an Uncertain or Bad status code | `Bad_WriteNotSupported` |
 | the address is [forced](/guides/forcing/) | `Bad_Locked` |
 | this replica is a standby | `Bad_InvalidState` |
 | written | `Good` |
@@ -473,7 +481,9 @@ is refused with `Bad_Locked`. Change or remove the force first.
 
 With [redundancy](/guides/redundancy/#redundancy), only the leader takes
 writes. A standby's store is stale and does not scan, so it answers every
-write `Bad_InvalidState`, and its `opcua-server` row says it is a standby.
+write `Bad_InvalidState`. The replica is asked once per request, so a
+request lands whole or not at all if leadership moves while it is
+answered, and its `opcua-server` row says it is a standby.
 Unlike the HTTP API, a standby cannot pass an OPC UA write on to the
 leader. A client that is answered `Bad_InvalidState` should reconnect, and
 a Service that spreads connections over the replicas can land it on a
@@ -485,8 +495,13 @@ Every landed item is logged on the console as an `opcua: write` line naming
 the node, the old and the new value, the session, the client's
 `ApplicationUri`, the first 16 digits of its certificate thumbprint and its
 address. A refused item is an `opcua: write refused` warning with the
-status and the reason, logged once per client, node and reason, so a
-client retrying every second does not flood the log. The `opcua-server`
+status and the reason. A trusted client's refusal on a node it may know
+is logged once per client, node and reason. Every other refusal (an
+anonymous client's, a node id that is nothing) is one line per client and
+reason, saying how many items the request had: those node ids are
+whatever the client chose to send. Past 64 lines a client's refusals are
+only counted, and one line says so. A client retrying every second, or
+sending thousands of junk node ids, does not flood the log. The `opcua-server`
 row counts both (`writes`, `writes refused`).
 
 ### Writing from asyncua

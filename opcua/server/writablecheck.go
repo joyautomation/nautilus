@@ -13,9 +13,10 @@ import (
 // WritableWarnings is `naut check`'s look at opcua.writable against a
 // compiled runtime: a pattern that matches no tag or member (a typo, or a
 // tag since renamed), one that matches only inputs (never writable: the
-// driver replaces an input before every scan), and an output it opens that
-// a program writes (a client's value lasts until the program's next
-// commit). Malformed patterns are Load's error, not a warning here.
+// driver replaces an input before every scan), one that opens only arrays
+// or Objects with no scalar member (not writable until array writes land),
+// and an output it opens that a program writes (a client's value lasts
+// until the program's next commit). Malformed patterns are Load's error, not a warning here.
 //
 // The addresses are the ones a client browses: every tag, and every
 // member of a struct or composite array below it.
@@ -52,6 +53,8 @@ func WritableWarnings(rt *runtime.Runtime, patterns []string) []string {
 			out = append(out, fmt.Sprintf("opcua.writable: %q matches no tag or member — a typo, or a tag that no longer exists", pat))
 		case len(inputs) == len(matched):
 			out = append(out, fmt.Sprintf("opcua.writable: %q matches only inputs (%s), which are never writable — the driver replaces an input before every scan; open the setpoint the logic reads instead", pat, list(inputs)))
+		case !opensScalar(ns, writable.Patterns{pat}, addrs):
+			out = append(out, fmt.Sprintf("opcua.writable: %q opens only arrays or Objects with no scalar member (%s), which are not writable until array writes land", pat, list(matched)))
 		}
 	}
 	// Outputs a program writes: open to a client, overwritten by the logic.
@@ -77,6 +80,21 @@ func WritableWarnings(rt *runtime.Runtime, patterns []string) []string {
 		out = append(out, fmt.Sprintf("opcua.writable opens output %q, which a program writes — a client's value lasts only until the program's next commit", name))
 	}
 	return out
+}
+
+// opensScalar reports whether ps opens any scalar Variable outside the
+// inputs: something a client can write today. A pattern on a UDT opens its
+// scalar members; one on an array of scalars opens nothing yet.
+func opensScalar(ns *namespace, ps writable.Patterns, addrs []member) bool {
+	for _, m := range addrs {
+		if isObject(m) || m.val.Kind == ir.TypeArray || !ps.Allows(m.addr) {
+			continue
+		}
+		if root, _ := ir.SplitAddress(m.addr); !ns.isInput(root) {
+			return true
+		}
+	}
+	return false
 }
 
 // list names up to three addresses.

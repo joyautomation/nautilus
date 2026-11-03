@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
+	"fmt"
 	"log/slog"
 	"math"
 	"os"
@@ -46,12 +47,13 @@ VAR_EXTERNAL
   Closed  : REAL;
   Hi      : REAL;
   Lo      : REAL;
+  Drives  : ARRAY[0..1] OF Drive;
 END_VAR
 END_PROGRAM
 `
 
 // writePatterns opens everything above but Closed, and of P101 only Drive.
-var writePatterns = []string{"Flag", "V_*", "Speed", "Delay", "Label", "State", "P101.Drive", "Levels", "Level", "Pump1", "Locked", "Hi", "Lo"}
+var writePatterns = []string{"Flag", "V_*", "Speed", "Delay", "Label", "State", "P101.Drive", "Levels", "Level", "Pump1", "Locked", "Hi", "Lo", "Drives"}
 
 func writeRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
@@ -76,6 +78,7 @@ func writeRuntime(t *testing.T) *runtime.Runtime {
 		runtime.Setpoint("Closed", 0.0),
 		runtime.Setpoint("Hi", 0.0),
 		runtime.Setpoint("Lo", 0.0),
+		runtime.Typed("Drives", runtime.RoleSetpoint, "ARRAY[0..1] OF Drive"),
 	}
 	tags[14].Type = "REAL"
 	rt, err := runtime.New(runtime.Options{
@@ -253,6 +256,7 @@ func TestWriteStatusTable(t *testing.T) {
 		{"no value", novalue, ua.StatusBadTypeMismatch, "Speed", 0.0},
 		// A Good StatusCode and timestamps are what most clients send.
 		{"Good StatusCode and timestamps", withMask(wv("Speed", 2.5), ua.DataValueStatusCode|ua.DataValueSourceTimestamp|ua.DataValueServerTimestamp, ua.StatusGood), ua.StatusGood, "Speed", 2.5},
+		{"GoodClamped StatusCode", withMask(wv("Speed", 2.75), ua.DataValueStatusCode, ua.StatusGoodClamped), ua.StatusGood, "Speed", 2.75},
 
 		{"Boolean", wv("Flag", true), ua.StatusGood, "Flag", true},
 		{"Int32 to Boolean", wv("Flag", int32(0)), ua.StatusBadTypeMismatch, "Flag", true},
@@ -298,6 +302,7 @@ func TestWriteStatusTable(t *testing.T) {
 		{"Int32 to String", wv("Label", int32(2)), ua.StatusBadTypeMismatch, "Label", ""},
 
 		{"member under a matched ancestor", wv("P101.Drive.Speed", 1450.0), ua.StatusGood, "P101.Drive.Speed", 1450.0},
+		{"member of an element of a matched array", wv("Drives[1].Speed", 900.0), ua.StatusGood, "Drives[1].Speed", 900.0},
 		{"output, matched", wv("Pump1", true), ua.StatusGood, "Pump1", true},
 		{"another casing", wv("speed", 3.0), ua.StatusGood, "Speed", 3.0},
 	}
@@ -354,7 +359,8 @@ func TestAccessLevelsPerNodeAndSession(t *testing.T) {
 		{"Closed", r, r, r},
 		{"Level", r, r, r}, // an input, though matched
 		{"Pump1", rw, rw, r},
-		{"Levels", rw, rw, r}, // matched; the write itself is Bad_WriteNotSupported until slice 4
+		{"Levels", r, r, r}, // matched, but an array: not writable until slice 4
+		{"Drives[0].Amps", rw, rw, r},
 	}
 	for _, c := range cases {
 		nid := ua.NewStringNodeID(1, c.addr)
@@ -491,9 +497,13 @@ func TestUntrustedCertificateStopsWritingOnItsChannel(t *testing.T) {
 	if v := stored(t, f.rt, "Speed"); v != 1.0 {
 		t.Errorf("Speed = %v after the certificate was untrusted", v)
 	}
-	// Reads go on as they were.
+	// Reads go on as they were, but the session no longer reads as a
+	// writer.
 	if dv := read(t, f.writer, ua.NewStringNodeID(1, "Speed"), ua.AttributeIDValue); dv.Status != ua.StatusGood {
 		t.Errorf("read after untrust: %s", dv.Status)
+	}
+	if got := read(t, f.writer, ua.NewStringNodeID(1, "Speed"), ua.AttributeIDUserAccessLevel).Value.Value(); got != uint8(ua.AccessLevelTypeCurrentRead) {
+		t.Errorf("UserAccessLevel after untrust = %v, want CurrentRead", got)
 	}
 	trust(t, f.dir, f.der)
 	if got := write(t, f.writer, wv("Speed", 3.0))[0]; got != ua.StatusGood {
@@ -606,5 +616,129 @@ func TestNewRefusesAMalformedWritablePattern(t *testing.T) {
 	rt := writeRuntime(t)
 	if _, err := New(rt, Options{Writable: []string{"["}}); err == nil || !strings.Contains(err.Error(), `opcua.writable pattern "["`) {
 		t.Fatalf("New with a malformed pattern: %v", err)
+	}
+}
+
+// The standby gate is asked once per Write request, before the batch, so
+// a request lands whole or not at all while leadership moves.
+func TestStandbyGateIsAskedOncePerRequest(t *testing.T) {
+	f := startWritable(t)
+	var mu sync.Mutex
+	calls := 0
+	f.s.SetWriteGate(func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return calls%2 == 1 // leadership flips on every question
+	})
+	for i := 0; i < 4; i++ {
+		got := write(t, f.writer, wv("Hi", float64(i)), wv("Lo", float64(i)), wv("Speed", float64(i)))
+		if got[0] != got[1] || got[1] != got[2] {
+			t.Fatalf("request %d answered %v: part landed, part did not", i, got)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 4 {
+		t.Errorf("the gate was asked %d times for 4 requests", calls)
+	}
+}
+
+// A writer's certificate must still be within its validity period: once
+// it expires, the channel it opened while valid writes nothing more, and
+// the session reads UserAccessLevel CurrentRead.
+func TestExpiredCertificateStopsWritingOnItsChannel(t *testing.T) {
+	f := startWritable(t)
+	notAfter := time.Now().Add(3 * time.Second)
+	der, key := clientCert(t, "urn:test:brief", notAfter.Add(-time.Hour), time.Hour)
+	trust(t, f.dir, der) // replaces the fixture's trusted certificate file
+	ep := endpointFor(t, f.s, ua.SecurityPolicyURIBasic256Sha256, ua.MessageSecurityModeSignAndEncrypt)
+	c, err := secureConnect(f.s, ep, der, key, "urn:test:brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeClient(c)
+	if got := write(t, c, wv("Speed", 1.0))[0]; got != ua.StatusGood {
+		t.Fatalf("valid: %s", statusName(got))
+	}
+	time.Sleep(time.Until(notAfter) + 1100*time.Millisecond) // x509 times are whole seconds
+	if got := write(t, c, wv("Speed", 2.0))[0]; got != ua.StatusBadUserAccessDenied {
+		t.Errorf("expired: %s, want Bad_UserAccessDenied", statusName(got))
+	}
+	if got := read(t, c, ua.NewStringNodeID(1, "Speed"), ua.AttributeIDUserAccessLevel).Value.Value(); got != uint8(ua.AccessLevelTypeCurrentRead) {
+		t.Errorf("UserAccessLevel after expiry = %v, want CurrentRead", got)
+	}
+}
+
+// certStanding fails closed: a certificate that cannot be read, is not
+// valid yet, has expired or is no longer trusted may not write.
+func TestCertStandingFailsClosed(t *testing.T) {
+	der, _ := clientCert(t, writerURI, time.Now().Add(-time.Hour), 2*time.Hour)
+	leaf := leafCert(der)
+	if leaf == nil {
+		t.Fatal("the test certificate does not parse")
+	}
+	yes := func([]byte) bool { return true }
+	now := time.Now()
+	if why := certStanding(leaf, yes, now); why != "" {
+		t.Fatalf("a trusted, valid certificate: %q", why)
+	}
+	for name, why := range map[string]string{
+		"unreadable":    certStanding(leafCert([]byte("not a certificate")), yes, now),
+		"not yet valid": certStanding(leaf, yes, now.Add(-2*time.Hour)),
+		"expired":       certStanding(leaf, yes, now.Add(2*time.Hour)),
+		"untrusted":     certStanding(leaf, func([]byte) bool { return false }, now),
+		"no trust list": certStanding(leaf, nil, now),
+	} {
+		if why == "" {
+			t.Errorf("%s: may write", name)
+		}
+	}
+}
+
+// A client sending thousands of junk node ids costs a line per reason, not
+// a line per node id: anonymous, or a writer naming nodes that do not exist.
+// A writer's refusals on nodes it may know are one line per node and
+// reason, up to a budget per client, then one line saying the rest are
+// only counted.
+func TestRefusalsCannotFloodTheLog(t *testing.T) {
+	f := startWritable(t)
+	junk := func(prefix string) []*ua.WriteValue {
+		items := make([]*ua.WriteValue, maxNodesPerWrite)
+		for i := range items {
+			items[i] = wv(fmt.Sprintf("%s-%d", prefix, i), 1.0)
+		}
+		items[0] = wv("Speed", 1.0)                              // a real tag, refused for a non-writer
+		items[1].NodeID = ua.NewNumericNodeID(0, uint32(900000)) // nothing in ns=0
+		return items
+	}
+	for r := 0; r < 3; r++ {
+		write(t, f.anon, junk(fmt.Sprintf("anon%d", r))...)
+		write(t, f.writer, junk(fmt.Sprintf("writer%d", r))[1:]...)
+	}
+	lines := strings.Count(f.log.String(), "opcua: write refused")
+	// anonymous: UserAccessDenied, NodeIdUnknown; the writer: NodeIdUnknown.
+	if lines > 3 {
+		t.Fatalf("%d refusal lines for 60 000 refused items:\n%.2000s", lines, f.log.String())
+	}
+	if st := f.s.Status(); st.WritesRefused != 3*maxNodesPerWrite+3*(maxNodesPerWrite-1) {
+		t.Errorf("WritesRefused = %d", st.WritesRefused)
+	}
+	if !strings.Contains(f.log.String(), "items=") {
+		t.Errorf("a summary line does not say how many items it covers:\n%.2000s", f.log.String())
+	}
+
+	// The per-client budget.
+	f2 := startWritable(t)
+	f2.s.w.budget = 3
+	for _, tag := range []string{"Closed", "Level", "P101", "P101.Running", "Levels", "Closed"} {
+		write(t, f2.writer, wv(tag, 1.0))
+	}
+	log := f2.log.String()
+	if n := strings.Count(log, `msg="opcua: write refused"`); n != 3 {
+		t.Errorf("%d per-node refusal lines with a budget of 3:\n%s", n, log)
+	}
+	if n := strings.Count(log, "no longer logged"); n != 1 {
+		t.Errorf("%d budget lines:\n%s", n, log)
 	}
 }
