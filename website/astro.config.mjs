@@ -24,6 +24,8 @@ export default defineConfig({
         alt: 'nautilus',
       },
       customCss: ['./src/styles/fonts.css'],
+      // One line under every page: who builds nautilus, and where support is.
+      components: { Footer: './src/components/Footer.astro' },
       // Google Analytics — the same GA4 property joyautomation.com reports to
       // (src/app.html there); the docs show up under their own hostname.
       // Starlight pages are full loads, so `config` on each page is enough.
