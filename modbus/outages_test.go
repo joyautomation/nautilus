@@ -243,6 +243,110 @@ func TestOutagesStopIsNotAnOutage(t *testing.T) {
 	}
 }
 
+// A write-only source (a keep-alive word re-asserted every rewrite:,
+// nothing polled) answers with write confirmations, not reads. A confirmed
+// write makes the connection one the device talked on, so losing it is an
+// outage.
+func TestOutagesWriteOnlySourceCounts(t *testing.T) {
+	srv := newSlave(t)
+	srv.Unit(1).SetHolding(8, 0)
+	ln := &link{up: true}
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", srv.Addr())},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true, Rewrite: 20 * time.Millisecond}},
+	}
+	d, err := New(m, WithScanRate(15*time.Millisecond), WithDialer(ln.dial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
+	waitFor(t, "connect", func() bool { return read()["DEV__Online"] == true })
+	if err := d.WriteOutputs(nio.Values{"CMD": int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "write confirmed", func() bool { return srv.Unit(1).Holding(8) == 5 })
+
+	ln.cut()
+	waitFor(t, "source offline", func() bool { return read()["DEV__Online"] == false })
+	if got := read()["DEV__Outages"]; got != int64(1) {
+		t.Fatalf("write-only source lost after a confirmed write: __Outages = %#v, want int64(1)", got)
+	}
+}
+
+// Whether the device answered is per connection: once it has answered on
+// one connection and that one falls (one outage), later connections it
+// never answers on do not count.
+func TestOutagesAnsweredResetsPerConnection(t *testing.T) {
+	srv := newSlave(t)
+	srv.Unit(1).SetHolding(0, 7)
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = silent.Close() })
+	var mu sync.Mutex
+	accepted := 0
+	go func() {
+		for {
+			c, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			accepted++
+			mu.Unlock()
+			t.Cleanup(func() { _ = c.Close() })
+		}
+	}()
+
+	// The first dial reaches the slave; every later one the silent listener.
+	var first net.Conn
+	dials := 0
+	dial := func(ctx context.Context, _ string) (net.Conn, error) {
+		mu.Lock()
+		dials++
+		n := dials
+		mu.Unlock()
+		addr := silent.Addr().String()
+		if n == 1 {
+			addr = srv.Addr()
+		}
+		var dl net.Dialer
+		c, err := dl.DialContext(ctx, "tcp", addr)
+		if n == 1 && err == nil {
+			mu.Lock()
+			first = c
+			mu.Unlock()
+		}
+		return c, err
+	}
+	src := fastSource("DEV", srv.Addr())
+	src.Timeout = 30 * time.Millisecond
+	m := Manifest{
+		Sources: []Source{src},
+		Tags:    []TagBinding{{Name: "PV", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"}},
+	}
+	d, err := New(m, WithScanRate(15*time.Millisecond), WithDialer(dial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "first read", func() bool { v, _ := d.ReadInputs(); return v["PV"] == int64(7) })
+	mu.Lock()
+	_ = first.Close()
+	mu.Unlock()
+	waitFor(t, "several silent connections", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return accepted >= 4
+	})
+	if v, _ := d.ReadInputs(); v["DEV__Outages"] != int64(1) {
+		t.Fatalf("one answered connection lost, then silent ones: __Outages = %#v, want int64(1)", v["DEV__Outages"])
+	}
+}
+
 // A binding may not take the companion's name: the driver owns it.
 func TestOutagesCompanionCollidesWithABinding(t *testing.T) {
 	m := Manifest{

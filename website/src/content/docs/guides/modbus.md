@@ -210,7 +210,7 @@ in `OutputNames()` alongside the writable bindings.
 Each source also gets `<source>__Outages`, a DINT input: the number of
 times `__Online` has gone false since nautilus started. The first connect
 is not an outage, and a source that has not connected yet has had none.
-A fall counts only when the device had answered a read on that
+A fall counts only when the device had answered a read or a write on that
 connection, so a gateway that accepts the connection and never replies
 does not count, however often the driver reconnects. Stopping nautilus
 does not count. Parking a source with `enable:` counts, because

@@ -47,7 +47,8 @@ const suffixOnline = "__Online"
 
 // suffixOutages names the second per-source companion: "<source>__Outages"
 // is a DINT input counting the times __Online has gone false since the
-// driver started, after the device had answered on that connection. The
+// driver started, after the device had answered a read or a write on that
+// connection. The
 // first connect is not an outage, and neither is starting offline, a
 // connection the device never answered on, or Stop. A program compares it with last scan's value to latch
 // an outage it might otherwise miss between scans (issue #449; optommp and
@@ -185,7 +186,7 @@ type source struct {
 	snapshot nio.Values // decoded values, held across disconnects
 	online   bool
 	outages  int64  // online → offline transitions since New
-	answered bool   // a read succeeded on the current connection (resets backoff)
+	answered bool   // a read or write succeeded on the current connection (resets backoff)
 	state    string // parked | connecting | connected | error
 	sinceMs  int64
 	lastErr  error
@@ -748,8 +749,9 @@ func (d *Driver) run(ctx context.Context, s *source) {
 		_ = c.Close()
 		s.mu.Lock()
 		answered := s.answered
-		// An outage is losing a device that was talking: a connection the
-		// device never answered on (a gateway that accepts TCP and stays
+		// An outage is losing a device that was talking (a read or a write
+		// succeeded on this connection): a connection the device never
+		// answered on (a gateway that accepts TCP and stays
 		// silent) is not one, and neither is the driver stopping.
 		s.goOfflineLocked(answered && ctx.Err() == nil)
 		s.mu.Unlock()
@@ -1037,6 +1039,12 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err error) bool {
 	if err == nil {
 		d.writes.Add(1)
+		// A confirmed write is the device answering, as a read is: a
+		// write-only source (a command or keep-alive word) counts its
+		// outages too, and its backoff ladder resets.
+		s.mu.Lock()
+		s.answered = true
+		s.mu.Unlock()
 		return true
 	}
 	d.errs.Add(1)

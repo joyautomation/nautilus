@@ -39,7 +39,14 @@ tags:
 }
 
 func TestSparkplugDevicePerConnection(t *testing.T) {
-	p, err := Load(collectorFiles("", ""), "")
+	// The edge node keeps a device only when the project declares some of
+	// its tags (TestSparkplugDeviceWithNothingDeclaredIsDropped).
+	files := collectorFiles("", "tag-files: [tags/dev.yaml]\n")
+	files["tags/dev.yaml"] = &fstest.MapFile{Data: []byte(`- { name: M1_KW, role: input }
+- { name: M2_KW, role: input }
+- { name: W1_Level, role: input }
+`)}
+	p, err := Load(files, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +192,7 @@ func TestSparkplugDeviceCarriesOnlyDeclaredTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string][]string{}
-	for _, d := range declaredOnly(devs, rt.Inputs()) {
+	for _, d := range declaredOnly(devs, declaredNames(p.Runtime, rt)) {
 		got[d.ID] = d.Tags
 	}
 	want := map[string][]string{
@@ -208,5 +215,75 @@ func TestSparkplugDeviceCarriesOnlyDeclaredTags(t *testing.T) {
 	}
 	if want := map[string]int{"M1": 3, "M2": 1, "sparkplug-host": 1}; !reflect.DeepEqual(counts, want) {
 		t.Fatalf("node device tag counts = %v, want %v", counts, want)
+	}
+}
+
+// edgeDeviceTags loads files, builds the runtime and the edge node, and
+// returns each edge device's tags after the declared-only filter, plus the
+// devices the built node reports.
+func edgeDeviceTags(t *testing.T, files fstest.MapFS) (map[string][]string, []string) {
+	t.Helper()
+	p, err := Load(files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(p.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devs, err := sparkplugDevices(p.drivers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, d := range declaredOnly(devs, declaredNames(p.Runtime, rt)) {
+		got[d.ID] = d.Tags
+	}
+	node, err := p.Sparkplug(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, d := range node.Status().Devices {
+		ids = append(ids, d.ID)
+	}
+	return got, ids
+}
+
+// A polled writable binding is one of its source's tags, and the project
+// declares it role: output, not input. It stays on its device (DBIRTH,
+// DCMD, dies with the device) rather than moving to node level.
+func TestSparkplugDeviceKeepsADeclaredOutput(t *testing.T) {
+	files := collectorFiles("", "tag-files: [tags/dev.yaml]\n")
+	files["modbus_manifest.yaml"] = &fstest.MapFile{Data: []byte(`sources:
+  - {id: M1, host: 192.0.2.1}
+tags:
+  - {name: M1_KW, source: M1, table: holding, address: 0, format: float32}
+  - {name: M1_SP, source: M1, table: holding, address: 2, format: float32, writable: true}
+`)}
+	files["tags/dev.yaml"] = &fstest.MapFile{Data: []byte(`- { name: M1_KW, role: input }
+- { name: M1_SP, role: output, init: 0.0 }
+- { name: W1_Level, role: input }
+`)}
+	got, _ := edgeDeviceTags(t, files)
+	if want := []string{"M1_KW", "M1_SP"}; !reflect.DeepEqual(got["M1"], want) {
+		t.Fatalf("device M1 tags = %v, want %v", got["M1"], want)
+	}
+}
+
+// A device none of whose tags the project declares is left off the edge
+// node, as before the declared-only filter: its tags never reach the tag
+// store, so it would only birth empty on every connect.
+func TestSparkplugDeviceWithNothingDeclaredIsDropped(t *testing.T) {
+	files := collectorFiles("", "tag-files: [tags/dev.yaml]\n")
+	files["tags/dev.yaml"] = &fstest.MapFile{Data: []byte(`- { name: M1_KW, role: input }
+- { name: W1_Level, role: input }
+`)}
+	got, ids := edgeDeviceTags(t, files)
+	if _, ok := got["M2"]; ok {
+		t.Fatalf("device tags = %v: M2 declares nothing and must be dropped", got)
+	}
+	if want := []string{"M1", "sparkplug-host"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("node devices = %v, want %v", ids, want)
 	}
 }
