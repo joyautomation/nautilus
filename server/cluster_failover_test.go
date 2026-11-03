@@ -104,32 +104,30 @@ func TestStandbyRefusedForwardWithNoNewLeaderIs502(t *testing.T) {
 }
 
 // A client that gives up while the standby waits for the new leader is not
-// replayed later: the write it abandoned (and has likely retried) must not
-// land behind its back.
+// replayed later. The case that matters is this replica taking over: its
+// own handler would apply the write the client abandoned (and has likely
+// retried) behind its back. A replay to another leader is already refused
+// by the proxy's transport once the request's context is done.
 func TestStandbyDoesNotReplayAnAbandonedRequest(t *testing.T) {
 	defer func(d time.Duration) { failoverWait = d }(failoverWait)
 	failoverWait = 5 * time.Second
-	hit := make(chan struct{}, 1)
-	next := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit <- struct{}{} }))
-	defer next.Close()
 	c := &movingCluster{st: leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: deadAddr(t)}}
-	srv := New(newTestRuntime(t), Options{Cluster: c})
+	rt := newTestRuntime(t)
+	srv := New(rt, Options{Cluster: c})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		cancel() // the client gives up
 		time.Sleep(200 * time.Millisecond)
-		c.set(leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-2", LeaderAddr: standbyAddr(next)})
+		c.set(leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-1", IsLeader: true})
 	}()
 	start := time.Now()
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader(`{"name":"SP","value":5}`)).WithContext(ctx))
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("the handler waited %v after the client left", d)
+	if d := time.Since(start); d > 300*time.Millisecond+150*time.Millisecond {
+		t.Errorf("the handler waited %v; it should stop when the client leaves", d)
 	}
-	select {
-	case <-hit:
-		t.Fatal("the abandoned write was replayed to the new leader")
-	case <-time.After(500 * time.Millisecond):
+	if got := rt.Tags().All()["SP"]; got != 65.0 {
+		t.Errorf("SP = %v: the abandoned write was applied when this replica took over", got)
 	}
 }
