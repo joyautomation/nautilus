@@ -89,6 +89,31 @@ type Options struct {
 	Logger *slog.Logger
 }
 
+// serverDiagnosticsLeftOut are the static diagnostic nodes under the Server
+// object's ServerDiagnostics: the Summary and its counters, and the
+// subscription, sampling-interval and session arrays. Diagnostics are not
+// collected (EnabledFlag reads false), so they are left out (nautilus#485).
+var serverDiagnosticsLeftOut = []uint32{
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_ServerViewCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_CurrentSessionCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_CumulatedSessionCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_SecurityRejectedSessionCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_RejectedSessionCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_SessionTimeoutCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_SessionAbortCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_PublishingIntervalCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_CurrentSubscriptionCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_CumulatedSubscriptionCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_SecurityRejectedRequestsCount,
+	id.Server_ServerDiagnostics_ServerDiagnosticsSummary_RejectedRequestsCount,
+	id.Server_ServerDiagnostics_SamplingIntervalDiagnosticsArray,
+	id.Server_ServerDiagnostics_SubscriptionDiagnosticsArray,
+	id.Server_ServerDiagnostics_SessionsDiagnosticsSummary,
+	id.Server_ServerDiagnostics_SessionsDiagnosticsSummary_SessionDiagnosticsArray,
+	id.Server_ServerDiagnostics_SessionsDiagnosticsSummary_SessionSecurityDiagnosticsArray,
+}
+
 // securePolicies are the policies the secure endpoints offer, each under
 // SignAndEncrypt only. Basic128Rsa15 and Basic256 are deprecated (Part 7)
 // and never offered; Sign without encryption is not offered either.
@@ -293,16 +318,26 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	// Diagnostics are not collected, and ServerDiagnostics says so: its
 	// mandatory EnabledFlag reads false rather than failing (nautilus#485).
+	// It stays read-only, as Part 5 §6.3.3 asks when collection is not
+	// supported (every ns=0 node is; see checkWrite and accessAttribute).
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(false))
 	}
-	// MaxArrayLength and MaxStringLength are optional, and the server sets
-	// no limit of its own (the message size bounds both). Part 5 says a
-	// server that does not impose such a limit leaves the property out, so
-	// it is left out rather than served without a value (nautilus#485).
 	if root, err := srv.Namespace(0); err == nil {
 		if nns, ok := root.(*opcserver.NodeNameSpace); ok {
+			// MaxArrayLength and MaxStringLength are optional, and the server
+			// sets no limit of its own (the message size bounds both). Part 5
+			// says a server that does not impose such a limit leaves the
+			// property out, so it is left out rather than served without a
+			// value (nautilus#485).
 			for _, nid := range []uint32{id.Server_ServerCapabilities_MaxArrayLength, id.Server_ServerCapabilities_MaxStringLength} {
+				nns.RemoveNode(ua.NewNumericNodeID(0, nid))
+			}
+			// With diagnostics off, Part 5 §6.3.3 lets a server answer
+			// Bad_NodeIdUnknown for every static diagnostic node except
+			// EnabledFlag. Leave them out rather than serve the Summary's
+			// counters and the arrays with no value (nautilus#485).
+			for _, nid := range serverDiagnosticsLeftOut {
 				nns.RemoveNode(ua.NewNumericNodeID(0, nid))
 			}
 		}
