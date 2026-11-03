@@ -203,6 +203,7 @@ function pickParentFolder(): Promise<Step<vscode.Uri> | undefined> {
       answer(vscode.Uri.file(resolveParentInput(box.value, home, base)!));
     });
     box.onDidTriggerButton(async () => {
+      if (browsing) return; // one dialog at a time
       browsing = true;
       let picked: vscode.Uri[] | undefined;
       try {
@@ -214,6 +215,10 @@ function pickParentFolder(): Promise<Step<vscode.Uri> | undefined> {
           openLabel: "Create project here",
           title: "nautilus: choose a parent folder for the new project",
         });
+      } catch {
+        // A dialog that fails (a remote file system error) is a cancel: the
+        // box comes back, rather than the flow waiting on a hidden box.
+        picked = undefined;
       } finally {
         browsing = false;
       }

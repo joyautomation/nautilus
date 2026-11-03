@@ -86,7 +86,11 @@ create_flow() {
     fbd) llabel="Function Block Diagram" ;; sfc) llabel="Sequential Function Chart" ;;
   esac
   png=$(shot "$lbl-1-folder")
-  pass "$lbl: parent-folder input box up (Enter accepts, #86; folder $parent)" "$png"
+  if [[ $via == browse ]]; then
+    pass "$lbl: parent-folder input box up (folder $parent, to be picked with Browse)" "$png"
+  else
+    pass "$lbl: parent-folder input box up (Enter accepts, #86; folder $parent)" "$png"
+  fi
   # #86: the parent-folder step is an input box; Enter accepts the prefilled folder.
   wait_pg "($QI_TITLE || '').includes('parent folder')" 10 || true
   [[ $(qi_title) == *"parent folder"* ]] || { fail "$lbl: no parent-folder input box" "$png"; return 1; }
@@ -108,7 +112,7 @@ create_flow() {
     pg "$QI_INPUT?.focus()" >/dev/null; sleep 0.3
     key ctrl+a; xdotool type --delay 20 "$parent/"; sleep 1.5
     png=$(shot "$lbl-1e-dialog-folder")
-    pg_click "$(btn_js 'Create project here')" 2 || { info "$lbl: no 'Create project here' button in the dialog; pressing Enter" "$png"; xdotool key Return; sleep 2; }
+    pg_click "$(btn_js 'Create project here')" 2 || { fail "$lbl: no 'Create project here' button in the Browse dialog" "$png"; return 1; }
   else
     # the cold first run leaves focus on the Welcome page: click into the box first
     pg_click "document.querySelector('.quick-input-widget .quick-input-box input')" 0.5 || true
