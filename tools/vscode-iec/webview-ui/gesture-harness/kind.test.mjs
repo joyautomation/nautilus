@@ -123,6 +123,9 @@ class Kind {
 	rotation() {
 		return this.b.eval('window.__rotation()');
 	}
+	frames() {
+		return this.b.eval('window.__frames()');
+	}
 	labels() {
 		return this.b.eval('JSON.stringify(window.__labels())').then(JSON.parse);
 	}
@@ -263,16 +266,23 @@ test('K04 samples: a sample value changes the status preview and posts nothing',
 
 test('K05 turntable: the model turns while on, holds while off', { skip: !MODEL_URI && 'no model' }, async () => {
 	await withKind(valveKind(), {}, async (k) => {
-		// Turning is a frame-by-frame animation: on a slow runner (software
-		// WebGL in CI) one frame can take longer than any fixed wait, so poll
-		// until the angle moves rather than sampling once after a sleep.
+		// Turning is a frame-by-frame animation, and on a loaded runner
+		// software WebGL can stall the first frames for seconds while it
+		// compiles shaders (#489: 0 -> 0 in 5 s, about one run in five). So
+		// the test counts FRAMES, not seconds: it waits (up to 60 s) until
+		// the loop has run a few frames past the first sample, and only then
+		// asks whether the model turned. A stalled loop and a turntable that
+		// does not turn now fail with different messages.
 		const a = await k.rotation();
+		const f0 = await k.frames();
 		let b = a;
-		for (const until = Date.now() + 5000; b === a && Date.now() < until; ) {
+		let f = f0;
+		for (const until = Date.now() + 60000; (b === a || f - f0 < 5) && Date.now() < until; ) {
 			await sleep(100);
-			b = await k.rotation();
+			[b, f] = [await k.rotation(), await k.frames()];
 		}
-		assert.ok(a !== null && b !== null && b !== a, `turning: ${a} -> ${b} (5 s)`);
+		assert.ok(f - f0 >= 2, `the stage's frame loop is not running: ${f0} -> ${f} frames in 60 s`);
+		assert.ok(a !== null && b !== null && b !== a, `turning: ${a} -> ${b} over ${f - f0} frames`);
 		const btn = await k.button('Turntable');
 		assert.ok(btn.active);
 		await k.b.click(btn.cx, btn.cy);

@@ -24,7 +24,12 @@
 
 	let placed = $state<Record<string, PlacedNode>>({});
 	const RAD_PER_S = 0.4;
+	// Frames the loop has run, for the harness: on a loaded machine software
+	// WebGL can stall the first frames for seconds (shader compiles), so a
+	// test counts frames rather than wall-clock time (#489).
+	let frames = 0;
 	useTask((dt) => {
+		frames++;
 		const obj = placed.PREVIEW?.object;
 		if (!obj || !kd.turntable) return;
 		obj.rotation.y = (obj.rotation.y + dt * RAD_PER_S) % (Math.PI * 2);
@@ -243,6 +248,7 @@
 		const w = window as unknown as { __nxKind?: unknown };
 		w.__nxKind = {
 			rotation: () => placed.PREVIEW?.object?.rotation.y ?? null,
+			frames: () => frames,
 			hover: () => kd.hover,
 			picked: () => kd.picked,
 			hit: () => kd.hit,
