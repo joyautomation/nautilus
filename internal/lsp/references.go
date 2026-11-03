@@ -222,7 +222,7 @@ func manifestTagDecls(mpath, name string) map[string]map[Range]bool {
 				continue
 			}
 		}
-		for _, item := range seqItems(mappingValue(doc, "tags")) {
+		for _, item := range tagItems(doc) {
 			if n := mappingValue(item, "name"); n != nil && n.Kind == yaml.ScalarNode && n.Value == name {
 				if out[f] == nil {
 					out[f] = map[Range]bool{}

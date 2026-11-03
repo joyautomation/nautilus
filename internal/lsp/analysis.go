@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -79,6 +80,11 @@ type env struct {
 	// peers are the project's task programs, so naming another task's
 	// instance (t1.Q) says that tasks share only tags (#327).
 	peers []st.PeerProgram
+	// manifest is the governing manifest's entry (nil outside a project):
+	// a name it declares as a tag but cannot read (#518) is not in tags,
+	// and an undeclared-identifier error on it is not reported — the
+	// fault is the manifest's, and it is reported there.
+	manifest *manifestEntry
 }
 
 // TypeMember is one member of a UDT, as declared.
@@ -172,6 +178,13 @@ func analyzeIn(text string, e env) analysis {
 			// name when the compiler knew it (an undeclared identifier, an
 			// unknown member), else the statement start.
 			pos, end, msg = le.Pos, le.End, le.Err.Error()
+		}
+		if pos.Line > preludeLines && e.manifest.unreadTag(undeclaredName(msg)) {
+			// The program names a tag the manifest cannot declare: the
+			// manifest's diagnostic says why, and this one would only
+			// blame the program for it. (A library sees no tags, so its
+			// undeclared names stay its own errors.)
+			return a
 		}
 		if pos.Line > preludeLines {
 			pos.Line -= preludeLines
@@ -465,6 +478,11 @@ func analyzeSFCIn(text string, e env) analysis {
 	var tagNames []string
 	for _, d := range e.tags {
 		tagNames = append(tagNames, d.Name)
+	}
+	if e.manifest != nil {
+		for _, name := range e.manifest.unread {
+			tagNames = append(tagNames, name) // declared, if not readable: the manifest says so
+		}
 	}
 	for _, d := range sfc.CheckWith(prog, tagNames) {
 		sev := SeverityError
@@ -994,4 +1012,15 @@ func staticCompletions() []CompletionItem {
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
 	return items
+}
+
+// undeclaredName is the identifier an "undeclared identifier" error names,
+// or "" for any other error. For `Pump.Speed` or `Pumps[1]` the compiler
+// names the base (Pump, Pumps), which is the tag.
+func undeclaredName(msg string) string {
+	var name string
+	if _, err := fmt.Sscanf(msg, "undeclared identifier %q", &name); err != nil {
+		return ""
+	}
+	return name
 }
