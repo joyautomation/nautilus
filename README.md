@@ -192,9 +192,10 @@ Go is the **SDK**, not the base: `--template sdk` when you need a custom
 field bus or richer simulation physics. Same runtime, with the manifest
 written as code.
 
-Run it bare for the interactive form, sv-create style — pick the template,
-the program language, and the features (CI workflow, VS Code setup, git
-init). An `sdk` template also asks for a module path, and gives you
+A name and a `--template` write the project at once, with the defaults
+(CI workflow, VS Code setup, git init; `--language`, `--deploy` to change
+them). Run it bare for the interactive form, sv-create style — pick the
+template, the program language, and the features. An `sdk` template also asks for a module path, and gives you
 `main.go`, `program.st`, a `driver.go` seam to fill in, Go acceptance
 tests, CI, and `.vscode/` recommendations.
 

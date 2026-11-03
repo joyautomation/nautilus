@@ -69,8 +69,12 @@ naut new my-plant --template sdk       # Go project, for a custom field bus
 naut new my-plant --template sdk-demo  # Go project with plant physics in Go
 ```
 
-Run it bare for the interactive form — it asks for the template, the
-program language, and the features you want.
+With a name and a `--template` it writes the project straight away, with
+the defaults: the CI workflow, the VS Code setup and `git init`
+(`--language fbd`, `ld` or `sfc` for the program, `--deploy` for the
+container and Kubernetes files). Run it bare, or with only a name, for the
+interactive form — it asks for the template, the program language, and the
+features you want. `--no-input` never prompts.
 
 A nautilus project is your logic and a manifest. Run, test, and ship it
 with the CLI alone, no toolchain:

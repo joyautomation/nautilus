@@ -914,8 +914,8 @@ checks:
 - id: 002-P-api-live-reaction
   run: 2026-11-01-002
   pass: through POST /api/forces and POST /api/tags the running station starts the lead, adds the lag, stops both
-    and alternates; enum, member and undeclared-tag writes are refused with 400; a string to a TIME tag is 4xx;
-    /api/meta lists enum members
+    and alternates; enum, member and undeclared-tag writes are refused with 400; a TIME literal to a TIME tag
+    lands and a string that is no duration is 4xx; /api/meta lists enum members
   disposition: gate
   surface: api
   oracle: website:/guides/tag-model/ (member writes), /guides/forcing/
@@ -923,6 +923,7 @@ checks:
   script: checks/2026-11-01-002/002-P-api-live-reaction.py
   env: {}
   expected_today: pass (3.1 s)
+  note: "Reconciliation: nautilus#519 changed the contract: a TIME tag takes its IEC literal over HTTP. The imported check now expects T#8h to land and a non-duration string to be refused; the tester should confirm."
 - id: 002-P-force-alarm-delay-live
   run: 2026-11-01-002
   pass: on a running controller a forced high level raises HiLevelAlm only after the 2 s on-delay; a write to a

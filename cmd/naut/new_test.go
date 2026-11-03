@@ -275,3 +275,51 @@ func TestScaffoldedManifestProjectsPass(t *testing.T) {
 		})
 	}
 }
+
+// A name and a template on the command line are the whole answer:
+// `naut new my-plant --template minimal` writes the project without opening
+// the form, in a terminal or not, and so does the older --no-go spelling. A
+// name alone, or a template alone, still prompts for the rest; --no-input
+// and no terminal never prompt. Driven through parseNew, the command line
+// runNew reads, so the flags that count as "a template" are pinned too.
+func TestNewNameAndTemplateSkipTheForm(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		tty      bool
+		form     bool
+		template string
+	}{
+		{[]string{"my-plant", "--template", "minimal"}, true, false, tmplMinimal},
+		{[]string{"--template", "sdk", "my-plant"}, true, false, tmplSDK},
+		{[]string{"my-plant", "--no-go"}, true, false, tmplMinimal},
+		{[]string{"my-plant", "--template", "demo"}, true, false, tmplDemo},
+		{[]string{"my-plant"}, true, true, tmplDemo},                 // which template?
+		{[]string{"--template", "minimal"}, true, true, tmplMinimal}, // which name?
+		{[]string{}, true, true, tmplDemo},                           // naut new
+		{[]string{"my-plant", "--language", "fbd"}, true, true, tmplDemo},
+		{[]string{"my-plant", "--no-input"}, true, false, tmplDemo},
+		{[]string{"my-plant"}, false, false, tmplDemo}, // no terminal
+	} {
+		sc, form, code := parseNew(tc.args, tc.tty)
+		if code != 0 {
+			t.Errorf("naut new %v: exit %d", tc.args, code)
+			continue
+		}
+		if form != tc.form || sc.Template != tc.template {
+			t.Errorf("naut new %v (tty %v): form %v, template %q; want form %v, template %q",
+				tc.args, tc.tty, form, sc.Template, tc.form, tc.template)
+		}
+		if !form && (sc.Language != "st" || !sc.CI || !sc.VSCode || !sc.Git || sc.Deploy) {
+			t.Errorf("naut new %v: defaults %+v, want st, CI, VS Code and git on, deploy off", tc.args, sc)
+		}
+	}
+	// Without a terminal or with --no-input, a name is still required.
+	if _, _, code := quietlyParse(func() (scaffold, bool, int) { return parseNew([]string{"--template", "minimal"}, false) }); code != 2 {
+		t.Errorf("naut new --template minimal with no terminal: exit %d, want 2", code)
+	}
+}
+
+func quietlyParse(f func() (scaffold, bool, int)) (sc scaffold, form bool, code int) {
+	quietly(func() int { sc, form, code = f(); return 0 })
+	return
+}

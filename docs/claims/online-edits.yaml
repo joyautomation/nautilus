@@ -36,6 +36,7 @@ claims:
     tests:
       - go ./server TestProgramEndpointsGated
       - go ./server TestProgramOnlineEditFlow
+      - go ./internal/project TestOnlineEditsRefusalNamesTheManifestKey
   - id: OE-004
     claim: >-
       With a token configured, tag writes and online edits require it while

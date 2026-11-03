@@ -124,8 +124,8 @@ func TestGenerateModbusMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`- { name: EPIC_M1_DO11, role: output, init: false, desc: "GRV-ODCI-12 slot 1 ch 11 — Digital Output" }`,
-		`- { name: EPIC_M2_AI00, role: input, unit: "°C", desc: "GRV-IICTD-12 slot 2 ch 0 — ICTD Temperature Probe" }`,
+		`- { name: EPIC_M1_DO11, role: output, type: BOOL, init: false, desc: "GRV-ODCI-12 slot 1 ch 11 — Digital Output" }`,
+		`- { name: EPIC_M2_AI00, role: input, type: REAL, unit: "°C", desc: "GRV-IICTD-12 slot 2 ch 0 — ICTD Temperature Probe" }`,
 	} {
 		if !strings.Contains(string(tags), want) {
 			t.Errorf("tag file lacks %s\n%s", want, tags)
