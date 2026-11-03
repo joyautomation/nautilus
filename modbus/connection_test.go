@@ -13,6 +13,9 @@ import (
 // neighbour down with it.
 func TestConnectionsSplitBySource(t *testing.T) {
 	a, b := newSlave(t), newSlave(t)
+	// Up means the unit answers: a slave with no unit 1 answers 0x0B.
+	a.Unit(1)
+	b.Unit(1)
 	m := Manifest{
 		Sources: []Source{fastSource("M1", a.Addr()), fastSource("M2", b.Addr())},
 		Tags: []TagBinding{

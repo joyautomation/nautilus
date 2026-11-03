@@ -198,12 +198,31 @@ claims:
   - id: MB-018
     claim: >-
       Each source gets a `<source>__Online` BOOL input that is true while
-      its connection is up and false while the source is dead or parked.
+      the device answers and false while the source is dead or parked. It
+      starts false and goes true on the first answer on a connection (a
+      read or write reply, or an exception other than 0x0A/0x0B), not on
+      the TCP dial, so a gateway that accepts and never replies is never
+      online and a write-only source goes online on its first confirmed
+      write. Once every block's latest read gets gateway exception 0x0A or
+      0x0B (for a source with nothing polled, its latest write), the source
+      is offline while the gateway connection stays up; the next answer
+      brings it back. Any other exception, such as 0x02, keeps it online.
     source: "#the-__online-companion-and-enable"
     tests:
       - go ./modbus TestDriverDeliversTagsPerClass
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
       - go ./modbus TestEnableTagParksSource
+      - go ./modbus TestOnlineSilentGatewayNeverGoesOnline
+      - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
+      - go ./modbus TestOnlineGatewayNoAnswerFromTheStart
+      - go ./modbus TestOnlineOtherExceptionsAreAnswers
+      - go ./modbus TestOnlineWriteOnlySource
+      - go ./modbus TestConnectionsSplitBySource
+    partial: true
+    note: >-
+      Against the in-process slave, which answers 0x0B for a unit it does
+      not have and injects exceptions per function code. Nothing has run
+      against a real gateway with a dead drop.
   - id: MB-019
     claim: >-
       The `__Online` companion is present from `Start`, before any poll has
@@ -246,6 +265,7 @@ claims:
     claim: >-
       A Modbus exception response marks only that block's tags Bad while
       sibling blocks on the same device stay Good, the source stays online
+      (unless every block gets gateway exception 0x0A or 0x0B, see MB-018)
       and polling continues without reconnecting, and the block recovers
       when the fault clears.
     source: "#per-tag-quality"
@@ -575,14 +595,15 @@ claims:
   - id: MB-051
     claim: >-
       Each source gets a `<source>__Outages` DINT input, present from
-      `Start` with good quality: the times `__Online` has gone false since
-      nautilus started. The first connect is not an outage, a source that
-      has not connected yet has had none, and each later fall adds one,
-      parking with `enable:` included. A fall counts only when the device
-      had answered a read or a write on that connection (a gateway that
-      accepts and never replies does not count, and neither do later silent
-      connections after one that answered), and stopping nautilus does not
-      count.
+      `Start` with good quality: the times `__Online` has fallen from true
+      to false since nautilus started. Since `__Online` goes true only on an
+      answer (MB-018), the first connect is not an outage, a source that has
+      not answered yet has had none, a gateway that accepts and never
+      replies does not count (nor do later silent connections after one
+      that answered), and a write-only source counts once a write was
+      confirmed. Each later fall adds one, parking with `enable:` and a
+      gateway answering 0x0A/0x0B on every block included. Stopping
+      nautilus does not count.
       A binding may not take the name.
     source: "#the-__online-companion-and-enable"
     tests:
@@ -594,6 +615,8 @@ claims:
       - go ./modbus TestOutagesWriteOnlySourceCounts
       - go ./modbus TestOutagesAnsweredResetsPerConnection
       - go ./modbus TestOutagesCompanionCollidesWithABinding
+      - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
+      - go ./modbus TestOnlineWriteOnlySource
       - go ./modbus TestConnectionsSplitBySource
     partial: true
     note: >-

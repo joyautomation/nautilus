@@ -40,20 +40,36 @@ const (
 const exceptionsToPark = 3
 
 // suffixOnline names the driver-synthesized per-source companion:
-// "<source>__Online" is a BOOL input that is true while the source's
-// connection is up — the guard a program reads before trusting the source's
-// tags, exactly like sparkplug/host's "<site>__Online".
+// "<source>__Online" is a BOOL input that is true while the device answers:
+// the guard a program reads before trusting the source's tags, exactly like
+// sparkplug/host's "<site>__Online" (issue #539). It starts false and goes
+// true on the first answer on a connection, not on the TCP dial. An answer
+// is a read or write reply, or an exception other than the gateway ones:
+// 0x02 (illegal data address) is the device talking about one bad span,
+// which per-tag quality already reports. Gateway exceptions 0x0A (path
+// unavailable) and 0x0B (target failed to respond) mean nobody answered:
+// once every block's latest read got one (for a source with nothing polled,
+// its latest write), the source is offline, still connected to the gateway.
+// A lost connection or a parked source is offline too.
 const suffixOnline = "__Online"
 
 // suffixOutages names the second per-source companion: "<source>__Outages"
-// is a DINT input counting the times __Online has gone false since the
-// driver started, after the device had answered a read or a write on that
-// connection. The
-// first connect is not an outage, and neither is starting offline, a
-// connection the device never answered on, or Stop. A program compares it with last scan's value to latch
-// an outage it might otherwise miss between scans (issue #449; optommp and
-// plcnext deliver the same name).
+// is a DINT input counting the times __Online has fallen from true to false
+// since the driver started. Since __Online goes true only on an answer, the
+// first connect is not an outage, and neither is starting offline or a
+// connection the device never answered on; Stop is not one either. A
+// gateway whose field device stops answering is one. A program compares it
+// with last scan's value to latch an outage it might otherwise miss between
+// scans (issue #449; optommp and plcnext deliver the same name).
 const suffixOutages = "__Outages"
+
+// gatewayNoAnswer reports a gateway exception that means the device behind
+// the gateway did not answer: 0x0A gateway path unavailable, 0x0B gateway
+// target device failed to respond.
+func gatewayNoAnswer(err error) bool {
+	var exc ExceptionError
+	return errors.As(err, &exc) && (exc.Code == 0x0A || exc.Code == 0x0B)
+}
 
 // OnlineTagName is the source's synthesized BOOL companion tag name — shared
 // with the generator so tags/modbus.yaml declares exactly what the driver
@@ -184,10 +200,11 @@ type source struct {
 
 	mu       sync.Mutex
 	snapshot nio.Values // decoded values, held across disconnects
-	online   bool
-	outages  int64  // online → offline transitions since New
-	answered bool   // a read or write succeeded on the current connection (resets backoff)
-	state    string // parked | connecting | connected | error
+	online   bool       // the device answers (see suffixOnline)
+	outages  int64      // online → offline transitions since New
+	answered bool       // the device answered on the current connection (resets backoff)
+	gwFailed int        // blocks whose latest read got a gateway no-answer (0x0A/0x0B)
+	state    string     // parked | connecting | connected | error
 	sinceMs  int64
 	lastErr  error
 	retries  uint64
@@ -217,6 +234,7 @@ type blockRun struct {
 	excCount    int       // consecutive exceptions
 	parkedUntil time.Time // exception parking (excCount ≥ exceptionsToPark)
 	bad         bool      // tags Bad while true (guarded by source.mu)
+	gwFail      bool      // latest read got a gateway no-answer (guarded by source.mu)
 }
 
 // rewriteRun schedules one Rewrite binding's re-assert (brief §4.1).
@@ -702,7 +720,8 @@ func sameScalar(a, b any) bool {
 
 // run is one source's life: parked ⇄ connecting ⇄ connected with 1s→60s
 // backoff on dial/IO errors (brief §2). The backoff ladder resets only once
-// the device has answered a read on a connection, not on a successful dial.
+// the device has answered on a connection, not on a successful dial, and
+// __Online goes true on that answer too (heardLocked), never on the dial.
 func (d *Driver) run(ctx context.Context, s *source) {
 	backoff := s.cfg.RetryMin
 	for ctx.Err() == nil {
@@ -739,7 +758,11 @@ func (d *Driver) run(ctx context.Context, s *source) {
 			continue
 		}
 		s.mu.Lock()
-		s.online, s.answered = true, false
+		s.answered = false
+		s.gwFailed = 0
+		for _, br := range s.blocks {
+			br.gwFail = false
+		}
 		s.mu.Unlock()
 		s.setState("connected", nil)
 		d.log.Info("modbus: connected", "source", s.cfg.ID, "addr", s.cfg.Addr(), "blocks", len(s.blocks))
@@ -749,11 +772,11 @@ func (d *Driver) run(ctx context.Context, s *source) {
 		_ = c.Close()
 		s.mu.Lock()
 		answered := s.answered
-		// An outage is losing a device that was talking (a read or a write
-		// succeeded on this connection): a connection the device never
-		// answered on (a gateway that accepts TCP and stays
-		// silent) is not one, and neither is the driver stopping.
-		s.goOfflineLocked(answered && ctx.Err() == nil)
+		// An outage is __Online falling: a connection the device never
+		// answered on (a gateway that accepts TCP and stays silent) never
+		// went online, so losing it is not one, and neither is the driver
+		// stopping.
+		s.goOfflineLocked(ctx.Err() == nil)
 		s.mu.Unlock()
 		if ctx.Err() != nil || !s.isEnabled() {
 			continue // shutting down, or parking: no wait, no escalation
@@ -908,6 +931,11 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 			s.excs++
 			s.lastErr = fmt.Errorf("%s %d..%d: %w", br.Table, br.Start, int(br.Start)+int(br.Count)-1, err)
 			br.bad = true
+			if gatewayNoAnswer(err) {
+				s.blockNoAnswerLocked(br, ctx.Err() == nil)
+			} else {
+				s.blockAnsweredLocked(br) // the device is there; this span is refused
+			}
 			s.mu.Unlock()
 			if br.excCount == exceptionsToPark {
 				br.parkedUntil = time.Now().Add(s.cfg.RetryMin)
@@ -942,7 +970,7 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 	}
 	br.excCount = 0
 	br.bad = false
-	s.answered = true
+	s.blockAnsweredLocked(br)
 	for _, t := range br.Bindings {
 		off := int(t.Address) - int(br.Start)
 		if regs != nil {
@@ -1040,10 +1068,10 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 	if err == nil {
 		d.writes.Add(1)
 		// A confirmed write is the device answering, as a read is: a
-		// write-only source (a command or keep-alive word) counts its
-		// outages too, and its backoff ladder resets.
+		// write-only source (a command or keep-alive word) goes online and
+		// counts its outages too, and its backoff ladder resets.
 		s.mu.Lock()
-		s.answered = true
+		s.writeAnsweredLocked()
 		s.mu.Unlock()
 		return true
 	}
@@ -1053,6 +1081,15 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 		s.mu.Lock()
 		s.lastErr = fmt.Errorf("write %v: %w", names, err)
 		s.excs++
+		if gatewayNoAnswer(err) {
+			// Reads decide for a polled source; a source with nothing
+			// polled has only its writes to go by.
+			if len(s.blocks) == 0 {
+				s.goOfflineLocked(ctx.Err() == nil)
+			}
+		} else {
+			s.writeAnsweredLocked() // refused, but the device answered
+		}
 		s.mu.Unlock()
 		d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
 		return true
@@ -1229,10 +1266,46 @@ func (s *source) setState(state string, err error) {
 	s.mu.Unlock()
 }
 
-func (s *source) setOnline(on bool) {
-	s.mu.Lock()
-	s.online = on
-	s.mu.Unlock()
+// heardLocked records an answer from the device: the source is online
+// and the backoff ladder resets. Caller holds s.mu.
+func (s *source) heardLocked() {
+	s.online = true
+	s.answered = true
+}
+
+// blockAnsweredLocked records an answer to br's read (data, or an
+// exception other than a gateway no-answer). Caller holds s.mu.
+func (s *source) blockAnsweredLocked(br *blockRun) {
+	if br.gwFail {
+		br.gwFail = false
+		s.gwFailed--
+	}
+	s.heardLocked()
+}
+
+// blockNoAnswerLocked records a gateway no-answer (0x0A/0x0B) to br's
+// read. Once every block's latest read got one, nothing behind the gateway
+// answers: the source goes offline, an outage when outage is true and it
+// was online. Caller holds s.mu.
+func (s *source) blockNoAnswerLocked(br *blockRun, outage bool) {
+	if !br.gwFail {
+		br.gwFail = true
+		s.gwFailed++
+	}
+	if s.gwFailed == len(s.blocks) {
+		s.goOfflineLocked(outage)
+	}
+}
+
+// writeAnsweredLocked records an answer to a write. It is fresher than any
+// block's latest read, so every block must fail again before the source
+// goes offline. Caller holds s.mu.
+func (s *source) writeAnsweredLocked() {
+	for _, br := range s.blocks {
+		br.gwFail = false
+	}
+	s.gwFailed = 0
+	s.heardLocked()
 }
 
 // goOfflineLocked takes the source offline, counting an outage
