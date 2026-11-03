@@ -121,14 +121,33 @@ const EDGE_SLOTS: [number, number][] = [
 	[0, 0.75], [0, 0.25] // left quarters
 ];
 
-const closeEnough = (a: number, b: number): boolean => Math.abs(a - b) < 0.001;
+/** How close (render pixels, centre to centre) an existing port's dot may
+ * be to a slot before the slot counts as taken: two dot radii, so the new
+ * dot never lands on top of one already there. */
+export const SLOT_CLEARANCE = 12;
+
+const UNIT_BOX: Box = { x: 0, y: 0, w: 100, h: 100 };
+
+/** Where a port's dot renders: its fractions of its part's frame when it
+ * names a part `parts` has, else of the whole box. */
+export function portPoint(box: Box, parts: [string, Box][], p: Pick<Port, 'x' | 'y' | 'part'>): [number, number] {
+	const f = (p.part !== undefined && parts.find(([n]) => n === p.part)?.[1]) || box;
+	return [f.x + p.x * f.w, f.y + p.y * f.h];
+}
 
 /** The first free slot from EDGE_SLOTS not already occupied by an existing
  * port — falls back to dead center if every quarter-grid slot on the
- * outline is taken. */
-export function firstFreeSlot(existing: Port[]): [number, number] {
+ * outline is taken. A slot is taken when an existing port's dot renders
+ * within SLOT_CLEARANCE of it, judged where the dots actually draw (a part
+ * port in its part's frame), not by equal fractions (nautilus#477): a port
+ * a few hundredths off a slot, or at a slot's fractions of a part, would
+ * otherwise get a new dot right on top of it. Without a box, fractions of
+ * a nominal 100 px square. */
+export function firstFreeSlot(existing: Port[], box: Box = UNIT_BOX, parts: [string, Box][] = []): [number, number] {
+	const dots = existing.map((p) => portPoint(box, parts, p));
 	for (const [x, y] of EDGE_SLOTS) {
-		if (!existing.some((p) => closeEnough(p.x, x) && closeEnough(p.y, y))) return [x, y];
+		const [sx, sy] = [box.x + x * box.w, box.y + y * box.h];
+		if (!dots.some(([dx, dy]) => Math.hypot(dx - sx, dy - sy) < SLOT_CLEARANCE)) return [x, y];
 	}
 	return [0.5, 0.5];
 }
@@ -145,9 +164,11 @@ export function nextPortName(existing: Port[]): string {
 }
 
 /** Build a new auto-named port at the first free quarter-position slot on
- * the outline — the ports panel's "Add port" button. */
-export function newPortAtFreeSlot(existing: Port[]): Port {
-	const [x, y] = firstFreeSlot(existing);
+ * the outline — the ports panel's "Add port" button. `box` and `parts` are
+ * the render's, in the same pixels, so a slot is judged free where the
+ * dots draw (firstFreeSlot). */
+export function newPortAtFreeSlot(existing: Port[], box?: Box, parts: [string, Box][] = []): Port {
+	const [x, y] = firstFreeSlot(existing, box, parts);
 	return { name: nextPortName(existing), x, y };
 }
 

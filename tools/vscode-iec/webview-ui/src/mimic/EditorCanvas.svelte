@@ -1659,7 +1659,7 @@
 	}
 	function addPortAtFreeSlotEC(eq: MimicEquipment) {
 		const existing = resolvePorts(eq, ed.manifest);
-		commitPorts(eq, [...existing, newPortAtFreeSlot(existing)]);
+		commitPorts(eq, [...existing, newPortAtFreeSlot(existing, eqBox(eq), partsOf(eq))]);
 	}
 </script>
 

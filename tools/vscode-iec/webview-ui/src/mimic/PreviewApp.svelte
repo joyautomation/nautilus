@@ -337,7 +337,8 @@
 		commitPorts([...ports, hit ? { ...newPortAtPoint(hit[1], pt, ports), part: hit[0] } : newPortAtPoint(b, pt, ports)]);
 	}
 	function addPortAtFreeSlot() {
-		commitPorts([...ports, newPortAtFreeSlot(ports)]);
+		// Judged where the dots draw: the box and parts in the render's pixels.
+		commitPorts([...ports, boxEl ? newPortAtFreeSlot(ports, portFrame({}), parts()) : newPortAtFreeSlot(ports)]);
 	}
 	function renamePort(i: number, name: string): boolean {
 		const trimmed = name.trim();
