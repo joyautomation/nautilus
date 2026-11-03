@@ -326,9 +326,9 @@ func scalar(v ir.Value, dt uint32) any {
 				return uint32(n)
 			}
 		case id.UInt64:
-			if n >= 0 {
-				return uint64(n)
-			}
+			// A ULINT or LWORD holds any 64-bit pattern (NOT of an LWORD 0
+			// is -1 in the store): it is that unsigned value.
+			return uint64(n)
 		}
 		return n
 	}

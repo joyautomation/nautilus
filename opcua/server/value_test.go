@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -246,7 +247,7 @@ func TestScalarConvertsInRangeAndWidensOutOfRange(t *testing.T) {
 		{"UINT", 60000, uint16(60000)}, {"UINT", 70000, int64(70000)},
 		{"DINT", 1 << 30, int32(1 << 30)}, {"DINT", 1 << 40, int64(1 << 40)},
 		{"UDINT", 1<<32 - 1, uint32(1<<32 - 1)}, {"UDINT", -3, int64(-3)},
-		{"ULINT", 7, uint64(7)}, {"ULINT", -7, int64(-7)},
+		{"ULINT", 7, uint64(7)}, {"ULINT", -1, uint64(math.MaxUint64)}, {"LWORD", -7, uint64(math.MaxUint64 - 6)},
 		{"LINT", 7, int64(7)}, {"", 7, int64(7)},
 	}
 	for _, tc := range cases {
