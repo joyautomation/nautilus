@@ -145,6 +145,12 @@ func TestCompanionTagNames(t *testing.T) {
 	if got := n.DeviceOnlineTagName(n.Devices[0]); got != "W_6_PLC_1__Online" {
 		t.Errorf("DeviceOnlineTagName() = %q", got)
 	}
+	if got := n.OutagesTagName(); got != "W_6__Outages" {
+		t.Errorf("OutagesTagName() = %q", got)
+	}
+	if got := n.DeviceOutagesTagName(n.Devices[0]); got != "W_6_PLC_1__Outages" {
+		t.Errorf("DeviceOutagesTagName() = %q", got)
+	}
 
 	// Prefix overrides the edge node id.
 	p := Node{EdgeNode: "W6", Prefix: "Site6"}
@@ -158,7 +164,8 @@ func TestCompanionTagNames(t *testing.T) {
 		OnlineTag:  "Well6_Comms",
 		BirthTag:   "Well6_Born",
 		RebirthTag: "Well6_Kick",
-		Devices:    []Device{{Device: "PLC1", OnlineTag: "Well6_PLC_Comms"}},
+		OutagesTag: "Well6_Drops",
+		Devices:    []Device{{Device: "PLC1", OnlineTag: "Well6_PLC_Comms", OutagesTag: "Well6_PLC_Drops"}},
 	}
 	if got := e.OnlineTagName(); got != "Well6_Comms" {
 		t.Errorf("explicit OnlineTagName() = %q", got)
@@ -172,6 +179,12 @@ func TestCompanionTagNames(t *testing.T) {
 	if got := e.DeviceOnlineTagName(e.Devices[0]); got != "Well6_PLC_Comms" {
 		t.Errorf("explicit DeviceOnlineTagName() = %q", got)
 	}
+	if got := e.OutagesTagName(); got != "Well6_Drops" {
+		t.Errorf("explicit OutagesTagName() = %q", got)
+	}
+	if got := e.DeviceOutagesTagName(e.Devices[0]); got != "Well6_PLC_Drops" {
+		t.Errorf("explicit DeviceOutagesTagName() = %q", got)
+	}
 }
 
 func TestTagSpecs(t *testing.T) {
@@ -184,10 +197,12 @@ func TestTagSpecs(t *testing.T) {
 		{Name: "W6_PLC1_Pump_Run", Role: RoleInput, Datatype: "Boolean"},
 		{Name: "W6_PLC1_Pump_SpeedSP", Role: RoleOutput, Init: 0.0, Datatype: "Double"},
 		{Name: "W6_PLC1__Online", Role: RoleInput},
+		{Name: "W6_PLC1__Outages", Role: RoleInput},
 		{Name: "W6_Pump1", Role: RoleInput, Type: "Motor"},
 		{Name: "W6_Well_Level", Role: RoleInput, Datatype: "Double"},
 		{Name: "W6__LastBirthMs", Role: RoleInput},
 		{Name: "W6__Online", Role: RoleInput},
+		{Name: "W6__Outages", Role: RoleInput},
 		{Name: "W6__Rebirth", Role: RoleOutput, Init: false},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -209,7 +224,7 @@ tags:
 		specs[s.Name] = s
 	}
 	// Companion tags are synthesized even though the manifest names none.
-	for _, name := range []string{"W6__Online", "W6__LastBirthMs", "W6_PLC1__Online"} {
+	for _, name := range []string{"W6__Online", "W6__Outages", "W6__LastBirthMs", "W6_PLC1__Online", "W6_PLC1__Outages"} {
 		if s, ok := specs[name]; !ok || s.Role != RoleInput {
 			t.Errorf("%s = %+v, want an input", name, s)
 		}
@@ -245,10 +260,12 @@ func TestBuildIndexes(t *testing.T) {
 	wantInputs := []string{
 		"W6_PLC1_Pump_Run",
 		"W6_PLC1__Online",
+		"W6_PLC1__Outages",
 		"W6_Pump1",
 		"W6_Well_Level",
 		"W6__LastBirthMs",
 		"W6__Online",
+		"W6__Outages",
 	}
 	if got := d.InputNames(); !reflect.DeepEqual(got, wantInputs) {
 		t.Errorf("InputNames() = %v, want %v", got, wantInputs)
@@ -330,7 +347,7 @@ tags: []
 	if err := d.buildIndexes(); err != nil {
 		t.Fatalf("buildIndexes: %v", err)
 	}
-	want := []string{"W6_PLC1__Online", "W6__LastBirthMs", "W6__Online", "W7__LastBirthMs", "W7__Online"}
+	want := []string{"W6_PLC1__Online", "W6_PLC1__Outages", "W6__LastBirthMs", "W6__Online", "W6__Outages", "W7__LastBirthMs", "W7__Online", "W7__Outages"}
 	if got := d.InputNames(); !reflect.DeepEqual(got, want) {
 		t.Errorf("InputNames() = %v, want %v", got, want)
 	}

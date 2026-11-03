@@ -14,14 +14,16 @@ TYPE
 END_TYPE
 
 (* Add the tags your program uses to its VAR_EXTERNAL block. The __Online,
-   __LastBirthMs and __Rebirth tags are synthesized by the driver: interlock
-   on __Online before trusting a site's values, and pulse __Rebirth to force
-   a resync.
+   __Outages, __LastBirthMs and __Rebirth tags are synthesized by the driver:
+   interlock on __Online before trusting a site's values, and pulse
+   __Rebirth to force a resync. __Outages counts the times __Online went
+   false.
 
 VAR_EXTERNAL
   Booster1_DischargePress : LREAL;
   Booster1_FM1_FM1_FlowLps : LREAL;
   Booster1_FM1__Online : BOOL;
+  Booster1_FM1__Outages : DINT;
   Booster1_Pump1 : Pump;
   Booster1_Pump1_SpeedSP : LREAL;
   Booster1_Pump2 : Pump;
@@ -30,18 +32,21 @@ VAR_EXTERNAL
   Booster1_TankLevel : LREAL;
   Booster1__LastBirthMs : LINT;
   Booster1__Online : BOOL;
+  Booster1__Outages : DINT;
   Booster1__Rebirth : BOOL;
   Well1_Pump1 : Pump;
   Well1_Pump1_SpeedSP : LREAL;
   Well1_WellLevel : LREAL;
   Well1__LastBirthMs : LINT;
   Well1__Online : BOOL;
+  Well1__Outages : DINT;
   Well1__Rebirth : BOOL;
   Well2_Pump1 : Pump;
   Well2_Pump1_SpeedSP : LREAL;
   Well2_WellLevel : LREAL;
   Well2__LastBirthMs : LINT;
   Well2__Online : BOOL;
+  Well2__Outages : DINT;
   Well2__Rebirth : BOOL;
 END_VAR
 *)

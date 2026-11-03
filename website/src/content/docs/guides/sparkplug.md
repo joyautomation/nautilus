@@ -127,7 +127,8 @@ pretending to be fresh — while every other device stays born.
 | `eip`, `sparkplug-host`, `replay` | driver | the driver's `name:` (default: its type) |
 
 A device carries the input tags its connection delivers, its `__Online`
-companion included. Everything else — computed tags, program state,
+companion included (and `__Outages`, for a modbus source or a Sparkplug
+host). Everything else — computed tags, program state,
 outputs, and every tag of the `memory` loopback, which is no connection —
 publishes at node level. Two connections with one id would share a topic,
 so that is a load error naming both; give a driver a `name:` to choose

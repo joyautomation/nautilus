@@ -27,14 +27,17 @@ nodes:
     - edgenode: W6
       prefix: W6
       onlinetag: W6__Online
+      outagestag: W6__Outages
       birthtag: W6__LastBirthMs
       rebirthtag: W6__Rebirth
       devices:
         - device: PLC1
           onlinetag: W6_PLC1__Online
+          outagestag: W6_PLC1__Outages
     - edgenode: W7
       prefix: W7
       onlinetag: W7__Online
+      outagestag: W7__Outages
       birthtag: W7__LastBirthMs
       rebirthtag: W7__Rebirth
       devices: []

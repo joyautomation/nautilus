@@ -201,16 +201,18 @@ func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
 	ns.stopGap()
 	ns.pending = nil
 	ns.rebirthAsked = false
-	ns.online = true
+	ns.setOnline(true)
 	ns.seq = p.Seq
 	ns.seqPrimed = true
 	ns.birthMs = birthTimestamp(p)
 	ns.aliases = map[uint64]metricRef{}
 
 	// A node rebirth invalidates every device: the spec requires a DBIRTH
-	// before any device data, so hold the rows but mark them dark.
+	// before any device data, so hold the rows but mark them dark. A device
+	// that was online counts an outage: its __Online goes false here until
+	// its DBIRTH.
 	for _, dev := range ns.devices {
-		dev.online = false
+		dev.setOnline(false)
 	}
 
 	if bd, ok := bdSeqOf(p.Metrics); ok {
@@ -230,7 +232,7 @@ func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
 // edge node including its devices. Caller holds d.mu.
 func (d *Driver) applyDBirthLocked(ns *nodeState, device string, p sparkplug.Payload) {
 	dev := ns.device(device)
-	dev.online = true
+	dev.setOnline(true)
 	dev.birthMs = birthTimestamp(p)
 	d.registerAliasesLocked(ns, device, p.Metrics)
 	dev.metrics = d.applyMetricsLocked(ns, device, p.Metrics)
@@ -337,10 +339,10 @@ func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
 	}
 	ns.stopGap()
 	ns.pending = nil
-	ns.online = false
+	ns.setOnline(false)
 	ns.seqPrimed = false
 	for _, dev := range ns.devices {
-		dev.online = false
+		dev.setOnline(false)
 	}
 	d.syncTagsLocked(ns)
 	d.stateLogger().Info("sparkplug host: node death",
@@ -351,8 +353,26 @@ func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
 // Caller holds d.mu.
 func (d *Driver) applyDDeathLocked(ns *nodeState, device string) {
 	dev := ns.device(device)
-	dev.online = false
+	dev.setOnline(false)
 	d.syncTagsLocked(ns)
+}
+
+// setOnline records whether the node is online; a fall is an outage
+// (__Outages). Caller holds d.mu.
+func (ns *nodeState) setOnline(up bool) {
+	if ns.online && !up {
+		ns.outages++
+	}
+	ns.online = up
+}
+
+// setOnline records whether the device is online; a fall is an outage.
+// Caller holds d.mu.
+func (dev *deviceState) setOnline(up bool) {
+	if dev.online && !up {
+		dev.outages++
+	}
+	dev.online = up
 }
 
 // device returns one device's state, creating it on first sight.
@@ -861,12 +881,18 @@ func (d *Driver) initValues() {
 		if t := n.OnlineTagName(); t != "" {
 			d.values[t] = false
 		}
+		if t := n.OutagesTagName(); t != "" {
+			d.values[t] = int64(0)
+		}
 		if t := n.BirthTagName(); t != "" {
 			d.values[t] = int64(0)
 		}
 		for _, dev := range n.Devices {
 			if t := n.DeviceOnlineTagName(dev); t != "" {
 				d.values[t] = false
+			}
+			if t := n.DeviceOutagesTagName(dev); t != "" {
+				d.values[t] = int64(0)
 			}
 		}
 	}
@@ -886,6 +912,9 @@ func (d *Driver) syncTagsLocked(ns *nodeState) {
 	if t := cfg.OnlineTagName(); t != "" {
 		d.values[t] = ns.online
 	}
+	if t := cfg.OutagesTagName(); t != "" {
+		d.values[t] = ns.outages
+	}
 	if t := cfg.BirthTagName(); t != "" {
 		d.values[t] = ns.birthMs
 	}
@@ -900,6 +929,9 @@ func (d *Driver) syncTagsLocked(ns *nodeState) {
 		}
 		if t := cfg.DeviceOnlineTagName(dev); t != "" {
 			d.values[t] = live.online
+		}
+		if t := cfg.DeviceOutagesTagName(dev); t != "" {
+			d.values[t] = live.outages
 		}
 	}
 }

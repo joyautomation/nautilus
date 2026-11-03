@@ -61,9 +61,9 @@ func TestSparkplugDevicePerConnection(t *testing.T) {
 		}
 	}
 	want := []dev{
-		{"M1", []string{"M1_KW", "M1_PF", "M1__Online"}},
-		{"M2", []string{"M2_KW", "M2__Online"}},
-		{"sparkplug-host", []string{"W1_Level", "W1__LastBirthMs", "W1__Online"}},
+		{"M1", []string{"M1_KW", "M1_PF", "M1__Online", "M1__Outages"}},
+		{"M2", []string{"M2_KW", "M2__Online", "M2__Outages"}},
+		{"sparkplug-host", []string{"W1_Level", "W1__LastBirthMs", "W1__Online", "W1__Outages"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("devices =\n  %+v\nwant\n  %+v", got, want)

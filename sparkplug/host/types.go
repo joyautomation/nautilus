@@ -128,6 +128,9 @@ type Node struct {
 	// OnlineTag is a BOOL input tag: node online (NBIRTH seen, no matching
 	// NDEATH). Empty means don't synthesize it.
 	OnlineTag string
+	// OutagesTag is a DINT input tag: the times OnlineTag has gone false
+	// since the driver started.
+	OutagesTag string
 	// BirthTag is an INT input tag carrying the last NBIRTH epoch ms.
 	BirthTag string
 	// RebirthTag is a BOOL *output* tag: a rising edge sends NCMD Rebirth.
@@ -142,6 +145,9 @@ type Device struct {
 	Device string
 	// OnlineTag is a BOOL input tag: device online.
 	OnlineTag string
+	// OutagesTag is a DINT input tag: the times the device's OnlineTag has
+	// gone false since the driver started.
+	OutagesTag string
 }
 
 // Binding maps one Sparkplug metric to one nautilus tag.
@@ -247,8 +253,8 @@ type Driver struct {
 	// synthesized, so they are not in byName.
 	rebirthTags map[string]string
 	// synthInputs are the driver-synthesized companion INPUT tag names —
-	// Node.OnlineTagName / BirthTagName per node and DeviceOnlineTagName per
-	// device — sorted. They are not bindings (no metric backs them), so they
+	// Node.OnlineTagName / OutagesTagName / BirthTagName per node and
+	// DeviceOnlineTagName / DeviceOutagesTagName per device — sorted. They are not bindings (no metric backs them), so they
 	// live beside inputs rather than in it. (added by B1)
 	synthInputs []string
 	// synthOutputs are the synthesized companion OUTPUT tag names:
@@ -479,6 +485,8 @@ type metricRef struct {
 type nodeState struct {
 	group, edge string
 	online      bool
+	// outages counts online → offline transitions since New (__Outages).
+	outages int64
 	// bdSeq from the NBIRTH. An NDEATH whose bdSeq does not match is a late
 	// will from a prior session and must be ignored.
 	bdSeq int64
@@ -516,6 +524,7 @@ type nodeState struct {
 type deviceState struct {
 	id      string
 	online  bool
+	outages int64 // online → offline transitions since New (__Outages)
 	birthMs int64
 	metrics int
 }

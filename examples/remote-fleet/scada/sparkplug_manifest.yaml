@@ -25,20 +25,24 @@ nodes:
     - edgenode: Booster1
       prefix: Booster1
       onlinetag: Booster1__Online
+      outagestag: Booster1__Outages
       birthtag: Booster1__LastBirthMs
       rebirthtag: Booster1__Rebirth
       devices:
         - device: FM1
           onlinetag: Booster1_FM1__Online
+          outagestag: Booster1_FM1__Outages
     - edgenode: Well1
       prefix: Well1
       onlinetag: Well1__Online
+      outagestag: Well1__Outages
       birthtag: Well1__LastBirthMs
       rebirthtag: Well1__Rebirth
       devices: []
     - edgenode: Well2
       prefix: Well2
       onlinetag: Well2__Online
+      outagestag: Well2__Outages
       birthtag: Well2__LastBirthMs
       rebirthtag: Well2__Rebirth
       devices: []

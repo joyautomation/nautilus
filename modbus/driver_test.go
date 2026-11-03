@@ -159,7 +159,7 @@ func TestDriverDeliversTagsPerClass(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantIn := []string{"DEV__Online", "T_CO", "T_Flt", "T_Raw", "T_Run", "T_Temp"}
+	wantIn := []string{"DEV__Online", "DEV__Outages", "T_CO", "T_Flt", "T_Raw", "T_Run", "T_Temp"}
 	if got := d.InputNames(); !reflect.DeepEqual(got, wantIn) {
 		t.Fatalf("InputNames = %v, want %v", got, wantIn)
 	}

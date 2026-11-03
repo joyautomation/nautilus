@@ -296,10 +296,12 @@ func buildNodes(m *host.Manifest, sites map[string]*site, order []string, opts O
 		n.OnlineTag = claim(companion.OnlineTagName(), used)
 		n.BirthTag = claim(companion.BirthTagName(), used)
 		n.RebirthTag = claim(companion.RebirthTagName(), used)
+		n.OutagesTag = claim(companion.OutagesTagName(), used)
 		sort.Strings(s.deviceIDs)
 		for _, id := range s.deviceIDs {
 			dv := host.Device{Device: id}
 			dv.OnlineTag = claim(companion.DeviceOnlineTagName(dv), used)
+			dv.OutagesTag = claim(companion.DeviceOutagesTagName(dv), used)
 			n.Devices = append(n.Devices, dv)
 		}
 		nodes = append(nodes, n)
@@ -1050,9 +1052,10 @@ func TypesST(m host.Manifest) ([]byte, error) {
 	}
 
 	sb.WriteString("(* Add the tags your program uses to its VAR_EXTERNAL block. The __Online,\n")
-	sb.WriteString("   __LastBirthMs and __Rebirth tags are synthesized by the driver: interlock\n")
-	sb.WriteString("   on __Online before trusting a site's values, and pulse __Rebirth to force\n")
-	sb.WriteString("   a resync.\n\n")
+	sb.WriteString("   __Outages, __LastBirthMs and __Rebirth tags are synthesized by the driver:\n")
+	sb.WriteString("   interlock on __Online before trusting a site's values, and pulse\n")
+	sb.WriteString("   __Rebirth to force a resync. __Outages counts the times __Online went\n")
+	sb.WriteString("   false.\n\n")
 	sb.WriteString(stgen.VarBlock("VAR_EXTERNAL", varFields(m)...))
 	sb.WriteString("*)\n")
 	return []byte(sb.String()), nil
@@ -1070,6 +1073,9 @@ func varFields(m host.Manifest) []stgen.FieldDef {
 		if t := n.OnlineTagName(); t != "" {
 			all = append(all, entry{t, stgen.BOOL})
 		}
+		if t := n.OutagesTagName(); t != "" {
+			all = append(all, entry{t, stgen.DINT})
+		}
 		if t := n.BirthTagName(); t != "" {
 			all = append(all, entry{t, stgen.LINT})
 		}
@@ -1079,6 +1085,9 @@ func varFields(m host.Manifest) []stgen.FieldDef {
 		for _, dv := range n.Devices {
 			if t := n.DeviceOnlineTagName(dv); t != "" {
 				all = append(all, entry{t, stgen.BOOL})
+			}
+			if t := n.DeviceOutagesTagName(dv); t != "" {
+				all = append(all, entry{t, stgen.DINT})
 			}
 		}
 	}

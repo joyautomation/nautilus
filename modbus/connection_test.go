@@ -8,7 +8,7 @@ import (
 	nio "github.com/joyautomation/nautilus/io"
 )
 
-// Each source is one connection: its own bindings and __Online companion,
+// Each source is one connection: its own bindings and __Online and __Outages companions,
 // and an up/down verdict of its own — a dead meter does not take its
 // neighbour down with it.
 func TestConnectionsSplitBySource(t *testing.T) {
@@ -28,8 +28,8 @@ func TestConnectionsSplitBySource(t *testing.T) {
 	var _ nio.ConnectionReporter = d
 
 	want := []nio.Connection{
-		{ID: "M1", Inputs: []string{"M1_KW", "M1_PF", "M1__Online"}},
-		{ID: "M2", Inputs: []string{"M2_KW", "M2__Online"}},
+		{ID: "M1", Inputs: []string{"M1_KW", "M1_PF", "M1__Online", "M1__Outages"}},
+		{ID: "M2", Inputs: []string{"M2_KW", "M2__Online", "M2__Outages"}},
 	}
 	if got := d.Connections(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Connections = %+v, want %+v", got, want)
