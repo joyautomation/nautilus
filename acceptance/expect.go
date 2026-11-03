@@ -207,6 +207,12 @@ func (m *Matcher) setExact(v any) error {
 // match reports whether got satisfies the matcher, and renders what was
 // wanted for the failure line.
 func (m Matcher) match(got ir.Value, defaultTol float64) (bool, string) {
+	// A number asserted against a TIME is milliseconds; the want reads in
+	// the actual's units (`Delay = T#2m, want T#1m30s`, not `want 90000`).
+	trim := trim
+	if got.Kind == ir.TypeTime {
+		trim = trimTime
+	}
 	switch m.Op {
 	case "eq":
 		switch {
@@ -270,6 +276,15 @@ func numOf(v ir.Value) float64 {
 		return float64(v.I)
 	}
 	return math.NaN()
+}
+
+// trimTime renders a number of milliseconds as a TIME literal when it is
+// one (90000 → T#1m30s), else as the number.
+func trimTime(f float64) string {
+	if f == math.Trunc(f) && f >= math.MinInt64 && f < math.MaxInt64 {
+		return ir.FormatDuration(int64(f))
+	}
+	return trim(f)
 }
 
 // trim renders a float without trailing zeros, so a want reads like the

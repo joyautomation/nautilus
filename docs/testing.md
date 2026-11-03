@@ -326,7 +326,9 @@ The location is the assertion that broke — the tag or expression inside
 the step's own first line when that differs.
 
 Values read the way the test writes them: a `TIME` shows as its literal
-(`Delay = T#2m, want T#1m30s`), an enumeration as its member name.
+(`Delay = T#2m, want T#1m30s`), and so does a number asserted against one
+(`{gt: 200000}` reads `want > T#3m20s`); an enumeration shows its member
+name.
 
 The trajectory is the point. Here the loop is fine and still converging —
 the 20 s contract was too tight, which the numbers say and a bare

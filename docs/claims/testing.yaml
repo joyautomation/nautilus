@@ -293,12 +293,14 @@ claims:
       A failure reports the assertion that broke (file:line of the tag key,
       expression or alarms: key), the step and its first line, the virtual
       time, and a trajectory of the process values with their units and
-      descriptions. A TIME value reads as its literal (T#2m).
+      descriptions. A TIME value, and a want against one, reads as its
+      literal (T#2m).
     source: "#reading-a-failure"
     tests:
       - go ./acceptance TestFailureLinePointsAtTheAssertion
       - go ./acceptance TestFailureReportsBothLines
       - go ./acceptance TestFailureShowsTimeAsLiteral
+      - go ./acceptance TestFailureWantOnATimeReadsAsALiteral
     partial: true
     note: >-
       Line and step line are asserted, and a TIME tag's trace values (as T# literals); the trace's unit and description are not.
