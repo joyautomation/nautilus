@@ -124,8 +124,7 @@ claims:
       is corrected; it stays open under #424 until then. The Go test reads
       i=2994. The build number and date come from the binary's VCS stamp;
       a binary built without one (-buildvcs=false) has no build number and
-      dates itself by the executable's modification time. OPC-016 to OPC-022
-      are reserved by docs/design/opcua-server-writes.md.
+      dates itself by the executable's modification time.
 
   - id: OPC-004
     claim: >-
@@ -247,10 +246,12 @@ claims:
 
   - id: OPC-008
     claim: >-
-      The server is read-only: a write to a value is answered
-      Bad_UserAccessDenied and does not land, AccessLevel is CurrentRead,
-      and the standard Server object and its variables are as read-only as
-      the project's nodes.
+      The server is read-only unless opcua.writable opens tags, and then only
+      to a writer session: any other session's write to a tag's value is
+      answered Bad_UserAccessDenied and does not land, and a write to another
+      attribute or an Object is Bad_NotWritable. AccessLevel is CurrentRead
+      on every node opcua.writable does not open, and the standard Server
+      object and its variables are read-only for every session.
     source: "#security"
     tests:
       - go ./tools/blackbox TestBlackbox/001-P-read-only-tags
@@ -261,6 +262,9 @@ claims:
       - go ./opcua/server TestNamespaceSetAttributeRefusesEverything
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestNamespaceAttributesOfFolderAndMembers
+      - go ./opcua/server TestNonWriterSessionsAreRefused
+      - go ./opcua/server TestNoWritableListIsReadOnly
+      - go ./opcua/server TestAccessLevelsPerNodeAndSession
       - go ./cmd/naut TestNautRunServesOPCUA
       - go ./opcua/server TestForeignAsyncuaClient
 
@@ -327,11 +331,110 @@ claims:
       - go ./opcua/internal/uaserver TestSessionTokenRefusedOnAnotherChannel
       - go ./opcua/server TestForeignAsyncuaSecure
 
+  - id: OPC-018
+    claim: >-
+      opcua.writable lists globs over tag names and member paths, with the
+      rule sparkplug.writable uses: a pattern on a tag opens its members, one
+      on a member opens it and everything below it. A writer session is one
+      on a SignAndEncrypt endpoint from a trusted client certificate;
+      anonymous on None, with or without a certificate, is never one. The
+      trust list is read again on every Write request, so a certificate taken
+      out of trusted/ writes nothing more on the channel it has (every item
+      Bad_UserAccessDenied). A writer may write the Value of a matched scalar
+      tag or struct member, an output included; an input never
+      (Bad_NotWritable), nor a tag no pattern opens. AccessLevel is
+      CurrentRead|CurrentWrite on a matched non-input tag, AccessLevelEx
+      follows it, and UserAccessLevel is AccessLevel for a writer session
+      and CurrentRead for any other. naut check refuses a malformed pattern
+      and warns on one that matches nothing, one that matches only inputs,
+      and an output it opens that a program writes.
+    source: "#writes"
+    tests:
+      - go ./internal/writable TestAllowsAMatchAndEverythingBelowIt
+      - go ./internal/writable TestValidateRefusesAMalformedPattern
+      - go ./opcua/server TestWriteStatusTable
+      - go ./opcua/server TestNonWriterSessionsAreRefused
+      - go ./opcua/server TestAccessLevelsPerNodeAndSession
+      - go ./opcua/server TestUntrustedCertificateStopsWritingOnItsChannel
+      - go ./opcua/server TestNewRefusesAMalformedWritablePattern
+      - go ./cmd/naut TestCheckWarnsOnOPCUAWritable
+      - go ./cmd/naut TestWireRedundancyGatesOPCUAWrites
+      - go ./opcua/server TestForeignAsyncuaSecure
+    note: >-
+      No black-box check covers writes yet; the writes brief (design §5.3)
+      will.
+
+  - id: OPC-019
+    claim: >-
+      A written value lands exactly as sent or is refused. A Boolean node
+      takes only a Boolean; an integer node any integer type, checked against
+      the declared width (Bad_OutOfRange outside it), never a Float or Double
+      (Bad_TypeMismatch); a ULINT or LWORD any 64-bit pattern; a Double node
+      a Float, a Double or an integer within ±2^53, never NaN, infinity or
+      an integer past ±2^53 (Bad_OutOfRange); an enumeration's Int32 node
+      only a member's value (Bad_OutOfRange); a Duration node a Double or an
+      integer of whole milliseconds (Bad_OutOfRange for a fraction); a
+      String node a String, a null String written as ''. A Good or absent
+      StatusCode is a plain write and any other is Bad_WriteNotSupported;
+      source and server timestamps are accepted and ignored. An array, an
+      IndexRange or an array Variant is Bad_WriteNotSupported; an unknown
+      node Bad_NodeIdUnknown. A Write may name up to the 10 000 nodes
+      MaxNodesPerWrite advertises (Bad_TooManyOperations past it).
+    source: "#conversions"
+    tests:
+      - go ./opcua/server TestWriteStatusTable
+      - go ./opcua/server TestMaxNodesPerWriteIsAdvertisedAndEnforced
+      - go ./opcua/server TestForeignAsyncuaSecure
+      - go ./runtime TestFrontDoorConversions
+
+  - id: OPC-020
+    claim: >-
+      A written value is in the tag store when the response goes out; the
+      items of one Write that pass land through one front-door batch under
+      one store lock, so no reader sees part of a request, and a refused item
+      does not hold back the others. A forced address, a member of one or a
+      tag holding one is refused with Bad_Locked. Another session's
+      subscription hears the new value through the sweep, with no
+      notification path of its own.
+    source: "#when-a-write-takes-effect"
+    tests:
+      - go ./opcua/server TestWriteRequestIsOneBatch
+      - go ./opcua/server TestWriteStatusTable
+      - go ./opcua/server TestWriteReachesAnotherSessionsSubscription
+      - go ./runtime TestFrontDoorBatchIsAtomic
+      - go ./runtime TestFrontDoorRefusesForced
+
+  - id: OPC-021
+    claim: >-
+      Every landed write is an Info line opcua: write naming the node, the
+      old and new values, the session, the client's ApplicationUri, the
+      first 16 digits of its certificate thumbprint and its address; a
+      refused item is an opcua: write refused warning with the status and
+      the reason, once per client, node and reason. The opcua-server row on
+      GET /api/drivers counts writes and writes refused, and says whether
+      the server is writable.
+    source: "#audit"
+    tests:
+      - go ./opcua/server TestWriteAuditAndCounters
+      - go ./internal/project TestOPCUAStatusCarriesTheWrites
+
+  - id: OPC-022
+    claim: >-
+      With redundancy, only the leader takes OPC UA writes: a standby
+      answers every write Bad_InvalidState and its opcua-server row says it
+      is a standby. naut run gives the server the elector's leadership gate,
+      as it does the drivers.
+    source: "#when-a-write-takes-effect"
+    tests:
+      - go ./opcua/server TestStandbyRefusesWrites
+      - go ./cmd/naut TestWireRedundancyGatesOPCUAWrites
+      - go ./internal/project TestOPCUAStatusCarriesTheWrites
+
   - id: OPC-009
     claim: >-
       GET /api/drivers carries an opcua-server row with the endpoint,
       whether it is listening, and the subscription and monitored-item
-      counts.
+      counts (the write counters are OPC-021).
     source: "#status"
     tests:
       - go ./tools/blackbox TestBlackbox/001-P-driver-row
