@@ -25,6 +25,12 @@ func TestCheckReportsAManifestTagErrorNotUndeclaredTags(t *testing.T) {
 					"  - { name: PumpRun, role: output, type: BOOL, init: false }\n" +
 					"  - " + bad + "\n",
 				"main.st": "PROGRAM Main\nPumpRun := Level > 50.0;\nEND_PROGRAM\n",
+				// A second program in a subdirectory: one manifest, still
+				// one report.
+				"sub/aux.st": "PROGRAM Aux\nPumpRun := Level > 60.0;\nEND_PROGRAM\n",
+			}
+			if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+				t.Fatal(err)
 			}
 			for n, body := range files {
 				if err := os.WriteFile(filepath.Join(dir, n), []byte(body), 0o644); err != nil {
