@@ -786,7 +786,8 @@ func sameType(a, b *ir.Type) bool {
 		return false
 	}
 	if a.Enum != nil {
-		if !ir.SameName(a.Enum.Name, b.Enum.Name) || len(a.Enum.Members) != len(b.Enum.Members) {
+		if !ir.SameName(a.Enum.Name, b.Enum.Name) || len(a.Enum.Members) != len(b.Enum.Members) ||
+			a.Enum.Default != b.Enum.Default { // and where a tag of it starts
 			return false
 		}
 		for i, m := range a.Enum.Members {

@@ -29,9 +29,11 @@ END_PROGRAM`}},
 		}
 	}
 	for name, lib := range map[string]string{
-		"other names":  `TYPE Mode : (Off, On, Tripped); END_TYPE`,
-		"other values": `TYPE Mode : (Idle, Run := 11, Fault); END_TYPE`,
-		"fewer":        `TYPE Mode : (Idle, Run := 10); END_TYPE`,
+		"other names":              `TYPE Mode : (Off, On, Tripped); END_TYPE`,
+		"other values":             `TYPE Mode : (Idle, Run := 11, Fault); END_TYPE`,
+		"fewer":                    `TYPE Mode : (Idle, Run := 10); END_TYPE`,
+		"same values, other names": `TYPE Mode : (Idle, Go := 10, Fault); END_TYPE`,
+		"other default":            `TYPE Mode : (Idle, Run := 10, Fault) := Run; END_TYPE`,
 	} {
 		_, err := runtime.New(opts(lib))
 		if err == nil || !strings.Contains(err.Error(), "TYPE Mode") {
