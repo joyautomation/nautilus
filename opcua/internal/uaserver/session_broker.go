@@ -26,7 +26,7 @@ type session struct {
 
 	PublishRequests chan PubReq
 
-	// mu guards activated. Every request is handled on the server's one message loop, so this
+	// mu guards activated and notices. Every request is handled on the server's one message loop, so this
 	// is defensive; channel is set at creation and never changes.
 	mu sync.Mutex
 	// channel is the secure channel the session was created on. ActivateSession must arrive on
@@ -38,9 +38,75 @@ type session struct {
 	// identity is who ActivateSession's user identity token says the user is:
 	// "anonymous", the only kind advertised (Part 4 §5.6.3).
 	identity string
+	// secured is set when the session was created on a channel that signs (Sign or
+	// SignAndEncrypt under a policy other than None), and applicationURI is then the client's
+	// ApplicationUri, which CreateSession has held to the URI in its certificate. Under None
+	// the client's ApplicationUri is only what it says, and applicationURI is empty. Both are
+	// set on the message loop at CreateSession and never change.
+	secured        bool
+	applicationURI string
 	// activated is set by the first successful ActivateSession. Until then the session can be
 	// activated or closed and nothing else.
 	activated bool
+	// notices are the subscriptions (id to the notice's sequence number) moved to another
+	// session that this one has not been told of yet: the next Publish it sends is answered
+	// with one (SubscriptionService.noticeFor). Guarded by mu.
+	notices map[uint32]uint32
+}
+
+// mayTransfer is whether a subscription of the session from may be transferred to the session
+// to: the TransferSubscriptions rule of Part 4 §5.14.7. Both must act for the same user. For an
+// anonymous user that means the same client application, which only a signed channel can
+// show: both sessions must have been created on one, with the same ApplicationUri (the one
+// their certificates carry). A session on None cannot take another's subscription, nor have
+// its own taken. Bad_UserAccessDenied otherwise. Sessions are read on the message loop, where
+// their identity and security are written.
+func mayTransfer(from, to *session) ua.StatusCode {
+	if from == nil || to == nil {
+		return ua.StatusBadUserAccessDenied
+	}
+	if from.identity != to.identity {
+		return ua.StatusBadUserAccessDenied
+	}
+	if from.identity == "anonymous" || from.identity == "" {
+		if !from.secured || !to.secured || from.applicationURI == "" || from.applicationURI != to.applicationURI {
+			return ua.StatusBadUserAccessDenied
+		}
+	}
+	return ua.StatusOK
+}
+
+// keepNotice keeps a notice that subscription id has moved, for the session's next Publish.
+func (s *session) keepNotice(id, seq uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notices == nil {
+		s.notices = map[uint32]uint32{}
+	}
+	s.notices[id] = seq
+}
+
+// dropNotice forgets a kept notice about subscription id.
+func (s *session) dropNotice(id uint32) {
+	s.mu.Lock()
+	delete(s.notices, id)
+	s.mu.Unlock()
+}
+
+// takeNotice removes and returns one kept notice, the lowest subscription id first.
+func (s *session) takeNotice() (id, seq uint32, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.notices {
+		if !ok || k < id {
+			id, ok = k, true
+		}
+	}
+	if ok {
+		seq = s.notices[id]
+		delete(s.notices, id)
+	}
+	return id, seq, ok
 }
 
 // boundTo reports whether sc is the channel the session was created on.

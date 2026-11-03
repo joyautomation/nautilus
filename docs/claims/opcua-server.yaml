@@ -584,3 +584,52 @@ claims:
       - go ./tools/blackbox TestBlackbox/001-P-browse-paging-dedup
       - go ./tools/blackbox TestBlackbox/001-F30-maxnodesperread-enforced
       - go ./tools/blackbox TestBlackbox/001-P-read-limit-boundary
+
+  - id: OPC-026
+    claim: >-
+      TranslateBrowsePathsToNodeIds resolves a path of browse names over the
+      references a Browse lists, in the project namespace and in ns=0, a
+      name compared exactly (case included), Bad_NoMatch for a path that
+      reaches nothing. Call answers each method: the Server object's
+      GetMonitoredItems and ResendData run for the calling session's own
+      subscriptions (Bad_UserAccessDenied for another's),
+      SetSubscriptionDurable and RequestServerStateChange are
+      Bad_NotExecutable with Executable false, and a method that is not the
+      object's is Bad_MethodInvalid. A Browse or BrowseNext names at most
+      500 nodes, a TranslateBrowsePathsToNodeIds at most 100 paths (of at
+      most 32 elements, Bad_QueryTooComplex past that), a Call at most 100
+      methods, each limit advertised in OperationLimits and
+      Bad_TooManyOperations past it.
+    source: "#what-a-client-sees"
+    tests:
+      - go ./opcua/server TestTranslateBrowsePathsFollowsBrowse
+      - go ./opcua/server TestOperationLimitsAreAdvertisedAndEnforced
+      - go ./opcua/server TestCallAnswersEachMethod
+      - go ./tools/blackbox TestBlackbox/001-F31-services-unsupported
+
+  - id: OPC-027
+    claim: >-
+      ModifyMonitoredItems changes an item's sampling interval and client
+      handle, revised as CreateMonitoredItems revises them, and the item is
+      sampled at the new interval and heard under the new handle;
+      SetPublishingMode pauses a subscription to keep-alives only and
+      resumes it with what its items hold, and a subscription created with
+      PublishingEnabled false starts paused. TransferSubscriptions moves a
+      subscription to another session only of the same client application
+      on a signed channel (same ApplicationUri), refuses a session on None
+      or another application with Bad_UserAccessDenied, sends current
+      values when asked, and tells the old session
+      Good_SubscriptionTransferred, never a session that has taken the
+      subscription back; a client on None claiming the application's
+      ApplicationUri is not that application.
+    source: "#subscriptions"
+    tests:
+      - go ./opcua/server TestModifyMonitoredItemsResamplesAndRehandles
+      - go ./opcua/server TestSetPublishingModeHoldsAndResumes
+      - go ./opcua/server TestTransferSubscriptionsToTheSameApplication
+      - go ./opcua/server TestTransferSubscriptionsAfterCloseSession
+      - go ./opcua/server TestTransferredBackIsNotReportedTransferred
+      - go ./opcua/server TestNoneClientClaimingAnApplicationUriIsNotIt
+      - go ./opcua/internal/uaserver TestMayTransfer
+      - go ./opcua/internal/uaserver TestChangesAfterTheTaskReturnedChangeNothing
+      - go ./tools/blackbox TestBlackbox/001-F31-services-unsupported

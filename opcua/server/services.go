@@ -26,6 +26,10 @@
 //   - CreateSubscription, ModifySubscription, CreateMonitoredItems,
 //     SetMonitoringMode, DeleteMonitoredItems: monitoring.go, each for a
 //     crash, a freeze or a Good that meant nothing.
+//   - ModifyMonitoredItems, SetPublishingMode, TransferSubscriptions
+//     (monitoring.go), TranslateBrowsePathsToNodeIds (browse.go) and Call
+//     (method.go): gopcua stubbed them Bad_ServiceUnsupported (black-box
+//     F-31, #431).
 //
 // They are installed between New and Start, and uaserver (gopcua's server
 // package, copied in) no longer carries its own versions of them, so these
@@ -152,11 +156,26 @@ func registerServices(srv *opcserver.Server, ns *namespace) {
 	srv.RegisterHandler(id.BrowseNextRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return browseNextNodes(srv, r)
 	})
+	srv.RegisterHandler(id.TranslateBrowsePathsToNodeIDsRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return translateBrowsePaths(srv, r)
+	})
+	srv.RegisterHandler(id.CallRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return callMethods(srv, ns, r)
+	})
 	srv.RegisterHandler(id.CreateSubscriptionRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 		return createSubscription(srv, ns, sc, r, reqID)
 	})
 	srv.RegisterHandler(id.ModifySubscriptionRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return modifySubscription(srv, ns, r)
+	})
+	srv.RegisterHandler(id.SetPublishingModeRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return setPublishingMode(srv, r)
+	})
+	srv.RegisterHandler(id.TransferSubscriptionsRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return transferSubscriptions(srv, ns, sc, r)
+	})
+	srv.RegisterHandler(id.ModifyMonitoredItemsRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return modifyMonitoredItems(srv, ns, r)
 	})
 	srv.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 		return createMonitoredItems(srv, ns, sc, r, reqID)
@@ -347,6 +366,12 @@ func accessAttribute(srv *opcserver.Server, nid *ua.NodeID, attr ua.AttributeID,
 	switch attr {
 	case ua.AttributeIDWriteMask, ua.AttributeIDUserWriteMask:
 		return value(uint32(0))
+	case ua.AttributeIDExecutable, ua.AttributeIDUserExecutable:
+		// Mandatory on a Method (Part 3 §5.7); true for the ones a Call
+		// runs (method.go), false for the rest.
+		if node.NodeClass() == ua.NodeClassMethod {
+			return value(executable(nid))
+		}
 	case ua.AttributeIDAccessLevel, ua.AttributeIDUserAccessLevel:
 		// gopcua's built-in variables do not all carry a NodeClass; one
 		// that answers a Value is a Variable whatever it says.

@@ -275,6 +275,17 @@ func (s *Server) Start(ctx context.Context) error {
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerWrite)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(maxNodesPerWrite)))
 	}
+	// And the Browse, TranslateBrowsePathsToNodeIds and Call limits their
+	// services enforce (browse.go, method.go).
+	for limit, n := range map[uint32]uint32{
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerBrowse:                        maxNodesPerBrowse,
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerTranslateBrowsePathsToNodeIDs: maxNodesPerTranslate,
+		id.Server_ServerCapabilities_OperationLimits_MaxNodesPerMethodCall:                    maxNodesPerMethodCall,
+	} {
+		if node := srv.Node(ua.NewNumericNodeID(0, limit)); node != nil {
+			node.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(n))
+		}
+	}
 	// The fastest a value is sampled is the change sweep, the same
 	// MinimumSamplingInterval every tag advertises.
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_MinSupportedSampleRate)); n != nil {
@@ -633,10 +644,10 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 		}
 		for _, mon := range mons {
 			live[mon.key] = struct{}{}
-			owed := false // an item new under monitoring, or back to Reporting, is owed the current value
+			owed := false // an item new under monitoring, back to Reporting or asked to resend is owed the current value
 			for _, w := range mon.items {
 				liveItems[w.item] = struct{}{}
-				if st := items[w.item]; watching(w.item) && (st == nil || st.mode != w.mode) {
+				if st := items[w.item]; w.watching() && (st == nil || st.mode != w.mode || st.resend != w.resend || st.req != w.req) {
 					owed = true
 				}
 			}
@@ -668,20 +679,20 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 }
 
 // watching reports whether item is a live monitored item with a request
-// behind it; gopcua's maps can hold less.
-func watching(item *opcserver.MonitoredItem) bool {
-	return item != nil && item.Sub != nil && item.Req != nil && item.Req.ItemToMonitor != nil && item.Req.RequestedParameters != nil
+// behind it; gopcua's maps can hold less. req is the item's request as
+// read under the lock (ModifyMonitoredItems replaces it).
+func watching(item *opcserver.MonitoredItem, req *ua.MonitoredItemCreateRequest) bool {
+	return item != nil && item.Sub != nil && req != nil && req.ItemToMonitor != nil && req.RequestedParameters != nil
 }
 
 // current reads the node once, for the attribute its first live item
 // watches, and reduces it to what the node would be told.
 func (s *Server) current(mon monitoredNode) (*ua.DataValue, reading, bool) {
 	for _, w := range mon.items {
-		item := w.item
-		if !watching(item) {
+		if !w.watching() {
 			continue
 		}
-		dv := s.ns.Attribute(mon.nid, item.Req.ItemToMonitor.AttributeID)
+		dv := s.ns.Attribute(mon.nid, w.req.ItemToMonitor.AttributeID)
 		return dv, readingOf(dv), true
 	}
 	return nil, reading{}, false
@@ -702,13 +713,18 @@ type monitoredNode struct {
 	items []watched
 }
 
-// watched is a monitored item with its mode as it was when the lock was
-// held: SetMonitoringMode writes the mode under gopcua's lock, and the
-// sweep reads it there.
+// watched is a monitored item with its mode, request and resend count as
+// they were when the lock was held: SetMonitoringMode, ModifyMonitoredItems
+// and a resend write them under gopcua's lock, and the sweep reads them
+// there.
 type watched struct {
-	item *opcserver.MonitoredItem
-	mode ua.MonitoringMode
+	item   *opcserver.MonitoredItem
+	mode   ua.MonitoringMode
+	req    *ua.MonitoredItemCreateRequest
+	resend uint32
 }
+
+func (w watched) watching() bool { return watching(w.item, w.req) }
 
 // monitored lists the nodes of ours under monitoring right now. gopcua's
 // maps are read under its lock and copied out, so no notification is ever
@@ -728,7 +744,7 @@ func (s *Server) monitored() []monitoredNode {
 		mon := monitoredNode{key: k, nid: nid, items: make([]watched, 0, len(items))}
 		for _, item := range items {
 			if item != nil {
-				mon.items = append(mon.items, watched{item: item, mode: item.Mode})
+				mon.items = append(mon.items, watched{item: item, mode: item.Mode, req: item.Req, resend: item.Resend})
 			}
 		}
 		out = append(out, mon)
@@ -739,14 +755,16 @@ func (s *Server) monitored() []monitoredNode {
 
 // itemState is one monitored item's sampling: the interval it was granted
 // (CreateMonitoredItems revised it to a multiple of the sweep), when it was
-// last sent a value, whether its node has changed since, and the mode it
-// was last seen in.
+// last sent a value, whether its node has changed since, and the mode,
+// request and resend count it was last seen with.
 type itemState struct {
-	every time.Duration
-	sent  time.Time
-	dirty bool
-	mode  ua.MonitoringMode
-	last  reading // what the item was last told, for one with an IndexRange
+	every  time.Duration
+	sent   time.Time
+	dirty  bool
+	mode   ua.MonitoringMode
+	req    *ua.MonitoredItemCreateRequest // the interval is req's
+	resend uint32
+	last   reading // what the item was last told, for one with an IndexRange
 }
 
 // notify reads the node once and offers the reading to every item watching
@@ -771,16 +789,21 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 	done := true
 	for _, w := range mon.items {
 		item := w.item
-		if !watching(item) {
+		if !w.watching() {
 			continue
 		}
 		st := items[item]
 		if st == nil {
-			st = &itemState{every: s.sampling(item), dirty: true, mode: w.mode}
+			st = &itemState{every: s.sampling(item, w.req), dirty: true, mode: w.mode, req: w.req, resend: w.resend}
 			items[item] = st
 		}
 		if changed {
 			st.dirty = true
+		}
+		if w.req != st.req {
+			// ModifyMonitoredItems: the item samples at its new interval from
+			// now; a value it is owed waits no longer than that.
+			st.every, st.req = s.sampling(item, w.req), w.req
 		}
 		resumed := false
 		if w.mode != st.mode {
@@ -788,6 +811,11 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 				st.dirty, resumed = true, true
 			}
 			st.mode = w.mode
+		}
+		if w.resend != st.resend {
+			// Owed the current value, changed or not (a transfer with
+			// sendInitialValues, ResendData, a new client handle).
+			st.dirty, resumed, st.resend = true, true, w.resend
 		}
 		if !st.dirty || st.mode != ua.MonitoringModeReporting {
 			continue
@@ -797,7 +825,7 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 			continue
 		}
 		told, mine := dv, cur
-		if rng := item.Req.ItemToMonitor.IndexRange; rng != "" {
+		if rng := w.req.ItemToMonitor.IndexRange; rng != "" {
 			told = indexRange(dv, rng)
 			mine = readingOf(told)
 			if !resumed && !st.sent.IsZero() && st.last.equal(mine) {
@@ -805,7 +833,7 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 				continue
 			}
 		}
-		n := &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: wireValue(told)}
+		n := &ua.MonitoredItemNotification{ClientHandle: w.req.RequestedParameters.ClientHandle, Value: wireValue(told)}
 		select {
 		case item.Sub.NotifyChannel <- n:
 			st.sent, st.dirty, st.last = now, false, mine
@@ -831,10 +859,10 @@ func (r reading) equal(o reading) bool {
 }
 
 // sampling is the interval an item was granted, the same arithmetic
-// CreateMonitoredItems answered with.
-func (s *Server) sampling(item *opcserver.MonitoredItem) time.Duration {
+// CreateMonitoredItems and ModifyMonitoredItems answered with.
+func (s *Server) sampling(item *opcserver.MonitoredItem, req *ua.MonitoredItemCreateRequest) time.Duration {
 	publishing, _, _ := item.Sub.Revised()
-	ms := reviseSampling(item.Req.RequestedParameters.SamplingInterval, publishing, s.opts.Sweep)
+	ms := reviseSampling(req.RequestedParameters.SamplingInterval, publishing, s.opts.Sweep)
 	return time.Duration(ms * float64(time.Millisecond))
 }
 

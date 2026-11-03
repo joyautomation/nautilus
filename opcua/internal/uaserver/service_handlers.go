@@ -18,11 +18,12 @@ type Handler func(*uasc.SecureChannel, ua.Request, uint32) (ua.Response, error)
 
 func (s *Server) initHandlers() {
 	// FindServers, GetEndpoints, Read, Write, Browse, BrowseNext,
-	// ModifySubscription, CreateMonitoredItems, SetMonitoringMode and
-	// DeleteMonitoredItems have no handler here: opcua/server registers its
-	// own before Start, and gopcua's versions of them, which it shadowed,
-	// were removed. Without a registration they answer
-	// Bad_ServiceUnsupported.
+	// TranslateBrowsePathsToNodeIds, Call, ModifySubscription,
+	// SetPublishingMode, TransferSubscriptions, CreateMonitoredItems,
+	// ModifyMonitoredItems, SetMonitoringMode and DeleteMonitoredItems have
+	// no handler here: opcua/server registers its own before Start, and
+	// gopcua's versions of them, which it shadowed or stubbed, were removed.
+	// Without a registration they answer Bad_ServiceUnsupported.
 
 	// s.registerHandlerFunc(id.ServiceFault_Encoding_DefaultBinary, handleServiceFault)
 
@@ -48,7 +49,6 @@ func (s *Server) initHandlers() {
 	s.RegisterHandler(id.DeleteReferencesRequest_Encoding_DefaultBinary, node.DeleteReferences)
 
 	view := &ViewService{s}
-	s.RegisterHandler(id.TranslateBrowsePathsToNodeIDsRequest_Encoding_DefaultBinary, view.TranslateBrowsePathsToNodeIDs)
 	s.RegisterHandler(id.RegisterNodesRequest_Encoding_DefaultBinary, view.RegisterNodes)
 	s.RegisterHandler(id.UnregisterNodesRequest_Encoding_DefaultBinary, view.UnregisterNodes)
 
@@ -60,20 +60,14 @@ func (s *Server) initHandlers() {
 	s.RegisterHandler(id.HistoryReadRequest_Encoding_DefaultBinary, attr.HistoryRead)
 	s.RegisterHandler(id.HistoryUpdateRequest_Encoding_DefaultBinary, attr.HistoryUpdate)
 
-	method := &MethodService{s}
-	// s.registerHandler(id.CallMethodRequest_Encoding_DefaultBinary, method.CallMethod) // todo(fs): I think this is bogus
-	s.RegisterHandler(id.CallRequest_Encoding_DefaultBinary, method.Call)
-
 	sub := &SubscriptionService{
 		srv:  s,
 		Subs: make(map[uint32]*Subscription),
 	}
 	s.SubscriptionService = sub
 	s.RegisterHandler(id.CreateSubscriptionRequest_Encoding_DefaultBinary, sub.CreateSubscription)
-	s.RegisterHandler(id.SetPublishingModeRequest_Encoding_DefaultBinary, sub.SetPublishingMode)
 	s.RegisterHandler(id.PublishRequest_Encoding_DefaultBinary, sub.Publish)
 	s.RegisterHandler(id.RepublishRequest_Encoding_DefaultBinary, sub.Republish)
-	s.RegisterHandler(id.TransferSubscriptionsRequest_Encoding_DefaultBinary, sub.TransferSubscriptions)
 	s.RegisterHandler(id.DeleteSubscriptionsRequest_Encoding_DefaultBinary, sub.DeleteSubscriptions)
 
 	item := &MonitoredItemService{
@@ -86,7 +80,6 @@ func (s *Server) initHandlers() {
 	// s.registerHandler(id.MonitoredItemCreateRequest_Encoding_DefaultBinary, item.MonitoredItemCreate)
 	//s.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary, s.CreateMonitoredItems)
 	// s.registerHandler(id.MonitoredItemModifyRequest_Encoding_DefaultBinary, item.MonitoredItemModify)
-	s.RegisterHandler(id.ModifyMonitoredItemsRequest_Encoding_DefaultBinary, item.ModifyMonitoredItems)
 	s.RegisterHandler(id.SetTriggeringRequest_Encoding_DefaultBinary, item.SetTriggering)
 }
 

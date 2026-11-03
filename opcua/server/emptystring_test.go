@@ -161,7 +161,7 @@ func TestEmptyStringIsNotifiedAsEmptyNotNull(t *testing.T) {
 			MonitoringMode:      ua.MonitoringModeReporting,
 			RequestedParameters: &ua.MonitoringParameters{ClientHandle: 7, SamplingInterval: -1},
 		}}
-		mon := monitoredNode{key: nid.String(), nid: nid, items: []watched{{item: item, mode: ua.MonitoringModeReporting}}}
+		mon := monitoredNode{key: nid.String(), nid: nid, items: []watched{{item: item, mode: ua.MonitoringModeReporting, req: item.Req}}}
 		if !s.notify(mon, map[string]reading{}, false, map[*opcserver.MonitoredItem]*itemState{}, time.Now()) {
 			t.Fatalf("%s: notify owed a value it could not send", tc.addr)
 		}

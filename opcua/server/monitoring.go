@@ -132,7 +132,7 @@ func subscriptionOf(srv *opcserver.Server, hdr *ua.RequestHeader, id uint32) (*o
 	subs.Mu.Lock()
 	sub := subs.Subs[id]
 	subs.Mu.Unlock()
-	if sub == nil || sub.Session == nil || sub.Session.AuthTokenID == nil || sess.AuthTokenID == nil || sub.Session.AuthTokenID.String() != sess.AuthTokenID.String() {
+	if sub == nil || !sub.OwnedBy(sess) {
 		return nil, ua.StatusBadSubscriptionIDInvalid
 	}
 	return sub, ua.StatusGood
@@ -165,7 +165,7 @@ func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureC
 		return nil, ua.StatusBadNothingToDo
 	}
 	results := make([]*ua.MonitoredItemCreateResult, len(req.ItemsToCreate))
-	var foreign []*opcserver.MonitoredItem // outside the project namespace: owed one value, below
+	var foreign []owed // outside the project namespace: owed one value, below
 	publishing, _, _ := sub.Revised()
 	mi.Mu.Lock()
 	for i, item := range req.ItemsToCreate {
@@ -186,26 +186,35 @@ func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureC
 			FilterResult:            ua.NewExtensionObject(nil),
 		}
 		if item.ItemToMonitor.NodeID.Namespace() != ns.id && item.MonitoringMode == ua.MonitoringModeReporting {
-			foreign = append(foreign, booked)
+			foreign = append(foreign, owed{booked, item})
 		}
 	}
 	mi.Mu.Unlock()
-	for _, item := range foreign {
-		go initialValue(srv, item)
+	for _, o := range foreign {
+		go initialValue(srv, o.item, o.req)
 	}
 	return &ua.CreateMonitoredItemsResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }
 
+// owed is an item on a node outside the project namespace that is owed its
+// value, with its request as read under the lock.
+type owed struct {
+	item *opcserver.MonitoredItem
+	req  *ua.MonitoredItemCreateRequest
+}
+
 // initialValue sends an item on a node outside the project namespace the
-// one value it will ever get: those nodes are gopcua's (the Server object
-// and its variables) and nothing sweeps them. The send holds no lock and
-// gives up when the subscription is not draining its channel, so a
-// subscription that has died cannot hold anything else up.
-func initialValue(srv *opcserver.Server, item *opcserver.MonitoredItem) {
-	if !watching(item) {
+// one value it will ever get (and again when it is asked to resend): those
+// nodes are gopcua's (the Server object and its variables) and nothing
+// sweeps them. req is the item's request as it was read under the lock.
+// The send holds no lock and gives up when the subscription is not
+// draining its channel, so a subscription that has died cannot hold
+// anything else up.
+func initialValue(srv *opcserver.Server, item *opcserver.MonitoredItem, req *ua.MonitoredItemCreateRequest) {
+	if !watching(item, req) {
 		return
 	}
-	nid, attr := item.Req.ItemToMonitor.NodeID, item.Req.ItemToMonitor.AttributeID
+	nid, attr := req.ItemToMonitor.NodeID, req.ItemToMonitor.AttributeID
 	space, err := srv.Namespace(int(nid.Namespace()))
 	if err != nil {
 		return
@@ -214,11 +223,11 @@ func initialValue(srv *opcserver.Server, item *opcserver.MonitoredItem) {
 	if dv == nil {
 		dv = status(ua.StatusBadNodeIDUnknown)
 	}
-	if rng := item.Req.ItemToMonitor.IndexRange; rng != "" {
+	if rng := req.ItemToMonitor.IndexRange; rng != "" {
 		dv = indexRange(dv, rng)
 	}
 	select {
-	case item.Sub.NotifyChannel <- &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: wireValue(dv)}:
+	case item.Sub.NotifyChannel <- &ua.MonitoredItemNotification{ClientHandle: req.RequestedParameters.ClientHandle, Value: wireValue(dv)}:
 	case <-time.After(5 * time.Second):
 	}
 }
@@ -361,4 +370,165 @@ func deleteMonitoredItems(srv *opcserver.Server, r ua.Request) (ua.Response, err
 	}
 	sub.Fence() // as in setMonitoringMode: nothing of a deleted item is published after this answer
 	return &ua.DeleteMonitoredItemsResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
+}
+
+// modifyMonitoredItems changes the parameters of items of the named
+// subscription (Part 4 §5.13.3) and answers each with the values granted,
+// revised exactly as CreateMonitoredItems revises them: the sampling
+// interval to a multiple of the sweep, which the sweep then samples the
+// item at; the queue size to 1. The filter is not acted on, as it is not
+// at creation. A new client handle is used from the next notification on,
+// and the item is sent its current value under it, since whatever it had
+// queued under the old one is dropped. An id that is not an item of the
+// subscription is Bad_MonitoredItemIdInvalid in its own result.
+//
+// The item's request is replaced whole under gopcua's lock, never written
+// in place: the sweep reads the request it copied out under that lock.
+func modifyMonitoredItems(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Response, error) {
+	req, ok := r.(*ua.ModifyMonitoredItemsRequest)
+	if !ok {
+		return nil, ua.StatusBadRequestTypeInvalid
+	}
+	mi := srv.MonitoredItemService
+	if mi == nil {
+		return nil, ua.StatusBadInternalError
+	}
+	sub, code := subscriptionOf(srv, req.RequestHeader, req.SubscriptionID)
+	if code != ua.StatusGood {
+		return nil, code
+	}
+	if len(req.ItemsToModify) == 0 {
+		return nil, ua.StatusBadNothingToDo
+	}
+	publishing, _, _ := sub.Revised()
+	results := make([]*ua.MonitoredItemModifyResult, len(req.ItemsToModify))
+	var foreign []owed
+	mi.Mu.Lock()
+	for i, m := range req.ItemsToModify {
+		var item *opcserver.MonitoredItem
+		if m != nil {
+			item = mi.Items[m.MonitoredItemID]
+		}
+		switch {
+		case item == nil || item.Sub != sub || item.Req == nil || item.Req.ItemToMonitor == nil || item.Req.RequestedParameters == nil:
+			results[i] = &ua.MonitoredItemModifyResult{StatusCode: ua.StatusBadMonitoredItemIDInvalid, FilterResult: ua.NewExtensionObject(nil)}
+			continue
+		case m.RequestedParameters == nil:
+			results[i] = &ua.MonitoredItemModifyResult{StatusCode: ua.StatusBadInvalidArgument, FilterResult: ua.NewExtensionObject(nil)}
+			continue
+		}
+		params := *m.RequestedParameters
+		old := item.Req
+		item.Req = &ua.MonitoredItemCreateRequest{ItemToMonitor: old.ItemToMonitor, MonitoringMode: old.MonitoringMode, RequestedParameters: &params}
+		if params.ClientHandle != old.RequestedParameters.ClientHandle {
+			if old.ItemToMonitor.NodeID.Namespace() != ns.id {
+				if item.Mode == ua.MonitoringModeReporting {
+					foreign = append(foreign, owed{item, item.Req})
+				}
+			} else {
+				item.Resend++
+			}
+		}
+		results[i] = &ua.MonitoredItemModifyResult{
+			StatusCode:              ua.StatusGood,
+			RevisedSamplingInterval: reviseSampling(params.SamplingInterval, publishing, ns.sweep),
+			RevisedQueueSize:        1,
+			FilterResult:            ua.NewExtensionObject(nil),
+		}
+	}
+	mi.Mu.Unlock()
+	for _, o := range foreign {
+		go initialValue(srv, o.item, o.req)
+	}
+	sub.Fence() // nothing composed under an old client handle goes out after this answer
+	return &ua.ModifyMonitoredItemsResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
+}
+
+// setPublishingMode turns publishing on or off for each subscription named
+// (Part 4 §5.14.4), and answers once each subscription's publish loop has
+// taken it. Disabled, a subscription sends keep-alives only and keeps the
+// latest value of each item; enabled again, it publishes them. Another
+// session's subscription, or one that is not there, is
+// Bad_SubscriptionIdInvalid in its own result.
+func setPublishingMode(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
+	req, ok := r.(*ua.SetPublishingModeRequest)
+	if !ok {
+		return nil, ua.StatusBadRequestTypeInvalid
+	}
+	if srv.SubscriptionService == nil {
+		return nil, ua.StatusBadInternalError
+	}
+	if srv.Session(req.RequestHeader) == nil {
+		return nil, ua.StatusBadSessionIDInvalid
+	}
+	if len(req.SubscriptionIDs) == 0 {
+		return nil, ua.StatusBadNothingToDo
+	}
+	results := make([]ua.StatusCode, len(req.SubscriptionIDs))
+	for i, id := range req.SubscriptionIDs {
+		sub, code := subscriptionOf(srv, req.RequestHeader, id)
+		switch {
+		case code != ua.StatusGood:
+			results[i] = code
+		case !sub.SetPublishing(req.PublishingEnabled):
+			results[i] = ua.StatusBadSubscriptionIDInvalid // its task returned: the subscription is gone
+		default:
+			results[i] = ua.StatusGood
+		}
+	}
+	return &ua.SetPublishingModeResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
+}
+
+// transferSubscriptions moves each subscription named to the requesting
+// session (Part 4 §5.14.7; uaserver's Transfer says who may take what).
+// With sendInitialValues, each Reporting item of a moved subscription is
+// sent its current value in the next publishing cycle. No message is kept
+// for retransmission, so no sequence number is available.
+func transferSubscriptions(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request) (ua.Response, error) {
+	req, ok := r.(*ua.TransferSubscriptionsRequest)
+	if !ok {
+		return nil, ua.StatusBadRequestTypeInvalid
+	}
+	subs := srv.SubscriptionService
+	if subs == nil {
+		return nil, ua.StatusBadInternalError
+	}
+	if len(req.SubscriptionIDs) == 0 {
+		return nil, ua.StatusBadNothingToDo
+	}
+	results := make([]*ua.TransferResult, len(req.SubscriptionIDs))
+	for i, id := range req.SubscriptionIDs {
+		sub, code := subs.Transfer(sc, req.RequestHeader, id)
+		if code == ua.StatusGood && req.SendInitialValues {
+			resendValues(srv, ns, sub)
+		}
+		results[i] = &ua.TransferResult{StatusCode: code, AvailableSequenceNumbers: []uint32{}}
+	}
+	return &ua.TransferSubscriptionsResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
+}
+
+// resendValues has every Reporting item of sub sent its current value,
+// changed or not: a project tag's by the sweep, which sees the item's
+// Resend move, and any other node's here, with no lock held.
+func resendValues(srv *opcserver.Server, ns *namespace, sub *opcserver.Subscription) {
+	mi := srv.MonitoredItemService
+	if mi == nil {
+		return
+	}
+	var foreign []owed
+	mi.Mu.Lock()
+	for _, item := range mi.Subs[sub.ID] {
+		if !watching(item, item.Req) || item.Mode != ua.MonitoringModeReporting {
+			continue
+		}
+		if item.Req.ItemToMonitor.NodeID.Namespace() != ns.id {
+			foreign = append(foreign, owed{item, item.Req})
+			continue
+		}
+		item.Resend++
+	}
+	mi.Mu.Unlock()
+	for _, o := range foreign {
+		go initialValue(srv, o.item, o.req)
+	}
 }

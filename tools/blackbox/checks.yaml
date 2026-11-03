@@ -665,7 +665,6 @@ checks:
   note: 'gap. ModifyMonitoredItems, ModifySubscription, SetPublishingMode, TransferSubscriptions,
     TranslateBrowsePathsToNodeIds, Call all return Bad_ServiceUnsupported.'
   group: new findings of this run
-  open: '#431'
 - id: 001-O-mutex-deadlock
   run: 2026-10-24-001b
   finding: F-26
