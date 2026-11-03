@@ -1,7 +1,12 @@
 """Pass: every tag Variable has AccessLevel == UserAccessLevel == CurrentRead (1); a Write to
 a scalar, a BOOL, a UDT member and an array is answered Bad_UserAccessDenied and the value
 is unchanged; a Write to the folder or a UDT Object, or to a Description attribute, is
-Bad_NotWritable. Project: evidence/typed. Oracle: asyncua + guide (Security)."""
+Bad_NotWritable. Every tag written to is one evidence/typed/main.st never writes (Level, Flag
+and IntArr are setpoints; P101.Drive.Amps is a member the program leaves alone), so "value
+unchanged" is a property of the refused write, not of scan timing.
+Rewritten 2026-11-03 per runs/RECONCILIATION-2026-11-03.md ruling 2 (was: P101.Drive.Speed,
+which the program rewrites every scan).
+Project: evidence/typed. Oracle: asyncua + guide (Security)."""
 import asyncio, os, sys
 from asyncua import Client, ua
 EP = os.environ["SUT_OPCUA"]; F = []
@@ -23,7 +28,7 @@ async def main():
             al = (await v.read_attribute(A.AccessLevel)).Value.Value; ual = (await v.read_attribute(A.UserAccessLevel)).Value.Value
             if not (al == 1 and ual == 1): bad.append((v.nodeid.to_string(), al, ual))
         ok(len(vs) > 30 and not bad, f"{len(vs)} Variables all AccessLevel=UserAccessLevel=1; exceptions {bad}")
-        for nid, var in [("ns=1;s=Level", ua.Variant(9.9)), ("ns=1;s=Flag", ua.Variant(False)), ("ns=1;s=P101.Drive.Speed", ua.Variant(9.9)), ("ns=1;s=IntArr", ua.Variant([9, 9, 9], ua.VariantType.Int16)), ("ns=1;s=level", ua.Variant(9.9))]:
+        for nid, var in [("ns=1;s=Level", ua.Variant(9.9)), ("ns=1;s=Flag", ua.Variant(False)), ("ns=1;s=P101.Drive.Amps", ua.Variant(9.9)), ("ns=1;s=IntArr", ua.Variant([9, 9, 9], ua.VariantType.Int16)), ("ns=1;s=level", ua.Variant(9.9))]:
             before = await c.get_node(nid).read_value()
             r = await write(c, nid, A.Value, var)
             after = await c.get_node(nid).read_value()

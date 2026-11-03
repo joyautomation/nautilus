@@ -2,7 +2,10 @@
 subscriber - the default DataChangeFilter trigger is StatusValue (Part 4 §7.17.2). Drives
 a pymodbus slave on SUT_MODBUS up, subscribes TC_A_Tpv with an explicit StatusValue
 trigger, kills the slave, and expects a notification carrying Uncertain_LastUsableValue.
-release. Project: evidence/mb. Oracle: asyncua + Part 4; pymodbus as the device."""
+release. Project: evidence/mb. Oracle: asyncua + Part 4; pymodbus as the device.
+Rewritten 2026-11-03 per runs/RECONCILIATION-2026-11-03.md ruling 8: the item is created with
+sub.create_monitored_items([...]) so asyncua registers its client handle (the parent created it
+with c.uaclient.create_monitored_items, and asyncua dropped every notification as unknown)."""
 import asyncio, os, sys, subprocess, time
 from asyncua import Client, ua
 EP = os.environ["SUT_OPCUA"]; MB = os.environ["SUT_MODBUS"]; F = []
@@ -28,12 +31,12 @@ async def main():
             await asyncio.sleep(0.25)
         ok(dv.StatusCode.is_good(), f"device up: Read {dv.StatusCode.name} {dv.Value.Value if dv.Value else None}")
         h = H(); sub = await c.create_subscription(100, h)
-        p = ua.CreateMonitoredItemsParameters(); p.SubscriptionId = sub.subscription_id; p.TimestampsToReturn = ua.TimestampsToReturn.Both
         r = ua.MonitoredItemCreateRequest(); r.ItemToMonitor = ua.ReadValueId(NodeId=n.nodeid, AttributeId=ua.AttributeIds.Value); r.MonitoringMode = ua.MonitoringMode.Reporting
         f = ua.DataChangeFilter(); f.Trigger = ua.DataChangeTrigger.StatusValue; f.DeadbandType = 0; f.DeadbandValue = 0.0
         r.RequestedParameters = ua.MonitoringParameters(ClientHandle=1, SamplingInterval=100, QueueSize=10, DiscardOldest=True, Filter=f)
-        p.ItemsToCreate = [r]; res = (await c.uaclient.create_monitored_items(p))[0]
-        print(f"CreateMonitoredItems with StatusValue trigger: {res.StatusCode.name} filter result {res.FilterResult}")
+        res = (await sub.create_monitored_items([r]))[0]   # through the subscription, so asyncua registers the handle
+        print(f"CreateMonitoredItems with StatusValue trigger: {res.name if isinstance(res, ua.StatusCode) else f'monitored item id {res}'}")
+        ok(not isinstance(res, ua.StatusCode), "the monitored item was created")
         await asyncio.sleep(1.0); print("initial notifications:", h.ev); h.ev.clear()
         s.kill(); s.wait(); t0 = time.monotonic(); print("slave killed")
         for _ in range(180):

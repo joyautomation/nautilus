@@ -29,6 +29,15 @@ projects:
   projects/2026-10-24-001d/typed:
     http: http://localhost:8080
     opcua: opc.tcp://localhost:4840
+  projects/2026-11-03-001/typed:
+    http: http://localhost:8080
+    opcua: opc.tcp://localhost:4840
+  projects/2026-11-03-001/mb:
+    http: http://localhost:8082
+    opcua: opc.tcp://localhost:4842
+    modbus: 127.0.0.1:5020
+  projects/2026-11-03-002/pumps:
+    http: http://127.0.0.1:8080
 checks:
 - id: 001-F01-namespace-index
   run: 2026-10-24-001
@@ -76,20 +85,6 @@ checks:
   note: the access-level half of F-04
   expected_today: pass
   group: findings of the parent run, in scope (fixed-unverified -> verified)
-- id: 001-F04b-server-identity-mandatory-vars
-  run: 2026-10-24-001
-  finding: F-04
-  disposition: gate
-  surface: opcua
-  oracle: asyncua + Part 4/5
-  project: projects/2026-10-24-001/typed
-  script: checks/2026-10-24-001/001-F04b-server-identity-mandatory-vars.py
-  env: {}
-  note: 'the rest of F-04 (issue 424): ApplicationUri, BuildInfo identity, ServerArray/ServiceLevel/Auditing. Also shows BuildInfo
-    (i=2260) reading Good with a null value while ServerStatus.BuildInfo is populated'
-  expected_today: fail
-  group: findings of the parent run, in scope (fixed-unverified -> verified)
-  open: '#424'
 - id: 001-F05-schemeless-endpoint
   run: 2026-10-24-001
   finding: F-05
@@ -220,20 +215,6 @@ checks:
   note: issue 423; starts its own instances on 8095/4855; 10 s per case on the bug
   expected_today: fail
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
-- id: 001-F15-status-change-notified
-  run: 2026-10-24-001
-  finding: F-15
-  disposition: release
-  surface: opcua
-  oracle: asyncua + Part 4; pymodbus as the device
-  project: projects/2026-10-24-001/mb
-  script: checks/2026-10-24-001/001-F15-status-change-notified.py
-  env:
-    SUT_MODBUS: 127.0.0.1:5020
-  note: issue 419; starts a pymodbus slave; the driver's reconnect backoff can be 60 s, so allow 5 min
-  expected_today: fail
-  group: findings of the parent run, out of scope (filed), rerun because they were cheap
-  open: '#419'
 - id: 001-F16-undelivered-tag-has-node
   run: 2026-10-24-001
   finding: F-16
@@ -386,29 +367,6 @@ checks:
   env: {}
   expected_today: pass
   group: what passed (the regression suite)
-- id: 001-P-type-table
-  run: 2026-10-24-001
-  pass: the guide's type table row by row with init values
-  disposition: once
-  surface: opcua
-  oracle: asyncua
-  project: projects/2026-10-24-001/typed
-  script: checks/2026-10-24-001/001-P-type-table.py
-  env: {}
-  note: "was gate. Superseded by the fix for F-11 (nautilus#425): an enumeration's DataType is now its own Enumeration subtype (ns=1;s=type:Mode), not i=6, so its rows for Mode1 and P101.State (want i=6) fail by design while every other row still passes. The new enumeration row is covered by 001-F11-enum-names and the opcua/server enumeration tests (OPC-024); the other rows by TestReadsCarryTypesQualityAndTimestamps and TestEveryIntegerWidthReadsAsItsOwnType. For the operator to rule on at reconciliation (the tester's check could read the enumeration's DataType as a subtype of Enumeration). Also: fails after 001-F06 has run on a build with the bug."
-  expected_today: pass
-  group: what passed (the regression suite)
-- id: 001-P-read-only-tags
-  run: 2026-10-24-001
-  pass: AccessLevel CurrentRead everywhere; writes refused Bad_UserAccessDenied / Bad_NotWritable
-  disposition: gate
-  surface: opcua
-  oracle: asyncua + guide
-  project: projects/2026-10-24-001/typed
-  script: checks/2026-10-24-001/001-P-read-only-tags.py
-  env: {}
-  expected_today: pass
-  group: what passed (the regression suite)
 - id: 001-P-read-error-codes
   run: 2026-10-24-001
   pass: Read answers Bad_NodeIdUnknown / Bad_AttributeIdInvalid per Part 4
@@ -435,7 +393,7 @@ checks:
   run: 2026-10-24-001
   pass: policy None, mode None, anonymous token only
   disposition: once
-  note: "was gate. Superseded by OPC UA writes slice 2 (docs/design/opcua-server-writes.md §2.1, §7.4): every address now also offers Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under SignAndEncrypt beside None, so 'every endpoint is None/None' no longer holds by design. Its other half (anonymous tokens only) still passes. The new endpoint set is covered by OPC-016 (TestForeignAsyncuaSecure); the writes brief's tester checks will replace this one. For the operator to rule on at reconciliation."
+  note: "was gate. Superseded by OPC UA writes slice 2 (docs/design/opcua-server-writes.md §2.1, §7.4): every address now also offers Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under SignAndEncrypt beside None, so 'every endpoint is None/None' no longer holds by design. Its other half (anonymous tokens only) still passes. The new endpoint set is covered by OPC-016 (TestForeignAsyncuaSecure); the writes brief's tester checks will replace this one. For the operator to rule on at reconciliation. Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 7): RETIRED. Its anonymous-token half moves into the OPC UA writes brief's checks."
   surface: opcua
   oracle: asyncua
   project: projects/2026-10-24-001/typed
@@ -909,19 +867,6 @@ checks:
   script: checks/2026-11-01-002/002-P-virtual-time-exact.sh
   env: {}
   expected_today: pass (1.3 s)
-- id: 002-P-api-live-reaction
-  run: 2026-11-01-002
-  pass: through POST /api/forces and POST /api/tags the running station starts the lead, adds the lag, stops both
-    and alternates; enum, member and undeclared-tag writes are refused with 400; a TIME literal to a TIME tag
-    lands and a string that is no duration is 4xx; /api/meta lists enum members
-  disposition: gate
-  surface: api
-  oracle: website:/guides/tag-model/ (member writes), /guides/forcing/
-  project: projects/2026-11-01-002/pumps
-  script: checks/2026-11-01-002/002-P-api-live-reaction.py
-  env: {}
-  expected_today: pass (3.1 s)
-  note: "Reconciliation: nautilus#519 changed the contract: a TIME tag takes its IEC literal over HTTP. The imported check now expects T#8h to land and a non-duration string to be refused; the tester should confirm."
 - id: 002-P-force-alarm-delay-live
   run: 2026-11-01-002
   pass: on a running controller a forced high level raises HiLevelAlm only after the 2 s on-delay; a write to a
@@ -980,22 +925,6 @@ checks:
   note: 'needs network access to the website; it checks the published site, not the release [project in the run:
     ''none''; the runner needs one, and the check does not use it]'
   expected_today: fail (functions.md#enumerations → 404)
-- id: 002-F05-run-hours-survive-restart
-  run: 2026-11-01-002
-  finding: F-05
-  disposition: once
-  surface: cli
-  oracle: customer expectation (Logix tag retention, Codesys RETAIN/PERSISTENT, TIA retentive DB)
-  project: projects/2026-11-01-002/pumps
-  script: checks/2026-11-01-002/002-F05-run-hours-survive-restart.sh
-  env:
-    port: 18081
-  note: 'guards a gap against expectation, not against the docs (the redundancy page documents that state re-seeds).
-    If the product rules this wontfix, retire the check rather than invert it was release. James''s decision (2026-11-02):
-    retention is opt-in, CODESYS-style (retain: true, VAR RETAIN; #494); this check expects every state tag kept
-    under retain: {} and fails on the project as written by design (it passes with retain: true on P1_Stats). For
-    the operator to rule on at reconciliation.'
-  expected_today: fail (P1_Stats {Hours 5.0008} before restart → {Hours 0} after)
 - id: 002-F06-check-empty-manifest
   run: 2026-11-01-002
   finding: F-06
@@ -1062,18 +991,6 @@ checks:
   env: {}
   note: '[project in the run: ''none (scaffolds its own)''; the runner needs one, and the check does not use it]'
   expected_today: fail (?? p, ?? retain.json)
-- id: 002-F14-scaffold-blocks-claim
-  run: 2026-11-01-002
-  finding: F-14
-  disposition: once
-  surface: website:/guides/blocks-and-tasks/
-  oracle: the website
-  project: projects/2026-11-01-002/pumps
-  script: checks/2026-11-01-002/002-F14-scaffold-blocks-claim.sh
-  env: {}
-  note: 'encodes the page''s sentence. If the page is corrected rather than the scaffold, retire it [project in
-    the run: ''none (scaffolds its own)''; the runner needs one, and the check does not use it]'
-  expected_today: fail
 - id: 002-F15-manifest-diag-location
   run: 2026-11-01-002
   finding: F-15
@@ -1084,19 +1001,6 @@ checks:
   script: checks/2026-11-01-002/002-F15-manifest-diag-location.sh
   env: {}
   expected_today: 'fail (".: tag Lead …")'
-- id: 002-F16-pt-integer-refused
-  run: 2026-11-01-002
-  finding: F-16
-  disposition: once
-  surface: cli
-  oracle: IEC 61131-3 (no implicit ANY_INT → TIME); website:/coming-from/studio-5000/
-  project: projects/2026-11-01-002/pumps
-  script: checks/2026-11-01-002/002-F16-pt-integer-refused.sh
-  env: {}
-  expected_today: fail (0 errors)
-  note: 'was gate. James''s decision (2026-11-02): an integer where a TIME is expected keeps compiling and naut
-    check WARNS (#497); this check requires a non-zero exit, so it fails by design. Kept, not inverted, for the
-    operator to rule on at reconciliation.'
 - id: 002-F17-check-unknown-type-message
   run: 2026-11-01-002
   finding: F-17
@@ -1148,3 +1052,122 @@ checks:
   note: 'a newcomer can go from `naut new x --template minimal` to an edited program with a tag, a timer and a passing
     test using getting-started plus at most one linked page [project in the run: ''''; the runner needs one, and
     the check does not use it]'
+
+# Run 2026-11-03-001: the reconciliation retest of 2026-10-24-001 against main-986037f4 (nautilus-blackbox
+# runs/RECONCILIATION-2026-11-03.md). Each check it rewrote keeps its id and replaces the earlier
+# entry and script (revised: 2026-11-03-001); its project is byte-identical to the parent's.
+- id: 001-P-type-table
+  run: "2026-11-03-001"
+  pass: "the guide's type table row by row with init values; an enumeration tag's DataType is a subtype of Enumeration (i=29)"
+  disposition: "gate"
+  surface: "opcua"
+  oracle: "asyncua + Part 3 (DataType hierarchy)"
+  project: "projects/2026-11-03-001/typed"
+  script: "checks/2026-11-03-001/001-P-type-table.py"
+  env: {}
+  expected_today: "pass (0.3 s; 3/3)"
+  note: "Ruling 1. The enumeration rows (Mode1, P101.State) accept any DataType found by browsing HasSubtype down from i=29 on the server (34 DataTypes on main-986037f4; ns=1;s=type:Mode among them), and both tags of TYPE Mode must share one DataType. Still fails after 001-F06 on a build with that bug, as in the parent. Fails on a build that serves an enumeration as Int32 (i=6), e.g. the parent's."
+  revised: "2026-11-03-001"
+- id: 001-P-read-only-tags
+  run: "2026-11-03-001"
+  pass: "AccessLevel CurrentRead everywhere; writes refused Bad_UserAccessDenied / Bad_NotWritable, value unchanged"
+  disposition: "gate"
+  surface: "opcua"
+  oracle: "asyncua + guide"
+  project: "projects/2026-11-03-001/typed"
+  script: "checks/2026-11-03-001/001-P-read-only-tags.py"
+  env: {}
+  expected_today: "pass (0.3 s; 3/3, then 20/20)"
+  note: "Ruling 2. The UDT-member write now targets P101.Drive.Amps, which main.st never writes, in place of P101.Drive.Speed (rewritten every scan). Every tag the check writes is one no program writes."
+  revised: "2026-11-03-001"
+- id: 001-F04b-server-identity-mandatory-vars
+  run: "2026-11-03-001"
+  finding: "F-04"
+  disposition: "gate"
+  surface: "opcua"
+  oracle: "asyncua + Part 4/5"
+  project: "projects/2026-11-03-001/typed"
+  script: "checks/2026-11-03-001/001-F04b-server-identity-mandatory-vars.py"
+  env: {}
+  expected_today: "pass (0.3 s; 3/3)"
+  note: "Ruling 9. Auditing is read at i=2994 (ua.ObjectIds.Server_Auditing); the parent read i=2268 (ServerCapabilities, an Object). F-04 is in runs/2026-10-22-001/FINDINGS.md."
+  revised: "2026-11-03-001"
+- id: 001-F15-status-change-notified
+  run: "2026-11-03-001"
+  finding: "F-15"
+  disposition: "release"
+  surface: "opcua"
+  oracle: "asyncua + Part 4; pymodbus as the device"
+  project: "projects/2026-11-03-001/mb"
+  script: "checks/2026-11-03-001/001-F15-status-change-notified.py"
+  env:
+    SUT_MODBUS: "127.0.0.1:5020"
+  expected_today: "pass (48 s and 2 s; 2/2, the first waiting out the driver's reconnect backoff)"
+  note: "Ruling 8. The monitored item is created with sub.create_monitored_items([...]) so asyncua registers its client handle; it now also asserts the item was created. Release, as in the parent: the driver's reconnect backoff can be 60 s, so allow 5 min. F-15 is in runs/2026-10-22-001/FINDINGS.md."
+  revised: "2026-11-03-001"
+
+# Run 2026-11-03-002: the reconciliation retest of 2026-11-01-002 against main-986037f4 (nautilus-blackbox
+# runs/RECONCILIATION-2026-11-03.md). Each check it rewrote keeps its id and replaces the earlier
+# entry and script (revised: 2026-11-03-002); its project is byte-identical to the parent's.
+- id: 002-P-api-live-reaction
+  run: "2026-11-03-002"
+  pass: "through POST /api/forces and POST /api/tags the running station starts the lead, adds the lag, stops both and alternates; enum, member and undeclared-tag writes are refused with 400; \"T#8h\" to a TIME tag lands as 28800000 ms and a non-duration string is 422; /api/meta lists enum members"
+  disposition: "gate"
+  surface: "api"
+  oracle: "website:/guides/http-api/ (\"TIME values\", status table), /guides/tag-model/, /guides/forcing/"
+  project: "projects/2026-11-03-002/pumps"
+  script: "checks/2026-11-03-002/002-P-api-live-reaction.py"
+  env: {}
+  expected_today: "pass (3.6 s; 3/3)"
+  note: "Ruling 3. The product side's imported copy is not in this repo, so this is the tester's own writing of the change the ruling describes, not a copy of that one; import this over it. It is stricter than \"refused\": the page's 422 for a whole tag, and the value left as it was. It puts HiLevelDelay back to 30000 at the end."
+  revised: "2026-11-03-002"
+- id: 002-F05-run-hours-survive-restart
+  run: "2026-11-03-002"
+  finding: "F-05"
+  disposition: "gate"
+  surface: "cli"
+  oracle: "website:/guides/tag-model/ and /guides/redundancy/ (retain true); the operator's ruling (opt-in, CODESYS-style)"
+  project: "projects/2026-11-03-002/pumps"
+  script: "checks/2026-11-03-002/002-F05-run-hours-survive-restart.sh"
+  env:
+    port: "18081"
+  expected_today: "pass (3.5 s; 3/3)"
+  note: "Ruling 4: back to gate. It marks P1_Stats retain true in its copy and expects it kept. It also expects P2_Stats, left unmarked, to re-seed, which is the page's opt-in. It has one 3 s sleep so that a 2 s retain write has happened before the SIGTERM (see F-19). By the letter of runs/README.md that sleep would make it release; the ruling says gate."
+  revised: "2026-11-03-002"
+- id: 002-F14-scaffold-blocks-claim
+  run: "2026-11-03-002"
+  finding: "F-14"
+  disposition: "gate"
+  surface: "website:/guides/blocks-and-tasks/ · cli"
+  oracle: "the website (the corrected paragraph, identical in /opt/sut/docs and live on 2026-11-03)"
+  project: "projects/2026-11-03-002/pumps"
+  script: "checks/2026-11-03-002/002-F14-scaffold-blocks-claim.sh"
+  env: {}
+  expected_today: "pass (0.1 s; 3/3)"
+  note: "Ruling 5, rewritten rather than retired. One assertion per clause of the page, for each template. It needs no Go toolchain. If a template or the paragraph changes, the other side has to follow. [project in the run: 'none (scaffolds its own, all four templates)'; the runner needs one, and the check does not use it]"
+  revised: "2026-11-03-002"
+- id: 002-F16-pt-integer-refused
+  run: "2026-11-03-002"
+  finding: "F-16"
+  disposition: "gate"
+  surface: "cli"
+  oracle: "the operator's ruling (warn, not refuse); website:/coming-from/studio-5000/; gcc-style diagnostics (/languages/structured-text/)"
+  project: "projects/2026-11-03-002/pumps"
+  script: "checks/2026-11-03-002/002-F16-pt-integer-refused.sh"
+  env: {}
+  expected_today: "pass (<0.1 s; 3/3)"
+  note: "Ruling 6. The id keeps its old slug. Expects exit 0 and a warning at program.st:<PT line> naming PT, 30000 and TIME. The control (PT := T#30s) expects no warning on that line."
+  revised: "2026-11-03-002"
+- id: 002-F19-retain-saved-on-orderly-stop
+  run: "2026-11-03-002"
+  finding: "F-19"
+  disposition: "release"
+  surface: "cli"
+  oracle: "website:/guides/redundancy/ (\"A hard kill can lose at most 2 seconds of operator input\", by contrast); customer expectation"
+  project: "projects/2026-11-03-002/pumps"
+  script: "checks/2026-11-03-002/002-F19-retain-saved-on-orderly-stop.sh"
+  env:
+    port: "18084"
+  expected_today: "fail (SIGTERM and SIGINT 0.2 s after a setpoint write, 42 is lost and 60 comes back; 3/3)"
+  note: "New finding of this run, outside the reconciliation's scope. It was noticed while 002-F05 ran. About 12 s of wall clock."
+  open: '#531'
