@@ -287,3 +287,40 @@ func TestSparkplugDeviceWithNothingDeclaredIsDropped(t *testing.T) {
 		t.Fatalf("node devices = %v, want %v", ids, want)
 	}
 }
+
+// Only a name the project declares as a tag, spelled as declared, stays on
+// a device: a companion a program binds through VAR_EXTERNAL with no tag
+// declaration, and a binding declared in another case, never reach the
+// tag store, so either would hold the DBIRTH back for its whole delay.
+func TestSparkplugDeviceIgnoresProgramOnlyAndCaseMismatchedNames(t *testing.T) {
+	files := collectorFiles("", "tag-files: [tags/dev.yaml]\n")
+	files["tags/dev.yaml"] = &fstest.MapFile{Data: []byte(`- { name: M1_KW, role: input }
+- { name: m1_pf, role: input }
+- { name: M2_KW, role: input }
+- { name: W1_Level, role: input }
+`)}
+	files["program.fbd"] = &fstest.MapFile{Data: []byte(`PROGRAM Main
+VAR_EXTERNAL Sensor : REAL; Setpoint : REAL; Actuator : REAL; M1__Outages : DINT; END_VAR
+FBD
+  w_err = SUB(Setpoint, Sensor)
+  Actuator := LIMIT(0.0, w_err, 100.0)
+END_FBD
+END_PROGRAM`)}
+	p, err := Load(files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(p.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devs, err := sparkplugDevices(p.drivers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range declaredOnly(devs, declaredNames(p.Runtime, rt)) {
+		if d.ID == "M1" && !reflect.DeepEqual(d.Tags, []string{"M1_KW"}) {
+			t.Fatalf("device M1 tags = %v, want [M1_KW] (M1__Outages is only a program global; M1_PF is declared as m1_pf)", d.Tags)
+		}
+	}
+}

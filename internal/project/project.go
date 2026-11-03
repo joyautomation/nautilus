@@ -635,7 +635,7 @@ func declaredOnly(devs []sparkplug.Device, declared map[string]bool) []sparkplug
 		}
 		var tags []string
 		for _, name := range d.Tags {
-			if declared[ir.NameKey(name)] {
+			if declared[name] {
 				tags = append(tags, name)
 			}
 		}
@@ -648,29 +648,23 @@ func declaredOnly(devs []sparkplug.Device, declared map[string]bool) []sparkplug
 	return out
 }
 
-// declaredNames is every tag name the project declares, in any role, keyed
-// by ir.NameKey (tag names are case-insensitive): the role-declared tags,
-// the flat input/output/seed lists, and every global the programs bind.
+// declaredNames is every tag name the project declares, in any role, spelled
+// exactly as declared: the store keys a tag by its declared spelling and a
+// driver delivers by exact name, so a name that differs only in case never
+// arrives either. A global a program binds through VAR_EXTERNAL with no tag
+// declaration is not in the store, so it is not declared here.
 func declaredNames(o runtime.Options, rt *runtime.Runtime) map[string]bool {
 	out := map[string]bool{}
-	add := func(name string) {
-		if name != "" {
-			out[ir.NameKey(name)] = true
-		}
-	}
 	for _, d := range o.Tags {
-		add(d.Name)
+		out[d.Name] = true
 	}
 	for _, list := range [][]string{o.Inputs, o.Outputs, rt.Inputs(), rt.Outputs()} {
 		for _, name := range list {
-			add(name)
+			out[name] = true
 		}
 	}
 	for name := range o.Seed {
-		add(name)
-	}
-	for name := range rt.Globals() {
-		add(name)
+		out[name] = true
 	}
 	return out
 }
