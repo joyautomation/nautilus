@@ -1,0 +1,38 @@
+# Duplex pump station: two pumps on one wet well, lead/lag by level,
+# lead alternates every pump-down cycle, high-level alarm with a delay,
+# per-pump run hours.
+name: pumps
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+tasks:
+  - program: program.st
+    scan: 100ms
+    dt-tag: ScanDtS
+
+tags:
+  # field
+  - { name: LevelPct,     role: input,    type: REAL, init: 0.0,  unit: "%", desc: "Wet-well level" }
+  # operator setpoints
+  - { name: LeadStartPct, role: setpoint, type: REAL, init: 60.0, unit: "%", desc: "Lead pump start level" }
+  - { name: LagStartPct,  role: setpoint, type: REAL, init: 80.0, unit: "%", desc: "Lag pump start level" }
+  - { name: StopPct,      role: setpoint, type: REAL, init: 20.0, unit: "%", desc: "All pumps stop level" }
+  - { name: HiLevelPct,   role: setpoint, type: REAL, init: 90.0, unit: "%", desc: "High-level alarm threshold" }
+  - { name: HiLevelDelay, role: setpoint, type: TIME, init: T#30s,          desc: "High-level alarm on-delay" }
+  # commands to the field
+  - { name: P1_Run, role: output, type: BOOL, init: false, desc: "Pump 1 run command" }
+  - { name: P2_Run, role: output, type: BOOL, init: false, desc: "Pump 2 run command" }
+  # logic state
+  - { name: Lead,       role: state, type: PumpSel,      init: Pump1, desc: "Which pump leads this cycle" }
+  - { name: Station,    role: state, type: StationState,              desc: "Station state" }
+  - { name: HiLevelAlm, role: state, type: BOOL,         init: false, desc: "High wet-well level alarm" }
+  - { name: Cycles,     role: state, type: INT,          init: 0,     desc: "Completed pump-down cycles" }
+  - { name: P1_Stats,   role: state, type: PumpStats,                 desc: "Pump 1 starts and run hours" }
+  - { name: P2_Stats,   role: state, type: PumpStats,                 desc: "Pump 2 starts and run hours" }
+
+driver:
+  type: memory
+
+retain: {}

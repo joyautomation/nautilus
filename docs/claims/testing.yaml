@@ -106,6 +106,9 @@ claims:
       the step's first scan.
     source: "#given-setting-the-world"
     tests:
+      - go ./tools/blackbox TestBlackbox/002-F07-given-time-literal
+      - go ./tools/blackbox TestBlackbox/002-F08-expect-time-literal
+      - go ./tools/blackbox TestBlackbox/002-P-pumps-acceptance
       - go ./acceptance TestGivenComposesAfterZeroScans
     partial: true
     note: >-
