@@ -265,7 +265,7 @@ func decodeProperties(ps *spb.Payload_PropertySet) []Property {
 		case *spb.Payload_PropertyValue_BooleanValue:
 			p.Value = v.BooleanValue
 		case *spb.Payload_PropertyValue_IntValue:
-			p.Value = int64(int32(v.IntValue))
+			p.Value = intValue(spb.DataType(pv.GetType()), v.IntValue)
 		case *spb.Payload_PropertyValue_LongValue:
 			p.Value = int64(v.LongValue)
 		case *spb.Payload_PropertyValue_FloatValue:
@@ -308,6 +308,18 @@ func encodeTemplate(t *Template, ts uint64) (*spb.Payload_Template, error) {
 	return et, nil
 }
 
+// intValue reads the 32-bit int_value field the way its datatype means it
+// (Sparkplug B §6.4.16): Int8/16/32 are sign-extended, UInt8/16/32 are the
+// unsigned value. Sign-extending every one turned a UInt32 3000000000
+// into -1294967296.
+func intValue(dt spb.DataType, raw uint32) int64 {
+	switch dt {
+	case spb.DataType_UInt8, spb.DataType_UInt16, spb.DataType_UInt32:
+		return int64(raw)
+	}
+	return int64(int32(raw))
+}
+
 func decodeMetric(m *spb.Payload_Metric) Metric {
 	out := Metric{
 		Name:      m.GetName(),
@@ -323,7 +335,7 @@ func decodeMetric(m *spb.Payload_Metric) Metric {
 	case *spb.Payload_Metric_BooleanValue:
 		out.Value = v.BooleanValue
 	case *spb.Payload_Metric_IntValue:
-		out.Value = int64(int32(v.IntValue))
+		out.Value = intValue(out.Datatype, v.IntValue)
 	case *spb.Payload_Metric_LongValue:
 		out.Value = int64(v.LongValue)
 	case *spb.Payload_Metric_FloatValue:
