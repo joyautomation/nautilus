@@ -66,7 +66,7 @@ where marked `…`.
 
 - **CORS is open.** Every response carries
   `Access-Control-Allow-Origin: *`. An `OPTIONS` preflight answers `204`
-  and allows the methods `GET, POST, DELETE, OPTIONS` and the headers
+  and allows the methods `GET, POST, PUT, DELETE, OPTIONS` and the headers
   `Content-Type, Authorization, X-Nautilus-Token`. A browser page on
   another origin can read freely. Whether it can write is decided by the
   next section.
@@ -376,7 +376,8 @@ Writes one tag, or one member of a struct tag.
 - `name` is a tag, or a member path into one: `P101.Speed`,
   `Recipe.Steps[2].Mode`.
 - `value` is a JSON number or boolean. A string is accepted only by a
-  `STRING` tag or an enumerated one (the member name). For a struct tag,
+  `STRING` tag, an enumerated one (the member name), or a `TIME` (an IEC
+  literal, see below). For a struct tag,
   `value` may be an object, which **merges**: the members it names are
   set, every other member keeps its current value.
 
@@ -401,12 +402,34 @@ as sent or not at all. The full rules for members, arrays, enumerations and
 integer widths are in
 [Writing a member](/guides/tag-model/#writing-a-member-post-apitags-with-tagmember).
 
-A `TIME` tag reads and writes as whole milliseconds. For a `TIME` setpoint
-`RunDelay` (captured from a copy of the project with one added),
-`{"name": "RunDelay", "value": 7500}` sets 7.5 s and reads back as `7500`. A `T#` literal such as `"T#5s"` is refused with
-`422` (`value must be a number or boolean (a string only to a STRING tag)`),
-and a fraction of a millisecond with `400`
-(`tag RunDelay: want TIME (milliseconds), got a number`).
+### `TIME` values
+
+A `TIME` tag or member takes either a number of milliseconds or an IEC
+literal as a string: `"T#1m"`, `"T#45s"`, a compound `"T#1m30s500ms"`, or a
+bare `"30s"`. Reads always return milliseconds. These were captured from
+a copy of the project with a `TIME` setpoint `RunDelay` and a `TIME` member
+`P101.MinRun` added:
+
+```sh
+curl -X POST localhost:8080/api/tags -d '{"name": "RunDelay", "value": "T#1m30s500ms"}'
+curl -X POST localhost:8080/api/tags -d '{"name": "P101.MinRun", "value": "T#2m"}'
+curl -s 'localhost:8080/api/state?tags=RunDelay,P101' | jq -c .tags
+```
+```json
+{"P101":{"Enable":true,"MinRun":120000,"Speed":60},"RunDelay":90500}
+```
+
+| Value | Status | Body |
+| --- | --- | --- |
+| a malformed literal, whole tag | `422` | `tag RunDelay: "T#5x" is not a TIME literal: not a duration (unit "x"; use d, h, m, s or ms) (write T#30s, T#1m30s, or a number of milliseconds)` |
+| a malformed literal, member | `400` | `tag P101.MinRun: "T#5x" is not a TIME literal: …` (same text) |
+| a literal finer than 1 ms | `400` | `tag RunDelay: "T#1.5ms" is finer than the millisecond a TIME holds` |
+| a literal past the 64-bit range | `400` | `tag RunDelay: "T#999999999999999d" is longer than a TIME holds (T#-106751991167d7h12m55s808ms to T#106751991167d7h12m55s807ms)` |
+| a fraction of a millisecond | `400` | `tag RunDelay: 2.5 is not a whole number of milliseconds a TIME can hold` |
+| a number past the 64-bit range | `400` | `tag RunDelay: 1e+30 milliseconds is out of range for a TIME (T#-106751991167d7h12m55s808ms to T#106751991167d7h12m55s807ms)` |
+
+A force takes the same values (`{"name": "RunDelay", "value": "T#45s"}`
+forces `45000`), and refuses the same ones with `400`.
 
 ### Which tags may be written
 
@@ -445,7 +468,7 @@ That check comes first, so a forced input answers "forced", not "input".
 | `401` | A token is set and the request has none, or the wrong one | `missing or invalid auth token` |
 | `403` | No token is set and a browser page on another origin wrote | `cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILUS_TOKEN)` |
 | `409` | The address, a member of it, or the tag that contains it is forced | `tag Level is forced — change the force value or remove the force first` |
-| `422` | The wrong kind of value for a **whole** tag: a boolean to a `REAL`, a fraction to an `INT`, a string to anything but a `STRING`, `null` | `tag StartLevel: want REAL, got a boolean` |
+| `422` | The wrong kind of value for a **whole** tag: a boolean to a `REAL`, a fraction to an `INT`, a string to anything but a `STRING`, an enumeration or a `TIME`, a malformed `TIME` literal, `null` | `tag StartLevel: want REAL, got a boolean` |
 
 ## Forces
 
@@ -498,7 +521,8 @@ That is a `409`.
 | `200` | Forced; the body is the force table | |
 | `400` | No `name`, or no `value` (or `null`) | `expected {"name": ..., "value": ...}` |
 | `400` | The tag does not exist | `undefined tag Nope` |
-| `400` | The wrong kind of value | `tag Level: want REAL, got a string` |
+| `400` | The wrong kind of value | `tag StartLevel: want REAL, got a string` |
+| `400` | A value the address cannot hold, by the same rules as `POST /api/tags` | `tag Starts: 70000 is outside INT (-32768..32767)` |
 | `401`, `403` | Authorization, as for `POST /api/tags` | |
 
 ### `GET /api/forces`
@@ -653,8 +677,9 @@ Both answer the alarm's record.
 | `400` | No `id` (unshelve) | `expected {"id": "...", "by": "..."}` |
 | `400` | Shelve with neither `until` nor `seconds` | `shelve needs "until" (RFC3339 or epoch ms) or "seconds" — there is no permanent shelf` |
 | `400` | `until` unparseable, or not in the future | `alarm "HighLevel": shelve until 2020-01-01T00:00:00Z is not in the future` |
+| `400` | Shelve of an alarm whose definition says `shelve: false` | `alarm "…" is not shelvable` |
 | `400` | Unshelve of an alarm that is not shelved | `alarm "HighLevel" is not shelved` |
-| `400` | The id is not an alarm | `no alarm "NoSuch"` |
+| `404` | The id is not an alarm | `no alarm "NoSuch"` |
 
 ### `GET /api/alarms/journal`
 
@@ -668,7 +693,14 @@ curl -s 'localhost:8080/api/alarms/journal?limit=3'
 Newest first. Query parameters: `from` and `to` (epoch milliseconds or RFC
 3339; default the last 24 hours), `limit`, and comma-separated filters
 `site`, `priority`, `id`, `kind`, `state`, plus `q` for a substring of the
-name or id. `truncated` is `true` when the result hit the limit.
+name or id. `limit` defaults to 1000 (as does `0`).
+
+`state` and `q` are applied before `limit`, so a page holds up to `limit`
+matching events. `truncated` is `true` when more matching events exist in
+the range than the page holds. One request reads at most 100,000 raw
+journal rows looking for matches: past that it returns what it found with
+`truncated: true` (narrow the range, or filter by `site`, `priority`, `id`
+or `kind`), and a `limit` above 100,000 returns at most 100,000 events.
 
 | Status | When | Example body |
 | --- | --- | --- |
@@ -733,7 +765,7 @@ and restarted at their initial values.
 | --- | --- | --- |
 | `200` | Swapped | |
 | `400` | No `source` | `{"error":"body must be {\"source\": \"...\"}"}` |
-| `403` | `online-edits` is off | `{"error":"online edits are disabled on this controller (server.Options.OnlineEdits)"}` |
+| `403` | `online-edits` is off | `{"error":"online edits are disabled on this controller (set server.online-edits: true in nautilus.yaml)"}` |
 | `404` | No such task or POU | `{"error":"no task named nope"}` |
 | `409` | `baseHash` is not the running hash | `{"error":"controller program changed since your base — refresh and re-apply","hash":"b983f85adadc","task":"main"}` |
 | `422` | The source does not compile; the old program keeps running | `{"error":"line 2: unexpected token \";\""}` |
