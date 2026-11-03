@@ -95,15 +95,26 @@ create_flow() {
   t=$(qi_title)
   [[ $t == "nautilus: Create Project" ]] || { fail "$lbl: no name input box after the folder (quick input: '${t:-none}')" "$png"; return 1; }
   pass "$lbl: name input box (\"nautilus: Create Project\")" "$png"
-  # On a cold, loaded window the Welcome page's webview can take the focus a
-  # moment after the box opens (the #405 mechanism): the box stays up, but the
-  # typing lands in the webview. Type only into the focused box, and say so
-  # when the focus had to be put back.
-  wait_pg "$QI_FOCUSED" 5 \
-    || { info "$lbl: the name box opened without the keyboard focus; focusing it"; pg "$QI_INPUT?.focus()" >/dev/null; sleep 0.4; }
+  # #443: on a cold, loaded window the Welcome page's webview used to take the
+  # focus a moment after the name box opened (the #405 mechanism), so typing
+  # landed in the webview. The box must hold the focus, and still hold it
+  # after the webview's moment has passed; the name is typed with no help.
+  # A miss is a FAIL; the box is then focused so the rest of the flow runs.
+  local focused=1
+  if ! wait_pg "$QI_FOCUSED" 5; then
+    focused=
+  else
+    sleep 1.5; pg_true "$QI_FOCUSED" || focused=
+  fi
+  if [[ -n $focused ]]; then
+    pass "$lbl: the name box holds the keyboard focus (1.5 s after it opened)" "$png"
+  else
+    fail "$lbl: the name box does not hold the keyboard focus (active element: $(pg 'document.activeElement?.tagName + "." + document.activeElement?.className'))" "$(shot "$lbl-2-name-nofocus")"
+    pg "$QI_INPUT?.focus()" >/dev/null; sleep 0.4
+  fi
   xdotool type --delay 40 "$name"; sleep 0.6
   if [[ $(qi_value) != "$name" ]]; then
-    info "$lbl: the name box read '$(qi_value)' after typing '$name'; focusing it and typing again"
+    fail "$lbl: the name box read '$(qi_value)' after typing '$name'; focusing it and typing again"
     pg "$QI_INPUT?.focus()" >/dev/null; sleep 0.4; key ctrl+a; xdotool type --delay 40 "$name"; sleep 0.6
   fi
   xdotool key Return; sleep 1.2
