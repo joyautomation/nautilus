@@ -147,9 +147,20 @@ applies the rules below. Run the guard locally to see what CI would decide:
 
 ## Registry credentials (Settings → Secrets and variables → Actions)
 
-- **`VSCE_PAT`** (secret) — VS Code Marketplace. Azure DevOps org, publisher
-  `joyauto` (already in `package.json`), Personal Access Token with
-  Marketplace → Manage scope.
+- **VS Code Marketplace — Trusted Publishing (OIDC), no secret.** On
+  marketplace.visualstudio.com/manage, publisher `joyauto` → **Trusted
+  Publishing** holds two policies: repository owner `joyautomation`,
+  repository `nautilus`, workflow **`publish.yml`** (pre-release) and
+  **`vscode-stable.yml`** (stable), environment empty. The jobs have
+  `id-token: write`, and `.github/scripts/vsce-publish.sh` runs
+  `vsce publish --oidc`.
+- **`VSCE_PAT`** (secret) — the Marketplace fallback while Trusted Publishing
+  settles: vsce-publish.sh uses it, with a warning, only when the OIDC publish
+  fails. Azure DevOps org `joyja0136` (the Microsoft Account context that owns
+  `joyauto`), Personal Access Token scoped to that org with Marketplace →
+  Manage, expires about 2027-10-29; `verify-pat.yml` checks it. Global PATs
+  end on 2027-01-27 (Microsoft postponed it from 2026-12-01). Delete the
+  secret once a pre-release and a stable have published over OIDC (#460).
 - **`OVSX_PAT`** (secret) — Open VSX. Eclipse Foundation account + signed
   Publisher Agreement, `joyauto` namespace, access token.
 - **npm — OIDC, no secret.** On npmjs.com, the package's Settings → Trusted
