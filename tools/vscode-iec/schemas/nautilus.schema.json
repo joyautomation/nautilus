@@ -66,7 +66,7 @@
     },
     "opcua": {
       "$ref": "#/definitions/opcua",
-      "description": "Serve the tag store as an OPC UA address space (read-only). Any OPC UA client browses, reads and subscribes to the tags; the section's presence turns the server on."
+      "description": "Serve the tag store as an OPC UA address space. Any OPC UA client browses, reads and subscribes to the tags; a trusted client also writes the tags writable opens. The section's presence turns the server on."
     },
     "sparkplug": {
       "$ref": "#/definitions/sparkplug",
@@ -733,6 +733,14 @@
           "type": "string",
           "default": "pki",
           "description": "Certificate store directory, relative to the working directory: the server's own certificate and key (generated on first start) and the client certificates it trusts (trusted/certs) or has refused (rejected/certs). Approve a client with `naut opcua trust <thumbprint>`. Keep it out of git; `naut build` never embeds it."
+        },
+        "writable": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Globs over tag names or UDT member paths (TempSP, *_SP, Pump*.SpeedSP) that a trusted OPC UA client may write: a session on a SignAndEncrypt channel whose certificate is in pki/trusted. A pattern on a tag opens its members. Inputs are never writable. The same globs and rule as sparkplug.writable, but its own list. Omit and the server is read-only."
         }
       }
     },

@@ -26,3 +26,23 @@ func TestOPCUAStatusCarriesTheCertificate(t *testing.T) {
 		t.Error("a thumbprint without a certificate")
 	}
 }
+
+// The row shows the write counters, whether the server is writable at all
+// (opcua.writable), and a standby replica.
+func TestOPCUAStatusCarriesTheWrites(t *testing.T) {
+	row := opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true, Writable: []string{"*_SP"}, Writes: 3, WritesRefused: 2, Standby: true})
+	got := map[string]float64{}
+	for _, m := range row.Metrics {
+		got[m.Label] = m.Value
+	}
+	if got["writes"] != 3 || got["writes refused"] != 2 {
+		t.Errorf("metrics %v", row.Metrics)
+	}
+	if row.Extra["access"] != "writable by trusted clients" || row.Extra["writes"] != uint64(3) || row.Extra["writesRefused"] != uint64(2) || row.Extra["standby"] != true {
+		t.Errorf("extra %v", row.Extra)
+	}
+	row = opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true})
+	if row.Extra["access"] != "read-only" || row.Extra["writable"] != nil || row.Extra["standby"] != nil {
+		t.Errorf("a read-only server's extra %v", row.Extra)
+	}
+}

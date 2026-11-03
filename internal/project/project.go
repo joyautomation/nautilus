@@ -27,6 +27,7 @@ import (
 
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/internal/stproject"
+	"github.com/joyautomation/nautilus/internal/writable"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
@@ -471,6 +472,12 @@ type Project struct {
 
 	//OPCUA
 	OPCUA *OPCUAConfig
+
+	// WriteGate, when set, is asked before a protocol server accepts a
+	// write from outside: false on a standby replica, whose store is stale.
+	// `naut run` sets it with the elector (wireRedundancy); OPCUAServer
+	// hands it to the OPC UA server. Nil: always writable (no redundancy).
+	WriteGate func() bool
 }
 
 // RetainNames resolves the retain section's defaults against the project
@@ -845,6 +852,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if m.OPCUA != nil && m.OPCUA.ApplicationURI != "" {
 		if err := opcuaserver.CheckApplicationURI(m.OPCUA.ApplicationURI); err != nil {
 			return nil, err
+		}
+	}
+	if m.OPCUA != nil {
+		if err := writable.Patterns(m.OPCUA.Writable).Validate(); err != nil {
+			return nil, fmt.Errorf("opcua.%w", err)
 		}
 	}
 	if m.Sparkplug != nil {
@@ -1640,8 +1652,9 @@ func onlineTagFor(name, fallback string) string {
 }
 
 // OPCUAConfig is the manifest's `opcua:` section: serve the tag store as an
-// OPC UA address space (read-only; see opcua/server). The section's
-// presence turns the server on, like `sparkplug:`.
+// OPC UA address space (see opcua/server), read-only unless writable opens
+// tags to trusted clients. The section's presence turns the server on, like
+// `sparkplug:`.
 type OPCUAConfig struct {
 	// Endpoint is the listen address, "opc.tcp://host:port" (or
 	// "host:port"); the default is opc.tcp://localhost:4840 — loopback, so
@@ -1659,6 +1672,12 @@ type OPCUAConfig struct {
 	// (Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under
 	// SignAndEncrypt), each open only to a trusted client certificate.
 	PKI string `yaml:"pki"`
+	// Writable opens the tags (or UDT members) these globs match to Write
+	// from a trusted client: a session on a SignAndEncrypt channel whose
+	// application certificate is in the PKI's trust list. Same globs and
+	// same rule as sparkplug.writable (internal/writable), but its own
+	// list. Inputs are never writable. Empty, the default, is read-only.
+	Writable []string `yaml:"writable"`
 }
 
 // OPCUA builds the manifest's OPC UA server over a compiled runtime, or
@@ -1673,5 +1692,12 @@ func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) 
 	if pki == "" {
 		pki = opcuaserver.DefaultPKI
 	}
-	return opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI, PKI: pki})
+	srv, err := opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI, PKI: pki, Writable: c.Writable})
+	if err != nil {
+		return nil, err
+	}
+	if p.WriteGate != nil {
+		srv.SetWriteGate(p.WriteGate)
+	}
+	return srv, nil
 }

@@ -19,14 +19,18 @@ import (
 // a client certificate the server does not trust is refused and filed;
 // trusted, it connects under each of the three policies, keeps reading
 // across channel renewals, and is still refused Sign-only security and a
-// session that claims another ApplicationUri; None stays open. Gated on
-// NAUTILUS_OPCUA_PYTHON like the rest of the foreign suite.
+// session that claims another ApplicationUri; None stays open. The trusted
+// client writes each type with asyncua's plain write_value, which sends a
+// Good StatusCode, a SourceTimestamp and an Int64 for a Python int, across
+// renewals too, and is refused what does not fit; anonymous on None is
+// refused writes. Gated on NAUTILUS_OPCUA_PYTHON like the rest of the
+// foreign suite.
 func TestForeignAsyncuaSecure(t *testing.T) {
 	python := os.Getenv("NAUTILUS_OPCUA_PYTHON")
 	if python == "" {
 		t.Skip("set NAUTILUS_OPCUA_PYTHON=/path/to/python (with asyncua installed) to run the foreign-stack test")
 	}
-	s, dir := startSecure(t)
+	s, dir := startSecureWith(t, Options{Writable: []string{"Running", "Count", "Level", "Label", "Elapsed", "State", "P101.Drive", "Levels"}})
 	const uri = "urn:test:asyncua"
 	der, key := clientCert(t, uri, time.Now().Add(-time.Hour), 24*time.Hour)
 	tmp := t.TempDir()
@@ -103,12 +107,48 @@ func TestForeignAsyncuaSecure(t *testing.T) {
 	}
 	ren := next()
 	connected(ren)
-	if ren["reads"] != float64(20) {
-		t.Errorf("renewals: %v, want 20 reads", ren)
+	if ren["reads"] != float64(20) || ren["writes"] != float64(20) || ren["count"] != float64(19) {
+		t.Errorf("renewals: %v, want 20 reads and 20 writes, Count 19", ren)
+	}
+	wr := next()
+	connected(wr)
+	got, _ := wr["writes"].(map[string]any)
+	lands := map[string]any{
+		"Running": false, "Count": float64(7), "Count32": float64(8), "Level": 4.25, "Label": "Pump 9", "Empty": "",
+		"Elapsed": 1500.0, "State": float64(10), "P101.Drive.Speed": 1450.0,
+	}
+	for name, want := range lands {
+		r, _ := got[name].(map[string]any)
+		if r["ok"] != true || r["value"] != want {
+			t.Errorf("asyncua write %s: %v, want it to land as %v", name, r, want)
+		}
+	}
+	refusals := map[string]string{
+		"CountFraction": "BadTypeMismatch", "CountTooBig": "BadOutOfRange", "StateNotMember": "BadOutOfRange",
+		"ElapsedFraction": "BadOutOfRange", "LevelNaN": "BadOutOfRange", "Array": "BadWriteNotSupported", "Unmatched": "BadNotWritable",
+	}
+	for name, code := range refusals {
+		r, _ := got[name].(map[string]any)
+		if r["ok"] == true || !strings.Contains(fmt.Sprint(r["error"]), code) {
+			t.Errorf("asyncua write %s: %v, want %s", name, r, code)
+		}
+	}
+	if got["userAccessLevel"] != float64(3) {
+		t.Errorf("the writer reads UserAccessLevel %v on Level, want 3", got["userAccessLevel"])
+	}
+	if v, _ := s.rt.Tags().ReadPath("P101.Drive.Speed"); v != 1450.0 {
+		t.Errorf("the store holds P101.Drive.Speed = %v", v)
 	}
 	refused(next(), "BadSecurityPolicyRejected")
 	refused(next(), "BadCertificateUriInvalid")
-	connected(next())
+	none := next()
+	connected(none)
+	if w, _ := none["write"].(map[string]any); !strings.Contains(fmt.Sprint(w["error"]), "BadUserAccessDenied") {
+		t.Errorf("anonymous on None wrote: %v", none)
+	}
+	if none["userAccessLevel"] != float64(1) {
+		t.Errorf("anonymous reads UserAccessLevel %v, want 1", none["userAccessLevel"])
+	}
 	if done := next(); done["done"] != true {
 		t.Errorf("expected the done line, got %v", done)
 	}

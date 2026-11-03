@@ -68,11 +68,18 @@ func electorFor(proj *project.Project, addr string) (*leader.Elector, error) {
 //   - a Sparkplug host must not declare itself the primary host (STATE
 //     online) or send NCMD/DCMD from a standby, or two hosts fight over
 //     every edge node in the group (#325).
+//
+// The OPC UA server gets the same gate for its Write service: a standby's
+// store is stale and the scan does not run there, so a client's write is
+// refused (Bad_InvalidState) rather than landing where nothing reads it.
+// The server is built after the runtime, so the gate rides on the project
+// and OPCUAServer installs it.
 func wireRedundancy(proj *project.Project, el runtime.Coordinator) {
 	proj.Runtime.Coordinator = el
 	if g, ok := proj.Runtime.Driver.(interface{ SetWriteGate(func() bool) }); ok {
 		g.SetWriteGate(el.IsLeader)
 	}
+	proj.WriteGate = el.IsLeader
 }
 
 // runProject hosts a loaded project: scan loop + tag API, Ctrl+C to stop.
@@ -153,7 +160,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	go rt.Run(ctx)
 
 	// The OPC UA server, when the manifest asks for it: the tag store as
-	// an address space, read-only, fed by the store's change generations.
+	// an address space, fed by the store's change generations; writable
+	// only where opcua.writable opens it, to a trusted client.
 	opc, err := proj.OPCUAServer(rt)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: opcua:", err)

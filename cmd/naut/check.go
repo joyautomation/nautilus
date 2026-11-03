@@ -18,6 +18,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/logix/writer"
+	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -453,6 +454,17 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			"knowable type (no type:, no program declares it, the driver cannot say), "+
 			"so it has no value until the device first delivers one — give it a type: "+
 			"to have it read as zero until then\n", loc.tag(name), name)
+	}
+
+	// opcua.writable against the tags it is meant to open: a pattern that
+	// opens nothing, or only inputs (never writable), is a list that does
+	// not say what its author thinks; an output a program writes is open to
+	// a client only until the next commit.
+	if proj.OPCUA != nil {
+		for _, w := range opcuaserver.WritableWarnings(rt, proj.OPCUA.Writable) {
+			warns++
+			fmt.Printf("%s: warning: %s\n", loc.file, w)
+		}
 	}
 
 	// Keyed by ir.NameKey: tag names are case-insensitive identifiers, so a
