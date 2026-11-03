@@ -122,13 +122,26 @@ func runCheck(args []string) int {
 		}
 	}
 	tagsFor := map[string][]runtime.TagDef{}
+	tagsErr := map[string]error{} // root → why its manifest's tags can't be read
 	projectTags := func(f string) []runtime.TagDef {
 		root := stproject.ProjectRoot(f)
 		if defs, ok := tagsFor[root]; ok {
 			return defs
 		}
-		defs := project.TagDefsFor(f)
+		defs, mdir, err := project.TagDefsForErr(f)
 		tagsFor[root] = defs
+		if err != nil {
+			// Reported once per project, on the manifest. Its programs are
+			// not compiled against an empty tag set: that would only say
+			// each tag they use is undeclared, and hide this.
+			tagsErr[root] = err
+			if wd, werr := os.Getwd(); werr == nil {
+				if rel, rerr := filepath.Rel(wd, mdir); rerr == nil && !strings.HasPrefix(rel, "..") {
+					mdir = rel
+				}
+			}
+			fmt.Println(newManifestLoc(mdir, "").say(err))
+		}
 		return defs
 	}
 	for _, f := range files {
@@ -169,6 +182,10 @@ func runCheck(args []string) int {
 		// signature to know which pins its power uses.
 		prelude, libSources, segs := stproject.PreludeParts(f, nil)
 		tags := projectTags(f)
+		if tagsErr[stproject.ProjectRoot(f)] != nil {
+			markBad(f)
+			continue
+		}
 		// Graphical languages compile by transpiling toward ST — LD to the
 		// FBD netlist, FBD to ST — then check exactly like an .st file; the
 		// composed line maps project diagnostic positions back onto the
