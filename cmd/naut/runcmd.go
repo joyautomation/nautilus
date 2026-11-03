@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/internal/lsp"
@@ -132,10 +133,22 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if el != nil {
-		go el.Run(ctx)
-		// On shutdown, hand the lease over instead of letting it expire:
-		// a standby takes over on its next tick rather than 4s later.
-		defer el.Release()
+		// The elector runs on its own context, not the signal's: it keeps
+		// renewing the lease through the last scan and the last retain save
+		// that follow a stop, so no standby takes over and loads the store
+		// before this replica's final save lands (nautilus#531). On the
+		// way out it stops renewing, then hands the lease over instead of
+		// letting it expire: a standby takes over on its next tick rather
+		// than 4s later. Release waits for the loop, so a renew in flight
+		// cannot re-claim the lease after it was given up.
+		elCtx, elCancel := context.WithCancel(context.Background())
+		elDone := make(chan struct{})
+		go func() { el.Run(elCtx); close(elDone) }()
+		defer func() {
+			elCancel()
+			<-elDone
+			el.Release()
+		}()
 	}
 	// Drivers with their own polling loop (eip, sparkplug-host) start here;
 	// the loopback memory driver has nothing to start.
@@ -157,7 +170,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			s.Start(ctx)
 		}
 	}
-	go rt.Run(ctx)
+	// Run returns after the last scan and, with a retain store, its last
+	// save; the stop below waits for it, so an orderly stop keeps a
+	// setpoint written just before it (nautilus#531).
+	runDone := make(chan struct{})
+	go func() { rt.Run(ctx); close(runDone) }()
 
 	// The OPC UA server, when the manifest asks for it: the tag store as
 	// an address space, fed by the store's change generations; writable
@@ -267,8 +284,24 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
 	<-ctx.Done()
+	// Wait for the last scan and the last retain save before the deferred
+	// teardown (the lease release, driver stops) runs, but not forever: a
+	// store that hangs (an unreachable Kubernetes API) must not hold the
+	// process past a supervisor's stop timeout.
+	select {
+	case <-runDone:
+	case <-time.After(runStopTimeout):
+		fmt.Fprintf(os.Stderr, "naut run: the scan loop did not stop within %s; exiting without its last retain save\n", runStopTimeout)
+	}
 	return 0
 }
+
+// runStopTimeout bounds how long an orderly stop waits for the scan loop's
+// last scan and retain save (a ConfigMap save already under way can take
+// longer, up to its PUT and POST timeouts; the exit then cuts it short), leaving the driver teardown after it room
+// inside a supervisor's stop timeout: the groov EPIC unit's
+// TimeoutStopSec=10, Kubernetes' 30 s grace period, systemd's default 90 s.
+const runStopTimeout = 5 * time.Second
 
 // startAlarms builds the project's alarm engine over rt, before the scan
 // loop starts: the engine registers itself on the runtime's post-scan

@@ -1170,4 +1170,3 @@ checks:
     port: "18084"
   expected_today: "fail (SIGTERM and SIGINT 0.2 s after a setpoint write, 42 is lost and 60 comes back; 3/3)"
   note: "New finding of this run, outside the reconciliation's scope. It was noticed while 002-F05 ran. About 12 s of wall clock."
-  open: '#531'
