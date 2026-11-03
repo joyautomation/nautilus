@@ -1,6 +1,7 @@
 package sparkplug
 
 import (
+	"strings"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -70,6 +71,14 @@ func (n *Node) applyCommand(device string, payload Payload) {
 		}
 		if isArrayType(m.Datatype) {
 			n.refuseCommand(arrayWriteRefusal, m.Name, "datatype", m.Datatype.String())
+			continue
+		}
+		// An indexed name ("Levels[1]", "Drives[0].Speed") is an element
+		// write. The node never births one — a scalar array is one array
+		// metric, an array of structs is not published — so it is refused
+		// like a whole-array command, whatever sparkplug.writable opens.
+		if strings.ContainsRune(m.Name, '[') {
+			n.refuseCommand(arrayWriteRefusal, m.Name)
 			continue
 		}
 		if m.Datatype == spb.DataType_Template {

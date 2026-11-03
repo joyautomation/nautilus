@@ -373,7 +373,8 @@ opens `ns=1;s=Recipe.Steps`, and `Drives`, an array of UDTs, opens
 `ns=1;s=Drives[0].Speed`. One that matches a member opens that member and
 everything below it: `Pump*.SpeedSP` opens `ns=1;s=Pump1.SpeedSP`, not
 `Pump1.Running`. In a glob `[ ]` is a set of characters, so to name one
-element, escape its brackets: `'Drives\[0\]'`. These
+element, escape its brackets, in single quotes (in double quotes YAML
+reads `\[` as an escape and refuses the file): `'Drives\[0\]'`. These
 are the same globs, with the same rule, as
 [`sparkplug.writable`](/guides/sparkplug/), but the list is separate:
 opening a setpoint to your SCADA over OPC UA does not open it to everyone
@@ -498,9 +499,10 @@ address. A refused item is an `opcua: write refused` warning with the
 status and the reason. A trusted client's refusal on a node it may know
 is logged once per client, node and reason. Every other refusal (an
 anonymous client's, a node id that is nothing) is one line per client and
-reason, saying how many items the request had: those node ids are
-whatever the client chose to send. Past 64 lines a client's refusals are
-only counted, and one line says so. A client retrying every second, or
+reason, saying how many items of the first such request were refused
+for that reason: those node ids are whatever the client chose to send.
+Past 64 lines in an hour a client's refusals are only counted, and one
+line says so; the next hour it is heard from again. A client retrying every second, or
 sending thousands of junk node ids, does not flood the log. The `opcua-server`
 row counts both (`writes`, `writes refused`).
 

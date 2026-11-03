@@ -738,7 +738,17 @@ func TestRefusalsCannotFloodTheLog(t *testing.T) {
 	if n := strings.Count(log, `msg="opcua: write refused"`); n != 3 {
 		t.Errorf("%d per-node refusal lines with a budget of 3:\n%s", n, log)
 	}
-	if n := strings.Count(log, "no longer logged"); n != 1 {
+	if n := strings.Count(log, "only counted"); n != 1 {
 		t.Errorf("%d budget lines:\n%s", n, log)
+	}
+
+	// The budget lasts a window, not for ever: a long-running client that
+	// spent it is heard from again.
+	defer func(d time.Duration) { refusalWindow = d }(refusalWindow)
+	refusalWindow = 20 * time.Millisecond
+	time.Sleep(30 * time.Millisecond)
+	write(t, f2.writer, wv("Closed", 1.0))
+	if n := strings.Count(f2.log.String(), `msg="opcua: write refused"`); n != 4 {
+		t.Errorf("%d per-node refusal lines after the window, want 4:\n%s", n, f2.log.String())
 	}
 }

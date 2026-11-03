@@ -153,8 +153,9 @@ that matches a tag opens all of its members. A template command carrying
 a writable member and a read-only one writes the first and refuses the
 second. A command must also arrive where the tag is published: a DCMD
 writes only its own device's tags, an NCMD only node-level ones. Array
-writes are not supported yet: a command carrying an array metric, or a
-template command with an array member, has the array refused. The
+writes are not supported yet: a command carrying an array metric, a
+template command with an array member, or a metric named by index
+(`Levels[1]`) has the array write refused. The
 template's other members still apply. Every refusal is logged once per
 tag and counted as `commandsRefused` in the node's status.
 

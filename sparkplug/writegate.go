@@ -79,9 +79,12 @@ func (n *Node) writableTemplate(p string, m Metric) (Metric, []string) {
 }
 
 // rootTag is the tag a command metric name addresses: the name up to its
-// first member separator ("Motor1.START" → "Motor1").
+// first member or element separator ("Motor1.START" → "Motor1",
+// "Levels[1]" → "Levels"). Cutting only at "." let an element's name miss
+// the device-ownership table, so a node-level command could write a
+// device's tag (#506 review).
 func rootTag(name string) string {
-	if i := strings.IndexByte(name, '.'); i >= 0 {
+	if i := strings.IndexAny(name, ".["); i >= 0 {
 		return name[:i]
 	}
 	return name

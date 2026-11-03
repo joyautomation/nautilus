@@ -420,8 +420,9 @@ claims:
       trusted client's refusal on a node it may know is an opcua: write
       refused warning once per client, node and reason; every other refusal
       (a non-writer's, an unknown node id) is one line per client and reason
-      with the request's item count; past 64 lines a client's refusals are
-      only counted, so thousands of junk node ids cost a line or two. The
+      with the refused item count; past 64 lines in an hour a client's
+      refusals are only counted, so thousands of junk node ids cost a line
+      or two. The
       opcua-server row on
       GET /api/drivers counts writes and writes refused, and says whether
       the server is writable.

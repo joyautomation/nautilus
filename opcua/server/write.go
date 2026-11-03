@@ -67,6 +67,12 @@ const maxWarned = 4096
 // probing the whole address space would otherwise log a line per node.
 const refusalBudget = 64
 
+// refusalWindow is how long a client's refusal budget lasts: after it the
+// log-once memory starts over, so a long-running SCADA client that spent
+// its budget is heard from again within the hour rather than never.
+// Overridable in tests.
+var refusalWindow = time.Hour
+
 // maxLoggedNode is how much of a client-supplied node id a log line quotes.
 const maxLoggedNode = 96
 
@@ -87,6 +93,7 @@ type writeAccess struct {
 	warned map[string]struct{}
 	lines  map[string]int // refusal lines logged per client key
 	budget int            // refusalBudget; tests lower it
+	since  time.Time      // when the log-once memory last started over
 }
 
 // client is who sent a request, as the audit names it.
@@ -585,8 +592,8 @@ func (w *writeAccess) refuse(cl client, rs []refusal) {
 // its budget.
 func (w *writeAccess) warnOnce(cl client, key string, emit func()) {
 	w.mu.Lock()
-	if w.warned == nil || len(w.warned) >= maxWarned || len(w.lines) >= maxWarned {
-		w.warned, w.lines = map[string]struct{}{}, map[string]int{}
+	if w.warned == nil || len(w.warned) >= maxWarned || len(w.lines) >= maxWarned || time.Since(w.since) >= refusalWindow {
+		w.warned, w.lines, w.since = map[string]struct{}{}, map[string]int{}, time.Now()
 	}
 	if _, seen := w.warned[key]; seen {
 		w.mu.Unlock()
@@ -604,7 +611,7 @@ func (w *writeAccess) warnOnce(cl client, key string, emit func()) {
 	case n <= budget:
 		emit()
 	case n == budget+1:
-		w.log.Warn("opcua: write refusals from this client are no longer logged, only counted (writesRefused)",
+		w.log.Warn("opcua: further write refusals from this client are only counted (writesRefused) for the next hour at most",
 			"client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
 	}
 }
