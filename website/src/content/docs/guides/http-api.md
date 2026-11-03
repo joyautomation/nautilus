@@ -342,8 +342,9 @@ curl -s localhost:8080/api/drivers
 ```
 
 `kind`, `name`, `detail`, `state` (`connected`, `connecting`, `waiting`,
-`degraded`, `error` or `offline`), `message` and `sinceMs` are common to
-every driver. `lastError` appears when there is one. `metrics`, `devices`
+`degraded`, `error` or `offline`), `message`, `sinceMs` and `asOfMs` are
+common to every driver. `asOfMs` is stamped by the server: when this status
+was read. `lastError` appears when there is one. `metrics`, `devices`
 and `extra` are the driver's own; each protocol guide documents its
 `/api/drivers` entry ([Modbus TCP](/guides/modbus/#apidrivers),
 [EtherNet/IP](/guides/ethernet-ip/#apidrivers),
@@ -399,6 +400,13 @@ A write never creates a tag, never changes a tag's type, and lands exactly
 as sent or not at all. The full rules for members, arrays, enumerations and
 integer widths are in
 [Writing a member](/guides/tag-model/#writing-a-member-post-apitags-with-tagmember).
+
+A `TIME` tag reads and writes as whole milliseconds. For a `TIME` setpoint
+`RunDelay` (captured from a copy of the project with one added),
+`{"name": "RunDelay", "value": 7500}` sets 7.5 s and reads back as `7500`. A `T#` literal such as `"T#5s"` is refused with
+`422` (`value must be a number or boolean (a string only to a STRING tag)`),
+and a fraction of a millisecond with `400`
+(`tag RunDelay: want TIME (milliseconds), got a number`).
 
 ### Which tags may be written
 
@@ -641,9 +649,11 @@ Both answer the alarm's record.
 | Status | When | Example body |
 | --- | --- | --- |
 | `200` | The alarm's record | |
-| `400` | No `id` | `expected {"id": "...", "until"\|"seconds": ..., "by": "..."}` |
+| `400` | No `id` (shelve) | `expected {"id": "...", "until"\|"seconds": ..., "by": "..."}` |
+| `400` | No `id` (unshelve) | `expected {"id": "...", "by": "..."}` |
 | `400` | Shelve with neither `until` nor `seconds` | `shelve needs "until" (RFC3339 or epoch ms) or "seconds" — there is no permanent shelf` |
 | `400` | `until` unparseable, or not in the future | `alarm "HighLevel": shelve until 2020-01-01T00:00:00Z is not in the future` |
+| `400` | Unshelve of an alarm that is not shelved | `alarm "HighLevel" is not shelved` |
 | `400` | The id is not an alarm | `no alarm "NoSuch"` |
 
 ### `GET /api/alarms/journal`
@@ -776,11 +786,12 @@ curl -s -X POST localhost:8080/api/program/activate -d '{"sha":"e230fc4"}'
 | Status | When | Example body |
 | --- | --- | --- |
 | `200` | Every program swapped | |
-| `400` | No `sha` | `{"error":"body must be {\"sha\": \"<commit>\"}"}` |
+| `400` | No `sha` | `{"error":"body must be {\"sha\": \"\u003ccommit\u003e\"}"}` |
 | `403` | `online-edits` is off | |
 | `404` | No such commit in the history | `{"error":"no commit 0000000 in this controller's history"}` |
 | `409` | The commit's sources cannot be rebuilt, or its tasks differ from the running ones | |
 | `422` | A program at that commit does not compile; nothing was swapped | |
+| `500` | A swap failed after every source compiled; the body's `programs` lists the tasks already swapped | |
 | `503` | The server cannot rebuild sources from history. `naut run` and built controllers always can; an embedded Go server may not | |
 | `401`, `403` | Authorization | |
 
@@ -795,6 +806,7 @@ own status codes come back unchanged.
 | Status | When | Example body |
 | --- | --- | --- |
 | `503` | No historian is configured | `no historian configured (set server.historian in the manifest, or NAUTILUS_HISTORIAN_URL)` |
+| `500` | `server.historian` is not a valid URL | `bad historian url: …` |
 | `502` | The historian did not answer | `historian unavailable: …` |
 
 ## On a standby replica
