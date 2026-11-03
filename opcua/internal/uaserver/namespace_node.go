@@ -98,6 +98,8 @@ func (as *NodeNameSpace) AddNode(n *Node) *Node {
 // Read names an unknown node. For leaving out an optional node of the
 // standard node set that the server cannot honestly fill in (a limit it
 // does not know): Part 5 says such a component "shall not be included".
+// Call it before the server starts: it edits other nodes' references
+// under the namespace lock only, not each node's own.
 func (as *NodeNameSpace) RemoveNode(nid *ua.NodeID) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
