@@ -83,6 +83,9 @@ func TestWriteTimeTakesIECLiteral(t *testing.T) {
 		{`{"name":"MinRun","value":"T#1x"}`, `"T#1x" is not a TIME literal`},
 		{`{"name":"MinRun","value":"soon"}`, `"soon" is not a TIME literal`},
 		{`{"name":"Step.Hold","value":"T#"}`, `"T#" is not a TIME literal`},
+		// A fraction of a millisecond is finer than a TIME holds: a 400
+		// (out of range) on a whole tag, unlike a fraction to an INT (422).
+		{`{"name":"MinRun","value":2.5}`, `2.5 is not a whole number of milliseconds`},
 	} {
 		rec := postTag(t, srv, tc.body)
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), tc.msg) {

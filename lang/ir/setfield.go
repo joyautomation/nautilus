@@ -405,6 +405,11 @@ func coerceLeaf(cur Value, v any, sofar string) (Value, error) {
 		if i, ok := toInt(v); ok {
 			return TimeVal(i), nil
 		}
+		if f, ok := toFloat(v); ok {
+			// Out of range, not a mismatch: a number is the right kind of
+			// thing, finer than a TIME's millisecond (OPC UA's Bad_OutOfRange).
+			return Value{}, rangef("%s: %v is not a whole number of milliseconds a TIME can hold", sofar, f)
+		}
 		return Value{}, wantErr(TypeTime, v, "%s: want TIME (T#30s or milliseconds), got %s", sofar, describeKind(v))
 	case TypeString:
 		if s, ok := v.(string); ok {
