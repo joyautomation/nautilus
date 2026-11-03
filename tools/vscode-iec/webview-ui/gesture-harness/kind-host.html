@@ -58,6 +58,7 @@
 				return b ? { active: b.classList.contains('active'), ...vpCenter(b) } : null;
 			};
 			window.__rotation = () => (window.__nxKind ? window.__nxKind.rotation() : null);
+			window.__frames = () => (window.__nxKind ? window.__nxKind.frames() : null);
 			// The part picker: what is hovered / picked on the stage, where a
 			// part is on the page, the panel's chips and its picked line.
 			window.__hover = () => (window.__nxKind ? window.__nxKind.hover() : null);
