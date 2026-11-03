@@ -480,8 +480,8 @@ func analyzeSFCIn(text string, e env) analysis {
 		tagNames = append(tagNames, d.Name)
 	}
 	if e.manifest != nil {
-		for _, b := range e.manifest.badTags {
-			tagNames = append(tagNames, b.name) // declared, if not readable: the manifest says so
+		for _, name := range e.manifest.unread {
+			tagNames = append(tagNames, name) // declared, if not readable: the manifest says so
 		}
 	}
 	for _, d := range sfc.CheckWith(prog, tagNames) {
@@ -1014,15 +1014,13 @@ func staticCompletions() []CompletionItem {
 	return items
 }
 
-// undeclaredName is the identifier an "undeclared identifier" error names
-// (its base, for a dotted path), or "" for any other error.
+// undeclaredName is the identifier an "undeclared identifier" error names,
+// or "" for any other error. For `Pump.Speed` or `Pumps[1]` the compiler
+// names the base (Pump, Pumps), which is the tag.
 func undeclaredName(msg string) string {
 	var name string
 	if _, err := fmt.Sscanf(msg, "undeclared identifier %q", &name); err != nil {
 		return ""
-	}
-	if i := strings.IndexByte(name, '.'); i >= 0 {
-		name = name[:i]
 	}
 	return name
 }

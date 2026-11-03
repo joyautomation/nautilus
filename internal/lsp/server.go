@@ -144,6 +144,11 @@ func (s *Server) dispatch(m *message) {
 		s.handleRename(m)
 	case "textDocument/documentSymbol":
 		s.handleDocumentSymbol(m)
+	case "workspace/didChangeWatchedFiles":
+		var p DidChangeWatchedFilesParams
+		if unmarshal(m.Params, &p) {
+			s.manifestFilesChanged(p.Changes) // manifest.go
+		}
 	case "nautilus/descriptions":
 		s.handleDescriptions(m) // descriptions.go: tag descriptions for the diagram editors
 	default:

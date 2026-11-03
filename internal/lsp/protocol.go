@@ -188,3 +188,16 @@ type TextEdit struct {
 type WorkspaceEdit struct {
 	Changes map[string][]TextEdit `json:"changes"`
 }
+
+// DidChangeWatchedFilesParams is workspace/didChangeWatchedFiles: files the
+// client watches for the server (nautilus.yaml and tag-files) changed.
+type DidChangeWatchedFilesParams struct {
+	Changes []FileEvent `json:"changes"`
+}
+
+// FileEvent is one watched file's change: Type 1 created, 2 changed, 3
+// deleted.
+type FileEvent struct {
+	URI  string `json:"uri"`
+	Type int    `json:"type"`
+}

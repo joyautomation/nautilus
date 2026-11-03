@@ -26,7 +26,9 @@ import (
 	"sync"
 
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
+	"gopkg.in/yaml.v3"
 )
 
 // ProjectTag is one tag as nautilus.yaml declares it.
@@ -43,6 +45,9 @@ type ProjectTag struct {
 type manifestCache struct {
 	mu      sync.Mutex
 	entries map[string]*manifestEntry
+	// failed remembers a manifest that does not read, against the same
+	// modtimes, so a broken manifest is not re-read on every keystroke.
+	failed map[string]*manifestEntry
 }
 
 type manifestEntry struct {
@@ -59,11 +64,17 @@ type manifestEntry struct {
 	// reported on the manifest instead of as undeclared in every program
 	// that uses them (#518).
 	badTags []badTag
-	// readErr: the manifest itself does not read. The entry is then the
-	// last good one (stale is false) or empty (stale is true: no tag is
-	// known at all).
+	// readErr: the manifest itself does not read. The entry then serves
+	// the last good read's tags, or none when there was none.
 	readErr error
-	stale   bool
+	// unread holds the tags the YAML declares (tags[].name, in the
+	// manifest or a tag-file) that are not in defs, by ir.NameKey: a bad
+	// tag, or every tag of a manifest that does not read. A program naming
+	// one is not at fault; the manifest is, and says so.
+	unread map[string]string
+	// diags is what the manifest says is wrong, by file URI (#518),
+	// computed once per read.
+	diags map[string][]Diagnostic
 }
 
 // badTag is one tag declaration the compiler cannot scope, and why.
@@ -78,15 +89,8 @@ func (e *manifestEntry) unreadTag(name string) bool {
 	if e == nil || name == "" {
 		return false
 	}
-	if e.stale {
-		return true // nothing is known: any undeclared name may be a tag
-	}
-	for _, b := range e.badTags {
-		if b.name != "" && strings.EqualFold(b.name, name) {
-			return true
-		}
-	}
-	return false
+	_, ok := e.unread[ir.NameKey(name)]
+	return ok
 }
 
 // modOf is the newest modtime among the manifest and its tag-files: a
@@ -111,7 +115,7 @@ func modOf(mpath string, files []string) int64 {
 	return mod
 }
 
-var manifests = manifestCache{entries: map[string]*manifestEntry{}}
+var manifests = manifestCache{entries: map[string]*manifestEntry{}, failed: map[string]*manifestEntry{}}
 
 // findManifest walks up from a file looking for nautilus.yaml, stopping at
 // the filesystem root. A project is a directory with a manifest in it, so
@@ -147,13 +151,71 @@ func projectTags(path string) []ProjectTag {
 	return nil
 }
 
-// manifestDiagnostics is what the manifest governing a program says is
-// wrong with its tags, keyed by the file URI to show it on: each tag that
-// does not read on its tags[].name (in nautilus.yaml or the tag-file
-// declaring it), and a manifest that does not read at all on the line its
-// error names. nil when there is nothing to say.
-func manifestDiagnostics(mpath string, e *manifestEntry) map[string][]Diagnostic {
-	if e == nil || (e.readErr == nil && len(e.badTags) == 0) {
+// tagDecl is where the raw YAML declares a tag: its tags[].name scalar.
+type tagDecl struct {
+	name string
+	file string
+	r    Range
+}
+
+// scanTagDecls reads the tags[].name entries of the manifest and of its
+// tag-files from the YAML trees alone — no validation, so it answers for a
+// manifest that does not read too — keeping each name's first
+// declaration, by ir.NameKey. files are the tag-files' paths.
+func scanTagDecls(mpath string) (decls map[string]tagDecl, files []string) {
+	decls = map[string]tagDecl{}
+	root, err := parseYAMLFile(mpath)
+	if err != nil {
+		return decls, nil
+	}
+	for _, tf := range yamlStringSeq(mappingValue(root, "tag-files")) {
+		files = append(files, filepath.Join(filepath.Dir(mpath), filepath.FromSlash(tf)))
+	}
+	scan := func(file string, doc *yaml.Node) {
+		for _, item := range tagItems(doc) {
+			n := mappingValue(item, "name")
+			if n == nil || n.Kind != yaml.ScalarNode || n.Value == "" {
+				continue
+			}
+			if _, dup := decls[ir.NameKey(n.Value)]; !dup {
+				decls[ir.NameKey(n.Value)] = tagDecl{name: n.Value, file: file, r: scalarRange(n)}
+			}
+		}
+	}
+	for _, f := range files {
+		if doc, err := parseYAMLFile(f); err == nil {
+			scan(f, doc)
+		}
+	}
+	scan(mpath, root)
+	return decls, files
+}
+
+// unreadOf is the declared tags missing from defs.
+func unreadOf(decls map[string]tagDecl, defs []runtime.TagDef) map[string]string {
+	have := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		have[ir.NameKey(d.Name)] = true
+	}
+	var out map[string]string
+	for k, d := range decls {
+		if !have[k] {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[k] = d.name
+		}
+	}
+	return out
+}
+
+// manifestDiagnostics is what the manifest says is wrong with its tags,
+// keyed by the file URI to show it on: each tag that does not read on its
+// tags[].name (in nautilus.yaml or the tag-file declaring it), and a
+// manifest that does not read at all on the file and line its error names.
+// nil when there is nothing to say.
+func manifestDiagnostics(mpath string, e *manifestEntry, decls map[string]tagDecl, files []string) map[string][]Diagnostic {
+	if e.readErr == nil && len(e.badTags) == 0 {
 		return nil
 	}
 	out := map[string][]Diagnostic{}
@@ -162,77 +224,71 @@ func manifestDiagnostics(mpath string, e *manifestEntry) map[string][]Diagnostic
 		out[uri] = append(out[uri], Diagnostic{Range: r, Severity: SeverityError, Source: "nautilus", Message: msg})
 	}
 	if e.readErr != nil {
-		add(mpath, manifestErrRange(mpath, e.readErr), e.readErr.Error())
+		file, r := readErrPlace(mpath, files, e.readErr)
+		add(file, r, e.readErr.Error())
 	}
 	for _, b := range e.badTags {
-		file, r := mpath, manifestErrRange(mpath, nil)
-		if b.name != "" {
-			if f, rr, ok := firstDecl(manifestTagDecls(mpath, b.name)); ok {
-				file, r = f, rr
-			}
+		file, r := mpath, fileLineRange(mpath, 1)
+		if d, ok := decls[ir.NameKey(b.name)]; ok && b.name != "" {
+			file, r = d.file, d.r
 		}
 		add(file, r, b.err.Error())
 	}
 	return out
 }
 
-// firstDecl is the first declaration in a manifestTagDecls result, in
-// file order.
-func firstDecl(decls map[string]map[Range]bool) (string, Range, bool) {
-	files := make([]string, 0, len(decls))
-	for f := range decls {
-		files = append(files, f)
-	}
-	sort.Strings(files)
-	for _, f := range files {
-		var best Range
-		found := false
-		for r := range decls[f] {
-			if !found || r.Start.Line < best.Start.Line {
-				best, found = r, true
-			}
-		}
-		if found {
-			return f, best, true
-		}
-	}
-	return "", Range{}, false
-}
-
 var yamlLineRe = regexp.MustCompile(`\bline (\d+)\b`)
 
-// manifestErrRange places a manifest-level error: on the line a YAML
-// error in the manifest names, else on the manifest's first line.
-func manifestErrRange(mpath string, err error) Range {
-	text := ""
-	if raw, rerr := os.ReadFile(mpath); rerr == nil {
-		text = string(raw)
+// readErrPlace places an error reading the manifest: on the file it names
+// (the manifest, or one of its tag-files, by project-relative path) at the
+// line a YAML error gives, else on the manifest's first line.
+func readErrPlace(mpath string, files []string, err error) (string, Range) {
+	msg := err.Error()
+	file := ""
+	for _, f := range append([]string{mpath}, files...) {
+		rel, rerr := filepath.Rel(filepath.Dir(mpath), f)
+		if rerr == nil && strings.HasPrefix(msg, filepath.ToSlash(rel)+":") {
+			file = f
+			break
+		}
+	}
+	if file == "" {
+		return mpath, fileLineRange(mpath, 1)
 	}
 	line := 1
-	if err != nil && strings.HasPrefix(err.Error(), filepath.Base(mpath)+":") {
-		if m := yamlLineRe.FindStringSubmatch(err.Error()); m != nil {
-			if n, cerr := strconv.Atoi(m[1]); cerr == nil && n >= 1 {
-				line = n
-			}
+	if m := yamlLineRe.FindStringSubmatch(msg); m != nil {
+		if n, cerr := strconv.Atoi(m[1]); cerr == nil && n >= 1 {
+			line = n
 		}
+	}
+	return file, fileLineRange(file, line)
+}
+
+// fileLineRange is lineRange on a file read from disk.
+func fileLineRange(path string, line int) Range {
+	text := ""
+	if raw, err := os.ReadFile(path); err == nil {
+		text = string(raw)
 	}
 	return lineRange(text, line)
 }
 
 // publishManifestDiags publishes the manifest's own diagnostics (#518) for
-// the project governing path, and clears the ones it published before that
-// no longer hold. The editor does not send nautilus.yaml to the server, so
-// this runs as the project's programs are analyzed: a save of the manifest
-// shows on the next keystroke in any of them.
+// the project governing path. It runs as the project's programs are
+// analyzed, and when the editor reports a manifest or tag-file changed
+// (manifestFilesChanged).
 func (s *Server) publishManifestDiags(path string) {
 	mpath, ok := findManifest(path)
 	if !ok {
 		return
 	}
-	found := manifestDiagnostics(mpath, manifestFor(path))
-	if s.manifestDiags == nil {
-		s.manifestDiags = map[string]map[string][]Diagnostic{}
-	}
+	s.publishManifestDiagsAt(mpath, manifestAt(mpath).diags)
+}
+
+// publishManifestDiagsAt publishes found for the manifest at mpath and
+// clears what it published before that no longer holds. Only changes are
+// sent: this runs on every keystroke in a program.
+func (s *Server) publishManifestDiagsAt(mpath string, found map[string][]Diagnostic) {
 	prev := s.manifestDiags[mpath]
 	for uri, ds := range found {
 		if !reflect.DeepEqual(prev[uri], ds) {
@@ -248,7 +304,72 @@ func (s *Server) publishManifestDiags(path string) {
 		delete(s.manifestDiags, mpath)
 		return
 	}
+	if s.manifestDiags == nil {
+		s.manifestDiags = map[string]map[string][]Diagnostic{}
+	}
 	s.manifestDiags[mpath] = found
+}
+
+// manifestFilesChanged answers workspace/didChangeWatchedFiles. The editor
+// does not send nautilus.yaml or a tag-file to the server as a document, so
+// this is how a save, a fix or a delete of one reaches the squiggles: the
+// open documents are analyzed again (their tags may have changed), and
+// every manifest with diagnostics out — or named by the change — publishes
+// afresh, which clears a deleted manifest's.
+func (s *Server) manifestFilesChanged(changes []FileEvent) {
+	watched := manifestFilesWatched()
+	var named []string
+	relevant := false
+	for _, c := range changes {
+		p, ok := uriToPath(c.URI)
+		if !ok {
+			continue
+		}
+		if filepath.Base(p) == project.ManifestName {
+			relevant = true
+			named = append(named, p)
+		} else if watched[p] {
+			relevant = true
+		}
+	}
+	if !relevant {
+		return
+	}
+	uris := make([]string, 0, len(s.docs))
+	for uri := range s.docs {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	for _, uri := range uris {
+		s.setDocument(uri, s.docs[uri].text)
+	}
+	mpaths := append([]string(nil), named...)
+	for mpath := range s.manifestDiags {
+		mpaths = append(mpaths, mpath)
+	}
+	sort.Strings(mpaths)
+	for _, mpath := range mpaths {
+		if st, err := os.Stat(mpath); err != nil || st.IsDir() {
+			s.publishManifestDiagsAt(mpath, nil) // gone: nothing left to say
+			continue
+		}
+		s.publishManifestDiagsAt(mpath, manifestAt(mpath).diags)
+	}
+}
+
+// manifestFilesWatched is every tag-file a cached manifest composes.
+func manifestFilesWatched() map[string]bool {
+	manifests.mu.Lock()
+	defer manifests.mu.Unlock()
+	out := map[string]bool{}
+	for _, m := range []map[string]*manifestEntry{manifests.entries, manifests.failed} {
+		for _, e := range m {
+			for _, f := range e.files {
+				out[f] = true
+			}
+		}
+	}
+	return out
 }
 
 // projectTagDefs is projectTags as the compiler sees them: the tags every
@@ -273,27 +394,46 @@ func manifestFor(path string) *manifestEntry {
 	if !ok {
 		return nil
 	}
+	return manifestAt(mpath)
+}
+
+// manifestAt is the cached read of the manifest at mpath, refreshed when
+// it or a tag-file changes. Never nil.
+func manifestAt(mpath string) *manifestEntry {
 	manifests.mu.Lock()
 	defer manifests.mu.Unlock()
 	prev, hadPrev := manifests.entries[mpath]
 	if hadPrev && prev.mod == modOf(mpath, prev.files) {
 		return prev
 	}
+	if f, ok := manifests.failed[mpath]; ok && f.mod == modOf(mpath, f.files) {
+		return f
+	}
+	decls, rawFiles := scanTagDecls(mpath)
 	tags, defs, bad, files, logix, err := readTags(mpath)
 	if err != nil {
-		// A manifest being edited is invalid for most of the keystrokes it
+		// A manifest being edited is invalid for many of the saves it
 		// takes to add a tag. Serving the last good answer beats completion
-		// blinking out mid-edit — and the failure is deliberately NOT
-		// cached, so the next keystroke retries. The error rides along, for
-		// the diagnostic on the manifest.
+		// blinking out mid-edit; the error rides along, for the diagnostic
+		// on the manifest. The failure is cached against the files'
+		// modtimes, like a good read, and the next good read replaces it.
+		var e manifestEntry
 		if hadPrev {
-			e := *prev
-			e.readErr = err
-			return &e
+			e = *prev
 		}
-		return &manifestEntry{readErr: err, stale: true}
+		e.badTags = nil
+		e.readErr = err
+		e.files = rawFiles
+		e.mod = modOf(mpath, rawFiles)
+		e.unread = unreadOf(decls, e.defs)
+		e.diags = manifestDiagnostics(mpath, &e, decls, rawFiles)
+		manifests.failed[mpath] = &e
+		return &e
 	}
+	delete(manifests.failed, mpath)
 	e := &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags, defs: defs, badTags: bad, logix: logix}
+	e.unread = unreadOf(decls, defs)
+	e.diags = manifestDiagnostics(mpath, e, decls, files)
 	manifests.entries[mpath] = e
 	return e
 }
