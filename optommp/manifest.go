@@ -359,6 +359,26 @@ func indexInRange(i, n int) error {
 	return nil
 }
 
+// IECType names the IEC type of what the driver delivers for the binding,
+// for the generated tag file's type: BOOL for a digital channel, a latch, a
+// scratchpad bit and the online flag; REAL for an analog channel and a
+// scratchpad float (32-bit floats); DINT for a scratchpad integer (32-bit
+// signed); UDINT for a counter and a quality word (32-bit unsigned) and for
+// the driver's outage and watchdog-trip counts. "" for an unknown point.
+func (b Binding) IECType() string {
+	switch b.Point {
+	case PointDI, PointDO, PointOnLatch, PointOffLatch, PointScratchBit, PointOnline:
+		return "BOOL"
+	case PointAI, PointAO, PointScratchFloat:
+		return "REAL"
+	case PointScratchInt:
+		return "DINT"
+	case PointCounter, PointQuality, PointOutages, PointWatchdogTrips:
+		return "UDINT"
+	}
+	return ""
+}
+
 // isOutput reports whether the driver writes the binding.
 func (b Binding) isOutput() bool {
 	switch b.Point {

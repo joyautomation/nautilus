@@ -103,3 +103,72 @@ func TestGivenValueNotOfTheTagsTypeIsAnError(t *testing.T) {
 		}
 	}
 }
+
+// A failing expectation on a TIME tag shows what the tag held as a T#
+// literal, in the failure line and in its trace, the way the test wrote it:
+// `Delay = T#2m`, not `Delay = 120000`.
+func TestFailureShowsTimeAsLiteral(t *testing.T) {
+	results, err := runDelay(t, `
+tests:
+  - name: a TIME expectation that fails
+    given: { Delay: T#2m, Level: 0.0 }
+    steps:
+      - advance: 1s
+        expect: { Delay: T#1m30s }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Passed {
+		t.Fatalf("want one failing result, got %+v", results)
+	}
+	out := acceptance.FormatFailure(results[0])
+	if !strings.Contains(out, "Delay = T#2m, want T#1m30s ") {
+		t.Errorf("failure line does not read Delay = T#2m, want T#1m30s:\n%s", out)
+	}
+	if strings.Contains(out, "120000") || strings.Contains(out, "90000") {
+		t.Errorf("failure output shows Delay in milliseconds:\n%s", out)
+	}
+	trace := false
+	for _, tr := range results[0].Failure.Trace {
+		if tr.Name == "Delay" {
+			trace = true
+			for _, v := range tr.Values {
+				if v != "T#2m" {
+					t.Errorf("Delay trace value %q, want T#2m", v)
+				}
+			}
+		}
+	}
+	if !trace {
+		t.Errorf("no trace for Delay:\n%s", out)
+	}
+}
+
+// The want side of a failing TIME expectation reads in the same units as
+// the actual: a literal written the canonical way as itself, one written
+// another way with what it was read as, and a number (milliseconds) or a
+// numeric bound as a literal too.
+func TestFailureWantOnATimeReadsAsALiteral(t *testing.T) {
+	for _, tc := range []struct{ expect, detail string }{
+		{`{ Delay: T#1m30s }`, `Delay = T#2m, want T#1m30s`},
+		{`{ Delay: t#1M_30S }`, `Delay = T#2m, want T#1m30s`},
+		{`{ Delay: 90s }`, `Delay = T#2m, want 90s (T#1m30s)`},
+		{`{ Delay: 90000 }`, `Delay = T#2m, want T#1m30s`},
+		{`{ Delay: { gt: 200000 } }`, `Delay = T#2m, want > T#3m20s`},
+		{`{ Delay: { le: 60000 } }`, `Delay = T#2m, want <= T#1m`},
+		{`{ Delay: { between: [1000, 2000] } }`, `Delay = T#2m, want between T#1s and T#2s`},
+		{`{ Delay: { near: 60000, tol: 500 } }`, `Delay = T#2m, want T#1m ± T#500ms`},
+	} {
+		results, err := runDelay(t, "tests:\n  - name: fails\n    given: { Delay: T#2m, Level: 0.0 }\n    expect: "+tc.expect+"\n")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.expect, err)
+		}
+		if len(results) != 1 || results[0].Passed || results[0].Failure == nil {
+			t.Fatalf("%s: want one failing result, got %+v", tc.expect, results)
+		}
+		if got := results[0].Failure.Detail; got != tc.detail {
+			t.Errorf("expect %s: failure reads %q, want %q", tc.expect, got, tc.detail)
+		}
+	}
+}
