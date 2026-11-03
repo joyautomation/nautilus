@@ -85,8 +85,7 @@ checks:
   project: projects/2026-10-24-001/typed
   script: checks/2026-10-24-001/001-F04b-server-identity-mandatory-vars.py
   env: {}
-  note: 'the rest of F-04 (issue 424): ApplicationUri, BuildInfo identity, ServerArray/ServiceLevel/Auditing. Also shows BuildInfo
-    (i=2260) reading Good with a null value while ServerStatus.BuildInfo is populated'
+  note: "the rest of F-04 (issue 424): ApplicationUri, BuildInfo identity, ServerArray/ServiceLevel/Auditing. Also shows BuildInfo (i=2260) reading Good with a null value while ServerStatus.BuildInfo is populated Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 9): the check reads Auditing at i=2268 (ServerCapabilities); the tester corrects it to i=2994; #424 closes when it passes."
   expected_today: fail
   group: findings of the parent run, in scope (fixed-unverified -> verified)
   open: '#424'
@@ -230,7 +229,7 @@ checks:
   script: checks/2026-10-24-001/001-F15-status-change-notified.py
   env:
     SUT_MODBUS: 127.0.0.1:5020
-  note: issue 419; starts a pymodbus slave; the driver's reconnect backoff can be 60 s, so allow 5 min
+  note: "issue 419; starts a pymodbus slave; the driver's reconnect backoff can be 60 s, so allow 5 min Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 8): the check's raw uaclient.create_monitored_items is the tester's bug; the tester corrects it to sub.create_monitored_items; #419 closes when it passes."
   expected_today: fail
   group: findings of the parent run, out of scope (filed), rerun because they were cheap
   open: '#419'
@@ -395,13 +394,14 @@ checks:
   project: projects/2026-10-24-001/typed
   script: checks/2026-10-24-001/001-P-type-table.py
   env: {}
-  note: "was gate. Superseded by the fix for F-11 (nautilus#425): an enumeration's DataType is now its own Enumeration subtype (ns=1;s=type:Mode), not i=6, so its rows for Mode1 and P101.State (want i=6) fail by design while every other row still passes. The new enumeration row is covered by 001-F11-enum-names and the opcua/server enumeration tests (OPC-024); the other rows by TestReadsCarryTypesQualityAndTimestamps and TestEveryIntegerWidthReadsAsItsOwnType. For the operator to rule on at reconciliation (the tester's check could read the enumeration's DataType as a subtype of Enumeration). Also: fails after 001-F06 has run on a build with the bug."
+  note: "was gate. Superseded by the fix for F-11 (nautilus#425): an enumeration's DataType is now its own Enumeration subtype (ns=1;s=type:Mode), not i=6, so its rows for Mode1 and P101.State (want i=6) fail by design while every other row still passes. The new enumeration row is covered by 001-F11-enum-names and the opcua/server enumeration tests (OPC-024); the other rows by TestReadsCarryTypesQualityAndTimestamps and TestEveryIntegerWidthReadsAsItsOwnType. For the operator to rule on at reconciliation (the tester's check could read the enumeration's DataType as a subtype of Enumeration). Also: fails after 001-F06 has run on a build with the bug. Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 1): the tester rewrites the check to accept any subtype of Enumeration (i=29) for an enumeration tag; the rewrite is imported back at gate."
   expected_today: pass
   group: what passed (the regression suite)
 - id: 001-P-read-only-tags
   run: 2026-10-24-001
   pass: AccessLevel CurrentRead everywhere; writes refused Bad_UserAccessDenied / Bad_NotWritable
   disposition: gate
+  note: "Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 2): timing-flaky (the program moves P101.Drive.Speed between the before and after reads); stays gate; the tester rewrites it to read a tag the program never writes."
   surface: opcua
   oracle: asyncua + guide
   project: projects/2026-10-24-001/typed
@@ -435,7 +435,7 @@ checks:
   run: 2026-10-24-001
   pass: policy None, mode None, anonymous token only
   disposition: once
-  note: "was gate. Superseded by OPC UA writes slice 2 (docs/design/opcua-server-writes.md §2.1, §7.4): every address now also offers Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under SignAndEncrypt beside None, so 'every endpoint is None/None' no longer holds by design. Its other half (anonymous tokens only) still passes. The new endpoint set is covered by OPC-016 (TestForeignAsyncuaSecure); the writes brief's tester checks will replace this one. For the operator to rule on at reconciliation."
+  note: "was gate. Superseded by OPC UA writes slice 2 (docs/design/opcua-server-writes.md §2.1, §7.4): every address now also offers Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss under SignAndEncrypt beside None, so 'every endpoint is None/None' no longer holds by design. Its other half (anonymous tokens only) still passes. The new endpoint set is covered by OPC-016 (TestForeignAsyncuaSecure); the writes brief's tester checks will replace this one. For the operator to rule on at reconciliation. Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 7): RETIRED. Its anonymous-token half moves into the OPC UA writes brief's checks."
   surface: opcua
   oracle: asyncua
   project: projects/2026-10-24-001/typed
@@ -921,7 +921,7 @@ checks:
   script: checks/2026-11-01-002/002-P-api-live-reaction.py
   env: {}
   expected_today: pass (3.1 s)
-  note: "Reconciliation: nautilus#519 changed the contract: a TIME tag takes its IEC literal over HTTP. The imported check now expects T#8h to land and a non-duration string to be refused; the tester should confirm."
+  note: "Reconciliation: nautilus#519 changed the contract: a TIME tag takes its IEC literal over HTTP. The imported check now expects T#8h to land and a non-duration string to be refused; the tester should confirm. Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 3): the import's change is accepted; the tester confirms it in the reconciliation retest."
 - id: 002-P-force-alarm-delay-live
   run: 2026-11-01-002
   pass: on a running controller a forced high level raises HiLevelAlm only after the 2 s on-delay; a write to a
@@ -990,11 +990,7 @@ checks:
   script: checks/2026-11-01-002/002-F05-run-hours-survive-restart.sh
   env:
     port: 18081
-  note: 'guards a gap against expectation, not against the docs (the redundancy page documents that state re-seeds).
-    If the product rules this wontfix, retire the check rather than invert it was release. James''s decision (2026-11-02):
-    retention is opt-in, CODESYS-style (retain: true, VAR RETAIN; #494); this check expects every state tag kept
-    under retain: {} and fails on the project as written by design (it passes with retain: true on P1_Stats). For
-    the operator to rule on at reconciliation.'
+  note: "guards a gap against expectation, not against the docs (the redundancy page documents that state re-seeds). If the product rules this wontfix, retire the check rather than invert it was release. James's decision (2026-11-02): retention is opt-in, CODESYS-style (retain: true, VAR RETAIN; #494); this check expects every state tag kept under retain: {} and fails on the project as written by design (it passes with retain: true on P1_Stats). For the operator to rule on at reconciliation. Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 4): retention stays opt-in; the tester rewrites the check to set retain: true on P1_Stats; the rewrite is imported at gate and F-05 is verified when it passes."
   expected_today: fail (P1_Stats {Hours 5.0008} before restart → {Hours 0} after)
 - id: 002-F06-check-empty-manifest
   run: 2026-11-01-002
@@ -1071,8 +1067,7 @@ checks:
   project: projects/2026-11-01-002/pumps
   script: checks/2026-11-01-002/002-F14-scaffold-blocks-claim.sh
   env: {}
-  note: 'encodes the page''s sentence. If the page is corrected rather than the scaffold, retire it [project in
-    the run: ''none (scaffolds its own)''; the runner needs one, and the check does not use it]'
+  note: "encodes the page's sentence. If the page is corrected rather than the scaffold, retire it [project in the run: 'none (scaffolds its own)'; the runner needs one, and the check does not use it] Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 5): the page was corrected, not the scaffold; the tester rewrites the check against the page's current claim or retires it; once until then."
   expected_today: fail
 - id: 002-F15-manifest-diag-location
   run: 2026-11-01-002
@@ -1094,9 +1089,7 @@ checks:
   script: checks/2026-11-01-002/002-F16-pt-integer-refused.sh
   env: {}
   expected_today: fail (0 errors)
-  note: 'was gate. James''s decision (2026-11-02): an integer where a TIME is expected keeps compiling and naut
-    check WARNS (#497); this check requires a non-zero exit, so it fails by design. Kept, not inverted, for the
-    operator to rule on at reconciliation.'
+  note: "was gate. James's decision (2026-11-02): an integer where a TIME is expected keeps compiling and naut check WARNS (#497); this check requires a non-zero exit, so it fails by design. Kept, not inverted, for the operator to rule on at reconciliation. Ruled 2026-11-03 by James at reconciliation (nautilus-blackbox runs/RECONCILIATION-2026-11-03.md, ruling 6): an integer TIME keeps compiling with a warning; the tester rewrites the check to expect the warning; the rewrite is imported at gate."
 - id: 002-F17-check-unknown-type-message
   run: 2026-11-01-002
   finding: F-17
