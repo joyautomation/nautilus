@@ -63,7 +63,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -686,16 +688,100 @@ func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: st.LeaderAddr})
-		// -1 disables buffering: an SSE frame must reach the client the
-		// instant the leader emits it, not whenever the proxy's timer next
-		// fires.
-		proxy.FlushInterval = -1
-		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, "leader unavailable: "+err.Error(), http.StatusBadGateway)
+		// The body is kept so a request the leader never received can be
+		// replayed to its successor (forwardTo). API bodies are small; one
+		// past the cap is forwarded once, without the replay.
+		var body []byte
+		if r.Body != nil && r.Body != http.NoBody {
+			b, err := io.ReadAll(io.LimitReader(r.Body, maxReplayBody+1))
+			if err != nil {
+				http.Error(w, "reading request: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if len(b) > maxReplayBody {
+				r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(b), r.Body))
+				s.forwardTo(w, r, st.LeaderAddr, mux, nil, false)
+				return
+			}
+			body = b
 		}
-		proxy.ServeHTTP(w, r)
+		s.forwardTo(w, r, st.LeaderAddr, mux, body, true)
 	})
+}
+
+// maxReplayBody is the largest request body a standby keeps for a replay.
+const maxReplayBody = 1 << 20
+
+// failoverWait is how long a standby waits for leadership to move when the
+// leader refuses its connection: a leader shutting down closes its HTTP
+// port first (#423) and hands the lease over last, after its drivers and
+// Sparkplug stop, so for a few seconds the address it still advertises
+// answers nothing (#483). Overridable in tests.
+var failoverWait = 10 * time.Second
+
+// forwardTo reverse-proxies r to the leader at addr. When the leader
+// refuses the connection, the request never reached it, so replaying it
+// cannot apply a write twice: with replay set, the standby waits for the
+// lease to move and sends it again — to the new leader, or to its own mux
+// if this replica is the new leader. Any other failure (the leader took
+// the request and then failed) is a 502, as before; replaying that one
+// could repeat a write.
+func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, mux http.Handler, body []byte, replay bool) {
+	if body != nil {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+	}
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: addr})
+	// -1 disables buffering: an SSE frame must reach the client the
+	// instant the leader emits it, not whenever the proxy's timer next
+	// fires.
+	proxy.FlushInterval = -1
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		var op *net.OpError
+		if replay && errors.As(err, &op) && op.Op == "dial" {
+			if next, local, ok := s.awaitLeaderChange(r.Context(), addr); ok {
+				if body != nil {
+					r.Body = io.NopCloser(bytes.NewReader(body))
+				}
+				if local {
+					mux.ServeHTTP(w, r)
+					return
+				}
+				s.forwardTo(w, r, next, mux, body, false)
+				return
+			}
+		}
+		http.Error(w, "leader unavailable: "+err.Error(), http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// awaitLeaderChange waits up to failoverWait for the cluster to name a
+// leader other than the one at old: this replica (local) or another
+// address. ok is false when nothing changed in time, or when the client
+// gave up first (ctx): a write the client abandoned, and has likely
+// retried, must not be applied late.
+func (s *Server) awaitLeaderChange(ctx context.Context, old string) (addr string, local, ok bool) {
+	deadline := time.NewTimer(failoverWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		st := s.cluster.Status()
+		if st.IsLeader {
+			return "", true, ctx.Err() == nil
+		}
+		if st.LeaderAddr != "" && st.LeaderAddr != old {
+			return st.LeaderAddr, false, ctx.Err() == nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", false, false
+		case <-deadline.C:
+			return "", false, false
+		case <-tick.C:
+		}
+	}
 }
 
 // withCORS allows browser HMIs served from another origin (e.g. a Vite dev
