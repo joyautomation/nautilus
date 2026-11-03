@@ -439,6 +439,9 @@ type UndefinedTagError struct{ Name string }
 
 func (e *UndefinedTagError) Error() string { return "undefined tag " + e.Name }
 
+// Is makes errors.Is(err, ErrUndefined) true.
+func (e *UndefinedTagError) Is(target error) bool { return target == ErrUndefined }
+
 // Typed accessors (zero value if absent).
 
 func (t *Tags) Real(name string) float64 {
@@ -552,24 +555,34 @@ func (t *Tags) setAny(name string, v any) {
 // No path ever creates a tag: an unknown root is an error, which is what
 // keeps a typo out of the tag store (and off the Sparkplug wire).
 func (t *Tags) SetPath(path string, v any) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.setPathLocked(path, v, false)
+}
+
+// setPathLocked is SetPath under a lock the caller holds. strict holds
+// every leaf to its declared type's range and an enumeration to its
+// members (ir.SetFieldTypedStrict): the front door's rule, not SetPath's.
+func (t *Tags) setPathLocked(path string, v any, strict bool) error {
 	if path == "" {
 		return fmt.Errorf("no tag name")
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	// A tag whose own NAME contains a dot wins over member resolution.
 	// Nothing in nautilus creates one today, but a driver is free to name a
 	// tag after the field symbol it was read from, and such a tag must stay
 	// writable as a whole.
 	if cur, key, ok := t.lookupLocked(path); ok {
 		if ev, isEnum, err := t.enumWrite(key, v); isEnum {
+			if err == nil && strict {
+				err = ir.EnumMemberOnly(t.types[ir.NameKey(key)], v, "tag "+key)
+			}
 			if err != nil {
 				return err
 			}
 			t.writeLocked(key, ev)
 			return nil
 		}
-		return t.setFieldLocked(key, t.writeBase(key, cur), nil, v)
+		return t.setFieldLocked(key, t.writeBase(key, cur), nil, v, strict)
 	}
 	root, segs := ir.SplitAddress(path)
 	if len(segs) == 0 {
@@ -579,7 +592,7 @@ func (t *Tags) SetPath(path string, v any) error {
 	if !ok {
 		return &UndefinedTagError{root}
 	}
-	return t.setFieldLocked(root, t.writeBase(root, cur), segs, v)
+	return t.setFieldLocked(root, t.writeBase(root, cur), segs, v, strict)
 }
 
 // writeBase is the value a member write edits: the stored value, or for a
@@ -594,8 +607,12 @@ func (t *Tags) writeBase(root string, cur *tagVal) ir.Value {
 
 // setFieldLocked applies one member write to a tag already read under the
 // lock, and stores the result. Caller holds t.mu.
-func (t *Tags) setFieldLocked(root string, cur ir.Value, path []string, v any) error {
-	nv, err := ir.SetFieldTyped(cur, t.types[ir.NameKey(root)], path, v, "tag "+root)
+func (t *Tags) setFieldLocked(root string, cur ir.Value, path []string, v any, strict bool) error {
+	set := ir.SetFieldTyped
+	if strict {
+		set = ir.SetFieldTypedStrict
+	}
+	nv, err := set(cur, t.types[ir.NameKey(root)], path, v, "tag "+root)
 	if err != nil {
 		return err
 	}

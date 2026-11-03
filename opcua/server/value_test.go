@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -246,7 +247,7 @@ func TestScalarConvertsInRangeAndWidensOutOfRange(t *testing.T) {
 		{"UINT", 60000, uint16(60000)}, {"UINT", 70000, int64(70000)},
 		{"DINT", 1 << 30, int32(1 << 30)}, {"DINT", 1 << 40, int64(1 << 40)},
 		{"UDINT", 1<<32 - 1, uint32(1<<32 - 1)}, {"UDINT", -3, int64(-3)},
-		{"ULINT", 7, uint64(7)}, {"ULINT", -7, int64(-7)},
+		{"ULINT", 7, uint64(7)}, {"ULINT", -1, uint64(math.MaxUint64)}, {"LWORD", -7, uint64(math.MaxUint64 - 6)},
 		{"LINT", 7, int64(7)}, {"", 7, int64(7)},
 	}
 	for _, tc := range cases {
@@ -388,6 +389,57 @@ func TestLeafName(t *testing.T) {
 	} {
 		if got := leafName(addr); got != want {
 			t.Errorf("%s → %s, want %s", addr, got, want)
+		}
+	}
+}
+
+// #421 part 2: a value of another kind in the store (a REAL in an INT tag,
+// as an unchecked write once left there) does not retype the node. The
+// DataType stays the declared Int16; a whole number is sent as that
+// integer, and an out-of-width one as Int64, never as a Double.
+func TestDeclaredTypeOutlivesAStoredKind(t *testing.T) {
+	typ := &ir.Type{Kind: ir.TypeInt, Name: "INT"}
+	for _, tc := range []struct {
+		v    ir.Value
+		want any
+	}{
+		{ir.RealVal(5), int16(5)},
+		{ir.RealVal(70000), int64(70000)},
+		{ir.RealVal(2.5), 2.5},
+	} {
+		m := member{addr: "Int1", val: tc.v, typ: typ}
+		dt := dataType(m)
+		if dt != id.Int16 {
+			t.Fatalf("%v stored → DataType i=%d, want Int16 (i=%d)", tc.v.F, dt, id.Int16)
+		}
+		if got := scalar(tc.v, dt); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%v stored → %v (%T), want %v (%T)", tc.v.F, got, got, tc.want, tc.want)
+		}
+	}
+}
+
+// A stored kind the declared type cannot carry without loss keeps its own
+// DataType, and one it can is sent as the declared type, so a Variant
+// always agrees with the DataType it is read under (#501 review: a BOOL a
+// driver fed an integer claimed Boolean and sent an Int64).
+func TestVariantAgreesWithDataTypeWhenKindsDiffer(t *testing.T) {
+	for _, tc := range []struct {
+		decl   *ir.Type
+		stored ir.Value
+		dt     uint32
+		want   any
+	}{
+		{ir.RealT, ir.IntVal(7), id.Double, 7.0},
+		{ir.TimeT, ir.IntVal(1000), id.Duration, 1000.0},
+		{&ir.Type{Kind: ir.TypeInt, Name: "DINT"}, ir.TimeVal(1500), id.Int32, int32(1500)},
+		{ir.BoolT, ir.IntVal(1), id.Int64, int64(1)},
+		{ir.StringT, ir.RealVal(2.5), id.Double, 2.5},
+	} {
+		m := member{addr: "X", val: tc.stored, typ: tc.decl}
+		dt := dataType(m)
+		got := scalar(tc.stored, dt)
+		if dt != tc.dt || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("declared %v holding %v: DataType i=%d Variant %v (%T), want i=%d %v (%T)", tc.decl.Kind, tc.stored.Kind, dt, got, got, tc.dt, tc.want, tc.want)
 		}
 	}
 }

@@ -1134,9 +1134,11 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	if s.tagWriter == nil {
 		// A forced address holds its forced value against every writer,
 		// an operator's included; answering 204 for a write the force will
-		// swallow would be a lie. Change the force, or remove it.
+		// swallow would be a lie. Checked first, so a forced input says
+		// "forced" rather than "input"; the front door checks again under
+		// its lock.
 		if f := s.rt.Tags().ForcedOverlap(req.Name); f != "" {
-			http.Error(w, "tag "+f+" is forced — change the force value or remove the force first", http.StatusConflict)
+			http.Error(w, (&runtime.ForcedError{Path: req.Name, Force: f}).Error(), http.StatusConflict)
 			return
 		}
 	}
@@ -1175,11 +1177,7 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if member || enum {
-		if err := s.rt.Tags().SetPath(req.Name, req.Value); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		s.frontDoor(w, req, false)
 		return
 	}
 	// Whole-tag scalar write. JSON numbers decode to float64; booleans to
@@ -1195,19 +1193,60 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "undefined tag "+req.Name+": not a declared tag, so there is nothing to write (a CONSTANT is not a tag and cannot be written)", http.StatusBadRequest)
 		return
 	}
-	switch v := req.Value.(type) {
+	switch req.Value.(type) {
 	case float64, bool:
-		s.rt.Tags().Set(req.Name, req.Value)
-		w.WriteHeader(http.StatusNoContent)
 	case string:
-		if cur, err := s.rt.Tags().ReadGlobal(req.Name); err != nil || cur.Kind != ir.TypeString {
+		kind := ir.TypeVoid
+		if cur, err := s.rt.Tags().ReadGlobal(req.Name); err == nil {
+			kind = cur.Kind
+		} else if t := s.rt.Tags().TypeOf(req.Name); t != nil {
+			kind = t.Kind
+		}
+		if kind != ir.TypeString {
 			http.Error(w, "value must be a number or boolean (a string only to a STRING tag)", http.StatusUnprocessableEntity)
 			return
 		}
-		s.rt.Tags().Set(req.Name, v)
-		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "value must be a number or boolean", http.StatusUnprocessableEntity)
+		return
+	}
+	s.frontDoor(w, req, true)
+}
+
+// frontDoor applies one write through the runtime's front door
+// (runtime.Tags.Write), which converts to the declared type, checks the
+// declared width and refuses a forced address, and answers it: 204 when it
+// landed; 409 for a force; for a whole-tag scalar (whole) 422 when the
+// value is the wrong kind, as before the front door; 400 for everything
+// else, an out-of-range value included (#421: an INT took 70000).
+//
+// A declared tag the store has not seen yet (an output no scan has written)
+// is written onto a zero of its declared type, by the same strict rule, so
+// it cannot be born retyped (#421 on the output a Sparkplug host commands
+// through). Only a tag with no declared type at all, which has nothing to
+// convert against, is written as it comes.
+func (s *Server) frontDoor(w http.ResponseWriter, req writeTagRequest, whole bool) {
+	err := s.rt.Tags().Write([]runtime.WriteOp{{Path: req.Name, Value: req.Value}})[0]
+	if whole && errors.Is(err, runtime.ErrUndefined) {
+		if t := s.rt.Tags().TypeOf(req.Name); t != nil {
+			var nv ir.Value
+			if nv, err = ir.SetFieldTypedStrict(ir.Zero(t), t, nil, req.Value, "tag "+req.Name); err == nil {
+				s.rt.Tags().Set(req.Name, nv)
+			}
+		} else {
+			s.rt.Tags().Set(req.Name, req.Value)
+			err = nil
+		}
+	}
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, runtime.ErrForced):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case whole && errors.Is(err, ir.ErrTypeMismatch):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	default:
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	}
 }
 

@@ -60,8 +60,26 @@ func SetField(val Value, path []string, v any, sofar string) (Value, error) {
 // "Steps[2].Mode" into "Steps", "[2]", "Mode"). Without a type the index
 // counts from 0, which is what a driver-delivered array is.
 func SetFieldTyped(val Value, t *Type, path []string, v any, sofar string) (Value, error) {
+	return setFieldTyped(val, t, path, v, sofar, false)
+}
+
+// SetFieldTypedStrict is SetFieldTyped for a write from a client (an
+// operator's HTTP write, an OPC UA Write): every leaf it reaches, through a
+// path, a mapping or a list, must also FIT its declared type. An integer
+// must be within its declared width (a 64-bit unsigned or bit-string type
+// takes any 64-bit pattern, as the VM holds one), a REAL takes no NaN or
+// infinity, and an enumeration takes only a member's name or value. The
+// lenient form stays for what restores or replays state the program
+// produced (a retained value, a test's given:, a force), because the VM
+// does not wrap a declared INT that a program counts past 32767, and such
+// a value must survive a restart as it was.
+func SetFieldTypedStrict(val Value, t *Type, path []string, v any, sofar string) (Value, error) {
+	return setFieldTyped(val, t, path, v, sofar, true)
+}
+
+func setFieldTyped(val Value, t *Type, path []string, v any, sofar string, strict bool) (Value, error) {
 	if len(path) == 0 {
-		return assignInto(val, t, v, sofar)
+		return assignInto(val, t, v, sofar, strict)
 	}
 	name := path[0]
 	if name == "" {
@@ -75,7 +93,7 @@ func SetFieldTyped(val Value, t *Type, path []string, v any, sofar string) (Valu
 		if err != nil {
 			return Value{}, err
 		}
-		ev, err := SetFieldTyped(val.Arr[i], et, path[1:], v, sofar+name)
+		ev, err := setFieldTyped(val.Arr[i], et, path[1:], v, sofar+name, strict)
 		if err != nil {
 			return Value{}, err
 		}
@@ -92,7 +110,7 @@ func SetFieldTyped(val Value, t *Type, path []string, v any, sofar string) (Valu
 	if !ok || i >= len(val.Fld) {
 		return Value{}, fmt.Errorf("%s: unknown member %s%s", sofar, name, didYouMean(name, val.Struct))
 	}
-	fv, err := SetFieldTyped(val.Fld[i], val.Struct.Fields[i].Type, path[1:], v, sofar+"."+name)
+	fv, err := setFieldTyped(val.Fld[i], val.Struct.Fields[i].Type, path[1:], v, sofar+"."+name, strict)
 	if err != nil {
 		return Value{}, err
 	}
@@ -227,20 +245,36 @@ func elementAt(val Value, t *Type, idx int, sofar string) (int, *Type, error) {
 // onto an array, an ir.Value is taken as-is when its kind agrees, and
 // anything else is a scalar coerced to the value's own kind (an
 // enumeration's member by name or integer, when t says it is one).
-func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
+func assignInto(cur Value, t *Type, v any, sofar string, strict bool) (Value, error) {
 	if t != nil && t.Enum != nil {
+		if strict {
+			if err := EnumMemberOnly(t, v, sofar); err != nil {
+				return Value{}, err
+			}
+		}
 		return EnumFromAny(t, v, sofar)
 	}
 	if nv, ok := v.(Value); ok {
 		if cur.Kind != TypeVoid && nv.Kind != cur.Kind {
-			return Value{}, fmt.Errorf("%s: want %s, got %s", sofar, cur.Kind, nv.Kind)
+			return Value{}, mismatchf("%s: want %s, got %s", sofar, cur.Kind, nv.Kind)
+		}
+		if strict {
+			if err := checkFits(t, nv, sofar); err != nil {
+				return Value{}, err
+			}
 		}
 		return CopyValue(nv), nil
+	}
+	// A 64-bit unsigned or bit-string type holds any 64-bit pattern in the
+	// int64 the store keeps: an unsigned value past 2^63-1 is stored as its
+	// bit pattern, which is how the VM itself holds one.
+	if u, ok := v.(uint64); ok && unsigned64(t) {
+		v = int64(u)
 	}
 	if cur.Kind == TypeStruct {
 		m, ok := asStringMap(v)
 		if !ok {
-			return Value{}, fmt.Errorf(
+			return Value{}, mismatchf(
 				"%s: %s is a struct — a write must be a mapping of member: value, not %s",
 				sofar, structName(cur), describeKind(v))
 		}
@@ -254,7 +288,7 @@ func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
 		sort.Strings(keys)
 		out := cur
 		for _, k := range keys {
-			nv, err := SetFieldTyped(out, t, []string{k}, m[k], sofar)
+			nv, err := setFieldTyped(out, t, []string{k}, m[k], sofar, strict)
 			if err != nil {
 				return Value{}, err
 			}
@@ -268,10 +302,10 @@ func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
 		// a null entry leaves that element.
 		list, ok := v.([]any)
 		if !ok {
-			return Value{}, fmt.Errorf("%s: an array is written as a list of elements, or one element by index (%s[n]), not %s", sofar, sofar, describeKind(v))
+			return Value{}, mismatchf("%s: an array is written as a list of elements, or one element by index (%s[n]), not %s", sofar, sofar, describeKind(v))
 		}
 		if len(list) > len(cur.Arr) {
-			return Value{}, fmt.Errorf("%s: %d values for an array of %d", sofar, len(list), len(cur.Arr))
+			return Value{}, rangef("%s: %d values for an array of %d", sofar, len(list), len(cur.Arr))
 		}
 		lo := 0
 		if t != nil && t.Kind == TypeArray {
@@ -282,7 +316,7 @@ func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
 			if e == nil {
 				continue
 			}
-			nv, err := SetFieldTyped(out, t, []string{"[" + strconv.Itoa(lo+i) + "]"}, e, sofar)
+			nv, err := setFieldTyped(out, t, []string{"[" + strconv.Itoa(lo+i) + "]"}, e, sofar, strict)
 			if err != nil {
 				return Value{}, err
 			}
@@ -290,7 +324,16 @@ func assignInto(cur Value, t *Type, v any, sofar string) (Value, error) {
 		}
 		return out, nil
 	}
-	return coerceLeaf(cur, v, sofar)
+	nv, err := coerceLeaf(cur, v, sofar)
+	if err != nil {
+		return Value{}, err
+	}
+	if strict {
+		if err := checkFits(t, nv, sofar); err != nil {
+			return Value{}, err
+		}
+	}
+	return nv, nil
 }
 
 // EnumFromAny converts a written value to the enumerated type t: a member
@@ -324,7 +367,7 @@ func EnumFromAny(t *Type, v any, sofar string) (Value, error) {
 	if i, ok := toInt(v); ok {
 		return t.Enum.Val(i), nil
 	}
-	return Value{}, fmt.Errorf("%s: want a member of %s (%s), got %s", sofar, t.Enum.Name, enumNames(t.Enum), describeKind(v))
+	return Value{}, mismatchf("%s: want a member of %s (%s), got %s", sofar, t.Enum.Name, enumNames(t.Enum), describeKind(v))
 }
 
 // coerceLeaf converts a written scalar to the kind the value already has.
@@ -336,27 +379,27 @@ func coerceLeaf(cur Value, v any, sofar string) (Value, error) {
 		if b, ok := v.(bool); ok {
 			return BoolVal(b), nil
 		}
-		return Value{}, fmt.Errorf("%s: want BOOL, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeBool, v, "%s: want BOOL, got %s", sofar, describeKind(v))
 	case TypeReal:
 		if f, ok := toFloat(v); ok {
 			return RealVal(f), nil
 		}
-		return Value{}, fmt.Errorf("%s: want REAL, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeReal, v, "%s: want REAL, got %s", sofar, describeKind(v))
 	case TypeInt:
 		if i, ok := toInt(v); ok {
 			return IntVal(i), nil
 		}
-		return Value{}, fmt.Errorf("%s: want INT, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeInt, v, "%s: want INT, got %s", sofar, describeKind(v))
 	case TypeTime:
 		if i, ok := toInt(v); ok {
 			return TimeVal(i), nil
 		}
-		return Value{}, fmt.Errorf("%s: want TIME (milliseconds), got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeTime, v, "%s: want TIME (milliseconds), got %s", sofar, describeKind(v))
 	case TypeString:
 		if s, ok := v.(string); ok {
 			return StringVal(s), nil
 		}
-		return Value{}, fmt.Errorf("%s: want STRING, got %s", sofar, describeKind(v))
+		return Value{}, wantErr(TypeString, v, "%s: want STRING, got %s", sofar, describeKind(v))
 	case TypeArray, TypeFB:
 		// No settled literal form for either in a write payload (an array
 		// needs indices, an FB instance is identity, not a value). Refuse
