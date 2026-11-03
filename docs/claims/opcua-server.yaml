@@ -107,11 +107,16 @@ claims:
       (ServerStatusType, PropertyType), never its DataType. ServiceLevel
       reads 255 while the server runs and Auditing false; ServerCapabilities'
       Mandatory properties have values (no profile or locale claimed, the
-      sweep as MinSupportedSampleRate, no continuation-point limit).
+      sweep as MinSupportedSampleRate, no continuation-point limit), as do
+      MaxArrayLength and MaxStringLength (0, no limit of the server's own);
+      ServerDiagnostics.EnabledFlag reads false (no diagnostics collected).
+      The project folder under Objects browses as a FolderType.
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestServerObjectDescribesNautilus
       - go ./opcua/server TestBrowseTypeDefinitionsAreTypes
+      - go ./opcua/server TestServerDiagnosticsAndLimitsHaveValues
+      - go ./opcua/internal/uaserver TestAddRefNeverUsesTheDataTypeAsTypeDefinition
       - go ./opcua/server TestApplicationURIIsStableAndOverridable
       - go ./opcua/server TestBinaryBuildIsNeverThePlaceholder
       - go ./opcua/internal/uaserver TestApplicationURIOptionWinsOverTheCertificate

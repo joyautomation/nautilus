@@ -279,6 +279,18 @@ func (s *Server) Start(ctx context.Context) error {
 	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_MinSupportedSampleRate)); n != nil {
 		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(float64(s.opts.Sweep)/float64(time.Millisecond)))
 	}
+	// Diagnostics are not collected, and ServerDiagnostics says so: its
+	// mandatory EnabledFlag reads false rather than failing (nautilus#485).
+	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag)); n != nil {
+		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(false))
+	}
+	// No array or string limit of the server's own: 0 is "no limit"
+	// (Part 5, ServerCapabilitiesType). The message size bounds both.
+	for _, nid := range []uint32{id.Server_ServerCapabilities_MaxArrayLength, id.Server_ServerCapabilities_MaxStringLength} {
+		if n := srv.Node(ua.NewNumericNodeID(0, nid)); n != nil {
+			n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(0)))
+		}
+	}
 	// Hang the project folder off ns=0's Objects, where every client
 	// starts browsing.
 	root, err := srv.Namespace(0)

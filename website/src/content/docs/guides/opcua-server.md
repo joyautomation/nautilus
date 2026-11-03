@@ -121,7 +121,10 @@ names the product (`ProductUri` `urn:joyautomation:nautilus`, Joy
 Automation, Nautilus), the version `naut version` prints, the commit it
 was built from as the build number, and that commit's date. `ServiceLevel`
 is 255 while the server runs, and `Auditing` is false: the server writes
-no audit events.
+no audit events. `ServerDiagnostics.EnabledFlag` is false too, because the
+server collects no diagnostics. `MaxArrayLength` and `MaxStringLength`
+under `ServerCapabilities` are 0, meaning the server sets no limit of its
+own (the message size still bounds both).
 
 ## Types
 

@@ -340,3 +340,30 @@ func TestBrowseTypeDefinitionsAreTypes(t *testing.T) {
 		t.Errorf("Objects → project folder %+v, want TypeDefinition FolderType (i=61)", folder)
 	}
 }
+
+// The Server object's ServerDiagnostics.EnabledFlag (Mandatory) and the
+// optional MaxArrayLength and MaxStringLength read as values, not
+// Bad_AttributeIdInvalid (nautilus#485): diagnostics are off, and the
+// server sets no array or string limit of its own (0).
+func TestServerDiagnosticsAndLimitsHaveValues(t *testing.T) {
+	rt, _ := newRuntime(t)
+	_, c := startServer(t, rt)
+	for _, tc := range []struct {
+		name string
+		nid  uint32
+		want any
+	}{
+		{"ServerDiagnostics.EnabledFlag", id.Server_ServerDiagnostics_EnabledFlag, false},
+		{"ServerCapabilities.MaxArrayLength", id.Server_ServerCapabilities_MaxArrayLength, uint32(0)},
+		{"ServerCapabilities.MaxStringLength", id.Server_ServerCapabilities_MaxStringLength, uint32(0)},
+	} {
+		dv := read(t, c, ua.NewNumericNodeID(0, tc.nid), ua.AttributeIDValue)
+		if dv.Status != ua.StatusOK {
+			t.Errorf("%s: %s, want a value", tc.name, dv.Status)
+			continue
+		}
+		if got := dv.Value.Value(); got != tc.want {
+			t.Errorf("%s = %#v, want %#v", tc.name, got, tc.want)
+		}
+	}
+}

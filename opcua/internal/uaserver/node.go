@@ -372,12 +372,13 @@ const (
 func (n *Node) AddRef(o *Node, rt RefType, forward bool) {
 	//eoid := ua.NewNumericExpandedNodeID(o.ns.ID(), o.)
 	eoid := ua.NewExpandedNodeID(o.ID(), "", 0)
-	// The target's HasTypeDefinition; failing that, DataType(), which is
-	// where a node built without references keeps its type (opcua/server's
-	// project folder holds FolderType there).
+	// The target's HasTypeDefinition; failing that, the null NodeId, never
+	// its DataType: a Variable's DataType is not its type definition
+	// (nautilus#485). Browse resolves the target's type again when it
+	// answers, so a type added after this reference still shows.
 	tdef := o.TypeDefinition()
 	if tdef == nil {
-		tdef = o.DataType()
+		tdef = ua.NewTwoByteExpandedNodeID(0)
 	}
 
 	ref := ua.ReferenceDescription{
