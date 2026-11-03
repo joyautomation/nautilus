@@ -739,7 +739,7 @@ func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		var op *net.OpError
 		if replay && errors.As(err, &op) && op.Op == "dial" {
-			if next, local, ok := s.awaitLeaderChange(addr); ok {
+			if next, local, ok := s.awaitLeaderChange(r.Context(), addr); ok {
 				if body != nil {
 					r.Body = io.NopCloser(bytes.NewReader(body))
 				}
@@ -758,20 +758,29 @@ func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, 
 
 // awaitLeaderChange waits up to failoverWait for the cluster to name a
 // leader other than the one at old: this replica (local) or another
-// address. ok is false when nothing changed in time.
-func (s *Server) awaitLeaderChange(old string) (addr string, local, ok bool) {
-	for deadline := time.Now().Add(failoverWait); ; {
+// address. ok is false when nothing changed in time, or when the client
+// gave up first (ctx): a write the client abandoned, and has likely
+// retried, must not be applied late.
+func (s *Server) awaitLeaderChange(ctx context.Context, old string) (addr string, local, ok bool) {
+	deadline := time.NewTimer(failoverWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		st := s.cluster.Status()
 		if st.IsLeader {
-			return "", true, true
+			return "", true, ctx.Err() == nil
 		}
 		if st.LeaderAddr != "" && st.LeaderAddr != old {
-			return st.LeaderAddr, false, true
+			return st.LeaderAddr, false, ctx.Err() == nil
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-ctx.Done():
 			return "", false, false
+		case <-deadline.C:
+			return "", false, false
+		case <-tick.C:
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
 }
 

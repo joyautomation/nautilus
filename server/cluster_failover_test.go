@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -99,5 +100,36 @@ func TestStandbyRefusedForwardWithNoNewLeaderIs502(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status %d, want 502", rec.Code)
+	}
+}
+
+// A client that gives up while the standby waits for the new leader is not
+// replayed later: the write it abandoned (and has likely retried) must not
+// land behind its back.
+func TestStandbyDoesNotReplayAnAbandonedRequest(t *testing.T) {
+	defer func(d time.Duration) { failoverWait = d }(failoverWait)
+	failoverWait = 5 * time.Second
+	hit := make(chan struct{}, 1)
+	next := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit <- struct{}{} }))
+	defer next.Close()
+	c := &movingCluster{st: leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: deadAddr(t)}}
+	srv := New(newTestRuntime(t), Options{Cluster: c})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel() // the client gives up
+		time.Sleep(200 * time.Millisecond)
+		c.set(leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-2", LeaderAddr: standbyAddr(next)})
+	}()
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader(`{"name":"SP","value":5}`)).WithContext(ctx))
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("the handler waited %v after the client left", d)
+	}
+	select {
+	case <-hit:
+		t.Fatal("the abandoned write was replayed to the new leader")
+	case <-time.After(500 * time.Millisecond):
 	}
 }
