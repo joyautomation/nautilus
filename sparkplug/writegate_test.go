@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
@@ -290,4 +291,54 @@ func newRuntimeForGate(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	var buf bytes.Buffer
 	return newCommandNode(t, &buf).rt
+}
+
+// A command goes through the runtime's write front door, as HTTP and OPC
+// UA writes do: a value the tag's declared type cannot hold is refused,
+// never stored as a new type, and a forced tag keeps its force. Before,
+// an NCMD carrying a String for the REAL SpeedSP turned it into a STRING
+// tag, and a Boolean then into a BOOL.
+func TestCommandWritesGoThroughTheFrontDoor(t *testing.T) {
+	var buf bytes.Buffer
+	n := newCommandNode(t, &buf, WithWritable("SpeedSP", "Motor1.*"))
+	tags := n.rt.Tags()
+
+	for _, m := range []Metric{
+		{Name: "SpeedSP", Datatype: spb.DataType_String, Value: "fast"},
+		{Name: "SpeedSP", Datatype: spb.DataType_Boolean, Value: true},
+		{Name: "Motor1.Speed", Datatype: spb.DataType_String, Value: "fast"},
+	} {
+		n.applyCommand("", Payload{Metrics: []Metric{m}})
+	}
+	if v, err := tags.ReadGlobal("SpeedSP"); err != nil || v.Kind != ir.TypeReal || v.F != 12.5 {
+		t.Errorf("SpeedSP after a String and a Boolean command = %+v (%v), want REAL 12.5", v, err)
+	}
+	if fld(t, motor1(t, n), "Speed").Kind != ir.TypeReal || fld(t, motor1(t, n), "Speed").F != 1450 {
+		t.Errorf("Motor1.Speed after a String command = %+v, want REAL 1450", fld(t, motor1(t, n), "Speed"))
+	}
+	if got := n.Status().CommandsRefused; got != 3 {
+		t.Errorf("CommandsRefused = %d, want 3", got)
+	}
+	if !strings.Contains(buf.String(), "does not fit the tag's type") {
+		t.Errorf("log does not say why:\n%s", buf.String())
+	}
+
+	// A value the type holds is still written: an integer into a REAL.
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "SpeedSP", Datatype: spb.DataType_Int64, Value: int64(40)}}})
+	if v := speedSP(t, n); v != 40 {
+		t.Errorf("SpeedSP after an Int64 40 command = %v, want 40", v)
+	}
+
+	// A forced tag is not written underneath its force.
+	if err := tags.Force("SpeedSP", 7.0); err != nil {
+		t.Fatal(err)
+	}
+	n.applyCommand("", setSpeedSP(99))
+	tags.Unforce("SpeedSP")
+	if v := speedSP(t, n); v != 40 {
+		t.Errorf("SpeedSP after a command while forced, then unforced = %v, want 40 (the command refused)", v)
+	}
+	if !strings.Contains(buf.String(), "the tag is forced") {
+		t.Errorf("log does not mention the force:\n%s", buf.String())
+	}
 }

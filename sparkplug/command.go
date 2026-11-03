@@ -1,11 +1,13 @@
 package sparkplug
 
 import (
+	"errors"
 	"strings"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
 
@@ -100,10 +102,32 @@ func (n *Node) applyCommand(device string, payload Payload) {
 			continue
 		}
 		if v, ok := commandValue(m); ok {
-			tags.Set(m.Name, v)
+			// The runtime's one write front door, as HTTP and OPC UA use:
+			// a value the tag's declared type cannot hold is refused, never
+			// stored as a new type, and a forced tag keeps its force.
+			if err := tags.Write([]runtime.WriteOp{{Path: m.Name, Value: v}})[0]; err != nil {
+				n.refuseCommand(writeRefusal(err), m.Name, "datatype", m.Datatype.String(), "error", err)
+				continue
+			}
 			n.log.Debug("sparkplug: command write", "tag", m.Name, "value", m.Value)
 		}
 	}
+}
+
+// writeRefusal is the logged reason for a command the runtime's write
+// front door refused.
+func writeRefusal(err error) string {
+	switch {
+	case errors.Is(err, runtime.ErrForced):
+		return "the tag is forced"
+	case errors.Is(err, runtime.ErrUndefined):
+		return "no such tag"
+	case errors.Is(err, ir.ErrTypeMismatch):
+		return "the value does not fit the tag's type"
+	case errors.Is(err, ir.ErrOutOfRange):
+		return "the value is out of the tag's range"
+	}
+	return "the write failed"
 }
 
 // arrayWriteRefusal is the reason an array write is refused. Sparkplug can
@@ -188,7 +212,10 @@ func (n *Node) commandTemplate(m Metric) {
 			"sparkplug: template command names a member the type does not have; ignored",
 			"tag", m.Name, "member", u, "type", prev.Struct.Name)
 	}
-	tags.Set(m.Name, merged)
+	if err := tags.Write([]runtime.WriteOp{{Path: m.Name, Value: merged}})[0]; err != nil {
+		n.refuseCommand(writeRefusal(err), m.Name, "error", err)
+		return
+	}
 	n.log.Debug("sparkplug: template command write", "tag", m.Name, "members", len(templateMembers(m)))
 }
 

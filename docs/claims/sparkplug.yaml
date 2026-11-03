@@ -26,10 +26,14 @@ claims:
     claim: >-
       A host can write the tags `writable:` names back via NCMD: a scalar
       command overwrites the tag in the store for the program to act on.
+      It goes through the same write path as HTTP and OPC UA writes: a
+      value the tag's declared type cannot hold is refused, never stored as
+      a new type, and a forced tag's command is refused.
     source: "#"
     tests:
       - go ./sparkplug TestWriteGateOpensMatchingTagsOnly
       - go ./sparkplug TestCommandScalarStillReplaces
+      - go ./sparkplug TestCommandWritesGoThroughTheFrontDoor
   - id: SPB-005
     claim: >-
       `Node Control/Rebirth` is honored: the node answers the command with

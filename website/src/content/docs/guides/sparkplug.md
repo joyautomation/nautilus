@@ -156,8 +156,12 @@ writes only its own device's tags, an NCMD only node-level ones. Array
 writes are not supported yet: a command carrying an array metric, a
 template command with an array member, or a metric named by index
 (`Levels[1]`) has the array write refused. The
-template's other members still apply. Every refusal is logged once per
-tag and counted as `commandsRefused` in the node's status.
+template's other members still apply. A command is written the way an
+HTTP or OPC UA write is: a value the tag's type cannot hold (a String for
+a `REAL`, a number past an `INT`'s range) is refused rather than changing
+the tag's type, and a forced tag refuses commands until the force is
+removed. Every refusal is logged once per tag and counted as
+`commandsRefused` in the node's status.
 
 ## Primary host and store-and-forward
 
