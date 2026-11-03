@@ -62,15 +62,14 @@ func suitableRefType(srv *Server, ref1, ref2 *ua.NodeID, subtypes bool) bool {
 	if ref1.Equal(ref2) {
 		return true
 	}
-	hasRef2Fn := func(nid *ua.NodeID) bool { return nid.Equal(ref2) }
-	hasSubtypeFn := func(nid *ua.NodeID) bool { return nid.Equal(hasSubtype) }
-	oktypes := getSubRefs(srv, ref1)
-	if !subtypes && slices.ContainsFunc(oktypes, hasSubtypeFn) {
-		for n := slices.IndexFunc(oktypes, hasSubtypeFn); n > 0; {
-			oktypes = slices.Delete(oktypes, n, n+1)
-		}
+	// Without subtypes only the type itself matches (Part 4, 5.8.2). This
+	// used to delete HasSubtype from the subtype list in a loop that never
+	// advanced, which ran off the slice and panicked the server whenever a
+	// client asked for, say, HierarchicalReferences without subtypes.
+	if !subtypes {
+		return false
 	}
-	return slices.ContainsFunc(oktypes, hasRef2Fn)
+	return slices.ContainsFunc(getSubRefs(srv, ref1), func(nid *ua.NodeID) bool { return nid.Equal(ref2) })
 }
 
 func getSubRefs(srv *Server, nid *ua.NodeID) []*ua.NodeID {

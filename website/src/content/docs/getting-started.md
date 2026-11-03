@@ -69,8 +69,12 @@ naut new my-plant --template sdk       # Go project, for a custom field bus
 naut new my-plant --template sdk-demo  # Go project with plant physics in Go
 ```
 
-Run it bare for the interactive form — it asks for the template, the
-program language, and the features you want.
+With a name and a `--template` it writes the project straight away, with
+the defaults: the CI workflow, the VS Code setup and `git init`
+(`--language fbd`, `ld` or `sfc` for the program, `--deploy` for the
+container and Kubernetes files). Run it bare, or with only a name, for the
+interactive form — it asks for the template, the program language, and the
+features you want. `--no-input` never prompts.
 
 A nautilus project is your logic and a manifest. Run, test, and ship it
 with the CLI alone, no toolchain:
@@ -84,7 +88,8 @@ naut build      # emit ./my-plant — a self-contained controller binary
 ```
 
 `nautilus.yaml` declares the tasks (one program file each, any language,
-own scan rates), the tags by role, the server, and the field driver.
+own scan rates), the tags by [role](/guides/tag-model/#which-role-fits-which-job),
+the server, and the field driver.
 `naut build` emits one deployable binary, with no Go toolchain anywhere.
 
 `*_test.yaml` holds the acceptance tests, and they run against a **virtual
@@ -126,13 +131,15 @@ does.
 Open **http://localhost:8080** for the built-in live dashboard, or
 `GET /api/state` for the raw tag snapshot. Setpoints are click-to-set right in
 the tag table — click a value and type, or flip a BOOL with its toggle — so you
-can drive the loop before there is an HMI. Inputs and outputs stay read-only:
+can drive the loop before there is an HMI. Inputs and outputs stay read-only in
+the dashboard:
 the driver rewrites an input before every scan and the logic rewrites an output
 after, so an edit there would be discarded within a scan. `POST /api/tags` to
 a `role: input` tag is refused for the same reason. To drive an input during
 bring-up, [force it](/guides/forcing/): `POST /api/forces` with
 `{"name": "LevelPct", "value": 65}` holds the value against the driver until you
-remove the force.
+remove the force. Every endpoint, with its status codes, is in the
+[HTTP API](/guides/http-api/) reference.
 
 ## 3. Develop in VS Code
 
@@ -169,13 +176,22 @@ full path (`which naut`), or launch VS Code from a terminal with `code .`.
   for a Dockerfile, a redundant-pair Kubernetes manifest, and the workflow
   that ships a merged commit to the controller.
 
+To do all of that once, on a small program of your own, follow
+[Your first program](/guides/first-program/): a sump pump with a
+minimum-run timer and a start counter, from tags to tests to a running,
+force-driven controller to a built binary, on one page.
+
 ## Next
 
+- [Your first program](/guides/first-program/) — declare, write, test,
+  run, force and build one small program, end to end.
 - [Online edits](/guides/online-edits/) — change logic on a running
   controller from VS Code, and pull field edits back into git.
 - [Testing](/reference/testing/) — virtual time, and the `*_test.yaml`
   format for asserting on timers and loop responses.
-- [The tag model](/guides/tag-model/) — how tags come to exist, which role
-  fits which job, and the one rule that bites.
+- [The tag model](/guides/tag-model/) — [which role fits which
+  job](/guides/tag-model/#which-role-fits-which-job) (`input`, `output`,
+  `setpoint` or `state`), how tags come to exist, and the one rule that
+  bites.
 - [Language reference](/reference/functions/) — evaluation semantics and
   every built-in operator, function, and function block.

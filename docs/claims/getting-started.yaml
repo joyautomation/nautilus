@@ -14,6 +14,14 @@ claims:
       - go ./cmd/naut TestScaffoldVariants
       - go ./cmd/naut TestScaffoldTourDeclaresThreeTasksInThreeLanguages
       - go ./cmd/naut TestScaffoldMinimalIsOneTaskOneProgramOneTestFile
+  - id: GS-014
+    claim: >-
+      naut new with a name and a --template writes the project with the
+      defaults and opens no form; run bare, or with only a name, it opens the
+      interactive form; --no-input never prompts.
+    source: "#2-scaffold-a-project"
+    tests:
+      - go ./cmd/naut TestNewNameAndTemplateSkipTheForm
   - id: GS-002
     claim: >-
       A freshly scaffolded project can be run, tested and shipped with the

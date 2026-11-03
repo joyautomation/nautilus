@@ -22,11 +22,13 @@ re-applied every scan until it is removed.
 
 A forced value is checked and converted like any write: an enumerated
 member or tag takes its member name (`Run`), and a name that is no member
-is refused with the list of members; a value the tag's type cannot hold
-(`70000` for an `INT`, a string for a `REAL`, a fraction for an integer)
-is refused with a `400` and nothing is forced. An acceptance test's
-`force:` is the exception: it may hold a value the program itself can
-produce, such as an `INT` counted past 32767.
+is refused with the list of members; a `TIME` takes milliseconds or its IEC
+literal (`"T#45s"`), and a string that is no duration is refused with the
+reason. A value the tag's type cannot hold (`70000` for an `INT`, a string
+for a `REAL`, a fraction for an integer) is refused with a `400` and
+nothing is forced. An acceptance test's `force:` is the exception: it may
+hold a value the program itself can produce, such as an `INT` counted past
+32767.
 
 The controller records what the tag *would* hold — the driver's latest
 reading, the logic's latest write — and the force table shows it beside the
@@ -94,7 +96,8 @@ Forces are deliberately short-lived:
 ## The API
 
 Every write passes the same guard as `POST /api/tags` (same-origin by
-default; the token when `NAUTILUS_TOKEN` is set).
+default; the token when `NAUTILUS_TOKEN` is set). Responses and status
+codes are in the [HTTP API](/guides/http-api/#forces) reference.
 
 ```text
 GET    /api/forces          {"forces": [{"name", "value", "actual"?, "sinceMs"}]}

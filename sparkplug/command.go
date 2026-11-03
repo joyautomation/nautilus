@@ -1,11 +1,14 @@
 package sparkplug
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
 
@@ -48,11 +51,9 @@ func (n *Node) applyCommand(device string, payload Payload) {
 	}
 	// Remaining metrics are writes into the tag store. A metric named after
 	// a TEMPLATE MEMBER ("P101/Speed" flattened to "P101.Speed" by the host)
-	// resolves through Tags.Set to that member of the UDT tag and
-	// read-modify-writes the whole struct; a name that resolves to nothing
-	// is dropped rather than stored, so a host's typo can no longer create a
-	// junk top-level tag that the next NBIRTH would publish back at it.
-	tags := n.rt.Tags()
+	// is written to that member of the UDT tag; a name that resolves to
+	// nothing is refused rather than stored, so a host's typo cannot create
+	// a junk top-level tag that the next NBIRTH would publish back at it.
 	for _, m := range payload.Metrics {
 		if m.Name == "" || m.IsNull || m.Name == "Node Control/Rebirth" {
 			continue
@@ -67,6 +68,15 @@ func (n *Node) applyCommand(device string, payload Payload) {
 		if owner, _ := n.ownerOf(rootTag(m.Name)); owner != device {
 			n.refuseCommand("addressed to the wrong device", m.Name,
 				"addressedTo", deviceLabel(device), "publishedOn", deviceLabel(owner))
+			continue
+		}
+		// An input is the field's value: its driver replaces it before every
+		// scan, so a command would be discarded unread. Refused, as HTTP and
+		// OPC UA refuse it, whatever sparkplug.writable opens. A device
+		// carries only its connection's inputs, so this refuses every DCMD
+		// until a write reaches the device through its driver.
+		if n.isInput(rootTag(m.Name)) {
+			n.refuseCommand(inputWriteRefusal, m.Name)
 			continue
 		}
 		if isArrayType(m.Datatype) {
@@ -100,10 +110,90 @@ func (n *Node) applyCommand(device string, payload Payload) {
 			continue
 		}
 		if v, ok := commandValue(m); ok {
-			tags.Set(m.Name, v)
+			// The runtime's one write front door, as HTTP and OPC UA use:
+			// a value the tag's declared type cannot hold is refused, never
+			// stored as a new type, and a forced tag keeps its force.
+			if err := n.writeCommand(m.Name, v); err != nil {
+				n.refuseCommand(writeRefusal(err), m.Name, "datatype", m.Datatype.String(), "error", err)
+				continue
+			}
 			n.log.Debug("sparkplug: command write", "tag", m.Name, "value", m.Value)
 		}
 	}
+}
+
+// writeCommand writes one scalar command through the runtime's write front
+// door. A declared tag the store does not hold yet (an output no scan has
+// written) is written onto a zero of its declared type by the same strict
+// rule, as an HTTP write is, so it cannot be born retyped. A name with no
+// declared type is refused: the node never births such a tag.
+func (n *Node) writeCommand(name string, v any) error {
+	tags := n.rt.Tags()
+	if s, ok := v.(string); ok && !n.takesString(name) {
+		// As OPC UA refuses a String Variant for a non-String node: the node
+		// births a STRING tag as a String metric and nothing else as one, so
+		// a String command for anything else is the wrong type, never text
+		// to parse (a TIME literal, a number).
+		return fmt.Errorf("tag %s: a String metric (%q) for a tag that is not a STRING: %w", name, s, ir.ErrTypeMismatch)
+	}
+	err := tags.Write([]runtime.WriteOp{{Path: name, Value: v}})[0]
+	if !errors.Is(err, runtime.ErrUndefined) || strings.ContainsRune(name, '.') {
+		return err
+	}
+	t := tags.TypeOf(name)
+	if t == nil {
+		return err
+	}
+	nv, serr := ir.SetFieldTypedStrict(ir.Zero(t), t, nil, v, "tag "+name)
+	if serr != nil {
+		return serr
+	}
+	tags.Set(tags.DeclaredOutputName(name), nv)
+	return nil
+}
+
+// takesString reports whether name is a STRING tag or member, or an
+// enumeration (which takes a member's name). It is judged by the value the
+// store holds, else by the declared type of a whole tag not yet stored.
+func (n *Node) takesString(name string) bool {
+	tags := n.rt.Tags()
+	if v, ok := tags.ReadPath(name); ok {
+		_, isStr := v.(string) // a STRING, or an enumeration read as its member name
+		return isStr
+	}
+	if t := tags.TypeOf(name); t != nil {
+		return t.Kind == ir.TypeString || t.Enum != nil
+	}
+	return false
+}
+
+// inputWriteRefusal is the reason a command to an input is refused.
+const inputWriteRefusal = "an input: its driver replaces it before every scan (force it to hold a value, or write the setpoint the logic reads)"
+
+// isInput reports whether tag is one of the runtime's inputs, in any case.
+func (n *Node) isInput(tag string) bool {
+	for _, in := range n.rt.Inputs() {
+		if strings.EqualFold(in, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// writeRefusal is the logged reason for a command the runtime's write
+// front door refused.
+func writeRefusal(err error) string {
+	switch {
+	case errors.Is(err, runtime.ErrForced):
+		return "the tag is forced"
+	case errors.Is(err, runtime.ErrUndefined):
+		return "no such tag"
+	case errors.Is(err, ir.ErrTypeMismatch):
+		return "the value does not fit the tag's type"
+	case errors.Is(err, ir.ErrOutOfRange):
+		return "the value is out of the tag's range"
+	}
+	return "the write failed"
 }
 
 // arrayWriteRefusal is the reason an array write is refused. Sparkplug can
@@ -155,49 +245,80 @@ func deviceLabel(device string) string {
 	return device
 }
 
-// commandTemplate merges a Template command metric into the struct tag it
-// names, member by member (ValueFromMetricInto with the tag's CURRENT value as
-// prev). Members the template does not carry keep the value the edge holds;
-// members the tag's type does not know are logged once and ignored.
-//
-// The read-modify-write is not atomic against a concurrent scan — the tag
-// store has no set-one-field primitive here — which is the same window a
-// whole-tag command write already has, and a scan writing the same struct
-// field an operator is commanding is a program bug either way.
+// commandTemplate writes a Template command metric into the struct tag it
+// names, one front-door write per leaf member it carries ("Motor1.Speed",
+// "Motor1.Drive.Torque"), all in one Tags.Write: they land under one lock,
+// so a scan sees them together, and each is judged on its own, exactly as
+// the same member sent by its member path would be. A member the type
+// cannot hold, a forced member and a member the type does not have are
+// refused one by one; the template's other members still apply. Members
+// the template does not carry keep the value the edge holds.
 func (n *Node) commandTemplate(m Metric) {
 	tags := n.rt.Tags()
 	prev, err := tags.ReadGlobal(m.Name)
 	if err != nil {
-		n.warnCommandOnce("unknown:"+m.Name,
-			"sparkplug: template command for a tag this node does not have", "tag", m.Name)
+		n.refuseCommand("a template for a tag this node does not have", m.Name)
 		return
 	}
 	if prev.Kind != ir.TypeStruct || prev.Struct == nil {
-		n.warnCommandOnce("notstruct:"+m.Name,
-			"sparkplug: template command for a tag that is not a UDT", "tag", m.Name, "kind", prev.Kind)
+		n.refuseCommand("a template for a tag that is not a UDT", m.Name, "kind", prev.Kind)
 		return
 	}
-	merged, unknown, err := ValueFromMetricInto(m, prev)
-	if err != nil {
-		n.warnCommandOnce("merge:"+m.Name,
-			"sparkplug: template command rejected", "tag", m.Name, "error", err)
-		return
+	var ops []runtime.WriteOp
+	var leaves []Metric
+	var walk func(path string, t *Template)
+	walk = func(path string, t *Template) {
+		for _, mm := range t.Metrics {
+			if mm.Name == "" || mm.IsNull {
+				continue
+			}
+			p := path + "." + mm.Name
+			// A member name is a name: an index ("Levels[1]") would be an
+			// element write past the array refusal, and a dot a path the
+			// node never births.
+			if strings.ContainsRune(mm.Name, '[') {
+				n.refuseCommand(arrayWriteRefusal, p)
+				continue
+			}
+			if strings.ContainsRune(mm.Name, '.') {
+				n.refuseCommand("a member name with a dot", p)
+				continue
+			}
+			if sub, ok := mm.Value.(*Template); ok {
+				if sub != nil {
+					walk(p, sub)
+				}
+				continue
+			}
+			v, ok := commandValue(mm)
+			if _, isStr := v.(string); ok && isStr && !n.takesString(p) {
+				ok = false // a String metric only for a STRING member, as for a tag
+			}
+			if !ok {
+				n.refuseCommand("the value does not fit the tag's type", p, "datatype", mm.Datatype.String())
+				continue
+			}
+			ops = append(ops, runtime.WriteOp{Path: p, Value: v})
+			leaves = append(leaves, mm)
+		}
 	}
-	for _, u := range unknown {
-		n.warnCommandOnce("member:"+m.Name+"."+u,
-			"sparkplug: template command names a member the type does not have; ignored",
-			"tag", m.Name, "member", u, "type", prev.Struct.Name)
+	if t, _ := m.Value.(*Template); t != nil {
+		walk(m.Name, t)
 	}
-	tags.Set(m.Name, merged)
-	n.log.Debug("sparkplug: template command write", "tag", m.Name, "members", len(templateMembers(m)))
-}
-
-// templateMembers is the member count of a template metric, for logging.
-func templateMembers(m Metric) []Metric {
-	if t, ok := m.Value.(*Template); ok && t != nil {
-		return t.Metrics
+	written := 0
+	for i, err := range tags.Write(ops) {
+		if err != nil {
+			reason := writeRefusal(err)
+			if strings.Contains(err.Error(), "unknown member") { // ir's error for it is untyped
+				reason = "a member the type does not have"
+			}
+			n.refuseCommand(reason, ops[i].Path, "member", leaves[i].Name, "type", prev.Struct.Name,
+				"datatype", leaves[i].Datatype.String(), "error", err)
+			continue
+		}
+		written++
 	}
-	return nil
+	n.log.Debug("sparkplug: template command write", "tag", m.Name, "members", written)
 }
 
 // warnCommandOnce logs a command diagnostic the first time its reason is seen,

@@ -17,6 +17,102 @@ HMI / POST /api/tags ──(writes)─────▶ │           │ ──(r
                                      (coils)    ▼
 ```
 
+Every tag in `nautilus.yaml` has a `role:`, and choosing it is the first
+decision about a tag: the role says who owns the value. The next section
+answers that in manifest terms. The rest of the page explains the rules
+underneath, and [the Go form](#declaring-tags-one-entry-per-tag) shows the
+same roles in an SDK project.
+
+## Which role fits which job
+
+A tag's `role:` is one of `input`, `output`, `setpoint` or `state`. Any
+other value is a load error (`tag Pump: role must be input, output,
+setpoint, or state (got "command")`). Pick the role by who owns the value:
+
+| You want a tag that… | `role:` | It also needs |
+| --- | --- | --- |
+| comes from a sensor, through a driver | `input` | a driver binding that delivers it |
+| goes to an actuator, through a driver | `output` | a program that writes it |
+| goes to an actuator, and the logic also reads it (a seal-in) | `output` | an `init:`, so it exists on scan one |
+| an operator adjusts: a setpoint, a gain, a limit | `setpoint` | an `init:` or a `type:` |
+| the logic keeps across scans or computes for the HMI: a mode word, an integrator, an alarm | `state` | an `init:` or a `type:` |
+| the logic keeps and must not lose on a restart: run hours, a start count | `state` | `retain: true`, and a `retain:` section |
+
+What each role does at run time:
+
+| | `input` | `output` | `setpoint` | `state` |
+| --- | --- | --- | --- | --- |
+| **Written by** | the driver, before every scan | the program; the driver sends it to the field after the scan | the operator; the program may too | the program; the operator may too |
+| **`POST /api/tags`** | refused with a `400`; [force it](/guides/forcing/) instead | accepted (`204`), but the program's next write to it replaces the value | accepted (`204`) | accepted (`204`) |
+| **Built-in dashboard** | read-only | read-only | click to set a number or a BOOL (a STRING, an enumerated value or an array element stays read-only) | click to set a number or a BOOL (a STRING, an enumerated value or an array element stays read-only) |
+| **OPC UA client write** | refused, even when `opcua.writable` matches it (`Bad_NotWritable` to a trusted writer session; any other session gets `Bad_UserAccessDenied` first, as for every tag) | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client |
+| **[Sparkplug](/guides/sparkplug/#writes) NCMD/DCMD** | refused (logged and counted in `commandsRefused`), whatever `sparkplug.writable` opens | written when `sparkplug.writable` opens it | written when `sparkplug.writable` opens it | written when `sparkplug.writable` opens it |
+| **Kept across a restart** (needs a `retain:` section) | never; `retain: true` is a load error | never; `retain: true` is a load error | always | only with `retain: true` |
+| **Seeded from `init:`** | only when it has an `init:`, or when a [communications driver](#inputs-from-a-device-that-is-down) delivers it (then the zero of its type); otherwise a read before the first delivery faults the scan | only when it has an `init:`; otherwise it exists from its first write | always: its `init:`, else the zero of its `type:` | always: its `init:`, else the zero of its `type:` |
+| **On a standby replica** | not read: a standby does no field I/O | not written: a standby runs no logic | not changed there: writes go to the leader | not changed there: a standby runs no logic |
+| **After a failover** | the new leader reads it on its first scan | the new leader writes every output on its first scan | reloaded from the retain store; with no `retain:` section, the new leader's own copy (its seed, on a replica that has never led) | the new leader's own copy (its seed, on a replica that has never led), unless `retain: true` reloads it from the retain store |
+
+A `setpoint` or `state` tag with neither an `init:` nor a `type:` is a
+load error (`tag StartLevel: a setpoint needs init or type (its value from
+scan one)`). An output the program never writes keeps what the operator
+wrote, which is how a [Sparkplug host](/guides/sparkplug-host/) commands
+the node it reads. With a `retain:` section, a retained value wins over the
+`init:` when the controller starts. On a redundant pair a standby passes
+`POST /api/tags` to the leader and answers an OPC UA write
+`Bad_InvalidState` ([Redundancy](/guides/redundancy/)).
+
+### One example per role
+
+A lift station, with each role once:
+
+```yaml
+retain: {}   # keeps setpoints, and state marked retain: true
+
+tags:
+  - { name: Level,      role: input,    type: REAL, unit: "%", desc: "Wet well level" }
+  - { name: PumpRun,    role: output,   type: BOOL, init: false, desc: "Pump run command" }
+  - { name: StartLevel, role: setpoint, type: REAL, init: 60.0, unit: "%" }
+  - { name: StopLevel,  role: setpoint, type: REAL, init: 20.0, unit: "%" }
+  - { name: HighLevel,  role: state,    type: BOOL }
+  - { name: RunHours,   role: state,    type: REAL, retain: true }
+```
+
+```iecst
+PROGRAM Main
+  PumpRun := (Level > StartLevel OR PumpRun) AND Level > StopLevel;
+  HighLevel := Level > 90.0;
+  IF PumpRun THEN
+    RunHours := RunHours + 0.1 / 3600.0;   (* 100 ms scan *)
+  END_IF;
+END_PROGRAM
+```
+
+- **`Level` is an `input`.** The level transmitter's value, delivered by
+  the driver binding that names it ([Modbus](/guides/modbus/),
+  [EtherNet/IP](/guides/ethernet-ip/), …). The program only reads it.
+  With no `driver:`, the `memory` loopback delivers nothing for `Level`
+  and the first scan stops with `undefined tag Level`; give it an `init:`
+  to try the example without hardware. To hold it at a value during
+  bring-up, [force it](/guides/forcing/). A force needs the tag to exist:
+  an input nothing has delivered and no `init:` seeds is refused with
+  `400 undefined tag Level`. With an `init:`, or once a communications
+  driver has seeded or delivered it, `POST /api/forces` with
+  `{"name": "Level", "value": 70}` holds it.
+- **`PumpRun` is an `output`.** The program writes it and the driver sends
+  it to the starter. The program also reads it back (the seal-in), so it
+  has an `init:`; without one, the first scan stops with `undefined tag
+  PumpRun`.
+- **`StartLevel` and `StopLevel` are `setpoint`s.** The operator tunes
+  them: `POST /api/tags` with `{"name": "StartLevel", "value": 65}`, or a
+  click in the dashboard. The `retain:` section keeps the 65 across a
+  restart.
+- **`HighLevel` and `RunHours` are `state`.** The logic owns them.
+  `HighLevel` starts at `FALSE`, the zero of its `type:`, and is
+  recomputed every scan. `RunHours` is marked `retain: true`, so a restart
+  does not reset it to zero.
+
+## How a tag comes to exist
+
 **Every program sees the project's tags without declaring them.** A tag in
 `nautilus.yaml` (or a `tag-files:` entry) is in scope in every PROGRAM as
 it is — the tag table is the declaration, as a Codesys GVL, a TIA PLC tag
@@ -26,7 +122,9 @@ create it. Using `TempC` in a program means "resolve this name in the tag
 store at scan time", and nothing more. Existence comes from a write, and
 there are exactly four writers:
 
-1. a **seed** in the Go composition (initial value, exists from scan one),
+1. a **seed**: the tag's `init:`, or the zero of its type for the roles
+   [the table above](#which-role-fits-which-job) seeds without one (it
+   exists from scan one),
 2. a **driver** delivering it as an input each scan,
 3. an **operator** writing a tag the project declares through the HMI or
    `POST /api/tags` (a name nothing declares, a CONSTANT's included, is
@@ -131,51 +229,6 @@ holds its last value (quality `stale`), as it always has.
 
 A program binds only the tags it names: an unused tag costs a program
 nothing per scan.
-
-## Declaring tags: one entry per tag
-
-`runtime.Options.Tags` states each tag's **role** once — which direction it
-moves each scan, its initial value, and its HMI documentation — instead of
-spreading the name across the flat `Inputs`/`Outputs`/`Seed`/`Meta` fields
-(all of which still work and compose with `Tags`):
-
-```go
-Tags: []runtime.TagDef{
-    // Field input: the driver produces it. NOT seeded — if the driver
-    // doesn't deliver it, you want the loud fault, not a silent zero.
-    // (The name must also appear in the driver's ReadInputs map.)
-    runtime.Input("TempC", runtime.Desc("Tank temperature"), runtime.Unit("°C")),
-
-    // An input from a device that can be down (Modbus, EtherNet/IP, …):
-    // runtime.Comms() seeds it with its Init or the zero of its type, so
-    // the program runs until the device answers. The manifest loader sets
-    // this for you from the driver.
-    runtime.Input("FlowLps", runtime.Comms(), runtime.Unit("L/s")),
-
-    // Operator setpoint / config: seeded so it exists from scan one;
-    // the HMI or POST /api/tags writes it later.
-    runtime.Setpoint("TempSP", 65.0, runtime.Unit("°C")),
-
-    // Field output: the logic produces it, the driver consumes it.
-    // Init() any output the logic also READS — the seal-in latch.
-    runtime.Output("PumpRun", runtime.Init(false), runtime.Desc("Pump run command")),
-
-    // Logic-owned state that must survive read-before-write: latches,
-    // integrators, mode words.
-    runtime.State("Mode", int64(0), runtime.Desc("0=off 1=auto 2=manual")),
-},
-```
-
-Picking a role, by use case:
-
-| You want a tag that…                        | Use                          | Backed by                                   |
-| ------------------------------------------- | ---------------------------- | ------------------------------------------- |
-| comes from a sensor / the field             | `Input(name, …)`             | driver `ReadInputs` map + this entry        |
-| goes to an actuator / the field             | `Output(name, …)`            | your logic writes it (coil)                 |
-| …and your logic also reads it (latch)       | `Output(name, Init(v), …)`   | the seed covers scan one, then the coil     |
-| an operator adjusts (setpoint, gain, limit) | `Setpoint(name, initial, …)` | the seed, then HMI / `POST /api/tags`       |
-| your logic owns across scans (integrator)   | `State(name, initial, …)`    | the seed, then the coil                     |
-| the HMI watches but the field never sees    | plain coil write — no entry  | the program creates it on first write       |
 
 ## A tag's `type:`
 
@@ -329,8 +382,13 @@ plant is already running on.
   (`tag Int1: 70000 is outside INT (-32768..32767)`), and so is `-1` on a
   `UINT`. A `ULINT` or `LWORD` takes any 64-bit pattern. A fraction for an
   integer (`2.5`), a boolean for a `REAL`, or text for anything but a
-  `STRING` is a `422` on a whole tag (a `400` on a member). A `TIME` takes
-  whole milliseconds. The same rules hold for a whole tag, a member, every
+  `STRING` or a `TIME` is a `422` on a whole tag (a `400` on a member). A
+  `TIME` takes whole milliseconds or its IEC literal, as `init:` and a
+  test's `given:` do: `"T#1m30s"`, `"TIME#500ms"`. A string that is no
+  duration is the wrong kind of value, like text for a `REAL`. A literal
+  finer than a millisecond (`"T#1.5ms"`) or longer than a `TIME` holds is
+  a `400`, as `2.5` is: a write is never rounded or wrapped (`init:`
+  rounds to the millisecond). The same rules hold for a whole tag, a member, every
   member of an object `value` and every element of a list, and for an
   output no scan has written yet. What the program itself produced is not
   held to them: a retained value comes back after a restart exactly as the
@@ -355,6 +413,8 @@ plant is already running on.
   an `init:` so it exists before the first write.
 - **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
   controller that resolves member paths from an older one that swallowed them.
+- Every status code `POST /api/tags` answers, and the rest of the API, is in
+  the [HTTP API](/guides/http-api/#post-apitags) reference.
 
 The same dotted (and indexed) paths work everywhere else a tag is
 addressed: a test manifest's `given:`/`expect:`, a force, the built-in
@@ -439,6 +499,60 @@ composition (`runtime.Input("testExt")`; give it a type with
 program's `VAR_EXTERNAL`, so the programs know its type). The `Inputs`
 list is a deliberate allowlist — a driver can't spray arbitrary names into
 the store — which is why the driver map alone isn't enough.
+
+## Declaring tags: one entry per tag
+
+This is the Go form of the manifest's `tags:` list, for an SDK project
+(`--template sdk`). The roles are the same four, and
+[which role fits which job](#which-role-fits-which-job) applies unchanged:
+`runtime.Input` is `role: input`, `runtime.Output` is `output`,
+`runtime.Setpoint` is `setpoint` and `runtime.State` is `state`. The
+options `runtime.Init`, `runtime.Unit`, `runtime.Desc` and
+`runtime.Retained` are `init:`, `unit:`, `desc:` and `retain: true`, and
+`runtime.Typed(name, role, type, …)` declares a tag with a `type:`.
+
+`runtime.Options.Tags` states each tag's **role** once — which direction it
+moves each scan, its initial value, and its HMI documentation — instead of
+spreading the name across the flat `Inputs`/`Outputs`/`Seed`/`Meta` fields
+(all of which still work and compose with `Tags`):
+
+```go
+Tags: []runtime.TagDef{
+    // Field input: the driver produces it. NOT seeded — if the driver
+    // doesn't deliver it, you want the loud fault, not a silent zero.
+    // (The name must also appear in the driver's ReadInputs map.)
+    runtime.Input("TempC", runtime.Desc("Tank temperature"), runtime.Unit("°C")),
+
+    // An input from a device that can be down (Modbus, EtherNet/IP, …):
+    // runtime.Comms() seeds it with its Init or the zero of its type, so
+    // the program runs until the device answers. The manifest loader sets
+    // this for you from the driver.
+    runtime.Input("FlowLps", runtime.Comms(), runtime.Unit("L/s")),
+
+    // Operator setpoint / config: seeded so it exists from scan one;
+    // the HMI or POST /api/tags writes it later.
+    runtime.Setpoint("TempSP", 65.0, runtime.Unit("°C")),
+
+    // Field output: the logic produces it, the driver consumes it.
+    // Init() any output the logic also READS — the seal-in latch.
+    runtime.Output("PumpRun", runtime.Init(false), runtime.Desc("Pump run command")),
+
+    // Logic-owned state that must survive read-before-write: latches,
+    // integrators, mode words.
+    runtime.State("Mode", int64(0), runtime.Desc("0=off 1=auto 2=manual")),
+},
+```
+
+Picking a role in Go, by use case:
+
+| You want a tag that…                        | Use                          | Backed by                                   |
+| ------------------------------------------- | ---------------------------- | ------------------------------------------- |
+| comes from a sensor / the field             | `Input(name, …)`             | driver `ReadInputs` map + this entry        |
+| goes to an actuator / the field             | `Output(name, …)`            | your logic writes it (coil)                 |
+| …and your logic also reads it (latch)       | `Output(name, Init(v), …)`   | the seed covers scan one, then the coil     |
+| an operator adjusts (setpoint, gain, limit) | `Setpoint(name, initial, …)` | the seed, then HMI / `POST /api/tags`       |
+| your logic owns across scans (integrator)   | `State(name, initial, …)`    | the seed, then the coil                     |
+| the HMI watches but the field never sees    | plain coil write — no entry  | the program creates it on first write       |
 
 ## Performance notes: write generations
 

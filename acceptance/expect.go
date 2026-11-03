@@ -207,6 +207,12 @@ func (m *Matcher) setExact(v any) error {
 // match reports whether got satisfies the matcher, and renders what was
 // wanted for the failure line.
 func (m Matcher) match(got ir.Value, defaultTol float64) (bool, string) {
+	// A number asserted against a TIME is milliseconds; the want reads in
+	// the actual's units (`Delay = T#2m, want T#1m30s`, not `want 90000`).
+	trim := trim
+	if got.Kind == ir.TypeTime {
+		trim = trimTime
+	}
 	switch m.Op {
 	case "eq":
 		switch {
@@ -226,7 +232,13 @@ func (m Matcher) match(got ir.Value, defaultTol float64) (bool, string) {
 				if err != nil {
 					return false, fmt.Sprintf("%q (not a TIME: %v)", m.Str, err)
 				}
-				return got.I == ms, fmt.Sprintf("%s (%d)", m.Str, ms)
+				// The want reads as the actual does (T#1m30s); a literal
+				// written another way (90s) shows what it was read as.
+				want := ir.FormatDuration(ms)
+				if !strings.EqualFold(strings.ReplaceAll(m.Str, "_", ""), want) {
+					want = fmt.Sprintf("%s (%s)", m.Str, want)
+				}
+				return got.I == ms, want
 			}
 			return got.Kind == ir.TypeString && got.S == m.Str, fmt.Sprintf("%q", m.Str)
 		default:
@@ -266,6 +278,15 @@ func numOf(v ir.Value) float64 {
 	return math.NaN()
 }
 
+// trimTime renders a number of milliseconds as a TIME literal when it is
+// one (90000 → T#1m30s), else as the number.
+func trimTime(f float64) string {
+	if f == math.Trunc(f) && f >= math.MinInt64 && f < math.MaxInt64 {
+		return ir.FormatDuration(int64(f))
+	}
+	return trim(f)
+}
+
 // trim renders a float without trailing zeros, so a want reads like the
 // number the author wrote.
 func trim(f float64) string {
@@ -281,8 +302,10 @@ func show(v ir.Value) string {
 		return fmt.Sprintf("%q", v.S)
 	case ir.TypeReal:
 		return trim(v.F)
-	case ir.TypeInt, ir.TypeTime:
-		if v.Kind == ir.TypeInt && v.S != "" {
+	case ir.TypeTime:
+		return ir.FormatDuration(v.I) // T#2m, the way the test writes it
+	case ir.TypeInt:
+		if v.S != "" {
 			return fmt.Sprintf("%s (%d)", v.S, v.I) // an enumeration member
 		}
 		return fmt.Sprintf("%d", v.I)

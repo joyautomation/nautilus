@@ -213,6 +213,25 @@ func (t *Tags) storeLocked(name string, cur *tagVal, v ir.Value) bool {
 	return true
 }
 
+// DeclaredOutputName is the declared spelling of an output named name in
+// any case ("cmd" for the declared "Cmd"), or name unchanged. A write that
+// creates an output no scan has written yet stores it under this spelling,
+// so the tag keeps its declared name and its output flag (outNames is keyed
+// by the declared spelling) whatever case the writer used.
+func (t *Tags) DeclaredOutputName(name string) string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if _, ok := t.outNames[name]; ok {
+		return name
+	}
+	for n := range t.outNames {
+		if strings.EqualFold(n, name) {
+			return n
+		}
+	}
+	return name
+}
+
 // markOutputs registers the tags the runtime hands to the driver, so a write
 // to one of them can stamp outGen without anyone sweeping the output list.
 // Names that do not exist yet are remembered and flagged when created.

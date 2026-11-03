@@ -32,3 +32,33 @@ tags:
 		}
 	}
 }
+
+// IECType is the type a generated tag file declares: each unscaled integer
+// format its own width and sign, float32 REAL, float64 LREAL, a scaled or
+// offset integer REAL, and BOOL for the bit kinds.
+func TestIECTypeFollowsTheFormat(t *testing.T) {
+	for _, tc := range []struct {
+		b    TagBinding
+		want string
+	}{
+		{TagBinding{Table: TableHolding, Format: "int16"}, "INT"},
+		{TagBinding{Table: TableHolding, Format: "uint16"}, "UINT"},
+		{TagBinding{Table: TableHolding, Format: "int32"}, "DINT"},
+		{TagBinding{Table: TableInput, Format: "uint32"}, "UDINT"},
+		{TagBinding{Table: TableInput, Format: "float32"}, "REAL"},
+		{TagBinding{Table: TableHolding, Format: "float64"}, "LREAL"},
+		{TagBinding{Table: TableHolding, Format: "float64", Scale: 0.1}, "LREAL"},
+		{TagBinding{Table: TableHolding, Format: "int16", Scale: 0.1}, "REAL"},
+		{TagBinding{Table: TableHolding, Format: "uint32", Offset: -40}, "REAL"},
+		{TagBinding{Table: TableHolding, Format: "int32", Scale: 1}, "DINT"},
+		{TagBinding{Table: TableHolding, Format: "bool"}, "BOOL"},
+		{TagBinding{Table: TableHolding, Format: "bit:3"}, "BOOL"},
+		{TagBinding{Table: TableCoil}, "BOOL"},
+		{TagBinding{Table: TableDiscrete, Format: "bool"}, "BOOL"},
+		{TagBinding{Table: TableHolding, Format: "float16"}, ""},
+	} {
+		if got := tc.b.IECType(); got != tc.want {
+			t.Errorf("%s %s scale %v offset %v: IECType() = %q, want %q", tc.b.Table, tc.b.Format, tc.b.Scale, tc.b.Offset, got, tc.want)
+		}
+	}
+}

@@ -57,12 +57,13 @@ func TestManifestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`- { name: EPIC_M1_DO11, role: output, init: false, desc: "GRV-ODCI-12 slot 1 ch 11 — Digital Output" }`,
-		`- { name: EPIC_M2_AI00, role: input, unit: "°C", desc: "GRV-IICTD-12 slot 2 ch 0 — ICTD Temperature Probe (-270 to 150)" }`,
-		`- { name: EPIC_M0_DI04_OnLatch, role: input, desc: "GRV-IACDCTTL-24 slot 0 ch 4 — turned on since the previous scan" }`,
-		`- { name: EPIC_SP_F1, role: output, init: 0.0, desc: "scratchpad float 1" }`,
-		`- { name: EPIC__Online, role: input, desc: "the driver is exchanging data with the processor now (driver status)" }`,
-		`- { name: EPIC__Outages, role: input, desc: "times the driver lost the processor since nautilus started (driver status)" }`,
+		`- { name: EPIC_M1_DO11, role: output, type: BOOL, init: false, desc: "GRV-ODCI-12 slot 1 ch 11 — Digital Output" }`,
+		`- { name: EPIC_M2_AI00, role: input, type: REAL, unit: "°C", desc: "GRV-IICTD-12 slot 2 ch 0 — ICTD Temperature Probe (-270 to 150)" }`,
+		`- { name: EPIC_M0_DI04_OnLatch, role: input, type: BOOL, desc: "GRV-IACDCTTL-24 slot 0 ch 4 — turned on since the previous scan" }`,
+		`- { name: EPIC_SP_F1, role: output, type: REAL, init: 0.0, desc: "scratchpad float 1" }`,
+		`- { name: EPIC__Online, role: input, type: BOOL, desc: "the driver is exchanging data with the processor now (driver status)" }`,
+		`- { name: EPIC__Outages, role: input, type: UDINT, desc: "times the driver lost the processor since nautilus started (driver status)" }`,
+		`- { name: EPIC_M3_AI00_Quality, role: input, type: UDINT, desc: "GRV-IV-24 slot 3 ch 0 — processor quality code, 0 = good" }`,
 	} {
 		if !strings.Contains(string(tags), want+"\n") {
 			t.Errorf("tag file lacks\n%s\n%s", want, tags)
@@ -163,5 +164,20 @@ func TestManifestCommOptionValidation(t *testing.T) {
 	// Polled through the custom area, 400 words fit.
 	if _, err := ParseManifest([]byte("host: h\ncustom-area: true\ntags:\n" + tags.String())); err != nil {
 		t.Errorf("custom-area with 400 words: %v", err)
+	}
+}
+
+// Each point's tag type is what the driver delivers for it.
+func TestBindingIECType(t *testing.T) {
+	for point, want := range map[string]string{
+		PointDI: "BOOL", PointDO: "BOOL", PointOnLatch: "BOOL", PointOffLatch: "BOOL", PointScratchBit: "BOOL", PointOnline: "BOOL",
+		PointAI: "REAL", PointAO: "REAL", PointScratchFloat: "REAL",
+		PointScratchInt: "DINT",
+		PointCounter:    "UDINT", PointQuality: "UDINT", PointOutages: "UDINT", PointWatchdogTrips: "UDINT",
+		"bogus": "",
+	} {
+		if got := (Binding{Point: point}).IECType(); got != want {
+			t.Errorf("%s: IECType() = %q, want %q", point, got, want)
+		}
 	}
 }

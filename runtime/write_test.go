@@ -38,6 +38,7 @@ func frontDoorTags(t *testing.T) *Tags {
 // exactly as sent, or is refused with the kind a protocol maps to its code.
 func TestFrontDoorConversions(t *testing.T) {
 	ok := error(nil)
+	refused := errors.New("any refusal") // refused, with no protocol kind
 	for _, tc := range []struct {
 		path string
 		v    any
@@ -58,9 +59,10 @@ func TestFrontDoorConversions(t *testing.T) {
 		{"I_INT", 2.5, ir.ErrTypeMismatch}, {"I_INT", true, ir.ErrTypeMismatch}, {"I_INT", "5", ir.ErrTypeMismatch},
 		{"Flag", true, ok}, {"Flag", 1.0, ir.ErrTypeMismatch},
 		{"SP", 1.5, ok}, {"SP", int64(7), ok}, {"SP", math.NaN(), ir.ErrOutOfRange}, {"SP", math.Inf(1), ir.ErrOutOfRange}, {"SP", "x", ir.ErrTypeMismatch}, {"SP", false, ir.ErrTypeMismatch},
-		{"Delay", 1500.0, ok}, {"Delay", 1500.5, ir.ErrOutOfRange}, {"Delay", "T#1s", ir.ErrTypeMismatch},
+		{"Delay", 1500.0, ok}, {"Delay", 1500.5, ir.ErrOutOfRange}, {"Delay", "T#1s", ok}, {"Delay", "TIME#1m30s", ok}, {"Delay", "T#1x", ir.ErrTypeMismatch}, {"Delay", "soon", ir.ErrTypeMismatch},
+		{"Delay", "T#1.5ms", ir.ErrOutOfRange}, {"Delay", "T#1us", ir.ErrOutOfRange}, {"Delay", "T#106751991168d", ir.ErrOutOfRange}, {"Delay", 1e300, ir.ErrOutOfRange},
 		{"Name", "", ok}, {"Name", "batch 7", ok}, {"Name", 7.0, ir.ErrTypeMismatch},
-		{"Mode", "Run", ok}, {"Mode", 10.0, ok}, {"Mode", 3.0, ir.ErrOutOfRange}, {"Mode", "Walk", nil /* any error */},
+		{"Mode", "Run", ok}, {"Mode", 10.0, ok}, {"Mode", 3.0, ir.ErrOutOfRange}, {"Mode", "Walk", refused},
 		{"P1.Speed", 60.0, ok}, {"P1.Count", 40000.0, ir.ErrOutOfRange}, {"P1.Count", 4.0, ok},
 		{"Nope", 1.0, ErrUndefined},
 	} {
@@ -68,11 +70,10 @@ func TestFrontDoorConversions(t *testing.T) {
 		before, _ := tags.ReadPath(tc.path)
 		err := tags.Write([]WriteOp{{Path: tc.path, Value: tc.v}})[0]
 		switch {
-		case tc.path == "Mode" && tc.v == "Walk":
+		case tc.want == refused:
 			if err == nil {
-				t.Errorf("Mode = %q landed; want refused", tc.v)
+				t.Errorf("%s = %q landed; want refused", tc.path, tc.v)
 			}
-			continue
 		case tc.want == nil && err != nil:
 			t.Errorf("%s = %v (%T): %v, want it to land", tc.path, tc.v, tc.v, err)
 		case tc.want != nil && !errors.Is(err, tc.want):
@@ -217,5 +218,25 @@ func TestForceIsCheckedAsAWriteIs(t *testing.T) {
 	}
 	if err := tags.ForceLenient("P1.Count", 40000.0); err != nil {
 		t.Errorf("ForceLenient(P1.Count, 40000) = %v, want it held as the VM would hold it", err)
+	}
+}
+
+// An output no scan has written yet, created by a write spelled in another
+// case, takes its declared spelling and stays an output: its changes keep
+// reaching the driver (outNames is keyed by the declared spelling).
+func TestDeclaredOutputNameKeepsTheOutputFlag(t *testing.T) {
+	tags := NewTags()
+	tags.markOutputs([]string{"Cmd"})
+	if got := tags.DeclaredOutputName("cmd"); got != "Cmd" {
+		t.Fatalf("DeclaredOutputName(cmd) = %q, want Cmd", got)
+	}
+	if got := tags.DeclaredOutputName("Other"); got != "Other" {
+		t.Errorf("DeclaredOutputName(Other) = %q, want it unchanged", got)
+	}
+	tags.Set(tags.DeclaredOutputName("cmd"), 1.0)
+	g := tags.outputGeneration()
+	tags.Set("Cmd", 2.0)
+	if tags.outputGeneration() == g {
+		t.Error("a change to Cmd did not move the output generation: it lost its output flag")
 	}
 }
