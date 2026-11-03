@@ -14,6 +14,7 @@ import {
   movePort,
   nextPortName,
   newPortAtFreeSlot,
+  SLOT_CLEARANCE,
   newPortAtPoint,
   nudgePort,
   roundPort,
@@ -147,4 +148,12 @@ test("firstFreeSlot: a port well clear of every slot leaves them all free", () =
   assert.deepEqual(firstFreeSlot([{ name: "c", x: 0.5, y: 0.5 }], box), [0.5, 0]);
   assert.deepEqual(firstFreeSlot([{ name: "t", x: 0.45, y: 0 }], box), [1, 0.5]); // 10 px off top-mid
   assert.deepEqual(firstFreeSlot([{ name: "t", x: 0.42, y: 0 }], box), [0.5, 0]); // 16 px off: clear
+});
+
+test("firstFreeSlot: the clearance follows the zoom (dots keep their screen size)", () => {
+  const box = { x: 0, y: 0, w: 200, h: 100 };
+  const near: Port = { name: "t", x: 0.42, y: 0 }; // 16 render px off top-mid
+  assert.deepEqual(firstFreeSlot([near], box), [0.5, 0]); // zoom 1: clear
+  assert.deepEqual(firstFreeSlot([near], box, [], SLOT_CLEARANCE / 0.5), [1, 0.5]); // zoom 0.5: 16 render px is 8 on screen, taken
+  assert.deepEqual(newPortAtFreeSlot([near], box, [], SLOT_CLEARANCE / 0.5), { name: "p1", x: 1, y: 0.5 });
 });
