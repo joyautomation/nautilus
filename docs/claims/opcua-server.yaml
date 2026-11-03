@@ -132,8 +132,9 @@ claims:
     note: >-
       The tester's 001-F04b-server-identity-mandatory-vars proves everything
       it checks, Auditing included: the copy imported from the reconciliation
-      retest (run 2026-11-03-001) reads it at i=2994, and passes. The build number and date come from the binary's VCS stamp;
-      a binary built without one (-buildvcs=false) has no build number and
+      retest (run 2026-11-03-001) reads it at i=2994, and passes. The build
+      number and date come from the binary's VCS stamp; a binary built
+      without one (-buildvcs=false) has no build number and
       dates itself by the executable's modification time.
 
   - id: OPC-004

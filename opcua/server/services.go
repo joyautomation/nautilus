@@ -354,9 +354,10 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 }
 
 // accessAttribute answers the access attributes Part 3 §5.2 makes
-// mandatory on every node — WriteMask and UserWriteMask on all, AccessLevel,
-// UserAccessLevel and Historizing on Variables — for a built-in node that has none:
-// read-only, like everything this server serves. Any other attribute, or a
+// mandatory on every node — WriteMask and UserWriteMask on all,
+// AccessLevel, UserAccessLevel and Historizing on Variables — for a
+// built-in node that has none: read-only, like everything this server
+// serves. Any other attribute, or a
 // node id that is not a node, keeps the answer it had.
 func accessAttribute(srv *opcserver.Server, nid *ua.NodeID, attr ua.AttributeID, had *ua.DataValue) *ua.DataValue {
 	node := srv.Node(nid)
