@@ -355,6 +355,8 @@ plant is already running on.
   an `init:` so it exists before the first write.
 - **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
   controller that resolves member paths from an older one that swallowed them.
+- Every status code `POST /api/tags` answers, and the rest of the API, is in
+  the [HTTP API](/guides/http-api/#post-apitags) reference.
 
 The same dotted (and indexed) paths work everywhere else a tag is
 addressed: a test manifest's `given:`/`expect:`, a force, the built-in

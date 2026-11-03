@@ -90,7 +90,8 @@ Forces are deliberately short-lived:
 ## The API
 
 Every write passes the same guard as `POST /api/tags` (same-origin by
-default; the token when `NAUTILUS_TOKEN` is set).
+default; the token when `NAUTILUS_TOKEN` is set). Responses and status
+codes are in the [HTTP API](/guides/http-api/#forces) reference.
 
 ```text
 GET    /api/forces          {"forces": [{"name", "value", "actual"?, "sinceMs"}]}
