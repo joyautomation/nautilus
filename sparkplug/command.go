@@ -70,6 +70,15 @@ func (n *Node) applyCommand(device string, payload Payload) {
 				"addressedTo", deviceLabel(device), "publishedOn", deviceLabel(owner))
 			continue
 		}
+		// An input is the field's value: its driver replaces it before every
+		// scan, so a command would be discarded unread. Refused, as HTTP and
+		// OPC UA refuse it, whatever sparkplug.writable opens. A device
+		// carries only its connection's inputs, so this refuses every DCMD
+		// until a write reaches the device through its driver.
+		if n.isInput(rootTag(m.Name)) {
+			n.refuseCommand(inputWriteRefusal, m.Name)
+			continue
+		}
 		if isArrayType(m.Datatype) {
 			n.refuseCommand(arrayWriteRefusal, m.Name, "datatype", m.Datatype.String())
 			continue
@@ -154,6 +163,19 @@ func (n *Node) takesString(name string) bool {
 	}
 	if t := tags.TypeOf(name); t != nil {
 		return t.Kind == ir.TypeString || t.Enum != nil
+	}
+	return false
+}
+
+// inputWriteRefusal is the reason a command to an input is refused.
+const inputWriteRefusal = "an input: its driver replaces it before every scan (force it to hold a value, or write the setpoint the logic reads)"
+
+// isInput reports whether tag is one of the runtime's inputs, in any case.
+func (n *Node) isInput(tag string) bool {
+	for _, in := range n.rt.Inputs() {
+		if strings.EqualFold(in, tag) {
+			return true
+		}
 	}
 	return false
 }

@@ -558,3 +558,51 @@ END_TYPE
 		t.Errorf("the scalar refusal does not say it is a String metric for a non-STRING tag:\n%s", buf.String())
 	}
 }
+
+// A command to an input is refused, as HTTP and OPC UA refuse it, whatever
+// sparkplug.writable opens: the driver replaces an input before every scan,
+// so the write would be discarded unread. A device carries only its
+// connection's inputs, so this is what a DCMD to one now gets.
+func TestCommandToAnInputIsRefused(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Main\nVAR_EXTERNAL\n\tLevel : REAL;\n\tFlow : REAL;\n\tLevelSP : REAL;\nEND_VAR\nEND_PROGRAM\n",
+		Driver:  nio.NewMemory(), Scan: 50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.Input("Level", runtime.Init(4.5)),
+			runtime.Input("Flow", runtime.Init(1.0)),
+			runtime.Setpoint("LevelSP", 50.0),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))},
+		WithWritable("*"), WithDevice(Device{ID: "plc1", Tags: []string{"Flow"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := func(name string, v float64) Payload {
+		return Payload{Metrics: []Metric{{Name: name, Datatype: spb.DataType_Double, Value: v}}}
+	}
+	n.applyCommand("", cmd("Level", 99))    // a node-level input
+	n.applyCommand("", cmd("level", 99))    // in another case
+	n.applyCommand("plc1", cmd("Flow", 99)) // a device's input, by DCMD
+	n.applyCommand("", cmd("LevelSP", 60))  // a setpoint: written
+	tags := rt.Tags()
+	if v := tags.Real("Level"); v != 4.5 {
+		t.Errorf("Level = %v, want 4.5: a command wrote an input", v)
+	}
+	if v := tags.Real("Flow"); v != 1.0 {
+		t.Errorf("Flow = %v, want 1.0: a DCMD wrote the device's input", v)
+	}
+	if v := tags.Real("LevelSP"); v != 60 {
+		t.Errorf("LevelSP = %v, want 60: a setpoint command must still land", v)
+	}
+	if got := n.Status().CommandsRefused; got != 3 {
+		t.Errorf("CommandsRefused = %d, want 3", got)
+	}
+	if !strings.Contains(buf.String(), "an input") {
+		t.Errorf("the refusal does not say the tag is an input:\n%s", buf.String())
+	}
+}

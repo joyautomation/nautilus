@@ -32,6 +32,7 @@ claims:
       is judged member by member the same way; its other members still
       apply. A declared output no scan has written yet takes a command
       typed by its declaration; an undeclared name is refused, not created.
+      A command to an input is refused, as HTTP and OPC UA refuse it.
     source: "#"
     tests:
       - go ./sparkplug TestWriteGateOpensMatchingTagsOnly
@@ -40,6 +41,7 @@ claims:
       - go ./sparkplug TestTemplateCommandMembersGoThroughTheFrontDoor
       - go ./sparkplug TestCommandToADeclaredOutputNotYetWritten
       - go ./sparkplug TestStringCommandOnlyForAStringTag
+      - go ./sparkplug TestCommandToAnInputIsRefused
       - go ./sparkplug TestTemplateMemberWithAnIndexIsRefused
   - id: SPB-005
     claim: >-

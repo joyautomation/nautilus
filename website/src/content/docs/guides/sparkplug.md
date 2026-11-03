@@ -136,7 +136,10 @@ its id.
 ## Writes
 
 The node is **read-only by default**: an NCMD/DCMD that writes a tag is
-refused unless `writable:` names it. Anyone who can publish to the broker
+refused unless `writable:` names it, and a command to an input is refused
+whatever `writable:` says: its driver replaces it before every scan, as
+the HTTP API and OPC UA also refuse it. A device carries only its
+connection's inputs, so a DCMD writes nothing today. Anyone who can publish to the broker
 can send a command, so this is what stands between the broker and a
 controller. `Node Control/Rebirth` is always honored.
 
@@ -151,8 +154,9 @@ sparkplug:
 Patterns are globs over the tag name or a UDT member's dotted path; one
 that matches a tag opens all of its members. A template command carrying
 a writable member and a read-only one writes the first and refuses the
-second. A command must also arrive where the tag is published: a DCMD
-writes only its own device's tags, an NCMD only node-level ones. Array
+second. A command must also arrive where the tag is published: an NCMD
+reaches only node-level tags, and a DCMD only its own device's (which,
+being inputs, it is then refused). Array
 writes are not supported yet: a command carrying an array metric, a
 template command with an array member, or a metric named by index
 (`Levels[1]`) has the array write refused. The
