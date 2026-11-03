@@ -25,7 +25,7 @@ You need `naut` on your `PATH` ([Getting started](/getting-started/), step
 ## 1. Scaffold
 
 ```sh
-naut new sump --template minimal --no-input
+naut new sump --template minimal
 cd sump
 ```
 
@@ -42,8 +42,7 @@ cd sump
   diagnostics, the graphical editors, and live values in program.st.
 ```
 
-(`--no-input` skips the interactive form, which `naut new` opens whenever
-it runs in a terminal.) You will replace the three files that matter:
+You will replace the three files that matter:
 `nautilus.yaml`, `program.st` and `sump_test.yaml`.
 
 ## 2. Declare the tags
@@ -239,13 +238,25 @@ sump_test.yaml
                   0.1s       4.3s       8.5s      12.7s      16.9s      21.1s      25.3s      29.6s
                   true      false      false      false      false      false      false      false
   FAIL  MinRun is a setpoint, so a longer one needs no program change
-  ...
+        sump_test.yaml:25 — step 2 (line 23), t=1m59.6s
+          PumpRun = false, want true   (expectation failed)
+
+          PumpRun  — Pump run command
+                  0.1s      17.1s      34.2s      51.3s     1m8.3s    1m25.4s    1m42.5s    1m59.6s
+                  true      false      false      false      false      false      false      false
+
+          MinRun  — Shortest run once started
+                  0.1s      17.1s      34.2s      51.3s     1m8.3s    1m25.4s    1m42.5s    1m59.6s
+                  T#2m       T#2m       T#2m       T#2m       T#2m       T#2m       T#2m       T#2m
+  ok    between the levels the pump keeps its state; each start counts once
 
 4 tests, 2 passed, 2 failed
 ```
 
 The failure names the line of the expectation, the virtual time, and what
-`PumpRun` actually did: on at the first scan, off by the next sample. Put
+`PumpRun` actually did: on at the first scan, off by the next sample. The
+second failure also shows the `MinRun` the test set, so you can see the
+pump stopped with a two-minute minimum in force. Put
 ` AND minTimer.Q` back and the suite passes again. `naut test` exits
 non-zero on a failure, which is what the scaffolded CI gates on. Every
 step key, matcher and the `force:` step are in
@@ -272,7 +283,7 @@ curl -s localhost:8080/api/state | jq -c .tags
 {"LevelPct":0,"MinRun":30000,"PumpRun":false,"PumpStarts":0,"StartLevel":60,"StopLevel":20}
 ```
 
-Over HTTP a `TIME` travels as milliseconds: `MinRun` is `30000`.
+A `TIME` reads back as milliseconds: `MinRun` is `30000`.
 
 ## 6. Drive it with forces
 
@@ -336,20 +347,24 @@ curl -s localhost:8080/api/state | jq -c .tags
 {"LevelPct":15,"MinRun":30000,"PumpRun":false,"PumpStarts":1,"StartLevel":60,"StopLevel":20}
 ```
 
-Setpoints, unlike inputs, take a plain write. Lower the start level, then
-remove the force so the level goes back to what the driver says (the
-loopback's `0`):
+Setpoints, unlike inputs, take a plain write. Lower the start level and
+lengthen the minimum run (a `TIME` write takes an IEC literal, or a number
+of milliseconds), then remove the force so the level goes back to what the
+driver says (the loopback's `0`):
 
 ```sh
 curl -s -X POST localhost:8080/api/tags -d '{"name":"StartLevel","value":50}'
+curl -s -X POST localhost:8080/api/tags -d '{"name":"MinRun","value":"T#1m"}'
 curl -s -X DELETE localhost:8080/api/forces/LevelPct
 curl -s localhost:8080/api/state | jq -c .tags
 ```
 
 ```text
 {"forces":[]}
-{"LevelPct":0,"MinRun":30000,"PumpRun":false,"PumpStarts":1,"StartLevel":50,"StopLevel":20}
+{"LevelPct":0,"MinRun":60000,"PumpRun":false,"PumpStarts":1,"StartLevel":50,"StopLevel":20}
 ```
+
+`MinRun` reads back as `60000`, the milliseconds of `T#1m`.
 
 A successful write answers `204 No Content`, so it prints nothing. Forces
 are not retained: a restart comes up with none. Stop the controller with
