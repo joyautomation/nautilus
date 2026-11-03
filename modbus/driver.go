@@ -44,13 +44,21 @@ const exceptionsToPark = 3
 // the guard a program reads before trusting the source's tags, exactly like
 // sparkplug/host's "<site>__Online" (issue #539). It starts false and goes
 // true on the first answer on a connection, not on the TCP dial. An answer
-// is a read or write reply, or an exception other than the gateway ones:
-// 0x02 (illegal data address) is the device talking about one bad span,
-// which per-tag quality already reports. Gateway exceptions 0x0A (path
-// unavailable) and 0x0B (target failed to respond) mean nobody answered:
-// once every block's latest read got one (for a source with nothing polled,
-// its latest write), the source is offline, still connected to the gateway.
-// A lost connection or a parked source is offline too.
+// is a reply, or an exception other than the gateway ones: 0x02 (illegal
+// data address) is the device talking about one bad span, which per-tag
+// quality already reports. Gateway exceptions 0x0A (path unavailable) and
+// 0x0B (target failed to respond) mean nobody answered. The source goes
+// offline, still connected to the gateway, once every block's latest read
+// got one AND the last gatewayMissesToOffline requests in a row did (one
+// RS-485 timeout behind a gateway is not an outage).
+//
+// For a polled source only reads decide: a write's answer may come from the
+// gateway itself, or from a keep-alive that answers while the reads do not.
+// A source with nothing polled goes by its writes instead: with a rewrite:
+// binding it waits for the first re-assert's answer; without one there is
+// nothing to ask until the program commands it, so it is online on connect
+// (a program that gates its commands on __Online would otherwise never
+// send one). A lost connection or a parked source is offline.
 const suffixOnline = "__Online"
 
 // suffixOutages names the second per-source companion: "<source>__Outages"
@@ -62,6 +70,11 @@ const suffixOnline = "__Online"
 // with last scan's value to latch an outage it might otherwise miss between
 // scans (issue #449; optommp and plcnext deliver the same name).
 const suffixOutages = "__Outages"
+
+// gatewayMissesToOffline is how many gateway no-answers in a row, with no
+// answer between them, a source needs before it goes offline: a single
+// RS-485 timeout or CRC error behind a gateway is noise, not an outage.
+const gatewayMissesToOffline = 3
 
 // gatewayNoAnswer reports a gateway exception that means the device behind
 // the gateway did not answer: 0x0A gateway path unavailable, 0x0B gateway
@@ -204,6 +217,7 @@ type source struct {
 	outages  int64      // online → offline transitions since New
 	answered bool       // the device answered on the current connection (resets backoff)
 	gwFailed int        // blocks whose latest read got a gateway no-answer (0x0A/0x0B)
+	gwMisses int        // gateway no-answers in a row since the last answer
 	state    string     // parked | connecting | connected | error
 	sinceMs  int64
 	lastErr  error
@@ -759,9 +773,14 @@ func (d *Driver) run(ctx context.Context, s *source) {
 		}
 		s.mu.Lock()
 		s.answered = false
-		s.gwFailed = 0
+		s.gwFailed, s.gwMisses = 0, 0
 		for _, br := range s.blocks {
 			br.gwFail = false
+		}
+		if len(s.blocks) == 0 && len(s.rewrites) == 0 {
+			// Write-only, nothing re-asserted: nothing to ask the device
+			// until the program commands it (see suffixOnline).
+			s.online = true
 		}
 		s.mu.Unlock()
 		s.setState("connected", nil)
@@ -1082,11 +1101,7 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 		s.lastErr = fmt.Errorf("write %v: %w", names, err)
 		s.excs++
 		if gatewayNoAnswer(err) {
-			// Reads decide for a polled source; a source with nothing
-			// polled has only its writes to go by.
-			if len(s.blocks) == 0 {
-				s.goOfflineLocked(ctx.Err() == nil)
-			}
+			s.writeNoAnswerLocked(ctx.Err() == nil)
 		} else {
 			s.writeAnsweredLocked() // refused, but the device answered
 		}
@@ -1271,6 +1286,7 @@ func (s *source) setState(state string, err error) {
 func (s *source) heardLocked() {
 	s.online = true
 	s.answered = true
+	s.gwMisses = 0
 }
 
 // blockAnsweredLocked records an answer to br's read (data, or an
@@ -1292,20 +1308,34 @@ func (s *source) blockNoAnswerLocked(br *blockRun, outage bool) {
 		br.gwFail = true
 		s.gwFailed++
 	}
-	if s.gwFailed == len(s.blocks) {
+	s.gwMisses++
+	if s.gwFailed == len(s.blocks) && s.gwMisses >= gatewayMissesToOffline {
 		s.goOfflineLocked(outage)
 	}
 }
 
-// writeAnsweredLocked records an answer to a write. It is fresher than any
-// block's latest read, so every block must fail again before the source
-// goes offline. Caller holds s.mu.
+// writeAnsweredLocked records an answer to a write. Only a source with
+// nothing polled goes by it; for a polled source it resets the backoff
+// ladder and nothing else, since reads decide __Online. Caller holds s.mu.
 func (s *source) writeAnsweredLocked() {
-	for _, br := range s.blocks {
-		br.gwFail = false
+	if len(s.blocks) > 0 {
+		s.answered = true
+		return
 	}
-	s.gwFailed = 0
 	s.heardLocked()
+}
+
+// writeNoAnswerLocked records a gateway no-answer to a write: for a source
+// with nothing polled, gatewayMissesToOffline in a row take it offline.
+// Caller holds s.mu.
+func (s *source) writeNoAnswerLocked(outage bool) {
+	if len(s.blocks) > 0 {
+		return
+	}
+	s.gwMisses++
+	if s.gwMisses >= gatewayMissesToOffline {
+		s.goOfflineLocked(outage)
+	}
 }
 
 // goOfflineLocked takes the source offline, counting an outage

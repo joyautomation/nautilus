@@ -200,13 +200,17 @@ claims:
       Each source gets a `<source>__Online` BOOL input that is true while
       the device answers and false while the source is dead or parked. It
       starts false and goes true on the first answer on a connection (a
-      read or write reply, or an exception other than 0x0A/0x0B), not on
-      the TCP dial, so a gateway that accepts and never replies is never
-      online and a write-only source goes online on its first confirmed
-      write. Once every block's latest read gets gateway exception 0x0A or
-      0x0B (for a source with nothing polled, its latest write), the source
-      is offline while the gateway connection stays up; the next answer
-      brings it back. Any other exception, such as 0x02, keeps it online.
+      reply, or an exception other than 0x0A/0x0B), not on the TCP dial,
+      so a gateway that accepts and never replies is never online. Once
+      every block's latest read got gateway exception 0x0A or 0x0B and the
+      last three requests in a row did, the source is offline while the
+      gateway connection stays up; one or two misses do not count, and the
+      next answer brings it back. Any other exception, such as 0x02, keeps
+      it online. On a polled source only reads decide; a write's reply does
+      not bring it online. A write-only source goes by its writes: with a
+      `rewrite:` keep-alive it goes online on the first confirmed
+      re-assert, without one it is online from the connect (nothing to ask
+      until the program commands it).
     source: "#the-__online-companion-and-enable"
     tests:
       - go ./modbus TestDriverDeliversTagsPerClass
@@ -216,12 +220,19 @@ claims:
       - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
       - go ./modbus TestOnlineGatewayNoAnswerFromTheStart
       - go ./modbus TestOnlineOtherExceptionsAreAnswers
-      - go ./modbus TestOnlineWriteOnlySource
+      - go ./modbus TestOnlineGatewayNoAnswerIsDebounced
+      - go ./modbus TestOnlinePolledSourceWritesDoNotDecide
+      - go ./modbus TestOnlineWriteOnlySourceWithRewrite
+      - go ./modbus TestOnlineWriteOnlySourceWithoutRewrite
       - go ./modbus TestConnectionsSplitBySource
     partial: true
     note: >-
       Against the in-process slave, which answers 0x0B for a unit it does
-      not have and injects exceptions per function code. Nothing has run
+      not have and injects exceptions per function code, and a scripted
+      server for the three-in-a-row debounce. A slow block keeping the
+      source online until it is read again (scan classes) is not asserted.
+      A write-only source without `rewrite:` is online from the connect but
+      does not notice a dead TCP link until it next writes. Nothing has run
       against a real gateway with a dead drop.
   - id: MB-019
     claim: >-
@@ -600,10 +611,12 @@ claims:
       answer (MB-018), the first connect is not an outage, a source that has
       not answered yet has had none, a gateway that accepts and never
       replies does not count (nor do later silent connections after one
-      that answered), and a write-only source counts once a write was
-      confirmed. Each later fall adds one, parking with `enable:` and a
-      gateway answering 0x0A/0x0B on every block included. Stopping
-      nautilus does not count.
+      that answered), and a write-only source with a `rewrite:` keep-alive
+      counts once a re-assert was confirmed. Each later fall adds one,
+      parking with `enable:` and a gateway answering 0x0A/0x0B on every
+      block three requests in a row included; one or two misses are not an
+      outage, and a keep-alive the gateway keeps confirming does not make a
+      polled source flap. Stopping nautilus does not count.
       A binding may not take the name.
     source: "#the-__online-companion-and-enable"
     tests:
@@ -616,9 +629,15 @@ claims:
       - go ./modbus TestOutagesAnsweredResetsPerConnection
       - go ./modbus TestOutagesCompanionCollidesWithABinding
       - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
-      - go ./modbus TestOnlineWriteOnlySource
+      - go ./modbus TestOnlineGatewayNoAnswerIsDebounced
+      - go ./modbus TestOnlinePolledSourceWritesDoNotDecide
+      - go ./modbus TestOnlineWriteOnlySourceWithRewrite
+      - go ./modbus TestOnlineWriteOnlySourceWithoutRewrite
       - go ./modbus TestConnectionsSplitBySource
     partial: true
     note: >-
       Against the in-process slave, with a test dialer that cuts and
-      restores the link. Nothing has run on a real device.
+      restores the link. A write-only source without `rewrite:` is online
+      from the connect, so losing its connection counts, but it notices a
+      dead link only when it next writes. Nothing has run on a real
+      device.

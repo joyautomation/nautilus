@@ -1,6 +1,8 @@
 package modbus
 
 import (
+	"encoding/binary"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -11,7 +13,8 @@ import (
 
 // __Online means the device answers, not that TCP is up (issue #539). These
 // tests pin that meaning: a dial alone never sets it, gateway no-answers
-// (0x0A, 0x0B) clear it, any other answer sets it. Stop never counts an
+// (0x0A, 0x0B) clear it after gatewayMissesToOffline in a row, any other
+// answer sets it. Stop never counts an
 // outage: TestOutagesStopIsNotAnOutage.
 
 // A gateway that accepts TCP and never replies is never online, not even
@@ -193,10 +196,10 @@ func TestOnlineOtherExceptionsAreAnswers(t *testing.T) {
 	})
 }
 
-// A write-only source (a keep-alive word, nothing polled) is offline until
-// its first write is confirmed, online after, and offline again (one
-// outage) when the gateway answers its writes with 0x0B.
-func TestOnlineWriteOnlySource(t *testing.T) {
+// A write-only source with a rewrite: keep-alive is offline until the
+// first re-assert is confirmed, online after, and offline again (one
+// outage) once its writes get gateway no-answers.
+func TestOnlineWriteOnlySourceWithRewrite(t *testing.T) {
 	srv := newSlave(t)
 	u := srv.Unit(1)
 	u.SetHolding(8, 0)
@@ -214,7 +217,7 @@ func TestOnlineWriteOnlySource(t *testing.T) {
 	waitFor(t, "connected", func() bool { return d.Health().Sources[0].State == "connected" })
 	for range 10 {
 		if read()["DEV__Online"] != false {
-			t.Fatal("connected, nothing written yet: __Online went true on the dial")
+			t.Fatal("connected, keep-alive not yet answered: __Online went true on the dial")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -235,5 +238,227 @@ func TestOnlineWriteOnlySource(t *testing.T) {
 	waitFor(t, "back online on the next re-assert", func() bool { return read()["DEV__Online"] == true })
 	if got := read()["DEV__Outages"]; got != int64(1) {
 		t.Fatalf("coming back changed __Outages to %#v, want int64(1)", got)
+	}
+}
+
+// A write-only source with no rewrite: has nothing to ask the device until
+// the program commands it, so it is online on connect (a program gating
+// its commands on __Online must be able to send the first one). Its writes
+// decide after that: gateway no-answers take it offline, an answer brings
+// it back.
+func TestOnlineWriteOnlySourceWithoutRewrite(t *testing.T) {
+	srv := newSlave(t)
+	u := srv.Unit(1)
+	u.SetHolding(8, 0)
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", srv.Addr())},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true}},
+	}
+	d, err := New(m, WithScanRate(15*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
+	waitFor(t, "online on connect", func() bool { return read()["DEV__Online"] == true })
+	// The first snapshot after Start is the baseline, not a command.
+	if err := d.WriteOutputs(nio.Values{"CMD": int64(1)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Three in a row, pinned here rather than read from the constant.
+	const misses = 3
+	u.InjectException(FCWriteSingleRegister, 0x0B)
+	for i := range misses {
+		if read()["DEV__Online"] != true {
+			t.Fatalf("offline after %d gateway no-answers, want %d in a row first", i, misses)
+		}
+		if err := d.WriteOutputs(nio.Values{"CMD": int64(10 + i)}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "write refused", func() bool { return d.Health().Sources[0].Exceptions == uint64(i+1) })
+	}
+	if v := read(); v["DEV__Online"] != false || v["DEV__Outages"] != int64(1) {
+		t.Fatalf("after %d gateway no-answers: __Online = %#v, __Outages = %#v, want false and int64(1)",
+			misses, v["DEV__Online"], v["DEV__Outages"])
+	}
+
+	u.InjectException(FCWriteSingleRegister, 0)
+	if err := d.WriteOutputs(nio.Values{"CMD": int64(20)}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "back online on the confirmed write", func() bool {
+		return srv.Unit(1).Holding(8) == 20 && read()["DEV__Online"] == true
+	})
+	if got := read()["DEV__Outages"]; got != int64(1) {
+		t.Fatalf("coming back changed __Outages to %#v, want int64(1)", got)
+	}
+}
+
+// On a polled source only reads decide: a keep-alive the gateway keeps
+// confirming must not bring back a source whose reads all get 0x0B, or the
+// source flaps at the rewrite rate and __Outages climbs with it.
+func TestOnlinePolledSourceWritesDoNotDecide(t *testing.T) {
+	srv := newSlave(t)
+	u := srv.Unit(1)
+	u.SetHolding(0, 7)
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", srv.Addr())},
+		Tags: []TagBinding{
+			{Name: "PV", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+				Format: "uint16", Writable: true, WriteOnly: true, Rewrite: 20 * time.Millisecond},
+		},
+	}
+	d, err := New(m, WithScanRate(15*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
+	if err := d.WriteOutputs(nio.Values{"CMD": int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "online, keep-alive written", func() bool {
+		return read()["DEV__Online"] == true && srv.Unit(1).Holding(8) == 5
+	})
+
+	u.InjectException(FCReadHoldingRegisters, 0x0B)
+	waitFor(t, "offline on gateway no-answers to the reads", func() bool { return read()["DEV__Online"] == false })
+	writes := d.Health().Writes
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if read()["DEV__Online"] != false {
+			t.Fatal("a confirmed keep-alive brought back a source whose reads get 0x0B")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if d.Health().Writes < writes+5 {
+		t.Fatalf("the keep-alive did not keep writing: %d writes before, %d after", writes, d.Health().Writes)
+	}
+	if got := read()["DEV__Outages"]; got != int64(1) {
+		t.Fatalf("__Outages = %#v, want int64(1)", got)
+	}
+}
+
+// scriptedGateway is a Modbus TCP server that answers each FC3 request
+// from a script: 0 answers one register holding 7, anything else is that
+// exception code. Past the script it answers. At each request it records
+// __Online as the driver sees it, which on one connection with one block
+// is the verdict after the previous reply.
+type scriptedGateway struct {
+	t      *testing.T
+	ln     net.Listener
+	script []byte
+	online func() bool
+
+	mu   sync.Mutex
+	seen []bool // __Online at request i+1, i.e. after reply i
+	n    int
+}
+
+func newScriptedGateway(t *testing.T, script []byte) *scriptedGateway {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	g := &scriptedGateway{t: t, ln: ln, script: script}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = c.Close() })
+			go g.serve(c)
+		}
+	}()
+	return g
+}
+
+func (g *scriptedGateway) serve(c net.Conn) {
+	for {
+		var hdr [7]byte
+		if _, err := io.ReadFull(c, hdr[:]); err != nil {
+			return
+		}
+		body := make([]byte, int(binary.BigEndian.Uint16(hdr[4:6]))-1)
+		if _, err := io.ReadFull(c, body); err != nil {
+			return
+		}
+		g.mu.Lock()
+		if g.n > 0 && g.online != nil {
+			g.seen = append(g.seen, g.online())
+		}
+		code := byte(0)
+		if g.n < len(g.script) {
+			code = g.script[g.n]
+		}
+		g.n++
+		g.mu.Unlock()
+
+		fc := body[0]
+		var pdu []byte
+		if code != 0 {
+			pdu = []byte{fc | 0x80, code}
+		} else {
+			pdu = []byte{fc, 2, 0, 7}
+		}
+		resp := make([]byte, 7, 7+len(pdu))
+		copy(resp, hdr[:4])
+		binary.BigEndian.PutUint16(resp[4:6], uint16(len(pdu)+1))
+		resp[6] = hdr[6]
+		if _, err := c.Write(append(resp, pdu...)); err != nil {
+			return
+		}
+	}
+}
+
+// One or two gateway no-answers in a row (a lone RS-485 timeout behind the
+// gateway) do not take a source offline; three do, and count one outage.
+func TestOnlineGatewayNoAnswerIsDebounced(t *testing.T) {
+	const ok, miss = 0, 0x0B
+	script := []byte{
+		ok,
+		miss, ok,
+		miss, miss, ok,
+		miss, miss, miss, ok,
+	}
+	g := newScriptedGateway(t, script)
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", g.ln.Addr().String())},
+		Tags:    []TagBinding{{Name: "PV", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"}},
+	}
+	d, err := New(m, WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	g.online = func() bool { v, _ := d.ReadInputs(); return v["DEV__Online"] == true }
+	g.mu.Unlock()
+	startDriver(t, d)
+	waitFor(t, "the script played out", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return len(g.seen) >= len(script)
+	})
+	g.mu.Lock()
+	seen := append([]bool(nil), g.seen[:len(script)]...)
+	g.mu.Unlock()
+	want := []bool{
+		true,
+		true, true,
+		true, true, true,
+		true, true, false, true,
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Fatalf("__Online after reply %d (script %v) = %v, want %v; all: %v", i+1, script[:i+1], seen[i], want[i], seen)
+		}
+	}
+	if v, _ := d.ReadInputs(); v["DEV__Outages"] != int64(1) {
+		t.Fatalf("__Outages = %#v, want int64(1): only the three-in-a-row run is an outage", v["DEV__Outages"])
 	}
 }
