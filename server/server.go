@@ -1322,7 +1322,7 @@ func (s *Server) frontDoor(w http.ResponseWriter, req writeTagRequest, whole boo
 		if t := s.rt.Tags().TypeOf(req.Name); t != nil {
 			var nv ir.Value
 			if nv, err = ir.SetFieldTypedStrict(ir.Zero(t), t, nil, req.Value, "tag "+req.Name); err == nil {
-				s.rt.Tags().Set(req.Name, nv)
+				s.rt.Tags().Set(s.rt.Tags().DeclaredOutputName(req.Name), nv)
 			}
 		} else {
 			s.rt.Tags().Set(req.Name, req.Value)
