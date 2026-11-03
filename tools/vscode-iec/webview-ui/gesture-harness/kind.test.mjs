@@ -273,6 +273,9 @@ test('K05 turntable: the model turns while on, holds while off', { skip: !MODEL_
 		// the loop has run a few frames past the first sample, and only then
 		// asks whether the model turned. A stalled loop and a turntable that
 		// does not turn now fail with different messages.
+		// The model must be on stage before the first sample: a null there
+		// would fail the assertion below however the model then turned.
+		for (const until = Date.now() + 60000; (await k.rotation()) === null && Date.now() < until; ) await sleep(100);
 		const a = await k.rotation();
 		const f0 = await k.frames();
 		let b = a;
