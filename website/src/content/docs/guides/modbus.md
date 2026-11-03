@@ -83,8 +83,17 @@ every re-run so a regeneration diffs cleanly:
   format, scale, `writable`/`rewrite`/`writeonly`, `scanclass`). Decoded
   strictly — a misspelled key is an error with a did-you-mean, not a
   silently dropped binding.
-- `tags/modbus.yaml` — an ordinary tag file (`role: input|output`, unit,
-  desc, init), composed with `tag-files: [tags/modbus.yaml]`.
+- `tags/modbus.yaml` — an ordinary tag file (`role: input|output`,
+  `type:`, unit, desc, init), composed with `tag-files: [tags/modbus.yaml]`.
+  The type comes from the register format, so a program reads the tag
+  without declaring it in `VAR_EXTERNAL`:
+
+  | format | `type:` |
+  | --- | --- |
+  | `int16`, `uint16`, `int32`, `uint32` | `INT`, `UINT`, `DINT`, `UDINT` |
+  | any of those with `scale:` or `offset:` | `REAL` |
+  | `float32`, `float64` | `REAL`, `LREAL` |
+  | a coil, a discrete input, `bool`, `bit:N` | `BOOL` |
 
 The regeneration command lives in each generated file's header, so nobody
 has to remember it. Useful flags: `--instance` for one instance id,

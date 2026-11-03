@@ -207,8 +207,8 @@ func TestTagsYAMLRolesAndSkip(t *testing.T) {
 	}
 	body := string(raw)
 	for _, want := range []string{
-		`- { name: TC_A_Tpv, role: input, unit: "degC", desc: "zone A — process temperature" }`,
-		`- { name: TC_A_Tsp, role: output, init: 0.0, desc: "zone A — setpoint" }`,
+		`- { name: TC_A_Tpv, role: input, type: REAL, unit: "degC", desc: "zone A — process temperature" }`,
+		`- { name: TC_A_Tsp, role: output, type: REAL, init: 0.0, desc: "zone A — setpoint" }`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("tag file missing:\n  %s\ngot:\n%s", want, body)

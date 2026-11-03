@@ -138,15 +138,16 @@ func TestModbusTagsRederives(t *testing.T) {
 		t.Errorf("re-derived tag file differs:\n%s", got)
 	}
 
-	// Without --map the names and roles survive; the map-only columns drop.
+	// Without --map the names, roles and types survive; the map-only
+	// columns drop.
 	bare := filepath.Join(dir, "bare.yaml")
 	if _, code := captureModbus(t, "tags", "-o", bare,
 		filepath.Join(dir, "modbus_manifest.yaml")); code != 0 {
 		t.Fatalf("tags without --map failed (%d)", code)
 	}
 	body := read(t, bare)
-	if !strings.Contains(body, "- { name: TC_A_Tsp, role: output }") {
-		t.Errorf("bare tags lost the role:\n%s", body)
+	if !strings.Contains(body, "- { name: TC_A_Tsp, role: output, type: REAL }") {
+		t.Errorf("bare tags lost the role or the type:\n%s", body)
 	}
 }
 
@@ -255,5 +256,99 @@ func TestModbusServeRejectsUnknownSeed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Nope") {
 		t.Errorf("seed error does not name the tag: %v", err)
+	}
+}
+
+// The generated tag file types every tag from its register format, so a
+// program can read an imported tag without declaring it in VAR_EXTERNAL:
+// `naut check` passes on a project that composes the import and nothing
+// else. Before, every tag came out with no type: and the first program to
+// read GAS_Flow failed check with "a project tag with no type".
+func TestModbusImportTypesTagsForCheck(t *testing.T) {
+	dir := t.TempDir()
+	devmap := filepath.Join(dir, "devices.yaml")
+	if err := os.WriteFile(devmap, []byte(`devices:
+  meter:
+    registers:
+      - {tag: Flow,    address: 0,  table: input, format: float32}
+      - {tag: Total,   address: 2,  table: input, format: float64}
+      - {tag: Temp,    address: 6,  table: input, format: int16}
+      - {tag: Count,   address: 7,  table: input, format: uint16}
+      - {tag: Pulses,  address: 8,  table: input, format: int32}
+      - {tag: Uptime,  address: 10, table: input, format: uint32}
+      - {tag: Level,   address: 12, table: input, format: int16, scale: 0.1}
+      - {tag: Running, address: 0,  table: discrete}
+      - {tag: Fault,   address: 13, table: input, format: "bit:2"}
+      - {tag: Speed,   address: 0,  format: uint16, writable: true}
+instances:
+  - {id: M1, type: meter, host: 192.0.2.10}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := captureModbus(t, "import", "--map", devmap, "--out", dir); code != 0 {
+		t.Fatalf("import failed (%d):\n%s", code, out)
+	}
+	tags := read(t, filepath.Join(dir, "tags", "modbus.yaml"))
+	for name, typ := range map[string]string{
+		"M1_Flow": "REAL", "M1_Total": "LREAL", "M1_Temp": "INT", "M1_Count": "UINT",
+		"M1_Pulses": "DINT", "M1_Uptime": "UDINT", "M1_Level": "REAL", "M1_Running": "BOOL",
+		"M1_Fault": "BOOL", "M1_Speed": "UINT",
+	} {
+		role := "input"
+		if name == "M1_Speed" {
+			role = "output"
+		}
+		if line := "- { name: " + name + ", role: " + role + ", type: " + typ + " }"; !strings.Contains(tags, line) {
+			t.Errorf("no %q in the tag file:\n%s", line, tags)
+		}
+	}
+	files := map[string]string{
+		"nautilus.yaml": `tasks:
+  - program: program.st
+    scan: 100ms
+driver:
+  type: modbus
+  manifest: modbus_manifest.yaml
+tag-files: [tags/modbus.yaml]
+`,
+		// Every imported tag read, none declared: the tag file's types are
+		// what the compiler binds them by.
+		"program.st": `PROGRAM Main
+VAR
+    f : REAL; tot : LREAL; n : DINT; ok : BOOL;
+END_VAR
+f := M1_Flow + M1_Level;
+tot := M1_Total;
+n := INT_TO_DINT(M1_Temp) + UINT_TO_DINT(M1_Count) + M1_Pulses + UDINT_TO_DINT(M1_Uptime);
+ok := M1_Running AND NOT M1_Fault;
+M1_Speed := UINT#1500;
+END_PROGRAM
+`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = w, w
+	code := runCheck([]string{dir})
+	os.Stdout, os.Stderr = oldOut, oldErr
+	w.Close()
+	var buf strings.Builder
+	b := make([]byte, 4096)
+	for {
+		n, err := r.Read(b)
+		buf.Write(b[:n])
+		if err != nil {
+			break
+		}
+	}
+	if code != 0 {
+		t.Errorf("naut check on an imported project exited %d:\n%s", code, buf.String())
 	}
 }

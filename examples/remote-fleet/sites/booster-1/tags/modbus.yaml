@@ -4,4 +4,4 @@
 # --map the unit/desc/init columns, which only the map knows, are dropped).
 #
 # Compose it into a project with:  tag-files: [tags/modbus.yaml]
-- { name: FM1_FlowLps, role: input, unit: "L/s", desc: "Booster 1 discharge flow meter — discharge flow" }
+- { name: FM1_FlowLps, role: input, type: REAL, unit: "L/s", desc: "Booster 1 discharge flow meter — discharge flow" }

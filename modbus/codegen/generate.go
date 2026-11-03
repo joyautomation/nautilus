@@ -311,7 +311,10 @@ func TagsYAML(m modbus.Manifest, meta map[string]TagMeta, skip []string) ([]byte
 			skipped++
 			continue
 		}
-		tag := tagfile.Tag{Name: t.Name, Role: "input"}
+		// The binding's format decides the type, so a program can read the
+		// tag without declaring it in VAR_EXTERNAL (`naut check` refuses a
+		// project tag with no type) and a scan starts on the right kind.
+		tag := tagfile.Tag{Name: t.Name, Role: "input", Type: t.IECType()}
 		if t.Writable {
 			// Writable bindings are the driver's output set. A program
 			// that also reads one back before the first poll needs an
