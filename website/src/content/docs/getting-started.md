@@ -174,8 +174,15 @@ full path (`which naut`), or launch VS Code from a terminal with `code .`.
   for a Dockerfile, a redundant-pair Kubernetes manifest, and the workflow
   that ships a merged commit to the controller.
 
+To do all of that once, on a small program of your own, follow
+[Your first program](/guides/first-program/): a sump pump with a
+minimum-run timer and a start counter, from tags to tests to a running,
+force-driven controller to a built binary, on one page.
+
 ## Next
 
+- [Your first program](/guides/first-program/) — declare, write, test,
+  run, force and build one small program, end to end.
 - [Online edits](/guides/online-edits/) — change logic on a running
   controller from VS Code, and pull field edits back into git.
 - [Testing](/reference/testing/) — virtual time, and the `*_test.yaml`
