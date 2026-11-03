@@ -1,0 +1,6 @@
+PROGRAM Main
+VAR_EXTERNAL
+    Beat : DINT;
+END_VAR
+Beat := Beat + 1;
+END_PROGRAM

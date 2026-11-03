@@ -2,6 +2,8 @@
 library - ApplicationUri set (Part 4 §7.1), ProductUri/SoftwareVersion/BuildDate of
 BuildInfo not a placeholder - and the ServerType Mandatory variables ServerArray,
 ServiceLevel and Auditing (Part 5 §8.2) have readable Values.
+Rewritten 2026-11-03 per runs/RECONCILIATION-2026-11-03.md ruling 9: Auditing is read at
+i=2994 (ua.ObjectIds.Server_Auditing); the parent read i=2268, which is ServerCapabilities.
 Project: evidence/typed. Oracle: asyncua + Part 4/5."""
 import asyncio, os, sys, datetime
 from asyncua import Client, ua
@@ -27,7 +29,7 @@ async def main():
             ok("gopcua" not in (bi.ProductUri or ""), f"BuildInfo.ProductUri ({bi.ProductUri!r}) does not name a library")
             ok(bi.SoftwareVersion not in ("", "0.0.0-dev"), f"BuildInfo.SoftwareVersion ({bi.SoftwareVersion!r}) is a version")
             ok(bi.BuildDate.year > 2000, f"BuildInfo.BuildDate ({bi.BuildDate}) is not the epoch placeholder")
-        for nid, what in [("i=2254", "ServerArray"), ("i=2267", "ServiceLevel"), ("i=2268", "Auditing")]:
+        for nid, what in [("i=2254", "ServerArray"), ("i=2267", "ServiceLevel"), (f"i={ua.ObjectIds.Server_Auditing}", "Auditing")]:
             dv = await c.get_node(nid).read_data_value(raise_on_bad_status=False)
             ok(dv.StatusCode.is_good(), f"{what} Value: {dv.StatusCode.name} {dv.Value.Value if dv.StatusCode.is_good() else ''}")
 asyncio.run(main()); sys.exit(1 if F else 0)

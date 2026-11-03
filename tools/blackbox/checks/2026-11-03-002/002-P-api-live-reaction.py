@@ -4,7 +4,10 @@ Project: evidence/pumps, served by `naut run` at SUT_HTTP. Sets its own state:
 forces LevelPct (POST /api/forces, the forcing guide) and writes setpoints (POST /api/tags).
 Checks: lead starts at 65 %, lag joins at 85 %, both stop at 15 % and the lead alternates;
 an enum tag takes a member name and refuses a non-member with 400; a misspelt UDT member and an
-undeclared tag are 400. Clears its forces at the end.
+undeclared tag are 400; "T#8h" written to the TIME tag HiLevelDelay lands (28 800 000 ms) and a
+string that is no duration is 422. Clears its forces and puts HiLevelDelay back to 30 s at the end.
+Changed 2026-11-03 per runs/RECONCILIATION-2026-11-03.md ruling 3 (the parent expected any string
+to a TIME tag, "T#8h" included, to be refused).
 """
 import json, os, sys, time, urllib.request, urllib.error
 
@@ -63,18 +66,21 @@ try:
     expect("misspelt member is 400", s == 400 and "Starts" in b, {"status": s, "body": b})
     s, b = req("POST", "/api/tags", {"name": "Nope", "value": 1})
     expect("undeclared tag is 400", s == 400, {"status": s, "body": b})
-    # Reconciliation (nautilus#519, approved 2026-11-02): a TIME tag now takes
-    # its IEC literal over HTTP, as init: and given: do; a string that is no
-    # duration is still refused. The brief's check asserted "T#8h" was 4xx,
-    # from docs that said TIME travels as milliseconds only.
-    s, b = req("POST", "/api/tags", {"name": "HiLevelDelay", "value": "T#8h"})
-    expect("a TIME literal to a TIME tag lands (204)", s == 204, {"status": s, "body": b})
-    s, b = req("POST", "/api/tags", {"name": "HiLevelDelay", "value": "soon"})
-    expect("a string that is no duration is refused (4xx)", 400 <= s < 500, {"status": s, "body": b})
+    # a TIME tag takes an IEC literal and reads back in milliseconds (/guides/http-api/ "TIME values";
+    # /guides/first-program/ "A TIME reads back as milliseconds"); a string that is no duration is
+    # the wrong kind of value for a whole tag, 422 (/guides/http-api/ status table, /guides/tag-model/)
+    s, b = req("POST", "/api/tags", {"name": "HiLevelDelay", "value": "T#8h"}); settle(); t = tags()
+    expect("T#8h to a TIME tag lands as 8 h in milliseconds", s == 204 and t["HiLevelDelay"] == 8 * 3600 * 1000,
+           {"status": s, "body": b, "HiLevelDelay": t["HiLevelDelay"]})
+    s, b = req("POST", "/api/tags", {"name": "HiLevelDelay", "value": "eight hours"}); t = tags()
+    expect("a non-duration string to a TIME tag is 422 and leaves the value", s == 422 and t["HiLevelDelay"] == 8 * 3600 * 1000,
+           {"status": s, "body": b, "HiLevelDelay": t["HiLevelDelay"]})
+    req("POST", "/api/tags", {"name": "HiLevelDelay", "value": 30000})
     meta = json.loads(req("GET", "/api/meta")[1])
     expect("/api/meta lists the enum members", [m["name"] for m in meta["tags"]["Lead"]["enum"]] == ["Pump1", "Pump2"],
            meta["tags"]["Lead"])
 finally:
     req("POST", "/api/forces/clear")
+    req("POST", "/api/tags", {"name": "HiLevelDelay", "value": 30000})
 
 sys.exit(1 if fails else 0)

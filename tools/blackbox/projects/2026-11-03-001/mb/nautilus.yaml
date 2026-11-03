@@ -1,0 +1,14 @@
+name: mb
+server:
+  addr: "localhost:8082"
+tasks:
+  - { program: main.st, scan: 100ms }
+tag-files: [tags/modbus.yaml]
+tags:
+  - { name: Beat, role: state, type: DINT, init: 0 }
+driver:
+  type: modbus
+  manifest: modbus_manifest.yaml
+  scan-rate: 500ms
+opcua:
+  endpoint: opc.tcp://localhost:4842

@@ -1,0 +1,44 @@
+name: typed
+server:
+  addr: "localhost:8080"
+tasks:
+  - program: main.st
+    scan: 100ms
+    dt-tag: ScanDt
+tags:
+  - { name: Flag,    role: setpoint, type: BOOL,  init: true, desc: "A boolean" }
+  - { name: Small,   role: setpoint, type: SINT,  init: -5 }
+  - { name: USmall,  role: setpoint, type: USINT, init: 200 }
+  - { name: Byte1,   role: setpoint, type: BYTE,  init: 255 }
+  - { name: Int1,    role: setpoint, type: INT,   init: -1234, desc: "An INT", unit: "counts" }
+  - { name: UInt1,   role: setpoint, type: UINT,  init: 60000 }
+  - { name: Word1,   role: setpoint, type: WORD,  init: 65535 }
+  - { name: Dint1,   role: setpoint, type: DINT,  init: -100000 }
+  - { name: UDint1,  role: setpoint, type: UDINT, init: 4000000000 }
+  - { name: DWord1,  role: setpoint, type: DWORD, init: 4294967295 }
+  - { name: Lint1,   role: setpoint, type: LINT,  init: -9000000000 }
+  - { name: ULint1,  role: setpoint, type: ULINT, init: 9000000000 }
+  - { name: LWord1,  role: setpoint, type: LWORD, init: 1 }
+  - { name: Level,   role: setpoint, type: REAL,  init: 1.5, unit: "ft", desc: "Wet well level" }
+  - { name: LReal1,  role: setpoint, type: LREAL, init: 2.5 }
+  - { name: Str1,    role: setpoint, type: STRING, init: "hello" }
+  - { name: Time1,   role: setpoint, type: TIME,  init: T#2s500ms }
+  - { name: Mode1,   role: setpoint, type: Mode,  init: Run }
+  - { name: P101,    role: state,    type: Motor, init: { Running: true, Drive: { Speed: 1.0 }, State: Run } }
+  - { name: RealArr, role: setpoint, type: 'ARRAY[1..4] OF REAL',   init: [10.0, 20.0] }
+  - { name: IntArr,  role: setpoint, type: 'ARRAY[0..2] OF INT',    init: [1, 2, 3] }
+  - { name: BoolArr, role: setpoint, type: 'ARRAY[5..7] OF BOOL',   init: [true, false, true] }
+  - { name: StrArr,  role: setpoint, type: 'ARRAY[1..2] OF STRING', init: ["a", "b"] }
+  - { name: TimeArr, role: setpoint, type: 'ARRAY[1..2] OF TIME',   init: [T#1s, T#2s] }
+  - { name: Grid,    role: setpoint, type: 'ARRAY[0..1, 0..2] OF INT' }
+  - { name: Pumps,   role: state,    type: 'ARRAY[1..2] OF Motor' }
+  - { name: Recipe,  role: setpoint, type: DoseRecipe, init: { TargetL: 10.0, SettleTime: T#2s, Steps: [T#1s, T#2s] } }
+  - { name: UnitOnly, role: setpoint, type: REAL, init: 3.0, unit: "psi" }
+  - { name: Counter,  role: state, type: DINT, init: 0 }
+  - { name: Ramp,     role: state, type: REAL, init: 0.0 }
+  - { name: Blink,    role: state, type: BOOL, init: false }
+  - { name: Fixed,    role: state, type: INT,  init: 0 }
+  - { name: ScanDt,   role: state, type: REAL, init: 0.0 }
+driver:
+  type: memory
+opcua: {}
