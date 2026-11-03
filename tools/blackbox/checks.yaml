@@ -921,7 +921,7 @@ checks:
   project: projects/2026-11-01-002/pumps
   script: checks/2026-11-01-002/002-F04-testing-enum-link.sh
   env:
-    SUT_WEBSITE: https://nautilus.joyautomation.com (default)
+    SUT_WEBSITE: https://nautilus.joyautomation.com
   note: 'needs network access to the website; it checks the published site, not the release [project in the run:
     ''none''; the runner needs one, and the check does not use it]'
   expected_today: fail (functions.md#enumerations → 404)
