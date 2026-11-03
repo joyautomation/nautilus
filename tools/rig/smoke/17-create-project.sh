@@ -6,8 +6,10 @@
 #        name, template quick pick (Minimal), then the "created <name>/"
 #        toast's Open Here — the project is on disk, checks clean with the
 #        CLI under test, and the window reopens on it. Then the same flow
-#        from the Get Started walkthrough's "Create a project" step (the link
-#        in the step's markdown media, a webview).
+#        with the folder picked through Browse in the simple dialog (#528:
+#        Escape there returns to the box, a pick carries on), and from the Get
+#        Started walkthrough's "Create a project" step (the link in the step's
+#        markdown media, a webview).
 #   X01  workbench.editorAssociations {"*.ld": "nautilus.ldDiagram"} opens a
 #        .ld as the Ladder diagram custom editor; without it, as text.
 #   X21  the FbMonitorLenses CodeLens over a FUNCTION_BLOCK header (blocks.st
@@ -56,6 +58,11 @@ btn_js() { echo "[...document.querySelectorAll('a.monaco-button, .monaco-button,
 
 QI_TITLE='(() => { const w = document.querySelector(".quick-input-widget"); return w && w.style.display !== "none" ? (w.querySelector(".quick-input-title")?.textContent.trim() ?? "") : null; })()'
 QI_PARENT="(($QI_TITLE) || '').includes('parent folder')"
+# The parent-folder box itself, and the simple file dialog Browse opens over it
+# (its title also says "parent folder").
+QI_PARENT_BOX="$QI_TITLE === 'nautilus: Create Project — parent folder'"
+QI_BROWSE_DIALOG="(($QI_TITLE) || '').includes('choose a parent folder')"
+BROWSE_JS="[...document.querySelectorAll('.quick-input-widget .action-label, .quick-input-widget a')].find(a => ((a.getAttribute('aria-label') || '') + (a.title || '') + a.className).match(/Browse|folder-opened/) && a.offsetParent)"
 QI_ROWS='[...document.querySelectorAll(".quick-input-widget .quick-input-list .monaco-list-row")].map(r => r.getAttribute("aria-label") || r.textContent.trim())'
 # The quick input's text box, whether it holds the keyboard focus, and what is in it.
 QI_INPUT='document.querySelector(".quick-input-widget input")'
@@ -73,7 +80,7 @@ TOASTS='[...document.querySelectorAll(".notification-list-item")].map(n => n.tex
 # does not happen. After Minimal the program-language quick pick (X50, #221)
 # asks; default Structured Text.
 create_flow() {
-  local lbl=$1 parent=$2 name=$3 lang=${4:-st} png t rows i llabel
+  local lbl=$1 parent=$2 name=$3 lang=${4:-st} via=${5:-type} png t rows i llabel
   case $lang in
     st) llabel="Structured Text" ;; ld) llabel="Ladder Diagram" ;;
     fbd) llabel="Function Block Diagram" ;; sfc) llabel="Sequential Function Chart" ;;
@@ -83,12 +90,33 @@ create_flow() {
   # #86: the parent-folder step is an input box; Enter accepts the prefilled folder.
   wait_pg "($QI_TITLE || '').includes('parent folder')" 10 || true
   [[ $(qi_title) == *"parent folder"* ]] || { fail "$lbl: no parent-folder input box" "$png"; return 1; }
-  # the cold first run leaves focus on the Welcome page: click into the box first
-  pg_click "document.querySelector('.quick-input-widget .quick-input-box input')" 0.5 || true
-  key ctrl+a; xdotool type --delay 20 "$parent"; sleep 0.6; xdotool key Return; sleep 1.2
-  # a cold first run can swallow the first Enter; a second one is the same gesture
-  [[ $(qi_title) == *"parent folder"* ]] \
-    && { info "$lbl: first Enter left the parent-folder box up; pressing it again"; xdotool key Return; sleep 1.2; }
+  if [[ $via == browse ]]; then
+    # #528: Browse opens files.simpleDialog, itself a quick input, over the
+    # box. Cancelling the dialog must bring the box back, and a folder picked
+    # in it must carry on to the name box (both used to end the flow).
+    pg_click "$BROWSE_JS" 2 || { fail "$lbl: no Browse button on the parent-folder box" "$(shot "$lbl-1b-nobrowse")"; return 1; }
+    wait_pg "$QI_BROWSE_DIALOG" 10 || { fail "$lbl: Browse opened no simple dialog (quick input '$(qi_title)')" "$(shot "$lbl-1b-nodialog")"; return 1; }
+    key Escape; sleep 1.2
+    png=$(shot "$lbl-1c-dialog-cancelled")
+    if wait_pg "$QI_PARENT_BOX" 5; then
+      pass "$lbl: Escape in the Browse dialog brings the parent-folder box back (#528)" "$png"
+    else
+      fail "$lbl: Escape in the Browse dialog ended Create Project (quick input '$(qi_title)')" "$png"; return 1
+    fi
+    pg_click "$BROWSE_JS" 2 || { fail "$lbl: no Browse button after the cancel" "$(shot "$lbl-1d-nobrowse")"; return 1; }
+    wait_pg "$QI_BROWSE_DIALOG" 10 || { fail "$lbl: the second Browse opened no dialog" "$(shot "$lbl-1d-nodialog")"; return 1; }
+    pg "$QI_INPUT?.focus()" >/dev/null; sleep 0.3
+    key ctrl+a; xdotool type --delay 20 "$parent/"; sleep 1.5
+    png=$(shot "$lbl-1e-dialog-folder")
+    pg_click "$(btn_js 'Create project here')" 2 || { info "$lbl: no 'Create project here' button in the dialog; pressing Enter" "$png"; xdotool key Return; sleep 2; }
+  else
+    # the cold first run leaves focus on the Welcome page: click into the box first
+    pg_click "document.querySelector('.quick-input-widget .quick-input-box input')" 0.5 || true
+    key ctrl+a; xdotool type --delay 20 "$parent"; sleep 0.6; xdotool key Return; sleep 1.2
+    # a cold first run can swallow the first Enter; a second one is the same gesture
+    [[ $(qi_title) == *"parent folder"* ]] \
+      && { info "$lbl: first Enter left the parent-folder box up; pressing it again"; xdotool key Return; sleep 1.2; }
+  fi
 
   wait_pg "$QI_TITLE === 'nautilus: Create Project'" 10 || true
   png=$(shot "$lbl-2-name")
@@ -189,6 +217,25 @@ if [[ -z $up ]]; then
 else
   (( up > 1 )) && info "palette: the picker came up on attempt $up (the cold first run lost it — see the NOTE rows above)"
   create_flow palette "$PARENT" smoke-new || true
+fi
+
+# ── from the palette, the folder picked with Browse (#528) ──────────────────
+# files.simpleDialog makes Browse's open dialog a quick input over the
+# parent-folder box. The folder picked there is where the project lands.
+BROWSE_PARENT=$HOME/c25-browse
+rm -rf "$BROWSE_PARENT"; mkdir -p "$BROWSE_PARENT/picked"
+EXTRA_SETTINGS='"files.simpleDialog.enable": true' smoke_open "$BROWSE_PARENT"
+key Escape; vs_cmd "Notifications: Clear All Notifications" 1
+up=
+for attempt in 1 2 3; do
+  vs_cmd "nautilus: Create Project" 2
+  if wait_pg "$QI_PARENT_BOX" 10; then up=$attempt; break; fi
+  key Escape; vs_cmd "Notifications: Clear All Notifications" 1; vs_cmd "View: Close All Editors" 1
+done
+if [[ -z $up ]]; then
+  fail "browse: \"nautilus: Create Project…\" never opened the folder picker in 3 attempts"
+else
+  create_flow browse "$BROWSE_PARENT/picked" smoke-browse st browse || true
 fi
 
 # ── from the Get Started walkthrough ─────────────────────────────────────
