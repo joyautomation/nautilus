@@ -153,9 +153,10 @@ func decodeContinuation(cp []byte) (bd *ua.BrowseDescription, offset, max uint32
 const (
 	// maxNodesPerBrowse is the most nodes one Browse, or continuation
 	// points one BrowseNext, may name: a client building its tree browses
-	// a few at a time, and a thousand is room for one that does the whole
-	// project in one call.
-	maxNodesPerBrowse = 1000
+	// a few at a time, and 500 is room for a whole project's tags in one
+	// call. A standard (ns=0) node costs about 1.2 ms to browse, so 500 of
+	// them hold the message loop about 0.7 s; 1000 held it 1.4 s.
+	maxNodesPerBrowse = 500
 	// maxNodesPerTranslate is the most browse paths one
 	// TranslateBrowsePathsToNodeIds may carry.
 	maxNodesPerTranslate = 100

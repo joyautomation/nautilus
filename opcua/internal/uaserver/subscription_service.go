@@ -252,8 +252,9 @@ func (s *SubscriptionService) tellTransferred(from *session, id, seq uint32) {
 }
 
 // noticeFor answers a Publish of sess with a notice it is owed, if it has one that is still
-// true: the subscription is not the session's (it may have taken it back since, or the
-// subscription may be gone). Notices that are no longer true are dropped.
+// true: the subscription is not the session's (it may have taken it back since). A notice
+// for a subscription deleted after the transfer is still delivered: it was owed when the
+// subscription moved. Notices that are no longer true are dropped.
 func (s *SubscriptionService) noticeFor(sess *session, hdr *ua.RequestHeader) ua.Response {
 	for {
 		id, seq, ok := sess.takeNotice()

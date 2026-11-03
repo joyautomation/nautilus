@@ -565,7 +565,7 @@ claims:
       SetSubscriptionDurable and RequestServerStateChange are
       Bad_NotExecutable with Executable false, and a method that is not the
       object's is Bad_MethodInvalid. A Browse or BrowseNext names at most
-      1 000 nodes, a TranslateBrowsePathsToNodeIds at most 100 paths (of at
+      500 nodes, a TranslateBrowsePathsToNodeIds at most 100 paths (of at
       most 32 elements, Bad_QueryTooComplex past that), a Call at most 100
       methods, each limit advertised in OperationLimits and
       Bad_TooManyOperations past it.

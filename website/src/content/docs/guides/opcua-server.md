@@ -105,7 +105,7 @@ the standard `Server` object's included. The server answers one request at
 a time, so the services that can be asked for a great deal of work are
 bounded, each limit advertised in the `Server` object's `OperationLimits`
 and refused past it with `Bad_TooManyOperations`: a Browse (or BrowseNext)
-names at most 1 000 nodes, a `TranslateBrowsePathsToNodeIds` at most 100
+names at most 500 nodes, a `TranslateBrowsePathsToNodeIds` at most 100
 paths, and a `Call` at most 100 methods.
 
 `TranslateBrowsePathsToNodeIds` resolves a path of browse names over the
