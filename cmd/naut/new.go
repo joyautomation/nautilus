@@ -96,76 +96,11 @@ var identRE = regexp.MustCompile(`[^A-Za-z0-9]+`)
 // --no-input, having no terminal to prompt on, or a name and a --template
 // on the command line skip the prompts and take the defaults.
 func runNew(args []string) int {
-	fs := flag.NewFlagSet("new", flag.ContinueOnError)
-	module := fs.String("module", "", "Go module path (sdk templates only; default: name)")
-	language := fs.String("language", "st", "program language for minimal/sdk: st, fbd, ld, or sfc")
-	tmpl := fs.String("template", "", "project template: minimal, demo, sdk, or sdk-demo (default: demo)")
-	// Superseded by --template; kept working so documented one-liners and
-	// existing scripts don't break. It is listed in --help, so it says so.
-	noGo := fs.Bool("no-go", false, "same as --template minimal (superseded by --template)")
-	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting (a name and --template already skip the prompts)")
-	deploy := fs.Bool("deploy", false, "add Dockerfile, k8s manifests, and a CD workflow (manifest templates)")
-	replace := fs.String("replace", "", "path to a local nautilus checkout; adds a filesystem replace directive so the project builds against it (for contributors, pre-publish)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	sc, form, code := parseNew(args, stdinIsTTY())
+	if code != 0 {
+		return code
 	}
-	name := ""
-	if fs.NArg() > 0 {
-		// Go's flag package stops at the first positional argument, so
-		// `naut new water-plant --no-input` leaves the flags unparsed.
-		// Take the name, then parse the remainder as flags.
-		name = fs.Arg(0)
-		if err := fs.Parse(fs.Args()[1:]); err != nil {
-			return 2
-		}
-	}
-
-	sc := scaffold{
-		Name:   name,
-		Module: *module,
-		CI:     true, VSCode: true, Git: true, Deploy: *deploy,
-		Language: strings.ToLower(strings.TrimSpace(*language)),
-		Template: strings.ToLower(strings.TrimSpace(*tmpl)),
-	}
-	switch sc.Template {
-	case "":
-		sc.Template = tmplDemo // a new project should run and move
-		if *noGo {
-			sc.Template = tmplMinimal // the flag --template replaced
-		}
-	case tmplMinimal, tmplDemo, tmplSDK, tmplSDKDemo:
-	default:
-		fmt.Fprintf(os.Stderr, "naut new: --template must be one of %s\n", strings.Join(templateNames, ", "))
-		return 2
-	}
-	switch sc.Language {
-	case "", "st":
-		sc.Language = "st"
-	case "fbd", "ld", "sfc":
-	default:
-		fmt.Fprintln(os.Stderr, "naut new: --language must be st, fbd, ld, or sfc")
-		return 2
-	}
-	if *replace != "" {
-		// Absolute, so the directive resolves from the generated project dir
-		// regardless of where the user later runs go from.
-		abs, err := filepath.Abs(*replace)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "naut new: --replace:", err)
-			return 2
-		}
-		sc.Replace = abs
-	}
-
-	templateGiven := *tmpl != "" || *noGo
-	if !wantForm(*noInput, stdinIsTTY(), sc.Name, templateGiven) {
-		// No terminal to prompt on (CI, docker, piped input) behaves like
-		// --no-input, so the documented one-liners work headlessly.
-		if sc.Name == "" {
-			fmt.Fprintln(os.Stderr, "naut new: a name is required when not prompting (--no-input or no terminal)")
-			return 2
-		}
-	} else {
+	if form {
 		if err := prompt(&sc); err != nil {
 			fmt.Fprintln(os.Stderr, "naut new:", err)
 			return 1
@@ -181,7 +116,88 @@ func runNew(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut new:", err)
 		return 1
 	}
+	return created(sc)
+}
 
+// parseNew reads naut new's command line into the scaffold, and decides
+// whether the interactive form still has questions to ask (form); tty is
+// whether there is a terminal to ask them on. A non-zero code is the exit
+// status for a bad command line, already reported.
+func parseNew(args []string, tty bool) (sc scaffold, form bool, code int) {
+	fs := flag.NewFlagSet("new", flag.ContinueOnError)
+	module := fs.String("module", "", "Go module path (sdk templates only; default: name)")
+	language := fs.String("language", "st", "program language for minimal/sdk: st, fbd, ld, or sfc")
+	tmpl := fs.String("template", "", "project template: minimal, demo, sdk, or sdk-demo (default: demo)")
+	// Superseded by --template; kept working so documented one-liners and
+	// existing scripts don't break. It is listed in --help, so it says so.
+	noGo := fs.Bool("no-go", false, "same as --template minimal (superseded by --template)")
+	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting (a name and --template already skip the prompts)")
+	deploy := fs.Bool("deploy", false, "add Dockerfile, k8s manifests, and a CD workflow (manifest templates)")
+	replace := fs.String("replace", "", "path to a local nautilus checkout; adds a filesystem replace directive so the project builds against it (for contributors, pre-publish)")
+	if err := fs.Parse(args); err != nil {
+		return scaffold{}, false, 2
+	}
+	name := ""
+	if fs.NArg() > 0 {
+		// Go's flag package stops at the first positional argument, so
+		// `naut new water-plant --no-input` leaves the flags unparsed.
+		// Take the name, then parse the remainder as flags.
+		name = fs.Arg(0)
+		if err := fs.Parse(fs.Args()[1:]); err != nil {
+			return scaffold{}, false, 2
+		}
+	}
+
+	sc = scaffold{
+		Name:   name,
+		Module: *module,
+		CI:     true, VSCode: true, Git: true, Deploy: *deploy,
+		Language: strings.ToLower(strings.TrimSpace(*language)),
+		Template: strings.ToLower(strings.TrimSpace(*tmpl)),
+	}
+	switch sc.Template {
+	case "":
+		sc.Template = tmplDemo // a new project should run and move
+		if *noGo {
+			sc.Template = tmplMinimal // the flag --template replaced
+		}
+	case tmplMinimal, tmplDemo, tmplSDK, tmplSDKDemo:
+	default:
+		fmt.Fprintf(os.Stderr, "naut new: --template must be one of %s\n", strings.Join(templateNames, ", "))
+		return scaffold{}, false, 2
+	}
+	switch sc.Language {
+	case "", "st":
+		sc.Language = "st"
+	case "fbd", "ld", "sfc":
+	default:
+		fmt.Fprintln(os.Stderr, "naut new: --language must be st, fbd, ld, or sfc")
+		return scaffold{}, false, 2
+	}
+	if *replace != "" {
+		// Absolute, so the directive resolves from the generated project dir
+		// regardless of where the user later runs go from.
+		abs, err := filepath.Abs(*replace)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut new: --replace:", err)
+			return scaffold{}, false, 2
+		}
+		sc.Replace = abs
+	}
+
+	templateGiven := *tmpl != "" || *noGo
+	form = wantForm(*noInput, tty, sc.Name, templateGiven)
+	if !form && sc.Name == "" {
+		// No terminal to prompt on (CI, docker, piped input) behaves like
+		// --no-input, so the documented one-liners work headlessly.
+		fmt.Fprintln(os.Stderr, "naut new: a name is required when not prompting (--no-input or no terminal)")
+		return scaffold{}, false, 2
+	}
+	return sc, form, 0
+}
+
+// created prints what naut new wrote and what to run next.
+func created(sc scaffold) int {
 	if sc.NoGo() {
 		what := "a manifest project, no Go required"
 		if sc.Demo() {

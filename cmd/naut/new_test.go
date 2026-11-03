@@ -278,25 +278,48 @@ func TestScaffoldedManifestProjectsPass(t *testing.T) {
 
 // A name and a template on the command line are the whole answer:
 // `naut new my-plant --template minimal` writes the project without opening
-// the form, in a terminal or not. A name alone, or a template alone, still
-// prompts for the rest; --no-input and no terminal never prompt.
+// the form, in a terminal or not, and so does the older --no-go spelling. A
+// name alone, or a template alone, still prompts for the rest; --no-input
+// and no terminal never prompt. Driven through parseNew, the command line
+// runNew reads, so the flags that count as "a template" are pinned too.
 func TestNewNameAndTemplateSkipTheForm(t *testing.T) {
 	for _, tc := range []struct {
-		noInput, tty  bool
-		name          string
-		templateGiven bool
-		want          bool
+		args     []string
+		tty      bool
+		form     bool
+		template string
 	}{
-		{false, true, "my-plant", true, false}, // naut new my-plant --template minimal
-		{false, true, "my-plant", false, true}, // naut new my-plant: which template?
-		{false, true, "", true, true},          // naut new --template minimal: which name?
-		{false, true, "", false, true},         // naut new
-		{true, true, "my-plant", false, false}, // --no-input
-		{false, false, "my-plant", false, false},
+		{[]string{"my-plant", "--template", "minimal"}, true, false, tmplMinimal},
+		{[]string{"--template", "sdk", "my-plant"}, true, false, tmplSDK},
+		{[]string{"my-plant", "--no-go"}, true, false, tmplMinimal},
+		{[]string{"my-plant", "--template", "demo"}, true, false, tmplDemo},
+		{[]string{"my-plant"}, true, true, tmplDemo},                 // which template?
+		{[]string{"--template", "minimal"}, true, true, tmplMinimal}, // which name?
+		{[]string{}, true, true, tmplDemo},                           // naut new
+		{[]string{"my-plant", "--language", "fbd"}, true, true, tmplDemo},
+		{[]string{"my-plant", "--no-input"}, true, false, tmplDemo},
+		{[]string{"my-plant"}, false, false, tmplDemo}, // no terminal
 	} {
-		if got := wantForm(tc.noInput, tc.tty, tc.name, tc.templateGiven); got != tc.want {
-			t.Errorf("wantForm(noInput=%v, tty=%v, name=%q, template=%v) = %v, want %v",
-				tc.noInput, tc.tty, tc.name, tc.templateGiven, got, tc.want)
+		sc, form, code := parseNew(tc.args, tc.tty)
+		if code != 0 {
+			t.Errorf("naut new %v: exit %d", tc.args, code)
+			continue
+		}
+		if form != tc.form || sc.Template != tc.template {
+			t.Errorf("naut new %v (tty %v): form %v, template %q; want form %v, template %q",
+				tc.args, tc.tty, form, sc.Template, tc.form, tc.template)
+		}
+		if !form && (sc.Language != "st" || !sc.CI || !sc.VSCode || !sc.Git || sc.Deploy) {
+			t.Errorf("naut new %v: defaults %+v, want st, CI, VS Code and git on, deploy off", tc.args, sc)
 		}
 	}
+	// Without a terminal or with --no-input, a name is still required.
+	if _, _, code := quietlyParse(func() (scaffold, bool, int) { return parseNew([]string{"--template", "minimal"}, false) }); code != 2 {
+		t.Errorf("naut new --template minimal with no terminal: exit %d, want 2", code)
+	}
+}
+
+func quietlyParse(f func() (scaffold, bool, int)) (sc scaffold, form bool, code int) {
+	quietly(func() int { sc, form, code = f(); return 0 })
+	return
 }
