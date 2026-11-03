@@ -136,7 +136,8 @@ after, so an edit there would be discarded within a scan. `POST /api/tags` to
 a `role: input` tag is refused for the same reason. To drive an input during
 bring-up, [force it](/guides/forcing/): `POST /api/forces` with
 `{"name": "LevelPct", "value": 65}` holds the value against the driver until you
-remove the force.
+remove the force. Every endpoint, with its status codes, is in the
+[HTTP API](/guides/http-api/) reference.
 
 ## 3. Develop in VS Code
 
