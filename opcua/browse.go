@@ -28,9 +28,10 @@ type Variable struct {
 	// DisplayName and Description as the server shows them.
 	DisplayName string
 	Description string
-	// Type is the binding type name when the Value is a scalar built-in;
-	// otherwise the DataType node id as a string (the generator skips it
-	// and says why).
+	// Type is the binding type name when the Value is encoded as a scalar
+	// built-in — the DataType itself, or the built-in it is a subtype of,
+	// an enumeration being an Int32 (encodedAs); otherwise the DataType
+	// node id as a string (the generator skips it and says why).
 	Type string
 	// Scalar reports a built-in scalar type (Type is then a TypeNames entry).
 	Scalar bool
@@ -62,6 +63,7 @@ var ObjectsFolder = ua.NewNumericNodeID(0, id.ObjectsFolder)
 func Browse(ctx context.Context, c *opcua.Client, root *ua.NodeID, maxDepth int, progress func(string)) (BrowseResult, error) {
 	res := BrowseResult{Root: root.String(), Namespaces: c.Namespaces()}
 	visited := map[string]bool{}
+	types := map[string]string{} // DataType node id → the built-in it is encoded as, "" for none
 	serverObj := ua.NewNumericNodeID(0, id.Server).String()
 
 	var walk func(node *ua.NodeID, path []string, depth int) error
@@ -88,7 +90,7 @@ func Browse(ctx context.Context, c *opcua.Client, root *ua.NodeID, maxDepth int,
 			}
 		}
 		if len(vars) > 0 {
-			found, err := readVariables(ctx, c, vars, path, res.Namespaces)
+			found, err := readVariables(ctx, c, vars, path, res.Namespaces, types)
 			if err != nil {
 				return err
 			}
@@ -159,7 +161,7 @@ func browseChildren(ctx context.Context, c *opcua.Client, node *ua.NodeID) ([]*u
 
 // readVariables reads DataType, ValueRank, AccessLevel and Description for
 // a level's variables in one request (chunked to the server's limit).
-func readVariables(ctx context.Context, c *opcua.Client, refs []*ua.ReferenceDescription, path []string, nss []string) ([]Variable, error) {
+func readVariables(ctx context.Context, c *opcua.Client, refs []*ua.ReferenceDescription, path []string, nss []string, types map[string]string) ([]Variable, error) {
 	attrs := []ua.AttributeID{ua.AttributeIDDataType, ua.AttributeIDValueRank, ua.AttributeIDAccessLevel, ua.AttributeIDDescription}
 	const perReq = 100 // nodes per Read; ×4 attributes stays under every server's limit
 	var out []Variable
@@ -203,7 +205,7 @@ func readVariables(ctx context.Context, c *opcua.Client, refs []*ua.ReferenceDes
 				}
 			}
 			if dt != nil {
-				if name, scalar := TypeName(dt); scalar {
+				if name := encodedAs(ctx, c, dt, types); name != "" {
 					v.Type, v.Scalar = name, true
 				} else {
 					v.Type = dt.String()
@@ -223,6 +225,66 @@ func readVariables(ctx context.Context, c *opcua.Client, refs []*ua.ReferenceDes
 		}
 	}
 	return out, nil
+}
+
+// encodedAs is the scalar built-in a DataType's values are encoded as: the
+// type itself when it is one, else the nearest built-in it is a subtype of
+// (Part 3 §5.8.3: a subtype is encoded as its supertype), with an
+// enumeration — any subtype of Enumeration, i=29 — an Int32 (Part 6
+// §5.2.4). So a nautilus server's enumeration tag (ns=1;s=type:Mode)
+// imports as Int32, and a Duration as the Double of milliseconds it is.
+// "" when the chain reaches neither, or cannot be browsed; cache holds
+// each answer for the rest of the walk.
+func encodedAs(ctx context.Context, c *opcua.Client, dt *ua.NodeID, cache map[string]string) string {
+	if name, ok := TypeName(dt); ok {
+		return name
+	}
+	key := dt.String()
+	if name, ok := cache[key]; ok {
+		return name
+	}
+	name := ""
+	cur := dt
+	for range 16 { // a type hierarchy is shallow; a cycle must not hang an import
+		if n, ok := TypeName(cur); ok {
+			name = n
+			break
+		}
+		if cur.Namespace() == 0 && cur.IntID() == id.Enumeration {
+			name = "Int32"
+			break
+		}
+		if cached, ok := cache[cur.String()]; ok && cur != dt {
+			name = cached
+			break
+		}
+		up := supertype(ctx, c, cur)
+		if up == nil {
+			break
+		}
+		cur = up
+	}
+	cache[key] = name
+	return name
+}
+
+// supertype is the DataType dt is a HasSubtype of, or nil.
+func supertype(ctx context.Context, c *opcua.Client, dt *ua.NodeID) *ua.NodeID {
+	resp, err := c.Browse(ctx, &ua.BrowseRequest{NodesToBrowse: []*ua.BrowseDescription{{
+		NodeID:          dt,
+		BrowseDirection: ua.BrowseDirectionInverse,
+		ReferenceTypeID: ua.NewNumericNodeID(0, id.HasSubtype),
+		ResultMask:      uint32(ua.BrowseResultMaskAll),
+	}}})
+	if err != nil || len(resp.Results) == 0 || resp.Results[0].StatusCode != ua.StatusGood {
+		return nil
+	}
+	for _, r := range resp.Results[0].References {
+		if r.NodeID != nil && r.NodeID.NodeID != nil && !r.IsForward {
+			return r.NodeID.NodeID
+		}
+	}
+	return nil
 }
 
 // value unwraps a good DataValue's Variant, or nil.

@@ -14,10 +14,13 @@ import (
 )
 
 // enumTypesST has a sparse enumeration (values 0, 10, 11: EnumValues), a
-// dense one (0, 1, 2: EnumStrings), and a struct holding one of each.
+// dense one (0, 1, 2: EnumStrings), a dense one declared out of value
+// order, one no tag uses, and a struct holding the first two.
 const enumTypesST = `
 TYPE Mode : (Idle, Run := 10, Fault) := Idle; END_TYPE
 TYPE Color : (Red, Green, Blue) := Green; END_TYPE
+TYPE Order : (A := 2, B := 0, C := 1) := B; END_TYPE
+TYPE Spare : (X, Y); END_TYPE
 TYPE Unit :
   STRUCT
     Mode  : Mode;
@@ -34,6 +37,7 @@ VAR_EXTERNAL
   U1    : Unit;
   Modes : ARRAY[1..3] OF Mode;
   Count : DINT;
+  Seq   : Order;
 END_VAR
 END_PROGRAM
 `
@@ -51,6 +55,7 @@ func enumServer(t *testing.T) (*runtime.Runtime, *Server, *opcua.Client) {
 			runtime.Typed("U1", runtime.RoleSetpoint, "Unit"),
 			runtime.Typed("Modes", runtime.RoleSetpoint, "ARRAY[1..3] OF Mode"),
 			runtime.Typed("Count", runtime.RoleSetpoint, "DINT"),
+			runtime.Typed("Seq", runtime.RoleSetpoint, "Order"),
 		},
 	})
 	if err != nil {
@@ -118,7 +123,8 @@ func TestEnumerationIsADataTypeUnderEnumeration(t *testing.T) {
 			subtypes[r.BrowseName.Name] = r
 		}
 	}
-	if len(subtypes) != 2 || subtypes["Mode"] == nil || subtypes["Color"] == nil {
+	// Spare is declared and used by no tag: a client still sees the type.
+	if len(subtypes) != 4 || subtypes["Mode"] == nil || subtypes["Color"] == nil || subtypes["Order"] == nil || subtypes["Spare"] == nil {
 		t.Fatalf("Enumeration's project subtypes: %v", subtypes)
 	}
 	// And under the hierarchical browse a client walks the Types tree with.
@@ -220,6 +226,24 @@ func TestEnumValuesAndEnumStrings(t *testing.T) {
 	if !ok || len(lts) != 3 || lts[0].Text != "Red" || lts[1].Text != "Green" || lts[2].Text != "Blue" {
 		t.Errorf("EnumStrings = %v", lts)
 	}
+	// EnumStrings is indexed by value, not declaration order: Order is
+	// (A := 2, B := 0, C := 1), so [B, C, A].
+	ord, ok := val(read(t, c, ua.NewStringNodeID(s.NamespaceIndex(), "type:Order.EnumStrings"), ua.AttributeIDValue)).([]*ua.LocalizedText)
+	if !ok || len(ord) != 3 || ord[0].Text != "B" || ord[1].Text != "C" || ord[2].Text != "A" {
+		t.Errorf("Order EnumStrings = %v, want [B C A]", ord)
+	}
+
+	// Both properties are read-only arrays of one entry per member.
+	for _, p := range []*ua.NodeID{values, strs} {
+		if dims, ok := val(read(t, c, p, ua.AttributeIDArrayDimensions)).([]uint32); !ok || len(dims) != 1 || dims[0] != 3 {
+			t.Errorf("%s ArrayDimensions %v", p, dims)
+		}
+		for _, a := range []ua.AttributeID{ua.AttributeIDAccessLevel, ua.AttributeIDUserAccessLevel} {
+			if lvl := val(read(t, c, p, a)); lvl != uint8(ua.AccessLevelTypeCurrentRead) {
+				t.Errorf("%s %s = %v, want CurrentRead", p, a, lvl)
+			}
+		}
+	}
 	// The property a type does not carry is no node.
 	if dv := read(t, c, ua.NewStringNodeID(s.NamespaceIndex(), "type:Mode.EnumStrings"), ua.AttributeIDValue); dv.Status != ua.StatusBadNodeIDUnknown {
 		t.Errorf("Mode.EnumStrings: %s", dv.Status)
@@ -316,5 +340,54 @@ func TestDenseEnumerations(t *testing.T) {
 		if got := dense(d); got != tc.want {
 			t.Errorf("dense(%v) = %v", tc.vals, got)
 		}
+	}
+}
+
+// A Browse of an enumeration DataType by an abstract reference type finds
+// its references through the subtype relations: HierarchicalReferences and
+// HasChild both cover the inverse HasSubtype to Enumeration and the
+// forward HasProperty; Aggregates the property only; References all.
+func TestEnumerationTypeBrowsesByAbstractReferenceTypes(t *testing.T) {
+	_, s, c := enumServer(t)
+	nid := typeNode(s, "Mode")
+	type ref struct {
+		typ     uint32
+		forward bool
+	}
+	got := func(refType uint32) map[ref]bool {
+		out := map[ref]bool{}
+		for _, r := range browseAll(t, c, nid, refType, ua.BrowseDirectionBoth) {
+			out[ref{r.ReferenceTypeID.IntID(), r.IsForward}] = true
+		}
+		return out
+	}
+	sub, prop := ref{id.HasSubtype, false}, ref{id.HasProperty, true}
+	for _, tc := range []struct {
+		refType uint32
+		want    []ref
+	}{
+		{id.References, []ref{sub, prop}},
+		{id.HierarchicalReferences, []ref{sub, prop}},
+		{id.HasChild, []ref{sub, prop}},
+		{id.Aggregates, []ref{prop}},
+		{id.HasSubtype, []ref{sub}},
+		{id.HasProperty, []ref{prop}},
+		{id.NonHierarchicalReferences, nil},
+	} {
+		have := got(tc.refType)
+		if len(have) != len(tc.want) {
+			t.Errorf("browse by i=%d: %v, want %v", tc.refType, have, tc.want)
+			continue
+		}
+		for _, w := range tc.want {
+			if !have[w] {
+				t.Errorf("browse by i=%d lacks %v: %v", tc.refType, w, have)
+			}
+		}
+	}
+	// The property, by HierarchicalReferences, lists its owner backwards.
+	pid := ua.NewStringNodeID(s.NamespaceIndex(), "type:Mode.EnumValues")
+	if back := browseAll(t, c, pid, id.HierarchicalReferences, ua.BrowseDirectionInverse); len(back) != 1 || !back[0].NodeID.NodeID.Equal(nid) {
+		t.Errorf("EnumValues' owner by HierarchicalReferences: %v", back)
 	}
 }

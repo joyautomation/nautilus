@@ -169,9 +169,15 @@ claims:
       naming them: EnumStrings when the values are 0..n-1, EnumValues
       otherwise. A tag, UDT member or array of the enumeration has that node
       as its DataType and an Int32 value, the member's. The type nodes are
-      read-only.
+      read-only. asyncua's load_data_type_definitions and load_enums build
+      the enums from them. Two tasks declaring one enumeration name with
+      different members are refused when the project loads.
     source: "#enumerations"
     tests:
+      - go ./runtime TestTasksDeclaringOneEnumerationDifferentlyAreRefused
+      - go ./opcua/server TestForeignAsyncuaClient
+      - go ./opcua/server TestEnumerationTypeBrowsesByAbstractReferenceTypes
+      - go ./opcua TestBrowseResolvesSubtypesOfBuiltins
       - go ./tools/blackbox TestBlackbox/001-F11-enum-names
       - go ./opcua/server TestEnumerationIsADataTypeUnderEnumeration
       - go ./opcua/server TestEnumValuesAndEnumStrings

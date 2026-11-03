@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,6 +133,15 @@ func TestForeignAsyncuaClient(t *testing.T) {
 	}
 	if !has(get("Pumps"), "Pumps[1]") || !has(get("Pumps"), "Pumps[2]") {
 		t.Errorf("Pumps elements %v", get("Pumps"))
+	}
+
+	// An enumeration: Int32 on the wire, its own DataType, and the member
+	// names asyncua builds from it (#425).
+	if get("State", "variant") != "Int32" || get("State", "value") != 0.0 || get("State", "dataType") != "ns=1;s=type:Mode" || get("State", "name") != "Idle" {
+		t.Errorf("State: %v", get("State"))
+	}
+	if mode, ok := get("Mode").([]any); !ok || fmt.Sprint(mode) != "[[Idle 0] [Run 10] [Fault 11]]" {
+		t.Errorf("asyncua's Mode enum: %v", get("Mode"))
 	}
 
 	// Reads: value, variant type, data type, status, timestamps.

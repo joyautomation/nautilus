@@ -58,10 +58,13 @@ claims:
     claim: >-
       Two nodes that would share a tag name are an error, and arrays and
       variables whose type is not a scalar built-in are listed as skipped
-      with the reason.
+      with the reason. A subtype of a scalar built-in is imported as the
+      built-in it is encoded as: an enumeration as Int32, a Duration as
+      Double.
     source: "#generating-the-manifest-naut-opcua-import"
     tests:
       - go ./opcua/codegen TestGenerate
+      - go ./opcua TestBrowseResolvesSubtypesOfBuiltins
 
   - id: UAC-006
     claim: >-

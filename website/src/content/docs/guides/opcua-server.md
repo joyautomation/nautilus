@@ -169,10 +169,14 @@ dashboard show. Take `TYPE Mode : (Idle, Run := 10, Fault) := Idle; END_TYPE`:
   as its `DataType`. Its value is still an `Int32`, the member's value, so
   `Mode1` reads `10`, and a client that knows the type shows `Run`.
 
-asyncua builds Python enums from these with
-`await client.load_data_type_definitions()`, and UAExpert shows the names
-beside the values. The type nodes are read-only, and the set is the
-project's enumerations at the time the server starts.
+asyncua (2.1) builds a Python enum for each from these, with
+`await client.load_data_type_definitions()` or the older
+`await client.load_enums()`, so `ua.Mode(10)` is `Mode.Run`. Any client
+that reads an enumeration's `DataTypeDefinition`, `EnumStrings` or
+`EnumValues` can show the names the same way. The type nodes are
+read-only, and the set is the project's enumerations at the time the
+server starts. Two tasks that declare one enumeration name with different
+members are refused when the project loads.
 
 ## Quality and timestamps
 

@@ -60,8 +60,12 @@ an unchanged server. Tag names are the browse path joined with `_`
 Two nodes that would share a name are an error, not a suffix: narrow
 `--root` or run one import per `--prefix`.
 
-Variables whose type is not a scalar built-in (structures, enumerations)
-and arrays are listed as skipped, with the reason. `--tags` keeps a subset
+A variable whose DataType is a subtype of a scalar built-in is imported
+as the built-in its value is encoded as: an enumeration (any subtype of
+`Enumeration`, such as a nautilus server's `ns=1;s=type:Mode`) as `Int32`,
+the member's value, and a `Duration` as a `Double` of milliseconds.
+Variables whose type is not a scalar built-in (structures) and arrays are
+listed as skipped, with the reason. `--tags` keeps a subset
 by glob.
 
 The tag file also declares the driver's `<name>__Online` companion. Its

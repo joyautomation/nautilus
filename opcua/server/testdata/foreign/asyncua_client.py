@@ -109,6 +109,18 @@ async def main(url, folder_name):
         pumps = await children_by_name(tags["Pumps"])
         report["Pumps"] = sorted(pumps)
 
+        # State is a Mode, (Idle, Run := 10, Fault): an Int32 whose DataType
+        # is the enumeration's own node, from which asyncua builds the enum
+        # (#425).
+        state = tags["State"]
+        report["State"] = describe(await state.read_data_value())
+        dt = await state.read_data_type()
+        report["State"]["dataType"] = dt.to_string()
+        made = await client.load_data_type_definitions()
+        mode = made.get("Mode")
+        report["Mode"] = [[m.name, m.value] for m in mode] if mode is not None else None
+        report["State"]["name"] = mode(report["State"]["value"]).name if mode is not None else None
+
         # Label holds "": an empty String on the wire, which asyncua decodes
         # as "", not a null one, which it decodes as None — by Read and by
         # subscription (#434).

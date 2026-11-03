@@ -19,8 +19,8 @@
 // converts by the encoding (dataType), and the front door refuses an
 // integer that is no member's value.
 //
-// The set of enumerations is the runtime's as of Start, as every other type
-// the address space shows is the store's as of New.
+// The set of enumerations is the runtime's TYPEs as of Start, as every
+// other type the address space shows is the store's as of New.
 package server
 
 import (
@@ -52,61 +52,23 @@ type enumTypes struct {
 	keys  []string // sorted, for a stable order
 }
 
-// collectEnums gathers every enumeration the runtime declares (its TYPEs)
-// or a tag holds anywhere beneath it (a struct field, an FB pin, an array
-// element). The first declaration of a name wins.
+// collectEnums gathers every enumeration the runtime declares. Every one is
+// a named TYPE (the compiler refuses an inline (Lo, Hi) in a VAR or a
+// struct field), and Types is the TYPE table of every task's program and
+// libraries, so a tag's enumeration, at any depth, is one of these.
+// unionTypes refuses one name declared with two member lists, so the name
+// is the type. An alias (TYPE M2 : Mode) names the same enumeration once.
 func collectEnums(rt *runtime.Runtime) enumTypes {
 	out := enumTypes{byKey: map[string]*ir.EnumDef{}}
-	var walk func(t *ir.Type, depth int)
-	walk = func(t *ir.Type, depth int) {
-		if t == nil || depth > 32 {
-			return
+	for _, t := range rt.Types() {
+		if t == nil || t.Enum == nil || t.Enum.Name == "" {
+			continue
 		}
-		if t.Enum != nil {
-			if t.Enum.Name == "" {
-				return
-			}
-			k := ir.NameKey(t.Enum.Name)
-			if _, dup := out.byKey[k]; !dup {
-				out.byKey[k] = t.Enum
-				out.keys = append(out.keys, k)
-			}
-			return
+		k := ir.NameKey(t.Enum.Name)
+		if _, dup := out.byKey[k]; !dup {
+			out.byKey[k] = t.Enum
+			out.keys = append(out.keys, k)
 		}
-		switch t.Kind {
-		case ir.TypeStruct:
-			if t.Struct != nil {
-				for _, f := range t.Struct.Fields {
-					walk(f.Type, depth+1)
-				}
-			}
-		case ir.TypeFB:
-			if t.FB != nil {
-				for _, s := range t.FB.AllSlots() {
-					walk(s.Type, depth+1)
-				}
-			}
-		case ir.TypeArray:
-			walk(t.Elem, depth+1)
-		}
-	}
-	types := rt.Types()
-	names := make([]string, 0, len(types))
-	for n := range types {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		walk(types[n], 0)
-	}
-	tagTypes := rt.TagTypes()
-	names = names[:0]
-	for n := range tagTypes {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		walk(tagTypes[n], 0)
 	}
 	sort.Strings(out.keys)
 	return out
