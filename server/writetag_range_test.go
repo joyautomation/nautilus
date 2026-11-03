@@ -88,7 +88,7 @@ func TestWriteUndeliveredTypedOutputIsChecked(t *testing.T) {
 		{`{"name":"Cmd","value":70000}`, 400},
 		{`{"name":"Cmd","value":2.5}`, 422},
 		{`{"name":"Flag","value":"hello"}`, 422},
-		{`{"name":"Cmd","value":7}`, 204},
+		{`{"name":"cmd","value":7}`, 204}, // another case: still created as Cmd
 	} {
 		if rec := postTag(t, srv, tc.body); rec.Code != tc.code {
 			t.Errorf("%s: %d %q, want %d", tc.body, rec.Code, rec.Body, tc.code)
@@ -99,5 +99,8 @@ func TestWriteUndeliveredTypedOutputIsChecked(t *testing.T) {
 	}
 	if _, err := rt.Tags().ReadGlobal("Flag"); err == nil {
 		t.Errorf("Flag was created by a refused write")
+	}
+	if _, ok := rt.Tags().Snapshot()["Cmd"]; !ok {
+		t.Errorf("a write spelled cmd created the output under that spelling, not its declared name Cmd")
 	}
 }

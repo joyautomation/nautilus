@@ -31,10 +31,15 @@ retain:
 - **What is saved:** every `role: setpoint` tag; every tag marked
   `retain: true` in the manifest or declared in a library's `VAR_GLOBAL
   RETAIN`; every program's `VAR RETAIN` variables; and the source of any
-  program that differs from what shipped (an online edit). Nothing else —
-  inputs re-read from the field, other state re-seeds, outputs re-derive
-  from logic. The PID does not persist its integral; it warm-starts from
-  live field values, the way a real changeover does.
+  program that differs from what shipped (an online edit). Nothing else:
+  inputs re-read from the field and outputs re-derive from logic. Any other
+  tag is not carried between replicas, and nothing re-seeds it at a
+  takeover. A restart starts it from its seed, because the process is new;
+  a failover leader keeps its own copy, which is its seed if it has never
+  led and what it last held as leader if it has. A program `VAR` that is
+  not `RETAIN` starts from its declared value at every takeover. The PID
+  does not persist its integral; it warm-starts from live field values, the
+  way a real changeover does.
 - **Keeping state the logic owns:** run hours, start counts and a lead/lag
   pointer are state, not setpoints, so mark them. A tag:
 

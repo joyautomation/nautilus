@@ -63,8 +63,14 @@ try:
     expect("misspelt member is 400", s == 400 and "Starts" in b, {"status": s, "body": b})
     s, b = req("POST", "/api/tags", {"name": "Nope", "value": 1})
     expect("undeclared tag is 400", s == 400, {"status": s, "body": b})
+    # Reconciliation (nautilus#519, approved 2026-11-02): a TIME tag now takes
+    # its IEC literal over HTTP, as init: and given: do; a string that is no
+    # duration is still refused. The brief's check asserted "T#8h" was 4xx,
+    # from docs that said TIME travels as milliseconds only.
     s, b = req("POST", "/api/tags", {"name": "HiLevelDelay", "value": "T#8h"})
-    expect("string to a TIME tag is refused (4xx)", 400 <= s < 500, {"status": s, "body": b})
+    expect("a TIME literal to a TIME tag lands (204)", s == 204, {"status": s, "body": b})
+    s, b = req("POST", "/api/tags", {"name": "HiLevelDelay", "value": "soon"})
+    expect("a string that is no duration is refused (4xx)", 400 <= s < 500, {"status": s, "body": b})
     meta = json.loads(req("GET", "/api/meta")[1])
     expect("/api/meta lists the enum members", [m["name"] for m in meta["tags"]["Lead"]["enum"]] == ["Pump1", "Pump2"],
            meta["tags"]["Lead"])
