@@ -2,6 +2,7 @@ package sparkplug
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -119,6 +120,13 @@ func (n *Node) applyCommand(device string, payload Payload) {
 // declared type is refused: the node never births such a tag.
 func (n *Node) writeCommand(name string, v any) error {
 	tags := n.rt.Tags()
+	if s, ok := v.(string); ok && !n.takesString(name) {
+		// As OPC UA refuses a String Variant for a non-String node: the node
+		// births a STRING tag as a String metric and nothing else as one, so
+		// a String command for anything else is the wrong type, never text
+		// to parse (a TIME literal, a number).
+		return fmt.Errorf("tag %s: a String metric (%q) for a tag that is not a STRING: %w", name, s, ir.ErrTypeMismatch)
+	}
 	err := tags.Write([]runtime.WriteOp{{Path: name, Value: v}})[0]
 	if !errors.Is(err, runtime.ErrUndefined) || strings.ContainsRune(name, '.') {
 		return err
@@ -133,6 +141,21 @@ func (n *Node) writeCommand(name string, v any) error {
 	}
 	tags.Set(tags.DeclaredOutputName(name), nv)
 	return nil
+}
+
+// takesString reports whether name is a STRING tag or member, or an
+// enumeration (which takes a member's name). It is judged by the value the
+// store holds, else by the declared type of a whole tag not yet stored.
+func (n *Node) takesString(name string) bool {
+	tags := n.rt.Tags()
+	if v, ok := tags.ReadPath(name); ok {
+		_, isStr := v.(string) // a STRING, or an enumeration read as its member name
+		return isStr
+	}
+	if t := tags.TypeOf(name); t != nil {
+		return t.Kind == ir.TypeString || t.Enum != nil
+	}
+	return false
 }
 
 // writeRefusal is the logged reason for a command the runtime's write
@@ -246,6 +269,9 @@ func (n *Node) commandTemplate(m Metric) {
 				continue
 			}
 			v, ok := commandValue(mm)
+			if _, isStr := v.(string); ok && isStr && !n.takesString(p) {
+				ok = false // a String metric only for a STRING member, as for a tag
+			}
 			if !ok {
 				n.refuseCommand("the value does not fit the tag's type", p, "datatype", mm.Datatype.String())
 				continue

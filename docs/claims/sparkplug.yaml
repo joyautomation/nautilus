@@ -39,6 +39,8 @@ claims:
       - go ./sparkplug TestCommandWritesGoThroughTheFrontDoor
       - go ./sparkplug TestTemplateCommandMembersGoThroughTheFrontDoor
       - go ./sparkplug TestCommandToADeclaredOutputNotYetWritten
+      - go ./sparkplug TestStringCommandOnlyForAStringTag
+      - go ./sparkplug TestTemplateMemberWithAnIndexIsRefused
   - id: SPB-005
     claim: >-
       `Node Control/Rebirth` is honored: the node answers the command with

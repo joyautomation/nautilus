@@ -158,8 +158,8 @@ template command with an array member, or a metric named by index
 (`Levels[1]`) has the array write refused. The
 template's other members still apply. A command is written the way an
 HTTP or OPC UA write is: a value the tag's type cannot hold (a String for
-a `REAL`, a number past an `INT`'s range) is refused rather than changing
-the tag's type, and a forced tag refuses commands until the force is
+anything but a `STRING` or an enumeration, a number past an `INT`'s range)
+is refused rather than changing the tag's type, and a forced tag refuses commands until the force is
 removed. Every refusal is logged once per tag and counted as
 `commandsRefused` in the node's status.
 

@@ -496,3 +496,65 @@ END_TYPE
 		t.Errorf("the refusal does not say it is an array write:\n%s", buf.String())
 	}
 }
+
+// A String metric is only for a STRING tag (or an enumeration, by member
+// name), as OPC UA refuses a String Variant for any other node: the node
+// births nothing else as a String, so "T#5s" or "42" for a TIME or a REAL
+// is the wrong type, not text to parse.
+func TestStringCommandOnlyForAStringTag(t *testing.T) {
+	const types = `
+TYPE
+	Batch : STRUCT
+		Name : STRING;
+		Hold : TIME;
+	END_STRUCT;
+END_TYPE
+`
+	const prog = "PROGRAM Main\nVAR_EXTERNAL\n\tB1 : Batch;\n\tRecipe : STRING;\n\tHold : TIME;\nEND_VAR\nEND_PROGRAM\n"
+	rt, err := runtime.New(runtime.Options{
+		Program: prog, Libraries: []string{types}, Driver: nio.NewMemory(), Scan: 50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.Typed("B1", runtime.RoleState, "Batch"),
+			runtime.State("Recipe", "plain"),
+			runtime.Typed("Hold", runtime.RoleSetpoint, "TIME"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))}, WithWritable("*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := rt.Tags()
+	n.applyCommand("", Payload{Metrics: []Metric{
+		{Name: "Recipe", Datatype: spb.DataType_String, Value: "spicy"},
+		{Name: "Hold", Datatype: spb.DataType_String, Value: "5000"},
+		tmplCmd("B1", "Batch",
+			Metric{Name: "Name", Datatype: spb.DataType_String, Value: "lot 7"},
+			Metric{Name: "Hold", Datatype: spb.DataType_String, Value: "5000"}),
+	}})
+	if v, _ := tags.ReadPath("Recipe"); v != "spicy" {
+		t.Errorf("Recipe = %v, want spicy: a String metric for a STRING tag is written", v)
+	}
+	if v, _ := tags.ReadPath("B1.Name"); v != "lot 7" {
+		t.Errorf("B1.Name = %v, want lot 7", v)
+	}
+	if v, err := tags.ReadGlobal("Hold"); err == nil && v.Kind != ir.TypeTime {
+		t.Errorf("Hold is now %v: a String metric retyped the TIME tag", v.Kind)
+	}
+	if v, _ := tags.ReadPath("Hold"); v == int64(5000) {
+		t.Error("Hold = 5000: a String metric was parsed into a TIME tag")
+	}
+	if v, _ := tags.ReadPath("B1.Hold"); v == int64(5000) {
+		t.Error("B1.Hold = 5000: a String member was parsed into a TIME member")
+	}
+	if got := n.Status().CommandsRefused; got != 2 {
+		t.Errorf("CommandsRefused = %d, want 2 (Hold, B1.Hold)", got)
+	}
+	// Refused for being a String, before any parsing: the reason names it.
+	if !strings.Contains(buf.String(), "a String metric") {
+		t.Errorf("the scalar refusal does not say it is a String metric for a non-STRING tag:\n%s", buf.String())
+	}
+}
