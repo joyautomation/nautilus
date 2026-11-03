@@ -16,6 +16,7 @@ package lsp
 // manifest's modtime, because this runs on a keystroke.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,7 +52,7 @@ type manifestCache struct {
 }
 
 type manifestEntry struct {
-	mod   int64
+	mod   string   // modOf at the read
 	files []string // the tag-files it composed, whose modtimes join mod
 	tags  []ProjectTag
 	defs  []runtime.TagDef // the same tags as the compiler scopes them
@@ -93,26 +94,22 @@ func (e *manifestEntry) unreadTag(name string) bool {
 	return ok
 }
 
-// modOf is the newest modtime among the manifest and its tag-files: a
-// tags/*.yaml save must refresh hover and the diagrams' descriptions as
-// surely as a nautilus.yaml one. A file that cannot be stat'ed counts as
-// changed (-1 never matches a stored modtime).
-func modOf(mpath string, files []string) int64 {
-	st, err := os.Stat(mpath)
-	if err != nil {
-		return -1
-	}
-	mod := st.ModTime().UnixNano()
-	for _, f := range files {
-		fst, err := os.Stat(f)
-		if err != nil {
-			return -1
-		}
-		if m := fst.ModTime().UnixNano(); m > mod {
-			mod = m
+// modOf fingerprints the manifest and its tag-files: each file's modtime
+// and size, in order. A tags/*.yaml save must refresh hover and the
+// diagrams' descriptions as surely as a nautilus.yaml one, and each file
+// counts on its own — the newest modtime alone would miss a rewrite within
+// one clock tick, or a timestamp-preserving restore of an older file. A
+// file that cannot be stat'ed is marked so, and its return is a change.
+func modOf(mpath string, files []string) string {
+	var b strings.Builder
+	for _, f := range append([]string{mpath}, files...) {
+		if st, err := os.Stat(f); err == nil {
+			fmt.Fprintf(&b, "%d:%d;", st.ModTime().UnixNano(), st.Size())
+		} else {
+			b.WriteString("-;")
 		}
 	}
-	return mod
+	return b.String()
 }
 
 var manifests = manifestCache{entries: map[string]*manifestEntry{}, failed: map[string]*manifestEntry{}}
@@ -319,29 +316,37 @@ func (s *Server) publishManifestDiagsAt(mpath string, found map[string][]Diagnos
 func (s *Server) manifestFilesChanged(changes []FileEvent) {
 	watched := manifestFilesWatched()
 	var named []string
-	relevant := false
+	reanalyze := false
 	for _, c := range changes {
 		p, ok := uriToPath(c.URI)
 		if !ok {
 			continue
 		}
-		if filepath.Base(p) == project.ManifestName {
-			relevant = true
+		switch {
+		case filepath.Base(p) == project.ManifestName:
+			// Its own diagnostics are always published (one cached read),
+			// so a manifest saved with no program open still shows its
+			// errors; the open documents are analyzed again only when it
+			// is theirs.
 			named = append(named, p)
-		} else if watched[p] {
-			relevant = true
+			if s.governsProject(p, watched) {
+				reanalyze = true
+			}
+		case watched[p]:
+			reanalyze = true
 		}
 	}
-	if !relevant {
+	if reanalyze {
+		uris := make([]string, 0, len(s.docs))
+		for uri := range s.docs {
+			uris = append(uris, uri)
+		}
+		sort.Strings(uris)
+		for _, uri := range uris {
+			s.setDocument(uri, s.docs[uri].text)
+		}
+	} else if len(named) == 0 {
 		return
-	}
-	uris := make([]string, 0, len(s.docs))
-	for uri := range s.docs {
-		uris = append(uris, uri)
-	}
-	sort.Strings(uris)
-	for _, uri := range uris {
-		s.setDocument(uri, s.docs[uri].text)
 	}
 	mpaths := append([]string(nil), named...)
 	for mpath := range s.manifestDiags {
@@ -357,13 +362,36 @@ func (s *Server) manifestFilesChanged(changes []FileEvent) {
 	}
 }
 
-// manifestFilesWatched is every tag-file a cached manifest composes.
+// governsProject reports whether a changed nautilus.yaml is the open
+// documents' business: it is cached, has diagnostics out, or governs an
+// open document (a manifest just created above one). An unrelated
+// project's manifest elsewhere in the workspace analyzes nothing again.
+func (s *Server) governsProject(mpath string, watched map[string]bool) bool {
+	if watched[mpath] {
+		return true
+	}
+	if _, ok := s.manifestDiags[mpath]; ok {
+		return true
+	}
+	for uri := range s.docs {
+		if p, ok := uriToPath(uri); ok {
+			if m, found := findManifest(p); found && m == mpath {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// manifestFilesWatched is every cached manifest and every tag-file one
+// composes.
 func manifestFilesWatched() map[string]bool {
 	manifests.mu.Lock()
 	defer manifests.mu.Unlock()
 	out := map[string]bool{}
 	for _, m := range []map[string]*manifestEntry{manifests.entries, manifests.failed} {
-		for _, e := range m {
+		for mpath, e := range m {
+			out[mpath] = true
 			for _, f := range e.files {
 				out[f] = true
 			}

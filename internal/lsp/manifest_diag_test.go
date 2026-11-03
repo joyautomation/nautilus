@@ -397,3 +397,100 @@ func TestManifestReadIsCached(t *testing.T) {
 		})
 	}
 }
+
+// The cache follows each file, not the newest modtime: a rewrite within one
+// clock tick, or a tag-file restored with its older timestamp, is read
+// again (#518 review).
+func TestManifestCacheFollowsEachFile(t *testing.T) {
+	has := func(e *manifestEntry, name string) bool {
+		for _, d := range e.defs {
+			if d.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	setTime := func(p string, at time.Time) {
+		if err := os.Chtimes(p, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	mpath, tpath := filepath.Join(dir, "nautilus.yaml"), filepath.Join(dir, "tags", "io.yaml")
+	writeFiles(t, dir, map[string]string{
+		"nautilus.yaml": liftHead + "tag-files: [tags/io.yaml]\n" + liftTags,
+		"tags/io.yaml":  "- { name: Spare, role: input, type: BOOL }\n",
+	})
+	older, newer := time.Now().Add(-time.Hour), time.Now().Add(-time.Minute)
+	setTime(tpath, older)
+	setTime(mpath, newer)
+	if e := manifestAt(mpath); !has(e, "Spare") {
+		t.Fatalf("first read lacks Spare: %+v", e.defs)
+	}
+
+	// The manifest rewritten within the same tick.
+	writeFiles(t, dir, map[string]string{"nautilus.yaml": liftHead + "tag-files: [tags/io.yaml]\n" + liftTags +
+		"  - { name: Horn, role: output, type: BOOL }\n"})
+	setTime(mpath, newer)
+	if e := manifestAt(mpath); !has(e, "Horn") {
+		t.Errorf("a same-modtime rewrite of nautilus.yaml served the old tags: %+v", e.defs)
+	}
+
+	// The tag-file restored with its older timestamp, under the newer
+	// manifest's.
+	writeFiles(t, dir, map[string]string{"tags/io.yaml": "- { name: Spare, role: input, type: BOOL }\n- { name: Beacon, role: output, type: BOOL }\n"})
+	setTime(tpath, older)
+	if e := manifestAt(mpath); !has(e, "Beacon") {
+		t.Errorf("a tag-file restored with an older modtime served the old tags: %+v", e.defs)
+	}
+}
+
+// A library sees no tags, so an undeclared name in one is the library's own
+// error even when it names a tag the manifest cannot read: it is still
+// reported, on the library.
+func TestLibraryNamingAnUnreadTagIsStillReported(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"nautilus.yaml": liftHead + liftTags + "  - { name: Horn, role: command, type: BOOL }\n",
+		"siren.st":      "FUNCTION_BLOCK Siren\nVAR q : BOOL; END_VAR\nq := Horn;\nEND_FUNCTION_BLOCK\n",
+	})
+	uri, luri := pathToURI(filepath.Join(dir, "main.st")), pathToURI(filepath.Join(dir, "siren.st"))
+	s := startedSession(t)
+	got := s.publishedUntilBarrier(uri, "PROGRAM Main\nPumpRun := Level > 50.0;\nEND_PROGRAM\n", 1)
+	if d := got[luri]; len(d) != 1 || !strings.Contains(d[0].Message, `undeclared identifier "Horn"`) {
+		t.Errorf("siren.st diagnostics = %+v, want its undeclared Horn", d)
+	}
+}
+
+// A nautilus.yaml of a project nothing here belongs to changes nothing: the
+// open documents are not analyzed again for it.
+func TestUnrelatedManifestChangeIsIgnored(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	writeFiles(t, a, map[string]string{"nautilus.yaml": liftHead + liftTags})
+	writeFiles(t, b, map[string]string{"nautilus.yaml": liftHead + liftTags})
+	uri := pathToURI(filepath.Join(a, "main.st"))
+	s := startedSession(t)
+	s.publishedUntilBarrier(uri, "PROGRAM Main\nPumpRun := Level > 50.0;\nEND_PROGRAM\n", 1)
+	if got := s.watchedChanged(2, filepath.Join(b, "nautilus.yaml")); len(got) != 0 {
+		t.Errorf("an unrelated project's manifest change republished %v", got)
+	}
+	if _, ok := s.watchedChanged(2, filepath.Join(a, "nautilus.yaml"))[uri]; !ok {
+		t.Errorf("its own project's manifest change did not analyze main.st again")
+	}
+}
+
+// A manifest created above an open document is that document's business:
+// it is analyzed again, now with the manifest's tags.
+func TestManifestCreatedAboveAnOpenDocument(t *testing.T) {
+	dir := t.TempDir()
+	uri := pathToURI(filepath.Join(dir, "main.st"))
+	s := startedSession(t)
+	src := "PROGRAM Main\nPumpRun := Level > 50.0;\nEND_PROGRAM\n"
+	if d := s.publishedUntilBarrier(uri, src, 1)[uri]; len(d) == 0 {
+		t.Fatalf("with no manifest, PumpRun should be undeclared")
+	}
+	writeFiles(t, dir, map[string]string{"nautilus.yaml": liftHead + liftTags})
+	if d, ok := s.watchedChanged(1, filepath.Join(dir, "nautilus.yaml"))[uri]; !ok || len(d) != 0 {
+		t.Errorf("main.st after its manifest appeared = %+v (published %v), want analyzed again, clean", d, ok)
+	}
+}
