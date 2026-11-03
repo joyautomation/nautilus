@@ -572,3 +572,30 @@ claims:
     partial: true
     note: >-
       `Stop` closing every connection is not asserted.
+  - id: MB-051
+    claim: >-
+      Each source gets a `<source>__Outages` DINT input, present from
+      `Start` with good quality: the times `__Online` has gone false since
+      nautilus started. The first connect is not an outage, a source that
+      has not connected yet has had none, and each later fall adds one,
+      parking with `enable:` included. A fall counts only when the device
+      had answered a read or a write on that connection (a gateway that
+      accepts and never replies does not count, and neither do later silent
+      connections after one that answered), and stopping nautilus does not
+      count.
+      A binding may not take the name.
+    source: "#the-__online-companion-and-enable"
+    tests:
+      - go ./modbus TestOutagesCountsEachFallNotTheFirstConnect
+      - go ./modbus TestOutagesStartingOfflineIsNotAnOutage
+      - go ./modbus TestOutagesParkingCounts
+      - go ./modbus TestOutagesSilentGatewayDoesNotCount
+      - go ./modbus TestOutagesStopIsNotAnOutage
+      - go ./modbus TestOutagesWriteOnlySourceCounts
+      - go ./modbus TestOutagesAnsweredResetsPerConnection
+      - go ./modbus TestOutagesCompanionCollidesWithABinding
+      - go ./modbus TestConnectionsSplitBySource
+    partial: true
+    note: >-
+      Against the in-process slave, with a test dialer that cuts and
+      restores the link. Nothing has run on a real device.

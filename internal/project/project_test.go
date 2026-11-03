@@ -541,7 +541,7 @@ tags:
 		t.Fatalf("driver = %T, want *host.Driver", p.Runtime.Driver)
 	}
 	// The manifest's binding plus the synthesized companions.
-	if got := drv.InputNames(); !reflect.DeepEqual(got, []string{"W6_Well_Level", "W6__LastBirthMs", "W6__Online"}) {
+	if got := drv.InputNames(); !reflect.DeepEqual(got, []string{"W6_Well_Level", "W6__LastBirthMs", "W6__Online", "W6__Outages"}) {
 		t.Fatalf("InputNames = %v", got)
 	}
 	if got := drv.OutputNames(); !reflect.DeepEqual(got, []string{"W6__Rebirth"}) {
@@ -633,8 +633,8 @@ tags:
 		t.Fatalf("driver = %T, want *modbus.Driver", p.Runtime.Driver)
 	}
 	// The bindings (a writable one is polled too — read-back is the source
-	// of truth) plus the synthesized companion.
-	if got := drv.InputNames(); !reflect.DeepEqual(got, []string{"FTIR_CO", "FTIR_Sp", "FTIR__Online"}) {
+	// of truth) plus the synthesized companions.
+	if got := drv.InputNames(); !reflect.DeepEqual(got, []string{"FTIR_CO", "FTIR_Sp", "FTIR__Online", "FTIR__Outages"}) {
 		t.Fatalf("InputNames = %v", got)
 	}
 	// The writable binding plus the source's Enable command tag.

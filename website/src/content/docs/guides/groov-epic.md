@@ -224,8 +224,9 @@ every import:
 They are delivered from the first scan, before the processor answers,
 and their quality is always good. The names end the same way on every
 driver that has them (`<id>__Online` is what the Modbus, EtherNet/IP,
-SNMP and Sparkplug host drivers deliver too), so the logic does not change
-with the driver.
+SNMP and Sparkplug host drivers deliver too, and the Modbus and Sparkplug
+host drivers deliver `<id>__Outages` as well), so the logic does not
+change with the driver.
 
 The EPIC's own I/O is local I/O, so a channel input the driver has not
 delivered yet still faults the scan that reads it (`undefined tag`). The

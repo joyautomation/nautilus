@@ -142,6 +142,8 @@ declared in the manifest like anything else:
 
 - `<site>__Online` — `BOOL`, true from NBIRTH to the matching NDEATH.
 - `<site>_<device>__Online` — the same, per device.
+- `<site>__Outages` and `<site>_<device>__Outages` — `DINT`, the number of
+  times the matching `__Online` has gone false since nautilus started.
 - `<site>__LastBirthMs` — epoch ms of the last NBIRTH.
 - `<site>__Rebirth` — `BOOL` **output**; a rising edge sends NCMD Node
   Control/Rebirth to that site — the operator's forced-resync button.
@@ -156,6 +158,41 @@ is `NotConnected` until the birth. A zero is not a reading, so interlock
 logic gates on `__Online`, which is present from t=0 (`false` until the
 first birth): `WellAlarm := W6__Online AND W6_Well_Level > 90.0`, never
 `WellAlarm := W6_Well_Level > 90.0` alone.
+
+The manifest names each companion. `naut sparkplug import` writes the
+names on every node and device; a hand-written manifest can leave them
+out to get the defaults above, or set one to rename a companion:
+
+```yaml
+nodes:
+    - edgenode: W6
+      onlinetag: W6__Online
+      outagestag: W6__Outages
+      birthtag: W6__LastBirthMs
+      rebirthtag: W6__Rebirth
+      devices:
+        - { device: PLC1, onlinetag: W6_PLC1__Online, outagestag: W6_PLC1__Outages }
+```
+
+A binding may not take a companion's name.
+
+**`__Outages` counts the falls of `__Online`.** The first birth is not an
+outage, and a site that has not birthed yet has had none. A site counts
+one on each NDEATH that matches its birth; a late will from an old
+session does not count. A device counts one on its DDEATH and on its
+node's NDEATH. A device that is already offline does not count again.
+
+**A rebirth counts as an outage for each device that was online.** A node
+rebirth takes the node's devices offline until each one's DBIRTH, so
+their `__Online` falls. That is true whether the host asked for the
+rebirth after a sequence gap or an operator pulsed `__Rebirth`. The
+node's own count does not change, because the node stays online.
+
+The counters only go up, so a program that
+compares them with last scan's values never misses an outage between
+scans. A program uses them to hold its outputs after an outage until an
+operator acknowledges it; see [Holding outputs until an operator
+acknowledges](/guides/groov-epic/#holding-outputs-until-an-operator-acknowledges).
 
 ## Per-tag quality
 
@@ -176,10 +213,11 @@ fully-birthed fleet reports an empty map. A tag never named in it is Good.
   (omitted).
 
 Only data (read-only) bindings get a verdict. Writable bindings — plain
-outputs, member outputs, and the `__Online`/`__LastBirthMs`/`__Rebirth`
-companions — are host-authored, not field readings, and are always Good;
-`__Online` (etc.) already **is** the quality signal for the tags around
-it, so `Quality()` never puts a verdict on top of a verdict.
+outputs, member outputs, and the
+`__Online`/`__Outages`/`__LastBirthMs`/`__Rebirth` companions — are
+host-authored, not field readings, and are always Good; `__Online` (etc.)
+already **is** the quality signal for the tags around it, so `Quality()`
+never puts a verdict on top of a verdict.
 
 ## Writes: DCMD/NCMD
 

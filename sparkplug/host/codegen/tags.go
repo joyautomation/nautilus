@@ -1,7 +1,8 @@
 package codegen
 
 // The importer already knows every tag the manifest implies — the bindings
-// and the driver-synthesized companions (__Online, __LastBirthMs, __Rebirth)
+// and the driver-synthesized companions (__Online, __Outages, __LastBirthMs,
+// __Rebirth)
 // — so the tag file is derivable rather than transcribed. It is rendered
 // through the SHARED internal/tagfile.Render, the same helper
 // `naut eip import` and `naut tags import-csv` use, so sorting,
@@ -82,9 +83,10 @@ func TagsYAML(m host.Manifest, skip []string) ([]byte, error) {
 		"",
 		"Compose it into a project with:  tag-files: [tags/sparkplug.yaml]",
 		"",
-		"__Online / __LastBirthMs / __Rebirth are synthesized by the driver, not",
-		"metrics: a site's values survive its death (Sparkplug's last value IS the",
-		"value), so quality rides on these companions. Interlock on __Online.",
+		"__Online / __Outages / __LastBirthMs / __Rebirth are synthesized by the",
+		"driver, not metrics: a site's values survive its death (Sparkplug's last",
+		"value IS the value), so quality rides on these companions. Interlock on",
+		"__Online. __Outages counts the times it went false.",
 	}
 	if len(skip) > 0 {
 		header = append(header, "",

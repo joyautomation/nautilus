@@ -130,23 +130,32 @@ claims:
   - id: SPB-015
     claim: >-
       Every field connection publishes as its own Sparkplug device under
-      the edge node, carrying the input tags it delivers (its `__Online`
-      companion included); computed tags, program state, outputs and every
-      tag of the `memory` loopback publish at node level.
+      the edge node, carrying the tags it delivers that the project declares
+      in any role; a companion such as `__Online` or `__Outages` is in the
+      device's DBIRTH only when the project declares it, and a connection
+      with nothing declared makes no device; computed tags,
+      program state, outputs and every tag of the `memory` loopback publish
+      at node level.
     source: "#devices-and-connection-health"
     tests:
       - go ./sparkplug TestMetricsSplitBetweenDevicesAndTheNode
       - go ./internal/project TestSparkplugDevicePerConnection
+      - go ./internal/project TestSparkplugDeviceCarriesOnlyDeclaredTags
+      - go ./internal/project TestSparkplugDeviceKeepsADeclaredOutput
+      - go ./internal/project TestSparkplugDeviceWithNothingDeclaredIsDropped
       - go ./internal/project TestSparkplugMemoryMakesNoDevice
     partial: true
     note: >-
-      One device per connection carrying its inputs and `__Online`, the
-      memory loopback making none, and tags outside a device's list riding
-      the NBIRTH are asserted. That outputs publish at node level is not, and
-      the code disagrees for modbus: a writable binding that is also polled
-      (not `writeonly`) is listed in its source's Connections() inputs, so
-      that output rides the device. TestMetricsSplitBetweenDevicesAndTheNode
-      only shows the node honouring the device lists it is handed.
+      One device per connection carrying its declared tags (an undeclared
+      companion left out, a declared one kept, a device with nothing
+      declared dropped), the memory loopback making none, and tags outside
+      a device's list riding the NBIRTH are asserted. "Outputs publish at
+      node level" holds only for outputs no connection delivers: a modbus
+      writable binding that is also polled (not `writeonly`) is listed in
+      its source's Connections(), and declared `role: output` it rides the
+      device (TestSparkplugDeviceKeepsADeclaredOutput).
+      TestMetricsSplitBetweenDevicesAndTheNode only shows the node
+      honouring the device lists it is handed.
   - id: SPB-016
     claim: >-
       A device's DBIRTH/DDEATH follow its connection's health: when one

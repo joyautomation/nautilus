@@ -126,8 +126,13 @@ pretending to be fresh — while every other device stays born.
 | `modbus`, `snmp`, `redfish`, `prometheus` | source | the source's `id` |
 | `eip`, `sparkplug-host`, `replay` | driver | the driver's `name:` (default: its type) |
 
-A device carries the input tags its connection delivers, its `__Online`
-companion included. Everything else — computed tags, program state,
+A device carries the tags its connection delivers that the project
+declares, in any role: a polled writable binding declared `role: output`
+rides its device too. A companion such as `__Online` or `__Outages` is in
+the device's DBIRTH only when the project declares it (in `tags:` or a
+tag file); one that is not declared never reaches the tag store, so it is
+left out rather than holding the birth back. A connection none of whose
+tags the project declares makes no device. Everything else — computed tags, program state,
 outputs, and every tag of the `memory` loopback, which is no connection —
 publishes at node level. Two connections with one id would share a topic,
 so that is a load error naming both; give a driver a `name:` to choose

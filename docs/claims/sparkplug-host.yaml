@@ -396,3 +396,24 @@ claims:
     source: "#from-go"
     tests:
       - go ./sparkplug/host TestMqttReconnectsAfterBrokerRestart
+  - id: SPH-044
+    claim: >-
+      `<site>__Outages` and `<site>_<device>__Outages` are DINT inputs,
+      present from t=0 as 0: the times the matching `__Online` went false.
+      The first birth is not an outage; a matching NDEATH counts for the
+      site and its online devices, a DDEATH for the device, and a node
+      rebirth (host-requested or an operator's `__Rebirth`) for each device
+      that was online. A device already offline does not count again. A
+      stale NDEATH and a node rebirth do not count for the site. A manifest can name them with
+      `outagestag`, and a binding may not take the name.
+    source: "#the-online-rebirth-companions"
+    tests:
+      - go ./sparkplug/host TestOutagesNodeCountsEachDeath
+      - go ./sparkplug/host TestOutagesDeviceCountsEachFall
+      - go ./sparkplug/host TestOutagesDeclaredAsDINTUnderTheManifestName
+      - go ./sparkplug/host TestOutagesCompanionCollidesWithABinding
+      - go ./sparkplug/host/codegen TestGenerateGolden
+    partial: true
+    note: >-
+      Driven through the state machine with encoded payloads, no broker.
+      Not yet run against a live fleet.

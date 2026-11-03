@@ -450,6 +450,7 @@ func (m Manifest) validateBindings(types map[string]bool, nodes map[string]Node,
 	for _, n := range m.Nodes {
 		for _, t := range []struct{ name, what string }{
 			{n.OnlineTagName(), "onlinetag"},
+			{n.OutagesTagName(), "outagestag"},
 			{n.BirthTagName(), "birthtag"},
 			{n.RebirthTagName(), "rebirthtag"},
 		} {
@@ -458,9 +459,14 @@ func (m Manifest) validateBindings(types map[string]bool, nodes map[string]Node,
 			}
 		}
 		for _, dv := range n.Devices {
-			what := fmt.Sprintf("node %q device %q onlinetag", n.EdgeNode, dv.Device)
-			if err := claimCompanion(owner, byName, n.DeviceOnlineTagName(dv), what); err != nil {
-				return err
+			for _, t := range []struct{ name, what string }{
+				{n.DeviceOnlineTagName(dv), "onlinetag"},
+				{n.DeviceOutagesTagName(dv), "outagestag"},
+			} {
+				what := fmt.Sprintf("node %q device %q %s", n.EdgeNode, dv.Device, t.what)
+				if err := claimCompanion(owner, byName, t.name, what); err != nil {
+					return err
+				}
 			}
 		}
 	}

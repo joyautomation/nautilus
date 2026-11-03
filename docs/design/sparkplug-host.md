@@ -156,6 +156,8 @@ and the HMI can bind:
 
 - `<site>__Online` — BOOL, node online (NBIRTH seen, no matching NDEATH)
 - `<site>_<device>__Online` — BOOL, per device
+- `<site>__Outages`, `<site>_<device>__Outages` — DINT, times the matching `__Online` went
+  false since the driver started (issue #449; the first birth is not an outage)
 - `<site>__LastBirthMs` — INT (epoch ms)
 - `<site>__Rebirth` — BOOL **output**; rising edge → NCMD Rebirth (operator-forced)
 

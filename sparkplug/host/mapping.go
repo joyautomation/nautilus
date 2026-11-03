@@ -28,6 +28,7 @@ const (
 // collapses "_" runs, so no metric name can produce one.
 const (
 	suffixOnline    = "__Online"
+	suffixOutages   = "__Outages"
 	suffixLastBirth = "__LastBirthMs"
 	suffixRebirth   = "__Rebirth"
 )
@@ -123,8 +124,9 @@ func uniqueNames(names []string) []string {
 
 // ── Synthesized companion tags ───────────────────────────────────────────
 //
-// Every node gets an online flag, a last-birth timestamp and a rebirth
-// trigger; every device gets an online flag. They are ordinary tags — ST
+// Every node gets an online flag, an outage counter, a last-birth timestamp
+// and a rebirth trigger; every device gets an online flag and an outage
+// counter. They are ordinary tags — ST
 // interlocks on them and the HMI binds them — and the manifest may name them
 // explicitly (the generator always does). An empty name in the manifest means
 // "use the default", so a hand-written manifest gets them for free.
@@ -145,6 +147,18 @@ func (n Node) OnlineTagName() string {
 		return n.OnlineTag
 	}
 	return n.TagPrefix() + suffixOnline
+}
+
+// OutagesTagName is the node's DINT outage counter, "<prefix>__Outages"
+// unless the manifest names it: the times its __Online has gone false since
+// the driver started. The first birth is not an outage, and neither is a
+// node that has not birthed yet. optommp, plcnext and modbus deliver the
+// same name (issue #449).
+func (n Node) OutagesTagName() string {
+	if n.OutagesTag != "" {
+		return n.OutagesTag
+	}
+	return n.TagPrefix() + suffixOutages
 }
 
 // BirthTagName is the node's INT last-NBIRTH-epoch-ms companion tag,
@@ -173,6 +187,15 @@ func (n Node) DeviceOnlineTagName(d Device) string {
 		return d.OnlineTag
 	}
 	return n.TagPrefix() + "_" + sanitizeRunes(d.Device) + suffixOnline
+}
+
+// DeviceOutagesTagName is a device's DINT outage counter,
+// "<prefix>_<device>__Outages" unless the manifest names it.
+func (n Node) DeviceOutagesTagName(d Device) string {
+	if d.OutagesTag != "" {
+		return d.OutagesTag
+	}
+	return n.TagPrefix() + "_" + sanitizeRunes(d.Device) + suffixOutages
 }
 
 // ── Generated tag specs ──────────────────────────────────────────────────
@@ -210,10 +233,10 @@ type TagSpec struct {
 // diffs cleanly against the last one.
 func (m Manifest) TagSpecs() []TagSpec {
 	types := m.typeIndex()
-	out := make([]TagSpec, 0, len(m.Tags)+3*len(m.Nodes))
+	out := make([]TagSpec, 0, len(m.Tags)+4*len(m.Nodes))
 
 	for _, n := range m.Nodes {
-		for _, name := range [...]string{n.OnlineTagName(), n.BirthTagName()} {
+		for _, name := range [...]string{n.OnlineTagName(), n.OutagesTagName(), n.BirthTagName()} {
 			if name != "" {
 				out = append(out, TagSpec{Name: name, Role: RoleInput})
 			}
@@ -222,8 +245,10 @@ func (m Manifest) TagSpecs() []TagSpec {
 			out = append(out, TagSpec{Name: name, Role: RoleOutput, Init: false})
 		}
 		for _, dv := range n.Devices {
-			if name := n.DeviceOnlineTagName(dv); name != "" {
-				out = append(out, TagSpec{Name: name, Role: RoleInput})
+			for _, name := range [...]string{n.DeviceOnlineTagName(dv), n.DeviceOutagesTagName(dv)} {
+				if name != "" {
+					out = append(out, TagSpec{Name: name, Role: RoleInput})
+				}
 			}
 		}
 	}
@@ -354,14 +379,16 @@ func (d *Driver) buildIndexes() error {
 	d.synthOutputs = nil
 	d.rebirthTags = make(map[string]string, len(m.Nodes))
 	for _, n := range m.Nodes {
-		for _, name := range [...]string{n.OnlineTagName(), n.BirthTagName()} {
+		for _, name := range [...]string{n.OnlineTagName(), n.OutagesTagName(), n.BirthTagName()} {
 			if name != "" {
 				d.synthInputs = append(d.synthInputs, name)
 			}
 		}
 		for _, dv := range n.Devices {
-			if name := n.DeviceOnlineTagName(dv); name != "" {
-				d.synthInputs = append(d.synthInputs, name)
+			for _, name := range [...]string{n.DeviceOnlineTagName(dv), n.DeviceOutagesTagName(dv)} {
+				if name != "" {
+					d.synthInputs = append(d.synthInputs, name)
+				}
 			}
 		}
 		if name := n.RebirthTagName(); name != "" {
@@ -375,8 +402,8 @@ func (d *Driver) buildIndexes() error {
 }
 
 // InputNames returns every tag the driver delivers values for: the read-only
-// bindings plus the synthesized companions (__Online, __LastBirthMs) — for
-// runtime.Options.Inputs.
+// bindings plus the synthesized companions (__Online, __Outages,
+// __LastBirthMs) — for runtime.Options.Inputs.
 //
 // The companions are present from t=0 even though a data metric stays absent
 // from the snapshot until it is first seen, so alarm logic can interlock on
@@ -396,21 +423,26 @@ func (d *Driver) InputNames() []string {
 // the right type before its site births (runtime.TagDef.DriverType). A
 // Sparkplug datatype maps to the IEC type of the same width (the generated
 // ST's mapping), a Template to the TYPE generated for it, an array to
-// ARRAY[0..n-1] OF either; __Online companions are BOOL and __LastBirthMs
-// is LINT (epoch milliseconds). "" for a name the driver does not deliver
-// or a datatype IEC has no spelling for (DataSet, Bytes, File).
+// ARRAY[0..n-1] OF either; __Online companions are BOOL, __Outages DINT and
+// __LastBirthMs LINT (epoch milliseconds). "" for a name the driver does not
+// deliver or a datatype IEC has no spelling for (DataSet, Bytes, File).
 func (d *Driver) InputType(name string) string {
 	for _, n := range d.manifest.Nodes {
 		switch name {
 		case "":
 		case n.OnlineTagName():
 			return "BOOL"
+		case n.OutagesTagName():
+			return "DINT"
 		case n.BirthTagName():
 			return "LINT"
 		}
 		for _, dv := range n.Devices {
-			if name == n.DeviceOnlineTagName(dv) {
+			switch name {
+			case n.DeviceOnlineTagName(dv):
 				return "BOOL"
+			case n.DeviceOutagesTagName(dv):
+				return "DINT"
 			}
 		}
 	}

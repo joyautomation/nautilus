@@ -560,7 +560,7 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range devices {
+	for _, d := range declaredOnly(devices, declaredNames(p.Runtime, rt)) {
 		opts = append(opts, sparkplug.WithDevice(d))
 	}
 	opts = append(opts, sparkplug.WithWritable(c.Writable...))
@@ -612,6 +612,61 @@ func sparkplugDevices(drivers []nio.NamedDriver) ([]sparkplug.Device, error) {
 		}
 	}
 	return out, nil
+}
+
+// declaredOnly keeps, of each device's tags, the ones the project declares
+// in any role. The runtime never puts an undeclared driver input in the tag
+// store, so an undeclared tag (a driver companion such as
+// <source>__Outages that no tag file names) would never arrive: the device
+// would wait out its birth delay for it and be born without it anyway. Left
+// out, it neither delays the DBIRTH nor appears in it. A declared tag of
+// any role stays, so a polled writable binding declared role: output keeps
+// riding its device.
+//
+// A device that had tags and has none declared is dropped, as it was before
+// the filter: its tags could never arrive, so it was never born. A device
+// that delivers no tags at all is kept (it births on health alone).
+func declaredOnly(devs []sparkplug.Device, declared map[string]bool) []sparkplug.Device {
+	out := make([]sparkplug.Device, 0, len(devs))
+	for _, d := range devs {
+		if len(d.Tags) == 0 {
+			out = append(out, d)
+			continue
+		}
+		var tags []string
+		for _, name := range d.Tags {
+			if declared[name] {
+				tags = append(tags, name)
+			}
+		}
+		if len(tags) == 0 {
+			continue
+		}
+		d.Tags = tags
+		out = append(out, d)
+	}
+	return out
+}
+
+// declaredNames is every tag name the project declares, in any role, spelled
+// exactly as declared: the store keys a tag by its declared spelling and a
+// driver delivers by exact name, so a name that differs only in case never
+// arrives either. A global a program binds through VAR_EXTERNAL with no tag
+// declaration is not in the store, so it is not declared here.
+func declaredNames(o runtime.Options, rt *runtime.Runtime) map[string]bool {
+	out := map[string]bool{}
+	for _, d := range o.Tags {
+		out[d.Name] = true
+	}
+	for _, list := range [][]string{o.Inputs, o.Outputs, rt.Inputs(), rt.Outputs()} {
+		for _, name := range list {
+			out[name] = true
+		}
+	}
+	for name := range o.Seed {
+		out[name] = true
+	}
+	return out
 }
 
 // hasProgramDecl reports whether src contains a PROGRAM declaration,

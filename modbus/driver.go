@@ -45,10 +45,23 @@ const exceptionsToPark = 3
 // tags, exactly like sparkplug/host's "<site>__Online".
 const suffixOnline = "__Online"
 
+// suffixOutages names the second per-source companion: "<source>__Outages"
+// is a DINT input counting the times __Online has gone false since the
+// driver started, after the device had answered a read or a write on that
+// connection. The
+// first connect is not an outage, and neither is starting offline, a
+// connection the device never answered on, or Stop. A program compares it with last scan's value to latch
+// an outage it might otherwise miss between scans (issue #449; optommp and
+// plcnext deliver the same name).
+const suffixOutages = "__Outages"
+
 // OnlineTagName is the source's synthesized BOOL companion tag name — shared
 // with the generator so tags/modbus.yaml declares exactly what the driver
 // delivers.
 func (s Source) OnlineTagName() string { return s.ID + suffixOnline }
+
+// OutagesTagName is the source's synthesized DINT outage counter tag name.
+func (s Source) OutagesTagName() string { return s.ID + suffixOutages }
 
 // Option configures New.
 type Option func(*Driver)
@@ -131,7 +144,7 @@ type Driver struct {
 	byName  map[string]outBinding
 	enables map[string][]*source
 
-	inputs  []string // polled bindings + __Online companions, sorted
+	inputs  []string // polled bindings + __Online/__Outages companions, sorted
 	outputs []string // writable bindings + enable tags, sorted
 
 	// gateMu guards writeGate; the gate itself is read on every write and
@@ -172,7 +185,8 @@ type source struct {
 	mu       sync.Mutex
 	snapshot nio.Values // decoded values, held across disconnects
 	online   bool
-	answered bool   // a read succeeded on the current connection (resets backoff)
+	outages  int64  // online → offline transitions since New
+	answered bool   // a read or write succeeded on the current connection (resets backoff)
 	state    string // parked | connecting | connected | error
 	sinceMs  int64
 	lastErr  error
@@ -329,13 +343,15 @@ func (d *Driver) buildSources() error {
 		d.sources = append(d.sources, s)
 		d.bySource[cfg.ID] = s
 
-		// The companion is a name the driver owns; a binding that claims it
-		// would collide with the delivery (sparkplug/host's claimCompanion).
-		online := cfg.OnlineTagName()
-		if bound[online] {
-			return fmt.Errorf("modbus: source %s: companion tag %q collides with a binding of the same name", cfg.ID, online)
+		// The companions are names the driver owns; a binding that claims
+		// one would collide with the delivery (sparkplug/host's
+		// claimCompanion).
+		for _, name := range [...]string{cfg.OnlineTagName(), cfg.OutagesTagName()} {
+			if bound[name] {
+				return fmt.Errorf("modbus: source %s: companion tag %q collides with a binding of the same name", cfg.ID, name)
+			}
+			d.inputs = append(d.inputs, name)
 		}
-		d.inputs = append(d.inputs, online)
 
 		if cfg.Enable != "" {
 			if bound[cfg.Enable] {
@@ -403,8 +419,8 @@ func (d *Driver) gateOpen() bool {
 // ── names / classes ──────────────────────────────────────────────────────
 
 // InputNames returns every tag the driver delivers values for: the polled
-// bindings plus the synthesized "<source>__Online" companions — for
-// runtime.Options.Inputs. The companions are present from Start even though
+// bindings plus the synthesized "<source>__Online" and "<source>__Outages"
+// companions — for runtime.Options.Inputs. The companions are present from Start even though
 // a data tag stays absent until first read, so logic can interlock on
 // __Online before the first poll (the sparkplug-host contract).
 func (d *Driver) InputNames() []string {
@@ -416,12 +432,15 @@ func (d *Driver) InputNames() []string {
 // starts at the zero of until the first poll (runtime.TagDef.DriverType):
 // BOOL for coils, discretes, bool and bit:N; DINT for an unscaled integer
 // format, which is what the driver delivers (int64); REAL for a float
-// format or anything scaled. A source's __Online companion is BOOL. ""
-// for a name the driver does not deliver.
+// format or anything scaled. A source's __Online companion is BOOL and its
+// __Outages companion DINT. "" for a name the driver does not deliver.
 func (d *Driver) InputType(name string) string {
 	for _, s := range d.sources {
-		if s.cfg.OnlineTagName() == name {
+		switch name {
+		case s.cfg.OnlineTagName():
 			return "BOOL"
+		case s.cfg.OutagesTagName():
+			return "DINT"
 		}
 	}
 	for _, t := range d.manifest.Tags {
@@ -498,10 +517,11 @@ func (d *Driver) Stop() {
 
 // ── io.Driver ────────────────────────────────────────────────────────────
 
-// ReadInputs merges the latest per-source snapshots, __Online companions
-// included. Once Start has been called it never errors: a dead source holds
-// its last values (the tag store must never see a zero because a cable was
-// pulled) and quality rides on Quality() and the companions. A data tag
+// ReadInputs merges the latest per-source snapshots, __Online and
+// __Outages companions included. Once Start has been called it never
+// errors: a dead source holds its last values (the tag store must never see
+// a zero because a cable was pulled) and quality rides on Quality() and the
+// companions. A data tag
 // never delivered stays absent from the delivery: the runtime holds it at
 // its init: or zero (a protocol input, runtime.TagDef.Comms) and Quality
 // says NotConnected — __Online is the guard.
@@ -534,6 +554,7 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 		delivered := make(map[string]bool, n)
 		for _, s := range d.sources {
 			delivered[s.cfg.OnlineTagName()] = true
+			delivered[s.cfg.OutagesTagName()] = true
 			s.mu.Lock()
 			for k := range s.snapshot {
 				delivered[k] = true
@@ -560,7 +581,8 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 			n++
 		}
 		dst[s.cfg.OnlineTagName()] = s.online
-		n++
+		dst[s.cfg.OutagesTagName()] = s.outages
+		n += 2
 		s.mu.Unlock()
 	}
 	return n
@@ -726,8 +748,12 @@ func (d *Driver) run(ctx context.Context, s *source) {
 
 		_ = c.Close()
 		s.mu.Lock()
-		s.online = false
 		answered := s.answered
+		// An outage is losing a device that was talking (a read or a write
+		// succeeded on this connection): a connection the device never
+		// answered on (a gateway that accepts TCP and stays
+		// silent) is not one, and neither is the driver stopping.
+		s.goOfflineLocked(answered && ctx.Err() == nil)
 		s.mu.Unlock()
 		if ctx.Err() != nil || !s.isEnabled() {
 			continue // shutting down, or parking: no wait, no escalation
@@ -1013,6 +1039,12 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err error) bool {
 	if err == nil {
 		d.writes.Add(1)
+		// A confirmed write is the device answering, as a read is: a
+		// write-only source (a command or keep-alive word) counts its
+		// outages too, and its backoff ladder resets.
+		s.mu.Lock()
+		s.answered = true
+		s.mu.Unlock()
 		return true
 	}
 	d.errs.Add(1)
@@ -1201,6 +1233,16 @@ func (s *source) setOnline(on bool) {
 	s.mu.Lock()
 	s.online = on
 	s.mu.Unlock()
+}
+
+// goOfflineLocked takes the source offline, counting an outage
+// (__Outages) when outage is true and the source was online. Caller holds
+// s.mu.
+func (s *source) goOfflineLocked(outage bool) {
+	if s.online && outage {
+		s.outages++
+	}
+	s.online = false
 }
 
 // Interface conformance — the same trio io.Memory proves.

@@ -553,8 +553,8 @@ END_PROGRAM`,
 	if !ok {
 		t.Fatalf("driver = %T, want *host.Driver", proj.Runtime.Driver)
 	}
-	if got := len(drv.InputNames()); got != 6 {
-		t.Fatalf("InputNames = %v, want the 3 bindings + 3 companions", drv.InputNames())
+	if got := len(drv.InputNames()); got != 8 {
+		t.Fatalf("InputNames = %v, want the 3 bindings + 5 companions", drv.InputNames())
 	}
 	if _, ok := drv.StructDefs()["Motor"]; !ok {
 		t.Fatalf("StructDefs = %v, want the manifest's Motor template", drv.StructDefs())

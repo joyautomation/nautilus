@@ -13,10 +13,10 @@
 //     leaf. They live in d.byName, not d.inputs, so Quality never sees them.
 //   - any other writable binding (a plain operator-command metric) — same
 //     reason, same exclusion.
-//   - the synthesized companions (__Online, __LastBirthMs, __Rebirth) — they
-//     ARE the driver's own liveness signal in tag form (__Online IS what
-//     Stale would otherwise be telling you), so putting a quality verdict on
-//     top of them would be quality about quality. They live in
+//   - the synthesized companions (__Online, __Outages, __LastBirthMs,
+//     __Rebirth) — they ARE the driver's own liveness signal in tag form
+//     (__Online IS what Stale would otherwise be telling you), so putting a
+//     quality verdict on top of them would be quality about quality. They live in
 //     d.synthInputs/d.synthOutputs, never in d.inputs, so they are excluded
 //     the same way.
 //

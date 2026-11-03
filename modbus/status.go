@@ -91,7 +91,8 @@ func (d *Driver) Health() Health {
 //     Stale: the value holds, greyed, with its age — never a silent zero.
 //   - a tag never delivered on a dead/parked source is NotConnected.
 //
-// The __Online companions are the driver's own truth and are always Good.
+// The __Online and __Outages companions are the driver's own truth and are
+// always Good.
 func (d *Driver) Quality() map[string]nio.Quality {
 	var out map[string]nio.Quality
 	mark := func(name string, q nio.Quality) {
@@ -142,11 +143,11 @@ func notANumber(v any) bool {
 }
 
 // Connections lists each source and the tags it delivers — its polled
-// bindings and its __Online companion (io.ConnectionReporter).
+// bindings and its __Online and __Outages companions (io.ConnectionReporter).
 func (d *Driver) Connections() []nio.Connection {
 	out := make([]nio.Connection, 0, len(d.sources))
 	for _, s := range d.sources {
-		seen := map[string]bool{s.cfg.OnlineTagName(): true}
+		seen := map[string]bool{s.cfg.OnlineTagName(): true, s.cfg.OutagesTagName(): true}
 		for _, br := range s.blocks {
 			for _, t := range br.Bindings {
 				seen[t.Name] = true
