@@ -145,8 +145,9 @@ is 255 while the server runs, and `Auditing` is false: the server writes
 no audit events. `ServerDiagnostics.EnabledFlag` is false too, because the
 server collects no diagnostics, and it is read-only. So `ServerDiagnostics`
 holds only that flag: the standard lets a server with diagnostics off leave
-out the summary counters and the session and subscription arrays, and
-reading one answers `Bad_NodeIdUnknown`. `ServerCapabilities` has no
+out everything else under it (the server and sessions summaries, the
+summary's counters, and the sampling-interval, subscription and session
+arrays), and reading one answers `Bad_NodeIdUnknown`. `ServerCapabilities` has no
 `MaxArrayLength` or `MaxStringLength`: the server sets no such limit of its
 own (the message size bounds both), and the standard asks a server in that
 case to leave them out.

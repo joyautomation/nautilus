@@ -404,14 +404,15 @@ func TestServerDiagnosticsLeftOutWhileDisabled(t *testing.T) {
 
 	// The node ids by number (Part 6 NodeIds.csv), not by the list the
 	// server removes, so a node dropped from that list shows here.
-	for _, n := range []uint32{
+	removed := []uint32{
 		2275,                                                                   // ServerDiagnosticsSummary
 		2276, 2277, 2278, 2279, 3705, 2281, 2282, 2284, 2285, 2286, 2287, 2288, // its counters
 		2289,       // SamplingIntervalDiagnosticsArray
 		2290,       // SubscriptionDiagnosticsArray
 		3706,       // SessionsDiagnosticsSummary
 		3707, 3708, // SessionDiagnosticsArray, SessionSecurityDiagnosticsArray
-	} {
+	}
+	for _, n := range removed {
 		nid := ua.NewNumericNodeID(0, n)
 		for _, attr := range []ua.AttributeID{ua.AttributeIDValue, ua.AttributeIDBrowseName} {
 			if dv := read(t, c, nid, attr); dv.Status != ua.StatusBadNodeIDUnknown {
@@ -419,15 +420,39 @@ func TestServerDiagnosticsLeftOutWhileDisabled(t *testing.T) {
 			}
 		}
 	}
+	// Nothing still points at a removed node: the type nodes they were
+	// instances of (whose inverse HasTypeDefinition refs the node set
+	// import adds) and their parent, browsed both ways over every
+	// reference type.
+	for _, n := range []uint32{
+		id.Server_ServerDiagnostics,
+		id.ServerDiagnosticsSummaryType, id.BaseDataVariableType,
+		id.SamplingIntervalDiagnosticsArrayType, id.SubscriptionDiagnosticsArrayType,
+		id.SessionsDiagnosticsSummaryType, id.SessionDiagnosticsArrayType, id.SessionSecurityDiagnosticsArrayType,
+	} {
+		for _, dir := range []ua.BrowseDirection{ua.BrowseDirectionForward, ua.BrowseDirectionInverse} {
+			for _, r := range browseAll(t, c, ua.NewNumericNodeID(0, n), id.References, dir) {
+				if r.NodeID.NodeID.Namespace() == 0 && slices.Contains(removed, r.NodeID.NodeID.IntID()) {
+					t.Errorf("i=%d (direction %d) still references removed %s %q", n, dir, r.NodeID.NodeID, r.BrowseName.Name)
+				}
+			}
+		}
+	}
 
+	val := func(dv *ua.DataValue) any {
+		if dv.Value == nil {
+			return nil
+		}
+		return dv.Value.Value()
+	}
 	flag := ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_EnabledFlag)
-	if dv := read(t, c, flag, ua.AttributeIDValue); dv.Status != ua.StatusOK || dv.Value.Value() != false {
-		t.Errorf("EnabledFlag: %s %v, want false", dv.Status, dv.Value)
+	if dv := read(t, c, flag, ua.AttributeIDValue); dv.Status != ua.StatusOK || val(dv) != false {
+		t.Errorf("EnabledFlag: %s %#v, want false", dv.Status, val(dv))
 	}
 	for _, attr := range []ua.AttributeID{ua.AttributeIDAccessLevel, ua.AttributeIDUserAccessLevel} {
 		dv := read(t, c, flag, attr)
-		if dv.Status != ua.StatusOK || dv.Value.Value() != uint8(ua.AccessLevelTypeCurrentRead) {
-			t.Errorf("EnabledFlag attribute %d: %s %v, want CurrentRead only", attr, dv.Status, dv.Value)
+		if dv.Status != ua.StatusOK || val(dv) != uint8(ua.AccessLevelTypeCurrentRead) {
+			t.Errorf("EnabledFlag attribute %d: %s %#v, want CurrentRead only", attr, dv.Status, val(dv))
 		}
 	}
 	got := write(t, c, &ua.WriteValue{NodeID: flag, AttributeID: ua.AttributeIDValue,
@@ -435,7 +460,7 @@ func TestServerDiagnosticsLeftOutWhileDisabled(t *testing.T) {
 	if got[0] == ua.StatusOK {
 		t.Error("a Write of true to EnabledFlag landed; it must be read-only")
 	}
-	if dv := read(t, c, flag, ua.AttributeIDValue); dv.Value.Value() != false {
-		t.Errorf("EnabledFlag after the refused Write = %v, want false", dv.Value)
+	if dv := read(t, c, flag, ua.AttributeIDValue); val(dv) != false {
+		t.Errorf("EnabledFlag after the refused Write = %#v, want false", val(dv))
 	}
 }
