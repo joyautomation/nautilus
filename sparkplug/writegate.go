@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/internal/writable"
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // The write gate (docs/design/edge-collector.md §6). An edge node is
@@ -23,7 +24,8 @@ import (
 // globs (path.Match) over the tag name, or over a UDT member's dotted path
 // ("Motor1.START", "Pump*.SpeedSP"). A pattern that matches a tag opens all
 // of its members; one that matches a member opens that member and anything
-// below it. Without it every write is refused.
+// below it. Patterns match the declared spelling of the tag and member,
+// whatever case a command names them in. Without it every write is refused.
 func WithWritable(patterns ...string) Option {
 	return func(n *Node) { n.writable = append(n.writable, patterns...) }
 }
@@ -38,9 +40,85 @@ func validateWritable(patterns []string) error {
 }
 
 // writeAllowed reports whether a command may write the tag or member at p:
-// p itself, or any dotted ancestor of it, matches a writable pattern (the
-// rule internal/writable shares with opcua.writable).
-func (n *Node) writeAllowed(p string) bool { return writable.Patterns(n.writable).Allows(p) }
+// its declared spelling (canonicalPath), or any dotted ancestor of that,
+// matches a writable pattern (the rule internal/writable shares with
+// opcua.writable). The patterns are matched against the declared name, not
+// the host's spelling: tag and member names are case-insensitive, so a
+// host's "speedSP" writes SpeedSP, and matching what it sent let a
+// respelling open a tag the patterns keep closed, or close one they open
+// (#619). OPC UA matches its canonical address the same way.
+func (n *Node) writeAllowed(p string) bool {
+	return writable.Patterns(n.writable).Allows(n.canonicalPath(p))
+}
+
+// canonicalPath is the declared spelling of the tag or member a command
+// names, in any case: the tag as the store holds it (or a declared output
+// no scan has written yet, under the name writeCommand creates it with),
+// and each member as its struct type declares it ("motor1.start" →
+// "Motor1.START"). An index is kept as sent. A part that resolves to
+// nothing is kept as sent, so an unknown name is gated, and refused,
+// exactly as before.
+func (n *Node) canonicalPath(p string) string {
+	tags := n.rt.Tags()
+	// A tag whose own name contains a dot wins over member resolution, as
+	// it does in the store's write (Tags.SetPath).
+	if c, ok := tags.Canonical(p); ok {
+		return c
+	}
+	root, segs := ir.SplitAddress(p)
+	val, typ := ir.Value{}, tags.TypeOf(root)
+	if c, ok := tags.Canonical(root); ok {
+		root = c
+		if v, err := tags.ReadGlobal(c); err == nil {
+			val = v
+		}
+	} else {
+		root = tags.DeclaredOutputName(root)
+	}
+	for i, seg := range segs {
+		if strings.HasPrefix(seg, "[") {
+			// An element: what is below it is the element type's. Index
+			// writes are refused before the gate today; resolving past one
+			// keeps a member below it in its declared case all the same.
+			if val.Kind == ir.TypeArray && len(val.Arr) > 0 {
+				val = val.Arr[0]
+			} else {
+				val = ir.Value{}
+			}
+			if typ != nil && typ.Kind == ir.TypeArray {
+				typ = typ.Elem
+			} else {
+				typ = nil
+			}
+			continue
+		}
+		def := structOf(val, typ)
+		fi, ok := def.FieldOf(seg)
+		if !ok || fi >= len(def.Fields) {
+			break // an unknown member: it and what is below it kept as sent
+		}
+		segs[i] = def.Fields[fi].Name
+		if val.Kind == ir.TypeStruct && fi < len(val.Fld) {
+			val = val.Fld[fi]
+		} else {
+			val = ir.Value{}
+		}
+		typ = def.Fields[fi].Type
+	}
+	return ir.JoinPath(root, segs)
+}
+
+// structOf is the struct definition a member name resolves against: the
+// stored value's, else the declared type's; nil when neither is a struct.
+func structOf(v ir.Value, t *ir.Type) *ir.StructDef {
+	if v.Kind == ir.TypeStruct && v.Struct != nil {
+		return v.Struct
+	}
+	if t != nil && t.Kind == ir.TypeStruct {
+		return t.Struct
+	}
+	return nil
+}
 
 // writableTemplate prunes a Template command metric to the members a write
 // may reach, at any depth, and returns the dotted paths it dropped. The

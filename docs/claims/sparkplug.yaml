@@ -33,9 +33,17 @@ claims:
       apply. A declared output no scan has written yet takes a command
       typed by its declaration; an undeclared name is refused, not created.
       A command to an input is refused, as HTTP and OPC UA refuse it.
+      `writable:` is matched against the tag's and member's declared
+      casing, whatever case the host writes them in, as `opcua.writable`
+      is.
     source: "#"
     tests:
       - go ./sparkplug TestWriteGateOpensMatchingTagsOnly
+      - go ./sparkplug TestWriteGateRespellingDoesNotOpenAClosedTag
+      - go ./sparkplug TestWriteGateRespellingDoesNotCloseAnOpenTag
+      - go ./sparkplug TestWriteGatePumpPatternAndADeclaredLowerCaseTag
+      - go ./sparkplug TestWriteGateMemberRespelling
+      - go ./sparkplug TestWriteGateDeviceCommandRespelling
       - go ./sparkplug TestCommandScalarStillReplaces
       - go ./sparkplug TestCommandWritesGoThroughTheFrontDoor
       - go ./sparkplug TestTemplateCommandMembersGoThroughTheFrontDoor

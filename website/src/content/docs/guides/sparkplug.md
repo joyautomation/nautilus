@@ -156,8 +156,11 @@ sparkplug:
     - Mixer                 # a UDT tag: every member
 ```
 
-Patterns are globs over the tag name or a UDT member's dotted path; one
-that matches a tag opens all of its members. A template command carrying
+Patterns are globs over the tag name or a UDT member's dotted path,
+matched in the tag's and member's declared casing whatever case a host
+writes them in: `Pump*` does not open a tag declared `pumpHouseDoor`, even
+to a command for `PumpHouseDoor`, and `LevelSP` opens `LevelSP` to a
+command for `levelsp`. One that matches a tag opens all of its members. A template command carrying
 a writable member and a read-only one writes the first and refuses the
 second. A command must also arrive where the tag is published: an NCMD
 reaches only node-level tags, and a DCMD only its own device's (which,
