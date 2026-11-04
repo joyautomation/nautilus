@@ -387,13 +387,22 @@ claims:
     claim: >-
       A command raised while the source is down is queued per source (latest
       value per tag), flushed on reconnect, and counted as `queuedWrites`.
+      When the link breaks partway through a flush, the write that broke and
+      the ones after it are queued again, and writes the device already
+      answered in that flush are not re-sent.
     source: "#writes"
     tests:
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
+      - go ./modbus TestBrokenFlushResendsOnlyUnconfirmedRuns
     partial: true
     note: >-
-      Queueing one tag and flush on reconnect are asserted; latest-value-wins
-      coalescing of several queued writes to one tag is not.
+      Queueing one tag and flush on reconnect are asserted. The broken flush
+      is asserted with the link cut on the second register run: the bit RMW
+      and the first run are sent once, the broken run is sent again, and a
+      value queued while the flush was in flight goes out in place of the
+      one it replaced. Latest-value-wins coalescing of several writes queued
+      to one tag while the source is down is not asserted, nor is a write
+      refused with an exception earlier in a broken flush.
   - id: MB-031
     claim: >-
       A binding with `rewrite:` re-asserts its last commanded value on that
