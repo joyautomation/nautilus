@@ -8,6 +8,7 @@ package modbus
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"reflect"
 	"sync"
@@ -322,6 +323,59 @@ func TestWriteCoalescingAndBaseline(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 	if after := len(rec.writes(FCWriteSingleRegister, 300)); after != before {
 		t.Errorf("unchanged value must not re-write: %d → %d frames", before, after)
+	}
+}
+
+// One snapshot's contiguous registers go out as one FC16 even while the
+// source loop is flushing between polls: WriteOutputs queues a source's
+// share of a snapshot under one hold of its lock, so a flush that runs
+// mid-snapshot cannot take half of it (#592). Fast polling keeps the loop
+// flushing all the time; a split shows up as an FC16 shorter than the run
+// or one starting past its first register.
+func TestSnapshotWritesAreNeverSplit(t *testing.T) {
+	srv := newSlave(t)
+	u := srv.Unit(1)
+	rec := &recorder{}
+	const n = 120
+	m := Manifest{Sources: []Source{fastSource("DEV", srv.Addr())}}
+	for i := 0; i < n; i++ {
+		m.Tags = append(m.Tags, TagBinding{Name: fmt.Sprintf("W%03d", i), Source: "DEV",
+			Table: TableHolding, Address: uint16(i), Format: "uint16", Writable: true})
+	}
+	d, err := New(m, WithScanRate(time.Millisecond), WithDialer(recordingDialer(rec)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
+
+	snap := func(v float64) nio.Values {
+		out := nio.Values{}
+		for i := 0; i < n; i++ {
+			out[fmt.Sprintf("W%03d", i)] = v
+		}
+		return out
+	}
+	if err := d.WriteOutputs(snap(0)); err != nil { // baseline
+		t.Fatal(err)
+	}
+	const rounds = 200
+	for r := 1; r <= rounds; r++ {
+		if err := d.WriteOutputs(snap(float64(r))); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Duration(r%3) * 100 * time.Microsecond)
+	}
+	waitFor(t, "the last round to land", func() bool {
+		return u.Holding(0) == rounds && u.Holding(n-1) == rounds
+	})
+	if got := rec.writes(FCWriteSingleRegister, -1); len(got) != 0 {
+		t.Errorf("a snapshot register went out alone as FC6: %v", got)
+	}
+	for _, f := range rec.writes(FCWriteMultipleRegisters, -1) {
+		if f.addr != 0 || f.count != n {
+			t.Fatalf("an FC16 carried part of the %d-register run: %+v", n, f)
+		}
 	}
 }
 
