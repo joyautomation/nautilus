@@ -13,7 +13,7 @@ import { pdfString } from './pdf.ts';
 import { dedent } from './sfcExport.ts';
 import type { LdModel } from '../ladder.ts';
 import type { FbdModel } from '../layout.ts';
-import type { SfcModel } from '../sfc.ts';
+import { fitLabel, layoutSfc, type SfcModel } from '../sfc.ts';
 
 function ladder(rungs: number): LdModel {
 	return {
@@ -144,6 +144,58 @@ test('a long title is cut with an ellipsis before it reaches the diagram kind', 
 	const width = Number(/<svg[^>]* width="([\d.]+)"/.exec(svg)?.[1]);
 	assert.ok(head.endsWith('…'), head);
 	assert.ok(12 + textWidth(head, 13) < width - 12 - textWidth('Ladder Diagram', 10));
+});
+
+test('a multi-statement assign box prints one statement per line, inside its box', () => {
+	const text = "Count := Count + 1; Msg := 'it$'s done; really'; Ready := TRUE; Total := Total + Count";
+	const m = {
+		name: 'Assigns',
+		rungs: [{ name: 'r0', line: 1, elements: [{ kind: 'contact', ref: 'Go' }, { kind: 'assign', text }], coils: [] }]
+	} as unknown as LdModel;
+	const d = diagramFor('ld', m);
+	const box = d.items.find((p) => p.t === 'rect' && p.rx === 4);
+	assert.ok(box && box.t === 'rect');
+	const lines = d.items.filter((p) => p.t === 'text' && p.y > box.y && p.y < box.y + box.h && p.x > box.x && p.x < box.x + box.w);
+	// The `;` inside the string literal (after `$'`) does not split it.
+	assert.deepEqual(
+		lines.map((p) => p.t === 'text' && p.text),
+		['Count := Count + 1;', "Msg := 'it$'s done; really';", 'Ready := TRUE;', 'Total := Total + Count']
+	);
+	for (let i = 0; i < lines.length; i++) {
+		const p = lines[i];
+		assert.ok(p.t === 'text');
+		if (i > 0) assert.ok(p.y > (lines[i - 1] as { y: number }).y + 10, 'stacked, not on top of each other');
+		const w = textWidth(p.text, p.size);
+		assert.ok(p.x - w / 2 >= box.x + 2 && p.x + w / 2 <= box.x + box.w - 2, `"${p.text}" runs off the box`);
+		assert.ok(p.y - p.size >= box.y && p.y + 3 <= box.y + box.h, `"${p.text}" leaves the box vertically`);
+	}
+	// …and nothing runs off the SVG or onto the next rung.
+	const svg = exportSvg('ld', m);
+	const svgW = Number(/<svg[^>]* width="([\d.]+)"/.exec(svg)?.[1]);
+	assert.ok(box.x + box.w + 12 <= svgW);
+	assert.ok(box.y >= 0 && box.y + box.h <= d.height);
+	for (const s of [exportSheets('ld', m, page), exportSheets('ld', m, { ...page, paper: 'a4' })]) assert.equal(s.length, 1);
+});
+
+test('SFC: a label over its own left run is cut short of the source stem, as the view cuts it', () => {
+	const m: SfcModel = {
+		name: 'TankBatch',
+		steps: ['Idle', 'Fill', 'Heat', 'Mix', 'Drain', 'Aborted'].map((name, i) => ({ id: `st:${name}`, name, initial: i === 0, line: i * 2 + 1, endLine: i * 2 + 2 })),
+		trans: [
+			{ id: 'tr:t_start', name: 't_start', from: ['Idle'], to: ['Fill'], cond: 'Start', kind: 'normal', line: 13, endLine: 14 },
+			{ id: 'tr:t_abort', name: 't_abort_on_operator_request_or_interlock', from: ['Fill'], to: ['Aborted'], cond: 'AbortRequested OR NOT InterlocksHealthy OR EStopActive', kind: 'alt', line: 15, endLine: 16 },
+			{ id: 'tr:t_full', name: 't_full', from: ['Fill'], to: ['Heat', 'Mix'], cond: 'Level >= FillSP', kind: 'simDiverge', line: 17, endLine: 18 },
+			{ id: 'tr:t_done', name: 't_done', from: ['Heat', 'Mix'], to: ['Drain'], cond: 'TempC >= HeatSP', kind: 'simConverge', line: 19, endLine: 20 },
+			{ id: 'tr:t_empty', name: 't_empty', from: ['Drain'], to: ['Idle'], cond: 'Level <= EmptySP', kind: 'normal', line: 21, endLine: 22 }
+		]
+	};
+	const abort = layoutSfc(m).trans.find((r) => r.t.id === 'tr:t_abort')!;
+	assert.ok(abort.condMax !== undefined && abort.nameMax !== undefined, 'the layout limits this label');
+	const texts = diagramFor('sfc', m).items.flatMap((p) => (p.t === 'text' ? [p.text] : []));
+	assert.ok(texts.includes(fitLabel(m.trans[1].cond, abort.condMax)));
+	assert.ok(texts.includes(fitLabel(m.trans[1].name!, abort.nameMax)));
+	assert.ok(fitLabel(m.trans[1].cond, abort.condMax).endsWith('…'));
+	assert.ok(!texts.includes(m.trans[1].cond), 'the full condition crosses the stem');
 });
 
 test('ladder with a live snapshot paints power flow and values', () => {

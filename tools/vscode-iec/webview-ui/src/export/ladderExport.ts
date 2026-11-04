@@ -7,7 +7,7 @@
 // rungs and never through one.
 
 import { annotate, normalizeLd, type Ann, type LdModel, type LdRung } from '../ladder.ts';
-import { fitArgs, L, layoutRung, OPERAND_LABEL_MAX, rungMinWidth, type LNode } from '../ladderLayout.ts';
+import { assignLineDy, assignLines, fitArgs, L, layoutRung, OPERAND_LABEL_MAX, rungMinWidth, type LNode } from '../ladderLayout.ts';
 import { FAINT, INK, MONO_ADVANCE, MUTED, Pen, POWER, textWidth, trunc, wrapText, type Block, type Diagram } from './draw.ts';
 import type { LiveSnapshot } from './live.ts';
 
@@ -169,11 +169,17 @@ function drawNode(pen: Pen, r: LdRung, n: LNode, live?: LiveSnapshot): void {
 			operand(el.ref);
 			break;
 		}
-		case 'fn':
-		case 'assign': {
+		case 'fn': {
 			pen.rect(0, 0, n.w, n.h, { rx: 4, s: { color: ink, width: 1.2 } });
-			const label = n.kind === 'fn' ? `${el.fn}(${el.args ?? ''})` : (el.text ?? '');
-			pen.text(mid, cy + 3.5, label, { size: 10, anchor: 'middle', color: ink });
+			pen.text(mid, cy + 3.5, `${el.fn}(${el.args ?? ''})`, { size: 10, anchor: 'middle', color: ink });
+			break;
+		}
+		case 'assign': {
+			// One line per statement, stacked in the box the layout sized
+			// for them, as the view draws it.
+			pen.rect(0, 0, n.w, n.h, { rx: 4, s: { color: ink, width: 1.2 } });
+			const lines = assignLines(el.text);
+			lines.forEach((line, i) => pen.text(mid, cy + assignLineDy(i, lines.length), line, { size: 10, anchor: 'middle', color: ink }));
 			break;
 		}
 		case 'fb': {

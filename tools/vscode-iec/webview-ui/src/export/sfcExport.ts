@@ -6,7 +6,7 @@
 // a condition). The ACTION bodies follow the chart as an appendix, since a
 // printed chart that names `Fill` is only half the program without them.
 
-import { ASSOC_GAP, G, layoutSfc, normalizeSfc, type SfcModel } from '../sfc.ts';
+import { ASSOC_GAP, fitLabel, G, layoutSfc, normalizeSfc, type SfcModel } from '../sfc.ts';
 import { FAINT, INK, MUTED, Pen, POWER, SHADE, textWidth, mergeBlocks, type Block, type Diagram } from './draw.ts';
 import type { LiveSnapshot } from './live.ts';
 
@@ -49,12 +49,15 @@ export function sfcDiagram(model: SfcModel, live?: LiveSnapshot): Diagram {
 		for (const leg of [...r.legsIn, ...r.legsOut]) pen.line(leg.x, leg.y1, leg.x, leg.y2, { width: 1.8 });
 		pen.line(r.barX1, r.barY, r.barX2, r.barY, { width: 2.6 });
 		if (r.double) pen.line(r.barX1, r.barY + 4, r.barX2, r.barY + 4, { width: 2.6 });
-		const cond = r.t.cond || '…';
+		// Cut short of a stem the label would cross, as the view does
+		// (the layout's condMax / nameMax).
+		const cond = fitLabel(r.t.cond || '…', r.condMax);
+		const shownName = name ? fitLabel(name, r.nameMax) : '';
 		// The view centres the condition on condY+4 (dominant-baseline:
 		// middle); as a plain baseline that sits ~4 px lower.
 		labels.push(() => {
 			pen.text(r.condX, r.condY + 8, cond, { size: 11, color: INK }, true);
-			if (name) pen.text(r.condX, r.condY - 9, name, { size: 10, bold: true }, true);
+			if (shownName) pen.text(r.condX, r.condY - 9, shownName, { size: 10, bold: true }, true);
 			if (r.prio) prio(pen, r.barX1 - 14, r.barY, r.prio);
 		});
 		width = Math.max(width, r.condX + textWidth(cond, 11) + G.MARGIN);
