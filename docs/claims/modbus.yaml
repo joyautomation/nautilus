@@ -390,7 +390,7 @@ claims:
       When the link breaks partway through a flush, the write that broke and
       the ones after it are queued again, and writes answered earlier in
       that flush (confirmed, or with an exception) are not queued again
-      (for a gateway no-answer see MB-052).
+      (for a gateway no-answer see MB-053).
     source: "#writes"
     tests:
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
@@ -693,7 +693,7 @@ claims:
       sending a request. A device closing idle connections is not an
       outage; one that closes and then refuses the reconnect counts once. A silent cut caught only by TCP keepalive
       (about 15 s) is not exercised. Nothing has run on a real device.
-  - id: MB-052
+  - id: MB-053
     claim: >-
       A write the device refuses with an exception (0x02, 0x03, anything
       but 0x0A/0x0B) is dropped, and the same value is not sent again; a
