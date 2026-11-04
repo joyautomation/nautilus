@@ -199,6 +199,16 @@ The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
 trip when nautilus alone stops.
 
+Nor does it trip when nautilus's scan hangs (logic that never returns, a
+driver call that blocks) without `redundancy:`. The driver's own loop
+keeps polling the unit, and those polls feed the watchdog, so the outputs
+hold their last command for as long as the hang lasts. `naut run` gates
+some drivers on live scans in every project, but not this one, because
+it reads any gate as "one replica of a redundant set" (see
+[Redundancy](/guides/redundancy/#redundancy)). With `redundancy:`, a hung
+leader closes its gate and hands over (see [Redundancy](#redundancy)
+below).
+
 ## Holding outputs until an operator acknowledges
 
 Recovery is automatic: when the processor comes back, or after a

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -335,5 +336,60 @@ func TestAResumedTermDoesNotTakeOver(t *testing.T) {
 	rt.Scan()
 	if c := count(); c != 1 {
 		t.Fatalf("Count = %d after a new term, want 1: a new term is a takeover", c)
+	}
+}
+
+// countingStore is a retain store that counts its loads (each takeover
+// loads it once) and saves nothing worth keeping.
+type countingStore struct{ loads atomic.Int64 }
+
+func (s *countingStore) Load() (retain.State, error) { s.loads.Add(1); return retain.State{}, nil }
+func (s *countingStore) Save(retain.State) error     { return nil }
+func (s *countingStore) Kind() string                { return "counting" }
+
+// The dangerous mirror of TestAResumedTermDoesNotTakeOver: the gate closed
+// and opens again in a NEW term (another replica led meanwhile). That is a
+// takeover, never a resume: the retained state is reloaded and the frames
+// reset, or this replica would carry on from state another leader has
+// since moved past.
+func TestANewTermAfterTheGateClosedIsATakeover(t *testing.T) {
+	drv := &hangDriver{}
+	store := &countingStore{}
+	coord := &termFlag{}
+	coord.lead.Store(true)
+	coord.term.Store(1)
+	rt, err := runtime.New(runtime.Options{
+		Program:     resumeProgram,
+		Driver:      drv,
+		Outputs:     []string{"Out"},
+		Seed:        nio.Values{"Out": int64(0), "Count": int64(0)},
+		Scan:        time.Hour,
+		Coordinator: coord,
+		Retain:      store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		rt.Scan()
+	}
+	if n := store.loads.Load(); n != 1 {
+		t.Fatalf("setup: %d retained loads after the first takeover, want 1", n)
+	}
+
+	coord.lead.Store(false)
+	rt.Scan()
+	coord.term.Store(2) // another replica led while this one's gate was closed
+	coord.lead.Store(true)
+	rt.Scan()
+	v, err := rt.Tags().ReadGlobal("Count")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.I != 1 {
+		t.Fatalf("Count = %d after the gate opened in a new term, want 1: the frames were not reset (resumed instead of taking over)", v.I)
+	}
+	if n := store.loads.Load(); n != 2 {
+		t.Fatalf("%d retained loads, want 2: the new term did not reload what the other leader saved", n)
 	}
 }

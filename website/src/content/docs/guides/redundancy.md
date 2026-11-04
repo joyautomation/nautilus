@@ -128,8 +128,14 @@ never computes.
   same lease and opens the gate again: the program carries on where it
   was (no takeover: frames, timers, SFC steps and retained state are
   kept), and the drivers get every output once. Forces are dropped when
-  the gate closes, as on any step-down. Only a lease another replica held
-  in between makes the next opening a takeover.
+  the gate closes, as on any step-down. The scan clock is not zeroed on a
+  resume, unlike a takeover, so the first scan's `dt` spans the stall.
+  Only a lease another replica held in between makes the next opening a
+  takeover.
+- **A lease holder whose gate is closed answers its own API.** The lease
+  still names it, so its leader address is its own: rather than forward a
+  request to itself, it answers reads from its own store and refuses
+  writes with 503 until its gate opens or another replica takes the lease.
 - **Outside a cluster** (no service account), a `redundancy:` manifest
   runs standalone: it is always the leader, with nothing to hand over
   to, except that a hung scan closes its gate: 4 s after the last check

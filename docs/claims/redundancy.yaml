@@ -268,21 +268,33 @@ claims:
       takes the lease. When it completes, the replica renews the same lease
       and opens the gate again without a takeover: frames, timers, SFC steps
       and retained state are kept, and the drivers get every output once.
-      Forces are dropped when the gate closes. Only a lease another replica
-      held in between, or a loss and regain the runtime never saw, makes
-      the next opening a takeover.
+      Forces are dropped when the gate closes. The scan clock is not
+      zeroed on a resume, so the first scan's dt spans the stall. Only a
+      lease another replica held in between, or a loss and regain the
+      runtime never saw, makes the next opening a takeover, which reloads
+      the retained state and resets the frames.
     source: "#redundancy"
     tests:
       - go ./leader TestASlowScanKeepsTheLease
       - go ./leader TestTermMovesOnlyWhenAnotherReplicaMayHaveLed
       - go ./runtime TestAResumedTermDoesNotTakeOver
+      - go ./runtime TestANewTermAfterTheGateClosedIsATakeover
     partial: true
     note: >-
       The leader test ticks 1 ms late on a 1 s lease so the slow scan does
       close the gate, and checks that a plain VAR kept counting (no frame
       reset). Timers and SFC steps are kept by the same skipped
       takeover, not asserted one by one. The forces drop is RED-033's
-      step-down path (forcing.yaml).
+      step-down path (forcing.yaml). The dt after a resume is not asserted.
+
+  - id: RED-038
+    claim: >-
+      A replica the lease names whose gate is closed does not forward its
+      API to the leader's address, which is its own: it answers reads from
+      its own store and refuses writes with 503.
+    source: "#redundancy"
+    tests:
+      - go ./server TestGateClosedLeaseHolderDoesNotProxyToItself
 
   - id: RED-019
     claim: >-
@@ -386,7 +398,10 @@ claims:
       Modbus rewrite: keep-alive). A healthy project sees no difference:
       the gate is open from the start and the runtime is not coordinated
       (no takeover, forces kept). The groov EPIC driver and a Sparkplug
-      host take no gate there.
+      host take no gate there: without redundancy, a hung scan does not
+      stop a groov EPIC's driver from polling the unit, so its polls keep
+      the unit's communication watchdog fed and the outputs hold their
+      last command.
     source: "#redundancy"
     tests:
       - go ./cmd/naut TestNoRedundancyAHungScanStopsTheRewriteKeepAlive
