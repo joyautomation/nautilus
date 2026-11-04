@@ -519,6 +519,7 @@ claims:
       - go ./cmd/naut TestNautRunContinuesWhenOPCUAPortIsTaken
       - go ./cmd/naut TestNautRunShutdownWithOPCUASessionIsPrompt
       - go ./cmd/naut TestNautRunGivesBackTheHTTPPortBeforeSlowStops
+      - go ./cmd/naut TestNautRunStopFreesHTTPPortBeforeLastScan
       - go ./opcua/server TestStartReportsAPortInUse
       - go ./opcua/server TestStopDropsClientsAndRestartReusesThePort
       - go ./opcua/internal/uaserver TestCloseWithSessionOpenIsPrompt

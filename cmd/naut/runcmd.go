@@ -253,8 +253,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// the last scan and the deferred stops above (OPC UA sessions, the
 		// Sparkplug death certificate, a driver's teardown), so a `naut
 		// run` started again meanwhile still gets its port (nautilus#423,
-		// #599). The defer covers the early returns.
-		defer ln.Close()
+		// #599). No defer: nothing returns between here and that close.
 		go func() {
 			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "tag api:", err)
