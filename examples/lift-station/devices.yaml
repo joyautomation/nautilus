@@ -28,7 +28,7 @@ devices:
       - {tag: VfdFault, address: 2000, format: "bit:3", desc: "fault bit of the status word"}
       - {tag: SpeedHz,  address: 2001, format: int16, scale: 0.01, unit: Hz, desc: "actual speed"}
       - {tag: Amps,     address: 2002, format: int16, scale: 0.1, unit: A, desc: "motor current"}
-      - {tag: RunCmd,   address: 2100, format: "bit:0", writable: true, desc: "run command — control word bit 0"}
+      - {tag: RunCmd,   address: 2100, format: "bit:0", writable: true, init: false, desc: "run command — control word bit 0"}
       - {tag: SpeedCmd, address: 2101, format: int16, scale: 0.01, writable: true, rewrite: 1s, init: 0.0, unit: Hz, desc: "speed command"}
   rio:
     description: remote I/O — wet-well instruments and pump-skid contacts

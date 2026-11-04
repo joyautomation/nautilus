@@ -50,6 +50,17 @@ type Config struct {
 	// the pair as: RebirthOnStart || !NoRebirthOnStart.
 	NoRebirthOnStart bool
 
+	// NoRebirthRequests turns off every NCMD Node Control/Rebirth this host
+	// sends: at connect, on reconnect, on data before a birth, after an
+	// unfilled sequence gap, on an unknown alias, on a stale node, and the
+	// operator's RequestRebirth and <site>__Rebirth. Sparkplug 3.0 §5 ("Host
+	// Application Receive Data") lets any host application send rebirths
+	// and says whether it does "is often reasonable" to make configurable.
+	// The host still adopts the births it did not ask for. With Primary
+	// false as well, the host publishes nothing at all, so it can run on a
+	// read-only broker account. Zero value: requests on.
+	NoRebirthRequests bool
+
 	// Leader reports whether this replica currently holds leadership. It gates
 	// the STATE birth/death publish and every outbound NCMD/DCMD, so a standby
 	// under `redundancy:` never publishes STATE online — its LWT would
@@ -520,6 +531,10 @@ type nodeState struct {
 	// rebirthAsked (B2) debounces rebirth requests to one per birth cycle:
 	// set when the state machine asks, cleared by the next NBIRTH.
 	rebirthAsked bool
+	// aliasMiss marks a node that sent an alias its birth never defined:
+	// its alias table is out of step, so its data reads Stale until the
+	// next NBIRTH clears it.
+	aliasMiss bool
 	// metrics counts the node-level metrics the last birth carried.
 	metrics int
 	// stale marks a node silent for longer than StaleAfter.

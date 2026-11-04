@@ -9,6 +9,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
@@ -96,7 +97,7 @@ func startServer(t *testing.T, rt *runtime.Runtime) (*Server, *opcua.Client) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Connect(ctx); err != nil {
+	if err := gopcuatest.Connect(ctx, c); err != nil {
 		t.Fatalf("connect %s: %v", s.URL(), err)
 	}
 	t.Cleanup(func() {

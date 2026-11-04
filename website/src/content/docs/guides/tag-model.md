@@ -101,7 +101,7 @@ END_PROGRAM
 - **`PumpRun` is an `output`.** The program writes it and the driver sends
   it to the starter. The program also reads it back (the seal-in), so it
   has an `init:`; without one, the first scan stops with `undefined tag
-  PumpRun`.
+  PumpRun`, and `naut check` reports it on the tag's line before you run.
 - **`StartLevel` and `StopLevel` are `setpoint`s.** The operator tunes
   them: `POST /api/tags` with `{"name": "StartLevel", "value": 65}`, or a
   click in the dashboard. The `retain:` section keeps the 65 across a
@@ -137,8 +137,13 @@ The one rule that bites: **writes create, reads fault.** Reading a tag
 nobody has ever written stops the scan with `undefined tag <name>` —
 deliberately, so a mis-wired binding fails loudly instead of running on a
 silent zero. The classic trap is a seal-in latch that *reads its own coil*
-on scan one, before the first write; the fix is a seed. (In the FBD
-diagram, with live values on, externals with no backing tag are flagged —
+on scan one, before the first write; the fix is a seed, and `naut check`
+reports an output with no `init:` that a program can read before it writes
+it: an error when some path through the scan reaches the read first, a
+warning when only a loop that may run zero times writes it first. A
+program's own earlier write counts, including one made inside a function
+block or function it calls; another task's does not, since tasks start
+together. (In the FBD diagram, with live values on, externals with no backing tag are flagged —
 an amber *no tag* badge in the vars panel and on any chip that reads one —
 so you see this before the download, not after.)
 
@@ -598,12 +603,23 @@ Two consequences are worth knowing about:
 
 **`WriteOutputs` is a push of changes, not a per-scan heartbeat.** The
 runtime calls it on the first scan, on any scan where an output tag's value
-differs from the one it last handed over, after a failed write, and after a
-redundancy takeover — and skips it otherwise. Every driver in tree already
+differs from the one it last handed over, after a failed write, after a
+redundancy takeover, and on a scan where the driver asked for the outputs
+— and skips it otherwise. Every driver in tree already
 reduced the call to that internally; now the call itself is skipped. A
 driver that genuinely needs a per-scan call — a watchdog to re-arm, a bus
 whose outputs decay without a rewrite — asks for one with
 `runtime.Options{AlwaysWriteOutputs: true}`.
+
+**A driver that forgot a command asks for the outputs.** A driver that
+diffs against what it last sent cannot get a value back the runtime no
+longer hands over: a write a gateway could not deliver, or a command its
+write gate dropped, would wait for that output to change. Such a driver
+implements `io.OutputsRequester` — `OutputsWanted() bool`, true once after
+it forgot something — and the runtime, which asks on every scan, hands it
+every output on the scan where it says yes. A push made anyway answers the request too.
+`io.Multi` asks every child and pushes once for all of them. Asking is
+one call per scan; nothing else runs unless the answer is yes.
 
 **A driver can skip the per-scan input map.** `ReadInputs` returns a fresh
 `io.Values` every scan; on a driver with thousands of bindings that is tens
