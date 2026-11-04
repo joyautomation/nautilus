@@ -253,13 +253,18 @@ the site already reports that value.**
 An operator who dials a setpoint on a site showing `__Online: false` has
 still asked for something, and the ask outlives the outage: the write is
 held per site (the latest value per tag, up to 256 tags) and delivered on
-that site's next `NBIRTH`, or for a device's tag on that device's next
-`DBIRTH` — after the birth has settled what the site actually holds. A
-newer command that goes out in the meantime replaces the held one. If the site comes back already at the commanded
-value, the command is satisfied and nothing goes on the wire; if it comes
-back at anything else, one command goes out, and only for the members the
+that site's next `NBIRTH` — after the birth has settled what the site
+actually holds. If the site comes back already at the commanded value,
+the command is satisfied and nothing goes on the wire; if it comes back
+at anything else, one command goes out, and only for the members the
 operator touched. Write twice while the site is down and the second value
 is what lands, because that is what the operator asked for last.
+
+A device works the same way. A command for a dark device is held even
+when its node is online, and goes out on that device's next `DBIRTH`. A
+device is dark after its `DDEATH`, after its node's death, and after a
+node rebirth until its own `DBIRTH`. A device the host has never seen
+birth is not dark: its commands go out with the node's.
 
 `Status` counts both halves: `WriteQueued` is how many commands have been
 parked, `QueuedWrites` how many are waiting *right now* (per site in

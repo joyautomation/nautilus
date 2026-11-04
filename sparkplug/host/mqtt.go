@@ -360,26 +360,42 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 // subscribe issues the whole subscription set, literal STATE first. Six
 // filters per group, preferred over spBv1.0/<group>/#, which would echo our
 // own NCMD/DCMD back and pull in other hosts' retained STATE.
+//
+// The group filters go in ONE SUBSCRIBE, so they take effect together:
+// messages are not applied until the session is subscribed (sessionDown),
+// and filter-by-filter subscribing would leave a window in which, say, an
+// NDEATH on an already-subscribed filter is delivered and dropped.
 func (d *Driver) subscribe(cli mqtt.Client) error {
-	filters := []string{stateTopic(d.cfg.HostID)}
-	for _, g := range d.groups {
-		filters = append(filters,
-			"spBv1.0/"+g+"/NBIRTH/+",
-			"spBv1.0/"+g+"/NDEATH/+",
-			"spBv1.0/"+g+"/NDATA/+",
-			"spBv1.0/"+g+"/DBIRTH/+/+",
-			"spBv1.0/"+g+"/DDEATH/+/+",
-			"spBv1.0/"+g+"/DDATA/+/+",
-		)
+	state := stateTopic(d.cfg.HostID)
+	if err := waitSubscribe(cli.Subscribe(state, 1, nil), state); err != nil {
+		return err
 	}
-	for _, f := range filters {
-		tok := cli.Subscribe(f, 1, nil)
-		if !tok.WaitTimeout(tokenTimeout) {
-			return fmt.Errorf("host: subscribe %s timed out", f)
+	filters := map[string]byte{}
+	for _, g := range d.groups {
+		for _, f := range []string{
+			"spBv1.0/" + g + "/NBIRTH/+",
+			"spBv1.0/" + g + "/NDEATH/+",
+			"spBv1.0/" + g + "/NDATA/+",
+			"spBv1.0/" + g + "/DBIRTH/+/+",
+			"spBv1.0/" + g + "/DDEATH/+/+",
+			"spBv1.0/" + g + "/DDATA/+/+",
+		} {
+			filters[f] = 1
 		}
-		if err := tok.Error(); err != nil {
-			return fmt.Errorf("host: subscribe %s: %w", f, err)
-		}
+	}
+	if len(filters) == 0 {
+		return nil
+	}
+	return waitSubscribe(cli.SubscribeMultiple(filters, nil), "the group filters")
+}
+
+// waitSubscribe waits for one SUBSCRIBE's SUBACK.
+func waitSubscribe(tok mqtt.Token, what string) error {
+	if !tok.WaitTimeout(tokenTimeout) {
+		return fmt.Errorf("host: subscribe %s timed out", what)
+	}
+	if err := tok.Error(); err != nil {
+		return fmt.Errorf("host: subscribe %s: %w", what, err)
 	}
 	return nil
 }
@@ -730,7 +746,9 @@ func (d *Driver) flushWrites() {
 				"tag", name, "node", b.Node)
 			continue
 		}
-		if !d.nodeOnline(b.Node) {
+		if !d.reachable(b.Node, b.Device) {
+			// A dark node, or a dark device on a live node (DDEATH, or a
+			// rebirth before its DBIRTH): park it until the birth.
 			if hold[b.Node] == nil {
 				hold[b.Node] = map[string]any{}
 			}
@@ -892,9 +910,9 @@ func (d *Driver) markWritten(name string, v any) {
 	d.initWriteMapsLocked()
 	d.lastOut[name] = v
 	d.remote[name] = v
-	// A command that went out supersedes one parked for the same tag (a
-	// device's command waits for its DBIRTH while its node is already
-	// online, so a newer write can overtake it).
+	// A command that went out supersedes one parked for the same tag. A
+	// newer write to a dark device is parked in its place instead, so this
+	// is a safety net for a write that raced the device's birth.
 	if b, ok := d.byName[name]; ok {
 		delete(d.queued[b.Node], name)
 	}
@@ -954,9 +972,9 @@ func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
 }
 
 // releaseQueued delivers the commands parked for one edge node, now that it
-// has birthed. A device's command waits for that device's DBIRTH as well:
-// the NBIRTH comes first and darks every device until its own birth, and
-// only the DBIRTH says what the device holds. It is called from the inbound
+// has birthed. A dark device's command waits for that device's DBIRTH as
+// well (see reachable): the NBIRTH comes first and darks every device until
+// its own birth, and only the DBIRTH says what the device holds. It is called from the inbound
 // path with NEITHER lock held —
 // the same discipline flushAdopts documents, and for the same reason: wmu and
 // d.mu are never nested in this package.
@@ -984,7 +1002,7 @@ func (d *Driver) releaseQueued(edge string) {
 	q := d.queued[edge]
 	sent, settled := 0, 0
 	for name, v := range q {
-		if dev := d.byName[name].Device; dev != "" && !devices[dev] {
+		if deviceDark(devices, d.byName[name].Device) {
 			continue // stays parked until this device's DBIRTH
 		}
 		delete(q, name)
@@ -1055,6 +1073,24 @@ func (d *Driver) flushAdopts() {
 		d.remote[a.name] = a.value
 	}
 	d.wmu.Unlock()
+}
+
+// reachable reports whether a command for this node (device "") or device
+// can be delivered now: the node is online and the device is not dark. A
+// device is dark once the host has seen it and it is not online: a DDEATH,
+// its node's death, or a node rebirth before its DBIRTH. A device the host
+// has never seen is not dark (the host cannot tell it apart from one that
+// is not there), so its command goes out with the node's. releaseQueued
+// applies the same rule. Takes d.mu alone.
+func (d *Driver) reachable(edge, device string) bool {
+	devices, online := d.onlineDevices(edge)
+	return online && !deviceDark(devices, device)
+}
+
+// deviceDark is reachable's device half, over onlineDevices' map.
+func deviceDark(devices map[string]bool, device string) bool {
+	on, seen := devices[device]
+	return device != "" && seen && !on
 }
 
 // onlineDevices reports whether an edge node is online and, if it is, which

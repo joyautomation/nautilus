@@ -199,13 +199,16 @@ claims:
   - id: SPH-022
     claim: >-
       A command to a dark site is held (the latest value per tag) and
-      delivered once on the site's next NBIRTH, or for a device's tag on
-      that device's next DBIRTH, after the birth has settled what the site
-      holds. A newer command that goes out meanwhile replaces it.
+      delivered once on the site's next NBIRTH, after the birth has settled
+      what the site holds. A command for a dark device (after its DDEATH,
+      its node's death, or a node rebirth before its DBIRTH) is held the
+      same way even while its node is online, and delivered on the
+      device's next DBIRTH; a newer command for it replaces the held one.
     source: "#writes-to-a-site-that-is-down"
     tests:
       - go ./sparkplug/host TestParkedDeviceCommandWaitsForItsDBIRTH
-      - go ./sparkplug/host TestNewerCommandSupersedesAParkedOne
+      - go ./sparkplug/host TestCommandToADarkDeviceOnALiveNodeIsParked
+      - go ./sparkplug/host TestNewerCommandReplacesAParkedOne
       - go ./sparkplug/host TestMqttWriteToOfflineNodeIsQueued
       - go ./sparkplug/host TestMqttQueuedWriteIsDeliveredOnBirth
       - go ./sparkplug/host TestEdgeToHostQueuedWriteReachesAWokenSite

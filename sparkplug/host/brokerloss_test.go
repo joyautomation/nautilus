@@ -376,9 +376,25 @@ func TestParkedDeviceCommandWaitsForItsDBIRTH(t *testing.T) {
 	}
 }
 
-// A newer command that goes out while the device is still dark supersedes
-// the parked one, which must not follow it at the DBIRTH.
-func TestNewerCommandSupersedesAParkedOne(t *testing.T) {
+// waitQueuedOnW6 waits for W6 to carry n parked commands.
+func waitQueuedOnW6(t *testing.T, host *Driver, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		nodes := host.Status().Nodes
+		if len(nodes) == 1 && nodes[0].QueuedWrites == n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("W6 QueuedWrites never reached %d: %+v", n, nodes)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A newer command for a dark device replaces the parked one instead of
+// going out to the device, and only the newer value goes out at the DBIRTH.
+func TestNewerCommandReplacesAParkedOne(t *testing.T) {
 	srv, addr := startBroker(t, "")
 	t.Cleanup(func() { _ = closeBroker(srv) })
 	host := startHostDriver(t, testManifest(), testConfig(addr, "h-supersede"))
@@ -390,15 +406,52 @@ func TestNewerCommandSupersedesAParkedOne(t *testing.T) {
 	if err := host.WriteOutputs(map[string]any{"W6_PLC1_Pump_SpeedSP": 44.0}); err != nil {
 		t.Fatal(err)
 	}
-	waitCmd(t, get, "the newer DCMD", "spBv1.0/G/DCMD/W6/PLC1")
+	time.Sleep(300 * time.Millisecond)
+	if got := speedSPs(t, get); len(got) != 0 {
+		t.Fatalf("a command for the dark PLC1 went out before its DBIRTH: %v", got)
+	}
+	waitQueuedOnW6(t, host, 1)
 
 	publishPayload(t, edge, "spBv1.0/G/DBIRTH/W6/PLC1", data(1, boolean("Pump/Run", true)))
-	waitForValue(t, host, "W6_PLC1__Online", func(v any) bool { return v == true })
-	time.Sleep(400 * time.Millisecond)
+	waitCmd(t, get, "the newer DCMD after the DBIRTH", "spBv1.0/G/DCMD/W6/PLC1")
+	time.Sleep(300 * time.Millisecond)
 	if got := speedSPs(t, get); len(got) != 1 || got[0] != 44.0 {
-		t.Fatalf("DCMD Pump/SpeedSP values = %v, want [44] (the parked 33 is superseded)", got)
+		t.Fatalf("DCMD Pump/SpeedSP values = %v, want [44] (44 replaced the parked 33)", got)
 	}
-	if n := host.Status().Nodes[0].QueuedWrites; n != 0 {
-		t.Errorf("QueuedWrites = %d after the DBIRTH, want 0", n)
+	waitQueuedOnW6(t, host, 0)
+}
+
+// A command for a device that died (DDEATH) while its node stayed online is
+// parked like a command for a dark node, and goes out at the device's next
+// DBIRTH. Sent at once it would reach nothing, and the DBIRTH (carrying the
+// device's own value) would leave the operator's command lost.
+func TestCommandToADarkDeviceOnALiveNodeIsParked(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = closeBroker(srv) })
+	host := startHostDriver(t, testManifest(), testConfig(addr, "h-dark-device"))
+	waitConnected(t, host)
+	get := cmdObserver(t, addr, "spBv1.0/G/DCMD/+/+")
+	edge := edgePublisher(t, addr, "edge-dark-device")
+	birthW6AndPLC1(t, host, edge, 1)
+	baselineScan(t, host)
+
+	publishPayload(t, edge, "spBv1.0/G/DDEATH/W6/PLC1", data(2))
+	waitForValue(t, host, "W6_PLC1__Online", func(v any) bool { return v == false })
+	if err := host.WriteOutputs(map[string]any{"W6_PLC1_Pump_SpeedSP": 55.0}); err != nil {
+		t.Fatal(err)
 	}
+	time.Sleep(300 * time.Millisecond)
+	if got := speedSPs(t, get); len(got) != 0 {
+		t.Fatalf("the command for the dead PLC1 went out at once: %v", got)
+	}
+	waitQueuedOnW6(t, host, 1)
+
+	publishPayload(t, edge, "spBv1.0/G/DBIRTH/W6/PLC1",
+		data(3, boolean("Pump/Run", true), dbl("Pump/SpeedSP", 10)))
+	waitCmd(t, get, "the parked DCMD after the DBIRTH", "spBv1.0/G/DCMD/W6/PLC1")
+	time.Sleep(300 * time.Millisecond)
+	if got := speedSPs(t, get); len(got) != 1 || got[0] != 55.0 {
+		t.Fatalf("DCMD Pump/SpeedSP values = %v, want [55]", got)
+	}
+	waitQueuedOnW6(t, host, 0)
 }
