@@ -33,6 +33,73 @@ type DivZeroCounter interface {
 	DivZero()
 }
 
+// MemberWriter is an optional Host extension. An assignment that reaches
+// into a global (`S.Speed := 60`, `Tbl[3] := 0`, `Line.Steps[2].Mode :=
+// Run`) is a read-modify-write of the whole aggregate, because the host
+// holds whole tags. A host that implements MemberWriter is handed the new
+// whole value together with the path the program actually assigned, so it
+// can land only that part and leave every other member as whatever it
+// holds by then (#578: an external write to a sibling member that arrives
+// mid-scan must not be overwritten by the program's stale copy). A host
+// without it gets the whole value through WriteGlobal, as before, and so
+// does any host for a path deeper than MaxMemberDepth.
+type MemberWriter interface {
+	WriteGlobalMember(name string, whole Value, path MemberPath) error
+}
+
+// MaxMemberDepth is the deepest member path a MemberWriter is handed; an
+// assignment deeper than this is reported as a write of the whole global.
+const MaxMemberDepth = 16
+
+// MemberPath is the part of a global an assignment reached into, as a
+// sequence of steps from the root: a struct member or a function-block pin
+// (field, by index) or an array element (by 0-based offset into Arr, the
+// declared lower bound already taken off), and, for an assignment to part
+// of an integer — a bit (`S.Word.3 := TRUE`, `W.3 := TRUE`) or an IEC
+// partial access (`W.%B1 := 16#FF`) — the bits of that integer it set
+// (Bits). A path with no steps and Bits set is part of a global integer
+// itself. It is a plain value, with no pointers, so handing one to a host
+// costs no allocation.
+type MemberPath struct {
+	n     int
+	idx   [MaxMemberDepth]int32
+	field uint16 // bit i: step i is a field
+	bits  uint64 // non-zero: only these bits of the integer at the path
+}
+
+// memberPath converts writeLValue's leaf-first chain; ok is false when the
+// chain is deeper than MaxMemberDepth.
+func memberPath(chain []accessor) (p MemberPath, ok bool) {
+	if len(chain) > MaxMemberDepth {
+		return p, false
+	}
+	p.n = len(chain)
+	for i := range chain {
+		a := chain[len(chain)-1-i]
+		if a.isField {
+			p.idx[i] = int32(a.fieldIdx)
+			p.field |= 1 << uint(i)
+		} else {
+			p.idx[i] = int32(a.arrIdx)
+		}
+	}
+	return p, true
+}
+
+// Len is the number of steps below the root.
+func (p MemberPath) Len() int { return p.n }
+
+// Step returns the i-th step below the root (0 = the root's own member or
+// element): its index, and whether it is a field (else an array element).
+func (p MemberPath) Step(i int) (index int, field bool) {
+	return int(p.idx[i]), p.field&(1<<uint(i)) != 0
+}
+
+// Bits is the mask of the bits the assignment set in the integer the path
+// ends at (bit i of the integer is bit i of the mask), or 0 when it
+// assigned that value whole.
+func (p MemberPath) Bits() uint64 { return p.bits }
+
 func isZeroDivisor(v Value) bool {
 	if v.Kind == TypeReal {
 		return v.F == 0
@@ -276,6 +343,13 @@ type accessor struct {
 }
 
 func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
+	return writeLValueBits(ctx, lv, v, 0)
+}
+
+// writeLValueBits is writeLValue for a value of which only bits were
+// assigned (0: all of it). A global reports them to a MemberWriter host, so
+// a bit write does not count as a write of the whole word.
+func writeLValueBits(ctx *EvalCtx, lv LValue, v Value, bits uint64) error {
 	// A bit of an integer: read the word, set or clear the bit, write the
 	// word back through whatever lvalue it is.
 	if b, ok := lv.(*BitRef); ok {
@@ -283,18 +357,21 @@ func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
 		if err != nil {
 			return err
 		}
+		m := b.mask()
 		if b.Width > 1 {
-			m := b.mask()
 			word.I = word.I&^(m<<uint(b.Bit)) | (v.I&m)<<uint(b.Bit)
-			return writeLValue(ctx, b.Object, word)
-		}
-		mask := int64(1) << uint(b.Bit)
-		if v.B {
-			word.I |= mask
+		} else if v.B {
+			word.I |= m << uint(b.Bit)
 		} else {
-			word.I &^= mask
+			word.I &^= m << uint(b.Bit)
 		}
-		return writeLValue(ctx, b.Object, word)
+		// The bits set in the word: the part's, or, for a bit of a part
+		// (w.%B1.3), the bits the outer write set within the part.
+		part := uint64(m)
+		if bits != 0 {
+			part &= bits
+		}
+		return writeLValueBits(ctx, b.Object, word, part<<uint(b.Bit))
 	}
 	// Collect accessors while descending to the root slot / global.
 	// The chain is built leaf-first and applied root-first below.
@@ -306,6 +383,11 @@ func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
 			return storeAtRoot(&ctx.Frame.Slots[n.Slot], chain, v)
 		case *GlobalRef:
 			if len(chain) == 0 {
+				if bits != 0 {
+					if mw, ok := ctx.Host.(MemberWriter); ok {
+						return mw.WriteGlobalMember(n.Name, v, MemberPath{bits: bits})
+					}
+				}
 				return ctx.Host.WriteGlobal(n.Name, CopyValue(v))
 			}
 			// Reaching into a field/element of a global: the tag store holds
@@ -319,6 +401,12 @@ func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
 			cur = CopyValue(coerceValue(cur, n.T))
 			if err := storeAtRoot(&cur, chain, v); err != nil {
 				return fmt.Errorf("assign to %s: %w", n.Name, err)
+			}
+			if mw, ok := ctx.Host.(MemberWriter); ok {
+				if p, ok := memberPath(chain); ok {
+					p.bits = bits
+					return mw.WriteGlobalMember(n.Name, cur, p)
+				}
 			}
 			return ctx.Host.WriteGlobal(n.Name, cur)
 		case *IndexRef:

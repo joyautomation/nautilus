@@ -216,6 +216,24 @@ another attribute stays `Bad_NotWritable` for everyone.
   in progress runs on its own snapshot and does not see it; the next scan does
   (`runtime/scanview.go:9-28`). If a program writes the same tag, its commit wins, last
   writer first.
+
+  **Changed 2026-11-03 (#578, James: member-level merge).** The commit used to store the
+  program's whole copy of a struct tag, so a client's write to one member that landed
+  mid-scan was put back to the scan-start value whenever the program assigned any other
+  member of that tag (a throwaway test lost 8 of 200). Now the VM tells the scan which
+  member path each assignment reached (`ir.MemberWriter`), the scan keeps a per-tag write
+  mask, and the commit lands only the assigned members onto the store's current value
+  (`runtime/membermerge.go`). The same-member rule is the scalar one: a member the program
+  assigned this scan takes the program's value, even when it assigned the value it already
+  had; assigning a whole member or the whole tag assigns everything beneath it.
+  **Changed 2026-11-04 (James):** a bit assigns only its bit, not its word. The VM reports
+  the bits it set (`ir.MemberPath.Bits`), and the commit lands them into the stored word
+  (`stored &^ mask | program & mask`), so a client's write to another bit of that word in
+  the same scan survives; assigning the word itself still assigns every bit. OPC UA has no
+  node for one bit, so a client writes the whole word, and the bits the program did not
+  assign keep the client's value. Recorded by assignment rather than by diffing against the snapshot,
+  which could not see an assignment of an unchanged value. A tag nobody wrote since the
+  snapshot (by store generation) still commits whole, with no merge and no allocation.
 - **Retain.** A write to a setpoint persists because the default retained set is every
   setpoint (`runtime/runtime.go:454-464`), saved within 2 s (`runtime.go:58-62`). Nothing
   new is needed.
