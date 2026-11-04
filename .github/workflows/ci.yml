@@ -27,8 +27,9 @@ jobs:
           go test -json -coverprofile=evidence/cover.out ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
       # Every benchmark once, so one that no longer compiles its own program
-      # fails here rather than when someone next profiles (#612). A few
-      # seconds; the numbers are not kept.
+      # fails here rather than when someone next profiles (#612). The test
+      # step above has already built the packages, so this adds little (15-35 s
+      # from a cold cache); the numbers are not kept.
       - name: benchmarks compile and run (1 iteration)
         run: go test -run '^$' -bench . -benchtime 1x ./...
       # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
