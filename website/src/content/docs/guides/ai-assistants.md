@@ -65,7 +65,11 @@ writes Structured Text, which is valid and hard to read:
 The file is short, because an agent reads it on every turn:
 
 - **Checking work:** `naut check` after every edit, warnings treated as
-  bugs, and `naut test` for any change in behavior.
+  bugs, and `naut test` for any change in behavior. Most of the diagram
+  rules below are also [structure warnings](/reference/structure-warnings/)
+  that `naut check` reports by ID (`LD001`, `FBD002`, `SFC001`), and the
+  file tells the agent to fix the diagram rather than silence one with an
+  `@allow` pragma.
 - **Project layout** and the **tag model**: roles, an `init:` and a `desc:`
   on every tag, one writer per tag, and no `VAR` declarations that shadow
   a manifest tag.
