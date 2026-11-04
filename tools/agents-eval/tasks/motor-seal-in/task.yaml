@@ -1,0 +1,6 @@
+title: Motor start/stop seal-in with overload
+level: beginner
+# Each language here must be the language of at least one program the
+# manifest runs as a task; the hidden tests only see tags, so this is what
+# stops "write it in ladder" from being answered in ST.
+languages: [ld]

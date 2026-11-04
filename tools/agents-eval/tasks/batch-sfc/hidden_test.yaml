@@ -1,0 +1,94 @@
+# Hidden acceptance tests for batch-sfc. Start and abort are pulsed (held
+# 300 ms, then released), as a person presses a button.
+tests:
+  - name: idle with everything off
+    given: { LT101_Level: 0.0 }
+    advance: 2s
+    always: { XV101_Open: false, M101_Run: false, XV102_Open: false, FillTimeout: false }
+
+  - name: a full batch fills, mixes 30 s, drains and is counted
+    steps:
+      - given: { LT101_Level: 10.0, StartPB: true }
+        advance: 300ms
+      - given: { StartPB: false }
+        advance: 1s
+        expect: { XV101_Open: true, M101_Run: false, XV102_Open: false }
+      - given: { LT101_Level: 85.0 }
+        advance: 500ms
+        expect: { XV101_Open: false, M101_Run: true, XV102_Open: false }
+      - advance: 28s                       # about 28.5 s into the mix
+        expect: { M101_Run: true, XV102_Open: false }
+      - advance: 3s                        # about 31.5 s: draining
+        expect: { M101_Run: false, XV102_Open: true, XV101_Open: false }
+      - given: { LT101_Level: 3.0 }
+        advance: 1s
+        expect: { XV102_Open: false, XV101_Open: false, M101_Run: false, BatchCount: 1, FillTimeout: false }
+      - advance: 5s                        # back in idle, no restart without a press
+        expect: { XV101_Open: false, BatchCount: 1 }
+
+  - name: a slow fill times out into the drain
+    steps:
+      - given: { LT101_Level: 10.0, StartPB: true }
+        advance: 300ms
+      - given: { StartPB: false }
+        advance: 58s
+        expect: { XV101_Open: true, FillTimeout: false }
+      - advance: 3s                        # past 60 s
+        expect: { XV101_Open: false, XV102_Open: true, FillTimeout: true, M101_Run: false }
+      - given: { LT101_Level: 2.0 }
+        advance: 1s
+        expect: { XV102_Open: false, FillTimeout: true, BatchCount: 0 }
+      - given: { StartPB: true }           # the next start clears the alarm
+        advance: 300ms
+      - given: { StartPB: false }
+        advance: 1s
+        expect: { FillTimeout: false, XV101_Open: true }
+
+  - name: abort while filling drains without counting
+    steps:
+      - given: { LT101_Level: 40.0, StartPB: true }
+        advance: 300ms
+      - given: { StartPB: false }
+        advance: 1s
+        expect: { XV101_Open: true }
+      - given: { AbortPB: true }
+        advance: 300ms
+      - given: { AbortPB: false }
+        advance: 500ms
+        expect: { XV101_Open: false, XV102_Open: true, M101_Run: false }
+      - given: { LT101_Level: 1.0 }
+        advance: 1s
+        expect: { XV102_Open: false, BatchCount: 0 }
+
+  - name: abort while mixing drains without counting
+    steps:
+      - given: { LT101_Level: 85.0, StartPB: true }
+        advance: 300ms
+      - given: { StartPB: false }
+        advance: 5s
+        expect: { M101_Run: true }
+      - given: { AbortPB: true }
+        advance: 300ms
+      - given: { AbortPB: false }
+        advance: 500ms
+        expect: { M101_Run: false, XV102_Open: true }
+      - given: { LT101_Level: 1.0 }
+        advance: 1s
+        expect: { XV102_Open: false, BatchCount: 0 }
+
+  - name: two batches count two
+    steps:
+      - given: { LT101_Level: 85.0, StartPB: true }
+        advance: 300ms
+      - given: { StartPB: false }
+        advance: 32s
+      - given: { LT101_Level: 2.0 }
+        advance: 1s
+        expect: { BatchCount: 1 }
+      - given: { LT101_Level: 85.0, StartPB: true }
+        advance: 300ms
+      - given: { StartPB: false }
+        advance: 32s
+      - given: { LT101_Level: 2.0 }
+        advance: 1s
+        expect: { BatchCount: 2, XV102_Open: false }

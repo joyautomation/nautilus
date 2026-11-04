@@ -1,0 +1,56 @@
+PROGRAM Batch
+(* Mixing tank batch: fill, mix 30 s, drain. An abort or a fill timeout
+   drains without counting the batch. *)
+SFC
+  INITIAL_STEP Idle:
+  END_STEP
+
+  STEP Fill (MAXTIME := T#60S):
+    R FillTimeout;
+    N XV101_Open;
+  END_STEP
+
+  STEP Mix:
+    N M101_Run;
+  END_STEP
+
+  STEP Drain:
+    N XV102_Open;
+    P0 CountBatch;
+  END_STEP
+
+  STEP AbortDrain:
+    N XV102_Open;
+  END_STEP
+
+  STEP TimeoutDrain:
+    S FillTimeout;
+    N XV102_Open;
+  END_STEP
+
+  TRANSITION t_start FROM Idle TO Fill := StartPB;
+  END_TRANSITION
+
+  (* abort and timeout first: declaration order is priority *)
+  TRANSITION t_fill_abort FROM Fill TO AbortDrain := AbortPB;
+  END_TRANSITION
+  TRANSITION t_fill_timeout FROM Fill TO TimeoutDrain := Fill.ERR;
+  END_TRANSITION
+  TRANSITION t_full FROM Fill TO Mix := LT101_Level >= FullSP;
+  END_TRANSITION
+
+  TRANSITION t_mix_abort FROM Mix TO AbortDrain := AbortPB;
+  END_TRANSITION
+  TRANSITION t_mixed FROM Mix TO Drain := Mix.T >= T#30S;
+  END_TRANSITION
+
+  TRANSITION t_empty FROM Drain TO Idle := LT101_Level <= EmptySP;
+  END_TRANSITION
+  TRANSITION t_abort_empty FROM AbortDrain TO Idle := LT101_Level <= EmptySP;
+  END_TRANSITION
+  TRANSITION t_timeout_empty FROM TimeoutDrain TO Idle := LT101_Level <= EmptySP;
+  END_TRANSITION
+
+  ACTION CountBatch: BatchCount := BatchCount + 1; END_ACTION
+END_SFC
+END_PROGRAM

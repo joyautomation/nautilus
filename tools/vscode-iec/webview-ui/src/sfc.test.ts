@@ -21,7 +21,9 @@ import {
 	priorities,
 	moveTransitionOp,
 	navigate,
-	type SfcModel
+	type SfcModel,
+	type TransRoute,
+	fitLabel
 } from './sfc.ts';
 
 // A minimal linear chart: Idle -> Fill -> Drain -> Idle (a back edge).
@@ -597,4 +599,102 @@ test('layoutSfc: an alternative branch and a join sharing its source get separat
 	assert.ok(!join.jump && !ov.jump);
 	assert.ok(Math.abs(join.barY - ov.barY) >= 20, `bars at ${join.barY} and ${ov.barY} overlap`);
 	assert.ok(join.barY < ov.barY, 'the higher priority (declared first) on top');
+});
+
+// #563: a loop-back's name (drawn above its glyph) must clear the step box
+// above it, and a second loop back out of the same step stacks below the first.
+test('layoutSfc: a jump-back glyph clears its step box and stacked jumps do not share a row', () => {
+	const model = {
+		name: 'Loop',
+		vars: [],
+		steps: [
+			{ id: 'st:Idle', name: 'Idle', initial: true, line: 1, endLine: 2 },
+			{ id: 'st:Run', name: 'Run', initial: false, line: 3, endLine: 4 }
+		],
+		trans: [
+			{ id: 'tr:1', name: 't_go', from: ['Idle'], to: ['Run'], cond: 'Go', kind: 'normal', line: 5, endLine: 6 },
+			{ id: 'tr:2', name: 't_back', from: ['Run'], to: ['Idle'], cond: 'Done', kind: 'normal', line: 7, endLine: 8 },
+			{ id: 'tr:3', name: 't_abort', from: ['Run'], to: ['Idle'], cond: 'Abort', kind: 'normal', line: 9, endLine: 10 }
+		],
+		actions: []
+	} as unknown as SfcModel;
+	const lay = layoutSfc(model);
+	const run = lay.steps.find((p) => p.id === 'st:Run')!;
+	const jumps = lay.trans.filter((r) => r.jump).map((r) => r.jump!);
+	assert.equal(jumps.length, 2);
+	// The name is drawn at y-12 (10px text, middle baseline): its top edge is ~y-17.
+	for (const j of jumps) assert.ok(j.y - 17 >= run.y + run.h, `jump at ${j.y} puts its name over the step box (bottom ${run.y + run.h})`);
+	// 12px of name row + 18px of glyph: rows closer than 30px would collide.
+	assert.ok(Math.abs(jumps[1].y - jumps[0].y) >= 30, 'stacked jumps must not share a row');
+	assert.ok(lay.height >= Math.max(...jumps.map((j) => j.y)) + 9, 'the canvas must reach the lowest jump');
+});
+
+// #571: a chain Idle -> S1 -> S2 whose S1 also loops back to Idle `backs`
+// times; S1 has `actions` action associations.
+function loopModel(backs: number, actions: number, backName = (i: number) => `t_back${i}`): SfcModel {
+	const trans = [
+		{ id: 'tr:1', name: 't1', from: ['Idle'], to: ['S1'], cond: 'Go', kind: 'normal', line: 1, endLine: 1 },
+		{ id: 'tr:2', name: 't2', from: ['S1'], to: ['S2'], cond: 'Go', kind: 'normal', line: 2, endLine: 2 }
+	];
+	for (let i = 0; i < backs; i++) trans.push({ id: `tr:b${i}`, name: backName(i), from: ['S1'], to: ['Idle'], cond: 'Abort', kind: 'normal', line: 3 + i, endLine: 3 + i });
+	return {
+		name: 'Loop',
+		vars: [],
+		steps: [
+			{ id: 'st:Idle', name: 'Idle', initial: true, line: 1, endLine: 1 },
+			{ id: 'st:S1', name: 'S1', initial: false, line: 2, endLine: 2, actions: Array.from({ length: actions }, (_, i) => ({ qualifier: 'N', target: `A${i}` })) },
+			{ id: 'st:S2', name: 'S2', initial: false, line: 3, endLine: 3 }
+		],
+		trans,
+		actions: []
+	} as unknown as SfcModel;
+}
+
+// The top edge of a forward transition's drawing: its name at condY - 9 (10 px).
+const fwdTop = (r: TransRoute) => Math.min(r.barY, r.condY - 18);
+
+test('layoutSfc: a loop-back under an action table hangs just below the table, above the forward labels (#571)', () => {
+	const lay = layoutSfc(loopModel(1, 3));
+	const s1 = lay.steps.find((p) => p.id === 'st:S1')!;
+	const jump = lay.trans.find((r) => r.jump)!.jump!;
+	const t2 = lay.trans.find((r) => r.t.id === 'tr:2')!;
+	// 3 rows + "+ action" = 70 px of table; 14 px under it, not 30.
+	assert.equal(jump.y, s1.y + 3 * 16 + 6 + 16 + 14);
+	assert.ok(jump.y + 10 <= fwdTop(t2), `jump at ${jump.y} runs into t2's labels (top ${fwdTop(t2)})`);
+});
+
+test('layoutSfc: many loop-backs out of one step grow the gap to the next rank (#571)', () => {
+	for (const backs of [1, 2, 3, 4, 5]) {
+		for (const actions of [0, 3]) {
+			const lay = layoutSfc(loopModel(backs, actions));
+			const s2 = lay.steps.find((p) => p.id === 'st:S2')!;
+			const t2 = lay.trans.find((r) => r.t.id === 'tr:2')!;
+			const jumps = lay.trans.filter((r) => r.jump).map((r) => r.jump!);
+			assert.equal(jumps.length, backs);
+			const lowest = Math.max(...jumps.map((j) => j.y));
+			assert.ok(lowest + 10 <= fwdTop(t2), `${backs} jumps / ${actions} actions: the lowest (${lowest}) runs into t2's labels (top ${fwdTop(t2)})`);
+			assert.ok(lowest + 10 <= s2.y, `${backs} jumps / ${actions} actions: the lowest (${lowest}) lands on S2 (top ${s2.y})`);
+		}
+	}
+	// Room is added only where it is needed: one bare loop-back keeps the pitch.
+	const one = layoutSfc(loopModel(1, 0));
+	const plain = layoutSfc(loopModel(0, 0));
+	assert.equal(one.steps.find((p) => p.id === 'st:S2')!.y, plain.steps.find((p) => p.id === 'st:S2')!.y);
+});
+
+test('layoutSfc: the canvas is wide enough for a long loop-back name', () => {
+	const name = 't_an_extremely_long_transition_name_that_goes_on_and_on_and_on';
+	const lay = layoutSfc(loopModel(1, 0, () => name));
+	const jump = lay.trans.find((r) => r.jump)!.jump!;
+	assert.ok(lay.width >= jump.x + 16 + name.length * 6.2, `canvas ${lay.width} clips the name (ends ~${jump.x + 16 + name.length * 6.2})`);
+});
+
+test('layoutSfc: a bar labelled over its own left run stops its labels short of the source stem', () => {
+	const lay = layoutSfc(tankBatchWithAborted());
+	const abort = lay.trans.find((r) => r.t.id === 'tr:t_abort')!;
+	assert.ok(abort.condMax !== undefined && abort.nameMax !== undefined);
+	assert.ok(abort.condX + abort.condMax! * 6.7 <= abort.barX2 - 8, 'the condition may reach the source stem');
+	assert.equal(fitLabel('abcdef', 4), 'abc…');
+	assert.equal(fitLabel('abc', 4), 'abc');
+	assert.equal(fitLabel('abc', undefined), 'abc');
 });
