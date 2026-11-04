@@ -1,0 +1,18 @@
+name: traffic-light-reference
+
+tasks:
+  - program: traffic.ld
+    scan: 100ms
+
+tags:
+  - { name: Enable,     role: input,  type: BOOL, init: false, desc: "Run switch" }
+  - { name: CycleDone,  role: state,  type: BOOL, init: false, desc: "One scan at the end of each 50 s cycle" }
+  - { name: NS_Red,     role: output, type: BOOL, init: true,  desc: "North-south red" }
+  - { name: NS_Yellow,  role: output, type: BOOL, init: false, desc: "North-south yellow" }
+  - { name: NS_Green,   role: output, type: BOOL, init: false, desc: "North-south green" }
+  - { name: EW_Red,     role: output, type: BOOL, init: true,  desc: "East-west red" }
+  - { name: EW_Yellow,  role: output, type: BOOL, init: false, desc: "East-west yellow" }
+  - { name: EW_Green,   role: output, type: BOOL, init: false, desc: "East-west green" }
+
+driver:
+  type: memory

@@ -1,0 +1,19 @@
+name: analog-pid-reference
+
+tasks:
+  - program: heater.fbd
+    scan: 100ms
+
+tags:
+  - { name: TT101_mA,   role: input,    type: REAL, init: 4.0,   unit: "mA",   desc: "TT-101 transmitter signal" }
+  - { name: HeatEnable, role: input,    type: BOOL, init: false,               desc: "Heater enable switch" }
+  - { name: TempSP,     role: setpoint, type: REAL, init: 60.0,  unit: "degC", desc: "Temperature setpoint" }
+  - { name: TicKp,      role: setpoint, type: REAL, init: 2.0,                 desc: "TIC-101 gain" }
+  - { name: TicKi,      role: setpoint, type: REAL, init: 0.1,                 desc: "TIC-101 integral gain (1/s)" }
+  - { name: TempHiSP,   role: setpoint, type: REAL, init: 90.0,  unit: "degC", desc: "High temperature alarm limit" }
+  - { name: TT101_Temp, role: state,    type: REAL, init: 0.0,   unit: "degC", desc: "Tank temperature (TT-101)" }
+  - { name: E101_Out,   role: output,   type: REAL, init: 0.0,   unit: "%",    desc: "Heater E-101 power" }
+  - { name: TempHiAlm,  role: output,   type: BOOL, init: false,               desc: "High temperature alarm" }
+
+driver:
+  type: memory

@@ -1,0 +1,90 @@
+# Hidden acceptance tests for motor-seal-in. The agent never sees this file;
+# the scorer copies it into a scratch copy of the finished project. Every
+# test states StopPB (NC, TRUE = not pressed) explicitly, so the verdict does
+# not hang on the init: the agent chose for it.
+tests:
+  - name: idle at power up
+    given: { StopPB: true }
+    advance: 1s
+    always: { Motor_Run: false, Motor_Fault: false }
+
+  - name: start seals in after the button is released
+    steps:
+      - given: { StopPB: true, StartPB: true }
+        advance: 500ms
+        expect: { Motor_Run: true }
+      - given: { StartPB: false }
+        advance: 2s
+        expect: { Motor_Run: true }
+
+  - name: stop drops the motor and it stays stopped
+    steps:
+      - given: { StopPB: true, StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false }
+        advance: 500ms
+        expect: { Motor_Run: true }
+      - given: { StopPB: false }
+        advance: 500ms
+        expect: { Motor_Run: false }
+      - given: { StopPB: true }
+        advance: 1s
+        expect: { Motor_Run: false }
+
+  - name: stop wins over start
+    given: { StopPB: false, StartPB: true }
+    advance: 1s
+    always: { Motor_Run: false }
+
+  - name: overload trips the motor and latches the fault
+    steps:
+      - given: { StopPB: true, StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false }
+        advance: 500ms
+        expect: { Motor_Run: true }
+      - given: { OL_Trip: true }
+        advance: 300ms
+        expect: { Motor_Run: false, Motor_Fault: true }
+      - given: { OL_Trip: false }
+        advance: 1s
+        expect: { Motor_Run: false, Motor_Fault: true }
+
+  - name: a latched fault blocks a restart
+    steps:
+      - given: { StopPB: true, OL_Trip: true }
+        advance: 500ms
+      - given: { OL_Trip: false }
+        advance: 500ms
+        expect: { Motor_Fault: true }
+      - given: { StartPB: true }
+        advance: 500ms
+        expect: { Motor_Run: false }
+      - given: { StartPB: false }
+        advance: 500ms
+        expect: { Motor_Run: false }
+
+  - name: reset is refused while the overload is still tripped
+    steps:
+      - given: { StopPB: true, OL_Trip: true }
+        advance: 500ms
+      - given: { ResetPB: true }
+        advance: 500ms
+      - given: { ResetPB: false }
+        advance: 500ms
+        expect: { Motor_Fault: true }
+
+  - name: reset after the overload clears allows a restart
+    steps:
+      - given: { StopPB: true, OL_Trip: true }
+        advance: 500ms
+      - given: { OL_Trip: false, ResetPB: true }
+        advance: 500ms
+      - given: { ResetPB: false }
+        advance: 500ms
+        expect: { Motor_Fault: false, Motor_Run: false }
+      - given: { StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false }
+        advance: 500ms
+        expect: { Motor_Run: true }
