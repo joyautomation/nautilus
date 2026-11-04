@@ -451,9 +451,12 @@ func TestSlaveDeathHoldsValuesQueuesWritesRecovers(t *testing.T) {
 	// Same address, new slave: the driver reconnects, delivers the queued
 	// write, and quality returns to Good.
 	// Populate unit 1 BEFORE listening: a request to a unit that does not
-	// exist yet answers exception 0x0B, and the driver (correctly) drops a
-	// refused write rather than re-queueing it forever. Creating the unit
-	// after Start raced the driver's first flush on reconnect.
+	// exist yet answers exception 0x0B, and the driver drops that write from
+	// the queue and forgets it, so it would go out with the NEXT
+	// WriteOutputs (issue #596, TestGatewayNoAnswerWriteIsResent), not on
+	// this reconnect. This test is about the queue delivering on the
+	// reconnect by itself; creating the unit after Start raced the driver's
+	// first flush.
 	srv2 := slave.NewServer(addr, nil)
 	srv2.Unit(1).SetHolding(0, 22)
 	if err := srv2.Start(); err != nil {

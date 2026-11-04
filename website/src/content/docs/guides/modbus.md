@@ -339,6 +339,31 @@ registers since is left alone. Not so for a `rewrite:` binding: it
 re-asserts its last commanded value on connect and on every period, so it
 overwrites the other master's value anyway.
 
+**An exception to a write depends on who answered.** When the device itself
+refuses a write (0x02 illegal data address, 0x03 illegal data value, or
+any exception other than the two below), the write is dropped and the same
+value is not sent again. Sending it again would only be refused again, so
+only a changed value is a new command. When a gateway answers 0x0A (path
+unavailable) or 0x0B (target device failed to respond), the device behind
+it never got the command. The write is dropped from the queue and
+forgotten, so the next time the driver is handed the outputs, the
+program's value goes out again as a command even if it has not changed.
+That is the program's current value, never a replay of the one that failed,
+and there is no backoff: it retries as often as outputs are handed over.
+`naut run` hands the outputs over on a scan where any output changed, not
+on every scan, so with no output moving the command waits for the next
+change ([#601](https://github.com/joyautomation/nautilus/issues/601)). Only
+the tags whose write did not land are forgotten: on a `bit:N` register,
+the bits whose read-modify-write got the exception, not the register's
+other bits. A `rewrite:` binding is not forgotten, because its next
+re-assert sends it again anyway. While the write gate is closed nothing is
+sent, and the forgotten command goes out once the gate reopens, as for a
+command the gate dropped (see [Redundancy](#redundancy)). Both kinds count
+in `exceptions` on the device row. The log says `write refused` for the
+first and `write not delivered; will resend` for the second. On a
+write-only source, a gateway no-answer to a write also counts toward
+taking it offline, as described above.
+
 **`rewrite:` is the exception, and it is a keep-alive.** Some devices watch
 a command register and fail safe if it stops moving — a safety controller's
 enable word, a VFD control word, an IO-Link master's Modbus watchdog. A

@@ -1185,10 +1185,11 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // contiguous holding registers into FC16 (one register FC6), contiguous
 // coils into FC15 (one coil FC5). Returns false when the connection broke;
 // the write that broke and the ones not yet attempted stay queued for the
-// reconnect. Writes the device already answered in this flush, confirmed
-// or refused with an exception, are not re-sent: a re-send would put back
-// a value someone else may have written since. With the write gate closed
-// the queue is dropped instead (see SetWriteGate).
+// reconnect. Writes answered in this flush, confirmed or with an
+// exception, are not re-queued: a re-send would put back a value someone
+// else may have written since. One a gateway answered 0x0A/0x0B for is
+// forgotten instead, so the next WriteOutputs sends it (see wroteOK). With
+// the write gate closed the queue is dropped (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.mu.Lock()
 	if len(s.pending) == 0 {
@@ -1289,10 +1290,25 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	return true
 }
 
-// wroteOK accounts one device write. An exception means the device refused
-// THIS write on a healthy connection: it is dropped (re-queueing would loop
-// forever) and reported. A transport error means reconnect: false, and the
-// caller re-queues this write and everything not yet attempted.
+// wroteOK accounts one device write. An exception is an answer on a
+// healthy connection, so the write is never re-queued (that would loop),
+// and what follows depends on who answered:
+//
+//   - 0x0A/0x0B (gatewayNoAnswer): the gateway answered for a device that
+//     never got the command. The write is dropped from the queue and its
+//     tags are forgotten from written, so the next WriteOutputs sends the
+//     program's value then, changed or not: no replay of the value sent
+//     here, and no backoff of its own (issue #596). A rewrite: binding is
+//     not forgotten: its re-assert sends written again on its period, and
+//     forgetting it would stop the keep-alive until the program changed
+//     it. A tag queued again during this flush is not forgotten either:
+//     its newer value is on its way. For a write-only source the miss
+//     counts toward going offline, once per write (#550).
+//   - Any other exception: the device refused THIS write. It is dropped
+//     and stays in written, so the same value is not sent again.
+//
+// A transport error means reconnect: false, and the caller re-queues this
+// write and everything not yet attempted.
 func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err error) bool {
 	if err == nil {
 		d.writes.Add(1)
@@ -1310,13 +1326,26 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 		s.mu.Lock()
 		s.lastErr = fmt.Errorf("write %v: %w", names, err)
 		s.excs++
-		if gatewayNoAnswer(err) {
+		noAnswer := gatewayNoAnswer(err)
+		if noAnswer {
 			s.writeNoAnswerLocked(ctx.Err() == nil)
+			for _, n := range names {
+				if d.byName[n].b.Rewrite > 0 {
+					continue
+				}
+				if _, queued := s.pending[n]; !queued {
+					delete(s.written, n)
+				}
+			}
 		} else {
 			s.writeAnsweredLocked() // refused, but the device answered
 		}
 		s.mu.Unlock()
-		d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		if noAnswer {
+			d.log.Warn("modbus: write not delivered; will resend", "source", s.cfg.ID, "tags", names, "error", err)
+		} else {
+			d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		}
 		return true
 	}
 	if ctx.Err() == nil {
