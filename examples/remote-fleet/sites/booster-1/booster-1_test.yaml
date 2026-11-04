@@ -1,8 +1,7 @@
 # Acceptance tests for booster-1 — no broker, no live flow meter, virtual
 # time. FM1_FlowLps is role: input (tags/modbus.yaml) and pressure.fbd
-# reads it every scan (FBD has no short-circuiting) so every test seeds it
-# in `given`, same "reads fault until first birth" rule
-# ../../scada/scada_test.yaml documents for its own consumed inputs.
+# reads it every scan; every test sets it in `given` so each one states
+# the flow it runs at (with no meter it would read 0.0, notConnected).
 tolerance: 0.5
 
 tests:

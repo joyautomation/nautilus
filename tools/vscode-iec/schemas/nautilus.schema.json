@@ -538,6 +538,10 @@
           "type": "boolean",
           "description": "sparkplug-host: ask every manifest node to rebirth on connect (default true). Births are not retained, so a host starting mid-stream sees nothing until it asks."
         },
+        "rebirth-requests": {
+          "type": "boolean",
+          "description": "sparkplug-host: send NCMD Rebirth requests at all (default true) \u2014 on connect, on reconnect, on data before a birth, after a sequence gap. false sends none; with primary: false the host then publishes nothing (a read-only broker account) and waits for births another host asks for."
+        },
         "endpoint": {
           "type": "string",
           "minLength": 1,

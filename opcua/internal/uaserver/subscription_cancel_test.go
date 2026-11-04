@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 	"github.com/joyautomation/nautilus/opcua/internal/require"
 
 	"github.com/gopcua/opcua"
@@ -22,7 +23,7 @@ func startSubscriptionTestServer(t *testing.T, ctx context.Context) (string, *op
 	endpoint, _ := startTestServer(t)
 	c, err := opcua.NewClient(endpoint, opcua.SecurityMode(ua.MessageSecurityModeNone))
 	require.NoError(t, err)
-	require.NoError(t, c.Connect(ctx))
+	require.NoError(t, gopcuatest.Connect(ctx, c))
 	t.Cleanup(func() { _ = c.Close(context.Background()) })
 	return endpoint, c
 }

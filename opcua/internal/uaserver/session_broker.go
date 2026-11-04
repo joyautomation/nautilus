@@ -16,6 +16,10 @@ import (
 // and is long enough not to be guessed.
 const authTokenLength = 32
 
+// maxPublishRequests is how many Publish requests a session may have queued. A new one past it
+// de-queues the oldest, which is answered with Bad_TooManyPublishRequests (Part 4 §5.14.5.1).
+const maxPublishRequests = 100
+
 type session struct {
 	cfg sessionConfig
 
@@ -157,7 +161,7 @@ func (sb *sessionBroker) NewSession(sc *uasc.SecureChannel) (*session, error) {
 	s := &session{
 		ID:              ua.NewGUIDNodeID(1, uuid.New().String()),
 		AuthTokenID:     ua.NewByteStringNodeID(0, tok),
-		PublishRequests: make(chan PubReq, 100),
+		PublishRequests: make(chan PubReq, maxPublishRequests),
 		channel:         sc,
 	}
 
