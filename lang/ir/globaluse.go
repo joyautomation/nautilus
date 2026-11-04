@@ -22,7 +22,10 @@ type GlobalUse struct {
 
 	// funcs, while GlobalUses walks, is the set of user FUNCTIONs already
 	// followed; nil for DirectGlobalUses, which does not follow calls.
-	funcs map[*FuncDef]bool
+	// funcOrder is the same FUNCTIONs in the order the walk reached them,
+	// for GlobalsDeep.
+	funcs     map[*FuncDef]bool
+	funcOrder []*FuncDef
 }
 
 // DirectGlobalUses walks only this program's own body and classifies every
@@ -53,13 +56,21 @@ func (p *Program) DirectGlobalUses() GlobalUse {
 // the whole project has finished lowering — unlike FBDef.Uses, which a
 // sibling FB may still be populating.
 func (p *Program) GlobalUses() GlobalUse {
+	u := p.deepUses()
+	u.funcs, u.funcOrder = nil, nil
+	return u
+}
+
+// deepUses is the walk behind GlobalUses and GlobalsDeep: this program's
+// body, every FB instance's body, and every user FUNCTION any of them calls,
+// with the FUNCTIONs it reached left in funcOrder.
+func (p *Program) deepUses() GlobalUse {
 	u := GlobalUse{Read: map[string]bool{}, Written: map[string]bool{}, funcs: map[*FuncDef]bool{}}
 	u.stmts(p.Body)
 	seen := map[*FBDef]bool{}
 	for _, s := range p.Slots {
 		u.collectFB(s.Type, seen)
 	}
-	u.funcs = nil
 	return u
 }
 
@@ -219,6 +230,7 @@ func (u *GlobalUse) expr(e Expr) {
 		// call (deep walk only — at Lower time the body may not exist yet).
 		if d := n.Def; u.funcs != nil && d != nil && d.Body != nil && !u.funcs[d] {
 			u.funcs[d] = true
+			u.funcOrder = append(u.funcOrder, d)
 			u.stmts(d.Body.Body)
 		}
 	case *Lit, *SlotRef, nil:

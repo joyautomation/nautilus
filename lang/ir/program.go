@@ -188,6 +188,13 @@ func (def *FuncDef) releaseFrame(f *Frame) { def.frames.Put(f) }
 // instantiated by anything reachable from this program contributes
 // nothing — which is the point: an unused library block shouldn't make a
 // tag look bound.
+//
+// A user FUNCTION's VAR_EXTERNAL is the calling program's tag too
+// (nautilus#590): every FUNCTION this program, one of its blocks, or
+// another FUNCTION calls adds its Globals, following calls exactly as
+// GlobalUses does. A FUNCTION nothing reachable calls adds nothing. This is
+// the runtime's per-scan snapshot list and the set its tag seeding and
+// typing read, so it needs the whole project lowered (FuncDef.Body set).
 func (p *Program) GlobalsDeep() map[string]*Type {
 	out := make(map[string]*Type, len(p.Globals))
 	for name, t := range p.Globals {
@@ -197,7 +204,21 @@ func (p *Program) GlobalsDeep() map[string]*Type {
 	for _, s := range p.Slots {
 		collectFBGlobals(s.Type, seen, out)
 	}
+	for _, def := range p.deepUses().funcOrder {
+		for name, gt := range def.Body.Globals {
+			addGlobal(out, name, gt)
+		}
+	}
 	return out
+}
+
+// addGlobal merges one bound tag into out. One tag, however each POU
+// spells it: the program's own (or the first) spelling stands.
+func addGlobal(out map[string]*Type, name string, t *Type) {
+	if _, key, dup := Lookup(out, name); dup && key != name {
+		return
+	}
+	out[name] = t
 }
 
 // collectFBGlobals walks t looking for FUNCTION_BLOCK instances (directly,
@@ -216,12 +237,7 @@ func collectFBGlobals(t *Type, seen map[*FBDef]bool, out map[string]*Type) {
 		}
 		seen[t.FB] = true
 		for name, gt := range t.FB.Globals {
-			// One tag, however each POU spells it: the program's own
-			// (or the first) spelling stands.
-			if _, key, dup := Lookup(out, name); dup && key != name {
-				continue
-			}
-			out[name] = gt
+			addGlobal(out, name, gt)
 		}
 		for _, s := range t.FB.AllSlots() {
 			collectFBGlobals(s.Type, seen, out)

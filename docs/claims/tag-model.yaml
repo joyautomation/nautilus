@@ -90,6 +90,22 @@ claims:
     tests:
       - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
       - go ./internal/project TestTagModelFunctionsDoNotSeeTagsImplicitly
+  - id: TAG-054
+    claim: >-
+      A tag a block's or function's VAR_EXTERNAL names is bound by the
+      program that instantiates the block or calls the function, as if the
+      program named it: the scan snapshots it, a tag with no type: takes its
+      type from that declaration, and naut check counts it as bound. A block
+      nothing instantiates, or a function nothing calls, binds nothing.
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./lang/ir TestGlobalsDeepFollowsFunctionCalls
+      - go ./runtime TestTagsBoundOnlyInAFunction
+      - go ./runtime TestScanSnapshotsAFunctionsExternals
+      - go ./cmd/naut TestCheckSeesTagsBoundThroughAFunction
+      - go ./cmd/naut TestCheckWarnsWhenFunctionNotCalled
+      - go ./cmd/naut TestCheckSeesTagsBoundThroughInstantiatedLibraryFB
+      - go ./cmd/naut TestCheckWarnsWhenLibraryFBNotInstantiated
   - id: TAG-010
     claim: >-
       A file-level VAR_GLOBAL block in a library .st (a GVL) declares globals
