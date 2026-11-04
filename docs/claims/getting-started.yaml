@@ -153,3 +153,18 @@ claims:
     source: "#1-install-the-cli"
     tests:
       - go ./cmd/naut TestNautVersionAnswers
+  - id: GS-015
+    claim: >-
+      The macOS and Linux install commands download the release archive to a
+      file with curl -f before extracting it, and name the archive the way
+      the release names it.
+    source: "#1-install-the-cli"
+    tests:
+      - go ./cmd/naut TestInstallDocsDownloadBeforeExtracting
+    partial: true
+    note: >-
+      Asserted: neither README.md nor this page pipes curl into tar or into a
+      reader that stops early (grep -m1, head), every archive download uses
+      curl -fsSL -o, and the archive name matches the goreleaser template.
+      Not asserted: the commands run against a real release; that was checked
+      by hand against v0.19.0 on linux/amd64.
