@@ -238,11 +238,17 @@ What "answers" means:
   noticed within about a second. A link cut silently (a pulled cable, a
   dead switch) is caught by TCP keepalive, which the driver sets on
   every connection: an idle link is declared dead within about 15 s.
-- A device that closes a connection while it is idle (many gateways
-  have an idle timeout) is not an outage. The driver reconnects at once,
+- A device that closes a connection cleanly (a FIN) while it is idle,
+  as many gateways do on an idle timeout, is not an outage, provided it
+  had kept the connection at least 100 ms. The driver reconnects at once,
   with no backoff, and the source stays online with nothing counted;
   the poll schedule carries on as before. Only if that reconnect fails
-  does the source go offline and count one outage.
+  does the source go offline and count one outage. A device that hangs
+  up sooner than 100 ms after the connect (a crash-looping server, a
+  gateway out of connection slots) is an outage each time, with backoff;
+  every connection is checked once it is 100 ms old, so this is seen
+  promptly. A device whose idle timeout resets the connection (an RST)
+  instead of closing it counts an outage each time too.
 
 This is the meaning `__Online` has on the other drivers: true when the
 device is answering, not when a socket is open.
@@ -264,7 +270,7 @@ often the driver reconnects. A gateway whose field device stops
 answering (0x0A or 0x0B on every block, three requests in a row) counts
 one. A write-only source without `rewrite:` is online from the connect,
 so losing its connection counts, even while it sends nothing; a device
-closing it on an idle timeout does not, as long as it takes the
+closing it cleanly on an idle timeout does not, as long as it takes the
 reconnect. Stopping nautilus
 does not count. Parking a source with `enable:` counts, because
 `__Online` goes false.
@@ -333,7 +339,10 @@ enable word, a VFD control word, an IO-Link master's Modbus watchdog. A
 binding with `rewrite: 2.5s` re-asserts its last commanded value on that
 period even when nothing changed, and its baseline value *is* written on
 connect, because a watchdog that never sees a first write drops out
-immediately.
+immediately. After the quiet reconnect that follows a device closing an
+idle connection, nothing is written at once: the value is re-asserted
+when its period next falls due, as it would have been on the old
+connection.
 
 ```yaml
 - {tag: Tsp, address: 262, format: int32, scale: 0.1, writable: true, rewrite: 2.5s, init: 0.0}

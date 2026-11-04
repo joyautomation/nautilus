@@ -240,7 +240,9 @@ claims:
       the socket. A device that closes idle connections (a proxy with a
       200 ms idle timeout) leaves a write-only and a polled source online
       with nothing counted, a command sent after the close goes out on a
-      fresh connection, and the poll schedule is kept. A silent cut caught
+      fresh connection, and the poll schedule is kept. A device that
+      accepts and closes within 1 ms is an outage with backoff, not a
+      quiet reconnect. A silent cut caught
       only by TCP keepalive (about 15 s) is not exercised; it needs a real
       dropped link. A reset (as opposed to a clean close) is not tested
       separately from the cut. Nothing has run against a real gateway with a dead
@@ -627,9 +629,10 @@ claims:
       parking with `enable:` and a gateway answering 0x0A/0x0B on every
       block three requests in a row included; one or two misses are not an
       outage, and a keep-alive the gateway keeps confirming does not make a
-      polled source flap. A device that closes an idle connection and
-      takes the reconnect is not an outage; one that then refuses it
-      counts once. Stopping nautilus does not count.
+      polled source flap. A device that cleanly closes a connection it
+      kept at least 100 ms, while idle, and takes the reconnect is not an
+      outage; one that then refuses it counts once, and one that hangs up
+      sooner counts each time. Stopping nautilus does not count.
       A binding may not take the name.
     source: "#the-__online-companion-and-enable"
     tests:
@@ -643,6 +646,7 @@ claims:
       - go ./modbus TestOutagesIdleCloseThenRefusedCountsOnce
       - go ./modbus TestOnlineIdleTimeoutIsNotAnOutage
       - go ./modbus TestOnlinePolledIdleTimeoutIsNotAnOutage
+      - go ./modbus TestOutagesAcceptThenCloseIsAnOutage
       - go ./modbus TestOutagesAnsweredResetsPerConnection
       - go ./modbus TestOutagesCompanionCollidesWithABinding
       - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage

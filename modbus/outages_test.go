@@ -489,7 +489,8 @@ func TestOnlinePolledIdleTimeoutIsNotAnOutage(t *testing.T) {
 
 // A device that hangs up while idle and then refuses the reconnect (a
 // reboot, a gateway going down) is an outage: exactly one, noticed while
-// idle rather than at the next command.
+// idle rather than at the next command. The quiet reconnect is tried and
+// fails.
 func TestOutagesIdleCloseThenRefusedCountsOnce(t *testing.T) {
 	ic := newIdleCloser(t, "", time.Hour)
 	m := Manifest{
@@ -505,6 +506,9 @@ func TestOutagesIdleCloseThenRefusedCountsOnce(t *testing.T) {
 	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
 	waitFor(t, "online on connect", func() bool { return read()["DEV__Online"] == true })
 	waitFor(t, "connection accepted", func() bool { a, _ := ic.counts(); return a == 1 })
+	// Held past quietCloseAfter (the first check sees it up), so the close
+	// is taken for an idle timeout and the reconnect is what fails.
+	time.Sleep(quietCloseAfter + 200*time.Millisecond)
 
 	ic.refuse()
 	ic.mu.Lock()
@@ -519,6 +523,40 @@ func TestOutagesIdleCloseThenRefusedCountsOnce(t *testing.T) {
 	time.Sleep(300 * time.Millisecond) // more refused dials
 	if got := read()["DEV__Outages"]; got != int64(1) {
 		t.Fatalf("refused dials changed __Outages to %#v, want int64(1)", got)
+	}
+}
+
+// A device that accepts and hangs up at once (a crash-looping server, a
+// gateway out of connection slots) is not an idle timeout: the close comes
+// before the connection was held quietCloseAfter, so it is an outage with
+// backoff, noticed at the first check, not a quiet reconnect forever.
+func TestOutagesAcceptThenCloseIsAnOutage(t *testing.T) {
+	ic := newIdleCloser(t, "", time.Millisecond)
+	src := fastSource("DEV", ic.addr())
+	src.RetryMin, src.RetryMax = 300*time.Millisecond, 300*time.Millisecond
+	m := Manifest{
+		Sources: []Source{src},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true}},
+	}
+	d, err := New(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
+	start := time.Now()
+	waitFor(t, "an outage counted", func() bool { o, _ := read()["DEV__Outages"].(int64); return o >= 1 })
+	if el := time.Since(start); el > quietCloseAfter+500*time.Millisecond {
+		t.Errorf("first outage after %v, want about %v (the first check)", el, quietCloseAfter)
+	}
+	if h := d.Health().Sources[0]; h.Retries == 0 {
+		t.Fatalf("closes counted no failures: retries %d, error %q", h.Retries, h.LastError)
+	}
+	// Each connection waits out the backoff: no quiet reconnect loop.
+	time.Sleep(time.Second)
+	if a, _ := ic.counts(); a > 6 {
+		t.Fatalf("%d connections in about 1.2 s with a 300 ms backoff, want a few", a)
 	}
 }
 

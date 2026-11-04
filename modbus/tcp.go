@@ -106,6 +106,8 @@ type tcpConn struct {
 	timeout time.Duration
 	txid    uint16
 	last    time.Time // when the last request went out (or the dial)
+	born    time.Time // when the connection was made
+	seen    time.Time // when the link was last known up: a response, or a quiet idle check
 }
 
 // newTCPConn wraps an established stream. timeout bounds each Request when
@@ -113,7 +115,8 @@ type tcpConn struct {
 // Deadlines only apply when rw is a net.Conn — an in-memory test rig has no
 // deadline to set, which is fine because it never blocks.
 func newTCPConn(rw io.ReadWriter, timeout time.Duration) *tcpConn {
-	c := &tcpConn{rw: rw, timeout: timeout, last: time.Now()}
+	now := time.Now()
+	c := &tcpConn{rw: rw, timeout: timeout, last: now, born: now, seen: now}
 	if nc, ok := rw.(net.Conn); ok {
 		c.nc = nc
 	}
@@ -217,10 +220,12 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 		if len(body) < 2 {
 			return nil, fmt.Errorf("modbus: truncated exception response")
 		}
+		c.seen = time.Now()
 		return nil, ExceptionError{Code: body[1]}
 	case rfc != fc:
 		return nil, fmt.Errorf("modbus: response function 0x%02X (want 0x%02X)", rfc, fc)
 	}
+	c.seen = time.Now()
 	return body[1:], nil
 }
 
@@ -259,11 +264,27 @@ func (c *tcpConn) checkIdle() error {
 	case err == nil:
 		return nil
 	case errors.Is(err, os.ErrDeadlineExceeded):
+		c.seen = time.Now()
 		return nil // quiet and healthy
 	case err == io.EOF:
 		return errIdleClosed
 	}
 	return fmt.Errorf("modbus: idle check: %w", err)
+}
+
+// heldFor is how long the device is known to have kept the connection:
+// from the dial to the last response or quiet idle check.
+func (c *tcpConn) heldFor() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.seen.Sub(c.born)
+}
+
+// age is how long ago the connection was made.
+func (c *tcpConn) age() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Since(c.born)
 }
 
 // quietFor is how long it has been since the last request went out on c.

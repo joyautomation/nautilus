@@ -804,7 +804,8 @@ func (d *Driver) run(ctx context.Context, s *source) {
 				}
 				break
 			}
-			d.log.Info("modbus: device closed an idle connection; reconnected",
+			// Debug: a device with a short idle timeout does this all day.
+			d.log.Debug("modbus: device closed an idle connection; reconnected",
 				"source", s.cfg.ID, "addr", s.cfg.Addr())
 			c = nc
 			closed = d.resume(ctx, s, c)
@@ -866,6 +867,8 @@ func (d *Driver) dialSource(ctx context.Context, s *source) (*tcpConn, error) {
 type idleChecker interface {
 	checkIdle() error
 	quietFor() time.Duration
+	heldFor() time.Duration
+	age() time.Duration
 }
 
 // idleCheckEvery is how often serve asks an idle connection whether it is
@@ -883,6 +886,15 @@ const idleCheckEvery = time.Second
 // whose idle timeout is at least this long never sees a request on a
 // connection it has closed, short of a close inside the peek itself.
 const checkBeforeSendAfter = 100 * time.Millisecond
+
+// quietCloseAfter is how long the device must be known to have kept a
+// connection (a response, or an idle check that found it up, at least this
+// long after the dial) for its clean close to be a quiet reconnect rather
+// than an outage. Real idle timeouts are seconds to minutes; a device that
+// accepts and hangs up at once (a crash-looping server, a gateway out of
+// connection slots) must still go offline and back off. serve checks every
+// connection once it is this old, so a close before then is seen promptly.
+const quietCloseAfter = 100 * time.Millisecond
 
 // linkKeepAlive is the TCP keepalive on every source connection. A link
 // that is cut silently (a pulled cable, a dead switch) sends no FIN, so an
@@ -984,6 +996,14 @@ func (d *Driver) loop(ctx context.Context, s *source, c conn) bool {
 		if idle {
 			wake = idleCheckEvery // nothing due soon: look at the link meanwhile
 		}
+		if ic, ok := c.(idleChecker); ok && ic.heldFor() < quietCloseAfter {
+			// Not yet known to have been held quietCloseAfter: look as
+			// soon as it is that old, so a device that hangs up at once is
+			// told apart from one with an idle timeout (see linkUp).
+			if until := quietCloseAfter - ic.age(); until < wake {
+				wake, idle = max(until, 0), true
+			}
+		}
 		timer := time.NewTimer(wake)
 		select {
 		case <-ctx.Done():
@@ -1041,9 +1061,10 @@ func (d *Driver) loop(ctx context.Context, s *source, c conn) bool {
 
 // linkUp runs the idle check on c, if it has one and nothing has been sent
 // on it for at least quiet. up false means the link is gone and serve
-// returns. closed true says how: the device closed it
-// cleanly with nothing outstanding, which run answers with a quiet
-// reconnect. Anything else (a reset, a keepalive that went unanswered,
+// returns. closed true says how: the device closed it cleanly with nothing
+// outstanding, after keeping it at least quietCloseAfter, which run
+// answers with a quiet reconnect. A close sooner than that is an outage
+// like the rest. Anything else (a reset, a keepalive that went unanswered,
 // unsolicited bytes, a socket closed under us) is recorded as the error,
 // and run drops the connection, takes the source offline (an outage if it
 // was online), and reconnects with backoff, as for a failed read.
@@ -1059,8 +1080,11 @@ func (d *Driver) linkUp(ctx context.Context, s *source, c conn, quiet time.Durat
 	if ctx.Err() != nil {
 		return false, false
 	}
-	if errors.Is(err, errIdleClosed) {
-		return false, true
+	if held := ic.heldFor(); errors.Is(err, errIdleClosed) {
+		if held >= quietCloseAfter {
+			return false, true
+		}
+		err = fmt.Errorf("%w before it had been held %v", err, quietCloseAfter)
 	}
 	d.errs.Add(1)
 	s.mu.Lock()
