@@ -17,6 +17,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -166,7 +167,7 @@ func (f *writeFixture) connectAnonymous(t *testing.T, extra ...opcua.Option) *op
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Connect(context.Background()); err != nil {
+	if err := gopcuatest.Connect(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeClient(c) })

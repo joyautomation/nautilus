@@ -3,7 +3,7 @@
 // LastBirthMs follows the newest birth, a member output adopts the site's live
 // value on every trigger, commands leave at QoS 0 under full names, the
 // offline queue's bound shows as WriteDrops and per-site depth, commands
-// raised during a broker outage go out on reconnect, on-unknown logs or stays
+// raised during a broker outage go out when the site births again, on-unknown logs or stays
 // silent, and the leadership gate on STATE and commands.
 
 package host
@@ -362,7 +362,7 @@ func TestMqttQueuedWritesAreCountedPerSite(t *testing.T) {
 	}
 }
 
-// ── SPH-033: a command raised during an outage goes out on reconnect ─────
+// ── SPH-033: a command raised during an outage goes out when the site births again ─
 
 func TestMqttCommandRaisedDuringAnOutageGoesOutOnReconnect(t *testing.T) {
 	addr := freePort(t)
@@ -393,6 +393,15 @@ func TestMqttCommandRaisedDuringAnOutageGoesOutOnReconnect(t *testing.T) {
 	t.Cleanup(func() { _ = closeBroker(srv2) })
 	get := cmdObserver(t, addr, "spBv1.0/G/DCMD/+/+")
 	waitConnected(t, d)
+
+	// Losing the broker took W6 offline (#540), so the command waits for
+	// the births that answer the reconnect's rebirth request, like any
+	// command to a dark site: a device's command for its device's DBIRTH.
+	time.Sleep(300 * time.Millisecond)
+	if n := len(get()); n != 0 {
+		t.Fatalf("%d DCMD went out before W6 birthed again", n)
+	}
+	birthW6AndPLC1(t, d, edgePublisher(t, addr, "edge-outage-2"), 1)
 
 	msg := waitCmd(t, get, "the command raised during the outage", "spBv1.0/G/DCMD/W6/PLC1")
 	p, err := sparkplug.DecodePayload(msg.payload)

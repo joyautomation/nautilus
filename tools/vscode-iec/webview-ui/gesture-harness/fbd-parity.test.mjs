@@ -7,7 +7,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-	recordClips, sleep, withPage, deliver, reset, center, node, fbdOps, rect, clickAt, key, btnByText, typeText, text
+	recordClips, sleep, withPage, deliver, reset, center, node, fbdOps, rect, clickAt, key, btnByText, typeText, text,
+	opsPosted
 } from './diagram-helpers.mjs';
 
 recordClips('fbd-parity');
@@ -60,11 +61,11 @@ test('FBD EN/ENO: bound EN draws without asking; the EN toggle opens EN/ENO pins
 		// Drop a tag on EN: the text gains EN := En.
 		await reset(b);
 		await drag(b, await handle(b, 'v:En', 'source', ''), await handle(b, 'b:w.sp', 'target', 'EN'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'rewire', to: 'b:w.sp', toPin: 'EN', source: 'v:En', sourcePin: '' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'rewire', to: 'b:w.sp', toPin: 'EN', source: 'v:En', sourcePin: '' }]);
 		// Drag from ENO onto a coil: the coil reads sp.ENO.
 		await reset(b);
 		await drag(b, await handle(b, 'b:w.sp', 'source', 'ENO'), await handle(b, 'c:Ok', 'target', ''));
-		assert.deepEqual(await fbdOps(b), [{ type: 'rewire', to: 'c:Ok', toPin: '', source: 'b:w.sp', sourcePin: 'ENO' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'rewire', to: 'c:Ok', toPin: '', source: 'b:w.sp', sourcePin: 'ENO' }]);
 		// The toggle again hides the open pins (a bound EN would stay).
 		await clickAt(b, await center(b, `${node('b:w.sp')} .eno-toggle`));
 		await sleep(200);
@@ -117,7 +118,7 @@ test('FBD networks: the header picks the palette target; buttons move, add, remo
 		await clickAt(b, await btnByText(b, 'button.item', 'comment'));
 		await reset(b);
 		await clickAt(b, await btnByText(b, '.actions button', 'insert'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: '// note', node: 'n:2' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'insertStatement', text: '// note', node: 'n:2' }]);
 		// The palette's "network" template adds one after the picked network.
 		await clickAt(b, await btnByText(b, '.bar button', '+ add'));
 		await clickAt(b, await btnByText(b, 'button.item', 'network'));
@@ -125,7 +126,7 @@ test('FBD networks: the header picks the palette target; buttons move, add, remo
 		await typeText(b, 'Dose');
 		await reset(b);
 		await clickAt(b, await btnByText(b, '.actions button', 'insert'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'addNetwork', text: 'Dose', node: 'n:2' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'addNetwork', text: 'Dose', node: 'n:2' }]);
 		// Header buttons.
 		const btn = (id, act) => center(b, `${band(id)} .nbtn[data-act="${act}"]`);
 		assert.equal(await b.eval(`document.querySelector('${band('n:1')} .nbtn[data-act="up"]').disabled`), true, 'the first cannot move up');
@@ -134,7 +135,7 @@ test('FBD networks: the header picks the palette target; buttons move, add, remo
 		await clickAt(b, await btn('n:2', 'up'));
 		await clickAt(b, await btn('n:1', 'add'));
 		await clickAt(b, await btn('n:3', 'remove'));
-		assert.deepEqual(await fbdOps(b), [
+		assert.deepEqual(await opsPosted(b, fbdOps, 3), [
 			{ type: 'moveNetwork', node: 'n:2', value: 'up' },
 			{ type: 'addNetwork', node: 'n:1', text: '' },
 			{ type: 'removeNetwork', node: 'n:3' }
@@ -148,7 +149,7 @@ test('FBD networks: the header picks the palette target; buttons move, add, remo
 		await typeText(b, 'Lamp');
 		await reset(b);
 		await key(b, 'Enter', 'Enter', 13);
-		assert.deepEqual(await fbdOps(b), [{ type: 'renameNetwork', node: 'n:3', text: 'Lamp' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'renameNetwork', node: 'n:3', text: 'Lamp' }]);
 	});
 });
 
@@ -172,7 +173,7 @@ test("FBD palette: the function field offers the project's FUNCTIONs by their de
 		assert.equal(await b.eval(`(${field}).value`), 'ScaleAnalog');
 		await reset(b);
 		await clickAt(b, await btnByText(b, '.actions button', 'insert'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: 'w1 = ScaleAnalog(in1, in2)' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'insertStatement', text: 'w1 = ScaleAnalog(in1, in2)' }]);
 	});
 });
 
@@ -201,7 +202,7 @@ test('FBD palette: the FB picker leaves an input with a declared default unbound
 		assert.equal(await b.eval(`document.querySelector('.fbpick input.fbargs').value`), 'Start := _, Recipe := _');
 		await reset(b);
 		await key(b, 'Enter', 'Enter', 13);
-		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: 'd1 : Dosing(Start := _, Recipe := _)' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'insertStatement', text: 'd1 : Dosing(Start := _, Recipe := _)' }]);
 	});
 });
 
@@ -211,6 +212,6 @@ test('FBD: a blank main.fbd seeds PROGRAM Main, the name naut new would give it 
 		assert.match(await text(b), /PROGRAM Main skeleton/);
 		await reset(b);
 		await clickAt(b, await center(b, '.blank button'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'init', pou: 'Main' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'init', pou: 'Main' }]);
 	});
 });

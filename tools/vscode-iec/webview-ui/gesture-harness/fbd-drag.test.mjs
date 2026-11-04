@@ -3,7 +3,7 @@
 // and on the exact ops the webview posts. See INVENTORY.md.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recordClips, sleep, withPage, deliver, reset, center, esc, FBD, byId, node, fbdOps, rect } from './diagram-helpers.mjs';
+import { recordClips, sleep, withPage, deliver, reset, center, esc, FBD, byId, node, fbdOps, rect, opsPosted } from './diagram-helpers.mjs';
 
 recordClips('fbd-drag');
 
@@ -75,7 +75,7 @@ test('FBD drag: Shift+drag over empty canvas selects exactly the boxed nodes (F0
 		// ...and the selection is real: Delete removes exactly those notes.
 		await b.pressKey('Delete', { code: 'Delete', keyCode: 46 });
 		await sleep(200);
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.deepEqual([...ops[0].nodes].sort(), ['cm:1', 'cm:2']);
 	});
@@ -104,12 +104,11 @@ test('FBD drag: Esc cancels a constant edit — no setLiteral, chip keeps its va
 test('FBD drag: dragging a node posts ONE setLayout per drag, with the new coordinates (F11)', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await sleep(300);
 		const k = (await viewportT(b)).k; // fitView scale: flow units = screen / k
 		const before = await rect(b, node('cm:2'));
 		await reset(b);
 		await drag(b, { x: before.cx, y: before.cy }, { x: before.cx + 60, y: before.cy + 40 });
-		let ops = await fbdOps(b);
+		let ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'setLayout');
 		assert.equal(ops[0].entries.length, 1);
@@ -122,7 +121,7 @@ test('FBD drag: dragging a node posts ONE setLayout per drag, with the new coord
 		// A second drag posts another, further along.
 		await drag(b, { x: after.cx, y: after.cy }, { x: after.cx + 50, y: after.cy });
 		const after2 = await rect(b, node('cm:2'));
-		ops = await fbdOps(b);
+		ops = await opsPosted(b, fbdOps, 2);
 		assert.equal(ops.length, 2, JSON.stringify(ops));
 		assert.equal(ops[1].type, 'setLayout');
 		assert.equal(ops[1].entries[0].node, 'cm:2');
@@ -134,7 +133,6 @@ test('FBD drag: dragging a node posts ONE setLayout per drag, with the new coord
 test('FBD drag: dragging empty canvas pans the viewport and posts no edit (F13)', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await sleep(400); // fitView settles
 		const t0 = await viewportT(b);
 		const from = await emptyPoint(b);
 		assert.ok(from, 'found empty canvas');
@@ -158,7 +156,7 @@ test('FBD drag: output pin → input pin posts a rewire naming exactly those pin
 		assert.ok(from && to, 'pins rendered');
 		await reset(b);
 		await drag(b, from, to);
-		assert.deepEqual(await fbdOps(b), [{ type: 'rewire', to: 'b:c.Y', toPin: 'IN2', source: 'v:A', sourcePin: '' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'rewire', to: 'b:c.Y', toPin: 'IN2', source: 'v:A', sourcePin: '' }]);
 	});
 });
 
@@ -170,7 +168,7 @@ test('FBD drag: dropping a wire on a block\'s + posts addInput (F08)', async () 
 		assert.ok(from && to, 'pins rendered');
 		await reset(b);
 		await drag(b, from, to);
-		assert.deepEqual(await fbdOps(b), [{ type: 'addInput', node: 'b:c.Y', source: 'v:B', sourcePin: '' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'addInput', node: 'b:c.Y', source: 'v:B', sourcePin: '' }]);
 	});
 });
 
