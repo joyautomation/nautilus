@@ -156,8 +156,11 @@ sparkplug:
     - Mixer                 # a UDT tag: every member
 ```
 
-Patterns are globs over the tag name or a UDT member's dotted path; one
-that matches a tag opens all of its members. `*` matches any run of
+Patterns are globs over the tag name or a UDT member's dotted path,
+matched in the tag's and member's declared casing whatever case a host
+writes them in: `Pump*` does not open a tag declared `pumpHouseDoor`, even
+to a command for `PumpHouseDoor`, and `LevelSP` opens `LevelSP` to a
+command for `levelsp`. One that matches a tag opens all of its members. `*` matches any run of
 characters and `?` any one. `[n]` in a pattern is an array index and `[*]`
 any index, as in [`opcua.writable`](/guides/opcua-server/#writes); there are
 no character classes.
