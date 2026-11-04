@@ -565,15 +565,23 @@ claims:
       With a `redundancy:` section the write gate is wired to leadership so
       commands leave the driver only on the leader, reads are unaffected,
       and a closed gate also stops `rewrite:` re-asserts (resuming when
-      reopened).
+      reopened); commands queued during an outage, or put back by a broken
+      flush, are dropped when the gate has closed by the time the source
+      returns, and the same value is a command again once it reopens.
     source: "#redundancy"
     tests:
       - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+      - go ./modbus TestQueuedWriteRechecksTheGate
+      - go ./modbus TestRequeuedWriteRechecksTheGate
     partial: true
     note: >-
-      The gate stopping re-asserts is asserted; plain writes under a closed
-      gate, reads being unaffected, and the leadership wiring in `naut run`
-      are not.
+      The gate stopping re-asserts is asserted, and so is the gate being
+      checked again when queued commands go out: a command and a keep-alive
+      re-assert queued during an outage, and the writes a broken flush put
+      back, are dropped with no frame sent, the queue drains, and no outage
+      is counted. The gate is a test gate function; plain writes made while
+      it is closed, reads being unaffected, and the leadership wiring in
+      `naut run` are not asserted.
   - id: MB-047
     claim: >-
       `naut test` with a `memory.yaml` loopback runs the acceptance suites

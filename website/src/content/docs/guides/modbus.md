@@ -449,7 +449,11 @@ which is exactly what makes it unroutable next to another driver.
 
 With a `redundancy:` section, the driver's write gate is wired to leadership
 — commands leave the driver only on the leader, and a `SetWriteGate` func
-can compose a "logic healthy" signal into the same condition.
+can compose a "logic healthy" signal into the same condition. Leadership
+is checked again when queued commands go out: a replica that lost it
+during an outage drops what it queued, and so do the writes a broken
+flush put back. A dropped command is forgotten, so the same value is a
+command again once the gate reopens.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly

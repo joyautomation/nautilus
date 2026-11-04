@@ -422,10 +422,14 @@ func (d *Driver) buildSources() error {
 	return nil
 }
 
-// SetWriteGate installs the write gate the rewrite loop and WriteOutputs
-// consult: commands leave the driver only while gate() is true. The project
-// wires it to redundancy leadership (leader.Elector.IsLeader), and a
-// "logic healthy" signal can be composed into the same func.
+// SetWriteGate installs the write gate WriteOutputs, the rewrite loop and
+// the flush consult: commands leave the driver only while gate() is true.
+// A command queued while the gate was open, during an outage or put back
+// by a broken flush, is dropped if the gate has closed by the time it
+// would go out, and forgotten, so the same value is a command again once
+// the gate reopens. The project wires it to redundancy leadership
+// (leader.Elector.IsLeader), and a "logic healthy" signal can be composed
+// into the same func.
 //
 // A FALSE GATE STOPS RE-ASSERTS BY DESIGN: a device whose keep-alive word
 // (Banner SC10, i550 control word, an IO-Link master's Modbus watchdog)
@@ -1183,7 +1187,8 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // the write that broke and the ones not yet attempted stay queued for the
 // reconnect. Writes the device already answered in this flush, confirmed
 // or refused with an exception, are not re-sent: a re-send would put back
-// a value someone else may have written since.
+// a value someone else may have written since. With the write gate closed
+// the queue is dropped instead (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.mu.Lock()
 	if len(s.pending) == 0 {
@@ -1193,6 +1198,23 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	work := s.pending
 	s.pending = map[string]any{}
 	s.mu.Unlock()
+
+	// The gate is checked again here, not only when the command was
+	// queued: a replica that lost leadership during an outage must not
+	// send what it queued while it led, nor what a broken flush put back,
+	// nor a re-assert queued just before the gate closed. Dropped commands
+	// are forgotten (not recorded as written), so the same value is a
+	// command again once the gate reopens. A drop is not a failure: no
+	// error is counted and __Online is left to the reads.
+	if !d.gateOpen() {
+		s.mu.Lock()
+		for name := range work {
+			delete(s.written, name)
+		}
+		s.mu.Unlock()
+		d.log.Warn("modbus: write gate closed; queued writes dropped", "source", s.cfg.ID, "count", len(work))
+		return true
+	}
 
 	regWrites, coilWrites, bitWrites := d.stageWrites(s, work)
 	regRuns, coilRuns := coalesceRegs(regWrites), coalesceCoils(coilWrites)
