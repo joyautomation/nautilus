@@ -61,7 +61,7 @@ need `naut` in a terminal too, so install it as follows.
 **macOS** (also works on Linux). Paste this whole block, then press Enter:
 
 ```sh
-v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
+v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
 os=$(uname -s | tr A-Z a-z)
 arch=$(uname -m)
 [ "$arch" = x86_64 ] && arch=amd64
