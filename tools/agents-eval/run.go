@@ -24,25 +24,33 @@ const (
 
 // RunConfig is one `agents-eval run`.
 type RunConfig struct {
-	Tasks        []*Task
-	Conditions   []string
-	K            int
-	Model        string
-	Agent        Agent
-	Parallel     int
-	Timeout      time.Duration
-	BudgetUSD    float64
-	AgentsMd     []byte // the AGENTS.md under test
-	ClaudeMd     []byte // the CLAUDE.md written beside it
-	Naut         string // naut binary, used by the agent and the scorer
-	Out          string // results directory for this run
-	Log          func(format string, args ...any)
-	StopAfterUSD float64 // stop starting new trials once spend passes this (0 = no limit)
+	Tasks      []*Task
+	Conditions []string
+	K          int
+	Model      string
+	Agent      Agent
+	Parallel   int
+	Timeout    time.Duration
+	BudgetUSD  float64
+	AgentsMd   []byte // the AGENTS.md under test
+	ClaudeMd   []byte // the CLAUDE.md written beside it
+	Naut       string // naut binary, used by the agent and the scorer
+	Out        string // results directory for this run
+	Log        func(format string, args ...any)
+	// StopAfterUSD: once the finished trials have spent this much, no new
+	// trial starts (0 = no limit). Trials already running finish, so a run
+	// can overshoot by up to Parallel × BudgetUSD.
+	StopAfterUSD float64
+	// Secrets are scrubbed from every trial directory as it is written
+	// (secretsFromEnv by default).
+	Secrets []secret
 
 	// agentBin is the directory put first on the agent's PATH: a copy of
 	// Naut outside the checkout, so `which naut` does not lead the agent
 	// to the repository (and its hidden tests).
 	agentBin string
+	// trial runs one trial; runTrial unless a test replaces it.
+	trial func(ctx context.Context, cfg RunConfig, task *Task, cond string, trial int) *Record
 }
 
 // Meta is the run's provenance, written to meta.json and the summary.
@@ -67,6 +75,10 @@ type Record struct {
 	Run       *AgentRun `json:"run"`
 	Score     *Score    `json:"score,omitempty"`
 	Error     string    `json:"error,omitempty"` // harness failure (not the agent's)
+	// SecretsRedacted lists the files in the trial directory where a
+	// credential's value was found and replaced. It should always be
+	// empty; `run` fails when it is not.
+	SecretsRedacted []string `json:"secretsRedacted,omitempty"`
 }
 
 func trialDir(out string, task, cond string, trial int) string {
@@ -80,19 +92,22 @@ func Run(ctx context.Context, cfg RunConfig) ([]*Record, error) {
 	if err := os.MkdirAll(cfg.Out, 0o755); err != nil {
 		return nil, err
 	}
-	bin, err := os.MkdirTemp("", "agents-eval-bin-*")
-	if err != nil {
-		return nil, err
+	if cfg.trial == nil {
+		cfg.trial = runTrial
+		bin, err := os.MkdirTemp("", "agents-eval-bin-*")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(bin)
+		raw, err := os.ReadFile(cfg.Naut)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(bin, "naut"), raw, 0o755); err != nil {
+			return nil, err
+		}
+		cfg.agentBin = bin
 	}
-	defer os.RemoveAll(bin)
-	raw, err := os.ReadFile(cfg.Naut)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(bin, "naut"), raw, 0o755); err != nil {
-		return nil, err
-	}
-	cfg.agentBin = bin
 	type job struct {
 		task  *Task
 		cond  string
@@ -127,7 +142,7 @@ func Run(ctx context.Context, cfg RunConfig) ([]*Record, error) {
 				if skip || ctx.Err() != nil {
 					continue
 				}
-				rec := runTrial(ctx, cfg, j.task, j.cond, j.trial)
+				rec := cfg.trial(ctx, cfg, j.task, j.cond, j.trial)
 				mu.Lock()
 				records = append(records, rec)
 				if rec.Run != nil {
@@ -164,7 +179,7 @@ func runTrial(ctx context.Context, cfg RunConfig, task *Task, cond string, trial
 		rec.Error = err.Error()
 		cfg.Log("%-14s %-7s #%d  HARNESS ERROR %v", task.ID, cond, trial, err)
 		writeJSON(recPath, rec)
-		return rec
+		return sealTrial(cfg, dir, rec)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fail(err)
@@ -195,8 +210,33 @@ func runTrial(ctx context.Context, cfg RunConfig, task *Task, cond string, trial
 		return fail(err)
 	}
 	writeJSON(recPath, rec)
+	rec = sealTrial(cfg, dir, rec)
 	cfg.Log("%-14s %-7s #%d  %s  (%d turns, $%.2f, %.0fs)%s", task.ID, cond, trial, verdictWord(rec),
 		rec.Run.Turns, rec.Run.CostUSD, rec.Run.DurationSec, reasonsTail(rec))
+	return rec
+}
+
+// sealTrial scrubs credentials from everything the trial wrote
+// (transcript, project copy, record). When it finds one it says so loudly
+// and returns the record as re-read from the redacted file, so no copy of
+// the value survives in memory either.
+func sealTrial(cfg RunConfig, dir string, rec *Record) *Record {
+	found, err := RedactDir(dir, cfg.Secrets)
+	if err != nil {
+		cfg.Log("%-14s %-7s #%d  REDACTION FAILED: %v", rec.Task, rec.Condition, rec.Trial, err)
+		found = append(found, "(redaction error: "+err.Error()+")")
+	}
+	if len(found) == 0 {
+		return rec
+	}
+	cfg.Log("%-14s %-7s #%d  SECRET FOUND AND REDACTED in %v", rec.Task, rec.Condition, rec.Trial, found)
+	var clean Record
+	recPath := filepath.Join(dir, "record.json")
+	if raw, err := os.ReadFile(recPath); err == nil && json.Unmarshal(raw, &clean) == nil {
+		rec = &clean
+	}
+	rec.SecretsRedacted = found
+	writeJSON(recPath, rec)
 	return rec
 }
 

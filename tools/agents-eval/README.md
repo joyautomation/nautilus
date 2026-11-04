@@ -31,12 +31,18 @@ go run ./tools/agents-eval report tools/agents-eval/results/<run>
 # after changing the scorer (or naut check): re-score a run's saved
 # projects, no tokens spent, and rebuild its summary
 go run ./tools/agents-eval rescore tools/agents-eval/results/<run>
+
+# before sharing a results directory: replace any credential value in the
+# environment wherever it occurs under it; exits 1 if one was found
+go run ./tools/agents-eval redact tools/agents-eval/results/<run>
 ```
 
 Flags: `-tasks`, `-k`, `-model`, `-conditions with,without`, `-parallel`,
 `-timeout` (wall clock per trial, default 10m), `-budget` (USD per trial,
-passed to `claude --max-budget-usd`), `-stop-after-usd` (no new trials past
-this total), `-agents-md` (default `cmd/naut/templates/AGENTS.md.tmpl`),
+passed to `claude --max-budget-usd`), `-stop-after-usd` (no new trial
+starts once the finished ones have spent this much; trials already running
+finish, so a run can overshoot by up to `-parallel` × `-budget`, $3 at the
+defaults), `-agents-md` (default `cmd/naut/templates/AGENTS.md.tmpl`),
 `-out` (reuse a directory to resume an interrupted run: finished trials
 are skipped), `-naut` (default: build `./cmd/naut` into the run directory,
 so the agent and the scorer use the same naut).
@@ -44,7 +50,8 @@ so the agent and the scorer use the same naut).
 The **AGENTS.md eval** workflow (`.github/workflows/agents-eval.yml`) runs
 the same thing by hand from the Actions tab (`workflow_dispatch`), with an
 `agents_md_ref` input to evaluate an AGENTS.md on another branch. It skips
-cleanly until an `ANTHROPIC_API_KEY` repository secret exists.
+cleanly until an `ANTHROPIC_API_KEY` repository secret exists. See
+[Keeping the API key in](#keeping-the-api-key-in) for what it uploads.
 
 ## The task suite
 
@@ -89,26 +96,30 @@ For each task × condition × trial:
    ```sh
    claude -p "<spec>" --model <m> --setting-sources project,local \
      --tools Bash,Read,Edit,Write,Glob,Grep \
-     --allowedTools 'Bash(naut:*)' 'Bash(echo:*)' 'Bash(pwd)' 'Bash(true)' \
-       'Bash(which:*)' 'Bash(command -v:*)' 'Bash(head:*)' 'Bash(tail:*)' \
+     --allowedTools 'Read(./**)' 'Edit(./**)' 'Write(./**)' 'Glob(./**)' \
+       'Grep(./**)' 'Bash(naut:*)' 'Bash(<bin>/naut:*)' 'Bash(pwd)' \
+       'Bash(true)' 'Bash(which:*)' 'Bash(command -v:*)' 'Bash(head:*)' \
+       'Bash(tail:*)' \
      --disallowedTools 'Bash(naut run:*)' --permission-mode acceptEdits \
      --permission-prompts none --no-session-persistence \
      --output-format stream-json --verbose --max-budget-usd <b>
+   # environment: CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, no CLAUDECODE /
+   # CLAUDE_CODE_* / GITHUB_TOKEN / GH_TOKEN / ACTIONS_*, <bin> first on PATH
    ```
 
-   File tools are confined to the project (acceptEdits, and with no one to
-   answer a prompt anything outside is refused); the shell runs `naut` and
-   the glue agents put around it (`naut check; echo $?`, `naut --help |
-   head`: Claude Code refuses a compound command whole when any part is
-   not allowed, which in a first pilot cost a run its `naut check`);
-   there is no web access and no subagent. `--setting-sources
-   project,local` keeps the developer's own hooks, plugins and permission
-   rules out. The environment drops `CLAUDECODE` / `CLAUDE_CODE_*` so a
-   run started from inside Claude Code is not treated as nested, and puts
-   a copy of the run's `naut` first on `PATH` from a temp directory (so
-   `which naut` does not point into this checkout, where the hidden tests
-   and reference solutions live). The process group is killed at the time
-   limit.
+   File tools are confined to the project (`./**`; with no one to answer
+   a prompt, anything else is refused). The shell runs `naut`, by name or
+   by the absolute path `which naut` prints, plus the glue agents put
+   around it (`naut check; true`, `naut --help | head`). Claude Code
+   refuses a compound command whole when any part is not allowed, which in
+   the first pilot cost a run its `naut check`. There is no web access and
+   no subagent. `--setting-sources project,local` keeps the developer's
+   own hooks, plugins and permission rules out. Dropping `CLAUDECODE` /
+   `CLAUDE_CODE_*` keeps a run started from inside Claude Code from being
+   treated as nested. A copy of the run's `naut` goes first on `PATH` from
+   a temp directory, so `which naut` does not point into this checkout,
+   where the hidden tests and reference solutions live. The process group
+   is killed at the time limit.
 
    The sandbox matters. In the pilot, agents without AGENTS.md went
    looking for nautilus examples: `find / -name '*.ld'`, Glob over the
@@ -118,6 +129,46 @@ For each task × condition × trial:
 4. Copy the project (minus `.git`) and the transcript into
    `results/<run>/runs/<task>/<condition>/trial-<n>/`, score it, write
    `record.json`.
+
+### Keeping the API key in
+
+`claude -p` reads its credential from the environment (`ANTHROPIC_API_KEY`)
+or from an `apiKeyHelper` command in its settings. There is no flag or
+stdin path, and a helper would only move the key into a file the agent's
+`head` could read. So the key stays an environment variable of the
+`claude` process, and these layers keep it from the agent:
+
+1. **Not inherited.** The harness starts `claude` with
+   `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, which strips the Anthropic
+   credentials from every tool subprocess. Claude Code needs bubblewrap for
+   it (the workflow installs it) and turns it on by itself under GitHub
+   Actions. This was checked with a fake `naut` that dumps its environment:
+   a canary value in a scrubbed variable reaches it without the setting
+   and does not with it. The setting forces Claude Code's permission mode
+   back to default, which is why the file-tool rules are spelled out.
+2. **Not printable.** No allowed command prints the environment: no
+   `echo`, `env`, `printenv`, `set` or `cat`, and naut never prints its
+   environment. Under these rules Claude Code also refuses `$VAR`
+   expansion and reads of `/proc/*/environ` (probed with the same canary).
+3. **Not stored.** Every trial directory (transcript, project copy,
+   record) is scanned for the values of `ANTHROPIC_API_KEY`,
+   `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`,
+   `GITHUB_TOKEN` and `GH_TOKEN` as it is written. A value found is
+   replaced with `[REDACTED:<NAME>]`, the trial is flagged, and `run` exits
+   non-zero. `agents-eval redact <dir>` runs the same scan over a whole
+   directory.
+4. **Not uploaded by default.** The workflow has `permissions: contents:
+   read`, checks out with `persist-credentials: false`, runs
+   `agents-eval redact` over the results (failing the job on a hit), and
+   then uploads only `summary.*` and `meta.json`. Transcripts and the
+   agents' projects go up only when the `upload_transcripts` input is set:
+   artifacts are readable by anyone with read access to the repo, and
+   GitHub's log masking does not apply to them.
+
+`agents_md_ref` puts another branch's AGENTS.md in front of the agent as
+instructions. Treat it as untrusted prompt input: the layers above are
+what stop it from getting the key out, so read the ref's AGENTS.md before
+running it.
 
 No web access is a deliberate choice: it measures what the project itself
 teaches, which is what AGENTS.md changes. A student's agent with web
@@ -193,7 +244,15 @@ every reference Good, and scores a mutant per requirement (a missing
 seal-in, a wrong timer, a reverse-acting PID, a non-latching jam, a level
 counted as an edge, a state-number transition, a check warning, the right
 logic in the wrong language) as failing the right part. `go test -short`
-skips the build.
+skips the build. `agent_test.go` covers the run path with no agent at
+all:
+- a fake `claude` script replays a canned stream-json transcript, so the
+  test checks the transcript parsing, the command line (no allowed tool
+  can print the environment) and the environment (scrub on, nesting and
+  CI tokens gone, naut first on PATH);
+- a sleeping fake checks that the time limit kills the process group;
+- a stub trial checks stop-after-spend;
+- planted keys check the redaction.
 
 ## Results
 
@@ -225,4 +284,6 @@ it in the same PR as the AGENTS.md or lint change it measures.
 
 Pass rates from k=3 are coarse: one trial is 33 points. Treat a cell that
 moves by one trial as noise; a condition total over 21 runs that moves by
-three or more is a signal.
+three or more is a signal. At k=3 and with the "with" condition at 100%,
+the baseline catches regressions but cannot rank two good versions of
+AGENTS.md. Ranking needs harder tasks (above) or a larger k.

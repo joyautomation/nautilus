@@ -33,6 +33,9 @@ type Row struct {
 	ReadAgentsMd bool           `json:"readAgentsMd"`
 	TimedOut     bool           `json:"timedOut,omitempty"`
 	Error        string         `json:"error,omitempty"`
+	// SecretRedacted: a credential's value turned up in the trial's files
+	// and was replaced (see Record.SecretsRedacted).
+	SecretRedacted bool `json:"secretRedacted,omitempty"`
 }
 
 // Summary is summary.json.
@@ -42,7 +45,7 @@ type Summary struct {
 }
 
 func toRow(r *Record) Row {
-	row := Row{Task: r.Task, Condition: r.Condition, Trial: r.Trial, Error: r.Error}
+	row := Row{Task: r.Task, Condition: r.Condition, Trial: r.Trial, Error: r.Error, SecretRedacted: len(r.SecretsRedacted) > 0}
 	if r.Run != nil {
 		row.Turns, row.CostUSD, row.DurationSec = r.Run.Turns, r.Run.CostUSD, r.Run.DurationSec
 		row.CheckRuns, row.TestRuns, row.ReadAgentsMd = r.Run.CheckRuns, r.Run.TestRuns, r.Run.ReadAgentsMd
@@ -189,6 +192,9 @@ func WriteMarkdown(w io.Writer, s Summary, taskLangs map[string][]string) {
 				seen[c] = true
 				note(r.Condition, c)
 			}
+		}
+		if r.SecretRedacted {
+			mark("CREDENTIAL FOUND AND REDACTED")
 		}
 		if r.Error != "" {
 			mark("harness error")

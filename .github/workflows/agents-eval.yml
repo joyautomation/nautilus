@@ -3,6 +3,14 @@
 # the pass-rate table. Manual only: it spends API tokens and its results
 # vary run to run, so it is never a PR gate. It skips cleanly until an
 # ANTHROPIC_API_KEY secret exists in this repo.
+#
+# The key reaches only the claude process: tools/agents-eval starts it with
+# CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (bubblewrap, installed below), so the
+# agent's shell never inherits it, and its allowed commands cannot print the
+# environment. Everything the run wrote is scanned for the key's value
+# before upload (`agents-eval redact`), and the job fails if it is found.
+# By default only the summary is uploaded; transcripts and the agents'
+# projects are opt-in (artifacts are readable by anyone with read access).
 name: AGENTS.md eval
 on:
   workflow_dispatch:
@@ -17,11 +25,17 @@ on:
         description: comma-separated task ids (empty = all)
         default: ''
       stop_after_usd:
-        description: start no new trials past this spend
+        description: start no new trials past this spend (running trials can add up to 3 × $1 more)
         default: '20'
       agents_md_ref:
-        description: branch or commit to take AGENTS.md from (empty = the checked-out tree)
+        description: branch or commit of this repo to take AGENTS.md from (empty = the checked-out tree). Its text goes to the agent as instructions; only run refs you have read.
         default: ''
+      upload_transcripts:
+        description: also upload every trial's record, transcript and project (redacted), not just the summary
+        type: boolean
+        default: false
+permissions:
+  contents: read
 env:
   GOTOOLCHAIN: local
 jobs:
@@ -42,15 +56,22 @@ jobs:
           fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         if: steps.gate.outputs.go == 'true'
         with: {go-version: '1.24'}
       - uses: actions/setup-node@v4
         if: steps.gate.outputs.go == 'true'
         with: {node-version: '22'}
-      - name: install Claude Code
+      - name: install Claude Code and bubblewrap
         if: steps.gate.outputs.go == 'true'
-        run: npm install -g @anthropic-ai/claude-code
+        # Pinned: the sandbox flags and subprocess env scrubbing this
+        # harness relies on were verified on this version. Bump it on
+        # purpose, after a local run.
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+          npm install -g @anthropic-ai/claude-code@2.1.318
       - name: run the suite
         if: steps.gate.outputs.go == 'true'
         env:
@@ -71,13 +92,27 @@ jobs:
           fi
           go run ./tools/agents-eval run -model "$MODEL" -k "$K" -tasks "$TASKS" \
             -stop-after-usd "$STOP" -agents-md "$md" -out tools/agents-eval/results/ci
+      - name: redact, then publish the summary
+        if: steps.gate.outputs.go == 'true' && !cancelled()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Fails the job if the key's value is anywhere under the run
+        # directory (after replacing it), so nothing is uploaded unscanned.
+        run: |
+          go run ./tools/agents-eval redact tools/agents-eval/results/ci
           cat tools/agents-eval/results/ci/summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
-        if: steps.gate.outputs.go == 'true' && !cancelled()
+        if: steps.gate.outputs.go == 'true' && success()
         with:
-          name: agents-eval-${{ inputs.model }}
+          name: agents-eval-${{ inputs.model }}-summary
           path: |
             tools/agents-eval/results/ci/summary.*
             tools/agents-eval/results/ci/meta.json
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.go == 'true' && success() && inputs.upload_transcripts
+        with:
+          name: agents-eval-${{ inputs.model }}-runs
+          path: |
             tools/agents-eval/results/ci/runs/**/record.json
+            tools/agents-eval/results/ci/runs/**/transcript.jsonl
             tools/agents-eval/results/ci/runs/**/project/**

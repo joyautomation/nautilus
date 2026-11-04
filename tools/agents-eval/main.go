@@ -38,6 +38,8 @@ func main() {
 		err = cmdReport(os.Args[2:])
 	case "rescore":
 		err = cmdRescore(os.Args[2:])
+	case "redact":
+		err = cmdRedact(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -58,6 +60,9 @@ func usage() {
   agents-eval report <results-dir>           rebuild summary.md/.json from a run
   agents-eval rescore [-naut p] <results-dir> re-score a run's saved projects with
                                              the current scorer (no tokens), then report
+  agents-eval redact <dir>                   replace the values of ANTHROPIC_API_KEY and
+                                             other credentials in the environment wherever
+                                             they occur under dir; exit 1 if any was found
 
 run 'agents-eval <command> -h' for flags.
 `)
@@ -192,7 +197,7 @@ func cmdRun(args []string) error {
 	_, runErr := Run(ctx, RunConfig{
 		Tasks: tasks, Conditions: conditions, K: *k, Model: *model, Agent: agent,
 		Parallel: *parallel, Timeout: *timeout, BudgetUSD: *budget, AgentsMd: md, ClaudeMd: cm,
-		Naut: *naut, Out: *out, Log: logf, StopAfterUSD: *stopAfter,
+		Naut: *naut, Out: *out, Log: logf, StopAfterUSD: *stopAfter, Secrets: secretsFromEnv(),
 	})
 	// Report every trial in the directory, not only this invocation's:
 	// a resumed run's summary covers the whole run.
@@ -208,6 +213,17 @@ func cmdRun(args []string) error {
 		return err
 	}
 	logf("summary: %s", filepath.Join(*out, "summary.md"))
+	var leaked []string
+	for _, r := range recs {
+		if len(r.SecretsRedacted) > 0 {
+			leaked = append(leaked, fmt.Sprintf("%s/%s/#%d", r.Task, r.Condition, r.Trial))
+		}
+	}
+	if len(leaked) > 0 {
+		// Redacted on disk already; the run still fails so nobody ships
+		// it without looking at how the value got there.
+		return fmt.Errorf("a credential's value was found (and redacted) in %v", leaked)
+	}
 	return runErr
 }
 
@@ -253,6 +269,30 @@ func cmdReport(args []string) error {
 		return err
 	}
 	return writeReport(out, meta, recs, tasks)
+}
+
+// cmdRedact is the last gate before results leave the machine (the
+// workflow runs it before uploading): it scrubs every credential value in
+// the environment from every file under dir and fails if it found one.
+func cmdRedact(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: agents-eval redact <dir>")
+	}
+	secrets := secretsFromEnv()
+	if len(secrets) == 0 {
+		fmt.Fprintln(os.Stderr, "agents-eval redact: no credential set in the environment; nothing to scan for")
+		return nil
+	}
+	found, err := RedactDir(args[0], secrets)
+	if err != nil {
+		return err
+	}
+	if len(found) > 0 {
+		// The file names only: never the value.
+		return fmt.Errorf("a credential's value was found and redacted in %d file(s): %v", len(found), found)
+	}
+	fmt.Fprintf(os.Stderr, "agents-eval redact: %s is clean of %d credential(s)\n", args[0], len(secrets))
+	return nil
 }
 
 // cmdRescore re-applies the current scorer to every trial's saved project,

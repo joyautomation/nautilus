@@ -70,22 +70,53 @@ func NewAgent(name string) (Agent, error) {
 
 // ─── Claude Code ────────────────────────────────────────────────────
 
-type claudeAgent struct{}
+// claudeAgent runs Claude Code headless. Bin is the CLI to run ("claude"
+// on PATH when empty); the tests point it at a fake that replays a canned
+// transcript.
+type claudeAgent struct{ Bin string }
 
 func (claudeAgent) Name() string { return "claude" }
 
-func (claudeAgent) Available() error {
-	_, err := exec.LookPath("claude")
+func (a claudeAgent) bin() string {
+	if a.Bin != "" {
+		return a.Bin
+	}
+	return "claude"
+}
+
+func (a claudeAgent) Available() error {
+	_, err := exec.LookPath(a.bin())
 	return err
 }
 
-// claudeTools is the whole tool set the agent gets: file tools (confined to
-// the working directory by acceptEdits plus --permission-prompts none) and
-// Bash for naut only. No web, no subagents: the run measures what the
-// project itself teaches.
+// claudeTools is the whole tool set the agent gets: file tools confined to
+// the project and Bash for naut only. No web, no subagents: the run
+// measures what the project itself teaches.
 const claudeTools = "Bash,Read,Edit,Write,Glob,Grep"
 
-func (claudeAgent) Run(ctx context.Context, req AgentRequest) (*AgentRun, error) {
+// claudeAllowed is every permission rule the agent runs under; with
+// --permission-prompts none, anything else is refused.
+//
+//   - File tools on the project only (`./**` is the working directory). The
+//     rules are explicit because CLAUDE_CODE_SUBPROCESS_ENV_SCRUB forces the
+//     permission mode back to default, where acceptEdits no longer applies.
+//   - naut, by name and by the absolute path `which naut` prints, plus the
+//     glue an agent puts around it (`naut check; true`, `naut --help |
+//     head`): a compound command is refused whole when any part is not
+//     allowed. No echo, env, printenv, set or cat: nothing that prints the
+//     environment. Claude Code also refuses `$VAR` expansion and reads of
+//     /proc/*/environ under these rules (probed with a canary), and naut
+//     itself never prints its environment.
+func claudeAllowed(nautDir string) []string {
+	return []string{
+		"Read(./**)", "Edit(./**)", "Write(./**)", "Glob(./**)", "Grep(./**)",
+		"Bash(naut:*)", "Bash(" + filepath.Join(nautDir, "naut") + ":*)",
+		"Bash(pwd)", "Bash(true)", "Bash(which:*)", "Bash(command -v:*)",
+		"Bash(head:*)", "Bash(tail:*)",
+	}
+}
+
+func (a claudeAgent) Run(ctx context.Context, req AgentRequest) (*AgentRun, error) {
 	args := []string{
 		"-p", req.Prompt,
 		"--model", req.Model,
@@ -93,15 +124,10 @@ func (claudeAgent) Run(ctx context.Context, req AgentRequest) (*AgentRun, error)
 		// permission rules stay out of the run.
 		"--setting-sources", "project,local",
 		"--tools", claudeTools,
-		// naut, plus the glue an agent puts around it (`naut check; echo
-		// $?`, `naut --help | head`): a compound command is refused whole
-		// when any part is not allowed. Nothing here reads files outside
-		// the project except head/tail given a path, and nothing tells the
-		// agent where such a path would be.
-		"--allowedTools", "Bash(naut:*)", "Bash(echo:*)", "Bash(pwd)", "Bash(true)",
-		"Bash(which:*)", "Bash(command -v:*)", "Bash(head:*)", "Bash(tail:*)",
-		// …and naut by the absolute path `which naut` prints.
-		"Bash(" + filepath.Join(req.NautDir, "naut") + ":*)",
+		"--allowedTools",
+	}
+	args = append(args, claudeAllowed(req.NautDir)...)
+	args = append(args,
 		// naut run serves forever; the time limit would kill it, but the
 		// agent would learn nothing in the meantime.
 		"--disallowedTools", "Bash(naut run:*)",
@@ -109,11 +135,11 @@ func (claudeAgent) Run(ctx context.Context, req AgentRequest) (*AgentRun, error)
 		"--permission-prompts", "none",
 		"--no-session-persistence",
 		"--output-format", "stream-json", "--verbose",
-	}
+	)
 	if req.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(req.BudgetUSD, 'f', 2, 64))
 	}
-	run, err := runProcess(ctx, "claude", args, req)
+	run, err := runProcess(ctx, a.bin(), args, req)
 	if err != nil {
 		return nil, err
 	}
@@ -268,9 +294,16 @@ func runProcess(ctx context.Context, bin string, args []string, req AgentRequest
 	return run, nil
 }
 
-// agentEnv is the harness's environment minus anything that would tell the
-// agent CLI it is nested inside another agent session, with naut first on
-// PATH.
+// agentEnv is the environment the agent CLI starts with: the harness's own,
+// minus anything that would tell it it is nested inside another agent
+// session and minus credentials it has no use for (a CI job's GitHub and
+// Actions tokens), with naut first on PATH.
+//
+// The agent CLI itself needs its API key, so ANTHROPIC_API_KEY stays here;
+// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 makes Claude Code strip it (and the
+// other Anthropic credentials) from every tool subprocess, so the agent's
+// shell never sees it. Claude Code needs bubblewrap for that, and turns it
+// on by itself under GitHub Actions.
 func agentEnv(nautDir string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
@@ -279,12 +312,14 @@ func agentEnv(nautDir string) []string {
 		case k == "CLAUDECODE", k == "CLAUDE_PID", k == "CLAUDE_EFFORT", k == "AI_AGENT",
 			strings.HasPrefix(k, "CLAUDE_CODE_"):
 			continue
+		case k == "GITHUB_TOKEN", k == "GH_TOKEN", strings.HasPrefix(k, "ACTIONS_"):
+			continue
 		case k == "PATH":
 			kv = "PATH=" + nautDir + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
 		}
 		env = append(env, kv)
 	}
-	return env
+	return append(env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1")
 }
 
 func truncate(s string, n int) string {
