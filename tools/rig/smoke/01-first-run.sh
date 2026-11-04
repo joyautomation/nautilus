@@ -2,7 +2,9 @@
 # 01 — first run: clean activation, the walkthrough opens once (and only
 # outside a nautilus project), and the missing-CLI prompt's "Install naut"
 # downloads the latest release into globalStorage/bin, after which the
-# language server runs and a broken .st gets a diagnostic.
+# language server runs, the PATH prompt (#558) adds naut to PATH for a login
+# shell and "Remove naut from PATH" undoes it, and a broken .st gets a
+# diagnostic.
 #
 # Needs the container's network (api.github.com); without it the install
 # half is a SKIP and naut goes back on PATH for the rest.
@@ -79,6 +81,48 @@ png=$(shot installed)
 pass "Install naut → $(basename "$(dirname "$(dirname "$MANAGED")")")/bin/naut ($("$MANAGED" version))" "$png"
 check "language server running from the managed copy" "" \
   wait_for 20 pgrep -f "$MANAGED lsp" >/dev/null
+
+# ── the PATH prompt (#558) ────────────────────────────────────────────────
+# After the restart above (never before it), a modal asks to put naut on
+# PATH outside VS Code, listing what changes. ~/.local/bin isn't on this
+# container's PATH, so it lists the link and profile lines. Add to PATH,
+# check a new login shell finds naut, then Remove undoes it — and the trap
+# cleans up regardless, so later checks never find this naut in ~/.local/bin.
+LINK=$HOME/.local/bin/naut
+MARK='# added by the nautilus VS Code extension'
+rm_path_bits() {
+  if [[ -L $LINK && $(readlink "$LINK") == "$MANAGED" ]]; then rm -f "$LINK"; fi
+  local f; for f in "$HOME/.profile" "$HOME/.bashrc"; do [[ -f $f ]] && sed -i "\\|$MARK|d" "$f"; done; true
+}
+eval "$(trap -p EXIT | sed 's/_rc=\$?; /_rc=$?; rm_path_bits; /')"
+if wait_for 15 dialog_up; then
+  msg=$(dialog_message); btns=$(dialog_buttons)
+  png=$(shot path-prompt)
+  if [[ $msg == *"~/.local/bin/naut"* && $msg == *"~/.profile"* && $btns == *"Add to PATH"* && $btns == *"Not now"* ]]; then
+    pass "PATH prompt (after the server restart) lists ~/.local/bin/naut and ~/.profile; offers $btns" "$png"
+  else
+    fail "PATH prompt doesn't list the changes: [$msg] [$btns]" "$png"
+  fi
+  page_click_button '^Add to PATH$' 1 || fail "PATH prompt: no Add to PATH button"
+  if wait_for 10 test -L "$LINK" && [[ $(readlink "$LINK") == "$MANAGED" ]] && grep -qF "$MARK" "$HOME/.profile"; then
+    pass "Add to PATH: ~/.local/bin/naut → the managed copy, one marked line in ~/.profile"
+  else
+    fail "Add to PATH: link $(readlink "$LINK" 2>/dev/null || echo missing); .profile mark $(grep -cF "$MARK" "$HOME/.profile" 2>/dev/null || echo 0)"
+  fi
+  found=$(env -i HOME="$HOME" PATH=/usr/bin:/bin bash -lc 'command -v naut' 2>/dev/null || true)
+  [[ $found == "$LINK" ]] && pass "a new login shell finds naut at ~/.local/bin/naut" || fail "a new login shell finds naut at: ${found:-nothing}"
+  vs_cmd "nautilus: Remove naut from PATH" 2
+  png=$(shot path-removed)
+  if [[ ! -e $LINK && ! -L $LINK ]] && ! grep -qF "$MARK" "$HOME/.profile" "$HOME/.bashrc" 2>/dev/null; then
+    pass "Remove naut from PATH: link and marked lines gone" "$png"
+  else
+    fail "Remove naut from PATH left: $(ls -l "$LINK" 2>/dev/null) $(grep -lF "$MARK" "$HOME/.profile" "$HOME/.bashrc" 2>/dev/null | tr '\n' ' ')" "$png"
+  fi
+else
+  png=$(shot no-path-prompt)
+  fail "no PATH prompt after Install naut (~/.local/bin is not on PATH here)" "$png"
+fi
+rm_path_bits
 
 # ── diagnostics on the broken file ─────────────────────────────────────────
 open_file broken.st 3

@@ -232,6 +232,9 @@ type Runtime struct {
 	// takeover sequence when this replica becomes leader. See retain.go.
 	leadMu  sync.Mutex
 	leading bool
+	// ledTerm is the coordinator's term (Termed) at the last takeover, 0
+	// before the first or without a Termed coordinator. Under leadMu.
+	ledTerm uint64
 
 	// alarms is the alarm engine, as retained operator state — nil unless
 	// SetAlarms registered one. Its own mutex because loadRetained reads it
@@ -274,6 +277,9 @@ type Runtime struct {
 	// pendingLocals are the VAR RETAIN locals loadRetained read, held for
 	// takeover to write back once it has reset the frames.
 	pendingLocals map[string]map[string]any
+
+	// live is what Liveness reads: Run's loops' scan edges and lifecycle.
+	live liveness
 }
 
 // onScanEntry is one registered OnScan observer, identified by an id so
@@ -502,6 +508,10 @@ func New(o Options) (*Runtime, error) {
 	}
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a
+	}
+	r.live.loops = append(r.live.loops, &loopLive{name: MainTaskName, period: o.Scan})
+	for _, tr := range tasks {
+		r.live.loops = append(r.live.loops, &loopLive{name: tr.name, period: tr.scan})
 	}
 	// Flag the output tags in the store so a write to one stamps the
 	// output generation Scan reads (see Tags.markOutputs).
@@ -950,12 +960,20 @@ func (r *Runtime) Run(ctx context.Context) {
 		saved = make(chan []byte, 1)
 		go func() { saved <- r.retainSaver(ctx) }()
 	}
+	// Liveness watches the loops from here on; see liveness.go.
+	r.live.state.Store(runRunning)
+	defer r.live.state.Store(runStopped)
 	var loops sync.WaitGroup
-	for _, tr := range r.tasks {
+	for i, tr := range r.tasks {
 		loops.Add(1)
+		live := r.live.loops[i+1]
 		go func(tr *taskRun) {
 			defer loops.Done()
-			runLoop(ctx, tr.scan, func(due time.Time) { r.scanTaskAt(tr, due) }, func(k uint64) {
+			runLoop(ctx, tr.scan, func(due time.Time) {
+				live.begin()
+				r.scanTaskAt(tr, due)
+				live.end()
+			}, func(k uint64) {
 				tr.mu.Lock()
 				tr.late.missed += k
 				tr.mu.Unlock()
@@ -968,7 +986,12 @@ func (r *Runtime) Run(ctx context.Context) {
 			})
 		}(tr)
 	}
-	runLoop(ctx, r.scan, r.scanAt, func(k uint64) {
+	mainLive := r.live.loops[0]
+	runLoop(ctx, r.scan, func(due time.Time) {
+		mainLive.begin()
+		r.scanAt(due)
+		mainLive.end()
+	}, func(k uint64) {
 		r.mu.Lock()
 		r.late.missed += k
 		r.mu.Unlock()
@@ -1212,7 +1235,15 @@ func (r *Runtime) scanAt(due time.Time) {
 	// (io.OutputsRequester). It is asked on every scan, even one that
 	// pushes anyway: the answer is a read-and-clear, so a request this push
 	// answers is not answered again on the next scan.
-	if r.driver != nil && len(r.outputs) > 0 {
+	//
+	// Leadership is asked again here, not only at the gate: a scan that
+	// hung in its read (or in the logic) may have lost the lease meanwhile
+	// to a standby that is now writing, and its stale outputs must not land
+	// after the new leader's (#621). Not sent means not held: the next push
+	// is the whole set.
+	if r.driver != nil && len(r.outputs) > 0 && r.coord != nil && !r.coord.IsLeader() {
+		r.outSent.Store(false)
+	} else if r.driver != nil && len(r.outputs) > 0 {
 		gen := r.tags.outputGeneration()
 		wanted := r.asker != nil && r.asker.OutputsWanted()
 		if r.alwaysWrite || wanted || !r.outSent.Load() || gen != r.outGen.Load() {

@@ -121,6 +121,15 @@ ext_fixture tank-batch
 point_extension_at "$PROJ" "$PORT"
 start_controller "$PROJ" "$PORT"
 sleep 3
+# start_controller is satisfied by ANY answer on the port, and my-plant's
+# controller, still stopping, can be the one that gives it: tank-batch's
+# then lost the bind and runs without its tag API, and the SFC editor can
+# never go live (#599). Say so here rather than as an editor FAIL.
+if api /api/state | grep -q '"BatchCount"'; then
+  pass "tank-batch's naut run on :$PORT, /api/state answers"
+else
+  fail "tank-batch's controller is not answering on :$PORT ($(grep -m1 '^tag api: ' /tmp/capture-controller.log 2>/dev/null || echo 'no tag api error logged'))"
+fi
 smoke_open "$PROJ" batch.sfc
 key Escape; hide_sidebar
 check_editor SFC-diagram 'open_file batch.sfc 3; vs_cmd "nautilus: Open as Diagram Editor" 8' 0

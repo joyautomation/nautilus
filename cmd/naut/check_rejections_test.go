@@ -34,13 +34,13 @@ func TestCheckRejects(t *testing.T) {
 		{name: "REF_TO", file: "p.st", src: stVars + "  q : REF_TO INT;\n" + stTail,
 			want: `p.st:5:1: var decl: line 5: expected an identifier, got "INT"`},
 		{name: "VAR_ACCESS", file: "p.st", src: "VAR_ACCESS\n  a : x : INT READ_ONLY;\nEND_VAR\n" + stVars + stTail,
-			want: `undeclared identifier "VAR_ACCESS"`},
+			want: `"VAR_ACCESS" alone is not a statement`},
 		{name: "CONFIGURATION", file: "p.st", src: "CONFIGURATION c\nEND_CONFIGURATION\n",
-			want: `undeclared identifier "CONFIGURATION"`},
+			want: `"CONFIGURATION" alone is not a statement`},
 		{name: "RESOURCE", file: "p.st", src: "RESOURCE r ON cpu\nEND_RESOURCE\n",
-			want: `undeclared identifier "RESOURCE"`},
+			want: `"RESOURCE" alone is not a statement`},
 		{name: "TASK", file: "p.st", src: "TASK t(INTERVAL := T#10ms, PRIORITY := 1);\n",
-			want: `undeclared identifier "TASK"`},
+			want: `"TASK" alone is not a statement`},
 		{name: "subrange", file: "p.st", src: "TYPE Pct : INT (0..100);\nEND_TYPE\n" + stVars + stTail,
 			want: `type decl: line 1: expected an identifier, got "("`},
 		{name: "DATE", file: "p.st", src: stVars + "  d : DATE;\n" + stTail, want: `unknown scalar type "DATE"`},
@@ -105,7 +105,7 @@ func TestCheckRejects(t *testing.T) {
 			want: `expected STEP, INITIAL_STEP, TRANSITION, or ACTION, got "MACRO_STEP"`},
 		{name: "SFC IL action", file: "p.sfc",
 			src:  sfcHead + "  INITIAL_STEP S0:\n    N Act;\n  END_STEP\n  ACTION Act:\n    LD A\n    ST Y\n  END_ACTION\n" + sfcTail,
-			want: `undeclared identifier "LD"`},
+			want: `"LD" alone is not a statement`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

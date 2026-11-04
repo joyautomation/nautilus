@@ -510,6 +510,13 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Unlock()
 }
 
+// PlainWriteGate marks this driver's write gate as only a gate
+// (io.PlainGated): open, it acts as with none. naut run gives it one in a
+// project without redundancy too, open while the scans are live (#625).
+func (d *Driver) PlainWriteGate() {}
+
+var _ nio.PlainGated = (*Driver)(nil)
+
 // gateOpen reports whether commands may leave the driver right now. Every
 // call is also a look at the gate: a look that finds it closed disarms the
 // start-up baseline, and the first that finds it open again forgets every

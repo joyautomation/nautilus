@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/l5x"
+	"github.com/joyautomation/nautilus/lang/lint"
 )
 
 // scope is where a routine's operands resolve: the program's own tags
@@ -122,8 +123,33 @@ func (p *pou) declare(d decl) {
 
 var sectionOrder = []string{"VAR_INPUT", "VAR_OUTPUT", "VAR_IN_OUT", "VAR_EXTERNAL", "VAR"}
 
-func (p *pou) source() []byte {
+// ldPragma is the first line of every ladder file the import writes: an
+// @allow pragma above the POU, so it covers the file, switching off every
+// ladder structure rule (lang/lint, #561). The vendor's rungs come across
+// as they were written — two coils on one tag, literal trip points, rungs
+// with no comment — and an import that warns on every routine would bury
+// what `naut check` says about the import itself. The reason says where
+// the rungs came from and how to have them linted: delete the line.
+func (im *importer) ldPragma() string {
+	var ids []string
+	for _, r := range lint.Rules {
+		if strings.HasPrefix(r.ID, "LD") {
+			ids = append(ids, r.ID)
+		}
+	}
+	src := im.opts.Source
+	if src == "" {
+		src = "the " + im.file.Controller.Name + " export"
+	}
+	return fmt.Sprintf("(* @allow %s: imported from %s by `naut logix import`; delete this line to lint it *)",
+		strings.Join(ids, " "), safeComment(src))
+}
+
+func (p *pou) source(pragma string) []byte {
 	var b strings.Builder
+	if pragma != "" {
+		b.WriteString(pragma + "\n")
+	}
 	fmt.Fprintf(&b, "%s %s\n", p.kind, p.name)
 	if len(p.header) > 0 {
 		b.WriteString("(* ")
@@ -273,7 +299,7 @@ func (im *importer) importProgram(prog *l5x.Program) []progFile {
 		} else {
 			im.lowerRoutine(sc, r, p)
 			file = im.fileName(name, ".ld")
-			im.proj.Files[file] = p.source()
+			im.proj.Files[file] = p.source(im.ldPragma())
 		}
 		files = append(files, progFile{File: file, Program: prog.Name, Routine: r.Name})
 	}
@@ -346,7 +372,7 @@ func (im *importer) importAOI(a *l5x.AddOnInstruction) {
 		return
 	}
 	im.lowerRoutine(sc, logic, p)
-	im.proj.Files["lib/"+im.fileName(p.name, ".ld")] = p.source()
+	im.proj.Files["lib/"+im.fileName(p.name, ".ld")] = p.source(im.ldPragma())
 }
 
 func firstLine(s string) string {

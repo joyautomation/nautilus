@@ -1,6 +1,9 @@
 package sfc
 
-import "strings"
+import (
+	"github.com/joyautomation/nautilus/lang/st"
+	"strings"
+)
 
 // TokenType enumerates the SFC body lexer's token kinds. The SFC-specific
 // keywords are always reserved (recognized regardless of surrounding
@@ -165,19 +168,13 @@ func (l *lexer) next() Token {
 			return Token{Type: tt, Literal: lit, Line: line, Col: col, Offset: offset}
 		}
 		return Token{Type: TokenIdent, Literal: lit, Line: line, Col: col, Offset: offset}
-	case c == '\'':
+	case c == '\'' || c == '"':
+		// '…' or "…", ending where st's lexer ends it: $' and $" are
+		// quotes inside it, so an action's 'it$'s' does not open a string
+		// that runs on past END_ACTION.
 		start := l.pos
-		l.advanceByte()
-		for l.pos < len(l.src) {
-			if l.peekByte() == '\'' {
-				if l.peekByteAt(1) == '\'' { // doubled '' = escaped quote
-					l.advanceByte()
-					l.advanceByte()
-					continue
-				}
-				l.advanceByte()
-				break
-			}
+		end, _ := st.StringEnd(l.src, l.pos)
+		for l.pos < end {
 			l.advanceByte()
 		}
 		return Token{Type: TokenString, Literal: l.src[start:l.pos], Line: line, Col: col, Offset: offset}

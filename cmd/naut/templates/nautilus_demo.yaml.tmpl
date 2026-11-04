@@ -53,6 +53,8 @@ tags:
   - { name: TempC,    role: state, init: 60.0, unit: "°C", desc: "Tank temperature" }
   # operator setpoints — writable from the HMI/API from scan one
   - { name: TempSP,         role: setpoint, init: 65.0, unit: "°C", desc: "Temperature setpoint" }
+  - { name: TempLowSP,      role: setpoint, init: 62.0, unit: "°C", desc: "Low temperature alarm threshold" }
+  - { name: HiTempSP,       role: setpoint, init: 90.0, unit: "°C", desc: "High temperature alarm threshold" }
   - { name: Kp,             role: setpoint, init: 12.0, desc: "PI proportional gain" }
   - { name: Ki,             role: setpoint, init: 0.15, unit: "1/s", desc: "PI integral gain" }
   - { name: PumpStartLevel, role: setpoint, init: 40.0, unit: "%", desc: "Pump seal-in level" }

@@ -199,6 +199,16 @@ The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
 trip when nautilus alone stops.
 
+Nor does it trip when nautilus's scan hangs (logic that never returns, a
+driver call that blocks) without `redundancy:`. The driver's own loop
+keeps polling the unit, and those polls feed the watchdog, so the outputs
+hold their last command for as long as the hang lasts. `naut run` gates
+some drivers on live scans in every project, but not this one, because
+it reads any gate as "one replica of a redundant set" (see
+[Redundancy](/guides/redundancy/#redundancy)). With `redundancy:`, a hung
+leader closes its gate and hands over (see [Redundancy](#redundancy)
+below).
+
 ## Holding outputs until an operator acknowledges
 
 Recovery is automatic: when the processor comes back, or after a
@@ -280,13 +290,50 @@ leadership: commands leave the driver only on the leader. A standby skips
 scans, so it never hands the driver a command, and its driver neither
 rewrites outputs on reconnect nor after a watchdog trip.
 
-**A standby's driver is not passive yet.** It keeps its session with the
-processor, and that session still changes the unit: it clears the on/off
-latches it reads, so the leader can miss a latch event, and when streaming
-it points the stream at itself, taking it from the leader
-([#618](https://github.com/joyautomation/nautilus/issues/618)). Until that
-is fixed, a redundant project should poll rather than stream, and not
-rely on latch tags.
+**A standby changes nothing on the unit.** It keeps a session with the
+processor and polls the packed areas, whatever the manifest asks for: the
+plain reads a polled scan makes (two on an ordinary chassis). It leaves
+the unit's configuration to the leader:
+it does not send the power-up clear, set the watchdog, write the custom
+data area's pointers, or configure the stream. It clears no latch: a
+latch reads set on the standby until the leader, which must see the
+event, delivers and clears it. At the takeover edge a latch event can
+still be lost, when the old leader clears it in its last scan before it
+sees the gate close and its program never runs on it, or delivered twice,
+when both replicas lead for a moment while the lease changes hands. A
+standby's clean stop puts nothing back.
+Its reads still count as requests to the unit, so they feed the
+communication watchdog. For a hung leader that is fine: the lease needs
+live scans, so a leader whose scan hangs closes its gate and the standby
+takes over within about 5 to 8 s (see
+[Redundancy](/guides/redundancy/#redundancy)). It is not fine for a
+leader that keeps scanning but cannot reach the unit while the standby
+can: the standby's polls keep the watchdog fed
+([#626](https://github.com/joyautomation/nautilus/issues/626)).
+
+**A takeover moves the stream.** The role follows the write gate, looked
+at every scan and every datagram. A standby whose gate opens becomes the
+leader on the same connection, with no outage: it sends the power-up clear
+if one is owed and configures the watchdog, the custom data area and the
+stream as the manifest asks, pointing the stream at itself. A leader whose
+gate closes stops using the stream and polls as a standby; it leaves the
+configuration where it is, since the new leader now owns it. Only a
+replica that still leads when it stops puts the stream and the pointers
+back: one that lost the lease and is stopped before it looks again
+leaves them to the new leader.
+
+**After a takeover, a stop cannot put back the original configuration.**
+Each replica records the stream and the custom data area's pointers as it
+first found them, in memory. Only the replica that led first found the
+unit as it was before nautilus; one that takes over finds the previous
+leader's settings. So what the last leader's stop puts back depends on
+which replica that is, and a stream the unit had before nautilus (to a
+historian, say) is put back only if the replica that first led is the
+one that stops last. Under redundancy a stream of the custom data area
+found at a takeover (the previous leader's) is recorded as off, so a stop
+never re-points the stream at the other replica. Note the unit's stream
+settings before you deploy a redundant pair, and put them back by hand in
+groov Manage if you retire it.
 
 **A command held while the processor was away goes out only on the
 leader.** Leadership is checked again when held commands go out, before

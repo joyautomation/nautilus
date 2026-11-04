@@ -24,6 +24,7 @@ import { LogixDeploy } from "./logixDeploy";
 import { broadcastSyncState, FbdEditorProvider, FbdPreview } from "./fbdPreview";
 import { LdEditorProvider, LdPreview } from "./ldPreview";
 import { SfcEditorProvider, SfcPreview } from "./sfcPreview";
+import { registerDiagramExport } from "./diagramExport";
 import { registerDiagramCommands } from "./diagramCommands";
 import { MimicEditorProvider } from "./mimicEditor";
 import { SceneEditorProvider } from "./sceneEditor";
@@ -35,7 +36,18 @@ import { registerPagePreview } from "./pagePreview";
 import { registerCopyKitComponentCommand } from "./copyKitComponent";
 import { registerNewProjectCommand } from "./newProject";
 import { AcceptanceTests } from "./acceptanceTests";
-import { cliVersion, checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
+import {
+  addCliToPathCommand,
+  cliVersion,
+  checkCliVersion,
+  initCli,
+  installCliCommand,
+  removeCliFromPathCommand,
+  resolveCliNow,
+  showCliInfo,
+  showCliMissing,
+  syncTerminalPath,
+} from "./cli";
 import { initTestState } from "./testState";
 import { notifyInfo, notifyWarning, openEditors } from "./testHooks";
 import { setLspClient } from "./lspClient";
@@ -235,6 +247,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.fbd.diffRevisions", () => fbd.diffRevisions()),
     vscode.commands.registerCommand("nautilus.ld.diffRevisions", () => ladder.diffRevisions()),
     vscode.commands.registerCommand("nautilus.sfc.diffRevisions", () => sfc.diffRevisions()),
+    // Export / print an LD, FBD or SFC diagram (SVG or paginated PDF).
+    ...registerDiagramExport(context, live),
     // The connection is just the nautilus.runtimeUrl setting; this command
     // is the discoverable way to change it. The config watcher below does
     // the actual reconnect, so writing the setting IS connecting. Recently
@@ -316,6 +330,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.logix.download", () => logix.download()),
     vscode.commands.registerCommand("nautilus.installCli", () => installCliCommand()),
     vscode.commands.registerCommand("nautilus.showCliInfo", () => showCliInfo()),
+    vscode.commands.registerCommand("nautilus.addCliToPath", () => addCliToPathCommand()),
+    vscode.commands.registerCommand("nautilus.removeCliFromPath", () => removeCliFromPathCommand()),
     vscode.commands.registerCommand("nautilus.restartLanguageServer", async () => {
       setLspClient(undefined);
       await client?.stop().catch(() => undefined);
@@ -327,6 +343,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         live?.configChanged();
       }
       if (e.affectsConfiguration("nautilus.cliPath")) {
+        // Integrated terminals follow the naut the extension now runs.
+        syncTerminalPath();
         void vscode.commands.executeCommand("nautilus.restartLanguageServer");
       }
     })

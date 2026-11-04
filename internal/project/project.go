@@ -30,6 +30,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/writable"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/lint"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/opcua"
@@ -103,6 +104,66 @@ type Manifest struct {
 	// `naut check` also runs that target's rules, so a construct the
 	// target cannot take is a diagnostic on the keystroke that wrote it.
 	Target *TargetConfig `yaml:"target"`
+	// Check tunes the diagram structure warnings `naut check` and the
+	// editor report for ladder, FBD and SFC (lang/lint): thresholds, and
+	// rules switched off for the whole project. One POU opts out of a rule
+	// with an `(* @allow ID *)` pragma in its header instead.
+	Check *CheckConfig `yaml:"check"`
+}
+
+// CheckConfig is the manifest's check: section. A field left out keeps its
+// default (lang/lint).
+//
+//	check:
+//	  disable: [LD005]      # rules not reported in this project
+//	  max-series: 6         # LD003: elements in series on one rung
+//	  max-branch-depth: 1   # LD002: how deep ladder branches nest
+//	  max-nesting: 2        # FBD001: how deep FBD calls nest
+type CheckConfig struct {
+	Disable        []string `yaml:"disable"`
+	MaxSeries      *int     `yaml:"max-series"`
+	MaxBranchDepth *int     `yaml:"max-branch-depth"`
+	MaxNesting     *int     `yaml:"max-nesting"`
+}
+
+// Structure is the project's structure-rule settings: the defaults, with
+// what check: changes. A nil section is the defaults.
+func (c *CheckConfig) Structure() (lint.Config, error) {
+	cfg := lint.Defaults()
+	if c == nil {
+		return cfg, nil
+	}
+	for _, id := range c.Disable {
+		if !lint.Known(id) {
+			ids := make([]string, len(lint.Rules))
+			for i, r := range lint.Rules {
+				ids[i] = r.ID
+			}
+			return cfg, fmt.Errorf("check.disable: %q is not a structure rule (the rules are %s)", id, strings.Join(ids, ", "))
+		}
+		if cfg.Disabled == nil {
+			cfg.Disabled = map[string]bool{}
+		}
+		cfg.Disabled[strings.ToUpper(id)] = true
+	}
+	for _, t := range []struct {
+		key string
+		v   *int
+		dst *int
+	}{
+		{"max-series", c.MaxSeries, &cfg.MaxSeries},
+		{"max-branch-depth", c.MaxBranchDepth, &cfg.MaxBranchDepth},
+		{"max-nesting", c.MaxNesting, &cfg.MaxNesting},
+	} {
+		if t.v == nil {
+			continue
+		}
+		if *t.v < 0 {
+			return cfg, fmt.Errorf("check.%s: %d is negative", t.key, *t.v)
+		}
+		*t.dst = *t.v
+	}
+	return cfg, nil
 }
 
 // TargetConfig is the deploy target. One kind at a time; logix is the
@@ -732,6 +793,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	if !dialect.Known(m.Dialect) {
 		return nil, fmt.Errorf("%s: dialect %q is not one of %s", name, m.Dialect, strings.Join(dialect.Names, ", "))
 	}
+	if _, err := m.Check.Structure(); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
 	if err := composeTags(fsys, &m, name); err != nil {
 		return nil, err
 	}
@@ -1133,33 +1197,65 @@ func TagDefsForErr(file, manifestName string) (defs []runtime.TagDef, manifestDi
 	if err != nil {
 		return nil, "", "", nil
 	}
+	dir, name, ok := governingManifest(abs, manifestName)
+	if !ok {
+		return nil, "", "", nil
+	}
+	m, err := ReadManifest(os.DirFS(dir), name)
+	if err != nil {
+		return nil, dir, name, err
+	}
+	defs, err = TagDefs(m)
+	if err != nil {
+		return nil, dir, name, err
+	}
+	return defs, dir, name, nil
+}
+
+// governingManifest finds the manifest that governs the file at abs: the
+// nearest one in its directory or above (manifestName first, when given,
+// then nautilus.yaml).
+func governingManifest(abs, manifestName string) (dir, name string, ok bool) {
 	names := []string{ManifestName}
 	if manifestName != "" && manifestName != ManifestName {
 		names = []string{manifestName, ManifestName}
 	}
-	dir := filepath.Dir(abs)
+	dir = filepath.Dir(abs)
 	for range 32 {
 		for _, name := range names {
 			if fi, err := os.Stat(filepath.Join(dir, filepath.FromSlash(name))); err != nil || fi.IsDir() {
 				continue
 			}
-			m, err := ReadManifest(os.DirFS(dir), name)
-			if err != nil {
-				return nil, dir, name, err
-			}
-			defs, err := TagDefs(m)
-			if err != nil {
-				return nil, dir, name, err
-			}
-			return defs, dir, name, nil
+			return dir, name, true
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil, "", "", nil
+			return "", "", false
 		}
 		dir = parent
 	}
-	return nil, "", "", nil
+	return "", "", false
+}
+
+// StructureFor is the structure-rule settings (lang/lint) of the project
+// governing file: its manifest's check: section, or the defaults outside a
+// project or when the manifest does not read (that error is reported on
+// the manifest, by whoever reads it for tags).
+func StructureFor(file, manifestName string) lint.Config {
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return lint.Defaults()
+	}
+	dir, name, ok := governingManifest(abs, manifestName)
+	if !ok {
+		return lint.Defaults()
+	}
+	m, err := ReadManifest(os.DirFS(dir), name)
+	if err != nil {
+		return lint.Defaults()
+	}
+	cfg, _ := m.Check.Structure()
+	return cfg
 }
 
 // PeersFor is the programs of the project governing file — every task's

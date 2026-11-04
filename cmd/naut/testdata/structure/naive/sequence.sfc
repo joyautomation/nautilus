@@ -1,0 +1,39 @@
+PROGRAM Sequence
+VAR
+    State : INT;
+END_VAR
+SFC
+  INITIAL_STEP S0:
+    N Logic;
+  END_STEP
+
+  STEP S1:
+    N Logic;
+  END_STEP
+
+  STEP S2:
+    N Logic;
+  END_STEP
+
+  TRANSITION FROM S0 TO S1 := State = 1;
+  END_TRANSITION
+
+  TRANSITION FROM S1 TO S2 := State = 2;
+  END_TRANSITION
+
+  TRANSITION FROM S2 TO S0 := State = 0;
+  END_TRANSITION
+
+  ACTION Logic:
+    IF State = 0 AND Start THEN
+        State := 1;
+    ELSIF State = 1 AND LT101_Level >= 80.0 THEN
+        State := 2;
+    ELSIF State = 2 AND LT101_Level <= 5.0 THEN
+        State := 0;
+    END_IF;
+    FillReq := State = 1;
+    DrainReq := State = 2;
+  END_ACTION
+END_SFC
+END_PROGRAM

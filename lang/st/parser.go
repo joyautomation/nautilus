@@ -21,8 +21,18 @@ func tokPos(tok Token) Pos { return Pos{Line: tok.Line, Col: tok.Col} }
 func (p *Parser) peekPos() Pos { return tokPos(p.peek()) }
 
 // Parse parses Structured Text source into a Program AST.
+//
+// What the lexer could not read is an error here, where it starts: a
+// string literal that is unterminated or holds an unknown $ escape, and a
+// (* comment that never closes (nautilus#609). Read on, either swallows
+// the rest of its line or file and the parser reports something else, or
+// nothing.
 func Parse(source string) (*Program, error) {
-	tokens := Lex(source)
+	tokens, lexErrs := LexErrors(source)
+	if len(lexErrs) > 0 {
+		e := lexErrs[0]
+		return nil, fmt.Errorf("line %d:%d: %s", e.Pos.Line, e.Pos.Col, e.Msg)
+	}
 	p := &Parser{tokens: tokens}
 	return p.parseProgram()
 }
@@ -107,6 +117,7 @@ func (p *Parser) match(tt TokenType) bool {
 func (p *Parser) parseProgram() (*Program, error) {
 	prog := &Program{}
 	nameSet := false
+	progLine := 0 // the PROGRAM keyword's line, where a missing END_PROGRAM is reported
 
 	// File-level prelude: TYPE / FUNCTION_BLOCK / FUNCTION declarations may
 	// appear before (or instead of) PROGRAM. A file with no PROGRAM keyword
@@ -163,7 +174,7 @@ func (p *Parser) parseProgram() (*Program, error) {
 			if prog.TopKeyword == "" {
 				prog.TopKeyword = "PROGRAM"
 			}
-			p.advance()
+			progLine = p.advance().Line
 			nameTok := p.advance()
 			prog.Name = nameTok.Literal
 			nameSet = true
@@ -219,7 +230,11 @@ func (p *Parser) parseProgram() (*Program, error) {
 		}
 	}
 	if nameSet {
-		p.match(TokenEndProgram)
+		if !p.match(TokenEndProgram) {
+			// The loop above stops at END_PROGRAM or the end of the file:
+			// here it is the end, so the POU never closed (nautilus#609).
+			return nil, fmt.Errorf("line %d: PROGRAM %s has no END_PROGRAM", progLine, prog.Name)
+		}
 		// One POU per file: FUNCTION_BLOCKs and FUNCTIONs belong before
 		// END_PROGRAM, so anything after it would silently never compile.
 		if t := p.peek(); t.Type != TokenEOF {
@@ -646,8 +661,11 @@ func (p *Parser) parseStatement() (Statement, error) {
 		// silently dropping the `#` and running the assignment (#198).
 		return nil, p.hashPrefixErr(p.advance())
 	default:
-		p.advance()
-		return nil, nil
+		// A token that cannot start a statement: an operand left over
+		// after an expression (`x := a 5;`), a stray keyword. Said, not
+		// skipped (nautilus#609).
+		t := p.advance()
+		return nil, fmt.Errorf("line %d:%d: unexpected %s; a statement starts with a name, IF, CASE, FOR, WHILE, REPEAT, RETURN, EXIT or CONTINUE", t.Line, t.Col, t.describe())
 	}
 }
 
@@ -759,6 +777,9 @@ func (p *Parser) parseAssignOrCall() (Statement, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := p.endOfExpression(); err != nil {
+			return nil, err
+		}
 		p.match(TokenSemicolon)
 		return &AssignStmt{
 			Target:     flattenLValue(lhs),
@@ -768,15 +789,32 @@ func (p *Parser) parseAssignOrCall() (Statement, error) {
 		}, nil
 	}
 
-	// Bare identifier on a line — legacy code paths produced an identity
-	// assignment here. Preserve that behavior for backward compat.
-	p.match(TokenSemicolon)
-	return &AssignStmt{
-		Target:     flattenLValue(lhs),
-		TargetExpr: lhs,
-		Value:      lhs,
-		Pos:        pos,
-	}, nil
+	// A name alone (`b;`) does nothing: IEC has no expression statement
+	// but a call. It used to read as `b := b`, which hid an operand left
+	// over from the line before (`s := a` / `b;`) (nautilus#609).
+	name := flattenLValue(lhs)
+	return nil, fmt.Errorf("line %d:%d: %q alone is not a statement: assign it (%s := …), or call it as %s()", pos.Line, pos.Col, name, name, name)
+}
+
+// endOfExpression reports an expression followed, on its own line, by
+// something that can only continue one: `s := a b;` is two operands with no
+// operator between them, not `s := a;` and then a statement `b`
+// (nautilus#609). The ';' that ends a statement stays optional before a
+// new line, as it always has been here.
+func (p *Parser) endOfExpression() error {
+	next := p.peek()
+	if p.pos == 0 || next.Line != p.tokens[p.pos-1].Line {
+		return nil
+	}
+	if p.atEndRegion() { // END_REGION lexes as a name, and ends the statement as END_IF does
+		return nil
+	}
+	switch next.Type {
+	case TokenIdent, TokenNumber, TokenBasedNumber, TokenString, TokenTimeLiteral,
+		TokenTypedLiteral, TokenTrue, TokenFalse, TokenLParen:
+		return fmt.Errorf("line %d:%d: expected an operator or ';' after the expression, got %s", next.Line, next.Col, next.describe())
+	}
+	return nil
 }
 
 // flattenLValue renders a structured lvalue as the dot-joined string form
@@ -1214,7 +1252,7 @@ func (p *Parser) parsePrimary() (Expression, error) {
 		return &NumberLit{Value: digits, Base: base, Pos: pos}, nil
 	case TokenString:
 		p.advance()
-		return &StringLit{Value: tok.Literal, Pos: pos}, nil
+		return &StringLit{Value: UnquoteString(tok.Literal, tok.Quote), Pos: pos}, nil
 	case TokenTrue:
 		p.advance()
 		return &BoolLit{Value: true, Pos: pos}, nil
@@ -1424,9 +1462,12 @@ func buildTypedLit(raw string, pos Pos) Expression {
 		return &TypedLit{TypeName: typeName, Inner: &BoolLit{Value: false, Pos: pos}, Pos: pos}
 	}
 
-	// STRING#'hello' → strip the quotes and return a StringLit.
-	if (typeName == "STRING" || typeName == "WSTRING") && len(payload) >= 2 && payload[0] == '\'' && payload[len(payload)-1] == '\'' {
-		return &TypedLit{TypeName: typeName, Inner: &StringLit{Value: payload[1 : len(payload)-1], Pos: pos}, Pos: pos}
+	// STRING#'hello' / WSTRING#"hello" → strip the quotes, decode the $
+	// escapes, and return a StringLit.
+	if (typeName == "STRING" || typeName == "WSTRING") && len(payload) >= 2 {
+		if q := payload[0]; (q == '\'' || q == '"') && payload[len(payload)-1] == q {
+			return &TypedLit{TypeName: typeName, Inner: &StringLit{Value: UnquoteString(payload[1:len(payload)-1], q), Pos: pos}, Pos: pos}
+		}
 	}
 
 	// TIME#5s / LTIME#1h30m → TimeLit.

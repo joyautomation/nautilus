@@ -1493,3 +1493,28 @@ func TestSTTOFAndCounterValue(t *testing.T) {
 		}
 	}
 }
+
+// A lint pragma is a naut check setting, not rung documentation: neither a
+// header pragma nor a pragma line in the note run reaches the rung's
+// <Comment>, and the rest of the comment does.
+func TestLintPragmaStaysOutOfRungComment(t *testing.T) {
+	src := strings.Replace(fixture(t, "demoline.ld"),
+		"  RUNG alarm (* LAH-101 high-level alarm when tank level is at or above the setpoint *)",
+		"  // LAH-101 high-level alarm\n  RUNG alarm (* @allow LD006: the setpoint is a tag, the limit is fixed *)", 1)
+	src = strings.Replace(src,
+		"  RUNG seal (* P-101 pump seal-in: Start latches the run command, Stop drops it out *)",
+		"  // P-101 pump seal-in\n  // @allow LD004: kept as drawn on the P&ID\n  RUNG seal", 1)
+	if !strings.Contains(src, "@allow LD006") || !strings.Contains(src, "@allow LD004") {
+		t.Fatal("fixture changed; the replacements did not apply")
+	}
+	f := mustWrite(t, src, demoOpts())
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if len(rungs) != 2 {
+		t.Fatalf("rungs = %+v", rungs)
+	}
+	for i, want := range []string{"P-101 pump seal-in", "LAH-101 high-level alarm"} {
+		if got := rungs[i].Comment; got != want {
+			t.Errorf("rung %d comment = %q, want %q", i, got, want)
+		}
+	}
+}

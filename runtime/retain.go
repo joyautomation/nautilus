@@ -20,6 +20,16 @@ type Coordinator interface {
 	IsLeader() bool
 }
 
+// Termed is a Coordinator that also says which leadership this is: Term
+// changes whenever another replica may have led since this one last did
+// (leader.Elector.Term). With it, a replica whose gate closed and opens
+// again in the same term resumes instead of taking over (#621): a scan that
+// stalled for a couple of seconds pauses the outputs, not the program's
+// state. Without it, every opening of the gate is a takeover.
+type Termed interface {
+	Term() uint64
+}
+
 // saveInterval paces the retain saver. Two seconds bounds how much operator
 // input a hard kill can lose (an orderly stop saves once more, see Run),
 // while keeping a busy HMI session from turning every slider drag into a
@@ -63,10 +73,26 @@ func (r *Runtime) gate() bool {
 	lead := r.coord == nil || r.coord.IsLeader()
 	r.leadMu.Lock()
 	defer r.leadMu.Unlock()
+	termed, _ := r.coord.(Termed)
 	switch {
-	case lead && !r.leading:
+	case lead && !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm:
+		// The same leadership, resumed: this replica closed its gate (its
+		// scans stalled) and opens it again on a lease nobody else held in
+		// between. Nothing to reload and nothing stale to discard, so no
+		// takeover: frames, timers, SFC steps and retained state carry on.
+		// The drivers get the whole output set on this scan, as after any
+		// gap in what was sent.
+		r.outSent.Store(false)
+		r.leading = true
+	case lead && (!r.leading || termed != nil && termed.Term() != r.ledTerm):
+		// Leadership from standby, or a new term this replica never saw
+		// the gate close for (lost and regained between two scans): another
+		// replica may have led meanwhile.
 		r.takeover()
 		r.leading = true
+		if termed != nil {
+			r.ledTerm = termed.Term()
+		}
 	case !lead:
 		if r.leading {
 			// Stepping down: forces belong to the active controller only.

@@ -239,6 +239,9 @@ type Token struct {
 	Literal string
 	Line    int
 	Col     int
+	// Quote is the quote a TokenString opened with: '\'' (STRING) or '"'
+	// (WSTRING). Zero for every other token.
+	Quote byte
 }
 
 // keywords maps IEC 61131-3 keywords to token types.

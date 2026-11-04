@@ -29,10 +29,10 @@ LD
   RUNG fail (* commanded to run, no running feedback for 5 s: failed to start *)
     Run /RunFb t1:TON(PT := T#5S) ( S FailToRun )
 
-  RUNG reset
+  RUNG reset (* the operator's Reset pulse clears a fail-to-run trip so the pump can retry *)
     Reset ( R FailToRun )
 
-  RUNG hand
+  RUNG hand (* reported back so the speed logic uses the hand speed, not the loop *)
     EQ(Mode, 1) ( InHand )
 
   // one CTU count per fail-to-run trip; three locks the pump out. The

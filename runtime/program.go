@@ -347,8 +347,10 @@ func (p *Program) Locals() map[string]any {
 // has no top-level declaration of its own to see here — the tag is bound
 // through whichever program's instance steps it, exactly as a scan
 // resolves it — so leaving those out would undercount what this program
-// actually binds. An FB type that exists but nothing here instantiates
-// contributes nothing.
+// actually binds. The same goes for the VAR_EXTERNAL of every user
+// FUNCTION the program or one of those blocks calls (nautilus#590). An FB
+// type that exists but nothing here instantiates, or a FUNCTION nothing
+// calls, contributes nothing.
 //
 // This is introspection for tooling, not a scan path. It answers a question
 // the tag store cannot until something has run: an output tag with no seed
@@ -361,6 +363,17 @@ func (p *Program) Globals() map[string]*ir.Type {
 		return nil
 	}
 	return p.prog.GlobalsDeep()
+}
+
+// BindingConflicts reports each tag two of this program's POUs declare
+// with different shapes — see ir.Program.BindingConflicts.
+func (p *Program) BindingConflicts() []ir.BindingConflict {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prog == nil {
+		return nil
+	}
+	return p.prog.BindingConflicts()
 }
 
 // Types reports every TYPE this program's sources declare, resolved. A
