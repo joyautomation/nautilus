@@ -451,7 +451,10 @@ TRUE`, `Alarms.3 := TRUE` on a plain `WORD` tag, or a ladder coil on
 as it is stored at that moment and leaves every other bit as it is, so an
 operator's or a client's change to bit 5 survives a program that sets bit 3
 in the same scan. A writer always sends the whole word, and only the bits
-the program did not assign keep its value.
+the program did not assign keep its value. The sign bit of a signed type
+(bit 15 of an `INT`) carries the sign, so assigning it assigns the sign:
+the program's `I16.15 := FALSE` with a writer's -1 in the same scan
+commits 32767, the writer's other 15 bits with the program's sign.
 
 When the program and a writer hit the **same** member in one scan, the
 program's assignment is the last write and wins. A whole tag has always

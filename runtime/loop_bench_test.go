@@ -47,7 +47,7 @@ END_PROGRAM`
 
 func benchProgram(b *testing.B, src string, iters int64) {
 	b.Helper()
-	r, err := runtime.New(runtime.Options{Program: src, Seed: nio.Values{"Iters": iters, "Acc": 0.0, "Len": int64(0)}})
+	r, err := runtime.New(runtime.Options{Program: src, Seed: nio.Values{"Iters": iters, "Acc": 0.0, "Len": int64(0), "Word": int64(0)}})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -100,3 +100,29 @@ func BenchmarkUserFBScan(b *testing.B) {
 		r.Scan()
 	}
 }
+
+// Bit writes on signed words, the sign bit among them (#611): a local in a
+// loop, and a global word set and cleared once a scan through its sign bit
+// and a byte that covers it. 1000 iterations a scan; the scan allocates
+// nothing.
+const benchSignBits = `PROGRAM Bits
+VAR_EXTERNAL
+    Iters : INT;
+    Word  : INT;
+    Len   : INT;
+END_VAR
+VAR
+    i : INT;
+    w : INT;
+END_VAR
+FOR i := 1 TO Iters DO
+    w.15 := NOT w.15;
+    w.3 := w.15;
+    w.%B1 := 16#80;
+END_FOR;
+Word.15 := NOT Word.15;
+Word.%B1.7 := Word.15;
+Len := w;
+END_PROGRAM`
+
+func BenchmarkSignBitScan(b *testing.B) { benchProgram(b, benchSignBits, 1000) }

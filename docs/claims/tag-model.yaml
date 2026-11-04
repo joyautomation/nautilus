@@ -296,6 +296,22 @@ claims:
       - go ./runtime TestWholeAssignmentOwnsEverythingBeneath
       - go ./runtime TestWholeWordAssignmentOwnsEveryBit
       - go ./server TestHTTPMemberWritesSurviveProgramMemberWrites
+  - id: TAG-055
+    claim: >-
+      Assigning the sign bit of a signed type assigns the sign: the
+      program's I16.15 := FALSE with a writer's -1 in the same scan commits
+      32767, the writer's other 15 bits with the program's sign, and the
+      result is always in the type's range.
+    source: "#a-member-write-during-a-scan"
+    tests:
+      - go ./runtime TestSignBitMergesWithAnOutsideBit
+      - go ./lang/ir TestBitWriteReportsItsBits
+    note: >-
+      Every signed width, set and cleared, against an outside write to
+      another bit, on a plain word tag, a structure member, an array element
+      and a member of an array-of-structs element, through a bit, a byte
+      that holds the sign and a bit of that byte, and with ladder output,
+      set and reset coils.
   - id: TAG-025
     claim: >-
       A member write keeps the leaf's type (a number lands as REAL or as an

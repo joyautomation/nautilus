@@ -33,8 +33,10 @@ END_PROGRAM`
 	if got := h.globals["Lo"].I; got != 0x1228 {
 		t.Errorf("Alarms.%%W0 (after the two bit writes) = %#x, want 0x1228", got)
 	}
-	if got := h.globals["Alarms"].I; got != 0xAB001228 {
-		t.Errorf("Alarms = %#x, want 0xAB001228 (bit 5 set, bit 0 cleared, byte 3 = AB)", got)
+	// Byte 3 of a DINT holds its sign bit, so 16#AB makes it negative: the
+	// DINT whose 32 bits are 16#AB001228 (#611).
+	if got := h.globals["Alarms"].I; got != int64(int32(-0x54ffedd8)) || uint32(got) != 0xAB001228 {
+		t.Errorf("Alarms = %d (%#x), want %d: the DINT 16#AB001228 (bit 5 set, bit 0 cleared, byte 3 = AB)", got, uint32(got), int32(-0x54ffedd8))
 	}
 	if got := h.globals["D1"].I; got != 0x12345678 {
 		t.Errorf("L.%%D1 = %#x", got)

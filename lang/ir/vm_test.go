@@ -44,11 +44,14 @@ func (h *memberHost) WriteGlobalMember(name string, v Value, p MemberPath) error
 // whole.
 func TestBitWriteReportsItsBits(t *testing.T) {
 	word := IntNamed("LWORD")
-	rec := &StructDef{Name: "R", Fields: []StructField{{Name: "A", Type: IntT}, {Name: "W", Type: word}}}
+	rec := &StructDef{Name: "R", Fields: []StructField{{Name: "A", Type: IntT}, {Name: "W", Type: word}, {Name: "SI", Type: IntNamed("SINT")}}}
 	recT := &Type{Kind: TypeStruct, Struct: rec}
 	w := &GlobalRef{Name: "W", T: word}
 	sw := &MemberRef{Object: &GlobalRef{Name: "S", T: recT}, FieldIdx: 1, T: word}
 	byte1 := &BitRef{Object: w, Bit: 8, Width: 8, T: IntNamed("BYTE")}
+	i := &GlobalRef{Name: "I", T: IntNamed("INT")}
+	ibyte1 := &BitRef{Object: i, Bit: 8, Width: 8, T: IntNamed("BYTE"), Sign: 15}
+	ssi := &MemberRef{Object: &GlobalRef{Name: "S", T: recT}, FieldIdx: 2, T: IntNamed("SINT")}
 	for _, tc := range []struct {
 		name   string
 		target LValue
@@ -64,12 +67,24 @@ func TestBitWriteReportsItsBits(t *testing.T) {
 		{"W.%B1.2", &BitRef{Object: byte1, Bit: 2}, BoolVal(true), 0, 1 << 10, true},
 		{"W.%L0", &BitRef{Object: w, Bit: 0, Width: 64, T: word}, IntVal(-1), 0, ^uint64(0), true},
 		{"S.W", sw, IntVal(1), 1, 0, true},
+		// The sign bit of a signed word narrower than 64 bits carries the
+		// bits above it (#611); a bit below it, or a part without it, does
+		// not.
+		{"I.15", &BitRef{Object: i, Bit: 15, Sign: 15}, BoolVal(true), 0, ^uint64(1<<15 - 1), true},
+		{"I.15 cleared", &BitRef{Object: i, Bit: 15, Sign: 15}, BoolVal(false), 0, ^uint64(1<<15 - 1), true},
+		{"I.14", &BitRef{Object: i, Bit: 14, Sign: 15}, BoolVal(true), 0, 1 << 14, true},
+		{"I.%B1", ibyte1, IntVal(0x80), 0, ^uint64(1<<8 - 1), true},
+		{"I.%B0", &BitRef{Object: i, Bit: 0, Width: 8, T: IntNamed("BYTE"), Sign: 15}, IntVal(0x80), 0, 0xFF, true},
+		{"I.%B1.7", &BitRef{Object: ibyte1, Bit: 7}, BoolVal(true), 0, ^uint64(1<<15 - 1), true},
+		{"I.%B1.6", &BitRef{Object: ibyte1, Bit: 6}, BoolVal(true), 0, 1 << 14, true},
+		{"S.SI.7", &BitRef{Object: ssi, Bit: 7, Sign: 7}, BoolVal(true), 1, ^uint64(1<<7 - 1), true},
 		{"W", w, IntVal(1), 0, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &memberHost{stubHost: newStubHost()}
 			h.globals["W"] = Value{Kind: TypeInt}
-			h.globals["S"] = Value{Kind: TypeStruct, Struct: rec, Fld: []Value{{Kind: TypeInt}, {Kind: TypeInt}}}
+			h.globals["I"] = Value{Kind: TypeInt}
+			h.globals["S"] = Value{Kind: TypeStruct, Struct: rec, Fld: []Value{{Kind: TypeInt}, {Kind: TypeInt}, {Kind: TypeInt}}}
 			prog := &Program{Body: []Stmt{&Assign{Target: tc.target, Value: &Lit{V: tc.value}}}}
 			if err := Run(prog, NewFrame(prog), h); err != nil {
 				t.Fatal(err)
@@ -350,5 +365,24 @@ func TestReturnEarly(t *testing.T) {
 	}
 	if frame.Slots[1].I != 1 {
 		t.Errorf("result = %d, want 1 (RETURN should have skipped the trailing assign)", frame.Slots[1].I)
+	}
+}
+
+// Type.SignBit names the sign bit of a signed integer narrower than 64 bits
+// and nothing else (#611).
+func TestSignBit(t *testing.T) {
+	for name, want := range map[string]int{
+		"SINT": 7, "INT": 15, "DINT": 31, "LINT": 0,
+		"USINT": 0, "UINT": 0, "UDINT": 0, "ULINT": 0,
+		"BYTE": 0, "WORD": 0, "DWORD": 0, "LWORD": 0,
+	} {
+		if got := IntNamed(name).SignBit(); got != want {
+			t.Errorf("%s.SignBit() = %d, want %d", name, got, want)
+		}
+	}
+	for _, typ := range []*Type{IntT, RealT, BoolT, nil, {Kind: TypeInt, Name: "INT", Enum: &EnumDef{}}} {
+		if got := typ.SignBit(); got != 0 {
+			t.Errorf("%v.SignBit() = %d, want 0", typ, got)
+		}
 	}
 }
