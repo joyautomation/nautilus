@@ -219,17 +219,31 @@ func (t *Tags) storeLocked(name string, cur *tagVal, v ir.Value) bool {
 // so the tag keeps its declared name and its output flag (outNames is keyed
 // by the declared spelling) whatever case the writer used.
 func (t *Tags) DeclaredOutputName(name string) string {
+	if d, ok := t.DeclaredOutput(name); ok {
+		return d
+	}
+	return name
+}
+
+// DeclaredOutput is the declared spelling of an output named name in any
+// case, and whether name names one. Names are folded with ir.NameKey, as
+// every other lookup in the store folds them: strings.EqualFold does not
+// see the dotless ı of "Pumpınlet" as the I of pumpInlet, which NameKey
+// does, so a write could create the output under the writer's spelling
+// and drop its output flag (#619).
+func (t *Tags) DeclaredOutput(name string) (string, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if _, ok := t.outNames[name]; ok {
-		return name
+		return name, true
 	}
+	k := ir.NameKey(name)
 	for n := range t.outNames {
-		if strings.EqualFold(n, name) {
-			return n
+		if ir.NameKey(n) == k {
+			return n, true
 		}
 	}
-	return name
+	return "", false
 }
 
 // markOutputs registers the tags the runtime hands to the driver, so a write

@@ -123,10 +123,13 @@ func (n *Node) applyCommand(device string, payload Payload) {
 }
 
 // writeCommand writes one scalar command through the runtime's write front
-// door. A declared tag the store does not hold yet (an output no scan has
-// written) is written onto a zero of its declared type by the same strict
-// rule, as an HTTP write is, so it cannot be born retyped. A name with no
-// declared type is refused: the node never births such a tag.
+// door. A declared output the store does not hold yet (no scan has written
+// it) is created under its declared name, on a zero of its declared type by
+// the same strict rule, as an HTTP write is, so it cannot be born retyped.
+// Any other name the store does not hold is refused: the node never births
+// such a tag, and a global only a program declares, created under the
+// host's spelling, was a tag the write gate had judged by that spelling
+// ("gain" past "g*" for the program's Gain, #619).
 func (n *Node) writeCommand(name string, v any) error {
 	tags := n.rt.Tags()
 	if s, ok := v.(string); ok && !n.takesString(name) {
@@ -140,15 +143,19 @@ func (n *Node) writeCommand(name string, v any) error {
 	if !errors.Is(err, runtime.ErrUndefined) || strings.ContainsRune(name, '.') {
 		return err
 	}
-	t := tags.TypeOf(name)
+	decl, isOut := tags.DeclaredOutput(name)
+	if !isOut {
+		return err
+	}
+	t := tags.TypeOf(decl)
 	if t == nil {
 		return err
 	}
-	nv, serr := ir.SetFieldTypedStrict(ir.Zero(t), t, nil, v, "tag "+name)
+	nv, serr := ir.SetFieldTypedStrict(ir.Zero(t), t, nil, v, "tag "+decl)
 	if serr != nil {
 		return serr
 	}
-	tags.Set(tags.DeclaredOutputName(name), nv)
+	tags.Set(decl, nv)
 	return nil
 }
 
@@ -171,9 +178,13 @@ func (n *Node) takesString(name string) bool {
 const inputWriteRefusal = "an input: its driver replaces it before every scan (force it to hold a value, or write the setpoint the logic reads)"
 
 // isInput reports whether tag is one of the runtime's inputs, in any case.
+// It folds with ir.NameKey, as the store does: under strings.EqualFold the
+// dotless ı of "Lımit" missed the input Limit that the write then reached
+// (#619).
 func (n *Node) isInput(tag string) bool {
+	k := ir.NameKey(tag)
 	for _, in := range n.rt.Inputs() {
-		if strings.EqualFold(in, tag) {
+		if ir.NameKey(in) == k {
 			return true
 		}
 	}

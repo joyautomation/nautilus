@@ -57,7 +57,10 @@ func (n *Node) writeAllowed(p string) bool {
 // and each member as its struct type declares it ("motor1.start" →
 // "Motor1.START"). An index is kept as sent. A part that resolves to
 // nothing is kept as sent, so an unknown name is gated, and refused,
-// exactly as before.
+// exactly as before. That fallback is safe only because the write resolves
+// names the same way and refuses what this does not resolve: tags and
+// declared outputs are both folded with ir.NameKey, and writeCommand
+// creates no tag but a declared output, under its declared name.
 func (n *Node) canonicalPath(p string) string {
 	tags := n.rt.Tags()
 	// A tag whose own name contains a dot wins over member resolution, as
@@ -72,14 +75,19 @@ func (n *Node) canonicalPath(p string) string {
 		if v, err := tags.ReadGlobal(c); err == nil {
 			val = v
 		}
-	} else {
-		root = tags.DeclaredOutputName(root)
+	} else if d, ok := tags.DeclaredOutput(root); ok {
+		root = d
 	}
 	for i, seg := range segs {
 		if strings.HasPrefix(seg, "[") {
 			// An element: what is below it is the element type's. Index
 			// writes are refused before the gate today; resolving past one
 			// keeps a member below it in its declared case all the same.
+			// The index itself is kept as sent, though PathSegments and the
+			// store read "[01]" and "[+1]" as "[1]": if element writes are
+			// ever enabled, canonicalise the index here too (to the
+			// element's decimal index), or a pattern naming `Pumps\[1\]`
+			// could be dodged with "Pumps[01]".
 			if val.Kind == ir.TypeArray && len(val.Arr) > 0 {
 				val = val.Arr[0]
 			} else {

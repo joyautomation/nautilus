@@ -10,6 +10,7 @@ package sparkplug
 import (
 	"bytes"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,5 +192,94 @@ func TestWriteGateUnknownNameStillRefused(t *testing.T) {
 	}
 	if got := n.Status().CommandsRefused; got != 2 {
 		t.Errorf("CommandsRefused = %d, want 2", got)
+	}
+}
+
+// newFoldNode is a node over a runtime with an output no scan has written
+// (pumpInlet), a global only the program declares (Gain) and an input
+// (Limit), for the fold tests below.
+func newFoldNode(t *testing.T, patterns ...string) (*Node, *bytes.Buffer) {
+	t.Helper()
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Main\nVAR_EXTERNAL\n\tpumpInlet : REAL;\n\tGain : REAL;\n\tLimit : REAL;\nEND_VAR\nEND_PROGRAM\n",
+		Driver:  nio.NewMemory(), Scan: 50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.Typed("pumpInlet", runtime.RoleOutput, "REAL"),
+			runtime.Input("Limit", runtime.Init(4.5)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))},
+		WithWritable(patterns...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n, &buf
+}
+
+// The store folds a name with ir.NameKey (upper case), under which the
+// dotless ı of "Pumpınlet" is the I of the declared output pumpInlet;
+// strings.EqualFold does not see them as one. The gate must judge the tag
+// the write lands on: Pump* does not open pumpInlet, so "Pumpınlet" is
+// refused, and nothing is created under that spelling.
+func TestWriteGateDotlessIDoesNotOpenAnUnwrittenOutput(t *testing.T) {
+	n, buf := newFoldNode(t, "Pump*")
+	tags := n.rt.Tags()
+	if _, err := tags.ReadGlobal("pumpInlet"); err == nil {
+		t.Fatal("precondition: pumpInlet is already in the store")
+	}
+	n.applyCommand("", speedCmd("PumpInlet", 1))
+	n.applyCommand("", speedCmd("Pumpınlet", 2))
+	if _, err := tags.ReadGlobal("pumpInlet"); err == nil {
+		t.Errorf("a command got past Pump* to the output pumpInlet: %v\n%s", snapKeys(tags.Snapshot()), buf)
+	}
+	if got := n.Status().CommandsRefused; got != 2 {
+		t.Errorf("CommandsRefused = %d, want 2", got)
+	}
+
+	// Opened by its declared name, the output is created under that name
+	// whatever the host's spelling.
+	n, buf = newFoldNode(t, "pump*")
+	n.applyCommand("", speedCmd("PUMPıNLET", 3))
+	snap := n.rt.Tags().Snapshot()
+	if v, ok := snap["pumpInlet"]; !ok || v.F != 3 {
+		t.Errorf("pumpInlet not written under its declared name: %v\n%s", snapKeys(snap), buf)
+	}
+}
+
+// A global only the program declares (no tag definition, not an output) is
+// not created by a command under the host's spelling: before, "g*" let an
+// NCMD for "gain" create a tag "gain" that the program and the next birth
+// then saw, and "G*" refused it.
+func TestCommandDoesNotCreateAProgramOnlyGlobal(t *testing.T) {
+	for _, pat := range []string{"g*", "G*", "*"} {
+		n, buf := newFoldNode(t, pat)
+		tags := n.rt.Tags()
+		if _, err := tags.ReadGlobal("Gain"); err == nil {
+			t.Fatal("precondition: Gain is already in the store")
+		}
+		n.applyCommand("", speedCmd("gain", 5))
+		if _, err := tags.ReadGlobal("gain"); err == nil {
+			t.Errorf("writable %q: an NCMD for gain created a tag: %v\n%s", pat, snapKeys(tags.Snapshot()), buf)
+		}
+		if got := n.Status().CommandsRefused; got != 1 {
+			t.Errorf("writable %q: CommandsRefused = %d, want 1", pat, got)
+		}
+	}
+}
+
+// The input refusal folds names as the store does: "Lımit" names the input
+// Limit and is refused, whatever writable opens.
+func TestCommandToAnInputRefusedUnderDotlessI(t *testing.T) {
+	n, buf := newFoldNode(t, "*")
+	n.applyCommand("", speedCmd("Lımit", 42))
+	if v := n.rt.Tags().Real("Limit"); v != 4.5 {
+		t.Errorf("Limit = %v, want 4.5: a command wrote the input\n%s", v, buf)
+	}
+	if !strings.Contains(buf.String(), "an input") {
+		t.Errorf("the refusal does not say the tag is an input:\n%s", buf)
 	}
 }
