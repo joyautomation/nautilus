@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser } from './cdp.mjs';
+import { waitUntil } from './wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUNDLE = process.env.SCENE_BUNDLE || join(HERE, '..', '..', 'media', 'dist');
@@ -59,17 +60,10 @@ class Scene {
 		const b = await Browser.launch({ headless: HEADLESS, webgl: true });
 		const s = new Scene(b);
 		await b.navigate('file://' + join(runDir, 'scene-host.html'));
-		for (let i = 0; i < 100; i++) {
-			if (await b.eval(`window.__posted().some((m) => m && m.type === 'sceneReady')`)) break;
-			await sleep(50);
-		}
-		assert.ok(await b.eval(`window.__posted().some((m) => m && m.type === 'sceneReady')`), 'the bundle never announced sceneReady');
+		// Software WebGL on a loaded runner is slow to start: a long deadline.
+		await waitUntil(() => b.eval(`window.__posted().some((m) => m && m.type === 'sceneReady')`), Boolean, { timeout: 15000, what: 'the bundle to announce sceneReady' });
 		await s.deliver(doc);
-		for (let i = 0; i < 100; i++) {
-			if (await b.eval('window.__ready()')) break;
-			await sleep(50);
-		}
-		assert.ok(await b.eval('window.__ready()'), 'no palette + canvas after the doc arrived');
+		await waitUntil(() => b.eval('window.__ready()'), Boolean, { timeout: 15000, what: 'the palette + canvas after the doc arrived' });
 		// Labels are HTML overlays placed once the renderer has a frame.
 		for (let i = 0; i < 100; i++) {
 			if ((await s.labels()).length >= doc.nodes.length) break;

@@ -198,12 +198,55 @@ claims:
   - id: MB-018
     claim: >-
       Each source gets a `<source>__Online` BOOL input that is true while
-      its connection is up and false while the source is dead or parked.
+      the device answers and false while the source is dead or parked. It
+      starts false and goes true on the first answer on a connection (a
+      reply, or an exception other than 0x0A/0x0B), not on the TCP dial,
+      so a gateway that accepts and never replies is never online. Once
+      every block's latest read got gateway exception 0x0A or 0x0B and the
+      last three requests in a row did, the source is offline while the
+      gateway connection stays up; one or two misses do not count, and the
+      next answer brings it back. Any other exception, such as 0x02, keeps
+      it online. On a polled source only reads decide; a write's reply does
+      not bring it online. A write-only source goes by its writes: with a
+      `rewrite:` keep-alive it goes online on the first confirmed
+      re-assert, without one it is online from the connect (nothing to ask
+      until the program commands it).
     source: "#the-__online-companion-and-enable"
     tests:
       - go ./modbus TestDriverDeliversTagsPerClass
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
       - go ./modbus TestEnableTagParksSource
+      - go ./modbus TestOnlineSilentGatewayNeverGoesOnline
+      - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
+      - go ./modbus TestOnlineGatewayNoAnswerFromTheStart
+      - go ./modbus TestOnlineOtherExceptionsAreAnswers
+      - go ./modbus TestOnlineGatewayNoAnswerIsDebounced
+      - go ./modbus TestOnlinePolledSourceWritesDoNotDecide
+      - go ./modbus TestOnlineWriteOnlySourceWithRewrite
+      - go ./modbus TestOnlineWriteOnlySourceWithoutRewrite
+      - go ./modbus TestOutagesIdleWriteOnlySourceNoticesCut
+      - go ./modbus TestIdleWriteOnlySourceSendsNothing
+      - go ./modbus TestOnlineIdleTimeoutIsNotAnOutage
+      - go ./modbus TestOnlinePolledIdleTimeoutIsNotAnOutage
+      - go ./modbus TestConnectionsSplitBySource
+    partial: true
+    note: >-
+      Against the in-process slave, which answers 0x0B for a unit it does
+      not have and injects exceptions per function code, and a scripted
+      server for the three-in-a-row debounce. A slow block keeping the
+      source online until it is read again (scan classes) is not asserted.
+      A write-only source without `rewrite:` notices a cut link while
+      idle, within the one-second idle check, against a dialer that closes
+      the socket. A device that closes idle connections (a proxy with a
+      200 ms idle timeout) leaves a write-only and a polled source online
+      with nothing counted, a command sent after the close goes out on a
+      fresh connection, and the poll schedule is kept. A device that
+      accepts and closes within 1 ms is an outage with backoff, not a
+      quiet reconnect. A silent cut caught
+      only by TCP keepalive (about 15 s) is not exercised; it needs a real
+      dropped link. A reset (as opposed to a clean close) is not tested
+      separately from the cut. Nothing has run against a real gateway with a dead
+      drop.
   - id: MB-019
     claim: >-
       The `__Online` companion is present from `Start`, before any poll has
@@ -246,6 +289,7 @@ claims:
     claim: >-
       A Modbus exception response marks only that block's tags Bad while
       sibling blocks on the same device stay Good, the source stays online
+      (unless every block gets gateway exception 0x0A or 0x0B, see MB-018)
       and polling continues without reconnecting, and the block recovers
       when the fault clears.
     source: "#per-tag-quality"
@@ -343,13 +387,26 @@ claims:
     claim: >-
       A command raised while the source is down is queued per source (latest
       value per tag), flushed on reconnect, and counted as `queuedWrites`.
+      When the link breaks partway through a flush, the write that broke and
+      the ones after it are queued again, and writes the device confirmed or
+      refused with an exception earlier in that flush are not re-sent.
     source: "#writes"
     tests:
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
+      - go ./modbus TestBrokenFlushResendsOnlyUnconfirmedRuns
+      - go ./modbus TestBrokenFlushAtEveryPoint
     partial: true
     note: >-
-      Queueing one tag and flush on reconnect are asserted; latest-value-wins
-      coalescing of several queued writes to one tag is not.
+      Queueing one tag and flush on reconnect are asserted. The broken flush
+      is asserted with the link cut at every point of one flush (the RMW
+      read, each RMW write, each register run, the first and the last coil
+      write): every write before the cut goes out once and another master's
+      value on it stands, the broken one goes out again (an RMW cut on its
+      read sends its write once), and every write after it goes out once. A value queued while the flush was in flight goes out
+      in place of the one it replaced. Latest-value-wins coalescing of
+      several writes queued to one tag while the source is down is not
+      asserted, nor is a write refused with an exception earlier in a broken
+      flush, nor a `rewrite:` binding in a broken flush.
   - id: MB-031
     claim: >-
       A binding with `rewrite:` re-asserts its last commanded value on that
@@ -512,15 +569,30 @@ claims:
       With a `redundancy:` section the write gate is wired to leadership so
       commands leave the driver only on the leader, reads are unaffected,
       and a closed gate also stops `rewrite:` re-asserts (resuming when
-      reopened).
+      reopened); commands queued during an outage, or put back by a broken
+      flush, are dropped when the gate has closed by the time the source
+      returns, a flush the gate closes partway through sends nothing more,
+      and a dropped value is a command again at the first output push after
+      the gate reopens (at once on a takeover, otherwise on the next output
+      change).
     source: "#redundancy"
     tests:
       - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+      - go ./modbus TestQueuedWriteRechecksTheGate
+      - go ./modbus TestRequeuedWriteRechecksTheGate
+      - go ./modbus TestGateClosingMidFlushStopsTheFlush
     partial: true
     note: >-
-      The gate stopping re-asserts is asserted; plain writes under a closed
-      gate, reads being unaffected, and the leadership wiring in `naut run`
-      are not.
+      The gate stopping re-asserts is asserted, and so is the gate being
+      checked again when queued commands go out: a command and a keep-alive
+      re-assert queued during an outage, the writes a broken flush put back,
+      and the runs after the one in flight when the gate closes mid-flush
+      are dropped with no frame sent, the queue drains, no outage is
+      counted, and pushing the same values after the gate reopens sends
+      them. The gate is a test gate function and the push is a direct
+      WriteOutputs call; plain writes made while it is closed, reads being
+      unaffected, the runtime's push on takeover, and the leadership wiring
+      in `naut run` are not asserted.
   - id: MB-047
     claim: >-
       `naut test` with a `memory.yaml` loopback runs the acceptance suites
@@ -575,14 +647,20 @@ claims:
   - id: MB-051
     claim: >-
       Each source gets a `<source>__Outages` DINT input, present from
-      `Start` with good quality: the times `__Online` has gone false since
-      nautilus started. The first connect is not an outage, a source that
-      has not connected yet has had none, and each later fall adds one,
-      parking with `enable:` included. A fall counts only when the device
-      had answered a read or a write on that connection (a gateway that
-      accepts and never replies does not count, and neither do later silent
-      connections after one that answered), and stopping nautilus does not
-      count.
+      `Start` with good quality: the times `__Online` has fallen from true
+      to false since nautilus started. Since `__Online` goes true only on an
+      answer (MB-018), the first connect is not an outage, a source that has
+      not answered yet has had none, a gateway that accepts and never
+      replies does not count (nor do later silent connections after one
+      that answered), and a write-only source with a `rewrite:` keep-alive
+      counts once a re-assert was confirmed. Each later fall adds one,
+      parking with `enable:` and a gateway answering 0x0A/0x0B on every
+      block three requests in a row included; one or two misses are not an
+      outage, and a keep-alive the gateway keeps confirming does not make a
+      polled source flap. A device that cleanly closes a connection it
+      kept at least 100 ms, while idle, and takes the reconnect is not an
+      outage; one that then refuses it counts once, and one that hangs up
+      sooner counts each time. Stopping nautilus does not count.
       A binding may not take the name.
     source: "#the-__online-companion-and-enable"
     tests:
@@ -592,10 +670,42 @@ claims:
       - go ./modbus TestOutagesSilentGatewayDoesNotCount
       - go ./modbus TestOutagesStopIsNotAnOutage
       - go ./modbus TestOutagesWriteOnlySourceCounts
+      - go ./modbus TestOutagesIdleWriteOnlySourceNoticesCut
+      - go ./modbus TestOutagesIdleCloseThenRefusedCountsOnce
+      - go ./modbus TestOnlineIdleTimeoutIsNotAnOutage
+      - go ./modbus TestOnlinePolledIdleTimeoutIsNotAnOutage
+      - go ./modbus TestOutagesAcceptThenCloseIsAnOutage
       - go ./modbus TestOutagesAnsweredResetsPerConnection
       - go ./modbus TestOutagesCompanionCollidesWithABinding
+      - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
+      - go ./modbus TestOnlineGatewayNoAnswerIsDebounced
+      - go ./modbus TestOnlinePolledSourceWritesDoNotDecide
+      - go ./modbus TestOnlineWriteOnlySourceWithRewrite
+      - go ./modbus TestOnlineWriteOnlySourceWithoutRewrite
       - go ./modbus TestConnectionsSplitBySource
     partial: true
     note: >-
       Against the in-process slave, with a test dialer that cuts and
-      restores the link. Nothing has run on a real device.
+      restores the link. A write-only source without `rewrite:` is online
+      from the connect, so losing its connection counts, and it notices a
+      cut link while idle, within the one-second idle check, without
+      sending a request. A device closing idle connections is not an
+      outage; one that closes and then refuses the reconnect counts once. A silent cut caught only by TCP keepalive
+      (about 15 s) is not exercised. Nothing has run on a real device.
+  - id: MB-052
+    claim: >-
+      A source's changed values from one scan are queued together, so a
+      flush takes all of them or none: a run changed in one scan is never
+      split across two frames by a poll that happened mid-scan.
+    source: "#writes"
+    tests:
+      - go ./modbus TestSnapshotWritesAreNeverSplit
+      - go ./modbus TestForeignWriteRoundTrip
+    partial: true
+    note: >-
+      TestSnapshotWritesAreNeverSplit hands 200 snapshots of 120 contiguous
+      holding registers to the in-process slave at a 1 ms poll and asserts
+      every FC16 carries the whole run and no register goes alone as FC6.
+      TestForeignWriteRoundTrip (pymodbus sim, gated on
+      NAUTILUS_MODBUS_SIM) asserts the same shape for a 14-register mixed
+      run. Coil runs (FC15) are not stress-tested this way.

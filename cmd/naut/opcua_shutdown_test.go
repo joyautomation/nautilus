@@ -15,6 +15,7 @@ import (
 
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 )
 
 // SIGTERM to `naut run` with an OPC UA client's session open (and one
@@ -102,7 +103,7 @@ opcua:
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := c.Connect(ctx); err != nil {
+			if err := gopcuatest.Connect(ctx, c); err != nil {
 				t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())
 			}
 			defer func() {

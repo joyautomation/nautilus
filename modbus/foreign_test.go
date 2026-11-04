@@ -381,7 +381,8 @@ func TestForeignExceptionMarksOnlyThatBlock(t *testing.T) {
 // whose Timeout exceeds the latency still delivers, and one whose Timeout is
 // below it never delivers — each request times out as a TRANSPORT error (not
 // an exception), the loop drops the connection and re-dials, Retries and
-// Errors climb, and the tag stays absent rather than reading zero. Needs
+// Errors climb, the tag stays absent rather than reading zero, and the
+// source is never online (it never answered). Needs
 // NAUTILUS_MODBUS_SIM_SLOW.
 //
 // The re-dial succeeds at once (the sim accepts TCP promptly), so the source
@@ -423,8 +424,15 @@ func TestForeignLatencyAboveTimeoutReconnects(t *testing.T) {
 			if _, ok := v["PV"]; ok {
 				t.Fatalf("PV must never be delivered through a timed-out request, got %v", v["PV"])
 			}
+			// Connected is not online: the sim never answers in time (#539).
+			if v["U1__Online"] == true {
+				t.Fatal("U1__Online went true though no request was answered")
+			}
 			return d.Health().Sources[0].Retries >= 3
 		})
+		if v, _ := d.ReadInputs(); v["U1__Outages"] != int64(0) {
+			t.Errorf("never answered, so never an outage: U1__Outages = %#v", v["U1__Outages"])
+		}
 		// Never delivered means NotConnected whichever phase of the
 		// reconnect oscillation this lands in (socket up but unheard-from,
 		// or down) — never Good, Stale or Bad.
