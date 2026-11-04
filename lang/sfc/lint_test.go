@@ -74,6 +74,81 @@ END_PROGRAM
 	}
 }
 
+// SFC001 is the hidden state machine only: a variable the chart's actions
+// set to two or more different constants. A batch-start snapshot latched
+// by a P1 action (Recipe := RecipeReq), a pass counter (Pass := Pass + 1)
+// and a value reset to one constant are data the sequence branches on, so
+// the reviewer's batch-start chart (#574) stays quiet.
+func TestLintSFCStateVariableNeedsConstantSteps(t *testing.T) {
+	chart := func(actions string) string {
+		return `PROGRAM Seq
+VAR Recipe : INT; RecipeReq : INT; Pass : INT; Start : BOOL; Stop : BOOL; END_VAR
+SFC
+  INITIAL_STEP Idle:
+    P1 Latch;
+  END_STEP
+  STEP ChargeA:
+    P1 Count;
+  END_STEP
+  STEP ChargeB:
+    P0 Clear;
+  END_STEP
+  TRANSITION FROM Idle TO ChargeA := Start AND Recipe = 1;
+  END_TRANSITION
+  TRANSITION ToB FROM Idle TO ChargeB := Recipe = 2;
+  END_TRANSITION
+  TRANSITION Again FROM ChargeA TO Idle := Pass <> 3;
+  END_TRANSITION
+  TRANSITION FROM ChargeB TO Idle := Stop;
+  END_TRANSITION
+` + actions + `END_SFC
+END_PROGRAM
+`
+	}
+	quiet := chart(`  ACTION Latch:
+    Recipe := RecipeReq;
+  END_ACTION
+  ACTION Count:
+    Pass := Pass + 1;
+  END_ACTION
+  ACTION Clear:
+    Recipe := 0;
+  END_ACTION
+`)
+	if _, err := Parse(quiet); err != nil {
+		t.Fatal(err)
+	}
+	if fs := Lint(quiet, lint.Defaults()); len(fs) != 0 {
+		t.Errorf("snapshot, counter, one reset: want nothing, got %v", fs)
+	}
+	// The same chart with Recipe stepped through constants by the actions
+	// is the hidden machine: ToB fires.
+	machine := chart(`  ACTION Latch:
+    IF Start THEN Recipe := 1; ELSE Recipe := 2; END_IF;
+  END_ACTION
+  ACTION Count:
+    Pass := Pass + 1;
+  END_ACTION
+  ACTION Clear:
+    Recipe := 0;
+  END_ACTION
+`)
+	fs := Lint(machine, lint.Defaults())
+	if len(fs) != 1 || fs[0].Rule != "SFC001" || !strings.Contains(fs[0].Message, "transition ToB only tests Recipe, which this chart's own actions set to 3 different constants") {
+		t.Errorf("want SFC001 on ToB, got %v", fs)
+	}
+}
+
+// SFC002 points at the step's name, not the STEP keyword.
+func TestLintSFCStepColumn(t *testing.T) {
+	src := "PROGRAM Seq\nSFC\n  INITIAL_STEP S0:\n  END_STEP\n  STEP Step1:\n  END_STEP\n" +
+		"  TRANSITION FROM S0 TO Step1 := TRUE;\n  END_TRANSITION\n  TRANSITION FROM Step1 TO S0 := TRUE;\n  END_TRANSITION\nEND_SFC\nEND_PROGRAM\n"
+	fs := Lint(src, lint.Defaults())
+	if len(fs) != 2 || fs[0].Line != 3 || fs[0].Col != 16 || fs[1].Line != 5 || fs[1].Col != 8 {
+		t.Errorf("want SFC002 at 3:16 and 5:8, got %v", fs)
+	}
+}
+
 // A mode compare is not a state machine unless the chart writes the mode
 // itself: an operator's Mode setpoint, or a status string the actions set
 // only for display, stay quiet.

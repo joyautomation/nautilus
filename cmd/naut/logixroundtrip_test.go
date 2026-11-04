@@ -21,6 +21,49 @@ import (
 	"github.com/joyautomation/nautilus/lang/l5x"
 )
 
+// An imported routine is the vendor's rungs as written, so the import
+// heads each ladder file with an @allow pragma for every ladder structure
+// rule (#561), saying where the rungs came from and how to lint them.
+// Deleting that line brings the warnings back: Line.L5X's Line_Accept has
+// a coil and a later reset (LD001), and two rungs compare with literal
+// trip points (LD006). The pragma does not reach the L5X the project
+// writes back (the round trip below compares the logic byte for byte).
+func TestLogixImportAllowsLadderRules(t *testing.T) {
+	src := filepath.Join("..", "..", "examples", "batch-skid", "line", "Line.L5X")
+	proj := filepath.Join(t.TempDir(), "line")
+	if out, code := capture(t, func() int { return runLogix([]string{"import", "--project", proj, src}) }); code != 0 {
+		t.Fatalf("import: exit %d\n%s", code, out)
+	}
+	ld := filepath.Join(proj, "MainProgram.ld")
+	body, err := os.ReadFile(ld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pragma = "(* @allow LD001 LD002 LD003 LD004 LD005 LD006: imported from Line.L5X by `naut logix import`; delete this line to lint it *)\n"
+	if !strings.HasPrefix(string(body), pragma+"PROGRAM MainProgram\n") {
+		t.Fatalf("MainProgram.ld does not start with the pragma, above the PROGRAM:\n%s", body)
+	}
+	out, code := capture(t, func() int { return runCheck([]string{proj}) })
+	if code != 0 || strings.Contains(out, "warning") {
+		t.Errorf("with the pragma: exit %d\n%s", code, out)
+	}
+
+	if err := os.WriteFile(ld, []byte(strings.TrimPrefix(string(body), pragma)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = capture(t, func() int { return runCheck([]string{proj}) })
+	seen := map[string]int{}
+	for _, m := range structureWarnRe.FindAllStringSubmatch(out, -1) {
+		seen[m[4]]++
+	}
+	if code != 0 || seen["LD001"] != 1 || seen["LD006"] != 2 {
+		t.Errorf("pragma deleted: want LD001 once and LD006 twice (exit 0), got %v (exit %d)\n%s", seen, code, out)
+	}
+	if !strings.Contains(out, "rung r4 comes later and forces Line_Accept off while it is true, so the coil on rung r2 only holds while rung r4 is false") {
+		t.Errorf("LD001 on the import does not explain the rung order:\n%s", out)
+	}
+}
+
 func TestLogixRoundTripYardstickCLI(t *testing.T) {
 	src := filepath.Join("..", "..", "examples", "batch-skid", "line", "Line.L5X")
 	dir := t.TempDir()
@@ -33,13 +76,12 @@ func TestLogixRoundTripYardstickCLI(t *testing.T) {
 		t.Fatalf("import: exit %d\n%s", code, out)
 	}
 	// The project it writes checks clean: no errors, and no warning (the
-	// timer the program owns is not also a project tag). The structure
-	// warnings (#561) are the exception: they judge the vendor's rungs as
-	// imported — this yardstick has an OTE and an OTU on Line_Accept and
-	// literal thresholds — and the round trip keeps those rungs verbatim.
+	// timer the program owns is not also a project tag). That includes the
+	// structure warnings (#561): the import heads each ladder file with an
+	// @allow pragma for the ladder rules (TestLogixImportAllowsLadderRules).
 	for _, args := range [][]string{{proj}, {"--target", "logix", proj}} {
 		out, code = capture(t, func() int { return runCheck(args) })
-		if code != 0 || strings.Contains(structureWarnRe.ReplaceAllString(out, ""), ": warning:") {
+		if code != 0 || strings.Contains(out, "warning") {
 			t.Errorf("naut check %v: exit %d\n%s", args, code, out)
 		}
 	}

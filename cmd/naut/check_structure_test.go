@@ -40,23 +40,42 @@ func TestCheckReportsStructureWarnings(t *testing.T) {
 }
 
 // The regression guard: every ladder, FBD and SFC file under examples/, in
-// every scaffold naut new writes, and in the AGENTS.md sample project (when
+// every scaffold naut new writes (minimal and sdk in each language, the
+// tour and the sdk demo), and in the AGENTS.md sample project (when
 // it is in the tree) passes with no structure warning, under its own
 // project's check: settings. A new example, or an edit to one, that draws
 // badly fails here — fix the file (or, where a rule truly does not fit, say
 // why in an (* @allow ID: reason *) pragma).
 func TestExamplesAndScaffoldsHaveNoStructureWarnings(t *testing.T) {
 	roots := []string{"../../examples", "testdata/structure/good", "testdata/agents-md"}
+	var diagramScaffolds []string
 	for _, tc := range []struct{ name, template, language string }{
 		{"minimal-st", tmplMinimal, "st"},
 		{"minimal-fbd", tmplMinimal, "fbd"},
 		{"minimal-ld", tmplMinimal, "ld"},
 		{"minimal-sfc", tmplMinimal, "sfc"},
 		{"tour", tmplDemo, ""},
+		{"sdk-st", tmplSDK, "st"},
+		{"sdk-ld", tmplSDK, "ld"},
+		{"sdk-fbd", tmplSDK, "fbd"},
+		{"sdk-sfc", tmplSDK, "sfc"},
+		{"sdk-demo", tmplSDKDemo, ""}, // ST only today; a diagram added to it is linted too
 	} {
-		roots = append(roots, scaffoldInto(t, scaffold{Name: tc.name, Program: pascalCase(tc.name), Template: tc.template, Language: tc.language}))
+		root := scaffoldInto(t, scaffold{Name: tc.name, Program: pascalCase(tc.name), Template: tc.template, Language: tc.language})
+		roots = append(roots, root)
+		if tc.language == "ld" || tc.language == "fbd" || tc.language == "sfc" {
+			diagramScaffolds = append(diagramScaffolds, root)
+		}
 	}
 	linted := 0
+	perRoot := map[string]int{}
+	defer func() {
+		for _, root := range diagramScaffolds {
+			if perRoot[root] == 0 {
+				t.Errorf("%s: a diagram scaffold with no diagram file linted", root)
+			}
+		}
+	}()
 	for _, root := range roots {
 		if _, err := os.Stat(root); os.IsNotExist(err) {
 			continue // testdata/agents-md arrives with #556
@@ -78,6 +97,7 @@ func TestExamplesAndScaffoldsHaveNoStructureWarnings(t *testing.T) {
 				return err
 			}
 			linted++
+			perRoot[root]++
 			for _, f := range project.Structure(path, string(src), project.StructureFor(path, "")) {
 				t.Errorf("%s:%d:%d: %s [%s]", path, f.Line, f.Col, f.Message, f.Rule)
 			}
@@ -87,6 +107,7 @@ func TestExamplesAndScaffoldsHaveNoStructureWarnings(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	t.Logf("linted %d diagram files", linted)
 	if linted < 15 {
 		t.Errorf("linted only %d diagram files: the walk lost the examples", linted)
 	}

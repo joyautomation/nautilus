@@ -29,6 +29,8 @@ tags:
   - { name: FillReq,     role: state,    type: BOOL, init: false }
   - { name: DrainReq,    role: state,    type: BOOL, init: false }
   - { name: HighLevelAlm, role: state,   type: BOOL, init: false }
+  - { name: LowLevelAlm, role: state,    type: BOOL, init: false }
+  - { name: HighTempAlm, role: state,    type: BOOL, init: false }
   - { name: Pump,        role: output,   type: BOOL, init: false }
   - { name: Horn,        role: output,   type: BOOL, init: false }
   - { name: XV101_Cmd,   role: output,   type: BOOL, init: false }

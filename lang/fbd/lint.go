@@ -108,9 +108,12 @@ func (nl *netlist) lint(cfg lint.Config) []lint.Finding {
 
 	// FBD002: an untitled network holding more than one function. Functions
 	// are the connected parts of the network's graph: statements joined by
-	// a wire or by an FB instance's pins. Reading the same variable does not
-	// join two functions — the diagram draws each its own copy of the
-	// variable — so this counts what the diagram draws as separate pieces.
+	// a wire, by an FB instance's pins, or by a variable one of them
+	// assigns and another reads (Scaled := MUL(Level, 2.0), then
+	// Valve := GE(Scaled, SP) is one function). Two statements that only
+	// read the same input are not joined: that input feeds both, it does
+	// not make them one. A network of three statements or fewer
+	// (minFunctionsStmts) is not reported: it reads without a title.
 	parent := map[string]string{}
 	var find func(string) string
 	find = func(x string) string {
@@ -123,9 +126,23 @@ func (nl *netlist) lint(cfg lint.Config) []lint.Finding {
 		return r
 	}
 	union := func(a, b string) { parent[find(a)] = find(b) }
+	written := map[string]bool{} // "v:" keys of the variables a statement assigns
 	for i, n := range nl.nodes {
+		id := fmt.Sprintf("n:%d", i)
 		if n.isCall {
-			union(fmt.Sprintf("n:%d", i), "i:"+instKey(n.inst))
+			union(id, "i:"+instKey(n.inst))
+			for _, a := range n.args {
+				if a.out {
+					if v := varKey(a.val); v != "" {
+						written[v] = true
+						union(id, v)
+					}
+				}
+			}
+		} else if n.target != "" {
+			v := "v:" + instKey(n.target)
+			written[v] = true
+			union(id, v)
 		}
 	}
 	for _, s := range stmts {
@@ -136,6 +153,11 @@ func (nl *netlist) lint(cfg lint.Config) []lint.Finding {
 					union(s.id, key)
 				}
 			})
+			eachVar(e, func(v string) {
+				if written[v] {
+					union(s.id, v)
+				}
+			})
 		}
 	}
 	for k, nw := range nl.networks {
@@ -143,17 +165,18 @@ func (nl *netlist) lint(cfg lint.Config) []lint.Finding {
 			continue
 		}
 		roots := map[string]bool{}
-		first := 0
+		first, size := 0, 0
 		for _, s := range stmts {
 			if s.net != k {
 				continue
 			}
+			size++
 			roots[find(s.id)] = true
 			if first == 0 || s.line < first {
 				first = s.line
 			}
 		}
-		if len(roots) < 2 {
+		if len(roots) < 2 || size < minFunctionsStmts {
 			continue
 		}
 		line := nw.line
@@ -168,6 +191,37 @@ func (nl *netlist) lint(cfg lint.Config) []lint.Finding {
 				"diagram draws it as its own titled band", where, len(roots))})
 	}
 	return fs
+}
+
+// minFunctionsStmts is the smallest untitled network FBD002 judges: a
+// body of three statements or fewer reads without a title, whatever it
+// holds.
+const minFunctionsStmts = 4
+
+// varKey is the function-graph key ("v:…") of the variable an expression
+// names, "" when it names none (a literal, a block).
+func varKey(e expr) string {
+	switch x := e.(type) {
+	case refExpr:
+		return "v:" + ir.NameKey(x.name)
+	case accExpr:
+		return "v:" + ir.NameKey(x.base)
+	}
+	return ""
+}
+
+// eachVar calls fn with the "v:" key of every variable e reads.
+func eachVar(e expr, fn func(string)) {
+	switch x := e.(type) {
+	case refExpr, accExpr:
+		fn(varKey(x))
+	case notExpr:
+		eachVar(x.inner, fn)
+	case callExpr:
+		for _, a := range x.reads() {
+			eachVar(a, fn)
+		}
+	}
 }
 
 // instKey is an FB instance's identity in the function graph: the variable

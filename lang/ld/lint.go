@@ -18,17 +18,31 @@ func Lint(src string, cfg lint.Config) []lint.Finding {
 		return nil
 	}
 	var fs []lint.Finding
+	lines := strings.Split(src, "\n")
 	add := func(rule string, line int, format string, args ...any) {
-		fs = append(fs, lint.Finding{Rule: rule, Line: line, Col: 1, Message: fmt.Sprintf(format, args...)})
+		fs = append(fs, lint.Finding{Rule: rule, Line: line, Col: nameCol(lines, line), Message: fmt.Sprintf(format, args...)})
 	}
 
-	commented := map[int]bool{} // rung index → a // note sits right above it
+	// rung index → a // note sits on the line above its header (blank
+	// lines between are fine). A note further up, or inside the previous
+	// rung's body, is that body's note, not this rung's comment.
+	commented := map[int]bool{}
 	for _, c := range m.Comments {
 		for i, r := range m.Rungs {
-			if r.Line > c.EndLine {
-				commented[i] = true
-				break
+			if r.Line <= c.EndLine {
+				continue
 			}
+			above := true
+			for l := c.EndLine + 1; l < r.Line && l <= len(lines); l++ {
+				if strings.TrimSpace(lines[l-1]) != "" {
+					above = false
+					break
+				}
+			}
+			if above {
+				commented[i] = true
+			}
+			break
 		}
 	}
 
@@ -63,12 +77,12 @@ func Lint(src string, cfg lint.Config) []lint.Finding {
 				"contact", r.Name, n, cfg.MaxSeries)
 		}
 		eachBranch(r.Elements, func(b Element) {
-			for _, el := range commonToLegs(b.Legs) {
+			for _, c := range commonToLegs(b.Legs) {
 				add("LD004", r.Line, "%s is on every leg of a branch in rung %s: put it once, in "+
-					"series, before the branch, and take it out of the legs", elementText(el), r.Name)
+					"series, %s the branch, and take it out of the legs", elementText(c.el), r.Name, c.where)
 			}
 		})
-		if strings.TrimSpace(r.Comment) == "" && !commented[i] {
+		if c := strings.TrimSpace(r.Comment); (c == "" || lint.IsPragma(c)) && !commented[i] {
 			add("LD005", r.Line, "rung %s has no comment: write why the rung exists after its name, "+
 				"RUNG %s (* … *), or in a // note on the line above — the reason, not a list of "+
 				"the contacts", r.Name, r.Name)
@@ -107,15 +121,31 @@ func Lint(src string, cfg lint.Config) []lint.Finding {
 						"compute each into its own BOOL and OR those), or latch it with a ( S %s ) / "+
 						"( R %s ) pair", name, coilText(prev.mode, name), prev.rung.Name, prev.rung.Line,
 						name, name, name)
+				case curPlain:
+					// The plain coil runs after the latch: it writes the tag
+					// every scan, so the latch never holds.
+					add("LD001", cur.rung.Line, "%s is both latched (%s, rung %s) and driven by %s (rung %s): "+
+						"rung %s comes later and writes %s every scan, so it overwrites the latch and the "+
+						"latch never holds. Use one %s rung, or a ( S %s ) / ( R %s ) pair, not both",
+						name, coilText(prev.mode, name), prev.rung.Name, coilText(cur.mode, name), cur.rung.Name,
+						cur.rung.Name, name, coilText(cur.mode, name), name, name)
 				default:
-					latch, plain := prev, cur
-					if prevPlain {
-						latch, plain = cur, prev
+					// The latch runs after the plain coil: it overrides the
+					// coil's result for the scans its rung is true, and the
+					// coil writes the tag again on the next scan.
+					effect := fmt.Sprintf("forces %s off while it is true, so the coil on rung %s only "+
+						"holds while rung %s is false", name, prev.rung.Name, cur.rung.Name)
+					if cur.mode == "S" {
+						effect = fmt.Sprintf("forces %s on while it is true, so %s is on while either rung is",
+							name, name)
 					}
 					add("LD001", cur.rung.Line, "%s is both latched (%s, rung %s) and driven by %s (rung %s): "+
-						"the plain coil overwrites the latch every scan. Use one %s rung, or a ( S %s ) / "+
-						"( R %s ) pair, not both", name, coilText(latch.mode, name), latch.rung.Name,
-						coilText(plain.mode, name), plain.rung.Name, coilText(plain.mode, name), name, name)
+						"rung %s comes later and %s; it never latches, because rung %s writes %s again "+
+						"every scan. Put rung %s's condition into rung %s (one %s rung), or use a ( S %s ) / "+
+						"( R %s ) pair, not both",
+						name, coilText(cur.mode, name), cur.rung.Name, coilText(prev.mode, name), prev.rung.Name,
+						cur.rung.Name, effect, prev.rung.Name, name, cur.rung.Name, prev.rung.Name,
+						coilText(prev.mode, name), name, name)
 				}
 				break
 			}
@@ -201,15 +231,26 @@ func eachElement(els []Element, fn func(Element)) {
 	}
 }
 
+// common is one contact LD004 reports, and where it can go: "before" or
+// "after" the branch.
+type common struct {
+	el    Element
+	where string
+}
+
 // commonToLegs is every contact (plain or comparison) that appears in
-// every leg of a branch, in the first leg's order. Edge contacts and
-// blocks are left out: each occurrence is its own instance with its own
-// state, so factoring one is not the same program.
-func commonToLegs(legs [][]Element) []Element {
+// every leg of a branch and can be factored out without changing the
+// program, in the first leg's order. Edge contacts and blocks are left
+// out: each occurrence is its own instance with its own state, so
+// factoring one is not the same program. And a contact moves only past
+// other plain or comparison contacts: in `[ t1:TON(…) A | B A ]`, A
+// after the timer is not A before it (the timer's IN would change), so
+// that branch is not reported.
+func commonToLegs(legs [][]Element) []common {
 	if len(legs) < 2 {
 		return nil
 	}
-	var out []Element
+	var out []common
 	seen := map[string]bool{}
 	for _, el := range legs[0] {
 		k := contactKey(el)
@@ -217,25 +258,66 @@ func commonToLegs(legs [][]Element) []Element {
 			continue
 		}
 		seen[k] = true
-		all := true
-		for _, leg := range legs[1:] {
-			found := false
-			for _, o := range leg {
+		before, after := true, true
+		for _, leg := range legs {
+			at := -1
+			for j, o := range leg {
 				if contactKey(o) == k {
-					found = true
+					at = j
 					break
 				}
 			}
-			if !found {
-				all = false
+			if at < 0 {
+				before, after = false, false
 				break
 			}
+			before = before && pureSeries(leg[:at])
+			after = after && pureSeries(leg[at+1:])
 		}
-		if all {
-			out = append(out, el)
+		switch {
+		case before:
+			out = append(out, common{el, "before"})
+		case after:
+			out = append(out, common{el, "after"})
 		}
 	}
 	return out
+}
+
+// pureSeries reports whether els are only plain and comparison contacts
+// (and branches of them): elements a contact can move past, because none
+// keeps state or acts on the power that reaches it.
+func pureSeries(els []Element) bool {
+	for _, e := range els {
+		switch e.Kind {
+		case "contact", "fn":
+		case "branch":
+			for _, leg := range e.Legs {
+				if !pureSeries(leg) {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// nameCol is the column of the rung's name on its header line (that of
+// the RUNG keyword for an unnamed rung), so the editor marks the name.
+func nameCol(lines []string, line int) int {
+	if line < 1 || line > len(lines) {
+		return 1
+	}
+	loc := rungNameRe.FindStringSubmatchIndex(lines[line-1])
+	switch {
+	case loc == nil:
+		return 1
+	case loc[2] >= 0:
+		return loc[2] + 1
+	}
+	return len(lines[line-1]) - len(strings.TrimLeft(lines[line-1], " \t")) + 1
 }
 
 func contactKey(el Element) string {
