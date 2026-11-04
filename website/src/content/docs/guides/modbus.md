@@ -331,7 +331,45 @@ would command every setpoint to zero. So the **first snapshot after `Start`
 is the baseline**: recorded, sent to nobody. Thereafter only a value that
 actually moved goes on the wire, once. A command raised while the source is
 down is queued per source (latest value per tag) and flushed on reconnect,
-counted as `queuedWrites` on the device row.
+counted as `queuedWrites` on the device row. If the link breaks partway
+through a flush, the write that broke and the ones after it are queued
+again. Writes the device confirmed or refused with an exception earlier in
+that flush are not re-sent, so a value another master has written to those
+registers since is left alone. Not so for a `rewrite:` binding: it
+re-asserts its last commanded value on connect and on every period, so it
+overwrites the other master's value anyway.
+
+**An exception to a write depends on whether the write ran.** When the
+device itself refuses a write (0x02 illegal data address, 0x03 illegal
+data value, or any exception other than the three below), the write is
+dropped and the same value is not sent again. Sending it again would only
+be refused again, so only a changed value is a new command. 0x04 (server
+device failure) is handled the same way: the write may have partly run,
+and on a register that triggers an action a second write could fire it
+twice. When a gateway answers 0x0A (path unavailable) or 0x0B (target
+device failed to respond), the device behind it never got the command,
+and when the device answers 0x06 (server device busy), it did not carry
+the command out. Such a write is dropped from the queue and forgotten, so
+the next time the driver is handed the outputs, the program's value goes
+out again as a command even if it has not changed. That is the program's
+current value, never a replay of the one that failed, and there is no
+backoff: it retries as often as outputs are handed over. `naut run` hands
+the outputs over on the first scan, on a scan where any output changed and
+on a redundancy takeover, not on every scan, so with no output moving the
+command waits for the next change
+([#601](https://github.com/joyautomation/nautilus/issues/601)). Only the
+tags whose write did not run are forgotten: on a `bit:N` register, the
+bits whose read-modify-write got the exception (on its read or on its
+write), not the register's other bits. A `rewrite:` binding is not
+forgotten, because its next re-assert sends it again anyway. While the
+write gate is closed nothing is sent, and the forgotten command goes out
+at the first output push after the gate reopens, as for a command the
+gate dropped (see [Redundancy](#redundancy)). Every exception to a write
+counts in `exceptions` on the device row. The log says `write not
+delivered; will resend` for 0x0A, 0x0B and 0x06, and `write refused` for
+the rest. On a write-only source, a gateway no-answer to a write also
+counts toward taking it offline, as described above; 0x06 is the device
+answering.
 
 **`rewrite:` is the exception, and it is a keep-alive.** Some devices watch
 a command register and fail safe if it stops moving — a safety controller's
@@ -356,7 +394,10 @@ after a restart — which is what you want almost always.
 
 Writes are **coalesced**: exactly adjacent register writes staged in one
 flush merge into a single FC16 run, adjacent coils into one FC15, and a
-lone register or coil goes as FC6 or FC5. Requests on a source are strictly
+lone register or coil goes as FC6 or FC5. A source's changed values from
+one scan are queued together, so a flush takes all of them or none: a run
+changed in one scan is never split across two frames by a poll that
+happened mid-scan. Requests on a source are strictly
 sequential — Modbus TCP permits pipelining by transaction id, but the
 gateways in the field do not, so one outstanding request is the default.
 
@@ -446,7 +487,15 @@ which is exactly what makes it unroutable next to another driver.
 
 With a `redundancy:` section, the driver's write gate is wired to leadership
 — commands leave the driver only on the leader, and a `SetWriteGate` func
-can compose a "logic healthy" signal into the same condition.
+can compose a "logic healthy" signal into the same condition. Leadership
+is checked again when queued commands go out: a replica that lost it
+during an outage drops what it queued, and so do the writes a broken
+flush put back. It is checked again before each write of a flush, so a
+long flush through a slow gateway stops sending once the gate closes. A
+dropped command is forgotten, so the first output push after the gate
+reopens sends the same value again. The runtime pushes on a takeover, so a
+replica that regains leadership sends at once; a gate that reopens without
+one (logic healthy again) waits for the next output change.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly

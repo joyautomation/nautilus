@@ -93,7 +93,7 @@ func TestCheckRejects(t *testing.T) {
 		{name: "FBD WHILE", file: "p.fbd", src: fbdHead + "  WHILE A DO\n    Out := B\n  END_WHILE\n" + fbdTail,
 			want: `expected a wire, coil, or block, got "WHILE"`},
 		{name: "FBD index arithmetic", file: "p.fbd", src: fbdHead + "  R := Lv[i + 1]\n" + fbdTail,
-			want: "expected ']' after the index"},
+			want: "an FBD index is a number or a tag, not arithmetic (+): compute it on a named wire first"},
 		{name: "FBD duplicate wire", file: "p.fbd", src: fbdHead + "  w = AND(A, B)\n  w = OR(A, B)\n  Out := w\n" + fbdTail,
 			want: `wire "w" defined twice`},
 		{name: "FBD self-feeding wire", file: "p.fbd", src: fbdHead + "  w = AND(w, B)\n  Out := w\n" + fbdTail,

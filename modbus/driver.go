@@ -84,6 +84,15 @@ func gatewayNoAnswer(err error) bool {
 	return errors.As(err, &exc) && (exc.Code == 0x0A || exc.Code == 0x0B)
 }
 
+// writeNotRun reports an exception to a write that says the write did not
+// run, so the value is sent again with the next WriteOutputs (see wroteOK):
+// a gateway no-answer (0x0A, 0x0B) or 0x06 server device busy. Not 0x04
+// server device failure: the write may have partly run.
+func writeNotRun(err error) bool {
+	var exc ExceptionError
+	return gatewayNoAnswer(err) || (errors.As(err, &exc) && exc.Code == 0x06)
+}
+
 // OnlineTagName is the source's synthesized BOOL companion tag name — shared
 // with the generator so tags/modbus.yaml declares exactly what the driver
 // delivers.
@@ -233,6 +242,9 @@ type source struct {
 	pending  map[string]any
 	written  map[string]any
 	rewrites []*rewriteRun
+	// outputs are this source's writable binding names, so WriteOutputs
+	// can queue a source's share of a snapshot under one hold of mu.
+	outputs []string
 
 	// kick wakes the loop: a queued write, an enable flip, a stop.
 	kick chan struct{}
@@ -410,6 +422,7 @@ func (d *Driver) buildSources() error {
 		f, _ := t.format() // Validate (in BuildPlan) already vetted it
 		d.byName[t.Name] = outBinding{src: s, b: t, f: f}
 		d.outputs = append(d.outputs, t.Name)
+		s.outputs = append(s.outputs, t.Name)
 		if t.Rewrite > 0 {
 			s.rewrites = append(s.rewrites, &rewriteRun{name: t.Name, period: t.Rewrite})
 		}
@@ -422,10 +435,19 @@ func (d *Driver) buildSources() error {
 	return nil
 }
 
-// SetWriteGate installs the write gate the rewrite loop and WriteOutputs
-// consult: commands leave the driver only while gate() is true. The project
-// wires it to redundancy leadership (leader.Elector.IsLeader), and a
-// "logic healthy" signal can be composed into the same func.
+// SetWriteGate installs the write gate WriteOutputs, the rewrite loop and
+// the flush consult: commands leave the driver only while gate() is true.
+// A command queued while the gate was open, during an outage or put back
+// by a broken flush, is dropped if the gate has closed by the time it
+// would go out, and so is the rest of a flush the gate closes partway
+// through. A dropped command is forgotten, so the first WriteOutputs push
+// after the gate reopens commands the same value again. The runtime
+// pushes on an output change, the first scan, after a failed write and
+// on a redundancy takeover, so a replica that regains leadership pushes
+// at once; a gate that reopens without a takeover (logic healthy again)
+// waits for the next output change. The project wires the gate to
+// redundancy leadership (leader.Elector.IsLeader), and a "logic healthy"
+// signal can be composed into the same func.
 //
 // A FALSE GATE STOPS RE-ASSERTS BY DESIGN: a device whose keep-alive word
 // (Banner SC10, i550 control word, an IO-Link master's Modbus watchdog)
@@ -639,6 +661,11 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //     a command. A changed value is queued per source, last value per tag,
 //     and held across a disconnect — flushed when the source reconnects,
 //     reported as queued writes on the device row.
+//
+// A source's share of one snapshot is queued under one hold of its lock,
+// so the source loop's flush sees all of it or none of it: contiguous
+// registers changed in one snapshot go out as one FC16, never split
+// across two flushes by a poll that ran mid-snapshot (#592).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	kicked := map[*source]bool{}
 	for name, v := range vals {
@@ -665,31 +692,30 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
-	gateOpen := d.gateOpen()
-	for name, v := range vals {
-		ob, ok := d.byName[name]
-		if !ok {
-			continue // enable tags handled above; unknown names ignored
-		}
-		if !gateOpen {
-			continue
-		}
-		s := ob.src
-		s.mu.Lock()
-		if baseline && ob.b.Rewrite <= 0 {
-			// Record, never send. A tag with a command already queued
-			// keeps it: that one WAS asked for.
-			if _, queued := s.pending[name]; !queued {
-				s.written[name] = v
+	if d.gateOpen() {
+		for _, s := range d.sources {
+			s.mu.Lock()
+			for _, name := range s.outputs {
+				v, ok := vals[name]
+				if !ok {
+					continue
+				}
+				if baseline && d.byName[name].b.Rewrite <= 0 {
+					// Record, never send. A tag with a command already
+					// queued keeps it: that one WAS asked for.
+					if _, queued := s.pending[name]; !queued {
+						s.written[name] = v
+					}
+				} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
+					// unchanged since the last value we accounted for
+				} else {
+					s.written[name] = v
+					s.pending[name] = v
+					kicked[s] = true
+				}
 			}
-		} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
-			// unchanged since the last value we accounted for
-		} else {
-			s.written[name] = v
-			s.pending[name] = v
-			kicked[s] = true
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}
 	for s := range kicked {
 		nudge(s.kick)
@@ -1180,7 +1206,13 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // flushWrites pushes this source's pending writes to the device, coalescing
 // contiguous holding registers into FC16 (one register FC6), contiguous
 // coils into FC15 (one coil FC5). Returns false when the connection broke;
-// unattempted writes stay queued for the reconnect.
+// the write that broke and the ones not yet attempted stay queued for the
+// reconnect. Writes answered in this flush, confirmed or with an
+// exception, are not re-queued: a re-send would put back a value someone
+// else may have written since. One a gateway answered 0x0A/0x0B for is
+// forgotten instead, so the next WriteOutputs sends it (see wroteOK). With
+// the write gate closed the queue is dropped instead, and if the gate
+// closes partway through, the rest of the flush is (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.mu.Lock()
 	if len(s.pending) == 0 {
@@ -1191,21 +1223,86 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.pending = map[string]any{}
 	s.mu.Unlock()
 
-	regWrites, coilWrites, bitWrites := d.stageWrites(s, work)
-
-	requeue := func() {
+	// The gate is checked again here, not only when the command was
+	// queued: a replica that lost leadership during an outage must not
+	// send what it queued while it led, nor what a broken flush put back,
+	// nor a re-assert queued just before the gate closed. It is checked
+	// again before every bit RMW, register run and coil run, so a long
+	// flush stops once the gate closes. Dropped commands are forgotten
+	// (not recorded as written), so the next WriteOutputs push after the
+	// gate reopens commands the same value again. A drop is not a failure:
+	// no error is counted and __Online is left to the reads.
+	drop := func(names []string) {
 		s.mu.Lock()
-		for n, v := range work {
+		for _, n := range names {
+			// Forget only what this flush dropped: a tag WriteOutputs has
+			// queued again since keeps the written value that command
+			// recorded.
+			if _, again := s.pending[n]; !again && sameScalar(s.written[n], work[n]) {
+				delete(s.written, n)
+			}
+		}
+		s.mu.Unlock()
+		d.log.Warn("modbus: write gate closed; queued writes dropped", "source", s.cfg.ID, "count", len(names))
+	}
+	if !d.gateOpen() {
+		names := make([]string, 0, len(work))
+		for n := range work {
+			names = append(names, n)
+		}
+		drop(names)
+		return true
+	}
+
+	regWrites, coilWrites, bitWrites := d.stageWrites(s, work)
+	regRuns, coilRuns := coalesceRegs(regWrites), coalesceCoils(coilWrites)
+
+	// rest names the write at bi/ri/ci and every one after it, in send
+	// order: bit RMWs from bi, register runs from ri, coil runs from ci.
+	rest := func(bi, ri, ci int) []string {
+		var names []string
+		for _, bw := range bitWrites[bi:] {
+			names = append(names, bw.names...)
+		}
+		for _, run := range regRuns[ri:] {
+			names = append(names, run.names...)
+		}
+		for _, run := range coilRuns[ci:] {
+			names = append(names, run.names...)
+		}
+		return names
+	}
+
+	// requeue puts back the write that broke and every one after it. A tag
+	// queued again while this flush was in flight keeps that newer value
+	// (last value wins).
+	requeue := func(bi, ri, ci int) {
+		s.mu.Lock()
+		for _, n := range rest(bi, ri, ci) {
 			if _, exists := s.pending[n]; !exists {
-				s.pending[n] = v
+				s.pending[n] = work[n]
 			}
 		}
 		s.mu.Unlock()
 	}
 
+	// gateClosed drops the write at bi/ri/ci and every one after it when
+	// the gate has closed since the flush began. The flush returns as soon
+	// as it does, so a drop is logged at most once per flush.
+	gateClosed := func(bi, ri, ci int) bool {
+		if d.gateOpen() {
+			return false
+		}
+		drop(rest(bi, ri, ci))
+		return true
+	}
+
 	// bit:N writables read-modify-write their register one at a time — the
 	// other 15 bits belong to the device (or to sibling bindings).
-	for _, bw := range bitWrites {
+	for i, bw := range bitWrites {
+		if gateClosed(i, 0, 0) {
+			return true
+		}
 		cur, err := readRegisters(ctx, c, s.cfg.UnitID, FCReadHoldingRegisters, bw.addr, 1)
 		if err == nil {
 			// Merge in normalized (big-endian) space, then restore the
@@ -1215,44 +1312,70 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			out := wireOrder([]uint16{w}, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, bw.addr, out)
 		}
-		if !d.wroteOK(ctx, s, bw.names, err) {
-			requeue()
+		if !d.wroteOK(ctx, s, work, bw.names, err) {
+			requeue(i, 0, 0)
 			return false
 		}
 	}
 
-	for _, run := range coalesceRegs(regWrites) {
+	for i, run := range regRuns {
+		if gateClosed(len(bitWrites), i, 0) {
+			return true
+		}
 		var err error
 		if len(run.values) == 1 {
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
 			err = writeMultipleRegisters(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, run.names, err) {
-			requeue()
+		if !d.wroteOK(ctx, s, work, run.names, err) {
+			requeue(len(bitWrites), i, 0)
 			return false
 		}
 	}
-	for _, run := range coalesceCoils(coilWrites) {
+	for i, run := range coilRuns {
+		if gateClosed(len(bitWrites), len(regRuns), i) {
+			return true
+		}
 		var err error
 		if len(run.values) == 1 {
 			err = writeSingleCoil(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
 			err = writeMultipleCoils(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, run.names, err) {
-			requeue()
+		if !d.wroteOK(ctx, s, work, run.names, err) {
+			requeue(len(bitWrites), len(regRuns), i)
 			return false
 		}
 	}
 	return true
 }
 
-// wroteOK accounts one device write. An exception means the device refused
-// THIS write on a healthy connection: it is dropped (re-queueing would loop
-// forever) and reported. A transport error means reconnect: false, and the
-// caller re-queues everything unattempted.
-func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err error) bool {
+// wroteOK accounts one device write. An exception is an answer on a
+// healthy connection, so the write is never re-queued (that would loop),
+// and what follows depends on who answered:
+//
+//   - 0x0A/0x0B (gatewayNoAnswer) and 0x06 (busy): the write did not run.
+//     The gateway answered for a device that never got the command (#596),
+//     or the device was busy and did not carry it out (#602). The write is
+//     dropped from the queue and its tags are forgotten from written, so
+//     the next WriteOutputs sends the program's value then, changed or
+//     not: no replay of the value sent here, and no backoff of its own. A
+//     rewrite: binding is not forgotten: its re-assert sends written again
+//     on its period, and forgetting it would stop the keep-alive until the
+//     program changed it. As for a gate drop, a tag is forgotten only while
+//     written still holds the value this write carried (work) and the tag
+//     is not queued again: a newer command keeps its on-change reference.
+//     For a write-only source a gateway no-answer counts toward going
+//     offline, once per write (#550); 0x06 is the device answering.
+//   - Any other exception: the device refused THIS write, or (0x04) failed
+//     partway and a re-send could fire a write-to-trigger register twice.
+//     It is dropped and stays in written, so the same value is not sent
+//     again.
+//
+// A transport error means reconnect: false, and the caller re-queues this
+// write and everything not yet attempted.
+func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, names []string, err error) bool {
 	if err == nil {
 		d.writes.Add(1)
 		// A confirmed write is the device answering, as a read is: a
@@ -1269,13 +1392,30 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 		s.mu.Lock()
 		s.lastErr = fmt.Errorf("write %v: %w", names, err)
 		s.excs++
+		notRun := writeNotRun(err)
 		if gatewayNoAnswer(err) {
 			s.writeNoAnswerLocked(ctx.Err() == nil)
 		} else {
-			s.writeAnsweredLocked() // refused, but the device answered
+			s.writeAnsweredLocked() // the device answered (busy, or refused)
+		}
+		if notRun {
+			for _, n := range names {
+				if d.byName[n].b.Rewrite > 0 {
+					continue
+				}
+				// The gate drop's rule: forget only the value this write
+				// carried, and not a tag WriteOutputs has queued again.
+				if _, again := s.pending[n]; !again && sameScalar(s.written[n], work[n]) {
+					delete(s.written, n)
+				}
+			}
 		}
 		s.mu.Unlock()
-		d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		if notRun {
+			d.log.Warn("modbus: write not delivered; will resend", "source", s.cfg.ID, "tags", names, "error", err)
+		} else {
+			d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		}
 		return true
 	}
 	if ctx.Err() == nil {

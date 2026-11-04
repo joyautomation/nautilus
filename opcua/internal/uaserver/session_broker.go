@@ -16,8 +16,12 @@ import (
 // and is long enough not to be guessed.
 const authTokenLength = 32
 
-// maxPublishRequests is how many Publish requests a session may have queued. A new one past it
-// de-queues the oldest, which is answered with Bad_TooManyPublishRequests (Part 4 §5.14.5.1).
+// maxPublishRequests is how many Publish requests a session may have queued, unless it owns as
+// many subscriptions or more: then it may queue one more than it has subscriptions, since "a
+// Server shall accept more queued Publish requests than created Subscriptions" (Part 4
+// §5.14.5.1; the OPC Foundation .NET stack's limit, so no client is refused subscriptions to
+// keep the queue short). A new request past the limit de-queues the oldest, which is answered
+// with Bad_TooManyPublishRequests.
 const maxPublishRequests = 100
 
 type session struct {
@@ -28,7 +32,19 @@ type session struct {
 	serverNonce       []byte
 	remoteCertificate []byte
 
-	PublishRequests chan PubReq
+	// pubMu guards the Publish queue and the count of subscriptions the session owns, so that
+	// whether a Publish is queued and whether the last subscription has gone are decided one
+	// at a time: a request is never queued on a session that has just lost its last
+	// subscription, where nothing would answer it.
+	pubMu sync.Mutex
+	// pubReqs are the Publish requests waiting for a subscription to answer them, oldest first.
+	pubReqs []PubReq
+	// subscriptions is how many subscriptions the session owns.
+	subscriptions int
+	// pubReady holds a token while pubReqs may be non-empty, for a subscription's task to
+	// wait on: whoever queues a request, or takes one and leaves others, puts one there. A
+	// token with nothing queued behind it is harmless (takePublish reports nothing).
+	pubReady chan struct{}
 
 	// mu guards activated and notices. Every request is handled on the server's one message loop, so this
 	// is defensive; channel is set at creation and never changes.
@@ -113,6 +129,108 @@ func (s *session) takeNotice() (id, seq uint32, ok bool) {
 	return id, seq, ok
 }
 
+// queuePublish queues pr for the session's subscriptions to answer, and returns the requests
+// de-queued to make room for it, oldest first, which are owed Bad_TooManyPublishRequests (Part
+// 4 §5.14.5.1). ok is false, and pr is not queued, when the session owns no subscription: the
+// request is owed Bad_NoSubscription (§5.14.5.3).
+func (s *session) queuePublish(pr PubReq) (dequeued []PubReq, ok bool) {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	if s.subscriptions == 0 {
+		return nil, false
+	}
+	// More than one only when the session has lost subscriptions since its queue filled.
+	for limit := max(maxPublishRequests, s.subscriptions+1); len(s.pubReqs) >= limit; {
+		dequeued = append(dequeued, s.pubReqs[0])
+		s.pubReqs[0] = PubReq{}
+		s.pubReqs = s.pubReqs[1:]
+	}
+	s.pubReqs = append(s.pubReqs, pr)
+	s.signalPublish()
+	return dequeued, true
+}
+
+// takePublish de-queues the oldest Publish request, if there is one.
+func (s *session) takePublish() (PubReq, bool) {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	if len(s.pubReqs) == 0 {
+		return PubReq{}, false
+	}
+	pr := s.pubReqs[0]
+	s.pubReqs[0] = PubReq{}
+	s.pubReqs = s.pubReqs[1:]
+	if len(s.pubReqs) > 0 {
+		s.signalPublish() // another task may be waiting for the next one
+	}
+	return pr, true
+}
+
+// signalPublish leaves a token on pubReady, if there is none. Called with pubMu held.
+func (s *session) signalPublish() {
+	select {
+	case s.pubReady <- struct{}{}:
+	default:
+	}
+}
+
+// publishQueued is a channel that has a token once a Publish request may be queued; the
+// waiter then calls takePublish, which may find another task took it first.
+func (s *session) publishQueued() <-chan struct{} {
+	return s.pubReady
+}
+
+// queuedPublishes is how many Publish requests are waiting.
+func (s *session) queuedPublishes() int {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	return len(s.pubReqs)
+}
+
+// subscriptionAdded counts a subscription the session has come to own: created, or
+// transferred to it.
+func (s *session) subscriptionAdded() {
+	s.pubMu.Lock()
+	s.subscriptions++
+	s.pubMu.Unlock()
+}
+
+// subscriptionGone counts a subscription the session owns no more: deleted, or transferred
+// away. Its queued requests stay; orphanedPublishes takes them once there is no subscription
+// left to answer them.
+func (s *session) subscriptionGone() {
+	s.pubMu.Lock()
+	if s.subscriptions > 0 {
+		s.subscriptions--
+	}
+	s.pubMu.Unlock()
+}
+
+// orphanedPublishes de-queues and returns every queued Publish request when the session owns
+// no subscription, which are owed Bad_NoSubscription: "If this is the last Subscription for
+// the Session, then all Publish requests still queued for that Session are de-queued and
+// shall be returned with Bad_NoSubscription" (Part 4 §5.14.8.1). It returns nothing while
+// the session owns one.
+func (s *session) orphanedPublishes() []PubReq {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	if s.subscriptions > 0 || len(s.pubReqs) == 0 {
+		return nil
+	}
+	out := s.pubReqs
+	s.pubReqs = nil
+	return out
+}
+
+// discardPublishes drops every Publish request queued for the session, unanswered. It is for a
+// session whose channel has gone: there is nothing left to answer on, and deleting its last
+// subscription would otherwise try to send each one Bad_NoSubscription.
+func (s *session) discardPublishes() {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	s.pubReqs = nil
+}
+
 // boundTo reports whether sc is the channel the session was created on.
 func (s *session) boundTo(sc *uasc.SecureChannel) bool {
 	s.mu.Lock()
@@ -159,10 +277,10 @@ func (sb *sessionBroker) NewSession(sc *uasc.SecureChannel) (*session, error) {
 		return nil, err
 	}
 	s := &session{
-		ID:              ua.NewGUIDNodeID(1, uuid.New().String()),
-		AuthTokenID:     ua.NewByteStringNodeID(0, tok),
-		PublishRequests: make(chan PubReq, maxPublishRequests),
-		channel:         sc,
+		ID:          ua.NewGUIDNodeID(1, uuid.New().String()),
+		AuthTokenID: ua.NewByteStringNodeID(0, tok),
+		pubReady:    make(chan struct{}, 1),
+		channel:     sc,
 	}
 
 	sb.mu.Lock()

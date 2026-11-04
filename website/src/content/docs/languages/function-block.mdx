@@ -306,8 +306,14 @@ Because the source is text, a wiring change reviews as a diff:
 - Execution-order overrides. Order is network order, then source order plus
   the FB-before-reader rule within a network.
 - Control flow: no `IF`, `CASE`, or loops in the netlist.
+- Infix operators. Every operator is a block: `ADD(a, b)`, not `a + b`;
+  `GT(a, b)`, not `a > b`; `AND(a, b)`, not `a AND b` or `a & b`. Writing
+  an operator is a parse error that names the block to use. Negate with
+  `SUB(0, a)`; a negative constant is a typed literal, `INT#-5` or
+  `REAL#-1.5`. `NOT x` is pin negation and is allowed.
 - Inline arithmetic in an array index. Compute the index on a named wire
-  first, then use `Levels[i]`.
+  first, then use `Levels[i]`; `Levels[i + 1]` is a parse error that says
+  so.
 - Defining the same wire twice, or a wire that feeds itself. Both are
   compile errors.
 
