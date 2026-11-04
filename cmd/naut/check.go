@@ -527,6 +527,39 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		}
 	}
 
+	// An output with no init: is never seeded: it holds nothing until a
+	// program writes it, and a read before that faults the scan with
+	// "undefined tag" (nautilus#560). A seal-in reads its own coil first,
+	// so it faults on scan one and — the faulting rung being the one that
+	// writes the tag — on every scan after. Only a program's own earlier
+	// write counts: tasks start concurrently.
+	readFirst := map[string][]runtime.EarlyRead{}
+	for name, reads := range rt.ReadBeforeWrite() {
+		readFirst[ir.NameKey(name)] = append(readFirst[ir.NameKey(name)], reads...)
+	}
+	for _, d := range proj.Runtime.Tags {
+		if d.Role != runtime.RoleOutput || d.Init != nil {
+			continue
+		}
+		reads := readFirst[ir.NameKey(d.Name)]
+		if len(reads) == 0 {
+			continue
+		}
+		var progs []string
+		why := "a seal-in reads its own coil"
+		for _, r := range reads {
+			progs = append(progs, r.Program)
+			if !r.Writes {
+				why = "another task writes it, and tasks start together, so the read can come first"
+			}
+		}
+		errs++
+		fmt.Printf("%s: error: output %q has no init:, and %s reads it before writing it "+
+			"(%s) — an output with no init: holds nothing until it is written, so that read "+
+			"faults the scan with \"undefined tag %s\"; give it an init:%s\n",
+			loc.tag(d.Name), d.Name, programList(progs), why, d.Name, initHint(d, rt))
+	}
+
 	bound := map[string]bool{}
 	for name := range rt.Globals() {
 		bound[ir.NameKey(name)] = true
@@ -610,6 +643,42 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", loc.file, r.File, r.Nodes, r.Pipes)
 	}
 	return errs, warns
+}
+
+// programList names programs for a diagnostic: "Interlocks", "Interlocks
+// and Alarms", "A, B and C".
+func programList(names []string) string {
+	sort.Strings(names)
+	switch len(names) {
+	case 0:
+		return "a program"
+	case 1:
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// initHint is " (init: <the zero of the tag's type>)" for a diagnostic
+// that asks for an init:, "" when the type has no one-word zero.
+func initHint(d runtime.TagDef, rt *runtime.Runtime) string {
+	var t *ir.Type
+	for name, gt := range rt.Globals() {
+		if ir.NameKey(name) == ir.NameKey(d.Name) {
+			t = gt
+			break
+		}
+	}
+	if t == nil || t.Enum != nil {
+		return ""
+	}
+	zero := map[ir.TypeKind]string{
+		ir.TypeBool: "false", ir.TypeInt: "0", ir.TypeReal: "0.0",
+		ir.TypeTime: "T#0s", ir.TypeString: "''",
+	}[t.Kind]
+	if zero == "" {
+		return ""
+	}
+	return " (init: " + zero + ")"
 }
 
 func roleName(r runtime.TagRole) string {

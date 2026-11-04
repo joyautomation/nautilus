@@ -842,6 +842,33 @@ func (r *Runtime) GlobalUses() ir.GlobalUse {
 	return out
 }
 
+// EarlyRead is one program reading a global before it has written it in
+// the scan: Program is its POU name, and Writes says whether it writes the
+// global later (a seal-in) or leaves that to another task.
+type EarlyRead struct {
+	Program string
+	Writes  bool
+}
+
+// ReadBeforeWrite maps each global some program can read before that same
+// program has written it in the scan (ir.Program.ReadBeforeWrite) to the
+// programs that do, in task order. Tasks start concurrently, so another
+// task's write is no guarantee: only a program's own earlier write is.
+func (r *Runtime) ReadBeforeWrite() map[string][]EarlyRead {
+	out := map[string][]EarlyRead{}
+	progs := []*Program{r.prog}
+	for _, tr := range r.tasks {
+		progs = append(progs, tr.prog)
+	}
+	for _, p := range progs {
+		written := p.GlobalUses().Written
+		for name := range p.ReadBeforeWrite() {
+			out[name] = append(out[name], EarlyRead{Program: p.POU(), Writes: written[name]})
+		}
+	}
+	return out
+}
+
 // TaskProgram returns a task's program by task name — "main" (or "") for
 // the main task, nil for an unknown name. Task programs hot-swap exactly
 // like the main one; the swap applies on that task's next scan.

@@ -539,6 +539,10 @@ func (p *netParser) namedArgs() ([]namedArg, error) {
 }
 
 // expr := 'NOT' expr | primary
+//
+// An expression is never followed by an operator: FBD has blocks, not
+// infix arithmetic, so `a + b` ends the expression at `a`. Said that way
+// (nautilus#562), not as the `expected ')'` the next rule would give.
 func (p *netParser) expr() (expr, error) {
 	if p.at(st.TokenNot) {
 		at := p.here()
@@ -549,7 +553,54 @@ func (p *netParser) expr() (expr, error) {
 		}
 		return notExpr{exprPos: p.span(at), inner: inner}, nil
 	}
-	return p.primary()
+	e, err := p.primary()
+	if err != nil {
+		return nil, err
+	}
+	if op, fn := p.infixAhead(); fn != "" {
+		return nil, p.posErr(fmt.Sprintf("FBD has no operators; write %s(a, b), not a %s b", fn, op))
+	}
+	return e, nil
+}
+
+// infixAhead names the ST operator at the parser's position and the block
+// that does its job ("+", "ADD"); fn is "" when the next token is not one.
+// NOT is not here: it is FBD's pin negation, and parses.
+func (p *netParser) infixAhead() (op, fn string) {
+	switch p.peek().Type {
+	case st.TokenPlus:
+		return "+", "ADD"
+	case st.TokenMinus:
+		return "-", "SUB"
+	case st.TokenStar:
+		if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Type == st.TokenStar {
+			return "**", "EXPT"
+		}
+		return "*", "MUL"
+	case st.TokenSlash:
+		return "/", "DIV"
+	case st.TokenMod:
+		return "MOD", "MOD"
+	case st.TokenEqual:
+		return "=", "EQ"
+	case st.TokenNotEqual:
+		return "<>", "NE"
+	case st.TokenLess:
+		return "<", "LT"
+	case st.TokenLessEq:
+		return "<=", "LE"
+	case st.TokenGreater:
+		return ">", "GT"
+	case st.TokenGreaterEq:
+		return ">=", "GE"
+	case st.TokenAnd:
+		return "AND", "AND"
+	case st.TokenOr:
+		return "OR", "OR"
+	case st.TokenXor:
+		return "XOR", "XOR"
+	}
+	return "", ""
 }
 
 // primary := literal | IDENT ('.' IDENT)? | IDENT '(' args ')' | '(' expr ')'
@@ -630,6 +681,9 @@ func (p *netParser) primary() (expr, error) {
 			}
 			return refExpr{exprPos: p.span(at), name: name}, nil
 		}
+	}
+	if p.at(st.TokenMinus) {
+		return nil, p.posErr("FBD has no operators; negate with SUB(0, a), and write a negative constant as a typed literal (INT#-5, REAL#-1.5)")
 	}
 	return nil, p.posErr(fmt.Sprintf("unexpected %q in expression", p.peek().Literal))
 }

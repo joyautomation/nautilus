@@ -392,6 +392,17 @@ func (p *Program) GlobalUses() ir.GlobalUse {
 	return p.prog.GlobalUses()
 }
 
+// ReadBeforeWrite lists the globals one scan of this program can read
+// before it writes them itself (ir.Program.ReadBeforeWrite).
+func (p *Program) ReadBeforeWrite() map[string]bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prog == nil {
+		return map[string]bool{}
+	}
+	return p.prog.ReadBeforeWrite()
+}
+
 func (p *Program) Source() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()

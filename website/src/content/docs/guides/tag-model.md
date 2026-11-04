@@ -101,7 +101,7 @@ END_PROGRAM
 - **`PumpRun` is an `output`.** The program writes it and the driver sends
   it to the starter. The program also reads it back (the seal-in), so it
   has an `init:`; without one, the first scan stops with `undefined tag
-  PumpRun`.
+  PumpRun`, and `naut check` reports it on the tag's line before you run.
 - **`StartLevel` and `StopLevel` are `setpoint`s.** The operator tunes
   them: `POST /api/tags` with `{"name": "StartLevel", "value": 65}`, or a
   click in the dashboard. The `retain:` section keeps the 65 across a
@@ -137,7 +137,10 @@ The one rule that bites: **writes create, reads fault.** Reading a tag
 nobody has ever written stops the scan with `undefined tag <name>` —
 deliberately, so a mis-wired binding fails loudly instead of running on a
 silent zero. The classic trap is a seal-in latch that *reads its own coil*
-on scan one, before the first write; the fix is a seed. (In the FBD
+on scan one, before the first write; the fix is a seed, and `naut check`
+reports an output with no `init:` that a program reads before it writes it
+(a program's own earlier write counts; another task's does not, since tasks
+start together). (In the FBD
 diagram, with live values on, externals with no backing tag are flagged —
 an amber *no tag* badge in the vars panel and on any chip that reads one —
 so you see this before the download, not after.)
