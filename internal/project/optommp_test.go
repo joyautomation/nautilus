@@ -124,6 +124,12 @@ func TestOptommpStatus(t *testing.T) {
 	if s := optommpStatus(h); s.State != "error" || s.Detail != "10.0.0.5:2001" {
 		t.Fatalf("down: %+v", s)
 	}
+	// #626: a standby that holds no session because of the watchdog says
+	// so, not "connecting", whatever error its last session left.
+	h.Mode = "standby (watchdog)"
+	if s := optommpStatus(h); s.State != "waiting" || !strings.Contains(s.Message, "watchdog") {
+		t.Fatalf("watchdog standby: %+v", s)
+	}
 }
 
 func TestOptommpStatusStreamAndWatchdog(t *testing.T) {

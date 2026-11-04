@@ -789,6 +789,10 @@ func optommpStatus(h optommp.Health) server.DriverStatus {
 		s.Detail = fmt.Sprintf("%s · firmware %s · %s", h.Unit, h.Firmware, s.Detail)
 	}
 	switch {
+	case h.Mode == "standby (watchdog)":
+		// No session on purpose (#626): the leader alone feeds the unit's
+		// watchdog, so a leader that loses the unit lets it trip.
+		s.State, s.Message = "waiting", "Standby: not polling, so only the leader feeds the unit's watchdog"
 	case h.Connected && h.Faults != "":
 		s.State, s.Message = "error", h.Faults
 	case h.Connected:

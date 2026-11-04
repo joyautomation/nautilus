@@ -54,43 +54,67 @@ func TestStandbyLeavesALatchSet(t *testing.T) {
 
 // A lone standby on a unit no replica has configured changes nothing: the
 // custom data area stays empty, the stream off, the watchdog as found, and
-// the power-up clear stays owed. When its gate opens it leads and does
-// all of it.
+// the power-up clear stays owed. Without a watchdog in the manifest it
+// polls; with one it sends nothing at all (#626). When its gate opens it
+// leads and does all of it.
 func TestLoneStandbyLeavesABlankUnitBlank(t *testing.T) {
-	dev := newBenchDevice()
 	wd := 500 * time.Millisecond
-	m := benchManifest(t, dev, ManifestOptions{Stream: 5 * time.Millisecond, Watchdog: &wd})
-	dev.PutU32(addrPUCFlag, 1)
-	watchdog := dev.U32(fakeWatchdog)
-	g := &gateWatch{}
-	drv := gatedTCP(t, m, dev.Listen(t), g)
-	eventually(t, "the standby's polls", func() bool { return drv.Health().Reads > 10 })
-	if p := dev.U32(fakeCustomConfig); p != 0 {
-		t.Errorf("a standby wrote custom pointer 0: %08X", p)
-	}
-	if on := dev.U32(fakeStreamOn); on != 0 {
-		t.Error("a standby turned the stream on")
-	}
-	if got := dev.U32(fakeWatchdog); got != watchdog {
-		t.Errorf("a standby set the watchdog: %d ms, was %d", got, watchdog)
-	}
-	if got := dev.U32(addrPowerupClear); got != 0 {
-		t.Error("a standby sent the power-up clear")
-	}
-	if h := drv.Health(); h.Mode != "poll" {
-		t.Errorf("standby mode %q, want poll", h.Mode)
-	}
+	for _, tc := range []struct {
+		name     string
+		watchdog *time.Duration
+	}{{"polling", nil}, {"watchdog set", &wd}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dev := newBenchDevice()
+			m := benchManifest(t, dev, ManifestOptions{Stream: 5 * time.Millisecond, Watchdog: tc.watchdog})
+			dev.PutU32(addrPUCFlag, 1)
+			watchdog := dev.U32(fakeWatchdog)
+			g := &gateWatch{}
+			reqs := dev.Requests()
+			drv := gatedTCP(t, m, dev.Listen(t), g)
+			if tc.watchdog == nil {
+				eventually(t, "the standby's polls", func() bool { return drv.Health().Reads > 10 })
+				if h := drv.Health(); h.Mode != "poll" {
+					t.Errorf("standby mode %q, want poll", h.Mode)
+				}
+			} else {
+				g.seen()
+				time.Sleep(50 * time.Millisecond)
+				if n := dev.Requests() - reqs; n != 0 {
+					t.Errorf("a standby with the watchdog set sent %d requests", n)
+				}
+				if h := drv.Health(); h.Mode != "standby (watchdog)" {
+					t.Errorf("standby mode %q, want standby (watchdog)", h.Mode)
+				}
+			}
+			if p := dev.U32(fakeCustomConfig); p != 0 {
+				t.Errorf("a standby wrote custom pointer 0: %08X", p)
+			}
+			if on := dev.U32(fakeStreamOn); on != 0 {
+				t.Error("a standby turned the stream on")
+			}
+			if got := dev.U32(fakeWatchdog); got != watchdog {
+				t.Errorf("a standby set the watchdog: %d ms, was %d", got, watchdog)
+			}
+			if got := dev.U32(addrPowerupClear); got != 0 {
+				t.Error("a standby sent the power-up clear")
+			}
 
-	g.open.Store(true)
-	eventually(t, "leading: streaming", func() bool { return drv.Health().Mode == "stream" && dev.U32(fakeStreamOn) != 0 })
-	if got := dev.U32(fakeWatchdog); got != 500 {
-		t.Errorf("leading: watchdog %d ms, want 500", got)
-	}
-	if got := dev.U32(addrPowerupClear); got != 1 {
-		t.Error("leading: the power-up clear owed was not sent")
-	}
-	if dev.U32(fakeCustomConfig) == 0 {
-		t.Error("leading: the custom data area was not configured")
+			g.open.Store(true)
+			eventually(t, "leading: streaming", func() bool { return drv.Health().Mode == "stream" && dev.U32(fakeStreamOn) != 0 })
+			want := watchdog // without `watchdog:` the unit's is left alone
+			if tc.watchdog != nil {
+				want = 500
+			}
+			if got := dev.U32(fakeWatchdog); got != want {
+				t.Errorf("leading: watchdog %d ms, want %d", got, want)
+			}
+			if got := dev.U32(addrPowerupClear); got != 1 {
+				t.Error("leading: the power-up clear owed was not sent")
+			}
+			if dev.U32(fakeCustomConfig) == 0 {
+				t.Error("leading: the custom data area was not configured")
+			}
+		})
 	}
 }
 

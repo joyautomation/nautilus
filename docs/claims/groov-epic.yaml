@@ -376,17 +376,18 @@ claims:
     claim: >-
       A standby changes no configuration on the unit: it sends no power-up
       clear, sets no watchdog, writes no custom data area pointer and
-      configures no stream; it polls the packed areas, and a leader
-      streaming beside it keeps stream target #1 and its stream on time.
+      configures no stream; without `watchdog:` in the manifest it polls
+      the packed areas, and a leader streaming beside it keeps stream
+      target #1 and its stream on time.
     source: "#redundancy"
     tests:
       - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
       - go ./optommp TestStandbyLeavesTheStreamToTheLeader
     note: >-
       The in-process fake over loopback TCP: a lone standby on a blank unit
-      (stream and watchdog in the manifest, a power-up clear owed), then a
-      standby beside a streaming leader with the stream configuration
-      watched for 300 ms.
+      (stream in the manifest, a power-up clear owed), once polling and
+      once with the watchdog set (EPIC-033), then a standby beside a
+      streaming leader with the stream configuration watched for 300 ms.
   - id: EPIC-031
     claim: >-
       A takeover moves the stream: the new leader sends a power-up clear
@@ -418,3 +419,43 @@ claims:
     note: >-
       No test stops a leader that took over from another, so what it
       restores (and the found stream recorded as off) is not asserted.
+  - id: EPIC-033
+    claim: >-
+      With `watchdog:` set above 0s, a standby holds no connection to the
+      processor: it dials nothing and sends no request, so a leader that
+      keeps the lease but cannot reach the unit lets the unit's watchdog
+      trip, and the outputs go to their watchdog values. Its Health mode
+      is "standby (watchdog)", `online` is false, and the status row reads
+      waiting, not connecting.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestWatchdogStandbySendsNothingSoTheWatchdogTrips
+      - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
+      - go ./internal/project TestOptommpStatus
+    note: >-
+      The in-process fake, which counts requests (not connects) toward its
+      watchdog: a leader sets it to 100 ms, a standby beside it is watched
+      for 100 ms, then the leader's link is cut and the fake must trip and
+      drive DO00 to its watchdog value within a second.
+  - id: EPIC-034
+    claim: >-
+      Only a watchdog the manifest sets keeps a standby off the unit:
+      without the `watchdog` key, or with 0s, a standby polls the packed
+      areas.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyPollsUnlessTheManifestSetsTheWatchdog
+  - id: EPIC-035
+    claim: >-
+      A standby with `watchdog:` set that takes over connects, configures
+      the watchdog, and reads the unit before it writes, and the first
+      command it sends comes from a scan that read the unit since the
+      takeover, not from the runtime's earlier scans as leader on what
+      the standby last saw.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestWatchdogStandbyTakeoverReadsBeforeItWrites
+    note: >-
+      A runtime copies DI03 (on at the unit, its tag seeded FALSE) to
+      DO00; every request of the takeover is recorded, and no write may
+      come before a read of a packed area or command DO00 off.

@@ -197,7 +197,9 @@ the processor may have restarted meanwhile.
 
 The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
-trip when nautilus alone stops.
+trip when nautilus alone stops. A redundant standby is not one of those
+other clients: with `watchdog:` set it does not talk to the unit at all
+(see [Redundancy](#redundancy)).
 
 ## Holding outputs until an operator acknowledges
 
@@ -280,9 +282,10 @@ leadership: commands leave the driver only on the leader. A standby skips
 scans, so it never hands the driver a command, and its driver neither
 rewrites outputs on reconnect nor after a watchdog trip.
 
-**A standby changes nothing on the unit.** It keeps a session with the
-processor and polls the packed areas, whatever the manifest asks for: the
-plain reads a polled scan makes (two on an ordinary chassis). It leaves
+**A standby changes nothing on the unit.** Unless the manifest sets the
+watchdog (below), it keeps a session with the processor and polls the
+packed areas, whatever the manifest asks for: the plain reads a polled
+scan makes (two on an ordinary chassis). It leaves
 the unit's configuration to the leader:
 it does not send the power-up clear, set the watchdog, write the custom
 data area's pointers, or configure the stream. It clears no latch: a
@@ -292,17 +295,47 @@ still be lost, when the old leader clears it in its last scan before it
 sees the gate close and its program never runs on it, or delivered twice,
 when both replicas lead for a moment while the lease changes hands. A
 standby's clean stop puts nothing back.
-Its reads still count as requests to the unit, so they feed the
-communication watchdog: a leader that hangs while it still holds the lease
-does not trip it
-([#621](https://github.com/joyautomation/nautilus/issues/621)).
+
+**With `watchdog:` set, a standby does not talk to the unit.** Any
+client's OptoMMP request resets the unit's communication watchdog, so a
+polling standby would keep it fed. Take a leader that still holds the
+lease but cannot reach the unit (a network fault between the two, both
+still reaching the cluster): its outputs never arrive, and a standby that
+polled would keep the watchdog from tripping, so the unit would hold the
+last command for as long as the fault lasted. So while the manifest sets
+`watchdog:` above `0s`, a standby holds no connection to the processor:
+no request, no stream, not even a TCP connect. If the leader loses the
+unit, nothing else feeds the watchdog, and it trips and drives the outputs
+to their watchdog values, as it would for a single controller
+([#626](https://github.com/joyautomation/nautilus/issues/626)). The cost
+is the standby's live view of that unit: its tags are Stale (or not
+connected, if it never led), `online` is false without counting an
+outage, and the status row reads "Standby: not polling" (Health mode
+`standby (watchdog)`). Other drivers on the same standby keep polling
+their devices. Without `watchdog:`, or with `0s`, a standby polls as
+above. A watchdog set only in groov Manage is not something the driver
+knows about until it reads it, so name it in the manifest for this to
+apply.
+
+**A watchdog standby's takeover connects, reads, then writes.** When the
+gate opens the driver connects at once (it looks at the gate every scan
+while standing by, and the runtime's first push as leader wakes it). It
+leads as below: power-up clear if owed, watchdog, custom data area and
+stream. The runtime's first scans as leader run on what the standby last
+saw, not on the unit, so the driver accepts no command until the runtime
+has read inputs from its first scan of the unit. That read asks for every
+output, and the push in the same scan, computed from fresh inputs, is the
+first command that goes out. The takeover costs a TCP connect, the
+session's set-up requests and one scan more than a polling standby's
+would.
 
 **A takeover moves the stream.** The role follows the write gate, looked
 at every scan and every datagram. A standby whose gate opens becomes the
 leader on the same connection, with no outage: it sends the power-up clear
 if one is owed and configures the watchdog, the custom data area and the
 stream as the manifest asks, pointing the stream at itself. A leader whose
-gate closes stops using the stream and polls as a standby; it leaves the
+gate closes stops using the stream and polls as a standby (with
+`watchdog:` set, it closes its connection instead); it leaves the
 configuration where it is, since the new leader now owns it. Only a
 replica that still leads when it stops puts the stream and the pointers
 back: one that lost the lease and is stopped before it looks again
@@ -348,7 +381,8 @@ output is written (see [What a scan does](#what-a-scan-does)).
 **A flip between two looks is not seen.** A gate func cannot say it
 changed, so the driver looks at it: on every push and flush, before every
 write in a flush, every scan (every stream check when streaming) and at
-least once a second while connected, and on every connect attempt. A gate
+least once a second while connected, every scan while a standby with
+`watchdog:` set waits unconnected, and on every connect attempt. A gate
 that closes and reopens between two looks is not seen, and then nothing
 above happens. The window is about a second, or a scan when that is
 shorter, while connected, and up to the reconnect backoff (30 s) while

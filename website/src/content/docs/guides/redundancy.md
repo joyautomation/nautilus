@@ -133,6 +133,15 @@ never computes.
   output too. The hw drivers (SNMP, Redfish, Prometheus) do not do this:
   their commands are often pulses (a ForceOff sent twice powers a server
   off twice), so the first value after their gate opens is a baseline.
+- **A standby leaves a device's communication watchdog to the leader.**
+  Where the manifest sets a watchdog that any client's request feeds (a
+  groov EPIC's `watchdog:`), the standby does not talk to that device at
+  all, so a leader that keeps the lease but cannot reach the device lets
+  the watchdog trip instead of the standby's polls feeding it. The
+  standby loses its live view of just that device until it takes over
+  (see [groov EPIC](/guides/groov-epic/#redundancy)). No other driver
+  has a manifest-set watchdog of that kind; a Modbus `rewrite:`
+  keep-alive is a write, and a standby sends none.
 - **The HTTP API follows the leader.** Every replica serves the
   dashboard, and a standby reverse-proxies API traffic to the leader
   (the leader's address rides inside the Lease), so a Service in front
