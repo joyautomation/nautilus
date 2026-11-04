@@ -90,7 +90,7 @@ claims:
     tests:
       - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
       - go ./internal/project TestTagModelFunctionsDoNotSeeTagsImplicitly
-  - id: TAG-054
+  - id: TAG-055
     claim: >-
       A tag a block's or function's VAR_EXTERNAL names is bound by the
       program that instantiates the block or calls the function, as if the
