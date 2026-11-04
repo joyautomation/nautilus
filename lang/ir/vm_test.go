@@ -25,6 +25,65 @@ func TestMemberPathIsRootFirst(t *testing.T) {
 	}
 }
 
+// memberHost is a stubHost that implements MemberWriter and keeps the
+// path of the last member write.
+type memberHost struct {
+	*stubHost
+	path   MemberPath
+	member bool
+}
+
+func (h *memberHost) WriteGlobalMember(name string, v Value, p MemberPath) error {
+	h.globals[name], h.path, h.member = v, p, true
+	return nil
+}
+
+// A bit assignment reports only its bit to a MemberWriter (#578): on a plain
+// global word (no steps), on a member, and for an IEC partial access and a
+// bit of one, only the part's bits. Assigning the word itself reports it
+// whole.
+func TestBitWriteReportsItsBits(t *testing.T) {
+	word := IntNamed("LWORD")
+	rec := &StructDef{Name: "R", Fields: []StructField{{Name: "A", Type: IntT}, {Name: "W", Type: word}}}
+	recT := &Type{Kind: TypeStruct, Struct: rec}
+	w := &GlobalRef{Name: "W", T: word}
+	sw := &MemberRef{Object: &GlobalRef{Name: "S", T: recT}, FieldIdx: 1, T: word}
+	byte1 := &BitRef{Object: w, Bit: 8, Width: 8, T: IntNamed("BYTE")}
+	for _, tc := range []struct {
+		name   string
+		target LValue
+		value  Value
+		steps  int
+		bits   uint64
+		member bool
+	}{
+		{"W.3", &BitRef{Object: w, Bit: 3}, BoolVal(true), 0, 1 << 3, true},
+		{"W.63", &BitRef{Object: w, Bit: 63}, BoolVal(true), 0, 1 << 63, true},
+		{"S.W.5", &BitRef{Object: sw, Bit: 5}, BoolVal(false), 1, 1 << 5, true},
+		{"W.%B1", byte1, IntVal(0xFF), 0, 0xFF00, true},
+		{"W.%B1.2", &BitRef{Object: byte1, Bit: 2}, BoolVal(true), 0, 1 << 10, true},
+		{"W.%L0", &BitRef{Object: w, Bit: 0, Width: 64, T: word}, IntVal(-1), 0, ^uint64(0), true},
+		{"S.W", sw, IntVal(1), 1, 0, true},
+		{"W", w, IntVal(1), 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &memberHost{stubHost: newStubHost()}
+			h.globals["W"] = Value{Kind: TypeInt}
+			h.globals["S"] = Value{Kind: TypeStruct, Struct: rec, Fld: []Value{{Kind: TypeInt}, {Kind: TypeInt}}}
+			prog := &Program{Body: []Stmt{&Assign{Target: tc.target, Value: &Lit{V: tc.value}}}}
+			if err := Run(prog, NewFrame(prog), h); err != nil {
+				t.Fatal(err)
+			}
+			if h.member != tc.member {
+				t.Fatalf("member write = %v, want %v", h.member, tc.member)
+			}
+			if tc.member && (h.path.Len() != tc.steps || h.path.Bits() != tc.bits) {
+				t.Errorf("path = %d steps, bits %#x; want %d steps, bits %#x", h.path.Len(), h.path.Bits(), tc.steps, tc.bits)
+			}
+		})
+	}
+}
+
 type stubHost struct {
 	globals map[string]Value
 	now     int64

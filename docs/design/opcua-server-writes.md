@@ -223,8 +223,13 @@ another attribute stays `Bad_NotWritable` for everyone.
   mask, and the commit lands only the assigned members onto the store's current value
   (`runtime/membermerge.go`). The same-member rule is the scalar one: a member the program
   assigned this scan takes the program's value, even when it assigned the value it already
-  had; assigning a whole member or the whole tag assigns everything beneath it; a bit
-  assigns its word. Recorded by assignment rather than by diffing against the snapshot,
+  had; assigning a whole member or the whole tag assigns everything beneath it.
+  **Changed 2026-11-04 (James):** a bit assigns only its bit, not its word. The VM reports
+  the bits it set (`ir.MemberPath.Bits`), and the commit lands them into the stored word
+  (`stored &^ mask | program & mask`), so a client's write to another bit of that word in
+  the same scan survives; assigning the word itself still assigns every bit. OPC UA has no
+  node for one bit, so a client writes the whole word, and the bits the program did not
+  assign keep the client's value. Recorded by assignment rather than by diffing against the snapshot,
   which could not see an assignment of an unchanged value. A tag nobody wrote since the
   snapshot (by store generation) still commits whole, with no merge and no allocation.
 - **Retain.** A write to a setpoint persists because the default retained set is every

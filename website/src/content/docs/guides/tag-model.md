@@ -444,14 +444,25 @@ member the program did not assign survives, whoever made it: `POST
 holds at any depth: a nested member, an array element, or a member of one
 element of an array of structs.
 
+The same goes for the bits of a word. A bit assignment (`P101.Status.3 :=
+TRUE`, `Alarms.3 := TRUE` on a plain `WORD` tag, or a ladder coil on
+`Alarms.3`) assigns that bit only, and a partial access such as
+`Alarms.%B1` only its byte. The commit sets the program's bits in the word
+as it is stored at that moment and leaves every other bit as it is, so an
+operator's or a client's change to bit 5 survives a program that sets bit 3
+in the same scan. A writer always sends the whole word, and only the bits
+the program did not assign keep its value.
+
 When the program and a writer hit the **same** member in one scan, the
 program's assignment is the last write and wins. A whole tag has always
 followed this rule. The assignment counts even when it stores the value the
 member already had (`P101.Speed := P101.Speed`). Assigning a whole member
 (`P101.LVL := Limits`) or the whole tag (`P101 := Spare`) assigns everything
-beneath it. A bit (`P101.Word.3 := TRUE`) is an assignment of its word. To
-let the operator own a member, don't assign it in the program, or assign it
-only when the logic means to change it.
+beneath it. The same rule holds for a bit: if the program assigned bit 3
+this scan, its bit 3 wins, and assigning the word itself (`Alarms := 0`)
+assigns every bit of it. To let the operator own a member or a bit, don't
+assign it in the program, or assign it only when the logic means to change
+it.
 
 ## Observing scans: `Runtime.OnScan`
 

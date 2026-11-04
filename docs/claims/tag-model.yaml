@@ -264,31 +264,37 @@ claims:
       - go ./runtime TestSetPathUnknownRoot
   - id: TAG-051
     claim: >-
-      A scan's commit lands only the members the program assigned in that
-      scan, so a write to another member that lands mid-scan survives,
-      whoever made it (POST /api/tags, an OPC UA client, another task), at
-      any depth: a nested member, an array element, a member of an element
-      of an array of structs.
+      A scan's commit lands only the members, and the bits of an integer,
+      the program assigned in that scan, so a write to another member, or to
+      another bit of a word the program set a bit of, that lands mid-scan
+      survives, whoever made it (POST /api/tags, an OPC UA client, another
+      task), at any depth: a nested member, an array element, a member of an
+      element of an array of structs, or a plain integer tag of any width.
     source: "#a-member-write-during-a-scan"
     tests:
       - go ./runtime TestExternalMemberWriteSurvivesProgramMemberWrite
       - go ./runtime TestMemberMergeNestedAndArrays
+      - go ./runtime TestExternalBitWriteSurvivesProgramBitWrite
+      - go ./runtime TestLadderBitCoilsMergeByBit
       - go ./runtime TestTwoTasksWritingDifferentMembersBothLand
       - go ./runtime TestConcurrentMemberWritesAreNeverLost
       - go ./server TestHTTPMemberWritesSurviveProgramMemberWrites
       - go ./opcua/server TestOPCUAMemberWriteSurvivesProgramMemberWrite
+      - go ./lang/ir TestBitWriteReportsItsBits
   - id: TAG-052
     claim: >-
-      When the program and a writer hit the same member in one scan, the
-      program's assignment wins, as it does for a whole tag, even when it
-      assigns the value the member already had. Assigning a whole member or
-      the whole tag assigns everything beneath it, and a bit is an
-      assignment of its word.
+      When the program and a writer hit the same member, or the same bit, in
+      one scan, the program's assignment wins, as it does for a whole tag,
+      even when it assigns the value the member or bit already had.
+      Assigning a whole member or the whole tag assigns everything beneath
+      it, and assigning a word assigns every bit of it; a bit assigns only
+      that bit.
     source: "#a-member-write-during-a-scan"
     tests:
       - go ./runtime TestProgramAssignmentWinsTheSameMember
+      - go ./runtime TestProgramAssignmentWinsTheSameBit
       - go ./runtime TestWholeAssignmentOwnsEverythingBeneath
-      - go ./runtime TestBitAssignmentIsItsWord
+      - go ./runtime TestWholeWordAssignmentOwnsEveryBit
       - go ./server TestHTTPMemberWritesSurviveProgramMemberWrites
   - id: TAG-025
     claim: >-

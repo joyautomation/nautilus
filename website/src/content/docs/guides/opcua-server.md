@@ -479,9 +479,9 @@ YAML anchor.
   (`Bad_NotWritable`). Open the setpoint the logic reads instead.
 - **An output when it is matched.** That is how a project that commands
   another controller passes a value through. A program that writes the same
-  output, or the same member of it, overwrites the client's value at its
-  next commit; a member the program does not assign keeps the client's
-  value (see [a member write during a scan](/guides/tag-model/#a-member-write-during-a-scan)).
+  output, or the same member or bit of it, overwrites the client's value at
+  its next commit; a member or bit the program does not assign keeps the
+  client's value (see [a member write during a scan](/guides/tag-model/#a-member-write-during-a-scan)).
 - **Not arrays yet.** A whole array, or any write with an `IndexRange`, is
   `Bad_WriteNotSupported`.
 

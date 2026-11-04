@@ -64,9 +64,10 @@ tasks.
 **Task isolation.** Tasks run concurrently. Each scan copies its program's
 external tags in, executes privately, and commits what changed as one
 unit, so a fast task never waits behind a slow one and a reader never sees
-a scan half-done. The commit lands only the members the program assigned,
-so a write to another member of the same struct tag survives it. The one
-rule that follows: two tasks writing the same tag or member resolve by
+a scan half-done. The commit lands only the members, and the bits of a
+word, the program assigned, so a write to another member of the same
+struct tag, or another bit of the same word, survives it. The one rule
+that follows: two tasks writing the same tag, member or bit resolve by
 commit order (last wins), as on any PLC with shared globals — give a tag
 one owner.
 

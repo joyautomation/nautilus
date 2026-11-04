@@ -21,11 +21,11 @@ import (
 //     server, Sparkplug) can never see a scan half-done, though it can see
 //     task A's commit and then task B's between two reads of its own.
 //
-// A commit lands what the program ASSIGNED, at member granularity: a tag
-// the program wrote one member of keeps every other member as the store
-// holds it at commit, so an operator's or a client's write to a sibling
-// member, or another task's commit, that lands mid-scan survives (#578; see
-// membermerge.go). Two tasks assigning the same tag or the same member
+// A commit lands what the program ASSIGNED, at member and bit granularity:
+// a tag the program wrote one member (or one bit of a word) of keeps every
+// other member (or bit) as the store holds it at commit, so an operator's or
+// a client's write to a sibling member or another bit, or another task's
+// commit, that lands mid-scan survives (#578; see membermerge.go). Two tasks assigning the same tag or the same member
 // resolve by commit order, last wins — the same rule a scan-serialised
 // runtime had, now at commit instead of scan granularity; and a
 // read-modify-write of one member from two tasks can lose an update,
@@ -154,9 +154,9 @@ func (v *scanView) WriteGlobal(name string, val ir.Value) error {
 }
 
 // WriteGlobalMember is the VM's optional ir.MemberWriter: an assignment
-// into part of a global. The view holds the new whole value, as for
-// WriteGlobal, and records the path, so commit lands only what the program
-// assigned.
+// into part of a global — a member, an element, or bits of an integer
+// (path.Bits). The view holds the new whole value, as for WriteGlobal, and
+// records the path, so commit lands only what the program assigned.
 func (v *scanView) WriteGlobalMember(name string, val ir.Value, path ir.MemberPath) error {
 	if len(v.alias) > 0 {
 		if key, ok := v.alias[name]; ok {

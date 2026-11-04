@@ -140,8 +140,9 @@ Tasks run concurrently, and every scan still sees a consistent store:
 each scan copies its program's external tags in, executes privately, and
 commits what changed as one unit, so a fast task never waits behind a slow
 one and a reader never sees a scan half-done. A commit lands only what the
-program assigned, member by member, so two tasks writing different members
-of one struct tag both land (see
+program assigned, member by member and bit by bit, so two tasks writing
+different members of one struct tag, or different bits of one word, both
+land (see
 [a member write during a scan](/guides/tag-model/#a-member-write-during-a-scan)).
 Two tasks writing the same tag, or the same member, resolve by commit
 order (last wins), as on any PLC with shared globals — give a tag one
