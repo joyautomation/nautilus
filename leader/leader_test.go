@@ -24,6 +24,8 @@ type fakeAPI struct {
 	lease *lease
 	rv    int
 	fail  bool
+	// failNext answers that many requests 500 before serving normally.
+	failNext int
 
 	// raceGate, when armed, makes GETs on the lease block until raceWant of
 	// them have arrived, so two racing electors are guaranteed to read the
@@ -61,7 +63,10 @@ func (f *fakeAPI) setFail(v bool) {
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
-	if f.fail {
+	if f.fail || f.failNext > 0 {
+		if f.failNext > 0 {
+			f.failNext--
+		}
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -323,4 +328,89 @@ func TestStandalone(t *testing.T) {
 	}
 
 	e.Release() // no-op; must not panic or block
+}
+
+// Run makes its first decision at once, before its ticker's first tick,
+// and Decided says so: a replica that acquires the lease is the leader
+// from that moment, so `naut run` starts its drivers as a plain start
+// (their start-up baseline kept, #606); one that finds the lease held is a
+// standby from that moment. A standalone elector has decided from New.
+func TestRunDecidesBeforeItsFirstTick(t *testing.T) {
+	waitDecided := func(t *testing.T, e *Elector) {
+		t.Helper()
+		select {
+		case <-e.Decided():
+		case <-time.After(2 * time.Second):
+			t.Fatal("no first decision: Run must decide before its ticker's first tick")
+		}
+	}
+	// A long lease: the ticker's first tick is 10 s away, so only the
+	// decision Run makes up front can close Decided in time.
+	const lease = 40 * time.Second
+
+	t.Run("acquires", func(t *testing.T) {
+		srv, _ := newFakeServer(t)
+		e := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+		e.duration = lease
+		select {
+		case <-e.Decided():
+			t.Fatal("a cluster elector has decided before Run")
+		default:
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go e.Run(ctx)
+		waitDecided(t, e)
+		if !e.IsLeader() {
+			t.Fatal("the first decision on an empty lease must be leader")
+		}
+	})
+
+	t.Run("standby", func(t *testing.T) {
+		srv, _ := newFakeServer(t)
+		holder := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+		holder.duration = lease
+		holder.tick(time.Now())
+		e := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+		e.duration = lease
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go e.Run(ctx)
+		waitDecided(t, e)
+		if e.IsLeader() {
+			t.Fatal("a held, fresh lease must make the first decision standby")
+		}
+	})
+
+	t.Run("standalone", func(t *testing.T) {
+		t.Setenv("KUBERNETES_SERVICE_HOST", "")
+		e, err := New("test-lease", "pod-a", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitDecided(t, e)
+	})
+}
+
+// A first tick that never reached the API (a blip: the Lease GET failed)
+// decides nothing: Run tries again within its lease duration, and the
+// first decision is the one the API gave. A replica that will lead is
+// then a plain start, not a standby that commands every output a second
+// later (#606).
+func TestRunRetriesAFirstTickThatMissedTheAPI(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	fake.failNext = 1
+	e := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	e.duration = 4 * time.Second // retries every 250 ms; the ticker's first tick is 1 s in
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+	select {
+	case <-e.Decided():
+	case <-time.After(3 * time.Second):
+		t.Fatal("no first decision")
+	}
+	if !e.IsLeader() {
+		t.Fatal("a failed first GET was taken as the first decision (standby); the retry acquires an empty lease")
+	}
 }

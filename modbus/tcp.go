@@ -14,9 +14,11 @@ package modbus
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -103,6 +105,9 @@ type tcpConn struct {
 	nc      net.Conn // rw when it is a real socket; nil under test rigs
 	timeout time.Duration
 	txid    uint16
+	last    time.Time // when the last request went out (or the dial)
+	born    time.Time // when the connection was made
+	seen    time.Time // when the link was last known up: a response, or a quiet idle check
 }
 
 // newTCPConn wraps an established stream. timeout bounds each Request when
@@ -110,7 +115,8 @@ type tcpConn struct {
 // Deadlines only apply when rw is a net.Conn — an in-memory test rig has no
 // deadline to set, which is fine because it never blocks.
 func newTCPConn(rw io.ReadWriter, timeout time.Duration) *tcpConn {
-	c := &tcpConn{rw: rw, timeout: timeout}
+	now := time.Now()
+	c := &tcpConn{rw: rw, timeout: timeout, last: now, born: now, seen: now}
 	if nc, ok := rw.(net.Conn); ok {
 		c.nc = nc
 	}
@@ -169,6 +175,7 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 	}
 
 	c.txid++
+	c.last = time.Now()
 	txid := c.txid
 	if c.nc != nil {
 		deadline := time.Time{}
@@ -213,11 +220,79 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 		if len(body) < 2 {
 			return nil, fmt.Errorf("modbus: truncated exception response")
 		}
+		c.seen = time.Now()
 		return nil, ExceptionError{Code: body[1]}
 	case rfc != fc:
 		return nil, fmt.Errorf("modbus: response function 0x%02X (want 0x%02X)", rfc, fc)
 	}
+	c.seen = time.Now()
 	return body[1:], nil
+}
+
+// idlePeek is how long checkIdle waits for the socket to say something.
+// Any pending EOF or socket error comes back from the read syscall at
+// once; the wait only bounds the quiet case, so it can be tiny.
+const idlePeek = time.Millisecond
+
+// errIdleClosed is checkIdle's report of a clean close by the device (a
+// FIN, read as EOF) while no request was outstanding: what a device with
+// a server-side idle timeout does. The driver reconnects quietly.
+var errIdleClosed = errors.New("modbus: the device closed the idle connection")
+
+// checkIdle asks the socket, between requests, whether the link is still
+// there, without sending anything: a short read that times out on a
+// healthy, quiet link and fails on one the peer closed (EOF), reset, or
+// the kernel gave up on (a TCP keepalive that went unanswered). No request
+// is outstanding, so the read cannot take bytes of a response. Bytes that
+// arrive anyway are unsolicited and would desync the next transaction's
+// framing, so they break the connection too. Under a test rig with no
+// socket it reports nothing.
+func (c *tcpConn) checkIdle() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.nc == nil {
+		return nil
+	}
+	if err := c.nc.SetReadDeadline(time.Now().Add(idlePeek)); err != nil {
+		return fmt.Errorf("modbus: idle check: %w", err)
+	}
+	var b [1]byte
+	n, err := c.nc.Read(b[:])
+	switch {
+	case n > 0:
+		return fmt.Errorf("modbus: unsolicited data from the device while idle")
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		c.seen = time.Now()
+		return nil // quiet and healthy
+	case err == io.EOF:
+		return errIdleClosed
+	}
+	return fmt.Errorf("modbus: idle check: %w", err)
+}
+
+// heldFor is how long the device is known to have kept the connection:
+// from the dial to the last response or quiet idle check.
+func (c *tcpConn) heldFor() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.seen.Sub(c.born)
+}
+
+// age is how long ago the connection was made.
+func (c *tcpConn) age() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Since(c.born)
+}
+
+// quietFor is how long it has been since the last request went out on c.
+// The idle check is not traffic, so it does not count.
+func (c *tcpConn) quietFor() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Since(c.last)
 }
 
 // shortRead normalizes io.EOF mid-frame to io.ErrUnexpectedEOF, so a peer

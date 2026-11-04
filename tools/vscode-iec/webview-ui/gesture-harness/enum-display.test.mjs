@@ -49,7 +49,6 @@ test('FBD: an enumerated chip reads bare in the enum style with its type; a STRI
 		};
 		await deliver(b, { type: 'model', model, title: 'n.fbd' });
 		await deliver(b, live({ a: 'Run', b: 'Run', y: false }, TYPES));
-		await sleep(200);
 		const ps = await pills(b);
 		const en = ps.filter((p) => p.enum);
 		assert.ok(en.length >= 1, `no enum pill among ${JSON.stringify(ps)}`);
@@ -76,13 +75,11 @@ test('FBD: an enumerated chip reads bare in the enum style with its type; a STRI
 
 		// A frame with no types (an older controller): exactly as before.
 		await deliver(b, live({ a: 'Run', b: 'Run', y: false }, undefined));
-		await sleep(200);
 		assert.deepEqual((await pills(b)).filter((p) => p.enum), [], 'no types, no enum styling');
 		assert.ok((await pills(b)).every((p) => p.text !== 'Run'), 'and every string value quoted');
 
 		// A value forced by its integer still reads as its member.
 		await deliver(b, live({ a: 11, b: 'Run', y: false }, TYPES));
-		await sleep(200);
 		assert.ok((await pills(b)).some((p) => p.enum && p.text === 'Fault'), 'an enum integer shows as its member');
 	});
 });
@@ -91,7 +88,6 @@ test('Ladder: an enumerated operand value reads bare in the enum style; a STRING
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
 		await deliver(b, live({ a: 'Run', b: 'Run', y: true, z: true, t1: { Q: false, ET: 0 } }, TYPES));
-		await sleep(200);
 		const vals = await b.eval(`[...document.querySelectorAll('text.liveval')].map((t) => ({
 			text: t.textContent, enum: t.classList.contains('enum'), italic: getComputedStyle(t).fontStyle,
 			title: t.closest('g')?.querySelector('title')?.textContent || ''
@@ -117,7 +113,6 @@ test('SFC: the vars panel shows an enumerated tag bare with its type, a STRING q
 		};
 		await deliver(b, { type: 'sfcModel', model, title: 'seq.sfc' });
 		await deliver(b, live({ _s_idle_x: true, _s_run_x: false, mode: 'Fault', label: 'Fault' }, TYPES));
-		await sleep(200);
 		await openVars(b);
 		const vp = await b.eval(`[...document.querySelectorAll('.row[data-id] .nx-pill')].map((el) => ({ id: el.closest('.row').dataset.id, text: el.textContent.trim(), enum: el.classList.contains('enum'), title: el.title }))`);
 		assert.deepEqual(

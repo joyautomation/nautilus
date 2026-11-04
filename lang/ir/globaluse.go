@@ -19,6 +19,10 @@ package ir
 type GlobalUse struct {
 	Read    map[string]bool
 	Written map[string]bool
+
+	// funcs, while GlobalUses walks, is the set of user FUNCTIONs already
+	// followed; nil for DirectGlobalUses, which does not follow calls.
+	funcs map[*FuncDef]bool
 }
 
 // DirectGlobalUses walks only this program's own body and classifies every
@@ -39,20 +43,23 @@ func (p *Program) DirectGlobalUses() GlobalUse {
 }
 
 // GlobalUses reports how this program uses the PLC-wide variables it
-// binds: DirectGlobalUses, plus transitively the Uses of every
-// FUNCTION_BLOCK instance it declares — nested FB-in-FB included. A
-// library FB's VAR_EXTERNAL reads and writes the tag store through
-// whichever program's instance steps it, so those reads/writes belong to
-// this program exactly as if it had named the tag directly (see
-// FBDef.Uses and Program.GlobalsDeep, which this mirrors). Safe to call
-// any time after the whole project has finished lowering — unlike
-// FBDef.Uses, which a sibling FB may still be populating.
+// binds: DirectGlobalUses, plus transitively the uses of every
+// FUNCTION_BLOCK instance it declares — nested FB-in-FB included — and of
+// every user FUNCTION it (or one of those blocks) calls. A library FB's or
+// FUNCTION's VAR_EXTERNAL reads and writes the tag store through whichever
+// program steps or calls it, so those reads/writes belong to this program
+// exactly as if it had named the tag directly (see FBDef.Uses and
+// Program.GlobalsDeep, which this mirrors). Safe to call any time after
+// the whole project has finished lowering — unlike FBDef.Uses, which a
+// sibling FB may still be populating.
 func (p *Program) GlobalUses() GlobalUse {
-	u := p.DirectGlobalUses()
+	u := GlobalUse{Read: map[string]bool{}, Written: map[string]bool{}, funcs: map[*FuncDef]bool{}}
+	u.stmts(p.Body)
 	seen := map[*FBDef]bool{}
 	for _, s := range p.Slots {
 		u.collectFB(s.Type, seen)
 	}
+	u.funcs = nil
 	return u
 }
 
@@ -70,11 +77,16 @@ func (u *GlobalUse) collectFB(t *Type, seen map[*FBDef]bool) {
 			return
 		}
 		seen[t.FB] = true
-		for name := range t.FB.Uses.Read {
-			u.Read[name] = true
-		}
-		for name := range t.FB.Uses.Written {
-			u.Written[name] = true
+		if t.FB.Body != nil && u.funcs != nil {
+			// The body itself, so the FUNCTIONs it calls are followed too.
+			u.stmts(t.FB.Body.Body)
+		} else {
+			for name := range t.FB.Uses.Read {
+				u.Read[name] = true
+			}
+			for name := range t.FB.Uses.Written {
+				u.Written[name] = true
+			}
 		}
 		for _, s := range t.FB.AllSlots() {
 			u.collectFB(s.Type, seen)
@@ -202,6 +214,12 @@ func (u *GlobalUse) expr(e Expr) {
 	case *UserCall:
 		for _, a := range n.Args {
 			u.expr(a)
+		}
+		// A FUNCTION's VAR_EXTERNAL is the caller's tag store: follow the
+		// call (deep walk only — at Lower time the body may not exist yet).
+		if d := n.Def; u.funcs != nil && d != nil && d.Body != nil && !u.funcs[d] {
+			u.funcs[d] = true
+			u.stmts(d.Body.Body)
 		}
 	case *Lit, *SlotRef, nil:
 		// no globals reachable

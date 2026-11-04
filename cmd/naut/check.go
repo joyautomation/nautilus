@@ -478,6 +478,18 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			"to have it read as zero until then\n", loc.tag(name), name)
 	}
 
+	// A declared tag and a driver binding that differ only in case. Program
+	// identifiers are case-insensitive, but the driver delivers (and accepts
+	// writes for) its binding's exact spelling and the tag store matches
+	// exactly, so `m1_kw` never receives what the driver delivers as
+	// `M1_KW`, and nothing else says so (#544).
+	for _, m := range caseOnlyBindings(proj.Runtime.Tags, proj.Runtime.Driver) {
+		errs++
+		fmt.Printf("%s: error: tag %q is spelled %q in the driver's bindings — the driver "+
+			"matches names exactly, so this tag would never %s; spell both the same\n",
+			loc.tag(m.tag), m.tag, m.binding, m.never)
+	}
+
 	// opcua.writable against the tags it is meant to open: a pattern that
 	// opens nothing, or only inputs (never writable), is a list that does
 	// not say what its author thinks; an output a program writes is open to
@@ -524,6 +536,49 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			fmt.Printf("%s: warning: the programs write %q, which %s declares no tag for — "+
 				"it will reach an HMI with no unit and no description\n",
 				loc.file, name, manifestLabel(manifestName))
+		}
+	}
+
+	// An output with no init: is never seeded: it holds nothing until a
+	// program writes it, and a read before that faults the scan with
+	// "undefined tag" (nautilus#560). A seal-in reads its own coil first,
+	// so it faults on scan one and — the faulting rung being the one that
+	// writes the tag — on every scan after. Only a program's own earlier
+	// write counts: tasks start concurrently. An error when some path the
+	// scan can take reaches the read unwritten; a warning when it is
+	// unwritten only if a loop runs zero times.
+	readFirst := map[string][]runtime.EarlyRead{}
+	for name, reads := range rt.ReadBeforeWrite() {
+		readFirst[ir.NameKey(name)] = append(readFirst[ir.NameKey(name)], reads...)
+	}
+	writtenAnywhere := map[string]bool{}
+	for name := range uses.Written {
+		writtenAnywhere[ir.NameKey(name)] = true
+	}
+	for _, d := range proj.Runtime.Tags {
+		if d.Role != runtime.RoleOutput || d.Init != nil {
+			continue
+		}
+		var sure, maybe []runtime.EarlyRead
+		for _, r := range readFirst[ir.NameKey(d.Name)] {
+			if r.Sure {
+				sure = append(sure, r)
+			} else {
+				maybe = append(maybe, r)
+			}
+		}
+		switch {
+		case len(sure) > 0:
+			errs++
+			fmt.Printf("%s: error: output %q has no init:, and %s — an output with no init: holds "+
+				"nothing until it is written, so that read faults the scan with \"undefined tag %s\"; "+
+				"give it an init:%s\n",
+				loc.tag(d.Name), d.Name, earlyReads(sure, writtenAnywhere[ir.NameKey(d.Name)]), d.Name, initHint(d, rt))
+		case len(maybe) > 0:
+			warns++
+			fmt.Printf("%s: warning: output %q has no init:, and %s — if a read comes first it "+
+				"faults the scan with \"undefined tag %s\"; give it an init:%s\n",
+				loc.tag(d.Name), d.Name, earlyReads(maybe, true), d.Name, initHint(d, rt))
 		}
 	}
 
@@ -610,6 +665,69 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", loc.file, r.File, r.Nodes, r.Pipes)
 	}
 	return errs, warns
+}
+
+// programList names programs for a diagnostic: "Interlocks", "Interlocks
+// and Alarms", "A, B and C".
+// earlyReads says which programs read an output before writing it, and
+// why, one clause per program in task order. writtenAnywhere is whether
+// any program writes it.
+func earlyReads(reads []runtime.EarlyRead, writtenAnywhere bool) string {
+	var parts []string
+	for _, r := range reads {
+		var part string
+		switch {
+		case !r.Sure:
+			part = r.Program + " may read it before writing it (it is written first only inside a loop that may run zero times)"
+		case !r.Writes && writtenAnywhere:
+			part = r.Program + " reads it, and only another task writes it (tasks start together, so the read can come first)"
+		case !r.Writes:
+			part = r.Program + " reads it, and no program writes it"
+		default:
+			part = r.Program + " reads it before writing it (" + readCause(r) + ")"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// readCause is why a program's read of a tag comes before its own write.
+func readCause(r runtime.EarlyRead) string {
+	switch r.Cause {
+	case ir.CauseSelfAssign:
+		if r.Lang == "ld" {
+			return "a seal-in or set/reset coil reads its own coil"
+		}
+		return "the assignment that writes it reads it first"
+	case ir.CauseCompound:
+		return "setting a member, element or bit of it reads the whole tag first"
+	case ir.CauseSomePaths:
+		return "it is written only on some paths before this read"
+	}
+	return "the read comes before the first write"
+}
+
+// initHint is " (init: <the zero of the tag's type>)" for a diagnostic
+// that asks for an init:, "" when the type has no one-word zero.
+func initHint(d runtime.TagDef, rt *runtime.Runtime) string {
+	var t *ir.Type
+	for name, gt := range rt.Globals() {
+		if ir.NameKey(name) == ir.NameKey(d.Name) {
+			t = gt
+			break
+		}
+	}
+	if t == nil || t.Enum != nil {
+		return ""
+	}
+	zero := map[ir.TypeKind]string{
+		ir.TypeBool: "false", ir.TypeInt: "0", ir.TypeReal: "0.0",
+		ir.TypeTime: "T#0s", ir.TypeString: "''",
+	}[t.Kind]
+	if zero == "" {
+		return ""
+	}
+	return " (init: " + zero + ")"
 }
 
 func roleName(r runtime.TagRole) string {
@@ -773,6 +891,55 @@ func inLibDir(f string) bool {
 	}
 	rel, err := filepath.Rel(stproject.ProjectRoot(abs), abs)
 	return err == nil && stproject.InLibDir(filepath.ToSlash(rel))
+}
+
+// caseMismatch is a declared tag whose driver binding is spelled differently.
+type caseMismatch struct {
+	tag, binding string
+	never        string // what the tag would never do: receive values / reach the device
+}
+
+// caseOnlyBindings finds the declared inputs and outputs that no driver
+// binding names exactly but one names in another case. A tag the driver names exactly is
+// fine even if another binding differs only in case from it.
+func caseOnlyBindings(tags []runtime.TagDef, d nio.Driver) []caseMismatch {
+	type namer interface {
+		InputNames() []string
+		OutputNames() []string
+	}
+	n, ok := d.(namer)
+	if !ok {
+		return nil
+	}
+	exact := map[string]bool{}
+	byKey := map[string]string{} // NameKey → a binding's spelling
+	for _, name := range append(n.InputNames(), n.OutputNames()...) {
+		exact[name] = true
+		if _, seen := byKey[ir.NameKey(name)]; !seen {
+			byKey[ir.NameKey(name)] = name
+		}
+	}
+	var out []caseMismatch
+	for _, t := range tags {
+		// Only inputs and outputs meet the driver; a state or setpoint tag
+		// beside an undeclared binding of the same name is not wired to it.
+		if t.Role != runtime.RoleInput && t.Role != runtime.RoleOutput {
+			continue
+		}
+		if exact[t.Name] {
+			continue
+		}
+		b, ok := byKey[ir.NameKey(t.Name)]
+		if !ok {
+			continue
+		}
+		never := "receive the driver's values"
+		if t.Role == runtime.RoleOutput {
+			never = "reach the device"
+		}
+		out = append(out, caseMismatch{tag: t.Name, binding: b, never: never})
+	}
+	return out
 }
 
 // driverWarnings collects Warnings() from a driver, recursing into a

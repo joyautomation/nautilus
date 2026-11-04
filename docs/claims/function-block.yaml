@@ -311,6 +311,7 @@ claims:
     source: "#not-supported"
     tests:
       - go ./cmd/naut TestCheckRejects/FBD index arithmetic
+      - go ./lang/fbd TestIndexArithmeticSaysToUseAWire
 
   - id: FBD-029
     claim: Defining the same wire twice is a compile error.
@@ -329,3 +330,14 @@ claims:
       A two-wire loop (TestCombinationalLoopRejected) and a wire that reads
       itself directly (TestWireReadingItselfRejected, and naut check) are
       refused.
+
+  - id: FBD-031
+    claim: >-
+      FBD has no infix operators: an operator where an expression has ended
+      (+ - * / ** MOD, comparisons, AND OR XOR, &) is a parse error, on the
+      operator's column, that names the block to use; a leading minus says
+      to negate with SUB(0, a) or write a typed negative literal. NOT is pin
+      negation and parses.
+    source: "#not-supported"
+    tests:
+      - go ./lang/fbd TestInfixOperatorSaysWhichBlockToUse

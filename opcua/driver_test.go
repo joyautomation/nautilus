@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -329,14 +330,15 @@ func TestWriteGate(t *testing.T) {
 	d := startDriver(t, ts.url, manifest(2))
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Setpoint"]; return ok })
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
-	open := false
-	d.SetWriteGate(func() bool { return open })
+	// Atomic: the session loop looks at the gate too.
+	var open atomic.Bool
+	d.SetWriteGate(open.Load)
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
 	time.Sleep(100 * time.Millisecond)
 	if ts.get(t, "Setpoint") != 0.0 {
 		t.Fatal("a closed gate let a command through")
 	}
-	open = true
+	open.Store(true)
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
 	waitFor(t, "gated write", func() bool { return ts.get(t, "Setpoint") == 9.0 })
 }
@@ -641,4 +643,68 @@ func TestQueuedWriteRechecksTheGate(t *testing.T) {
 	mu.Unlock()
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 3.0})
 	waitFor(t, "the command once the gate reopens", func() bool { return ts2.get(t, "Setpoint") == 3.0 })
+}
+
+// Regaining the write gate (#600): the driver wrote a value as leader, lost
+// the gate, another client wrote the node, and the gate came back with the
+// program's value unchanged. The driver asks for the outputs, and the push
+// that answers sends the unchanged value again: written from the previous
+// term is not trusted.
+func TestRegainedGateSendsTheUnchangedValueAgain(t *testing.T) {
+	ts := startServer(t, freePort(t))
+	d := startDriver(t, ts.url, manifest(2))
+	waitFor(t, "first poll", func() bool { return read(t, d)["plant__Online"] == true })
+	var open atomic.Bool
+	var looks atomic.Int64
+	open.Store(true)
+	d.SetWriteGate(func() bool { looks.Add(1); return open.Load() })
+	// seen waits until the session loop, the only other caller, has looked
+	// at the gate after the test moved it: the second look after a move
+	// started after the first finished. A driver that never looks (one
+	// that does not track the gate) is given two seconds and fails on what
+	// it sends, below, not here.
+	seen := func() {
+		n := looks.Load()
+		for deadline := time.Now().Add(2 * time.Second); looks.Load() < n+2 && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
+	waitFor(t, "the leader's write", func() bool { return ts.get(t, "Setpoint") == 9.0 })
+
+	open.Store(false)
+	seen() // the driver sees the gate close
+	// Another client writes the node while this one is not leader.
+	ts.set(t, "Setpoint", 5.0)
+	open.Store(true)
+	seen() // and reopen
+	if !d.OutputsWanted() {
+		t.Error("the driver did not ask for the outputs when the gate reopened")
+	}
+	if d.OutputsWanted() {
+		t.Error("the request must be answered once")
+	}
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0}) // the push: unchanged
+	waitFor(t, "the program's value back", func() bool { return ts.get(t, "Setpoint") == 9.0 })
+}
+
+// A driver that has seen its write gate closed was a standby and has no
+// start-up baseline (#606): its first push once the gate opens, a
+// takeover's, commands the program's value. A plain start keeps the
+// baseline (TestWrites, TestWriteGate).
+func TestStandbyFirstPushCommands(t *testing.T) {
+	ts := startServer(t, freePort(t))
+	d := startDriver(t, ts.url, manifest(2))
+	var open atomic.Bool
+	var looks atomic.Int64
+	d.SetWriteGate(func() bool { looks.Add(1); return open.Load() })
+	waitFor(t, "first poll", func() bool { return read(t, d)["plant__Online"] == true })
+	// The session loop, the only caller, looks at least once a second.
+	n := looks.Load()
+	waitFor(t, "the driver to see the gate closed", func() bool { return looks.Load() >= n+2 })
+	// Takeover: the first push since start.
+	open.Store(true)
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
+	waitFor(t, "the takeover push commands", func() bool { return ts.get(t, "Setpoint") == 9.0 })
 }
