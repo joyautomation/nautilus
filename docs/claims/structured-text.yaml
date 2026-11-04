@@ -249,10 +249,11 @@ claims:
       - go ./runtime TestStructTagWrittenFieldwiseAndWhole
     note: >-
       Asserted by behaviour: a field write changes that member and leaves every
-      other member as it was, including one an operator set between scans, and
-      a whole write copies every member. The VM does a field write as a
-      read-modify-write of the whole tag within the one statement, not as a
-      store-level member call.
+      other member as it was, including one an operator set between scans or
+      during the scan (#578, TAG-051), and a whole write copies every member.
+      The VM does a field write as a read-modify-write of the whole tag within
+      the one statement and tells the scan which member it assigned, so the
+      commit lands only that member.
 
   - id: ST-022
     claim: >-

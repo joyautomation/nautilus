@@ -511,7 +511,9 @@ YAML anchor.
   (`Bad_NotWritable`). Open the setpoint the logic reads instead.
 - **An output when it is matched.** That is how a project that commands
   another controller passes a value through. A program that writes the same
-  output overwrites the client's value at its next commit.
+  output, or the same member or bit of it, overwrites the client's value at
+  its next commit; a member or bit the program does not assign keeps the
+  client's value (see [a member write during a scan](/guides/tag-model/#a-member-write-during-a-scan)).
 - **An array one element at a time.** An element of an array of scalars
   is written by its own node id, `ns=1;s=Levels[2]`, when a pattern opens
   the array (`Levels`), every element (`Levels[*]`) or the element
