@@ -1,5 +1,7 @@
 package ir
 
+import "sort"
+
 // VarKind classifies where a slot's canonical value lives.
 type VarKind uint8
 
@@ -191,64 +193,68 @@ func (def *FuncDef) releaseFrame(f *Frame) { def.frames.Put(f) }
 //
 // A user FUNCTION's VAR_EXTERNAL is the calling program's tag too
 // (nautilus#590): every FUNCTION this program, one of its blocks, or
-// another FUNCTION calls adds its Globals, following calls exactly as
-// GlobalUses does. A FUNCTION nothing reachable calls adds nothing. This is
-// the runtime's per-scan snapshot list and the set its tag seeding and
-// typing read, so it needs the whole project lowered (FuncDef.Body set).
+// another FUNCTION calls adds its Globals, and so does every FB instance
+// such a FUNCTION declares, following calls exactly as GlobalUses does. A
+// FUNCTION nothing reachable calls adds nothing. This is the runtime's
+// per-scan snapshot list and the set its tag seeding and typing read, so
+// it needs the whole project lowered (FuncDef.Body set).
+//
+// A tag declared by more than one of these POUs keeps the first
+// declaration's spelling and type, the program's own first; a declaration
+// of a different shape is a BindingConflict.
 func (p *Program) GlobalsDeep() map[string]*Type {
-	out := make(map[string]*Type, len(p.Globals))
-	for name, t := range p.Globals {
-		out[name] = t
-	}
-	seen := map[*FBDef]bool{}
-	for _, s := range p.Slots {
-		collectFBGlobals(s.Type, seen, out)
-	}
-	for _, def := range p.deepUses().funcOrder {
-		for name, gt := range def.Body.Globals {
-			addGlobal(out, name, gt)
-		}
-	}
+	out, _ := p.globalsDeep()
 	return out
 }
 
-// addGlobal merges one bound tag into out. One tag, however each POU
-// spells it: the program's own (or the first) spelling stands.
-func addGlobal(out map[string]*Type, name string, t *Type) {
-	if _, key, dup := Lookup(out, name); dup && key != name {
-		return
-	}
-	out[name] = t
+// BindingConflict is one tag that two POUs of one program — the PROGRAM, a
+// FUNCTION_BLOCK it instantiates, a FUNCTION it calls — declare with types
+// of different shapes (ir.SameShape). The tag store holds one value, so one
+// of them would read it wrong. First is the declaration GlobalsDeep keeps.
+type BindingConflict struct {
+	Name                string
+	First, Second       *Type
+	FirstPOU, SecondPOU string
 }
 
-// collectFBGlobals walks t looking for FUNCTION_BLOCK instances (directly,
-// or nested inside an array/struct), merges each one's own Globals into
-// out, and recurses into its slots to reach FB-in-FB instances. seen guards
-// against revisiting a shared *FBDef (every instance of a type points at
-// the same one) and against a pathological cycle.
-func collectFBGlobals(t *Type, seen map[*FBDef]bool, out map[string]*Type) {
-	if t == nil {
-		return
-	}
-	switch t.Kind {
-	case TypeFB:
-		if t.FB == nil || seen[t.FB] {
-			return
+// BindingConflicts reports every BindingConflict in this program, in walk
+// order: the program's own declarations, then its FB instances, then the
+// FUNCTIONs it calls.
+func (p *Program) BindingConflicts() []BindingConflict {
+	_, c := p.globalsDeep()
+	return c
+}
+
+func (p *Program) globalsDeep() (map[string]*Type, []BindingConflict) {
+	out := make(map[string]*Type, len(p.Globals))
+	from := make(map[string]string, len(p.Globals))
+	var conflicts []BindingConflict
+	add := func(pou string, globals map[string]*Type) {
+		names := make([]string, 0, len(globals))
+		for name := range globals {
+			names = append(names, name)
 		}
-		seen[t.FB] = true
-		for name, gt := range t.FB.Globals {
-			addGlobal(out, name, gt)
-		}
-		for _, s := range t.FB.AllSlots() {
-			collectFBGlobals(s.Type, seen, out)
-		}
-	case TypeArray:
-		collectFBGlobals(t.Elem, seen, out)
-	case TypeStruct:
-		if t.Struct != nil {
-			for _, f := range t.Struct.Fields {
-				collectFBGlobals(f.Type, seen, out)
+		sort.Strings(names)
+		for _, name := range names {
+			t := globals[name]
+			prev, key, dup := Lookup(out, name)
+			switch {
+			case !dup:
+				out[name], from[name] = t, pou
+			case prev == nil:
+				out[key], from[key] = t, pou
+			case t != nil && !SameShape(prev, t):
+				conflicts = append(conflicts, BindingConflict{Name: key, First: prev, Second: t, FirstPOU: from[key], SecondPOU: pou})
 			}
 		}
 	}
+	add(p.Name, p.Globals)
+	u := p.deepUses()
+	for _, fb := range u.fbOrder {
+		add(fb.Name, fb.Globals)
+	}
+	for _, def := range u.funcOrder {
+		add(def.Name, def.Body.Globals)
+	}
+	return out, conflicts
 }

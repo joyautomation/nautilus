@@ -365,6 +365,17 @@ func (p *Program) Globals() map[string]*ir.Type {
 	return p.prog.GlobalsDeep()
 }
 
+// BindingConflicts reports each tag two of this program's POUs declare
+// with different shapes — see ir.Program.BindingConflicts.
+func (p *Program) BindingConflicts() []ir.BindingConflict {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prog == nil {
+		return nil
+	}
+	return p.prog.BindingConflicts()
+}
+
 // Types reports every TYPE this program's sources declare, resolved. A
 // manifest tag naming a UDT resolves against this.
 func (p *Program) Types() map[string]*ir.Type {

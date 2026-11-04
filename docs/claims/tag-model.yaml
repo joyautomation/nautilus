@@ -95,11 +95,19 @@ claims:
       A tag a block's or function's VAR_EXTERNAL names is bound by the
       program that instantiates the block or calls the function, as if the
       program named it: the scan snapshots it, a tag with no type: takes its
-      type from that declaration, and naut check counts it as bound. A block
-      nothing instantiates, or a function nothing calls, binds nothing.
+      type from that declaration, and naut check counts it as bound; a block
+      instance the function declares counts too. A block nothing
+      instantiates, or a function nothing calls, binds nothing. Two of a
+      program's POUs declaring one tag with different types is an error at
+      startup and in naut check, naming both.
     source: "#tags-in-scope-the-rules"
     tests:
       - go ./lang/ir TestGlobalsDeepFollowsFunctionCalls
+      - go ./lang/ir TestGlobalsDeepFollowsAnFBInsideAFunction
+      - go ./lang/ir TestGlobalsDeepKeepsTheProgramsDeclaration
+      - go ./runtime TestTagBoundByAnFBInsideAFunction
+      - go ./runtime TestFunctionDeclaringATagDifferentlyIsAnError
+      - go ./cmd/naut TestCheckFollowsAnFBInsideAFunction
       - go ./runtime TestTagsBoundOnlyInAFunction
       - go ./runtime TestScanSnapshotsAFunctionsExternals
       - go ./cmd/naut TestCheckSeesTagsBoundThroughAFunction
