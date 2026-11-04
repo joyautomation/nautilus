@@ -378,11 +378,13 @@ claims:
     claim: >-
       The first output snapshot after `Start` is a baseline that writes
       nothing, and thereafter only a value that changed goes on the wire,
-      once.
+      once. A driver that has seen its write gate closed (a standby) has no
+      baseline: its first snapshot commands every output (MB-046).
     source: "#writes"
     tests:
       - go ./modbus TestWriteCoalescingAndBaseline
       - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+      - go ./modbus TestStandbyTakeoverCommandsEveryOutput
   - id: MB-030
     claim: >-
       A command raised while the source is down is queued per source (latest
@@ -569,19 +571,36 @@ claims:
     claim: >-
       With a `redundancy:` section the write gate is wired to leadership so
       commands leave the driver only on the leader, reads are unaffected,
-      and a closed gate also stops `rewrite:` re-asserts (resuming when
-      reopened); commands queued during an outage, or put back by a broken
-      flush, are dropped when the gate has closed by the time the source
-      returns, a flush the gate closes partway through sends nothing more,
-      and a dropped value is a command again at the first output push after
-      the gate reopens (at once on a takeover, otherwise on the next output
-      change).
+      and a closed gate also stops `rewrite:` re-asserts; commands queued
+      during an outage, or put back by a broken flush, are dropped when the
+      gate has closed by the time the source returns, and a flush the gate
+      closes partway through sends nothing more. On the first scan after
+      the driver sees the gate reopen, every output goes out once with the
+      program's value, changed or not, the ones the gate dropped and the
+      ones this replica had already sent alike: on a takeover because the
+      runtime pushes, otherwise because the driver asks it for the outputs.
+      Until that push a `rewrite:` binding re-asserts nothing, so the
+      previous term's value is never sent. A driver that has seen the gate
+      closed has no start-up baseline, so a replica that started as a
+      standby commands every output on its first takeover; one that never
+      saw it closed keeps the baseline. The driver sees the gate only by
+      looking at it, so a gate that closes and reopens between two looks is
+      not seen and none of this happens: the window is about a second while
+      a source is connected, up to `retrymax` (60 s by default) while every
+      source is down, and unbounded while every source is parked.
     source: "#redundancy"
     tests:
       - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
       - go ./modbus TestQueuedWriteRechecksTheGate
       - go ./modbus TestRequeuedWriteRechecksTheGate
       - go ./modbus TestGateClosingMidFlushStopsTheFlush
+      - go ./modbus TestRegainingTheGateSendsEveryOutputAgain
+      - go ./modbus TestGateReopenIsSeenByTheSourceLoop
+      - go ./modbus TestGateReopenDuringTheDialIsSeenBeforeTheReassert
+      - go ./modbus TestStandbyTakeoverCommandsEveryOutput
+      - go ./modbus TestReopenForgetsBeforeAnotherLookerReasserts
+      - go ./modbus TestStandbyReconnectQueuesNothing
+      - go ./modbus TestRestartAfterStandbyKeepsNoBaseline
     partial: true
     note: >-
       The gate stopping re-asserts is asserted, and so is the gate being
@@ -590,10 +609,25 @@ claims:
       and the runs after the one in flight when the gate closes mid-flush
       are dropped with no frame sent, the queue drains, no outage is
       counted, and pushing the same values after the gate reopens sends
-      them. The gate is a test gate function and the push is a direct
-      WriteOutputs call; plain writes made while it is closed, reads being
-      unaffected, the runtime's push on takeover, and the leadership wiring
-      in `naut run` are not asserted.
+      them, together with the ones that landed before the close.
+      TestRegainingTheGateSendsEveryOutputAgain runs the driver under the
+      runtime, with a takeover and with the gate alone: the leader writes,
+      the gate closes, another master writes both registers, the gate
+      reopens, no keep-alive frame goes out before the next scan's push,
+      and that push puts back the unchanged setpoint, sent once, and the
+      keep-alive, which from then on re-asserts only the program's value.
+      TestGateReopenIsSeenByTheSourceLoop has no keep-alive and nothing
+      queued, so only the source loop's own look sees the reopen.
+      TestGateReopenDuringTheDialIsSeenBeforeTheReassert reopens the gate
+      inside the dial, after the connect attempt's look: no keep-alive
+      frame goes out on the new connection before the push.
+      TestStandbyTakeoverCommandsEveryOutput starts the driver gated as a
+      standby: the takeover push sends the plain setpoint and the
+      keep-alive; started ungated, the setpoint is the baseline and is not
+      sent. The gate is a test gate function; plain writes made while it is
+      closed, reads being unaffected, and the leadership wiring in `naut
+      run` are not asserted. The window in which a flip is not seen is a
+      known limit, not a gap in the tests.
   - id: MB-047
     claim: >-
       `naut test` with a `memory.yaml` loopback runs the acceptance suites
@@ -714,24 +748,35 @@ claims:
     claim: >-
       A write the device refuses with an exception (0x02, 0x03, 0x04,
       anything but 0x0A/0x0B/0x06) is dropped, and the same value is not
-      sent again; a changed value is a new command. A write a gateway
-      answers with 0x0A or 0x0B, or the device answers with 0x06 (busy), is
-      dropped from the queue and forgotten, so the next time the driver is
-      handed the outputs the program's value goes out again, changed or
-      not, with no backoff of its own. This applies to FC5, FC6, FC15, FC16
-      and bit:N read-modify-writes alike, the RMW's exception coming on its
-      read or on its write. Only the tags whose write got the exception are
+      sent again until the write gate reopens (MB-046); a changed value is a
+      new command. A write a gateway answers with 0x0A or 0x0B, or the
+      device answers with 0x06 (busy), is dropped from the queue and, after
+      a backoff of the source's `retrymin`, forgotten, and the driver asks
+      the runtime for the outputs, so on the next scan the program's value
+      goes out again, unchanged; it is retried once per `retrymin`, not once
+      per scan. A changed value is a new command and goes out at once, even
+      inside the backoff. This applies to FC5, FC6, FC15, FC16 and bit:N
+      read-modify-writes alike, the RMW's exception coming on its read or
+      on its write. Only the tags whose write got the exception are
       forgotten, not a write that landed in the same flush or a sibling bit
       on the same register. A `rewrite:` binding is not forgotten: its
-      re-assert keeps sending it. A forgotten command does not go out while
-      the write gate is closed; the first outputs handed over after it
-      reopens send it. Each such write counts once in `exceptions`.
+      re-assert keeps sending it on its own period. A forgotten command
+      does not go out while the write gate is closed; the first outputs
+      handed over after it reopens send it. Each attempt counts once in
+      `exceptions`; a write that keeps not running logs one warning, and
+      one Info line with the number of attempts when it lands.
     source: "#writes"
     tests:
       - go ./modbus TestGatewayNoAnswerWriteIsResent
       - go ./modbus TestRefusedWriteIsNotResent
       - go ./modbus TestGatewayNoAnswerWriteWaitsForTheGate
       - go ./modbus TestGatewayNoAnswerKeepsRewriteAsserting
+      - go ./modbus TestUndeliveredSetpointGoesOutAgainAfterTheBackoff
+      - go ./modbus TestNotRunWriteIsRetriedAtRetryMinNotTheScanRate
+      - go ./modbus TestChangedValueGoesOutDuringTheBackoff
+      - go ./modbus TestStuckWriteWarnsOnceAndLogsTheLanding
+      - go ./modbus TestNotRunWriteIsRetriedAtRetryMinOnAWriteOnlySource
+      - go ./modbus TestRefusalEndsTheStuckWrite
     partial: true
     note: >-
       Against the in-process slave answering chosen exceptions per
@@ -739,9 +784,18 @@ claims:
       FC6, an FC5, an FC15 run and two bit RMWs on one register (on the
       RMW's write, and separately on its read), with an FC6 that lands in
       the same flush and a sibling bit commanded earlier; 0x02, 0x03 and
-      0x04 on the same writes (0x04 also on the RMW's read). The test calls
-      WriteOutputs directly. `naut run` hands the outputs over on the first
-      scan, on a scan where an output changed and on a redundancy takeover,
-      not on every scan (#601), so there the command waits for the next of
-      those; that is not asserted. The write-only offline debounce on
-      gateway no-answers is MB-051's.
+      0x04 on the same writes (0x04 also on the RMW's read). Those tests
+      call WriteOutputs directly.
+      TestUndeliveredSetpointGoesOutAgainAfterTheBackoff runs the driver
+      under the runtime: a setpoint set once and never changed, answered
+      0x0B once, lands after the backoff and is sent exactly twice in all.
+      The backoff tests also run under the runtime, scanning every
+      millisecond: against a persistent 0x06 with a 100 ms `retrymin` the
+      writes stay within elapsed/retrymin + 2 and each counts as an
+      exception, on a polled and on a write-only source; inside a 3 s
+      backoff the unchanged command is not sent
+      again while a changed value lands at once; against a persistent 0x0B
+      the warning is logged once over five attempts and the Info line once,
+      with the attempt count, and not for a write that lands first time,
+      nor after a refusal ended the stuck write.
+      The write-only offline debounce on gateway no-answers is MB-051's.
