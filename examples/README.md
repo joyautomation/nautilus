@@ -6,6 +6,105 @@ historian, retain, redundancy, online edits, and an HMI mimic. None of them
 is a client's plant — generic water/wastewater, batching, and remote-site
 patterns, deliberately small so they run on a laptop with no hardware.
 
+## Run an example and see its HMI
+
+New to nautilus? Do the [tutorial](../docs/tutorial.md) first. It installs
+everything and builds a small project from scratch. This section is the
+next step: run a finished project from this folder and open its screen.
+
+Every example is a normal nautilus project. You run it from its own folder.
+The example here is `lift-station`. The other examples work the same way.
+
+**You need:** the `naut` command ([tutorial, Part 1](../docs/tutorial.md#part-1-install))
+and a copy of this repository. Get the copy one of two ways:
+
+- With git: `git clone https://github.com/joyautomation/nautilus.git`
+- Without git: on the repository page, click *Code*, then *Download ZIP*,
+  and unzip it.
+
+For the operator screen you also need [Node.js](https://nodejs.org/) 20 or
+newer (the LTS installer is fine).
+
+**1. Run the controller (no Node needed).** In a terminal:
+
+```sh
+cd nautilus/examples/lift-station
+naut run .
+```
+
+You should see a line ending `tag API on http://localhost:8080 — Ctrl+C to
+stop`. Open <http://localhost:8080>. You see the engineering dashboard: the
+scan diagnostics and a table of live tags. The water level (`LIT101_Level`)
+moves because the project simulates the plant. To stop, press `Ctrl+C` in
+the terminal.
+
+**2. Build the operator screen (needs Node).** The screen is a small web
+app in the example's `hmi/` folder. It is built from the repository's own
+`hmi/` and `hmi-3d/` packages, so build those once first. Stop the
+controller, then run these from `nautilus/examples/lift-station`:
+
+```sh
+cd ../../hmi
+npm install
+npm run package
+cd ../hmi-3d
+npm install
+npm run package
+cd ../examples/lift-station/hmi
+npm install
+npm run build
+cd ..
+```
+
+Each `npm install` downloads packages and can take a few minutes. A
+warning about `allow-scripts` is harmless. The last command ends with
+`Wrote site to "build"`.
+
+**3. Run it again.**
+
+```sh
+naut run .
+```
+
+The first line now says `hmi (hmi/build)`. Open <http://localhost:8080>.
+
+You should see the 2D screen (the P&ID): the wet well with its level, two
+pumps, the check valves, an alarm banner, a faceplate for each pump, the
+level setpoints you can edit, and a level trend. The engineering dashboard
+moves to <http://localhost:8080/_nautilus/>.
+
+**4. See the 3D view.** Open <http://localhost:8080/3d>. It is the same
+station in 3D. Drag with the mouse to orbit, scroll to zoom, and click a
+pump or the well to see its values. To see it drawn as a line drawing,
+add `?look=paper`: <http://localhost:8080/3d?look=paper>.
+
+**5. Make something happen.** The inflow to the well is a setpoint. In the
+dashboard at <http://localhost:8080/_nautilus/>, find `InflowLps` and set it
+to `60`. This is the "storm" case. In a few minutes the well fills past
+the lag level and the second pump starts. You can watch it on both the 2D
+screen and the 3D view.
+
+**Other examples.** `spatial-rig`, `well-site` and `node-3d` also have an
+`hmi/` folder (3D screens). Open each project's own README for its steps.
+`batch-skid` and `remote-fleet` have a mimic file but no built screen. Open
+the mimic in VS Code (right-click, *Open With*, *Mimic Editor*). Note that
+`remote-fleet` is four projects, each started from its own folder.
+
+**Develop the screen.** `npm run dev` in the `hmi/` folder serves the screen
+at <http://localhost:5173> and reloads on every save. Keep `naut run .`
+running in another terminal.
+
+**If it does not work.**
+
+- *The page says "not built yet" or `naut run` prints that `hmi/build` is
+  not built yet:* run step 2.
+- *`npm run build` fails with "Cannot find module" for
+  `@joyautomation/nautilus-hmi`:* the `npm run package` steps in `hmi/` and
+  `hmi-3d/` have not been run. Run step 2 from the top.
+- *Port 8080 is busy:* run `NAUTILUS_ADDR=localhost:8090 naut run .`
+  (Windows PowerShell: `$env:NAUTILUS_ADDR="localhost:8090"; naut run .`)
+  and use port 8090 in the URLs.
+
 ## Open `lift-station` first
 
 [`lift-station`](lift-station/) is the flagship: a single project, one

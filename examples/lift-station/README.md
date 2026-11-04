@@ -19,6 +19,20 @@ naut run .                       # dashboard + tag API on http://localhost:8080
 naut build .                     # one deployable controller binary
 ```
 
+## Run it and see the HMI
+
+1. `naut run .` in this folder, then open <http://localhost:8080>. This is
+   the engineering dashboard: live tags and scan diagnostics. It needs no
+   Node.
+2. For the operator screen, build it once (needs Node.js 20+; steps are in
+   [examples/README.md](../README.md#run-an-example-and-see-its-hmi)).
+   Then `naut run .` again and open <http://localhost:8080>. The 2D P&ID is
+   at `/`, and the dashboard moves to `/_nautilus/`.
+3. For the 3D view, open <http://localhost:8080/3d>. Drag to orbit, click an
+   asset for its values, and add `?look=paper` for the line-drawing look.
+4. Make it do something: set `InflowLps` to `60` in the dashboard and watch
+   the lag pump join on both views.
+
 **Needs naut >= 0.13.1.** `lib/` composition, a `FUNCTION_BLOCK`'s
 declared initial values, and `naut compose` are on `main` but not in the
 released v0.12.0 — build the CLI from source until 0.13.0 ships.
@@ -251,13 +265,15 @@ drivers, not EtherNet/IP or Sparkplug), and scan diagnostics. It follows
 reference for the mimic format, custom components, faceplates and the
 dev proxy. A second route, `/3d`, is the same station in 3D (below).
 
-The 3D view consumes `@joyautomation/nautilus-hmi-3d` from this checkout
-(`file:../../../hmi-3d`, as `examples/spatial-rig` does), so build that
-package once first:
+The screen consumes `@joyautomation/nautilus-hmi` and
+`@joyautomation/nautilus-hmi-3d` from this checkout (`file:../../../hmi` and
+`file:../../../hmi-3d`, as `examples/spatial-rig` does), so build both
+packages once first:
 
 ```sh
-cd ../../hmi-3d && npm install && npm run package && cd -
-cd hmi
+cd ../../hmi && npm install && npm run package
+cd ../hmi-3d && npm install && npm run package
+cd ../examples/lift-station/hmi
 npm install
 npm run dev             # http://localhost:5173, proxying /api to :8080 —
                          # run `naut run .` in the project root first

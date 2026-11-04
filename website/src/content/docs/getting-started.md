@@ -3,9 +3,15 @@ title: Getting started
 description: Install the nautilus CLI, scaffold a project, and see a live scan loop with a dashboard in a few minutes.
 ---
 
+:::tip[Brand new to this?]
+Follow the [step-by-step tutorial](/tutorial/). It starts from an
+empty laptop and goes as far as a running controller with an operator
+screen. This page is the short reference version.
+:::
+
 **Platforms:** nautilus is one static binary with no runtime dependencies.
-Every release ships builds for *### macOS* (Apple Silicon and Intel),
-*### Linux* (x86-64 and arm64), and *### Windows* (x86-64 and arm64); the
+Every release ships builds for **macOS** (Apple Silicon and Intel),
+**Linux** (x86-64 and arm64), and **Windows** (x86-64 and arm64); the
 controller it builds runs anywhere the same binary does, from a laptop to a
 Raspberry Pi to a Kubernetes pod. VS Code is the editor experience on all
 three. The

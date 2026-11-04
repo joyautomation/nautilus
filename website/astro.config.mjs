@@ -59,7 +59,10 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Start here',
-          items: [{ label: 'Getting started', slug: 'getting-started' }],
+          items: [
+            { label: 'Tutorial: your first controller', slug: 'tutorial' },
+            { label: 'Getting started', slug: 'getting-started' },
+          ],
         },
         {
           label: 'Languages',

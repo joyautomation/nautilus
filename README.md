@@ -63,6 +63,15 @@ examples/    four real plant projects — lift-station, batch-skid, remote-fleet
 
 ## Getting started
 
+**New to PLCs or to nautilus? Start with the
+[step-by-step tutorial](docs/tutorial.md)** ([also on the
+site](https://nautilus.joyautomation.com/tutorial/)). It covers macOS,
+Windows and Linux, from installing VS Code to a motor start/stop in ladder,
+a little Structured Text, live values and forcing, and a simple HMI screen.
+To run a finished project and see its HMI, see
+[examples/README.md](examples/README.md#run-an-example-and-see-its-hmi).
+The rest of this section is the short version.
+
 **Platforms:** nautilus is one static binary with no runtime dependencies.
 Every release ships builds for **macOS** (Apple Silicon and Intel),
 **Linux** (x86-64, arm64 and ARMv7), and **Windows** (x86-64 and arm64);
