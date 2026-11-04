@@ -157,7 +157,10 @@ sparkplug:
 ```
 
 Patterns are globs over the tag name or a UDT member's dotted path; one
-that matches a tag opens all of its members. A template command carrying
+that matches a tag opens all of its members. `[n]` in a pattern is an array
+index and `[*]` any index (`Drives[*].Speed`), as in
+[`opcua.writable`](/guides/opcua-server/#writes); there are no character
+classes. A template command carrying
 a writable member and a read-only one writes the first and refuses the
 second. A command must also arrive where the tag is published: an NCMD
 reaches only node-level tags, and a DCMD only its own device's (which,

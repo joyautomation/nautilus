@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,5 +212,76 @@ func TestElementNodeIDsAnonymousWritesOff(t *testing.T) {
 	}
 	if v := stored(t, f.rt, "PlcLabConnector.Inputs[17]"); v != int64(0) {
 		t.Errorf("Inputs[17] = %v after a refused write", v)
+	}
+}
+
+// A writable pattern may name elements: "Levels[1]" that element, "[*]"
+// any index ("P101.Hours[*]" every element, "Drives[*].Speed" every
+// element's Speed). [n] is an array index, never a glob's character class
+// (which would match "Levels1" and no element). AccessLevel and Write
+// follow the pattern exactly: the element it names, nothing beside it.
+func TestElementPatternsOpenElements(t *testing.T) {
+	const rw = uint8(ua.AccessLevelTypeCurrentRead | ua.AccessLevelTypeCurrentWrite)
+	const ro = uint8(ua.AccessLevelTypeCurrentRead)
+	f := startAnonymousWrites(t, true, false, []string{"Levels[1]", "P101.Hours[*]", "Drives[*].Speed"})
+	for addr, want := range map[string]uint8{
+		"Levels[1]":       rw,
+		"Levels[0]":       ro,
+		"Levels":          ro,
+		"P101.Hours[1]":   rw,
+		"P101.Hours[3]":   rw,
+		"P101.Hours":      ro,
+		"Drives[0].Speed": rw,
+		"Drives[1].Speed": rw,
+		"Drives[1].Amps":  ro,
+	} {
+		nid := ua.NewStringNodeID(1, addr)
+		if got := read(t, f.anon, nid, ua.AttributeIDAccessLevel).Value.Value(); got != want {
+			t.Errorf("%s AccessLevel %v, want %v", addr, got, want)
+		}
+		if got := read(t, f.anon, nid, ua.AttributeIDUserAccessLevel).Value.Value(); got != want {
+			t.Errorf("%s UserAccessLevel %v, want %v", addr, got, want)
+		}
+	}
+	for _, c := range []struct {
+		item  *ua.WriteValue
+		want  ua.StatusCode
+		path  string
+		value any
+	}{
+		{wv("Levels[1]", 9.5), ua.StatusGood, "Levels[1]", 9.5},
+		{wv("Levels[0]", 9.5), ua.StatusBadNotWritable, "Levels[0]", 1.0},
+		{wv("Levels[2]", 9.5), ua.StatusBadNotWritable, "Levels[2]", 3.0},
+		{wv("P101.Hours[2]", int32(7)), ua.StatusGood, "P101.Hours[2]", int64(7)},
+		{wv("Drives[1].Speed", 1450.0), ua.StatusGood, "Drives[1].Speed", 1450.0},
+		{wv("Drives[1].Amps", 3.0), ua.StatusBadNotWritable, "Drives[1].Amps", 0.0},
+	} {
+		got := write(t, f.anon, c.item)[0]
+		if got != c.want {
+			t.Errorf("write %s: %s, want %s", c.item.NodeID, statusName(got), statusName(c.want))
+		}
+		if v := stored(t, f.rt, c.path); v != c.value {
+			t.Errorf("after writing %s: %s holds %v (%T), want %v (%T)", c.item.NodeID, c.path, v, v, c.value, c.value)
+		}
+	}
+}
+
+// naut check knows elements: a pattern naming an element of an array of
+// scalars, or every element with [*], matches something and says nothing;
+// an index past the bounds matches nothing, as a typo does; the array
+// itself still gets the note that elements are written one at a time.
+func TestWritableWarningsOnElementPatterns(t *testing.T) {
+	rt := writeRuntime(t)
+	ws := WritableWarnings(rt, []string{"Levels[1]", "Levels[*]", "P101.Hours[*]", "Drives[*].Speed", `Levels\[2\]`})
+	if len(ws) != 0 {
+		t.Errorf("element patterns warned: %q", ws)
+	}
+	ws = WritableWarnings(rt, []string{"Levels[7]"})
+	if len(ws) != 1 || !strings.Contains(ws[0], `"Levels[7]" matches no tag or member`) {
+		t.Errorf("an index past the bounds: %q", ws)
+	}
+	ws = WritableWarnings(rt, []string{"Levels"})
+	if len(ws) != 1 || !strings.Contains(ws[0], "opens arrays (Levels)") {
+		t.Errorf("the array itself: %q", ws)
 	}
 }

@@ -17,13 +17,19 @@ naut test  .    # the acceptance suite, virtual time, no PLC-Lab needed
 naut run   .    # OPC UA on opc.tcp://localhost:4840, dashboard on http://localhost:8080
 ```
 
-`naut check` prints one warning, on purpose: `PlcLabConnector.Inputs` is an
-array, so a client may write its bytes one at a time but not the whole array
-in one write. One at a time is what PLC-Lab does.
+`naut check` prints one warning, on purpose: `opcua.anonymous-writes` is on,
+so any client that can reach the endpoint can write what `writable` opens
+without a certificate. That is what this lab setup is for, and the warning
+is there so the switch is never on unnoticed; on `0.0.0.0` it is stronger
+and names the endpoint. `writable` opens the input bytes as
+`PlcLabConnector.Inputs[*]`, every element, one byte per write: a client
+cannot write the whole array in one write, and one byte at a time is what
+PLC-Lab is expected to do (not yet verified, below).
 
 ## Point PLC-Lab at it
 
-In PLC-Lab, add an **OPC UA** device (PLC-Lab 1.6 or later) and set:
+In PLC-Lab, add an **OPC UA** device (in a PLC-Lab version that connects to
+OPC UA servers) and set:
 
 | Setting | Value |
 |---|---|
@@ -36,9 +42,10 @@ In PLC-Lab, add an **OPC UA** device (PLC-Lab 1.6 or later) and set:
 The endpoint is `opc.tcp://<host>:4840`, security policy `None`. The
 manifest listens on `localhost`, which is right when PLC-Lab and nautilus run
 on the same PC. For PLC-Lab on another machine, change `opcua.endpoint` in
-`nautilus.yaml` to `opc.tcp://0.0.0.0:4840`, on a lab network only:
-anonymous writes mean anyone who can reach the port may write what
-`writable` opens, and `naut run` says so with an error line at every start.
+`nautilus.yaml` to `opc.tcp://0.0.0.0:4840`, on a lab network only, never on
+a plant network: anonymous writes mean anyone who can reach the port may
+write what `writable` opens, and `naut run` says so with an error line at
+every start (`naut check` warns too).
 
 On CODESYS you would also add the PlcLabSync function, the GVL and the
 symbol configuration. Here they are already in the project:
@@ -47,7 +54,7 @@ symbol configuration. Here they are already in the project:
 |---|---|
 | DUT `PlcLabData` | `PlcLabArea` in [`types.st`](types.st) |
 | GVL `PlcLabConnector` | the struct tag `PlcLabConnector`, of type `PlcLabConnectorData` ([`types.st`](types.st), [`nautilus.yaml`](nautilus.yaml)) |
-| Symbol configuration | `opcua:` in [`nautilus.yaml`](nautilus.yaml): `writable` opens `Inputs`, `AreaInputs` and `AreaOutputs`, nothing else |
+| Symbol configuration | `opcua:` in [`nautilus.yaml`](nautilus.yaml): `writable` opens `Inputs[*]`, `AreaInputs` and `AreaOutputs`, nothing else |
 | `PlcLabSync(Inputs:=TRUE, Outputs:=TRUE)` first in `PLC_PRG` | [`plclab.st`](plclab.st): bytes in, logic, bytes out, in one scan |
 | `PLC_PRG`'s own logic | [`lib/tank.ld`](lib/tank.ld), a ladder function block |
 
@@ -89,17 +96,23 @@ four `SIZE_` words tell it how long the arrays are.
 Every scan, `plclab.st` copies the mapped input bytes into `ib`, puts their
 bits on named tags, runs the tank, packs the named outputs into `qb`, and
 copies the mapped bytes of `qb` into `Outputs`. It writes an output byte
-only when it changed. The connector is one tag, and a scan that writes any
-part of it commits all of it, so a scan that wrote every scan could put
-back an older copy of an input byte PLC-Lab wrote while the scan ran. Now
-that can only happen when an output byte changes in the same scan as a
-PLC-Lab write, which is rare, and the next write of that byte puts it right.
+only when it changed. The connector is one tag, and today a scan that
+writes any part of it commits all of it, so a scan that wrote every scan
+could put back an older copy of what PLC-Lab wrote while the scan ran.
+Writing only on change narrows that to a scan where an output byte changes
+while a PLC-Lab write lands, which is rare, but not harmless: an input byte
+is put right by PLC-Lab's next write of it, while the area tables are
+written once, at connect, so a lost area entry stays lost until PLC-Lab
+connects again. PR #581 (an external write to one struct member survives
+the program writing another) fixes the loss itself; once it is in, the
+write-on-change should no longer be needed for this.
 
-Over OPC UA, PLC-Lab reads and writes single bytes by string node id,
-`ns=1;s=PlcLabConnector.Inputs[17]`, and the area fields as
-`ns=1;s=PlcLabConnector.AreaInputs[0].CntBytes` (UInt16). The project
-folder is `Objects/plclab/PlcLabConnector`, in namespace 1
-(`urn:joyautomation:nautilus:plclab`).
+Over OPC UA, PLC-Lab is expected to read and write single bytes by string
+node id, `ns=1;s=PlcLabConnector.Inputs[17]`, and the area fields as
+`ns=1;s=PlcLabConnector.AreaInputs[0].CntBytes` (UInt16); that is the
+CODESYS shape as MHJ's manual describes it, not yet seen from PLC-Lab
+itself (below). The project folder is `Objects/plclab/PlcLabConnector`, in
+namespace 1 (`urn:joyautomation:nautilus:plclab`).
 
 One difference from MHJ's PlcLabSync: its copy loop runs from 0 to
 `CntBytes` inclusive, one byte more than the area holds. This project copies
@@ -130,6 +143,17 @@ Not yet verified against PLC-Lab itself:
 - **Access levels.** The `Inputs` array node itself reads `CurrentRead`; its
   elements read `CurrentRead|CurrentWrite`. A client that checks the
   array's `AccessLevel` before writing elements would stop there.
+- **Browsing.** Browse lists `Inputs` as one array Variable, with no element
+  nodes under it. A PLC-Lab that browses down to the bytes, rather than
+  building `Inputs[17]` itself, would not find them.
+- **What PLC-Lab writes at connect.** Whether it also writes `Outputs` or the
+  `SIZE_` words. Neither is writable here, so such a write is refused
+  (`Bad_NotWritable`, logged).
+- **Word and double-word operands.** In CODESYS addressing `IWn` is image
+  bytes `2n..2n+1` and `IDn` bytes `4n..4n+3`. This example maps bits of
+  `IB0` and `QB0` only; it has no word or double-word tags, and how PLC-Lab
+  lays words out in the area tables, and in which byte order, is
+  unconfirmed.
 
 If you run it against PLC-Lab, please report what happened, with `naut
 run`'s console output (every refused write is logged with its node id and

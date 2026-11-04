@@ -58,17 +58,23 @@ func anonymousLoopback(endpoint string) bool {
 // below them, and an output it opens that a program writes (a client's
 // value lasts until the program's next commit). Malformed patterns are Load's error, not a warning here.
 //
-// The addresses are the ones a client browses: every tag, and every
-// member of a struct or composite array below it.
+// The addresses are the ones a client browses (every tag, and every
+// member of a struct or composite array below it) and the elements of
+// every array of scalars, which a client reaches by node id though Browse
+// does not list them: "Counts[2]" or "Counts[*]" names elements, and is
+// no typo.
 func WritableWarnings(rt *runtime.Runtime, patterns []string) []string {
 	if len(patterns) == 0 {
 		return nil
 	}
 	ns := &namespace{rt: rt}
-	var addrs []member
+	var addrs, elems []member
 	var collect func(m member)
 	collect = func(m member) {
 		addrs = append(addrs, m)
+		if m.val.Kind == ir.TypeArray && !isObject(m) {
+			elems = append(elems, elements(m)...)
+		}
 		for _, c := range children(m) {
 			collect(c)
 		}
@@ -76,19 +82,26 @@ func WritableWarnings(rt *runtime.Runtime, patterns []string) []string {
 	for _, m := range ns.roots() {
 		collect(m)
 	}
+	all := append(append([]member(nil), addrs...), elems...)
 	var out []string
 	for _, pat := range patterns {
 		var matched, inputs []string
-		for _, m := range addrs {
+		elem := false // matches an element of an array of scalars outside the inputs
+		for _, m := range all {
 			if !writable.Matches(pat, m.addr) {
 				continue
 			}
 			matched = append(matched, m.addr)
-			if root, _ := ir.SplitAddress(m.addr); ns.isInput(root) {
+			root, _ := ir.SplitAddress(m.addr)
+			if ns.isInput(root) {
 				inputs = append(inputs, m.addr)
+			} else if strings.HasSuffix(m.addr, "]") && m.val.Kind != ir.TypeArray && !isObject(m) {
+				elem = true
 			}
 		}
 		switch {
+		case elem:
+			// It names elements: scalars a client writes one at a time.
 		case len(matched) == 0:
 			out = append(out, fmt.Sprintf("opcua.writable: %q matches no tag or member — a typo, or a tag that no longer exists", pat))
 		case len(inputs) == len(matched):
@@ -112,7 +125,7 @@ func WritableWarnings(rt *runtime.Runtime, patterns []string) []string {
 		if !written[ir.NameKey(name)] {
 			continue
 		}
-		for _, m := range addrs {
+		for _, m := range all {
 			if root, _ := ir.SplitAddress(m.addr); ir.NameKey(root) == ir.NameKey(name) && ps.Allows(m.addr) {
 				outs = append(outs, name)
 				break
@@ -154,6 +167,22 @@ func scalarArrays(ns *namespace, ps writable.Patterns, addrs []member) []member 
 		if root, _ := ir.SplitAddress(m.addr); !ns.isInput(root) {
 			out = append(out, m)
 		}
+	}
+	return out
+}
+
+// elements are the members of an array of scalars, one per element, with
+// the addresses a client writes them by: m.addr[lo] … m.addr[hi]. Browse
+// lists none of them (children returns nil for such an array).
+func elements(m member) []member {
+	lo := 0
+	var et *ir.Type
+	if m.typ != nil && m.typ.Kind == ir.TypeArray {
+		lo, et = m.typ.ArrLoBound, m.typ.Elem
+	}
+	out := make([]member, len(m.val.Arr))
+	for i, e := range m.val.Arr {
+		out[i] = member{addr: m.addr + "[" + strconv.Itoa(lo+i) + "]", val: e, typ: et}
 	}
 	return out
 }

@@ -72,6 +72,27 @@ END_PROGRAM`,
 	if code == 0 || !strings.Contains(out, `opcua.writable pattern "["`) {
 		t.Errorf("a malformed glob passed (%d):\n%s", code, out)
 	}
+
+	// Element patterns: [n] is that index, [*] any. Naming an element of
+	// an array of scalars, every element, or every element's member of an
+	// array of UDTs matches something; an index past the bounds does not.
+	// A character class is not a pattern any more: refused.
+	out, code = checkIn(t, files(`["Counts[2]", "Trend[*]", "Drives[*].Speed", "Counts[9]"]`))
+	if code != 0 {
+		t.Fatalf("element patterns failed the check (%d):\n%s", code, out)
+	}
+	for _, quiet := range []string{`"Counts[2]"`, `"Trend[*]"`, `"Drives[*].Speed"`} {
+		if strings.Contains(out, quiet) {
+			t.Errorf("%s warned:\n%s", quiet, out)
+		}
+	}
+	if !strings.Contains(out, `warning: opcua.writable: "Counts[9]" matches no tag or member`) {
+		t.Errorf("an index past the bounds was not reported:\n%s", out)
+	}
+	out, code = checkIn(t, files(`["Counts[1-3]"]`))
+	if code == 0 || !strings.Contains(out, `opcua.writable pattern "Counts[1-3]"`) {
+		t.Errorf("a character class passed (%d):\n%s", code, out)
+	}
 }
 
 // opcua.anonymous-writes is a warning, never an error: with nothing under

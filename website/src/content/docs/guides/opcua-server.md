@@ -99,7 +99,7 @@ reads as the element's type (a `BYTE` element is a `Byte`), with
 `Bad_NodeIdUnknown`. Its `AccessLevel` follows `opcua.writable` like any
 scalar's, and a writer may write it, one element at a time (see
 [What may be written](#what-may-be-written)). A client that addresses
-bytes this way, such as MHJ PLC-Lab, needs nothing more.
+bytes this way, as MHJ PLC-Lab is expected to, needs nothing more.
 
 Tag names are IEC identifiers, so `ns=1;s=level` resolves to `Level`, and
 the same goes for members and elements: `ns=1;s=conn.inputs[17]` is
@@ -474,10 +474,14 @@ everything below it, through members and array elements alike: `Recipe`
 opens `ns=1;s=Recipe.Steps`, and `Drives`, an array of UDTs, opens
 `ns=1;s=Drives[0].Speed`. One that matches a member opens that member and
 everything below it: `Pump*.SpeedSP` opens `ns=1;s=Pump1.SpeedSP`, not
-`Pump1.Running`. In a glob `[ ]` is a set of characters, so to name one
-element, escape its brackets, in single quotes (in double quotes YAML
-reads `\[` as an escape and refuses the file): `'Drives\[0\]'`. These
-are the same globs, with the same rule, as
+`Pump1.Running`. In a pattern `*` matches any run of characters and `?`
+any one; `[n]` is the array index `n`, literally, and `[*]` any one index:
+`Counts[2]` opens the element `Counts[2]`, `Counts[*]` every element of
+`Counts`, and `Drives[*].Speed` every drive's `Speed` and nothing else of
+it. There are no character classes: a `[` that is not `[n]` or `[*]` is
+refused. (`\` escapes the next character, so `'Drives\[0\]'`, in single
+quotes, still names `Drives[0]`.) These are the same patterns, with the
+same rule, as
 [`sparkplug.writable`](/guides/sparkplug/), but the list is separate:
 opening a setpoint to your SCADA over OPC UA does not open it to everyone
 who can publish to the MQTT broker. If you want one list for both, use a
@@ -508,7 +512,8 @@ YAML anchor.
   output overwrites the client's value at its next commit.
 - **An array one element at a time.** An element of an array of scalars
   is written by its own node id, `ns=1;s=Levels[2]`, when a pattern opens
-  the array (or the element); the rest of the array is untouched. A whole
+  the array (`Levels`), every element (`Levels[*]`) or the element
+  (`Levels[2]`); the rest of the array is untouched. A whole
   array, or any write with an `IndexRange`, is `Bad_WriteNotSupported`
   for now.
 
@@ -732,15 +737,39 @@ opcua:
   endpoint: opc.tcp://localhost:4840
   anonymous-writes: true
   writable:
-    - PlcLabConnector.Inputs        # its elements, by node id
+    - PlcLabConnector.Inputs[*]     # every element, each by its own node id
     - PlcLabConnector.AreaInputs
     - PlcLabConnector.AreaOutputs
 ```
 
-PLC-Lab reaches the bytes as elements, `ns=1;s=PlcLabConnector.Inputs[17]`,
-which nautilus serves (see [What a client sees](#what-a-client-sees)). The
-example is checked against a client that behaves as PLC-Lab is known to;
-it has not yet been run against PLC-Lab itself.
+PLC-Lab is expected to reach the bytes as elements,
+`ns=1;s=PlcLabConnector.Inputs[17]`, which nautilus serves (see [What a
+client sees](#what-a-client-sees)): that is the CODESYS shape as MHJ's
+manual describes it. The example is checked against a client that behaves
+that way; it has not yet been run against PLC-Lab itself, and these are
+still open:
+
+- **The namespace and node id form.** nautilus serves the connector in
+  namespace 1 (`urn:joyautomation:nautilus:<project>`) with the address as
+  the string id. A PLC-Lab that expects a fixed namespace index or URI, or
+  a CODESYS-style id such as `ns=4;s=|var|<device>.Application.PlcLabConnector.Inputs[17]`,
+  would not find it.
+- **Element writes, IndexRange or whole arrays.** Single elements by node id
+  work. A write of `Inputs` with an `IndexRange`, or of the whole array, is
+  `Bad_WriteNotSupported` until array writes land.
+- **Browsing down to elements.** Browse lists `Inputs` as one array
+  Variable with no element nodes under it; a client that browses to each
+  byte rather than building its node id would not find them.
+- **What PLC-Lab writes at connect.** If it also writes `Outputs` or the
+  `SIZE_` words, those writes are refused (`Bad_NotWritable`), as nothing
+  opens them.
+- **Word and double-word operands.** In CODESYS addressing `IWn` is image
+  bytes `2n..2n+1` (and `IDn` bytes `4n..4n+3`); the example maps single
+  bits of byte 0 only, and does not map words.
+
+If you run it against PLC-Lab, please report what happened, with `naut
+run`'s console output (every refused write is logged with its node id and
+reason).
 
 ## Status
 

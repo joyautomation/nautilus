@@ -96,17 +96,23 @@ claims:
       BYTE element a Byte, ValueRank -1); an index outside the declared
       bounds is Bad_NodeIdUnknown; the node id resolves in any casing. Its
       AccessLevel is CurrentRead|CurrentWrite when opcua.writable opens the
-      array, the element or an ancestor, and UserAccessLevel follows it for
+      array, the element (Inputs[17]), every element (Inputs[*]) or an
+      ancestor, and UserAccessLevel follows it for
       a writer (an anonymous one included, with anonymous-writes on). A
       writer writes it one element at a time, through the same conversions
       and refusals as a scalar, leaving the rest of the array untouched;
       the whole array and any IndexRange write are Bad_WriteNotSupported.
+      naut check counts elements as things a pattern can match: an element
+      pattern is no typo, an index past the bounds matches nothing.
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestElementNodeIDsRead
       - go ./opcua/server TestElementNodeIDsAccessLevels
       - go ./opcua/server TestElementNodeIDsAnonymousWrites
       - go ./opcua/server TestElementNodeIDsAnonymousWritesOff
+      - go ./opcua/server TestElementPatternsOpenElements
+      - go ./opcua/server TestWritableWarningsOnElementPatterns
+      - go ./cmd/naut TestCheckWarnsOnOPCUAWritable
       - go ./opcua/server TestForeignPLCLabShapedClient
 
   - id: OPC-023
@@ -399,7 +405,9 @@ claims:
   - id: OPC-018
     claim: >-
       opcua.writable lists globs over tag names and member paths, with the
-      rule sparkplug.writable uses: a pattern on a tag opens everything below
+      rule sparkplug.writable uses (* any run, ? one character, [n] the
+      array index n literally, [*] any index, no character classes: a [
+      that is neither is refused): a pattern on a tag opens everything below
       it, through members and array elements alike (Drives opens
       Drives[0].Speed), one on a member opens it and everything below it. A
       writer session is one on a SignAndEncrypt endpoint from a trusted
@@ -425,6 +433,7 @@ claims:
     tests:
       - go ./internal/writable TestAllowsAMatchAndEverythingBelowIt
       - go ./internal/writable TestValidateRefusesAMalformedPattern
+      - go ./internal/writable TestArrayIndexPatterns
       - go ./opcua/server TestWriteStatusTable
       - go ./opcua/server TestNonWriterSessionsAreRefused
       - go ./opcua/server TestAccessLevelsPerNodeAndSession

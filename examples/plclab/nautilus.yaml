@@ -35,14 +35,15 @@ tags:
 
 opcua:
   # localhost when PLC-Lab runs on this machine. For PLC-Lab on another
-  # machine, opc.tcp://0.0.0.0:4840, on a lab network only: with
-  # anonymous-writes on, anyone who can reach the port may write what
-  # writable opens.
+  # machine, opc.tcp://0.0.0.0:4840, on a lab network only, never on a
+  # plant network: with anonymous-writes on, anyone who can reach the port
+  # may write what writable opens. naut check warns about it, on purpose.
   endpoint: opc.tcp://localhost:4840
   anonymous-writes: true
   # What PLC-Lab writes, and nothing else. Outputs is the controller's.
+  # Inputs[*] is every input byte, each written by its own node id.
   writable:
-    - PlcLabConnector.Inputs
+    - PlcLabConnector.Inputs[*]
     - PlcLabConnector.AreaInputs
     - PlcLabConnector.AreaOutputs
 

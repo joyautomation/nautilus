@@ -20,8 +20,9 @@ import (
 // names a tag on another device is a host bug or a probe, not a write.
 
 // WithWritable opens command writes for the tags matching any of patterns —
-// globs (path.Match) over the tag name, or over a UDT member's dotted path
-// ("Motor1.START", "Pump*.SpeedSP"). A pattern that matches a tag opens all
+// patterns over the tag name, or over a UDT member's dotted path
+// ("Motor1.START", "Pump*.SpeedSP", "Drives[*].Speed"; the syntax is
+// internal/writable's). A pattern that matches a tag opens all
 // of its members; one that matches a member opens that member and anything
 // below it. Without it every write is refused.
 func WithWritable(patterns ...string) Option {
