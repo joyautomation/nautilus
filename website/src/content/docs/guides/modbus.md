@@ -342,8 +342,9 @@ overwrites the other master's value anyway.
 **An exception to a write depends on whether the write ran.** When the
 device itself refuses a write (0x02 illegal data address, 0x03 illegal
 data value, or any exception other than the three below), the write is
-dropped and the same value is not sent again. Sending it again would only
-be refused again, so only a changed value is a new command. 0x04 (server
+dropped and the same value is not sent again (until the write gate
+reopens, see [Redundancy](#redundancy)). Sending it again would only be
+refused again, so only a changed value is a new command. 0x04 (server
 device failure) is handled the same way: the write may have partly run,
 and on a register that triggers an action a second write could fire it
 twice. When a gateway answers 0x0A (path unavailable) or 0x0B (target
@@ -488,22 +489,40 @@ long flush through a slow gateway stops sending once the gate closes.
 **When the gate reopens, every output goes out again.** While it was
 closed another replica may have led and written the same registers, so
 nothing this replica sent before is trusted to still be there. On the
-first scan after the gate reopens, every output is sent once with the
-program's current value, including one that has not changed since this
-replica last led. A replica that regains leadership pushes because it took
-over; a gate that reopens without a takeover (logic healthy again) pushes
-because the driver asks the runtime for the outputs when it sees the gate
-reopen. Commands the gate dropped go out in the same push. Until that
-push, a `rewrite:` binding re-asserts nothing, so the value from the
-previous term is never sent: the keep-alive restarts with the program's
-value. The first push after the driver starts is still its baseline, gate
-or no gate: a replica that starts as a standby records it and sends only
-its `rewrite:` bindings, as on any start. The driver sees the gate by
-looking at it: on every push, flush and re-assert, at least once a second
-while a source is connected, and on every connect attempt. A gate that
-closes and reopens between two looks is not seen: one shorter than a
-second, or one while every source is down or parked between its connect
-attempts.
+first scan after the driver sees the gate reopen, every output is sent
+once with the program's current value, including one that has not changed
+since this replica last led. A replica that regains leadership pushes
+because it took over; a gate that reopens without a takeover (logic
+healthy again) pushes because the driver asks the runtime for the outputs
+when it sees the gate reopen. Commands the gate dropped go out in the same
+push. Until that push, a `rewrite:` binding re-asserts nothing, so the
+value from the previous term is never sent: the keep-alive restarts with
+the program's value.
+
+**A replica that has been a standby has no baseline.** Once the driver has
+seen the write gate closed, the start-up baseline is off: a replica that
+starts as a standby commands every output with its first push as leader,
+as the new primary of a hot-standby PLC pair drives its outputs at once. A
+plain start, leader from the first scan and never gated, keeps the
+baseline.
+
+**A write-to-trigger register is written again too.** The re-send does not
+know what a register does. One whose every write starts something (a
+recipe number, a step command, a reset) is written again on every regain
+of leadership and every reopen of the gate, with the program's current
+value, even when that value has not changed, and even when its last write
+was refused with 0x04. Gate such a command in the program, or make it
+edge-like (write it, then a neutral value), if a second write would act
+twice.
+
+**A flip between two looks is not seen.** A gate func cannot say it
+changed, so the driver looks at it: on every push, flush and re-assert, on
+every wake of a connected source's loop (at least once a second), on every
+connect attempt, and before the on-connect re-assert. A gate that closes
+and reopens between two looks is not seen, and then nothing above happens.
+The window is about a second while a source is connected, up to `retrymax`
+(60 s by default) while every source is down, and unbounded while every
+source is parked.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly

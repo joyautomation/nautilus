@@ -107,15 +107,22 @@ never computes.
   the hours it spent standing by. Process state is deliberately **not**
   replicated — configuration travels through the retain store, process
   state re-derives from the field.
-- **A replica that regains leadership sends every output once**, with
-  the program's value, changed or not: the runtime hands the drivers the
-  whole output set on the first scan as leader, and the Modbus and OPC UA
-  client drivers send each one even if it equals what this replica sent
-  the last time it led, since the leader in between may have written
-  something else. A Modbus `rewrite:` keep-alive re-asserts nothing until
-  that push has given it the program's value. The first time a replica
-  leads after it starts, that push is the drivers' baseline, as on any
-  start: recorded, not sent.
+- **A replica that takes over from standby sends every output once**
+  through the Modbus and OPC UA client drivers, with the program's value,
+  changed or not: the runtime hands the drivers the whole output set on
+  the first scan as leader, and those drivers send each one even if it
+  equals what this replica sent the last time it led, since the leader in
+  between may have written something else. A replica that started as a
+  standby has no start-up baseline, so its first takeover commands every
+  output, as the new primary of a hot-standby PLC pair does; a replica that
+  leads from its first scan keeps the baseline. A Modbus `rewrite:`
+  keep-alive re-asserts nothing until that push has given it the
+  program's value. A driver sees leadership only by looking at its write
+  gate, so a loss and regain between two looks is not seen (see
+  [Modbus](/guides/modbus/#redundancy)). EtherNet/IP, OptoMMP and the hw
+  drivers do not do this yet
+  ([#605](https://github.com/joyautomation/nautilus/issues/605),
+  [#607](https://github.com/joyautomation/nautilus/issues/607)).
 - **The HTTP API follows the leader.** Every replica serves the
   dashboard, and a standby reverse-proxies API traffic to the leader
   (the leader's address rides inside the Lease), so a Service in front

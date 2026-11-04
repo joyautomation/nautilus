@@ -199,7 +199,9 @@ claims:
       reconnect; a closed write gate holds commands back, including commands
       queued during an outage when the gate has closed by the time the
       session returns; once the gate reopens, every output goes out once
-      more with the program's value, changed or not.
+      more with the program's value, changed or not, and a driver that has
+      seen the gate closed (a standby) has no start-up baseline, so its
+      first push commands.
     source: "#writes-are-opt-in-per-tag"
     tests:
       - go ./opcua TestValueCodec
@@ -208,6 +210,7 @@ claims:
       - go ./opcua TestWriteGate
       - go ./opcua TestQueuedWriteRechecksTheGate
       - go ./opcua TestRegainedGateSendsTheUnchangedValueAgain
+      - go ./opcua TestStandbyFirstPushCommands
       - go ./cmd/naut TestNautOPCUAClientImportAndRun
     partial: true
     note: >-

@@ -378,11 +378,13 @@ claims:
     claim: >-
       The first output snapshot after `Start` is a baseline that writes
       nothing, and thereafter only a value that changed goes on the wire,
-      once.
+      once. A driver that has seen its write gate closed (a standby) has no
+      baseline: its first snapshot commands every output (MB-046).
     source: "#writes"
     tests:
       - go ./modbus TestWriteCoalescingAndBaseline
       - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+      - go ./modbus TestStandbyTakeoverCommandsEveryOutput
   - id: MB-030
     claim: >-
       A command raised while the source is down is queued per source (latest
@@ -573,12 +575,19 @@ claims:
       during an outage, or put back by a broken flush, are dropped when the
       gate has closed by the time the source returns, and a flush the gate
       closes partway through sends nothing more. On the first scan after
-      the gate reopens every output goes out once with the program's value,
-      changed or not, the ones the gate dropped and the ones this replica
-      had already sent alike: on a takeover because the runtime pushes,
-      otherwise because the driver asks it for the outputs. Until that push
-      a `rewrite:` binding re-asserts nothing, so the previous term's value
-      is never sent.
+      the driver sees the gate reopen, every output goes out once with the
+      program's value, changed or not, the ones the gate dropped and the
+      ones this replica had already sent alike: on a takeover because the
+      runtime pushes, otherwise because the driver asks it for the outputs.
+      Until that push a `rewrite:` binding re-asserts nothing, so the
+      previous term's value is never sent. A driver that has seen the gate
+      closed has no start-up baseline, so a replica that started as a
+      standby commands every output on its first takeover; one that never
+      saw it closed keeps the baseline. The driver sees the gate only by
+      looking at it, so a gate that closes and reopens between two looks is
+      not seen and none of this happens: the window is about a second while
+      a source is connected, up to `retrymax` (60 s by default) while every
+      source is down, and unbounded while every source is parked.
     source: "#redundancy"
     tests:
       - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
@@ -586,6 +595,9 @@ claims:
       - go ./modbus TestRequeuedWriteRechecksTheGate
       - go ./modbus TestGateClosingMidFlushStopsTheFlush
       - go ./modbus TestRegainingTheGateSendsEveryOutputAgain
+      - go ./modbus TestGateReopenIsSeenByTheSourceLoop
+      - go ./modbus TestGateReopenDuringTheDialIsSeenBeforeTheReassert
+      - go ./modbus TestStandbyTakeoverCommandsEveryOutput
     partial: true
     note: >-
       The gate stopping re-asserts is asserted, and so is the gate being
@@ -601,10 +613,18 @@ claims:
       reopens, no keep-alive frame goes out before the next scan's push,
       and that push puts back the unchanged setpoint, sent once, and the
       keep-alive, which from then on re-asserts only the program's value.
-      The gate is a test gate function;
-      plain writes made while it is closed, reads being unaffected, a gate
-      that flips between two of the driver's looks, and the leadership
-      wiring in `naut run` are not asserted.
+      TestGateReopenIsSeenByTheSourceLoop has no keep-alive and nothing
+      queued, so only the source loop's own look sees the reopen.
+      TestGateReopenDuringTheDialIsSeenBeforeTheReassert reopens the gate
+      inside the dial, after the connect attempt's look: no keep-alive
+      frame goes out on the new connection before the push.
+      TestStandbyTakeoverCommandsEveryOutput starts the driver gated as a
+      standby: the takeover push sends the plain setpoint and the
+      keep-alive; started ungated, the setpoint is the baseline and is not
+      sent. The gate is a test gate function; plain writes made while it is
+      closed, reads being unaffected, and the leadership wiring in `naut
+      run` are not asserted. The window in which a flip is not seen is a
+      known limit, not a gap in the tests.
   - id: MB-047
     claim: >-
       `naut test` with a `memory.yaml` loopback runs the acceptance suites
@@ -708,7 +728,8 @@ claims:
     claim: >-
       A write the device refuses with an exception (0x02, 0x03, 0x04,
       anything but 0x0A/0x0B/0x06) is dropped, and the same value is not
-      sent again; a changed value is a new command. A write a gateway
+      sent again until the write gate reopens (MB-046); a changed value is a
+      new command. A write a gateway
       answers with 0x0A or 0x0B, or the device answers with 0x06 (busy), is
       dropped from the queue and forgotten, and the driver asks the runtime
       for the outputs, so on the next scan the program's value goes out
