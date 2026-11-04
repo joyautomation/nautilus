@@ -318,25 +318,60 @@ export type RunPowerShell = (script: string, env: Record<string, string>) => Pro
 // bug). Then broadcast WM_SETTINGCHANGE so Explorer, and the terminals it
 // starts, pick up the new PATH without a sign-out; if the broadcast fails, new
 // sign-ins still do.
-export const READ_USER_PATH = "(Get-Item -Path 'HKCU:\\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')";
+//
+// The value crosses the process boundary as base64 of its UTF-16LE bytes, both
+// ways: Windows PowerShell writes redirected stdout in the OEM code page, so a
+// plain read would turn C:\Users\José\… into U+FFFD and the write would store
+// that. Any failure to write exits non-zero with the reason on stderr, and the
+// write is read back before it counts.
+export const READ_USER_PATH = [
+  "$ErrorActionPreference = 'Stop'",
+  "$v = [string](Get-Item -Path 'HKCU:\\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')",
+  "[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($v))",
+].join("\n");
 export const WRITE_USER_PATH = [
-  "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)",
-  "$k.SetValue('Path', $env:NAUT_NEW_PATH, [Microsoft.Win32.RegistryValueKind]::ExpandString)",
-  "$k.Close()",
+  "$ErrorActionPreference = 'Stop'",
+  "try {",
+  "  $p = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($env:NAUT_NEW_PATH_B64))",
+  "  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)",
+  "  if (-not $k) { throw 'HKCU\\Environment cannot be opened for writing' }",
+  "  $k.SetValue('Path', $p, [Microsoft.Win32.RegistryValueKind]::ExpandString)",
+  "  $back = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')",
+  "  $kind = $k.GetValueKind('Path')",
+  "  $k.Close()",
+  "  if ($back -ne $p -or $kind -ne [Microsoft.Win32.RegistryValueKind]::ExpandString) { throw 'the new value did not stick' }",
+  "} catch {",
+  `  [Console]::Error.WriteLine("couldn't write the user PATH: $($_.Exception.Message)")`,
+  "  exit 1",
+  "}",
   "try {",
   `  Add-Type -Namespace NautPath -Name Native -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);'`,
   "  $r = [UIntPtr]::Zero",
   "  [void][NautPath.Native]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r)",
   "} catch {}",
+  "exit 0",
 ].join("\n");
+
+/** The user PATH, raw (unexpanded), exactly as stored. */
+export async function readUserPath(run: RunPowerShell): Promise<string> {
+  const b64 = (await run(READ_USER_PATH, {})).trim();
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) throw new Error(`unexpected answer reading the user PATH: ${b64.slice(0, 80)}`);
+  return Buffer.from(b64, "base64").toString("utf16le");
+}
+
+/** Store `value` as the user PATH (REG_EXPAND_SZ). Rejects when it didn't stick. */
+export async function writeUserPath(value: string, run: RunPowerShell): Promise<void> {
+  await run(WRITE_USER_PATH, { NAUT_NEW_PATH_B64: Buffer.from(value, "utf16le").toString("base64") });
+}
 
 /** What applyWindows would change: the new user PATH, or undefined when the
  * directory is already on it. Reads only. */
 export async function windowsChange(plan: UserPathPlan, run: RunPowerShell): Promise<string | undefined> {
-  return withDirOnUserPath((await run(READ_USER_PATH, {})).trim(), plan.dir);
+  return withDirOnUserPath(await readUserPath(run), plan.dir);
 }
 
-/** Windows: per-user PATH only (no admin). */
+/** Windows: per-user PATH only (no admin). Rejects, claiming nothing, when
+ * the write fails. */
 export async function applyWindows(plan: UserPathPlan, run: RunPowerShell): Promise<PathResult> {
   const r: PathResult = { done: [], undo: [], newTerminal: true };
   const next = await windowsChange(plan, run);
@@ -344,7 +379,7 @@ export async function applyWindows(plan: UserPathPlan, run: RunPowerShell): Prom
     r.done.push(`${plan.dir} is already on your user PATH`);
     return r;
   }
-  await run(WRITE_USER_PATH, { NAUT_NEW_PATH: next });
+  await writeUserPath(next, run);
   r.done.push(`added ${plan.dir} to the end of your user PATH`);
   r.undo.push(UNDO_CMD);
   return r;
@@ -352,9 +387,9 @@ export async function applyWindows(plan: UserPathPlan, run: RunPowerShell): Prom
 
 /** Undo applyWindows: drop the managed directory from the user PATH. */
 export async function removeWindows(dir: string, run: RunPowerShell): Promise<string[]> {
-  const next = withoutDirOnUserPath((await run(READ_USER_PATH, {})).trim(), dir);
+  const next = withoutDirOnUserPath(await readUserPath(run), dir);
   if (next === undefined) return [];
-  await run(WRITE_USER_PATH, { NAUT_NEW_PATH: next });
+  await writeUserPath(next, run);
   return [`removed ${dir} from your user PATH`];
 }
 

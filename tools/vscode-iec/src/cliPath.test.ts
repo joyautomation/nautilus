@@ -224,24 +224,62 @@ test("danglingOwnLink: our link whose target is gone", unixOnly, () => {
 });
 
 /** A fake HKCU\Environment that runs the two PowerShell scripts the way
- * Windows would, recording the value kind each write uses. */
-function fakeRegistry(initial: string) {
+ * Windows PowerShell 5.1 would, recording the value kind each write uses.
+ * Like the real thing it can only hand text back through stdout in the OEM
+ * code page: anything outside ASCII comes back as U+FFFD, so only an
+ * ASCII-safe encoding (base64) survives. `failWrite` makes SetValue throw
+ * (Constrained Language Mode, policy, a value too long): without
+ * $ErrorActionPreference = 'Stop' and an explicit exit 1, PowerShell would
+ * carry on and exit 0. */
+function fakeRegistry(initial: string, o: { failWrite?: boolean } = {}) {
   const reg = { value: initial, kind: "ExpandString", writes: [] as { value: string; kind: string; broadcast: boolean }[] };
+  const oem = (s: string) => s.replace(/[^\x00-\x7f]/g, "\ufffd");
   const run = async (script: string, env: Record<string, string>) => {
     if (script.includes("SetValue(")) {
       if (script.includes("SetEnvironmentVariable")) throw new Error("SetEnvironmentVariable writes REG_SZ");
-      const m = /SetValue\('Path', \$env:NAUT_NEW_PATH, \[Microsoft\.Win32\.RegistryValueKind\]::(\w+)\)/.exec(script);
+      assert.match(script, /FromBase64String\(\$env:NAUT_NEW_PATH_B64\)/);
+      const m = /SetValue\('Path', \$p, \[Microsoft\.Win32\.RegistryValueKind\]::(\w+)\)/.exec(script);
       if (!m) throw new Error(`unexpected write script: ${script}`);
-      reg.value = env.NAUT_NEW_PATH;
+      if (o.failWrite) {
+        const stops = /^\$ErrorActionPreference = 'Stop'/.test(script) && /catch \{[^}]*exit 1/.test(script);
+        if (!stops) return ""; // the error is printed, the script goes on, exit 0
+        throw new Error("couldn't write the user PATH: Requested registry access is not allowed.");
+      }
+      reg.value = Buffer.from(env.NAUT_NEW_PATH_B64, "base64").toString("utf16le");
       reg.kind = m[1];
       reg.writes.push({ value: reg.value, kind: m[1], broadcast: /SendMessageTimeout\(\[IntPtr\]0xffff, 0x1A, .*'Environment'/.test(script) });
       return "";
     }
     assert.match(script, /GetValue\('Path', '', 'DoNotExpandEnvironmentNames'\)/);
-    return `${reg.value}\r\n`;
+    const out = /ToBase64String\(\[Text\.Encoding\]::Unicode\.GetBytes\(\$v\)\)/.test(script)
+      ? Buffer.from(reg.value, "utf16le").toString("base64")
+      : reg.value;
+    return `${oem(out)}\r\n`;
   };
   return { reg, run };
 }
+
+test("windows: a non-ASCII entry survives the read and the write-back", async () => {
+  const jose = "C:\\Users\\José\\AppData\\Local\\Programs\\Microsoft VS Code\\bin";
+  const { reg, run } = fakeRegistry(`%USERPROFILE%\\bin;${jose};C:\\Ünïcødé 日本`);
+  const plan = planPathSetup({ platform: "win32", home: "C:\\Users\\José", env: {}, managedBinDir: "C:\\Users\\José\\s\\bin" });
+  if (plan.kind !== "userPath") throw new Error("plan");
+  await applyWindows(plan, run);
+  assert.equal(reg.value, `%USERPROFILE%\\bin;${jose};C:\\Ünïcødé 日本;C:\\Users\\José\\s\\bin`);
+  assert.ok(!reg.value.includes("\ufffd"));
+  await removeWindows(plan.dir, run);
+  assert.equal(reg.value, `%USERPROFILE%\\bin;${jose};C:\\Ünïcødé 日本`);
+});
+
+test("windows: a write that fails rejects (no 'added' claimed) and changes nothing", async () => {
+  const { reg, run } = fakeRegistry("C:\\a", { failWrite: true });
+  const plan = planPathSetup({ platform: "win32", home: "C:\\Users\\u", env: {}, managedBinDir: "C:\\s\\bin" });
+  if (plan.kind !== "userPath") throw new Error("plan");
+  await assert.rejects(applyWindows(plan, run), /couldn't write the user PATH/);
+  await assert.rejects(removeWindows("C:\\a", run), /couldn't write the user PATH/);
+  assert.equal(reg.value, "C:\\a");
+  assert.equal(reg.writes.length, 0);
+});
 
 test("windows: appends once to the user PATH as REG_EXPAND_SZ, keeps %VARS%, broadcasts", async () => {
   assert.equal(withDirOnUserPath("C:\\a;C:\\b", "C:\\c"), "C:\\a;C:\\b;C:\\c");

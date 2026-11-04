@@ -113,7 +113,12 @@ function runPowerShell(script: string, env: Record<string, string>): Promise<str
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
       { encoding: "utf8", timeout: 20_000, env: { ...process.env, ...env }, windowsHide: true },
-      (err, stdout) => (err ? reject(err) : resolve(stdout))
+      (err, stdout, stderr) => {
+        if (!err) return resolve(stdout);
+        // The script's own message, not "Command failed: powershell.exe <base64…>".
+        const why = String(stderr).trim().split(/\r?\n/)[0] || (err.killed ? "PowerShell timed out" : `PowerShell exited with ${err.code}`);
+        reject(new Error(why));
+      }
     );
   });
 }
@@ -186,7 +191,7 @@ export async function offerPathSetup(log: vscode.OutputChannel, explicit: boolea
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     log.appendLine(`[install] couldn't put naut on PATH: ${why}`);
-    return ` It is not on your PATH outside VS Code (${why}).`;
+    return ` Couldn't put naut on PATH outside VS Code, nothing was changed there: ${why}.`;
   }
 }
 
@@ -406,19 +411,25 @@ async function runInstall(): Promise<void> {
   checked.clear();
   const now = resolveCliNow();
   const inTerminals = syncTerminalPath();
-  const pathNote = await offerPathSetup(log, false);
+  // The language server moves to the new binary first: the PATH question
+  // below is a modal that may sit unanswered for a while.
   void vscode.commands.executeCommand("nautilus.restartLanguageServer");
   if (sameFile(now.command, installed.path)) {
     const term = inTerminals ? TERMINALS_NOTE : "";
-    void vscode.window.showInformationMessage(`nautilus: naut ${installed.version} installed.${term}${pathNote}`);
+    void vscode.window.showInformationMessage(`nautilus: naut ${installed.version} installed.${term}`);
+    // Not awaited: the install is done whatever the answer is.
+    void offerPathSetup(log, false).then((note) => {
+      if (note) void vscode.window.showInformationMessage(`nautilus:${note}`);
+    });
     return;
   }
   // Something earlier in the search order (PATH, or an explicit cliPath)
-  // still wins. Say so rather than silently not using the new binary.
+  // still wins. Say so rather than silently not using the new binary. (No
+  // PATH offer: that is only for when the extension runs its own copy.)
   const USE = "Use the installed one";
   const pick = await vscode.window.showInformationMessage(
     `nautilus: naut ${installed.version} installed, but the extension is still using ${now.command} ` +
-      `(${howInstalled(now.command)}), which comes first.${pathNote}`,
+      `(${howInstalled(now.command)}), which comes first.`,
     USE
   );
   if (pick === USE) {

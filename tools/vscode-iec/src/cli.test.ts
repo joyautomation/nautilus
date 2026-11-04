@@ -10,11 +10,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import Module from "node:module";
 
-type Handler = (msg: string, items: string[], opts?: { modal?: boolean; detail?: string }) => string | undefined;
+type Handler = (
+  msg: string,
+  items: string[],
+  opts?: { modal?: boolean; detail?: string }
+) => string | undefined | Promise<string | undefined>;
 
 const ui = {
   info: [] as { msg: string; items: string[]; opts?: { modal?: boolean; detail?: string } }[],
   warn: [] as string[],
+  /** Every executeCommand, and every message shown, in order. */
+  events: [] as string[],
   onInfo: (() => undefined) as Handler,
   onWarn: (() => undefined) as Handler,
   progress: 0,
@@ -32,6 +38,7 @@ const vscodeStub = {
     showInformationMessage: (msg: string, ...args: unknown[]) => {
       const { opts, items } = splitArgs(args);
       ui.info.push({ msg, items, opts });
+      ui.events.push(opts?.modal ? `modal ${msg}` : `info ${msg}`);
       return Promise.resolve(ui.onInfo(msg, items, opts));
     },
     showWarningMessage: (msg: string, ...args: unknown[]) => {
@@ -48,7 +55,12 @@ const vscodeStub = {
     },
     createOutputChannel: () => ({ appendLine: () => undefined, show: () => undefined }),
   },
-  commands: { executeCommand: () => Promise.resolve(undefined) },
+  commands: {
+    executeCommand: (cmd: string) => {
+      ui.events.push(`command ${cmd}`);
+      return Promise.resolve(undefined);
+    },
+  },
   workspace: {
     getConfiguration: () => ({ get: () => ui.cliPath, update: () => Promise.resolve() }),
   },
@@ -137,6 +149,7 @@ async function settle(): Promise<void> {
 beforeEach(() => {
   ui.info = [];
   ui.warn = [];
+  ui.events = [];
   ui.onInfo = () => undefined;
   ui.onWarn = () => undefined;
   ui.progress = 0;
@@ -198,6 +211,30 @@ test("Install over the linked copy reports it installed, not 'still using ~/.loc
   assert.ok(msgs.some((m) => /naut 0\.2\.0 installed\./.test(m)), msgs.join("|"));
   assert.ok(!msgs.some((m) => /still using/.test(m)), msgs.join("|"));
   assert.ok(!ui.info.some((i) => i.opts?.modal), "nothing left to set up, so no PATH prompt");
+});
+
+test("Install restarts the language server before the PATH prompt, and an unanswered prompt doesn't hold it up", unixOnly, async () => {
+  const s = setup({ installed: false });
+  s.init();
+  ui.onProgress = () => {
+    fakeNaut(s.managed, "0.2.0");
+    return Promise.resolve({ version: "0.2.0", path: s.managed });
+  };
+  let answer: (v: string | undefined) => void = () => undefined;
+  ui.onInfo = (_m, _i, opts) => (opts?.modal ? new Promise((r) => (answer = r)) : undefined);
+  await cli.installCliCommand(); // resolves although the modal is still up
+  await settle();
+  const restart = ui.events.indexOf("command nautilus.restartLanguageServer");
+  const modal = ui.events.findIndex((e) => e.startsWith("modal "));
+  const installed = ui.events.findIndex((e) => /^info nautilus: naut 0\.2\.0 installed\./.test(e));
+  assert.ok(restart >= 0 && installed >= 0 && modal >= 0, ui.events.join(" | "));
+  assert.ok(restart < modal && installed < modal, ui.events.join(" | "));
+  assert.ok(!fs.existsSync(s.link), "nothing changed while the prompt is open");
+
+  answer("Add to PATH");
+  await settle();
+  assert.equal(fs.readlinkSync(s.link), s.managed);
+  assert.match(ui.events.at(-1) ?? "", /^info nautilus: linked ~\/\.local\/bin\/naut/);
 });
 
 // ── integrated terminals run the naut the extension runs ───────────────────
@@ -294,6 +331,11 @@ test("PATH prompt: 'Add to PATH' links and appends; Remove undoes it all", unixO
   assert.equal(s.envColl.ops.at(-1), "clear");
   assert.equal(cli.syncTerminalPath(), false, "terminals stay off after Remove");
   assert.equal(s.envColl.ops.at(-1), "clear");
+  assert.equal(s.state.get(cli.PATH_DECLINED_KEY), true, "Remove counts as a decline");
+  ui.info = [];
+  await cli.offerPathSetup(log, false);
+  assert.equal(ui.info.length, 0, "so the next install doesn't ask to put it back");
+  assert.throws(() => fs.lstatSync(s.link));
 
   ui.info = [];
   await cli.addCliToPathCommand();

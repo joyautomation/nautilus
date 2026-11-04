@@ -14,8 +14,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   - Terminals inside VS Code find it at once (new ones; relaunch open ones).
     They always get the same `naut` the extension runs: when that is a `naut`
     of your own (on PATH, or `nautilus.cliPath`), their PATH is left alone.
-  - For terminals outside VS Code the extension asks first, listing every
-    change: on macOS and Linux a link `~/.local/bin/naut`, and, if
+  - For terminals outside VS Code the extension asks first, once the install
+    is done and the language server already runs the new `naut`, listing
+    every change: on macOS and Linux a link `~/.local/bin/naut`, and, if
     `~/.local/bin` is not on PATH yet, one marked line that appends it in your
     shell's startup file (`.zprofile` or `.bash_profile` on macOS; `.profile`,
     or `.zshrc` for zsh, on Linux; plus `.bashrc`/`.zshrc`/`.bash_profile`
