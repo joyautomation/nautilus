@@ -11,7 +11,7 @@ import (
 
 // SubscriptionService implements the Subscription Service Set.
 //
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13
+// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.14
 type SubscriptionService struct {
 	srv *Server
 	// pub sub stuff
@@ -67,7 +67,7 @@ func (s *SubscriptionService) DeleteSessionSubscriptions(sess *session) {
 	}
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.2
+// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.14.2
 func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {
 		s.srv.cfg.logger.Debug("Handling %T", r)
@@ -128,7 +128,7 @@ func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Re
 	return resp, nil
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.5
+// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.14.5
 func (s *SubscriptionService) Publish(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {
 		s.srv.cfg.logger.Debug("Raw Publish req")
@@ -170,20 +170,44 @@ func (s *SubscriptionService) Publish(sc *uasc.SecureChannel, r ua.Request, reqI
 		return notice, nil
 	}
 
-	select {
-	case session.PublishRequests <- PubReq{Req: req, ID: reqID}:
-	default:
-		if s.srv.cfg.logger != nil {
-			s.srv.cfg.logger.Warn("Too many publish reqs.")
+	// Per the spec we don't respond now: when data is available on the subscription, the
+	// Subscription answers in the background. When the session already holds as many
+	// requests as it may, the oldest is de-queued and answered with Bad_TooManyPublishRequests
+	// to make room for this one (Part 4 §5.14.5.1). A subscription's task may take one
+	// meanwhile, so this tries again until the new request is queued.
+	for {
+		select {
+		case session.PublishRequests <- PubReq{Req: req, ID: reqID}:
+			return nil, nil
+		default:
+		}
+		select {
+		case oldest := <-session.PublishRequests:
+			if s.srv.cfg.logger != nil {
+				s.srv.cfg.logger.Warn("Too many publish reqs: answering the oldest with Bad_TooManyPublishRequests.")
+			}
+			if err := sc.SendResponseWithContext(context.Background(), oldest.ID, tooManyPublishRequests(oldest.Req.RequestHeader)); err != nil && s.srv.cfg.logger != nil {
+				s.srv.cfg.logger.Warn("Error sending response: %s", err)
+			}
+		default:
 		}
 	}
-
-	// per opcua spec, we don't respond now.  When data is available on the subscription,
-	// the Subscription will respond in the background.
-	return nil, nil
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.6
+// tooManyPublishRequests is the answer to a Publish request de-queued to make room for a newer
+// one (Part 4 §5.14.5.1), with the request's handle so the client matches it. It names no
+// subscription: nothing was published in it.
+func tooManyPublishRequests(hdr *ua.RequestHeader) *ua.PublishResponse {
+	return &ua.PublishResponse{
+		ResponseHeader:           responseHeader(hdr.RequestHandle, ua.StatusBadTooManyPublishRequests),
+		NotificationMessage:      &ua.NotificationMessage{NotificationData: []*ua.ExtensionObject{}},
+		AvailableSequenceNumbers: []uint32{},
+		Results:                  []ua.StatusCode{},
+		DiagnosticInfos:          []*ua.DiagnosticInfo{},
+	}
+}
+
+// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.14.6
 func (s *SubscriptionService) Republish(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {
 		s.srv.cfg.logger.Debug("Handling %T", r)
@@ -285,7 +309,7 @@ func transferNotice(hdr *ua.RequestHeader, id, seq uint32) *ua.PublishResponse {
 	}
 }
 
-// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.13.8
+// https://reference.opcfoundation.org/Core/Part4/v105/docs/5.14.8
 func (s *SubscriptionService) DeleteSubscriptions(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 	if s.srv.cfg.logger != nil {
 		s.srv.cfg.logger.Debug("Handling %T", r)
