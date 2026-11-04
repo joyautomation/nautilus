@@ -24,16 +24,19 @@ type SubscriptionService struct {
 }
 
 // get rid of all references to a subscription and all monitored items that are pointed at this subscription.
+// When it was its session's last, the Publish requests the session still has queued are
+// answered with Bad_NoSubscription (Part 4 §5.14.8.1). It may be called more than once for an
+// id (DeleteSubscriptions, then the task as it returns); the first call stops the task and
+// takes the subscription off its session, so a TransferSubscriptions after it moves nothing.
 func (s *SubscriptionService) DeleteSubscription(id uint32) {
 	s.Mu.Lock()
-	defer s.Mu.Unlock()
-
-	sub, ok := s.Subs[id]
-	if ok {
+	var owner *session
+	if sub, ok := s.Subs[id]; ok {
 		sub.Mu.Lock()
 		if sub.running {
 			sub.running = false
 			close(sub.shutdown)
+			owner = sub.Session
 		}
 		sub.Mu.Unlock()
 	}
@@ -42,7 +45,25 @@ func (s *SubscriptionService) DeleteSubscription(id uint32) {
 
 	// ask the monitored item service to purge out any items that use this subscription
 	s.srv.MonitoredItemService.DeleteSub(id)
+	s.Mu.Unlock()
 
+	if owner != nil {
+		owner.subscriptionGone()
+		s.answerNoSubscription(owner, owner.orphanedPublishes())
+	}
+}
+
+// answerNoSubscription answers Publish requests of sess that no subscription is left to answer
+// with Bad_NoSubscription, each with its own handle.
+func (s *SubscriptionService) answerNoSubscription(sess *session, reqs []PubReq) {
+	if sess.channel == nil {
+		return
+	}
+	for _, pr := range reqs {
+		if err := sess.channel.SendResponseWithContext(context.Background(), pr.ID, noSubscription(pr.Req.RequestHeader)); err != nil && s.srv.cfg.logger != nil {
+			s.srv.cfg.logger.Warn("Error sending response: %s", err)
+		}
+	}
 }
 
 // DeleteSessionSubscriptions deletes every subscription sess owns, and their
@@ -108,6 +129,9 @@ func (s *SubscriptionService) CreateSubscription(sc *uasc.SecureChannel, r ua.Re
 	sub.publishingEnabled = req.PublishingEnabled
 
 	s.Subs[newsubid] = sub
+	// Counted before the response goes out, so a Publish the client sends after it, which the
+	// message loop handles after this, is queued.
+	sub.Session.subscriptionAdded()
 	sub.running = true
 	sub.Start()
 
@@ -171,35 +195,43 @@ func (s *SubscriptionService) Publish(sc *uasc.SecureChannel, r ua.Request, reqI
 	}
 
 	// Per the spec we don't respond now: when data is available on the subscription, the
-	// Subscription answers in the background. When the session already holds as many
-	// requests as it may, the oldest is de-queued and answered with Bad_TooManyPublishRequests
-	// to make room for this one (Part 4 §5.14.5.1). A subscription's task may take one
-	// meanwhile, so this tries again until the new request is queued.
-	for {
-		select {
-		case session.PublishRequests <- PubReq{Req: req, ID: reqID}:
-			return nil, nil
-		default:
+	// Subscription answers in the background. A session that owns no subscription has nothing
+	// to answer it, and is told so at once with Bad_NoSubscription (Part 4 §5.14.5.3). When the
+	// session already holds as many requests as it may, the oldest is de-queued and answered
+	// with Bad_TooManyPublishRequests to make room for this one (§5.14.5.1).
+	dequeued, ok := session.queuePublish(PubReq{Req: req, ID: reqID})
+	if !ok {
+		return noSubscription(req.RequestHeader), nil
+	}
+	for _, oldest := range dequeued {
+		if s.srv.cfg.logger != nil {
+			s.srv.cfg.logger.Warn("Too many publish reqs: answering the oldest with Bad_TooManyPublishRequests.")
 		}
-		select {
-		case oldest := <-session.PublishRequests:
-			if s.srv.cfg.logger != nil {
-				s.srv.cfg.logger.Warn("Too many publish reqs: answering the oldest with Bad_TooManyPublishRequests.")
-			}
-			if err := sc.SendResponseWithContext(context.Background(), oldest.ID, tooManyPublishRequests(oldest.Req.RequestHeader)); err != nil && s.srv.cfg.logger != nil {
-				s.srv.cfg.logger.Warn("Error sending response: %s", err)
-			}
-		default:
+		if err := sc.SendResponseWithContext(context.Background(), oldest.ID, tooManyPublishRequests(oldest.Req.RequestHeader)); err != nil && s.srv.cfg.logger != nil {
+			s.srv.cfg.logger.Warn("Error sending response: %s", err)
 		}
 	}
+	return nil, nil
 }
 
 // tooManyPublishRequests is the answer to a Publish request de-queued to make room for a newer
 // one (Part 4 §5.14.5.1), with the request's handle so the client matches it. It names no
 // subscription: nothing was published in it.
 func tooManyPublishRequests(hdr *ua.RequestHeader) *ua.PublishResponse {
+	return publishFault(hdr, ua.StatusBadTooManyPublishRequests)
+}
+
+// noSubscription is the answer to a Publish request of a session that owns no subscription,
+// sent or still queued when its last one went (Part 4 §5.14.5.3, §5.14.8.1).
+func noSubscription(hdr *ua.RequestHeader) *ua.PublishResponse {
+	return publishFault(hdr, ua.StatusBadNoSubscription)
+}
+
+// publishFault is a Publish response that publishes nothing, with the service result code and
+// the request's handle.
+func publishFault(hdr *ua.RequestHeader, code ua.StatusCode) *ua.PublishResponse {
 	return &ua.PublishResponse{
-		ResponseHeader:           responseHeader(hdr.RequestHandle, ua.StatusBadTooManyPublishRequests),
+		ResponseHeader:           responseHeader(hdr.RequestHandle, code),
 		NotificationMessage:      &ua.NotificationMessage{NotificationData: []*ua.ExtensionObject{}},
 		AvailableSequenceNumbers: []uint32{},
 		Results:                  []ua.StatusCode{},
@@ -257,6 +289,11 @@ func (s *SubscriptionService) Transfer(sc *uasc.SecureChannel, hdr *ua.RequestHe
 	to.dropNotice(id)
 	if from != nil && from.AuthTokenID != nil && s.srv.sb.Session(from.AuthTokenID) == from {
 		s.tellTransferred(from, id, seq)
+		// When that was its last subscription, the requests it still has queued, after the one
+		// the notice went on, have nothing to answer them. Part 4 §5.14.7 is silent on this;
+		// it is what §5.14.8.1 asks when the last one is deleted, and what open62541 does once
+		// the moved subscription's notice is out (UA_Session_detachSubscription).
+		s.answerNoSubscription(from, from.orphanedPublishes())
 	}
 	return sub, ua.StatusOK
 }
@@ -267,10 +304,9 @@ func (s *SubscriptionService) Transfer(sc *uasc.SecureChannel, hdr *ua.RequestHe
 // one (Publish). Nothing waits for it: a session that never publishes again is never told,
 // and the notice goes with the session. It runs on the message loop, as Publish does.
 func (s *SubscriptionService) tellTransferred(from *session, id, seq uint32) {
-	select {
-	case pubreq := <-from.PublishRequests:
+	if pubreq, ok := from.takePublish(); ok {
 		_ = from.channel.SendResponseWithContext(context.Background(), pubreq.ID, transferNotice(pubreq.Req.RequestHeader, id, seq))
-	default:
+	} else {
 		from.keepNotice(id, seq)
 	}
 }
@@ -325,9 +361,8 @@ func (s *SubscriptionService) DeleteSubscriptions(sc *uasc.SecureChannel, r ua.R
 	}
 
 	s.Mu.Lock()
-	defer s.Mu.Unlock()
-
 	results := make([]ua.StatusCode, len(req.SubscriptionIDs))
+	var deleted []uint32
 	for i := range req.SubscriptionIDs {
 
 		subid := req.SubscriptionIDs[i]
@@ -343,10 +378,15 @@ func (s *SubscriptionService) DeleteSubscriptions(sc *uasc.SecureChannel, r ua.R
 			results[i] = ua.StatusBadSessionIDInvalid
 			continue
 		}
-		// delete subscription gets the lock so we set them up to run in the background
-		// once this function releases its lock
-		go s.DeleteSubscription(subid)
+		deleted = append(deleted, subid)
 		results[i] = ua.StatusOK
+	}
+	s.Mu.Unlock()
+	// DeleteSubscription takes the lock itself. They are deleted before the response, so a
+	// Publish the client sends after it finds the session as the deletions left it, and the
+	// requests a last subscription leaves queued are answered first (Part 4 §5.14.8.1).
+	for _, id := range deleted {
+		s.DeleteSubscription(id)
 	}
 	return &ua.DeleteSubscriptionsResponse{
 		ResponseHeader: &ua.ResponseHeader{
@@ -513,7 +553,19 @@ func (s *Subscription) SetPublishing(enabled bool) bool {
 func (s *Subscription) Transfer(to *session, ch *uasc.SecureChannel) (seq uint32, ok bool) {
 	ok = s.change(func() {
 		s.Mu.Lock()
+		from := s.Session
 		s.Session, s.Channel = to, ch
+		// A subscription DeleteSubscription has already taken off its session is counted on
+		// none. Decided under Mu, where DeleteSubscription decides it, so it is counted off
+		// exactly one session.
+		if s.running && from != to {
+			if from != nil {
+				from.subscriptionGone()
+			}
+			if to != nil {
+				to.subscriptionAdded()
+			}
+		}
 		s.Mu.Unlock()
 		seq = s.SequenceID + 1
 		if seq == 0 {
@@ -651,8 +703,7 @@ cycle:
 					keepalive_counter++
 					if keepalive_counter > int(s.RevisedMaxKeepAliveCount) {
 						keepalive_counter = 0
-						select {
-						case pubreq := <-s.Session.PublishRequests:
+						if pubreq, ok := s.Session.takePublish(); ok {
 							err := s.keepalive(pubreq)
 							if err != nil {
 								if s.srv.srv.cfg.logger != nil {
@@ -660,7 +711,7 @@ cycle:
 								}
 								return
 							}
-						default:
+						} else {
 							lifetime_counter++
 							if lifetime_counter > int(s.RevisedLifetimeCount) {
 								if s.srv.srv.cfg.logger != nil {
@@ -687,8 +738,14 @@ cycle:
 			select {
 			case <-s.shutdown:
 				return
-			case pubreq = <-s.Session.PublishRequests:
-				// once we get a publish request, we should move on to publish them back
+			case <-s.Session.publishQueued():
+				// once we get a publish request, we should move on to publish them back; another
+				// subscription's task may have taken it first
+				pr, ok := s.Session.takePublish()
+				if !ok {
+					continue
+				}
+				pubreq = pr
 				break L2
 			case newNotification := <-s.NotifyChannel:
 				publishQueue[newNotification.ClientHandle] = newNotification
