@@ -304,6 +304,7 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 		return nil
 	}
 	onCheck := func() error {
+		d.gateOpen() // a look (see SetWriteGate), even with no datagram
 		idle := time.Since(last)
 		if idle > deadAfter {
 			return fmt.Errorf("optommp: communication timeout: missed incoming stream (none for %s)", idle.Round(time.Millisecond))
@@ -337,7 +338,7 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 	if d.m.Priority > 0 {
 		if recv, closeFd, ok := udpReceiver(uc, time.Millisecond); ok {
 			defer closeFd()
-			err = d.streamRT(ctx, c, recv, onPacket, onCheck, onKeep, staleAfter/2, keepEvery)
+			err = d.streamRT(ctx, c, recv, onPacket, onCheck, onKeep, min(staleAfter/2, lookEvery), keepEvery)
 			return polled, err
 		}
 	}
@@ -361,7 +362,10 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 		}
 	}()
 
-	check := time.NewTicker(staleAfter / 2)
+	// The check runs at least once a second (lookEvery), so the write gate
+	// is looked at while the stream is quiet or slow.
+	checkEvery := min(staleAfter/2, lookEvery)
+	check := time.NewTicker(checkEvery)
 	defer check.Stop()
 	keep := time.NewTicker(keepEvery)
 	defer keep.Stop()

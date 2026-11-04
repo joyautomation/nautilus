@@ -77,6 +77,10 @@ const (
 	// chassisEvery is how often the module types and channel-present mask
 	// are re-read: groov modules are hot-swappable.
 	chassisEvery = 5 * time.Second
+	// lookEvery bounds the time between two looks at the write gate while
+	// a session is up and no scan, stream check or command looks sooner
+	// (see SetWriteGate).
+	lookEvery = time.Second
 	// readbackSettle is how long after a write a digital output's state
 	// may still disagree with it before the tag goes Bad (at least three
 	// scans or stream intervals): long enough for the module to switch and
@@ -164,6 +168,7 @@ type Driver struct {
 	quality        map[string]nio.Quality
 	commanded      map[string]any       // last output value accepted
 	pending        map[string]any       // accepted, not yet written
+	term           uint64               // the write gate's reopens (see flushCount)
 	wrote          map[string]time.Time // when each output was last written
 	disagree       map[string]bool      // digital outputs whose state is not their command
 	quietTrip      bool                 // the last quiet check outran the watchdog
@@ -177,8 +182,15 @@ type Driver struct {
 	customOrig     []byte // the custom area's pointers as first found
 	streamFrom     net.IP // the processor, the only sender a stream is taken from
 
+	// gateMu guards writeGate (SetWriteGate). gateShut is true from the
+	// first look that finds the gate closed to the first that finds it
+	// open again (see gateOpen), and turnMu serializes those transitions.
+	// wanted is the request OutputsWanted answers.
 	gateMu    sync.Mutex
 	writeGate func() bool
+	gateShut  atomic.Bool
+	turnMu    sync.Mutex
+	wanted    atomic.Bool
 
 	connected atomic.Bool
 	online    atomic.Bool   // the status point: a session up, inputs fresh
@@ -287,19 +299,95 @@ func (d *Driver) InputNames() []string  { return d.m.InputNames() }
 func (d *Driver) OutputNames() []string { return d.m.OutputNames() }
 
 // SetWriteGate installs the write gate: commands leave the driver only
-// while gate() is true (redundancy leadership). Reads are unaffected.
+// while gate() is true. `naut run` wires it to redundancy leadership
+// (leader.Elector.IsLeader); io.Multi fans it out. Reads are unaffected.
+//
+// The gate is checked when a command is handed over (WriteOutputs), before
+// the on-connect and watchdog rewrites, and again when the queue is
+// flushed, before every write: a replica that queued commands as leader
+// while the processor was away must not send them once it is back if it
+// has lost leadership meanwhile (the Modbus driver's #595, eip's #607). A
+// closed gate drops the queue, and the rest of a flush it closes partway
+// through; a dropped command is forgotten and asked for again
+// (OutputsWanted).
+//
+// While the gate is closed another replica may lead and write the same
+// outputs, so nothing this driver commanded is trusted to still be there:
+// the first look that finds the gate open again forgets every command
+// (and anything still queued from the previous term) and asks the runtime
+// for the outputs, so the next push sends every output with the
+// program's value, changed or not (#605, the Modbus driver's #600). The
+// driver has no start-up baseline, so a replica that started as a
+// standby commands every output on its first takeover too (#606).
+//
+// A func cannot say it changed, so the driver sees the gate close and
+// reopen by looking at it (gateOpen): on every WriteOutputs and flush,
+// every scan (every stream check when streaming) and at least once a
+// second while connected, and on every connect attempt. A gate that closes
+// and reopens between two looks is not seen: one shorter than about a
+// second (or the scan, when faster) while connected, or than the
+// reconnect backoff (up to 30 s) while the processor is away.
 func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Lock()
 	d.writeGate = gate
 	d.gateMu.Unlock()
 }
 
+// gateOpen reports whether commands may leave the driver right now. Every
+// call is also a look at the gate (see SetWriteGate): the first look that
+// finds it open again after one found it closed forgets every command and
+// asks for the outputs. Callers do not hold mu.
 func (d *Driver) gateOpen() bool {
 	d.gateMu.Lock()
 	g := d.writeGate
 	d.gateMu.Unlock()
-	return g == nil || g()
+	if g == nil {
+		return true
+	}
+	open := g()
+	// Steady state is one atomic load. A transition is made under turnMu,
+	// and gateShut is cleared only AFTER the forget: a second looker that
+	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
+	// and so cannot rewrite or diff against the previous term's commands.
+	if shut := d.gateShut.Load(); shut == open {
+		d.turnMu.Lock()
+		switch {
+		case !open && !d.gateShut.Load():
+			d.gateShut.Store(true)
+		case open && d.gateShut.Load():
+			d.forgetCommanded()
+			d.gateShut.Store(false)
+			d.wanted.Store(true)
+			d.log.Info("optommp: write gate open again; every output goes out with the next push", "host", d.m.Host)
+		}
+		d.turnMu.Unlock()
+	}
+	return open
 }
+
+// forgetCommanded empties commanded and pending and starts a new term: no
+// value is the on-change reference or a rewrite's command any more, and
+// no command from the previous term is sent in this one.
+func (d *Driver) forgetCommanded() {
+	d.mu.Lock()
+	clear(d.commanded)
+	clear(d.pending)
+	clear(d.disagree)
+	d.term++
+	d.mu.Unlock()
+}
+
+// OutputsWanted is the driver's io.OutputsRequester: true once after it
+// forgot commands (the write gate dropped them, or reopened), so the
+// runtime hands it every output on the next scan.
+func (d *Driver) OutputsWanted() bool {
+	return d.wanted.Load() && d.wanted.Swap(false)
+}
+
+var (
+	_ nio.OutputsRequester                   = (*Driver)(nil)
+	_ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
+)
 
 // Start connects and runs the poll loop until ctx ends or Stop is called.
 func (d *Driver) Start(ctx context.Context) {
@@ -329,6 +417,7 @@ func (d *Driver) run(ctx context.Context) {
 	}
 	backoff := d.retryMin
 	for {
+		d.gateOpen() // a look (see SetWriteGate), on every connect attempt
 		conn, err := d.dial(ctx)
 		polled := false
 		if err == nil {
@@ -439,9 +528,15 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 	start := time.Now()
 	slot := start
 	var tick *time.Ticker
+	var look <-chan time.Time // a look at the gate between slow scans
 	if d.m.Priority == 0 {
 		tick = time.NewTicker(d.scanRate)
 		defer tick.Stop()
+		if d.scanRate > lookEvery {
+			lt := time.NewTicker(lookEvery)
+			defer lt.Stop()
+			look = lt.C
+		}
 	}
 	nextChassis := start.Add(d.chassis)
 	for {
@@ -478,6 +573,8 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 			case <-tick.C:
 				waiting = false
 				slot = start.Add(time.Since(start) / d.scanRate * d.scanRate)
+			case <-look:
+				d.gateOpen() // see SetWriteGate
 			case <-d.kick:
 				// A command: write it now, read on the next tick.
 				if err := d.flush(c); err != nil {
@@ -558,7 +655,12 @@ func (d *Driver) poll(c *Client) error {
 // at a time in the kernel, writing any command that arrives meanwhile.
 // ok is false when ctx ended the wait or a write failed (err).
 func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time) (ok bool, err error) {
+	looked := time.Now()
 	for {
+		if time.Since(looked) >= lookEvery {
+			d.gateOpen() // a look between slow scans (see SetWriteGate)
+			looked = time.Now()
+		}
 		rem := time.Until(deadline)
 		if rem <= 0 {
 			return true, nil
@@ -706,6 +808,17 @@ func (d *Driver) flush(c *Client) error {
 
 // flushCount writes every pending output and reports how many requests it
 // took. A failed write leaves the rest pending for the next session.
+//
+// The gate is checked again here, not only when the command was accepted:
+// a replica that lost leadership while the processor was away must not
+// send what it accepted while it led (see SetWriteGate). It is checked
+// before every write, so a flush stops once the gate closes. Dropped
+// commands are forgotten (no longer commanded) and asked for
+// (OutputsWanted), so the push after the gate reopens commands them
+// again. A drop is not a failure. A flush that finds the gate reopened
+// since it took its queue sends none of the rest either: the reopen forgot
+// them as the previous term's, and the push that answers it sends this
+// term's values.
 func (d *Driver) flushCount(c *Client) (int, error) {
 	d.rearm(c)
 	d.mu.Lock()
@@ -715,8 +828,25 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 	}
 	work := d.pending
 	d.pending = map[string]any{}
+	term := d.term
 	d.mu.Unlock()
 
+	// drop forgets what this flush dropped. A tag WriteOutputs has handed
+	// a newer command since keeps it, and after a reopen (a new term)
+	// nothing of this flush's is left to forget.
+	drop := func(names []string) {
+		d.mu.Lock()
+		if d.term == term {
+			for _, n := range names {
+				if _, again := d.pending[n]; !again && sameScalar(d.commanded[n], work[n]) {
+					delete(d.commanded, n)
+				}
+			}
+		}
+		d.mu.Unlock()
+		d.wanted.Store(true) // the commands it dropped: ask for them
+		d.log.Warn("optommp: write gate closed; queued writes dropped", "host", d.m.Host, "count", len(names))
+	}
 	type pointWrite struct {
 		addr  uint32
 		data  []byte
@@ -808,13 +938,37 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 		binary.BigEndian.PutUint64(data[8:], bitsOff)
 		writes = append(writes, pointWrite{addrScratchOn, data, bitNames})
 	}
+	// rest names write i and every one after it.
+	rest := func(i int) []string {
+		var names []string
+		for _, w := range writes[i:] {
+			names = append(names, w.names...)
+		}
+		return names
+	}
+	// goOn looks at the gate before write i: false when the flush stops,
+	// the rest dropped (closed) or already forgotten (reopened).
+	goOn := func(i int) bool {
+		if !d.gateOpen() {
+			drop(rest(i))
+			return false
+		}
+		d.mu.Lock()
+		same := d.term == term
+		d.mu.Unlock()
+		return same
+	}
 	for i, w := range writes {
+		if !goOn(i) {
+			return i, nil
+		}
 		if err := c.Write(w.addr, w.data); err != nil {
 			// Requeue this write and every one after it, unless a newer
-			// command for the same tag arrived meanwhile.
+			// command for the same tag arrived meanwhile, or a reopen
+			// forgot them as the previous term's.
 			d.mu.Lock()
-			for _, rest := range writes[i:] {
-				for _, name := range rest.names {
+			if d.term == term {
+				for _, name := range rest(i) {
 					if _, newer := d.pending[name]; !newer {
 						d.pending[name] = work[name]
 					}
@@ -960,7 +1114,8 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 // plus every command again on reconnect, and the digital and analog ones
 // after the unit may have applied watchdog values (rearm). Commands are
 // held across a disconnect. While the write gate is closed nothing is
-// accepted, and nothing is rewritten.
+// accepted, and nothing is rewritten; once it reopens every output is a
+// command again (see SetWriteGate).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	if !d.gateOpen() {
 		return nil
