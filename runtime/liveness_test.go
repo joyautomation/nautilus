@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -211,6 +212,8 @@ func TestLivenessStartupGraceAndStop(t *testing.T) {
 	<-done
 	if err := rt.Liveness(time.Now(), max); err == nil {
 		t.Fatal("a runtime whose Run has returned reads as live")
+	} else if !errors.Is(err, runtime.ErrStopped) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("an orderly stop reads as %v, want ErrStopped (a context.Canceled)", err)
 	}
 }
 
@@ -261,5 +264,76 @@ func TestScanWithACoordinatorAllocatesNothingMore(t *testing.T) {
 	without, with := allocs(nil), allocs(lead)
 	if with > without {
 		t.Fatalf("a scan with a coordinator allocates %v, without %v", with, without)
+	}
+}
+
+// termFlag is a Termed Coordinator a test flips: leadership and its term.
+type termFlag struct {
+	lead atomic.Bool
+	term atomic.Uint64
+}
+
+func (f *termFlag) IsLeader() bool { return f.lead.Load() }
+func (f *termFlag) Term() uint64   { return f.term.Load() }
+
+const resumeProgram = `PROGRAM Counter
+VAR n : DINT; END_VAR
+VAR_EXTERNAL Out : DINT; Count : DINT; END_VAR
+n := n + 1;
+Count := n;
+Out := 5;
+END_PROGRAM`
+
+// A gate that closes and opens again in the same term (scans stalled, then
+// completed, and nobody else led) resumes: no takeover, so the program's
+// frames carry on, and the drivers get every output once, changed or not.
+// A new term is a takeover, also when the runtime never saw the gate close
+// (lost and regained between two scans).
+func TestAResumedTermDoesNotTakeOver(t *testing.T) {
+	drv := &hangDriver{}
+	coord := &termFlag{}
+	coord.lead.Store(true)
+	coord.term.Store(1)
+	rt, err := runtime.New(runtime.Options{
+		Program:     resumeProgram,
+		Driver:      drv,
+		Outputs:     []string{"Out"},
+		Seed:        nio.Values{"Out": int64(0), "Count": int64(0)},
+		Scan:        time.Hour,
+		Coordinator: coord,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() int64 {
+		t.Helper()
+		v, err := rt.Tags().ReadGlobal("Count")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.I
+	}
+	for range 3 {
+		rt.Scan()
+	}
+	if c, w := count(), drv.writes.Load(); c != 3 || w != 1 {
+		t.Fatalf("setup: Count=%d after 3 scans, %d pushes of the unchanged output", c, w)
+	}
+
+	coord.lead.Store(false)
+	rt.Scan()
+	coord.lead.Store(true) // same term: nobody else led
+	rt.Scan()
+	if c := count(); c != 4 {
+		t.Fatalf("Count = %d after the gate reopened in the same term, want 4: the frames were reset (a takeover)", c)
+	}
+	if w := drv.writes.Load(); w != 2 {
+		t.Fatalf("%d pushes in all, want 2: the resumed scan sends every output once", w)
+	}
+
+	coord.term.Store(2) // lost and regained between two scans
+	rt.Scan()
+	if c := count(); c != 1 {
+		t.Fatalf("Count = %d after a new term, want 1: a new term is a takeover", c)
 	}
 }

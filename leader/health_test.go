@@ -237,9 +237,13 @@ func newReplica(t *testing.T, e *Elector, scan time.Duration, tasks ...runtime.T
 	t.Helper()
 	drv := &hangDriver{}
 	rt, err := runtime.New(runtime.Options{
+		// n is a plain VAR: a takeover resets it, so Out falling behind the
+		// scan count shows a warm restart.
 		Program: `PROGRAM Counter
+VAR n : DINT; END_VAR
 VAR_EXTERNAL Out : DINT; END_VAR
-Out := Out + 1;
+n := n + 1;
+Out := n;
 END_PROGRAM`,
 		Driver:      drv,
 		Outputs:     []string{"Out"},
@@ -406,11 +410,14 @@ func TestAHungReplicaDoesNotTakeTheLeaseBack(t *testing.T) {
 	}
 }
 
-// A healthy leader with a scan that is slow now and then keeps the lease:
-// one scan stuck for most of a second (two ticks seen stuck past its
-// bound) skips two renews, and the gate stays open.
+// A healthy leader with a scan that is slow now and then keeps the lease,
+// and its program's state: one scan stuck for about a second skips renews
+// and may close its gate (ticks are 1 ms late here, as real ticks are),
+// but nobody else leads meanwhile, the lease keeps its holder and
+// transitions, and when the scan completes the replica resumes in the
+// same term, with no takeover: no frame reset, no retained reload.
 func TestASlowScanKeepsTheLease(t *testing.T) {
-	srv, _ := newFakeServer(t)
+	srv, fake := newFakeServer(t)
 	a := newReplica(t, newTestElector(t, srv, "pod-a", "10.0.0.1:8080"), 10*time.Millisecond)
 	b := newReplica(t, newTestElector(t, srv, "pod-b", "10.0.0.2:8080"), time.Hour)
 	t0 := time.Now()
@@ -419,31 +426,84 @@ func TestASlowScanKeepsTheLease(t *testing.T) {
 	a.run(t)
 	b.run(t)
 	a.progress(t)
+	term := a.el.Term()
 
+	const jittered = testTick + time.Millisecond
 	now := t0
 	step := func() {
 		t.Helper()
-		now = now.Add(testTick)
+		now = now.Add(jittered)
 		a.el.tick(now)
 		b.el.tick(now)
-		if !a.el.IsLeader() || b.el.IsLeader() {
-			t.Fatalf("at +%s: a=%v b=%v, want the leader to keep the lease", now.Sub(t0), a.el.IsLeader(), b.el.IsLeader())
+		if b.el.IsLeader() {
+			t.Fatalf("at +%s the standby leads: a slow scan lost the lease", now.Sub(t0))
+		}
+		fake.mu.Lock()
+		holder, transitions := fake.lease.Spec.HolderIdentity, fake.lease.Spec.LeaseTransitions
+		fake.mu.Unlock()
+		if !strings.HasPrefix(holder, "pod-a|") || transitions != 1 {
+			t.Fatalf("at +%s the lease is %s after %d transitions, want pod-a's first", now.Sub(t0), holder, transitions)
 		}
 	}
 	for range 4 {
 		a.progress(t)
 		step()
+		if !a.el.IsLeader() {
+			t.Fatalf("at +%s a healthy leader is not leading", now.Sub(t0))
+		}
 	}
 	hung, release := a.drv.arm()
 	t.Cleanup(release)
 	waitFor(t, hung, "the slow read")
-	for range 4 { // first seen, live at the bound, then stuck for two ticks
+	before := a.rt.Stats().Count
+	closed := false
+	for range 4 { // first seen, then stuck past its bound
 		step()
+		closed = closed || !a.el.IsLeader()
+	}
+	if !closed {
+		t.Fatal("setup: the slow scan never closed the gate, so the resume is not on trial")
 	}
 	release()
-	for range 8 {
+	// Wait for the slow scan to finish (it is counted whether or not the
+	// gate closed meanwhile) and for a look that sees it, then let a few
+	// more (perhaps gated) scans go by before the next tick looks.
+	deadline := time.Now().Add(5 * time.Second)
+	for a.rt.Stats().Count <= before {
+		if time.Now().After(deadline) {
+			t.Fatal("the slow scan never finished")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for a.rt.Liveness(now, time.Second/2) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the finished scan is still seen stuck")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+	step()
+	if !a.el.IsLeader() {
+		t.Fatal("scans complete again but the gate stays closed")
+	}
+	for range 6 {
 		a.progress(t)
 		step()
+		if !a.el.IsLeader() {
+			t.Fatalf("at +%s a healthy leader is not leading", now.Sub(t0))
+		}
+	}
+	if got := a.el.Term(); got != term {
+		t.Fatalf("the term moved from %d to %d with nobody else leading", term, got)
+	}
+	a.progress(t)
+	n := a.rt.Stats().Count
+	v, err := a.rt.Tags().ReadGlobal("Out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.I+3 < int64(n) {
+		t.Fatalf("Out = %d after %d scans: the program restarted (a takeover) when the gate reopened", v.I, n)
 	}
 }
 
@@ -505,5 +565,183 @@ func TestANeverScanningLeaderLosesTheLease(t *testing.T) {
 	// grace (2 s) + lease (1 s) + a tick
 	if limit := 2*time.Second + time.Second + 2*testTick; took > limit {
 		t.Fatalf("the standby took over at +%s, want within %s", took, limit)
+	}
+}
+
+// ---- review probes: two leaders while the hung leader's API call fails
+// or hangs, a late tick, the term ----
+
+// A hung leader closes its gate without the API: its step-down is decided
+// before the Lease GET, so a GET that fails cannot keep it leading while
+// the standby takes the lease.
+func TestAHungLeaderWhoseGETFailsDoesNotLeadWithTheStandby(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	a := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	b := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+	h := &stubHealth{}
+	a.SetHealth(h.health)
+	t0 := time.Now()
+	a.tick(t0)
+	b.tick(t0)
+	h.stuck.Store(true)
+	a.tick(t0.Add(testTick))
+	a.tick(t0.Add(2*testTick - time.Millisecond)) // stuck, not yet half a lease since the renew
+	fake.setFail(true)
+	a.tick(t0.Add(3 * testTick)) // its GET fails
+	fake.setFail(false)
+	b.tick(t0.Add(time.Second + time.Millisecond))
+	if a.IsLeader() && b.IsLeader() {
+		t.Fatal("both replicas lead: the hung leader's failed GET kept its gate open")
+	}
+	if !b.IsLeader() {
+		t.Fatal("setup: the standby did not take the lapsed lease")
+	}
+}
+
+// Nor can a GET that hangs: the standby ticks while the hung leader's GET
+// is still in flight.
+func TestAHungLeaderWhoseGETHangsDoesNotLeadWithTheStandby(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	a := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	b := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+	h := &stubHealth{}
+	a.SetHealth(h.health)
+	t0 := time.Now()
+	a.tick(t0)
+	b.tick(t0)
+	h.stuck.Store(true)
+	a.tick(t0.Add(testTick))
+	a.tick(t0.Add(2*testTick - time.Millisecond)) // stuck, not yet half a lease since the renew
+	arrived, release := fake.armHoldGet()
+	t.Cleanup(release)
+	done := make(chan struct{})
+	go func() { a.tick(t0.Add(3 * testTick)); close(done) }()
+	waitFor(t, arrived, "pod-a's GET")
+	b.tick(t0.Add(time.Second + time.Millisecond))
+	if a.IsLeader() && b.IsLeader() {
+		t.Fatal("both replicas lead: the hung leader's slow GET kept its gate open")
+	}
+	if !b.IsLeader() {
+		t.Fatal("setup: the standby did not take the lapsed lease")
+	}
+	release()
+	waitFor(t, done, "pod-a's tick")
+}
+
+// IsLeader is fenced by the time since the last renew, read when it is
+// asked, not on the elector's next tick: a leader whose tick is late (a
+// starved goroutine, an API call that hangs) does not lead past its
+// lease, or past half of it while its scans are stuck.
+func TestALeaderWhoseTickIsLateIsFenced(t *testing.T) {
+	srv, _ := newFakeServer(t)
+	a := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	a.duration = 100 * time.Millisecond
+	a.tick(time.Now())
+	if !a.IsLeader() {
+		t.Fatal("setup: no lead")
+	}
+	time.Sleep(150 * time.Millisecond)
+	if a.IsLeader() || a.Status().IsLeader {
+		t.Fatal("a leader whose last renew is older than its lease still leads")
+	}
+
+	b := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+	b.duration = 400 * time.Millisecond
+	h := &stubHealth{}
+	b.SetHealth(h.health)
+	b.tick(time.Now().Add(2 * time.Second)) // takes a's lapsed lease
+	if !b.IsLeader() {
+		t.Fatal("setup: no lead")
+	}
+	h.stuck.Store(true)
+	b.tick(time.Now().Add(2 * time.Second)) // stuck: no renew, too soon to step down
+	b.mu.Lock()
+	b.lastRenewOK = time.Now() // the fence reads the wall clock
+	b.mu.Unlock()
+	if !b.IsLeader() {
+		t.Fatal("setup: stepped down at once")
+	}
+	time.Sleep(250 * time.Millisecond)
+	if b.IsLeader() {
+		t.Fatal("a leader with stuck scans still leads more than half a lease after its last renew")
+	}
+}
+
+// The term stays the same when a replica closes its gate and opens it
+// again on a lease nobody else held, and moves when it takes the lease
+// after another replica held it.
+func TestTermMovesOnlyWhenAnotherReplicaMayHaveLed(t *testing.T) {
+	srv, _ := newFakeServer(t)
+	a := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	b := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+	h := &stubHealth{}
+	a.SetHealth(h.health)
+	t0 := time.Now()
+	a.tick(t0)
+	first := a.Term()
+	if first == 0 {
+		t.Fatal("a leader has no term")
+	}
+	h.stuck.Store(true)
+	a.tick(t0.Add(3 * testTick)) // gate closes
+	if a.IsLeader() {
+		t.Fatal("setup: the gate did not close")
+	}
+	h.stuck.Store(false)
+	a.tick(t0.Add(4 * testTick)) // renews the same lease
+	if !a.IsLeader() || a.Term() != first {
+		t.Fatalf("resumed on its own lease: lead=%v term %d, want the same term %d", a.IsLeader(), a.Term(), first)
+	}
+	b.tick(t0.Add(3 * time.Second)) // a stopped renewing: b takes it
+	a.tick(t0.Add(3*time.Second + testTick))
+	if a.IsLeader() {
+		t.Fatal("setup: a still leads")
+	}
+	a.tick(t0.Add(5 * time.Second)) // b went quiet: a takes it back
+	if !a.IsLeader() || a.Term() == first {
+		t.Fatalf("took the lease back after b held it: lead=%v term %d, want a new term", a.IsLeader(), a.Term())
+	}
+}
+
+// An orderly stop (Run has returned) is not a hang: it is logged at info.
+func TestAStoppedRuntimeIsLoggedAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv, _ := newFakeServer(t)
+	a := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	var stopped atomic.Bool
+	a.SetHealth(func(time.Time, time.Duration) error {
+		if stopped.Load() {
+			return runtime.ErrStopped
+		}
+		return nil
+	})
+	t0 := time.Now()
+	a.tick(t0)
+	stopped.Store(true)
+	a.tick(t0.Add(testTick))
+	out := buf.String()
+	if strings.Contains(out, "level=ERROR") {
+		t.Fatalf("an orderly stop was logged as an error:\n%s", out)
+	}
+	if !strings.Contains(out, "scan loops have stopped") {
+		t.Fatalf("no record of the stop:\n%s", out)
+	}
+}
+
+// NewLocal is open from the start and has one term: a project without
+// redundancy never sees its gate closed while healthy.
+func TestNewLocalIsOpenFromTheStart(t *testing.T) {
+	e := NewLocal("plant", time.Second)
+	if !e.IsLeader() || e.Term() == 0 {
+		t.Fatalf("lead=%v term=%d, want open with a term", e.IsLeader(), e.Term())
+	}
+	e.SetHealth(func(time.Time, time.Duration) error { return nil })
+	e.standaloneTick(time.Now().Add(time.Hour))
+	if !e.IsLeader() || e.Term() != 1 {
+		t.Fatalf("lead=%v term=%d after a live tick", e.IsLeader(), e.Term())
 	}
 }

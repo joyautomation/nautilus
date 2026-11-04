@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -45,6 +46,11 @@ type loopLive struct {
 // atomic adds a scan, no allocation.
 func (l *loopLive) begin() { l.edges.Add(1) }
 func (l *loopLive) end()   { l.edges.Add(1) }
+
+// ErrStopped is what Liveness reports once Run has returned: an orderly
+// stop, not a hang. It wraps context.Canceled, so a caller that tells the
+// two apart (the elector logs it at info) needs no import of this package.
+var ErrStopped = fmt.Errorf("runtime: the scan loops have stopped: %w", context.Canceled)
 
 // Run's lifecycle, as Liveness sees it.
 const (
@@ -113,7 +119,7 @@ func (r *Runtime) Liveness(now time.Time, max time.Duration) error {
 		}
 		return nil
 	case runStopped:
-		return fmt.Errorf("runtime: the scan loops have stopped")
+		return ErrStopped
 	}
 	var stuck []string
 	for _, l := range lv.loops {

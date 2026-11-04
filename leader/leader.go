@@ -10,6 +10,7 @@ package leader
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,6 +77,25 @@ type Elector struct {
 	// reported, "" while live: the transition is logged once each way.
 	health    Health
 	unhealthy string
+
+	// term counts the leaderships this elector has held: it moves when it
+	// creates or takes the lease, or renews one whose transitions or
+	// acquire time differ from the last it held (termKey), and not when it
+	// renews the same lease after a pause. See Term.
+	term    uint64
+	termKey string
+}
+
+// Term identifies this replica's current leadership: it changes whenever
+// another replica may have led since this one last did, and stays the same
+// when this replica closes its gate and opens it again on a lease nobody
+// else held in between (scans that stalled, then completed). The runtime
+// resumes on an unchanged term instead of taking over: no retained reload,
+// no frame reset (runtime.Termed). A standalone elector has one term.
+func (e *Elector) Term() uint64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.term
 }
 
 // Health reports whether this replica's scans are live at now: nil when
@@ -109,9 +129,9 @@ func (e *Elector) live(now time.Time) bool {
 	if h == nil {
 		return true
 	}
-	why := ""
+	why, stopped := "", false
 	if err := h(now, e.duration/2); err != nil {
-		why = err.Error()
+		why, stopped = err.Error(), errors.Is(err, context.Canceled)
 	}
 	if why == was {
 		return why == ""
@@ -123,6 +143,10 @@ func (e *Elector) live(now time.Time) bool {
 	switch {
 	case why == "":
 		slog.Info("redundancy: scans are completing again; this replica renews and contends for the lease", "lease", e.name)
+	case stopped:
+		// An orderly stop: Run has returned. Not renewing keeps a teardown
+		// that hangs from holding the lease; Release hands it over sooner.
+		slog.Info("redundancy: the scan loops have stopped; this replica no longer renews the lease", "lease", e.name)
 	case was != "":
 		slog.Error("redundancy: scans are still not completing", "lease", e.name, "reason", why)
 	case lead:
@@ -188,7 +212,21 @@ func newStandalone(leaseName, identity, selfAddr string) *Elector {
 		isLeader: true,
 		holder:   holderID,
 		decided:  closedChan(),
+		term:     1,
 	}
+}
+
+// NewLocal builds a standalone elector for a project without
+// `redundancy:` (#625): there is no lease and nothing to hand over to, but
+// with SetHealth and Run it is a write gate that is open while the scans
+// are live and closes a lease duration (lease) after the last check that
+// found them live, so a driver's own loop (a Modbus rewrite: keep-alive)
+// stops asserting outputs for a scan that is hung. It is open from New:
+// a healthy project's drivers never see it closed.
+func NewLocal(name string, lease time.Duration) *Elector {
+	e := newStandalone(name, "", "")
+	e.duration = lease
+	return e
 }
 
 func closedChan() chan struct{} {
@@ -255,7 +293,8 @@ func (e *Elector) Run(ctx context.Context) {
 // renew it, and after a lease duration without them the gate closes, so a
 // driver's own loop (a keep-alive, a device watchdog's feed) stops
 // asserting outputs for a scan that is hung, and the device's fail-safe
-// can act. Live scans open it again, and the runtime's takeover follows.
+// can act. Live scans open it again in the same term (Term), so the
+// runtime resumes rather than taking over.
 func (e *Elector) runStandalone(ctx context.Context) {
 	e.mu.RLock()
 	h := e.health
@@ -290,26 +329,42 @@ func (e *Elector) standaloneTick(now time.Time) {
 // tests can drive the acquire/renew/steal/follow state machine with
 // controlled clocks instead of real sleeps. It reports whether it reached
 // the API (the Lease GET answered).
+//
+// Every step-down decision taken after an API call reads the time again
+// (later), as the call may have taken seconds: a decision on the time the
+// tick began would keep a leader that should already have stepped down.
 func (e *Elector) tick(now time.Time) bool {
-	l, code, err := e.get()
-	if err != nil {
-		e.maybeStepDown(now)
-		return false
+	start := time.Now()
+	later := func() time.Time { return now.Add(time.Since(start)) }
+
+	// Scans that are not completing neither renew nor acquire (#621). A
+	// hung leader's step-down needs no API: it happens here, before the
+	// GET, so a GET that fails or hangs cannot keep the gate open while a
+	// standby takes the lease.
+	live := e.live(now)
+	if !live {
+		e.stepDownAfter(now, e.duration/2)
 	}
 
-	// Scans that are not completing neither renew nor acquire (#621).
-	live := e.live(now)
+	l, code, err := e.get()
+	if err != nil {
+		e.maybeStepDown(later())
+		if !live {
+			e.stepDownAfter(later(), e.duration/2)
+		}
+		return false
+	}
 
 	switch {
 	case code == http.StatusNotFound:
 		// No lease yet — first replica up claims it.
 		if !live {
-			e.maybeStepDown(now)
+			e.stepDownAfter(later(), e.duration/2)
 			break
 		}
 		fresh := e.newLease(now, 1)
 		if err := e.post(fresh); err == nil {
-			e.setLeader(true, e.holderID, 1, now)
+			e.lead(&fresh.Spec, now)
 		}
 
 	case l.Spec.HolderIdentity == e.holderID && !live:
@@ -321,16 +376,16 @@ func (e *Elector) tick(now time.Time) bool {
 		// replica can still see the lease, so it gives up its gate (a
 		// driver's keep-alive, its own output flush) before any standby
 		// can claim it, and two replicas never write at once. Live scans
-		// before the lapse renew and lead again.
-		e.stepDownAfter(now, e.duration/2)
+		// before the lapse renew and lead again, in the same term.
+		e.stepDownAfter(later(), e.duration/2)
 
 	case l.Spec.HolderIdentity == e.holderID:
 		// We hold it — renew.
 		l.Spec.RenewTime = mtime(now)
 		if err := e.put(l); err == nil {
-			e.setLeader(true, e.holderID, l.Spec.LeaseTransitions, now)
+			e.lead(&l.Spec, now)
 		} else {
-			e.maybeStepDown(now)
+			e.maybeStepDown(later())
 		}
 
 	case e.expired(l, now) && live:
@@ -343,7 +398,7 @@ func (e *Elector) tick(now time.Time) bool {
 		l.Spec.RenewTime = mtime(now)
 		l.Spec.LeaseTransitions++
 		if err := e.put(l); err == nil {
-			e.setLeader(true, e.holderID, l.Spec.LeaseTransitions, now)
+			e.lead(&l.Spec, now)
 		}
 		// 409 conflict: another standby won the race — stay standby.
 
@@ -378,6 +433,20 @@ func (e *Elector) stepDownAfter(now time.Time, d time.Duration) {
 	if e.isLeader && now.Sub(e.lastRenewOK) > d {
 		e.isLeader = false
 	}
+}
+
+// lead records a successful create, renew or take-over of the lease s at
+// now (the tick's start: a renew is dated no later than it was sent). The
+// term moves unless s is the lease this elector last held, unchanged.
+func (e *Elector) lead(s *leaseSpec, now time.Time) {
+	key := fmt.Sprintf("%d|%s", s.LeaseTransitions, s.AcquireTime)
+	e.mu.Lock()
+	if key != e.termKey {
+		e.term++
+		e.termKey = key
+	}
+	e.mu.Unlock()
+	e.setLeader(true, e.holderID, s.LeaseTransitions, now)
 }
 
 func (e *Elector) setLeader(lead bool, holder string, transitions int, now time.Time) {
@@ -421,10 +490,27 @@ func (e *Elector) Release() {
 	e.mu.Unlock()
 }
 
+// IsLeader reports whether this replica leads. In a cluster it is also
+// fenced by time, read now rather than on the elector's next tick: a
+// leader whose last renew is older than the lease (half the lease while
+// its scans are not completing) does not lead, however late its own tick
+// or its API call is. A starved or blocked elector goroutine cannot keep
+// the gate open while a standby takes the lease.
 func (e *Elector) IsLeader() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.isLeader
+	return e.leadingLocked()
+}
+
+func (e *Elector) leadingLocked() bool {
+	if !e.isLeader || e.mode != "cluster" {
+		return e.isLeader
+	}
+	fence := e.duration
+	if e.unhealthy != "" {
+		fence = e.duration / 2
+	}
+	return time.Since(e.lastRenewOK) <= fence
 }
 
 func (e *Elector) Status() Status {
@@ -433,7 +519,7 @@ func (e *Elector) Status() Status {
 	name, addr, _ := strings.Cut(e.holder, "|")
 	return Status{
 		Mode: e.mode, Pod: e.identity, Leader: name, LeaderAddr: addr,
-		IsLeader: e.isLeader, Transitions: e.transitions,
+		IsLeader: e.leadingLocked(), Transitions: e.transitions,
 	}
 }
 

@@ -293,9 +293,13 @@ sees the gate close and its program never runs on it, or delivered twice,
 when both replicas lead for a moment while the lease changes hands. A
 standby's clean stop puts nothing back.
 Its reads still count as requests to the unit, so they feed the
-communication watchdog: a leader that hangs while it still holds the lease
-does not trip it
-([#621](https://github.com/joyautomation/nautilus/issues/621)).
+communication watchdog. For a hung leader that is fine: the lease needs
+live scans, so a leader whose scan hangs closes its gate and the standby
+takes over within about 5 to 8 s (see
+[Redundancy](/guides/redundancy/#redundancy)). It is not fine for a
+leader that keeps scanning but cannot reach the unit while the standby
+can: the standby's polls keep the watchdog fed
+([#626](https://github.com/joyautomation/nautilus/issues/626)).
 
 **A takeover moves the stream.** The role follows the write gate, looked
 at every scan and every datagram. A standby whose gate opens becomes the

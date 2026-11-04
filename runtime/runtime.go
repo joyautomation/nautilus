@@ -232,6 +232,9 @@ type Runtime struct {
 	// takeover sequence when this replica becomes leader. See retain.go.
 	leadMu  sync.Mutex
 	leading bool
+	// ledTerm is the coordinator's term (Termed) at the last takeover, 0
+	// before the first or without a Termed coordinator. Under leadMu.
+	ledTerm uint64
 
 	// alarms is the alarm engine, as retained operator state — nil unless
 	// SetAlarms registered one. Its own mutex because loadRetained reads it
