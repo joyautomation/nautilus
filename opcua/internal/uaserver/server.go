@@ -305,6 +305,7 @@ func (s *Server) channelConfig() *uasc.Config {
 // certificate (opcua-server-writes §6, slice 2), so such a session is already unusable.
 func (s *Server) channelClosed(sc *uasc.SecureChannel) {
 	for _, sess := range s.sb.CloseChannel(sc) {
+		sess.discardPublishes() // the channel is gone, so nothing can answer them
 		if s.SubscriptionService != nil {
 			s.SubscriptionService.DeleteSessionSubscriptions(sess)
 		}

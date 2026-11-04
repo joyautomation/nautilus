@@ -54,14 +54,34 @@ func TestOPCUAStatusCarriesAnonymousWrites(t *testing.T) {
 	if row.Extra["access"] != "writable by anonymous clients" || row.Extra["anonymousWrites"] != true {
 		t.Errorf("extra %v", row.Extra)
 	}
+	// The dashboard card renders Message, not Extra: the switch is there.
+	if want := "Serving 0 tags · 0 subscriptions, 0 monitored items · writable by anonymous clients"; row.Message != want {
+		t.Errorf("message %q, want %q", row.Message, want)
+	}
+	// Before a certificate warning, which is appended after it.
+	row = opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true, Writable: []string{"*_SP"}, AnonymousWrites: true, CertWarning: "the OPC UA server certificate expires in 9 days"})
+	if !strings.HasSuffix(row.Message, " · writable by anonymous clients · the OPC UA server certificate expires in 9 days") {
+		t.Errorf("message with a certificate warning %q", row.Message)
+	}
+	// Not listening, the message says only that.
+	row = opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", LastError: "address in use", Writable: []string{"*_SP"}, AnonymousWrites: true})
+	if strings.Contains(row.Message, "anonymous") {
+		t.Errorf("a server not listening says it is writable: %q", row.Message)
+	}
 	// On, with nothing writable, the server is still read-only; the row
 	// says so, and still shows the switch.
 	row = opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true, AnonymousWrites: true})
 	if row.Extra["access"] != "read-only" || row.Extra["anonymousWrites"] != true {
 		t.Errorf("extra %v", row.Extra)
 	}
+	if strings.Contains(row.Message, "anonymous") {
+		t.Errorf("a read-only server's message says it is writable: %q", row.Message)
+	}
 	row = opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true, Writable: []string{"*_SP"}})
 	if _, ok := row.Extra["anonymousWrites"]; ok {
 		t.Errorf("anonymousWrites on a server without the switch: %v", row.Extra)
+	}
+	if strings.Contains(row.Message, "anonymous") {
+		t.Errorf("a server without the switch says anonymous: %q", row.Message)
 	}
 }

@@ -74,9 +74,11 @@ END_PROGRAM`,
 	}
 }
 
-// opcua.anonymous-writes with nothing under opcua.writable opens nothing:
-// a warning, not an error. With a list it is quiet.
-func TestCheckWarnsOnAnonymousWritesWithoutWritable(t *testing.T) {
+// opcua.anonymous-writes is a warning, never an error: with nothing under
+// opcua.writable it opens nothing; with a list it is in effect, and the
+// warning says any client that can reach the endpoint may write, more
+// strongly (naming the address) when it listens beyond loopback.
+func TestCheckWarnsOnAnonymousWrites(t *testing.T) {
 	files := func(opcua string) map[string]string {
 		return map[string]string{
 			"nautilus.yaml": `
@@ -100,7 +102,16 @@ END_PROGRAM`,
 		t.Errorf("no warning for anonymous-writes without writable:\n%s", out)
 	}
 	out, code = checkIn(t, files("  anonymous-writes: true\n  writable: [LevelSP]\n"))
+	if code != 0 || !strings.Contains(out, "warning: opcua.anonymous-writes is on: any client that can reach opc.tcp://localhost:4840 (this machine only") ||
+		!strings.Contains(out, "(LevelSP) without a certificate") || strings.Contains(out, "beyond loopback") {
+		t.Errorf("anonymous-writes on loopback with a writable list (%d):\n%s", code, out)
+	}
+	out, code = checkIn(t, files("  endpoint: opc.tcp://0.0.0.0:4840\n  anonymous-writes: true\n  writable: [LevelSP]\n"))
+	if code != 0 || !strings.Contains(out, "warning: opcua.anonymous-writes is on and opc.tcp://0.0.0.0:4840 listens beyond loopback: ANY client") {
+		t.Errorf("anonymous-writes on every interface (%d):\n%s", code, out)
+	}
+	out, code = checkIn(t, files("  writable: [LevelSP]\n"))
 	if code != 0 || strings.Contains(out, "anonymous-writes") {
-		t.Errorf("anonymous-writes with a writable list warned (%d):\n%s", code, out)
+		t.Errorf("a writable list without the switch mentioned anonymous-writes (%d):\n%s", code, out)
 	}
 }

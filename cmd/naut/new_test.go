@@ -36,7 +36,7 @@ func TestScaffoldVariants(t *testing.T) {
 				".github/workflows/ci.yml", ".vscode/extensions.json", ".vscode/settings.json",
 				"README.md", ".gitignore",
 			},
-			absent: []string{"driver.go", "nautilus.yaml", "Dockerfile", "deploy/k8s.yaml"},
+			absent: []string{"driver.go", "nautilus.yaml", "Dockerfile", "deploy/k8s.yaml", "AGENTS.md", "CLAUDE.md"},
 		},
 		{
 			name: "sdk, blank program",
@@ -44,6 +44,7 @@ func TestScaffoldVariants(t *testing.T) {
 			want: []string{"go.mod", "main.go", "driver.go", "program.st", "program_test.go"},
 			absent: []string{
 				"plant.go", "blocks.st", "nautilus.yaml", ".github/workflows/ci.yml", ".vscode/extensions.json",
+				"AGENTS.md", "CLAUDE.md",
 			},
 		},
 		{
@@ -55,7 +56,7 @@ func TestScaffoldVariants(t *testing.T) {
 		{
 			name:   "minimal manifest project",
 			sc:     scaffold{Name: "min-proj", Program: "MinProj", Template: tmplMinimal, Language: "fbd"},
-			want:   []string{"nautilus.yaml", "program.fbd", "min-proj_test.yaml", "README.md", ".gitignore"},
+			want:   []string{"nautilus.yaml", "program.fbd", "min-proj_test.yaml", "README.md", ".gitignore", "AGENTS.md", "CLAUDE.md"},
 			absent: []string{"go.mod", "main.go", "driver.go", "plant.go", "program_test.go", "sim.st"},
 		},
 		{
@@ -65,7 +66,7 @@ func TestScaffoldVariants(t *testing.T) {
 			sc:   scaffold{Name: "demo-proj", Program: "DemoProj", Template: tmplDemo, CI: true},
 			want: []string{
 				"nautilus.yaml", "program.fbd", "sim.st", "interlocks.ld", "blocks.st",
-				"demo-proj_test.yaml", "README.md", ".github/workflows/ci.yml",
+				"demo-proj_test.yaml", "README.md", ".github/workflows/ci.yml", "AGENTS.md", "CLAUDE.md",
 			},
 			absent: []string{"go.mod", "main.go", "plant.go", "program.st", "program_test.go", "Dockerfile", "deploy/k8s.yaml"},
 		},
@@ -109,6 +110,12 @@ func TestScaffoldVariants(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(dir, tc.sc.Name, f)); err == nil {
 					t.Errorf("%s should not exist in this variant", f)
 				}
+			}
+			// CLAUDE.md carries no guidance of its own: Claude Code reads
+			// AGENTS.md through its import line.
+			if raw, err := os.ReadFile(filepath.Join(dir, tc.sc.Name, "CLAUDE.md")); err == nil &&
+				!strings.Contains(string(raw), "\n@AGENTS.md") {
+				t.Errorf("CLAUDE.md does not import AGENTS.md:\n%s", raw)
 			}
 
 			// The generated control program must compile — composed with

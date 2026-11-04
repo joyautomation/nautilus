@@ -458,12 +458,17 @@ Added after slice 3:
      when it listens beyond it, and a warning that it opens nothing with no `writable`
      list. The banner adds "(anonymous writes on)". `Status.AnonymousWrites`, and on the
      `/api/drivers` row `anonymousWrites: true` with access "writable by anonymous
-     clients". The audit line of a landed write carries `anonymous=true` (there is no
-     certificate URI or thumbprint to name), and its refusals are logged per node, as a
-     writer's are, within the same per-client budget.
-   - **`naut check`.** `anonymous-writes: true` with no `writable` list is a **warning**,
-     not an error: the server it describes is read-only, which is safe, but not what the
-     author meant.
+     clients"; when it opens something, the row's message (the dashboard card's sentence)
+     ends "· writable by anonymous clients". The audit line of a landed write carries
+     `anonymous=true` (there is no certificate URI or thumbprint to name), and so does
+     every refusal line: per node on a node it may know, as a writer's, and per reason
+     otherwise, within the same per-client budget.
+   - **`naut check`.** Always a **warning**, never an error. With no `writable` list: the
+     server it describes is read-only, which is safe, but not what the author meant. With
+     a list, whenever the switch is in effect: any client that can reach the endpoint can
+     write those tags without a certificate. It is stronger, naming the endpoint, when the
+     endpoint listens beyond loopback (the start-up error's case), and suggests 127.0.0.1
+     when the client runs on the same machine. A lab manifest is expected to show it.
    - **Not in this change.** Arrays and `IndexRange` stay slice 4.
 10. **Element node ids are official (2026-11-03).** PLC-Lab reaches its connector's bytes one
     at a time by string node id (`PlcLabConnector.Inputs[17]`), not by `IndexRange`, as the

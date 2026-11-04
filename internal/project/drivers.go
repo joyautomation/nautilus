@@ -589,6 +589,12 @@ func opcuaStatus(st opcuaserver.Status) server.DriverStatus {
 	if st.AnonymousWrites {
 		s.Extra["anonymousWrites"] = true
 	}
+	// The card shows Message, not Extra: a server any client may write
+	// says so where the dashboard looks (only when the switch opens
+	// something; with nothing writable it is read-only, as the row says).
+	if st.AnonymousWrites && len(st.Writable) > 0 && s.State == "connected" {
+		s.Message += " · writable by anonymous clients"
+	}
 	if st.Standby {
 		s.Extra["standby"] = true
 	}

@@ -499,7 +499,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			warns++
 			fmt.Printf("%s: warning: %s\n", loc.file, w)
 		}
-		if w := opcuaserver.AnonymousWritesWarning(proj.OPCUA.AnonymousWrites, proj.OPCUA.Writable); w != "" {
+		if w := opcuaserver.AnonymousWritesWarning(proj.OPCUA.AnonymousWrites, proj.OPCUA.Writable, proj.OPCUA.Endpoint); w != "" {
 			warns++
 			fmt.Printf("%s: warning: %s\n", loc.file, w)
 		}
@@ -540,6 +540,49 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			fmt.Printf("%s: warning: the programs write %q, which %s declares no tag for — "+
 				"it will reach an HMI with no unit and no description\n",
 				loc.file, name, manifestLabel(manifestName))
+		}
+	}
+
+	// An output with no init: is never seeded: it holds nothing until a
+	// program writes it, and a read before that faults the scan with
+	// "undefined tag" (nautilus#560). A seal-in reads its own coil first,
+	// so it faults on scan one and — the faulting rung being the one that
+	// writes the tag — on every scan after. Only a program's own earlier
+	// write counts: tasks start concurrently. An error when some path the
+	// scan can take reaches the read unwritten; a warning when it is
+	// unwritten only if a loop runs zero times.
+	readFirst := map[string][]runtime.EarlyRead{}
+	for name, reads := range rt.ReadBeforeWrite() {
+		readFirst[ir.NameKey(name)] = append(readFirst[ir.NameKey(name)], reads...)
+	}
+	writtenAnywhere := map[string]bool{}
+	for name := range uses.Written {
+		writtenAnywhere[ir.NameKey(name)] = true
+	}
+	for _, d := range proj.Runtime.Tags {
+		if d.Role != runtime.RoleOutput || d.Init != nil {
+			continue
+		}
+		var sure, maybe []runtime.EarlyRead
+		for _, r := range readFirst[ir.NameKey(d.Name)] {
+			if r.Sure {
+				sure = append(sure, r)
+			} else {
+				maybe = append(maybe, r)
+			}
+		}
+		switch {
+		case len(sure) > 0:
+			errs++
+			fmt.Printf("%s: error: output %q has no init:, and %s — an output with no init: holds "+
+				"nothing until it is written, so that read faults the scan with \"undefined tag %s\"; "+
+				"give it an init:%s\n",
+				loc.tag(d.Name), d.Name, earlyReads(sure, writtenAnywhere[ir.NameKey(d.Name)]), d.Name, initHint(d, rt))
+		case len(maybe) > 0:
+			warns++
+			fmt.Printf("%s: warning: output %q has no init:, and %s — if a read comes first it "+
+				"faults the scan with \"undefined tag %s\"; give it an init:%s\n",
+				loc.tag(d.Name), d.Name, earlyReads(maybe, true), d.Name, initHint(d, rt))
 		}
 	}
 
@@ -626,6 +669,69 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", loc.file, r.File, r.Nodes, r.Pipes)
 	}
 	return errs, warns
+}
+
+// programList names programs for a diagnostic: "Interlocks", "Interlocks
+// and Alarms", "A, B and C".
+// earlyReads says which programs read an output before writing it, and
+// why, one clause per program in task order. writtenAnywhere is whether
+// any program writes it.
+func earlyReads(reads []runtime.EarlyRead, writtenAnywhere bool) string {
+	var parts []string
+	for _, r := range reads {
+		var part string
+		switch {
+		case !r.Sure:
+			part = r.Program + " may read it before writing it (it is written first only inside a loop that may run zero times)"
+		case !r.Writes && writtenAnywhere:
+			part = r.Program + " reads it, and only another task writes it (tasks start together, so the read can come first)"
+		case !r.Writes:
+			part = r.Program + " reads it, and no program writes it"
+		default:
+			part = r.Program + " reads it before writing it (" + readCause(r) + ")"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// readCause is why a program's read of a tag comes before its own write.
+func readCause(r runtime.EarlyRead) string {
+	switch r.Cause {
+	case ir.CauseSelfAssign:
+		if r.Lang == "ld" {
+			return "a seal-in or set/reset coil reads its own coil"
+		}
+		return "the assignment that writes it reads it first"
+	case ir.CauseCompound:
+		return "setting a member, element or bit of it reads the whole tag first"
+	case ir.CauseSomePaths:
+		return "it is written only on some paths before this read"
+	}
+	return "the read comes before the first write"
+}
+
+// initHint is " (init: <the zero of the tag's type>)" for a diagnostic
+// that asks for an init:, "" when the type has no one-word zero.
+func initHint(d runtime.TagDef, rt *runtime.Runtime) string {
+	var t *ir.Type
+	for name, gt := range rt.Globals() {
+		if ir.NameKey(name) == ir.NameKey(d.Name) {
+			t = gt
+			break
+		}
+	}
+	if t == nil || t.Enum != nil {
+		return ""
+	}
+	zero := map[ir.TypeKind]string{
+		ir.TypeBool: "false", ir.TypeInt: "0", ir.TypeReal: "0.0",
+		ir.TypeTime: "T#0s", ir.TypeString: "''",
+	}[t.Kind]
+	if zero == "" {
+		return ""
+	}
+	return " (init: " + zero + ")"
 }
 
 func roleName(r runtime.TagRole) string {

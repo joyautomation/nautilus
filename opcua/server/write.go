@@ -113,6 +113,17 @@ type client struct {
 	why        string // why revoked
 }
 
+// logArgs is a write's audit or refusal line's attributes: args, then
+// who the client is, with anonymous=true for an anonymous writer (it has
+// no certificate to name, only its address).
+func (c client) logArgs(args ...any) []any {
+	args = append(args, "session", c.session, "client", c.uri, "thumbprint", c.thumbprint, "remote", c.remote)
+	if c.anonymous {
+		args = append(args, "anonymous", true)
+	}
+	return args
+}
+
 // channelWriter reports whether sc is a writer's channel: SignAndEncrypt
 // under a secure policy, which the server opens only for a certificate in
 // the trust list (uasc's checkOpen calls VerifyPeer on every OPN, renewals
@@ -362,12 +373,7 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		if m, ok := ns.resolve(req.NodesToWrite[i].NodeID); ok {
 			after = m
 		}
-		args := []any{"node", paths[i], "old", shown(olds[k]), "new", shown(after),
-			"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote}
-		if cl.anonymous {
-			args = append(args, "anonymous", true)
-		}
-		w.log.Info("opcua: write", args...)
+		w.log.Info("opcua: write", cl.logArgs("node", paths[i], "old", shown(olds[k]), "new", shown(after))...)
 	}
 	var refused []refusal
 	for i, code := range results {
@@ -604,8 +610,7 @@ func (w *writeAccess) refuse(cl client, rs []refusal) {
 		reason := statusName(r.code)
 		if r.known {
 			w.warnOnce(cl, cl.key()+"|"+r.node+"|"+reason, func() {
-				w.log.Warn("opcua: write refused", "node", r.node, "status", reason, "reason", r.detail,
-					"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+				w.log.Warn("opcua: write refused", cl.logArgs("node", r.node, "status", reason, "reason", r.detail)...)
 			})
 			continue
 		}
@@ -620,8 +625,7 @@ func (w *writeAccess) refuse(cl client, rs []refusal) {
 	for _, reason := range order {
 		g := groups[reason]
 		w.warnOnce(cl, cl.key()+"|"+reason, func() {
-			w.log.Warn("opcua: write refused", "node", clip(g.first.node), "items", g.n, "status", reason, "reason", g.first.detail,
-				"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+			w.log.Warn("opcua: write refused", cl.logArgs("node", clip(g.first.node), "items", g.n, "status", reason, "reason", g.first.detail)...)
 		})
 	}
 }
