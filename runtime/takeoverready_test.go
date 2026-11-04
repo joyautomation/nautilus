@@ -93,3 +93,65 @@ func TestNoCoordinatorDoesNotWaitForInputs(t *testing.T) {
 		t.Fatalf("writes %d, asked %d; want 1, 0", drv.writeCount(), drv.asked.Load())
 	}
 }
+
+// A new term while this replica still reads as leading (lost and regained
+// between two scans, #621) is a takeover too, so it waits for live inputs
+// like one from standby: no frame reset and no scan until the driver is
+// ready.
+func TestNewTermTakeoverWaitsForLiveInputs(t *testing.T) {
+	drv := &readyDriver{scriptDriver: scriptDriver{in: nio.Values{"In": 1.0}}}
+	drv.ready.Store(true)
+	coord := &termFlag{}
+	coord.lead.Store(true)
+	coord.term.Store(1)
+	rt, err := runtime.New(runtime.Options{
+		Program:            doublerProg,
+		Driver:             drv,
+		Inputs:             []string{"In"},
+		Outputs:            []string{"Out"},
+		Seed:               nio.Values{"Out": 0.0},
+		Coordinator:        coord,
+		TakeoverInputsWait: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	if drv.reads != 1 || drv.writeCount() != 1 {
+		t.Fatalf("setup: reads %d, writes %d; want 1, 1", drv.reads, drv.writeCount())
+	}
+
+	drv.ready.Store(false) // the driver lost its live view meanwhile
+	coord.term.Store(2)    // and another replica may have led
+	for range 3 {
+		rt.Scan()
+	}
+	if drv.reads != 1 || drv.writeCount() != 1 {
+		t.Fatalf("new term, inputs not live: reads %d, writes %d; want no scan (1, 1)", drv.reads, drv.writeCount())
+	}
+	drv.mu.Lock()
+	drv.in["In"] = 4.0
+	drv.mu.Unlock()
+	drv.ready.Store(true)
+	rt.Scan()
+	if drv.reads != 2 || drv.lastOut["Out"] != 8.0 {
+		t.Fatalf("live again: reads %d, Out %v; want the takeover's scan on the fresh input (2, 8)", drv.reads, drv.lastOut["Out"])
+	}
+
+	// A resume (gate closed and reopened in the same term) waits too.
+	coord.lead.Store(false)
+	rt.Scan()
+	drv.ready.Store(false)
+	coord.lead.Store(true)
+	for range 3 {
+		rt.Scan()
+	}
+	if drv.reads != 2 {
+		t.Fatalf("resumed term, inputs not live: reads %d, want no scan (2)", drv.reads)
+	}
+	drv.ready.Store(true)
+	rt.Scan()
+	if drv.reads != 3 {
+		t.Fatalf("resumed term, live again: reads %d, want 3", drv.reads)
+	}
+}

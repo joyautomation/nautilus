@@ -73,15 +73,17 @@ func (r *Runtime) gate() bool {
 	lead := r.coord == nil || r.coord.IsLeader()
 	r.leadMu.Lock()
 	defer r.leadMu.Unlock()
-	// A leader not yet scanning waits for live inputs (#626): the loop
-	// keeps ticking, and nothing below runs until they are, or the wait
-	// is over.
+	termed, _ := r.coord.(Termed)
+	// Every edge below that takes over or resumes (from standby, the same
+	// term resumed, or a new term this replica never saw the gate close
+	// for) waits for live inputs first (#626): the loop keeps ticking, and
+	// nothing below runs until they are, or the wait is over. A steady
+	// leader never asks.
 	if !lead {
 		r.readySince = time.Time{}
-	} else if !r.leading && !r.inputsReady() {
+	} else if (!r.leading || termed != nil && termed.Term() != r.ledTerm) && !r.inputsReady() {
 		return false
 	}
-	termed, _ := r.coord.(Termed)
 	switch {
 	case lead && !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm:
 		// The same leadership, resumed: this replica closed its gate (its

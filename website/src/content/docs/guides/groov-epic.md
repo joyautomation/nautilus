@@ -209,7 +209,13 @@ some drivers on live scans in every project, but not this one, because
 it reads any gate as "one replica of a redundant set" (see
 [Redundancy](/guides/redundancy/#redundancy)). With `redundancy:`, a hung
 leader closes its gate and hands over (see [Redundancy](#redundancy)
-below).
+below). With `watchdog:` set as well, the hung leader's driver also drops
+its connection once its gate closes, and the standby has none, so nothing
+feeds the watchdog until the new leader's first poll: a watchdog shorter
+than that gap (from the gate closing, at least 2 s after the hung
+leader's last renew, to the lease lapsing 4 s after it and the standby's
+next tick, plus its connect: a few seconds) trips during the handover. Without `watchdog:`, the old leader's driver
+polls on as a standby and the standby's polls feed it throughout.
 
 ## Holding outputs until an operator acknowledges
 
@@ -358,6 +364,10 @@ and the session's set-up requests (a dozen or so, plus one per bound
 output for its watchdog value, at about 0.75 ms each) beyond a polling
 standby's. If a sibling driver's read fails on that
 first scan, the scan runs on last-known values, as any failed read does.
+The same wait applies whenever the gate opens on this driver without a
+session: a leader whose stalled scan closed its gate dropped its
+connection too, so when it resumes in the same term, or takes over in a
+new one, the runtime again waits for its first scan of the unit.
 
 **A takeover moves the stream.** The role follows the write gate, looked
 at every scan and every datagram. A standby whose gate opens becomes the

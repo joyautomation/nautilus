@@ -465,19 +465,27 @@ claims:
       a sibling driver's in the same set included) until that read has
       been delivered: the warm start runs on the unit's values, not on
       what the standby last saw, and the first command sent comes from it.
+      The runtime waits the same way on every edge that takes over or
+      resumes: from standby, a resumed term, and a new term while this
+      replica still read as leading.
     source: "#redundancy"
     tests:
       - go ./optommp TestWatchdogStandbyTakeoverReadsBeforeItWrites
       - go ./optommp TestWatchdogStandbyTakeoverWarmStartsOnLiveInputs
       - go ./optommp TestWatchdogStandbyTakeoverHoldsSiblingOutputs
       - go ./runtime TestTakeoverWaitsForLiveInputs
+      - go ./runtime TestNewTermTakeoverWaitsForLiveInputs
       - go ./io TestMultiInputsReadyWaitsForEveryChild
     note: >-
       The fake behind a 50 ms dial; DI03 is on at the unit and seeded
       FALSE in the runtime. One program copies it to DO00 (no write before
       a packed-area read, the first DO00 command on), one latches a fault
       when it reads DI03 off (DO00 never commanded on), and one copies it
-      to a sibling driver in the same io.Multi (never handed FALSE).
+      to a sibling driver in the same io.Multi (never handed FALSE). The
+      new-term and resumed-term cases are a scripted driver under a Termed
+      coordinator: its term moves from 1 to 2 while it still leads, then
+      its gate closes and reopens in term 2, each onto a driver that is
+      not ready.
   - id: EPIC-036
     claim: >-
       The takeover's wait for live inputs is bounded (2 s by default,
