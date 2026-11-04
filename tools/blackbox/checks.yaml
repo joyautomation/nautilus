@@ -718,7 +718,7 @@ checks:
   script: checks/2026-10-24-001c/001-P-monitoring-mode-transitions.py
   env: {}
   expected_today: pass
-  note: counts notifications over 1 s windows on Counter (100 ms sweep); thresholds have slack (>=7 of ~10).
+  note: "counts notifications over 1 s windows on Counter (100 ms sweep); thresholds have slack (>=7 of ~10). Changed on the product side for #573: the Reporting assertion wanted >=7 notifications in 1 s and got 6 once on a loaded CI runner. Each item's queue is revised to 1, and the 100 ms sweep and the 100 ms publish run on separate timers; when they tick together a sample can replace the one before it in the same publish, which Part 4 §5.12.1.5 allows. Reproduced under load: values skipped by 2 (Counter moved 10, 6 delivered), each delivered value arriving a few ms after its source timestamp, so nothing stalled or ran late. The check now waits 2 s, wants at least 5 notifications, each newer than the last, and the last to reach the Counter the controller reports after the window."
   group: edges of the fixes, newly checked
 - id: 001-P-browse-paging-dedup
   run: 2026-10-24-001c
