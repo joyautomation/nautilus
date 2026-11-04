@@ -302,3 +302,62 @@ claims:
       The example's program in virtual time, with the status tags given by
       the test rather than delivered by the driver. The driver side is
       EPIC-021 and EPIC-022.
+  - id: EPIC-024
+    claim: >-
+      With a write gate (redundancy leadership), a command held while the
+      processor was away is not written when it comes back if the gate
+      closed meanwhile: the queue drains, the commands are asked for
+      again, and the push after the replica leads again writes them.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestQueuedWritesGoNowhereAfterTheGateClosed
+    note: >-
+      Under the runtime with a test coordinator whose flag is also the
+      driver's gate, against the in-process fake of the chassis.
+  - id: EPIC-025
+    claim: >-
+      A gate that closes partway through a flush stops it: the write in
+      hand and every one after it are dropped, and a dropped command is
+      asked for again.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestGateClosingMidFlushStopsTheFlush
+  - id: EPIC-026
+    claim: >-
+      When the gate reopens, every output is written once with the
+      program's value, changed or not: on a takeover because the runtime
+      pushes, on a reopen without one because the driver asks for the
+      outputs (io.OutputsRequester). Until that push the reconnect and
+      watchdog rewrites write nothing from the previous term.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestRegainedGateSendsTheUnchangedOutputsAgain
+      - go ./optommp TestQueuedWritesGoNowhereAfterTheGateClosed
+    partial: true
+    note: >-
+      Another master switches the digital output off and overwrites the
+      scratchpad integer while the gate is closed. That the reconnect and
+      watchdog rewrites stay empty until the push is not asserted.
+  - id: EPIC-027
+    claim: >-
+      A replica that started as a standby commands every output on its
+      first takeover: the first value handed over for each output is
+      written.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyFirstTakeoverCommands
+  - id: EPIC-028
+    claim: >-
+      The driver sees the gate change only by looking at it: on every push
+      and flush, before every write, every scan or stream check and at
+      least once a second while connected, and on every connect attempt. A
+      gate that closes and reopens between two looks is not seen.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestRegainedGateSendsTheUnchangedOutputsAgain/gate reopens while leading
+    partial: true
+    note: >-
+      The reopen without a takeover is seen by the scan's own look, at a
+      5 ms scan. The once-a-second look between slower scans, the stream
+      check's look, the look on a connect attempt, and the unseen flip are
+      not asserted.
