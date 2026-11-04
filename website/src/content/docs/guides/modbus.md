@@ -184,7 +184,7 @@ format side by side.
 ## The `__Online` companion and `enable:`
 
 Each source gets a driver-synthesized `<source>__Online` BOOL input, true
-while its connection is up. It is present from `Start` — before any poll
+while the device answers. It is present from `Start` — before any poll
 has landed — so interlock logic can gate on it safely:
 
 ```
@@ -199,6 +199,42 @@ programs that read its tags. Their quality is `NotConnected`
 meanwhile. See [Inputs from a device that is
 down](/guides/tag-model/#inputs-from-a-device-that-is-down).
 
+What "answers" means:
+
+- `__Online` starts false and goes true on the first answer on a
+  connection, not when the TCP connection opens. A gateway that accepts
+  the connection and never replies is never online.
+- An answer is a reply, or any exception except the two gateway ones. An
+  exception such as 0x02 (illegal data address) is the device answering
+  about one span: the source stays online and only that block's tags go
+  `Bad`.
+- Exceptions 0x0A (gateway path unavailable) and 0x0B (gateway target
+  device failed to respond) mean the device behind the gateway did not
+  answer. The source goes offline (`__Online` false, its tags `Stale`),
+  while the connection to the gateway stays up, once every block's latest
+  read got one and the last three requests in a row did. One or two
+  misses (a single RS-485 timeout or CRC error behind the gateway) do not
+  count. The next answer brings it back.
+- With blocks in different scan classes, a slow block whose last read
+  answered keeps the source online until it is read again.
+- On a polled source only reads decide. A write's reply does not bring
+  the source online: it may come from the gateway itself, or from a
+  keep-alive the gateway confirms while the device's reads get 0x0B.
+- A write-only source (nothing polled) goes by its writes. With a
+  `rewrite:` keep-alive it starts offline and goes online when the first
+  re-assert is confirmed. Without one there is nothing to ask the device
+  until the program commands it, so it is online as soon as the
+  connection opens; a program that gates its commands on `__Online` can
+  still send the first one. Either way, three gateway no-answers to its
+  writes in a row take it offline, and a confirmed write brings it back.
+  Without `rewrite:`, nothing else asks the device, so a program that
+  sends commands only while `__Online` is true never sends the write that
+  would bring it back: keep commanding while offline, or add `rewrite:`.
+- A lost connection, or a source parked with `enable:`, is offline.
+
+This is the meaning `__Online` has on the other drivers: true when the
+device is answering, not when a socket is open.
+
 A source may also name an `enable:` tag — any BOOL the project already
 declares. While it is false the source is **parked**: no connection is
 attempted, its tags hold their last values and report `Stale`
@@ -208,11 +244,14 @@ register write: it acts even while the write gate is closed, and it appears
 in `OutputNames()` alongside the writable bindings.
 
 Each source also gets `<source>__Outages`, a DINT input: the number of
-times `__Online` has gone false since nautilus started. The first connect
-is not an outage, and a source that has not connected yet has had none.
-A fall counts only when the device had answered a read or a write on that
-connection, so a gateway that accepts the connection and never replies
-does not count, however often the driver reconnects. Stopping nautilus
+times `__Online` has fallen from true to false since nautilus started.
+Since `__Online` goes true only on an answer, the first connect is not an
+outage, a source that has not answered yet has had none, and a gateway
+that accepts the connection and never replies does not count, however
+often the driver reconnects. A gateway whose field device stops
+answering (0x0A or 0x0B on every block, three requests in a row) counts
+one. A write-only source without `rewrite:` is online from the connect,
+so losing its connection counts. Stopping nautilus
 does not count. Parking a source with `enable:` counts, because
 `__Online` goes false.
 The counter only goes up, so a program that compares it with last scan's
@@ -228,13 +267,16 @@ Modbus has two entirely different kinds of failure, and the driver treats
 them differently on purpose.
 
 **An exception response** — the device answered and refused: illegal data
-address, illegal function, gateway target failed to respond. The connection
+address, illegal function, server busy. The connection
 is fine and *this span of addresses* is wrong. That block's tags go `Bad`,
 its siblings on the same device stay Good, and the driver keeps polling —
 it does not reconnect over a bad register map. Three consecutive exceptions
 park just that block for one `retrymin` period so a permanently illegal
 address stops burning a request slot every cycle; it retries after that.
-The refusal surfaces as `badBlocks` on the device row.
+The refusal surfaces as `badBlocks` on the device row. The gateway
+exceptions 0x0A and 0x0B are handled the same way per block, but they say
+the device did not answer at all: when every block gets one, the source
+goes offline and its tags `Stale` (see the `__Online` companion above).
 
 **A transport failure** — dial refused, timeout, a short read, a response
 carrying the wrong unit id. The whole source is down: the driver drops the

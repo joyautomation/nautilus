@@ -245,8 +245,7 @@ func TestOutagesStopIsNotAnOutage(t *testing.T) {
 
 // A write-only source (a keep-alive word re-asserted every rewrite:,
 // nothing polled) answers with write confirmations, not reads. A confirmed
-// write makes the connection one the device talked on, so losing it is an
-// outage.
+// write takes the source online, so losing it is an outage.
 func TestOutagesWriteOnlySourceCounts(t *testing.T) {
 	srv := newSlave(t)
 	srv.Unit(1).SetHolding(8, 0)
@@ -262,11 +261,12 @@ func TestOutagesWriteOnlySourceCounts(t *testing.T) {
 	}
 	startDriver(t, d)
 	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
-	waitFor(t, "connect", func() bool { return read()["DEV__Online"] == true })
+	// Nothing polled: __Online waits for the first confirmed write (#539).
+	waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
 	if err := d.WriteOutputs(nio.Values{"CMD": int64(5)}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "write confirmed", func() bool { return srv.Unit(1).Holding(8) == 5 })
+	waitFor(t, "write confirmed", func() bool { return srv.Unit(1).Holding(8) == 5 && read()["DEV__Online"] == true })
 
 	ln.cut()
 	waitFor(t, "source offline", func() bool { return read()["DEV__Online"] == false })
