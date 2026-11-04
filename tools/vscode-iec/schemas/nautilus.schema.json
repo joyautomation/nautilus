@@ -780,7 +780,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Globs over tag names or UDT member paths (TempSP, *_SP, Pump*.SpeedSP) that a trusted OPC UA client may write: a session on a SignAndEncrypt channel whose certificate is in pki/trusted. A pattern on a tag opens its members. Inputs are never writable. The same globs and rule as sparkplug.writable, but its own list. Omit and the server is read-only."
+          "description": "Globs over tag names or UDT member paths (TempSP, *_SP, Pump*.SpeedSP, Counts[2], Drives[*].Speed; [n] is an array index, [*] any index, no character classes) that a trusted OPC UA client may write: a session on a SignAndEncrypt channel whose certificate is in pki/trusted. A pattern on a tag opens its members. Inputs are never writable. The same globs and rule as sparkplug.writable, but its own list. Omit and the server is read-only."
         },
         "anonymous-writes": {
           "type": "boolean",

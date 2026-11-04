@@ -1,0 +1,113 @@
+# Acceptance tests for plclab.st, in virtual time, no PLC-Lab needed: each
+# test writes what PLC-Lab would write (the area tables, then input bytes)
+# and checks the named tags and the output bytes PLC-Lab would read.
+#
+# Most tests use PLC-Lab's simplest layout: one input byte and one output
+# byte, connector byte 0 to process image byte 0 (IB0, QB0). The input
+# byte's bits: 1 start, 2 stop (normally closed, so 2 means "not pressed"),
+# 4 low switch, 8 high switch. The output byte's: 1 fill, 2 drain, 4 run
+# lamp, 8 full lamp.
+tests:
+  - name: the connector carries the sizes PLC-Lab reads
+    scans: 1
+    expect:
+      PlcLabConnector.SIZE_AREA_I_ARRAY: 10
+      PlcLabConnector.SIZE_AREA_Q_ARRAY: 10
+      PlcLabConnector.SIZE_I_ARRAY: 1024
+      PlcLabConnector.SIZE_Q_ARRAY: 1024
+      PlcLabMapped: false
+
+  - name: with no area tables an input byte reaches nothing
+    given: { "PlcLabConnector.Inputs[0]": 15 }
+    scans: 2
+    expect: { StartPB: false, StopPB: false, LevelLow: false, LevelHigh: false, "PlcLabConnector.Outputs[0]": 0 }
+
+  - name: the area tables map input bits onto named tags and outputs back into bytes
+    given: &mapped
+      "PlcLabConnector.AreaInputs[0].CntBytes": 1
+      "PlcLabConnector.AreaOutputs[0].CntBytes": 1
+    steps:
+      - given: { "PlcLabConnector.Inputs[0]": 2 }
+        scans: 2
+        expect: { PlcLabMapped: true, StopPB: true, StartPB: false, RunLamp: false, "PlcLabConnector.Outputs[0]": 0 }
+      - given: { "PlcLabConnector.Inputs[0]": 3 }   # start pressed, the tank empty
+        scans: 2
+        expect: { StartPB: true, RunLamp: true, FillValve: true, "PlcLabConnector.Outputs[0]": 5 }
+      - given: { "PlcLabConnector.Inputs[0]": 2 }   # start released: sealed in
+        scans: 2
+        expect: { RunLamp: true, FillValve: true, "PlcLabConnector.Outputs[0]": 5 }
+      - given: { "PlcLabConnector.Inputs[0]": 0 }   # stop pressed
+        scans: 2
+        expect: { RunLamp: false, FillValve: false, "PlcLabConnector.Outputs[0]": 0 }
+
+  - name: the tank fills, holds full for three seconds, drains and fills again
+    given: *mapped
+    steps:
+      - given: { "PlcLabConnector.Inputs[0]": 3 }    # start, empty
+        scans: 2
+        expect: { FillValve: true, DrainValve: false }
+      - given: { "PlcLabConnector.Inputs[0]": 6 }    # above the low switch: still filling
+        scans: 2
+        expect: { FillValve: true, LevelLow: true }
+      - given: { "PlcLabConnector.Inputs[0]": 14 }   # the high switch: full
+        scans: 2
+        expect: { FillValve: false, DrainValve: false, FullLamp: true, "PlcLabConnector.Outputs[0]": 12 }
+      - advance: 2s
+        expect: { DrainValve: false }
+      - advance: 1500ms
+        expect: { DrainValve: true, "PlcLabConnector.Outputs[0]": 14 }
+      - given: { "PlcLabConnector.Inputs[0]": 6 }    # below the high switch: keeps draining
+        scans: 2
+        expect: { DrainValve: true, FillValve: false, FullLamp: false }
+      - given: { "PlcLabConnector.Inputs[0]": 2 }    # below the low switch: fill again
+        scans: 2
+        expect: { DrainValve: false, FillValve: true, "PlcLabConnector.Outputs[0]": 5 }
+
+  - name: Addr and IoOfs place bytes, and the first empty area ends the table
+    given:
+      # IB0 comes from connector byte 5, QB0 goes to connector byte 7.
+      "PlcLabConnector.AreaInputs[0].CntBytes": 1
+      "PlcLabConnector.AreaInputs[0].Addr": 5
+      "PlcLabConnector.AreaInputs[0].IoOfs": 0
+      "PlcLabConnector.AreaOutputs[0].CntBytes": 1
+      "PlcLabConnector.AreaOutputs[0].Addr": 7
+      "PlcLabConnector.AreaOutputs[0].IoOfs": 0
+      # After an empty area: never read, as PlcLabSync stops there too.
+      "PlcLabConnector.AreaInputs[2].CntBytes": 1
+      "PlcLabConnector.AreaInputs[2].Addr": 9
+      "PlcLabConnector.Inputs[9]": 1
+    steps:
+      - given: { "PlcLabConnector.Inputs[0]": 3, "PlcLabConnector.Inputs[5]": 2 }
+        scans: 2
+        expect: { StopPB: true, StartPB: false, "PlcLabConnector.Outputs[7]": 0, "PlcLabConnector.Outputs[0]": 0 }
+      - given: { "PlcLabConnector.Inputs[5]": 3 }
+        scans: 2
+        expect: { RunLamp: true, "PlcLabConnector.Outputs[7]": 5, "PlcLabConnector.Outputs[0]": 0 }
+
+  - name: a multi-byte area copies every byte it names
+    # Two bytes from connector byte 0 into IB3..IB4, so IB0 (the tank's) is
+    # untouched; the outputs as before.
+    given:
+      "PlcLabConnector.AreaInputs[0].CntBytes": 2
+      "PlcLabConnector.AreaInputs[0].IoOfs": 3
+      "PlcLabConnector.AreaInputs[1].CntBytes": 1
+      "PlcLabConnector.AreaInputs[1].Addr": 2
+      "PlcLabConnector.AreaOutputs[0].CntBytes": 1
+      "PlcLabConnector.Inputs[0]": 255
+      "PlcLabConnector.Inputs[1]": 255
+      "PlcLabConnector.Inputs[2]": 3
+    scans: 2
+    expect: { StartPB: true, StopPB: true, RunLamp: true, "PlcLabConnector.Outputs[0]": 5 }
+
+  - name: an area past the connector or the image is skipped, not a fault
+    given:
+      "PlcLabConnector.AreaInputs[0].CntBytes": 4
+      "PlcLabConnector.AreaInputs[0].Addr": 1022
+      "PlcLabConnector.AreaInputs[1].CntBytes": 1
+      "PlcLabConnector.AreaInputs[1].IoOfs": 40
+      "PlcLabConnector.AreaOutputs[0].CntBytes": 3
+      "PlcLabConnector.AreaOutputs[0].Addr": 1022
+      "PlcLabConnector.AreaOutputs[0].IoOfs": 0
+      "PlcLabConnector.Inputs[1022]": 3
+    scans: 3
+    expect: { StartPB: true, StopPB: true, RunLamp: true, "PlcLabConnector.Outputs[1022]": 5, "PlcLabConnector.Outputs[1023]": 0 }

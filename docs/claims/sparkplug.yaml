@@ -33,8 +33,14 @@ claims:
       apply. A declared output no scan has written yet takes a command
       typed by its declaration; an undeclared name is refused, not created.
       A command to an input is refused, as HTTP and OPC UA refuse it.
+      writable patterns use opcua.writable's syntax ([n] an array index,
+      [*] any, no character classes); a malformed one is refused when the
+      project loads, so naut check and naut run stop on it, and naut check
+      warns on a pattern that matches no tag or struct member.
     source: "#"
     tests:
+      - go ./internal/project TestSparkplugWritableValidatedAtLoad
+      - go ./cmd/naut TestCheckSparkplugWritable
       - go ./sparkplug TestWriteGateOpensMatchingTagsOnly
       - go ./sparkplug TestCommandScalarStillReplaces
       - go ./sparkplug TestCommandWritesGoThroughTheFrontDoor

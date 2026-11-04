@@ -825,3 +825,26 @@ func TestOPCUAAnonymousWritesConfig(t *testing.T) {
 		}
 	}
 }
+
+// sparkplug.writable is validated by Load, as opcua.writable is: a
+// malformed pattern (a character class, gone with the array-index syntax)
+// is refused before anything starts, named once as sparkplug.writable.
+func TestSparkplugWritableValidatedAtLoad(t *testing.T) {
+	section := func(writable string) string {
+		return manifest + "\nsparkplug:\n  broker: tcp://x:1883\n  group-id: Joy\n  writable: " + writable + "\n"
+	}
+	_, err := Load(fsys(section(`["Fill[VW]alve"]`)), "")
+	if err == nil || !strings.HasPrefix(err.Error(), `sparkplug.writable pattern "Fill[VW]alve"`) || strings.Contains(err.Error(), "sparkplug: sparkplug") {
+		t.Fatalf("a character class in sparkplug.writable: %v", err)
+	}
+	p, err := Load(fsys(section(`["Setpoint", "Drives[*].Speed"]`)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.SparkplugWritable(); len(got) != 2 || got[1] != "Drives[*].Speed" {
+		t.Fatalf("SparkplugWritable() = %v", got)
+	}
+	if p, err := Load(fsys(manifest), ""); err != nil || p.SparkplugWritable() != nil {
+		t.Fatalf("no sparkplug section: %v, %v", p.SparkplugWritable(), err)
+	}
+}

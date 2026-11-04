@@ -157,7 +157,23 @@ sparkplug:
 ```
 
 Patterns are globs over the tag name or a UDT member's dotted path; one
-that matches a tag opens all of its members. A template command carrying
+that matches a tag opens all of its members. `*` matches any run of
+characters and `?` any one. `[n]` in a pattern is an array index and `[*]`
+any index, as in [`opcua.writable`](/guides/opcua-server/#writes); there are
+no character classes.
+
+:::caution[Changed after v0.19: no character classes]
+Up to v0.19, `writable:` patterns were `path.Match` globs, where `[ ]` was
+a set of characters: `Pump[12]` opened `Pump1` and `Pump2`. Now `[digits]`
+is an array index, so `Pump[12]` names element 12 of `Pump`. A command
+never writes an element, so the pattern opens nothing. Any other `[…]`,
+such as `Fill[VW]alve`, is refused: `naut check` and `naut run` stop on it.
+Spell the tags out (`[Pump1, Pump2]`) or use `*` / `?` (`Pump?`).
+`naut check` warns about a pattern that matches no tag or member, and
+says why when it has a `[`.
+:::
+
+A template command carrying
 a writable member and a read-only one writes the first and refuses the
 second. A command must also arrive where the tag is published: an NCMD
 reaches only node-level tags, and a DCMD only its own device's (which,
