@@ -64,10 +64,9 @@ qb[0].%X1 := DrainValve;  (* Q0.1 *)
 qb[0].%X2 := RunLamp;     (* Q0.2 *)
 qb[0].%X3 := FullLamp;    (* Q0.3 *)
 
-(* the image into the bytes PLC-Lab reads. Only a byte that changed is
-   written: a scan that writes nothing to PlcLabConnector leaves it alone,
-   so it cannot put back an older copy of an input byte PLC-Lab wrote
-   while the scan ran. *)
+(* the image into the bytes PLC-Lab reads. The commit at the end of the
+   scan lands only the Outputs bytes assigned here, so an input byte or an
+   area entry PLC-Lab writes while the scan runs is never put back. *)
 FOR a := 0 TO 9 DO
     n := PlcLabConnector.AreaOutputs[a].CntBytes;
     IF n = 0 THEN
@@ -77,9 +76,7 @@ FOR a := 0 TO 9 DO
         src := PlcLabConnector.AreaOutputs[a].IoOfs + i;
         dst := PlcLabConnector.AreaOutputs[a].Addr + i;
         IF src <= 15 AND dst <= 1023 THEN
-            IF PlcLabConnector.Outputs[dst] <> qb[src] THEN
-                PlcLabConnector.Outputs[dst] := qb[src];
-            END_IF;
+            PlcLabConnector.Outputs[dst] := qb[src];
         END_IF;
     END_FOR;
 END_FOR;

@@ -95,17 +95,11 @@ four `SIZE_` words tell it how long the arrays are.
 
 Every scan, `plclab.st` copies the mapped input bytes into `ib`, puts their
 bits on named tags, runs the tank, packs the named outputs into `qb`, and
-copies the mapped bytes of `qb` into `Outputs`. It writes an output byte
-only when it changed. The connector is one tag, and today a scan that
-writes any part of it commits all of it, so a scan that wrote every scan
-could put back an older copy of what PLC-Lab wrote while the scan ran.
-Writing only on change narrows that to a scan where an output byte changes
-while a PLC-Lab write lands, which is rare, but not harmless: an input byte
-is put right by PLC-Lab's next write of it, while the area tables are
-written once, at connect, so a lost area entry stays lost until PLC-Lab
-connects again. PR #581 (an external write to one struct member survives
-the program writing another) fixes the loss itself; once it is in, the
-write-on-change should no longer be needed for this.
+copies the mapped bytes of `qb` into `Outputs`. The connector is
+one tag, but the commit at the end of a scan lands only the bytes the
+program assigned, so an input byte or an area entry PLC-Lab writes while
+the scan runs survives it (see
+[a member write during a scan](https://nautilus.joyautomation.com/guides/tag-model/#a-member-write-during-a-scan)).
 
 Over OPC UA, PLC-Lab is expected to read and write single bytes by string
 node id, `ns=1;s=PlcLabConnector.Inputs[17]`, and the area fields as
