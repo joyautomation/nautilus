@@ -478,8 +478,10 @@ everything below it: `Pump*.SpeedSP` opens `ns=1;s=Pump1.SpeedSP`, not
 any one; `[n]` is the array index `n`, literally, and `[*]` any one index:
 `Counts[2]` opens the element `Counts[2]`, `Counts[*]` every element of
 `Counts`, and `Drives[*].Speed` every drive's `Speed` and nothing else of
-it. There are no character classes: a `[` that is not `[n]` or `[*]` is
-refused. (`\` escapes the next character, so `'Drives\[0\]'`, in single
+it. `*` crosses `.` and `[`, so `Pump*.SpeedSP` also opens
+`Pump[3].SpeedSP` and `Pump1.Drive.SpeedSP`. There are no character
+classes: a `[` that is not `[n]` or `[*]` is refused (up to v0.19 patterns
+were `path.Match` globs, where `Pump[12]` opened `Pump1` and `Pump2`). (`\` escapes the next character, so `'Drives\[0\]'`, in single
 quotes, still names `Drives[0]`.) These are the same patterns, with the
 same rule, as
 [`sparkplug.writable`](/guides/sparkplug/), but the list is separate:

@@ -20,6 +20,7 @@ import (
 	"github.com/joyautomation/nautilus/logix/writer"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/sparkplug"
 )
 
 // runCheck compiles every .st file under the given paths (files or
@@ -488,6 +489,14 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: error: tag %q is spelled %q in the driver's bindings — the driver "+
 			"matches names exactly, so this tag would never %s; spell both the same\n",
 			loc.tag(m.tag), m.tag, m.binding, m.never)
+	}
+
+	// sparkplug.writable against the names a command can carry: a pattern
+	// that matches none is a typo, a renamed tag, or an old character
+	// class ("Pump[12]") that is an array index now.
+	for _, w := range sparkplug.WritableWarnings(rt, proj.SparkplugWritable()) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 
 	// opcua.writable against the tags it is meant to open: a pattern that

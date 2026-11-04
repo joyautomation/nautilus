@@ -77,7 +77,10 @@ func TestArrayIndexPatterns(t *testing.T) {
 		{"*_SP", "Temp_SP", true},
 		{"P?01", "P101", true},
 		{"Pump*.SpeedSP", "Pump1.SpeedSP", true},
-		{"a*", "a/b", false}, // * does not cross / (sparkplug metric names)
+		{"Pump*.SpeedSP", "Pump[3].SpeedSP", true},     // * crosses [ and .
+		{"Pump*.SpeedSP", "Pump1.Drive.SpeedSP", true}, // as the guide says
+		{"Pump[12]", "Pump1", false},                   // once a character class
+		{"a*", "a/b", false},                           // * does not cross / (sparkplug metric names)
 		{"Tank*", "Tänk1", false},
 		{"Tänk*", "Tänk1", true},
 	}

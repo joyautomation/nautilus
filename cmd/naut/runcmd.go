@@ -245,7 +245,13 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// Sparkplug B retransmission, when the manifest asks for it.
 	spNode, err := proj.Sparkplug(rt)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "naut run: sparkplug:", err)
+		// Its errors name sparkplug already ("sparkplug: …"); add it only
+		// to one that does not.
+		msg := err.Error()
+		if !strings.HasPrefix(msg, "sparkplug") {
+			msg = "sparkplug: " + msg
+		}
+		fmt.Fprintln(os.Stderr, "naut run:", msg)
 		return 1
 	}
 	sparkplugUp := false

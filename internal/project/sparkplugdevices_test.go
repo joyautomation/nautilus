@@ -151,12 +151,19 @@ func TestSparkplugDeviceKeyIsGone(t *testing.T) {
 	}
 }
 
-// writable: reaches the node: a malformed glob is refused when it is built.
+// writable: reaches the node. A malformed pattern is refused by Load
+// (TestSparkplugWritableValidatedAtLoad), so the list is spoiled after Load
+// here: the node, built from it, refuses it too, which only the list it
+// was given can make it do.
 func TestSparkplugWritableReachesTheNode(t *testing.T) {
-	p, err := Load(collectorFiles("", "  writable: [\"M1_[\"]\n"), "")
+	if _, err := Load(collectorFiles("", "  writable: [\"M1_[\"]\n"), ""); err == nil || !strings.Contains(err.Error(), `sparkplug.writable pattern "M1_["`) {
+		t.Fatalf("Load: err = %v, want the bad writable pattern named", err)
+	}
+	p, err := Load(collectorFiles("", "  writable: [\"M1_*\"]\n"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.sparkplug.Writable = []string{"M1_["}
 	rt, err := runtime.New(p.Runtime)
 	if err != nil {
 		t.Fatal(err)
