@@ -74,6 +74,16 @@ func (r *Runtime) gate() bool {
 	r.leadMu.Lock()
 	defer r.leadMu.Unlock()
 	termed, _ := r.coord.(Termed)
+	// Every edge below that takes over or resumes (from standby, the same
+	// term resumed, or a new term this replica never saw the gate close
+	// for) waits for live inputs first (#626): the loop keeps ticking, and
+	// nothing below runs until they are, or the wait is over. A steady
+	// leader never asks.
+	if !lead {
+		r.readySince = time.Time{}
+	} else if (!r.leading || termed != nil && termed.Term() != r.ledTerm) && !r.inputsReady() {
+		return false
+	}
 	switch {
 	case lead && !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm:
 		// The same leadership, resumed: this replica closed its gate (its
@@ -101,6 +111,43 @@ func (r *Runtime) gate() bool {
 		r.leading = false
 	}
 	return lead
+}
+
+// DefaultTakeoverInputsWait is how long a takeover waits for live inputs
+// when Options.TakeoverInputsWait is zero.
+const DefaultTakeoverInputsWait = 2 * time.Second
+
+// inputsReady answers, on a pending takeover, whether the driver's inputs
+// are live enough to run it on (io.InputsReadier): the takeover resets
+// every frame so warm-start logic runs against live field values, and a
+// driver that held no session while standing by has none yet (#626).
+// While it is false, gate reports "do not scan": no frame reset, no logic,
+// no outputs, but the scan loop goes on ticking, so the replica's scans
+// stay live for the lease. After takeoverWait it gives up and the takeover
+// runs on what the driver holds, with a warning. Called under leadMu.
+func (r *Runtime) inputsReady() bool {
+	if r.coord == nil || r.ready == nil {
+		return true
+	}
+	now := time.Now()
+	if r.ready.InputsReady() {
+		if !r.readySince.IsZero() {
+			slog.Info("runtime: inputs live; taking over", "waited", now.Sub(r.readySince).Round(time.Millisecond))
+		}
+		r.readySince = time.Time{}
+		return true
+	}
+	if r.readySince.IsZero() {
+		r.readySince = now
+		slog.Info("runtime: leading; holding the takeover until the drivers' inputs are live", "up_to", r.readyWait)
+		return false
+	}
+	if now.Sub(r.readySince) < r.readyWait {
+		return false
+	}
+	slog.Warn("runtime: inputs still not live; taking over on the inputs the drivers hold", "waited", now.Sub(r.readySince).Round(time.Millisecond))
+	r.readySince = time.Time{}
+	return true
 }
 
 // takeover runs once per acquisition of leadership (including process start,

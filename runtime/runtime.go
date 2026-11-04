@@ -81,6 +81,11 @@ type Options struct {
 	// watchdog that must be re-armed, or a bus whose outputs decay without
 	// a rewrite.
 	AlwaysWriteOutputs bool
+	// TakeoverInputsWait bounds how long a redundancy takeover waits for a
+	// driver that is an io.InputsReadier to report live inputs before it
+	// runs on what the driver holds (0: DefaultTakeoverInputsWait). Only
+	// with a Coordinator.
+	TakeoverInputsWait time.Duration
 	// LateThreshold is how far past its target a scan may START before it
 	// counts as late in Lateness (see ScanStats.Lateness). It applies to
 	// the main task and to every Task that does not set its own. Zero
@@ -232,6 +237,13 @@ type Runtime struct {
 	// takeover sequence when this replica becomes leader. See retain.go.
 	leadMu  sync.Mutex
 	leading bool
+	// ready is the driver as an io.InputsReadier (nil when it is not one),
+	// readyWait how long a takeover waits for it, and readySince when the
+	// pending takeover began waiting (zero when none is). See inputsReady.
+	// readySince is guarded by leadMu.
+	ready      nio.InputsReadier
+	readyWait  time.Duration
+	readySince time.Time
 	// ledTerm is the coordinator's term (Termed) at the last takeover, 0
 	// before the first or without a Termed coordinator. Under leadMu.
 	ledTerm uint64
@@ -508,6 +520,13 @@ func New(o Options) (*Runtime, error) {
 	}
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a
+	}
+	if rd, ok := o.Driver.(nio.InputsReadier); ok {
+		r.ready = rd
+	}
+	r.readyWait = o.TakeoverInputsWait
+	if r.readyWait <= 0 {
+		r.readyWait = DefaultTakeoverInputsWait
 	}
 	r.live.loops = append(r.live.loops, &loopLive{name: MainTaskName, period: o.Scan})
 	for _, tr := range tasks {

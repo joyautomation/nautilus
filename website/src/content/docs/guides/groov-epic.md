@@ -197,7 +197,9 @@ the processor may have restarted meanwhile.
 
 The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
-trip when nautilus alone stops.
+trip when nautilus alone stops. A redundant standby is not one of those
+other clients: with `watchdog:` set it does not talk to the unit at all
+(see [Redundancy](#redundancy)).
 
 Nor does it trip when nautilus's scan hangs (logic that never returns, a
 driver call that blocks) without `redundancy:`. The driver's own loop
@@ -207,7 +209,13 @@ some drivers on live scans in every project, but not this one, because
 it reads any gate as "one replica of a redundant set" (see
 [Redundancy](/guides/redundancy/#redundancy)). With `redundancy:`, a hung
 leader closes its gate and hands over (see [Redundancy](#redundancy)
-below).
+below). With `watchdog:` set as well, the hung leader's driver also drops
+its connection once its gate closes, and the standby has none, so nothing
+feeds the watchdog until the new leader's first poll: a watchdog shorter
+than that gap (from the gate closing, at least 2 s after the hung
+leader's last renew, to the lease lapsing 4 s after it and the standby's
+next tick, plus its connect: a few seconds) trips during the handover. Without `watchdog:`, the old leader's driver
+polls on as a standby and the standby's polls feed it throughout.
 
 ## Holding outputs until an operator acknowledges
 
@@ -290,9 +298,10 @@ leadership: commands leave the driver only on the leader. A standby skips
 scans, so it never hands the driver a command, and its driver neither
 rewrites outputs on reconnect nor after a watchdog trip.
 
-**A standby changes nothing on the unit.** It keeps a session with the
-processor and polls the packed areas, whatever the manifest asks for: the
-plain reads a polled scan makes (two on an ordinary chassis). It leaves
+**A standby changes nothing on the unit.** Unless the manifest sets the
+watchdog (below), it keeps a session with the processor and polls the
+packed areas, whatever the manifest asks for: the plain reads a polled
+scan makes (two on an ordinary chassis). It leaves
 the unit's configuration to the leader:
 it does not send the power-up clear, set the watchdog, write the custom
 data area's pointers, or configure the stream. It clears no latch: a
@@ -302,21 +311,71 @@ still be lost, when the old leader clears it in its last scan before it
 sees the gate close and its program never runs on it, or delivered twice,
 when both replicas lead for a moment while the lease changes hands. A
 standby's clean stop puts nothing back.
-Its reads still count as requests to the unit, so they feed the
-communication watchdog. For a hung leader that is fine: the lease needs
-live scans, so a leader whose scan hangs closes its gate and the standby
-takes over within about 5 to 8 s (see
-[Redundancy](/guides/redundancy/#redundancy)). It is not fine for a
-leader that keeps scanning but cannot reach the unit while the standby
-can: the standby's polls keep the watchdog fed
-([#626](https://github.com/joyautomation/nautilus/issues/626)).
+
+**With `watchdog:` set, a standby does not talk to the unit.** Any
+client's OptoMMP request resets the unit's communication watchdog, so a
+polling standby would keep it fed. Take a leader that still holds the
+lease but cannot reach the unit (a network fault between the two, both
+still reaching the cluster): its outputs never arrive, and a standby that
+polled would keep the watchdog from tripping, so the unit would hold the
+last command for as long as the fault lasted. So while the manifest sets
+`watchdog:` above `0s`, a standby holds no connection to the processor:
+no request and no stream. (A gate that closes in the instant between the
+driver's look before it connects and its next look can still get a TCP
+connect, closed again before any request.) If the leader loses the
+unit, nothing else feeds the watchdog, and it trips and drives the outputs
+to their watchdog values, as it would for a single controller
+([#626](https://github.com/joyautomation/nautilus/issues/626)). The cost
+is the standby's live view of that unit: its tags are Stale (or not
+connected, if it never led), `online` is false without counting an
+outage, and the status row reads "Standby: not polling" (Health mode
+`standby (watchdog)`). Other drivers on the same standby keep polling
+their devices. Without `watchdog:`, or with `0s`, a standby polls as
+above.
+
+**A watchdog the manifest does not name is still fed.** The driver only
+knows what the manifest says. A watchdog set in groov Manage, or left
+armed after you delete `watchdog:` from the manifest (nautilus never turns
+it off unless the manifest says `0s`), is fed by a polling standby, so a
+leader that loses the unit will not let it trip. The standby reads the
+unit's watchdog each time it starts standing by. When it is on and the
+manifest does not set it, the driver logs a warning and the status row
+turns degraded: "Standby polling feeds the unit's … ms watchdog, which the
+manifest does not set". Name the watchdog in the manifest.
+
+**A watchdog standby's takeover waits for the unit.** When the gate opens
+the driver connects at once (it looks at the gate every scan while
+standing by, and the runtime asks it on every scan of the takeover). It
+leads as below: power-up clear if owed, watchdog, custom data area and
+stream. Until its first scan of the unit has been delivered, it tells the
+runtime its inputs are not live, and the runtime holds the takeover: no
+frame reset, no logic, and no outputs from any driver, not just this one.
+Its scan loop keeps ticking meanwhile, so the replica stays live for the
+lease. The first scan that runs is a warm start on the unit's values, not
+on what the standby last saw. The wait is bounded (2 s by default), and
+one hiccup in the dial can use it up: a failed first connect retries
+after about 1 s, and a lost SYN costs as much. Past the wait the takeover
+runs on the inputs the drivers hold, with a warning: the logic and every
+other driver's outputs run on stale inputs, while this driver still
+sends no command until the runtime has read a scan of
+the unit, then asks for every output, so the first command it sends comes
+from fresh inputs. On a reachable unit the takeover costs the TCP connect
+and the session's set-up requests (a dozen or so, plus one per bound
+output for its watchdog value, at about 0.75 ms each) beyond a polling
+standby's. If a sibling driver's read fails on that
+first scan, the scan runs on last-known values, as any failed read does.
+The same wait applies whenever the gate opens on this driver without a
+session: a leader whose stalled scan closed its gate dropped its
+connection too, so when it resumes in the same term, or takes over in a
+new one, the runtime again waits for its first scan of the unit.
 
 **A takeover moves the stream.** The role follows the write gate, looked
 at every scan and every datagram. A standby whose gate opens becomes the
 leader on the same connection, with no outage: it sends the power-up clear
 if one is owed and configures the watchdog, the custom data area and the
 stream as the manifest asks, pointing the stream at itself. A leader whose
-gate closes stops using the stream and polls as a standby; it leaves the
+gate closes stops using the stream and polls as a standby (with
+`watchdog:` set, it closes its connection instead); it leaves the
 configuration where it is, since the new leader now owns it. Only a
 replica that still leads when it stops puts the stream and the pointers
 back: one that lost the lease and is stopped before it looks again
@@ -362,7 +421,8 @@ output is written (see [What a scan does](#what-a-scan-does)).
 **A flip between two looks is not seen.** A gate func cannot say it
 changed, so the driver looks at it: on every push and flush, before every
 write in a flush, every scan (every stream check when streaming) and at
-least once a second while connected, and on every connect attempt. A gate
+least once a second while connected, every scan while a standby with
+`watchdog:` set waits unconnected, and on every connect attempt. A gate
 that closes and reopens between two looks is not seen, and then nothing
 above happens. The window is about a second, or a scan when that is
 shorter, while connected, and up to the reconnect backoff (30 s) while
