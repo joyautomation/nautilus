@@ -39,6 +39,9 @@ type Options struct {
 	// so an imported project can deploy back where it came from.
 	CommPath string
 	Host     string
+	// Source names the export in the @allow pragma each ladder file gets
+	// ("Line.L5X"); default "the <controller> export".
+	Source string
 }
 
 // Note is one thing the import could not carry, or changed.

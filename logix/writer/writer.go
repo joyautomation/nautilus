@@ -55,6 +55,7 @@ import (
 
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/ld"
+	"github.com/joyautomation/nautilus/lang/lint"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -511,8 +512,22 @@ func (lw *lowered) notesByLine() map[int]string {
 }
 
 // rungComment joins a rung's note run and header comment the way the
-// comparator expects to find them in the L5X.
+// comparator expects to find them in the L5X. A lint pragma
+// (`(* @allow LD006: … *)`) is a setting for naut check, not rung
+// documentation, so it never reaches the controller.
 func rungComment(notes, header string) string {
+	if lint.IsPragma(header) {
+		header = ""
+	}
+	if strings.Contains(notes, "@allow") {
+		var keep []string
+		for _, l := range strings.Split(notes, "\n") {
+			if !lint.IsPragma(l) {
+				keep = append(keep, l)
+			}
+		}
+		notes = strings.Join(keep, "\n")
+	}
 	switch {
 	case notes != "" && header != "":
 		return notes + "\n" + header

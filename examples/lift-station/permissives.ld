@@ -50,13 +50,13 @@ LD
   RUNG p101req
     [ LeadIsP101 LeadReq | /LeadIsP101 LagReq | LSHH101 ] ( P101_Req )
 
-  RUNG p102req
+  RUNG p102req (* the same duty mapping for P-102: called when it is lead, or as lag *)
     [ /LeadIsP101 LeadReq | LeadIsP101 LagReq | LSHH101 ] ( P102_Req )
 
   RUNG p101perm (* a dry well (LSLL) blocks both pumps, not just the lead *)
     /P101_SealFail /P101_OverTemp /P101_VfdFault /LSLL101 ( P101_Permissive )
 
-  RUNG p102perm
+  RUNG p102perm (* the same trips as P-101, against P-102's own devices *)
     /P102_SealFail /P102_OverTemp /P102_VfdFault /LSLL101 ( P102_Permissive )
 
   // every BOOL input bound by name: no free input for rung power, so the
@@ -67,7 +67,7 @@ LD
                        Run => P101_RunCmd, InHand => P101_InHand, FailToRun => P101_FailToRun,
                        LockedOut => P101_LockedOut)
 
-  RUNG p102start
+  RUNG p102start (* P-102's starter: the same block, a second instance *)
     m102:MotorStarter(Mode := P102_Mode, AutoReq := P102_Req, Permissive := P102_Permissive,
                        RunFb := P102_Running, Reset := ResetFaults,
                        Run => P102_RunCmd, InHand => P102_InHand, FailToRun => P102_FailToRun,
@@ -76,10 +76,10 @@ LD
   RUNG p101avail (* Off (Mode 0) is never available, same as a failed, locked-out, or blocked pump *)
     /P101_FailToRun /P101_LockedOut P101_Permissive /EQ(P101_Mode, 0) ( P101_Avail )
 
-  RUNG p102avail
+  RUNG p102avail (* as p101avail, for P-102 *)
     /P102_FailToRun /P102_LockedOut P102_Permissive /EQ(P102_Mode, 0) ( P102_Avail )
 
-  RUNG bothunavail
+  RUNG bothunavail (* neither pump can take a call: the station alarm *)
     /P101_Avail /P102_Avail ( BothUnavail )
 
   RUNG leadfailed (* whichever pump is currently lead, reflected for the sequence *)

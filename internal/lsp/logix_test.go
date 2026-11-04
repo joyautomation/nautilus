@@ -33,7 +33,7 @@ VAR
     pulse : TP;
 END_VAR
 LD
-  RUNG one
+  RUNG one (* a pulse on Go *)
     Go pulse:TP(PT := T#500MS) ( Out )
 END_LD
 END_PROGRAM

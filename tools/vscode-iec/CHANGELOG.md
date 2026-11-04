@@ -5,6 +5,23 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **Export and print diagrams.** **nautilus: Export Diagram…** writes an
+  LD, FBD or SFC diagram (or a Rockwell `.L5X` ladder) as a paginated PDF
+  or as one SVG image; **nautilus: Print Diagram…** opens the same PDF in
+  the system's PDF viewer to print (in a remote window, such as SSH, WSL
+  or Codespaces, it saves the PDF instead). Both are in a diagram's "…" menu, on
+  the editor's and the Explorer's right-click menu, and in the Command
+  Palette. The printout is black on white with no selection, palette or
+  diagnostics; pages break between rungs, networks and SFC ranks, never
+  through one, and carry the POU's name, the file name and "Page n of N".
+  An SFC prints its ACTION bodies after the chart. New settings
+  `nautilus.export.paper` (Letter or A4, by default from the system
+  locale) and `nautilus.export.orientation`. With a controller connected,
+  the export can include its live values. Needs no other software: the
+  PDF is written by the extension itself.
+
 ### Changed
 
 - **"Install or Update the naut CLI" can put `naut` on your PATH.** Until

@@ -21,6 +21,7 @@ VAR_EXTERNAL
     Batch       : BatchStatus;
     TT201_Temp  : REAL;
     LT201_Level : REAL;
+    DrainedLevelSP : REAL;
     Line_Accept : BOOL;
     CipDue      : BOOL;
 
@@ -176,15 +177,15 @@ SFC
   TRANSITION t_abort_held FROM Held TO Aborted := Abort;
   END_TRANSITION
 
-  TRANSITION t_cip FROM Transfer TO Cip := Line_Accept AND (LT201_Level <= 2.0) AND CipDue;
+  TRANSITION t_cip FROM Transfer TO Cip := Line_Accept AND (LT201_Level <= DrainedLevelSP) AND CipDue;
   END_TRANSITION
-  TRANSITION t_transferred FROM Transfer TO Idle := Line_Accept AND (LT201_Level <= 2.0) AND NOT CipDue;
+  TRANSITION t_transferred FROM Transfer TO Idle := Line_Accept AND (LT201_Level <= DrainedLevelSP) AND NOT CipDue;
   END_TRANSITION
 
   TRANSITION t_cipped FROM Cip TO Idle := cipTmr.Q;
   END_TRANSITION
 
-  TRANSITION t_resume_idle FROM Aborted TO Idle := (NOT Abort) AND (LT201_Level <= 2.0);
+  TRANSITION t_resume_idle FROM Aborted TO Idle := (NOT Abort) AND (LT201_Level <= DrainedLevelSP);
   END_TRANSITION
 
   (* --- action blocks --- *)
