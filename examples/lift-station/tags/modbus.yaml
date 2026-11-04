@@ -6,14 +6,14 @@
 #
 # Compose it into a project with:  tag-files: [tags/modbus.yaml]
 - { name: P101_Amps, role: input, type: REAL, unit: "A", desc: "P-101 VFD — motor current" }
-- { name: P101_RunCmd, role: output, type: BOOL, desc: "P-101 VFD — run command — control word bit 0" }
+- { name: P101_RunCmd, role: output, type: BOOL, init: false, desc: "P-101 VFD — run command — control word bit 0" }
 - { name: P101_Running, role: input, type: BOOL, desc: "P-101 VFD — running bit of the status word" }
 - { name: P101_SpeedCmd, role: output, type: REAL, init: 0.0, unit: "Hz", desc: "P-101 VFD — speed command" }
 - { name: P101_SpeedHz, role: input, type: REAL, unit: "Hz", desc: "P-101 VFD — actual speed" }
 - { name: P101_Status, role: input, type: UINT, desc: "P-101 VFD — status word" }
 - { name: P101_VfdFault, role: input, type: BOOL, desc: "P-101 VFD — fault bit of the status word" }
 - { name: P102_Amps, role: input, type: REAL, unit: "A", desc: "P-102 VFD — motor current" }
-- { name: P102_RunCmd, role: output, type: BOOL, desc: "P-102 VFD — run command — control word bit 0" }
+- { name: P102_RunCmd, role: output, type: BOOL, init: false, desc: "P-102 VFD — run command — control word bit 0" }
 - { name: P102_Running, role: input, type: BOOL, desc: "P-102 VFD — running bit of the status word" }
 - { name: P102_SpeedCmd, role: output, type: REAL, init: 0.0, unit: "Hz", desc: "P-102 VFD — speed command" }
 - { name: P102_SpeedHz, role: input, type: REAL, unit: "Hz", desc: "P-102 VFD — actual speed" }

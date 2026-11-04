@@ -110,9 +110,10 @@ never computes.
 - **A replica that takes over from standby sends every output once**
   through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers,
   with the program's value, changed or not: the runtime hands the
-  drivers the whole output set on the first scan as leader, and those drivers send each one even if it
-  equals what this replica sent the last time it led, since the leader in
-  between may have written something else. A replica that started as a
+  drivers the whole output set on the first scan as leader, and those
+  drivers send each one even if it equals what this replica sent the
+  last time it led, since the leader in between may have written
+  something else. A replica that started as a
   standby has no start-up baseline, so its first takeover commands every
   output, as the new primary of a hot-standby PLC pair does; a replica that
   leads from its first scan keeps the baseline. `naut run` starts the
