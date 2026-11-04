@@ -3,6 +3,24 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Export and print diagrams.** **nautilus: Export Diagram…** writes an
+  LD, FBD or SFC diagram (or a Rockwell `.L5X` ladder) as a paginated PDF
+  or as one SVG image; **nautilus: Print Diagram…** opens the same PDF in
+  the system's PDF viewer to print. Both are in a diagram's "…" menu, on
+  the editor's and the Explorer's right-click menu, and in the Command
+  Palette. The printout is black on white with no selection, palette or
+  diagnostics; pages break between rungs, networks and SFC ranks, never
+  through one, and carry the POU's name, the file name and "Page n of N".
+  An SFC prints its ACTION bodies after the chart. New settings
+  `nautilus.export.paper` (Letter or A4, by default from the system
+  locale) and `nautilus.export.orientation`. With a controller connected,
+  the export can include its live values. Needs no other software: the
+  PDF is written by the extension itself.
+
 ## [0.19.2] - 2026-11-03
 
 Requires a `naut` built from main (after 0.19.0) for the items that

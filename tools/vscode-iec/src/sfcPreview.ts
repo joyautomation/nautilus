@@ -34,7 +34,7 @@ import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./di
 
 /** Run `naut sfc graph -` over source text. `at` (the file the buffer
  * belongs to) lets the CLI attach the project's manifest tags. */
-function sfcGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
+export function sfcGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
   const cli = cliCommand();
   return new Promise((resolve) => {
     const args = at ? ["sfc", "graph", "-", at] : ["sfc", "graph", "-"];

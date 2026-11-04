@@ -263,6 +263,11 @@ jobs:
           path: tools/vscode-iec/.vscode-test/vscode-*
           key: vscode-download-${{ runner.os }}-${{ hashFiles('tools/vscode-iec/package-lock.json') }}
       - run: npm ci
+      # The diagram exporter (webview-ui/src/export → media/dist), which the
+      # suite drives through "Export Diagram…" on every OS. Pure TypeScript:
+      # it needs webview-ui's vite, not the hmi packages built.
+      - name: Build the diagram exporter
+        run: npm --prefix webview-ui ci && npm --prefix webview-ui run build:export
       # The resolver and installer against this OS's real filesystem (the ubuntu `npm test`
       # above only exercises Linux paths).
       - run: npm run compile && node --test out/cliResolve.test.js out/cliInstall.test.js

@@ -309,6 +309,16 @@
         "icon": "$(diff)"
       },
       {
+        "command": "nautilus.diagram.export",
+        "title": "nautilus: Export Diagram…",
+        "icon": "$(export)"
+      },
+      {
+        "command": "nautilus.diagram.print",
+        "title": "nautilus: Print Diagram…",
+        "icon": "$(file-pdf)"
+      },
+      {
         "command": "nautilus.editComponentPorts",
         "title": "nautilus: Edit Component Ports…"
       },
@@ -439,6 +449,16 @@
           "command": "nautilus.sfc.fireTransition",
           "when": "(webviewId == 'nautilus.sfcDiagram' || webviewId == 'nautilus.sfcPreview') && nautilusSfcTransition && nautilus.liveConnected",
           "group": "nautilus@2"
+        },
+        {
+          "command": "nautilus.diagram.export",
+          "when": "webviewId =~ /^nautilus\\.(ld|l5x|fbd|sfc)(Diagram|Preview)$/",
+          "group": "z_export@1"
+        },
+        {
+          "command": "nautilus.diagram.print",
+          "when": "webviewId =~ /^nautilus\\.(ld|l5x|fbd|sfc)(Diagram|Preview)$/",
+          "group": "z_export@2"
         }
       ],
       "editor/context": [
@@ -461,6 +481,16 @@
           "command": "nautilus.unforceAll",
           "when": "nautilus.forcesActive && (resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc)",
           "group": "nautilus@4"
+        },
+        {
+          "command": "nautilus.diagram.export",
+          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
+          "group": "nautilus_export@1"
+        },
+        {
+          "command": "nautilus.diagram.print",
+          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
+          "group": "nautilus_export@2"
         }
       ],
       "editor/title": [
@@ -558,6 +588,16 @@
           "command": "nautilus.logix.onlineEdit",
           "when": "nautilus.logixTarget && (resourceLangId =~ /^iec-(ld|st)$/ || activeCustomEditorId == nautilus.ldDiagram)",
           "group": "2_logix@2"
+        },
+        {
+          "command": "nautilus.diagram.export",
+          "when": "activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/ || !activeCustomEditorId && resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
+          "group": "2_export@1"
+        },
+        {
+          "command": "nautilus.diagram.print",
+          "when": "activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/ || !activeCustomEditorId && resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
+          "group": "2_export@2"
         }
       ],
       "commandPalette": [
@@ -632,6 +672,26 @@
         {
           "command": "nautilus.sfc.diffRevisions",
           "when": "resourceLangId == iec-sfc"
+        },
+        {
+          "command": "nautilus.diagram.export",
+          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/"
+        },
+        {
+          "command": "nautilus.diagram.print",
+          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "nautilus.diagram.export",
+          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(ld|fbd|sfc|l5x|L5X)$/",
+          "group": "7_modification@9"
+        },
+        {
+          "command": "nautilus.diagram.print",
+          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(ld|fbd|sfc|l5x|L5X)$/",
+          "group": "7_modification@10"
         }
       ]
     },
@@ -656,7 +716,7 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token \u2014 reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token — reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
         },
         "nautilus.diagram.showDescriptions": {
           "type": "boolean",
@@ -682,6 +742,36 @@
           "type": "boolean",
           "default": false,
           "description": "Download Project to Logix Controller normally keeps the controller's tag values: every tag whose name, scope, type and dimensions are unchanged starts with the value it had on the controller (a timer's or counter's preset comes from the project). Turn this on to start every tag at the project's value instead, as `naut logix deploy --download --reset-values` does."
+        },
+        "nautilus.export.paper": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "letter",
+            "a4"
+          ],
+          "enumDescriptions": [
+            "Letter where it is the local paper (US, Canada, Mexico and a few others, from the system locale), A4 everywhere else",
+            "US Letter, 8.5 × 11 in",
+            "ISO A4, 210 × 297 mm"
+          ],
+          "default": "auto",
+          "description": "Paper size for \"nautilus: Export Diagram…\" (PDF) and \"nautilus: Print Diagram…\"."
+        },
+        "nautilus.export.orientation": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "portrait",
+            "landscape"
+          ],
+          "enumDescriptions": [
+            "Portrait, unless the diagram is clearly wider than a portrait page",
+            "Always portrait",
+            "Always landscape"
+          ],
+          "default": "auto",
+          "description": "Page orientation for exported and printed diagrams (PDF)."
         }
       }
     },
@@ -879,7 +969,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js",
     "gen:kind-schema": "npm run compile && node out/kindSchema.js --write"

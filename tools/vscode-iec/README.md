@@ -79,6 +79,30 @@ controller onto both the text and the diagram.
 
 ![A Sequential Function Chart with the active step highlighted](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/sfc-chart.png)
 
+## Export and print
+
+**nautilus: Export Diagram…** (in the "…" menu of a diagram editor, a
+preview or a text editor, on the right-click menu of the editor or of the
+file in the Explorer) writes an LD, FBD or SFC diagram, or a Rockwell
+`.L5X` ladder, as:
+
+- **PDF**, paginated for printing: black on white, page breaks between
+  rungs, networks and SFC ranks (never through one), the POU's name on
+  every page and "Page n of N" with the file name in the footer. An SFC
+  prints its ACTION bodies after the chart. Paper size and orientation come
+  from `nautilus.export.paper` and `nautilus.export.orientation`; by default
+  Letter or A4 follows the system locale, and a diagram too wide for a
+  portrait page turns landscape.
+- **SVG**, the whole diagram as one vector image at screen size, for
+  documents and slides.
+
+**nautilus: Print Diagram…** makes the same PDF and opens it in the system's
+PDF viewer, to print from there. The diagram is drawn by the editors' own
+layout from the file, not captured from the screen: no selection, palette
+or diagnostics come along. With a controller connected, both commands ask
+whether to include its live values (power flow, values under the operands,
+active steps); the default is the program alone.
+
 ## Visual diff
 
 ![A ladder diff: added, removed and changed elements marked on the rungs](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/diagram-diff.png)
@@ -347,6 +371,8 @@ server.
 | `nautilus.token` | `""` | Bearer token for writes to a controller started with `NAUTILUS_TOKEN`. Set it in workspace settings. |
 | `nautilus.confirmControllerWrites` | `true` | Confirm before Download or Rollback changes what a controller runs. Leave it on for anything that might be live. |
 | `nautilus.logix.resetValuesOnDownload` | `false` | Download Project to Logix Controller keeps the controller's tag values where the tag is unchanged; turn this on to start every tag at the project's value (`naut logix deploy --download --reset-values`). |
+| `nautilus.export.paper` | `auto` | Paper for exported and printed diagrams: `letter`, `a4`, or `auto` (Letter where the system locale's region uses it, A4 elsewhere). |
+| `nautilus.export.orientation` | `auto` | `portrait`, `landscape`, or `auto` (portrait unless the diagram is clearly wider than a portrait page). |
 | `nautilus.mimic.snapToGrid` | `true` | Snap dragged equipment, labels and pipe points to the grid in the mimic editor. |
 | `nautilus.scene.snapToGrid` | `true` | Snap a dragged node to the grid cell and its rotation to 15° in the scene editor; Shift while dragging is a free move. |
 
@@ -364,6 +390,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Open Component Preview / Preview HMI Page | A `.svelte` component, or a whole route, beside the text |
 | Copy Kit Component to Project… | Start your own symbol from one the kit ships |
 | Diff … Diagram (vs git HEAD / between git revisions… / vs Controller) | Visual diff |
+| Export Diagram… / Print Diagram… | An LD, FBD or SFC diagram as a paginated PDF or one SVG image; print through the system's PDF viewer |
 | Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
 | Set Live Value… | Write a tag on the controller |
 | Force… / Remove Force / Remove All Forces / Show Forces | Hold a tag at a value until removed; list and clear forces |

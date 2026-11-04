@@ -24,6 +24,7 @@ import { LogixDeploy } from "./logixDeploy";
 import { broadcastSyncState, FbdEditorProvider, FbdPreview } from "./fbdPreview";
 import { LdEditorProvider, LdPreview } from "./ldPreview";
 import { SfcEditorProvider, SfcPreview } from "./sfcPreview";
+import { registerDiagramExport } from "./diagramExport";
 import { registerDiagramCommands } from "./diagramCommands";
 import { MimicEditorProvider } from "./mimicEditor";
 import { SceneEditorProvider } from "./sceneEditor";
@@ -235,6 +236,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.fbd.diffRevisions", () => fbd.diffRevisions()),
     vscode.commands.registerCommand("nautilus.ld.diffRevisions", () => ladder.diffRevisions()),
     vscode.commands.registerCommand("nautilus.sfc.diffRevisions", () => sfc.diffRevisions()),
+    // Export / print an LD, FBD or SFC diagram (SVG or paginated PDF).
+    ...registerDiagramExport(context, live),
     // The connection is just the nautilus.runtimeUrl setting; this command
     // is the discoverable way to change it. The config watcher below does
     // the actual reconnect, so writing the setting IS connecting. Recently
