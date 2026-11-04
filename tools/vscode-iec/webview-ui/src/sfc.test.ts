@@ -598,3 +598,31 @@ test('layoutSfc: an alternative branch and a join sharing its source get separat
 	assert.ok(Math.abs(join.barY - ov.barY) >= 20, `bars at ${join.barY} and ${ov.barY} overlap`);
 	assert.ok(join.barY < ov.barY, 'the higher priority (declared first) on top');
 });
+
+// #563: a loop-back's name (drawn above its glyph) must clear the step box
+// above it, and a second loop back out of the same step stacks below the first.
+test('layoutSfc: a jump-back glyph clears its step box and stacked jumps do not share a row', () => {
+	const model = {
+		name: 'Loop',
+		vars: [],
+		steps: [
+			{ id: 'st:Idle', name: 'Idle', initial: true, line: 1, endLine: 2 },
+			{ id: 'st:Run', name: 'Run', initial: false, line: 3, endLine: 4 }
+		],
+		trans: [
+			{ id: 'tr:1', name: 't_go', from: ['Idle'], to: ['Run'], cond: 'Go', kind: 'normal', line: 5, endLine: 6 },
+			{ id: 'tr:2', name: 't_back', from: ['Run'], to: ['Idle'], cond: 'Done', kind: 'normal', line: 7, endLine: 8 },
+			{ id: 'tr:3', name: 't_abort', from: ['Run'], to: ['Idle'], cond: 'Abort', kind: 'normal', line: 9, endLine: 10 }
+		],
+		actions: []
+	} as unknown as SfcModel;
+	const lay = layoutSfc(model);
+	const run = lay.steps.find((p) => p.id === 'st:Run')!;
+	const jumps = lay.trans.filter((r) => r.jump).map((r) => r.jump!);
+	assert.equal(jumps.length, 2);
+	// The name is drawn at y-12 (10px text, middle baseline): its top edge is ~y-17.
+	for (const j of jumps) assert.ok(j.y - 17 >= run.y + run.h, `jump at ${j.y} puts its name over the step box (bottom ${run.y + run.h})`);
+	// 12px of name row + 18px of glyph: rows closer than 30px would collide.
+	assert.ok(Math.abs(jumps[1].y - jumps[0].y) >= 30, 'stacked jumps must not share a row');
+	assert.ok(lay.height >= Math.max(...jumps.map((j) => j.y)) + 9, 'the canvas must reach the lowest jump');
+});

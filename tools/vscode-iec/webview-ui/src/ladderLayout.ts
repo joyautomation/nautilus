@@ -159,6 +159,50 @@ export function fitArgs(args: string | undefined, max = FB_ARGS_MAX): string {
 	return parts[0].slice(0, max - 1).trimEnd() + '…';
 }
 
+/** Longest assignment line drawn in a `{ … }` box; longer ones end in `…`
+ * (the full text stays in the box's tooltip and the edit input). */
+export const ASSIGN_LINE_MAX = 44;
+/** Height of each extra statement line in a multi-statement assign box. */
+export const ASSIGN_LINE_H = 12;
+
+/** The lines an assign box draws: one per top-level `;`-separated statement
+ * (a string literal's `;` stays put), each ending `;` but the last, cut to
+ * ASSIGN_LINE_MAX. A box with several statements stacks them rather than
+ * running one very long line off both of its sides. */
+export function assignLines(text: string | undefined): string[] {
+	const stmts: string[] = [];
+	let quote = '';
+	let start = 0;
+	const t = text ?? '';
+	for (let i = 0; i < t.length; i++) {
+		const c = t[i];
+		if (quote) {
+			if (c === quote) quote = '';
+		} else if (c === "'" || c === '"') quote = c;
+		else if (c === ';') {
+			stmts.push(t.slice(start, i).trim());
+			start = i + 1;
+		}
+	}
+	stmts.push(t.slice(start).trim());
+	const parts = stmts.filter((x) => x !== '');
+	if (parts.length === 0) return [''];
+	return parts.map((x, i) => {
+		const line = i < parts.length - 1 ? x + ';' : x;
+		return line.length > ASSIGN_LINE_MAX ? line.slice(0, ASSIGN_LINE_MAX - 1) + '…' : line;
+	});
+}
+/** An assign box's size: wide enough for its longest line, tall enough for
+ * all of them. */
+export function assignSize(a: Ann): { w: number; h: number } {
+	const lines = assignLines(a.el.text);
+	const longest = Math.max(...lines.map((l) => l.length));
+	return {
+		w: Math.max(60, Math.ceil(textW('x'.repeat(longest), 10)) + 16),
+		h: L.FN_H + (lines.length - 1) * ASSIGN_LINE_H
+	};
+}
+
 export function fnWidth(a: Ann): number {
 	return Math.max(L.FN_MIN_W, Math.ceil(textW(`${a.el.fn}(${a.el.args ?? ''})`, 10)) + 2 * L.FN_PAD);
 }
@@ -244,10 +288,14 @@ export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] 
 			}
 			case 'assign': {
 				// A box like a function contact, sized to its text.
-				const w = Math.max(60, Math.min(260, 16 + 6.2 * (a.el.text ?? '').length));
-				const y = cy - L.FN_H / 2;
-				nodes.push({ kind: 'assign', x: cursor, y, w, h: L.FN_H, ann: a, path: elPath });
-				descent = reserveWasLabel(a, cy, y, L.FN_H, descent);
+				const { w, h } = assignSize(a);
+				const y = cy - h / 2;
+				nodes.push({ kind: 'assign', x: cursor, y, w, h, ann: a, path: elPath });
+				// A tall (multi-statement) box reaches further above and
+				// below the wire; keep its labels clear of the rung's edges.
+				ascent = Math.max(ascent, h / 2 + L.LABEL_TOP);
+				descent = Math.max(descent, h / 2 + L.LABEL_BOT);
+				descent = reserveWasLabel(a, cy, y, h, descent);
 				cursor += w;
 				break;
 			}

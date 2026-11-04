@@ -3,6 +3,21 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A multi-statement `{ … }` box in the ladder no longer overflows.** An
+  assignment box with several statements drew them as one long line that
+  ran past its box, over the neighbouring contact's label and off the
+  rung's left edge. It now stacks one statement per line inside a box sized
+  to hold them (a very long statement ends in `…`; the tooltip has the
+  full text).
+- **A jump-back transition's name no longer overlaps its step.** The
+  loop-back glyph and its name hang clear of the step box, a second
+  loop-back out of the same step stacks below the first instead of on top
+  of it, and the chart widens to fit the glyph's label.
+
 ## [0.19.2] - 2026-11-03
 
 Requires a `naut` built from main (after 0.19.0) for the items that

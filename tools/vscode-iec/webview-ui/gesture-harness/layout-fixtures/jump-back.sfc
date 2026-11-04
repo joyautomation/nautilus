@@ -1,0 +1,18 @@
+PROGRAM Repro
+VAR_EXTERNAL
+    Go : BOOL;
+    Done : BOOL;
+    Again : BOOL;
+END_VAR
+SFC
+  INITIAL_STEP Idle:
+    N SetIdle;
+  END_STEP
+  STEP Run:
+  END_STEP
+  TRANSITION t_go FROM Idle TO Run := Go;
+  END_TRANSITION
+  TRANSITION t_loop_back_to_idle FROM Run TO Idle := Done AND NOT Again;
+  END_TRANSITION
+END_SFC
+END_PROGRAM

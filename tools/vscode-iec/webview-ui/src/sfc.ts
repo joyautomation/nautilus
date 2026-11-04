@@ -283,6 +283,13 @@ export function assocTableHeight(s: SfcStep): number {
 // Gap between an action table and an orphan chip beside it.
 const CHIP_GAP = 16;
 
+// How far below the step box (or its action table) a jump glyph's centre
+// sits: room for the transition's name, drawn above the glyph, to clear the
+// box instead of overlapping it.
+const JUMP_DROP = 30;
+// Row pitch between stacked jump glyphs (name row + glyph row).
+const JUMP_PITCH = 34;
+
 // Vertical spacing between the staggered bars of an alternative divergence.
 const ALT_BAR_GAP = 26;
 
@@ -444,6 +451,9 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 	const forwardGroup = (t: SfcTransition) => altGroup(model, t.id).filter((u) => forwardIds.has(u.id));
 
 	const trans: TransRoute[] = [];
+	// Jump glyphs already hung under each source step: a second loop back
+	// out of the same step stacks below the first instead of on top of it.
+	const jumpsUnder = new Map<string, number>();
 	const prioOf = priorities(model);
 	// Transitions whose FROM and/or TO don't fully resolve — collected here,
 	// positioned into OrphanChips once every step's final position is known.
@@ -457,6 +467,8 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 		}
 		if (!isForward(t, rankOf)) {
 			const anchor = sources[0];
+			const slot = jumpsUnder.get(anchor.id) ?? 0;
+			jumpsUnder.set(anchor.id, slot + 1);
 			trans.push({
 				t,
 				barY: 0,
@@ -474,7 +486,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 					// "+ action" row the editor draws under it): a step with
 					// three actions reaches further down than the box, and
 					// the glyph's label runs right, into that column.
-					y: anchor.y + Math.max(anchor.h, assocTableHeight(anchor.step) + G.ASSOC_ROW_H) + 14,
+					y: anchor.y + Math.max(anchor.h, assocTableHeight(anchor.step) + G.ASSOC_ROW_H) + JUMP_DROP + slot * JUMP_PITCH,
 					label: '↩ ' + t.to.join(', '),
 				},
 			});
@@ -519,7 +531,11 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 	}
 	for (const r of trans) {
 		width = Math.max(width, r.condX + 220);
-		if (r.jump) height = Math.max(height, r.jump.y + G.MARGIN);
+		if (r.jump) {
+			height = Math.max(height, r.jump.y + G.MARGIN);
+			// The label runs right of the glyph (mono 11px ≈ 6.7 px/char).
+			width = Math.max(width, r.jump.x + 16 + Math.ceil((r.jump.label.length + 2 + r.t.cond.length) * 6.7) + G.MARGIN);
+		}
 	}
 	for (const n of notes) {
 		width = Math.max(width, n.x + n.w + G.MARGIN);
