@@ -536,8 +536,16 @@ func (d *Driver) gapExpired(nk nodeKey, gen uint64) {
 
 // askRebirthLocked queues one NCMD Node Control/Rebirth for this node,
 // debounced to one per birth cycle so a dark site cannot storm the broker.
+// With rebirth requests off (Config.NoRebirthRequests) it asks for nothing
+// and counts nothing: the node waits for a birth someone else asks for.
 // Caller holds d.mu; the hook runs later, in flushRebirths.
 func (d *Driver) askRebirthLocked(ns *nodeState) {
+	if d.cfg.NoRebirthRequests {
+		d.warnOnceLocked("norebirth:"+ns.group+"/"+ns.edge,
+			"sparkplug host: waiting for a birth; rebirth requests are off (rebirth-requests: false)",
+			"group", ns.group, "node", ns.edge)
+		return
+	}
 	if ns.rebirthAsked {
 		return
 	}

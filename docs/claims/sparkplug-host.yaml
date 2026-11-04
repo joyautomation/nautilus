@@ -448,3 +448,30 @@ claims:
       host demoted, through a TCP proxy; the edge stays connected and births
       again after the reconnect. The half-open session is a broker hook that
       drops the host part way through its SUBSCRIBEs.
+  - id: SPH-046
+    claim: >-
+      A passive host (`primary: false`) publishes no STATE and sends no
+      writes, but asks for rebirths like a primary host: on connect, on
+      reconnect, and on data before a birth.
+    source: "#passive-hosts-and-rebirth-requests"
+    tests:
+      - go ./sparkplug/host TestMqttPassiveConsumerPublishesNoState
+      - go ./sparkplug/host TestMqttPassiveConsumerCanRequestRebirth
+      - go ./sparkplug/host TestRebirthRequestsOnStart
+      - go ./sparkplug/host TestRebirthRequestsOnReconnect
+      - go ./sparkplug/host TestRebirthRequestsOnDataBeforeBirth
+  - id: SPH-047
+    claim: >-
+      `rebirth-requests: false` sends no NCMD Rebirth, primary or passive:
+      not on connect, on reconnect, on data before a birth, after a
+      sequence gap, on an unknown alias or a stale node, and an operator's
+      request is refused. The host still adopts births it did not ask for
+      and counts outages as usual; with `primary: false` it publishes
+      nothing.
+    source: "#passive-hosts-and-rebirth-requests"
+    tests:
+      - go ./sparkplug/host TestRebirthRequestsOnStart
+      - go ./sparkplug/host TestRebirthRequestsOnReconnect
+      - go ./sparkplug/host TestRebirthRequestsOnDataBeforeBirth
+      - go ./sparkplug/host TestRebirthRequestsOffAsksForNothing
+      - go ./internal/project TestSparkplugHostRebirthRequestsOffPublishesNothing

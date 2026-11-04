@@ -140,10 +140,20 @@ func (d *Driver) isStopping() bool {
 	return d.stopping
 }
 
-// mayPublish gates the STATE certificate and every outbound NCMD/DCMD. A
-// passive consumer (Primary false) never writes to the group at all, and a
-// standby replica under `redundancy:` never publishes STATE online — its LWT
-// would otherwise flap store-and-forward across every site (design §8.1).
+// mayPublish gates the STATE certificate and every outbound write (NCMD/DCMD
+// carrying tag values). A passive consumer (Primary false) publishes no STATE
+// and writes no tags, and a standby replica under `redundancy:` never
+// publishes STATE online — its LWT would otherwise flap store-and-forward
+// across every site (design §8.1).
+//
+// One exception: NCMD Node Control/Rebirth is NOT gated here. Sparkplug 3.0
+// lets ANY host application request a rebirth (§5 "Sparkplug Host
+// Application Receive Data"; §10 conformance: host applications "may also
+// send rebirth requests"), and the spec's only hint otherwise is a
+// non-normative note that a non-primary host "may not". So a passive host
+// asks for the births it missed (publishRebirth, gated on isLeader alone),
+// and rebirth-requests: false (Config.NoRebirthRequests) is the switch the
+// spec recommends for turning that off.
 func (d *Driver) mayPublish() bool { return d.cfg.Primary && d.isLeader() }
 
 // ── connect / reconnect loop ─────────────────────────────────────────────
@@ -560,10 +570,10 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 //
 // Unlike publishCommand (gated on mayPublish — Primary && isLeader), a
 // Rebirth request bypasses the Primary check: it does not contend for the
-// STATE certificate and it commands no field device, so it does not "write
-// to the group" in the sense mayPublish's doc comment means. It is gated on
-// isLeader alone, so a standby replica under redundancy: still doesn't
-// duplicate the request.
+// STATE certificate and it commands no field device, and Sparkplug 3.0 §5
+// lets any host application send one (see mayPublish). It is gated on
+// isLeader, so a standby replica under redundancy: still doesn't duplicate
+// the request, and on Config.NoRebirthRequests, which refuses every one.
 //
 // This matters for host-as-edge (docs/design/sparkplug-host.md §8.8): a
 // project consuming a group with primary: false is a passive consumer with
@@ -582,6 +592,11 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 // originate here — RequestRebirth, the connect-time sweep, a __Rebirth
 // rising edge — call countRebirth.
 func (d *Driver) publishRebirth(group, edge string) error {
+	if d.cfg.NoRebirthRequests {
+		err := fmt.Errorf("host: rebirth requests are off (rebirth-requests: false)")
+		d.log.Warn("host: rebirth request refused", "group", group, "node", edge, "error", err)
+		return err
+	}
 	p := d.publisher()
 	if p == nil {
 		err := fmt.Errorf("host: not connected")

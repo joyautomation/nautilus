@@ -93,6 +93,9 @@ func New(m Manifest, cfg Config, opts ...Option) (*Driver, error) {
 	// RebirthOnStart defaults to true; NoRebirthOnStart is the opt-out (a
 	// Config literal cannot distinguish "unset" from "off").
 	cfg.RebirthOnStart = cfg.RebirthOnStart || !cfg.NoRebirthOnStart
+	if cfg.NoRebirthRequests {
+		cfg.RebirthOnStart = false // no request of any kind, start included
+	}
 
 	log := cfg.Log
 	if log == nil {
