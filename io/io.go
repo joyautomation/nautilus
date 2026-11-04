@@ -19,7 +19,8 @@ type Values map[string]any
 //
 // WriteOutputs receives the outputs when at least one of them CHANGED since
 // the previous call — plus the first scan, the scan after a failed write,
-// and the first scan after a redundancy takeover. A driver that needs a
+// the first scan after a redundancy takeover, and a scan where the driver
+// asked for them (OutputsRequester). A driver that needs a
 // per-scan call regardless (a watchdog to re-arm, a bus whose outputs decay)
 // asks for it with runtime.Options.AlwaysWriteOutputs.
 //
@@ -45,6 +46,28 @@ type Driver interface {
 type BatchReader interface {
 	Driver
 	ReadInputsInto(dst Values) error
+}
+
+// OutputsRequester is an optional refinement a Driver may also implement:
+// ask for every output on the next scan, changed or not.
+//
+// The runtime hands WriteOutputs the outputs only when one changed (see
+// Driver), which every driver that diffs against what it last sent relies
+// on. A driver that FORGETS a command it was handed (a write a gateway
+// could not deliver, a queued command the write gate dropped, a write gate
+// that closed and reopened while another master may have written) would
+// otherwise not see that output again until the program changed it.
+// OutputsWanted returns true once after such a forget; the runtime asks
+// on every scan, beside its own push rule, and when the answer is true it
+// hands WriteOutputs every output on that scan.
+//
+// It is a read-and-clear: one true per request, however many forgets came
+// before it, and one push answers it. It is called every scan, so it must
+// be cheap (an atomic load) and never block. The runtime uses it when the
+// driver provides it — implementing it is never required.
+type OutputsRequester interface {
+	Driver
+	OutputsWanted() bool
 }
 
 // Memory is a trivial in-process driver: outputs written are readable as

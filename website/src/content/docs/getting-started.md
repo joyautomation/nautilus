@@ -17,8 +17,9 @@ has the archives and a `checksums.txt`.
 ### macOS — pick `arm64` for Apple Silicon, `amd64` for Intel:
 
 ```sh
-v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_darwin_arm64.tar.gz" | tar xz naut
+v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -fsSL -o naut.tar.gz "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_darwin_arm64.tar.gz"
+tar xzf naut.tar.gz naut && rm naut.tar.gz
 sudo mv naut /usr/local/bin/
 ```
 
@@ -29,8 +30,9 @@ flag once: `xattr -d com.apple.quarantine /usr/local/bin/naut`.
 ### Linux — `amd64` or `arm64`:
 
 ```sh
-v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_amd64.tar.gz" | tar xz naut
+v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -fsSL -o naut.tar.gz "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_amd64.tar.gz"
+tar xzf naut.tar.gz naut && rm naut.tar.gz
 sudo install naut /usr/local/bin/naut
 ```
 

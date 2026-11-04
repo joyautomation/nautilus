@@ -73,11 +73,13 @@ type Options struct {
 	// moved. By default the runtime pushes output CHANGES — it calls
 	// WriteOutputs on the first scan, on any scan where an output tag's
 	// value differs from the one last handed over, after a failed write,
-	// and after a redundancy takeover — because that is what every driver
-	// in tree already reduces the call to internally (see eip.Driver, which
-	// diffs against its own last-written set). Set this for a driver that
-	// needs a per-scan refresh in its own right: a watchdog that must be
-	// re-armed, or a bus whose outputs decay without a rewrite.
+	// after a redundancy takeover, and on a scan where the driver asked for
+	// them (io.OutputsRequester: it forgot a command) — because that is what
+	// every driver in tree already reduces the call to internally (see
+	// eip.Driver, which diffs against its own last-written set). Set this
+	// for a driver that needs a per-scan refresh in its own right: a
+	// watchdog that must be re-armed, or a bus whose outputs decay without
+	// a rewrite.
 	AlwaysWriteOutputs bool
 	// LateThreshold is how far past its target a scan may START before it
 	// counts as late in Lateness (see ScanStats.Lateness). It applies to
@@ -206,6 +208,9 @@ type Runtime struct {
 	alwaysWrite bool
 	outGen      atomic.Uint64
 	outSent     atomic.Bool
+	// asker is the driver as an io.OutputsRequester, nil when it is not
+	// one: asked every scan whether it wants the whole output set.
+	asker nio.OutputsRequester
 
 	// inBuf is the delivery map an io.BatchReader driver refills each scan
 	// instead of allocating one, and outBuf the map the output push is
@@ -494,6 +499,9 @@ func New(o Options) (*Runtime, error) {
 		clock: o.Clock, types: types, tasks: tasks,
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
 		alwaysWrite: o.AlwaysWriteOutputs, untypedComms: untyped,
+	}
+	if a, ok := o.Driver.(nio.OutputsRequester); ok {
+		r.asker = a
 	}
 	// Flag the output tags in the store so a write to one stamps the
 	// output generation Scan reads (see Tags.markOutputs).
@@ -1199,9 +1207,15 @@ func (r *Runtime) scanAt(due time.Time) {
 	// without reading a single value, which is what keeps a controller with
 	// thousands of output bindings from re-serialising all of them every
 	// scan to say nothing. Options.AlwaysWriteOutputs opts back out.
+	//
+	// A driver that forgot a command asks for the whole set
+	// (io.OutputsRequester). It is asked on every scan, even one that
+	// pushes anyway: the answer is a read-and-clear, so a request this push
+	// answers is not answered again on the next scan.
 	if r.driver != nil && len(r.outputs) > 0 {
 		gen := r.tags.outputGeneration()
-		if r.alwaysWrite || !r.outSent.Load() || gen != r.outGen.Load() {
+		wanted := r.asker != nil && r.asker.OutputsWanted()
+		if r.alwaysWrite || wanted || !r.outSent.Load() || gen != r.outGen.Load() {
 			// Compound values (UDTs, arrays) cross the seam as ir.Value so
 			// typed drivers keep field names and integer widths; scalars
 			// stay plain Go values for simple drivers.

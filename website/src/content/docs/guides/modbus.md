@@ -339,6 +339,40 @@ registers since is left alone. Not so for a `rewrite:` binding: it
 re-asserts its last commanded value on connect and on every period, so it
 overwrites the other master's value anyway.
 
+**An exception to a write depends on whether the write ran.** When the
+device itself refuses a write (0x02 illegal data address, 0x03 illegal
+data value, or any exception other than the three below), the write is
+dropped and the same value is not sent again (until the write gate
+reopens, see [Redundancy](#redundancy)). Sending it again would only be
+refused again, so only a changed value is a new command. 0x04 (server
+device failure) is handled the same way: the write may have partly run,
+and on a register that triggers an action a second write could fire it
+twice. When a gateway answers 0x0A (path unavailable) or 0x0B (target
+device failed to respond), the device behind it never got the command, and
+when the device answers 0x06 (server device busy), it did not carry the
+command out. Such a write is dropped from the queue and held back for the
+source's `retrymin` (1 s by default, the same pause a block's polls get
+after repeated exceptions). Then the driver forgets it and asks the
+runtime for the outputs, so the next scan hands them over and the
+program's value goes out again as a command even if it has not changed.
+That is the program's current value, never a replay of the one that
+failed. A write that keeps not running is therefore tried once per
+`retrymin`, not once per scan, so a busy device or an RS-485 line behind a
+gateway is not flooded. A changed value is a new command and goes out at
+once, backoff or not. Only the tags whose write did not run are forgotten:
+on a `bit:N` register, the bits whose read-modify-write got the exception
+(on its read or on its write), not the register's other bits. A `rewrite:`
+binding is not forgotten, because its next re-assert sends it again
+anyway. While the write gate is closed nothing is sent, and the forgotten
+command goes out with every other output once the gate reopens (see
+[Redundancy](#redundancy)). Every exception to a write counts in
+`exceptions` on the device row. The log says `write not delivered; will
+resend` once when a write first fails to run (not on every attempt) and
+`write delivered after it did not run`, at Info with the number of
+attempts, when it lands; it says `write refused` for the rest. On a
+write-only source, a gateway no-answer to a write also counts toward
+taking it offline, as described above; 0x06 is the device answering.
+
 **`rewrite:` is the exception, and it is a keep-alive.** Some devices watch
 a command register and fail safe if it stops moving — a safety controller's
 enable word, a VFD control word, an IO-Link master's Modbus watchdog. A
@@ -459,11 +493,49 @@ can compose a "logic healthy" signal into the same condition. Leadership
 is checked again when queued commands go out: a replica that lost it
 during an outage drops what it queued, and so do the writes a broken
 flush put back. It is checked again before each write of a flush, so a
-long flush through a slow gateway stops sending once the gate closes. A
-dropped command is forgotten, so the first output push after the gate
-reopens sends the same value again. The runtime pushes on a takeover, so a
-replica that regains leadership sends at once; a gate that reopens without
-one (logic healthy again) waits for the next output change.
+long flush through a slow gateway stops sending once the gate closes.
+
+**When the gate reopens, every output goes out again.** While it was
+closed another replica may have led and written the same registers, so
+nothing this replica sent before is trusted to still be there. On the
+first scan after the driver sees the gate reopen, every output is sent
+once with the program's current value, including one that has not changed
+since this replica last led. A replica that regains leadership pushes
+because it took over; a gate that reopens without a takeover (logic
+healthy again) pushes because the driver asks the runtime for the outputs
+when it sees the gate reopen. Commands the gate dropped go out in the same
+push. Until that push, a `rewrite:` binding re-asserts nothing, so the
+value from the previous term is never sent: the keep-alive restarts with
+the program's value.
+
+**A replica that has been a standby has no baseline.** Once the driver has
+seen the write gate closed, the start-up baseline is off: a replica that
+starts as a standby commands every output with its first push as leader,
+as the new primary of a hot-standby PLC pair drives its outputs at once. A
+plain start, leader from the first scan and never gated, keeps the
+baseline: `naut run` starts the driver only after the redundancy elector
+has made its first decision, so a replica that acquires the lease at once
+never sees the gate closed. A driver restarted after it saw the gate
+closed is still a standby. A standby's reconnect re-asserts no `rewrite:`
+binding.
+
+**A write-to-trigger register is written again too.** The re-send does not
+know what a register does. One whose every write starts something (a
+recipe number, a step command, a reset) is written again on every regain
+of leadership and every reopen of the gate, with the program's current
+value, even when that value has not changed, and even when its last write
+was refused with 0x04. Gate such a command in the program, or make it
+edge-like (write it, then a neutral value), if a second write would act
+twice.
+
+**A flip between two looks is not seen.** A gate func cannot say it
+changed, so the driver looks at it: on every push, flush and re-assert, on
+every wake of a connected source's loop (at least once a second), on every
+connect attempt, and before the on-connect re-assert. A gate that closes
+and reopens between two looks is not seen, and then nothing above happens.
+The window is about a second while a source is connected, up to `retrymax`
+(60 s by default) while every source is down, and unbounded while every
+source is parked.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly

@@ -16,6 +16,14 @@ type Unit struct {
 	coils    map[uint16]bool
 	discrete map[uint16]bool
 	excepts  map[byte]byte // fc -> injected exception code
+	exceptAt map[fcAddr]byte
+}
+
+// fcAddr keys an exception injected for one function code at one start
+// address.
+type fcAddr struct {
+	fc   byte
+	addr uint16
 }
 
 func newUnit() *Unit {
@@ -25,6 +33,7 @@ func newUnit() *Unit {
 		coils:    map[uint16]bool{},
 		discrete: map[uint16]bool{},
 		excepts:  map[byte]byte{},
+		exceptAt: map[fcAddr]byte{},
 	}
 }
 
@@ -97,10 +106,40 @@ func (u *Unit) InjectException(fc, code byte) {
 	u.mu.Unlock()
 }
 
-// injected reports the exception code configured for fc, if any.
-func (u *Unit) injected(fc byte) (byte, bool) {
+// InjectExceptionAt is InjectException for the requests with this
+// function code whose start address is addr: one write among several in a
+// flush can be answered with an exception while the rest land. Code 0
+// clears it. An exception set for the whole function code wins.
+func (u *Unit) InjectExceptionAt(fc byte, addr uint16, code byte) {
+	u.mu.Lock()
+	if code == 0 {
+		delete(u.exceptAt, fcAddr{fc, addr})
+	} else {
+		u.exceptAt[fcAddr{fc, addr}] = code
+	}
+	u.mu.Unlock()
+}
+
+// injected reports the exception code configured for fc, or for fc at
+// addr, if any.
+func (u *Unit) injected(fc byte, addr uint16, hasAddr bool) (byte, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	code, ok := u.excepts[fc]
+	if code, ok := u.excepts[fc]; ok {
+		return code, ok
+	}
+	if !hasAddr {
+		return 0, false
+	}
+	code, ok := u.exceptAt[fcAddr{fc, addr}]
 	return code, ok
+}
+
+// injectedFor is injected for one request's PDU data, whose first two
+// bytes are the start address for every function code the slave serves.
+func (u *Unit) injectedFor(fc byte, data []byte) (byte, bool) {
+	if len(data) < 2 {
+		return u.injected(fc, 0, false)
+	}
+	return u.injected(fc, uint16(data[0])<<8|uint16(data[1]), true)
 }
