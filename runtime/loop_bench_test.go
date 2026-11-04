@@ -18,13 +18,13 @@ VAR_EXTERNAL
 END_VAR
 VAR
     i   : INT;
-    acc : REAL;
+    sum : REAL;
 END_VAR
-acc := 0.0;
+sum := 0.0;
 FOR i := 1 TO Iters DO
-    acc := acc + SQRT(INT_TO_REAL(i)) * 1.0001;
+    sum := sum + SQRT(INT_TO_REAL(i)) * 1.0001;
 END_FOR;
-Acc := acc;
+Acc := sum;
 END_PROGRAM`
 
 // The harness's allocation task: string building, which must allocate
