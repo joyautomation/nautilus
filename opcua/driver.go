@@ -203,6 +203,8 @@ type Driver struct {
 	gateShut atomic.Bool
 	sawShut  atomic.Bool
 	wanted   atomic.Bool
+	// turnMu serializes the gate's transitions (see gateOpen).
+	turnMu sync.Mutex
 
 	wmu      sync.Mutex
 	baseline bool
@@ -522,18 +524,25 @@ func (d *Driver) gateOpen() bool {
 		return true
 	}
 	open := gate()
-	switch {
-	case !open:
-		if !d.gateShut.Swap(true) {
+	// Steady state is one atomic load. A transition is made under turnMu,
+	// and gateShut is cleared only after the forget, so a second looker
+	// that finds the gate open meanwhile waits for the forget.
+	if shut := d.gateShut.Load(); shut == open {
+		d.turnMu.Lock()
+		switch {
+		case !open && !d.gateShut.Load():
+			d.gateShut.Store(true)
 			d.sawShut.Store(true)
 			d.wmu.Lock()
 			d.baseline = false // a standby has no baseline (#606)
 			d.wmu.Unlock()
+		case open && d.gateShut.Load():
+			d.forgetWritten()
+			d.gateShut.Store(false)
+			d.wanted.Store(true)
+			d.log.Info("opcua-client: write gate open again; every output goes out with the next push", "driver", d.name)
 		}
-	case d.gateShut.Load() && d.gateShut.CompareAndSwap(true, false):
-		d.forgetWritten()
-		d.wanted.Store(true)
-		d.log.Info("opcua-client: write gate open again; every output goes out with the next push", "driver", d.name)
+		d.turnMu.Unlock()
 	}
 	return open
 }

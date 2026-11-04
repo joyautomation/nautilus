@@ -197,6 +197,10 @@ type Driver struct {
 	gateShut atomic.Bool
 	sawShut  atomic.Bool
 	wanted   atomic.Bool
+	// turnMu serializes the gate's transitions (see gateOpen): a looker
+	// that finds the gate reopened while another is still forgetting waits
+	// for the forget instead of reading the previous term's written.
+	turnMu sync.Mutex
 
 	// baseline is armed by Start: the first WriteOutputs snapshot after it
 	// describes the world, it does not command it (sparkplug-host's rule).
@@ -522,21 +526,36 @@ func (d *Driver) gateOpen() bool {
 		return true
 	}
 	open := gate()
-	switch {
-	case !open:
-		if !d.gateShut.Swap(true) {
+	// Steady state is one atomic load. A transition is made under turnMu,
+	// and gateShut is cleared only AFTER the forget: a second looker that
+	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
+	// and so cannot re-assert the previous term's written (#600).
+	if shut := d.gateShut.Load(); shut == open {
+		d.turnMu.Lock()
+		switch {
+		case !open && !d.gateShut.Load():
+			d.gateShut.Store(true)
 			d.sawShut.Store(true)
 			d.wmu.Lock()
 			d.baseline = false // a standby has no baseline (#606)
 			d.wmu.Unlock()
+		case open && d.gateShut.Load():
+			if reopenHook != nil {
+				reopenHook()
+			}
+			d.forgetWritten()
+			d.gateShut.Store(false)
+			d.wanted.Store(true)
+			d.log.Info("modbus: write gate open again; every output goes out with the next push")
 		}
-	case d.gateShut.Load() && d.gateShut.CompareAndSwap(true, false):
-		d.forgetWritten()
-		d.wanted.Store(true)
-		d.log.Info("modbus: write gate open again; every output goes out with the next push")
+		d.turnMu.Unlock()
 	}
 	return open
 }
+
+// reopenHook, when a test sets it, runs as a reopen is handled, before the
+// forget: the window another looker must not slip through.
+var reopenHook func()
 
 // forgetWritten empties every source's written: no value is the on-change
 // reference any more, so the next push sends them all, and no rewrite:
@@ -1055,13 +1074,14 @@ func (d *Driver) resume(ctx context.Context, s *source, c conn) bool {
 // prime is serve's on-connect step: re-assert, flush, read every block.
 // False when the connection broke.
 func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
-	// A look at the gate first (see SetWriteGate): one that closed or
-	// reopened since the last look forgets written before it is re-asserted.
-	d.gateOpen()
+	// A look at the gate first (see SetWriteGate): one that reopened since
+	// the last look forgets written before it is re-asserted, and a closed
+	// gate re-asserts nothing (a standby's reconnect queues nothing to drop).
+	open := d.gateOpen()
 	now := time.Now()
 	s.mu.Lock()
 	for _, rw := range s.rewrites {
-		if v, ok := s.written[rw.name]; ok {
+		if v, ok := s.written[rw.name]; ok && open {
 			s.pending[rw.name] = v // re-assert after an outage, on the spot
 		}
 		rw.next = now.Add(rw.period)
@@ -1322,6 +1342,9 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	work := s.pending
 	s.pending = map[string]any{}
 	s.mu.Unlock()
+	// One retry deadline for every write in this flush that does not run,
+	// so they are released, and asked for, together (see wroteOK).
+	retryAt := time.Now().Add(s.cfg.RetryMin)
 
 	// The gate is checked again here, not only when the command was
 	// queued: a replica that lost leadership during an outage must not
@@ -1413,7 +1436,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			out := wireOrder([]uint16{w}, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, bw.addr, out)
 		}
-		if !d.wroteOK(ctx, s, work, bw.names, err) {
+		if !d.wroteOK(ctx, s, work, bw.names, retryAt, err) {
 			requeue(i, 0, 0)
 			return false
 		}
@@ -1429,7 +1452,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		} else {
 			err = writeMultipleRegisters(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, work, run.names, err) {
+		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
 			requeue(len(bitWrites), i, 0)
 			return false
 		}
@@ -1444,7 +1467,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		} else {
 			err = writeMultipleCoils(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, work, run.names, err) {
+		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
 			requeue(len(bitWrites), len(regRuns), i)
 			return false
 		}
@@ -1460,7 +1483,9 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 //     The gateway answered for a device that never got the command (#596),
 //     or the device was busy and did not carry it out (#602). The write is
 //     dropped from the queue and its tags become stuck (s.stuck): for
-//     RetryMin the value stays in written, so an unchanged push does not
+//     RetryMin from the start of the flush (retryAt, one deadline for the
+//     whole flush, so its stuck writes are asked for in one push) the
+//     value stays in written, so an unchanged push does not
 //     send it again (the same pace a dead block's polls are parked at),
 //     while a changed value is a new command and goes out at once. When
 //     the backoff is over the source loop forgets it and asks the runtime
@@ -1481,7 +1506,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 //
 // A transport error means reconnect: false, and the caller re-queues this
 // write and everything not yet attempted.
-func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, names []string, err error) bool {
+func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, names []string, retryAt time.Time, err error) bool {
 	if err == nil {
 		d.writes.Add(1)
 		// A confirmed write is the device answering, as a read is: a
@@ -1510,7 +1535,6 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, na
 		}
 		first := false
 		if notRun {
-			retryAt := time.Now().Add(s.cfg.RetryMin)
 			for _, n := range names {
 				st := s.stuck[n]
 				if st == nil {

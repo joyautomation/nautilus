@@ -65,6 +65,13 @@ type backoffRig struct {
 
 func newBackoffRig(t *testing.T, retryMin time.Duration) *backoffRig {
 	t.Helper()
+	return newBackoffRigWith(t, retryMin, false)
+}
+
+// newBackoffRigWith is newBackoffRig with SP write-only when writeOnly:
+// the source then has nothing to poll.
+func newBackoffRigWith(t *testing.T, retryMin time.Duration, writeOnly bool) *backoffRig {
+	t.Helper()
 	srv := newSlave(t)
 	r := &backoffRig{u: srv.Unit(1), rec: &recorder{}, logs: &logRec{}}
 	src := fastSource("DEV", srv.Addr())
@@ -72,7 +79,7 @@ func newBackoffRig(t *testing.T, retryMin time.Duration) *backoffRig {
 	m := Manifest{
 		Sources: []Source{src},
 		Tags: []TagBinding{
-			{Name: "SP", Source: "DEV", Table: TableHolding, Address: 500, Format: "uint16", Writable: true},
+			{Name: "SP", Source: "DEV", Table: TableHolding, Address: 500, Format: "uint16", Writable: true, WriteOnly: writeOnly},
 		},
 	}
 	d, err := New(m, WithScanRate(20*time.Millisecond), WithDialer(recordingDialer(r.rec)), WithLogger(slog.New(r.logs)))

@@ -53,6 +53,26 @@ func electorFor(proj *project.Project, addr string) (*leader.Elector, error) {
 	return el, nil
 }
 
+// firstDecisionTimeout bounds how long runProject waits for the elector's
+// first decision (one Lease GET, and a write when it claims). An API server
+// slower than that starts the drivers anyway; they then see the gate closed
+// and behave as a standby's do (no start-up baseline, #606).
+const firstDecisionTimeout = 5 * time.Second
+
+// awaitDecision waits until el has made its first decision (leader or
+// standby), or timeout. It reports whether the decision came in time.
+func awaitDecision(el interface{ Decided() <-chan struct{} }, timeout time.Duration) bool {
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-el.Decided():
+		return true
+	case <-t.C:
+		fmt.Fprintln(os.Stderr, "naut run: redundancy: no leadership decision after", timeout, "- starting as a standby")
+		return false
+	}
+}
+
 // wireRedundancy answers a loaded project to its elector: the runtime scans
 // only on the leader, and the driver (or every child of a Multi) gets the
 // elector as its write gate. runProject calls it only for a manifest with a
@@ -149,6 +169,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			<-elDone
 			el.Release()
 		}()
+		// Drivers start only once the elector has decided, so a replica
+		// that leads from its first scan is a plain start and keeps its
+		// drivers' start-up baseline; only one that starts as a standby
+		// has its gate seen closed and drops it (#606).
+		awaitDecision(el, firstDecisionTimeout)
 	}
 	// Drivers with their own polling loop (eip, sparkplug-host) start here;
 	// the loopback memory driver has nothing to start.

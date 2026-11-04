@@ -324,3 +324,65 @@ func TestStandalone(t *testing.T) {
 
 	e.Release() // no-op; must not panic or block
 }
+
+// Run makes its first decision at once, before its ticker's first tick,
+// and Decided says so: a replica that acquires the lease is the leader
+// from that moment, so `naut run` starts its drivers as a plain start
+// (their start-up baseline kept, #606); one that finds the lease held is a
+// standby from that moment. A standalone elector has decided from New.
+func TestRunDecidesBeforeItsFirstTick(t *testing.T) {
+	waitDecided := func(t *testing.T, e *Elector) {
+		t.Helper()
+		select {
+		case <-e.Decided():
+		case <-time.After(2 * time.Second):
+			t.Fatal("no first decision: Run must decide before its ticker's first tick")
+		}
+	}
+	// A long lease: the ticker's first tick is 10 s away, so only the
+	// decision Run makes up front can close Decided in time.
+	const lease = 40 * time.Second
+
+	t.Run("acquires", func(t *testing.T) {
+		srv, _ := newFakeServer(t)
+		e := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+		e.duration = lease
+		select {
+		case <-e.Decided():
+			t.Fatal("a cluster elector has decided before Run")
+		default:
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go e.Run(ctx)
+		waitDecided(t, e)
+		if !e.IsLeader() {
+			t.Fatal("the first decision on an empty lease must be leader")
+		}
+	})
+
+	t.Run("standby", func(t *testing.T) {
+		srv, _ := newFakeServer(t)
+		holder := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+		holder.duration = lease
+		holder.tick(time.Now())
+		e := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+		e.duration = lease
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go e.Run(ctx)
+		waitDecided(t, e)
+		if e.IsLeader() {
+			t.Fatal("a held, fresh lease must make the first decision standby")
+		}
+	})
+
+	t.Run("standalone", func(t *testing.T) {
+		t.Setenv("KUBERNETES_SERVICE_HOST", "")
+		e, err := New("test-lease", "pod-a", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitDecided(t, e)
+	})
+}

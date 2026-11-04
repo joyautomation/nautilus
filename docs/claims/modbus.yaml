@@ -598,6 +598,9 @@ claims:
       - go ./modbus TestGateReopenIsSeenByTheSourceLoop
       - go ./modbus TestGateReopenDuringTheDialIsSeenBeforeTheReassert
       - go ./modbus TestStandbyTakeoverCommandsEveryOutput
+      - go ./modbus TestReopenForgetsBeforeAnotherLookerReasserts
+      - go ./modbus TestStandbyReconnectQueuesNothing
+      - go ./modbus TestRestartAfterStandbyKeepsNoBaseline
     partial: true
     note: >-
       The gate stopping re-asserts is asserted, and so is the gate being
@@ -755,6 +758,8 @@ claims:
       - go ./modbus TestNotRunWriteIsRetriedAtRetryMinNotTheScanRate
       - go ./modbus TestChangedValueGoesOutDuringTheBackoff
       - go ./modbus TestStuckWriteWarnsOnceAndLogsTheLanding
+      - go ./modbus TestNotRunWriteIsRetriedAtRetryMinOnAWriteOnlySource
+      - go ./modbus TestRefusalEndsTheStuckWrite
     partial: true
     note: >-
       Against the in-process slave answering chosen exceptions per
@@ -770,8 +775,10 @@ claims:
       The backoff tests also run under the runtime, scanning every
       millisecond: against a persistent 0x06 with a 100 ms `retrymin` the
       writes stay within elapsed/retrymin + 2 and each counts as an
-      exception; inside a 3 s backoff the unchanged command is not sent
+      exception, on a polled and on a write-only source; inside a 3 s
+      backoff the unchanged command is not sent
       again while a changed value lands at once; against a persistent 0x0B
       the warning is logged once over five attempts and the Info line once,
-      with the attempt count, and not for a write that lands first time.
+      with the attempt count, and not for a write that lands first time,
+      nor after a refusal ended the stuck write.
       The write-only offline debounce on gateway no-answers is MB-051's.

@@ -63,7 +63,22 @@ type Elector struct {
 	holder      string // current lease holderIdentity, verbatim
 	transitions int
 	lastRenewOK time.Time
+
+	// decided is closed once the elector has made its first decision:
+	// at once for a standalone elector, after Run's first tick in a
+	// cluster. See Decided.
+	decided     chan struct{}
+	decidedOnce sync.Once
 }
+
+// Decided is closed once the elector has made its first decision, leader
+// or standby. Until then IsLeader reports false in a cluster only because
+// nothing has been asked yet; a caller that treats "the write gate was
+// seen closed" as "this replica was a standby" (modbus and opcua-client
+// drop their start-up baseline, #606) waits for it before starting them.
+func (e *Elector) Decided() <-chan struct{} { return e.decided }
+
+func (e *Elector) markDecided() { e.decidedOnce.Do(func() { close(e.decided) }) }
 
 // New builds an elector for the named lease. identity should be the pod
 // name; selfAddr (host:port) is advertised in the lease so standbys can
@@ -110,7 +125,14 @@ func newStandalone(leaseName, identity, selfAddr string) *Elector {
 		mode:     "standalone",
 		isLeader: true,
 		holder:   holderID,
+		decided:  closedChan(),
 	}
+}
+
+func closedChan() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
 }
 
 // newWithClient builds a cluster-mode elector against c. Split out from New
@@ -129,6 +151,7 @@ func newWithClient(c *k8sapi.Client, leaseName, identity, selfAddr string) *Elec
 		duration: 4 * time.Second,
 		client:   c,
 		mode:     "cluster",
+		decided:  make(chan struct{}),
 	}
 }
 
@@ -137,6 +160,10 @@ func (e *Elector) Run(ctx context.Context) {
 	if e.mode == "standalone" {
 		return
 	}
+	// The first decision is made at once, not a tick in: until it is,
+	// a replica that will lead would look like a standby (see Decided).
+	e.tick(time.Now())
+	e.markDecided()
 	tick := time.NewTicker(e.duration / 4)
 	defer tick.Stop()
 	for {

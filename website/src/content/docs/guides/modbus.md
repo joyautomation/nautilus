@@ -510,7 +510,11 @@ seen the write gate closed, the start-up baseline is off: a replica that
 starts as a standby commands every output with its first push as leader,
 as the new primary of a hot-standby PLC pair drives its outputs at once. A
 plain start, leader from the first scan and never gated, keeps the
-baseline.
+baseline: `naut run` starts the driver only after the redundancy elector
+has made its first decision, so a replica that acquires the lease at once
+never sees the gate closed. A driver restarted after it saw the gate
+closed is still a standby. A standby's reconnect re-asserts no `rewrite:`
+binding.
 
 **A write-to-trigger register is written again too.** The re-send does not
 know what a register does. One whose every write starts something (a

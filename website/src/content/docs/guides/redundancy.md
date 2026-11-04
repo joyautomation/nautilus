@@ -115,7 +115,12 @@ never computes.
   between may have written something else. A replica that started as a
   standby has no start-up baseline, so its first takeover commands every
   output, as the new primary of a hot-standby PLC pair does; a replica that
-  leads from its first scan keeps the baseline. A Modbus `rewrite:`
+  leads from its first scan keeps the baseline. `naut run` starts the
+  drivers only after the elector's first decision (at most 5 s), so a
+  replica that acquires the lease at once is a plain start. One whose
+  lease is still held by a predecessor that has not yet expired (a pod
+  replaced under a new name) is a standby until it takes over, and so
+  commands every output when it does. A Modbus `rewrite:`
   keep-alive re-asserts nothing until that push has given it the
   program's value. A driver sees leadership only by looking at its write
   gate, so a loss and regain between two looks is not seen (see
