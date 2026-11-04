@@ -12,6 +12,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -306,7 +307,7 @@ func TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c2.Connect(ctx); err != nil {
+	if err := gopcuatest.Connect(ctx, c2); err != nil {
 		t.Fatal(err)
 	}
 	defer c2.Close(ctx)

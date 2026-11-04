@@ -13,6 +13,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
@@ -415,7 +416,7 @@ func TestThousandsOfMovingTagsUnderConcurrentClients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c2.Connect(ctx); err != nil {
+	if err := gopcuatest.Connect(ctx, c2); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
@@ -560,7 +561,7 @@ func TestStopDropsClientsAndRestartReusesThePort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c2.Connect(ctx); err != nil {
+	if err := gopcuatest.Connect(ctx, c2); err != nil {
 		t.Fatalf("reconnect after restart: %v", err)
 	}
 	defer c2.Close(ctx)
