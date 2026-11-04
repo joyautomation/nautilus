@@ -357,8 +357,9 @@ the tags whose write did not land are forgotten: on a `bit:N` register,
 the bits whose read-modify-write got the exception, not the register's
 other bits. A `rewrite:` binding is not forgotten, because its next
 re-assert sends it again anyway. While the write gate is closed nothing is
-sent, and the forgotten command goes out once the gate reopens, as for a
-command the gate dropped (see [Redundancy](#redundancy)). Both kinds count
+sent, and the forgotten command goes out at the first output push after
+the gate reopens, as for a command the gate dropped (see
+[Redundancy](#redundancy)). Both kinds count
 in `exceptions` on the device row. The log says `write refused` for the
 first and `write not delivered; will resend` for the second. On a
 write-only source, a gateway no-answer to a write also counts toward
@@ -480,8 +481,12 @@ With a `redundancy:` section, the driver's write gate is wired to leadership
 can compose a "logic healthy" signal into the same condition. Leadership
 is checked again when queued commands go out: a replica that lost it
 during an outage drops what it queued, and so do the writes a broken
-flush put back. A dropped command is forgotten, so the same value is a
-command again once the gate reopens.
+flush put back. It is checked again before each write of a flush, so a
+long flush through a slow gateway stops sending once the gate closes. A
+dropped command is forgotten, so the first output push after the gate
+reopens sends the same value again. The runtime pushes on a takeover, so a
+replica that regains leadership sends at once; a gate that reopens without
+one (logic healthy again) waits for the next output change.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly

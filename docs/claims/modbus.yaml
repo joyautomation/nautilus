@@ -572,21 +572,28 @@ claims:
       and a closed gate also stops `rewrite:` re-asserts (resuming when
       reopened); commands queued during an outage, or put back by a broken
       flush, are dropped when the gate has closed by the time the source
-      returns, and the same value is a command again once it reopens.
+      returns, a flush the gate closes partway through sends nothing more,
+      and a dropped value is a command again at the first output push after
+      the gate reopens (at once on a takeover, otherwise on the next output
+      change).
     source: "#redundancy"
     tests:
       - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
       - go ./modbus TestQueuedWriteRechecksTheGate
       - go ./modbus TestRequeuedWriteRechecksTheGate
+      - go ./modbus TestGateClosingMidFlushStopsTheFlush
     partial: true
     note: >-
       The gate stopping re-asserts is asserted, and so is the gate being
       checked again when queued commands go out: a command and a keep-alive
-      re-assert queued during an outage, and the writes a broken flush put
-      back, are dropped with no frame sent, the queue drains, and no outage
-      is counted. The gate is a test gate function; plain writes made while
-      it is closed, reads being unaffected, and the leadership wiring in
-      `naut run` are not asserted.
+      re-assert queued during an outage, the writes a broken flush put back,
+      and the runs after the one in flight when the gate closes mid-flush
+      are dropped with no frame sent, the queue drains, no outage is
+      counted, and pushing the same values after the gate reopens sends
+      them. The gate is a test gate function and the push is a direct
+      WriteOutputs call; plain writes made while it is closed, reads being
+      unaffected, the runtime's push on takeover, and the leadership wiring
+      in `naut run` are not asserted.
   - id: MB-047
     claim: >-
       `naut test` with a `memory.yaml` loopback runs the acceptance suites
