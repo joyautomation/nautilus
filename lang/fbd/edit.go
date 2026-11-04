@@ -169,10 +169,12 @@ func (b *modelBuilder) opSetLiteral(op EditOp) ([]TextEdit, error) {
 }
 
 // isLiteral accepts exactly the constants the netlist grammar does: one
-// number/string/time/typed-literal token, or TRUE/FALSE.
+// number/string/time/typed-literal token, or TRUE/FALSE. A string the lexer
+// could not read ('abc, 'a$Qb') is not one: the edit would write a file
+// that does not parse.
 func isLiteral(v string) bool {
-	toks := st.Lex(v)
-	if len(toks) != 2 { // token + EOF
+	toks, lexErrs := st.LexErrors(v)
+	if len(lexErrs) > 0 || len(toks) != 2 { // token + EOF
 		return false
 	}
 	switch toks[0].Type {

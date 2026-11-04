@@ -108,11 +108,12 @@ never computes.
   replicated — configuration travels through the retain store, process
   state re-derives from the field.
 - **A replica that takes over from standby sends every output once**
-  through the Modbus and OPC UA client drivers, with the program's value,
-  changed or not: the runtime hands the drivers the whole output set on
-  the first scan as leader, and those drivers send each one even if it
-  equals what this replica sent the last time it led, since the leader in
-  between may have written something else. A replica that started as a
+  through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers,
+  with the program's value, changed or not: the runtime hands the
+  drivers the whole output set on the first scan as leader, and those
+  drivers send each one even if it equals what this replica sent the
+  last time it led, since the leader in between may have written
+  something else. A replica that started as a
   standby has no start-up baseline, so its first takeover commands every
   output, as the new primary of a hot-standby PLC pair does; a replica that
   leads from its first scan keeps the baseline. `naut run` starts the
@@ -125,10 +126,13 @@ never computes.
   keep-alive re-asserts nothing until that push has given it the
   program's value. A driver sees leadership only by looking at its write
   gate, so a loss and regain between two looks is not seen (see
-  [Modbus](/guides/modbus/#redundancy)). EtherNet/IP, OptoMMP and the hw
-  drivers do not do this yet
-  ([#605](https://github.com/joyautomation/nautilus/issues/605),
-  [#607](https://github.com/joyautomation/nautilus/issues/607)).
+  [Modbus](/guides/modbus/#redundancy),
+  [EtherNet/IP](/guides/ethernet-ip/#redundancy) and
+  [groov EPIC](/guides/groov-epic/#redundancy)). EtherNet/IP and OptoMMP
+  have no start-up baseline at all, so a plain start commands every
+  output too. The hw drivers (SNMP, Redfish, Prometheus) do not do this:
+  their commands are often pulses (a ForceOff sent twice powers a server
+  off twice), so the first value after their gate opens is a baseline.
 - **The HTTP API follows the leader.** Every replica serves the
   dashboard, and a standby reverse-proxies API traffic to the leader
   (the leader's address rides inside the Lease), so a Service in front

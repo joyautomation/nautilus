@@ -22,6 +22,7 @@ VAR_EXTERNAL
     P202_Cmd         : BOOL;
     P202_Permissive  : BOOL;
     LT201_Level      : REAL;
+    DrainedLevelSP   : REAL;
     Batch            : BatchStatus;
     Active           : Recipe;
     AgitateReq       : BOOL;
@@ -44,7 +45,7 @@ LD
     Line_Ready /Line_Fault XV203_Open ( P202_Permissive )
 
   RUNG p202seal (* seal in on the request+permissive; hold until the tank drains *)
-    [ TransferReq P202_Permissive | P202_Cmd ] /LE(LT201_Level, 2.0) ( P202_Cmd )
+    [ TransferReq P202_Permissive | P202_Cmd ] /LE(LT201_Level, DrainedLevelSP) ( P202_Cmd )
 
   RUNG cipdue (* every CipEveryN-th batch needs a flush after this transfer *)
     EQ(MOD(Batch.Count, CipEveryN), 0) ( CipDue )

@@ -18,8 +18,15 @@ import "github.com/joyautomation/nautilus/lang/st"
 // look like keywords. A blanked span runs from the start of one body token
 // to the start of the next kept token, so it never cuts a comment or string
 // in half.
+//
+// A file typed top to bottom is unfinished at the end, which st.Parse
+// refuses (nautilus#609): a (* comment still open is blanked from its
+// opening to the end, and a POU with no END_PROGRAM, END_FUNCTION_BLOCK or
+// END_FUNCTION yet gets one appended after the text, where it moves no
+// position.
 func declSkeleton(text string) string {
-	toks := st.Lex(text)
+	toks, lexErrs := st.LexErrors(text)
+	var open []st.TokenType // END_ keywords owed, innermost last
 	lineStart := []int{0}
 	for i := 0; i < len(text); i++ {
 		if text[i] == '\n' {
@@ -58,12 +65,18 @@ func declSkeleton(text string) string {
 		case isVarStart(t):
 			i = keepThrough(i, st.TokenEndVar)
 		case t == st.TokenProgram || t == st.TokenFunctionBlock:
+			if t == st.TokenProgram {
+				open = append(open, st.TokenEndProgram)
+			} else {
+				open = append(open, st.TokenEndFunctionBlock)
+			}
 			keep[i] = true // keyword and name
 			if i+1 < n {
 				keep[i+1] = true
 			}
 			i += 2
 		case t == st.TokenFunction:
+			open = append(open, st.TokenEndFunction)
 			// FUNCTION Name : ReturnType [;] — the header is one line; stop
 			// early at a VAR block written on the same line.
 			line := toks[i].Line
@@ -71,6 +84,9 @@ func declSkeleton(text string) string {
 				keep[i] = true
 			}
 		case t == st.TokenEndProgram || t == st.TokenEndFunctionBlock || t == st.TokenEndFunction:
+			if k := len(open) - 1; k >= 0 && open[k] == t {
+				open = open[:k]
+			}
 			keep[i] = true
 			i++
 		default:
@@ -102,7 +118,22 @@ func declSkeleton(text string) string {
 		blank(offset(toks[i]), end)
 		i = j
 	}
+	for _, e := range lexErrs {
+		if !e.InString && e.Pos.Line >= 1 && e.Pos.Line <= len(lineStart) {
+			// The unclosed (* comment: the lexer ran it to the end.
+			blank(min(lineStart[e.Pos.Line-1]+e.Pos.Col-1, len(text)), len(text))
+		}
+	}
+	for k := len(open) - 1; k >= 0; k-- {
+		b = append(b, "\n"+endKeyword[open[k]]...)
+	}
 	return string(b)
+}
+
+var endKeyword = map[st.TokenType]string{
+	st.TokenEndProgram:       "END_PROGRAM",
+	st.TokenEndFunctionBlock: "END_FUNCTION_BLOCK",
+	st.TokenEndFunction:      "END_FUNCTION",
 }
 
 func isVarStart(t st.TokenType) bool {

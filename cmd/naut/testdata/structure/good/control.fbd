@@ -1,0 +1,17 @@
+PROGRAM Control
+(* TIC-101 heater loop and the high level alarm. *)
+FBD
+  NETWORK 'TIC-101: heater temperature loop'
+  // reverse acting (DIRECT := FALSE); off auto, CV follows CV_MAN (0)
+  heatOn = AND(HeatReq, HeatPermissive)
+  tic : PID(AUTO := heatOn, PV := TT101_Temp, SP := TempSP,
+            KP := TicKp, KI := TicKi, CV_MIN := 0.0, CV_MAX := 100.0,
+            DIRECT := FALSE)
+  E101_Out := tic.CV
+
+  NETWORK 'LAH-101: high level, 10 s on-delay'
+  hiLevel = GE(LT101_Level, HighLevelSP)
+  hlTmr : TON(IN := hiLevel, PT := T#10S)
+  HighLevelAlm := hlTmr.Q
+END_FBD
+END_PROGRAM

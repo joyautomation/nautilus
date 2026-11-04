@@ -1,0 +1,40 @@
+# The tank from the AGENTS.md investigation (#556), written the way an
+# uncoached model writes it: one-rung ladder with nested branches and the
+# same contacts on every leg, a BOOL with three writers, FBD as nested ST
+# with literal thresholds, and SFC as a CASE machine. It compiles and
+# runs; naut check reports every structure rule on it
+# (check_structure_test.go). testdata/structure/good is the rewrite.
+name: structure-naive
+
+tasks:
+  - program: sequence.sfc
+    scan: 100ms
+  - name: interlocks
+    program: interlocks.ld
+    scan: 100ms
+  - name: control
+    program: control.fbd
+    scan: 100ms
+
+tags:
+  - { name: LT101_Level, role: input,    type: REAL, init: 0.0 }
+  - { name: TT101_Temp,  role: input,    type: REAL, init: 20.0 }
+  - { name: LSHH101,     role: input,    type: BOOL, init: false }
+  - { name: HeaterTrip,  role: input,    type: BOOL, init: false }
+  - { name: StopPB,      role: input,    type: BOOL, init: false }
+  - { name: Overload,    role: input,    type: BOOL, init: false }
+  - { name: Start,       role: setpoint, type: BOOL, init: false }
+  - { name: HornAck,     role: setpoint, type: BOOL, init: false }
+  - { name: TempSP,      role: setpoint, type: REAL, init: 60.0 }
+  - { name: FillReq,     role: state,    type: BOOL, init: false }
+  - { name: DrainReq,    role: state,    type: BOOL, init: false }
+  - { name: HighLevelAlm, role: state,   type: BOOL, init: false }
+  - { name: LowLevelAlm, role: state,    type: BOOL, init: false }
+  - { name: HighTempAlm, role: state,    type: BOOL, init: false }
+  - { name: Pump,        role: output,   type: BOOL, init: false }
+  - { name: Horn,        role: output,   type: BOOL, init: false }
+  - { name: XV101_Cmd,   role: output,   type: BOOL, init: false }
+  - { name: E101_Out,    role: output,   type: REAL, init: 0.0 }
+
+driver:
+  type: memory

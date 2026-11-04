@@ -77,6 +77,10 @@ const (
 	// chassisEvery is how often the module types and channel-present mask
 	// are re-read: groov modules are hot-swappable.
 	chassisEvery = 5 * time.Second
+	// lookEvery bounds the time between two looks at the write gate while
+	// a session is up and no scan, stream check or command looks sooner
+	// (see SetWriteGate).
+	lookEvery = time.Second
 	// readbackSettle is how long after a write a digital output's state
 	// may still disagree with it before the tag goes Bad (at least three
 	// scans or stream intervals): long enough for the module to switch and
@@ -154,6 +158,19 @@ type Driver struct {
 	tags     []Binding      // the memory-map bindings, in manifest order
 	status   []Binding      // the driver's own status points
 
+	// packed is the plan a standby polls with (see standbyNote): packed
+	// reads only, no custom data area, no stream.
+	packed scanPlan
+	// cur and curCustom are the plan the session in progress fetches and
+	// decodes with: plan and custom while leading, packed while standing
+	// by. Owned by the loop.
+	cur       *scanPlan
+	curCustom bool
+	// standby is true while the session in progress is a standby's (the
+	// write gate was closed when it began or last switched): Health
+	// reports its mode as "poll".
+	standby atomic.Bool
+
 	// Owned by the loop: when the last session's last request went out,
 	// and how long before the new session's first one that was.
 	lastSent     time.Time
@@ -164,6 +181,7 @@ type Driver struct {
 	quality        map[string]nio.Quality
 	commanded      map[string]any       // last output value accepted
 	pending        map[string]any       // accepted, not yet written
+	term           uint64               // the write gate's reopens (see flushCount)
 	wrote          map[string]time.Time // when each output was last written
 	disagree       map[string]bool      // digital outputs whose state is not their command
 	quietTrip      bool                 // the last quiet check outran the watchdog
@@ -177,8 +195,15 @@ type Driver struct {
 	customOrig     []byte // the custom area's pointers as first found
 	streamFrom     net.IP // the processor, the only sender a stream is taken from
 
+	// gateMu guards writeGate (SetWriteGate). gateShut is true from the
+	// first look that finds the gate closed to the first that finds it
+	// open again (see gateOpen), and turnMu serializes those transitions.
+	// wanted is the request OutputsWanted answers.
 	gateMu    sync.Mutex
 	writeGate func() bool
+	gateShut  atomic.Bool
+	turnMu    sync.Mutex
+	wanted    atomic.Bool
 
 	connected atomic.Bool
 	online    atomic.Bool   // the status point: a session up, inputs fresh
@@ -249,8 +274,25 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 			d.tags = append(d.tags, b)
 		}
 	}
+	for _, b := range d.tags {
+		d.quality[b.Name] = nio.NotConnected
+		if b.isOutput() {
+			d.outputs[b.Name] = b
+		}
+	}
 	custom := m.CustomArea || m.Stream > 0
-	words := planWords(d.tags, custom)
+	d.custom = custom
+	d.plan = newPlan(d.tags, custom)
+	d.packed = newPlan(d.tags, false)
+	d.cur, d.curCustom = &d.plan, custom
+	return d, nil
+}
+
+// newPlan is the scan plan for the bindings: the words to fetch (the
+// custom data area's pointers when custom), how a packed fetch reads them,
+// and each binding's words in the image.
+func newPlan(tags []Binding, custom bool) scanPlan {
+	words := planWords(tags, custom)
 	index := make(map[uint32]int, len(words))
 	for i, w := range words {
 		index[w] = i
@@ -258,11 +300,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	p := scanPlan{words: words}
 	p.areas, p.src = packedAreas(words)
 	slots := map[int]bool{}
-	for _, b := range d.tags {
-		d.quality[b.Name] = nio.NotConnected
-		if b.isOutput() {
-			d.outputs[b.Name] = b
-		}
+	for _, b := range tags {
 		if b.isChannel() {
 			slots[b.Slot] = true
 		}
@@ -277,9 +315,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		p.slots = append(p.slots, s)
 	}
 	sort.Ints(p.slots)
-	d.custom = custom
-	d.plan = p
-	return d, nil
+	return p
 }
 
 // InputNames / OutputNames are the bound tags by direction.
@@ -287,19 +323,103 @@ func (d *Driver) InputNames() []string  { return d.m.InputNames() }
 func (d *Driver) OutputNames() []string { return d.m.OutputNames() }
 
 // SetWriteGate installs the write gate: commands leave the driver only
-// while gate() is true (redundancy leadership). Reads are unaffected.
+// while gate() is true. `naut run` wires it to redundancy leadership
+// (leader.Elector.IsLeader); io.Multi fans it out. Reads are unaffected.
+//
+// The gate is checked when a command is handed over (WriteOutputs), before
+// the on-connect and watchdog rewrites, and again when the queue is
+// flushed, before every write: a replica that queued commands as leader
+// while the processor was away must not send them once it is back if it
+// has lost leadership meanwhile (the Modbus driver's #595, eip's #607). A
+// closed gate drops the queue, and the rest of a flush it closes partway
+// through; a dropped command is forgotten and asked for again
+// (OutputsWanted).
+//
+// While the gate is closed another replica may lead and write the same
+// outputs, so nothing this driver commanded is trusted to still be there:
+// the first look that finds the gate open again forgets every command
+// (and anything still queued from the previous term) and asks the runtime
+// for the outputs, so the next push sends every output with the
+// program's value, changed or not (#605, the Modbus driver's #600). The
+// driver has no start-up baseline, so a replica that started as a
+// standby commands every output on its first takeover too (#606).
+//
+// A func cannot say it changed, so the driver sees the gate close and
+// reopen by looking at it (gateOpen): on every WriteOutputs and flush,
+// every scan (every stream check when streaming) and at least once a
+// second while connected, and on every connect attempt. A gate that closes
+// and reopens between two looks is not seen: one shorter than about a
+// second (or the scan, when faster) while connected, or than the
+// reconnect backoff (up to 30 s) while the processor is away.
 func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Lock()
 	d.writeGate = gate
 	d.gateMu.Unlock()
 }
 
+// gateOpen reports whether commands may leave the driver right now. Every
+// call is also a look at the gate (see SetWriteGate): the first look that
+// finds it open again after one found it closed forgets every command and
+// asks for the outputs. Callers do not hold mu.
 func (d *Driver) gateOpen() bool {
 	d.gateMu.Lock()
 	g := d.writeGate
 	d.gateMu.Unlock()
-	return g == nil || g()
+	if g == nil {
+		return true
+	}
+	open := g()
+	// Steady state is one atomic load. A transition is made under turnMu,
+	// and gateShut is cleared only AFTER the forget: a second looker that
+	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
+	// and so cannot rewrite or diff against the previous term's commands.
+	if shut := d.gateShut.Load(); shut == open {
+		d.turnMu.Lock()
+		switch {
+		case !open && !d.gateShut.Load():
+			d.gateShut.Store(true)
+		case open && d.gateShut.Load():
+			d.forgetCommanded()
+			d.gateShut.Store(false)
+			d.wanted.Store(true)
+			d.log.Info("optommp: write gate open again; every output goes out with the next push", "host", d.m.Host)
+		}
+		d.turnMu.Unlock()
+	}
+	return open
 }
+
+// forgetCommanded empties commanded and pending and starts a new term: no
+// value is the on-change reference or a rewrite's command any more, and
+// no command from the previous term is sent in this one.
+func (d *Driver) forgetCommanded() {
+	d.mu.Lock()
+	clear(d.commanded)
+	clear(d.pending)
+	clear(d.disagree)
+	d.term++
+	d.mu.Unlock()
+}
+
+// replicated reports whether a write gate is installed: the driver is one
+// of a redundant set, and another replica may lead the unit.
+func (d *Driver) replicated() bool {
+	d.gateMu.Lock()
+	defer d.gateMu.Unlock()
+	return d.writeGate != nil
+}
+
+// OutputsWanted is the driver's io.OutputsRequester: true once after it
+// forgot commands (the write gate dropped them, or reopened), so the
+// runtime hands it every output on the next scan.
+func (d *Driver) OutputsWanted() bool {
+	return d.wanted.Load() && d.wanted.Swap(false)
+}
+
+var (
+	_ nio.OutputsRequester                   = (*Driver)(nil)
+	_ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
+)
 
 // Start connects and runs the poll loop until ctx ends or Stop is called.
 func (d *Driver) Start(ctx context.Context) {
@@ -329,6 +449,9 @@ func (d *Driver) run(ctx context.Context) {
 	}
 	backoff := d.retryMin
 	for {
+		// A look (see SetWriteGate), on every connect attempt; Health
+		// reports a standby's mode before its first session too.
+		d.standby.Store(!d.gateOpen())
 		conn, err := d.dial(ctx)
 		polled := false
 		if err == nil {
@@ -369,17 +492,48 @@ func (d *Driver) run(ctx context.Context) {
 	}
 }
 
-// session is one connection: power-up clear, chassis check, the
-// configuration the manifest asks for, then poll (or receive the stream)
-// until an error. polled reports whether at least one scan completed.
+// errSwitch ends a session's loop when the write gate no longer matches
+// the role the loop was started in: session carries on, on the same
+// connection, in the other role.
+var errSwitch = errors.New("optommp: the write gate changed")
+
+// standbyNote: under redundancy a STANDBY changes nothing on the unit
+// (#618). Its session reads the identity and the chassis and polls the
+// packed areas, the same values the leader's custom data area or stream
+// would deliver. It does not send the power-up clear, set the watchdog,
+// write the custom data area's pointers, configure or restore the stream,
+// or clear a latch: the leader owns all of them, and a standby that
+// touched them would take the stream from the leader, clear a latch event
+// before the leader saw it, or put the configuration back under it on a
+// stop. A latch is read without clearing it (the packed latch words are
+// plain reads; only the clear area clears), so a standby sees one set
+// until the leader clears it.
+//
+// The role follows the write gate, looked at every scan, every datagram
+// and every stream check. A standby whose gate opens (a takeover) becomes
+// the leader on the same connection: it sends the power-up clear if one
+// is owed and configures the watchdog, custom data area and stream the
+// manifest asks for. A leader whose gate closes stops using the stream
+// (its socket closes) and polls as a standby, leaving the unit's
+// configuration to the new leader: nothing is put back. Only the clean
+// stop of a replica whose gate is still open restores what it found, and
+// that is held in memory: after a takeover it is the previous leader's
+// configuration, not the unit's original (the guide says so). Persisting
+// the originals in the retain store was not chosen: the driver has no
+// handle on it, and an original recorded once goes stale if someone
+// changes the unit's stream in groov Manage while nautilus runs.
+
+// session is one connection: identity and chassis check, then the
+// session's role (see standbyNote) until an error or a stop. A leader
+// sends the power-up clear, configures what the manifest asks for and
+// polls or receives the stream; a standby polls the packed areas. polled
+// reports whether at least one scan completed.
 func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error) {
-	if puc, err := c.ReadUint32(addrPUCFlag); err != nil {
-		return false, err
-	} else if puc != 0 {
-		if err := c.Write(addrPowerupClear, []byte{0, 0, 0, 1}); err != nil {
-			return false, fmt.Errorf("optommp: power-up clear: %w", err)
+	lead := d.gateOpen()
+	if lead {
+		if err := d.powerupClear(c); err != nil {
+			return false, err
 		}
-		d.log.Info("optommp: sent the power-up clear the processor asked for", "host", d.m.Host)
 	}
 	unit, fw := "", ""
 	if b, err := c.Read(addrUnitDescription, 32); err == nil {
@@ -396,52 +550,102 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 	if err := d.checkChassis(c); err != nil {
 		return false, err
 	}
-	uc, err := d.configure(c)
-	if err != nil {
-		return false, err
-	}
-	d.mu.Lock()
-	wd := time.Duration(d.watchdogMs) * time.Millisecond
-	d.mu.Unlock()
-	if wd > 0 && d.reconnectGap > wd {
-		// Nothing reached the unit between the last session's last request
-		// and this one's first: longer than its watchdog.
-		d.trips.Add(1)
-		d.log.Warn("optommp: reconnected after longer than the unit's watchdog; it may have applied watchdog values",
-			"host", d.m.Host, "gap", d.reconnectGap.Round(time.Millisecond), "watchdog", wd)
-	}
-	if d.gateOpen() {
-		// The unit may have restarted, or its watchdog fired, since the
-		// last session: what it holds is not known to be what was written.
-		d.mu.Lock()
-		n := d.requeueLocked(false)
-		d.mu.Unlock()
-		if n > 0 {
-			d.log.Info("optommp: rewriting every commanded output on reconnect", "host", d.m.Host, "outputs", n)
-		}
-	}
+	leading := false // a role whose configuration a clean stop restores
 	defer func() {
-		if ctx.Err() != nil {
-			d.restore(c) // a clean stop: leave the unit as it was found
+		// A clean stop leaves the unit as it was found, but only while
+		// this replica still leads: one that lost the lease before its
+		// loop looked again must not put its configuration back over the
+		// new leader's. A leader's ordinary stop still restores, since
+		// `naut run` stops the drivers before it gives up the lease.
+		if ctx.Err() != nil && leading && d.gateOpen() {
+			d.restore(c)
 		}
 	}()
-	d.connected.Store(true)
-	d.setOnline(true)
-	d.log.Info("optommp: connected", "host", d.m.Host, "unit", unit, "firmware", fw,
-		"tags", len(d.tags), "mode", d.mode())
-	if uc != nil {
-		return d.streamLoop(ctx, c, uc)
+	for first := true; ; first = false {
+		var uc *net.UDPConn
+		if lead {
+			if !first {
+				if err := d.powerupClear(c); err != nil {
+					return polled, err
+				}
+			}
+			if uc, err = d.configure(c); err != nil {
+				return polled, err
+			}
+			d.cur, d.curCustom = &d.plan, d.custom
+		} else {
+			if err := d.configureWatchdog(c, false); err != nil {
+				return polled, err
+			}
+			d.cur, d.curCustom = &d.packed, false
+		}
+		leading = lead
+		d.standby.Store(!lead)
+		if first {
+			d.mu.Lock()
+			wd := time.Duration(d.watchdogMs) * time.Millisecond
+			d.mu.Unlock()
+			if wd > 0 && d.reconnectGap > wd {
+				// Nothing reached the unit between the last session's last
+				// request and this one's first: longer than its watchdog.
+				d.trips.Add(1)
+				d.log.Warn("optommp: reconnected after longer than the unit's watchdog; it may have applied watchdog values",
+					"host", d.m.Host, "gap", d.reconnectGap.Round(time.Millisecond), "watchdog", wd)
+			}
+		}
+		if lead && d.gateOpen() {
+			// The unit may have restarted, or its watchdog fired, since the
+			// last session: what it holds is not known to be what was
+			// written.
+			d.mu.Lock()
+			n := d.requeueLocked(false)
+			d.mu.Unlock()
+			if n > 0 {
+				d.log.Info("optommp: rewriting every commanded output on reconnect", "host", d.m.Host, "outputs", n)
+			}
+		}
+		d.setOnline(true) // a switch too: a late stream's outage ends with it
+		if first {
+			d.connected.Store(true)
+			d.log.Info("optommp: connected", "host", d.m.Host, "unit", unit, "firmware", fw,
+				"tags", len(d.tags), "mode", d.mode())
+		} else if lead {
+			d.log.Info("optommp: write gate open: leading the unit", "host", d.m.Host, "mode", d.mode())
+		} else {
+			d.log.Info("optommp: write gate closed: standing by, polling, leaving the unit's configuration to the leader", "host", d.m.Host)
+		}
+		var scanned bool
+		if uc != nil {
+			scanned, err = d.streamLoop(ctx, c, uc)
+		} else {
+			scanned, err = d.pollLoop(ctx, c, lead)
+		}
+		polled = polled || scanned
+		if !errors.Is(err, errSwitch) {
+			return polled, err
+		}
+		lead = !lead
 	}
+}
 
+// pollLoop polls with the session's plan (d.cur) until an error, a stop,
+// or the write gate no longer matching lead (errSwitch).
+func (d *Driver) pollLoop(ctx context.Context, c *Client, lead bool) (polled bool, err error) {
 	// Scan k is due at start + k·scan-rate; how late each one starts is
 	// the wake-up lateness on the status row. With priority: the driver
 	// sleeps to the slot in the kernel; without, a ticker wakes it.
 	start := time.Now()
 	slot := start
 	var tick *time.Ticker
+	var look <-chan time.Time // a look at the gate between slow scans
 	if d.m.Priority == 0 {
 		tick = time.NewTicker(d.scanRate)
 		defer tick.Stop()
+		if d.scanRate > lookEvery {
+			lt := time.NewTicker(lookEvery)
+			defer lt.Stop()
+			look = lt.C
+		}
 	}
 	nextChassis := start.Add(d.chassis)
 	for {
@@ -450,11 +654,14 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 			return polled, err
 		}
 		polled = true
+		if d.gateOpen() != lead {
+			return polled, errSwitch
+		}
 		if time.Now().After(nextChassis) {
 			if err := d.checkChassis(c); err != nil {
 				return polled, err
 			}
-			if d.custom {
+			if d.curCustom {
 				if err := d.verifyCustom(c); err != nil {
 					return polled, err
 				}
@@ -466,7 +673,7 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 			// slots it missed rather than running them back to back.
 			for slot = slot.Add(d.scanRate); !time.Now().Before(slot); slot = slot.Add(d.scanRate) {
 			}
-			if ok, err := d.sleepTo(ctx, c, slot); !ok {
+			if ok, err := d.sleepTo(ctx, c, slot, lead); !ok {
 				return polled, err
 			}
 			continue
@@ -478,6 +685,10 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 			case <-tick.C:
 				waiting = false
 				slot = start.Add(time.Since(start) / d.scanRate * d.scanRate)
+			case <-look:
+				if d.gateOpen() != lead { // see SetWriteGate
+					return polled, errSwitch
+				}
 			case <-d.kick:
 				// A command: write it now, read on the next tick.
 				if err := d.flush(c); err != nil {
@@ -486,6 +697,23 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 			}
 		}
 	}
+}
+
+// powerupClear sends the power-up clear when the processor asks for one.
+// Only a leader sends it (see standbyNote).
+func (d *Driver) powerupClear(c *Client) error {
+	puc, err := c.ReadUint32(addrPUCFlag)
+	if err != nil {
+		return err
+	}
+	if puc == 0 {
+		return nil
+	}
+	if err := c.Write(addrPowerupClear, []byte{0, 0, 0, 1}); err != nil {
+		return fmt.Errorf("optommp: power-up clear: %w", err)
+	}
+	d.log.Info("optommp: sent the power-up clear the processor asked for", "host", d.m.Host)
+	return nil
 }
 
 // checkChassis re-reads each bound slot's module type and the
@@ -556,9 +784,17 @@ func (d *Driver) poll(c *Client) error {
 
 // sleepTo waits on the driver's own thread until deadline, a millisecond
 // at a time in the kernel, writing any command that arrives meanwhile.
-// ok is false when ctx ended the wait or a write failed (err).
-func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time) (ok bool, err error) {
+// ok is false when ctx ended the wait, a write failed (err), or a look at
+// the gate between slow scans found it no longer matching lead (errSwitch).
+func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time, lead bool) (ok bool, err error) {
+	looked := time.Now()
 	for {
+		if time.Since(looked) >= lookEvery {
+			if d.gateOpen() != lead { // a look between slow scans (see SetWriteGate)
+				return false, errSwitch
+			}
+			looked = time.Now()
+		}
 		rem := time.Until(deadline)
 		if rem <= 0 {
 			return true, nil
@@ -581,8 +817,9 @@ func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time) (ok
 // fetch reads the scan's words: the packed areas one block read each, or
 // the custom data area in one.
 func (d *Driver) fetch(c *Client) (img []uint32, reqs int, err error) {
-	img = make([]uint32, len(d.plan.words))
-	if d.custom {
+	p := d.cur
+	img = make([]uint32, len(p.words))
+	if d.curCustom {
 		n := len(img) * 4
 		b, err := c.Read(addrCustomData, n)
 		if err != nil {
@@ -593,26 +830,29 @@ func (d *Driver) fetch(c *Client) (img []uint32, reqs int, err error) {
 		}
 		return img, (n + MaxBlock - 1) / MaxBlock, nil
 	}
-	bufs := make([][]byte, len(d.plan.areas))
-	for k, a := range d.plan.areas {
+	bufs := make([][]byte, len(p.areas))
+	for k, a := range p.areas {
 		if bufs[k], err = c.Read(a.base, a.n); err != nil {
 			return nil, 0, err
 		}
 		reqs += (a.n + MaxBlock - 1) / MaxBlock
 	}
-	for i, s := range d.plan.src {
+	for i, s := range p.src {
 		img[i] = binary.BigEndian.Uint32(bufs[s.area][s.off:])
 	}
 	return img, reqs, nil
 }
 
-// deliver decodes one word image — polled or streamed — into values and
-// quality, clears the latches it reported, and writes pending outputs. It
+// deliver decodes one word image — polled or streamed, laid out by the
+// session's plan (d.cur) — into values and quality, clears the latches it
+// reported while the write gate is open, and writes pending outputs. It
 // returns the requests that took.
 func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 	var clears []uint32
-	// A replica that is not writing has no command to hold the unit to.
+	// A replica that is not writing has no command to hold the unit to,
+	// and clears no latch: the leader must see every latch event (#618).
 	checkOut := d.gateOpen()
+	refs := d.cur.refs
 	now := time.Now()
 	type turn struct {
 		name     string
@@ -621,7 +861,7 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 	var turned []turn // digital outputs that began or stopped disagreeing
 	d.mu.Lock()
 	for i, b := range d.tags {
-		r := d.plan.refs[i]
+		r := refs[i]
 		w := img[r.val]
 		set := w>>r.bit&1 == 1
 		var v any
@@ -639,7 +879,7 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 			v = int64(w)
 		case PointOnLatch, PointOffLatch:
 			v = set
-			if set {
+			if set && checkOut {
 				off := clearOnLatch
 				if b.Point == PointOffLatch {
 					off = clearOffLatch
@@ -706,6 +946,17 @@ func (d *Driver) flush(c *Client) error {
 
 // flushCount writes every pending output and reports how many requests it
 // took. A failed write leaves the rest pending for the next session.
+//
+// The gate is checked again here, not only when the command was accepted:
+// a replica that lost leadership while the processor was away must not
+// send what it accepted while it led (see SetWriteGate). It is checked
+// before every write, so a flush stops once the gate closes. Dropped
+// commands are forgotten (no longer commanded) and asked for
+// (OutputsWanted), so the push after the gate reopens commands them
+// again. A drop is not a failure. A flush that finds the gate reopened
+// since it took its queue sends none of the rest either: the reopen forgot
+// them as the previous term's, and the push that answers it sends this
+// term's values.
 func (d *Driver) flushCount(c *Client) (int, error) {
 	d.rearm(c)
 	d.mu.Lock()
@@ -715,8 +966,25 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 	}
 	work := d.pending
 	d.pending = map[string]any{}
+	term := d.term
 	d.mu.Unlock()
 
+	// drop forgets what this flush dropped. A tag WriteOutputs has handed
+	// a newer command since keeps it, and after a reopen (a new term)
+	// nothing of this flush's is left to forget.
+	drop := func(names []string) {
+		d.mu.Lock()
+		if d.term == term {
+			for _, n := range names {
+				if _, again := d.pending[n]; !again && sameScalar(d.commanded[n], work[n]) {
+					delete(d.commanded, n)
+				}
+			}
+		}
+		d.mu.Unlock()
+		d.wanted.Store(true) // the commands it dropped: ask for them
+		d.log.Warn("optommp: write gate closed; queued writes dropped", "host", d.m.Host, "count", len(names))
+	}
 	type pointWrite struct {
 		addr  uint32
 		data  []byte
@@ -808,13 +1076,37 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 		binary.BigEndian.PutUint64(data[8:], bitsOff)
 		writes = append(writes, pointWrite{addrScratchOn, data, bitNames})
 	}
+	// rest names write i and every one after it.
+	rest := func(i int) []string {
+		var names []string
+		for _, w := range writes[i:] {
+			names = append(names, w.names...)
+		}
+		return names
+	}
+	// goOn looks at the gate before write i: false when the flush stops,
+	// the rest dropped (closed) or already forgotten (reopened).
+	goOn := func(i int) bool {
+		if !d.gateOpen() {
+			drop(rest(i))
+			return false
+		}
+		d.mu.Lock()
+		same := d.term == term
+		d.mu.Unlock()
+		return same
+	}
 	for i, w := range writes {
+		if !goOn(i) {
+			return i, nil
+		}
 		if err := c.Write(w.addr, w.data); err != nil {
 			// Requeue this write and every one after it, unless a newer
-			// command for the same tag arrived meanwhile.
+			// command for the same tag arrived meanwhile, or a reopen
+			// forgot them as the previous term's.
 			d.mu.Lock()
-			for _, rest := range writes[i:] {
-				for _, name := range rest.names {
+			if d.term == term {
+				for _, name := range rest(i) {
 					if _, newer := d.pending[name]; !newer {
 						d.pending[name] = work[name]
 					}
@@ -960,7 +1252,8 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 // plus every command again on reconnect, and the digital and analog ones
 // after the unit may have applied watchdog values (rearm). Commands are
 // held across a disconnect. While the write gate is closed nothing is
-// accepted, and nothing is rewritten.
+// accepted, and nothing is rewritten; once it reopens every output is a
+// command again (see SetWriteGate).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	if !d.gateOpen() {
 		return nil
@@ -1042,6 +1335,8 @@ type Health struct {
 
 func (d *Driver) mode() string {
 	switch {
+	case d.standby.Load():
+		return "poll" // a standby polls the packed areas (see standbyNote)
 	case d.m.Stream > 0:
 		return "stream"
 	case d.custom:

@@ -20,10 +20,12 @@ VAR_EXTERNAL
     Well2Called   : BOOL;
 END_VAR
 FBD
+  NETWORK 'Well 1: lead, called below TankHighSP'
   belowHigh = LE(TankLevelPct, TankHighSP)
-  belowLow  = LE(TankLevelPct, TankLowSP)
-
   Well1Called := AND(belowHigh, Well1__Online)
+
+  NETWORK 'Well 2: backup, called below TankLowSP'
+  belowLow = LE(TankLevelPct, TankLowSP)
   Well2Called := AND(belowLow, Well2__Online)
 END_FBD
 END_PROGRAM

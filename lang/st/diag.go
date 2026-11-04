@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-// parseLineRE recovers a line number from a parser error message. Parse
-// errors are currently plain strings that usually embed "line N"; see
-// ParseErrorPos.
-var parseLineRE = regexp.MustCompile(`line (\d+)`)
+// parseLineRE recovers a position from a parser error message. Parse
+// errors are plain strings that usually embed "line N", or "line N:C" when
+// the column is known; see ParseErrorPos.
+var parseLineRE = regexp.MustCompile(`line (\d+)(?::(\d+))?`)
 
 // ParseErrorPos best-effort extracts a source position from an error
 // returned by Parse. It exists so every consumer (the LSP diagnostics and
@@ -31,7 +31,11 @@ func ParseErrorPos(err error) (Pos, bool) {
 	if convErr != nil || line < 1 {
 		return Pos{}, false
 	}
-	return Pos{Line: line, Col: 1}, true
+	col := 1
+	if c, err := strconv.Atoi(m[2]); err == nil && c >= 1 {
+		col = c
+	}
+	return Pos{Line: line, Col: col}, true
 }
 
 // LowerError is a structured error produced by the ST → IR lowering pass.

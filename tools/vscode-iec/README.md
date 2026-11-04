@@ -19,7 +19,9 @@ controller onto both the text and the diagram.
    asks, or run **nautilus: Install or Update the naut CLI**. It downloads
    the release for your OS and CPU from GitHub, checks it against
    `checksums.txt`, and keeps it in the extension's storage. No Go
-   toolchain needed.
+   toolchain needed. Terminals inside VS Code find it at once; to use it
+   in other terminals too, click **Add to PATH** when it asks (see
+   [naut on your PATH](#naut-on-your-path)).
 3. **Create a project.** Run **nautilus: Create Project…**, or follow the
    **nautilus: Get Started** walkthrough (install, create, open a diagram,
    run, test; about five minutes). The default *Demo* template is a
@@ -78,6 +80,30 @@ controller onto both the text and the diagram.
   closely for another line.
 
 ![A Sequential Function Chart with the active step highlighted](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/sfc-chart.png)
+
+## Export and print
+
+**nautilus: Export Diagram…** (in the "…" menu of a diagram editor, a
+preview or a text editor, on the right-click menu of the editor or of the
+file in the Explorer) writes an LD, FBD or SFC diagram, or a Rockwell
+`.L5X` ladder, as:
+
+- **PDF**, paginated for printing: black on white, page breaks between
+  rungs, networks and SFC ranks (never through one), the POU's name on
+  every page and "Page n of N" with the file name in the footer. An SFC
+  prints its ACTION bodies after the chart. Paper size and orientation come
+  from `nautilus.export.paper` and `nautilus.export.orientation`; by default
+  Letter or A4 follows the system locale, and a diagram too wide for a
+  portrait page turns landscape.
+- **SVG**, the whole diagram as one vector image at screen size, for
+  documents and slides.
+
+**nautilus: Print Diagram…** makes the same PDF and opens it in the system's
+PDF viewer, to print from there. The diagram is drawn by the editors' own
+layout from the file, not captured from the screen: no selection, palette
+or diagnostics come along. With a controller connected, both commands ask
+whether to include its live values (power flow, values under the operands,
+active steps); the default is the program alone.
 
 ## Visual diff
 
@@ -334,6 +360,38 @@ server.
   `naut` on your PATH (for example from `go install
   github.com/joyautomation/nautilus/cmd/naut@latest`) is used first. The
   extension warns when the one it finds is older than it needs.
+
+### naut on your PATH
+
+When the extension runs its own copy of `naut`:
+
+- **Terminals inside VS Code** get its folder first on their PATH, so `naut`
+  there is the one the editor uses. New terminals have it; relaunch any that
+  were open. When the extension runs a `naut` of your own instead (on PATH,
+  or `nautilus.cliPath`), their PATH is left alone.
+- **Other terminals**: after installing, the extension asks before changing
+  anything and lists exactly what will change. Click **Add to PATH**, or
+  **Not now** (remembered; run **nautilus: Add naut to PATH** later). With
+  your OK, and no admin rights:
+  - macOS and Linux: a link `~/.local/bin/naut` to the extension's copy (so
+    updates follow). If `~/.local/bin` isn't on PATH yet, one line that
+    *appends* it, ending `# added by the nautilus VS Code extension`, goes
+    into your shell's startup files. macOS: `~/.zprofile` (`~/.bash_profile`
+    if your shell is bash), and the other one if it exists. Linux:
+    `~/.profile` (`~/.zshrc` if your shell is zsh), plus `~/.bashrc`,
+    `~/.zshrc`, `~/.profile` and, for zsh, `~/.zprofile` where they exist.
+    fish (if `~/.config/fish` exists): `~/.config/fish/conf.d/nautilus.fish`.
+    Other shells: add `~/.local/bin` to PATH yourself. The prompt names the
+    exact files.
+  - Windows: the extension's folder is appended to your user PATH
+    (`HKCU\Environment`, kept as an expandable string so `%USERPROFILE%`
+    entries still work).
+  - Open a new terminal window afterwards. A `naut` you installed yourself
+    keeps winning (the folder is appended, not prepended), and an existing
+    `~/.local/bin/naut` the extension didn't make is never replaced.
+- **nautilus: Remove naut from PATH** undoes it: the link, the marked lines,
+  the fish file, the user PATH entry, and the integrated terminals' PATH.
+  It touches nothing it didn't add.
 - A running nautilus controller (`naut run`) for live values, online edit
   and the controller diff.
 
@@ -347,6 +405,8 @@ server.
 | `nautilus.token` | `""` | Bearer token for writes to a controller started with `NAUTILUS_TOKEN`. Set it in workspace settings. |
 | `nautilus.confirmControllerWrites` | `true` | Confirm before Download or Rollback changes what a controller runs. Leave it on for anything that might be live. |
 | `nautilus.logix.resetValuesOnDownload` | `false` | Download Project to Logix Controller keeps the controller's tag values where the tag is unchanged; turn this on to start every tag at the project's value (`naut logix deploy --download --reset-values`). |
+| `nautilus.export.paper` | `auto` | Paper for exported and printed diagrams: `letter`, `a4`, or `auto` (Letter where the system locale's region uses it, A4 elsewhere). |
+| `nautilus.export.orientation` | `auto` | `portrait`, `landscape`, or `auto` (portrait unless the diagram is clearly wider than a portrait page). |
 | `nautilus.mimic.snapToGrid` | `true` | Snap dragged equipment, labels and pipe points to the grid in the mimic editor. |
 | `nautilus.scene.snapToGrid` | `true` | Snap a dragged node to the grid cell and its rotation to 15° in the scene editor; Shift while dragging is a free move. |
 
@@ -364,6 +424,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Open Component Preview / Preview HMI Page | A `.svelte` component, or a whole route, beside the text |
 | Copy Kit Component to Project… | Start your own symbol from one the kit ships |
 | Diff … Diagram (vs git HEAD / between git revisions… / vs Controller) | Visual diff |
+| Export Diagram… / Print Diagram… | An LD, FBD or SFC diagram as a paginated PDF or one SVG image; print through the system's PDF viewer |
 | Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
 | Set Live Value… | Write a tag on the controller |
 | Force… / Remove Force / Remove All Forces / Show Forces | Hold a tag at a value until removed; list and clear forces |
@@ -371,6 +432,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Download Program to Controller | Online edit |
 | Diff / Pull / Rollback Program | Compare with, bring back, or undo on the controller |
 | Show CLI Info | Which `naut` is in use, and its version |
+| Add naut to PATH / Remove naut from PATH | Make the extension's `naut` usable in any terminal, or undo that ([details](#naut-on-your-path)) |
 
 ## Troubleshooting
 
@@ -379,6 +441,9 @@ The most used; all are under **nautilus:** in the Command Palette.
   see a PATH set in your shell profile; the extension searches the usual
   install directories, and the **nautilus** output channel lists every one
   it tried. **Show CLI Info** says which `naut` it picked.
+- **`naut: command not found` in a terminal.** Inside VS Code, relaunch
+  the terminal. Outside, run **nautilus: Add naut to PATH** and open a new
+  terminal window (see [naut on your PATH](#naut-on-your-path)).
 - **Flatpak VS Code.** Its sandbox can't run programs installed on the
   host, so a `naut` on your PATH is invisible. The install command puts a
   copy inside the sandbox; or use VS Code from a `.deb`, `.rpm` or tarball.

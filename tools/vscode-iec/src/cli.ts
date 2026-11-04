@@ -10,6 +10,21 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { isExecutableFile, resolveCli, Resolved } from "./cliResolve";
+import {
+  applyUnix,
+  applyWindows,
+  danglingOwnLink,
+  describeResult,
+  PathResult,
+  planPathSetup,
+  PROFILE_MARK,
+  removeUnix,
+  removeWindows,
+  RunPowerShell,
+  sameFile,
+  unixChanges,
+  windowsChange,
+} from "./cliPath";
 import { checkMinVersion, installLatestCli, parseCliVersionOutput, RELEASES_PAGE } from "./cliInstall";
 
 const INSTALL_URL = "https://github.com/joyautomation/nautilus#getting-started";
@@ -43,6 +58,193 @@ export function initCli(context: vscode.ExtensionContext): void {
   minCliVersion = (context.extension.packageJSON as { nautilusCli?: { minVersion?: string } }).nautilusCli?.minVersion ?? "0.0.0";
   state = context.globalState;
   cache = undefined;
+  terminalEnv = context.environmentVariableCollection;
+  syncTerminalPath();
+  // The managed copy is gone (storage cleared): don't leave our link dangling.
+  if (process.platform !== "win32") {
+    const dangling = danglingOwnLink(os.homedir(), managedBinDir);
+    if (dangling) {
+      try {
+        fs.rmSync(dangling);
+        channel().appendLine(`[install] removed ${dangling}: the naut it pointed to is gone`);
+      } catch {
+        // best effort
+      }
+    }
+  }
+}
+
+/** The user said "Not now" to putting naut on PATH outside VS Code; the
+ * install command doesn't ask again ("Add naut to PATH" still does). */
+export const PATH_DECLINED_KEY = "nautilus.cli.pathDeclined";
+/** "Remove naut from PATH" ran: integrated terminals don't get it either. */
+export const TERMINAL_PATH_OFF_KEY = "nautilus.cli.terminalPathOff";
+
+let terminalEnv: vscode.EnvironmentVariableCollection | undefined;
+
+/** The resolved naut is the extension's own copy, reached directly or
+ * through a link such as ~/.local/bin/naut. */
+export function isManagedCli(cmd: string): boolean {
+  return sameFile(cmd, managedCliPath());
+}
+
+/** Integrated terminals run the same naut the extension does: when that is
+ * the managed copy, its folder goes first on their PATH (no new window
+ * needed); otherwise (a naut of your own on PATH, nautilus.cliPath set, or
+ * nothing installed) their PATH is left alone. Call again whenever that
+ * answer may change. Returns whether the folder is now on their PATH. */
+export function syncTerminalPath(): boolean {
+  if (!terminalEnv || !managedBinDir) return false;
+  const cli = resolveCliNow();
+  if (!state?.get<boolean>(TERMINAL_PATH_OFF_KEY) && cli.found && isManagedCli(cli.command)) {
+    terminalEnv.description = "Puts the naut CLI the nautilus extension uses on PATH";
+    terminalEnv.prepend("PATH", managedBinDir + path.delimiter);
+    return true;
+  }
+  terminalEnv.clear();
+  return false;
+}
+
+function runPowerShell(script: string, env: Record<string, string>): Promise<string> {
+  // -EncodedCommand: the script needs no quoting through the command line.
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  return new Promise((resolve, reject) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+      { encoding: "utf8", timeout: 20_000, env: { ...process.env, ...env }, windowsHide: true },
+      (err, stdout, stderr) => {
+        if (!err) return resolve(stdout);
+        // The script's own message, not "Command failed: powershell.exe <base64…>".
+        const why = String(stderr).trim().split(/\r?\n/)[0] || (err.killed ? "PowerShell timed out" : `PowerShell exited with ${err.code}`);
+        reject(new Error(why));
+      }
+    );
+  });
+}
+
+/** The tests swap in a fake registry. */
+let powerShell: RunPowerShell = runPowerShell;
+export function setPowerShellForTest(run: RunPowerShell | undefined): void {
+  powerShell = run ?? runPowerShell;
+}
+
+const ADD_CMD = '"nautilus: Add naut to PATH"';
+const NOT_ON_PATH = ` It is not on PATH outside VS Code; run ${ADD_CMD} to put it there.`;
+
+/** Offer to make the managed naut reachable from terminals outside VS Code
+ * (no admin rights; see cliPath.ts). Nothing outside the extension changes
+ * until the user agrees to a prompt that lists every file, or the user PATH,
+ * that will change. "Not now" is remembered, so the install command doesn't
+ * ask again; `explicit` (the Add command) asks regardless. Only offered when
+ * the extension itself runs the managed copy, so a terminal's naut and the
+ * editor's agree. Failures are reported, never fatal. Returns a sentence
+ * (with a leading space) for the notification. */
+export async function offerPathSetup(log: vscode.OutputChannel, explicit: boolean): Promise<string> {
+  if (!managedBinDir) return "";
+  const cli = resolveCliNow();
+  if (!cli.found || !isManagedCli(cli.command)) {
+    return explicit && cli.found ? ` The extension runs ${cli.command}, not its own copy, so PATH was left as it is.` : "";
+  }
+  if (!explicit && state?.get<boolean>(PATH_DECLINED_KEY)) return NOT_ON_PATH;
+  try {
+    const plan = planPathSetup({ platform: process.platform, home: os.homedir(), env: process.env, managedBinDir });
+    let changes: string[];
+    if (plan.kind === "symlink") {
+      const c = unixChanges(plan, managedBinDir);
+      if (c.blocked) return ` ${c.blocked}.`;
+      changes = c.changes.map((x) => x.describe);
+    } else {
+      const next = await windowsChange(plan, powerShell);
+      changes = next === undefined ? [] : [`add ${plan.dir} to the end of your user PATH (HKCU\\Environment)`];
+    }
+    if (!changes.length) return explicit ? " naut is already on PATH for new terminals." : "";
+
+    const ADD = "Add to PATH";
+    const NOT_NOW = "Not now";
+    const pick = await vscode.window.showInformationMessage(
+      "nautilus: put naut on PATH for terminals outside VS Code too?",
+      {
+        modal: true,
+        detail:
+          "This will:\n" +
+          changes.map((c) => `• ${c}`).join("\n") +
+          (plan.kind === "symlink" ? `\n\nEach line it adds ends with "${PROFILE_MARK}".` : "") +
+          `\n\n"nautilus: Remove naut from PATH" undoes it. Terminals inside VS Code have naut either way.`,
+      },
+      ADD,
+      NOT_NOW
+    );
+    if (pick !== ADD) {
+      // A dismissed prompt asks again next time; "Not now" doesn't.
+      if (pick === NOT_NOW) await state?.update(PATH_DECLINED_KEY, true);
+      log.appendLine(`[install] PATH outside VS Code left unchanged (${pick ?? "dismissed"})`);
+      return NOT_ON_PATH;
+    }
+    await state?.update(PATH_DECLINED_KEY, undefined);
+    const result: PathResult = plan.kind === "symlink" ? applyUnix(plan, managedBinDir) : await applyWindows(plan, powerShell);
+    for (const l of result.done) log.appendLine(`[install] ${l}`);
+    if (result.skipped) log.appendLine(`[install] ${result.skipped}`);
+    for (const l of result.undo) log.appendLine(`[install] to undo: ${l}`);
+    const undo = result.undo.length ? ` To undo: ${result.undo.join("; ")}.` : "";
+    return ` ${describeResult(result)}${undo}`;
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    log.appendLine(`[install] couldn't put naut on PATH: ${why}`);
+    return ` Couldn't put naut on PATH outside VS Code, nothing was changed there: ${why}.`;
+  }
+}
+
+const TERMINALS_NOTE = " New terminals inside VS Code find it; relaunch any that were already open.";
+
+/** "nautilus: Add naut to PATH": the install command's PATH step on its own,
+ * asked again even after "Not now" or "Remove naut from PATH". */
+export async function addCliToPathCommand(): Promise<void> {
+  const managed = managedCliPath();
+  if (!managed || !fs.existsSync(managed)) {
+    const INSTALL = "Install naut";
+    const pick = await vscode.window.showInformationMessage(
+      "nautilus: the extension hasn't installed its own naut. Install it first; it asks about PATH then.",
+      INSTALL
+    );
+    if (pick === INSTALL) void installCliCommand();
+    return;
+  }
+  await state?.update(TERMINAL_PATH_OFF_KEY, undefined);
+  cache = undefined;
+  const inTerminals = syncTerminalPath();
+  const note = (await offerPathSetup(channel(), true)) + (inTerminals ? TERMINALS_NOTE : "");
+  void vscode.window.showInformationMessage(`nautilus:${note || " nothing to change."}`);
+}
+
+/** "nautilus: Remove naut from PATH": undo everything the extension did to
+ * PATH (our link, our marked profile lines, our fish file, our user PATH
+ * entry, the integrated terminals' PATH), and stop doing it until "Add naut
+ * to PATH". */
+export async function removeCliFromPathCommand(): Promise<void> {
+  const log = channel();
+  await state?.update(TERMINAL_PATH_OFF_KEY, true);
+  await state?.update(PATH_DECLINED_KEY, true);
+  terminalEnv?.clear();
+  let done: string[] = [];
+  if (managedBinDir) {
+    try {
+      done =
+        process.platform === "win32"
+          ? await removeWindows(managedBinDir, powerShell)
+          : removeUnix({ platform: process.platform, home: os.homedir(), env: process.env, managedBinDir });
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      log.appendLine(`[path] couldn't undo every PATH change: ${why}`);
+      void vscode.window.showErrorMessage(`nautilus: couldn't undo every PATH change: ${why}`);
+      return;
+    }
+  }
+  for (const l of done) log.appendLine(`[path] ${l}`);
+  void vscode.window.showInformationMessage(
+    `nautilus: ${done.length ? done.join("; ") : "nothing outside VS Code to undo"}. ` +
+      `Terminals inside VS Code no longer get the extension's naut (relaunch open ones). ${ADD_CMD} puts it back.`
+  );
 }
 
 /** The oldest naut this extension works with (nautilusCli.minVersion). */
@@ -80,12 +282,6 @@ export function resolveCliNow(): Resolved {
 /** The command to spawn for the nautilus CLI. */
 export function cliCommand(): string {
   return resolveCliNow().command;
-}
-
-function samePath(a: string, b: string | undefined): boolean {
-  if (!b) return false;
-  const norm = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
-  return norm(a) === norm(b);
 }
 
 /** A Flatpak VS Code runs in a sandbox that can't execute host binaries, so
@@ -214,13 +410,22 @@ async function runInstall(): Promise<void> {
   cache = undefined;
   checked.clear();
   const now = resolveCliNow();
+  const inTerminals = syncTerminalPath();
+  // The language server moves to the new binary first: the PATH question
+  // below is a modal that may sit unanswered for a while.
   void vscode.commands.executeCommand("nautilus.restartLanguageServer");
-  if (samePath(now.command, installed.path)) {
-    void vscode.window.showInformationMessage(`nautilus: naut ${installed.version} installed.`);
+  if (sameFile(now.command, installed.path)) {
+    const term = inTerminals ? TERMINALS_NOTE : "";
+    void vscode.window.showInformationMessage(`nautilus: naut ${installed.version} installed.${term}`);
+    // Not awaited: the install is done whatever the answer is.
+    void offerPathSetup(log, false).then((note) => {
+      if (note) void vscode.window.showInformationMessage(`nautilus:${note}`);
+    });
     return;
   }
   // Something earlier in the search order (PATH, or an explicit cliPath)
-  // still wins. Say so rather than silently not using the new binary.
+  // still wins. Say so rather than silently not using the new binary. (No
+  // PATH offer: that is only for when the extension runs its own copy.)
   const USE = "Use the installed one";
   const pick = await vscode.window.showInformationMessage(
     `nautilus: naut ${installed.version} installed, but the extension is still using ${now.command} ` +
@@ -236,11 +441,11 @@ async function runInstall(): Promise<void> {
 
 /** A guess at who put a binary where it is, for "update it the same way". */
 function howInstalled(cmd: string): string {
-  if (samePath(cmd, managedCliPath())) return "installed by this extension";
+  if (isManagedCli(cmd)) return "installed by this extension";
   if (configured().includes("/") || configured().includes("\\")) return "set by nautilus.cliPath";
   const dir = path.dirname(cmd);
   const goDirs = [process.env.GOBIN, ...(process.env.GOPATH ?? "").split(path.delimiter).map((p) => p && path.join(p, "bin")), path.join(os.homedir(), "go", "bin")];
-  if (goDirs.some((d) => d && samePath(dir, d))) return "a go install";
+  if (goDirs.some((d) => d && sameFile(dir, d))) return "a go install";
   return "found on PATH or in a well-known directory";
 }
 
@@ -285,7 +490,7 @@ export async function checkCliVersion(): Promise<void> {
 
   const key = `${version}<${minCliVersion}`;
   if (state?.get<string>("nautilus.cli.skipVersionWarning") === key) return;
-  const managed = samePath(cli.command, managedCliPath());
+  const managed = isManagedCli(cli.command);
   const UPDATE = "Update naut";
   const SKIP = "Don't show again for this version";
   const pick = await vscode.window.showWarningMessage(

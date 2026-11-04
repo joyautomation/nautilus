@@ -323,14 +323,33 @@ claims:
       an output's `init:` reaches the controller is not.
   - id: EIP-031
     claim: >-
-      A write that fails because the connection broke is requeued (latest
-      value per tag) and retried after reconnect; a write the controller
-      refuses on a live connection is logged, dropped for that flush, and
-      goes again when the value changes.
+      A write the controller refuses on a live connection is logged,
+      dropped for that flush, and goes again when the value changes.
     source: "#writes"
     tests: []
     note: >-
-      No test breaks the connection or refuses a write.
+      No test refuses a write. The broken-connection half of this claim is
+      EIP-052.
+  - id: EIP-052
+    claim: >-
+      Queued writes go out in tag-name order, a struct's members in field
+      order. When the connection breaks partway through a flush, the write
+      that broke and every one after it are requeued and sent after the
+      reconnect, and the writes before it are not; a struct cut partway
+      re-sends only the members the controller had not confirmed; a tag
+      commanded again meanwhile goes with its newer value.
+    source: "#writes"
+    tests:
+      - go ./eip TestBrokenFlushAtEveryPoint
+      - go ./eip TestBrokenFlushKeepsANewerCommand
+    partial: true
+    note: >-
+      A proxy in front of the emulator cuts the link at each of six write
+      requests of one flush (four tags, three of them a struct's members)
+      and another client then writes over every step before the cut; the
+      test counts the write requests that reach the controller. The cut
+      request never reaches it, so a write that landed but whose answer
+      was lost (sent once more) is not exercised.
   - id: EIP-032
     claim: >-
       A write kicks the poll loop awake rather than waiting out the next
@@ -339,15 +358,76 @@ claims:
     tests: []
     note: >-
       Latency of a write against a slow scan rate is not tested.
-  - id: EIP-033
+  - id: EIP-047
     claim: >-
-      The driver has no write gate: nothing inside it suppresses a command
-      (a standby replica instead skips scans).
-    source: "#writes"
-    tests: []
+      With a write gate (redundancy leadership), a command queued while the
+      controller was down is not sent when it comes back if the gate closed
+      meanwhile: the queue drains, the commands are asked for again, and
+      the push after the replica leads again sends them.
+    source: "#redundancy"
+    tests:
+      - go ./eip TestQueuedWritesGoNowhereAfterTheGateClosed
+    partial: true
     note: >-
-      An absence; the standby-skips-scans behaviour is a runtime property
-      not tested here.
+      Under the runtime with a test coordinator whose flag is also the
+      driver's gate, the controller down and back through a proxy in front
+      of the emulator. That the writes a broken flush re-queued (EIP-052)
+      are dropped the same way when the gate has closed by the reconnect is
+      not asserted.
+  - id: EIP-048
+    claim: >-
+      A gate that closes partway through a flush stops it: the tag being
+      written and every one after it are dropped, a struct's remaining
+      members included, and a dropped command is asked for again.
+    source: "#redundancy"
+    tests:
+      - go ./eip TestGateClosingMidFlushStopsTheFlush
+    partial: true
+    note: >-
+      The gate closes once the first write lands, between tags and between
+      a struct's members. That the struct then goes out in full on the
+      next write is not asserted separately.
+  - id: EIP-049
+    claim: >-
+      When the gate reopens, every output goes out once with the program's
+      value, changed or not, a struct member by member in full: on a
+      takeover because the runtime pushes, on a reopen without one because
+      the driver asks for the outputs (io.OutputsRequester).
+    source: "#redundancy"
+    tests:
+      - go ./eip TestRegainedGateSendsTheUnchangedOutputsAgain
+      - go ./eip TestQueuedWritesGoNowhereAfterTheGateClosed
+      - go ./eip TestWriteInFlightAcrossAReopenIsNotRecorded
+    note: >-
+      Another master overwrites every scalar and struct member while the
+      gate is closed; both the takeover and the reopen without a takeover
+      are run under the runtime. A write on the wire while the gate closes
+      and reopens is not recorded as written once it is confirmed, so the
+      push after the reopen sends the value again.
+  - id: EIP-050
+    claim: >-
+      A replica that started as a standby commands every output on its
+      first takeover: the driver has no baseline.
+    source: "#redundancy"
+    tests:
+      - go ./eip TestStandbyFirstTakeoverCommands
+  - id: EIP-051
+    claim: >-
+      The driver sees the gate change only by looking at it: on every push
+      and flush, before every write, on every connect attempt, and at
+      least once a second otherwise, while connected and while waiting out
+      the reconnect backoff. A gate that closes and reopens between two
+      looks is not seen.
+    source: "#redundancy"
+    tests:
+      - go ./eip TestRegainedGateSendsTheUnchangedOutputsAgain/gate reopens while leading
+      - go ./eip TestBackoffLooksAtTheGate
+    partial: true
+    note: >-
+      The reopen without a takeover is seen by the serve loop's own look,
+      at a 20 ms scan, and a reopen during the reconnect backoff, after a
+      connect attempt saw the gate closed, by the wait's own look. The once-a-second bound with no class due sooner, the
+      look on a connect attempt, and the unseen flip are not asserted.
   - id: EIP-034
     claim: >-
       `/api/drivers` reports Kind `ethernet-ip` with state connected,

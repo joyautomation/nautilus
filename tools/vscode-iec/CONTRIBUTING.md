@@ -11,7 +11,10 @@ the repo's [RELEASING.md](../../RELEASING.md).
 - `webview-ui/` — the diagram, mimic and component editors (Svelte + Vite,
   built to `media/dist/`). A separate npm package with its own lockfile. It
   links the HMI kit locally (`file:../../../hmi`), so `hmi/` must be built
-  first.
+  first. `webview-ui/src/export/` is the diagram exporter: pure TypeScript
+  on the diagram editors' layout code, bundled to
+  `media/dist/diagram-export.cjs` for the extension host
+  (`npm --prefix webview-ui run build:export` builds just that).
 - `syntaxes/`, `schemas/`, `walkthroughs/` — grammars, the YAML JSON
   schemas, and the Get Started walkthrough.
 

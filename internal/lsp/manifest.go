@@ -28,6 +28,7 @@ import (
 
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/lint"
 	"github.com/joyautomation/nautilus/runtime"
 	"gopkg.in/yaml.v3"
 )
@@ -60,6 +61,9 @@ type manifestEntry struct {
 	// programs are checked against the Logix writer's rules as they are
 	// typed, the same rules `naut check` runs for such a project.
 	logix bool
+	// structure is the manifest's check: settings for the diagram
+	// structure warnings (lang/lint), the ones naut check uses.
+	structure *lint.Config // nil: the defaults (no good read yet)
 	// badTags are the tags whose declarations cannot be read (an unknown
 	// role, a setpoint with neither init nor type): left out of defs, and
 	// reported on the manifest instead of as undeclared in every program
@@ -438,7 +442,7 @@ func manifestAt(mpath string) *manifestEntry {
 		return f
 	}
 	decls, rawFiles := scanTagDecls(mpath)
-	tags, defs, bad, files, logix, err := readTags(mpath)
+	tags, defs, bad, files, m, err := readTags(mpath)
 	if err != nil {
 		// A manifest being edited is invalid for many of the saves it
 		// takes to add a tag. Serving the last good answer beats completion
@@ -459,7 +463,9 @@ func manifestAt(mpath string) *manifestEntry {
 		return &e
 	}
 	delete(manifests.failed, mpath)
-	e := &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags, defs: defs, badTags: bad, logix: logix}
+	structure, _ := m.Check.Structure() // ReadManifest refused a bad one
+	e := &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags, defs: defs, badTags: bad,
+		logix: m.Target != nil && m.Target.Logix != nil, structure: &structure}
 	e.unread = unreadOf(decls, defs)
 	e.diags = manifestDiagnostics(mpath, e, decls, files)
 	manifests.entries[mpath] = e
@@ -505,11 +511,11 @@ func manifestTagLocation(uri, name string) (Location, bool) {
 // in bad; the rest are still in scope. `naut check` refuses the whole
 // project instead, but an editor is answering hover and completion on a
 // keystroke: one bad tag must not take every other tag's type with it.
-func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []badTag, []string, bool, error) {
+func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []badTag, []string, *project.Manifest, error) {
 	dir := filepath.Dir(mpath)
 	m, err := project.ReadManifest(os.DirFS(dir), "")
 	if err != nil {
-		return nil, nil, nil, nil, false, err
+		return nil, nil, nil, nil, nil, err
 	}
 	defs, err := project.TagDefs(m)
 	var bad []badTag
@@ -552,7 +558,7 @@ func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []badTag, []string,
 			Desc: t.Desc,
 		})
 	}
-	return out, defs, bad, files, m.Target != nil && m.Target.Logix != nil, nil
+	return out, defs, bad, files, m, nil
 }
 
 // iecTypeOf infers a tag's IEC type from its declared initial value. The

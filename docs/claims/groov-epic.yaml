@@ -302,3 +302,119 @@ claims:
       The example's program in virtual time, with the status tags given by
       the test rather than delivered by the driver. The driver side is
       EPIC-021 and EPIC-022.
+  - id: EPIC-024
+    claim: >-
+      With a write gate (redundancy leadership), a command held while the
+      processor was away is not written when it comes back if the gate
+      closed meanwhile: the queue drains, the commands are asked for
+      again, and the push after the replica leads again writes them.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestQueuedWritesGoNowhereAfterTheGateClosed
+    note: >-
+      Under the runtime with a test coordinator whose flag is also the
+      driver's gate, against the in-process fake of the chassis.
+  - id: EPIC-025
+    claim: >-
+      A gate that closes partway through a flush stops it: the write in
+      hand and every one after it are dropped, and a dropped command is
+      asked for again.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestGateClosingMidFlushStopsTheFlush
+  - id: EPIC-026
+    claim: >-
+      When the gate reopens, every output is written once with the
+      program's value, changed or not: on a takeover because the runtime
+      pushes, on a reopen without one because the driver asks for the
+      outputs (io.OutputsRequester). Until that push the reconnect and
+      watchdog rewrites write nothing from the previous term.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestRegainedGateSendsTheUnchangedOutputsAgain
+      - go ./optommp TestQueuedWritesGoNowhereAfterTheGateClosed
+    partial: true
+    note: >-
+      Another master switches the digital output off and overwrites the
+      scratchpad integer while the gate is closed. That the reconnect and
+      watchdog rewrites stay empty until the push is not asserted.
+  - id: EPIC-027
+    claim: >-
+      A replica that started as a standby commands every output on its
+      first takeover: the first value handed over for each output is
+      written.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyFirstTakeoverCommands
+  - id: EPIC-028
+    claim: >-
+      The driver sees the gate change only by looking at it: on every push
+      and flush, before every write, every scan or stream check and at
+      least once a second while connected, and on every connect attempt. A
+      gate that closes and reopens between two looks is not seen.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestRegainedGateSendsTheUnchangedOutputsAgain/gate reopens while leading
+    partial: true
+    note: >-
+      The reopen without a takeover is seen by the scan's own look, at a
+      5 ms scan. The once-a-second look between slower scans, the stream
+      check's look, the look on a connect attempt, and the unseen flip are
+      not asserted.
+  - id: EPIC-029
+    claim: >-
+      A standby clears no latch: it reads a set latch as set and leaves it
+      set at the unit, and the leader then delivers and clears it.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyLeavesALatchSet
+    note: >-
+      The in-process fake: the standby runs its own session; the leader's
+      scans are driven by hand. Latch events at the takeover edge (lost
+      or delivered twice, as the guide says) are not exercised.
+  - id: EPIC-030
+    claim: >-
+      A standby changes no configuration on the unit: it sends no power-up
+      clear, sets no watchdog, writes no custom data area pointer and
+      configures no stream; it polls the packed areas, and a leader
+      streaming beside it keeps stream target #1 and its stream on time.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
+      - go ./optommp TestStandbyLeavesTheStreamToTheLeader
+    note: >-
+      The in-process fake over loopback TCP: a lone standby on a blank unit
+      (stream and watchdog in the manifest, a power-up clear owed), then a
+      standby beside a streaming leader with the stream configuration
+      watched for 300 ms.
+  - id: EPIC-031
+    claim: >-
+      A takeover moves the stream: the new leader sends a power-up clear
+      owed and configures the watchdog, custom data area and stream to
+      itself without an outage, and the old leader stops using the stream,
+      polls, and does not take it back.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestTakeoverMovesTheStream
+      - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
+    note: >-
+      In-process fake; the new leader's stream is watched for 300 ms after
+      the swap, and neither replica's outage count moves.
+  - id: EPIC-032
+    claim: >-
+      A standby's clean stop puts nothing back, and neither does that of a
+      leader that lost the lease before it looked again: the new leader's
+      stream and custom data area stay as it configured them. Only a
+      replica that still leads when it stops restores them, to what it
+      first found; after a takeover that is the previous leader's
+      configuration, not the unit's original, and a found stream of the
+      custom data area is restored as off.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyStopLeavesTheStream
+      - go ./optommp TestOldLeaderStopDoesNotRestoreUnderTheNewLeader
+      - go ./optommp TestDriverStopPutsTheStreamConfigBack
+    partial: true
+    note: >-
+      No test stops a leader that took over from another, so what it
+      restores (and the found stream recorded as off) is not asserted.

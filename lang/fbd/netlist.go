@@ -176,7 +176,13 @@ type netParser struct {
 }
 
 func parseNetlist(body string, lineOffset int) (*netlist, error) {
-	p := &netParser{toks: st.Lex(body), lineOffset: lineOffset, lines: strings.Split(body, "\n")}
+	toks, lexErrs := st.LexErrors(body)
+	for _, e := range lexErrs {
+		if e.InString { // as st.Parse does: the literal, not what follows it
+			return nil, &ParseError{Line: e.Pos.Line + lineOffset, Col: e.Pos.Col, Msg: e.Msg}
+		}
+	}
+	p := &netParser{toks: toks, lineOffset: lineOffset, lines: strings.Split(body, "\n")}
 	nl := newNetlist()
 	for !p.at(st.TokenEOF) {
 		if err := p.item(nl); err != nil {
@@ -471,7 +477,8 @@ func (p *netParser) networkHeader(nl *netlist) error {
 	line := kw.Line + p.lineOffset
 	title := ""
 	if p.at(st.TokenString) && p.peek().Line == kw.Line {
-		title = p.next().Literal
+		t := p.next()
+		title = st.UnquoteString(t.Literal, t.Quote)
 	}
 	if p.at(st.TokenSemicolon) {
 		p.next()
@@ -862,8 +869,8 @@ func opKeyword(t st.Token) string {
 // literalText reconstructs a literal's source text from its token.
 func literalText(t st.Token) string {
 	switch t.Type {
-	case st.TokenString:
-		return "'" + t.Literal + "'"
+	case st.TokenString: // as written, so ST reads the same value back
+		return string(t.Quote) + t.Literal + string(t.Quote)
 	case st.TokenTimeLiteral:
 		return "T#" + strings.TrimPrefix(strings.TrimPrefix(t.Literal, "T#"), "t#")
 	default:

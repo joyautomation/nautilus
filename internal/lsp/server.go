@@ -193,6 +193,11 @@ func (s *Server) setDocument(uri, text string) {
 	if isFile && !hasErrors(diags) && logixTarget(path) {
 		diags = append(diags[:len(diags):len(diags)], logixDiagnostics(path, text, e.libs)...)
 	}
+	// Ladder, FBD and SFC structure warnings (structure.go), likewise on a
+	// buffer that compiles.
+	if isFile && !hasErrors(diags) {
+		diags = append(diags[:len(diags):len(diags)], structureDiagnostics(path, text)...)
+	}
 	s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{
 		URI: uri, Diagnostics: nonNil(diags),
 	})
