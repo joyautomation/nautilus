@@ -201,6 +201,16 @@ trip when nautilus alone stops. A redundant standby is not one of those
 other clients: with `watchdog:` set it does not talk to the unit at all
 (see [Redundancy](#redundancy)).
 
+Nor does it trip when nautilus's scan hangs (logic that never returns, a
+driver call that blocks) without `redundancy:`. The driver's own loop
+keeps polling the unit, and those polls feed the watchdog, so the outputs
+hold their last command for as long as the hang lasts. `naut run` gates
+some drivers on live scans in every project, but not this one, because
+it reads any gate as "one replica of a redundant set" (see
+[Redundancy](/guides/redundancy/#redundancy)). With `redundancy:`, a hung
+leader closes its gate and hands over (see [Redundancy](#redundancy)
+below).
+
 ## Holding outputs until an operator acknowledges
 
 Recovery is automatic: when the processor comes back, or after a
