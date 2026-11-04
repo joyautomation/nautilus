@@ -101,10 +101,11 @@ const claudeTools = "Bash,Read,Edit,Write,Glob,Grep"
 //     rules are explicit because CLAUDE_CODE_SUBPROCESS_ENV_SCRUB forces the
 //     permission mode back to default, where acceptEdits no longer applies.
 //   - naut, by name and by the absolute path `which naut` prints, plus the
-//     glue an agent puts around it (`naut check; true`, `naut --help |
-//     head`): a compound command is refused whole when any part is not
-//     allowed. No echo, env, printenv, set or cat: nothing that prints the
-//     environment. Claude Code also refuses `$VAR` expansion and reads of
+//     glue an agent puts around it (`naut check; true`): a compound command
+//     is refused whole when any part is not allowed. No echo, env, printenv,
+//     set or cat: nothing that prints the environment. No head or tail
+//     either: they take any path, so `head /proc/<pid>/environ` of the
+//     claude process would be a way to the key; Read covers project files. Claude Code also refuses `$VAR` expansion and reads of
 //     /proc/*/environ under these rules (probed with a canary), and naut
 //     itself never prints its environment.
 func claudeAllowed(nautDir string) []string {
@@ -112,7 +113,6 @@ func claudeAllowed(nautDir string) []string {
 		"Read(./**)", "Edit(./**)", "Write(./**)", "Glob(./**)", "Grep(./**)",
 		"Bash(naut:*)", "Bash(" + filepath.Join(nautDir, "naut") + ":*)",
 		"Bash(pwd)", "Bash(true)", "Bash(which:*)", "Bash(command -v:*)",
-		"Bash(head:*)", "Bash(tail:*)",
 	}
 }
 

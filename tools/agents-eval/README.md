@@ -98,8 +98,7 @@ For each task × condition × trial:
      --tools Bash,Read,Edit,Write,Glob,Grep \
      --allowedTools 'Read(./**)' 'Edit(./**)' 'Write(./**)' 'Glob(./**)' \
        'Grep(./**)' 'Bash(naut:*)' 'Bash(<bin>/naut:*)' 'Bash(pwd)' \
-       'Bash(true)' 'Bash(which:*)' 'Bash(command -v:*)' 'Bash(head:*)' \
-       'Bash(tail:*)' \
+       'Bash(true)' 'Bash(which:*)' 'Bash(command -v:*)' \
      --disallowedTools 'Bash(naut run:*)' --permission-mode acceptEdits \
      --permission-prompts none --no-session-persistence \
      --output-format stream-json --verbose --max-budget-usd <b>
@@ -110,7 +109,8 @@ For each task × condition × trial:
    File tools are confined to the project (`./**`; with no one to answer
    a prompt, anything else is refused). The shell runs `naut`, by name or
    by the absolute path `which naut` prints, plus the glue agents put
-   around it (`naut check; true`, `naut --help | head`). Claude Code
+   around it (`naut check; true`). No `head` or `tail`: they read any path,
+   `/proc/<pid>/environ` included, and Read covers project files. Claude Code
    refuses a compound command whole when any part is not allowed, which in
    the first pilot cost a run its `naut check`. There is no web access and
    no subagent. `--setting-sources project,local` keeps the developer's
@@ -134,8 +134,8 @@ For each task × condition × trial:
 
 `claude -p` reads its credential from the environment (`ANTHROPIC_API_KEY`)
 or from an `apiKeyHelper` command in its settings. There is no flag or
-stdin path, and a helper would only move the key into a file the agent's
-`head` could read. So the key stays an environment variable of the
+stdin path, and a helper would only move the key into a file, which is no
+better. So the key stays an environment variable of the
 `claude` process, and these layers keep it from the agent:
 
 1. **Not inherited.** The harness starts `claude` with

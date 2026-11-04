@@ -102,6 +102,12 @@ func TestClaudeAgentWithFakeCLI(t *testing.T) {
 				t.Errorf("allowed tool %q can print the environment or a file", a)
 			}
 		}
+		// head and tail read any path, /proc/<pid>/environ included.
+		for _, bad := range []string{"Bash(head", "Bash(tail", "Bash(less", "Bash(more", "Bash(od", "Bash(xxd", "Bash(strings"} {
+			if strings.HasPrefix(a, bad) {
+				t.Errorf("allowed tool %q reads any file outside the project", a)
+			}
+		}
 	}
 
 	// The environment the CLI starts with.
