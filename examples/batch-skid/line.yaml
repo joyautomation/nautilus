@@ -43,8 +43,11 @@ tasks:
     dt-tag: StatusDtS
 
 # tags/eip.yaml supplies the line's own tags (Line_Ready, Line_Accept,
-# Line_TankLevel, Line_Fault as role: input; Line_Request, Line_BatchId
+# Line_TankLevel, Line_Fault as role: input; Line_BatchId
 # as role: output; Line_Status as a role: input LineStatus struct).
+# Line_Request is imported with --tags-skip and declared under tags:
+# below, because status.st reads it before transfer.ld first writes it
+# and an output read first needs an init: the import cannot supply.
 # tags/skid.yaml supplies every operator setpoint and computed-state tag
 # that's byte-identical to nautilus.yaml's.
 tag-files:
@@ -62,7 +65,6 @@ tag-meta:
   Line_Accept: { desc: "Line has accepted the transfer request" }
   Line_TankLevel: { unit: "%", desc: "Line's receiving tank level" }
   Line_Fault: { desc: "Line-side fault — blocks Line_Accept" }
-  Line_Request: { desc: "Skid requests a transfer" }
   Line_BatchId: { desc: "Batch count stamped onto the line on each request" }
   Line_Status: { desc: "Line status/alarm struct (Mode, Alarm) read from the line controller" }
 
@@ -86,6 +88,7 @@ tags:
   - { name: TCV201_Pos, role: output, init: 0.0, unit: "%", desc: "Jacket water control valve position" }
   - { name: P202_Cmd, role: output, init: false, desc: "Transfer pump run command" }
   - { name: XV203_Cmd, role: output, init: false, desc: "Transfer valve command" }
+  - { name: Line_Request, role: output, init: false, desc: "Skid requests a transfer" }
 
 alarms:
   defaults: { ack-required: true, auto-clear: true, shelve: true }
