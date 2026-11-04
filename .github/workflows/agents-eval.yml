@@ -1,0 +1,83 @@
+# AGENTS.md eval (#564): runs a coding agent on the task suite in
+# tools/agents-eval, with and without the project AGENTS.md, and uploads
+# the pass-rate table. Manual only: it spends API tokens and its results
+# vary run to run, so it is never a PR gate. It skips cleanly until an
+# ANTHROPIC_API_KEY secret exists in this repo.
+name: AGENTS.md eval
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Claude model (alias or full name)
+        default: haiku
+      k:
+        description: trials per task and condition
+        default: '3'
+      tasks:
+        description: comma-separated task ids (empty = all)
+        default: ''
+      stop_after_usd:
+        description: start no new trials past this spend
+        default: '20'
+      agents_md_ref:
+        description: branch or commit to take AGENTS.md from (empty = the checked-out tree)
+        default: ''
+env:
+  GOTOOLCHAIN: local
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: gate on ANTHROPIC_API_KEY
+        id: gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY not set — skipping the eval"
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+      - uses: actions/setup-go@v5
+        if: steps.gate.outputs.go == 'true'
+        with: {go-version: '1.24'}
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == 'true'
+        with: {node-version: '22'}
+      - name: install Claude Code
+        if: steps.gate.outputs.go == 'true'
+        run: npm install -g @anthropic-ai/claude-code
+      - name: run the suite
+        if: steps.gate.outputs.go == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ inputs.model }}
+          K: ${{ inputs.k }}
+          TASKS: ${{ inputs.tasks }}
+          STOP: ${{ inputs.stop_after_usd }}
+          REF: ${{ inputs.agents_md_ref }}
+        run: |
+          md=cmd/naut/templates/AGENTS.md.tmpl
+          if [ -n "$REF" ]; then
+            git fetch --depth 1 origin "$REF"
+            mkdir -p "$RUNNER_TEMP/agents-md"
+            git show FETCH_HEAD:cmd/naut/templates/AGENTS.md.tmpl > "$RUNNER_TEMP/agents-md/AGENTS.md.tmpl"
+            git show FETCH_HEAD:cmd/naut/templates/CLAUDE.md.tmpl > "$RUNNER_TEMP/agents-md/CLAUDE.md.tmpl" || true
+            md="$RUNNER_TEMP/agents-md/AGENTS.md.tmpl"
+          fi
+          go run ./tools/agents-eval run -model "$MODEL" -k "$K" -tasks "$TASKS" \
+            -stop-after-usd "$STOP" -agents-md "$md" -out tools/agents-eval/results/ci
+          cat tools/agents-eval/results/ci/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.go == 'true' && !cancelled()
+        with:
+          name: agents-eval-${{ inputs.model }}
+          path: |
+            tools/agents-eval/results/ci/summary.*
+            tools/agents-eval/results/ci/meta.json
+            tools/agents-eval/results/ci/runs/**/record.json
+            tools/agents-eval/results/ci/runs/**/project/**

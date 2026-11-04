@@ -1,0 +1,11 @@
+PROGRAM Control
+FBD
+  w1 = GE(Level, 90.0)
+  Pump := AND(AND(OR(StartPB, Pump), StopPB), NOT OR(AND(w1, Auto), AND(Hi, NOT Auto)))
+  t1 : TON(IN := w1, PT := T#10S)
+  HighAlm := t1.Q
+  (* @layout
+    c:Pump 320,64
+  *)
+END_FBD
+END_PROGRAM

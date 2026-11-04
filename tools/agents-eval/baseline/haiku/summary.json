@@ -1,0 +1,1029 @@
+{
+  "meta": {
+    "started": "2026-11-04T01:21:49.83589282Z",
+    "agent": "claude",
+    "model": "haiku",
+    "k": 3,
+    "tasks": [
+      "analog-pid",
+      "batch-sfc",
+      "conveyor-fbd",
+      "motor-seal-in",
+      "tank-fill",
+      "totalizer-st",
+      "traffic-light"
+    ],
+    "conditions": [
+      "with",
+      "without"
+    ],
+    "agentsMdSha256": "7280d6a4b76025179c985e88b37dd24fa6f87c49936fb89e9cdad75375a435ad",
+    "nautCommit": "3de610f41b8c476fb562c86ad594f259972b5cc2",
+    "timeoutSec": 600,
+    "budgetUsd": 1
+  },
+  "rows": [
+    {
+      "task": "analog-pid",
+      "condition": "with",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 7,
+      "hiddenTotal": 7,
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 16,
+      "costUsd": 0.03208567,
+      "durationSec": 111.777243775,
+      "checkRuns": 1,
+      "testRuns": 1,
+      "readAgentsMd": false
+    },
+    {
+      "task": "analog-pid",
+      "condition": "with",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 7,
+      "hiddenTotal": 7,
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 11,
+      "costUsd": 0.0313962,
+      "durationSec": 99.737489532,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "analog-pid",
+      "condition": "with",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 7,
+      "hiddenTotal": 7,
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 13,
+      "costUsd": 0.03251748,
+      "durationSec": 102.488813184,
+      "checkRuns": 1,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "analog-pid",
+      "condition": "without",
+      "trial": 1,
+      "good": false,
+      "correct": true,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 7,
+      "hiddenTotal": 7,
+      "violations": [
+        "fbd.logic-outside-network heater.fbd"
+      ],
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 44,
+      "costUsd": 0.06851291999999999,
+      "durationSec": 198.547380242,
+      "checkRuns": 4,
+      "testRuns": 7,
+      "readAgentsMd": false
+    },
+    {
+      "task": "analog-pid",
+      "condition": "without",
+      "trial": 2,
+      "good": false,
+      "correct": false,
+      "clean": false,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "warnings": {
+        "unbound-tag": 7
+      },
+      "languages": [
+        "st"
+      ],
+      "missingLanguages": [
+        "fbd"
+      ],
+      "agentTestFiles": 0,
+      "turns": 14,
+      "costUsd": 0.02119162,
+      "durationSec": 41.035408521,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "analog-pid",
+      "condition": "without",
+      "trial": 3,
+      "good": false,
+      "correct": false,
+      "clean": false,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "warnings": {
+        "unbound-tag": 7
+      },
+      "languages": [
+        "st"
+      ],
+      "missingLanguages": [
+        "fbd"
+      ],
+      "agentTestFiles": 0,
+      "turns": 15,
+      "costUsd": 0.026514620000000003,
+      "durationSec": 49.696681103,
+      "checkRuns": 1,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "batch-sfc",
+      "condition": "with",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 6,
+      "hiddenTotal": 6,
+      "languages": [
+        "sfc",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 29,
+      "costUsd": 0.08563555,
+      "durationSec": 162.509700832,
+      "checkRuns": 4,
+      "testRuns": 3,
+      "readAgentsMd": false
+    },
+    {
+      "task": "batch-sfc",
+      "condition": "with",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 6,
+      "hiddenTotal": 6,
+      "languages": [
+        "sfc",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 16,
+      "costUsd": 0.044800370000000006,
+      "durationSec": 142.705387549,
+      "checkRuns": 1,
+      "testRuns": 2,
+      "readAgentsMd": false
+    },
+    {
+      "task": "batch-sfc",
+      "condition": "with",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 6,
+      "hiddenTotal": 6,
+      "languages": [
+        "sfc",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 13,
+      "costUsd": 0.0359736,
+      "durationSec": 95.338505869,
+      "checkRuns": 2,
+      "testRuns": 2,
+      "readAgentsMd": false
+    },
+    {
+      "task": "batch-sfc",
+      "condition": "without",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 6,
+      "hiddenTotal": 6,
+      "languages": [
+        "sfc",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 57,
+      "costUsd": 0.2308263700000001,
+      "durationSec": 306.574009506,
+      "checkRuns": 11,
+      "testRuns": 12,
+      "readAgentsMd": false
+    },
+    {
+      "task": "batch-sfc",
+      "condition": "without",
+      "trial": 2,
+      "good": false,
+      "correct": false,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "violations": [
+        "sfc.unnamed-transition batch.sfc"
+      ],
+      "languages": [
+        "sfc",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 42,
+      "costUsd": 0.28827693000000004,
+      "durationSec": 327.795493512,
+      "checkRuns": 3,
+      "testRuns": 3,
+      "readAgentsMd": false
+    },
+    {
+      "task": "batch-sfc",
+      "condition": "without",
+      "trial": 3,
+      "good": false,
+      "correct": false,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "languages": [
+        "sfc",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 38,
+      "costUsd": 0.113023,
+      "durationSec": 200.742648243,
+      "checkRuns": 6,
+      "testRuns": 4,
+      "readAgentsMd": false
+    },
+    {
+      "task": "conveyor-fbd",
+      "condition": "with",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 9,
+      "costUsd": 0.03276528,
+      "durationSec": 101.889548101,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "conveyor-fbd",
+      "condition": "with",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 10,
+      "costUsd": 0.02969383,
+      "durationSec": 100.846547781,
+      "checkRuns": 2,
+      "testRuns": 1,
+      "readAgentsMd": false
+    },
+    {
+      "task": "conveyor-fbd",
+      "condition": "with",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 8,
+      "costUsd": 0.028813270000000005,
+      "durationSec": 75.320635802,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "conveyor-fbd",
+      "condition": "without",
+      "trial": 1,
+      "good": false,
+      "correct": false,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 3,
+      "hiddenTotal": 8,
+      "violations": [
+        "fbd.logic-outside-network conveyor.fbd"
+      ],
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 83,
+      "costUsd": 0.48263965999999997,
+      "durationSec": 389.410224397,
+      "checkRuns": 14,
+      "testRuns": 14,
+      "readAgentsMd": false
+    },
+    {
+      "task": "conveyor-fbd",
+      "condition": "without",
+      "trial": 2,
+      "good": false,
+      "correct": true,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "violations": [
+        "fbd.logic-outside-network conveyor.fbd"
+      ],
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 66,
+      "costUsd": 0.25022300999999997,
+      "durationSec": 366.344071858,
+      "checkRuns": 1,
+      "testRuns": 16,
+      "readAgentsMd": false
+    },
+    {
+      "task": "conveyor-fbd",
+      "condition": "without",
+      "trial": 3,
+      "good": false,
+      "correct": true,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "violations": [
+        "fbd.logic-outside-network conveyor.fbd"
+      ],
+      "languages": [
+        "fbd",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 31,
+      "costUsd": 0.05062736000000001,
+      "durationSec": 154.580148024,
+      "checkRuns": 1,
+      "testRuns": 1,
+      "readAgentsMd": false
+    },
+    {
+      "task": "motor-seal-in",
+      "condition": "with",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 10,
+      "costUsd": 0.024039190000000002,
+      "durationSec": 65.16115181,
+      "checkRuns": 1,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "motor-seal-in",
+      "condition": "with",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 9,
+      "costUsd": 0.025025640000000005,
+      "durationSec": 62.328368559,
+      "checkRuns": 1,
+      "testRuns": 1,
+      "readAgentsMd": false
+    },
+    {
+      "task": "motor-seal-in",
+      "condition": "with",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 10,
+      "costUsd": 0.025002160000000002,
+      "durationSec": 57.055620485,
+      "checkRuns": 1,
+      "testRuns": 1,
+      "readAgentsMd": false
+    },
+    {
+      "task": "motor-seal-in",
+      "condition": "without",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 8,
+      "hiddenTotal": 8,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 0,
+      "turns": 28,
+      "costUsd": 0.03511932000000001,
+      "durationSec": 101.51108012,
+      "checkRuns": 3,
+      "testRuns": 4,
+      "readAgentsMd": false
+    },
+    {
+      "task": "motor-seal-in",
+      "condition": "without",
+      "trial": 2,
+      "good": false,
+      "correct": false,
+      "clean": false,
+      "structured": true,
+      "compiles": false,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 22,
+      "costUsd": 0.04415092999999999,
+      "durationSec": 129.586323011,
+      "checkRuns": 0,
+      "testRuns": 4,
+      "readAgentsMd": false
+    },
+    {
+      "task": "motor-seal-in",
+      "condition": "without",
+      "trial": 3,
+      "good": false,
+      "correct": false,
+      "clean": false,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "warnings": {
+        "unbound-tag": 2
+      },
+      "languages": [
+        "st"
+      ],
+      "missingLanguages": [
+        "ld"
+      ],
+      "agentTestFiles": 0,
+      "turns": 17,
+      "costUsd": 0.02514582,
+      "durationSec": 49.86778238,
+      "checkRuns": 2,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "tank-fill",
+      "condition": "with",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 7,
+      "hiddenTotal": 7,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 10,
+      "costUsd": 0.03572661,
+      "durationSec": 137.517135986,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "tank-fill",
+      "condition": "with",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 7,
+      "hiddenTotal": 7,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 8,
+      "costUsd": 0.033317,
+      "durationSec": 98.024171865,
+      "checkRuns": 2,
+      "testRuns": 2,
+      "readAgentsMd": false
+    },
+    {
+      "task": "tank-fill",
+      "condition": "with",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 7,
+      "hiddenTotal": 7,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 12,
+      "costUsd": 0.038503489999999994,
+      "durationSec": 117.296510458,
+      "checkRuns": 2,
+      "testRuns": 2,
+      "readAgentsMd": false
+    },
+    {
+      "task": "tank-fill",
+      "condition": "without",
+      "trial": 1,
+      "good": false,
+      "correct": false,
+      "clean": false,
+      "structured": true,
+      "compiles": false,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 0,
+      "turns": 14,
+      "costUsd": 0.05747326,
+      "durationSec": 163.965064334,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "tank-fill",
+      "condition": "without",
+      "trial": 2,
+      "good": false,
+      "correct": false,
+      "clean": false,
+      "structured": true,
+      "compiles": false,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 0,
+      "turns": 9,
+      "costUsd": 0.041287380000000005,
+      "durationSec": 159.953148452,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "tank-fill",
+      "condition": "without",
+      "trial": 3,
+      "good": false,
+      "correct": false,
+      "clean": false,
+      "structured": true,
+      "compiles": false,
+      "hiddenPassed": 0,
+      "hiddenTotal": 0,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 0,
+      "turns": 15,
+      "costUsd": 0.04931513999999999,
+      "durationSec": 151.694137467,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "totalizer-st",
+      "condition": "with",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 11,
+      "costUsd": 0.02603202,
+      "durationSec": 55.962428734,
+      "checkRuns": 1,
+      "testRuns": 4,
+      "readAgentsMd": false
+    },
+    {
+      "task": "totalizer-st",
+      "condition": "with",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 20,
+      "costUsd": 0.040350090000000005,
+      "durationSec": 148.290650431,
+      "checkRuns": 2,
+      "testRuns": 9,
+      "readAgentsMd": false
+    },
+    {
+      "task": "totalizer-st",
+      "condition": "with",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 15,
+      "costUsd": 0.03364193,
+      "durationSec": 85.091306553,
+      "checkRuns": 5,
+      "testRuns": 6,
+      "readAgentsMd": false
+    },
+    {
+      "task": "totalizer-st",
+      "condition": "without",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "st"
+      ],
+      "agentTestFiles": 0,
+      "turns": 9,
+      "costUsd": 0.021768279999999997,
+      "durationSec": 55.437993595,
+      "checkRuns": 1,
+      "testRuns": 3,
+      "readAgentsMd": false
+    },
+    {
+      "task": "totalizer-st",
+      "condition": "without",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 30,
+      "costUsd": 0.04553618000000001,
+      "durationSec": 126.012047862,
+      "checkRuns": 2,
+      "testRuns": 5,
+      "readAgentsMd": false
+    },
+    {
+      "task": "totalizer-st",
+      "condition": "without",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 13,
+      "costUsd": 0.028829090000000005,
+      "durationSec": 69.283327413,
+      "checkRuns": 0,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "traffic-light",
+      "condition": "with",
+      "trial": 1,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 12,
+      "costUsd": 0.056080130000000006,
+      "durationSec": 209.719107455,
+      "checkRuns": 1,
+      "testRuns": 0,
+      "readAgentsMd": false
+    },
+    {
+      "task": "traffic-light",
+      "condition": "with",
+      "trial": 2,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 44,
+      "costUsd": 0.44748941999999997,
+      "durationSec": 565.602690668,
+      "checkRuns": 12,
+      "testRuns": 13,
+      "readAgentsMd": false
+    },
+    {
+      "task": "traffic-light",
+      "condition": "with",
+      "trial": 3,
+      "good": true,
+      "correct": true,
+      "clean": true,
+      "structured": true,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 12,
+      "costUsd": 0.0857434,
+      "durationSec": 171.430807997,
+      "checkRuns": 3,
+      "testRuns": 3,
+      "readAgentsMd": false
+    },
+    {
+      "task": "traffic-light",
+      "condition": "without",
+      "trial": 1,
+      "good": false,
+      "correct": true,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "violations": [
+        "ld.series\u003e6 traffic.ld",
+        "ld.uncommented-rung traffic.ld"
+      ],
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 1,
+      "turns": 37,
+      "costUsd": 0.09609035999999999,
+      "durationSec": 206.320742773,
+      "checkRuns": 1,
+      "testRuns": 5,
+      "readAgentsMd": false
+    },
+    {
+      "task": "traffic-light",
+      "condition": "without",
+      "trial": 2,
+      "good": false,
+      "correct": true,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "violations": [
+        "ld.series\u003e6 traffic.ld",
+        "ld.uncommented-rung traffic.ld"
+      ],
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 0,
+      "turns": 60,
+      "costUsd": 0.38651037000000005,
+      "durationSec": 355.424745978,
+      "checkRuns": 16,
+      "testRuns": 3,
+      "readAgentsMd": false
+    },
+    {
+      "task": "traffic-light",
+      "condition": "without",
+      "trial": 3,
+      "good": false,
+      "correct": true,
+      "clean": true,
+      "structured": false,
+      "compiles": true,
+      "hiddenPassed": 4,
+      "hiddenTotal": 4,
+      "violations": [
+        "ld.series\u003e6 traffic.ld",
+        "ld.uncommented-rung traffic.ld"
+      ],
+      "languages": [
+        "ld",
+        "st"
+      ],
+      "agentTestFiles": 0,
+      "turns": 49,
+      "costUsd": 0.18712,
+      "durationSec": 243.926182413,
+      "checkRuns": 6,
+      "testRuns": 5,
+      "readAgentsMd": false
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+# Hidden acceptance tests for conveyor-fbd. Every test states StopPB (NC)
+# and the permissives it relies on.
+tests:
+  - name: start seals in, stop stops
+    steps:
+      - given: { StopPB: true, EStop_OK: true, Guard_Closed: true, StartPB: true }
+        advance: 500ms
+        expect: { M201_Run: true }
+      - given: { StartPB: false }
+        advance: 2s
+        expect: { M201_Run: true }
+      - given: { StopPB: false }
+        advance: 500ms
+        expect: { M201_Run: false }
+      - given: { StopPB: true }
+        advance: 1s
+        expect: { M201_Run: false }
+
+  - name: no start without both permissives
+    steps:
+      - given: { StopPB: true, EStop_OK: false, Guard_Closed: true, StartPB: true }
+        advance: 1s
+        always: { M201_Run: false }
+      - given: { EStop_OK: true, Guard_Closed: false }
+        advance: 1s
+        always: { M201_Run: false }
+
+  - name: losing the guard stops it and it needs a new start
+    steps:
+      - given: { StopPB: true, EStop_OK: true, Guard_Closed: true, StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false }
+        advance: 500ms
+        expect: { M201_Run: true }
+      - given: { Guard_Closed: false }
+        advance: 500ms
+        expect: { M201_Run: false }
+      - given: { Guard_Closed: true }
+        advance: 1s
+        expect: { M201_Run: false }
+      - given: { StartPB: true }
+        advance: 500ms
+        expect: { M201_Run: true }
+
+  - name: losing the e-stop relay stops it and it needs a new start
+    steps:
+      - given: { StopPB: true, EStop_OK: true, Guard_Closed: true, StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false }
+        advance: 500ms
+      - given: { EStop_OK: false }
+        advance: 500ms
+        expect: { M201_Run: false }
+      - given: { EStop_OK: true }
+        advance: 1s
+        expect: { M201_Run: false }
+
+  - name: blocked 3 s while running is a jam
+    steps:
+      - given: { StopPB: true, EStop_OK: true, Guard_Closed: true, StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false, PE101_Blocked: true }
+        advance: 2.5s
+        expect: { M201_Run: true, JamAlm: false }
+      - advance: 1s
+        expect: { M201_Run: false, JamAlm: true }
+
+  - name: a short block is not a jam
+    steps:
+      - given: { StopPB: true, EStop_OK: true, Guard_Closed: true, StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false, PE101_Blocked: true }
+        advance: 2s
+      - given: { PE101_Blocked: false }
+        advance: 500ms
+      - given: { PE101_Blocked: true }
+        advance: 2s
+        expect: { JamAlm: false, M201_Run: true }
+
+  - name: blocked while stopped is not a jam
+    given: { StopPB: true, EStop_OK: true, Guard_Closed: true, PE101_Blocked: true }
+    advance: 5s
+    expect: { JamAlm: false }
+
+  - name: the jam blocks a restart until reset with the eye clear
+    steps:
+      - given: { StopPB: true, EStop_OK: true, Guard_Closed: true, StartPB: true }
+        advance: 500ms
+      - given: { StartPB: false, PE101_Blocked: true }
+        advance: 4s
+        expect: { JamAlm: true }
+      - given: { ResetPB: true }          # still blocked: refused
+        advance: 500ms
+      - given: { ResetPB: false }
+        advance: 500ms
+        expect: { JamAlm: true }
+      - given: { StartPB: true }
+        advance: 500ms
+        expect: { M201_Run: false }
+      - given: { StartPB: false, PE101_Blocked: false, ResetPB: true }
+        advance: 500ms
+      - given: { ResetPB: false }
+        advance: 500ms
+        expect: { JamAlm: false, M201_Run: false }
+      - given: { StartPB: true }
+        advance: 500ms
+        expect: { M201_Run: true }

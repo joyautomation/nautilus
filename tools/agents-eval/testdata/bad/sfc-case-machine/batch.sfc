@@ -1,0 +1,35 @@
+PROGRAM Batch
+SFC
+  INITIAL_STEP S0:
+    N Step0;
+  END_STEP
+
+  STEP S1:
+    N Step1;
+  END_STEP
+
+  STEP S2:
+    N Step2;
+  END_STEP
+
+  TRANSITION FROM S0 TO S1 := State = 1;
+  END_TRANSITION
+  TRANSITION FROM S1 TO S2 := State = 2;
+  END_TRANSITION
+  TRANSITION t_back FROM S2 TO S0 := (State = 0);
+  END_TRANSITION
+
+  ACTION Step0:
+    XV101_Open := FALSE;
+    IF StartPB THEN State := 1; END_IF;
+  END_ACTION
+  ACTION Step1:
+    XV101_Open := TRUE;
+    IF LT101_Level >= FullSP THEN State := 2; END_IF;
+  END_ACTION
+  ACTION Step2:
+    XV101_Open := FALSE;
+    CASE Phase OF 1: State := 0; END_CASE;
+  END_ACTION
+END_SFC
+END_PROGRAM
