@@ -7,15 +7,20 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"flag"
+	"io"
 	"math/big"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,6 +103,12 @@ func endpointFor(t *testing.T, s *Server, policy string, mode ua.MessageSecurity
 // secureConnect connects to s under policy and SignAndEncrypt with the
 // client certificate given; extra options follow.
 func secureConnect(s *Server, ep *ua.EndpointDescription, der []byte, key *rsa.PrivateKey, uri string, extra ...opcua.Option) (*opcua.Client, error) {
+	return secureConnectAt(s.URL(), ep, der, key, uri, extra...)
+}
+
+// secureConnectAt is secureConnect dialing addr, a relay in front of the
+// server.
+func secureConnectAt(addr string, ep *ua.EndpointDescription, der []byte, key *rsa.PrivateKey, uri string, extra ...opcua.Option) (*opcua.Client, error) {
 	opts := append([]opcua.Option{
 		opcua.SecurityFromEndpoint(ep, ua.UserTokenTypeAnonymous),
 		opcua.Certificate(der),
@@ -107,7 +118,7 @@ func secureConnect(s *Server, ep *ua.EndpointDescription, der []byte, key *rsa.P
 		opcua.DialTimeout(3 * time.Second),
 		opcua.RequestTimeout(3 * time.Second),
 	}, extra...)
-	c, err := opcua.NewClient(s.URL(), opts...)
+	c, err := opcua.NewClient(addr, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -336,24 +347,33 @@ func TestExpiredClientCertificateIsRefused(t *testing.T) {
 // renewal is a new token beside the old one; the live one is never touched
 // by the reader (it was: the reader wrote the renewal's keys into the live
 // instance while the handlers encrypted with it, and about half these runs
-// timed out mid-read).
+// timed out mid-read). The server closes a channel whose token is not
+// renewed a quarter past its lifetime (expireUnlessRenewed), so reading for
+// twice that long passes only if the renewals work, and the client goes
+// through a relay that reads the token id off each of the server's MSG
+// chunks: the server must answer under the renewed tokens, not keep
+// answering under the first (gopcua's client takes either).
 //
-// The client is gopcua's own, whose renewal races itself (go test -race
-// points into github.com/gopcua/opcua/uasc renew vs sendRequestWithTimeout,
-// never into this server), so under the race detector the test renews less
-// often, on Basic256Sha256 with a 2 s lifetime, and the server's side is
-// still checked for races.
+// The client is gopcua's own. It renews at 75 % of the lifetime, but in
+// whole seconds: time.Second * time.Duration(lifetime.Seconds()*0.75) is 0
+// under 4/3 s. With the 1 s lifetime this test had, the client renewed back
+// to back, each renewal started from the response to the one before. And
+// renew's reqLocker is a flag, not a lock: the finishing renewal's unlock
+// cleared the flag the next one had just set, reads went on adding to the
+// sync.WaitGroup that next renewal was waiting on, and it panicked ("sync:
+// WaitGroup is reused before previous Wait has returned") in the renewal
+// goroutine, where no test can recover it. On a loaded CI runner it did on
+// all three tries. A 2 s lifetime renews every whole second (1.5 s
+// truncates to 1 s): four renewals in the 5 s, each a second after the one
+// before has let go of the flag, and each still with reads around it on the
+// server. Under the race detector the policy is Basic256Sha256.
 //
-// That race can also panic: renew waits on a sync.WaitGroup that every
-// request adds to, and nothing stops a request adding while a woken Wait has
-// yet to return ("sync: WaitGroup is reused before previous Wait has
-// returned", in the renewal goroutine, where no test can recover it). It
-// killed the whole package's test binary in CI. So the test runs in a child
-// process (this test binary, re-run for this test alone): the child's panic
-// is that child's, and a run that dies of exactly that panic is run again.
-// Any other failure fails the test as before, and the child is the same
-// binary, so under -race the server is still race-checked and under -cover
-// its coverage still counts.
+// The test still runs in a child process (this test binary, re-run for this
+// test alone), so if gopcua's panic ever fires again it kills that child and
+// not the package's test binary; a run that dies of exactly that panic is
+// logged and run again. Any other failure fails the test as before, and the
+// child is the same binary, so under -race the server is still race-checked
+// and under -cover its coverage still counts.
 func TestSecureChannelRenews(t *testing.T) {
 	if os.Getenv(renewChildEnv) == "" {
 		runRenewalChild(t)
@@ -363,17 +383,22 @@ func TestSecureChannelRenews(t *testing.T) {
 	const uri = "urn:test:renew"
 	der, key := clientCert(t, uri, time.Now().Add(-time.Hour), 24*time.Hour)
 	trust(t, dir, der)
-	policy, lifetime := ua.SecurityPolicyURIAes256Sha256RsaPss, time.Second
+	// gopcua renews after whole seconds of 0.75 x lifetime: 1 s here. Under
+	// 4/3 s that is 0 and it renews back to back, and panics (see above).
+	const lifetime = 2 * time.Second
+	policy := ua.SecurityPolicyURIAes256Sha256RsaPss
 	if raceEnabled {
-		policy, lifetime = ua.SecurityPolicyURIBasic256Sha256, 2*time.Second
+		policy = ua.SecurityPolicyURIBasic256Sha256
 	}
 	ep := endpointFor(t, s, policy, ua.MessageSecurityModeSignAndEncrypt)
-	c, err := secureConnect(s, ep, der, key, uri, opcua.Lifetime(lifetime))
+	tap := newTokenTap(t, s.URL())
+	c, err := secureConnectAt(tap.URL(), ep, der, key, uri, opcua.Lifetime(lifetime))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close(context.Background())
-	deadline := time.Now().Add(5 * time.Second) // two renewals at least
+	// Twice the 2.5 s an unrenewed token lasts on the server.
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		dv := read(t, c, ua.NewNumericNodeID(0, id.Server_ServerStatus_State), ua.AttributeIDValue)
 		if dv.Status != ua.StatusGood {
@@ -381,6 +406,104 @@ func TestSecureChannelRenews(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	// The first token and four renewals; three leaves room for a slow box.
+	ids := tap.tokens()
+	if len(ids) < 3 {
+		t.Fatalf("the server answered under tokens %v, want the first and at least two renewals", ids)
+	}
+	t.Logf("the server answered under tokens %v", ids)
+}
+
+// tokenTap relays a client's connection to the server and notes the
+// security token id of every MSG chunk the server sends. The id is in the
+// symmetric security header, which is sent in the clear (Part 6 §6.7.2.3):
+// message header (type, chunk type, size), secure channel id, token id.
+type tokenTap struct {
+	ln    net.Listener
+	mu    sync.Mutex
+	ids   []uint32 // in the order first seen
+	conns []net.Conn
+}
+
+// newTokenTap listens on a free local port and relays each connection to
+// server (an opc.tcp:// URL) until the test ends.
+func newTokenTap(t *testing.T, server string) *tokenTap {
+	t.Helper()
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &tokenTap{ln: ln}
+	t.Cleanup(func() {
+		ln.Close()
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, c := range p.conns {
+			c.Close()
+		}
+	})
+	target := strings.TrimPrefix(server, "opc.tcp://")
+	go func() {
+		for {
+			cc, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			sc, err := net.Dial("tcp", target)
+			if err != nil {
+				cc.Close()
+				continue
+			}
+			p.mu.Lock()
+			p.conns = append(p.conns, cc, sc)
+			p.mu.Unlock()
+			go func() { io.Copy(sc, cc); sc.Close() }()
+			go func() { p.relayServer(cc, sc); cc.Close() }()
+		}
+	}()
+	return p
+}
+
+func (p *tokenTap) URL() string { return "opc.tcp://" + p.ln.Addr().String() }
+
+// relayServer copies the server's chunks to the client, noting MSG tokens.
+func (p *tokenTap) relayServer(client io.Writer, server io.Reader) {
+	hdr := make([]byte, 8)
+	for {
+		if _, err := io.ReadFull(server, hdr); err != nil {
+			return
+		}
+		size := binary.LittleEndian.Uint32(hdr[4:8])
+		if size < 8 {
+			return
+		}
+		chunk := make([]byte, size)
+		copy(chunk, hdr)
+		if _, err := io.ReadFull(server, chunk[8:]); err != nil {
+			return
+		}
+		if string(chunk[:3]) == "MSG" && size >= 16 {
+			p.note(binary.LittleEndian.Uint32(chunk[12:16]))
+		}
+		if _, err := client.Write(chunk); err != nil {
+			return
+		}
+	}
+}
+
+func (p *tokenTap) note(id uint32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !slices.Contains(p.ids, id) {
+		p.ids = append(p.ids, id)
+	}
+}
+
+// tokens is the token ids the server has sent MSG chunks under.
+func (p *tokenTap) tokens() []uint32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.ids)
 }
 
 // renewChildEnv marks the child process TestSecureChannelRenews runs in.
