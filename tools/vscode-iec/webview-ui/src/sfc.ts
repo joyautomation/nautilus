@@ -283,12 +283,39 @@ export function assocTableHeight(s: SfcStep): number {
 // Gap between an action table and an orphan chip beside it.
 const CHIP_GAP = 16;
 
-// How far below the step box (or its action table) a jump glyph's centre
-// sits: room for the transition's name, drawn above the glyph, to clear the
-// box instead of overlapping it.
+// Where a jump glyph's centre sits under its step. The transition's name is
+// drawn 12 px ABOVE the glyph (its top ~21 px above), so under a bare box
+// the glyph drops JUMP_DROP to keep the name off the box; under an action
+// table (which ends with the editor's "+ action" row) JUMP_BELOW_TABLE is
+// enough, the name's ink clearing that row's.
 const JUMP_DROP = 30;
+const JUMP_BELOW_TABLE = 14;
 // Row pitch between stacked jump glyphs (name row + glyph row).
 const JUMP_PITCH = 34;
+// How far below a jump's centre y its glyph and label reach.
+const JUMP_BOTTOM = 10;
+// Top of a forward transition's labels relative to its condY: the name is
+// drawn at condY - 9 (10 px), the condition at condY + 4 (11 px).
+const FWD_NAME_TOP = 18;
+const FWD_COND_TOP = 6;
+// Clear space kept between a jump stack and what lies below it.
+const JUMP_GAP = 6;
+// Label glyph advances (monospace): the 11 px condition, the 10 px bold name.
+const COND_CHAR_W = 6.7;
+const NAME_CHAR_W = 6.2;
+
+/** Where the jump glyph in `slot` (0 = first) under step `p` is centred. */
+export function jumpY(p: PlacedStep, slot: number): number {
+	const below = Math.max(p.h + JUMP_DROP, assocTableHeight(p.step) + G.ASSOC_ROW_H + JUMP_BELOW_TABLE);
+	return p.y + below + slot * JUMP_PITCH;
+}
+
+/** A transition label cut to `max` characters (ending in `…`); the full
+ * text stays in the transition's tooltip and its edit input. */
+export function fitLabel(text: string, max: number | undefined): string {
+	if (max === undefined || text.length <= max) return text;
+	return max <= 1 ? '…' : text.slice(0, max - 1).trimEnd() + '…';
+}
 
 // Vertical spacing between the staggered bars of an alternative divergence.
 const ALT_BAR_GAP = 26;
@@ -308,12 +335,17 @@ export type TransRoute = {
 	legsOut: Leg[];
 	condX: number;
 	condY: number;
+	/** Set when the labels must stop short of a stem they would otherwise
+	 * cross (a bar labelled over its own left run): the most characters
+	 * the condition / the name may show (fitLabel). */
+	condMax?: number;
+	nameMax?: number;
 	// Present INSTEAD of the forward fields when the transition's target(s)
 	// don't lie strictly below its source(s) (a loop back to an earlier
 	// step): a compact glyph anchored under the (first) source, labelled
 	// with the destination step name(s), rather than a line stretching back
 	// up the canvas.
-	jump?: { x: number; y: number; label: string };
+	jump?: { x: number; y: number; label: string; anchor: string };
 	/** 1-based priority among the transitions sharing a source step (§2.3:
 	 * declaration order), set only when there are two or more. */
 	prio?: number;
@@ -371,7 +403,65 @@ function isForward(t: SfcTransition, rankOf: Map<string, number>): boolean {
  * endpoint when it has one, else collected into a strip along the bottom
  * edge. Pure function of the model; deterministic. */
 export function layoutSfc(model: SfcModel): SfcLayout {
+	const first = placeSfc(model, []);
+	// A step whose loop-backs stack below it can run its jump glyphs into
+	// the forward transition under it (or into a step further down): grow
+	// the gap below that rank by what they need, and lay out again.
+	const extra = jumpRoom(first);
+	return extra.some((e) => e > 0) ? placeSfc(model, extra) : first;
+}
+
+/** Per rank, how much the gap below it must grow so every jump stack
+ * hanging under a step of that rank clears what lies below it: the bar and
+ * labels of the step's own forward transitions (they sit midway down the
+ * gap, so they move half as far as the gap grows) and any step box under
+ * the stack. */
+function jumpRoom(lay: SfcLayout): number[] {
+	const extra: number[] = [];
+	const byId = new Map(lay.steps.map((p) => [p.id, p]));
+	const lowest = new Map<string, number>();
+	const widest = new Map<string, number>();
+	for (const r of lay.trans) {
+		if (!r.jump) continue;
+		lowest.set(r.jump.anchor, Math.max(lowest.get(r.jump.anchor) ?? -Infinity, r.jump.y));
+		widest.set(r.jump.anchor, Math.max(widest.get(r.jump.anchor) ?? 0, jumpLabelW(r)));
+	}
+	for (const [id, y] of lowest) {
+		const p = byId.get(id);
+		if (!p || p.pinned) continue;
+		const bottom = y + JUMP_BOTTOM + JUMP_GAP;
+		let need = 0;
+		for (const r of lay.trans) {
+			if (r.jump || !r.t.from.some((n) => stepId(n) === id)) continue;
+			const top = Math.min(r.barY - 3, r.condY - (r.t.name ? FWD_NAME_TOP : FWD_COND_TOP));
+			need = Math.max(need, 2 * (bottom - top));
+		}
+		const x1 = p.x;
+		const x2 = p.x + p.w / 2 + (widest.get(id) ?? 0);
+		for (const q of lay.steps) {
+			if (q.rank <= p.rank || q.pinned || q.x > x2 || q.x + q.w < x1) continue;
+			need = Math.max(need, bottom - q.y);
+		}
+		if (need > 0) extra[p.rank] = Math.max(extra[p.rank] ?? 0, Math.ceil(need));
+	}
+	return extra;
+}
+
+/** How far right of the glyph's centre a jump's drawing reaches: its
+ * "↩ target: cond" label or its name, whichever is longer. */
+function jumpLabelW(r: TransRoute): number {
+	if (!r.jump) return 0;
+	return 16 + Math.ceil(Math.max((r.jump.label.length + 2 + r.t.cond.length) * COND_CHAR_W, (r.t.name ?? '').length * NAME_CHAR_W));
+}
+
+/** layoutSfc's single pass; `rankExtra[r]` is extra room below rank r. */
+function placeSfc(model: SfcModel, rankExtra: number[]): SfcLayout {
 	const { rankOf, colOf } = computeRanksAndColumns(model);
+	const rankShift = (rank: number) => {
+		let s = 0;
+		for (let q = 0; q < rank; q++) s += rankExtra[q] ?? 0;
+		return s;
+	};
 	const byId = new Map<string, PlacedStep>();
 	const steps: PlacedStep[] = [];
 
@@ -417,7 +507,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 		const rank = rankOf.get(s.id) ?? 0;
 		const col = colOf.get(s.id) ?? 0;
 		const autoX = G.MARGIN + col * colW;
-		const autoY = G.MARGIN + notesBand + rank * G.RANK_H;
+		const autoY = G.MARGIN + notesBand + rank * G.RANK_H + rankShift(rank);
 		const pin = model.layout?.[s.id];
 		const x = pin ? pin.x : autoX;
 		const y = pin ? pin.y : autoY;
@@ -486,8 +576,9 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 					// "+ action" row the editor draws under it): a step with
 					// three actions reaches further down than the box, and
 					// the glyph's label runs right, into that column.
-					y: anchor.y + Math.max(anchor.h, assocTableHeight(anchor.step) + G.ASSOC_ROW_H) + JUMP_DROP + slot * JUMP_PITCH,
+					y: jumpY(anchor, slot),
 					label: '↩ ' + t.to.join(', '),
+					anchor: anchor.id,
 				},
 			});
 			continue;
@@ -509,6 +600,10 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 		// which is the source's own stem, where a sibling's bar continues.
 		// Label it above its own left run instead.
 		const leftOnly = group.length > 1 && Math.max(...targets.map(centerX)) < Math.min(...sources.map(centerX));
+		// Those labels run right from the bar's left end, towards the
+		// source's stem coming down to the bar: stop them short of it
+		// rather than write across it.
+		const room = Math.min(...sources.map(centerX)) - 8 - (barX1 + 10);
 		trans.push({
 			t,
 			barY,
@@ -519,6 +614,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 			legsOut: targets.map((p) => ({ x: centerX(p), y1: barY, y2: p.y })),
 			condX: leftOnly ? barX1 + 10 : barX2 + 10,
 			condY: leftOnly ? barY - 12 : barY,
+			...(leftOnly ? { condMax: Math.floor(room / COND_CHAR_W), nameMax: Math.floor(room / NAME_CHAR_W) } : {}),
 			prio: prioOf.get(t.id),
 		});
 	}
@@ -530,11 +626,15 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 		height = Math.max(height, p.y + p.h + G.MARGIN);
 	}
 	for (const r of trans) {
-		width = Math.max(width, r.condX + 220);
 		if (r.jump) {
 			height = Math.max(height, r.jump.y + G.MARGIN);
-			// The label runs right of the glyph (mono 11px ≈ 6.7 px/char).
-			width = Math.max(width, r.jump.x + 16 + Math.ceil((r.jump.label.length + 2 + r.t.cond.length) * 6.7) + G.MARGIN);
+			// The label and the name run right of the glyph.
+			width = Math.max(width, r.jump.x + jumpLabelW(r) + G.MARGIN);
+		} else {
+			// The condition and the name run right of condX.
+			const cond = fitLabel(r.t.cond || '…', r.condMax).length * COND_CHAR_W;
+			const name = fitLabel(r.t.name ?? '', r.nameMax).length * NAME_CHAR_W;
+			width = Math.max(width, r.condX + Math.max(220, Math.ceil(Math.max(cond, name)) + G.MARGIN));
 		}
 	}
 	for (const n of notes) {

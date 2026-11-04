@@ -905,6 +905,8 @@ func fbdArgs(args string) string {
 }
 
 // splitStatementsOn splits on sep outside parentheses, brackets and strings.
+// Inside a string, `$` escapes the next character (`$'` is a quote, `$$` a
+// dollar), so 'it$'s;x' is one string, not a string ending at `$'`.
 func splitStatementsOn(s string, sep byte) []string {
 	var out []string
 	depth, start := 0, 0
@@ -912,7 +914,9 @@ func splitStatementsOn(s string, sep byte) []string {
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
 		case inStr:
-			if c == '\'' {
+			if c == '$' {
+				i++
+			} else if c == '\'' {
 				inStr = false
 			}
 		case c == '\'':

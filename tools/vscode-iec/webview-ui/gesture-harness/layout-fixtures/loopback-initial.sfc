@@ -1,0 +1,17 @@
+PROGRAM P
+VAR_EXTERNAL
+    Go : BOOL; Done : BOOL; Again : BOOL; Abort : BOOL; Retry : BOOL; Fault : BOOL; X : BOOL;
+END_VAR
+SFC
+  INITIAL_STEP Idle:
+  END_STEP
+  STEP Run:
+  END_STEP
+  TRANSITION t_self FROM Idle TO Idle := Again;
+  END_TRANSITION
+  TRANSITION t_go FROM Idle TO Run := Go;
+  END_TRANSITION
+  TRANSITION t_back FROM Run TO Idle := Done;
+  END_TRANSITION
+END_SFC
+END_PROGRAM

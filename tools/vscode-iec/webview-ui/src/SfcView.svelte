@@ -19,6 +19,7 @@
 		commentId,
 		connectHandlePos,
 		layoutSfc,
+		fitLabel,
 		ASSOC_GAP,
 		stepAtPoint,
 		nextStepInitial,
@@ -1165,9 +1166,9 @@ if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev
 							y={r.condY + 4}
 							class="cond"
 							ondblclick={(e) => editCondition(e, r.t, { x: (e.currentTarget as Element).getBoundingClientRect().left, y: (e.currentTarget as Element).getBoundingClientRect().top, w: 160 })}
-						>{r.t.cond || '…'}</text>
+						>{fitLabel(r.t.cond || '…', r.condMax)}</text>
 						{#if r.t.name}
-							<text x={r.condX} y={r.condY - 9} class="tname" ondblclick={(e) => renameTransition(e, r.t)}>{r.t.name}</text>
+							<text x={r.condX} y={r.condY - 9} class="tname" ondblclick={(e) => renameTransition(e, r.t)}>{fitLabel(r.t.name, r.nameMax)}</text>
 						{/if}
 						{#if r.prio}
 							<g class="prio" transform="translate({r.barX1 - 14}, {r.barY})"><title>priority {r.prio} of the branches out of {r.t.from.join(', ')} (file order; ◀ / ▶ or Alt+← / Alt+→ reorders)</title><circle r="6" class="priodot" /><text y="3" text-anchor="middle" class="priotext">{r.prio}</text></g>

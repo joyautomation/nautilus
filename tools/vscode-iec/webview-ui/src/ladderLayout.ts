@@ -168,7 +168,9 @@ export const ASSIGN_LINE_H = 12;
 /** The lines an assign box draws: one per top-level `;`-separated statement
  * (a string literal's `;` stays put), each ending `;` but the last, cut to
  * ASSIGN_LINE_MAX. A box with several statements stacks them rather than
- * running one very long line off both of its sides. */
+ * running one very long line off both of its sides. Anything that draws an
+ * assign box (the view, an export) lays it out with assignLines,
+ * assignSize and assignLineDy. */
 export function assignLines(text: string | undefined): string[] {
 	const stmts: string[] = [];
 	let quote = '';
@@ -177,7 +179,9 @@ export function assignLines(text: string | undefined): string[] {
 	for (let i = 0; i < t.length; i++) {
 		const c = t[i];
 		if (quote) {
-			if (c === quote) quote = '';
+			// `$` escapes the next character in an ST string (`$'`, `$$`).
+			if (c === '$') i++;
+			else if (c === quote) quote = '';
 		} else if (c === "'" || c === '"') quote = c;
 		else if (c === ';') {
 			stmts.push(t.slice(start, i).trim());
@@ -191,6 +195,11 @@ export function assignLines(text: string | undefined): string[] {
 		const line = i < parts.length - 1 ? x + ';' : x;
 		return line.length > ASSIGN_LINE_MAX ? line.slice(0, ASSIGN_LINE_MAX - 1) + '…' : line;
 	});
+}
+/** The baseline of line `i` of `count` in an assign box, relative to the
+ * box's vertical centre (the lines are centred as a block; 10 px text). */
+export function assignLineDy(i: number, count: number): number {
+	return 3.5 + (i - (count - 1) / 2) * ASSIGN_LINE_H;
 }
 /** An assign box's size: wide enough for its longest line, tall enough for
  * all of them. */

@@ -95,6 +95,10 @@ test('ladderLayout: assignLines splits on top-level semicolons only', () => {
 	assert.deepEqual(assignLines('a := 1'), ['a := 1']);
 	assert.deepEqual(assignLines('a := 1; b := 2;'), ['a := 1;', 'b := 2']);
 	assert.deepEqual(assignLines("s := 'x;y'; n := 1"), ["s := 'x;y';", 'n := 1']);
+	// `$'` and `$$` are escapes inside an ST string, not its end.
+	assert.deepEqual(assignLines("s := 'it$'s;x'; n := 1"), ["s := 'it$'s;x';", 'n := 1']);
+	assert.deepEqual(assignLines("s := 'q$$;'; n := 2"), ["s := 'q$$;';", 'n := 2']);
+	assert.deepEqual(assignLines("s := 'a$$'; t := 'b;c'"), ["s := 'a$$';", "t := 'b;c'"]);
 	const long = assignLines('x := ' + 'y + '.repeat(30) + 'z');
 	assert.equal(long[0].length, ASSIGN_LINE_MAX);
 	assert.ok(long[0].endsWith('…'));
