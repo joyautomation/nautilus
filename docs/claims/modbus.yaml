@@ -692,3 +692,20 @@ claims:
       sending a request. A device closing idle connections is not an
       outage; one that closes and then refuses the reconnect counts once. A silent cut caught only by TCP keepalive
       (about 15 s) is not exercised. Nothing has run on a real device.
+  - id: MB-052
+    claim: >-
+      A source's changed values from one scan are queued together, so a
+      flush takes all of them or none: a run changed in one scan is never
+      split across two frames by a poll that happened mid-scan.
+    source: "#writes"
+    tests:
+      - go ./modbus TestSnapshotWritesAreNeverSplit
+      - go ./modbus TestForeignWriteRoundTrip
+    partial: true
+    note: >-
+      TestSnapshotWritesAreNeverSplit hands 200 snapshots of 120 contiguous
+      holding registers to the in-process slave at a 1 ms poll and asserts
+      every FC16 carries the whole run and no register goes alone as FC6.
+      TestForeignWriteRoundTrip (pymodbus sim, gated on
+      NAUTILUS_MODBUS_SIM) asserts the same shape for a 14-register mixed
+      run. Coil runs (FC15) are not stress-tested this way.

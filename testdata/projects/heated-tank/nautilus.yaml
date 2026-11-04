@@ -52,7 +52,7 @@ tags:
   - { name: HornAck,        role: setpoint, init: false, desc: "Horn acknowledge — releases when alarms clear" }
   # commands — sent to the driver (loopback here)
   - { name: PumpRun, role: output, init: false, desc: "Pump run command" }
-  - { name: Heater,  role: output, unit: "%",   desc: "Heater output command" }
+  - { name: Heater,  role: output, init: 0.0, unit: "%", desc: "Heater output command" }
   # computed state — retained across scans and online edits
   - { name: TempLowAlm, role: state, init: false, desc: "Low temperature alarm (10 s delay)" }
   - { name: HiTempAlm,  role: state, init: false, desc: "High temperature alarm (interlocks.ld)" }
