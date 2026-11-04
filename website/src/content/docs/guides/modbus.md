@@ -227,6 +227,9 @@ What "answers" means:
   connection opens; a program that gates its commands on `__Online` can
   still send the first one. Either way, three gateway no-answers to its
   writes in a row take it offline, and a confirmed write brings it back.
+  Without `rewrite:`, nothing else asks the device, so a program that
+  sends commands only while `__Online` is true never sends the write that
+  would bring it back: keep commanding while offline, or add `rewrite:`.
 - A lost connection, or a source parked with `enable:`, is offline.
 
 This is the meaning `__Online` has on the other drivers: true when the
