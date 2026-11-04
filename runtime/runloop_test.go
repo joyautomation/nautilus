@@ -107,6 +107,46 @@ func TestRunLoopStopsOnCancel(t *testing.T) {
 	}
 }
 
+// A loop whose scan overruns its period has a slot already past every time
+// it goes to sleep; a cancel must still stop it after the scan in flight.
+// The Linux sleeper answered a past deadline with "go" without looking at
+// ctx, so the loop scanned on forever and naut run's stop waited out its
+// whole timeout with the HTTP port held (nautilus#599).
+func TestRunLoopOverrunningStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	scans := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		runLoop(ctx, time.Millisecond, func(time.Time) {
+			select {
+			case scans <- struct{}{}:
+			default:
+			}
+			time.Sleep(5 * time.Millisecond) // five periods per scan
+		}, func(uint64) {}, nil)
+		close(done)
+	}()
+	<-scans
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("an overrunning runLoop did not return on cancel")
+	}
+}
+
+func TestSleepUntilPastDeadlineAnswersCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	past := time.Now().Add(-time.Millisecond)
+	if !sleepUntil(ctx, past) {
+		t.Fatal("a past deadline with a live context should go straight on")
+	}
+	cancel()
+	if sleepUntil(ctx, past) {
+		t.Fatal("a past deadline after a cancel reported the deadline, not the cancel")
+	}
+}
+
 // A cancel must end a long sleep promptly, not at the next slot: the
 // Linux sleeper chunks its uninterruptible sleeps for exactly this.
 func TestSleepUntilReturnsOnCancel(t *testing.T) {
