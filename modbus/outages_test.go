@@ -3,6 +3,7 @@ package modbus
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -245,8 +246,7 @@ func TestOutagesStopIsNotAnOutage(t *testing.T) {
 
 // A write-only source (a keep-alive word re-asserted every rewrite:,
 // nothing polled) answers with write confirmations, not reads. A confirmed
-// write makes the connection one the device talked on, so losing it is an
-// outage.
+// write takes the source online, so losing it is an outage.
 func TestOutagesWriteOnlySourceCounts(t *testing.T) {
 	srv := newSlave(t)
 	srv.Unit(1).SetHolding(8, 0)
@@ -262,16 +262,329 @@ func TestOutagesWriteOnlySourceCounts(t *testing.T) {
 	}
 	startDriver(t, d)
 	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
-	waitFor(t, "connect", func() bool { return read()["DEV__Online"] == true })
+	// Nothing polled: __Online waits for the first confirmed write (#539).
+	waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
 	if err := d.WriteOutputs(nio.Values{"CMD": int64(5)}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "write confirmed", func() bool { return srv.Unit(1).Holding(8) == 5 })
+	waitFor(t, "write confirmed", func() bool { return srv.Unit(1).Holding(8) == 5 && read()["DEV__Online"] == true })
 
 	ln.cut()
 	waitFor(t, "source offline", func() bool { return read()["DEV__Online"] == false })
 	if got := read()["DEV__Outages"]; got != int64(1) {
 		t.Fatalf("write-only source lost after a confirmed write: __Outages = %#v, want int64(1)", got)
+	}
+}
+
+// A write-only source with no rewrite: has nothing to ask the device, so
+// its loop is idle between commands. A link cut while it is idle is still
+// noticed, within idleCheckEvery, with no command pending (#552).
+func TestOutagesIdleWriteOnlySourceNoticesCut(t *testing.T) {
+	srv := newSlave(t)
+	ln := &link{up: true}
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", srv.Addr())},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true}},
+	}
+	d, err := New(m, WithScanRate(15*time.Millisecond), WithDialer(ln.dial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
+	waitFor(t, "online on connect", func() bool { return read()["DEV__Online"] == true })
+
+	ln.cut()
+	cut := time.Now()
+	waitFor(t, "source offline", func() bool { return read()["DEV__Online"] == false })
+	if el := time.Since(cut); el > idleCheckEvery+time.Second {
+		t.Errorf("noticed the cut after %v, want within %v", el, idleCheckEvery)
+	}
+	if got := read()["DEV__Outages"]; got != int64(1) {
+		t.Fatalf("idle write-only source lost its link: __Outages = %#v, want int64(1)", got)
+	}
+	ln.restore()
+	waitFor(t, "back online", func() bool { return read()["DEV__Online"] == true })
+	if got := read()["DEV__Outages"]; got != int64(1) {
+		t.Fatalf("reconnecting changed __Outages to %#v, want int64(1)", got)
+	}
+}
+
+// idleCloser stands in for a device with a server-side idle timeout: a
+// listener that closes each connection once the client has sent nothing
+// for idle. With a target it forwards to that slave, so polls and writes
+// still get answers. refuse closes the listener: later dials are refused.
+type idleCloser struct {
+	l      net.Listener
+	target string
+	idle   time.Duration
+
+	mu      sync.Mutex
+	accepts int
+	frames  int // client writes forwarded (one per request)
+	conns   []net.Conn
+}
+
+func newIdleCloser(t *testing.T, target string, idle time.Duration) *idleCloser {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ic := &idleCloser{l: l, target: target, idle: idle}
+	t.Cleanup(func() {
+		ic.refuse()
+		ic.mu.Lock()
+		defer ic.mu.Unlock()
+		for _, c := range ic.conns {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			ic.mu.Lock()
+			ic.accepts++
+			ic.conns = append(ic.conns, c)
+			ic.mu.Unlock()
+			go ic.handle(c)
+		}
+	}()
+	return ic
+}
+
+func (ic *idleCloser) handle(c net.Conn) {
+	defer c.Close()
+	var up net.Conn
+	if ic.target != "" {
+		var err error
+		if up, err = net.Dial("tcp", ic.target); err != nil {
+			return
+		}
+		defer up.Close()
+		ic.mu.Lock()
+		ic.conns = append(ic.conns, up)
+		ic.mu.Unlock()
+		go func() { _, _ = io.Copy(c, up) }()
+	}
+	buf := make([]byte, 512)
+	for {
+		_ = c.SetReadDeadline(time.Now().Add(ic.idle))
+		n, err := c.Read(buf)
+		if err != nil {
+			return // idle too long (or the client went): hang up
+		}
+		ic.mu.Lock()
+		ic.frames++
+		ic.mu.Unlock()
+		if up != nil {
+			if _, err := up.Write(buf[:n]); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (ic *idleCloser) addr() string { return ic.l.Addr().String() }
+func (ic *idleCloser) refuse()      { _ = ic.l.Close() }
+func (ic *idleCloser) counts() (accepts, frames int) {
+	ic.mu.Lock()
+	defer ic.mu.Unlock()
+	return ic.accepts, ic.frames
+}
+
+// watchOnline samples __Online and __Outages for d, every few ms, for dur
+// and fails on any sample that is not online with no outage.
+func watchOnline(t *testing.T, d *Driver, dur time.Duration) {
+	t.Helper()
+	for end := time.Now().Add(dur); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		v, _ := d.ReadInputs()
+		if v["DEV__Online"] != true || v["DEV__Outages"] != int64(0) {
+			t.Fatalf("__Online = %#v, __Outages = %#v, want true and int64(0) throughout",
+				v["DEV__Online"], v["DEV__Outages"])
+		}
+	}
+}
+
+// A device that closes connections it has been idle on (a server-side idle
+// timeout) is not having outages. The idle check reads the close, the
+// driver reconnects at once with no backoff, and the source stays online
+// with nothing counted, however often it happens. Commands still go out.
+func TestOnlineIdleTimeoutIsNotAnOutage(t *testing.T) {
+	srv := newSlave(t)
+	ic := newIdleCloser(t, srv.Addr(), 200*time.Millisecond)
+	src := fastSource("DEV", ic.addr())
+	src.RetryMin, src.RetryMax = 3*time.Second, 3*time.Second // a backoff wait would show
+	m := Manifest{
+		Sources: []Source{src},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true}},
+	}
+	d, err := New(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "online on connect", func() bool { v, _ := d.ReadInputs(); return v["DEV__Online"] == true })
+	// The first snapshot after Start is the baseline, not a command.
+	if err := d.WriteOutputs(nio.Values{"CMD": int64(1)}); err != nil {
+		t.Fatal(err)
+	}
+
+	watchOnline(t, d, 3*idleCheckEvery+idleCheckEvery/2)
+	if accepts, _ := ic.counts(); accepts < 3 {
+		t.Fatalf("%d connections, want the device's idle closes followed by reconnects (3 or more)", accepts)
+	}
+	if h := d.Health().Sources[0]; h.State != "connected" || h.Retries != 0 {
+		t.Fatalf("idle closes counted as failures: state %q, retries %d, error %q", h.State, h.Retries, h.LastError)
+	}
+	// Send a command on a connection the device has closed but the next
+	// idle check has not looked at yet: 400 ms after a reconnect (closed at
+	// 200 ms, next check near 1 s). It goes out on a fresh connection.
+	before, _ := ic.counts()
+	waitFor(t, "a reconnect", func() bool { a, _ := ic.counts(); return a > before })
+	time.Sleep(400 * time.Millisecond)
+	if err := d.WriteOutputs(nio.Values{"CMD": int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "command delivered", func() bool { return srv.Unit(1).Holding(8) == 5 })
+	if v, _ := d.ReadInputs(); v["DEV__Online"] != true || v["DEV__Outages"] != int64(0) {
+		t.Fatalf("after a command on a link the device had closed: __Online = %#v, __Outages = %#v, want true and int64(0)",
+			v["DEV__Online"], v["DEV__Outages"])
+	}
+}
+
+// The same for a polled source whose device closes between slow polls: no
+// outage, and the reconnect keeps the poll schedule rather than re-reading
+// everything, so the device is not read more often than configured.
+func TestOnlinePolledIdleTimeoutIsNotAnOutage(t *testing.T) {
+	srv := newSlave(t)
+	srv.Unit(1).SetHolding(0, 7)
+	ic := newIdleCloser(t, srv.Addr(), 200*time.Millisecond)
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", ic.addr())},
+		Tags:    []TagBinding{{Name: "PV", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"}},
+	}
+	const scan = 2500 * time.Millisecond
+	d, err := New(m, WithScanRate(scan))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "first read", func() bool { v, _ := d.ReadInputs(); return v["DEV__Online"] == true && v["PV"] == int64(7) })
+
+	watchOnline(t, d, 4*time.Second) // the prime, then one poll at 2.5 s
+	accepts, frames := ic.counts()
+	if accepts < 3 {
+		t.Fatalf("%d connections, want the device's idle closes followed by reconnects (3 or more)", accepts)
+	}
+	if frames > 2 {
+		t.Fatalf("%d reads in 4 s at a %v scan, want 2: a reconnect after an idle close must not re-prime", frames, scan)
+	}
+}
+
+// A device that hangs up while idle and then refuses the reconnect (a
+// reboot, a gateway going down) is an outage: exactly one, noticed while
+// idle rather than at the next command. The quiet reconnect is tried and
+// fails.
+func TestOutagesIdleCloseThenRefusedCountsOnce(t *testing.T) {
+	ic := newIdleCloser(t, "", time.Hour)
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", ic.addr())},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true}},
+	}
+	d, err := New(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
+	waitFor(t, "online on connect", func() bool { return read()["DEV__Online"] == true })
+	waitFor(t, "connection accepted", func() bool { a, _ := ic.counts(); return a == 1 })
+	// Held past quietCloseAfter (the first check sees it up), so the close
+	// is taken for an idle timeout and the reconnect is what fails.
+	time.Sleep(quietCloseAfter + 200*time.Millisecond)
+
+	ic.refuse()
+	ic.mu.Lock()
+	for _, c := range ic.conns {
+		_ = c.Close()
+	}
+	ic.mu.Unlock()
+	waitFor(t, "source offline", func() bool { return read()["DEV__Online"] == false })
+	if got := read()["DEV__Outages"]; got != int64(1) {
+		t.Fatalf("after the close and a refused reconnect __Outages = %#v, want int64(1)", got)
+	}
+	time.Sleep(300 * time.Millisecond) // more refused dials
+	if got := read()["DEV__Outages"]; got != int64(1) {
+		t.Fatalf("refused dials changed __Outages to %#v, want int64(1)", got)
+	}
+}
+
+// A device that accepts and hangs up at once (a crash-looping server, a
+// gateway out of connection slots) is not an idle timeout: the close comes
+// before the connection was held quietCloseAfter, so it is an outage with
+// backoff, noticed at the first check, not a quiet reconnect forever.
+func TestOutagesAcceptThenCloseIsAnOutage(t *testing.T) {
+	ic := newIdleCloser(t, "", time.Millisecond)
+	src := fastSource("DEV", ic.addr())
+	src.RetryMin, src.RetryMax = 300*time.Millisecond, 300*time.Millisecond
+	m := Manifest{
+		Sources: []Source{src},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true}},
+	}
+	d, err := New(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
+	start := time.Now()
+	waitFor(t, "an outage counted", func() bool { o, _ := read()["DEV__Outages"].(int64); return o >= 1 })
+	if el := time.Since(start); el > quietCloseAfter+500*time.Millisecond {
+		t.Errorf("first outage after %v, want about %v (the first check)", el, quietCloseAfter)
+	}
+	if h := d.Health().Sources[0]; h.Retries == 0 {
+		t.Fatalf("closes counted no failures: retries %d, error %q", h.Retries, h.LastError)
+	}
+	// Each connection waits out the backoff: no quiet reconnect loop.
+	time.Sleep(time.Second)
+	if a, _ := ic.counts(); a > 6 {
+		t.Fatalf("%d connections in about 1.2 s with a 300 ms backoff, want a few", a)
+	}
+}
+
+// Watching an idle link puts nothing on the wire: no Modbus request the
+// manifest did not ask for.
+func TestIdleWriteOnlySourceSendsNothing(t *testing.T) {
+	srv := newSlave(t)
+	rec := &recorder{}
+	m := Manifest{
+		Sources: []Source{fastSource("DEV", srv.Addr())},
+		Tags: []TagBinding{{Name: "CMD", Source: "DEV", Table: TableHolding, Address: 8,
+			Format: "uint16", Writable: true, WriteOnly: true}},
+	}
+	d, err := New(m, WithDialer(recordingDialer(rec)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "connected", func() bool { return d.Health().Sources[0].State == "connected" })
+	time.Sleep(idleCheckEvery + idleCheckEvery/2) // at least one idle check
+	rec.mu.Lock()
+	n := len(rec.frames)
+	rec.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("idle write-only source sent %d frames, want 0", n)
+	}
+	if h := d.Health().Sources[0]; h.State != "connected" {
+		t.Fatalf("idle check dropped a healthy link: state %q, error %q", h.State, h.LastError)
 	}
 }
 

@@ -198,6 +198,12 @@ holds its last value (quality `stale`), as it always has.
 
 ## Tags in scope: the rules
 
+- **A driver binding and its tag are spelled the same.** Programs read tag
+  names in any case (`level` binds `Level`), but a driver delivers, and
+  accepts writes for, its binding's exact spelling. A tag declared `m1_kw`
+  never receives what a Modbus binding named `M1_KW` delivers, so
+  `naut check` refuses it: `tag "m1_kw" is spelled "M1_KW" in the driver's
+  bindings`.
 - **A manifest tag needs no declaration** in a PROGRAM — ST, ladder, FBD or
   SFC. Its type is its `type:`; with no `type:`, the type its `init:`
   implies (`TRUE`/`FALSE` BOOL, a number REAL, `T#5s` TIME, other text

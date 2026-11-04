@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { Browser } from './cdp.mjs';
 import { applyThemeJs } from './themes.mjs';
 import { recordClips } from './clips.mjs';
+import { settled, waitUntil, opsPosted } from './wait.mjs';
 
-export { recordClips, Browser, applyThemeJs };
+export { recordClips, Browser, applyThemeJs, settled, waitUntil, opsPosted };
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const BUNDLE = process.env.DIAGRAM_BUNDLE || join(HERE, '../../media/dist');
 export const HEADLESS = process.env.HEADED !== '1';
@@ -43,9 +44,13 @@ export async function withPage(fn, opts) {
 	}
 }
 
+// A delivered model renders, then the pane fits it a frame or two later:
+// wait for the page to stop moving, or a click aimed at a box lands where
+// the box was before the fit (#545).
 export const deliver = async (b, msg) => {
 	await b.eval(`window.__deliver(${JSON.stringify(msg)})`);
 	await sleep(250);
+	await settled(b);
 };
 
 export const posted = (b) => b.eval('window.__POSTED__');
@@ -182,6 +187,8 @@ export async function restores(saved, check, zoom) {
 	await withPage(
 		async (b) => {
 			await sleep(250);
+			await waitUntil(() => ready(b), (r) => r.length > 0, { what: 'ready' });
+			await settled(b);
 			assert.deepEqual(await ready(b), [{ type: 'ready' }], 'mount must still say ready');
 			await check(b);
 		},

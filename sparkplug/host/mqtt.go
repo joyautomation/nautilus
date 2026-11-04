@@ -140,10 +140,20 @@ func (d *Driver) isStopping() bool {
 	return d.stopping
 }
 
-// mayPublish gates the STATE certificate and every outbound NCMD/DCMD. A
-// passive consumer (Primary false) never writes to the group at all, and a
-// standby replica under `redundancy:` never publishes STATE online — its LWT
-// would otherwise flap store-and-forward across every site (design §8.1).
+// mayPublish gates the STATE certificate and every outbound write (NCMD/DCMD
+// carrying tag values). A passive consumer (Primary false) publishes no STATE
+// and writes no tags, and a standby replica under `redundancy:` never
+// publishes STATE online — its LWT would otherwise flap store-and-forward
+// across every site (design §8.1).
+//
+// One exception: NCMD Node Control/Rebirth is NOT gated here. Sparkplug 3.0
+// lets ANY host application request a rebirth (§5 "Sparkplug Host
+// Application Receive Data"; §10 conformance: host applications "may also
+// send rebirth requests"), and the spec's only hint otherwise is a
+// non-normative note that a non-primary host "may not". So a passive host
+// asks for the births it missed (publishRebirth, gated on isLeader alone),
+// and rebirth-requests: false (Config.NoRebirthRequests) is the switch the
+// spec recommends for turning that off.
 func (d *Driver) mayPublish() bool { return d.cfg.Primary && d.isLeader() }
 
 // ── connect / reconnect loop ─────────────────────────────────────────────
@@ -168,6 +178,19 @@ func (d *Driver) run(ctx context.Context) {
 		cli, lost, err := d.connect(ctx)
 		if err != nil {
 			d.setErr(err)
+			if ctx.Err() == nil && !d.isStopping() {
+				// No session, so the host can reach none of its nodes. This
+				// is the one place a host learns it is cut off when it left
+				// its last session on purpose (a leadership change on a
+				// partitioned link, before paho noticed the dead broker), and
+				// it also covers a CONNECT that succeeded but whose
+				// SUBSCRIBE or STATE birth failed. brokerLostLocked counts
+				// only the nodes still online, so repeated failures, or a
+				// host that never connected, count nothing (#540).
+				d.mu.Lock()
+				d.brokerLostLocked()
+				d.mu.Unlock()
+			}
 			d.log.Warn("host: connect failed", "broker", d.cfg.BrokerURL, "error", err, "retryIn", backoff)
 			select {
 			case <-ctx.Done():
@@ -184,11 +207,16 @@ func (d *Driver) run(ctx context.Context) {
 		}
 		backoff = backoffMin
 
-		d.serve(ctx, lost)
+		dropped := d.serve(ctx, lost) && ctx.Err() == nil && !d.isStopping()
 
 		d.mu.Lock()
 		d.connected = false
 		d.pub = nil
+		if dropped {
+			// The host can no longer see its nodes: every one goes offline
+			// now, as an NDEATH would take it (#540).
+			d.brokerLostLocked()
+		}
 		d.mu.Unlock()
 		// Death-before-DISCONNECT: Stop publishes the certificate and only
 		// then cancels, so by the time we get here the wire is already clear.
@@ -206,7 +234,11 @@ func (d *Driver) run(ctx context.Context) {
 // disconnect — a clean DISCONNECT discards the will, so without it the
 // retained STATE would keep naming this replica's session online. See
 // publishDemotionDeath for why it carries the session timestamp.
-func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
+//
+// It reports true when the broker connection was lost, the one ending the
+// host did not choose: Stop and a leadership change reconnect on purpose,
+// and their nodes keep their state until the births that follow.
+func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 	// What the session was opened as (will or no will), not a fresh sample:
 	// leadership that moved between CONNECT and here is a change too.
 	d.mu.Lock()
@@ -217,10 +249,10 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-lost:
 			d.log.Warn("host: connection lost", "broker", d.cfg.BrokerURL)
-			return
+			return true
 		case <-t.C:
 			if d.mayPublish() != wasLeader {
 				d.log.Info("host: leadership changed; reconnecting to refresh STATE",
@@ -228,7 +260,7 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
 				if wasLeader {
 					d.publishDemotionDeath()
 				}
-				return
+				return false
 			}
 		}
 	}
@@ -249,6 +281,12 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 
 	lost := make(chan struct{})
 	var lostOnce sync.Once
+
+	// Until every subscription is in place this is not a session the host
+	// can trust: nothing it delivers is applied (see sessionDown).
+	d.mu.Lock()
+	d.sessionDown = true
+	d.mu.Unlock()
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(d.cfg.BrokerURL).
@@ -284,12 +322,17 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 	if err := tok.Error(); err != nil {
 		return nil, nil, fmt.Errorf("host: connect %s: %w", d.cfg.BrokerURL, err)
 	}
-
 	p := &pahoPub{cli: cli}
 	if err := d.subscribe(cli); err != nil {
 		cli.Disconnect(0)
 		return nil, nil, err
 	}
+	// Subscribed: the session's messages are current from here on. Cleared
+	// before the STATE birth, so a birth that answers it is never dropped.
+	// Should the STATE birth fail, run takes every node offline again.
+	d.mu.Lock()
+	d.sessionDown = false
+	d.mu.Unlock()
 	if err := d.publishStateBirth(p, ts); err != nil {
 		cli.Disconnect(0)
 		return nil, nil, err
@@ -327,26 +370,42 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 // subscribe issues the whole subscription set, literal STATE first. Six
 // filters per group, preferred over spBv1.0/<group>/#, which would echo our
 // own NCMD/DCMD back and pull in other hosts' retained STATE.
+//
+// The group filters go in ONE SUBSCRIBE, so they take effect together:
+// messages are not applied until the session is subscribed (sessionDown),
+// and filter-by-filter subscribing would leave a window in which, say, an
+// NDEATH on an already-subscribed filter is delivered and dropped.
 func (d *Driver) subscribe(cli mqtt.Client) error {
-	filters := []string{stateTopic(d.cfg.HostID)}
-	for _, g := range d.groups {
-		filters = append(filters,
-			"spBv1.0/"+g+"/NBIRTH/+",
-			"spBv1.0/"+g+"/NDEATH/+",
-			"spBv1.0/"+g+"/NDATA/+",
-			"spBv1.0/"+g+"/DBIRTH/+/+",
-			"spBv1.0/"+g+"/DDEATH/+/+",
-			"spBv1.0/"+g+"/DDATA/+/+",
-		)
+	state := stateTopic(d.cfg.HostID)
+	if err := waitSubscribe(cli.Subscribe(state, 1, nil), state); err != nil {
+		return err
 	}
-	for _, f := range filters {
-		tok := cli.Subscribe(f, 1, nil)
-		if !tok.WaitTimeout(tokenTimeout) {
-			return fmt.Errorf("host: subscribe %s timed out", f)
+	filters := map[string]byte{}
+	for _, g := range d.groups {
+		for _, f := range []string{
+			"spBv1.0/" + g + "/NBIRTH/+",
+			"spBv1.0/" + g + "/NDEATH/+",
+			"spBv1.0/" + g + "/NDATA/+",
+			"spBv1.0/" + g + "/DBIRTH/+/+",
+			"spBv1.0/" + g + "/DDEATH/+/+",
+			"spBv1.0/" + g + "/DDATA/+/+",
+		} {
+			filters[f] = 1
 		}
-		if err := tok.Error(); err != nil {
-			return fmt.Errorf("host: subscribe %s: %w", f, err)
-		}
+	}
+	if len(filters) == 0 {
+		return nil
+	}
+	return waitSubscribe(cli.SubscribeMultiple(filters, nil), "the group filters")
+}
+
+// waitSubscribe waits for one SUBSCRIBE's SUBACK.
+func waitSubscribe(tok mqtt.Token, what string) error {
+	if !tok.WaitTimeout(tokenTimeout) {
+		return fmt.Errorf("host: subscribe %s timed out", what)
+	}
+	if err := tok.Error(); err != nil {
+		return fmt.Errorf("host: subscribe %s: %w", what, err)
 	}
 	return nil
 }
@@ -511,10 +570,10 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 //
 // Unlike publishCommand (gated on mayPublish — Primary && isLeader), a
 // Rebirth request bypasses the Primary check: it does not contend for the
-// STATE certificate and it commands no field device, so it does not "write
-// to the group" in the sense mayPublish's doc comment means. It is gated on
-// isLeader alone, so a standby replica under redundancy: still doesn't
-// duplicate the request.
+// STATE certificate and it commands no field device, and Sparkplug 3.0 §5
+// lets any host application send one (see mayPublish). It is gated on
+// isLeader, so a standby replica under redundancy: still doesn't duplicate
+// the request, and on Config.NoRebirthRequests, which refuses every one.
 //
 // This matters for host-as-edge (docs/design/sparkplug-host.md §8.8): a
 // project consuming a group with primary: false is a passive consumer with
@@ -533,6 +592,11 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 // originate here — RequestRebirth, the connect-time sweep, a __Rebirth
 // rising edge — call countRebirth.
 func (d *Driver) publishRebirth(group, edge string) error {
+	if d.cfg.NoRebirthRequests {
+		err := fmt.Errorf("host: rebirth requests are off (rebirth-requests: false)")
+		d.log.Warn("host: rebirth request refused", "group", group, "node", edge, "error", err)
+		return err
+	}
 	p := d.publisher()
 	if p == nil {
 		err := fmt.Errorf("host: not connected")
@@ -646,8 +710,20 @@ func (d *Driver) staleLoop(ctx context.Context) {
 // site actually holds. Only a command nothing can ever address — a node with
 // no group, or a node whose queue is full — is dropped and counted.
 func (d *Driver) flushWrites() {
-	if d.publisher() == nil || !d.mayPublish() {
+	if d.publisher() == nil {
 		return // stay queued; connect() kicks us again
+	}
+	if !d.cfg.Primary {
+		// A passive host writes no tags, but the operator's __Rebirth is a
+		// rebirth request, which any host application may send (Sparkplug
+		// 3.0 §5; see mayPublish). Only those leave the queue (#576).
+		if d.isLeader() {
+			d.flushRebirthTags()
+		}
+		return
+	}
+	if !d.mayPublish() {
+		return // a standby: stay queued until promoted
 	}
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
@@ -670,18 +746,9 @@ func (d *Driver) flushWrites() {
 	hold := map[string]map[string]any{}
 
 	for name, v := range work {
-		// Synthesized <site>__Rebirth: a rising edge is an operator-forced
-		// rebirth. Change suppression upstream means only transitions get
-		// here, so "value is true" *is* the rising edge.
-		if edge, ok := d.rebirthTags[name]; ok {
-			if truthy(v) {
-				if group, ok := d.groupFor(edge); ok {
-					if err := d.publishRebirth(group, edge); err == nil {
-						d.countRebirth()
-					}
-				}
-			}
-			d.markWritten(name, v)
+		// Synthesized <site>__Rebirth: see writeRebirthTag.
+		if _, ok := d.rebirthTags[name]; ok {
+			d.writeRebirthTag(name, v)
 			continue
 		}
 		b, ok := d.byName[name]
@@ -697,7 +764,9 @@ func (d *Driver) flushWrites() {
 				"tag", name, "node", b.Node)
 			continue
 		}
-		if !d.nodeOnline(b.Node) {
+		if !d.reachable(b.Node, b.Device) {
+			// A dark node, or a dark device on a live node (DDEATH, or a
+			// rebirth before its DBIRTH): park it until the birth.
 			if hold[b.Node] == nil {
 				hold[b.Node] = map[string]any{}
 			}
@@ -859,7 +928,44 @@ func (d *Driver) markWritten(name string, v any) {
 	d.initWriteMapsLocked()
 	d.lastOut[name] = v
 	d.remote[name] = v
+	// A command that went out supersedes one parked for the same tag. A
+	// newer write to a dark device is parked in its place instead, so this
+	// is a safety net for a write that raced the device's birth.
+	if b, ok := d.byName[name]; ok {
+		delete(d.queued[b.Node], name)
+	}
 	d.wmu.Unlock()
+}
+
+// flushRebirthTags sends the queued <site>__Rebirth writes and leaves every
+// other write queued: the whole of flushWrites for a passive host.
+func (d *Driver) flushRebirthTags() {
+	d.wmu.Lock()
+	work := map[string]any{}
+	for name, v := range d.pending {
+		if _, ok := d.rebirthTags[name]; ok {
+			work[name] = v
+			delete(d.pending, name)
+		}
+	}
+	d.wmu.Unlock()
+	for name, v := range work {
+		d.writeRebirthTag(name, v)
+	}
+}
+
+// writeRebirthTag handles one <site>__Rebirth write: a rising edge is an
+// operator-forced rebirth. Change suppression upstream (WriteOutputs) means
+// only transitions get here, so "value is true" *is* the rising edge.
+func (d *Driver) writeRebirthTag(name string, v any) {
+	if truthy(v) {
+		if group, ok := d.groupFor(d.rebirthTags[name]); ok {
+			if err := d.publishRebirth(group, d.rebirthTags[name]); err == nil {
+				d.countRebirth()
+			}
+		}
+	}
+	d.markWritten(name, v)
 }
 
 // maxQueuedPerNode bounds the dark-site queue. It is one value per TAG — a
@@ -915,7 +1021,10 @@ func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
 }
 
 // releaseQueued delivers the commands parked for one edge node, now that it
-// has birthed. It is called from the inbound path with NEITHER lock held —
+// has birthed. A dark device's command waits for that device's DBIRTH as
+// well (see reachable): the NBIRTH comes first and darks every device until
+// its own birth, and only the DBIRTH says what the device holds. It is called from the inbound
+// path with NEITHER lock held —
 // the same discipline flushAdopts documents, and for the same reason: wmu and
 // d.mu are never nested in this package.
 //
@@ -929,16 +1038,23 @@ func (d *Driver) releaseQueued(edge string) {
 	d.wmu.Lock()
 	waiting := len(d.queued[edge])
 	d.wmu.Unlock()
-	if waiting == 0 || !d.nodeOnline(edge) {
+	if waiting == 0 {
+		return
+	}
+	devices, online := d.onlineDevices(edge)
+	if !online {
 		return
 	}
 
 	d.wmu.Lock()
 	d.initWriteMapsLocked()
 	q := d.queued[edge]
-	delete(d.queued, edge)
 	sent, settled := 0, 0
 	for name, v := range q {
+		if deviceDark(devices, d.byName[name].Device) {
+			continue // stays parked until this device's DBIRTH
+		}
+		delete(q, name)
 		if _, newer := d.pending[name]; newer {
 			continue // a later scan already queued this tag; that value wins
 		}
@@ -948,6 +1064,9 @@ func (d *Driver) releaseQueued(edge string) {
 		}
 		d.pending[name] = v
 		sent++
+	}
+	if len(q) == 0 {
+		delete(d.queued, edge)
 	}
 	d.wmu.Unlock()
 
@@ -1003,6 +1122,45 @@ func (d *Driver) flushAdopts() {
 		d.remote[a.name] = a.value
 	}
 	d.wmu.Unlock()
+}
+
+// reachable reports whether a command for this node (device "") or device
+// can be delivered now: the node is online and the device is not dark. A
+// device is dark once the host has seen it and it is not online: a DDEATH,
+// its node's death, or a node rebirth before its DBIRTH. A device the host
+// has never seen is not dark (the host cannot tell it apart from one that
+// is not there), so its command goes out with the node's. releaseQueued
+// applies the same rule. Takes d.mu alone.
+func (d *Driver) reachable(edge, device string) bool {
+	devices, online := d.onlineDevices(edge)
+	return online && !deviceDark(devices, device)
+}
+
+// deviceDark is reachable's device half, over onlineDevices' map.
+func deviceDark(devices map[string]bool, device string) bool {
+	on, seen := devices[device]
+	return device != "" && seen && !on
+}
+
+// onlineDevices reports whether an edge node is online and, if it is, which
+// of its devices are. Takes d.mu alone.
+func (d *Driver) onlineDevices(edge string) (map[string]bool, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for k, ns := range d.nodes {
+		if k.EdgeNode != edge {
+			continue
+		}
+		if ns == nil || !ns.online {
+			return nil, false
+		}
+		devs := make(map[string]bool, len(ns.devices))
+		for id, dev := range ns.devices {
+			devs[id] = dev.online
+		}
+		return devs, true
+	}
+	return nil, false
 }
 
 // nodeOnline reports whether an edge node has birthed and not died. An unknown
