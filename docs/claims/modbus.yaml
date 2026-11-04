@@ -799,3 +799,24 @@ claims:
       with the attempt count, and not for a write that lands first time,
       nor after a refusal ended the stuck write.
       The write-only offline debounce on gateway no-answers is MB-051's.
+
+  - id: MB-054
+    claim: >-
+      A hung scan closes the write gate with or without `redundancy:`: once
+      one scan has been in progress longer than its bound, the gate closes
+      about a lease (4 s) after the last check that found the scans live,
+      the `rewrite:` re-asserts stop and the device's watchdog trips. When
+      scans complete again the gate reopens and every output goes out once.
+      Without `redundancy:`, a healthy project sees no difference: the
+      gate is open from the start.
+    source: "#redundancy"
+    tests:
+      - go ./cmd/naut TestNoRedundancyAHungScanStopsTheRewriteKeepAlive
+      - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+    partial: true
+    note: >-
+      The naut test runs a project without redundancy (a real driver against
+      the in-process slave, a scan read that blocks) with a 200 ms gate
+      lease, not the 4 s of naut run; it asserts the re-asserts stop while
+      the scan hangs and resume after. That every output goes out once at
+      the reopen is TestRewriteFiresOnPeriodAndStopsOnGate's (MB-046).

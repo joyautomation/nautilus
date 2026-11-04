@@ -100,6 +100,57 @@ never computes.
 - **Failover** is bounded by the lease: 4 s worst case, and a clean
   shutdown (SIGTERM) hands the lease over so a standby takes it on its
   next 1 s tick.
+- **The lease needs live scans.** A leader renews only while its scans
+  are completing, so a leader that is still running but whose scan is
+  hung (logic that never returns, a driver call that blocks) hands over
+  too. A scan counts as hung once one scan has been in progress for
+  longer than twice its task's period, at least 1 s and at most 2 s,
+  whatever the period: a task that runs every 10 s is fine between its
+  scans, and a fast task that overruns now and then is not hung. A hung
+  leader stops renewing and closes its own gate (its drivers stop
+  writing) on its first tick more than 2 s after its last renew, without
+  waiting on the Lease API, so a call to it that fails or hangs cannot
+  keep the gate open. The gate also closes by itself once the last renew
+  is older than the lease (2 s while scans are hung), however late the
+  elector's own tick is. The standby takes the lease once it lapses, 4 s
+  after that renew: about 5 to 8 s from the start of the hang, and the
+  two never lead at once. A hung scan that finally returns after the
+  lease is gone writes nothing. A replica whose own scans are hung does
+  not take the lease either, so a broken replica never takes over; it
+  contends again once its scans complete. Each change is logged once,
+  naming the stuck task. At start-up a replica may take the lease before
+  its first scan, but its scan loops must be running within 8 s (twice
+  the lease) or it lets the lease go.
+- **A scan over about 2 s pauses the outputs.** A single scan that takes
+  longer than about 2 s can close the gate before it completes, even when
+  no other replica takes the lease. While it is closed, the drivers send
+  nothing of their own. When the scan completes, the replica renews the
+  same lease and opens the gate again: the program carries on where it
+  was (no takeover: frames, timers, SFC steps and retained state are
+  kept), and the drivers get every output once. Forces are dropped when
+  the gate closes, as on any step-down. The scan clock is not zeroed on a
+  resume, unlike a takeover, so the first scan's `dt` spans the stall.
+  Only a lease another replica held in between makes the next opening a
+  takeover.
+- **A lease holder whose gate is closed answers its own API.** The lease
+  still names it, so its leader address is its own: rather than forward a
+  request to itself, it answers reads from its own store and refuses
+  writes with 503 until its gate opens or another replica takes the lease.
+- **Outside a cluster** (no service account), a `redundancy:` manifest
+  runs standalone: it is always the leader, with nothing to hand over
+  to, except that a hung scan closes its gate: 4 s after the last check
+  that found its scans live, about 5 to 8 s into the hang. Drivers then
+  stop asserting outputs on their own (a Modbus `rewrite:` keep-alive,
+  for one), so a device's communication watchdog sees the silence and
+  acts. The gate opens again once scans complete, and the program
+  carries on as above.
+- **Without `redundancy:`** there is no lease, but `naut run` still gates
+  the Modbus, EtherNet/IP and OPC UA client drivers on live scans, on
+  the same timing. A healthy project sees no difference: the gate is
+  open from the start and the runtime is not coordinated (no takeover,
+  forces kept). The groov EPIC (OptoMMP) driver and a Sparkplug host take
+  no gate here, because they read any gate as "one replica of a
+  redundant set".
 - **On takeover**, the new leader re-reads the retain store (the old
   leader may have accepted retunes or edits while this replica idled),
   discards program frames so warm-start logic runs against live field
@@ -133,6 +184,26 @@ never computes.
   output too. The hw drivers (SNMP, Redfish, Prometheus) do not do this:
   their commands are often pulses (a ForceOff sent twice powers a server
   off twice), so the first value after their gate opens is a baseline.
+- **A standby leaves a device's communication watchdog to the leader.**
+  Where the manifest sets a watchdog that any client's request feeds (a
+  groov EPIC's `watchdog:`), the standby does not talk to that device at
+  all, so a leader that keeps the lease but cannot reach the device lets
+  the watchdog trip instead of the standby's polls feeding it. The
+  standby loses its live view of just that device until it takes over
+  (see [groov EPIC](/guides/groov-epic/#redundancy)), so its takeover
+  waits for live inputs: the driver reports them not ready until its
+  first read of the device, and the runtime holds the takeover (frame
+  reset, logic and every driver's outputs) until then, at most 2 s
+  (`runtime.Options.TakeoverInputsWait`), its scan loop still ticking.
+  One hiccup in the dial can use up that wait: a first connect that
+  fails waits about 1 s for its retry, and a lost SYN costs as much in
+  the kernel. Past the wait the logic and every other driver's outputs
+  run on stale inputs (the groov EPIC's own outputs stay held until it
+  has read the unit).
+  A watchdog the manifest does not name is still fed by a polling
+  standby; the groov EPIC driver warns when it finds one. No other driver
+  has a manifest-set watchdog of that kind; a Modbus `rewrite:`
+  keep-alive is a write, and a standby sends none.
 - **The HTTP API follows the leader.** Every replica serves the
   dashboard, and a standby reverse-proxies API traffic to the leader
   (the leader's address rides inside the Lease), so a Service in front
@@ -182,6 +253,11 @@ rt, _ := runtime.New(runtime.Options{
 `runtime.Coordinator` is one method — `IsLeader() bool` — so a different
 election scheme (a hardware keyswitch, a modbus arbiter) plugs in with a
 few lines.
+
+`elector.SetHealth(rt.Liveness)` makes the lease need live scans, as
+`naut run` does; call it before `elector.Run`. `rt.Liveness(now, max)` is
+nil while the runtime's scans are completing, else an error naming the
+stuck task, so another election scheme can ask it too.
 
 `rt.Run(ctx)` returns after the last scan and, with a retain store, the
 last save. Wait for it to return before the process exits, or the writes

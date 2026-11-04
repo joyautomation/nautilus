@@ -28,7 +28,12 @@ import "github.com/joyautomation/nautilus/lang/ir"
 //     program's assigned bits into the word the store holds then (stored
 //     &^ mask | program & mask), so a write to a different bit of the same
 //     word that landed mid-scan survives, exactly as a sibling member does.
-//     Assigning the word itself still assigns every bit.
+//     Assigning the word itself still assigns every bit. The sign bit of a
+//     signed word narrower than 64 bits (INT bit 15) arrives with every bit
+//     above it in the mask, because the VM holds the word sign-extended
+//     and setting the sign sets them (#611): the program's sign then
+//     lands with its upper bits, never beside a writer's, so the commit is
+//     in range without knowing the declared type.
 //   - A function-block instance is identity, not value: an assignment
 //     reaching into one commits that whole subtree, as before.
 //

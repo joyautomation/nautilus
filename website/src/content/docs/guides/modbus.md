@@ -544,6 +544,16 @@ faulted. A hung controller that kept refreshing a stale command would mask
 the fault instead, leaving the device happily executing a setpoint nobody
 computes any more. Reads are unaffected on both replicas.
 
+**A hung scan closes the gate, with or without `redundancy:`.** `naut run`
+gates the driver on live scans in every project. When one scan has been in
+progress for longer than its bound (twice its task's period, 1 to 2 s), as
+with logic that never returns or a driver call that blocks, the gate closes
+about 4 s later, 5 to 8 s into the hang. The `rewrite:` re-asserts stop and
+the device's watchdog trips. When scans complete again, the gate reopens
+and every output goes out once. Without `redundancy:`, a healthy project
+sees no difference: the gate is open from the start (see
+[Redundancy](/guides/redundancy/#redundancy)).
+
 ## Testing
 
 `naut test` never opens a socket. Keep a `memory.yaml` beside

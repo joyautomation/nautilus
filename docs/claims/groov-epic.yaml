@@ -376,17 +376,18 @@ claims:
     claim: >-
       A standby changes no configuration on the unit: it sends no power-up
       clear, sets no watchdog, writes no custom data area pointer and
-      configures no stream; it polls the packed areas, and a leader
-      streaming beside it keeps stream target #1 and its stream on time.
+      configures no stream; without `watchdog:` in the manifest it polls
+      the packed areas, and a leader streaming beside it keeps stream
+      target #1 and its stream on time.
     source: "#redundancy"
     tests:
       - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
       - go ./optommp TestStandbyLeavesTheStreamToTheLeader
     note: >-
       The in-process fake over loopback TCP: a lone standby on a blank unit
-      (stream and watchdog in the manifest, a power-up clear owed), then a
-      standby beside a streaming leader with the stream configuration
-      watched for 300 ms.
+      (stream in the manifest, a power-up clear owed), once polling and
+      once with the watchdog set (EPIC-033), then a standby beside a
+      streaming leader with the stream configuration watched for 300 ms.
   - id: EPIC-031
     claim: >-
       A takeover moves the stream: the new leader sends a power-up clear
@@ -418,3 +419,84 @@ claims:
     note: >-
       No test stops a leader that took over from another, so what it
       restores (and the found stream recorded as off) is not asserted.
+  - id: EPIC-033
+    claim: >-
+      With `watchdog:` set above 0s, a standby holds no connection to the
+      processor and sends it no request, so a leader that keeps the lease
+      but cannot reach the unit lets the unit's watchdog trip, and the
+      outputs go to their watchdog values. Its Health mode is "standby
+      (watchdog)", `online` is false, and the status row reads waiting,
+      not connecting.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestWatchdogStandbySendsNothingSoTheWatchdogTrips
+      - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
+      - go ./internal/project TestOptommpStatus
+    note: >-
+      The in-process fake, which counts requests (not connects) toward its
+      watchdog: a leader sets it to 100 ms, a standby beside it is watched
+      for 100 ms (no dial, no request), then the leader's link is cut and
+      the fake must trip and drive DO00 to its watchdog value within a
+      second. A gate that closes between the driver's look before it dials
+      and the session's first look still gets a TCP connect, closed before
+      any request; no test forces that window.
+  - id: EPIC-034
+    claim: >-
+      Only a watchdog the manifest sets keeps a standby off the unit:
+      without the `watchdog` key, or with 0s, a standby polls the packed
+      areas. A polling standby that finds the unit's watchdog on, though
+      the manifest does not set it, reports it in Health (FedWatchdogMs),
+      logs a warning, and its status row is degraded; leading clears it.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyPollsUnlessTheManifestSetsTheWatchdog
+      - go ./optommp TestPollingStandbyReportsAWatchdogTheManifestDoesNotName
+      - go ./internal/project TestOptommpStatus
+    note: >-
+      The unit's watchdog is read when a role begins (a connect or a gate
+      change), not every scan: one set in groov Manage while a standby
+      polls is reported from its next session. The log line is not
+      asserted.
+  - id: EPIC-035
+    claim: >-
+      A standby with `watchdog:` set that takes over connects, configures
+      the watchdog, and reads the unit before it writes, and the runtime
+      holds the takeover (frame reset, logic and every driver's outputs,
+      a sibling driver's in the same set included) until that read has
+      been delivered: the warm start runs on the unit's values, not on
+      what the standby last saw, and the first command sent comes from it.
+      The runtime waits the same way on every edge that takes over or
+      resumes: from standby, a resumed term, and a new term while this
+      replica still read as leading.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestWatchdogStandbyTakeoverReadsBeforeItWrites
+      - go ./optommp TestWatchdogStandbyTakeoverWarmStartsOnLiveInputs
+      - go ./optommp TestWatchdogStandbyTakeoverHoldsSiblingOutputs
+      - go ./runtime TestTakeoverWaitsForLiveInputs
+      - go ./runtime TestNewTermTakeoverWaitsForLiveInputs
+      - go ./io TestMultiInputsReadyWaitsForEveryChild
+    note: >-
+      The fake behind a 50 ms dial; DI03 is on at the unit and seeded
+      FALSE in the runtime. One program copies it to DO00 (no write before
+      a packed-area read, the first DO00 command on), one latches a fault
+      when it reads DI03 off (DO00 never commanded on), and one copies it
+      to a sibling driver in the same io.Multi (never handed FALSE). The
+      new-term and resumed-term cases are a scripted driver under a Termed
+      coordinator: its term moves from 1 to 2 while it still leads, then
+      its gate closes and reopens in term 2, each onto a driver that is
+      not ready.
+  - id: EPIC-036
+    claim: >-
+      The takeover's wait for live inputs is bounded (2 s by default,
+      runtime.Options.TakeoverInputsWait): past it the takeover runs on
+      the inputs the drivers hold, and the groov EPIC driver still sends
+      no command until the runtime has read a scan of the unit.
+    source: "#redundancy"
+    tests:
+      - go ./runtime TestTakeoverWaitIsBounded
+      - go ./optommp TestWatchdogStandbyTakeoverPastTheWaitStillHoldsStaleCommands
+    note: >-
+      A 10 ms wait against a 150 ms dial: the scans before the unit is
+      read run on DI03 seeded FALSE, and the first DO00 command is still
+      on. A sibling driver's outputs are not held past the wait.

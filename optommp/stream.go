@@ -14,7 +14,8 @@ package optommp
 // is stored to flash) as it first found them and puts both back on a
 // clean stop. Under redundancy only the leader configures any of this or
 // puts it back; a standby polls and touches none of it (see standbyNote
-// in driver.go). The watchdog it leaves set: a controller that has stopped
+// in driver.go), or, when the manifest sets the watchdog, holds no
+// session at all (watchdogStandbyNote). The watchdog it leaves set: a controller that has stopped
 // is what it is for. A stream that misses five
 // intervals (at least 100 ms) makes every tag Stale until the next one
 // arrives; none for the request timeout ends the session, and the
@@ -472,6 +473,7 @@ func (d *Driver) decodeStream(p []byte) ([]uint32, error) {
 // markStale demotes every delivered tag to Stale.
 func (d *Driver) markStale() {
 	d.mu.Lock()
+	d.freshIn = false // nothing live left to release a hold on
 	for name, q := range d.quality {
 		if q != nio.NotConnected {
 			d.quality[name] = nio.Stale

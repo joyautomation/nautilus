@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/joyautomation/nautilus/leader"
@@ -199,5 +200,41 @@ func TestLeaderNeverProxies(t *testing.T) {
 	}
 	if hit {
 		t.Error("the leader proxied a request instead of answering it locally")
+	}
+}
+
+// A replica the lease still names but whose gate is closed (a hung scan's
+// step-down, #621) advertises its own address as the leader's: it must not
+// forward to it, or one request becomes an endless chain of self-hops. It
+// answers reads from its own store and refuses writes with 503.
+func TestGateClosedLeaseHolderDoesNotProxyToItself(t *testing.T) {
+	var hits atomic.Int64
+	self := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(200)
+	}))
+	defer self.Close()
+	srv := New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{
+		Mode: "cluster", Pod: "plc-0", Leader: "plc-0", LeaderAddr: standbyAddr(self),
+		IsLeader: false,
+	}}})
+	h := srv.Handler()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /api/state = %d, want 200 from the local store: %s", rec.Code, rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/forces", strings.NewReader(`{"name":"Level","value":1}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST /api/forces = %d, want 503: %s", rec.Code, rec.Body)
+	}
+	if n := srv.rt.Tags().ForceCount(); n != 0 {
+		t.Fatalf("a replica with its gate closed forced its own store (%d)", n)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("the request was forwarded to the replica's own address %d times", n)
 	}
 }

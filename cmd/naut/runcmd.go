@@ -32,6 +32,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/vcs"
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
@@ -144,6 +145,38 @@ func wireRedundancy(proj *project.Project, el runtime.Coordinator) {
 	proj.WriteGate = el.IsLeader
 }
 
+// localGateLease is how long a project without `redundancy:` keeps its
+// write gate open after the last check that found its scans live (#625):
+// the lease a redundant replica holds, so a hung scan closes the gate on
+// the same timing (about 5 to 8 s into the hang).
+const localGateLease = 4 * time.Second
+
+// gateOnLiveScans makes the write gate need live scans and returns the
+// elector to run for it. With redundancy that is el itself: the lease
+// needs live scans (#621), and el already gates the runtime and the
+// drivers (wireRedundancy). Without, it is a local gate (#625) on the
+// drivers only, and only those whose gate is just a gate
+// (io.SetPlainGate): open while rt's scans are live, closed lease after the
+// last check that found them live, so a driver's own loop (a Modbus
+// rewrite: keep-alive) stops asserting outputs for a hung scan and the
+// device's watchdog acts. The runtime stays uncoordinated (no takeover at
+// start, forces kept) and the gate is open from the start, so a healthy
+// project's drivers see what they saw without it.
+func gateOnLiveScans(proj *project.Project, el *leader.Elector, rt *runtime.Runtime, lease time.Duration) *leader.Elector {
+	gate := el
+	if gate == nil {
+		gate = leader.NewLocal(proj.Name, lease)
+		if proj.Runtime.Driver != nil {
+			// Only drivers whose gate is just a gate (io.PlainGated):
+			// optommp and a Sparkplug host read any gate as "one replica
+			// of a redundant set" and would change how they behave.
+			nio.SetPlainGate(proj.Runtime.Driver, gate.IsLeader)
+		}
+	}
+	gate.SetHealth(rt.Liveness)
+	return gate
+}
+
 // runProject hosts a loaded project: scan loop + tag API, Ctrl+C to stop.
 // dir is the project's on-disk path when running from a checkout ("" for a
 // built binary's embedded project) — it's where live git history capture
@@ -181,6 +214,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintln(os.Stderr, "naut run: compile:", err)
 		return 1
 	}
+	// The write gate needs live scans, with redundancy or without (#621,
+	// #625). Set before gate.Run below.
+	gate := gateOnLiveScans(proj, el, rt, localGateLease)
 
 	alarms, err := startAlarms(proj, rt)
 	if err != nil {
@@ -196,23 +232,24 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	var dec decider
 	if el != nil {
 		dec = el
-		// The elector runs on its own context, not the signal's: it keeps
-		// renewing the lease through the last scan and the last retain save
-		// that follow a stop, so no standby takes over and loads the store
-		// before this replica's final save lands (nautilus#531). On the
-		// way out it stops renewing, then hands the lease over instead of
-		// letting it expire: a standby takes over on its next tick rather
-		// than 4s later. Release waits for the loop, so a renew in flight
-		// cannot re-claim the lease after it was given up.
-		elCtx, elCancel := context.WithCancel(context.Background())
-		elDone := make(chan struct{})
-		go func() { el.Run(elCtx); close(elDone) }()
-		defer func() {
-			elCancel()
-			<-elDone
-			el.Release()
-		}()
 	}
+	// The elector (or, without redundancy, the local gate) runs on its own
+	// context, not the signal's: it keeps renewing the lease through the
+	// last scan and the last retain save that follow a stop, so no standby
+	// takes over and loads the store before this replica's final save
+	// lands (nautilus#531). On the way out it stops renewing, then hands
+	// the lease over instead of letting it expire: a standby takes over on
+	// its next tick rather than 4s later. Release waits for the loop, so a
+	// renew in flight cannot re-claim the lease after it was given up (a
+	// local gate has no lease: Release does nothing).
+	elCtx, elCancel := context.WithCancel(context.Background())
+	elDone := make(chan struct{})
+	go func() { gate.Run(elCtx); close(elDone) }()
+	defer func() {
+		elCancel()
+		<-elDone
+		gate.Release()
+	}()
 	// Drivers with their own polling loop (eip, sparkplug-host, modbus)
 	// start here, after the elector's first decision.
 	if stop := startDriverWhenDecided(ctx, dec, firstDecisionTimeout, proj.Runtime.Driver); stop != nil {
@@ -245,7 +282,13 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// Sparkplug B retransmission, when the manifest asks for it.
 	spNode, err := proj.Sparkplug(rt)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "naut run: sparkplug:", err)
+		// Its errors name sparkplug already ("sparkplug: …"); add it only
+		// to one that does not.
+		msg := err.Error()
+		if !strings.HasPrefix(msg, "sparkplug") {
+			msg = "sparkplug: " + msg
+		}
+		fmt.Fprintln(os.Stderr, "naut run:", msg)
 		return 1
 	}
 	sparkplugUp := false

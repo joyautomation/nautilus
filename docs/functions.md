@@ -494,13 +494,18 @@ compare argument) and assignable (`Cmd.4 := TRUE`, a ladder coil
 the word back. Bits are numbered from 0 at the least significant end. This
 is the spelling Logix uses; IEC 61131-3 ed. 3 writes it `Word.%X3`, and
 both work. A bit of an array element or a structure member works the same
-way: `Words[2].15`, `P101.Status.12`.
+way: `Words[2].15`, `P101.Status.12`. The top bit of a signed type is its
+sign, as in two's complement on any PLC: on an `INT`, `x.15 := TRUE` makes
+0 into -32768 and `x.15 := FALSE` makes -1 into 32767 (`SINT` bit 7, `DINT`
+bit 31, `LINT` bit 63). An unsigned or bit-string type's top bit is an
+ordinary value bit (`w.15 := TRUE` on a `WORD` is 32768).
 
 **Partial access** (IEC, [#222](https://github.com/joyautomation/nautilus/issues/222))
 addresses a wider part the same way: `w.%B1` is the second byte (a
 `BYTE`, bits 8..15), `w.%W0` the low word, `w.%D1` the high double word of
 an `LWORD`, `w.%L0` the whole 64 bits. Each reads as an unsigned integer of
-that width and writes back only its own bits (`Alarms.%B3 := 16#AB`). The
+that width and writes back only its own bits (`Alarms.%B3 := 16#AB`; on a
+signed type, a part that holds the sign bit sets the sign with it). The
 part must fit the **declared** type: a `DINT` has bits 0..31, bytes 0..3
 and words 0..1, so `d.%X32` or `w.16` on a `WORD` is a compile error that
 names the type. Ladder contacts and coils and FBD wires take every form

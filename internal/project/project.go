@@ -570,6 +570,15 @@ func (p *Project) LeaseName() string {
 
 // Sparkplug builds the manifest's edge node over a compiled runtime, or
 // (nil, nil) when the manifest has no sparkplug section.
+// SparkplugWritable is the manifest's sparkplug.writable, nil without a
+// sparkplug section.
+func (p *Project) SparkplugWritable() []string {
+	if p.sparkplug == nil {
+		return nil
+	}
+	return p.sparkplug.Writable
+}
+
 func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 	c := p.sparkplug
 	if c == nil {
@@ -982,6 +991,13 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if m.OPCUA != nil {
 		if err := writable.Patterns(m.OPCUA.Writable).Validate(); err != nil {
 			return nil, fmt.Errorf("opcua.%w", err)
+		}
+	}
+	// sparkplug.writable as well, here rather than at sparkplug.New: naut
+	// check reports it, and naut run refuses it before anything starts.
+	if m.Sparkplug != nil {
+		if err := writable.Patterns(m.Sparkplug.Writable).Validate(); err != nil {
+			return nil, fmt.Errorf("sparkplug.%w", err)
 		}
 	}
 	if m.Sparkplug != nil {

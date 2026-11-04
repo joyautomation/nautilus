@@ -276,3 +276,72 @@ func TestMultiWriteGateReachesChildren(t *testing.T) {
 		t.Fatalf("leader sent %v", sent)
 	}
 }
+
+// readyChild is a named child that says whether its inputs are live.
+type readyChild struct {
+	named
+	ready bool
+	asked *int
+}
+
+func (r readyChild) InputsReady() bool { *r.asked++; return r.ready }
+
+// A set is ready only when every child that can say so is, and asks each
+// of them (a child's answer may be its look at its write gate).
+func TestMultiInputsReadyWaitsForEveryChild(t *testing.T) {
+	asked := 0
+	mk := func(name string, ready bool) NamedDriver {
+		return NamedDriver{Name: name, Driver: readyChild{named: named{Memory: NewMemory(), ins: []string{name + "_In"}}, ready: ready, asked: &asked}}
+	}
+	plainChild := NamedDriver{Name: "plain", Driver: named{Memory: NewMemory(), ins: []string{"P_In"}}}
+	m, err := NewMulti(mk("a", false), plainChild, mk("b", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.InputsReady() || asked != 2 {
+		t.Fatalf("one child not ready: ready %v, asked %d; want false, 2", m.InputsReady(), asked)
+	}
+	m2, err := NewMulti(mk("a", true), plainChild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m2.InputsReady() {
+		t.Error("every child that can say so is ready: the set is ready")
+	}
+	m3, err := NewMulti(plainChild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m3.InputsReady() {
+		t.Error("no child can say: the set is ready")
+	}
+}
+
+// plainGated is a gated child whose gate is only a gate (PlainGated).
+type plainGated struct{ gated }
+
+func (plainGated) PlainWriteGate() {}
+
+// SetPlainGate, the gate a project without redundancy gets (#625), reaches
+// only the children whose gate is only a gate: a child that reads any
+// gate as "one replica of a redundant set" (optommp, a Sparkplug host) is
+// left ungated, as it is without redundancy today.
+func TestSetPlainGateReachesOnlyPlainGatedChildren(t *testing.T) {
+	var sent []string
+	var gateA, gateB func() bool
+	a := plainGated{gated{named: named{Memory: NewMemory(), outs: []string{"A_Cmd"}}, gate: &gateA, sent: &sent}}
+	b := gated{named: named{Memory: NewMemory(), outs: []string{"B_Cmd"}}, gate: &gateB, sent: &sent}
+	m, err := NewMulti(NamedDriver{"a", a}, NamedDriver{"b", b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := SetPlainGate(m, func() bool { return false }); n != 1 {
+		t.Fatalf("%d children took the gate, want 1", n)
+	}
+	if gateA == nil || gateB != nil {
+		t.Fatalf("plain child gated: %v, replica-minded child gated: %v", gateA != nil, gateB != nil)
+	}
+	if n := SetPlainGate(b, func() bool { return false }); n != 0 || gateB != nil {
+		t.Fatal("a lone driver that is not PlainGated took the gate")
+	}
+}

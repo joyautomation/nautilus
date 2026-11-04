@@ -412,7 +412,7 @@ func (l *lowerer) lowerPartial(m *MemberExpr, obj ir.Expr) (ir.Expr, error) {
 		return nil, errName(m.MemberPos, m.Member, fmt.Errorf("partial access %s needs a variable, not an expression", form))
 	}
 	if width == 1 {
-		return &ir.BitRef{Object: lv, Bit: index}, nil
+		return &ir.BitRef{Object: lv, Bit: index, Sign: ot.SignBit()}, nil
 	}
-	return &ir.BitRef{Object: lv, Bit: index * width, Width: width, T: partT}, nil
+	return &ir.BitRef{Object: lv, Bit: index * width, Width: width, T: partT, Sign: ot.SignBit()}, nil
 }

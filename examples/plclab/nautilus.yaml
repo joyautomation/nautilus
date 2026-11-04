@@ -1,0 +1,51 @@
+# plclab — a nautilus controller that MHJ PLC-Lab drives directly over
+# OPC UA, the way it drives a CODESYS controller: PLC-Lab plays the plant
+# (a tank with two level switches, two pushbuttons, two valves, two lamps)
+# and nautilus runs the logic. No bridge script: PLC-Lab connects to the
+# OPC UA server below, anonymously, and reads and writes PlcLabConnector.
+# How to point PLC-Lab at it, and the I/O map: README.md.
+#
+#   naut check .     validate offline
+#   naut test  .     the acceptance suite, virtual time, no PLC-Lab needed
+#   naut run   .     OPC UA on opc.tcp://localhost:4840, dashboard on http://localhost:8080
+name: plclab
+
+tasks:
+  - program: plclab.st
+    scan: 20ms
+
+tags:
+  # The connector, one struct tag (types.st). state, not input: PLC-Lab
+  # writes into it over OPC UA, and an input belongs to a driver.
+  - name: PlcLabConnector
+    role: state
+    type: PlcLabConnectorData
+    desc: "PLC-Lab connector: Inputs and the area tables written by PLC-Lab, Outputs read by it"
+  - { name: PlcLabMapped, role: state, type: BOOL, desc: "PLC-Lab has written its area tables" }
+
+  # The process image's bits, by name. plclab.st writes them every scan.
+  - { name: StartPB,    role: state, type: BOOL, desc: "I0.0 start pushbutton (normally open)" }
+  - { name: StopPB,     role: state, type: BOOL, desc: "I0.1 stop pushbutton (normally closed)" }
+  - { name: LevelLow,   role: state, type: BOOL, desc: "I0.2 low level switch" }
+  - { name: LevelHigh,  role: state, type: BOOL, desc: "I0.3 high level switch" }
+  - { name: FillValve,  role: state, type: BOOL, desc: "Q0.0 fill valve" }
+  - { name: DrainValve, role: state, type: BOOL, desc: "Q0.1 drain valve" }
+  - { name: RunLamp,    role: state, type: BOOL, desc: "Q0.2 running lamp" }
+  - { name: FullLamp,   role: state, type: BOOL, desc: "Q0.3 tank full lamp" }
+
+opcua:
+  # localhost when PLC-Lab runs on this machine. For PLC-Lab on another
+  # machine, opc.tcp://0.0.0.0:4840, on a lab network only, never on a
+  # plant network: with anonymous-writes on, anyone who can reach the port
+  # may write what writable opens. naut check warns about it, on purpose.
+  endpoint: opc.tcp://localhost:4840
+  anonymous-writes: true
+  # What PLC-Lab writes, and nothing else. Outputs is the controller's.
+  # Inputs[*] is every input byte, each written by its own node id.
+  writable:
+    - PlcLabConnector.Inputs[*]
+    - PlcLabConnector.AreaInputs
+    - PlcLabConnector.AreaOutputs
+
+driver:
+  type: memory   # no field I/O: PLC-Lab is the plant

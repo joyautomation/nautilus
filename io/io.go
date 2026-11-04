@@ -70,6 +70,28 @@ type OutputsRequester interface {
 	OutputsWanted() bool
 }
 
+// InputsReadier is an optional refinement a Driver may also implement:
+// say whether its inputs are live enough for a redundancy takeover to run
+// on them.
+//
+// On the first scan as leader the runtime resets every program frame so
+// warm-start logic runs against live field values (runtime.takeover). A
+// driver that held no session while its replica stood by (the groov EPIC
+// standby with a watchdog set, #626) has nothing live at that moment:
+// what it holds is what the standby last saw, or nothing. InputsReady is
+// false until it has delivered a read made since the takeover began; the
+// runtime holds the takeover (no frame reset, no logic, no outputs) while
+// it is false, up to a bound, and its scan loop keeps ticking meanwhile.
+//
+// The runtime asks on every scan of a pending takeover, so it must be
+// cheap and never block. It may look at the driver's write gate (a look
+// is how a driver sees the gate open). The runtime uses it when the
+// driver provides it — implementing it is never required.
+type InputsReadier interface {
+	Driver
+	InputsReady() bool
+}
+
 // Memory is a trivial in-process driver: outputs written are readable as
 // inputs. Useful for tests and loopback wiring. It also implements
 // QualityReporter (see SetQuality), so the per-tag quality path can be

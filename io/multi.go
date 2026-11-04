@@ -257,6 +257,20 @@ func (m *Multi) OutputsWanted() bool {
 	return wanted
 }
 
+// InputsReady is true when every child that can say so is ready: a
+// takeover runs on the whole delivery, so it waits for the slowest child.
+// Every such child is asked (each may look at its write gate). A set with
+// no such child is always ready.
+func (m *Multi) InputsReady() bool {
+	ready := true
+	for _, c := range m.children {
+		if r, ok := c.Driver.(InputsReadier); ok && !r.InputsReady() {
+			ready = false
+		}
+	}
+	return ready
+}
+
 // Start fans out to every child with its own loop to launch (eip's poll
 // loop, a Sparkplug host's MQTT session); a child without Start has
 // nothing to start, exactly as `naut run` treats a lone driver.
@@ -283,6 +297,38 @@ func (m *Multi) SetWriteGate(gate func() bool) {
 	}
 }
 
+// PlainGated is a driver whose write gate is only a gate. Open, it acts
+// exactly as with no gate; closed, it sends nothing of its own (no
+// re-assert, no queued command); reopened, it forgets what it sent and
+// asks for every output (OutputsRequester). Such a driver can take a gate
+// that has nothing to do with redundancy. `naut run` gives it one in
+// every project, open while the scans are live, so a hung scan stops its
+// keep-alives (#625). A driver that reads "a gate is installed" as "I am
+// one replica of a redundant set" (optommp's passive standby, a
+// Sparkplug host's client ID and STATE hand-over) is not PlainGated.
+type PlainGated interface {
+	SetWriteGate(func() bool)
+	PlainWriteGate()
+}
+
+// SetPlainGate installs gate on d if it is PlainGated, or on each child
+// of a Multi that is, and leaves every other driver ungated. It reports
+// how many drivers took the gate.
+func SetPlainGate(d Driver, gate func() bool) int {
+	if m, ok := d.(*Multi); ok {
+		n := 0
+		for _, c := range m.children {
+			n += SetPlainGate(c.Driver, gate)
+		}
+		return n
+	}
+	if g, ok := d.(PlainGated); ok {
+		g.SetWriteGate(gate)
+		return 1
+	}
+	return 0
+}
+
 // Stop tears the children down in reverse start order, so a driver that
 // says goodbye on the wire (a Sparkplug host's STATE death certificate)
 // does it on a session nothing has pulled down yet.
@@ -301,6 +347,7 @@ var (
 	_ BatchReader      = (*Multi)(nil)
 	_ QualityReporter  = (*Multi)(nil)
 	_ OutputsRequester = (*Multi)(nil)
+	_ InputsReadier    = (*Multi)(nil)
 
 	_ interface{ SetWriteGate(func() bool) } = (*Multi)(nil)
 )

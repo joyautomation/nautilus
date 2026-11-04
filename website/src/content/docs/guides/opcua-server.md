@@ -84,12 +84,26 @@ URI `urn:joyautomation:nautilus:<project>` — so a client that already knows
 a nautilus address can write the node id down without browsing for it:
 
 ```
-ns=1;s=Level               a tag
-ns=1;s=P101.Drive.Speed    a member of a UDT tag
-ns=1;s=Levels[2]           an element of an array of UDTs
+ns=1;s=Level                       a tag
+ns=1;s=P101.Drive.Speed            a member of a UDT tag
+ns=1;s=Pumps[2]                    an element of an array of UDTs
+ns=1;s=Levels[2]                   an element of an array of scalars
+ns=1;s=Conn.Inputs[17]             an element of an array member of a UDT
 ```
 
-Tag names are IEC identifiers, so `ns=1;s=level` resolves to `Level`. A
+An element of an array of scalars is a Variable of its own, by node id,
+though Browse does not list it: the array is one Variable holding an OPC UA
+array, so a browsing client sees `Levels` and no children. The element node
+reads as the element's type (a `BYTE` element is a `Byte`), with
+`ValueRank` -1, and an index outside the declared bounds is
+`Bad_NodeIdUnknown`. Its `AccessLevel` follows `opcua.writable` like any
+scalar's, and a writer may write it, one element at a time (see
+[What may be written](#what-may-be-written)). A client that addresses
+bytes this way, as MHJ PLC-Lab is expected to, needs nothing more.
+
+Tag names are IEC identifiers, so `ns=1;s=level` resolves to `Level`, and
+the same goes for members and elements: `ns=1;s=conn.inputs[17]` is
+`Conn.Inputs[17]`. A
 tag's `desc:` and `unit:` from the [tag model](/guides/tag-model/) become
 the node's `Description` — `Wet well level [ft]`.
 
@@ -460,21 +474,30 @@ everything below it, through members and array elements alike: `Recipe`
 opens `ns=1;s=Recipe.Steps`, and `Drives`, an array of UDTs, opens
 `ns=1;s=Drives[0].Speed`. One that matches a member opens that member and
 everything below it: `Pump*.SpeedSP` opens `ns=1;s=Pump1.SpeedSP`, not
-`Pump1.Running`. In a glob `[ ]` is a set of characters, so to name one
-element, escape its brackets, in single quotes (in double quotes YAML
-reads `\[` as an escape and refuses the file): `'Drives\[0\]'`. These
-are the same globs, with the same rule, as
+`Pump1.Running`. In a pattern `*` matches any run of characters and `?`
+any one; `[n]` is the array index `n`, literally, and `[*]` any one index:
+`Counts[2]` opens the element `Counts[2]`, `Counts[*]` every element of
+`Counts`, and `Drives[*].Speed` every drive's `Speed` and nothing else of
+it. `*` crosses `.` and `[`, so `Pump*.SpeedSP` also opens
+`Pump[3].SpeedSP` and `Pump1.Drive.SpeedSP`. There are no character
+classes: a `[` that is not `[n]` or `[*]` is refused (up to v0.19 patterns
+were `path.Match` globs, where `Pump[12]` opened `Pump1` and `Pump2`). (`\` escapes the next character, so `'Drives\[0\]'`, in single
+quotes, still names `Drives[0]`.) These are the same patterns, with the
+same rule, as
 [`sparkplug.writable`](/guides/sparkplug/), but the list is separate:
 opening a setpoint to your SCADA over OPC UA does not open it to everyone
 who can publish to the MQTT broker. If you want one list for both, use a
 YAML anchor.
 
-`naut check` refuses a malformed glob. It warns about three things:
+`naut check` refuses a malformed glob. It warns about:
 
 - a pattern that matches nothing, which is usually a typo or a renamed tag;
 - a pattern that matches only inputs;
-- a pattern that opens only arrays, or Objects with no scalar member,
-  which are not writable until array writes land;
+- a pattern that opens no scalar but arrays of scalars: their elements are
+  writable one at a time by node id (`ns=1;s=Trend[0]`), but a client
+  that writes the whole array, or an `IndexRange`, is refused until array
+  writes land;
+- a pattern that opens only Objects with no scalar member, so nothing;
 - an output it opens that a program writes.
 
 ### What may be written
@@ -491,12 +514,17 @@ YAML anchor.
   output, or the same member or bit of it, overwrites the client's value at
   its next commit; a member or bit the program does not assign keeps the
   client's value (see [a member write during a scan](/guides/tag-model/#a-member-write-during-a-scan)).
-- **Not arrays yet.** A whole array, or any write with an `IndexRange`, is
-  `Bad_WriteNotSupported`.
+- **An array one element at a time.** An element of an array of scalars
+  is written by its own node id, `ns=1;s=Levels[2]`, when a pattern opens
+  the array (`Levels`), every element (`Levels[*]`) or the element
+  (`Levels[2]`); the rest of the array is untouched. A whole
+  array, or any write with an `IndexRange`, is `Bad_WriteNotSupported`
+  for now.
 
 `AccessLevel` tells a client what it may write: `CurrentRead` and
-`CurrentWrite` on a scalar `opcua.writable` opens (not an input, not an
-array), `CurrentRead` elsewhere. `UserAccessLevel` is answered for the
+`CurrentWrite` on a scalar `opcua.writable` opens (not an input; an
+element of an array is a scalar, the array itself is not), `CurrentRead`
+elsewhere. `UserAccessLevel` is answered for the
 session asking: the same as `AccessLevel` for a writer (an anonymous
 session included, when `anonymous-writes` is on), `CurrentRead` for
 anyone else, including a client whose certificate has been withdrawn or
@@ -694,6 +722,58 @@ address (`anonymous=true`, no certificate). `naut run`'s banner adds
 `(anonymous writes on)`, and the dashboard's OPC UA card ends its sentence
 with `writable by anonymous clients` ([Status](#status)). Use it on a lab
 network only, never on a plant network. Off is the default.
+
+### MHJ PLC-Lab
+
+PLC-Lab drives a CODESYS controller through a container named
+`PlcLabConnector`: input bytes it writes, output bytes it reads, and two
+area tables saying which bytes it uses. A nautilus project can be that
+controller with no bridge in between: declare the container as one struct
+tag of that shape (a `state` tag, since PLC-Lab writes into it), open what
+PLC-Lab writes under `writable`, and copy bytes to and from your logic in
+a program. [`examples/plclab`](https://github.com/joyautomation/nautilus/tree/main/examples/plclab)
+is such a project, with the connector type, the copy program and a small
+tank in ladder; its README has PLC-Lab's settings (address mode
+"Address mode for CodeSys systems", anonymous) and the I/O map.
+
+```yaml
+opcua:
+  endpoint: opc.tcp://localhost:4840
+  anonymous-writes: true
+  writable:
+    - PlcLabConnector.Inputs[*]     # every element, each by its own node id
+    - PlcLabConnector.AreaInputs
+    - PlcLabConnector.AreaOutputs
+```
+
+PLC-Lab is expected to reach the bytes as elements,
+`ns=1;s=PlcLabConnector.Inputs[17]`, which nautilus serves (see [What a
+client sees](#what-a-client-sees)): that is the CODESYS shape as MHJ's
+manual describes it. The example is checked against a client that behaves
+that way; it has not yet been run against PLC-Lab itself, and these are
+still open:
+
+- **The namespace and node id form.** nautilus serves the connector in
+  namespace 1 (`urn:joyautomation:nautilus:<project>`) with the address as
+  the string id. A PLC-Lab that expects a fixed namespace index or URI, or
+  a CODESYS-style id such as `ns=4;s=|var|<device>.Application.PlcLabConnector.Inputs[17]`,
+  would not find it.
+- **Element writes, IndexRange or whole arrays.** Single elements by node id
+  work. A write of `Inputs` with an `IndexRange`, or of the whole array, is
+  `Bad_WriteNotSupported` until array writes land.
+- **Browsing down to elements.** Browse lists `Inputs` as one array
+  Variable with no element nodes under it; a client that browses to each
+  byte rather than building its node id would not find them.
+- **What PLC-Lab writes at connect.** If it also writes `Outputs` or the
+  `SIZE_` words, those writes are refused (`Bad_NotWritable`), as nothing
+  opens them.
+- **Word and double-word operands.** In CODESYS addressing `IWn` is image
+  bytes `2n..2n+1` (and `IDn` bytes `4n..4n+3`); the example maps single
+  bits of byte 0 only, and does not map words.
+
+If you run it against PLC-Lab, please report what happened, with `naut
+run`'s console output (every refused write is logged with its node id and
+reason).
 
 ## Status
 

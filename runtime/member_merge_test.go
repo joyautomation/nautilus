@@ -363,6 +363,109 @@ END_PROGRAM`)
 	}
 }
 
+// The sign bit of a signed word against an outside write to another bit of
+// it in the same scan (#611): the result is in the type's range and has
+// both bits. The program's sign carries the bits above it (the VM holds a
+// word sign-extended), so they are the program's too: without that, the
+// writer's -1 with the program's I16.15 := FALSE committed -32769, and the
+// writer's 1 with SI8.7 := TRUE committed 129. A plain word and a member
+// word (S.Word is a DINT), set and cleared, and in ladder.
+func TestSignBitMergesWithAnOutsideBit(t *testing.T) {
+	for _, tc := range []struct {
+		target, body string
+		outside      int64 // written mid-scan; the word starts at 0
+		want         int64
+	}{
+		{"SI8", "SI8.7 := TRUE;", 1, -127},
+		{"SI8", "SI8.7 := FALSE;", -1, 127},
+		{"I16", "I16.15 := TRUE;", 1, -32767},
+		{"I16", "I16.15 := FALSE;", -1, 32767},
+		{"I16", "I16.%B1 := 16#80;", 1, -32767},
+		{"I16", "I16.%B1.7 := FALSE;", -1, 32767},
+		{"DI32", "DI32.31 := TRUE;", 1, -2147483647},
+		{"DI32", "DI32.31 := FALSE;", -1, 2147483647},
+		{"LI64", "LI64.63 := TRUE;", 1, -1<<63 | 1},
+		{"LI64", "LI64.63 := FALSE;", -1, 1<<63 - 1},
+		{"S.Word", "S.Word.31 := TRUE;", 1, -2147483647},
+		{"S.Word", "S.Word.31 := FALSE;", -1, 2147483647},
+		{"Tbl[2]", "Tbl[2].31 := TRUE;", 1, -2147483647},
+		{"S.Items[2].Y", "S.Items[2].Y.31 := FALSE;", -1, 2147483647},
+		// A bit below the sign already merged on a negative word.
+		{"I16", "I16.3 := FALSE;", -1, -9},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			clk := newGateClock()
+			r := newBitRuntime(t, clk, tc.body)
+			parkedScan(t, r, clk, func() { write(t, r, tc.target, tc.outside) })
+			wantPath(t, r, tc.target, tc.want)
+		})
+	}
+	t.Run("ladder", func(t *testing.T) {
+		clk := newGateClock()
+		r := newBitRuntime(t, clk, `PROGRAM Main
+VAR_EXTERNAL END_VAR
+LD
+  RUNG gate
+    wall:LOCAL_TIME()
+  RUNG coil
+    S.Flags[0] ( I16.15 )
+  RUNG set
+    S.Flags[0] ( S SI8.7 )
+  RUNG reset
+    S.Flags[0] ( R DI32.31 )
+  RUNG member
+    S.Flags[0] ( S.Word.%X31 )
+END_LD
+END_PROGRAM`)
+		write(t, r, "S.Flags[0]", true)
+		write(t, r, "DI32", -1) // the reset coil clears its sign
+		parkedScan(t, r, clk, func() {
+			write(t, r, "I16", 1)
+			write(t, r, "SI8", 2)
+			write(t, r, "DI32", -2) // bit 0 cleared from outside
+			write(t, r, "S.Word", 4)
+		})
+		wantPath(t, r, "I16", int64(-32767))
+		wantPath(t, r, "SI8", int64(-126))
+		wantPath(t, r, "DI32", int64(2147483646))
+		wantPath(t, r, "S.Word", int64(-2147483644))
+		if n := r.Stats().LogicErrors; n != 0 {
+			t.Fatalf("%d logic errors", n)
+		}
+	})
+}
+
+// Ladder coils on the sign bit of a signed word, with nothing else writing:
+// an output coil, a set coil and a reset coil give in-range values.
+func TestLadderCoilOnSignBit(t *testing.T) {
+	r := newBitRuntime(t, nil, `PROGRAM Main
+VAR_EXTERNAL END_VAR
+LD
+  RUNG coil
+    S.Flags[0] ( I16.15 )
+  RUNG set
+    S.Flags[0] ( S SI8.7 )
+  RUNG reset
+    S.Flags[0] ( R DI32.31 )
+  RUNG off
+    /S.Flags[0] ( S.Word.31 )
+END_LD
+END_PROGRAM`)
+	write(t, r, "S.Flags[0]", true)
+	write(t, r, "DI32", -1)
+	write(t, r, "S.Word", -1)
+	r.Scan()
+	wantPath(t, r, "I16", int64(-32768))
+	wantPath(t, r, "SI8", int64(-128))
+	wantPath(t, r, "DI32", int64(2147483647))
+	wantPath(t, r, "S.Word", int64(2147483647))
+	write(t, r, "S.Flags[0]", false)
+	r.Scan()
+	wantPath(t, r, "I16", int64(0))
+	wantPath(t, r, "SI8", int64(-128)) // latched
+	wantPath(t, r, "S.Word", int64(-1))
+}
+
 // A forced word: the program's bit lands in the tag's ACTUAL value without
 // the forced value's other bits, so removing the force returns the word to
 // its real value with only the program's bit added. The same for a forced

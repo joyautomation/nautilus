@@ -164,6 +164,21 @@ func (t *Type) BitWidth() int {
 	return 64
 }
 
+// SignBit is the bit a signed integer type narrower than the VM's 64 bits
+// keeps its sign in: 7 for SINT, 15 for INT, 31 for DINT. 0 for every
+// other type: LINT's sign is the VM's own bit 63, and an unsigned or
+// bit-string type has none. A write that sets or clears this bit sets the
+// value's sign, so the bits above it, up to 63, follow it (#611).
+func (t *Type) SignBit() int {
+	if !t.IsInteger() {
+		return 0
+	}
+	if class, width := intClass(t.Name); class == 's' && width < 64 {
+		return width - 1
+	}
+	return 0
+}
+
 // intClass sorts the declared integer names into the three families the
 // common-type rule ranks within: signed (SINT..LINT), unsigned
 // (USINT..ULINT) and bit strings (BYTE..LWORD).
