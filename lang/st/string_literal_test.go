@@ -98,3 +98,32 @@ func TestQuoteStringRoundTrips(t *testing.T) {
 		}
 	}
 }
+
+// StringEnd ends a string where the lexer does, for the scanners that find
+// strings without lexing (LD, SFC, the comment strippers).
+func TestStringEndAgreesWithTheLexer(t *testing.T) {
+	for _, tc := range []struct {
+		s   string
+		end int
+		ok  bool
+	}{
+		{`'abc' x`, 5, true},
+		{`"a&b" x`, 5, true},
+		{`'it$'s' x`, 7, true},
+		{`"say $"hi$"" x`, 12, true},
+		{`'$$' x`, 4, true},
+		{"'abc\nx'", 4, false},
+		{`'abc`, 4, false},
+	} {
+		end, ok := StringEnd(tc.s, 0)
+		if end != tc.end || ok != tc.ok {
+			t.Errorf("StringEnd(%q) = %d, %v, want %d, %v", tc.s, end, ok, tc.end, tc.ok)
+		}
+		if tc.ok {
+			toks := Lex(tc.s)
+			if toks[0].Type != TokenString || len(toks[0].Literal)+2 != tc.end {
+				t.Errorf("%q: the lexer ends the string elsewhere: %+v", tc.s, toks[0])
+			}
+		}
+	}
+}

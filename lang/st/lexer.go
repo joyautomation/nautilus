@@ -255,6 +255,30 @@ func (l *Lexer) scanQuoted(quote byte) string {
 	}
 }
 
+// StringEnd reports where the string literal that opens at s[i] ('…' or
+// "…") ends: end is the index just past its closing quote. It reads the
+// way the lexer does — a $ takes the next character with it, so $' and $"
+// never close the string — for the scanners that find strings without
+// lexing (the LD expression and statement splitters, the SFC lexer, the
+// comment strippers), so every language agrees where a string stops. ok is
+// false when the line (or s) ends first; end is then the line's end.
+func StringEnd(s string, i int) (end int, ok bool) {
+	quote := s[i]
+	for j := i + 1; j < len(s); j++ {
+		switch s[j] {
+		case quote:
+			return j + 1, true
+		case '\n':
+			return j, false
+		case '$':
+			if j+1 < len(s) && s[j+1] != '\n' {
+				j++
+			}
+		}
+	}
+	return len(s), false
+}
+
 // escapeLen is the source length of the IEC 61131-3 escape at the start of
 // s (which begins with '$') in a string opened by quote, or 0 when it is not
 // one: $$, $', $", $L, $N, $P, $R, $T (any case), and a character code, two
@@ -336,8 +360,9 @@ func UnquoteString(raw string, quote byte) string {
 	return b.String()
 }
 
-// QuoteString writes s as a '…' STRING literal that UnquoteString reads
-// back as s: $, ' and the control characters escaped, the rest as is.
+// QuoteString writes s as a '…' STRING literal: $, ' and the control
+// characters escaped, the rest as is. For valid UTF-8, UnquoteString reads
+// it back as s; an invalid byte comes back as U+FFFD.
 func QuoteString(s string) string {
 	var b strings.Builder
 	b.WriteByte('\'')

@@ -117,6 +117,7 @@ func (p *Parser) match(tt TokenType) bool {
 func (p *Parser) parseProgram() (*Program, error) {
 	prog := &Program{}
 	nameSet := false
+	progLine := 0 // the PROGRAM keyword's line, where a missing END_PROGRAM is reported
 
 	// File-level prelude: TYPE / FUNCTION_BLOCK / FUNCTION declarations may
 	// appear before (or instead of) PROGRAM. A file with no PROGRAM keyword
@@ -173,7 +174,7 @@ func (p *Parser) parseProgram() (*Program, error) {
 			if prog.TopKeyword == "" {
 				prog.TopKeyword = "PROGRAM"
 			}
-			p.advance()
+			progLine = p.advance().Line
 			nameTok := p.advance()
 			prog.Name = nameTok.Literal
 			nameSet = true
@@ -232,7 +233,7 @@ func (p *Parser) parseProgram() (*Program, error) {
 		if !p.match(TokenEndProgram) {
 			// The loop above stops at END_PROGRAM or the end of the file:
 			// here it is the end, so the POU never closed (nautilus#609).
-			return nil, fmt.Errorf("line %d: PROGRAM %s has no END_PROGRAM", p.peek().Line, prog.Name)
+			return nil, fmt.Errorf("line %d: PROGRAM %s has no END_PROGRAM", progLine, prog.Name)
 		}
 		// One POU per file: FUNCTION_BLOCKs and FUNCTIONs belong before
 		// END_PROGRAM, so anything after it would silently never compile.
@@ -664,7 +665,7 @@ func (p *Parser) parseStatement() (Statement, error) {
 		// after an expression (`x := a 5;`), a stray keyword. Said, not
 		// skipped (nautilus#609).
 		t := p.advance()
-		return nil, fmt.Errorf("line %d: unexpected %s; a statement starts with a name, IF, CASE, FOR, WHILE, REPEAT, RETURN, EXIT or CONTINUE", t.Line, t.describe())
+		return nil, fmt.Errorf("line %d:%d: unexpected %s; a statement starts with a name, IF, CASE, FOR, WHILE, REPEAT, RETURN, EXIT or CONTINUE", t.Line, t.Col, t.describe())
 	}
 }
 
@@ -791,7 +792,8 @@ func (p *Parser) parseAssignOrCall() (Statement, error) {
 	// A name alone (`b;`) does nothing: IEC has no expression statement
 	// but a call. It used to read as `b := b`, which hid an operand left
 	// over from the line before (`s := a` / `b;`) (nautilus#609).
-	return nil, fmt.Errorf("line %d: %q alone is not a statement: a statement is an assignment (x := …) or a call (f(…))", pos.Line, flattenLValue(lhs))
+	name := flattenLValue(lhs)
+	return nil, fmt.Errorf("line %d:%d: %q alone is not a statement: assign it (%s := …), or call it as %s()", pos.Line, pos.Col, name, name, name)
 }
 
 // endOfExpression reports an expression followed, on its own line, by
@@ -804,10 +806,13 @@ func (p *Parser) endOfExpression() error {
 	if p.pos == 0 || next.Line != p.tokens[p.pos-1].Line {
 		return nil
 	}
+	if p.atEndRegion() { // END_REGION lexes as a name, and ends the statement as END_IF does
+		return nil
+	}
 	switch next.Type {
 	case TokenIdent, TokenNumber, TokenBasedNumber, TokenString, TokenTimeLiteral,
 		TokenTypedLiteral, TokenTrue, TokenFalse, TokenLParen:
-		return fmt.Errorf("line %d: expected an operator or ';' after the expression, got %s", next.Line, next.describe())
+		return fmt.Errorf("line %d:%d: expected an operator or ';' after the expression, got %s", next.Line, next.Col, next.describe())
 	}
 	return nil
 }

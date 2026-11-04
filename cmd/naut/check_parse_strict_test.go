@@ -48,4 +48,16 @@ func TestCheckRejectsUnclosedPOUAndComment(t *testing.T) {
 			}
 		}
 	}
+
+	// In ST the report lands where the problem is: the extra operand's
+	// column, and the PROGRAM line for a missing END_PROGRAM.
+	for src, at := range map[string]string{
+		strings.Replace(srcs["st"], "Actuator := Sensor;", "Actuator := Sensor Setpoint;", 1): "program.st:2:20: ",
+		strings.Replace(srcs["st"], "END_PROGRAM\n", "", 1):                                   "program.st:1:1: ",
+	} {
+		out, _ := checkIn(t, map[string]string{"nautilus.yaml": manifest("program.st"), "program.st": src})
+		if !strings.Contains(out, at) {
+			t.Errorf("want the error at %q:\n%s", at, out)
+		}
+	}
 }

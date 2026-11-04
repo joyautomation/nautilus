@@ -159,7 +159,8 @@ durations (`T#5s`, `T#500ms`, `T#1h30m`). A string is `'…'` (`STRING`) or
 the IEC escapes: `$'` and `$"` for quotes, `$$` for a dollar sign, `$N` (or
 `$L`) a line feed, `$R`, `$T`, `$P`, and a character code, `$hh` in `'…'` and
 `$hhhh` in `"…"` (`'it$'s'` is `it's`). An unclosed string or an unknown escape
-is a parse error at the string. Comments are `(* … *)`, which nest, or `//` to
+is a parse error at the string. Strings in LD rungs, FBD netlists and SFC
+actions read the same way. Comments are `(* … *)`, which nest, or `//` to
 end of line; a `(*` that never closes is a parse error at the `(*`.
 
 Every program `VAR` and function block instance keeps its value from scan to

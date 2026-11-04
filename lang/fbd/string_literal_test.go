@@ -80,3 +80,18 @@ func TestNetworkTitleEscapes(t *testing.T) {
 		t.Errorf("networks = %+v, want one titled %q", m.Networks, "50$ budget")
 	}
 }
+
+// Retyping a constant to a string the lexer cannot read is refused: the
+// edit would write a file that does not parse. A good string is taken.
+func TestEditSetLiteralRefusesABadString(t *testing.T) {
+	for _, bad := range []string{`'abc`, `'a$Qb'`, `"open`} {
+		if _, err := ApplyEdit(editSrc, EditOp{Type: "setLiteral", Node: "k:0", Value: bad}); err == nil {
+			t.Errorf("setLiteral %s was accepted", bad)
+		}
+	}
+	for _, good := range []string{`'it$'s'`, `"a&b"`} {
+		if _, err := ApplyEdit(editSrc, EditOp{Type: "setLiteral", Node: "k:0", Value: good}); err != nil {
+			t.Errorf("setLiteral %s: %v", good, err)
+		}
+	}
+}

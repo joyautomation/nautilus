@@ -273,10 +273,15 @@ claims:
       A string literal is '…' (STRING) or "…" (WSTRING, held as STRING) and
       closes on its own line; $ starts the IEC escapes ($' $" $$ $N $L $R $T
       $P, $hh in '…' and $hhhh in "…"), and an unclosed string or an unknown
-      escape is a parse error at the string.
+      escape is a parse error at the string. Strings in LD rungs, FBD
+      netlists and SFC actions read the same way.
     source: "#declarations"
     tests:
       - go ./lang/st TestStringLiteralsAreOneToken
+      - go ./lang/st TestStringEndAgreesWithTheLexer
+      - go ./lang/ld TestRungStringsReadAsInST
+      - go ./lang/sfc TestActionStringsReadAsInST
+      - go ./lang/fbd TestStringLiteralsAreNotOperators
       - go ./lang/st TestStringEscapesDecode
       - go ./lang/st TestStringLiteralErrors
       - go ./lang/st TestQuoteStringRoundTrips
@@ -291,6 +296,7 @@ claims:
     tests:
       - go ./lang/st TestParseRejectsWhatItUsedToSkip
       - go ./lang/st TestParseStillAccepts
+      - go ./lang/st TestParseErrorPosReadsTheColumn
       - go ./cmd/naut TestCheckRejectsUnclosedPOUAndComment
 
   - id: ST-023

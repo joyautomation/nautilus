@@ -2,6 +2,7 @@ package ld
 
 import (
 	"fmt"
+	"github.com/joyautomation/nautilus/lang/st"
 	"strings"
 )
 
@@ -264,14 +265,15 @@ func (p *exprParser) primary() (Expr, error) {
 		return e, nil
 	case c >= '0' && c <= '9':
 		return p.number()
-	case c == '\'':
-		// a string literal, verbatim
-		end := strings.IndexByte(p.src[p.pos+1:], '\'')
-		if end < 0 {
+	case c == '\'' || c == '"':
+		// a string literal, '…' or "…", verbatim; it ends where st's
+		// lexer ends it ($' and $" are quotes inside it), and ST reads it
+		end, ok := st.StringEnd(p.src, p.pos)
+		if !ok {
 			return nil, fmt.Errorf("unclosed string")
 		}
-		lit := p.src[p.pos : p.pos+end+2]
-		p.pos += end + 2
+		lit := p.src[p.pos:end]
+		p.pos = end
 		return &Lit{Text: lit}, nil
 	case isIdentStart(c):
 		start := p.pos
