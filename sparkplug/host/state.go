@@ -75,6 +75,11 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 	}
 
 	d.mu.Lock()
+	if d.sessionDown {
+		// Delivered outside a complete session; see sessionDown.
+		d.mu.Unlock()
+		return
+	}
 	d.stats.Msgs++
 	nk := nodeKey{Group: group, EdgeNode: edge}
 	ns := d.nodeLocked(nk)
@@ -347,6 +352,36 @@ func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
 	d.syncTagsLocked(ns)
 	d.stateLogger().Info("sparkplug host: node death",
 		"group", ns.group, "node", ns.edge, "bdSeq", bd)
+}
+
+// brokerLostLocked is the host's own death as its nodes see it: with the
+// broker connection gone, the host can reach none of them, so every node and
+// every device goes offline exactly as an NDEATH takes it (__Online false,
+// one outage for each that was online, values kept, data bindings Stale) and
+// stays offline until its next birth after the reconnect. The sequence is
+// unprimed, since whatever was published while the host was away is lost,
+// so data before a birth asks for one; a rebirth request raised during the
+// outage, which could not be sent, may be raised again. A birth after the
+// reconnect does not count a second outage: nothing it darks is still
+// online (#540). Caller holds d.mu.
+func (d *Driver) brokerLostLocked() {
+	d.sessionDown = true
+	for _, ns := range d.nodes {
+		ns.stopGap()
+		ns.pending = nil
+		ns.seqPrimed = false
+		ns.rebirthAsked = false
+		wasOnline := ns.online
+		ns.setOnline(false)
+		for _, dev := range ns.devices {
+			dev.setOnline(false)
+		}
+		d.syncTagsLocked(ns)
+		if wasOnline {
+			d.stateLogger().Info("sparkplug host: node offline, broker connection lost",
+				"group", ns.group, "node", ns.edge)
+		}
+	}
 }
 
 // applyDDeathLocked takes one device offline, keeping its values.

@@ -109,7 +109,8 @@ claims:
   - id: SPH-014
     claim: >-
       The companions exist per site and device: `<site>__Online` is true
-      from NBIRTH to the matching NDEATH, `<site>_<device>__Online` does
+      from NBIRTH to the matching NDEATH (or until the host loses its
+      broker connection), `<site>_<device>__Online` does
       the same per device, and `<site>__LastBirthMs` is the epoch ms of the
       last NBIRTH.
     source: "#the-online-rebirth-companions"
@@ -156,11 +157,13 @@ claims:
     claim: >-
       `Quality()` reports non-Good entries only: a binding never delivered
       (site never birthed, or the birth omits that metric) is NotConnected,
-      and a binding whose site is not online (NDEATH, silence past
-      `stale-after`, or DDEATH for a device-scoped metric) is Stale,
-      scoped to the node or device concerned.
+      and a binding whose site is not online (NDEATH, the host's broker
+      connection lost, silence past `stale-after`, or DDEATH for a
+      device-scoped metric) is Stale, scoped to the node or device
+      concerned.
     source: "#per-tag-quality"
     tests:
+      - go ./sparkplug/host TestBrokerLossTakesNodesOfflineAndCountsOnce
       - go ./sparkplug/host TestQualityPreBirthNotConnected
       - go ./sparkplug/host TestQualityBirthEmptyMap
       - go ./sparkplug/host TestQualityNDeathStaleScopedToNode
@@ -196,10 +199,16 @@ claims:
   - id: SPH-022
     claim: >-
       A command to a dark site is held (the latest value per tag) and
-      delivered once on the site's next NBIRTH/DBIRTH, after the birth has
-      settled what the site holds.
+      delivered once on the site's next NBIRTH, after the birth has settled
+      what the site holds. A command for a dark device (after its DDEATH,
+      its node's death, or a node rebirth before its DBIRTH) is held the
+      same way even while its node is online, and delivered on the
+      device's next DBIRTH; a newer command for it replaces the held one.
     source: "#writes-to-a-site-that-is-down"
     tests:
+      - go ./sparkplug/host TestParkedDeviceCommandWaitsForItsDBIRTH
+      - go ./sparkplug/host TestCommandToADarkDeviceOnALiveNodeIsParked
+      - go ./sparkplug/host TestNewerCommandReplacesAParkedOne
       - go ./sparkplug/host TestMqttWriteToOfflineNodeIsQueued
       - go ./sparkplug/host TestMqttQueuedWriteIsDeliveredOnBirth
       - go ./sparkplug/host TestEdgeToHostQueuedWriteReachesAWokenSite
@@ -306,7 +315,7 @@ claims:
     claim: >-
       A reconnect replays nothing: change detection survives a dropped
       connection, while commands raised during the outage are queued and go
-      out on reconnect.
+      out when the site births again after the reconnect.
     source: "#outputs-are-commands-the-baseline-rule"
     tests:
       - go ./sparkplug/host TestMqttReconnectDoesNotReplayOutputs
@@ -417,3 +426,25 @@ claims:
     note: >-
       Driven through the state machine with encoded payloads, no broker.
       Not yet run against a live fleet.
+  - id: SPH-045
+    claim: >-
+      When the host loses its own broker connection, or fails to reconnect
+      after leaving a session on purpose, every site and device it tracks
+      goes `__Online` false and counts one outage, and their data reads
+      Stale at once, as after an NDEATH. Each comes back online at its next
+      birth after the reconnect, and that birth does not count a second
+      outage. Stopping the host counts nothing, and neither does a host that
+      never connected or repeated failed reconnects. A session that has not
+      finished subscribing applies nothing it delivers.
+    source: "#the-online-rebirth-companions"
+    tests:
+      - go ./sparkplug/host TestBrokerLossTakesNodesOfflineAndCountsOnce
+      - go ./sparkplug/host TestPartitionedLeaderTakesNodesOffline
+      - go ./sparkplug/host TestBrokerNeverReachedCountsNothing
+      - go ./sparkplug/host TestBrokerLossUnprimesTheSequence
+      - go ./sparkplug/host TestHalfOpenSessionAppliesNothing
+    note: >-
+      The host's link to an in-process broker is cut, or stalled with the
+      host demoted, through a TCP proxy; the edge stays connected and births
+      again after the reconnect. The half-open session is a broker hook that
+      drops the host part way through its SUBSCRIBEs.

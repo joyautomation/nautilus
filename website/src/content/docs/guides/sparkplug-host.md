@@ -140,7 +140,8 @@ one arrives — the same contract the runtime already has for a driver read
 failure. So quality rides on separate, driver-synthesized companions,
 declared in the manifest like anything else:
 
-- `<site>__Online` — `BOOL`, true from NBIRTH to the matching NDEATH.
+- `<site>__Online` — `BOOL`, true from NBIRTH to the matching NDEATH, or
+  until the host loses its broker connection.
 - `<site>_<device>__Online` — the same, per device.
 - `<site>__Outages` and `<site>_<device>__Outages` — `DINT`, the number of
   times the matching `__Online` has gone false since nautilus started.
@@ -182,6 +183,24 @@ one on each NDEATH that matches its birth; a late will from an old
 session does not count. A device counts one on its DDEATH and on its
 node's NDEATH. A device that is already offline does not count again.
 
+**Losing the broker takes every site offline.** `__Online` means the host
+can reach the site now, as it does for every other driver. When the host
+loses its own broker connection, or fails to reconnect after leaving a
+session on purpose (a leader that loses its lease on a partitioned link),
+every site and device it tracks goes `__Online` false at once and counts
+one outage, as if each had sent an NDEATH. Their data reads `Stale`
+straight away, without waiting for `stale-after`. Failed reconnects after
+that count nothing more.
+
+On reconnect a leader host asks every site to rebirth (unless
+`rebirth-on-start` is off; then the first data a site sends asks for it).
+A standby under `redundancy:` asks for nothing, so its sites stay offline
+and `Stale` until a birth it did not ask for, such as one the leader
+requested. Each site and device comes back online at its next birth. That
+birth does not count again, because the site is already offline. Stopping
+nautilus counts nothing, and neither does a host that has not connected
+yet, nor a reconnect after a leadership change that succeeds.
+
 **A rebirth counts as an outage for each device that was online.** A node
 rebirth takes the node's devices offline until each one's DBIRTH, so
 their `__Online` falls. That is true whether the host asked for the
@@ -206,8 +225,9 @@ fully-birthed fleet reports an empty map. A tag never named in it is Good.
   `NotConnected`. The driver cannot tell "hasn't happened yet" from "will
   never happen", so both read the same: nothing to show.
 - A binding with a value on file whose site is not currently online — an
-  `NDEATH`, a site gone quiet past `StaleAfter`, or (for a device-scoped
-  metric) a `DDEATH` on just that device — is `Stale`. The value is real,
+  `NDEATH`, the host's own broker connection lost, a site gone quiet past
+  `StaleAfter`, or (for a device-scoped metric) a `DDEATH` on just that
+  device — is `Stale`. The value is real,
   just old.
 - A binding whose site is online and has delivered its metric is `Good`
   (omitted).
@@ -233,12 +253,18 @@ the site already reports that value.**
 An operator who dials a setpoint on a site showing `__Online: false` has
 still asked for something, and the ask outlives the outage: the write is
 held per site (the latest value per tag, up to 256 tags) and delivered on
-that site's next `NBIRTH`/`DBIRTH` — after the birth has settled what the
-site actually holds. If the site comes back already at the commanded
-value, the command is satisfied and nothing goes on the wire; if it comes
-back at anything else, one command goes out, and only for the members the
+that site's next `NBIRTH` — after the birth has settled what the site
+actually holds. If the site comes back already at the commanded value,
+the command is satisfied and nothing goes on the wire; if it comes back
+at anything else, one command goes out, and only for the members the
 operator touched. Write twice while the site is down and the second value
 is what lands, because that is what the operator asked for last.
+
+A device works the same way. A command for a dark device is held even
+when its node is online, and goes out on that device's next `DBIRTH`. A
+device is dark after its `DDEATH`, after its node's death, and after a
+node rebirth until its own `DBIRTH`. A device the host has never seen
+birth is not dark: its commands go out with the node's.
 
 `Status` counts both halves: `WriteQueued` is how many commands have been
 parked, `QueuedWrites` how many are waiting *right now* (per site in
@@ -325,7 +351,9 @@ So the driver reads its output set as follows.
 - **A reconnect replays nothing.** Change detection tracks the runtime's
   output tags, not the broker session, so it survives a dropped
   connection intact. Commands genuinely raised while the broker was away
-  are still queued and go out on reconnect.
+  are still queued. Losing the broker took every site offline, so they go
+  out as each site births again after the reconnect, like any command to
+  a dark site.
 - **`__Rebirth` follows the same rule.** Only a rising edge is a command,
   and a `__Rebirth` that is already TRUE on the first scan is baseline,
   not an edge: a value held TRUE (or retained) across a restart does not

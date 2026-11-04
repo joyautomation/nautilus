@@ -168,6 +168,19 @@ func (d *Driver) run(ctx context.Context) {
 		cli, lost, err := d.connect(ctx)
 		if err != nil {
 			d.setErr(err)
+			if ctx.Err() == nil && !d.isStopping() {
+				// No session, so the host can reach none of its nodes. This
+				// is the one place a host learns it is cut off when it left
+				// its last session on purpose (a leadership change on a
+				// partitioned link, before paho noticed the dead broker), and
+				// it also covers a CONNECT that succeeded but whose
+				// SUBSCRIBE or STATE birth failed. brokerLostLocked counts
+				// only the nodes still online, so repeated failures, or a
+				// host that never connected, count nothing (#540).
+				d.mu.Lock()
+				d.brokerLostLocked()
+				d.mu.Unlock()
+			}
 			d.log.Warn("host: connect failed", "broker", d.cfg.BrokerURL, "error", err, "retryIn", backoff)
 			select {
 			case <-ctx.Done():
@@ -184,11 +197,16 @@ func (d *Driver) run(ctx context.Context) {
 		}
 		backoff = backoffMin
 
-		d.serve(ctx, lost)
+		dropped := d.serve(ctx, lost) && ctx.Err() == nil && !d.isStopping()
 
 		d.mu.Lock()
 		d.connected = false
 		d.pub = nil
+		if dropped {
+			// The host can no longer see its nodes: every one goes offline
+			// now, as an NDEATH would take it (#540).
+			d.brokerLostLocked()
+		}
 		d.mu.Unlock()
 		// Death-before-DISCONNECT: Stop publishes the certificate and only
 		// then cancels, so by the time we get here the wire is already clear.
@@ -206,7 +224,11 @@ func (d *Driver) run(ctx context.Context) {
 // disconnect — a clean DISCONNECT discards the will, so without it the
 // retained STATE would keep naming this replica's session online. See
 // publishDemotionDeath for why it carries the session timestamp.
-func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
+//
+// It reports true when the broker connection was lost, the one ending the
+// host did not choose: Stop and a leadership change reconnect on purpose,
+// and their nodes keep their state until the births that follow.
+func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 	// What the session was opened as (will or no will), not a fresh sample:
 	// leadership that moved between CONNECT and here is a change too.
 	d.mu.Lock()
@@ -217,10 +239,10 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-lost:
 			d.log.Warn("host: connection lost", "broker", d.cfg.BrokerURL)
-			return
+			return true
 		case <-t.C:
 			if d.mayPublish() != wasLeader {
 				d.log.Info("host: leadership changed; reconnecting to refresh STATE",
@@ -228,7 +250,7 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) {
 				if wasLeader {
 					d.publishDemotionDeath()
 				}
-				return
+				return false
 			}
 		}
 	}
@@ -249,6 +271,12 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 
 	lost := make(chan struct{})
 	var lostOnce sync.Once
+
+	// Until every subscription is in place this is not a session the host
+	// can trust: nothing it delivers is applied (see sessionDown).
+	d.mu.Lock()
+	d.sessionDown = true
+	d.mu.Unlock()
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(d.cfg.BrokerURL).
@@ -284,12 +312,17 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 	if err := tok.Error(); err != nil {
 		return nil, nil, fmt.Errorf("host: connect %s: %w", d.cfg.BrokerURL, err)
 	}
-
 	p := &pahoPub{cli: cli}
 	if err := d.subscribe(cli); err != nil {
 		cli.Disconnect(0)
 		return nil, nil, err
 	}
+	// Subscribed: the session's messages are current from here on. Cleared
+	// before the STATE birth, so a birth that answers it is never dropped.
+	// Should the STATE birth fail, run takes every node offline again.
+	d.mu.Lock()
+	d.sessionDown = false
+	d.mu.Unlock()
 	if err := d.publishStateBirth(p, ts); err != nil {
 		cli.Disconnect(0)
 		return nil, nil, err
@@ -327,26 +360,42 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 // subscribe issues the whole subscription set, literal STATE first. Six
 // filters per group, preferred over spBv1.0/<group>/#, which would echo our
 // own NCMD/DCMD back and pull in other hosts' retained STATE.
+//
+// The group filters go in ONE SUBSCRIBE, so they take effect together:
+// messages are not applied until the session is subscribed (sessionDown),
+// and filter-by-filter subscribing would leave a window in which, say, an
+// NDEATH on an already-subscribed filter is delivered and dropped.
 func (d *Driver) subscribe(cli mqtt.Client) error {
-	filters := []string{stateTopic(d.cfg.HostID)}
-	for _, g := range d.groups {
-		filters = append(filters,
-			"spBv1.0/"+g+"/NBIRTH/+",
-			"spBv1.0/"+g+"/NDEATH/+",
-			"spBv1.0/"+g+"/NDATA/+",
-			"spBv1.0/"+g+"/DBIRTH/+/+",
-			"spBv1.0/"+g+"/DDEATH/+/+",
-			"spBv1.0/"+g+"/DDATA/+/+",
-		)
+	state := stateTopic(d.cfg.HostID)
+	if err := waitSubscribe(cli.Subscribe(state, 1, nil), state); err != nil {
+		return err
 	}
-	for _, f := range filters {
-		tok := cli.Subscribe(f, 1, nil)
-		if !tok.WaitTimeout(tokenTimeout) {
-			return fmt.Errorf("host: subscribe %s timed out", f)
+	filters := map[string]byte{}
+	for _, g := range d.groups {
+		for _, f := range []string{
+			"spBv1.0/" + g + "/NBIRTH/+",
+			"spBv1.0/" + g + "/NDEATH/+",
+			"spBv1.0/" + g + "/NDATA/+",
+			"spBv1.0/" + g + "/DBIRTH/+/+",
+			"spBv1.0/" + g + "/DDEATH/+/+",
+			"spBv1.0/" + g + "/DDATA/+/+",
+		} {
+			filters[f] = 1
 		}
-		if err := tok.Error(); err != nil {
-			return fmt.Errorf("host: subscribe %s: %w", f, err)
-		}
+	}
+	if len(filters) == 0 {
+		return nil
+	}
+	return waitSubscribe(cli.SubscribeMultiple(filters, nil), "the group filters")
+}
+
+// waitSubscribe waits for one SUBSCRIBE's SUBACK.
+func waitSubscribe(tok mqtt.Token, what string) error {
+	if !tok.WaitTimeout(tokenTimeout) {
+		return fmt.Errorf("host: subscribe %s timed out", what)
+	}
+	if err := tok.Error(); err != nil {
+		return fmt.Errorf("host: subscribe %s: %w", what, err)
 	}
 	return nil
 }
@@ -697,7 +746,9 @@ func (d *Driver) flushWrites() {
 				"tag", name, "node", b.Node)
 			continue
 		}
-		if !d.nodeOnline(b.Node) {
+		if !d.reachable(b.Node, b.Device) {
+			// A dark node, or a dark device on a live node (DDEATH, or a
+			// rebirth before its DBIRTH): park it until the birth.
 			if hold[b.Node] == nil {
 				hold[b.Node] = map[string]any{}
 			}
@@ -859,6 +910,12 @@ func (d *Driver) markWritten(name string, v any) {
 	d.initWriteMapsLocked()
 	d.lastOut[name] = v
 	d.remote[name] = v
+	// A command that went out supersedes one parked for the same tag. A
+	// newer write to a dark device is parked in its place instead, so this
+	// is a safety net for a write that raced the device's birth.
+	if b, ok := d.byName[name]; ok {
+		delete(d.queued[b.Node], name)
+	}
 	d.wmu.Unlock()
 }
 
@@ -915,7 +972,10 @@ func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
 }
 
 // releaseQueued delivers the commands parked for one edge node, now that it
-// has birthed. It is called from the inbound path with NEITHER lock held —
+// has birthed. A dark device's command waits for that device's DBIRTH as
+// well (see reachable): the NBIRTH comes first and darks every device until
+// its own birth, and only the DBIRTH says what the device holds. It is called from the inbound
+// path with NEITHER lock held —
 // the same discipline flushAdopts documents, and for the same reason: wmu and
 // d.mu are never nested in this package.
 //
@@ -929,16 +989,23 @@ func (d *Driver) releaseQueued(edge string) {
 	d.wmu.Lock()
 	waiting := len(d.queued[edge])
 	d.wmu.Unlock()
-	if waiting == 0 || !d.nodeOnline(edge) {
+	if waiting == 0 {
+		return
+	}
+	devices, online := d.onlineDevices(edge)
+	if !online {
 		return
 	}
 
 	d.wmu.Lock()
 	d.initWriteMapsLocked()
 	q := d.queued[edge]
-	delete(d.queued, edge)
 	sent, settled := 0, 0
 	for name, v := range q {
+		if deviceDark(devices, d.byName[name].Device) {
+			continue // stays parked until this device's DBIRTH
+		}
+		delete(q, name)
 		if _, newer := d.pending[name]; newer {
 			continue // a later scan already queued this tag; that value wins
 		}
@@ -948,6 +1015,9 @@ func (d *Driver) releaseQueued(edge string) {
 		}
 		d.pending[name] = v
 		sent++
+	}
+	if len(q) == 0 {
+		delete(d.queued, edge)
 	}
 	d.wmu.Unlock()
 
@@ -1003,6 +1073,45 @@ func (d *Driver) flushAdopts() {
 		d.remote[a.name] = a.value
 	}
 	d.wmu.Unlock()
+}
+
+// reachable reports whether a command for this node (device "") or device
+// can be delivered now: the node is online and the device is not dark. A
+// device is dark once the host has seen it and it is not online: a DDEATH,
+// its node's death, or a node rebirth before its DBIRTH. A device the host
+// has never seen is not dark (the host cannot tell it apart from one that
+// is not there), so its command goes out with the node's. releaseQueued
+// applies the same rule. Takes d.mu alone.
+func (d *Driver) reachable(edge, device string) bool {
+	devices, online := d.onlineDevices(edge)
+	return online && !deviceDark(devices, device)
+}
+
+// deviceDark is reachable's device half, over onlineDevices' map.
+func deviceDark(devices map[string]bool, device string) bool {
+	on, seen := devices[device]
+	return device != "" && seen && !on
+}
+
+// onlineDevices reports whether an edge node is online and, if it is, which
+// of its devices are. Takes d.mu alone.
+func (d *Driver) onlineDevices(edge string) (map[string]bool, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for k, ns := range d.nodes {
+		if k.EdgeNode != edge {
+			continue
+		}
+		if ns == nil || !ns.online {
+			return nil, false
+		}
+		devs := make(map[string]bool, len(ns.devices))
+		for id, dev := range ns.devices {
+			devs[id] = dev.online
+		}
+		return devs, true
+	}
+	return nil, false
 }
 
 // nodeOnline reports whether an edge node has birthed and not died. An unknown
