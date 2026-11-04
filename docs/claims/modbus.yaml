@@ -729,26 +729,32 @@ claims:
       A write the device refuses with an exception (0x02, 0x03, 0x04,
       anything but 0x0A/0x0B/0x06) is dropped, and the same value is not
       sent again until the write gate reopens (MB-046); a changed value is a
-      new command. A write a gateway
-      answers with 0x0A or 0x0B, or the device answers with 0x06 (busy), is
-      dropped from the queue and forgotten, and the driver asks the runtime
-      for the outputs, so on the next scan the program's value goes out
-      again, changed or not, with no backoff of its own. This applies to
-      FC5, FC6, FC15, FC16
-      and bit:N read-modify-writes alike, the RMW's exception coming on its
-      read or on its write. Only the tags whose write got the exception are
+      new command. A write a gateway answers with 0x0A or 0x0B, or the
+      device answers with 0x06 (busy), is dropped from the queue and, after
+      a backoff of the source's `retrymin`, forgotten, and the driver asks
+      the runtime for the outputs, so on the next scan the program's value
+      goes out again, unchanged; it is retried once per `retrymin`, not once
+      per scan. A changed value is a new command and goes out at once, even
+      inside the backoff. This applies to FC5, FC6, FC15, FC16 and bit:N
+      read-modify-writes alike, the RMW's exception coming on its read or
+      on its write. Only the tags whose write got the exception are
       forgotten, not a write that landed in the same flush or a sibling bit
       on the same register. A `rewrite:` binding is not forgotten: its
-      re-assert keeps sending it. A forgotten command does not go out while
-      the write gate is closed; the first outputs handed over after it
-      reopens send it. Each such write counts once in `exceptions`.
+      re-assert keeps sending it on its own period. A forgotten command
+      does not go out while the write gate is closed; the first outputs
+      handed over after it reopens send it. Each attempt counts once in
+      `exceptions`; a write that keeps not running logs one warning, and
+      one Info line with the number of attempts when it lands.
     source: "#writes"
     tests:
       - go ./modbus TestGatewayNoAnswerWriteIsResent
       - go ./modbus TestRefusedWriteIsNotResent
       - go ./modbus TestGatewayNoAnswerWriteWaitsForTheGate
       - go ./modbus TestGatewayNoAnswerKeepsRewriteAsserting
-      - go ./modbus TestUndeliveredSetpointGoesOutAgainOnTheNextScan
+      - go ./modbus TestUndeliveredSetpointGoesOutAgainAfterTheBackoff
+      - go ./modbus TestNotRunWriteIsRetriedAtRetryMinNotTheScanRate
+      - go ./modbus TestChangedValueGoesOutDuringTheBackoff
+      - go ./modbus TestStuckWriteWarnsOnceAndLogsTheLanding
     partial: true
     note: >-
       Against the in-process slave answering chosen exceptions per
@@ -758,7 +764,14 @@ claims:
       the same flush and a sibling bit commanded earlier; 0x02, 0x03 and
       0x04 on the same writes (0x04 also on the RMW's read). Those tests
       call WriteOutputs directly.
-      TestUndeliveredSetpointGoesOutAgainOnTheNextScan runs the driver under
-      the runtime: a setpoint set once and never changed, answered 0x0B
-      once, lands within two scans, and is sent exactly twice in all. The
-      write-only offline debounce on gateway no-answers is MB-051's.
+      TestUndeliveredSetpointGoesOutAgainAfterTheBackoff runs the driver
+      under the runtime: a setpoint set once and never changed, answered
+      0x0B once, lands after the backoff and is sent exactly twice in all.
+      The backoff tests also run under the runtime, scanning every
+      millisecond: against a persistent 0x06 with a 100 ms `retrymin` the
+      writes stay within elapsed/retrymin + 2 and each counts as an
+      exception; inside a 3 s backoff the unchanged command is not sent
+      again while a changed value lands at once; against a persistent 0x0B
+      the warning is logged once over five attempts and the Info line once,
+      with the attempt count, and not for a write that lands first time.
+      The write-only offline debounce on gateway no-answers is MB-051's.

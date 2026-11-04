@@ -40,11 +40,12 @@ type leaderFunc func() bool
 func (f leaderFunc) IsLeader() bool { return f() }
 
 // A setpoint set once and never changed again, whose write a gateway
-// answers 0x0B (#596), goes out again on the runtime's next scan: the
-// driver forgets it and asks for the outputs, so the scan pushes them
-// although none changed. Before #601 it waited for the next change, which
-// for a setpoint can be never. It goes out once more, not on every scan.
-func TestUndeliveredSetpointGoesOutAgainOnTheNextScan(t *testing.T) {
+// answers 0x0B (#596), goes out again on the runtime's first scan after
+// its retry backoff (RetryMin): the driver forgets it and asks for the
+// outputs, so the scan pushes them although none changed. Before #601 it
+// waited for the next change, which for a setpoint can be never. It goes
+// out once more, not on every scan.
+func TestUndeliveredSetpointGoesOutAgainAfterTheBackoff(t *testing.T) {
 	srv := newSlave(t)
 	u := srv.Unit(1)
 	rec := &recorder{}
@@ -70,9 +71,10 @@ func TestUndeliveredSetpointGoesOutAgainOnTheNextScan(t *testing.T) {
 	waitFor(t, "the 0x0B answer", func() bool { return d.Health().Sources[0].Exceptions == 1 })
 	u.InjectExceptionAt(FCWriteSingleRegister, 500, 0)
 
-	rt.Scan()
-	rt.Scan()
-	waitFor(t, "the unchanged setpoint goes out again", func() bool { return u.Holding(500) == 21 })
+	waitFor(t, "the unchanged setpoint goes out again", func() bool {
+		rt.Scan()
+		return u.Holding(500) == 21
+	})
 
 	for range 5 {
 		rt.Scan()

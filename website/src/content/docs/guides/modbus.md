@@ -350,20 +350,26 @@ and on a register that triggers an action a second write could fire it
 twice. When a gateway answers 0x0A (path unavailable) or 0x0B (target
 device failed to respond), the device behind it never got the command, and
 when the device answers 0x06 (server device busy), it did not carry the
-command out. Such a write is dropped from the queue and forgotten, and the
-driver asks the runtime for the outputs, so the next scan hands them over
-and the program's value goes out again as a command even if it has not
-changed. That is the program's current value, never a replay of the one
-that failed, and there is no backoff of its own: a write that keeps
-getting 0x0B is tried once per scan. Only the tags whose write did not run
-are forgotten: on a `bit:N` register, the bits whose read-modify-write got
-the exception (on its read or on its write), not the register's other
-bits. A `rewrite:` binding is not forgotten, because its next re-assert
-sends it again anyway. While the write gate is closed nothing is sent, and
-the forgotten command goes out with every other output once the gate
-reopens (see [Redundancy](#redundancy)). Every exception to a write counts
-in `exceptions` on the device row. The log says `write not delivered; will
-resend` for 0x0A, 0x0B and 0x06, and `write refused` for the rest. On a
+command out. Such a write is dropped from the queue and held back for the
+source's `retrymin` (1 s by default, the same pause a block's polls get
+after repeated exceptions). Then the driver forgets it and asks the
+runtime for the outputs, so the next scan hands them over and the
+program's value goes out again as a command even if it has not changed.
+That is the program's current value, never a replay of the one that
+failed. A write that keeps not running is therefore tried once per
+`retrymin`, not once per scan, so a busy device or an RS-485 line behind a
+gateway is not flooded. A changed value is a new command and goes out at
+once, backoff or not. Only the tags whose write did not run are forgotten:
+on a `bit:N` register, the bits whose read-modify-write got the exception
+(on its read or on its write), not the register's other bits. A `rewrite:`
+binding is not forgotten, because its next re-assert sends it again
+anyway. While the write gate is closed nothing is sent, and the forgotten
+command goes out with every other output once the gate reopens (see
+[Redundancy](#redundancy)). Every exception to a write counts in
+`exceptions` on the device row. The log says `write not delivered; will
+resend` once when a write first fails to run (not on every attempt) and
+`write delivered after it did not run`, at Info with the number of
+attempts, when it lands; it says `write refused` for the rest. On a
 write-only source, a gateway no-answer to a write also counts toward
 taking it offline, as described above; 0x06 is the device answering.
 
