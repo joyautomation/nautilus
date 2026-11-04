@@ -1,0 +1,35 @@
+page: docs/tutorial.md
+title: "Tutorial: your first controller"
+prefix: TU
+claims:
+  - id: TU-001
+    claim: >-
+      naut new with --template minimal scaffolds a project with one program,
+      one acceptance test file and a manifest, and the scaffolded project
+      passes naut check, naut test and naut build.
+    source: "#part-2-create-a-project"
+    tests:
+      - go ./cmd/naut TestScaffoldMinimalIsOneTaskOneProgramOneTestFile
+      - go ./cmd/naut TestScaffoldedManifestProjectsCheckTestAndBuild
+  - id: TU-002
+    claim: >-
+      naut run serves the dashboard and the tag API on http://localhost:8080.
+    source: "#part-5-run-it-and-open-the-dashboard"
+    tests:
+      - go ./cmd/naut TestNautRunServesDashboardAndState
+      - go ./cmd/naut TestProjectDefaultsToLocalhost8080
+  - id: TU-003
+    claim: >-
+      A force holds a tag at a value, and a write to a forced tag is refused
+      until the force is removed.
+    source: "#64-force-a-value"
+    tests:
+      - go ./server TestForceAPI
+  - id: TU-004
+    claim: >-
+      With server.hmi set to a built screen, the controller serves that
+      screen at the root, and naut build embeds it in the built binary.
+    source: "#84-tell-the-controller-to-serve-it"
+    tests:
+      - go ./server TestHMISPAFallback
+      - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt

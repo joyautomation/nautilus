@@ -22,6 +22,22 @@ const pages = [
       'Acceptance tests for control logic in virtual time — assert on-delays, debounces, and loop settling exactly, with no Go and no toolchain.',
   },
   {
+    // The beginner tutorial lives in docs/ so GitHub readers find it beside
+    // the examples; the site gets a copy under Start here.
+    src: join(root, '..', 'docs', 'tutorial.md'),
+    dest: join(root, 'src', 'content', 'docs', 'tutorial.md'),
+    title: 'Tutorial: your first controller',
+    description:
+      'From nothing installed to a motor start/stop in ladder, a little Structured Text, live values and forcing, and a simple operator screen. macOS, Windows and Linux.',
+    // Repo-relative links that mean nothing on the site.
+    replace: [
+      [
+        '](../examples/README.md#run-an-example-and-see-its-hmi)',
+        '](https://github.com/joyautomation/nautilus/blob/main/examples/README.md#run-an-example-and-see-its-hmi)',
+      ],
+    ],
+  },
+  {
     src: join(root, '..', 'docs', 'structure-warnings.md'),
     dest: join(root, 'src', 'content', 'docs', 'reference', 'structure-warnings.md'),
     description:
@@ -59,7 +75,8 @@ for (const page of pages) {
   const relink = (text) =>
     text.replace(/\]\(([a-z][a-z0-9-]*)\.md(#[^)]*)?\)/g, (m, name, hash = '') =>
       siblings.includes(name) ? `](/reference/${name}/${hash})` : m);
-  const body = relink(dropSections(lines.slice(1).join('\n').trimStart(), page.dropSections));
+  let body = relink(dropSections(lines.slice(1).join('\n').trimStart(), page.dropSections));
+  for (const [from, to] of page.replace ?? []) body = body.replaceAll(from, to);
   const out = `---\ntitle: ${JSON.stringify(title)}\ndescription: ${JSON.stringify(page.description)}\n---\n\n${body}`;
   mkdirSync(dirname(page.dest), { recursive: true });
   writeFileSync(page.dest, out);
