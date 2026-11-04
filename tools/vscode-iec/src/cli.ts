@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { isExecutableFile, resolveCli, Resolved } from "./cliResolve";
+import { applyUnix, applyWindows, describeResult, PathResult, planPathSetup } from "./cliPath";
 import { checkMinVersion, installLatestCli, parseCliVersionOutput, RELEASES_PAGE } from "./cliInstall";
 
 const INSTALL_URL = "https://github.com/joyautomation/nautilus#getting-started";
@@ -43,6 +44,48 @@ export function initCli(context: vscode.ExtensionContext): void {
   minCliVersion = (context.extension.packageJSON as { nautilusCli?: { minVersion?: string } }).nautilusCli?.minVersion ?? "0.0.0";
   state = context.globalState;
   cache = undefined;
+  terminalEnv = context.environmentVariableCollection;
+  // Integrated terminals find the managed naut at once, no new window needed.
+  if (fs.existsSync(managedCliPath() ?? "")) exposeToTerminals();
+}
+
+let terminalEnv: vscode.EnvironmentVariableCollection | undefined;
+
+function exposeToTerminals(): void {
+  if (!terminalEnv || !managedBinDir) return;
+  terminalEnv.description = "Puts the naut CLI installed by the nautilus extension on PATH";
+  terminalEnv.prepend("PATH", managedBinDir + path.delimiter);
+}
+
+function runPowerShell(script: string, env: Record<string, string>): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { encoding: "utf8", timeout: 20_000, env: { ...process.env, ...env }, windowsHide: true },
+      (err, stdout) => (err ? reject(err) : resolve(stdout))
+    );
+  });
+}
+
+/** Make the managed naut reachable from a terminal outside VS Code (no admin
+ * rights): see cliPath.ts. Failures are reported, never fatal. */
+async function putOnPath(log: vscode.OutputChannel): Promise<string> {
+  exposeToTerminals();
+  if (!managedBinDir) return "";
+  let result: PathResult;
+  try {
+    const plan = planPathSetup({ platform: process.platform, home: os.homedir(), env: process.env, managedBinDir });
+    result = plan.kind === "symlink" ? applyUnix(plan, managedBinDir) : await applyWindows(plan, runPowerShell);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    log.appendLine(`[install] couldn't put naut on PATH: ${why}`);
+    return ` It is not on your PATH outside VS Code (${why}); terminals inside VS Code can run it.`;
+  }
+  for (const l of result.done) log.appendLine(`[install] ${l}`);
+  for (const l of result.undo) log.appendLine(`[install] to undo: ${l}`);
+  const undo = result.undo.length ? ` To undo: ${result.undo.join("; ")}.` : "";
+  return ` ${describeResult(result)}${undo}`;
 }
 
 /** The oldest naut this extension works with (nautilusCli.minVersion). */
@@ -214,9 +257,10 @@ async function runInstall(): Promise<void> {
   cache = undefined;
   checked.clear();
   const now = resolveCliNow();
+  const pathNote = await putOnPath(log);
   void vscode.commands.executeCommand("nautilus.restartLanguageServer");
   if (samePath(now.command, installed.path)) {
-    void vscode.window.showInformationMessage(`nautilus: naut ${installed.version} installed.`);
+    void vscode.window.showInformationMessage(`nautilus: naut ${installed.version} installed.${pathNote}`);
     return;
   }
   // Something earlier in the search order (PATH, or an explicit cliPath)
@@ -224,7 +268,7 @@ async function runInstall(): Promise<void> {
   const USE = "Use the installed one";
   const pick = await vscode.window.showInformationMessage(
     `nautilus: naut ${installed.version} installed, but the extension is still using ${now.command} ` +
-      `(${howInstalled(now.command)}), which comes first.`,
+      `(${howInstalled(now.command)}), which comes first.${pathNote}`,
     USE
   );
   if (pick === USE) {

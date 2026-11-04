@@ -3,6 +3,22 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **"Install or Update the naut CLI" puts `naut` on your PATH.** Until now
+  the CLI landed in the extension's storage, where only the extension could
+  find it, so `naut run` failed in a terminal. Now, without admin rights:
+  terminals inside VS Code find it at once (the extension adds its folder to
+  their PATH); on macOS and Linux a link `~/.local/bin/naut` is made, and
+  `~/.local/bin` is added to PATH in your shell profile if it is not there
+  (`.zprofile` on macOS, `.profile` and `.bashrc` on Linux); on Windows the
+  extension's folder is added to your user PATH. Open a new terminal window
+  to use it outside VS Code. The notification says what was done and how to
+  undo it, and an existing `naut` you installed yourself is never replaced.
+  `nautilus.cliPath` still wins when set. (#558)
+
 ## [0.19.2] - 2026-11-03
 
 Requires a `naut` built from main (after 0.19.0) for the items that
