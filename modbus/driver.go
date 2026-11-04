@@ -1273,15 +1273,6 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 				s.pending[n] = work[n]
 			}
 		}
-		for _, bw := range bitWrites[bi:] {
-			put(bw.names)
-		}
-		for _, run := range regRuns[ri:] {
-			put(run.names)
-		}
-		for _, run := range coilRuns[ci:] {
-			put(run.names)
-		}
 		s.mu.Unlock()
 	}
 
