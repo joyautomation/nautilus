@@ -464,6 +464,16 @@ assigns every bit of it. To let the operator own a member or a bit, don't
 assign it in the program, or assign it only when the logic means to change
 it.
 
+Two consequences of "assigned" being the test. A member bound to a
+function block's `VAR_IN_OUT` counts as assigned on every call, because the
+call copies the pin back even when the block only reads it, so a write to
+that member during the scan is lost. And the merge is per member, not per
+invariant: a program that computes one member from another
+(`P101.Limit := P101.Span * 2`) reads the sibling at scan start and wins
+its own member at commit, even if a writer changed the sibling meanwhile,
+so a rule that ties members together holds only if one owner writes all of
+them.
+
 ## Observing scans: `Runtime.OnScan`
 
 A Go-level subsystem that needs to react to the tag store every cycle — an
