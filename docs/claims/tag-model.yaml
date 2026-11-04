@@ -582,3 +582,20 @@ claims:
       - go ./runtime TestFrontDoorEnumInsideMapAndList
       - go ./runtime TestRetainKeepsWhatTheProgramProduced
       - go ./tools/blackbox TestBlackbox/001-F06-overflow-int64
+  - id: TAG-053
+    claim: >-
+      naut check reports an output with no init: that a program can read
+      before it writes it: an error, on the tag's line, when some path
+      through the scan reaches the read first (and the scan then faults with
+      "undefined tag"), a warning when only a loop that may run zero times
+      writes it first. A program's own earlier write counts, including one
+      made inside a function block or function it calls; another task's
+      does not.
+    source: "#how-a-tag-comes-to-exist"
+    tests:
+      - go ./cmd/naut TestCheckReportsAnOutputReadBeforeItsFirstWrite
+      - go ./cmd/naut TestCheckReportsAnOutputAnotherTaskWrites
+      - go ./cmd/naut TestCheckReportsAnOutputNothingWrites
+      - go ./cmd/naut TestCheckPlacesATagFileTagAtItsLine
+      - go ./lang/ir TestReadBeforeWrite
+      - go ./lang/ir TestReadBeforeWriteFollowsCalls

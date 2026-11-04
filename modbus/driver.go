@@ -261,6 +261,10 @@ type source struct {
 	// under mu.
 	stuck map[string]*stuckWrite
 
+	// outputs are this source's writable binding names, so WriteOutputs
+	// can queue a source's share of a snapshot under one hold of mu.
+	outputs []string
+
 	// kick wakes the loop: a queued write, an enable flip, a stop.
 	kick chan struct{}
 }
@@ -449,6 +453,7 @@ func (d *Driver) buildSources() error {
 		f, _ := t.format() // Validate (in BuildPlan) already vetted it
 		d.byName[t.Name] = outBinding{src: s, b: t, f: f}
 		d.outputs = append(d.outputs, t.Name)
+		s.outputs = append(s.outputs, t.Name)
 		if t.Rewrite > 0 {
 			s.rewrites = append(s.rewrites, &rewriteRun{name: t.Name, period: t.Rewrite})
 		}
@@ -769,6 +774,11 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //     a command. A changed value is queued per source, last value per tag,
 //     and held across a disconnect — flushed when the source reconnects,
 //     reported as queued writes on the device row.
+//
+// A source's share of one snapshot is queued under one hold of its lock,
+// so the source loop's flush sees all of it or none of it: contiguous
+// registers changed in one snapshot go out as one FC16, never split
+// across two flushes by a poll that ran mid-snapshot (#592).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	kicked := map[*source]bool{}
 	for name, v := range vals {
@@ -795,31 +805,30 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
-	gateOpen := d.gateOpen()
-	for name, v := range vals {
-		ob, ok := d.byName[name]
-		if !ok {
-			continue // enable tags handled above; unknown names ignored
-		}
-		if !gateOpen {
-			continue
-		}
-		s := ob.src
-		s.mu.Lock()
-		if baseline && ob.b.Rewrite <= 0 {
-			// Record, never send. A tag with a command already queued
-			// keeps it: that one WAS asked for.
-			if _, queued := s.pending[name]; !queued {
-				s.written[name] = v
+	if d.gateOpen() {
+		for _, s := range d.sources {
+			s.mu.Lock()
+			for _, name := range s.outputs {
+				v, ok := vals[name]
+				if !ok {
+					continue
+				}
+				if baseline && d.byName[name].b.Rewrite <= 0 {
+					// Record, never send. A tag with a command already
+					// queued keeps it: that one WAS asked for.
+					if _, queued := s.pending[name]; !queued {
+						s.written[name] = v
+					}
+				} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
+					// unchanged since the last value we accounted for
+				} else {
+					s.written[name] = v
+					s.pending[name] = v
+					kicked[s] = true
+				}
 			}
-		} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
-			// unchanged since the last value we accounted for
-		} else {
-			s.written[name] = v
-			s.pending[name] = v
-			kicked[s] = true
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}
 	for s := range kicked {
 		nudge(s.kick)

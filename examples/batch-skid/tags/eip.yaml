@@ -8,11 +8,12 @@
 #
 # eip__Online is synthesized by the driver, true while the controller is
 # connected and polled: check it before trusting this controller's values.
+#
+# Not generated (declared by hand in the manifest): Line_Request
 - { name: Line_Accept, role: input }
 - { name: Line_BatchId, role: output }
 - { name: Line_Fault, role: input }
 - { name: Line_Ready, role: input }
-- { name: Line_Request, role: output }
 - { name: Line_Status, role: input, type: LineStatus }
 - { name: Line_TankLevel, role: input }
 - { name: eip__Online, role: input, type: BOOL, desc: "controller 127.0.0.1 connected and every scan class polled — interlock on this" }
