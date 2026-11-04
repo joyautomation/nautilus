@@ -32,7 +32,13 @@ func Connect(ctx context.Context, c *opcua.Client) error {
 	if err := c.Connect(ctx); err != nil {
 		return err
 	}
-	return AwaitPublishLoop(ctx, c)
+	if err := AwaitPublishLoop(ctx, c); err != nil {
+		// Callers register their Close after a successful Connect, so a
+		// client left open here would leak.
+		c.Close(ctx)
+		return err
+	}
+	return nil
 }
 
 // AwaitPublishLoop returns once c's publish loop has taken the pause
