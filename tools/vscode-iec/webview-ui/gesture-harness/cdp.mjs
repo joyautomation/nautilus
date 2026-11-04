@@ -46,11 +46,9 @@ export class Browser {
 		ws.addEventListener('message', (ev) => this._onMessage(ev));
 	}
 
-	/** `webgl`: software WebGL (SwiftShader through ANGLE) for a bundle that
-	 * draws into a canvas — the scene editor's three.js stage. Off by
-	 * default: the 2D editors never need it and the GPU process costs a
-	 * second per launch. */
-	static async launch({ width = 1400, height = 900, headless = true, webgl = false } = {}) {
+	/** Spawn Chrome and wait up to `waitMs` for the port it picked. A
+	 * Chrome that never says is killed; `port` is then null. */
+	static async _start({ width, height, headless, webgl }, waitMs) {
 		const chrome = findChrome();
 		const userDataDir = mkdtempSync(join(tmpdir(), 'mimic-harness-'));
 		const args = [
@@ -68,27 +66,46 @@ export class Browser {
 			'about:blank'
 		];
 		const proc = spawn(chrome, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-		let chromeErr = '';
-		proc.stderr?.on('data', (d) => (chromeErr = (chromeErr + d).slice(-2000)));
+		const started = { proc, userDataDir, port: null, chromeErr: '' };
+		proc.stderr?.on('data', (d) => (started.chromeErr = (started.chromeErr + d).slice(-2000)));
 		// Chrome writes the chosen debugging port to DevToolsActivePort.
 		const portFile = join(userDataDir, 'DevToolsActivePort');
-		let port = null;
-		// 30 s: two test files launch Chrome at once, and a loaded CI runner
-		// can take well over 5 s to start the first one.
-		for (let i = 0; i < 600; i++) {
+		for (const until = Date.now() + waitMs; Date.now() < until; ) {
 			if (existsSync(portFile)) {
 				const txt = readFileSync(portFile, 'utf8').split('\n')[0].trim();
 				if (txt) {
-					port = txt;
-					break;
+					started.port = txt;
+					return started;
 				}
 			}
 			await sleep(50);
 		}
-		if (!port) {
-			proc.kill('SIGKILL');
-			throw new Error('Chrome never reported a DevTools port' + (chromeErr ? `: ${chromeErr}` : ''));
+		proc.kill('SIGKILL');
+		try {
+			rmSync(userDataDir, { recursive: true, force: true });
+		} catch {
+			/* ignore */
 		}
+		return started;
+	}
+
+	/** `webgl`: software WebGL (SwiftShader through ANGLE) for a bundle that
+	 * draws into a canvas — the scene editor's three.js stage. Off by
+	 * default: the 2D editors never need it and the GPU process costs a
+	 * second per launch. */
+	static async launch({ width = 1400, height = 900, headless = true, webgl = false } = {}) {
+		// A loaded CI runner can take well over 30 s to start Chrome when
+		// three test files launch at once (#545: three first launches gave up
+		// together, the next ones took 17 s). So: give the first try 30 s,
+		// then kill it and start a fresh one with a minute more.
+		let started;
+		for (const waitMs of [30000, 60000]) {
+			started = await Browser._start({ width, height, headless, webgl }, waitMs);
+			if (started.port) break;
+			process.stderr.write(`gesture harness: Chrome reported no DevTools port in ${waitMs / 1000} s; starting another\n`);
+		}
+		if (!started.port) throw new Error('Chrome never reported a DevTools port' + (started.chromeErr ? `: ${started.chromeErr}` : ''));
+		const { proc, userDataDir, port } = started;
 		// Find the page target's WebSocket URL.
 		let wsUrl = null;
 		for (let i = 0; i < 200; i++) {
@@ -117,6 +134,10 @@ export class Browser {
 		await b.send('Page.enable');
 		await b.send('Runtime.enable');
 		await b.send('Log.enable');
+		// GESTURE_CPU_THROTTLE=<n>: slow the page's CPU n× (CDP's own
+		// throttling) to reproduce a loaded CI runner on a fast box.
+		const throttle = Number(process.env.GESTURE_CPU_THROTTLE || 0);
+		if (throttle > 1) await b.send('Emulation.setCPUThrottlingRate', { rate: throttle });
 		if (Browser.recorder) await Browser.recorder.attach(b);
 		return b;
 	}
