@@ -557,11 +557,13 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 // every output on its first takeover too (#606).
 //
 // A func cannot say it changed, so the driver sees the gate close and
-// reopen by looking at it (gateOpen): on every WriteOutputs and flush,
-// at least once a second while connected, and on every connect attempt.
-// A gate that closes and reopens between two looks is not seen: one
-// shorter than about a second while connected, or than the reconnect
-// backoff (up to about 30 s) while the controller is down.
+// reopen by looking at it (gateOpen): on every WriteOutputs and flush, on
+// every connect attempt, and at least once a second otherwise, while
+// connected and while waiting out the reconnect backoff. A gate that
+// closes and reopens between two looks is not seen: one shorter than
+// about a second, or than one connect attempt while the controller is
+// down (the dial gives up after 10 s; the browse and validation that
+// follow it on a controller that answers are not timed).
 func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Lock()
 	d.writeGate = gate
@@ -643,10 +645,8 @@ func (d *Driver) run(ctx context.Context) {
 		if err != nil {
 			d.setErr(err)
 			d.log.Warn("eip: connect failed", "host", d.host, "error", err, "retryIn", backoff)
-			select {
-			case <-ctx.Done():
+			if !d.backoffWait(ctx, backoff) {
 				return
-			case <-time.After(backoff):
 			}
 			if backoff < 30*time.Second {
 				backoff *= 2
@@ -673,6 +673,31 @@ func (d *Driver) run(ctx context.Context) {
 		d.primed = false
 		d.stats.sinceMs = time.Now().UnixMilli()
 		d.mu.Unlock()
+	}
+}
+
+// gateLookEvery bounds the time between two looks at the write gate while
+// nothing else looks sooner: the serve loop's idle wake and the reconnect
+// backoff (see SetWriteGate).
+const gateLookEvery = time.Second
+
+// backoffWait waits wait between connect attempts, looking at the write
+// gate at least every gateLookEvery meanwhile, so a loss and regain of
+// leadership during a long backoff is seen. False when ctx ended.
+func (d *Driver) backoffWait(ctx context.Context, wait time.Duration) bool {
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	look := time.NewTicker(gateLookEvery)
+	defer look.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+			return true
+		case <-look.C:
+			d.gateOpen() // see SetWriteGate
+		}
 	}
 }
 
@@ -788,7 +813,7 @@ func (d *Driver) serve(ctx context.Context, sess *session) {
 	for {
 		// At least once a second, so the write gate is looked at (see
 		// SetWriteGate) when no class is due for longer than that.
-		wake := time.Second
+		wake := gateLookEvery
 		now := time.Now()
 		for _, c := range d.classes {
 			if until := c.next.Sub(now); until < wake {

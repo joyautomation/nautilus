@@ -371,8 +371,9 @@ claims:
     note: >-
       Under the runtime with a test coordinator whose flag is also the
       driver's gate, the controller down and back through a proxy in front
-      of the emulator. That a broken flush's re-queued writes are dropped
-      the same way is not asserted (no test breaks a flush).
+      of the emulator. That the writes a broken flush re-queued (EIP-052)
+      are dropped the same way when the gate has closed by the reconnect is
+      not asserted.
   - id: EIP-048
     claim: >-
       A gate that closes partway through a flush stops it: the tag being
@@ -396,10 +397,13 @@ claims:
     tests:
       - go ./eip TestRegainedGateSendsTheUnchangedOutputsAgain
       - go ./eip TestQueuedWritesGoNowhereAfterTheGateClosed
+      - go ./eip TestWriteInFlightAcrossAReopenIsNotRecorded
     note: >-
       Another master overwrites every scalar and struct member while the
       gate is closed; both the takeover and the reopen without a takeover
-      are run under the runtime.
+      are run under the runtime. A write on the wire while the gate closes
+      and reopens is not recorded as written once it is confirmed, so the
+      push after the reopen sends the value again.
   - id: EIP-050
     claim: >-
       A replica that started as a standby commands every output on its
@@ -410,17 +414,20 @@ claims:
   - id: EIP-051
     claim: >-
       The driver sees the gate change only by looking at it: on every push
-      and flush, before every write, at least once a second while
-      connected, and on every connect attempt. A gate that closes and
-      reopens between two looks is not seen.
+      and flush, before every write, on every connect attempt, and at
+      least once a second otherwise, while connected and while waiting out
+      the reconnect backoff. A gate that closes and reopens between two
+      looks is not seen.
     source: "#redundancy"
     tests:
       - go ./eip TestRegainedGateSendsTheUnchangedOutputsAgain/gate reopens while leading
+      - go ./eip TestBackoffLooksAtTheGate
     partial: true
     note: >-
       The reopen without a takeover is seen by the serve loop's own look,
-      at a 20 ms scan. The once-a-second bound with no class due sooner,
-      the look on a connect attempt, and the unseen flip are not asserted.
+      at a 20 ms scan, and a reopen during the reconnect backoff, after a
+      connect attempt saw the gate closed, by the wait's own look. The once-a-second bound with no class due sooner, the
+      look on a connect attempt, and the unseen flip are not asserted.
   - id: EIP-034
     claim: >-
       `/api/drivers` reports Kind `ethernet-ip` with state connected,

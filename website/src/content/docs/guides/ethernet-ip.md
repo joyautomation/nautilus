@@ -300,11 +300,12 @@ pair drives its outputs at once.
 
 **A flip between two looks is not seen.** A gate func cannot say it
 changed, so the driver looks at it: on every push and flush, before every
-write in a flush, at least once a second while connected, and on every
-connect attempt. A gate that closes and reopens between two looks is not
-seen, and then nothing above happens. The window is about a second while
-connected, and up to the reconnect backoff (about 30 s) while the
-controller is down.
+write in a flush, on every connect attempt, and at least once a second
+otherwise, while connected and while it waits to reconnect. A gate that
+closes and reopens between two looks is not seen, and then nothing above
+happens. The window is about a second, or one connect attempt while the
+controller is down: the dial gives up after 10 s, and on a controller that
+answers, the tag browse and manifest check that follow it are not timed.
 
 ## `/api/drivers`
 

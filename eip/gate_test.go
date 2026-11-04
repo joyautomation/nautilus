@@ -301,6 +301,27 @@ func TestGateClosingMidFlushStopsTheFlush(t *testing.T) {
 	})
 }
 
+// While the controller is down, a gate the connect attempt saw closed and
+// that reopens during the backoff wait is seen by the wait's own look (at
+// least once a second), not only by the next connect attempt, which may
+// be 30 s away: the driver forgets what it wrote and asks for the outputs.
+func TestBackoffLooksAtTheGate(t *testing.T) {
+	d, err := New("127.0.0.1", testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &gateWatch{}
+	d.SetWriteGate(g.gate)
+	d.gateOpen() // the connect attempt's look: closed
+	g.open.Store(true)
+	if !d.backoffWait(context.Background(), gateLookEvery+500*time.Millisecond) {
+		t.Fatal("the wait ended early")
+	}
+	if !d.OutputsWanted() {
+		t.Error("a gate that reopened during the backoff was not seen by it")
+	}
+}
+
 // #606: a replica that started as a standby commands every output on its
 // first takeover, with the program's value: the driver has no start-up
 // baseline, so the takeover push is not taken for one.

@@ -218,9 +218,10 @@ claims:
     claim: >-
       Through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers, a
       replica that takes over from standby sends every output once on its
-      first scan as leader, with the program's value, changed or not: an output equal to
-      what this replica sent when it last led goes out again, a replica that
-      started as a standby has no start-up baseline, and a Modbus rewrite:
+      first scan as leader, with the program's value, changed or not: an
+      output equal to what this replica sent when it last led goes out
+      again, a replica that started as a standby has no start-up baseline,
+      and a Modbus rewrite:
       keep-alive re-asserts nothing before that push. A replica that leads
       from its first scan keeps the drivers' baseline: `naut run` starts
       the drivers only after the elector's first decision, which Run makes
@@ -253,9 +254,10 @@ claims:
       runtime with a test coordinator and the same flag as its write gate,
       against the Logix emulator and the in-process groov fake for the
       latter two. The OPC UA tests call WriteOutputs directly. The hw
-      drivers' baseline is not asserted here. The elector's first decision is asserted
-      against a fake Lease API (acquire, standby, standalone, a first GET
-      that fails), and runProject's driver start (startDriverWhenDecided)
+      drivers' baseline is not asserted here. The elector's first decision
+      is asserted against a fake Lease API (acquire, standby, standalone, a
+      first GET that fails), and runProject's driver start
+      (startDriverWhenDecided)
       against a fake elector and driver: Start runs only after the
       decision, at once without redundancy, and not at all after a stop.
       A real cluster is not exercised. A leadership flip the drivers do not see

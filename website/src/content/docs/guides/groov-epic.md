@@ -278,7 +278,15 @@ watchdog value in groov Manage, so the count means "may have".
 With a `redundancy:` section, the driver's write gate is wired to
 leadership: commands leave the driver only on the leader. A standby skips
 scans, so it never hands the driver a command, and its driver neither
-rewrites outputs on reconnect nor after a watchdog trip. It keeps reading.
+rewrites outputs on reconnect nor after a watchdog trip.
+
+**A standby's driver is not passive yet.** It keeps its session with the
+processor, and that session still changes the unit: it clears the on/off
+latches it reads, so the leader can miss a latch event, and when streaming
+it points the stream at itself, taking it from the leader
+([#618](https://github.com/joyautomation/nautilus/issues/618)). Until that
+is fixed, a redundant project should poll rather than stream, and not
+rely on latch tags.
 
 **A command held while the processor was away goes out only on the
 leader.** Leadership is checked again when held commands go out, before

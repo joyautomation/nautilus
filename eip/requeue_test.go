@@ -3,6 +3,7 @@ package eip
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"strconv"
 	"sync"
@@ -233,6 +234,98 @@ func TestBrokenFlushAtEveryPoint(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// hookProxy forwards to the emulator and runs onRequest once, before it
+// forwards the first request naming name (a write, when the tag is never
+// polled), with the driver waiting on that request's answer.
+type hookProxy struct {
+	name      string
+	onRequest func()
+	once      sync.Once
+}
+
+func (p *hookProxy) serve(t *testing.T, target string) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			s, err := net.Dial("tcp", target)
+			if err != nil {
+				_ = c.Close()
+				continue
+			}
+			go func() { _, _ = io.Copy(c, s); _ = c.Close() }()
+			go func() {
+				buf := make([]byte, 64<<10)
+				for {
+					n, err := c.Read(buf)
+					if err != nil {
+						_ = s.Close()
+						return
+					}
+					if bytes.Contains(buf[:n], []byte(p.name)) {
+						p.once.Do(p.onRequest)
+					}
+					if _, err := s.Write(buf[:n]); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// The term guard: a write in flight while the gate closes and reopens
+// belongs to the previous term. The reopen forgot everything written; the
+// write's confirmation must not record it again afterwards, or the push
+// that answers the reopen skips the value as unchanged and another
+// master's write since stands.
+func TestWriteInFlightAcrossAReopenIsNotRecorded(t *testing.T) {
+	addr, store := startRequeueEmulator(t)
+	g := &gateWatch{}
+	g.open.Store(true)
+	var d *Driver
+	p := &hookProxy{name: "SpeedCmd", onRequest: func() {
+		// Leadership lost and regained while the write is on the wire,
+		// each seen by a look.
+		g.open.Store(false)
+		d.gateOpen()
+		g.open.Store(true)
+		d.gateOpen()
+	}}
+	port := p.serve(t, addr)
+	d, err := New("127.0.0.1", requeueManifest(), WithPort(port), WithScanRate(20*time.Millisecond),
+		WithTagClass(NoPoll, "ASetCmd", "SpeedCmd", "TRSCmd", "ZCmd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetWriteGate(g.gate)
+	if err := d.WriteOutputs(nio.Values{"SpeedCmd": 77.0}); err != nil {
+		t.Fatal(err)
+	}
+	d.Start(context.Background())
+	t.Cleanup(d.Stop)
+	waitFor(t, "the write in flight lands", func() bool { return storeVal(store, "SpeedCmd") == 77.0 })
+	pollsPast(t, d, 2) // the flush that sent it has returned
+
+	store.UpdateValue("SpeedCmd", 5.0) // another master
+	if err := d.WriteOutputs(nio.Values{"SpeedCmd": 77.0}); err != nil {
+		t.Fatal(err)
+	}
+	pollsPast(t, d, 2)
+	if v := storeVal(store, "SpeedCmd"); v != 77.0 {
+		t.Errorf("SpeedCmd = %v: the push after the reopen was skipped", v)
 	}
 }
 
