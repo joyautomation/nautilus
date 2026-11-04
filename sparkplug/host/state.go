@@ -75,6 +75,11 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 	}
 
 	d.mu.Lock()
+	if d.sessionDown {
+		// Delivered outside a complete session; see sessionDown.
+		d.mu.Unlock()
+		return
+	}
 	d.stats.Msgs++
 	nk := nodeKey{Group: group, EdgeNode: edge}
 	ns := d.nodeLocked(nk)
@@ -92,7 +97,7 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 			// Data before a birth: the host started mid-stream, or the gap
 			// timer gave up. Retained births are forbidden by the spec, so
 			// the only cure is to ask.
-			d.askRebirthLocked(ns)
+			d.askRebirthLocked(ns, "data before a birth")
 			break
 		}
 		if d.acceptSeqLocked(ns, kind, device, p) {
@@ -201,6 +206,7 @@ func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
 	ns.stopGap()
 	ns.pending = nil
 	ns.rebirthAsked = false
+	ns.aliasMiss = false
 	ns.setOnline(true)
 	ns.seq = p.Seq
 	ns.seqPrimed = true
@@ -349,6 +355,37 @@ func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
 		"group", ns.group, "node", ns.edge, "bdSeq", bd)
 }
 
+// brokerLostLocked is the host's own death as its nodes see it: with the
+// broker connection gone, the host can reach none of them, so every node and
+// every device goes offline exactly as an NDEATH takes it (__Online false,
+// one outage for each that was online, values kept, data bindings Stale) and
+// stays offline until its next birth after the reconnect. The sequence is
+// unprimed, since whatever was published while the host was away is lost,
+// so data before a birth asks for one; a rebirth request raised during the
+// outage, which could not be sent, may be raised again. A birth after the
+// reconnect does not count a second outage: nothing it darks is still
+// online (#540). Caller holds d.mu.
+func (d *Driver) brokerLostLocked() {
+	d.sessionDown = true
+	for _, ns := range d.nodes {
+		ns.stopGap()
+		ns.pending = nil
+		ns.seqPrimed = false
+		ns.rebirthAsked = false
+		ns.aliasMiss = false
+		wasOnline := ns.online
+		ns.setOnline(false)
+		for _, dev := range ns.devices {
+			dev.setOnline(false)
+		}
+		d.syncTagsLocked(ns)
+		if wasOnline {
+			d.stateLogger().Info("sparkplug host: node offline, broker connection lost",
+				"group", ns.group, "node", ns.edge)
+		}
+	}
+}
+
 // applyDDeathLocked takes one device offline, keeping its values.
 // Caller holds d.mu.
 func (d *Driver) applyDDeathLocked(ns *nodeState, device string) {
@@ -489,24 +526,35 @@ func (d *Driver) gapExpired(nk nodeKey, gen uint64) {
 	ns.pending = nil
 	ns.seqPrimed = false
 	d.stats.SeqGaps++
-	d.askRebirthLocked(ns)
+	d.askRebirthLocked(ns, "sequence gap")
 	d.mu.Unlock()
 
-	d.stateLogger().Warn("sparkplug host: sequence gap, requesting rebirth",
-		"group", nk.Group, "node", nk.EdgeNode, "buffered", held)
+	if !d.cfg.NoRebirthRequests {
+		d.stateLogger().Warn("sparkplug host: sequence gap, requesting rebirth",
+			"group", nk.Group, "node", nk.EdgeNode, "buffered", held)
+	} // else askRebirthLocked logged the wait
 	d.flushRebirths()
 }
 
 // ── rebirth requests ─────────────────────────────────────────────────────
 
 // askRebirthLocked queues one NCMD Node Control/Rebirth for this node,
-// debounced to one per birth cycle so a dark site cannot storm the broker.
+// debounced to one per birth cycle so a dark site cannot storm the broker;
+// why names the cause for the log. With rebirth requests off
+// (Config.NoRebirthRequests) it asks for nothing and counts nothing: the
+// node waits for a birth someone else asks for, and the wait is logged once
+// (the same debounce, so the next birth or broker loss re-arms it).
 // Caller holds d.mu; the hook runs later, in flushRebirths.
-func (d *Driver) askRebirthLocked(ns *nodeState) {
+func (d *Driver) askRebirthLocked(ns *nodeState, why string) {
 	if ns.rebirthAsked {
 		return
 	}
 	ns.rebirthAsked = true
+	if d.cfg.NoRebirthRequests {
+		d.stateLogger().Warn("sparkplug host: waiting for a birth; rebirth requests are off (rebirth-requests: false)",
+			"group", ns.group, "node", ns.edge, "reason", why)
+		return
+	}
 	d.stats.Rebirths++
 	d.rebirthQ = append(d.rebirthQ, nodeKey{Group: ns.group, EdgeNode: ns.edge})
 }
@@ -568,10 +616,17 @@ func (d *Driver) resolveMetricLocked(ns *nodeState, device string, m sparkplug.M
 	}
 	ref, ok := ns.aliases[m.Alias]
 	if !ok {
+		// The alias table is out of step with the node: some metric of
+		// ours may be the one we cannot resolve, so the node's data reads
+		// Stale until its next birth (bindingQualityLocked).
+		ns.aliasMiss = true
+		msg := "sparkplug host: unknown metric alias; requesting rebirth"
+		if d.cfg.NoRebirthRequests {
+			msg = "sparkplug host: unknown metric alias"
+		}
 		d.warnOnceLocked(fmt.Sprintf("alias:%s/%s/%d", ns.group, ns.edge, m.Alias),
-			"sparkplug host: unknown metric alias; requesting rebirth",
-			"group", ns.group, "node", ns.edge, "alias", m.Alias)
-		d.askRebirthLocked(ns)
+			msg, "group", ns.group, "node", ns.edge, "alias", m.Alias)
+		d.askRebirthLocked(ns, "unknown metric alias")
 		return "", "", false
 	}
 	return ref.Metric, ref.Device, true
@@ -1031,7 +1086,7 @@ func (d *Driver) sweepStale(now time.Time) {
 				"group", ns.group, "node", ns.edge, "silent", now.Sub(time.UnixMilli(ns.lastMs)))
 		}
 		ns.stale = true
-		d.askRebirthLocked(ns)
+		d.askRebirthLocked(ns, "node stale")
 	}
 	d.mu.Unlock()
 	d.flushRebirths()

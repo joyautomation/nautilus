@@ -184,7 +184,7 @@ format side by side.
 ## The `__Online` companion and `enable:`
 
 Each source gets a driver-synthesized `<source>__Online` BOOL input, true
-while its connection is up. It is present from `Start` — before any poll
+while the device answers. It is present from `Start` — before any poll
 has landed — so interlock logic can gate on it safely:
 
 ```
@@ -199,6 +199,60 @@ programs that read its tags. Their quality is `NotConnected`
 meanwhile. See [Inputs from a device that is
 down](/guides/tag-model/#inputs-from-a-device-that-is-down).
 
+What "answers" means:
+
+- `__Online` starts false and goes true on the first answer on a
+  connection, not when the TCP connection opens. A gateway that accepts
+  the connection and never replies is never online.
+- An answer is a reply, or any exception except the two gateway ones. An
+  exception such as 0x02 (illegal data address) is the device answering
+  about one span: the source stays online and only that block's tags go
+  `Bad`.
+- Exceptions 0x0A (gateway path unavailable) and 0x0B (gateway target
+  device failed to respond) mean the device behind the gateway did not
+  answer. The source goes offline (`__Online` false, its tags `Stale`),
+  while the connection to the gateway stays up, once every block's latest
+  read got one and the last three requests in a row did. One or two
+  misses (a single RS-485 timeout or CRC error behind the gateway) do not
+  count. The next answer brings it back.
+- With blocks in different scan classes, a slow block whose last read
+  answered keeps the source online until it is read again.
+- On a polled source only reads decide. A write's reply does not bring
+  the source online: it may come from the gateway itself, or from a
+  keep-alive the gateway confirms while the device's reads get 0x0B.
+- A write-only source (nothing polled) goes by its writes. With a
+  `rewrite:` keep-alive it starts offline and goes online when the first
+  re-assert is confirmed. Without one there is nothing to ask the device
+  until the program commands it, so it is online as soon as the
+  connection opens; a program that gates its commands on `__Online` can
+  still send the first one. Either way, three gateway no-answers to its
+  writes in a row take it offline, and a confirmed write brings it back.
+  Without `rewrite:`, nothing else asks the device, so a program that
+  sends commands only while `__Online` is true never sends the write that
+  would bring it back: keep commanding while offline, or add `rewrite:`.
+- A lost connection, or a source parked with `enable:`, is offline. A
+  source with nothing due for over a second (nothing polled and no
+  `rewrite:`, or a slow scan class) checks its socket once a second
+  without sending a request, and checks it again before sending on a
+  link that has been quiet for 100 ms or more. A reset connection is
+  noticed within about a second. A link cut silently (a pulled cable, a
+  dead switch) is caught by TCP keepalive, which the driver sets on
+  every connection: an idle link is declared dead within about 15 s.
+- A device that closes a connection cleanly (a FIN) while it is idle,
+  as many gateways do on an idle timeout, is not an outage, provided it
+  had kept the connection at least 100 ms. The driver reconnects at once,
+  with no backoff, and the source stays online with nothing counted;
+  the poll schedule carries on as before. Only if that reconnect fails
+  does the source go offline and count one outage. A device that hangs
+  up sooner than 100 ms after the connect (a crash-looping server, a
+  gateway out of connection slots) is an outage each time, with backoff;
+  every connection is checked once it is 100 ms old, so this is seen
+  promptly. A device whose idle timeout resets the connection (an RST)
+  instead of closing it counts an outage each time too.
+
+This is the meaning `__Online` has on the other drivers: true when the
+device is answering, not when a socket is open.
+
 A source may also name an `enable:` tag — any BOOL the project already
 declares. While it is false the source is **parked**: no connection is
 attempted, its tags hold their last values and report `Stale`
@@ -208,11 +262,16 @@ register write: it acts even while the write gate is closed, and it appears
 in `OutputNames()` alongside the writable bindings.
 
 Each source also gets `<source>__Outages`, a DINT input: the number of
-times `__Online` has gone false since nautilus started. The first connect
-is not an outage, and a source that has not connected yet has had none.
-A fall counts only when the device had answered a read or a write on that
-connection, so a gateway that accepts the connection and never replies
-does not count, however often the driver reconnects. Stopping nautilus
+times `__Online` has fallen from true to false since nautilus started.
+Since `__Online` goes true only on an answer, the first connect is not an
+outage, a source that has not answered yet has had none, and a gateway
+that accepts the connection and never replies does not count, however
+often the driver reconnects. A gateway whose field device stops
+answering (0x0A or 0x0B on every block, three requests in a row) counts
+one. A write-only source without `rewrite:` is online from the connect,
+so losing its connection counts, even while it sends nothing; a device
+closing it cleanly on an idle timeout does not, as long as it takes the
+reconnect. Stopping nautilus
 does not count. Parking a source with `enable:` counts, because
 `__Online` goes false.
 The counter only goes up, so a program that compares it with last scan's
@@ -228,18 +287,27 @@ Modbus has two entirely different kinds of failure, and the driver treats
 them differently on purpose.
 
 **An exception response** — the device answered and refused: illegal data
-address, illegal function, gateway target failed to respond. The connection
+address, illegal function, server busy. The connection
 is fine and *this span of addresses* is wrong. That block's tags go `Bad`,
 its siblings on the same device stay Good, and the driver keeps polling —
 it does not reconnect over a bad register map. Three consecutive exceptions
 park just that block for one `retrymin` period so a permanently illegal
 address stops burning a request slot every cycle; it retries after that.
-The refusal surfaces as `badBlocks` on the device row.
+The refusal surfaces as `badBlocks` on the device row. The gateway
+exceptions 0x0A and 0x0B are handled the same way per block, but they say
+the device did not answer at all: when every block gets one, the source
+goes offline and its tags `Stale` (see the `__Online` companion above).
 
 **A transport failure** — dial refused, timeout, a short read, a response
-carrying the wrong unit id. The whole source is down: the driver drops the
-connection and reconnects with exponential backoff from `retrymin` (1s) to
-`retrymax` (60s), resetting on success. **Values hold.** The driver zeroes
+carrying the wrong unit id, an idle socket that was reset or that TCP
+keepalive gave up on, or a device that closed an idle connection and
+then refused the reconnect. The whole source is down: the driver drops
+the connection and reconnects with exponential backoff from `retrymin`
+(1s) to `retrymax` (60s). The ladder starts over once the device has
+answered on a connection, not when the dial succeeds, so a device that
+accepts connections and never answers keeps climbing it. An idle
+connection the device closes cleanly is not a failure: see the
+`__Online` rules above. **Values hold.** The driver zeroes
 and invents nothing; a tag delivered at least once reports `Stale` with
 its age, a tag never delivered reports `NotConnected` (the tag store holds
 its `init:` or zero for the logic meanwhile), and `<source>__Online` goes
@@ -263,7 +331,13 @@ would command every setpoint to zero. So the **first snapshot after `Start`
 is the baseline**: recorded, sent to nobody. Thereafter only a value that
 actually moved goes on the wire, once. A command raised while the source is
 down is queued per source (latest value per tag) and flushed on reconnect,
-counted as `queuedWrites` on the device row.
+counted as `queuedWrites` on the device row. If the link breaks partway
+through a flush, the write that broke and the ones after it are queued
+again. Writes the device confirmed or refused with an exception earlier in
+that flush are not re-sent, so a value another master has written to those
+registers since is left alone. Not so for a `rewrite:` binding: it
+re-asserts its last commanded value on connect and on every period, so it
+overwrites the other master's value anyway.
 
 **`rewrite:` is the exception, and it is a keep-alive.** Some devices watch
 a command register and fail safe if it stops moving — a safety controller's
@@ -271,7 +345,10 @@ enable word, a VFD control word, an IO-Link master's Modbus watchdog. A
 binding with `rewrite: 2.5s` re-asserts its last commanded value on that
 period even when nothing changed, and its baseline value *is* written on
 connect, because a watchdog that never sees a first write drops out
-immediately.
+immediately. After the quiet reconnect that follows a device closing an
+idle connection, nothing is written at once: the value is re-asserted
+when its period next falls due, as it would have been on the old
+connection.
 
 ```yaml
 - {tag: Tsp, address: 262, format: int32, scale: 0.1, writable: true, rewrite: 2.5s, init: 0.0}
@@ -285,7 +362,10 @@ after a restart — which is what you want almost always.
 
 Writes are **coalesced**: exactly adjacent register writes staged in one
 flush merge into a single FC16 run, adjacent coils into one FC15, and a
-lone register or coil goes as FC6 or FC5. Requests on a source are strictly
+lone register or coil goes as FC6 or FC5. A source's changed values from
+one scan are queued together, so a flush takes all of them or none: a run
+changed in one scan is never split across two frames by a poll that
+happened mid-scan. Requests on a source are strictly
 sequential — Modbus TCP permits pipelining by transaction id, but the
 gateways in the field do not, so one outstanding request is the default.
 
@@ -375,7 +455,15 @@ which is exactly what makes it unroutable next to another driver.
 
 With a `redundancy:` section, the driver's write gate is wired to leadership
 — commands leave the driver only on the leader, and a `SetWriteGate` func
-can compose a "logic healthy" signal into the same condition.
+can compose a "logic healthy" signal into the same condition. Leadership
+is checked again when queued commands go out: a replica that lost it
+during an outage drops what it queued, and so do the writes a broken
+flush put back. It is checked again before each write of a flush, so a
+long flush through a slow gateway stops sending once the gate closes. A
+dropped command is forgotten, so the first output push after the gate
+reopens sends the same value again. The runtime pushes on a takeover, so a
+replica that regains leadership sends at once; a gate that reopens without
+one (logic healthy again) waits for the next output change.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly

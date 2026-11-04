@@ -402,6 +402,12 @@ type DriverConfig struct {
 	// (default true) — births are not retained, so a host starting
 	// mid-stream sees nothing until it asks.
 	RebirthOnStart *bool `yaml:"rebirth-on-start"`
+	// RebirthRequests lets the host send NCMD Rebirth requests at all
+	// (default true): at connect, on reconnect, on data before a birth,
+	// after a sequence gap. false sends none, so with primary: false the
+	// host publishes nothing and runs on a read-only broker account; it
+	// still adopts the births another host asks for.
+	RebirthRequests *bool `yaml:"rebirth-requests"`
 
 	// opcua-client: the OPC UA client driver, polling one server (manifest,
 	// scan-rate, scan-classes and tag-classes shared with eip and modbus;
@@ -1493,14 +1499,15 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			Username:  d.Username,
 			Password:  os.Getenv("NAUTILUS_MQTT_PASSWORD"),
 			Keepalive: time.Duration(d.Keepalive),
-			// primary: and rebirth-on-start: both DEFAULT TRUE, so they are
-			// pointers here — an absent key is "yes", and only an explicit
-			// `false` opts out.
-			Primary:          d.Primary == nil || *d.Primary,
-			StateForm:        d.StateForm,
-			ReorderTimeout:   time.Duration(d.ReorderTimeout),
-			StaleAfter:       time.Duration(d.StaleAfter),
-			NoRebirthOnStart: d.RebirthOnStart != nil && !*d.RebirthOnStart,
+			// primary:, rebirth-on-start: and rebirth-requests: all DEFAULT
+			// TRUE, so they are pointers here — an absent key is "yes", and
+			// only an explicit `false` opts out.
+			Primary:           d.Primary == nil || *d.Primary,
+			StateForm:         d.StateForm,
+			ReorderTimeout:    time.Duration(d.ReorderTimeout),
+			StaleAfter:        time.Duration(d.StaleAfter),
+			NoRebirthOnStart:  d.RebirthOnStart != nil && !*d.RebirthOnStart,
+			NoRebirthRequests: d.RebirthRequests != nil && !*d.RebirthRequests,
 		}
 		opts := []sphost.Option{sphost.WithLogger(slog.Default().With("driver", "sparkplug-host"))}
 		if d.OnUnknown != "" {

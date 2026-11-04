@@ -9,7 +9,7 @@
 // Bundle under test: env DIAGRAM_BUNDLE, else ../media/dist (the repo build).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recordClips, applyThemeJs, Browser, sleep, open, withPage, deliver, posted, reset, center, text, key, del, esc, clickAt, ctrlClick, FBD, byId, node, fbdOps, edgePoint, LD, ldOps, paletteBtn, SFC, sfcOps, ctrlKey, FBD_SRC, sfcStepPt, ready, restores, wheel, zoomPct, zoomBtn, rect, stepCenter, LD_LONG, TALL, css, FBD_PID, btnByText, typeText } from './diagram-helpers.mjs';
+import { recordClips, applyThemeJs, Browser, sleep, open, withPage, deliver, posted, reset, center, text, key, del, esc, clickAt, ctrlClick, FBD, byId, node, fbdOps, edgePoint, LD, ldOps, paletteBtn, SFC, sfcOps, ctrlKey, FBD_SRC, sfcStepPt, ready, restores, wheel, zoomPct, zoomBtn, rect, stepCenter, LD_LONG, TALL, css, FBD_PID, btnByText, typeText, waitUntil, opsPosted, settled } from './diagram-helpers.mjs';
 
 // GESTURE_CLIPS=<dir> records each test's run as <dir>/diagram/NN-<slug>.mp4.
 recordClips('diagram');
@@ -21,7 +21,7 @@ test('FBD: deleting two selected notes posts ONE batched deleteNode (ordinal ids
 		await ctrlClick(b, await center(b, byId('comment', 'cm:1')));
 		await reset(b);
 		await del(b);
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'deleteNode');
 		assert.deepEqual([...ops[0].nodes].sort(), ['cm:0', 'cm:1']);
@@ -34,7 +34,7 @@ test('FBD: deleting a wired coil posts no disconnects for its own edges', async 
 		await clickAt(b, await center(b, byId('chip', 'c:Y')));
 		await reset(b);
 		await del(b);
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 1);
 		assert.deepEqual(ops, [{ type: 'deleteNode', nodes: ['c:Y'] }]);
 	});
 });
@@ -46,7 +46,7 @@ test('FBD: disconnecting two inputs of one block goes highest pin first', async 
 		await ctrlClick(b, await edgePoint(b, 'b:c.Y', 'IN2'));
 		await reset(b);
 		await del(b);
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 2);
 		assert.deepEqual(ops.map((o) => `${o.type} ${o.toPin}`), ['disconnect IN2', 'disconnect IN1']);
 	});
 });
@@ -57,15 +57,15 @@ test('FBD: arrow-key moves persist as ONE setLayout once the keys settle', async
 		await clickAt(b, await center(b, node('cm:2')));
 		// A loaded CI runner can lag the selection; the keys only move a
 		// selected node, so wait for it rather than racing it.
-		for (let i = 0; i < 50 && !(await b.eval(`!!document.querySelector(${JSON.stringify(node('cm:2'))})?.classList.contains('selected')`)); i++) await sleep(100);
+		await waitUntil(() => b.eval(`!!document.querySelector(${JSON.stringify(node('cm:2'))})?.classList.contains('selected')`), Boolean, { what: 'cm:2 selected' });
 		await reset(b);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowDown', 'ArrowDown', 40);
-		// The move persists 350 ms after the last key; poll instead of a fixed sleep.
-		for (let i = 0; i < 50 && (await fbdOps(b)).length === 0; i++) await sleep(100);
+		// The move persists 350 ms after the last key: wait for it.
+		await opsPosted(b, fbdOps);
 		await sleep(600); // and let any (wrong) second batch show up
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'setLayout');
 		assert.equal(ops[0].entries.length, 1);
@@ -79,7 +79,7 @@ test('FBD: null arrays (older CLI) render without crashing; blank file offers in
 		assert.match(await text(b), /Empty file/);
 		await reset(b);
 		await clickAt(b, await center(b, '.blank button'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'init', pou: 'Heater2' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'init', pou: 'Heater2' }]);
 	});
 });
 
@@ -88,7 +88,7 @@ test('Ladder: empty body (rungs null) renders the palette; + rung works', async 
 		await deliver(b, { type: 'ldModel', model: { name: 'P', rungs: null }, title: 'p.ld' });
 		await reset(b);
 		await clickAt(b, await paletteBtn(b, '+ rung'));
-		assert.deepEqual(await ldOps(b), [{ type: 'addRung', name: 'rung1', after: '' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'addRung', name: 'rung1', after: '' }]);
 	});
 });
 
@@ -97,7 +97,7 @@ test('Ladder: a blank file seeds with the file name on the first op', async () =
 		await deliver(b, { type: 'ldModel', model: { name: '', rungs: [], blank: true }, title: 'interlock.ld' });
 		await reset(b);
 		await clickAt(b, await paletteBtn(b, '+ rung'));
-		assert.deepEqual(await ldOps(b), [{ type: 'addRung', name: 'rung1', after: '', pou: 'Interlock' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'addRung', name: 'rung1', after: '', pou: 'Interlock' }]);
 	});
 });
 
@@ -108,7 +108,7 @@ test('Ladder: click a rung name, Del deletes the rung', async () => {
 		await clickAt(b, names[1]);
 		await reset(b);
 		await del(b);
-		assert.deepEqual(await ldOps(b), [{ type: 'deleteRung', rung: 'r2' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'deleteRung', rung: 'r2' }]);
 	});
 });
 
@@ -123,7 +123,7 @@ test('Ladder: the FB… picker names a TON / CTU instance with the first free na
 			await key(b, 'Enter', 'Enter', 13); // picks the type, focus → instance
 			await key(b, 'Enter', 'Enter', 13); // inserts
 		}
-		const ops = await ldOps(b);
+		const ops = await opsPosted(b, ldOps, 2);
 		assert.equal(ops[0].inst, 't2'); // t1 is taken by rung r1
 		assert.equal(ops[1].inst, 'c2'); // c1 is a header variable
 	});
@@ -232,7 +232,7 @@ test('SFC: empty chart (null arrays) — + step, first field focused, Enter adds
 		assert.equal(await b.eval(`document.activeElement?.tagName`), 'INPUT');
 		await reset(b);
 		await key(b, 'Enter', 'Enter', 13);
-		assert.deepEqual(await sfcOps(b), [{ type: 'addStep', name: 'Step1', initial: true }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'addStep', name: 'Step1', initial: true }]);
 		assert.equal(await b.eval(`document.querySelectorAll('.addform').length`), 0);
 	});
 });
@@ -259,7 +259,7 @@ test('SFC: after the float editor closes, Del works without another click', asyn
 		await esc(b);
 		await reset(b);
 		await del(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'deleteStep', step: 'st:Spare' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'deleteStep', step: 'st:Spare' }]);
 	});
 });
 
@@ -272,7 +272,7 @@ test('FBD: Ctrl+C / Ctrl+V duplicates in place; Ctrl+X deletes, and its paste re
 		await ctrlKey(b, 'c');
 		assert.deepEqual(await fbdOps(b), [], 'a copy posts nothing');
 		await ctrlKey(b, 'v');
-		let ops = await fbdOps(b);
+		let ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'duplicate');
 		assert.deepEqual([...ops[0].nodes].sort(), ['b:c.Y', 'c:Y']);
@@ -280,13 +280,13 @@ test('FBD: Ctrl+C / Ctrl+V duplicates in place; Ctrl+X deletes, and its paste re
 
 		await reset(b);
 		await ctrlKey(b, 'x');
-		ops = await fbdOps(b);
+		ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'deleteNode');
 		assert.deepEqual([...ops[0].nodes].sort(), ['b:c.Y', 'c:Y']);
 		await reset(b);
 		await ctrlKey(b, 'v');
-		ops = await fbdOps(b);
+		ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'duplicate');
 		assert.equal(ops[0].text, FBD_SRC, 'a cut pastes from the snapshot');
@@ -331,7 +331,7 @@ test('SFC: Ctrl-click multi-selects steps; copy/paste posts ONE pasteSteps with 
 		await reset(b);
 		await ctrlKey(b, 'c');
 		await ctrlKey(b, 'v');
-		const ops = await sfcOps(b);
+		const ops = await opsPosted(b, sfcOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'pasteSteps');
 		assert.deepEqual(ops[0].steps.map((s) => s.name), ['Idle', 'Run']);
@@ -347,11 +347,11 @@ test('SFC: Ctrl+X cuts the selected steps (and the transitions between them) in 
 		await ctrlClick(b, await sfcStepPt(b, 'Run'));
 		await reset(b);
 		await ctrlKey(b, 'x');
-		assert.deepEqual(await sfcOps(b), [{ type: 'deleteSelection', nodes: ['st:Idle', 'st:Run', 'tr:7'] }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'deleteSelection', nodes: ['st:Idle', 'st:Run', 'tr:7'] }]);
 		await reset(b);
 		await clickAt(b, await paletteBtn(b, '⎘'));
 		await sleep(500);
-		const ops = await sfcOps(b);
+		const ops = await opsPosted(b, sfcOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'pasteSteps');
 	});
@@ -365,7 +365,7 @@ test('SFC: Ctrl+A then Del deletes every step and transition as ONE op', async (
 		assert.equal(await b.eval(`document.querySelectorAll('.step.selected').length`), 3);
 		await reset(b);
 		await del(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'deleteSelection', nodes: ['st:Idle', 'st:Run', 'st:Spare', 'tr:7'] }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'deleteSelection', nodes: ['st:Idle', 'st:Run', 'st:Spare', 'tr:7'] }]);
 	});
 });
 
@@ -404,7 +404,7 @@ test('SFC: the vars panel declares/deletes with the payload `naut sfc edit` acce
 		await clickAt(b, nameIn);
 		for (const ch of 'Lvl') await b.send('Input.insertText', { text: ch });
 		await key(b, 'Enter', 'Enter', 13);
-		const ops = await sfcOps(b);
+		const ops = await opsPosted(b, sfcOps, 2);
 		assert.deepEqual(ops[0], { type: 'deleteVar', name: 'go' });
 		assert.equal(ops[1].type, 'declareVar');
 		assert.equal(ops[1].name, 'Lvl');
@@ -430,6 +430,8 @@ test('Restore: legacy state (the bare model message) still restores', async () =
 	await withPage(
 		async (b) => {
 			await sleep(250);
+			await waitUntil(() => ready(b), (r) => r.length > 0, { what: 'ready' });
+			await settled(b);
 			assert.equal((await ready(b)).length, 1);
 			assert.ok(await center(b, node('b:c.Y')));
 		},
@@ -573,7 +575,7 @@ test('Ladder zoom: a palette drop and a node drag still hit their spots at 173%'
 		await b.mouseMove(target.x, target.y);
 		await b.mouseUp(target.x, target.y);
 		await sleep(150);
-		const ops = await ldOps(b);
+		const ops = await opsPosted(b, ldOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.deepEqual({ type: ops[0].type, rung: ops[0].rung, neg: ops[0].neg, index: ops[0].index }, { type: 'insert', rung: 'r2', neg: true, index: 0 });
 		// Drag r1's contact `a` onto the same spot: a move to r2 index 0.
@@ -584,7 +586,7 @@ test('Ladder zoom: a palette drop and a node drag still hit their spots at 173%'
 		await b.mouseMove(target.x, target.y);
 		await b.mouseUp(target.x, target.y);
 		await sleep(150);
-		const mv = await ldOps(b);
+		const mv = await opsPosted(b, ldOps, 1);
 		assert.equal(mv.length, 1, JSON.stringify(mv));
 		assert.equal(mv[0].type, 'move');
 		assert.equal(mv[0].toRung, 'r2');
@@ -613,7 +615,6 @@ test('Ladder zoom: the float editor opens ON the element it edits', async () => 
 test('SFC zoom: an overflowing chart fits on first load; a saved zoom is restored instead', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'sfcModel', model: TALL, title: 'long.sfc' });
-		await sleep(150);
 		const z = parseInt(await zoomPct(b)) / 100;
 		assert.ok(z < 1 && z >= 0.5, `fitted, but no smaller than the legible 50% floor (${z})`);
 		assert.ok(Math.abs((await b.eval('window.__STATE__')).zoom.sfc - z) < 0.01);
@@ -627,7 +628,6 @@ test('SFC zoom: an overflowing chart fits on first load; a saved zoom is restore
 	await withPage(
 		async (b) => {
 			await deliver(b, { type: 'sfcModel', model: TALL, title: 'long.sfc' });
-			await sleep(150);
 			assert.equal(await zoomPct(b), '150%', 'the saved zoom wins over fit');
 		},
 		{ state: { zoom: { sfc: 1.5 } } }
@@ -652,7 +652,7 @@ test('SFC zoom: step drag and connect rubber band stay under the cursor at 200%'
 		await b.mouseMove(spare.x + 100, spare.y + 40);
 		await b.mouseUp(spare.x + 100, spare.y + 40);
 		await sleep(150);
-		const ops = await sfcOps(b);
+		const ops = await opsPosted(b, sfcOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'setLayout');
 		assert.ok(Math.abs(ops[0].x - (before.e + 100 / z)) <= 1.5, JSON.stringify({ op: ops[0], before }));
@@ -674,7 +674,7 @@ test('SFC zoom: step drag and connect rubber band stay under the cursor at 200%'
 		assert.ok(await b.eval(`!!document.querySelector('.step.connectTarget')`), 'Idle highlights as the drop target');
 		await b.mouseUp(idle.x, idle.y);
 		await sleep(150);
-		assert.deepEqual(await sfcOps(b), [{ type: 'addTransition', from: ['Run'], to: ['Idle'], cond: 'TRUE' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'addTransition', from: ['Run'], to: ['Idle'], cond: 'TRUE' }]);
 	});
 });
 
@@ -729,24 +729,23 @@ test('Theme: high contrast draws focus on the diagram surface', async () => {
 test('FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await sleep(300);
 		const scale = () => b.eval(`new DOMMatrix(getComputedStyle(document.querySelector('.svelte-flow__viewport')).transform).a`);
 		const z0 = await scale();
 		await clickAt(b, await center(b, node('c:Y')));
 		await reset(b);
 		// (A small diagram fits at the 2× max: go out first.)
 		await key(b, '-', 'Minus', 189, 2);
-		await sleep(400);
+		await settled(b);
 		const z1 = await scale();
 		assert.ok(z1 < z0 * 0.95, `zoomed out ${z0} → ${z1}`);
 		await key(b, '-', 'Minus', 189, 2);
-		await sleep(400);
+		await settled(b);
 		await key(b, '=', 'Equal', 187, 2);
-		await sleep(400);
+		await settled(b);
 		const z2 = await scale();
 		assert.ok(z2 > z1 * 0.95 && z2 < z0, `zoomed back in ${z2}`);
 		await key(b, '0', 'Digit0', 48, 2);
-		await sleep(400);
+		await settled(b);
 		assert.ok(Math.abs((await scale()) - z0) < 0.02, 'Ctrl+0 fits again');
 		assert.deepEqual(await fbdOps(b), []);
 	});
@@ -769,7 +768,7 @@ test('FBD palette: "function block" places a PID with every input open, next fre
 		assert.match(await b.eval(`document.querySelector('.fbpick .hint').textContent`), /outputs: lic\.CV, lic\.SAT_HI/);
 		await reset(b);
 		await key(b, 'Enter', 'Enter', 13);
-		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: 'lic : PID(AUTO := _, PV := _, SP := _)' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'insertStatement', text: 'lic : PID(AUTO := _, PV := _, SP := _)' }]);
 		assert.equal(await b.eval(`document.querySelectorAll('.fbpick').length`), 0, 'palette closes');
 	});
 });
@@ -790,7 +789,7 @@ test('FBD palette: output reference takes an FB output as its source — one sta
 		await b.eval(`(${field('source')}).value = 'pid1.CV', (${field('source')}).dispatchEvent(new Event('input', { bubbles: true }))`);
 		await reset(b);
 		await clickAt(b, await btnByText(b, '.actions button', 'insert'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: 'SpeedRef := pid1.CV' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'insertStatement', text: 'SpeedRef := pid1.CV' }]);
 	});
 });
 
@@ -805,6 +804,6 @@ test('FBD: double-clicking an FB header renames the instance; the body inspects 
 		await typeText(b, 'lic');
 		await reset(b);
 		await key(b, 'Enter', 'Enter', 13);
-		assert.deepEqual(await fbdOps(b), [{ type: 'rename', node: 'f:pid1', newName: 'lic' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'rename', node: 'f:pid1', newName: 'lic' }]);
 	});
 });

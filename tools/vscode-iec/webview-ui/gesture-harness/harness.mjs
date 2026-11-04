@@ -10,6 +10,7 @@
 // focus, pointer capture, hit-testing or preview-vs-commit geometry.
 
 import { Browser } from './cdp.mjs';
+import { waitUntil, settled } from './wait.mjs';
 import { mkdtempSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -68,11 +69,9 @@ export class Editor {
 			}
 			await ed.deliver({ type: 'previewDoc', sidecar: 'harness.component.json', hasSidecar: true, ...doc });
 			// The ports overlay draws once the render has been measured.
-			for (let i = 0; i < 100; i++) {
-				if (await b.eval(`!!document.querySelector('svg.ports')`)) break;
-				await sleep(50);
-			}
+			await waitUntil(() => b.eval(`!!document.querySelector('svg.ports')`), Boolean, { what: 'the ports overlay (svg.ports)' });
 			await sleep(100);
+			await settled(b);
 			return ed;
 		}
 		// Wait for the bundle to say it is listening. NOT __ready(): that also
@@ -93,12 +92,12 @@ export class Editor {
 		await ed.deliver({ type: 'mimicConfig', snapToGrid: true });
 		await ed.deliver({ type: 'mimicTags', tags: null });
 
-		// Wait until both equipment boxes have rendered.
-		for (let i = 0; i < 100; i++) {
-			if ((await b.eval('window.__eqRects().length')) >= 2) break;
-			await sleep(50);
-		}
-		await sleep(80); // let ResizeObserver settle scale + ports project
+		// Wait until the equipment boxes have rendered (two, or as many as
+		// the doc has).
+		const boxes = Math.min(2, doc?.equipment?.length ?? 0);
+		await waitUntil(() => b.eval('window.__eqRects().length'), (n) => n >= boxes, { what: `${boxes} equipment boxes` });
+		await sleep(80);
+		await settled(b); // the ResizeObserver rescale and the ports projection
 		return ed;
 	}
 
@@ -192,6 +191,7 @@ export class Editor {
 	async setDoc(doc) {
 		await this.deliver({ type: 'mimicDoc', doc, title: 'harness.mimic.json' });
 		await sleep(60);
+		await settled(this.b);
 	}
 
 	// ── gesture layer ─────────────────────────────────────────────────────────
