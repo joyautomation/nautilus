@@ -745,6 +745,11 @@
             "minLength": 1
           },
           "description": "Globs over tag names or UDT member paths (TempSP, *_SP, Pump*.SpeedSP) that a trusted OPC UA client may write: a session on a SignAndEncrypt channel whose certificate is in pki/trusted. A pattern on a tag opens its members. Inputs are never writable. The same globs and rule as sparkplug.writable, but its own list. Omit and the server is read-only."
+        },
+        "anonymous-writes": {
+          "type": "boolean",
+          "default": false,
+          "description": "Lab only: let an anonymous client on the None endpoint, with no certificate, write the tags writable opens, as a trusted client does (for simulators such as PLC-Lab or Factory I/O). Writable still decides what is writable. naut run logs a warning at start, an error when the endpoint listens beyond loopback. Never on a plant network."
         }
       }
     },

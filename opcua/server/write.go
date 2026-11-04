@@ -6,7 +6,11 @@
 // trust list (pki.go, checked at every OpenSecureChannel, renewals
 // included). The trust list is read again on each Write request, so a
 // certificate taken out of trusted/ stops writing at once rather than at
-// the channel's next renewal. Anonymous on None reads, never writes.
+// the channel's next renewal. Anonymous on None reads, never writes,
+// unless opcua.anonymous-writes is on (a lab switch, design §7 decision 9):
+// then every session on the None endpoint is a writer too, with exactly
+// the same checks below, the same front door and the same audit, which
+// marks the writer anonymous since it has no certificate to name.
 //
 // What may be written. A Variable's Value, when the tag or member (or an
 // ancestor of it) matches opcua.writable and its root is not an input.
@@ -80,9 +84,10 @@ const maxLoggedNode = 96
 // writable, who is a writer, the standby gate, the counters and the
 // refusal log. It outlives a Stop/Start, so the counters do too.
 type writeAccess struct {
-	patterns writable.Patterns
-	pki      *PKI // nil without secure endpoints: then nobody is a writer
-	log      *slog.Logger
+	patterns  writable.Patterns
+	pki       *PKI // nil without secure endpoints: then nobody is a writer
+	anonymous bool // opcua.anonymous-writes: a session on None is a writer too
+	log       *slog.Logger
 
 	gate atomic.Pointer[func() bool]
 
@@ -102,21 +107,54 @@ type client struct {
 	uri        string // the ApplicationURI in the client certificate
 	thumbprint string // short: the first 16 hex digits
 	remote     string
-	writer     bool   // a SignAndEncrypt channel from a trusted, valid certificate
+	writer     bool   // a SignAndEncrypt channel from a trusted, valid certificate, or anonymous below
+	anonymous  bool   // a writer on the None endpoint, by opcua.anonymous-writes
 	revoked    bool   // a writer's channel whose certificate no longer is
 	why        string // why revoked
+}
+
+// logArgs is a write's audit or refusal line's attributes: args, then
+// who the client is, with anonymous=true for an anonymous writer (it has
+// no certificate to name, only its address).
+func (c client) logArgs(args ...any) []any {
+	args = append(args, "session", c.session, "client", c.uri, "thumbprint", c.thumbprint, "remote", c.remote)
+	if c.anonymous {
+		args = append(args, "anonymous", true)
+	}
+	return args
 }
 
 // channelWriter reports whether sc is a writer's channel: SignAndEncrypt
 // under a secure policy, which the server opens only for a certificate in
 // the trust list (uasc's checkOpen calls VerifyPeer on every OPN, renewals
-// included). Without a PKI no secure endpoint exists and nobody writes.
+// included). Without a PKI no secure endpoint exists and nobody writes,
+// unless anonymous writes are on: then the None endpoint's channels are
+// writers' too (anonymousChannel).
 func (w *writeAccess) channelWriter(sc *uasc.SecureChannel) bool {
-	if w == nil || w.pki == nil || sc == nil {
+	if w == nil || sc == nil {
+		return false
+	}
+	if w.anonymousChannel(sc) {
+		return true
+	}
+	if w.pki == nil {
 		return false
 	}
 	p := sc.SecurityPolicyURI()
 	return sc.SecurityMode() == ua.MessageSecurityModeSignAndEncrypt && p != "" && p != ua.SecurityPolicyURINone && len(sc.RemoteCertificate()) > 0
+}
+
+// anonymousChannel reports whether sc is a writer's channel only by
+// opcua.anonymous-writes: the switch is on and sc is unsecured (policy
+// None, mode None: the one unsecured endpoint the server offers). A
+// certificate a client sends on it changes nothing and is not checked, as
+// on a read-only None channel.
+func (w *writeAccess) anonymousChannel(sc *uasc.SecureChannel) bool {
+	if w == nil || !w.anonymous || sc == nil {
+		return false
+	}
+	p := sc.SecurityPolicyURI()
+	return sc.SecurityMode() == ua.MessageSecurityModeNone && (p == "" || p == ua.SecurityPolicyURINone)
 }
 
 // who identifies the client of a request on sc. For a writer's channel it
@@ -126,7 +164,7 @@ func (w *writeAccess) channelWriter(sc *uasc.SecureChannel) bool {
 // and reads UserAccessLevel CurrentRead. One that cannot be parsed is no
 // writer's.
 func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua.RequestHeader) client {
-	c := client{writer: w.channelWriter(sc)}
+	c := client{writer: w.channelWriter(sc), anonymous: w.anonymousChannel(sc)}
 	if hdr != nil && srv != nil {
 		if sess := srv.Session(hdr); sess != nil && sess.ID != nil {
 			c.session = sess.ID.String()
@@ -139,13 +177,16 @@ func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua
 		c.remote = a.String()
 	}
 	leaf := leafCert(sc.RemoteCertificate())
-	if leaf != nil {
+	// An anonymous writer is named by its address alone: a certificate on
+	// an unsecured channel proves nothing, so it names no one in the audit
+	// (and a client cannot spread its refusal budget over certificates).
+	if leaf != nil && !c.anonymous {
 		c.thumbprint = Thumbprint(leaf.Raw)[:16]
 		if len(leaf.URIs) > 0 {
 			c.uri = leaf.URIs[0].String()
 		}
 	}
-	if c.writer {
+	if c.writer && !c.anonymous {
 		if why := certStanding(leaf, w.pki.trusted, time.Now()); why != "" {
 			c.writer, c.revoked, c.why = false, true, why
 		}
@@ -252,7 +293,8 @@ func (ns *namespace) accessLevel(m member) ua.AccessLevelType {
 }
 
 // userAccessLevel is the UserAccessLevel a session reads for nid: the
-// node's AccessLevel for a writer, CurrentRead for anyone else. ok is false
+// node's AccessLevel for a writer (an anonymous one on None included, with
+// opcua.anonymous-writes), CurrentRead for anyone else. ok is false
 // when nid is not one of this namespace's Variables.
 func (ns *namespace) userAccessLevel(nid *ua.NodeID, writer bool) (ua.AccessLevelType, bool) {
 	m, ok := ns.resolve(nid)
@@ -331,8 +373,7 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		if m, ok := ns.resolve(req.NodesToWrite[i].NodeID); ok {
 			after = m
 		}
-		w.log.Info("opcua: write", "node", paths[i], "old", shown(olds[k]), "new", shown(after),
-			"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+		w.log.Info("opcua: write", cl.logArgs("node", paths[i], "old", shown(olds[k]), "new", shown(after))...)
 	}
 	var refused []refusal
 	for i, code := range results {
@@ -393,7 +434,7 @@ func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl clie
 	// tag: Bad_UserAccessDenied, as every Value write of a tag answered
 	// before writes existed. A writer learns whether the tag is open.
 	if !cl.writer {
-		return ua.StatusBadUserAccessDenied, m, nil, "not a writer session: writes need a SignAndEncrypt channel from a trusted client certificate"
+		return ua.StatusBadUserAccessDenied, m, nil, "not a writer session: writes need a SignAndEncrypt channel from a trusted client certificate (or, in a lab, opcua.anonymous-writes)"
 	}
 	root, _ := ir.SplitAddress(m.addr)
 	if ns.isInput(root) {
@@ -569,8 +610,7 @@ func (w *writeAccess) refuse(cl client, rs []refusal) {
 		reason := statusName(r.code)
 		if r.known {
 			w.warnOnce(cl, cl.key()+"|"+r.node+"|"+reason, func() {
-				w.log.Warn("opcua: write refused", "node", r.node, "status", reason, "reason", r.detail,
-					"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+				w.log.Warn("opcua: write refused", cl.logArgs("node", r.node, "status", reason, "reason", r.detail)...)
 			})
 			continue
 		}
@@ -585,8 +625,7 @@ func (w *writeAccess) refuse(cl client, rs []refusal) {
 	for _, reason := range order {
 		g := groups[reason]
 		w.warnOnce(cl, cl.key()+"|"+reason, func() {
-			w.log.Warn("opcua: write refused", "node", clip(g.first.node), "items", g.n, "status", reason, "reason", g.first.detail,
-				"session", cl.session, "client", cl.uri, "thumbprint", cl.thumbprint, "remote", cl.remote)
+			w.log.Warn("opcua: write refused", cl.logArgs("node", clip(g.first.node), "items", g.n, "status", reason, "reason", g.first.detail)...)
 		})
 	}
 }
