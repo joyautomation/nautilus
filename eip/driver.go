@@ -2,6 +2,7 @@ package eip
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -66,7 +67,22 @@ type Driver struct {
 	wmu     sync.Mutex
 	pending map[string]any // queued writes (nautilus tag name -> desired value)
 	written map[string]any // last value successfully written (for on-change)
-	wkick   chan struct{}
+	// term counts the write gate's reopens (guarded by wmu). A flush notes
+	// it when it takes the queue and records, re-queues or forgets only
+	// while it is unchanged: a reopen in between has forgotten the
+	// previous term, and what that flush sent belongs to it.
+	term  uint64
+	wkick chan struct{}
+
+	// gateMu guards writeGate (SetWriteGate). gateShut is true from the
+	// first look that finds the gate closed to the first that finds it
+	// open again (see gateOpen), and turnMu serializes those transitions.
+	// wanted is the request OutputsWanted answers.
+	gateMu    sync.Mutex
+	writeGate func() bool
+	gateShut  atomic.Bool
+	turnMu    sync.Mutex
+	wanted    atomic.Bool
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -484,8 +500,12 @@ var _ nio.QualityReporter = (*Driver)(nil)
 
 // WriteOutputs queues changed values for the writer goroutine. Unknown or
 // non-writable names are ignored (the runtime hands us exactly the Outputs
-// list it was configured with).
+// list it was configured with). While the write gate is closed nothing is
+// queued (see SetWriteGate).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
+	if !d.gateOpen() {
+		return nil
+	}
 	d.wmu.Lock()
 	changed := false
 	for name, v := range vals {
@@ -511,6 +531,98 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	return nil
 }
 
+// ── write gate ───────────────────────────────────────────────────────
+
+// SetWriteGate installs the write gate: commands leave the driver only
+// while gate() is true. `naut run` wires it to redundancy leadership
+// (leader.Elector.IsLeader); io.Multi fans it out. Reads are unaffected.
+//
+// The gate is checked when a command is handed over (WriteOutputs) and
+// again when the queue is flushed, before every tag and every member
+// write of a struct: a replica that queued commands as leader while the
+// controller was down, or that a broken flush re-queued, must not send
+// them once the controller is back if it has lost leadership meanwhile
+// (#607, the Modbus driver's #595). A closed gate drops the queue, and the
+// rest of a flush it closes partway through; a dropped command is
+// forgotten and asked for again (OutputsWanted).
+//
+// While the gate is closed another replica may lead and write the same
+// tags, so nothing this driver wrote is trusted to still be there: the
+// first look that finds the gate open again forgets every written value
+// (and anything still queued from the previous term) and asks the runtime
+// for the outputs, so the next push sends every output with the
+// program's value, changed or not (#605, the Modbus driver's #600). A
+// struct then goes out member by member in full. The driver has no
+// start-up baseline, so a replica that started as a standby commands
+// every output on its first takeover too (#606).
+//
+// A func cannot say it changed, so the driver sees the gate close and
+// reopen by looking at it (gateOpen): on every WriteOutputs and flush,
+// at least once a second while connected, and on every connect attempt.
+// A gate that closes and reopens between two looks is not seen: one
+// shorter than about a second while connected, or than the reconnect
+// backoff (up to about 30 s) while the controller is down.
+func (d *Driver) SetWriteGate(gate func() bool) {
+	d.gateMu.Lock()
+	d.writeGate = gate
+	d.gateMu.Unlock()
+}
+
+// gateOpen reports whether commands may leave the driver right now. Every
+// call is also a look at the gate (see SetWriteGate): the first look that
+// finds it open again after one found it closed forgets every written and
+// queued value and asks for the outputs. Callers do not hold wmu.
+func (d *Driver) gateOpen() bool {
+	d.gateMu.Lock()
+	gate := d.writeGate
+	d.gateMu.Unlock()
+	if gate == nil {
+		return true
+	}
+	open := gate()
+	// Steady state is one atomic load. A transition is made under turnMu,
+	// and gateShut is cleared only AFTER the forget: a second looker that
+	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
+	// and so cannot queue against the previous term's written.
+	if shut := d.gateShut.Load(); shut == open {
+		d.turnMu.Lock()
+		switch {
+		case !open && !d.gateShut.Load():
+			d.gateShut.Store(true)
+		case open && d.gateShut.Load():
+			d.forgetWritten()
+			d.gateShut.Store(false)
+			d.wanted.Store(true)
+			d.log.Info("eip: write gate open again; every output goes out with the next push", "host", d.host)
+		}
+		d.turnMu.Unlock()
+	}
+	return open
+}
+
+// forgetWritten empties written and pending and starts a new term: no
+// value is the on-change reference any more, and no command from the
+// previous term is sent in this one.
+func (d *Driver) forgetWritten() {
+	d.wmu.Lock()
+	clear(d.written)
+	clear(d.pending)
+	d.term++
+	d.wmu.Unlock()
+}
+
+// OutputsWanted is the driver's io.OutputsRequester: true once after it
+// forgot commands (the write gate dropped them, or reopened), so the
+// runtime hands it every output on the next scan.
+func (d *Driver) OutputsWanted() bool {
+	return d.wanted.Load() && d.wanted.Swap(false)
+}
+
+var (
+	_ nio.OutputsRequester                   = (*Driver)(nil)
+	_ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
+)
+
 // ── connection / poll loop ──────────────────────────────────────────────
 
 type session struct {
@@ -526,6 +638,7 @@ func (d *Driver) run(ctx context.Context) {
 	backoff := time.Second
 	everConnected := false
 	for ctx.Err() == nil {
+		d.gateOpen() // a look (see SetWriteGate), on every connect attempt
 		sess, err := d.connect(ctx)
 		if err != nil {
 			d.setErr(err)
@@ -673,7 +786,9 @@ func (d *Driver) serve(ctx context.Context, sess *session) {
 	d.primed = true
 	d.mu.Unlock()
 	for {
-		wake := time.Duration(time.Hour)
+		// At least once a second, so the write gate is looked at (see
+		// SetWriteGate) when no class is due for longer than that.
+		wake := time.Second
 		now := time.Now()
 		for _, c := range d.classes {
 			if until := c.next.Sub(now); until < wake {
@@ -694,6 +809,7 @@ func (d *Driver) serve(ctx context.Context, sess *session) {
 				return
 			}
 		case <-timer.C:
+			d.gateOpen() // a look, even with nothing queued
 			if !d.flushWrites(ctx, sess) {
 				return
 			}
@@ -822,8 +938,42 @@ func (d *Driver) setErr(err error) {
 	d.mu.Unlock()
 }
 
-// flushWrites pushes pending writes to the controller. Returns false when
-// the connection broke.
+// errGateClosed stops a flush, or a struct write partway, when the write
+// gate has closed; errNewTerm when it has reopened since the flush took
+// its queue, whose commands that reopen forgot (they belong to the
+// previous term; the push that answers the reopen sends this term's).
+var (
+	errGateClosed = errors.New("eip: write gate closed")
+	errNewTerm    = errors.New("eip: write gate reopened")
+)
+
+// goOn looks at the gate before a write of the flush that took its queue
+// in term: nil to send it, errGateClosed or errNewTerm to stop.
+func (d *Driver) goOn(term uint64) error {
+	if !d.gateOpen() {
+		return errGateClosed
+	}
+	d.wmu.Lock()
+	defer d.wmu.Unlock()
+	if d.term != term {
+		return errNewTerm
+	}
+	return nil
+}
+
+// flushWrites pushes pending writes to the controller, in tag-name order.
+// Returns false when the connection broke.
+//
+// The gate is checked again here, not only when the command was queued: a
+// replica that lost leadership during an outage must not send what it
+// queued while it led, nor what a broken flush re-queued (#607). It is
+// checked before every tag and every member write of a struct, so a long
+// flush stops once the gate closes. Dropped commands are forgotten (not
+// kept as written) and asked for (OutputsWanted), so the push after the
+// gate reopens commands them again. A drop is not a failure: no error is
+// recorded. A flush that finds the gate reopened since it took its queue
+// sends none of the rest either: the reopen forgot them as the previous
+// term's, and the push that answers it sends this term's values.
 func (d *Driver) flushWrites(ctx context.Context, sess *session) bool {
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
@@ -832,20 +982,63 @@ func (d *Driver) flushWrites(ctx context.Context, sess *session) bool {
 	}
 	work := d.pending
 	d.pending = map[string]any{}
+	term := d.term
 	d.wmu.Unlock()
+	names := make([]string, 0, len(work))
+	for name := range work {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// drop forgets what this flush dropped. A tag WriteOutputs has queued
+	// again since is left to that command, and after a reopen (a new term)
+	// nothing of this flush's is left to forget.
+	drop := func(dropped []string) {
+		d.wmu.Lock()
+		if d.term == term {
+			for _, n := range dropped {
+				if _, again := d.pending[n]; !again {
+					delete(d.written, n)
+				}
+			}
+		}
+		d.wmu.Unlock()
+		d.wanted.Store(true) // the commands it dropped: ask for them
+		d.log.Warn("eip: write gate closed; queued writes dropped", "host", d.host, "count", len(dropped))
+	}
 
 	ok := true
-	for name, v := range work {
+	for i, name := range names {
+		v := work[name]
+		if err := d.goOn(term); err != nil {
+			if errors.Is(err, errGateClosed) {
+				drop(names[i:])
+			}
+			return true
+		}
 		b := d.byName[name]
-		if err := d.writeOne(ctx, sess, b, v); err != nil {
+		if err := d.writeOne(ctx, sess, b, v, term); err != nil {
+			if errors.Is(err, errGateClosed) {
+				// Some of the struct's members may have gone out: forgetting
+				// it makes the next write send every member.
+				drop(names[i:])
+				return true
+			}
+			if errors.Is(err, errNewTerm) {
+				return true // the reopen forgot it, and the rest
+			}
 			d.setErr(fmt.Errorf("write %s: %w", name, err))
 			d.log.Warn("eip: write failed", "tag", name, "device", b.Device, "error", err)
 			if sess.ctrl.Broken() {
-				// Requeue everything not yet attempted; retry after reconnect.
+				// Requeue the flush (every write in it, the ones that landed
+				// too: #608) and retry after reconnect. Not after a reopen:
+				// those were the previous term's.
 				d.wmu.Lock()
-				for n, pv := range work {
-					if _, exists := d.pending[n]; !exists {
-						d.pending[n] = pv
+				if d.term == term {
+					for n, pv := range work {
+						if _, exists := d.pending[n]; !exists {
+							d.pending[n] = pv
+						}
 					}
 				}
 				d.wmu.Unlock()
@@ -855,7 +1048,9 @@ func (d *Driver) flushWrites(ctx context.Context, sess *session) bool {
 			continue
 		}
 		d.wmu.Lock()
-		d.written[name] = v
+		if d.term == term {
+			d.written[name] = v
+		}
 		d.wmu.Unlock()
 	}
 	return ok
@@ -863,8 +1058,9 @@ func (d *Driver) flushWrites(ctx context.Context, sess *session) bool {
 
 // writeOne writes a single nautilus value to the device: elementary scalars
 // directly, struct values as per-leaf symbolic writes of the members that
-// changed since the last write (all members on the first write).
-func (d *Driver) writeOne(ctx context.Context, sess *session, b TagBinding, v any) error {
+// changed since the last write (all members on the first write), each
+// after a look at the gate (goOn) for the flush that took it in term.
+func (d *Driver) writeOne(ctx context.Context, sess *session, b TagBinding, v any, term uint64) error {
 	if code, isElem := elementaryCode(b.Type); isElem && b.ArrayLen == 0 {
 		data, err := logix.EncodeScalar(code, scalarOf(v))
 		if err != nil {
@@ -886,7 +1082,7 @@ func (d *Driver) writeOne(ctx context.Context, sess *session, b TagBinding, v an
 	if !ok {
 		return fmt.Errorf("eip: cannot write type %q", b.Type)
 	}
-	return d.writeStructLeaves(ctx, sess, b.Device, td, iv, prev)
+	return d.writeStructLeaves(ctx, sess, b.Device, td, iv, prev, term)
 }
 
 func (d *Driver) typeDef(name string) (TypeDef, bool) {
@@ -901,7 +1097,7 @@ func (d *Driver) typeDef(name string) (TypeDef, bool) {
 // writeStructLeaves walks manifest fields, writing changed elementary leaves
 // symbolically ("Device.Field.Sub"). Nested structs recurse; strings and
 // arrays inside structs are read-only for now.
-func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath string, td TypeDef, v ir.Value, prev *ir.Value) error {
+func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath string, td TypeDef, v ir.Value, prev *ir.Value, term uint64) error {
 	for i, f := range td.Fields {
 		if i >= len(v.Fld) {
 			break
@@ -920,13 +1116,16 @@ func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath s
 			if err != nil {
 				return fmt.Errorf("%s: %w", leaf, err)
 			}
+			if err := d.goOn(term); err != nil {
+				return err
+			}
 			if err := sess.ctrl.WriteTag(ctx, leaf, code, 1, data); err != nil {
 				return err
 			}
 			continue
 		}
 		if sub, ok := d.typeDef(f.Type); ok && f.ArrayLen == 0 {
-			if err := d.writeStructLeaves(ctx, sess, leaf, sub, fv, pv); err != nil {
+			if err := d.writeStructLeaves(ctx, sess, leaf, sub, fv, pv, term); err != nil {
 				return err
 			}
 		}
