@@ -72,14 +72,15 @@ func (b *modelBuilder) netIndex(id string) (int, error) {
 	return num - 1, nil
 }
 
-// networkLine renders a NETWORK line. A title cannot hold a quote (the
-// netlist's strings have no escapes) or a line break: a ' becomes ’.
+// networkLine renders a NETWORK line. A title is one line, and a ' in it
+// becomes ’ so the line reads plainly; a $ is written $$, the string escape
+// for itself.
 func networkLine(indent, title string) string {
 	title = strings.Join(strings.Fields(strings.ReplaceAll(title, "'", "’")), " ")
 	if title == "" {
 		return indent + "NETWORK\n"
 	}
-	return indent + "NETWORK '" + title + "'\n"
+	return indent + "NETWORK '" + strings.ReplaceAll(title, "$", "$$") + "'\n"
 }
 
 func (b *modelBuilder) opAddNetwork(op EditOp) ([]TextEdit, error) {

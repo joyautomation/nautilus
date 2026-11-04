@@ -172,7 +172,7 @@ func exprText(e st.Expression) string {
 	case *st.UnaryExpr:
 		return v.Op + exprText(v.Operand)
 	case *st.StringLit:
-		return "'" + v.Value + "'"
+		return st.QuoteString(v.Value)
 	}
 	return ""
 }

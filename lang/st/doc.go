@@ -18,9 +18,16 @@ package st
 // Lex(input) keeps returning only []Token for backward compatibility with
 // its existing callers (lang/st.Parse, lang/sfc, lang/fbd,
 // internal/project) — none of them were touched to add error plumbing.
-// Callers that want to observe lexical errors (currently just the
-// unterminated-comment case above) should call LexErrors(input) instead,
-// which returns the same token stream plus a []LexError.
+// Callers that want to observe lexical errors (the unterminated-comment
+// case above, and a string literal that is unterminated or holds an
+// unknown $ escape) should call LexErrors(input) instead, which returns the
+// same token stream plus a []LexError. Parse, and lang/fbd's netlist
+// parser, report the string errors (LexError.InString).
+//
+// String literals: '…' is a STRING and "…" a WSTRING (IEC 61131-3); a $
+// escape never closes either, and a string closes on its own line. A
+// TokenString's Literal is the raw text between the quotes and its Quote
+// the opening quote; UnquoteString gives the value, QuoteString writes one.
 //
 // Known gap this doesn't cover: internal/lsp/rename.go has its own
 // hand-rolled comment/string scanner (identOccurrences) used for

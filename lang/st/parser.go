@@ -21,8 +21,17 @@ func tokPos(tok Token) Pos { return Pos{Line: tok.Line, Col: tok.Col} }
 func (p *Parser) peekPos() Pos { return tokPos(p.peek()) }
 
 // Parse parses Structured Text source into a Program AST.
+//
+// A string literal the lexer could not read (unterminated, or an unknown $
+// escape) is an error here, at the literal: read on, it would swallow the
+// rest of its line as text and the parser would report something else.
 func Parse(source string) (*Program, error) {
-	tokens := Lex(source)
+	tokens, lexErrs := LexErrors(source)
+	for _, e := range lexErrs {
+		if e.InString {
+			return nil, fmt.Errorf("line %d:%d: %s", e.Pos.Line, e.Pos.Col, e.Msg)
+		}
+	}
 	p := &Parser{tokens: tokens}
 	return p.parseProgram()
 }
@@ -1214,7 +1223,7 @@ func (p *Parser) parsePrimary() (Expression, error) {
 		return &NumberLit{Value: digits, Base: base, Pos: pos}, nil
 	case TokenString:
 		p.advance()
-		return &StringLit{Value: tok.Literal, Pos: pos}, nil
+		return &StringLit{Value: UnquoteString(tok.Literal, tok.Quote), Pos: pos}, nil
 	case TokenTrue:
 		p.advance()
 		return &BoolLit{Value: true, Pos: pos}, nil
@@ -1424,9 +1433,12 @@ func buildTypedLit(raw string, pos Pos) Expression {
 		return &TypedLit{TypeName: typeName, Inner: &BoolLit{Value: false, Pos: pos}, Pos: pos}
 	}
 
-	// STRING#'hello' → strip the quotes and return a StringLit.
-	if (typeName == "STRING" || typeName == "WSTRING") && len(payload) >= 2 && payload[0] == '\'' && payload[len(payload)-1] == '\'' {
-		return &TypedLit{TypeName: typeName, Inner: &StringLit{Value: payload[1 : len(payload)-1], Pos: pos}, Pos: pos}
+	// STRING#'hello' / WSTRING#"hello" → strip the quotes, decode the $
+	// escapes, and return a StringLit.
+	if (typeName == "STRING" || typeName == "WSTRING") && len(payload) >= 2 {
+		if q := payload[0]; (q == '\'' || q == '"') && payload[len(payload)-1] == q {
+			return &TypedLit{TypeName: typeName, Inner: &StringLit{Value: UnquoteString(payload[1:len(payload)-1], q), Pos: pos}, Pos: pos}
+		}
 	}
 
 	// TIME#5s / LTIME#1h30m → TimeLit.

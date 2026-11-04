@@ -50,6 +50,18 @@ claims:
       The one-statement form declares the instance even when another block
       in the same file has a local of that name (#332).
 
+  - id: FBD-032
+    claim: >-
+      A string constant reads as in ST, '…' or "…" with $ escapes, and
+      nothing inside its quotes is an operator ("a&b" is a string, not
+      a & b); an unclosed string or an unknown escape is a parse error at
+      the string.
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestStringLiteralsAreNotOperators
+      - go ./lang/fbd TestBadStringLiteralSaysSo
+      - go ./lang/fbd TestNetworkTitleEscapes
+
   - id: FBD-004
     claim: >-
       The => output binding (ET => Elapsed) captures a non-BOOL pin into a

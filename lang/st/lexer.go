@@ -2,6 +2,7 @@ package st
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -16,15 +17,19 @@ type Lexer struct {
 	errs   []LexError
 }
 
-// LexError is a lexical-level error found while scanning input. Currently
-// the only case produced is an unterminated (possibly nested) block
-// comment. The lexer is best-effort: it keeps producing whatever tokens it
-// can and records errors on the side rather than aborting, so Lex's
+// LexError is a lexical-level error found while scanning input: an
+// unterminated (possibly nested) block comment, or a string literal that is
+// unterminated or holds an unknown $ escape. The lexer is best-effort: it
+// keeps producing whatever tokens it can and records errors on the side
+// rather than aborting, so Lex's
 // token-only signature (relied on by lang/sfc, lang/fbd, and
 // internal/project) never has to change shape.
 type LexError struct {
 	Pos Pos
 	Msg string
+	// InString marks an error inside a string literal (unterminated, or
+	// an unknown $ escape). Parse reports these; see Parse.
+	InString bool
 }
 
 func (e LexError) Error() string {
@@ -111,8 +116,8 @@ func (l *Lexer) lex() {
 			l.emit(TokenCaret, "^", 1)
 		case ch == '%' && isPartialPrefix(l.peek(1)) && isDigit(l.peek(2)):
 			l.lexPartial()
-		case ch == '\'':
-			l.lexString()
+		case ch == '\'' || ch == '"':
+			l.lexString(ch)
 		case isDigit(ch):
 			l.lexNumber()
 		case isIdentStart(ch):
@@ -191,17 +196,174 @@ func (l *Lexer) skipBlockComment() {
 	})
 }
 
-func (l *Lexer) lexString() {
-	l.advance(1) // skip opening '
+// lexString scans a character string literal, l.pos at its opening quote:
+// '…' is a STRING (IEC 61131-3 single-byte) and "…" a WSTRING (double-byte),
+// which nautilus holds as STRING. Neither form's text is ever scanned as
+// code, so `"a&b"` is one token, not a, &, b (nautilus#591). The token's
+// Literal is the raw source between the quotes, escapes undecoded, so its
+// source width stays len(Literal)+2; Quote says which quote opened it, and
+// UnquoteString gives the value. Line/Col are the opening quote's.
+func (l *Lexer) lexString(quote byte) {
+	line, col := l.line, l.col
+	lit := l.scanQuoted(quote)
+	l.tokens = append(l.tokens, Token{Type: TokenString, Literal: lit, Line: line, Col: col, Quote: quote})
+}
+
+// scanQuoted consumes a quoted string from its opening quote to its closing
+// one and returns the raw text between them. A `$` takes the next character
+// with it, so `$'` and `$"` never close the string. A string has to close on
+// its own line (IEC writes a line break as $N): one that reaches the end of
+// the line or the input first is reported, at its opening quote, and ends
+// there so the next line still lexes. A `$` not followed by one of the IEC
+// escapes is reported where it stands.
+func (l *Lexer) scanQuoted(quote byte) string {
+	line, col := l.line, l.col
+	l.advance(1) // opening quote
 	start := l.pos
-	for l.pos < len(l.input) && l.input[l.pos] != '\'' {
+	for {
+		if l.pos >= len(l.input) || l.input[l.pos] == '\n' {
+			l.errs = append(l.errs, LexError{
+				Pos:      Pos{Line: line, Col: col},
+				Msg:      fmt.Sprintf("unterminated string: close it with %c on the same line (write a line break as $N)", quote),
+				InString: true,
+			})
+			return l.input[start:l.pos]
+		}
+		ch := l.input[l.pos]
+		if ch == quote {
+			lit := l.input[start:l.pos]
+			l.advance(1)
+			return lit
+		}
+		if ch == '$' {
+			if n := escapeLen(l.input[l.pos:], quote); n > 0 {
+				l.advance(n)
+				continue
+			}
+			l.errs = append(l.errs, LexError{
+				Pos:      Pos{Line: l.line, Col: l.col},
+				Msg:      badEscapeMsg(quote),
+				InString: true,
+			})
+			if l.pos+1 < len(l.input) && l.input[l.pos+1] != '\n' {
+				l.advance(2) // a bad escape still never closes the string
+				continue
+			}
+		}
 		l.advance(1)
 	}
-	lit := l.input[start:l.pos]
-	if l.pos < len(l.input) {
-		l.advance(1) // skip closing '
+}
+
+// escapeLen is the source length of the IEC 61131-3 escape at the start of
+// s (which begins with '$') in a string opened by quote, or 0 when it is not
+// one: $$, $', $", $L, $N, $P, $R, $T (any case), and a character code, two
+// hex digits in a '…' STRING and four in a "…" WSTRING. The standard pairs
+// $' with '…' and $" with "…"; either is accepted in both, since neither is
+// ambiguous there.
+func escapeLen(s string, quote byte) int {
+	if len(s) < 2 {
+		return 0
 	}
-	l.tokens = append(l.tokens, Token{Type: TokenString, Literal: lit, Line: l.line, Col: l.col})
+	switch s[1] {
+	case '$', '\'', '"', 'L', 'l', 'N', 'n', 'P', 'p', 'R', 'r', 'T', 't':
+		return 2
+	}
+	digits := 2
+	if quote == '"' {
+		digits = 4
+	}
+	if len(s) < 1+digits {
+		return 0
+	}
+	for i := 1; i <= digits; i++ {
+		if !isHexDigit(s[i]) {
+			return 0
+		}
+	}
+	return 1 + digits
+}
+
+func badEscapeMsg(quote byte) string {
+	code := "$hh (two hex digits)"
+	if quote == '"' {
+		code = "$hhhh (four hex digits)"
+	}
+	return "unknown string escape: $ starts $$, $', $\", $L, $N, $P, $R, $T or " + code + "; write a dollar sign as $$"
+}
+
+// UnquoteString is the value of a string literal whose raw source text
+// (between the quotes, as a TokenString's Literal holds it) is raw, opened
+// by quote: each IEC 61131-3 escape becomes its character. $N is a line
+// feed, as on Codesys. A character code is a Unicode code point — $hh in a
+// '…' STRING is the Latin-1 character, $hhhh in a "…" WSTRING the UCS-2
+// one — held as UTF-8. Anything the lexer reported as a bad escape is kept
+// as written.
+func UnquoteString(raw string, quote byte) string {
+	if !strings.Contains(raw, "$") {
+		return raw
+	}
+	var b strings.Builder
+	for i := 0; i < len(raw); {
+		if raw[i] != '$' {
+			b.WriteByte(raw[i])
+			i++
+			continue
+		}
+		n := escapeLen(raw[i:], quote)
+		if n == 0 {
+			b.WriteByte('$')
+			i++
+			continue
+		}
+		switch c := raw[i+1]; c {
+		case '$', '\'', '"':
+			b.WriteByte(c)
+		case 'L', 'l', 'N', 'n':
+			b.WriteByte('\n')
+		case 'P', 'p':
+			b.WriteByte('\f')
+		case 'R', 'r':
+			b.WriteByte('\r')
+		case 'T', 't':
+			b.WriteByte('\t')
+		default:
+			code, _ := strconv.ParseUint(raw[i+1:i+n], 16, 32)
+			b.WriteRune(rune(code))
+		}
+		i += n
+	}
+	return b.String()
+}
+
+// QuoteString writes s as a '…' STRING literal that UnquoteString reads
+// back as s: $, ' and the control characters escaped, the rest as is.
+func QuoteString(s string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		switch r {
+		case '$':
+			b.WriteString("$$")
+		case '\'':
+			b.WriteString("$'")
+		case '\n':
+			b.WriteString("$N")
+		case '\f':
+			b.WriteString("$P")
+		case '\r':
+			b.WriteString("$R")
+		case '\t':
+			b.WriteString("$T")
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, "$%02X", r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 // lexNumber handles decimal integers, reals, exponents, and based integers (16#FF, 2#1010, 8#777).
@@ -268,15 +430,9 @@ func (l *Lexer) lexIdentOrKeyword() {
 		}
 		// STRING#'...' — wrap the string payload including quotes in the literal.
 		if upper == "STRING" || upper == "WSTRING" {
-			if l.pos < len(l.input) && l.input[l.pos] == '\'' {
+			if q := l.peek(0); q == '\'' || q == '"' {
 				pstart := l.pos
-				l.advance(1)
-				for l.pos < len(l.input) && l.input[l.pos] != '\'' {
-					l.advance(1)
-				}
-				if l.pos < len(l.input) {
-					l.advance(1) // closing quote
-				}
+				l.scanQuoted(q)
 				l.tokens = append(l.tokens, Token{Type: TokenTypedLiteral, Literal: upper + "#" + l.input[pstart:l.pos], Line: line, Col: col})
 				return
 			}

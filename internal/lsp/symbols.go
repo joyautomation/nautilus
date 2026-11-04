@@ -189,13 +189,8 @@ func (o *outliner) end(i int) Position {
 	// Strings and time literals drop part of their source text from
 	// Literal; measure those from the line instead.
 	switch t.Type {
-	case st.TokenString:
+	case st.TokenString: // Literal is the raw text between the quotes
 		w = len(t.Literal) + 2
-		if c := t.Col - 1; c >= 0 && c < len(line) {
-			if j := strings.IndexByte(line[c+1:], line[c]); j >= 0 {
-				w = j + 2
-			}
-		}
 	case st.TokenTimeLiteral, st.TokenTypedLiteral:
 		if c := t.Col - 1; c >= 0 && c < len(line) {
 			if j := strings.IndexByte(line[c:], '#'); j >= 0 && j+1+len(t.Literal) > w {
