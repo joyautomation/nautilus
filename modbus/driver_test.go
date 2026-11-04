@@ -327,7 +327,9 @@ func TestWriteCoalescingAndBaseline(t *testing.T) {
 
 // Rewrite re-asserts the last commanded value on its period and only there
 // — the non-rewrite binding stays change-only — and a closed write gate
-// stops the re-asserts so a device-side watchdog can trip.
+// stops the re-asserts so a device-side watchdog can trip. Once the gate
+// reopens they resume from the next push, which sends every output again
+// (#600).
 func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 	srv := newSlave(t)
 	u := srv.Unit(1)
@@ -374,7 +376,8 @@ func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 	}
 
 	// Close the gate: re-asserts stop (the device watchdog would now trip,
-	// by design). Reopen: they resume.
+	// by design). Reopen: the driver asks for the outputs, and the push
+	// that hands them over sends both and starts the re-asserts again.
 	d.SetWriteGate(func() bool { return false })
 	time.Sleep(60 * time.Millisecond) // drain any in-flight fire
 	quiet := len(rec.writes(FCWriteSingleRegister, 400))
@@ -383,8 +386,15 @@ func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 		t.Errorf("closed gate must stop re-asserts: %d → %d frames", quiet, now)
 	}
 	d.SetWriteGate(func() bool { return true })
+	waitFor(t, "the driver asks for the outputs", d.OutputsWanted)
+	if err := d.WriteOutputs(nio.Values{"KA": float64(7), "SP": float64(10)}); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, "re-asserts resume", func() bool {
-		return len(rec.writes(FCWriteSingleRegister, 400)) > quiet
+		return len(rec.writes(FCWriteSingleRegister, 400)) > quiet+1
+	})
+	waitFor(t, "the unchanged SP sent again", func() bool {
+		return len(rec.writes(FCWriteSingleRegister, 500)) == 2
 	})
 }
 

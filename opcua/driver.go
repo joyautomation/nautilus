@@ -195,6 +195,11 @@ type Driver struct {
 
 	gateMu    sync.Mutex
 	writeGate func() bool
+	// gateShut is true from the first look that finds the gate closed to
+	// the first that finds it open again (see gateOpen). wanted is the
+	// request OutputsWanted answers.
+	gateShut atomic.Bool
+	wanted   atomic.Bool
 
 	wmu      sync.Mutex
 	baseline bool
@@ -481,17 +486,60 @@ func (d *Driver) Endpoint() string { return d.endpoint }
 // SetWriteGate installs the write gate WriteOutputs consults: commands
 // leave the driver only while gate() is true. The project wires it to
 // redundancy leadership (leader.Elector.IsLeader). Reads are unaffected.
+//
+// While the gate is closed another replica may lead and write the same
+// nodes, so nothing this driver wrote is trusted to still be there: once
+// the gate reopens every output goes out again with the program's value,
+// changed or not (#600). The driver sees the gate close and reopen by
+// looking at it (gateOpen): on every WriteOutputs and flush, at least once
+// a second while connected, and on every connect attempt. A gate that
+// closes and reopens between two looks is not seen.
 func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Lock()
 	d.writeGate = gate
 	d.gateMu.Unlock()
 }
 
+// gateOpen reports whether commands may leave the driver right now. Every
+// call is also a look at the gate: the first look that finds it closed
+// forgets every written value, and the first that finds it open again
+// forgets them once more (a push that raced the close may have recorded
+// one since) and asks the runtime for the outputs (OutputsWanted), so the
+// push that answers sends them all. Callers do not hold d.mu.
 func (d *Driver) gateOpen() bool {
 	d.gateMu.Lock()
 	gate := d.writeGate
 	d.gateMu.Unlock()
-	return gate == nil || gate()
+	if gate == nil {
+		return true
+	}
+	open := gate()
+	switch {
+	case !open:
+		if !d.gateShut.Swap(true) {
+			d.forgetWritten()
+		}
+	case d.gateShut.Load() && d.gateShut.CompareAndSwap(true, false):
+		d.forgetWritten()
+		d.wanted.Store(true)
+		d.log.Info("opcua-client: write gate open again; every output goes out with the next push", "driver", d.name)
+	}
+	return open
+}
+
+// forgetWritten empties written: no value is the on-change reference any
+// more, so the next push sends them all.
+func (d *Driver) forgetWritten() {
+	d.mu.Lock()
+	clear(d.written)
+	d.mu.Unlock()
+}
+
+// OutputsWanted is the driver's io.OutputsRequester: true once after it
+// forgot commands (the write gate dropped them, or reopened), so the
+// runtime hands it every output on the next scan.
+func (d *Driver) OutputsWanted() bool {
+	return d.wanted.Load() && d.wanted.Swap(false)
 }
 
 // ── names / classes ──────────────────────────────────────────────────────
@@ -676,6 +724,7 @@ func sameScalar(a, b any) bool {
 func (d *Driver) run(ctx context.Context) {
 	backoff := d.retryMin
 	for ctx.Err() == nil {
+		d.gateOpen() // a look (see SetWriteGate), on every connect attempt
 		sess, err := Dial(ctx, d.endpoint, d.conn)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -833,7 +882,9 @@ func (d *Driver) serve(ctx context.Context, sess *Session) {
 		if ctx.Err() != nil {
 			return
 		}
-		wake := time.Hour
+		// At least once a second, so the write gate is looked at (see
+		// SetWriteGate) when no class is due for longer than that.
+		wake := time.Second
 		now := time.Now()
 		for _, c := range d.classes {
 			if until := c.next.Sub(now); until < wake {
@@ -854,6 +905,7 @@ func (d *Driver) serve(ctx context.Context, sess *Session) {
 				return
 			}
 		case <-timer.C:
+			d.gateOpen() // a look, even with nothing queued
 			if !d.flushWrites(ctx, sess) {
 				return
 			}
@@ -1023,6 +1075,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 			delete(d.written, name)
 		}
 		d.mu.Unlock()
+		d.wanted.Store(true) // the commands it dropped: ask for them (#601)
 		d.log.Warn("opcua-client: write gate closed; queued writes dropped", "driver", d.name, "count", len(work))
 		return true
 	}
@@ -1121,7 +1174,8 @@ func (d *Driver) setState(state string, err error) {
 
 // Interface conformance.
 var (
-	_ nio.Driver          = (*Driver)(nil)
-	_ nio.BatchReader     = (*Driver)(nil)
-	_ nio.QualityReporter = (*Driver)(nil)
+	_ nio.Driver           = (*Driver)(nil)
+	_ nio.BatchReader      = (*Driver)(nil)
+	_ nio.QualityReporter  = (*Driver)(nil)
+	_ nio.OutputsRequester = (*Driver)(nil)
 )

@@ -347,29 +347,24 @@ be refused again, so only a changed value is a new command. 0x04 (server
 device failure) is handled the same way: the write may have partly run,
 and on a register that triggers an action a second write could fire it
 twice. When a gateway answers 0x0A (path unavailable) or 0x0B (target
-device failed to respond), the device behind it never got the command,
-and when the device answers 0x06 (server device busy), it did not carry
-the command out. Such a write is dropped from the queue and forgotten, so
-the next time the driver is handed the outputs, the program's value goes
-out again as a command even if it has not changed. That is the program's
-current value, never a replay of the one that failed, and there is no
-backoff: it retries as often as outputs are handed over. `naut run` hands
-the outputs over on the first scan, on a scan where any output changed and
-on a redundancy takeover, not on every scan, so with no output moving the
-command waits for the next change
-([#601](https://github.com/joyautomation/nautilus/issues/601)). Only the
-tags whose write did not run are forgotten: on a `bit:N` register, the
-bits whose read-modify-write got the exception (on its read or on its
-write), not the register's other bits. A `rewrite:` binding is not
-forgotten, because its next re-assert sends it again anyway. While the
-write gate is closed nothing is sent, and the forgotten command goes out
-at the first output push after the gate reopens, as for a command the
-gate dropped (see [Redundancy](#redundancy)). Every exception to a write
-counts in `exceptions` on the device row. The log says `write not
-delivered; will resend` for 0x0A, 0x0B and 0x06, and `write refused` for
-the rest. On a write-only source, a gateway no-answer to a write also
-counts toward taking it offline, as described above; 0x06 is the device
-answering.
+device failed to respond), the device behind it never got the command, and
+when the device answers 0x06 (server device busy), it did not carry the
+command out. Such a write is dropped from the queue and forgotten, and the
+driver asks the runtime for the outputs, so the next scan hands them over
+and the program's value goes out again as a command even if it has not
+changed. That is the program's current value, never a replay of the one
+that failed, and there is no backoff of its own: a write that keeps
+getting 0x0B is tried once per scan. Only the tags whose write did not run
+are forgotten: on a `bit:N` register, the bits whose read-modify-write got
+the exception (on its read or on its write), not the register's other
+bits. A `rewrite:` binding is not forgotten, because its next re-assert
+sends it again anyway. While the write gate is closed nothing is sent, and
+the forgotten command goes out with every other output once the gate
+reopens (see [Redundancy](#redundancy)). Every exception to a write counts
+in `exceptions` on the device row. The log says `write not delivered; will
+resend` for 0x0A, 0x0B and 0x06, and `write refused` for the rest. On a
+write-only source, a gateway no-answer to a write also counts toward
+taking it offline, as described above; 0x06 is the device answering.
 
 **`rewrite:` is the exception, and it is a keep-alive.** Some devices watch
 a command register and fail safe if it stops moving — a safety controller's
@@ -488,11 +483,27 @@ can compose a "logic healthy" signal into the same condition. Leadership
 is checked again when queued commands go out: a replica that lost it
 during an outage drops what it queued, and so do the writes a broken
 flush put back. It is checked again before each write of a flush, so a
-long flush through a slow gateway stops sending once the gate closes. A
-dropped command is forgotten, so the first output push after the gate
-reopens sends the same value again. The runtime pushes on a takeover, so a
-replica that regains leadership sends at once; a gate that reopens without
-one (logic healthy again) waits for the next output change.
+long flush through a slow gateway stops sending once the gate closes.
+
+**When the gate reopens, every output goes out again.** While it was
+closed another replica may have led and written the same registers, so
+nothing this replica sent before is trusted to still be there. On the
+first scan after the gate reopens, every output is sent once with the
+program's current value, including one that has not changed since this
+replica last led. A replica that regains leadership pushes because it took
+over; a gate that reopens without a takeover (logic healthy again) pushes
+because the driver asks the runtime for the outputs when it sees the gate
+reopen. Commands the gate dropped go out in the same push. Until that
+push, a `rewrite:` binding re-asserts nothing, so the value from the
+previous term is never sent: the keep-alive restarts with the program's
+value. The first push after the driver starts is still its baseline, gate
+or no gate: a replica that starts as a standby records it and sends only
+its `rewrite:` bindings, as on any start. The driver sees the gate by
+looking at it: on every push, flush and re-assert, at least once a second
+while a source is connected, and on every connect attempt. A gate that
+closes and reopens between two looks is not seen: one shorter than a
+second, or one while every source is down or parked between its connect
+attempts.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly

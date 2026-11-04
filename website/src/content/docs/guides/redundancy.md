@@ -107,6 +107,15 @@ never computes.
   the hours it spent standing by. Process state is deliberately **not**
   replicated — configuration travels through the retain store, process
   state re-derives from the field.
+- **A replica that regains leadership sends every output once**, with
+  the program's value, changed or not: the runtime hands the drivers the
+  whole output set on the first scan as leader, and the Modbus and OPC UA
+  client drivers send each one even if it equals what this replica sent
+  the last time it led, since the leader in between may have written
+  something else. A Modbus `rewrite:` keep-alive re-asserts nothing until
+  that push has given it the program's value. The first time a replica
+  leads after it starts, that push is the drivers' baseline, as on any
+  start: recorded, not sent.
 - **The HTTP API follows the leader.** Every replica serves the
   dashboard, and a standby reverse-proxies API traffic to the leader
   (the leader's address rides inside the Lease), so a Service in front

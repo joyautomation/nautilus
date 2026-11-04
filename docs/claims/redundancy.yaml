@@ -214,6 +214,28 @@ claims:
     tests:
       - go ./runtime TestTakeoverReloadsAndResetsFrames
 
+  - id: RED-032
+    claim: >-
+      A replica that regains leadership sends every output once on its
+      first scan as leader, with the program's value, changed or not: the
+      Modbus and OPC UA client drivers send one that equals what this
+      replica sent when it last led, and a Modbus rewrite: keep-alive
+      re-asserts nothing before that push. The first time a replica leads
+      after it starts, the push is the drivers' baseline: recorded, not
+      sent.
+    source: "#redundancy"
+    tests:
+      - go ./runtime TestWriteOutputsTriggersFirstScanFailureAndTakeover
+      - go ./modbus TestRegainingTheGateSendsEveryOutputAgain
+      - go ./opcua TestRegainedGateSendsTheUnchangedValueAgain
+    partial: true
+    note: >-
+      The Modbus test runs the driver under the runtime with a test
+      coordinator and the same flag as its write gate. The OPC UA test
+      calls WriteOutputs directly. The baseline on a first leadership is
+      the drivers' start rule (MB-029, UAC-017) and is not asserted for a
+      replica that starts as a standby.
+
   - id: RED-020
     claim: On takeover the scan clock is zeroed so the first dt is one scan, not the time spent standing by.
     source: "#redundancy"
