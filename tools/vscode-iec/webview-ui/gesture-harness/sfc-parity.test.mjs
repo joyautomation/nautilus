@@ -3,7 +3,7 @@
 // draws. INVENTORY rows S23–S31.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recordClips, withPage, deliver, reset, center, key, esc, clickAt, sfcOps, paletteBtn, sleep, typeText, rect } from './diagram-helpers.mjs';
+import { recordClips, withPage, deliver, reset, center, key, esc, clickAt, sfcOps, paletteBtn, sleep, typeText, rect, opsPosted } from './diagram-helpers.mjs';
 
 recordClips('sfc-parity');
 
@@ -58,7 +58,7 @@ test('S27 #186 SFC: "+ action" appends — the op carries the row count as its i
 		await ctrlA(b);
 		await typeText(b, 'P1 CountCycle');
 		await enter(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'addAssoc', step: 'st:Fill', index: 2, qualifier: 'P1', target: 'CountCycle' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'addAssoc', step: 'st:Fill', index: 2, qualifier: 'P1', target: 'CountCycle' }]);
 	});
 });
 
@@ -71,7 +71,7 @@ test('S27 #183 SFC: the action field takes "D Detergent T#3S"; text it cannot pa
 		await ctrlA(b);
 		await typeText(b, 'D Detergent T#3S');
 		await enter(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'addAssoc', step: 'st:Heat', index: 1, qualifier: 'D', target: 'Detergent', time: 'T#3S' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'addAssoc', step: 'st:Heat', index: 1, qualifier: 'D', target: 'Detergent', time: 'T#3S' }]);
 		// unparseable: nothing posted, the field reopens holding the text, the error shown
 		await reset(b);
 		await clickAt(b, await assocAdd(b, 'Heat'));
@@ -87,7 +87,7 @@ test('S27 #183 SFC: the action field takes "D Detergent T#3S"; text it cannot pa
 		await ctrlA(b);
 		await typeText(b, 'D Detergent(T#3S)');
 		await enter(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'addAssoc', step: 'st:Heat', index: 1, qualifier: 'D', target: 'Detergent', time: 'T#3S' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'addAssoc', step: 'st:Heat', index: 1, qualifier: 'D', target: 'Detergent', time: 'T#3S' }]);
 		assert.equal(await b.eval(`document.querySelectorAll('.ferr').length`), 0, 'the error goes with the field');
 	});
 });
@@ -143,7 +143,7 @@ test('S23–S25 #76 SFC: arrow keys walk the chart along its flow; Enter edits t
 		await ctrlA(b);
 		await typeText(b, 'Filling');
 		await enter(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'renameStep', step: 'st:Fill', newName: 'Filling' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'renameStep', step: 'st:Fill', newName: 'Filling' }]);
 		// focus came back: the arrows still walk
 		await arrow(b, 'Up');
 		assert.deepEqual(await sel(b), ['tr:30']);
@@ -160,11 +160,11 @@ test('S23–S25 #76 SFC: arrow keys walk the chart along its flow; Enter edits t
 		await ctrlA(b);
 		await typeText(b, 'T_go');
 		await enter(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'renameTransition', transition: 'tr:30', newName: 'T_go' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'renameTransition', transition: 'tr:30', newName: 'T_go' }]);
 		// Del still deletes the keyboard selection
 		await reset(b);
 		await key(b, 'Delete', 'Delete', 46);
-		assert.deepEqual(await sfcOps(b), [{ type: 'deleteTransition', transition: 'tr:30' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'deleteTransition', transition: 'tr:30' }]);
 	});
 });
 
@@ -181,7 +181,7 @@ test('S31 #76 SFC: the add forms take a transition name', async () => {
 		await typeText(b, 'T_empty');
 		await reset(b);
 		await enter(b);
-		const [op] = await sfcOps(b);
+		const [op] = await opsPosted(b, sfcOps, 1);
 		assert.equal(op.type, 'addTransition');
 		assert.equal(op.name, 'T_empty');
 		assert.deepEqual(op.from, ['Drain']);
@@ -193,7 +193,7 @@ assert.deepEqual(op.to, ['Aborted']);
 		await typeText(b, 'T_spin');
 		await reset(b);
 		await enter(b);
-		const [op2] = await sfcOps(b);
+		const [op2] = await opsPosted(b, sfcOps, 1);
 		assert.equal(op2.type, 'addStep');
 		assert.equal(op2.transName, 'T_spin');
 	});
@@ -210,12 +210,12 @@ test('S26 #181 SFC: ◀ priority / Alt+← move an alternative branch earlier; t
 		assert.equal(await b.eval(`[...document.querySelectorAll('.palette button')].find((x) => x.textContent.includes('priority ▶')).disabled`), true, 'already last');
 		await reset(b);
 		await clickAt(b, await paletteBtn(b, '◀ priority'));
-		assert.deepEqual(await sfcOps(b), [{ type: 'moveTransition', transition: 'tr:34', delta: -1 }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'moveTransition', transition: 'tr:34', delta: -1 }]);
 		// the keyboard way, focus back on the chart
 		await clickAt(b, await center(b, 'g.trans[data-id="tr:34"] rect.barhit'));
 		await reset(b);
 		await arrow(b, 'Left', 1);
-		assert.deepEqual(await sfcOps(b), [{ type: 'moveTransition', transition: 'tr:34', delta: -1 }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'moveTransition', transition: 'tr:34', delta: -1 }]);
 		// the moved transition (an unnamed one changes id) stays selected once the model comes back
 		const moved = { ...WASHER, trans: [WASHER.trans[0], { ...WASHER.trans[2], id: 'tr:32', line: 32 }, { ...WASHER.trans[1], id: 'tr:34', line: 34 }, ...WASHER.trans.slice(3)] };
 		await show(b, moved);
@@ -240,7 +240,7 @@ test('S28 #182 SFC: double-click an association to an action that does not exist
 		assert.match(await b.eval(`document.querySelector('.fcap')?.textContent ?? ''`), /new ACTION HeatCtl/);
 		await typeText(b, 'Heater := TempC < TempSP;');
 		await key(b, 'Enter', 'Enter', 13, 2);
-		assert.deepEqual(await sfcOps(b), [{ type: 'setActionBody', action: 'HeatCtl', body: 'Heater := TempC < TempSP;' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'setActionBody', action: 'HeatCtl', body: 'Heater := TempC < TempSP;' }]);
 		// a declared variable's row opens the association line
 		await reset(b);
 		const v = await center(b, `${row('Fill', 1)} text.assoctarget`);
@@ -298,7 +298,7 @@ test('S29 #180 SFC: the vars panel declares a CONSTANT with its value; a refused
 		await typeText(b, 'T#60S');
 		await reset(b);
 		await enter(b);
-		assert.deepEqual(await sfcOps(b), [{ type: 'declareVar', name: 'tMaxFill', varType: 'TIME', section: 'VAR CONSTANT', init: 'T#60S' }]);
+		assert.deepEqual(await opsPosted(b, sfcOps, 1), [{ type: 'declareVar', name: 'tMaxFill', varType: 'TIME', section: 'VAR CONSTANT', init: 'T#60S' }]);
 		// no model back yet (or the op was refused): the name is still there
 		assert.equal(await b.eval(`document.querySelector('.addrow input.grow').value`), 'tMaxFill');
 		// the declaration arrives: the row clears, the list shows it as a constant
