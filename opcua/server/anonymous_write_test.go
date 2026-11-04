@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -244,17 +245,98 @@ func TestAnonymousWritesAreLoggedAtStart(t *testing.T) {
 	}
 }
 
-// naut check's warning: the switch on with nothing under writable.
+// naut check's warning: the switch on with nothing under writable opens
+// nothing; on with a list it is in effect and says so, more strongly when
+// the endpoint listens beyond loopback (the start-up ERROR's case). Off,
+// nothing.
 func TestAnonymousWritesWarning(t *testing.T) {
-	if w := AnonymousWritesWarning(true, nil); !strings.Contains(w, "nothing is writable") {
+	if w := AnonymousWritesWarning(true, nil, ""); !strings.Contains(w, "nothing is writable") {
 		t.Errorf("on, no writable list: %q", w)
 	}
-	for _, c := range []struct {
-		on       bool
-		patterns []string
-	}{{false, nil}, {true, []string{"*_SP"}}, {false, []string{"*_SP"}}} {
-		if w := AnonymousWritesWarning(c.on, c.patterns); w != "" {
-			t.Errorf("on %v, patterns %v: %q", c.on, c.patterns, w)
+	for _, ep := range []string{"", "opc.tcp://localhost:4840", "opc.tcp://127.0.0.1:4840", "[::1]:4840"} {
+		w := AnonymousWritesWarning(true, []string{"PartAtEnd", "StartPB"}, ep)
+		if !strings.Contains(w, "any client that can reach") || !strings.Contains(w, "without a certificate") ||
+			!strings.Contains(w, "(PartAtEnd, StartPB)") || !strings.Contains(w, "loopback") || strings.Contains(w, "beyond loopback") {
+			t.Errorf("on, loopback %q: %q", ep, w)
 		}
+	}
+	if w := AnonymousWritesWarning(true, []string{"*_SP"}, ""); !strings.Contains(w, DefaultEndpoint) {
+		t.Errorf("on, default endpoint: %q does not name %s", w, DefaultEndpoint)
+	}
+	for _, ep := range []string{"opc.tcp://0.0.0.0:4840", "opc.tcp://192.0.2.7:4840", "[::]:4840"} {
+		w := AnonymousWritesWarning(true, []string{"*_SP"}, ep)
+		if !strings.Contains(w, ep+" listens beyond loopback") || !strings.Contains(w, "ANY client") ||
+			!strings.Contains(w, "without a certificate") || !strings.Contains(w, "listen on 127.0.0.1") {
+			t.Errorf("on, %q: %q", ep, w)
+		}
+	}
+	for _, c := range []struct {
+		patterns []string
+		endpoint string
+	}{{nil, ""}, {[]string{"*_SP"}, ""}, {[]string{"*_SP"}, "opc.tcp://0.0.0.0:4840"}} {
+		if w := AnonymousWritesWarning(false, c.patterns, c.endpoint); w != "" {
+			t.Errorf("off, patterns %v, endpoint %q: %q", c.patterns, c.endpoint, w)
+		}
+	}
+}
+
+// Only the None endpoint is opened by the switch. A client on a secure
+// channel is a writer by its certificate alone, and that certificate is
+// checked again on every Write with the switch on as with it off: taken
+// out of the trust list, the client's next write is Bad_UserAccessDenied.
+// (Were every channel anonymous's, a SignAndEncrypt session would skip the
+// re-check and keep writing.)
+func TestAnonymousWritesLeaveSecureChannelsToTheirCertificate(t *testing.T) {
+	f := startAnonymousWrites(t, true, true, writePatterns)
+	if got := write(t, f.writer, wv("Speed", 1.0))[0]; got != ua.StatusGood {
+		t.Fatalf("trusted, switch on: %s", statusName(got))
+	}
+	if err := os.Remove(filepath.Join(f.dir, "trusted", "certs", "client.der")); err != nil {
+		t.Fatal(err)
+	}
+	if got := write(t, f.writer, wv("Speed", 2.0))[0]; got != ua.StatusBadUserAccessDenied {
+		t.Errorf("secure channel after its certificate left the trust list, switch on: %s, want Bad_UserAccessDenied", statusName(got))
+	}
+	if v := stored(t, f.rt, "Speed"); v != 1.0 {
+		t.Errorf("Speed = %v after the certificate was untrusted", v)
+	}
+	if got := read(t, f.writer, ua.NewStringNodeID(1, "Speed"), ua.AttributeIDUserAccessLevel).Value.Value(); got != uint8(ua.AccessLevelTypeCurrentRead) {
+		t.Errorf("UserAccessLevel after untrust, switch on = %v, want CurrentRead", got)
+	}
+	// The None endpoint is still open to anyone.
+	if got := write(t, f.anon, wv("Speed", 3.0))[0]; got != ua.StatusGood {
+		t.Errorf("anonymous on None after the untrust: %s", statusName(got))
+	}
+}
+
+// An anonymous writer's refusals say anonymous=true, as its landed writes
+// do: the per-node line (a writer's refusal on a node it may know) and the
+// per-reason summary (a node id that is nothing) alike. A trusted
+// writer's do not.
+func TestAnonymousWriteRefusalsAreMarkedAnonymous(t *testing.T) {
+	f := startAnonymousWrites(t, true, true, writePatterns)
+	write(t, f.anon, wv("Closed", 1.0)) // known: per node
+	write(t, f.anon, wv("Nope", 1.0))   // nothing: a summary
+	write(t, f.writer, wv("Closed", 2.0))
+	var known, summary, trusted bool
+	for _, line := range strings.Split(f.log.String(), "\n") {
+		if !strings.Contains(line, `msg="opcua: write refused"`) {
+			continue
+		}
+		anon := strings.Contains(line, "anonymous=true")
+		switch {
+		case strings.Contains(line, "client="+writerURI):
+			trusted = strings.Contains(line, `node="ns=1;s=Closed"`) && !anon
+		case strings.Contains(line, `node="ns=1;s=Closed"`):
+			known = anon
+		case strings.Contains(line, "s=Nope"):
+			summary = anon && strings.Contains(line, "items=1")
+		}
+	}
+	if !known || !summary {
+		t.Errorf("anonymous refusals not marked anonymous=true (per node %v, summary %v):\n%s", known, summary, f.log.String())
+	}
+	if !trusted {
+		t.Errorf("no trusted refusal line without anonymous=true:\n%s", f.log.String())
 	}
 }

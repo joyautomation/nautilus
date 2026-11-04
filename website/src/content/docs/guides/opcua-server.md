@@ -587,11 +587,15 @@ the node, the old and the new value, the session, the client's
 `ApplicationUri`, the first 16 digits of its certificate thumbprint and its
 address; an anonymous writer's line has no URI or thumbprint and says
 `anonymous=true`. A refused item is an `opcua: write refused` warning with the
-status and the reason. A trusted client's refusal on a node it may know
-is logged once per client, node and reason. Every other refusal (an
-anonymous client's, a node id that is nothing) is one line per client and
-reason, saying how many items of the first such request were refused
-for that reason: those node ids are whatever the client chose to send.
+status, the reason and the same client fields, `anonymous=true` included
+for an anonymous writer. A writer's refusal on a node it may know (a
+trusted client's, or an anonymous one's with
+[`anonymous-writes`](#lab-setups-without-certificates) on) is logged once
+per client, node and reason. Every other refusal (a client that is no
+writer, such as an anonymous one with the switch off, or a node id that is
+nothing) is one line per client and reason, saying how many items of the
+first such request were refused for that reason: those node ids are
+whatever the client chose to send.
 Past 64 lines in an hour a client's refusals are only counted, and one
 line says so; the next hour it is heard from again. A client retrying every second, or
 sending thousands of junk node ids, does not flood the log. The `opcua-server`
@@ -640,17 +644,33 @@ tags:
   - { name: Conveyor,  role: output,   type: BOOL, desc: Read by the simulator }
 
 opcua:
-  endpoint: opc.tcp://0.0.0.0:4840   # localhost when the simulator runs on this machine
+  endpoint: opc.tcp://0.0.0.0:4840   # 127.0.0.1 when the simulator runs on this machine
   writable: ["PartAtEnd", "StartPB"]
   anonymous-writes: true
 ```
+
+The simulator here runs on another PC, so the server listens on every
+interface. Prefer localhost (`opc.tcp://127.0.0.1:4840`) when the simulator
+runs on the same machine: then only clients on that machine can reach it.
+
+`naut check` passes this manifest with one warning, and that warning is
+expected: it is there so the switch is never on unnoticed. On `0.0.0.0` it
+reads:
+
+```text
+nautilus.yaml: warning: opcua.anonymous-writes is on and opc.tcp://0.0.0.0:4840 listens beyond loopback: ANY client that can reach it over the network can write the tags opcua.writable opens (PartAtEnd, StartPB) without a certificate, and only its address is logged — use it on a lab network only, never on a plant network; when the client runs on this machine, listen on 127.0.0.1 instead
+```
+
+On `127.0.0.1` (or the default `localhost`) it is milder: any client that
+can reach the endpoint, on this machine only, can write those tags without
+a certificate.
 
 With `anonymous-writes: true`, every session on the `None` endpoint is a
 writer, with no certificate. Everything else stays as it is:
 
 - **`writable` still decides what may be written.** With `anonymous-writes`
   on and no `writable` list, nothing is writable; `naut check` warns about
-  that. A tag no pattern opens is still `Bad_NotWritable`.
+  that instead. A tag no pattern opens is still `Bad_NotWritable`.
 - **The same rules as a trusted writer.** Conversions, status codes,
   forces (`Bad_Locked`), the standby gate (`Bad_InvalidState`), the
   10 000-node limit and arrays (`Bad_WriteNotSupported`) all answer the
@@ -661,28 +681,42 @@ writer, with no certificate. Everything else stays as it is:
   never writable over OPC UA. What the simulator only reads, such as
   `Conveyor`, needs no entry under `writable`.
 - **The secure endpoints still work** for a trusted client, when the
-  certificate store is there.
+  certificate store is there, and only by its certificate: one taken out of
+  the trust list writes nothing more on its secure channel.
 
 The server says it is open, every time it starts: a warning when it
 listens on loopback (only clients on that machine can write), and an
 error when it listens beyond it, since then **anyone who can reach the
-port may write**, and the audit line can only name their address
-(`anonymous=true`, no certificate). `naut run`'s banner adds
-`(anonymous writes on)`, and the `opcua-server` row says `writable by
-anonymous clients`. Use it on a lab network only, never on a plant
-network. Off is the default.
+port may write**, and the audit and refusal lines can only name their
+address (`anonymous=true`, no certificate). `naut run`'s banner adds
+`(anonymous writes on)`, and the dashboard's OPC UA card ends its sentence
+with `writable by anonymous clients` ([Status](#status)). Use it on a lab
+network only, never on a plant network. Off is the default.
 
 ## Status
 
 The dashboard's driver cards and `GET /api/drivers` carry an `opcua-server`
-row: the endpoint, whether it is listening, how many subscriptions and
-monitored items clients hold, whether it is writable, how many writes
-landed and how many were refused, whether this replica is a standby, and
-the server certificate's thumbprint and expiry, with a warning from 30
-days before it expires. With `anonymous-writes` on, the row carries
-`anonymousWrites: true` and says it is writable by anonymous clients. A port already in use is reported there and
-on stderr at start (`continuing without it`); the controller runs
-regardless.
+row. The dashboard's OPC UA card shows:
+
+- its state (connected while it listens) and the endpoint;
+- a sentence: `Serving 12 tags · 1 subscription, 8 monitored items` while
+  it listens, followed by ` · writable by anonymous clients` when
+  [`anonymous-writes`](#lab-setups-without-certificates) is on and
+  `writable` opens something, then by the certificate warning from 30 days
+  before the server certificate expires, then how long it has been up;
+  `Not listening — ` and the error (repeated on a line of its own) when it
+  could not listen; `Not started` before it starts;
+- the counts `tags`, `subscriptions`, `monitored items`, `writes` (landed)
+  and `writes refused`.
+
+`GET /api/drivers` carries the same, and in the row's `extra`: `endpoint`,
+`access` (`read-only`, `writable by trusted clients` or `writable by
+anonymous clients`), `writes`, `writesRefused`, `writable` (the patterns,
+when there are any), `anonymousWrites: true` when the switch is on (even
+with nothing writable), `standby: true` on a standby replica, and
+`certThumbprint`, `certExpiresMs` and `certWarning` for the server
+certificate. A port already in use is reported there and on stderr at start
+(`continuing without it`); the controller runs regardless.
 
 Stopping the controller (Ctrl+C, or SIGTERM from a service manager) closes
 every client's connection at once, sessions and subscriptions included, and

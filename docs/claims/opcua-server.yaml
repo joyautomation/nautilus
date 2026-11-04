@@ -498,17 +498,25 @@ claims:
       server has secure endpoints; a certificate sent on None is neither
       needed nor checked. opcua.writable still decides what may be written:
       with the switch on, a tag no pattern opens is Bad_NotWritable, and with
-      no writable list nothing is writable (naut check warns). An anonymous
+      no writable list nothing is writable. Only the None endpoint is opened:
+      a client on a secure channel writes by its certificate alone, re-checked
+      on every Write, so one taken out of the trust list is
+      Bad_UserAccessDenied with the switch on too. naut check warns whenever
+      the switch is on: that it opens nothing with no writable list, and
+      otherwise that any client that can reach the endpoint can write those
+      tags without a certificate, more strongly when the endpoint listens
+      beyond loopback. An anonymous
       writer gets the same answers as a trusted one: inputs and Objects
       Bad_NotWritable, arrays Bad_WriteNotSupported, a forced address
       Bad_Locked, a standby Bad_InvalidState, the same conversions. Its
       UserAccessLevel follows AccessLevel; with the switch off it reads
       CurrentRead and every write is Bad_UserAccessDenied. Every start logs
       that the switch is on: a warning on loopback, an error when the server
-      listens beyond it. The landed-write audit line says anonymous=true, the
-      naut run banner says (anonymous writes on), and the opcua-server row
-      carries anonymousWrites true and access "writable by anonymous
-      clients".
+      listens beyond it. The landed-write audit line and every refusal line
+      say anonymous=true, the naut run banner says (anonymous writes on), and
+      the opcua-server row carries anonymousWrites true and access "writable
+      by anonymous clients", and, when it opens something, its message (the
+      dashboard card's sentence) ends "writable by anonymous clients".
     source: "#lab-setups-without-certificates"
     tests:
       - go ./opcua/server TestAnonymousWritesOffRefusesAnonymous
@@ -519,10 +527,12 @@ claims:
       - go ./opcua/server TestAnonymousWritesIgnoreACertificateOnNone
       - go ./opcua/server TestAnonymousWritesAreLoggedAtStart
       - go ./opcua/server TestAnonymousWritesWarning
+      - go ./opcua/server TestAnonymousWritesLeaveSecureChannelsToTheirCertificate
+      - go ./opcua/server TestAnonymousWriteRefusalsAreMarkedAnonymous
       - go ./opcua/server TestForeignAsyncuaAnonymousWrites
       - go ./internal/project TestOPCUAAnonymousWritesConfig
       - go ./internal/project TestOPCUAStatusCarriesAnonymousWrites
-      - go ./cmd/naut TestCheckWarnsOnAnonymousWritesWithoutWritable
+      - go ./cmd/naut TestCheckWarnsOnAnonymousWrites
     partial: true
     note: >-
       The banner text is not asserted by a test. No black-box check covers
