@@ -216,9 +216,9 @@ claims:
 
   - id: RED-032
     claim: >-
-      Through the Modbus and OPC UA client drivers, a replica that takes
-      over from standby sends every output once on its first scan as
-      leader, with the program's value, changed or not: an output equal to
+      Through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers, a
+      replica that takes over from standby sends every output once on its
+      first scan as leader, with the program's value, changed or not: an output equal to
       what this replica sent when it last led goes out again, a replica that
       started as a standby has no start-up baseline, and a Modbus rewrite:
       keep-alive re-asserts nothing before that push. A replica that leads
@@ -226,9 +226,10 @@ claims:
       the drivers only after the elector's first decision, which Run makes
       at once rather than a tick in (a first Lease GET that fails is
       retried, not taken as standby), bounded by 5 s; a stop during that
-      wait starts nothing. EtherNet/IP, OptoMMP
-      and the hw drivers (SNMP, Redfish, Prometheus) do not do this yet
-      (#605, #607).
+      wait starts nothing (EtherNet/IP and OptoMMP have no baseline, so a
+      plain start commands every output too). The hw drivers (SNMP,
+      Redfish, Prometheus) do not do this: the first value after their gate
+      opens is a baseline.
     source: "#redundancy"
     tests:
       - go ./runtime TestWriteOutputsTriggersFirstScanFailureAndTakeover
@@ -236,6 +237,10 @@ claims:
       - go ./modbus TestStandbyTakeoverCommandsEveryOutput
       - go ./opcua TestRegainedGateSendsTheUnchangedValueAgain
       - go ./opcua TestStandbyFirstPushCommands
+      - go ./eip TestRegainedGateSendsTheUnchangedOutputsAgain
+      - go ./eip TestStandbyFirstTakeoverCommands
+      - go ./optommp TestRegainedGateSendsTheUnchangedOutputsAgain
+      - go ./optommp TestStandbyFirstTakeoverCommands
       - go ./modbus TestRestartAfterStandbyKeepsNoBaseline
       - go ./leader TestRunDecidesBeforeItsFirstTick
       - go ./leader TestRunRetriesAFirstTickThatMissedTheAPI
@@ -244,9 +249,11 @@ claims:
       - go ./cmd/naut TestDriversStartAfterTheFirstDecision
     partial: true
     note: >-
-      The Modbus tests run the driver under the runtime with a test
-      coordinator and the same flag as its write gate. The OPC UA tests
-      call WriteOutputs directly. The elector's first decision is asserted
+      The Modbus, EtherNet/IP and OptoMMP tests run the driver under the
+      runtime with a test coordinator and the same flag as its write gate,
+      against the Logix emulator and the in-process groov fake for the
+      latter two. The OPC UA tests call WriteOutputs directly. The hw
+      drivers' baseline is not asserted here. The elector's first decision is asserted
       against a fake Lease API (acquire, standby, standalone, a first GET
       that fails), and runProject's driver start (startDriverWhenDecided)
       against a fake elector and driver: Start runs only after the

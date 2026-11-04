@@ -255,10 +255,51 @@ after reconnect, latest value per tag. A write the controller *refuses* on a
 live connection is logged and dropped for that flush; it goes again the next
 time the value changes.
 
-**Writes are not gated.** The driver has no `SetWriteGate` — the redundancy
-hook the Modbus driver exposes — so nothing inside it suppresses a command.
-Redundancy is handled a level up: a standby replica skips scans entirely, so
-it never produces an output to hand over, while its driver keeps polling.
+## Redundancy
+
+With a `redundancy:` section, the driver's write gate (`SetWriteGate`) is
+wired to leadership: commands leave the driver only on the leader. A
+standby skips scans entirely, so it never hands the driver a command, while
+its driver keeps polling. The gate covers what the driver still holds when
+leadership moves.
+
+**A command queued while the controller was down goes out only on the
+leader.** Leadership is checked again when queued writes go out, before
+every tag and before every member write of a struct. A replica that lost
+leadership during the outage drops what it queued, and what a broken flush
+put back, instead of sending it once the controller is back. A flush the
+gate closes partway through stops there: the tag being written and every
+one after it are dropped, and a struct whose first members went out is
+written in full next time. The dropped commands are asked for again, so
+the push that follows the reopen sends them. A drop is not a failure: no
+error is recorded.
+
+**When the gate reopens, every output goes out again.** While it was
+closed another replica may have led and written the same tags, so nothing
+this replica wrote before is trusted to still be there. The first time the
+driver sees the gate open again it forgets what it last wrote, and what is
+still queued from before, and asks the runtime for the outputs. The next
+push sends every output with the program's current value, including one
+that has not changed since this replica last led, and a struct goes out
+member by member in full. A replica that regains leadership pushes because
+it took over. A gate that reopens without a takeover (logic healthy again)
+pushes because the driver asked. A write-to-trigger tag, one whose every
+write starts something, is written again on every regain too. Gate such a
+command in the program, or make it edge-like, if a second write would act
+twice.
+
+**A replica that started as a standby commands every output on its first
+takeover.** The driver has no baseline (see [Writes](#writes)), so the
+takeover push is a set of commands, as the new primary of a hot-standby PLC
+pair drives its outputs at once.
+
+**A flip between two looks is not seen.** A gate func cannot say it
+changed, so the driver looks at it: on every push and flush, before every
+write in a flush, at least once a second while connected, and on every
+connect attempt. A gate that closes and reopens between two looks is not
+seen, and then nothing above happens. The window is about a second while
+connected, and up to the reconnect backoff (about 30 s) while the
+controller is down.
 
 ## `/api/drivers`
 

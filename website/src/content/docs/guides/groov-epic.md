@@ -273,6 +273,46 @@ driver cannot see. A trip is counted only when the unit's watchdog is
 on, and whether an output actually moved depends on which outputs have a
 watchdog value in groov Manage, so the count means "may have".
 
+## Redundancy
+
+With a `redundancy:` section, the driver's write gate is wired to
+leadership: commands leave the driver only on the leader. A standby skips
+scans, so it never hands the driver a command, and its driver neither
+rewrites outputs on reconnect nor after a watchdog trip. It keeps reading.
+
+**A command held while the processor was away goes out only on the
+leader.** Leadership is checked again when held commands go out, before
+every write. A replica that lost leadership during the outage drops what
+it held instead of writing it once the processor is back. A flush the gate
+closes partway through stops there: the write in hand and every one after
+it are dropped. The dropped commands are asked for again, so the push that
+follows the reopen sends them.
+
+**When the gate reopens, every output goes out again.** While it was
+closed another replica may have led and written the same outputs, so
+nothing this replica commanded before is trusted to still be there. The
+first time the driver sees the gate open again it forgets every command,
+and what is still held from before, and asks the runtime for the outputs.
+The next push writes every output with the program's current value,
+including one that has not changed since this replica last led. A replica
+that regains leadership pushes because it took over. A gate that reopens
+without a takeover (logic healthy again) pushes because the driver asked.
+Until that push the reconnect and watchdog rewrites have nothing to write,
+so a command from the previous term is never sent.
+
+**A replica that started as a standby commands every output on its first
+takeover.** Like a plain start, the first value handed over for each
+output is written (see [What a scan does](#what-a-scan-does)).
+
+**A flip between two looks is not seen.** A gate func cannot say it
+changed, so the driver looks at it: on every push and flush, before every
+write in a flush, every scan (every stream check when streaming) and at
+least once a second while connected, and on every connect attempt. A gate
+that closes and reopens between two looks is not seen, and then nothing
+above happens. The window is about a second, or a scan when that is
+shorter, while connected, and up to the reconnect backoff (30 s) while
+the processor is away.
+
 ## Run it on the processor
 
 ```sh
