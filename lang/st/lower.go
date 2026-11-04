@@ -325,6 +325,7 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, env *lowerer) error {
 	// yet at this point in the lowering loop below.
 	def.Globals = bodyIR.Globals
 	def.Uses = bodyIR.DirectGlobalUses()
+	def.Body = bodyIR
 
 	def.Step = func(inst *ir.FBInstance, ctx ir.FBStepCtx) error {
 		return ir.Run(bodyIR, inst.StepFrame(), ctx.Host)
@@ -436,6 +437,7 @@ func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, env *lowerer) error {
 	// Every local of a FUNCTION — VAR_TEMP included — is already
 	// re-initialised per call by the frame (FuncDef.reinitLocals).
 	bodyIR.Temps = nil
+	def.Body = bodyIR
 	def.Run = func(frame *ir.Frame, host ir.Host) error {
 		return ir.Run(bodyIR, frame, host)
 	}

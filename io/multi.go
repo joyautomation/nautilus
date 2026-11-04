@@ -39,6 +39,10 @@ type Multi struct {
 	inOwner  map[string]int // input tag name → index into children
 	outOwner map[string]int // output tag name → index into children
 
+	// askers are the children that implement OutputsRequester, found once
+	// here rather than by a type assertion per child on every scan.
+	askers []OutputsRequester
+
 	// mu guards scratch, the per-child delivery maps reused across scans
 	// for children that implement BatchReader (their contract says "the
 	// same map back each scan"). Reads are serialized by the runtime, but
@@ -92,6 +96,9 @@ func NewMulti(children ...NamedDriver) (*Multi, error) {
 				return nil, fmt.Errorf("multi-driver: output tag %q is accepted by both driver %q and driver %q — a write must have exactly one destination (rename one binding, or remove the duplicate)", tag, m.children[j].Name, c.Name)
 			}
 			m.outOwner[tag] = i
+		}
+		if r, ok := c.Driver.(OutputsRequester); ok {
+			m.askers = append(m.askers, r)
 		}
 	}
 	return m, nil
@@ -236,6 +243,20 @@ func (m *Multi) Quality() map[string]Quality {
 	return out
 }
 
+// OutputsWanted asks every child that can ask and reports whether any
+// did. Every child is asked, not just up to the first yes: each answer is
+// a read-and-clear, and the one push the runtime makes hands every child
+// its outputs, so it answers them all at once.
+func (m *Multi) OutputsWanted() bool {
+	wanted := false
+	for _, r := range m.askers {
+		if r.OutputsWanted() {
+			wanted = true
+		}
+	}
+	return wanted
+}
+
 // Start fans out to every child with its own loop to launch (eip's poll
 // loop, a Sparkplug host's MQTT session); a child without Start has
 // nothing to start, exactly as `naut run` treats a lone driver.
@@ -276,9 +297,10 @@ func (m *Multi) Stop() {
 // Multi carries every optional refinement its children might, so composing
 // drivers never costs the runtime a capability a lone driver had.
 var (
-	_ Driver          = (*Multi)(nil)
-	_ BatchReader     = (*Multi)(nil)
-	_ QualityReporter = (*Multi)(nil)
+	_ Driver           = (*Multi)(nil)
+	_ BatchReader      = (*Multi)(nil)
+	_ QualityReporter  = (*Multi)(nil)
+	_ OutputsRequester = (*Multi)(nil)
 
 	_ interface{ SetWriteGate(func() bool) } = (*Multi)(nil)
 )

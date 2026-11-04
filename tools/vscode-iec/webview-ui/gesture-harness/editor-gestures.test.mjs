@@ -7,7 +7,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-	recordClips, sleep, withPage, deliver, reset, center, key, clickAt, fbdOps, ldOps, rect, node, byId, FBD, LD
+	recordClips, sleep, withPage, deliver, reset, center, key, clickAt, fbdOps, ldOps, rect, node, byId, FBD, LD,
+	opsPosted, settled
 } from './diagram-helpers.mjs';
 
 recordClips('editor-gestures');
@@ -91,7 +92,6 @@ test('FBD + add (#78): a double-click on empty canvas opens the palette; the blo
 	await withPage(async (b) => {
 		const before = pin(P101, 'c:Run', 330, 60);
 		await deliver(b, { type: 'model', model: before, title: 'p101.fbd' });
-		await sleep(300);
 		const was = await positions(b);
 		const pt = await emptyPoint(b);
 		assert.ok(pt, 'an empty spot of canvas');
@@ -103,11 +103,11 @@ test('FBD + add (#78): a double-click on empty canvas opens the palette; the blo
 		await sleep(200);
 		assert.ok(await center(b, 'button.item[data-id="block → wire"]'), 'the palette opened');
 		await insertBoth(b);
-		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: 'both = AND(LE, GE)' }]);
+		assert.deepEqual(await opsPosted(b, fbdOps, 1), [{ type: 'insertStatement', text: 'both = AND(LE, GE)' }]);
 		await reset(b);
 		// The host applies it and sends the new model back.
 		await deliver(b, { type: 'model', model: withBoth(before), title: 'p101.fbd' });
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'setLayout');
 		const both = ops[0].entries.find((e) => e.node === 'b:w.both');
@@ -128,7 +128,6 @@ test('FBD + add (#78): a double-click on empty canvas opens the palette; the blo
 test('FBD + add (#78): with a block selected, the new block lands one column right of it; an unarranged network stays auto', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: P101, title: 'p101.fbd' });
-		await sleep(300);
 		await clickAt(b, await center(b, `${node('b:w.LE')} .title`));
 		const le = (await positions(b))['b:w.LE'];
 		const leW = await b.eval(`document.querySelector('.svelte-flow__node[data-id="b:w.LE"]').offsetWidth`);
@@ -136,7 +135,7 @@ test('FBD + add (#78): with a block selected, the new block lands one column rig
 		await insertBoth(b);
 		await reset(b);
 		await deliver(b, { type: 'model', model: withBoth(P101), title: 'p101.fbd' });
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 1);
 		assert.deepEqual(ops, [{ type: 'setLayout', entries: [{ node: 'b:w.both', x: le[0] + leW + 72, y: le[1] }] }]);
 		assert.deepEqual(await overlapping(b, 'b:w.both'), [], 'lands on nothing');
 	});
@@ -146,12 +145,11 @@ test('FBD + add (#78): nothing selected, the network arranged: the newcomer is p
 	await withPage(async (b) => {
 		const before = pin(P101, 'c:Run', 330, 60);
 		await deliver(b, { type: 'model', model: before, title: 'p101.fbd' });
-		await sleep(300);
 		await clickAt(b, await btnByText(b, '.bar button', '+ add'));
 		await insertBoth(b);
 		await reset(b);
 		await deliver(b, { type: 'model', model: withBoth(before), title: 'p101.fbd' });
-		const ops = await fbdOps(b);
+		const ops = await opsPosted(b, fbdOps, 1);
 		assert.equal(ops.length, 1);
 		assert.ok(ops[0].entries.some((e) => e.node === 'b:w.both'), JSON.stringify(ops));
 		assert.deepEqual(await overlapping(b, 'b:w.both'), [], 'lands on nothing');
@@ -161,7 +159,6 @@ test('FBD + add (#78): nothing selected, the network arranged: the newcomer is p
 test('FBD + add (#78): nothing selected, nothing arranged: auto-layout places it and nothing is pinned', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: P101, title: 'p101.fbd' });
-		await sleep(300);
 		await clickAt(b, await btnByText(b, '.bar button', '+ add'));
 		await insertBoth(b);
 		await reset(b);
@@ -195,7 +192,6 @@ const BIG = {
 test('FBD open zoom (#79): a big program opens at the readable floor on its top-left; Ctrl+0 still fits it all', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: BIG, title: 'big.fbd' });
-		await sleep(400);
 		const vp = await viewport(b);
 		assert.ok(Math.abs(vp.k - 0.9) < 0.001, `opens at 0.9, got ${vp.k}`);
 		// The first network (top-left) is in view, near the corner.
@@ -208,7 +204,7 @@ test('FBD open zoom (#79): a big program opens at the readable floor on its top-
 		assert.ok(fs >= 10, `title ${fs}px`);
 		// The fit command still fits everything (far below the floor here).
 		await key(b, '0', 'Digit0', 48, 2);
-		await sleep(400);
+		await settled(b);
 		assert.ok((await viewport(b)).k < 0.5, 'Ctrl+0 fits the whole program');
 	});
 });
@@ -216,11 +212,9 @@ test('FBD open zoom (#79): a big program opens at the readable floor on its top-
 test('FBD open zoom (#79): a small diagram still opens fitted; an edit never re-zooms, it pans a new element into view', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await sleep(400);
 		const k0 = (await viewport(b)).k;
 		assert.ok(k0 >= 0.9, `fitted at ${k0}`);
 		await deliver(b, { type: 'model', model: BIG, title: 'big.fbd' });
-		await sleep(400);
 		assert.ok(Math.abs((await viewport(b)).k - 0.9) < 0.001, 'another file: a fresh opening frame');
 		// A structural edit to the same file: the camera keeps its zoom and
 		// pans the new element (far below) into view.
@@ -230,7 +224,6 @@ test('FBD open zoom (#79): a small diagram still opens fitted; an edit never re-
 			edges: [...BIG.edges, { from: 'v:z', to: 'c:zz' }]
 		};
 		await deliver(b, { type: 'model', model: more, title: 'big.fbd' });
-		await sleep(500);
 		const vp = await viewport(b);
 		assert.ok(Math.abs(vp.k - 0.9) < 0.001, `zoom kept, got ${vp.k}`);
 		const z = await rect(b, node('c:zz'));
@@ -280,14 +273,14 @@ test('Ladder OR (#91): Ctrl-click three contacts, O → ONE wrapOr with a leg ea
 		assert.equal(await b.eval(`document.querySelectorAll('.node.selected').length`), 3);
 		await reset(b);
 		await key(b, 'o', 'KeyO', 79);
-		assert.deepEqual(await ldOps(b), [{ type: 'wrapOr', rung: 'r1', paths: [[0], [1], [2]] }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'wrapOr', rung: 'r1', paths: [[0], [1], [2]] }]);
 		// The toolbar button: same op for the same selection.
 		await deliver(b, { type: 'ldModel', model: LD3, title: 'p.ld' });
 		await clickAt(b, await center(b, byId('contact', 'a')));
 		await ctrlClick(b, await center(b, byId('contact', 'c')));
 		await reset(b);
 		await clickAt(b, await center(b, byId('chip', 'or')));
-		assert.deepEqual(await ldOps(b), [{ type: 'wrapOr', rung: 'r1', paths: [[0], [2]] }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'wrapOr', rung: 'r1', paths: [[0], [2]] }]);
 	});
 });
 
@@ -314,9 +307,9 @@ test('Ladder OR (#91): a branch is ONE element — g.branch > g.leg > g.node, la
 		assert.ok(await b.eval(`document.querySelector('[data-id="${id}"]').classList.contains('selected')`), 'branch selected');
 		await reset(b);
 		await key(b, 'o', 'KeyO', 79);
-		assert.deepEqual(await ldOps(b), [{ type: 'addLeg', rung: 'r1', path: [0] }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'addLeg', rung: 'r1', path: [0] }]);
 		await reset(b);
 		await key(b, 'Delete', 'Delete', 46);
-		assert.deepEqual(await ldOps(b), [{ type: 'delete', rung: 'r1', path: [0] }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'delete', rung: 'r1', path: [0] }]);
 	});
 });

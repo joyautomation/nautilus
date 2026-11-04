@@ -87,3 +87,17 @@ func TestUnknownAssetNotFound(t *testing.T) {
 		}
 	}
 }
+
+var programFileRe = regexp.MustCompile(`\bprogram\.(st|ld|fbd|sfc|il)\b`)
+
+// TestDashboardNamesNoProgramFile keeps the page from telling the user which
+// file their logic lives in (#582). The dashboard is one static page for
+// every project, and it can't know: `naut new --language ld` writes
+// program.ld, an FBD project program.fbd, and a manifest may name its files
+// anything. A beginner told to edit program.st in a ladder project goes
+// looking for a file that isn't there.
+func TestDashboardNamesNoProgramFile(t *testing.T) {
+	if m := programFileRe.Find(indexHTML); m != nil {
+		t.Fatalf("index.html names %q; the dashboard serves every project and can't know its program's file name", m)
+	}
+}

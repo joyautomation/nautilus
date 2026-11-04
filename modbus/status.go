@@ -81,7 +81,7 @@ func (d *Driver) Health() Health {
 // Quality says, per tag, how much its last delivered value is worth
 // believing (io.QualityReporter). Only non-Good entries appear:
 //
-//   - a tag whose source is connected is Good — unless its block is
+//   - a tag whose source is online is Good — unless its block is
 //     exception-marked, which is Bad (the connection is fine, THIS span of
 //     addresses is refused: FTIR's reg-46 collision made visible), or the
 //     device delivered a float that is not a number — NaN or ±Inf, which
