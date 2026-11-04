@@ -19,6 +19,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 )
 
 // send is one raw request and its response, or the service fault's code.
@@ -515,7 +516,7 @@ func TestCallAnswersEachMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := other.Connect(context.Background()); err != nil {
+	if err := gopcuatest.Connect(context.Background(), other); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeClient(other) })
