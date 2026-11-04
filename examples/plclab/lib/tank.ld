@@ -32,7 +32,7 @@ LD
   RUNG drained (* down to the low switch, or stopped: close the drain *)
     [ /Low | /Running ] ( R Drain )
 
-  RUNG full
+  RUNG full (* the lamp shows the tank is at the high switch *)
     High ( Full )
 END_LD
 END_FUNCTION_BLOCK
