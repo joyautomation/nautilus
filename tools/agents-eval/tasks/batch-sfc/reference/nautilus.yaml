@@ -1,0 +1,20 @@
+name: batch-sfc-reference
+
+tasks:
+  - program: batch.sfc
+    scan: 100ms
+
+tags:
+  - { name: StartPB,     role: input,    type: BOOL, init: false,             desc: "Start push button" }
+  - { name: AbortPB,     role: input,    type: BOOL, init: false,             desc: "Abort push button" }
+  - { name: LT101_Level, role: input,    type: REAL, init: 0.0,  unit: "%",   desc: "Tank level (LT-101)" }
+  - { name: FullSP,      role: setpoint, type: REAL, init: 80.0, unit: "%",   desc: "Fill stops here" }
+  - { name: EmptySP,     role: setpoint, type: REAL, init: 5.0,  unit: "%",   desc: "Drain stops here" }
+  - { name: XV101_Open,  role: output,   type: BOOL, init: false,             desc: "Fill valve XV-101" }
+  - { name: M101_Run,    role: output,   type: BOOL, init: false,             desc: "Agitator M-101" }
+  - { name: XV102_Open,  role: output,   type: BOOL, init: false,             desc: "Drain valve XV-102" }
+  - { name: FillTimeout, role: output,   type: BOOL, init: false,             desc: "Fill ran past 60 s" }
+  - { name: BatchCount,  role: state,    type: DINT, init: 0,                 desc: "Completed batches" }
+
+driver:
+  type: memory

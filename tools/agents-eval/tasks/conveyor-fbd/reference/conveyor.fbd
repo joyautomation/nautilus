@@ -1,0 +1,16 @@
+PROGRAM Conveyor
+(* M-201 packing conveyor: start/stop with safety permissives, jam stop. *)
+FBD
+  NETWORK 'Jam: PE-101 blocked 3 s while running'
+  blockedRunning = AND(PE101_Blocked, M201_Run)
+  jamTmr : TON(IN := blockedRunning, PT := T#3S)
+  peClear = NOT PE101_Blocked
+  resetOk = AND(ResetPB, peClear)
+  JamAlm := AND(OR(jamTmr.Q, JamAlm), NOT resetOk)
+
+  NETWORK 'M-201: start/stop seal-in with permissives'
+  // losing a permissive drops the seal; a restart needs a new press
+  runReq = OR(StartPB, M201_Run)
+  M201_Run := AND(runReq, StopPB, EStop_OK, Guard_Closed, NOT JamAlm)
+END_FBD
+END_PROGRAM

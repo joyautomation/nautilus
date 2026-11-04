@@ -1,0 +1,18 @@
+name: totalizer-st-reference
+
+tasks:
+  - program: dosing.st
+    scan: 50ms
+
+tags:
+  - { name: FT201_Pulse, role: input,    type: BOOL, init: false,             desc: "FT-201 pulse, 0.5 L each" }
+  - { name: DoseStart,   role: input,    type: BOOL, init: false,             desc: "Start a dose" }
+  - { name: TotReset,    role: input,    type: BOOL, init: false,             desc: "Reset the grand total" }
+  - { name: DoseSP,      role: setpoint, type: REAL, init: 100.0, unit: "L",  desc: "Dose size" }
+  - { name: XV201_Open,  role: output,   type: BOOL, init: false,             desc: "Dosing valve XV-201" }
+  - { name: Dose_L,      role: state,    type: REAL, init: 0.0,   unit: "L",  desc: "This dose so far" }
+  - { name: Total_L,     role: state,    type: REAL, init: 0.0,   unit: "L",  desc: "Grand total" }
+  - { name: DoseDone,    role: output,   type: BOOL, init: false,             desc: "Last dose complete" }
+
+driver:
+  type: memory

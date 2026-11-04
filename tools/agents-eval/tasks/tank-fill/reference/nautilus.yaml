@@ -1,0 +1,20 @@
+name: tank-fill-reference
+
+tasks:
+  - program: tank.ld
+    scan: 100ms
+
+tags:
+  - { name: LSL101,   role: input,  type: BOOL, init: true,  desc: "Low level switch (LSL-101)" }
+  - { name: LSH101,   role: input,  type: BOOL, init: false, desc: "High level switch (LSH-101)" }
+  - { name: LSHH101,  role: input,  type: BOOL, init: false, desc: "High-high level switch (LSHH-101)" }
+  - { name: AutoSel,  role: input,  type: BOOL, init: false, desc: "HOA selector in Auto" }
+  - { name: HornAck,  role: input,  type: BOOL, init: false, desc: "Horn silence push button" }
+  - { name: AlmReset, role: input,  type: BOOL, init: false, desc: "Alarm reset push button" }
+  - { name: FillCall, role: state,  type: BOOL, init: false, desc: "Level asks for a fill (low to high)" }
+  - { name: P101_Run, role: output, type: BOOL, init: false, desc: "Fill pump P-101" }
+  - { name: HHAlarm,  role: output, type: BOOL, init: false, desc: "High-high level alarm" }
+  - { name: Horn,     role: output, type: BOOL, init: false, desc: "Alarm horn" }
+
+driver:
+  type: memory
