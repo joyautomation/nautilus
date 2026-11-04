@@ -2,6 +2,29 @@ package ir
 
 import "testing"
 
+// A MemberWriter host is handed the assigned path root-first (#578); a
+// path deeper than MaxMemberDepth is not a member path at all, and the VM
+// falls back to a whole-global write.
+func TestMemberPathIsRootFirst(t *testing.T) {
+	// S.Items[2].X, as writeLValue builds it: leaf first.
+	chain := []accessor{{fieldIdx: 0, isField: true}, {arrIdx: 1}, {fieldIdx: 4, isField: true}}
+	p, ok := memberPath(chain)
+	if !ok || p.Len() != 3 {
+		t.Fatalf("memberPath = %+v, %v", p, ok)
+	}
+	for i, want := range []struct {
+		idx   int
+		field bool
+	}{{4, true}, {1, false}, {0, true}} {
+		if idx, field := p.Step(i); idx != want.idx || field != want.field {
+			t.Errorf("step %d = (%d, %v), want (%d, %v)", i, idx, field, want.idx, want.field)
+		}
+	}
+	if _, ok := memberPath(make([]accessor, MaxMemberDepth+1)); ok {
+		t.Error("a path deeper than MaxMemberDepth was accepted")
+	}
+}
+
 type stubHost struct {
 	globals map[string]Value
 	now     int64

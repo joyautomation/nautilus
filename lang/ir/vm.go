@@ -33,6 +33,64 @@ type DivZeroCounter interface {
 	DivZero()
 }
 
+// MemberWriter is an optional Host extension. An assignment that reaches
+// into a global (`S.Speed := 60`, `Tbl[3] := 0`, `Line.Steps[2].Mode :=
+// Run`) is a read-modify-write of the whole aggregate, because the host
+// holds whole tags. A host that implements MemberWriter is handed the new
+// whole value together with the path the program actually assigned, so it
+// can land only that part and leave every other member as whatever it
+// holds by then (#578: an external write to a sibling member that arrives
+// mid-scan must not be overwritten by the program's stale copy). A host
+// without it gets the whole value through WriteGlobal, as before, and so
+// does any host for a path deeper than MaxMemberDepth.
+type MemberWriter interface {
+	WriteGlobalMember(name string, whole Value, path MemberPath) error
+}
+
+// MaxMemberDepth is the deepest member path a MemberWriter is handed; an
+// assignment deeper than this is reported as a write of the whole global.
+const MaxMemberDepth = 16
+
+// MemberPath is the part of a global an assignment reached into, as a
+// sequence of steps from the root: a struct member or a function-block pin
+// (field, by index) or an array element (by 0-based offset into Arr, the
+// declared lower bound already taken off). A bit of an integer
+// (`S.Word.3 := TRUE`) is an assignment of the integer. It is a plain
+// value, with no pointers, so handing one to a host costs no allocation.
+type MemberPath struct {
+	n     int
+	idx   [MaxMemberDepth]int32
+	field uint16 // bit i: step i is a field
+}
+
+// memberPath converts writeLValue's leaf-first chain; ok is false when the
+// chain is deeper than MaxMemberDepth.
+func memberPath(chain []accessor) (p MemberPath, ok bool) {
+	if len(chain) > MaxMemberDepth {
+		return p, false
+	}
+	p.n = len(chain)
+	for i := range chain {
+		a := chain[len(chain)-1-i]
+		if a.isField {
+			p.idx[i] = int32(a.fieldIdx)
+			p.field |= 1 << uint(i)
+		} else {
+			p.idx[i] = int32(a.arrIdx)
+		}
+	}
+	return p, true
+}
+
+// Len is the number of steps below the root.
+func (p MemberPath) Len() int { return p.n }
+
+// Step returns the i-th step below the root (0 = the root's own member or
+// element): its index, and whether it is a field (else an array element).
+func (p MemberPath) Step(i int) (index int, field bool) {
+	return int(p.idx[i]), p.field&(1<<uint(i)) != 0
+}
+
 func isZeroDivisor(v Value) bool {
 	if v.Kind == TypeReal {
 		return v.F == 0
@@ -319,6 +377,11 @@ func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
 			cur = CopyValue(coerceValue(cur, n.T))
 			if err := storeAtRoot(&cur, chain, v); err != nil {
 				return fmt.Errorf("assign to %s: %w", n.Name, err)
+			}
+			if mw, ok := ctx.Host.(MemberWriter); ok {
+				if p, ok := memberPath(chain); ok {
+					return mw.WriteGlobalMember(n.Name, cur, p)
+				}
 			}
 			return ctx.Host.WriteGlobal(n.Name, cur)
 		case *IndexRef:

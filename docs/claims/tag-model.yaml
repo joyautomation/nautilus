@@ -262,6 +262,34 @@ claims:
       - go ./runtime TestSetPathUnknownMemberSuggests
       - go ./runtime TestSetPathOnNonStructRootCreatesNoJunkTag
       - go ./runtime TestSetPathUnknownRoot
+  - id: TAG-051
+    claim: >-
+      A scan's commit lands only the members the program assigned in that
+      scan, so a write to another member that lands mid-scan survives,
+      whoever made it (POST /api/tags, an OPC UA client, another task), at
+      any depth: a nested member, an array element, a member of an element
+      of an array of structs.
+    source: "#a-member-write-during-a-scan"
+    tests:
+      - go ./runtime TestExternalMemberWriteSurvivesProgramMemberWrite
+      - go ./runtime TestMemberMergeNestedAndArrays
+      - go ./runtime TestTwoTasksWritingDifferentMembersBothLand
+      - go ./runtime TestConcurrentMemberWritesAreNeverLost
+      - go ./server TestHTTPMemberWritesSurviveProgramMemberWrites
+      - go ./opcua/server TestOPCUAMemberWriteSurvivesProgramMemberWrite
+  - id: TAG-052
+    claim: >-
+      When the program and a writer hit the same member in one scan, the
+      program's assignment wins, as it does for a whole tag, even when it
+      assigns the value the member already had. Assigning a whole member or
+      the whole tag assigns everything beneath it, and a bit is an
+      assignment of its word.
+    source: "#a-member-write-during-a-scan"
+    tests:
+      - go ./runtime TestProgramAssignmentWinsTheSameMember
+      - go ./runtime TestWholeAssignmentOwnsEverythingBeneath
+      - go ./runtime TestBitAssignmentIsItsWord
+      - go ./server TestHTTPMemberWritesSurviveProgramMemberWrites
   - id: TAG-025
     claim: >-
       A member write keeps the leaf's type (a number lands as REAL or as an

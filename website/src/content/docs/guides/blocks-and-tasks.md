@@ -139,9 +139,13 @@ rt, _ := runtime.New(runtime.Options{
 Tasks run concurrently, and every scan still sees a consistent store:
 each scan copies its program's external tags in, executes privately, and
 commits what changed as one unit, so a fast task never waits behind a slow
-one and a reader never sees a scan half-done. Two tasks writing the same
-tag resolve by commit order (last wins), as on any PLC with shared
-globals — give a tag one owner. Tags are all that tasks share: a
+one and a reader never sees a scan half-done. A commit lands only what the
+program assigned, member by member, so two tasks writing different members
+of one struct tag both land (see
+[a member write during a scan](/guides/tag-model/#a-member-write-during-a-scan)).
+Two tasks writing the same tag, or the same member, resolve by commit
+order (last wins), as on any PLC with shared globals — give a tag one
+owner. Tags are all that tasks share: a
 program's own variables, its function-block instances among them, are
 private to it, so a value another task needs is published to a tag by the
 program that owns it (`T1Done := t1.Q;`, or a coil), and naming the

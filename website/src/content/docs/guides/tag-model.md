@@ -429,6 +429,25 @@ writable struct tag and each leaf is editable), and the HMI kit's
 `rt.writeTag('ZONE15_PMP_015.START', true)`, which resolves to `null` on
 success or the controller's reason when it refuses.
 
+### A member write during a scan
+
+A write can land while a scan is running: a scan copies its tags in at the
+start and commits what the program assigned at the end. The commit lands
+only the members the program **assigned** in that scan, so a write to a
+member the program did not assign survives, whoever made it: `POST
+/api/tags`, an OPC UA client, a Sparkplug command or another task. This
+holds at any depth: a nested member, an array element, or a member of one
+element of an array of structs.
+
+When the program and a writer hit the **same** member in one scan, the
+program's assignment is the last write and wins. A whole tag has always
+followed this rule. The assignment counts even when it stores the value the
+member already had (`P101.Speed := P101.Speed`). Assigning a whole member
+(`P101.LVL := Limits`) or the whole tag (`P101 := Spare`) assigns everything
+beneath it. A bit (`P101.Word.3 := TRUE`) is an assignment of its word. To
+let the operator own a member, don't assign it in the program, or assign it
+only when the logic means to change it.
+
 ## Observing scans: `Runtime.OnScan`
 
 A Go-level subsystem that needs to react to the tag store every cycle — an
