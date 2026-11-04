@@ -400,10 +400,14 @@ claims:
       - go ./runtime TestRunStandbyDoesNotSaveOnStop
       - go ./runtime TestRunLostLeaseDoesNotSaveOnStop
       - go ./runtime TestRunLogsAFailedLastSave
+      - go ./runtime TestRunLoopOverrunningStopsOnCancel
       - go ./tools/blackbox TestBlackbox/002-F19-retain-saved-on-orderly-stop
     note: >-
-      The runtime tests stop Run well inside the first save interval. The
-      black-box check (release; black-box finding 2026-11-03-002 F-19, #531)
+      The runtime tests stop Run well inside the first save interval.
+      TestRunLoopOverrunningStopsOnCancel: a task whose scan overruns its
+      period still stops on the cancel, so Run returns and the last save
+      happens (on Linux it scanned on, and naut run's 5 s bound cut the
+      save, #599). The black-box check (release; black-box finding 2026-11-03-002 F-19, #531)
       runs naut itself and writes a setpoint over HTTP 0.2 s before SIGTERM
       and before SIGINT, then restarts and reads it back. Not asserted: that
       the elector keeps renewing the lease until the final save and only
