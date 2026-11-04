@@ -120,8 +120,22 @@ const MEASURE = `(() => {
 	// ── FBD: xyflow nodes and their labels ────────────────────────────────
 	const nodes = [...document.querySelectorAll('.svelte-flow__node')].filter((n) => !n.classList.contains('hidden'));
 	const nb = nodes.map((n) => ({ el: n, b: box(n) })).filter((n) => n.b.w > 1 && n.b.h > 1);
+	// A network's frame (.svelte-flow__node-net) is a band drawn behind its
+	// blocks, so it is meant to hold them: frames must not overlap one
+	// another, and each block must sit wholly inside exactly one frame (when
+	// the diagram has any). A block is then measured against its own frame
+	// only by its frame's header text, which must stay clear of it.
+	const isFrame = (n) => n.el.classList.contains('svelte-flow__node-net');
+	const frames = nb.filter(isFrame);
+	for (const n of nb) {
+		if (isFrame(n) || !frames.length) continue;
+		const holders = frames.filter((f) => inside(n.b, f.b));
+		if (holders.length !== 1) out.push('FBD node not inside exactly one network frame (' + holders.length + '): ' + describe(n.el));
+		n.frame = holders[0];
+	}
 	for (let i = 0; i < nb.length; i++) {
 		for (let j = i + 1; j < nb.length; j++) {
+			if (isFrame(nb[i]) !== isFrame(nb[j])) continue;
 			if (hit(nb[i].b, nb[j].b)) out.push('FBD nodes overlap: ' + describe(nb[i].el) + ' / ' + describe(nb[j].el));
 		}
 	}
@@ -145,10 +159,11 @@ const MEASURE = `(() => {
 			if (ftexts[j].node !== t.node && hit(t.b, ftexts[j].b)) out.push('FBD text overlaps text: ' + describe(t.el) + ' / ' + describe(ftexts[j].el));
 		}
 		for (const n of nb) {
-			if (n !== t.node && hit(t.b, n.b)) out.push('FBD text overlaps a node: ' + describe(t.el) + ' / ' + describe(n.el));
+			if (n === t.node || (isFrame(n) && t.node.frame === n)) continue;
+			if (hit(t.b, n.b)) out.push('FBD text overlaps a node: ' + describe(t.el) + ' / ' + describe(n.el));
 		}
 	}
-	return { out, counts: { svgs: svgs.length, texts: texts.length, bodies: bodies.length, nodes: nb.length, fbdTexts: ftexts.length } };
+	return { out, counts: { svgs: svgs.length, texts: texts.length, bodies: bodies.length, nodes: nb.length, frames: frames.length, fbdTexts: ftexts.length } };
 })()`;
 
 // Known, still-open overlaps, by fixture: a pattern for each exact message.
