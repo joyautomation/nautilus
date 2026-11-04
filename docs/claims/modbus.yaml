@@ -226,6 +226,8 @@ claims:
       - go ./modbus TestOnlineWriteOnlySourceWithoutRewrite
       - go ./modbus TestOutagesIdleWriteOnlySourceNoticesCut
       - go ./modbus TestIdleWriteOnlySourceSendsNothing
+      - go ./modbus TestOnlineIdleTimeoutIsNotAnOutage
+      - go ./modbus TestOnlinePolledIdleTimeoutIsNotAnOutage
       - go ./modbus TestConnectionsSplitBySource
     partial: true
     note: >-
@@ -233,11 +235,15 @@ claims:
       not have and injects exceptions per function code, and a scripted
       server for the three-in-a-row debounce. A slow block keeping the
       source online until it is read again (scan classes) is not asserted.
-      A write-only source without `rewrite:` notices a cut or closed link
-      while idle, within the one-second idle check, against a dialer that
-      closes the socket and a server that hangs up. A silent cut caught
+      A write-only source without `rewrite:` notices a cut link while
+      idle, within the one-second idle check, against a dialer that closes
+      the socket. A device that closes idle connections (a proxy with a
+      200 ms idle timeout) leaves a write-only and a polled source online
+      with nothing counted, a command sent after the close goes out on a
+      fresh connection, and the poll schedule is kept. A silent cut caught
       only by TCP keepalive (about 15 s) is not exercised; it needs a real
-      dropped link. Nothing has run against a real gateway with a dead
+      dropped link. A reset (as opposed to a clean close) is not tested
+      separately from the cut. Nothing has run against a real gateway with a dead
       drop.
   - id: MB-019
     claim: >-
@@ -621,7 +627,9 @@ claims:
       parking with `enable:` and a gateway answering 0x0A/0x0B on every
       block three requests in a row included; one or two misses are not an
       outage, and a keep-alive the gateway keeps confirming does not make a
-      polled source flap. Stopping nautilus does not count.
+      polled source flap. A device that closes an idle connection and
+      takes the reconnect is not an outage; one that then refuses it
+      counts once. Stopping nautilus does not count.
       A binding may not take the name.
     source: "#the-__online-companion-and-enable"
     tests:
@@ -632,7 +640,9 @@ claims:
       - go ./modbus TestOutagesStopIsNotAnOutage
       - go ./modbus TestOutagesWriteOnlySourceCounts
       - go ./modbus TestOutagesIdleWriteOnlySourceNoticesCut
-      - go ./modbus TestOutagesIdleWriteOnlySourceNoticesPeerClose
+      - go ./modbus TestOutagesIdleCloseThenRefusedCountsOnce
+      - go ./modbus TestOnlineIdleTimeoutIsNotAnOutage
+      - go ./modbus TestOnlinePolledIdleTimeoutIsNotAnOutage
       - go ./modbus TestOutagesAnsweredResetsPerConnection
       - go ./modbus TestOutagesCompanionCollidesWithABinding
       - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
@@ -646,6 +656,7 @@ claims:
       Against the in-process slave, with a test dialer that cuts and
       restores the link. A write-only source without `rewrite:` is online
       from the connect, so losing its connection counts, and it notices a
-      cut or closed link while idle, within the one-second idle check,
-      without sending a request. A silent cut caught only by TCP keepalive
+      cut link while idle, within the one-second idle check, without
+      sending a request. A device closing idle connections is not an
+      outage; one that closes and then refuses the reconnect counts once. A silent cut caught only by TCP keepalive
       (about 15 s) is not exercised. Nothing has run on a real device.

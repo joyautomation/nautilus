@@ -786,7 +786,29 @@ func (d *Driver) run(ctx context.Context, s *source) {
 		s.setState("connected", nil)
 		d.log.Info("modbus: connected", "source", s.cfg.ID, "addr", s.cfg.Addr(), "blocks", len(s.blocks))
 
-		d.serve(ctx, s, c)
+		// A device that closes a connection it has been idle on (a
+		// server-side idle timeout) is not an outage: reconnect on the
+		// spot and carry on as if nothing happened, online and uncounted.
+		// Only a reconnect that fails makes it one, below.
+		closed := d.serve(ctx, s, c)
+		for closed && ctx.Err() == nil && s.isEnabled() {
+			_ = c.Close()
+			nc, err := d.dialSource(ctx, s)
+			if err != nil {
+				if ctx.Err() == nil {
+					d.errs.Add(1)
+					s.mu.Lock()
+					s.lastErr = fmt.Errorf("reconnect after an idle close: %w", err)
+					s.retries++
+					s.mu.Unlock()
+				}
+				break
+			}
+			d.log.Info("modbus: device closed an idle connection; reconnected",
+				"source", s.cfg.ID, "addr", s.cfg.Addr())
+			c = nc
+			closed = d.resume(ctx, s, c)
+		}
 
 		_ = c.Close()
 		s.mu.Lock()
@@ -843,6 +865,7 @@ func (d *Driver) dialSource(ctx context.Context, s *source) (*tcpConn, error) {
 // tcpConn implements it; scripted test conns do not.
 type idleChecker interface {
 	checkIdle() error
+	quietFor() time.Duration
 }
 
 // idleCheckEvery is how often serve asks an idle connection whether it is
@@ -851,6 +874,15 @@ type idleChecker interface {
 // rewrite:), whose loop would otherwise sleep until the next command, and
 // for slow scan classes. The check sends nothing to the device (issue #552).
 const idleCheckEvery = time.Second
+
+// checkBeforeSendAfter: a request about to go out on a link that has been
+// quiet this long is preceded by the idle check, so a connection the
+// device closed on its idle timeout since the last check is reconnected
+// quietly instead of failing the request (an outage). It costs one
+// idlePeek on a healthy link, and only after a quiet spell; a device
+// whose idle timeout is at least this long never sees a request on a
+// connection it has closed, short of a close inside the peek itself.
+const checkBeforeSendAfter = 100 * time.Millisecond
 
 // linkKeepAlive is the TCP keepalive on every source connection. A link
 // that is cut silently (a pulled cable, a dead switch) sends no FIN, so an
@@ -873,7 +905,33 @@ var linkKeepAlive = net.KeepAliveConfig{
 // command must not wait behind a full poll cycle), re-assert every Rewrite
 // binding that has a value, then prime every block so the snapshot fills
 // without waiting a slow class's interval.
-func (d *Driver) serve(ctx context.Context, s *source, c conn) {
+//
+// It returns true only when the device closed the connection cleanly while
+// no request was outstanding (an idle timeout on the device), which run
+// answers with a quiet reconnect (see resume) rather than an outage.
+func (d *Driver) serve(ctx context.Context, s *source, c conn) (idleClosed bool) {
+	if !d.prime(ctx, s, c) {
+		return false
+	}
+	return d.loop(ctx, s, c)
+}
+
+// resume carries a source over to the connection that replaced one the
+// device closed while idle: the queued writes go out, then the loop
+// carries on with the poll and rewrite schedule as it was, nothing
+// re-asserted or primed, so a device whose idle timeout is shorter than a
+// slow scan class is not read more often than configured. It returns what
+// serve does.
+func (d *Driver) resume(ctx context.Context, s *source, c conn) bool {
+	if !d.flushWrites(ctx, s, c) {
+		return false
+	}
+	return d.loop(ctx, s, c)
+}
+
+// prime is serve's on-connect step: re-assert, flush, read every block.
+// False when the connection broke.
+func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
 	now := time.Now()
 	s.mu.Lock()
 	for _, rw := range s.rewrites {
@@ -884,18 +942,24 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 	}
 	s.mu.Unlock()
 	if !d.flushWrites(ctx, s, c) {
-		return
+		return false
 	}
 	for _, br := range s.blocks {
 		if !d.pollBlock(ctx, s, c, br) {
-			return
+			return false
 		}
 		br.next = time.Now().Add(br.rate)
 	}
+	return true
+}
 
+// loop is serve's steady state: wait for the next due block, rewrite or
+// command, and check the link while nothing is due. It returns true when
+// the device closed the connection while idle.
+func (d *Driver) loop(ctx context.Context, s *source, c conn) bool {
 	for {
 		if ctx.Err() != nil || !s.isEnabled() {
-			return
+			return false
 		}
 		wake := time.Hour
 		now := time.Now()
@@ -924,18 +988,25 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return false
 		case <-s.kick:
 			timer.Stop()
 			if !s.isEnabled() {
-				return
+				return false
+			}
+			if up, closed := d.linkUp(ctx, s, c, checkBeforeSendAfter); !up {
+				return closed
 			}
 			if !d.flushWrites(ctx, s, c) {
-				return
+				return false
 			}
 		case <-timer.C:
-			if idle && !d.linkUp(ctx, s, c) {
-				return
+			quiet := checkBeforeSendAfter
+			if idle {
+				quiet = 0 // woke only to look
+			}
+			if up, closed := d.linkUp(ctx, s, c, quiet); !up {
+				return closed
 			}
 			now := time.Now()
 			for _, rw := range s.rewrites {
@@ -953,14 +1024,14 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 				s.mu.Unlock()
 			}
 			if !d.flushWrites(ctx, s, c) {
-				return
+				return false
 			}
 			for _, br := range s.blocks {
 				if br.next.After(now) || br.parkedUntil.After(now) {
 					continue
 				}
 				if !d.pollBlock(ctx, s, c, br) {
-					return
+					return false
 				}
 				br.next = time.Now().Add(br.rate)
 			}
@@ -968,18 +1039,28 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 	}
 }
 
-// linkUp runs the idle check on c, if it has one. False means the link is
-// gone: the error is recorded and serve returns, so run drops the
-// connection, takes the source offline (an outage if it was online), and
-// reconnects with backoff, as it does for a failed read.
-func (d *Driver) linkUp(ctx context.Context, s *source, c conn) bool {
+// linkUp runs the idle check on c, if it has one and nothing has been sent
+// on it for at least quiet. up false means the link is gone and serve
+// returns. closed true says how: the device closed it
+// cleanly with nothing outstanding, which run answers with a quiet
+// reconnect. Anything else (a reset, a keepalive that went unanswered,
+// unsolicited bytes, a socket closed under us) is recorded as the error,
+// and run drops the connection, takes the source offline (an outage if it
+// was online), and reconnects with backoff, as for a failed read.
+func (d *Driver) linkUp(ctx context.Context, s *source, c conn, quiet time.Duration) (up, closed bool) {
 	ic, ok := c.(idleChecker)
-	if !ok {
-		return true
+	if !ok || ic.quietFor() < quiet {
+		return true, false
 	}
 	err := ic.checkIdle()
-	if err == nil || ctx.Err() != nil {
-		return err == nil
+	if err == nil {
+		return true, false
+	}
+	if ctx.Err() != nil {
+		return false, false
+	}
+	if errors.Is(err, errIdleClosed) {
+		return false, true
 	}
 	d.errs.Add(1)
 	s.mu.Lock()
@@ -987,7 +1068,7 @@ func (d *Driver) linkUp(ctx context.Context, s *source, c conn) bool {
 	s.retries++
 	s.mu.Unlock()
 	d.log.Warn("modbus: link lost while idle", "source", s.cfg.ID, "addr", s.cfg.Addr(), "error", err)
-	return false
+	return false, false
 }
 
 // pollBlock executes one block read and decodes it into the snapshot.

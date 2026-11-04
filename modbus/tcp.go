@@ -105,6 +105,7 @@ type tcpConn struct {
 	nc      net.Conn // rw when it is a real socket; nil under test rigs
 	timeout time.Duration
 	txid    uint16
+	last    time.Time // when the last request went out (or the dial)
 }
 
 // newTCPConn wraps an established stream. timeout bounds each Request when
@@ -112,7 +113,7 @@ type tcpConn struct {
 // Deadlines only apply when rw is a net.Conn — an in-memory test rig has no
 // deadline to set, which is fine because it never blocks.
 func newTCPConn(rw io.ReadWriter, timeout time.Duration) *tcpConn {
-	c := &tcpConn{rw: rw, timeout: timeout}
+	c := &tcpConn{rw: rw, timeout: timeout, last: time.Now()}
 	if nc, ok := rw.(net.Conn); ok {
 		c.nc = nc
 	}
@@ -171,6 +172,7 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 	}
 
 	c.txid++
+	c.last = time.Now()
 	txid := c.txid
 	if c.nc != nil {
 		deadline := time.Time{}
@@ -227,6 +229,11 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 // once; the wait only bounds the quiet case, so it can be tiny.
 const idlePeek = time.Millisecond
 
+// errIdleClosed is checkIdle's report of a clean close by the device (a
+// FIN, read as EOF) while no request was outstanding: what a device with
+// a server-side idle timeout does. The driver reconnects quietly.
+var errIdleClosed = errors.New("modbus: the device closed the idle connection")
+
 // checkIdle asks the socket, between requests, whether the link is still
 // there, without sending anything: a short read that times out on a
 // healthy, quiet link and fails on one the peer closed (EOF), reset, or
@@ -254,9 +261,17 @@ func (c *tcpConn) checkIdle() error {
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		return nil // quiet and healthy
 	case err == io.EOF:
-		return fmt.Errorf("modbus: connection closed by the device")
+		return errIdleClosed
 	}
 	return fmt.Errorf("modbus: idle check: %w", err)
+}
+
+// quietFor is how long it has been since the last request went out on c.
+// The idle check is not traffic, so it does not count.
+func (c *tcpConn) quietFor() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Since(c.last)
 }
 
 // shortRead normalizes io.EOF mid-frame to io.ErrUnexpectedEOF, so a peer
