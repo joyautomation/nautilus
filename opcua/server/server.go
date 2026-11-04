@@ -12,8 +12,9 @@
 //
 // It is read-only unless Options.Writable opens tags, and then only to a
 // writer session: one on a SignAndEncrypt channel from a client
-// certificate in the trust list. A write goes through the runtime's one
-// write front door, the same as POST /api/tags (write.go).
+// certificate in the trust list, or, with Options.AnonymousWrites (a lab
+// switch), any session on the None endpoint too. A write goes through the
+// runtime's one write front door, the same as POST /api/tags (write.go).
 //
 // Subscriptions are fed by the tag store's own change generations: a sweep
 // every Options.Sweep asks the store what moved since the last sweep (one
@@ -83,8 +84,18 @@ type Options struct {
 	// Writable opens the tags and members these globs match to Write from
 	// a writer session (internal/writable: the rule sparkplug.writable
 	// uses). Inputs never are. Empty: every write is refused. A writer
-	// needs a secure endpoint, so without PKI nothing is writable.
+	// needs a secure endpoint, so without PKI nothing is writable, unless
+	// AnonymousWrites makes the None endpoint's sessions writers too.
 	Writable []string
+	// AnonymousWrites makes every session on the None endpoint a writer:
+	// an anonymous client with no certificate may write what Writable
+	// opens, through the same checks and the same front door as a trusted
+	// client. For a lab, where simulators such as PLC-Lab or Factory I/O
+	// connect anonymously and certificates are a chore; never for a plant
+	// network. Off by default. Writable still decides what is writable, so
+	// with Writable empty it opens nothing. Start logs a warning, an error
+	// when the endpoint listens beyond loopback.
+	AnonymousWrites bool
 	// Logger takes the write audit (an Info line per landed write, a Warn
 	// once per client, node and reason for a refusal); nil is slog.Default.
 	Logger *slog.Logger
@@ -178,7 +189,7 @@ func New(rt *runtime.Runtime, o Options) (*Server, error) {
 	if err := writable.Patterns(o.Writable).Validate(); err != nil {
 		return nil, fmt.Errorf("opcua.%w", err)
 	}
-	w := &writeAccess{patterns: writable.Patterns(o.Writable), log: o.Logger}
+	w := &writeAccess{patterns: writable.Patterns(o.Writable), anonymous: o.AnonymousWrites, log: o.Logger}
 	if w.log == nil {
 		w.log = slog.Default()
 	}
@@ -398,10 +409,41 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 	ns.seed(time.Now())
 	s.srv, s.ns, s.cancel = srv, ns, cancel
 	s.url = endpointURL(listen, port)
+	if s.opts.AnonymousWrites {
+		s.warnAnonymousWrites(listen)
+	}
 	s.up, s.since, s.lastErr = true, time.Now(), nil
 	s.done = make(chan struct{})
 	go s.sweep(cctx, s.done)
 	return nil
+}
+
+// warnAnonymousWrites says, at every start, that anonymous clients may
+// write: a warning when the server listens on loopback, where only this
+// machine's clients reach it, and an error when it listens beyond it,
+// where anyone who can reach the port may write. With no writable list it
+// says the switch opens nothing.
+func (s *Server) warnAnonymousWrites(listen string) {
+	lg := s.w.log
+	if len(s.opts.Writable) == 0 {
+		lg.Warn("opcua: anonymous-writes is on, but opcua.writable opens nothing, so nothing is writable", "endpoint", s.url)
+		return
+	}
+	if loopbackHost(listen) {
+		lg.Warn("opcua: anonymous-writes is on: any client on this machine may write the tags opcua.writable opens, anonymously on the None endpoint, with no certificate",
+			"endpoint", s.url, "writable", strings.Join(s.opts.Writable, ", "))
+		return
+	}
+	lg.Error("opcua: anonymous-writes is on and the server listens beyond loopback: ANY client that can reach this port may write the tags opcua.writable opens, with no certificate to say who it is (only its address is logged). Use it on a lab network only, never on a plant network",
+		"endpoint", s.url, "writable", strings.Join(s.opts.Writable, ", "))
+}
+
+// loopbackHost reports whether a listen host (an address in URL form, as
+// endpointHosts returns it) is a loopback address. A name that did not
+// resolve is not known to be loopback.
+func loopbackHost(host string) bool {
+	ip := net.ParseIP(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // SetSoftwareVersion sets the version the server reports as
@@ -528,6 +570,9 @@ type Status struct {
 	CertWarning    string `json:"certWarning,omitempty"`
 	// Writable is opcua.writable; empty is a read-only server.
 	Writable []string `json:"writable,omitempty"`
+	// AnonymousWrites is opcua.anonymous-writes: anonymous sessions on
+	// the None endpoint may write what Writable opens.
+	AnonymousWrites bool `json:"anonymousWrites,omitempty"`
 	// Writes counts the items a client wrote that landed, WritesRefused
 	// the items refused, since the process started.
 	Writes        uint64 `json:"writes"`
@@ -582,7 +627,7 @@ func (s *Server) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := Status{Endpoint: s.url, Listening: s.up, Tags: len(s.rt.Tags().AppendNames(nil)),
-		Writable: s.opts.Writable, Writes: s.w.writes.Load(), WritesRefused: s.w.refused.Load(), Standby: !s.w.leader()}
+		Writable: s.opts.Writable, AnonymousWrites: s.opts.AnonymousWrites, Writes: s.w.writes.Load(), WritesRefused: s.w.refused.Load(), Standby: !s.w.leader()}
 	if st.Endpoint == "" {
 		st.Endpoint = "opc.tcp://" + net.JoinHostPort(s.host, strconv.Itoa(s.port))
 	}

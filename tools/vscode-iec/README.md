@@ -19,7 +19,9 @@ controller onto both the text and the diagram.
    asks, or run **nautilus: Install or Update the naut CLI**. It downloads
    the release for your OS and CPU from GitHub, checks it against
    `checksums.txt`, and keeps it in the extension's storage. No Go
-   toolchain needed.
+   toolchain needed. Terminals inside VS Code find it at once; to use it
+   in other terminals too, click **Add to PATH** when it asks (see
+   [naut on your PATH](#naut-on-your-path)).
 3. **Create a project.** Run **nautilus: Create Project…**, or follow the
    **nautilus: Get Started** walkthrough (install, create, open a diagram,
    run, test; about five minutes). The default *Demo* template is a
@@ -358,6 +360,38 @@ server.
   `naut` on your PATH (for example from `go install
   github.com/joyautomation/nautilus/cmd/naut@latest`) is used first. The
   extension warns when the one it finds is older than it needs.
+
+### naut on your PATH
+
+When the extension runs its own copy of `naut`:
+
+- **Terminals inside VS Code** get its folder first on their PATH, so `naut`
+  there is the one the editor uses. New terminals have it; relaunch any that
+  were open. When the extension runs a `naut` of your own instead (on PATH,
+  or `nautilus.cliPath`), their PATH is left alone.
+- **Other terminals**: after installing, the extension asks before changing
+  anything and lists exactly what will change. Click **Add to PATH**, or
+  **Not now** (remembered; run **nautilus: Add naut to PATH** later). With
+  your OK, and no admin rights:
+  - macOS and Linux: a link `~/.local/bin/naut` to the extension's copy (so
+    updates follow). If `~/.local/bin` isn't on PATH yet, one line that
+    *appends* it, ending `# added by the nautilus VS Code extension`, goes
+    into your shell's startup files. macOS: `~/.zprofile` (`~/.bash_profile`
+    if your shell is bash), and the other one if it exists. Linux:
+    `~/.profile` (`~/.zshrc` if your shell is zsh), plus `~/.bashrc`,
+    `~/.zshrc`, `~/.profile` and, for zsh, `~/.zprofile` where they exist.
+    fish (if `~/.config/fish` exists): `~/.config/fish/conf.d/nautilus.fish`.
+    Other shells: add `~/.local/bin` to PATH yourself. The prompt names the
+    exact files.
+  - Windows: the extension's folder is appended to your user PATH
+    (`HKCU\Environment`, kept as an expandable string so `%USERPROFILE%`
+    entries still work).
+  - Open a new terminal window afterwards. A `naut` you installed yourself
+    keeps winning (the folder is appended, not prepended), and an existing
+    `~/.local/bin/naut` the extension didn't make is never replaced.
+- **nautilus: Remove naut from PATH** undoes it: the link, the marked lines,
+  the fish file, the user PATH entry, and the integrated terminals' PATH.
+  It touches nothing it didn't add.
 - A running nautilus controller (`naut run`) for live values, online edit
   and the controller diff.
 
@@ -398,6 +432,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Download Program to Controller | Online edit |
 | Diff / Pull / Rollback Program | Compare with, bring back, or undo on the controller |
 | Show CLI Info | Which `naut` is in use, and its version |
+| Add naut to PATH / Remove naut from PATH | Make the extension's `naut` usable in any terminal, or undo that ([details](#naut-on-your-path)) |
 
 ## Troubleshooting
 
@@ -406,6 +441,9 @@ The most used; all are under **nautilus:** in the Command Palette.
   see a PATH set in your shell profile; the extension searches the usual
   install directories, and the **nautilus** output channel lists every one
   it tried. **Show CLI Info** says which `naut` it picked.
+- **`naut: command not found` in a terminal.** Inside VS Code, relaunch
+  the terminal. Outside, run **nautilus: Add naut to PATH** and open a new
+  terminal window (see [naut on your PATH](#naut-on-your-path)).
 - **Flatpak VS Code.** Its sandbox can't run programs installed on the
   host, so a `naut` on your PATH is invisible. The install command puts a
   copy inside the sandbox; or use VS Code from a `.deb`, `.rpm` or tarball.

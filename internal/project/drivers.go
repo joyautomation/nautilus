@@ -573,14 +573,27 @@ func opcuaStatus(st opcuaserver.Status) server.DriverStatus {
 		{Label: "writes refused", Value: float64(st.WritesRefused)},
 	}
 	// Writable only when opcua.writable opens something, and then only to
-	// a trusted client on a SignAndEncrypt channel.
+	// a trusted client on a SignAndEncrypt channel, or to anyone at all on
+	// the None endpoint with opcua.anonymous-writes.
 	access := "read-only"
 	if len(st.Writable) > 0 {
 		access = "writable by trusted clients"
+		if st.AnonymousWrites {
+			access = "writable by anonymous clients"
+		}
 	}
 	s.Extra = map[string]any{"endpoint": st.Endpoint, "access": access, "writes": st.Writes, "writesRefused": st.WritesRefused}
 	if len(st.Writable) > 0 {
 		s.Extra["writable"] = st.Writable
+	}
+	if st.AnonymousWrites {
+		s.Extra["anonymousWrites"] = true
+	}
+	// The card shows Message, not Extra: a server any client may write
+	// says so where the dashboard looks (only when the switch opens
+	// something; with nothing writable it is read-only, as the row says).
+	if st.AnonymousWrites && len(st.Writable) > 0 && s.State == "connected" {
+		s.Message += " · writable by anonymous clients"
 	}
 	if st.Standby {
 		s.Extra["standby"] = true

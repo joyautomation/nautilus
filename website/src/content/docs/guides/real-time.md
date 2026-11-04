@@ -64,9 +64,16 @@ tasks.
 **Task isolation.** Tasks run concurrently. Each scan copies its program's
 external tags in, executes privately, and commits what changed as one
 unit, so a fast task never waits behind a slow one and a reader never sees
-a scan half-done. The one rule that follows: two tasks writing the same tag
-resolve by commit order (last wins), as on any PLC with shared globals —
-give a tag one owner.
+a scan half-done. The commit lands only the members, and the bits of a
+word, the program assigned, so a write to another member of the same
+struct tag, or another bit of the same word, survives it. The one rule
+that follows: two tasks writing the same tag, member or bit resolve by
+commit order (last wins), as on any PLC with shared globals — give a tag
+one owner.
+The commit allocates nothing in the common case, when nothing else wrote
+the tag during the scan. When something did (a client's write, another
+task, a force on the tag), the member-by-member merge copies the
+containers along the assigned paths, so that scan allocates a little more.
 
 **An allocation-free scan path.** The VM makes no allocation per builtin
 call, user-function call, or function-block step, so the scan loop itself

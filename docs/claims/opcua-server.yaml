@@ -288,7 +288,8 @@ claims:
   - id: OPC-008
     claim: >-
       The server is read-only unless opcua.writable opens tags, and then only
-      to a writer session: any other session's write to a tag's value is
+      to a writer session (with opcua.anonymous-writes off, the default, an
+      anonymous session on None never is one): any other session's write to a tag's value is
       answered Bad_UserAccessDenied and does not land, and a write to another
       attribute or an Object is Bad_NotWritable. AccessLevel is CurrentRead
       on every node opcua.writable does not open, and the standard Server
@@ -382,7 +383,7 @@ claims:
       Drives[0].Speed), one on a member opens it and everything below it. A
       writer session is one on a SignAndEncrypt endpoint from a trusted
       client certificate; anonymous on None, with or without a certificate,
-      is never one. On every Write request the trust list is read again and
+      is never one unless opcua.anonymous-writes is on (OPC-028). On every Write request the trust list is read again and
       the certificate's validity period checked, so a certificate taken out
       of trusted/, or one that has expired, writes nothing more on the
       channel it has (every item Bad_UserAccessDenied), and the session then
@@ -490,6 +491,53 @@ claims:
       - go ./cmd/naut TestWireRedundancyGatesOPCUAWrites
       - go ./internal/project TestOPCUAStatusCarriesTheWrites
 
+  - id: OPC-028
+    claim: >-
+      opcua.anonymous-writes: true (default false) makes every session on
+      the None endpoint a writer, with no certificate, whether or not the
+      server has secure endpoints; a certificate sent on None is neither
+      needed nor checked. opcua.writable still decides what may be written:
+      with the switch on, a tag no pattern opens is Bad_NotWritable, and with
+      no writable list nothing is writable. Only the None endpoint is opened:
+      a client on a secure channel writes by its certificate alone, re-checked
+      on every Write, so one taken out of the trust list is
+      Bad_UserAccessDenied with the switch on too. naut check warns whenever
+      the switch is on: that it opens nothing with no writable list, and
+      otherwise that any client that can reach the endpoint can write those
+      tags without a certificate, more strongly when the endpoint listens
+      beyond loopback. An anonymous
+      writer gets the same answers as a trusted one: inputs and Objects
+      Bad_NotWritable, arrays Bad_WriteNotSupported, a forced address
+      Bad_Locked, a standby Bad_InvalidState, the same conversions. Its
+      UserAccessLevel follows AccessLevel; with the switch off it reads
+      CurrentRead and every write is Bad_UserAccessDenied. Every start logs
+      that the switch is on: a warning on loopback, an error when the server
+      listens beyond it. The landed-write audit line and every refusal line
+      say anonymous=true, the naut run banner says (anonymous writes on), and
+      the opcua-server row carries anonymousWrites true and access "writable
+      by anonymous clients", and, when it opens something, its message (the
+      dashboard card's sentence) ends "writable by anonymous clients".
+    source: "#lab-setups-without-certificates"
+    tests:
+      - go ./opcua/server TestAnonymousWritesOffRefusesAnonymous
+      - go ./opcua/server TestAnonymousWritesOpenTheNoneEndpoint
+      - go ./opcua/server TestAnonymousWritesOpenNothingWithoutAWritableList
+      - go ./opcua/server TestAnonymousWritesUserAccessLevel
+      - go ./opcua/server TestAnonymousWritesRespectTheStandbyGate
+      - go ./opcua/server TestAnonymousWritesIgnoreACertificateOnNone
+      - go ./opcua/server TestAnonymousWritesAreLoggedAtStart
+      - go ./opcua/server TestAnonymousWritesWarning
+      - go ./opcua/server TestAnonymousWritesLeaveSecureChannelsToTheirCertificate
+      - go ./opcua/server TestAnonymousWriteRefusalsAreMarkedAnonymous
+      - go ./opcua/server TestForeignAsyncuaAnonymousWrites
+      - go ./internal/project TestOPCUAAnonymousWritesConfig
+      - go ./internal/project TestOPCUAStatusCarriesAnonymousWrites
+      - go ./cmd/naut TestCheckWarnsOnAnonymousWrites
+    partial: true
+    note: >-
+      The banner text is not asserted by a test. No black-box check covers
+      anonymous writes yet.
+
   - id: OPC-009
     claim: >-
       GET /api/drivers carries an opcua-server row with the endpoint,
@@ -519,6 +567,7 @@ claims:
       - go ./cmd/naut TestNautRunContinuesWhenOPCUAPortIsTaken
       - go ./cmd/naut TestNautRunShutdownWithOPCUASessionIsPrompt
       - go ./cmd/naut TestNautRunGivesBackTheHTTPPortBeforeSlowStops
+      - go ./cmd/naut TestNautRunStopFreesHTTPPortBeforeLastScan
       - go ./opcua/server TestStartReportsAPortInUse
       - go ./opcua/server TestStopDropsClientsAndRestartReusesThePort
       - go ./opcua/internal/uaserver TestCloseWithSessionOpenIsPrompt

@@ -290,16 +290,18 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	go srv.Run(ctx)
 
 	apiUp := false
+	var apiLn net.Listener
 	if ln, err := net.Listen("tcp", addr); err != nil {
 		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
 	} else {
 		apiUp = true
-		// The HTTP port is the first thing shutdown gives back: the
-		// deferred stops above (OPC UA sessions, the Sparkplug death
-		// certificate, a driver's teardown) run after this returns, and a
-		// `naut run` started again meanwhile must still get its port
-		// (nautilus#423).
-		defer ln.Close()
+		apiLn = ln
+		// The HTTP port is the first thing shutdown gives back: it is
+		// closed as soon as the stop arrives (below), before the wait for
+		// the last scan and the deferred stops above (OPC UA sessions, the
+		// Sparkplug death certificate, a driver's teardown), so a `naut
+		// run` started again meanwhile still gets its port (nautilus#423,
+		// #599). No defer: nothing returns between here and that close.
 		go func() {
 			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "tag api:", err)
@@ -320,6 +322,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if opc != nil && opc.Status().Listening {
 		banner += " — opc ua on " + opc.URL()
+		if st := opc.Status(); st.AnonymousWrites && len(st.Writable) > 0 {
+			banner += " (anonymous writes on)"
+		}
 	}
 	if alarms != nil {
 		banner += fmt.Sprintf(" — %d alarms", len(alarms.Defs))
@@ -332,6 +337,12 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
 	<-ctx.Done()
+	// Give the HTTP port back first. Held through the wait below, a `naut
+	// run` started right after the stop lost the bind and ran without its
+	// tag API while this process finished its last scan (nautilus#599).
+	if apiLn != nil {
+		apiLn.Close()
+	}
 	// Wait for the last scan and the last retain save before the deferred
 	// teardown (the lease release, driver stops) runs, but not forever: a
 	// store that hangs (an unreachable Kubernetes API) must not hold the

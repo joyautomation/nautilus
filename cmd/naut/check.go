@@ -499,6 +499,10 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			warns++
 			fmt.Printf("%s: warning: %s\n", loc.file, w)
 		}
+		if w := opcuaserver.AnonymousWritesWarning(proj.OPCUA.AnonymousWrites, proj.OPCUA.Writable, proj.OPCUA.Endpoint); w != "" {
+			warns++
+			fmt.Printf("%s: warning: %s\n", loc.file, w)
+		}
 	}
 
 	// Keyed by ir.NameKey: tag names are case-insensitive identifiers, so a

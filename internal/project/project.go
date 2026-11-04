@@ -1764,6 +1764,14 @@ type OPCUAConfig struct {
 	// same rule as sparkplug.writable (internal/writable), but its own
 	// list. Inputs are never writable. Empty, the default, is read-only.
 	Writable []string `yaml:"writable"`
+	// AnonymousWrites lets an anonymous client on the None endpoint, with no
+	// certificate, write what Writable opens too: for a lab, where
+	// simulators (PLC-Lab, Factory I/O) connect anonymously and nobody
+	// wants to manage certificates. Same tags, same checks, same front
+	// door as a trusted client. Default false. `naut run` logs a warning at
+	// start (an error when the endpoint is not loopback), and naut check
+	// warns when writable opens nothing for it to open.
+	AnonymousWrites bool `yaml:"anonymous-writes"`
 }
 
 // OPCUA builds the manifest's OPC UA server over a compiled runtime, or
@@ -1778,7 +1786,7 @@ func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) 
 	if pki == "" {
 		pki = opcuaserver.DefaultPKI
 	}
-	srv, err := opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI, PKI: pki, Writable: c.Writable})
+	srv, err := opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI, PKI: pki, Writable: c.Writable, AnonymousWrites: c.AnonymousWrites})
 	if err != nil {
 		return nil, err
 	}

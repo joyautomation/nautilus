@@ -29,6 +29,7 @@ claims:
     tests:
       - go ./runtime TestForceStructMember
       - go ./runtime TestForceEnumMemberByName
+      - go ./runtime TestMemberCommitKeepsForcedMembersOutOfActual
   - id: FRC-004
     claim: >-
       A forced value is coerced like any write: an enumerated tag or member
@@ -54,10 +55,15 @@ claims:
       - go ./runtime TestUnforceRestoresActual
       - go ./runtime TestForceInputOverridesDriver
       - go ./runtime TestForceOutputReappliedAfterLogic
+      - go ./runtime TestMemberCommitKeepsForcedMembersOutOfActual
+      - go ./runtime TestBitCommitKeepsForcedBitsOutOfActual
     note: >-
       The driver's latest reading (an input) and the logic's latest write (an
       output) are each asserted as the actual value, and unforce restores it
-      at once for both.
+      at once for both. For a struct or a word with a forced member or bit,
+      a program writing another member or bit lands only that part in the
+      actual value, so unforcing returns the forced part to its real value,
+      not the forced one.
   - id: FRC-006
     claim: >-
       A write to a forced tag through POST /api/tags is refused with 409

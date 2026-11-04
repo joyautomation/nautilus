@@ -10,6 +10,43 @@ import (
 	"github.com/joyautomation/nautilus/runtime"
 )
 
+// AnonymousWritesWarning is `naut check`'s look at opcua.anonymous-writes,
+// given opcua.writable and opcua.endpoint ("" is DefaultEndpoint). Off, it
+// is "". On with no writable list, it opens nothing, since the switch says
+// who may write, not what: the server runs read-only, which is safe, but
+// the author meant something else. On with a list, it is in effect, and
+// the warning says so: informational on loopback, where only clients on
+// this machine reach the endpoint, and stronger beyond it, where anyone
+// who can reach the port may write (the start-up ERROR's case).
+func AnonymousWritesWarning(on bool, patterns []string, endpoint string) string {
+	if !on {
+		return ""
+	}
+	if len(patterns) == 0 {
+		return "opcua.anonymous-writes is on but opcua.writable lists nothing, so nothing is writable — anonymous-writes says who may write; list the tags under opcua.writable"
+	}
+	if endpoint == "" {
+		endpoint = DefaultEndpoint
+	}
+	tags := strings.Join(patterns, ", ")
+	if anonymousLoopback(endpoint) {
+		return fmt.Sprintf("opcua.anonymous-writes is on: any client that can reach %s (this machine only: it listens on loopback) can write the tags opcua.writable opens (%s) without a certificate — expected in a lab, never on a plant network", endpoint, tags)
+	}
+	return fmt.Sprintf("opcua.anonymous-writes is on and %s listens beyond loopback: ANY client that can reach it over the network can write the tags opcua.writable opens (%s) without a certificate, and only its address is logged — use it on a lab network only, never on a plant network; when the client runs on this machine, listen on 127.0.0.1 instead", endpoint, tags)
+}
+
+// anonymousLoopback reports whether endpoint listens on loopback alone,
+// decided as Start decides it for its start-up line. An endpoint that does
+// not parse is not known to be loopback.
+func anonymousLoopback(endpoint string) bool {
+	host, _, err := ParseEndpoint(endpoint)
+	if err != nil {
+		return false
+	}
+	listen, _ := endpointHosts(host)
+	return loopbackHost(listen)
+}
+
 // WritableWarnings is `naut check`'s look at opcua.writable against a
 // compiled runtime: a pattern that matches no tag or member (a typo, or a
 // tag since renamed), one that matches only inputs (never writable: the
