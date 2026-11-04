@@ -361,3 +361,52 @@ claims:
       5 ms scan. The once-a-second look between slower scans, the stream
       check's look, the look on a connect attempt, and the unseen flip are
       not asserted.
+  - id: EPIC-029
+    claim: >-
+      A standby clears no latch: it reads a set latch as set and leaves it
+      set at the unit, and the leader then delivers and clears it.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyLeavesALatchSet
+    note: >-
+      Two replicas on the in-process fake, scans driven by hand.
+  - id: EPIC-030
+    claim: >-
+      A standby never configures the stream or the custom data area: it
+      polls the packed areas, and a leader streaming beside it keeps stream
+      target #1 and its stream on time.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyLeavesTheStreamToTheLeader
+    partial: true
+    note: >-
+      A leader and a standby against the in-process fake over loopback
+      TCP; the stream configuration is watched for 300 ms. That a standby
+      neither sends the power-up clear nor sets the watchdog is not
+      asserted.
+  - id: EPIC-031
+    claim: >-
+      A takeover moves the stream: the new leader configures it to itself
+      on the same connection, and the old leader stops using it, polls,
+      and does not take it back.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestTakeoverMovesTheStream
+    partial: true
+    note: >-
+      In-process fake; the new leader's stream is watched for 300 ms after
+      the swap. That the switch costs no outage on the status points is not
+      asserted.
+  - id: EPIC-032
+    claim: >-
+      A standby's clean stop puts nothing back: the leader's stream and
+      custom data area stay as the leader configured them. Only a leader's
+      clean stop restores them.
+    source: "#redundancy"
+    tests:
+      - go ./optommp TestStandbyStopLeavesTheStream
+      - go ./optommp TestDriverStopPutsTheStreamConfigBack
+    partial: true
+    note: >-
+      Under redundancy a found stream of the custom data area is put back
+      as off; no test stops a leader that took over from another.

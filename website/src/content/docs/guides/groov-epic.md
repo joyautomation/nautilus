@@ -280,13 +280,28 @@ leadership: commands leave the driver only on the leader. A standby skips
 scans, so it never hands the driver a command, and its driver neither
 rewrites outputs on reconnect nor after a watchdog trip.
 
-**A standby's driver is not passive yet.** It keeps its session with the
-processor, and that session still changes the unit: it clears the on/off
-latches it reads, so the leader can miss a latch event, and when streaming
-it points the stream at itself, taking it from the leader
-([#618](https://github.com/joyautomation/nautilus/issues/618)). Until that
-is fixed, a redundant project should poll rather than stream, and not
-rely on latch tags.
+**A standby changes nothing on the unit.** It keeps a session with the
+processor and polls the packed areas, two plain reads a scan, whatever
+the manifest asks for. It leaves the unit's configuration to the leader:
+it does not send the power-up clear, set the watchdog, write the custom
+data area's pointers, or configure the stream. It clears no latch: a
+latch reads set on the standby until the leader, which must see the
+event, delivers and clears it. A standby's clean stop puts nothing back.
+Its reads still count as requests to the unit, so they feed the
+communication watchdog: a leader that hangs while it still holds the lease
+does not trip it
+([#621](https://github.com/joyautomation/nautilus/issues/621)).
+
+**A takeover moves the stream.** The role follows the write gate, looked
+at every scan and every datagram. A standby whose gate opens becomes the
+leader on the same connection, with no outage: it sends the power-up clear
+if one is owed and configures the watchdog, the custom data area and the
+stream as the manifest asks, pointing the stream at itself. A leader whose
+gate closes stops using the stream and polls as a standby; it leaves the
+configuration where it is, since the new leader now owns it. Only the
+leader's clean stop puts the stream and the pointers back, and under
+redundancy a stream of the custom data area that it found (the previous
+leader's) is put back as off, not as a stream to that replica.
 
 **A command held while the processor was away goes out only on the
 leader.** Leadership is checked again when held commands go out, before
