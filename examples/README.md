@@ -32,8 +32,9 @@ cd nautilus/examples/lift-station
 naut run .
 ```
 
-You should see a line ending `tag API on http://localhost:8080 — Ctrl+C to
-stop`. Open <http://localhost:8080>. You see the engineering dashboard: the
+You should see a line containing `tag API on http://localhost:8080`. Before
+it, a line says `hmi/build is not built yet` and that the built-in
+dashboard is served instead. That is expected until step 2. Open <http://localhost:8080>. You see the engineering dashboard: the
 scan diagnostics and a table of live tags. The water level (`LIT101_Level`)
 moves because the project simulates the plant. To stop, press `Ctrl+C` in
 the terminal.
@@ -80,7 +81,7 @@ add `?look=paper`: <http://localhost:8080/3d?look=paper>.
 
 **5. Make something happen.** The inflow to the well is a setpoint. In the
 dashboard at <http://localhost:8080/_nautilus/>, find `InflowLps` and set it
-to `60`. This is the "storm" case. In a few minutes the well fills past
+to `60`. This is the "storm" case. In about a minute the well fills past
 the lag level and the second pump starts. You can watch it on both the 2D
 screen and the 3D view.
 

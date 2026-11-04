@@ -14,6 +14,7 @@ You will:
 6. Watch and force tags live in VS Code.
 7. Add a small Structured Text program.
 8. Build a simple operator screen (HMI).
+9. Build one file you can copy to a controller.
 
 Each step is one action. Each says what you should see. If you do not see
 it, go to [When something goes wrong](#when-something-goes-wrong) at the end.
@@ -133,8 +134,8 @@ and a short list of next steps.
 5. If VS Code offers to install recommended extensions, click *Install*.
 
 You should see these files in the Explorer on the left, among a few
-others (`README.md`, `.gitignore` and the `.github` and `.vscode`
-folders):
+others (`README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore` and the
+`.github` and `.vscode` folders):
 
 - `nautilus.yaml`: the project. It lists the tags and the programs.
 - `program.ld`: your ladder program.
@@ -867,7 +868,9 @@ ways:
 Something else is using port 8080. Stop the other program, or run on
 another port. In `nautilus.yaml`, change `addr: "localhost:8080"` to
 `addr: "localhost:8090"`, and use that port in every address in this
-tutorial. The HMI's `vite.config.js` proxy target also has the port.
+tutorial. The HMI's `vite.config.js` has the port twice: in the proxy
+`target`, and in the line that sets the `origin` header
+(`'http://localhost:8080'`). Change both.
 
 ### The test says "no tag MotorRun in this project"
 
