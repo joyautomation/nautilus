@@ -250,10 +250,15 @@ drivers record the first snapshot after `Start` and send it to nobody, this
 driver commands what the first scan produces — an output tag's `init:` reaches
 the controller. Give every output an `init:` that is safe to command.
 
-A write that fails because the **connection broke** is requeued and retried
-after reconnect, latest value per tag. A write the controller *refuses* on a
-live connection is logged and dropped for that flush; it goes again the next
-time the value changes.
+Queued writes go out in tag-name order, a struct's members in field order.
+When the **connection breaks** partway through, the write that broke and
+every one after it are requeued and sent again after the reconnect. The
+writes before it are not: the controller answered them, and a re-send could
+put back a value another client wrote since. A struct cut partway re-sends
+only the members the controller had not confirmed. A tag the program
+commanded again meanwhile goes with its newer value (last value wins). A
+write the controller *refuses* on a live connection is logged and dropped
+for that flush; it goes again the next time the value changes.
 
 ## Redundancy
 

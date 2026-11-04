@@ -1017,7 +1017,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *session) bool {
 			return true
 		}
 		b := d.byName[name]
-		if err := d.writeOne(ctx, sess, b, v, term); err != nil {
+		if held, err := d.writeOne(ctx, sess, b, v, term); err != nil {
 			if errors.Is(err, errGateClosed) {
 				// Some of the struct's members may have gone out: forgetting
 				// it makes the next write send every member.
@@ -1030,14 +1030,23 @@ func (d *Driver) flushWrites(ctx context.Context, sess *session) bool {
 			d.setErr(fmt.Errorf("write %s: %w", name, err))
 			d.log.Warn("eip: write failed", "tag", name, "device", b.Device, "error", err)
 			if sess.ctrl.Broken() {
-				// Requeue the flush (every write in it, the ones that landed
-				// too: #608) and retry after reconnect. Not after a reopen:
-				// those were the previous term's.
+				// Requeue the write that broke and every one after it, in
+				// send order, and retry after reconnect (#608). The writes
+				// before it were answered, confirmed or refused: a re-send
+				// would put back a value another client may have written
+				// since. A struct the break cut partway keeps the members
+				// the controller confirmed as written, so only the rest go
+				// again. A tag queued again during the flight keeps its
+				// newer value (last value wins). Not after a reopen: those
+				// were the previous term's.
 				d.wmu.Lock()
 				if d.term == term {
-					for n, pv := range work {
+					if held != nil {
+						d.written[name] = held
+					}
+					for _, n := range names[i:] {
 						if _, exists := d.pending[n]; !exists {
-							d.pending[n] = pv
+							d.pending[n] = work[n]
 						}
 					}
 				}
@@ -1060,17 +1069,22 @@ func (d *Driver) flushWrites(ctx context.Context, sess *session) bool {
 // directly, struct values as per-leaf symbolic writes of the members that
 // changed since the last write (all members on the first write), each
 // after a look at the gate (goOn) for the flush that took it in term.
-func (d *Driver) writeOne(ctx context.Context, sess *session, b TagBinding, v any, term uint64) error {
+//
+// When a struct write fails partway, held is what the controller is known
+// to hold now: the members confirmed in this write at their new values,
+// the rest as last written (unknown, and so sent again, where nothing was
+// written before). It is nil for a scalar.
+func (d *Driver) writeOne(ctx context.Context, sess *session, b TagBinding, v any, term uint64) (held any, err error) {
 	if code, isElem := elementaryCode(b.Type); isElem && b.ArrayLen == 0 {
 		data, err := logix.EncodeScalar(code, scalarOf(v))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return sess.ctrl.WriteTag(ctx, b.Device, code, 1, data)
+		return nil, sess.ctrl.WriteTag(ctx, b.Device, code, 1, data)
 	}
 	iv, ok := v.(ir.Value)
 	if !ok {
-		return fmt.Errorf("eip: compound tag needs ir.Value, got %T", v)
+		return nil, fmt.Errorf("eip: compound tag needs ir.Value, got %T", v)
 	}
 	var prev *ir.Value
 	d.wmu.Lock()
@@ -1080,9 +1094,36 @@ func (d *Driver) writeOne(ctx context.Context, sess *session, b TagBinding, v an
 	d.wmu.Unlock()
 	td, ok := d.typeDef(b.Type)
 	if !ok {
-		return fmt.Errorf("eip: cannot write type %q", b.Type)
+		return nil, fmt.Errorf("eip: cannot write type %q", b.Type)
 	}
-	return d.writeStructLeaves(ctx, sess, b.Device, td, iv, prev, term)
+	h := heldFrom(iv, prev)
+	if err := d.writeStructLeaves(ctx, sess, b.Device, td, iv, &h, term); err != nil {
+		return h, err
+	}
+	return nil, nil
+}
+
+// heldFrom is a copy of v's shape holding, per elementary leaf, the value
+// last written (prev) or, where there is none, the zero ir.Value, which
+// equals nothing: what the controller is known to hold before a write of
+// v. writeStructLeaves updates it as each member is confirmed.
+func heldFrom(v ir.Value, prev *ir.Value) ir.Value {
+	if v.Kind != ir.TypeStruct {
+		if prev != nil {
+			return *prev
+		}
+		return ir.Value{}
+	}
+	out := v
+	out.Fld = make([]ir.Value, len(v.Fld))
+	for i := range v.Fld {
+		var p *ir.Value
+		if prev != nil && prev.Kind == ir.TypeStruct && i < len(prev.Fld) {
+			p = &prev.Fld[i]
+		}
+		out.Fld[i] = heldFrom(v.Fld[i], p)
+	}
+	return out
 }
 
 func (d *Driver) typeDef(name string) (TypeDef, bool) {
@@ -1094,22 +1135,19 @@ func (d *Driver) typeDef(name string) (TypeDef, bool) {
 	return TypeDef{}, false
 }
 
-// writeStructLeaves walks manifest fields, writing changed elementary leaves
-// symbolically ("Device.Field.Sub"). Nested structs recurse; strings and
+// writeStructLeaves walks manifest fields, writing the elementary leaves
+// that differ from held symbolically ("Device.Field.Sub"), and records each
+// one the controller confirmed in held. Nested structs recurse; strings and
 // arrays inside structs are read-only for now.
-func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath string, td TypeDef, v ir.Value, prev *ir.Value, term uint64) error {
+func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath string, td TypeDef, v ir.Value, held *ir.Value, term uint64) error {
 	for i, f := range td.Fields {
-		if i >= len(v.Fld) {
+		if i >= len(v.Fld) || i >= len(held.Fld) {
 			break
 		}
 		fv := v.Fld[i]
-		var pv *ir.Value
-		if prev != nil && i < len(prev.Fld) {
-			pv = &prev.Fld[i]
-		}
 		leaf := devPath + "." + f.deviceName()
 		if code, isElem := elementaryCode(f.Type); isElem && f.ArrayLen == 0 {
-			if pv != nil && scalarEqual(fv, *pv) {
+			if scalarEqual(fv, held.Fld[i]) {
 				continue
 			}
 			data, err := logix.EncodeScalar(code, plainScalar(fv))
@@ -1122,10 +1160,11 @@ func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath s
 			if err := sess.ctrl.WriteTag(ctx, leaf, code, 1, data); err != nil {
 				return err
 			}
+			held.Fld[i] = fv
 			continue
 		}
 		if sub, ok := d.typeDef(f.Type); ok && f.ArrayLen == 0 {
-			if err := d.writeStructLeaves(ctx, sess, leaf, sub, fv, pv, term); err != nil {
+			if err := d.writeStructLeaves(ctx, sess, leaf, sub, fv, &held.Fld[i], term); err != nil {
 				return err
 			}
 		}

@@ -323,14 +323,33 @@ claims:
       an output's `init:` reaches the controller is not.
   - id: EIP-031
     claim: >-
-      A write that fails because the connection broke is requeued (latest
-      value per tag) and retried after reconnect; a write the controller
-      refuses on a live connection is logged, dropped for that flush, and
-      goes again when the value changes.
+      A write the controller refuses on a live connection is logged,
+      dropped for that flush, and goes again when the value changes.
     source: "#writes"
     tests: []
     note: >-
-      No test breaks the connection or refuses a write.
+      No test refuses a write. The broken-connection half of this claim is
+      EIP-052.
+  - id: EIP-052
+    claim: >-
+      Queued writes go out in tag-name order, a struct's members in field
+      order. When the connection breaks partway through a flush, the write
+      that broke and every one after it are requeued and sent after the
+      reconnect, and the writes before it are not; a struct cut partway
+      re-sends only the members the controller had not confirmed; a tag
+      commanded again meanwhile goes with its newer value.
+    source: "#writes"
+    tests:
+      - go ./eip TestBrokenFlushAtEveryPoint
+      - go ./eip TestBrokenFlushKeepsANewerCommand
+    partial: true
+    note: >-
+      A proxy in front of the emulator cuts the link at each of six write
+      requests of one flush (four tags, three of them a struct's members)
+      and another client then writes over every step before the cut; the
+      test counts the write requests that reach the controller. The cut
+      request never reaches it, so a write that landed but whose answer
+      was lost (sent once more) is not exercised.
   - id: EIP-032
     claim: >-
       A write kicks the poll loop awake rather than waiting out the next
