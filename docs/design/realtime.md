@@ -300,7 +300,12 @@ the harness.
    commit order (last wins, as before at scan granularity), a cross-task
    read-modify-write can lose an update exactly as on any PLC with shared
    globals, and an FB instance bound as a global in two tasks is shared
-   identity those tasks race on (`New` logs a warning). `OnScan` observers
+   identity those tasks race on (`New` logs a warning). Since #578 the
+   commit lands only what the program assigned, member by member and bit
+   by bit (`runtime/membermerge.go`): two tasks, or a task and an operator,
+   writing different members of one struct tag, or different bits of one
+   word, no longer undo each other; the same member or bit still resolves
+   by commit order. `OnScan` observers
    still run with the main task's lock held, but another task may commit
    between two of their reads; one that wants an instant uses `Snapshot`.
    The main task keeps a lock of its own (`mainMu`) for its I/O buffers and

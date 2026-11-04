@@ -1,0 +1,87 @@
+# Hidden acceptance tests for tank-fill. Every test states the switches it
+# relies on, so the verdict does not hang on the agent's init: choices.
+tests:
+  - name: auto fills from low to high, with hysteresis
+    steps:
+      - given: { AutoSel: true, LSL101: false, LSH101: false, LSHH101: false }
+        advance: 500ms
+        expect: { P101_Run: true }
+      - given: { LSL101: true }          # above low, below high: keep filling
+        advance: 1s
+        expect: { P101_Run: true }
+      - given: { LSH101: true }          # full
+        advance: 500ms
+        expect: { P101_Run: false }
+      - given: { LSH101: false }         # drawn down, still above low
+        advance: 1s
+        expect: { P101_Run: false }
+      - given: { LSL101: false }         # below low again
+        advance: 500ms
+        expect: { P101_Run: true }
+
+  - name: out of auto the pump is off
+    given: { AutoSel: false, LSL101: false, LSH101: false, LSHH101: false }
+    advance: 2s
+    always: { P101_Run: false }
+
+  - name: high-high stops the pump at once, alarm after 2 s
+    steps:
+      - given: { AutoSel: true, LSL101: false, LSH101: false, LSHH101: false }
+        advance: 500ms
+        expect: { P101_Run: true }
+      - given: { LSHH101: true }
+        advance: 300ms
+        expect: { P101_Run: false, HHAlarm: false }
+      - advance: 1.2s                    # 1.5 s on
+        expect: { HHAlarm: false, Horn: false }
+      - advance: 1s                      # 2.5 s on
+        expect: { HHAlarm: true, Horn: true, P101_Run: false }
+
+  - name: a short high-high blip raises no alarm
+    steps:
+      - given: { AutoSel: true, LSL101: true, LSH101: false, LSHH101: true }
+        advance: 1s
+      - given: { LSHH101: false }
+        advance: 3s
+        expect: { HHAlarm: false, Horn: false }
+
+  - name: the alarm latches and blocks the pump until reset
+    steps:
+      - given: { AutoSel: true, LSL101: true, LSH101: true, LSHH101: true }
+        advance: 3s
+        expect: { HHAlarm: true }
+      - given: { LSHH101: false, LSH101: false, LSL101: false }  # level fell, nobody reset
+        advance: 1s
+        expect: { HHAlarm: true, P101_Run: false }
+      - given: { AlmReset: true }
+        advance: 500ms
+      - given: { AlmReset: false }
+        advance: 500ms
+        expect: { HHAlarm: false, Horn: false, P101_Run: true }
+
+  - name: reset is refused while high-high is still on
+    steps:
+      - given: { AutoSel: true, LSL101: true, LSH101: true, LSHH101: true }
+        advance: 3s
+      - given: { AlmReset: true }
+        advance: 500ms
+      - given: { AlmReset: false }
+        advance: 500ms
+        expect: { HHAlarm: true }
+
+  - name: horn silence holds until the next alarm
+    steps:
+      - given: { AutoSel: true, LSL101: true, LSH101: true, LSHH101: true }
+        advance: 3s
+        expect: { Horn: true }
+      - given: { HornAck: true }
+        advance: 500ms
+        expect: { Horn: false, HHAlarm: true }
+      - given: { HornAck: false }
+        advance: 2s
+        expect: { Horn: false, HHAlarm: true }
+      - given: { LSHH101: false, AlmReset: true }   # clear and reset
+        advance: 500ms
+      - given: { AlmReset: false, LSHH101: true }   # a new alarm
+        advance: 3s
+        expect: { HHAlarm: true, Horn: true }

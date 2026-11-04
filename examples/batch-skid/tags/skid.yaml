@@ -14,6 +14,7 @@
 - { name: Ki, role: setpoint, init: 0.05, unit: "1/s", desc: "Jacket PID integral gain" }
 - { name: Kd, role: setpoint, init: 0.0, unit: "s", desc: "Jacket PID derivative gain" }
 - { name: CipEveryN, role: setpoint, init: 3, desc: "Run a CIP flush after every Nth batch" }
+- { name: DrainedLevelSP, role: setpoint, init: 2.0, unit: "%", desc: "The mix tank counts as drained at or below this level" }
 - { name: Start, role: setpoint, init: false, desc: "Pulse: start a batch with the selected recipe" }
 - { name: Hold, role: setpoint, init: false, desc: "Operator hold — pauses Heat/Hold, agitator keeps running" }
 - { name: Resume, role: setpoint, init: false, desc: "Resume from Held back into Heat" }

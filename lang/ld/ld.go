@@ -119,6 +119,7 @@ package ld
 
 import (
 	"fmt"
+	"github.com/joyautomation/nautilus/lang/st"
 	"regexp"
 	"strings"
 
@@ -905,18 +906,16 @@ func fbdArgs(args string) string {
 }
 
 // splitStatementsOn splits on sep outside parentheses, brackets and strings.
+// A string, '…' or "…", ends where st's lexer ends it: $' and $" are quotes
+// inside it, so 'it$'s;x' is one string.
 func splitStatementsOn(s string, sep byte) []string {
 	var out []string
 	depth, start := 0, 0
-	inStr := false
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
-		case inStr:
-			if c == '\'' {
-				inStr = false
-			}
-		case c == '\'':
-			inStr = true
+		case c == '\'' || c == '"':
+			end, _ := st.StringEnd(s, i)
+			i = end - 1
 		case c == '(' || c == '[':
 			depth++
 		case c == ')' || c == ']':

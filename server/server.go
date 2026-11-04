@@ -688,6 +688,21 @@ func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
+		if heldHere(st) {
+			// The lease names this replica, but its gate is closed (its
+			// scans are not completing, #621): the leader's address is our
+			// own, and forwarding would send the request back here, again
+			// and again. Reads are answered from this store; a write is
+			// refused, since nothing here scans it.
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				mux.ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "this replica holds the lease but its write gate is closed (its scans are not completing); try again shortly",
+			})
+			return
+		}
 		// The body is kept so a request the leader never received can be
 		// replayed to its successor (forwardTo). API bodies are small; one
 		// past the cap is forwarded once, without the replay.
@@ -707,6 +722,14 @@ func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 		}
 		s.forwardTo(w, r, st.LeaderAddr, mux, body, true)
 	})
+}
+
+// heldHere reports a replica that the lease names but that is not leading:
+// its gate is closed while it still holds the lease (a hung scan, #621, or
+// a renew older than the lease), so LeaderAddr is its own address. Never a
+// proxy target: that is a request forwarding to itself without end.
+func heldHere(st leader.Status) bool {
+	return !st.IsLeader && st.Leader != "" && st.Leader == st.Pod
 }
 
 // maxReplayBody is the largest request body a standby keeps for a replay.
@@ -771,7 +794,7 @@ func (s *Server) awaitLeaderChange(ctx context.Context, old string) (addr string
 		if st.IsLeader {
 			return "", true, ctx.Err() == nil
 		}
-		if st.LeaderAddr != "" && st.LeaderAddr != old {
+		if st.LeaderAddr != "" && st.LeaderAddr != old && !heldHere(st) {
 			return st.LeaderAddr, false, ctx.Err() == nil
 		}
 		select {

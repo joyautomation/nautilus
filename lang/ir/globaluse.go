@@ -22,7 +22,13 @@ type GlobalUse struct {
 
 	// funcs, while GlobalUses walks, is the set of user FUNCTIONs already
 	// followed; nil for DirectGlobalUses, which does not follow calls.
-	funcs map[*FuncDef]bool
+	// fbs is the same for FB types, shared by every instance the walk
+	// reaches — the program's, a FUNCTION's, an FB's own. funcOrder and
+	// fbOrder are what the walk reached, in order, for GlobalsDeep.
+	funcs     map[*FuncDef]bool
+	fbs       map[*FBDef]bool
+	funcOrder []*FuncDef
+	fbOrder   []*FBDef
 }
 
 // DirectGlobalUses walks only this program's own body and classifies every
@@ -53,30 +59,39 @@ func (p *Program) DirectGlobalUses() GlobalUse {
 // the whole project has finished lowering — unlike FBDef.Uses, which a
 // sibling FB may still be populating.
 func (p *Program) GlobalUses() GlobalUse {
-	u := GlobalUse{Read: map[string]bool{}, Written: map[string]bool{}, funcs: map[*FuncDef]bool{}}
-	u.stmts(p.Body)
-	seen := map[*FBDef]bool{}
-	for _, s := range p.Slots {
-		u.collectFB(s.Type, seen)
-	}
-	u.funcs = nil
+	u := p.deepUses()
+	u.funcs, u.fbs, u.funcOrder, u.fbOrder = nil, nil, nil, nil
 	return u
 }
 
-// collectFB is the GlobalUse counterpart of collectFBGlobals: it merges in
-// the Read/Written sets of every FB instance reachable from t (directly, or
-// nested inside an array/struct/FB-in-FB), guarding against revisiting a
-// shared *FBDef.
-func (u *GlobalUse) collectFB(t *Type, seen map[*FBDef]bool) {
+// deepUses is the walk behind GlobalUses and GlobalsDeep: this program's
+// body, every FB instance's body, every user FUNCTION any of them calls,
+// and every FB instance such a FUNCTION declares, with the FUNCTIONs and
+// FB types it reached left in funcOrder and fbOrder.
+func (p *Program) deepUses() GlobalUse {
+	u := GlobalUse{Read: map[string]bool{}, Written: map[string]bool{},
+		funcs: map[*FuncDef]bool{}, fbs: map[*FBDef]bool{}}
+	u.stmts(p.Body)
+	for _, s := range p.Slots {
+		u.collectFB(s.Type)
+	}
+	return u
+}
+
+// collectFB merges in the Read/Written sets of every FB instance reachable
+// from t (directly, or nested inside an array/struct/FB-in-FB), guarding
+// against revisiting a shared *FBDef, and records each FB type in fbOrder.
+func (u *GlobalUse) collectFB(t *Type) {
 	if t == nil {
 		return
 	}
 	switch t.Kind {
 	case TypeFB:
-		if t.FB == nil || seen[t.FB] {
+		if t.FB == nil || u.fbs[t.FB] {
 			return
 		}
-		seen[t.FB] = true
+		u.fbs[t.FB] = true
+		u.fbOrder = append(u.fbOrder, t.FB)
 		if t.FB.Body != nil && u.funcs != nil {
 			// The body itself, so the FUNCTIONs it calls are followed too.
 			u.stmts(t.FB.Body.Body)
@@ -89,14 +104,14 @@ func (u *GlobalUse) collectFB(t *Type, seen map[*FBDef]bool) {
 			}
 		}
 		for _, s := range t.FB.AllSlots() {
-			u.collectFB(s.Type, seen)
+			u.collectFB(s.Type)
 		}
 	case TypeArray:
-		u.collectFB(t.Elem, seen)
+		u.collectFB(t.Elem)
 	case TypeStruct:
 		if t.Struct != nil {
 			for _, f := range t.Struct.Fields {
-				u.collectFB(f.Type, seen)
+				u.collectFB(f.Type)
 			}
 		}
 	}
@@ -219,7 +234,13 @@ func (u *GlobalUse) expr(e Expr) {
 		// call (deep walk only — at Lower time the body may not exist yet).
 		if d := n.Def; u.funcs != nil && d != nil && d.Body != nil && !u.funcs[d] {
 			u.funcs[d] = true
+			u.funcOrder = append(u.funcOrder, d)
 			u.stmts(d.Body.Body)
+			// An FB instance the FUNCTION declares: its body, and what
+			// it binds, run as part of the call.
+			for _, s := range d.Body.Slots {
+				u.collectFB(s.Type)
+			}
 		}
 	case *Lit, *SlotRef, nil:
 		// no globals reachable

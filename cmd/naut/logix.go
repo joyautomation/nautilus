@@ -228,7 +228,7 @@ func runLogixImport(args []string) int {
 	}
 	if *projectDir != "" {
 		return runLogixImportProject(f, *projectDir, importer.Options{
-			Programs: splitPatterns(*programs), CommPath: *commPath, Host: *host,
+			Programs: splitPatterns(*programs), CommPath: *commPath, Host: *host, Source: filepath.Base(fs.Arg(0)),
 		})
 	}
 

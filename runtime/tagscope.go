@@ -157,6 +157,13 @@ func checkBindings(main *Program, tasks []*taskRun, tags []TagDef) error {
 	}
 	seen := map[string]binding{}
 	check := func(task string, prog *Program) error {
+		// Within one program first: the PROGRAM, a block it instantiates
+		// and a FUNCTION it calls each declare the tag they bind, and one
+		// tag has one type (nautilus#590).
+		if c := prog.BindingConflicts(); len(c) > 0 {
+			return fmt.Errorf("tag %s is %s in %s but %s in %s, both run by task %s — a tag has one type; "+
+				"declare it the same way in each", c[0].Name, c[0].First, c[0].FirstPOU, c[0].Second, c[0].SecondPOU, task)
+		}
 		globals := prog.Globals()
 		names := make([]string, 0, len(globals))
 		for n := range globals {

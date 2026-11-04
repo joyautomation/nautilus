@@ -97,6 +97,34 @@ async function downloadWithLadderLibrary(cli: string, folder: vscode.Uri): Promi
   }
 }
 
+/** "Export Diagram…" on this OS: the ladder library (a FUNCTION_BLOCK in
+ * ladder) to a PDF and an SVG, through the command's non-interactive form
+ * — the bundled exporter loads in the extension host, the CLI draws the
+ * model, and the files land where asked. */
+async function exportLadderDiagram(folder: vscode.Uri): Promise<void> {
+  const src = vscode.Uri.joinPath(folder, "compose", "lib", "rungs.ld");
+  const dir = path.join(os.tmpdir(), `nautilus-e2e-export-${process.pid}`);
+  for (const format of ["pdf", "svg"] as const) {
+    const to = path.join(dir, `rungs.${format}`);
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
+    const out = await step(`export rungs.ld as ${format}`, 30_000, () =>
+      vscode.commands.executeCommand<vscode.Uri | undefined>("nautilus.diagram.export", src, { format, to })
+    );
+    assert.ok(out, `the ${format} export wrote a file`);
+    const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(to)));
+    if (format === "pdf") {
+      assert.equal(bytes.subarray(0, 8).toString("latin1"), "%PDF-1.4");
+      const pdf = bytes.toString("latin1");
+      for (const text of ["(PumpSeq) Tj", "(Page 1 of 1) Tj", "(rungs.ld) Tj"]) assert.ok(pdf.includes(text), text);
+      assert.ok(pdf.endsWith("%%EOF\n"));
+    } else {
+      const svg = bytes.toString("utf8");
+      assert.match(svg, /^<\?xml[^>]*>\n<svg xmlns="http:\/\/www.w3.org\/2000\/svg"/);
+      for (const label of ["FUNCTION_BLOCK", "PumpSeq", "Start", "Stop", "Run"]) assert.ok(svg.includes(`>${label}<`), label);
+    }
+  }
+}
+
 function nautilusDiagnostics(uri: vscode.Uri): vscode.Diagnostic[] {
   return vscode.languages.getDiagnostics(uri).filter((d) => d.source?.startsWith("nautilus"));
 }
@@ -139,7 +167,10 @@ export async function run(): Promise<void> {
 
     const g = await step("fbd graph via the CLI", 30_000, () => fbdGraph(FBD));
     assert.ok(!("error" in g) || !/nautilus\.cliPath/.test(g.error), `the diagram path reached the CLI: ${JSON.stringify(g)}`);
-    if (expect === "found") await downloadWithLadderLibrary(cli.command, folder.uri);
+    if (expect === "found") {
+      await exportLadderDiagram(folder.uri);
+      await downloadWithLadderLibrary(cli.command, folder.uri);
+    }
   } else if (expect === "missing") {
     assert.equal(cli.found, false, `nothing to find, but resolved ${cli.command}`);
     assert.ok(cli.searched.includes(path.join(os.homedir(), "go", "bin")), "searched ~/go/bin");

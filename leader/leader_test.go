@@ -33,6 +33,11 @@ type fakeAPI struct {
 	raceGate chan struct{}
 	raceWant int
 	raceHits int
+
+	// holdGet, when armed, holds the next GET until it is closed (a slow
+	// API call); heldGet is closed once that GET has arrived.
+	holdGet chan struct{}
+	heldGet chan struct{}
 }
 
 func newFakeAPI(ns, name string) *fakeAPI {
@@ -53,6 +58,17 @@ func (f *fakeAPI) armRace(n int) {
 	f.raceGate = make(chan struct{})
 	f.raceWant = n
 	f.raceHits = 0
+}
+
+// armHoldGet holds the next GET until release is called; arrived is
+// closed once it is held.
+func (f *fakeAPI) armHoldGet() (arrived <-chan struct{}, release func()) {
+	hold, held := make(chan struct{}), make(chan struct{})
+	f.mu.Lock()
+	f.holdGet, f.heldGet = hold, held
+	f.mu.Unlock()
+	var once sync.Once
+	return held, func() { once.Do(func() { close(hold) }) }
 }
 
 func (f *fakeAPI) setFail(v bool) {
@@ -88,6 +104,15 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // handleGet waits at the race gate (if armed) before reading, so concurrent
 // racers all observe the lease as it stood before any of them writes.
 func (f *fakeAPI) handleGet(w http.ResponseWriter) {
+	f.mu.Lock()
+	hold, held := f.holdGet, f.heldGet
+	f.holdGet, f.heldGet = nil, nil
+	f.mu.Unlock()
+	if hold != nil {
+		close(held)
+		<-hold
+	}
+
 	f.mu.Lock()
 	gate := f.raceGate
 	if gate != nil {

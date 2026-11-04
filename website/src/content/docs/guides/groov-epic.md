@@ -199,6 +199,16 @@ The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
 trip when nautilus alone stops.
 
+Nor does it trip when nautilus's scan hangs (logic that never returns, a
+driver call that blocks) without `redundancy:`. The driver's own loop
+keeps polling the unit, and those polls feed the watchdog, so the outputs
+hold their last command for as long as the hang lasts. `naut run` gates
+some drivers on live scans in every project, but not this one, because
+it reads any gate as "one replica of a redundant set" (see
+[Redundancy](/guides/redundancy/#redundancy)). With `redundancy:`, a hung
+leader closes its gate and hands over (see [Redundancy](#redundancy)
+below).
+
 ## Holding outputs until an operator acknowledges
 
 Recovery is automatic: when the processor comes back, or after a
@@ -272,6 +282,91 @@ a watchdog that fired while nautilus was not running is something the
 driver cannot see. A trip is counted only when the unit's watchdog is
 on, and whether an output actually moved depends on which outputs have a
 watchdog value in groov Manage, so the count means "may have".
+
+## Redundancy
+
+With a `redundancy:` section, the driver's write gate is wired to
+leadership: commands leave the driver only on the leader. A standby skips
+scans, so it never hands the driver a command, and its driver neither
+rewrites outputs on reconnect nor after a watchdog trip.
+
+**A standby changes nothing on the unit.** It keeps a session with the
+processor and polls the packed areas, whatever the manifest asks for: the
+plain reads a polled scan makes (two on an ordinary chassis). It leaves
+the unit's configuration to the leader:
+it does not send the power-up clear, set the watchdog, write the custom
+data area's pointers, or configure the stream. It clears no latch: a
+latch reads set on the standby until the leader, which must see the
+event, delivers and clears it. At the takeover edge a latch event can
+still be lost, when the old leader clears it in its last scan before it
+sees the gate close and its program never runs on it, or delivered twice,
+when both replicas lead for a moment while the lease changes hands. A
+standby's clean stop puts nothing back.
+Its reads still count as requests to the unit, so they feed the
+communication watchdog. For a hung leader that is fine: the lease needs
+live scans, so a leader whose scan hangs closes its gate and the standby
+takes over within about 5 to 8 s (see
+[Redundancy](/guides/redundancy/#redundancy)). It is not fine for a
+leader that keeps scanning but cannot reach the unit while the standby
+can: the standby's polls keep the watchdog fed
+([#626](https://github.com/joyautomation/nautilus/issues/626)).
+
+**A takeover moves the stream.** The role follows the write gate, looked
+at every scan and every datagram. A standby whose gate opens becomes the
+leader on the same connection, with no outage: it sends the power-up clear
+if one is owed and configures the watchdog, the custom data area and the
+stream as the manifest asks, pointing the stream at itself. A leader whose
+gate closes stops using the stream and polls as a standby; it leaves the
+configuration where it is, since the new leader now owns it. Only a
+replica that still leads when it stops puts the stream and the pointers
+back: one that lost the lease and is stopped before it looks again
+leaves them to the new leader.
+
+**After a takeover, a stop cannot put back the original configuration.**
+Each replica records the stream and the custom data area's pointers as it
+first found them, in memory. Only the replica that led first found the
+unit as it was before nautilus; one that takes over finds the previous
+leader's settings. So what the last leader's stop puts back depends on
+which replica that is, and a stream the unit had before nautilus (to a
+historian, say) is put back only if the replica that first led is the
+one that stops last. Under redundancy a stream of the custom data area
+found at a takeover (the previous leader's) is recorded as off, so a stop
+never re-points the stream at the other replica. Note the unit's stream
+settings before you deploy a redundant pair, and put them back by hand in
+groov Manage if you retire it.
+
+**A command held while the processor was away goes out only on the
+leader.** Leadership is checked again when held commands go out, before
+every write. A replica that lost leadership during the outage drops what
+it held instead of writing it once the processor is back. A flush the gate
+closes partway through stops there: the write in hand and every one after
+it are dropped. The dropped commands are asked for again, so the push that
+follows the reopen sends them.
+
+**When the gate reopens, every output goes out again.** While it was
+closed another replica may have led and written the same outputs, so
+nothing this replica commanded before is trusted to still be there. The
+first time the driver sees the gate open again it forgets every command,
+and what is still held from before, and asks the runtime for the outputs.
+The next push writes every output with the program's current value,
+including one that has not changed since this replica last led. A replica
+that regains leadership pushes because it took over. A gate that reopens
+without a takeover (logic healthy again) pushes because the driver asked.
+Until that push the reconnect and watchdog rewrites have nothing to write,
+so a command from the previous term is never sent.
+
+**A replica that started as a standby commands every output on its first
+takeover.** Like a plain start, the first value handed over for each
+output is written (see [What a scan does](#what-a-scan-does)).
+
+**A flip between two looks is not seen.** A gate func cannot say it
+changed, so the driver looks at it: on every push and flush, before every
+write in a flush, every scan (every stream check when streaming) and at
+least once a second while connected, and on every connect attempt. A gate
+that closes and reopens between two looks is not seen, and then nothing
+above happens. The window is about a second, or a scan when that is
+shorter, while connected, and up to the reconnect backoff (30 s) while
+the processor is away.
 
 ## Run it on the processor
 

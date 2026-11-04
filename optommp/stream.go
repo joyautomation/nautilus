@@ -12,7 +12,9 @@ package optommp
 //
 // The driver records the pointers and the streaming configuration (which
 // is stored to flash) as it first found them and puts both back on a
-// clean stop. The watchdog it leaves set: a controller that has stopped
+// clean stop. Under redundancy only the leader configures any of this or
+// puts it back; a standby polls and touches none of it (see standbyNote
+// in driver.go). The watchdog it leaves set: a controller that has stopped
 // is what it is for. A stream that misses five
 // intervals (at least 100 ms) makes every tag Stale until the next one
 // arrives; none for the request timeout ends the session, and the
@@ -34,9 +36,10 @@ import (
 )
 
 // configure writes the watchdog, the custom data area and the stream the
-// manifest asks for. It returns the stream's socket, or nil when polling.
+// manifest asks for: a leader's (see standbyNote). It returns the stream's
+// socket, or nil when polling.
 func (d *Driver) configure(c *Client) (*net.UDPConn, error) {
-	if err := d.configureWatchdog(c); err != nil {
+	if err := d.configureWatchdog(c, true); err != nil {
 		return nil, err
 	}
 	if !d.custom {
@@ -51,12 +54,14 @@ func (d *Driver) configure(c *Client) (*net.UDPConn, error) {
 	return d.configureStream(c)
 }
 
-func (d *Driver) configureWatchdog(c *Client) error {
+// configureWatchdog reads the unit's watchdog and which bound outputs have
+// a watchdog value, and, when set (a leader), sets it to the manifest's.
+func (d *Driver) configureWatchdog(c *Client, set bool) error {
 	cur, err := c.ReadUint32(addrWatchdog)
 	if err != nil {
 		return err
 	}
-	if d.m.Watchdog != nil {
+	if d.m.Watchdog != nil && set {
 		want := uint32(time.Duration(*d.m.Watchdog) / time.Millisecond)
 		if cur != want {
 			if err := c.Write(addrSetWatchdog, be32(want)); err != nil {
@@ -176,8 +181,10 @@ func (d *Driver) configureStream(c *Client) (*net.UDPConn, error) {
 	d.mu.Lock()
 	if d.streamOrig == nil {
 		orig := bytes.Clone(cur)
-		if binary.BigEndian.Uint32(orig[0x08:]) == addrCustomData && net.IP(orig[0x20:0x24]).Equal(local.IP.To4()) {
-			// Left streaming here by a nautilus that did not stop cleanly.
+		if binary.BigEndian.Uint32(orig[0x08:]) == addrCustomData && (net.IP(orig[0x20:0x24]).Equal(local.IP.To4()) || d.replicated()) {
+			// Left streaming here by a nautilus that did not stop cleanly,
+			// or, under redundancy, by the replica that led before this
+			// one: put back as off, not as a stream to that replica.
 			binary.BigEndian.PutUint32(orig[0x10:], 0)
 		}
 		d.streamOrig = orig
@@ -297,6 +304,9 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 			return err
 		}
 		polled = true
+		if !d.gateOpen() {
+			return errSwitch // standing by: stop using the stream (see standbyNote)
+		}
 		d.requests.Store(int64(n))
 		us := time.Since(now).Microseconds()
 		d.scanUs.Store(us)
@@ -304,6 +314,9 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 		return nil
 	}
 	onCheck := func() error {
+		if !d.gateOpen() { // a look (see SetWriteGate), even with no datagram
+			return errSwitch // standing by: stop using the stream (see standbyNote)
+		}
 		idle := time.Since(last)
 		if idle > deadAfter {
 			return fmt.Errorf("optommp: communication timeout: missed incoming stream (none for %s)", idle.Round(time.Millisecond))
@@ -337,7 +350,7 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 	if d.m.Priority > 0 {
 		if recv, closeFd, ok := udpReceiver(uc, time.Millisecond); ok {
 			defer closeFd()
-			err = d.streamRT(ctx, c, recv, onPacket, onCheck, onKeep, staleAfter/2, keepEvery)
+			err = d.streamRT(ctx, c, recv, onPacket, onCheck, onKeep, min(staleAfter/2, lookEvery), keepEvery)
 			return polled, err
 		}
 	}
@@ -361,7 +374,10 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 		}
 	}()
 
-	check := time.NewTicker(staleAfter / 2)
+	// The check runs at least once a second (lookEvery), so the write gate
+	// is looked at while the stream is quiet or slow.
+	checkEvery := min(staleAfter/2, lookEvery)
+	check := time.NewTicker(checkEvery)
 	defer check.Stop()
 	keep := time.NewTicker(keepEvery)
 	defer keep.Stop()

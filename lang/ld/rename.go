@@ -2,6 +2,7 @@ package ld
 
 import (
 	"fmt"
+	"github.com/joyautomation/nautilus/lang/st"
 	"regexp"
 	"sort"
 	"strings"
@@ -63,7 +64,6 @@ func renameInPOU(src string, m *Model, pou, oldName, newName string) ([]TextEdit
 	var edits []TextEdit
 	renamed := append([]string(nil), lines...)
 	depth := 0 // paren depth, carried across lines (a call may wrap)
-	inString := false
 	prevWord := ""
 	for i := range lines {
 		if !inScope(i + 1) {
@@ -74,14 +74,9 @@ func renameInPOU(src string, m *Model, pou, oldName, newName string) ([]TextEdit
 		for j := 0; j < len(code); {
 			c := code[j]
 			switch {
-			case inString:
-				if c == '\'' {
-					inString = false
-				}
-				j++
-			case c == '\'':
-				inString = true
-				j++
+			case c == '\'' || c == '"':
+				// a string, '…' or "…", as st reads it: never renamed
+				j, _ = st.StringEnd(code, j)
 			case c == '(':
 				depth++
 				j++

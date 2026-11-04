@@ -179,8 +179,9 @@ claims:
 
   - id: RED-016
     claim: >-
-      Failover is bounded by the lease: a leader that cannot renew steps down
-      once the lease duration elapses, not before.
+      Failover is bounded by the lease: a leader that cannot renew (the
+      Lease API does not answer) steps down once the lease duration elapses,
+      not before.
     source: "#redundancy"
     tests:
       - go ./leader TestStepDown
@@ -205,6 +206,96 @@ claims:
       its next tick; that a SIGTERM shutdown calls Release (cmd/naut defer) is
       not tested.
 
+  - id: RED-033
+    claim: >-
+      The lease needs live scans: a leader whose scan is hung (one scan in
+      progress longer than twice its task's period, at least 1 s and at most
+      2 s) stops renewing, closes its own gate on its first tick more than
+      half a lease after its last renew, without waiting on the Lease API
+      (a GET that fails or hangs does not keep it open), and the standby
+      takes the lease when it lapses, so the two never lead at once. The
+      gate also closes by itself once the last renew is older than the
+      lease (half of it while scans are hung), however late the elector's
+      tick. A hung scan that returns after the lease is gone writes no
+      outputs. A scan that is slow for a second or two and then completes
+      keeps the lease, and a task whose period is longer than the lease is
+      live between its scans. Each change is logged once, naming the stuck
+      task; an orderly stop is logged at info.
+    source: "#redundancy"
+    tests:
+      - go ./leader TestAHungLeaderHandsOverToTheStandby
+      - go ./leader TestUnhealthyLeaderStopsRenewing
+      - go ./leader TestAHungLeaderWhoseGETFailsDoesNotLeadWithTheStandby
+      - go ./leader TestAHungLeaderWhoseGETHangsDoesNotLeadWithTheStandby
+      - go ./leader TestALeaderWhoseTickIsLateIsFenced
+      - go ./leader TestAStoppedRuntimeIsLoggedAtInfo
+      - go ./leader TestASlowScanKeepsTheLease
+      - go ./leader TestASlowTaskDoesNotFlapTheLease
+      - go ./leader TestHealthChangeIsLoggedOnce
+      - go ./runtime TestLivenessAScanHungInADriverReadIsStuck
+      - go ./runtime TestLivenessASlowTaskIsLiveBetweenScans
+      - go ./runtime TestAScanThatLostLeadershipWhileHungWritesNothing
+    partial: true
+    note: >-
+      The leader tests run two electors against the fake Lease API with a
+      1 s lease and explicit times, and a real runtime whose driver read
+      blocks; the 4 s lease and the 1 to 2 s bounds of production are the
+      same arithmetic scaled, not asserted at that size (RED-017). The slow
+      task's 10 s period is not run through a whole scan of it: the test
+      shows a slow task sleeping between scans is live, and the runtime test
+      that its bound is capped at half the lease. That naut run wires the
+      runtime's liveness into the elector (cmd/naut/runcmd.go) is not
+      tested. The late-tick fence is asserted on the wall clock with a
+      100 ms and a 400 ms lease.
+
+  - id: RED-034
+    claim: >-
+      A replica whose own scans are hung does not take the lease, not an
+      empty one and not an expired one, and contends again once its scans
+      complete. At start-up a replica may take the lease before its first
+      scan, but its scan loops must be running within twice the lease or it
+      lets the lease go.
+    source: "#redundancy"
+    tests:
+      - go ./leader TestUnhealthyReplicaDoesNotAcquire
+      - go ./leader TestAHungReplicaDoesNotTakeTheLeaseBack
+      - go ./leader TestANeverScanningLeaderLosesTheLease
+      - go ./runtime TestLivenessStartupGraceAndStop
+
+  - id: RED-036
+    claim: >-
+      A scan over about 2 s can close the gate even when no other replica
+      takes the lease. When it completes, the replica renews the same lease
+      and opens the gate again without a takeover: frames, timers, SFC steps
+      and retained state are kept, and the drivers get every output once.
+      Forces are dropped when the gate closes. The scan clock is not
+      zeroed on a resume, so the first scan's dt spans the stall. Only a
+      lease another replica held in between, or a loss and regain the
+      runtime never saw, makes the next opening a takeover, which reloads
+      the retained state and resets the frames.
+    source: "#redundancy"
+    tests:
+      - go ./leader TestASlowScanKeepsTheLease
+      - go ./leader TestTermMovesOnlyWhenAnotherReplicaMayHaveLed
+      - go ./runtime TestAResumedTermDoesNotTakeOver
+      - go ./runtime TestANewTermAfterTheGateClosedIsATakeover
+    partial: true
+    note: >-
+      The leader test ticks 1 ms late on a 1 s lease so the slow scan does
+      close the gate, and checks that a plain VAR kept counting (no frame
+      reset). Timers and SFC steps are kept by the same skipped
+      takeover, not asserted one by one. The forces drop is RED-033's
+      step-down path (forcing.yaml). The dt after a resume is not asserted.
+
+  - id: RED-038
+    claim: >-
+      A replica the lease names whose gate is closed does not forward its
+      API to the leader's address, which is its own: it answers reads from
+      its own store and refuses writes with 503.
+    source: "#redundancy"
+    tests:
+      - go ./server TestGateClosedLeaseHolderDoesNotProxyToItself
+
   - id: RED-019
     claim: >-
       On takeover the new leader re-reads the retain store (picking up
@@ -216,19 +307,21 @@ claims:
 
   - id: RED-032
     claim: >-
-      Through the Modbus and OPC UA client drivers, a replica that takes
-      over from standby sends every output once on its first scan as
-      leader, with the program's value, changed or not: an output equal to
-      what this replica sent when it last led goes out again, a replica that
-      started as a standby has no start-up baseline, and a Modbus rewrite:
+      Through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers, a
+      replica that takes over from standby sends every output once on its
+      first scan as leader, with the program's value, changed or not: an
+      output equal to what this replica sent when it last led goes out
+      again, a replica that started as a standby has no start-up baseline,
+      and a Modbus rewrite:
       keep-alive re-asserts nothing before that push. A replica that leads
       from its first scan keeps the drivers' baseline: `naut run` starts
       the drivers only after the elector's first decision, which Run makes
       at once rather than a tick in (a first Lease GET that fails is
       retried, not taken as standby), bounded by 5 s; a stop during that
-      wait starts nothing. EtherNet/IP, OptoMMP
-      and the hw drivers (SNMP, Redfish, Prometheus) do not do this yet
-      (#605, #607).
+      wait starts nothing (EtherNet/IP and OptoMMP have no baseline, so a
+      plain start commands every output too). The hw drivers (SNMP,
+      Redfish, Prometheus) do not do this: the first value after their gate
+      opens is a baseline.
     source: "#redundancy"
     tests:
       - go ./runtime TestWriteOutputsTriggersFirstScanFailureAndTakeover
@@ -236,6 +329,10 @@ claims:
       - go ./modbus TestStandbyTakeoverCommandsEveryOutput
       - go ./opcua TestRegainedGateSendsTheUnchangedValueAgain
       - go ./opcua TestStandbyFirstPushCommands
+      - go ./eip TestRegainedGateSendsTheUnchangedOutputsAgain
+      - go ./eip TestStandbyFirstTakeoverCommands
+      - go ./optommp TestRegainedGateSendsTheUnchangedOutputsAgain
+      - go ./optommp TestStandbyFirstTakeoverCommands
       - go ./modbus TestRestartAfterStandbyKeepsNoBaseline
       - go ./leader TestRunDecidesBeforeItsFirstTick
       - go ./leader TestRunRetriesAFirstTickThatMissedTheAPI
@@ -244,11 +341,14 @@ claims:
       - go ./cmd/naut TestDriversStartAfterTheFirstDecision
     partial: true
     note: >-
-      The Modbus tests run the driver under the runtime with a test
-      coordinator and the same flag as its write gate. The OPC UA tests
-      call WriteOutputs directly. The elector's first decision is asserted
-      against a fake Lease API (acquire, standby, standalone, a first GET
-      that fails), and runProject's driver start (startDriverWhenDecided)
+      The Modbus, EtherNet/IP and OptoMMP tests run the driver under the
+      runtime with a test coordinator and the same flag as its write gate,
+      against the Logix emulator and the in-process groov fake for the
+      latter two. The OPC UA tests call WriteOutputs directly. The hw
+      drivers' baseline is not asserted here. The elector's first decision
+      is asserted against a fake Lease API (acquire, standby, standalone, a
+      first GET that fails), and runProject's driver start
+      (startDriverWhenDecided)
       against a fake elector and driver: Start runs only after the
       decision, at once without redundancy, and not at all after a stop.
       A real cluster is not exercised. A leadership flip the drivers do not see
@@ -263,13 +363,58 @@ claims:
   - id: RED-021
     claim: >-
       Outside a cluster redundancy degrades gracefully: the controller runs
-      standalone and is always the leader.
+      standalone and is the leader, with no lease to win (unless its scans
+      hang, RED-035).
     source: "#redundancy"
     tests:
       - go ./leader TestStandalone
     partial: true
     note: >-
       The standalone elector is tested; nothing shows the runtime scanning with a redundancy: section outside a cluster.
+
+  - id: RED-035
+    claim: >-
+      Outside a cluster, a hung scan closes the write gate a lease duration
+      after the last check that found the scans live, so drivers stop
+      asserting outputs on their own and a device's communication watchdog
+      can act; the gate opens again once scans complete, and the program
+      carries on without a takeover (RED-036).
+    source: "#redundancy"
+    tests:
+      - go ./leader TestStandaloneGateClosesWhileScansHang
+      - go ./runtime TestAResumedTermDoesNotTakeOver
+    partial: true
+    note: >-
+      Asserted with a stub health func against the standalone elector, on
+      explicit ticks and on Run's own ticker. That a driver's keep-alive
+      stops when the gate closes is each driver's own claim (MB-046 and the
+      write-gate tests); a standalone naut run with a hung scan is not run.
+
+  - id: RED-037
+    claim: >-
+      Without `redundancy:`, naut run still gates the Modbus, EtherNet/IP
+      and OPC UA client drivers on live scans, on the same timing as a
+      standalone replica, so a hung scan stops their own output traffic (a
+      Modbus rewrite: keep-alive). A healthy project sees no difference:
+      the gate is open from the start and the runtime is not coordinated
+      (no takeover, forces kept). The groov EPIC driver and a Sparkplug
+      host take no gate there: without redundancy, a hung scan does not
+      stop a groov EPIC's driver from polling the unit, so its polls keep
+      the unit's communication watchdog fed and the outputs hold their
+      last command.
+    source: "#redundancy"
+    tests:
+      - go ./cmd/naut TestNoRedundancyAHungScanStopsTheRewriteKeepAlive
+      - go ./io TestSetPlainGateReachesOnlyPlainGatedChildren
+      - go ./leader TestNewLocalIsOpenFromTheStart
+    partial: true
+    note: >-
+      The naut test wires gateOnLiveScans (what runProject calls) on a real
+      Modbus driver against the in-process slave, with a 200 ms gate lease
+      and a read that blocks the scan. EtherNet/IP and OPC UA client are
+      gated through the same io.PlainGated marker and not run here. That a
+      healthy project's driver behaviour is unchanged rests on those
+      drivers treating an open gate as no gate (their own gate tests).
 
   - id: RED-022
     claim: >-
@@ -391,10 +536,14 @@ claims:
       - go ./runtime TestRunStandbyDoesNotSaveOnStop
       - go ./runtime TestRunLostLeaseDoesNotSaveOnStop
       - go ./runtime TestRunLogsAFailedLastSave
+      - go ./runtime TestRunLoopOverrunningStopsOnCancel
       - go ./tools/blackbox TestBlackbox/002-F19-retain-saved-on-orderly-stop
     note: >-
-      The runtime tests stop Run well inside the first save interval. The
-      black-box check (release; black-box finding 2026-11-03-002 F-19, #531)
+      The runtime tests stop Run well inside the first save interval.
+      TestRunLoopOverrunningStopsOnCancel: a task whose scan overruns its
+      period still stops on the cancel, so Run returns and the last save
+      happens (on Linux it scanned on, and naut run's 5 s bound cut the
+      save, #599). The black-box check (release; black-box finding 2026-11-03-002 F-19, #531)
       runs naut itself and writes a setpoint over HTTP 0.2 s before SIGTERM
       and before SIGINT, then restarts and reads it back. Not asserted: that
       the elector keeps renewing the lease until the final save and only

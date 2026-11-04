@@ -1,0 +1,52 @@
+# Hidden acceptance tests for traffic-light. Checks sit at least 0.5 s
+# away from every phase boundary, so a scan or two of slack in how the
+# cycle restarts does not matter.
+tests:
+  - name: disabled shows red both ways
+    given: { Enable: false }
+    advance: 3s
+    always:
+      - NS_Red AND NOT NS_Yellow AND NOT NS_Green
+      - EW_Red AND NOT EW_Yellow AND NOT EW_Green
+
+  - name: one full cycle in order
+    given: { Enable: true }
+    steps:
+      - advance: 1s
+        expect: { NS_Green: true, NS_Yellow: false, NS_Red: false, EW_Red: true }
+      - advance: 18.5s                     # 19.5 s
+        expect: { NS_Green: true, EW_Red: true }
+      - advance: 1.5s                      # 21 s
+        expect: { NS_Yellow: true, NS_Green: false, EW_Red: true }
+      - advance: 2.5s                      # 23.5 s: all red
+        expect: { NS_Red: true, EW_Red: true, NS_Yellow: false, EW_Green: false }
+      - advance: 2.5s                      # 26 s
+        expect: { EW_Green: true, EW_Red: false, NS_Red: true }
+      - advance: 18.5s                     # 44.5 s
+        expect: { EW_Green: true, NS_Red: true }
+      - advance: 2s                        # 46.5 s
+        expect: { EW_Yellow: true, EW_Green: false, NS_Red: true }
+      - advance: 2.5s                      # 49 s: all red
+        expect: { NS_Red: true, EW_Red: true, EW_Yellow: false, NS_Green: false }
+      - advance: 2.5s                      # 51.5 s: the next cycle
+        expect: { NS_Green: true, EW_Red: true }
+
+  - name: one lamp per direction, never both directions moving
+    given: { Enable: true }
+    advance: 120s
+    always:
+      - (NS_Red AND NOT NS_Yellow AND NOT NS_Green) OR (NOT NS_Red AND NS_Yellow AND NOT NS_Green) OR (NOT NS_Red AND NOT NS_Yellow AND NS_Green)
+      - (EW_Red AND NOT EW_Yellow AND NOT EW_Green) OR (NOT EW_Red AND EW_Yellow AND NOT EW_Green) OR (NOT EW_Red AND NOT EW_Yellow AND EW_Green)
+      - NOT ((NS_Green OR NS_Yellow) AND (EW_Green OR EW_Yellow))
+
+  - name: disable goes all red, enable restarts at north-south green
+    steps:
+      - given: { Enable: true }
+        advance: 30s                       # east-west green
+        expect: { EW_Green: true }
+      - given: { Enable: false }
+        advance: 1s
+        expect: { NS_Red: true, EW_Red: true, EW_Green: false, NS_Green: false }
+      - given: { Enable: true }
+        advance: 1s
+        expect: { NS_Green: true, EW_Red: true }

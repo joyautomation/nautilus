@@ -26,6 +26,12 @@ jobs:
           mkdir -p evidence
           go test -json -coverprofile=evidence/cover.out ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
+      # Every benchmark once, so one that no longer compiles its own program
+      # fails here rather than when someone next profiles (#612). The test
+      # step above has already built the packages, so this adds little (15-35 s
+      # from a cold cache); the numbers are not kept.
+      - name: benchmarks compile and run (1 iteration)
+        run: go test -run '^$' -bench . -benchtime 1x ./...
       # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
       # release, not in git (examples/spatial-rig/hmi/assets.json); naut
       # check holds the scene file to files that exist, so fetch them first.
@@ -221,12 +227,18 @@ jobs:
       - run: npm ci --prefix webview-ui
       - run: npm --prefix webview-ui run build
       # Every test records a clip of its run (gesture-harness/clips.mjs);
-      # the runner image may not carry ffmpeg, so make sure of it.
+      # the runner image may not carry ffmpeg, so make sure of it. The clips
+      # are a convenience, not the test: an apt mirror that hangs (it has,
+      # holding the job until its 15-minute limit) gives up after 4 minutes
+      # and the tests run without clips.
       - name: ffmpeg (for the clips)
+        id: ffmpeg
+        timeout-minutes: 4
+        continue-on-error: true
         run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -yqq --no-install-recommends ffmpeg; }
       - run: npm --prefix webview-ui run test:gestures
         env:
-          GESTURE_CLIPS: ${{ github.workspace }}/gesture-clips
+          GESTURE_CLIPS: ${{ steps.ffmpeg.outcome == 'success' && format('{0}/gesture-clips', github.workspace) || '' }}
       # index.html in the artifact plays every clip beside its PASS/FAIL.
       - name: Upload clips
         if: always()
@@ -263,6 +275,11 @@ jobs:
           path: tools/vscode-iec/.vscode-test/vscode-*
           key: vscode-download-${{ runner.os }}-${{ hashFiles('tools/vscode-iec/package-lock.json') }}
       - run: npm ci
+      # The diagram exporter (webview-ui/src/export → media/dist), which the
+      # suite drives through "Export Diagram…" on every OS. Pure TypeScript:
+      # it needs webview-ui's vite, not the hmi packages built.
+      - name: Build the diagram exporter
+        run: npm --prefix webview-ui ci && npm --prefix webview-ui run build:export
       # The resolver and installer against this OS's real filesystem (the ubuntu `npm test`
       # above only exercises Linux paths).
       - run: npm run compile && node --test out/cliResolve.test.js out/cliInstall.test.js

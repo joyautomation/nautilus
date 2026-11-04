@@ -13,7 +13,7 @@
 	import { annotate, argIdents, offerType, useTypes, type Ann, type LdElement, type LdFbType, type LdModel, type LdRung, type RungStatus } from './ladder';
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
-	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode, type LBranch, type RungLayout } from './ladderLayout';
+	import { layoutRung, rungMinWidth, fitArgs, assignLines, assignLineDy, L, OPERAND_LABEL_MAX, type LSpot, type LNode, type LBranch, type RungLayout } from './ladderLayout';
 	import { afterWrapOr, deleteOrder, inSel, orOp, selPaths, seriesKey, toggleSel, type LdSel } from './ladderSelect';
 	import { live, liveValue, liveForced, liveEnum, liveTypeNote, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
@@ -956,7 +956,10 @@
 		{:else if n.kind === 'assign'}
 			<title>{'{ ' + (n.ann.el.text ?? '') + ' }'}{diffNote(n.ann.el)}{editable ? ' — dblclick: edit the assignment(s) · Del · drag to move' : ''}</title>
 			<rect x="0" y="0" width={n.w} height={n.h} rx="4" class="box" />
-			<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="fntext">{n.ann.el.text}</text>
+			{@const lines = assignLines(n.ann.el.text)}
+			{#each lines as line, li (li)}
+				<text x={n.w / 2} y={n.h / 2 + assignLineDy(li, lines.length)} text-anchor="middle" class="fntext">{line}</text>
+			{/each}
 		{:else if n.kind === 'fb'}
 			<title>{n.ann.el.inst} : {n.ann.el.type}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick the name: rename the instance · dblclick the body: edit args · Del · drag to move' : ''}{descTail(n.ann.el.inst)}</title>
 			<rect x="0" y="0" width={n.w} height={n.h} rx="3" class="box fbbox" />

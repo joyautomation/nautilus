@@ -17,7 +17,7 @@ tags:
 `,
 		"owner.ld": `PROGRAM Owner
 LD
-  RUNG timer
+  RUNG timer (* times Run *)
     Run t1:TON(PT := T#5S)
 END_LD
 END_PROGRAM

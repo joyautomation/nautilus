@@ -1,0 +1,16 @@
+name: motor-seal-in-reference
+
+tasks:
+  - program: motor.ld
+    scan: 100ms
+
+tags:
+  - { name: StartPB,     role: input,  type: BOOL, init: false, desc: "Start push button (NO)" }
+  - { name: StopPB,      role: input,  type: BOOL, init: true,  desc: "Stop push button (NC: TRUE when not pressed)" }
+  - { name: OL_Trip,     role: input,  type: BOOL, init: false, desc: "Overload relay tripped" }
+  - { name: ResetPB,     role: input,  type: BOOL, init: false, desc: "Fault reset push button" }
+  - { name: Motor_Run,   role: output, type: BOOL, init: false, desc: "Motor contactor" }
+  - { name: Motor_Fault, role: output, type: BOOL, init: false, desc: "Fault lamp" }
+
+driver:
+  type: memory

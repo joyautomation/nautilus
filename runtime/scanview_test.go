@@ -201,4 +201,5 @@ func TestFastTaskDoesNotWaitForSlowTask(t *testing.T) {
 // the view, or it silently disappears behind it.
 func TestScanViewForwardsHostExtensions(t *testing.T) {
 	var _ ir.DivZeroCounter = (*scanView)(nil)
+	var _ ir.MemberWriter = (*scanView)(nil)
 }

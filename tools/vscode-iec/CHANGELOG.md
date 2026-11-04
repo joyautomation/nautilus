@@ -3,6 +3,73 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Export and print diagrams.** **nautilus: Export Diagram…** writes an
+  LD, FBD or SFC diagram (or a Rockwell `.L5X` ladder) as a paginated PDF
+  or as one SVG image; **nautilus: Print Diagram…** opens the same PDF in
+  the system's PDF viewer to print (in a remote window, such as SSH, WSL
+  or Codespaces, it saves the PDF instead). Both are in a diagram's "…" menu, on
+  the editor's and the Explorer's right-click menu, and in the Command
+  Palette. The printout is black on white with no selection, palette or
+  diagnostics; pages break between rungs, networks and SFC ranks, never
+  through one, and carry the POU's name, the file name and "Page n of N".
+  An SFC prints its ACTION bodies after the chart. New settings
+  `nautilus.export.paper` (Letter or A4, by default from the system
+  locale) and `nautilus.export.orientation`. With a controller connected,
+  the export can include its live values. Needs no other software: the
+  PDF is written by the extension itself.
+
+### Changed
+
+- **"Install or Update the naut CLI" can put `naut` on your PATH.** Until
+  now the CLI landed in the extension's storage, where only the extension
+  could find it, so `naut run` failed in a terminal. Now, when the extension
+  runs its own copy:
+  - Terminals inside VS Code find it at once (new ones; relaunch open ones).
+    They always get the same `naut` the extension runs: when that is a `naut`
+    of your own (on PATH, or `nautilus.cliPath`), their PATH is left alone.
+  - For terminals outside VS Code the extension asks first, once the install
+    is done and the language server already runs the new `naut`, listing
+    every change: on macOS and Linux a link `~/.local/bin/naut`, and, if
+    `~/.local/bin` is not on PATH yet, one marked line that appends it in your
+    shell's startup file (`.zprofile` or `.bash_profile` on macOS; `.profile`,
+    or `.zshrc` for zsh, on Linux; plus `.bashrc`/`.zshrc`/`.bash_profile`
+    where they exist) and a `conf.d/nautilus.fish` for fish; on Windows the
+    extension's folder appended to your user PATH, no admin rights. **Not
+    now** is remembered; **nautilus: Add naut to PATH** asks again.
+  - Appending means a `naut` you installed yourself (Homebrew,
+    `/usr/local/bin`, `go install`) keeps winning, and one already at
+    `~/.local/bin/naut` is never replaced.
+  - **nautilus: Remove naut from PATH** undoes all of it (only the lines and
+    link the extension made). (#558)
+
+### Fixed
+
+- **A multi-statement `{ … }` box in the ladder no longer overflows.** An
+  assignment box with several statements drew them as one long line that
+  ran past its box, over the neighbouring contact's label and off the
+  rung's left edge. It now stacks one statement per line inside a box sized
+  to hold them (a very long statement ends in `…`; the tooltip has the
+  full text). A `$'` or `$$` inside a string no longer splits a statement
+  there, in the ladder view or in `naut` itself.
+- **A jump-back transition's name no longer overlaps its step.** The
+  loop-back glyph and its name hang clear of the step box, a second
+  loop-back out of the same step stacks below the first instead of on top
+  of it, and the chart widens to fit the glyph's label and name.
+- **Loop-backs no longer collide with the step's forward transition.** A
+  loop-back under an action table hangs just below the table, and a step
+  with several loop-backs gets a taller gap to its next step, so the
+  glyphs and their labels stay clear of the forward bar's name and
+  condition and of the next step's box (`batch-skid/phases.sfc`: ChargeA,
+  ChargeB, Hold).
+- **An alternative branch labelled over its own bar stops short of the
+  source's stem.** A long condition or name on a branch that runs left of
+  its source ends in `…` instead of being written across the stem (the
+  tooltip has the full text).
+
 ## [0.19.2] - 2026-11-03
 
 Requires a `naut` built from main (after 0.19.0) for the items that

@@ -38,6 +38,12 @@ const pages = [
     ],
   },
   {
+    src: join(root, '..', 'docs', 'structure-warnings.md'),
+    dest: join(root, 'src', 'content', 'docs', 'reference', 'structure-warnings.md'),
+    description:
+      'The ladder, FBD and SFC structure warnings naut check and the editor report — LD001…, FBD001…, SFC001… — what each means, what to write instead, and how to tune them.',
+  },
+  {
     // The package README is already the reference for the HMI kit; syncing it
     // beats maintaining a second copy that quietly falls behind the components.
     src: join(root, '..', 'hmi', 'README.md'),

@@ -1,17 +1,18 @@
 package fbd
 
+import "github.com/joyautomation/nautilus/lang/st"
+
 // stripComments returns src with every comment's body blanked to spaces —
 // `(* ... *)` block comments (which nest, IEC 61131-3 3rd edition) and
 // `//` line comments — while leaving line and column positions untouched:
 // comment characters (delimiters included) become ' ', newlines stay
 // newlines. The result has exactly the same length and line count as src.
 //
-// String literals ('...') are skipped whole and never mistaken for a
+// String literals ('...' and "...") are skipped whole, ending where
+// lang/st's lexer ends them (st.StringEnd), and never mistaken for a
 // comment delimiter — a "(*", "*)" or "//" quoted inside one does not open
-// or close a comment. This mirrors lang/st's lexer, which never looks for
-// a comment from inside a string token either. (Kept as a package-local
-// copy of lang/ld's identical helper — these two leaf packages have no
-// dependency on each other and the function has none of its own.)
+// or close a comment. (A package-local copy of fbcatalog.StripComments,
+// which lang/ld uses.)
 //
 // Every STRUCTURAL scan in this package — is this line FBD / END_FBD, a
 // PROGRAM / FUNCTION_BLOCK header, a VAR* section opener / END_VAR — must
@@ -21,17 +22,12 @@ package fbd
 // if it were real code.
 func stripComments(src string) string {
 	out := []byte(src)
-	inString := false
 	for i := 0; i < len(out); {
 		switch {
-		case inString:
-			if out[i] == '\'' {
-				inString = false
-			}
-			i++
-		case out[i] == '\'':
-			inString = true
-			i++
+		case out[i] == '\'' || out[i] == '"':
+			// A string, '…' or "…", skipped whole as st reads it ($'
+			// and $" never close it), so a (* or // inside is text.
+			i, _ = st.StringEnd(src, i)
 		case out[i] == '/' && i+1 < len(out) && out[i+1] == '/':
 			for i < len(out) && out[i] != '\n' {
 				out[i] = ' '
