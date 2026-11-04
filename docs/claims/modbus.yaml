@@ -388,21 +388,25 @@ claims:
       A command raised while the source is down is queued per source (latest
       value per tag), flushed on reconnect, and counted as `queuedWrites`.
       When the link breaks partway through a flush, the write that broke and
-      the ones after it are queued again, and writes the device already
-      answered in that flush are not re-sent.
+      the ones after it are queued again, and writes the device confirmed or
+      refused with an exception earlier in that flush are not re-sent.
     source: "#writes"
     tests:
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
       - go ./modbus TestBrokenFlushResendsOnlyUnconfirmedRuns
+      - go ./modbus TestBrokenFlushAtEveryPoint
     partial: true
     note: >-
       Queueing one tag and flush on reconnect are asserted. The broken flush
-      is asserted with the link cut on the second register run: the bit RMW
-      and the first run are sent once, the broken run is sent again, and a
-      value queued while the flush was in flight goes out in place of the
-      one it replaced. Latest-value-wins coalescing of several writes queued
-      to one tag while the source is down is not asserted, nor is a write
-      refused with an exception earlier in a broken flush.
+      is asserted with the link cut at every point of one flush (the RMW
+      read, each RMW write, each register run, the first and the last coil
+      write): every write before the cut goes out once and another master's
+      value on it stands, the broken one goes out again (an RMW cut on its
+      read sends its write once), and every write after it goes out once. A value queued while the flush was in flight goes out
+      in place of the one it replaced. Latest-value-wins coalescing of
+      several writes queued to one tag while the source is down is not
+      asserted, nor is a write refused with an exception earlier in a broken
+      flush, nor a `rewrite:` binding in a broken flush.
   - id: MB-031
     claim: >-
       A binding with `rewrite:` re-asserts its last commanded value on that

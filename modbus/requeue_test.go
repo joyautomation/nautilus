@@ -11,6 +11,7 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/modbus/slave"
 )
 
 // breakingConn records like recordingConn, and the first frame for which
@@ -159,5 +160,173 @@ func TestBrokenFlushResendsOnlyUnconfirmedRuns(t *testing.T) {
 	}
 	if q := d.Health().Sources[0].QueuedWrites; q != 0 {
 		t.Errorf("queue must drain, %d left", q)
+	}
+}
+
+// flushStep is one device write in a flush's send order: its write frame,
+// another master's value for it, and how to read back what landed.
+type flushStep struct {
+	name     string
+	fc       byte
+	addr     uint16
+	interfer func(u *slave.Unit)      // another master writes over it
+	foreign  func(u *slave.Unit) bool // the other master's value is there
+	landed   func(u *slave.Unit) bool // this flush's command is there
+}
+
+// The link cut at every point of one flush (issue #593): every write
+// before the cut goes out once and another master's value on it stands,
+// the write that broke goes out twice (a cut on an RMW read: once, its
+// write never left), and every write after it goes out once.
+func TestBrokenFlushAtEveryPoint(t *testing.T) {
+	tags := []TagBinding{
+		{Name: "BA", Source: "DEV", Table: TableHolding, Address: 50, Format: "bit:0", Writable: true},
+		{Name: "BB", Source: "DEV", Table: TableHolding, Address: 60, Format: "bit:0", Writable: true},
+		{Name: "A1", Source: "DEV", Table: TableHolding, Address: 100, Format: "uint16", Writable: true},
+		{Name: "A2", Source: "DEV", Table: TableHolding, Address: 101, Format: "uint16", Writable: true},
+		{Name: "B1", Source: "DEV", Table: TableHolding, Address: 200, Format: "uint16", Writable: true},
+		{Name: "B2", Source: "DEV", Table: TableHolding, Address: 201, Format: "uint16", Writable: true},
+		{Name: "C1", Source: "DEV", Table: TableHolding, Address: 300, Format: "uint16", Writable: true},
+		{Name: "C2", Source: "DEV", Table: TableHolding, Address: 301, Format: "uint16", Writable: true},
+		{Name: "K1", Source: "DEV", Table: TableCoil, Address: 10, Writable: true},
+		{Name: "K2", Source: "DEV", Table: TableCoil, Address: 11, Writable: true},
+		{Name: "K3", Source: "DEV", Table: TableCoil, Address: 20, Writable: true},
+	}
+	base := nio.Values{"BA": false, "BB": false, "A1": float64(0), "A2": float64(0),
+		"B1": float64(0), "B2": float64(0), "C1": float64(0), "C2": float64(0),
+		"K1": false, "K2": false, "K3": false}
+	cmd := nio.Values{"BA": true, "BB": true, "A1": float64(11), "A2": float64(12),
+		"B1": float64(21), "B2": float64(22), "C1": float64(31), "C2": float64(32),
+		"K1": true, "K2": true, "K3": true}
+
+	bitStep := func(name string, addr uint16) flushStep {
+		return flushStep{name: name, fc: FCWriteSingleRegister, addr: addr,
+			interfer: func(u *slave.Unit) { u.SetHolding(addr, 0x8000) },
+			foreign:  func(u *slave.Unit) bool { return u.Holding(addr) == 0x8000 },
+			landed:   func(u *slave.Unit) bool { return u.Holding(addr)&1 == 1 },
+		}
+	}
+	runStep := func(name string, addr, v0, v1 uint16) flushStep {
+		return flushStep{name: name, fc: FCWriteMultipleRegisters, addr: addr,
+			interfer: func(u *slave.Unit) { u.SetHolding(addr, 4242) },
+			foreign:  func(u *slave.Unit) bool { return u.Holding(addr) == 4242 },
+			landed:   func(u *slave.Unit) bool { return u.Holding(addr) == v0 && u.Holding(addr+1) == v1 },
+		}
+	}
+	coilStep := func(name string, fc byte, addr uint16) flushStep {
+		return flushStep{name: name, fc: fc, addr: addr,
+			interfer: func(u *slave.Unit) { u.SetCoil(addr, false) },
+			foreign:  func(u *slave.Unit) bool { return !u.Coil(addr) },
+			landed:   func(u *slave.Unit) bool { return u.Coil(addr) },
+		}
+	}
+	// Send order: bit RMWs, register runs by address, coil runs by address.
+	steps := []flushStep{
+		bitStep("RMW 50", 50),
+		bitStep("RMW 60", 60),
+		runStep("FC16 100", 100, 11, 12),
+		runStep("FC16 200", 200, 21, 22),
+		runStep("FC16 300", 300, 31, 32),
+		coilStep("FC15 10", FCWriteMultipleCoils, 10),
+		coilStep("FC5 20", FCWriteSingleCoil, 20),
+	}
+
+	cuts := []struct {
+		name string
+		fc   byte
+		addr uint16
+		step int  // the step the cut frame belongs to
+		sent bool // the cut frame is that step's write, not its RMW read
+	}{
+		{"RMW read at 50", FCReadHoldingRegisters, 50, 0, false},
+		{"RMW write at 50", FCWriteSingleRegister, 50, 0, true},
+		{"RMW write at 60", FCWriteSingleRegister, 60, 1, true},
+		{"FC16 at 100", FCWriteMultipleRegisters, 100, 2, true},
+		{"FC16 at 200", FCWriteMultipleRegisters, 200, 3, true},
+		{"FC16 at 300", FCWriteMultipleRegisters, 300, 4, true},
+		{"first coil run FC15 at 10", FCWriteMultipleCoils, 10, 5, true},
+		{"last coil FC5 at 20 with nothing after", FCWriteSingleCoil, 20, 6, true},
+	}
+
+	for _, cut := range cuts {
+		t.Run(cut.name, func(t *testing.T) {
+			srv := newSlave(t)
+			u := srv.Unit(1)
+			rec := &recorder{}
+
+			var allow atomic.Bool // refuse dials until every command is queued
+			var dials atomic.Int32
+			dialer := func(ctx context.Context, addr string) (net.Conn, error) {
+				if !allow.Load() {
+					return nil, errors.New("test: not yet")
+				}
+				var nd net.Dialer
+				nc, err := nd.DialContext(ctx, "tcp", addr)
+				if err != nil {
+					return nil, err
+				}
+				if dials.Add(1) > 1 {
+					return &recordingConn{Conn: nc, rec: rec}, nil
+				}
+				return &breakingConn{
+					recordingConn: recordingConn{Conn: nc, rec: rec},
+					// prime flushes before it polls, so on the first
+					// connection the first matching frame is the flush's
+					// own, an RMW read included.
+					breakOn: func(fc byte, addr uint16) bool { return fc == cut.fc && addr == cut.addr },
+					onBreak: func() {
+						for _, st := range steps[:cut.step] {
+							st.interfer(u)
+						}
+					},
+				}, nil
+			}
+
+			m := Manifest{Sources: []Source{fastSource("DEV", srv.Addr())}, Tags: tags}
+			d, err := New(m, WithScanRate(20*time.Millisecond), WithDialer(dialer))
+			if err != nil {
+				t.Fatal(err)
+			}
+			startDriver(t, d)
+			if err := d.WriteOutputs(base); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.WriteOutputs(cmd); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "all commands queued", func() bool {
+				h := d.Health()
+				return len(h.Sources) == 1 && h.Sources[0].QueuedWrites == len(cmd)
+			})
+			allow.Store(true)
+
+			// The flush after the reconnect sends in the same order, so
+			// once every re-sent step has landed and the queue is empty, a
+			// re-send of an earlier step would have been recorded already.
+			waitFor(t, "the re-sent steps land", func() bool {
+				if dials.Load() < 2 || d.Health().Sources[0].QueuedWrites != 0 {
+					return false
+				}
+				for _, st := range steps[cut.step:] {
+					if !st.landed(u) {
+						return false
+					}
+				}
+				return true
+			})
+
+			for i, st := range steps {
+				want := 1
+				if i == cut.step && cut.sent {
+					want = 2
+				}
+				if got := len(rec.writes(st.fc, int(st.addr))); got != want {
+					t.Errorf("%s: %d write frames, want %d", st.name, got, want)
+				}
+				if i < cut.step && !st.foreign(u) {
+					t.Errorf("%s: confirmed before the cut, yet the other master's value was overwritten", st.name)
+				}
+			}
+		})
 	}
 }
