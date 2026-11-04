@@ -455,8 +455,12 @@ With a `redundancy:` section, the driver's write gate is wired to leadership
 can compose a "logic healthy" signal into the same condition. Leadership
 is checked again when queued commands go out: a replica that lost it
 during an outage drops what it queued, and so do the writes a broken
-flush put back. A dropped command is forgotten, so the same value is a
-command again once the gate reopens.
+flush put back. It is checked again before each write of a flush, so a
+long flush through a slow gateway stops sending once the gate closes. A
+dropped command is forgotten, so the first output push after the gate
+reopens sends the same value again. The runtime pushes on a takeover, so a
+replica that regains leadership sends at once; a gate that reopens without
+one (logic healthy again) waits for the next output change.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly
