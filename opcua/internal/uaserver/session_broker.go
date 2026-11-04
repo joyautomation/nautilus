@@ -222,6 +222,15 @@ func (s *session) orphanedPublishes() []PubReq {
 	return out
 }
 
+// discardPublishes drops every Publish request queued for the session, unanswered. It is for a
+// session whose channel has gone: there is nothing left to answer on, and deleting its last
+// subscription would otherwise try to send each one Bad_NoSubscription.
+func (s *session) discardPublishes() {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	s.pubReqs = nil
+}
+
 // boundTo reports whether sc is the channel the session was created on.
 func (s *session) boundTo(sc *uasc.SecureChannel) bool {
 	s.mu.Lock()

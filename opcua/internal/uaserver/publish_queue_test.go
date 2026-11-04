@@ -2,6 +2,8 @@ package uaserver
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -312,4 +314,71 @@ func rawDeleteSubscription(t *testing.T, ctx context.Context, sc *cuasc.SecureCh
 		return nil
 	}))
 	require.Equal(t, []ua.StatusCode{ua.StatusOK}, results)
+}
+
+// A dropped connection with Publish requests still queued takes them with it, unanswered and
+// unlogged: there is no channel left to answer on. Deleting the session's last subscription
+// answers queued requests with Bad_NoSubscription (§5.14.8.1), and before this every one of
+// them was sent to the closed channel and logged a warning, so each disconnect logged one line
+// per request the client had outstanding.
+func TestDroppedConnectionDiscardsItsQueuedPublishesQuietly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	log := &warnRecorder{}
+	endpoint, srv := startTestServer(t, func(srv *Server) { srv.cfg.logger = log })
+
+	c := dial(t, ctx, endpoint)
+	sc := c.SecureChannel()
+	tok := rawCreateSession(t, ctx, sc, endpoint)
+	require.NoError(t, rawActivate(ctx, sc, tok))
+	sess := srv.sb.Session(tok)
+	require.NotNil(t, sess)
+	rawIdleSubscription(t, ctx, sc, tok)
+	const outstanding = 5
+	for i := range outstanding {
+		sendPublish(ctx, sc, tok)
+		waitQueued(t, sess, i+1)
+	}
+
+	require.NoError(t, c.Close(ctx))
+	subs := func() int {
+		srv.SubscriptionService.Mu.Lock()
+		defer srv.SubscriptionService.Mu.Unlock()
+		return len(srv.SubscriptionService.Subs)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for (srv.sb.Session(tok) != nil || subs() != 0) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.True(t, srv.sb.Session(tok) == nil, "the dropped channel's session is still held")
+	require.Equal(t, 0, subs(), "the dropped channel's subscription is still held")
+	require.Equal(t, 0, queuedPublishes(sess), "the dropped channel's publish requests are still queued")
+	require.Equal(t, 0, log.count("Error sending response"), "answers were sent to the closed channel")
+}
+
+// warnRecorder is a Logger that counts warnings by message.
+type warnRecorder struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnRecorder) Debug(string, ...any) {}
+func (l *warnRecorder) Info(string, ...any)  {}
+func (l *warnRecorder) Error(string, ...any) {}
+func (l *warnRecorder) Warn(msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns = append(l.warns, msg)
+}
+
+func (l *warnRecorder) count(prefix string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, w := range l.warns {
+		if strings.HasPrefix(w, prefix) {
+			n++
+		}
+	}
+	return n
 }
