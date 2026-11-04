@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { diagramFor, exportPdf, exportSheets, exportSvg, liveSnapshot, sheetSvg } from './index.ts';
-import { mergeBlocks, POWER, wrapText } from './draw.ts';
+import { mergeBlocks, POWER, textWidth, wrapText } from './draw.ts';
 import { slicePages } from './paginate.ts';
 import { pdfString } from './pdf.ts';
 import { dedent } from './sfcExport.ts';
@@ -76,6 +76,74 @@ test('ladder SVG: self-contained, the operands and coils, no editor chrome', () 
 	assert.doesNotMatch(svg, /class=|<style|<script|href=/);
 	// Without a live snapshot nothing is drawn as powered.
 	assert.ok(!svg.includes(POWER));
+});
+
+/** Why `xml` is not well-formed XML 1.0, or undefined if it is: only the
+ * characters XML allows, entity references that exist, balanced tags and
+ * one root element. (No XML parser ships with the test dependencies.) */
+function xmlError(xml: string): string | undefined {
+	const bad = /[^\t\n\r\x20-퟿-�\u{10000}-\u{10FFFF}]/u.exec(xml);
+	if (bad) return `character U+${bad[0].codePointAt(0)!.toString(16).padStart(4, '0')} at ${bad.index}`;
+	const amp = /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/.exec(xml);
+	if (amp) return `bare & at ${amp.index}`;
+	const tok = /<\?[^?]*\?>|<!--[\s\S]*?-->|<\/([\w:.-]+)\s*>|<([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*"[^"<]*")*)\s*(\/?)>|([^<]+)/y;
+	const stack: string[] = [];
+	let roots = 0;
+	for (let at = 0; at < xml.length; ) {
+		tok.lastIndex = at;
+		const m = tok.exec(xml);
+		if (!m) return `cannot parse at ${at}: ${JSON.stringify(xml.slice(at, at + 40))}`;
+		at = tok.lastIndex;
+		if (m[1]) {
+			if (stack.pop() !== m[1]) return `</${m[1]}> closes nothing open`;
+		} else if (m[2]) {
+			if (stack.length === 0) roots++;
+			if (!m[4]) stack.push(m[2]);
+		} else if (m[5] && stack.length === 0 && m[5].trim()) return 'text outside the root element';
+	}
+	if (stack.length) return `<${stack.at(-1)}> never closed`;
+	return roots === 1 ? undefined : `${roots} root elements`;
+}
+
+test('SVG is well-formed XML even when a comment holds control characters', () => {
+	const m = ladder(2);
+	m.comments = [{ line: 1, endLine: 1, text: 'pasted\x01from\x08a\x0Bterminal\x1F & <done>' }];
+	m.rungs[0].comment = 'bell\x07 and tab\tkept';
+	for (const svg of [exportSvg('ld', m), exportSvg('fbd', { ...fbd, nodes: [...fbd.nodes, { id: 'n:2', kind: 'comment', label: 'esc\x1B[0m', layer: 0, line: 3 }] } as FbdModel)]) {
+		assert.equal(xmlError(svg), undefined);
+		assert.doesNotMatch(svg, /[\x00-\x08\x0B\x0C\x0E-\x1F]/);
+	}
+	assert.ok(exportSvg('ld', m).includes('pasted from a terminal'));
+	// The checker itself rejects what the exporter used to write.
+	assert.match(xmlError('<svg><text>a\x01b</text></svg>') ?? '', /U\+0001/);
+	assert.equal(xmlError('<?xml version="1.0"?>\n<svg a="1"><g/><text>x &amp; y</text></svg>\n'), undefined);
+});
+
+test('a long title is cut with an ellipsis before it reaches the diagram kind', () => {
+	const many = Array.from({ length: 30 }, (_, i) => `Block${i}`);
+	const lib = { ...ladder(2), name: '', blocks: many.map((name, i) => ({ name, line: i * 10 + 1, endLine: i * 10 + 9, pins: [] })) } as LdModel;
+	assert.equal(diagramFor('ld', lib).title, many.join(', '));
+	for (const orientation of ['portrait', 'landscape'] as const) {
+		for (const s of exportSheets('ld', lib, { ...page, orientation })) {
+			const texts = s.chrome.filter((p) => p.t === 'text');
+			const title = texts.find((p) => p.text.startsWith('Block0'));
+			const kind = texts.find((p) => p.text === 'Ladder Diagram');
+			assert.ok(title && title.t === 'text' && kind && kind.t === 'text');
+			assert.ok(title.text.endsWith('…'), title.text);
+			assert.ok(title.text.length > 20);
+			// Title ends left of where the right-anchored kind label starts.
+			assert.ok(title.x + textWidth(title.text, title.size) < kind.x - textWidth(kind.text, kind.size), orientation);
+		}
+	}
+	// A short title is left alone.
+	assert.equal(exportSheets('ld', ladder(2), page)[0].chrome.find((p) => p.t === 'text')?.text, 'Permissives');
+	// The SVG cuts its header the same way; its <title> keeps the whole name.
+	const svg = exportSvg('ld', lib);
+	assert.ok(svg.includes(`<title>${many.join(', ')} — Ladder Diagram</title>`));
+	const head = /<text x="12" y="20"[^>]*>([^<]*)<\/text>/.exec(svg)?.[1] ?? '';
+	const width = Number(/<svg[^>]* width="([\d.]+)"/.exec(svg)?.[1]);
+	assert.ok(head.endsWith('…'), head);
+	assert.ok(12 + textWidth(head, 13) < width - 12 - textWidth('Ladder Diagram', 10));
 });
 
 test('ladder with a live snapshot paints power flow and values', () => {

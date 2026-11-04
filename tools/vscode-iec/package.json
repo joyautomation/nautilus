@@ -452,12 +452,12 @@
         },
         {
           "command": "nautilus.diagram.export",
-          "when": "webviewId =~ /^nautilus\\.(ld|l5x|fbd|sfc)(Diagram|Preview)$/",
+          "when": "webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/",
           "group": "z_export@1"
         },
         {
           "command": "nautilus.diagram.print",
-          "when": "webviewId =~ /^nautilus\\.(ld|l5x|fbd|sfc)(Diagram|Preview)$/",
+          "when": "webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/",
           "group": "z_export@2"
         }
       ],
@@ -591,12 +591,12 @@
         },
         {
           "command": "nautilus.diagram.export",
-          "when": "activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/ || !activeCustomEditorId && resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
+          "when": "activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ || !activeCustomEditorId && resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
           "group": "2_export@1"
         },
         {
           "command": "nautilus.diagram.print",
-          "when": "activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/ || !activeCustomEditorId && resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
+          "when": "activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ || !activeCustomEditorId && resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/",
           "group": "2_export@2"
         }
       ],
@@ -675,22 +675,22 @@
         },
         {
           "command": "nautilus.diagram.export",
-          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/"
+          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
         },
         {
           "command": "nautilus.diagram.print",
-          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^nautilus\\.(ld|fbd|sfc)Preview$/"
+          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
         }
       ],
       "explorer/context": [
         {
           "command": "nautilus.diagram.export",
-          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(ld|fbd|sfc|l5x|L5X)$/",
+          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(ld|fbd|sfc|l5x)$/i",
           "group": "7_modification@9"
         },
         {
           "command": "nautilus.diagram.print",
-          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(ld|fbd|sfc|l5x|L5X)$/",
+          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(ld|fbd|sfc|l5x)$/i",
           "group": "7_modification@10"
         }
       ]
@@ -716,7 +716,7 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token — reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token \u2014 reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
         },
         "nautilus.diagram.showDescriptions": {
           "type": "boolean",

@@ -11,8 +11,17 @@ export function num(n: number): string {
 	return Object.is(r, -0) ? '0' : String(r);
 }
 
+/** Text and attribute values for XML. Characters XML 1.0 does not allow at
+ * all (C0 controls other than tab, LF and CR; U+FFFE/U+FFFF; a lone
+ * surrogate) cannot be escaped either, so they become a space, as the PDF
+ * writer does with control characters. */
 export function esc(s: string): string {
-	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+	return s
+		.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F￾￿]|\p{Cs}/gu, ' ')
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;');
 }
 
 function stroke(s: Stroke | undefined): string {

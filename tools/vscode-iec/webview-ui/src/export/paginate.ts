@@ -8,7 +8,7 @@
 // Every sheet carries the POU's name and the diagram kind in a header and
 // "Page n of N" in its footer.
 
-import { FAINT, MUTED, mergeBlocks, yExtent, type Block, type Diagram, type Prim } from './draw.ts';
+import { FAINT, MUTED, fitText, mergeBlocks, textWidth, yExtent, type Block, type Diagram, type Prim } from './draw.ts';
 
 export type Paper = 'letter' | 'a4';
 export type Orientation = 'portrait' | 'landscape' | 'auto';
@@ -147,9 +147,15 @@ export function paginate(build: (width: number) => Diagram, opts: PageOptions): 
 	});
 }
 
+/** Space kept between the header's title and the diagram kind beside it. */
+export const HEADER_GAP = 12;
+
 function chrome(d: Diagram, opts: PageOptions, w: number, h: number, page: number, pages: number): Prim[] {
+	// A library of many function blocks has a long title: cut it short of
+	// the kind label rather than run into it.
+	const titleW = w - 2 * MARGIN - textWidth(d.kind, 9) - HEADER_GAP;
 	const out: Prim[] = [
-		{ t: 'text', x: MARGIN, y: MARGIN + 12, text: d.title, size: 12, bold: true },
+		{ t: 'text', x: MARGIN, y: MARGIN + 12, text: fitText(d.title, 12, titleW), size: 12, bold: true },
 		{ t: 'text', x: w - MARGIN, y: MARGIN + 12, text: d.kind, size: 9, anchor: 'end', color: MUTED },
 		{ t: 'line', x1: MARGIN, y1: MARGIN + 18, x2: w - MARGIN, y2: MARGIN + 18, s: { color: FAINT, width: 0.5 } },
 		{ t: 'line', x1: MARGIN, y1: h - MARGIN - 10, x2: w - MARGIN, y2: h - MARGIN - 10, s: { color: FAINT, width: 0.5 } },

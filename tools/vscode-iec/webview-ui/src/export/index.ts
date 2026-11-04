@@ -7,11 +7,11 @@
 import type { LdModel } from '../ladder.ts';
 import type { FbdModel } from '../layout.ts';
 import type { SfcModel } from '../sfc.ts';
-import { MUTED, type Diagram } from './draw.ts';
+import { MUTED, fitText, textWidth, type Diagram } from './draw.ts';
 import { fbdDiagram } from './fbdExport.ts';
 import { ladderDiagram } from './ladderExport.ts';
 import type { LiveSnapshot } from './live.ts';
-import { paginate, type PageOptions, type Sheet } from './paginate.ts';
+import { HEADER_GAP, paginate, type PageOptions, type Sheet } from './paginate.ts';
 import { pdfDocument } from './pdf.ts';
 import { sfcDiagram } from './sfcExport.ts';
 import { esc, num, primsToSvg, svgDocument } from './svg.ts';
@@ -36,14 +36,21 @@ export function diagramFor(lang: DiagramLang, model: unknown, width = 0, live?: 
 
 const TITLE_H = 30;
 const EDGE = 12;
+/** A narrow diagram's SVG widens to show at least this much of its title. */
+const MIN_TITLE_CHARS = 24;
 
 /** The whole diagram as one standalone SVG image, at screen size, with a
  * one-line title (POU name, diagram kind) above it. */
 export function exportSvg(lang: DiagramLang, model: unknown, opts: { live?: LiveSnapshot } = {}): string {
 	const d = diagramFor(lang, model, 0, opts.live);
-	const w = d.width + 2 * EDGE;
+	// Wide enough for the kind and a readable start of the title; a longer
+	// title (a library of many blocks) is cut short of the kind label. The
+	// <title> element keeps it whole.
+	const kindW = textWidth(d.kind, 10) + HEADER_GAP;
+	const w = Math.max(d.width, kindW + Math.min(textWidth(d.title, 13), textWidth('x', 13) * MIN_TITLE_CHARS)) + 2 * EDGE;
+	const title = fitText(d.title, 13, w - 2 * EDGE - kindW);
 	const head =
-		`<text x="${EDGE}" y="20" font-size="13" font-weight="bold" fill="#000000">${esc(d.title)}</text>\n` +
+		`<text x="${EDGE}" y="20" font-size="13" font-weight="bold" fill="#000000">${esc(title)}</text>\n` +
 		`<text x="${num(w - EDGE)}" y="20" font-size="10" text-anchor="end" fill="${MUTED}">${esc(d.kind)}</text>\n`;
 	const body = `${head}<g transform="translate(${EDGE} ${TITLE_H})">\n${primsToSvg(d.items)}\n</g>`;
 	return svgDocument(w, d.height + TITLE_H + EDGE, body, `${d.title} — ${d.kind}`);

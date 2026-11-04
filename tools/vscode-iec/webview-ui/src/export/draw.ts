@@ -201,6 +201,14 @@ export function wrapText(text: string, max: number): string[] {
 	return out;
 }
 
+/** `s` cut to fit `maxW` at `size`, ending in an ellipsis when cut — a
+ * header title that must not run into the label beside it. */
+export function fitText(s: string, size: number, maxW: number): string {
+	if (textWidth(s, size) <= maxW) return s;
+	const n = Math.max(0, Math.floor(maxW / (size * MONO_ADVANCE)) - 1);
+	return [...s].slice(0, n).join('').trimEnd() + '…';
+}
+
 /** Middle-ellipsis truncation, as the ladder view labels long operands. */
 export function trunc(s: string | undefined, n: number): string {
 	const t = s ?? '';

@@ -10,11 +10,12 @@
 // and the built-in Courier faces) instead of asking a webview to print —
 // which VS Code webviews cannot reliably do on every platform.
 //
-// "Print" is an export to a temporary PDF that opens in the system's PDF
-// viewer, whose print dialog is the platform's own.
+// "Print" is an export to a temporary PDF (in a private mkdtemp directory)
+// that opens in the system's PDF viewer, whose print dialog is the
+// platform's own. In a remote window that viewer is out of reach, so Print
+// saves the PDF through the save dialog instead.
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { fbdGraph } from "./fbdPreview";
@@ -29,6 +30,9 @@ import {
   liveValueMap,
   orientationFor,
   paperFor,
+  printRoute,
+  sweepPrintDirs,
+  writePrintFile,
   type DiagramLang,
   type ExportFormat,
   type Orientation,
@@ -141,11 +145,32 @@ export function registerDiagramExport(context: vscode.ExtensionContext, live?: L
  * this way. Resolves to the written file. */
 export type ExportArgs = { format?: ExportFormat; to?: string | vscode.Uri };
 
+/** "nautilus: <message> <path>" with Open and Reveal buttons. In a remote
+ * window the OS file manager is on the other machine, so Reveal shows the
+ * file in VS Code's own Explorer instead. */
+function showFileToast(message: string, file: vscode.Uri, warn = false): void {
+  const open = "Open";
+  const reveal = vscode.env.remoteName ? "Reveal in Explorer View" : "Reveal in File Explorer";
+  const where = file.scheme === "file" ? file.fsPath : file.toString(true);
+  const text = `nautilus: ${message} ${where}`;
+  const shown = warn
+    ? vscode.window.showWarningMessage(text, open, reveal)
+    : vscode.window.showInformationMessage(text, open, reveal);
+  void shown.then((choice) => {
+    if (choice === open) void vscode.env.openExternal(file);
+    else if (choice === reveal) {
+      void vscode.commands.executeCommand(vscode.env.remoteName ? "revealInExplorer" : "revealFileInOS", file);
+    }
+  });
+}
+
 async function exportDiagram(
   context: vscode.ExtensionContext,
   live: LiveValues | undefined,
   arg?: unknown,
-  opts?: ExportArgs
+  opts?: ExportArgs,
+  /** Skip the format pick (Print in a remote window saves a PDF). */
+  preset?: ExportFormat
 ): Promise<vscode.Uri | undefined> {
   const target = await resolveTarget(arg);
   if (!target) {
@@ -166,13 +191,13 @@ async function exportDiagram(
     await vscode.workspace.fs.writeFile(dest, bytes);
     return dest;
   }
-  const fmt = await vscode.window.showQuickPick(
-    [
-      { label: "PDF", description: "paginated for printing: page breaks between rungs and networks, name and page numbers on every page", format: "pdf" as ExportFormat },
-      { label: "SVG", description: "the whole diagram as one vector image, for documents and slides", format: "svg" as ExportFormat },
-    ],
-    { title: "nautilus: Export Diagram", placeHolder: "Export as…" }
-  );
+  const formats = [
+    { label: "PDF", description: "paginated for printing: page breaks between rungs and networks, name and page numbers on every page", format: "pdf" as ExportFormat },
+    { label: "SVG", description: "the whole diagram as one vector image, for documents and slides", format: "svg" as ExportFormat },
+  ];
+  const fmt = preset
+    ? formats.find((f) => f.format === preset)
+    : await vscode.window.showQuickPick(formats, { title: "nautilus: Export Diagram", placeHolder: "Export as…" });
   if (!fmt) return undefined;
   const liveSnap = await pickLive(live, ex);
   if (liveSnap === null) return undefined;
@@ -186,24 +211,25 @@ async function exportDiagram(
   const dest = await vscode.window.showSaveDialog({
     defaultUri: dir ? vscode.Uri.joinPath(dir, fileName) : undefined,
     filters: fmt.format === "pdf" ? { PDF: ["pdf"] } : { SVG: ["svg"] },
-    saveLabel: "Export",
-    title: `Export ${name} as ${fmt.label}`,
+    saveLabel: preset ? "Save" : "Export",
+    title: preset
+      ? `Print ${name}: this is a remote window, so save the PDF (Show Local saves it on your machine) and print it from there`
+      : `Export ${name} as ${fmt.label}`,
   });
   if (!dest) return undefined;
 
   const bytes = await render(ex, target, fmt.format, liveSnap);
   if (!bytes) return undefined;
   await vscode.workspace.fs.writeFile(dest, bytes);
-  const open = "Open";
-  const reveal = "Reveal in File Explorer";
-  void vscode.window.showInformationMessage(`nautilus: exported ${path.basename(dest.fsPath)}`, open, reveal).then((choice) => {
-    if (choice === open) void vscode.env.openExternal(dest);
-    else if (choice === reveal) void vscode.commands.executeCommand("revealFileInOS", dest);
-  });
+  showFileToast(preset ? "saved the printable PDF to" : "exported to", dest);
   return dest;
 }
 
 async function printDiagram(context: vscode.ExtensionContext, live: LiveValues | undefined, arg?: unknown): Promise<void> {
+  if (printRoute(vscode.env.remoteName) === "save") {
+    await exportDiagram(context, live, arg, undefined, "pdf");
+    return;
+  }
   const target = await resolveTarget(arg);
   if (!target) {
     void vscode.window.showErrorMessage("nautilus: open a ladder (.ld, .L5X), FBD (.fbd) or SFC (.sfc) file to print its diagram");
@@ -220,14 +246,15 @@ async function printDiagram(context: vscode.ExtensionContext, live: LiveValues |
   if (liveSnap === null) return;
   const bytes = await render(ex, target, "pdf", liveSnap);
   if (!bytes) return;
-  const dir = path.join(os.tmpdir(), "nautilus-print");
-  await fs.promises.mkdir(dir, { recursive: true });
-  const file = path.join(dir, exportFileName(path.basename(target.doc.uri.path), "pdf"));
-  await fs.promises.writeFile(file, bytes);
-  const opened = await vscode.env.openExternal(vscode.Uri.file(file));
-  if (!opened) {
-    void vscode.window.showWarningMessage(`nautilus: could not open a PDF viewer — the printable PDF is at ${file}`);
-  }
+  // Earlier prints' temp directories go once their viewer has had an hour.
+  await sweepPrintDirs();
+  const file = vscode.Uri.file(await writePrintFile(exportFileName(path.basename(target.doc.uri.path), "pdf"), bytes));
+  // openExternal says true when it handed the file to the OS, not when a
+  // viewer showed it (Linux with no PDF viewer says true too), so always
+  // say where the file is.
+  const opened = await vscode.env.openExternal(file);
+  if (opened) showFileToast("opened the printable PDF in your PDF viewer:", file);
+  else showFileToast("could not open a PDF viewer; the printable PDF is at", file, true);
 }
 
 async function render(ex: Exporter, t: Target, format: ExportFormat, liveSnap: unknown): Promise<Uint8Array | undefined> {

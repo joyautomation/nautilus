@@ -10,7 +10,8 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 - **Export and print diagrams.** **nautilus: Export Diagram…** writes an
   LD, FBD or SFC diagram (or a Rockwell `.L5X` ladder) as a paginated PDF
   or as one SVG image; **nautilus: Print Diagram…** opens the same PDF in
-  the system's PDF viewer to print. Both are in a diagram's "…" menu, on
+  the system's PDF viewer to print (in a remote window, such as SSH, WSL
+  or Codespaces, it saves the PDF instead). Both are in a diagram's "…" menu, on
   the editor's and the Explorer's right-click menu, and in the Command
   Palette. The printout is black on white with no selection, palette or
   diagnostics; pages break between rungs, networks and SFC ranks, never
