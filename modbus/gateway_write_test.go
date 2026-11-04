@@ -132,8 +132,9 @@ func gwCount(rec *recorder) gwFrames {
 // A write a gateway answers with 0x0A (path unavailable) or 0x0B (target
 // device failed to respond) never reached the device behind it (issue
 // #596), and one answered 0x06 (server device busy) did not run (#602).
-// It is dropped from the queue and forgotten, so the next WriteOutputs
-// with the same value sends it again: an FC16 run, an FC6, an FC5, an FC15
+// It is dropped from the queue and, once its retry backoff (RetryMin) is
+// over, forgotten and asked for, so the next WriteOutputs with the same
+// value sends it again: an FC16 run, an FC6, an FC5, an FC15
 // and a bit RMW alike, whether the RMW got the exception on its write or
 // on its read. Only the tags whose write was not delivered are forgotten:
 // a write in the same flush that landed (L), and a sibling bit on the
@@ -161,7 +162,11 @@ func TestGatewayNoAnswerWriteIsResent(t *testing.T) {
 			}
 
 			// The gateway path is back; the program's values have not moved.
+			// The unchanged commands are held back for the retry backoff
+			// (RetryMin), then the driver forgets them and asks for the
+			// outputs.
 			gwInject(u, 0, c.rmwRead)
+			waitFor(t, "the retry backoff to end", d.OutputsWanted)
 			gwRound(t, d, u, gwCmd, true)
 			after := gwCount(rec)
 

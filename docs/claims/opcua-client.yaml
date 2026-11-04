@@ -198,7 +198,10 @@ claims:
       not a command; a command made while the session is down goes out on
       reconnect; a closed write gate holds commands back, including commands
       queued during an outage when the gate has closed by the time the
-      session returns.
+      session returns; once the gate reopens, every output goes out once
+      more with the program's value, changed or not, and a driver that has
+      seen the gate closed (a standby) has no start-up baseline, so its
+      first push commands.
     source: "#writes-are-opt-in-per-tag"
     tests:
       - go ./opcua TestValueCodec
@@ -206,6 +209,8 @@ claims:
       - go ./opcua TestReconnectAndStale
       - go ./opcua TestWriteGate
       - go ./opcua TestQueuedWriteRechecksTheGate
+      - go ./opcua TestRegainedGateSendsTheUnchangedValueAgain
+      - go ./opcua TestStandbyFirstPushCommands
       - go ./cmd/naut TestNautOPCUAClientImportAndRun
     partial: true
     note: >-
@@ -213,7 +218,10 @@ claims:
       Int16 refused); TestWrites asserts a wrongly typed value never reaches
       the server. The gate is asserted on the driver with a test gate
       function; its wiring to redundancy leadership (runcmd) is shared with
-      every driver and not exercised here. Not asserted: that an unchanged
+      every driver and not exercised here. After the gate reopens, an
+      unchanged value another client overwrote meanwhile is written again
+      and the driver asks for the outputs once; the push is a direct
+      WriteOutputs call. Not asserted: that an unchanged
       value is not re-sent, and that a write the server refuses on a healthy
       session is dropped rather than retried.
 

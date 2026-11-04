@@ -479,14 +479,28 @@ claims:
   - id: TAG-042
     claim: >-
       WriteOutputs is called on the first scan, on any scan where an output
-      differs from the last value handed over, after a failed write and
-      after a redundancy takeover, and skipped otherwise;
-      Options.AlwaysWriteOutputs restores a per-scan call.
+      differs from the last value handed over, after a failed write, after
+      a redundancy takeover and on a scan where the driver asked for the
+      outputs (TAG-054), and skipped otherwise; Options.AlwaysWriteOutputs
+      restores a per-scan call.
     source: "#performance-notes-write-generations"
     tests:
       - go ./runtime TestHostWriteOutputsSkippedWhenUnchanged
       - go ./runtime TestAlwaysWriteOutputs
       - go ./runtime TestWriteOutputsTriggersFirstScanFailureAndTakeover
+      - go ./runtime TestOutputsWantedPushesEveryOutputOnce
+  - id: TAG-054
+    claim: >-
+      A driver implementing io.OutputsRequester is asked on every scan
+      whether it wants the outputs; when it says yes (once, after it forgot
+      a command) the runtime hands it every output on that scan, none
+      changed, and only on that scan; a push made anyway on the same scan
+      answers the request too. io.Multi asks every child and forwards a
+      yes from any of them, so children asking together get one push.
+    source: "#performance-notes-write-generations"
+    tests:
+      - go ./runtime TestOutputsWantedPushesEveryOutputOnce
+      - go ./runtime TestMultiForwardsOutputsWanted
   - id: TAG-043
     claim: >-
       A driver implementing io.BatchReader is handed the same map each scan
