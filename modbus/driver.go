@@ -1188,7 +1188,10 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // flushWrites pushes this source's pending writes to the device, coalescing
 // contiguous holding registers into FC16 (one register FC6), contiguous
 // coils into FC15 (one coil FC5). Returns false when the connection broke;
-// unattempted writes stay queued for the reconnect.
+// the write that broke and the ones not yet attempted stay queued for the
+// reconnect. Writes the device already answered in this flush, confirmed
+// or refused with an exception, are not re-sent: a re-send would put back
+// a value someone else may have written since.
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.mu.Lock()
 	if len(s.pending) == 0 {
@@ -1200,20 +1203,36 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.mu.Unlock()
 
 	regWrites, coilWrites, bitWrites := d.stageWrites(s, work)
+	regRuns, coilRuns := coalesceRegs(regWrites), coalesceCoils(coilWrites)
 
-	requeue := func() {
+	// requeue puts back the write that broke and every one after it, in
+	// send order: bit RMWs from bi, register runs from ri, coil runs from
+	// ci. A tag queued again while this flush was in flight keeps that
+	// newer value (last value wins).
+	requeue := func(bi, ri, ci int) {
 		s.mu.Lock()
-		for n, v := range work {
-			if _, exists := s.pending[n]; !exists {
-				s.pending[n] = v
+		put := func(names []string) {
+			for _, n := range names {
+				if _, exists := s.pending[n]; !exists {
+					s.pending[n] = work[n]
+				}
 			}
+		}
+		for _, bw := range bitWrites[bi:] {
+			put(bw.names)
+		}
+		for _, run := range regRuns[ri:] {
+			put(run.names)
+		}
+		for _, run := range coilRuns[ci:] {
+			put(run.names)
 		}
 		s.mu.Unlock()
 	}
 
 	// bit:N writables read-modify-write their register one at a time — the
 	// other 15 bits belong to the device (or to sibling bindings).
-	for _, bw := range bitWrites {
+	for i, bw := range bitWrites {
 		cur, err := readRegisters(ctx, c, s.cfg.UnitID, FCReadHoldingRegisters, bw.addr, 1)
 		if err == nil {
 			// Merge in normalized (big-endian) space, then restore the
@@ -1224,12 +1243,12 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, bw.addr, out)
 		}
 		if !d.wroteOK(ctx, s, bw.names, err) {
-			requeue()
+			requeue(i, 0, 0)
 			return false
 		}
 	}
 
-	for _, run := range coalesceRegs(regWrites) {
+	for i, run := range regRuns {
 		var err error
 		if len(run.values) == 1 {
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
@@ -1237,11 +1256,11 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			err = writeMultipleRegisters(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
 		if !d.wroteOK(ctx, s, run.names, err) {
-			requeue()
+			requeue(len(bitWrites), i, 0)
 			return false
 		}
 	}
-	for _, run := range coalesceCoils(coilWrites) {
+	for i, run := range coilRuns {
 		var err error
 		if len(run.values) == 1 {
 			err = writeSingleCoil(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
@@ -1249,7 +1268,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			err = writeMultipleCoils(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
 		if !d.wroteOK(ctx, s, run.names, err) {
-			requeue()
+			requeue(len(bitWrites), len(regRuns), i)
 			return false
 		}
 	}
@@ -1259,7 +1278,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 // wroteOK accounts one device write. An exception means the device refused
 // THIS write on a healthy connection: it is dropped (re-queueing would loop
 // forever) and reported. A transport error means reconnect: false, and the
-// caller re-queues everything unattempted.
+// caller re-queues this write and everything not yet attempted.
 func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err error) bool {
 	if err == nil {
 		d.writes.Add(1)

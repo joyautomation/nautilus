@@ -331,7 +331,13 @@ would command every setpoint to zero. So the **first snapshot after `Start`
 is the baseline**: recorded, sent to nobody. Thereafter only a value that
 actually moved goes on the wire, once. A command raised while the source is
 down is queued per source (latest value per tag) and flushed on reconnect,
-counted as `queuedWrites` on the device row.
+counted as `queuedWrites` on the device row. If the link breaks partway
+through a flush, the write that broke and the ones after it are queued
+again. Writes the device confirmed or refused with an exception earlier in
+that flush are not re-sent, so a value another master has written to those
+registers since is left alone. Not so for a `rewrite:` binding: it
+re-asserts its last commanded value on connect and on every period, so it
+overwrites the other master's value anyway.
 
 **`rewrite:` is the exception, and it is a keep-alive.** Some devices watch
 a command register and fail safe if it stops moving — a safety controller's
