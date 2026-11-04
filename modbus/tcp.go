@@ -14,9 +14,11 @@ package modbus
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -218,6 +220,43 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 		return nil, fmt.Errorf("modbus: response function 0x%02X (want 0x%02X)", rfc, fc)
 	}
 	return body[1:], nil
+}
+
+// idlePeek is how long checkIdle waits for the socket to say something.
+// Any pending EOF or socket error comes back from the read syscall at
+// once; the wait only bounds the quiet case, so it can be tiny.
+const idlePeek = time.Millisecond
+
+// checkIdle asks the socket, between requests, whether the link is still
+// there, without sending anything: a short read that times out on a
+// healthy, quiet link and fails on one the peer closed (EOF), reset, or
+// the kernel gave up on (a TCP keepalive that went unanswered). No request
+// is outstanding, so the read cannot take bytes of a response. Bytes that
+// arrive anyway are unsolicited and would desync the next transaction's
+// framing, so they break the connection too. Under a test rig with no
+// socket it reports nothing.
+func (c *tcpConn) checkIdle() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.nc == nil {
+		return nil
+	}
+	if err := c.nc.SetReadDeadline(time.Now().Add(idlePeek)); err != nil {
+		return fmt.Errorf("modbus: idle check: %w", err)
+	}
+	var b [1]byte
+	n, err := c.nc.Read(b[:])
+	switch {
+	case n > 0:
+		return fmt.Errorf("modbus: unsolicited data from the device while idle")
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return nil // quiet and healthy
+	case err == io.EOF:
+		return fmt.Errorf("modbus: connection closed by the device")
+	}
+	return fmt.Errorf("modbus: idle check: %w", err)
 }
 
 // shortRead normalizes io.EOF mid-frame to io.ErrUnexpectedEOF, so a peer

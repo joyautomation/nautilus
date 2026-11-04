@@ -230,7 +230,14 @@ What "answers" means:
   Without `rewrite:`, nothing else asks the device, so a program that
   sends commands only while `__Online` is true never sends the write that
   would bring it back: keep commanding while offline, or add `rewrite:`.
-- A lost connection, or a source parked with `enable:`, is offline.
+- A lost connection, or a source parked with `enable:`, is offline. A
+  source with nothing due for over a second (nothing polled and no
+  `rewrite:`, or a slow scan class) checks its socket once a second
+  without sending a request, so a device that closes or resets the
+  connection is noticed within about a second. A link cut silently (a
+  pulled cable, a dead switch) is caught by TCP keepalive, which the
+  driver sets on every connection: an idle link is declared dead within
+  about 15 s.
 
 This is the meaning `__Online` has on the other drivers: true when the
 device is answering, not when a socket is open.
@@ -251,7 +258,7 @@ that accepts the connection and never replies does not count, however
 often the driver reconnects. A gateway whose field device stops
 answering (0x0A or 0x0B on every block, three requests in a row) counts
 one. A write-only source without `rewrite:` is online from the connect,
-so losing its connection counts. Stopping nautilus
+so losing its connection counts, even while it sends nothing. Stopping nautilus
 does not count. Parking a source with `enable:` counts, because
 `__Online` goes false.
 The counter only goes up, so a program that compares it with last scan's
@@ -279,7 +286,8 @@ the device did not answer at all: when every block gets one, the source
 goes offline and its tags `Stale` (see the `__Online` companion above).
 
 **A transport failure** — dial refused, timeout, a short read, a response
-carrying the wrong unit id. The whole source is down: the driver drops the
+carrying the wrong unit id, or an idle socket that the device closed or
+that TCP keepalive gave up on. The whole source is down: the driver drops the
 connection and reconnects with exponential backoff from `retrymin` (1s) to
 `retrymax` (60s), resetting on success. **Values hold.** The driver zeroes
 and invents nothing; a tag delivered at least once reports `Stale` with

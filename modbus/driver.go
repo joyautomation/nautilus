@@ -830,7 +830,42 @@ func (d *Driver) dialSource(ctx context.Context, s *source) (*tcpConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	if tc, ok := nc.(*net.TCPConn); ok {
+		// Best effort: a platform that refuses the counts keeps its own
+		// keepalive, and the idle check still sees a closed or reset link.
+		_ = tc.SetKeepAliveConfig(linkKeepAlive)
+	}
 	return newTCPConn(nc, s.cfg.Timeout), nil
+}
+
+// idleChecker is the part of a connection that can tell, between
+// requests and without sending one, whether the link is still up.
+// tcpConn implements it; scripted test conns do not.
+type idleChecker interface {
+	checkIdle() error
+}
+
+// idleCheckEvery is how often serve asks an idle connection whether it is
+// still up: the longest a source waits with nothing due before it looks.
+// It matters for a source with nothing to poll (write-only bindings, no
+// rewrite:), whose loop would otherwise sleep until the next command, and
+// for slow scan classes. The check sends nothing to the device (issue #552).
+const idleCheckEvery = time.Second
+
+// linkKeepAlive is the TCP keepalive on every source connection. A link
+// that is cut silently (a pulled cable, a dead switch) sends no FIN, so an
+// idle socket would never learn it is gone; keepalive probes are TCP
+// segments, not Modbus requests, and after Count unanswered ones the
+// kernel fails the socket, which the next idle check reads. A link idle
+// for Idle is declared dead Interval×Count later: 5 + 3×3 = 14 s, and the
+// source is offline within idleCheckEvery after that (15 s in all).
+// Keepalive only runs on a quiet link; a request sent into a dead one
+// fails on its Timeout, as before.
+var linkKeepAlive = net.KeepAliveConfig{
+	Enable:   true,
+	Idle:     5 * time.Second,
+	Interval: 3 * time.Second,
+	Count:    3,
 }
 
 // serve polls one connected source until the connection breaks, the source
@@ -881,6 +916,10 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 		if wake < 0 {
 			wake = 0
 		}
+		idle := wake > idleCheckEvery
+		if idle {
+			wake = idleCheckEvery // nothing due soon: look at the link meanwhile
+		}
 		timer := time.NewTimer(wake)
 		select {
 		case <-ctx.Done():
@@ -895,6 +934,9 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 				return
 			}
 		case <-timer.C:
+			if idle && !d.linkUp(ctx, s, c) {
+				return
+			}
 			now := time.Now()
 			for _, rw := range s.rewrites {
 				if rw.next.After(now) {
@@ -924,6 +966,28 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 			}
 		}
 	}
+}
+
+// linkUp runs the idle check on c, if it has one. False means the link is
+// gone: the error is recorded and serve returns, so run drops the
+// connection, takes the source offline (an outage if it was online), and
+// reconnects with backoff, as it does for a failed read.
+func (d *Driver) linkUp(ctx context.Context, s *source, c conn) bool {
+	ic, ok := c.(idleChecker)
+	if !ok {
+		return true
+	}
+	err := ic.checkIdle()
+	if err == nil || ctx.Err() != nil {
+		return err == nil
+	}
+	d.errs.Add(1)
+	s.mu.Lock()
+	s.lastErr = err
+	s.retries++
+	s.mu.Unlock()
+	d.log.Warn("modbus: link lost while idle", "source", s.cfg.ID, "addr", s.cfg.Addr(), "error", err)
+	return false
 }
 
 // pollBlock executes one block read and decodes it into the snapshot.

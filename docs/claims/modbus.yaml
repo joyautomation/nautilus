@@ -224,6 +224,8 @@ claims:
       - go ./modbus TestOnlinePolledSourceWritesDoNotDecide
       - go ./modbus TestOnlineWriteOnlySourceWithRewrite
       - go ./modbus TestOnlineWriteOnlySourceWithoutRewrite
+      - go ./modbus TestOutagesIdleWriteOnlySourceNoticesCut
+      - go ./modbus TestIdleWriteOnlySourceSendsNothing
       - go ./modbus TestConnectionsSplitBySource
     partial: true
     note: >-
@@ -231,9 +233,12 @@ claims:
       not have and injects exceptions per function code, and a scripted
       server for the three-in-a-row debounce. A slow block keeping the
       source online until it is read again (scan classes) is not asserted.
-      A write-only source without `rewrite:` is online from the connect but
-      does not notice a dead TCP link until it next writes. Nothing has run
-      against a real gateway with a dead drop.
+      A write-only source without `rewrite:` notices a cut or closed link
+      while idle, within the one-second idle check, against a dialer that
+      closes the socket and a server that hangs up. A silent cut caught
+      only by TCP keepalive (about 15 s) is not exercised; it needs a real
+      dropped link. Nothing has run against a real gateway with a dead
+      drop.
   - id: MB-019
     claim: >-
       The `__Online` companion is present from `Start`, before any poll has
@@ -626,6 +631,8 @@ claims:
       - go ./modbus TestOutagesSilentGatewayDoesNotCount
       - go ./modbus TestOutagesStopIsNotAnOutage
       - go ./modbus TestOutagesWriteOnlySourceCounts
+      - go ./modbus TestOutagesIdleWriteOnlySourceNoticesCut
+      - go ./modbus TestOutagesIdleWriteOnlySourceNoticesPeerClose
       - go ./modbus TestOutagesAnsweredResetsPerConnection
       - go ./modbus TestOutagesCompanionCollidesWithABinding
       - go ./modbus TestOnlineGatewayNoAnswerIsAnOutage
@@ -638,6 +645,7 @@ claims:
     note: >-
       Against the in-process slave, with a test dialer that cuts and
       restores the link. A write-only source without `rewrite:` is online
-      from the connect, so losing its connection counts, but it notices a
-      dead link only when it next writes. Nothing has run on a real
-      device.
+      from the connect, so losing its connection counts, and it notices a
+      cut or closed link while idle, within the one-second idle check,
+      without sending a request. A silent cut caught only by TCP keepalive
+      (about 15 s) is not exercised. Nothing has run on a real device.
