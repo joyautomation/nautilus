@@ -1,0 +1,71 @@
+page: docs/structure-warnings.md
+title: Structure warnings
+prefix: STRUCT
+claims:
+  - id: STRUCT-001
+    claim: >-
+      naut check reports ladder, FBD and SFC structure warnings as gcc-style
+      warnings with the rule ID in brackets, and still exits 0.
+    source: "#structure-warnings"
+    tests:
+      - go ./cmd/naut TestCheckReportsStructureWarnings
+  - id: STRUCT-002
+    claim: >-
+      The language server reports the same warnings as you type, with the
+      rule ID as the diagnostic's code, under the manifest's check:
+      settings, and not on a buffer that does not compile.
+    source: "#structure-warnings"
+    tests:
+      - go ./internal/lsp TestStructureWarningsInTheEditor
+  - id: STRUCT-003
+    claim: >-
+      Every project under examples/ and every naut new scaffold passes with
+      no structure warning.
+    source: "#structure-warnings"
+    tests:
+      - go ./cmd/naut TestExamplesAndScaffoldsHaveNoStructureWarnings
+  - id: STRUCT-004
+    claim: >-
+      LD001 to LD006 each fire on their bad shape and are silent on the
+      rewrite their message asks for; edge contacts, set/reset pairs,
+      comparisons with zero, EQ/NE and TIME literals are not reported.
+    source: "#ladder"
+    tests:
+      - go ./lang/ld TestLintLadderRules
+      - go ./lang/ld TestLintLadderQuietCases
+  - id: STRUCT-005
+    claim: >-
+      FBD001 to FBD003 each fire on their bad shape and are silent on the
+      rewrite; a body that is one function needs no NETWORK title, and
+      reading the same variable does not join two functions.
+    source: "#function-block-diagram"
+    tests:
+      - go ./lang/fbd TestLintFBDRules
+      - go ./lang/fbd TestLintFBDOneFunctionIsQuiet
+  - id: STRUCT-006
+    claim: >-
+      SFC001 fires only when the chart's own actions assign the variable a
+      transition tests; SFC002 fires on steps named for their number.
+    source: "#sequential-function-chart"
+    tests:
+      - go ./lang/sfc TestLintSFCRules
+      - go ./lang/sfc TestLintSFCStateTestNeedsAChartWrite
+  - id: STRUCT-007
+    claim: >-
+      The manifest's check: section moves the thresholds and disables
+      rules, an unknown rule ID there is a manifest error, and an @allow
+      pragma covers the POU it is written in (or the file, above the first
+      POU).
+    source: "#thresholds-and-switching-rules-off"
+    tests:
+      - go ./cmd/naut TestCheckStructureManifestSettings
+      - go ./lang/ld TestLintLadderConfigAndPragma
+      - go ./lang/lint TestFilterPragmaScope
+  - id: STRUCT-008
+    claim: >-
+      Every rule is documented on this page and offered in the VS Code
+      manifest schema's check.disable list, with the default thresholds
+      stated.
+    source: "#thresholds-and-switching-rules-off"
+    tests:
+      - go ./lang/lint TestRulesAreDocumentedAndInTheSchema

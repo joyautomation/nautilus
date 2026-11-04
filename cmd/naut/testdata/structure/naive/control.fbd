@@ -1,0 +1,6 @@
+PROGRAM Control
+FBD
+  E101_Out := LIMIT(0.0, ADD(MUL(4.0, SUB(TempSP, TT101_Temp)), 10.0), 100.0)
+  HighLevelAlm := AND(GT(LT101_Level, 90.0), NOT HornAck)
+END_FBD
+END_PROGRAM

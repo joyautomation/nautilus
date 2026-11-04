@@ -15,6 +15,7 @@ VAR_EXTERNAL
     ScanDtS        : REAL;
     (* operator setpoints — writable from the dashboard and the tag API *)
     TempSP         : REAL;
+    TempLowSP      : REAL;
     Kp             : REAL;
     Ki             : REAL;
     PumpStartLevel : REAL;
@@ -29,25 +30,29 @@ VAR
     integral : REAL;
 END_VAR
 FBD
-  // P-101 pump: level hysteresis as a seal-in latch — start when low,
-  // seal through PumpRun itself, drop out when high.
+  NETWORK 'P-101 pump: level hysteresis seal-in'
+  // start when low, seal through PumpRun itself, drop out when high
   low  = LE(LevelPct, PumpStartLevel)
   high = GE(LevelPct, PumpStopLevel)
   PumpRun := AND(OR(low, PumpRun), NOT high)
 
-  // TIC-101: temperature PI with an anti-windup clamp. The integral is
-  // retained state, fed back from its own coil.
+  NETWORK 'TIC-101: temperature PI with anti-windup'
+  // the integral is retained state, fed back from its own coil
   e = SUB(TempSP, TempC)
-  integral := LIMIT(0.0, ADD(integral, MUL(Ki, e, ScanDtS)), 100.0)
-  Heater := LIMIT(0.0, ADD(MUL(Kp, e), integral), 100.0)
+  iStep = MUL(Ki, e, ScanDtS)
+  integral := LIMIT(0.0, ADD(integral, iStep), 100.0)
+  pTerm = MUL(Kp, e)
+  Heater := LIMIT(0.0, ADD(pTerm, integral), 100.0)
 
-  // TAL-101: low-temperature alarm, delayed 10 s so a transient dip
-  // doesn't annunciate. `naut test` asserts this delay exactly.
-  cold = LT(TempC, 62.0)
+  NETWORK 'TAL-101: low temperature, 10 s on-delay'
+  // delayed so a transient dip doesn't annunciate; `naut test` asserts
+  // this delay exactly
+  cold = LT(TempC, TempLowSP)
   a1 : TON(IN := cold, PT := T#10S)
   TempLowAlm := a1.Q
 
-  // A user FUNCTION_BLOCK from blocks.st, instantiated like a built-in.
+  NETWORK 'Temperature rate of change'
+  // a user FUNCTION_BLOCK from blocks.st, instantiated like a built-in
   roc : RateOfChange(IN := TempC, DT := ScanDtS)
   TempRate := roc.OUT
 END_FBD

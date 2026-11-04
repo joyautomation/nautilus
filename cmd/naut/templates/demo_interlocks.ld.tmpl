@@ -10,6 +10,7 @@ PROGRAM Interlocks
 VAR_EXTERNAL
     TempLowAlm : BOOL;
     TempC      : REAL;
+    HiTempSP   : REAL;
     HornAck    : BOOL;
     Horn       : BOOL;
     HiTempAlm  : BOOL;
@@ -19,7 +20,7 @@ VAR
 END_VAR
 LD
   RUNG hitemp (* comparison as a contact, 5 s on-delay; ET captured with the standard's => output binding *)
-    GT(TempC, 90.0) t1:TON(PT := T#5S, ET => HiSecs) ( HiTempAlm )
+    GT(TempC, HiTempSP) t1:TON(PT := T#5S, ET => HiSecs) ( HiTempAlm )
 
   // Comment runs like this render as notes in the ladder diagram —
   // double-click to edit them there.

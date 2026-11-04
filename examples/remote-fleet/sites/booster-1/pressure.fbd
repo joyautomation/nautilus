@@ -24,16 +24,19 @@ VAR_EXTERNAL
     Pump2_SpeedCmd : LREAL;
 END_VAR
 FBD
-  Pump1_RunCmd := TRUE   // the lead always runs
+  NETWORK 'Pump 1: the lead always runs'
+  Pump1_RunCmd := TRUE
 
+  NETWORK 'PIC-1: discharge pressure to pump speed'
   pic : PID(AUTO := TRUE, PV := DischargePress, SP := PressureSP,
             KP := Kp, KI := Ki, KD := Kd,
             CV_MIN := MinSpeedHz, CV_MAX := MaxSpeedHz,
             DIRECT := FALSE, DT := PressDtS)
   Pump1_SpeedCmd := pic.CV
 
-  // Lag call: seal-in with hysteresis on flow, same idiom as the well
-  // sites' pump call and level.fbd's high-level seal-in.
+  NETWORK 'Pump 2: lag call on flow demand, at the loop speed'
+  // seal-in with hysteresis on flow, same idiom as the well sites' pump
+  // call and level.fbd's high-level seal-in.
   above = GE(FM1_FlowLps, LagOnFlow)
   below = LE(FM1_FlowLps, LagOffFlow)
   Pump2_RunCmd := AND(OR(above, Pump2_RunCmd), NOT below)

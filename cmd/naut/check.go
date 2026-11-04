@@ -15,6 +15,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/ld"
+	"github.com/joyautomation/nautilus/lang/lint"
 	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/logix/writer"
@@ -148,6 +149,16 @@ func runCheck(args []string) int {
 			}
 		}
 		return defs
+	}
+	structureCfg := map[string]lint.Config{} // project root → its check: settings
+	structureFor := func(f string) lint.Config {
+		root := stproject.ProjectRoot(f)
+		cfg, ok := structureCfg[root]
+		if !ok {
+			cfg = project.StructureFor(f, *manifest)
+			structureCfg[root] = cfg
+		}
+		return cfg
 	}
 	for _, f := range files {
 		if abs, err := filepath.Abs(f); err == nil {
@@ -310,6 +321,13 @@ func runCheck(args []string) int {
 				col = 1
 			}
 			fmt.Printf("%s:%d:%d: warning: %s\n", f, line, col, sh.Message())
+		}
+		// Diagram structure (#561): a ladder, FBD or SFC file that compiles
+		// can still draw as a knot. The rules, their IDs and thresholds:
+		// lang/lint and docs/structure-warnings.md.
+		for _, sf := range project.Structure(f, original, structureFor(f)) {
+			blankWarns++
+			fmt.Printf("%s:%d:%d: warning: %s [%s]\n", f, sf.Line, sf.Col, sf.Message, sf.Rule)
 		}
 		// The target's rules run on a file that compiles: the same
 		// lowering `naut logix write` uses, so what passes here writes.

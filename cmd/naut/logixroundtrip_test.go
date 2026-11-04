@@ -33,10 +33,13 @@ func TestLogixRoundTripYardstickCLI(t *testing.T) {
 		t.Fatalf("import: exit %d\n%s", code, out)
 	}
 	// The project it writes checks clean: no errors, and no warning (the
-	// timer the program owns is not also a project tag).
+	// timer the program owns is not also a project tag). The structure
+	// warnings (#561) are the exception: they judge the vendor's rungs as
+	// imported — this yardstick has an OTE and an OTU on Line_Accept and
+	// literal thresholds — and the round trip keeps those rungs verbatim.
 	for _, args := range [][]string{{proj}, {"--target", "logix", proj}} {
 		out, code = capture(t, func() int { return runCheck(args) })
-		if code != 0 || strings.Contains(out, "warning") {
+		if code != 0 || strings.Contains(structureWarnRe.ReplaceAllString(out, ""), ": warning:") {
 			t.Errorf("naut check %v: exit %d\n%s", args, code, out)
 		}
 	}
