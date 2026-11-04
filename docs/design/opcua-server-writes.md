@@ -12,7 +12,8 @@ A tag a client may write is opted in by name under `opcua.writable:`. That list 
 same globs and the same "a match opens the member and everything under it" rule as
 `sparkplug.writable:`. Inputs are never writable. Only a **writer session** may write: one
 on a `SignAndEncrypt` channel whose client application certificate is in the controller's
-trust list. Anonymous reads on `None` stay exactly as they are. A write goes through one
+trust list. Anonymous reads on `None` stay exactly as they are (a lab may opt in to
+anonymous writes there too, §7 decision 9). A write goes through one
 front door in `runtime`, which HTTP also adopts. That door does three things:
 
 - It converts to the tag's declared type, and a value either lands exactly as sent or is
@@ -120,6 +121,7 @@ lifetime (§5).
 | Session | Read, browse, subscribe | Write a `writable` tag |
 |---|---|---|
 | Anonymous on `None` | yes, as today | `Bad_UserAccessDenied` |
+| Anonymous on `None`, with `opcua.anonymous-writes: true` (lab only, §7 decision 9) | yes | **yes**: a writer, with no certificate |
 | Anonymous on `SignAndEncrypt` from a trusted certificate | yes | **yes**: the writer role |
 | UserName / X.509 user token | not advertised in v1 | see Q2 |
 
@@ -275,7 +277,8 @@ The two new keys go on `OPCUAConfig` (`internal/project/project.go:1555-1560`) a
 passed through `OPCUAServer` (`:1565-1571`). `naut check` validates the globs, as
 `validateWritable` does (`writegate.go:30-39`), and warns on a pattern that matches
 nothing, or only inputs. There is no key for security policies (the set is fixed) and
-none for users (not in v1). No secret goes in the manifest: the private key lives in
+none for users (not in v1). `anonymous-writes` (§7 decision 9, 2026-11-03) is the one
+switch over who writes. No secret goes in the manifest: the private key lives in
 `pki`, following the `NAUTILUS_TOKEN` / `NAUTILUS_MQTT_PASSWORD` rule
 (`project.go:207-209, 263-266`).
 
@@ -427,3 +430,37 @@ Taken as recommended, open to change before the slice that needs them:
    cheap to compute.
 7. **HTTP moves onto the one write front door in slice 3.** That is the #421 fix.
 8. **A forced tag answers `Bad_Locked`.** `Bad_InvalidState` means only "standby".
+
+Added after slice 3:
+
+9. **Anonymous writes, as a lab opt-in (James, 2026-11-03).** "we probably should allow for
+   anonymous connections in OPC UA. A lot of people run OPC UA in their lab, and I don't want
+   to force them to have to deal with certificates just to run something locally when
+   security doesn't matter." The trigger: a university instructor connecting simulators (MHJ
+   PLC-Lab, which logs in anonymously under policy `None`; Factory I/O) that write the
+   controller's inputs. So `opcua.anonymous-writes: true` (kebab-case, like
+   `application-uri`) makes every session on the `None` endpoint a writer. As built:
+   - **What, unchanged.** `opcua.writable` still decides what is writable; with it empty the
+     switch opens nothing. An anonymous writer goes through the same checks in the same
+     order (§3.3) and the same front door as a trusted one: inputs, Objects, arrays, forced
+     addresses, the standby gate, conversions all answer as for a trusted writer.
+   - **Who.** A channel under policy `None` and mode `None` is a writer's when the switch is
+     on. A certificate sent on it changes nothing and is not checked, as before. The secure
+     endpoints, the trust list and the per-request certificate re-check are unchanged; a
+     withdrawn certificate still writes nothing on its own secure channel (it could
+     reconnect on `None`, which is what the switch means).
+   - **What clients see.** `AccessLevel` is the node's, unchanged. `UserAccessLevel` for an
+     anonymous session follows `AccessLevel` with the switch on, so a client that decides
+     from it offers the write.
+   - **Saying so.** Default off. `naut run` logs it at every start: a warning when the
+     server listens on loopback, an error ("ANY client that can reach this port may write")
+     when it listens beyond it, and a warning that it opens nothing with no `writable`
+     list. The banner adds "(anonymous writes on)". `Status.AnonymousWrites`, and on the
+     `/api/drivers` row `anonymousWrites: true` with access "writable by anonymous
+     clients". The audit line of a landed write carries `anonymous=true` (there is no
+     certificate URI or thumbprint to name), and its refusals are logged per node, as a
+     writer's are, within the same per-client budget.
+   - **`naut check`.** `anonymous-writes: true` with no `writable` list is a **warning**,
+     not an error: the server it describes is read-only, which is safe, but not what the
+     author meant.
+   - **Not in this change.** Arrays and `IndexRange` stay slice 4.

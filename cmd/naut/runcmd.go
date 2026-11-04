@@ -272,6 +272,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if opc != nil && opc.Status().Listening {
 		banner += " — opc ua on " + opc.URL()
+		if st := opc.Status(); st.AnonymousWrites && len(st.Writable) > 0 {
+			banner += " (anonymous writes on)"
+		}
 	}
 	if alarms != nil {
 		banner += fmt.Sprintf(" — %d alarms", len(alarms.Defs))

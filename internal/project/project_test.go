@@ -800,3 +800,28 @@ func TestOPCUAConfig(t *testing.T) {
 		t.Errorf("no section: server %v, %v", s, err)
 	}
 }
+
+// opcua.anonymous-writes reaches the server, off unless written.
+func TestOPCUAAnonymousWritesConfig(t *testing.T) {
+	for extra, want := range map[string]bool{
+		"  writable: [\"*\"]\n":                           false,
+		"  writable: [\"*\"]\n  anonymous-writes: true\n": true,
+		"  anonymous-writes: false\n":                     false,
+	} {
+		p, err := Load(fsys(manifest+"\nopcua:\n"+extra), "")
+		if err != nil {
+			t.Fatalf("%q: %v", extra, err)
+		}
+		rt, err := runtime.New(p.Runtime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := p.OPCUAServer(rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Status().AnonymousWrites; got != want {
+			t.Errorf("%q: AnonymousWrites %v, want %v", extra, got, want)
+		}
+	}
+}

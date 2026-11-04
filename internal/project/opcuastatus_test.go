@@ -46,3 +46,22 @@ func TestOPCUAStatusCarriesTheWrites(t *testing.T) {
 		t.Errorf("a read-only server's extra %v", row.Extra)
 	}
 }
+
+// opcua.anonymous-writes shows on the row: who may write, and the switch
+// itself, so a dashboard can say a lab server is open to anyone.
+func TestOPCUAStatusCarriesAnonymousWrites(t *testing.T) {
+	row := opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true, Writable: []string{"*_SP"}, AnonymousWrites: true})
+	if row.Extra["access"] != "writable by anonymous clients" || row.Extra["anonymousWrites"] != true {
+		t.Errorf("extra %v", row.Extra)
+	}
+	// On, with nothing writable, the server is still read-only; the row
+	// says so, and still shows the switch.
+	row = opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true, AnonymousWrites: true})
+	if row.Extra["access"] != "read-only" || row.Extra["anonymousWrites"] != true {
+		t.Errorf("extra %v", row.Extra)
+	}
+	row = opcuaStatus(opcuaserver.Status{Endpoint: "opc.tcp://h:4840", Listening: true, Writable: []string{"*_SP"}})
+	if _, ok := row.Extra["anonymousWrites"]; ok {
+		t.Errorf("anonymousWrites on a server without the switch: %v", row.Extra)
+	}
+}

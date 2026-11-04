@@ -65,3 +65,34 @@ END_PROGRAM`,
 		t.Errorf("a malformed glob passed (%d):\n%s", code, out)
 	}
 }
+
+// opcua.anonymous-writes with nothing under opcua.writable opens nothing:
+// a warning, not an error. With a list it is quiet.
+func TestCheckWarnsOnAnonymousWritesWithoutWritable(t *testing.T) {
+	files := func(opcua string) map[string]string {
+		return map[string]string{
+			"nautilus.yaml": `
+tasks:
+  - program: program.st
+opcua:
+` + opcua + `
+tags:
+  - { name: LevelSP, role: setpoint, init: 5.0 }
+`,
+			"program.st": `PROGRAM Main
+VAR_EXTERNAL LevelSP : REAL; END_VAR
+END_PROGRAM`,
+		}
+	}
+	out, code := checkIn(t, files("  anonymous-writes: true\n"))
+	if code != 0 {
+		t.Fatalf("a warning failed the check (%d):\n%s", code, out)
+	}
+	if !strings.Contains(out, "warning: opcua.anonymous-writes is on but opcua.writable lists nothing") {
+		t.Errorf("no warning for anonymous-writes without writable:\n%s", out)
+	}
+	out, code = checkIn(t, files("  anonymous-writes: true\n  writable: [LevelSP]\n"))
+	if code != 0 || strings.Contains(out, "anonymous-writes") {
+		t.Errorf("anonymous-writes with a writable list warned (%d):\n%s", code, out)
+	}
+}

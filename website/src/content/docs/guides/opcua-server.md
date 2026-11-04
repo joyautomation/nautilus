@@ -25,6 +25,7 @@ opcua:
   # application-uri: urn:acme:plant7:lift-station   # default urn:joyautomation:nautilus:<project>
   # pki: /var/lib/nautilus/pki                     # default ./pki
   # writable: ["*_SP", "Pump*.SpeedSP"]             # default: nothing is writable
+  # anonymous-writes: true                          # lab only: no certificate needed to write
 ```
 
 `naut run` (and a built binary) starts the server alongside the scan loop;
@@ -32,7 +33,9 @@ the section's presence turns it on (`opcua: {}` serves on the default).
 `endpoint` is where it listens; `application-uri` is the name clients know
 it by ([below](#what-a-client-sees)); `pki` is the certificate store the
 secure endpoints use ([Security](#security)); `writable` names the tags a
-trusted client may write ([Writes](#writes)). The endpoint defaults to the loopback interface —
+trusted client may write ([Writes](#writes)); `anonymous-writes` lets any
+client write them, for a lab ([Lab setups without
+certificates](#lab-setups-without-certificates)). The endpoint defaults to the loopback interface —
 `localhost` listens on `127.0.0.1` — so putting a controller on the network
 is a line you write: `opc.tcp://0.0.0.0:4840` listens on every interface.
 `naut check` refuses an endpoint that is not `opc.tcp://host:port` (a bare
@@ -52,7 +55,9 @@ ones, which open only to a client certificate you have approved; anyone
 may read on the unsecured one, and only a trusted client on a secure one
 may write the tags `opcua.writable` names. A refused write is answered
 with a status code that says why, never silently dropped. See
-[Security](#security) and [Writes](#writes).
+[Security](#security) and [Writes](#writes). In a lab, where nobody wants
+to manage certificates, one more line lets an anonymous client write too:
+see [Lab setups without certificates](#lab-setups-without-certificates).
 
 ## What a client sees
 
@@ -323,10 +328,12 @@ tamper-proof on the wire, and they are the only way to write:
 | Session | Read, browse, subscribe | Write a tag `opcua.writable` opens |
 |---|---|---|
 | anonymous on `None` | yes | no: `Bad_UserAccessDenied` |
+| anonymous on `None`, with `opcua.anonymous-writes: true` | yes | **yes** ([lab only](#lab-setups-without-certificates)) |
 | on a `SignAndEncrypt` endpoint, from a trusted certificate | yes | **yes** |
 
 A client certificate sent on the `None` endpoint makes no difference: the
-channel is not secured, so the session is not a writer. The standard
+channel is not secured, so the session is not a writer (or, with
+`anonymous-writes`, is one, certificate or not). The standard
 `Server` object and its variables are read-only for every session, so no
 client can rewrite the `NamespaceArray` or `ServerStatus` other clients
 rely on.
@@ -406,7 +413,9 @@ open channel is closed at its next key renewal. A channel's keys last an
 hour at most, and a channel that does not renew in time is closed, so a
 withdrawn client can go on reading for about an hour and a quarter. A certificate outside its validity period is refused with
 `Bad_CertificateTimeInvalid`, trusted or not. There is no "accept
-everything" switch. `--pki DIR` points both commands at another store; by
+every certificate" switch; a lab that wants no certificates at all uses
+[`anonymous-writes`](#lab-setups-without-certificates) on the `None`
+endpoint instead. `--pki DIR` points both commands at another store; by
 default they use the `opcua.pki` of the `nautilus.yaml` in the working
 directory, else `./pki`.
 
@@ -486,7 +495,8 @@ YAML anchor.
 `AccessLevel` tells a client what it may write: `CurrentRead` and
 `CurrentWrite` on a scalar `opcua.writable` opens (not an input, not an
 array), `CurrentRead` elsewhere. `UserAccessLevel` is answered for the
-session asking: the same as `AccessLevel` for a writer, `CurrentRead` for
+session asking: the same as `AccessLevel` for a writer (an anonymous
+session included, when `anonymous-writes` is on), `CurrentRead` for
 anyone else, including a client whose certificate has been withdrawn or
 has expired. `AccessLevelEx` follows `AccessLevel`.
 
@@ -575,7 +585,8 @@ standby again.
 Every landed item is logged on the console as an `opcua: write` line naming
 the node, the old and the new value, the session, the client's
 `ApplicationUri`, the first 16 digits of its certificate thumbprint and its
-address. A refused item is an `opcua: write refused` warning with the
+address; an anonymous writer's line has no URI or thumbprint and says
+`anonymous=true`. A refused item is an `opcua: write refused` warning with the
 status and the reason. A trusted client's refusal on a node it may know
 is logged once per client, node and reason. Every other refusal (an
 anonymous client's, a node id that is nothing) is one line per client and
@@ -608,6 +619,59 @@ async with client:
 
 A refused write raises `ua.UaStatusCodeError` carrying the status code.
 
+## Lab setups without certificates
+
+In a lab, a simulator often plays the plant: MHJ PLC-Lab or Factory I/O
+writes the sensors the logic reads and reads the outputs it drives, and
+connects anonymously on the `None` endpoint. Nothing on that network needs
+protecting, and approving certificates is a chore nobody asked for. One
+line lets an anonymous client write:
+
+```yaml
+name: conveyor-lab
+
+tasks:
+  - program: program.st
+    scan: 50ms
+
+tags:
+  - { name: PartAtEnd, role: setpoint, type: BOOL, desc: Written by the simulator }
+  - { name: StartPB,   role: setpoint, type: BOOL, desc: Written by the simulator }
+  - { name: Conveyor,  role: output,   type: BOOL, desc: Read by the simulator }
+
+opcua:
+  endpoint: opc.tcp://0.0.0.0:4840   # localhost when the simulator runs on this machine
+  writable: ["PartAtEnd", "StartPB"]
+  anonymous-writes: true
+```
+
+With `anonymous-writes: true`, every session on the `None` endpoint is a
+writer, with no certificate. Everything else stays as it is:
+
+- **`writable` still decides what may be written.** With `anonymous-writes`
+  on and no `writable` list, nothing is writable; `naut check` warns about
+  that. A tag no pattern opens is still `Bad_NotWritable`.
+- **The same rules as a trusted writer.** Conversions, status codes,
+  forces (`Bad_Locked`), the standby gate (`Bad_InvalidState`), the
+  10 000-node limit and arrays (`Bad_WriteNotSupported`) all answer the
+  same. `UserAccessLevel` reads `CurrentRead` and `CurrentWrite` for an
+  anonymous session on a tag it may write, so a client offers the write.
+- **Declare what the simulator writes as `setpoint` tags, not inputs.** An
+  input belongs to a driver, which replaces it before every scan, so it is
+  never writable over OPC UA. What the simulator only reads, such as
+  `Conveyor`, needs no entry under `writable`.
+- **The secure endpoints still work** for a trusted client, when the
+  certificate store is there.
+
+The server says it is open, every time it starts: a warning when it
+listens on loopback (only clients on that machine can write), and an
+error when it listens beyond it, since then **anyone who can reach the
+port may write**, and the audit line can only name their address
+(`anonymous=true`, no certificate). `naut run`'s banner adds
+`(anonymous writes on)`, and the `opcua-server` row says `writable by
+anonymous clients`. Use it on a lab network only, never on a plant
+network. Off is the default.
+
 ## Status
 
 The dashboard's driver cards and `GET /api/drivers` carry an `opcua-server`
@@ -615,7 +679,8 @@ row: the endpoint, whether it is listening, how many subscriptions and
 monitored items clients hold, whether it is writable, how many writes
 landed and how many were refused, whether this replica is a standby, and
 the server certificate's thumbprint and expiry, with a warning from 30
-days before it expires. A port already in use is reported there and
+days before it expires. With `anonymous-writes` on, the row carries
+`anonymousWrites: true` and says it is writable by anonymous clients. A port already in use is reported there and
 on stderr at start (`continuing without it`); the controller runs
 regardless.
 

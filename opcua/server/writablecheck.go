@@ -10,6 +10,17 @@ import (
 	"github.com/joyautomation/nautilus/runtime"
 )
 
+// AnonymousWritesWarning is `naut check`'s look at opcua.anonymous-writes:
+// on with no opcua.writable, it opens nothing, since the switch says who
+// may write, not what. A warning, not an error: the server runs read-only
+// as written, which is safe, but the author meant something else.
+func AnonymousWritesWarning(on bool, patterns []string) string {
+	if !on || len(patterns) > 0 {
+		return ""
+	}
+	return "opcua.anonymous-writes is on but opcua.writable lists nothing, so nothing is writable — anonymous-writes says who may write; list the tags under opcua.writable"
+}
+
 // WritableWarnings is `naut check`'s look at opcua.writable against a
 // compiled runtime: a pattern that matches no tag or member (a typo, or a
 // tag since renamed), one that matches only inputs (never writable: the
