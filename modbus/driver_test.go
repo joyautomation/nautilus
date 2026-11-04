@@ -381,7 +381,9 @@ func TestSnapshotWritesAreNeverSplit(t *testing.T) {
 
 // Rewrite re-asserts the last commanded value on its period and only there
 // — the non-rewrite binding stays change-only — and a closed write gate
-// stops the re-asserts so a device-side watchdog can trip.
+// stops the re-asserts so a device-side watchdog can trip. Once the gate
+// reopens they resume from the next push, which sends every output again
+// (#600).
 func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 	srv := newSlave(t)
 	u := srv.Unit(1)
@@ -428,7 +430,8 @@ func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 	}
 
 	// Close the gate: re-asserts stop (the device watchdog would now trip,
-	// by design). Reopen: they resume.
+	// by design). Reopen: the driver asks for the outputs, and the push
+	// that hands them over sends both and starts the re-asserts again.
 	d.SetWriteGate(func() bool { return false })
 	time.Sleep(60 * time.Millisecond) // drain any in-flight fire
 	quiet := len(rec.writes(FCWriteSingleRegister, 400))
@@ -437,9 +440,20 @@ func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 		t.Errorf("closed gate must stop re-asserts: %d → %d frames", quiet, now)
 	}
 	d.SetWriteGate(func() bool { return true })
+	waitFor(t, "the driver asks for the outputs", d.OutputsWanted)
+	if err := d.WriteOutputs(nio.Values{"KA": float64(7), "SP": float64(10)}); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, "re-asserts resume", func() bool {
-		return len(rec.writes(FCWriteSingleRegister, 400)) > quiet
+		return len(rec.writes(FCWriteSingleRegister, 400)) > quiet+1
 	})
+	waitFor(t, "the unchanged SP sent again", func() bool {
+		return len(rec.writes(FCWriteSingleRegister, 500)) == 2
+	})
+	time.Sleep(100 * time.Millisecond) // several re-assert periods
+	if got := rec.writes(FCWriteSingleRegister, 500); len(got) != 2 {
+		t.Errorf("SP must go out once after the reopen, got %d frames in all", len(got))
+	}
 }
 
 // ── failure & recovery ───────────────────────────────────────────────────
@@ -505,9 +519,12 @@ func TestSlaveDeathHoldsValuesQueuesWritesRecovers(t *testing.T) {
 	// Same address, new slave: the driver reconnects, delivers the queued
 	// write, and quality returns to Good.
 	// Populate unit 1 BEFORE listening: a request to a unit that does not
-	// exist yet answers exception 0x0B, and the driver (correctly) drops a
-	// refused write rather than re-queueing it forever. Creating the unit
-	// after Start raced the driver's first flush on reconnect.
+	// exist yet answers exception 0x0B, and the driver drops that write from
+	// the queue and forgets it, so it would go out with the NEXT
+	// WriteOutputs (issue #596, TestGatewayNoAnswerWriteIsResent), not on
+	// this reconnect. This test is about the queue delivering on the
+	// reconnect by itself; creating the unit after Start raced the driver's
+	// first flush.
 	srv2 := slave.NewServer(addr, nil)
 	srv2.Unit(1).SetHolding(0, 22)
 	if err := srv2.Start(); err != nil {

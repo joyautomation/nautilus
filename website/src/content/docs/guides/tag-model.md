@@ -603,12 +603,23 @@ Two consequences are worth knowing about:
 
 **`WriteOutputs` is a push of changes, not a per-scan heartbeat.** The
 runtime calls it on the first scan, on any scan where an output tag's value
-differs from the one it last handed over, after a failed write, and after a
-redundancy takeover — and skips it otherwise. Every driver in tree already
+differs from the one it last handed over, after a failed write, after a
+redundancy takeover, and on a scan where the driver asked for the outputs
+— and skips it otherwise. Every driver in tree already
 reduced the call to that internally; now the call itself is skipped. A
 driver that genuinely needs a per-scan call — a watchdog to re-arm, a bus
 whose outputs decay without a rewrite — asks for one with
 `runtime.Options{AlwaysWriteOutputs: true}`.
+
+**A driver that forgot a command asks for the outputs.** A driver that
+diffs against what it last sent cannot get a value back the runtime no
+longer hands over: a write a gateway could not deliver, or a command its
+write gate dropped, would wait for that output to change. Such a driver
+implements `io.OutputsRequester` — `OutputsWanted() bool`, true once after
+it forgot something — and the runtime, which asks on every scan, hands it
+every output on the scan where it says yes. A push made anyway answers the request too.
+`io.Multi` asks every child and pushes once for all of them. Asking is
+one call per scan; nothing else runs unless the answer is yes.
 
 **A driver can skip the per-scan input map.** `ReadInputs` returns a fresh
 `io.Values` every scan; on a driver with thousands of bindings that is tens

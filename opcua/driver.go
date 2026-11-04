@@ -195,6 +195,16 @@ type Driver struct {
 
 	gateMu    sync.Mutex
 	writeGate func() bool
+	// gateShut is true from the first look that finds the gate closed to
+	// the first that finds it open again (see gateOpen); sawShut stays true
+	// once any look has found it closed: this replica has been a standby,
+	// so it has no start-up baseline (#606). wanted is the request
+	// OutputsWanted answers.
+	gateShut atomic.Bool
+	sawShut  atomic.Bool
+	wanted   atomic.Bool
+	// turnMu serializes the gate's transitions (see gateOpen).
+	turnMu sync.Mutex
 
 	wmu      sync.Mutex
 	baseline bool
@@ -481,17 +491,79 @@ func (d *Driver) Endpoint() string { return d.endpoint }
 // SetWriteGate installs the write gate WriteOutputs consults: commands
 // leave the driver only while gate() is true. The project wires it to
 // redundancy leadership (leader.Elector.IsLeader). Reads are unaffected.
+//
+// While the gate is closed another replica may lead and write the same
+// nodes, so nothing this driver wrote is trusted to still be there: once
+// the gate reopens every output goes out again with the program's value,
+// changed or not (#600). A driver that has seen the gate closed (a
+// standby) has no start-up baseline either, so its first push once the
+// gate opens commands every output (#606); a plain start that never saw
+// it closed keeps the baseline. The driver sees the gate close and reopen
+// by looking at it (gateOpen): on every WriteOutputs and flush, at least
+// once a second while connected, and on every connect attempt. A gate
+// that closes and reopens between two looks is not seen: one shorter than
+// about a second while connected, or up to the retry backoff (60 s by
+// default) while the session is down.
 func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Lock()
 	d.writeGate = gate
 	d.gateMu.Unlock()
 }
 
+// gateOpen reports whether commands may leave the driver right now. Every
+// call is also a look at the gate: a look that finds it closed disarms the
+// start-up baseline, and the first that finds it open again forgets every
+// written value and asks the runtime for the outputs (OutputsWanted), so
+// the push that answers sends them all. WriteOutputs, the only reader of
+// written, looks first. Callers do not hold d.mu or d.wmu.
 func (d *Driver) gateOpen() bool {
 	d.gateMu.Lock()
 	gate := d.writeGate
 	d.gateMu.Unlock()
-	return gate == nil || gate()
+	if gate == nil {
+		return true
+	}
+	open := gate()
+	// Steady state is one atomic load. A transition is made under turnMu,
+	// and gateShut is cleared only after the forget, so a second looker
+	// that finds the gate open meanwhile waits for the forget. (Here the
+	// only reader of written is WriteOutputs, which looks first; one that
+	// slipped through would at worst skip an unchanged value that the
+	// push answering wanted then sends, so this mirrors modbus rather than
+	// guarding a hazard of its own.)
+	if shut := d.gateShut.Load(); shut == open {
+		d.turnMu.Lock()
+		switch {
+		case !open && !d.gateShut.Load():
+			d.gateShut.Store(true)
+			d.sawShut.Store(true)
+			d.wmu.Lock()
+			d.baseline = false // a standby has no baseline (#606)
+			d.wmu.Unlock()
+		case open && d.gateShut.Load():
+			d.forgetWritten()
+			d.gateShut.Store(false)
+			d.wanted.Store(true)
+			d.log.Info("opcua-client: write gate open again; every output goes out with the next push", "driver", d.name)
+		}
+		d.turnMu.Unlock()
+	}
+	return open
+}
+
+// forgetWritten empties written: no value is the on-change reference any
+// more, so the next push sends them all.
+func (d *Driver) forgetWritten() {
+	d.mu.Lock()
+	clear(d.written)
+	d.mu.Unlock()
+}
+
+// OutputsWanted is the driver's io.OutputsRequester: true once after it
+// forgot commands (the write gate dropped them, or reopened), so the
+// runtime hands it every output on the next scan.
+func (d *Driver) OutputsWanted() bool {
+	return d.wanted.Load() && d.wanted.Swap(false)
 }
 
 // ── names / classes ──────────────────────────────────────────────────────
@@ -525,7 +597,7 @@ func (d *Driver) ScanClasses() map[string][]string {
 func (d *Driver) Start(ctx context.Context) {
 	ctx, d.cancel = context.WithCancel(ctx)
 	d.wmu.Lock()
-	d.baseline = true
+	d.baseline = !d.sawShut.Load() // a standby has none (#606)
 	d.wmu.Unlock()
 	d.started.Store(true)
 	d.wg.Add(1)
@@ -600,7 +672,9 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //  1. GATE. While the write gate is closed (not leader, logic faulted) no
 //     command is queued or recorded.
 //  2. BASELINE. The first snapshot after Start is recorded, not written —
-//     it is the state of the world at t=0, not a set of commands.
+//     it is the state of the world at t=0, not a set of commands. A
+//     driver that has seen the write gate closed (a standby) has none: its
+//     first push commands everything (#606).
 //  3. CHANGE. Thereafter a value equal to the last handed-over value is not
 //     a command. A changed value is queued, last value per tag, and held
 //     across a disconnect — flushed when the session reconnects.
@@ -676,6 +750,7 @@ func sameScalar(a, b any) bool {
 func (d *Driver) run(ctx context.Context) {
 	backoff := d.retryMin
 	for ctx.Err() == nil {
+		d.gateOpen() // a look (see SetWriteGate), on every connect attempt
 		sess, err := Dial(ctx, d.endpoint, d.conn)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -833,7 +908,9 @@ func (d *Driver) serve(ctx context.Context, sess *Session) {
 		if ctx.Err() != nil {
 			return
 		}
-		wake := time.Hour
+		// At least once a second, so the write gate is looked at (see
+		// SetWriteGate) when no class is due for longer than that.
+		wake := time.Second
 		now := time.Now()
 		for _, c := range d.classes {
 			if until := c.next.Sub(now); until < wake {
@@ -854,6 +931,7 @@ func (d *Driver) serve(ctx context.Context, sess *Session) {
 				return
 			}
 		case <-timer.C:
+			d.gateOpen() // a look, even with nothing queued
 			if !d.flushWrites(ctx, sess) {
 				return
 			}
@@ -1023,6 +1101,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 			delete(d.written, name)
 		}
 		d.mu.Unlock()
+		d.wanted.Store(true) // the commands it dropped: ask for them (#601)
 		d.log.Warn("opcua-client: write gate closed; queued writes dropped", "driver", d.name, "count", len(work))
 		return true
 	}
@@ -1121,7 +1200,8 @@ func (d *Driver) setState(state string, err error) {
 
 // Interface conformance.
 var (
-	_ nio.Driver          = (*Driver)(nil)
-	_ nio.BatchReader     = (*Driver)(nil)
-	_ nio.QualityReporter = (*Driver)(nil)
+	_ nio.Driver           = (*Driver)(nil)
+	_ nio.BatchReader      = (*Driver)(nil)
+	_ nio.QualityReporter  = (*Driver)(nil)
+	_ nio.OutputsRequester = (*Driver)(nil)
 )

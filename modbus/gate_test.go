@@ -183,6 +183,9 @@ func TestRequeuedWriteRechecksTheGate(t *testing.T) {
 		t.Errorf("a dropped write is not an outage: DEV__Outages = %v", v["DEV__Outages"])
 	}
 
+	// Once the gate reopens every output goes out again (#600): the
+	// dropped ones, and the one confirmed before the close too, since
+	// another leader may have written it in between.
 	open.Store(true)
 	if err := d.WriteOutputs(nio.Values{"A1": float64(11), "B1": float64(22), "C1": float64(33)}); err != nil {
 		t.Fatal(err)
@@ -190,8 +193,14 @@ func TestRequeuedWriteRechecksTheGate(t *testing.T) {
 	waitFor(t, "the dropped commands once the gate reopens", func() bool {
 		return u.Holding(200) == 22 && u.Holding(300) == 33
 	})
-	if got := rec.writes(FCWriteSingleRegister, 100); len(got) != 1 {
-		t.Errorf("confirmed write at 100 must not be re-sent, got %d frames", len(got))
+	waitFor(t, "the confirmed write sent once more", func() bool {
+		return len(rec.writes(FCWriteSingleRegister, 100)) == 2
+	})
+	time.Sleep(60 * time.Millisecond) // several poll cycles: nothing more goes out
+	for addr, want := range map[int]int{100: 2, 200: 2, 300: 1} {
+		if got := len(rec.writes(FCWriteSingleRegister, addr)); got != want {
+			t.Errorf("register %d: %d frames in all, want %d (each once after the reopen)", addr, got, want)
+		}
 	}
 }
 
@@ -295,7 +304,8 @@ func TestGateClosingMidFlushStopsTheFlush(t *testing.T) {
 	}
 
 	// Forgotten: the same snapshot pushed after the gate reopens sends the
-	// dropped writes; the ones that landed are not commands again.
+	// dropped writes, and the ones that landed before the close once more
+	// (#600: another leader may have written them since).
 	open.Store(true)
 	if err := d.WriteOutputs(cmd); err != nil {
 		t.Fatal(err)
@@ -303,10 +313,14 @@ func TestGateClosingMidFlushStopsTheFlush(t *testing.T) {
 	waitFor(t, "the dropped writes once the gate reopens", func() bool {
 		return u.Holding(200) == 22 && u.Holding(300) == 33 && u.Coil(10)
 	})
-	if got := rec.writes(FCWriteSingleRegister, 100); len(got) != 1 {
-		t.Errorf("the run at 100 landed before the close and must not be re-sent, got %d frames", len(got))
+	waitFor(t, "the writes that landed before the close sent once more", func() bool {
+		return len(rec.writes(FCWriteSingleRegister, 100)) == 2 && len(rec.writes(FCWriteSingleRegister, 50)) == 2
+	})
+	time.Sleep(60 * time.Millisecond) // several poll cycles: nothing more goes out
+	if got := rec.writes(FCWriteSingleRegister, 100); len(got) != 2 {
+		t.Errorf("the run at 100 must go out once after the reopen, got %d frames in all", len(got))
 	}
-	if got := rec.writes(FCWriteSingleRegister, 50); len(got) != 1 {
-		t.Errorf("the bit RMW landed before the close and must not be re-sent, got %d frames", len(got))
+	if got := rec.writes(FCWriteSingleRegister, 50); len(got) != 2 {
+		t.Errorf("the bit RMW must go out once after the reopen, got %d frames in all", len(got))
 	}
 }
