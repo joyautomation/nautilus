@@ -86,6 +86,9 @@ func TestCheckReportsAnOutputReadBeforeItsFirstWrite(t *testing.T) {
 			prog: "PROGRAM Main\nVAR copy : BOOL; END_VAR\nREPEAT\n  Horn := Alarm;\nUNTIL TRUE END_REPEAT;\ncopy := Horn;\nEND_PROGRAM\n"},
 		"FOR 1 TO 3 writes it, read after the loop": {ext: "st", horn: noInit,
 			prog: "PROGRAM Main\nVAR copy : BOOL; i : INT; END_VAR\nFOR i := 1 TO 3 DO\n  Horn := Alarm;\nEND_FOR;\ncopy := Horn;\nEND_PROGRAM\n"},
+		"FOR 3 TO 1 never runs, read after the loop": {ext: "st", horn: noInit, want: "error", faults: true,
+			prog:  "PROGRAM Main\nVAR copy : BOOL; i : INT; END_VAR\nFOR i := 3 TO 1 DO\n  Horn := Alarm;\nEND_FOR;\ncopy := Horn;\nEND_PROGRAM\n",
+			cause: "Main reads it before writing it (it is written only on some paths before this read)"},
 		"CASE names every enum member, no ELSE": {ext: "st", horn: noInit,
 			prog: "TYPE Mode : (Idle, Run); END_TYPE\n\nPROGRAM Main\nVAR m : Mode; copy : BOOL; END_VAR\nCASE m OF\n  Idle: Horn := FALSE;\n  Run: Horn := TRUE;\nEND_CASE;\ncopy := Horn;\nEND_PROGRAM\n"},
 

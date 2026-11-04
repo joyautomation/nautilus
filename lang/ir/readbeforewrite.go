@@ -228,7 +228,11 @@ func (w *rbwWalker) stmt(st Stmt, s *rbwState) *rbwState {
 		w.expr(n.Start, s)
 		w.expr(n.End, s)
 		w.expr(n.Step, s)
-		return w.loop(n.Body, s, nil, w.loopsRun || forRuns(n))
+		runs, known := forRuns(n)
+		if !known {
+			runs = w.loopsRun
+		}
+		return w.loop(n.Body, s, nil, runs)
 	case *While:
 		w.expr(n.Cond, s)
 		return w.loop(n.Body, s, nil, w.loopsRun)
@@ -309,9 +313,11 @@ func (w *rbwWalker) callee(def any, body []Stmt, s *rbwState) *rbwState {
 	return mergeStates(append(returned, end)...)
 }
 
-// forRuns reports a FOR whose constant bounds give it at least one
-// iteration (`FOR i := 1 TO 3`).
-func forRuns(n *For) bool {
+// forRuns reports whether a FOR runs its body at least once, and whether
+// that is known: constant bounds and a constant non-zero step settle it
+// either way (1 TO 3 runs; 3 TO 1 never does), anything else is unknown
+// and left to the pass's assumption about loops.
+func forRuns(n *For) (runs, known bool) {
 	lo, ok1 := constInt(n.Start)
 	hi, ok2 := constInt(n.End)
 	step := int64(1)
@@ -319,10 +325,10 @@ func forRuns(n *For) bool {
 	if n.Step != nil {
 		step, ok3 = constInt(n.Step)
 	}
-	if !ok1 || !ok2 || !ok3 {
-		return false
+	if !ok1 || !ok2 || !ok3 || step == 0 {
+		return false, false
 	}
-	return (step > 0 && lo <= hi) || (step < 0 && lo >= hi)
+	return (step > 0 && lo <= hi) || (step < 0 && lo >= hi), true
 }
 
 func constInt(e Expr) (int64, bool) {

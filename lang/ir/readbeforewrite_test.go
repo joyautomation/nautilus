@@ -46,7 +46,7 @@ func TestReadBeforeWrite(t *testing.T) {
 		{"CASE missing an enum member does not", "CASE m OF Idle: X := TRUE; Run: X := FALSE; END_CASE; c := X;", "X"},
 		{"a FOR of unknown count may run zero times", "FOR i := 1 TO N DO X := TRUE; END_FOR; c := X;", "N,X?"},
 		{"a FOR of constant bounds runs", "FOR i := 1 TO 3 DO X := TRUE; END_FOR; c := X;", ""},
-		{"a FOR of constant bounds that never runs", "FOR i := 3 TO 1 DO X := TRUE; END_FOR; c := X;", "X?"},
+		{"a FOR of constant bounds that never runs", "FOR i := 3 TO 1 DO X := TRUE; END_FOR; c := X;", "X"},
 		{"a counting-down FOR runs", "FOR i := 3 TO 1 BY -1 DO X := TRUE; END_FOR; c := X;", ""},
 		{"a WHILE may run zero times", "WHILE A DO X := TRUE; A := FALSE; END_WHILE; c := X;", "A,X?"},
 		{"REPEAT runs once", "REPEAT X := A; UNTIL TRUE END_REPEAT; c := X;", "A"},
