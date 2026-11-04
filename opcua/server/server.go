@@ -37,6 +37,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gopcua/opcua/id"
@@ -232,16 +233,41 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.up {
 		return nil
 	}
-	port := s.port
-	listen, aliases := endpointHosts(s.host)
-	if port == 0 {
-		p, err := freePort(listen)
-		if err != nil {
+	if s.port != 0 {
+		return s.startOn(ctx, s.port)
+	}
+	// Port 0: gopcua binds by address, not from a listener we hand it, so
+	// the free port is probed and released, and another process can take
+	// it before the bind. When that happens (EADDRINUSE) probe again.
+	listen, _ := endpointHosts(s.host)
+	var err error
+	for range portZeroTries {
+		var port int
+		if port, err = freePort(listen); err != nil {
 			s.lastErr = err
 			return err
 		}
-		port = p
+		if probeGap != nil {
+			probeGap(port)
+		}
+		if err = s.startOn(ctx, port); !errors.Is(err, syscall.EADDRINUSE) {
+			return err
+		}
 	}
+	return err
+}
+
+// portZeroTries bounds how often Start re-probes a port 0 endpoint whose
+// probed port was taken before the bind.
+const portZeroTries = 5
+
+// probeGap, when set by a test, runs between the probe releasing a port
+// and the bind, to take the port in that window.
+var probeGap func(port int)
+
+// startOn binds the server to port and serves. Start holds s.mu.
+func (s *Server) startOn(ctx context.Context, port int) error {
+	listen, aliases := endpointHosts(s.host)
 	// gopcua announces its node-set import and its listener on the
 	// standard logger, unconditionally; those lines are not ours to show
 	// an operator (the run banner says where we listen). Everything else

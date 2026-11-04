@@ -7,6 +7,7 @@ package project
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -323,4 +324,53 @@ func TestSparkplugHostQueuedWritesAreReportedOnAPIDrivers(t *testing.T) {
 	if v, shown := queuedMetric(); !shown || v != 1 {
 		t.Fatalf("queued writes metric = %v (shown %v), want 1", v, shown)
 	}
+}
+
+// SPH-047: `rebirth-requests: false` with `primary: false` reaches the
+// driver: the host publishes nothing at all (no STATE, no NCMD Rebirth on
+// connect or on data before a birth), and still adopts the birth it did
+// not ask for.
+func TestSparkplugHostRebirthRequestsOffPublishesNothing(t *testing.T) {
+	url := testBroker(t, nil)
+	var mu sync.Mutex
+	var got []string
+	obs := mqtt.NewClient(mqtt.NewClientOptions().AddBroker(url).SetClientID("obs-rr").
+		SetCleanSession(true).
+		SetDefaultPublishHandler(func(_ mqtt.Client, m mqtt.Message) {
+			mu.Lock()
+			got = append(got, m.Topic())
+			mu.Unlock()
+		}))
+	if tok := obs.Connect(); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatalf("observer connect: %v", tok.Error())
+	}
+	t.Cleanup(func() { obs.Disconnect(50) })
+	for _, f := range []string{"spBv1.0/STATE/#", "STATE/#", "spBv1.0/Plant/NCMD/#", "spBv1.0/Plant/DCMD/#"} {
+		if tok := obs.Subscribe(f, 1, nil); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+			t.Fatalf("observer subscribe %s: %v", f, tok.Error())
+		}
+	}
+
+	drv := startHost(t, url, "  primary: false\n  rebirth-requests: false\n")
+	edge := edgeClient(t, url)
+	body, err := sparkplug.Payload{Timestamp: uint64(time.Now().UnixMilli()), Seq: 4,
+		Metrics: []sparkplug.Metric{fit(1)}}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok := edge.Publish("spBv1.0/Plant/NDATA/Edge1", 1, false, body); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatalf("publish NDATA: %v", tok.Error())
+	}
+	time.Sleep(500 * time.Millisecond)
+	mu.Lock()
+	if len(got) != 0 {
+		t.Errorf("a passive host with rebirth-requests: false published %v; want nothing", got)
+	}
+	mu.Unlock()
+
+	birth(t, edge, fit(12.5))
+	waitFor(t, "the unrequested birth to be adopted", func() bool {
+		v, err := drv.ReadInputs()
+		return err == nil && v["Edge1__Online"] == true && v["Edge1_ZONE1_FIT_001"] == 12.5
+	})
 }

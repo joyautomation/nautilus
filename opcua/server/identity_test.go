@@ -9,6 +9,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 )
 
 // The server describes nautilus, not the library it is built on: every
@@ -58,7 +59,7 @@ func TestServerObjectDescribesNautilus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Connect(ctx); err != nil {
+	if err := gopcuatest.Connect(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

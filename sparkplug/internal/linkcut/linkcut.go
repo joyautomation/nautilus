@@ -1,12 +1,13 @@
 // Package linkcut is a TCP proxy for tests that need to drop a live MQTT
 // connection the way a network does: both sides see the socket close, with
-// no MQTT DISCONNECT, so the broker fires the client's will.
+// no MQTT DISCONNECT, so the broker fires the client's will. Stall is the
+// other failure a network has: the bytes stop and neither side is told.
 package linkcut
 
 import (
-	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -18,6 +19,9 @@ type Proxy struct {
 	mu      sync.Mutex
 	conns   []net.Conn
 	refused bool
+	// stalled black-holes the bytes of the open connections without
+	// closing them.
+	stalled atomic.Bool
 }
 
 // New starts a proxy on 127.0.0.1 in front of target; it closes with the test.
@@ -48,11 +52,23 @@ func (p *Proxy) Cut() {
 	p.closeAll()
 }
 
-// Restore lets connections through again.
+// Stall stops every proxied connection carrying bytes, in both directions,
+// without closing it: no FIN, no RST, so each side only learns of it from a
+// timeout. New connections are refused, as after Cut, until Restore.
+func (p *Proxy) Stall() {
+	p.mu.Lock()
+	p.refused = true
+	p.mu.Unlock()
+	p.stalled.Store(true)
+}
+
+// Restore lets connections through again. A connection that lost bytes to
+// a Stall stays silent: it is no use to either side.
 func (p *Proxy) Restore() {
 	p.mu.Lock()
 	p.refused = false
 	p.mu.Unlock()
+	p.stalled.Store(false)
 }
 
 func (p *Proxy) closeAll() {
@@ -93,13 +109,30 @@ func (p *Proxy) serve() {
 		// The broker side first, so it is the broker that notices first.
 		p.conns = append(p.conns, up, down)
 		p.mu.Unlock()
-		go pipe(up, down)
-		go pipe(down, up)
+		go p.pipe(up, down)
+		go p.pipe(down, up)
 	}
 }
 
-func pipe(dst, src net.Conn) {
-	_, _ = io.Copy(dst, src)
+func (p *Proxy) pipe(dst, src net.Conn) {
+	// dead latches: bytes that arrived during a Stall were dropped, so this
+	// connection never carries anything again, even after Restore.
+	dead := false
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			dead = dead || p.stalled.Load()
+			if !dead {
+				if _, werr := dst.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
 	_ = dst.Close()
 	_ = src.Close()
 }

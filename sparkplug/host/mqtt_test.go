@@ -848,7 +848,8 @@ func TestMqttQueuedWriteIsDeliveredOnBirth(t *testing.T) {
 	}
 	waitQueued(t, d, 1)
 
-	bringW6Online(t, d, addr, "edge-flush")
+	// A device's command waits for its device's DBIRTH, not just the NBIRTH.
+	birthW6AndPLC1(t, d, edgePublisher(t, addr, "edge-flush"), 1)
 
 	dcmd := isCommandFor("spBv1.0/G/DCMD/W6/PLC1")
 	msg := obs.wait(t, "the queued DCMD, delivered on the birth", dcmd)
@@ -1529,8 +1530,9 @@ func TestMqttChangePushCadence(t *testing.T) {
 	}
 
 	// 5. The site comes back: the command is delivered, once, with NO further
-	//    WriteOutputs call — nothing moved, so the runtime makes none.
-	bringW6Online(t, d, addr, "edge-push-back")
+	//    WriteOutputs call — nothing moved, so the runtime makes none. (A
+	//    device's command waits for its DBIRTH, so the site births PLC1 too.)
+	birthW6AndPLC1(t, d, edgePublisher(t, addr, "edge-push-back"), 1)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && obs.count(dcmd) < 2 {
 		time.Sleep(10 * time.Millisecond)

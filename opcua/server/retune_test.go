@@ -19,6 +19,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 )
 
 // send is one raw request and its response, or the service fault's code.
@@ -515,7 +516,7 @@ func TestCallAnswersEachMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := other.Connect(context.Background()); err != nil {
+	if err := gopcuatest.Connect(context.Background(), other); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeClient(other) })
@@ -624,8 +625,13 @@ func TestTransferredBackIsNotReportedTransferred(t *testing.T) {
 		waiting <- st
 	}()
 	time.Sleep(200 * time.Millisecond) // A's Publish is queued, and the subscription is idle
-	if v, _, ok := publish(t, b, subID, 100*time.Millisecond); ok {
-		t.Fatalf("B, owning nothing, was answered: %v", v)
+	// B owns nothing, so its Publish is answered at once with Bad_NoSubscription
+	// (Part 4 §5.14.5.3), not data and not a wait.
+	bctx, bcancel := context.WithTimeout(context.Background(), 2*time.Second)
+	err := b.Send(bctx, &ua.PublishRequest{RequestHeader: &ua.RequestHeader{}, SubscriptionAcknowledgements: []*ua.SubscriptionAcknowledgement{}}, func(ua.Response) error { return nil })
+	bcancel()
+	if err != ua.StatusBadNoSubscription {
+		t.Fatalf("B, owning nothing, publishes: %v, want Bad_NoSubscription", err)
 	}
 	transfer(b)
 	select {
