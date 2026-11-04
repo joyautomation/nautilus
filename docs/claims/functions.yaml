@@ -1150,6 +1150,25 @@ claims:
     tests:
       - go ./lang/st TestPartialAccessErrorsNameDeclaredType
 
+  - id: FN-161
+    claim: >-
+      The top bit of a signed type is its sign: on an INT, x.15 := TRUE makes
+      0 into -32768 and x.15 := FALSE makes -1 into 32767 (SINT bit 7, DINT
+      bit 31, LINT bit 63), and a partial access that holds the sign bit sets
+      the sign with it. An unsigned or bit-string type's top bit is an
+      ordinary value bit (w.15 := TRUE on a WORD is 32768).
+    source: "#bit-operations"
+    tests:
+      - go ./lang/st TestSignedTopBitIsTheSign
+      - go ./lang/st TestSignedPartialAccessCarriesTheSign
+      - go ./lang/st TestUnsignedTopBitIsAValueBit
+      - go ./runtime TestLadderCoilOnSignBit
+    note: >-
+      Every signed width, set and cleared, on a global, a local, a structure
+      member and an array element, in both spellings; the parts %B, %W, %D
+      and %L and a bit of a part; ladder output, set and reset coils. Every
+      unsigned and bit-string width keeps its unsigned value.
+
   - id: FN-084
     claim: >-
       String functions use 1-based positions, and length and position

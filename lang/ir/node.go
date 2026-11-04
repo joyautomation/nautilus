@@ -194,6 +194,11 @@ type BitRef struct {
 	Bit    int    // the lowest bit addressed
 	Width  int    // 0 or 1: a single bit (BOOL); else the part's width in bits
 	T      *Type  // Width > 1: the part's type (BYTE, WORD, DWORD)
+	// Sign is Object's sign bit when Object is a signed integer narrower
+	// than 64 bits (Type.SignBit: SINT 7, INT 15, DINT 31), else 0. A
+	// write that covers it sign-extends the word, so INT.15 := TRUE is
+	// -32768 rather than 32768 (#611).
+	Sign int
 }
 
 // mask is the part's value mask, unshifted.

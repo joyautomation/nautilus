@@ -371,7 +371,17 @@ func writeLValueBits(ctx *EvalCtx, lv LValue, v Value, bits uint64) error {
 		if bits != 0 {
 			part &= bits
 		}
-		return writeLValueBits(ctx, b.Object, word, part<<uint(b.Bit))
+		part <<= uint(b.Bit)
+		// The sign bit of a signed word narrower than 64 bits (#611): the
+		// VM holds the word sign-extended, so setting or clearing the sign
+		// sets every bit above it too, and those bits are assigned with it.
+		// Reporting them keeps a commit that merges by bit (#578) from
+		// pairing the program's sign with an outside writer's upper bits.
+		if s := uint(b.Sign); s != 0 && part>>s&1 != 0 {
+			word.I = word.I << (63 - s) >> (63 - s)
+			part |= ^uint64(0) << s
+		}
+		return writeLValueBits(ctx, b.Object, word, part)
 	}
 	// Collect accessors while descending to the root slot / global.
 	// The chain is built leaf-first and applied root-first below.
