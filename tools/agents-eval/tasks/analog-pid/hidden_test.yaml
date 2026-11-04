@@ -1,0 +1,57 @@
+# Hidden acceptance tests for analog-pid. No assertion depends on the
+# loop's tuning beyond its sign and its clamps: any reverse-acting PI with
+# the given gains (or sane others) passes.
+tolerance: 0.05
+tests:
+  - name: 4 mA is 0 degC
+    given: { TT101_mA: 4.0 }
+    advance: 500ms
+    expect: { TT101_Temp: { near: 0.0 } }
+
+  - name: 12 mA is 75 degC
+    given: { TT101_mA: 12.0 }
+    advance: 500ms
+    expect: { TT101_Temp: { near: 75.0 } }
+
+  - name: 20 mA is 150 degC
+    given: { TT101_mA: 20.0 }
+    advance: 500ms
+    expect: { TT101_Temp: { near: 150.0 } }
+
+  - name: disabled heater stays off
+    given: { HeatEnable: false, TT101_mA: 7.2 }     # 30 degC, well below 60
+    advance: 10s
+    always:
+      - E101_Out = 0.0
+
+  - name: below setpoint the heater comes on, within 0-100 %
+    given: { HeatEnable: true, TT101_mA: 7.2 }      # 30 degC
+    steps:
+      - advance: 10s
+        always:
+          - E101_Out >= 0.0 AND E101_Out <= 100.0
+        expect:
+          - E101_Out > 1.0
+
+  - name: above setpoint the heater winds down to zero
+    given: { HeatEnable: true, TT101_mA: 12.0 }     # 75 degC, above 60
+    advance: 20s
+    always:
+      - E101_Out >= 0.0 AND E101_Out <= 100.0
+    expect:
+      - E101_Out < 0.01
+
+  - name: high temperature alarm waits 5 s and forces the heater off
+    steps:
+      - given: { HeatEnable: true, TT101_mA: 7.2 }  # heat for a while first
+        advance: 10s
+        expect:
+          - E101_Out > 1.0
+      - given: { TT101_mA: 15.2 }                   # 105 degC
+        advance: 4.5s
+        expect: { TempHiAlm: false }
+      - advance: 1s
+        expect: { TempHiAlm: true, E101_Out: { near: 0.0 } }
+      - given: { TT101_mA: 12.0 }                   # 75 degC, below the limit
+        advance: 1s
+        expect: { TempHiAlm: false }

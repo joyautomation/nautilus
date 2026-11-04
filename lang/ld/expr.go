@@ -265,13 +265,22 @@ func (p *exprParser) primary() (Expr, error) {
 	case c >= '0' && c <= '9':
 		return p.number()
 	case c == '\'':
-		// a string literal, verbatim
-		end := strings.IndexByte(p.src[p.pos+1:], '\'')
+		// a string literal, verbatim; `$` escapes the next character, so
+		// `$'` is a quote inside the string, not its end
+		end := -1
+		for i := p.pos + 1; i < len(p.src); i++ {
+			if p.src[i] == '$' {
+				i++
+			} else if p.src[i] == '\'' {
+				end = i
+				break
+			}
+		}
 		if end < 0 {
 			return nil, fmt.Errorf("unclosed string")
 		}
-		lit := p.src[p.pos : p.pos+end+2]
-		p.pos += end + 2
+		lit := p.src[p.pos : end+1]
+		p.pos = end + 1
 		return &Lit{Text: lit}, nil
 	case isIdentStart(c):
 		start := p.pos

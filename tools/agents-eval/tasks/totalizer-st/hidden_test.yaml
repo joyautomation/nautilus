@@ -1,0 +1,70 @@
+# Hidden acceptance tests for totalizer-st. Each pulse is held 200 ms and
+# released for 200 ms, several scans each way at any sane scan rate.
+tolerance: 0.01
+tests:
+  - name: a pulse held on counts once
+    steps:
+      - given: { FT201_Pulse: true }
+        advance: 2s
+        expect: { Total_L: { near: 0.5 } }
+      - given: { FT201_Pulse: false }
+        advance: 200ms
+        expect: { Total_L: { near: 0.5 } }
+
+  - name: a 2 L dose opens, counts four pulses, and closes
+    steps:
+      - given: { DoseSP: 2.0, DoseStart: true }
+        advance: 200ms
+      - given: { DoseStart: false }
+        advance: 200ms
+        expect: { XV201_Open: true, DoseDone: false, Dose_L: { near: 0.0 } }
+      - { given: { FT201_Pulse: true }, advance: 200ms }
+      - { given: { FT201_Pulse: false }, advance: 200ms }
+      - { given: { FT201_Pulse: true }, advance: 200ms }
+      - { given: { FT201_Pulse: false }, advance: 200ms }
+      - { given: { FT201_Pulse: true }, advance: 200ms }
+      - given: { FT201_Pulse: false }
+        advance: 200ms
+        expect: { XV201_Open: true, DoseDone: false, Dose_L: { near: 1.5 } }
+      - { given: { FT201_Pulse: true }, advance: 200ms }
+      - given: { FT201_Pulse: false }
+        advance: 200ms
+        expect: { XV201_Open: false, DoseDone: true, Dose_L: { near: 2.0 }, Total_L: { near: 2.0 } }
+      - advance: 2s
+        expect: { XV201_Open: false, DoseDone: true }
+
+  - name: a new start zeroes the dose but not the grand total
+    steps:
+      - given: { DoseSP: 1.0, DoseStart: true }
+        advance: 200ms
+      - { given: { DoseStart: false, FT201_Pulse: true }, advance: 200ms }
+      - { given: { FT201_Pulse: false }, advance: 200ms }
+      - { given: { FT201_Pulse: true }, advance: 200ms }
+      - given: { FT201_Pulse: false }
+        advance: 200ms
+        expect: { DoseDone: true, Total_L: { near: 1.0 } }
+      - given: { DoseStart: true }
+        advance: 200ms
+      - given: { DoseStart: false }
+        advance: 200ms
+        expect: { DoseDone: false, XV201_Open: true, Dose_L: { near: 0.0 }, Total_L: { near: 1.0 } }
+      - { given: { FT201_Pulse: true }, advance: 200ms }
+      - given: { FT201_Pulse: false }
+        advance: 200ms
+        expect: { Dose_L: { near: 0.5 }, Total_L: { near: 1.5 } }
+
+  - name: total reset zeroes only the grand total
+    steps:
+      - given: { DoseSP: 10.0, DoseStart: true }
+        advance: 200ms
+      - { given: { DoseStart: false, FT201_Pulse: true }, advance: 200ms }
+      - { given: { FT201_Pulse: false }, advance: 200ms }
+      - { given: { FT201_Pulse: true }, advance: 200ms }
+      - given: { FT201_Pulse: false }
+        advance: 200ms
+        expect: { Total_L: { near: 1.0 }, Dose_L: { near: 1.0 } }
+      - given: { TotReset: true }
+        advance: 200ms
+      - given: { TotReset: false }
+        advance: 200ms
+        expect: { Total_L: { near: 0.0 }, Dose_L: { near: 1.0 }, XV201_Open: true }

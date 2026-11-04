@@ -1,0 +1,4 @@
+# Run output: transcripts, projects, records. Commit a run summary by
+# copying summary.md/summary.json into ../baseline/.
+*
+!.gitignore
