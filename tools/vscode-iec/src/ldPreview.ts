@@ -31,7 +31,7 @@ import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./di
  * live values) works on Allen-Bradley rungs without knowing it. The only
  * thing that differs is which CLI verb produces the model, and whether the
  * result is editable — it is not: you do not hand-edit a vendor export. */
-function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
+export function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
   const cli = cliCommand();
   const args = graphArgs(at);
   return new Promise((resolve) => {

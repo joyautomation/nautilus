@@ -107,6 +107,9 @@ const NET_EMPTY_H = 34;
 
 let meter: CanvasRenderingContext2D | null = null;
 function textW(s: string, px: number): number {
+  // Outside a webview (the diagram export, run in the extension host) there
+  // is no canvas to measure with: a monospace advance is close enough.
+  if (typeof document === "undefined") return s.length * px * 0.6;
   if (!meter) meter = document.createElement("canvas").getContext("2d");
   if (!meter) return s.length * px * 0.6;
   meter.font = `${px}px ${getComputedStyle(document.body).getPropertyValue("--vscode-editor-font-family") || "monospace"}`;
