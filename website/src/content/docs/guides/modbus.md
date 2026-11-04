@@ -230,7 +230,25 @@ What "answers" means:
   Without `rewrite:`, nothing else asks the device, so a program that
   sends commands only while `__Online` is true never sends the write that
   would bring it back: keep commanding while offline, or add `rewrite:`.
-- A lost connection, or a source parked with `enable:`, is offline.
+- A lost connection, or a source parked with `enable:`, is offline. A
+  source with nothing due for over a second (nothing polled and no
+  `rewrite:`, or a slow scan class) checks its socket once a second
+  without sending a request, and checks it again before sending on a
+  link that has been quiet for 100 ms or more. A reset connection is
+  noticed within about a second. A link cut silently (a pulled cable, a
+  dead switch) is caught by TCP keepalive, which the driver sets on
+  every connection: an idle link is declared dead within about 15 s.
+- A device that closes a connection cleanly (a FIN) while it is idle,
+  as many gateways do on an idle timeout, is not an outage, provided it
+  had kept the connection at least 100 ms. The driver reconnects at once,
+  with no backoff, and the source stays online with nothing counted;
+  the poll schedule carries on as before. Only if that reconnect fails
+  does the source go offline and count one outage. A device that hangs
+  up sooner than 100 ms after the connect (a crash-looping server, a
+  gateway out of connection slots) is an outage each time, with backoff;
+  every connection is checked once it is 100 ms old, so this is seen
+  promptly. A device whose idle timeout resets the connection (an RST)
+  instead of closing it counts an outage each time too.
 
 This is the meaning `__Online` has on the other drivers: true when the
 device is answering, not when a socket is open.
@@ -251,7 +269,9 @@ that accepts the connection and never replies does not count, however
 often the driver reconnects. A gateway whose field device stops
 answering (0x0A or 0x0B on every block, three requests in a row) counts
 one. A write-only source without `rewrite:` is online from the connect,
-so losing its connection counts. Stopping nautilus
+so losing its connection counts, even while it sends nothing; a device
+closing it cleanly on an idle timeout does not, as long as it takes the
+reconnect. Stopping nautilus
 does not count. Parking a source with `enable:` counts, because
 `__Online` goes false.
 The counter only goes up, so a program that compares it with last scan's
@@ -279,9 +299,15 @@ the device did not answer at all: when every block gets one, the source
 goes offline and its tags `Stale` (see the `__Online` companion above).
 
 **A transport failure** — dial refused, timeout, a short read, a response
-carrying the wrong unit id. The whole source is down: the driver drops the
-connection and reconnects with exponential backoff from `retrymin` (1s) to
-`retrymax` (60s), resetting on success. **Values hold.** The driver zeroes
+carrying the wrong unit id, an idle socket that was reset or that TCP
+keepalive gave up on, or a device that closed an idle connection and
+then refused the reconnect. The whole source is down: the driver drops
+the connection and reconnects with exponential backoff from `retrymin`
+(1s) to `retrymax` (60s). The ladder starts over once the device has
+answered on a connection, not when the dial succeeds, so a device that
+accepts connections and never answers keeps climbing it. An idle
+connection the device closes cleanly is not a failure: see the
+`__Online` rules above. **Values hold.** The driver zeroes
 and invents nothing; a tag delivered at least once reports `Stale` with
 its age, a tag never delivered reports `NotConnected` (the tag store holds
 its `init:` or zero for the logic meanwhile), and `<source>__Online` goes
@@ -313,7 +339,10 @@ enable word, a VFD control word, an IO-Link master's Modbus watchdog. A
 binding with `rewrite: 2.5s` re-asserts its last commanded value on that
 period even when nothing changed, and its baseline value *is* written on
 connect, because a watchdog that never sees a first write drops out
-immediately.
+immediately. After the quiet reconnect that follows a device closing an
+idle connection, nothing is written at once: the value is re-asserted
+when its period next falls due, as it would have been on the old
+connection.
 
 ```yaml
 - {tag: Tsp, address: 262, format: int32, scale: 0.1, writable: true, rewrite: 2.5s, init: 0.0}

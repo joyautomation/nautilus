@@ -43,6 +43,9 @@ Options (env):
   point it at an old bundle and watch the regression tests fail.
 - `HEADED=1` — run with a visible window (debugging).
 - `GESTURE_CLIPS=<dir>` — record every test's run as a clip (below).
+- `GESTURE_CPU_THROTTLE=<n>` — slow every page's CPU n× (CDP
+  `Emulation.setCPUThrottlingRate`): a loaded CI runner on a fast box. A
+  timing flake shows up locally at 6–12.
 
 ## Clips
 
@@ -81,6 +84,7 @@ level; tests themselves need nothing.
 | `host.html` | Stand-in for the webview shell: stamps `data-mimic-mode`, mounts `#app`, loads the bundle, and exposes `window.__*` helpers that only READ the rendered DOM (ports, handles, draft/pipe paths, canvas↔viewport mapping). |
 | `harness.mjs` | `Editor` — opens a bundle with a test doc, drives the host protocol, and offers a gesture layer (enter pipe mode, click/hover a named port, drag a handle mid-flight, press Enter). Plus `applyOpToDoc`, a tiny reducer so a committed op can be reflected back and its "materialized" render compared. |
 | `gestures.test.mjs` | The regression suite (`node:test`). |
+| `wait.mjs` | Waiting on the page, not the clock: `waitUntil(probe, ok)` polls to a deadline and fails naming what it saw; `opsPosted(b, sfcOps, n)` waits for n posted ops; `settled(b)` waits until the layout holds still for a few frames (a render, a fit-to-view). The diagram `deliver` and the mimic `Editor.open` / `setDoc` settle this way. |
 | `clips.mjs` | `recordClips(suite)`: with `GESTURE_CLIPS` set, records each test's run to an mp4 and writes the index. |
 | `themes.mjs` | What VS Code injects per theme (body class + `--vscode-*` variables, Dark Modern / Light Modern / High Contrast values): `applyThemeJs('light')` reproduces a theme so colours can be asserted — or screenshotted — against light, dark and HC. |
 | `diagram-host.html` / `diagram.test.mjs` | The same approach for the FBD / Ladder / SFC diagram bundle (`fbd-flow.js`): models delivered by `postMessage` as the extension host does, real input, assertions on the posted `edit`/`ldEdit`/`sfcEdit` ops. `DIAGRAM_BUNDLE=…` points it at another build. |
@@ -91,7 +95,10 @@ Reproduce the user's gesture with the `Editor` helpers, then assert on either
 the ops posted (`ed.ops()`) or the rendered geometry (`ed.pipePaths()`,
 `ed.draft()`). For a preview-vs-commit case: capture the mid-drag/pre-Enter
 render, commit, reflect the op with `applyOpToDoc` + `ed.setDoc`, and assert the
-two paths are equal. When you fix a bug, first confirm the new test FAILS
+two paths are equal. Wait for what you assert on, not for a fixed time: read
+expected ops through `opsPosted`, poll a render with `waitUntil`. A fixed
+sleep is right only before asserting that nothing happens (no op posted, no
+second batch). When you fix a bug, first confirm the new test FAILS
 against the shipped bundle (`MIMIC_BUNDLE=…`), then passes against your build.
 
 ## Adding a suite

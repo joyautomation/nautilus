@@ -25,10 +25,18 @@ async def main():
         r = await sub.set_monitoring_mode(ua.MonitoringMode.Sampling); h.n.clear(); await asyncio.sleep(1.0)
         print(f"   SetMonitoringMode(Sampling) -> {[x.name for x in r]}; {len(h.n)} notifications in 1 s")
         ok(r[0].is_good() and len(h.n) == 0, f"Sampling answers Good and reports nothing (got {len(h.n)})")
-        t = time.time(); r = await sub.set_monitoring_mode(ua.MonitoringMode.Reporting); h.n.clear(); await asyncio.sleep(1.0)
-        first = (h.n[0][0] - t) if h.n else None
-        print(f"   SetMonitoringMode(Reporting) -> {[x.name for x in r]}; {len(h.n)} notifications in 1 s; first after {first and round(first, 3)} s")
-        ok(r[0].is_good() and len(h.n) >= 7, f"Reporting resumes delivery (got {len(h.n)} in 1 s; Counter changes every 100 ms)")
+        t = time.time(); r = await sub.set_monitoring_mode(ua.MonitoringMode.Reporting); h.n.clear(); await asyncio.sleep(2.0)
+        first = (h.n[0][0] - t) if h.n else None; got = len(h.n)
+        # Queue size 1 and a 100 ms sweep against a 100 ms publish: a sample can replace the one
+        # before it in the same publish, so a count per second is not the measure. Delivery that
+        # resumed keeps up: the notifications run newer each time and reach the Counter the
+        # controller reports once the window is over.
+        now = counter(); until = time.time() + 2.0
+        while isinstance(now, int) and not (h.n and h.n[-1][1] >= now) and time.time() < until: await asyncio.sleep(0.05)
+        vals = [v for _, v in h.n]; last = vals[-1] if vals else None
+        print(f"   SetMonitoringMode(Reporting) -> {[x.name for x in r]}; {got} notifications in 2 s; first after {first and round(first, 3)} s; values {vals}; Counter after the window {now}")
+        ok(r[0].is_good() and got >= 5 and vals == sorted(set(vals)) and isinstance(now, int) and last is not None and last >= now,
+           f"Reporting resumes delivery and keeps up with Counter (got {got} in 2 s, each newer than the last; last {last}, Counter {now})")
         ok(first is not None and first < 0.35, f"the first notification after Reporting arrives within a sweep or two (got {first})")
         h2 = H(); sub2 = await c.create_subscription(100, h2); await sub2.subscribe_data_change(c.get_node("ns=1;s=Fixed")); await asyncio.sleep(0.5)
         ok(len(h2.n) == 1, f"idle tag Fixed: one initial notification (got {len(h2.n)})")
