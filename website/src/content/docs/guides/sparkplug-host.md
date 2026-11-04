@@ -20,7 +20,7 @@ driver:
   manifest: sparkplug_manifest.yaml
   primary: true                      # publish STATE (default)
   state-form: both                   # 3.0 JSON + legacy STATE/<host-id>
-  reorder-timeout: 5s                # unfilled seq gap this long -> NCMD Rebirth
+  reorder-timeout: 5s                # unfilled seq gap this long -> NCMD Rebirth (unless rebirth-requests: false)
   stale-after: 2m                    # silence this long -> node marked stale
   on-unknown: log                    # metrics the manifest never bound: log | ignore | strict
   rebirth-requests: true             # send NCMD Rebirth requests (default)
@@ -232,6 +232,10 @@ fully-birthed fleet reports an empty map. A tag never named in it is Good.
   `StaleAfter`, or (for a device-scoped metric) a `DDEATH` on just that
   device — is `Stale`. The value is real,
   just old.
+- A binding whose site is online but waiting for a birth is `Stale` too.
+  That is after a sequence gap left unfilled for `reorder-timeout`, whose
+  data is dropped until the next NBIRTH, or after the site sent a metric
+  alias its birth never defined. The values may be frozen.
 - A binding whose site is online and has delivered its metric is `Good`
   (omitted).
 
@@ -401,8 +405,8 @@ operator's `__Rebirth`, as the spec suggests making it configurable. The
 host still goes online on births it did not ask for. With `primary: false`
 as well, the host publishes nothing at all, so it can run on a read-only
 broker account. Such a host sees a site only after that site's next
-birth, and a sequence gap it cannot fill leaves the site's data waiting
-for one. The TCK's reorder-timeout check expects a rebirth request, so a
+birth. A sequence gap it cannot fill, or an alias it does not know, leaves
+the site online but its data `Stale` until a birth someone else asks for. The TCK's reorder-timeout check expects a rebirth request, so a
 host that must pass it keeps the default.
 
 ## Redundancy

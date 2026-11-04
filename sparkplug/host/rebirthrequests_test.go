@@ -7,9 +7,15 @@ package host
 // (Config.NoRebirthRequests) stops every request either kind sends.
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	nio "github.com/joyautomation/nautilus/io"
 
 	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/sparkplug/internal/linkcut"
@@ -234,4 +240,102 @@ func TestRebirthRequestsPassiveRebirthTag(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A node that is online but waiting for a birth (an unfilled sequence gap
+// unprimed it, or it sent an alias its birth never defined) has data that
+// may be frozen, so it reads Stale, not Good, until the next NBIRTH. With
+// rebirth-requests: false that wait has no end of its own, and the node's
+// later data keeps it from going stale by silence.
+func TestWaitingForABirthReadsStale(t *testing.T) {
+	for _, requests := range []bool{true, false} {
+		t.Run(fmt.Sprintf("gap/requests=%v", requests), func(t *testing.T) {
+			d, _ := newTestDriver(t, testManifest(), Config{NoRebirthRequests: !requests,
+				ReorderTimeout: 20 * time.Millisecond, StaleAfter: time.Minute})
+			d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(1, dbl("Well/Level", 1))))
+			if q := d.Quality()["W6_Well_Level"]; q != nio.Good {
+				t.Fatalf("after the birth Quality = %v, want Good", q)
+			}
+			d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(2, dbl("Well/Level", 2)))) // seq 1 lost
+			time.Sleep(100 * time.Millisecond)                                           // the gap expires
+			for seq := uint64(3); seq < 50; seq++ {
+				d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(seq, dbl("Well/Level", float64(seq)))))
+			}
+			d.sweepStale(time.Now().Add(30 * time.Second))
+			vals := d.snapshot()
+			if vals["W6__Online"] != true || vals["W6_Well_Level"] != 1.0 {
+				t.Fatalf("W6__Online = %#v, W6_Well_Level = %#v; want true and the birth's 1",
+					vals["W6__Online"], vals["W6_Well_Level"])
+			}
+			if q := d.Quality()["W6_Well_Level"]; q != nio.Stale {
+				t.Errorf("waiting for a birth: Quality = %v, want Stale", q)
+			}
+
+			d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(2, dbl("Well/Level", 7))))
+			if q := d.Quality()["W6_Well_Level"]; q != nio.Good {
+				t.Errorf("after the next birth Quality = %v, want Good", q)
+			}
+		})
+		t.Run(fmt.Sprintf("alias/requests=%v", requests), func(t *testing.T) {
+			d, _ := newTestDriver(t, testManifest(), Config{NoRebirthRequests: !requests})
+			d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(1, dbl("Well/Level", 1))))
+			d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(1,
+				sparkplug.Metric{Alias: 77, Datatype: spb.DataType_Double, Value: 5.0})))
+			if q := d.Quality()["W6_Well_Level"]; q != nio.Stale {
+				t.Errorf("after an unknown alias Quality = %v, want Stale", q)
+			}
+			d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(2, dbl("Well/Level", 7))))
+			if q := d.Quality()["W6_Well_Level"]; q != nio.Good {
+				t.Errorf("after the next birth Quality = %v, want Good", q)
+			}
+		})
+	}
+}
+
+// With rebirth requests off, the wait for a birth is logged once per wait,
+// not once per process: the next birth re-arms it. Nothing claims a
+// request was sent.
+func TestRebirthRequestsOffLogsOncePerWait(t *testing.T) {
+	var buf syncBuffer
+	d, _ := newTestDriver(t, testManifest(), Config{NoRebirthRequests: true, ReorderTimeout: 20 * time.Millisecond})
+	d.log = slog.New(slog.NewTextHandler(&buf, nil))
+
+	gap := func(bd int64) {
+		t.Helper()
+		d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(bd, dbl("Well/Level", 1))))
+		d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(2, dbl("Well/Level", 2)))) // seq 1 lost
+		time.Sleep(100 * time.Millisecond)
+		for seq := uint64(3); seq < 6; seq++ {
+			d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(seq, dbl("Well/Level", 3))))
+		}
+	}
+	gap(1)
+	if n := strings.Count(buf.String(), "waiting for a birth"); n != 1 {
+		t.Fatalf("first wait logged %d times; want 1\n%s", n, buf.String())
+	}
+	gap(2)
+	if n := strings.Count(buf.String(), "waiting for a birth"); n != 2 {
+		t.Fatalf("second wait: %d lines in total; want 2\n%s", n, buf.String())
+	}
+	if strings.Contains(buf.String(), "requesting rebirth") {
+		t.Errorf("a host with rebirth requests off logged a request:\n%s", buf.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the gap timer's goroutine.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

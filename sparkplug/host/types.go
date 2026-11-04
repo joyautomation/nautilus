@@ -531,6 +531,10 @@ type nodeState struct {
 	// rebirthAsked (B2) debounces rebirth requests to one per birth cycle:
 	// set when the state machine asks, cleared by the next NBIRTH.
 	rebirthAsked bool
+	// aliasMiss marks a node that sent an alias its birth never defined:
+	// its alias table is out of step, so its data reads Stale until the
+	// next NBIRTH clears it.
+	aliasMiss bool
 	// metrics counts the node-level metrics the last birth carried.
 	metrics int
 	// stale marks a node silent for longer than StaleAfter.

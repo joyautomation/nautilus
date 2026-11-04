@@ -160,7 +160,8 @@ claims:
       and a binding whose site is not online (NDEATH, the host's broker
       connection lost, silence past `stale-after`, or DDEATH for a
       device-scoped metric) is Stale, scoped to the node or device
-      concerned.
+      concerned. So is a binding whose site is online but waiting for a
+      birth (an unfilled sequence gap, or an alias its birth never defined).
     source: "#per-tag-quality"
     tests:
       - go ./sparkplug/host TestBrokerLossTakesNodesOfflineAndCountsOnce
@@ -170,6 +171,7 @@ claims:
       - go ./sparkplug/host TestQualityDeviceDeathStaleJustThatDevice
       - go ./sparkplug/host TestQualityStaleSweepMarksStale
       - go ./sparkplug/host TestQualityMissingMetricFromBirth
+      - go ./sparkplug/host TestWaitingForABirthReadsStale
   - id: SPH-019
     claim: >-
       Writable bindings and the companions are host-authored and get no
@@ -469,7 +471,9 @@ claims:
       sequence gap, on an unknown alias or a stale node, and an operator's
       request is refused. The host still adopts births it did not ask for
       and counts outages as usual; with `primary: false` it publishes
-      nothing.
+      nothing. A site left waiting for a birth (an unfilled sequence gap or
+      an unknown alias) stays online with its data Stale until one arrives,
+      and the wait is logged once per wait.
     source: "#passive-hosts-and-rebirth-requests"
     tests:
       - go ./sparkplug/host TestRebirthRequestsOnStart
@@ -477,4 +481,6 @@ claims:
       - go ./sparkplug/host TestRebirthRequestsOnDataBeforeBirth
       - go ./sparkplug/host TestRebirthRequestsOffAsksForNothing
       - go ./sparkplug/host TestRebirthRequestsPassiveRebirthTag
+      - go ./sparkplug/host TestWaitingForABirthReadsStale
+      - go ./sparkplug/host TestRebirthRequestsOffLogsOncePerWait
       - go ./internal/project TestSparkplugHostRebirthRequestsOffPublishesNothing

@@ -97,7 +97,7 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 			// Data before a birth: the host started mid-stream, or the gap
 			// timer gave up. Retained births are forbidden by the spec, so
 			// the only cure is to ask.
-			d.askRebirthLocked(ns)
+			d.askRebirthLocked(ns, "data before a birth")
 			break
 		}
 		if d.acceptSeqLocked(ns, kind, device, p) {
@@ -206,6 +206,7 @@ func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
 	ns.stopGap()
 	ns.pending = nil
 	ns.rebirthAsked = false
+	ns.aliasMiss = false
 	ns.setOnline(true)
 	ns.seq = p.Seq
 	ns.seqPrimed = true
@@ -371,6 +372,7 @@ func (d *Driver) brokerLostLocked() {
 		ns.pending = nil
 		ns.seqPrimed = false
 		ns.rebirthAsked = false
+		ns.aliasMiss = false
 		wasOnline := ns.online
 		ns.setOnline(false)
 		for _, dev := range ns.devices {
@@ -524,32 +526,35 @@ func (d *Driver) gapExpired(nk nodeKey, gen uint64) {
 	ns.pending = nil
 	ns.seqPrimed = false
 	d.stats.SeqGaps++
-	d.askRebirthLocked(ns)
+	d.askRebirthLocked(ns, "sequence gap")
 	d.mu.Unlock()
 
-	d.stateLogger().Warn("sparkplug host: sequence gap, requesting rebirth",
-		"group", nk.Group, "node", nk.EdgeNode, "buffered", held)
+	if !d.cfg.NoRebirthRequests {
+		d.stateLogger().Warn("sparkplug host: sequence gap, requesting rebirth",
+			"group", nk.Group, "node", nk.EdgeNode, "buffered", held)
+	} // else askRebirthLocked logged the wait
 	d.flushRebirths()
 }
 
 // ── rebirth requests ─────────────────────────────────────────────────────
 
 // askRebirthLocked queues one NCMD Node Control/Rebirth for this node,
-// debounced to one per birth cycle so a dark site cannot storm the broker.
-// With rebirth requests off (Config.NoRebirthRequests) it asks for nothing
-// and counts nothing: the node waits for a birth someone else asks for.
+// debounced to one per birth cycle so a dark site cannot storm the broker;
+// why names the cause for the log. With rebirth requests off
+// (Config.NoRebirthRequests) it asks for nothing and counts nothing: the
+// node waits for a birth someone else asks for, and the wait is logged once
+// (the same debounce, so the next birth or broker loss re-arms it).
 // Caller holds d.mu; the hook runs later, in flushRebirths.
-func (d *Driver) askRebirthLocked(ns *nodeState) {
-	if d.cfg.NoRebirthRequests {
-		d.warnOnceLocked("norebirth:"+ns.group+"/"+ns.edge,
-			"sparkplug host: waiting for a birth; rebirth requests are off (rebirth-requests: false)",
-			"group", ns.group, "node", ns.edge)
-		return
-	}
+func (d *Driver) askRebirthLocked(ns *nodeState, why string) {
 	if ns.rebirthAsked {
 		return
 	}
 	ns.rebirthAsked = true
+	if d.cfg.NoRebirthRequests {
+		d.stateLogger().Warn("sparkplug host: waiting for a birth; rebirth requests are off (rebirth-requests: false)",
+			"group", ns.group, "node", ns.edge, "reason", why)
+		return
+	}
 	d.stats.Rebirths++
 	d.rebirthQ = append(d.rebirthQ, nodeKey{Group: ns.group, EdgeNode: ns.edge})
 }
@@ -611,10 +616,17 @@ func (d *Driver) resolveMetricLocked(ns *nodeState, device string, m sparkplug.M
 	}
 	ref, ok := ns.aliases[m.Alias]
 	if !ok {
+		// The alias table is out of step with the node: some metric of
+		// ours may be the one we cannot resolve, so the node's data reads
+		// Stale until its next birth (bindingQualityLocked).
+		ns.aliasMiss = true
+		msg := "sparkplug host: unknown metric alias; requesting rebirth"
+		if d.cfg.NoRebirthRequests {
+			msg = "sparkplug host: unknown metric alias"
+		}
 		d.warnOnceLocked(fmt.Sprintf("alias:%s/%s/%d", ns.group, ns.edge, m.Alias),
-			"sparkplug host: unknown metric alias; requesting rebirth",
-			"group", ns.group, "node", ns.edge, "alias", m.Alias)
-		d.askRebirthLocked(ns)
+			msg, "group", ns.group, "node", ns.edge, "alias", m.Alias)
+		d.askRebirthLocked(ns, "unknown metric alias")
 		return "", "", false
 	}
 	return ref.Metric, ref.Device, true
@@ -1074,7 +1086,7 @@ func (d *Driver) sweepStale(now time.Time) {
 				"group", ns.group, "node", ns.edge, "silent", now.Sub(time.UnixMilli(ns.lastMs)))
 		}
 		ns.stale = true
-		d.askRebirthLocked(ns)
+		d.askRebirthLocked(ns, "node stale")
 	}
 	d.mu.Unlock()
 	d.flushRebirths()
