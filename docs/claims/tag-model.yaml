@@ -320,7 +320,7 @@ claims:
       - go ./runtime TestWholeAssignmentOwnsEverythingBeneath
       - go ./runtime TestWholeWordAssignmentOwnsEveryBit
       - go ./server TestHTTPMemberWritesSurviveProgramMemberWrites
-  - id: TAG-055
+  - id: TAG-056
     claim: >-
       Assigning the sign bit of a signed type assigns the sign: the
       program's I16.15 := FALSE with a writer's -1 in the same scan commits
