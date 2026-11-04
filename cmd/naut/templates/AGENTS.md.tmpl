@@ -20,6 +20,9 @@ naut run              # optional: dashboard + tag API on http://localhost:8080
 - Run `naut check` after every edit. Treat a warning as a bug: "local X
   shadows the project tag X" and the like mean the logic is not doing what
   it looks like.
+- Warnings with an ID (`LD001`, `FBD002`, `SFC001`) are the diagram rules
+  below, checked. Fix the diagram; never add a `(* @allow ID: reason *)`
+  pragma to silence one unless a person asked for it.
 - `naut check` does not run the logic. When behavior changes, add or change
   a test in `*_test.yaml` and run `naut test`.
 
@@ -114,20 +117,22 @@ contact (any comparison), `inst:TON(PT := T#5S)` block in the rung,
 2. **Read left to right**: request or mode, then permissives (usually NC
    contacts), then the coil at the right. Seal-in: `[ Start | Run ] /Stop
    ( Run )`.
-3. **Keep rungs small**: at most about 6 elements in series, and no branch
-   inside a branch (`[ a [ b | c ] | d ]`). Past that, compute a named
+3. **Keep rungs small**: at most 6 elements in series (LD003), and no branch
+   inside a branch (`[ a [ b | c ] | d ]`, LD002). Past that, compute a named
    intermediate BOOL on its own rung (`PumpPermissive`, `PumpAutoCall`) and
    use it as one contact.
 4. **Factor, don't repeat**: a contact on every leg of a branch belongs once,
-   in series, outside the branch.
+   in series, outside the branch (LD004).
 5. **Name and comment every rung**: a real name, plus `(* … *)` saying
-   *why*, not restating the contacts.
+   *why*, not restating the contacts (LD005).
 6. **One coil per BOOL.** Drive a BOOL with `( X )` on exactly one rung. A
    latch is a `( S X )` / `( R X )` pair; never mix those with `( X )` on the
-   same tag. `naut check` does not warn about this.
+   same tag (LD001).
 7. **Power is boolean.** Comparisons are contacts; `ADD(...)` is not. Numeric
    work goes inside a comparison's arguments or a `{ }` move. More than one
-   short assignment means the logic belongs in FBD or ST.
+   short assignment means the logic belongs in FBD or ST. Compare against a
+   setpoint tag or a named constant, not a number: `GE(Level, HighLevelSP)`,
+   not `GE(Level, 90.0)` (LD006).
 8. **Timers and counters sit in the rung**: power drives `IN` (`CU`, `CD`,
    `CLK`); never pass it yourself. Capture values with `=>`:
    `c1:CTU(PV := 9999, CV => Starts)`.
@@ -166,15 +171,16 @@ Forms: `wire = BLOCK(...)` names a block output; `Tag := expr` is a coil
 a network.
 
 1. **One `NETWORK 'title'` per function**: one loop, one alarm, one scaling.
-   Each draws as its own titled band.
+   Each draws as its own titled band (FBD002).
 2. **One block per line.** Give each intermediate result a wire named for
    what it carries (`hiLevel`, `err`, `heatOn`), not `w1`. Nest calls at
-   most two deep; a long nested expression draws as a wide tree of
+   most two deep (FBD001); a long nested expression draws as a wide tree of
    crossing wires.
 3. **Write in signal order**: wires from inputs, then block calls, then the
    coils that write tags.
 4. **Compare once, reuse the wire.** One variable feeding many blocks in a
-   network draws long crossing wires; one named comparison does not.
+   network draws long crossing wires; one named comparison does not. Compare
+   against a setpoint tag or a named constant, not a number (FBD003).
 5. **Use the library block** (`PID`, `LIMIT`, `SEL`, `TON`, `R_TRIG`, `CTU`,
    `AND`/`OR` with several inputs) instead of rebuilding it from math, and
    do not add blocks for what the block already does.
@@ -228,7 +234,7 @@ SFC
   TRANSITION t_empty FROM Drain TO Idle := LT101_Level <= EmptySP;
   END_TRANSITION
 
-  (* ACTION bodies go after the steps and transitions, before END_SFC *)
+  (* by convention, ACTION bodies go last, before END_SFC *)
   ACTION CountBatch:
     BatchCount := BatchCount + 1;
   END_ACTION
@@ -236,16 +242,16 @@ END_SFC
 END_PROGRAM
 ```
 
-1. **Steps are process states** (`Fill`, `Heat`), not `S1`, `S2`.
+1. **Steps are process states** (`Fill`, `Heat`), not `S1`, `S2` (SFC002).
    Transitions get names too (`t_full`).
 2. **The condition lives in the transition**, written in process terms. Never
    keep a `State` integer that actions set and transitions compare: the
-   chart then shows `State = 2` and hides the logic.
+   chart then shows `State = 2` and hides the logic (SFC001).
 3. **Drive outputs with associations** (`N FillReq;`). Use an `ACTION`
    body (ST) only for what an association cannot do, such as a counter
    (`P0 CountBatch;` above); keep it short, with no `IF` deciding where the
-   chart goes next. `ACTION name: … END_ACTION` blocks go inside the chart,
-   after the transitions and before `END_SFC`.
+   chart goes next. `ACTION name: … END_ACTION` blocks go inside the chart;
+   put them after the transitions, so the chart reads steps first.
 4. **One `INITIAL_STEP`**, a safe idle with no outputs. Every step reachable.
 5. **Alternatives**: transitions sharing a source fire by declaration order,
    so declare abort and fault paths first.

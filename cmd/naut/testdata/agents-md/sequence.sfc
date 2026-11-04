@@ -35,7 +35,7 @@ SFC
   TRANSITION t_empty FROM Drain TO Idle := LT101_Level <= EmptySP;
   END_TRANSITION
 
-  (* ACTION bodies go after the steps and transitions, before END_SFC *)
+  (* by convention, ACTION bodies go last, before END_SFC *)
   ACTION CountBatch:
     BatchCount := BatchCount + 1;
   END_ACTION
