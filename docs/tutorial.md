@@ -45,7 +45,10 @@ You should see the VS Code welcome page.
 1. In VS Code, click the *Extensions* icon on the left (four squares), or
    press `Ctrl+Shift+X` (macOS: `Cmd+Shift+X`).
 2. In the search box, type `nautilus IEC 61131-3`.
-3. Click *Install* on the result by `joyauto`.
+3. Click *Install* on the result named *nautilus IEC 61131-3* by `joyauto`.
+4. A window asks *Do you trust the publisher "joyauto"?* Click
+   *Trust Publisher & Install*.
+5. Click the result's name to open its page.
 
 You should see the extension's page with an *Uninstall* button.
 
@@ -122,13 +125,16 @@ You should see `created motor/ — a manifest project, no Go required`
 and a short list of next steps.
 
 3. In VS Code, choose *File*, then *Open Folder…* (macOS: *File*, then
-   *Open…*). Pick the `motor` folder in `Documents`.
+   *Open…*). In the *Open Folder* window, pick the `motor` folder in
+   `Documents` and click *Open*.
 4. If VS Code asks *Do you trust the authors of the files in this
    folder?*, click *Yes, I trust the authors*. You made the folder a
    moment ago.
 5. If VS Code offers to install recommended extensions, click *Install*.
 
-You should see these files in the Explorer on the left:
+You should see these files in the Explorer on the left, among a few
+others (`README.md`, `.gitignore` and the `.github` and `.vscode`
+folders):
 
 - `nautilus.yaml`: the project. It lists the tags and the programs.
 - `program.ld`: your ladder program.
@@ -204,10 +210,14 @@ Read the rung from left to right:
 ### 3.3 See it as a ladder diagram
 
 1. Right-click the `program.ld` tab at the top.
-2. Choose *Open With…*, then *Ladder Diagram*.
+2. Choose *Reopen Editor With…*, then, in the list that appears, *Ladder
+   Diagram*.
 
-You should see the rung drawn with contacts and a coil. To go back to the
-text, click *Show Source* in the editor's title bar.
+You should see the rung drawn with contacts and a coil, and a yellow
+*offline* pill at the top right (it turns green when a controller is
+running, in Part 5). To see the text, click *Show Source* in the editor's
+title bar (the icon with a file and an arrow). The text opens beside the
+diagram.
 
 ### 3.4 Check it
 
@@ -221,9 +231,10 @@ naut check .
 
 You should see `naut check: 1 file(s), 0 with errors`.
 
-To see an error, change `StartPB` in the rung to `StartPBX`, save, and look
-at the *Problems* panel (menu *View*, then *Problems*). You should see an
-error naming `StartPBX`. Change it back and save.
+To see an error, click *Show Source* to open the text, change `StartPB` in
+the rung to `StartPBX`, save, and look at the *Problems* panel (menu
+*View*, then *Problems*). You should see `undeclared identifier
+"StartPBX"`. Change it back and save.
 
 ## Part 4. Test it
 
@@ -322,11 +333,13 @@ Keep `naut run` going. If you stopped it, start it again.
 1. In VS Code, open `program.ld` as a ladder diagram (Part 3.3).
 
 You should see the rung with live values and power flow. Wires that carry
-power are highlighted.
+power are highlighted. The status bar at the bottom right says *nautilus:
+live* and the diagram has a green *live* pill. The project already points
+at `http://localhost:8080`, so VS Code connects by itself.
 
-2. If you see no values, press `Ctrl+Shift+P` (macOS `Cmd+Shift+P`), type
-   `nautilus: Connect to Controller`, press Enter, and press Enter again
-   to accept `http://localhost:8080`.
+2. If you see *offline* instead, press `Ctrl+Shift+P` (macOS
+   `Cmd+Shift+P`), type `nautilus: Connect to Controller`, and press Enter
+   to accept `http://localhost:8080`. A message says *nautilus: connected*.
 3. In the browser dashboard, click the `StartPB` toggle on and off.
 
 You should see the rung light up in VS Code. After `StartPB` goes off, the
@@ -334,19 +347,22 @@ You should see the rung light up in VS Code. After `StartPB` goes off, the
 
 ### 6.2 Open the Live Values panel
 
-1. Click the *nautilus* icon in the Activity Bar on the left.
+1. Click the *nautilus* icon in the Activity Bar on the left (three
+   horizontal lines).
 
-You should see a *Live Values* list with every tag and its value.
+You should see *NAUTILUS: LIVE VALUES* with a *Tags* group that lists every
+tag and its value.
 
 ### 6.3 Set a value
 
 The motor is running after step 6.1. Stop it from VS Code.
 
-1. In the *Live Values* list, click the pencil next to `StopPB`.
-2. Type `true` and press Enter. A confirmation may appear. Click the
-   confirm button.
+1. In the *Live Values* list, point at `StopPB`. A lock and a pencil
+   appear at the right of the row. Click the pencil.
+2. Type `true` and press Enter.
 
-You should see `MotorRun` go off.
+You should see a message *nautilus: set StopPB = TRUE* and `MotorRun` go
+off.
 
 3. Click the pencil next to `StopPB` again, type `false`, and press Enter.
 
@@ -360,14 +376,18 @@ forces to test an interlock before the real sensor is wired.
 
 1. In the dashboard, click the `StartPB` toggle on, then off. The motor
    runs again.
-2. In VS Code, open `program.ld` as text (*Show Source*).
+2. In VS Code, open `program.ld` as text: click *Show Source* in the
+   diagram's title bar. If the text is too narrow to read, close the
+   diagram on the left.
 3. Right-click `StopPB` in the rung.
-4. Choose *nautilus: Force…*, type `true`, and press Enter. Confirm if
-   asked.
+4. Choose *nautilus: Force…*, type `true`, and press Enter. A window asks
+   *Force StopPB (now FALSE) to TRUE on http://localhost:8080?* Click
+   *Force*.
 
-You should see `MotorRun` go off, an amber **F** next to `StopPB`, and
-*1 forces active* in the status bar at the bottom. The force holds `StopPB`
-at `true`, so the rung cannot pass power.
+You should see `MotorRun` go off, an amber *F TRUE* next to `StopPB`, a
+*Forces* group in the *Live Values* list, and *1 force active* in the
+status bar at the bottom. The force holds `StopPB` at `true`, so the rung
+cannot pass power.
 
 5. In the dashboard, click the `StartPB` toggle on.
 
@@ -375,10 +395,10 @@ You should see `StartPB` change but `MotorRun` stay off. Now try the
 `StopPB` toggle. The controller refuses the write, because the tag is
 forced.
 
-6. Click *1 forces active* in the status bar and choose to remove all
-   forces.
+6. Click *1 force active* in the status bar. In the list, choose *Remove
+   all forces*, then click *Remove All* in the window that asks.
 
-You should see the **F** disappear. `StartPB` is still on, so the motor
+You should see the *F TRUE* disappear. `StartPB` is still on, so the motor
 starts.
 
 7. In the dashboard, click the `StartPB` toggle off, then click the
