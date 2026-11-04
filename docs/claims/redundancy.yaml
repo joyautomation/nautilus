@@ -224,7 +224,9 @@ claims:
       keep-alive re-asserts nothing before that push. A replica that leads
       from its first scan keeps the drivers' baseline: `naut run` starts
       the drivers only after the elector's first decision, which Run makes
-      at once rather than a tick in, bounded by 5 s. EtherNet/IP, OptoMMP
+      at once rather than a tick in (a first Lease GET that fails is
+      retried, not taken as standby), bounded by 5 s; a stop during that
+      wait starts nothing. EtherNet/IP, OptoMMP
       and the hw drivers (SNMP, Redfish, Prometheus) do not do this yet
       (#605, #607).
     source: "#redundancy"
@@ -236,15 +238,20 @@ claims:
       - go ./opcua TestStandbyFirstPushCommands
       - go ./modbus TestRestartAfterStandbyKeepsNoBaseline
       - go ./leader TestRunDecidesBeforeItsFirstTick
+      - go ./leader TestRunRetriesAFirstTickThatMissedTheAPI
       - go ./cmd/naut TestAwaitDecisionWaitsForTheFirstDecision
+      - go ./cmd/naut TestAwaitDecisionEndsOnAStop
+      - go ./cmd/naut TestDriversStartAfterTheFirstDecision
     partial: true
     note: >-
       The Modbus tests run the driver under the runtime with a test
       coordinator and the same flag as its write gate. The OPC UA tests
       call WriteOutputs directly. The elector's first decision is asserted
-      against a fake Lease API (acquire, standby, standalone), and the
-      bounded wait on its own; that runProject calls the wait before it
-      starts the drivers is not asserted end to end (it needs a cluster). A leadership flip the drivers do not see
+      against a fake Lease API (acquire, standby, standalone, a first GET
+      that fails), and runProject's driver start (startDriverWhenDecided)
+      against a fake elector and driver: Start runs only after the
+      decision, at once without redundancy, and not at all after a stop.
+      A real cluster is not exercised. A leadership flip the drivers do not see
       (MB-046's window) is a known limit.
 
   - id: RED-020

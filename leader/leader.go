@@ -162,7 +162,17 @@ func (e *Elector) Run(ctx context.Context) {
 	}
 	// The first decision is made at once, not a tick in: until it is,
 	// a replica that will lead would look like a standby (see Decided).
-	e.tick(time.Now())
+	// A tick that never reached the API decides nothing, so it is tried
+	// again, every duration/16, for up to one lease duration: an API blip
+	// at start must not turn a replica that will lead into a standby.
+	for deadline := time.Now().Add(e.duration); !e.tick(time.Now()) && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			e.markDecided()
+			return
+		case <-time.After(e.duration / 16):
+		}
+	}
 	e.markDecided()
 	tick := time.NewTicker(e.duration / 4)
 	defer tick.Stop()
@@ -178,12 +188,13 @@ func (e *Elector) Run(ctx context.Context) {
 
 // tick takes now as a parameter (rather than reading time.Now() itself) so
 // tests can drive the acquire/renew/steal/follow state machine with
-// controlled clocks instead of real sleeps.
-func (e *Elector) tick(now time.Time) {
+// controlled clocks instead of real sleeps. It reports whether it reached
+// the API (the Lease GET answered).
+func (e *Elector) tick(now time.Time) bool {
 	l, code, err := e.get()
 	if err != nil {
 		e.maybeStepDown(now)
-		return
+		return false
 	}
 
 	switch {
@@ -220,6 +231,7 @@ func (e *Elector) tick(now time.Time) {
 	default:
 		e.setLeader(false, l.Spec.HolderIdentity, l.Spec.LeaseTransitions, now)
 	}
+	return true
 }
 
 func (e *Elector) expired(l *lease, now time.Time) bool {

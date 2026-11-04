@@ -59,18 +59,59 @@ func electorFor(proj *project.Project, addr string) (*leader.Elector, error) {
 // and behave as a standby's do (no start-up baseline, #606).
 const firstDecisionTimeout = 5 * time.Second
 
+// decider is the part of leader.Elector startup waits on.
+type decider interface{ Decided() <-chan struct{} }
+
 // awaitDecision waits until el has made its first decision (leader or
-// standby), or timeout. It reports whether the decision came in time.
-func awaitDecision(el interface{ Decided() <-chan struct{} }, timeout time.Duration) bool {
+// standby), until timeout, or until ctx ends (a stop during startup). It
+// reports whether the decision came.
+func awaitDecision(ctx context.Context, el decider, timeout time.Duration) bool {
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	select {
 	case <-el.Decided():
 		return true
+	case <-ctx.Done():
+		return false
 	case <-t.C:
 		fmt.Fprintln(os.Stderr, "naut run: redundancy: no leadership decision after", timeout, "- starting as a standby")
 		return false
 	}
+}
+
+// startDriverWhenDecided starts drv, when it has a loop of its own to
+// start, once dec (nil without redundancy) has made its first decision or
+// timeout has passed: a replica that leads from its first scan is then a
+// plain start and keeps its drivers' start-up baseline, and only one that
+// starts as a standby sees its write gate closed and drops it (#606). A
+// stop during the wait starts nothing. It returns the teardown runProject
+// defers, nil when there is none.
+//
+// A driver that also has Stop() owns its own teardown, so it gets a
+// context Ctrl+C does NOT cancel and is stopped by the returned func
+// instead. The ordering matters: the Sparkplug host must publish its
+// STATE death certificate on a live connection before the DISCONNECT, and
+// cancelling its context first would tear the session down out from
+// under it. Stop publishes synchronously and waits, so by the time it
+// returns the certificate is on the wire.
+func startDriverWhenDecided(ctx context.Context, dec decider, timeout time.Duration, drv any) (stop func()) {
+	if dec != nil && !awaitDecision(ctx, dec, timeout) && ctx.Err() != nil {
+		return nil
+	}
+	s, ok := drv.(interface{ Start(context.Context) })
+	if !ok {
+		return nil // the loopback memory driver has nothing to start
+	}
+	if st, ok := drv.(interface{ Stop() }); ok {
+		dctx, dcancel := context.WithCancel(context.Background())
+		s.Start(dctx)
+		return func() {
+			st.Stop()
+			dcancel() // belt and braces: Stop cancels its own child
+		}
+	}
+	s.Start(ctx)
+	return nil
 }
 
 // wireRedundancy answers a loaded project to its elector: the runtime scans
@@ -152,7 +193,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var dec decider
 	if el != nil {
+		dec = el
 		// The elector runs on its own context, not the signal's: it keeps
 		// renewing the lease through the last scan and the last retain save
 		// that follow a stop, so no standby takes over and loads the store
@@ -169,31 +212,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			<-elDone
 			el.Release()
 		}()
-		// Drivers start only once the elector has decided, so a replica
-		// that leads from its first scan is a plain start and keeps its
-		// drivers' start-up baseline; only one that starts as a standby
-		// has its gate seen closed and drops it (#606).
-		awaitDecision(el, firstDecisionTimeout)
 	}
-	// Drivers with their own polling loop (eip, sparkplug-host) start here;
-	// the loopback memory driver has nothing to start.
-	//
-	// A driver that also has Stop() owns its own teardown, so it gets a
-	// context Ctrl+C does NOT cancel and is stopped by the deferred call
-	// instead. The ordering matters: the Sparkplug host must publish its
-	// STATE death certificate on a live connection before the DISCONNECT,
-	// and cancelling its context first would tear the session down out from
-	// under it. Stop publishes synchronously and waits, so by the time this
-	// returns the certificate is on the wire.
-	if s, ok := proj.Runtime.Driver.(interface{ Start(context.Context) }); ok {
-		if st, ok := proj.Runtime.Driver.(interface{ Stop() }); ok {
-			dctx, dcancel := context.WithCancel(context.Background())
-			defer dcancel() // belt and braces: Stop cancels its own child
-			s.Start(dctx)
-			defer st.Stop()
-		} else {
-			s.Start(ctx)
-		}
+	// Drivers with their own polling loop (eip, sparkplug-host, modbus)
+	// start here, after the elector's first decision.
+	if stop := startDriverWhenDecided(ctx, dec, firstDecisionTimeout, proj.Runtime.Driver); stop != nil {
+		defer stop()
 	}
 	// Run returns after the last scan and, with a retain store, its last
 	// save; the stop below waits for it, so an orderly stop keeps a

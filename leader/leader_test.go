@@ -24,6 +24,8 @@ type fakeAPI struct {
 	lease *lease
 	rv    int
 	fail  bool
+	// failNext answers that many requests 500 before serving normally.
+	failNext int
 
 	// raceGate, when armed, makes GETs on the lease block until raceWant of
 	// them have arrived, so two racing electors are guaranteed to read the
@@ -61,7 +63,10 @@ func (f *fakeAPI) setFail(v bool) {
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
-	if f.fail {
+	if f.fail || f.failNext > 0 {
+		if f.failNext > 0 {
+			f.failNext--
+		}
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -385,4 +390,27 @@ func TestRunDecidesBeforeItsFirstTick(t *testing.T) {
 		}
 		waitDecided(t, e)
 	})
+}
+
+// A first tick that never reached the API (a blip: the Lease GET failed)
+// decides nothing: Run tries again within its lease duration, and the
+// first decision is the one the API gave. A replica that will lead is
+// then a plain start, not a standby that commands every output a second
+// later (#606).
+func TestRunRetriesAFirstTickThatMissedTheAPI(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	fake.failNext = 1
+	e := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	e.duration = 4 * time.Second // retries every 250 ms; the ticker's first tick is 1 s in
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+	select {
+	case <-e.Decided():
+	case <-time.After(3 * time.Second):
+		t.Fatal("no first decision")
+	}
+	if !e.IsLeader() {
+		t.Fatal("a failed first GET was taken as the first decision (standby); the retry acquires an empty lease")
+	}
 }

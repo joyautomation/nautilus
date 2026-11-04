@@ -540,9 +540,6 @@ func (d *Driver) gateOpen() bool {
 			d.baseline = false // a standby has no baseline (#606)
 			d.wmu.Unlock()
 		case open && d.gateShut.Load():
-			if reopenHook != nil {
-				reopenHook()
-			}
 			d.forgetWritten()
 			d.gateShut.Store(false)
 			d.wanted.Store(true)
@@ -553,14 +550,18 @@ func (d *Driver) gateOpen() bool {
 	return open
 }
 
-// reopenHook, when a test sets it, runs as a reopen is handled, before the
-// forget: the window another looker must not slip through.
+// reopenHook, when a test sets it, runs at the start of forgetWritten: the
+// window another looker must not slip through, which must still see
+// gateShut set while it lasts.
 var reopenHook func()
 
 // forgetWritten empties every source's written: no value is the on-change
 // reference any more, so the next push sends them all, and no rewrite:
 // binding has anything to re-assert until it does.
 func (d *Driver) forgetWritten() {
+	if reopenHook != nil {
+		reopenHook()
+	}
 	for _, s := range d.sources {
 		s.mu.Lock()
 		clear(s.written)

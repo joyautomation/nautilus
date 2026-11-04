@@ -116,7 +116,8 @@ never computes.
   standby has no start-up baseline, so its first takeover commands every
   output, as the new primary of a hot-standby PLC pair does; a replica that
   leads from its first scan keeps the baseline. `naut run` starts the
-  drivers only after the elector's first decision (at most 5 s), so a
+  drivers only after the elector's first decision (at most 5 s; a Lease
+  read that fails at start is retried, not taken as standby), so a
   replica that acquires the lease at once is a plain start. One whose
   lease is still held by a predecessor that has not yet expired (a pod
   replaced under a new name) is a standby until it takes over, and so

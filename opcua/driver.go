@@ -526,7 +526,11 @@ func (d *Driver) gateOpen() bool {
 	open := gate()
 	// Steady state is one atomic load. A transition is made under turnMu,
 	// and gateShut is cleared only after the forget, so a second looker
-	// that finds the gate open meanwhile waits for the forget.
+	// that finds the gate open meanwhile waits for the forget. (Here the
+	// only reader of written is WriteOutputs, which looks first; one that
+	// slipped through would at worst skip an unchanged value that the
+	// push answering wanted then sends, so this mirrors modbus rather than
+	// guarding a hazard of its own.)
 	if shut := d.gateShut.Load(); shut == open {
 		d.turnMu.Lock()
 		switch {
