@@ -358,12 +358,13 @@ type Driver struct {
 	// which is what makes the whole state machine testable without a broker.
 	pub       publisher
 	connected bool
-	// brokerLost is set when the broker connection drops (brokerLostLocked)
-	// and cleared by the next CONNECT: a message the dead session's client
-	// still delivers in between is not applied, so it cannot bring a node
-	// back online the host can no longer see.
-	brokerLost bool
-	lastErr    error
+	// sessionDown is set when a session ends (brokerLostLocked) and while a
+	// new one is being opened, and cleared once all its subscriptions are in
+	// place: a message delivered in between, by the dead session's client or
+	// a half-open new one, is not applied, so it cannot bring a node online
+	// the host may be unable to see.
+	sessionDown bool
+	lastErr     error
 	// sessionTS is the will/birth timestamp captured once per connection
 	// attempt before CONNECT. The STATE birth must carry the byte-identical
 	// value the will carries (TCK host-topic-phid-birth-payload-timestamp).

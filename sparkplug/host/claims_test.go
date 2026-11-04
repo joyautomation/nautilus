@@ -395,13 +395,13 @@ func TestMqttCommandRaisedDuringAnOutageGoesOutOnReconnect(t *testing.T) {
 	waitConnected(t, d)
 
 	// Losing the broker took W6 offline (#540), so the command waits for
-	// the birth that answers the reconnect's rebirth request, like any
-	// command to a dark site.
+	// the births that answer the reconnect's rebirth request, like any
+	// command to a dark site: a device's command for its device's DBIRTH.
 	time.Sleep(300 * time.Millisecond)
 	if n := len(get()); n != 0 {
 		t.Fatalf("%d DCMD went out before W6 birthed again", n)
 	}
-	bringW6Online(t, d, addr, "edge-outage-2")
+	birthW6AndPLC1(t, d, edgePublisher(t, addr, "edge-outage-2"), 1)
 
 	msg := waitCmd(t, get, "the command raised during the outage", "spBv1.0/G/DCMD/W6/PLC1")
 	p, err := sparkplug.DecodePayload(msg.payload)

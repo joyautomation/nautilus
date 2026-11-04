@@ -185,14 +185,21 @@ node's NDEATH. A device that is already offline does not count again.
 
 **Losing the broker takes every site offline.** `__Online` means the host
 can reach the site now, as it does for every other driver. When the host
-loses its own broker connection, every site and device it tracks goes
-`__Online` false at once and counts one outage, as if each had sent an
-NDEATH. Their data reads `Stale` straight away, without waiting for
-`stale-after`. On reconnect the host asks every site to rebirth (unless
+loses its own broker connection, or fails to reconnect after leaving a
+session on purpose (a leader that loses its lease on a partitioned link),
+every site and device it tracks goes `__Online` false at once and counts
+one outage, as if each had sent an NDEATH. Their data reads `Stale`
+straight away, without waiting for `stale-after`. Failed reconnects after
+that count nothing more.
+
+On reconnect a leader host asks every site to rebirth (unless
 `rebirth-on-start` is off; then the first data a site sends asks for it).
-Each site and device comes back online at its next birth. That birth does
-not count again, because the site is already offline. Stopping nautilus
-counts nothing, and neither does a host that has not connected yet.
+A standby under `redundancy:` asks for nothing, so its sites stay offline
+and `Stale` until a birth it did not ask for, such as one the leader
+requested. Each site and device comes back online at its next birth. That
+birth does not count again, because the site is already offline. Stopping
+nautilus counts nothing, and neither does a host that has not connected
+yet, nor a reconnect after a leadership change that succeeds.
 
 **A rebirth counts as an outage for each device that was online.** A node
 rebirth takes the node's devices offline until each one's DBIRTH, so
@@ -246,8 +253,9 @@ the site already reports that value.**
 An operator who dials a setpoint on a site showing `__Online: false` has
 still asked for something, and the ask outlives the outage: the write is
 held per site (the latest value per tag, up to 256 tags) and delivered on
-that site's next `NBIRTH`/`DBIRTH` — after the birth has settled what the
-site actually holds. If the site comes back already at the commanded
+that site's next `NBIRTH`, or for a device's tag on that device's next
+`DBIRTH` — after the birth has settled what the site actually holds. A
+newer command that goes out in the meantime replaces the held one. If the site comes back already at the commanded
 value, the command is satisfied and nothing goes on the wire; if it comes
 back at anything else, one command goes out, and only for the members the
 operator touched. Write twice while the site is down and the second value

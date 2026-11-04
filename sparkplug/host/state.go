@@ -75,8 +75,8 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 	}
 
 	d.mu.Lock()
-	if d.brokerLost {
-		// Delivered by a session that has already dropped; see brokerLost.
+	if d.sessionDown {
+		// Delivered outside a complete session; see sessionDown.
 		d.mu.Unlock()
 		return
 	}
@@ -365,7 +365,7 @@ func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
 // reconnect does not count a second outage: nothing it darks is still
 // online (#540). Caller holds d.mu.
 func (d *Driver) brokerLostLocked() {
-	d.brokerLost = true
+	d.sessionDown = true
 	for _, ns := range d.nodes {
 		ns.stopGap()
 		ns.pending = nil
