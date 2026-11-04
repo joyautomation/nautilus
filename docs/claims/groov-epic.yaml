@@ -369,44 +369,52 @@ claims:
     tests:
       - go ./optommp TestStandbyLeavesALatchSet
     note: >-
-      Two replicas on the in-process fake, scans driven by hand.
+      The in-process fake: the standby runs its own session; the leader's
+      scans are driven by hand. Latch events at the takeover edge (lost
+      or delivered twice, as the guide says) are not exercised.
   - id: EPIC-030
     claim: >-
-      A standby never configures the stream or the custom data area: it
-      polls the packed areas, and a leader streaming beside it keeps stream
-      target #1 and its stream on time.
+      A standby changes no configuration on the unit: it sends no power-up
+      clear, sets no watchdog, writes no custom data area pointer and
+      configures no stream; it polls the packed areas, and a leader
+      streaming beside it keeps stream target #1 and its stream on time.
     source: "#redundancy"
     tests:
+      - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
       - go ./optommp TestStandbyLeavesTheStreamToTheLeader
-    partial: true
     note: >-
-      A leader and a standby against the in-process fake over loopback
-      TCP; the stream configuration is watched for 300 ms. That a standby
-      neither sends the power-up clear nor sets the watchdog is not
-      asserted.
+      The in-process fake over loopback TCP: a lone standby on a blank unit
+      (stream and watchdog in the manifest, a power-up clear owed), then a
+      standby beside a streaming leader with the stream configuration
+      watched for 300 ms.
   - id: EPIC-031
     claim: >-
-      A takeover moves the stream: the new leader configures it to itself
-      on the same connection, and the old leader stops using it, polls,
-      and does not take it back.
+      A takeover moves the stream: the new leader sends a power-up clear
+      owed and configures the watchdog, custom data area and stream to
+      itself without an outage, and the old leader stops using the stream,
+      polls, and does not take it back.
     source: "#redundancy"
     tests:
       - go ./optommp TestTakeoverMovesTheStream
-    partial: true
+      - go ./optommp TestLoneStandbyLeavesABlankUnitBlank
     note: >-
       In-process fake; the new leader's stream is watched for 300 ms after
-      the swap. That the switch costs no outage on the status points is not
-      asserted.
+      the swap, and neither replica's outage count moves.
   - id: EPIC-032
     claim: >-
-      A standby's clean stop puts nothing back: the leader's stream and
-      custom data area stay as the leader configured them. Only a leader's
-      clean stop restores them.
+      A standby's clean stop puts nothing back, and neither does that of a
+      leader that lost the lease before it looked again: the new leader's
+      stream and custom data area stay as it configured them. Only a
+      replica that still leads when it stops restores them, to what it
+      first found; after a takeover that is the previous leader's
+      configuration, not the unit's original, and a found stream of the
+      custom data area is restored as off.
     source: "#redundancy"
     tests:
       - go ./optommp TestStandbyStopLeavesTheStream
+      - go ./optommp TestOldLeaderStopDoesNotRestoreUnderTheNewLeader
       - go ./optommp TestDriverStopPutsTheStreamConfigBack
     partial: true
     note: >-
-      Under redundancy a found stream of the custom data area is put back
-      as off; no test stops a leader that took over from another.
+      No test stops a leader that took over from another, so what it
+      restores (and the found stream recorded as off) is not asserted.

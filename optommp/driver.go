@@ -284,7 +284,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	d.custom = custom
 	d.plan = newPlan(d.tags, custom)
 	d.packed = newPlan(d.tags, false)
-	d.cur = &d.plan
+	d.cur, d.curCustom = &d.plan, custom
 	return d, nil
 }
 
@@ -449,7 +449,9 @@ func (d *Driver) run(ctx context.Context) {
 	}
 	backoff := d.retryMin
 	for {
-		d.gateOpen() // a look (see SetWriteGate), on every connect attempt
+		// A look (see SetWriteGate), on every connect attempt; Health
+		// reports a standby's mode before its first session too.
+		d.standby.Store(!d.gateOpen())
 		conn, err := d.dial(ctx)
 		polled := false
 		if err == nil {
@@ -513,8 +515,13 @@ var errSwitch = errors.New("optommp: the write gate changed")
 // is owed and configures the watchdog, custom data area and stream the
 // manifest asks for. A leader whose gate closes stops using the stream
 // (its socket closes) and polls as a standby, leaving the unit's
-// configuration to the new leader: nothing is put back. Only a leader's
-// clean stop restores what it found.
+// configuration to the new leader: nothing is put back. Only the clean
+// stop of a replica whose gate is still open restores what it found, and
+// that is held in memory: after a takeover it is the previous leader's
+// configuration, not the unit's original (the guide says so). Persisting
+// the originals in the retain store was not chosen: the driver has no
+// handle on it, and an original recorded once goes stale if someone
+// changes the unit's stream in groov Manage while nautilus runs.
 
 // session is one connection: identity and chassis check, then the
 // session's role (see standbyNote) until an error or a stop. A leader
@@ -545,8 +552,13 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 	}
 	leading := false // a role whose configuration a clean stop restores
 	defer func() {
-		if ctx.Err() != nil && leading {
-			d.restore(c) // a clean stop: leave the unit as it was found
+		// A clean stop leaves the unit as it was found, but only while
+		// this replica still leads: one that lost the lease before its
+		// loop looked again must not put its configuration back over the
+		// new leader's. A leader's ordinary stop still restores, since
+		// `naut run` stops the drivers before it gives up the lease.
+		if ctx.Err() != nil && leading && d.gateOpen() {
+			d.restore(c)
 		}
 	}()
 	for first := true; ; first = false {
@@ -661,7 +673,7 @@ func (d *Driver) pollLoop(ctx context.Context, c *Client, lead bool) (polled boo
 			// slots it missed rather than running them back to back.
 			for slot = slot.Add(d.scanRate); !time.Now().Before(slot); slot = slot.Add(d.scanRate) {
 			}
-			if ok, err := d.sleepTo(ctx, c, slot); !ok {
+			if ok, err := d.sleepTo(ctx, c, slot, lead); !ok {
 				return polled, err
 			}
 			continue
@@ -772,12 +784,15 @@ func (d *Driver) poll(c *Client) error {
 
 // sleepTo waits on the driver's own thread until deadline, a millisecond
 // at a time in the kernel, writing any command that arrives meanwhile.
-// ok is false when ctx ended the wait or a write failed (err).
-func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time) (ok bool, err error) {
+// ok is false when ctx ended the wait, a write failed (err), or a look at
+// the gate between slow scans found it no longer matching lead (errSwitch).
+func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time, lead bool) (ok bool, err error) {
 	looked := time.Now()
 	for {
 		if time.Since(looked) >= lookEvery {
-			d.gateOpen() // a look between slow scans (see SetWriteGate)
+			if d.gateOpen() != lead { // a look between slow scans (see SetWriteGate)
+				return false, errSwitch
+			}
 			looked = time.Now()
 		}
 		rem := time.Until(deadline)

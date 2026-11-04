@@ -281,12 +281,17 @@ scans, so it never hands the driver a command, and its driver neither
 rewrites outputs on reconnect nor after a watchdog trip.
 
 **A standby changes nothing on the unit.** It keeps a session with the
-processor and polls the packed areas, two plain reads a scan, whatever
-the manifest asks for. It leaves the unit's configuration to the leader:
+processor and polls the packed areas, whatever the manifest asks for: the
+plain reads a polled scan makes (two on an ordinary chassis). It leaves
+the unit's configuration to the leader:
 it does not send the power-up clear, set the watchdog, write the custom
 data area's pointers, or configure the stream. It clears no latch: a
 latch reads set on the standby until the leader, which must see the
-event, delivers and clears it. A standby's clean stop puts nothing back.
+event, delivers and clears it. At the takeover edge a latch event can
+still be lost, when the old leader clears it in its last scan before it
+sees the gate close and its program never runs on it, or delivered twice,
+when both replicas lead for a moment while the lease changes hands. A
+standby's clean stop puts nothing back.
 Its reads still count as requests to the unit, so they feed the
 communication watchdog: a leader that hangs while it still holds the lease
 does not trip it
@@ -298,10 +303,23 @@ leader on the same connection, with no outage: it sends the power-up clear
 if one is owed and configures the watchdog, the custom data area and the
 stream as the manifest asks, pointing the stream at itself. A leader whose
 gate closes stops using the stream and polls as a standby; it leaves the
-configuration where it is, since the new leader now owns it. Only the
-leader's clean stop puts the stream and the pointers back, and under
-redundancy a stream of the custom data area that it found (the previous
-leader's) is put back as off, not as a stream to that replica.
+configuration where it is, since the new leader now owns it. Only a
+replica that still leads when it stops puts the stream and the pointers
+back: one that lost the lease and is stopped before it looks again
+leaves them to the new leader.
+
+**After a takeover, a stop cannot put back the original configuration.**
+Each replica records the stream and the custom data area's pointers as it
+first found them, in memory. Only the replica that led first found the
+unit as it was before nautilus; one that takes over finds the previous
+leader's settings. So what the last leader's stop puts back depends on
+which replica that is, and a stream the unit had before nautilus (to a
+historian, say) is put back only if the replica that first led is the
+one that stops last. Under redundancy a stream of the custom data area
+found at a takeover (the previous leader's) is recorded as off, so a stop
+never re-points the stream at the other replica. Note the unit's stream
+settings before you deploy a redundant pair, and put them back by hand in
+groov Manage if you retire it.
 
 **A command held while the processor was away goes out only on the
 leader.** Leadership is checked again when held commands go out, before
