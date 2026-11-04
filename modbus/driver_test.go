@@ -396,6 +396,10 @@ func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 	waitFor(t, "the unchanged SP sent again", func() bool {
 		return len(rec.writes(FCWriteSingleRegister, 500)) == 2
 	})
+	time.Sleep(100 * time.Millisecond) // several re-assert periods
+	if got := rec.writes(FCWriteSingleRegister, 500); len(got) != 2 {
+		t.Errorf("SP must go out once after the reopen, got %d frames in all", len(got))
+	}
 }
 
 // ── failure & recovery ───────────────────────────────────────────────────

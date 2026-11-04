@@ -196,6 +196,12 @@ func TestRequeuedWriteRechecksTheGate(t *testing.T) {
 	waitFor(t, "the confirmed write sent once more", func() bool {
 		return len(rec.writes(FCWriteSingleRegister, 100)) == 2
 	})
+	time.Sleep(60 * time.Millisecond) // several poll cycles: nothing more goes out
+	for addr, want := range map[int]int{100: 2, 200: 2, 300: 1} {
+		if got := len(rec.writes(FCWriteSingleRegister, addr)); got != want {
+			t.Errorf("register %d: %d frames in all, want %d (each once after the reopen)", addr, got, want)
+		}
+	}
 }
 
 // gatingConn records like recordingConn and runs onFrame as a matching

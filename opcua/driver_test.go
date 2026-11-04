@@ -688,3 +688,23 @@ func TestRegainedGateSendsTheUnchangedValueAgain(t *testing.T) {
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0}) // the push: unchanged
 	waitFor(t, "the program's value back", func() bool { return ts.get(t, "Setpoint") == 9.0 })
 }
+
+// A driver that has seen its write gate closed was a standby and has no
+// start-up baseline (#606): its first push once the gate opens, a
+// takeover's, commands the program's value. A plain start keeps the
+// baseline (TestWrites, TestWriteGate).
+func TestStandbyFirstPushCommands(t *testing.T) {
+	ts := startServer(t, freePort(t))
+	d := startDriver(t, ts.url, manifest(2))
+	var open atomic.Bool
+	var looks atomic.Int64
+	d.SetWriteGate(func() bool { looks.Add(1); return open.Load() })
+	waitFor(t, "first poll", func() bool { return read(t, d)["plant__Online"] == true })
+	// The session loop, the only caller, looks at least once a second.
+	n := looks.Load()
+	waitFor(t, "the driver to see the gate closed", func() bool { return looks.Load() >= n+2 })
+	// Takeover: the first push since start.
+	open.Store(true)
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
+	waitFor(t, "the takeover push commands", func() bool { return ts.get(t, "Setpoint") == 9.0 })
+}

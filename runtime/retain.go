@@ -123,7 +123,13 @@ func (r *Runtime) takeover() {
 	// This replica has never written to the field, whatever its predecessor
 	// left in the store: the first scan as leader pushes the FULL output set
 	// rather than trusting a generation stamp the old leader's driver knows
-	// nothing about. See Options.AlwaysWriteOutputs.
+	// nothing about. See Options.AlwaysWriteOutputs. After a spell as
+	// standby the push commands: a driver that tracks the write gate
+	// (modbus, opcua-client) has seen it closed meanwhile, so it sends every
+	// output, even one equal to what it sent when it last led (#600), and
+	// even when this is its first push since start, which on a plain start
+	// (leader from the first scan, gate never closed) is its baseline
+	// instead (#606).
 	r.outSent.Store(false)
 	r.mu.Lock()
 	r.lastScan = time.Time{}

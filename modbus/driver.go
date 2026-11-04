@@ -190,15 +190,19 @@ type Driver struct {
 	gateMu    sync.Mutex
 	writeGate func() bool
 	// gateShut is true from the first look that finds the gate closed to
-	// the first that finds it open again (see gateOpen). wanted is the
-	// request OutputsWanted answers: set when a command was forgotten.
+	// the first that finds it open again (see gateOpen); sawShut stays true
+	// once any look has found it closed: this replica has been a standby,
+	// so it has no start-up baseline (#606). wanted is the request
+	// OutputsWanted answers: set when a command was forgotten.
 	gateShut atomic.Bool
+	sawShut  atomic.Bool
 	wanted   atomic.Bool
 
 	// baseline is armed by Start: the first WriteOutputs snapshot after it
 	// describes the world, it does not command it (sparkplug-host's rule).
 	// Bindings with Rewrite > 0 are the exception — their baseline value IS
-	// queued, because a keep-alive word must be written on connect.
+	// queued, because a keep-alive word must be written on connect. A look
+	// that finds the write gate closed disarms it (see SetWriteGate).
 	wmu      sync.Mutex
 	baseline bool
 
@@ -447,21 +451,31 @@ func (d *Driver) buildSources() error {
 // BE THERE (#600): another replica may lead and write the same registers.
 // So when the gate reopens, every output goes out once more with the
 // program's value, changed or not, and a rewrite: binding re-asserts
-// nothing until it has: the first look that finds the gate closed forgets
-// every written value, the first that finds it open again forgets them
-// once more and asks the runtime for the outputs (OutputsWanted), and the
-// push that answers is what fills written again. A command the gate
-// dropped is forgotten and asked for the same way. The runtime pushes on
-// a redundancy takeover anyway; the request is what makes a gate that
+// nothing until it has: the first look that finds the gate open again
+// forgets every written value and asks the runtime for the outputs
+// (OutputsWanted), and the push that answers is what fills written again.
+// Every reader of written looks first, so none can see the previous
+// term's values once the gate is back. A command the gate dropped is
+// forgotten and asked for the same way. The runtime pushes on a
+// redundancy takeover anyway; the request is what makes a gate that
 // reopens without one (logic healthy again) push too.
+//
+// A REPLICA THAT HAS BEEN A STANDBY HAS NO BASELINE (#606): the first
+// look that finds the gate closed disarms the start-up baseline, so the
+// first push once the gate opens commands every output, as a hot-standby
+// PLC's new primary drives its outputs at once. A plain start that never
+// saw the gate closed keeps the baseline.
 //
 // A func cannot say it changed, so the driver sees the gate close and
 // reopen by looking at it (gateOpen): on every WriteOutputs, flush and
 // rewrite fire, on every wake of a connected source's loop (at least once
-// a second) and on every connect attempt. A gate that closes and reopens
-// between two looks is not seen. The project wires the gate to redundancy
-// leadership (leader.Elector.IsLeader), and a "logic healthy" signal can
-// be composed into the same func.
+// a second), on every connect attempt and before the on-connect
+// re-assert. A gate that closes and reopens between two looks is not
+// seen: one shorter than about a second while a source is connected, up
+// to RetryMax (60 s by default) while every source is down, and without
+// bound while every source is parked. The project wires the gate to
+// redundancy leadership (leader.Elector.IsLeader), and a "logic healthy"
+// signal can be composed into the same func.
 //
 // A FALSE GATE STOPS RE-ASSERTS BY DESIGN: a device whose keep-alive word
 // (Banner SC10, i550 control word, an IO-Link master's Modbus watchdog)
@@ -477,11 +491,12 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 }
 
 // gateOpen reports whether commands may leave the driver right now. Every
-// call is also a look at the gate (see SetWriteGate): the first look that
-// finds it closed forgets every written value, and the first that finds it
-// open again forgets them once more (a push that raced the close may have
-// recorded one since) and asks for the outputs. Callers do not hold any
-// source's mu.
+// call is also a look at the gate (see SetWriteGate): a look that finds it
+// closed disarms the start-up baseline, and the first look that finds it
+// open again forgets every written value and asks for the outputs.
+// Forgetting at the reopen, not at the close, also covers a push that
+// raced the close and recorded a value after it. Callers do not hold any
+// source's mu or wmu.
 func (d *Driver) gateOpen() bool {
 	d.gateMu.Lock()
 	gate := d.writeGate
@@ -493,7 +508,10 @@ func (d *Driver) gateOpen() bool {
 	switch {
 	case !open:
 		if !d.gateShut.Swap(true) {
-			d.forgetWritten()
+			d.sawShut.Store(true)
+			d.wmu.Lock()
+			d.baseline = false // a standby has no baseline (#606)
+			d.wmu.Unlock()
 		}
 	case d.gateShut.Load() && d.gateShut.CompareAndSwap(true, false):
 		d.forgetWritten()
@@ -601,7 +619,7 @@ func (d *Driver) Plan() Plan { return d.plan }
 func (d *Driver) Start(ctx context.Context) {
 	ctx, d.cancel = context.WithCancel(ctx)
 	d.wmu.Lock()
-	d.baseline = true
+	d.baseline = !d.sawShut.Load() // a standby has none (#606)
 	d.wmu.Unlock()
 	d.started.Store(true)
 	for _, s := range d.sources {
@@ -708,7 +726,8 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //     it is the state of the world at t=0, not a set of commands. EXCEPT
 //     bindings with Rewrite > 0: a keep-alive word must be asserted on
 //     connect (an SC10 drops its enable otherwise), so their baseline value
-//     is queued.
+//     is queued. A driver that has seen the write gate closed (a standby)
+//     has no baseline: its first push commands everything (#606).
 //  4. CHANGE. Thereafter a value equal to the last handed-over value is not
 //     a command. A changed value is queued per source, last value per tag,
 //     and held across a disconnect — flushed when the source reconnects,

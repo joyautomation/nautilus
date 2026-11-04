@@ -196,9 +196,12 @@ type Driver struct {
 	gateMu    sync.Mutex
 	writeGate func() bool
 	// gateShut is true from the first look that finds the gate closed to
-	// the first that finds it open again (see gateOpen). wanted is the
-	// request OutputsWanted answers.
+	// the first that finds it open again (see gateOpen); sawShut stays true
+	// once any look has found it closed: this replica has been a standby,
+	// so it has no start-up baseline (#606). wanted is the request
+	// OutputsWanted answers.
 	gateShut atomic.Bool
+	sawShut  atomic.Bool
 	wanted   atomic.Bool
 
 	wmu      sync.Mutex
@@ -490,10 +493,15 @@ func (d *Driver) Endpoint() string { return d.endpoint }
 // While the gate is closed another replica may lead and write the same
 // nodes, so nothing this driver wrote is trusted to still be there: once
 // the gate reopens every output goes out again with the program's value,
-// changed or not (#600). The driver sees the gate close and reopen by
-// looking at it (gateOpen): on every WriteOutputs and flush, at least once
-// a second while connected, and on every connect attempt. A gate that
-// closes and reopens between two looks is not seen.
+// changed or not (#600). A driver that has seen the gate closed (a
+// standby) has no start-up baseline either, so its first push once the
+// gate opens commands every output (#606); a plain start that never saw
+// it closed keeps the baseline. The driver sees the gate close and reopen
+// by looking at it (gateOpen): on every WriteOutputs and flush, at least
+// once a second while connected, and on every connect attempt. A gate
+// that closes and reopens between two looks is not seen: one shorter than
+// about a second while connected, or up to the retry backoff (60 s by
+// default) while the session is down.
 func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Lock()
 	d.writeGate = gate
@@ -501,11 +509,11 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 }
 
 // gateOpen reports whether commands may leave the driver right now. Every
-// call is also a look at the gate: the first look that finds it closed
-// forgets every written value, and the first that finds it open again
-// forgets them once more (a push that raced the close may have recorded
-// one since) and asks the runtime for the outputs (OutputsWanted), so the
-// push that answers sends them all. Callers do not hold d.mu.
+// call is also a look at the gate: a look that finds it closed disarms the
+// start-up baseline, and the first that finds it open again forgets every
+// written value and asks the runtime for the outputs (OutputsWanted), so
+// the push that answers sends them all. WriteOutputs, the only reader of
+// written, looks first. Callers do not hold d.mu or d.wmu.
 func (d *Driver) gateOpen() bool {
 	d.gateMu.Lock()
 	gate := d.writeGate
@@ -517,7 +525,10 @@ func (d *Driver) gateOpen() bool {
 	switch {
 	case !open:
 		if !d.gateShut.Swap(true) {
-			d.forgetWritten()
+			d.sawShut.Store(true)
+			d.wmu.Lock()
+			d.baseline = false // a standby has no baseline (#606)
+			d.wmu.Unlock()
 		}
 	case d.gateShut.Load() && d.gateShut.CompareAndSwap(true, false):
 		d.forgetWritten()
@@ -573,7 +584,7 @@ func (d *Driver) ScanClasses() map[string][]string {
 func (d *Driver) Start(ctx context.Context) {
 	ctx, d.cancel = context.WithCancel(ctx)
 	d.wmu.Lock()
-	d.baseline = true
+	d.baseline = !d.sawShut.Load() // a standby has none (#606)
 	d.wmu.Unlock()
 	d.started.Store(true)
 	d.wg.Add(1)
@@ -648,7 +659,9 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //  1. GATE. While the write gate is closed (not leader, logic faulted) no
 //     command is queued or recorded.
 //  2. BASELINE. The first snapshot after Start is recorded, not written —
-//     it is the state of the world at t=0, not a set of commands.
+//     it is the state of the world at t=0, not a set of commands. A
+//     driver that has seen the write gate closed (a standby) has none: its
+//     first push commands everything (#606).
 //  3. CHANGE. Thereafter a value equal to the last handed-over value is not
 //     a command. A changed value is queued, last value per tag, and held
 //     across a disconnect — flushed when the session reconnects.
