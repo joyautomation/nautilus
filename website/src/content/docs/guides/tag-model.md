@@ -230,7 +230,15 @@ holds its last value (quality `stale`), as it always has.
 - **Function blocks and functions do not see tags implicitly.** A block
   that reaches a tag says so in its own `VAR_EXTERNAL`, so it stays
   self-contained and can move to another project. Pass values in through
-  `VAR_INPUT` / `VAR_IN_OUT` where you can.
+  `VAR_INPUT` / `VAR_IN_OUT` where you can. A tag named this way is bound
+  by the program that instantiates the block or calls the function, as if
+  the program had named it: the scan snapshots it, a tag with no `type:`
+  takes its type from that declaration, and `naut check` counts it as
+  bound. That includes a block instance the function itself declares. A
+  block nothing instantiates, or a function nothing calls, binds nothing.
+  The program, its blocks and the functions it calls must agree on a tag's
+  type: one declaring `Mode : REAL` and another `Mode : INT` is an error at
+  startup and in `naut check`, naming both.
 - **A GVL file works too.** A library `.st` holding a file-level
   `VAR_GLOBAL` block (Codesys's `gvl.st`) declares globals for every
   program. A global the manifest does not also declare becomes a `state`
