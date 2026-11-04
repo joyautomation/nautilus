@@ -1,0 +1,18 @@
+name: conveyor-fbd-reference
+
+tasks:
+  - program: conveyor.fbd
+    scan: 100ms
+
+tags:
+  - { name: StartPB,       role: input,  type: BOOL, init: false, desc: "Start push button" }
+  - { name: StopPB,        role: input,  type: BOOL, init: true,  desc: "Stop push button (NC: TRUE when not pressed)" }
+  - { name: EStop_OK,      role: input,  type: BOOL, init: false, desc: "E-stop safety relay healthy" }
+  - { name: Guard_Closed,  role: input,  type: BOOL, init: false, desc: "Guard door closed" }
+  - { name: PE101_Blocked, role: input,  type: BOOL, init: false, desc: "Discharge photo-eye PE-101 blocked" }
+  - { name: ResetPB,       role: input,  type: BOOL, init: false, desc: "Jam reset push button" }
+  - { name: M201_Run,      role: output, type: BOOL, init: false, desc: "Conveyor motor M-201" }
+  - { name: JamAlm,        role: output, type: BOOL, init: false, desc: "Jam alarm" }
+
+driver:
+  type: memory

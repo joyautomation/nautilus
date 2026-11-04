@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { L, layoutRung, fitArgs, splitArgs, fbWidth, FB_ARGS_MAX } from './ladderLayout.ts';
+import { L, layoutRung, fitArgs, splitArgs, fbWidth, FB_ARGS_MAX, assignLines, ASSIGN_LINE_MAX, ASSIGN_LINE_H } from './ladderLayout.ts';
 import type { Ann } from './ladder.ts';
 
 // The rung's SVG height must reserve enough room below a changed/removed
@@ -83,4 +83,40 @@ test('fbWidth: the box is sized for the args line it draws (capped)', () => {
 	const huge = fbWidth(ton({ args: Array.from({ length: 20 }, (_, i) => `A${i} := ${i}`).join(', ') }));
 	assert.ok(short >= Math.ceil('PT := T#5S, ET => HiSecs'.length * 9 * 0.62) + 20);
 	assert.ok(huge <= Math.ceil(FB_ARGS_MAX * 9 * 0.62) + 20 + 1);
+});
+
+// #563: a multi-statement `{ … }` box stacks one statement per line and is
+// sized to contain them — it used to cap at 260px and let the one long line
+// spill over its neighbours and off the rung's left edge.
+const assign = (text: string): Ann => ({ el: { kind: 'assign', text }, in: true, out: true });
+const CHAR_W = 10 * 0.62; // textW's monospace estimate at the 10px assign font
+
+test('ladderLayout: assignLines splits on top-level semicolons only', () => {
+	assert.deepEqual(assignLines('a := 1'), ['a := 1']);
+	assert.deepEqual(assignLines('a := 1; b := 2;'), ['a := 1;', 'b := 2']);
+	assert.deepEqual(assignLines("s := 'x;y'; n := 1"), ["s := 'x;y';", 'n := 1']);
+	// `$'` and `$$` are escapes inside an ST string, not its end.
+	assert.deepEqual(assignLines("s := 'it$'s;x'; n := 1"), ["s := 'it$'s;x';", 'n := 1']);
+	assert.deepEqual(assignLines("s := 'q$$;'; n := 2"), ["s := 'q$$;';", 'n := 2']);
+	assert.deepEqual(assignLines("s := 'a$$'; t := 'b;c'"), ["s := 'a$$';", "t := 'b;c'"]);
+	const long = assignLines('x := ' + 'y + '.repeat(30) + 'z');
+	assert.equal(long[0].length, ASSIGN_LINE_MAX);
+	assert.ok(long[0].endsWith('…'));
+});
+
+test('ladderLayout: a multi-statement assign box contains every line and stays on the rung', () => {
+	const text = 'Count := Count + 1; Target := 5; Big := ABS(Big); Level := (Level + HiSP) / 2.0';
+	const lay = layoutRung([contact({ ref: 'Start' }), assign(text), contact({ ref: 'Stop' })], [contact({ kind: 'coil', ref: 'Ready' })], 900);
+	const box = lay.nodes.find((n) => n.kind === 'assign')!;
+	const lines = assignLines(text);
+	assert.equal(lines.length, 4);
+	assert.ok(box.w >= Math.max(...lines.map((l) => l.length)) * CHAR_W, `box ${box.w}px too narrow for its longest line`);
+	assert.ok(box.h >= L.FN_H + (lines.length - 1) * ASSIGN_LINE_H, `box ${box.h}px too short for ${lines.length} lines`);
+	assert.ok(box.x >= L.RAIL_LEFT, 'box must not start left of the rung');
+	assert.ok(box.y >= L.RUNG_PAD_Y, 'box top must stay inside the rung');
+	assert.ok(box.y + box.h <= lay.height, 'box bottom must stay inside the rung');
+	for (const n of lay.nodes) {
+		if (n === box) continue;
+		assert.ok(n.x + n.w <= box.x || n.x >= box.x + box.w, `${n.kind} overlaps the assign box`);
+	}
 });

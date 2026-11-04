@@ -29,6 +29,30 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   - **nautilus: Remove naut from PATH** undoes all of it (only the lines and
     link the extension made). (#558)
 
+### Fixed
+
+- **A multi-statement `{ … }` box in the ladder no longer overflows.** An
+  assignment box with several statements drew them as one long line that
+  ran past its box, over the neighbouring contact's label and off the
+  rung's left edge. It now stacks one statement per line inside a box sized
+  to hold them (a very long statement ends in `…`; the tooltip has the
+  full text). A `$'` or `$$` inside a string no longer splits a statement
+  there, in the ladder view or in `naut` itself.
+- **A jump-back transition's name no longer overlaps its step.** The
+  loop-back glyph and its name hang clear of the step box, a second
+  loop-back out of the same step stacks below the first instead of on top
+  of it, and the chart widens to fit the glyph's label and name.
+- **Loop-backs no longer collide with the step's forward transition.** A
+  loop-back under an action table hangs just below the table, and a step
+  with several loop-backs gets a taller gap to its next step, so the
+  glyphs and their labels stay clear of the forward bar's name and
+  condition and of the next step's box (`batch-skid/phases.sfc`: ChargeA,
+  ChargeB, Hold).
+- **An alternative branch labelled over its own bar stops short of the
+  source's stem.** A long condition or name on a branch that runs left of
+  its source ends in `…` instead of being written across the stem (the
+  tooltip has the full text).
+
 ## [0.19.2] - 2026-11-03
 
 Requires a `naut` built from main (after 0.19.0) for the items that

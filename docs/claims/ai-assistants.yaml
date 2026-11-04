@@ -1,0 +1,43 @@
+page: website/src/content/docs/guides/ai-assistants.md
+title: AI assistants and AGENTS.md
+prefix: AI
+claims:
+  - id: AI-001
+    claim: >-
+      naut new writes an AGENTS.md and a CLAUDE.md that imports it into every
+      manifest project it scaffolds (minimal and demo), and neither into the
+      Go SDK templates (sdk, sdk-demo).
+    source: "#"
+    tests:
+      - go ./cmd/naut TestScaffoldVariants
+    note: >-
+      Asserts both files exist for the minimal and demo templates, are absent
+      from sdk and sdk-demo, and that CLAUDE.md has the @AGENTS.md import
+      line.
+  - id: AI-002
+    claim: >-
+      The examples AGENTS.md shows (a tank's sequence, interlocks and heater
+      loop, and its tests) compile with no naut check errors or warnings and
+      pass their acceptance tests.
+    source: "#what-agentsmd-covers"
+    tests:
+      - go ./cmd/naut TestAgentsMdSnippetsRun
+    note: >-
+      Every program, tag line and test in AGENTS.md must be a file of
+      cmd/naut/testdata/agents-md verbatim; that project is then checked
+      (naut check, zero warnings), compiled, and its acceptance tests run,
+      including more_test.yaml for what the examples' comments claim: CV
+      follows CV_MAN off auto, the abort transition wins over t_full when
+      both are true on the same scan (declaring t_full first fails that
+      test), and the P0 CountBatch action counts once per batch (an N
+      association fails it).
+  - id: AI-003
+    claim: >-
+      naut check catches an output with no init: that a program reads before
+      writing it, as a seal-in does, which would fault the scan.
+    source: "#working-with-an-agent"
+    tests:
+      - go ./cmd/naut TestCheckReportsAnOutputReadBeforeItsFirstWrite
+    note: >-
+      The page's summary of TAG-053 (tag-model), which carries the full
+      claim and its tests.

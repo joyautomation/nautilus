@@ -1,0 +1,23 @@
+PROGRAM Heater
+(* TT-101 scaling, the TIC-101 heater loop and its high temperature alarm. *)
+FBD
+  NETWORK 'TT-101: 4-20 mA to degC'
+  // 16 mA span over 150 degC
+  aboveZero = SUB(TT101_mA, 4.0)
+  degC = MUL(aboveZero, 9.375)
+  TT101_Temp := degC
+
+  NETWORK 'TAH-101: high temperature, 5 s on-delay'
+  tooHot = GE(TT101_Temp, TempHiSP)
+  hiTmr : TON(IN := tooHot, PT := T#5S)
+  TempHiAlm := hiTmr.Q
+
+  NETWORK 'TIC-101: heater loop'
+  // reverse acting; off auto the output follows CV_MAN (0)
+  heatOn = AND(HeatEnable, NOT TempHiAlm)
+  tic : PID(AUTO := heatOn, PV := TT101_Temp, SP := TempSP,
+            KP := TicKp, KI := TicKi, CV_MIN := 0.0, CV_MAX := 100.0,
+            DIRECT := FALSE)
+  E101_Out := tic.CV
+END_FBD
+END_PROGRAM
