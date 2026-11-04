@@ -115,6 +115,42 @@
       },
       "description": "Files holding additional alarm definitions and rules, each a bare YAML list. Mirrors `tag-files:` exactly, and for the same reason: a GENERATED alarm set stays a separate reviewable artifact. Read in order, then `alarms:` last. An id declared twice in any two sources is an error naming both."
     },
+    "check": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Settings for the diagram structure warnings `naut check` and the editor report on ladder, FBD and SFC (LD001…, FBD001…, SFC001…): thresholds, and rules switched off for the whole project. One POU opts out with an `(* @allow ID: reason *)` pragma in its header instead. See the Structure warnings reference.",
+      "additionalProperties": false,
+      "properties": {
+        "disable": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["LD001", "LD002", "LD003", "LD004", "LD005", "LD006", "FBD001", "FBD002", "FBD003", "SFC001", "SFC002"]
+          },
+          "description": "Rule IDs not reported in this project."
+        },
+        "max-series": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 6,
+          "description": "LD003: the most condition elements in series on one rung (a branch counts as its longest leg)."
+        },
+        "max-branch-depth": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1,
+          "description": "LD002: how deep ladder branches may nest (1: a branch, but no branch inside a leg)."
+        },
+        "max-nesting": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2,
+          "description": "FBD001: how deep FBD calls may nest in one statement (an FB call counts as a level)."
+        }
+      }
+    },
     "target": {
       "type": [
         "object",

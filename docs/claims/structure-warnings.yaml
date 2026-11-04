@@ -1,0 +1,103 @@
+page: docs/structure-warnings.md
+title: Structure warnings
+prefix: STRUCT
+claims:
+  - id: STRUCT-001
+    claim: >-
+      naut check reports ladder, FBD and SFC structure warnings as gcc-style
+      warnings with the rule ID in brackets, and still exits 0.
+    source: "#structure-warnings"
+    tests:
+      - go ./cmd/naut TestCheckReportsStructureWarnings
+  - id: STRUCT-002
+    claim: >-
+      The language server reports the same warnings as you type, with the
+      rule ID as the diagnostic's code, under the manifest's check:
+      settings, and not on a buffer that does not compile.
+    source: "#structure-warnings"
+    tests:
+      - go ./internal/lsp TestStructureWarningsInTheEditor
+  - id: STRUCT-003
+    claim: >-
+      Every project under examples/ and every naut new scaffold (minimal
+      and sdk in ST, FBD, ladder and SFC, the tour and the sdk demo) passes
+      with no structure warning.
+    source: "#structure-warnings"
+    tests:
+      - go ./cmd/naut TestExamplesAndScaffoldsHaveNoStructureWarnings
+  - id: STRUCT-004
+    claim: >-
+      LD001 to LD006 each fire on their bad shape and are silent on the
+      rewrite their message asks for; edge contacts, set/reset pairs,
+      comparisons with 0, 1 and -1, EQ/NE and TIME literals are not
+      reported. LD001 explains a coil mixed with a latch by rung order,
+      LD004 only suggests a move that keeps the program, LD005 counts a
+      // note only on the line above the rung, and findings point at the
+      rung's name.
+    source: "#ladder"
+    tests:
+      - go ./lang/ld TestLintLadderRules
+      - go ./lang/ld TestLintLadderQuietCases
+      - go ./lang/ld TestLintLadderLD001RungOrder
+      - go ./lang/ld TestLintLadderLD004Order
+      - go ./lang/ld TestLintLadderLD005Placement
+      - go ./lang/ld TestLintLadderLD006SmallCounts
+      - go ./lang/ld TestLintLadderColumnIsRungName
+      - go ./lang/lint TestMagicNumber
+  - id: STRUCT-005
+    claim: >-
+      FBD001 to FBD003 each fire on their bad shape and are silent on the
+      rewrite; a body that is one function needs no NETWORK title, a
+      variable one statement assigns and another reads joins them,
+      reading the same input does not, an untitled network of three
+      statements or fewer is not reported, and FBD003 exempts 0, 1 and -1.
+    source: "#function-block-diagram"
+    tests:
+      - go ./lang/fbd TestLintFBDRules
+      - go ./lang/fbd TestLintFBDOneFunctionIsQuiet
+      - go ./lang/fbd TestLintFBDSmallOrJoinedBodiesAreQuiet
+      - go ./lang/fbd TestLintFBDSmallCounts
+  - id: STRUCT-006
+    claim: >-
+      SFC001 fires only when the chart's own actions set the variable a
+      transition tests to two or more different constants (a snapshot
+      latched from another variable, a counter or a single reset value
+      is not reported); SFC002 fires on steps named for their number and
+      points at the name.
+    source: "#sequential-function-chart"
+    tests:
+      - go ./lang/sfc TestLintSFCRules
+      - go ./lang/sfc TestLintSFCStateTestNeedsAChartWrite
+      - go ./lang/sfc TestLintSFCStateVariableNeedsConstantSteps
+      - go ./lang/sfc TestLintSFCStepColumn
+  - id: STRUCT-007
+    claim: >-
+      The manifest's check: section moves the thresholds and disables
+      rules, an unknown rule ID there is a manifest error, and an @allow
+      pragma covers the rung whose header it is in, else the POU it is
+      written in (or the file, above the first POU); an ID in a pragma
+      that is not a rule is reported as a warning naming it.
+    source: "#thresholds-and-switching-rules-off"
+    tests:
+      - go ./cmd/naut TestCheckStructureManifestSettings
+      - go ./lang/ld TestLintLadderConfigAndPragma
+      - go ./lang/ld TestLintLadderPragmaRungScopeAndTypos
+      - go ./lang/lint TestFilterPragmaScope
+      - go ./lang/lint TestFilterPragmaRungScopeAndUnknownIDs
+  - id: STRUCT-008
+    claim: >-
+      Every rule is documented on this page and offered in the VS Code
+      manifest schema's check.disable list, with the default thresholds
+      stated.
+    source: "#thresholds-and-switching-rules-off"
+    tests:
+      - go ./lang/lint TestRulesAreDocumentedAndInTheSchema
+  - id: STRUCT-009
+    claim: >-
+      naut logix import heads each ladder file it writes with an @allow
+      pragma for every ladder rule, naming the export, so an imported
+      project checks clean; deleting the line brings the warnings back.
+    source: "#imported-ladder"
+    tests:
+      - go ./cmd/naut TestLogixImportAllowsLadderRules
+      - go ./cmd/naut TestLogixRoundTripYardstickCLI

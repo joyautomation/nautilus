@@ -144,8 +144,10 @@ func TestDiagramPasteProperty(t *testing.T) {
 	}
 	out := applyFBDEdits(src, edits)
 	for _, want := range []string{
-		"integral_copy := LIMIT(0.0, ADD(integral_copy, MUL(_, e_copy, _)), 100.0)",
-		"Heater_copy := LIMIT(0.0, ADD(MUL(_, e_copy), integral_copy), 100.0)",
+		"iStep_copy = MUL(_, e_copy, _)",
+		"integral_copy := LIMIT(0.0, ADD(integral_copy, iStep_copy), 100.0)",
+		"pTerm_copy = MUL(_, e_copy)",
+		"Heater_copy := LIMIT(0.0, ADD(pTerm_copy, integral_copy), 100.0)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("select-all paste lacks %q:\n%s", want, out)

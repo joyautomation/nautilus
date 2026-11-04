@@ -20,12 +20,17 @@ VAR_EXTERNAL
     OvertempAlm  : BOOL;
 END_VAR
 FBD
-  // Dosing-line totalizers: liters = flow (L/min) * dt (s) / 60, held at
-  // zero for the one scan Prep sets ResetTotals (see phases.sfc).
-  Batch.ChargedA_L := SEL(ResetTotals, ADD(Batch.ChargedA_L, MUL(FIT201A_Flow, DIV(DosingDtS, 60.0))), 0.0)
-  Batch.ChargedB_L := SEL(ResetTotals, ADD(Batch.ChargedB_L, MUL(FIT201B_Flow, DIV(DosingDtS, 60.0))), 0.0)
+  NETWORK 'Dosing-line totalizers'
+  // liters = flow (L/min) * dt (s) / 60, held at zero for the one scan
+  // Prep sets ResetTotals (see phases.sfc).
+  dtMin = DIV(DosingDtS, 60.0)
+  litersA = MUL(FIT201A_Flow, dtMin)
+  litersB = MUL(FIT201B_Flow, dtMin)
+  Batch.ChargedA_L := SEL(ResetTotals, ADD(Batch.ChargedA_L, litersA), 0.0)
+  Batch.ChargedB_L := SEL(ResetTotals, ADD(Batch.ChargedB_L, litersB), 0.0)
 
-  // TIC-201: jacket water control valve. Reverse acting (DIRECT := FALSE):
+  NETWORK 'TIC-201: jacket temperature loop'
+  // jacket water control valve. Reverse acting (DIRECT := FALSE):
   // TCV opens further as temperature falls below setpoint, the PID doc's
   // own "heater" case. AUTO tracks Heat and Hold together — HeatingActive
   // is written N-qualified from both steps in phases.sfc, which OR-combine
@@ -37,8 +42,9 @@ FBD
             DIRECT := FALSE, DT := DosingDtS)
   TCV201_Pos := tic.CV
 
-  // Overtemp seal-in: latch 5 degrees above setpoint, clear once 5 degrees
-  // below it — the same hysteresis shape as lift-station's HighLevelAlm.
+  NETWORK 'Overtemperature alarm'
+  // seal-in: latch 5 degrees above setpoint, clear once the temperature is
+  // back at setpoint — the same hysteresis shape as lift-station's HighLevelAlm.
   hiTemp = GE(TT201_Temp, ADD(Active.TempSP_C, 5.0))
   loTemp = LE(TT201_Temp, Active.TempSP_C)
   OvertempAlm := AND(OR(hiTemp, OvertempAlm), NOT loTemp)
