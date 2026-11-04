@@ -97,7 +97,7 @@ accepts these forms.
 | Pin read | `lic.CV` | an output pin of an FB instance |
 | Output binding | `ET => Elapsed` | IEC's formal-call output form, for capturing a non-BOOL pin such as `ET` or `CV` into a variable |
 | Negation | `NOT high` | inline pin negation, drawn as the IEC circle on the pin |
-| Constant | `5.0`, `T#10S`, `TRUE`, `'ok'` | a literal input chip |
+| Constant | `5.0`, `T#10S`, `TRUE`, `'ok'`, `"a&b"` | a literal input chip; strings read as in [ST](/languages/structured-text/#declarations), `$` escapes and all, and nothing inside the quotes is an operator |
 | Accessor | `TempHist[2]`, `M.Speed` | array element or struct member, as an input or a coil target |
 | Network | `NETWORK 'high-level alarm'` | starts the next numbered network; the title is optional ([below](#networks)) |
 | EN / ENO | `sp = LIMIT(EN := Run, MN := 0.0, IN := x, MX := 9.0, ENO => ok)`, `t1.ENO` | execution control on any block ([below](#eneno-execution-control)) |
