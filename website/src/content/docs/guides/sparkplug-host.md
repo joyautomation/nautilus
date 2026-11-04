@@ -392,8 +392,9 @@ Sparkplug does not retain births: without asking, a passive host that
 starts after a site's last birth sees nothing from it. Sparkplug 3.0 §5
 lets any host application request a rebirth, primary or not. So a passive
 host sends NCMD Node Control/Rebirth just as a primary one does: on
-connect, on reconnect, on data before a birth, and after an unfilled
-sequence gap.
+connect, on reconnect, on data before a birth, after an unfilled sequence
+gap, and when an operator pulses `<site>__Rebirth`. Every other output
+write stays unsent.
 
 `rebirth-requests: false` turns every rebirth request off, including the
 operator's `__Rebirth`, as the spec suggests making it configurable. The

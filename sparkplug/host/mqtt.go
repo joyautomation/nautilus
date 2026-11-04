@@ -710,8 +710,20 @@ func (d *Driver) staleLoop(ctx context.Context) {
 // site actually holds. Only a command nothing can ever address — a node with
 // no group, or a node whose queue is full — is dropped and counted.
 func (d *Driver) flushWrites() {
-	if d.publisher() == nil || !d.mayPublish() {
+	if d.publisher() == nil {
 		return // stay queued; connect() kicks us again
+	}
+	if !d.cfg.Primary {
+		// A passive host writes no tags, but the operator's __Rebirth is a
+		// rebirth request, which any host application may send (Sparkplug
+		// 3.0 §5; see mayPublish). Only those leave the queue (#576).
+		if d.isLeader() {
+			d.flushRebirthTags()
+		}
+		return
+	}
+	if !d.mayPublish() {
+		return // a standby: stay queued until promoted
 	}
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
@@ -734,18 +746,9 @@ func (d *Driver) flushWrites() {
 	hold := map[string]map[string]any{}
 
 	for name, v := range work {
-		// Synthesized <site>__Rebirth: a rising edge is an operator-forced
-		// rebirth. Change suppression upstream means only transitions get
-		// here, so "value is true" *is* the rising edge.
-		if edge, ok := d.rebirthTags[name]; ok {
-			if truthy(v) {
-				if group, ok := d.groupFor(edge); ok {
-					if err := d.publishRebirth(group, edge); err == nil {
-						d.countRebirth()
-					}
-				}
-			}
-			d.markWritten(name, v)
+		// Synthesized <site>__Rebirth: see writeRebirthTag.
+		if _, ok := d.rebirthTags[name]; ok {
+			d.writeRebirthTag(name, v)
 			continue
 		}
 		b, ok := d.byName[name]
@@ -932,6 +935,37 @@ func (d *Driver) markWritten(name string, v any) {
 		delete(d.queued[b.Node], name)
 	}
 	d.wmu.Unlock()
+}
+
+// flushRebirthTags sends the queued <site>__Rebirth writes and leaves every
+// other write queued: the whole of flushWrites for a passive host.
+func (d *Driver) flushRebirthTags() {
+	d.wmu.Lock()
+	work := map[string]any{}
+	for name, v := range d.pending {
+		if _, ok := d.rebirthTags[name]; ok {
+			work[name] = v
+			delete(d.pending, name)
+		}
+	}
+	d.wmu.Unlock()
+	for name, v := range work {
+		d.writeRebirthTag(name, v)
+	}
+}
+
+// writeRebirthTag handles one <site>__Rebirth write: a rising edge is an
+// operator-forced rebirth. Change suppression upstream (WriteOutputs) means
+// only transitions get here, so "value is true" *is* the rising edge.
+func (d *Driver) writeRebirthTag(name string, v any) {
+	if truthy(v) {
+		if group, ok := d.groupFor(d.rebirthTags[name]); ok {
+			if err := d.publishRebirth(group, d.rebirthTags[name]); err == nil {
+				d.countRebirth()
+			}
+		}
+	}
+	d.markWritten(name, v)
 }
 
 // maxQueuedPerNode bounds the dark-site queue. It is one value per TAG — a

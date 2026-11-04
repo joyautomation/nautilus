@@ -193,3 +193,45 @@ func TestRebirthRequestsOffAsksForNothing(t *testing.T) {
 		t.Error("RequestRebirth must be refused with rebirth requests off")
 	}
 }
+
+// The operator's <site>__Rebirth is a rebirth request, so a passive host
+// sends it (#576) unless rebirth requests are off. Every other write stays
+// refused: a passive host sends no NCMD/DCMD carrying a tag value.
+func TestRebirthRequestsPassiveRebirthTag(t *testing.T) {
+	for i, requests := range []bool{true, false} {
+		t.Run(fmt.Sprintf("requests=%v", requests), func(t *testing.T) {
+			srv, addr := startBroker(t, "")
+			t.Cleanup(func() { _ = closeBroker(srv) })
+
+			cfg := rebirthCase{primary: false, requests: requests}.config(addr, fmt.Sprintf("h-rr-tag-%d", i))
+			cfg.NoRebirthOnStart = true // only the operator asks
+			d := startDriver(t, cfg)
+			waitConnected(t, d)
+			birthW6AndPLC1(t, d, edgePublisher(t, addr, fmt.Sprintf("edge-rr-tag-%d", i)), 1)
+			obs := newObserver(t, addr, fmt.Sprintf("obs-rr-tag-%d", i), "spBv1.0/G/NCMD/#", "spBv1.0/G/DCMD/#")
+			baselineScan(t, d)
+
+			// A tag write: refused, nothing on the wire.
+			if err := d.WriteOutputs(outputSnapshot(d, map[string]any{"W6_PLC1_Pump_SpeedSP": 42.5})); err != nil {
+				t.Fatalf("WriteOutputs: %v", err)
+			}
+			time.Sleep(requestWindow)
+			if n := seen(obs); n != 0 {
+				t.Fatalf("a passive host sent %d command(s) for a tag write; want none", n)
+			}
+
+			// The operator's rising edge on __Rebirth.
+			if err := d.WriteOutputs(outputSnapshot(d, map[string]any{
+				"W6_PLC1_Pump_SpeedSP": 42.5, "W6__Rebirth": true})); err != nil {
+				t.Fatalf("WriteOutputs: %v", err)
+			}
+			expectRebirth(t, obs, 0, requests, "on the operator's __Rebirth")
+			time.Sleep(requestWindow)
+			if requests {
+				if n := seen(obs); n != 1 {
+					t.Fatalf("passive host sent %d command(s); want only the one NCMD Rebirth", n)
+				}
+			}
+		})
+	}
+}
