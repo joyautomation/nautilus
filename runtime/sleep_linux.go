@@ -62,7 +62,12 @@ func sleepUntil(ctx context.Context, deadline time.Time) bool {
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return true
+			// A deadline already passed (a loop overrunning its period)
+			// still answers to ctx, as in sleep_other.go: returning true
+			// here regardless kept an overrunning loop scanning after a
+			// stop, so Run never returned and naut run waited out its
+			// whole stop timeout (nautilus#599).
+			return ctx.Err() == nil
 		}
 		if ctx.Err() != nil {
 			return false
