@@ -339,6 +339,38 @@ registers since is left alone. Not so for a `rewrite:` binding: it
 re-asserts its last commanded value on connect and on every period, so it
 overwrites the other master's value anyway.
 
+**An exception to a write depends on whether the write ran.** When the
+device itself refuses a write (0x02 illegal data address, 0x03 illegal
+data value, or any exception other than the three below), the write is
+dropped and the same value is not sent again. Sending it again would only
+be refused again, so only a changed value is a new command. 0x04 (server
+device failure) is handled the same way: the write may have partly run,
+and on a register that triggers an action a second write could fire it
+twice. When a gateway answers 0x0A (path unavailable) or 0x0B (target
+device failed to respond), the device behind it never got the command,
+and when the device answers 0x06 (server device busy), it did not carry
+the command out. Such a write is dropped from the queue and forgotten, so
+the next time the driver is handed the outputs, the program's value goes
+out again as a command even if it has not changed. That is the program's
+current value, never a replay of the one that failed, and there is no
+backoff: it retries as often as outputs are handed over. `naut run` hands
+the outputs over on the first scan, on a scan where any output changed and
+on a redundancy takeover, not on every scan, so with no output moving the
+command waits for the next change
+([#601](https://github.com/joyautomation/nautilus/issues/601)). Only the
+tags whose write did not run are forgotten: on a `bit:N` register, the
+bits whose read-modify-write got the exception (on its read or on its
+write), not the register's other bits. A `rewrite:` binding is not
+forgotten, because its next re-assert sends it again anyway. While the
+write gate is closed nothing is sent, and the forgotten command goes out
+at the first output push after the gate reopens, as for a command the
+gate dropped (see [Redundancy](#redundancy)). Every exception to a write
+counts in `exceptions` on the device row. The log says `write not
+delivered; will resend` for 0x0A, 0x0B and 0x06, and `write refused` for
+the rest. On a write-only source, a gateway no-answer to a write also
+counts toward taking it offline, as described above; 0x06 is the device
+answering.
+
 **`rewrite:` is the exception, and it is a keep-alive.** Some devices watch
 a command register and fail safe if it stops moving — a safety controller's
 enable word, a VFD control word, an IO-Link master's Modbus watchdog. A

@@ -84,6 +84,15 @@ func gatewayNoAnswer(err error) bool {
 	return errors.As(err, &exc) && (exc.Code == 0x0A || exc.Code == 0x0B)
 }
 
+// writeNotRun reports an exception to a write that says the write did not
+// run, so the value is sent again with the next WriteOutputs (see wroteOK):
+// a gateway no-answer (0x0A, 0x0B) or 0x06 server device busy. Not 0x04
+// server device failure: the write may have partly run.
+func writeNotRun(err error) bool {
+	var exc ExceptionError
+	return gatewayNoAnswer(err) || (errors.As(err, &exc) && exc.Code == 0x06)
+}
+
 // OnlineTagName is the source's synthesized BOOL companion tag name — shared
 // with the generator so tags/modbus.yaml declares exactly what the driver
 // delivers.
@@ -1198,11 +1207,12 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // contiguous holding registers into FC16 (one register FC6), contiguous
 // coils into FC15 (one coil FC5). Returns false when the connection broke;
 // the write that broke and the ones not yet attempted stay queued for the
-// reconnect. Writes the device already answered in this flush, confirmed
-// or refused with an exception, are not re-sent: a re-send would put back
-// a value someone else may have written since. With the write gate closed
-// the queue is dropped instead, and if the gate closes partway through,
-// the rest of the flush is (see SetWriteGate).
+// reconnect. Writes answered in this flush, confirmed or with an
+// exception, are not re-queued: a re-send would put back a value someone
+// else may have written since. One a gateway answered 0x0A/0x0B for is
+// forgotten instead, so the next WriteOutputs sends it (see wroteOK). With
+// the write gate closed the queue is dropped instead, and if the gate
+// closes partway through, the rest of the flush is (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.mu.Lock()
 	if len(s.pending) == 0 {
@@ -1302,7 +1312,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			out := wireOrder([]uint16{w}, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, bw.addr, out)
 		}
-		if !d.wroteOK(ctx, s, bw.names, err) {
+		if !d.wroteOK(ctx, s, work, bw.names, err) {
 			requeue(i, 0, 0)
 			return false
 		}
@@ -1318,7 +1328,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		} else {
 			err = writeMultipleRegisters(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, run.names, err) {
+		if !d.wroteOK(ctx, s, work, run.names, err) {
 			requeue(len(bitWrites), i, 0)
 			return false
 		}
@@ -1333,7 +1343,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		} else {
 			err = writeMultipleCoils(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, run.names, err) {
+		if !d.wroteOK(ctx, s, work, run.names, err) {
 			requeue(len(bitWrites), len(regRuns), i)
 			return false
 		}
@@ -1341,11 +1351,31 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	return true
 }
 
-// wroteOK accounts one device write. An exception means the device refused
-// THIS write on a healthy connection: it is dropped (re-queueing would loop
-// forever) and reported. A transport error means reconnect: false, and the
-// caller re-queues this write and everything not yet attempted.
-func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err error) bool {
+// wroteOK accounts one device write. An exception is an answer on a
+// healthy connection, so the write is never re-queued (that would loop),
+// and what follows depends on who answered:
+//
+//   - 0x0A/0x0B (gatewayNoAnswer) and 0x06 (busy): the write did not run.
+//     The gateway answered for a device that never got the command (#596),
+//     or the device was busy and did not carry it out (#602). The write is
+//     dropped from the queue and its tags are forgotten from written, so
+//     the next WriteOutputs sends the program's value then, changed or
+//     not: no replay of the value sent here, and no backoff of its own. A
+//     rewrite: binding is not forgotten: its re-assert sends written again
+//     on its period, and forgetting it would stop the keep-alive until the
+//     program changed it. As for a gate drop, a tag is forgotten only while
+//     written still holds the value this write carried (work) and the tag
+//     is not queued again: a newer command keeps its on-change reference.
+//     For a write-only source a gateway no-answer counts toward going
+//     offline, once per write (#550); 0x06 is the device answering.
+//   - Any other exception: the device refused THIS write, or (0x04) failed
+//     partway and a re-send could fire a write-to-trigger register twice.
+//     It is dropped and stays in written, so the same value is not sent
+//     again.
+//
+// A transport error means reconnect: false, and the caller re-queues this
+// write and everything not yet attempted.
+func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, names []string, err error) bool {
 	if err == nil {
 		d.writes.Add(1)
 		// A confirmed write is the device answering, as a read is: a
@@ -1362,13 +1392,30 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 		s.mu.Lock()
 		s.lastErr = fmt.Errorf("write %v: %w", names, err)
 		s.excs++
+		notRun := writeNotRun(err)
 		if gatewayNoAnswer(err) {
 			s.writeNoAnswerLocked(ctx.Err() == nil)
 		} else {
-			s.writeAnsweredLocked() // refused, but the device answered
+			s.writeAnsweredLocked() // the device answered (busy, or refused)
+		}
+		if notRun {
+			for _, n := range names {
+				if d.byName[n].b.Rewrite > 0 {
+					continue
+				}
+				// The gate drop's rule: forget only the value this write
+				// carried, and not a tag WriteOutputs has queued again.
+				if _, again := s.pending[n]; !again && sameScalar(s.written[n], work[n]) {
+					delete(s.written, n)
+				}
+			}
 		}
 		s.mu.Unlock()
-		d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		if notRun {
+			d.log.Warn("modbus: write not delivered; will resend", "source", s.cfg.ID, "tags", names, "error", err)
+		} else {
+			d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		}
 		return true
 	}
 	if ctx.Err() == nil {

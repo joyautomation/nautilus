@@ -388,8 +388,9 @@ claims:
       A command raised while the source is down is queued per source (latest
       value per tag), flushed on reconnect, and counted as `queuedWrites`.
       When the link breaks partway through a flush, the write that broke and
-      the ones after it are queued again, and writes the device confirmed or
-      refused with an exception earlier in that flush are not re-sent.
+      the ones after it are queued again, and writes answered earlier in
+      that flush (confirmed, or with an exception) are not queued again
+      (for a write answered 0x0A, 0x0B or 0x06 see MB-053).
     source: "#writes"
     tests:
       - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
@@ -709,3 +710,38 @@ claims:
       TestForeignWriteRoundTrip (pymodbus sim, gated on
       NAUTILUS_MODBUS_SIM) asserts the same shape for a 14-register mixed
       run. Coil runs (FC15) are not stress-tested this way.
+  - id: MB-053
+    claim: >-
+      A write the device refuses with an exception (0x02, 0x03, 0x04,
+      anything but 0x0A/0x0B/0x06) is dropped, and the same value is not
+      sent again; a changed value is a new command. A write a gateway
+      answers with 0x0A or 0x0B, or the device answers with 0x06 (busy), is
+      dropped from the queue and forgotten, so the next time the driver is
+      handed the outputs the program's value goes out again, changed or
+      not, with no backoff of its own. This applies to FC5, FC6, FC15, FC16
+      and bit:N read-modify-writes alike, the RMW's exception coming on its
+      read or on its write. Only the tags whose write got the exception are
+      forgotten, not a write that landed in the same flush or a sibling bit
+      on the same register. A `rewrite:` binding is not forgotten: its
+      re-assert keeps sending it. A forgotten command does not go out while
+      the write gate is closed; the first outputs handed over after it
+      reopens send it. Each such write counts once in `exceptions`.
+    source: "#writes"
+    tests:
+      - go ./modbus TestGatewayNoAnswerWriteIsResent
+      - go ./modbus TestRefusedWriteIsNotResent
+      - go ./modbus TestGatewayNoAnswerWriteWaitsForTheGate
+      - go ./modbus TestGatewayNoAnswerKeepsRewriteAsserting
+    partial: true
+    note: >-
+      Against the in-process slave answering chosen exceptions per
+      function code and address: 0x0A, 0x0B and 0x06 on an FC16 run, an
+      FC6, an FC5, an FC15 run and two bit RMWs on one register (on the
+      RMW's write, and separately on its read), with an FC6 that lands in
+      the same flush and a sibling bit commanded earlier; 0x02, 0x03 and
+      0x04 on the same writes (0x04 also on the RMW's read). The test calls
+      WriteOutputs directly. `naut run` hands the outputs over on the first
+      scan, on a scan where an output changed and on a redundancy takeover,
+      not on every scan (#601), so there the command waits for the next of
+      those; that is not asserted. The write-only offline debounce on
+      gateway no-answers is MB-051's.
