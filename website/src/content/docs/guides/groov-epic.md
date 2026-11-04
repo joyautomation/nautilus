@@ -199,6 +199,16 @@ The watchdog is per unit and any client's request resets it, so on an
 EPIC where groov Manage or another program also talks OptoMMP it may not
 trip when nautilus alone stops.
 
+Nor does it trip when nautilus's scan hangs (logic that never returns, a
+driver call that blocks) without `redundancy:`. The driver's own loop
+keeps polling the unit, and those polls feed the watchdog, so the outputs
+hold their last command for as long as the hang lasts. `naut run` gates
+some drivers on live scans in every project, but not this one, because
+it reads any gate as "one replica of a redundant set" (see
+[Redundancy](/guides/redundancy/#redundancy)). With `redundancy:`, a hung
+leader closes its gate and hands over (see [Redundancy](#redundancy)
+below).
+
 ## Holding outputs until an operator acknowledges
 
 Recovery is automatic: when the processor comes back, or after a
@@ -293,9 +303,13 @@ sees the gate close and its program never runs on it, or delivered twice,
 when both replicas lead for a moment while the lease changes hands. A
 standby's clean stop puts nothing back.
 Its reads still count as requests to the unit, so they feed the
-communication watchdog: a leader that hangs while it still holds the lease
-does not trip it
-([#621](https://github.com/joyautomation/nautilus/issues/621)).
+communication watchdog. For a hung leader that is fine: the lease needs
+live scans, so a leader whose scan hangs closes its gate and the standby
+takes over within about 5 to 8 s (see
+[Redundancy](/guides/redundancy/#redundancy)). It is not fine for a
+leader that keeps scanning but cannot reach the unit while the standby
+can: the standby's polls keep the watchdog fed
+([#626](https://github.com/joyautomation/nautilus/issues/626)).
 
 **A takeover moves the stream.** The role follows the write gate, looked
 at every scan and every datagram. A standby whose gate opens becomes the
