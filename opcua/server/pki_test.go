@@ -24,6 +24,7 @@ import (
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
 	"github.com/gopcua/opcua/uapolicy"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
@@ -112,7 +113,7 @@ func secureConnect(s *Server, ep *ua.EndpointDescription, der []byte, key *rsa.P
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := c.Connect(ctx); err != nil {
+	if err := gopcuatest.Connect(ctx, c); err != nil {
 		return nil, err
 	}
 	return c, nil

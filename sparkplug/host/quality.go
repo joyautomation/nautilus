@@ -44,7 +44,8 @@ import nio "github.com/joyautomation/nautilus/io"
 //     other way — see recordUnknownLocked), so both read the same to an
 //     HMI: there is nothing here to show.
 //   - a value EXISTS, but its source is not currently online: the node
-//     died (NDEATH), the node has gone quiet longer than StaleAfter
+//     died (NDEATH), the host lost its broker connection (brokerLostLocked
+//     takes every node offline), the node has gone quiet longer than StaleAfter
 //     (sweepStale), or — for a device-scoped metric — just that device
 //     died (DDEATH) while the node itself stayed up → Stale. The value is
 //     real, it is just old.
@@ -84,6 +85,15 @@ func (d *Driver) bindingQualityLocked(b Binding) (nio.Quality, bool) {
 		// that delivered it created ns first (nodeLocked) — but a value
 		// with no state behind it is closer to Stale (something was once
 		// true, nothing is tracking it now) than to Good.
+		return nio.Stale, true
+	}
+	if !ns.seqPrimed || ns.aliasMiss {
+		// Online, but waiting for a birth: an unfilled sequence gap
+		// unprimed the node, so its data is dropped until the next NBIRTH,
+		// or it sent an alias the birth never defined. The last values
+		// may be frozen, so they are not Good. With rebirth requests on
+		// the wait is one round trip; with rebirth-requests: false it
+		// lasts until a birth someone else asks for.
 		return nio.Stale, true
 	}
 	if b.Device != "" {

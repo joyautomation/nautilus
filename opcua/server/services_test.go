@@ -11,6 +11,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/gopcuatest"
 )
 
 func TestEndpointHosts(t *testing.T) {
@@ -287,7 +288,7 @@ func TestSourceTimestampIsSeededAtStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Connect(context.Background()); err != nil {
+	if err := gopcuatest.Connect(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close(context.Background())
@@ -498,7 +499,7 @@ func TestCreateSessionEndpointsAreTheDiscoveryList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Connect(ctx); err != nil {
+	if err := gopcuatest.Connect(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
