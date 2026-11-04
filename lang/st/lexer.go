@@ -28,7 +28,8 @@ type LexError struct {
 	Pos Pos
 	Msg string
 	// InString marks an error inside a string literal (unterminated, or
-	// an unknown $ escape). Parse reports these; see Parse.
+	// an unknown $ escape). Parse reports every LexError; lang/fbd's
+	// netlist parser reports these.
 	InString bool
 }
 

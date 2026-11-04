@@ -160,7 +160,7 @@ the IEC escapes: `$'` and `$"` for quotes, `$$` for a dollar sign, `$N` (or
 `$L`) a line feed, `$R`, `$T`, `$P`, and a character code, `$hh` in `'…'` and
 `$hhhh` in `"…"` (`'it$'s'` is `it's`). An unclosed string or an unknown escape
 is a parse error at the string. Comments are `(* … *)`, which nest, or `//` to
-end of line.
+end of line; a `(*` that never closes is a parse error at the `(*`.
 
 Every program `VAR` and function block instance keeps its value from scan to
 scan, and a warm swap carries that state across an online edit by name and
@@ -196,7 +196,11 @@ A `CASE` label is a constant (a literal, a named constant, or an enumeration
 member), a comma list, or an inclusive `lo..hi` range; two labels with the same
 value are a compile error. Assignment is `:=`, equality is `=`, and inequality
 is `<>`. `REGION name … END_REGION` groups statements for folding and the
-Outline, as in TIA SCL; it opens no scope.
+Outline, as in TIA SCL; it opens no scope. A statement is an assignment, a call
+or one of the forms above, and ends with `;` (optional at the end of a line):
+an expression followed by another operand (`s := a b;`), a name alone, or a
+`PROGRAM` with no `END_PROGRAM` is a parse error, in ST and in the ST that
+LD, FBD and SFC compile to.
 
 ```iecst
 CASE Mode OF

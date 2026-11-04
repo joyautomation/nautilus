@@ -22,15 +22,16 @@ func (p *Parser) peekPos() Pos { return tokPos(p.peek()) }
 
 // Parse parses Structured Text source into a Program AST.
 //
-// A string literal the lexer could not read (unterminated, or an unknown $
-// escape) is an error here, at the literal: read on, it would swallow the
-// rest of its line as text and the parser would report something else.
+// What the lexer could not read is an error here, where it starts: a
+// string literal that is unterminated or holds an unknown $ escape, and a
+// (* comment that never closes (nautilus#609). Read on, either swallows
+// the rest of its line or file and the parser reports something else, or
+// nothing.
 func Parse(source string) (*Program, error) {
 	tokens, lexErrs := LexErrors(source)
-	for _, e := range lexErrs {
-		if e.InString {
-			return nil, fmt.Errorf("line %d:%d: %s", e.Pos.Line, e.Pos.Col, e.Msg)
-		}
+	if len(lexErrs) > 0 {
+		e := lexErrs[0]
+		return nil, fmt.Errorf("line %d:%d: %s", e.Pos.Line, e.Pos.Col, e.Msg)
 	}
 	p := &Parser{tokens: tokens}
 	return p.parseProgram()
@@ -228,7 +229,11 @@ func (p *Parser) parseProgram() (*Program, error) {
 		}
 	}
 	if nameSet {
-		p.match(TokenEndProgram)
+		if !p.match(TokenEndProgram) {
+			// The loop above stops at END_PROGRAM or the end of the file:
+			// here it is the end, so the POU never closed (nautilus#609).
+			return nil, fmt.Errorf("line %d: PROGRAM %s has no END_PROGRAM", p.peek().Line, prog.Name)
+		}
 		// One POU per file: FUNCTION_BLOCKs and FUNCTIONs belong before
 		// END_PROGRAM, so anything after it would silently never compile.
 		if t := p.peek(); t.Type != TokenEOF {
@@ -655,8 +660,11 @@ func (p *Parser) parseStatement() (Statement, error) {
 		// silently dropping the `#` and running the assignment (#198).
 		return nil, p.hashPrefixErr(p.advance())
 	default:
-		p.advance()
-		return nil, nil
+		// A token that cannot start a statement: an operand left over
+		// after an expression (`x := a 5;`), a stray keyword. Said, not
+		// skipped (nautilus#609).
+		t := p.advance()
+		return nil, fmt.Errorf("line %d: unexpected %s; a statement starts with a name, IF, CASE, FOR, WHILE, REPEAT, RETURN, EXIT or CONTINUE", t.Line, t.describe())
 	}
 }
 
@@ -768,6 +776,9 @@ func (p *Parser) parseAssignOrCall() (Statement, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := p.endOfExpression(); err != nil {
+			return nil, err
+		}
 		p.match(TokenSemicolon)
 		return &AssignStmt{
 			Target:     flattenLValue(lhs),
@@ -777,15 +788,28 @@ func (p *Parser) parseAssignOrCall() (Statement, error) {
 		}, nil
 	}
 
-	// Bare identifier on a line — legacy code paths produced an identity
-	// assignment here. Preserve that behavior for backward compat.
-	p.match(TokenSemicolon)
-	return &AssignStmt{
-		Target:     flattenLValue(lhs),
-		TargetExpr: lhs,
-		Value:      lhs,
-		Pos:        pos,
-	}, nil
+	// A name alone (`b;`) does nothing: IEC has no expression statement
+	// but a call. It used to read as `b := b`, which hid an operand left
+	// over from the line before (`s := a` / `b;`) (nautilus#609).
+	return nil, fmt.Errorf("line %d: %q alone is not a statement: a statement is an assignment (x := …) or a call (f(…))", pos.Line, flattenLValue(lhs))
+}
+
+// endOfExpression reports an expression followed, on its own line, by
+// something that can only continue one: `s := a b;` is two operands with no
+// operator between them, not `s := a;` and then a statement `b`
+// (nautilus#609). The ';' that ends a statement stays optional before a
+// new line, as it always has been here.
+func (p *Parser) endOfExpression() error {
+	next := p.peek()
+	if p.pos == 0 || next.Line != p.tokens[p.pos-1].Line {
+		return nil
+	}
+	switch next.Type {
+	case TokenIdent, TokenNumber, TokenBasedNumber, TokenString, TokenTimeLiteral,
+		TokenTypedLiteral, TokenTrue, TokenFalse, TokenLParen:
+		return fmt.Errorf("line %d: expected an operator or ';' after the expression, got %s", next.Line, next.describe())
+	}
+	return nil
 }
 
 // flattenLValue renders a structured lvalue as the dot-joined string form

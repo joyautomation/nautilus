@@ -16,13 +16,13 @@ package st
 // the lexer has never accepted it.
 //
 // Lex(input) keeps returning only []Token for backward compatibility with
-// its existing callers (lang/st.Parse, lang/sfc, lang/fbd,
-// internal/project) — none of them were touched to add error plumbing.
+// its existing callers (lang/sfc, lang/fbd, internal/project, the LSP).
 // Callers that want to observe lexical errors (the unterminated-comment
 // case above, and a string literal that is unterminated or holds an
 // unknown $ escape) should call LexErrors(input) instead, which returns the
-// same token stream plus a []LexError. Parse, and lang/fbd's netlist
-// parser, report the string errors (LexError.InString).
+// same token stream plus a []LexError. Parse reports the first of them as
+// its error (nautilus#609), and lang/fbd's netlist parser reports the
+// string ones (LexError.InString).
 //
 // String literals: '…' is a STRING and "…" a WSTRING (IEC 61131-3); a $
 // escape never closes either, and a string closes on its own line. A
