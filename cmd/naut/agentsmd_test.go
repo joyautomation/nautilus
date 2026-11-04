@@ -101,6 +101,13 @@ func TestAgentsMdSnippetsRun(t *testing.T) {
 		}
 	}
 
+	// AGENTS.md tells the agent to treat every naut check warning as a bug,
+	// so its own examples must check with none, not merely compile.
+	out, code := capture(t, func() int { return runCheck([]string{dir}) })
+	if code != 0 || strings.Contains(out, "warning") {
+		t.Errorf("naut check on testdata/agents-md (exit %d) must report no errors and no warnings:\n%s", code, out)
+	}
+
 	fsys := os.DirFS(dir)
 	proj, err := project.Load(fsys, "")
 	if err != nil {
@@ -113,8 +120,8 @@ func TestAgentsMdSnippetsRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("testdata/agents-md tests do not run: %v", err)
 	}
-	if len(results) < 3 {
-		t.Fatalf("testdata/agents-md ran %d tests; want both test files", len(results))
+	if len(results) < 9 {
+		t.Fatalf("testdata/agents-md ran %d tests; want the 9 of both test files", len(results))
 	}
 	for _, r := range results {
 		if !r.Passed {

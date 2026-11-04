@@ -1,6 +1,6 @@
 # Beyond the two tests AGENTS.md shows: the rest of the example's behavior,
 # including the claims its comments make (CV follows CV_MAN off auto, abort
-# priority, the drain back to Idle).
+# priority, the drain back to Idle, CountBatch once per batch).
 tests:
   - name: start opens the fill valve
     given: { Start: true }
@@ -38,3 +38,25 @@ tests:
         expect: { XV102_Cmd: false, HeatReq: true }
       - advance: 10s
         expect: { XV102_Cmd: true, HeatReq: false }
+
+  # Abort and full true on the same scan: only declaration order decides,
+  # and the abort is declared first, so Heat never runs. Declare t_full
+  # first and this fails (Heat is active, HeatReq on, for a scan).
+  - name: abort wins over full on the same scan
+    steps:
+      - given: { Start: true, LT101_Level: 50.0 }
+        scans: 2
+        expect: { FillReq: true }
+      - given: { Start: false, Abort: true, LT101_Level: 85.0 }
+        scans: 3
+        always: { HeatReq: false }
+        expect: { DrainReq: true }
+
+  - name: a batch is counted once, as its drain ends
+    given: { Start: true, LT101_Level: 85.0, TT101_Temp: 65.0 }
+    steps:
+      - advance: 35s
+        expect: { DrainReq: true, BatchCount: 0 }
+      - given: { Start: false, LT101_Level: 2.0 }
+        advance: 5s
+        expect: { DrainReq: false, BatchCount: 1 }

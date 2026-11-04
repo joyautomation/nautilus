@@ -12,7 +12,8 @@ Docs: https://nautilus.joyautomation.com
 ```sh
 naut check            # compile every program; prints errors and warnings
 naut test             # acceptance tests (*_test.yaml), in virtual time
-naut test -run fill   # only tests whose name matches a regex; -v lists each
+naut test -run fill   # only tests whose name matches a regex
+naut test -list       # list the tests without running them
 naut run              # optional: dashboard + tag API on http://localhost:8080
 ```
 
@@ -45,9 +46,13 @@ tags:
 
 - Roles: `input` (driver writes), `output` (logic writes, driver sends),
   `setpoint` (operator writes), `state` (logic writes, nothing sends).
-- Give **every** tag an `init:`. Reading a tag that was never written faults
-  the scan at run time, and `naut check` does not catch it. A seal-in reads
-  its own coil, so even an output needs one.
+- Give **every** tag an `init:`, so it starts at a value you chose. Without
+  one, a typed `setpoint` or `state` tag starts at zero, but an `output`
+  (or a local-I/O `input` before its first reading) holds nothing until it
+  is written, and reading it first faults the scan with "undefined tag". A
+  seal-in reads its own coil before writing it. `naut check` reports an
+  output read before it is written: an error, or a warning where it cannot
+  be sure.
 - Give every tag a `desc:`. The ladder editor prints it under each contact
   and coil; FBD and SFC show it on hover.
 - Manifest tags are in scope in every program. Do **not** redeclare them in
@@ -109,9 +114,10 @@ contact (any comparison), `inst:TON(PT := T#5S)` block in the rung,
 2. **Read left to right**: request or mode, then permissives (usually NC
    contacts), then the coil at the right. Seal-in: `[ Start | Run ] /Stop
    ( Run )`.
-3. **Keep rungs small**: at most about 6 elements in series and branches at
-   most one level deep. Past that, compute a named intermediate BOOL on its
-   own rung (`PumpPermissive`, `PumpAutoCall`) and use it as one contact.
+3. **Keep rungs small**: at most about 6 elements in series, and no branch
+   inside a branch (`[ a [ b | c ] | d ]`). Past that, compute a named
+   intermediate BOOL on its own rung (`PumpPermissive`, `PumpAutoCall`) and
+   use it as one contact.
 4. **Factor, don't repeat**: a contact on every leg of a branch belongs once,
    in series, outside the branch.
 5. **Name and comment every rung**: a real name, plus `(* … *)` saying
@@ -173,8 +179,8 @@ a network.
    `AND`/`OR` with several inputs) instead of rebuilding it from math, and
    do not add blocks for what the block already does.
 6. **No operators and no control flow.** Write `ADD(a, b)`, `GT(a, b)`,
-   `AND(a, b, c)`, never `a + b` or `a > b`; the parser only reports a
-   missing `)` or `,` there. No `IF`, `CASE` or loops: that is ST.
+   `AND(a, b, c)`, never `a + b` or `a > b` (the parser rejects them: "FBD
+   has no operators"). No `IF`, `CASE` or loops: that is ST.
 7. **Feedback goes through a variable**: a seal-in is
    `Alm := AND(OR(set, Alm), NOT clear)`. A wire that reads itself is an
    error.
@@ -202,6 +208,7 @@ SFC
 
   STEP Drain:
     N DrainReq;
+    P0 CountBatch;  (* once, as Drain ends *)
   END_STEP
 
   TRANSITION t_start FROM Idle TO Fill := Start;
@@ -220,6 +227,11 @@ SFC
 
   TRANSITION t_empty FROM Drain TO Idle := LT101_Level <= EmptySP;
   END_TRANSITION
+
+  (* ACTION bodies go after the steps and transitions, before END_SFC *)
+  ACTION CountBatch:
+    BatchCount := BatchCount + 1;
+  END_ACTION
 END_SFC
 END_PROGRAM
 ```
@@ -230,8 +242,10 @@ END_PROGRAM
    keep a `State` integer that actions set and transitions compare: the
    chart then shows `State = 2` and hides the logic.
 3. **Drive outputs with associations** (`N FillReq;`). Use an `ACTION`
-   body (ST) only for what an association cannot do, such as a counter;
-   keep it short, with no `IF` deciding where the chart goes next.
+   body (ST) only for what an association cannot do, such as a counter
+   (`P0 CountBatch;` above); keep it short, with no `IF` deciding where the
+   chart goes next. `ACTION name: … END_ACTION` blocks go inside the chart,
+   after the transitions and before `END_SFC`.
 4. **One `INITIAL_STEP`**, a safe idle with no outputs. Every step reachable.
 5. **Alternatives**: transitions sharing a source fire by declaration order,
    so declare abort and fault paths first.
@@ -271,6 +285,8 @@ every timer, permissive and abort path.
 ## Before you finish
 
 - `naut check`: no errors, no new warnings. `naut test` passes.
+- New or changed behavior has a test in `*_test.yaml`: every timer,
+  permissive and abort path.
 - Every rung and network has a comment; every step and transition a name.
 - Rungs of about six elements at most, FBD nesting two deep at most, one
   writer per tag, no manifest tag redeclared in `VAR`, no `(* @layout *)`

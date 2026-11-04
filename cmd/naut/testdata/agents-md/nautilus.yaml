@@ -33,6 +33,7 @@ tags:
   - { name: HeatReq,     role: state,    type: BOOL, init: false, desc: "Sequence asks to heat" }
   - { name: DrainReq,    role: state,    type: BOOL, init: false, desc: "Sequence asks to drain" }
   - { name: FillOverrun, role: state,    type: BOOL, init: false, desc: "Fill ran past 10 min" }
+  - { name: BatchCount,  role: state,    type: DINT, init: 0,    desc: "Batches drained since start" }
   - { name: HeatPermissive, role: state, type: BOOL, init: false, desc: "The heater may run" }
   - { name: HighHighAlm, role: state,    type: BOOL, init: false, desc: "High-high level alarm" }
   - { name: HighLevelAlm, role: state,   type: BOOL, init: false, desc: "High level alarm" }
