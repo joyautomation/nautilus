@@ -1,0 +1,40 @@
+# Beyond the two tests AGENTS.md shows: the rest of the example's behavior,
+# including the claims its comments make (CV follows CV_MAN off auto, abort
+# priority, the drain back to Idle).
+tests:
+  - name: start opens the fill valve
+    given: { Start: true }
+    scans: 2
+    expect: { XV101_Cmd: true, XV102_Cmd: false }
+
+  - name: heater stays off without liquid over it
+    given: { Start: true, LT101_Level: 85.0, TT101_Temp: 20.0, HeatMinLevelSP: 95.0 }
+    advance: 2s
+    always:
+      - E101_Out = 0.0
+
+  - name: heater runs once full and permitted
+    given: { Start: true, LT101_Level: 85.0, TT101_Temp: 20.0 }
+    advance: 2s
+    expect:
+      - E101_Out > 0.0
+
+  - name: abort while filling drains, then returns to idle
+    steps:
+      - given: { Start: true, LT101_Level: 50.0 }
+        scans: 2
+        expect: { XV101_Cmd: true }
+      - given: { Start: false, Abort: true }
+        scans: 2
+        expect: { XV101_Cmd: false, XV102_Cmd: true }
+      - given: { Abort: false, LT101_Level: 2.0 }
+        scans: 2
+        expect: { XV102_Cmd: false, FillReq: false }
+
+  - name: heat holds 30 s at temperature before draining
+    given: { Start: true, LT101_Level: 85.0, TT101_Temp: 65.0 }
+    steps:
+      - advance: 25s
+        expect: { XV102_Cmd: false, HeatReq: true }
+      - advance: 10s
+        expect: { XV102_Cmd: true, HeatReq: false }

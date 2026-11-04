@@ -1,0 +1,28 @@
+page: website/src/content/docs/guides/ai-assistants.md
+title: AI assistants and AGENTS.md
+prefix: AI
+claims:
+  - id: AI-001
+    claim: >-
+      naut new writes an AGENTS.md and a CLAUDE.md into every manifest
+      project it scaffolds (minimal and the demo tour).
+    source: "#what-agentsmd-covers"
+    tests:
+      - go ./cmd/naut TestScaffoldVariants
+    partial: true
+    note: >-
+      Asserts both files exist for the minimal and demo templates and are
+      absent from the Go templates. That CLAUDE.md imports AGENTS.md is not
+      asserted.
+  - id: AI-002
+    claim: >-
+      The examples AGENTS.md shows (a tank's sequence, interlocks and heater
+      loop, and its tests) compile and pass their acceptance tests.
+    source: "#what-agentsmd-covers"
+    tests:
+      - go ./cmd/naut TestAgentsMdSnippetsRun
+    note: >-
+      Every program, tag line and test in AGENTS.md must be a file of
+      cmd/naut/testdata/agents-md verbatim; that project is then compiled
+      and its acceptance tests run, including more_test.yaml for what the
+      examples' comments claim (abort priority, CV follows CV_MAN off auto).

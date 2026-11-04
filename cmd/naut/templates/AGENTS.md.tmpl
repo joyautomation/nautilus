@@ -1,0 +1,277 @@
+# AGENTS.md
+
+For AI coding agents in this nautilus (IEC 61131-3) project. Programs are
+**text**; the VS Code extension draws the ladder, FBD and SFC diagrams from
+it with a computed layout, so you never place anything, and the structure
+of the text alone decides whether the diagram is readable. A program that
+compiles can still draw as a mess: follow these rules.
+Docs: https://nautilus.joyautomation.com
+
+## Check every change
+
+```sh
+naut check            # compile every program; prints errors and warnings
+naut test             # acceptance tests (*_test.yaml), in virtual time
+naut test -run fill   # only tests whose name matches a regex; -v lists each
+naut run              # optional: dashboard + tag API on http://localhost:8080
+```
+
+- Run `naut check` after every edit. Treat a warning as a bug: "local X
+  shadows the project tag X" and the like mean the logic is not doing what
+  it looks like.
+- `naut check` does not run the logic. When behavior changes, add or change
+  a test in `*_test.yaml` and run `naut test`.
+
+## Project layout
+
+| Path | Holds |
+| --- | --- |
+| `nautilus.yaml` | tasks (one program per task, each with a scan), tags, driver, alarms |
+| `*.st` `*.ld` `*.fbd` `*.sfc` in the root | one `PROGRAM` per file; each is a task's program |
+| `lib/**` (or a root file with no `PROGRAM`) | `FUNCTION_BLOCK`s, `FUNCTION`s and `TYPE`s, usable from every program |
+| `*_test.yaml` | acceptance tests; the fixture is `nautilus.yaml` itself |
+| `tags/*.yaml` | more tags, listed under `tag-files:` in the manifest |
+
+The first task in `tasks:` is the main task. Programs share one tag store.
+
+## Tags
+
+```yaml
+tags:
+  - { name: LT101_Level, role: input,    type: REAL, init: 0.0,  unit: "%", desc: "Tank level (LT-101)" }
+  - { name: FullSP,      role: setpoint, type: REAL, init: 80.0, unit: "%", desc: "Fill stops here" }
+  - { name: XV101_Cmd,   role: output,   type: BOOL, init: false, desc: "Fill valve XV-101" }
+```
+
+- Roles: `input` (driver writes), `output` (logic writes, driver sends),
+  `setpoint` (operator writes), `state` (logic writes, nothing sends).
+- Give **every** tag an `init:`. Reading a tag that was never written faults
+  the scan at run time, and `naut check` does not catch it. A seal-in reads
+  its own coil, so even an output needs one.
+- Give every tag a `desc:`. The ladder editor prints it under each contact
+  and coil; FBD and SFC show it on hover.
+- Manifest tags are in scope in every program. Do **not** redeclare them in
+  `VAR`: that makes a private copy that shadows the tag. Use `VAR` only for
+  block instances (timers, counters, your blocks) and true scratch values.
+- Each tag has **one writer**: one program, one rung or statement. Any
+  number of programs may read it.
+- Thresholds an operator might change are `setpoint` tags, not literals:
+  `GE(LT101_Level, HighLevelSP)`, not `GT(LT101_Level, 90.0)`.
+- Names: `LT101_Level`, `HeatPermissive` for tags; `hhTmr`, `tic` for
+  instances; `fillcmd` for rungs. Never `r1`, `w1`, `S1`.
+
+## Pick the language by the logic
+
+| Logic | Language |
+| --- | --- |
+| interlocks, permissives, seal-ins, alarm/horn logic, mode selection | LD |
+| analog signal flow: scaling, PID loops, limits, selection, filters | FBD |
+| phases and sequences: fill, heat, drain; startup/shutdown; batch | SFC |
+| math, loops, arrays, `IF`/`CASE`, strings, simulation | ST |
+
+Split a machine across programs (one per task) rather than forcing one
+language: the SFC **asks** (`FillReq`), the LD **decides**
+(`FillReq /LSHH101 ( XV101_Cmd )`), the FBD computes analog values. Asked
+for "ladder" for mostly math, put the math in FBD or ST and say so.
+
+## Ladder (`.ld`)
+
+```
+PROGRAM Interlocks
+(* Turns the sequence's requests into commands, or refuses them. *)
+LD
+  RUNG fillcmd (* fill only while asked and the high-high switch is clear *)
+    FillReq /LSHH101 ( XV101_Cmd )
+
+  RUNG draincmd (* draining is always allowed *)
+    DrainReq ( XV102_Cmd )
+
+  RUNG heatperm (* the heater needs liquid over it and no trip *)
+    GE(LT101_Level, HeatMinLevelSP) /HeaterTrip ( HeatPermissive )
+
+  RUNG hhalarm (* LSHH-101 held for 2 s *)
+    LSHH101 hhTmr:TON(PT := T#2S) ( HighHighAlm )
+
+  RUNG horn (* a new alarm sounds the horn; it seals in until acknowledged *)
+    [ +HighHighAlm | +HighLevelAlm | Horn ] /HornAck ( Horn )
+END_LD
+END_PROGRAM
+```
+
+Elements: `X` NO contact, `/X` NC contact, `+X` / `-X` rising / falling
+edge, `[ a b | c ]` parallel branch (legs are series), `GT(a, b)` function
+contact (any comparison), `inst:TON(PT := T#5S)` block in the rung,
+`{ Dest := Src }` move, `( X )` coil, `( S X )` / `( R X )` set / reset,
+`( P X )` / `( N X )` edge coil. `// text` on its own line is a note.
+
+1. **One rung, one idea, one output.** Several coils on one rung only when
+   they really share the whole condition.
+2. **Read left to right**: request or mode, then permissives (usually NC
+   contacts), then the coil at the right. Seal-in: `[ Start | Run ] /Stop
+   ( Run )`.
+3. **Keep rungs small**: at most about 6 elements in series and branches at
+   most one level deep. Past that, compute a named intermediate BOOL on its
+   own rung (`PumpPermissive`, `PumpAutoCall`) and use it as one contact.
+4. **Factor, don't repeat**: a contact on every leg of a branch belongs once,
+   in series, outside the branch.
+5. **Name and comment every rung**: a real name, plus `(* … *)` saying
+   *why*, not restating the contacts.
+6. **One coil per BOOL.** Drive a BOOL with `( X )` on exactly one rung. A
+   latch is a `( S X )` / `( R X )` pair; never mix those with `( X )` on the
+   same tag. `naut check` does not warn about this.
+7. **Power is boolean.** Comparisons are contacts; `ADD(...)` is not. Numeric
+   work goes inside a comparison's arguments or a `{ }` move. More than one
+   short assignment means the logic belongs in FBD or ST.
+8. **Timers and counters sit in the rung**: power drives `IN` (`CU`, `CD`,
+   `CLK`); never pass it yourself. Capture values with `=>`:
+   `c1:CTU(PV := 9999, CV => Starts)`.
+9. **Use edge contacts** (`+X`) instead of hand-built one-shot latches.
+10. **Repeated equipment** (two pumps) is a `FUNCTION_BLOCK` with rungs in
+    `lib/*.ld`, instantiated once per unit in a rung.
+11. **Not supported**: jumps/labels, MCR zones, negated coils `( /X )`, coils
+    inside a branch or before a block, vendor mnemonics (`XIC`, `OTE`,
+    `GRT`, `.DN`). ASCII-art ladder is not a file format.
+
+## Function Block Diagram (`.fbd`)
+
+```
+PROGRAM Control
+(* TIC-101 heater loop and the high level alarm. *)
+FBD
+  NETWORK 'TIC-101: heater temperature loop'
+  // reverse acting (DIRECT := FALSE); off auto, CV follows CV_MAN (0)
+  heatOn = AND(HeatReq, HeatPermissive)
+  tic : PID(AUTO := heatOn, PV := TT101_Temp, SP := TempSP,
+            KP := TicKp, KI := TicKi, CV_MIN := 0.0, CV_MAX := 100.0,
+            DIRECT := FALSE)
+  E101_Out := tic.CV
+
+  NETWORK 'LAH-101: high level, 10 s on-delay'
+  hiLevel = GE(LT101_Level, HighLevelSP)
+  hlTmr : TON(IN := hiLevel, PT := T#10S)
+  HighLevelAlm := hlTmr.Q
+END_FBD
+END_PROGRAM
+```
+
+Forms: `wire = BLOCK(...)` names a block output; `Tag := expr` is a coil
+(writes a variable); `inst : TYPE(Pin := ...)` declares and calls a block;
+`inst.Pin` reads an output; `NOT x` negates a pin; `NETWORK 'title'` starts
+a network.
+
+1. **One `NETWORK 'title'` per function**: one loop, one alarm, one scaling.
+   Each draws as its own titled band.
+2. **One block per line.** Give each intermediate result a wire named for
+   what it carries (`hiLevel`, `err`, `heatOn`), not `w1`. Nest calls at
+   most two deep; a long nested expression draws as a wide tree of
+   crossing wires.
+3. **Write in signal order**: wires from inputs, then block calls, then the
+   coils that write tags.
+4. **Compare once, reuse the wire.** One variable feeding many blocks in a
+   network draws long crossing wires; one named comparison does not.
+5. **Use the library block** (`PID`, `LIMIT`, `SEL`, `TON`, `R_TRIG`, `CTU`,
+   `AND`/`OR` with several inputs) instead of rebuilding it from math, and
+   do not add blocks for what the block already does.
+6. **No operators and no control flow.** Write `ADD(a, b)`, `GT(a, b)`,
+   `AND(a, b, c)`, never `a + b` or `a > b`; the parser only reports a
+   missing `)` or `,` there. No `IF`, `CASE` or loops: that is ST.
+7. **Feedback goes through a variable**: a seal-in is
+   `Alm := AND(OR(set, Alm), NOT clear)`. A wire that reads itself is an
+   error.
+8. **Never write a `(* @layout … *)` block.** It holds positions a person
+   dragged in the editor. Do not invent or edit coordinates; leave an
+   existing block alone.
+
+## Sequential Function Chart (`.sfc`)
+
+```
+PROGRAM Sequence
+(* Batch: fill, heat, drain. The chart only asks (FillReq, HeatReq,
+   DrainReq); interlocks.ld decides whether the equipment runs. *)
+SFC
+  INITIAL_STEP Idle:
+  END_STEP
+
+  STEP Fill (MAXTIME := T#10M, ERROR := FillOverrun):
+    N FillReq;
+  END_STEP
+
+  STEP Heat:
+    N HeatReq;
+  END_STEP
+
+  STEP Drain:
+    N DrainReq;
+  END_STEP
+
+  TRANSITION t_start FROM Idle TO Fill := Start;
+  END_TRANSITION
+
+  (* abort first: on a shared source step, declaration order is priority *)
+  TRANSITION t_fill_abort FROM Fill TO Drain := Abort OR Fill.ERR;
+  END_TRANSITION
+  TRANSITION t_full FROM Fill TO Heat := LT101_Level >= FullSP;
+  END_TRANSITION
+
+  TRANSITION t_heat_abort FROM Heat TO Drain := Abort;
+  END_TRANSITION
+  TRANSITION t_hot FROM Heat TO Drain := TT101_Temp >= TempSP AND Heat.T >= T#30S;
+  END_TRANSITION
+
+  TRANSITION t_empty FROM Drain TO Idle := LT101_Level <= EmptySP;
+  END_TRANSITION
+END_SFC
+END_PROGRAM
+```
+
+1. **Steps are process states** (`Fill`, `Heat`), not `S1`, `S2`.
+   Transitions get names too (`t_full`).
+2. **The condition lives in the transition**, written in process terms. Never
+   keep a `State` integer that actions set and transitions compare: the
+   chart then shows `State = 2` and hides the logic.
+3. **Drive outputs with associations** (`N FillReq;`). Use an `ACTION`
+   body (ST) only for what an association cannot do, such as a counter;
+   keep it short, with no `IF` deciding where the chart goes next.
+4. **One `INITIAL_STEP`**, a safe idle with no outputs. Every step reachable.
+5. **Alternatives**: transitions sharing a source fire by declaration order,
+   so declare abort and fault paths first.
+6. **Time**: `Step.T >= T#30S` in a condition; supervise a step with
+   `(MAXTIME := T#10M, ERROR := Tag)` and route `Step.ERR` to an abort.
+7. **Parallel branches**: `TO (A, B)` splits, `FROM (A, B)` joins.
+8. Qualifiers: `N`, `S`, `R`, `P1`, `P0`, `P`, and timed `L`, `D`, `SD`,
+   `DS`, `SL` (`D Vent(T#3S);`). Several steps may `N` the same BOOL; they
+   OR together.
+
+**ST** is standard IEC: a `FUNCTION_BLOCK` per piece of equipment in
+`lib/`, `T#5S` time literals, single-quoted strings, IEC names only.
+
+## Tests (`*_test.yaml`)
+
+```yaml
+tests:
+  - name: high-high switch closes the fill valve
+    given: { Start: true, LSHH101: true }
+    scans: 2
+    expect: { XV101_Cmd: false }
+
+  - name: high-high alarm waits its 2 s
+    given: { LSHH101: true }
+    steps:
+      - advance: 1.9s
+        expect: { HighHighAlm: false }
+      - advance: 0.2s
+        expect: { HighHighAlm: true, Horn: true }
+```
+
+Time is virtual: `advance: 10s` runs ten seconds exactly, instantly. A step
+takes one of `scans`, `advance`, `until`; `expect` checks its end, `always`
+every scan, and both take ST expressions (`- E101_Out = 0.0`) too. Test
+every timer, permissive and abort path.
+
+## Before you finish
+
+- `naut check`: no errors, no new warnings. `naut test` passes.
+- Every rung and network has a comment; every step and transition a name.
+- Rungs of about six elements at most, FBD nesting two deep at most, one
+  writer per tag, no manifest tag redeclared in `VAR`, no `(* @layout *)`
+  added or changed.

@@ -393,6 +393,13 @@ func write(sc *scaffold) error {
 		{"deploy_k8s.yaml.tmpl", "deploy/k8s.yaml", sc.Deploy && sc.NoGo()},
 		{"deploy.yml.tmpl", ".github/workflows/deploy.yml", sc.Deploy && sc.NoGo()},
 
+		// Guidance for AI coding agents (Codex, Claude Code, Cursor, …):
+		// how to structure LD/FBD/SFC text so the computed diagrams read
+		// well, and how to check the work. It describes a manifest project,
+		// so the Go templates leave it out. CLAUDE.md only imports it.
+		{"AGENTS.md.tmpl", "AGENTS.md", sc.NoGo()},
+		{"CLAUDE.md.tmpl", "CLAUDE.md", sc.NoGo()},
+
 		{"gitignore.tmpl", ".gitignore", true},
 		{"README.md.tmpl", "README.md", !sc.NoGo()},
 		{"README_nogo.md.tmpl", "README.md", sc.NoGo()},

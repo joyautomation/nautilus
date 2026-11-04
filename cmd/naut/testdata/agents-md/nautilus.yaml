@@ -1,0 +1,45 @@
+# The project AGENTS.md (cmd/naut/templates/AGENTS.md.tmpl) uses as its
+# examples. TestAgentsMdSnippetsRun holds every program, the tag lines and
+# the tests shown there to these files, then compiles and runs the project,
+# so the guidance an AI reads on every turn cannot drift from what works.
+name: agents-md
+
+tasks:
+  - program: sequence.sfc       # the first task is the main task
+    scan: 100ms
+  - name: interlocks
+    program: interlocks.ld
+    scan: 100ms
+  - name: control
+    program: control.fbd
+    scan: 100ms
+
+tags:
+  - { name: LT101_Level, role: input,    type: REAL, init: 0.0,  unit: "%", desc: "Tank level (LT-101)" }
+  - { name: TT101_Temp,  role: input,    type: REAL, init: 20.0, unit: "degC", desc: "Tank temperature (TT-101)" }
+  - { name: LSHH101,     role: input,    type: BOOL, init: false, desc: "High-high level switch (LSHH-101)" }
+  - { name: HeaterTrip,  role: input,    type: BOOL, init: false, desc: "Heater over-temperature trip" }
+  - { name: Start,       role: setpoint, type: BOOL, init: false, desc: "Operator: start a batch" }
+  - { name: Abort,       role: setpoint, type: BOOL, init: false, desc: "Operator: abort the batch" }
+  - { name: HornAck,     role: setpoint, type: BOOL, init: false, desc: "Operator: silence the horn" }
+  - { name: FullSP,      role: setpoint, type: REAL, init: 80.0, unit: "%", desc: "Fill stops here" }
+  - { name: EmptySP,     role: setpoint, type: REAL, init: 5.0,  unit: "%", desc: "Drain stops here" }
+  - { name: TempSP,      role: setpoint, type: REAL, init: 60.0, unit: "degC", desc: "Heat setpoint" }
+  - { name: HeatMinLevelSP, role: setpoint, type: REAL, init: 30.0, unit: "%", desc: "The heater needs this much liquid" }
+  - { name: HighLevelSP, role: setpoint, type: REAL, init: 90.0, unit: "%", desc: "High level alarm" }
+  - { name: TicKp,       role: setpoint, type: REAL, init: 4.0,  desc: "TIC-101 gain" }
+  - { name: TicKi,       role: setpoint, type: REAL, init: 0.2,  desc: "TIC-101 integral gain (1/s)" }
+  - { name: FillReq,     role: state,    type: BOOL, init: false, desc: "Sequence asks to fill" }
+  - { name: HeatReq,     role: state,    type: BOOL, init: false, desc: "Sequence asks to heat" }
+  - { name: DrainReq,    role: state,    type: BOOL, init: false, desc: "Sequence asks to drain" }
+  - { name: FillOverrun, role: state,    type: BOOL, init: false, desc: "Fill ran past 10 min" }
+  - { name: HeatPermissive, role: state, type: BOOL, init: false, desc: "The heater may run" }
+  - { name: HighHighAlm, role: state,    type: BOOL, init: false, desc: "High-high level alarm" }
+  - { name: HighLevelAlm, role: state,   type: BOOL, init: false, desc: "High level alarm" }
+  - { name: Horn,        role: output,   type: BOOL, init: false, desc: "Alarm horn" }
+  - { name: XV101_Cmd,   role: output,   type: BOOL, init: false, desc: "Fill valve XV-101" }
+  - { name: XV102_Cmd,   role: output,   type: BOOL, init: false, desc: "Drain valve XV-102" }
+  - { name: E101_Out,    role: output,   type: REAL, init: 0.0,  unit: "%", desc: "Heater E-101 output" }
+
+driver:
+  type: memory
