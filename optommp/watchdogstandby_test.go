@@ -5,11 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -27,9 +29,11 @@ type request struct {
 
 // link is one replica's way to the fake: every dial a fresh pipe, every
 // request recorded, and a cut that closes the pipes and refuses dials (a
-// network fault between this replica and the unit).
+// network fault between this replica and the unit). delay is how long a
+// dial takes (a real connect is not instant; a pipe is).
 type link struct {
 	dev   *fakeDevice
+	delay time.Duration
 	mu    sync.Mutex
 	reqs  []request
 	dials int
@@ -43,6 +47,7 @@ func (l *link) dial(context.Context) (net.Conn, error) {
 	if l.down.Load() {
 		return nil, errors.New("unreachable")
 	}
+	time.Sleep(l.delay)
 	a, b := net.Pipe()
 	go l.dev.Serve(b)
 	l.mu.Lock()
@@ -188,6 +193,109 @@ func TestStandbyPollsUnlessTheManifestSetsTheWatchdog(t *testing.T) {
 	}
 }
 
+// A polling standby on a unit whose watchdog is on though the manifest
+// does not set it (set in groov Manage, or left armed after `watchdog:`
+// was deleted) feeds it: Health says so, and leading clears it.
+func TestPollingStandbyReportsAWatchdogTheManifestDoesNotName(t *testing.T) {
+	dev := newBenchDevice()
+	dev.PutU32(fakeWatchdog, 500)
+	m := benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond})
+	l, g := newLink(dev), &gateWatch{}
+	drv := replica(t, m, l, g)
+	eventually(t, "the standby's polls", func() bool { return drv.Health().Reads > 3 })
+	if h := drv.Health(); h.FedWatchdogMs != 500 {
+		t.Errorf("standby: FedWatchdogMs %d, want 500", h.FedWatchdogMs)
+	}
+	g.open.Store(true)
+	eventually(t, "leading", func() bool { return drv.Health().FedWatchdogMs == 0 })
+}
+
+// takeoverRig is a standby with the watchdog set, its link taking 50 ms to
+// dial, and a runtime over drv (or over a set holding it) that leads when
+// the gate is open.
+type takeoverRig struct {
+	dev *fakeDevice
+	l   *link
+	g   *gateWatch
+	drv *Driver
+}
+
+func newTakeoverRig(t *testing.T) *takeoverRig {
+	t.Helper()
+	dev := newBenchDevice()
+	wd := 100 * time.Millisecond
+	m := benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond, Watchdog: &wd})
+	l, g := newLink(dev), &gateWatch{}
+	l.delay = 50 * time.Millisecond
+	return &takeoverRig{dev: dev, l: l, g: g, drv: replica(t, m, l, g)}
+}
+
+// runtime builds a runtime over driver with the program and tags; DI03 is
+// a seeded comms input, as `naut run` builds it, so a scan before the unit
+// is read runs on FALSE.
+func (k *takeoverRig) runtime(t *testing.T, driver nio.Driver, prog string, wait time.Duration, tags ...runtime.TagDef) *runtime.Runtime {
+	t.Helper()
+	rt, err := runtime.New(runtime.Options{
+		Program:            prog,
+		Driver:             driver,
+		Coordinator:        leaderFunc(k.g.open.Load),
+		TakeoverInputsWait: wait,
+		Tags: append([]runtime.TagDef{
+			{Name: "EPIC_M0_DI03", Role: runtime.RoleInput, Type: "BOOL", Comms: true},
+		}, tags...),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+// takeOver stands by (checking nothing reaches the unit), opens the gate,
+// and scans every 5 ms until the driver has made n scans of the unit.
+func (k *takeoverRig) takeOver(t *testing.T, rt *runtime.Runtime, n uint64) {
+	t.Helper()
+	k.g.seen()
+	rt.Scan() // standing by: no scan
+	time.Sleep(50 * time.Millisecond)
+	if dials, reqs := k.l.log(); dials != 0 || len(reqs) != 0 {
+		t.Errorf("before the takeover the standby dialled %d times and sent %d requests; want none", dials, len(reqs))
+	}
+	k.g.open.Store(true)
+	deadline := time.Now().Add(3 * time.Second)
+	for k.drv.Health().Reads < n && time.Now().Before(deadline) {
+		rt.Scan()
+		time.Sleep(5 * time.Millisecond)
+	}
+	for range 5 {
+		rt.Scan()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// commandedDO00 lists the DO00 commands in the link's must-on/must-off
+// writes, in order (true: on).
+func (k *takeoverRig) commandedDO00() []bool {
+	_, reqs := k.l.log()
+	var out []bool
+	for _, r := range reqs {
+		if !r.write || r.addr < addrDigitalMOMO || r.addr >= addrDigitalMOMO+MaxModules*momoModuleStride {
+			continue
+		}
+		lo := int(r.addr-addrDigitalMOMO) / momoModuleStride
+		off := (1 - lo) * momoModuleStride
+		if off < 0 || off+8 > len(r.data) {
+			continue
+		}
+		if binary.BigEndian.Uint32(r.data[off:])&1 != 0 {
+			out = append(out, true)
+		}
+		if binary.BigEndian.Uint32(r.data[off+4:])&1 != 0 {
+			out = append(out, false)
+		}
+	}
+	return out
+}
+
 // followProg copies DI03 (on at the unit) to DO00: a scan that ran on
 // inputs not read since the takeover would command DO00 off.
 const followProg = `PROGRAM Main
@@ -198,55 +306,27 @@ END_VAR
 EPIC_M1_DO00 := EPIC_M0_DI03;
 END_PROGRAM`
 
+var do00Tag = runtime.TagDef{Name: "EPIC_M1_DO00", Role: runtime.RoleOutput, Type: "BOOL"}
+
 // A watchdog standby's takeover connects, configures the watchdog, and
 // reads the unit before it writes; and the first command it sends comes
 // from a scan that read those inputs, not from the scans the runtime ran
 // as leader before the driver had any.
 func TestWatchdogStandbyTakeoverReadsBeforeItWrites(t *testing.T) {
-	dev := newBenchDevice()
-	wd := 100 * time.Millisecond
-	m := benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond, Watchdog: &wd})
-	l, g := newLink(dev), &gateWatch{}
-	drv := replica(t, m, l, g)
-	rt, err := runtime.New(runtime.Options{
-		Program:     followProg,
-		Driver:      drv,
-		Coordinator: leaderFunc(g.open.Load),
-		Tags: []runtime.TagDef{
-			// Seeded (a comms input exists from scan one, as `naut run`
-			// builds it): the runtime's first scans as leader run on FALSE.
-			{Name: "EPIC_M0_DI03", Role: runtime.RoleInput, Type: "BOOL", Comms: true},
-			{Name: "EPIC_M1_DO00", Role: runtime.RoleOutput, Type: "BOOL"},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	g.seen()
-	rt.Scan() // standing by: no scan
-	time.Sleep(50 * time.Millisecond)
-	if dials, reqs := l.log(); dials != 0 || len(reqs) != 0 {
-		t.Errorf("before the takeover the standby dialled %d times and sent %d requests; want none", dials, len(reqs))
-	}
-
-	g.open.Store(true)
-	deadline := time.Now().Add(2 * time.Second)
-	for !do00(dev) && time.Now().Before(deadline) {
-		rt.Scan()
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !do00(dev) {
+	k := newTakeoverRig(t)
+	rt := k.runtime(t, k.drv, followProg, 0, do00Tag)
+	k.takeOver(t, rt, 5)
+	if !do00(k.dev) {
 		t.Fatal("DO00 never followed DI03 after the takeover")
 	}
-	if got := dev.U32(fakeWatchdog); got != 100 {
+	if got := k.dev.U32(fakeWatchdog); got != 100 {
 		t.Errorf("the new leader left the watchdog at %d ms, want 100", got)
 	}
-
-	_, reqs := l.log()
+	_, reqs := k.l.log()
 	fetched := false // a read of one of the scan's packed areas
 	for _, r := range reqs {
 		if !r.write {
-			for _, a := range drv.plan.areas {
+			for _, a := range k.drv.plan.areas {
 				fetched = fetched || r.addr == a.base
 			}
 			continue
@@ -257,12 +337,98 @@ func TestWatchdogStandbyTakeoverReadsBeforeItWrites(t *testing.T) {
 		if !fetched {
 			t.Fatalf("wrote 0x%08X before any scan read the unit", r.addr)
 		}
-		if r.addr >= addrDigitalMOMO && r.addr < addrDigitalMOMO+MaxModules*momoModuleStride {
-			lo := int(r.addr-addrDigitalMOMO) / momoModuleStride
-			if off := (1 - lo) * momoModuleStride; off >= 0 && off+8 <= len(r.data) &&
-				binary.BigEndian.Uint32(r.data[off+4:])&1 != 0 {
-				t.Fatal("the takeover commanded DO00 off: a scan computed it from inputs not read since the takeover")
-			}
-		}
+	}
+	if got := k.commandedDO00(); len(got) == 0 || !got[0] {
+		t.Errorf("DO00 commands %v: the first must be on (DI03 is on at the unit)", got)
+	}
+}
+
+// If the unit is not live within TakeoverInputsWait, the takeover runs on
+// the inputs the driver holds (here, none: DI03 seeded FALSE), but the
+// driver's own hold still keeps those scans' commands off the unit: the
+// first DO00 command is on, from a scan that read it.
+func TestWatchdogStandbyTakeoverPastTheWaitStillHoldsStaleCommands(t *testing.T) {
+	k := newTakeoverRig(t)
+	k.l.delay = 150 * time.Millisecond
+	rt := k.runtime(t, k.drv, followProg, 10*time.Millisecond, do00Tag)
+	k.takeOver(t, rt, 5)
+	if got := k.commandedDO00(); len(got) == 0 || !got[0] {
+		t.Errorf("DO00 commands %v: the first must be on; the scans that ran before the unit was read are not commands", got)
+	}
+}
+
+// latchProg latches a fault the first scan DI03 reads off, and drives DO00
+// with it: a warm start on the standby's view (DI03 seeded FALSE) latches
+// it, though DI03 is on at the unit.
+const latchProg = `PROGRAM Main
+VAR_EXTERNAL
+  EPIC_M0_DI03 : BOOL;
+  EPIC_M1_DO00 : BOOL;
+END_VAR
+VAR
+  Fault : BOOL;
+END_VAR
+IF NOT EPIC_M0_DI03 THEN Fault := TRUE; END_IF;
+EPIC_M1_DO00 := Fault;
+END_PROGRAM`
+
+// The takeover's frame reset and the logic wait for live inputs: the
+// warm start runs on the unit, not on the standby's view, so no fault
+// latches and DO00 is never commanded on.
+func TestWatchdogStandbyTakeoverWarmStartsOnLiveInputs(t *testing.T) {
+	k := newTakeoverRig(t)
+	rt := k.runtime(t, k.drv, latchProg, 0, do00Tag)
+	k.takeOver(t, rt, 10)
+	if got := k.commandedDO00(); slices.Contains(got, true) || do00(k.dev) {
+		t.Errorf("DO00 commands %v, on at the unit %v: the warm start latched a fault from inputs not read since the takeover", got, do00(k.dev))
+	}
+}
+
+// sibling is another driver in the same set: one output, every value it
+// is handed recorded.
+type sibling struct {
+	mu  sync.Mutex
+	got []bool
+}
+
+func (s *sibling) InputNames() []string            { return nil }
+func (s *sibling) OutputNames() []string           { return []string{"SIB_OUT"} }
+func (s *sibling) ReadInputs() (nio.Values, error) { return nio.Values{}, nil }
+func (s *sibling) values() []bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]bool(nil), s.got...)
+}
+func (s *sibling) WriteOutputs(v nio.Values) error {
+	if b, ok := v["SIB_OUT"].(bool); ok {
+		s.mu.Lock()
+		s.got = append(s.got, b)
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// Every driver's outputs wait for the EPIC's live inputs, not only the
+// EPIC's own: a sibling in the same io.Multi set that copies DI03 is never
+// handed FALSE.
+func TestWatchdogStandbyTakeoverHoldsSiblingOutputs(t *testing.T) {
+	k := newTakeoverRig(t)
+	sib := &sibling{}
+	set, err := nio.NewMulti(nio.NamedDriver{Name: "epic", Driver: k.drv}, nio.NamedDriver{Name: "sib", Driver: sib})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog := `PROGRAM Main
+VAR_EXTERNAL
+  EPIC_M0_DI03 : BOOL;
+  SIB_OUT : BOOL;
+END_VAR
+SIB_OUT := EPIC_M0_DI03;
+END_PROGRAM`
+	rt := k.runtime(t, set, prog, 0, runtime.TagDef{Name: "SIB_OUT", Role: runtime.RoleOutput, Type: "BOOL"})
+	k.takeOver(t, rt, 5)
+	got := sib.values()
+	if len(got) == 0 || slices.Contains(got, false) {
+		t.Errorf("the sibling was handed %v: every value must be TRUE (DI03 is on at the unit)", got)
 	}
 }

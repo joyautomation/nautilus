@@ -130,6 +130,12 @@ func TestOptommpStatus(t *testing.T) {
 	if s := optommpStatus(h); s.State != "waiting" || !strings.Contains(s.Message, "watchdog") {
 		t.Fatalf("watchdog standby: %+v", s)
 	}
+	// A polling standby feeding a watchdog the manifest does not name is
+	// degraded, and says what to do.
+	h = optommp.Health{Host: "10.0.0.5", Port: 2001, Connected: true, Mode: "poll", FedWatchdogMs: 500}
+	if s := optommpStatus(h); s.State != "degraded" || !strings.Contains(s.Message, "Set watchdog:") {
+		t.Fatalf("standby feeding an unnamed watchdog: %+v", s)
+	}
 }
 
 func TestOptommpStatusStreamAndWatchdog(t *testing.T) {

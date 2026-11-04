@@ -276,3 +276,43 @@ func TestMultiWriteGateReachesChildren(t *testing.T) {
 		t.Fatalf("leader sent %v", sent)
 	}
 }
+
+// readyChild is a named child that says whether its inputs are live.
+type readyChild struct {
+	named
+	ready bool
+	asked *int
+}
+
+func (r readyChild) InputsReady() bool { *r.asked++; return r.ready }
+
+// A set is ready only when every child that can say so is, and asks each
+// of them (a child's answer may be its look at its write gate).
+func TestMultiInputsReadyWaitsForEveryChild(t *testing.T) {
+	asked := 0
+	mk := func(name string, ready bool) NamedDriver {
+		return NamedDriver{Name: name, Driver: readyChild{named: named{Memory: NewMemory(), ins: []string{name + "_In"}}, ready: ready, asked: &asked}}
+	}
+	plainChild := NamedDriver{Name: "plain", Driver: named{Memory: NewMemory(), ins: []string{"P_In"}}}
+	m, err := NewMulti(mk("a", false), plainChild, mk("b", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.InputsReady() || asked != 2 {
+		t.Fatalf("one child not ready: ready %v, asked %d; want false, 2", m.InputsReady(), asked)
+	}
+	m2, err := NewMulti(mk("a", true), plainChild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m2.InputsReady() {
+		t.Error("every child that can say so is ready: the set is ready")
+	}
+	m3, err := NewMulti(plainChild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m3.InputsReady() {
+		t.Error("no child can say: the set is ready")
+	}
+}

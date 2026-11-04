@@ -304,7 +304,9 @@ still reaching the cluster): its outputs never arrive, and a standby that
 polled would keep the watchdog from tripping, so the unit would hold the
 last command for as long as the fault lasted. So while the manifest sets
 `watchdog:` above `0s`, a standby holds no connection to the processor:
-no request, no stream, not even a TCP connect. If the leader loses the
+no request and no stream. (A gate that closes in the instant between the
+driver's look before it connects and its next look can still get a TCP
+connect, closed again before any request.) If the leader loses the
 unit, nothing else feeds the watchdog, and it trips and drives the outputs
 to their watchdog values, as it would for a single controller
 ([#626](https://github.com/joyautomation/nautilus/issues/626)). The cost
@@ -313,21 +315,36 @@ connected, if it never led), `online` is false without counting an
 outage, and the status row reads "Standby: not polling" (Health mode
 `standby (watchdog)`). Other drivers on the same standby keep polling
 their devices. Without `watchdog:`, or with `0s`, a standby polls as
-above. A watchdog set only in groov Manage is not something the driver
-knows about until it reads it, so name it in the manifest for this to
-apply.
+above.
 
-**A watchdog standby's takeover connects, reads, then writes.** When the
-gate opens the driver connects at once (it looks at the gate every scan
-while standing by, and the runtime's first push as leader wakes it). It
+**A watchdog the manifest does not name is still fed.** The driver only
+knows what the manifest says. A watchdog set in groov Manage, or left
+armed after you delete `watchdog:` from the manifest (nautilus never turns
+it off unless the manifest says `0s`), is fed by a polling standby, so a
+leader that loses the unit will not let it trip. The standby reads the
+unit's watchdog each time it starts standing by. When it is on and the
+manifest does not set it, the driver logs a warning and the status row
+turns degraded: "Standby polling feeds the unit's … ms watchdog, which the
+manifest does not set". Name the watchdog in the manifest.
+
+**A watchdog standby's takeover waits for the unit.** When the gate opens
+the driver connects at once (it looks at the gate every scan while
+standing by, and the runtime asks it on every scan of the takeover). It
 leads as below: power-up clear if owed, watchdog, custom data area and
-stream. The runtime's first scans as leader run on what the standby last
-saw, not on the unit, so the driver accepts no command until the runtime
-has read inputs from its first scan of the unit. That read asks for every
-output, and the push in the same scan, computed from fresh inputs, is the
-first command that goes out. The takeover costs a TCP connect, the
-session's set-up requests and one scan more than a polling standby's
-would.
+stream. Until its first scan of the unit has been delivered, it tells the
+runtime its inputs are not live, and the runtime holds the takeover: no
+frame reset, no logic, and no outputs from any driver, not just this one.
+Its scan loop keeps ticking meanwhile, so the replica stays live for the
+lease. The first scan that runs is a warm start on the unit's values, not
+on what the standby last saw. The wait is bounded (2 s by default). Past
+it the takeover runs on the inputs the drivers hold, with a warning, and
+this driver still sends no command until the runtime has read a scan of
+the unit, then asks for every output, so the first command it sends comes
+from fresh inputs. On a reachable unit the takeover costs the TCP connect
+and the session's set-up requests (a dozen or so, plus one per bound
+output for its watchdog value, at about 0.75 ms each) beyond a polling
+standby's. If a sibling driver's read fails on that
+first scan, the scan runs on last-known values, as any failed read does.
 
 **A takeover moves the stream.** The role follows the write gate, looked
 at every scan and every datagram. A standby whose gate opens becomes the

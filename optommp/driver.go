@@ -173,6 +173,9 @@ type Driver struct {
 	// (watchdogStandbyNote): Health reports "standby (watchdog)".
 	standby atomic.Bool
 	idle    atomic.Bool
+	// fedWatchdog is the unit's watchdog (ms) while a polling standby
+	// feeds one the manifest does not name, else 0 (noteFedWatchdog).
+	fedWatchdog atomic.Int64
 
 	// Owned by the loop: when the last session's last request went out,
 	// and how long before the new session's first one that was.
@@ -433,7 +436,25 @@ func (d *Driver) OutputsWanted() bool {
 	return d.wanted.Load() && d.wanted.Swap(false)
 }
 
+// InputsReady is the driver's io.InputsReadier: false from the gate's
+// reopen on a standby that held no session (watchdogStandbyNote) until a
+// leader's scan of the unit has delivered, so the runtime holds its
+// takeover (frame reset, logic, every driver's outputs) until the inputs
+// are live. It looks at the gate, which is how the driver sees the reopen
+// and wakes its wait to connect. Always true without `watchdog:`: a
+// polling standby's inputs are live. While the gate is closed it is true
+// too: the driver does not connect then, so waiting would gain nothing.
+func (d *Driver) InputsReady() bool {
+	if !d.gateOpen() {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.holdOut || d.freshIn
+}
+
 var (
+	_ nio.InputsReadier                      = (*Driver)(nil)
 	_ nio.OutputsRequester                   = (*Driver)(nil)
 	_ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
 )
@@ -495,6 +516,7 @@ func (d *Driver) run(ctx context.Context) {
 				d.lastSent = c.sent
 			}
 		}
+		d.fedWatchdog.Store(0) // not polling now
 		d.connected.Store(false)
 		d.markStale()
 		if ctx.Err() != nil {
@@ -540,24 +562,34 @@ var errStandby = errors.New("optommp: standing by without a session (watchdog)")
 // lease: the unit would hold the last command for as long as the fault
 // lasts, where a single controller would let the watchdog trip. So while
 // the write gate is closed and `watchdog:` is above 0s, the driver does
-// not dial: no request, no stream, not even a TCP connect. Requests are
-// what the fake counts, and what feeds the watchdog as far as the docs
-// say, but a connection that sends nothing has no use, so none is held.
-// Inputs go Stale, `online` falls without counting an outage, and Health
-// reports Mode "standby (watchdog)". The standby loses its live view of
-// the unit until it takes over. Without `watchdog:` (or with 0s) it polls
-// as standbyNote says; a watchdog set only in groov Manage is not known
-// to a driver that has not read it, so the manifest must name it.
+// not dial: no request and no stream. Requests are what the fake counts,
+// and what feeds the watchdog as far as the docs say, but a connection
+// that sends nothing has no use, so none is held, with one exception: a
+// gate that closes between run's look and the session's first look gets
+// a TCP connect that is closed again before any request. Inputs go Stale,
+// `online` falls without counting an outage, and Health reports Mode
+// "standby (watchdog)". The standby loses its live view of the unit until
+// it takes over. Without `watchdog:` (or with 0s) it polls as standbyNote
+// says. A watchdog the manifest does not name (set in groov Manage, or
+// left armed after `watchdog:` was deleted) is fed by those polls; the
+// standby reads it at the start of each role, warns, and reports it in
+// Health (noteFedWatchdog).
 //
 // The first look that finds the gate open (a takeover) wakes the wait,
 // and the driver connects and leads as standbyNote says: power-up clear,
 // watchdog, custom data area, stream. Its inputs are not live until its
-// first scan, and the runtime's first scans as leader run on what the
-// standby last saw, so WriteOutputs accepts no command until the runtime
-// has read a delivery made after the gate opened. That read asks for
-// every output (OutputsWanted), so the push of the same scan, computed
-// from fresh inputs, is the first command that goes out. A leader whose
-// gate closes ends its session and closes the connection.
+// first scan of the unit, so it reports them not ready (InputsReady) and
+// the runtime holds its takeover, frame reset, logic and every driver's
+// outputs, until a scan of the unit has been delivered (up to
+// runtime.Options.TakeoverInputsWait). As a backstop, for a takeover that
+// gave up waiting, WriteOutputs accepts no command until the runtime has
+// read a delivery made after the gate opened. That read asks for every
+// output (OutputsWanted), so the push of the same scan, computed from
+// fresh inputs, is the first command that goes out. The read releases
+// the hold even when the runtime then drops the delivery because a
+// sibling driver in the same io.Multi failed its read: that scan runs on
+// last-known values, as every scan after a failed read does. A leader
+// whose gate closes ends its session and closes the connection.
 
 // skipsStandby reports whether the manifest sets the unit's watchdog, so
 // a standby holds no session with it (watchdogStandbyNote).
@@ -589,6 +621,27 @@ func (d *Driver) standOff(ctx context.Context) bool {
 		case <-tick.C:
 		case <-d.kick:
 		}
+	}
+}
+
+// noteFedWatchdog records whether this session's role feeds a watchdog
+// the manifest does not name: a polling standby (standby true) on a unit
+// whose watchdog read on when the role began. Only `watchdog:` keeps a
+// standby off the unit, so one set in groov Manage, or left armed after
+// `watchdog:` was deleted from the manifest, is fed by the standby's
+// polls and will not trip when the leader loses the unit. It warns once
+// per role and reports it in Health (FedWatchdogMs).
+func (d *Driver) noteFedWatchdog(standby bool) {
+	d.mu.Lock()
+	wd := d.watchdogMs
+	d.mu.Unlock()
+	if !standby || d.skipsStandby() || wd <= 0 {
+		d.fedWatchdog.Store(0)
+		return
+	}
+	if d.fedWatchdog.Swap(wd) != wd {
+		d.log.Warn("optommp: standing by and polling a unit whose watchdog is on, but the manifest does not set it: these polls feed it, so a leader that loses the unit will not let it trip; set watchdog: in the manifest",
+			"host", d.m.Host, "watchdog_ms", wd)
 	}
 }
 
@@ -681,6 +734,7 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 			}
 			d.cur, d.curCustom = &d.packed, false
 		}
+		d.noteFedWatchdog(!lead)
 		leading = lead
 		d.standby.Store(!lead)
 		if first {
@@ -1449,6 +1503,11 @@ type Health struct {
 	// deliver (whether or not the manifest binds them).
 	Online                 bool
 	Outages, WatchdogTrips uint64
+	// FedWatchdogMs is non-zero while this replica stands by polling a
+	// unit whose watchdog reads on (this many ms) though the manifest does
+	// not set one: its polls feed that watchdog, so a leader that loses
+	// the unit will not let it trip (see watchdogStandbyNote).
+	FedWatchdogMs int64
 }
 
 func (d *Driver) mode() string {
@@ -1484,6 +1543,7 @@ func (d *Driver) Health() Health {
 	h.Host, h.Port = d.m.Host, d.m.Port
 	h.Connected = d.connected.Load()
 	h.Online, h.Outages, h.WatchdogTrips = d.online.Load(), d.outages.Load(), d.trips.Load()
+	h.FedWatchdogMs = d.fedWatchdog.Load()
 	h.Modules = len(d.m.Modules)
 	h.Faults = strings.Join(faults, "; ")
 	h.Reads, h.Writes, h.Errors = d.reads.Load(), d.writes.Load(), d.errs.Load()

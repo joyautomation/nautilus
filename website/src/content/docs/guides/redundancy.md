@@ -139,7 +139,13 @@ never computes.
   all, so a leader that keeps the lease but cannot reach the device lets
   the watchdog trip instead of the standby's polls feeding it. The
   standby loses its live view of just that device until it takes over
-  (see [groov EPIC](/guides/groov-epic/#redundancy)). No other driver
+  (see [groov EPIC](/guides/groov-epic/#redundancy)), so its takeover
+  waits for live inputs: the driver reports them not ready until its
+  first read of the device, and the runtime holds the takeover (frame
+  reset, logic and every driver's outputs) until then, at most 2 s
+  (`runtime.Options.TakeoverInputsWait`), its scan loop still ticking.
+  A watchdog the manifest does not name is still fed by a polling
+  standby; the groov EPIC driver warns when it finds one. No other driver
   has a manifest-set watchdog of that kind; a Modbus `rewrite:`
   keep-alive is a write, and a standby sends none.
 - **The HTTP API follows the leader.** Every replica serves the
