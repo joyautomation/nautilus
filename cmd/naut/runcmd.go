@@ -181,6 +181,12 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintln(os.Stderr, "naut run: compile:", err)
 		return 1
 	}
+	if el != nil {
+		// The lease needs live scans (#621): a leader whose scan is hung
+		// stops renewing and a standby takes over; a replica whose scans
+		// are hung does not take the lease. Set before el.Run below.
+		el.SetHealth(rt.Liveness)
+	}
 
 	alarms, err := startAlarms(proj, rt)
 	if err != nil {

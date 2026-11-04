@@ -179,8 +179,9 @@ claims:
 
   - id: RED-016
     claim: >-
-      Failover is bounded by the lease: a leader that cannot renew steps down
-      once the lease duration elapses, not before.
+      Failover is bounded by the lease: a leader that cannot renew (the
+      Lease API does not answer) steps down once the lease duration elapses,
+      not before.
     source: "#redundancy"
     tests:
       - go ./leader TestStepDown
@@ -204,6 +205,53 @@ claims:
       Release is asserted to drop leadership and let the follower acquire on
       its next tick; that a SIGTERM shutdown calls Release (cmd/naut defer) is
       not tested.
+
+  - id: RED-033
+    claim: >-
+      The lease needs live scans: a leader whose scan is hung (one scan in
+      progress longer than twice its task's period, at least 1 s and at most
+      2 s) stops renewing, closes its own gate on its first tick more than
+      half a lease after its last renew, and the standby takes the lease
+      when it lapses, so the two never lead at once. A hung scan that
+      returns after the lease is gone writes no outputs. A scan that is slow
+      for a second or two and then completes keeps the lease, and a task
+      whose period is longer than the lease is live between its scans. Each
+      change is logged once, naming the stuck task.
+    source: "#redundancy"
+    tests:
+      - go ./leader TestAHungLeaderHandsOverToTheStandby
+      - go ./leader TestUnhealthyLeaderStopsRenewing
+      - go ./leader TestASlowScanKeepsTheLease
+      - go ./leader TestASlowTaskDoesNotFlapTheLease
+      - go ./leader TestHealthChangeIsLoggedOnce
+      - go ./runtime TestLivenessAScanHungInADriverReadIsStuck
+      - go ./runtime TestLivenessASlowTaskIsLiveBetweenScans
+      - go ./runtime TestAScanThatLostLeadershipWhileHungWritesNothing
+    partial: true
+    note: >-
+      The leader tests run two electors against the fake Lease API with a
+      1 s lease and explicit times, and a real runtime whose driver read
+      blocks; the 4 s lease and the 1 to 2 s bounds of production are the
+      same arithmetic scaled, not asserted at that size (RED-017). The slow
+      task's 10 s period is not run through a whole scan of it: the test
+      shows a slow task sleeping between scans is live, and the runtime test
+      that its bound is capped at half the lease. That naut run wires the
+      runtime's liveness into the elector (cmd/naut/runcmd.go) is not
+      tested.
+
+  - id: RED-034
+    claim: >-
+      A replica whose own scans are hung does not take the lease, not an
+      empty one and not an expired one, and contends again once its scans
+      complete. At start-up a replica may take the lease before its first
+      scan, but its scan loops must be running within twice the lease or it
+      lets the lease go.
+    source: "#redundancy"
+    tests:
+      - go ./leader TestUnhealthyReplicaDoesNotAcquire
+      - go ./leader TestAHungReplicaDoesNotTakeTheLeaseBack
+      - go ./leader TestANeverScanningLeaderLosesTheLease
+      - go ./runtime TestLivenessStartupGraceAndStop
 
   - id: RED-019
     claim: >-
@@ -272,13 +320,30 @@ claims:
   - id: RED-021
     claim: >-
       Outside a cluster redundancy degrades gracefully: the controller runs
-      standalone and is always the leader.
+      standalone and is the leader, with no lease to win (unless its scans
+      hang, RED-035).
     source: "#redundancy"
     tests:
       - go ./leader TestStandalone
     partial: true
     note: >-
       The standalone elector is tested; nothing shows the runtime scanning with a redundancy: section outside a cluster.
+
+  - id: RED-035
+    claim: >-
+      Outside a cluster, a hung scan closes the write gate a lease duration
+      after the last check that found the scans live, so drivers stop
+      asserting outputs on their own and a device's communication watchdog
+      can act; the gate opens again once scans complete.
+    source: "#redundancy"
+    tests:
+      - go ./leader TestStandaloneGateClosesWhileScansHang
+    partial: true
+    note: >-
+      Asserted with a stub health func against the standalone elector, on
+      explicit ticks and on Run's own ticker. That a driver's keep-alive
+      stops when the gate closes is each driver's own claim (MB-046 and the
+      write-gate tests); a standalone naut run with a hung scan is not run.
 
   - id: RED-022
     claim: >-
