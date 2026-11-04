@@ -341,6 +341,12 @@ type FBDef struct {
 	// the FB-scoped counterpart of Program.GlobalUses. Populated alongside
 	// Globals.
 	Uses GlobalUse
+
+	// Body is the lowered body Step runs, nil for a built-in. Introspection
+	// only (the VM runs Step): it is how Program.ReadBeforeWrite follows a
+	// call into the block in scan order, and how GlobalUses reaches the
+	// FUNCTIONs the body calls.
+	Body *Program
 }
 
 // FBSlot is a single named slot on a function block instance (or a
@@ -447,6 +453,11 @@ type FuncDef struct {
 	// per-call Frame.Slots slice without reaching into Inputs/Locals.
 	FrameSize int
 	Run       FuncRunFn
+	// Body is the lowered body Run executes. Introspection only (the VM
+	// runs Run): Program.GlobalUses and Program.ReadBeforeWrite follow a
+	// call into it, since a FUNCTION's VAR_EXTERNAL reads and writes the
+	// tag store like the program that calls it.
+	Body *Program
 	// frames recycles per-call frames — see acquireFrame.
 	frames sync.Pool
 }

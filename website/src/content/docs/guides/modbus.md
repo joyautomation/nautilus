@@ -394,7 +394,10 @@ after a restart — which is what you want almost always.
 
 Writes are **coalesced**: exactly adjacent register writes staged in one
 flush merge into a single FC16 run, adjacent coils into one FC15, and a
-lone register or coil goes as FC6 or FC5. Requests on a source are strictly
+lone register or coil goes as FC6 or FC5. A source's changed values from
+one scan are queued together, so a flush takes all of them or none: a run
+changed in one scan is never split across two frames by a poll that
+happened mid-scan. Requests on a source are strictly
 sequential — Modbus TCP permits pipelining by transaction id, but the
 gateways in the field do not, so one outstanding request is the default.
 
