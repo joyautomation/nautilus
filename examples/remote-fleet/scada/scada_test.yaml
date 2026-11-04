@@ -4,10 +4,9 @@
 # NBIRTH/NDATA/NDEATH (or a live Modbus poll) would leave behind, without
 # a broker or a device in sight.
 #
-# fleet.st reads every site's data tag unconditionally every scan (ST's
-# AND does not short-circuit), so every test seeds a full baseline before
-# its first scan — the "first birth" rule fleet.st's own header comment
-# documents.
+# Every test seeds a full baseline before its first scan, so each test
+# states the fleet it starts from rather than relying on the zeros a
+# never-birthed site reads as.
 tolerance: 0.5
 
 tests:
