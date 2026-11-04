@@ -336,9 +336,12 @@ runtime its inputs are not live, and the runtime holds the takeover: no
 frame reset, no logic, and no outputs from any driver, not just this one.
 Its scan loop keeps ticking meanwhile, so the replica stays live for the
 lease. The first scan that runs is a warm start on the unit's values, not
-on what the standby last saw. The wait is bounded (2 s by default). Past
-it the takeover runs on the inputs the drivers hold, with a warning, and
-this driver still sends no command until the runtime has read a scan of
+on what the standby last saw. The wait is bounded (2 s by default), and
+one hiccup in the dial can use it up: a failed first connect retries
+after about 1 s, and a lost SYN costs as much. Past the wait the takeover
+runs on the inputs the drivers hold, with a warning: the logic and every
+other driver's outputs run on stale inputs, while this driver still
+sends no command until the runtime has read a scan of
 the unit, then asks for every output, so the first command it sends comes
 from fresh inputs. On a reachable unit the takeover costs the TCP connect
 and the session's set-up requests (a dozen or so, plus one per bound

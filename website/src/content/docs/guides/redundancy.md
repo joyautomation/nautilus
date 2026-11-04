@@ -144,6 +144,11 @@ never computes.
   first read of the device, and the runtime holds the takeover (frame
   reset, logic and every driver's outputs) until then, at most 2 s
   (`runtime.Options.TakeoverInputsWait`), its scan loop still ticking.
+  One hiccup in the dial can use up that wait: a first connect that
+  fails waits about 1 s for its retry, and a lost SYN costs as much in
+  the kernel. Past the wait the logic and every other driver's outputs
+  run on stale inputs (the groov EPIC's own outputs stay held until it
+  has read the unit).
   A watchdog the manifest does not name is still fed by a polling
   standby; the groov EPIC driver warns when it finds one. No other driver
   has a manifest-set watchdog of that kind; a Modbus `rewrite:`
