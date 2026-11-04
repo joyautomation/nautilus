@@ -138,10 +138,12 @@ nobody has ever written stops the scan with `undefined tag <name>` —
 deliberately, so a mis-wired binding fails loudly instead of running on a
 silent zero. The classic trap is a seal-in latch that *reads its own coil*
 on scan one, before the first write; the fix is a seed, and `naut check`
-reports an output with no `init:` that a program reads before it writes it
-(a program's own earlier write counts; another task's does not, since tasks
-start together). (In the FBD
-diagram, with live values on, externals with no backing tag are flagged —
+reports an output with no `init:` that a program can read before it writes
+it: an error when some path through the scan reaches the read first, a
+warning when only a loop that may run zero times writes it first. A
+program's own earlier write counts, including one made inside a function
+block or function it calls; another task's does not, since tasks start
+together. (In the FBD diagram, with live values on, externals with no backing tag are flagged —
 an amber *no tag* badge in the vars panel and on any chip that reads one —
 so you see this before the download, not after.)
 

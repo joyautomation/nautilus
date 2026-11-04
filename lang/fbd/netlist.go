@@ -560,7 +560,35 @@ func (p *netParser) expr() (expr, error) {
 	if op, fn := p.infixAhead(); fn != "" {
 		return nil, p.posErr(fmt.Sprintf("FBD has no operators; write %s(a, b), not a %s b", fn, op))
 	}
+	if col, ok := p.ampAhead(); ok {
+		return nil, &ParseError{Line: p.lastEndLine, Col: col, Msg: "FBD has no operators; write AND(a, b), not a & b"}
+	}
 	return e, nil
+}
+
+// ampAhead finds a `&` (ST's other spelling of AND) between the last token
+// and the next one on the same line, before any comment. The lexer drops a
+// character it does not know, so the token stream never shows it: without
+// this, `a & b` read as two expressions in a row.
+func (p *netParser) ampAhead() (col int, ok bool) {
+	i := p.lastEndLine - p.lineOffset - 1
+	if i < 0 || i >= len(p.lines) {
+		return 0, false
+	}
+	line := p.lines[i]
+	end := len(line)
+	if t := p.peek(); t.Line+p.lineOffset == p.lastEndLine && t.Col-1 < end {
+		end = t.Col - 1
+	}
+	for c := p.lastEndCol - 1; c >= 0 && c < end; c++ {
+		if strings.HasPrefix(line[c:], "//") || strings.HasPrefix(line[c:], "(*") {
+			return 0, false // a comment: whatever it says is not code
+		}
+		if line[c] == '&' {
+			return c + 1, true
+		}
+	}
+	return 0, false
 }
 
 // infixAhead names the ST operator at the parser's position and the block
@@ -704,6 +732,9 @@ func (p *netParser) accessorChain(head string) (string, error) {
 				return "", err
 			}
 			if !p.at(st.TokenRBracket) {
+				if op, _ := p.infixAhead(); op != "" {
+					return "", p.posErr(fmt.Sprintf("an FBD index is a number or a tag, not arithmetic (%s): compute it on a named wire first (i1 = ADD(i, 1)), then index with that wire", op))
+				}
 				return "", p.posErr("expected ']' after the index")
 			}
 			p.next()

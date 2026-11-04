@@ -843,11 +843,15 @@ func (r *Runtime) GlobalUses() ir.GlobalUse {
 }
 
 // EarlyRead is one program reading a global before it has written it in
-// the scan: Program is its POU name, and Writes says whether it writes the
-// global later (a seal-in) or leaves that to another task.
+// the scan: Program is its POU name, Lang its source language ("ld",
+// "fbd", "sfc" or "st"), Writes says whether it writes the global itself
+// (a seal-in) or leaves that to another task, and ReadFirst is how sure the
+// walk is and why the read comes first.
 type EarlyRead struct {
 	Program string
+	Lang    string
 	Writes  bool
+	ir.ReadFirst
 }
 
 // ReadBeforeWrite maps each global some program can read before that same
@@ -861,9 +865,13 @@ func (r *Runtime) ReadBeforeWrite() map[string][]EarlyRead {
 		progs = append(progs, tr.prog)
 	}
 	for _, p := range progs {
-		written := p.GlobalUses().Written
-		for name := range p.ReadBeforeWrite() {
-			out[name] = append(out[name], EarlyRead{Program: p.POU(), Writes: written[name]})
+		written := map[string]bool{}
+		for name := range p.GlobalUses().Written {
+			written[ir.NameKey(name)] = true
+		}
+		lang := Language(p.Source())
+		for name, rf := range p.ReadBeforeWrite() {
+			out[name] = append(out[name], EarlyRead{Program: p.POU(), Lang: lang, Writes: written[ir.NameKey(name)], ReadFirst: rf})
 		}
 	}
 	return out

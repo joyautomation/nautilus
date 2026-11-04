@@ -18,18 +18,25 @@ type manifestLoc struct {
 	// file is the manifest's path as the person typed the project's: bare
 	// "nautilus.yaml" when checking ".", "plant/nautilus.yaml" otherwise.
 	file string
-	// tags maps a tag's name key to where its `name:` value sits in the
-	// manifest, so a diagnostic about one tag can carry its line.
-	tags map[string][2]int
+	// tags maps a tag's name key to where its `name:` value sits — in the
+	// manifest, or in the tag file (tag-files:) that declares it — so a
+	// diagnostic about one tag can carry its file and line.
+	tags map[string]tagPos
 	// dir and label are file's two halves: the project directory, and the
 	// manifest's name relative to it as the loader's own errors spell it
 	// ("nautilus.yaml", or "sites/bad.yaml" under -m).
 	dir, label string
 }
 
+// tagPos is where one tag's `name:` value sits.
+type tagPos struct {
+	file      string
+	line, col int
+}
+
 func newManifestLoc(dir, manifestName string) manifestLoc {
 	label := manifestLabel(manifestName)
-	l := manifestLoc{file: filepath.Join(dir, filepath.FromSlash(label)), tags: map[string][2]int{}, dir: dir, label: label}
+	l := manifestLoc{file: filepath.Join(dir, filepath.FromSlash(label)), tags: map[string]tagPos{}, dir: dir, label: label}
 	raw, err := os.ReadFile(l.file)
 	if err != nil {
 		return l
@@ -40,30 +47,54 @@ func newManifestLoc(dir, manifestName string) manifestLoc {
 	}
 	top := doc.Content[0].Content
 	for i := 0; i+1 < len(top); i += 2 {
-		if top[i].Value != "tags" || top[i+1].Kind != yaml.SequenceNode {
+		if top[i+1].Kind != yaml.SequenceNode {
 			continue
 		}
-		for _, entry := range top[i+1].Content {
-			if entry.Kind != yaml.MappingNode {
-				continue
-			}
-			for j := 0; j+1 < len(entry.Content); j += 2 {
-				if entry.Content[j].Value == "name" {
-					v := entry.Content[j+1]
-					l.tags[ir.NameKey(v.Value)] = [2]int{v.Line, v.Column}
+		switch top[i].Value {
+		case "tags":
+			l.placeTags(top[i+1], l.file)
+		case "tag-files":
+			// A tag file is a bare YAML list of tags, its paths relative
+			// to the project directory. A tag may be declared once
+			// (composeTags), so each name lands in one file.
+			for _, f := range top[i+1].Content {
+				path := filepath.Join(dir, filepath.FromSlash(f.Value))
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					continue
 				}
+				var tf yaml.Node
+				if yaml.Unmarshal(raw, &tf) != nil || len(tf.Content) == 0 || tf.Content[0].Kind != yaml.SequenceNode {
+					continue
+				}
+				l.placeTags(tf.Content[0], path)
 			}
 		}
 	}
 	return l
 }
 
-// tag is the location of one tag's entry: file:line:col when the manifest
-// itself declares it, else just the file (a tag composed from a tag file, or
-// a name the decoder could not place, has no line here to give).
+// placeTags records where each `name:` in a sequence of tag entries sits.
+func (l manifestLoc) placeTags(seq *yaml.Node, file string) {
+	for _, entry := range seq.Content {
+		if entry.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(entry.Content); j += 2 {
+			if entry.Content[j].Value == "name" {
+				v := entry.Content[j+1]
+				l.tags[ir.NameKey(v.Value)] = tagPos{file, v.Line, v.Column}
+			}
+		}
+	}
+}
+
+// tag is the location of one tag's entry: file:line:col in the manifest or
+// the tag file that declares it, else just the manifest (a name the decoder
+// could not place has no line here to give).
 func (l manifestLoc) tag(name string) string {
 	if p, ok := l.tags[ir.NameKey(name)]; ok && name != "" {
-		return fmt.Sprintf("%s:%d:%d", l.file, p[0], p[1])
+		return fmt.Sprintf("%s:%d:%d", p.file, p.line, p.col)
 	}
 	return l.file
 }

@@ -34,6 +34,8 @@ func TestInfixOperatorSaysWhichBlockToUse(t *testing.T) {
 		{"x OR y", "write OR(a, b), not a OR b", 10},
 		{"x XOR y", "write XOR(a, b), not a XOR b", 10},
 		{"NOT x AND y", "write AND(a, b), not a AND b", 14},
+		{"x & y", "write AND(a, b), not a & b", 10},
+		{"AND(x & y, y)", "write AND(a, b), not a & b", 14},
 		{"-a", "negate with SUB(0, a)", 8},
 		{"ADD(a, -5)", "a typed literal (INT#-5, REAL#-1.5)", 15},
 	} {
@@ -60,5 +62,28 @@ func TestInfixOperatorSaysWhichBlockToUse(t *testing.T) {
 	}
 	if _, err := Transpile("PROGRAM P\nVAR x : BOOL; y : BOOL; END_VAR\nFBD\n  y := AND(NOT x, y)\nEND_FBD\nEND_PROGRAM\n"); err != nil {
 		t.Errorf("NOT as pin negation: %v", err)
+	}
+	// A & in a comment is not an operator.
+	for _, ok := range []string{"x // pump & valve", "x (* pump & valve *)"} {
+		if _, err := Transpile("PROGRAM P\nVAR x : BOOL; y : BOOL; END_VAR\nFBD\n  y := " + ok + "\nEND_FBD\nEND_PROGRAM\n"); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+}
+
+// An index is a number or a tag. Arithmetic in one says so and says what
+// to do, on the operator's column, not "expected ']'".
+func TestIndexArithmeticSaysToUseAWire(t *testing.T) {
+	src := "PROGRAM P\nVAR i : INT; z : INT; Lv : ARRAY[0..3] OF INT; END_VAR\nFBD\n  z := Lv[i + 1]\nEND_FBD\nEND_PROGRAM\n"
+	_, err := Transpile(src)
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want a ParseError, got %v", err)
+	}
+	if !strings.Contains(pe.Msg, "an FBD index is a number or a tag, not arithmetic (+)") || !strings.Contains(pe.Msg, "named wire") {
+		t.Errorf("message %q", pe.Msg)
+	}
+	if pe.Line != 4 || pe.Col != 13 {
+		t.Errorf("at %d:%d, want 4:13 (the operator)", pe.Line, pe.Col)
 	}
 }

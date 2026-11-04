@@ -304,6 +304,17 @@ claims:
       IF, CASE, FOR and WHILE in an FBD body are refused by naut check. No
       test tries an execution-order override.
 
+  - id: FBD-031
+    claim: >-
+      FBD has no infix operators: an operator where an expression has ended
+      (+ - * / ** MOD, comparisons, AND OR XOR, &) is a parse error, on the
+      operator's column, that names the block to use; a leading minus says
+      to negate with SUB(0, a) or write a typed negative literal. NOT is pin
+      negation and parses.
+    source: "#not-supported"
+    tests:
+      - go ./lang/fbd TestInfixOperatorSaysWhichBlockToUse
+
   - id: FBD-028
     claim: >-
       Inline arithmetic in an array index is not supported; the index is
@@ -311,6 +322,7 @@ claims:
     source: "#not-supported"
     tests:
       - go ./cmd/naut TestCheckRejects/FBD index arithmetic
+      - go ./lang/fbd TestIndexArithmeticSaysToUseAWire
 
   - id: FBD-029
     claim: Defining the same wire twice is a compile error.
