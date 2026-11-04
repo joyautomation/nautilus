@@ -87,6 +87,15 @@ func (d *Driver) bindingQualityLocked(b Binding) (nio.Quality, bool) {
 		// true, nothing is tracking it now) than to Good.
 		return nio.Stale, true
 	}
+	if !ns.seqPrimed || ns.aliasMiss {
+		// Online, but waiting for a birth: an unfilled sequence gap
+		// unprimed the node, so its data is dropped until the next NBIRTH,
+		// or it sent an alias the birth never defined. The last values
+		// may be frozen, so they are not Good. With rebirth requests on
+		// the wait is one round trip; with rebirth-requests: false it
+		// lasts until a birth someone else asks for.
+		return nio.Stale, true
+	}
 	if b.Device != "" {
 		if dev, ok := ns.devices[b.Device]; ok && !dev.online {
 			return nio.Stale, true // DDEATH on just this device

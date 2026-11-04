@@ -140,10 +140,20 @@ func (d *Driver) isStopping() bool {
 	return d.stopping
 }
 
-// mayPublish gates the STATE certificate and every outbound NCMD/DCMD. A
-// passive consumer (Primary false) never writes to the group at all, and a
-// standby replica under `redundancy:` never publishes STATE online — its LWT
-// would otherwise flap store-and-forward across every site (design §8.1).
+// mayPublish gates the STATE certificate and every outbound write (NCMD/DCMD
+// carrying tag values). A passive consumer (Primary false) publishes no STATE
+// and writes no tags, and a standby replica under `redundancy:` never
+// publishes STATE online — its LWT would otherwise flap store-and-forward
+// across every site (design §8.1).
+//
+// One exception: NCMD Node Control/Rebirth is NOT gated here. Sparkplug 3.0
+// lets ANY host application request a rebirth (§5 "Sparkplug Host
+// Application Receive Data"; §10 conformance: host applications "may also
+// send rebirth requests"), and the spec's only hint otherwise is a
+// non-normative note that a non-primary host "may not". So a passive host
+// asks for the births it missed (publishRebirth, gated on isLeader alone),
+// and rebirth-requests: false (Config.NoRebirthRequests) is the switch the
+// spec recommends for turning that off.
 func (d *Driver) mayPublish() bool { return d.cfg.Primary && d.isLeader() }
 
 // ── connect / reconnect loop ─────────────────────────────────────────────
@@ -560,10 +570,10 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 //
 // Unlike publishCommand (gated on mayPublish — Primary && isLeader), a
 // Rebirth request bypasses the Primary check: it does not contend for the
-// STATE certificate and it commands no field device, so it does not "write
-// to the group" in the sense mayPublish's doc comment means. It is gated on
-// isLeader alone, so a standby replica under redundancy: still doesn't
-// duplicate the request.
+// STATE certificate and it commands no field device, and Sparkplug 3.0 §5
+// lets any host application send one (see mayPublish). It is gated on
+// isLeader, so a standby replica under redundancy: still doesn't duplicate
+// the request, and on Config.NoRebirthRequests, which refuses every one.
 //
 // This matters for host-as-edge (docs/design/sparkplug-host.md §8.8): a
 // project consuming a group with primary: false is a passive consumer with
@@ -582,6 +592,11 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 // originate here — RequestRebirth, the connect-time sweep, a __Rebirth
 // rising edge — call countRebirth.
 func (d *Driver) publishRebirth(group, edge string) error {
+	if d.cfg.NoRebirthRequests {
+		err := fmt.Errorf("host: rebirth requests are off (rebirth-requests: false)")
+		d.log.Warn("host: rebirth request refused", "group", group, "node", edge, "error", err)
+		return err
+	}
 	p := d.publisher()
 	if p == nil {
 		err := fmt.Errorf("host: not connected")
@@ -695,8 +710,20 @@ func (d *Driver) staleLoop(ctx context.Context) {
 // site actually holds. Only a command nothing can ever address — a node with
 // no group, or a node whose queue is full — is dropped and counted.
 func (d *Driver) flushWrites() {
-	if d.publisher() == nil || !d.mayPublish() {
+	if d.publisher() == nil {
 		return // stay queued; connect() kicks us again
+	}
+	if !d.cfg.Primary {
+		// A passive host writes no tags, but the operator's __Rebirth is a
+		// rebirth request, which any host application may send (Sparkplug
+		// 3.0 §5; see mayPublish). Only those leave the queue (#576).
+		if d.isLeader() {
+			d.flushRebirthTags()
+		}
+		return
+	}
+	if !d.mayPublish() {
+		return // a standby: stay queued until promoted
 	}
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
@@ -719,18 +746,9 @@ func (d *Driver) flushWrites() {
 	hold := map[string]map[string]any{}
 
 	for name, v := range work {
-		// Synthesized <site>__Rebirth: a rising edge is an operator-forced
-		// rebirth. Change suppression upstream means only transitions get
-		// here, so "value is true" *is* the rising edge.
-		if edge, ok := d.rebirthTags[name]; ok {
-			if truthy(v) {
-				if group, ok := d.groupFor(edge); ok {
-					if err := d.publishRebirth(group, edge); err == nil {
-						d.countRebirth()
-					}
-				}
-			}
-			d.markWritten(name, v)
+		// Synthesized <site>__Rebirth: see writeRebirthTag.
+		if _, ok := d.rebirthTags[name]; ok {
+			d.writeRebirthTag(name, v)
 			continue
 		}
 		b, ok := d.byName[name]
@@ -917,6 +935,37 @@ func (d *Driver) markWritten(name string, v any) {
 		delete(d.queued[b.Node], name)
 	}
 	d.wmu.Unlock()
+}
+
+// flushRebirthTags sends the queued <site>__Rebirth writes and leaves every
+// other write queued: the whole of flushWrites for a passive host.
+func (d *Driver) flushRebirthTags() {
+	d.wmu.Lock()
+	work := map[string]any{}
+	for name, v := range d.pending {
+		if _, ok := d.rebirthTags[name]; ok {
+			work[name] = v
+			delete(d.pending, name)
+		}
+	}
+	d.wmu.Unlock()
+	for name, v := range work {
+		d.writeRebirthTag(name, v)
+	}
+}
+
+// writeRebirthTag handles one <site>__Rebirth write: a rising edge is an
+// operator-forced rebirth. Change suppression upstream (WriteOutputs) means
+// only transitions get here, so "value is true" *is* the rising edge.
+func (d *Driver) writeRebirthTag(name string, v any) {
+	if truthy(v) {
+		if group, ok := d.groupFor(d.rebirthTags[name]); ok {
+			if err := d.publishRebirth(group, d.rebirthTags[name]); err == nil {
+				d.countRebirth()
+			}
+		}
+	}
+	d.markWritten(name, v)
 }
 
 // maxQueuedPerNode bounds the dark-site queue. It is one value per TAG — a

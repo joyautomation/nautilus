@@ -20,9 +20,10 @@ driver:
   manifest: sparkplug_manifest.yaml
   primary: true                      # publish STATE (default)
   state-form: both                   # 3.0 JSON + legacy STATE/<host-id>
-  reorder-timeout: 5s                # unfilled seq gap this long -> NCMD Rebirth
+  reorder-timeout: 5s                # unfilled seq gap this long -> NCMD Rebirth (unless rebirth-requests: false)
   stale-after: 2m                    # silence this long -> node marked stale
   on-unknown: log                    # metrics the manifest never bound: log | ignore | strict
+  rebirth-requests: true             # send NCMD Rebirth requests (default)
 tag-files: [tags/sparkplug.yaml]
 ```
 
@@ -194,6 +195,8 @@ that count nothing more.
 
 On reconnect a leader host asks every site to rebirth (unless
 `rebirth-on-start` is off; then the first data a site sends asks for it).
+A host with `rebirth-requests: false` asks for nothing and waits for a
+birth another host asks for.
 A standby under `redundancy:` asks for nothing, so its sites stay offline
 and `Stale` until a birth it did not ask for, such as one the leader
 requested. Each site and device comes back online at its next birth. That
@@ -229,6 +232,10 @@ fully-birthed fleet reports an empty map. A tag never named in it is Good.
   `StaleAfter`, or (for a device-scoped metric) a `DDEATH` on just that
   device — is `Stale`. The value is real,
   just old.
+- A binding whose site is online but waiting for a birth is `Stale` too.
+  That is after a sequence gap left unfilled for `reorder-timeout`, whose
+  data is dropped until the next NBIRTH, or after the site sent a metric
+  alias its birth never defined. The values may be frozen.
 - A binding whose site is online and has delivered its metric is `Good`
   (omitted).
 
@@ -380,6 +387,27 @@ Detail: "12 tags · born 3m"}` — device sub-rows flattened as `W6/plc1`.
 That's the same shape `DriverStatusPanel`/`DriverStatusCard` already
 render for an `eip` driver, so a host project's per-site comms status
 needs zero HMI changes.
+
+## Passive hosts and rebirth requests
+
+`primary: false` makes the host a passive consumer: it publishes no STATE
+and sends no writes. It still asks for the births it missed, because
+Sparkplug does not retain births: without asking, a passive host that
+starts after a site's last birth sees nothing from it. Sparkplug 3.0 §5
+lets any host application request a rebirth, primary or not. So a passive
+host sends NCMD Node Control/Rebirth just as a primary one does: on
+connect, on reconnect, on data before a birth, after an unfilled sequence
+gap, and when an operator pulses `<site>__Rebirth`. Every other output
+write stays unsent.
+
+`rebirth-requests: false` turns every rebirth request off, including the
+operator's `__Rebirth`, as the spec suggests making it configurable. The
+host still goes online on births it did not ask for. With `primary: false`
+as well, the host publishes nothing at all, so it can run on a read-only
+broker account. Such a host sees a site only after that site's next
+birth. A sequence gap it cannot fill, or an alias it does not know, leaves
+the site online but its data `Stale` until a birth someone else asks for. The TCK's reorder-timeout check expects a rebirth request, so a
+host that must pass it keeps the default.
 
 ## Redundancy
 
