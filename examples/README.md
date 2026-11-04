@@ -43,6 +43,10 @@ to see what the VS Code extension does against a real project.
   the casing, the water in it and the submersible pump, the discharge
   run through a meter and a valve to a reservoir, and a hypochlorite feed
   — with a simulated aquifer behind it. The first screen in that style.
+- **[`plclab/`](plclab/)** — a controller MHJ PLC-Lab drives directly
+  over OPC UA, as it drives a CODESYS controller: the `PlcLabConnector`
+  struct tag, anonymous writes for a lab, a byte-copy program in place of
+  PlcLabSync, and a small tank in ladder. For teaching labs.
 
 Each project runs the same way:
 
@@ -91,6 +95,7 @@ is four projects, not one — `naut run sites/well-1`, `sites/well-2`,
 | HMI: a mimic built entirely from the kit's built-in components | batch-skid, remote-fleet | `batch-skid.mimic.json`, `scada/fleet.mimic.json` |
 | HMI: a 3D scene bound to struct tags (`@joyautomation/nautilus-hmi-3d`) | spatial-rig | `rig.scene.json`, `hmi/` |
 | HMI: a 3D scene over flat tags (`bind`, no struct), its kinds as glTF data, beside the 2D mimic of the same station | lift-station | `lift-station.scene.json`, `hmi/models/build.py`, `hmi/src/routes/3d/` |
+| OPC UA server: a simulator writing inputs anonymously, element node ids (`Inputs[17]`) | plclab | `nautilus.yaml` `opcua:`, `plclab.st` |
 | The SDK path: a custom `io.Driver`, no manifest | go-sdk | `plant.go` |
 | A plant simulation of IT hardware: a `replay` driver, fault inputs as tags, `naut snmp serve --from` | it-cluster | `lib/switch.st`, `replay_manifest.yaml` |
 

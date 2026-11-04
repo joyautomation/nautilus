@@ -88,6 +88,27 @@ claims:
       - go ./opcua/server TestNamespaceDescriptionFromTagMeta
       - go ./opcua/server TestForeignAsyncuaClient
 
+  - id: OPC-029
+    claim: >-
+      An element of an array of scalars has its own node id,
+      <tag>.<member>[i] (ns=1;s=PlcLabConnector.Inputs[17]), though Browse
+      lists no element under the array. It reads as the element's type (a
+      BYTE element a Byte, ValueRank -1); an index outside the declared
+      bounds is Bad_NodeIdUnknown; the node id resolves in any casing. Its
+      AccessLevel is CurrentRead|CurrentWrite when opcua.writable opens the
+      array, the element or an ancestor, and UserAccessLevel follows it for
+      a writer (an anonymous one included, with anonymous-writes on). A
+      writer writes it one element at a time, through the same conversions
+      and refusals as a scalar, leaving the rest of the array untouched;
+      the whole array and any IndexRange write are Bad_WriteNotSupported.
+    source: "#what-a-client-sees"
+    tests:
+      - go ./opcua/server TestElementNodeIDsRead
+      - go ./opcua/server TestElementNodeIDsAccessLevels
+      - go ./opcua/server TestElementNodeIDsAnonymousWrites
+      - go ./opcua/server TestElementNodeIDsAnonymousWritesOff
+      - go ./opcua/server TestForeignPLCLabShapedClient
+
   - id: OPC-023
     claim: >-
       The server identifies itself as nautilus: every endpoint's
@@ -390,13 +411,16 @@ claims:
       reads UserAccessLevel CurrentRead. A writer may write the Value of a
       matched scalar tag or struct member, an output included; an input
       never (Bad_NotWritable), nor a tag no pattern opens. AccessLevel is
-      CurrentRead|CurrentWrite on a matched non-input scalar (an array reads
-      CurrentRead until array writes land), AccessLevelEx follows it, and
-      UserAccessLevel is AccessLevel for a writer session and CurrentRead
-      for any other. naut check refuses a malformed pattern and warns on one
-      that matches nothing, one that matches only inputs, one that opens
-      only arrays or Objects with no scalar member, and an output it opens
-      that a program writes.
+      CurrentRead|CurrentWrite on a matched non-input scalar (an element of
+      an array included, OPC-029; the array itself reads CurrentRead until
+      array writes land), AccessLevelEx follows it, and UserAccessLevel is
+      AccessLevel for a writer session and CurrentRead for any other. naut
+      check refuses a malformed pattern and warns on one that matches
+      nothing, one that matches only inputs, one that opens no scalar but
+      arrays of scalars (saying their elements are writable one at a time
+      by node id, a whole-array or IndexRange write not yet), one that
+      opens only Objects with no scalar member, and an output it opens that
+      a program writes.
     source: "#writes"
     tests:
       - go ./internal/writable TestAllowsAMatchAndEverythingBelowIt
@@ -527,6 +551,34 @@ claims:
     note: >-
       The banner text is not asserted by a test. No black-box check covers
       anonymous writes yet.
+
+  - id: OPC-030
+    claim: >-
+      A nautilus project can be the controller MHJ PLC-Lab drives, with no
+      bridge: examples/plclab declares PlcLabConnector as one state struct
+      tag (Inputs and Outputs ARRAY[0..1023] OF BYTE, AreaInputs and
+      AreaOutputs ARRAY[0..9] of CntBytes/Addr/IoOfs WORDs, the four SIZE_
+      WORDs), opens Inputs and the area tables to anonymous writes, and
+      copies bytes between the connector and its logic by the area tables.
+      A client that connects anonymously on None, finds PlcLabConnector by
+      browse name, writes the area tables as UInt16 and single input bytes
+      by string node id, and polls Outputs sees the logic answer.
+    source: "#mhj-plc-lab"
+    tests:
+      - go ./opcua/server TestForeignPLCLabShapedClient
+      - naut examples/plclab the connector carries the sizes PLC-Lab reads
+      - naut examples/plclab with no area tables an input byte reaches nothing
+      - naut examples/plclab the area tables map input bits onto named tags and outputs back into bytes
+      - naut examples/plclab the tank fills, holds full for three seconds, drains and fills again
+      - naut examples/plclab Addr and IoOfs place bytes, and the first empty area ends the table
+      - naut examples/plclab a multi-byte area copies every byte it names
+      - naut examples/plclab an area past the connector or the image is skipped, not a fault
+    partial: true
+    note: >-
+      The client is asyncua behaving as PLC-Lab's manual and a server
+      PLC-Lab is known to accept show; PLC-Lab itself has not been run
+      against it. Its namespace handling and whether it ever writes with an
+      IndexRange are unconfirmed.
 
   - id: OPC-009
     claim: >-

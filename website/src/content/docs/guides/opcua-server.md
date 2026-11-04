@@ -84,12 +84,26 @@ URI `urn:joyautomation:nautilus:<project>` — so a client that already knows
 a nautilus address can write the node id down without browsing for it:
 
 ```
-ns=1;s=Level               a tag
-ns=1;s=P101.Drive.Speed    a member of a UDT tag
-ns=1;s=Levels[2]           an element of an array of UDTs
+ns=1;s=Level                       a tag
+ns=1;s=P101.Drive.Speed            a member of a UDT tag
+ns=1;s=Pumps[2]                    an element of an array of UDTs
+ns=1;s=Levels[2]                   an element of an array of scalars
+ns=1;s=Conn.Inputs[17]             an element of an array member of a UDT
 ```
 
-Tag names are IEC identifiers, so `ns=1;s=level` resolves to `Level`. A
+An element of an array of scalars is a Variable of its own, by node id,
+though Browse does not list it: the array is one Variable holding an OPC UA
+array, so a browsing client sees `Levels` and no children. The element node
+reads as the element's type (a `BYTE` element is a `Byte`), with
+`ValueRank` -1, and an index outside the declared bounds is
+`Bad_NodeIdUnknown`. Its `AccessLevel` follows `opcua.writable` like any
+scalar's, and a writer may write it, one element at a time (see
+[What may be written](#what-may-be-written)). A client that addresses
+bytes this way, such as MHJ PLC-Lab, needs nothing more.
+
+Tag names are IEC identifiers, so `ns=1;s=level` resolves to `Level`, and
+the same goes for members and elements: `ns=1;s=conn.inputs[17]` is
+`Conn.Inputs[17]`. A
 tag's `desc:` and `unit:` from the [tag model](/guides/tag-model/) become
 the node's `Description` — `Wet well level [ft]`.
 
@@ -469,12 +483,15 @@ opening a setpoint to your SCADA over OPC UA does not open it to everyone
 who can publish to the MQTT broker. If you want one list for both, use a
 YAML anchor.
 
-`naut check` refuses a malformed glob. It warns about three things:
+`naut check` refuses a malformed glob. It warns about:
 
 - a pattern that matches nothing, which is usually a typo or a renamed tag;
 - a pattern that matches only inputs;
-- a pattern that opens only arrays, or Objects with no scalar member,
-  which are not writable until array writes land;
+- a pattern that opens no scalar but arrays of scalars: their elements are
+  writable one at a time by node id (`ns=1;s=Trend[0]`), but a client
+  that writes the whole array, or an `IndexRange`, is refused until array
+  writes land;
+- a pattern that opens only Objects with no scalar member, so nothing;
 - an output it opens that a program writes.
 
 ### What may be written
@@ -489,12 +506,16 @@ YAML anchor.
 - **An output when it is matched.** That is how a project that commands
   another controller passes a value through. A program that writes the same
   output overwrites the client's value at its next commit.
-- **Not arrays yet.** A whole array, or any write with an `IndexRange`, is
-  `Bad_WriteNotSupported`.
+- **An array one element at a time.** An element of an array of scalars
+  is written by its own node id, `ns=1;s=Levels[2]`, when a pattern opens
+  the array (or the element); the rest of the array is untouched. A whole
+  array, or any write with an `IndexRange`, is `Bad_WriteNotSupported`
+  for now.
 
 `AccessLevel` tells a client what it may write: `CurrentRead` and
-`CurrentWrite` on a scalar `opcua.writable` opens (not an input, not an
-array), `CurrentRead` elsewhere. `UserAccessLevel` is answered for the
+`CurrentWrite` on a scalar `opcua.writable` opens (not an input; an
+element of an array is a scalar, the array itself is not), `CurrentRead`
+elsewhere. `UserAccessLevel` is answered for the
 session asking: the same as `AccessLevel` for a writer (an anonymous
 session included, when `anonymous-writes` is on), `CurrentRead` for
 anyone else, including a client whose certificate has been withdrawn or
@@ -671,6 +692,34 @@ port may write**, and the audit line can only name their address
 `(anonymous writes on)`, and the `opcua-server` row says `writable by
 anonymous clients`. Use it on a lab network only, never on a plant
 network. Off is the default.
+
+### MHJ PLC-Lab
+
+PLC-Lab drives a CODESYS controller through a container named
+`PlcLabConnector`: input bytes it writes, output bytes it reads, and two
+area tables saying which bytes it uses. A nautilus project can be that
+controller with no bridge in between: declare the container as one struct
+tag of that shape (a `state` tag, since PLC-Lab writes into it), open what
+PLC-Lab writes under `writable`, and copy bytes to and from your logic in
+a program. [`examples/plclab`](https://github.com/joyautomation/nautilus/tree/main/examples/plclab)
+is such a project, with the connector type, the copy program and a small
+tank in ladder; its README has PLC-Lab's settings (address mode
+"Address mode for CodeSys systems", anonymous) and the I/O map.
+
+```yaml
+opcua:
+  endpoint: opc.tcp://localhost:4840
+  anonymous-writes: true
+  writable:
+    - PlcLabConnector.Inputs        # its elements, by node id
+    - PlcLabConnector.AreaInputs
+    - PlcLabConnector.AreaOutputs
+```
+
+PLC-Lab reaches the bytes as elements, `ns=1;s=PlcLabConnector.Inputs[17]`,
+which nautilus serves (see [What a client sees](#what-a-client-sees)). The
+example is checked against a client that behaves as PLC-Lab is known to;
+it has not yet been run against PLC-Lab itself.
 
 ## Status
 

@@ -7,8 +7,9 @@ import (
 
 // opcua.writable is checked against the tags it is meant to open: a
 // malformed glob is an error; a pattern that matches nothing, one that
-// matches only inputs, and an output a program writes are warnings. A
-// pattern that opens a setpoint, or a UDT member, is quiet.
+// matches only inputs, one that opens only arrays of scalars, and an
+// output a program writes are warnings. A pattern that opens a setpoint, or
+// a UDT member, is quiet.
 func TestCheckWarnsOnOPCUAWritable(t *testing.T) {
 	files := func(writable string) map[string]string {
 		return map[string]string{
@@ -24,6 +25,7 @@ tags:
   - { name: P101, role: setpoint, type: Drive }
   - { name: Drives, role: setpoint, type: "ARRAY[0..1] OF Drive" }
   - { name: Trend, role: setpoint, init: [1.0, 2.0, 3.0] }
+  - { name: Counts, role: setpoint, type: "ARRAY[1..3] OF DINT" }
 `,
 			"types.st": `TYPE Drive : STRUCT Speed : REAL; Amps : REAL; END_STRUCT END_TYPE`,
 			"program.st": `PROGRAM Main
@@ -39,15 +41,21 @@ END_PROGRAM`,
 		t.Errorf("a list that opens a setpoint, a member and an array of UDTs warned (%d):\n%s", code, out)
 	}
 
-	out, code = checkIn(t, files(`["LevelSp*", "Lvl*", "Lev?l", "Pump", "Trend"]`))
+	out, code = checkIn(t, files(`["LevelSp*", "Lvl*", "Lev?l", "Pump", "Trend", "Counts"]`))
 	if code != 0 {
 		t.Fatalf("warnings must not fail the check (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "not writable until array writes land") {
+		t.Errorf("an array of scalars is called not writable, though its elements are:\n%s", out)
 	}
 	for _, want := range []string{
 		`warning: opcua.writable: "Lvl*" matches no tag or member`,
 		`warning: opcua.writable: "Lev?l" matches only inputs (Level)`,
 		`warning: opcua.writable opens output "Pump", which a program writes`,
-		`warning: opcua.writable: "Trend" opens only arrays or Objects with no scalar member (Trend)`,
+		// An array of scalars is refused whole, but its elements are
+		// writable one at a time by node id, from the declared lower bound.
+		`warning: opcua.writable: "Trend" opens arrays (Trend): a client writes their elements one at a time, by node id (ns=1;s=Trend[0]); a whole-array or IndexRange write is refused until array writes land`,
+		`warning: opcua.writable: "Counts" opens arrays (Counts): a client writes their elements one at a time, by node id (ns=1;s=Counts[1])`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)

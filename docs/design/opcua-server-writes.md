@@ -33,6 +33,7 @@ Every write is logged, whether it lands or is refused. Before any of this, the d
 | Scalar tags (BOOL, integers, enum, REAL/LREAL, TIME, STRING) | yes, if matched | — |
 | Struct members (`ns=1;s=P101.Drive.Speed`) | yes, if the member or an ancestor is matched. Applied as a read-modify-write of the whole tag under one lock (`runtime/tags.go:554-583`), as HTTP does | — |
 | Object nodes (UDT, FB, composite array) | `Bad_NotWritable`, as today (`namespace.go:515-518`) | — |
+| An element of an array of scalars, by its own node id (`ns=1;s=Levels[2]`) | yes, if the array, the element or an ancestor is matched: the element resolves to a scalar member, so it is a struct member write in all but name (made official for PLC-Lab, decision 10) | — |
 | Arrays of scalars, whole or with `IndexRange` | `Bad_WriteNotSupported`, the same line Sparkplug draws ("array writes are not supported", `sparkplug/command.go:100-105`) | whole array of the declared length; `IndexRange` as one element or a slice, through `SetPath("Levels[n]")`, which already indexes arrays (`lang/ir/setfield.go:62-87`) |
 
 **Roles.** Inputs are refused even when a pattern matches: the driver replaces them before
@@ -464,3 +465,12 @@ Added after slice 3:
      not an error: the server it describes is read-only, which is safe, but not what the
      author meant.
    - **Not in this change.** Arrays and `IndexRange` stay slice 4.
+10. **Element node ids are official (2026-11-03).** PLC-Lab reaches its connector's bytes one
+    at a time by string node id (`PlcLabConnector.Inputs[17]`), not by `IndexRange`, as the
+    one server PLC-Lab is known to accept (an instructor's asyncua bridge) shows. The
+    namespace already resolved those ids, read them, and wrote them through the member path,
+    so this records it: tested (`opcua/server/element_nodeid_test.go`, the PLC-Lab-shaped
+    `TestForeignPLCLabShapedClient` over `examples/plclab`), in the guide, claim OPC-029.
+    Browse still lists no element under an array of scalars. `naut check` no longer calls a
+    pattern on such an array unwritable; it says its elements are writable one at a time and
+    whole-array or `IndexRange` writes are not yet.
