@@ -16,7 +16,9 @@ import (
 //	R1,R2  holding 100,101  one FC16 run
 //	S      holding 200      FC6
 //	B0,B1  holding 300      two bit RMWs (FC3 + FC6) on one register,
-//	BX     holding 300      and a sibling bit commanded earlier
+//	BX     holding 300      and a sibling bit commanded earlier; all
+//	                        three write-only, so the RMWs' FC3 reads are
+//	                        the only reads of 300
 //	L      holding 400      FC6 that is never answered with an exception
 //	K      coil 10          FC5
 //	KA,KB  coils 20,21      one FC15 run
@@ -29,9 +31,9 @@ func gwManifest(addr string) Manifest {
 			{Name: "R1", Source: "DEV", Table: TableHolding, Address: 100, Format: "uint16", Writable: true},
 			{Name: "R2", Source: "DEV", Table: TableHolding, Address: 101, Format: "uint16", Writable: true},
 			{Name: "S", Source: "DEV", Table: TableHolding, Address: 200, Format: "uint16", Writable: true},
-			{Name: "B0", Source: "DEV", Table: TableHolding, Address: 300, Format: "bit:0", Writable: true},
-			{Name: "B1", Source: "DEV", Table: TableHolding, Address: 300, Format: "bit:1", Writable: true},
-			{Name: "BX", Source: "DEV", Table: TableHolding, Address: 300, Format: "bit:2", Writable: true},
+			{Name: "B0", Source: "DEV", Table: TableHolding, Address: 300, Format: "bit:0", Writable: true, WriteOnly: true},
+			{Name: "B1", Source: "DEV", Table: TableHolding, Address: 300, Format: "bit:1", Writable: true, WriteOnly: true},
+			{Name: "BX", Source: "DEV", Table: TableHolding, Address: 300, Format: "bit:2", Writable: true, WriteOnly: true},
 			{Name: "L", Source: "DEV", Table: TableHolding, Address: 400, Format: "uint16", Writable: true},
 			{Name: "K", Source: "DEV", Table: TableCoil, Address: 10, Writable: true},
 			{Name: "KA", Source: "DEV", Table: TableCoil, Address: 20, Writable: true},
@@ -42,13 +44,31 @@ func gwManifest(addr string) Manifest {
 }
 
 // gwInject answers code to every write in gwManifest except L's and CTL's,
-// and to nothing else (the bit RMWs' FC3 reads are answered).
-func gwInject(u *slave.Unit, code byte) {
+// and to nothing else. The bit RMWs get it on their FC6 write, or, with
+// rmwRead, on their FC3 read, so the write is never sent.
+func gwInject(u *slave.Unit, code byte, rmwRead bool) {
 	u.InjectExceptionAt(FCWriteMultipleRegisters, 100, code)
 	u.InjectExceptionAt(FCWriteSingleRegister, 200, code)
-	u.InjectExceptionAt(FCWriteSingleRegister, 300, code)
+	if rmwRead {
+		u.InjectExceptionAt(FCReadHoldingRegisters, 300, code)
+	} else {
+		u.InjectExceptionAt(FCWriteSingleRegister, 300, code)
+	}
 	u.InjectExceptionAt(FCWriteSingleCoil, 10, code)
 	u.InjectExceptionAt(FCWriteMultipleCoils, 20, code)
+}
+
+// gwCase is one exception and where the bit RMWs get it.
+type gwCase struct {
+	code    byte
+	rmwRead bool
+}
+
+func (c gwCase) String() string {
+	if c.rmwRead {
+		return fmt.Sprintf("%#02x/rmw-read", c.code)
+	}
+	return fmt.Sprintf("%#02x", c.code)
 }
 
 // gwRound hands vals to the driver with CTL set to ctl and waits until the
@@ -111,19 +131,25 @@ func gwCount(rec *recorder) gwFrames {
 
 // A write a gateway answers with 0x0A (path unavailable) or 0x0B (target
 // device failed to respond) never reached the device behind it (issue
-// #596). It is dropped from the queue and forgotten, so the next
-// WriteOutputs with the same value sends it again: an FC16 run, an FC6, an
-// FC5, an FC15 and a bit RMW alike. Only the tags whose write was not
-// delivered are forgotten: a write in the same flush that landed (L), and
-// a sibling bit on the RMW'd register commanded earlier (BX), are not sent
-// again. Each undelivered write is counted once as an exception.
+// #596), and one answered 0x06 (server device busy) did not run (#602).
+// It is dropped from the queue and forgotten, so the next WriteOutputs
+// with the same value sends it again: an FC16 run, an FC6, an FC5, an FC15
+// and a bit RMW alike, whether the RMW got the exception on its write or
+// on its read. Only the tags whose write was not delivered are forgotten:
+// a write in the same flush that landed (L), and a sibling bit on the
+// RMW'd register commanded earlier (BX), are not sent again. Each
+// undelivered write is counted once as an exception.
 func TestGatewayNoAnswerWriteIsResent(t *testing.T) {
-	for _, code := range []byte{0x0A, 0x0B} {
-		t.Run(fmt.Sprintf("%#02x", code), func(t *testing.T) {
+	var cases []gwCase
+	for _, code := range []byte{0x0A, 0x0B, 0x06} {
+		cases = append(cases, gwCase{code, false}, gwCase{code, true})
+	}
+	for _, c := range cases {
+		t.Run(c.String(), func(t *testing.T) {
 			d, u, rec := gwSetup(t)
 			excs0 := d.Health().Sources[0].Exceptions
 
-			gwInject(u, code)
+			gwInject(u, c.code, c.rmwRead)
 			gwRound(t, d, u, gwCmd, false)
 			before := gwCount(rec)
 			// 1 FC16 + 1 FC6@200 + 2 bit RMWs + 1 FC5 + 1 FC15.
@@ -135,7 +161,7 @@ func TestGatewayNoAnswerWriteIsResent(t *testing.T) {
 			}
 
 			// The gateway path is back; the program's values have not moved.
-			gwInject(u, 0)
+			gwInject(u, 0, c.rmwRead)
 			gwRound(t, d, u, gwCmd, true)
 			after := gwCount(rec)
 
@@ -186,17 +212,19 @@ func TestGatewayNoAnswerWriteIsResent(t *testing.T) {
 // A write the device itself refuses (0x02 illegal address, 0x03 illegal
 // value) is dropped and NOT re-sent while the program's value stands: the
 // device answered, and sending it again would only be refused again
-// (today's behaviour, kept by #596). A changed value still goes out.
+// (today's behaviour, kept by #596). So is one answered 0x04 (server
+// device failure): it may have partly run, and a re-send could fire a
+// write-to-trigger register twice (#602). A changed value still goes out.
 func TestRefusedWriteIsNotResent(t *testing.T) {
-	for _, code := range []byte{0x02, 0x03} {
-		t.Run(fmt.Sprintf("%#02x", code), func(t *testing.T) {
+	for _, c := range []gwCase{{0x02, false}, {0x03, false}, {0x04, false}, {0x04, true}} {
+		t.Run(c.String(), func(t *testing.T) {
 			d, u, rec := gwSetup(t)
 
-			gwInject(u, code)
+			gwInject(u, c.code, c.rmwRead)
 			gwRound(t, d, u, gwCmd, false)
 			before := gwCount(rec)
 
-			gwInject(u, 0)
+			gwInject(u, 0, c.rmwRead)
 			gwRound(t, d, u, gwCmd, true)
 			if after := gwCount(rec); after != before {
 				t.Errorf("a refused write with an unchanged value was sent again: %+v → %+v", before, after)
@@ -286,16 +314,22 @@ func TestGatewayNoAnswerKeepsRewriteAsserting(t *testing.T) {
 	u.InjectExceptionAt(FCWriteSingleRegister, 500, 0)
 	waitFor(t, "the re-assert lands", func() bool { return u.Holding(500) == 5 })
 
-	// An unchanged value between re-asserts is not one more command: over
-	// ten periods there are about ten frames, not twenty.
+	// An unchanged value between re-asserts is not one more command. A
+	// re-assert is scheduled a full period after the last one fired, so in
+	// the measured time there are at most elapsed/period + 1 of them; ten
+	// pushes that each added a frame would show up as ten more.
+	const period = 40 * time.Millisecond
 	n0 := len(rec.writes(FCWriteSingleRegister, 500))
+	start := time.Now()
 	for range 10 {
 		if err := d.WriteOutputs(nio.Values{"KW": float64(5)}); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(period)
 	}
-	if n := len(rec.writes(FCWriteSingleRegister, 500)) - n0; n > 14 {
-		t.Errorf("%d frames in ten re-assert periods: an unchanged value must not add to the re-asserts", n)
+	n := len(rec.writes(FCWriteSingleRegister, 500)) - n0
+	elapsed := time.Since(start)
+	if limit := int(elapsed/period) + 2; n > limit {
+		t.Errorf("%d frames in %v (at most %d re-asserts): an unchanged value must not add to the re-asserts", n, elapsed, limit)
 	}
 }
