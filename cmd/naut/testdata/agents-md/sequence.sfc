@@ -1,0 +1,43 @@
+PROGRAM Sequence
+(* Batch: fill, heat, drain. The chart only asks (FillReq, HeatReq,
+   DrainReq); interlocks.ld decides whether the equipment runs. *)
+SFC
+  INITIAL_STEP Idle:
+  END_STEP
+
+  STEP Fill (MAXTIME := T#10M, ERROR := FillOverrun):
+    N FillReq;
+  END_STEP
+
+  STEP Heat:
+    N HeatReq;
+  END_STEP
+
+  STEP Drain:
+    N DrainReq;
+    P0 CountBatch;  (* once, as Drain ends *)
+  END_STEP
+
+  TRANSITION t_start FROM Idle TO Fill := Start;
+  END_TRANSITION
+
+  (* abort first: on a shared source step, declaration order is priority *)
+  TRANSITION t_fill_abort FROM Fill TO Drain := Abort OR Fill.ERR;
+  END_TRANSITION
+  TRANSITION t_full FROM Fill TO Heat := LT101_Level >= FullSP;
+  END_TRANSITION
+
+  TRANSITION t_heat_abort FROM Heat TO Drain := Abort;
+  END_TRANSITION
+  TRANSITION t_hot FROM Heat TO Drain := TT101_Temp >= TempSP AND Heat.T >= T#30S;
+  END_TRANSITION
+
+  TRANSITION t_empty FROM Drain TO Idle := LT101_Level <= EmptySP;
+  END_TRANSITION
+
+  (* ACTION bodies go after the steps and transitions, before END_SFC *)
+  ACTION CountBatch:
+    BatchCount := BatchCount + 1;
+  END_ACTION
+END_SFC
+END_PROGRAM

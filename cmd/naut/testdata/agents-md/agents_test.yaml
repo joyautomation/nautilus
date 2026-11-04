@@ -1,0 +1,13 @@
+tests:
+  - name: high-high switch closes the fill valve
+    given: { Start: true, LSHH101: true }
+    scans: 2
+    expect: { XV101_Cmd: false }
+
+  - name: high-high alarm waits its 2 s
+    given: { LSHH101: true }
+    steps:
+      - advance: 1.9s
+        expect: { HighHighAlm: false }
+      - advance: 0.2s
+        expect: { HighHighAlm: true, Horn: true }

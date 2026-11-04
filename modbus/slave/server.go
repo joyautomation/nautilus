@@ -182,7 +182,7 @@ func (s *Server) serve(c net.Conn) {
 		var resp []byte
 		if u == nil {
 			resp = exception(txid, unit, fc, 0x0B) // gateway target failed to respond
-		} else if code, ok := u.injected(fc); ok {
+		} else if code, ok := u.injectedFor(fc, data); ok {
 			resp = exception(txid, unit, fc, code)
 		} else if out, exc := s.dispatch(u, fc, data); exc != 0 {
 			resp = exception(txid, unit, fc, exc)

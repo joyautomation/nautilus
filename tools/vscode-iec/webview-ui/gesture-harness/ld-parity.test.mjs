@@ -9,7 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	recordClips, withPage, deliver, posted, reset, center, key, clickAt, ldOps, sleep, byId, esc, ctrlKey, typeText,
-	paletteBtn, LD
+	paletteBtn, LD,
+	opsPosted
 } from './diagram-helpers.mjs';
 
 recordClips('ld-parity');
@@ -84,7 +85,7 @@ test('Ladder edge contact: the palette inserts P and N contacts (L22, #213)', as
 		await reset(b);
 		await clickAt(b, await paletteBtn(b, '⊣P⊢'));
 		await clickAt(b, await paletteBtn(b, '⊣N⊢'));
-		assert.deepEqual(await ldOps(b), [
+		assert.deepEqual(await opsPosted(b, ldOps, 2), [
 			{ type: 'insert', rung: 'r2', kind: 'edge', mode: 'P', path: [], index: 999 },
 			{ type: 'insert', rung: 'r2', kind: 'edge', mode: 'N', path: [], index: 999 }
 		]);
@@ -106,7 +107,7 @@ test('Ladder edge contact: P cycles a selected contact NO → P → N → NC →
 			await clickAt(b, await center(b, byId(el.kind, 'a')));
 			await reset(b);
 			await P(b);
-			const ops = await ldOps(b);
+			const ops = await opsPosted(b, ldOps, 1);
 			assert.equal(ops.length, 1, JSON.stringify(ops));
 			assert.deepEqual({ ...ops[0], mode: undefined }, { type: 'setContactForm', rung: 'r1', path: [0], mode: undefined });
 			seen.push(ops[0].mode);
@@ -117,7 +118,7 @@ test('Ladder edge contact: P cycles a selected contact NO → P → N → NC →
 		await clickAt(b, await center(b, byId('edge', 'a')));
 		await reset(b);
 		await N(b);
-		assert.deepEqual(await ldOps(b), [{ type: 'setContactForm', rung: 'r1', path: [0], mode: 'NC' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'setContactForm', rung: 'r1', path: [0], mode: 'NC' }]);
 		// A coil has no contact form: P does nothing.
 		await clickAt(b, await center(b, byId('coil', 'y')));
 		await reset(b);
@@ -137,7 +138,7 @@ test('Ladder edge contact: double-click a contact and type +Tag — the retag po
 		await reset(b);
 		await typeText(b, '+Start');
 		await enter(b);
-		assert.deepEqual(await ldOps(b), [{ type: 'setRef', rung: 'r1', path: [0], ref: '+Start' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'setRef', rung: 'r1', path: [0], ref: '+Start' }]);
 		await deliver(b, { type: 'ldModel', model: EDGE, title: 'program.ld' });
 		const e = await center(b, byId('edge', 'M1_StartPB'));
 		await b.dblclick(e.x, e.y);
@@ -147,7 +148,7 @@ test('Ladder edge contact: double-click a contact and type +Tag — the retag po
 		await reset(b);
 		await typeText(b, 'M2_StartPB');
 		await enter(b);
-		assert.deepEqual(await ldOps(b), [{ type: 'setRef', rung: 'm1', path: [0], ref: 'M2_StartPB' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'setRef', rung: 'm1', path: [0], ref: 'M2_StartPB' }]);
 	});
 });
 
@@ -165,7 +166,7 @@ test('Ladder rung copy: select a rung, Ctrl+C, select another, Ctrl+V — pasteR
 		assert.deepEqual(await ldOps(b), [], 'a copy posts nothing');
 		await clickAt(b, await center(b, rungName('r2')));
 		await ctrlKey(b, 'v');
-		const ops = await ldOps(b);
+		const ops = await opsPosted(b, ldOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		const r1 = model.rungs[0];
 		assert.deepEqual(ops[0], {
@@ -188,14 +189,14 @@ test('Ladder rung copy: the palette ⧉ then ⎘ pastes below the source when no
 		await sleep(100);
 		await clickAt(b, await paletteBtn(b, '⎘'));
 		await sleep(500);
-		let ops = await ldOps(b);
+		let ops = await opsPosted(b, ldOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'pasteRung');
 		assert.equal(ops[0].after, 'r2');
 		await clickAt(b, await center(b, rungName('r1')));
 		await reset(b);
 		await clickAt(b, await paletteBtn(b, '✂'));
-		ops = await ldOps(b);
+		ops = await opsPosted(b, ldOps, 1);
 		assert.deepEqual(ops, [{ type: 'deleteRung', rung: 'r1' }]);
 	});
 });
@@ -246,7 +247,7 @@ test('Ladder declare: a CTU\'s CV => Starts is offered as VAR_EXTERNAL : INT, no
 		assert.equal(await declText(b, 'M1_Starts', 'VAR'), 'VAR : INT');
 		await reset(b);
 		await clickAt(b, await declBtn(b, 'M1_Starts', 'VAR_EXTERNAL'));
-		assert.deepEqual(await ldOps(b), [{ type: 'declareVar', name: 'M1_Starts', varType: 'INT', section: 'VAR_EXTERNAL' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'declareVar', name: 'M1_Starts', varType: 'INT', section: 'VAR_EXTERNAL' }]);
 	});
 });
 
@@ -280,7 +281,7 @@ test('Ladder declare: inside a FUNCTION_BLOCK the offer makes pins — a read is
 		assert.equal(await b.eval(`document.querySelectorAll('.declpop button[data-section="VAR_EXTERNAL"]').length`), 0, 'no tags inside a block');
 		await reset(b);
 		await clickAt(b, await declBtn(b, 'Stop', 'VAR_INPUT'));
-		assert.deepEqual(await ldOps(b), [{ type: 'declareVar', name: 'Stop', varType: 'BOOL', section: 'VAR_INPUT', block: 'MotorStarter' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'declareVar', name: 'Stop', varType: 'BOOL', section: 'VAR_INPUT', block: 'MotorStarter' }]);
 	});
 });
 
@@ -308,7 +309,7 @@ test('Ladder vars panel: a block\'s scope declares its pins (in → out → in/o
 		await typeText(b, 'Faulted');
 		await reset(b);
 		await enter(b);
-		let ops = await ldOps(b);
+		let ops = await opsPosted(b, ldOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.deepEqual({ ...ops[0], varType: undefined }, { type: 'declareVar', name: 'Faulted', varType: undefined, section: 'VAR_OUTPUT', block: 'MotorStarter' });
 		// Rename: double-click the pin's name, type, Enter.
@@ -320,13 +321,13 @@ test('Ladder vars panel: a block\'s scope declares its pins (in → out → in/o
 		await reset(b);
 		await typeText(b, 'StartReq');
 		await enter(b);
-		ops = await ldOps(b);
+		ops = await opsPosted(b, ldOps, 1);
 		assert.deepEqual(ops, [{ type: 'renameVar', name: 'Start', newName: 'StartReq', block: 'MotorStarter' }]);
 		// Delete it from its own block.
 		await b.eval(`document.querySelector('.rows .row[data-id="Start"] .del').style.visibility = 'visible'`);
 		await reset(b);
 		await clickAt(b, await center(b, `.rows .row[data-id="Start"] .del`));
-		assert.deepEqual(await ldOps(b), [{ type: 'deleteVar', name: 'Start', block: 'MotorStarter' }]);
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'deleteVar', name: 'Start', block: 'MotorStarter' }]);
 	});
 });
 

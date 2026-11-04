@@ -10,7 +10,7 @@
 // Run: `npm run test:gestures` (from webview-ui, after `npm run build`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recordClips, withPage, deliver, FBD, LD, SFC, sleep } from './diagram-helpers.mjs';
+import { recordClips, withPage, deliver, FBD, LD, SFC } from './diagram-helpers.mjs';
 
 recordClips('force');
 
@@ -35,7 +35,6 @@ test('FBD: a forced input chip and its VARS pill carry the F badge; unforced one
 		};
 		await deliver(b, { type: 'model', model, title: 'n.fbd' });
 		await deliver(b, live({ a: true, b: false, y: false }, { a: true }));
-		await sleep(200);
 		const ps = await pills(b);
 		const forced = ps.filter((p) => p.forced);
 		assert.ok(forced.length >= 1, `no forced pill among ${JSON.stringify(ps)}`);
@@ -48,7 +47,6 @@ test('FBD: a forced input chip and its VARS pill carry the F badge; unforced one
 
 		// The force removed: the next frame carries no table, the badge goes.
 		await deliver(b, live({ a: false, b: false, y: false }, {}));
-		await sleep(200);
 		assert.deepEqual((await pills(b)).filter((p) => p.forced), [], 'badge gone once unforced');
 	});
 });
@@ -57,7 +55,6 @@ test('Ladder: a forced operand shows F ahead of its live value', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
 		await deliver(b, live({ a: true, b: true, y: true, z: true, t1: { Q: false, ET: 0 } }, { b: true }));
-		await sleep(200);
 		const vals = await b.eval(`[...document.querySelectorAll('text.liveval')].map((t) => ({
 			text: t.textContent, mark: !!t.querySelector('tspan.nx-forced-mark')
 		}))`);
@@ -87,11 +84,9 @@ test('SFC: steps and transitions carry the context the Set Active Step / Fire Tr
 
 		// A forced action target is marked on the chart.
 		await deliver(b, live({ _s_run_x: true, _s_idle_x: false, pump: true }, { pump: true }));
-		await sleep(200);
 		const marks = await b.eval(`[...document.querySelectorAll('.assoctarget')].map((t) => ({ text: t.textContent, mark: !!t.querySelector('.nx-forced-mark') }))`);
 		assert.deepEqual(marks, [{ text: 'PumpF', mark: true }]);
 		await deliver(b, live({ _s_run_x: true, _s_idle_x: false, pump: true }, {}));
-		await sleep(200);
 		const after = await b.eval(`[...document.querySelectorAll('.assoctarget .nx-forced-mark')].length`);
 		assert.equal(after, 0);
 	});

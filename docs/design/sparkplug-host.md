@@ -154,7 +154,8 @@ matches the runtime, which holds last-known values when a driver read fails. Qua
 driver-synthesized companion tags, declared in the manifest like any other so ST can interlock
 and the HMI can bind:
 
-- `<site>__Online` — BOOL, node online (NBIRTH seen, no matching NDEATH)
+- `<site>__Online` — BOOL, node online (NBIRTH seen, no matching NDEATH, and the host's
+  broker connection has not dropped since: a lost connection takes every node offline, #540)
 - `<site>_<device>__Online` — BOOL, per device
 - `<site>__Outages`, `<site>_<device>__Outages` — DINT, times the matching `__Online` went
   false since the driver started (issue #449; the first birth is not an outage)

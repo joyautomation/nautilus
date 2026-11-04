@@ -40,20 +40,58 @@ const (
 const exceptionsToPark = 3
 
 // suffixOnline names the driver-synthesized per-source companion:
-// "<source>__Online" is a BOOL input that is true while the source's
-// connection is up — the guard a program reads before trusting the source's
-// tags, exactly like sparkplug/host's "<site>__Online".
+// "<source>__Online" is a BOOL input that is true while the device answers:
+// the guard a program reads before trusting the source's tags, exactly like
+// sparkplug/host's "<site>__Online" (issue #539). It starts false and goes
+// true on the first answer on a connection, not on the TCP dial. An answer
+// is a reply, or an exception other than the gateway ones: 0x02 (illegal
+// data address) is the device talking about one bad span, which per-tag
+// quality already reports. Gateway exceptions 0x0A (path unavailable) and
+// 0x0B (target failed to respond) mean nobody answered. The source goes
+// offline, still connected to the gateway, once every block's latest read
+// got one AND the last gatewayMissesToOffline requests in a row did (one
+// RS-485 timeout behind a gateway is not an outage).
+//
+// For a polled source only reads decide: a write's answer may come from the
+// gateway itself, or from a keep-alive that answers while the reads do not.
+// A source with nothing polled goes by its writes instead: with a rewrite:
+// binding it waits for the first re-assert's answer; without one there is
+// nothing to ask until the program commands it, so it is online on connect
+// (a program that gates its commands on __Online would otherwise never
+// send one). A lost connection or a parked source is offline.
 const suffixOnline = "__Online"
 
 // suffixOutages names the second per-source companion: "<source>__Outages"
-// is a DINT input counting the times __Online has gone false since the
-// driver started, after the device had answered a read or a write on that
-// connection. The
-// first connect is not an outage, and neither is starting offline, a
-// connection the device never answered on, or Stop. A program compares it with last scan's value to latch
-// an outage it might otherwise miss between scans (issue #449; optommp and
-// plcnext deliver the same name).
+// is a DINT input counting the times __Online has fallen from true to false
+// since the driver started. Since __Online goes true only on an answer, the
+// first connect is not an outage, and neither is starting offline or a
+// connection the device never answered on; Stop is not one either. A
+// gateway whose field device stops answering is one. A program compares it
+// with last scan's value to latch an outage it might otherwise miss between
+// scans (issue #449; optommp and plcnext deliver the same name).
 const suffixOutages = "__Outages"
+
+// gatewayMissesToOffline is how many gateway no-answers in a row, with no
+// answer between them, a source needs before it goes offline: a single
+// RS-485 timeout or CRC error behind a gateway is noise, not an outage.
+const gatewayMissesToOffline = 3
+
+// gatewayNoAnswer reports a gateway exception that means the device behind
+// the gateway did not answer: 0x0A gateway path unavailable, 0x0B gateway
+// target device failed to respond.
+func gatewayNoAnswer(err error) bool {
+	var exc ExceptionError
+	return errors.As(err, &exc) && (exc.Code == 0x0A || exc.Code == 0x0B)
+}
+
+// writeNotRun reports an exception to a write that says the write did not
+// run, so the value is sent again with the next WriteOutputs (see wroteOK):
+// a gateway no-answer (0x0A, 0x0B) or 0x06 server device busy. Not 0x04
+// server device failure: the write may have partly run.
+func writeNotRun(err error) bool {
+	var exc ExceptionError
+	return gatewayNoAnswer(err) || (errors.As(err, &exc) && exc.Code == 0x06)
+}
 
 // OnlineTagName is the source's synthesized BOOL companion tag name — shared
 // with the generator so tags/modbus.yaml declares exactly what the driver
@@ -151,11 +189,24 @@ type Driver struct {
 	// every rewrite fire. Nil means always open (standalone, no redundancy).
 	gateMu    sync.Mutex
 	writeGate func() bool
+	// gateShut is true from the first look that finds the gate closed to
+	// the first that finds it open again (see gateOpen); sawShut stays true
+	// once any look has found it closed: this replica has been a standby,
+	// so it has no start-up baseline (#606). wanted is the request
+	// OutputsWanted answers: set when a command was forgotten.
+	gateShut atomic.Bool
+	sawShut  atomic.Bool
+	wanted   atomic.Bool
+	// turnMu serializes the gate's transitions (see gateOpen): a looker
+	// that finds the gate reopened while another is still forgetting waits
+	// for the forget instead of reading the previous term's written.
+	turnMu sync.Mutex
 
 	// baseline is armed by Start: the first WriteOutputs snapshot after it
 	// describes the world, it does not command it (sparkplug-host's rule).
 	// Bindings with Rewrite > 0 are the exception — their baseline value IS
-	// queued, because a keep-alive word must be written on connect.
+	// queued, because a keep-alive word must be written on connect. A look
+	// that finds the write gate closed disarms it (see SetWriteGate).
 	wmu      sync.Mutex
 	baseline bool
 
@@ -184,10 +235,12 @@ type source struct {
 
 	mu       sync.Mutex
 	snapshot nio.Values // decoded values, held across disconnects
-	online   bool
-	outages  int64  // online → offline transitions since New
-	answered bool   // a read or write succeeded on the current connection (resets backoff)
-	state    string // parked | connecting | connected | error
+	online   bool       // the device answers (see suffixOnline)
+	outages  int64      // online → offline transitions since New
+	answered bool       // the device answered on the current connection (resets backoff)
+	gwFailed int        // blocks whose latest read got a gateway no-answer (0x0A/0x0B)
+	gwMisses int        // gateway no-answers in a row since the last answer
+	state    string     // parked | connecting | connected | error
 	sinceMs  int64
 	lastErr  error
 	retries  uint64
@@ -202,9 +255,29 @@ type source struct {
 	pending  map[string]any
 	written  map[string]any
 	rewrites []*rewriteRun
+	// stuck is, per tag, a command whose write did not run (0x0A, 0x0B,
+	// 0x06) and has not landed since: its retry backoff and how many
+	// times it was tried (see wroteOK). Touched only by the source loop,
+	// under mu.
+	stuck map[string]*stuckWrite
+
+	// outputs are this source's writable binding names, so WriteOutputs
+	// can queue a source's share of a snapshot under one hold of mu.
+	outputs []string
 
 	// kick wakes the loop: a queued write, an enable flip, a stop.
 	kick chan struct{}
+}
+
+// stuckWrite is one tag's command that did not run. Until retryAt the
+// value stays in written, so an unchanged push does not send it again;
+// at retryAt the source loop forgets it and asks for the outputs (see
+// releaseStuck). retryAt is zero once released, and always for a rewrite:
+// binding, whose own re-assert is its retry.
+type stuckWrite struct {
+	value    any       // the value the write that did not run carried
+	attempts int       // writes of this tag that did not run, in a row
+	retryAt  time.Time // when the unchanged command may be asked for again
 }
 
 // blockRun is one plan block plus its schedule and exception state. Owned by
@@ -217,6 +290,7 @@ type blockRun struct {
 	excCount    int       // consecutive exceptions
 	parkedUntil time.Time // exception parking (excCount ≥ exceptionsToPark)
 	bad         bool      // tags Bad while true (guarded by source.mu)
+	gwFail      bool      // latest read got a gateway no-answer (guarded by source.mu)
 }
 
 // rewriteRun schedules one Rewrite binding's re-assert (brief §4.1).
@@ -338,6 +412,7 @@ func (d *Driver) buildSources() error {
 			enabled:  true,
 			pending:  map[string]any{},
 			written:  map[string]any{},
+			stuck:    map[string]*stuckWrite{},
 			kick:     make(chan struct{}, 1),
 		}
 		d.sources = append(d.sources, s)
@@ -378,6 +453,7 @@ func (d *Driver) buildSources() error {
 		f, _ := t.format() // Validate (in BuildPlan) already vetted it
 		d.byName[t.Name] = outBinding{src: s, b: t, f: f}
 		d.outputs = append(d.outputs, t.Name)
+		s.outputs = append(s.outputs, t.Name)
 		if t.Rewrite > 0 {
 			s.rewrites = append(s.rewrites, &rewriteRun{name: t.Name, period: t.Rewrite})
 		}
@@ -390,10 +466,42 @@ func (d *Driver) buildSources() error {
 	return nil
 }
 
-// SetWriteGate installs the write gate the rewrite loop and WriteOutputs
-// consult: commands leave the driver only while gate() is true. The project
-// wires it to redundancy leadership (leader.Elector.IsLeader), and a
-// "logic healthy" signal can be composed into the same func.
+// SetWriteGate installs the write gate WriteOutputs, the rewrite loop and
+// the flush consult: commands leave the driver only while gate() is true.
+// A command queued while the gate was open, during an outage or put back
+// by a broken flush, is dropped if the gate has closed by the time it
+// would go out, and so is the rest of a flush the gate closes partway
+// through.
+//
+// WHILE THE GATE IS CLOSED, NOTHING THIS DRIVER SENT IS TRUSTED TO STILL
+// BE THERE (#600): another replica may lead and write the same registers.
+// So when the gate reopens, every output goes out once more with the
+// program's value, changed or not, and a rewrite: binding re-asserts
+// nothing until it has: the first look that finds the gate open again
+// forgets every written value and asks the runtime for the outputs
+// (OutputsWanted), and the push that answers is what fills written again.
+// Every reader of written looks first, so none can see the previous
+// term's values once the gate is back. A command the gate dropped is
+// forgotten and asked for the same way. The runtime pushes on a
+// redundancy takeover anyway; the request is what makes a gate that
+// reopens without one (logic healthy again) push too.
+//
+// A REPLICA THAT HAS BEEN A STANDBY HAS NO BASELINE (#606): the first
+// look that finds the gate closed disarms the start-up baseline, so the
+// first push once the gate opens commands every output, as a hot-standby
+// PLC's new primary drives its outputs at once. A plain start that never
+// saw the gate closed keeps the baseline.
+//
+// A func cannot say it changed, so the driver sees the gate close and
+// reopen by looking at it (gateOpen): on every WriteOutputs, flush and
+// rewrite fire, on every wake of a connected source's loop (at least once
+// a second), on every connect attempt and before the on-connect
+// re-assert. A gate that closes and reopens between two looks is not
+// seen: one shorter than about a second while a source is connected, up
+// to RetryMax (60 s by default) while every source is down, and without
+// bound while every source is parked. The project wires the gate to
+// redundancy leadership (leader.Elector.IsLeader), and a "logic healthy"
+// signal can be composed into the same func.
 //
 // A FALSE GATE STOPS RE-ASSERTS BY DESIGN: a device whose keep-alive word
 // (Banner SC10, i550 control word, an IO-Link master's Modbus watchdog)
@@ -408,12 +516,70 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Unlock()
 }
 
-// gateOpen reports whether commands may leave the driver right now.
+// gateOpen reports whether commands may leave the driver right now. Every
+// call is also a look at the gate (see SetWriteGate): a look that finds it
+// closed disarms the start-up baseline, and the first look that finds it
+// open again forgets every written value and asks for the outputs.
+// Forgetting at the reopen, not at the close, also covers a push that
+// raced the close and recorded a value after it. Callers do not hold any
+// source's mu or wmu.
 func (d *Driver) gateOpen() bool {
 	d.gateMu.Lock()
 	gate := d.writeGate
 	d.gateMu.Unlock()
-	return gate == nil || gate()
+	if gate == nil {
+		return true
+	}
+	open := gate()
+	// Steady state is one atomic load. A transition is made under turnMu,
+	// and gateShut is cleared only AFTER the forget: a second looker that
+	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
+	// and so cannot re-assert the previous term's written (#600).
+	if shut := d.gateShut.Load(); shut == open {
+		d.turnMu.Lock()
+		switch {
+		case !open && !d.gateShut.Load():
+			d.gateShut.Store(true)
+			d.sawShut.Store(true)
+			d.wmu.Lock()
+			d.baseline = false // a standby has no baseline (#606)
+			d.wmu.Unlock()
+		case open && d.gateShut.Load():
+			d.forgetWritten()
+			d.gateShut.Store(false)
+			d.wanted.Store(true)
+			d.log.Info("modbus: write gate open again; every output goes out with the next push")
+		}
+		d.turnMu.Unlock()
+	}
+	return open
+}
+
+// reopenHook, when a test sets it, runs at the start of forgetWritten: the
+// window another looker must not slip through, which must still see
+// gateShut set while it lasts.
+var reopenHook func()
+
+// forgetWritten empties every source's written: no value is the on-change
+// reference any more, so the next push sends them all, and no rewrite:
+// binding has anything to re-assert until it does.
+func (d *Driver) forgetWritten() {
+	if reopenHook != nil {
+		reopenHook()
+	}
+	for _, s := range d.sources {
+		s.mu.Lock()
+		clear(s.written)
+		s.mu.Unlock()
+	}
+}
+
+// OutputsWanted is the driver's io.OutputsRequester: true once after it
+// forgot a command (a write that did not run, once its retry backoff is
+// over; a command the write gate dropped; the gate reopening), so the
+// runtime hands it every output on the next scan.
+func (d *Driver) OutputsWanted() bool {
+	return d.wanted.Load() && d.wanted.Swap(false)
 }
 
 // ── names / classes ──────────────────────────────────────────────────────
@@ -495,7 +661,7 @@ func (d *Driver) Plan() Plan { return d.plan }
 func (d *Driver) Start(ctx context.Context) {
 	ctx, d.cancel = context.WithCancel(ctx)
 	d.wmu.Lock()
-	d.baseline = true
+	d.baseline = !d.sawShut.Load() // a standby has none (#606)
 	d.wmu.Unlock()
 	d.started.Store(true)
 	for _, s := range d.sources {
@@ -602,11 +768,17 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //     it is the state of the world at t=0, not a set of commands. EXCEPT
 //     bindings with Rewrite > 0: a keep-alive word must be asserted on
 //     connect (an SC10 drops its enable otherwise), so their baseline value
-//     is queued.
+//     is queued. A driver that has seen the write gate closed (a standby)
+//     has no baseline: its first push commands everything (#606).
 //  4. CHANGE. Thereafter a value equal to the last handed-over value is not
 //     a command. A changed value is queued per source, last value per tag,
 //     and held across a disconnect — flushed when the source reconnects,
 //     reported as queued writes on the device row.
+//
+// A source's share of one snapshot is queued under one hold of its lock,
+// so the source loop's flush sees all of it or none of it: contiguous
+// registers changed in one snapshot go out as one FC16, never split
+// across two flushes by a poll that ran mid-snapshot (#592).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	kicked := map[*source]bool{}
 	for name, v := range vals {
@@ -633,31 +805,30 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
-	gateOpen := d.gateOpen()
-	for name, v := range vals {
-		ob, ok := d.byName[name]
-		if !ok {
-			continue // enable tags handled above; unknown names ignored
-		}
-		if !gateOpen {
-			continue
-		}
-		s := ob.src
-		s.mu.Lock()
-		if baseline && ob.b.Rewrite <= 0 {
-			// Record, never send. A tag with a command already queued
-			// keeps it: that one WAS asked for.
-			if _, queued := s.pending[name]; !queued {
-				s.written[name] = v
+	if d.gateOpen() {
+		for _, s := range d.sources {
+			s.mu.Lock()
+			for _, name := range s.outputs {
+				v, ok := vals[name]
+				if !ok {
+					continue
+				}
+				if baseline && d.byName[name].b.Rewrite <= 0 {
+					// Record, never send. A tag with a command already
+					// queued keeps it: that one WAS asked for.
+					if _, queued := s.pending[name]; !queued {
+						s.written[name] = v
+					}
+				} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
+					// unchanged since the last value we accounted for
+				} else {
+					s.written[name] = v
+					s.pending[name] = v
+					kicked[s] = true
+				}
 			}
-		} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
-			// unchanged since the last value we accounted for
-		} else {
-			s.written[name] = v
-			s.pending[name] = v
-			kicked[s] = true
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}
 	for s := range kicked {
 		nudge(s.kick)
@@ -702,10 +873,12 @@ func sameScalar(a, b any) bool {
 
 // run is one source's life: parked ⇄ connecting ⇄ connected with 1s→60s
 // backoff on dial/IO errors (brief §2). The backoff ladder resets only once
-// the device has answered a read on a connection, not on a successful dial.
+// the device has answered on a connection, not on a successful dial, and
+// __Online goes true on that answer too (heardLocked), never on the dial.
 func (d *Driver) run(ctx context.Context, s *source) {
 	backoff := s.cfg.RetryMin
 	for ctx.Err() == nil {
+		d.gateOpen() // a look (see SetWriteGate), on every connect attempt
 		if !s.isEnabled() {
 			s.setState("parked", nil)
 			select {
@@ -739,21 +912,53 @@ func (d *Driver) run(ctx context.Context, s *source) {
 			continue
 		}
 		s.mu.Lock()
-		s.online, s.answered = true, false
+		s.answered = false
+		s.gwFailed, s.gwMisses = 0, 0
+		for _, br := range s.blocks {
+			br.gwFail = false
+		}
+		if len(s.blocks) == 0 && len(s.rewrites) == 0 {
+			// Write-only, nothing re-asserted: nothing to ask the device
+			// until the program commands it (see suffixOnline).
+			s.online = true
+		}
 		s.mu.Unlock()
 		s.setState("connected", nil)
 		d.log.Info("modbus: connected", "source", s.cfg.ID, "addr", s.cfg.Addr(), "blocks", len(s.blocks))
 
-		d.serve(ctx, s, c)
+		// A device that closes a connection it has been idle on (a
+		// server-side idle timeout) is not an outage: reconnect on the
+		// spot and carry on as if nothing happened, online and uncounted.
+		// Only a reconnect that fails makes it one, below.
+		closed := d.serve(ctx, s, c)
+		for closed && ctx.Err() == nil && s.isEnabled() {
+			_ = c.Close()
+			nc, err := d.dialSource(ctx, s)
+			if err != nil {
+				if ctx.Err() == nil {
+					d.errs.Add(1)
+					s.mu.Lock()
+					s.lastErr = fmt.Errorf("reconnect after an idle close: %w", err)
+					s.retries++
+					s.mu.Unlock()
+				}
+				break
+			}
+			// Debug: a device with a short idle timeout does this all day.
+			d.log.Debug("modbus: device closed an idle connection; reconnected",
+				"source", s.cfg.ID, "addr", s.cfg.Addr())
+			c = nc
+			closed = d.resume(ctx, s, c)
+		}
 
 		_ = c.Close()
 		s.mu.Lock()
 		answered := s.answered
-		// An outage is losing a device that was talking (a read or a write
-		// succeeded on this connection): a connection the device never
-		// answered on (a gateway that accepts TCP and stays
-		// silent) is not one, and neither is the driver stopping.
-		s.goOfflineLocked(answered && ctx.Err() == nil)
+		// An outage is __Online falling: a connection the device never
+		// answered on (a gateway that accepts TCP and stays silent) never
+		// went online, so losing it is not one, and neither is the driver
+		// stopping.
+		s.goOfflineLocked(ctx.Err() == nil)
 		s.mu.Unlock()
 		if ctx.Err() != nil || !s.isEnabled() {
 			continue // shutting down, or parking: no wait, no escalation
@@ -788,7 +993,63 @@ func (d *Driver) dialSource(ctx context.Context, s *source) (*tcpConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	if tc, ok := nc.(*net.TCPConn); ok {
+		// Best effort: a platform that refuses the counts keeps its own
+		// keepalive, and the idle check still sees a closed or reset link.
+		_ = tc.SetKeepAliveConfig(linkKeepAlive)
+	}
 	return newTCPConn(nc, s.cfg.Timeout), nil
+}
+
+// idleChecker is the part of a connection that can tell, between
+// requests and without sending one, whether the link is still up.
+// tcpConn implements it; scripted test conns do not.
+type idleChecker interface {
+	checkIdle() error
+	quietFor() time.Duration
+	heldFor() time.Duration
+	age() time.Duration
+}
+
+// idleCheckEvery is how often serve asks an idle connection whether it is
+// still up: the longest a source waits with nothing due before it looks.
+// It matters for a source with nothing to poll (write-only bindings, no
+// rewrite:), whose loop would otherwise sleep until the next command, and
+// for slow scan classes. The check sends nothing to the device (issue #552).
+const idleCheckEvery = time.Second
+
+// checkBeforeSendAfter: a request about to go out on a link that has been
+// quiet this long is preceded by the idle check, so a connection the
+// device closed on its idle timeout since the last check is reconnected
+// quietly instead of failing the request (an outage). It costs one
+// idlePeek on a healthy link, and only after a quiet spell; a device
+// whose idle timeout is at least this long never sees a request on a
+// connection it has closed, short of a close inside the peek itself.
+const checkBeforeSendAfter = 100 * time.Millisecond
+
+// quietCloseAfter is how long the device must be known to have kept a
+// connection (a response, or an idle check that found it up, at least this
+// long after the dial) for its clean close to be a quiet reconnect rather
+// than an outage. Real idle timeouts are seconds to minutes; a device that
+// accepts and hangs up at once (a crash-looping server, a gateway out of
+// connection slots) must still go offline and back off. serve checks every
+// connection once it is this old, so a close before then is seen promptly.
+const quietCloseAfter = 100 * time.Millisecond
+
+// linkKeepAlive is the TCP keepalive on every source connection. A link
+// that is cut silently (a pulled cable, a dead switch) sends no FIN, so an
+// idle socket would never learn it is gone; keepalive probes are TCP
+// segments, not Modbus requests, and after Count unanswered ones the
+// kernel fails the socket, which the next idle check reads. A link idle
+// for Idle is declared dead Interval×Count later: 5 + 3×3 = 14 s, and the
+// source is offline within idleCheckEvery after that (15 s in all).
+// Keepalive only runs on a quiet link; a request sent into a dead one
+// fails on its Timeout, as before.
+var linkKeepAlive = net.KeepAliveConfig{
+	Enable:   true,
+	Idle:     5 * time.Second,
+	Interval: 3 * time.Second,
+	Count:    3,
 }
 
 // serve polls one connected source until the connection breaks, the source
@@ -796,30 +1057,67 @@ func (d *Driver) dialSource(ctx context.Context, s *source) (*tcpConn, error) {
 // command must not wait behind a full poll cycle), re-assert every Rewrite
 // binding that has a value, then prime every block so the snapshot fills
 // without waiting a slow class's interval.
-func (d *Driver) serve(ctx context.Context, s *source, c conn) {
+//
+// It returns true only when the device closed the connection cleanly while
+// no request was outstanding (an idle timeout on the device), which run
+// answers with a quiet reconnect (see resume) rather than an outage.
+func (d *Driver) serve(ctx context.Context, s *source, c conn) (idleClosed bool) {
+	if !d.prime(ctx, s, c) {
+		return false
+	}
+	return d.loop(ctx, s, c)
+}
+
+// resume carries a source over to the connection that replaced one the
+// device closed while idle: the queued writes go out, then the loop
+// carries on with the poll and rewrite schedule as it was, nothing
+// re-asserted or primed, so a device whose idle timeout is shorter than a
+// slow scan class is not read more often than configured. It returns what
+// serve does.
+func (d *Driver) resume(ctx context.Context, s *source, c conn) bool {
+	if !d.flushWrites(ctx, s, c) {
+		return false
+	}
+	return d.loop(ctx, s, c)
+}
+
+// prime is serve's on-connect step: re-assert, flush, read every block.
+// False when the connection broke.
+func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
+	// A look at the gate first (see SetWriteGate): one that reopened since
+	// the last look forgets written before it is re-asserted, and a closed
+	// gate re-asserts nothing (a standby's reconnect queues nothing to drop).
+	open := d.gateOpen()
 	now := time.Now()
 	s.mu.Lock()
 	for _, rw := range s.rewrites {
-		if v, ok := s.written[rw.name]; ok {
+		if v, ok := s.written[rw.name]; ok && open {
 			s.pending[rw.name] = v // re-assert after an outage, on the spot
 		}
 		rw.next = now.Add(rw.period)
 	}
 	s.mu.Unlock()
 	if !d.flushWrites(ctx, s, c) {
-		return
+		return false
 	}
 	for _, br := range s.blocks {
 		if !d.pollBlock(ctx, s, c, br) {
-			return
+			return false
 		}
 		br.next = time.Now().Add(br.rate)
 	}
+	return true
+}
 
+// loop is serve's steady state: wait for the next due block, rewrite or
+// command, and check the link while nothing is due. It returns true when
+// the device closed the connection while idle.
+func (d *Driver) loop(ctx context.Context, s *source, c conn) bool {
 	for {
 		if ctx.Err() != nil || !s.isEnabled() {
-			return
+			return false
 		}
+		d.gateOpen() // a look (see SetWriteGate), at least once a second
 		wake := time.Hour
 		now := time.Now()
 		for _, br := range s.blocks {
@@ -836,24 +1134,56 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 				wake = until
 			}
 		}
+		s.mu.Lock()
+		for _, st := range s.stuck {
+			if !st.retryAt.IsZero() {
+				if until := st.retryAt.Sub(now); until < wake {
+					wake = until
+				}
+			}
+		}
+		s.mu.Unlock()
 		if wake < 0 {
 			wake = 0
+		}
+		idle := wake > idleCheckEvery
+		if idle {
+			wake = idleCheckEvery // nothing due soon: look at the link meanwhile
+		}
+		if ic, ok := c.(idleChecker); ok && ic.heldFor() < quietCloseAfter {
+			// Not yet known to have been held quietCloseAfter: look as
+			// soon as it is that old, so a device that hangs up at once is
+			// told apart from one with an idle timeout (see linkUp).
+			if until := quietCloseAfter - ic.age(); until < wake {
+				wake, idle = max(until, 0), true
+			}
 		}
 		timer := time.NewTimer(wake)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return false
 		case <-s.kick:
 			timer.Stop()
 			if !s.isEnabled() {
-				return
+				return false
+			}
+			if up, closed := d.linkUp(ctx, s, c, checkBeforeSendAfter); !up {
+				return closed
 			}
 			if !d.flushWrites(ctx, s, c) {
-				return
+				return false
 			}
 		case <-timer.C:
+			quiet := checkBeforeSendAfter
+			if idle {
+				quiet = 0 // woke only to look
+			}
+			if up, closed := d.linkUp(ctx, s, c, quiet); !up {
+				return closed
+			}
 			now := time.Now()
+			d.releaseStuck(s, now)
 			for _, rw := range s.rewrites {
 				if rw.next.After(now) {
 					continue
@@ -869,19 +1199,55 @@ func (d *Driver) serve(ctx context.Context, s *source, c conn) {
 				s.mu.Unlock()
 			}
 			if !d.flushWrites(ctx, s, c) {
-				return
+				return false
 			}
 			for _, br := range s.blocks {
 				if br.next.After(now) || br.parkedUntil.After(now) {
 					continue
 				}
 				if !d.pollBlock(ctx, s, c, br) {
-					return
+					return false
 				}
 				br.next = time.Now().Add(br.rate)
 			}
 		}
 	}
+}
+
+// linkUp runs the idle check on c, if it has one and nothing has been sent
+// on it for at least quiet. up false means the link is gone and serve
+// returns. closed true says how: the device closed it cleanly with nothing
+// outstanding, after keeping it at least quietCloseAfter, which run
+// answers with a quiet reconnect. A close sooner than that is an outage
+// like the rest. Anything else (a reset, a keepalive that went unanswered,
+// unsolicited bytes, a socket closed under us) is recorded as the error,
+// and run drops the connection, takes the source offline (an outage if it
+// was online), and reconnects with backoff, as for a failed read.
+func (d *Driver) linkUp(ctx context.Context, s *source, c conn, quiet time.Duration) (up, closed bool) {
+	ic, ok := c.(idleChecker)
+	if !ok || ic.quietFor() < quiet {
+		return true, false
+	}
+	err := ic.checkIdle()
+	if err == nil {
+		return true, false
+	}
+	if ctx.Err() != nil {
+		return false, false
+	}
+	if held := ic.heldFor(); errors.Is(err, errIdleClosed) {
+		if held >= quietCloseAfter {
+			return false, true
+		}
+		err = fmt.Errorf("%w before it had been held %v", err, quietCloseAfter)
+	}
+	d.errs.Add(1)
+	s.mu.Lock()
+	s.lastErr = err
+	s.retries++
+	s.mu.Unlock()
+	d.log.Warn("modbus: link lost while idle", "source", s.cfg.ID, "addr", s.cfg.Addr(), "error", err)
+	return false, false
 }
 
 // pollBlock executes one block read and decodes it into the snapshot.
@@ -908,6 +1274,11 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 			s.excs++
 			s.lastErr = fmt.Errorf("%s %d..%d: %w", br.Table, br.Start, int(br.Start)+int(br.Count)-1, err)
 			br.bad = true
+			if gatewayNoAnswer(err) {
+				s.blockNoAnswerLocked(br, ctx.Err() == nil)
+			} else {
+				s.blockAnsweredLocked(br) // the device is there; this span is refused
+			}
 			s.mu.Unlock()
 			if br.excCount == exceptionsToPark {
 				br.parkedUntil = time.Now().Add(s.cfg.RetryMin)
@@ -942,7 +1313,7 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 	}
 	br.excCount = 0
 	br.bad = false
-	s.answered = true
+	s.blockAnsweredLocked(br)
 	for _, t := range br.Bindings {
 		off := int(t.Address) - int(br.Start)
 		if regs != nil {
@@ -964,7 +1335,14 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // flushWrites pushes this source's pending writes to the device, coalescing
 // contiguous holding registers into FC16 (one register FC6), contiguous
 // coils into FC15 (one coil FC5). Returns false when the connection broke;
-// unattempted writes stay queued for the reconnect.
+// the write that broke and the ones not yet attempted stay queued for the
+// reconnect. Writes answered in this flush, confirmed or with an
+// exception, are not re-queued: a re-send would put back a value someone
+// else may have written since. One a gateway answered 0x0A/0x0B for (or
+// the device 0x06) is forgotten and asked for once its retry backoff is
+// over, so the scan after that sends it (see wroteOK). With
+// the write gate closed the queue is dropped instead, and if the gate
+// closes partway through, the rest of the flush is (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	s.mu.Lock()
 	if len(s.pending) == 0 {
@@ -974,22 +1352,91 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	work := s.pending
 	s.pending = map[string]any{}
 	s.mu.Unlock()
+	// One retry deadline for every write in this flush that does not run,
+	// so they are released, and asked for, together (see wroteOK).
+	retryAt := time.Now().Add(s.cfg.RetryMin)
+
+	// The gate is checked again here, not only when the command was
+	// queued: a replica that lost leadership during an outage must not
+	// send what it queued while it led, nor what a broken flush put back,
+	// nor a re-assert queued just before the gate closed. It is checked
+	// again before every bit RMW, register run and coil run, so a long
+	// flush stops once the gate closes. Dropped commands are forgotten
+	// (not recorded as written), so the next WriteOutputs push after the
+	// gate reopens commands the same value again. A drop is not a failure:
+	// no error is counted and __Online is left to the reads.
+	drop := func(names []string) {
+		s.mu.Lock()
+		for _, n := range names {
+			// Forget only what this flush dropped: a tag WriteOutputs has
+			// queued again since keeps the written value that command
+			// recorded.
+			if _, again := s.pending[n]; !again && sameScalar(s.written[n], work[n]) {
+				delete(s.written, n)
+			}
+		}
+		s.mu.Unlock()
+		d.wanted.Store(true) // the commands it dropped: ask for them (#601)
+		d.log.Warn("modbus: write gate closed; queued writes dropped", "source", s.cfg.ID, "count", len(names))
+	}
+	if !d.gateOpen() {
+		names := make([]string, 0, len(work))
+		for n := range work {
+			names = append(names, n)
+		}
+		drop(names)
+		return true
+	}
 
 	regWrites, coilWrites, bitWrites := d.stageWrites(s, work)
+	regRuns, coilRuns := coalesceRegs(regWrites), coalesceCoils(coilWrites)
 
-	requeue := func() {
+	// rest names the write at bi/ri/ci and every one after it, in send
+	// order: bit RMWs from bi, register runs from ri, coil runs from ci.
+	rest := func(bi, ri, ci int) []string {
+		var names []string
+		for _, bw := range bitWrites[bi:] {
+			names = append(names, bw.names...)
+		}
+		for _, run := range regRuns[ri:] {
+			names = append(names, run.names...)
+		}
+		for _, run := range coilRuns[ci:] {
+			names = append(names, run.names...)
+		}
+		return names
+	}
+
+	// requeue puts back the write that broke and every one after it. A tag
+	// queued again while this flush was in flight keeps that newer value
+	// (last value wins).
+	requeue := func(bi, ri, ci int) {
 		s.mu.Lock()
-		for n, v := range work {
+		for _, n := range rest(bi, ri, ci) {
 			if _, exists := s.pending[n]; !exists {
-				s.pending[n] = v
+				s.pending[n] = work[n]
 			}
 		}
 		s.mu.Unlock()
 	}
 
+	// gateClosed drops the write at bi/ri/ci and every one after it when
+	// the gate has closed since the flush began. The flush returns as soon
+	// as it does, so a drop is logged at most once per flush.
+	gateClosed := func(bi, ri, ci int) bool {
+		if d.gateOpen() {
+			return false
+		}
+		drop(rest(bi, ri, ci))
+		return true
+	}
+
 	// bit:N writables read-modify-write their register one at a time — the
 	// other 15 bits belong to the device (or to sibling bindings).
-	for _, bw := range bitWrites {
+	for i, bw := range bitWrites {
+		if gateClosed(i, 0, 0) {
+			return true
+		}
 		cur, err := readRegisters(ctx, c, s.cfg.UnitID, FCReadHoldingRegisters, bw.addr, 1)
 		if err == nil {
 			// Merge in normalized (big-endian) space, then restore the
@@ -999,52 +1446,89 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			out := wireOrder([]uint16{w}, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, bw.addr, out)
 		}
-		if !d.wroteOK(ctx, s, bw.names, err) {
-			requeue()
+		if !d.wroteOK(ctx, s, work, bw.names, retryAt, err) {
+			requeue(i, 0, 0)
 			return false
 		}
 	}
 
-	for _, run := range coalesceRegs(regWrites) {
+	for i, run := range regRuns {
+		if gateClosed(len(bitWrites), i, 0) {
+			return true
+		}
 		var err error
 		if len(run.values) == 1 {
 			err = writeSingleRegister(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
 			err = writeMultipleRegisters(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, run.names, err) {
-			requeue()
+		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
+			requeue(len(bitWrites), i, 0)
 			return false
 		}
 	}
-	for _, run := range coalesceCoils(coilWrites) {
+	for i, run := range coilRuns {
+		if gateClosed(len(bitWrites), len(regRuns), i) {
+			return true
+		}
 		var err error
 		if len(run.values) == 1 {
 			err = writeSingleCoil(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
 			err = writeMultipleCoils(ctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
-		if !d.wroteOK(ctx, s, run.names, err) {
-			requeue()
+		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
+			requeue(len(bitWrites), len(regRuns), i)
 			return false
 		}
 	}
 	return true
 }
 
-// wroteOK accounts one device write. An exception means the device refused
-// THIS write on a healthy connection: it is dropped (re-queueing would loop
-// forever) and reported. A transport error means reconnect: false, and the
-// caller re-queues everything unattempted.
-func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err error) bool {
+// wroteOK accounts one device write. An exception is an answer on a
+// healthy connection, so the write is never re-queued (that would loop),
+// and what follows depends on who answered:
+//
+//   - 0x0A/0x0B (gatewayNoAnswer) and 0x06 (busy): the write did not run.
+//     The gateway answered for a device that never got the command (#596),
+//     or the device was busy and did not carry it out (#602). The write is
+//     dropped from the queue and its tags become stuck (s.stuck): for
+//     RetryMin from the start of the flush (retryAt, one deadline for the
+//     whole flush, so its stuck writes are asked for in one push) the
+//     value stays in written, so an unchanged push does not
+//     send it again (the same pace a dead block's polls are parked at),
+//     while a changed value is a new command and goes out at once. When
+//     the backoff is over the source loop forgets it and asks the runtime
+//     for the outputs (releaseStuck), so the next scan sends the program's
+//     value then, changed or not: never a replay of the value sent here.
+//     A rewrite: binding is stuck but never forgotten: its re-assert sends
+//     written again on its own period, and forgetting it would stop the
+//     keep-alive until the program changed it. The first write of a tag
+//     that does not run logs a warning; the attempts after it do not, and
+//     the one that lands logs at Info with the number of attempts. Every
+//     attempt counts in exceptions.
+//     For a write-only source a gateway no-answer counts toward going
+//     offline, once per write (#550); 0x06 is the device answering.
+//   - Any other exception: the device refused THIS write, or (0x04) failed
+//     partway and a re-send could fire a write-to-trigger register twice.
+//     It is dropped and stays in written, so the same value is not sent
+//     again.
+//
+// A transport error means reconnect: false, and the caller re-queues this
+// write and everything not yet attempted.
+func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, names []string, retryAt time.Time, err error) bool {
 	if err == nil {
 		d.writes.Add(1)
 		// A confirmed write is the device answering, as a read is: a
-		// write-only source (a command or keep-alive word) counts its
-		// outages too, and its backoff ladder resets.
+		// write-only source (a command or keep-alive word) goes online and
+		// counts its outages too, and its backoff ladder resets.
 		s.mu.Lock()
-		s.answered = true
+		s.writeAnsweredLocked()
+		tries := s.landedLocked(names)
 		s.mu.Unlock()
+		if tries > 0 {
+			d.log.Info("modbus: write delivered after it did not run", "source", s.cfg.ID, "tags", names, "attempts", tries)
+		}
 		return true
 	}
 	d.errs.Add(1)
@@ -1053,8 +1537,39 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 		s.mu.Lock()
 		s.lastErr = fmt.Errorf("write %v: %w", names, err)
 		s.excs++
+		notRun := writeNotRun(err)
+		if gatewayNoAnswer(err) {
+			s.writeNoAnswerLocked(ctx.Err() == nil)
+		} else {
+			s.writeAnsweredLocked() // the device answered (busy, or refused)
+		}
+		first := false
+		if notRun {
+			for _, n := range names {
+				st := s.stuck[n]
+				if st == nil {
+					st = &stuckWrite{}
+					s.stuck[n] = st
+					first = true
+				}
+				st.attempts++
+				if d.byName[n].b.Rewrite > 0 {
+					continue // its own re-assert is its retry
+				}
+				st.value, st.retryAt = work[n], retryAt
+			}
+		} else {
+			for _, n := range names {
+				delete(s.stuck, n) // refused: it will not land; nothing to retry
+			}
+		}
 		s.mu.Unlock()
-		d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		switch {
+		case first:
+			d.log.Warn("modbus: write not delivered; will resend", "source", s.cfg.ID, "tags", names, "error", err, "retryIn", s.cfg.RetryMin)
+		case !notRun:
+			d.log.Warn("modbus: write refused", "source", s.cfg.ID, "tags", names, "error", err)
+		}
 		return true
 	}
 	if ctx.Err() == nil {
@@ -1065,6 +1580,45 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, names []string, err err
 		d.log.Warn("modbus: write failed", "source", s.cfg.ID, "tags", names, "error", err)
 	}
 	return false
+}
+
+// landedLocked ends the stuck state of names, whose write just landed,
+// and returns the most attempts any of them took (0 when none was stuck).
+// Caller holds s.mu.
+func (s *source) landedLocked(names []string) int {
+	tries := 0
+	for _, n := range names {
+		if st := s.stuck[n]; st != nil {
+			tries = max(tries, st.attempts+1)
+			delete(s.stuck, n)
+		}
+	}
+	return tries
+}
+
+// releaseStuck ends the backoff of each command that did not run and is
+// due: it is forgotten from written and the driver asks for the outputs,
+// so the next push sends the program's value again. The gate drop's rule
+// applies: only while written still holds the value that did not run and
+// the tag is not queued again; a newer command already went out on its
+// own. Called by the source loop.
+func (d *Driver) releaseStuck(s *source, now time.Time) {
+	asked := false
+	s.mu.Lock()
+	for n, st := range s.stuck {
+		if st.retryAt.IsZero() || st.retryAt.After(now) {
+			continue
+		}
+		st.retryAt = time.Time{}
+		if _, again := s.pending[n]; !again && sameScalar(s.written[n], st.value) {
+			delete(s.written, n)
+			asked = true
+		}
+	}
+	s.mu.Unlock()
+	if asked {
+		d.wanted.Store(true) // ask for them with the next scan (#601)
+	}
 }
 
 // regWrite / coilWrite / bitWrite are staged single-address writes, ready
@@ -1229,10 +1783,61 @@ func (s *source) setState(state string, err error) {
 	s.mu.Unlock()
 }
 
-func (s *source) setOnline(on bool) {
-	s.mu.Lock()
-	s.online = on
-	s.mu.Unlock()
+// heardLocked records an answer from the device: the source is online
+// and the backoff ladder resets. Caller holds s.mu.
+func (s *source) heardLocked() {
+	s.online = true
+	s.answered = true
+	s.gwMisses = 0
+}
+
+// blockAnsweredLocked records an answer to br's read (data, or an
+// exception other than a gateway no-answer). Caller holds s.mu.
+func (s *source) blockAnsweredLocked(br *blockRun) {
+	if br.gwFail {
+		br.gwFail = false
+		s.gwFailed--
+	}
+	s.heardLocked()
+}
+
+// blockNoAnswerLocked records a gateway no-answer (0x0A/0x0B) to br's
+// read. Once every block's latest read got one, nothing behind the gateway
+// answers: the source goes offline, an outage when outage is true and it
+// was online. Caller holds s.mu.
+func (s *source) blockNoAnswerLocked(br *blockRun, outage bool) {
+	if !br.gwFail {
+		br.gwFail = true
+		s.gwFailed++
+	}
+	s.gwMisses++
+	if s.gwFailed == len(s.blocks) && s.gwMisses >= gatewayMissesToOffline {
+		s.goOfflineLocked(outage)
+	}
+}
+
+// writeAnsweredLocked records an answer to a write. Only a source with
+// nothing polled goes by it; for a polled source it resets the backoff
+// ladder and nothing else, since reads decide __Online. Caller holds s.mu.
+func (s *source) writeAnsweredLocked() {
+	if len(s.blocks) > 0 {
+		s.answered = true
+		return
+	}
+	s.heardLocked()
+}
+
+// writeNoAnswerLocked records a gateway no-answer to a write: for a source
+// with nothing polled, gatewayMissesToOffline in a row take it offline.
+// Caller holds s.mu.
+func (s *source) writeNoAnswerLocked(outage bool) {
+	if len(s.blocks) > 0 {
+		return
+	}
+	s.gwMisses++
+	if s.gwMisses >= gatewayMissesToOffline {
+		s.goOfflineLocked(outage)
+	}
 }
 
 // goOfflineLocked takes the source offline, counting an outage
@@ -1245,8 +1850,9 @@ func (s *source) goOfflineLocked(outage bool) {
 	s.online = false
 }
 
-// Interface conformance — the same trio io.Memory proves.
+// Interface conformance: the optional io refinements the driver implements.
 var (
-	_ nio.BatchReader     = (*Driver)(nil)
-	_ nio.QualityReporter = (*Driver)(nil)
+	_ nio.BatchReader      = (*Driver)(nil)
+	_ nio.QualityReporter  = (*Driver)(nil)
+	_ nio.OutputsRequester = (*Driver)(nil)
 )

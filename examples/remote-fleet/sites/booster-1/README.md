@@ -19,9 +19,10 @@ naut run   .    # dashboard + tag API on http://localhost:8093
 and the Sparkplug DEVICE publish are both already released. See
 `../../README.md` for the fleet-wide version check.
 
-`naut run .` alone shows the Modbus task **degraded** — `FM1_FlowLps`
-faulted, the driver panel red — until `naut modbus serve` (below) is
-brought up alongside it; this is deliberate, not a rough edge (see
+`naut run .` alone shows the Modbus driver red and retrying
+(`FM1_FlowLps` reading 0.0 with quality `notConnected`) until
+`naut modbus serve` (below) is brought up alongside it; this is
+deliberate, not a rough edge (see
 `sim.st`'s own header: "the flow meter is real either way"), the same
 choice this codebase makes everywhere a field driver has nothing to talk
 to yet. There is no memory-only `bench.yaml` here the way `field.yaml`
@@ -67,10 +68,8 @@ naut modbus import --map devices.yaml   # regenerate the committed files
 ```
 
 Generates `FM1_FlowLps` (`role: input`), which `pressure.fbd` reads every
-scan for the lag pump's call — FBD has no short-circuiting, so (like
-`scada`'s own consumed Sparkplug inputs) it must be seeded before the
-first scan; `booster-1_test.yaml` does this with `given:` in every test,
-no live device required.
+scan for the lag pump's call. `booster-1_test.yaml` sets it with `given:`
+in every test, so no live device is required.
 
 **Live**, this is the one site in the fleet whose own field bus needs
 standing up separately from the broker:
@@ -80,16 +79,20 @@ naut modbus serve --manifest modbus_manifest.yaml --listen 127.0.0.1:5021 --ramp
 naut run .
 ```
 
-Without a live meter, `FM1_FlowLps` reads as a task fault (the same
-"reads fault until connected" contract every input tag has) — honest,
-and why the fleet's live walkthrough (`../../README.md`) brings the meter
-up alongside the broker and the three sites.
+Without a live meter, `FM1_FlowLps` reads 0.0 (the zero of its type)
+with quality `notConnected`, as every communications input does until its
+device answers (see the tag model guide). That is why the fleet's live
+walkthrough (`../../README.md`) brings the meter up alongside the broker
+and the three sites.
 
 ## Sparkplug
 
 Every field connection is its own Sparkplug DEVICE, so the flow meter's
-tags (`FM1_FlowLps`, `FM1__Online`) ride device `FM1`, named after its
-Modbus source — its DBIRTH/DDEATH track that meter's connection health,
+tag (`FM1_FlowLps`) rides device `FM1`, named after its Modbus source. Its
+DBIRTH/DDEATH track that meter's connection health, which a host sees as
+`Booster1_FM1__Online` (and counts in `Booster1_FM1__Outages`). The site's
+own `FM1__Online` is not published: it is not declared, and the device's
+birth and death already carry it. This is
 the same mechanism a Sparkplug retransmit of EIP-polled tags would use
 (see `examples/batch-skid`'s `eip_manifest.yaml` for an
 EtherNet/IP-polled project).

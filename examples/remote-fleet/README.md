@@ -80,9 +80,9 @@ form, and the `sparkplug-host` driver are already released, not
 
 Every site but `booster-1` is pure bench (`driver: {type: memory}`, no
 field build in this fleet). `booster-1` also carries a live Modbus device
-(its flow meter); without it, `FM1_FlowLps` reads as a task fault (honest
-— "reads fault until connected" is the field-driver contract everywhere
-in this codebase). To see the lag pump's flow-demand call actually
+(its flow meter); without it, `FM1_FlowLps` reads 0.0 with quality
+`notConnected`, as every communications input does until its device
+answers. To see the lag pump's flow-demand call actually
 respond to something real:
 
 ```sh

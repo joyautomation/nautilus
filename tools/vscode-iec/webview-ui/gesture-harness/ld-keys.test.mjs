@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	recordClips, withPage, open, deliver, posted, reset, center, key, clickAt, ldOps, rect, wheel, sleep, byId,
-	LD, LD_LONG
+	LD, LD_LONG,
+	opsPosted
 } from './diagram-helpers.mjs';
 
 recordClips('ld-keys');
@@ -23,14 +24,14 @@ test('Ladder keys: N on a selected contact posts toggleNeg, again flips it back 
 		await clickAt(b, await center(b, byId('contact', 'a')));
 		await reset(b);
 		await N(b);
-		let ops = await ldOps(b);
+		let ops = await opsPosted(b, ldOps, 1);
 		assert.deepEqual(ops, [{ type: 'toggleNeg', rung: 'r1', path: [0] }]);
 		// The host rewrites the file and re-sends the model: now NC.
 		const nc = withRung(LD, 0, (r) => ({ elements: [{ ...r.elements[0], neg: true }, r.elements[1]] }));
 		await deliver(b, { type: 'ldModel', model: nc, title: 'p.ld' });
 		await reset(b);
 		await N(b);
-		ops = await ldOps(b);
+		ops = await opsPosted(b, ldOps, 1);
 		assert.deepEqual(ops, [{ type: 'toggleNeg', rung: 'r1', path: [0] }], 'the selection survives the refresh');
 		// A coil is not a contact: N does nothing.
 		await clickAt(b, await center(b, byId('coil', 'y')));
@@ -49,7 +50,7 @@ test('Ladder keys: M on a selected coil cycles normal -> set -> reset -> normal 
 		for (let i = 0; i < 3; i++) {
 			await reset(b);
 			await M(b);
-			const ops = await ldOps(b);
+			const ops = await opsPosted(b, ldOps, 1);
 			assert.equal(ops.length, 1, JSON.stringify(ops));
 			assert.deepEqual({ type: ops[0].type, rung: ops[0].rung, coil: ops[0].coil }, { type: 'setCoilMode', rung: 'r1', coil: 0 });
 			modes.push(ops[0].mode);
@@ -148,7 +149,7 @@ test('Ladder drag: a contact dragged into another rung posts ONE move naming sou
 		const a = await center(b, byId('contact', 'a'));
 		await reset(b);
 		await dragTo(b, a, target);
-		const ops = await ldOps(b);
+		const ops = await opsPosted(b, ldOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.deepEqual(ops[0], { type: 'move', rung: 'r1', path: [0], toRung: 'r2', toPath: target.series ?? [], toIndex: 0 });
 	});
@@ -164,7 +165,7 @@ test('Ladder drag: a contact dragged to a later spot in its own rung posts a mov
 		const a = await center(b, byId('contact', 'a'));
 		await reset(b);
 		await dragTo(b, a, later);
-		const ops = await ldOps(b);
+		const ops = await opsPosted(b, ldOps, 1);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.deepEqual(ops[0], { type: 'move', rung: 'r1', path: [0], toRung: 'r1', toPath: later.series ?? [], toIndex: later.index });
 	});
@@ -193,6 +194,6 @@ test('Ladder drag: a cross-rung drag leaves no text selected, mid-drag or after 
 		const after = await b.eval(`document.getSelection().toString()`);
 		assert.equal(mid, '', 'nothing selected mid-drag');
 		assert.equal(after, '', 'nothing selected after the drop');
-		assert.equal((await ldOps(b)).length, 1, 'the move itself still posts');
+		assert.equal((await opsPosted(b, ldOps, 1)).length, 1, 'the move itself still posts');
 	});
 });
