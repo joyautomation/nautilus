@@ -4,12 +4,12 @@ description: Expose a controller's tags to any OPC UA client — browse, read an
 ---
 
 :::caution[Preview]
-Still moving. The `opcua:` section and its `endpoint` are
-meant to stay as they are, but session and subscription handling is being
-reworked, and the limits named on this page (a never-delivered tag has no
-node, a client must dial an advertised address) are tracked as
-issues and may change between releases. Try it against your client before
-you depend on it.
+Still moving. The `opcua:` section, its `endpoint` and `writable` are
+meant to stay as they are. What is missing today may change between
+releases: sessions are anonymous (no user names), whole-array and
+IndexRange writes are refused, and a monitored item queues one value and
+does not act on its filter. Try it against your client before you depend
+on it.
 :::
 
 An `opcua:` section in `nautilus.yaml` serves the controller's tag store as
