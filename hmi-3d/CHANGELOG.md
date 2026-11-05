@@ -1,5 +1,13 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.3.1 — 2026-11-05
+
+**Changed.** Works with `@joyautomation/nautilus-hmi` 0.9 as well as 0.8
+(the dependency is `^0.8.0 || ^0.9.0`). The tank in `TankPanel` no longer
+passes `tempC`, which nautilus-hmi 0.9's `<Tank>` dropped (it is a plain
+vessel now), so on 0.8 too the panel's liquid is no longer coloured by
+temperature. (#466)
+
 ## 0.3.0 — 2026-10-21
 
 **Added.** A kind in a file of its own (design §3g, slice 2). A `kinds`

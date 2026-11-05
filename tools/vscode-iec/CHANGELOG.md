@@ -5,6 +5,29 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-05
+
+The pre-release line after the stable release 0.20.0. Same contents as
+[0.20.0]; pre-release builds from `main` carry new work under
+`[Unreleased]` from here on. Requires naut 0.20.0 or later.
+
+## [0.20.0] - 2026-11-05
+
+The fifth stable release, for everyone on the stable channel since
+[0.18.0]. Everything below shipped first in the pre-releases `0.19.1` and
+`0.19.2` (kept in full further down this file) or is new in this release,
+and is consolidated here, newest first. **Requires naut 0.20.0 or later.**
+
+Highlights: **export and print diagrams** (LD, FBD and SFC as PDF or SVG);
+**`naut` on your terminal PATH** after the extension installs it, with
+consent and undo; **structure warnings** that point at diagrams that will
+draw badly; a **component preview** pane and **page preview** for HMI
+work; the **mimic editor** resizes equipment, anchors ports to parts and
+switches between the ISA-101 and realistic looks; a first **3D scene
+editor** and **kind editor** to play with; a multi-leg OR in one ladder
+step; FBD blocks inserted where you click; and manifest schema for the
+OPC UA server, PLCnext and groov EPIC drivers and Logix hardware.
+
 ### Added
 
 - **Export and print diagrams.** **nautilus: Export Diagram…** writes an
@@ -21,6 +44,223 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   locale) and `nautilus.export.orientation`. With a controller connected,
   the export can include its live values. Needs no other software: the
   PDF is written by the extension itself.
+
+- **Structure warnings on the diagrams and in Problems.** The language
+  server reports the shapes that make a ladder, FBD or SFC diagram hard to
+  read (LD001–LD006, FBD001–FBD003, SFC001–SFC002) as warnings with the
+  rule ID as the diagnostic code, so they show in the Problems panel and
+  on the diagrams; each message says what to write instead.
+  `nautilus.yaml`'s new `check:` section (thresholds, rules switched off)
+  is in the manifest schema, and one POU opts out with an
+  `(* @allow ID: reason *)` pragma. (#574)
+- **Manifest schema: `opcua.anonymous-writes`, `sparkplug-host`'s
+  `rebirth-requests`, and array indexes in `opcua.writable`.** Completion
+  and hover for the lab-only anonymous writes switch, the host's switch
+  for Rebirth requests, and `writable` patterns such as `Counts[2]` and
+  `Drives[*].Speed`. (#555, #575, #577)
+
+- **See a component while you edit it.** Open a `{Name}.svelte` and press
+  the preview button in its editor title (or **nautilus: Open Component
+  Preview**): a pane beside the text renders the component for real,
+  compiled with the project's own Svelte as you type, not only on save. A
+  compile error shows over the last good render instead of blanking the
+  pane. Sample props live in the sidecar's new `preview.props` key
+  (`{Name}.component.json`, created next to the `.svelte` on the first
+  add) and are edited from the pane's props strip: values read as JSON
+  when they parse (`62`, `true`, `[1, 2]`), else as text. The pane follows
+  the active `.svelte` editor and zooms 50 to 400 %. The sidecar's
+  `ports` are drawn on the render as dots and edited in the same pane:
+  turn **ports** on in the header, then drag a dot, double-click the
+  render to add one on the nearer edge, double-click a dot to remove it,
+  or use the panel to rename, delete, set an exit direction or add at a
+  free slot — the same gestures as the mimic editor's ports mode. The
+  pane is now THE editor for a `{Name}.component.json`: the file opens
+  as plain JSON (hand-editable, diffable, with a schema for hover help
+  and validation) with the same preview button in its title, which lands
+  the pane on the component it describes — a
+  built-in (Tank, Pump, …) rendered from the kit's own registry, showing
+  the kit's default ports until the first change writes the project's
+  override. **Edit Component Ports…** opens this pane for every
+  component. The standalone Component Editor for sidecars is gone (it
+  also ran away sizing a component with a plain HTML root).
+  Needs workspace trust, like the mimic editor's user components.
+- **Copy Kit Component to Project….** Start your own symbol from one the
+  kit ships: pick a kit component (the mimic built-ins first), name the
+  copy (MyTank), and its `.svelte` lands in the project's `src/lib` as a
+  component of the project's own — the kit's source as written, its
+  relative imports rewritten to `@joyautomation/nautilus-hmi` (which
+  exports the helpers), a header saying where it came from. A mimic
+  built-in's copy gets a `{Name}.component.json` with the kit's ports
+  and sample props, so pipes connect where they did. The copy opens with
+  the preview beside it. Register it on a page with
+  `<Mimic registry={{ MyTank }}>` and point equipment at it by name.
+- **Preview a page for use.** Open a `+page.svelte` (or `+layout.svelte`)
+  and press its browser button, or run **nautilus: Preview HMI Page**: the
+  project's own `npm run dev` starts in a terminal on a free port (reused
+  while that terminal lives) and the file's route opens in VS Code's
+  Simple Browser beside the text. Vite's hot reload keeps it current as
+  you type; the dev server is pointed at `nautilus.runtimeUrl` through
+  `CONTROLLER_URL`, and when nothing answers there the extension offers
+  to start `naut run .` in the project above. The Svelte Inspector is on
+  in that server: hold **Alt+X** in the page (or press its corner button)
+  and hover to see which `.svelte` drew what, click to open it at the
+  line — in this window, local or Remote SSH. Works from a Remote SSH
+  window (the port is forwarded). Needs workspace trust.
+- **A 3D kind editor, and kinds in files of their own.** A scene's
+  `kinds` entry may now be the path of a `{Name}.kind.json` relative to the
+  scene (`"pump": "hmi/src/lib/kinds/pump.kind.json"`), holding the same
+  keys an inline entry does, so one pump is declared once and placed in
+  every scene; the schema knows the file (`nautilus-kind.schema.json`,
+  derived from the scene schema's kind contract) and the scene editor
+  inlines it, captions the kind `glTF · file` and offers **edit kind**.
+  The file opens as the kind itself: its model on a turntable (`T`), in
+  any look; the model's named objects fill every drive row's mesh menu
+  and a name the model lacks is flagged; sample values per member drive
+  the meshes and preview the `status` text without touching the file;
+  `type`, `members`, `model`, `status`, `labelAt`, `bounds` and the
+  drives (mesh, channel, fields; **Add drive**, `×`) are edited beside it,
+  each change one text edit with one drive per line. `naut check` reads
+  the file next to the scene. `examples/lift-station`'s six kinds moved
+  into `hmi/src/lib/kinds/`. **Click a part on the model to pick it**:
+  the part under the pointer lights, a click picks it (again on the same
+  spot: the part behind), the panel names it with what it sits in and
+  its drives, **Add drive** starts on it, the **Parts** list picks by
+  name, and a hovered name or drive row lights its part; `Esc` clears.
+- **Ports and anchored pipes (design §3g, slice 3).** A kind declares
+  `ports` in its own frame; in the kind editor **Add port here** puts one
+  where the last click landed on the model, facing out of the surface,
+  and each port is a mark on the model and a row in the panel (rename,
+  `at`, `dir`, **here**, `×`). In the scene editor every node's ports
+  wear a mark that follows the gizmo; **click a port, then another** to
+  run a pipe — one `addPipe` anchored at both ends (`from` / `to` as
+  `{ node, port }`) with an orthogonal route between them as its points,
+  so the pipe follows its nodes when they move; the panel lists the
+  scene's pipes with `×`. `naut check` and the schema know ports and
+  anchors; `hmi-3d` resolves them.
+- **A point by name, and a colour from a number.** A port's `at` and the
+  kind's `labelAt` may be a place on a box — `{ "part": "Motor",
+  "anchor": "top" }`, or `"top"` for the bounds, with `offset` — resolved
+  once the model is loaded, so it survives a re-export; **Add port at…**
+  offers the faces of the picked part, and each row has a mode menu. A
+  tint or emissive drive may be a **ramp** of `[value, colour]` stops over
+  a number instead of on / off.
+- **Blink and pulse, in one click.** Two presets in the kind editor —
+  **Blink on {member}** (a glow on the picked part that flashes twice a
+  second while the member is true) and **Pulse on {member}** (the part
+  breathes, ±10 % once a second) — each a drive row like any other
+  afterwards: every boolean row (`tint`, `emissive`, `visible`) has a
+  **blink** field in Hz, and the new `pulse` channel has **Hz** and **±**
+  (`"pulse": { "bind": "Alarm", "hz": 1, "amount": 0.1 }`). The schema,
+  `naut check` and `hmi-3d` carry both.
+- **Eject to component…** (kind editor header): writes `{Name}.svelte`
+  beside the kind file — a `<script module>` exporting the contract
+  (`type`, `members`, `bounds`, `labelAt`, `ports`, `status`) and an
+  instance holding the model and the drive rows as data, rendered by
+  `hmi-3d`'s new `<ModelNode>` — offers to re-point every scene naming
+  the file at the component, and opens it beside. Nothing is lost on the
+  way out; the file is open ground for anything Threlte. The kind file
+  stays.
+- **Ask AI…** (kind editor header): picks one of five prompts about this
+  file — a model from a picture, sensible part names, drives for the
+  UDT's members, a variant of the kind, or a stub to finish — and opens
+  the editor's chat with it, or copies it (and opens Claude Code's
+  sidebar when it is installed).
+- **Vertex drag, and pipes that follow a move** (scene editor). Select a
+  pipe in the panel and its points wear handles on the stage; a click
+  on one puts the gizmo on it, a drag posts one `setPipePoints`, `Del`
+  drops the point, `Esc` clears the point then the pipe. Moving a node
+  whose anchored pipe still has the suggested run re-routes the run in
+  the same edit as the move; a run someone laid by hand is left alone.
+  The built-in tank, pump and valve have ports (`inlet` / `outlet`,
+  `suction` / `discharge`, `in` / `out`), and `examples/lift-station`'s
+  kinds carry ports as box points with the scene's pipes anchored to
+  them.
+- **Mimic editor: resize equipment, pick a look, anchor ports to parts.**
+  The selected equipment has resize handles (right edge, bottom edge,
+  corner) and a **height** field beside **width**; the toolbar's **Look**
+  picks ISA-101 or realistic for every component. In ports mode, a
+  double-click on a part of the drawing (a vessel, a valve body) adds a
+  port anchored to that part, and dropping a dragged port on a part
+  anchors it there (off every part, to the box), so it stays put when the
+  equipment is resized. The component preview pane does the same. The
+  palette has
+  the kit's new **Heater**.
+- **Mimic editor: the canvas previews the HMI's own colours.** The canvas
+  (and the component preview pane's stage) used to repaint the kit's equipment in
+  VS Code theme colours, which flattered it: outlines that are faint on
+  the real HMI looked crisp in the editor. It now draws in the kit's
+  palette, on the kit's card colour, following VS Code's light/dark; the
+  toolbar's **Dark / Light** switch previews the other theme. That switch
+  is a view setting and never touches the file: the operator's screen
+  picks dark or light.
+- **Mimic editor: Shift-click to select several, drag to move them
+  together.** Shift-click (or Ctrl-click, as before) adds equipment or a
+  label to the selection or takes it out; dragging any of the selection
+  moves all of it, and a pipe between two selected instances moves whole,
+  bends and all. Arrow keys and Del act on the labels too. Shift-drag on
+  empty canvas draws a box and adds what lies wholly inside it; a
+  Shift-press on an item adds it and can drag the lot from the same press.
+- **Mimic editor: drag the canvas edge to resize it.** The canvas's right
+  edge, bottom edge and corner are handles (grid-snapped, the size shown
+  while you drag); the **canvas w / h** fields still take exact numbers.
+- **Mimic editor: zoom.** Ctrl+wheel or pinch zooms around the pointer,
+  Ctrl+= / Ctrl+- and the corner buttons step, Ctrl+0 (or the fit button)
+  fits the canvas to the pane width again, and a middle-drag pans — the
+  same gestures as the ladder and SFC editors.
+
+- **A 3D scene editor, a first version to play with.** It still needs
+  work, but it is already useful. A `*.scene.json` now opens as the 3D
+  view itself (the same `@joyautomation/nautilus-hmi-3d` renderer the
+  built HMI uses, in its own webview bundle), with a palette of the
+  document's kinds, a move/turn gizmo on the selected node (`G` / `R`,
+  snapped to the grid cell and 15°, Shift for free), a panel that edits
+  the node's fields by number, `Del`, `Esc` and **Save view**. The toolbar
+  switches the look (lit, flat, paper) as a preview; **Use … as the
+  scene's look** writes it. A click picks through glass — the pump inside
+  the wet well, not the well — and clicking the same spot again cycles
+  through what is stacked there; a label picks its node. The JSON stays
+  canonical: every gesture is one text edit (undo is text undo; a move
+  diffs as one `pos` line), and a hand edit beside it re-renders live.
+  Models, textures and HDRIs resolve where `naut check` looks (next to the
+  scene, `hmi/static/`, `hmi/build/`); a missing file is named in a banner
+  and draws as a grey box, as does a component kind (the app builds those,
+  not the editor). Live values come from `nautilus.runtimeUrl` as the
+  mimic's do. *Open With → Text Editor* is a right-click away; a window
+  without WebGL says so instead of failing. Setting:
+  `nautilus.scene.snapToGrid`.
+- **A multi-leg OR in one step, and a branch you can select (ladder).**
+  Ctrl- or Shift-click several elements of one series (the rung, or one
+  leg of a branch), then press `O` or the toolbar's **OR**: they become
+  ONE parallel branch with a leg each (`a b c` → `[ a | b | c ]`), in a
+  single edit. A branch is now an element of its own: click its rails to
+  select it, then `O` adds a leg, `Del` deletes it, Ctrl+C/X copies or
+  cuts it. With one element selected, `O` is `B` (a 2-leg OR around it).
+  In the DOM a branch is `<g class="branch" data-kind="branch">` with an
+  aria label ("OR branch, 3 legs") wrapping a `<g class="leg">` per leg,
+  so it is addressable from tests. (#91)
+- **Insert an FBD block right where you want it.** Double-click empty
+  canvas: the **+ add** palette opens, and what you insert lands at that
+  point. With an element selected, **+ add** inserts one column to its
+  right. Either way it moves down to the first clear place if that spot
+  is taken: an insert never lands on another element. (#78)
+- **Manifest schema: `opcua:`.** A controller serves its tag store as an
+  OPC UA address space (read-only: browse, read, subscribe) when the
+  section is present; `endpoint` (default `opc.tcp://localhost:4840`) is
+  its one key, with completion and hover. `naut check` refuses an endpoint
+  that is not `opc.tcp://host:port`. (#416)
+- **Manifest schema: `driver: {type: plcnext}` and `{type: optommp}`.**
+  Completion and validation for the two open-controller drivers (Phoenix
+  Contact PLCnext and Opto 22 groov EPIC), whose own manifests
+  `naut plcnext` and `naut optommp import` write. (#436, #437, #438)
+- **`target.logix.hardware` in `nautilus.yaml`.** Completion and
+  validation for the option that names the project's hardware
+  configuration: an L5X (`hardware.L5X`, written by `naut logix import
+  --project` from an export with I/O modules) whose `<Modules>` section
+  the Logix writer carries into the project unchanged, so tags with an
+  `alias:` of a rack point (`Local:1:I.Data.0`, `Remote1:1:I.Data.0`)
+  have their modules and the project builds and downloads. An alias of a
+  module the configuration lacks is refused at write time, naming the
+  module. (#397)
 
 ### Changed
 
@@ -69,6 +309,102 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   source's stem.** A long condition or name on a branch that runs left of
   its source ends in `…` instead of being written across the stem (the
   tooltip has the full text).
+
+- **Create Project…: the name box has the focus from the start.** Run from
+  the Welcome page, the first step sometimes opened with the focus left on
+  the page behind it, so typing went nowhere until you clicked the box. The
+  steps are now one quick input that is never closed between them, so the
+  focus stays on it. (#443)
+- **Create Project…: Browse works with the simple file dialog.** With
+  `files.simpleDialog.enable` on, the parent-folder step's Browse button
+  ended Create Project instead of opening the picker. Browse now opens the
+  folder picker: "Create project here" on a folder creates the project there,
+  and Escape brings you back to the step. (#528)
+- **A tag error in `nautilus.yaml` is shown on `nautilus.yaml`.** If the
+  language server could not read a tag (an unknown `role:`, or a setpoint
+  with neither `init:` nor `type:`), it used to drop every tag. Each
+  program then said its first tag was an undeclared identifier, and the
+  manifest showed nothing. Now:
+  - The error appears in Problems on that tag's `name:`, in
+    `nautilus.yaml` or in the tag-file that declares it.
+  - The other tags stay in scope.
+  - A program that uses the bad tag is not blamed for it. A name that is
+    not a tag at all is still reported.
+  - A manifest or tag-file that does not read at all (an unknown field,
+    bad YAML) is shown on the file and line the error names.
+  - The extension now tells the server when YAML files change, so saving
+    a fix, or deleting the manifest, clears the error without a keystroke
+    in a program.
+
+  Rename and find-references now also find a tag declared in a tag-file.
+- **"Online edits disabled" names the setting to change.** Download
+  Program to Controller on a controller with online edits off said
+  `(server.Options.OnlineEdits)`, a Go field; it now says to set
+  `server.online-edits: true` in `nautilus.yaml`, as the controller's own
+  refusal does.
+- **A port dot can be dragged after a double-click added it.** In the
+  sidecar editor (and the new preview pane) the double-click that adds a
+  port left the render's text selected; the next drag on a dot then
+  started the browser's native drag of that selection a few pixels in,
+  which cancelled the pointer and took the dot's capture with it — the
+  dot stopped, or the drop never reached the sidecar. The gesture now
+  cancels the selection and the native drag, and the dot commits the
+  drop on its own pointerup and pointercancel, not only on the window's.
+  A capture lost while the button is still down is not a drop (Chromium
+  can lose it at the first move), so the drag carries on.
+- **A built-in's ports in the preview pane are the kit's.** "Edit
+  Component Ports…" on Tank, Pump or Valve showed (and the first edit wrote
+  into the project's `{Name}.component.json`) the box fractions the kit
+  used before its default ports moved onto the parts of each drawing — so
+  an override started from ports the runtime no longer draws. The pane now
+  starts from the kit's part-anchored ports; Heater is offered as a
+  built-in, and a copied kit component starts from the registry's own
+  sample props.
+- **A port dot dragged toward the right of a narrow preview pane lands
+  under the cursor.** The coordinate readout beside a dragged dot ran past
+  the pane's stage, a scrollbar came up mid-drag, the render re-centred
+  under the pointer and the dot was dropped a few pixels off, then jumped
+  again when the readout went away. The readout now floats over the pane
+  without taking part in its layout.
+- **Quick port edits in the preview pane stick.** Each edit saves the whole
+  ports list and the host answers with the file as saved. Two edits in a
+  row (a direction stepped twice from the keyboard, a rename right after a
+  drag) could have the answer to the FIRST arrive after the second, put the
+  older list back on screen, and the next edit was then built from it,
+  silently undoing the second. The pane now holds the host's ports back
+  until its latest edit is confirmed.
+
+- **An FBD insert no longer re-lays out a network you arranged.** Adding
+  a block that joins a network re-ran that network's auto-layout, so
+  blocks you had placed could swap rows (in a take, existing blocks
+  jumped). Now, once a network has any position you set by dragging, an
+  insert keeps every one of its blocks where it was (pinned in
+  `(* @layout *)` alongside the new block); a network you never arranged
+  stays fully auto-laid-out and re-flows around the new block as before.
+  An insert with no place asked for (nothing selected, the toolbar's
+  **+ add**) still goes where auto-layout puts it — into an arranged
+  network, clear of the blocks that held still. A structural edit also
+  no longer re-fits the whole view: the camera stays, and pans only to
+  bring a new element into view. (#78)
+- **The FBD editor opens at a readable zoom.** It used to fit the whole
+  program, so a big one opened with ~4 px pins and ~5 px text. It now
+  opens fitted only while that keeps text readable (zoom ≥ 0.9); a bigger
+  program opens at that zoom on its top-left (the first network), to pan
+  or zoom out from. Ctrl+0 and the fit button still fit everything. Pins
+  are also easier to hit: a pin takes a press or a dropped wire within
+  5 px of its dot. (#79)
+- **Create Project…: Enter in the parent-folder step now accepts.** The step
+  was VS Code's open dialog, which with `files.simpleDialog.enable` (VS Code
+  for the web, remote setups) is a plain input where Enter navigates instead
+  of confirming "Create project here". It is now an input box with the
+  workspace folder (or home) prefilled: Enter accepts, a typed or `~` path
+  works, and a folder button still opens the system picker. (#86)
+- **Create Project…: the name, template and language steps no longer vanish
+  on a fresh window.** After the parent-folder step closed, VS Code returned
+  focus to the Welcome page, whose step media is a webview that takes focus
+  a moment later; the next step closed on that focus loss before anything
+  could be typed. Those steps now ignore focus-out (Escape still cancels).
+  (#405)
 
 ## [0.19.2] - 2026-11-03
 
