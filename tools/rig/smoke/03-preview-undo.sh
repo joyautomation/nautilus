@@ -12,7 +12,7 @@
 # focus left behind in the text editor).
 #
 # Every target is found in the DOM: the editor-title button by its label,
-# the TAL-101 constant by the wire into IN2 of block `cold` (data-id), the
+# the TIC-101 heater clamp by the wire into MX of Heater's LIMIT (data-id), the
 # SFC "+ step" button by its text, empty canvas by elementFromPoint.
 set -euo pipefail
 CHECK=03-preview-undo
@@ -23,8 +23,12 @@ rm -rf "$PROFILE"
 
 ext_scaffold my-plant
 F=$PROJ/program.fbd
-const() { grep -oP 'cold = LT\(TempC, \K[0-9.]+' "$F"; }
-[[ $(const) == 62.0 ]] || { fail "scaffold changed: cold threshold is $(const), not 62.0"; exit 1; }
+# The constant: Heater's upper clamp, LIMIT(0.0, …, 100.0), a REAL literal
+# wired straight into a block pin. (TAL-101's threshold was this check's
+# constant until #574 made it the TempLowSP setpoint.)
+K0=100.0
+const() { grep -oP 'Heater := LIMIT\(0\.0, ADD\(pTerm, integral\), \K[0-9.]+' "$F"; }
+[[ $(const) == "$K0" ]] || { fail "scaffold changed: Heater's LIMIT MX is '$(const)', not $K0"; exit 1; }
 
 smoke_open "$PROJ" program.fbd
 key Escape; hide_sidebar
@@ -49,16 +53,16 @@ keyin() {
   [[ -z $seen ]] || info "focus left the diagram during $1:$seen"
 }
 
-# ── an edit through the float editor: 62.0 → 55.0 ──────────────────────────
-# The TAL-101 constant: the chip whose wire runs into IN2 of block `cold`
+# ── an edit through the float editor: 100.0 → 55.0 ─────────────────────────
+# The TIC-101 clamp: the chip whose wire runs into MX of block b:c.Heater
 # (FbdEdge's data-id is "<from>-><to>:<pin>", the chip's data-id <from>).
-CONST_EL='(() => { const e = [...doc.querySelectorAll("[data-kind=edge]")].find(e => e.dataset.id.endsWith("->b:w.cold:IN2")); return e ? doc.querySelector(`[data-kind=chip][data-id="${CSS.escape(e.dataset.id.split("->")[0])}"]`) : null; })()'
+CONST_EL='(() => { const e = [...doc.querySelectorAll("[data-kind=edge]")].find(e => e.dataset.id.endsWith("->b:c.Heater:MX")); return e ? doc.querySelector(`[data-kind=chip][data-id="${CSS.escape(e.dataset.id.split("->")[0])}"]`) : null; })()'
 chip() { wv "$CONST_EL?.textContent.trim() ?? ''"; }
 chip0=$(chip)
-dclick_el "$CONST_EL" || fail "no TAL-101 constant chip (wire into cold.IN2) on the preview"
+dclick_el "$CONST_EL" || fail "no TIC-101 clamp chip (wire into the MX of Heater's LIMIT) on the preview"
 key ctrl+a; xdotool type --delay 40 55.0; sleep 0.3; key Return; sleep 2
 png=$(shot edited)
-[[ $(const) == 62.0 ]] && pass "float-editor edit is in the buffer, not yet on disk" "$png" \
+[[ $(const) == "$K0" ]] && pass "float-editor edit is in the buffer, not yet on disk" "$png" \
   || fail "edit reached disk without a save (autosave?) — $(const)" "$png"
 
 keyin ctrl+s; sleep 1
@@ -68,14 +72,14 @@ keyin ctrl+s; sleep 1
 keyin ctrl+z; sleep 1.5
 png=$(shot undone)
 keyin ctrl+s; sleep 1
-[[ $(const) == 62.0 ]] && pass "Ctrl+Z in the preview reverted the document (saved: 62.0)" "$png" \
+[[ $(const) == "$K0" ]] && pass "Ctrl+Z in the preview reverted the document (saved: $K0)" "$png" \
   || fail "Ctrl+Z in the preview did not revert the document (saved: $(const))" "$png"
 # The diagram re-rendered from the text: the constant's chip reads what it
 # read before the edit.
 chip_is() { [[ $(chip) == "$1" ]]; }
 wait_for 5 chip_is "$chip0" || true
 c=$(chip)
-[[ $chip0 == 62.0 && $c == "$chip0" ]] && pass "diagram re-rendered to 62.0 after undo (the chip reads '$c' again, as before the edit)" "$png" \
+[[ $chip0 == "$K0" && $c == "$chip0" ]] && pass "diagram re-rendered to $K0 after undo (the chip reads '$c' again, as before the edit)" "$png" \
   || fail "diagram did not re-render after undo (the chip reads '$c'; before the edit '$chip0')" "$png"
 
 keyin ctrl+shift+z; sleep 1.5; keyin ctrl+s; sleep 1
@@ -95,12 +99,12 @@ click_canvas "" 0.6 || true  # empty canvas, focus in the diagram
 keyin ctrl+z; sleep 1.5
 png=$(shot undo-no-text-editor)
 keyin ctrl+s; sleep 1
-[[ $(const) == 62.0 ]] && pass "text editor closed: Ctrl+Z in the preview still reverted the document" "$png" \
+[[ $(const) == "$K0" ]] && pass "text editor closed: Ctrl+Z in the preview still reverted the document" "$png" \
   || fail "text editor closed: Ctrl+Z in the preview did nothing (no editor beside, saved $(const)) — key dropped: fbdPreview.ts:564 finds the doc in workspace.textDocuments, which no longer has it" "$png"
 # A float-editor edit in the same state (the constant, now in a full-width
 # preview).
 before=$(const)
-dclick_el "$CONST_EL" || fail "no TAL-101 constant chip on the full-width preview"
+dclick_el "$CONST_EL" || fail "no TIC-101 clamp chip on the full-width preview"
 key ctrl+a; xdotool type --delay 40 50.0; sleep 0.3; key Return; sleep 2
 keyin ctrl+s; sleep 1
 png=$(shot edit-no-text-editor)

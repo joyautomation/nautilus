@@ -42,6 +42,7 @@ as_diagram() { open_file "$1" 3; vs_cmd "nautilus: Open as Diagram Editor" 6; }
 one() { # <lang label> <project> <file> <old literal> <new literal>
   local lang=$1 file=$3 old=$4 new=$5
   local f=$PROJ/$file png
+  grep -qF -- "$old" "$f" || { fail "$lang: '$old' is not in $file (did the project change?)"; return; }
   smoke_open "$PROJ" "$file"
   key Escape; hide_sidebar
   page_hover "$(title_action_el "$AS_DIAGRAM")" || true
@@ -95,8 +96,10 @@ one() { # <lang label> <project> <file> <old literal> <new literal>
 }
 
 ext_scaffold my-plant
-one FBD my-plant program.fbd "62.0" "61.0"
-one Ladder my-plant interlocks.ld "90.0" "85.0"
+# FBD: TAL-101's on-delay preset; Ladder: hitemp's, the one literal each file
+# writes once (their thresholds are setpoints since #574).
+one FBD my-plant program.fbd "T#10S" "T#12S"
+one Ladder my-plant interlocks.ld "T#5S" "T#8S"
 ext_fixture tank-batch
 one SFC tank-batch batch.sfc "Start AND NOT Abort" "Start AND Abort"
 

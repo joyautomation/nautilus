@@ -80,8 +80,10 @@ e=$(fcheck | grep target2.fbd || true)
 # source statement arrives once, and with program.fbd's declarations spliced
 # in, naut check gets past parsing and reports nothing but those
 # breadcrumbs. The 2026-09-24 duplicateText bug (MUL(Ki, e, ScanDtS) ->
-# MUL(_, _0.0)) is a parse error and still FAILs here.
-body() { sed -n '/^FBD$/,/^END_FBD$/p' "$1" | grep -vE '^\s*(//|$|FBD$|END_FBD$)' | wc -l; }
+# MUL(_, _0.0)) is a parse error and still FAILs here. A NETWORK '…' header
+# is not a statement (and the paste does not carry headers), so body()
+# counts statements only.
+body() { sed -n '/^FBD$/,/^END_FBD$/p' "$1" | grep -vE '^\s*(//|$|FBD$|END_FBD$|NETWORK(\s|$))' | wc -l; }
 cp "$PROJ/target2.fbd" "$PROJ/target2.pasted"
 python3 - "$PROJ/program.fbd" "$PROJ/target2.fbd" <<'PY2'
 import sys

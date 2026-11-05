@@ -27,7 +27,10 @@ h0=$(prog_hash MyPlant)
 
 smoke_open "$PROJ" program.fbd
 key Escape; hide_sidebar; sleep 3
-text_replace "$PROJ/program.fbd" "62.0" "61.0"
+# The edit: TAL-101's on-delay preset, T#10S -> T#12S (the demo's one literal
+# written once; its thresholds are setpoints since #574).
+grep -qF 'PT := T#10S' "$PROJ/program.fbd" || { fail "scaffold changed: no 'PT := T#10S' in program.fbd"; exit 1; }
+text_replace "$PROJ/program.fbd" "T#10S" "T#12S"
 key ctrl+s; sleep 1
 # modal_up — the custom confirmation dialog is on screen (workbench DOM).
 modal_up() { dialog_up; }
@@ -58,7 +61,7 @@ h1=$(prog_hash MyPlant)
 png=$(shot downloaded)
 [[ -n $h1 && $h1 != "$h0" ]] && pass "Download: controller program changed ($h0 → $h1)" "$png" \
   || fail "Download did not change the controller ($h1)" "$png"
-api "/api/program?pou=MyPlant" | grep -q 'LT(TempC, 61.0)' && pass "the running source has the edit (LT(TempC, 61.0))" \
+api "/api/program?pou=MyPlant" | grep -qF 'PT := T#12S' && pass "the running source has the edit (PT := T#12S)" \
   || fail "the running source lacks the edit"
 
 # ── Rollback ────────────────────────────────────────────────────────────────
