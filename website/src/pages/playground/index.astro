@@ -5,7 +5,8 @@
 // is copied to /playground/engine/ by scripts/sync-playground.mjs; this page
 // frames it with a way out: the project as a .zip, the extension, the
 // install. ?example= and ?project= pass through, so a guide can link
-// straight to a running example.
+// straight to a running example, and so does a share link's #project=
+// (the whole project, made by the Share button).
 import '../../styles/fonts.css';
 import logo from '../../assets/logo.svg';
 
@@ -47,6 +48,7 @@ const description =
       <nav class="actions" aria-label="Playground">
         <a id="open-hmi" hidden target="_blank" rel="noopener">Open HMI</a>
         <a id="open-dashboard" hidden target="_blank" rel="noopener">Open dashboard</a>
+        <button id="share" type="button" disabled title="Copy a link with the whole project in it">Share</button>
         <button id="download" type="button" disabled>Download project</button>
         <a href="vscode:extension/joyauto.vscode-iec">Open in VS Code</a>
         <a class="primary" href="/tutorial/">Install nautilus</a>
@@ -164,6 +166,7 @@ const description =
   type Playground = {
     title: string;
     files(): Promise<Record<string, string>>;
+    shareLink?: () => Promise<string>;
     showCommands?: () => Promise<unknown>;
     focus?: () => Promise<unknown>;
     views?: Views;
@@ -171,6 +174,7 @@ const description =
 
   const note = document.getElementById('note')!;
   const download = document.getElementById('download') as HTMLButtonElement;
+  const share = document.getElementById('share') as HTMLButtonElement;
   const openHmi = document.getElementById('open-hmi') as HTMLAnchorElement;
   const openDashboard = document.getElementById('open-dashboard') as HTMLAnchorElement;
   let frame: HTMLIFrameElement | null = null;
@@ -192,6 +196,28 @@ const description =
       download.textContent = 'Download project';
     }
   });
+
+  /** A link holding the whole project as it stands: nothing is uploaded. */
+  share.addEventListener('click', async () => {
+    const link = await app()?.shareLink?.();
+    if (!link) return;
+    share.disabled = true;
+    try {
+      await navigator.clipboard.writeText(link);
+      share.textContent = 'Link copied';
+    } catch {
+      // No clipboard (an insecure context, a refusal): show it to copy by hand.
+      window.prompt('Copy this link:', link);
+    } finally {
+      setTimeout(() => {
+        share.textContent = 'Share';
+        share.disabled = false;
+      }, 2000);
+    }
+  });
+
+  // A share link pasted into this tab names a different project.
+  window.addEventListener('hashchange', () => location.reload());
 
   // Keys typed while focus is on this page (the bar) never reach the frame.
   // The command palette's keys, the ones people try first, are forwarded.
@@ -215,6 +241,7 @@ const description =
       win.focus();
       void app()?.focus?.();
       download.disabled = false;
+      share.disabled = !app()?.shareLink;
       const views = app()?.views;
       if (views?.hmi) {
         openHmi.href = views.hmi;
@@ -240,7 +267,7 @@ const description =
       frame.title = 'nautilus playground';
       frame.allow = 'clipboard-read; clipboard-write';
       frame.addEventListener('load', onFrameLoad);
-      frame.src = `/playground/engine/app/index.html?${q}`;
+      frame.src = `/playground/engine/app/index.html?${q}${location.hash}`;
       note.replaceWith(frame);
     } catch {
       note.textContent = 'The playground is not available right now. Nautilus installs in a minute: see the ';

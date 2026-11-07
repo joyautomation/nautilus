@@ -4,11 +4,26 @@
 //
 //   ?example=<name>   one of ../examples/index.json (default: sealin)
 //   ?project=<url>    a project JSON: {path: text} or {files, open, title}
+//   #project=<code>   a share link: the project itself (keep.js)
+//
+// The visitor's edits are kept in their browser, apart from the project
+// they started from (keep.js): a reload or a later visit brings them back.
 import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-yaml-default-extension';
 import '@codingame/monaco-vscode-json-default-extension';
 import '@codingame/monaco-vscode-markdown-basics-default-extension';
-import { initialize, getService, ICommandService, IEditorService, IKeybindingService } from '@codingame/monaco-vscode-api';
+import {
+	initialize,
+	getService,
+	ICommandService,
+	IEditorService,
+	IKeybindingService,
+	INotificationService,
+	IDialogService,
+	IClipboardService
+} from '@codingame/monaco-vscode-api';
+import { Action2, registerAction2 } from '@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions';
+import Severity from '@codingame/monaco-vscode-api/vscode/vs/base/common/severity';
 import { StandardKeyboardEvent } from '@codingame/monaco-vscode-api/vscode/vs/base/browser/keyboardEvent';
 import { ResultKind } from '@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/keybindingResolver';
 import { ExtensionHostKind, registerExtension } from '@codingame/monaco-vscode-api/extensions';
@@ -16,6 +31,8 @@ import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
 import getExtensions from '@codingame/monaco-vscode-extensions-service-override';
 import getFiles, { registerFileSystemOverlay } from '@codingame/monaco-vscode-files-service-override';
+import getWorkingCopy from '@codingame/monaco-vscode-working-copy-service-override';
+import getDialogs from '@codingame/monaco-vscode-dialogs-service-override';
 import getTheme from '@codingame/monaco-vscode-theme-service-override';
 import getKeybindings from '@codingame/monaco-vscode-keybindings-service-override';
 import getQuickAccess from '@codingame/monaco-vscode-quickaccess-service-override';
@@ -39,6 +56,7 @@ import { Playground } from '../src/client.js';
 import { serveBridge } from '../src/bridge.js';
 import { EngineFileSystem } from './engineFs.js';
 import { NautShellBackend } from './nautShell.js';
+import * as kept from './keep.js';
 
 const ENGINE = new URL('../', location.href); // the package's dist/: worker.js, naut.wasm, examples/
 const EXTENSION = new URL('./extension/', location.href); // the extension's web build and assets
@@ -63,7 +81,22 @@ const fail = (t) => {
 	splash.querySelector('p').textContent = t;
 };
 
-async function loadProject(params) {
+/**
+ * The project this page was opened on, as published: {key, kind, project}.
+ * key names it in the visitor's kept copies; kind is example, url or share.
+ */
+async function loadSource(params) {
+	const code = new URLSearchParams(location.hash.slice(1)).get('project');
+	if (code) {
+		const shared = await kept.decodeProject(code);
+		const key = 'share:' + (await kept.fingerprint({ code }));
+		if (!shared.from) return { key, kind: 'share', project: { ...shared, open: shared.open ?? ['nautilus.yaml'] } };
+		// Changes to one of our examples: laid over the example as it is now.
+		const example = await fetchExample(shared.from);
+		const files = { ...example.files, ...shared.files };
+		for (const f of shared.removed) delete files[f];
+		return { key, kind: 'share', project: { ...example, title: shared.title, open: shared.open ?? example.open, files } };
+	}
 	const url = params.get('project');
 	if (url) {
 		const r = await fetch(url);
@@ -71,12 +104,71 @@ async function loadProject(params) {
 		const data = await r.json();
 		const files = data && typeof data.files === 'object' ? data.files : data;
 		if (!files || !('nautilus.yaml' in files)) throw new Error(`${url} is not a nautilus project (no nautilus.yaml)`);
-		return { title: data.title || 'project', open: data.open || ['nautilus.yaml'], files };
+		return { key: 'url:' + url, kind: 'url', project: { title: data.title || 'project', open: data.open || ['nautilus.yaml'], files } };
 	}
 	const name = params.get('example') || 'sealin';
+	return { key: 'example:' + name, kind: 'example', project: await fetchExample(name) };
+}
+
+async function fetchExample(name) {
+	// Never ?v=: an example edited on the site reaches visitors on their
+	// next load (nginx has the browser revalidate it).
 	const r = await fetch(new URL(`examples/${encodeURIComponent(name)}.json`, ENGINE));
 	if (!r.ok) throw new Error(`no example named "${name}"`);
 	return r.json();
+}
+
+/**
+ * Where a share link points: the page framing the playground when there
+ * is one (the docs site's /playground/), else this page.
+ */
+function shareBase() {
+	try {
+		if (window.parent !== window) return window.parent.location.origin + window.parent.location.pathname;
+	} catch {
+		// Framed by another site: link to the playground itself.
+	}
+	const u = new URL(location.href);
+	u.hash = '';
+	u.searchParams.delete('v');
+	return u.href;
+}
+
+/**
+ * Keeps the visitor's edits: after each change made in the workbench, the
+ * project as it stands is saved under the source's key, or forgotten when
+ * it matches the source again. Returns the hooks main() needs.
+ */
+function keeper(pg, source, copy) {
+	const { key, project } = source;
+	let base = copy ? copy.base : project.version; // the source version their copy started from
+	let timer = 0;
+	let stopped = false;
+	const save = async () => {
+		if (stopped) return;
+		const files = await pg.files();
+		if (stopped) return;
+		if (kept.sameFiles(files, project.files)) await kept.forget(key);
+		else await kept.keep({ key, base, files, updated: Date.now() }).catch((e) => console.warn('nautilus playground: could not keep your changes:', e));
+	};
+	return {
+		edited() {
+			clearTimeout(timer);
+			timer = setTimeout(save, 300);
+		},
+		/** Their copy stays, now counted as made from the current source. */
+		async adopt() {
+			base = project.version;
+			await save();
+		},
+		/** Back to the source: the copy is dropped and the page reloads. */
+		async discard() {
+			stopped = true;
+			clearTimeout(timer);
+			await kept.forget(key);
+			location.reload();
+		}
+	};
 }
 
 /**
@@ -135,10 +227,15 @@ async function openProject(project) {
 async function main() {
 	const params = new URLSearchParams(location.search);
 	say('Starting nautilus in your browser…');
-	const [pg, project] = await Promise.all([
+	const [pg, source] = await Promise.all([
 		Playground.start({ base: ENGINE.href, version: params.get('v') || undefined }),
-		loadProject(params)
+		loadSource(params)
 	]);
+	source.project.version = await kept.fingerprint(source.project.files);
+	const copy = await kept.mine(source.key);
+	// What opens: their copy if they have one, else the source as published.
+	const project = copy ? { ...source.project, files: copy.files } : source.project;
+	const keep = keeper(pg, source, copy);
 	await pg.setProject(project.files);
 	document.title = `${project.title} · nautilus playground`;
 
@@ -146,8 +243,14 @@ async function main() {
 	const views = serveViews(bridge.name, project.hmi);
 	// For the page framing the playground (the docs site's download
 	// button): the project as it stands, saved edits included.
-	window.nautilusPlayground = { title: project.title, files: () => pg.files() };
-	registerFileSystemOverlay(1, new EngineFileSystem(pg));
+	// A project that began as one of our examples (or a link to one) is
+	// shared as its changes to that example.
+	const example = source.kind === 'example' ? source.project : project.name ? await fetchExample(project.name).catch(() => null) : null;
+	const shareLink = async () =>
+		shareBase() + '#project=' + (await kept.encodeProject(kept.sharePayload(project, await pg.files(), example)));
+	window.nautilusPlayground = { title: project.title, files: () => pg.files(), shareLink };
+	registerPlaygroundCommands(source, keep, shareLink);
+	registerFileSystemOverlay(1, new EngineFileSystem(pg, '/project', keep.edited));
 
 	await initUserConfiguration(
 		JSON.stringify({
@@ -184,6 +287,13 @@ async function main() {
 			...getWorkbench(),
 			...getExtensions({ enableWorkerExtensionHost: true }),
 			...getFiles(),
+			// Without it, edits never reach the save machinery: files.autoSave
+			// does nothing and a typed change is lost unless saved by hand.
+			// Backups in memory only: what lasts across visits is keep.js's.
+			...getWorkingCopy({ storage: 'memory' }),
+			// VS Code's own dialogs, not the browser's confirm() (Discard My Changes,
+			// the explorer's delete).
+			...getDialogs(),
 			...getTheme(),
 			...getKeybindings(),
 			...getQuickAccess(),
@@ -227,6 +337,7 @@ async function main() {
 	await ext.whenReady();
 	await openProject(project);
 	splash?.remove();
+	if (copy) void welcomeBack(source, copy, keep);
 
 	// For the framing page: keys typed while focus is outside this frame
 	// (its nav, its toolbar) never reach the workbench, so it forwards the
@@ -239,6 +350,70 @@ async function main() {
 		views: await views
 	});
 	window.dispatchEvent(new Event('nautilus-playground-ready'));
+}
+
+const SOURCE_NAME = { example: 'example', url: 'project', share: 'shared project' };
+
+/** Their copy is back: say so, and whether the source changed since. */
+async function welcomeBack(source, copy, keep) {
+	const notifications = await getService(INotificationService);
+	const what = `the ${source.project.title} ${SOURCE_NAME[source.kind]}`;
+	if (copy.base !== source.project.version) {
+		notifications.prompt(
+			Severity.Info,
+			`${cap(what)} has been updated since you started changing it. You are looking at your version.`,
+			[
+				{ label: 'Open the new version', run: () => keep.discard() },
+				{ label: 'Keep mine', run: () => keep.adopt() }
+			],
+			{ sticky: true }
+		);
+	} else {
+		// Sticky: an ordinary toast is gone before the editor has settled.
+		const commands = await getService(ICommandService);
+		notifications.prompt(
+			Severity.Info,
+			`Your changes to ${what} are back. They are kept in this browser.`,
+			[{ label: 'Start over', run: () => commands.executeCommand('nautilus.playground.discard') }],
+			{ sticky: true }
+		);
+	}
+}
+
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+
+/** The playground's own commands, in the command palette. */
+function registerPlaygroundCommands(source, keep, shareLink) {
+	const category = { value: 'Playground', original: 'Playground' };
+	registerAction2(
+		class extends Action2 {
+			constructor() {
+				super({ id: 'nautilus.playground.discard', title: { value: 'Discard My Changes', original: 'Discard My Changes' }, category, f1: true });
+			}
+			async run(accessor) {
+				const dialogs = accessor.get(IDialogService);
+				const { confirmed } = await dialogs.confirm({
+					message: `Discard your changes to the ${source.project.title} ${SOURCE_NAME[source.kind]}?`,
+					detail: 'The original comes back. To keep a copy of your version, use Download project first.',
+					primaryButton: 'Discard my changes'
+				});
+				if (confirmed) await keep.discard();
+			}
+		}
+	);
+	registerAction2(
+		class extends Action2 {
+			constructor() {
+				super({ id: 'nautilus.playground.share', title: { value: 'Copy Share Link', original: 'Copy Share Link' }, category, f1: true });
+			}
+			async run(accessor) {
+				const clipboard = accessor.get(IClipboardService);
+				const notifications = accessor.get(INotificationService);
+				await clipboard.writeText(await shareLink());
+				notifications.info('Share link copied. The whole project is in the link: anyone who opens it gets their own copy to change.');
+			}
+		}
+	);
 }
 
 /**

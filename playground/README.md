@@ -27,6 +27,22 @@ The project lives in an in-memory file system (`src/memfs.js`) that Go's
 `os` calls reach through `globalThis.fs`, so the language server and the
 loader read it as if it were on disk, under `/project`.
 
+## Their copy and ours, and share links
+
+A project opens from a source that is ours and never changes: an example,
+a `?project=` URL, or a share link. The first edit makes the visitor's own
+copy, kept in their browser (IndexedDB, `app/keep.js`) under the source's
+key with a fingerprint of the source it started from. A later visit opens
+their copy; if the source has changed since, a notice offers the new
+version or keeps theirs. "Playground: Discard My Changes" goes back to the
+source. Nothing is sent anywhere.
+
+A share link (the Share button, or "Playground: Copy Share Link") carries
+the project itself in the URL's `#project=`: gzip, then base64url. A
+project made from one of our examples carries only the files that differ
+from it, so a link to a changed lift-station is a few KB. Opening a link
+gives whoever opens it their own copy.
+
 ## The dashboard and the HMI
 
 `naut run` serves the built-in dashboard at `/`, or a built HMI

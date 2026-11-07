@@ -28,11 +28,16 @@ function toProviderError(e, path) {
 	return FileSystemProviderError.create(`${e.message || e} (${path})`, code);
 }
 
-/** A file system provider over pg's worker file system, under root. */
+/**
+ * A file system provider over pg's worker file system, under root.
+ * onEdit runs after each change made from the workbench (an edit saved, a
+ * file added, removed or renamed), not after the engine's own writes.
+ */
 export class EngineFileSystem {
-	constructor(pg, root = '/project') {
+	constructor(pg, root = '/project', onEdit = () => {}) {
 		this.pg = pg;
 		this.root = root;
+		this.onEdit = onEdit;
 		this.capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.PathCaseSensitive;
 		this._onDidChangeFile = new Emitter();
 		this.onDidChangeFile = this._onDidChangeFile.event;
@@ -84,11 +89,13 @@ export class EngineFileSystem {
 	async writeFile(resource, content) {
 		await this.fs('writeFile', resource.path, dec.decode(content));
 		this._onDidChangeFile.fire([{ type: FileChangeType.UPDATED, resource }]);
+		this.onEdit();
 	}
 
 	async mkdir(resource) {
 		await this.fs('mkdir', resource.path, 0o755);
 		this._onDidChangeFile.fire([{ type: FileChangeType.ADDED, resource }]);
+		this.onEdit();
 	}
 
 	async delete(resource, opts) {
@@ -100,6 +107,7 @@ export class EngineFileSystem {
 			await this.fs('unlink', resource.path);
 		}
 		this._onDidChangeFile.fire([{ type: FileChangeType.DELETED, resource }]);
+		this.onEdit();
 	}
 
 	async rename(from, to) {
@@ -108,5 +116,6 @@ export class EngineFileSystem {
 			{ type: FileChangeType.DELETED, resource: from },
 			{ type: FileChangeType.ADDED, resource: to }
 		]);
+		this.onEdit();
 	}
 }
