@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build @joyautomation/nautilus-playground into dist/:
 #   naut.wasm (GOOS=js, so internal/project links no field drivers), Go's
-#   wasm_exec.js, the worker, client and bridge, examples/, and app/: the
+#   wasm_exec.js, the worker, client, bridge and sw.js (the dashboard and
+#   HMI server), examples/, hmi/ (prebuilt HMIs), and app/: the
 #   workbench (app/, monaco-vscode-api) with the nautilus extension's web
 #   build and its editors in app/extension/.
 set -euo pipefail
@@ -18,6 +19,17 @@ cp "$goroot/lib/wasm/wasm_exec.js" "$out/" 2>/dev/null || cp "$goroot/misc/wasm/
 cp "$here"/src/*.js "$here"/src/*.d.ts "$out/"
 
 "$here/scripts/app.sh"
+
+# Prebuilt HMIs, served by sw.js at <base>/view/<name>/ in a tab of their
+# own, as `naut run` serves server.hmi. The base is where the site mounts
+# dist/ (joyautomation.com: /playground/engine); PLAYGROUND_BASE overrides.
+# An example with one gets "hmi" in its JSON (examples.py).
+base="${PLAYGROUND_BASE:-/playground/engine}"
+ci() { [ -n "${SKIP_NPM:-}" ] || npm ci --no-audit --no-fund --silent; }
+( cd "$repo/hmi-3d" && ci && npm run --silent package >/dev/null )
+lift="$repo/examples/lift-station/hmi"
+( cd "$lift" && ci && HMI_BASE="$base/view/lift-station" npx vite build --logLevel warn >/dev/null )
+mkdir -p "$out/hmi" && cp -r "$lift/build" "$out/hmi/lift-station"
 
 # Examples, as the JSON file maps the client loads.
 demo="$(mktemp -d)"

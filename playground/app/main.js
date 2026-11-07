@@ -79,6 +79,41 @@ async function loadProject(params) {
 	return r.json();
 }
 
+/**
+ * The pages `naut run` would serve, opened in tabs of their own: the
+ * built-in dashboard and, for an example that ships one built, the
+ * project's HMI. sw.js serves them from this tab's engine (its channel is
+ * in the URL). Resolves to their URLs, or null where service workers are
+ * unavailable. The worker's scope is view/ alone, so the workbench's own
+ * requests never pass through it.
+ */
+async function serveViews(channel, hmi) {
+	try {
+		if (!('serviceWorker' in navigator)) return null;
+		const reg = await navigator.serviceWorker.register(new URL('sw.js', ENGINE), {
+			scope: new URL('view/', ENGINE).pathname,
+			updateViaCache: 'none'
+		});
+		const sw = reg.installing || reg.waiting || reg.active;
+		if (sw && sw.state !== 'activated') {
+			await new Promise((ok, no) =>
+				sw.addEventListener('statechange', () =>
+					sw.state === 'activated' ? ok() : sw.state === 'redundant' && no(new Error('sw.js did not install'))
+				)
+			);
+		}
+		// The newest playground tab is where a view goes when its own tab is
+		// reloaded or closed. (sw, not reg.active: during an update that is
+		// still the old worker.)
+		(sw ?? reg.active)?.postMessage({ kind: 'engine', channel });
+		const url = (name) => new URL(`view/${name}/?engine=${encodeURIComponent(channel)}`, ENGINE).href;
+		return { dashboard: url('dashboard'), hmi: hmi ? url(hmi) : null };
+	} catch (e) {
+		console.warn('nautilus playground: no dashboard or HMI view:', e);
+		return null;
+	}
+}
+
 /** The project's files to open, first one active. (The extension opens a
  * diagram file's diagram beside its text once its editors are registered:
  * src/web/platform.ts.) */
@@ -102,6 +137,7 @@ async function main() {
 	document.title = `${project.title} · nautilus playground`;
 
 	const bridge = serveBridge(pg);
+	const views = serveViews(bridge.name, project.hmi);
 	// For the page framing the playground (joyautomation.com's download
 	// button): the project as it stands, saved edits included.
 	window.nautilusPlayground = { title: project.title, files: () => pg.files() };
@@ -192,7 +228,8 @@ async function main() {
 	relayWebviewKeys(commands, await getService(IKeybindingService));
 	Object.assign(window.nautilusPlayground, {
 		showCommands: () => commands.executeCommand('workbench.action.showCommands'),
-		focus: () => commands.executeCommand('workbench.action.focusActiveEditorGroup')
+		focus: () => commands.executeCommand('workbench.action.focusActiveEditorGroup'),
+		views: await views
 	});
 	window.dispatchEvent(new Event('nautilus-playground-ready'));
 }

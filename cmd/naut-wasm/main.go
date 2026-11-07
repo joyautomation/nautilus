@@ -233,8 +233,24 @@ func jsHandle(_ js.Value, args []js.Value) any {
 				h[k] = vs[0]
 			}
 		}
-		return js.ValueOf(map[string]any{"status": res.StatusCode, "headers": h, "body": buf.String()})
+		out := map[string]any{"status": res.StatusCode, "headers": h, "body": buf.String()}
+		// A string crosses into JavaScript as UTF-8, which mangles a font or
+		// an image: those also come as bytes (a Uint8Array).
+		if !textual(res.Header.Get("Content-Type")) {
+			b := js.Global().Get("Uint8Array").New(buf.Len())
+			js.CopyBytesToJS(b, buf.Bytes())
+			out["bytes"] = b
+		}
+		return js.ValueOf(out)
 	})
+}
+
+// textual reports whether a response of this content type is text.
+func textual(ct string) bool {
+	ct = strings.ToLower(ct)
+	return ct == "" || strings.HasPrefix(ct, "text/") ||
+		strings.Contains(ct, "json") || strings.Contains(ct, "javascript") ||
+		strings.Contains(ct, "xml") || strings.Contains(ct, "svg")
 }
 
 // flushWriter is an http.ResponseWriter whose Flush hands what was written

@@ -1,6 +1,7 @@
 """Bundle playground examples as JSON: {name, title, description, open, files}.
 
 Usage: examples.py OUTDIR NAME=DIR[:open1,open2[:Title[:Description]]] ...
+An example with a built HMI in OUTDIR/../hmi/NAME/ gets "hmi": NAME.
 Every text file a project carries is included (IEC sources, manifests, tag
 files, test suites, mimic/scene JSON, READMEs); built HMIs, node_modules and
 binaries are not.
@@ -42,6 +43,9 @@ for arg in sys.argv[2:]:
         ex['title'] = title
     if desc:
         ex['description'] = desc
+    # A prebuilt HMI (build.sh puts it in dist/hmi/NAME/): sw.js serves it.
+    if os.path.isfile(os.path.join(out, '..', 'hmi', name, 'index.html')):
+        ex['hmi'] = name
     with open(os.path.join(out, name + '.json'), 'w', encoding='utf-8') as f:
         json.dump(ex, f)
     index.append({k: ex[k] for k in ('name', 'title', 'description')})
