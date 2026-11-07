@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>playground engine test</title>
+<pre id="out" style="font:12px ui-monospace,monospace;white-space:pre-wrap"></pre>
+<script type="module">
+import { Playground, fileUri } from '../dist/client.js';
+const R = (window.R = { steps: [] });
+const out = document.getElementById('out');
+const log = (k, v) => { R[k] = v; out.textContent += k + ': ' + JSON.stringify(v) + '\n'; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const proj = (n) => fetch('./projects/' + n + '.json').then((r) => r.json());
+try {
+	const t0 = performance.now();
+	const pg = (window.pg = await Playground.start({ base: '../dist/' }));
+	log('ready', { version: pg.version, ms: Math.round(performance.now() - t0) });
+
+	// 1. seal-in: run, write through the tag API, watch the real SSE stream
+	const sealin = await proj('sealin');
+	await pg.setProject(sealin);
+	log('sealin.run', await pg.run());
+	const events = [];
+	const stopStream = pg.stream('/api/stream?delta=1', (ev) => ev && events.push(ev));
+	await sleep(400);
+	await pg.api('POST', '/api/tags', { name: 'StartPB', value: true });
+	await sleep(400);
+	await pg.api('POST', '/api/tags', { name: 'StartPB', value: false });
+	await sleep(600);
+	stopStream();
+	const frames = events.map((e) => { try { return JSON.parse(e.data); } catch { return null; } }).filter(Boolean);
+	log('stream', { events: events.length, kinds: [...new Set(events.map((e) => e.event))], motorSeen: frames.map((f) => f.tags && f.tags.Motor).filter((v) => v !== undefined) });
+
+	// 2. ladder graph + edit, as the editor would ask
+	const src = sealin['program.ld'];
+	const g = await pg.graph('ld', src, 'program.ld');
+	log('graph', { error: g.error, keys: Object.keys(g), tags: (g.tags || []).map((t) => t.name) });
+	log('edit', await pg.edit('ld', { source: src, op: { type: 'addRung', name: 'two' }, file: 'program.ld' }));
+
+	// 3. language server: diagnostics on a typo, hover on a tag
+	const lsp = [];
+	pg.on('lsp', (m) => lsp.push(m.msg));
+	await pg.lspStart();
+	pg.lspSend({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { processId: null, rootUri: 'file:///project', capabilities: {} } });
+	pg.lspSend({ jsonrpc: '2.0', method: 'initialized', params: {} });
+	const bad = src.replace('/StopPB', '/StopPBB');
+	pg.lspSend({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri: fileUri('program.ld'), languageId: 'iec-ld', version: 1, text: bad } } });
+	const line = bad.split('\n').findIndex((l) => l.includes('StartPB |'));
+	pg.lspSend({ jsonrpc: '2.0', id: 2, method: 'textDocument/hover', params: { textDocument: { uri: fileUri('program.ld') }, position: { line, character: bad.split('\n')[line].indexOf('StartPB') + 2 } } });
+	await sleep(800);
+	const init = lsp.find((m) => m.id === 1);
+	const diags = lsp.filter((m) => m.method === 'textDocument/publishDiagnostics');
+	const hover = lsp.find((m) => m.id === 2);
+	log('lsp', {
+		server: init && init.result && init.result.serverInfo,
+		diagnostics: diags.flatMap((d) => d.params.diagnostics.map((x) => x.message)),
+		hover: hover && JSON.stringify(hover.result).slice(0, 160),
+	});
+
+	// 4. lift-station: five tasks, four languages, alarms, and its test suite
+	const lift = await proj('lift-station');
+	await pg.setProject(lift);
+	log('lift.run', await pg.run());
+	await sleep(1500);
+	const st = (await pg.api('GET', '/api/state')).body;
+	log('lift.state', { scans: st.scans, level: st.tags.LIT101_Level });
+	const t1 = performance.now();
+	const tests = await pg.test();
+	log('lift.tests', { ms: Math.round(performance.now() - t1), count: tests.length, passed: tests.filter((t) => t.passed).length, failed: tests.filter((t) => !t.passed).map((t) => t.name || t.error) });
+
+	// 5. the same station's field build (Modbus VFDs): simulated, not refused
+	await pg.setProject({ ...lift, 'nautilus.yaml': lift['field.yaml'] });
+	log('field.run', await pg.run());
+	await sleep(1500);
+	const fs = (await pg.api('GET', '/api/state')).body;
+	log('field.state', { scans: fs.scans, P101_Running: fs.tags && fs.tags.P101_Running, faults: fs.scan && fs.scan.faults });
+
+	// 6. back to the seal-in, so the page leaves something running
+	await pg.setProject(sealin);
+	await pg.run();
+	log('done', true);
+} catch (e) {
+	log('error', String(e.stack || e));
+}
+</script>

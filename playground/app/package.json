@@ -1,0 +1,40 @@
+{
+	"name": "nautilus-playground-app",
+	"private": true,
+	"type": "module",
+	"description": "The playground's workbench: VS Code's own parts (monaco-vscode-api) running the nautilus extension's web build against the in-browser engine. Built into ../dist/app by scripts/build.sh. Every @codingame package must be the same exact version.",
+	"scripts": {
+		"build": "vite build",
+		"dev": "vite"
+	},
+	"dependencies": {
+		"@codingame/monaco-vscode-api": "39.0.3",
+		"@codingame/monaco-vscode-configuration-service-override": "39.0.3",
+		"@codingame/monaco-vscode-explorer-service-override": "39.0.3",
+		"@codingame/monaco-vscode-extensions-service-override": "39.0.3",
+		"@codingame/monaco-vscode-files-service-override": "39.0.3",
+		"@codingame/monaco-vscode-json-default-extension": "39.0.3",
+		"@codingame/monaco-vscode-keybindings-service-override": "39.0.3",
+		"@codingame/monaco-vscode-languages-service-override": "39.0.3",
+		"@codingame/monaco-vscode-log-service-override": "39.0.3",
+		"@codingame/monaco-vscode-markdown-basics-default-extension": "39.0.3",
+		"@codingame/monaco-vscode-markers-service-override": "39.0.3",
+		"@codingame/monaco-vscode-model-service-override": "39.0.3",
+		"@codingame/monaco-vscode-notifications-service-override": "39.0.3",
+		"@codingame/monaco-vscode-outline-service-override": "39.0.3",
+		"@codingame/monaco-vscode-output-service-override": "39.0.3",
+		"@codingame/monaco-vscode-quickaccess-service-override": "39.0.3",
+		"@codingame/monaco-vscode-terminal-service-override": "39.0.3",
+		"@codingame/monaco-vscode-testing-service-override": "39.0.3",
+		"@codingame/monaco-vscode-textmate-service-override": "39.0.3",
+		"@codingame/monaco-vscode-theme-defaults-default-extension": "39.0.3",
+		"@codingame/monaco-vscode-theme-service-override": "39.0.3",
+		"@codingame/monaco-vscode-workbench-service-override": "39.0.3",
+		"@codingame/monaco-vscode-yaml-default-extension": "39.0.3",
+		"monaco-editor": "npm:@codingame/monaco-vscode-editor-api@39.0.3",
+		"vscode": "npm:@codingame/monaco-vscode-extension-api@39.0.3"
+	},
+	"devDependencies": {
+		"vite": "6.3.5"
+	}
+}

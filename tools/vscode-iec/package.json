@@ -195,6 +195,11 @@
         "icon": "$(edit)"
       },
       {
+        "command": "nautilus.toggleBit",
+        "title": "nautilus: Toggle Bit",
+        "category": "nautilus"
+      },
+      {
         "command": "nautilus.force",
         "title": "nautilus: Force…",
         "icon": "$(lock)"
@@ -361,6 +366,20 @@
         "command": "nautilus.diagram.showSource",
         "title": "nautilus: Show Source",
         "icon": "$(go-to-file)"
+      },
+      {
+        "command": "nautilus.playground.run",
+        "title": "Run (compile and start scanning)",
+        "category": "nautilus",
+        "icon": "$(play)",
+        "enablement": "isWeb"
+      },
+      {
+        "command": "nautilus.playground.stop",
+        "title": "Stop",
+        "category": "nautilus",
+        "icon": "$(debug-stop)",
+        "enablement": "isWeb"
       }
     ],
     "viewsContainers": {
@@ -427,6 +446,11 @@
           "group": "inline"
         },
         {
+          "command": "nautilus.toggleBit",
+          "when": "view == nautilusLiveValues && viewItem == nautilusTag",
+          "group": "nautilus@0"
+        },
+        {
           "command": "nautilus.setValue",
           "when": "view == nautilusLiveValues && viewItem == nautilusTag",
           "group": "nautilus@1"
@@ -459,17 +483,42 @@
           "group": "nautilus@2"
         },
         {
+          "command": "nautilus.toggleBit",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "group": "nautilus@0"
+        },
+        {
+          "command": "nautilus.setValue",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "group": "nautilus@1"
+        },
+        {
+          "command": "nautilus.force",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "group": "nautilus@2"
+        },
+        {
+          "command": "nautilus.unforce",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected && nautilus.forcesActive",
+          "group": "nautilus@3"
+        },
+        {
           "command": "nautilus.diagram.export",
-          "when": "webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/",
+          "when": "(webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && !isWeb",
           "group": "z_export@1"
         },
         {
           "command": "nautilus.diagram.print",
-          "when": "webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/",
+          "when": "(webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && !isWeb",
           "group": "z_export@2"
         }
       ],
       "editor/context": [
+        {
+          "command": "nautilus.toggleBit",
+          "when": "resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc && nautilus.liveConnected",
+          "group": "nautilus@0"
+        },
         {
           "command": "nautilus.setValue",
           "when": "resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc",
@@ -631,11 +680,11 @@
         },
         {
           "command": "nautilus.component.preview",
-          "when": "resourceExtname == .svelte || resourceFilename =~ /\\.component\\.json$/"
+          "when": "(resourceExtname == .svelte || resourceFilename =~ /\\.component\\.json$/) && !isWeb"
         },
         {
           "command": "nautilus.page.preview",
-          "when": "resourceExtname == .svelte"
+          "when": "(resourceExtname == .svelte) && !isWeb"
         },
         {
           "command": "nautilus.ld.preview",
@@ -655,7 +704,7 @@
         },
         {
           "command": "nautilus.fbd.diffRevisions",
-          "when": "resourceLangId == iec-fbd"
+          "when": "(resourceLangId == iec-fbd) && !isWeb"
         },
         {
           "command": "nautilus.ld.diff",
@@ -667,7 +716,7 @@
         },
         {
           "command": "nautilus.ld.diffRevisions",
-          "when": "resourceLangId == iec-ld || resourceLangId == logix-l5x"
+          "when": "(resourceLangId == iec-ld || resourceLangId == logix-l5x) && !isWeb"
         },
         {
           "command": "nautilus.sfc.diff",
@@ -679,15 +728,55 @@
         },
         {
           "command": "nautilus.sfc.diffRevisions",
-          "when": "resourceLangId == iec-sfc"
+          "when": "(resourceLangId == iec-sfc) && !isWeb"
         },
         {
           "command": "nautilus.diagram.export",
-          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+          "when": "(resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && !isWeb"
         },
         {
           "command": "nautilus.diagram.print",
-          "when": "resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+          "when": "(resourceLangId =~ /^(iec-ld|iec-fbd|iec-sfc|logix-l5x)$/ || activeCustomEditorId =~ /^nautilus\\.(ld|l5x|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && !isWeb"
+        },
+        {
+          "command": "nautilus.playground.run",
+          "when": "isWeb"
+        },
+        {
+          "command": "nautilus.playground.stop",
+          "when": "isWeb"
+        },
+        {
+          "command": "nautilus.installCli",
+          "when": "!isWeb"
+        },
+        {
+          "command": "nautilus.addCliToPath",
+          "when": "!isWeb"
+        },
+        {
+          "command": "nautilus.removeCliFromPath",
+          "when": "!isWeb"
+        },
+        {
+          "command": "nautilus.logix.onlineEdit",
+          "when": "!isWeb"
+        },
+        {
+          "command": "nautilus.logix.download",
+          "when": "!isWeb"
+        },
+        {
+          "command": "nautilus.newProject",
+          "when": "!isWeb"
+        },
+        {
+          "command": "nautilus.copyKitComponent",
+          "when": "!isWeb"
+        },
+        {
+          "command": "nautilus.editComponentPorts",
+          "when": "!isWeb"
         }
       ],
       "explorer/context": [
@@ -780,6 +869,12 @@
           ],
           "default": "auto",
           "description": "Page orientation for exported and printed diagrams (PDF)."
+        },
+        "nautilus.playground.channel": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "markdownDescription": "Set by the nautilus playground page: the channel its in-browser engine answers on. Not used outside the playground."
         }
       }
     },
@@ -965,6 +1060,19 @@
           }
         ]
       }
+    ],
+    "keybindings": [
+      {
+        "command": "nautilus.playground.run",
+        "key": "f5",
+        "when": "isWeb"
+      },
+      {
+        "command": "nautilus.toggleBit",
+        "key": "ctrl+t",
+        "mac": "cmd+t",
+        "when": "(activeCustomEditorId == nautilus.ldDiagram || activeWebviewPanelId == nautilus.ldPreview) && nautilus.liveConnected"
+      }
     ]
   },
   "capabilities": {
@@ -976,6 +1084,8 @@
   "scripts": {
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
+    "compile:web": "node esbuild.web.mjs --minify",
+    "check:web": "tsc -p tsconfig.web.json",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/cliPath.test.js out/cli.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
@@ -990,6 +1100,7 @@
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.82.0",
     "@vscode/test-electron": "^3.1.0",
+    "path-browserify": "^1.0.1",
     "svelte": "^5.56.4",
     "typescript": "^5.4.0"
   }

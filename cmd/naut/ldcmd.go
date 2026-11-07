@@ -5,12 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
-	"github.com/joyautomation/nautilus/internal/lsp"
-	"github.com/joyautomation/nautilus/internal/stproject"
-	"github.com/joyautomation/nautilus/lang/ld"
-	"github.com/joyautomation/nautilus/lang/st"
+	"github.com/joyautomation/nautilus/internal/diagram"
 )
 
 const ldUsage = `naut ld — Ladder Diagram tools
@@ -66,29 +62,18 @@ func runLD(args []string) int {
 }
 
 func runLDEdit() int {
-	var req struct {
-		Source string    `json:"source"`
-		Op     ld.EditOp `json:"op"`
-		// File, when given, names the .ld on disk so the project's library
-		// sources are in scope for a user block's power pins.
-		File string `json:"file,omitempty"`
-	}
 	enc := json.NewEncoder(os.Stdout)
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+	req, err := io.ReadAll(os.Stdin)
+	if err != nil {
 		_ = enc.Encode(map[string]string{"error": "expected {\"source\": ..., \"op\": {...}} on stdin"})
 		return 2
 	}
-	var libs []string
-	if req.File != "" {
-		_, libs, _ = stproject.PreludeSources(req.File, nil)
+	out, code := diagram.Edit("ld", req)
+	if err := enc.Encode(out); err != nil {
+		fmt.Fprintln(os.Stderr, "naut ld edit:", err)
+		return 2
 	}
-	edits, err := ld.ApplyEdit(req.Source, req.Op, libs...)
-	if err != nil {
-		_ = enc.Encode(map[string]string{"error": err.Error()})
-		return 1
-	}
-	_ = enc.Encode(map[string]any{"edits": edits})
-	return 0
+	return code
 }
 
 func runLDGraph(args []string) int {
@@ -116,57 +101,16 @@ func runLDGraph(args []string) int {
 		_ = enc.Encode(map[string]string{"error": err.Error()})
 		return 2
 	}
-	// The project's library sources are in scope, so an FB element shows
-	// the pins the rung's power really uses (a user block's, not IN/Q).
-	var libs []string
-	if at != "" {
-		_, libs, _ = stproject.PreludeSources(at, nil)
-	}
-	model, err := ld.Graph(string(src), libs...)
-	if err != nil {
-		_ = enc.Encode(map[string]string{"error": err.Error()})
+	model, gerr := diagram.Graph("ld", string(src), at)
+	if gerr != nil {
+		// Machine-readable error on stdout so the preview panel can show it,
+		// plus non-zero exit for scripted use.
+		_ = enc.Encode(map[string]string{"error": gerr.Error()})
 		return 1
 	}
-	// The manifest's tags ride along (with a path to find the project by):
-	// a retag to a tag this file doesn't declare can then offer to declare
-	// it, typed, in VAR_EXTERNAL.
-	var tags []lsp.ProjectTag
-	if at != "" {
-		if abs, err := filepath.Abs(at); err == nil {
-			tags = lsp.ProjectTags(abs)
-		}
+	if err := enc.Encode(model); err != nil {
+		fmt.Fprintln(os.Stderr, "naut ld graph:", err)
+		return 2
 	}
-	_ = enc.Encode(struct {
-		*ld.Model
-		Tags  []lsp.ProjectTag `json:"tags,omitempty"`
-		Known []string         `json:"known,omitempty"`
-	}{model, tags, projectNames(libs)})
 	return 0
-}
-
-// projectNames are the names the project's libraries put in scope that are
-// neither tags nor variables: VAR_GLOBAL CONSTANT constants (#176) and
-// enumeration members (#238). A rung naming one needs no declaration, so
-// the ladder's declare offer leaves it out.
-func projectNames(libs []string) []string {
-	var out []string
-	for _, src := range libs {
-		prog, err := st.Parse(src)
-		if err != nil {
-			continue
-		}
-		for _, vb := range prog.GlobalConsts {
-			for _, vd := range vb.Variables {
-				out = append(out, vd.Name)
-			}
-		}
-		for _, td := range prog.TypeDecls {
-			if e, ok := td.Type.(*st.EnumType); ok {
-				for _, m := range e.Members {
-					out = append(out, m.Name)
-				}
-			}
-		}
-	}
-	return out
 }
