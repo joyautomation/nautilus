@@ -8,7 +8,7 @@ import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-yaml-default-extension';
 import '@codingame/monaco-vscode-json-default-extension';
 import '@codingame/monaco-vscode-markdown-basics-default-extension';
-import { initialize, getService, ICommandService, IKeybindingService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, ICommandService, IEditorService, IKeybindingService } from '@codingame/monaco-vscode-api';
 import { StandardKeyboardEvent } from '@codingame/monaco-vscode-api/vscode/vs/base/browser/keyboardEvent';
 import { ResultKind } from '@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/keybindingResolver';
 import { ExtensionHostKind, registerExtension } from '@codingame/monaco-vscode-api/extensions';
@@ -114,16 +114,22 @@ async function serveViews(channel, hmi) {
 	}
 }
 
-/** The project's files to open, first one active. (The extension opens a
- * diagram file's diagram beside its text once its editors are registered:
- * src/web/platform.ts.) */
-function defaultEditors(open) {
-	return open.map((f, i) => ({
-		uri: URI.file('/project/' + f),
-		viewColumn: 1,
-		openOnlyIfExists: true,
-		options: i === 0 ? { pinned: true } : { inactive: true, pinned: true }
-	}));
+/**
+ * The project's files to open, first one showing. Opened once the extension
+ * is registered, not in the workbench's default layout: the layout opens its
+ * editors before the extension's diagram editors exist, so a ladder file
+ * would come up as text. Here they resolve through editorAssociations.
+ */
+async function openProject(project) {
+	const editors = await getService(IEditorService);
+	const open = (project.open || []).filter((f) => f in project.files);
+	if (!open.length) return;
+	await editors.openEditor({ resource: URI.file('/project/' + open[0]), options: { pinned: true } });
+	// Each lands just right of the showing one: the rest, last first, keeps
+	// their order. Inactive, so a diagram builds its view only when shown.
+	for (const f of open.slice(1).reverse()) {
+		await editors.openEditor({ resource: URI.file('/project/' + f), options: { pinned: true, inactive: true, preserveFocus: true } });
+	}
 }
 
 async function main() {
@@ -149,7 +155,15 @@ async function main() {
 			'workbench.startupEditor': 'none',
 			'workbench.tips.enabled': false,
 			'workbench.editor.enablePreview': false,
-			'workbench.editorAssociations': { '*.scene.json': 'default', '*.kind.json': 'default' },
+			// The graphical languages open in their diagram editors, as a
+			// mimic opens in its own; Reopen Editor With shows the text.
+			'workbench.editorAssociations': {
+				'*.ld': 'nautilus.ldDiagram',
+				'*.fbd': 'nautilus.fbdDiagram',
+				'*.sfc': 'nautilus.sfcDiagram',
+				'*.scene.json': 'default',
+				'*.kind.json': 'default'
+			},
 			'files.autoSave': 'afterDelay',
 			'files.autoSaveDelay': 400,
 			'editor.minimap.enabled': false,
@@ -190,17 +204,9 @@ async function main() {
 		document.getElementById('workbench'),
 		{
 			workspaceProvider: { trusted: true, workspace: { folderUri: URI.file('/project') }, async open() { return false; } },
-			defaultLayout: (() => {
-				const editors = defaultEditors(project.open || []);
-				// A diagram beside the text needs the second editor group to
-				// exist: the workbench places editors by viewColumn.
-				const columns = Math.max(1, ...editors.map((e) => e.viewColumn ?? 1));
-				return {
-					force: true,
-					editors,
-					layout: { editors: { orientation: 0, groups: Array.from({ length: columns }, () => ({ size: 1 / columns })) } }
-				};
-			})(),
+			// One editor group, empty until openProject: no editors restored
+			// from a previous visit.
+			defaultLayout: { force: true, editors: [], layout: { editors: { orientation: 0, groups: [{ size: 1 }] } } },
 			productConfiguration: { nameShort: 'nautilus playground', nameLong: 'nautilus playground' }
 		}
 	);
@@ -219,6 +225,7 @@ async function main() {
 	const ext = registerExtension(manifest, ExtensionHostKind.LocalWebWorker, { system: true });
 	for (const f of files) ext.registerFileUrl('/' + f, extUrl(f));
 	await ext.whenReady();
+	await openProject(project);
 	splash?.remove();
 
 	// For the framing page: keys typed while focus is outside this frame

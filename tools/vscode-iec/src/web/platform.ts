@@ -88,65 +88,8 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
   }
 
   show();
-  // A playground opens running, so the first thing anyone sees moves, and
-  // with a diagram beside the program text: the extension's text-left,
-  // diagram-right, as "Open Diagram to the Side" gives it on a desktop.
-  const arrange = async () => {
-    await openFirstDiagram();
-    await reopenMimics();
-  };
-  void run().then(() => {
-    // On a slow machine the extension can activate before the workbench
-    // has restored the project's first editor: then wait for it, once.
-    if (vscode.window.activeTextEditor) return arrange();
-    const once = vscode.window.onDidChangeActiveTextEditor((ed) => {
-      if (!ed) return;
-      once.dispose();
-      void arrange();
-    });
-    context.subscriptions.push(once);
-  });
-}
-
-const DIAGRAMS: Record<string, string> = { "iec-ld": "nautilus.ldDiagram", "iec-fbd": "nautilus.fbdDiagram", "iec-sfc": "nautilus.sfcDiagram" };
-
-async function openFirstDiagram(): Promise<void> {
-  const ed = vscode.window.activeTextEditor ?? vscode.window.visibleTextEditors[0];
-  const viewType = ed && DIAGRAMS[ed.document.languageId];
-  if (!ed || !viewType) return;
-  const open = vscode.window.tabGroups.all.some((g) =>
-    g.tabs.some((t) => t.input instanceof vscode.TabInputCustom && t.input.viewType === viewType)
-  );
-  if (open) return;
-  await vscode.commands.executeCommand("vscode.openWith", ed.document.uri, viewType, {
-    viewColumn: vscode.ViewColumn.Beside,
-    preserveFocus: true,
-  });
-}
-
-const MIMIC = "nautilus.mimicEditor";
-const isMimicText = (t: vscode.Tab): t is vscode.Tab & { input: vscode.TabInputText } =>
-  t.input instanceof vscode.TabInputText && t.input.uri.path.endsWith(".mimic.json");
-
-/** The playground's startup layout opens a project's tabs before this
- * extension has registered the mimic editor, so a mimic there comes up as
- * its JSON. Reopen each one as the HMI, keeping the tab that was showing. */
-async function reopenMimics(): Promise<void> {
-  for (const group of vscode.window.tabGroups.all) {
-    const shown = group.activeTab?.input;
-    const uris = group.tabs.filter(isMimicText).map((t) => t.input.uri);
-    if (!uris.length) continue;
-    for (const uri of uris) {
-      await vscode.commands.executeCommand("vscode.openWith", uri, MIMIC, {
-        viewColumn: group.viewColumn,
-        preserveFocus: true,
-        preview: false,
-      });
-      const text = group.tabs.find((t) => isMimicText(t) && t.input.uri.toString() === uri.toString());
-      if (text) await vscode.window.tabGroups.close(text, true);
-    }
-    if (shown instanceof vscode.TabInputText && !shown.uri.path.endsWith(".mimic.json")) {
-      await vscode.window.showTextDocument(shown.uri, { viewColumn: group.viewColumn, preserveFocus: true, preview: false });
-    }
-  }
+  // A playground opens running, so the first thing anyone sees moves. (The
+  // playground app opens the project's files, the diagrams in their
+  // editors: playground/app/main.js.)
+  void run();
 }
