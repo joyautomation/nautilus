@@ -14,12 +14,13 @@ export const ROOT = '/project';
 export class Playground {
 	/**
 	 * Start the worker and wait for naut.wasm to be ready.
-	 * @param {{ base: string }} opts  URL of the directory holding worker.js,
-	 *   memfs.js, wasm_exec.js and naut.wasm.
+	 * @param {{ base: string, version?: string }} opts  base: URL of the
+	 *   directory holding worker.js, memfs.js, wasm_exec.js and naut.wasm;
+	 *   version, when given, tags the worker and wasm URLs for caching.
 	 */
 	static async start(opts) {
 		const base = new URL(opts.base, location.href);
-		const worker = new Worker(new URL('worker.js', base));
+		const worker = new Worker(new URL('worker.js' + (opts.version ? '?v=' + encodeURIComponent(opts.version) : ''), base));
 		const pg = new Playground(worker);
 		await pg.ready;
 		return pg;
