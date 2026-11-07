@@ -14,6 +14,9 @@ RUN npm ci && npm run build
 FROM nginx:alpine
 COPY website/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /repo/website/dist /usr/share/nginx/html
+# The playground's build id, for nginx.conf's long-lived ?v= responses.
+RUN b=$(sed -n 's/.*"build":"\([0-9a-z]*\)".*/\1/p' /usr/share/nginx/html/playground/engine/engine.json 2>/dev/null) \
+ && sed -i "s/@PLAYGROUND_BUILD@/${b:-unbuilt}/" /etc/nginx/conf.d/default.conf
 # A .gz beside every compressible file, for nginx.conf's gzip_static.
 RUN find /usr/share/nginx/html -type f -size +1k \( -name '*.html' -o -name '*.css' -o -name '*.js' \
       -o -name '*.mjs' -o -name '*.json' -o -name '*.svg' -o -name '*.wasm' -o -name '*.map' \

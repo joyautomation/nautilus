@@ -10,8 +10,18 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$here/.." && pwd)"
 out="$here/dist"
 rm -rf "$out" && mkdir -p "$out"
-version="${NAUT_VERSION:-$(git -C "$repo" describe --tags --always --dirty 2>/dev/null || echo dev)}"
-( cd "$repo" && GOOS=js GOARCH=wasm go build -trimpath \
+# The build id: a hash of what the playground is built from (everything the
+# repo tracks but the docs site, plus uncommitted changes), not of the time.
+# The docs deploy rebuilds the playground for every docs edit; an unchanged
+# id keeps visitors' cached naut.wasm and workbench (see website/nginx.conf).
+# The version carries it too, so naut.wasm itself is byte-for-byte the same
+# (-buildvcs=false keeps the commit out of it as well).
+build="$(cd "$repo" && { git ls-files -s -- . ':!website' ':!docs' ':!.github'
+  git diff HEAD -- . ':!website' ':!docs' ':!.github'
+  git ls-files -o --exclude-standard -- . ':!website' ':!docs' ':!.github' | xargs -r sha256sum
+} | sha256sum | cut -c1-12)"
+version="${NAUT_VERSION:-$(git -C "$repo" describe --tags --abbrev=0 2>/dev/null || echo dev)-$build}"
+( cd "$repo" && GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false \
     -ldflags "-s -w -X github.com/joyautomation/nautilus/internal/lsp.Version=$version" \
     -o "$out/naut.wasm" ./cmd/naut-wasm )
 goroot="$(go env GOROOT)"
@@ -43,6 +53,6 @@ python3 -I "$here/scripts/examples.py" "$out/examples" \
   "lift-station=$repo/examples/lift-station:permissives.ld,sequence.sfc,level.fbd:Lift station (all four languages):A duplex sewage lift station: duty/standby sequencing in SFC, level control in FBD, permissives in ladder, the plant simulated in ST, with alarms and 15 tests. Set InflowLps to 40 for a storm."
 rm -rf "$demo"
 
-# What a page hosting dist/ reads first: the version, and a build id that
-# changes with every build, for the ?v= that keeps browsers off stale files.
-printf '{"version":"%s","build":"%s"}\n' "$version" "$(date +%s)" > "$out/engine.json"
+# What a page hosting dist/ reads first: the version and the build id, for
+# the ?v= that keeps browsers off stale files.
+printf '{"version":"%s","build":"%s"}\n' "$version" "$build" > "$out/engine.json"
