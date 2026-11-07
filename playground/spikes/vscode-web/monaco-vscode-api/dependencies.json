@@ -6,6 +6,7 @@
     "@codingame/monaco-vscode-extensions-service-override": "^39.0.3",
     "@codingame/monaco-vscode-files-service-override": "^39.0.3",
     "@codingame/monaco-vscode-keybindings-service-override": "^39.0.3",
+    "@codingame/monaco-vscode-model-service-override": "^39.0.3",
     "@codingame/monaco-vscode-quickaccess-service-override": "^39.0.3",
     "@codingame/monaco-vscode-textmate-service-override": "^39.0.3",
     "@codingame/monaco-vscode-theme-defaults-default-extension": "^39.0.3",

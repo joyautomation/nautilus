@@ -45,7 +45,6 @@ exports.activate = async function activate(ctx) {
       writeFile: (uri, content) => { files[uri.path.replace(/^\//, '')] = new TextDecoder().decode(content); },
       createDirectory() {}, delete() {}, rename() {},
     }, { isCaseSensitive: true }));
-    vscode.window.showTextDocument(vscode.Uri.parse('playground:/program.ld'));
     await readyP;
     const tEngine = Date.now() - t0;
     await call('resetProject', '/project', files);
@@ -53,6 +52,13 @@ exports.activate = async function activate(ctx) {
     if (!r.ok) return say('nautilus: ' + r.error);
     const tRun = Date.now() - t0;
     say(`nautilus: running (engine ${tEngine} ms, run ${tRun} ms after activate)`);
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse('playground:/program.ld'));
+      await vscode.window.showTextDocument(doc);
+      console.log('[nautilus-spike] opened ' + doc.uri.toString() + ' as ' + doc.languageId);
+    } catch (e) {
+      console.log('[nautilus-spike] open failed: ' + (e && (e.stack || e.message) || e));
+    }
     setInterval(async () => {
       const s = await call('handle', 'GET', '/api/state', {}, null);
       const st = JSON.parse(s.body);

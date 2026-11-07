@@ -12,6 +12,7 @@ import getQuickAccess from '@codingame/monaco-vscode-quickaccess-service-overrid
 import getConfiguration from '@codingame/monaco-vscode-configuration-service-override';
 import getExplorer from '@codingame/monaco-vscode-explorer-service-override';
 import getTextmate from '@codingame/monaco-vscode-textmate-service-override';
+import getModel from '@codingame/monaco-vscode-model-service-override';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import TextMateWorker from '@codingame/monaco-vscode-textmate-service-override/worker?worker';
 import extHostWorkerUrl from '@codingame/monaco-vscode-api/vscode/vs/workbench/api/worker/extensionHostWorkerMain?worker&url';
@@ -33,7 +34,8 @@ await initialize(
 		...getQuickAccess(),
 		...getConfiguration(),
 		...getExplorer(),
-		...getTextmate()
+		...getTextmate(),
+		...getModel()
 	},
 	document.getElementById('workbench'),
 	{ workspaceProvider: { trusted: true, workspace: undefined, async open() { return false; } } }
