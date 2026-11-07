@@ -131,10 +131,17 @@ Review a logic change as a diagram, not as text.
   **nautilus: Connect to Controller…** (default `http://localhost:8080`).
 - **Live Values panel** (nautilus in the Activity Bar): every tag and
   program local with its value; the pencil on a tag sets it.
-- **Set Live Value…**: right-click an identifier to write a new value.
+- **Set Live Value…**: right-click an identifier, or a contact or coil in
+  a ladder diagram, to write a new value.
+- **Toggle Bit**: select a contact or coil in a ladder diagram and press
+  **Ctrl+T** (**Cmd+T** on macOS), as in Studio 5000, or **T**, to flip its
+  BOOL tag on the controller. It is also on the right-click menu of a
+  diagram element, of the text editor and of the Live Values panel. A
+  forced tag is refused: the force would win the next scan.
 - **Force… / Remove Force / Remove All Forces**: hold a tag at a value
   against the field and the logic until you remove it — the PLC force
-  table. Forced values show an amber **F** on the inline pill, in the Live
+  table. Right-click an identifier, a ladder contact or coil, or use the
+  lock on a Live Values row. Forced values show an amber **F** on the inline pill, in the Live
   Values panel (a Forces group first) and on the diagrams, and a status-bar
   item reads **N forces active** until the last one is removed.
 - **SFC online**: right-click a step in a live SFC diagram for **Set Active
@@ -427,6 +434,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Export Diagram… / Print Diagram… | An LD, FBD or SFC diagram as a paginated PDF or one SVG image; print through the system's PDF viewer |
 | Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
 | Set Live Value… | Write a tag on the controller |
+| Toggle Bit | Flip a BOOL tag on the controller (Ctrl+T / Cmd+T in a ladder diagram) |
 | Force… / Remove Force / Remove All Forces / Show Forces | Hold a tag at a value until removed; list and clear forces |
 | Set Active Step / Fire Transition | Jump a running SFC chart to a step, or take one transition, once |
 | Download Program to Controller | Online edit |

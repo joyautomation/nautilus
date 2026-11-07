@@ -256,6 +256,22 @@ lights for the one scan it fires), the wires show whether power reaches that far
 comparisons evaluate locally. An in-rung block reads its real output pin
 from the controller. Anything unresolvable renders neutral.
 
+The running controller can be changed from the rungs too:
+
+- **Toggle Bit**: select a contact or coil and press **Ctrl+T** (**Cmd+T**
+  on macOS), as in Studio 5000, or **T**, to flip its BOOL tag. In VS Code
+  for the web, use T, since the browser keeps Ctrl+T for a new tab.
+- Right-click a contact, edge contact or coil for **Toggle Bit**, **Set
+  Live Value…** and **Force…** on its tag, and **Unforce** while forces are
+  active ([Forcing](/guides/forcing/)). With a diagram element selected,
+  the command palette's Set Live Value…, Force… and Unforce act on it.
+- A tag that is not a BOOL, has no live value yet, or is forced is refused
+  with a message saying which. Elements inside a `FUNCTION_BLOCK` body (its
+  locals) and member or element references (`P101.Run`, `Alarms[3]`) are
+  not tags the controller writes by name, so they get none of these.
+- A read-only diagram (a diff) selects nothing; use the right-click menu
+  there.
+
 Each contact and coil shows its tag's description on a second line under
 the operand, the way Studio 5000 does. The description is the `desc` from
 `nautilus.yaml` (or a tag file), or a trailing `(* comment *)` on the
