@@ -6,10 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/joyautomation/nautilus/internal/lsp"
-	"github.com/joyautomation/nautilus/internal/stproject"
-	"github.com/joyautomation/nautilus/lang/fbd"
-	"path/filepath"
+	"github.com/joyautomation/nautilus/internal/diagram"
 )
 
 const fbdUsage = `naut fbd — Function Block Diagram tools
@@ -58,35 +55,18 @@ func runFBD(args []string) int {
 }
 
 func runFBDEdit() int {
-	var req struct {
-		Source string     `json:"source"`
-		Op     fbd.EditOp `json:"op"`
-		// File, when given, names the .fbd on disk so the project's library
-		// sources are in scope for a user block's pins.
-		File string `json:"file,omitempty"`
-	}
 	enc := json.NewEncoder(os.Stdout)
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+	req, err := io.ReadAll(os.Stdin)
+	if err != nil {
 		_ = enc.Encode(map[string]string{"error": "expected {\"source\": ..., \"op\": {...}} on stdin"})
 		return 2
 	}
-	var libs []string
-	if req.File != "" {
-		_, libs, _ = stproject.PreludeSources(req.File, nil)
-	}
-	edits, err := fbd.ApplyEdit(req.Source, req.Op, libs...)
-	if err != nil {
-		_ = enc.Encode(map[string]string{"error": err.Error()})
-		return 1
-	}
-	if edits == nil {
-		edits = []fbd.TextEdit{}
-	}
-	if err := enc.Encode(map[string]any{"edits": edits}); err != nil {
+	out, code := diagram.Edit("fbd", req)
+	if err := enc.Encode(out); err != nil {
 		fmt.Fprintln(os.Stderr, "naut fbd edit:", err)
 		return 2
 	}
-	return 0
+	return code
 }
 
 func runFBDGraph(args []string) int {
@@ -114,39 +94,16 @@ func runFBDGraph(args []string) int {
 		return 2
 	}
 	enc := json.NewEncoder(os.Stdout)
-	var libs []string
-	if at != "" {
-		_, libs, _ = stproject.PreludeSources(at, nil)
-	}
-	model, gerr := fbd.GraphWithLibs(string(src), libs)
+	model, gerr := diagram.Graph("fbd", string(src), at)
 	if gerr != nil {
 		// Machine-readable error on stdout so the preview panel can show it,
 		// plus non-zero exit for scripted use.
 		_ = enc.Encode(map[string]string{"error": gerr.Error()})
 		return 1
 	}
-	// The manifest's tags ride along, as for `naut ld graph`: every program
-	// has them in scope without a declaration (#177/#210), so the palette
-	// and a chip's retag offer them beside the file's own variables.
-	if err := enc.Encode(struct {
-		*fbd.Model
-		Tags []lsp.ProjectTag `json:"tags,omitempty"`
-	}{model, graphTags(at)}); err != nil {
+	if err := enc.Encode(model); err != nil {
 		fmt.Fprintln(os.Stderr, "naut fbd graph:", err)
 		return 2
 	}
 	return 0
-}
-
-// graphTags is the manifest's tags for the project a diagram file belongs
-// to; nil for a buffer with no file.
-func graphTags(at string) []lsp.ProjectTag {
-	if at == "" {
-		return nil
-	}
-	abs, err := filepath.Abs(at)
-	if err != nil {
-		return nil
-	}
-	return lsp.ProjectTags(abs)
 }

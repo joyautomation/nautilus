@@ -26,6 +26,11 @@ jobs:
           mkdir -p evidence
           go test -json -coverprofile=evidence/cover.out ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
+      # The browser playground (playground/, cmd/naut-wasm): GOOS=js swaps
+      # internal/project's drivers for simulated ones, so a change that
+      # pulls a field driver or a socket into the shared path breaks here.
+      - name: playground wasm build
+        run: GOOS=js GOARCH=wasm go vet ./cmd/naut-wasm && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm
       # Every benchmark once, so one that no longer compiles its own program
       # fails here rather than when someone next profiles (#612). The test
       # step above has already built the packages, so this adds little (15-35 s
