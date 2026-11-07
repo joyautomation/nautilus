@@ -18,7 +18,8 @@ printf '%s raw, %s gzipped\n' "$(wc -c < "$out/naut.wasm")" "$(gzip -9 -c "$out/
 
 # Examples, as the JSON file maps the client loads.
 demo="$(mktemp -d)"
-( cd "$repo" && go run ./cmd/naut new --template demo --no-input "$demo/demo" >/dev/null )
+# naut new takes a bare name (a path names the test suite after the path).
+( cd "$repo" && go build -o "$demo/naut" ./cmd/naut ) && ( cd "$demo" && ./naut new --template demo --no-input demo >/dev/null )
 python3 -I "$here/scripts/examples.py" "$out/examples" \
   "sealin=$here/examples/sealin:program.ld:Start/stop seal-in (ladder):The first circuit everyone learns. Press StartPB in the Tags panel and the motor keeps running after you let go, because the rung reads its own Motor contact. StopPB breaks it." \
   "demo=$demo/demo:interlocks.ld,program.fbd:Tank demo (ladder, FBD, ST):What naut new makes: a heated tank with a PI loop and pump seal-in in FBD, the alarm annunciator in ladder, the plant simulated in ST, and acceptance tests. Change a setpoint and watch the loop follow." \
