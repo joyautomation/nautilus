@@ -1,0 +1,50 @@
+# Publishes @joyautomation/nautilus-playground (playground/) to npm when a
+# playground-v<version> tag is pushed, from whatever commit the tag names, so
+# a branch can ship prereleases (playground-v0.1.0-alpha.3 -> dist-tag next)
+# for joyautomation.com's staging before anything merges. A version without
+# a prerelease suffix goes to latest.
+#
+# npm trusted publishing (OIDC), as publish.yml: no stored token. The package
+# trusts this workflow file by name (npmjs.com -> package -> Settings ->
+# Trusted Publisher: joyautomation/nautilus, playground-publish.yml).
+name: playground-publish
+on:
+  push:
+    tags: ['playground-v*']
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  publish:
+    name: playground → npm
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Version from the tag
+        id: v
+        run: |
+          version="${GITHUB_REF_NAME#playground-v}"
+          case "$version" in *-*) tag=next ;; *) tag=latest ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publishing $version as $tag"
+      - name: Build
+        working-directory: playground
+        env:
+          NAUT_VERSION: ${{ github.ref_name }}
+        run: ./scripts/build.sh
+      - name: Publish
+        working-directory: playground
+        run: |
+          npm version --no-git-tag-version "${{ steps.v.outputs.version }}"
+          npm publish --access public --provenance --tag "${{ steps.v.outputs.tag }}"
