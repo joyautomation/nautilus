@@ -10,25 +10,37 @@ extension already writes through.
 
 ### Added
 
-- **Toggle Bit, as in Studio 5000.** Select a contact or coil in a ladder
-  diagram and press **Ctrl+T** (**Cmd+T** on macOS) to write the opposite
-  of its BOOL tag's live value, or press **T**, beside the diagram's other
-  one-letter keys (N, P, M, B, O). **nautilus: Toggle Bit** is also
-  in the right-click menu of a diagram element, of IEC text editors (the
-  tag under the cursor) and of the Live Values view. A tag that is not a
-  BOOL, has no live value yet, or is forced (the force would win) is
-  refused with a message that says which. Ctrl+T in a text editor stays
-  VS Code's Go to Symbol in Workspace. A read-only diagram (a diff)
-  selects nothing, so there it is the right-click menu.
-- **Set Live Value and Force from the ladder diagram.** Right-click a
-  contact, edge contact or coil for **Set Live Value…**, **Force…** and,
-  while forces are active, **Unforce**, for that element's tag. The
+- **Toggle Bit, as in Studio 5000.** Select a tag's element in a
+  diagram (a ladder contact or coil, an FBD variable chip, an SFC action
+  association or a transition whose condition is one variable) and press
+  **Ctrl+T** (**Cmd+T** on macOS) to write the opposite of its BOOL tag's
+  live value, or press **T** (in ladder, beside its other one-letter keys
+  N, P, M, B, O). **nautilus: Toggle Bit** is also in the right-click menu
+  of a diagram element, of IEC text editors (the tag under the cursor) and
+  of the Live Values view, and a BOOL's hover in text offers **Toggle
+  bit** beside Set value…. A tag that is not a BOOL, has no live value
+  yet, or is forced (the force would win) is refused with a message that
+  says which. Ctrl+T in a text editor stays VS Code's Go to Symbol in
+  Workspace. A read-only diagram (a diff) selects nothing, so there it is
+  the right-click menu.
+- **Set Live Value and Force from the diagrams.** Right-click a ladder
+  contact, edge contact or coil, an FBD variable chip, or an SFC action
+  association or one-variable transition for **Set Live Value…**,
+  **Force…** and, while forces are active, **Unforce**, for that
+  element's tag (a transition keeps Fire Transition beside them). The
   palette's Set Live Value, Force and Unforce now act on the diagram's
-  selected element while a ladder diagram has focus, as they act on the
-  identifier under the cursor in text; before, they asked for a text
-  cursor. Elements inside a FUNCTION_BLOCK body (its locals, not tags) and
-  member or element references are left out, as the text editor's hover
-  link leaves them out. The ladder's shortcut help gains a Live group.
+  selected element while a ladder, FBD or SFC diagram has focus, editor or
+  preview, as they act on the identifier under the cursor in text;
+  before, they asked for a text cursor. A FUNCTION_BLOCK body's pins and
+  locals, member or element references, literals, constants, steps and
+  ACTIONs are left out, as the text editor's hover link leaves them out.
+  The shortcut help of all three diagrams gains a Live group.
+
+### Fixed
+
+- **FBD diagram title.** A `.fbd` file that defines an ST FUNCTION_BLOCK
+  ahead of its PROGRAM titled the diagram with the block's name; it now
+  names the program that owns the FBD body.
 
 ## [0.21.0] - 2026-11-05
 

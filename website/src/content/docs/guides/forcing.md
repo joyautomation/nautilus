@@ -55,7 +55,8 @@ silently overridden: change the force, or remove it.
 - A status-bar item, **N forces active**, stays up while anything is forced
   (Logix keeps this in plain sight too). Click it to list the forces and
   remove one, or all.
-- **Toggle Bit** (Ctrl+T on a ladder contact or coil) refuses a forced
+- **Toggle Bit** (Ctrl+T on a ladder contact or coil, an FBD variable chip,
+  or an SFC action or transition that names one variable) refuses a forced
   tag: the force would put the old value back the next scan. Remove the
   force first.
 
