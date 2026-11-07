@@ -379,29 +379,36 @@ func runTests(root, pattern string) (string, error) {
 // runSuites runs (or, with list, only lists, as `naut test -list`) the
 // project's acceptance suites, as NDJSON.
 func runSuites(root, pattern string, list bool) (string, error) {
+	out, _, err := runSuitesAs(root, pattern, list, false, false)
+	return out, err
+}
+
+// runSuitesAs is runSuites with `naut test`'s other output: text (the
+// human report, -v adds each test's virtual time), and the failure count.
+func runSuitesAs(root, pattern string, list, text, verbose bool) (string, int, error) {
 	fsys := os.DirFS(root)
 	proj, err := project.Load(fsys, project.ManifestName)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if !list {
 		// A compile failure is a suite failure; listing skips it, as the
 		// CLI does, so an editor's test tree survives a mid-edit program.
 		if _, err := runtime.New(proj.Runtime); err != nil {
-			return "", fmt.Errorf("compile: %w", err)
+			return "", 0, fmt.Errorf("compile: %w", err)
 		}
 	}
 	paths, err := acceptance.DiscoverSuites(fsys)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if len(paths) == 0 {
-		return "", fmt.Errorf("no *%s files in this project", acceptance.SuffixTest)
+		return "", 0, fmt.Errorf("no *%s files in this project", acceptance.SuffixTest)
 	}
 	var filter *regexp.Regexp
 	if pattern != "" {
 		if filter, err = regexp.Compile(pattern); err != nil {
-			return "", fmt.Errorf("bad -run pattern: %w", err)
+			return "", 0, fmt.Errorf("bad -run pattern: %w", err)
 		}
 	}
 	var results []acceptance.Result
@@ -409,7 +416,7 @@ func runSuites(root, pattern string, list bool) (string, error) {
 	for _, p := range paths {
 		suite, err := acceptance.LoadSuite(fsys, p)
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 		if filter != nil {
 			kept := suite.Tests[:0]
@@ -429,16 +436,24 @@ func runSuites(root, pattern string, list bool) (string, error) {
 		}
 		rs, err := acceptance.RunSuite(suite, proj.Runtime, acceptance.WithAlarms(proj.AlarmEngine))
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 		results = append(results, rs...)
 	}
 	if list {
-		return listBuf.String(), nil
+		return listBuf.String(), 0, nil
+	}
+	if len(results) == 0 && pattern != "" {
+		return "", 0, fmt.Errorf("no tests matched %q", pattern)
 	}
 	var buf bytes.Buffer
-	acceptance.ReportJSON(&buf, results)
-	return buf.String(), nil
+	failed := 0
+	if text {
+		failed = acceptance.Report(&buf, results, verbose)
+	} else {
+		failed = acceptance.ReportJSON(&buf, results)
+	}
+	return buf.String(), failed, nil
 }
 
 func toAny(ss []string) []any {

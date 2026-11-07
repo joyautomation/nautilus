@@ -100,13 +100,15 @@ func exec(args []string, stdin, cwd string) (stdout, stderr string, code int) {
 			return string(j) + "\n", "", c
 		}
 	case "test":
-		list, asJSON, pattern, dir := false, false, "", "."
+		list, asJSON, verbose, pattern, dir := false, false, false, "", "."
 		for i := 0; i < len(rest); i++ {
 			switch r := strings.TrimPrefix(rest[i], "-"); {
 			case r == "list" || r == "-list":
 				list = true
 			case r == "json" || r == "-json":
 				asJSON = true
+			case r == "v" || r == "-v":
+				verbose = true
 			case r == "run" || r == "-run":
 				if i+1 < len(rest) {
 					i++
@@ -118,12 +120,12 @@ func exec(args []string, stdin, cwd string) (stdout, stderr string, code int) {
 				return "", fmt.Sprintf("naut test: %s is not available in the browser playground\n", rest[i]), 2
 			}
 		}
-		if !list && !asJSON {
-			return "", "naut test: the browser playground answers -json and -list\n", 2
-		}
-		s, err := runSuites(abs(dir), pattern, list)
+		s, failed, err := runSuitesAs(abs(dir), pattern, list, !list && !asJSON, verbose)
 		if err != nil {
 			return "", "naut test: " + err.Error() + "\n", 1
+		}
+		if failed > 0 {
+			return s, "", 1
 		}
 		return s, "", 0
 	}

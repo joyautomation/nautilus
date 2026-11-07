@@ -28,6 +28,7 @@ import getNotifications from '@codingame/monaco-vscode-notifications-service-ove
 import getTesting from '@codingame/monaco-vscode-testing-service-override';
 import getLog from '@codingame/monaco-vscode-log-service-override';
 import getOutline from '@codingame/monaco-vscode-outline-service-override';
+import getTerminal from '@codingame/monaco-vscode-terminal-service-override';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import TextMateWorker from '@codingame/monaco-vscode-textmate-service-override/worker?worker';
 import extHostWorkerUrl from '@codingame/monaco-vscode-api/vscode/vs/workbench/api/worker/extensionHostWorkerMain?worker&url';
@@ -35,6 +36,7 @@ import extHostWorkerUrl from '@codingame/monaco-vscode-api/vscode/vs/workbench/a
 import { Playground } from '../src/client.js';
 import { serveBridge } from '../src/bridge.js';
 import { EngineFileSystem } from './engineFs.js';
+import { NautShellBackend } from './nautShell.js';
 
 const ENGINE = new URL('../', location.href); // the package's dist/: worker.js, naut.wasm, examples/
 const EXTENSION = new URL('./extension/', location.href); // the extension's web build and assets
@@ -115,6 +117,9 @@ async function main() {
 			'editor.minimap.enabled': false,
 			'security.workspace.trust.enabled': false,
 			'telemetry.telemetryLevel': 'off',
+			'terminal.integrated.defaultProfile.linux': 'nautilus',
+			'terminal.integrated.defaultProfile.osx': 'nautilus',
+			'terminal.integrated.defaultProfile.windows': 'nautilus',
 			'nautilus.playground.channel': bridge.name,
 			'nautilus.runtimeUrl': PLAYGROUND_URL
 		})
@@ -139,7 +144,10 @@ async function main() {
 			...getOutput(),
 			...getNotifications(),
 			...getTesting(),
-			...getOutline()
+			...getOutline(),
+			// VS Code's terminal panel, with a nautilus shell for a backend
+			// (nautShell.js): there is no machine to run bash on.
+			...getTerminal(new NautShellBackend(pg))
 		},
 		document.getElementById('workbench'),
 		{
