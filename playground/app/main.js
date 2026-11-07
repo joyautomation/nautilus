@@ -8,7 +8,9 @@ import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-yaml-default-extension';
 import '@codingame/monaco-vscode-json-default-extension';
 import '@codingame/monaco-vscode-markdown-basics-default-extension';
-import { initialize, getService, ICommandService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, ICommandService, IKeybindingService } from '@codingame/monaco-vscode-api';
+import { StandardKeyboardEvent } from '@codingame/monaco-vscode-api/vscode/vs/base/browser/keyboardEvent';
+import { ResultKind } from '@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/keybindingResolver';
 import { ExtensionHostKind, registerExtension } from '@codingame/monaco-vscode-api/extensions';
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
@@ -183,11 +185,34 @@ async function main() {
 	// (its nav, its toolbar) never reach the workbench, so it forwards the
 	// command palette's keys here.
 	const commands = await getService(ICommandService);
+	relayWebviewKeys(commands, await getService(IKeybindingService));
 	Object.assign(window.nautilusPlayground, {
 		showCommands: () => commands.executeCommand('workbench.action.showCommands'),
 		focus: () => commands.executeCommand('workbench.action.focusActiveEditorGroup')
 	});
 	window.dispatchEvent(new Event('nautilus-playground-ready'));
+}
+
+/**
+ * Keys pressed inside a webview (the diagram editors) reach the workbench as
+ * keydown events VS Code re-creates on this window (webviewElement.js,
+ * handleKeyEvent). In this embedding the keybinding service does not act
+ * on those synthetic events, so Ctrl+Shift+P, F1, Ctrl+S, Ctrl+` ... did
+ * nothing while a diagram had focus. Resolve them the way the service
+ * would (softDispatch, in the webview's context) and run the command. A
+ * key the service did handle arrives here default-prevented and is left.
+ */
+function relayWebviewKeys(commands, keybindings) {
+	window.addEventListener('keydown', (e) => {
+		if (e.isTrusted || e.defaultPrevented) return;
+		const target = e.target;
+		if (!(target instanceof HTMLElement) || !target.classList.contains('webview')) return;
+		const kb = new StandardKeyboardEvent(e);
+		const res = keybindings.softDispatch(kb, target);
+		if (res.kind !== ResultKind.KbFound || !res.commandId) return;
+		e.preventDefault();
+		void commands.executeCommand(res.commandId, ...(res.commandArgs === undefined ? [] : [res.commandArgs]));
+	});
 }
 
 main().catch((e) => {
