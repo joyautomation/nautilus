@@ -51,20 +51,28 @@ async function navigate(event, url) {
 	let channel = url.searchParams.get('engine');
 	if (!channel) channel = (await recall('last:' + name))?.channel; // a reload or a deep link
 	if (!name || !channel) return page(404, 'This view needs the playground tab that runs its controller.');
+	// A page reloaded after its playground tab was: go straight to the newest
+	// one rather than wait out a dead channel. (Probed, not assumed: a view of
+	// an older playground tab that is still open stays with it.)
+	const latest = (await recall('latest'))?.channel;
+	if (latest && latest !== channel && !(await call(channel, 'stats', [], 1500).then(() => true, () => false))) {
+		channel = latest;
+	}
 	const view = { name, channel };
 	remember('last:' + name, view);
 	if (event.resultingClientId) remember(event.resultingClientId, view);
-	void forgetClosed();
+	void forgetClosed(event.resultingClientId);
 	return serve(view, event.request, url);
 }
 
-/** Drop what is remembered for pages that are gone. */
-async function forgetClosed() {
+/** Drop what is remembered for pages that are gone (keep: the page now
+ * loading, which has no client to find yet). */
+async function forgetClosed(keep) {
 	try {
 		const memo = await caches.open(MEMO);
 		for (const req of await memo.keys()) {
 			const key = decodeURIComponent(new URL(req.url).pathname.split('/_memo/')[1] ?? '');
-			if (!key || key === 'latest' || key.startsWith('last:')) continue;
+			if (!key || key === keep || key === 'latest' || key.startsWith('last:')) continue;
 			if (!(await self.clients.get(key))) {
 				views.delete(key);
 				await memo.delete(req);
@@ -189,14 +197,14 @@ async function stream(channel, path) {
 
 /** A Playground method over the bridge. Ids are strings so they can never
  * match the extension's numeric ones on the same channel. */
-function call(channel, op, args) {
+function call(channel, op, args, timeout = CALL_TIMEOUT_MS) {
 	return new Promise((resolve, reject) => {
 		const ch = new BroadcastChannel(channel);
 		const id = 'sw:' + crypto.randomUUID();
 		const timer = setTimeout(() => {
 			ch.close();
 			reject(new Error('the playground engine did not answer'));
-		}, CALL_TIMEOUT_MS);
+		}, timeout);
 		ch.onmessage = ({ data: m }) => {
 			if (m?.kind !== 'result' || m.id !== id) return;
 			clearTimeout(timer);
