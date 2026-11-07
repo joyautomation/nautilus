@@ -799,14 +799,18 @@ export class LiveValues implements vscode.Disposable {
           if (seg.prefix === "" && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(site.path)) {
             const arg = encodeURIComponent(JSON.stringify([site.path]));
             const links: string[] = [];
-            if (!forced && !site.path.includes(".")) links.push(`[$(edit) Set value…](command:nautilus.setValue?${arg})`);
+            if (!forced && !site.path.includes(".")) {
+              // A BOOL also flips in one click: Toggle Bit, as Ctrl+T does.
+              if (typeof site.value === "boolean") links.push(`[$(arrow-swap) Toggle bit](command:nautilus.toggleBit?${arg})`);
+              links.push(`[$(edit) Set value…](command:nautilus.setValue?${arg})`);
+            }
             links.push(`[$(lock) Force…](command:nautilus.force?${arg})`);
             if (forced) {
               const farg = encodeURIComponent(JSON.stringify([forced]));
               links.push(`[$(unlock) Remove force](command:nautilus.unforce?${farg})`);
             }
             hover.appendMarkdown("\n\n" + links.join(" · "));
-            hover.isTrusted = { enabledCommands: ["nautilus.setValue", "nautilus.force", "nautilus.unforce"] };
+            hover.isTrusted = { enabledCommands: ["nautilus.toggleBit", "nautilus.setValue", "nautilus.force", "nautilus.unforce"] };
             hover.supportThemeIcons = true;
           }
           (forced ? forcedDecos : enumText(site.value, ft) !== undefined ? enumDecos : decos).push({

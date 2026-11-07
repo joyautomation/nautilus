@@ -56,8 +56,8 @@ test("toggleBitDecision: refuses a forced tag (the force would win the next scan
 });
 
 test("noTagMessage: a focused diagram asks for a selection, a text editor for a cursor", () => {
-  assert.equal(noTagMessage(true, "Toggle Bit", "a BOOL tag"), "nautilus: select a contact or coil in the diagram, then Toggle Bit");
+  assert.equal(noTagMessage(true, "Toggle Bit", "a BOOL tag"), "nautilus: select an element that names a tag in the diagram (a contact or coil, a variable chip, an action or a transition), then Toggle Bit");
   assert.equal(noTagMessage(false, "Toggle Bit", "a BOOL tag"), "nautilus: put the cursor on a BOOL tag, then Toggle Bit");
   assert.equal(noTagMessage(false, "Force…"), "nautilus: put the cursor on a tag, then Force…");
-  assert.equal(noTagMessage(true, "Set Live Value"), "nautilus: select a contact or coil in the diagram, then Set Live Value");
+  assert.equal(noTagMessage(true, "Set Live Value"), "nautilus: select an element that names a tag in the diagram (a contact or coil, a variable chip, an action or a transition), then Set Live Value");
 });

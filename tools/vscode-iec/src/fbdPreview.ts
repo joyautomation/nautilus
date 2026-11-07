@@ -22,6 +22,7 @@ import type { LiveValues } from "./liveValues";
 import { gitShow } from "./gitHistory";
 import { pickRevisions } from "./revisionPick";
 import { applyDiagramKey, isDiagramKeyMessage, serialQueue, sourceDocument } from "./diagramKeys";
+import { handleDiagramLiveMessage } from "./diagramSelection";
 import { gateWebview } from "./webviewReady";
 import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./diagramXref";
 
@@ -579,6 +580,7 @@ export class FbdPreview implements vscode.Disposable {
     // message at a time so an edit never overtakes the one before it.
     const inOrder = serialQueue();
     this.panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
+      if (this.panel && handleDiagramLiveMessage(this.panel, msg, (command, tag) => void vscode.commands.executeCommand(command, tag))) return;
       if (msg.type === "toggleLive") {
         void vscode.commands.executeCommand("nautilus.liveValues.toggle");
         return;
@@ -657,6 +659,7 @@ export class FbdEditorProvider implements vscode.CustomTextEditorProvider {
       debounce = setTimeout(() => void postModel(panel.webview, document), DEBOUNCE_MS);
     });
     const messageSub = panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
+      if (handleDiagramLiveMessage(panel, msg, (command, tag) => void vscode.commands.executeCommand(command, tag))) return;
       void handleWebviewMessage(document, msg);
     });
     const diagSub = vscode.languages.onDidChangeDiagnostics((e) => {

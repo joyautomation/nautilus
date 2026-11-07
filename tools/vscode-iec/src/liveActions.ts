@@ -17,7 +17,7 @@ export function tagOf(arg: TagArg): string | undefined {
  * wants a selected element, a text editor a cursor on a tag. */
 export function noTagMessage(diagramFocused: boolean, action: string, textHint = "a tag"): string {
   return diagramFocused
-    ? `nautilus: select a contact or coil in the diagram, then ${action}`
+    ? `nautilus: select an element that names a tag in the diagram (a contact or coil, a variable chip, an action or a transition), then ${action}`
     : `nautilus: put the cursor on ${textHint}, then ${action}`;
 }
 

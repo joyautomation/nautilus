@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { activeDiagramTag, diagramHasFocus, trackDiagramSelection } from "./diagramSelection";
+import { activeDiagramTag, diagramHasFocus, handleDiagramLiveMessage, trackDiagramSelection } from "./diagramSelection";
 
 type Fake = { active: boolean; onDidDispose: (f: () => void) => { dispose(): void }; dispose(): void };
 
@@ -72,4 +72,26 @@ test("a disposed panel is forgotten", () => {
   p.dispose();
   assert.equal(diagramHasFocus(), false);
   assert.equal(activeDiagramTag(), undefined);
+});
+
+test("handleDiagramLiveMessage: every diagram surface's selection and Toggle Bit", () => {
+  const p = panel(true);
+  const ran: Array<[string, string]> = [];
+  const run = (command: string, tag: string) => void ran.push([command, tag]);
+  // A selection is remembered for the panel, and nothing runs.
+  assert.equal(handleDiagramLiveMessage(p, { type: "diagramSelection", tag: "FillValve" }, run), true);
+  assert.equal(activeDiagramTag(), "FillValve");
+  // T posts toggleBit: the Toggle Bit command, for that tag.
+  assert.equal(handleDiagramLiveMessage(p, { type: "toggleBit", tag: "FillValve" }, run), true);
+  assert.deepEqual(ran, [["nautilus.toggleBit", "FillValve"]]);
+  // A toggleBit without a tag is taken (it is ours) but runs nothing.
+  assert.equal(handleDiagramLiveMessage(p, { type: "toggleBit" }, run), true);
+  assert.equal(handleDiagramLiveMessage(p, { type: "toggleBit", tag: "" }, run), true);
+  assert.equal(ran.length, 1);
+  // Anything else is the surface's own (edits, keys, toggleLive).
+  for (const m of [{ type: "toggleLive" }, { type: "sfcOp", op: {} }, { type: "diagramKey", action: "undo" }, undefined]) {
+    assert.equal(handleDiagramLiveMessage(p, m, run), false, JSON.stringify(m));
+  }
+  assert.equal(ran.length, 1);
+  p.dispose();
 });

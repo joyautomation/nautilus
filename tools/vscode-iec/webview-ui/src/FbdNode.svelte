@@ -9,6 +9,7 @@
 	import { pinOffset, EXTENSIBLE, NOTE_LINE_H } from './layout';
 	import { live, liveValue, liveMissing, liveForced, liveEnum, liveTypeNote, member, formatLive } from './liveState.svelte';
 	import { withDesc } from './xref.svelte';
+	import { tagContext } from './liveTag';
 
 	let {
 		data
@@ -34,6 +35,8 @@
 			/** The EN/ENO pin gesture: show (or hide) a block's EN and ENO. */
 			onToggleEno?: (id: string) => void;
 			enoShown?: boolean;
+			/** The tag the live actions act on (liveTag.ts), if any. */
+			liveTag?: string;
 		};
 	} = $props();
 	const n = $derived(data.n);
@@ -168,6 +171,7 @@
 		data-id={n.id}
 		data-kind="chip"
 		data-xref={xref} data-xref-line={n.line}
+		data-vscode-context={tagContext(data.liveTag)}
 		class:ghost={n.ghost}
 		class:editable={editableConst || retargetable}
 		class:missing={missingTag}

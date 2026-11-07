@@ -10,6 +10,7 @@
 	// pointer-based with a movement threshold (HTML5 dnd doesn't exist for
 	// SVG), resolved at pointerup via elementFromPoint with a
 	// nearest-hotspot snap fallback.
+	import { isToggleKey, ldElementTag, tagContext } from './liveTag';
 	import { annotate, argIdents, offerType, useTypes, type Ann, type LdElement, type LdFbType, type LdModel, type LdRung, type RungStatus } from './ladder';
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
@@ -65,19 +66,13 @@
 	let selected = $state<Sel>(null);
 
 	/** The tag a contact, edge contact or coil names, when it is one the
-	 * controller's tag API can write: not a local of a FUNCTION_BLOCK body
-	 * (its rungs carry a scope), not a member or an element. */
-	function writableTag(r: { scope?: unknown }, el: { kind: string; ref?: string }): string | undefined {
-		if (r.scope) return undefined;
-		if (el.kind !== 'contact' && el.kind !== 'edge' && el.kind !== 'coil') return undefined;
-		const ref = el.ref ?? '';
-		return /^[A-Za-z_][A-Za-z0-9_]*$/.test(ref) ? ref : undefined;
-	}
+	 * live actions can act on (liveTag.ts: not a FUNCTION_BLOCK local, a
+	 * member or an element). */
+	const writableTag = ldElementTag;
 
 	/** Right-click context for VS Code (webview/context menus): the tag. */
 	function vsContext(r: { scope?: unknown }, el: { kind: string; ref?: string }): string | undefined {
-		const tag = writableTag(r, el);
-		return tag ? JSON.stringify({ nautilusTag: tag }) : undefined;
+		return tagContext(writableTag(r, el));
 	}
 
 	// ── model → geometry ────────────────────────────────────────────────────
@@ -825,7 +820,7 @@
 	function handleKey(ev: KeyboardEvent) {
 		if (handledKeys.has(ev)) return;
 		// T (Toggle Bit) is a live action, not an edit: it works read-only too.
-		if (!editable && !(!(ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === 't' || ev.key === 'T') && lastSelTag)) return;
+		if (!editable && !(isToggleKey(ev) && lastSelTag)) return;
 		if (typingTarget(ev)) return;
 		const ctrl = ev.ctrlKey || ev.metaKey;
 		const node = selected ? findSelected(selected) : undefined;
@@ -864,7 +859,7 @@
 			acted = true;
 		} else if (!ctrl && (ev.key === 'o' || ev.key === 'O')) {
 			acted = doOr();
-		} else if (!ctrl && !ev.altKey && (ev.key === 't' || ev.key === 'T') && lastSelTag && onToggleBit) {
+		} else if (isToggleKey(ev) && lastSelTag && onToggleBit) {
 			// Toggle Bit on the selection (Ctrl+T in the workbench too).
 			onToggleBit(lastSelTag);
 			acted = true;
