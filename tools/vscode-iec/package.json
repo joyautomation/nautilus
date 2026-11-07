@@ -473,13 +473,28 @@
           "group": "nautilus@2"
         },
         {
+          "command": "nautilus.setValue",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "group": "nautilus@1"
+        },
+        {
+          "command": "nautilus.force",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "group": "nautilus@2"
+        },
+        {
+          "command": "nautilus.unforce",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected && nautilus.forcesActive",
+          "group": "nautilus@3"
+        },
+        {
           "command": "nautilus.diagram.export",
-          "when": "webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/",
+          "when": "(webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && !isWeb",
           "group": "z_export@1"
         },
         {
           "command": "nautilus.diagram.print",
-          "when": "webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/",
+          "when": "(webviewId =~ /^(nautilus\\.(ld|l5x|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && !isWeb",
           "group": "z_export@2"
         }
       ],

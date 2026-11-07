@@ -939,6 +939,7 @@
 				zoom={ldZoom}
 				onOp={postLd}
 				onTrace={(msg) => vscode.postMessage({ type: 'ldTrace', msg })}
+				onSelectTag={(tag) => vscode.postMessage({ type: 'diagramSelection', tag })}
 				{requestInput}
 			/>
 		</ZoomPane>

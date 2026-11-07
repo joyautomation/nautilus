@@ -7,6 +7,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { trackDiagramSelection } from "./diagramSelection";
 import { applyDiagramKey, isDiagramKeyMessage, serialQueue, sourceDocument } from "./diagramKeys";
 import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
@@ -200,6 +201,7 @@ export class LdEditorProvider implements vscode.CustomTextEditorProvider {
       debounce = setTimeout(() => void postLdModel(panel.webview, document), DEBOUNCE_MS);
     });
     const messageSub = panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => {
+      if (trackDiagramSelection(panel, msg)) return;
       handleLdMessage(document, msg);
     });
     const diagSub = vscode.languages.onDidChangeDiagnostics((e) => {
@@ -430,6 +432,7 @@ export class LdPreview implements vscode.Disposable {
       // one message at a time so an edit never overtakes the one before it.
       const inOrder = serialQueue();
       this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => void inOrder(async () => {
+        if (this.panel && trackDiagramSelection(this.panel, msg)) return;
         const doc = await sourceDocument(this.docUri);
         if (isDiagramKeyMessage(msg)) {
           if (doc && this.panel) {
