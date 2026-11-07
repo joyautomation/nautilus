@@ -113,7 +113,7 @@ async function main() {
 			'workbench.startupEditor': 'none',
 			'workbench.tips.enabled': false,
 			'workbench.editor.enablePreview': false,
-			'workbench.editorAssociations': { '*.mimic.json': 'default', '*.scene.json': 'default', '*.kind.json': 'default' },
+			'workbench.editorAssociations': { '*.scene.json': 'default', '*.kind.json': 'default' },
 			'files.autoSave': 'afterDelay',
 			'files.autoSaveDelay': 400,
 			'editor.minimap.enabled': false,
@@ -170,14 +170,18 @@ async function main() {
 	);
 
 	// The nautilus extension, as built for the web (tools/vscode-iec).
-	const manifest = await (await fetch(new URL('package.json', EXTENSION))).json();
+	// Its files carry the build's ?v= like the engine's, so a returning
+	// visitor gets the extension that matches this build, not a cached one.
+	const v = params.get('v');
+	const extUrl = (f) => new URL(f + (v ? '?v=' + encodeURIComponent(v) : ''), EXTENSION).href;
+	const manifest = await (await fetch(extUrl('package.json'))).json();
 	// The Marketplace extension is desktop-only for now (no "browser" entry,
 	// so vscode.dev does not offer it without an engine); the playground
 	// supplies the engine, so it names the web build itself.
 	manifest.browser = './out/web/extension.js';
-	const files = await (await fetch(new URL('files.json', EXTENSION))).json();
+	const files = await (await fetch(extUrl('files.json'))).json();
 	const ext = registerExtension(manifest, ExtensionHostKind.LocalWebWorker, { system: true });
-	for (const f of files) ext.registerFileUrl('/' + f, new URL(f, EXTENSION).href);
+	for (const f of files) ext.registerFileUrl('/' + f, extUrl(f));
 	await ext.whenReady();
 	splash?.remove();
 

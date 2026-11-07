@@ -162,7 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(new SfcEditorProvider(context, live).register());
   // Title-bar hops between the text and the diagram editor.
   context.subscriptions.push(registerDiagramCommands());
-  if (!IS_WEB) registerHmiAndProjectTools(context);
+  registerHmiAndProjectTools(context);
 
   // Getting Started walkthrough: its own command (also reachable from the
   // Command Palette any time, not just on a fresh install), and the
@@ -328,9 +328,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 
 /** The HMI editors (mimic, scene, kind), user components and their
- * previews, page preview and the new-project wizard: they compile project
- * code with esbuild, run npm and write the disk, so they are not in the
- * web build yet. */
+ * previews, page preview and the new-project wizard. The web build has the
+ * mimic editor with the kit's built-in equipment (src/web/userComponents.ts);
+ * the rest compile project code with esbuild, run npm and write the disk,
+ * so they are not in the web build yet. */
 function registerHmiAndProjectTools(context: vscode.ExtensionContext): void {
   // User-authored Svelte components rendered for real inside the mimic/
   // component preview webviews — gated on workspace trust (it compiles and
@@ -345,6 +346,7 @@ function registerHmiAndProjectTools(context: vscode.ExtensionContext): void {
   // doc is spatial-first; the JSON is an "Open With → Text Editor" away).
   const mimic = new MimicEditorProvider(context, userComponents);
   context.subscriptions.push(mimic.register());
+  if (IS_WEB) return;
   // "*.scene.json" opens as the 3D scene editor by default, for the same
   // reason (docs/design/spatial-hmi.md §3g).
   context.subscriptions.push(new SceneEditorProvider(context).register());
