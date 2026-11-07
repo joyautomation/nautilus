@@ -31,6 +31,7 @@
 		onOp,
 		onTrace,
 		onSelectTag,
+		onToggleBit,
 		requestInput
 	}: {
 		model: LdModel;
@@ -46,6 +47,8 @@
 		/** The selected element's tag (see writableTag), or null: the host's
 		 * Set Live Value / Force act on it while the diagram has focus. */
 		onSelectTag?: (tag: string | null) => void;
+		/** T on a selected contact or coil: the host's Toggle Bit, for its tag. */
+		onToggleBit?: (tag: string) => void;
 		requestInput?: (
 			init: string,
 			at: { x: number; y: number; w: number },
@@ -820,7 +823,9 @@
 
 	const handledKeys = new WeakSet<Event>();
 	function handleKey(ev: KeyboardEvent) {
-		if (!editable || handledKeys.has(ev)) return;
+		if (handledKeys.has(ev)) return;
+		// T (Toggle Bit) is a live action, not an edit: it works read-only too.
+		if (!editable && !(!(ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === 't' || ev.key === 'T') && lastSelTag)) return;
 		if (typingTarget(ev)) return;
 		const ctrl = ev.ctrlKey || ev.metaKey;
 		const node = selected ? findSelected(selected) : undefined;
@@ -859,6 +864,10 @@
 			acted = true;
 		} else if (!ctrl && (ev.key === 'o' || ev.key === 'O')) {
 			acted = doOr();
+		} else if (!ctrl && !ev.altKey && (ev.key === 't' || ev.key === 'T') && lastSelTag && onToggleBit) {
+			// Toggle Bit on the selection (Ctrl+T in the workbench too).
+			onToggleBit(lastSelTag);
+			acted = true;
 		}
 		if (
 			(!ctrl && (ev.key === 'Delete' || ev.key === 'Backspace')) ||

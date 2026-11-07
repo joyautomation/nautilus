@@ -90,6 +90,11 @@ function isL5XDoc(doc: vscode.TextDocument): boolean {
 }
 
 function handleLdMessage(doc: vscode.TextDocument, msg: { type?: string; op?: unknown }): void {
+  if (msg?.type === "toggleBit") {
+    const tag = (msg as { tag?: unknown }).tag;
+    if (typeof tag === "string") void vscode.commands.executeCommand("nautilus.toggleBit", tag);
+    return;
+  }
   if (msg?.type === "toggleLive") {
     void vscode.commands.executeCommand("nautilus.liveValues.toggle");
     return;

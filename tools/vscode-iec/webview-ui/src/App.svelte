@@ -940,6 +940,7 @@
 				onOp={postLd}
 				onTrace={(msg) => vscode.postMessage({ type: 'ldTrace', msg })}
 				onSelectTag={(tag) => vscode.postMessage({ type: 'diagramSelection', tag })}
+				onToggleBit={(tag) => vscode.postMessage({ type: 'toggleBit', tag })}
 				{requestInput}
 			/>
 		</ZoomPane>

@@ -322,6 +322,41 @@ export class LiveValues implements vscode.Disposable {
     await this.postValue(name, value, formatValue(value));
   }
 
+  /**
+   * Toggle Bit (Ctrl+T in a ladder diagram, as in Studio 5000): write the
+   * opposite of a BOOL tag's live value. The tag is the argument (a diagram
+   * element's right-click context, a Live Values item), else the selected
+   * diagram element, else the identifier under the cursor. A tag that is
+   * not a BOOL, has no live value yet, or is forced (the force would win)
+   * is refused, saying which.
+   */
+  async toggleBit(arg?: TagArg): Promise<void> {
+    const name = tagOf(arg) ?? this.identifierAtCursor();
+    if (!name) {
+      void notifyWarning(diagramHasFocus()
+        ? "nautilus: select a contact or coil in the diagram, then Toggle Bit"
+        : "nautilus: put the cursor on a BOOL tag, then Toggle Bit");
+      return;
+    }
+    const ft = this.typeOf(name);
+    const current = this.valueFor(name);
+    if (ft && ft.t.toUpperCase() !== "BOOL") {
+      void notifyWarning(`nautilus: Toggle Bit works on BOOL tags; ${name} is ${typeLabel(ft)}`);
+      return;
+    }
+    if (typeof current !== "boolean") {
+      void notifyWarning(current === undefined
+        ? `nautilus: no live value for ${name} yet (is the controller running?)`
+        : `nautilus: Toggle Bit works on BOOL tags; ${name} is ${this.display(current, name)}`);
+      return;
+    }
+    if (this.forcedFor(name)) {
+      void notifyWarning(`nautilus: ${name} is forced, so a toggle would not stick; Unforce it first`);
+      return;
+    }
+    await this.postValue(name, !current, !current ? "TRUE" : "FALSE");
+  }
+
   /** POST /api/tags, and say how it went. */
   private async postValue(name: string, value: number | boolean | string, shown: string): Promise<void> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };

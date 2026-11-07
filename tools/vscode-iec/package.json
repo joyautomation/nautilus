@@ -195,6 +195,11 @@
         "icon": "$(edit)"
       },
       {
+        "command": "nautilus.toggleBit",
+        "title": "nautilus: Toggle Bit",
+        "category": "nautilus"
+      },
+      {
         "command": "nautilus.force",
         "title": "nautilus: Force…",
         "icon": "$(lock)"
@@ -441,6 +446,11 @@
           "group": "inline"
         },
         {
+          "command": "nautilus.toggleBit",
+          "when": "view == nautilusLiveValues && viewItem == nautilusTag",
+          "group": "nautilus@0"
+        },
+        {
           "command": "nautilus.setValue",
           "when": "view == nautilusLiveValues && viewItem == nautilusTag",
           "group": "nautilus@1"
@@ -473,6 +483,11 @@
           "group": "nautilus@2"
         },
         {
+          "command": "nautilus.toggleBit",
+          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "group": "nautilus@0"
+        },
+        {
           "command": "nautilus.setValue",
           "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
           "group": "nautilus@1"
@@ -499,6 +514,11 @@
         }
       ],
       "editor/context": [
+        {
+          "command": "nautilus.toggleBit",
+          "when": "resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc && nautilus.liveConnected",
+          "group": "nautilus@0"
+        },
         {
           "command": "nautilus.setValue",
           "when": "resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc",
@@ -1046,6 +1066,12 @@
         "command": "nautilus.playground.run",
         "key": "f5",
         "when": "isWeb"
+      },
+      {
+        "command": "nautilus.toggleBit",
+        "key": "ctrl+t",
+        "mac": "cmd+t",
+        "when": "(activeCustomEditorId == nautilus.ldDiagram || activeWebviewPanelId == nautilus.ldPreview) && nautilus.liveConnected"
       }
     ]
   },
