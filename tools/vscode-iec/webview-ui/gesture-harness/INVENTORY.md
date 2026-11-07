@@ -32,16 +32,16 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 188 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 193 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
-| Commands | 28 | 0 |
+| Commands | 29 | 0 |
 | FBD `?` | 22 | 0 |
-| Ladder `?` | 31 | 0 |
+| Ladder `?` | 33 | 0 |
 | SFC `?` | 31 | 0 |
-| Mimic `?` | 18 | 0 |
+| Mimic `?` | 20 | 0 |
 | Component `?` | 8 | 0 |
 | Other claims | 50 | 0 |
 
@@ -54,7 +54,7 @@ no rig verb, no smoke check); per section below.
 | C03 | Extension (Palette) | Show which naut is in use and its version | package.json command `nautilus.showCliInfo` | — | — | 12 |
 | C04 | Extension (Palette) | Restart the language server | package.json command `nautilus.restartLanguageServer` | — | — | 12 |
 | C05 | Extension (Palette; Live Values view title) | Connect to a controller (set the runtime URL) | package.json command `nautilus.connect` | — | — | 12 |
-| C06 | Extension (Palette; editor context menu; Live Values item inline) | Write a new value to a tag (right-click an identifier, or the pencil in the Live Values panel) | package.json command `nautilus.setValue` | — | — | 13 |
+| C06 | Extension (Palette; editor context menu; Live Values item inline; ladder element context menu) | Write a new value to a tag (right-click an identifier or a ladder element, or the pencil in the Live Values panel); from the palette, the selected ladder element's tag while a ladder diagram has focus | package.json command `nautilus.setValue` | ld-live.test.mjs (the selection the host acts on) | — | 13, 23 (palette with a diagram selection) |
 | C07 | Extension (Live Values view title (hidden from palette)) | Refresh the Live Values panel | package.json command `nautilus.liveValues.refresh` | — | — | 12 |
 | C08 | Extension (Palette) | Download the program to the controller (online edit, with confirmation) | package.json command `nautilus.program.download` | — | — | 08 |
 | C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | 16 |
@@ -77,6 +77,7 @@ no rig verb, no smoke check); per section below.
 | C26 | Extension (Palette) | Open the Get Started walkthrough | package.json command `nautilus.getStarted` | — | — | 01 (auto-open, not the command) |
 | C27 | Extension (Text editor title; Palette) | Open a text file as a diagram editor (replaces the tab, keeps unsaved edits) | package.json command `nautilus.diagram.openAsDiagram` | — | ed_open_diagram | 04 |
 | C28 | Extension (Diagram editor title; Palette) | Show the diagram's source text beside it | package.json command `nautilus.diagram.showSource` | — | — | 04 |
+| C29 | Extension (Palette; diagram element, text editor and Live Values context menus; Ctrl+T in a ladder diagram) | Toggle Bit: write the opposite of a BOOL tag's live value; refuses a non-BOOL, a tag with no live value, a forced tag | package.json command `nautilus.toggleBit`; CHANGELOG Unreleased | ld-live.test.mjs: the webview reports the selected element's tag (diagramSelection); the refusals in src/liveActions.test.ts | — | 23 |
 
 ## FBD editor (`?` list)
 
@@ -140,6 +141,8 @@ no rig verb, no smoke check); per section below.
 | L29 | LD | Ctrl / Shift + click adds an element of the same series to the selection (or takes it out) | "?" list LD / Select / `Ctrl / Shift + click` | editor-gestures.test.mjs: Ladder OR (#91): Ctrl-click three contacts, O | ld_or_select (selftest) | — |
 | L30 | LD | O (or the toolbar's OR): several selected elements → ONE branch with a leg each; a selected branch → one more leg; one element → a 2-leg OR (#91) | "?" list LD / Edit / `O`; CHANGELOG Unreleased | editor-gestures.test.mjs: Ladder OR (#91) ×2 | ld_or_select, ld_branch_or_leg (selftest) | — |
 | L31 | LD | A branch is its own element (g.branch > g.leg > g.node, aria-labelled): click its rails to select it; Del deletes it (#91) | "?" list LD / Select / `Click a branch's rails` | editor-gestures.test.mjs: Ladder OR (#91): a branch is ONE element | ld_branch_or_leg (selftest) | — |
+| L32 | LD | T / Ctrl + T on a selected contact or coil: Toggle Bit for its tag (Ctrl+T is the workbench keybinding; T the diagram's own key) | "?" list LD / Live / `T / Ctrl + T`; CHANGELOG Unreleased | ld-live.test.mjs: T posts toggleBit and no edit; not on a member or a FUNCTION_BLOCK local; Ctrl+T posts nothing from the webview; read-only selects nothing | — | 23 (Ctrl+T and T flip the tag on the controller) |
+| L33 | LD | Right-click a contact, edge contact or coil: Toggle Bit, Set Live Value…, Force…, Unforce (while forces are active) for its tag | "?" list LD / Live / `Right-click`; CHANGELOG Unreleased | ld-live.test.mjs: data-vscode-context {nautilusTag} on contacts, edge contacts and coils, none on FUNCTION_BLOCK locals or members | — | 23 (Toggle Bit, Force…, Unforce from the menu) |
 
 ## SFC editor (`?` list)
 
@@ -264,7 +267,7 @@ no rig verb, no smoke check); per section below.
 | X41 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
 | X48 | FBD | EN/ENO on every function and FB call (IEC execution control): EN FALSE skips the call — a function's result is not assigned, an FB's outputs hold; ENO = EN AND no error (DIV/MOD: a zero divisor); EN/ENO pins draw when bound or after the pin gesture | docs/functions.md EN/ENO; CHANGELOG | fbd-parity.test.mjs: FBD EN/ENO (F19); conformance fbd-en-eno (ST + FBD) | (tia-shaped build 09-EN-ENO-on-LIMIT, 09-EN-input-by-text) | — |
 | X49 | FBD | Numbered networks: `NETWORK 'title'` lines divide the body, run in order; the diagram draws numbered bands with titles and each statement's execution order; + add palette "network", header ops | docs/languages FBD; CHANGELOG | fbd-parity.test.mjs: FBD networks: numbered bands in order, statements with their execution order (F20, X49, #207); the header picks the palette target (F20) | (tia-shaped build 07..11-network, 11-network-numbers-or-exec-order) | — |
-| X43 | Extension | Force… / Remove Force / Remove All Forces (context menu, pill hover, Live Values row); forced values marked F on pills, the Live Values panel and the FBD/ladder/SFC overlays; status bar "N forces active"; SFC diagram Set Active Step / Fire Transition | README Live values and online edit; CHANGELOG Unreleased | force.test.mjs: FBD: a forced input chip and its VARS pill carry the F badge; Ladder: a forced operand shows F; SFC: steps and transitions carry the context the menu keys on | — | 18 |
+| X43 | Extension | Force… / Remove Force / Remove All Forces (context menu, ladder element context menu, pill hover, Live Values row); forced values marked F on pills, the Live Values panel and the FBD/ladder/SFC overlays; status bar "N forces active"; SFC diagram Set Active Step / Fire Transition | README Live values and online edit; CHANGELOG Unreleased | force.test.mjs: FBD: a forced input chip and its VARS pill carry the F badge; Ladder: a forced operand shows F; SFC: steps and transitions carry the context the menu keys on | — | 18, 23 (Force… and Unforce from a ladder contact) |
 | X44 | Diagrams | Cross-reference from a diagram element: Shift+F12, or right-click → Find All References, on a ladder contact/coil/block, an FBD chip/FB instance/FB pin or an SFC step/action association opens the References view on that name (every program and the manifest) | README Diagrams; #218 | xref-desc.test.mjs: X44 ladder / read-only / FBD / SFC (the posted message) | — | 14 (ladder contact → References view) |
 | X45 | Diagrams | Tag descriptions on diagram elements: the manifest desc (or the VAR line's comment) in the element tooltip in ladder, FBD and SFC; a second line under ladder contacts and coils (nautilus.diagram.showDescriptions) | README Diagrams; #216 | xref-desc.test.mjs: X45 ladder; X44/X45 FBD, SFC | logix-shaped lx_desc_on_element | 14 (ladder contact title + line) |
 | X46 | SFC | Timed qualifiers L, D, SD, DS, SL compile with the standard's semantics, in `Q Target(T#t);` or IEC's `Target(Q, T#t);` form; an R resets the stored ones | CHANGELOG [Unreleased]; website languages/sfc "Action qualifiers" | — (Go: lang/conformance/sfc-timed-qualifiers, lang/sfc/timed_test.go) | codesys-shaped build rows habit-D-qualifier, habit-SD-qualifier, habit-L-qualifier, habit-iec-assoc-form; reference-timed/ (naut test) | — |
@@ -272,7 +275,7 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**0 of 183.** Every row has at least one layer of coverage: a webview test, a
+**0 of 193.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 

@@ -1,0 +1,11 @@
+# A pump seal-in for smoke check 23 (Toggle Bit, and Set Live Value / Force
+# from the ladder diagram). The pushbuttons are setpoints so the tag API's
+# writes stick: nothing in the program or a driver writes them back.
+name: toggle-bit
+tasks:
+  - program: MainProgram.ld
+    scan: 100ms
+tags:
+  - { name: StartPB, role: setpoint, init: false, desc: "start pushbutton, NO" }
+  - { name: StopPB, role: setpoint, init: true, desc: "stop pushbutton, NC: TRUE while not pressed" }
+  - { name: RunCmd, role: output, init: false, desc: "pump run command" }
