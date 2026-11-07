@@ -316,6 +316,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.commands.registerCommand("nautilus.setValue", (tag?: string) => live?.setValue(tag)),
+    vscode.commands.registerCommand("nautilus.toggleBit", (tag?: string) => live?.toggleBit(tag)),
     vscode.commands.registerCommand("nautilus.force", (tag?: string) => live?.force(tag)),
     vscode.commands.registerCommand("nautilus.unforce", (tag?: string) => live?.unforce(tag)),
     vscode.commands.registerCommand("nautilus.unforceAll", () => live?.unforceAll()),

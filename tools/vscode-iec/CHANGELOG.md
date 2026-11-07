@@ -5,6 +5,31 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+Works with naut 0.20.0: both items below use the controller's tag API the
+extension already writes through.
+
+### Added
+
+- **Toggle Bit, as in Studio 5000.** Select a contact or coil in a ladder
+  diagram and press **Ctrl+T** (**Cmd+T** on macOS) to write the opposite
+  of its BOOL tag's live value, or press **T**, beside the diagram's other
+  one-letter keys (N, P, M, B, O); T also works in a read-only diagram,
+  since it is a live action, not an edit. **nautilus: Toggle Bit** is also
+  in the right-click menu of a diagram element, of IEC text editors (the
+  tag under the cursor) and of the Live Values view. A tag that is not a
+  BOOL, has no live value yet, or is forced (the force would win) is
+  refused with a message that says which. Ctrl+T in a text editor stays
+  VS Code's Go to Symbol in Workspace.
+- **Set Live Value and Force from the ladder diagram.** Right-click a
+  contact, edge contact or coil for **Set Live Value…**, **Force…** and,
+  while forces are active, **Unforce**, for that element's tag. The
+  palette's Set Live Value, Force and Unforce now act on the diagram's
+  selected element while a ladder diagram has focus, as they act on the
+  identifier under the cursor in text; before, they asked for a text
+  cursor. Elements inside a FUNCTION_BLOCK body (its locals, not tags) and
+  member or element references are left out, as the text editor's hover
+  link leaves them out. The ladder's shortcut help gains a Live group.
+
 ## [0.21.0] - 2026-11-05
 
 The pre-release line after the stable release 0.20.0. Same contents as

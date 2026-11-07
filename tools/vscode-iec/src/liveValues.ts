@@ -50,6 +50,17 @@ import {
   type FlatType,
   type FlatTypes,
 } from "./tagTypes";
+import { activeDiagramTag, diagramHasFocus } from "./diagramSelection";
+
+/** What a tag command is invoked with: a tag name (a hover link), a Live
+ * Values tree item ({tag} / {name}), or a diagram element's right-click
+ * context ({nautilusTag}, data-vscode-context in the webview). */
+type TagArg = string | { tag?: string; name?: string; nautilusTag?: string } | undefined;
+
+function tagOf(arg: TagArg): string | undefined {
+  if (typeof arg === "string") return arg || undefined;
+  return arg?.tag ?? arg?.name ?? arg?.nautilusTag ?? undefined;
+}
 
 type Frame = {
   ts: number;
@@ -272,13 +283,16 @@ export class LiveValues implements vscode.Disposable {
    * state/output tag the scan owns is overwritten next cycle — that's honest
    * PLC forcing, not a bug. The pill updates on the next frame.
    */
-  async setValue(arg?: string | { tag?: string; name?: string }): Promise<void> {
-    // arg is a tag name (hover link), a Live Values tree item ({tag}), or
-    // undefined (palette / right-click → read the identifier under the cursor).
-    const tag = typeof arg === "string" ? arg : arg?.tag ?? arg?.name;
-    const name = tag ?? this.identifierAtCursor();
+  async setValue(arg?: TagArg): Promise<void> {
+    // arg is a tag name (hover link), a Live Values tree item ({tag}), a
+    // diagram element's right-click context ({nautilusTag}), or undefined
+    // (palette / right-click in text → the identifier under the cursor, or
+    // the selected element when a diagram has focus).
+    const name = tagOf(arg) ?? this.identifierAtCursor();
     if (!name) {
-      void notifyWarning("nautilus: put the cursor on a tag, then Set Live Value");
+      void notifyWarning(diagramHasFocus()
+        ? "nautilus: select a contact or coil in the diagram, then Set Live Value"
+        : "nautilus: put the cursor on a tag, then Set Live Value");
       return;
     }
     const current = this.valueFor(name);
@@ -306,6 +320,41 @@ export class LiveValues implements vscode.Disposable {
     const value = parseTypedWrite(input, ft);
     if (value === undefined) return;
     await this.postValue(name, value, formatValue(value));
+  }
+
+  /**
+   * Toggle Bit (Ctrl+T in a ladder diagram, as in Studio 5000): write the
+   * opposite of a BOOL tag's live value. The tag is the argument (a diagram
+   * element's right-click context, a Live Values item), else the selected
+   * diagram element, else the identifier under the cursor. A tag that is
+   * not a BOOL, has no live value yet, or is forced (the force would win)
+   * is refused, saying which.
+   */
+  async toggleBit(arg?: TagArg): Promise<void> {
+    const name = tagOf(arg) ?? this.identifierAtCursor();
+    if (!name) {
+      void notifyWarning(diagramHasFocus()
+        ? "nautilus: select a contact or coil in the diagram, then Toggle Bit"
+        : "nautilus: put the cursor on a BOOL tag, then Toggle Bit");
+      return;
+    }
+    const ft = this.typeOf(name);
+    const current = this.valueFor(name);
+    if (ft && ft.t.toUpperCase() !== "BOOL") {
+      void notifyWarning(`nautilus: Toggle Bit works on BOOL tags; ${name} is ${typeLabel(ft)}`);
+      return;
+    }
+    if (typeof current !== "boolean") {
+      void notifyWarning(current === undefined
+        ? `nautilus: no live value for ${name} yet (is the controller running?)`
+        : `nautilus: Toggle Bit works on BOOL tags; ${name} is ${this.display(current, name)}`);
+      return;
+    }
+    if (this.forcedFor(name)) {
+      void notifyWarning(`nautilus: ${name} is forced, so a toggle would not stick; Unforce it first`);
+      return;
+    }
+    await this.postValue(name, !current, !current ? "TRUE" : "FALSE");
   }
 
   /** POST /api/tags, and say how it went. */
@@ -357,11 +406,12 @@ export class LiveValues implements vscode.Disposable {
    * until the force is removed — the controller re-applies it every scan
    * against the driver and the logic. Same entry points as Set Live Value:
    * a hover link (name), a Live Values row ({tag}), or the cursor. */
-  async force(arg?: string | { tag?: string; name?: string }): Promise<void> {
-    const tag = typeof arg === "string" ? arg : arg?.tag ?? arg?.name;
-    const name = tag ?? this.identifierAtCursor(true);
+  async force(arg?: TagArg): Promise<void> {
+    const name = tagOf(arg) ?? this.identifierAtCursor(true);
     if (!name) {
-      void notifyWarning("nautilus: put the cursor on a tag, then Force…");
+      void notifyWarning(diagramHasFocus()
+        ? "nautilus: select a contact or coil in the diagram, then Force…"
+        : "nautilus: put the cursor on a tag, then Force…");
       return;
     }
     const forcedAt = this.forcedFor(name);
@@ -406,8 +456,8 @@ export class LiveValues implements vscode.Disposable {
 
   /** "Remove Force": one address. With no argument, the forced address
    * under the cursor — or a pick from the table when there is none. */
-  async unforce(arg?: string | { tag?: string; name?: string; force?: string }): Promise<void> {
-    let name = typeof arg === "string" ? arg : arg?.force ?? arg?.tag ?? arg?.name;
+  async unforce(arg?: TagArg & { force?: string }): Promise<void> {
+    let name = typeof arg === "object" && arg?.force ? arg.force : tagOf(arg);
     if (name) name = this.forcedFor(name) ?? name;
     if (!name) {
       const here = this.identifierAtCursor(true);
@@ -496,6 +546,8 @@ export class LiveValues implements vscode.Disposable {
    * top-level watch is offered a value write, so an FB member path (a name
    * with a dot) resolves to "" here. */
   private identifierAtCursor(dotted = false): string {
+    // A diagram with focus answers with its selected element's tag.
+    if (diagramHasFocus()) return activeDiagramTag() ?? "";
     const editor = vscode.window.activeTextEditor;
     if (!editor || !isIecDoc(editor.document)) return "";
     // A force may address a struct member ("P101.Speed"); a value write may not.

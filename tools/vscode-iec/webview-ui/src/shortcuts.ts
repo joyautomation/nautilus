@@ -113,6 +113,13 @@ export const LD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Esc', does: 'Cancel a drag', hint: 'Esc: cancel drag' }
 		]
 	},
+	{
+		title: 'Live',
+		rows: [
+			{ keys: 'T / Ctrl + T', does: "Toggle Bit: flip the selected contact or coil's BOOL tag on the running controller (Ctrl+T as in Studio 5000; in a browser, T, since the browser keeps Ctrl+T for a new tab)", hint: 'T: toggle bit' },
+			{ keys: 'Right-click', does: "Toggle Bit, Set Live Value…, Force… for the element's tag" }
+		]
+	},
 	viewGroup('Fit the widest rung to the pane width (also the corner fit button)'),
 	XREF_GROUP,
 	FILE_GROUP
