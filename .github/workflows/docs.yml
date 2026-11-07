@@ -3,7 +3,10 @@ name: docs
 on:
   push:
     branches: [main]
-    paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**', 'tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md']
+    # The docs' own sources, and everything the playground (/playground/) is
+    # built from: it follows main, so a Go or extension change redeploys it.
+    paths: ['website/**', 'docs/**', 'hmi/**', 'hmi-3d/**', 'tools/vscode-iec/**', 'playground/**',
+            'examples/lift-station/**', '**.go', 'go.mod', 'go.sum']
   pull_request:
     paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**', 'tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md']
 
@@ -84,6 +87,16 @@ jobs:
           else
             echo 'no fetch script yet'
           fi
+      # The playground (playground/dist): naut.wasm, the VS Code app with the
+      # extension's web build, the examples and lift-station's HMI. The
+      # Dockerfile copies it in and the site serves it at /playground/engine/.
+      - uses: actions/setup-go@v5
+        if: steps.gate.outputs.go == 'true'
+        with:
+          go-version-file: go.mod
+      - name: Build the playground
+        if: steps.gate.outputs.go == 'true'
+        run: ./playground/scripts/build.sh
       - name: Build container image
         if: steps.gate.outputs.go == 'true'
         run: docker build -f website/Dockerfile -t registry.digitalocean.com/jar-containers/nautilus-docs:$(echo $GITHUB_SHA | head -c7) .

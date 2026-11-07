@@ -138,7 +138,7 @@ async function main() {
 
 	const bridge = serveBridge(pg);
 	const views = serveViews(bridge.name, project.hmi);
-	// For the page framing the playground (joyautomation.com's download
+	// For the page framing the playground (the docs site's download
 	// button): the project as it stands, saved edits included.
 	window.nautilusPlayground = { title: project.title, files: () => pg.files() };
 	registerFileSystemOverlay(1, new EngineFileSystem(pg));

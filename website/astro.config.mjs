@@ -62,6 +62,7 @@ export default defineConfig({
           items: [
             { label: 'Tutorial: your first controller', slug: 'tutorial' },
             { label: 'Getting started', slug: 'getting-started' },
+            { label: 'Playground (in your browser)', link: '/playground/' },
           ],
         },
         {

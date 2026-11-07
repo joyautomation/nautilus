@@ -3,8 +3,10 @@
 Nautilus in a browser tab, with nothing installed: the IEC 61131-3 compiler,
 the scan loop, the tag API (including the SSE stream), the language server,
 the diagram editors' graph/edit and the acceptance runner, compiled to
-WebAssembly (`cmd/naut-wasm`) and run in a Web Worker. joyautomation.com's
-playground is built on it.
+WebAssembly (`cmd/naut-wasm`) and run in a Web Worker. The docs site serves
+it at nautilus.joyautomation.com/playground/: `website/scripts/sync-playground.mjs`
+copies `dist/` to `/playground/engine/`, and `docs.yml` builds and deploys
+both.
 
     ./scripts/build.sh          # -> dist/: naut.wasm, wasm_exec.js, worker.js, memfs.js, client.js, sw.js, app/, hmi/
     python3 -m http.server -d .. 8765   # then open /playground/dev/test.html

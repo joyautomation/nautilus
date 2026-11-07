@@ -22,7 +22,7 @@ cp "$here"/src/*.js "$here"/src/*.d.ts "$out/"
 
 # Prebuilt HMIs, served by sw.js at <base>/view/<name>/ in a tab of their
 # own, as `naut run` serves server.hmi. The base is where the site mounts
-# dist/ (joyautomation.com: /playground/engine); PLAYGROUND_BASE overrides.
+# dist/ (the docs site: /playground/engine); PLAYGROUND_BASE overrides.
 # An example with one gets "hmi" in its JSON (examples.py).
 base="${PLAYGROUND_BASE:-/playground/engine}"
 ci() { [ -n "${SKIP_NPM:-}" ] || npm ci --no-audit --no-fund --silent; }
@@ -42,3 +42,7 @@ python3 -I "$here/scripts/examples.py" "$out/examples" \
   "demo=$demo/demo:interlocks.ld,program.fbd,tank.mimic.json:Tank demo (ladder, FBD, ST, HMI):What naut new makes: a heated tank with a PI loop and pump seal-in in FBD, the alarm annunciator in ladder, the plant simulated in ST, and acceptance tests. Change TempSP and watch the loop follow, on the diagrams and in tank.mimic.json." \
   "lift-station=$repo/examples/lift-station:permissives.ld,sequence.sfc,level.fbd:Lift station (all four languages):A duplex sewage lift station: duty/standby sequencing in SFC, level control in FBD, permissives in ladder, the plant simulated in ST, with alarms and 15 tests. Set InflowLps to 40 for a storm."
 rm -rf "$demo"
+
+# What a page hosting dist/ reads first: the version, and a build id that
+# changes with every build, for the ?v= that keeps browsers off stale files.
+printf '{"version":"%s","build":"%s"}\n' "$version" "$(date +%s)" > "$out/engine.json"
