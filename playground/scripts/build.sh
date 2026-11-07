@@ -13,7 +13,7 @@ version="${NAUT_VERSION:-$(git -C "$repo" describe --tags --always --dirty 2>/de
     -o "$out/naut.wasm" ./cmd/naut-wasm )
 goroot="$(go env GOROOT)"
 cp "$goroot/lib/wasm/wasm_exec.js" "$out/" 2>/dev/null || cp "$goroot/misc/wasm/wasm_exec.js" "$out/"
-cp "$here"/src/*.js "$here"/src/*.d.ts "$out/" 2>/dev/null || cp "$here"/src/*.js "$out/"
+cp "$here"/src/*.js "$here"/src/*.d.ts "$out/"
 printf '%s raw, %s gzipped\n' "$(wc -c < "$out/naut.wasm")" "$(gzip -9 -c "$out/naut.wasm" | wc -c)"
 
 # Examples, as the JSON file maps the client loads.
