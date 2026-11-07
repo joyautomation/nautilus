@@ -10,8 +10,11 @@
 //                  {event: 'lsp', msg}               one JSON-RPC message
 //                  {event: 'fs', path, kind}         Go changed a file
 //                  {event: 'log', fd, text}          Go's stdout/stderr
-const vq = new URL(self.location.href).search; // ?v=<version>, passed on to every asset
-importScripts('memfs.js' + vq);
+// Assets resolve against the worker's own URL, or against NAUTILUS_BASE when
+// a host starts it from a blob: (VS Code's web extension host does).
+const BASE = self.NAUTILUS_BASE || self.location.href;
+const vq = self.NAUTILUS_BASE ? '' : new URL(self.location.href).search; // ?v=<version>, passed on to every asset
+importScripts(new URL('memfs.js' + vq, BASE).href);
 
 const mem = self.createMemFS({ log: (fd, text) => postMessage({ event: 'log', fd, text }) });
 self.fs = mem.fs;
@@ -19,7 +22,7 @@ self.process = mem.process;
 self.path = mem.path;
 mem.api.onChange((path, kind) => postMessage({ event: 'fs', path, kind }));
 
-importScripts('wasm_exec.js' + vq);
+importScripts(new URL('wasm_exec.js' + vq, BASE).href);
 
 const T = { start: performance.now() };
 let markReady;
@@ -33,7 +36,7 @@ self.onNautilusReady = () => {
 	const go = new Go();
 	// The page starts this worker as worker.js?v=<version>; the same tag on
 	// naut.wasm lets both be cached for good and still change together.
-	const url = new URL('naut.wasm' + vq, self.location.href);
+	const url = new URL('naut.wasm' + vq, BASE);
 	let inst;
 	if (WebAssembly.instantiateStreaming) {
 		try {

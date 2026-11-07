@@ -1,0 +1,22 @@
+# Acceptance tests: the seal-in's behaviour, checked in virtual time.
+# Run them from the Tests panel (naut test on a real project).
+tests:
+  - name: start latches the motor on
+    steps:
+      - given: { StartPB: true }
+        scans: 1
+        expect: { Motor: true }
+      - given: { StartPB: false } # let go of the button
+        scans: 1
+        expect: { Motor: true }   # the seal holds it on
+
+  - name: stop drops the motor out
+    steps:
+      - given: { StartPB: true }
+        scans: 1
+      - given: { StartPB: false, StopPB: true }
+        scans: 1
+        expect: { Motor: false }
+      - given: { StopPB: false }
+        scans: 1
+        expect: { Motor: false } # stays off until Start again
