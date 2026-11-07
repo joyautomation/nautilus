@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 23 — Toggle Bit, and Set Live Value / Force from the ladder diagram, in a
-# real desktop VS Code (gesture inventory C29, L32, L33; C06 and X43's
-# diagram entry points):
+# 23 — Toggle Bit, and Set Live Value / Force from the ladder, FBD and SFC
+# diagrams, in a real desktop VS Code (gesture inventory C29, L32, L33, F23,
+# F24, S32, S33; C06 and X43's diagram entry points):
 #
 #   a. Ctrl+T on a selected contact flips its BOOL tag on the controller:
 #      StartPB FALSE → TRUE, and the seal-in latches RunCmd. This is the
@@ -17,8 +17,15 @@
 #   e. Force… from the element's menu forces StartPB (confirm modal); Ctrl+T
 #      on it is then refused ("is forced"), the value unchanged; Unforce
 #      (offered while forces are active) removes it.
+#   f. FBD (Panel.fbd): Ctrl+T on the selected LampTest chip flips it and
+#      the lamp follows; its right-click menu's Set Live Value… writes it
+#      back.
+#   g. SFC (Fill.sfc): T on the selected transition `:= FillGo` flips
+#      FillGo and the chart moves to Filling (FillValve on); the transition's
+#      menu offers Toggle Bit beside Fire Transition; the FillValve action's
+#      menu offers the live actions; Ctrl+T on the transition flips it back.
 #
-# Project: fixtures/toggle-bit (setpoint pushbuttons, so a write sticks).
+# Project: fixtures/toggle-bit (setpoint inputs, so a write sticks).
 # Assertions read /api/state, /api/forces, the extension's test state
 # (NAUTILUS_TEST_STATE) and the workbench DOM over CDP, not pixels. Menus:
 # window.menuStyle custom, so the webview's context menu is workbench DOM.
@@ -81,7 +88,12 @@ confirm() {
 # data-xref = their tag, data-rung = their rung).
 EL() { printf 'doc.querySelector(%s)' "$(_q "[data-rung=\"seal\"][data-xref=\"$1\"]")"; }
 select_el() { click_el "$(EL "$1")"; }
-right_click_el() { local p; p=$(el_at "$(EL "$1")") || return 1; read -r x y <<<"$p"; xdotool mousemove --window "$WIN" "$x" "$y"; sleep 0.3; xdotool click 3; sleep 1.2; }
+right_click_js() { local p; p=$(el_at "$1") || return 1; read -r x y <<<"$p"; xdotool mousemove --window "$WIN" "$x" "$y"; sleep 0.3; xdotool click 3; sleep 1.2; }
+right_click_el() { right_click_js "$(EL "$1")"; }
+# FBD chips and SFC association rows, by their testability attributes.
+FBD_CHIP() { printf 'doc.querySelector(%s)' "$(_q "[data-kind=\"chip\"][data-id=\"v:$1\"]")"; }
+SFC_ASSOC() { printf 'doc.querySelector(%s)?.querySelector(".assoctarget")' "$(_q "[data-kind=\"assoc\"][data-id=\"st:$1\"]")"; }
+live_items() { local i=$1; [[ $i == *"Toggle Bit"* && $i == *"Set Live Value"* && $i == *"Force"* ]]; }
 
 # ── project + controller ────────────────────────────────────────────────────
 ext_fixture toggle-bit
@@ -187,4 +199,71 @@ if is_forced StartPB; then
       api_post /api/forces/clear '' >/dev/null || true
     fi
   fi
+fi
+
+# ── f: FBD — Ctrl+T on a chip; Set Live Value… from its menu ─────────────────
+if ed_open_diagram Panel.fbd; then
+  if click_el "$(FBD_CHIP LampTest)"; then
+    g_key ctrl+t
+    if poll 3 tag_is LampTest true && poll 3 tag_is Lamp true; then
+      pass "f: FBD LampTest chip selected, Ctrl+T → LampTest true, Lamp on ($(last_note))" "$(shot f-ctrl-t)"
+    else
+      fail "f: Ctrl+T on the LampTest chip: LampTest $(tagv LampTest), Lamp $(tagv Lamp), '$(last_note)'" "$(shot f-ctrl-t)"
+    fi
+  else
+    fail "f: no LampTest chip on the FBD diagram" "$(shot f-no-chip)"
+  fi
+  if right_click_js "$(FBD_CHIP LampTest)"; then
+    items=$(menu_items)
+    if live_items "$items" && click_menu_item 'Set Live Value'; then
+      if t=$(type_in_input LampTest FALSE) && poll 3 tag_is LampTest false; then
+        pass "f: the LampTest chip's menu ($items) → Set Live Value… '$t' ← FALSE → LampTest false" "$(shot f-set)"
+      else
+        fail "f: Set Live Value… from the chip: ${t:-} LampTest $(tagv LampTest)" "$(shot f-set)"; key Escape
+      fi
+    else
+      fail "f: the LampTest chip's menu lacks the live actions: '$items'" "$(shot f-menu)"; key Escape
+    fi
+  fi
+else
+  fail "f: Panel.fbd did not open as an FBD diagram" "$(shot f-open)"
+fi
+
+# ── g: SFC — T on a transition, the menus, Ctrl+T back ──────────────────────
+if ed_open_diagram Fill.sfc; then
+  if sfc_select_trans 'Idle->Filling'; then
+    g_key t
+    if poll 3 tag_is FillGo true && poll 5 tag_is FillValve true; then
+      pass "g: SFC transition := FillGo selected, T → FillGo true, Filling active, FillValve on ($(last_note))" "$(shot g-t)"
+    else
+      fail "g: T on the FillGo transition: FillGo $(tagv FillGo), FillValve $(tagv FillValve), '$(last_note)'" "$(shot g-t)"
+    fi
+  else
+    fail "g: no Idle->Filling transition to select" "$(shot g-no-trans)"
+  fi
+  if right_click_js "$(sfc_trans_el 'Idle->Filling')"; then
+    items=$(menu_items)
+    if live_items "$items" && [[ $items == *"Fire Transition"* ]]; then
+      pass "g: the transition's menu keeps Fire Transition beside the live actions: $items" "$(shot g-trans-menu)"
+    else
+      fail "g: the FillGo transition's menu: '$items'" "$(shot g-trans-menu)"
+    fi
+    key Escape
+  fi
+  if right_click_js "$(SFC_ASSOC Filling:0)"; then
+    items=$(menu_items)
+    live_items "$items" && pass "g: the N FillValve action's menu: $items" "$(shot g-assoc-menu)" \
+      || fail "g: the FillValve action's menu lacks the live actions: '$items'" "$(shot g-assoc-menu)"
+    key Escape
+  fi
+  if sfc_select_trans 'Idle->Filling' || true; then
+    g_key ctrl+t
+    if poll 3 tag_is FillGo false && poll 5 tag_is FillValve false; then
+      pass "g: Ctrl+T on the transition → FillGo false, back to Idle, FillValve off ($(last_note))" "$(shot g-ctrl-t)"
+    else
+      fail "g: Ctrl+T back: FillGo $(tagv FillGo), FillValve $(tagv FillValve), '$(last_note)'" "$(shot g-ctrl-t)"
+    fi
+  fi
+else
+  fail "g: Fill.sfc did not open as an SFC diagram" "$(shot g-open)"
 fi

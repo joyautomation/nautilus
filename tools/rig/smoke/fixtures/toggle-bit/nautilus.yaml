@@ -1,11 +1,20 @@
-# A pump seal-in for smoke check 23 (Toggle Bit, and Set Live Value / Force
-# from the ladder diagram). The pushbuttons are setpoints so the tag API's
-# writes stick: nothing in the program or a driver writes them back.
+# Smoke check 23 (Toggle Bit, and Set Live Value / Force from the diagrams):
+# a pump seal-in in ladder, a lamp test in FBD, a fill sequence in SFC. The
+# inputs are setpoints so the tag API's writes stick: nothing in the program
+# or a driver writes them back.
 name: toggle-bit
 tasks:
   - program: MainProgram.ld
+    scan: 100ms
+  - program: Panel.fbd
+    scan: 100ms
+  - program: Fill.sfc
     scan: 100ms
 tags:
   - { name: StartPB, role: setpoint, init: false, desc: "start pushbutton, NO" }
   - { name: StopPB, role: setpoint, init: true, desc: "stop pushbutton, NC: TRUE while not pressed" }
   - { name: RunCmd, role: output, init: false, desc: "pump run command" }
+  - { name: LampTest, role: setpoint, init: false, desc: "lamp test switch" }
+  - { name: Lamp, role: output, init: false, desc: "panel lamp" }
+  - { name: FillGo, role: setpoint, init: false, desc: "start the fill" }
+  - { name: FillValve, role: output, init: false, desc: "fill valve" }
