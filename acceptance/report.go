@@ -96,6 +96,21 @@ func Report(w io.Writer, results []Result, verbose bool) int {
 	return failed
 }
 
+// ReportListJSON writes one NDJSON record per test in s without running
+// anything: what an editor's test explorer needs to populate its tree
+// (`naut test -list`). Same shape as a result minus the outcome, so a
+// consumer can key on (suite, name) across both.
+func ReportListJSON(w io.Writer, s *Suite) {
+	enc := json.NewEncoder(w)
+	for _, t := range s.Tests {
+		_ = enc.Encode(struct {
+			Suite string `json:"suite"`
+			Name  string `json:"name"`
+			Line  int    `json:"line"`
+		}{s.Path, t.Name, t.Line})
+	}
+}
+
 // ReportJSON writes one NDJSON event per test for the extension's test
 // explorer. Line-delimited so it can be consumed as the run streams.
 func ReportJSON(w io.Writer, results []Result) int {

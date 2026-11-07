@@ -17,6 +17,8 @@
 //	  edit(lang, request)      -> string    {"out": ..., "code": n}, as `naut <lang> edit`
 //	  lsp(onMessage)           -> send(json)   one language-server session
 //	  test(root, runPattern?)  -> Promise<string>   `naut test --json` output
+//	  exec(args, stdin, cwd)   -> Promise<{stdout, stderr, code}>  the CLI verbs
+//	                              the VS Code extension runs (exec.go)
 //	}
 package main
 
@@ -76,6 +78,7 @@ func main() {
 	api.Set("edit", js.FuncOf(jsEdit))
 	api.Set("lsp", js.FuncOf(jsLSP))
 	api.Set("test", js.FuncOf(jsTest))
+	api.Set("exec", js.FuncOf(jsExec))
 	api.Set("version", lsp.Version)
 	js.Global().Set("nautilus", api)
 	if cb := js.Global().Get("onNautilusReady"); cb.Type() == js.TypeFunction {
@@ -370,13 +373,23 @@ func jsTest(_ js.Value, args []js.Value) any {
 // runTests is `naut test --json [-run pattern]` against the project at root:
 // every *_test.yaml suite, each test on its own runtime in virtual time.
 func runTests(root, pattern string) (string, error) {
+	return runSuites(root, pattern, false)
+}
+
+// runSuites runs (or, with list, only lists, as `naut test -list`) the
+// project's acceptance suites, as NDJSON.
+func runSuites(root, pattern string, list bool) (string, error) {
 	fsys := os.DirFS(root)
 	proj, err := project.Load(fsys, project.ManifestName)
 	if err != nil {
 		return "", err
 	}
-	if _, err := runtime.New(proj.Runtime); err != nil {
-		return "", fmt.Errorf("compile: %w", err)
+	if !list {
+		// A compile failure is a suite failure; listing skips it, as the
+		// CLI does, so an editor's test tree survives a mid-edit program.
+		if _, err := runtime.New(proj.Runtime); err != nil {
+			return "", fmt.Errorf("compile: %w", err)
+		}
 	}
 	paths, err := acceptance.DiscoverSuites(fsys)
 	if err != nil {
@@ -392,6 +405,7 @@ func runTests(root, pattern string) (string, error) {
 		}
 	}
 	var results []acceptance.Result
+	var listBuf bytes.Buffer
 	for _, p := range paths {
 		suite, err := acceptance.LoadSuite(fsys, p)
 		if err != nil {
@@ -409,11 +423,18 @@ func runTests(root, pattern string) (string, error) {
 			}
 			suite.Tests = kept
 		}
+		if list {
+			acceptance.ReportListJSON(&listBuf, suite)
+			continue
+		}
 		rs, err := acceptance.RunSuite(suite, proj.Runtime, acceptance.WithAlarms(proj.AlarmEngine))
 		if err != nil {
 			return "", err
 		}
 		results = append(results, rs...)
+	}
+	if list {
+		return listBuf.String(), nil
 	}
 	var buf bytes.Buffer
 	acceptance.ReportJSON(&buf, results)
@@ -427,3 +448,5 @@ func toAny(ss []string) []any {
 	}
 	return out
 }
+
+func lspVersion() string { return lsp.Version }

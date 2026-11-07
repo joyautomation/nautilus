@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>nautilus playground</title>
+		<style>
+			html, body { margin: 0; height: 100%; background: #1f1f1f; color: #ccc; font: 13px -apple-system, 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+			#workbench { position: absolute; inset: 0; }
+			#splash { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #1f1f1f; text-align: center; padding: 16px; }
+			#splash .spin { width: 28px; height: 28px; border: 3px solid #333; border-top-color: #0078d4; border-radius: 50%; animation: s 0.8s linear infinite; }
+			#splash small { color: #8b8b8b; max-width: 32em; }
+			#splash.failed .spin { display: none; }
+			#splash.failed p { color: #f48771; }
+			@keyframes s { to { transform: rotate(360deg); } }
+			@media (prefers-reduced-motion: reduce) { #splash .spin { animation-duration: 3s; } }
+		</style>
+	</head>
+	<body>
+		<div id="workbench"></div>
+		<div id="splash" role="status">
+			<div class="spin" aria-hidden="true"></div>
+			<p>Loading…</p>
+			<small>VS Code and the nautilus compiler and runtime download once (about 6 MB), then everything runs on your machine.</small>
+		</div>
+		<script type="module" src="./main.js"></script>
+	</body>
+</html>

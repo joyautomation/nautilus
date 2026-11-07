@@ -1,0 +1,12 @@
+{
+  // Type-checks the web build (esbuild.web.mjs bundles; this only checks).
+  // The shared sources compile as they do natively; src/web/ adds the
+  // browser's DOM types for the playground bridge.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "WebWorker.ImportScripts"],
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", ".vscode-test", "out", "src/**/*.test.ts", "src/e2e"]
+}

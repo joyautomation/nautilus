@@ -6,7 +6,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -203,17 +202,8 @@ func runTest(args []string) int {
 	return 0
 }
 
-// listSuite emits one NDJSON record per test without running anything —
-// what an editor's test explorer needs to populate its tree. Same shape as
-// a result minus the outcome, so a consumer can key on (suite, name)
-// across both.
+// listSuite emits one NDJSON record per test without running anything:
+// acceptance.ReportListJSON, shared with the browser playground.
 func listSuite(s *acceptance.Suite) {
-	enc := json.NewEncoder(os.Stdout)
-	for _, t := range s.Tests {
-		_ = enc.Encode(struct {
-			Suite string `json:"suite"`
-			Name  string `json:"name"`
-			Line  int    `json:"line"`
-		}{s.Path, t.Name, t.Line})
-	}
+	acceptance.ReportListJSON(os.Stdout, s)
 }

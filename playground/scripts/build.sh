@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Build @joyautomation/nautilus-playground into dist/: naut.wasm (GOOS=js,
-# so internal/project links no field drivers), Go's wasm_exec.js, and the
-# worker + client sources.
+# Build @joyautomation/nautilus-playground into dist/:
+#   naut.wasm (GOOS=js, so internal/project links no field drivers), Go's
+#   wasm_exec.js, the worker, client and bridge, examples/, and app/: the
+#   workbench (app/, monaco-vscode-api) with the nautilus extension's web
+#   build and its editors in app/extension/.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$here/.." && pwd)"
@@ -14,7 +16,8 @@ version="${NAUT_VERSION:-$(git -C "$repo" describe --tags --always --dirty 2>/de
 goroot="$(go env GOROOT)"
 cp "$goroot/lib/wasm/wasm_exec.js" "$out/" 2>/dev/null || cp "$goroot/misc/wasm/wasm_exec.js" "$out/"
 cp "$here"/src/*.js "$here"/src/*.d.ts "$out/"
-printf '%s raw, %s gzipped\n' "$(wc -c < "$out/naut.wasm")" "$(gzip -9 -c "$out/naut.wasm" | wc -c)"
+
+"$here/scripts/app.sh"
 
 # Examples, as the JSON file maps the client loads.
 demo="$(mktemp -d)"

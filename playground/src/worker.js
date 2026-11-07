@@ -65,6 +65,22 @@ const ops = {
 	readFile: (p) => mem.api.readFile(p),
 	remove: (p) => mem.api.remove(p),
 	snapshot: (root) => mem.api.snapshot(root),
+	// The file-system calls a host needs to show the project as a folder
+	// (the playground app's file:// provider). Same errors as Node's.
+	fsCall: (name, ...args) =>
+		new Promise((resolve, reject) => {
+			const cb = (err, v) => (err ? reject(Object.assign(new Error(err.message), { code: err.code })) : resolve(v));
+			if (name === 'stat') return mem.fs.stat(args[0], (e, st) => cb(e, st && { dir: st.isDirectory(), size: st.size, mtime: st.mtimeMs, ctime: st.ctimeMs }));
+			if (name === 'readFile') {
+				const t = mem.api.readFile(args[0]);
+				return t === null ? cb({ code: 'ENOENT', message: 'ENOENT: ' + args[0] }) : cb(null, t);
+			}
+			if (name === 'writeFile') {
+				mem.api.writeFile(args[0], args[1]);
+				return cb(null);
+			}
+			mem.fs[name](...args, cb);
+		}),
 	/** Replace everything under root with files ({relativePath: text}). */
 	resetProject(root, files) {
 		mem.api.remove(root);
@@ -92,6 +108,7 @@ const ops = {
 	},
 
 	// diagram editors, language server, tests
+	exec: (args, stdin, cwd) => self.nautilus.exec(args, stdin == null ? '' : stdin, cwd || ''),
 	graph: (lang, src, at) => JSON.parse(self.nautilus.graph(lang, src, at || '')),
 	edit: (lang, request) => JSON.parse(self.nautilus.edit(lang, JSON.stringify(request))),
 	lspStart() {

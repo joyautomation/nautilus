@@ -140,6 +140,20 @@ export class Playground {
 	}
 
 	/**
+	 * A streaming endpoint's raw text, chunk by chunk as the server flushes
+	 * it; onChunk(null) when it ends. Returns the function that stops it.
+	 */
+	streamRaw(url, onChunk) {
+		const sid = ++this.seq;
+		this.streams.set(sid, onChunk);
+		this.worker.postMessage({ op: 'stream', args: [sid, url] });
+		return () => {
+			this.streams.delete(sid);
+			this.worker.postMessage({ op: 'streamCancel', args: [sid] });
+		};
+	}
+
+	/**
 	 * Server-sent events from a streaming endpoint (GET /api/stream...),
 	 * parsed: onEvent({event, data}) per event, onEvent(null) when it ends.
 	 * Returns the function that stops it.
@@ -178,6 +192,11 @@ export class Playground {
 	}
 
 	// ---- editors, language server, tests
+
+	/** A `naut` verb the VS Code extension runs (compose, ld|fbd|sfc graph|edit, test -json|-list). */
+	exec(args, stdin, cwd) {
+		return this.call('exec', args, stdin, cwd);
+	}
 
 	/** `naut <lang> graph` for a diagram source; at is its project-relative path. */
 	graph(lang, src, at) {
