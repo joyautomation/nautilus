@@ -10,6 +10,7 @@
 	// pointer-based with a movement threshold (HTML5 dnd doesn't exist for
 	// SVG), resolved at pointerup via elementFromPoint with a
 	// nearest-hotspot snap fallback.
+	import { isToggleKey, ldElementTag, tagContext } from './liveTag';
 	import { annotate, argIdents, offerType, useTypes, type Ann, type LdElement, type LdFbType, type LdModel, type LdRung, type RungStatus } from './ladder';
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
@@ -30,6 +31,8 @@
 		zoom = 1,
 		onOp,
 		onTrace,
+		onSelectTag,
+		onToggleBit,
 		requestInput
 	}: {
 		model: LdModel;
@@ -42,6 +45,11 @@
 		zoom?: number;
 		onOp?: (op: Record<string, unknown>) => void;
 		onTrace?: (msg: string) => void;
+		/** The selected element's tag (see writableTag), or null: the host's
+		 * Set Live Value / Force act on it while the diagram has focus. */
+		onSelectTag?: (tag: string | null) => void;
+		/** T on a selected contact or coil: the host's Toggle Bit, for its tag. */
+		onToggleBit?: (tag: string) => void;
 		requestInput?: (
 			init: string,
 			at: { x: number; y: number; w: number },
@@ -56,6 +64,16 @@
 	// (ladderSelect.ts), which the OR gesture turns into one branch.
 	type Sel = LdSel;
 	let selected = $state<Sel>(null);
+
+	/** The tag a contact, edge contact or coil names, when it is one the
+	 * live actions can act on (liveTag.ts: not a FUNCTION_BLOCK local, a
+	 * member or an element). */
+	const writableTag = ldElementTag;
+
+	/** Right-click context for VS Code (webview/context menus): the tag. */
+	function vsContext(r: { scope?: unknown }, el: { kind: string; ref?: string }): string | undefined {
+		return tagContext(writableTag(r, el));
+	}
 
 	// ── model → geometry ────────────────────────────────────────────────────
 	// The canvas width is the VIEW width (PLC-IDE style: rails span the
@@ -800,7 +818,9 @@
 
 	const handledKeys = new WeakSet<Event>();
 	function handleKey(ev: KeyboardEvent) {
-		if (!editable || handledKeys.has(ev)) return;
+		if (handledKeys.has(ev)) return;
+		// T (Toggle Bit) is a live action, not an edit: it works read-only too.
+		if (!editable && !(isToggleKey(ev) && lastSelTag)) return;
 		if (typingTarget(ev)) return;
 		const ctrl = ev.ctrlKey || ev.metaKey;
 		const node = selected ? findSelected(selected) : undefined;
@@ -839,6 +859,10 @@
 			acted = true;
 		} else if (!ctrl && (ev.key === 'o' || ev.key === 'O')) {
 			acted = doOr();
+		} else if (isToggleKey(ev) && lastSelTag && onToggleBit) {
+			// Toggle Bit on the selection (Ctrl+T in the workbench too).
+			onToggleBit(lastSelTag);
+			acted = true;
 		}
 		if (
 			(!ctrl && (ev.key === 'Delete' || ev.key === 'Backspace')) ||
@@ -885,6 +909,22 @@
 		}
 		return undefined;
 	}
+	// Tell the host which tag is selected, when that changes.
+	let lastSelTag: string | undefined;
+	$effect(() => {
+		const sel = selected;
+		let tag: string | undefined;
+		if (sel && !sel.whole) {
+			const rung = rungs.find(({ r }) => r.name === sel.rung);
+			const ann = rung ? findSelected(sel) : undefined;
+			if (rung && ann) tag = writableTag(rung.r, ann.el);
+		}
+		if (tag !== lastSelTag) {
+			lastSelTag = tag;
+			onSelectTag?.(tag ?? null);
+		}
+	});
+
 
 	const spotData = (rung: string, s: LSpot) =>
 		JSON.stringify({ rung, spot: s, accept: s.op === 'coil' ? 'coil' : 'series' });
@@ -899,6 +939,7 @@
 		data-rung={r.name}
 		data-path={n.path?.join('.')}
 		data-xref={n.ann.el.ref ?? n.ann.el.inst} data-xref-line={r.line} data-xref-end={r.endLine ?? r.line}
+		data-vscode-context={vsContext(r, n.ann.el)}
 		class:on={n.ann.val === true}
 		class:off={n.ann.val === false}
 		class:dadd={n.ann.el._diff === 'added'}

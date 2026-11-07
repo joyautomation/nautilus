@@ -41,8 +41,11 @@ silently overridden: change the force, or remove it.
 ## From VS Code
 
 - **Force…** — right-click an identifier in any `.st`, `.fbd`, `.ld` or
-  `.sfc` file, hover a live value pill, or use the lock on a Live Values
-  row. A dotted member path (`P101.Speed`) can be forced too.
+  `.sfc` file or a contact or coil in a ladder diagram, hover a live value
+  pill, or use the lock on a Live Values row. A dotted member path
+  (`P101.Speed`) can be forced too. From the command palette, Force… acts
+  on the identifier under the cursor or, while a ladder diagram has focus,
+  on its selected contact or coil.
 - **Remove Force** / **Remove All Forces** — the same places, and the
   unlock on a forced row.
 - Forced values are marked everywhere a live value is shown: the inline
@@ -52,6 +55,10 @@ silently overridden: change the force, or remove it.
 - A status-bar item, **N forces active**, stays up while anything is forced
   (Logix keeps this in plain sight too). Click it to list the forces and
   remove one, or all.
+- **Toggle Bit** (Ctrl+T on a ladder contact or coil, an FBD variable chip,
+  or an SFC action or transition that names one variable) refuses a forced
+  tag: the force would put the old value back the next scan. Remove the
+  force first.
 
 Force and Remove All ask for confirmation, naming the controller, while
 `nautilus.confirmControllerWrites` is on (the default). Against a

@@ -35,6 +35,7 @@
 	import { live, setLive, setVarBounds } from './liveState.svelte';
 	import type { FlatTypes } from '../../src/tagTypes';
 	import { readClip, typingTarget, writeClip } from './clipboard';
+	import { fbdNodeTag, isToggleKey } from './liveTag';
 	import ShortcutHelp from './ShortcutHelp.svelte';
 	import { FBD_SHORTCUTS, LD_SHORTCUTS, SFC_SHORTCUTS, hintLine } from './shortcuts';
 	import ZoomPane from './ZoomPane.svelte';
@@ -380,6 +381,9 @@
 			position: { x: n.x, y: n.y },
 			data: {
 				n,
+				// The tag the live actions act on (liveTag.ts), if this
+				// element names one: right-click context, selection, T.
+				liveTag: fbdNodeTag(n, model.block),
 				problems: n.line ? (diagsByLine.get(n.line) ?? []) : [],
 				editable,
 				extNames,
@@ -481,7 +485,7 @@
 			error = '';
 			ldModel = null;
 			sfcModel = null;
-			render(mergeDiff(normalizeFbd(msg.base), normalizeFbd(msg.head)), true);
+			render({ ...mergeDiff(normalizeFbd(msg.base), normalizeFbd(msg.head)), block: msg.head.block }, true);
 		} else if (msg.type === 'ldModel') {
 			mode = 'ld';
 			readOnly = !!msg.readOnly;
@@ -790,7 +794,16 @@
 	function onselectionchange({ nodes: sel }: { nodes: Node[]; edges: Edge[] }) {
 		selectedCount = sel.length;
 		selectedIds = sel.map((n) => n.id).filter(Boolean);
+		// One variable chip selected: tell the host its tag (Set Live Value /
+		// Force act on it while the diagram has focus; T toggles it). A diff
+		// is a review, so nothing there.
+		const tag = !diffing && sel.length === 1 ? ((sel[0].data as { liveTag?: string } | undefined)?.liveTag ?? undefined) : undefined;
+		if (tag !== fbdSelTag) {
+			fbdSelTag = tag;
+			vscode.postMessage({ type: 'diagramSelection', tag: tag ?? null });
+		}
 	}
+	let fbdSelTag: string | undefined;
 
 	// ── copy / cut / paste / select all ────────────────────────────────────
 	// Ctrl+C captures the selection's ids plus the source they resolve
@@ -834,6 +847,13 @@
 		// Typing in any editor (float editor, palette field) is never a
 		// canvas shortcut.
 		if (typingTarget(ev)) return;
+		// T: Toggle Bit on the selected chip's tag (Ctrl+T is the workbench
+		// keybinding's; a live action, never an edit).
+		if (isToggleKey(ev) && fbdSelTag) {
+			vscode.postMessage({ type: 'toggleBit', tag: fbdSelTag });
+			ev.preventDefault();
+			return;
+		}
 		if (ev.key.startsWith('Arrow') && !ev.ctrlKey && !ev.metaKey && selectedIds.length) {
 			clearTimeout(arrowTimer);
 			arrowTimer = setTimeout(persistKeyboardMove, 350);
@@ -939,6 +959,8 @@
 				zoom={ldZoom}
 				onOp={postLd}
 				onTrace={(msg) => vscode.postMessage({ type: 'ldTrace', msg })}
+				onSelectTag={(tag) => vscode.postMessage({ type: 'diagramSelection', tag })}
+				onToggleBit={(tag) => vscode.postMessage({ type: 'toggleBit', tag })}
 				{requestInput}
 			/>
 		</ZoomPane>
@@ -951,6 +973,8 @@
 				showLive={!diffing}
 				zoom={sfcZoom}
 				onOp={postSfc}
+				onSelectTag={(tag) => vscode.postMessage({ type: 'diagramSelection', tag })}
+				onToggleBit={(tag) => vscode.postMessage({ type: 'toggleBit', tag })}
 				{requestInput}
 			/>
 		</ZoomPane>

@@ -1,0 +1,10 @@
+PROGRAM Panel
+(* A lamp test switch for smoke check 23: the FBD diagram's chips. *)
+VAR_EXTERNAL
+    LampTest : BOOL;
+    Lamp     : BOOL;
+END_VAR
+FBD
+  Lamp := OR(LampTest, FALSE)
+END_FBD
+END_PROGRAM

@@ -39,6 +39,7 @@
 	import { live, liveValue, liveForced } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 	import { descTail } from './xref.svelte';
+	import { isToggleKey, sfcNameTag, tagContext } from './liveTag';
 
 	type Diag = { line: number; message: string; severity: string };
 
@@ -49,6 +50,8 @@
 		showLive = true,
 		zoom = 1,
 		onOp,
+		onSelectTag,
+		onToggleBit,
 		requestInput
 	}: {
 		model: SfcModel;
@@ -59,6 +62,12 @@
 		 * over an unscaled viewBox; pointer math divides it back out. */
 		zoom?: number;
 		onOp?: (op: Record<string, unknown>) => void;
+		/** The selected association's or transition's tag (liveTag.ts), or
+		 * null: the host's Set Live Value / Force act on it while the chart
+		 * has focus. */
+		onSelectTag?: (tag: string | null) => void;
+		/** T on a selected association or transition: the host's Toggle Bit. */
+		onToggleBit?: (tag: string) => void;
 		requestInput?: (
 			init: string,
 			at: { x: number; y: number; w: number },
@@ -66,6 +75,28 @@
 			opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc'; error?: string; title?: string }
 		) => void;
 	} = $props();
+
+	// ── live actions: the tag an association or a transition names ────────
+	// (liveTag.ts): an association's variable target, a transition whose
+	// condition is one BOOL variable. Right-click context, selection, T.
+	const assocTag = (target: string) => sfcNameTag(target, model);
+	const transTag = (cond: string) => sfcNameTag(cond, model);
+	let lastSelTag: string | undefined;
+	$effect(() => {
+		const sel = selected;
+		let tag: string | undefined;
+		if (editable && sel?.kind === 'assoc') {
+			const a = model.steps.find((s) => s.id === sel.step)?.actions?.[sel.index];
+			tag = a ? assocTag(a.target) : undefined;
+		} else if (editable && sel?.kind === 'trans') {
+			const t = model.trans.find((x) => x.id === sel.id);
+			tag = t ? transTag(t.cond) : undefined;
+		}
+		if (tag !== lastSelTag) {
+			lastSelTag = tag;
+			onSelectTag?.(tag ?? null);
+		}
+	});
 
 	function post(op: Record<string, unknown>) {
 		try {
@@ -848,6 +879,13 @@ let pendingSelectTrans = $state<{ from: string | string[]; to: string | string[]
 		}
 		if (!editable) return;
 		if (typingTarget(ev)) return;
+		if (isToggleKey(ev) && lastSelTag && onToggleBit) {
+			// Toggle Bit on the selection (Ctrl+T in the workbench too).
+			onToggleBit(lastSelTag);
+			ev.preventDefault();
+			ev.stopPropagation();
+			return;
+		}
 		if (ev.key === 'Delete' || ev.key === 'Backspace') {
 			if (!selected) return;
 			requestDeleteSelected();
@@ -1132,7 +1170,7 @@ if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev
 			{@const problems = problemsFor(r.t.line, r.t.endLine)}
 			<!-- data-from / data-to: the ends, so a transition is addressable by
 			     them (the rig's verbs), not only by where it happens to be drawn -->
-			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} data-from={r.t.from.join(',')} data-to={r.t.to.join(',')} class:selected={isSelTrans(r.t.id)} data-vscode-context={JSON.stringify({ nautilusSfcTransition: r.t.name || `t${r.t.line}` })}>
+			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} data-from={r.t.from.join(',')} data-to={r.t.to.join(',')} class:selected={isSelTrans(r.t.id)} data-vscode-context={tagContext(transTag(r.t.cond), { nautilusSfcTransition: r.t.name || `t${r.t.line}` })}>
 				{#if r.jump}
 					<g class="jump" data-kind="transition" data-id={r.t.id} transform="translate({r.jump.x}, {r.jump.y})" onclick={(e) => selectTrans(e, r.t.id)}>
 						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond} — jumps to {r.t.to.join(', ')} (a loop back, drawn compact rather than as a long line){r.prio ? ` — priority ${r.prio}` : ''}{editable ? ' — click to select, dblclick condition to edit, F2: name' : ''}</title>
@@ -1244,6 +1282,7 @@ if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev
 								class="assocrow {actionFor(a.target)?.status ?? ''}"
 								data-kind="assoc"
 								data-id="{p.id}:{i}"
+								data-vscode-context={isAction ? undefined : tagContext(assocTag(a.target))}
 								data-xref={isAction ? undefined : a.target} data-xref-line={p.step.line} data-xref-end={p.step.endLine ?? p.step.line}
 								class:selected={isSelAssoc(p.id, i)}
 								transform="translate(0, {i * 16})"
