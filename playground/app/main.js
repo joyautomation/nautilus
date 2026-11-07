@@ -8,7 +8,7 @@ import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-yaml-default-extension';
 import '@codingame/monaco-vscode-json-default-extension';
 import '@codingame/monaco-vscode-markdown-basics-default-extension';
-import { initialize } from '@codingame/monaco-vscode-api';
+import { initialize, getService, ICommandService } from '@codingame/monaco-vscode-api';
 import { ExtensionHostKind, registerExtension } from '@codingame/monaco-vscode-api/extensions';
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
@@ -170,6 +170,16 @@ async function main() {
 	for (const f of files) ext.registerFileUrl('/' + f, new URL(f, EXTENSION).href);
 	await ext.whenReady();
 	splash?.remove();
+
+	// For the framing page: keys typed while focus is outside this frame
+	// (its nav, its toolbar) never reach the workbench, so it forwards the
+	// command palette's keys here.
+	const commands = await getService(ICommandService);
+	Object.assign(window.nautilusPlayground, {
+		showCommands: () => commands.executeCommand('workbench.action.showCommands'),
+		focus: () => commands.executeCommand('workbench.action.focusActiveEditorGroup')
+	});
+	window.dispatchEvent(new Event('nautilus-playground-ready'));
 }
 
 main().catch((e) => {
