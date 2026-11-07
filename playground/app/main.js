@@ -98,6 +98,9 @@ async function main() {
 	document.title = `${project.title} · nautilus playground`;
 
 	const bridge = serveBridge(pg);
+	// For the page framing the playground (joyautomation.com's download
+	// button): the project as it stands, saved edits included.
+	window.nautilusPlayground = { title: project.title, files: () => pg.files() };
 	registerFileSystemOverlay(1, new EngineFileSystem(pg));
 
 	await initUserConfiguration(
