@@ -202,6 +202,10 @@ jobs:
       # now also runs its pure-logic test files, so its deps must exist too.
       - run: npm ci --prefix webview-ui
       - run: npm test
+      # The web build (esbuild.web.mjs: the browser playground runs it): type-
+      # check src/web/ against the DOM, and bundle with the swaps.
+      - name: web build (playground)
+        run: npm run check:web && npm run compile:web
       # Vite strips types without checking them, so nothing else type-checks
       # the webview's .svelte and .ts files. Warnings (a11y) don't fail it.
       - name: Type-check the webview (svelte-check)
