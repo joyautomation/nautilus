@@ -91,7 +91,17 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
   // A playground opens running, so the first thing anyone sees moves, and
   // with a diagram beside the program text: the extension's text-left,
   // diagram-right, as "Open Diagram to the Side" gives it on a desktop.
-  void run().then(openFirstDiagram);
+  void run().then(() => {
+    // On a slow machine the extension can activate before the workbench
+    // has restored the project's first editor: then wait for it, once.
+    if (vscode.window.activeTextEditor) return openFirstDiagram();
+    const once = vscode.window.onDidChangeActiveTextEditor((ed) => {
+      if (!ed) return;
+      once.dispose();
+      void openFirstDiagram();
+    });
+    context.subscriptions.push(once);
+  });
 }
 
 const DIAGRAMS: Record<string, string> = { "iec-ld": "nautilus.ldDiagram", "iec-fbd": "nautilus.fbdDiagram", "iec-sfc": "nautilus.sfcDiagram" };
