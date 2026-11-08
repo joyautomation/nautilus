@@ -106,15 +106,32 @@ jobs:
       - name: Push image
         if: steps.gate.outputs.go == 'true'
         run: docker push registry.digitalocean.com/jar-containers/nautilus-docs:$(echo $GITHUB_SHA | head -c7)
+      # The playground's saved projects (playground/share), which the docs
+      # ingress sends /playground/api/ to. Its pod restarts on each deploy
+      # (one replica on one volume); for those seconds the Share button
+      # puts the whole project in the link instead.
+      - name: Build and push the share service image
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          img=registry.digitalocean.com/jar-containers/nautilus-playground-share:$(echo $GITHUB_SHA | head -c7)
+          docker build -f playground/share/Dockerfile -t $img .
+          docker push $img
       - name: Set image in manifests
         if: steps.gate.outputs.go == 'true'
-        run: sed -i 's|<IMAGE>|registry.digitalocean.com/jar-containers/nautilus-docs:'$(echo $GITHUB_SHA | head -c7)'|' website/k8s/deploy.yml
+        run: |
+          sed -i 's|<IMAGE>|registry.digitalocean.com/jar-containers/nautilus-docs:'$(echo $GITHUB_SHA | head -c7)'|' website/k8s/deploy.yml
+          sed -i 's|<IMAGE>|registry.digitalocean.com/jar-containers/nautilus-playground-share:'$(echo $GITHUB_SHA | head -c7)'|' playground/share/k8s.yml
       - name: Save kubeconfig
         if: steps.gate.outputs.go == 'true'
         run: doctl kubernetes cluster kubeconfig save --expiry-seconds 600 k8s-joy-1
+      # The share service first, so the ingress path it adds has somewhere
+      # to go.
       - name: Deploy
         if: steps.gate.outputs.go == 'true'
-        run: kubectl apply -f website/k8s/deploy.yml
+        run: |
+          kubectl apply -f playground/share/k8s.yml
+          kubectl rollout status deployment/nautilus-playground-share -n joy --timeout=5m
+          kubectl apply -f website/k8s/deploy.yml
       - name: Verify rollout
         if: steps.gate.outputs.go == 'true'
         run: kubectl rollout status deployment/nautilus-docs -n joy

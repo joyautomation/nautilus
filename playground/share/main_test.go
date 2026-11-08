@@ -116,8 +116,11 @@ func TestRateLimit(t *testing.T) {
 			n++
 		}
 	}
-	if n != 10 {
-		t.Fatalf("burst of %d, want 10", n)
+	if n != savesBurst {
+		t.Fatalf("burst of %d, want %d", n, savesBurst)
+	}
+	if !l.keep(bytesPerDay/4) || l.keep(1<<20) {
+		t.Fatal("the bytes kept a day are not limited")
 	}
 	if !l.allow("5.6.7.8") {
 		t.Fatal("another visitor is limited too")

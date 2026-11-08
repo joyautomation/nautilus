@@ -45,15 +45,22 @@ import (
 
 // Limits on one saved project.
 const (
-	maxBody      = 2 << 20 // the request, JSON escaping included
-	maxContent   = 1 << 20 // the files' text, all together
-	maxFiles     = 200
-	maxPath      = 200
-	maxTitle     = 120
-	maxOpen      = 50
-	idLen        = 12 // base32: 60 bits
-	savesPerHour = 30 // per visitor
+	maxBody    = 2 << 20 // the request, JSON escaping included
+	maxContent = 1 << 20 // the files' text, all together
+	maxFiles   = 200
+	maxPath    = 200
+	maxTitle   = 120
+	maxOpen    = 50
+	idLen      = 12 // base32: 60 bits
+
+	// The ingress mostly sees a node's address, not the visitor's
+	// (externalTrafficPolicy: Cluster), so "per visitor" can be many
+	// people: generous. What bounds a flood is the limit for everyone, and
+	// above all the bytes kept a day, so the volume fills slowly if at all.
+	savesPerHour = 120 // per visitor (address)
+	savesBurst   = 30
 	savesPerDay  = 5000
+	bytesPerDay  = 100 << 20 // gzipped, as kept
 )
 
 var (
@@ -149,8 +156,9 @@ func (s *store) gone(id string) bool {
 	return err == nil
 }
 
-// put keeps body (canonical JSON) under its id, once.
-func (s *store) put(body []byte) (string, error) {
+// put keeps body (canonical JSON) under its id, once. afford is asked
+// before a new file is written, with its size.
+func (s *store) put(body []byte, afford func(int) bool) (string, error) {
 	sum := sha256.Sum256(body)
 	id := strings.ToLower(idEncode.EncodeToString(sum[:]))[:idLen]
 	if s.gone(id) {
@@ -169,6 +177,9 @@ func (s *store) put(body []byte) (string, error) {
 	w, _ := gzip.NewWriterLevel(&gz, gzip.BestCompression)
 	w.Write(body)
 	w.Close()
+	if !afford(gz.Len()) {
+		return id, errFull
+	}
 	tmp := name + ".tmp"
 	if err := os.WriteFile(tmp, gz.Bytes(), 0o644); err != nil {
 		return "", err
@@ -191,13 +202,18 @@ func (s *store) takeDown(id string) error {
 	return nil
 }
 
-var errGone = errors.New("taken down")
+var (
+	errGone = errors.New("taken down")
+	errFull = errors.New("enough saved for today")
+)
 
-// limiter: a small token bucket per visitor, and one for everyone.
+// limiter: a token bucket per visitor, one for everyone's saves, and one
+// for the bytes kept.
 type limiter struct {
 	mu      sync.Mutex
 	buckets map[string]*bucket
 	all     bucket
+	bytes   bucket
 }
 
 type bucket struct {
@@ -205,17 +221,17 @@ type bucket struct {
 	at     time.Time
 }
 
-func (b *bucket) take(now time.Time, perHour, burst float64) bool {
+func (b *bucket) take(now time.Time, perHour, burst, n float64) bool {
 	if b.at.IsZero() {
 		b.tokens = burst
 	} else {
 		b.tokens = min(burst, b.tokens+now.Sub(b.at).Hours()*perHour)
 	}
 	b.at = now
-	if b.tokens < 1 {
+	if b.tokens < n {
 		return false
 	}
-	b.tokens--
+	b.tokens -= n
 	return true
 }
 
@@ -231,10 +247,17 @@ func (l *limiter) allow(who string) bool {
 		b = &bucket{}
 		l.buckets[who] = b
 	}
-	if !b.take(now, savesPerHour, 10) {
+	if !b.take(now, savesPerHour, savesBurst, 1) {
 		return false
 	}
-	return l.all.take(now, savesPerDay/24.0, savesPerDay/4)
+	return l.all.take(now, savesPerDay/24.0, savesPerDay/4, 1)
+}
+
+// keep: room today for n more bytes on disk.
+func (l *limiter) keep(n int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.bytes.take(time.Now(), bytesPerDay/24.0, bytesPerDay/4, float64(n))
 }
 
 // visitor is who is saving, for the rate limit only (never written down):
@@ -270,7 +293,9 @@ func reply(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func refuse(w http.ResponseWriter, code int, msg string) { reply(w, code, map[string]string{"error": msg}) }
+func refuse(w http.ResponseWriter, code int, msg string) {
+	reply(w, code, map[string]string{"error": msg})
+}
 
 func (sv *server) save(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
@@ -297,10 +322,13 @@ func (sv *server) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := json.Marshal(p) // map keys sorted: the same project, the same bytes
-	id, err := sv.store.put(body)
+	id, err := sv.store.put(body, sv.limit.keep)
 	switch {
 	case errors.Is(err, errGone):
 		refuse(w, http.StatusGone, "this project was taken down")
+	case errors.Is(err, errFull):
+		w.Header().Set("Retry-After", "3600")
+		refuse(w, http.StatusTooManyRequests, "the playground has saved all it can for now; try again later")
 	case err != nil:
 		log.Printf("save: %v", err)
 		refuse(w, http.StatusInternalServerError, "could not save the project")
