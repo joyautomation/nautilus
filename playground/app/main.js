@@ -244,6 +244,13 @@ async function openProject(project) {
 }
 
 async function main() {
+	// VS Code's extension host and webviews need crypto.subtle, which
+	// browsers give only to https pages and localhost: on a plain-http
+	// address (a LAN or tailnet preview) the workbench would never open.
+	if (!window.isSecureContext) {
+		fail('The playground needs a secure page: open it over https, or on localhost. Browsers give VS Code what it needs only there.');
+		return;
+	}
 	const params = new URLSearchParams(location.search);
 	say('Starting nautilus in your browser…');
 	const [pg, source] = await Promise.all([
