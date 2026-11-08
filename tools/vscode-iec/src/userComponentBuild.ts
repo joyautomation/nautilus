@@ -23,8 +23,15 @@ import * as fs from "fs";
 import * as path from "path";
 import * as esbuild from "esbuild";
 
-export type ComponentDiagnostic = { component: string; message: string };
-export type BuildResult = { diagnostics: ComponentDiagnostic[]; built: string[] };
+export type { ComponentDiagnostic, BuildResult } from "./userComponentEntry";
+export { customComponentNames } from "./userComponentEntry";
+import {
+  buildEntrySource,
+  describeError,
+  EMPTY_BUNDLE_JS,
+  type BuildResult,
+  type ComponentDiagnostic,
+} from "./userComponentEntry";
 
 /** The bare shape of `svelte/compiler` we call — kept minimal and untyped
  * against the real package so this file has no compile-time dependency on
@@ -93,53 +100,6 @@ async function compileSvelteFile(
   return result;
 }
 
-function describeError(err: unknown): string {
-  if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
-    return (err as { message: string }).message;
-  }
-  return String(err);
-}
-
-/** The virtual entry — compiled itself as a runes module (compileModule),
- * since `$state` needs the svelte compiler's transform, not plain esbuild.
- * Exposes `window.__NX_USER_COMPONENTS__[name] = { mount(target, props) }`
- * where the handle wraps a `$state` props object: mutating it after mount
- * (handle.update) flows reactively into the mounted instance — the
- * documented Svelte 5 pattern for programmatic prop updates. */
-function buildEntrySource(usable: [name: string, absPath: string][]): string {
-  const imports = usable.map(([, absPath], i) => `import C${i} from ${JSON.stringify(absPath)};`).join("\n");
-  const entries = usable.map(([name], i) => `${JSON.stringify(name)}: C${i}`).join(", ");
-  return `import { mount, unmount } from 'svelte';
-${imports}
-
-const registry = { ${entries} };
-
-function makeHandle(Component, target, initial) {
-	let props = $state({ ...(initial ?? {}) });
-	const instance = mount(Component, { target, props });
-	return {
-		update(partial) {
-			Object.assign(props, partial ?? {});
-		},
-		destroy() {
-			unmount(instance);
-		}
-	};
-}
-
-const api = {};
-for (const name of Object.keys(registry)) {
-	const Component = registry[name];
-	api[name] = { mount: (target, props) => makeHandle(Component, target, props) };
-}
-window.__NX_USER_COMPONENTS__ = api;
-window.dispatchEvent(new Event('nx:user-components-ready'));
-`;
-}
-
-const EMPTY_BUNDLE_JS =
-  "window.__NX_USER_COMPONENTS__ = window.__NX_USER_COMPONENTS__ || {};\n" +
-  "window.dispatchEvent(new Event('nx:user-components-ready'));\n";
 
 /** Compile `components` (name -> absolute .svelte path) into one IIFE at
  * `outfile`, using each component's OWN project toolchain. Always writes
@@ -228,14 +188,4 @@ export async function buildUserComponentsBundle(
   }
 
   return { diagnostics, built: usable.map(([name]) => name) };
-}
-
-/** Discovery's pure part: the referenced names that need a build, i.e. not
- * already covered by the built-in kit registry. */
-export function customComponentNames(referenced: Iterable<string>, builtins: ReadonlySet<string>): string[] {
-  const out = new Set<string>();
-  for (const n of referenced) {
-    if (n && !builtins.has(n)) out.add(n);
-  }
-  return [...out].sort();
 }

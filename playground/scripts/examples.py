@@ -3,14 +3,16 @@
 Usage: examples.py OUTDIR NAME=DIR[:open1,open2[:Title[:Description]]] ...
 An example with a built HMI in OUTDIR/../hmi/NAME/ gets "hmi": NAME.
 Every text file a project carries is included (IEC sources, manifests, tag
-files, test suites, mimic/scene JSON, READMEs); built HMIs, node_modules and
-binaries are not.
+files, test suites, mimic/scene JSON, READMEs, and the HMI's sources: its
+.svelte components are what the mimic editor compiles in the browser);
+built HMIs, node_modules, lockfiles and binaries are not.
 """
 import json, os, sys
 
-TEXT = ('.yaml', '.yml', '.st', '.ld', '.fbd', '.sfc', '.json', '.md')
-SKIP_DIRS = {'hmi', 'node_modules', '.git', 'build', 'pki'}
-SKIP_FILES = {'AGENTS.md', 'CLAUDE.md', 'seed.json', 'retain.json'}
+TEXT = ('.yaml', '.yml', '.st', '.ld', '.fbd', '.sfc', '.json', '.md',
+        '.svelte', '.ts', '.js', '.css', '.html', '.py')
+SKIP_DIRS = {'node_modules', '.git', 'build', 'pki', 'static', '.svelte-kit'}
+SKIP_FILES = {'AGENTS.md', 'CLAUDE.md', 'seed.json', 'retain.json', 'package-lock.json'}
 
 def bundle(name, root, opens):
     files = {}

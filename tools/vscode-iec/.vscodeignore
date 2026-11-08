@@ -19,3 +19,4 @@ CONTRIBUTING.md
 esbuild.web.mjs
 tsconfig.web.json
 out/web/**
+out/web/**

@@ -403,7 +403,7 @@
     "viewsWelcome": [
       {
         "view": "nautilusLiveValues",
-        "contents": "No live values yet \u2014 start a controller with `naut run`, or point the editor at one.\n[Connect to Controller](command:nautilus.connect)\nValues stream over the same API the inline pills use."
+        "contents": "No live values yet — start a controller with `naut run`, or point the editor at one.\n[Connect to Controller](command:nautilus.connect)\nValues stream over the same API the inline pills use."
       }
     ],
     "menus": {
@@ -813,7 +813,7 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token \u2014 reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token — reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
         },
         "nautilus.diagram.showDescriptions": {
           "type": "boolean",
@@ -1087,7 +1087,7 @@
     "compile:web": "node esbuild.web.mjs --minify",
     "check:web": "tsc -p tsconfig.web.json",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/cliPath.test.js out/cli.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js out/liveActions.test.js out/diagramSelection.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/cliPath.test.js out/cli.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js out/liveActions.test.js out/diagramSelection.test.js out/componentCompiler.test.js out/runtimeModules.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js",
     "gen:kind-schema": "npm run compile && node out/kindSchema.js --write"
@@ -1101,6 +1101,7 @@
     "@types/vscode": "^1.82.0",
     "@vscode/test-electron": "^3.1.0",
     "path-browserify": "^1.0.1",
+    "sucrase": "3.35.1",
     "svelte": "^5.56.4",
     "typescript": "^5.4.0"
   }

@@ -68,9 +68,24 @@ const options = {
   logLevel: "info",
 };
 
+// The custom-component compiler (src/web/componentCompiler.ts: Svelte's
+// compiler and Sucrase, about 1 MB), a file of its own that
+// src/web/userComponents.ts loads only when a mimic uses a custom
+// component. Its svelte/compiler is webview-ui's, the same Svelte that
+// media/dist/user-runtime.js (webview-ui/vite.runtime.config.ts) runs the
+// compiled components on.
+const webviewSvelte = path.join(here, "webview-ui", "node_modules", "svelte");
+const compiler = {
+  ...options,
+  entryPoints: [web("componentCompiler.ts")],
+  outfile: path.join(here, "out/web/component-compiler.js"),
+  external: [],
+  plugins: [],
+  alias: { "svelte/compiler": path.join(webviewSvelte, "compiler", "index.js") },
+};
+
 if (process.argv.includes("--watch")) {
-  const ctx = await esbuild.context(options);
-  await ctx.watch();
+  for (const o of [options, compiler]) await (await esbuild.context(o)).watch();
 } else {
-  await esbuild.build(options);
+  await Promise.all([esbuild.build(options), esbuild.build(compiler)]);
 }
