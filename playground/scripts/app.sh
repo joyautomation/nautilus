@@ -13,13 +13,15 @@ ci() { [ -n "${SKIP_NPM:-}" ] || npm ci --no-audit --no-fund --silent; }
 # its diagram editors (webview-ui: fbd-flow.js renders LD, FBD and SFC) and
 # mimic editor (mimic-editor.js, the HMI).
 ext="$repo/tools/vscode-iec"
-( cd "$ext" && ci && node esbuild.web.mjs --minify )
 # The mimic editor draws with the HMI kit (hmi/), used as its packaged dist.
 ( cd "$repo/hmi" && ci && npm run --silent package >/dev/null )
 # The editors' bundles, and the runtime custom components compiled in the
 # browser run on (Svelte and the HMI kit: vite.runtime.config.ts).
 ( cd "$ext/webview-ui" && ci && npx vite build --logLevel warn && npx vite build --config vite.mimic.config.ts --logLevel warn \
     && npx vite build --config vite.runtime.config.ts --logLevel warn )
+# The extension itself, after webview-ui's install: its custom-component
+# compiler (out/web/component-compiler.js) is built from webview-ui's svelte.
+( cd "$ext" && ci && node esbuild.web.mjs --minify )
 
 # The workbench app, then the extension's files beside it.
 ( cd "$here/app" && ci && npx vite build --logLevel warn )
