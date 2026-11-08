@@ -8,6 +8,8 @@
 // straight to a running example. /playground/p/<id> is a project saved by
 // the Share button (nginx.conf serves this page for it; playground/share
 // keeps the projects), and a #project= link holds a whole project itself.
+// On a phone it first says the playground wants a computer, and offers to
+// send the link on (?phone=1 shows that page anywhere).
 import '../../styles/fonts.css';
 import logo from '../../assets/logo.svg';
 
@@ -57,6 +59,19 @@ const description =
     </header>
     <main class="playground">
       <p class="note" id="note">Loading the playground…</p>
+      <section class="phone" id="phone" hidden aria-labelledby="phone-title">
+        <h1 id="phone-title">The playground needs a computer</h1>
+        <p id="phone-what">
+          It's VS Code with the nautilus extension, running in your browser. On a phone the editor is too cramped to
+          use, and the first visit downloads about 10 MB.
+        </p>
+        <p>Send this link to yourself and open it on a laptop or desktop.</p>
+        <div class="phone-actions">
+          <button id="phone-send" type="button" class="primary">Send this link to myself</button>
+          <button id="phone-anyway" type="button">Open it here anyway</button>
+          <a href="/tutorial/">Get started with nautilus</a>
+        </div>
+      </section>
     </main>
   </body>
 </html>
@@ -157,6 +172,60 @@ const description =
   }
   .note :global(a) {
     color: #3794ff;
+  }
+  .phone {
+    margin: auto;
+    padding: 24px 16px;
+    max-width: 26em;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .phone h1 {
+    margin: 0 0 12px;
+    color: #eee;
+    font: 22px/1.25 'Righteous', 'Space Grotesk Variable', sans-serif;
+  }
+  .phone p {
+    margin: 0 0 12px;
+  }
+  .phone-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 20px;
+  }
+  .phone-actions button,
+  .phone-actions a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    font: inherit;
+    min-height: 44px;
+    padding: 10px 16px;
+    border-radius: 4px;
+    border: 1px solid #3c3c3c;
+    background: #2b2b2b;
+    color: #ddd;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .phone-actions .primary {
+    background: #1a7f45;
+    border-color: #1a7f45;
+    color: #fff;
+  }
+  .phone-actions button:focus-visible,
+  .phone-actions a:focus-visible {
+    outline: 2px solid #3794ff;
+    outline-offset: 1px;
+  }
+  /* The playground's own buttons mean nothing until it is open. */
+  :global(body.on-phone) #share,
+  :global(body.on-phone) #download,
+  :global(body.on-phone) .actions a[href^='vscode:'] {
+    display: none;
   }
 </style>
 
@@ -305,5 +374,80 @@ const description =
       note.append(a, '.');
     }
   }
-  void start();
+
+  /**
+   * A phone: a small touch screen. A tablet (the short side 600px or more)
+   * gets the playground, keyboard or not.
+   */
+  const PHONE_OK = 'nautilus-playground-phone-ok';
+  const params = new URLSearchParams(location.search);
+  const onPhone =
+    params.get('phone') === '1' ||
+    (matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600);
+  let anyway = false;
+  try {
+    anyway = params.get('phone') !== '1' && localStorage.getItem(PHONE_OK) === '1';
+  } catch {
+    // No storage: ask each time.
+  }
+
+  /** What the link opens, in a few words, for the phone page. */
+  function whatThisOpens(): string | null {
+    if (/\/playground\/p\/[a-z2-7]{12}\/?$/.test(location.pathname) || location.hash.includes('project=')) {
+      return 'a project someone shared';
+    }
+    if (params.get('project')) return 'a project';
+    const example = params.get('example');
+    return example ? `the ${example} example` : null;
+  }
+
+  function phonePage() {
+    const page = document.getElementById('phone')!;
+    const send = document.getElementById('phone-send') as HTMLButtonElement;
+    document.body.classList.add('on-phone');
+    note.hidden = true;
+    page.hidden = false;
+    const what = whatThisOpens();
+    if (what) {
+      document.getElementById('phone-what')!.textContent =
+        `This link opens ${what} in the nautilus playground: VS Code with the nautilus extension, running in your browser. ` +
+        'On a phone the editor is too cramped to use, and the first visit downloads about 10 MB.';
+    }
+    const url = new URL(location.href);
+    url.searchParams.delete('phone');
+    const link = url.href;
+
+    send.addEventListener('click', async () => {
+      // The phone's own share sheet (messages, email, notes), else the clipboard.
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: 'nautilus playground', url: link });
+          return;
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') return;
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(link);
+        send.textContent = 'Link copied';
+        setTimeout(() => (send.textContent = 'Send this link to myself'), 2000);
+      } catch {
+        window.prompt('Copy this link:', link);
+      }
+    });
+    document.getElementById('phone-anyway')!.addEventListener('click', () => {
+      try {
+        localStorage.setItem(PHONE_OK, '1');
+      } catch {
+        // Ask again next time, then.
+      }
+      document.body.classList.remove('on-phone');
+      page.hidden = true;
+      note.hidden = false;
+      void start();
+    });
+  }
+
+  if (onPhone && !anyway) phonePage();
+  else void start();
 </script>
