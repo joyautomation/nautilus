@@ -1,0 +1,94 @@
+# The playground's saved projects, beside nautilus-docs: the docs ingress
+# (website/k8s/deploy.yml) sends /playground/api/ here.
+#
+# One replica on one volume, so Recreate: a rolling update would wait
+# forever for the old pod to let go of the volume.
+#
+# Taking a project down needs SHARE_ADMIN_TOKEN, from a secret made by
+# hand (without it, nothing can be taken down):
+#   kubectl -n joy create secret generic nautilus-playground-share \
+#     --from-literal=SHARE_ADMIN_TOKEN=$(openssl rand -hex 24)
+#   curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+#     https://nautilus.joyautomation.com/playground/api/p/<id>
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nautilus-playground-share
+  namespace: joy
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: do-block-storage-retain
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nautilus-playground-share
+  namespace: joy
+  labels:
+    app: nautilus-playground-share
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nautilus-playground-share
+  template:
+    metadata:
+      labels:
+        app: nautilus-playground-share
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532 # distroless nonroot: the volume is writable by it
+      containers:
+        - name: share
+          image: <IMAGE>
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: nautilus-playground-share
+                optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /playground/api/healthz
+              port: 8080
+          livenessProbe:
+            httpGet:
+              path: /playground/api/healthz
+              port: 8080
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nautilus-playground-share
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nautilus-playground-share
+  namespace: joy
+spec:
+  selector:
+    app: nautilus-playground-share
+  ports:
+    - port: 80
+      targetPort: 8080

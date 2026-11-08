@@ -5,8 +5,9 @@
 // is copied to /playground/engine/ by scripts/sync-playground.mjs; this page
 // frames it with a way out: the project as a .zip, the extension, the
 // install. ?example= and ?project= pass through, so a guide can link
-// straight to a running example, and so does a share link's #project=
-// (the whole project, made by the Share button).
+// straight to a running example. /playground/p/<id> is a project saved by
+// the Share button (nginx.conf serves this page for it; playground/share
+// keeps the projects), and a #project= link holds a whole project itself.
 import '../../styles/fonts.css';
 import logo from '../../assets/logo.svg';
 
@@ -44,11 +45,11 @@ const description =
         <img src={logo.src} alt="" width="22" height="22" />
         <span>nautilus</span>
       </a>
-      <span class="what">VS Code with the nautilus extension, running in your browser. Nothing is installed or uploaded.</span>
+      <span class="what">VS Code with the nautilus extension, running in your browser. Nothing is installed.</span>
       <nav class="actions" aria-label="Playground">
         <a id="open-hmi" hidden target="_blank" rel="noopener">Open HMI</a>
         <a id="open-dashboard" hidden target="_blank" rel="noopener">Open dashboard</a>
-        <button id="share" type="button" disabled title="Copy a link with the whole project in it">Share</button>
+        <button id="share" type="button" disabled title="Save the project as it stands and copy a link to it">Share</button>
         <button id="download" type="button" disabled>Download project</button>
         <a href="vscode:extension/joyauto.vscode-iec">Open in VS Code</a>
         <a class="primary" href="/tutorial/">Install nautilus</a>
@@ -197,22 +198,47 @@ const description =
     }
   });
 
-  /** A link holding the whole project as it stands: nothing is uploaded. */
+  /**
+   * Saves the project as it stands and copies a short link to it (or, when
+   * it cannot be saved, a link with the whole project in it).
+   */
   share.addEventListener('click', async () => {
-    const link = await app()?.shareLink?.();
-    if (!link) return;
+    const make = app()?.shareLink;
+    if (!make) return;
     share.disabled = true;
-    try {
-      await navigator.clipboard.writeText(link);
-      share.textContent = 'Link copied';
-    } catch {
-      // No clipboard (an insecure context, a refusal): show it to copy by hand.
-      window.prompt('Copy this link:', link);
-    } finally {
+    share.textContent = 'Saving…';
+    const link = make();
+    const done = (text: string) => {
+      share.textContent = text;
       setTimeout(() => {
         share.textContent = 'Share';
         share.disabled = false;
       }, 2000);
+    };
+    try {
+      // The copy is asked for now, while the click still counts (Safari
+      // refuses a copy made after waiting on the save), with the link to
+      // follow.
+      if (typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'text/plain': link.then((l) => new Blob([l], { type: 'text/plain' })) })
+        ]);
+      } else {
+        await navigator.clipboard.writeText(await link);
+      }
+      done('Link copied');
+    } catch {
+      let l: string;
+      try {
+        l = await link;
+      } catch (e) {
+        done('Not shared');
+        window.alert(`The project could not be shared: ${(e as Error).message}`);
+        return;
+      }
+      // No clipboard (an insecure context, a refusal): show it to copy by hand.
+      window.prompt('Copy this link:', l);
+      done('Share');
     }
   });
 
@@ -263,6 +289,8 @@ const description =
       const { version, build } = await r.json();
       const q = new URLSearchParams(location.search);
       q.set('v', build ? `${version}.${build}` : version);
+      const saved = location.pathname.match(/\/playground\/p\/([a-z2-7]{12})\/?$/);
+      if (saved) q.set('p', saved[1]);
       frame = document.createElement('iframe');
       frame.title = 'nautilus playground';
       frame.allow = 'clipboard-read; clipboard-write';

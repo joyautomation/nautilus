@@ -61,6 +61,14 @@ spec:
     - host: nautilus.joyautomation.com
       http:
         paths:
+          # The playground's saved projects (playground/share/k8s.yml).
+          - path: /playground/api
+            pathType: Prefix
+            backend:
+              service:
+                name: nautilus-playground-share
+                port:
+                  number: 80
           - path: /
             pathType: Prefix
             backend:

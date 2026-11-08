@@ -58,7 +58,7 @@ export function sameFiles(a, b) {
 	return ka.length === Object.keys(b).length && ka.every((k) => k in b && a[k] === b[k]);
 }
 
-// ---- share links: {title, open, hmi, files, from?, removed?} as gzip, then
+// ---- share links: {title, open, hmi, files, from?, base?, removed?} as gzip, then
 // base64url. A project made from one of our examples carries only what
 // differs from it (from: the example's name), so a link to a changed
 // lift-station is a few KB, not 35.
@@ -74,17 +74,21 @@ export async function encodeProject(payload) {
 	return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** What to put in a share link for files, made from base (null: not from an example). */
-export function sharePayload({ title, open, hmi }, files, example) {
+/**
+ * What to put in a share link for files, made from example (null: not from
+ * one). base is the example's fingerprint, so a link opened after the
+ * example has changed can say so.
+ */
+export function sharePayload({ title, open, hmi }, files, example, base) {
 	if (!example) return { title, open, hmi, files };
 	const changed = {};
 	for (const [k, t] of Object.entries(files)) if (example.files[k] !== t) changed[k] = t;
 	const removed = Object.keys(example.files).filter((k) => !(k in files));
-	return { title, open, from: example.name, files: changed, ...(removed.length ? { removed } : {}) };
+	return { title, open, from: example.name, base, files: changed, ...(removed.length ? { removed } : {}) };
 }
 
 /**
- * A share link's project, checked: {title, open, hmi, files, from?, removed?}.
+ * A share link's project, checked: {title, open, hmi, files, from?, base?, removed?}.
  * With from, files are the changes to that example (loadSource merges them).
  */
 export async function decodeProject(code) {
@@ -106,6 +110,7 @@ export async function decodeProject(code) {
 		open: Array.isArray(p.open) ? p.open.filter((f) => typeof f === 'string') : undefined,
 		hmi: typeof p.hmi === 'string' && /^[\w-]+$/.test(p.hmi) ? p.hmi : undefined,
 		from,
+		base: typeof p.base === 'string' && /^[0-9a-f]{16}$/.test(p.base) ? p.base : undefined,
 		removed: Array.isArray(p.removed) ? p.removed.filter((f) => typeof f === 'string') : [],
 		files
 	};

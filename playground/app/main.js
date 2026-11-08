@@ -1,9 +1,12 @@
 // The nautilus playground: VS Code's workbench (monaco-vscode-api) running
 // the nautilus extension's web build, with nautilus itself (naut.wasm) in a
-// worker on this page. Nothing is installed and nothing leaves the browser.
+// worker on this page. Nothing is installed, and nothing leaves the browser
+// unless the visitor shares the project (share/).
 //
 //   ?example=<name>   one of ../examples/index.json (default: sealin)
 //   ?project=<url>    a project JSON: {path: text} or {files, open, title}
+//   ?p=<id>           a saved project (/playground/p/<id> on the docs site;
+//                     playground/share keeps them)
 //   #project=<code>   a share link: the project itself (keep.js)
 //
 // The visitor's edits are kept in their browser, apart from the project
@@ -61,6 +64,7 @@ import * as kept from './keep.js';
 const ENGINE = new URL('../', location.href); // the package's dist/: worker.js, naut.wasm, examples/
 const EXTENSION = new URL('./extension/', location.href); // the extension's web build and assets
 const PLAYGROUND_URL = 'http://playground.nautilus'; // the extension's controller URL (src/web/engine.ts)
+const SAVED = new URL('/playground/api/p', location.origin); // playground/share, beside the docs site
 
 self.MonacoEnvironment = {
 	getWorkerUrl: (_id, label) => (label === 'extensionHostWorkerMain' ? new URL(extHostWorkerUrl, location.href).href : undefined),
@@ -83,7 +87,9 @@ const fail = (t) => {
 
 /**
  * The project this page was opened on, as published: {key, kind, project}.
- * key names it in the visitor's kept copies; kind is example, url or share.
+ * key names it in the visitor's kept copies; kind is example, url, saved
+ * or share. drifted names the example a share link was made from when
+ * that example has changed since.
  */
 async function loadSource(params) {
 	const code = new URLSearchParams(location.hash.slice(1)).get('project');
@@ -95,7 +101,17 @@ async function loadSource(params) {
 		const example = await fetchExample(shared.from);
 		const files = { ...example.files, ...shared.files };
 		for (const f of shared.removed) delete files[f];
-		return { key, kind: 'share', project: { ...example, title: shared.title, open: shared.open ?? example.open, files } };
+		const drifted = shared.base && shared.base !== (await kept.fingerprint(example.files)) ? example.title : undefined;
+		return { key, kind: 'share', drifted, project: { ...example, title: shared.title, open: shared.open ?? example.open, files } };
+	}
+	const id = params.get('p');
+	if (id) {
+		if (!/^[a-z2-7]{12}$/.test(id)) throw new Error('this link does not name a saved project');
+		const r = await fetch(`${SAVED}/${id}`);
+		if (r.status === 410) throw new Error('the project at this link was taken down');
+		if (!r.ok) throw new Error(r.status === 404 ? 'there is no saved project at this link' : `could not load the saved project (${r.status})`);
+		const p = await r.json();
+		return { key: 'saved:' + id, kind: 'saved', project: { ...p, open: p.open?.length ? p.open : ['nautilus.yaml'] } };
 	}
 	const url = params.get('project');
 	if (url) {
@@ -124,7 +140,10 @@ async function fetchExample(name) {
  */
 function shareBase() {
 	try {
-		if (window.parent !== window) return window.parent.location.origin + window.parent.location.pathname;
+		if (window.parent !== window) {
+			const at = window.parent.location;
+			return at.origin + at.pathname.replace(/\/p\/[a-z2-7]+\/?$/, '/');
+		}
 	} catch {
 		// Framed by another site: link to the playground itself.
 	}
@@ -246,8 +265,33 @@ async function main() {
 	// A project that began as one of our examples (or a link to one) is
 	// shared as its changes to that example.
 	const example = source.kind === 'example' ? source.project : project.name ? await fetchExample(project.name).catch(() => null) : null;
-	const shareLink = async () =>
-		shareBase() + '#project=' + (await kept.encodeProject(kept.sharePayload(project, await pg.files(), example)));
+	const shareLink = async () => {
+		const files = await pg.files();
+		// An example as published: a link to the example itself.
+		if (source.kind === 'example' && kept.sameFiles(files, source.project.files)) {
+			return shareBase() + '?example=' + encodeURIComponent(params.get('example') || 'sealin');
+		}
+		// Saved by playground/share: a short link that always opens this
+		// version. Without it (the service is down, or this is a dev
+		// server), the whole project goes in the link instead.
+		try {
+			const { title, open, hmi, name } = project;
+			const r = await fetch(SAVED, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ title, open, hmi, name, files })
+			});
+			const out = await r.json().catch(() => ({}));
+			if (r.ok && out.id) return new URL(`/playground/p/${out.id}`, location.origin).href;
+			if (r.status === 400 || r.status === 413) throw Object.assign(new Error(out.error || 'the project could not be saved'), { refused: true });
+			console.warn('nautilus playground: not saved, sharing it in the link:', r.status, out.error);
+		} catch (e) {
+			if (e.refused) throw e;
+			console.warn('nautilus playground: not saved, sharing it in the link:', e);
+		}
+		const base = example && (await kept.fingerprint(example.files));
+		return shareBase() + '#project=' + (await kept.encodeProject(kept.sharePayload(project, files, example, base)));
+	};
 	window.nautilusPlayground = { title: project.title, files: () => pg.files(), shareLink };
 	registerPlaygroundCommands(source, keep, shareLink);
 	registerFileSystemOverlay(1, new EngineFileSystem(pg, '/project', keep.edited));
@@ -338,6 +382,7 @@ async function main() {
 	await openProject(project);
 	splash?.remove();
 	if (copy) void welcomeBack(source, copy, keep);
+	if (source.drifted) void driftNotice(source.drifted);
 
 	// For the framing page: keys typed while focus is outside this frame
 	// (its nav, its toolbar) never reach the workbench, so it forwards the
@@ -352,7 +397,18 @@ async function main() {
 	window.dispatchEvent(new Event('nautilus-playground-ready'));
 }
 
-const SOURCE_NAME = { example: 'example', url: 'project', share: 'shared project' };
+const SOURCE_NAME = { example: 'example', url: 'project', saved: 'saved project', share: 'shared project' };
+
+/** A share link's changes were laid over an example that has changed since. */
+async function driftNotice(example) {
+	const notifications = await getService(INotificationService);
+	notifications.prompt(
+		Severity.Warning,
+		`This link holds changes to the ${example} example, which has been updated since the link was made. Some of the changes may not fit the new version.`,
+		[],
+		{ sticky: true }
+	);
+}
 
 /** Their copy is back: say so, and whether the source changed since. */
 async function welcomeBack(source, copy, keep) {
@@ -409,8 +465,12 @@ function registerPlaygroundCommands(source, keep, shareLink) {
 			async run(accessor) {
 				const clipboard = accessor.get(IClipboardService);
 				const notifications = accessor.get(INotificationService);
-				await clipboard.writeText(await shareLink());
-				notifications.info('Share link copied. The whole project is in the link: anyone who opens it gets their own copy to change.');
+				try {
+					await clipboard.writeText(await shareLink());
+					notifications.info('Share link copied. Anyone who opens it gets their own copy to change.');
+				} catch (e) {
+					notifications.error(`Could not share the project: ${e.message}`);
+				}
 			}
 		}
 	);

@@ -30,18 +30,33 @@ loader read it as if it were on disk, under `/project`.
 ## Their copy and ours, and share links
 
 A project opens from a source that is ours and never changes: an example,
-a `?project=` URL, or a share link. The first edit makes the visitor's own
-copy, kept in their browser (IndexedDB, `app/keep.js`) under the source's
-key with a fingerprint of the source it started from. A later visit opens
-their copy; if the source has changed since, a notice offers the new
-version or keeps theirs. "Playground: Discard My Changes" goes back to the
-source. Nothing is sent anywhere.
+a `?project=` URL, a saved project, or a share link. The first edit makes
+the visitor's own copy, kept in their browser (IndexedDB, `app/keep.js`)
+under the source's key with a fingerprint of the source it started from. A
+later visit opens their copy; if the source has changed since, a notice
+offers the new version or keeps theirs. "Playground: Discard My Changes"
+goes back to the source.
 
-A share link (the Share button, or "Playground: Copy Share Link") carries
-the project itself in the URL's `#project=`: gzip, then base64url. A
-project made from one of our examples carries only the files that differ
-from it, so a link to a changed lift-station is a few KB. Opening a link
-gives whoever opens it their own copy.
+The Share button (or "Playground: Copy Share Link") saves the project as it
+stands with `share/`, a small service beside the docs site, and copies a
+short link: `/playground/p/<id>`. A saved project never changes; its id is
+a hash of it, so the same project saved twice is one link, and an edited
+one saved again is a new link. Opening a link gives whoever opens it their
+own copy. An example shared unchanged is just `?example=<name>`.
+
+When the project cannot be saved (the service is down, or this is a dev
+server), the link carries the project itself instead, in `#project=`: gzip,
+then base64url. A project made from one of our examples carries only the
+files that differ from it, and the example's fingerprint; opened after the
+example has changed, it says the changes may not fit.
+
+`share/` keeps each project as a gzipped JSON file on a volume (no
+database), with a size cap, a rate limit, and a way to take one down
+(`DELETE` with `SHARE_ADMIN_TOKEN`; it stays down if saved again). See
+`share/main.go` and `share/k8s.yml`. To try it all on one machine, after
+`scripts/build.sh` and `npm run build` in `website/`:
+
+    go run ./playground/share -data /tmp/shares -site website/dist -addr 127.0.0.1:5181
 
 ## The dashboard and the HMI
 
