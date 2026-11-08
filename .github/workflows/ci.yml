@@ -210,6 +210,52 @@ jobs:
       # the webview's .svelte and .ts files. Warnings (a11y) don't fail it.
       - name: Type-check the webview (svelte-check)
         run: npm --prefix webview-ui run check -- --output human
+  # The playground as the docs deploy builds it (docs.yml): build.sh, the
+  # docs image with the playground inside, nginx's config, and the share
+  # service's image. Without this, the first full build of a change is the
+  # deploy to main, and an nginx config that does not load takes the docs
+  # site down with it.
+  playground:
+    name: Playground — full build, docs and share images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: share links (keep.js)
+        run: node --test playground/app/keep.test.js
+      - run: ./playground/scripts/build.sh
+      - name: docs image
+        run: docker build -f website/Dockerfile -t nautilus-docs:ci .
+      - name: share image
+        run: docker build -f playground/share/Dockerfile -t nautilus-playground-share:ci .
+      # The image's nginx starts, and serves what the playground needs the
+      # way it should (caching, short links, the share API left to the ingress).
+      - name: docs image serves the playground
+        shell: bash
+        run: |
+          docker run --rm nautilus-docs:ci nginx -t
+          docker run -d --name docs -p 8080:80 nautilus-docs:ci
+          trap 'docker rm -f docs >/dev/null' EXIT
+          for i in $(seq 20); do curl -fs -o /dev/null http://localhost:8080/ && break; sleep 0.5; done
+          code() { curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080$1"; }
+          header() { curl -s -D - -o /dev/null "http://localhost:8080$1" | tr -d '\r' | sed -n "s/^$2: //Ip"; }
+          build=$(curl -fs http://localhost:8080/playground/engine/engine.json | sed -n 's/.*"build":"\([0-9a-z]*\)".*/\1/p')
+          version=$(curl -fs http://localhost:8080/playground/engine/engine.json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+          test -n "$build"
+          fail=0
+          check() { if [ "$2" != "$3" ]; then echo "::error::$1: got '$2', want '$3'"; fail=1; else echo "ok  $1"; fi; }
+          check "/playground/" "$(code /playground/)" 200
+          check "short link" "$(code /playground/p/abcdefghijkl)" 200
+          check "malformed short link" "$(code /playground/p/short)" 404
+          check "share API (the ingress's)" "$(code /playground/api/healthz)" 404
+          check "this build's wasm" "$(header "/playground/engine/naut.wasm?v=$version.$build" cache-control)" "public, max-age=31536000, immutable"
+          check "another build's wasm" "$(header "/playground/engine/naut.wasm?v=old.000000000000" cache-control)" "no-cache"
+          check "an example" "$(header /playground/engine/examples/lift-station.json cache-control)" "no-cache"
+          check "precompressed wasm" "$(curl -s -H 'Accept-Encoding: gzip' -D - -o /dev/null "http://localhost:8080/playground/engine/naut.wasm?v=$version.$build" | tr -d '\r' | sed -n 's/^content-encoding: //Ip')" gzip
+          exit $fail
   # The webview's real-input gesture harness (CDP-driven headless Chrome over
   # the production bundles: mimic, FBD, LD, SFC). ubuntu-latest ships Chrome.
   vscode-iec-gestures:

@@ -389,13 +389,19 @@ async function main() {
 	// command palette's keys here.
 	const commands = await getService(ICommandService);
 	relayWebviewKeys(commands, await getService(IKeybindingService));
+	const notifications = await getService(INotificationService);
 	Object.assign(window.nautilusPlayground, {
+		/** The framing page's Share button copied a link. */
+		shared: () => notifications.info(SHARED),
 		showCommands: () => commands.executeCommand('workbench.action.showCommands'),
 		focus: () => commands.executeCommand('workbench.action.focusActiveEditorGroup'),
 		views: await views
 	});
 	window.dispatchEvent(new Event('nautilus-playground-ready'));
 }
+
+/** Said whenever a share link is copied: a saved project is public to its link. */
+const SHARED = 'Link copied. Anyone with the link can open this project and get their own copy to change.';
 
 const SOURCE_NAME = { example: 'example', url: 'project', saved: 'saved project', share: 'shared project' };
 
@@ -467,7 +473,7 @@ function registerPlaygroundCommands(source, keep, shareLink) {
 				const notifications = accessor.get(INotificationService);
 				try {
 					await clipboard.writeText(await shareLink());
-					notifications.info('Share link copied. Anyone who opens it gets their own copy to change.');
+					notifications.info(SHARED);
 				} catch (e) {
 					notifications.error(`Could not share the project: ${e.message}`);
 				}

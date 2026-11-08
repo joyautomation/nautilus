@@ -49,7 +49,7 @@ const description =
       <nav class="actions" aria-label="Playground">
         <a id="open-hmi" hidden target="_blank" rel="noopener">Open HMI</a>
         <a id="open-dashboard" hidden target="_blank" rel="noopener">Open dashboard</a>
-        <button id="share" type="button" disabled title="Save the project as it stands and copy a link to it">Share</button>
+        <button id="share" type="button" disabled title="Save the project as it stands and copy a link to it. Anyone with the link can open it.">Share</button>
         <button id="download" type="button" disabled>Download project</button>
         <a href="vscode:extension/joyauto.vscode-iec">Open in VS Code</a>
         <a class="primary" href="/tutorial/">Install nautilus</a>
@@ -168,6 +168,7 @@ const description =
     title: string;
     files(): Promise<Record<string, string>>;
     shareLink?: () => Promise<string>;
+    shared?: () => unknown;
     showCommands?: () => Promise<unknown>;
     focus?: () => Promise<unknown>;
     views?: Views;
@@ -227,6 +228,7 @@ const description =
         await navigator.clipboard.writeText(await link);
       }
       done('Link copied');
+      app()?.shared?.();
     } catch {
       let l: string;
       try {

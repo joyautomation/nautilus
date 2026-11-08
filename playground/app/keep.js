@@ -88,6 +88,20 @@ export function sharePayload({ title, open, hmi }, files, example, base) {
 }
 
 /**
+ * A file name a project can have, as playground/share allows: relative,
+ * no . or .. or empty segments, no backslashes or control characters.
+ */
+export function plainPath(name) {
+	return (
+		typeof name === 'string' &&
+		name.length > 0 &&
+		name.length <= 200 &&
+		!/[\\\x00-\x1f\x7f]/.test(name) &&
+		name.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
+	);
+}
+
+/**
  * A share link's project, checked: {title, open, hmi, files, from?, base?, removed?}.
  * With from, files are the changes to that example (loadSource merges them).
  */
@@ -105,6 +119,7 @@ export async function decodeProject(code) {
 	if (!files || (!from && !('nautilus.yaml' in files)) || Object.values(files).some((t) => typeof t !== 'string')) {
 		throw new Error('this share link does not hold a nautilus project');
 	}
+	if (!Object.keys(files).every(plainPath)) throw new Error('this share link names a file a project cannot have');
 	return {
 		title: typeof p.title === 'string' ? p.title : 'shared project',
 		open: Array.isArray(p.open) ? p.open.filter((f) => typeof f === 'string') : undefined,
