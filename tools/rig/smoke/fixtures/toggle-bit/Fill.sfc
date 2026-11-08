@@ -1,0 +1,24 @@
+PROGRAM Fill
+(* A two-step fill for smoke check 23: an action association and a
+   one-variable transition, the SFC chart's tag elements. *)
+VAR_EXTERNAL
+    FillGo    : BOOL;
+    FillValve : BOOL;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+  END_STEP
+
+  STEP Filling:
+    N  FillValve;
+  END_STEP
+
+  TRANSITION FROM Idle TO Filling := FillGo;
+  END_TRANSITION
+
+  TRANSITION FROM Filling TO Idle := NOT FillGo;
+  END_TRANSITION
+
+END_SFC
+END_PROGRAM

@@ -51,16 +51,7 @@ import {
   type FlatTypes,
 } from "./tagTypes";
 import { activeDiagramTag, diagramHasFocus } from "./diagramSelection";
-
-/** What a tag command is invoked with: a tag name (a hover link), a Live
- * Values tree item ({tag} / {name}), or a diagram element's right-click
- * context ({nautilusTag}, data-vscode-context in the webview). */
-type TagArg = string | { tag?: string; name?: string; nautilusTag?: string } | undefined;
-
-function tagOf(arg: TagArg): string | undefined {
-  if (typeof arg === "string") return arg || undefined;
-  return arg?.tag ?? arg?.name ?? arg?.nautilusTag ?? undefined;
-}
+import { noTagMessage, tagOf, toggleBitDecision, type TagArg } from "./liveActions";
 
 type Frame = {
   ts: number;
@@ -290,9 +281,7 @@ export class LiveValues implements vscode.Disposable {
     // the selected element when a diagram has focus).
     const name = tagOf(arg) ?? this.identifierAtCursor();
     if (!name) {
-      void notifyWarning(diagramHasFocus()
-        ? "nautilus: select a contact or coil in the diagram, then Set Live Value"
-        : "nautilus: put the cursor on a tag, then Set Live Value");
+      void notifyWarning(noTagMessage(diagramHasFocus(), "Set Live Value"));
       return;
     }
     const current = this.valueFor(name);
@@ -333,28 +322,23 @@ export class LiveValues implements vscode.Disposable {
   async toggleBit(arg?: TagArg): Promise<void> {
     const name = tagOf(arg) ?? this.identifierAtCursor();
     if (!name) {
-      void notifyWarning(diagramHasFocus()
-        ? "nautilus: select a contact or coil in the diagram, then Toggle Bit"
-        : "nautilus: put the cursor on a BOOL tag, then Toggle Bit");
+      void notifyWarning(noTagMessage(diagramHasFocus(), "Toggle Bit", "a BOOL tag"));
       return;
     }
     const ft = this.typeOf(name);
     const current = this.valueFor(name);
-    if (ft && ft.t.toUpperCase() !== "BOOL") {
-      void notifyWarning(`nautilus: Toggle Bit works on BOOL tags; ${name} is ${typeLabel(ft)}`);
+    const d = toggleBitDecision(name, {
+      type: ft?.t,
+      typeLabel: typeLabel(ft),
+      current,
+      shown: current === undefined ? undefined : this.display(current, name),
+      forced: !!this.forcedFor(name),
+    });
+    if ("refuse" in d) {
+      void notifyWarning(d.refuse);
       return;
     }
-    if (typeof current !== "boolean") {
-      void notifyWarning(current === undefined
-        ? `nautilus: no live value for ${name} yet (is the controller running?)`
-        : `nautilus: Toggle Bit works on BOOL tags; ${name} is ${this.display(current, name)}`);
-      return;
-    }
-    if (this.forcedFor(name)) {
-      void notifyWarning(`nautilus: ${name} is forced, so a toggle would not stick; Unforce it first`);
-      return;
-    }
-    await this.postValue(name, !current, !current ? "TRUE" : "FALSE");
+    await this.postValue(name, d.write, d.shown);
   }
 
   /** POST /api/tags, and say how it went. */
@@ -409,9 +393,7 @@ export class LiveValues implements vscode.Disposable {
   async force(arg?: TagArg): Promise<void> {
     const name = tagOf(arg) ?? this.identifierAtCursor(true);
     if (!name) {
-      void notifyWarning(diagramHasFocus()
-        ? "nautilus: select a contact or coil in the diagram, then Force…"
-        : "nautilus: put the cursor on a tag, then Force…");
+      void notifyWarning(noTagMessage(diagramHasFocus(), "Force…"));
       return;
     }
     const forcedAt = this.forcedFor(name);
@@ -817,14 +799,18 @@ export class LiveValues implements vscode.Disposable {
           if (seg.prefix === "" && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(site.path)) {
             const arg = encodeURIComponent(JSON.stringify([site.path]));
             const links: string[] = [];
-            if (!forced && !site.path.includes(".")) links.push(`[$(edit) Set value…](command:nautilus.setValue?${arg})`);
+            if (!forced && !site.path.includes(".")) {
+              // A BOOL also flips in one click: Toggle Bit, as Ctrl+T does.
+              if (typeof site.value === "boolean") links.push(`[$(arrow-swap) Toggle bit](command:nautilus.toggleBit?${arg})`);
+              links.push(`[$(edit) Set value…](command:nautilus.setValue?${arg})`);
+            }
             links.push(`[$(lock) Force…](command:nautilus.force?${arg})`);
             if (forced) {
               const farg = encodeURIComponent(JSON.stringify([forced]));
               links.push(`[$(unlock) Remove force](command:nautilus.unforce?${farg})`);
             }
             hover.appendMarkdown("\n\n" + links.join(" · "));
-            hover.isTrusted = { enabledCommands: ["nautilus.setValue", "nautilus.force", "nautilus.unforce"] };
+            hover.isTrusted = { enabledCommands: ["nautilus.toggleBit", "nautilus.setValue", "nautilus.force", "nautilus.unforce"] };
             hover.supportThemeIcons = true;
           }
           (forced ? forcedDecos : enumText(site.value, ft) !== undefined ? enumDecos : decos).push({

@@ -51,6 +51,10 @@ type Model struct {
 	// draws and a programmer calls it ("network 4") — and every node
 	// carries the Number it belongs to (Node.Net).
 	Networks []Network `json:"networks,omitempty"`
+	// Block marks a FUNCTION_BLOCK body: its variables are the block's pins
+	// and locals, not controller tags, so the diagram offers no live tag
+	// actions (Toggle Bit, Set Live Value, Force) on them.
+	Block bool `json:"block,omitempty"`
 }
 
 // Network is one numbered network of the body. Implicit marks the
@@ -204,7 +208,7 @@ func buildModelIn(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*
 		src:         strings.Split(src, "\n"),
 		srcStripped: strings.Split(stripComments(src), "\n"),
 		exprOf:      map[string]callExpr{},
-		m:           &Model{Name: pouName(header), Vars: parseVarDecls(header)},
+		m:           &Model{Name: pouName(header), Block: pouIsBlock(header), Vars: parseVarDecls(header)},
 		nodes:       map[string]*Node{},
 		inputs:      map[string]*Node{},
 		coils:       map[string]*Node{},
@@ -991,17 +995,33 @@ func BlockPins(fn string, n int) []string { return blockPins(fn, n) }
 // calls and the language server).
 func blockPins(fn string, n int) []string { return ir.FormalNames(fn, n) }
 
-var pouNameRe = regexp.MustCompile(`(?im)^\s*(?:PROGRAM|FUNCTION_BLOCK)\s+([A-Za-z_][A-Za-z0-9_]*)`)
+var pouNameRe = regexp.MustCompile(`(?im)^\s*(PROGRAM|FUNCTION_BLOCK)\s+([A-Za-z_][A-Za-z0-9_]*)`)
+
+// ownPOU is the PROGRAM/FUNCTION_BLOCK header line that owns the FBD body:
+// the LAST one in the header, since a file may define ST library blocks
+// ahead of its program. Matched against comment-stripped text so a
+// `(* ... *)` doc comment whose text happens to start a line with "PROGRAM "
+// or "FUNCTION_BLOCK " isn't mistaken for the real declaration. nil if none.
+func ownPOU(header string) []string {
+	all := pouNameRe.FindAllStringSubmatch(stripComments(header), -1)
+	if len(all) == 0 {
+		return nil
+	}
+	return all[len(all)-1]
+}
 
 // pouName extracts the POU identifier from the ST header, "" if not found.
-// Matched against comment-stripped text so a `(* ... *)` doc comment whose
-// text happens to start a line with "PROGRAM " or "FUNCTION_BLOCK " isn't
-// mistaken for the real declaration.
 func pouName(header string) string {
-	if m := pouNameRe.FindStringSubmatch(stripComments(header)); m != nil {
-		return m[1]
+	if m := ownPOU(header); m != nil {
+		return m[2]
 	}
 	return ""
+}
+
+// pouIsBlock reports whether the body's POU is a FUNCTION_BLOCK.
+func pouIsBlock(header string) bool {
+	m := ownPOU(header)
+	return m != nil && strings.EqualFold(m[1], "FUNCTION_BLOCK")
 }
 
 // Header declaration scanning for the variables panel — the shared

@@ -484,22 +484,22 @@
         },
         {
           "command": "nautilus.toggleBit",
-          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "when": "webviewId =~ /^(nautilus\\.(ld|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && nautilusTag && nautilus.liveConnected",
           "group": "nautilus@0"
         },
         {
           "command": "nautilus.setValue",
-          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "when": "webviewId =~ /^(nautilus\\.(ld|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && nautilusTag && nautilus.liveConnected",
           "group": "nautilus@1"
         },
         {
           "command": "nautilus.force",
-          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected",
+          "when": "webviewId =~ /^(nautilus\\.(ld|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && nautilusTag && nautilus.liveConnected",
           "group": "nautilus@2"
         },
         {
           "command": "nautilus.unforce",
-          "when": "webviewId =~ /^nautilus\\.(ldDiagram|ldPreview)$/ && nautilusTag && nautilus.liveConnected && nautilus.forcesActive",
+          "when": "webviewId =~ /^(nautilus\\.(ld|fbd|sfc)Diagram|nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && nautilusTag && nautilus.liveConnected && nautilus.forcesActive",
           "group": "nautilus@3"
         },
         {
@@ -516,7 +516,7 @@
       "editor/context": [
         {
           "command": "nautilus.toggleBit",
-          "when": "resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc && nautilus.liveConnected",
+          "when": "(resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc) && nautilus.liveConnected",
           "group": "nautilus@0"
         },
         {
@@ -1071,7 +1071,7 @@
         "command": "nautilus.toggleBit",
         "key": "ctrl+t",
         "mac": "cmd+t",
-        "when": "(activeCustomEditorId == nautilus.ldDiagram || activeWebviewPanelId == nautilus.ldPreview) && nautilus.liveConnected"
+        "when": "(activeCustomEditorId =~ /^nautilus\\.(ld|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && nautilus.liveConnected"
       }
     ]
   },
@@ -1087,7 +1087,7 @@
     "compile:web": "node esbuild.web.mjs --minify",
     "check:web": "tsc -p tsconfig.web.json",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/cliPath.test.js out/cli.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/cliPath.test.js out/cli.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js out/liveActions.test.js out/diagramSelection.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js",
     "gen:kind-schema": "npm run compile && node out/kindSchema.js --write"

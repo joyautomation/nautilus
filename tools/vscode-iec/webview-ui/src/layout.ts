@@ -68,6 +68,8 @@ export type FbdModel = {
   /** The project manifest's tags: in scope without a declaration
    * (#177/#210), so the palette and a retag offer them. */
   tags?: { name: string; type?: string; role?: string; unit?: string; desc?: string }[];
+  /** A FUNCTION_BLOCK's body: its chips are pins and locals, not tags. */
+  block?: boolean;
 };
 
 /** Arrays always arrays: an older CLI (or saved webview state) can carry
