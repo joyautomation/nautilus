@@ -12,6 +12,7 @@
 // Same exports as ../userComponents.ts, so mimicEditor.ts is unchanged.
 import * as vscode from "vscode";
 import { BUILTIN_COMPONENT_NAMES } from "../builtinComponents";
+import { locateComponentSource } from "../mimicComponents";
 import { customComponentNames, describeError, type ComponentDiagnostic } from "../userComponentEntry";
 import type { compileComponents } from "./componentCompiler";
 
@@ -19,7 +20,6 @@ export const BUILTIN_COMPONENTS = new Set(BUILTIN_COMPONENT_NAMES);
 
 const SCHEME = "nautilus-components";
 const DEBOUNCE_MS = 400;
-const SKIP_DIRS = new Set(["node_modules", ".git", "out", "dist", "build", ".svelte-kit"]);
 
 /** The built scripts, by path: the webview reads them through this. */
 class BuiltScripts implements vscode.FileSystemProvider {
@@ -91,6 +91,7 @@ export class UserComponentManager implements vscode.Disposable {
   /** The files the last build used: a change to one rebuilds. */
   private watched = new Set<string>();
   private version = 0;
+  private lastCode = "";
   private building = false;
   private rebuildQueued = false;
   private debounce?: ReturnType<typeof setTimeout>;
@@ -157,23 +158,11 @@ export class UserComponentManager implements vscode.Disposable {
     this.debounce = setTimeout(() => void this.rebuild(), DEBOUNCE_MS);
   }
 
-  /** name -> the project's {name}.svelte, the shortest path winning as on
-   * a desktop. By walking the project: the playground has no file search
-   * (workspace.findFiles answers with files that do not match its glob). */
+  /** name -> the project's {name}.svelte, as a desktop finds it. */
   private async locate(names: string[]): Promise<Map<string, vscode.Uri>> {
-    const all: vscode.Uri[] = [];
-    const walk = async (dir: vscode.Uri): Promise<void> => {
-      for (const [entry, type] of await vscode.workspace.fs.readDirectory(dir).then(undefined, () => [])) {
-        const uri = vscode.Uri.joinPath(dir, entry);
-        if (type === vscode.FileType.Directory && !SKIP_DIRS.has(entry)) await walk(uri);
-        else if (type === vscode.FileType.File && entry.endsWith(".svelte")) all.push(uri);
-      }
-    };
-    for (const folder of vscode.workspace.workspaceFolders ?? []) await walk(folder.uri);
-    all.sort((a, b) => a.path.length - b.path.length || a.path.localeCompare(b.path));
     const found = new Map<string, vscode.Uri>();
     for (const name of names) {
-      const uri = all.find((u) => u.path.endsWith(`/${name}.svelte`));
+      const uri = await locateComponentSource(name);
       if (uri) found.set(name, uri);
     }
     return found;
@@ -185,6 +174,7 @@ export class UserComponentManager implements vscode.Disposable {
       return;
     }
     this.building = true;
+    let unchanged = false;
     try {
       const names = [...this.pendingNames].sort();
       if (!names.length) return;
@@ -205,8 +195,16 @@ export class UserComponentManager implements vscode.Disposable {
       };
       const result = await compile(Object.fromEntries([...located].map(([n, uri]) => [n, uri.path])), read, { sources });
 
-      this.diagnostics = [...missing, ...result.diagnostics];
+      const diagnostics = [...missing, ...result.diagnostics];
       this.watched = new Set(result.files);
+      // A save that changes nothing built (autosave, a comment in a file
+      // nothing imports) does not reload the open mimics.
+      if (result.code === this.lastCode && JSON.stringify(diagnostics) === JSON.stringify(this.diagnostics)) {
+        unchanged = true;
+        return;
+      }
+      this.lastCode = result.code;
+      this.diagnostics = diagnostics;
       const previous = this.bundleUri();
       this.version++;
       this.scripts.files.set(this.bundleUri()!.path, new TextEncoder().encode(result.code));
@@ -215,7 +213,7 @@ export class UserComponentManager implements vscode.Disposable {
       this.diagnostics = [{ component: "*", message: "building custom components: " + describeError(err) }];
     } finally {
       this.building = false;
-      this.onDidChangeEmitter.fire();
+      if (!unchanged) this.onDidChangeEmitter.fire();
       if (this.rebuildQueued) {
         this.rebuildQueued = false;
         void this.rebuild();

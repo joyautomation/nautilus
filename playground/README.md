@@ -58,6 +58,33 @@ database), with a size cap, a rate limit, and a way to take one down
 
     go run ./playground/share -data /tmp/shares -site website/dist -addr 127.0.0.1:5181
 
+## Custom components
+
+A project's own `{Name}.svelte` components render in the mimic editor as
+they do on a desktop, compiled in the browser by the extension's web build
+(`tools/vscode-iec/src/web/componentCompiler.ts`):
+
+- Svelte's compiler turns each component, and the `.svelte`, `.ts`, `.js`,
+  `.json` and `.css` files it imports (`$lib` included), into JavaScript.
+  Sucrase strips TypeScript and turns ES modules into CommonJS, and a small
+  registry links them into one script. Edit a component and the mimic
+  updates when the file saves.
+- Svelte and the HMI kit come from `user-runtime.js`, built once from the
+  same Svelte the compiler is (`webview-ui/vite.runtime.config.ts`). So a
+  component can import `svelte/*`, `@joyautomation/nautilus-hmi` and the
+  project's own files. Any other package is a placeholder that says which
+  import. The playground's Svelte is used, not the project's pin.
+- The compiler (275 KB gzipped) and the runtime (98 KB) load the first time
+  a mimic uses a custom component.
+
+The examples carry their HMI sources (lift-station's `hmi/`) for this. Open
+HMI still shows the HMI built with the playground, so it does not follow
+edits to components.
+
+The app also gives the workbench a file search over the project
+(`app/fileSearch.js`): without it `workspace.findFiles` ignored its glob,
+and the extension's component index and test discovery found wrong files.
+
 ## The dashboard and the HMI
 
 `naut run` serves the built-in dashboard at `/`, or a built HMI

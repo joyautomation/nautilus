@@ -36,6 +36,7 @@ import getExtensions from '@codingame/monaco-vscode-extensions-service-override'
 import getFiles, { registerFileSystemOverlay } from '@codingame/monaco-vscode-files-service-override';
 import getWorkingCopy from '@codingame/monaco-vscode-working-copy-service-override';
 import getDialogs from '@codingame/monaco-vscode-dialogs-service-override';
+import getSearch from '@codingame/monaco-vscode-search-service-override';
 import getTheme from '@codingame/monaco-vscode-theme-service-override';
 import getKeybindings from '@codingame/monaco-vscode-keybindings-service-override';
 import getQuickAccess from '@codingame/monaco-vscode-quickaccess-service-override';
@@ -60,6 +61,10 @@ import { serveBridge } from '../src/bridge.js';
 import { EngineFileSystem } from './engineFs.js';
 import { NautShellBackend } from './nautShell.js';
 import * as kept from './keep.js';
+import { projectFileSearch } from './fileSearch.js';
+import { ISearchService } from '@codingame/monaco-vscode-api/vscode/vs/workbench/services/search/common/search.service';
+import { SearchProviderType } from '@codingame/monaco-vscode-api/vscode/vs/workbench/services/search/common/search';
+import { Schemas } from '@codingame/monaco-vscode-api/vscode/vs/base/common/network';
 
 const ENGINE = new URL('../', location.href); // the package's dist/: worker.js, naut.wasm, examples/
 const EXTENSION = new URL('./extension/', location.href); // the extension's web build and assets
@@ -345,6 +350,11 @@ async function main() {
 			// VS Code's own dialogs, not the browser's confirm() (Discard My Changes,
 			// the explorer's delete).
 			...getDialogs(),
+			// File search over the project (the engine's file system): without
+			// it workspace.findFiles answers with the open editor whatever the
+			// glob, and the extension's component index, test discovery and
+			// custom components find the wrong files. Also the Search view.
+			...getSearch(),
 			...getTheme(),
 			...getKeybindings(),
 			...getQuickAccess(),
@@ -370,6 +380,14 @@ async function main() {
 			defaultLayout: { force: true, editors: [], layout: { editors: { orientation: 0, groups: [{ size: 1 }] } } },
 			productConfiguration: { nameShort: 'nautilus playground', nameLong: 'nautilus playground' }
 		}
+	);
+
+	// findFiles and Quick Open over the project, globs honoured (fileSearch.js).
+	const search = await getService(ISearchService);
+	search.registerSearchResultProvider(
+		Schemas.file,
+		SearchProviderType.file,
+		projectFileSearch(async () => Object.keys(await pg.files()))
 	);
 
 	// The nautilus extension, as built for the web (tools/vscode-iec).

@@ -87,8 +87,14 @@ export class EngineFileSystem {
 	}
 
 	async writeFile(resource, content) {
+		// A new file is ADDED, not UPDATED: file watchers' onDidCreate (the
+		// mimic palette picking up a new component) only hears of ADDED.
+		const existed = await this.fs('stat', resource.path).then(
+			() => true,
+			() => false
+		);
 		await this.fs('writeFile', resource.path, dec.decode(content));
-		this._onDidChangeFile.fire([{ type: FileChangeType.UPDATED, resource }]);
+		this._onDidChangeFile.fire([{ type: existed ? FileChangeType.UPDATED : FileChangeType.ADDED, resource }]);
 		this.onEdit();
 	}
 

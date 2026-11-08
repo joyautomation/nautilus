@@ -104,6 +104,7 @@ test("a component that fails is left out with a reason; the rest still build", a
   const why = Object.fromEntries(result.diagnostics.map((d) => [d.component, d.message]));
   assert.deepEqual(Object.keys(why).sort(), ["Broken", "Charts", "Gone", "Missing"]);
   assert.match(why.Charts, /"chart\.js", which the playground cannot load/);
+  assert.match(why.Broken, /^\/p\/Broken\.svelte:1:\d+: /, "a compile error says where");
   assert.match(why.Missing, /"\.\/Nope\.svelte", which is not in the project/);
   assert.match(why.Gone, /not in the project/);
   assert.equal(typeof (await run(result.code)).registered?.Good?.mount, "function");

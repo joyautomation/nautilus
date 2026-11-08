@@ -76,8 +76,23 @@ const toCommonJs = (code: string, file: string) =>
 const stripTypes = (code: string, file: string) =>
   transform(code, { transforms: ["typescript"], filePath: file, disableESTransforms: true }).code;
 
+/** Svelte's errors carry where they are; the message alone does not. */
+function located(path: string, err: unknown): unknown {
+  const at = (err as { start?: { line: number; column: number } })?.start;
+  if (!at || !(err instanceof Error)) return err;
+  return new Error(`${path}:${at.line}:${at.column + 1}: ${err.message}`);
+}
+
 /** One file, as CommonJS. */
 function compileFile(path: string, text: string): string {
+  try {
+    return compileOne(path, text);
+  } catch (err) {
+    throw located(path, err);
+  }
+}
+
+function compileOne(path: string, text: string): string {
   if (path.endsWith(".svelte")) {
     return toCommonJs(compile(text, { filename: path, generate: "client", css: "injected" }).js.code, path);
   }
