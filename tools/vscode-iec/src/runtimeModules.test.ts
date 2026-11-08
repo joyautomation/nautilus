@@ -31,3 +31,12 @@ test("the runtime has every entry the kit exports", { skip: !HAS_DEPS && "webvie
   assert.deepEqual([...KIT_MODULES].sort(), keys.filter((k) => !k.endsWith(".css")).map(name).sort());
   assert.deepEqual([...KIT_STYLES].sort(), keys.filter((k) => k.endsWith(".css")).map(name).sort());
 });
+
+test("the compiler the tests use is the one the playground ships", { skip: !HAS_DEPS && "webview-ui deps not installed" }, () => {
+  // esbuild.web.mjs bundles webview-ui's svelte/compiler (and the runtime
+  // is webview-ui's svelte); componentCompiler.test.ts compiles with this
+  // package's. Pinned alike, so the tests compile what visitors get.
+  const ours = readJson(path.join(__dirname, "..", "node_modules", "svelte", "package.json")).version;
+  const webview = readJson(path.join(WEBVIEW, "svelte", "package.json")).version;
+  assert.equal(ours, webview);
+});

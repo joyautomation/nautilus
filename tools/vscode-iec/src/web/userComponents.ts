@@ -19,7 +19,9 @@ import type { compileComponents } from "./componentCompiler";
 export const BUILTIN_COMPONENTS = new Set(BUILTIN_COMPONENT_NAMES);
 
 const SCHEME = "nautilus-components";
-const DEBOUNCE_MS = 400;
+// Longer than a desktop's: autosave (400 ms) saves at every pause in typing,
+// and each rebuild reloads the open mimics.
+const DEBOUNCE_MS = 800;
 
 /** The built scripts, by path: the webview reads them through this. */
 class BuiltScripts implements vscode.FileSystemProvider {

@@ -1102,7 +1102,7 @@
     "@vscode/test-electron": "^3.1.0",
     "path-browserify": "^1.0.1",
     "sucrase": "3.35.1",
-    "svelte": "^5.56.4",
+    "svelte": "5.56.4",
     "typescript": "^5.4.0"
   }
 }
