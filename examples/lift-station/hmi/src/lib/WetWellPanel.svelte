@@ -7,13 +7,29 @@
 	import SeqStepTag from '$lib/SeqStepTag.svelte';
 	import { num, bool, str, writeTag, levelBuf } from '$lib/client.svelte';
 
-	const SETPOINTS = [
-		{ tag: 'LeadOnLevel', label: 'Lead on' },
-		{ tag: 'LagOnLevel', label: 'Lag on' },
-		{ tag: 'LagOffLevel', label: 'Lag off' },
-		{ tag: 'LeadOffLevel', label: 'Lead off' },
-		{ tag: 'LevelSP', label: 'Level SP (speed loop)', step: 0.5 },
-		{ tag: 'HighLevelAlmSP', label: 'High level alarm' }
+	type Setpoint = { tag: string; label: string; unit: string; max: number; step?: number };
+	// Where the duty/standby sequence starts and stops the pumps
+	// (sequence.sfc), the level loop that sets their speed in Auto
+	// (level.fbd, LIC-101), and the alarm.
+	const GROUPS: { title: string; items: Setpoint[] }[] = [
+		{
+			title: 'Pump starts and stops',
+			items: [
+				{ tag: 'LagOnLevel', label: 'Lag on', unit: '%', max: 100 },
+				{ tag: 'LeadOnLevel', label: 'Lead on', unit: '%', max: 100 },
+				{ tag: 'LagOffLevel', label: 'Lag off', unit: '%', max: 100 },
+				{ tag: 'LeadOffLevel', label: 'Lead off', unit: '%', max: 100 }
+			]
+		},
+		{
+			title: 'Level loop (speed in Auto)',
+			items: [
+				{ tag: 'LevelSP', label: 'Level SP', unit: '%', max: 100, step: 0.5 },
+				{ tag: 'MinSpeedHz', label: 'Min speed', unit: 'Hz', max: 60 },
+				{ tag: 'MaxSpeedHz', label: 'Max speed', unit: 'Hz', max: 60 }
+			]
+		},
+		{ title: 'Alarm', items: [{ tag: 'HighLevelAlmSP', label: 'High level', unit: '%', max: 100 }] }
 	];
 </script>
 
@@ -36,20 +52,22 @@
 	<span>{bool('LeadIsP101') ? 'P-101' : 'P-102'} is lead</span>
 </p>
 
-<h3>Setpoints</h3>
-<div class="sp">
-	{#each SETPOINTS as s (s.tag)}
-		<NumberField
-			label={s.label}
-			unit="%"
-			value={num(s.tag)}
-			min={0}
-			max={100}
-			step={s.step ?? 1}
-			onsubmit={(v) => writeTag(s.tag, v)}
-		/>
-	{/each}
-</div>
+{#each GROUPS as g (g.title)}
+	<h3>{g.title}</h3>
+	<div class="sp">
+		{#each g.items as s (s.tag)}
+			<NumberField
+				label={s.label}
+				unit={s.unit}
+				value={num(s.tag)}
+				min={0}
+				max={s.max}
+				step={s.step ?? 1}
+				onsubmit={(v) => writeTag(s.tag, v)}
+			/>
+		{/each}
+	</div>
+{/each}
 
 <style>
 	.level {
@@ -99,5 +117,6 @@
 	.sp {
 		display: grid;
 		gap: 10px;
+		margin-bottom: 16px;
 	}
 </style>

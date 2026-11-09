@@ -24,7 +24,8 @@
 - { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Speed command ceiling" }
 - { name: P101_Mode, role: setpoint, init: 2, desc: "P-101 HOA: 0 Off, 1 Hand, 2 Auto" }
 - { name: P102_Mode, role: setpoint, init: 2, desc: "P-102 HOA: 0 Off, 1 Hand, 2 Auto" }
-- { name: HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "Speed commanded in Hand" }
+- { name: P101_HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "P-101 speed commanded in Hand" }
+- { name: P102_HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "P-102 speed commanded in Hand" }
 - { name: ResetFaults, role: setpoint, init: false, desc: "Pulse: clear fail-to-run latches" }
 
 # Computed state — written by sequence.sfc/level.fbd/permissives.ld/

@@ -158,9 +158,9 @@ well level into a speed reference (`SpeedRef`), targeting `LevelSP`
 (45 %) and clamped to `[MinSpeedHz, MaxSpeedHz]`. It only runs closed-
 loop while a pump is actually called (`AUTO := LeadReq`); otherwise it
 free-wheels, bumpless, ready to resume. Each pump's own speed command
-is zero when stopped, `SpeedRef` when running in Auto, and the operator's
-`HandSpeedHz` when running in Hand — a small `SEL` chain, not a second
-PID. A second seal-in latches `HighLevelAlm` at `HighLevelAlmSP` (90 %)
+is zero when stopped, `SpeedRef` when running in Auto, and its own
+hand speed (`P101_HandSpeedHz` / `P102_HandSpeedHz`) when running in
+Hand — a small `SEL` chain, not a second PID. A second seal-in latches `HighLevelAlm` at `HighLevelAlmSP` (90 %)
 with 5 % of hysteresis, so it doesn't chatter sitting on the setpoint.
 
 **Permissives and HOA (`permissives.ld`, `lib/motor.ld`).** Duty mapping
@@ -327,8 +327,13 @@ discharge line runs through a swing check valve (`CKV101`/`CKV102`, the
 custom `CheckValve` component: mechanical, so no actuator, no position and
 no tag; it draws in the same box as the kit's `Valve`) to a
 `ToProcess`-style off-page connector labeled "FORCE MAIN".
-Pipe runs carry `flowing` bound to `P101_Running`/`P102_Running`; labels
-show `LIT101_Level` (%) and `FIT101_Flow` (gpm). `SeqStep` is a **string**
+Pipe runs carry `flowing` bound to `P101_Running`/`P102_Running`. Two
+`TrendReadout`s (custom) show `LIT101_Level` (%) and `FIT101_Flow` (gpm),
+each with a sparkline of its last five minutes; the mimic binds a value,
+not a series, so the component samples it once a second itself. Beside
+the well's scale, `LevelMarks` (custom) puts an arrow at each level
+setpoint, bound to the setpoint tags, so moving one in the wet well's
+panel moves its arrow. `SeqStep` is a **string**
 tag (`'Idle'`/`'Lead'`/`'Lag'`/…) — the kit's built-in `MimicLabel.bind`
 only formats numeric tags, so it rides a small custom `SeqStepTag`
 component instead, bound the same way an equipment prop is (`bind: {

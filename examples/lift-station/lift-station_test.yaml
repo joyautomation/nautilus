@@ -138,12 +138,14 @@ tests:
       - advance: 500ms # P101_VfdFault's 1 s on-delay
         alarms: { active: ["P101_VfdFault"] }
 
-  - name: hand mode runs at HandSpeedHz regardless of level
-    given: { P101_Mode: 1, LIT101_Level: 10.0 } # well below LeadOnLevel
+  - name: hand mode runs each pump at its own hand speed regardless of level
+    given: { P101_Mode: 1, P102_Mode: 1, P101_HandSpeedHz: 40.0, P102_HandSpeedHz: 52.0, LIT101_Level: 10.0 } # well below LeadOnLevel
     advance: 1s
     expect:
       - P101_RunCmd: true
-      - P101_SpeedCmd: { near: 45.0, tol: 0.5 }
+      - P101_SpeedCmd: { near: 40.0, tol: 0.5 }
+      - P102_RunCmd: true
+      - P102_SpeedCmd: { near: 52.0, tol: 0.5 }
 
   - name: the level PID raises speed above setpoint and lowers it below
     suspend: [sim, main] # drive LeadReq and the level directly; the first

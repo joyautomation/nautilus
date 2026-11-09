@@ -1,5 +1,5 @@
 {
-  "name": "Lift station — wet well WW-101",
+  "name": "Lift station \u2014 wet well WW-101",
   "canvas": {
     "width": 570,
     "height": 449
@@ -94,8 +94,18 @@
       "width": 26,
       "label": "CKV-101",
       "ports": [
-        { "name": "in", "x": 0, "y": 0.5, "dir": "left" },
-        { "name": "out", "x": 1, "y": 0.5, "dir": "right" }
+        {
+          "name": "in",
+          "x": 0,
+          "y": 0.5,
+          "dir": "left"
+        },
+        {
+          "name": "out",
+          "x": 1,
+          "y": 0.5,
+          "dir": "right"
+        }
       ]
     },
     {
@@ -106,8 +116,18 @@
       "width": 26,
       "label": "CKV-102",
       "ports": [
-        { "name": "in", "x": 0, "y": 0.5, "dir": "left" },
-        { "name": "out", "x": 1, "y": 0.5, "dir": "right" }
+        {
+          "name": "in",
+          "x": 0,
+          "y": 0.5,
+          "dir": "left"
+        },
+        {
+          "name": "out",
+          "x": 1,
+          "y": 0.5,
+          "dir": "right"
+        }
       ]
     },
     {
@@ -137,6 +157,53 @@
       "height": 24,
       "bind": {
         "text": "SeqStep"
+      }
+    },
+    {
+      "id": "LIT101",
+      "component": "TrendReadout",
+      "x": 65,
+      "y": 90,
+      "props": {
+        "text": "LIT-101",
+        "unit": "%",
+        "decimals": 1,
+        "min": 0,
+        "max": 100
+      },
+      "bind": {
+        "value": "LIT101_Level"
+      }
+    },
+    {
+      "id": "FIT101",
+      "component": "TrendReadout",
+      "x": 182,
+      "y": 11,
+      "props": {
+        "text": "FIT-101",
+        "unit": "gpm",
+        "decimals": 0,
+        "min": 0
+      },
+      "bind": {
+        "value": "FIT101_Flow"
+      }
+    },
+    {
+      "id": "LEVELSP",
+      "component": "LevelMarks",
+      "x": 350,
+      "y": 126,
+      "width": 130,
+      "height": 234,
+      "bind": {
+        "leadOn": "LeadOnLevel",
+        "lagOn": "LagOnLevel",
+        "lagOff": "LagOffLevel",
+        "leadOff": "LeadOffLevel",
+        "levelSP": "LevelSP",
+        "highAlarm": "HighLevelAlmSP"
       }
     }
   ],
@@ -204,24 +271,6 @@
       "bind": {
         "flowing": "P102_Running"
       }
-    }
-  ],
-  "labels": [
-    {
-      "text": "LIT-101",
-      "x": 65,
-      "y": 90,
-      "bind": "LIT101_Level",
-      "unit": "%",
-      "decimals": 1
-    },
-    {
-      "text": "FIT-101",
-      "x": 182,
-      "y": 11,
-      "bind": "FIT101_Flow",
-      "unit": "gpm",
-      "decimals": 0
     }
   ]
 }

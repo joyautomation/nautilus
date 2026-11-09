@@ -23,6 +23,8 @@
 		LSHH101: { title: 'WW-101 wet well', show: 'wetwell' },
 		LSLL101: { title: 'WW-101 wet well', show: 'wetwell' },
 		SEQ: { title: 'WW-101 wet well', show: 'wetwell' },
+		LIT101: { title: 'WW-101 wet well', show: 'wetwell' },
+		LEVELSP: { title: 'WW-101 wet well', show: 'wetwell' },
 		CKV101: { title: 'CKV-101 check valve', show: 'valve', pump: 'P101' },
 		CKV102: { title: 'CKV-102 check valve', show: 'valve', pump: 'P102' },
 		FIT101: { title: 'Discharge to the force main', show: 'discharge' },
@@ -48,7 +50,7 @@
 		<div class="body">
 			{#if panel.show === 'P101' || panel.show === 'P102'}
 				{#key panel.show}
-					<PumpFaceplate pump={panel.show} />
+					<PumpFaceplate pump={panel.show} onloop={() => (selected = 'WW101')} />
 				{/key}
 			{:else if panel.show === 'wetwell'}
 				<WetWellPanel />

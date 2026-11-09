@@ -1,12 +1,15 @@
 <script lang="ts">
-	// One pump's controls: running state, Hand/Off/Auto, speed, current,
-	// starts and run hours, the fault states, and the shared fault reset.
-	// `pump` is the tag prefix, P101 or P102 (motor.ld's instances).
-	import { StatusPill, Button } from '@joyautomation/nautilus-hmi';
+	// One pump's controls: running state, Hand/Off/Auto, the speed it is
+	// commanded and where that comes from, its hand speed, speed feedback,
+	// current, starts and run hours, the fault states, and the shared fault
+	// reset. `pump` is the tag prefix, P101 or P102 (motor.ld's instances).
+	// In Auto the level loop (level.fbd, LIC-101) sets the speed; `onloop`
+	// opens the loop's settings.
+	import { StatusPill, Button, NumberField } from '@joyautomation/nautilus-hmi';
 	import { numAt } from '@joyautomation/nautilus-hmi';
 	import { rt, num, bool, writeTag, pulseReset } from '$lib/client.svelte';
 
-	let { pump }: { pump: 'P101' | 'P102' } = $props();
+	let { pump, onloop }: { pump: 'P101' | 'P102'; onloop?: () => void } = $props();
 
 	// HOA mode: 0 Off, 1 Hand, 2 Auto (permissives.ld / motor.ld).
 	const MODES = [
@@ -16,6 +19,9 @@
 	];
 	const tags = $derived((rt.frame?.tags ?? {}) as Record<string, unknown>);
 	const running = $derived(bool(`${pump}_Running`));
+	const mode = $derived(num(`${pump}_Mode`));
+	// What the speed command follows right now (level.fbd's SEL chain).
+	const source = $derived(!bool(`${pump}_RunCmd`) ? 'not called' : mode === 1 ? 'hand speed' : 'level loop');
 </script>
 
 <div class="state">
@@ -31,11 +37,32 @@
 </div>
 
 <dl class="rows">
-	<dt>Speed</dt><dd>{num(`${pump}_SpeedHz`).toFixed(0)} Hz</dd>
+	<dt>Speed command <span class="src">{source}</span></dt><dd>{num(`${pump}_SpeedCmd`).toFixed(1)} Hz</dd>
+	<dt>Speed</dt><dd>{num(`${pump}_SpeedHz`).toFixed(1)} Hz</dd>
 	<dt>Current</dt><dd>{num(`${pump}_Amps`).toFixed(1)} A</dd>
 	<dt>Starts</dt><dd>{numAt(tags, `${pump}_Stats.Starts`, 0).toFixed(0)}</dd>
 	<dt>Run hours</dt><dd>{numAt(tags, `${pump}_Stats.Hours`, 0).toFixed(1)}</dd>
 </dl>
+
+<div class="speed">
+	<NumberField
+		label="Hand speed"
+		unit="Hz"
+		value={num(`${pump}_HandSpeedHz`)}
+		min={0}
+		max={60}
+		step={1}
+		onsubmit={(v) => writeTag(`${pump}_HandSpeedHz`, v)}
+	/>
+	<p class="note">
+		{#if mode === 1}
+			Runs at this speed while in Hand.
+		{:else}
+			Used in Hand. In Auto the level loop sets the speed to hold the well at its setpoint.
+			{#if onloop}<button class="link" onclick={onloop}>Level loop settings</button>{/if}
+		{/if}
+	</p>
+</div>
 
 <div class="pills">
 	<StatusPill kind={bool(`${pump}_FailToRun`) ? 'critical' : 'off'} label="fail to run" />
@@ -91,6 +118,26 @@
 		font-variant-numeric: tabular-nums;
 		color: var(--ink);
 		text-align: right;
+	}
+	.src {
+		margin-left: 4px;
+		font-size: 0.72rem;
+		color: var(--muted);
+	}
+	.speed {
+		margin-bottom: 14px;
+	}
+	.speed .note {
+		margin-top: 6px;
+	}
+	.link {
+		border: 0;
+		padding: 0;
+		background: none;
+		color: var(--s1);
+		font: inherit;
+		text-decoration: underline;
+		cursor: pointer;
 	}
 	.pills {
 		display: flex;

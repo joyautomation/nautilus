@@ -13,6 +13,8 @@
 	import ToProcess from '$lib/ToProcess.svelte';
 	import SeqStepTag from '$lib/SeqStepTag.svelte';
 	import CheckValve from '$lib/CheckValve.svelte';
+	import TrendReadout from '$lib/TrendReadout.svelte';
+	import LevelMarks from '$lib/LevelMarks.svelte';
 	import EquipmentPanel from '$lib/EquipmentPanel.svelte';
 	import { rt } from '$lib/client.svelte';
 
@@ -35,7 +37,7 @@
 	<!-- With a panel open, the drawing moves over to make room for it. -->
 	<div class="stage" class:with-panel={selected !== null} style:--ratio={doc.canvas.width / doc.canvas.height}>
 		<div class="fit">
-			<Mimic {doc} {tags} registry={{ SubmersiblePump, FloatSwitch, ToProcess, SeqStepTag, CheckValve }} onequipmentclick={(eq) => (selected = eq.id)} />
+			<Mimic {doc} {tags} registry={{ SubmersiblePump, FloatSwitch, ToProcess, SeqStepTag, CheckValve, TrendReadout, LevelMarks }} onequipmentclick={(eq) => (selected = eq.id)} />
 		</div>
 		<p class="tip">Click any equipment for its controls.</p>
 	</div>
