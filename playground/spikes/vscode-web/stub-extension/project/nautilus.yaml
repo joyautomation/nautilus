@@ -1,0 +1,18 @@
+# Start/stop seal-in: the first circuit everyone learns.
+#
+# Press StartPB and the motor runs; let go and it keeps running, because
+# the rung reads its own Motor contact (the "seal"). StopPB breaks the rung.
+# Click a tag's value in the Tags panel to press a button.
+name: sealin
+
+server:
+  online-edits: true   # edit program.ld while it runs, as on a real PLC
+
+tasks:
+  - program: program.ld
+    scan: 100ms
+
+tags:
+  - { name: StartPB, role: setpoint, type: BOOL, init: false, desc: "Start pushbutton (normally open)" }
+  - { name: StopPB,  role: setpoint, type: BOOL, init: false, desc: "Stop pushbutton (TRUE while pressed)" }
+  - { name: Motor,   role: output,   type: BOOL, init: false, desc: "Motor run command" }

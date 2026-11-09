@@ -14,6 +14,10 @@ export default {
 		// on npm), and the linked hmi-3d brings its own installed copy. One
 		// alias makes both — and the type checker — see the same kit, so its
 		// classes (AlarmClient, RealtimeClient) are one type, not two.
-		alias: { '@joyautomation/nautilus-hmi': '../../../hmi/dist' }
+		alias: { '@joyautomation/nautilus-hmi': '../../../hmi/dist' },
+		// Served from somewhere other than "/" (the nautilus playground serves
+		// a build of this at its own path): HMI_BASE, e.g. /some/path. Unset,
+		// it is "/", as beside the controller.
+		paths: { base: process.env.HMI_BASE ?? '' }
 	}
 };

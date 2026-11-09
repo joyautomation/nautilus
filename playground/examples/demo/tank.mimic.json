@@ -1,0 +1,157 @@
+{
+  "name": "Heated surge tank",
+  "canvas": {
+    "width": 1100,
+    "height": 320
+  },
+  "equipment": [
+    {
+      "id": "T101",
+      "component": "Tank",
+      "x": 390,
+      "y": 40,
+      "width": 190,
+      "label": "T-101",
+      "bind": {
+        "levelPct": "LevelPct"
+      }
+    },
+    {
+      "id": "HTR101",
+      "component": "Heater",
+      "x": 410,
+      "y": 188,
+      "width": 122,
+      "height": 40,
+      "bind": {
+        "powerPct": "Heater"
+      }
+    },
+    {
+      "id": "P101",
+      "component": "Pump",
+      "x": 130,
+      "y": 180,
+      "width": 110,
+      "label": "P-101",
+      "bind": {
+        "running": "PumpRun"
+      }
+    },
+    {
+      "id": "DV101",
+      "component": "Valve",
+      "x": 680,
+      "y": 167,
+      "width": 80,
+      "label": "DV-101"
+    },
+    {
+      "id": "TT101",
+      "component": "Gauge",
+      "x": 950,
+      "y": 40,
+      "width": 130,
+      "label": "TT-101 vs TempSP",
+      "props": {
+        "min": 0,
+        "max": 110,
+        "unit": "°C",
+        "decimals": 1
+      },
+      "bind": {
+        "value": "TempC",
+        "setpoint": "TempSP"
+      }
+    }
+  ],
+  "pipes": [
+    {
+      "id": "suction",
+      "points": [
+        [
+          40,
+          232
+        ]
+      ],
+      "to": {
+        "equip": "P101",
+        "port": "in"
+      },
+      "bind": {
+        "flowing": "PumpRun"
+      }
+    },
+    {
+      "id": "discharge",
+      "points": [],
+      "routing": "orthogonal",
+      "from": {
+        "equip": "P101",
+        "port": "out"
+      },
+      "to": {
+        "equip": "T101",
+        "port": "left"
+      },
+      "bind": {
+        "flowing": "PumpRun"
+      }
+    },
+    {
+      "id": "demand",
+      "points": [],
+      "routing": "orthogonal",
+      "from": {
+        "equip": "T101",
+        "port": "right"
+      },
+      "to": {
+        "equip": "DV101",
+        "port": "in"
+      },
+      "color": "var(--s2, #d99a27)",
+      "props": {
+        "flowing": true,
+        "rate": 0.5
+      }
+    },
+    {
+      "id": "zone13",
+      "points": [
+        [
+          930,
+          206
+        ]
+      ],
+      "routing": "orthogonal",
+      "from": {
+        "equip": "DV101",
+        "port": "out"
+      },
+      "color": "var(--s2, #d99a27)",
+      "props": {
+        "flowing": true,
+        "rate": 0.5
+      }
+    }
+  ],
+  "labels": [
+    {
+      "text": "LT-101",
+      "x": 740,
+      "y": 30,
+      "bind": "LevelPct",
+      "unit": "%",
+      "decimals": 1
+    },
+    {
+      "text": "TT-101",
+      "x": 740,
+      "y": 64,
+      "bind": "TempC",
+      "unit": "°C",
+      "decimals": 1
+    }
+  ]
+}

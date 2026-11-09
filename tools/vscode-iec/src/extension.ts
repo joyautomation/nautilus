@@ -52,6 +52,7 @@ import { initTestState } from "./testState";
 import { notifyInfo, notifyWarning, openEditors } from "./testHooks";
 import { setLspClient } from "./lspClient";
 import { registerDiagramDescriptions } from "./diagramXref";
+import { IS_WEB, registerPlatform } from "./platform";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -106,7 +107,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Before anything resolves the CLI: the managed install's directory is
   // part of the search.
   initCli(context);
-  wireTestState(context);
+  // Real-machine features (a test harness writing files, installing the
+  // CLI, Logix, compiling user components) stay out of the web build, the
+  // browser playground: platform.ts.
+  if (!IS_WEB) wireTestState(context);
 
   // Register commands and live values FIRST, independent of the language
   // client: they don't need it, and if the CLI is missing we must not let a
@@ -134,8 +138,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const online = new OnlineEdit(broadcastSyncState);
   context.subscriptions.push(online);
   // A project with a Logix target deploys through `naut logix serve`.
-  const logix = new LogixDeploy(online);
-  context.subscriptions.push(logix);
+  const logix = IS_WEB ? undefined : new LogixDeploy(online);
+  if (logix) context.subscriptions.push(logix);
 
   const fbd = new FbdPreview(context, live);
   context.subscriptions.push(fbd);
@@ -158,43 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(new SfcEditorProvider(context, live).register());
   // Title-bar hops between the text and the diagram editor.
   context.subscriptions.push(registerDiagramCommands());
-  // User-authored Svelte components rendered for real inside the mimic/
-  // component preview webviews — gated on workspace trust (it compiles and
-  // runs the project's own code via esbuild + its svelte/compiler).
-  const userComponents = new UserComponentManager(context);
-  context.subscriptions.push(userComponents);
-  context.subscriptions.push(
-    vscode.workspace.onDidGrantWorkspaceTrust(() => userComponents.activateTrust())
-  );
-
-  // "*.mimic.json" opens as the graphical HMI mimic editor by default (the
-  // doc is spatial-first; the JSON is an "Open With → Text Editor" away).
-  const mimic = new MimicEditorProvider(context, userComponents);
-  context.subscriptions.push(mimic.register());
-  // "*.scene.json" opens as the 3D scene editor by default, for the same
-  // reason (docs/design/spatial-hmi.md §3g).
-  context.subscriptions.push(new SceneEditorProvider(context).register());
-  // "*.kind.json" — a 3D kind in a file of its own — opens as the kind on
-  // a turntable with its drives (§3g, slice 2).
-  context.subscriptions.push(new KindEditorProvider(context).register());
-  // "Edit Component Ports…": pick any component (built-in or custom) and
-  // edit its ports on its render in the component preview pane — shares the
-  // mimic editor's workspace-wide sidecar index so a sidecar written there
-  // shows up in every open mimic panel immediately.
-  context.subscriptions.push(registerEditComponentPortsCommand(mimic.componentIndex));
-  // "Open Component Preview": a `{Name}.svelte` rendered live beside its
-  // text editor, compiled from the buffer as you type; also the editor for
-  // a `{Name}.component.json` — opens as JSON, its preview button lands here
-  // (componentPreview.ts).
-  context.subscriptions.push(registerComponentPreview(context, userComponents, mimic.componentIndex));
-  // "Copy Kit Component to Project…": start a symbol of your own from one
-  // the kit ships — its .svelte copied into src/lib, sidecar seeded with
-  // the kit's ports, opened with the preview beside (copyKitComponent.ts).
-  context.subscriptions.push(registerCopyKitComponentCommand(mimic.componentIndex));
-  // "Preview HMI Page": a route served by the project's own `npm run dev`
-  // in VS Code's Simple Browser beside the text (pagePreview.ts).
-  context.subscriptions.push(registerPagePreview());
-  context.subscriptions.push(registerNewProjectCommand());
+  registerHmiAndProjectTools(context);
 
   // Getting Started walkthrough: its own command (also reachable from the
   // Command Palette any time, not just on a fresh install), and the
@@ -213,7 +181,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // this extension doesn't need onboarding, and VS Code already offers its
   // own "open walkthrough" prompt on a fresh extension install for anyone
   // starting from nothing.
-  if (!context.globalState.get<boolean>("nautilus.walkthroughShown", false)) {
+  if (!IS_WEB && !context.globalState.get<boolean>("nautilus.walkthroughShown", false)) {
     void context.globalState.update("nautilus.walkthroughShown", true);
     void vscode.workspace.findFiles("**/nautilus.yaml", "**/node_modules/**", 1).then((found) => {
       if (found.length === 0) {
@@ -248,7 +216,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.ld.diffRevisions", () => ladder.diffRevisions()),
     vscode.commands.registerCommand("nautilus.sfc.diffRevisions", () => sfc.diffRevisions()),
     // Export / print an LD, FBD or SFC diagram (SVG or paginated PDF).
-    ...registerDiagramExport(context, live),
+    ...(IS_WEB ? [] : registerDiagramExport(context, live)),
     // The connection is just the nautilus.runtimeUrl setting; this command
     // is the discoverable way to change it. The config watcher below does
     // the actual reconnect, so writing the setting IS connecting. Recently
@@ -327,8 +295,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
     vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
     vscode.commands.registerCommand("nautilus.program.pull", () => online.pull()),
-    vscode.commands.registerCommand("nautilus.logix.onlineEdit", () => logix.onlineEdit()),
-    vscode.commands.registerCommand("nautilus.logix.download", () => logix.download()),
+    vscode.commands.registerCommand("nautilus.logix.onlineEdit", () => logix?.onlineEdit()),
+    vscode.commands.registerCommand("nautilus.logix.download", () => logix?.download()),
     vscode.commands.registerCommand("nautilus.installCli", () => installCliCommand()),
     vscode.commands.registerCommand("nautilus.showCliInfo", () => showCliInfo()),
     vscode.commands.registerCommand("nautilus.addCliToPath", () => addCliToPathCommand()),
@@ -351,7 +319,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
+  // The web build's own pieces (the playground's Run button); nothing
+  // natively.
+  registerPlatform(context, live);
+
   await startLanguageClient(context);
+}
+
+
+/** The HMI editors (mimic, scene, kind), user components and their
+ * previews, page preview and the new-project wizard. The web build has the
+ * mimic editor with the kit's built-in equipment (src/web/userComponents.ts);
+ * the rest compile project code with esbuild, run npm and write the disk,
+ * so they are not in the web build yet. */
+function registerHmiAndProjectTools(context: vscode.ExtensionContext): void {
+  // User-authored Svelte components rendered for real inside the mimic/
+  // component preview webviews — gated on workspace trust (it compiles and
+  // runs the project's own code via esbuild + its svelte/compiler).
+  const userComponents = new UserComponentManager(context);
+  context.subscriptions.push(userComponents);
+  context.subscriptions.push(
+    vscode.workspace.onDidGrantWorkspaceTrust(() => userComponents.activateTrust())
+  );
+
+  // "*.mimic.json" opens as the graphical HMI mimic editor by default (the
+  // doc is spatial-first; the JSON is an "Open With → Text Editor" away).
+  const mimic = new MimicEditorProvider(context, userComponents);
+  context.subscriptions.push(mimic.register());
+  if (IS_WEB) return;
+  // "*.scene.json" opens as the 3D scene editor by default, for the same
+  // reason (docs/design/spatial-hmi.md §3g).
+  context.subscriptions.push(new SceneEditorProvider(context).register());
+  // "*.kind.json" — a 3D kind in a file of its own — opens as the kind on
+  // a turntable with its drives (§3g, slice 2).
+  context.subscriptions.push(new KindEditorProvider(context).register());
+  // "Edit Component Ports…": pick any component (built-in or custom) and
+  // edit its ports on its render in the component preview pane — shares the
+  // mimic editor's workspace-wide sidecar index so a sidecar written there
+  // shows up in every open mimic panel immediately.
+  context.subscriptions.push(registerEditComponentPortsCommand(mimic.componentIndex));
+  // "Open Component Preview": a `{Name}.svelte` rendered live beside its
+  // text editor, compiled from the buffer as you type; also the editor for
+  // a `{Name}.component.json` — opens as JSON, its preview button lands here
+  // (componentPreview.ts).
+  context.subscriptions.push(registerComponentPreview(context, userComponents, mimic.componentIndex));
+  // "Copy Kit Component to Project…": start a symbol of your own from one
+  // the kit ships — its .svelte copied into src/lib, sidecar seeded with
+  // the kit's ports, opened with the preview beside (copyKitComponent.ts).
+  context.subscriptions.push(registerCopyKitComponentCommand(mimic.componentIndex));
+  // "Preview HMI Page": a route served by the project's own `npm run dev`
+  // in VS Code's Simple Browser beside the text (pagePreview.ts).
+  context.subscriptions.push(registerPagePreview());
+  context.subscriptions.push(registerNewProjectCommand());
 }
 
 async function startLanguageClient(context: vscode.ExtensionContext): Promise<void> {

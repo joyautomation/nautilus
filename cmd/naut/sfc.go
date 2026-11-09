@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/joyautomation/nautilus/internal/lsp"
+	"github.com/joyautomation/nautilus/internal/diagram"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/lang/sfc"
 )
@@ -95,19 +95,14 @@ func runSFCGraph(args []string) int {
 		return 2
 	}
 	enc := json.NewEncoder(os.Stdout)
-	model, gerr := sfc.Graph(string(src))
+	model, gerr := diagram.Graph("sfc", string(src), at)
 	if gerr != nil {
 		// Machine-readable error on stdout so the preview panel can show it,
-		// plus non-zero exit for scripted use — same contract as fbd/ld graph.
+		// plus non-zero exit for scripted use.
 		_ = enc.Encode(map[string]string{"error": gerr.Error()})
 		return 1
 	}
-	// The manifest's tags ride along: an action association naming a tag
-	// is a tag, not a new action waiting for its body (#177/#210).
-	if err := enc.Encode(struct {
-		*sfc.Model
-		Tags []lsp.ProjectTag `json:"tags,omitempty"`
-	}{model, graphTags(at)}); err != nil {
+	if err := enc.Encode(model); err != nil {
 		fmt.Fprintln(os.Stderr, "naut sfc graph:", err)
 		return 2
 	}
@@ -115,28 +110,18 @@ func runSFCGraph(args []string) int {
 }
 
 func runSFCEdit() int {
-	var req struct {
-		Source string     `json:"source"`
-		Op     sfc.EditOp `json:"op"`
-	}
 	enc := json.NewEncoder(os.Stdout)
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+	req, err := io.ReadAll(os.Stdin)
+	if err != nil {
 		_ = enc.Encode(map[string]string{"error": "expected {\"source\": ..., \"op\": {...}} on stdin"})
 		return 2
 	}
-	edits, err := sfc.ApplyEdit(req.Source, req.Op)
-	if err != nil {
-		_ = enc.Encode(map[string]string{"error": err.Error()})
-		return 1
-	}
-	if edits == nil {
-		edits = []sfc.TextEdit{}
-	}
-	if err := enc.Encode(map[string]any{"edits": edits}); err != nil {
+	out, code := diagram.Edit("sfc", req)
+	if err := enc.Encode(out); err != nil {
 		fmt.Fprintln(os.Stderr, "naut sfc edit:", err)
 		return 2
 	}
-	return 0
+	return code
 }
 
 // runSFCCheck parses+checks a single .sfc file and prints gcc-style

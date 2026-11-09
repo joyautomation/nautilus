@@ -1,0 +1,5 @@
+# Build context is the repo root; the service needs only these.
+*
+!go.mod
+!go.sum
+!playground/share/*.go

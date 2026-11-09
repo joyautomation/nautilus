@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sync": "node scripts/sync-reference.mjs",
+    "sync": "node scripts/sync-reference.mjs && node scripts/sync-playground.mjs",
     "verified": "node scripts/fetch-verified.mjs",
     "predev": "npm run verified",
     "dev": "npm run sync && astro dev",

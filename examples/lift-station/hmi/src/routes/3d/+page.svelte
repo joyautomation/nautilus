@@ -7,6 +7,7 @@
 	// app's one realtime client to the view and carries the two things the
 	// mimic shows as text — the sequence step and the alarm banner — in the
 	// HUD, where a 3D drawing has no place for them.
+	import { resolve } from '$app/paths';
 	import { AlarmBanner, AckButton } from '@joyautomation/nautilus-hmi';
 	import { SceneView, LOOKS, type SceneDoc, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
 	import sceneDoc from '../../../../lift-station.scene.json';
@@ -44,7 +45,7 @@
 	<SceneView {doc} {rt} {alarms} {modules} {perf} bind:look>
 		{#snippet hud()}
 			<div class="bar">
-				<a class="pill" href="/" title="The operator screen: the P&ID mimic, faceplates, setpoints, trend">← operator screen</a>
+				<a class="pill" href={resolve('/')} title="The operator screen: the P&ID mimic, faceplates, setpoints, trend">← operator screen</a>
 				<button class="pill" onclick={next} title="Cycle the look: lit, flat, paper">{shown}</button>
 				<span class="seq">
 					Sequence <SeqStepTag text={str('SeqStep')} width={110} />

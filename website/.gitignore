@@ -12,3 +12,5 @@ src/content/docs/reference/structure-warnings.md
 public/verified/
 src/data/verified.json
 src/data/runtime.json
+# copied from ../playground/dist by scripts/sync-playground.mjs
+public/playground/

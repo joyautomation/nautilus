@@ -1,0 +1,26 @@
+{
+  "name": "nautilus-web-stub",
+  "displayName": "nautilus (web spike)",
+  "publisher": "joyauto",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "browser": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "iec-ld",
+        "extensions": [
+          ".ld"
+        ],
+        "aliases": [
+          "IEC Ladder"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+	"name": "@joyautomation/nautilus-playground",
+	"version": "0.1.0-alpha.0",
+	"description": "Nautilus in the browser: the compiler, scan loop, tag API, language server, diagram graph/edit and acceptance runner as WebAssembly in a Web Worker, plus the VS Code extension's editor bundles. Powers nautilus.joyautomation.com/playground/.",
+	"license": "Apache-2.0",
+	"type": "module",
+	"main": "./dist/client.js",
+	"types": "./dist/client.d.ts",
+	"exports": {
+		".": { "types": "./dist/client.d.ts", "default": "./dist/client.js" },
+		"./dist/*": "./dist/*"
+	},
+	"files": ["dist"],
+	"scripts": { "build": "./scripts/build.sh" },
+	"repository": { "type": "git", "url": "https://github.com/joyautomation/nautilus", "directory": "playground" }
+}

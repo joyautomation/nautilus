@@ -1,0 +1,453 @@
+---
+// /playground/ — VS Code with the nautilus extension, against nautilus
+// compiled to WebAssembly, all in the visitor's browser. The playground
+// itself (playground/ in this repo, built by playground/scripts/build.sh)
+// is copied to /playground/engine/ by scripts/sync-playground.mjs; this page
+// frames it with a way out: the project as a .zip, the extension, the
+// install. ?example= and ?project= pass through, so a guide can link
+// straight to a running example. /playground/p/<id> is a project saved by
+// the Share button (nginx.conf serves this page for it; playground/share
+// keeps the projects), and a #project= link holds a whole project itself.
+// On a phone it first says the playground wants a computer, and offers to
+// send the link on (?phone=1 shows that page anywhere).
+import '../../styles/fonts.css';
+import logo from '../../assets/logo.svg';
+
+const title = 'Playground | nautilus';
+const description =
+  'Write a ladder, FBD, SFC or Structured Text program and run it in VS Code with the nautilus extension, in your browser, with nothing to install.';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href="https://nautilus.joyautomation.com/playground/" />
+    <link rel="icon" href="/favicon.png" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content="https://nautilus.joyautomation.com/playground/" />
+    <meta name="color-scheme" content="dark" />
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-5EGNNTRBYC"></script>
+    <script is:inline>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        dataLayer.push(arguments);
+      }
+      gtag('js', new Date());
+      gtag('config', 'G-5EGNNTRBYC');
+    </script>
+  </head>
+  <body>
+    <header class="bar">
+      <a class="brand" href="/" title="nautilus documentation">
+        <img src={logo.src} alt="" width="22" height="22" />
+        <span>nautilus</span>
+      </a>
+      <span class="what">VS Code with the nautilus extension, running in your browser. Nothing is installed.</span>
+      <nav class="actions" aria-label="Playground">
+        <a id="open-hmi" hidden target="_blank" rel="noopener">Open HMI</a>
+        <a id="open-dashboard" hidden target="_blank" rel="noopener">Open dashboard</a>
+        <button id="share" type="button" disabled title="Save the project as it stands and copy a link to it. Anyone with the link can open it.">Share</button>
+        <button id="download" type="button" disabled>Download project</button>
+        <a href="vscode:extension/joyauto.vscode-iec">Open in VS Code</a>
+        <a class="primary" href="/tutorial/">Install nautilus</a>
+      </nav>
+    </header>
+    <main class="playground">
+      <p class="note" id="note">Loading the playground…</p>
+      <section class="phone" id="phone" hidden aria-labelledby="phone-title">
+        <h1 id="phone-title">The playground needs a computer</h1>
+        <p id="phone-what">
+          It's VS Code with the nautilus extension, running in your browser. On a phone the editor is too cramped to
+          use, and the first visit downloads about 10 MB.
+        </p>
+        <p>Send this link to yourself and open it on a laptop or desktop.</p>
+        <div class="phone-actions">
+          <button id="phone-send" type="button" class="primary">Send this link to myself</button>
+          <button id="phone-anyway" type="button">Open it here anyway</button>
+          <a href="/tutorial/">Get started with nautilus</a>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+
+<style>
+  :global(html),
+  :global(body) {
+    height: 100%;
+  }
+  :global(body) {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    background: #1f1f1f;
+    color: #ccc;
+    font: 13px/1.4 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 6px 16px;
+    background: #181818;
+    border-bottom: 1px solid #2b2b2b;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #64d88a;
+    text-decoration: none;
+    font: 17px/1 'Righteous', 'Space Grotesk Variable', sans-serif;
+  }
+  .what {
+    flex: 1;
+    min-width: 0;
+    color: #9d9d9d;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-left: auto;
+  }
+  .actions button,
+  .actions a {
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 3px;
+    border: 1px solid #3c3c3c;
+    background: #2b2b2b;
+    color: #ddd;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .actions [hidden] {
+    display: none;
+  }
+  .actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .actions .primary {
+    background: #1a7f45;
+    border-color: #1a7f45;
+    color: #fff;
+  }
+  .actions button:focus-visible,
+  .actions a:focus-visible,
+  .brand:focus-visible {
+    outline: 2px solid #3794ff;
+    outline-offset: 1px;
+  }
+  @media (max-width: 760px) {
+    .what {
+      display: none;
+    }
+  }
+  .playground {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+  .playground :global(iframe) {
+    flex: 1;
+    width: 100%;
+    border: 0;
+    display: block;
+  }
+  .note {
+    margin: auto;
+    padding: 16px;
+    text-align: center;
+    max-width: 36em;
+  }
+  .note :global(a) {
+    color: #3794ff;
+  }
+  .phone {
+    margin: auto;
+    padding: 24px 16px;
+    max-width: 26em;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .phone h1 {
+    margin: 0 0 12px;
+    color: #eee;
+    font: 22px/1.25 'Righteous', 'Space Grotesk Variable', sans-serif;
+  }
+  .phone p {
+    margin: 0 0 12px;
+  }
+  .phone-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 20px;
+  }
+  .phone-actions button,
+  .phone-actions a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    font: inherit;
+    min-height: 44px;
+    padding: 10px 16px;
+    border-radius: 4px;
+    border: 1px solid #3c3c3c;
+    background: #2b2b2b;
+    color: #ddd;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .phone-actions .primary {
+    background: #1a7f45;
+    border-color: #1a7f45;
+    color: #fff;
+  }
+  .phone-actions button:focus-visible,
+  .phone-actions a:focus-visible {
+    outline: 2px solid #3794ff;
+    outline-offset: 1px;
+  }
+  /* The playground's own buttons mean nothing until it is open. */
+  :global(body.on-phone) #share,
+  :global(body.on-phone) #download,
+  :global(body.on-phone) .actions a[href^='vscode:'] {
+    display: none;
+  }
+</style>
+
+<script>
+  import { zip } from '../../lib/zip';
+
+  type Views = { dashboard: string; hmi: string | null } | null;
+  type Playground = {
+    title: string;
+    files(): Promise<Record<string, string>>;
+    shareLink?: () => Promise<string>;
+    shared?: () => unknown;
+    showCommands?: () => Promise<unknown>;
+    focus?: () => Promise<unknown>;
+    views?: Views;
+  };
+
+  const note = document.getElementById('note')!;
+  const download = document.getElementById('download') as HTMLButtonElement;
+  const share = document.getElementById('share') as HTMLButtonElement;
+  const openHmi = document.getElementById('open-hmi') as HTMLAnchorElement;
+  const openDashboard = document.getElementById('open-dashboard') as HTMLAnchorElement;
+  let frame: HTMLIFrameElement | null = null;
+  const app = () => (frame?.contentWindow as (Window & { nautilusPlayground?: Playground }) | null)?.nautilusPlayground;
+
+  /** The project as it stands in the playground, as a .zip to open in VS Code. */
+  download.addEventListener('click', async () => {
+    const pg = app();
+    if (!pg) return;
+    download.disabled = true;
+    download.textContent = 'Preparing…';
+    try {
+      const name = (pg.title || 'project').replace(/[^\w.-]+/g, '-');
+      const url = URL.createObjectURL(zip(await pg.files(), name));
+      Object.assign(document.createElement('a'), { href: url, download: `${name}.zip` }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } finally {
+      download.disabled = false;
+      download.textContent = 'Download project';
+    }
+  });
+
+  /**
+   * Saves the project as it stands and copies a short link to it (or, when
+   * it cannot be saved, a link with the whole project in it).
+   */
+  share.addEventListener('click', async () => {
+    const make = app()?.shareLink;
+    if (!make) return;
+    share.disabled = true;
+    share.textContent = 'Saving…';
+    const link = make();
+    const done = (text: string) => {
+      share.textContent = text;
+      setTimeout(() => {
+        share.textContent = 'Share';
+        share.disabled = false;
+      }, 2000);
+    };
+    try {
+      // The copy is asked for now, while the click still counts (Safari
+      // refuses a copy made after waiting on the save), with the link to
+      // follow.
+      if (typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'text/plain': link.then((l) => new Blob([l], { type: 'text/plain' })) })
+        ]);
+      } else {
+        await navigator.clipboard.writeText(await link);
+      }
+      done('Link copied');
+      app()?.shared?.();
+    } catch {
+      let l: string;
+      try {
+        l = await link;
+      } catch (e) {
+        done('Not shared');
+        window.alert(`The project could not be shared: ${(e as Error).message}`);
+        return;
+      }
+      // No clipboard (an insecure context, a refusal): show it to copy by hand.
+      window.prompt('Copy this link:', l);
+      done('Share');
+    }
+  });
+
+  // A share link pasted into this tab names a different project.
+  window.addEventListener('hashchange', () => location.reload());
+
+  // Keys typed while focus is on this page (the bar) never reach the frame.
+  // The command palette's keys, the ones people try first, are forwarded.
+  // Firefox and Edge keep Ctrl+Shift+P for a private window whatever has
+  // focus; F1 is the way in there, as on vscode.dev.
+  window.addEventListener('keydown', (e) => {
+    const palette = e.key === 'F1' || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p');
+    if (!palette || !frame || document.activeElement === frame) return;
+    const showCommands = app()?.showCommands;
+    if (!showCommands) return;
+    e.preventDefault();
+    frame.contentWindow?.focus();
+    void showCommands();
+  });
+
+  /** Once the workbench is up, typing goes to the editor, not this page. */
+  function onFrameLoad() {
+    const win = frame?.contentWindow;
+    if (!win) return;
+    const ready = () => {
+      win.focus();
+      void app()?.focus?.();
+      download.disabled = false;
+      share.disabled = !app()?.shareLink;
+      const views = app()?.views;
+      if (views?.hmi) {
+        openHmi.href = views.hmi;
+        openHmi.hidden = false;
+      }
+      if (views) {
+        openDashboard.href = views.dashboard;
+        openDashboard.hidden = false;
+      }
+    };
+    if (app()?.focus) ready();
+    else win.addEventListener('nautilus-playground-ready', ready, { once: true });
+  }
+
+  async function start() {
+    try {
+      const r = await fetch('/playground/engine/engine.json', { cache: 'no-cache' });
+      if (!r.ok) throw new Error('no engine');
+      const { version, build } = await r.json();
+      const q = new URLSearchParams(location.search);
+      q.set('v', build ? `${version}.${build}` : version);
+      const saved = location.pathname.match(/\/playground\/p\/([a-z2-7]{12})\/?$/);
+      if (saved) q.set('p', saved[1]);
+      frame = document.createElement('iframe');
+      frame.title = 'nautilus playground';
+      frame.allow = 'clipboard-read; clipboard-write';
+      frame.addEventListener('load', onFrameLoad);
+      frame.src = `/playground/engine/app/index.html?${q}${location.hash}`;
+      note.replaceWith(frame);
+    } catch {
+      note.textContent = 'The playground is not available right now. Nautilus installs in a minute: see the ';
+      const a = Object.assign(document.createElement('a'), { href: '/tutorial/', textContent: 'step-by-step tutorial' });
+      note.append(a, '.');
+    }
+  }
+
+  /**
+   * A phone: a small touch screen. A tablet (the short side 600px or more)
+   * gets the playground, keyboard or not.
+   */
+  const PHONE_OK = 'nautilus-playground-phone-ok';
+  const params = new URLSearchParams(location.search);
+  const onPhone =
+    params.get('phone') === '1' ||
+    (matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600);
+  let anyway = false;
+  try {
+    anyway = params.get('phone') !== '1' && localStorage.getItem(PHONE_OK) === '1';
+  } catch {
+    // No storage: ask each time.
+  }
+
+  /** What the link opens, in a few words, for the phone page. */
+  function whatThisOpens(): string | null {
+    if (/\/playground\/p\/[a-z2-7]{12}\/?$/.test(location.pathname) || location.hash.includes('project=')) {
+      return 'a project someone shared';
+    }
+    if (params.get('project')) return 'a project';
+    const example = params.get('example');
+    return example ? `the ${example} example` : null;
+  }
+
+  function phonePage() {
+    const page = document.getElementById('phone')!;
+    const send = document.getElementById('phone-send') as HTMLButtonElement;
+    document.body.classList.add('on-phone');
+    note.hidden = true;
+    page.hidden = false;
+    const what = whatThisOpens();
+    if (what) {
+      document.getElementById('phone-what')!.textContent =
+        `This link opens ${what} in the nautilus playground: VS Code with the nautilus extension, running in your browser. ` +
+        'On a phone the editor is too cramped to use, and the first visit downloads about 10 MB.';
+    }
+    const url = new URL(location.href);
+    url.searchParams.delete('phone');
+    const link = url.href;
+
+    send.addEventListener('click', async () => {
+      // The phone's own share sheet (messages, email, notes), else the clipboard.
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: 'nautilus playground', url: link });
+          return;
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') return;
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(link);
+        send.textContent = 'Link copied';
+        setTimeout(() => (send.textContent = 'Send this link to myself'), 2000);
+      } catch {
+        window.prompt('Copy this link:', link);
+      }
+    });
+    document.getElementById('phone-anyway')!.addEventListener('click', () => {
+      try {
+        localStorage.setItem(PHONE_OK, '1');
+      } catch {
+        // Ask again next time, then.
+      }
+      document.body.classList.remove('on-phone');
+      page.hidden = true;
+      note.hidden = false;
+      void start();
+    });
+  }
+
+  if (onPhone && !anyway) phonePage();
+  else void start();
+</script>
