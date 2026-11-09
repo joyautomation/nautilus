@@ -286,18 +286,32 @@ def build_float():
 
 
 def build_check():
-    # A swing check valve on a horizontal run along x: body, two flanges, a
-    # bonnet, and the outside lever with its counterweight. Nothing moves.
+    # A swing check valve on a horizontal run along x, drawn the way one
+    # is recognised: a body with a round bolted cover on a short neck (the
+    # disc swings inside, hung from the hinge pin whose bosses show on the
+    # body's sides), and a flow arrow cast on both sides pointing
+    # downstream (+x). No lever, weight or handwheel: those read as a valve
+    # someone operates. Nothing moves.
     reset()
     steel = pbr("Steel", STEEL, metallic=0.75, roughness=0.35)
     dark = pbr("SteelDark", STEEL_DARK, metallic=0.6, roughness=0.55)
+    mark = pbr("Arrow", (0.86, 0.87, 0.89), metallic=0.0, roughness=0.5)  # light, to read against the steel
     b = cylinder("Body", steel, 0.11, 0.34, axis="x", pos=(0, 0, 0), segments=32)
     smooth(b)
     cylinder("FlangeIn", dark, 0.16, 0.03, axis="x", pos=(-0.185, 0, 0), segments=32)
     cylinder("FlangeOut", dark, 0.16, 0.03, axis="x", pos=(0.185, 0, 0), segments=32)
-    box("Bonnet", steel, (0.2, 0.14, 0.2), (0, 0.15, 0))
-    box("Lever", dark, (0.3, 0.025, 0.025), (0.12, 0.24, 0))
-    box("Weight", dark, (0.08, 0.08, 0.08), (0.26, 0.24, 0))
+    # The cover: a neck out of the body's top and a bolted round plate.
+    cylinder("Neck", steel, 0.095, 0.06, axis="y", pos=(0, 0.11, 0), segments=32)
+    cylinder("Cover", dark, 0.125, 0.025, axis="y", pos=(0, 0.152, 0), segments=32)
+    for i in range(8):
+        a = i * math.pi / 4
+        cylinder("Bolt", steel, 0.011, 0.018, axis="y", pos=(0.1 * math.cos(a), 0.172, 0.1 * math.sin(a)), segments=8)
+    # The hinge pin's bosses, high on the upstream side, through the body.
+    cylinder("HingePin", dark, 0.022, 0.25, axis="z", pos=(-0.06, 0.07, 0), segments=16)
+    # The flow arrow on each side: a shaft and a head pointing downstream.
+    for side, z in (("Front", 0.112), ("Back", -0.112)):
+        box("ArrowShaft" + side, mark, (0.13, 0.026, 0.008), (-0.03, -0.02, z))
+        cone("ArrowHead" + side, mark, 0.034, 0.0, 0.055, axis="x", pos=(0.06, -0.02, z), segments=3)
     export("check-valve.glb")
 
 

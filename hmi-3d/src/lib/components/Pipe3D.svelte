@@ -1,11 +1,13 @@
 <script lang="ts">
 	// A pipe run: cylinders along a polyline with spheres at the bends.
-	// Flow shows as the fluid colour, and as motion along the run in the
-	// order of its points: in the lit and flat looks a train of bulges in
-	// the pipe's own colour (a slug travelling the line, the way argonaut's
-	// site pipes show it), on paper a train of inked chevrons, since a
-	// bulge on a white pipe against white paper is nothing. A bad-quality
-	// binding greys the pipe out and stops the train.
+	// Flow shows on the pipe itself, as a 3D dashed line: while it flows the
+	// run is the fluid colour, banded at a regular pitch in the palette's
+	// flow colour, and the bands travel along it in the order of its points
+	// (across bends, not restarting after each), the way the 2D mimic's
+	// dashes move along a pipe. The same in every look; the palette sets the
+	// two colours (a lighter blue on the lit fluid, a quiet blue on paper's
+	// near-white, a light one on dark paper). A bad-quality binding greys
+	// the pipe out and stops the bands.
 	import { T, useTask } from '@threlte/core';
 	import { Quaternion, Vector3 } from 'three';
 	import { getContext } from 'svelte';
@@ -39,36 +41,38 @@
 		})
 	);
 	let color = $derived(!good ? palette.stale : flowing ? palette.fluid : palette.steel);
+	let bandColor = $derived(palette.flow ?? '#9cc8f2');
 
-	// The train: one marker every `pitch` of distance along the whole run
-	// (segment to segment, so a slug crosses a bend instead of restarting
-	// after it), all advancing together at `speed`. Chevrons are closer
-	// together and quicker than bulges, as marks are to a moving mass.
+	// The bands: one every `pitch` of distance along the whole run, half of
+	// it banded, all advancing together at `speed`.
 	let total = $derived(segments.reduce((a, s) => a + s.len, 0));
-	let pitch = $derived(view.paper ? Math.max(0.12, radius * 12) : Math.max(0.3, radius * 18));
-	let speed = $derived(view.paper ? pitch * 2 : pitch * 1.2);
-	let head = $derived(radius * 1.8);
-	// A bulge: a sphere a little wider than the pipe, stretched along it.
-	let bulge = $derived(radius * 1.28);
-	let margin = $derived(view.paper ? head : bulge * 2.2);
+	let pitch = $derived(Math.max(0.12, radius * 6));
+	let band = $derived(pitch * 0.5);
+	let speed = $derived(pitch * 1.5);
+	// A band sits just proud of the pipe, so it covers the pipe's own colour.
+	let bandRadius = $derived(radius * 1.03);
 	let phase = $state(0);
 	let moving = $derived(arrows && flowing && good);
 	useTask((dt) => {
 		if (moving) phase = (phase + speed * dt) % pitch;
 	});
-	let train = $derived.by(() => {
+	let bands = $derived.by(() => {
 		if (!moving) return [];
-		const out: { pos: Vec3; quat: [number, number, number, number] }[] = [];
-		let k = 0;
-		let before = 0;
-		for (let d = phase; d < total; d += pitch) {
-			while (k < segments.length - 1 && d > before + segments[k].len) before += segments[k++].len;
-			const s = segments[k];
-			const t = d - before;
-			// Keep a marker off the ends of the run, where it would poke out
-			// of the open pipe or into whatever the run meets.
-			if (d < margin || d > total - margin) continue;
-			out.push({ pos: [s.a[0] + s.dir[0] * t, s.a[1] + s.dir[1] * t, s.a[2] + s.dir[2] * t], quat: s.quat });
+		const out: { pos: Vec3; quat: [number, number, number, number]; len: number }[] = [];
+		// Each band is [start, start + band) along the run, cut where it
+		// crosses a segment end so it follows the bend.
+		for (let start = phase - pitch; start < total; start += pitch) {
+			const end = start + band;
+			let before = 0;
+			for (const s of segments) {
+				const lo = Math.max(start, before);
+				const hi = Math.min(end, before + s.len);
+				if (hi - lo > 1e-4) {
+					const t = (lo + hi) / 2 - before;
+					out.push({ pos: [s.a[0] + s.dir[0] * t, s.a[1] + s.dir[1] * t, s.a[2] + s.dir[2] * t], quat: s.quat, len: hi - lo });
+				}
+				before += s.len;
+			}
 		}
 		return out;
 	});
@@ -86,18 +90,11 @@
 		<T.MeshStandardMaterial {color} {...pbr} />
 	</T.Mesh>
 {/each}
-{#each train as c}
-	{#if view.paper}
-		<!-- an arrowhead pointing +y, turned onto the segment; no clicks, no ink of its own -->
-		<T.Mesh position={c.pos} quaternion={c.quat} raycast={() => {}} userData={{ ink: false }}>
-			<T.ConeGeometry args={[head, head * 2, 4]} />
-			<T.MeshBasicMaterial color={palette.ink} />
-		</T.Mesh>
-	{:else}
-		<!-- a slug: the pipe's own colour, so it reads as the pipe swelling -->
-		<T.Mesh position={c.pos} quaternion={c.quat} scale={[1, 2.2, 1]} raycast={() => {}} userData={{ ink: false }}>
-			<T.SphereGeometry args={[bulge, 20, 12]} />
-			<T.MeshStandardMaterial {color} {...pbr} />
-		</T.Mesh>
-	{/if}
+{#each bands as b}
+	<!-- a band of the flow colour around the pipe; no clicks, no ink of its own -->
+	<!-- unit length, scaled to the band: no new geometry every frame -->
+	<T.Mesh position={b.pos} quaternion={b.quat} scale={[1, b.len, 1]} raycast={() => {}} userData={{ ink: false }}>
+		<T.CylinderGeometry args={[bandRadius, bandRadius, 1, facets, 1, true]} />
+		<T.MeshStandardMaterial color={bandColor} {...pbr} />
+	</T.Mesh>
 {/each}

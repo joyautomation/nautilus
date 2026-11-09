@@ -1,0 +1,3 @@
+{
+	"preview": { "props": { "leadOn": 60, "lagOn": 80, "lagOff": 55, "leadOff": 30, "levelSP": 45, "highAlarm": 90 } }
+}

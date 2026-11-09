@@ -5,7 +5,7 @@
 # the control programs derive themselves, regardless of which build
 # supplies the process values underneath them. See each manifest's own
 # `tags:` comment for what stays inline instead (process values,
-# bench-only inject tags, InflowLps) and why.
+# bench-only inject tags, InflowGpm) and why.
 #
 # Compose it into a project with:  tag-files: [tags/station.yaml]
 
@@ -24,7 +24,8 @@
 - { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Speed command ceiling" }
 - { name: P101_Mode, role: setpoint, init: 2, desc: "P-101 HOA: 0 Off, 1 Hand, 2 Auto" }
 - { name: P102_Mode, role: setpoint, init: 2, desc: "P-102 HOA: 0 Off, 1 Hand, 2 Auto" }
-- { name: HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "Speed commanded in Hand" }
+- { name: P101_HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "P-101 speed commanded in Hand" }
+- { name: P102_HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "P-102 speed commanded in Hand" }
 - { name: ResetFaults, role: setpoint, init: false, desc: "Pulse: clear fail-to-run latches" }
 
 # Computed state — written by sequence.sfc/level.fbd/permissives.ld/
@@ -47,9 +48,10 @@
 - { name: P101_Avail, role: state, init: false, desc: "P-101 available (not failed, not locked out, permissive, not Off)" }
 - { name: P102_Avail, role: state, init: false, desc: "P-102 available (not failed, not locked out, permissive, not Off)" }
 - { name: BothUnavail, role: state, init: false, desc: "Neither pump is available" }
+- { name: DryRunHold, role: state, init: false, desc: "Dry-run protection: low-low tripped, pumps held off until the well refills to Lead off" }
 - { name: LeadFailed, role: state, init: false, desc: "The lead (on-duty) pump's fail-to-run" }
 - { name: HighLevelAlm, role: state, init: false, desc: "High level alarm (LIT-101, latched with hysteresis)" }
 - { name: P101_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-101 runtime stats" }
 - { name: P102_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-102 runtime stats" }
-- { name: StationFlowM3, role: state, init: 0.0, unit: "m3", desc: "Totalized discharge volume, today" }
+- { name: StationFlowGal, role: state, init: 0.0, unit: "gal", desc: "Totalized discharge volume, today" }
 - { name: CycleCount, role: state, init: 0, desc: "Lead-call cycle count" }

@@ -1,5 +1,29 @@
 # Changelog — @joyautomation/nautilus-hmi
 
+## Unreleased
+
+### Added
+
+- **`Tank` shapes.** `shape` says what kind of tank it is: a closed
+  `vessel` (the default, as before), an `open` basin with no roof, or a
+  below-grade `pit` (a wet well or sump: square concrete walls, a cover
+  slab with an access hatch at grade, and hatched ground beside and below
+  it). A pit reserves a band for its ground, so the scale and the label
+  sit outside it; `tankGeometry` and `builtinParts` take the shape too, so
+  ports on the vessel land on its walls. In a mimic: `"props": { "shape":
+  "pit" }`. `TankShape` is exported.
+- **`Mimic` `selected`.** The id of the equipment to mark as selected
+  (its faceplate open, say): it keeps a soft glow, the 2D counterpart of
+  the 3D view's selection cage. Clickable equipment gets `aria-pressed`.
+
+### Changed
+
+- **Clickable mimic equipment glows instead of drawing a box.** Hover
+  brightens the drawing and fades in a glow that follows its own shape
+  (a drop shadow), where the 2px outline traced its whole box and
+  snapped on and off. Keyboard focus and the selected equipment keep a
+  softer glow. No transition under `prefers-reduced-motion`.
+
 ## 0.9.0 — 2026-11-05 (minor; one breaking change, below)
 
 ### Added

@@ -6,21 +6,22 @@
    the same way a project's other library functions are. *)
 
 FUNCTION_BLOCK WetWellModel
-(* Integrates a level from an inflow/outflow balance. WW-101: 4.0 m level
-   span over 5 m3 of usable volume between the span's limits, so 1 L/s
-   net moves the level 1 % in 50 s (5000 L / 100 % = 50 L per %). *)
+(* Integrates a level from an inflow/outflow balance. WW-101: a 13 ft
+   level span over 1,320 gal of usable volume between the span's limits,
+   so 13.2 gal per %: 100 gpm net moves the level 1 % in about 8 s. *)
 VAR_INPUT
-    InflowLps  : REAL;
-    OutflowLps : REAL;
+    InflowGpm  : REAL;
+    OutflowGpm : REAL;
     Dt         : REAL; (* seconds *)
 END_VAR
 VAR_IN_OUT
     Level : REAL; (* %, 0..100 *)
 END_VAR
 VAR CONSTANT
-    LPerPercent : REAL := 50.0; (* 5000 L span / 100 % = 50 L per % *)
+    GalPerPercent : REAL := 13.2; (* 1,320 gal span / 100 % = 13.2 gal per % *)
 END_VAR
-Level := LIMIT(0.0, Level + (InflowLps - OutflowLps) * Dt / LPerPercent, 100.0);
+(* gal/min * s / 60 = gal *)
+Level := LIMIT(0.0, Level + (InflowGpm - OutflowGpm) * Dt / 60.0 / GalPerPercent, 100.0);
 END_FUNCTION_BLOCK
 
 FUNCTION_BLOCK VfdModel

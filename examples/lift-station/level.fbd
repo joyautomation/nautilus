@@ -12,16 +12,17 @@ VAR_EXTERNAL
     LevelDtS       : REAL;
     LeadReq        : BOOL;
     SpeedRef       : REAL;
-    HandSpeedHz    : REAL;
     HighLevelAlmSP : REAL;
     HighLevelAlm   : BOOL;
 
     P101_RunCmd   : BOOL;
     P101_InHand   : BOOL;
     P101_SpeedCmd : REAL;
+    P101_HandSpeedHz : REAL;
     P102_RunCmd   : BOOL;
     P102_InHand   : BOOL;
     P102_SpeedCmd : REAL;
+    P102_HandSpeedHz : REAL;
 END_VAR
 FBD
   NETWORK 'LIC-101: level to pump speed'
@@ -37,9 +38,9 @@ FBD
 
   NETWORK 'P-101 / P-102: speed commands'
   // stopped -> 0 Hz; running in Auto -> the loop's output; running in
-  // Hand -> the operator's hand-speed setpoint.
-  P101_SpeedCmd := SEL(P101_RunCmd, 0.0, SEL(P101_InHand, SpeedRef, HandSpeedHz))
-  P102_SpeedCmd := SEL(P102_RunCmd, 0.0, SEL(P102_InHand, SpeedRef, HandSpeedHz))
+  // Hand -> that pump's own hand-speed setpoint.
+  P101_SpeedCmd := SEL(P101_RunCmd, 0.0, SEL(P101_InHand, SpeedRef, P101_HandSpeedHz))
+  P102_SpeedCmd := SEL(P102_RunCmd, 0.0, SEL(P102_InHand, SpeedRef, P102_HandSpeedHz))
 
   NETWORK 'LAH-101: high level alarm'
   // seal-in with hysteresis — latches at HighLevelAlmSP, clears 5 % below

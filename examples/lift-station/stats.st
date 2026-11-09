@@ -9,7 +9,7 @@ VAR_EXTERNAL
     P101_Stats   : PumpStats;
     P102_Stats   : PumpStats;
     FIT101_Flow  : REAL;
-    StationFlowM3: REAL;
+    StationFlowGal: REAL;
     StatsDtS     : REAL;
 END_VAR
 VAR
@@ -19,6 +19,6 @@ END_VAR
 meter101(Running := P101_Running, Dt := StatsDtS, Stats := P101_Stats);
 meter102(Running := P102_Running, Dt := StatsDtS, Stats := P102_Stats);
 
-(* Totalized discharge volume, m3: L/s * s / 1000. *)
-StationFlowM3 := StationFlowM3 + FIT101_Flow * StatsDtS / 1000.0;
+(* Totalized discharge volume, gal: gal/min * s / 60. *)
+StationFlowGal := StationFlowGal + FIT101_Flow * StatsDtS / 60.0;
 END_PROGRAM

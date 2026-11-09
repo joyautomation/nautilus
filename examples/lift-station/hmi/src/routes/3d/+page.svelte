@@ -1,30 +1,26 @@
 <script lang="ts">
-	// The lift station in 3D — the same equipment and the same tag bindings
+	// The lift station in 3D: the same equipment and the same tag bindings
 	// as lift-station.mimic.json, placed in metres and rendered by
 	// @joyautomation/nautilus-hmi-3d. Everything about the scene is in
 	// ../../../../lift-station.scene.json (at the PROJECT root, next to the
-	// mimic, so `naut check` holds it to the tags); this page hands the
-	// app's one realtime client to the view and carries the two things the
-	// mimic shows as text — the sequence step and the alarm banner — in the
-	// HUD, where a 3D drawing has no place for them.
-	import { resolve } from '$app/paths';
-	import { AlarmBanner, AckButton } from '@joyautomation/nautilus-hmi';
+	// mimic, so `naut check` holds it to the tags). Clicking equipment opens
+	// the same controls as on the P&ID (EquipmentPanel), in place of the
+	// view's own read-only inspector.
 	import { SceneView, LOOKS, type SceneDoc, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
 	import sceneDoc from '../../../../lift-station.scene.json';
 	// The six kinds live in files of their own (hmi/src/lib/kinds/*.kind.json,
 	// design §3g): the scene names each by path, and the view pairs the
-	// path with the module Vite found, as it does a component kind's — a
+	// path with the module Vite found, as it does a component kind's. A
 	// kind ejected to a .svelte beside its file (the kind editor's "Eject
 	// to component") joins the same way.
 	const modules = import.meta.glob(['/src/lib/kinds/*.kind.json', '/src/lib/kinds/*.svelte'], { eager: true });
-	import SeqStepTag from '$lib/SeqStepTag.svelte';
+	import EquipmentPanel from '$lib/EquipmentPanel.svelte';
 	import { rt, alarms } from '$lib/client.svelte';
 
 	// The JSON import's literal types do not overlap SceneDoc closely enough
 	// for a direct cast; SceneView validates the document at run time.
 	const doc = sceneDoc as unknown as SceneDoc;
-	const tags = $derived((rt.frame?.tags ?? {}) as Record<string, unknown>);
-	const str = (k: string) => (typeof tags[k] === 'string' ? (tags[k] as string) : '');
+	let selected = $state<string | null>(null);
 
 	// The look: `lit` is the scene as authored (the glTF kinds in their own
 	// paint), `flat` the same models in the kit's matte greys, `paper` the
@@ -39,39 +35,33 @@
 	const perf = query?.has('perf') ?? false;
 </script>
 
-<svelte:head><title>Lift Station — 3D view</title></svelte:head>
+<svelte:head><title>Lift Station · 3D</title></svelte:head>
 
 <div class="stage">
-	<SceneView {doc} {rt} {alarms} {modules} {perf} bind:look>
-		{#snippet hud()}
-			<div class="bar">
-				<a class="pill" href={resolve('/')} title="The operator screen: the P&ID mimic, faceplates, setpoints, trend">← operator screen</a>
-				<button class="pill" onclick={next} title="Cycle the look: lit, flat, paper">{shown}</button>
-				<span class="seq">
-					Sequence <SeqStepTag text={str('SeqStep')} width={110} />
-				</span>
-			</div>
-			<div class="bar">
-				<AlarmBanner summary={alarms.summary} />
-				<AckButton alarms={alarms.active} ids={['*']} onack={(ids, by) => alarms.ack(ids, by)} />
-			</div>
-		{/snippet}
-	</SceneView>
+	<!-- Its own stacking layer: the scene's labels carry a very high
+	     z-index, which would otherwise draw them over the panel. -->
+	<div class="scene">
+		<SceneView {doc} {rt} {alarms} {modules} {perf} inspector={false} bind:selected bind:look>
+			{#snippet hud()}
+				<button class="pill" onclick={next} title="Cycle the look: lit, flat, paper">Look: {shown}</button>
+			{/snippet}
+		</SceneView>
+	</div>
+	<EquipmentPanel bind:selected />
 </div>
 
 <style>
 	.stage {
-		position: fixed;
+		position: absolute;
 		inset: 0;
 	}
-	.bar {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex-wrap: wrap;
+	.scene {
+		position: absolute;
+		inset: 0;
+		isolation: isolate;
 	}
 	.pill {
-		text-decoration: none;
+		pointer-events: auto;
 		font: 12px/1 var(--font, system-ui, sans-serif);
 		padding: 5px 10px;
 		border-radius: 999px;
@@ -79,12 +69,5 @@
 		background: color-mix(in srgb, var(--surface, #1a1a19) 85%, transparent);
 		color: var(--ink, #e8e6e1);
 		cursor: pointer;
-	}
-	.seq {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 12px;
-		color: var(--muted, #8a887d);
 	}
 </style>

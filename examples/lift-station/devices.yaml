@@ -34,7 +34,7 @@ devices:
     description: remote I/O — wet-well instruments and pump-skid contacts
     registers:
       - {tag: Level,         address: 0, table: input, format: int16, scale: 0.01, unit: "%", desc: "wet-well level"}
-      - {tag: Flow,          address: 1, table: input, format: int16, scale: 0.1, unit: "L/s", desc: "force-main discharge flow"}
+      - {tag: Flow,          address: 1, table: input, format: int16, scale: 0.1, unit: "gpm", desc: "force-main discharge flow"}
       - {tag: LSHH101,       address: 0, table: discrete, desc: "high-high float"}
       - {tag: LSLL101,       address: 1, table: discrete, desc: "low-low float"}
       - {tag: P101_SealFail, address: 2, table: discrete, desc: "P101 seal-leak probe"}

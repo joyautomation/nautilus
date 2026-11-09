@@ -17,7 +17,15 @@ export interface TankGeometry {
 	labelRow: Span;
 	/** Text size: the scale's numbers and the label. */
 	font: number;
+	/** A pit's band of ground beside and below the vessel (0 for the
+	 * other shapes): the scale and the label sit outside it. */
+	ground: number;
 }
+
+/** What a Tank is: a closed `vessel`, an `open` basin (no roof), or a
+ * below-grade `pit` (a wet well or sump: concrete walls, a cover slab at
+ * grade, ground around it). */
+export type TankShape = 'vessel' | 'open' | 'pit';
 
 /** Tank: a 12-unit margin, the vessel, then the level scale (44, or wider
  * if its numbers need it — text never drops below 8) on the right; a
@@ -25,21 +33,23 @@ export interface TankGeometry {
 export function tankGeometry(
 	width: number,
 	height: number | undefined,
-	opts: { label?: string; scale?: boolean } = {}
+	opts: { label?: string; scale?: boolean; shape?: TankShape } = {}
 ): TankGeometry {
 	const { w, h, k } = fitBox(width, height, [220, 260]);
 	const scale = opts.scale ?? true;
 	const font = Math.max(8, 12 * k);
+	const ground = opts.shape === 'pit' ? 14 * k : 0;
 	// tick (18k to the text) + "100" at ~1.9 em
-	const cols = tracks(w, [12 * k, '1fr', scale ? Math.max(44 * k, 18 * k + 2 * font) : 12 * k]);
-	const rows = tracks(h, [10 * k, '1fr', opts.label ? 32 * k : 10 * k]);
+	const cols = tracks(w, [12 * k + ground, '1fr', ground + (scale ? Math.max(44 * k, 18 * k + 2 * font) : 12 * k)]);
+	const rows = tracks(h, [10 * k, '1fr', ground, opts.label ? 32 * k : 10 * k]);
 	return {
 		w,
 		h,
 		k,
 		vessel: { x: cols[1].start, y: rows[1].start, w: cols[1].size, h: rows[1].size },
-		labelRow: rows[2],
-		font
+		labelRow: rows[3],
+		font,
+		ground
 	};
 }
 
@@ -104,7 +114,8 @@ export function builtinParts(
 		case 'Tank': {
 			const label = typeof eq.props?.label === 'string' ? eq.props.label : eq.label;
 			const scale = eq.props?.scale === false ? false : undefined;
-			return { vessel: tankGeometry(box.w, box.h, { label, scale }).vessel };
+			const shape = eq.props?.shape as TankShape | undefined;
+			return { vessel: tankGeometry(box.w, box.h, { label, scale, shape }).vessel };
 		}
 		case 'Valve':
 			return { body: valveGeometry(box.w, box.h).body };

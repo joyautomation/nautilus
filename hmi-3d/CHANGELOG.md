@@ -1,5 +1,21 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## Unreleased
+
+**Added.** A dark paper look: under a dark theme (read off the theme's
+`--bg`), `paper` is the same drawing inverted, a near-black sheet with dark
+fills and light lines; under a light theme it is the paper it was.
+`paperPalette(base, dark)` takes the choice, and `paletteFromTheme` reports
+`dark`. The view follows a theme switched while it is up (it watches
+`data-theme` on `<html>`), models included. The palette gains `flow` (the
+colour of a flowing pipe's bands) and `grid` (the floor grid's lines, which were
+fixed light greys).
+
+**Changed.** A flowing pipe is a 3D dashed line in every look: bands of
+the palette's `flow` colour around the pipe, over its fluid colour,
+travelling along the run in the order of its points and following its
+bends, in place of the bulges (lit, flat) and black chevrons (paper).
+
 ## 0.3.1 — 2026-11-05
 
 **Changed.** Works with `@joyautomation/nautilus-hmi` 0.9 as well as 0.8

@@ -4,7 +4,12 @@
 	// keep their size. The vessel is `data-part="vessel"`, so a port anchored
 	// to it stays on the wall however the tank is sized. Heating is its own
 	// component (Heater), placed over the tank.
-	import { tankGeometry } from '../drawings.js';
+	//
+	// `shape` says what kind of tank it is: a closed `vessel` (the default),
+	// an `open` basin with no roof, or a below-grade `pit` (a wet well or a
+	// sump: square concrete walls, a cover slab with an access hatch at
+	// grade, and hatched ground around it).
+	import { tankGeometry, type TankShape } from '../drawings.js';
 	import type { MimicLook } from '../mimic.js';
 
 	let {
@@ -13,7 +18,8 @@
 		width = 220,
 		height,
 		look = 'isa101',
-		scale = true
+		scale = true,
+		shape = 'vessel'
 	}: {
 		levelPct?: number;
 		label?: string;
@@ -22,11 +28,16 @@
 		look?: MimicLook;
 		/** Draw the 0–100 level graduations beside the vessel. */
 		scale?: boolean;
+		/** `vessel` (closed), `open` (no roof) or `pit` (below grade). */
+		shape?: TankShape;
 	} = $props();
 
 	const uid = `tank${Math.random().toString(36).slice(2, 8)}`;
 
-	let box = $derived(tankGeometry(width, height, { label, scale }));
+	let box = $derived(tankGeometry(width, height, { label, scale, shape }));
+	let pit = $derived(shape === 'pit');
+	let open = $derived(shape === 'open');
+	let g = $derived(box.ground);
 	let k = $derived(box.k);
 
 	// vessel (outer shell) and its interior
@@ -34,12 +45,14 @@
 	let vy = $derived(box.vessel.y);
 	let vw = $derived(box.vessel.w);
 	let vh = $derived(box.vessel.h);
-	let wall = $derived(Math.max(2, 6 * k));
-	let rx = $derived(Math.min(14 * k, vw / 3, vh / 3));
+	// A pit's walls are concrete: thicker, and square.
+	let wall = $derived(pit ? Math.max(3, 9 * k) : Math.max(2, 6 * k));
+	let rx = $derived(pit ? 0 : Math.min(14 * k, vw / 3, vh / 3));
 	let ix = $derived(vx + wall);
-	let iy = $derived(vy + wall);
+	// An open basin has no roof: its inside runs to the top of the walls.
+	let iy = $derived(open ? vy : vy + wall);
 	let iw = $derived(Math.max(0, vw - 2 * wall));
-	let ih = $derived(Math.max(0, vh - 2 * wall));
+	let ih = $derived(Math.max(0, vh - (open ? 1 : 2) * wall));
 	let irx = $derived(Math.max(0, rx - wall / 2));
 
 	let clamped = $derived(Math.max(0, Math.min(100, levelPct)));
@@ -52,6 +65,29 @@
 	let font = $derived(box.font);
 
 	let real = $derived(look === 'realistic');
+	let name = $derived(pit ? 'Pit' : open ? 'Basin' : 'Tank');
+	let shellFill = $derived(real ? (pit ? '#8f8c84' : `url(#${uid}-steel)`) : 'var(--surface-2, #232321)');
+	let edge = $derived(real ? '#2e3134' : 'var(--edge, #7a7973)');
+	// A pit's ground: the band beside and below it, hatched with the civil
+	// drawing's diagonals. Drawn as lines, not an SVG <pattern>: a pattern
+	// renders as repeated tiles, and when the drawing is re-rendered at an
+	// odd scale (a filter coming or going on a scaled mimic) the tiles'
+	// edges show as seams and uneven lines.
+	let earthBand = $derived(
+		`M ${vx - g} ${vy} H ${vx + vw + g} V ${vy + vh + g} H ${vx - g} Z M ${vx} ${vy} V ${vy + vh} H ${vx + vw} V ${vy} Z`
+	);
+	let hatch = $derived.by(() => {
+		if (!pit) return '';
+		const x0 = vx - g, x1 = vx + vw + g, y0 = vy, y1 = vy + vh + g;
+		const step = 6 * k * Math.SQRT2; // 6 units apart, measured across the lines
+		let d = '';
+		// Lines rising to the right (x + y = c), across the band's bounds.
+		for (let c = x0 + y0; c <= x1 + y1; c += step) d += `M ${c - y1} ${y1} L ${c - y0} ${y0} `;
+		return d;
+	});
+	// The access hatch in a pit's cover slab, a third of the way across.
+	let hatchX = $derived(vx + vw * 0.2);
+	let hatchW = $derived(vw * 0.28);
 </script>
 
 <svg
@@ -59,9 +95,15 @@
 	width={box.w}
 	height={box.h}
 	role="img"
-	aria-label={`Tank ${label}: ${clamped.toFixed(0)}%`}
+	aria-label={`${name} ${label}: ${clamped.toFixed(0)}%`}
 >
 	<defs>
+		{#if pit}
+			<!-- the band of ground around the pit, for the hatch to stay in -->
+			<clipPath id="{uid}-earth">
+				<path d={earthBand} clip-rule="evenodd" />
+			</clipPath>
+		{/if}
 		<clipPath id="{uid}-clip">
 			<rect x={ix} y={iy} width={iw} height={ih} rx={irx} />
 		</clipPath>
@@ -87,18 +129,25 @@
 		{/if}
 	</defs>
 
+	{#if pit}
+		<!-- the ground around the pit, and the grade line across its top -->
+		<path d={hatch} clip-path="url(#{uid}-earth)" stroke="var(--muted, #898781)" stroke-width={Math.max(0.75, k)} opacity="0.55" fill="none" />
+		<line x1={vx - g - 6 * k} x2={vx + vw + g} y1={vy} y2={vy} stroke={edge} stroke-width={Math.max(1.5, 3 * k)} />
+	{/if}
+
 	<!-- shell -->
-	<rect
-		data-part="vessel"
-		x={vx}
-		y={vy}
-		width={vw}
-		height={vh}
-		{rx}
-		fill={real ? `url(#${uid}-steel)` : 'var(--surface-2, #232321)'}
-		stroke={real ? '#2e3134' : 'var(--edge, #7a7973)'}
-		stroke-width={stroke}
-	/>
+	{#if open}
+		<!-- walls and floor, no roof -->
+		<path
+			data-part="vessel"
+			d="M {vx} {vy} V {vy + vh - rx} Q {vx} {vy + vh} {vx + rx} {vy + vh} H {vx + vw - rx} Q {vx + vw} {vy + vh} {vx + vw} {vy + vh - rx} V {vy}"
+			fill={shellFill}
+			stroke={edge}
+			stroke-width={stroke}
+		/>
+	{:else}
+		<rect data-part="vessel" x={vx} y={vy} width={vw} height={vh} {rx} fill={shellFill} stroke={edge} stroke-width={stroke} />
+	{/if}
 	<rect x={ix} y={iy} width={iw} height={ih} rx={irx} fill={real ? `url(#${uid}-bore)` : 'var(--bg, #0d0d0d)'} />
 
 	<g clip-path="url(#{uid}-clip)">
@@ -116,7 +165,12 @@
 		{/if}
 	</g>
 
-	{#if real}
+	{#if pit}
+		<!-- the access hatch in the cover slab -->
+		<rect x={hatchX} y={vy + stroke} width={hatchW} height={Math.max(1, wall - 2 * stroke)} fill="var(--bg, #0d0d0d)" stroke={edge} stroke-width={Math.max(1, k)} />
+	{/if}
+
+	{#if real && !pit}
 		<!-- weld seams between the shell's courses -->
 		{#each [1 / 3, 2 / 3] as f (f)}
 			<line x1={vx + stroke} x2={vx + vw - stroke} y1={vy + vh * f} y2={vy + vh * f} stroke="rgba(0,0,0,0.28)" stroke-width={Math.max(1, k)} />
@@ -125,10 +179,10 @@
 
 	<!-- level graduations -->
 	{#if scale}
-		{#each marks as g (g)}
-			{@const gy = iy + ih - (g / 100) * ih}
-			<line x1={vx + vw + 6 * k} x2={vx + vw + 14 * k} y1={gy} y2={gy} stroke="var(--muted, #898781)" stroke-width={Math.max(1, k)} />
-			<text x={vx + vw + 18 * k} y={gy + font * 0.3} font-size={font} fill="var(--muted, #898781)">{g}</text>
+		{#each marks as mark (mark)}
+			{@const gy = iy + ih - (mark / 100) * ih}
+			<line x1={vx + vw + g + 6 * k} x2={vx + vw + g + 14 * k} y1={gy} y2={gy} stroke="var(--muted, #898781)" stroke-width={Math.max(1, k)} />
+			<text x={vx + vw + g + 18 * k} y={gy + font * 0.3} font-size={font} fill="var(--muted, #898781)">{mark}</text>
 		{/each}
 	{/if}
 

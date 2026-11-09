@@ -1,6 +1,6 @@
 {
   "model": "models/flow-meter.glb",
-  "status": "{Flow:2} L/s",
+  "status": "{Flow:0} gpm",
   "ports": {
     "inlet": { "at": { "part": "FlangeIn", "anchor": "left" } },
     "outlet": { "at": { "part": "FlangeOut", "anchor": "right" } }

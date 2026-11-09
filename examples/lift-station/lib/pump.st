@@ -45,18 +45,18 @@ IF edgeDown.Q THEN
 END_IF;
 END_FUNCTION_BLOCK
 
-FUNCTION PumpFlowLps : REAL
+FUNCTION PumpFlowGpm : REAL
 (* Discharge flow at a given VFD speed — a rough affinity curve pinned to
-   two points: ~0 L/s below 25 Hz (not enough head to open the check
-   valve), 25 L/s at 60 Hz, linear between. Shared by the bench sim
+   two points: ~0 gpm below 25 Hz (not enough head to open the check
+   valve), 400 gpm at 60 Hz, linear between. Shared by the bench sim
    (lib/physics.st) and anywhere logic wants an expected flow from a
    commanded speed. *)
 VAR_INPUT
     SpeedHz : REAL;
 END_VAR
 IF SpeedHz <= 25.0 THEN
-    PumpFlowLps := 0.0;
+    PumpFlowGpm := 0.0;
 ELSE
-    PumpFlowLps := (SpeedHz - 25.0) / (60.0 - 25.0) * 25.0;
+    PumpFlowGpm := (SpeedHz - 25.0) / (60.0 - 25.0) * 400.0;
 END_IF;
 END_FUNCTION
