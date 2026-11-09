@@ -667,9 +667,11 @@
 	}
 
 	/* ── stacked cards ──────────────────────────────────────────────────
-	   Below 640px of the component's OWN width (a container query, so a
+	   Below 1080px of the component's OWN width (a container query, so a
 	   table in a narrow panel on a wide screen stacks too) the 8-column
-	   grid gives way to one card per row. Same DOM — the `<tr>`/`<td>`
+	   grid gives way to one card per row. 1080px is where the grid fits:
+	   the column widths above add up to 1052px (border-box), so any
+	   narrower and the table would scroll sideways instead. Same DOM — the `<tr>`/`<td>`
 	   are what a11y and the tests expect — the row becomes a grid and each
 	   cell takes its place by column class:
 	     line 1  priority glyph · label (wraps, never ellipsised) · select
@@ -680,7 +682,7 @@
 	.wrap {
 		container-type: inline-size;
 	}
-	@container (max-width: 640px) {
+	@container (max-width: 1080px) {
 		.sortctl {
 			display: inline-flex;
 		}

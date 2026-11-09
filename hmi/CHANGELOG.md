@@ -23,6 +23,10 @@
   (a drop shadow), where the 2px outline traced its whole box and
   snapped on and off. Keyboard focus and the selected equipment keep a
   softer glow. No transition under `prefers-reduced-motion`.
+- **`AlarmTable` stacks wherever its columns don't fit.** It switched to
+  one card per alarm below 640px of its own width, but its columns need
+  1052px, so between the two it scrolled sideways (in a side panel, say).
+  It now stacks below 1080px.
 
 ## 0.9.0 — 2026-11-05 (minor; one breaking change, below)
 
