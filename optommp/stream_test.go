@@ -242,7 +242,11 @@ func do07(dev *fakeDevice) bool { return dev.U32(addrDigitalPacked+digitalModule
 func TestDriverRewritesOutputsAfterAStall(t *testing.T) {
 	for _, stream := range []time.Duration{0, 5 * time.Millisecond} {
 		t.Run(fmt.Sprintf("stream=%s", stream), func(t *testing.T) {
-			wd := 60 * time.Millisecond
+			// Wide enough that a busy runner pausing the driver for a few
+			// dozen milliseconds is not a stall: at 60ms one such pause
+			// counted as quiet past the watchdog and rewrote the outputs
+			// while the test said it was being fed on time.
+			wd := 200 * time.Millisecond
 			dev := newBenchDevice()
 			dev.SetWatchdogValue(1, 7, 1) // DO07 on when the watchdog fires
 			m := benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond, Stream: stream, Watchdog: &wd})
