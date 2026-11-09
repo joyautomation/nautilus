@@ -16,6 +16,12 @@
 		{ tag: 'MaxSpeedHz', label: 'Max speed', unit: 'Hz', max: 60 }
 	];
 	const ALARM: Setpoint[] = [{ tag: 'HighLevelAlmSP', label: 'High level', unit: '%', max: 100 }];
+	// LeadSelect's values (sequence.sfc): alternate each cycle, or hold one.
+	const LEAD = [
+		{ v: 0, label: 'Alternate' },
+		{ v: 1, label: 'P-101' },
+		{ v: 2, label: 'P-102' }
+	];
 	const set = (tag: string) => (v: number) => writeTag(tag, v);
 </script>
 
@@ -39,6 +45,21 @@
 		<SeqStepTag text={str('SeqStep')} width={96} />
 		<span>{bool('LeadIsP101') ? 'P-101' : 'P-102'} is lead</span>
 	</p>
+	<!-- LeadSelect: who takes the next call (sequence.sfc's PickLead). A
+	     pump that is not in Auto and available is passed over either way. -->
+	<div class="line lead">
+		<span>Lead</span>
+		<div class="seg" role="group" aria-label="Lead pump">
+			{#each LEAD as l (l.v)}
+				<button class:active={num('LeadSelect') === l.v} aria-pressed={num('LeadSelect') === l.v} onclick={() => writeTag('LeadSelect', l.v)}>
+					{l.label}
+				</button>
+			{/each}
+		</div>
+	</div>
+	{#if num('LeadSelect') !== 0 && bool('LeadIsP101') !== (num('LeadSelect') === 1)}
+		<p class="hint">{num('LeadSelect') === 1 ? 'P-101' : 'P-102'} is selected but not in Auto and available, so the other pump leads.</p>
+	{/if}
 </section>
 
 <section>
@@ -156,6 +177,32 @@
 		justify-content: space-between;
 		gap: 10px;
 		padding: 3px 0;
+	}
+	.lead {
+		margin-top: 10px;
+	}
+	.seg {
+		display: flex;
+		gap: 2px;
+		padding: 2px;
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		background: var(--surface-2);
+	}
+	.seg button {
+		padding: 4px 9px;
+		border: 0;
+		border-radius: 5px;
+		background: none;
+		color: var(--ink-2);
+		font: inherit;
+		font-size: 0.75rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.seg button.active {
+		background: var(--s1);
+		color: var(--bg);
 	}
 	.hint {
 		margin: 4px 0 0;

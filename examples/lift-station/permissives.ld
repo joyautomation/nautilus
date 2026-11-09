@@ -42,6 +42,9 @@ VAR_EXTERNAL
     ResetFaults : BOOL;
     BothUnavail : BOOL;
     LeadFailed  : BOOL;
+    P101_DutyOk : BOOL;
+    P102_DutyOk : BOOL;
+    LeadUnavail : BOOL;
 END_VAR
 VAR
     m101 : MotorStarter;
@@ -97,5 +100,16 @@ LD
 
   RUNG leadfailed (* whichever pump is currently lead, reflected for the sequence *)
     [ LeadIsP101 P101_FailToRun | /LeadIsP101 P102_FailToRun ] ( LeadFailed )
+
+  // Fit to be lead: in Auto (the sequence commands it) and available. A
+  // pump in Hand runs on the operator's say-so, so it is not.
+  RUNG p101duty
+    EQ(P101_Mode, 2) P101_Avail ( P101_DutyOk )
+
+  RUNG p102duty (* as p101duty, for P-102 *)
+    EQ(P102_Mode, 2) P102_Avail ( P102_DutyOk )
+
+  RUNG leadunavail (* the lead is no longer fit while the other is: hand it over *)
+    [ LeadIsP101 /P101_DutyOk P102_DutyOk | /LeadIsP101 /P102_DutyOk P101_DutyOk ] ( LeadUnavail )
 END_LD
 END_PROGRAM

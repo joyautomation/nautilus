@@ -1,6 +1,9 @@
 PROGRAM PumpSequence
 (* Duty/standby sequencing: which pump(s) are called, who's lead, the
-   post-run pump-down, and failover on a fail-to-run. Level and float
+   post-run pump-down, and failover on a fail-to-run or a lead that is no
+   longer fit to lead. Who leads: LeadSelect, applied while idle (0
+   alternates after each pump-down, 1 and 2 hold P-101 or P-102), and
+   never a pump that is not in Auto and available while the other is. Level and float
    logic only — the fault sensing, permissives and the actual RunCmd/
    SpeedCmd outputs live in permissives.ld and level.fbd; this program
    only ever asks for a pump ("LeadReq"/"LagReq"), never commands one
@@ -14,6 +17,10 @@ VAR_EXTERNAL
     LeadOffLevel : REAL;
     PostRunSec   : REAL;
     LeadFailed   : BOOL; (* the lead pump's FailToRun, from permissives.ld *)
+    LeadUnavail  : BOOL; (* the lead stopped being fit to lead, the other is (permissives.ld) *)
+    LeadSelect   : INT;  (* 0 alternate, 1 P-101 lead, 2 P-102 lead *)
+    P101_DutyOk  : BOOL;
+    P102_DutyOk  : BOOL;
     LeadReq      : BOOL;
     LagReq       : BOOL;
     LeadIsP101   : BOOL;
@@ -29,6 +36,7 @@ SFC
     R  LeadReq;
     R  LagReq;
     N  SetIdle;
+    N  PickLead;         (* who takes the next call *)
   END_STEP
 
   STEP Lead:
@@ -36,6 +44,9 @@ SFC
     R  LagReq;           (* dropping back from Lag: the lag pump stands down *)
     N  SetLead;
     P1 CountCycle;      (* one new cycle counted per lead call *)
+    P1 PickLead;        (* the selection again as each call starts, in case
+                           it changed since Idle; a pump unfit to lead is
+                           never picked back (PickLead's second rule) *)
   END_STEP
 
   STEP Lag:
@@ -71,7 +82,7 @@ SFC
   END_TRANSITION
 
   (* alternative divergence out of Lead: priority by declaration order *)
-  TRANSITION t_failover FROM Lead TO Failover := LeadFailed;
+  TRANSITION t_failover FROM Lead TO Failover := LeadFailed OR LeadUnavail;
   END_TRANSITION
   TRANSITION t_lag FROM Lead TO Lag := LIT101_Level >= LagOnLevel;
   END_TRANSITION
@@ -96,6 +107,21 @@ SFC
 
   ACTION SwapDuty:
     LeadIsP101 := NOT LeadIsP101;
+  END_ACTION
+
+  ACTION PickLead:
+    (* The operator's choice first; alternation is Alternate's swap. *)
+    IF LeadSelect = 1 THEN
+      LeadIsP101 := TRUE;
+    ELSIF LeadSelect = 2 THEN
+      LeadIsP101 := FALSE;
+    END_IF;
+    (* Then never a lead that cannot take the call when the other can. *)
+    IF LeadIsP101 AND NOT P101_DutyOk AND P102_DutyOk THEN
+      LeadIsP101 := FALSE;
+    ELSIF NOT LeadIsP101 AND NOT P102_DutyOk AND P101_DutyOk THEN
+      LeadIsP101 := TRUE;
+    END_IF;
   END_ACTION
 
   ACTION RunDownTmr:

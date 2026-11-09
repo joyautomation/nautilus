@@ -106,20 +106,55 @@ tests:
         advance: 2.5s
         alarms: { active: [], state: { LSHH101: normal } }
 
-  - name: a seal fail blocks the lead's permissive; the standby still answers a further rise
-    # A seal fail blocks the lead pump's permissive outright, so it never
-    # gets a chance to run — the fail-to-run timer (gated on Run itself,
-    # not the call) never starts, and this design does not fail over on a
-    # permissive block alone (see lib/motor.ld's `fail` rung and
-    # docs/design/examples-dogfood.md). The well keeps rising, and the
-    # standby still answers once the level justifies its own call.
-    given: { LIT101_Level: 65.0, P101_SealFail: true }
+  - name: a seal fail on the lead hands the call to the standby at once
+    # A seal fail blocks the lead pump's permissive, so it is not fit to
+    # lead (P101_DutyOk false): the sequence gives the lead to P-102 before
+    # the call (or fails over to it, if the call came first) instead of
+    # waiting for the level to reach LagOn.
+    given: { LIT101_Level: 65.0, P101_SealFail: true, P102_Running: true }
+    advance: 1s
+    expect: { P101_Permissive: false, P101_RunCmd: false, LeadIsP101: false, P102_RunCmd: true }
+
+  - name: LeadSelect holds P-102 as lead across a pump-down
+    given: { LeadSelect: 2, LIT101_Level: 65.0, P102_Running: true }
     steps:
       - advance: 1s
-        expect: { P101_Permissive: false, P101_RunCmd: false, P102_RunCmd: false }
-      - given: { LIT101_Level: 85.0, P102_Running: true } # LagOnLevel
+        expect: { LeadIsP101: false, P102_RunCmd: true, P101_RunCmd: false }
+      - given: { LIT101_Level: 25.0 } # below LeadOff: post-run, then Alternate swaps...
+        advance: 22s
+        expect: { P102_RunCmd: false }
+      - advance: 1s # ...and back in Idle the selection takes the lead again
+        expect: { LeadIsP101: false }
+
+  - name: LeadSelect alternate swaps the lead after each pump-down
+    given: { LeadSelect: 0, LeadIsP101: true, LIT101_Level: 65.0, P101_Running: true }
+    steps:
+      - advance: 1s
+        expect: { P101_RunCmd: true }
+      - given: { LIT101_Level: 25.0 }
+        advance: 23s
+        expect: { LeadIsP101: false }
+
+  - name: a lead in Off hands the lead over while idle, whatever LeadSelect says
+    given: { LeadSelect: 1, P101_Mode: 0, LIT101_Level: 40.0 } # idle: below LeadOn
+    steps:
+      - advance: 1s
+        expect: { LeadIsP101: false } # P-101 selected, but Off: P-102 leads
+      - given: { LIT101_Level: 65.0, P102_Running: true }
         advance: 1s
-        expect: { P101_RunCmd: false, P102_RunCmd: true }
+        expect: { P102_RunCmd: true, P101_RunCmd: false }
+      - given: { P101_Mode: 2, LIT101_Level: 25.0, P102_Running: false }
+        advance: 23s # pump-down done; P-101 is back in Auto
+        expect: { LeadIsP101: true } # the selection holds again
+
+  - name: a lead switched to Off mid-cycle fails over to the other pump
+    given: { LIT101_Level: 65.0, LeadIsP101: true, P101_Running: true }
+    steps:
+      - advance: 1s
+        expect: { P101_RunCmd: true, LeadIsP101: true }
+      - given: { P101_Mode: 0, P101_Running: false, P102_Running: true }
+        advance: 1s
+        expect: { P101_RunCmd: false, LeadIsP101: false, P102_RunCmd: true }
 
   - name: a low-low float blocks the lead's permissive, same as a seal fail
     # permissives.ld's p101perm rung ANDs in /LSLL101 — a dry well blocks
