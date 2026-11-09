@@ -48,6 +48,10 @@
 - { name: P101_Avail, role: state, init: false, desc: "P-101 available (not failed, not locked out, permissive, not Off)" }
 - { name: P102_Avail, role: state, init: false, desc: "P-102 available (not failed, not locked out, permissive, not Off)" }
 - { name: BothUnavail, role: state, init: false, desc: "Neither pump is available" }
+- { name: LeadSelect, role: setpoint, type: INT, init: 0, desc: "Lead pump: 0 alternate each cycle, 1 P-101, 2 P-102" }
+- { name: P101_DutyOk, role: state, init: false, desc: "P-101 fit to be lead: in Auto and available" }
+- { name: P102_DutyOk, role: state, init: false, desc: "P-102 fit to be lead: in Auto and available" }
+- { name: LeadUnavail, role: state, init: false, desc: "The lead pump stopped being fit to lead while the other is" }
 - { name: DryRunHold, role: state, init: false, desc: "Dry-run protection: low-low tripped, pumps held off until the well refills to Lead off" }
 - { name: LeadFailed, role: state, init: false, desc: "The lead (on-duty) pump's fail-to-run" }
 - { name: HighLevelAlm, role: state, init: false, desc: "High level alarm (LIT-101, latched with hysteresis)" }

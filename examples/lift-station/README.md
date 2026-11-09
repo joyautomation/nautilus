@@ -7,7 +7,9 @@ well (WW-101); two submersible pumps on VFDs, P-101 and P-102, lift the
 wastewater into a force main. A level transmitter (LIT-101) and two float
 switches (LSHH-101 high-high, LSLL-101 low-low) watch the well; a flow
 meter (FIT-101) watches the discharge. The station alternates duty
-between the two pumps every cycle, brings the standby pump in on a rising
+between the two pumps every cycle (or holds the one the operator picks,
+and never leads with a pump that can't take the call), brings the standby
+pump in on a rising
 level, and runs both on the high-high float regardless of anything else
 in Auto.
 
@@ -151,7 +153,17 @@ qualifier — see `docs/design/examples-dogfood.md` for why that distinction
 matters). A lead pump that's commanded but never confirms running for
 5 s (`FailToRun`, computed in the ladder) triggers an immediate
 `Failover`: the standby takes the call this same scan, no waiting for a
-post-run.
+post-run. So does a lead that stops being fit to lead mid-cycle
+(`LeadUnavail`: switched out of Auto, or its permissive lost) while the
+other pump is.
+
+Who leads is `LeadSelect`: 0 alternates as above, 1 and 2 hold P-101 or
+P-102. The `PickLead` action applies it while `Idle` and again as each
+call starts, then makes sure the lead is fit: a pump is fit to lead
+(`P101_DutyOk`/`P102_DutyOk`, in the ladder) when it is in Auto and
+available, and an unfit lead hands the lead to the other pump if that
+one is fit, whatever `LeadSelect` says. The selector is in the wet
+well's panel on the HMI.
 
 **Level and speed (`level.fbd`).** A single `PID` (`LIC-101`) turns wet-
 well level into a speed reference (`SpeedRef`), targeting `LevelSP`
