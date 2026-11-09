@@ -89,25 +89,25 @@
     {
       "id": "CKV101",
       "component": "CheckValve",
-      "x": 320,
-      "y": 16,
-      "width": 60,
+      "x": 337,
+      "y": 23,
+      "width": 26,
       "label": "CKV-101",
       "ports": [
-        { "name": "in", "x": 0, "y": 0.55, "dir": "left" },
-        { "name": "out", "x": 1, "y": 0.55, "dir": "right" }
+        { "name": "in", "x": 0, "y": 0.5, "dir": "left" },
+        { "name": "out", "x": 1, "y": 0.5, "dir": "right" }
       ]
     },
     {
       "id": "CKV102",
       "component": "CheckValve",
-      "x": 320,
-      "y": 66,
-      "width": 60,
+      "x": 337,
+      "y": 73,
+      "width": 26,
       "label": "CKV-102",
       "ports": [
-        { "name": "in", "x": 0, "y": 0.55, "dir": "left" },
-        { "name": "out", "x": 1, "y": 0.55, "dir": "right" }
+        { "name": "in", "x": 0, "y": 0.5, "dir": "left" },
+        { "name": "out", "x": 1, "y": 0.5, "dir": "right" }
       ]
     },
     {
