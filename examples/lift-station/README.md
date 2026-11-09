@@ -28,8 +28,9 @@ naut build .                     # one deployable controller binary
    [examples/README.md](../README.md#run-an-example-and-see-its-hmi)).
    Then `naut run .` again and open <http://localhost:8080>. The 2D P&ID is
    at `/`, and the dashboard moves to `/_nautilus/`.
-3. For the 3D view, open <http://localhost:8080/3d>. Drag to orbit, click an
-   asset for its values, and add `?look=paper` for the line-drawing look.
+3. For the 3D view, open <http://localhost:8080/3d> (or the 3D tab). Drag to
+   orbit, click a pump or the wet well for its controls, and add
+   `?look=paper` for the line-drawing look.
 4. Make it do something: set `InflowLps` to `60` in the dashboard and watch
    the lag pump join on both views.
 
@@ -130,7 +131,8 @@ commits, independent of both the working tree and the controller.
 | Online edits: warm-swap a running program from the editor | `server.online-edits` | [Online edits](https://nautilus.joyautomation.com/guides/online-edits/) |
 | Acceptance tests: virtual time, `suspend:`, `advance:`/`until:`, alarm verbs | `lift-station_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
 | HMI: a P&ID mimic (`*.mimic.json`), custom components + port sidecars | `lift-station.mimic.json`, `hmi/src/lib/*.component.json` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
-| HMI: faceplates, alarm banner/ack, live trend, driver status, scan diagnostics | `hmi/src/routes/+page.svelte` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
+| HMI: the P&ID full-window, controls that pop out from the equipment, alarm banner/ack | `hmi/src/routes/+page.svelte`, `hmi/src/lib/EquipmentPanel.svelte` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
+| HMI: diagnostics (level trend, scan diagnostics, driver status) | `hmi/src/routes/diagnostics/` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
 | HMI: the same station in 3D — a `*.scene.json` over flat tags, six kinds as glTF data in files of their own | `lift-station.scene.json`, `hmi/src/lib/kinds/`, `hmi/models/build.py`, `hmi/src/routes/3d/` | [3D package](../../hmi-3d/README.md) |
 
 ## The control narrative
@@ -253,17 +255,28 @@ where the point is exercising reads/writes, not a full run simulation.
 
 `hmi/` is a SvelteKit app built on the published
 [`@joyautomation/nautilus-hmi`](https://www.npmjs.com/package/@joyautomation/nautilus-hmi)
-kit (0.8.0) — one page, not a catalog: the wet-well mimic, an alarm banner
-with an ack-all button, two pump faceplates (HOA selector, running/speed/
-amps, starts/run-hours from `P101_Stats`/`P102_Stats`, fail-to-run/locked-
-out pills, a Reset faults button), the five level setpoints
-(`LeadOnLevel`/`LagOnLevel`/`LagOffLevel`/`LeadOffLevel`/`LevelSP`) as
-number fields with write-back, a level trend, the field-driver status
-panel (honestly empty here — this project runs the loopback/Modbus
-drivers, not EtherNet/IP or Sparkplug), and scan diagnostics. It follows
-`examples/hmi-demo`'s pattern; that example's README is the deeper
-reference for the mimic format, custom components, faceplates and the
-dev proxy. A second route, `/3d`, is the same station in 3D (below).
+kit (0.8.0). A bar across the top switches between three views and
+carries the alarm banner, ack-all and the connection:
+
+- **P&ID** (`/`): the wet-well mimic filling the window. Click a piece of
+  equipment and its controls pop out on the right
+  (`hmi/src/lib/EquipmentPanel.svelte`), with the station still live and
+  clickable behind them. A pump gives its faceplate (HOA selector,
+  running/speed/amps, starts/run-hours from `P101_Stats`/`P102_Stats`, the
+  fault pills, Reset faults: `PumpFaceplate.svelte`); the wet well, a
+  float or the sequence tag gives the level and its trend, the floats, the
+  sequence, and the level setpoints with write-back
+  (`WetWellPanel.svelte`); a check valve or the discharge gives what they
+  show. Escape or × closes it.
+- **3D** (`/3d`): the same station in 3D (below). Its equipment has the
+  same ids, so a click opens the same controls.
+- **Diagnostics** (`/diagnostics`): the level trend, scan diagnostics, and
+  the field-driver status panel (honestly empty here: this project runs
+  the loopback/Modbus drivers, not EtherNet/IP or Sparkplug).
+
+It follows `examples/hmi-demo`'s pattern; that example's README is the
+deeper reference for the mimic format, custom components, faceplates and
+the dev proxy.
 
 The screen consumes `@joyautomation/nautilus-hmi` and
 `@joyautomation/nautilus-hmi-3d` from this checkout (`file:../../../hmi` and
@@ -370,9 +383,12 @@ impeller turns on `P101_Running` / `P101_SpeedHz`; each float swings up
 on `LSHH101` / `LSLL101`; the discharge pipes flow on the pump's running
 bit and the header on `FIT101_Flow`. The mimic's two readouts become
 label text (`LIT-101 62.3 %` on the well, `12.34 L/s` on a flow meter
-FIT-101 on the header), and its `SeqStep` pill and the alarm banner sit
-in the HUD, where a drawing has no place for them. Orbit with the mouse,
-click an asset for its drawer; `?perf` adds the frame rate and latency.
+FIT-101 on the header); the sequence step is in the wet well's panel and
+the alarm banner in the bar above, as on the P&ID. Orbit with the mouse,
+and click equipment for its controls: the page turns off the view's own
+read-only inspector (`inspector={false}`) and opens the P&ID's
+`EquipmentPanel` for the picked id. `?perf` adds the frame rate and
+latency.
 The HUD's look button cycles `lit` (the models in their own paint),
 `flat` (the same models matte) and `paper` (the station as a line
 drawing, design §3f — the look `examples/well-site` opens in); `?look=paper`
