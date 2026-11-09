@@ -379,7 +379,10 @@ func TestDriverStatusOutageWithoutATrip(t *testing.T) {
 
 			down.Store(tc.down > 0)
 			dev.Drop()
-			eventually(t, "offline", func() bool { on, _, _ := status(drv); return !on })
+			// The outage count, not the online flag: with nothing stopping
+			// the redial, the driver is back within a retry (10ms), and a
+			// check of online can sleep through the whole drop.
+			eventually(t, "the drop counted", func() bool { _, outages, _ := status(drv); return outages >= 1 })
 			time.Sleep(tc.down)
 			down.Store(false)
 			eventually(t, "online again", func() bool { on, _, _ := status(drv); return on })
