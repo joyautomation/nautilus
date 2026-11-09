@@ -5,7 +5,8 @@
 	// reset. `pump` is the tag prefix, P101 or P102 (motor.ld's instances).
 	// In Auto the level loop (level.fbd, LIC-101) sets the speed; `onloop`
 	// opens the loop's settings.
-	import { StatusPill, Button, NumberField } from '@joyautomation/nautilus-hmi';
+	import { StatusPill, Button } from '@joyautomation/nautilus-hmi';
+	import SetpointInput from '$lib/SetpointInput.svelte';
 	import { numAt } from '@joyautomation/nautilus-hmi';
 	import { rt, num, bool, has, writeTag, pulseReset } from '$lib/client.svelte';
 
@@ -46,15 +47,17 @@
 
 <div class="speed">
 	{#if has(`${pump}_HandSpeedHz`)}
-		<NumberField
-			label="Hand speed"
-			unit="Hz"
-			value={num(`${pump}_HandSpeedHz`)}
-			min={0}
-			max={60}
-			step={1}
-			onsubmit={(v) => writeTag(`${pump}_HandSpeedHz`, v)}
-		/>
+		<div class="line">
+			<span>Hand speed</span>
+			<SetpointInput
+				label="Hand speed"
+				unit="Hz"
+				value={num(`${pump}_HandSpeedHz`)}
+				min={0}
+				max={60}
+				onsubmit={(v) => writeTag(`${pump}_HandSpeedHz`, v)}
+			/>
+		</div>
 	{:else}
 		<p class="note">This controller has no {pump}_HandSpeedHz tag (a project from before hand speed was per pump?).</p>
 	{/if}
@@ -130,6 +133,14 @@
 	}
 	.speed {
 		margin-bottom: 14px;
+	}
+	.line {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		font-size: 12.5px;
+		color: var(--ink-2);
 	}
 	.speed .note {
 		margin-top: 6px;
