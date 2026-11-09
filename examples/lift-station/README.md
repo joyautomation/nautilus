@@ -256,7 +256,11 @@ where the point is exercising reads/writes, not a full run simulation.
 `hmi/` is a SvelteKit app built on the published
 [`@joyautomation/nautilus-hmi`](https://www.npmjs.com/package/@joyautomation/nautilus-hmi)
 kit (0.8.0). A bar across the top switches between three views and
-carries the alarm banner, ack-all and the connection:
+carries the alarm banner, ack-all and the connection. The banner opens
+the alarms panel (`hmi/src/lib/AlarmsPanel.svelte`) over any view: the
+active alarms in the kit's `AlarmTable` (acknowledge, shelve, unshelve)
+and the history in its `AlarmJournal`, read from the controller's alarm
+journal.
 
 - **P&ID** (`/`): the wet-well mimic filling the window. Click a piece of
   equipment and its controls pop out on the right

@@ -1,7 +1,8 @@
 <script lang="ts">
 	// App shell: a bar across the top (the station, the view switch between
 	// the P&ID, 3D and diagnostics pages, the alarm banner and ack, the
-	// connection) over a page that fills the rest of the window. Also the
+	// connection) over a page that fills the rest of the window. The alarm
+	// banner opens the alarms panel (AlarmsPanel) over any of them. Also the
 	// plumbing every page needs: theme tokens, the realtime client's
 	// lifecycle, and the one shared confirm dialog every irreversible action
 	// (ack, reset) routes through.
@@ -12,9 +13,12 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill } from '@joyautomation/nautilus-hmi';
+	import AlarmsPanel from '$lib/AlarmsPanel.svelte';
 	import { rt, alarms } from '$lib/client.svelte';
 
 	let { children } = $props();
+	// The alarm banner opens the alarms panel, over whichever view is up.
+	let alarmsOpen = $state(false);
 	onMount(() => {
 		theme.init();
 		rt.start();
@@ -49,13 +53,14 @@
 			{/each}
 		</nav>
 		<div class="status">
-			<div class="alarm"><AlarmBanner summary={alarms.summary} compact /></div>
+			<div class="alarm"><AlarmBanner summary={alarms.summary} compact onclick={() => (alarmsOpen = !alarmsOpen)} /></div>
 			<AckButton alarms={alarms.active} ids={['*']} onack={(ids, by) => alarms.ack(ids, by)} />
 			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
 		</div>
 	</header>
 	<main class="view">
 		{@render children()}
+		<AlarmsPanel bind:open={alarmsOpen} />
 	</main>
 </div>
 
