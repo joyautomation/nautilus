@@ -9,6 +9,9 @@ VAR_EXTERNAL
     LagReq     : BOOL;
     LSHH101    : BOOL;
     LSLL101    : BOOL;
+    LIT101_Level : REAL;
+    LeadOffLevel : REAL;
+    DryRunHold   : BOOL;
 
     P101_Req       : BOOL;
     P101_SealFail  : BOOL;
@@ -53,11 +56,21 @@ LD
   RUNG p102req (* the same duty mapping for P-102: called when it is lead, or as lag *)
     [ /LeadIsP101 LeadReq | LeadIsP101 LagReq | LSHH101 ] ( P102_Req )
 
-  RUNG p101perm (* a dry well (LSLL) blocks both pumps, not just the lead *)
-    /P101_SealFail /P101_OverTemp /P101_VfdFault /LSLL101 ( P101_Permissive )
+  // dry-run protection: a low-low trip holds both pumps off, in Hand as
+  // well as Auto, until the well has refilled to Lead off. Restarting the
+  // moment the float clears would run a pump dry, stop it and start it
+  // again every few seconds.
+  RUNG dryhold (* the low-low float latches the hold *)
+    LSLL101 ( S DryRunHold )
+
+  RUNG dryrelease (* refilled to Lead off, the float clear: the pumps may run again *)
+    GE(LIT101_Level, LeadOffLevel) /LSLL101 ( R DryRunHold )
+
+  RUNG p101perm (* a dry well (the hold) blocks both pumps, not just the lead *)
+    /P101_SealFail /P101_OverTemp /P101_VfdFault /DryRunHold ( P101_Permissive )
 
   RUNG p102perm (* the same trips as P-101, against P-102's own devices *)
-    /P102_SealFail /P102_OverTemp /P102_VfdFault /LSLL101 ( P102_Permissive )
+    /P102_SealFail /P102_OverTemp /P102_VfdFault /DryRunHold ( P102_Permissive )
 
   // every BOOL input bound by name: no free input for rung power, so the
   // call sits alone on the rail — see docs/functions.md "Power pins in ladder"

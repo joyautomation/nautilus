@@ -48,6 +48,7 @@
 - { name: P101_Avail, role: state, init: false, desc: "P-101 available (not failed, not locked out, permissive, not Off)" }
 - { name: P102_Avail, role: state, init: false, desc: "P-102 available (not failed, not locked out, permissive, not Off)" }
 - { name: BothUnavail, role: state, init: false, desc: "Neither pump is available" }
+- { name: DryRunHold, role: state, init: false, desc: "Dry-run protection: low-low tripped, pumps held off until the well refills to Lead off" }
 - { name: LeadFailed, role: state, init: false, desc: "The lead (on-duty) pump's fail-to-run" }
 - { name: HighLevelAlm, role: state, init: false, desc: "High level alarm (LIT-101, latched with hysteresis)" }
 - { name: P101_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-101 runtime stats" }

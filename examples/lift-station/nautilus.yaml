@@ -127,7 +127,7 @@ alarms:
     - { id: P102_SealFail, tag: P102_SealFail, name: "P-102 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
     - { id: P101_OverTemp, tag: P101_OverTemp, name: "P-101 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
     - { id: P102_OverTemp, tag: P102_OverTemp, name: "P-102 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
-    - { id: BothUnavail, tag: BothUnavail, name: "Both pumps unavailable", priority: critical, class: equipment }
+    - { id: BothUnavail, tag: BothUnavail, name: "Both pumps unavailable", priority: critical, on-delay: 5s, class: equipment }
 
 driver:
   type: memory

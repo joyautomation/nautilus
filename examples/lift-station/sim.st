@@ -71,10 +71,19 @@ FIT101_Flow := PumpFlowGpm(P101_SpeedHz) + PumpFlowGpm(P102_SpeedHz);
 well(InflowGpm := InflowGpm * (1.0 + InflowVaryFrac * SIN(tSec / InflowPeriodS * TwoPi)),
      OutflowGpm := FIT101_Flow, Dt := SimDtS, Level := LIT101_Level);
 
+(* The floats switch with a differential, as a real tilt float does: it
+   trips at one level and resets a few inches past it, so a level sitting
+   on the mark doesn't make it chatter. *)
 IF ForceLSHH THEN
     LSHH101 := TRUE;
-ELSE
-    LSHH101 := LIT101_Level >= 95.0;
+ELSIF LIT101_Level >= 95.0 THEN
+    LSHH101 := TRUE;
+ELSIF LIT101_Level <= 91.0 THEN
+    LSHH101 := FALSE;
 END_IF;
-LSLL101 := LIT101_Level <= 8.0;
+IF LIT101_Level <= 8.0 THEN
+    LSLL101 := TRUE;
+ELSIF LIT101_Level >= 12.0 THEN
+    LSLL101 := FALSE;
+END_IF;
 END_PROGRAM

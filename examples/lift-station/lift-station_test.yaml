@@ -212,6 +212,27 @@ tests:
         until: 900s
         expect: { P101_RunCmd: false, P102_RunCmd: false }
 
+  - name: a pump in Hand pumps the well to low-low once, then is held off until it refills
+    # What used to chatter: Hand ran the well down to LSLL, the trip
+    # stopped the pump, the float cleared a moment later, the pump started
+    # again, every few seconds. Now the trip latches DryRunHold, which
+    # holds both pumps off past the float's reset until Lead off.
+    suspend: [] # the sim runs: the level falls and refills for real
+    given: { P101_Mode: 1, LIT101_Level: 20.0, InflowGpm: 60.0 } # a quiet night: the pump outruns it
+    steps:
+      - until: 180s
+        expect: { LSLL101: true } # pumped down to low-low
+      - advance: 1s
+        expect: { DryRunHold: true, P101_RunCmd: false }
+      - until: 180s
+        expect: { LSLL101: false } # the float resets at 12 %...
+      - advance: 1s
+        expect: { DryRunHold: true, P101_RunCmd: false } # ...but the pump stays held
+      - until: 600s
+        expect: { DryRunHold: false } # refilled to Lead off (30 %)
+      - advance: 2s
+        expect: { P101_RunCmd: true } # Hand runs it again
+
   - name: a shelved high-level alarm is silent and always expires
     # Drives the level, not HighLevelAlm itself — level is left running
     # (only permissives is suspended beyond the file default, sim), so

@@ -30,6 +30,7 @@
 	<StatusPill kind={bool('LSHH101') ? 'critical' : 'off'} label="LSHH high-high" />
 	<StatusPill kind={bool('LSLL101') ? 'warning' : 'off'} label="LSLL low-low" />
 	<StatusPill kind={bool('HighLevelAlm') ? 'critical' : 'off'} label="high level alarm" />
+	<StatusPill kind={bool('DryRunHold') ? 'warning' : 'off'} label="dry-run hold" />
 </div>
 
 <section>

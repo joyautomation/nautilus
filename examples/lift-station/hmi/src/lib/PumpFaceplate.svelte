@@ -77,6 +77,7 @@
 	<StatusPill kind={bool(`${pump}_SealFail`) ? 'warning' : 'off'} label="seal fail" />
 	<StatusPill kind={bool(`${pump}_OverTemp`) ? 'warning' : 'off'} label="over temp" />
 	<StatusPill kind={bool(`${pump}_VfdFault`) ? 'critical' : 'off'} label="VFD fault" />
+	<StatusPill kind={bool('DryRunHold') ? 'warning' : 'off'} label="dry-run hold" />
 </div>
 
 <Button size="sm" variant="secondary" onclick={pulseReset}>Reset faults</Button>

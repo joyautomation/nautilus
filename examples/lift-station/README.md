@@ -169,7 +169,11 @@ turns `LeadReq`/`LagReq` into a request per physical pump
 float (`LSHH101`) OR'd into both regardless of the sequence or HOA mode
 — except HOA **Off** still wins, because `MotorStarter`'s own `run` rung
 never asserts on `Mode = 0`. Each pump's permissive is the AND of no
-seal fail, no over-temp, no VFD fault and no low-low float; `MotorStarter`
+seal fail, no over-temp, no VFD fault and no dry-run hold. The hold is
+the low-low float latched: a trip sets `DryRunHold`, and it releases only
+once the well is back at `LeadOffLevel` with the float clear, so a pump
+(in Hand as much as Auto) doesn't run the well dry, stop, and restart the
+moment the float lifts; `MotorStarter`
 (`lib/motor.ld`, a ladder-authored `FUNCTION_BLOCK`, instantiated once per
 pump) turns `(Mode, request, permissive, running-feedback)` into
 `(Run, InHand, FailToRun, LockedOut)`, with its own 5 s fail-to-run timer
