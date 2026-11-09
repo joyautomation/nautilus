@@ -296,21 +296,25 @@
 	.eq.clickable {
 		cursor: pointer;
 		border-radius: 8px;
-		--glow: color-mix(in srgb, var(--s1, #3987e5) 70%, transparent);
+		/* One filter list in every state, the glow's colour fixed and only
+		   its opacity and spread changing: a transition from `none`, or
+		   between lists that differ, starts from transparent black and
+		   passes through a dark halo on the way. */
+		--glow: rgb(from var(--s1, #3987e5) r g b / 0.7);
+		--clear: rgb(from var(--s1, #3987e5) r g b / 0);
+		filter: brightness(1) drop-shadow(0 0 0 var(--clear)) drop-shadow(0 0 0 var(--clear));
 		transition: filter 0.18s ease;
 	}
 	.eq.clickable:hover {
-		filter: brightness(1.12) drop-shadow(0 0 4px var(--glow));
+		filter: brightness(1.12) drop-shadow(0 0 4px var(--glow)) drop-shadow(0 0 0 var(--clear));
 	}
-	.eq.clickable.selected {
-		filter: drop-shadow(0 0 3px var(--glow)) drop-shadow(0 0 1px var(--glow));
+	.eq.clickable.selected,
+	.eq.clickable:focus-visible {
+		outline: none;
+		filter: brightness(1) drop-shadow(0 0 3px var(--glow)) drop-shadow(0 0 1px var(--glow));
 	}
 	.eq.clickable.selected:hover {
 		filter: brightness(1.12) drop-shadow(0 0 5px var(--glow)) drop-shadow(0 0 1px var(--glow));
-	}
-	.eq.clickable:focus-visible {
-		outline: none;
-		filter: drop-shadow(0 0 3px var(--glow)) drop-shadow(0 0 1px var(--glow));
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.eq.clickable {
