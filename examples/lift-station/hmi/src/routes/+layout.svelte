@@ -12,7 +12,7 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill } from '@joyautomation/nautilus-hmi';
+	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
 	import AlarmsPanel from '$lib/AlarmsPanel.svelte';
 	import { rt, alarms } from '$lib/client.svelte';
 
@@ -56,6 +56,7 @@
 			<div class="alarm"><AlarmBanner summary={alarms.summary} compact onclick={() => (alarmsOpen = !alarmsOpen)} /></div>
 			<AckButton alarms={alarms.active} ids={['*']} onack={(ids, by) => alarms.ack(ids, by)} />
 			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
+			<ThemeSwitch />
 		</div>
 	</header>
 	<main class="view">
