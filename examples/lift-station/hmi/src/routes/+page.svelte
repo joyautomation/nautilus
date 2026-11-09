@@ -55,6 +55,12 @@
 	.stage.with-panel {
 		padding-right: 356px;
 	}
+	/* The drawing eases over as the panel slides in, and back as it goes. */
+	@media (prefers-reduced-motion: no-preference) {
+		.stage {
+			transition: padding-right 260ms cubic-bezier(0.33, 1, 0.68, 1);
+		}
+	}
 	.fit {
 		width: min(100cqw, 100cqh * var(--ratio));
 	}

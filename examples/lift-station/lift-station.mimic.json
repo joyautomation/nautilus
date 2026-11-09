@@ -215,8 +215,8 @@
       "x": 182,
       "y": 11,
       "bind": "FIT101_Flow",
-      "unit": "L/s",
-      "decimals": 2
+      "unit": "gpm",
+      "decimals": 0
     }
   ]
 }

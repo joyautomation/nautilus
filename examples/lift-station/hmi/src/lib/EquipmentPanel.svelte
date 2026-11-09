@@ -5,6 +5,8 @@
 	// panel serves both. Not a dialog: the station keeps running and stays
 	// clickable behind it, so you can switch a pump to Hand and watch it
 	// start, or pick another piece of equipment. × or Escape closes it.
+	import { fly } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
 	import PumpFaceplate from '$lib/PumpFaceplate.svelte';
 	import WetWellPanel from '$lib/WetWellPanel.svelte';
 	import { num, bool } from '$lib/client.svelte';
@@ -29,12 +31,16 @@
 	const panel = $derived(selected ? PANELS[selected] : undefined);
 	const close = () => (selected = null);
 	const label = (p: 'P101' | 'P102') => (p === 'P101' ? 'P-101' : 'P-102');
+	// It slides in from the right edge and back out, unless the visitor's
+	// system asks for less motion.
+	const still = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const slide = { x: 344, opacity: 1, duration: still ? 0 : 260, easing: cubicOut };
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && close()} />
 
 {#if panel}
-	<aside class="panel" aria-label={panel.title}>
+	<aside class="panel" aria-label={panel.title} transition:fly={slide}>
 		<header>
 			<h2>{panel.title}</h2>
 			<button class="x" onclick={close} aria-label="Close" title="Close (Esc)">×</button>
@@ -57,8 +63,8 @@
 				<button class="link" onclick={() => (selected = panel.pump!)}>{label(panel.pump)} controls</button>
 			{:else if panel.show === 'discharge'}
 				<dl>
-					<dt>Flow, FIT-101</dt><dd>{num('FIT101_Flow').toFixed(1)} L/s</dd>
-					<dt>Pumped today</dt><dd>{num('StationFlowM3').toFixed(1)} m³</dd>
+					<dt>Flow, FIT-101</dt><dd>{num('FIT101_Flow').toFixed(0)} gpm</dd>
+					<dt>Pumped today</dt><dd>{num('StationFlowGal').toLocaleString(undefined, { maximumFractionDigits: 0 })} gal</dd>
 					<dt>Pumps running</dt><dd>{Number(bool('P101_Running')) + Number(bool('P102_Running'))} of 2</dd>
 				</dl>
 			{/if}

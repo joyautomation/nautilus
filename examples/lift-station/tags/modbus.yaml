@@ -19,7 +19,7 @@
 - { name: P102_SpeedHz, role: input, type: REAL, unit: "Hz", desc: "P-102 VFD — actual speed" }
 - { name: P102_Status, role: input, type: UINT, desc: "P-102 VFD — status word" }
 - { name: P102_VfdFault, role: input, type: BOOL, desc: "P-102 VFD — fault bit of the status word" }
-- { name: RIO_Flow, role: input, type: REAL, unit: "L/s", desc: "wet-well remote I/O — force-main discharge flow" }
+- { name: RIO_Flow, role: input, type: REAL, unit: "gpm", desc: "wet-well remote I/O — force-main discharge flow" }
 - { name: RIO_LSHH101, role: input, type: BOOL, desc: "wet-well remote I/O — high-high float" }
 - { name: RIO_LSLL101, role: input, type: BOOL, desc: "wet-well remote I/O — low-low float" }
 - { name: RIO_Level, role: input, type: REAL, unit: "%", desc: "wet-well remote I/O — wet-well level" }

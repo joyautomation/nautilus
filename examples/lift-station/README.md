@@ -31,7 +31,7 @@ naut build .                     # one deployable controller binary
 3. For the 3D view, open <http://localhost:8080/3d> (or the 3D tab). Drag to
    orbit, click a pump or the wet well for its controls, and add
    `?look=paper` for the line-drawing look.
-4. Make it do something: set `InflowLps` to `60` in the dashboard and watch
+4. Make it do something: set `InflowGpm` to `950` in the dashboard and watch
    the lag pump join on both views.
 
 **Needs naut >= 0.13.1.** `lib/` composition, a `FUNCTION_BLOCK`'s
@@ -63,8 +63,8 @@ and leave it running for all of this.
 is up. Open `sim.st` as plain text (not a diagram — it has none) and the
 same live values show as inline pills next to each variable.
 
-**Set Live Value.** With `sim.st` open, find `InflowLps`, run *nautilus:
-Set Live Value*, and set it to `60` — the "storm" inflow the file's own
+**Set Live Value.** With `sim.st` open, find `InflowGpm`, run *nautilus:
+Set Live Value*, and set it to `950`, the "storm" inflow the file's own
 comment describes. Watch `P102_RunCmd` (or `sequence.sfc`'s diagram) go
 true within a few minutes: the well fills past `LagOnLevel` and the lag
 pump joins.
@@ -183,15 +183,15 @@ ordinary fail-and-retry in between doesn't quietly reset the tally (see
 `VAR_IN_OUT` `FUNCTION_BLOCK`) accumulates each pump's starts and run
 hours into a retained `PumpStats` UDT tag, called once per pump. A
 running station flow totalizer integrates `FIT101_Flow` into
-`StationFlowM3`.
+`StationFlowGal`.
 
 **The bench plant (`sim.st`, `lib/physics.st`).** `WetWellModel` integrates
 the wet well's level from an inflow/outflow balance (small on purpose —
-5 m³ over the 4 m span, so a full cycle takes minutes); `VfdModel`
+1,320 gal over the 13 ft span, so a full cycle takes minutes); `VfdModel`
 (instantiated twice) turns a run command and speed command into a
 running feedback, a ramping speed, and a current draw, with a bench-only
-fault-injection input. Inflow is `InflowLps` (12 L/s normally, a "storm"
-is 40) plus a slow sinusoid, so the level never sits dead flat.
+fault-injection input. Inflow is `InflowGpm` (190 gpm normally, a "storm"
+is 640) plus a slow sinusoid, so the level never sits dead flat.
 
 ## Bench vs. field
 
@@ -326,7 +326,7 @@ submerged near the bottom, each with one `discharge` port on top; each
 discharge line runs through a check valve (`CV101`/`CV102`, the built-in
 `Valve`) to a `ToProcess`-style off-page connector labeled "FORCE MAIN".
 Pipe runs carry `flowing` bound to `P101_Running`/`P102_Running`; labels
-show `LIT101_Level` (%) and `FIT101_Flow` (L/s). `SeqStep` is a **string**
+show `LIT101_Level` (%) and `FIT101_Flow` (gpm). `SeqStep` is a **string**
 tag (`'Idle'`/`'Lead'`/`'Lag'`/…) — the kit's built-in `MimicLabel.bind`
 only formats numeric tags, so it rides a small custom `SeqStepTag`
 component instead, bound the same way an equipment prop is (`bind: {
@@ -382,7 +382,7 @@ connector — in metres, and binds the same tags: the water in the well is
 impeller turns on `P101_Running` / `P101_SpeedHz`; each float swings up
 on `LSHH101` / `LSLL101`; the discharge pipes flow on the pump's running
 bit and the header on `FIT101_Flow`. The mimic's two readouts become
-label text (`LIT-101 62.3 %` on the well, `12.34 L/s` on a flow meter
+label text (`LIT-101 62.3 %` on the well, `195 gpm` on a flow meter
 FIT-101 on the header); the sequence step is in the wet well's panel and
 the alarm banner in the bar above, as on the P&ID. Orbit with the mouse,
 and click equipment for its controls: the page turns off the view's own

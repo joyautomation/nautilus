@@ -80,8 +80,8 @@ pump or the well to see its values. To see it drawn as a line drawing,
 add `?look=paper`: <http://localhost:8080/3d?look=paper>.
 
 **5. Make something happen.** The inflow to the well is a setpoint. In the
-dashboard at <http://localhost:8080/_nautilus/>, find `InflowLps` and set it
-to `60`. This is the "storm" case. In about a minute the well fills past
+dashboard at <http://localhost:8080/_nautilus/>, find `InflowGpm` and set it
+to `950`. This is the "storm" case. In about a minute the well fills past
 the lag level and the second pump starts. You can watch it on both the 2D
 screen and the 3D view.
 

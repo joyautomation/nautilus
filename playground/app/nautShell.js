@@ -27,7 +27,7 @@ ${C.bold}naut${C.reset}, as on your machine:
 
 ${C.bold}The running program${C.reset} (playground commands):
   tags [pattern]                  every tag's value, or those matching (Start*, *Level)
-  set <tag> <value>               write a tag: set StartPB true, set InflowLps 40
+  set <tag> <value>               write a tag: set StartPB true, set InflowGpm 640
   watch <tag> [<tag>...]          follow tags as they change; Ctrl+C stops
 
 ${C.bold}Files${C.reset}: ls [dir], cat <file>, pwd, clear

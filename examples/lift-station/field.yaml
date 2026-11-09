@@ -70,7 +70,7 @@ tags:
   - { name: LIT101_Level, role: state, init: 0.0, unit: "%", desc: "Wet-well level (LIT-101)" }
   - { name: LSHH101,      role: state, init: false, desc: "High-high float (LSHH-101)" }
   - { name: LSLL101,      role: state, init: false, desc: "Low-low float (LSLL-101)" }
-  - { name: FIT101_Flow,  role: state, init: 0.0, unit: "L/s", desc: "Discharge flow (FIT-101)" }
+  - { name: FIT101_Flow,  role: state, init: 0.0, unit: "gpm", desc: "Discharge flow (FIT-101)" }
   - { name: P101_SealFail, role: state, init: false, desc: "P-101 seal-leak probe" }
   - { name: P102_SealFail, role: state, init: false, desc: "P-102 seal-leak probe" }
   - { name: P101_OverTemp, role: state, init: false, desc: "P-101 motor over-temperature" }

@@ -5,7 +5,7 @@
 # the control programs derive themselves, regardless of which build
 # supplies the process values underneath them. See each manifest's own
 # `tags:` comment for what stays inline instead (process values,
-# bench-only inject tags, InflowLps) and why.
+# bench-only inject tags, InflowGpm) and why.
 #
 # Compose it into a project with:  tag-files: [tags/station.yaml]
 
@@ -51,5 +51,5 @@
 - { name: HighLevelAlm, role: state, init: false, desc: "High level alarm (LIT-101, latched with hysteresis)" }
 - { name: P101_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-101 runtime stats" }
 - { name: P102_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-102 runtime stats" }
-- { name: StationFlowM3, role: state, init: 0.0, unit: "m3", desc: "Totalized discharge volume, today" }
+- { name: StationFlowGal, role: state, init: 0.0, unit: "gal", desc: "Totalized discharge volume, today" }
 - { name: CycleCount, role: state, init: 0, desc: "Lead-call cycle count" }

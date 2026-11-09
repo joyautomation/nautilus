@@ -1,8 +1,8 @@
 PROGRAM WetWell
 (* Bench-only plant: WW-101 (level from an inflow/outflow balance, via
    lib/physics.st's WetWellModel) and two submersible-pump/VFD models
-   (VfdModel). Inflow is InflowLps plus a slow sinusoid (+-20 %) so the
-   level never sits dead flat; InflowLps set to 40 is the "storm" the
+   (VfdModel). Inflow is InflowGpm plus a slow sinusoid (+-20 %) so the
+   level never sits dead flat; InflowGpm set to 640 is the "storm" the
    design calls out. A real deployment deletes this task entirely —
    field.yaml has no sim task and points the same control programs at
    the real devices instead (see docs/design/examples-dogfood.md for the
@@ -13,7 +13,7 @@ VAR_EXTERNAL
     LSLL101      : BOOL;
     FIT101_Flow  : REAL;
     SimDtS       : REAL;
-    InflowLps    : REAL;
+    InflowGpm    : REAL;
     ForceLSHH    : BOOL;
 
     P101_RunCmd      : BOOL;
@@ -66,10 +66,10 @@ P101_OverTemp := P101_InjectOverTemp;
 P102_SealFail := P102_InjectSealFail;
 P102_OverTemp := P102_InjectOverTemp;
 
-FIT101_Flow := PumpFlowLps(P101_SpeedHz) + PumpFlowLps(P102_SpeedHz);
+FIT101_Flow := PumpFlowGpm(P101_SpeedHz) + PumpFlowGpm(P102_SpeedHz);
 
-well(InflowLps := InflowLps * (1.0 + InflowVaryFrac * SIN(tSec / InflowPeriodS * TwoPi)),
-     OutflowLps := FIT101_Flow, Dt := SimDtS, Level := LIT101_Level);
+well(InflowGpm := InflowGpm * (1.0 + InflowVaryFrac * SIN(tSec / InflowPeriodS * TwoPi)),
+     OutflowGpm := FIT101_Flow, Dt := SimDtS, Level := LIT101_Level);
 
 IF ForceLSHH THEN
     LSHH101 := TRUE;

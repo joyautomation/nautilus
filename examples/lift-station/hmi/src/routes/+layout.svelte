@@ -130,6 +130,9 @@
 		flex: 1;
 		min-height: 0;
 		position: relative;
+		/* Pages scroll inside themselves; a panel sliding in from off the
+		   edge must not scroll the window sideways. */
+		overflow: hidden;
 	}
 	@media (max-width: 900px) {
 		.title span {
