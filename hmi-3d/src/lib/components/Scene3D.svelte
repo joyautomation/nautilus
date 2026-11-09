@@ -255,8 +255,8 @@
 		cellSize={theGrid.cell ?? 0.1}
 		sectionSize={theGrid.section ?? 1}
 		gridSize={theGrid.size ?? [4, 4]}
-		cellColor={paper ? '#e6e6e2' : '#2c2c2a'}
-		sectionColor={paper ? '#d2d2cd' : '#44443f'}
+		cellColor={paper ? (palette.grid?.cell ?? '#e6e6e2') : '#2c2c2a'}
+		sectionColor={paper ? (palette.grid?.section ?? '#d2d2cd') : '#44443f'}
 		fadeDistance={paper ? 40 : 12}
 	/>
 {/if}

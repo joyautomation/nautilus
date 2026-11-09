@@ -144,10 +144,15 @@
 	let stage: HTMLElement;
 	onMount(() => {
 		themed = paletteFromTheme(stage);
-		if (!perf) return;
+		// Follow a theme switched while the view is up: the kit stamps
+		// data-theme on <html>, and the tokens change under it.
+		const watch = new MutationObserver(() => (themed = paletteFromTheme(stage)));
+		watch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+		if (!perf) return () => watch.disconnect();
 		sampler.start();
 		const off = rt.onFrame((f) => sampler.onFrame(f.ts));
 		return () => {
+			watch.disconnect();
 			off();
 			sampler.stop();
 		};

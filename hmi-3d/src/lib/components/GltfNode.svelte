@@ -64,7 +64,9 @@
 	} = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
 	const view = getContext<ViewState>('hmi3d:view') ?? { lit: true };
-	let lookKey = $derived(view.paper ? 'paper' : view.lit ? 'lit' : 'flat');
+	// Paper paints the models in the palette's fills, so a theme switched
+	// while the view is up (light paper to dark, and back) repaints them.
+	let lookKey = $derived(view.paper ? `paper:${palette.steel}:${palette.fluid}` : view.lit ? 'lit' : 'flat');
 
 	let root = $state<Object3D | null>(null);
 	const meshes = new Map<string, Object3D>();

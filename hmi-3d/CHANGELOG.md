@@ -1,5 +1,21 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## Unreleased
+
+**Added.** A dark paper look: under a dark theme (read off the theme's
+`--bg`), `paper` is the same drawing inverted, a near-black sheet with dark
+fills and light lines; under a light theme it is the paper it was.
+`paperPalette(base, dark)` takes the choice, and `paletteFromTheme` reports
+`dark`. The view follows a theme switched while it is up (it watches
+`data-theme` on `<html>`), models included. The palette gains `flow` (the
+paper look's flow colour) and `grid` (the floor grid's lines, which were
+fixed light greys).
+
+**Changed.** Paper's flow markers: small rounded arrowheads riding just
+above the pipe in the palette's quiet `flow` blue, further apart and a
+little slower, fading in and out at a run's ends, in place of black
+four-sided chevrons on the line itself.
+
 ## 0.3.1 — 2026-11-05
 
 **Changed.** Works with `@joyautomation/nautilus-hmi` 0.9 as well as 0.8

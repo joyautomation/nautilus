@@ -22,6 +22,12 @@ export interface Palette {
 	ink: string;
 	/** What the paper look paints behind everything. */
 	paper: string;
+	/** The paper look's flow arrows: a quiet colour of their own, not ink. */
+	flow?: string;
+	/** The floor grid's lines (cell, section). */
+	grid?: { cell: string; section: string };
+	/** The theme is a dark one (read off --bg): the paper look inverts. */
+	dark?: boolean;
 	label: { bg: string; ink: string; border: string };
 	/** Alarm priority -> colour, keyed by the kit's Priority names. */
 	priority: Record<string, string>;
@@ -85,6 +91,8 @@ export function paletteFromTheme(el: Element): Palette {
 	if (surface) p.label.bg = surface;
 	const axis = get('--axis');
 	if (axis) p.label.border = axis;
+	const bg = get('--bg');
+	p.dark = bg ? luminance(bg) < 0.4 : true;
 	return p;
 }
 
@@ -100,7 +108,28 @@ export function paletteFromTheme(el: Element): Palette {
  * it, or a built-in pump that is running, reads as a state on the page
  * the way an alarm does.
  */
-export function paperPalette(base: Palette = DEFAULT_PALETTE): Palette {
+export function paperPalette(base: Palette = DEFAULT_PALETTE, dark = base.dark ?? false): Palette {
+	if (dark) {
+		// The same drawing inverted for a dark theme: a near-black sheet,
+		// dark fills, light lines; flow a lighter blue to show on it.
+		return {
+			...base,
+			steel: '#2a2b2e',
+			steelDark: '#202124',
+			shell: '#303135',
+			fluid: '#2b3a4b',
+			stale: '#3a3a3a',
+			selected: '#e8e6e1',
+			handle: '#8a8a86',
+			ink: '#c9c8c1',
+			paper: '#141517',
+			flow: '#86aedb',
+			grid: { cell: '#202124', section: '#2b2c30' },
+			dark: true,
+			label: { bg: '#141517', ink: '#e8e6e1', border: '#38383b' },
+			priority: { ...base.priority }
+		};
+	}
 	return {
 		...base,
 		steel: '#f7f7f5',
@@ -112,7 +141,30 @@ export function paperPalette(base: Palette = DEFAULT_PALETTE): Palette {
 		handle: '#8a8a86',
 		ink: '#45453f',
 		paper: '#f4f3ef',
+		flow: '#5f86b3',
+		grid: { cell: '#e6e6e2', section: '#d2d2cd' },
+		dark: false,
 		label: { bg: '#f4f3ef', ink: '#2b2b28', border: '#d6d6d1' },
 		priority: { ...base.priority }
 	};
+}
+
+/** Relative luminance (0-1) of a CSS colour in #rgb, #rrggbb or rgb() form;
+ * 1 for anything it cannot read. */
+function luminance(css: string): number {
+	let r = 255, g = 255, b = 255;
+	const hex = css.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+	if (hex) {
+		const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
+		[r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+	} else {
+		const m = css.match(/rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)/i);
+		if (!m) return 1;
+		[r, g, b] = [m[1], m[2], m[3]].map(Number);
+	}
+	const lin = (c: number) => {
+		const s = c / 255;
+		return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+	};
+	return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
