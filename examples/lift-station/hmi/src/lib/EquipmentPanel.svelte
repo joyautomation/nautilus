@@ -9,7 +9,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import PumpFaceplate from '$lib/PumpFaceplate.svelte';
 	import WetWellPanel from '$lib/WetWellPanel.svelte';
-	import { num, bool } from '$lib/client.svelte';
+	import { num, bool, writes } from '$lib/client.svelte';
 
 	let { selected = $bindable(null) }: { selected?: string | null } = $props();
 
@@ -47,6 +47,9 @@
 			<h2>{panel.title}</h2>
 			<button class="x" onclick={close} aria-label="Close" title="Close (Esc)">×</button>
 		</header>
+		{#if writes.failed}
+			<p class="failed" role="alert">{writes.failed}</p>
+		{/if}
 		<div class="body">
 			{#if panel.show === 'P101' || panel.show === 'P102'}
 				{#key panel.show}
@@ -117,6 +120,14 @@
 	.x:hover {
 		color: var(--ink);
 		background: var(--surface-2);
+	}
+	.failed {
+		margin: 0;
+		padding: 8px 16px;
+		font-size: 0.8rem;
+		color: var(--critical, #e5484d);
+		background: color-mix(in srgb, var(--critical, #e5484d) 12%, transparent);
+		border-bottom: 1px solid var(--border);
 	}
 	.body {
 		padding: 14px 16px 16px;

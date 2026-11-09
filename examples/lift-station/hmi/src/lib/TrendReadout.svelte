@@ -76,7 +76,7 @@
 	}
 	.spark {
 		display: block;
-		width: 52px;
+		width: 40px;
 		margin-left: 0.3em;
 	}
 </style>

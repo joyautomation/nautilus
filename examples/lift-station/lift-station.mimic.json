@@ -1,14 +1,14 @@
 {
   "name": "Lift station \u2014 wet well WW-101",
   "canvas": {
-    "width": 570,
+    "width": 610,
     "height": 449
   },
   "equipment": [
     {
       "id": "WW101",
       "component": "Tank",
-      "x": 42,
+      "x": 82,
       "y": 109,
       "width": 310,
       "height": 310,
@@ -24,7 +24,7 @@
     {
       "id": "LSHH101",
       "component": "FloatSwitch",
-      "x": 80,
+      "x": 120,
       "y": 140,
       "width": 52,
       "label": "LSHH",
@@ -35,7 +35,7 @@
     {
       "id": "LSLL101",
       "component": "FloatSwitch",
-      "x": 80,
+      "x": 120,
       "y": 291,
       "width": 52,
       "label": "LSLL",
@@ -49,7 +49,7 @@
     {
       "id": "P101",
       "component": "SubmersiblePump",
-      "x": 140,
+      "x": 180,
       "y": 250,
       "width": 56,
       "label": "P-101",
@@ -69,7 +69,7 @@
     {
       "id": "P102",
       "component": "SubmersiblePump",
-      "x": 210,
+      "x": 250,
       "y": 250,
       "width": 56,
       "label": "P-102",
@@ -89,7 +89,7 @@
     {
       "id": "CKV101",
       "component": "CheckValve",
-      "x": 337,
+      "x": 377,
       "y": 23,
       "width": 26,
       "label": "CKV-101",
@@ -111,7 +111,7 @@
     {
       "id": "CKV102",
       "component": "CheckValve",
-      "x": 337,
+      "x": 377,
       "y": 73,
       "width": 26,
       "label": "CKV-102",
@@ -133,7 +133,7 @@
     {
       "id": "TOPROC",
       "component": "ToProcess",
-      "x": 470,
+      "x": 510,
       "y": 60,
       "width": 96,
       "props": {
@@ -151,7 +151,7 @@
     {
       "id": "SEQ",
       "component": "SeqStepTag",
-      "x": 73,
+      "x": 113,
       "y": 418,
       "width": 186,
       "height": 24,
@@ -162,7 +162,7 @@
     {
       "id": "LIT101",
       "component": "TrendReadout",
-      "x": 65,
+      "x": 58,
       "y": 90,
       "props": {
         "text": "LIT-101",
@@ -178,7 +178,7 @@
     {
       "id": "FIT101",
       "component": "TrendReadout",
-      "x": 182,
+      "x": 216,
       "y": 11,
       "props": {
         "text": "FIT-101",
@@ -193,9 +193,9 @@
     {
       "id": "LEVELSP",
       "component": "LevelMarks",
-      "x": 350,
+      "x": 4,
       "y": 126,
-      "width": 130,
+      "width": 90,
       "height": 234,
       "bind": {
         "leadOn": "LeadOnLevel",
@@ -204,6 +204,9 @@
         "leadOff": "LeadOffLevel",
         "levelSP": "LevelSP",
         "highAlarm": "HighLevelAlmSP"
+      },
+      "props": {
+        "side": "left"
       }
     }
   ],

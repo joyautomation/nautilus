@@ -17,10 +17,16 @@ export const rt = createRealtimeClient<NautilusFrame>({
 // Alarm state (active/journal, ack/shelve) — refetches off frame.alarms.rev.
 export const alarms = createAlarmClient(rt);
 
+// The last write that failed, for the panels to show: a refused write
+// must not look like one that worked. Cleared by the next one that works.
+export const writes = $state({ failed: '' });
+
 // Write a tag back to the controller (same-origin via the dev proxy in
 // dev, same-origin for real once the built app is served by `naut run`).
 export async function writeTag(name: string, value: unknown): Promise<string | null> {
-	return rt.writeTag(name, value);
+	const err = await rt.writeTag(name, value);
+	writes.failed = err ? `Could not set ${name}: ${err}` : '';
+	return err;
 }
 
 // The latest frame's tags, read by name. Each read is reactive: a page or
@@ -31,6 +37,8 @@ export const num = (k: string, d = 0) => {
 	return typeof v === 'number' ? v : d;
 };
 export const bool = (k: string) => tagsNow()[k] === true;
+/** Whether the controller publishes the tag at all (an older project may not). */
+export const has = (k: string) => k in tagsNow();
 export const str = (k: string) => {
 	const v = tagsNow()[k];
 	return typeof v === 'string' ? v : '';

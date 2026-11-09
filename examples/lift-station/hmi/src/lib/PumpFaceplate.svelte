@@ -7,7 +7,7 @@
 	// opens the loop's settings.
 	import { StatusPill, Button, NumberField } from '@joyautomation/nautilus-hmi';
 	import { numAt } from '@joyautomation/nautilus-hmi';
-	import { rt, num, bool, writeTag, pulseReset } from '$lib/client.svelte';
+	import { rt, num, bool, has, writeTag, pulseReset } from '$lib/client.svelte';
 
 	let { pump, onloop }: { pump: 'P101' | 'P102'; onloop?: () => void } = $props();
 
@@ -45,15 +45,19 @@
 </dl>
 
 <div class="speed">
-	<NumberField
-		label="Hand speed"
-		unit="Hz"
-		value={num(`${pump}_HandSpeedHz`)}
-		min={0}
-		max={60}
-		step={1}
-		onsubmit={(v) => writeTag(`${pump}_HandSpeedHz`, v)}
-	/>
+	{#if has(`${pump}_HandSpeedHz`)}
+		<NumberField
+			label="Hand speed"
+			unit="Hz"
+			value={num(`${pump}_HandSpeedHz`)}
+			min={0}
+			max={60}
+			step={1}
+			onsubmit={(v) => writeTag(`${pump}_HandSpeedHz`, v)}
+		/>
+	{:else}
+		<p class="note">This controller has no {pump}_HandSpeedHz tag (a project from before hand speed was per pump?).</p>
+	{/if}
 	<p class="note">
 		{#if mode === 1}
 			Runs at this speed while in Hand.
