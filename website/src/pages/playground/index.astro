@@ -9,7 +9,9 @@
 // the Share button (nginx.conf serves this page for it; playground/share
 // keeps the projects), and a #project= link holds a whole project itself.
 // On a phone it first says the playground wants a computer, and offers to
-// send the link on (?phone=1 shows that page anywhere).
+// send the link on (?phone=1 shows that page anywhere). The Examples menu
+// lists the playground's examples (engine/examples/index.json); a visitor's
+// edits to one are kept in their browser, so switching loses nothing.
 import '../../styles/fonts.css';
 import logo from '../../assets/logo.svg';
 
@@ -49,6 +51,10 @@ const description =
       </a>
       <span class="what">VS Code with the nautilus extension, running in your browser. Nothing is installed.</span>
       <nav class="actions" aria-label="Playground">
+        <div class="examples" id="examples" hidden>
+          <button id="examples-button" type="button" aria-expanded="false" aria-controls="examples-menu">Examples</button>
+          <ul class="menu" id="examples-menu" hidden></ul>
+        </div>
         <a id="open-hmi" hidden target="_blank" rel="noopener">Open HMI</a>
         <a id="open-dashboard" hidden target="_blank" rel="noopener">Open dashboard</a>
         <button id="share" type="button" disabled title="Save the project as it stands and copy a link to it. Anyone with the link can open it.">Share</button>
@@ -132,6 +138,64 @@ const description =
   }
   .actions [hidden] {
     display: none;
+  }
+  .examples {
+    position: relative;
+  }
+  #examples-button::after {
+    content: '';
+    display: inline-block;
+    margin-left: 6px;
+    vertical-align: 2px;
+    border: 4px solid transparent;
+    border-top-color: currentColor;
+    border-bottom: 0;
+  }
+  .menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 10;
+    width: min(360px, calc(100vw - 32px));
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    background: #252526;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  }
+  /* Its items are made by the script, outside Astro's scoping. */
+  .actions .menu :global(a) {
+    display: block;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 3px;
+    background: none;
+    color: #ddd;
+    font-size: 12px;
+    line-height: 1.35;
+    text-decoration: none;
+  }
+  .actions .menu :global(a:hover),
+  .actions .menu :global(a:focus-visible) {
+    background: #04395e;
+    outline: none;
+  }
+  .menu :global(strong) {
+    display: block;
+    color: #eee;
+    font-weight: 500;
+  }
+  .menu :global(span) {
+    display: block;
+    margin-top: 2px;
+    color: #9d9d9d;
+  }
+  .menu :global(a[aria-current='page'] strong::after) {
+    content: ' (open now)';
+    color: #64d88a;
+    font-weight: 400;
   }
   .actions button:disabled {
     opacity: 0.5;
@@ -223,6 +287,7 @@ const description =
   }
   /* The playground's own buttons mean nothing until it is open. */
   :global(body.on-phone) #share,
+  :global(body.on-phone) #examples,
   :global(body.on-phone) #download,
   :global(body.on-phone) .actions a[href^='vscode:'] {
     display: none;
@@ -353,7 +418,76 @@ const description =
     else win.addEventListener('nautilus-playground-ready', ready, { once: true });
   }
 
+  /** The example this page shows, if it shows one as published. */
+  function currentExample(): string | null {
+    const q = new URLSearchParams(location.search);
+    if (location.pathname.replace(/\/$/, '') !== '/playground' || q.get('project') || location.hash) return null;
+    return q.get('example') || 'sealin';
+  }
+
+  /** The Examples menu, from the list the playground publishes. */
+  async function examplesMenu() {
+    const wrap = document.getElementById('examples')!;
+    const button = document.getElementById('examples-button') as HTMLButtonElement;
+    const menu = document.getElementById('examples-menu')!;
+    const r = await fetch('/playground/engine/examples/index.json', { cache: 'no-cache' });
+    if (!r.ok) return;
+    const list: { name: string; title: string; description?: string }[] = await r.json();
+    const current = currentExample();
+    for (const ex of list) {
+      const a = Object.assign(document.createElement('a'), { href: `/playground/?example=${encodeURIComponent(ex.name)}` });
+      if (ex.name === current) a.setAttribute('aria-current', 'page');
+      const title = Object.assign(document.createElement('strong'), { textContent: ex.title });
+      // The first sentence: enough to choose by.
+      const what = (ex.description ?? '').match(/^.*?[.!?](?=\s|$)/)?.[0] ?? ex.description ?? '';
+      a.append(title, Object.assign(document.createElement('span'), { textContent: what }));
+      const li = document.createElement('li');
+      li.append(a);
+      menu.append(li);
+    }
+    const links = () => [...menu.querySelectorAll('a')];
+    const open = (focusFirst: boolean) => {
+      menu.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
+      if (focusFirst) (menu.querySelector('[aria-current]') ?? links()[0])?.focus();
+    };
+    const close = (refocus: boolean) => {
+      if (menu.hidden) return;
+      menu.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+      if (refocus) button.focus();
+    };
+    button.addEventListener('click', () => (menu.hidden ? open(false) : close(false)));
+    button.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        open(true);
+      }
+    });
+    menu.addEventListener('keydown', (e) => {
+      const all = links();
+      const i = all.indexOf(document.activeElement as HTMLAnchorElement);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close(wrap.contains(document.activeElement));
+    });
+    document.addEventListener('click', (e) => {
+      if (!wrap.contains(e.target as Node)) close(false);
+    });
+    wrap.addEventListener('focusout', (e) => {
+      if (!wrap.contains(e.relatedTarget as Node | null) && e.relatedTarget) close(false);
+    });
+    // A click into the playground (another document) only blurs this window.
+    window.addEventListener('blur', () => close(false));
+    wrap.hidden = false;
+  }
+
   async function start() {
+    void examplesMenu().catch(() => {});
     try {
       const r = await fetch('/playground/engine/engine.json', { cache: 'no-cache' });
       if (!r.ok) throw new Error('no engine');

@@ -1,6 +1,7 @@
 """Bundle playground examples as JSON: {name, title, description, open, files}.
 
-Usage: examples.py OUTDIR NAME=DIR[:open1,open2[:Title[:Description]]] ...
+Usage: examples.py OUTDIR [--try=NAME=cmd;cmd...] NAME=DIR[:open1,open2[:Title[:Description]]] ...
+--try gives an example the commands its terminal suggests first ("try").
 An example with a built HMI in OUTDIR/../hmi/NAME/ gets "hmi": NAME.
 Every text file a project carries is included (IEC sources, manifests, tag
 files, test suites, mimic/scene JSON, READMEs, and the HMI's sources: its
@@ -35,7 +36,14 @@ def bundle(name, root, opens):
 out = sys.argv[1]
 os.makedirs(out, exist_ok=True)
 index = []
+tries = {}
 for arg in sys.argv[2:]:
+    if arg.startswith('--try='):
+        name, _, cmds = arg[len('--try='):].partition('=')
+        tries[name] = [c.strip() for c in cmds.split(';') if c.strip()]
+for arg in sys.argv[2:]:
+    if arg.startswith('--'):
+        continue
     name, rest = arg.split('=', 1)
     root, _, rest = rest.partition(':')
     opens, _, rest = rest.partition(':')
@@ -45,6 +53,8 @@ for arg in sys.argv[2:]:
         ex['title'] = title
     if desc:
         ex['description'] = desc
+    if name in tries:
+        ex['try'] = tries[name]
     # A prebuilt HMI (build.sh puts it in dist/hmi/NAME/): sw.js serves it.
     if os.path.isfile(os.path.join(out, '..', 'hmi', name, 'index.html')):
         ex['hmi'] = name

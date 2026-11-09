@@ -23,8 +23,10 @@ import {
 	IKeybindingService,
 	INotificationService,
 	IDialogService,
-	IClipboardService
+	IClipboardService,
+	IWorkbenchLayoutService
 } from '@codingame/monaco-vscode-api';
+import { Parts } from '@codingame/monaco-vscode-api/vscode/vs/workbench/services/layout/browser/layoutService';
 import { Action2, registerAction2 } from '@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions';
 import Severity from '@codingame/monaco-vscode-api/vscode/vs/base/common/severity';
 import { StandardKeyboardEvent } from '@codingame/monaco-vscode-api/vscode/vs/base/browser/keyboardEvent';
@@ -248,6 +250,40 @@ async function openProject(project) {
 	}
 }
 
+const TERMINAL_CLOSED = 'nautilus-playground-terminal-closed';
+
+/**
+ * A nautilus shell open below the editor, a quarter of the height, with
+ * the example's commands to try: naut test, set and watch are half of what
+ * the playground can do, and nobody opens a panel they don't know is there.
+ * Someone who closes the panel finds it closed next time.
+ */
+async function terminalBelow(commands) {
+	const layout = await getService(IWorkbenchLayoutService);
+	let closed = false;
+	try {
+		closed = localStorage.getItem(TERMINAL_CLOSED) === '1';
+	} catch {
+		// No storage: open it each time.
+	}
+	if (!closed) {
+		await commands.executeCommand('workbench.action.terminal.new');
+		const { width } = layout.getSize(Parts.PANEL_PART);
+		layout.setSize(Parts.PANEL_PART, { width, height: Math.max(140, Math.round(window.innerHeight / 4)) });
+		// Typing still goes to the editor.
+		await commands.executeCommand('workbench.action.focusActiveEditorGroup');
+	}
+	layout.onDidChangePartVisibility(({ partId, visible }) => {
+		if (partId !== Parts.PANEL_PART) return;
+		try {
+			if (visible) localStorage.removeItem(TERMINAL_CLOSED);
+			else localStorage.setItem(TERMINAL_CLOSED, '1');
+		} catch {
+			// Then it opens again next time.
+		}
+	});
+}
+
 async function main() {
 	// VS Code's extension host and webviews need crypto.subtle, which
 	// browsers give only to https pages and localhost: on a plain-http
@@ -370,7 +406,7 @@ async function main() {
 			...getOutline(),
 			// VS Code's terminal panel, with a nautilus shell for a backend
 			// (nautShell.js): there is no machine to run bash on.
-			...getTerminal(new NautShellBackend(pg))
+			...getTerminal(new NautShellBackend(pg, project.try))
 		},
 		document.getElementById('workbench'),
 		{
@@ -405,6 +441,7 @@ async function main() {
 	for (const f of files) ext.registerFileUrl('/' + f, extUrl(f));
 	await ext.whenReady();
 	await openProject(project);
+	await terminalBelow(await getService(ICommandService));
 	splash?.remove();
 	if (copy) void welcomeBack(source, copy, keep);
 	if (source.drifted) void driftNotice(source.drifted);

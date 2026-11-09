@@ -27,6 +27,15 @@ The project lives in an in-memory file system (`src/memfs.js`) that Go's
 `os` calls reach through `globalThis.fs`, so the language server and the
 loader read it as if it were on disk, under `/project`.
 
+## Examples and the terminal
+
+The examples are built by `scripts/build.sh` (`scripts/examples.py`) into
+`dist/examples/`; the docs page's Examples menu lists `index.json`. Each
+can carry `--try` commands: a new terminal (`app/nautShell.js`, a
+nautilus shell, not bash) prints them under its greeting. The terminal
+opens below the editor on load; a visitor who closes the panel finds it
+closed next time (`localStorage`, `nautilus-playground-terminal-closed`).
+
 ## Their copy and ours, and share links
 
 A project opens from a source that is ours and never changes: an example,

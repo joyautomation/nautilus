@@ -59,13 +59,14 @@ function glob(pattern) {
 }
 
 class NautShell extends SimpleTerminalProcess {
-	constructor(pg, id, out) {
+	constructor(pg, id, out, tries = []) {
 		// A nonzero pid: VS Code forwards keystrokes only to a process whose
 		// pid is truthy (terminalProcessManager: shellProcessId), so a shell
 		// with pid 0 would queue every key as if it had not launched yet.
 		super(id, id, ROOT, out.event);
 		this.pg = pg;
 		this.out = out;
+		this.tries = tries;
 		this.line = '';
 		this.cursor = 0;
 		this.history = [];
@@ -98,6 +99,9 @@ class NautShell extends SimpleTerminalProcess {
 			this.props.fire({ type: 'title', value: 'nautilus' });
 		});
 		this.write(`${C.bold}nautilus playground shell${C.reset}: naut runs in this browser tab. Type ${C.bold}help${C.reset} for what it can do.\n`);
+		if (this.tries.length) {
+			this.write(`Try ${this.tries.map((t) => C.bold + t + C.reset).join(C.dim + ' · ' + C.reset)}\n`);
+		}
 		this.redraw();
 		return undefined;
 	}
@@ -335,14 +339,15 @@ class NautShell extends SimpleTerminalProcess {
 
 /** The terminal backend: every new terminal is a nautilus shell. */
 export class NautShellBackend extends SimpleTerminalBackend {
-	constructor(pg) {
+	/** tries: the commands a new terminal suggests (the example's "try"). */
+	constructor(pg, tries = []) {
 		super();
 		this.pg = pg;
 		this.nextId = 1;
 		this.getDefaultSystemShell = async () => 'nautilus';
 		// The one profile, so the panel's profile picker reads "nautilus".
 		this.getProfiles = async () => [{ profileName: 'nautilus', path: 'nautilus', isDefault: true, args: [] }];
-		this.createProcess = async () => new NautShell(this.pg, this.nextId++, new Emitter());
+		this.createProcess = async () => new NautShell(this.pg, this.nextId++, new Emitter(), tries);
 		this.setReady();
 	}
 }
