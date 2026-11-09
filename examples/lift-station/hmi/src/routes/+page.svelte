@@ -37,7 +37,7 @@
 	<!-- With a panel open, the drawing moves over to make room for it. -->
 	<div class="stage" class:with-panel={selected !== null} style:--ratio={doc.canvas.width / doc.canvas.height}>
 		<div class="fit">
-			<Mimic {doc} {tags} registry={{ SubmersiblePump, FloatSwitch, ToProcess, SeqStepTag, CheckValve, TrendReadout, LevelMarks }} onequipmentclick={(eq) => (selected = eq.id)} />
+			<Mimic {doc} {tags} registry={{ SubmersiblePump, FloatSwitch, ToProcess, SeqStepTag, CheckValve, TrendReadout, LevelMarks }} onequipmentclick={(eq) => (selected = eq.id)} {selected} />
 		</div>
 		<p class="tip">Click any equipment for its controls.</p>
 	</div>
