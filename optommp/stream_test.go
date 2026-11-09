@@ -242,7 +242,11 @@ func do07(dev *fakeDevice) bool { return dev.U32(addrDigitalPacked+digitalModule
 func TestDriverRewritesOutputsAfterAStall(t *testing.T) {
 	for _, stream := range []time.Duration{0, 5 * time.Millisecond} {
 		t.Run(fmt.Sprintf("stream=%s", stream), func(t *testing.T) {
-			wd := 60 * time.Millisecond
+			// Wide enough that a busy runner pausing the driver for a few
+			// dozen milliseconds is not a stall: at 60ms one such pause
+			// counted as quiet past the watchdog and rewrote the outputs
+			// while the test said it was being fed on time.
+			wd := 200 * time.Millisecond
 			dev := newBenchDevice()
 			dev.SetWatchdogValue(1, 7, 1) // DO07 on when the watchdog fires
 			m := benchManifest(t, dev, ManifestOptions{ScanRate: 5 * time.Millisecond, Stream: stream, Watchdog: &wd})
@@ -379,7 +383,10 @@ func TestDriverStatusOutageWithoutATrip(t *testing.T) {
 
 			down.Store(tc.down > 0)
 			dev.Drop()
-			eventually(t, "offline", func() bool { on, _, _ := status(drv); return !on })
+			// The outage count, not the online flag: with nothing stopping
+			// the redial, the driver is back within a retry (10ms), and a
+			// check of online can sleep through the whole drop.
+			eventually(t, "the drop counted", func() bool { _, outages, _ := status(drv); return outages >= 1 })
 			time.Sleep(tc.down)
 			down.Store(false)
 			eventually(t, "online again", func() bool { on, _, _ := status(drv); return on })

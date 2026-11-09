@@ -22,6 +22,21 @@ const present = (file) => {
 	return existsSync(p) && statSync(p).size === file.bytes && sha256(readFileSync(p)) === file.sha256;
 };
 
+// GitHub's release downloads sometimes answer a cold file with a 502/503/504
+// after a long wait and serve it at once on the next request; a few tries
+// with a short backoff ride that out (seen on CI runners).
+const TRIES = 4;
+async function download(url) {
+	let res;
+	for (let i = 1; i <= TRIES; i++) {
+		res = await fetch(url, { redirect: 'follow' });
+		if (res.ok || res.status < 500 || i === TRIES) return res;
+		process.stdout.write(`HTTP ${res.status}, retrying … `);
+		await new Promise((r) => setTimeout(r, 1000 * 2 ** (i - 1)));
+	}
+	return res;
+}
+
 let missing = 0;
 for (const file of manifest.files) {
 	const p = join(here, 'static', file.path);
@@ -32,7 +47,7 @@ for (const file of manifest.files) {
 		continue;
 	}
 	process.stdout.write(`fetching ${file.path} (${(file.bytes / 1e6).toFixed(1)} MB) … `);
-	const res = await fetch(file.url, { redirect: 'follow' });
+	const res = await download(file.url);
 	if (!res.ok) {
 		console.log(`HTTP ${res.status}`);
 		missing++;
