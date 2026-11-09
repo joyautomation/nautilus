@@ -8,13 +8,13 @@ fills and light lines; under a light theme it is the paper it was.
 `paperPalette(base, dark)` takes the choice, and `paletteFromTheme` reports
 `dark`. The view follows a theme switched while it is up (it watches
 `data-theme` on `<html>`), models included. The palette gains `flow` (the
-paper look's flow colour) and `grid` (the floor grid's lines, which were
+colour of a flowing pipe's bands) and `grid` (the floor grid's lines, which were
 fixed light greys).
 
-**Changed.** Paper's flow markers: small rounded arrowheads riding just
-above the pipe in the palette's quiet `flow` blue, further apart and a
-little slower, fading in and out at a run's ends, in place of black
-four-sided chevrons on the line itself.
+**Changed.** A flowing pipe is a 3D dashed line in every look: bands of
+the palette's `flow` colour around the pipe, over its fluid colour,
+travelling along the run in the order of its points and following its
+bends, in place of the bulges (lit, flat) and black chevrons (paper).
 
 ## 0.3.1 — 2026-11-05
 

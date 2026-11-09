@@ -22,7 +22,8 @@ export interface Palette {
 	ink: string;
 	/** What the paper look paints behind everything. */
 	paper: string;
-	/** The paper look's flow arrows: a quiet colour of their own, not ink. */
+	/** The bands that travel along a flowing pipe (its dashes), over the
+	 * fluid colour. */
 	flow?: string;
 	/** The floor grid's lines (cell, section). */
 	grid?: { cell: string; section: string };
@@ -39,6 +40,7 @@ export const DEFAULT_PALETTE: Palette = {
 	steelDark: '#55585c',
 	shell: '#b8bcc2',
 	fluid: '#4a7fb5',
+	flow: '#9cc8f2',
 	running: '#5aa469',
 	stale: '#6b6b6b',
 	selected: '#e8e6e1',
