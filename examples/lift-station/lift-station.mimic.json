@@ -84,26 +84,28 @@
       ]
     },
     {
-      "id": "CV101",
-      "component": "Valve",
+      "id": "CKV101",
+      "component": "CheckValve",
       "x": 320,
       "y": 16,
       "width": 60,
-      "label": "CV-101",
-      "props": {
-        "openPct": 100
-      }
+      "label": "CKV-101",
+      "ports": [
+        { "name": "in", "x": 0, "y": 0.55, "dir": "left" },
+        { "name": "out", "x": 1, "y": 0.55, "dir": "right" }
+      ]
     },
     {
-      "id": "CV102",
-      "component": "Valve",
+      "id": "CKV102",
+      "component": "CheckValve",
       "x": 320,
       "y": 66,
       "width": 60,
-      "label": "CV-102",
-      "props": {
-        "openPct": 100
-      }
+      "label": "CKV-102",
+      "ports": [
+        { "name": "in", "x": 0, "y": 0.55, "dir": "left" },
+        { "name": "out", "x": 1, "y": 0.55, "dir": "right" }
+      ]
     },
     {
       "id": "TOPROC",
@@ -137,7 +139,7 @@
   ],
   "pipes": [
     {
-      "id": "p101-cv101",
+      "id": "p101-ckv101",
       "points": [],
       "routing": "orthogonal",
       "from": {
@@ -145,7 +147,7 @@
         "port": "discharge"
       },
       "to": {
-        "equip": "CV101",
+        "equip": "CKV101",
         "port": "in"
       },
       "bind": {
@@ -153,11 +155,11 @@
       }
     },
     {
-      "id": "cv101-header",
+      "id": "ckv101-header",
       "points": [],
       "routing": "orthogonal",
       "from": {
-        "equip": "CV101",
+        "equip": "CKV101",
         "port": "out"
       },
       "to": {
@@ -169,7 +171,7 @@
       }
     },
     {
-      "id": "p102-cv102",
+      "id": "p102-ckv102",
       "points": [],
       "routing": "orthogonal",
       "from": {
@@ -177,7 +179,7 @@
         "port": "discharge"
       },
       "to": {
-        "equip": "CV102",
+        "equip": "CKV102",
         "port": "in"
       },
       "bind": {
@@ -185,11 +187,11 @@
       }
     },
     {
-      "id": "cv102-header",
+      "id": "ckv102-header",
       "points": [],
       "routing": "orthogonal",
       "from": {
-        "equip": "CV102",
+        "equip": "CKV102",
         "port": "out"
       },
       "to": {

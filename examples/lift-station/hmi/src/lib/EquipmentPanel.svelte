@@ -23,8 +23,8 @@
 		LSHH101: { title: 'WW-101 wet well', show: 'wetwell' },
 		LSLL101: { title: 'WW-101 wet well', show: 'wetwell' },
 		SEQ: { title: 'WW-101 wet well', show: 'wetwell' },
-		CV101: { title: 'CV-101 check valve', show: 'valve', pump: 'P101' },
-		CV102: { title: 'CV-102 check valve', show: 'valve', pump: 'P102' },
+		CKV101: { title: 'CKV-101 check valve', show: 'valve', pump: 'P101' },
+		CKV102: { title: 'CKV-102 check valve', show: 'valve', pump: 'P102' },
 		FIT101: { title: 'Discharge to the force main', show: 'discharge' },
 		TOPROC: { title: 'Discharge to the force main', show: 'discharge' }
 	};
@@ -54,11 +54,12 @@
 				<WetWellPanel />
 			{:else if panel.show === 'valve' && panel.pump}
 				<p class="text">
-					Stops the force main draining back through {label(panel.pump)}. It has no switch of its
-					own: it is open while {label(panel.pump)} pumps.
+					A swing check: it stops the force main draining back through {label(panel.pump)}. It is
+					mechanical, with no actuator and no signal, so the station cannot command it or read it.
+					Pump pressure swings it open while {label(panel.pump)} runs.
 				</p>
 				<p class="text">
-					<b>{bool(`${panel.pump}_Running`) ? `Open: ${label(panel.pump)} is running` : `Closed: ${label(panel.pump)} is stopped`}</b>
+					<b>{bool(`${panel.pump}_Running`) ? `${label(panel.pump)} is running, so it should be open` : `${label(panel.pump)} is stopped, so it should be shut`}</b>
 				</p>
 				<button class="link" onclick={() => (selected = panel.pump!)}>{label(panel.pump)} controls</button>
 			{:else if panel.show === 'discharge'}

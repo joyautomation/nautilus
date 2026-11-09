@@ -323,8 +323,10 @@ float switches (`LSHH101`/`LSLL101`, both instances of the custom
 `FloatSwitch` component below) sit at the high-high/low-low marks; P-101
 and P-102 (both instances of the custom `SubmersiblePump` component) sit
 submerged near the bottom, each with one `discharge` port on top; each
-discharge line runs through a check valve (`CV101`/`CV102`, the built-in
-`Valve`) to a `ToProcess`-style off-page connector labeled "FORCE MAIN".
+discharge line runs through a swing check valve (`CKV101`/`CKV102`, the
+custom `CheckValve` component: mechanical, so no actuator, no position and
+no tag; it draws in the same box as the kit's `Valve`) to a
+`ToProcess`-style off-page connector labeled "FORCE MAIN".
 Pipe runs carry `flowing` bound to `P101_Running`/`P102_Running`; labels
 show `LIT101_Level` (%) and `FIT101_Flow` (gpm). `SeqStep` is a **string**
 tag (`'Idle'`/`'Lead'`/`'Lag'`/…) — the kit's built-in `MimicLabel.bind`
@@ -376,7 +378,7 @@ project root beside the mimic, rendered by
 [`@joyautomation/nautilus-hmi-3d`](../../hmi-3d) (the package
 `examples/spatial-rig` is the test bed for). It places the equipment the
 mimic draws — WW-101 cut open, the two floats on their cables, P-101 and
-P-102 on the well floor, CV-101 and CV-102 on a valve pad, the force-main
+P-102 on the well floor, CKV-101 and CKV-102 on a valve pad, the force-main
 connector — in metres, and binds the same tags: the water in the well is
 `LIT101_Level`; each pump's body goes green, its lamp lights and its
 impeller turns on `P101_Running` / `P101_SpeedHz`; each float swings up
