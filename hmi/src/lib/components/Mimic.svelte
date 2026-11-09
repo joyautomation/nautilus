@@ -20,6 +20,7 @@
 		tags = {},
 		registry = {},
 		onequipmentclick,
+		selected = null,
 		minScale = 0,
 		look
 	}: {
@@ -32,6 +33,9 @@
 		registry?: Record<string, Component<any>>;
 		/** Present = equipment is clickable (open a faceplate, navigate…). */
 		onequipmentclick?: (eq: MimicEquipment) => void;
+		/** The id of the equipment to mark as selected (its faceplate open,
+		 *  say): it keeps a soft glow, as hover gives one for a moment. */
+		selected?: string | null;
 		/**
 		 * Floor under which the mimic stops shrinking. When the container is
 		 * narrow enough that `containerWidth / doc.canvas.width` would drop
@@ -186,6 +190,8 @@
 						type="button"
 						class="eq clickable"
 						class:behind={eq.behind}
+						class:selected={eq.id === selected}
+						aria-pressed={eq.id === selected}
 						style="left: {eq.x}px; top: {eq.y}px"
 						aria-label={eq.label ?? eq.id}
 						use:regEl={eq.id}
@@ -281,17 +287,35 @@
 	.eq :global(svg) {
 		display: block;
 	}
+	/* Clickable equipment glows rather than boxing itself: a drop shadow
+	   follows the drawing's own shape, where an outline traced its whole
+	   box (often much larger than the drawing). Hover brightens it and
+	   fades the glow in; the selected one and the one keyboard focus is on
+	   keep a softer one, enough to see where Tab has landed without
+	   lighting up a large drawing. */
 	.eq.clickable {
 		cursor: pointer;
 		border-radius: 8px;
+		--glow: color-mix(in srgb, var(--s1, #3987e5) 70%, transparent);
+		transition: filter 0.18s ease;
 	}
 	.eq.clickable:hover {
-		outline: 2px solid var(--s1, #3987e5);
-		outline-offset: 2px;
+		filter: brightness(1.12) drop-shadow(0 0 4px var(--glow));
+	}
+	.eq.clickable.selected {
+		filter: drop-shadow(0 0 3px var(--glow)) drop-shadow(0 0 1px var(--glow));
+	}
+	.eq.clickable.selected:hover {
+		filter: brightness(1.12) drop-shadow(0 0 5px var(--glow)) drop-shadow(0 0 1px var(--glow));
 	}
 	.eq.clickable:focus-visible {
-		outline: 2px solid var(--s1, #3987e5);
-		outline-offset: 2px;
+		outline: none;
+		filter: drop-shadow(0 0 3px var(--glow)) drop-shadow(0 0 1px var(--glow));
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.eq.clickable {
+			transition: none;
+		}
 	}
 	.unknown {
 		display: inline-block;

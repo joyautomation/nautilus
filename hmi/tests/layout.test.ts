@@ -49,7 +49,7 @@ describe('built-in drawings', () => {
 		expect(vessel.vessel.w - pit.vessel.w).toBe(28);
 		expect(pit.labelRow.start - (pit.vessel.y + pit.vessel.h)).toBe(14);
 		// The vessel part ports anchor to follows the shape.
-		const parts = builtinParts('Tank', { x: 0, y: 0, w: 220, h: 260 }, { label: 'T', props: { shape: 'pit' } })!;
+		const parts = builtinParts('Tank', { w: 220, h: 260 }, { label: 'T', props: { shape: 'pit' } })!;
 		expect(parts.vessel).toEqual(pit.vessel);
 	});
 	it('runs the valve body the full width at any size', () => {
