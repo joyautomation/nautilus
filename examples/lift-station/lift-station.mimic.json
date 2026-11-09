@@ -8,12 +8,15 @@
     {
       "id": "WW101",
       "component": "Tank",
-      "x": 60,
-      "y": 110,
-      "width": 272,
-      "height": 290,
+      "x": 42,
+      "y": 109,
+      "width": 310,
+      "height": 310,
       "behind": true,
       "label": "WW-101",
+      "props": {
+        "shape": "pit"
+      },
       "bind": {
         "levelPct": "LIT101_Level"
       }
@@ -112,7 +115,7 @@
       "component": "ToProcess",
       "x": 470,
       "y": 60,
-      "width": 130,
+      "width": 96,
       "props": {
         "label": "FORCE MAIN"
       },
@@ -129,7 +132,7 @@
       "id": "SEQ",
       "component": "SeqStepTag",
       "x": 73,
-      "y": 398,
+      "y": 418,
       "width": 186,
       "height": 24,
       "bind": {
