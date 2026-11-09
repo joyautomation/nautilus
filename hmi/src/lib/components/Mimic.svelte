@@ -100,6 +100,28 @@
 	 * pipePaths below purely to force it to recompute after layout settles
 	 * (first paint, a component's size changing with its bound props, …). */
 	let boxVersion = $state(0);
+
+	// Equipment whose glow is fading out: it keeps its filter for the
+	// fade, then goes back to none. (A filter on the scaled canvas renders
+	// its element as an image at the canvas's own size, which the scale
+	// then blurs, so nothing keeps one while it is not glowing.)
+	const FADE_MS = 200;
+	let fading = $state<Record<string, true>>({});
+	function fadeOut(id: string) {
+		fading = { ...fading, [id]: true };
+		setTimeout(() => {
+			const { [id]: _, ...rest } = fading;
+			fading = rest;
+		}, FADE_MS);
+	}
+	// A selection that moves on fades out like a hover that ends. Before
+	// the DOM updates, so .fading arrives with .selected's removal: a
+	// frame between them would drop the glow to nothing at once.
+	let wasSelected: string | null = null;
+	$effect.pre(() => {
+		if (wasSelected && wasSelected !== selected) fadeOut(wasSelected);
+		wasSelected = selected;
+	});
 	function regEl(node: HTMLElement, id: string) {
 		eqEls.set(id, node);
 		const ro = new ResizeObserver(() => boxVersion++);
@@ -191,7 +213,10 @@
 						class="eq clickable"
 						class:behind={eq.behind}
 						class:selected={eq.id === selected}
+						class:fading={fading[eq.id]}
 						aria-pressed={eq.id === selected}
+						onpointerleave={() => fadeOut(eq.id)}
+						onblur={() => fadeOut(eq.id)}
 						style="left: {eq.x}px; top: {eq.y}px"
 						aria-label={eq.label ?? eq.id}
 						use:regEl={eq.id}
@@ -293,31 +318,35 @@
 	   fades the glow in; the selected one and the one keyboard focus is on
 	   keep a softer one, enough to see where Tab has landed without
 	   lighting up a large drawing. */
+	/* The glow's strength, 0 to 1: a registered property, so it animates
+	   on its own and the filter built from it follows. At rest there is no
+	   filter at all; while glowing, or fading (Mimic adds .fading for
+	   FADE_MS), the filter is built from --glow-a, whose colour stays the
+	   glow's blue at every step, so the fade never passes through a dark
+	   halo. */
+	@property --glow-a {
+		syntax: '<number>';
+		inherits: false;
+		initial-value: 0;
+	}
 	.eq.clickable {
 		cursor: pointer;
 		border-radius: 8px;
-		/* One filter list in every state, the glow's colour fixed and only
-		   its opacity and spread changing: a transition from `none`, or
-		   between lists that differ, starts from transparent black and
-		   passes through a dark halo on the way. */
-		--glow: rgb(from var(--s1, #3987e5) r g b / 0.7);
-		--clear: rgb(from var(--s1, #3987e5) r g b / 0);
-		filter: brightness(1) drop-shadow(0 0 0 var(--clear)) drop-shadow(0 0 0 var(--clear));
-		transition: filter 0.18s ease;
+	}
+	.eq.clickable:is(:hover, :focus-visible, .selected, .fading) {
+		outline: none;
+		filter: brightness(calc(1 + 0.12 * var(--glow-a)))
+			drop-shadow(0 0 calc(4px * var(--glow-a)) rgb(from var(--s1, #3987e5) r g b / calc(0.7 * var(--glow-a))));
+		transition: --glow-a 0.18s ease;
+	}
+	.eq.clickable:is(.selected, :focus-visible) {
+		--glow-a: 0.7;
 	}
 	.eq.clickable:hover {
-		filter: brightness(1.12) drop-shadow(0 0 4px var(--glow)) drop-shadow(0 0 0 var(--clear));
-	}
-	.eq.clickable.selected,
-	.eq.clickable:focus-visible {
-		outline: none;
-		filter: brightness(1) drop-shadow(0 0 3px var(--glow)) drop-shadow(0 0 1px var(--glow));
-	}
-	.eq.clickable.selected:hover {
-		filter: brightness(1.12) drop-shadow(0 0 5px var(--glow)) drop-shadow(0 0 1px var(--glow));
+		--glow-a: 1;
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.eq.clickable {
+		.eq.clickable:is(:hover, :focus-visible, .selected, .fading) {
 			transition: none;
 		}
 	}
