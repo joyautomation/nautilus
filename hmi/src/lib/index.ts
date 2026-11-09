@@ -205,6 +205,7 @@ export type { Motion } from './motion.svelte.js';
 export { tempColor } from './color.js';
 export { tracks, fitBox } from './layout.js';
 export { builtinParts, tankGeometry, valveGeometry, pumpGeometry } from './drawings.js';
+export type { TankShape } from './drawings.js';
 export type { Track, Span } from './layout.js';
 export {
 	pointsToPath,

@@ -1,5 +1,18 @@
 # Changelog — @joyautomation/nautilus-hmi
 
+## Unreleased
+
+### Added
+
+- **`Tank` shapes.** `shape` says what kind of tank it is: a closed
+  `vessel` (the default, as before), an `open` basin with no roof, or a
+  below-grade `pit` (a wet well or sump: square concrete walls, a cover
+  slab with an access hatch at grade, and hatched ground beside and below
+  it). A pit reserves a band for its ground, so the scale and the label
+  sit outside it; `tankGeometry` and `builtinParts` take the shape too, so
+  ports on the vessel land on its walls. In a mimic: `"props": { "shape":
+  "pit" }`. `TankShape` is exported.
+
 ## 0.9.0 — 2026-11-05 (minor; one breaking change, below)
 
 ### Added

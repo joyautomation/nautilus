@@ -552,7 +552,7 @@ reduced-motion via `data-motion`.
 
 | Component | Key props |
 | --- | --- |
-| `Tank` | `levelPct`, `tempC`, `heaterPct`, `label`, `width` |
+| `Tank` | `levelPct`, `label`, `width`, `height`, `scale`, `shape` (`'vessel'` closed, `'open'` basin, `'pit'` below grade: a wet well or sump) |
 | `LevelTank` | `value`, `min`, `max`, `units`, `precision`, `label`, `marks`, `overflow`, `volume`, `fill`, `width`, `height` |
 | `Gauge` | `value`, `min`, `max`, `unit`, `label`, `color`, `setpoint`, `decimals`, `width`, `sweep`, `gap`, `thickness` |
 | `ScaleBar` | `value`, `min`, `max`, `hh`/`h`/`l`/`ll` (`null` = limit disabled), `bands`, `orientation`, `thickness`, `length`, `showScale`, `indicatorColor`, `label`, `units`, `precision` |

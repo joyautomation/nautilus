@@ -38,6 +38,20 @@ describe('built-in drawings', () => {
 		expect(b.vessel.w).toBe(a.vessel.w);
 		expect(b.vessel.h - a.vessel.h).toBe(140);
 	});
+	it('leaves a pit room for its ground on both sides and below, and other shapes none', () => {
+		const vessel = tankGeometry(220, undefined, { label: 'T' });
+		const open = tankGeometry(220, undefined, { label: 'T', shape: 'open' });
+		const pit = tankGeometry(220, undefined, { label: 'T', shape: 'pit' });
+		expect(open).toEqual(vessel);
+		expect(vessel.ground).toBe(0);
+		expect(pit.ground).toBe(14);
+		expect(pit.vessel.x - vessel.vessel.x).toBe(14);
+		expect(vessel.vessel.w - pit.vessel.w).toBe(28);
+		expect(pit.labelRow.start - (pit.vessel.y + pit.vessel.h)).toBe(14);
+		// The vessel part ports anchor to follows the shape.
+		const parts = builtinParts('Tank', { x: 0, y: 0, w: 220, h: 260 }, { label: 'T', props: { shape: 'pit' } })!;
+		expect(parts.vessel).toEqual(pit.vessel);
+	});
 	it('runs the valve body the full width at any size', () => {
 		for (const [w, h] of [[90, undefined], [200, 80], [60, 120]] as const) {
 			const g = valveGeometry(w, h);
