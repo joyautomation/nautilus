@@ -68,6 +68,23 @@
 	let name = $derived(pit ? 'Pit' : open ? 'Basin' : 'Tank');
 	let shellFill = $derived(real ? (pit ? '#8f8c84' : `url(#${uid}-steel)`) : 'var(--surface-2, #232321)');
 	let edge = $derived(real ? '#2e3134' : 'var(--edge, #7a7973)');
+	// A pit's ground: the band beside and below it, hatched with the civil
+	// drawing's diagonals. Drawn as lines, not an SVG <pattern>: a pattern
+	// renders as repeated tiles, and when the drawing is re-rendered at an
+	// odd scale (a filter coming or going on a scaled mimic) the tiles'
+	// edges show as seams and uneven lines.
+	let earthBand = $derived(
+		`M ${vx - g} ${vy} H ${vx + vw + g} V ${vy + vh + g} H ${vx - g} Z M ${vx} ${vy} V ${vy + vh} H ${vx + vw} V ${vy} Z`
+	);
+	let hatch = $derived.by(() => {
+		if (!pit) return '';
+		const x0 = vx - g, x1 = vx + vw + g, y0 = vy, y1 = vy + vh + g;
+		const step = 6 * k * Math.SQRT2; // 6 units apart, measured across the lines
+		let d = '';
+		// Lines rising to the right (x + y = c), across the band's bounds.
+		for (let c = x0 + y0; c <= x1 + y1; c += step) d += `M ${c - y1} ${y1} L ${c - y0} ${y0} `;
+		return d;
+	});
 	// The access hatch in a pit's cover slab, a third of the way across.
 	let hatchX = $derived(vx + vw * 0.2);
 	let hatchW = $derived(vw * 0.28);
@@ -82,10 +99,10 @@
 >
 	<defs>
 		{#if pit}
-			<!-- ground: the civil drawing's diagonal hatch -->
-			<pattern id="{uid}-earth" width={6 * k} height={6 * k} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-				<line x1="0" y1="0" x2="0" y2={6 * k} stroke="var(--muted, #898781)" stroke-width={Math.max(0.75, k)} opacity="0.55" />
-			</pattern>
+			<!-- the band of ground around the pit, for the hatch to stay in -->
+			<clipPath id="{uid}-earth">
+				<path d={earthBand} clip-rule="evenodd" />
+			</clipPath>
 		{/if}
 		<clipPath id="{uid}-clip">
 			<rect x={ix} y={iy} width={iw} height={ih} rx={irx} />
@@ -114,11 +131,7 @@
 
 	{#if pit}
 		<!-- the ground around the pit, and the grade line across its top -->
-		<path
-			d="M {vx - g} {vy} H {vx + vw + g} V {vy + vh + g} H {vx - g} Z M {vx} {vy} V {vy + vh} H {vx + vw} V {vy} Z"
-			fill="url(#{uid}-earth)"
-			fill-rule="evenodd"
-		/>
+		<path d={hatch} clip-path="url(#{uid}-earth)" stroke="var(--muted, #898781)" stroke-width={Math.max(0.75, k)} opacity="0.55" fill="none" />
 		<line x1={vx - g - 6 * k} x2={vx + vw + g} y1={vy} y2={vy} stroke={edge} stroke-width={Math.max(1.5, 3 * k)} />
 	{/if}
 
