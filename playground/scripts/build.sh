@@ -51,10 +51,10 @@ cp "$here"/examples/demo/*.mimic.json "$demo/demo/"
 python3 -I "$here/scripts/examples.py" "$out/examples" \
   "--try=sealin=set StartPB true;set StartPB false;tags Motor;naut test" \
   "--try=demo=set TempSP 70;watch TempC Heater;naut test" \
-  "--try=lift-station=set InflowGpm 640;watch LIT101_Level;naut test" \
+  "--try=lift-station=set InflowGpm 950;watch LIT101_Level;naut test" \
   "sealin=$here/examples/sealin:program.ld:Start/stop seal-in (ladder):The first circuit everyone learns. Press StartPB in the Tags panel and the motor keeps running after you let go, because the rung reads its own Motor contact. StopPB breaks it." \
   "demo=$demo/demo:interlocks.ld,program.fbd,tank.mimic.json:Tank demo (ladder, FBD, ST, HMI):What naut new makes: a heated tank with a PI loop and pump seal-in in FBD, the alarm annunciator in ladder, the plant simulated in ST, and acceptance tests. Change TempSP and watch the loop follow, on the diagrams and in tank.mimic.json." \
-  "lift-station=$repo/examples/lift-station:permissives.ld,sequence.sfc,level.fbd:Lift station (all four languages):A duplex sewage lift station: duty/standby sequencing in SFC, level control in FBD, permissives in ladder, the plant simulated in ST, with alarms and 15 tests. Set InflowGpm to 640 for a storm."
+  "lift-station=$repo/examples/lift-station:permissives.ld,sequence.sfc,level.fbd:Lift station (all four languages):A duplex sewage lift station: duty/standby sequencing in SFC, level control in FBD, permissives in ladder, the plant simulated in ST, with alarms and 20 tests. Set InflowGpm to 950 for a storm."
 rm -rf "$demo"
 
 # What a page hosting dist/ reads first: the version and the build id, for

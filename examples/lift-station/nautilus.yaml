@@ -95,7 +95,7 @@ tags:
 
   # Bench-only setpoint (tags/station.yaml has the rest — every other
   # operator setpoint is byte-identical to field.yaml's).
-  - { name: InflowGpm, role: setpoint, init: 190.0, unit: "gpm", desc: "Bench only: base inflow (a storm is 640)" }
+  - { name: InflowGpm, role: setpoint, init: 190.0, unit: "gpm", desc: "Bench only: base inflow (a storm is 950)" }
 
   # Bench-only fault/float injection — nothing to wire up, just tags to
   # POST from the dashboard or the API.

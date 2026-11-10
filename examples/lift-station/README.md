@@ -207,7 +207,7 @@ the wet well's level from an inflow/outflow balance (small on purpose —
 (instantiated twice) turns a run command and speed command into a
 running feedback, a ramping speed, and a current draw, with a bench-only
 fault-injection input. Inflow is `InflowGpm` (190 gpm normally, a "storm"
-is 640) plus a slow sinusoid, so the level never sits dead flat.
+is 950; at 640 the lead pump holds it alone) plus a slow sinusoid, so the level never sits dead flat.
 
 ## Bench vs. field
 
