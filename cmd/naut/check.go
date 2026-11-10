@@ -448,6 +448,13 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 
+	// The guidance for AI assistants is missing, older than this naut's,
+	// or somebody's own file with none of it (agents.go).
+	for _, w := range agentsWarnings(dir) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
+	}
+
 	// The served HMI predates an edit it compiles in (a mimic, a scene,
 	// its own code): what the operator sees is not what the files say.
 	if !proj.HMIMissing {

@@ -28,6 +28,10 @@ Usage:
                           project — nautilus.yaml + IEC files, no toolchain —
                           or sdk / sdk-demo for a Go project when you need a
                           custom field bus or richer simulation.
+  naut agents [dir]   Add or update a project's guidance for AI coding
+                          assistants (AGENTS.md, and a CLAUDE.md that
+                          imports it). -check says whether it is missing or
+                          stale. "naut agents -h" for the rest.
                           --language st|fbd|ld|sfc picks the blank program's
                           language (minimal and sdk).
   naut run [dir]      Run a manifest project (nautilus.yaml + programs):
@@ -135,6 +139,8 @@ func main() {
 		os.Exit(runTest(os.Args[2:]))
 	case "new":
 		os.Exit(runNew(os.Args[2:]))
+	case "agents":
+		os.Exit(runAgents(os.Args[2:]))
 	case "eip":
 		os.Exit(runEIP(os.Args[2:]))
 	case "logix":

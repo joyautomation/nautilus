@@ -5,8 +5,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-Works with naut 0.20.0: both items below use the controller's tag API the
-extension already writes through.
+Works with naut 0.20.0: Toggle Bit and the diagram live actions use the
+controller's tag API the extension already writes through. The AGENTS.md
+offer needs the next naut, the first with `naut agents`.
 
 ### Added
 
@@ -35,6 +36,16 @@ extension already writes through.
   locals, member or element references, literals, constants, steps and
   ACTIONs are left out, as the text editor's hover link leaves them out.
   The shortcut help of all three diagrams gains a Live group.
+
+- **AGENTS.md for AI assistants, offered when it is missing or stale.**
+  Opening a project that has no `AGENTS.md` (the guidance Claude Code,
+  Copilot, Cursor and Codex read before writing its programs), or an older
+  naut's copy, offers to add or update it: *Add*, *Not now*, *Never for
+  this project*. **nautilus: Add or Update AGENTS.md** does it at any time.
+  The text comes from `naut agents`, so it always matches your naut's
+  checks, and notes you write outside its markers are kept. Needs a naut
+  with `naut agents`; with an older one the offer never appears. Turn it
+  off with `nautilus.agentsMd.offer`. (#645)
 
 ### Fixed
 

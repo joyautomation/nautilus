@@ -354,6 +354,10 @@
         "title": "nautilus: Create Project…"
       },
       {
+        "command": "nautilus.agentsMd.update",
+        "title": "nautilus: Add or Update AGENTS.md"
+      },
+      {
         "command": "nautilus.getStarted",
         "title": "nautilus: Get Started"
       },
@@ -771,6 +775,10 @@
           "when": "!isWeb"
         },
         {
+          "command": "nautilus.agentsMd.update",
+          "when": "!isWeb && nautilus.hasProject"
+        },
+        {
           "command": "nautilus.copyKitComponent",
           "when": "!isWeb"
         },
@@ -804,6 +812,11 @@
           "type": "string",
           "default": "http://localhost:8080",
           "description": "Base URL of a running nautilus controller's tag API. Inline live values subscribe to <url>/api/stream."
+        },
+        "nautilus.agentsMd.offer": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When a project you open has no `AGENTS.md` (the guidance AI assistants such as Claude Code, Copilot and Cursor read before writing its programs), or has an older naut's copy, offer to add or update it. The text comes from your `naut`, so it matches the checks `naut` runs. The command **nautilus: Add or Update AGENTS.md** works whatever this is set to."
         },
         "nautilus.liveValues.enabled": {
           "type": "boolean",
@@ -1087,7 +1100,7 @@
     "compile:web": "node esbuild.web.mjs --minify",
     "check:web": "tsc -p tsconfig.web.json",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/cliPath.test.js out/cli.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js out/liveActions.test.js out/diagramSelection.test.js out/componentCompiler.test.js out/runtimeModules.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/cliPath.test.js out/cli.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/builtinComponents.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/sceneOps.test.js out/sceneEditorLogic.test.js out/kindSchema.test.js out/kindEditorLogic.test.js out/kindOps.test.js out/kindEject.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js out/diagramExportLogic.test.js out/liveActions.test.js out/diagramSelection.test.js out/agentsMdLogic.test.js out/componentCompiler.test.js out/runtimeModules.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js",
     "gen:kind-schema": "npm run compile && node out/kindSchema.js --write"

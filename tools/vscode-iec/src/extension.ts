@@ -53,6 +53,7 @@ import { notifyInfo, notifyWarning, openEditors } from "./testHooks";
 import { setLspClient } from "./lspClient";
 import { registerDiagramDescriptions } from "./diagramXref";
 import { IS_WEB, registerPlatform } from "./platform";
+import { registerAgentsMd } from "./agentsMd";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -174,6 +175,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     )
   );
   watchHasProject(context);
+  // AGENTS.md for AI assistants: offered when a project lacks it or has an
+  // older naut's text; the text itself comes from naut (#645).
+  if (!IS_WEB) registerAgentsMd(context);
 
   // Auto-open the walkthrough at most once ever (a globalState flag, not
   // per-workspace), and only into a workspace that isn't already a nautilus

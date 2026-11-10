@@ -13,7 +13,7 @@ Code and the other agents that read `AGENTS.md` pick it up on their own;
 the project's `CLAUDE.md` only imports it. The Go SDK templates (`sdk`,
 `sdk-demo`) do not get one: they have no `nautilus.yaml`, so the file's
 check loop and tag rules would not apply. Its ladder, FBD and SFC rules
-still do, and the [existing-project](#an-existing-project) recipe adds it.
+still do, and [`naut agents`](#an-existing-project) adds it.
 
 ## Why a diagram can compile and still look wrong
 
@@ -94,17 +94,46 @@ shows, so the guidance cannot drift from what works.
 
 ## An existing project
 
-Projects made before the file shipped can take it as is:
+`naut agents` adds the file to a project that predates it, or to one
+imported from elsewhere:
 
 ```sh
-curl -fsSL -o AGENTS.md \
-  https://raw.githubusercontent.com/joyautomation/nautilus/main/cmd/naut/templates/AGENTS.md.tmpl
-printf 'Read AGENTS.md before changing any program:\n\n@AGENTS.md\n' > CLAUDE.md
+naut agents          # writes AGENTS.md, and a CLAUDE.md that imports it
+naut agents -check   # says whether either is missing or stale; writes nothing
 ```
 
-It is a starting point. Add your site's own conventions (tag naming,
-which programs own which equipment, what a rung comment must say) to the
-same file.
+The text comes from your `naut`, so it always matches the checks that
+`naut` runs. In VS Code, opening a project that has no `AGENTS.md`, or an
+older naut's copy, offers to add or update it (turn that off with the
+`nautilus.agentsMd.offer` setting); **nautilus: Add or Update AGENTS.md**
+in the Command Palette does the same at any time.
+
+## Keeping it current
+
+The nautilus text sits between two markers:
+
+```markdown
+<!-- nautilus:begin (naut 0.21.0): … -->
+# AGENTS.md
+…
+<!-- nautilus:end -->
+```
+
+When a newer `naut` has newer guidance, `naut check` warns that the
+project's copy is stale, and `naut agents` replaces what is between the
+markers. Anything above or below them is yours and is kept, so that is
+where your site's own conventions go: tag naming, which programs own which
+equipment, what a rung comment must say.
+
+A copy made by an older `naut new`, which had no markers, is recognised and
+updated the same way. An `AGENTS.md` that `naut` did not write is left
+alone: `naut agents -append` adds the nautilus guidance below its text, and
+`-force` replaces the file. A `CLAUDE.md` that exists without importing
+`AGENTS.md` gets the `@AGENTS.md` line added; nothing else in it changes.
+
+A project with no `AGENTS.md` gets no warning from `naut check`. Plenty of
+projects have no use for one, and a warning that never goes away teaches
+people to ignore warnings.
 
 ## Working with an agent
 

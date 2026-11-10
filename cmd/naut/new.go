@@ -397,8 +397,8 @@ func write(sc *scaffold) error {
 		// how to structure LD/FBD/SFC text so the computed diagrams read
 		// well, and how to check the work. It describes a manifest project,
 		// so the Go templates leave it out. CLAUDE.md only imports it.
-		{"AGENTS.md.tmpl", "AGENTS.md", sc.NoGo()},
-		{"CLAUDE.md.tmpl", "CLAUDE.md", sc.NoGo()},
+		// They are written after the loop, through agentsWrite (agents.go),
+		// so the project gets the marked block naut agents refreshes.
 
 		{"gitignore.tmpl", ".gitignore", true},
 		{"README.md.tmpl", "README.md", !sc.NoGo()},
@@ -433,6 +433,12 @@ func write(sc *scaffold) error {
 			return err
 		}
 		if err := out.Close(); err != nil {
+			return err
+		}
+	}
+
+	if sc.NoGo() {
+		if _, err := agentsWrite(sc.Name, agentsRefuse); err != nil {
 			return err
 		}
 	}
