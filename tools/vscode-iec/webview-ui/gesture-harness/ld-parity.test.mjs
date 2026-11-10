@@ -347,3 +347,57 @@ test('Ladder vars panel: rung-declared block instances are listed as inst : TYPE
 		assert.deepEqual(await ldOps(b), []);
 	});
 });
+
+// A program written straight against the manifest's tags (no VAR_EXTERNAL):
+// the rungs' tags list read-only under the declarations, with their own
+// count, and the head's count stays the header's.
+const MOTOR_TAGS = [
+	{ name: 'MTR101_HandSel', role: 'input', type: 'BOOL', desc: 'Hand selected at the MCC' },
+	{ name: 'MTR101_RunCmd', role: 'output', type: 'BOOL', desc: 'Run command to the starter' },
+	{ name: 'MTR101_RunFbk', role: 'input', type: 'BOOL', desc: 'Starter auxiliary contact' },
+	{ name: 'MTR101_Overload', role: 'input', type: 'BOOL', desc: 'Overload relay tripped' },
+	{ name: 'MTR101_FailToRun', role: 'memory', type: 'BOOL', desc: 'Commanded but no run feedback' },
+	{ name: 'MTR101_Permissive', role: 'memory', type: 'BOOL', desc: 'Clear to run' }
+];
+// What `naut ld graph` prints for the example (fbTypes trimmed).
+const MOTOR_TAGGED = {
+	name: 'Motor',
+	rungs: [
+		{
+			name: 'permissive', line: 3, endLine: 4,
+			elements: [{ kind: 'contact', ref: 'MTR101_Overload', neg: true }, { kind: 'contact', ref: 'MTR101_FailToRun', neg: true }],
+			coils: [{ kind: 'coil', ref: 'MTR101_Permissive' }]
+		},
+		{
+			name: 'failtorun', line: 5, endLine: 6,
+			elements: [
+				{ kind: 'contact', ref: 'MTR101_RunCmd' },
+				{ kind: 'contact', ref: 'MTR101_RunFbk', neg: true },
+				{ kind: 'fb', args: 'PT := T#5S', inst: 'ftrTmr', type: 'TON', powerIn: 'IN', powerOut: 'Q' }
+			],
+			coils: [{ kind: 'coil', ref: 'MTR101_FailToRun', mode: 'S' }]
+		}
+	],
+	tags: MOTOR_TAGS
+};
+
+test('Ladder vars panel: the project tags the rungs use without declaring them list read-only, with their own count', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'ldModel', model: MOTOR_TAGGED, title: 'motor.ld' });
+		await openVars(b);
+		const headCount = () => b.eval(`document.querySelector('.head .count').textContent.trim()`);
+		assert.equal(await headCount(), '1', 'the header count: the ftrTmr instance only');
+		const rows = () => b.eval(`[...document.querySelectorAll('.rows .row[data-section="project"]')].map((r) => r.dataset.id)`);
+		assert.deepEqual(await rows(), ['MTR101_RunCmd', 'MTR101_RunFbk', 'MTR101_Overload', 'MTR101_FailToRun', 'MTR101_Permissive'], 'manifest order; MTR101_HandSel is unused');
+		assert.equal(await b.eval(`document.querySelector('.tagshead .count').textContent.trim()`), '5');
+		const row = await b.eval(`document.querySelector('.rows .row[data-id="MTR101_RunFbk"]').textContent.replace(/\\s+/g, ' ').trim()`);
+		assert.match(row, /tag MTR101_RunFbk : BOOL Starter auxiliary contact input/);
+		assert.equal(await b.eval(`document.querySelectorAll('.rows .row[data-section="project"] .del').length`), 0, 'read-only: edited in the manifest');
+		assert.equal(await b.eval(`!!document.querySelector('.rows .row[data-section="instance"][data-id="ftrTmr"]')`), true, 'the instance still lists');
+		// Declared in the header (any case): a declaration, never a project-tag row too.
+		await deliver(b, { type: 'ldModel', model: { ...MOTOR_TAGGED, vars: [{ name: 'mtr101_runcmd', type: 'BOOL', section: 'VAR_EXTERNAL', line: 2 }] }, title: 'motor.ld' });
+		assert.deepEqual(await rows(), ['MTR101_RunFbk', 'MTR101_Overload', 'MTR101_FailToRun', 'MTR101_Permissive']);
+		assert.equal(await headCount(), '2');
+		assert.deepEqual(await ldOps(b), []);
+	});
+});

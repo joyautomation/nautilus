@@ -41,6 +41,7 @@
 	import ZoomPane from './ZoomPane.svelte';
 	import { loadViewState, saveViewState } from './viewState';
 	import { themeColorMode } from './themeMode.svelte';
+	import { fbdRefs, ldRefs, sfcRefs, usedProjectTags, type ProjectTag } from './usedTags';
 
 	const nodeTypes = { fbd: FbdNode, net: NetBand };
 	const edgeTypes = { fbd: FbdEdge };
@@ -79,7 +80,10 @@
 	let fbTypes = $state<FbCatalogType[]>([]);
 	// The project manifest's tags (from whichever graph command drew this
 	// diagram): in scope in a PROGRAM without a declaration (#177/#210).
-	let projectTags = $state<{ name: string; type?: string }[]>([]);
+	let projectTags = $state<ProjectTag[]>([]);
+	// The vars panel's read-only "project tags used here": the manifest tags
+	// the logic names without a header declaration (usedTags.ts).
+	let usedTags = $state<ProjectTag[]>([]);
 	let userFuncs = $state<FbCatalogType[]>([]);
 	let fbInsts = $state<FbInst[]>([]);
 	let takenNames = $state(new Set<string>());
@@ -321,6 +325,10 @@
 			fbTypes = model.fbTypes ?? [];
 			userFuncs = model.funcs ?? [];
 			projectTags = model.tags ?? [];
+			{
+				const r = fbdRefs(model);
+				usedTags = usedProjectTags(r.refs, projectTags, varList, r.exclude);
+			}
 			fbInsts = model.nodes
 				.filter((n) => n.kind === 'fb')
 				.map((n) => ({ name: n.label, type: n.type, outs: n.outputs ?? [] }));
@@ -502,6 +510,10 @@
 			usedNames = collectLdUsed(msg.model);
 			ldModel = normalizeLd(msg.model);
 			projectTags = msg.model.tags ?? [];
+			{
+				const r = ldRefs(ldModel);
+				usedTags = usedProjectTags(r.refs, projectTags, varList.filter((v) => !v.pou), r.exclude);
+			}
 			ldStatus = {};
 			diffing = false;
 			problemCount = diags.length;
@@ -534,6 +546,10 @@
 			projectTags = msg.model.tags ?? [];
 			usedNames = collectSfcUsed(msg.model);
 			sfcModel = normalizeSfc(msg.model);
+			{
+				const r = sfcRefs(sfcModel);
+				usedTags = usedProjectTags(r.refs, projectTags, varList, r.exclude);
+			}
 			diffing = false;
 			problemCount = diags.length;
 			problemTip = diags.map((d) => `line ${d.line}: ${d.message}`).join('\n');
@@ -933,7 +949,7 @@
 				<button title="Clear all pinned positions (back to full auto-layout)" onclick={() => postOp({ type: 'clearLayout' })}>auto layout</button>
 			{/if}
 			<ShortcutHelp groups={shortcutGroups} />
-			<button title="All header declarations, including ones the logic doesn't reference yet" onclick={(e) => { e.stopPropagation(); varsOpen = !varsOpen; paletteOpen = false; }}>vars</button>
+			<button title="All header declarations, including ones the logic doesn't reference yet, and the project tags the logic uses without declaring them" onclick={(e) => { e.stopPropagation(); varsOpen = !varsOpen; paletteOpen = false; }}>vars</button>
 			{#if mode === 'fbd'}
 				<button title="Insert an instruction — it lands beside the selected element; double-click empty canvas to insert right there" onclick={(e) => { e.stopPropagation(); if (paletteOpen) paletteOpen = false; else openPalette(); }}>+ add</button>
 			{/if}
@@ -1013,6 +1029,7 @@
 		bind:open={varsOpen}
 		vars={varList}
 		used={usedNames}
+		tags={usedTags}
 		insts={mode === 'ld' ? ldInsts : []}
 		scopes={mode === 'ld' ? ldScopes : mode === 'sfc' ? SFC_SCOPES : undefined}
 		readonly={readOnly || diffing}
