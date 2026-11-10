@@ -75,7 +75,7 @@ pump joins.
 `lift-station_test.yaml`'s whole suite, green, in well under a second of
 wall time (it's virtual time underneath). Now open `tags/station.yaml`,
 change `LeadOnLevel`'s `init: 60.0` to `70.0`, save, and run all tests
-again: 5 of 15 turn red, starting with "lead pump starts at LeadOn and
+again: 10 of 20 turn red, starting with "lead pump starts at LeadOn and
 post-runs after LeadOff" — it drives the level to 65 %, which no longer
 reaches the new 70 % call point. Click a failing test to see why it
 failed. Revert the `70.0` back to `60.0`, save, and run once more —
@@ -207,7 +207,7 @@ the wet well's level from an inflow/outflow balance (small on purpose —
 (instantiated twice) turns a run command and speed command into a
 running feedback, a ramping speed, and a current draw, with a bench-only
 fault-injection input. Inflow is `InflowGpm` (190 gpm normally, a "storm"
-is 640) plus a slow sinusoid, so the level never sits dead flat.
+is 950; at 640 the lead pump holds it alone) plus a slow sinusoid, so the level never sits dead flat.
 
 ## Bench vs. field
 

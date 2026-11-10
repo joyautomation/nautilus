@@ -2,7 +2,7 @@ PROGRAM WetWell
 (* Bench-only plant: WW-101 (level from an inflow/outflow balance, via
    lib/physics.st's WetWellModel) and two submersible-pump/VFD models
    (VfdModel). Inflow is InflowGpm plus a slow sinusoid (+-20 %) so the
-   level never sits dead flat; InflowGpm set to 640 is the "storm" the
+   level never sits dead flat; InflowGpm set to 950 is the "storm" the
    design calls out. A real deployment deletes this task entirely —
    field.yaml has no sim task and points the same control programs at
    the real devices instead (see docs/design/examples-dogfood.md for the
