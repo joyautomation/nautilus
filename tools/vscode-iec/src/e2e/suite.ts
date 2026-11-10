@@ -97,6 +97,20 @@ async function downloadWithLadderLibrary(cli: string, folder: vscode.Uri): Promi
   }
 }
 
+/** "nautilus: Add or Update AGENTS.md" on the fixture project, which has
+ * neither file (#645): the extension asks the CLI, the CLI writes, and the
+ * files land stamped with the nautilus markers and the Claude import. */
+async function addAgentsMd(folder: vscode.Uri): Promise<void> {
+  const proj = vscode.Uri.joinPath(folder, "compose");
+  await step("nautilus.agentsMd.update", 60_000, () => vscode.commands.executeCommand("nautilus.agentsMd.update"));
+  const read = async (name: string) => Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(proj, name))).toString("utf8");
+  // The command resolves after naut agents has written: no polling.
+  const agents = await read("AGENTS.md");
+  assert.match(agents, /^<!-- nautilus:begin /, "AGENTS.md carries the nautilus block");
+  assert.match(agents, /<!-- nautilus:end -->\s*$/);
+  assert.match(await read("CLAUDE.md"), /^@AGENTS\.md$/m, "CLAUDE.md imports AGENTS.md");
+}
+
 /** "Export Diagram…" on this OS: the ladder library (a FUNCTION_BLOCK in
  * ladder) to a PDF and an SVG, through the command's non-interactive form
  * — the bundled exporter loads in the extension host, the CLI draws the
@@ -170,6 +184,7 @@ export async function run(): Promise<void> {
     if (expect === "found") {
       await exportLadderDiagram(folder.uri);
       await downloadWithLadderLibrary(cli.command, folder.uri);
+      await addAgentsMd(folder.uri);
     }
   } else if (expect === "missing") {
     assert.equal(cli.found, false, `nothing to find, but resolved ${cli.command}`);
