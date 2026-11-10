@@ -100,6 +100,13 @@ never computes.
 - **Failover** is bounded by the lease: 4 s worst case, and a clean
   shutdown (SIGTERM) hands the lease over so a standby takes it on its
   next 1 s tick.
+- **A Lease someone else wrote is fine.** A Lease made by hand, from a
+  GitOps manifest or by another tool may store any duration. Each
+  replica writes its own 4 s on every renew and takeover, and a standby
+  judges a holder by the longer of the stored duration and its own. A
+  Lease stored short, or with no duration, never lets a standby take
+  over from a live leader. One stored long holds back only the first
+  takeover, if its holder never renewed it under this version.
 - **The lease needs live scans.** A leader renews only while its scans
   are completing, so a leader that is still running but whose scan is
   hung (logic that never returns, a driver call that blocks) hands over
