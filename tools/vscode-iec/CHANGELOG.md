@@ -46,6 +46,7 @@ offer needs the next naut, the first with `naut agents`.
   checks, and notes you write outside its markers are kept. Needs a naut
   with `naut agents`; with an older one the offer never appears. Turn it
   off with `nautilus.agentsMd.offer`. (#645)
+
 - **The diagrams' vars panel lists the project tags the logic uses.** A
   program may use the tags `nautilus.yaml` and its tag-files declare
   without a `VAR_EXTERNAL` block, and the panel listed only header
@@ -56,7 +57,8 @@ offer needs the next naut, the first with `naut agents`.
   that the header does not declare, with its type, unit, role,
   description and live value. Names match case-insensitively; block
   instances, FUNCTION_BLOCK bodies (pins and locals), steps and actions are
-  left out. The count beside "variables" is still the header's.
+  left out. The count beside "variables" still counts the header's
+  declarations (and the block instances rungs declare).
 
 ### Fixed
 

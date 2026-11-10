@@ -381,7 +381,7 @@ const MOTOR_TAGGED = {
 	tags: MOTOR_TAGS
 };
 
-test('Ladder vars panel: the project tags the rungs use without declaring them list read-only, with their own count', async () => {
+test('Ladder vars panel: the project tags the rungs use without declaring them list read-only, with their own count (X51)', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: MOTOR_TAGGED, title: 'motor.ld' });
 		await openVars(b);
@@ -394,6 +394,9 @@ test('Ladder vars panel: the project tags the rungs use without declaring them l
 		assert.match(row, /tag MTR101_RunFbk : BOOL Starter auxiliary contact input/);
 		assert.equal(await b.eval(`document.querySelectorAll('.rows .row[data-section="project"] .del').length`), 0, 'read-only: edited in the manifest');
 		assert.equal(await b.eval(`!!document.querySelector('.rows .row[data-section="instance"][data-id="ftrTmr"]')`), true, 'the instance still lists');
+		// A tag's live value rides on its row, as on a declaration's.
+		await live(b, { mtr101_runfbk: true }); // the stream keys by lowercased name
+		assert.equal(await b.eval(`document.querySelector('.rows .row[data-id="MTR101_RunFbk"] .val')?.textContent.trim()`), 'TRUE');
 		// Declared in the header (any case): a declaration, never a project-tag row too.
 		await deliver(b, { type: 'ldModel', model: { ...MOTOR_TAGGED, vars: [{ name: 'mtr101_runcmd', type: 'BOOL', section: 'VAR_EXTERNAL', line: 2 }] }, title: 'motor.ld' });
 		assert.deepEqual(await rows(), ['MTR101_RunFbk', 'MTR101_Overload', 'MTR101_FailToRun', 'MTR101_Permissive']);

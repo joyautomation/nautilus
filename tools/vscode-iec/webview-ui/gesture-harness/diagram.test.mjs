@@ -413,6 +413,38 @@ test('SFC: the vars panel declares/deletes with the payload `naut sfc edit` acce
 	});
 });
 
+test('FBD and SFC: the vars panel lists the project tags the logic uses without declaring them (X51)', async () => {
+	const tags = [
+		{ name: 'A', type: 'BOOL', role: 'input', desc: 'chip A' },
+		{ name: 'B', type: 'BOOL', role: 'input' },
+		{ name: 'Unused', type: 'REAL', role: 'setpoint' },
+		{ name: 'go', type: 'BOOL', role: 'input', desc: 'start' },
+		{ name: 'Y', type: 'BOOL', role: 'output', desc: 'the coil' }
+	];
+	const projectRows = (b) => b.eval(`[...document.querySelectorAll('.rows .row[data-section="project"]')].map((r) => r.dataset.id)`);
+	const openVars = async (b) => {
+		await clickAt(b, await b.eval(`(() => { const el = [...document.querySelectorAll('.bar button')].find((x) => x.textContent.trim() === 'vars'); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`));
+	};
+	// FBD: chips A, B and coil Y; B is declared, so only A and Y list.
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: { ...FBD, vars: [{ name: 'b', type: 'BOOL', section: 'VAR_EXTERNAL', line: 2 }], tags }, title: 'n.fbd' });
+		await openVars(b);
+		assert.deepEqual(await projectRows(b), ['A', 'Y']);
+		assert.equal(await b.eval(`document.querySelector('.head .count').textContent.trim()`), '1');
+		assert.equal(await b.eval(`document.querySelector('.tagshead .count').textContent.trim()`), '2');
+		// A FUNCTION_BLOCK body's chips are its pins and locals: none list.
+		await deliver(b, { type: 'model', model: { ...FBD, block: true, tags }, title: 'n.fbd' });
+		assert.deepEqual(await projectRows(b), []);
+	});
+	// SFC: the transition reads go; Idle/Run/Spare are steps, not tags.
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: { ...SFC, tags: [...tags, { name: 'Idle', type: 'BOOL' }] }, title: 's.sfc' });
+		await openVars(b);
+		assert.deepEqual(await projectRows(b), ['go']);
+		assert.equal(await b.eval(`document.querySelector('.rows .empty')?.textContent.trim()`), 'no header declarations');
+	});
+});
+
 // ── the ready handshake ─────────────────────────────────────────────────
 test('Ready: the webview says ready on mount (the host holds its posts until then)', async () => {
 	await withPage(async (b) => {
