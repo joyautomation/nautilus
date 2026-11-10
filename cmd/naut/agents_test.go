@@ -113,6 +113,45 @@ func TestAgentsRenderRefusesSomebodysOwnFileUnlessTold(t *testing.T) {
 	}
 }
 
+// An older copy that the old guide's "add your conventions to the same
+// file" grew: the known text, then the project's notes. The notes are kept
+// below the new block; edits inside the text cannot be told apart, so that
+// is a conflict, and -append (two sets of rules) is refused.
+func TestAgentsOlderCopyWithTheProjectsAdditions(t *testing.T) {
+	old := "# AGENTS.md\n\n" + agentsSignature + " (IEC 61131-3) project.\nolder rules\n"
+	agentsPrevious[sha(old)] = "test"
+	defer delete(agentsPrevious, sha(old))
+
+	grown := old + "\n## Site conventions\n\nTags are ISA-5.1.\n"
+	if st, _ := agentsClassify(grown); st != agentsStale {
+		t.Fatalf("an older copy with notes after it classifies as %s, want stale", st)
+	}
+	out, did, _, err := agentsRender(grown, true, agentsRefuse)
+	if err != nil || did != "updated" || out != agentsBlock()+"\n## Site conventions\n\nTags are ISA-5.1.\n" {
+		t.Fatalf("got %q err=%v:\n%s", did, err, out)
+	}
+
+	todayGrown := agentsText() + "\n## Ours\n"
+	if st, _ := agentsClassify(todayGrown); st != agentsUnstamped {
+		t.Fatalf("today's text with notes after it classifies as %s, want unstamped", st)
+	}
+	if out, _, _, _ := agentsRender(todayGrown, true, agentsRefuse); out != agentsBlock()+"\n## Ours\n" {
+		t.Fatalf("stamping lost the notes:\n%s", out)
+	}
+
+	edited := strings.Replace(old, "older rules", "older rules, edited", 1)
+	st, why := agentsClassify(edited)
+	if st != agentsConflict || why == nil {
+		t.Fatalf("an older copy edited inside classifies as %s (%v), want conflict", st, why)
+	}
+	if _, _, _, err := agentsRender(edited, true, agentsAppend); err == nil {
+		t.Fatal("-append would leave two sets of rules in the file")
+	}
+	if out, _, _, err := agentsRender(edited, true, agentsForce); err != nil || out != agentsBlock() {
+		t.Fatalf("-force: %v", err)
+	}
+}
+
 func TestAgentsBrokenMarkersAreNeverGuessedAt(t *testing.T) {
 	b := agentsBlock()
 	for name, doc := range map[string]string{
@@ -120,8 +159,8 @@ func TestAgentsBrokenMarkersAreNeverGuessedAt(t *testing.T) {
 		"two begins":     b + b,
 		"end before one": agentsEndMark + "\n" + "notes\n",
 	} {
-		if st, err := agentsClassify(doc); st != agentsUnmanaged || err == nil {
-			t.Errorf("%s: classified %s err=%v, want unmanaged with a reason", name, st, err)
+		if st, err := agentsClassify(doc); st != agentsConflict || err == nil {
+			t.Errorf("%s: classified %s err=%v, want conflict with a reason", name, st, err)
 		}
 		if _, _, _, err := agentsRender(doc, true, agentsAppend); err == nil {
 			t.Errorf("%s: -append went ahead on broken markers", name)
@@ -208,6 +247,25 @@ func TestRunAgents(t *testing.T) {
 	}
 	if code, m := check(); code != 0 || m["agentsMd"] != "current" || m["claudeMd"] != "current" {
 		t.Fatalf("after write: exit %d %v", code, m)
+	}
+
+	// Somebody's own AGENTS.md and no CLAUDE.md are choices: -check is 0.
+	mine := t.TempDir()
+	os.WriteFile(filepath.Join(mine, "nautilus.yaml"), []byte("name: x\n"), 0o644)
+	os.WriteFile(filepath.Join(mine, agentsFileName), []byte("# ours\n"), 0o644)
+	if code := runAgents([]string{"-check", mine}); code != 0 {
+		t.Errorf("own AGENTS.md, no CLAUDE.md: -check exit %d, want 0", code)
+	}
+
+	// A file that is there but cannot be read is an error, never "missing".
+	odd := t.TempDir()
+	os.WriteFile(filepath.Join(odd, "nautilus.yaml"), []byte("name: x\n"), 0o644)
+	os.Mkdir(filepath.Join(odd, agentsFileName), 0o755)
+	if code := runAgents([]string{"-check", odd}); code != 2 {
+		t.Errorf("AGENTS.md a directory: -check exit %d, want 2", code)
+	}
+	if code := runAgents([]string{odd}); code != 1 {
+		t.Errorf("AGENTS.md a directory: write exit %d, want 1", code)
 	}
 
 	own := t.TempDir()

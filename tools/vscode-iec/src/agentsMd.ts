@@ -25,9 +25,15 @@ function run(args: string[], cwd: string): Promise<{ code: number; stdout: strin
   });
 }
 
-async function check(dir: string): Promise<AgentsCheck | undefined> {
+/** What `naut agents -check -json` says; `missing` when there is no naut
+ * to ask (undefined check either way: an older naut has no answer). */
+async function check(dir: string): Promise<{ c: AgentsCheck | undefined; missing: boolean }> {
   const r = await run(["agents", "-check", "-json", "."], dir);
-  return parseAgentsCheck(r.stdout);
+  return { c: parseAgentsCheck(r.stdout), missing: r.missing };
+}
+
+function openAgentsMd(dir: string): void {
+  void vscode.window.showTextDocument(vscode.Uri.file(path.join(dir, "AGENTS.md")));
 }
 
 /** Runs naut agents with `args` in `dir` and says what it did. */
@@ -44,26 +50,35 @@ async function apply(dir: string, args: string[]): Promise<boolean> {
   const said = r.stdout.trim().split(/\r?\n/).join(" · ");
   const open = "Open AGENTS.md";
   void vscode.window.showInformationMessage(`nautilus: ${said}`, open).then((pick) => {
-    if (pick === open) void vscode.window.showTextDocument(vscode.Uri.file(path.join(dir, "AGENTS.md")));
+    if (pick === open) openAgentsMd(dir);
   });
   return true;
 }
 
+/** Projects already offered this window session: one notification per
+ * project, however many nautilus.yaml events follow, and "Not now" (or a
+ * dismissed toast) lasts until the window reloads. */
+const offered = new Set<string>();
+
 async function offer(context: vscode.ExtensionContext, folder: vscode.WorkspaceFolder): Promise<void> {
   if (!vscode.workspace.getConfiguration("nautilus").get<boolean>("agentsMd.offer", true)) return;
   const dir = folder.uri.fsPath;
-  const c = await check(dir);
+  const key = rememberKey(dir);
+  if (offered.has(dir) || silenced(context.workspaceState.get<string>(key))) return;
+  offered.add(dir);
+  const { c } = await check(dir);
   if (!c) return;
   const o = agentsOffer(c, folder.name);
   if (!o) return;
-  const key = rememberKey(dir);
-  if (silenced(context.workspaceState.get<string>(key), o)) return;
   const notNow = "Not now";
   const never = "Never for this project";
   const pick = await vscode.window.showInformationMessage(o.message, o.action, notNow, never);
-  if (pick === o.action) await apply(dir, o.args);
-  else if (pick === notNow) await context.workspaceState.update(key, `notnow:${o.key}`);
-  else if (pick === never) await context.workspaceState.update(key, "never");
+  if (pick === o.action) {
+    if (o.args.length === 0) openAgentsMd(dir);
+    else await apply(dir, o.args);
+  } else if (pick === never) {
+    await context.workspaceState.update(key, "never");
+  }
 }
 
 /** Every folder holding a nautilus.yaml in the workspace. */
@@ -88,9 +103,26 @@ async function command(): Promise<void> {
     if (!pick) return;
     dir = pick.dir;
   }
-  const c = await check(dir);
+  const { c, missing } = await check(dir);
+  if (missing) {
+    void vscode.window.showErrorMessage(cliMissingMessage(cliCommand()));
+    return;
+  }
   if (!c) {
     void vscode.window.showErrorMessage("nautilus: this naut has no `naut agents` command — update naut (nautilus: Install or Update the naut CLI).");
+    return;
+  }
+  if (c.agentsMd === "conflict") {
+    const open = "Open AGENTS.md";
+    const replace = "Replace the file";
+    const pick = await vscode.window.showWarningMessage(
+      "nautilus: AGENTS.md mixes nautilus's guidance with edits naut cannot separate (or its nautilus markers are broken). Move your own notes above or below the nautilus text and replace it, or replace the whole file now?",
+      { modal: true },
+      open,
+      replace
+    );
+    if (pick === open) openAgentsMd(dir);
+    else if (pick === replace) await apply(dir, ["agents", "-force"]);
     return;
   }
   if (c.agentsMd === "unmanaged") {

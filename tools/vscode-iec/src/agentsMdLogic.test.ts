@@ -26,7 +26,7 @@ test("agentsOffer: missing adds, stale updates, somebody's own file is appended 
   assert.match(agentsOffer(c("missing"), "sawmill")!.message, /^nautilus: sawmill has no AGENTS\.md/);
   assert.deepEqual(agentsOffer(c("stale"), "sawmill")?.args, ["agents"]);
   assert.deepEqual(agentsOffer(c("unmanaged"), "sawmill")?.args, ["agents", "-append"]);
-  for (const s of ["missing", "stale", "unmanaged"]) {
+  for (const s of ["missing", "stale", "conflict", "unmanaged"]) {
     assert.ok(!agentsOffer(c(s), "x")!.args.includes("-force"), `${s} must never offer -force`);
   }
 });
@@ -34,15 +34,18 @@ test("agentsOffer: missing adds, stale updates, somebody's own file is appended 
 test("agentsOffer: a current AGENTS.md needs nothing unless CLAUDE.md lacks the import", () => {
   assert.equal(agentsOffer(c("current"), "x"), undefined);
   assert.equal(agentsOffer(c("current", "missing"), "x"), undefined, "no CLAUDE.md is a choice, not a fault");
-  assert.equal(agentsOffer(c("current", "noimport"), "x")?.key, "noimport");
+  assert.equal(agentsOffer(c("current", "noimport"), "x")?.action, "Add @AGENTS.md");
 });
 
-test("silenced: Never silences everything; Not now silences only the same offer", () => {
-  const stale21 = agentsOffer(c("stale", "current", "0.21.0"), "x")!;
-  const stale22 = agentsOffer(c("stale", "current", "0.22.0"), "x")!;
-  assert.equal(silenced(undefined, stale21), false);
-  assert.equal(silenced("never", stale21), true);
-  assert.equal(silenced(`notnow:${stale21.key}`, stale21), true);
-  assert.equal(silenced(`notnow:${stale21.key}`, stale22), false, "a newer naut's guidance asks again");
+test("agentsOffer: a conflict opens the file for a person, never appends", () => {
+  const o = agentsOffer(c("conflict"), "x")!;
+  assert.deepEqual(o.args, []);
+  assert.equal(o.action, "Open AGENTS.md");
+});
+
+test("silenced: only Never is remembered", () => {
+  assert.equal(silenced(undefined), false);
+  assert.equal(silenced("never"), true);
+  assert.equal(silenced("notnow"), false);
   assert.notEqual(rememberKey("/a"), rememberKey("/b"));
 });

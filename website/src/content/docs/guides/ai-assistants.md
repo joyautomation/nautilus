@@ -126,9 +126,12 @@ where your site's own conventions go: tag naming, which programs own which
 equipment, what a rung comment must say.
 
 A copy made by an older `naut new`, which had no markers, is recognised and
-updated the same way. An `AGENTS.md` that `naut` did not write is left
-alone: `naut agents -append` adds the nautilus guidance below its text, and
-`-force` replaces the file. A `CLAUDE.md` that exists without importing
+updated the same way, and notes you added below it are kept below the new
+text. If you edited *inside* an older copy, `naut` cannot tell its text
+from yours: `naut check` says so, and you move your notes above or below
+the nautilus text before `naut agents -force` replaces it. An `AGENTS.md`
+that `naut` did not write at all is left alone: `naut agents -append` adds
+the nautilus guidance below its text, and `-force` replaces the file. A `CLAUDE.md` that exists without importing
 `AGENTS.md` gets the `@AGENTS.md` line added; nothing else in it changes.
 
 A project with no `AGENTS.md` gets no warning from `naut check`. Plenty of

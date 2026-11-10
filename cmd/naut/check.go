@@ -448,8 +448,9 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 
-	// The guidance for AI assistants is missing, older than this naut's,
-	// or somebody's own file with none of it (agents.go).
+	// The project's guidance for AI assistants is older than this naut's,
+	// conflicted, or not imported by CLAUDE.md (agents.go; a missing or
+	// home-grown AGENTS.md is deliberately not a warning).
 	for _, w := range agentsWarnings(dir) {
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)

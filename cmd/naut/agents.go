@@ -4,14 +4,18 @@ package main
 // CLAUDE.md that imports it for Claude Code) is part of the binary, not a
 // one-time copy. `naut new` writes it through agentsWrite; `naut agents`
 // adds it to a project that predates it and refreshes it when this naut's
-// text is newer; `naut check` warns when it is missing or stale; the VS Code
-// extension asks `naut agents -check -json` and offers to run the rest.
+// text is newer; `naut check` warns when a project's copy is stale or
+// broken; the VS Code extension asks `naut agents -check -json` and offers
+// to run the rest.
 //
 // The nautilus text sits between two HTML comment markers. A refresh
 // replaces only what is between them, so a project's own notes above or
-// below survive. A file with no markers is adopted only when it is a copy
-// of a text some naut wrote (agentsPrevious); anything else is somebody's
-// own file, and naut agents leaves it alone unless told -append or -force.
+// below survive. A file with no markers is adopted when it is a text some
+// naut wrote (agentsPrevious), alone or followed by the project's own
+// notes. A file that holds nautilus guidance naut cannot place (broken
+// markers, or an older copy edited in the middle) is a conflict for a
+// person to settle. Anything else is somebody's own file, left alone unless
+// told -append or -force.
 
 import (
 	"crypto/sha256"
@@ -20,6 +24,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,13 +37,18 @@ const (
 	claudeFileName  = "CLAUDE.md"
 	agentsBeginMark = "<!-- nautilus:begin"
 	agentsEndMark   = "<!-- nautilus:end -->"
+	// agentsSignature is a line every text of the guidance has carried. An
+	// unmarked file that has it but is no text naut wrote is an older copy
+	// somebody edited: appending would leave two sets of rules in it.
+	agentsSignature = "For AI coding agents in this nautilus"
 )
 
 // agentsPrevious holds the SHA-256 of every earlier text of
-// templates/AGENTS.md.tmpl that `naut new` wrote without markers, so a
-// project made by an older naut is recognised as ours and refreshed rather
-// than refused. When the template changes, add the hash of the text it
-// replaces: TestAgentsPreviousCoversHistory checks this list against git.
+// templates/AGENTS.md.tmpl that `naut new` wrote without markers (LF line
+// endings, one trailing newline), so a project made by an older naut is
+// recognised as ours and refreshed rather than refused. When the template
+// changes, add the hash of the text it replaces:
+// TestAgentsPreviousCoversHistory checks this list against git.
 var agentsPrevious = map[string]string{
 	"4f88a56f4a1d73731abe610253d3d42e80949fed498a74be02b580a20273f90b": "#556, 2026-11-04",
 	"988ff1b0879bc462564de93cb79b4f8fce489509210af48709c9499e1f2c3e61": "#630, 2026-11-04",
@@ -50,9 +60,10 @@ type agentsState string
 const (
 	agentsMissing   agentsState = "missing"   // no AGENTS.md
 	agentsCurrent   agentsState = "current"   // the nautilus block holds this naut's text
-	agentsUnstamped agentsState = "unstamped" // no markers, but exactly this naut's text: current, stamped on the next write
-	agentsStale     agentsState = "stale"     // the block (or an unmarked copy) holds an older naut's text
-	agentsUnmanaged agentsState = "unmanaged" // somebody's own AGENTS.md: no nautilus block
+	agentsUnstamped agentsState = "unstamped" // no markers, but this naut's text (maybe with notes after it): stamped on the next write
+	agentsStale     agentsState = "stale"     // the block, or an unmarked copy, holds an older naut's text
+	agentsConflict  agentsState = "conflict"  // nautilus guidance naut cannot place: broken markers, or an older copy edited inside
+	agentsUnmanaged agentsState = "unmanaged" // somebody's own AGENTS.md, with none of the guidance
 )
 
 // ok reports whether the state needs nothing done.
@@ -76,26 +87,31 @@ const (
 	claudeNoImport claudeState = "noimport" // it exists but does not import AGENTS.md
 )
 
-// agentsText is this naut's guidance, with LF line endings and one
-// trailing newline.
-func agentsText() string {
-	raw, err := templates.ReadFile("templates/AGENTS.md.tmpl")
+// embeddedText reads an embedded template as LF text with one trailing newline.
+func embeddedText(name string) string {
+	raw, err := templates.ReadFile("templates/" + name)
 	if err != nil {
 		panic(err) // embedded; cannot happen in a built binary
 	}
-	return strings.TrimRight(lf(string(raw)), "\n") + "\n"
+	return oneNewline(lf(string(raw)))
 }
+
+// agentsText is this naut's guidance.
+func agentsText() string { return embeddedText("AGENTS.md.tmpl") }
 
 // claudeText is the CLAUDE.md a project gets when it has none.
-func claudeText() string {
-	raw, err := templates.ReadFile("templates/CLAUDE.md.tmpl")
-	if err != nil {
-		panic(err)
-	}
-	return strings.TrimRight(lf(string(raw)), "\n") + "\n"
-}
+func claudeText() string { return embeddedText("CLAUDE.md.tmpl") }
 
-func lf(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+func lf(s string) string         { return strings.ReplaceAll(s, "\r\n", "\n") }
+func oneNewline(s string) string { return strings.TrimRight(s, "\n") + "\n" }
+
+// eol gives text back in the line endings of the file it came from.
+func eol(text, like string) string {
+	if strings.Contains(like, "\r\n") {
+		return strings.ReplaceAll(lf(text), "\n", "\r\n")
+	}
+	return text
+}
 
 func sha(s string) string {
 	h := sha256.Sum256([]byte(s))
@@ -112,7 +128,7 @@ func agentsBlock() string {
 // agentsSpan finds the nautilus block in an LF document: the byte offsets
 // of the start of its begin line and the end of its end line (after the
 // newline, if any), and the text between the two marker lines. found is
-// false with no begin marker; err is set when the markers are broken.
+// false with no marker at all; err is set when the markers are broken.
 func agentsSpan(doc string) (start, end int, body string, found bool, err error) {
 	// Every marker in the file is counted: exactly one begin, then exactly
 	// one end, or the block is not ours to rewrite.
@@ -144,40 +160,65 @@ func agentsSpan(doc string) (start, end int, body string, found bool, err error)
 	return start, end, strings.Join(lines[begin+1:endLine], ""), true, nil
 }
 
-// agentsClassify says what an existing AGENTS.md is.
+// knownPrefix finds a text some naut wrote at the start of an unmarked LF
+// document: today's (current true) or an earlier one. It returns the
+// length of that text in doc, so what follows it is the project's own.
+func knownPrefix(doc string) (n int, current, ok bool) {
+	if cur := agentsText(); strings.HasPrefix(oneNewline(doc), cur) {
+		return min(len(cur), len(doc)), true, true
+	}
+	// An earlier text is known only by its hash: try every line boundary.
+	for i := 0; i < len(doc); {
+		j := strings.IndexByte(doc[i:], '\n')
+		if j < 0 {
+			j = len(doc)
+		} else {
+			j += i + 1
+		}
+		if _, hit := agentsPrevious[sha(oneNewline(doc[:j]))]; hit {
+			// The text ends at its own last newline; blank lines after it
+			// (which oneNewline folded into the match) belong to what follows.
+			// Keep going: the longest match wins.
+			n, ok = min(len(strings.TrimRight(doc[:j], "\n"))+1, len(doc)), true
+		}
+		i = j
+	}
+	return n, false, ok
+}
+
+// agentsClassify says what an existing AGENTS.md is; err explains a
+// conflict.
 func agentsClassify(doc string) (agentsState, error) {
 	doc = lf(doc)
 	_, _, body, found, err := agentsSpan(doc)
 	if err != nil {
-		return agentsUnmanaged, err
+		return agentsConflict, err
 	}
-	want := agentsText()
 	if found {
-		if strings.TrimRight(body, "\n")+"\n" == want {
+		if oneNewline(body) == agentsText() {
 			return agentsCurrent, nil
 		}
 		return agentsStale, nil
 	}
-	norm := strings.TrimRight(doc, "\n") + "\n"
-	if norm == want {
-		return agentsUnstamped, nil
-	}
-	if _, ok := agentsPrevious[sha(norm)]; ok {
+	if _, current, ok := knownPrefix(doc); ok {
+		if current {
+			return agentsUnstamped, nil
+		}
 		return agentsStale, nil
 	}
-	if _, ok := agentsPrevious[sha(doc)]; ok {
-		return agentsStale, nil
+	if strings.Contains(doc, agentsSignature) {
+		return agentsConflict, errors.New("it is an older naut's guidance with edits inside it, so naut cannot tell its text from yours")
 	}
 	return agentsUnmanaged, nil
 }
 
-// agentsMode is how naut agents treats somebody's own AGENTS.md.
+// agentsMode is how naut agents treats an AGENTS.md it cannot update.
 type agentsMode int
 
 const (
 	agentsRefuse agentsMode = iota // leave it alone and say how to proceed
-	agentsAppend                   // add the nautilus block below it
-	agentsForce                    // replace it
+	agentsAppend                   // add the nautilus block below somebody's own file
+	agentsForce                    // replace the file
 )
 
 // agentsRender returns the AGENTS.md to write, given the one that exists
@@ -187,44 +228,36 @@ func agentsRender(existing string, exists bool, mode agentsMode) (out, did strin
 	if !exists {
 		return agentsBlock(), "wrote", true, nil
 	}
-	crlf := strings.Contains(existing, "\r\n")
 	doc := lf(existing)
-	restore := func(s string) string {
-		if crlf {
-			return strings.ReplaceAll(s, "\n", "\r\n")
-		}
-		return s
-	}
 	state, cerr := agentsClassify(doc)
-	switch {
-	case state == agentsCurrent:
+	switch state {
+	case agentsCurrent:
 		return existing, "already current", false, nil
-	case state == agentsStale:
+	case agentsStale, agentsUnstamped:
+		did := "updated"
+		if state == agentsUnstamped {
+			did = "stamped"
+		}
 		if start, end, _, found, _ := agentsSpan(doc); found {
-			return restore(doc[:start] + agentsBlock() + doc[end:]), "updated", true, nil
+			return eol(doc[:start]+agentsBlock()+doc[end:], existing), did, true, nil
 		}
-		return restore(agentsBlock()), "updated", true, nil
-	case state == agentsUnstamped:
-		return restore(agentsBlock()), "stamped", true, nil
+		n, _, _ := knownPrefix(doc)
+		return eol(agentsBlock()+doc[n:], existing), did, true, nil
 	}
-	// Somebody's own file (or one whose markers are broken).
-	switch mode {
-	case agentsForce:
-		return restore(agentsBlock()), "replaced", true, nil
-	case agentsAppend:
-		if cerr != nil {
-			return "", "", false, fmt.Errorf("%s: %v; fix the markers or use -force to replace the file", agentsFileName, cerr)
-		}
+	if mode == agentsForce {
+		return eol(agentsBlock(), existing), "replaced", true, nil
+	}
+	if state == agentsConflict {
+		return "", "", false, fmt.Errorf("%s: %v; move your own notes out of the nautilus text (above or below it), then run naut agents -force to replace the file", agentsFileName, cerr)
+	}
+	if mode == agentsAppend {
 		sep := "\n"
 		if !strings.HasSuffix(doc, "\n") {
 			sep = "\n\n"
 		}
-		return restore(doc + sep + agentsBlock()), "added the nautilus guidance below your text", true, nil
+		return eol(doc+sep+agentsBlock(), existing), "added the nautilus guidance below your text", true, nil
 	}
-	if cerr != nil {
-		return "", "", false, fmt.Errorf("%s: %v; fix the markers, or use -force to replace the file", agentsFileName, cerr)
-	}
-	return "", "", false, fmt.Errorf("%s is not one naut wrote (it has no nautilus:begin marker), so naut agents leaves it alone: -append adds the nautilus guidance below your text, -force replaces the file", agentsFileName)
+	return "", "", false, fmt.Errorf("%s is not one naut wrote, so naut agents leaves it alone: -append adds the nautilus guidance below your text, -force replaces the file", agentsFileName)
 }
 
 // claudeClassify says whether a CLAUDE.md imports AGENTS.md.
@@ -247,49 +280,77 @@ func claudeRender(existing string, exists bool) (out, did string, changed bool) 
 	if claudeClassify(existing) == claudeImports {
 		return existing, "already imports AGENTS.md", false
 	}
-	nl := "\n"
-	if strings.Contains(existing, "\r\n") {
-		nl = "\r\n"
-	}
-	sep := nl
+	sep := "\n"
 	if !strings.HasSuffix(existing, "\n") {
-		sep = nl + nl
+		sep = "\n\n"
 	}
-	return existing + sep + "@AGENTS.md" + nl, "added @AGENTS.md", true
+	return existing + eol(sep+"@AGENTS.md\n", existing), "added @AGENTS.md", true
 }
 
-// agentsInspect reads a project's two files.
-func agentsInspect(dir string) (agentsState, error, claudeState) {
-	var as agentsState
-	var aerr error
-	if b, err := os.ReadFile(filepath.Join(dir, agentsFileName)); err != nil {
-		as = agentsMissing
-	} else {
-		as, aerr = agentsClassify(string(b))
+// readIfThere reads a file; a file that is not there is not an error.
+func readIfThere(path string) (string, bool, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
 	}
-	cs := claudeMissing
-	if b, err := os.ReadFile(filepath.Join(dir, claudeFileName)); err == nil {
-		cs = claudeClassify(string(b))
+	if err != nil {
+		return "", false, err
 	}
-	return as, aerr, cs
+	return string(b), true, nil
+}
+
+// agentsInspect reads a project's two files. why explains a conflict; err
+// is a file that is there but cannot be read.
+func agentsInspect(dir string) (as agentsState, why error, cs claudeState, err error) {
+	doc, ok, err := readIfThere(filepath.Join(dir, agentsFileName))
+	if err != nil {
+		return "", nil, "", err
+	}
+	as = agentsMissing
+	if ok {
+		as, why = agentsClassify(doc)
+	}
+	cdoc, ok, err := readIfThere(filepath.Join(dir, claudeFileName))
+	if err != nil {
+		return "", nil, "", err
+	}
+	cs = claudeMissing
+	if ok {
+		cs = claudeClassify(cdoc)
+	}
+	return as, why, cs, nil
+}
+
+// agentsNeedsWork is -check's verdict: something naut agents (or a person)
+// should do. Somebody's own AGENTS.md and a missing CLAUDE.md are choices,
+// not faults.
+func agentsNeedsWork(as agentsState, cs claudeState) bool {
+	switch as {
+	case agentsMissing, agentsStale, agentsConflict:
+		return true
+	}
+	return cs == claudeNoImport && as.ok()
 }
 
 // agentsWarnings are naut check's findings for a manifest project. Only a
-// project that carries the guidance hears about it: a stale block, broken
-// markers, or a CLAUDE.md that does not import it. A project without
-// AGENTS.md, or with only its own, gets nothing here. Plenty of projects
-// (an import, a test fixture, a team that writes its own) have no use for
-// it, and a warning that never goes away teaches people to ignore
+// project that carries the guidance hears about it: a stale or conflicted
+// copy, or a CLAUDE.md that does not import a current one. A project
+// without AGENTS.md, or with only its own, gets nothing here. Plenty of
+// projects (an import, a test fixture, a team that writes its own) have no
+// use for it, and a warning that never goes away teaches people to ignore
 // warnings. The VS Code extension offers the missing file instead, and
 // `naut agents -check` answers a script.
 func agentsWarnings(dir string) []string {
-	as, aerr, cs := agentsInspect(dir)
+	as, why, cs, err := agentsInspect(dir)
+	if err != nil {
+		return []string{"cannot read the AI assistant guidance: " + err.Error()}
+	}
 	var w []string
-	switch {
-	case as == agentsStale:
-		w = append(w, "AGENTS.md's nautilus guidance is older than this naut's — run naut agents to update it (notes outside the nautilus block are kept)")
-	case as == agentsUnmanaged && aerr != nil:
-		w = append(w, "AGENTS.md: "+aerr.Error()+" — fix the markers, or run naut agents -force to replace the file")
+	switch as {
+	case agentsStale:
+		w = append(w, "AGENTS.md's nautilus guidance is older than this naut's — run naut agents to update it (notes outside the nautilus text are kept)")
+	case agentsConflict:
+		w = append(w, "AGENTS.md: "+why.Error()+" — move your own notes above or below the nautilus text, then run naut agents -force")
 	}
 	if cs == claudeNoImport && (as.ok() || as == agentsStale) {
 		w = append(w, "CLAUDE.md does not import AGENTS.md, so Claude Code does not read the nautilus guidance — run naut agents to add @AGENTS.md")
@@ -300,10 +361,17 @@ func agentsWarnings(dir string) []string {
 // agentsWrite brings a project's AGENTS.md and CLAUDE.md up to date and
 // returns a line per file saying what it did.
 func agentsWrite(dir string, mode agentsMode) ([]string, error) {
-	var report []string
 	ap := filepath.Join(dir, agentsFileName)
-	old, rerr := os.ReadFile(ap)
-	out, did, changed, err := agentsRender(string(old), rerr == nil, mode)
+	old, exists, err := readIfThere(ap)
+	if err != nil {
+		return nil, err
+	}
+	out, did, changed, err := agentsRender(old, exists, mode)
+	if err != nil {
+		return nil, err
+	}
+	cp := filepath.Join(dir, claudeFileName)
+	cold, cexists, err := readIfThere(cp)
 	if err != nil {
 		return nil, err
 	}
@@ -312,18 +380,13 @@ func agentsWrite(dir string, mode agentsMode) ([]string, error) {
 			return nil, err
 		}
 	}
-	report = append(report, agentsFileName+": "+did)
-
-	cp := filepath.Join(dir, claudeFileName)
-	cold, crerr := os.ReadFile(cp)
-	cout, cdid, cchanged := claudeRender(string(cold), crerr == nil)
+	cout, cdid, cchanged := claudeRender(cold, cexists)
 	if cchanged {
 		if err := os.WriteFile(cp, []byte(cout), 0o644); err != nil {
 			return nil, err
 		}
 	}
-	report = append(report, claudeFileName+": "+cdid)
-	return report, nil
+	return []string{agentsFileName + ": " + did, claudeFileName + ": " + cdid}, nil
 }
 
 const agentsUsage = `naut agents [-check [-json]] [-append | -force] [-m manifest] [dir]
@@ -338,12 +401,13 @@ Only the text between AGENTS.md's nautilus:begin and nautilus:end markers
 is naut's; notes above or below them are kept. An AGENTS.md naut did not
 write is left alone unless -append or -force says otherwise.
 
-  -check   say whether the files are missing or stale; write nothing. Exits
-           0 when nothing needs doing, 1 when something does.
-  -json    with -check: {"agentsMd": "missing|current|stale|unmanaged",
+  -check   say what the files are; write nothing. Exits 1 when AGENTS.md is
+           missing, stale or conflicted, or CLAUDE.md does not import it;
+           0 otherwise (your own AGENTS.md, or no CLAUDE.md, is a choice).
+  -json    with -check: {"agentsMd": "missing|current|stale|conflict|unmanaged",
            "claudeMd": "missing|current|noimport", "version": "..."}
   -append  an AGENTS.md naut did not write: add the guidance below it
-  -force   an AGENTS.md naut did not write: replace it
+  -force   replace AGENTS.md whatever it holds
 `
 
 func runAgents(args []string) int {
@@ -379,22 +443,26 @@ func runAgents(args []string) int {
 	}
 
 	if *check {
-		as, aerr, cs := agentsInspect(dir)
+		as, why, cs, err := agentsInspect(dir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut agents:", err)
+			return 2
+		}
 		if *asJSON {
 			b, _ := json.Marshal(map[string]string{"agentsMd": as.public(), "claudeMd": string(cs), "version": lsp.Version})
 			fmt.Println(string(b))
 		} else {
 			line := agentsFileName + ": " + as.public()
-			if aerr != nil {
-				line += " (" + aerr.Error() + ")"
+			if why != nil {
+				line += " (" + why.Error() + ")"
 			}
 			fmt.Println(line)
 			fmt.Println(claudeFileName + ": " + string(cs))
 		}
-		if as.ok() && cs == claudeImports {
-			return 0
+		if agentsNeedsWork(as, cs) {
+			return 1
 		}
-		return 1
+		return 0
 	}
 
 	mode := agentsRefuse

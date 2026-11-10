@@ -57,11 +57,13 @@ claims:
     claim: >-
       naut agents replaces only the text between the nautilus markers, so
       notes above or below them are kept, and a copy an older naut new wrote
-      without markers is recognised and updated.
+      without markers is recognised and updated, keeping notes added below
+      it; an older copy edited inside is reported, not guessed at.
     source: "#keeping-it-current"
     tests:
       - go ./cmd/naut TestAgentsRenderRefreshKeepsTheProjectsOwnNotes
       - go ./cmd/naut TestAgentsRenderUpdatesAnOlderNautsUnmarkedCopy
+      - go ./cmd/naut TestAgentsOlderCopyWithTheProjectsAdditions
       - go ./cmd/naut TestAgentsPreviousCoversHistory
     note: >-
       The history test checks that every earlier text of the template in git

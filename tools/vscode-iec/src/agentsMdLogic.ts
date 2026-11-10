@@ -4,7 +4,7 @@
 // binary (cmd/naut/agents.go), so it always matches the checks that naut
 // runs (#645).
 
-export type AgentsMdState = "missing" | "current" | "stale" | "unmanaged";
+export type AgentsMdState = "missing" | "current" | "stale" | "conflict" | "unmanaged";
 export type ClaudeMdState = "missing" | "current" | "noimport";
 
 export interface AgentsCheck {
@@ -13,7 +13,7 @@ export interface AgentsCheck {
   version: string;
 }
 
-const AGENTS: readonly string[] = ["missing", "current", "stale", "unmanaged"];
+const AGENTS: readonly string[] = ["missing", "current", "stale", "conflict", "unmanaged"];
 const CLAUDE: readonly string[] = ["missing", "current", "noimport"];
 
 /** `naut agents -check -json`'s stdout, or undefined when there is none to
@@ -38,11 +38,9 @@ export interface AgentsOffer {
   /** The button that does it. */
   action: string;
   /** The naut arguments (after the binary) that do it; the project dir is
-   * appended by the caller. */
+   * appended by the caller. Empty: nothing for naut to do, open the file
+   * for a person to settle. */
   args: string[];
-  /** Identifies this offer, so "Not now" silences only this one: a later
-   * naut whose guidance changed again asks again. */
-  key: string;
 }
 
 /** What to offer for a project, or undefined when there is nothing to do.
@@ -55,21 +53,26 @@ export function agentsOffer(c: AgentsCheck, name: string): AgentsOffer | undefin
         message: `nautilus: ${name} has no AGENTS.md, ${who}. Add it?`,
         action: "Add AGENTS.md",
         args: ["agents"],
-        key: "missing",
       };
     case "stale":
       return {
         message: `nautilus: ${name}'s AGENTS.md is older than your naut's guidance. Update it? Notes outside the nautilus block are kept.`,
         action: "Update AGENTS.md",
         args: ["agents"],
-        key: `stale:${c.version}`,
+      };
+    case "conflict":
+      // Broken markers, or an older copy edited inside: appending would
+      // leave two sets of rules, and only a person can tell theirs apart.
+      return {
+        message: `nautilus: ${name}'s AGENTS.md mixes nautilus's guidance with edits naut cannot separate. Move your own notes above or below the nautilus text, then run "nautilus: Add or Update AGENTS.md" to replace it.`,
+        action: "Open AGENTS.md",
+        args: [],
       };
     case "unmanaged":
       return {
         message: `nautilus: ${name}'s AGENTS.md has none of nautilus's guidance for AI assistants. Add it below your text?`,
         action: "Add below my text",
         args: ["agents", "-append"],
-        key: "unmanaged",
       };
   }
   if (c.claudeMd === "noimport") {
@@ -77,19 +80,18 @@ export function agentsOffer(c: AgentsCheck, name: string): AgentsOffer | undefin
       message: `nautilus: ${name}'s CLAUDE.md does not import AGENTS.md, so Claude Code does not read the nautilus guidance. Add the import?`,
       action: "Add @AGENTS.md",
       args: ["agents"],
-      key: "noimport",
     };
   }
   return undefined;
 }
 
-/** The workspaceState key that remembers a project's answer. */
+/** The workspaceState key that remembers "Never for this project". "Not
+ * now" is not stored: it lasts until the window reloads. */
 export function rememberKey(dir: string): string {
   return `nautilus.agentsMd.answer:${dir}`;
 }
 
-/** Whether a remembered answer silences this offer: "never" silences every
- * offer for the project, "notnow:<key>" only the same offer. */
-export function silenced(remembered: string | undefined, offer: AgentsOffer): boolean {
-  return remembered === "never" || remembered === `notnow:${offer.key}`;
+/** Whether the remembered answer silences every offer for the project. */
+export function silenced(remembered: string | undefined): boolean {
+  return remembered === "never";
 }
