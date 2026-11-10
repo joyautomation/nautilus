@@ -3,6 +3,7 @@ package leader
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -437,5 +438,121 @@ func TestRunRetriesAFirstTickThatMissedTheAPI(t *testing.T) {
 	}
 	if !e.IsLeader() {
 		t.Fatal("a failed first GET was taken as the first decision (standby); the retry acquires an empty lease")
+	}
+}
+
+// seedLease stands in for a Lease something other than this naut wrote (by
+// hand, a GitOps manifest, another tool): held by holder, last renewed at
+// renewed, with the given stored duration.
+func (f *fakeAPI) seedLease(holder string, seconds int, renewed time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rv++
+	l := &lease{APIVersion: "coordination.k8s.io/v1", Kind: "Lease"}
+	l.Metadata.Name, l.Metadata.Namespace = f.name, f.ns
+	l.Metadata.ResourceVersion = strconv.Itoa(f.rv)
+	l.Spec = leaseSpec{
+		HolderIdentity: holder, LeaseDurationSeconds: seconds,
+		AcquireTime: mtime(renewed), RenewTime: mtime(renewed), LeaseTransitions: 1,
+	}
+	f.lease = l
+}
+
+func (f *fakeAPI) storedSeconds() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lease.Spec.LeaseDurationSeconds
+}
+
+// A renew writes this replica's duration over a long one stored by
+// something else, so the Lease says what the holder's fence enforces (#635).
+func TestRenewWritesOwnDuration(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	e := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	e.duration = 4 * time.Second
+
+	t0 := time.Now()
+	fake.seedLease(e.holderID, 50, t0)
+	e.tick(t0.Add(time.Second))
+
+	if !e.IsLeader() {
+		t.Fatal("expected the holder to renew and lead")
+	}
+	if got := fake.storedSeconds(); got != 4 {
+		t.Fatalf("stored leaseDurationSeconds after renew = %d, want 4", got)
+	}
+}
+
+// A takeover of a Lease stored long waits out the stored duration, then
+// writes this replica's own (#635: the bench saw 50 s kept after takeover).
+func TestTakeoverWritesOwnDuration(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	e := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+	e.duration = 4 * time.Second
+
+	t0 := time.Now()
+	fake.seedLease("pod-a|10.0.0.1:8080", 50, t0)
+
+	e.tick(t0.Add(10 * time.Second))
+	if e.IsLeader() {
+		t.Fatal("a standby must not take a lease still inside its stored 50 s")
+	}
+	e.tick(t0.Add(51 * time.Second))
+	if !e.IsLeader() {
+		t.Fatal("expected the standby to take the lease once its stored duration lapsed")
+	}
+	if got := fake.storedSeconds(); got != 4 {
+		t.Fatalf("stored leaseDurationSeconds after takeover = %d, want 4", got)
+	}
+}
+
+// A Lease stored shorter than this replica's duration, or with none, must
+// not let a standby take it from a live holder: expiry is judged by the
+// longer of the two (#635).
+func TestShortStoredDurationDoesNotCutAHolderShort(t *testing.T) {
+	for _, stored := range []int{0, 1} {
+		t.Run(strconv.Itoa(stored), func(t *testing.T) {
+			srv, fake := newFakeServer(t)
+			e := newTestElector(t, srv, "pod-b", "10.0.0.2:8080")
+			e.duration = 4 * time.Second
+
+			t0 := time.Now()
+			fake.seedLease("pod-a|10.0.0.1:8080", stored, t0)
+
+			e.tick(t0.Add(3 * time.Second))
+			if e.IsLeader() {
+				t.Fatalf("stored %d s: standby took the lease inside its own 4 s duration", stored)
+			}
+			e.tick(t0.Add(5 * time.Second))
+			if !e.IsLeader() {
+				t.Fatalf("stored %d s: expected a takeover once the 4 s duration lapsed", stored)
+			}
+			if got := fake.storedSeconds(); got != 4 {
+				t.Fatalf("stored leaseDurationSeconds after takeover = %d, want 4", got)
+			}
+		})
+	}
+}
+
+func TestLeaseSecondsRoundsUp(t *testing.T) {
+	e := &Elector{}
+	for d, want := range map[time.Duration]int{
+		4 * time.Second: 4, 1500 * time.Millisecond: 2, 100 * time.Millisecond: 1,
+	} {
+		e.duration = d
+		if got := e.leaseSeconds(); got != want {
+			t.Errorf("leaseSeconds(%v) = %d, want %d", d, got, want)
+		}
+	}
+}
+
+// A stored duration too large for a time.Duration saturates (never lapses)
+// rather than wrapping to a short or negative lease.
+func TestHugeStoredDurationDoesNotWrap(t *testing.T) {
+	e := &Elector{duration: 4 * time.Second}
+	t0 := time.Now()
+	l := &lease{Spec: leaseSpec{RenewTime: mtime(t0), LeaseDurationSeconds: math.MaxInt}}
+	if e.expired(l, t0.Add(time.Hour)) {
+		t.Fatal("a huge stored duration wrapped and expired the lease")
 	}
 }

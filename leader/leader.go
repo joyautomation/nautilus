@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -380,8 +381,12 @@ func (e *Elector) tick(now time.Time) bool {
 		e.stepDownAfter(later(), e.duration/2)
 
 	case l.Spec.HolderIdentity == e.holderID:
-		// We hold it — renew.
+		// We hold it — renew. The duration is written again so a Lease
+		// that something else wrote (by hand, GitOps, another tool) says
+		// what this replica's own fence enforces from the first renew on
+		// (#635).
 		l.Spec.RenewTime = mtime(now)
+		l.Spec.LeaseDurationSeconds = e.leaseSeconds()
 		if err := e.put(l); err == nil {
 			e.lead(&l.Spec, now)
 		} else {
@@ -396,6 +401,7 @@ func (e *Elector) tick(now time.Time) bool {
 		l.Spec.HolderIdentity = e.holderID
 		l.Spec.AcquireTime = mtime(now)
 		l.Spec.RenewTime = mtime(now)
+		l.Spec.LeaseDurationSeconds = e.leaseSeconds()
 		l.Spec.LeaseTransitions++
 		if err := e.put(l); err == nil {
 			e.lead(&l.Spec, now)
@@ -408,13 +414,30 @@ func (e *Elector) tick(now time.Time) bool {
 	return true
 }
 
+// expired reports whether the holder of l has gone quiet past its lease.
+// The lease is judged by the longer of the stored duration and this
+// replica's own: a Lease written short (or with none) by something else
+// must not let a standby take it from a live holder whose fence still
+// keeps its gate open (#635).
 func (e *Elector) expired(l *lease, now time.Time) bool {
 	rt, err := time.Parse(time.RFC3339Nano, l.Spec.RenewTime)
 	if err != nil {
 		return true
 	}
-	d := time.Duration(l.Spec.LeaseDurationSeconds) * time.Second
+	d := e.duration
+	if s := int64(l.Spec.LeaseDurationSeconds); s > math.MaxInt64/int64(time.Second) {
+		return false // a stored duration past ~292 years never lapses
+	} else if stored := time.Duration(s) * time.Second; stored > d {
+		d = stored
+	}
 	return now.After(rt.Add(d))
+}
+
+// leaseSeconds is this replica's lease duration as a Lease stores it, in
+// whole seconds rounded up, so a replica reading it never judges the lease
+// to lapse before this one's own fence has closed the gate.
+func (e *Elector) leaseSeconds() int {
+	return int((e.duration + time.Second - 1) / time.Second)
 }
 
 // maybeStepDown relinquishes leadership if we haven't successfully renewed
@@ -535,7 +558,7 @@ func (e *Elector) newLease(now time.Time, transitions int) *lease {
 	l.Metadata.Namespace = e.client.Namespace
 	l.Spec = leaseSpec{
 		HolderIdentity:       e.holderID,
-		LeaseDurationSeconds: int(e.duration.Seconds()),
+		LeaseDurationSeconds: e.leaseSeconds(),
 		AcquireTime:          mtime(now),
 		RenewTime:            mtime(now),
 		LeaseTransitions:     transitions,
