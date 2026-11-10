@@ -158,6 +158,9 @@ vscode_profile() {
   "editor.cursorBlinking": "solid",
   "workbench.tips.enabled": false,
   "workbench.editor.enablePreview": false,
+  // The AGENTS.md offer (#645) is a notification on opening any project
+  // without one, which every fixture is; it would sit over the frame.
+  "nautilus.agentsMd.offer": false,
   // Session restore is why the quick-open guard was vacuous: VS Code reopened
   // program.st by itself, so the window title already matched and the check
   // passed without Ctrl+P ever working. Start clean, every time.
