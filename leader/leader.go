@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -423,7 +424,12 @@ func (e *Elector) expired(l *lease, now time.Time) bool {
 	if err != nil {
 		return true
 	}
-	d := max(time.Duration(l.Spec.LeaseDurationSeconds)*time.Second, e.duration)
+	d := e.duration
+	if s := int64(l.Spec.LeaseDurationSeconds); s > math.MaxInt64/int64(time.Second) {
+		return false // a stored duration past ~292 years never lapses
+	} else if stored := time.Duration(s) * time.Second; stored > d {
+		d = stored
+	}
 	return now.After(rt.Add(d))
 }
 

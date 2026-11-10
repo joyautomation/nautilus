@@ -195,17 +195,22 @@ claims:
 
   - id: RED-039
     claim: >-
-      A Lease written by something else may store any duration: each
-      replica writes its own on every renew and takeover, and a standby
-      judges a holder by the longer of the stored duration and its own, so
-      a Lease stored short or with no duration never lets a standby take
-      over from a live leader.
+      On an existing Lease, each replica writes its own duration on every
+      renew and takeover, and a standby judges a holder by the longer of
+      the stored duration and its own: a Lease stored short or with no
+      duration never lets a standby take over from a live leader, and a
+      long stored duration holds back a takeover for up to that duration.
     source: "#redundancy"
     tests:
       - go ./leader TestRenewWritesOwnDuration
       - go ./leader TestTakeoverWritesOwnDuration
       - go ./leader TestShortStoredDurationDoesNotCutAHolderShort
+      - go ./leader TestHugeStoredDurationDoesNotWrap
       - go ./leader TestLeaseSecondsRoundsUp
+    note: >-
+      A Lease re-applied by a GitOps controller is not covered: each
+      re-apply writes the stored duration back, and the guide says to keep
+      the Lease out of one.
 
   - id: RED-018
     claim: >-

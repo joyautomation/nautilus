@@ -3,6 +3,7 @@ package leader
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -542,5 +543,16 @@ func TestLeaseSecondsRoundsUp(t *testing.T) {
 		if got := e.leaseSeconds(); got != want {
 			t.Errorf("leaseSeconds(%v) = %d, want %d", d, got, want)
 		}
+	}
+}
+
+// A stored duration too large for a time.Duration saturates (never lapses)
+// rather than wrapping to a short or negative lease.
+func TestHugeStoredDurationDoesNotWrap(t *testing.T) {
+	e := &Elector{duration: 4 * time.Second}
+	t0 := time.Now()
+	l := &lease{Spec: leaseSpec{RenewTime: mtime(t0), LeaseDurationSeconds: math.MaxInt}}
+	if e.expired(l, t0.Add(time.Hour)) {
+		t.Fatal("a huge stored duration wrapped and expired the lease")
 	}
 }

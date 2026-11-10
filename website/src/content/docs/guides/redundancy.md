@@ -100,13 +100,17 @@ never computes.
 - **Failover** is bounded by the lease: 4 s worst case, and a clean
   shutdown (SIGTERM) hands the lease over so a standby takes it on its
   next 1 s tick.
-- **A Lease someone else wrote is fine.** A Lease made by hand, from a
-  GitOps manifest or by another tool may store any duration. Each
-  replica writes its own 4 s on every renew and takeover, and a standby
-  judges a holder by the longer of the stored duration and its own. A
-  Lease stored short, or with no duration, never lets a standby take
-  over from a live leader. One stored long holds back only the first
-  takeover, if its holder never renewed it under this version.
+- **A Lease created ahead of time is taken over.** If the Lease already
+  exists (made by hand or by another tool), each replica writes its own
+  4 s duration on every renew and takeover. A standby judges a holder by
+  the longer of the stored duration and its own, so a Lease stored short,
+  or with no duration, never lets a standby take over from a live
+  leader. A long stored duration still holds back a takeover from a
+  holder that never renewed it under naut: a Lease left at 3600 s by a
+  holder that is gone keeps every replica standby for up to an hour. Let
+  naut create the Lease. If you pre-create it, leave its duration out,
+  and keep it out of anything that re-applies it (a GitOps controller
+  with self-heal on): each re-apply writes the stored duration back.
 - **The lease needs live scans.** A leader renews only while its scans
   are completing, so a leader that is still running but whose scan is
   hung (logic that never returns, a driver call that blocks) hands over
