@@ -255,6 +255,21 @@ END_PROGRAM`
 		t.Fatalf("addLeg:\n%s", out)
 	}
 
+	// Delete a leg: a 3-leg branch keeps two; a 2-leg one collapses into
+	// the series around it, its last leg's elements in the branch's place.
+	three := step(t, src, EditOp{Type: "addLeg", Rung: "seal", Path: []int{0}})
+	out = step(t, three, EditOp{Type: "deleteLeg", Rung: "seal", Path: []int{0}, Index: 0})
+	if !strings.Contains(out, "[ Run | _ ] /Stop ( Run )") {
+		t.Fatalf("deleteLeg of 3:\n%s", out)
+	}
+	out = step(t, src, EditOp{Type: "deleteLeg", Rung: "seal", Path: []int{0}, Index: 1})
+	if !strings.Contains(out, "Start /Stop ( Run )") || strings.Contains(out, "[") {
+		t.Fatalf("deleteLeg collapse:\n%s", out)
+	}
+	if _, err := ApplyEdit(src, EditOp{Type: "deleteLeg", Rung: "seal", Path: []int{1}}); err == nil {
+		t.Fatal("deleteLeg on a contact must be refused")
+	}
+
 	// Delete the NC contact.
 	out = step(t, src, EditOp{Type: "delete", Rung: "seal", Path: []int{1}})
 	if !strings.Contains(out, "[ Start | Run ] ( Run )") {

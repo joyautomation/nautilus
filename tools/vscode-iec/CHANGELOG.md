@@ -46,6 +46,16 @@ offer needs the next naut, the first with `naut agents`.
   checks, and notes you write outside its markers are kept. Needs a naut
   with `naut agents`; with an older one the offer never appears. Turn it
   off with `nautilus.agentsMd.offer`. (#645)
+- **Ladder: an OR tab on every branch, and delete one leg.** A branch
+  was selectable only by its thin rails, so there was no visible way to
+  delete it. Each branch now has a small **OR** tab on its left rail:
+  click it to select the branch, then **Del** or ✕ deletes it. A selected
+  branch shows a red ✕ beside each leg that deletes that leg alone; a
+  branch left with one leg becomes plain series contacts. Deleting a leg
+  needs the next naut (its `naut ld edit` gains `deleteLeg`).
+- **Ladder: bigger ⊕ insert points.** The blue ⊕ spots for inserting a
+  contact, a coil or a leg are about half again as big, easier to see
+  and to hit.
 
 ### Fixed
 
