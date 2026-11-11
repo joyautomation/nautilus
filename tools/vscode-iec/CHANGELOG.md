@@ -3,11 +3,11 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.21.1] - 2026-11-10
 
 Works with naut 0.20.0: Toggle Bit and the diagram live actions use the
 controller's tag API the extension already writes through. The AGENTS.md
-offer needs the next naut, the first with `naut agents`.
+offer needs naut 0.21.0, the first with `naut agents`.
 
 ### Added
 
