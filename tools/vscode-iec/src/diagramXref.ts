@@ -23,6 +23,7 @@
 import * as vscode from "vscode";
 import { lspClient } from "./lspClient";
 import { describesLanguage, findIdentifier, normalizeDescriptions, type XrefMessage } from "./xrefTarget";
+import { isProjectTagsPath, PROJECT_TAGS_GLOB } from "./projectTagsLogic";
 
 export { isXrefMessage } from "./xrefTarget";
 
@@ -223,7 +224,7 @@ export function registerDiagramDescriptions(context: vscode.ExtensionContext): v
   const resendAll = () => {
     for (const [webview, uri] of targets) void sendDescriptions(webview, uri);
   };
-  const watcher = vscode.workspace.createFileSystemWatcher("**/{nautilus.yaml,tags/*.yaml,tags/*.yml}");
+  const watcher = vscode.workspace.createFileSystemWatcher(PROJECT_TAGS_GLOB);
   context.subscriptions.push(
     watcher,
     watcher.onDidChange(resendAll),
@@ -232,4 +233,32 @@ export function registerDiagramDescriptions(context: vscode.ExtensionContext): v
       if (e.affectsConfiguration("nautilus.diagram.showDescriptions")) resendAll();
     })
   );
+}
+
+/** Call `fn` when the project's tags may have changed: a save (or an
+ * on-disk change) to nautilus.yaml or a tags/ file. A diagram editor
+ * re-posts its model from it, because the model carries the tags — without
+ * it, a rung drawn before its tags were added keeps offering "declare N
+ * names…" until the diagram's own text changes. Saves and the watcher both
+ * fire for one autosave, so the call is debounced. */
+export function onProjectTagsChange(fn: () => void, delayMs = 250): vscode.Disposable {
+  let timer: NodeJS.Timeout | undefined;
+  const soon = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(fn, delayMs);
+  };
+  const watcher = vscode.workspace.createFileSystemWatcher(PROJECT_TAGS_GLOB);
+  const subs = [
+    watcher,
+    watcher.onDidChange(soon),
+    watcher.onDidCreate(soon),
+    watcher.onDidDelete(soon),
+    vscode.workspace.onDidSaveTextDocument((d) => {
+      if (isProjectTagsPath(d.uri.path)) soon();
+    }),
+  ];
+  return new vscode.Disposable(() => {
+    if (timer) clearTimeout(timer);
+    for (const s of subs) s.dispose();
+  });
 }
