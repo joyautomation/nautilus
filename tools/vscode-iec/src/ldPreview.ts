@@ -24,7 +24,7 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 import { pickRevisions } from "./revisionPick";
-import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./diagramXref";
+import { findReferencesFromDiagram, isXrefMessage, onProjectTagsChange, postDescriptions } from "./diagramXref";
 
 /** An L5X is a Rockwell export, not nautilus source — but `naut logix
  * graph` renders it into the SAME ladder model `naut ld graph` emits,
@@ -210,8 +210,12 @@ export class LdEditorProvider implements vscode.CustomTextEditorProvider {
       }
     });
     const syncSub = addSyncTarget(panel.webview, () => document.uri);
+    // The model carries the project's tags: a manifest or tag-file save
+    // re-posts it, or an offer to declare a now-declared tag stays up.
+    const tagsSub = onProjectTagsChange(() => void postLdModel(panel.webview, document));
     panel.onDidDispose(() => {
       if (debounce) clearTimeout(debounce);
+      tagsSub.dispose();
       changeSub.dispose();
       messageSub.dispose();
       diagSub.dispose();

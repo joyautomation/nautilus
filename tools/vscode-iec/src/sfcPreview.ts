@@ -31,7 +31,7 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 import { pickRevisions } from "./revisionPick";
-import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./diagramXref";
+import { findReferencesFromDiagram, isXrefMessage, onProjectTagsChange, postDescriptions } from "./diagramXref";
 
 /** Run `naut sfc graph -` over source text. `at` (the file the buffer
  * belongs to) lets the CLI attach the project's manifest tags. */
@@ -169,8 +169,12 @@ export class SfcEditorProvider implements vscode.CustomTextEditorProvider {
       }
     });
     const syncSub = addSyncTarget(panel.webview, () => document.uri);
+    // The model carries the project's tags: a manifest or tag-file save
+    // re-posts it, or an offer to declare a now-declared tag stays up.
+    const tagsSub = onProjectTagsChange(() => void postSfcModel(panel.webview, document));
     panel.onDidDispose(() => {
       if (debounce) clearTimeout(debounce);
+      tagsSub.dispose();
       changeSub.dispose();
       messageSub.dispose();
       diagSub.dispose();

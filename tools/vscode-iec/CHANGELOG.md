@@ -49,6 +49,11 @@ offer needs the next naut, the first with `naut agents`.
 
 ### Fixed
 
+- **Diagrams follow a tag added to nautilus.yaml.** A ladder, FBD or SFC
+  diagram that was already open when you added its tags to `nautilus.yaml`
+  (or a `tags/` file) kept offering **⚠ declare N names…** until its own
+  text changed, though the program compiled and ran. The diagram editors
+  now re-read the project's tags when the manifest or a tag file is saved.
 - **FBD diagram title.** A `.fbd` file that defines an ST FUNCTION_BLOCK
   ahead of its PROGRAM titled the diagram with the block's name; it now
   names the program that owns the FBD body.
