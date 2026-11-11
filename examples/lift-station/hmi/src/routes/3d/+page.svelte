@@ -15,7 +15,8 @@
 	// to component") joins the same way.
 	const modules = import.meta.glob(['/src/lib/kinds/*.kind.json', '/src/lib/kinds/*.svelte'], { eager: true });
 	import EquipmentPanel from '$lib/EquipmentPanel.svelte';
-	import { rt, alarms } from '$lib/client.svelte';
+	import { rt, alarms, num, has, writeTag } from '$lib/client.svelte';
+	import Rain from '$lib/Rain.svelte';
 
 	// The JSON import's literal types do not overlap SceneDoc closely enough
 	// for a direct cast; SceneView validates the document at run time.
@@ -33,6 +34,35 @@
 	let shown = $derived(look ?? doc.look ?? 'lit');
 	const next = () => (look = LOOKS[(LOOKS.indexOf(shown) + 1) % LOOKS.length]);
 	const perf = query?.has('perf') ?? false;
+
+	// Bench-only weather. InflowGpm is the bench sim's inflow (nautilus.yaml;
+	// field.yaml has no sim, so the controller never publishes it there and
+	// none of this shows). Rain starts above a normal day's flow and is at
+	// its heaviest by the 950 gpm storm; the Storm button sets that storm, or
+	// puts the inflow back to its normal 190.
+	const STORM = 950;
+	const NORMAL = 190;
+	const simulated = $derived(has('InflowGpm'));
+	const inflow = $derived(num('InflowGpm'));
+	const rain = $derived(simulated ? Math.min(1, Math.max(0, (inflow - 300) / (STORM - 300))) : 0);
+	const storming = $derived(inflow >= STORM - 50);
+
+	// Lightning: while it pours, a double flash every 4 to 11 seconds.
+	let flash = $state(0);
+	$effect(() => {
+		if (rain < 0.6) return;
+		let timer: ReturnType<typeof setTimeout>;
+		const seq: [number, number][] = [[1, 0], [0.15, 70], [0.85, 140], [0.3, 230], [0, 360]];
+		const strike = () => {
+			for (const [v, at] of seq) setTimeout(() => (flash = v), at);
+			timer = setTimeout(strike, 4000 + Math.random() * 7000);
+		};
+		timer = setTimeout(strike, 1500 + Math.random() * 2500);
+		return () => {
+			clearTimeout(timer);
+			flash = 0;
+		};
+	});
 </script>
 
 <svelte:head><title>Lift Station · 3D</title></svelte:head>
@@ -42,11 +72,27 @@
 	     z-index, which would otherwise draw them over the panel. -->
 	<div class="scene">
 		<SceneView {doc} {rt} {alarms} {modules} {perf} inspector={false} bind:selected bind:look>
+			{#if simulated}
+				<Rain intensity={rain} {flash} />
+			{/if}
 			{#snippet hud()}
 				<button class="pill" onclick={next} title="Cycle the look: lit, flat, paper">Look: {shown}</button>
+				{#if simulated}
+					<button
+						class="pill"
+						aria-pressed={storming}
+						onclick={() => writeTag('InflowGpm', storming ? NORMAL : STORM)}
+						title="Bench simulation: set the inflow to a {STORM} gpm storm, or back to {NORMAL}"
+					>
+						{storming ? 'Storm: on' : 'Storm'}
+					</button>
+				{/if}
 			{/snippet}
 		</SceneView>
 	</div>
+	<!-- The sky darkens with the rain, and lightning whitens it for a moment. -->
+	<div class="sky" style:opacity={rain * 0.3} aria-hidden="true"></div>
+	<div class="bolt" style:opacity={flash * 0.18} aria-hidden="true"></div>
 	<EquipmentPanel bind:selected />
 </div>
 
@@ -59,6 +105,25 @@
 		position: absolute;
 		inset: 0;
 		isolation: isolate;
+	}
+	.sky,
+	.bolt {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+		transition: opacity 0.6s;
+	}
+	.sky {
+		background: #0b1622;
+		mix-blend-mode: multiply;
+	}
+	.bolt {
+		background: #eef3ff;
+		transition: none;
+	}
+	.pill[aria-pressed='true'] {
+		border-color: #6aa9e9;
+		color: #cfe4ff;
 	}
 	.pill {
 		pointer-events: auto;
