@@ -323,7 +323,9 @@ const description =
     download.disabled = true;
     download.textContent = 'Preparing…';
     try {
-      const name = (pg.title || 'project').replace(/[^\w.-]+/g, '-');
+      // "Lift station (all four languages)" -> Lift-station-all-four-languages,
+      // with no hyphen left over from the closing paren at either end.
+      const name = (pg.title || '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
       const url = URL.createObjectURL(zip(await pg.files(), name));
       Object.assign(document.createElement('a'), { href: url, download: `${name}.zip` }).click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
