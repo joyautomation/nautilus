@@ -19,7 +19,7 @@ import (
 	"github.com/joyautomation/nautilus/optommp"
 )
 
-const optommpUsage = `naut optommp — Opto 22 groov EPIC / groov RIO tools (OptoMMP, TCP 2001)
+const optommpUsage = `naut optommp — Opto 22 groov EPIC tools (OptoMMP, TCP 2001)
 
 Usage:
   naut optommp browse --host <ip> [flags]
