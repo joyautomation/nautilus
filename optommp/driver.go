@@ -1,6 +1,6 @@
 package optommp
 
-// driver.go is the io.Driver for a groov EPIC (or groov RIO) chassis over
+// driver.go is the io.Driver for a groov EPIC chassis over
 // OptoMMP. New never dials, so `naut check` and `naut build` pass on a
 // laptop. Start connects, sends the power-up clear if one is owed, checks
 // the chassis against the manifest, and polls at the scan rate.

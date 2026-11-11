@@ -446,7 +446,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return plcnext.New(m, opts...)
 	case "optommp":
-		// An Opto 22 groov EPIC / groov RIO chassis over OptoMMP, from the
+		// An Opto 22 groov EPIC chassis over OptoMMP, from the
 		// processor's own LAN address or 127.0.0.1 when nautilus runs on
 		// it (brief docs/design/open-controllers.md §2). New never dials.
 		if d.Manifest == "" {

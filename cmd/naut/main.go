@@ -74,7 +74,7 @@ Usage:
                           one node per UDT tag a kind can draw, laid out
                           on a grid; nobody types a node). naut check
                           holds every scene file to the tags and UDTs.
-  naut optommp <cmd>  Opto 22 groov EPIC/RIO tools: browse (the chassis the
+  naut optommp <cmd>  Opto 22 groov EPIC tools: browse (the chassis the
                           processor reports) and import (that chassis as an
                           optommp manifest + tag file for the optommp driver,
                           or --modbus for the processor's Modbus map).
