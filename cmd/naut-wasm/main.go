@@ -11,7 +11,8 @@
 //	  load(root)               -> Promise<{ok, error?, notices[], ms}>
 //	  stop()                   -> Promise<void>
 //	  handle(m, url, hdrs, b)  -> Promise<{status, headers, body}>   the tag API
-//	  stream(url, onChunk)     -> cancel()                           SSE, chunk by chunk
+//	  stream(url, onChunk)     -> cancel()                           SSE, chunk by chunk;
+//	                              it ends (onChunk(null)) when its controller stops
 //	  stats()                  -> ScanStats | null
 //	  graph(lang, src, at)     -> string    `naut <lang> graph` output (JSON)
 //	  edit(lang, request)      -> string    {"out": ..., "code": n}, as `naut <lang> edit`
@@ -54,6 +55,9 @@ import (
 const localGateLease = 4 * time.Second
 
 type running struct {
+	// ctx is done once this controller is stopped or replaced: its streams
+	// end with it (openStream).
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
 	rt     *runtime.Runtime
@@ -166,7 +170,7 @@ func load(root string) ([]string, error) {
 
 	stop()
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &running{cancel: cancel, done: make(chan struct{}), rt: rt, srv: srv}
+	r := &running{ctx: ctx, cancel: cancel, done: make(chan struct{}), rt: rt, srv: srv}
 	gateCtx, gateCancel := context.WithCancel(context.Background())
 	gateDone := make(chan struct{})
 	go func() { gate.Run(gateCtx); close(gateDone) }()
@@ -279,22 +283,36 @@ func (w *flushWriter) Flush() {
 // function that ends it.
 func jsStream(_ js.Value, args []js.Value) any {
 	onChunk := args[1]
-	ctx, cancel := context.WithCancel(context.Background())
-	req := request(ctx, []js.Value{js.ValueOf("GET"), args[0]})
-	go func() {
-		r := current()
-		if r == nil {
-			onChunk.Invoke(js.Null())
-			return
-		}
-		w := &flushWriter{h: http.Header{}, emit: func(s string) { onChunk.Invoke(s) }}
-		r.srv.Handler().ServeHTTP(w, req)
-		w.Flush()
-		onChunk.Invoke(js.Null())
-	}()
+	cancel := openStream(args[0].String(),
+		func(s string) { onChunk.Invoke(s) },
+		func() { onChunk.Invoke(js.Null()) })
 	var fn js.Func
 	fn = js.FuncOf(func(js.Value, []js.Value) any { cancel(); fn.Release(); return nil })
 	return fn
+}
+
+// openStream serves url on the running controller, calling emit on every
+// flush and end once when the stream is over: cancelled, or the controller
+// it was opened on stopped. A stream belongs to one controller. naut run
+// replaces the controller in place, and the old one's stream would
+// otherwise stay open and silent: the extension's live view and the HMI
+// went grey until their watchdogs gave up on it, some 3 to 8 s after every
+// run. Ended, the client reconnects to the new controller at once.
+func openStream(url string, emit func(string), end func()) (cancel func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", url, nil).WithContext(ctx)
+	go func() {
+		defer end()
+		r := current()
+		if r == nil {
+			return
+		}
+		defer context.AfterFunc(r.ctx, cancel)()
+		w := &flushWriter{h: http.Header{}, emit: emit}
+		r.srv.Handler().ServeHTTP(w, req)
+		w.Flush()
+	}()
+	return cancel
 }
 
 // ---- diagram editors ---------------------------------------------------------

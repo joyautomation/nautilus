@@ -31,6 +31,10 @@ jobs:
       # pulls a field driver or a socket into the shared path breaks here.
       - name: playground wasm build
         run: GOOS=js GOARCH=wasm go vet ./cmd/naut-wasm && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm
+      # Its own tests run under Node (the runner has it): a controller's
+      # streams end when naut run replaces it or naut stop stops it.
+      - name: playground wasm tests
+        run: GOOS=js GOARCH=wasm go test -exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./cmd/naut-wasm
       # Every benchmark once, so one that no longer compiles its own program
       # fails here rather than when someone next profiles (#612). The test
       # step above has already built the packages, so this adds little (15-35 s
