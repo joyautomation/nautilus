@@ -75,6 +75,13 @@ function isIecDoc(doc: vscode.TextDocument): boolean {
 /** A frame is "fresh" if it arrived within this window; otherwise chips gray out. */
 const FRESHNESS_MS = 3000;
 const RECONNECT_MS = 2000;
+// A stream that delivered frames and then ended cleanly is a controller
+// restarting in place (naut run on a running one; the playground ends the
+// old controller's stream when it does): the new one is already there, so
+// the first retry goes at once. At most once per RESTART_WINDOW_MS, so a
+// server that ends every stream can't spin us.
+const RESTART_RECONNECT_MS = 200;
+const RESTART_WINDOW_MS = 5000;
 const RENDER_THROTTLE_MS = 150;
 
 /** A frame fanned out to non-text consumers (the FBD diagram webviews). */
@@ -121,6 +128,7 @@ export class LiveValues implements vscode.Disposable {
   private lastFrameMs = 0;
   private req: http.ClientRequest | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
+  private lastRestartMs = 0;
   private staleTimer: NodeJS.Timeout;
   private renderTimer: NodeJS.Timeout | undefined;
   private disposables: vscode.Disposable[] = [];
@@ -582,6 +590,7 @@ export class LiveValues implements vscode.Disposable {
     const url = new URL(this.runtimeUrl() + "/api/stream");
     const mod = url.protocol === "https:" ? https : http;
     let buffer = "";
+    const since = Date.now();
 
     const req = mod.get(url, (res) => {
       if (res.statusCode !== 200) {
@@ -602,7 +611,11 @@ export class LiveValues implements vscode.Disposable {
           }
         }
       });
-      res.on("end", () => this.scheduleReconnect());
+      res.on("end", () => {
+        const restart = this.lastFrameMs >= since && Date.now() - this.lastRestartMs > RESTART_WINDOW_MS;
+        if (restart) this.lastRestartMs = Date.now();
+        this.scheduleReconnect(restart ? RESTART_RECONNECT_MS : RECONNECT_MS);
+      });
       // A controller that dies mid-stream cuts a chunked response short:
       // Node reports that as 'aborted'/'close' (and an 'error' on the
       // response), never 'end'. Without these the client sat on a dead
@@ -642,13 +655,13 @@ export class LiveValues implements vscode.Disposable {
     }
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(ms = RECONNECT_MS): void {
     this.req = undefined;
     if (this.reconnectTimer || !this.enabled) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       this.onEditorsChanged();
-    }, RECONNECT_MS);
+    }, ms);
   }
 
   private onFrame(payload: string): void {

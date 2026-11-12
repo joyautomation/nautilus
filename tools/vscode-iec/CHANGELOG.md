@@ -54,6 +54,13 @@ offer needs the next naut, the first with `naut agents`.
   (or a `tags/` file) kept offering **⚠ declare N names…** until its own
   text changed, though the program compiled and ran. The diagram editors
   now re-read the project's tags when the manifest or a tag file is saved.
+- **Live values stay live through `naut run` in the playground.** Running
+  a project while one was already running turned the live values grey
+  about 3 s later, for about 5 s: the old controller's stream stayed open
+  and silent until the watchdog gave up on it. The playground now ends a
+  controller's streams when it stops or is replaced, and the extension
+  reconnects at once (200 ms, not 2 s) when a stream that was delivering
+  frames ends cleanly, the sign of a controller restarting in place.
 - **FBD diagram title.** A `.fbd` file that defines an ST FUNCTION_BLOCK
   ahead of its PROGRAM titled the diagram with the block's name; it now
   names the program that owns the FBD body.
