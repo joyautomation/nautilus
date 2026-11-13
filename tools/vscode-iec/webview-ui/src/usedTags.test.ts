@@ -159,3 +159,42 @@ test('sfc: association targets, conditions and action bodies; steps, actions and
 	const r = sfcRefs(m);
 	assert.deepEqual(usedProjectTags(r.refs, tags, m.vars, r.exclude).map((t) => t.name), ['MTR101_RunCmd', 'MTR101_FailToRun', 'MTR101_Permissive']);
 });
+
+// Review of #651: the cases the first cut missed.
+test('stIdents: a comment marker inside a string does not cut the code after it', () => {
+	assert.deepEqual(stIdents("msg := 'see http://x'; Alarm := TRUE;"), ['msg', 'Alarm', 'TRUE']);
+	assert.deepEqual(stIdents("msg := 'a (* b'; Pump := 1; (* c *) Valve := 0;"), ['msg', 'Pump', 'Valve']);
+	// and a quote inside a comment is not a string
+	assert.deepEqual(stIdents("// it's a note\nLevel := 1;"), ['Level']);
+});
+
+test('ldRefs: an instance array index is read; the array is not a tag', () => {
+	const m = {
+		rungs: [{ elements: [{ kind: 'fb', inst: 'tmrs[Idx]', type: 'TON' }], coils: [] }]
+	} as unknown as LdModel;
+	assert.deepEqual(ldRefs(m), { refs: ['Idx'], exclude: ['tmrs'] });
+});
+
+test('ldRefs: a FUNCTION_BLOCK\'s own instances do not shadow a project tag in the PROGRAM', () => {
+	const m = {
+		rungs: [
+			{ pou: 'Starter', elements: [{ kind: 'fb', inst: 'Delay', type: 'TON' }], coils: [] },
+			{ elements: [{ kind: 'contact', ref: 'Delay' }], coils: [] }
+		]
+	} as unknown as LdModel;
+	const r = ldRefs(m);
+	assert.deepEqual(r.exclude, []);
+	assert.deepEqual(usedProjectTags(r.refs, [{ name: 'Delay', type: 'BOOL' }], [], r.exclude).map((t) => t.name), ['Delay']);
+});
+
+test('sfcRefs: an association\'s duration variable is used', () => {
+	const m = {
+		steps: [{ name: 'Fill', actions: [{ qualifier: 'L', target: 'FillValve', time: 'FillTime', line: 3 }] }],
+		trans: [],
+		actions: []
+	} as unknown as SfcModel;
+	assert.deepEqual(sfcRefs(m).refs, ['FillValve', 'FillTime']);
+	// a literal duration is not
+	const lit = { ...m, steps: [{ name: 'Fill', actions: [{ qualifier: 'L', target: 'FillValve', time: 'T#5S', line: 3 }] }] } as unknown as SfcModel;
+	assert.deepEqual(sfcRefs(lit).refs, ['FillValve']);
+});

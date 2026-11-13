@@ -565,6 +565,12 @@
 			ldModel = null;
 			varList = (msg.head.vars ?? []) as VarDecl[];
 			setVarBounds(varList);
+			projectTags = msg.head.tags ?? projectTags;
+			{
+				// The head's tags, beside the head's declarations.
+				const r = sfcRefs(normalizeSfc(msg.head));
+				usedTags = usedProjectTags(r.refs, projectTags, varList, r.exclude);
+			}
 			sfcModel = diffSfc(normalizeSfc(msg.base), normalizeSfc(msg.head));
 			diffing = true;
 			problemCount = 0;
