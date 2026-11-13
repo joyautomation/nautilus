@@ -1,6 +1,6 @@
 # The playground's saved projects (see main.go). Build context is the repo
 # root: docker build -f playground/share/Dockerfile .
-FROM golang:1.24-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY playground/share ./playground/share
