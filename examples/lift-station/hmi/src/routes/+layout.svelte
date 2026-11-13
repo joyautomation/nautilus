@@ -1,8 +1,11 @@
 <script lang="ts">
 	// App shell: a bar across the top (the station, the view switch between
 	// the P&ID, 3D and diagnostics pages, the alarm banner and ack, the
-	// connection) over a page that fills the rest of the window. The alarm
-	// banner opens the alarms panel (AlarmsPanel) over any of them. Also the
+	// connection) over a page that fills the rest of the window. The bar is
+	// one row: the station left, the views in the middle, the status right;
+	// the description gives way first, and only a phone-width window wraps
+	// the status onto a row of its own. The alarm banner opens the alarms
+	// panel (AlarmsPanel) over any of them. Also the
 	// plumbing every page needs: theme tokens, the realtime client's
 	// lifecycle, and the one shared confirm dialog every irreversible action
 	// (ack, reset) routes through.
@@ -53,7 +56,7 @@
 			{/each}
 		</nav>
 		<div class="status">
-			<div class="alarm"><AlarmBanner summary={alarms.summary} compact onclick={() => (alarmsOpen = !alarmsOpen)} /></div>
+			<AlarmBanner summary={alarms.summary} compact onclick={() => (alarmsOpen = !alarmsOpen)} />
 			<AckButton alarms={alarms.active} ids={['*']} onack={(ids, by) => alarms.ack(ids, by)} />
 			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
 			<ThemeSwitch />
@@ -81,7 +84,11 @@
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
 	}
+	/* The station and the status share what the views leave, equally, so
+	   the views sit in the middle while both sides have room; the status
+	   never shrinks below its contents, and the description truncates. */
 	.title {
+		flex: 1 1 0;
 		display: flex;
 		align-items: baseline;
 		gap: 10px;
@@ -100,6 +107,7 @@
 		text-overflow: ellipsis;
 	}
 	.views {
+		flex: none;
 		display: flex;
 		gap: 2px;
 		padding: 2px;
@@ -123,14 +131,12 @@
 		color: var(--bg);
 	}
 	.status {
+		flex: 1 1 0;
+		min-width: max-content;
 		display: flex;
 		align-items: center;
+		justify-content: flex-end;
 		gap: 10px;
-		margin-left: auto;
-	}
-	/* The banner fills whatever it is given; here, a slot of its own. */
-	.alarm {
-		width: clamp(150px, 20vw, 260px);
 	}
 	.view {
 		flex: 1;
