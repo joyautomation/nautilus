@@ -117,7 +117,10 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 	],
 	Heater: [],
 	Gauge: [],
-	Sparkline: []
+	Sparkline: [],
+	// Operator controls: no pipe meets a button.
+	CommandButton: [],
+	WriteToggle: []
 };
 
 /** Resolve an equipment instance's connection points at the RUNTIME's

@@ -100,6 +100,32 @@ export async function fetchTags(): Promise<Record<string, unknown> | null> {
   }
 }
 
+/** Write one tag on the running controller (POST /api/tags, the same write
+ * Toggle Bit and Set Live Value… make), for an operator control on the
+ * mimic canvas. Resolves to null once the controller took it, else the
+ * reason it didn't, for the control to show beside itself: no toast, the
+ * screen is the feedback, as it is for an operator. */
+export async function writeTag(name: string, value: unknown): Promise<string | null> {
+  const cfg = vscode.workspace.getConfiguration("nautilus");
+  const url = cfg.get<string>("runtimeUrl", "http://localhost:8080");
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = cfg.get<string>("token", "");
+  if (token) headers["Authorization"] = "Bearer " + token;
+  try {
+    const resp = await fetch(`${url}/api/tags`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name, value }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.ok) return null;
+    const body = (await resp.text()).trim();
+    return body || resp.statusText || `HTTP ${resp.status}`;
+  } catch {
+    return `could not reach ${url}`;
+  }
+}
+
 /** "Open With → Mimic Editor" (the DEFAULT for *.mimic.json — a mimic is
  * spatial-first; the JSON is a right-click "Open With → Text Editor" away). */
 export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
@@ -272,6 +298,22 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
         }
         if (msg?.type === "toggleLive") {
           void vscode.commands.executeCommand("nautilus.liveValues.toggle");
+          return;
+        }
+        if (msg?.type === "writeTag") {
+          // An operator control on the canvas (webview liveWrite.ts). The
+          // webview already refused it with live values off or no
+          // controller; this is the write itself, answered by id.
+          const w = msg as { id?: number; name?: unknown; value?: unknown };
+          if (typeof w.id !== "number" || typeof w.name !== "string" || !w.name) return;
+          const id = w.id;
+          const name = w.name;
+          void (liveEnabled() ? writeTag(name, w.value) : Promise.resolve("Live values are off")).then((error) => {
+            logMimic(`write ${name} = ${JSON.stringify(w.value)}${error ? " refused: " + error : ""}`);
+            void panel.webview.postMessage({ type: "writeResult", id, error });
+            // the screen shows the new value at once, not a poll later
+            void postTags();
+          });
           return;
         }
         if (msg?.type === "reopenAsText") {

@@ -5,7 +5,7 @@
 	// gesture goes back as an op.
 	import ShortcutHelp from '../ShortcutHelp.svelte';
 	import { MIMIC_SHORTCUTS, hintLine } from '../shortcuts';
-	import { announceReady, ed, postOp, reopenAsText, setSnapToGrid, toggleLive } from './mimicState.svelte';
+	import { announceReady, ed, postOp, reopenAsText, setSnapToGrid, toggleLive, writeResult } from './mimicState.svelte';
 	import { themeColorMode } from '../themeMode.svelte';
 	import EditorCanvas from './EditorCanvas.svelte';
 	import EquipPalette from './EquipPalette.svelte';
@@ -25,6 +25,8 @@
 				diagnostics?: { component: string; message: string }[];
 				snapToGrid?: boolean;
 				enabled?: boolean;
+				id?: number;
+				error?: string | null;
 			};
 			if (m?.type === 'mimicDoc' && m.doc) {
 				ed.doc = m.doc;
@@ -42,6 +44,8 @@
 				setUserComponentDiagnostics(m.diagnostics ?? []);
 			} else if (m?.type === 'mimicConfig') {
 				ed.snapToGrid = m.snapToGrid ?? true;
+			} else if (m?.type === 'writeResult' && typeof m.id === 'number') {
+				writeResult(m.id, m.error ?? null);
 			}
 		};
 		window.addEventListener('message', onMsg);
