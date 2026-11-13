@@ -14,7 +14,8 @@ naut check            # compile every program; prints errors and warnings
 naut test             # acceptance tests (*_test.yaml), in virtual time
 naut test -run fill   # only tests whose name matches a regex
 naut test -list       # list the tests without running them
-naut run              # optional: dashboard + tag API on http://localhost:8080
+naut hmi build        # build the operator screen alone, and say what's wrong
+naut run              # optional: the screen, dashboard and tag API on http://localhost:8080
 ```
 
 - Run `naut check` after every edit. Treat a warning as a bug: "local X
@@ -265,6 +266,32 @@ END_PROGRAM
 **ST** is standard IEC: a `FUNCTION_BLOCK` per piece of equipment in
 `lib/`, `T#5S` time literals, single-quoted strings, IEC names only.
 
+## Operator screens
+
+naut builds the operator screen from the project itself, with no npm, and
+`naut run` serves it at `/` (the engineering dashboard moves to
+`/_nautilus/`). Guide: https://nautilus.joyautomation.com/guides/operator-screens/
+
+- A `*.mimic.json` is a screen: equipment placed on a canvas, pipes between
+  it, tags bound to it. A project with mimics gets a page for each. Use
+  the kit's equipment (`Tank`, `Pump`, `Valve`, `Gauge`, `CommandButton`,
+  `WriteToggle`, ...) and a `{Name}.svelte` of your own where the kit
+  doesn't draw what you need, with its pipe ports in `{Name}.component.json`.
+- For more than mimics, write an app: `hmi/src/routes/+page.svelte` is `/`,
+  components go in `hmi/src/lib`, and `server.hmi: hmi` in the manifest.
+  It is SvelteKit's layout, client-side; Go is the only backend.
+- Never hand-write an HTML or JavaScript page for the operator screen, and
+  never point `server.hmi` at one: naut doesn't check it, it can't use the
+  kit, and the editor can't show it.
+- `naut check` checks screens: every tag a binding, a label or a control
+  names, every pipe's ports, and the screen builds. A screen imports only
+  Svelte, `@joyautomation/nautilus-hmi`, `@joyautomation/nautilus-hmi-3d`,
+  three and Threlte.
+- In a component that uses `$state(...)`, never name a prop or variable
+  `state`: Svelte then reads `$state` as a store subscription and the
+  component throws when it mounts. Name it for what it holds
+  (`filterState`).
+
 ## Tests (`*_test.yaml`)
 
 ```yaml
@@ -288,9 +315,15 @@ takes one of `scans`, `advance`, `until`; `expect` checks its end, `always`
 every scan, and both take ST expressions (`- E101_Out = 0.0`) too. Test
 every timer, permissive and abort path.
 
+Write the tests from the specification, not from the code: every sentence
+that says the control sets, clears, holds, waits for or times something
+gets a test that checks it, including a command the control must clear
+once it has taken it.
+
 ## Before you finish
 
-- `naut check`: no errors, no new warnings. `naut test` passes.
+- `naut check`: no errors, no new warnings (the screen builds). `naut test`
+  passes.
 - New or changed behavior has a test in `*_test.yaml`: every timer,
   permissive and abort path.
 - Every rung and network has a comment; every step and transition a name.

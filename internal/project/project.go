@@ -956,6 +956,13 @@ func isApp(fsys fs.FS, dir string) bool {
 	return err == nil && st.IsDir()
 }
 
+// isProject reports whether dir holds a project of its own (a
+// nautilus.yaml): its screens are its own, not its parent's.
+func isProject(fsys fs.FS, dir string) bool {
+	_, err := fs.Stat(fsys, path.Join(dir, ManifestName))
+	return err == nil
+}
+
 // hasMimics reports whether the project has a *.mimic.json outside
 // node_modules, dot and build directories.
 func hasMimics(fsys fs.FS) bool {
@@ -966,7 +973,7 @@ func hasMimics(fsys fs.FS) bool {
 		}
 		if d.IsDir() {
 			n := d.Name()
-			if p != "." && (strings.HasPrefix(n, ".") || n == "node_modules" || n == "build" || n == "dist") {
+			if p != "." && (strings.HasPrefix(n, ".") || n == "node_modules" || n == "build" || n == "dist" || isProject(fsys, p)) {
 				return fs.SkipDir
 			}
 			return nil

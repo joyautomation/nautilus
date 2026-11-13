@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/hmibuild"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
@@ -458,7 +460,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 
 	// The served HMI predates an edit it compiles in (a mimic, a scene,
 	// its own code): what the operator sees is not what the files say.
-	if !proj.HMIMissing {
+	if !proj.HMIMissing && proj.HMIApp == "" {
 		if src := project.StaleHMISource(os.DirFS(dir), proj.HMIDir); src != "" {
 			warns++
 			fmt.Printf("%s: warning: server.hmi: %s is older than %s — run npm run build in %s\n",
@@ -702,6 +704,44 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	}
 	for _, r := range reports {
 		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", loc.file, r.File, r.Nodes, r.Pipes)
+	}
+
+	// Screens: every *.mimic.json binds tags the project declares, its
+	// controls write tags the API lets them, its pipes end on ports that
+	// exist; then the screen is built, as naut run would serve it, so a
+	// component that won't compile (or would throw when it mounts) is an
+	// error here and not a blank box on the operator's screen.
+	mreports, merrs, mwarns := proj.CheckMimics(os.DirFS(dir), manifestName == project.ManifestName)
+	for _, m := range merrs {
+		errs++
+		fmt.Printf("%s: error: %s\n", loc.file, m)
+	}
+	for _, m := range mwarns {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, m)
+	}
+	for _, r := range mreports {
+		fmt.Printf("%s: screen %s: %d equipment, %d pipes\n", loc.file, r.File, r.Equipment, r.Pipes)
+	}
+	if src := hmiSource(proj); src != "" {
+		res, err := buildHMI(proj, dir)
+		var be *hmibuild.Error
+		switch {
+		case errors.As(err, &be):
+			for _, m := range be.Messages {
+				errs++
+				fmt.Printf("%s: error: hmi: %s\n", loc.file, m)
+			}
+		case err != nil:
+			errs++
+			fmt.Printf("%s: error: hmi: %s\n", loc.file, err)
+		default:
+			for _, w := range res.Warnings {
+				warns++
+				fmt.Printf("%s: warning: hmi: %s\n", loc.file, w)
+			}
+			fmt.Printf("%s: hmi: %s builds: %s (%s)\n", loc.file, src, plural(len(res.Pages), "page"), strings.Join(res.Pages, " "))
+		}
 	}
 	return errs, warns
 }
