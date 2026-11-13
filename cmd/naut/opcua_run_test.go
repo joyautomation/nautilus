@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -32,7 +33,7 @@ func TestNautRunServesOPCUA(t *testing.T) {
 	}
 	bin := buildNautCLI(t, t.TempDir(), nil)
 	dir := t.TempDir()
-	apiAddr, opcAddr := freeAddr(t), freeAddr(t)
+	apiAddr := freeAddr(t)
 	files := map[string]string{
 		"nautilus.yaml": `name: wetwell
 tasks:
@@ -45,7 +46,7 @@ tags:
 server:
   addr: "` + apiAddr + `"
 opcua:
-  endpoint: "opc.tcp://` + opcAddr + `"
+  endpoint: "opc.tcp://127.0.0.1:0"
 `,
 		"types.st": `TYPE Pump :
   STRUCT
@@ -115,15 +116,17 @@ END_PROGRAM
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	opcURL := opcuaURL(t, stdout.String, exited, stderr.String)
+
 	// The OPC UA endpoint answers a real client.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	c, err := opcua.NewClient("opc.tcp://"+opcAddr, opcua.SecurityMode(ua.MessageSecurityModeNone), opcua.AuthAnonymous(), opcua.AutoReconnect(false))
+	c, err := opcua.NewClient(opcURL, opcua.SecurityMode(ua.MessageSecurityModeNone), opcua.AuthAnonymous(), opcua.AutoReconnect(false))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Connect(ctx); err != nil {
-		t.Fatalf("connect to naut run's OPC UA endpoint %s: %v\nstderr:\n%s", opcAddr, err, stderr.String())
+		t.Fatalf("connect to naut run's OPC UA endpoint %s: %v\nstderr:\n%s", opcURL, err, stderr.String())
 	}
 	defer func() {
 		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -203,7 +206,7 @@ END_PROGRAM
 	for _, r := range rows {
 		if r.Kind == "opcua-server" {
 			found = true
-			if r.State != "connected" || r.Detail != "opc.tcp://"+opcAddr {
+			if r.State != "connected" || r.Detail != opcURL {
 				t.Errorf("opcua-server row %+v", r)
 			}
 		}
@@ -225,9 +228,6 @@ END_PROGRAM
 	}
 	if c := cmd.ProcessState.ExitCode(); c != 0 {
 		t.Errorf("naut run exited %d after SIGTERM; stderr:\n%s", c, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "opc ua on opc.tcp://"+opcAddr) {
-		t.Errorf("banner does not name the endpoint:\n%s", stdout.String())
 	}
 	if strings.Contains(stderr.String(), "New Node Set") || strings.Contains(stderr.String(), "Started listening") {
 		t.Errorf("gopcua's startup chatter reached stderr:\n%s", stderr.String())
@@ -327,6 +327,31 @@ opcua:
 	}
 	if !strings.Contains(stderr.String(), "opcua:") || !strings.Contains(stderr.String(), "continuing without it") {
 		t.Errorf("stderr does not report the failed listen:\n%s", stderr.String())
+	}
+}
+
+// opcuaURL waits for naut run's banner to name the OPC UA endpoint it
+// bound, and returns it. Tests give the endpoint port 0 rather than a port
+// from freeAddr: a probed port is free only until the probe closes it, and
+// a test running in another package can take it before naut binds it
+// (TestNautRunOPCUAReportsTheCLIVersion failed that way on PR #651).
+func opcuaURL(t *testing.T, stdout func() string, exited <-chan struct{}, stderr func() string) string {
+	t.Helper()
+	re := regexp.MustCompile(`opc ua on (opc\.tcp://[^\s(]+)`)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if m := re.FindStringSubmatch(stdout()); m != nil {
+			return m[1]
+		}
+		select {
+		case <-exited:
+			t.Fatalf("naut run exited before its banner named an OPC UA endpoint; stdout:\n%s\nstderr:\n%s", stdout(), stderr())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("naut run's banner never named an OPC UA endpoint; stdout:\n%s\nstderr:\n%s", stdout(), stderr())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
