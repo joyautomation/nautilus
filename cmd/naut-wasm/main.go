@@ -62,6 +62,7 @@ type running struct {
 	done   chan struct{}
 	rt     *runtime.Runtime
 	srv    *server.Server
+	hmi    *hmiBuild // the operator screen naut builds (hmi.go); nil for none
 }
 
 var (
@@ -76,6 +77,8 @@ func main() {
 		return promise(func() any { stop(); return js.Undefined() })
 	}))
 	api.Set("handle", js.FuncOf(jsHandle))
+	api.Set("app", js.FuncOf(jsApp))
+	api.Set("appStatus", js.FuncOf(jsAppStatus))
 	api.Set("stream", js.FuncOf(jsStream))
 	api.Set("stats", js.FuncOf(jsStats))
 	api.Set("graph", js.FuncOf(jsGraph))
@@ -185,6 +188,7 @@ func load(root string) ([]string, error) {
 		gate.Release()
 		close(r.done)
 	}()
+	r.hmi = startHMI(proj, root)
 	mu.Lock()
 	cur = r
 	mu.Unlock()
