@@ -2,13 +2,13 @@
 // the same modules the runtime <Mimic> renders, so the canvas is WYSIWYG.
 // (Custom registry components render as a placeholder chip here; they only
 // exist in the app that supplies them.)
-import { Gauge, Heater, Pump, Sparkline, Tank, Valve } from '@joyautomation/nautilus-hmi';
+import { CommandButton, Gauge, Heater, Pump, Sparkline, Tank, Valve, WriteToggle } from '@joyautomation/nautilus-hmi';
 import type { Component } from 'svelte';
 import { PORTS } from './builtinPorts';
 export { PORTS };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const registry: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline };
+export const registry: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle };
 export const registryNames = Object.keys(registry);
 
 /** Fallbacks merged UNDER doc props/bindings so every component renders on
@@ -20,7 +20,11 @@ export const DEMO_PROPS: Record<string, Record<string, unknown>> = {
 	Heater: { powerPct: 60 },
 	Pump: { running: true },
 	Valve: { openPct: 70 },
-	Gauge: { value: 65, setpoint: 65 }
+	Gauge: { value: 65, setpoint: 65 },
+	// Operator controls: `tag` (a prop, not a binding) is the tag they
+	// write; the canvas hands them `write` (EditorCanvas eqProps).
+	CommandButton: { label: 'Command', tag: '' },
+	WriteToggle: { label: 'Enable', tag: '', value: true }
 };
 
 /** Named connection points, as fractions of the rendered box. Pipe drawing
@@ -38,5 +42,7 @@ export const BIND_HINTS: Record<string, string[]> = {
 	Valve: ['openPct'],
 	Gauge: ['value', 'setpoint'],
 	Sparkline: [],
+	CommandButton: ['held', 'disabled'],
+	WriteToggle: ['value'],
 	pipe: ['flowing', 'rate']
 };

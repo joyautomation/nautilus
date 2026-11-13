@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Operable mimics.** `<Mimic write={client.writeTag}>` hands every piece
+  of equipment a `write(name, value)` prop, so a screen's controls command
+  the plant; without it they say the screen is read-only. `CommandButton`
+  and `WriteToggle` are mimic built-ins (no ports), placed by name like
+  `Tank`.
+
 - **`Tank` shapes.** `shape` says what kind of tank it is: a closed
   `vessel` (the default, as before), an `open` basin with no roof, or a
   below-grade `pit` (a wet well or sump: square concrete walls, a cover

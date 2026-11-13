@@ -13,6 +13,15 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Added
 
+- **Operator screens you can operate.** With live values on and a
+  controller running, a mimic's controls write to it: the kit's
+  `CommandButton` (a momentary pushbutton) and `WriteToggle` (a lamp and a
+  switch) are on the palette, and every piece of equipment, your own
+  components included, is handed `write(name, value)` for its own buttons.
+  A click on a control operates it instead of selecting the equipment; a
+  refused write (live values off, no controller, a forced tag) shows its
+  reason beside the control. The write is the same POST Toggle Bit makes.
+
 - **Toggle Bit, as in Studio 5000.** Select a tag's element in a
   diagram (a ladder contact or coil, an FBD variable chip, an SFC action
   association or a transition whose condition is one variable) and press

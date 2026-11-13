@@ -11,6 +11,8 @@
 	import Valve from './Valve.svelte';
 	import Gauge from './Gauge.svelte';
 	import Sparkline from './Sparkline.svelte';
+	import CommandButton from './CommandButton.svelte';
+	import WriteToggle from './WriteToggle.svelte';
 	import Pipe from './Pipe.svelte';
 	import { makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
@@ -20,6 +22,7 @@
 		tags = {},
 		registry = {},
 		onequipmentclick,
+		write,
 		selected = null,
 		minScale = 0,
 		look
@@ -33,6 +36,14 @@
 		registry?: Record<string, Component<any>>;
 		/** Present = equipment is clickable (open a faceplate, navigate…). */
 		onequipmentclick?: (eq: MimicEquipment) => void;
+		/**
+		 * Writes one tag on the controller (`RealtimeClient.writeTag` is one):
+		 * resolves to null when it landed, else the refusal reason. Present =
+		 * the screen is operable: every equipment gets it as its `write` prop,
+		 * so the kit's CommandButton / WriteToggle and a project component's
+		 * own controls can command the plant. Absent, they show the reason.
+		 */
+		write?: (name: string, value: unknown) => Promise<string | null>;
 		/** The id of the equipment to mark as selected (its faceplate open,
 		 *  say): it keeps a soft glow, as hover gives one for a moment. */
 		selected?: string | null;
@@ -49,7 +60,7 @@
 	} = $props();
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline };
+	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle };
 	const components = $derived({ ...builtin, ...registry });
 
 	// Scale the logical canvas to the container width (height follows),
@@ -86,8 +97,10 @@
 		...(eq.height !== undefined ? { height: eq.height } : {}),
 		...(eq.label !== undefined ? { label: eq.label } : {}),
 		...(eq.props ?? {}),
-		...resolveBindings(eq.bind, tags)
+		...resolveBindings(eq.bind, tags),
+		write: write ?? readOnly
 	});
+	const readOnly = async (): Promise<string | null> => 'This screen is read-only';
 
 	// ── pipe end anchors (MimicPipe.from/to) ─────────────────────────────────
 	// Anchored pipe ends resolve against an equipment's ACTUAL rendered box —

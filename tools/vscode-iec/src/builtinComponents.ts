@@ -37,6 +37,8 @@ export const BUILTIN_COMPONENT_PORTS: Record<string, Port[]> = {
   ],
   Gauge: [],
   Sparkline: [],
+  CommandButton: [],
+  WriteToggle: [],
 };
 
 export const BUILTIN_COMPONENT_NAMES = Object.keys(BUILTIN_COMPONENT_PORTS);
@@ -51,4 +53,6 @@ export const BUILTIN_DEMO_PROPS: Record<string, Record<string, unknown>> = {
   Pump: { running: true },
   Valve: { openPct: 70 },
   Gauge: { value: 65, setpoint: 65 },
+  CommandButton: { label: "Command", tag: "" },
+  WriteToggle: { label: "Enable", tag: "", value: true },
 };

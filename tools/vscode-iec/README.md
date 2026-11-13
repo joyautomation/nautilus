@@ -174,6 +174,9 @@ commit (*Open With → Text Editor* any time).
   whatever is in the way.
 - Bind props to tags in the props panel; with a controller running, the
   canvas animates with the real process.
+- Operate it, too: a `CommandButton` or `WriteToggle` on the screen, or a
+  button in your own component, writes its tag to the controller while live
+  values are on (see [Operator screens](https://nautilus.joyautomation.com/guides/operator-screens/)).
 - Every gesture is one text edit, so undo is text undo. Press `p` to edit an
   equipment's ports; **Nautilus: Edit Component Ports…** does the same for
   any component, built-in or custom, in the preview pane.

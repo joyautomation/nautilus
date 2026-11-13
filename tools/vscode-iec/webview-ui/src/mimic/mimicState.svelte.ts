@@ -6,6 +6,7 @@ import { vscode } from '../vscodeApi';
 import type { MimicDoc, MimicPipeAnchor } from '@joyautomation/nautilus-hmi';
 import type { ComponentsManifest, Port } from './ports';
 import { cloneSafe, opFailureMessage } from './opPayload';
+import { writeRefusal } from './liveWrite';
 
 /** Mirror of src/mimicOps.ts (extension host). Patch semantics: a key set
  * to null DELETES the optional field; a present value sets it. */
@@ -159,6 +160,36 @@ export function postManifestOp(op: ManifestOp): boolean {
  * pill and the status-bar item; the host answers with a fresh mimicTags. */
 export function toggleLive(): void {
 	vscode.postMessage({ type: 'toggleLive' });
+}
+
+/** Write one tag on the running controller (POST /api/tags, through the
+ * host): what an operator control on the canvas is handed as `write`.
+ * Resolves to null once the controller took it, or the reason it didn't —
+ * live values off, no controller, or the controller's own refusal — for
+ * the control to show beside itself. */
+let writeSeq = 0;
+const pendingWrites = new Map<number, (error: string | null) => void>();
+export function writeTag(name: string, value: unknown): Promise<string | null> {
+	const refused = writeRefusal(ed);
+	if (refused) return Promise.resolve(refused);
+	const id = ++writeSeq;
+	return new Promise((resolve) => {
+		pendingWrites.set(id, resolve);
+		try {
+			vscode.postMessage({ type: 'writeTag', id, name, value: cloneSafe(value) });
+		} catch (err) {
+			pendingWrites.delete(id);
+			resolve('could not send the write: ' + String(err));
+		}
+	});
+}
+
+/** The host's answer to one writeTag. */
+export function writeResult(id: number, error: string | null): void {
+	const resolve = pendingWrites.get(id);
+	if (!resolve) return;
+	pendingWrites.delete(id);
+	resolve(error);
 }
 
 /** Leave the graphical editor for VS Code's text editor on this file —

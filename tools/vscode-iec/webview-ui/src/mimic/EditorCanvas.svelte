@@ -38,7 +38,8 @@
 	import { dropPort, fmtFraction, movePort, newPortAtFreeSlot, newPortAtPoint, nudgePort, roundPort, SLOT_CLEARANCE, smallestPartAt, type Box } from './portsGestures';
 	import { minInteriorPoints, nearestPort, resolveDraftFinish, type NamedPort } from './pipeDraft';
 	import { suggestRoute, type ObstacleRect } from './autoroute';
-	import { canvasBox, ed, GRID, postManifestOp, postOp, snap, type MimicOp, type Selection } from './mimicState.svelte';
+	import { canvasBox, ed, GRID, postManifestOp, postOp, snap, writeTag, type MimicOp, type Selection } from './mimicState.svelte';
+	import { isControlTarget } from './liveWrite';
 	import { themeColorMode } from '../themeMode.svelte';
 	import { clipEquipment, pasteOps, type MimicClip } from './mimicClip';
 	import { readClip, typingTarget, writeClip } from '../clipboard';
@@ -799,7 +800,11 @@
 			...(size.height !== undefined ? { height: size.height } : {}),
 			...(eq.label !== undefined ? { label: eq.label } : {}),
 			...(eq.props ?? {}),
-			...resolveBindings(eq.bind, ed.tags ?? {})
+			...resolveBindings(eq.bind, ed.tags ?? {}),
+			// Operator controls (the kit's CommandButton / WriteToggle, a
+			// project component's own buttons) write through this; it answers
+			// with why not while live values are off or no controller runs.
+			write: writeTag
 		};
 	};
 
@@ -807,6 +812,11 @@
 	function eqDown(e: PointerEvent, eq: MimicEquipment) {
 		if (ed.tool !== 'select' || e.button !== 0) return;
 		e.stopPropagation();
+		// With a controller connected, a press on an operator control inside
+		// the equipment (a button, a switch, an input) is the operator's: it
+		// reaches the component, and the equipment is neither selected nor
+		// dragged. Live values off, the whole box is the editor's again.
+		if (isControlTarget(e.target, ed)) return;
 		// Shift/Ctrl/Cmd-click toggles this instance in the selection;
 		// toggleItem keeps BUG 1's guard for a node multi-selection. Added to
 		// a several-item selection, a drag from the same press moves them all.
@@ -2307,6 +2317,11 @@
 	}
 	.eq.dragging {
 		cursor: grabbing;
+	}
+	/* An operator control on the screen takes its own clicks while a
+	   controller is connected (eqDown / liveWrite.ts): say so. */
+	.eq :global(:is(button, [role='button'], [role='switch'], input, select, [data-mimic-control])) {
+		cursor: pointer;
 	}
 	/* `behind` equipment (a wet well with pumps in it) paints under the
 	   pipe layer — see the runtime <Mimic>'s identical rule. */
