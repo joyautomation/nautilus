@@ -37,7 +37,7 @@ func TestNautRunOPCUAReportsTheCLIVersion(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	apiAddr, opcAddr := freeAddr(t), freeAddr(t)
+	apiAddr := freeAddr(t)
 	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(`name: ident
 tasks:
   - program: main.st
@@ -46,7 +46,7 @@ tags:
 server:
   addr: "`+apiAddr+`"
 opcua:
-  endpoint: "opc.tcp://`+opcAddr+`"
+  endpoint: "opc.tcp://127.0.0.1:0"
   application-uri: urn:example:plant7:ident
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -70,6 +70,13 @@ opcua:
 	defer errFile.Close()
 	cmd.Stderr = errFile
 	stderr := func() string { b, _ := os.ReadFile(errFile.Name()); return string(b) }
+	outFile, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outFile.Close()
+	cmd.Stdout = outFile
+	stdout := func() string { b, _ := os.ReadFile(outFile.Name()); return string(b) }
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -98,11 +105,13 @@ opcua:
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	opcURL := opcuaURL(t, stdout, exited, stderr)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	eps, err := opcua.GetEndpoints(ctx, "opc.tcp://"+opcAddr)
+	eps, err := opcua.GetEndpoints(ctx, opcURL)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v; stderr:\n%s", err, stderr())
 	}
 	want := "urn:example:plant7:ident"
 	for _, ep := range eps {
@@ -110,7 +119,7 @@ opcua:
 			t.Errorf("endpoint %s ApplicationUri = %q, want %q", ep.EndpointURL, ep.Server.ApplicationURI, want)
 		}
 	}
-	c, err := opcua.NewClient("opc.tcp://"+opcAddr, opcua.SecurityMode(ua.MessageSecurityModeNone), opcua.AuthAnonymous(), opcua.AutoReconnect(false))
+	c, err := opcua.NewClient(opcURL, opcua.SecurityMode(ua.MessageSecurityModeNone), opcua.AuthAnonymous(), opcua.AutoReconnect(false))
 	if err != nil {
 		t.Fatal(err)
 	}
