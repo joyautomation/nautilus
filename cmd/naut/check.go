@@ -711,7 +711,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	// exist; then the screen is built, as naut run would serve it, so a
 	// component that won't compile (or would throw when it mounts) is an
 	// error here and not a blank box on the operator's screen.
-	mreports, merrs, mwarns := proj.CheckMimics(os.DirFS(dir))
+	mreports, merrs, mwarns := proj.CheckMimics(os.DirFS(dir), manifestName == project.ManifestName)
 	for _, m := range merrs {
 		errs++
 		fmt.Printf("%s: error: %s\n", loc.file, m)

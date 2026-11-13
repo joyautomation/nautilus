@@ -39,7 +39,7 @@ tags:
 	if err != nil {
 		t.Fatal(err)
 	}
-	reports, errs, warns := p.CheckMimics(fsys)
+	reports, errs, warns := p.CheckMimics(fsys, true)
 	all := strings.Join(errs, "\n")
 	for _, want := range []string{
 		"equipment F1's busy binds !F1_Busy, which the project doesn't declare",
@@ -61,5 +61,23 @@ tags:
 	}
 	if len(reports) != 1 || reports[0].File != "screens/gallery.mimic.json" {
 		t.Errorf("reports = %+v (a nested project's mimic is its own)", reports)
+	}
+}
+
+// Against a second manifest (-m), a tag it leaves out is a warning.
+func TestCheckMimicsAgainstAnotherManifest(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"line.yaml":       file("name: p\ntasks:\n  - program: main.st\n    scan: 100ms\n"),
+		"main.st":         file("PROGRAM main\nEND_PROGRAM\n"),
+		"skid.mimic.json": file(`{"equipment":[{"id":"V","component":"Valve","x":0,"y":0,"bind":{"openPct":"XV1_Open"}}]}`),
+	}
+	p, err := Load(fsys, "line.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, false)
+	if len(errs) != 0 || len(warns) != 1 || !strings.Contains(warns[0], "this manifest doesn't declare") {
+		t.Errorf("errs = %q, warns = %q", errs, warns)
 	}
 }

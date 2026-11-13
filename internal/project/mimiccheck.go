@@ -57,7 +57,11 @@ type pipeEnd struct {
 // component is the kit's or the project's own {Name}.svelte; equipment ids
 // are unique; each pipe end names equipment that's there, at a port it has
 // (the kit's, or its {Name}.component.json's).
-func (p *Project) CheckMimics(fsys fs.FS) ([]MimicReport, []string, []string) {
+//
+// strict is false for a manifest other than the project's own (-m line.yaml):
+// a screen is drawn for the project's nautilus.yaml, and a second manifest
+// may leave tags it binds out on purpose, so those are warnings there.
+func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string, []string) {
 	tags := map[string]runtime.TagDef{}
 	for _, d := range p.Runtime.Tags {
 		tags[d.Name] = d
@@ -86,7 +90,11 @@ func (p *Project) CheckMimics(fsys fs.FS) ([]MimicReport, []string, []string) {
 				return
 			}
 			if _, ok := tags[root]; !ok {
-				say("%s binds %s, which the project doesn't declare%s", where, name, nearest(root, tags))
+				if strict {
+					say("%s binds %s, which the project doesn't declare%s", where, name, nearest(root, tags))
+				} else {
+					warns = append(warns, fmt.Sprintf("%s: %s binds %s, which this manifest doesn't declare (the screen shows nothing for it here)", f, where, name))
+				}
 			}
 		}
 		ports := map[string][]string{} // equipment id -> its ports
