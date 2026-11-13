@@ -39,6 +39,10 @@
 
 	let lastFrame: string | undefined;
 	let lastIds = new Set<string>();
+	// Whether this frame has had its opening viewport. A file that fails to
+	// parse when it opens has no nodes to frame; its first model must still
+	// get one even though the frame key did not change.
+	let framed = false;
 
 	// Node sizes arrive a frame or two after the nodes do: wait for them
 	// (a bounds with no size), but never forever.
@@ -55,6 +59,7 @@
 		const r = pane();
 		const ids = getNodes().map((n) => n.id);
 		if (!r || !ids.length) return;
+		framed = true;
 		const v = openViewport(getNodesBounds(ids), { width: r.width, height: r.height }, { fit: getViewportForBounds });
 		void setViewport({ x: v.x, y: v.y, zoom: v.zoom });
 	}
@@ -71,7 +76,8 @@
 		const frame = frameKey;
 		const ids = new Set(key ? key.split('|') : []);
 		const added = [...ids].filter((id) => !lastIds.has(id));
-		const first = lastFrame === undefined || frame !== lastFrame;
+		if (frame !== lastFrame) framed = false;
+		const first = !framed && ids.size > 0;
 		lastIds = ids;
 		lastFrame = frame;
 		if (first) whenMeasured(null, openFrame);

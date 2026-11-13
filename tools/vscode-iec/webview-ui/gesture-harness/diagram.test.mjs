@@ -783,6 +783,45 @@ test('FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too', async (
 	});
 });
 
+test('FBD zoom: a parse error and the model after it keep the user\'s zoom', async () => {
+	// The opening frame is keyed on the file. It used to be keyed on the
+	// title, which an error message shortens to the file name and the next
+	// model lengthens again ("Main — n.fbd"): that flip refitted the view.
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
+		const scale = () => b.eval(`new DOMMatrix(getComputedStyle(document.querySelector('.svelte-flow__viewport')).transform).a`);
+		const z0 = await scale();
+		await clickAt(b, await center(b, node('c:Y')));
+		await key(b, '-', 'Minus', 189, 2);
+		await settled(b);
+		await key(b, '-', 'Minus', 189, 2);
+		await settled(b);
+		const z1 = await scale();
+		assert.ok(z1 < z0 * 0.95, `zoomed out ${z0} → ${z1}`);
+		await deliver(b, { type: 'error', message: 'n.fbd:3:1: expected an expression', title: 'n.fbd' });
+		await settled(b);
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
+		await settled(b);
+		assert.ok(Math.abs((await scale()) - z1) < 0.01, `zoom kept at ${z1}, not refitted (now ${await scale()})`);
+	});
+});
+
+test('FBD zoom: a file that fails to parse on open still gets its opening frame', async () => {
+	let fitted;
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
+		fitted = await b.eval(`new DOMMatrix(getComputedStyle(document.querySelector('.svelte-flow__viewport')).transform).a`);
+	});
+	await withPage(async (b) => {
+		await deliver(b, { type: 'error', message: 'n.fbd:3:1: expected an expression', title: 'n.fbd' });
+		await settled(b);
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
+		await settled(b);
+		const z = await b.eval(`new DOMMatrix(getComputedStyle(document.querySelector('.svelte-flow__viewport')).transform).a`);
+		assert.ok(Math.abs(z - fitted) < 0.01, `opening frame ${fitted}, got ${z}`);
+	});
+});
+
 test('FBD palette: "function block" places a PID with every input open, next free name, output refs in the hint', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD_PID, title: 'n.fbd' });
