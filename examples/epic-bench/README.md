@@ -76,6 +76,32 @@ off the processor over a second OptoMMP connection every 100 ms went
 `1100000111110000001111100001111110000011` — the 1 Hz heartbeat — and
 scratchpad float 0 held the ICTD reading (23.0 °C).
 
+## The 3D screen
+
+`hmi/` is a small SvelteKit page that draws the chassis itself (the
+GRV-EPIC-PR1 with its screen closed and the four modules in slot order)
+and lights each channel from its tag: the 24 inputs, the 12 outputs with
+the heartbeat on 11, and a mark per analog channel, amber where the
+controller reports the channel bad (nothing wired to it). The two wired
+readings sit in a tag over their modules; a side panel has the driver's
+status and the scan times. Hovering a channel names its tag. It only
+reads: `/api/stream`, nothing written.
+
+```sh
+cd hmi
+npm install
+npm run build                                          # → hmi/build, which server.hmi serves at /
+CONTROLLER_URL=http://192.168.82.243:8086 npm run dev  # or work on it against a running controller
+```
+
+The model is plain Threlte (`hmi/src/lib/Epic.svelte`) placed inside
+`SceneView` from `@joyautomation/nautilus-hmi-3d`, which supplies the
+canvas, the orbit camera and the tags. It is not a `*.scene.json`, so
+`naut check` does not hold its tag names to the project; they are the
+import's names, built from the module table at the top of that file. The
+camera refits when the window changes shape, and the panel moves under
+the model in a square or tall window.
+
 ## On the EPIC itself
 
 The same project runs *on* the processor. The EPIC is a quad-core ARMv7

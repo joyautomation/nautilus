@@ -187,6 +187,35 @@ shim's watchdog dropped the frame) the mirrored outputs stay off until
 `lib/io_hold.st`. That is tested in virtual time only, not yet on the
 controller.
 
+## The 3D screen
+
+`hmi/` is a small SvelteKit page that draws the station itself: the
+AXC F 2152 and the four Smart Elements in their backplane, two over two
+(slots 1 and 2 down the left column, 3 and 4 down the right, the way
+the AXL F BP SE4 is marked). Each of the DO16's and DI16's sixteen lamps
+is lit from its tag (lamp 01 is `DO_00`, the heartbeat is lamp 16), and
+the AI4 U shows what its four words say: `0x8020` reads as "supply
+missing", with the element's E lamp red. A side panel has the driver's
+status and the scan times; the driver's status tags (`AXC__Online` and
+the two counters) appear there once the deployed project has them.
+Hovering a channel names its tag. It only reads: `/api/stream`, nothing
+written.
+
+```sh
+cd hmi
+npm install
+npm run build                                          # → hmi/build; do this before `naut build`, which embeds it
+CONTROLLER_URL=http://192.168.82.216:8080 npm run dev  # or work on it against the controller
+```
+
+The model is plain Threlte (`hmi/src/lib/Axc.svelte`) placed inside
+`SceneView` from `@joyautomation/nautilus-hmi-3d`. It is not a
+`*.scene.json`, so `naut check` does not hold its tag names to the
+project. The Smart Elements' faces follow the product photos; the
+controller's face (lamps, sockets, lettering) is drawn from memory of
+the part and only UL and D are driven: UL because the controller is
+serving the page, D from the driver's status.
+
 ## Timing, honestly
 
 The firmware refreshes the Axioline frames every 500 µs. On `transport:
