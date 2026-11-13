@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A project component fills its box.** `<Mimic>` gives equipment placed
+  from `registry` a box of the document's `width` and `height`, so a
+  component drawn at `width: 100%; height: 100%` (an `<svg>` with a
+  `viewBox`) fills it instead of collapsing to the browser's default
+  300 × 150. Built-ins size themselves from those props, as before.
+
 ### Added
 
 - **Operable mimics.** `<Mimic write={client.writeTag}>` hands every piece

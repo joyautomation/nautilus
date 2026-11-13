@@ -14,7 +14,7 @@
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import Pipe from './Pipe.svelte';
-	import { makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -91,6 +91,13 @@
 	};
 
 	const drawLook = $derived(look ?? doc.look ?? 'isa101');
+	/** A project component (one passed in `registry`, not a kit built-in) gets
+	 * a box of the document's width and height, so a drawing sized to 100%
+	 * fills it; the built-ins size themselves from those props. */
+	const customBox = (eq: MimicEquipment): string =>
+		eq.component in BUILTIN_PORTS
+			? ''
+			: (eq.width ? `; width: ${eq.width}px` : '') + (eq.height ? `; height: ${eq.height}px` : '');
 	const eqProps = (eq: MimicEquipment): Record<string, unknown> => ({
 		look: drawLook,
 		...(eq.width !== undefined ? { width: eq.width } : {}),
@@ -230,7 +237,7 @@
 						aria-pressed={eq.id === selected}
 						onpointerleave={() => fadeOut(eq.id)}
 						onblur={() => fadeOut(eq.id)}
-						style="left: {eq.x}px; top: {eq.y}px"
+						style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}"
 						aria-label={eq.label ?? eq.id}
 						use:regEl={eq.id}
 						onclick={() => onequipmentclick(eq)}
@@ -238,7 +245,7 @@
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</button>
 				{:else}
-					<div class="eq" class:behind={eq.behind} style="left: {eq.x}px; top: {eq.y}px" use:regEl={eq.id}>
+					<div class="eq" class:behind={eq.behind} style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}" use:regEl={eq.id}>
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</div>
 				{/if}
