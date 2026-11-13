@@ -1107,23 +1107,6 @@
 					{@render series(r, lay, [...br.path, li].join('.'))}
 				</g>
 			{/each}
-			{#if editable && isSel(r.name, br.path)}
-				{#each br.legYs as y, li (li)}
-					<g
-						class="leg-del"
-						role="button"
-						aria-label="delete leg {li + 1} of {br.legYs.length}"
-						data-kind="leg-del"
-						data-leg={li}
-						transform="translate({br.x + 8 - L.BRANCH_OUTER_GAP / 2}, {y + 12})"
-						use:legDelInteract={{ rung: r.name, br, leg: li }}
-					>
-						<title>delete leg {li + 1}{br.legYs.length <= 2 ? ' (the branch becomes a plain series)' : ''}</title>
-						<circle r="6.5" />
-						<path d="M -2.6 -2.6 L 2.6 2.6 M 2.6 -2.6 L -2.6 2.6" />
-					</g>
-				{/each}
-			{/if}
 		</g>
 	{/each}
 {/snippet}
@@ -1315,6 +1298,29 @@
 							<circle r="6.5" class="spot-dot" />
 							<text y="3.9" text-anchor="middle" class="spot-plus">+</text>
 						</g>
+					{/each}
+					<!-- A selected branch's leg ✕ handles, drawn after the ⊕ spots:
+					     leg 0's ✕ sits just below the insert spot ahead of the
+					     branch, and the one drawn last takes the click. -->
+					{#each lay.branches as br (br.path.join('.'))}
+						{#if isSel(r.name, br.path)}
+							{#each br.legYs as y, li (li)}
+								<g
+									class="leg-del"
+									role="button"
+									aria-label="delete leg {li + 1} of {br.legYs.length}"
+									data-kind="leg-del"
+									data-branch={`branch:${r.name}:${br.path.join('.')}`}
+									data-leg={li}
+									transform="translate({br.x + 8 - L.BRANCH_OUTER_GAP / 2}, {y + 12})"
+									use:legDelInteract={{ rung: r.name, br, leg: li }}
+								>
+									<title>delete leg {li + 1}{br.legYs.length <= 2 ? ' (the branch becomes a plain series)' : ''}</title>
+									<circle r="6.5" />
+									<path d="M -2.6 -2.6 L 2.6 2.6 M 2.6 -2.6 L -2.6 2.6" />
+								</g>
+							{/each}
+						{/if}
 					{/each}
 				{/if}
 			</svg>

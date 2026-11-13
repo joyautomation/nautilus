@@ -7,7 +7,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 Works with naut 0.20.0: Toggle Bit and the diagram live actions use the
 controller's tag API the extension already writes through. The AGENTS.md
-offer needs the next naut, the first with `naut agents`.
+offer needs the next naut, the first with `naut agents`. Deleting one leg
+of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
+`naut ld edit` has `deleteLeg`; an older one refuses the edit.
 
 ### Added
 
