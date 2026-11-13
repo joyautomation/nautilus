@@ -754,6 +754,11 @@
 		drag?.kind === 'resize' && drag.id === eq.id
 			? { width: drag.w, height: drag.h }
 			: (settled?.sizes[eq.id] ?? { width: eq.width, height: eq.height });
+	/** A project component's box takes the document's width and height, so a
+	 * drawing sized to 100% fills it (and a resize drag resizes it) the way
+	 * the built-ins, which size themselves from those props, already do. */
+	const customBox = (size: { width?: number; height?: number }): string =>
+		(size.width ? `; width: ${size.width}px` : '') + (size.height ? `; height: ${size.height}px` : '');
 	/** The canvas size as drawn: a live edge drag, else a committed one the
 	 * doc hasn't echoed yet, else the doc's own. */
 	const canvasSize = $derived(
@@ -1795,6 +1800,7 @@
 			{#each doc.equipment ?? [] as eq (eq.id)}
 				{@const C = registry[eq.component]}
 				{@const pos = dispEq(eq)}
+				{@const box = eq.component in registry ? '' : customBox(dispSize(eq))}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
 					class="eq"
@@ -1804,7 +1810,7 @@
 					class:dragging={drag?.kind === 'eq' && drag.id === eq.id}
 					class:portsedit={ed.portsEdit?.id === eq.id}
 					class:behind={eq.behind}
-					style="left: {pos.x}px; top: {pos.y}px"
+					style="left: {pos.x}px; top: {pos.y}px{box}"
 					use:regEl={eq.id}
 					onpointerdown={(e) => eqDown(e, eq)}
 					ondblclick={(e) => eqDblclick(e, eq)}

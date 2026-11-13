@@ -83,6 +83,12 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Fixed
 
+- **Mimic editor: a project component fills its box.** A `*.svelte`
+  component placed on a mimic gets a box of the document's `width` and
+  `height` (and follows a resize drag), so one drawn at 100% fills it
+  instead of rendering 300 × 150 in the corner. The Operator screens guide
+  now documents pipe points, ports and `{Name}.component.json`, and walks
+  through a P&ID.
 - **Undo, redo and save keep working in a diagram preview.** After an
   undo or redo in an FBD, ladder or SFC preview, the preview sometimes
   stayed the active tab without holding the keyboard: every Ctrl+Z,

@@ -54,16 +54,43 @@ The same document renders in a SvelteKit HMI through the
 
 ## Built-in equipment
 
-| Component | Props to bind |
-|---|---|
-| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`) |
-| `Pump` | `running`, `speedPct` |
-| `Valve` | `openPct` |
-| `Heater` | `powerPct` |
-| `Gauge` | `value`, `setpoint` |
-| `Sparkline` | `values` |
-| `CommandButton` | `held`, `disabled`; the tag it writes is the `tag` prop |
-| `WriteToggle` | `value`; the tag it writes is the `tag` prop |
+| Component | Props to bind | Ports |
+|---|---|---|
+| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`) | `top`, `left`, `right`, `bottom` |
+| `Pump` | `running`, `speedPct` | `in`, `out` |
+| `Valve` | `openPct` | `in`, `out` |
+| `Heater` | `powerPct` | |
+| `Gauge` | `value`, `setpoint` | |
+| `Sparkline` | `values` | |
+| `CommandButton` | `held`, `disabled`, `disabledReason`; the tag it writes is the `tag` prop | |
+| `WriteToggle` | `value`; the tag it writes is the `tag` prop | |
+
+## Pipes and ports
+
+A pipe is a polyline in canvas units, the same units as `x` and `y`:
+
+```json
+{ "id": "header", "points": [[300, 820], [1500, 820]],
+  "bind": { "flowing": "P501_Running" }, "color": "#3e6f96" }
+```
+
+Anchor an end to a piece of equipment instead with `from` or `to`,
+`{ "equip": "<id>", "port": "<port name>" }`. The end then follows the
+equipment wherever it moves, and `points` holds only the bends in between
+(it may be empty: `[]`). `routing: "orthogonal"` turns each pair of points
+into a right-angled L; without it the segments are straight.
+
+- **`flowing`** (a BOOL, or a number above zero) animates the flow in the
+  direction the points run, so draw a pipe from where the water comes from.
+- **`rate`** sets how fast, as a fraction of full flow, 0 to 1. Bind it to
+  a tag that holds that fraction (a flow over its design flow, computed in
+  the program), not to the flow in engineering units.
+- **`color`** is the pipe's flow colour; the wall stays the screen's grey.
+
+A port is a named point on an equipment's box, as fractions of it: `x: 0,
+y: 0.5` is the middle of the left edge. The built-ins have the ports in the
+table above. A component of your own has none until its
+`{Name}.component.json` gives it some (below).
 
 ## Controls that write
 
@@ -90,10 +117,15 @@ live values off, the whole piece is the editor's to select and drag again.
 
 Any `*.svelte` component in the project can be placed by name, next to the
 built-ins: the editor finds it, compiles it and renders it on the canvas.
+This is how a screen gets what the built-ins don't draw: a filter cell in
+section, a valve with its limit switches, a whole gallery.
+
 It is an ordinary Svelte 5 component: its props are what `props` and
 `bind` set, plus these, which every piece of equipment is given:
 
-- `width`, `height` and `label`, from the document;
+- `width`, `height` and `label`, from the document. The equipment's box is
+  that size, so a component that draws to `width: 100%; height: 100%` (an
+  `<svg>` with a `viewBox`, say) fills it and scales when it is resized;
 - `look`, the screen's look;
 - `write(name, value)`, which writes one tag on the controller and resolves
   to `null` once it landed, or to the reason it didn't.
@@ -124,6 +156,42 @@ So a filter cell can carry its own Backwash button, placed with
 ```
 
 Import the kit's helpers and drawings from `@joyautomation/nautilus-hmi`.
-A `{Name}.component.json` beside the component holds the sample props its
-preview shows and its pipe ports. Open the `.svelte` and press the preview
-button in the editor title to see it render as you type.
+
+A `{Name}.component.json` beside the component gives it pipe ports and the
+sample props its preview renders with:
+
+```json
+{
+  "ports": [
+    { "name": "influent", "x": 0.5, "y": 0 },
+    { "name": "effluent", "x": 0.25, "y": 1 },
+    { "name": "air", "x": 0, "y": 0.85 }
+  ],
+  "preview": { "label": "F-2", "level": 5.8, "state": 1 }
+}
+```
+
+Each port's `x` and `y` are fractions of the box. With `"part": "<name>"`
+they are fractions of an element the component marks
+`data-part="<name>"` instead, so the port stays on that part at any size.
+Open the `.svelte` and press the preview button in the editor title to see
+it render with the preview props as you type; there, you can also drag the
+ports into place.
+
+## A P&ID, step by step
+
+1. **Lay out the process** with equipment: built-ins where they fit, your
+   own components where they don't (one per unit you repeat, like a filter
+   cell, placed once per unit with its tags in `bind`).
+2. **Give each component its ports** in its `.component.json`, where the
+   plant's pipes meet it.
+3. **Run the pipes** between ports, anchored at both ends, in the
+   direction the process flows, and bind `flowing` to what proves the flow
+   (a pump running, a valve's open limit switch).
+4. **Add the readouts** as `labels` with `bind`, beside what they measure,
+   with the instrument's tag number in `text`.
+5. **Put the controls on the drawing** next to what they command, with
+   `disabled` (and `disabledReason`) bound so a command the program would
+   ignore can't be pressed.
+6. **Run it**: `naut run`, then open the `*.mimic.json` in VS Code with
+   live values on, and operate it.
