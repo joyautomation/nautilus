@@ -13,6 +13,12 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Added
 
+- **The component preview in the playground.** A `{Name}.svelte` (or its
+  `.component.json`) opens its live preview in the browser too, compiled
+  with the playground's Svelte as you type, with its sample props and
+  ports. **Edit Component Ports…** works there as well. Both were
+  desktop-only, and the preview button said its command was not found.
+
 - **Operator screens you can operate.** With live values on and a
   controller running, a mimic's controls write to it: the kit's
   `CommandButton` (a momentary pushbutton) and `WriteToggle` (a lamp and a
@@ -82,6 +88,16 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
   declarations (and the block instances rungs declare).
 
 ### Fixed
+
+- **One broken component no longer blanks a whole screen.** A project
+  component that threw when it mounted stopped the rest of the mimic from
+  drawing, with nothing said. It now shows why in its own box, and every
+  other component draws.
+- **A prop named `state` beside `$state(...)` is caught at compile.**
+  Svelte reads `$state` as a store subscription to that prop, and the
+  component threw on every mount. The build stops on Svelte's own warning
+  (`store_rune_conflict`) and shows it, with the file and line, where the
+  component goes.
 
 - **Mimic editor: a project component fills its box.** A `*.svelte`
   component placed on a mimic gets a box of the document's `width` and

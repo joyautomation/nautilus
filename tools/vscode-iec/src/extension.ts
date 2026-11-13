@@ -335,9 +335,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 /** The HMI editors (mimic, scene, kind), user components and their
  * previews, page preview and the new-project wizard. The web build has the
- * mimic editor with the kit's built-in equipment (src/web/userComponents.ts);
- * the rest compile project code with esbuild, run npm and write the disk,
- * so they are not in the web build yet. */
+ * mimic editor, the component preview and its port editor, compiling with
+ * the playground's Svelte (src/web/userComponents.ts, web/previewBuild.ts);
+ * the rest run npm or write the disk, so they are not in the web build yet. */
 function registerHmiAndProjectTools(context: vscode.ExtensionContext): void {
   // User-authored Svelte components rendered for real inside the mimic/
   // component preview webviews — gated on workspace trust (it compiles and
@@ -352,6 +352,17 @@ function registerHmiAndProjectTools(context: vscode.ExtensionContext): void {
   // doc is spatial-first; the JSON is an "Open With → Text Editor" away).
   const mimic = new MimicEditorProvider(context, userComponents);
   context.subscriptions.push(mimic.register());
+  // "Open Component Preview": a `{Name}.svelte` rendered live beside its
+  // text editor, compiled from the buffer as you type; also the editor for
+  // a `{Name}.component.json` — opens as JSON, its preview button lands here
+  // (componentPreview.ts). In the browser too: there it compiles
+  // with the playground's Svelte (web/previewBuild.ts).
+  context.subscriptions.push(registerComponentPreview(context, userComponents, mimic.componentIndex));
+  // "Edit Component Ports…": pick any component (built-in or custom) and
+  // edit its ports on its render in the component preview pane — shares the
+  // mimic editor's workspace-wide sidecar index so a sidecar written there
+  // shows up in every open mimic panel immediately.
+  context.subscriptions.push(registerEditComponentPortsCommand(mimic.componentIndex));
   if (IS_WEB) return;
   // "*.scene.json" opens as the 3D scene editor by default, for the same
   // reason (docs/design/spatial-hmi.md §3g).
@@ -359,16 +370,6 @@ function registerHmiAndProjectTools(context: vscode.ExtensionContext): void {
   // "*.kind.json" — a 3D kind in a file of its own — opens as the kind on
   // a turntable with its drives (§3g, slice 2).
   context.subscriptions.push(new KindEditorProvider(context).register());
-  // "Edit Component Ports…": pick any component (built-in or custom) and
-  // edit its ports on its render in the component preview pane — shares the
-  // mimic editor's workspace-wide sidecar index so a sidecar written there
-  // shows up in every open mimic panel immediately.
-  context.subscriptions.push(registerEditComponentPortsCommand(mimic.componentIndex));
-  // "Open Component Preview": a `{Name}.svelte` rendered live beside its
-  // text editor, compiled from the buffer as you type; also the editor for
-  // a `{Name}.component.json` — opens as JSON, its preview button lands here
-  // (componentPreview.ts).
-  context.subscriptions.push(registerComponentPreview(context, userComponents, mimic.componentIndex));
   // "Copy Kit Component to Project…": start a symbol of your own from one
   // the kit ships — its .svelte copied into src/lib, sidecar seeded with
   // the kit's ports, opened with the preview beside (copyKitComponent.ts).

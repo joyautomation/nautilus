@@ -5,6 +5,7 @@
 //   ./platform                     -> src/web/platform.ts   (IS_WEB, the playground's Run)
 //   ./cli                          -> src/web/cli.ts        (naut is the playground engine)
 //   ./userComponents               -> src/web/userComponents.ts (mimics draw the kit's built-ins)
+//   ./previewBuild                 -> src/web/previewBuild.ts (the component preview, compiled in the browser)
 //   child_process                  -> src/web/child_process.ts  (execFile(naut, ...) -> engine exec)
 //   http, https                    -> src/web/http.ts       (the SSE stream -> engine stream)
 //   vscode-languageclient/node     -> src/web/languageclient.ts (naut lsp in the engine)
@@ -37,7 +38,7 @@ const browserSwaps = {
   setup(build) {
     // Relative modules swapped whole: the platform switch, the CLI and the
     // mimic editor's user components.
-    build.onResolve({ filter: /^\.\/(platform|cli|userComponents)$/ }, (args) => {
+    build.onResolve({ filter: /^\.\/(platform|cli|userComponents|previewBuild)$/ }, (args) => {
       if (args.importer.includes(`${path.sep}src${path.sep}web${path.sep}`)) return;
       return { path: web(args.path.slice(2) + ".ts") };
     });

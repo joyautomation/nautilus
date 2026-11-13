@@ -29,7 +29,9 @@ import {
   buildEntrySource,
   describeError,
   EMPTY_BUNDLE_JS,
+  fatalWarning,
   type BuildResult,
+  type CompilerWarning,
   type ComponentDiagnostic,
 } from "./userComponentEntry";
 
@@ -37,7 +39,7 @@ import {
  * against the real package so this file has no compile-time dependency on
  * whichever svelte version a user's project happens to pin. */
 type SvelteCompilerModule = {
-  compile: (source: string, options: Record<string, unknown>) => { js: { code: string } };
+  compile: (source: string, options: Record<string, unknown>) => { js: { code: string }; warnings?: CompilerWarning[] };
   compileModule: (source: string, options: Record<string, unknown>) => { js: { code: string } };
 };
 
@@ -94,6 +96,8 @@ async function compileSvelteFile(
     result = { code: out.js.code, resolveDir };
   } else {
     const out = compiler.compile(source, { filename: absPath, generate: "client", css: "injected" });
+    const fatal = fatalWarning(absPath, out.warnings);
+    if (fatal) throw fatal;
     result = { code: out.js.code, resolveDir };
   }
   cache.set(absPath, result);

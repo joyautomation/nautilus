@@ -24,6 +24,7 @@ import {
   buildEntrySource,
   describeError,
   EMPTY_BUNDLE_JS,
+  fatalWarning,
   type BuildResult,
   type ComponentDiagnostic,
 } from "../userComponentEntry";
@@ -94,7 +95,10 @@ function compileFile(path: string, text: string): string {
 
 function compileOne(path: string, text: string): string {
   if (path.endsWith(".svelte")) {
-    return toCommonJs(compile(text, { filename: path, generate: "client", css: "injected" }).js.code, path);
+    const out = compile(text, { filename: path, generate: "client", css: "injected" });
+    const fatal = fatalWarning(path, out.warnings);
+    if (fatal) throw fatal;
+    return toCommonJs(out.js.code, path);
   }
   if (/\.svelte\.(js|ts)$/.test(path)) {
     const js = path.endsWith(".ts") ? stripTypes(text, path) : text;
