@@ -76,7 +76,7 @@ func TestBuildShipsLibDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "out")
-	if _, err := emitBinary(runner, libDirFixture, out, "", nil); err != nil {
+	if _, err := emitBinary(runner, libDirFixture, out, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.Open(out)

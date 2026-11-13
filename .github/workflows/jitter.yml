@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - run: go build -o jitter ./tools/jitter
       - name: A — fast tasks alone
         run: ./jitter -duration "$DURATION" -slow 0 -alloc 0 -out out/A-fast-only -note "GitHub runner ${{ runner.name }} (${{ runner.os }} ${{ runner.arch }})"

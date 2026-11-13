@@ -176,7 +176,7 @@ func TestBuildEmbedRoundTrip(t *testing.T) {
 	os.WriteFile(filepath.Join(proj, "program.st"), []byte("PROGRAM P\nEND_PROGRAM"), 0o644)
 
 	out := filepath.Join(dir, "out")
-	if _, err := emitBinary(runner, proj, out, "", nil); err != nil {
+	if _, err := emitBinary(runner, proj, out, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -220,7 +220,7 @@ func TestBuildEmbedRoundTrip(t *testing.T) {
 	// Rebuild from the BUILT binary with a changed project.
 	os.WriteFile(filepath.Join(proj, "program.st"), []byte("PROGRAM P2\nEND_PROGRAM"), 0o644)
 	out2 := filepath.Join(dir, "out2")
-	if _, err := emitBinary(out, proj, out2, "", nil); err != nil {
+	if _, err := emitBinary(out, proj, out2, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	prefix2, files2 := read(out2)
@@ -249,7 +249,7 @@ func TestBuildEmbedsHistory(t *testing.T) {
 
 	hist := []byte(`{"built":"abc123","commits":[{"sha":"abc123","short":"abc123x","subject":"s"}]}`)
 	out := filepath.Join(dir, "out")
-	if _, err := emitBinary(runner, proj, out, "", hist); err != nil {
+	if _, err := emitBinary(runner, proj, out, "", hist, nil); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.Open(out)
@@ -311,7 +311,7 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 	}
 
 	out := filepath.Join(dir, "out")
-	archiveBytes, err := emitBinary(runner, proj, out, "", nil)
+	archiveBytes, err := emitBinary(runner, proj, out, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestBuildEmbedsHMIAndBuiltBinaryServesIt(t *testing.T) {
 	}
 
 	out := filepath.Join(dir, "out")
-	if _, err := emitBinary(runner, proj, out, "", nil); err != nil {
+	if _, err := emitBinary(runner, proj, out, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.Open(out)

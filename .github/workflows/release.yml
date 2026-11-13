@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0 # GoReleaser needs full history + tags
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
       # Pin the current and previous CLI tags: a commit can also carry a
       # vscode-v* tag, and GoReleaser would otherwise consider it for either.
       - name: CLI tags for GoReleaser

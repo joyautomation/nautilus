@@ -19,7 +19,7 @@ import (
 func TestHMIBannerSuffixNoHMIConfigured(t *testing.T) {
 	var stderr bytes.Buffer
 	proj := &project.Project{}
-	suffix := hmiBannerSuffix(proj, "localhost:8080", &stderr)
+	suffix := hmiBannerSuffix(proj, "localhost:8080", "", &stderr)
 	if suffix != " — dashboard + tag API on http://localhost:8080" {
 		t.Fatalf("suffix = %q", suffix)
 	}
@@ -33,7 +33,7 @@ func TestHMIBannerSuffixNoHMIConfigured(t *testing.T) {
 func TestHMIBannerSuffixHMIPresent(t *testing.T) {
 	var stderr bytes.Buffer
 	proj := &project.Project{HMIDir: "hmi/build"}
-	suffix := hmiBannerSuffix(proj, "localhost:8080", &stderr)
+	suffix := hmiBannerSuffix(proj, "localhost:8080", "", &stderr)
 	if suffix != " — hmi (hmi/build) + tag API on http://localhost:8080" {
 		t.Fatalf("suffix = %q", suffix)
 	}
@@ -48,7 +48,7 @@ func TestHMIBannerSuffixHMIPresent(t *testing.T) {
 func TestHMIBannerSuffixHMIMissingWarns(t *testing.T) {
 	var stderr bytes.Buffer
 	proj := &project.Project{HMIDir: "hmi/build", HMIMissing: true}
-	suffix := hmiBannerSuffix(proj, "localhost:8080", &stderr)
+	suffix := hmiBannerSuffix(proj, "localhost:8080", "", &stderr)
 	if suffix != " — dashboard + tag API on http://localhost:8080" {
 		t.Fatalf("suffix = %q, want the dashboard suffix (the built-in dashboard keeps \"/\")", suffix)
 	}

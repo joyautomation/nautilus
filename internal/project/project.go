@@ -515,6 +515,15 @@ type Project struct {
 	// own one-line "not built yet" warning naming HMIDir.
 	HMIMissing bool
 
+	// HMIApp is an app naut builds itself (the caller does, with the
+	// project's directory: internal/hmibuild): server.hmi names it (its
+	// src/routes in it), or names its build output, which isn't there.
+	HMIApp string
+
+	// HMIScreens is a project with no server.hmi and *.mimic.json in it:
+	// the caller builds the default app, a page per mimic.
+	HMIScreens bool
+
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
 	// load projects too, and must not touch a cluster to do it.
@@ -867,7 +876,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		projName = "nautilus"
 	}
 	var hmiFS fs.FS
-	var hmiDir string
+	var hmiDir, hmiApp string
 	var hmiMissing bool
 	if m.Server.HMI != "" {
 		hmiPath, err := projectPath(m.Server.HMI)
@@ -892,12 +901,27 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			return nil, fmt.Errorf("server.hmi: %w", statErr)
 		case !st.IsDir():
 			return nil, fmt.Errorf("server.hmi: %s: not a directory (run the HMI's own build first, e.g. `npm run build` in its project)", hmiPath)
+		case isApp(fsys, hmiPath):
+			// the app itself (src/routes in it): naut builds it
+			hmiApp = hmiPath
 		default:
 			if hmiFS, err = fs.Sub(fsys, hmiPath); err != nil {
 				return nil, fmt.Errorf("server.hmi: %w", err)
 			}
 		}
+		// an app's own build output that isn't there (hmi/build before any
+		// `npm run build`): naut builds the app it comes from instead
+		if hmiMissing && isApp(fsys, path.Dir(hmiPath)) {
+			hmiApp, hmiMissing = path.Dir(hmiPath), false
+		}
 	}
+	// A controller `naut build` made carries its HMI already built.
+	if st, err := fs.Stat(fsys, BuiltHMIDir+"/index.html"); err == nil && !st.IsDir() {
+		if sub, err := fs.Sub(fsys, BuiltHMIDir); err == nil {
+			hmiFS, hmiApp, hmiMissing = sub, "", false
+		}
+	}
+	screens := m.Server.HMI == "" && hmiFS == nil && hasMimics(fsys)
 	return &Project{
 		Notices: platformNotices(m),
 		Name:    projName,
@@ -917,7 +941,43 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		Alarms:     m.Alarms,
 		HMIDir:     hmiDir,
 		HMIMissing: hmiMissing,
+		HMIApp:     hmiApp,
+		HMIScreens: screens,
 	}, nil
+}
+
+// BuiltHMIDir is where `naut build` puts the HMI it built into a
+// controller's embedded project: served as it is, never rebuilt.
+const BuiltHMIDir = ".naut/hmi"
+
+// isApp reports whether dir is a SvelteKit-style app naut builds itself.
+func isApp(fsys fs.FS, dir string) bool {
+	st, err := fs.Stat(fsys, path.Join(dir, "src", "routes"))
+	return err == nil && st.IsDir()
+}
+
+// hasMimics reports whether the project has a *.mimic.json outside
+// node_modules, dot and build directories.
+func hasMimics(fsys fs.FS) bool {
+	found := false
+	_ = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || found {
+			return fs.SkipAll
+		}
+		if d.IsDir() {
+			n := d.Name()
+			if p != "." && (strings.HasPrefix(n, ".") || n == "node_modules" || n == "build" || n == "dist") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ".mimic.json") {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // libraries composes the project's prelude: every root-level file with no
