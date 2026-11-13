@@ -31,7 +31,7 @@ type EditOp struct {
 	Path []int  `json:"path,omitempty"`
 	// Paths is wrapOr's selection: two or more elements of ONE series.
 	Paths [][]int `json:"paths,omitempty"`
-	Coil *int   `json:"coil,omitempty"`
+	Coil  *int    `json:"coil,omitempty"`
 	// setRef / insert payloads
 	Ref    string `json:"ref,omitempty"`
 	Neg    bool   `json:"neg,omitempty"`
@@ -286,6 +286,10 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 			return nil, fmt.Errorf("ld edit: %s is not a branch", el.Kind)
 		}
 		el.Legs = append(el.Legs, []Element{{Kind: "contact", Ref: "_"}})
+	case "deleteLeg":
+		if err := opDeleteLeg(r, op); err != nil {
+			return nil, err
+		}
 	case "wrapBranch":
 		// Wrap the selected series element in a parallel branch: the element
 		// becomes leg one, a `_` placeholder opens leg two (the classic
@@ -871,6 +875,45 @@ func opDelete(r *Rung, op EditOp) error {
 		return fmt.Errorf("ld edit: path %v out of range", op.Path)
 	}
 	*series = append((*series)[:i], (*series)[i+1:]...)
+	return nil
+}
+
+// opDeleteLeg removes leg op.Index of the branch at op.Path. A branch
+// left with one leg is no longer an OR: it collapses, and that leg's
+// elements take the branch's place in the parent series (`A [ B | C ] D`,
+// deleting leg 1 → `A B D`).
+func opDeleteLeg(r *Rung, op EditOp) error {
+	if op.Coil != nil || len(op.Path) == 0 {
+		return fmt.Errorf("ld edit: deleteLeg needs a branch path")
+	}
+	el, err := locate(r, op)
+	if err != nil {
+		return err
+	}
+	if el.Kind != "branch" {
+		return fmt.Errorf("ld edit: %s is not a branch", el.Kind)
+	}
+	if op.Index < 0 || op.Index >= len(el.Legs) {
+		return fmt.Errorf("ld edit: leg %d out of range", op.Index)
+	}
+	el.Legs = append(el.Legs[:op.Index], el.Legs[op.Index+1:]...)
+	if len(el.Legs) > 1 {
+		return nil
+	}
+	series, err := locateSeries(r, op.Path[:len(op.Path)-1])
+	if err != nil {
+		return err
+	}
+	i := op.Path[len(op.Path)-1]
+	var rest []Element
+	if len(el.Legs) == 1 {
+		rest = el.Legs[0]
+	}
+	out := make([]Element, 0, len(*series)-1+len(rest))
+	out = append(out, (*series)[:i]...)
+	out = append(out, rest...)
+	out = append(out, (*series)[i+1:]...)
+	*series = out
 	return nil
 }
 

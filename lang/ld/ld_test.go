@@ -255,6 +255,39 @@ END_PROGRAM`
 		t.Fatalf("addLeg:\n%s", out)
 	}
 
+	// Delete a leg: a 3-leg branch keeps two; a 2-leg one collapses into
+	// the series around it, its last leg's elements in the branch's place.
+	three := step(t, src, EditOp{Type: "addLeg", Rung: "seal", Path: []int{0}})
+	out = step(t, three, EditOp{Type: "deleteLeg", Rung: "seal", Path: []int{0}, Index: 0})
+	if !strings.Contains(out, "[ Run | _ ] /Stop ( Run )") {
+		t.Fatalf("deleteLeg of 3:\n%s", out)
+	}
+	out = step(t, src, EditOp{Type: "deleteLeg", Rung: "seal", Path: []int{0}, Index: 1})
+	if !strings.Contains(out, "Start /Stop ( Run )") || strings.Contains(out, "[") {
+		t.Fatalf("deleteLeg collapse:\n%s", out)
+	}
+	if _, err := ApplyEdit(src, EditOp{Type: "deleteLeg", Rung: "seal", Path: []int{1}}); err == nil {
+		t.Fatal("deleteLeg on a contact must be refused")
+	}
+	for _, ix := range []int{-1, 2} {
+		if _, err := ApplyEdit(src, EditOp{Type: "deleteLeg", Rung: "seal", Path: []int{0}, Index: ix}); err == nil {
+			t.Fatalf("deleteLeg of leg %d of 2 must be refused", ix)
+		}
+	}
+	// A nested branch collapses into its own leg, not the rung's series:
+	// the parent series is found through the outer branch's leg.
+	nested := `PROGRAM P
+VAR_EXTERNAL A : BOOL; B : BOOL; C : BOOL; Y : BOOL; END_VAR
+LD
+  RUNG n
+    [ A | [ B | C ] ] ( Y )
+END_LD
+END_PROGRAM`
+	out = step(t, nested, EditOp{Type: "deleteLeg", Rung: "n", Path: []int{0, 1, 0}, Index: 0})
+	if !strings.Contains(out, "[ A | C ] ( Y )") {
+		t.Fatalf("deleteLeg of a nested branch:\n%s", out)
+	}
+
 	// Delete the NC contact.
 	out = step(t, src, EditOp{Type: "delete", Rung: "seal", Path: []int{1}})
 	if !strings.Contains(out, "[ Start | Run ] ( Run )") {

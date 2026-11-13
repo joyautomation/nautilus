@@ -36,8 +36,8 @@ Usage:
                              edits realizing the op (1-based, end-exclusive).
                              Ops address the render model: setRef, toggleNeg,
                              setCoilMode, setArgs, insert, renameInst,
-                             delete, addLeg, wrapBranch, wrapOr,
-                             addRung, renameRung, deleteRung,
+                             delete, addLeg, deleteLeg, wrapBranch,
+                             wrapOr, addRung, renameRung, deleteRung,
                              move, setComment, addComment, setRungComment,
                              declareVar, deleteVar, init. Blank source seeds
                              a PROGRAM skeleton (named by the op's "pou")

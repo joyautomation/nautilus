@@ -602,18 +602,21 @@
 		};
 	}
 
-	// A branch's own wrapper: a press on its rails (or the space between
-	// its legs) selects the WHOLE branch — Del deletes it, O adds a leg,
-	// Ctrl/Shift adds it to a multi-selection like any series element.
+	// A branch's own wrapper: a press on its OR tab, its rails or the space
+	// between its legs selects the WHOLE branch — Del deletes it, O adds a
+	// leg, Ctrl/Shift adds it to a multi-selection like any series element.
 	// Its legs' elements sit above this hit area and keep their own.
 	function branchInteract(el: Element, args: { rung: string; br: LBranch }) {
 		let a = args;
+		// Only this branch's own hit area or tab: a press on a leg's element
+		// is that element's (its listener stops propagation first anyway),
+		// and a nested branch's tab is the nested branch's.
+		const own = (ev: Event) =>
+			(ev.target as Element | null)?.closest?.('.branch-hit, .branch-tab')?.parentElement === el;
 		const onDown = (ev: Event) => {
 			const pe = ev as PointerEvent;
 			if (!editable || pe.button !== 0) return;
-			// Only the branch's own hit area: a press on a leg's element is
-			// that element's (its listener stops propagation first anyway).
-			if (!(ev.target as Element | null)?.classList?.contains('branch-hit')) return;
+			if (!own(ev)) return;
 			ev.stopPropagation();
 			ev.preventDefault();
 			(el.closest('.wrap') as HTMLElement | null)?.focus({ preventScroll: true });
@@ -623,12 +626,39 @@
 					: { rung: a.rung, path: a.br.path };
 		};
 		const onClick = (ev: Event) => {
-			if (editable && (ev.target as Element | null)?.classList?.contains('branch-hit')) ev.stopPropagation();
+			if (editable && own(ev)) ev.stopPropagation();
 		};
 		el.addEventListener('pointerdown', onDown);
 		el.addEventListener('click', onClick);
 		return {
 			update(next: { rung: string; br: LBranch }) {
+				a = next;
+			},
+			destroy() {
+				el.removeEventListener('pointerdown', onDown);
+				el.removeEventListener('click', onClick);
+			}
+		};
+	}
+
+	// A selected branch's per-leg ✕: drop that leg. A branch left with one
+	// leg collapses into its series (deleteLeg in lang/ld/edit.go), so the
+	// selection goes with it.
+	function legDelInteract(el: Element, args: { rung: string; br: LBranch; leg: number }) {
+		let a = args;
+		const onDown = (ev: Event) => {
+			if (editable) ev.stopPropagation();
+		};
+		const onClick = (ev: Event) => {
+			if (!editable) return;
+			ev.stopPropagation();
+			post({ type: 'deleteLeg', rung: a.rung, path: a.br.path, index: a.leg });
+			if (a.br.legYs.length <= 2) selected = null;
+		};
+		el.addEventListener('pointerdown', onDown);
+		el.addEventListener('click', onClick);
+		return {
+			update(next: { rung: string; br: LBranch; leg: number }) {
 				a = next;
 			},
 			destroy() {
@@ -1060,6 +1090,18 @@
 			<rect class="branch-hit" x={br.x} y={br.y} width={br.w} height={br.h} rx="4">
 				<title>OR branch, {br.legYs.length} legs{editable ? ' — click its rails: select · O: add a leg · Del · B: branch around it · Ctrl+C/X' : ''}</title>
 			</rect>
+			{#if editable}
+				<!-- The branch's handle: an OR tab on its left rail, between the
+				     first two legs (the gap column left of the rail is always
+				     clear there), so a branch is selectable at sight. -->
+				{@const tx = br.x + 8 - L.BRANCH_OUTER_GAP / 2}
+				{@const ty = (br.legYs[0] + br.legYs[1]) / 2}
+				<g class="branch-tab" data-kind="branch-tab" transform="translate({tx}, {ty})">
+					<title>OR branch — click: select · Del deletes it · ✕ on a leg deletes that leg</title>
+					<rect x="-8.5" y="-7" width="17" height="14" rx="3" />
+					<text y="3" text-anchor="middle">OR</text>
+				</g>
+			{/if}
 			{#each br.legYs as _y, li (li)}
 				<g class="leg" role="group" aria-label="leg {li + 1} of {br.legYs.length}" data-kind="leg" data-path={[...br.path, li].join('.')}>
 					{@render series(r, lay, [...br.path, li].join('.'))}
@@ -1252,10 +1294,33 @@
 							use:spotInteract={{ rung: r.name, spot: s }}
 						>
 							<title>{s.op === 'insert' ? 'insert here (click: contact; or drop a palette item)' : s.op === 'coil' ? 'add a coil here' : 'add a branch leg'}</title>
-							<circle r="8" class="spot-hit" />
-							<circle r="4.5" class="spot-dot" />
-							<text y="2.8" text-anchor="middle" class="spot-plus">+</text>
+							<circle r="9" class="spot-hit" />
+							<circle r="6.5" class="spot-dot" />
+							<text y="3.9" text-anchor="middle" class="spot-plus">+</text>
 						</g>
+					{/each}
+					<!-- A selected branch's leg ✕ handles, drawn after the ⊕ spots:
+					     leg 0's ✕ sits just below the insert spot ahead of the
+					     branch, and the one drawn last takes the click. -->
+					{#each lay.branches as br (br.path.join('.'))}
+						{#if isSel(r.name, br.path)}
+							{#each br.legYs as y, li (li)}
+								<g
+									class="leg-del"
+									role="button"
+									aria-label="delete leg {li + 1} of {br.legYs.length}"
+									data-kind="leg-del"
+									data-branch={`branch:${r.name}:${br.path.join('.')}`}
+									data-leg={li}
+									transform="translate({br.x + 8 - L.BRANCH_OUTER_GAP / 2}, {y + 12})"
+									use:legDelInteract={{ rung: r.name, br, leg: li }}
+								>
+									<title>delete leg {li + 1}{br.legYs.length <= 2 ? ' (the branch becomes a plain series)' : ''}</title>
+									<circle r="6.5" />
+									<path d="M -2.6 -2.6 L 2.6 2.6 M 2.6 -2.6 L -2.6 2.6" />
+								</g>
+							{/each}
+						{/if}
 					{/each}
 				{/if}
 			</svg>
@@ -1607,6 +1672,61 @@
 		stroke: color-mix(in srgb, var(--nx-accent) 45%, transparent);
 		stroke-dasharray: 4 3;
 	}
+	/* The OR tab: always there while editing, quiet until the rung is
+	   hovered, the accent when its branch is selected. */
+	.branch-tab {
+		cursor: pointer;
+		opacity: 0.55;
+		transition: opacity 0.12s;
+	}
+	svg:hover .branch-tab {
+		opacity: 0.85;
+	}
+	.branch-tab:hover,
+	.branch.selected > .branch-tab {
+		opacity: 1;
+	}
+	.branch-tab rect {
+		fill: var(--nx-bg);
+		stroke: var(--nx-blue);
+		stroke-width: 1.2;
+		pointer-events: all;
+	}
+	.branch-tab text {
+		font-family: var(--nx-mono);
+		font-size: 8px;
+		font-weight: 700;
+		fill: var(--nx-blue);
+		pointer-events: none;
+	}
+	.branch-tab:hover rect {
+		fill: color-mix(in srgb, var(--nx-blue) 20%, var(--nx-bg));
+	}
+	.branch.selected > .branch-tab rect {
+		fill: var(--nx-accent);
+		stroke: var(--nx-accent);
+	}
+	.branch.selected > .branch-tab text {
+		fill: var(--nx-bg);
+	}
+	.leg-del {
+		cursor: pointer;
+	}
+	.leg-del circle {
+		fill: var(--nx-bg);
+		stroke: var(--nx-removed);
+		stroke-width: 1.2;
+		pointer-events: all;
+	}
+	.leg-del path {
+		stroke: var(--nx-removed);
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		pointer-events: none;
+	}
+	.leg-del:hover circle {
+		fill: color-mix(in srgb, var(--nx-removed) 20%, var(--nx-bg));
+	}
 	.branch.selected > .branch-hit {
 		fill: color-mix(in srgb, var(--nx-accent) 7%, transparent);
 		stroke: var(--nx-accent);
@@ -1707,7 +1827,7 @@
 		fill: color-mix(in srgb, var(--nx-blue) 20%, var(--nx-bg));
 	}
 	.spot-plus {
-		font-size: 8px;
+		font-size: 11px;
 		fill: var(--nx-blue);
 		font-weight: 700;
 	}

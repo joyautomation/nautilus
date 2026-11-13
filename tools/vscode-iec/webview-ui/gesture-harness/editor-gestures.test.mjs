@@ -313,3 +313,33 @@ test('Ladder OR (#91): a branch is ONE element — g.branch > g.leg > g.node, la
 		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'delete', rung: 'r1', path: [0] }]);
 	});
 });
+
+test('Ladder OR: the OR tab selects the branch at sight; a selected branch shows ✕ per leg, which posts deleteLeg', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'ldModel', model: LD_OR, title: 'p.ld' });
+		const id = 'branch:r1:0';
+		const tab = `[data-id="${id}"] > .branch-tab`;
+		assert.equal(await b.eval(`document.querySelectorAll('.leg-del').length`), 0, 'no leg ✕ before the branch is selected');
+		const pt = await center(b, tab);
+		// The tab is what a click there hits: no spot, rail or element over it.
+		assert.ok(await b.eval(`!!document.elementFromPoint(${pt.x}, ${pt.y})?.closest('${tab}')`), 'tab is topmost');
+		await clickAt(b, pt);
+		assert.ok(await b.eval(`document.querySelector('[data-id="${id}"]').classList.contains('selected')`), 'branch selected');
+		assert.equal(await b.eval(`document.querySelectorAll('.leg-del[data-branch="${id}"]').length`), 3, 'one ✕ per leg');
+		for (let li = 0; li < 3; li++) {
+			const p = await center(b, `.leg-del[data-branch="${id}"][data-leg="${li}"]`);
+			// The whole visible ✕ takes the click, its edges too: leg 0's sits
+			// just below the ⊕ insert spot ahead of the branch (#655 review).
+			for (const [dx, dy] of [[0, 0], [0, -5], [0, 5], [-5, 0], [5, 0]]) {
+				assert.ok(
+					await b.eval(`document.elementFromPoint(${p.x + dx}, ${p.y + dy})?.closest('.leg-del')?.dataset.leg === '${li}'`),
+					`leg ${li} ✕ is topmost at (${dx}, ${dy})`
+				);
+			}
+		}
+		await reset(b);
+		await clickAt(b, await center(b, `.leg-del[data-branch="${id}"][data-leg="1"]`));
+		assert.deepEqual(await opsPosted(b, ldOps, 1), [{ type: 'deleteLeg', rung: 'r1', path: [0], index: 1 }]);
+		assert.ok(await b.eval(`document.querySelector('[data-id="${id}"]').classList.contains('selected')`), 'a 3-leg branch stays selected');
+	});
+});

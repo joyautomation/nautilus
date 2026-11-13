@@ -7,7 +7,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 Works with naut 0.20.0: Toggle Bit and the diagram live actions use the
 controller's tag API the extension already writes through. The AGENTS.md
-offer needs the next naut, the first with `naut agents`.
+offer needs the next naut, the first with `naut agents`. Deleting one leg
+of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
+`naut ld edit` has `deleteLeg`; an older one refuses the edit.
 
 ### Added
 
@@ -46,6 +48,16 @@ offer needs the next naut, the first with `naut agents`.
   checks, and notes you write outside its markers are kept. Needs a naut
   with `naut agents`; with an older one the offer never appears. Turn it
   off with `nautilus.agentsMd.offer`. (#645)
+- **Ladder: an OR tab on every branch, and delete one leg.** A branch
+  was selectable only by its thin rails, so there was no visible way to
+  delete it. Each branch now has a small **OR** tab on its left rail:
+  click it to select the branch, then **Del** or ✕ deletes it. A selected
+  branch shows a red ✕ beside each leg that deletes that leg alone; a
+  branch left with one leg becomes plain series contacts. Deleting a leg
+  needs the next naut (its `naut ld edit` gains `deleteLeg`).
+- **Ladder: bigger ⊕ insert points.** The blue ⊕ spots for inserting a
+  contact, a coil or a leg are about half again as big, easier to see
+  and to hit.
 
 - **The diagrams' vars panel lists the project tags the logic uses.** A
   program may use the tags `nautilus.yaml` and its tag-files declare
