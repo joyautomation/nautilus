@@ -5,6 +5,7 @@
 	// the same store as the node pills. The footer row declares in place —
 	// no round-trip through the "+ add" palette.
 	import type { VarDecl } from './layout';
+	import type { ProjectTag } from './usedTags';
 	import Popover from './Popover.svelte';
 	import Suggest from './Suggest.svelte';
 	import { TYPES } from './suggest';
@@ -20,6 +21,11 @@
 	// scope declares its pins (VAR_INPUT / VAR_OUTPUT / VAR_IN_OUT, the
 	// AOI's Parameters tab) as well as locals. Block instances a rung
 	// declares by its call (`m1:MotorStarter(…)`) list read-only (`insts`).
+	//
+	// A PROGRAM has the project's tags (nautilus.yaml and its tag-files) in
+	// scope without declaring them: the ones its logic uses with no header
+	// declaration list read-only after the scopes (`tags`, usedTags.ts),
+	// counted on their own — the head's count stays the header's.
 	type Scope = { pou: string; label: string; sections: string[] };
 	type Inst = { name: string; type: string; rung: string; pou?: string };
 	let {
@@ -27,6 +33,7 @@
 		vars,
 		used,
 		insts = [],
+		tags = [],
 		scopes = [{ pou: '', label: '', sections: ['VAR_EXTERNAL', 'VAR'] }],
 		onDeclare = (name: string, type: string, section: string) =>
 			postOp({ type: 'declareVar', newName: name, value: type, text: section }),
@@ -41,6 +48,8 @@
 		vars: VarDecl[];
 		used: Set<string>;
 		insts?: Inst[];
+		/** Project tags the logic uses without a header declaration. */
+		tags?: ProjectTag[];
 		scopes?: Scope[];
 		onDeclare?: (name: string, type: string, section: string, pou?: string, init?: string) => void;
 		onDelete?: (name: string, pou?: string) => void;
@@ -149,7 +158,7 @@
 		     dropdown can overflow the card instead of being clipped. -->
 		<div class="rows">
 			{#if total === 0}
-				<div class="empty">no declarations{readonly ? '' : ' — add one below'}</div>
+				<div class="empty">{tags.length ? 'no header declarations' : `no declarations${readonly ? '' : ' — add one below'}`}</div>
 			{/if}
 			{#each scopes as sc (sc.pou)}
 				{#if grouped}
@@ -219,6 +228,30 @@
 					</div>
 				{/each}
 			{/each}
+			{#if tags.length}
+				<div class="scopehead tagshead" data-kind="scope" data-id="project-tags" title="Tags the project declares (nautilus.yaml and its tag-files) are in scope without a declaration; these are the ones this logic uses. Edit them in the manifest.">
+					<span>project tags used here</span>
+					<span class="count">{tags.length}</span>
+				</div>
+				{#each tags as t (t.name)}
+					{@const tv = liveValue(t.name)}
+					<div class="row tagrow" data-kind="chip" data-id={t.name} data-section="project" title="{t.name}{t.type ? ` : ${t.type}` : ''}{t.role ? ` — ${t.role}` : ''}{t.unit ? ` [${t.unit}]` : ''}{t.desc ? `\n${t.desc}` : ''}{'\n'}project tag: declared in the manifest, not in this file's header">
+						<span class="badge ext">tag</span>
+						<span class="tagtext">
+							<span class="tagline">
+								<span class="name">{t.name}</span>
+								{#if t.type}<span class="type">: {t.type}{t.unit ? ` [${t.unit}]` : ''}</span>{/if}
+							</span>
+							{#if t.desc}<span class="desc">{t.desc}</span>{/if}
+						</span>
+						<span class="spacer"></span>
+						{#if tv !== undefined}
+							<span class="nx-pill val" class:off={!live.fresh} class:forced={liveForced(t.name)} class:enum={liveEnum(t.name)} title="{t.name} = {formatLive(tv, t.name)}{liveTypeNote(t.name)}">{formatLive(tv, t.name)}</span>
+						{/if}
+						{#if t.role}<span class="by">{t.role}</span>{/if}
+					</div>
+				{/each}
+			{/if}
 		</div>
 		{#if !readonly}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -374,6 +407,38 @@ data-section={newSection}
 		font-weight: 700;
 		color: var(--nx-muted);
 		letter-spacing: 0.02em;
+	}
+	.tagshead {
+		display: flex;
+		gap: 6px;
+		border-top: 1px solid var(--nx-border);
+		margin-top: 4px;
+		padding-top: 6px;
+	}
+	.tagshead .count {
+		font-weight: 400;
+	}
+	.tagtext {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+	.tagline {
+		display: flex;
+		gap: 7px;
+		min-width: 0;
+	}
+	.desc {
+		font-family: var(--nx-font);
+		font-size: 10px;
+		color: var(--nx-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.tagrow .badge {
+		align-self: flex-start;
+		margin-top: 1px;
 	}
 	.badge.inst {
 		font-style: italic;

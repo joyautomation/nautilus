@@ -276,10 +276,11 @@ no rig verb, no smoke check); per section below.
 | X45 | Diagrams | Tag descriptions on diagram elements: the manifest desc (or the VAR line's comment) in the element tooltip in ladder, FBD and SFC; a second line under ladder contacts and coils (nautilus.diagram.showDescriptions) | README Diagrams; #216 | xref-desc.test.mjs: X45 ladder; X44/X45 FBD, SFC | logix-shaped lx_desc_on_element | 14 (ladder contact title + line) |
 | X46 | SFC | Timed qualifiers L, D, SD, DS, SL compile with the standard's semantics, in `Q Target(T#t);` or IEC's `Target(Q, T#t);` form; an R resets the stored ones | CHANGELOG [Unreleased]; website languages/sfc "Action qualifiers" | — (Go: lang/conformance/sfc-timed-qualifiers, lang/sfc/timed_test.go) | codesys-shaped build rows habit-D-qualifier, habit-SD-qualifier, habit-L-qualifier, habit-iec-assoc-form; reference-timed/ (naut test) | — |
 | X47 | SFC | Step supervision: `STEP Fill (MAXTIME := T#60S, ERROR := Tag):` sets Fill.ERR on an overrun and mirrors it into a tag an alarm binds to | CHANGELOG [Unreleased]; website languages/sfc "Step supervision" | — (Go: lang/conformance/sfc-step-maxtime asserts the alarm, lang/sfc/timed_test.go) | codesys-shaped reference-timed/ (naut test: fill timeout) | — |
+| X51 | Diagrams | The ladder, FBD and SFC vars panel lists, read-only and with its own count, the project tags the logic uses without a header declaration (type, unit, role, description, live value); header declarations, block instances, FUNCTION_BLOCK bodies, steps and actions are not listed | CHANGELOG Unreleased | ld-parity.test.mjs: the project tags the rungs use list read-only, with their own count (X51); diagram.test.mjs: FBD and SFC (X51); usedTags.test.ts | — | — |
 
 ## Count of rows with no coverage at all
 
-**0 of 197.** Every row has at least one layer of coverage: a webview test, a
+**0 of 198.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 
