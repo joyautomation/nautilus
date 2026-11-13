@@ -27,6 +27,15 @@ importScripts(new URL('wasm_exec.js' + vq, BASE).href);
 const T = { start: performance.now() };
 let markReady;
 const ready = new Promise((r) => (markReady = r));
+// The packages naut builds a screen with (Svelte, the HMI kits, three,
+// Threlte): not in naut.wasm, which fetches them the first time a project
+// has a screen to build (internal/hmibuild/packs_js.go).
+self.nautilusHMIPack = () =>
+	fetch(new URL('hmi-packs.tgz' + vq, BASE)).then((r) => {
+		if (!r.ok) throw new Error('hmi-packs.tgz: ' + r.status);
+		return r.arrayBuffer();
+	}).then((b) => new Uint8Array(b));
+
 self.onNautilusReady = () => {
 	T.goReady = performance.now();
 	markReady();
@@ -94,6 +103,9 @@ const ops = {
 	stop: () => self.nautilus.stop(),
 	stats: () => self.nautilus.stats(),
 	handle: (method, url, headers, body) => self.nautilus.handle(method, url, headers || {}, body == null ? null : body),
+	// the project's own screen, which the engine builds (sw.js view/app/)
+	app: (method, url, headers, body) => self.nautilus.app(method, url, headers || {}, body == null ? null : body),
+	appStatus: () => self.nautilus.appStatus(),
 	stream(sid, url) {
 		const cancel = self.nautilus.stream(url, (chunk) => {
 			postMessage({ event: 'stream', sid, chunk });

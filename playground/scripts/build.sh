@@ -27,6 +27,8 @@ version="${NAUT_VERSION:-$(git -C "$repo" describe --tags --abbrev=0 2>/dev/null
 goroot="$(go env GOROOT)"
 cp "$goroot/lib/wasm/wasm_exec.js" "$out/" 2>/dev/null || cp "$goroot/misc/wasm/wasm_exec.js" "$out/"
 cp "$here"/src/*.js "$here"/src/*.d.ts "$out/"
+# naut's HMI build packages, fetched by naut.wasm when a project has a screen
+cp "$repo/internal/hmibuild/packs/packs.tar.gz" "$out/hmi-packs.tgz"
 
 "$here/scripts/app.sh"
 

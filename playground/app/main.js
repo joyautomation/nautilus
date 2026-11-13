@@ -205,7 +205,7 @@ function keeper(pg, source, copy) {
  * unavailable. The worker's scope is view/ alone, so the workbench's own
  * requests never pass through it.
  */
-async function serveViews(channel, hmi) {
+async function serveViews(channel, hmi, screens) {
 	try {
 		if (!('serviceWorker' in navigator)) return null;
 		const reg = await navigator.serviceWorker.register(new URL('sw.js', ENGINE), {
@@ -225,11 +225,18 @@ async function serveViews(channel, hmi) {
 		// still the old worker.)
 		(sw ?? reg.active)?.postMessage({ kind: 'engine', channel });
 		const url = (name) => new URL(`view/${name}/?engine=${encodeURIComponent(channel)}`, ENGINE).href;
-		return { dashboard: url('dashboard'), hmi: hmi ? url(hmi) : null };
+		// An example's own prebuilt HMI, else the screen the engine builds
+		// for a project that has one (an app with src/routes, or mimics).
+		return { dashboard: url('dashboard'), hmi: hmi ? url(hmi) : screens ? url('app') : null };
 	} catch (e) {
 		console.warn('nautilus playground: no dashboard or HMI view:', e);
 		return null;
 	}
+}
+
+/** Whether naut builds this project a screen: an app (src/routes) or mimics. */
+function hasScreens(files) {
+	return Object.keys(files || {}).some((p) => p.endsWith('.mimic.json') || /(^|\/)src\/routes\/(.*\/)?\+page\.svelte$/.test(p));
 }
 
 /**
@@ -307,7 +314,7 @@ async function main() {
 	document.title = `${project.title} · nautilus playground`;
 
 	const bridge = serveBridge(pg);
-	const views = serveViews(bridge.name, project.hmi);
+	const views = serveViews(bridge.name, project.hmi, hasScreens(project.files));
 	// For the page framing the playground (the docs site's download
 	// button): the project as it stands, saved edits included.
 	// A project that began as one of our examples (or a link to one) is

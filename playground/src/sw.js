@@ -7,6 +7,8 @@
 //   view/dashboard/?engine=<channel>      the built-in dashboard
 //   view/<name>/?engine=<channel>         a prebuilt HMI (hmi/<name>/, built
 //                                         with paths.base = <scope><name>)
+//   view/app/?engine=<channel>            the project's own screen, which the
+//                                         engine builds (naut's HMI build)
 //
 // "/api/..." goes to the engine over the playground tab's bridge channel
 // (bridge.js; the channel names that tab), the dashboard comes from the
@@ -17,6 +19,7 @@
 const SCOPE = new URL(self.registration.scope);
 const ENGINE = new URL('../', SCOPE); // where hmi/<name>/ is published
 const CALL_TIMEOUT_MS = 8000;
+const APP = 'app'; // the view of the project's own screen, built by the engine
 const QUIET_MS = 15000; // a stream this quiet asks whether the engine is still there
 const MEMO = 'nautilus-view-clients';
 
@@ -130,7 +133,25 @@ async function answer(view, req, url) {
 		return handle(view.channel, req.clone(), path + url.search);
 	}
 	if (view.name === 'dashboard') return handle(view.channel, req.clone(), path + url.search);
+	if (view.name === APP) return app(view, req.clone(), path + url.search);
 	return asset(view.name, req, path);
+}
+
+/** The project's own screen, as the engine built it (naut.wasm's app()):
+ * its pages learn where they are served from (nx-base), so a link or a
+ * reload finds them under view/app/. */
+async function app(view, req, path) {
+	const headers = {};
+	req.headers.forEach((v, k) => (headers[k] = v));
+	const body = req.method === 'GET' || req.method === 'HEAD' ? null : await req.text();
+	const r = await call(view.channel, 'call', ['app', req.method, path, headers, body], 70000);
+	const h = new Headers(r.headers);
+	h.delete('content-length');
+	let out = r.bytes ?? r.body;
+	if (typeof out === 'string' && (h.get('content-type') || '').startsWith('text/html')) {
+		out = out.replace('<meta name="nx-base" content="">', `<meta name="nx-base" content="${SCOPE.pathname}${APP}">`);
+	}
+	return new Response(req.method === 'HEAD' ? null : out, { status: r.status, headers: h });
 }
 
 /** One request to the engine's HTTP server. */

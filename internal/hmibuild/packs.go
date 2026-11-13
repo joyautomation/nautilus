@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,10 +20,8 @@ import (
 // the HMI kit, the 3D kit, three and Threlte that their public entry points
 // reach, as node_modules/<package>/..., and svelte-compiler.js (that
 // Svelte's compiler, bundled for goja). Committed, so `go install` gets a
-// naut that builds HMIs.
-//
-//go:embed packs/packs.tar.gz
-var packTGZ []byte
+// naut that builds HMIs. naut embeds it (packs_embed.go); naut.wasm
+// fetches it when a project first needs it (packs_js.go).
 
 var (
 	rootOnce sync.Once
@@ -48,6 +45,10 @@ func packRoot() (string, error) {
 }
 
 func unpack() (string, error) {
+	packTGZ, err := packBytes()
+	if err != nil {
+		return "", err
+	}
 	if len(packTGZ) < 64 {
 		return "", errors.New("this naut was built without its HMI packages (internal/hmibuild/packs/packs.tar.gz is empty); build naut from a full checkout")
 	}
