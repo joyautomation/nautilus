@@ -21,7 +21,7 @@
 	],
 	"nodes": [
 		{ "id": "WW101", "kind": "wet-well", "label": "WW-101", "pos": [0, -3, 0], "bind": { "level": "LIT101_Level" } },
-		{ "id": "LSHH101", "kind": "float-switch", "label": "LSHH", "pos": [-0.95, 0, -0.8], "bind": { "tripped": "LSHH101" } },
+		{ "id": "LSHH101", "kind": "float-switch", "label": "LSHH", "pos": [-0.95, -0.168, -0.8], "bind": { "tripped": "LSHH101", "level": "LIT101_Level" } },
 		{ "id": "LSLL101", "kind": "float-switch-low", "label": "LSLL", "pos": [-0.95, -2.42, -0.15], "bind": { "tripped": "LSLL101" } },
 		{ "id": "P101", "kind": "submersible-pump", "label": "P-101", "pos": [-0.5, -3, -0.8], "rot": [0, -90, 0], "bind": { "running": "P101_Running", "speedHz": "P101_SpeedHz" } },
 		{ "id": "P102", "kind": "submersible-pump", "label": "P-102", "pos": [0.5, -3, 0.2], "rot": [0, -90, 0], "bind": { "running": "P102_Running", "speedHz": "P102_SpeedHz" } },
@@ -37,6 +37,7 @@
 		{ "id": "ckv102-header", "from": { "node": "CKV102", "port": "outlet" }, "points": [[2.9, 0.45, 0.2], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
 		{ "id": "header", "to": { "node": "FIT101", "port": "inlet" }, "points": [[2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
 		{ "id": "force-main", "from": { "node": "FIT101", "port": "outlet" }, "to": { "node": "TOPROC", "port": "inlet" }, "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
+		{ "id": "lshh-cable", "to": { "node": "LSHH101", "port": "cable" }, "points": [[-0.95, 0, -0.8]], "radius": 0.008 },
 		{ "id": "lsll-cable", "to": { "node": "LSLL101", "port": "cable" }, "points": [[-0.95, 0, -0.15]], "radius": 0.008 }
 	]
 }

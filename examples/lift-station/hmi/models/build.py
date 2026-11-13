@@ -6,7 +6,7 @@
 # and the kit does not.
 #
 #     blender -b -P build.py            # writes ../static/models/*.glb
-#     blender -b -P build.py -- pump    # one of: well pump float check meter main
+#     blender -b -P build.py -- pump    # one of: well pump float float-high check meter main
 #
 # Metres, +y up in the export (Blender is z-up; the exporter converts).
 # Mesh NAMES are the contract lift-station.scene.json's drives bind to:
@@ -14,6 +14,9 @@
 #   submersible-pump  Motor / Volute tint and Lamp lights while running;
 #                     Impeller spins at the VFD's speed
 #   float-switch      FloatDown shows while clear, FloatUp while tripped
+#                     (the low-low float)
+#   float-switch-high Tether turns about the clamp with the level, carrying
+#                     Float up on the water; Float tints when tripped
 #   flow-meter        Display lights while there is flow
 # Each model's origin is where a node's `pos` puts it: the well's floor,
 # the pump's feet, the float's hanger, a valve's or meter's body centre on
@@ -285,6 +288,27 @@ def build_float():
     export("float-switch.glb")
 
 
+def build_float_high():
+    # The high-high float, which rides the water up: the ball on its tether
+    # swings from the clamp (the origin, where the tether's own origin is
+    # put), so one `turn` on Tether, driven by the well's level, lifts it
+    # from hanging straight down (0 deg) to lying on the water (90 deg,
+    # toward +x). Hung 0.30 m below its clamp, the ball meets the water at
+    # ~85 % and lies flat by 94 %, just before the switch trips at 95 %
+    # (sim.st); float-switch.kind.json maps the level to the angle. The
+    # two-position float (float-switch.glb) hung under water from ~87 % while
+    # it still read clear (James 11-12).
+    reset()
+    dark = pbr("SteelDark", STEEL_DARK, metallic=0.6, roughness=0.55)
+    cable = pbr("Cable", CABLE, metallic=0.0, roughness=0.8)
+    shell = pbr("Float", FLOAT, metallic=0.0, roughness=0.6)
+    box("Clamp", dark, (0.05, 0.03, 0.05), (0, -0.015, 0))
+    arm = cylinder("Tether", cable, 0.01, 0.21, axis="y", pos=(0, -0.105, 0), segments=8)
+    origin_to(arm, (0, 0, 0))
+    parent(sphere("Float", shell, 0.09, pos=(0, -0.30, 0)), arm)
+    export("float-switch-high.glb")
+
+
 def build_check():
     # A swing check valve on a horizontal run along x, drawn the way one
     # is recognised: a body with a round bolted cover on a short neck (the
@@ -348,6 +372,7 @@ BUILDERS = {
     "well": build_well,
     "pump": build_pump,
     "float": build_float,
+    "float-high": build_float_high,
     "check": build_check,
     "meter": build_meter,
     "main": build_main,
