@@ -684,7 +684,7 @@
         },
         {
           "command": "nautilus.component.preview",
-          "when": "(resourceExtname == .svelte || resourceFilename =~ /\\.component\\.json$/) && !isWeb"
+          "when": "resourceExtname == .svelte || resourceFilename =~ /\\.component\\.json$/"
         },
         {
           "command": "nautilus.page.preview",
@@ -780,10 +780,6 @@
         },
         {
           "command": "nautilus.copyKitComponent",
-          "when": "!isWeb"
-        },
-        {
-          "command": "nautilus.editComponentPorts",
           "when": "!isWeb"
         }
       ],

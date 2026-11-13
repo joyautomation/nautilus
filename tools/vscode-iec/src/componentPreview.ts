@@ -30,10 +30,10 @@
 // is — this compiles and RUNS the project's own code.
 
 import * as vscode from "vscode";
-import * as fs from "fs";
 import * as path from "path";
 import { webviewOptions } from "./fbdPreview";
-import { buildUserComponentsBundle, type ComponentDiagnostic } from "./userComponentBuild";
+import type { ComponentDiagnostic } from "./userComponentBuild";
+import { PreviewBuilder } from "./previewBuild";
 import {
   componentNameFromFilename,
   componentNameFromSveltePath,
@@ -65,7 +65,6 @@ function logPreview(msg: string): void {
   previewLog.appendLine(`[${new Date().toISOString()}] ${msg}`);
 }
 const DOC_DEBOUNCE_MS = 150;
-const BUNDLE_FILE = "component-preview.js";
 
 /** What the pane shows. A custom component's `uri` is its .svelte (compiled
  * from the buffer); a built-in's is only an anchor — the sidecar if one
@@ -75,7 +74,7 @@ type Target = { uri: vscode.Uri; name: string; builtin: boolean };
 /** The argument "Edit Component Ports…" passes for a built-in. */
 export type PreviewArg = { name: string; uri: vscode.Uri };
 
-function previewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+function previewHtml(webview: vscode.Webview, extensionUri: vscode.Uri, builder: PreviewBuilder): string {
   // The mimic editor's bundle, mounted in its third mode (see
   // webview-ui/src/mimic/main.ts). No user-components tag here: the
   // preview bundle arrives by message (previewBundle) and is appended by
@@ -94,6 +93,7 @@ function previewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string 
       content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${styleUri}">
+${builder.headTags(webview, nonce)}
 <title>Component Preview</title>
 </head>
 <body data-mimic-mode="preview" data-nonce="${nonce}">
@@ -114,18 +114,14 @@ export class ComponentPreview implements vscode.Disposable {
   /** Cache-busting generation of the last GOOD bundle; 0 = none yet. */
   private version = 0;
   private diagnostics: ComponentDiagnostic[] = [];
-  private readonly resourceRoot: vscode.Uri;
-  private readonly bundleFsPath: string;
+  private readonly builder: PreviewBuilder;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     userComponents: UserComponentManager,
     private readonly index: ComponentIndex
   ) {
-    // Same workspace-storage directory as the shared user-components
-    // bundle, so one localResourceRoots entry covers both.
-    this.resourceRoot = userComponents.resourceRoot;
-    this.bundleFsPath = vscode.Uri.joinPath(this.resourceRoot, BUNDLE_FILE).fsPath;
+    this.builder = new PreviewBuilder(context, userComponents);
 
     const sidecars = vscode.workspace.createFileSystemWatcher(COMPONENT_GLOB);
     const sidecarChanged = (uri: vscode.Uri) => {
@@ -241,9 +237,9 @@ export class ComponentPreview implements vscode.Disposable {
       "nautilusComponentPreview",
       "Component Preview",
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      { ...webviewOptions(this.context.extensionUri, [this.resourceRoot]), retainContextWhenHidden: true }
+      { ...webviewOptions(this.context.extensionUri, [this.builder.resourceRoot]), retainContextWhenHidden: true }
     );
-    this.panel.webview.html = previewHtml(this.panel.webview, this.context.extensionUri);
+    this.panel.webview.html = previewHtml(this.panel.webview, this.context.extensionUri, this.builder);
     this.panel.onDidDispose(() => {
       this.panel = undefined;
       this.target = undefined;
@@ -391,19 +387,16 @@ export class ComponentPreview implements vscode.Disposable {
         })),
         target.uri.fsPath
       );
-      await fs.promises.mkdir(path.dirname(this.bundleFsPath), { recursive: true });
-      // Build beside the live bundle and promote only a bundle that has
-      // the component in it: a compile error leaves the last good render
+      // Only a bundle that has the component in it replaces the last good
+      // one (previewBuild.ts): a compile error leaves the last good render
       // on screen, under the error.
-      const staging = this.bundleFsPath + ".next";
       const t0 = Date.now();
-      const result = await buildUserComponentsBundle({ [target.name]: target.uri.fsPath }, staging, { sources });
+      const result = await this.builder.build(target.name, target.uri.fsPath, sources);
       logPreview(
         `built ${target.name} in ${Date.now() - t0} ms: built=[${result.built.join(", ")}] diagnostics=${JSON.stringify(result.diagnostics)} sources=${Object.keys(sources).length}`
       );
       if (this.target !== target) return; // retargeted mid-build; the queued rebuild covers it
       if (result.built.includes(target.name)) {
-        await fs.promises.rename(staging, this.bundleFsPath);
         this.version++;
         this.postBundle();
       }
@@ -423,7 +416,7 @@ export class ComponentPreview implements vscode.Disposable {
 
   private postBundle(): void {
     if (!this.panel || this.version === 0) return;
-    const raw = this.panel.webview.asWebviewUri(vscode.Uri.file(this.bundleFsPath)).toString();
+    const raw = this.builder.bundleSrc(this.panel.webview);
     const src = raw + (raw.includes("?") ? "&" : "?") + "v=" + this.version;
     logPreview(`bundle v${this.version} -> ${src}`);
     void this.panel.webview.postMessage({ type: "previewBundle", src, version: this.version });

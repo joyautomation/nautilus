@@ -110,6 +110,21 @@ test("a component that fails is left out with a reason; the rest still build", a
   assert.equal(typeof (await run(result.code)).registered?.Good?.mount, "function");
 });
 
+test("a prop named `state` beside $state(...) is stopped at compile, with where and why", async () => {
+  // Svelte reads `$state` as a store subscription to the `state` prop, and
+  // the component throws when it mounts ("e.subscribe is not a function"),
+  // blanking the islands after it (the bw01 chart, 11-13).
+  const files = {
+    "/p/Cell.svelte": "<script>\n  let { state = 1 } = $props();\n  let error = $state('');\n</script>\n<p>{state}{error}</p>",
+    "/p/Fine.svelte": "<script>\n  let { mode = 1 } = $props();\n  let error = $state('');\n</script>\n<p>{mode}{error}</p>",
+  };
+  const result = await compileComponents({ Cell: "/p/Cell.svelte", Fine: "/p/Fine.svelte" }, memory(files));
+  assert.deepEqual(result.built, ["Fine"]);
+  const [d] = result.diagnostics;
+  assert.equal(d.component, "Cell");
+  assert.match(d.message, /^\/p\/Cell\.svelte:\d+:\d+: .*store_rune_conflict: it throws when it mounts/);
+});
+
 test("an editor's unsaved text is what compiles", async () => {
   const result = await compileComponents({ A: "/p/A.svelte" }, memory({ "/p/A.svelte": "<p>on-disk</p>" }), {
     sources: { "/p/A.svelte": "<p>in-the-editor</p>" },

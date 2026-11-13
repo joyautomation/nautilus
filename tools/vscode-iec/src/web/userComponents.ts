@@ -63,7 +63,7 @@ type Compile = typeof compileComponents;
 
 /** The compiler chunk, evaluated once on first use. */
 let compiler: Promise<Compile> | undefined;
-function loadCompiler(extensionUri: vscode.Uri): Promise<Compile> {
+export function loadCompiler(extensionUri: vscode.Uri): Promise<Compile> {
   compiler ??= (async () => {
     const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(extensionUri, "out", "web", "component-compiler.js"));
     const module: { exports: { compileComponents?: Compile } } = { exports: {} };
@@ -126,6 +126,14 @@ export class UserComponentManager implements vscode.Disposable {
 
   lastDiagnostics(): ComponentDiagnostic[] {
     return this.diagnostics;
+  }
+
+  /** Keep a built script (the component preview's) where webviews can load
+   * it; `null` drops it. */
+  putScript(path: string, code: string | null): vscode.Uri {
+    if (code === null) this.scripts.files.delete(path);
+    else this.scripts.files.set(path, new TextEncoder().encode(code));
+    return vscode.Uri.from({ scheme: SCHEME, path });
   }
 
   get resourceRoot(): vscode.Uri {

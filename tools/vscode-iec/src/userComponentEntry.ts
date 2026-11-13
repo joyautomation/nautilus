@@ -57,6 +57,25 @@ export const EMPTY_BUNDLE_JS =
   "window.__NX_USER_COMPONENTS__ = window.__NX_USER_COMPONENTS__ || {};\n" +
   "window.dispatchEvent(new Event('nx:user-components-ready'));\n";
 
+/** A compiler warning that means the component throws when it mounts: the
+ * build stops on it with the warning's own words and where it is, rather
+ * than handing the editor a component that blanks every one placed after
+ * it. `store_rune_conflict` is the one met so far: a prop or variable named
+ * `state` (a filter's state, say) beside `$state(...)` makes Svelte read
+ * `$state` as a store subscription to it, which throws at mount
+ * ("e.subscribe is not a function"). */
+const FATAL_WARNINGS = new Set(["store_rune_conflict"]);
+
+export type CompilerWarning = { code?: string; message?: string; start?: { line: number; column: number } };
+
+export function fatalWarning(path: string, warnings: readonly CompilerWarning[] | undefined): Error | undefined {
+  const w = warnings?.find((x) => x.code && FATAL_WARNINGS.has(x.code));
+  if (!w) return undefined;
+  const at = w.start ? `:${w.start.line}:${w.start.column + 1}` : "";
+  const said = (w.message ?? w.code ?? "").replace(/\s*\n\s*/g, " ");
+  return new Error(`${path}${at}: ${said} (${w.code}: it throws when it mounts)`);
+}
+
 /** Discovery's pure part: the referenced names that need a build, i.e. not
  * already covered by the built-in kit registry. */
 export function customComponentNames(referenced: Iterable<string>, builtins: ReadonlySet<string>): string[] {
