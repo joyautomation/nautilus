@@ -17,7 +17,7 @@
 		max: [(x1 - CX) * S, (y1 - CY) * S, z1 * S]
 	});
 	/** What the camera must keep in frame, world units: the board, and the controller standing off it. */
-	export const BOUNDS: Box3[] = [box(BOARD.x0, BOARD.x1, BOARD.y0, BOARD.y1, -15, -11), box(0, 191, -81, 62, 0, 78)];
+	export const BOUNDS: Box3[] = [box(BOARD.x0, BOARD.x1, BOARD.y0, BOARD.y1, -15, -11), box(0, 191, -82, 70, 0, 86)];
 
 	export interface Channel {
 		tag: string;
@@ -61,11 +61,11 @@
 	import { T } from '@threlte/core';
 	import { RoundedBoxGeometry } from '@threlte/extras';
 	import { getContext } from 'svelte';
-	import { CanvasTexture, RepeatWrapping, SRGBColorSpace } from 'three';
+	import { AdditiveBlending, CanvasTexture, ExtrudeGeometry, Path, RepeatWrapping, Shape, SRGBColorSpace } from 'three';
 	import { SCENE, type SceneContext } from '@joyautomation/nautilus-hmi-3d';
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
-	import type { Ink } from './print';
+	import type { Ink, Paint } from './print';
 
 	let {
 		hovered = null,
@@ -155,7 +155,7 @@
 	// Each tag sits over its own module's top, shifted so the two don't meet.
 	const calloutX = (m: Module) => (m.slot === 2 ? cx(m) - CALLOUT.w / 2 + 3 : cx(m) + CALLOUT.w / 2 - 17);
 
-	// The chassis's slotted steel lip: one drawn tile, repeated along it.
+	// The chassis's slotted steel floor: one drawn tile, repeated along it.
 	const vents = (() => {
 		const c = document.createElement('canvas');
 		c.width = 117;
@@ -176,6 +176,79 @@
 		t.anisotropy = 8;
 		return t;
 	})();
+
+	// The touchscreen's housing, seen from the front: a frame round a sunken
+	// display, whose lower edge sweeps from high on the left down to a
+	// rounded tongue on the right, where the wordmark sits.
+	const SCREEN = { w: 92, top: 70, z: 68.5, d: 8 };
+	const DISPLAY = { x0: 13, x1: 79, y0: -42, y1: 62 };
+	const bezel = (() => {
+		const o = new Shape();
+		o.moveTo(4, SCREEN.top);
+		o.lineTo(SCREEN.w - 4, SCREEN.top);
+		o.quadraticCurveTo(SCREEN.w, SCREEN.top, SCREEN.w, SCREEN.top - 4);
+		o.lineTo(SCREEN.w, -66);
+		o.quadraticCurveTo(SCREEN.w, -79, SCREEN.w - 13, -79);
+		o.lineTo(58, -79);
+		o.bezierCurveTo(34, -79, 22, -66, 9, -57);
+		o.bezierCurveTo(3, -53, 0, -52, 0, -46);
+		o.lineTo(0, SCREEN.top - 4);
+		o.quadraticCurveTo(0, SCREEN.top, 4, SCREEN.top);
+		const hole = new Path();
+		hole.moveTo(DISPLAY.x0, DISPLAY.y0);
+		hole.lineTo(DISPLAY.x1, DISPLAY.y0);
+		hole.lineTo(DISPLAY.x1, DISPLAY.y1);
+		hole.lineTo(DISPLAY.x0, DISPLAY.y1);
+		hole.closePath();
+		o.holes.push(hole);
+		// the bevel slopes the frame's inner walls down toward the display
+		return new ExtrudeGeometry(o, { depth: SCREEN.d, bevelEnabled: true, bevelSize: 1.6, bevelThickness: 1.6, bevelSegments: 3, curveSegments: 24 });
+	})();
+
+	// A module's hinged cover: its top edge is a wave, low on the left and
+	// high on the right, and the status light is the band that follows it in
+	// the channel between the cover and the module's head.
+	const WAVE = { x: 9, lo: 32.5, hi: 46 };
+	const cover = (() => {
+		const o = new Shape();
+		o.moveTo(-WAVE.x, -63);
+		o.lineTo(-WAVE.x, WAVE.lo);
+		o.bezierCurveTo(-2, WAVE.lo + 0.5, 2, WAVE.lo + 6, WAVE.x, WAVE.hi);
+		o.lineTo(WAVE.x, -63);
+		o.absarc(0, -63, WAVE.x, 0, -Math.PI, true);
+		return new ExtrudeGeometry(o, { depth: 5.6, bevelEnabled: true, bevelSize: 0.7, bevelThickness: 0.7, bevelSegments: 3, curveSegments: 24 });
+	})();
+	const lens = (() => {
+		const o = new Shape();
+		o.moveTo(-WAVE.x, WAVE.lo + 1.4);
+		o.bezierCurveTo(-2, WAVE.lo + 1.9, 2, WAVE.lo + 7.4, WAVE.x, WAVE.hi + 1.4);
+		o.lineTo(WAVE.x, WAVE.hi + 2.6);
+		o.bezierCurveTo(2, WAVE.lo + 9.4, -2, WAVE.lo + 4.6, -WAVE.x, WAVE.lo + 4);
+		o.closePath();
+		return new ExtrudeGeometry(o, { depth: 0.8, bevelEnabled: false, curveSegments: 24 });
+	})();
+	/** The soft light the lens throws on the head above it. */
+	const haze = (() => {
+		const c = document.createElement('canvas');
+		c.width = c.height = 64;
+		const ctx = c.getContext('2d')!;
+		const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+		g.addColorStop(0, 'rgba(255,255,255,0.55)');
+		g.addColorStop(1, 'rgba(255,255,255,0)');
+		ctx.fillStyle = g;
+		ctx.fillRect(0, 0, 64, 64);
+		return new CanvasTexture(c);
+	})();
+	/** The mark printed on a module's head: two linked rings, gloss black on the matte face. */
+	const rings: Paint = (ctx) => {
+		ctx.strokeStyle = '#08080a';
+		ctx.lineWidth = 1.5;
+		for (const x of [4.6, 11.4]) {
+			ctx.beginPath();
+			ctx.arc(x, 4.5, 2.9, 0, Math.PI * 2);
+			ctx.stroke();
+		}
+	};
 </script>
 
 <T.Group scale={S} position={[-CX * S, -CY * S, 0]}>
@@ -192,56 +265,61 @@
 		<T.BoxGeometry args={[226, 25, 0.4]} />
 		<T.MeshStandardMaterial color="#8f9398" roughness={0.5} metalness={0.9} />
 	</T.Mesh>
-	<T.Mesh position={[95, -2, -2.2]}>
-		<T.BoxGeometry args={[196, 134, 2.4]} />
+	<T.Mesh position={[95, -6.6, -2.2]}>
+		<T.BoxGeometry args={[196, 150, 2.4]} />
 		<T.MeshStandardMaterial color={STEEL} roughness={0.5} metalness={0.6} />
 	</T.Mesh>
-	<T.Mesh position={[95, -73, 23]} rotation={[1.91, 0, 0]}>
-		<T.BoxGeometry args={[196, 50, 1.6]} />
+	<!-- the chassis floor: a flat slotted tray under the processor and the modules -->
+	<T.Mesh position={[95, -80.8, 43]} rotation={[-Math.PI / 2, 0, 0]}>
+		<T.BoxGeometry args={[196, 86, 1.6]} />
 		<T.MeshStandardMaterial map={vents} roughness={0.45} metalness={0.6} />
 	</T.Mesh>
 
 	<!-- GRV-EPIC-PR1: the processor's body, and its touchscreen closed over it -->
-	<T.Mesh position={[46, 1, 34]}>
-		<T.BoxGeometry args={[84, 124, 68]} />
+	<T.Mesh position={[46, -4, 34]}>
+		<T.BoxGeometry args={[84, 138, 68]} />
 		<T.MeshStandardMaterial color={BLACK} roughness={0.6} metalness={0.15} />
 	</T.Mesh>
-	<T.Mesh position={[46, -7, 73]}>
-		<RoundedBoxGeometry args={[90, 148, 9]} radius={3.5} />
+	<T.Mesh geometry={bezel} position={[0, 0, SCREEN.z]}>
 		<T.MeshStandardMaterial color={COVER} roughness={0.5} metalness={0.2} />
 	</T.Mesh>
-	<T.Mesh position={[46, 4, 77.6]}>
-		<T.BoxGeometry args={[70, 112, 0.4]} />
+	<!-- the display, dark, sunk behind the frame -->
+	<T.Mesh position={[(DISPLAY.x0 + DISPLAY.x1) / 2, (DISPLAY.y0 + DISPLAY.y1) / 2, SCREEN.z + 3]}>
+		<T.BoxGeometry args={[DISPLAY.x1 - DISPLAY.x0 + 4, DISPLAY.y1 - DISPLAY.y0 + 4, 0.6]} />
 		<T.MeshStandardMaterial color="#07080a" roughness={0.12} metalness={0.6} />
 	</T.Mesh>
 	<Print
-		w={70}
+		w={60}
 		h={22}
-		position={[46, -67, 77.7]}
+		position={[60, -62.5, SCREEN.z + SCREEN.d + 1.7]}
 		items={[
-			{ text: 'groov', x: 35, y: 7.6, size: 9, align: 'center', italic: true, weight: 800, color: '#c5c9ce' },
-			{ text: 'GRV-EPIC-PR1', x: 35, y: 17.5, size: 2.6, align: 'center', weight: 600, color: '#aab0b7', spacing: 0.5 }
+			{ text: 'groov', x: 30, y: 7.6, size: 9, align: 'center', italic: true, weight: 800, color: '#c5c9ce' },
+			{ text: 'GRV-EPIC-PR1', x: 30, y: 17.5, size: 2.6, align: 'center', weight: 600, color: '#aab0b7', spacing: 0.5 }
 		]}
 	/>
 
 	{#each MODULES as m (m.slot)}
 		<!-- the module's body, its status lens, and the hinged cover over the terminals -->
-		<T.Mesh position={[cx(m), 0, MOD_D / 2]}>
-			<T.BoxGeometry args={[MOD_W, 122, MOD_D]} />
+		<T.Mesh position={[cx(m), -3, MOD_D / 2]}>
+			<RoundedBoxGeometry args={[MOD_W, 128, MOD_D]} radius={2.2} />
 			<T.MeshStandardMaterial color={BLACK} roughness={0.6} metalness={0.15} />
 		</T.Mesh>
-		{#each [-3.4, 3.4] as dx}
-			<T.Mesh position={[cx(m) + dx, 52, MOD_D + 0.2]}>
-				<T.TorusGeometry args={[3.1, 0.75, 8, 24]} />
-				<T.MeshStandardMaterial color="#2b2e32" roughness={0.5} metalness={0.2} />
-			</T.Mesh>
-		{/each}
-		<T.Mesh position={[cx(m), 43.2, MOD_D + 3]} rotation={[0, 0, 0.3]}>
-			<RoundedBoxGeometry args={[14, 3.4, 5]} radius={1.2} />
-			<T.MeshBasicMaterial color={online ? '#3aa0ff' : '#1b2530'} toneMapped={false} />
+		<!-- the head: the face the cover's wave is cut against, with the two rings printed on it -->
+		<T.Mesh position={[cx(m), 43, MOD_D + 1.6]}>
+			<RoundedBoxGeometry args={[MOD_W - 1, 36, 6.4]} radius={2.4} />
+			<T.MeshStandardMaterial color={COVER} roughness={0.55} metalness={0.15} />
 		</T.Mesh>
-		<T.Mesh position={[cx(m), COVER_TOP - COVER_H / 2, COVER_Z - 3.5]}>
-			<RoundedBoxGeometry args={[COVER_W, COVER_H, 7]} radius={3} />
+		<Print w={16} h={9} position={[cx(m), 54.5, MOD_D + 4.9]} items={[]} paint={rings} res={14} />
+		<T.Mesh geometry={lens} position={[cx(m), 0, MOD_D + 4.85]}>
+			<T.MeshBasicMaterial color={online ? '#7fe9f2' : '#16242a'} toneMapped={false} />
+		</T.Mesh>
+		{#if online}
+			<T.Mesh position={[cx(m) - 2, 42, MOD_D + 4.95]} renderOrder={3}>
+				<T.PlaneGeometry args={[22, 20]} />
+				<T.MeshBasicMaterial map={haze} color="#35c6d8" transparent opacity={0.5} blending={AdditiveBlending} depthWrite={false} toneMapped={false} />
+			</T.Mesh>
+		{/if}
+		<T.Mesh geometry={cover} position={[cx(m), 0, COVER_Z - 6.3]}>
 			<T.MeshStandardMaterial color={COVER} roughness={0.45} metalness={0.2} />
 		</T.Mesh>
 		<Print w={COVER_W} h={COVER_H} position={[cx(m), COVER_TOP - COVER_H / 2, COVER_Z + 0.08]} items={coverInk(m)} res={12} />
