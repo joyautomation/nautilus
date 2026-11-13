@@ -209,17 +209,6 @@
 			ctx.fill();
 		}
 	};
-	const bpPaint: Paint = (ctx) => {
-		// the backplane's own lamps (not driven here) and its supply terminals
-		ctx.fillStyle = '#7f8486';
-		for (const [x, y] of [[2.6, 52], [5.4, 52], [2.6, 56], [5.4, 56], [4, 60.5]]) ctx.fillRect(x, y, 1.6, 2.2);
-		ctx.fillStyle = '#6b7073';
-		for (const y of [76, 88, 100, 112]) {
-			ctx.beginPath();
-			ctx.arc(5, y, 1.6, 0, Math.PI * 2);
-			ctx.fill();
-		}
-	};
 </script>
 
 <T.Group scale={S} position={[-CX * S, -CY * S, 0]}>
@@ -279,12 +268,13 @@
 		{/each}
 	{/each}
 
-	<!-- AXL F BP SE4: the backplane, with its lamps and supply terminals down the left edge -->
+	<!-- AXL F BP SE4: the backplane. Its own lamps and supply terminals, down the left edge, are left off:
+	     half hidden behind the controller they read as stray channel lamps -->
 	<T.Mesh position={[BP.x + BP.w / 2, 0, BP.d / 2]}>
 		<RoundedBoxGeometry args={[BP.w - 0.4, BP.h, BP.d]} radius={1} />
 		<T.MeshStandardMaterial color={GREY} roughness={0.7} />
 	</T.Mesh>
-	<Print w={10} h={BP.h} position={[BP.x + 5, 0, BP.d + 0.08]} items={[{ text: 'AXL F BP SE4', x: 5.2, y: 26, size: 1.5, align: 'center', rotate: -90, color: INK, weight: 600, spacing: 0.1 }]} paint={bpPaint} res={12} />
+	<Print w={10} h={BP.h} position={[BP.x + 5, 0, BP.d + 0.08]} items={[{ text: 'AXL F BP SE4', x: 5.2, y: 26, size: 1.5, align: 'center', rotate: -90, color: INK, weight: 600, spacing: 0.1 }]} res={12} />
 	<T.Mesh position={[BP.x + BP.w - 3, -BP.h / 2 - 1.5, 8]}>
 		<T.BoxGeometry args={[6, 5, 9]} />
 		<T.MeshBasicMaterial color={ORANGE} toneMapped={false} />

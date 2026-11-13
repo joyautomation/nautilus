@@ -121,7 +121,7 @@
 
 	/** The cover's lettering: the channel numbers, and the part number up its edge. */
 	function coverInk(m: Module): Ink[] {
-		const size = m.channels > 12 ? 1.9 : 2.9;
+		const size = m.channels > 12 ? 2.2 : 2.9;
 		const items: Ink[] = [];
 		for (let ch = 0; ch < m.channels; ch++)
 			items.push({ text: String(ch), x: 10.6, y: ROW0 + ch * pitch(m), size, align: 'right', color: '#eef0f2', weight: 600 });
