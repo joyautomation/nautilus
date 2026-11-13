@@ -51,6 +51,7 @@ keyin() {
   xdotool key --clearmodifiers "$1"
   for _ in $(seq 20); do t=$(title); [[ $t == "FBD: program.fbd"* ]] || seen="$seen|$t"; sleep 0.1; done
   [[ -z $seen ]] || info "focus left the diagram during $1:$seen"
+  info "after $1: iframe hasFocus=$(wv 'doc.hasFocus()') active=$(wv 'doc.activeElement?.tagName ?? ""') title=$(title)"
 }
 
 # ── an edit through the float editor: 100.0 → 55.0 ─────────────────────────
@@ -88,6 +89,36 @@ keyin ctrl+z; sleep 1.5; keyin ctrl+y; sleep 1.5; keyin ctrl+s; sleep 1
 png=$(shot redone)
 [[ $(const) == 55.0 ]] && pass "Ctrl+Y redo (saved: 55.0)" "$png" || fail "Ctrl+Y did not redo (saved: $(const))" "$png"
 on_diagram && pass "focus stayed on the diagram through every undo/redo/save" || fail "focus ended outside the diagram: $(title)"
+
+# One Ctrl+Z is one undo. A key the diagram holds is posted by the webview;
+# one that reaches the workbench (the frame lost focus in an undo round
+# trip) goes through nautilus.diagramPreview.key. Never both: a second edit
+# on the stack shows a double undo, which a single edit cannot.
+click_canvas "" 0.6 || true
+dclick_el "$CONST_EL" || fail "no TIC-101 clamp chip for the second edit"
+key ctrl+a; xdotool type --delay 40 60.0; sleep 0.3; key Return; sleep 2
+keyin ctrl+s; sleep 1
+[[ $(const) == 60.0 ]] || fail "second edit did not save (disk: $(const))"
+keyin ctrl+z; sleep 1.5; keyin ctrl+s; sleep 1
+[[ $(const) == 55.0 ]] && pass "one Ctrl+Z undid one edit (60.0 → 55.0)" \
+  || fail "one Ctrl+Z did not undo exactly one edit: 60.0 → $(const), want 55.0"
+
+# ── keys with the panel active but its frame unfocused ──────────────────────
+# The state an undo/redo round trip can leave behind: the panel is the
+# active editor (the title says so) but the webview frame lost keyboard
+# focus, so the keys reach the workbench, not the diagram. Every key after
+# that used to be dropped (nautilus#639, #654; 1 run in 3 here). The
+# workbench now hands them to the panel (nautilus.diagramPreview.key).
+# Blurring the frame from the workbench page makes the state on purpose.
+unfocus_frame() { pg '(document.activeElement?.blur(), document.activeElement?.tagName ?? "")' >/dev/null; sleep 0.4; }
+unfocus_frame
+info "frame blurred: hasFocus=$(wv 'doc.hasFocus()') title=$(title)"
+keyin ctrl+z; sleep 1.5; unfocus_frame; keyin ctrl+s; sleep 1
+[[ $(const) == "$K0" ]] && pass "frame unfocused: Ctrl+Z and Ctrl+S still reach the document (saved: $K0)" \
+  || fail "frame unfocused: Ctrl+Z / Ctrl+S were dropped (saved: $(const), want $K0)"
+unfocus_frame; keyin ctrl+shift+z; sleep 1.5; unfocus_frame; keyin ctrl+s; sleep 1
+[[ $(const) == 55.0 ]] && pass "frame unfocused: Ctrl+Shift+Z redo (saved: 55.0)" \
+  || fail "frame unfocused: Ctrl+Shift+Z did not redo (saved: $(const))"
 
 # ── the preview with NO text editor open ───────────────────────────────────
 # diagramKeys.ts means to open the text beside and run `undo` there (there

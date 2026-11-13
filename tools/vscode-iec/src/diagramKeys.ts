@@ -36,6 +36,34 @@ export function sourceDocument(uri: vscode.Uri | undefined): Promise<vscode.Text
  * wait for the action to be fully applied, not just scheduled. */
 const runInOrder = serialQueue();
 
+/** Each open preview panel's own key path: the same queue its webview's
+ * diagramKey messages go through. */
+const previewKeyHandlers = new Map<vscode.WebviewPanel, (action: DiagramKeyAction) => void>();
+
+export function registerPreviewKeys(panel: vscode.WebviewPanel, handle: (action: DiagramKeyAction) => void): void {
+  previewKeyHandlers.set(panel, handle);
+  panel.onDidDispose(() => previewKeyHandlers.delete(panel));
+}
+
+/** `nautilus.diagramPreview.key`: Ctrl/Cmd+Z, Y and S that reached the
+ * WORKBENCH while a preview panel is the active editor. With focus inside
+ * the diagram the webview posts those keys itself and stops them before
+ * the workbench sees them (keyForward.ts), so this only runs when the
+ * panel is active but its frame does not hold keyboard focus. That is the
+ * state undo/redo can leave it in: they focus the text editor to run the
+ * command, and the panel.reveal that hands focus back does not always
+ * reach the frame. Every key after that used to be dropped (rig check 03,
+ * nautilus#639 and #654). */
+export function runPreviewKey(action: unknown): void {
+  if (action !== "undo" && action !== "redo" && action !== "save") return;
+  for (const [panel, handle] of previewKeyHandlers) {
+    if (panel.active) {
+      handle(action);
+      return;
+    }
+  }
+}
+
 export function applyDiagramKey(
   action: DiagramKeyAction,
   doc: vscode.TextDocument,

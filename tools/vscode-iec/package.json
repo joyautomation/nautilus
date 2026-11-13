@@ -1085,6 +1085,33 @@
         "key": "ctrl+t",
         "mac": "cmd+t",
         "when": "(activeCustomEditorId =~ /^nautilus\\.(ld|fbd|sfc)Diagram$/ || activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/) && nautilus.liveConnected"
+      },
+      {
+        "command": "nautilus.diagramPreview.key",
+        "args": "undo",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+      },
+      {
+        "command": "nautilus.diagramPreview.key",
+        "args": "redo",
+        "key": "ctrl+shift+z",
+        "mac": "cmd+shift+z",
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+      },
+      {
+        "command": "nautilus.diagramPreview.key",
+        "args": "redo",
+        "key": "ctrl+y",
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+      },
+      {
+        "command": "nautilus.diagramPreview.key",
+        "args": "save",
+        "key": "ctrl+s",
+        "mac": "cmd+s",
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
       }
     ]
   },

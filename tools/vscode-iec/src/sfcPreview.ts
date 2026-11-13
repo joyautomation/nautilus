@@ -15,7 +15,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
-import { applyDiagramKey, isDiagramKeyMessage, serialQueue, sourceDocument } from "./diagramKeys";
+import { applyDiagramKey, isDiagramKeyMessage, registerPreviewKeys, serialQueue, sourceDocument } from "./diagramKeys";
 import { handleDiagramLiveMessage } from "./diagramSelection";
 import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
@@ -384,7 +384,7 @@ export class SfcPreview implements vscode.Disposable {
       // not — a closed text tab must not strand the preview's gestures),
       // one message at a time so an edit never overtakes the one before it.
       const inOrder = serialQueue();
-      this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => void inOrder(async () => {
+      const onMessage = (msg: { type?: string; op?: unknown }) => void inOrder(async () => {
         if (this.panel && handleDiagramLiveMessage(this.panel, msg, (command, tag) => void vscode.commands.executeCommand(command, tag))) return;
         const doc = await sourceDocument(this.docUri);
         if (isDiagramKeyMessage(msg)) {
@@ -400,7 +400,10 @@ export class SfcPreview implements vscode.Disposable {
         }
         if (doc) handleSfcMessage(doc, msg);
         else if (msg?.type === "toggleLive") void vscode.commands.executeCommand("nautilus.liveValues.toggle");
-      }));
+      });
+      this.panel.webview.onDidReceiveMessage(onMessage);
+      // The same keys when they reach the workbench instead (diagramKeys.ts).
+      registerPreviewKeys(this.panel, (action) => onMessage({ type: "diagramKey", action } as { type?: string }));
       attachLiveValues(this.live, this.panel);
       const sync = addSyncTarget(this.panel.webview, () => this.docUri);
       this.panel.onDidDispose(() => {
