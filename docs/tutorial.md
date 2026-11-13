@@ -727,10 +727,11 @@ ways:
 
 ### "address already in use" when running
 
-Something else is using port 8080. Stop the other program, or run on
-another port. In `nautilus.yaml`, change `addr: "localhost:8080"` to
-`addr: "localhost:8090"`, and use that port in every address in this
-tutorial.
+Something else is using port 8080. `naut run` then moves to the next free
+port and says which (`tag api: localhost:8080 is in use ..., so this one
+is on localhost:8081`); use that port in the addresses in this tutorial.
+To pick the port yourself, change `addr: "localhost:8080"` in
+`nautilus.yaml` to another, such as `addr: "localhost:8090"`.
 
 ### The test says "no tag MotorRun in this project"
 

@@ -226,8 +226,11 @@ A screen imports Svelte, the HMI kit, the 3D kit
 (`@joyautomation/nautilus-hmi-3d`), three and Threlte (`@threlte/core`,
 `@threlte/extras`), which `naut` carries, and the project's own files.
 
-`naut hmi build` builds the screens the same way without running them and
-lists what is wrong, each with its file and line: a component that names
+`naut check` checks every mimic against the project (each tag a binding,
+a label or a control names is declared, each pipe ends on a port its
+equipment has) and builds the screens; `naut hmi build` builds them alone,
+the same way, without running them. Both list what is wrong, each with its
+file and line: a component that names
 a prop `state` and also uses `$state(...)` (Svelte then reads `$state` as
 a store, and the component throws when it mounts), an import `naut`
 doesn't carry, a component a mimic names that isn't in the project.
