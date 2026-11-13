@@ -21,7 +21,7 @@ import type { ProgramInfo } from "./onlineEdit";
 import type { LiveValues } from "./liveValues";
 import { gitShow } from "./gitHistory";
 import { pickRevisions } from "./revisionPick";
-import { applyDiagramKey, isDiagramKeyMessage, serialQueue, sourceDocument } from "./diagramKeys";
+import { applyDiagramKey, isDiagramKeyMessage, registerPreviewKeys, serialQueue, sourceDocument } from "./diagramKeys";
 import { handleDiagramLiveMessage } from "./diagramSelection";
 import { gateWebview } from "./webviewReady";
 import { findReferencesFromDiagram, isXrefMessage, onProjectTagsChange, postDescriptions } from "./diagramXref";
@@ -579,7 +579,7 @@ export class FbdPreview implements vscode.Disposable {
     // not — a closed text tab must not strand the preview's gestures), one
     // message at a time so an edit never overtakes the one before it.
     const inOrder = serialQueue();
-    this.panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
+    const onMessage = (msg: WebviewMessage) => {
       if (this.panel && handleDiagramLiveMessage(this.panel, msg, (command, tag) => void vscode.commands.executeCommand(command, tag))) return;
       if (msg.type === "toggleLive") {
         void vscode.commands.executeCommand("nautilus.liveValues.toggle");
@@ -602,7 +602,10 @@ export class FbdPreview implements vscode.Disposable {
         const doc = await sourceDocument(this.docUri);
         if (doc) handleWebviewMessage(doc, msg);
       });
-    });
+    };
+    this.panel.webview.onDidReceiveMessage(onMessage);
+    // The same keys when they reach the workbench instead (diagramKeys.ts).
+    registerPreviewKeys(this.panel, (action) => onMessage({ type: "diagramKey", action } as unknown as WebviewMessage));
     this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri, {
       forwardKeys: true,
     });

@@ -74,6 +74,11 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Fixed
 
+- **Undo, redo and save keep working in a diagram preview.** After an
+  undo or redo in an FBD, ladder or SFC preview, the preview sometimes
+  stayed the active tab without holding the keyboard: every Ctrl+Z,
+  Ctrl+Y and Ctrl+S after that did nothing until you clicked the diagram.
+  Those keys now reach the preview's document either way.
 - **Diagrams follow a tag added to nautilus.yaml.** A ladder, FBD or SFC
   diagram that was already open when you added its tags to `nautilus.yaml`
   (or a `tags/` file) kept offering **⚠ declare N names…** until its own

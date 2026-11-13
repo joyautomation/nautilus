@@ -36,6 +36,41 @@ export function sourceDocument(uri: vscode.Uri | undefined): Promise<vscode.Text
  * wait for the action to be fully applied, not just scheduled. */
 const runInOrder = serialQueue();
 
+/** Each open preview panel's own key path: the same queue its webview's
+ * diagramKey messages go through. */
+const previewKeyHandlers = new Map<vscode.WebviewPanel, (action: DiagramKeyAction) => void>();
+
+export function registerPreviewKeys(panel: vscode.WebviewPanel, handle: (action: DiagramKeyAction) => void): void {
+  previewKeyHandlers.set(panel, handle);
+  panel.onDidDispose(() => previewKeyHandlers.delete(panel));
+}
+
+/** `nautilus.diagramPreview.key`: Ctrl/Cmd+Z, Y and S that reached the
+ * WORKBENCH while a preview panel is the active editor and nothing else
+ * holds the keyboard (the bindings exclude input boxes, the side bar,
+ * panel, notifications and the webview find widget, whose own undo and
+ * save must stay theirs). With focus inside
+ * the diagram the webview posts those keys itself and stops them before
+ * the workbench sees them (keyForward.ts), so this only runs when the
+ * panel is active but its frame does not hold keyboard focus. That is the
+ * state undo/redo can leave it in: they focus the text editor to run the
+ * command, and the panel.reveal that hands focus back does not always
+ * reach the frame. Every key after that used to be dropped (rig check 03,
+ * nautilus#639 and #654). */
+export function runPreviewKey(action: unknown): void {
+  if (action !== "undo" && action !== "redo" && action !== "save") return;
+  for (const [panel, handle] of previewKeyHandlers) {
+    if (panel.active) {
+      handle(action);
+      return;
+    }
+  }
+  // `active` can trail the context key the binding matched on, just after
+  // the reveal that follows an undo: then the one visible preview is it.
+  const visible = [...previewKeyHandlers].filter(([panel]) => panel.visible);
+  if (visible.length === 1) visible[0][1](action);
+}
+
 export function applyDiagramKey(
   action: DiagramKeyAction,
   doc: vscode.TextDocument,

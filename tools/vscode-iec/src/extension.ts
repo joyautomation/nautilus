@@ -54,6 +54,7 @@ import { setLspClient } from "./lspClient";
 import { registerDiagramDescriptions } from "./diagramXref";
 import { IS_WEB, registerPlatform } from "./platform";
 import { registerAgentsMd } from "./agentsMd";
+import { runPreviewKey } from "./diagramKeys";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -207,6 +208,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       { language: "iec-st" },
       new FbMonitorLenses(live)
     ),
+    vscode.commands.registerCommand("nautilus.diagramPreview.key", (action: unknown) => runPreviewKey(action)),
     vscode.commands.registerCommand("nautilus.fbd.preview", () => fbd.preview()),
     vscode.commands.registerCommand("nautilus.ld.preview", () => ladder.preview()),
     vscode.commands.registerCommand("nautilus.sfc.preview", () => sfc.preview()),
