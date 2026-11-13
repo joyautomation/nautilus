@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - run: go vet ./...
       # -json and the coverage profile are kept as runtime evidence (the
       # runtime-evidence job joins them to docs/claims); `evidence cat`
@@ -120,7 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - run: go test ./oplog/ ./alarm/
   sparkplug-tck:
     name: Sparkplug B — TCK conformance
@@ -128,7 +128,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       # Drives an in-process edge node through its full lifecycle against the
       # joyautomation/sparkplug-tck-go edge-node profile (embeds its own
       # broker) and fails on any conformance assertion failure.
@@ -181,6 +181,27 @@ jobs:
         working-directory: hmi
       - run: npm ci && npm run check && npm run build
         working-directory: examples/lift-station/hmi
+  hmi-packs:
+    # naut builds HMIs from a committed pack of the packages it carries
+    # (internal/hmibuild): this rebuilds it from the kits in this tree and
+    # the pins in packs/package.json, and fails when the committed one
+    # differs, so a kit change can't ship to naut without its pack.
+    name: HMI packs — packs.tar.gz is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: internal/hmibuild/packs/generate.sh
+      - name: the committed pack is the one generate.sh makes
+        run: |
+          git diff --exit-code --stat -- internal/hmibuild/packs/packs.tar.gz || {
+            echo "::error::internal/hmibuild/packs/packs.tar.gz is stale: run internal/hmibuild/packs/generate.sh and commit it"
+            exit 1
+          }
+
   vscode-iec:
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest
@@ -225,7 +246,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - name: share links (keep.js)
@@ -325,7 +346,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       # The VS Code download only, never a profile (run.ts makes a fresh one).
@@ -443,7 +464,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - name: Postgres tests
         shell: bash
         env:
@@ -464,7 +485,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       # The driver's only other peer is its own slave; pymodbus is the foreign
@@ -507,7 +528,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       # Every other OPC UA test speaks gopcua to gopcua — the same codec on
@@ -537,7 +558,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       # snmpsim (LeXtudio's maintained fork, on pysnmp) replays the committed
@@ -573,7 +594,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       # DMTF's own Redfish-Mockup-Server serving two mockups from the
@@ -599,7 +620,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       # A real node_exporter release binary, checksum-verified by the script
       # before it runs: the exposition format, metric names and label shapes
       # come from the exporter itself, not from our fixtures.
@@ -633,7 +654,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       # The oracle clients, pinned to the versions the runs recorded.
@@ -690,7 +711,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {fetch-depth: 2} # HEAD^1 is the base, for the drift check
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24'}
+        with: {go-version: '1.25'}
       - uses: actions/download-artifact@v4
         with: {pattern: evidence-*, path: evidence}
       # A docs page that changed while its claims file didn't: a warning on

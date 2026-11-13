@@ -53,7 +53,7 @@ Expand-Archive nautilus.zip -DestinationPath "$env:LOCALAPPDATA\nautilus" -Force
 
 Open a new terminal afterwards so the `Path` change is picked up.
 
-### Any OS, with Go 1.24+ installed
+### Any OS, with Go 1.25+ installed
 
 ```sh
 go install github.com/joyautomation/nautilus/cmd/naut@latest

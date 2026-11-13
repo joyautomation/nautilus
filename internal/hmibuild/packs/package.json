@@ -1,0 +1,16 @@
+{
+	"name": "nautilus-hmi-packs",
+	"private": true,
+	"description": "The closed package set naut builds HMIs with (internal/hmibuild): installed here only to pack them into packs.tar.gz (generate.sh). An HMI's imports resolve against these and nothing else. The kits' own dependencies (their fonts) are listed too: npm does not install a file: link's dependencies here.",
+	"dependencies": {
+		"@fontsource-variable/space-grotesk": "^5.3.0",
+		"@fontsource/ibm-plex-mono": "^5.3.0",
+		"@fontsource/righteous": "^5.3.0",
+		"@joyautomation/nautilus-hmi": "file:../../../hmi",
+		"@joyautomation/nautilus-hmi-3d": "file:../../../hmi-3d",
+		"@threlte/core": "8.6.1",
+		"@threlte/extras": "9.22.2",
+		"svelte": "5.57.1",
+		"three": "0.186.1"
+	}
+}

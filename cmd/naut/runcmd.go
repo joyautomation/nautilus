@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -329,6 +330,12 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}
 		return project.Sources(snap, manifest)
 	}
+	// naut's own build of the HMI (an app with src/routes, or the default
+	// app from the mimics): served at "/", the dashboard moves to /_nautilus/
+	builtHMI := buildHMIForRun(proj, dir, os.Stderr)
+	if proj.Server.HMI != nil {
+		sopts.HMI = proj.Server.HMI
+	}
 	srv := server.New(rt, sopts)
 	go srv.Run(ctx)
 
@@ -357,7 +364,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		banner += " (" + label + ")"
 	}
 	if apiUp {
-		banner += hmiBannerSuffix(proj, addr, os.Stderr)
+		banner += hmiBannerSuffix(proj, addr, builtHMI, os.Stderr)
 		warnStaleHMI("naut run", fsys, proj, os.Stderr)
 	}
 	if sparkplugUp {
@@ -426,8 +433,10 @@ func startAlarms(proj *project.Project, rt *runtime.Runtime) (*project.Alarms, e
 // Ctrl+C, so it isn't a convenient thing to unit test directly) so this
 // decision — the same one `naut build` makes about its own warning — has
 // a testable entry point of its own.
-func hmiBannerSuffix(proj *project.Project, addr string, stderr io.Writer) string {
+func hmiBannerSuffix(proj *project.Project, addr, built string, stderr io.Writer) string {
 	switch {
+	case built != "":
+		return " — " + built + " + tag API on http://" + addr
 	case proj.HMIDir != "" && proj.HMIMissing:
 		// project.Load already left Server.HMI nil for this — the
 		// built-in dashboard has "/", exactly as if server.hmi were
@@ -451,7 +460,7 @@ func hmiBannerSuffix(proj *project.Project, addr string, stderr io.Writer) strin
 // server.hmi was last built — the served or embedded HMI is then the old
 // one. naut never runs the HMI's build itself: a controller has no Node.
 func warnStaleHMI(cmd string, fsys fs.FS, proj *project.Project, w io.Writer) {
-	if proj.HMIDir == "" || proj.HMIMissing {
+	if proj.HMIDir == "" || proj.HMIMissing || proj.HMIApp != "" {
 		return
 	}
 	src := project.StaleHMISource(fsys, proj.HMIDir)
@@ -577,6 +586,21 @@ func runBuild(args []string) int {
 			proj.HMIDir, project.HMIBuildHint(proj.HMIDir))
 	}
 	warnStaleHMI("naut build", os.DirFS(dir), proj, os.Stderr)
+	// naut builds the HMI itself and ships it built, so the controller
+	// serves it at boot (project.BuiltHMIDir) and never compiles: a screen
+	// that doesn't build fails the build, as a program that doesn't would.
+	var hmiFiles map[string][]byte
+	if src := hmiSource(proj); src != "" {
+		res, err := buildHMI(proj, dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "naut build: hmi: %s didn't build:\n", src)
+			printBuildError(os.Stderr, "  ", err)
+			return 1
+		}
+		printBuildWarnings(os.Stderr, "naut build: hmi: ", res.Warnings)
+		hmiFiles = res.Files
+		fmt.Printf("hmi: %s, %s, built in %s\n", src, plural(len(res.Pages), "page"), res.Took.Round(100*time.Millisecond))
+	}
 
 	name := *out
 	if name == "" {
@@ -592,7 +616,7 @@ func runBuild(args []string) int {
 	// commits from an air-gapped network. No repo is fine — the endpoint
 	// just serves an empty history.
 	history, note := captureHistory(dir)
-	archiveBytes, err := emitBinary(self, dir, name, *manifest, history)
+	archiveBytes, err := emitBinary(self, dir, name, *manifest, history, hmiFiles)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut build:", err)
 		return 1
@@ -697,7 +721,7 @@ func pemPrivateKey(raw []byte) bool {
 // copy of the runner at self, writing the result to out. It returns the
 // archive's uncompressed byte total — runBuild's size warning threshold —
 // alongside the usual error.
-func emitBinary(self, dir, out, manifest string, history []byte) (int64, error) {
+func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string][]byte) (int64, error) {
 	src, err := os.Open(self)
 	if err != nil {
 		return 0, err
@@ -769,6 +793,22 @@ func emitBinary(self, dir, out, manifest string, history []byte) (int64, error) 
 		if _, err := w.Write([]byte(manifest)); err != nil {
 			return 0, err
 		}
+	}
+	// the HMI naut built, served from there as it is (project.Load)
+	hmiNames := make([]string, 0, len(hmi))
+	for n := range hmi {
+		hmiNames = append(hmiNames, n)
+	}
+	sort.Strings(hmiNames)
+	for _, n := range hmiNames {
+		w, err := zw.Create(project.BuiltHMIDir + "/" + n)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := w.Write(hmi[n]); err != nil {
+			return 0, err
+		}
+		archiveBytes += int64(len(hmi[n]))
 	}
 	if len(history) > 0 {
 		w, err := zw.Create(historyMarker)

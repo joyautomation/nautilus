@@ -131,12 +131,13 @@ It is an ordinary Svelte 5 component: its props are what `props` and
   to `null` once it landed, or to the reason it didn't.
 
 So a filter cell can carry its own Backwash button, placed with
-`"props": { "request": "F2_BackwashReq" }` and its state bound:
+`"props": { "request": "F2_BackwashReq" }` and `"bind": { "filterState":
+"F2_State" }`:
 
 ```svelte
 <script lang="ts">
-	let { state = 1, label = '', request = '', write }: {
-		state?: number;
+	let { filterState = 1, label = '', request = '', write }: {
+		filterState?: number;
 		label?: string;
 		/** The tag a press writes, set in the document's `props`. */
 		request?: string;
@@ -150,10 +151,14 @@ So a filter cell can carry its own Backwash button, placed with
 
 <div class="cell">
 	<b>{label}</b>
-	<button type="button" onclick={backwash} disabled={state !== 1}>Backwash</button>
+	<button type="button" onclick={backwash} disabled={filterState !== 1}>Backwash</button>
 	{#if error}<small>{error}</small>{/if}
 </div>
 ```
+
+Don't name a prop or variable `state` in a component that uses
+`$state(...)`: Svelte then reads `$state` as a store subscription to it,
+and the component throws when it mounts. `naut hmi build` stops on it.
 
 Import the kit's helpers and drawings from `@joyautomation/nautilus-hmi`.
 
@@ -167,7 +172,7 @@ sample props its preview renders with:
     { "name": "effluent", "x": 0.25, "y": 1 },
     { "name": "air", "x": 0, "y": 0.85 }
   ],
-  "preview": { "label": "F-2", "level": 5.8, "state": 1 }
+  "preview": { "label": "F-2", "level": 5.8, "filterState": 1 }
 }
 ```
 
@@ -193,5 +198,38 @@ ports into place.
 5. **Put the controls on the drawing** next to what they command, with
    `disabled` (and `disabledReason`) bound so a command the program would
    ignore can't be pressed.
-6. **Run it**: `naut run`, then open the `*.mimic.json` in VS Code with
-   live values on, and operate it.
+6. **Run it**: `naut run`, then open <http://localhost:8080>: the screen,
+   live, for the operator. In VS Code, open the `*.mimic.json` with live
+   values on to operate it while you edit.
+
+## Serving the screens
+
+`naut run` builds the project's screens itself (no Node, no npm) and
+serves them at `/`, with the engineering dashboard moved to `/_nautilus/`:
+
+- **With no `server.hmi`**, a project with `*.mimic.json` files gets a page
+  for each: the first at `/`, the others by file name
+  (`screens/pumps.mimic.json` is `/pumps`), under a bar with the project's
+  name, the pages, the connection and a theme switch. The pages are live
+  and their controls write, as in the editor.
+- **For more than mimics**, write the screen as an app and point
+  `server.hmi` at its folder: `src/routes/+page.svelte` is `/`,
+  `src/routes/trends/+page.svelte` is `/trends`, a `+layout.svelte` wraps
+  the pages under it, `+page.js` and `+layout.js` `load` functions run in
+  the browser, components go in `src/lib` (imported as `$lib/...`), and
+  `static/` is served as it is. That is SvelteKit's layout, client-side:
+  the same folder also builds with SvelteKit and npm. Go is the only
+  backend, so there are no `+server.js` or `+page.server.js` files: a page
+  reads the controller through the [tag API](/guides/http-api/).
+
+A screen imports Svelte, the HMI kit, the 3D kit
+(`@joyautomation/nautilus-hmi-3d`), three and Threlte (`@threlte/core`,
+`@threlte/extras`), which `naut` carries, and the project's own files.
+
+`naut hmi build` builds the screens the same way without running them and
+lists what is wrong, each with its file and line: a component that names
+a prop `state` and also uses `$state(...)` (Svelte then reads `$state` as
+a store, and the component throws when it mounts), an import `naut`
+doesn't carry, a component a mimic names that isn't in the project.
+`naut build` builds them into the controller it makes, so the controller
+serves them as they are.

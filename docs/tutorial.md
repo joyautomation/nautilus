@@ -20,7 +20,7 @@ Each step is one action. Each says what you should see. If you do not see
 it, go to [When something goes wrong](#when-something-goes-wrong) at the end.
 
 You need a computer running macOS, Windows or Linux and an internet
-connection. Part 8 also needs Node.js (it says when).
+connection.
 
 Words used here:
 
@@ -498,131 +498,18 @@ is running. Each name shows its live value.
 ## Part 8. Build a simple operator screen
 
 The dashboard is for engineers. An operator screen (HMI) shows what the
-operator needs and nothing else. nautilus HMIs are small web apps. You
-will make one with a motor symbol, a status line, and Start and Stop
+operator needs and nothing else. nautilus HMIs are small web apps, written
+in Svelte, and `naut` builds them itself: there is nothing else to install.
+You will make one with a motor symbol, a status line, and Start and Stop
 buttons.
 
-You need Node.js for this part.
+### 8.1 Create the page
 
-### 8.1 Install Node.js
-
-1. Go to <https://nodejs.org/> and download the *LTS* installer for your
-   system.
-2. Run it and accept the defaults.
-3. Close the terminal and open a new one in VS Code (*Terminal*, then
-   *New Terminal*).
-4. Type:
-
-```sh
-node --version
-```
-
-You should see a version number such as `v22.11.0`. Any version from 20 up
-is fine.
-
-### 8.2 Create the files
-
-Make a folder named `hmi` inside `motor`. In VS Code, right-click an empty
-space in the Explorer, choose *New Folder…*, and type `hmi`.
-
-Create each of the following files with the exact name and content. Make
-the folders `hmi/src` and `hmi/src/routes` the same way. To make a file
-inside a folder, right-click the folder and choose *New File…*.
-
-`hmi/package.json`
-
-```json
-{
-	"name": "motor-hmi",
-	"private": true,
-	"version": "0.0.0",
-	"type": "module",
-	"scripts": {
-		"dev": "vite dev",
-		"build": "vite build"
-	},
-	"dependencies": {
-		"@joyautomation/nautilus-hmi": "^0.8.0"
-	},
-	"devDependencies": {
-		"@sveltejs/adapter-static": "^3.0.0",
-		"@sveltejs/kit": "^2.21.0",
-		"@sveltejs/vite-plugin-svelte": "^5.0.0",
-		"svelte": "^5.30.0",
-		"vite": "^6.3.0"
-	}
-}
-```
-
-`hmi/svelte.config.js`
-
-```js
-import adapter from '@sveltejs/adapter-static';
-import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
-
-export default {
-	preprocess: vitePreprocess(),
-	kit: { adapter: adapter({ fallback: 'index.html' }) }
-};
-```
-
-`hmi/vite.config.js`
-
-```js
-import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
-
-// `npm run dev` serves the screen on :5173 and forwards /api to the
-// controller on :8080, so the page and the controller share one origin.
-export default defineConfig({
-	plugins: [sveltekit()],
-	server: {
-		proxy: {
-			'/api': {
-				target: 'http://localhost:8080',
-				changeOrigin: true,
-				configure(proxy) {
-					proxy.on('proxyReq', (req) => req.setHeader('origin', 'http://localhost:8080'));
-				}
-			}
-		}
-	}
-});
-```
-
-`hmi/.gitignore`
-
-```
-node_modules
-build
-.svelte-kit
-```
-
-`hmi/src/app.html`
-
-```html
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		%sveltekit.head%
-	</head>
-	<body>
-		<div style="display: contents">%sveltekit.body%</div>
-	</body>
-</html>
-```
-
-`hmi/src/routes/+layout.js`
-
-```js
-// The screen runs in the browser and talks to a live controller: no server rendering.
-export const ssr = false;
-export const prerender = false;
-```
-
-`hmi/src/routes/+page.svelte`
+1. Make a folder named `hmi` inside `motor`. In VS Code, right-click an
+   empty space in the Explorer, choose *New Folder…*, and type `hmi`.
+2. Inside it, make the folders `src`, then `src/routes`, the same way.
+3. In `hmi/src/routes`, create a file named `+page.svelte` (right-click the
+   folder, *New File…*) with this content:
 
 ```svelte
 <script>
@@ -675,31 +562,12 @@ a pump symbol, and writes `StartPB` and `StopPB` when you press the
 buttons. `CommandButton` presses a button for 0.4 s, like a real push
 button.
 
-### 8.3 Install and build it
+The folder is laid out the way SvelteKit lays out an app: each page is a
+`+page.svelte` under `src/routes` (`src/routes/pumps/+page.svelte` is the
+page at `/pumps`), shared components go in `src/lib`, and files in
+`static` are served as they are.
 
-1. In the terminal, go into the `hmi` folder and install its parts. This
-   downloads packages and takes a minute or two:
-
-```sh
-cd hmi
-npm install
-```
-
-2. Build the screen:
-
-```sh
-npm run build
-```
-
-You should see `Wrote site to "build"` and `done`.
-
-3. Go back to the project folder:
-
-```sh
-cd ..
-```
-
-### 8.4 Tell the controller to serve it
+### 8.2 Tell the controller to serve it
 
 1. Click `nautilus.yaml`.
 2. Under `server:`, add a line so it reads:
@@ -708,12 +576,12 @@ cd ..
 server:
   addr: "localhost:8080"
   online-edits: true
-  hmi: ./hmi/build
+  hmi: hmi
 ```
 
 3. Save.
 
-### 8.5 Run it
+### 8.3 Run it
 
 1. Type:
 
@@ -721,8 +589,8 @@ server:
 naut run
 ```
 
-You should see `dashboard` replaced by `hmi (hmi/build)` in the first
-line.
+You should see `dashboard` replaced by `hmi (hmi/, 1 page, built in …)` in
+the first line: `naut` built the screen before it started.
 
 2. Open <http://localhost:8080>.
 
@@ -740,29 +608,23 @@ You should see the pump stop and the text change to *Stopped*.
 
 The engineering dashboard has moved to <http://localhost:8080/_nautilus/>.
 
-### 8.6 Change the screen while it runs
+### 8.4 Change the screen
 
-For quick edits, you can run the screen in development mode. It reloads
-on every save.
-
-1. Leave `naut run` going. Open a second terminal (the `+` in the terminal
-   panel).
-2. Type:
-
-```sh
-cd hmi
-npm run dev
-```
-
-3. Open <http://localhost:5173>.
-4. In `hmi/src/routes/+page.svelte`, change `Motor M-101` in the `<h1>` to
+1. In `hmi/src/routes/+page.svelte`, change `Motor M-101` in the `<h1>` to
    another name and save.
+2. Stop `naut run` (`Ctrl+C`) and start it again, then reload the page.
 
-You should see the page update without a reload. Press `Ctrl+C` in the
-second terminal when you are done.
+You should see the new name.
 
-When you are happy with a change, run `npm run build` again in `hmi` and
-reload <http://localhost:8080>.
+To check a screen without running it, type `naut hmi build`. It builds the
+screen the same way and lists anything wrong with it, each with its file
+and line.
+
+The screen can import Svelte, the HMI kit
+(`@joyautomation/nautilus-hmi`), the 3D kit
+(`@joyautomation/nautilus-hmi-3d`), three and Threlte: `naut` carries
+those. The same `hmi` folder also builds with SvelteKit and npm, if you add
+its `package.json` and config, for a package `naut` doesn't carry.
 
 ## Part 9. Build one file to ship
 
@@ -868,9 +730,7 @@ ways:
 Something else is using port 8080. Stop the other program, or run on
 another port. In `nautilus.yaml`, change `addr: "localhost:8080"` to
 `addr: "localhost:8090"`, and use that port in every address in this
-tutorial. The HMI's `vite.config.js` has the port twice: in the proxy
-`target`, and in the line that sets the `origin` header
-(`'http://localhost:8080'`). Change both.
+tutorial.
 
 ### The test says "no tag MotorRun in this project"
 
@@ -887,8 +747,3 @@ A program read a tag before anything wrote it. Give every tag you read an
 The controller is not running, or the screen is talking to a different
 port. Start `naut run` and reload.
 
-### `npm install` fails
-
-Check `node --version` prints 20 or higher, and that you are in the `hmi`
-folder (`pwd` on macOS and Linux, `Get-Location` on Windows). On a
-school network, a proxy can block npm. Ask your network administrator.

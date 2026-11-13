@@ -36,6 +36,9 @@ Usage:
                           stale. "naut agents -h" for the rest.
   naut run [dir]      Run a manifest project (nautilus.yaml + programs):
                           scan loop, dashboard, and tag API — no Go needed.
+  naut hmi build [dir]  Build the operator screen naut run serves (the
+                          server.hmi app, or a page per *.mimic.json) with
+                          no npm, and list what's wrong with it (-o dir).
   naut test [dir]     Run a manifest project's acceptance tests
                           (*_test.yaml) in virtual time, so timers and loop
                           responses assert exactly (-run re, -v, -json).
@@ -135,6 +138,8 @@ func main() {
 		os.Exit(runRun(os.Args[2:]))
 	case "build":
 		os.Exit(runBuild(os.Args[2:]))
+	case "hmi":
+		os.Exit(runHMI(os.Args[2:]))
 	case "test":
 		os.Exit(runTest(os.Args[2:]))
 	case "new":

@@ -1,10 +1,13 @@
 module github.com/joyautomation/nautilus
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/charmbracelet/huh v1.0.0
+	github.com/dop251/goja v0.0.0-20261001165353-dc0ad5d0dc92
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/evanw/esbuild v0.28.2
+	github.com/google/uuid v1.6.0
 	github.com/gopcua/opcua v0.9.1
 	github.com/gosnmp/gosnmp v1.45.0
 	github.com/lib/pq v1.10.9
@@ -27,9 +30,11 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.13 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
+	github.com/dlclark/regexp2/v2 v2.8.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
+	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
