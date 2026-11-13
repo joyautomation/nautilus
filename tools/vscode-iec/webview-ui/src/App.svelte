@@ -65,6 +65,11 @@
 	// 'differs'/'edit' render a clickable pill in the toolbar.
 	let syncState = $state('unknown');
 	let title = $state('FBD');
+	// The file the diagram shows (the host's title: its basename). The FBD
+	// opening frame is keyed on this, not on `title`: `title` also carries
+	// the POU name, which an error message drops and the next model brings
+	// back, and that flip refitted the view and threw away the user's zoom.
+	let file = $state('');
 	let hint = $state(true);
 	const shortcutGroups = $derived(mode === 'ld' ? LD_SHORTCUTS : mode === 'sfc' ? SFC_SHORTCUTS : FBD_SHORTCUTS);
 	const hintText = $derived(hintLine(shortcutGroups));
@@ -469,6 +474,7 @@
 	}
 
 	function show(msg: Msg) {
+		if (msg.title !== undefined) file = msg.title;
 		if (msg.type === 'model') {
 			mode = 'fbd';
 			readOnly = false;
@@ -1004,7 +1010,7 @@
 			<Background />
 			<MiniMap pannable zoomable />
 			<Controls />
-			<FitController {structureKey} frameKey={(diffing ? 'diff:' : '') + title} bind:centre={viewCentre} bind:toFlow />
+			<FitController {structureKey} frameKey={(diffing ? 'diff:' : '') + file} bind:centre={viewCentre} bind:toFlow />
 		</SvelteFlow>
 	</div>
 	{/if}

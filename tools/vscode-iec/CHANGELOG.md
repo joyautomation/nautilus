@@ -61,6 +61,12 @@ offer needs the next naut, the first with `naut agents`.
   controller's streams when it stops or is replaced, and the extension
   reconnects at once (200 ms, not 2 s) when a stream that was delivering
   frames ends cleanly, the sign of a controller restarting in place.
+- **FBD zoom survives a parse error.** With an FBD diagram open beside
+  its text, typing that left the text briefly unparseable (half a
+  statement) refitted the diagram to the whole program once the text
+  parsed again, throwing away your zoom and scroll. The diagram now keeps
+  its view; it still frames itself when it first opens, including a file
+  that fails to parse at first.
 - **FBD diagram title.** A `.fbd` file that defines an ST FUNCTION_BLOCK
   ahead of its PROGRAM titled the diagram with the block's name; it now
   names the program that owns the FBD body.
