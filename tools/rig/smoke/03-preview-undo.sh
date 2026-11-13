@@ -120,6 +120,17 @@ unfocus_frame; keyin ctrl+shift+z; sleep 1.5; unfocus_frame; keyin ctrl+s; sleep
 [[ $(const) == 55.0 ]] && pass "frame unfocused: Ctrl+Shift+Z redo (saved: 55.0)" \
   || fail "frame unfocused: Ctrl+Shift+Z did not redo (saved: $(const))"
 
+# The workbench keys are the preview's only while nothing else holds the
+# keyboard: Ctrl+Z typed in the Search box is the box's, never the diagram's.
+xdotool key --clearmodifiers ctrl+shift+f; sleep 1
+xdotool type --delay 40 abc; sleep 0.3
+xdotool key --clearmodifiers ctrl+z; sleep 1.5
+hide_sidebar
+click_canvas "" 0.6 || true
+keyin ctrl+s; sleep 1
+[[ $(const) == 55.0 ]] && pass "Ctrl+Z in the Search box left the diagram alone (saved: 55.0)" \
+  || fail "Ctrl+Z in the Search box undid the diagram (saved: $(const), want 55.0)"
+
 # ── the preview with NO text editor open ───────────────────────────────────
 # diagramKeys.ts means to open the text beside and run `undo` there (there
 # is no API to undo a document directly). But once the last text editor for

@@ -1091,27 +1091,28 @@
         "args": "undo",
         "key": "ctrl+z",
         "mac": "cmd+z",
-        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && !inputFocus && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !notificationFocus && !webviewFindWidgetFocused"
       },
       {
         "command": "nautilus.diagramPreview.key",
         "args": "redo",
         "key": "ctrl+shift+z",
         "mac": "cmd+shift+z",
-        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && !inputFocus && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !notificationFocus && !webviewFindWidgetFocused"
       },
       {
         "command": "nautilus.diagramPreview.key",
         "args": "redo",
         "key": "ctrl+y",
-        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+        "mac": "cmd+y",
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && !inputFocus && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !notificationFocus && !webviewFindWidgetFocused"
       },
       {
         "command": "nautilus.diagramPreview.key",
         "args": "save",
         "key": "ctrl+s",
         "mac": "cmd+s",
-        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/"
+        "when": "activeWebviewPanelId =~ /^(nautilus\\.(ld|sfc)Preview|nautilusFbdPreview)$/ && !inputFocus && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !notificationFocus && !webviewFindWidgetFocused"
       }
     ]
   },
