@@ -19,4 +19,3 @@ type compiled struct {
 // `$state(...)` makes `$state` a store subscription to it
 // (store_rune_conflict), which throws "e.subscribe is not a function".
 var fatalWarnings = map[string]bool{"store_rune_conflict": true}
-

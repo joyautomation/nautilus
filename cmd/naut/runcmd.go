@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -341,7 +342,19 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 
 	apiUp := false
 	var apiLn net.Listener
-	if ln, err := net.Listen("tcp", addr); err != nil {
+	ln, err := net.Listen("tcp", addr)
+	// On a bench (naut run from a project), a port another controller
+	// already holds moves this one to the next free port, said out loud,
+	// instead of running with no tag API, screen or dashboard at all. A
+	// built controller, an address from NAUTILUS_ADDR and a redundant
+	// replica keep the address they were given.
+	if err != nil && dir != "" && os.Getenv("NAUTILUS_ADDR") == "" && proj.Redundancy == nil && addrInUse(err) {
+		if alt, altLn := nextFreePort(addr); altLn != nil {
+			fmt.Fprintf(os.Stderr, "tag api: %s is in use (another naut run?), so this one is on %s\n", addr, alt)
+			addr, ln, err = alt, altLn, nil
+		}
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
 	} else {
 		apiUp = true
@@ -470,6 +483,33 @@ func warnStaleHMI(cmd string, fsys fs.FS, proj *project.Project, w io.Writer) {
 	hint := project.HMIBuildHint(proj.HMIDir)
 	fmt.Fprintf(w, "%s: server.hmi: %s is older than %s — the HMI shows the last build; "+
 		"run npm run build in %s (or npm run dev there while editing)\n", cmd, proj.HMIDir, src, hint)
+}
+
+// addrInUse reports a listen that failed because the port is taken (on
+// Windows the error is WSAEADDRINUSE, which syscall.EADDRINUSE isn't).
+func addrInUse(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "address already in use") || strings.Contains(msg, "Only one usage of each socket address")
+}
+
+// nextFreePort listens on the first free port of the next twenty after
+// addr's, on the same host.
+func nextFreePort(addr string) (string, net.Listener) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", nil
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n == 0 {
+		return "", nil
+	}
+	for p := n + 1; p <= n+20 && p < 65536; p++ {
+		alt := net.JoinHostPort(host, strconv.Itoa(p))
+		if ln, err := net.Listen("tcp", alt); err == nil {
+			return alt, ln
+		}
+	}
+	return "", nil
 }
 
 // selfAddr is what a standby needs to reach this replica: the pod IP from

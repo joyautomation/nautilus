@@ -17,9 +17,16 @@ var builtinEquipment = map[string]bool{
 	"Sparkline": true, "CommandButton": true, "WriteToggle": true,
 }
 
-// skipDir is what a project search never looks in.
-func skipDir(name string) bool {
-	return strings.HasPrefix(name, ".") || name == "node_modules" || name == "build" || name == "dist" || name == ".svelte-kit"
+// skipDir is what a project search never looks in: dot, dependency and
+// build directories, and a directory that is a project of its own (its
+// own nautilus.yaml).
+func skipDir(dir string) bool {
+	name := filepath.Base(dir)
+	if strings.HasPrefix(name, ".") || name == "node_modules" || name == "build" || name == "dist" {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(dir, "nautilus.yaml"))
+	return err == nil
 }
 
 // Mimics lists the project's *.mimic.json, slash paths from the project
@@ -31,7 +38,7 @@ func Mimics(project string) []string {
 			return nil
 		}
 		if d.IsDir() {
-			if p != project && skipDir(d.Name()) {
+			if p != project && skipDir(p) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -152,7 +159,7 @@ func componentSources(project string) map[string][]string {
 			return nil
 		}
 		if d.IsDir() {
-			if p != project && skipDir(d.Name()) {
+			if p != project && skipDir(p) {
 				return filepath.SkipDir
 			}
 			return nil
