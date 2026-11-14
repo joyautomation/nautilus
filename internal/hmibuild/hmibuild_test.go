@@ -34,8 +34,8 @@ func TestBuildsTheLiftStationApp(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	if got := strings.Join(res.Pages, " "); got != "/ /3d /diagnostics" {
-		t.Errorf("pages = %q, want / /3d /diagnostics", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /3d /diagnostics /components" {
+		t.Errorf("pages = %q, want / /3d /diagnostics /components (naut's components page)", got)
 	}
 	for _, f := range []string{"index.html", "app.js", "app.css", "models/submersible-pump.glb"} {
 		if len(res.Files[f]) == 0 {
@@ -61,8 +61,9 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(res.Pages, " "); got != "/ /pumps" {
-		t.Errorf("pages = %q, want / /pumps", got)
+	// and the project's own FilterCell on the components page
+	if got := strings.Join(res.Pages, " "); got != "/ /pumps /components" {
+		t.Errorf("pages = %q, want / /pumps /components", got)
 	}
 	if !strings.Contains(string(res.Files["index.html"]), "<title>Filter gallery</title>") {
 		t.Errorf("index.html: %s", res.Files["index.html"])
@@ -179,6 +180,43 @@ func TestAUnitBuildsWithItsComponentAndPorts(t *testing.T) {
 	}
 	if strings.Contains(js, `"units"`) || strings.Contains(js, "F{n}") {
 		t.Errorf("the unit wasn't drawn out: %q", excerpt(js, "units"))
+	}
+}
+
+// naut's own screens get a /components page: each of the project's
+// components in each example its sidecar gives, at the box a screen gives
+// it; a component with none is drawn once, with no props.
+func TestComponentsPageDrawsEachExample(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "screens/g.mimic.json", `{"canvas":{"width":900,"height":300},"equipment":[
+		{"id":"V1","component":"XValve","x":10,"y":10,"width":40,"height":60},
+		{"id":"V2","component":"XValve","x":90,"y":10},
+		{"id":"M1","component":"Motor","x":200,"y":10},
+		{"id":"T1","component":"Tank","x":300,"y":10}]}`)
+	write(t, dir, "screens/XValve.svelte", "<script>let { open = false } = $props();</script><div>{open ? 'open_qq' : 'shut_qq'}</div>\n")
+	write(t, dir, "screens/XValve.component.json", `{"examples":{"opened_qq":{"open":true},"closed_qq":{"open":false}}}`)
+	write(t, dir, "screens/Motor.svelte", "<div>motor</div>\n")
+	res, err := Build(Options{Project: dir, Title: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(res.Pages, " "); got != "/ /components" {
+		t.Errorf("pages = %q, want / /components", got)
+	}
+	var all strings.Builder
+	for name, b := range res.Files {
+		if strings.HasSuffix(name, ".js") {
+			all.Write(b)
+		}
+	}
+	js := all.String()
+	for _, want := range []string{"opened_qq", "closed_qq", `"Motor"`, "width: 40, height: 60"} {
+		if !strings.Contains(js, want) {
+			t.Errorf("the components page has no %s", want)
+		}
+	}
+	if strings.Contains(js, `name: "Tank"`) {
+		t.Error("a kit component is on the project's components page")
 	}
 }
 

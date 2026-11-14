@@ -16,11 +16,12 @@ import (
 // editor drew are the pipes the screen draws (bw01 fable-2, haiku-1,
 // opus-3 and sonnet-3 drew every anchored pipe zero-length without it).
 
-// sidecarPorts maps a component's name to the `ports` its
-// {Name}.component.json declares, as the editor reads them: anywhere in
-// the project, and when two directories declare one name, the shorter
-// path wins, ties broken by name (mimicComponentIndex.ts).
-func sidecarPorts(project string) map[string]json.RawMessage {
+// sidecarFiles maps a component's name to its {Name}.component.json (the
+// whole object), the one the editor reads: anywhere in the project, and
+// when two directories declare one name, the shorter path wins, ties
+// broken by name (mimicComponentIndex.ts). A file that isn't a JSON
+// object doesn't count.
+func sidecarFiles(project string) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	winner := map[string]string{}
 	_ = filepath.WalkDir(project, func(p string, d os.DirEntry, err error) error {
@@ -47,20 +48,30 @@ func sidecarPorts(project string) map[string]json.RawMessage {
 		if err != nil {
 			return nil
 		}
-		var sc struct {
-			Ports json.RawMessage `json:"ports"`
-		}
-		if json.Unmarshal(raw, &sc) != nil {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) != nil || obj == nil {
 			return nil
 		}
 		winner[name] = rel
-		if len(sc.Ports) == 0 || bytes.Equal(sc.Ports, []byte("null")) {
-			delete(out, name)
-			return nil
-		}
-		out[name] = sc.Ports
+		out[name] = json.RawMessage(bytes.TrimSpace(raw))
 		return nil
 	})
+	return out
+}
+
+// sidecarPorts maps a component's name to the `ports` its
+// {Name}.component.json declares (sidecarFiles), when it declares any.
+func sidecarPorts(project string) map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	for name, raw := range sidecarFiles(project) {
+		var sc struct {
+			Ports json.RawMessage `json:"ports"`
+		}
+		if json.Unmarshal(raw, &sc) != nil || len(sc.Ports) == 0 || bytes.Equal(sc.Ports, []byte("null")) {
+			continue
+		}
+		out[name] = sc.Ports
+	}
 	return out
 }
 

@@ -46,6 +46,10 @@ export type ComponentManifestEntry = {
   ports?: Port[];
   /** Sample props for the preview pane. Absent = rendered with none. */
   preview?: ComponentPreviewEntry;
+  /** Props per state the component draws ("open": {...}, "faulted": {...}):
+   * naut's /components page draws each, and the preview pane the first
+   * when there is no `preview`. */
+  examples?: Record<string, Record<string, unknown>>;
   // Reserved for future per-component metadata (defaults, bindHints,
   // palette, ...) — not implemented yet. Any such keys, present in a
   // hand-written or future-version file, pass through every read/patch/
@@ -91,6 +95,28 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 export function validatePreviewEntry(preview: unknown): preview is ComponentPreviewEntry {
   if (!isPlainObject(preview)) return false;
   return preview.props === undefined || isPlainObject(preview.props);
+}
+
+/** The props the preview pane renders a component with: its sidecar's
+ * `preview.props`; or a `preview` written flat, the props themselves (as
+ * the operator-screens guide once showed it, and as agents write it); or
+ * else the first of its `examples` (name -> props, one per state, which
+ * naut's /components page draws). None of these: no props. */
+export function previewProps(entry: ComponentManifestEntry): Record<string, unknown> {
+  const p: unknown = entry.preview;
+  if (isPlainObject(p)) {
+    if (p.props === undefined) {
+      if (Object.keys(p).length > 0) return p;
+    } else if (isPlainObject(p.props)) {
+      return p.props;
+    }
+  }
+  const ex: unknown = entry.examples;
+  if (isPlainObject(ex)) {
+    const first = Object.values(ex).find(isPlainObject);
+    if (first) return first;
+  }
+  return {};
 }
 
 /** "src/lib/HeatExchanger.svelte" -> "HeatExchanger"; null for anything

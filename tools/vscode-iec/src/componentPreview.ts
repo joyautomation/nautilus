@@ -39,7 +39,7 @@ import {
   componentNameFromSveltePath,
   parseComponentEntry,
   validatePortList,
-  validatePreviewEntry,
+  previewProps,
 } from "./mimicComponentIndex";
 import {
   COMPONENT_GLOB,
@@ -288,7 +288,7 @@ export class ComponentPreview implements vscode.Disposable {
     const sidecar = await sidecarLocation(this.index, target.uri, target.name);
     const text = await readText(sidecar);
     const entry = parseComponentEntry(text);
-    const props = validatePreviewEntry(entry.preview) ? (entry.preview.props ?? {}) : {};
+    const props = previewProps(entry);
     // A built-in without a ports override shows the kit's defaults; the
     // first edit writes the whole list, defaults included, to the sidecar.
     const own = validatePortList(entry.ports) ? entry.ports : null;

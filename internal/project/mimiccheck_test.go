@@ -20,7 +20,7 @@ tags:
 `),
 		"main.st":                           file("PROGRAM main\nEND_PROGRAM\n"),
 		"screens/FilterCell.svelte":         file("<p></p>"),
-		"screens/FilterCell.component.json": file(`{"ports":[{"name":"influent","x":0.5,"y":0}]}`),
+		"screens/FilterCell.component.json": file(`{"ports":[{"name":"influent","x":0.5,"y":0}],"examples":{"washing":{"level":5.2}}}`),
 		"screens/gallery.mimic.json": file(`{"equipment":[
 			{"id":"F1","component":"FilterCell","x":0,"y":0,"bind":{"level":"F1_Level","busy":"!F1_Busy"}},
 			{"id":"T1","component":"Tank","x":0,"y":0,"bind":{"levelPct":"f1_level"}},
@@ -116,8 +116,12 @@ tags:
 	if err != nil {
 		t.Fatal(err)
 	}
-	reports, errs, _ := p.CheckMimics(fsys, true)
+	reports, errs, warns := p.CheckMimics(fsys, true)
 	all := strings.Join(errs, "\n")
+	// FilterCell has no examples: said once, however many copies
+	if len(warns) != 1 || !strings.Contains(warns[0], `FilterCell has no examples: give its FilterCell.component.json "examples"`) {
+		t.Errorf("warnings = %q, want the one about FilterCell's examples", warns)
+	}
 	if len(reports) != 1 || reports[0].Equipment != 6 || reports[0].Pipes != 6 {
 		t.Errorf("reports = %+v, want 6 equipment and 6 pipes", reports)
 	}

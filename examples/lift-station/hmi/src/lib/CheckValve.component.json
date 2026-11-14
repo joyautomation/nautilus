@@ -1,7 +1,26 @@
 {
 	"ports": [
-		{ "name": "in", "x": 0, "y": 0.5, "dir": "left" },
-		{ "name": "out", "x": 1, "y": 0.5, "dir": "right" }
+		{
+			"name": "in",
+			"x": 0,
+			"y": 0.5,
+			"dir": "left"
+		},
+		{
+			"name": "out",
+			"x": 1,
+			"y": 0.5,
+			"dir": "right"
+		}
 	],
-	"preview": { "props": { "label": "CKV-101" } }
+	"preview": {
+		"props": {
+			"label": "CKV-101"
+		}
+	},
+	"examples": {
+		"in line": {
+			"label": "CKV-101"
+		}
+	}
 }

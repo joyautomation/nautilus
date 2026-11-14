@@ -1,4 +1,20 @@
 {
-	"ports": [{ "name": "in", "x": 0, "y": 0.5, "dir": "left" }],
-	"preview": { "props": { "label": "FORCE MAIN" } }
+	"ports": [
+		{
+			"name": "in",
+			"x": 0,
+			"y": 0.5,
+			"dir": "left"
+		}
+	],
+	"preview": {
+		"props": {
+			"label": "FORCE MAIN"
+		}
+	},
+	"examples": {
+		"force main": {
+			"label": "FORCE MAIN"
+		}
+	}
 }

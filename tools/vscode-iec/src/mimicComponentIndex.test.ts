@@ -18,7 +18,8 @@ import {
   patchComponentPreviewText,
   validatePortList,
   validatePreviewEntry,
-  type ComponentFile,
+  previewProps,
+  type ComponentFile
 } from "./mimicComponentIndex";
 
 test("componentNameFromFilename extracts the name, or null for a non-match", () => {
@@ -340,4 +341,11 @@ test("patchComponentPreviewText writes preview.props beside existing keys and dr
   // Mid-keystroke JSON refuses, naming the edit.
   const bad = patchComponentPreviewText('{"ports": [', { a: 1 });
   assert.ok("error" in bad && /preview props/.test(bad.error));
+});
+
+test("previewProps: preview.props, a flat preview, else the first example", () => {
+  assert.deepEqual(previewProps(parseComponentEntry('{"preview": {"props": {"level": 62}}}')), { level: 62 });
+  assert.deepEqual(previewProps(parseComponentEntry('{"preview": {"label": "F-2", "level": 5.8}}')), { label: "F-2", level: 5.8 });
+  assert.deepEqual(previewProps(parseComponentEntry('{"examples": {"open": {"zso": true}, "closed": {"zsc": true}}}')), { zso: true });
+  assert.deepEqual(previewProps(parseComponentEntry('{"ports": []}')), {});
 });

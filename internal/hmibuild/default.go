@@ -58,8 +58,17 @@ func Mimics(project string) []string {
 type mimicDoc struct {
 	Name      string `json:"name"`
 	Equipment []struct {
-		Component string `json:"component"`
+		Component string   `json:"component"`
+		Width     *float64 `json:"width"`
+		Height    *float64 `json:"height"`
 	} `json:"equipment"`
+}
+
+// galleryComp is one of the project's components on the components page:
+// its source, and the box the first screen to use it gives it.
+type galleryComp struct {
+	name, src     string
+	width, height *float64
 }
 
 // defaultApp is the app for a project with mimics and no app of its own:
@@ -137,6 +146,9 @@ func defaultApp(project, title string) (*appSource, error) {
 	}
 	if len(problems) > 0 {
 		return nil, &Error{Messages: problems}
+	}
+	if !takenSlug["components"] {
+		a.addComponentsPage(project, []int{0})
 	}
 	if title == "" {
 		title = filepath.Base(project)
@@ -295,4 +307,181 @@ const defaultHTML = `<!doctype html>
 		%sveltekit.body%
 	</body>
 </html>
+`
+
+// projectGallery is every component of the project's own that a screen
+// shows: each a mimic places (with the box the first to place it gives
+// it), then each with a {Name}.component.json, as an app's are.
+func projectGallery(project string) []*galleryComp {
+	sources := componentSources(project)
+	var out []*galleryComp
+	at := map[string]*galleryComp{}
+	for _, m := range Mimics(project) {
+		raw, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(m)))
+		if err != nil {
+			continue
+		}
+		if x, _, err := mimicdoc.ExpandUnits(raw); err == nil {
+			raw = x
+		}
+		var doc mimicDoc
+		if json.Unmarshal(raw, &doc) != nil {
+			continue
+		}
+		for _, eq := range doc.Equipment {
+			c := eq.Component
+			if c == "" || builtinEquipment[c] {
+				continue
+			}
+			if g := at[c]; g != nil {
+				if g.width == nil && eq.Width != nil {
+					g.width = eq.Width
+				}
+				if g.height == nil && eq.Height != nil {
+					g.height = eq.Height
+				}
+				continue
+			}
+			src, err := pickSource(sources[c], filepath.Dir(filepath.Join(project, filepath.FromSlash(m))), project)
+			if err != nil {
+				continue
+			}
+			g := &galleryComp{name: c, src: src, width: eq.Width, height: eq.Height}
+			at[c] = g
+			out = append(out, g)
+		}
+	}
+	sidecars := sidecarFiles(project)
+	var declared []string
+	for name := range sidecars {
+		if at[name] == nil && !builtinEquipment[name] && len(sources[name]) > 0 {
+			declared = append(declared, name)
+		}
+	}
+	sort.Strings(declared)
+	for _, name := range declared {
+		src := sources[name][0]
+		for _, p := range sources[name][1:] {
+			if len(p) < len(src) {
+				src = p
+			}
+		}
+		out = append(out, &galleryComp{name: name, src: src})
+	}
+	return out
+}
+
+// addComponentsPage adds ComponentsRoute to the app, under the layouts
+// given, when the project has components of its own to show and the app
+// has no page there already.
+func (a *appSource) addComponentsPage(project string, layouts []int) {
+	for _, r := range a.routes {
+		if r.ID == ComponentsRoute {
+			return
+		}
+	}
+	gallery := projectGallery(project)
+	if len(gallery) == 0 {
+		return
+	}
+	const pageMod = "nx:components.svelte"
+	if a.virtual == nil {
+		a.virtual = map[string]vmod{}
+	}
+	a.virtual[pageMod] = vmod{kind: component, text: componentsPage(gallery, sidecarFiles(project))}
+	r, _ := routeFor(ComponentsRoute[1:])
+	r.Page = pageMod
+	r.Layouts = layouts
+	a.routes = append(a.routes, r)
+	a.generate()
+}
+
+// ComponentsRoute is where naut's own screens show the project's
+// components, each in each of the examples its {Name}.component.json
+// gives (`"examples": {"open": {...props}, "closed": {...}}`).
+const ComponentsRoute = "/components"
+
+// componentsPage is the Svelte page for ComponentsRoute.
+func componentsPage(gallery []*galleryComp, sidecars map[string]json.RawMessage) string {
+	var imports, entries []string
+	for i, g := range gallery {
+		imports = append(imports, fmt.Sprintf("\timport C%d from %s;", i, jsq(g.src)))
+		// only what the page draws from: the examples, or a preview
+		sc := json.RawMessage("null")
+		var all map[string]json.RawMessage
+		if json.Unmarshal(sidecars[g.name], &all) == nil {
+			keep := map[string]json.RawMessage{}
+			for _, k := range []string{"examples", "preview"} {
+				if v, ok := all[k]; ok {
+					keep[k] = v
+				}
+			}
+			if b, err := json.Marshal(keep); err == nil {
+				sc = b
+			}
+		}
+		num := func(f *float64) string {
+			if f == nil {
+				return "undefined"
+			}
+			return fmt.Sprint(*f)
+		}
+		entries = append(entries, fmt.Sprintf("\t\t{ name: %s, C: C%d, width: %s, height: %s, sidecar: %s }",
+			jsq(g.name), i, num(g.width), num(g.height), sc))
+	}
+	return fmt.Sprintf(componentsPageText, strings.Join(imports, "\n"), strings.Join(entries, ",\n"))
+}
+
+const componentsPageText = `<script>
+%s
+	// Each component's examples: its sidecar's "examples" (name -> props),
+	// else its "preview" (flat, or {props}), else none.
+	const comps = [
+%s
+	];
+	const examples = (sc) => {
+		if (sc && sc.examples && typeof sc.examples === 'object' && Object.keys(sc.examples).length > 0) return Object.entries(sc.examples);
+		if (sc && sc.preview && typeof sc.preview === 'object') return [['preview', sc.preview.props && typeof sc.preview.props === 'object' ? sc.preview.props : sc.preview]];
+		return [];
+	};
+	const write = async () => 'The components page writes nothing';
+</script>
+
+<div class="nx-components">
+	<h1>Components</h1>
+	<p class="nx-lede">Each of the project's own components, in each of the examples its <code>{'{Name}'}.component.json</code> gives.</p>
+	{#each comps as c (c.name)}
+		{@const C = c.C}
+		{@const ex = examples(c.sidecar)}
+		<section aria-label={c.name}>
+			<h2>{c.name}</h2>
+			{#if ex.length === 0}
+				<p class="nx-none">No examples: add <code>"examples": {"{"} "running": {"{"} ... props {"}"} {"}"}</code> to {c.name}.component.json. Drawn with no props.</p>
+			{/if}
+			<div class="nx-row">
+				{#each ex.length > 0 ? ex : [['no props', {}]] as [label, props] (label)}
+					<figure>
+						<div class="nx-box" style:width={c.width ? c.width + 'px' : undefined} style:height={c.height ? c.height + 'px' : undefined}>
+							<C look="isa101" {...(c.width ? { width: c.width } : {})} {...(c.height ? { height: c.height } : {})} {...props} {write} />
+						</div>
+						<figcaption>{label}</figcaption>
+					</figure>
+				{/each}
+			</div>
+		</section>
+	{/each}
+</div>
+
+<style>
+	.nx-components { display: grid; gap: 28px; max-width: 1800px; }
+	h1 { margin: 0; font-size: var(--font-lg); }
+	h2 { margin: 0 0 10px; font-size: var(--font-md); }
+	.nx-lede, .nx-none { margin: 0; color: var(--muted); }
+	.nx-none { margin-bottom: 10px; }
+	code { font-family: var(--mono); }
+	.nx-row { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+	figure { margin: 0; display: grid; gap: 8px; justify-items: start; }
+	.nx-box { position: relative; }
+	figcaption { color: var(--ink-2); font-size: var(--font-sm); }
+</style>
 `

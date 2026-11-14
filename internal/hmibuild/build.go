@@ -99,6 +99,20 @@ func Build(o Options) (*Result, error) {
 	var app *appSource
 	if o.App != "" {
 		app, err = scanApp(o.App)
+		if err == nil {
+			// the components page under the app's root layout, if it has one
+			proj := o.Project
+			if proj == "" {
+				proj = o.App
+			}
+			var root []int
+			for i, l := range app.layouts {
+				if l.Dir == "" {
+					root = []int{i}
+				}
+			}
+			app.addComponentsPage(proj, root)
+		}
 	} else {
 		app, err = defaultApp(o.Project, o.Title)
 	}

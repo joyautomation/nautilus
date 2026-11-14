@@ -180,8 +180,8 @@ kit's tokens rather than hex: text in `var(--ink)`, `var(--ink-2)` or
 both themes. A hex chosen for one theme is unreadable in the other, which
 `naut check` reports.
 
-A `{Name}.component.json` beside the component gives it pipe ports and the
-sample props its preview renders with:
+A `{Name}.component.json` beside the component gives it pipe ports and
+its examples: the props for each state it draws, by name.
 
 ```json
 {
@@ -190,15 +190,28 @@ sample props its preview renders with:
     { "name": "effluent", "x": 0.25, "y": 1 },
     { "name": "air", "x": 0, "y": 0.85 }
   ],
-  "preview": { "label": "F-2", "level": 5.8, "filterState": 1 }
+  "examples": {
+    "in service": { "label": "F-2", "level": 5.8, "filterState": 1 },
+    "washing": { "label": "F-2", "level": 2.1, "filterState": 3 },
+    "out of service": { "label": "F-2", "level": 0, "filterState": 0 }
+  }
 }
 ```
+
+Every screen naut builds, an app of your own included (unless it has a
+page there already), has a `/components` page. It draws each of the
+project's components (each a mimic places, and each with a
+`{Name}.component.json`) in each of its examples, at the size the screen
+gives it, and `naut check` renders that page like any other: a state that
+throws, or reads badly in one theme, shows up there before the plant
+reaches it. A component on a screen with no examples is a warning.
 
 Each port's `x` and `y` are fractions of the box. With `"part": "<name>"`
 they are fractions of an element the component marks
 `data-part="<name>"` instead, so the port stays on that part at any size.
 Open the `.svelte` and press the preview button in the editor title to see
-it render with the preview props as you type; there, you can also drag the
+it render with its first example (or `"preview": {"props": {...}}`, which
+the props strip there writes) as you type; there, you can also drag the
 ports into place.
 
 ## Units: what repeats, written once

@@ -1,4 +1,31 @@
 {
-	"ports": [{ "name": "mount", "x": 0.5, "y": 0, "dir": "up" }],
-	"preview": { "props": { "tripped": false, "label": "LSH-101" } }
+	"ports": [
+		{
+			"name": "mount",
+			"x": 0.5,
+			"y": 0,
+			"dir": "up"
+		}
+	],
+	"preview": {
+		"props": {
+			"tripped": false,
+			"label": "LSH-101"
+		}
+	},
+	"examples": {
+		"clear": {
+			"tripped": false,
+			"label": "LSH-101"
+		},
+		"tripped": {
+			"tripped": true,
+			"label": "LSH-101"
+		},
+		"low float, tripped": {
+			"tripped": true,
+			"trip": "low",
+			"label": "LSLL-101"
+		}
+	}
 }
