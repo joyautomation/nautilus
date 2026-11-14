@@ -321,10 +321,10 @@ naut builds the operator screen from the project itself, with no npm, and
 - With Chrome, Chromium or Edge on the machine, `naut check` also opens
   each page at desktop and phone size and reports what it sees: a page
   that throws or is blank, a pipe that draws nothing, a pipe that passes
-  under three or more others, a shape drawn far
-  outside its drawing, a drawing that runs off the bottom of the window or
-  is drawn too small to read, text too dim to read in either theme or
-  drawn under 9 px, sideways scroll on a phone. Fix them like compile
+  under three or more others, a shape drawn far outside its drawing, a
+  drawing that runs off the bottom of the window or is drawn too small to
+  read, text too dim to read in either theme, drawn under 9 px or drawn
+  over other text, sideways scroll on a phone. Fix them like compile
   errors. A screen you haven't seen rendered isn't done.
 - In a component that uses `$state(...)`, never name a prop or variable
   `state`: Svelte then reads `$state` as a store subscription and the

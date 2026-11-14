@@ -20,6 +20,11 @@
   one instead, and the header is drawn once, by what feeds it. Ports
   `top`, `left`, `right`, `bottom`.
 
+- **Text drawn over text, reported.** `naut check`'s render warns of a
+  label drawn over another (a tag over the next valve's state, one
+  connector's name over the next), naming the pairs. An `OffPage` with no
+  `width` is as wide as its label.
+
 - **Pipes that can't be traced, reported.** `<Mimic>` lists a pipe that
   passes under three or more others (`CROSSED_MANY`) on its root
   (`data-crossed`), and `naut check`'s render warns of it with what to do:

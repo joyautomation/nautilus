@@ -11,7 +11,7 @@
 	let {
 		label = '',
 		dir = 'right',
-		width = 150,
+		width,
 		height,
 		look = 'isa101'
 	}: {
@@ -25,7 +25,9 @@
 	} = $props();
 
 	const flat = $derived(dir === 'right' || dir === 'left');
-	const w = $derived(Math.max(40, width));
+	// no width given: as wide as the label needs (12 px semibold caps run
+	// about 8 px a letter), and the point
+	const w = $derived(Math.max(40, width ?? label.length * 8 + 20 + (flat ? 16 : 0)));
 	const h = $derived(Math.max(20, height ?? (flat ? 32 : 44)));
 	const s = 1; // half the 2 px outline
 	// how far the point stands out from the box
