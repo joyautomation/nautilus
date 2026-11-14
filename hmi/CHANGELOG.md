@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed
+
+- **Pipes on an ISA-101 screen are single lines.** `<Mimic>` draws a pipe
+  as one 4 px line when its look is `isa101` (the default), as a P&ID
+  draws a process line, the flow dashes on it; the walled tube stays for
+  `look="realistic"` and for a `<Pipe>` drawn on its own. Five headers
+  under a row of filters read as five lines, not a band of tubes. Tee
+  dots are 10 px on a line.
+
 ### Added
 
 - **Tees dotted, crossings gapped.** Where a pipe ends on another run (or
