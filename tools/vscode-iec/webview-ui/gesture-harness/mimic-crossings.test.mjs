@@ -1,7 +1,7 @@
 // Pipes that cross without joining, in the mimic editor: the flatter one
-// (a header) passes over and the other is broken either side of it, as the
-// kit's Mimic draws it on the screen; a pipe ending on a header is a tee and
-// gets no break.
+// (a header) passes over and the other is masked out either side of it, as
+// the kit's Mimic draws it on the screen; a pipe ending on a header is a tee
+// and gets a dot instead.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { recordClips, withEditor, sleepMs, exceptions } from './mimic-helpers.mjs';
@@ -21,18 +21,23 @@ const doc = () => ({
 	labels: []
 });
 
-test('X01 a drop crossing a header is broken under it; a tee is not', async () => {
+test('X01 a drop crossing a header is broken under it; a tee is dotted', async () => {
 	await withEditor(doc(), async (ed) => {
 		await sleepMs(300);
-		const n = await ed.b.eval("document.querySelectorAll('g.crossing').length");
-		assert.equal(n, 1, 'one crossing: D1 under H1');
-		// the crossing redraws H1 (horizontal) over D1, clipped round 200,150
-		const clip = await ed.b.eval(
-			`(() => { const g = document.querySelector('g.crossing'); const id = g.getAttribute('clip-path').slice(5, -1); const r = document.getElementById(id).querySelector('rect'); return [r.getAttribute('x'), r.getAttribute('y')].join(','); })()`
+		// D1 (the third run) is masked round 200,150, where it passes under H1
+		const masks = await ed.b.eval(
+			`JSON.stringify([...document.querySelectorAll('g.piperun[mask]')].map((g) => g.dataset.id))`
 		);
-		assert.equal(clip, '191,141');
-		const d = await ed.b.eval("document.querySelector('g.crossing path').getAttribute('d')");
-		assert.match(d, /M 40 150 L 560 150/);
+		assert.deepEqual([...new Set(JSON.parse(masks))], ['D1'], 'only D1 passes under a header');
+		const cut = await ed.b.eval(
+			`(() => { const g = document.querySelector('g.piperun[mask]'); const id = g.getAttribute('mask').slice(5, -1); const r = document.getElementById(id).querySelectorAll('rect')[1]; return [r.getAttribute('x'), r.getAttribute('y'), r.getAttribute('width')].join(','); })()`
+		);
+		assert.equal(cut, '189,139,22');
+		// D1 ends on H2 and D2 on H1: two tees, each dotted on its header
+		const tees = await ed.b.eval(
+			`JSON.stringify([...document.querySelectorAll('circle.tee')].map((c) => [+c.getAttribute('cx'), +c.getAttribute('cy')]).sort((a, b) => a[0] - b[0]))`
+		);
+		assert.deepEqual(JSON.parse(tees), [[200, 300], [400, 150]]);
 		assert.deepEqual(exceptions(ed), []);
 	});
 });

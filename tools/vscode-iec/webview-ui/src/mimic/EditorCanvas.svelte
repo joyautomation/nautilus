@@ -28,6 +28,7 @@
 		partRect,
 		Pipe,
 		pipeCrossings,
+		pipeTees,
 		pointsToPath,
 		resolveBindings,
 		resolvedPortDir,
@@ -398,7 +399,7 @@
 	/** Clip-path ids for crossings, unique to this canvas. */
 	const uid = $props.id();
 	/** Half a crossing's square, as the kit's Mimic draws it. */
-	const XING = 9;
+	const XING = 11;
 	/** Every pipe drawn (the doc's and its units' copies), routed, and where
 	 * they cross: read by the crossings pass in the pipe layer. */
 	const xingRuns = $derived.by(() => {
@@ -409,6 +410,16 @@
 		});
 	});
 	const xings = $derived(pipeCrossings(xingRuns.map((r) => r.pts)));
+	/** The crossings each run passes under, by its index in xingRuns: its
+	 * mask, as the kit's Mimic masks it. */
+	const unders = $derived.by(() => {
+		const m = new Map<number, { x: number; y: number }[]>();
+		for (const c of xings) m.set(c.under, [...(m.get(c.under) ?? []), c]);
+		return m;
+	});
+	const underMask = (i: number) => (unders.has(i) ? `url(#${uid}-u${i})` : undefined);
+	/** Where a branch joins a run, dotted as the kit's Mimic dots it. */
+	const tees = $derived(pipeTees(xingRuns.map((r) => r.pts)));
 
 	/** `{points, from, to}` to feed routedPoints()/resolvePipeEndpoints() for
 	 * `p`, with an in-flight 'anchor' drag on THIS pipe live-substituted in.
@@ -1741,10 +1752,22 @@
 				     (under everything of its own pipe and every bore); the hit
 				     strokes come last so they win pointer events over all
 				     paint. -->
+				{#if unders.size > 0}
+					<defs>
+						{#each [...unders] as [i, cs] (i)}
+							<mask id="{uid}-u{i}" maskUnits="userSpaceOnUse" x={-1e5} y={-1e5} width={2e5} height={2e5}>
+								<rect x={-1e5} y={-1e5} width={2e5} height={2e5} fill="white" />
+								{#each cs as c, k (k)}
+									<rect x={c.x - XING} y={c.y - XING} width={XING * 2} height={XING * 2} fill="black" />
+								{/each}
+							</mask>
+						{/each}
+					</defs>
+				{/if}
 				{#each PIPE_LAYERS as layer (layer)}
-					{#each doc.pipes ?? [] as p (p.id)}
+					{#each doc.pipes ?? [] as p, pi (p.id)}
 						{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
-						<g class="piperun" class:sel={selected('pipe', p.id)} class:flagged={pipeFlagged(p)} data-id={p.id} data-kind="pipe">
+						<g class="piperun" class:sel={selected('pipe', p.id)} class:flagged={pipeFlagged(p)} data-id={p.id} data-kind="pipe" mask={underMask(pi)}>
 							{#if layer === 'wall' && selected('pipe', p.id)}
 								<path class="pipesel" {d} style="stroke-width: {10 / scale}" />
 							{/if}
@@ -1757,8 +1780,8 @@
 							/>
 						</g>
 					{/each}
-					{#each unitCopies?.pipes ?? [] as p (p.id)}
-						<g class="piperun unitcopy" data-unit={p.fromUnit}>
+					{#each unitCopies?.pipes ?? [] as p, ui (p.id)}
+						<g class="piperun unitcopy" data-unit={p.fromUnit} mask={underMask((doc.pipes?.length ?? 0) + ui)}>
 							<Pipe
 								d={pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
 								{...(p.color !== undefined ? { color: p.color } : {})}
@@ -1769,28 +1792,9 @@
 						</g>
 					{/each}
 				{/each}
-				<!-- Crossings as the kit's Mimic draws them: the flatter pipe
-				     passes over, the other is broken either side of it, so the
-				     editor shows the break the screen will. -->
-				{#if xings.length > 0}
-					<defs>
-						{#each xings as c, i (i)}
-							<clipPath id="{uid}-x{i}"><rect x={c.x - XING} y={c.y - XING} width={XING * 2} height={XING * 2} /></clipPath>
-						{/each}
-					</defs>
-					{#each xings as c, i (i)}
-						{@const o = xingRuns[c.over]}
-						<g class="crossing" clip-path="url(#{uid}-x{i})" pointer-events="none">
-							<path d={o.d} fill="none" stroke="var(--pipe-bore, var(--bg, #0d0d0d))" stroke-width="16" />
-							<Pipe
-								d={o.d}
-								{...(o.p.color !== undefined ? { color: o.p.color } : {})}
-								{...(o.p.props ?? {})}
-								{...resolveBindings(o.p.bind, ed.tags ?? {})}
-							/>
-						</g>
-					{/each}
-				{/if}
+				{#each tees as t, i (i)}
+					<circle class="tee" cx={t.x} cy={t.y} r="7" fill="var(--pipe-wall, var(--edge, #7a7973))" pointer-events="none" />
+				{/each}
 				{#each doc.pipes ?? [] as p (p.id)}
 					{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
 					<g class="piperun" class:flagged={pipeFlagged(p)}>

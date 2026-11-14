@@ -9,6 +9,7 @@ import {
 	brokenPipes,
 	expandUnits,
 	pipeCrossings,
+	pipeTees,
 	connectPorts,
 	routedPoints,
 	makeGetPort,
@@ -362,5 +363,29 @@ describe('pipeCrossings', () => {
 	it('knows a crossing of a header near (but clear of) an end', () => {
 		expect(pipeCrossings([header, [[13, 50], [13, 150]]]).length).toBe(1);
 		expect(pipeCrossings([header, [[11, 50], [11, 150]]]).length).toBe(0);
+	});
+});
+
+describe('pipeTees', () => {
+	const header: [number, number][] = [[0, 100], [400, 100]];
+	it('dots a drop ending on a header, on the header', () => {
+		expect(pipeTees([header, [[200, 50], [200, 103]]])).toEqual([{ x: 200, y: 100 }]);
+	});
+	it('dots a drop that turns onto a header and runs along it', () => {
+		expect(pipeTees([header, [[300, 50], [300, 100], [380, 100]]]).some((t) => t.x === 300 && t.y === 100)).toBe(true);
+	});
+	it('leaves a crossing, an elbow and a run in two pieces alone', () => {
+		expect(pipeTees([header, [[100, 50], [100, 200]]])).toEqual([]);
+		expect(pipeTees([[[0, 0], [100, 0]], [[100, 0], [100, 100]]])).toEqual([]);
+		expect(pipeTees([[[0, 0], [100, 0]], [[100, 0], [200, 0]]])).toEqual([]);
+	});
+	it('dots three pipes ending at one point', () => {
+		expect(pipeTees([[[0, 0], [100, 0]], [[100, 0], [200, 0]], [[100, 0], [100, 80]]])).toEqual([{ x: 100, y: 0 }]);
+	});
+	it('leaves a drop that stops short of a header alone', () => {
+		expect(pipeTees([header, [[200, 50], [200, 90]]])).toEqual([]);
+	});
+	it('does not dot a drop ending at a header\'s own end', () => {
+		expect(pipeTees([header, [[400, 50], [400, 100]]])).toEqual([]);
 	});
 });

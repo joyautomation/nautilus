@@ -15,7 +15,7 @@
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import Pipe from './Pipe.svelte';
-	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pipeTees, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -237,14 +237,24 @@
 	/** Where pipes cross without joining. Drawn as on a P&ID: the pipe
 	 * passing over (the flatter one, a header) stays whole and the other is
 	 * broken either side of it, so a crossing never reads as the tee the
-	 * layered walls would otherwise make of it. Each is the over pipe drawn
-	 * again, clipped to a small square on the crossing, over a knockout band
-	 * in the bore colour: its flow dashes stay in step with the rest of it. */
+	 * layered walls would otherwise make of it. The under pipe is masked out
+	 * of a small square on each of its crossings: the over pipe's walls,
+	 * which its bore would have cut, show whole, with a clear gap either
+	 * side. */
 	const crossings = $derived(pipeCrossings(pipePaths.map((p) => p.pts)));
+	/** Where a branch joins a run: a dot, as on a schematic (pipeTees). */
+	const tees = $derived(pipeTees(pipePaths.map((p) => p.pts)));
 	const uid = $props.id();
-	/** Half the side of a crossing's square: half the under pipe's 10 px
-	 * wall plus a 3 px gap, and a px to spare. */
-	const XING = 9;
+	/** The crossings each pipe passes under, by its index: its mask. */
+	const unders = $derived.by(() => {
+		const m = new Map<number, PipeCrossing[]>();
+		for (const c of crossings) m.set(c.under, [...(m.get(c.under) ?? []), c]);
+		return m;
+	});
+	/** Half the side of a crossing's square: half the over pipe's 10 px
+	 * wall plus a 6 px gap the under pipe stops short by, so a crossing
+	 * reads as one at the size an operator sees it. */
+	const XING = 11;
 
 	/** Pipes that draw nothing (an end that isn't there, or no length), as
 	 * JSON on the root for `naut check`'s render; absent when there are none. */
@@ -288,36 +298,34 @@
 				     bore merges into the main's instead of the later pipe's
 				     background-coloured bore punching a slot across the earlier
 				     pipe's wall. See the junction note in Pipe.svelte. -->
-				{#each PIPE_LAYERS as layer (layer)}
-					{#each pipePaths as { pipe: p, d } (p.id)}
-						<Pipe
-							{d}
-							{...(p.color !== undefined ? { color: p.color } : {})}
-							{...(p.props ?? {})}
-							{...resolveBindings(p.bind, tags)}
-							{layer}
-						/>
-					{/each}
-				{/each}
-				{#if crossings.length > 0}
+				{#if unders.size > 0}
 					<defs>
-						{#each crossings as c, i (i)}
-							<clipPath id="{uid}-x{i}"><rect x={c.x - XING} y={c.y - XING} width={XING * 2} height={XING * 2} /></clipPath>
+						{#each [...unders] as [p, cs] (p)}
+							<mask id="{uid}-u{p}" maskUnits="userSpaceOnUse" x="0" y="0" width={doc.canvas.width} height={doc.canvas.height}>
+								<rect x="0" y="0" width={doc.canvas.width} height={doc.canvas.height} fill="white" />
+								{#each cs as c, i (i)}
+									<rect x={c.x - XING} y={c.y - XING} width={XING * 2} height={XING * 2} fill="black" />
+								{/each}
+							</mask>
 						{/each}
 					</defs>
-					{#each crossings as c, i (i)}
-						{@const o = pipePaths[c.over]}
-						<g class="crossing" clip-path="url(#{uid}-x{i})">
-							<path d={o.d} fill="none" stroke="var(--pipe-bore, var(--bg, #0d0d0d))" stroke-width="16" />
+				{/if}
+				{#each PIPE_LAYERS as layer (layer)}
+					{#each pipePaths as { pipe: p, d }, i (p.id)}
+						<g mask={unders.has(i) ? `url(#${uid}-u${i})` : undefined}>
 							<Pipe
-								d={o.d}
-								{...(o.pipe.color !== undefined ? { color: o.pipe.color } : {})}
-								{...(o.pipe.props ?? {})}
-								{...resolveBindings(o.pipe.bind, tags)}
+								{d}
+								{...(p.color !== undefined ? { color: p.color } : {})}
+								{...(p.props ?? {})}
+								{...resolveBindings(p.bind, tags)}
+								{layer}
 							/>
 						</g>
 					{/each}
-				{/if}
+				{/each}
+				{#each tees as t, i (i)}
+					<circle class="tee" cx={t.x} cy={t.y} r="7" fill="var(--pipe-wall, var(--edge, #7a7973))" />
+				{/each}
 			</svg>
 
 			{#each doc.equipment ?? [] as eq (eq.id)}

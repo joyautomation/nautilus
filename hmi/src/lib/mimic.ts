@@ -670,6 +670,69 @@ export function pipeCrossings(paths: [number, number][][]): PipeCrossing[] {
 	return out;
 }
 
+/** A point where three or more pipe ends and runs meet: a branch off a
+ * run (a tee) or a cross. */
+export interface PipeTee {
+	x: number;
+	y: number;
+}
+
+/** How near a pipe's end must come to another pipe to join it there: a
+ * little more than half a pipe's 10 px width. */
+export const TEE_NEAR = 6;
+
+/**
+ * Every tee in a pipe network, given each pipe's routed points: a place
+ * where three or more runs meet, counting a pipe's end as one run and a pipe
+ * passing through (or turning a corner) as two. Drawn as a dot, as on a
+ * schematic, so a branch never reads as a crossing at a glance. A pipe's
+ * corner counts too: a drop that turns onto a header and runs along it
+ * joins it there. Two pipes meeting end to end (an elbow, a run drawn in
+ * two pieces) isn't a tee. The dot sits on the run the branch joins.
+ */
+export function pipeTees(paths: [number, number][][]): PipeTee[] {
+	const near = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by) <= TEE_NEAR;
+	// the nearest point of a polyline's inside (not its two ends) to [x, y]
+	const through = (pts: [number, number][], x: number, y: number): [number, number] | undefined => {
+		let best: [number, number] | undefined, bd = Infinity;
+		for (let i = 1; i < pts.length; i++) {
+			const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
+			const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+			if (l2 === 0) continue;
+			const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2));
+			const px = ax + t * dx, py = ay + t * dy, d = Math.hypot(x - px, y - py);
+			if (d < bd) (bd = d), (best = [px, py]);
+		}
+		if (!best || bd > TEE_NEAR) return undefined;
+		const [sx, sy] = pts[0], [ex, ey] = pts[pts.length - 1];
+		if (near(best[0], best[1], sx, sy) || near(best[0], best[1], ex, ey)) return undefined;
+		return best;
+	};
+	const out: PipeTee[] = [];
+	paths.forEach((pts, p) => {
+		if (pts.length < 2) return;
+		pts.forEach(([x, y], k) => {
+			// this pipe: its end is one run, a corner two
+			let runs = k === 0 || k === pts.length - 1 ? 1 : 2;
+			let at: [number, number] = [x, y];
+			paths.forEach((q, j) => {
+				if (j === p || q.length < 2) return;
+				const ends = [q[0], q[q.length - 1]].filter(([ex, ey]) => near(x, y, ex, ey)).length;
+				if (ends > 0) {
+					runs += ends;
+					return;
+				}
+				const t = through(q, x, y);
+				if (t) (runs += 2), (at = t);
+			});
+			if (runs < 3) return;
+			const [tx, ty] = [Math.round(at[0] * 10) / 10, Math.round(at[1] * 10) / 10];
+			if (!out.some((d) => near(d.x, d.y, tx, ty))) out.push({ x: tx, y: ty });
+		});
+	});
+	return out;
+}
+
 /** Resolve a binding map (prop -> tag name) against the live tags. A tag
  * name prefixed with "!" negates a boolean. Absent tags resolve to nothing
  * so the component keeps its default — never a fabricated value. */
