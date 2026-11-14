@@ -80,8 +80,9 @@
 <script lang="ts">
 	import { T } from '@threlte/core';
 	import { RoundedBoxGeometry } from '@threlte/extras';
-	import { getContext } from 'svelte';
-	import { CatmullRomCurve3, TubeGeometry, Vector3 } from 'three';
+	import { getContext, onMount } from 'svelte';
+	import { CatmullRomCurve3, Mesh, TubeGeometry, Vector3, type BufferGeometry } from 'three';
+	import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 	import { SCENE, type SceneContext } from '@joyautomation/nautilus-hmi-3d';
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
@@ -105,6 +106,27 @@
 	const raw = (tag: string) => scene.tags[tag];
 	const on = (tag: string) => raw(tag) === true;
 	let live = $derived(Object.keys(scene.tags).length > 0);
+
+	// The bodies are hand-drawn below, from photographs: there is no
+	// published model of these parts in the repo. To replace one with a
+	// model, put a GLB in static/models (one mesh, in this component's frame
+	// in metres: x from the controller's left edge, y up from the rail's
+	// middle, z out from the rail; the element model in slot 1's place) and
+	// name it here. A body with a model loaded is drawn from it and its
+	// hand-drawn housing is skipped; the lamps, lettering, wiring and
+	// everything bound to a tag stay as they are, on top.
+	type Body = 'controller' | 'backplane' | 'element';
+	const MODELS: Partial<Record<Body, string>> = {};
+	let bodies = $state<Partial<Record<Body, BufferGeometry>>>({});
+	onMount(() => {
+		const loader = new GLTFLoader();
+		for (const [name, url] of Object.entries(MODELS) as [Body, string][])
+			loader.load(url, (gltf) => {
+				gltf.scene.traverse((o) => {
+					if (o instanceof Mesh) bodies[name] = o.geometry;
+				});
+			});
+	});
 
 	// Layout, mm. x runs along the rail, y up, z out of the panel.
 	const AXC = { w: 45, h: 126.9, d: 75 };
@@ -131,21 +153,22 @@
 		return { tag, text: () => analogFault(raw(tag)) ?? `${raw(tag)} counts` };
 	}
 
-	/** A column of push-in terminals: the white release beside the conductor's hole. */
+	/** A field of push-in terminals: the points alternate left and right down the element, each with its release beside it. */
 	const terminals =
 		(n: number): Paint =>
 		(ctx) => {
-			ctx.fillStyle = '#34383c';
+			ctx.fillStyle = '#7b8082';
 			ctx.beginPath();
-			ctx.roundRect(5.9, 6.4, 5.8, n * 3 + 0.4, 0.5);
+			ctx.roundRect(5.3, 6.2, 7.4, n * 3 + 0.8, 0.5);
 			ctx.fill();
 			for (let k = 0; k < n; k++) {
-				const y = 6.6 + k * 3;
-				ctx.fillStyle = '#e9ebec';
-				ctx.fillRect(6.3, y + 0.4, 1.9, 2.2);
+				const y = 6.6 + k * 3 + 1.5;
+				const leftward = k % 2 === 0;
+				ctx.fillStyle = '#d9dcdd';
+				ctx.fillRect(leftward ? 10 : 6, y - 0.9, 1.9, 1.8);
 				ctx.fillStyle = '#0c0d0e';
 				ctx.beginPath();
-				ctx.arc(9.9, y + 1.5, 1.05, 0, Math.PI * 2);
+				ctx.arc(leftward ? 7.4 : 10.6, y, 1.3, 0, Math.PI * 2);
 				ctx.fill();
 			}
 		};
@@ -217,7 +240,7 @@
 		ctx.lineWidth = 0.35;
 		for (const y of [47.5, 77.5]) {
 			ctx.beginPath();
-			ctx.moveTo(1.5, y);
+			ctx.moveTo(y > 60 ? STEP.w : 1.5, y);
 			ctx.lineTo(43.5, y);
 			ctx.stroke();
 		}
@@ -229,13 +252,6 @@
 		ctx.beginPath();
 		ctx.roundRect(21, 80, 20.5, 41, 0.8);
 		ctx.fill();
-		// the recess over the supply plug, slotted
-		ctx.fillStyle = '#2b2e30';
-		ctx.beginPath();
-		ctx.roundRect(4, 79, 14.5, 20, 0.6);
-		ctx.fill();
-		ctx.fillStyle = '#8f9496';
-		for (const y of [84.6, 91.2]) ctx.fillRect(4, y, 14.5, 2.6);
 		// the two socket marks and the arrow to the sockets underneath
 		ctx.strokeStyle = '#2a2d30';
 		ctx.lineWidth = 0.3;
@@ -257,6 +273,17 @@
 				ctx.roundRect(x, y0, 3.2, y1 - y0, 1.2);
 				ctx.fill();
 			}
+	};
+	/** The lower-left corner of the controller's face steps back; the supply plug sits inside the step. */
+	const STEP = { w: 19.5, top: 77.5, depth: 17 };
+	/** The step's back wall: sloped slots over the plug. */
+	const stepPaint: Paint = (ctx) => {
+		ctx.fillStyle = '#3d4144';
+		for (const y of [3, 9.5, 16]) {
+			ctx.beginPath();
+			ctx.roundRect(2.5, y, 14, 3.4, 0.8);
+			ctx.fill();
+		}
 	};
 	const plugPaint: Paint = (ctx) => {
 		for (const [i, x] of [3, 9].entries())
@@ -373,10 +400,10 @@
 		// the feed-through terminals, down through the board
 		...[0, 1, 2, 3].map((c) => ({ color: c < 2 ? RED : BLUE, g: wire(down(TERM.x0 + 2.7 + c * 5.2, -27, TERM.d - 2, 0, c * 1.4 - 2, 4), 0.85) })),
 		// the controller's supply plug
-		{ color: RED, g: wire(down(5.5, -50, 80, 1, -2, 8), 0.85) },
-		{ color: BLUE, g: wire(down(11.5, -50, 80, 1, 0, 8), 0.85) },
-		{ color: RED, g: wire(down(5.5, -57, 80, 1, -1, 12), 0.85) },
-		{ color: BLUE, g: wire(down(11.5, -57, 80, 1, 1, 12), 0.85) },
+		{ color: RED, g: wire(down(7.4, -50, AXC.d - 3, 1, -2, 8), 0.85) },
+		{ color: BLUE, g: wire(down(13.4, -50, AXC.d - 3, 1, 0, 8), 0.85) },
+		{ color: RED, g: wire(down(7.4, -57, AXC.d - 3, 1, -1, 12), 0.85) },
+		{ color: BLUE, g: wire(down(13.4, -57, AXC.d - 3, 1, 1, 12), 0.85) },
 		// the backplane's supply
 		{ color: RED, g: wire(down(50, -24, 37, 2, -1, 6), 0.85) },
 		{ color: BLUE, g: wire(down(50, -31, 37, 2, 1, 6), 0.85) },
@@ -521,22 +548,39 @@
 		{/each}
 	</T.Group>
 
-	<!-- AXC F 2152: bus base, housing (vented down its left side), the supply plug lower left, the sockets underneath, the rail latch -->
-	<T.Mesh position={[AXC.w / 2, 0, 6]}>
-		<T.BoxGeometry args={[AXC.w, AXC.h, 16]} />
-		<T.MeshStandardMaterial color={GREY_2} roughness={0.7} />
-	</T.Mesh>
-	<T.Mesh position={[AXC.w / 2, 0, (AXC.d + 10) / 2]}>
-		<RoundedBoxGeometry args={[AXC.w - 0.6, AXC.h - 5, AXC.d - 10]} radius={1.6} />
-		<T.MeshStandardMaterial color={GREY} roughness={0.7} />
-	</T.Mesh>
+	<!-- AXC F 2152: bus base and housing (vented down its left side); the lower-left corner of the face steps
+	     back and the supply plug sits inside the step; the sockets are underneath -->
+	{#if bodies.controller}
+		<T.Mesh geometry={bodies.controller} scale={1000}>
+			<T.MeshStandardMaterial color={GREY} roughness={0.7} />
+		</T.Mesh>
+	{:else}
+		<T.Mesh position={[AXC.w / 2, 0, 6]}>
+			<T.BoxGeometry args={[AXC.w, AXC.h, 16]} />
+			<T.MeshStandardMaterial color={GREY_2} roughness={0.7} />
+		</T.Mesh>
+		<!-- the housing in three blocks: above the step, right of it, and the shallower block behind it -->
+		<T.Mesh position={[AXC.w / 2, (AXC.h - 5) / 2 - (STEP.top - 2.5) / 2, (AXC.d + 10) / 2]}>
+			<RoundedBoxGeometry args={[AXC.w - 0.6, STEP.top - 2.5, AXC.d - 10]} radius={1.6} />
+			<T.MeshStandardMaterial color={GREY} roughness={0.7} />
+		</T.Mesh>
+		<T.Mesh position={[(STEP.w + AXC.w) / 2, AXC.h / 2 - (STEP.top + AXC.h - 2.5) / 2, (AXC.d + 10) / 2]}>
+			<RoundedBoxGeometry args={[AXC.w - STEP.w - 0.3, AXC.h - 2.5 - STEP.top + 3, AXC.d - 10]} radius={1.6} />
+			<T.MeshStandardMaterial color={GREY} roughness={0.7} />
+		</T.Mesh>
+		<T.Mesh position={[STEP.w / 2 + 0.6, AXC.h / 2 - (STEP.top + AXC.h - 2.5) / 2, (AXC.d - STEP.depth + 10) / 2]}>
+			<T.BoxGeometry args={[STEP.w + 0.6, AXC.h - 2.5 - STEP.top + 3, AXC.d - STEP.depth - 10]} />
+			<T.MeshStandardMaterial color={GREY_2} roughness={0.7} />
+		</T.Mesh>
+		<Print w={STEP.w - 1} h={22} position={[STEP.w / 2 + 0.4, AXC.h / 2 - STEP.top - 11.5, AXC.d - STEP.depth + 0.08]} items={[]} paint={stepPaint} res={10} />
+		<Print w={AXC.d - 10} h={AXC.h - 12} position={[0.2, 0, (AXC.d + 10) / 2]} rotation={[0, -Math.PI / 2, 0]} items={[]} paint={axcSide} res={8} />
+	{/if}
 	<Print w={AXC.w} h={AXC.h} position={[AXC.w / 2, 0, AXC.d + 0.08]} items={axcInk} paint={axcPaint} res={14} />
-	<Print w={AXC.d - 10} h={AXC.h - 12} position={[0.2, 0, (AXC.d + 10) / 2]} rotation={[0, -Math.PI / 2, 0]} items={[]} paint={axcSide} res={8} />
-	<T.Mesh position={[11.2, AXC.h / 2 - 110, AXC.d + 2]}>
-		<RoundedBoxGeometry args={[12.4, 24, 8]} radius={0.8} />
+	<T.Mesh position={[10.4, AXC.h / 2 - 110.5, AXC.d - STEP.depth + 6.5]}>
+		<RoundedBoxGeometry args={[12.4, 23, 13]} radius={0.8} />
 		<T.MeshStandardMaterial color="#1c1d1f" roughness={0.6} />
 	</T.Mesh>
-	<Print w={12} h={24} position={[11.2, AXC.h / 2 - 110, AXC.d + 6.08]} items={[]} paint={plugPaint} res={12} />
+	<Print w={12} h={23} position={[10.4, AXC.h / 2 - 110.5, AXC.d - STEP.depth + 13.08]} items={[]} paint={plugPaint} res={12} />
 	<!-- the Ethernet plug in the socket underneath, its link lamp lit while frames arrive -->
 	<T.Mesh position={[31, -AXC.h / 2 - 1, 58]}>
 		<T.BoxGeometry args={[11, 12, 13]} />
@@ -561,10 +605,16 @@
 	{/each}
 
 	<!-- AXL F BP SE4: the backplane, with its own strip (marker, lamps, supply points) between the controller and the elements -->
-	<T.Mesh position={[BP.x + BP.w / 2, 0, BP.d / 2]}>
-		<RoundedBoxGeometry args={[BP.w - 0.4, BP.h, BP.d]} radius={1} />
-		<T.MeshStandardMaterial color={GREY} roughness={0.7} />
-	</T.Mesh>
+	{#if bodies.backplane}
+		<T.Mesh geometry={bodies.backplane} scale={1000}>
+			<T.MeshStandardMaterial color={GREY} roughness={0.7} />
+		</T.Mesh>
+	{:else}
+		<T.Mesh position={[BP.x + BP.w / 2, 0, BP.d / 2]}>
+			<RoundedBoxGeometry args={[BP.w - 0.4, BP.h, BP.d]} radius={1} />
+			<T.MeshStandardMaterial color={GREY} roughness={0.7} />
+		</T.Mesh>
+	{/if}
 	<Print w={10} h={BP.h} position={[BP.x + 5, 0, BP.d + 0.08]} items={[{ text: 'AXL F BP SE4', x: 5.2, y: 42, size: 1.3, align: 'center', rotate: -90, color: INK, weight: 600, spacing: 0.1 }]} paint={bpPaint} res={12} />
 	{#each BP_LAMPS as [x, y]}
 		<Led position={[BP.x + x, BP.h / 2 - y, BP.d + 0.3]} size={[1.6, 2.2]} on={online} color="#7dff3c" off="#5d6265" spread={2.4} />
@@ -578,10 +628,16 @@
 		{@const x = seX(e)}
 		{@const top = seTop(e)}
 		<!-- one Smart Element: its housing, its face, its orange latch -->
-		<T.Mesh position={[x + SE.w / 2, top - SE.h / 2, (SE.z0 + SE.z1) / 2]}>
-			<RoundedBoxGeometry args={[SE.w, SE.h, SE.z1 - SE.z0]} radius={0.7} />
-			<T.MeshStandardMaterial color={e.kind === 'cover' ? '#989d9f' : GREY} roughness={0.7} />
-		</T.Mesh>
+		{#if bodies.element}
+			<T.Mesh geometry={bodies.element} scale={1000} position={[x - seX(ELEMENTS[0]), top - seTop(ELEMENTS[0]), 0]}>
+				<T.MeshStandardMaterial color={GREY} roughness={0.7} />
+			</T.Mesh>
+		{:else}
+			<T.Mesh position={[x + SE.w / 2, top - SE.h / 2, (SE.z0 + SE.z1) / 2]}>
+				<RoundedBoxGeometry args={[SE.w, SE.h, SE.z1 - SE.z0]} radius={0.7} />
+				<T.MeshStandardMaterial color={e.kind === 'cover' ? '#989d9f' : GREY} roughness={0.7} />
+			</T.Mesh>
+		{/if}
 		<Print
 			w={SE.w}
 			h={SE.h}
