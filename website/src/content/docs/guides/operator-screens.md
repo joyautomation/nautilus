@@ -183,11 +183,49 @@ Open the `.svelte` and press the preview button in the editor title to see
 it render with the preview props as you type; there, you can also drag the
 ports into place.
 
+## Units: what repeats, written once
+
+Four filters, each with six valves and their pipes, is the same drawing
+four times. Write it once in the mimic's `units`, and naut draws it once
+per value of `each`:
+
+```json
+"units": [
+  {
+    "id": "filter",
+    "each": [1, 2, 3, 4],
+    "step": [420, 0],
+    "equipment": [
+      { "id": "F{n}", "component": "FilterCell", "x": 230, "y": 370,
+        "props": { "label": "F-{n}" }, "bind": { "level": "F{n}_Level" } },
+      { "id": "F{n}_INF", "component": "IsaValve", "x": 335, "y": 300,
+        "bind": { "zso": "F{n}_INF_ZSO", "zsc": "F{n}_INF_ZSC" } }
+    ],
+    "pipes": [
+      { "id": "F{n}_inf", "points": [[355, 270]], "to": { "equip": "F{n}_INF", "port": "a" } }
+    ],
+    "labels": [{ "text": "F-{n}", "x": 240, "y": 680 }]
+  }
+]
+```
+
+- `{n}` in any string (an id, a tag in `bind`, a label, the equipment a
+  pipe ends on) becomes each value in turn. A string that is exactly
+  `"{n}"` becomes the value itself, so `"props": { "n": "{n}" }` passes the
+  number. `"as": "p"` names a different placeholder, `{p}`.
+- The first copy sits where it's written; each next one moves by `step`
+  (`[dx, dy]`, canvas units).
+- A copy is equipment, pipes and labels like any other: `naut check`
+  checks its tags and ports, ids must be unique (put `{n}` in them), and
+  a pipe outside the unit can end on a copy (`"equip": "F3_EFF"`).
+- The editor shows the copies outlined and locked; change them in the
+  unit, in the file.
+
 ## A P&ID, step by step
 
 1. **Lay out the process** with equipment: built-ins where they fit, your
-   own components where they don't (one per unit you repeat, like a filter
-   cell, placed once per unit with its tags in `bind`).
+   own components where they don't (a filter cell, say), and what repeats
+   per unit in `units`, written once.
 2. **Give each component its ports** in its `.component.json`, where the
    plant's pipes meet it.
 3. **Run the pipes** between ports, anchored at both ends, in the

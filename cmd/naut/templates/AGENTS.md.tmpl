@@ -277,6 +277,16 @@ naut builds the operator screen from the project itself, with no npm, and
   the kit's equipment (`Tank`, `Pump`, `Valve`, `Gauge`, `CommandButton`,
   `WriteToggle`, ...) and a `{Name}.svelte` of your own where the kit
   doesn't draw what you need, with its pipe ports in `{Name}.component.json`.
+- What repeats (four filters, eight pumps) goes in the mimic's `units`,
+  drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
+  and each copy moves by `step`:
+  `"units": [{"id": "filter", "each": [1, 2, 3, 4], "step": [420, 0],
+  "equipment": [{"id": "F{n}", "component": "FilterCell", "x": 230, "y": 370,
+  "bind": {"level": "F{n}_Level"}}], "pipes": [...], "labels": [...]}]`.
+- naut is the only tool a project needs, and often the only one there is
+  (the playground has no Python or Node). Write every file by hand, never
+  a script that writes one: `units` (or `{#each}` in an app) is how a
+  screen repeats itself.
 - For more than mimics, write an app: `hmi/src/routes/+page.svelte` is `/`,
   components go in `hmi/src/lib`, and `server.hmi: hmi` in the manifest.
   It is SvelteKit's layout, client-side; Go is the only backend.

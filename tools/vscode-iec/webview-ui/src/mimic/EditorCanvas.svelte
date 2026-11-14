@@ -23,6 +23,7 @@
 	import { flushSync } from 'svelte';
 	import {
 		builtinParts,
+		expandUnits,
 		makeGetPort,
 		partRect,
 		Pipe,
@@ -47,6 +48,13 @@
 	import UserIsland from './UserIsland.svelte';
 
 	const doc = $derived(ed.doc);
+	/** A unit's copies (the doc's `units`, drawn out the way the screen draws
+	 * them): shown on the canvas, locked — they're edited in the file, in
+	 * the unit they come from — and their ports anchor pipes like any other. */
+	const unitCopies = $derived(
+		doc?.units?.length ? expandUnits({ canvas: doc.canvas, units: doc.units }, { mark: true }) : null
+	);
+	const allEquipment = $derived([...(doc?.equipment ?? []), ...(unitCopies?.equipment ?? [])]);
 
 	// ── scale: fit to the pane, or the user's zoom ──────────────────────────
 	// The canvas opens fitted to the pane's width and follows it as the pane
@@ -342,15 +350,15 @@
 	 * DOM-measured box), so a pipe anchor lands exactly on its port dot. */
 	const getPort: GetPort = makeGetPort(
 		(id) => {
-			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
+			const eq = allEquipment.find((e) => e.id === id);
 			return eq ? eqBox(eq) : undefined;
 		},
 		(id) => {
-			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
+			const eq = allEquipment.find((e) => e.id === id);
 			return eq ? resolvePorts(eq, ed.manifest) : undefined;
 		},
 		(id, part) => {
-			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
+			const eq = allEquipment.find((e) => e.id === id);
 			return eq ? partOf(eq, part) : undefined;
 		}
 	);
@@ -1734,6 +1742,17 @@
 							/>
 						</g>
 					{/each}
+					{#each unitCopies?.pipes ?? [] as p (p.id)}
+						<g class="piperun unitcopy" data-unit={p.fromUnit}>
+							<Pipe
+								d={pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
+								{...(p.color !== undefined ? { color: p.color } : {})}
+								{...(p.props ?? {})}
+								{...resolveBindings(p.bind, ed.tags ?? {})}
+								{layer}
+							/>
+						</g>
+					{/each}
 				{/each}
 				{#each doc.pipes ?? [] as p (p.id)}
 					{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
@@ -1827,6 +1846,21 @@
 							></div>
 						{/each}
 					{/if}
+				</div>
+			{/each}
+
+			{#each unitCopies?.equipment ?? [] as eq (eq.id)}
+				{@const C = registry[eq.component]}
+				{@const box = eq.component in registry ? '' : customBox(dispSize(eq))}
+				<div
+					class="eq unitcopy"
+					class:behind={eq.behind}
+					data-unit={eq.fromUnit}
+					title="{eq.id}, from unit {eq.fromUnit}: edit the unit in the file"
+					style="left: {eq.x}px; top: {eq.y}px{box}"
+					use:regEl={eq.id}
+				>
+					{#if C}<C {...eqProps(eq)} />{:else}<UserIsland name={eq.component} props={eqProps(eq)} />{/if}
 				</div>
 			{/each}
 
@@ -1987,6 +2021,13 @@
 					class:sel={selected('label', i)}
 					style="left: {pos.x}px; top: {pos.y}px"
 					onpointerdown={(e) => labelDown(e, i, l)}
+					>{#if live !== null}{#if l.text}{l.text}{/if}<b class="num">{live}</b
+						>{#if l.unit}<span>{l.unit}</span>{/if}{:else}{l.text}{/if}</span
+				>
+			{/each}
+			{#each unitCopies?.labels ?? [] as l, i (i)}
+				{@const live = labelLive(l)}
+				<span class="lbl unitcopy" class:readout={live !== null} style="left: {l.x}px; top: {l.y}px"
 					>{#if live !== null}{#if l.text}{l.text}{/if}<b class="num">{live}</b
 						>{#if l.unit}<span>{l.unit}</span>{/if}{:else}{l.text}{/if}</span
 				>
@@ -2466,5 +2507,13 @@
 	.empty {
 		color: var(--nx-muted);
 		padding: 24px;
+	}
+	/* A unit's copies: shown, not editable here (edit the unit in the file). */
+	.unitcopy {
+		pointer-events: none;
+	}
+	.eq.unitcopy {
+		outline: 1px dashed var(--vscode-editorInfo-foreground, #3794ff);
+		outline-offset: 2px;
 	}
 </style>

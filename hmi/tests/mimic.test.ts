@@ -7,6 +7,7 @@ import { describe, expect, it } from './harness.js';
 import {
 	attachPipeEnds,
 	brokenPipes,
+	expandUnits,
 	connectPorts,
 	routedPoints,
 	makeGetPort,
@@ -15,6 +16,8 @@ import {
 	type MimicDoc,
 	type MimicEquipment
 } from '../src/lib/mimic.js';
+import unitsIn from '../../testdata/mimic-units/in.json';
+import unitsOut from '../../testdata/mimic-units/out.json';
 
 // A 100×100 pump at (100, 100) with a measured height, a discharge nozzle
 // on its top face at x 0.3 exiting 'up' and a suction on its left face.
@@ -319,5 +322,19 @@ describe('brokenPipes', () => {
 		expect(brokenPipes([{ id: 'dot', points: [[5, 5], [5, 5]] }, { id: 'run', points: [[0, 0], [9, 0]] }], getPort)).toEqual([
 			{ id: 'dot', ends: [] }
 		]);
+	});
+});
+
+describe('expandUnits', () => {
+	it('draws a unit once per value, as naut does (testdata/mimic-units, shared with Go)', () => {
+		expect(expandUnits(unitsIn as unknown as MimicDoc)).toEqual(unitsOut);
+	});
+	it('a document with no units comes back as it is', () => {
+		const d: MimicDoc = { canvas: { width: 1, height: 1 }, equipment: [] };
+		expect(expandUnits(d) === d).toBe(true);
+	});
+	it('marks each copy for the editor', () => {
+		const d = expandUnits(unitsIn as unknown as MimicDoc, { mark: true });
+		expect((d.equipment ?? []).map((e) => e.fromUnit ?? '')).toEqual(['', 'filter#1', 'filter#1', 'filter#2', 'filter#2', 'unit2#A', 'unit2#B']);
 	});
 });

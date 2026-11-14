@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/mimicdoc"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -75,6 +76,13 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", f, err))
 			continue
+		}
+		// a unit's copies are equipment, pipes and labels like any other
+		if x, _, err := mimicdoc.ExpandUnits(raw); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", f, err))
+			continue
+		} else {
+			raw = x
 		}
 		var m mimicFile
 		if err := json.Unmarshal(raw, &m); err != nil {

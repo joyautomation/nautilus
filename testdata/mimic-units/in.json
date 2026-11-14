@@ -1,0 +1,35 @@
+{
+  "name": "Units",
+  "canvas": { "width": 800, "height": 400 },
+  "equipment": [
+    { "id": "P1", "component": "Pump", "x": 10, "y": 300 }
+  ],
+  "pipes": [
+    { "id": "header", "points": [[0, 50], [800, 50]], "bind": { "flowing": "Hdr_Flow" } }
+  ],
+  "labels": [{ "text": "INFLUENT", "x": 20, "y": 30 }],
+  "units": [
+    {
+      "id": "filter",
+      "each": [1, 2],
+      "step": [300, 0],
+      "equipment": [
+        { "id": "F{n}", "component": "FilterCell", "x": 100, "y": 100, "width": 200, "height": 150,
+          "props": { "label": "F-{n}", "n": "{n}", "tags": ["F{n}_Level", 7] },
+          "bind": { "level": "F{n}_Level", "oos": "!F{n}_OutOfService" } },
+        { "id": "F{n}_INF", "component": "Valve", "x": 190, "y": 60 }
+      ],
+      "pipes": [
+        { "id": "F{n}_inf", "points": [[200, 50]], "to": { "equip": "F{n}_INF", "port": "in" }, "bind": { "flowing": "Disp_F{n}_Inf" } },
+        { "id": "F{n}_down", "from": { "equip": "F{n}_INF", "port": "out" }, "to": { "equip": "F{n}", "port": "inf" } }
+      ],
+      "labels": [{ "text": "F-{n} level", "x": 110, "y": 260, "bind": "F{n}_Level", "unit": "ft" }]
+    },
+    {
+      "as": "p",
+      "each": ["A", "B"],
+      "step": [0, 40],
+      "equipment": [{ "id": "B_{p}", "component": "Gauge", "x": 600, "y": 300, "props": { "id": "{p}" } }]
+    }
+  ]
+}
