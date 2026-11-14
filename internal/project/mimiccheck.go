@@ -35,10 +35,11 @@ type mimicFile struct {
 		Props     map[string]any    `json:"props"`
 	} `json:"equipment"`
 	Pipes []struct {
-		ID   string            `json:"id"`
-		From *pipeEnd          `json:"from"`
-		To   *pipeEnd          `json:"to"`
-		Bind map[string]string `json:"bind"`
+		ID     string            `json:"id"`
+		Points [][]float64       `json:"points"`
+		From   *pipeEnd          `json:"from"`
+		To     *pipeEnd          `json:"to"`
+		Bind   map[string]string `json:"bind"`
 	} `json:"pipes"`
 	Labels []struct {
 		Text string `json:"text"`
@@ -132,6 +133,11 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 		}
 		for _, pp := range m.Pipes {
 			where := "pipe " + pp.ID
+			// a pipe draws through its points and its anchored ends; with both
+			// ends anchored it needs no points at all
+			if n := len(pp.Points) + btoi(pp.From != nil && pp.From.Equip != "") + btoi(pp.To != nil && pp.To.Equip != ""); n < 2 {
+				say("%s has nothing to draw: give it points, or anchor both ends with from and to", where)
+			}
 			for _, end := range []*pipeEnd{pp.From, pp.To} {
 				if end == nil || end.Equip == "" {
 					continue
@@ -209,6 +215,13 @@ func scanScreens(fsys fs.FS) (mimics []string, sources map[string][]string, port
 	})
 	sort.Strings(mimics)
 	return mimics, sources, ports
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func hasPort(xs []string, x string) bool {

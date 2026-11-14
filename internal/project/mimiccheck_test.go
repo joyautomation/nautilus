@@ -30,7 +30,10 @@ tags:
 			{"id":"T1","component":"Tank","x":0,"y":0}],
 		  "pipes":[
 			{"id":"p1","from":{"equip":"T1","port":"bottom"},"to":{"equip":"F1","port":"influent"},"points":[]},
-			{"id":"p2","from":{"equip":"F1","port":"effluent"},"to":{"equip":"Nope","port":"in"},"points":[]}],
+			{"id":"p2","from":{"equip":"F1","port":"effluent"},"to":{"equip":"Nope","port":"in"},"points":[]},
+			{"id":"p3","from":{"equip":"T1","port":"bottom"},"to":{"equip":"F1","port":"influent"}},
+			{"id":"p4","from":{"equip":"T1","port":"bottom"}},
+			{"id":"p5","points":[[0,0]]}],
 		  "labels":[{"text":"LT-101","bind":"LT101"}]}`),
 		"scratch/nautilus.yaml": file("name: other\n"),
 		"scratch/x.mimic.json":  file(`{"equipment":[{"id":"A","component":"Nothing"}]}`),
@@ -48,13 +51,16 @@ tags:
 		"two pieces of equipment are T1",
 		`pipe p2 ends on F1's port "effluent"; a FilterCell has ports influent (a component's ports are in its FilterCell.component.json)`,
 		"pipe p2 ends on Nope, which isn't on the screen",
+		// p3 is anchored at both ends and needs no points (bw01 haiku-1)
+		"pipe p4 has nothing to draw: give it points, or anchor both ends with from and to",
+		"pipe p5 has nothing to draw",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("no error %q in:\n%s", want, all)
 		}
 	}
-	if len(errs) != 6 {
-		t.Errorf("%d errors, want 6:\n%s", len(errs), all)
+	if len(errs) != 8 {
+		t.Errorf("%d errors, want 8:\n%s", len(errs), all)
 	}
 	if len(warns) != 1 || !strings.Contains(warns[0], "B2 writes LT101, an input") {
 		t.Errorf("warnings = %q", warns)

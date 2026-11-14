@@ -237,7 +237,12 @@ func (a *appSource) generate() {
 	}
 	for _, r := range a.routes {
 		params, _ := json.Marshal(r.Params)
-		chain, _ := json.Marshal(r.Layouts)
+		// a page with no layout above it (an app with no +layout.svelte) has
+		// an empty chain: [] for the router, never null (bw01 sonnet-1, haiku-2)
+		chain := []byte("[]")
+		if len(r.Layouts) > 0 {
+			chain, _ = json.Marshal(r.Layouts)
+		}
 		load := "null"
 		if r.PageLoad != "" {
 			load = "() => import(" + jsq(r.PageLoad) + ")"

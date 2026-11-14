@@ -37,6 +37,21 @@ test("empty text parses as the starter doc; first op writes a full document", ()
   assert.deepEqual(d.equipment, [{ id: "tank1", component: "Tank", x: 40, y: 40 }]);
 });
 
+test("a pipe anchored at both ends may leave points out; the editor reads it as [] (bw01 haiku-1)", () => {
+  const text = JSON.stringify({
+    canvas: { width: 800, height: 400 },
+    equipment: [
+      { id: "tank1", component: "Tank", x: 100, y: 50 },
+      { id: "pump1", component: "Pump", x: 300, y: 200 },
+    ],
+    pipes: [{ id: "p1", from: { equip: "pump1", port: "out" }, to: { equip: "tank1", port: "left" }, routing: "orthogonal" }],
+  });
+  assert.deepEqual(doc(text).pipes![0].points, []);
+  // an edit to it works, and writes the empty list back
+  const out = apply(text, { type: "updatePipe", id: "p1", patch: { routing: "direct" } });
+  assert.deepEqual(doc(out).pipes![0].points, []);
+});
+
 test("bad JSON refuses with a message", () => {
   assert.match(refuse("{nope", { type: "setName", name: "x" }), /not valid JSON/);
   assert.match(refuse("[1,2]", { type: "setName", name: "x" }), /root must be/);

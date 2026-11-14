@@ -96,6 +96,35 @@ func TestBuildErrorsSayWhereAndWhy(t *testing.T) {
 	}
 }
 
+// An app with no +layout.svelte: its page has an empty layout chain, [],
+// never null (the router maps over it; bw01 sonnet-1 and haiku-2 got a 500).
+func TestAnAppWithNoLayout(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "hmi/src/routes/+page.svelte", "<p>hi</p>\n")
+	res, err := Build(Options{Project: dir, App: filepath.Join(dir, "hmi")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	for name, b := range res.Files {
+		if strings.HasSuffix(name, ".js") {
+			all.Write(b)
+		}
+	}
+	js := all.String()
+	if !strings.Contains(js, "layouts: []") || strings.Contains(js, "layouts: null") {
+		t.Errorf("the route's layout chain is not []: %q", excerpt(js, "layouts:"))
+	}
+}
+
+func excerpt(s, at string) string {
+	i := strings.Index(s, at)
+	if i < 0 {
+		return "(not found)"
+	}
+	return s[i:min(len(s), i+60)]
+}
+
 func TestServerCodeIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "hmi/src/routes/+page.svelte", "<p>hi</p>\n")

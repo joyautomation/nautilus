@@ -89,6 +89,9 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Fixed
 
+- **A mimic whose pipe has no points opens.** A pipe anchored at both ends
+  may leave `points` out; the mimic editor reads it as `[]` and writes the
+  empty list back on the next edit, instead of failing on it.
 - **One broken component no longer blanks a whole screen.** A project
   component that threw when it mounted stopped the rest of the mimic from
   drawing, with nothing said. It now shows why in its own box, and every

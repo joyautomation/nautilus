@@ -97,6 +97,19 @@ describe('attachPipeEnds', () => {
 		expect(report.free).toEqual([]);
 	});
 
+	it('reads a pipe with both ends anchored and no points list as no bends (bw01 haiku-1)', () => {
+		// a document may leave points out, as a scene's pipe may; one such
+		// pipe used to throw and blank the whole screen
+		const doc = docOf([{ id: 'a', from: { equip: 'P1', port: 'suction' }, to: { equip: 'T1', port: 'left' }, routing: 'orthogonal' } as never]);
+		const withEmpty = docOf([{ id: 'a', points: [], from: { equip: 'P1', port: 'suction' }, to: { equip: 'T1', port: 'left' }, routing: 'orthogonal' }]);
+		expect(routedPoints(doc.pipes![0], getPortFor(doc))).toEqual(routedPoints(withEmpty.pipes![0], getPortFor(withEmpty)));
+		expect(routedPoints(doc.pipes![0], getPortFor(doc)).length > 1).toBe(true);
+		const { report } = attachPipeEnds(doc, { tolerance: 10 });
+		expect(report.attached).toBe(0);
+		// and a free pipe with no points draws nothing rather than throwing
+		expect(routedPoints({ id: 'b' } as never)).toEqual([]);
+	});
+
 	it('does not move a vertex that is still a FREE end (it may be a shared tee)', () => {
 		// discharge (130, 100); a two-point pipe up to a tee at (134, 40)
 		const doc = docOf([{ id: 'a', points: [[131, 101], [134, 40]], routing: 'orthogonal' }]);
