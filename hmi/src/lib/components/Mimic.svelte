@@ -14,7 +14,7 @@
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import Pipe from './Pipe.svelte';
-	import { BUILTIN_PORTS, makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, brokenPipes, makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -186,11 +186,19 @@
 		return (doc.pipes ?? []).map((p) => ({ pipe: p, d: pointsToPath(routedPoints(p, getPort)) }));
 	});
 
+	/** Pipes that draw nothing (an end that isn't there, or no length), as
+	 * JSON on the root for `naut check`'s render; absent when there are none. */
+	const broken = $derived.by(() => {
+		void boxVersion;
+		const b = brokenPipes(doc.pipes ?? [], getPort);
+		return b.length > 0 ? JSON.stringify(b) : undefined;
+	});
+
 	/** Paint order for the pipe network — see the junction note in Pipe.svelte. */
 	const PIPE_LAYERS = ['wall', 'bore', 'flow'] as const;
 </script>
 
-<div class="mimic" class:scrolling={floored} bind:this={host} style="height: {doc.canvas.height * scale}px">
+<div class="mimic" class:scrolling={floored} bind:this={host} data-broken-pipes={broken} style="height: {doc.canvas.height * scale}px">
 	<div
 		class="scroll-host"
 		style:width={floored ? `${doc.canvas.width * scale}px` : undefined}

@@ -236,3 +236,20 @@ a store, and the component throws when it mounts), an import `naut`
 doesn't carry, a component a mimic names that isn't in the project.
 `naut build` builds them into the controller it makes, so the controller
 serves them as they are.
+
+With Chrome, Chromium or Edge on the machine, `naut check` then opens each
+page of the built screen at desktop and phone size and reports what a
+person would see wrong:
+
+- a page that throws, or comes up blank (an error);
+- a pipe that draws nothing, naming the end that isn't there (an error);
+- a shape drawn far outside its own drawing, usually a coordinate passed
+  as text (`y="130"`, so `y + 8` is `"1308"`) (a warning);
+- a page that scrolls sideways on a 390 px phone (a warning).
+
+The screen is served from naut's own server over the project's runtime
+without scanning it: no driver starts, no write reaches anything, and
+every tag shows its initial value. `NAUT_BROWSER` names the browser to
+use (`NAUT_BROWSER=none`, or `naut check -render=false`, skips it).
+Without a browser, `naut check` says the screen wasn't rendered and
+carries on.

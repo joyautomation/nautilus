@@ -497,6 +497,38 @@ export function routedPoints(
 	return pipe.routing === 'orthogonal' ? orthogonalPoints(pts) : pts;
 }
 
+/** A pipe that draws nothing on the screen, and why: an anchored end whose
+ * equipment or port isn't there (`ends` names each, "F1_INF.b"), or ends
+ * and points that all land on one spot. */
+export interface BrokenPipe {
+	id: string;
+	ends: string[];
+}
+
+/** The pipes that draw nothing, in document order. <Mimic> puts these on
+ * its root as `data-broken-pipes` (JSON), which `naut check` reads when it
+ * renders a screen: a pipe the editor drew and the screen can't is an error
+ * there, not a gap an operator finds. */
+export function brokenPipes(
+	pipes: Pick<MimicPipe, 'id' | 'points' | 'routing' | 'from' | 'to'>[],
+	getPort: GetPort
+): BrokenPipe[] {
+	const out: BrokenPipe[] = [];
+	for (const p of pipes) {
+		const ends: string[] = [];
+		if (p.from || p.to) {
+			const r = resolvePipeEndpoints(p, getPort);
+			if (r.startFlagged && p.from) ends.push(`${p.from.equip}.${p.from.port}`);
+			if (r.endFlagged && p.to) ends.push(`${p.to.equip}.${p.to.port}`);
+		}
+		const pts = routedPoints(p, getPort);
+		const [x0, y0] = pts[0] ?? [0, 0];
+		const somewhere = pts.some(([x, y]) => Math.abs(x - x0) >= 0.5 || Math.abs(y - y0) >= 0.5);
+		if (ends.length > 0 || !somewhere) out.push({ id: p.id, ends });
+	}
+	return out;
+}
+
 /** Resolve a binding map (prop -> tag name) against the live tags. A tag
  * name prefixed with "!" negates a boolean. Absent tags resolve to nothing
  * so the component keeps its default — never a fabricated value. */

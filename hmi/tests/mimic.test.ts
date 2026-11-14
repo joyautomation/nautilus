@@ -6,6 +6,7 @@
 import { describe, expect, it } from './harness.js';
 import {
 	attachPipeEnds,
+	brokenPipes,
 	connectPorts,
 	routedPoints,
 	makeGetPort,
@@ -292,5 +293,31 @@ describe('connectPorts', () => {
 		expect(JSON.stringify(rails)).toBe(before);
 		expect(report.connected.map((c) => [c.port, c.target])).toEqual([['suction', 'L']]);
 		expect(doc.pipes!.length).toBe(3);
+	});
+});
+
+describe('brokenPipes', () => {
+	const getPort = makeGetPort(
+		(id) => (id === 'P1' ? { x: pump.x, y: pump.y, w: 100, h: 50 } : undefined),
+		(id) => (id === 'P1' ? resolveRuntimePorts(pump) : undefined)
+	);
+	it('names each end that is not there when the screen runs (bw01 fable-2)', () => {
+		const got = brokenPipes(
+			[
+				{ id: 'ok', from: { equip: 'P1', port: 'discharge' }, points: [[130, 20]] },
+				{ id: 'noport', from: { equip: 'P1', port: 'inf' }, points: [[10, 10]] },
+				{ id: 'noequip', from: { equip: 'P1', port: 'suction' }, to: { equip: 'F1', port: 'a' }, points: [] }
+			],
+			getPort
+		);
+		expect(got).toEqual([
+			{ id: 'noport', ends: ['P1.inf'] },
+			{ id: 'noequip', ends: ['F1.a'] }
+		]);
+	});
+	it('a free pipe whose points are all one spot draws nothing', () => {
+		expect(brokenPipes([{ id: 'dot', points: [[5, 5], [5, 5]] }, { id: 'run', points: [[0, 0], [9, 0]] }], getPort)).toEqual([
+			{ id: 'dot', ends: [] }
+		]);
 	});
 });
