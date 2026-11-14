@@ -189,21 +189,22 @@ controller.
 
 ## The 3D screen
 
-`hmi/` is a small SvelteKit page that draws the station as it stands in
-the PLCnext Technology Starter Kit: the charcoal board on its two feet,
+`hmi/` is a small SvelteKit page that draws the station as it stands on
+the desk: the starter kit's black board leaning back in its two feet,
 the DIN rail, the feed-through terminals, the AXC F 2152 and the four
 Smart Elements in their backplane, two over two (slots 1 and 2 down the
-left column, 3 and 4 down the right, the way the AXL F BP SE4 is
-marked), and on the board the four pushbuttons and the 0 to 10 V slider.
-Each of the DO16's and DI16's sixteen lamps is lit from its tag (lamp 01
-is `DO_00`, the heartbeat is lamp 16). The buttons are inputs 01 to 04,
-top to bottom: a pressed one sits in and its collar lights, from `DI_00`
-to `DI_03`. The slider's knob follows `AI_00` (0 to 30000 counts taken
-as 0 to 10 V); while the AI4 U reports `0x8020` the knob is parked grey
-at 0 V, the tag under the element reads "supply missing" and the
-element's E lamp is red. A side panel has the driver's status and the
-scan times. Hovering a channel or a button names its tag. It only
-reads: `/api/stream`, nothing written.
+left column, 3 and 4 down the right: DO16 over DI16, the cover over the
+AI4 U, as on the bench), and on the board the four toggle switches and
+the 0 to 10 V slider. Each of the DO16's and DI16's sixteen lamps is lit
+from its tag (lamp 01 is `DO_00`, the heartbeat is lamp 16). The
+switches are labelled S4 at the top to S1 at the bottom and are inputs
+04 to 01: the bottom lever follows `DI_00`, the top one `DI_03`, each
+tipping up with a lit collar when its input is on. The slider's knob
+follows `AI_00` (0 to 30000 counts taken as 0 to 10 V); while the AI4 U
+reports `0x8020` the knob is parked grey at 0 V, the tag under the
+element reads "supply missing" and the element's E lamp is red. A side
+panel has the driver's status and the scan times. Hovering a channel or
+a switch names its tag. It only reads: `/api/stream`, nothing written.
 
 ```sh
 cd hmi
@@ -215,11 +216,12 @@ CONTROLLER_URL=http://192.168.82.216:8080 npm run dev  # or work on it against t
 The model is plain Threlte (`hmi/src/lib/Axc.svelte`) placed inside
 `SceneView` from `@joyautomation/nautilus-hmi-3d`. It is not a
 `*.scene.json`, so `naut check` does not hold its tag names to the
-project. The faces and the board's layout follow product photos. Of the
-controller's own lamps only D is driven (from the driver's status), and
-UL because the controller is serving the page. In a tall window the
-board runs off the sides so the station, the buttons and the slider
-stay large.
+project. The board's size and lean are measured off a capture of the
+bench, and the faces and positions follow photographs of it. Of the
+controller's own lamps, RUN is lit while frames arrive and D from the
+driver's status, as are the backplane's; the rest are drawn dark. In a
+tall window the board runs off the sides so the station, the switches
+and the slider stay large.
 
 ## Timing, honestly
 
