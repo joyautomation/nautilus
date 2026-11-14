@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **A pipe with no points no longer blanks the screen.** A pipe anchored
+  at both ends (`from` and `to`) with no bends may leave `points` out, as a
+  scene's pipe may; `<Mimic>` reads it as `[]`. One such pipe used to throw
+  and leave the whole screen blank.
+
 - **A project component fills its box.** `<Mimic>` gives equipment placed
   from `registry` a box of the document's `width` and `height`, so a
   component drawn at `width: 100%; height: 100%` (an `<svg>` with a

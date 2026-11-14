@@ -145,6 +145,11 @@ export function parseMimic(text: string): MimicDoc {
   ) {
     throw new Error('missing "canvas": {"width": …, "height": …}');
   }
+  // A pipe anchored at both ends with no bends may leave points out (as a
+  // scene's pipe may); the editor works on [] (the runtime reads it the same).
+  for (const p of Array.isArray(doc.pipes) ? doc.pipes : []) {
+    if (p && typeof p === "object" && !Array.isArray(p.points)) p.points = [];
+  }
   return doc;
 }
 

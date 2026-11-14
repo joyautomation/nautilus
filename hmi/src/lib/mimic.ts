@@ -201,7 +201,9 @@ export interface MimicPipeAnchor {
 export interface MimicPipe {
 	id: string;
 	/** Interior vertices only when an end is anchored (see `from`/`to`) —
-	 * otherwise (the common case) the full point list, same as always. */
+	 * otherwise (the common case) the full point list, same as always. A
+	 * document may leave it out when both ends are anchored and the run has
+	 * no bends (as a scene's pipe may): it reads as `[]`, never a crash. */
 	points: [number, number][];
 	color?: string;
 	/** How consecutive points are connected: a straight segment between each
@@ -393,7 +395,7 @@ export function resolvePipeEndpoints(
 	pipe: Pick<MimicPipe, 'points' | 'from' | 'to'>,
 	getPort: GetPort
 ): PipeEndpoints {
-	const interior = pipe.points.map((p) => [...p] as [number, number]);
+	const interior = (pipe.points ?? []).map((p) => [...p] as [number, number]);
 	let startFlagged = false;
 	let endFlagged = false;
 	let startDir: PortDir | undefined;
@@ -491,7 +493,7 @@ export function routedPoints(
 		startDir = resolved.startDir;
 		endDir = resolved.endDir;
 	} else {
-		pts = pipe.points;
+		pts = pipe.points ?? [];
 	}
 	pts = withDirStub(pts, startDir, true);
 	pts = withDirStub(pts, endDir, false);
@@ -627,7 +629,7 @@ export function attachPipeEnds(doc: MimicDoc, opts: AttachOptions): { doc: Mimic
 		});
 
 	const pipes = (doc.pipes ?? []).map((pipe): MimicPipe => {
-		const pts = pipe.points.map((p) => [p[0], p[1]] as [number, number]);
+		const pts = (pipe.points ?? []).map((p) => [p[0], p[1]] as [number, number]);
 		// Decide both ends first, against the untouched points.
 		const decide = (end: 'from' | 'to'): PortHit | undefined => {
 			if (pipe[end]) return undefined; // already anchored
