@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`--muted` text reaches AA contrast.** `#898781` → `#8d8b85` (dark) and
+  `#74726a` → `#68665e` (light): 4.6:1 on `--surface-2`, the lowest ground,
+  where it was 4.4:1 and 3.9:1. The palette test now holds every text
+  token (`--ink`, `--ink-2`, `--muted`) to 4.5:1 on every ground, as
+  `naut check` holds a screen's text.
+
 - **Crossings drawn as crossings.** Where two pipes cross without either
   ending there, `<Mimic>` (and the mimic editor) breaks the steeper one
   either side of the flatter one, as P&ID drafting does, instead of

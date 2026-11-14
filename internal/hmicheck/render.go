@@ -117,7 +117,7 @@ type probeResult struct {
 const SmallScale = 0.75
 
 func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second+Settle)
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second+2*Settle) // a load, and a reload in the other theme
 	defer cancel()
 	var target struct {
 		TargetID string `json:"targetId"`
@@ -283,6 +283,30 @@ func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding
 				vb = fmt.Sprintf(" (viewBox %d×%d)", d.ViewBox[0], d.ViewBox[1])
 			}
 			f(false, "a %d×%d drawing%s runs %d px past the bottom of a %d×%d window: an operator scrolls to see the rest. Size it to the room left in the window (an <svg> with a viewBox keeps its shape at any size: width: 100%%; height: 100%% in a container that has a height), or draw it for the room", d.Size[0], d.Size[1], vb, d.Below, v.width, v.height)
+		}
+	}
+	// Text a person can read: contrast against what it is drawn on, in each
+	// theme the page has, and size. (A phone's text is the screen's own
+	// choice of layout: no rule here yet.)
+	if !v.mobile {
+		reload := func() error {
+			if err := b.call(ctx, s, "Page.reload", nil, nil); err != nil {
+				return err
+			}
+			select {
+			case <-loaded:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case <-time.After(Settle):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		}
+		for _, line := range b.legibility(ctx, s, v, reload) {
+			f(false, "%s", line)
 		}
 	}
 	if v.mobile && pr.Sideways > 1 {
