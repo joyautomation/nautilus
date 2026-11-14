@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"regexp"
@@ -39,38 +40,59 @@ func TestDashboardScriptParses(t *testing.T) {
 	}
 }
 
-var assetRefRe = regexp.MustCompile(`/assets/[A-Za-z0-9._/-]+`)
+var assetRefRe = regexp.MustCompile(`"(/?assets/[A-Za-z0-9._/-]+)"`)
 
-// TestDashboardAssetsResolve walks every /assets/… URL the page names — the
+// TestDashboardAssetsResolve walks every assets/… URL the page names — the
 // logo mask, the favicon, the four @font-face sources — and fetches it
-// through the real handler. A renamed or unstaged asset breaks the page
-// silently: the mark disappears and the type falls back to a system face,
-// neither of which fails a build.
+// through the real handler, from both places the page is served: "/" and,
+// once a project has a screen of its own, "/_nautilus/". A renamed or
+// unstaged asset breaks the page silently: the mark disappears and the type
+// falls back to a system face, neither of which fails a build.
+//
+// The URLs must be relative. With a screen configured, "/assets/…" belongs
+// to that screen's build and answers a dashboard asset with its index.html
+// (200, text/html), which left the moved dashboard with no logo and no fonts.
 func TestDashboardAssetsResolve(t *testing.T) {
-	srv := New(newTestRuntime(t))
-	h := srv.Handler()
-
-	refs := assetRefRe.FindAllString(string(indexHTML), -1)
+	var refs []string
+	seen := map[string]bool{}
+	for _, m := range assetRefRe.FindAllStringSubmatch(string(indexHTML), -1) {
+		if strings.HasPrefix(m[1], "/") {
+			t.Errorf("index.html names %q; an absolute path misses once the dashboard moves to /_nautilus/", m[1])
+			continue
+		}
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			refs = append(refs, m[1])
+		}
+	}
 	if len(refs) < 5 { // logo + favicon + 4 fonts, minus duplicates
 		t.Fatalf("expected the page to reference the embedded assets, found %d", len(refs))
 	}
-	seen := map[string]bool{}
-	for _, ref := range refs {
-		if seen[ref] {
-			continue
-		}
-		seen[ref] = true
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", ref, nil))
-		if rec.Code != 200 {
-			t.Errorf("GET %s = %d, want 200", ref, rec.Code)
-			continue
-		}
-		if rec.Body.Len() == 0 {
-			t.Errorf("GET %s served an empty body", ref)
-		}
-		if ct := rec.Header().Get("Content-Type"); strings.HasSuffix(ref, ".woff2") && ct != "font/woff2" {
-			t.Errorf("GET %s Content-Type = %q, want font/woff2", ref, ct)
+	for _, c := range []struct {
+		base string
+		h    http.Handler
+	}{
+		{"/", New(newTestRuntime(t)).Handler()},
+		{"/_nautilus/", New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()},
+	} {
+		for _, ref := range refs {
+			url := c.base + ref
+			rec := httptest.NewRecorder()
+			c.h.ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
+			if rec.Code != 200 {
+				t.Errorf("GET %s = %d, want 200", url, rec.Code)
+				continue
+			}
+			if rec.Body.Len() == 0 {
+				t.Errorf("GET %s served an empty body", url)
+			}
+			ct := rec.Header().Get("Content-Type")
+			if strings.HasPrefix(ct, "text/html") {
+				t.Errorf("GET %s Content-Type = %q: that is a page, not the asset", url, ct)
+			}
+			if strings.HasSuffix(ref, ".woff2") && ct != "font/woff2" {
+				t.Errorf("GET %s Content-Type = %q, want font/woff2", url, ct)
+			}
 		}
 	}
 }
