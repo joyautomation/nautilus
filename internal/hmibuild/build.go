@@ -13,6 +13,7 @@
 package hmibuild
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -103,6 +104,11 @@ func Build(o Options) (*Result, error) {
 		return nil, err
 	}
 	b.app = app
+	if o.Project != "" {
+		b.sidecars = sidecarPorts(o.Project)
+	} else {
+		b.sidecars = sidecarPorts(app.dir)
+	}
 	res, err := b.bundle()
 	if err != nil {
 		return nil, err
@@ -132,6 +138,9 @@ type builder struct {
 	packs string // the extracted pack: node_modules/ and svelte-compiler.js
 	comp  *compiler
 	app   *appSource
+	// the ports each project component's {Name}.component.json declares
+	// (sidecar.go), written onto a mimic's equipment as it loads
+	sidecars map[string]json.RawMessage
 
 	mu       sync.Mutex
 	warnings []string
@@ -248,6 +257,15 @@ func (b *builder) plugin() api.Plugin {
 			}
 			r := pb.Resolve(a.Path, api.ResolveOptions{ResolveDir: b.packs, Kind: a.Kind, PluginData: "pack"})
 			return api.OnResolveResult{Path: r.Path, Errors: r.Errors, SideEffects: api.SideEffectsTrue}, nil
+		})
+		// a screen: its components' sidecar ports go onto its equipment
+		pb.OnLoad(api.OnLoadOptions{Filter: `\.mimic\.json$`}, func(a api.OnLoadArgs) (api.OnLoadResult, error) {
+			raw, err := os.ReadFile(a.Path)
+			if err != nil {
+				return api.OnLoadResult{}, err
+			}
+			text := string(withSidecarPorts(raw, b.sidecars))
+			return api.OnLoadResult{Contents: &text, Loader: api.LoaderJSON, ResolveDir: filepath.Dir(a.Path)}, nil
 		})
 		pb.OnLoad(api.OnLoadOptions{Filter: `\.svelte$`}, func(a api.OnLoadArgs) (api.OnLoadResult, error) {
 			js, err := b.svelte(a.Path, false, false)

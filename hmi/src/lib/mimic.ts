@@ -125,16 +125,13 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 
 /** Resolve an equipment instance's connection points at the RUNTIME's
  * precedence tier: instance override (`eq.ports`) -> built-in default. No
- * manifest/sidecar tier — *.component.json sidecars are a project/editor-
- * time aggregation (mimicComponentIndex.ts) that never ships with a built
- * HMI, so the runtime can't see them; only what's embedded in the doc
- * itself (or the shared built-in table) is available here. The mimic
- * editor's own resolvePorts() (webview-ui/src/mimic/ports.ts) additionally
- * consults the sidecar manifest tier before falling back to this same
- * built-in table — so an anchor/dir that depends on a sidecar override
- * renders correctly in the editor but NOT identically at runtime; keep
- * anything that must render identically in both (like a demo's) on the
- * instance-`ports` or built-in tiers instead. */
+ * manifest/sidecar tier here: *.component.json sidecars are a project-time
+ * aggregation (mimicComponentIndex.ts) the runtime never reads. naut's own
+ * HMI build closes that gap by writing each sidecar's `ports` onto the
+ * equipment that has none of its own as it bundles a *.mimic.json
+ * (internal/hmibuild/sidecar.go), so a screen naut builds draws the pipes
+ * the editor drew. A doc handed to <Mimic> some other way (an app built
+ * with npm) still needs its custom equipment's ports on the instance. */
 export function resolveRuntimePorts(eq: Pick<MimicEquipment, 'component' | 'ports'>): MimicPort[] {
 	if (eq.ports !== undefined) return eq.ports;
 	return BUILTIN_PORTS[eq.component] ?? [];
