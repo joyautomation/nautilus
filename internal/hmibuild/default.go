@@ -435,7 +435,9 @@ func componentsPage(gallery []*galleryComp, sidecars map[string]json.RawMessage)
 const componentsPageText = `<script>
 %s
 	// Each component's examples: its sidecar's "examples" (name -> props),
-	// else its "preview" (flat, or {props}), else none.
+	// else its "preview" (flat, or {props}), else none. A figure is the size
+	// the example gives (its width/height props), else the size a screen
+	// first places the component at.
 	const comps = [
 %s
 	];
@@ -460,8 +462,10 @@ const componentsPageText = `<script>
 			{/if}
 			<div class="nx-row">
 				{#each ex.length > 0 ? ex : [['no props', {}]] as [label, props] (label)}
+					{@const w = typeof props.width === 'number' ? props.width : c.width}
+					{@const h = typeof props.height === 'number' ? props.height : c.height}
 					<figure>
-						<div class="nx-box" style:width={c.width ? c.width + 'px' : undefined} style:height={c.height ? c.height + 'px' : undefined}>
+						<div class="nx-box" style:width={w ? w + 'px' : undefined} style:height={h ? h + 'px' : undefined}>
 							<C look="isa101" {...(c.width ? { width: c.width } : {})} {...(c.height ? { height: c.height } : {})} {...props} {write} />
 						</div>
 						<figcaption>{label}</figcaption>
