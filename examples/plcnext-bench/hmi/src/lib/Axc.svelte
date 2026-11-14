@@ -11,13 +11,10 @@
 	// measured off a photogrammetry capture of the bench, and the faces and
 	// positions follow photographs of it.
 	import type { Box3 } from './fit';
+	import { BOARD, TILT } from './wiring';
 
 	/** World units per millimetre. */
 	const S = 0.01;
-	/** The board, mm, before centring. The rail's middle is y = 0, the controller's left edge x = 0. */
-	const BOARD = { x0: -97, x1: 263, y0: -140, y1: 125, z: -14 };
-	/** How far the board leans back in its feet, radians. */
-	const TILT = 0.365;
 	const CX = (BOARD.x0 + BOARD.x1) / 2;
 	const CY = -30;
 	/** A box on the leaning board, as the upright box that contains it, in world units. */
@@ -87,6 +84,7 @@
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
 	import type { Ink, Paint } from './print';
+	import { AXC, BP, BP_POINTS, ETH, FEET, HOLES, HOLE_Y, JACK, PLUG, SE, STEP, TERM, WIRES, plugPoint, sePoint, seTop as seTopAt, seX as seXAt, termPoint } from './wiring';
 
 	let {
 		online = false,
@@ -129,12 +127,8 @@
 	});
 
 	// Layout, mm. x runs along the rail, y up, z out of the panel.
-	const AXC = { w: 45, h: 126.9, d: 75 };
-	const BP = { x: 45, w: 40, h: 122.4, d: 36.9 };
-	const SE = { w: 14.6, h: 60, z0: 20, z1: 54 };
-	/** Slots run down the left column, then down the right (the backplane's own 1 2 / 3 4 marking). */
-	const seX = (e: Element) => BP.x + 10 + (e.slot > 2 ? 15 : 0) + 0.2;
-	const seTop = (e: Element) => (e.slot % 2 === 1 ? 60.6 : -0.6);
+	const seX = (e: Element) => seXAt(e.slot);
+	const seTop = (e: Element) => seTopAt(e.slot);
 	// On a digital element's face, from its top edge: 01..08, the latch, 09..16.
 	const ROW = 2.75;
 	const rowAt = (ch: number) => 8.6 + ch * ROW + (ch >= 8 ? 4.4 : 0);
@@ -162,13 +156,13 @@
 			ctx.roundRect(5.3, 6.2, 7.4, n * 3 + 0.8, 0.5);
 			ctx.fill();
 			for (let k = 0; k < n; k++) {
-				const y = 6.6 + k * 3 + 1.5;
+				const [x, y] = sePoint(k);
 				const leftward = k % 2 === 0;
 				ctx.fillStyle = '#d9dcdd';
 				ctx.fillRect(leftward ? 10 : 6, y - 0.9, 1.9, 1.8);
 				ctx.fillStyle = '#0c0d0e';
 				ctx.beginPath();
-				ctx.arc(leftward ? 7.4 : 10.6, y, 1.3, 0, Math.PI * 2);
+				ctx.arc(x, y, 1.3, 0, Math.PI * 2);
 				ctx.fill();
 			}
 		};
@@ -211,7 +205,7 @@
 			{ text: faults.some(Boolean) ? faults.map((f, i) => (f ? `AI_0${i} ${f}` : '')).filter(Boolean).join(', ') : 'raw counts', x: 2.6, y: 14.6, size: 1.8, color: faults.some(Boolean) ? '#fab219' : '#a9a7a0', weight: 500 }
 		];
 	}
-	const CALLOUT = { w: 54, h: 17.5, x: 99, y: -80 };
+	const CALLOUT = { w: 54, h: 17.5, x: 121, y: -80 };
 
 	// The controller's own lamps: two columns in the middle of its face, the
 	// names outside them. RUN is drawn lit while frames arrive (the
@@ -274,8 +268,6 @@
 				ctx.fill();
 			}
 	};
-	/** The lower-left corner of the controller's face steps back; the supply plug sits inside the step. */
-	const STEP = { w: 19.5, top: 77.5, depth: 17 };
 	/** The step's back wall: sloped slots over the plug. */
 	const stepPaint: Paint = (ctx) => {
 		ctx.fillStyle = '#3d4144';
@@ -286,30 +278,29 @@
 		}
 	};
 	const plugPaint: Paint = (ctx) => {
-		for (const [i, x] of [3, 9].entries())
-			for (const y of [5, 12, 19]) {
-				ctx.fillStyle = y === 5 ? '#5a5f63' : i ? '#2f6fd6' : '#d83a30';
-				ctx.fillRect(x - 1.5, y - 2.6, 3, 2);
+		for (const col of [0, 1])
+			for (const row of [0, 1, 2]) {
+				const [x, y] = plugPoint(col, row);
+				ctx.fillStyle = row === 0 ? '#5a5f63' : col ? '#2f6fd6' : '#d83a30';
+				ctx.fillRect(x - 1.5, y - 4, 3, 1.8);
 				ctx.fillStyle = '#000';
 				ctx.beginPath();
-				ctx.arc(x, y + 1, 1.5, 0, Math.PI * 2);
+				ctx.arc(x, y, 1.5, 0, Math.PI * 2);
 				ctx.fill();
 			}
 	};
 	/** The feed-through terminals' faces: four across, two rows of points with orange levers above and below a white marker strip. */
-	const TERM = { x0: -21, w: 21, h: 58, d: 46 };
 	const termPaint: Paint = (ctx) => {
-		for (let c = 0; c < 4; c++) {
-			const x = 2.7 + c * 5.2;
-			for (const y of [5, 13.5, 44, 52.5]) {
+		for (let c = 0; c < 4; c++)
+			for (let row = 0; row < 4; row++) {
+				const [x, y] = termPoint(c, row);
 				ctx.fillStyle = '#0c0d0e';
 				ctx.beginPath();
 				ctx.arc(x, y, 1.7, 0, Math.PI * 2);
 				ctx.fill();
 				ctx.fillStyle = '#ef7d00';
-				ctx.fillRect(x - 1.7, y + 2.3, 3.4, 2.2);
+				ctx.fillRect(x - 1.7, row < 2 ? y + 2.3 : y - 4.5, 3.4, 2.2);
 			}
-		}
 		ctx.fillStyle = '#eef0f0';
 		ctx.fillRect(0.6, 19.5, 19.8, 9.5);
 		ctx.fillStyle = '#c9302a';
@@ -323,7 +314,7 @@
 		ctx.roundRect(2.2, 16, 5.6, 12, 0.6);
 		ctx.fill();
 		ctx.fillStyle = '#0c0d0e';
-		for (const y of [78, 85, 92, 99]) {
+		for (const y of BP_POINTS) {
 			ctx.beginPath();
 			ctx.arc(5, y, 1.5, 0, Math.PI * 2);
 			ctx.fill();
@@ -380,46 +371,8 @@
 		line([[186, 112], [222, 112]]);
 	};
 
-	// In the leaning frame: where the desk is under a point, and the leads that run down to it.
-	const deskY = (z: number) => BOARD.y0 - 6 - (z - BOARD.z) * Math.tan(TILT);
-	const onDesk = (x: number, z: number): [number, number, number] => [x, deskY(z) + 3, z];
-	/** A wire: a tube through the given points, mm. */
-	const wire = (pts: [number, number, number][], r: number) => new TubeGeometry(new CatmullRomCurve3(pts.map((p) => new Vector3(...p))), 48, r, 6);
-	const HOLES = [-12, 8, 52, 74];
-	const HOLE_Y = -100;
-	const down = (x: number, y: number, z: number, hole: number, dx: number, bulge: number): [number, number, number][] => [
-		[x, y, z],
-		[x, y - 14, z + bulge],
-		[HOLES[hole] + dx, HOLE_Y + 16, 10],
-		[HOLES[hole] + dx, HOLE_Y, -12]
-	];
-	const RED = '#c9302a';
-	const BLUE = '#2a5fc4';
-	const GREY_WIRE = '#9a9ea2';
-	const WIRES = [
-		// the feed-through terminals, down through the board
-		...[0, 1, 2, 3].map((c) => ({ color: c < 2 ? RED : BLUE, g: wire(down(TERM.x0 + 2.7 + c * 5.2, -27, TERM.d - 2, 0, c * 1.4 - 2, 4), 0.85) })),
-		// the controller's supply plug
-		{ color: RED, g: wire(down(7.4, -50, AXC.d - 3, 1, -2, 8), 0.85) },
-		{ color: BLUE, g: wire(down(13.4, -50, AXC.d - 3, 1, 0, 8), 0.85) },
-		{ color: RED, g: wire(down(7.4, -57, AXC.d - 3, 1, -1, 12), 0.85) },
-		{ color: BLUE, g: wire(down(13.4, -57, AXC.d - 3, 1, 1, 12), 0.85) },
-		// the backplane's supply
-		{ color: RED, g: wire(down(50, -24, 37, 2, -1, 6), 0.85) },
-		{ color: BLUE, g: wire(down(50, -31, 37, 2, 1, 6), 0.85) },
-		// the DI16's four inputs, to the switches, and the AI4 U's pair, to the slider: out, over and down as one bundle
-		...[0, 1, 2, 3].map((i) => ({
-			color: GREY_WIRE,
-			g: wire([[65, -8 - i * 3, 55], [70 + i, -8 - i * 3, 64], [84 + i * 1.5, -30, 62], [88 + i, -66, 40], [HOLES[3] + i * 1.3, HOLE_Y + 12, 8], [HOLES[3] + i * 1.3, HOLE_Y, -12]], 0.9)
-		})),
-		...[0, 1].map((i) => ({
-			color: BLUE,
-			g: wire([[80, -8 - i * 3, 55], [86 + i, -10 - i * 3, 62], [93 + i, -34, 56], [94 + i, -68, 36], [HOLES[3] + 6 + i * 1.3, HOLE_Y + 12, 8], [HOLES[3] + 6 + i * 1.3, HOLE_Y, -12]], 0.9)
-		})),
-		// Ethernet, from under the controller, and the supply lead from the board's jack
-		{ color: '#1d4fb8', g: wire([[31, -62, 58], [31, -84, 62], [26, -120, 76], onDesk(8, 110), onDesk(-70, 190), onDesk(-190, 250)], 2.4) },
-		{ color: '#101112', g: wire([[-46, -100, -6], [-48, -102, 14], [-56, -118, 38], onDesk(-82, 70), onDesk(-150, 120), onDesk(-250, 130)], 1.7) }
-	];
+	// The wiring: every wire's path comes from wiring.ts, which also says where each end terminates.
+	const tubes = WIRES.map((w) => ({ color: w.color, g: new TubeGeometry(new CatmullRomCurve3(w.path.map((p) => new Vector3(...p))), w.path.length * 2, w.r, 8) }));
 </script>
 
 <T.Group scale={S} position={[-CX * S, -CY * S, 0]}>
@@ -428,9 +381,9 @@
 		<RoundedBoxGeometry args={[760, 10, 560]} radius={2} />
 		<T.MeshStandardMaterial color="#b6935c" roughness={0.75} metalness={0} />
 	</T.Mesh>
-	{#each [BOARD.x0 + 34, BOARD.x1 - 26] as x}
-		<T.Mesh position={[x, BOARD.y0 + 5, BOARD.z - 58]}>
-			<RoundedBoxGeometry args={[26, 22, 172]} radius={1.5} />
+	{#each FEET.xs as x}
+		<T.Mesh position={[x, BOARD.y0 - 6 + FEET.h / 2, FEET.z]}>
+			<RoundedBoxGeometry args={[FEET.w, FEET.h, FEET.len]} radius={1.5} />
 			<T.MeshStandardMaterial color="#0b0b0c" roughness={0.6} metalness={0} envMapIntensity={0.3} />
 		</T.Mesh>
 	{/each}
@@ -449,7 +402,7 @@
 			<T.MeshStandardMaterial color="#0b0b0c" roughness={0.5} envMapIntensity={0.4} />
 		</T.Mesh>
 	{/each}
-	<T.Mesh position={[-46, -100, BOARD.z + 5]} rotation={[Math.PI / 2, 0, 0]}>
+	<T.Mesh position={[JACK.x, JACK.y, BOARD.z + 5]} rotation={[Math.PI / 2, 0, 0]}>
 		<T.CylinderGeometry args={[4.2, 4.2, 4, 20]} />
 		<T.MeshStandardMaterial color="#7f8387" roughness={0.45} metalness={0.6} />
 	</T.Mesh>
@@ -488,7 +441,7 @@
 	</T.Mesh>
 
 	<!-- the wiring -->
-	{#each WIRES as w}
+	{#each tubes as w}
 		<T.Mesh geometry={w.g}>
 			<T.MeshStandardMaterial color={w.color} roughness={0.55} />
 		</T.Mesh>
@@ -576,14 +529,14 @@
 		<Print w={AXC.d - 10} h={AXC.h - 12} position={[0.2, 0, (AXC.d + 10) / 2]} rotation={[0, -Math.PI / 2, 0]} items={[]} paint={axcSide} res={8} />
 	{/if}
 	<Print w={AXC.w} h={AXC.h} position={[AXC.w / 2, 0, AXC.d + 0.08]} items={axcInk} paint={axcPaint} res={14} />
-	<T.Mesh position={[10.4, AXC.h / 2 - 110.5, AXC.d - STEP.depth + 6.5]}>
-		<RoundedBoxGeometry args={[12.4, 23, 13]} radius={0.8} />
+	<T.Mesh position={[PLUG.x, PLUG.y, AXC.d - STEP.depth + 6.5]}>
+		<RoundedBoxGeometry args={[PLUG.w, PLUG.h, 13]} radius={0.8} />
 		<T.MeshStandardMaterial color="#1c1d1f" roughness={0.6} />
 	</T.Mesh>
-	<Print w={12} h={23} position={[10.4, AXC.h / 2 - 110.5, AXC.d - STEP.depth + 13.08]} items={[]} paint={plugPaint} res={12} />
+	<Print w={12} h={PLUG.h} position={[PLUG.x, PLUG.y, PLUG.z1 + 0.08]} items={[]} paint={plugPaint} res={12} />
 	<!-- the Ethernet plug in the socket underneath, its link lamp lit while frames arrive -->
-	<T.Mesh position={[31, -AXC.h / 2 - 1, 58]}>
-		<T.BoxGeometry args={[11, 12, 13]} />
+	<T.Mesh position={[ETH.x, ETH.y, ETH.z]}>
+		<T.BoxGeometry args={[ETH.w, ETH.h, ETH.d]} />
 		<T.MeshStandardMaterial color="#1d4fb8" roughness={0.6} />
 	</T.Mesh>
 	<Led position={[24, -AXC.h / 2 + 2.8, AXC.d - 4.2]} size={[2, 1.6]} on={live} color="#9dff3c" off="#5d6265" />
@@ -696,7 +649,7 @@
 					<T.MeshBasicMaterial transparent opacity={0} depthWrite={false} />
 				</T.Mesh>
 			{/each}
-			<T.Mesh position={[x + SE.w / 2, (top - SE.h + CALLOUT.y + CALLOUT.h / 2) / 2, SE.z1 - 4]}>
+			<T.Mesh position={[x + SE.w - 2.4, (top - SE.h + CALLOUT.y + CALLOUT.h / 2) / 2, SE.z1 - 4]}>
 				<T.BoxGeometry args={[0.4, top - SE.h - (CALLOUT.y + CALLOUT.h / 2), 0.4]} />
 				<T.MeshBasicMaterial color="#d8d6d0" toneMapped={false} />
 			</T.Mesh>

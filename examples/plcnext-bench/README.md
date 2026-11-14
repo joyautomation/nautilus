@@ -219,7 +219,11 @@ The model is plain Threlte (`hmi/src/lib/Axc.svelte`) placed inside
 `SceneView` from `@joyautomation/nautilus-hmi-3d`. It is not a
 `*.scene.json`, so `naut check` does not hold its tag names to the
 project. The board's size and lean are measured off a capture of the
-bench, and the faces and positions follow photographs of it. Of the
+bench, and the faces and positions follow photographs of it. The wiring
+is in `hmi/src/lib/wiring.ts`: each wire's two terminals and its path.
+`node hmi/tools/check-wiring.mjs` checks, without drawing anything, that
+every end is seated in its terminal and that no wire passes through a
+housing, the rail, the board, a foot or the desk. Of the
 controller's own lamps, RUN is lit while frames arrive and D from the
 driver's status, as are the backplane's; the rest are drawn dark. In a
 tall window the board runs off the sides so the station, the buttons
