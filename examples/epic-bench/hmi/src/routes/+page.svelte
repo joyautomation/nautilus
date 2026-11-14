@@ -6,7 +6,7 @@
 	import { onMount } from 'svelte';
 	import { RealtimeClient, ConnectionBadge, type NautilusFrame } from '@joyautomation/nautilus-hmi';
 	import { SceneView } from '@joyautomation/nautilus-hmi-3d';
-	import Epic, { BOUNDS, type Channel } from '$lib/Epic.svelte';
+	import Epic, { BOUNDS, BOUNDS_CORE, type Channel } from '$lib/Epic.svelte';
 	import Panel, { type Row } from '$lib/Panel.svelte';
 	import { fitCamera } from '$lib/fit';
 
@@ -19,7 +19,8 @@
 	let wide = $derived(innerWidth / innerHeight > 1.3);
 	let stage = $state<HTMLElement>();
 	let aspect = $state(1.5);
-	let camera = $derived(fitCamera(BOUNDS, aspect, { yaw: 20, pitch: 9, fov: 26, fill: 0.96 }));
+	// A tall window closes in on the processor and the modules; the stand runs off its sides.
+	let camera = $derived(fitCamera(aspect < 0.85 ? BOUNDS_CORE : BOUNDS, aspect, { yaw: -26, pitch: 26, fov: 26, fill: 0.96 }));
 
 	let hover = $state<Channel | null>(null);
 	let pointer = $state({ x: 0, y: 0 });

@@ -78,14 +78,21 @@ scratchpad float 0 held the ICTD reading (23.0 °C).
 
 ## The 3D screen
 
-`hmi/` is a small SvelteKit page that draws the chassis itself (the
-GRV-EPIC-PR1 with its screen closed and the four modules in slot order)
-and lights each channel from its tag: the 24 inputs, the 12 outputs with
-the heartbeat on 11, and a mark per analog channel, amber where the
-controller reports the channel bad (nothing wired to it). The two wired
-readings sit in a tag over their modules; a side panel has the driver's
-status and the scan times. Hovering a channel names its tag. It only
-reads: `/api/stream`, nothing written.
+`hmi/` is a small SvelteKit page that draws the bench unit as it stands
+on the desk: the GRV-EPIC-PR1 with its screen on, the four modules in
+slot order on the GRV-EPIC-CHS4, the clear acrylic stand it leans back
+on, and the small bar of buttons beside it (drawn, not bound to
+anything). The shapes are our own boxes and extrusions at the dimensions
+of Opto 22's published CAD; nothing of the CAD is in the repo or loaded
+by the page. Each discrete channel's lamp is its number on the cover,
+which glows white when the channel is on: the 24 inputs, and the 12
+outputs with the heartbeat on 11. The analog modules' covers are blank,
+as on the unit; their readings sit in a tag over each module (bad
+quality reads "unwired", never zero). Each module's status light has the
+colour it has on the bench (green, green, orange, blue) and goes dark
+when `EPIC__Online` is false. A side panel has the driver's status and
+the scan times. Hovering a channel names its tag. It only reads:
+`/api/stream`, nothing written.
 
 ```sh
 cd hmi
@@ -100,7 +107,8 @@ canvas, the orbit camera and the tags. It is not a `*.scene.json`, so
 `naut check` does not hold its tag names to the project; they are the
 import's names, built from the module table at the top of that file. The
 camera refits when the window changes shape, and the panel moves under
-the model in a square or tall window.
+the model in a square or tall window; a tall window closes in on the
+processor and the modules.
 
 ## On the EPIC itself
 
