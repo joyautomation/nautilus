@@ -4,7 +4,7 @@
 	// leaning back in two feet, a DIN rail across it, and on the rail a block
 	// of feed-through terminals, the AXC F 2152 and an AXL F BP SE4 backplane
 	// holding four Axioline Smart Elements, two over two. Right of them on
-	// the board, four toggle switches labelled S4 (top) to S1 (bottom), wired
+	// the board, four momentary pushbuttons labelled S4 (top) to S1 (bottom), wired
 	// to DI16 inputs 04..01, and a 0..10 V slider, the AI4 U's source. Sizes
 	// are the datasheets' (45 x 126.9 mm controller, 40 x 122.4 mm backplane,
 	// 15 x 62 mm elements); the board (360 x 265 mm, leaning 21 degrees) is
@@ -305,9 +305,9 @@
 	/** The backplane's lamps, green on the bench unit: lit here while the driver is exchanging the bus. */
 	const BP_LAMPS: [number, number][] = [[3.7, 58], [6.3, 58], [3.7, 63.6], [6.3, 63.6], [5, 69]];
 
-	// The board's own parts. The switches' labels read S4, S3, S2, S1 from
+	// The board's own parts. The pushbuttons' labels read S4, S3, S2, S1 from
 	// the top, so the bottom one is DI16 input 01 (DI_00) and the top one
-	// input 04 (DI_03). The slider is the AI4 U's 0..10 V source, read off AI_00.
+	// input 04 (DI_03); they are momentary, on while held. The slider is the AI4 U's 0..10 V source, read off AI_00.
 	const SWITCHES = { x: 167, ys: [24, 1, -21, -45] };
 	const switchTag = (i: number) => `DI_0${3 - i}`;
 	const SLIDER = { x: 217, y0: -28, y1: 15 };
@@ -467,25 +467,27 @@
 		</T.Mesh>
 	{/each}
 
-	<!-- the four toggle switches, S4 at the top to S1 at the bottom: the lever tips up
-	     with its input, and the collar lights so it reads from across the room -->
+	<!-- the four pushbuttons, S4 at the top to S1 at the bottom, momentary: a pressed
+	     one sits in, and its collar lights so it reads from across the room -->
 	{#each SWITCHES.ys as y, i}
 		{@const tag = switchTag(i)}
-		{@const up = on(tag)}
-		<T.Mesh position={[SWITCHES.x, y, BOARD.z + 4.6]} rotation={[Math.PI / 2, 0, 0]}>
-			<T.CylinderGeometry args={[4.6, 4.6, 3.2, 6]} />
+		{@const pressed = on(tag)}
+		<T.Mesh position={[SWITCHES.x, y, BOARD.z + 4.4]} rotation={[Math.PI / 2, 0, 0]}>
+			<T.CylinderGeometry args={[4.8, 4.8, 2.8, 6]} />
 			<T.MeshStandardMaterial color="#9a9ea2" roughness={0.4} metalness={0.7} />
 		</T.Mesh>
-		<T.Mesh position={[SWITCHES.x, y, BOARD.z + 6.4]}>
-			<T.TorusGeometry args={[3.4, 0.7, 8, 28]} />
-			<T.MeshBasicMaterial color={up ? YELLOW : '#4a4d50'} toneMapped={false} />
+		<T.Mesh position={[SWITCHES.x, y, BOARD.z + 7]} rotation={[Math.PI / 2, 0, 0]}>
+			<T.CylinderGeometry args={[3.3, 3.6, 3, 20]} />
+			<T.MeshStandardMaterial color="#b3b7bb" roughness={0.35} metalness={0.8} />
 		</T.Mesh>
-		<T.Group position={[SWITCHES.x, y, BOARD.z + 6]} rotation={[up ? -0.42 : 0.42, 0, 0]}>
-			<T.Mesh position={[0, 0, 6]} rotation={[Math.PI / 2, 0, 0]}>
-				<T.CylinderGeometry args={[2.5, 2, 12, 16]} />
-				<T.MeshStandardMaterial color="#050506" roughness={0.5} envMapIntensity={0.4} />
-			</T.Mesh>
-		</T.Group>
+		<T.Mesh position={[SWITCHES.x, y, BOARD.z + 6]}>
+			<T.TorusGeometry args={[4.6, 0.8, 8, 28]} />
+			<T.MeshBasicMaterial color={pressed ? YELLOW : '#3a3d40'} toneMapped={false} />
+		</T.Mesh>
+		<T.Mesh position={[SWITCHES.x, y, BOARD.z + (pressed ? 9 : 11.5)]} rotation={[Math.PI / 2, 0, 0]}>
+			<T.CylinderGeometry args={[2.9, 2.9, pressed ? 2 : 7, 20]} />
+			<T.MeshBasicMaterial color="#0b0b0d" toneMapped={false} />
+		</T.Mesh>
 		<Print w={15} h={7} position={[SWITCHES.x + 15, y + 1, BOARD.z + 3.12]} items={[{ text: `S${4 - i}`, x: 7.5, y: 3.6, size: 2.6, align: 'center', color: '#2a2d30', weight: 600 }]} plate={{ fill: '#f2f3f3', radius: 1 }} res={14} />
 		{#if hovered === tag}
 			<T.Mesh position={[SWITCHES.x + 7, y, BOARD.z + 3.2]}>

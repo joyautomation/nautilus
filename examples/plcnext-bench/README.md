@@ -194,17 +194,19 @@ the desk: the starter kit's black board leaning back in its two feet,
 the DIN rail, the feed-through terminals, the AXC F 2152 and the four
 Smart Elements in their backplane, two over two (slots 1 and 2 down the
 left column, 3 and 4 down the right: DO16 over DI16, the cover over the
-AI4 U, as on the bench), and on the board the four toggle switches and
+AI4 U, as on the bench), and on the board the four pushbuttons and
 the 0 to 10 V slider. Each of the DO16's and DI16's sixteen lamps is lit
 from its tag (lamp 01 is `DO_00`, the heartbeat is lamp 16). The
-switches are labelled S4 at the top to S1 at the bottom and are inputs
-04 to 01: the bottom lever follows `DI_00`, the top one `DI_03`, each
-tipping up with a lit collar when its input is on. The slider's knob
+pushbuttons are momentary, labelled S4 at the top to S1 at the bottom,
+and are inputs 04 to 01: the bottom one follows `DI_00`, the top one
+`DI_03`, each sitting in with a lit collar while it is held. The slider's knob
 follows `AI_00` (0 to 30000 counts taken as 0 to 10 V); while the AI4 U
 reports `0x8020` the knob is parked grey at 0 V, the tag under the
 element reads "supply missing" and the element's E lamp is red. A side
 panel has the driver's status and the scan times. Hovering a channel or
-a switch names its tag. It only reads: `/api/stream`, nothing written.
+a button names its tag. It only reads: one `/api/stream`, held only while
+the tab is showing (a browser allows six connections to a controller
+across all its tabs), nothing written.
 
 ```sh
 cd hmi
@@ -220,7 +222,7 @@ project. The board's size and lean are measured off a capture of the
 bench, and the faces and positions follow photographs of it. Of the
 controller's own lamps, RUN is lit while frames arrive and D from the
 driver's status, as are the backplane's; the rest are drawn dark. In a
-tall window the board runs off the sides so the station, the switches
+tall window the board runs off the sides so the station, the buttons
 and the slider stay large.
 
 ## Timing, honestly
