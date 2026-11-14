@@ -2,7 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **`brokenPipes(pipes, getPort)`** lists the pipes that draw nothing and
+  why: an anchored end whose equipment or port isn't there
+  (`"F1_INF.a"`), or ends and points that all land on one spot.
+  `<Mimic>` puts the list on its root as `data-broken-pipes` (JSON) when
+  there are any, which `naut check` reads when it renders a screen.
+
 ### Fixed
+
+- **ScanDiagnostics before the first scan.** A frame from a runtime that
+  hasn't scanned yet (or a standby replica, which doesn't) used to carry
+  `recent: null`, and the panel threw. The runtime now sends `[]`, and the
+  panel reads a missing history as empty either way.
 
 - **A pipe with no points no longer blanks the screen.** A pipe anchored
   at both ends (`from` and `to`) with no bends may leave `points` out, as a

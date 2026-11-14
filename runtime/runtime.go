@@ -1396,9 +1396,12 @@ func pushSample(s []float64, v float64) []float64 {
 func (r *Runtime) Stats() ScanStats {
 	r.mu.Lock()
 	s := r.stats
-	s.Recent = append([]float64(nil), r.stats.Recent...)
-	s.Periods = append([]float64(nil), r.stats.Periods...)
-	s.Histogram = append([]int(nil), r.stats.Histogram...)
+	// Copies that are never nil: before the first scan (and on a standby
+	// that doesn't scan) the rings are empty, and JSON must say [] — a null
+	// here threw in the kit's ScanDiagnostics (found by naut check's render).
+	s.Recent = append([]float64{}, r.stats.Recent...)
+	s.Periods = append([]float64{}, r.stats.Periods...)
+	s.Histogram = append([]int{}, r.stats.Histogram...)
 	if len(r.stats.RetainDiscardedEdits) > 0 {
 		s.RetainDiscardedEdits = append([]string(nil), r.stats.RetainDiscardedEdits...)
 	}

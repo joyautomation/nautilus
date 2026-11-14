@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,7 +15,10 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/hmibuild"
+	"github.com/joyautomation/nautilus/internal/hmicheck"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 // hmiSource says what naut builds for this project, or "" for nothing: the
@@ -168,4 +174,53 @@ func writeBuiltFiles(dir string, files map[string][]byte) error {
 		}
 	}
 	return nil
+}
+
+// renderScreens is naut check -render (on unless -render=false).
+var renderScreens = true
+
+// renderHMI serves the built screen from naut's own server over a runtime
+// that never scans (no driver, no write reaches anything; every tag at
+// its initial value) and looks at each page in the machine's browser, at
+// desktop and phone size. No browser is a note, not a failure.
+func renderHMI(file string, proj *project.Project, res *hmibuild.Result) (errs, warns int) {
+	path := hmicheck.FindBrowser()
+	if path == "" {
+		fmt.Printf("%s: hmi: not rendered: no Chrome, Chromium or Edge on this machine (NAUT_BROWSER names one)\n", file)
+		return 0, 0
+	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		return 0, 0 // the program's own errors are reported above
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	srv := server.New(rt, server.Options{HMI: res.FS()})
+	go srv.Run(ctx)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Printf("%s: hmi: not rendered: %v\n", file, err)
+		return 0, 0
+	}
+	hs := &http.Server{Handler: srv.Handler()}
+	go hs.Serve(ln)
+	defer hs.Close()
+	t0 := time.Now()
+	found, err := hmicheck.Render(ctx, path, "http://"+ln.Addr().String(), res.Pages)
+	for _, f := range found {
+		if f.Error {
+			errs++
+			fmt.Printf("%s: error: hmi: %s\n", file, f)
+		} else {
+			warns++
+			fmt.Printf("%s: warning: hmi: %s\n", file, f)
+		}
+	}
+	if err != nil {
+		fmt.Printf("%s: hmi: not rendered: %s: %v\n", file, filepath.Base(path), err)
+		return errs, warns
+	}
+	fmt.Printf("%s: hmi: rendered %s at desktop and phone size in %s: %s\n", file, plural(len(res.Pages), "page"),
+		time.Since(t0).Round(100*time.Millisecond), plural(errs, "error")+", "+plural(warns, "warning"))
+	return errs, warns
 }

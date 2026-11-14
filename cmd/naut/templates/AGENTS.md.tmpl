@@ -287,6 +287,11 @@ naut builds the operator screen from the project itself, with no npm, and
   names, every pipe's ports, and the screen builds. A screen imports only
   Svelte, `@joyautomation/nautilus-hmi`, `@joyautomation/nautilus-hmi-3d`,
   three and Threlte.
+- With Chrome, Chromium or Edge on the machine, `naut check` also opens
+  each page at desktop and phone size and reports what it sees: a page
+  that throws or is blank, a pipe that draws nothing, a shape drawn far
+  outside its drawing, sideways scroll on a phone. Fix them like compile
+  errors. A screen you haven't seen rendered isn't done.
 - In a component that uses `$state(...)`, never name a prop or variable
   `state`: Svelte then reads `$state` as a store subscription and the
   component throws when it mounts. Name it for what it holds
