@@ -129,9 +129,9 @@
 				});
 			});
 	});
-	// Satin black plastic, and the chassis's plain steel (its file carries no normals: flat sheet, shaded flat).
+	// Satin black plastic, and the chassis's plain steel.
 	const plastic = new MeshStandardMaterial({ color: '#0d0e0f', roughness: 0.55, metalness: 0, envMapIntensity: 0.45 });
-	const steel = new MeshStandardMaterial({ color: '#8b9096', roughness: 0.5, metalness: 0.6, flatShading: true });
+	const steel = new MeshStandardMaterial({ color: '#8b9096', roughness: 0.5, metalness: 0.6 });
 
 	// Where our own parts sit on those bodies, mm, read off the models.
 	const PR1 = { x0: 0.8, w: 87.5, top: 127.8, front: 135.9 };
@@ -143,7 +143,7 @@
 	const ROWS = 76;
 	const pitch = (m: Module) => ROWS / (m.channels - 1);
 	const rowY = (m: Module, ch: number) => ROW_TOP - ch * pitch(m);
-	const NUM_X = 6.4;
+	const NUM_X = 8.4;
 
 	const COVER = '#111214';
 	const ALU = '#aeb3b8';
@@ -185,19 +185,8 @@
 		return new CanvasTexture(c);
 	})();
 
-	/** A module's head: what it is, over the two linked rings (gloss on satin). The rings are moulded into the
-	 * real head; at this size the model's are only creases, so the head's face is a printed plate. */
-	const HEAD = { w: 17.6, h: 21, y: 105.5 };
-	const headInk = (m: Module): Ink[] => [{ text: m.mark, x: HEAD.w / 2, y: 3.4, size: m.mark.length > 8 ? 1.7 : 2.1, align: 'center', color: '#f2f3f4', weight: 650 }];
-	const rings: Paint = (ctx) => {
-		ctx.strokeStyle = '#020202';
-		ctx.lineWidth = 1.7;
-		for (const x of [HEAD.w / 2 - 3.5, HEAD.w / 2 + 3.5]) {
-			ctx.beginPath();
-			ctx.arc(x, 11.6, 3, 0, Math.PI * 2);
-			ctx.stroke();
-		}
-	};
+	/** A module's head: what it is, printed above the two rings moulded into it. */
+	const headInk = (m: Module): Ink[] => [{ text: m.mark, x: MOD.w / 2, y: 2.4, size: m.mark.length > 8 ? 1.7 : 2.1, align: 'center', color: '#f2f3f4', weight: 650 }];
 	/** The cover's field, from y = 80 down: the channel numbers, and the part number low on the right. */
 	const COVER_PRINT = { top: 80, h: 100 };
 	function coverInk(m: Module): Ink[] {
@@ -331,23 +320,11 @@
 		{/if}
 	</T.Group>
 
-	<!-- the touchscreen, lit: the sign-in page, behind the bezel; and the wordmark's plate on the skirt -->
+	<!-- the touchscreen, lit: the sign-in page, behind the bezel -->
 	<Print w={DW + 3} h={DH + 3} position={[(DISPLAY.x0 + DISPLAY.x1) / 2, (DISPLAY.y0 + DISPLAY.y1) / 2, DISPLAY.z]} items={signInInk} paint={signIn} res={12} />
-	<Print
-		w={46}
-		h={12.5}
-		position={[55, -9.6, PR1.front + 0.1]}
-		rotation={[0.1, 0, 0]}
-		plate={{ fill: COVER, radius: 2 }}
-		items={[
-			{ text: 'groov', x: 23, y: 5, size: 6.4, align: 'center', italic: true, weight: 800, color: '#2c2f33' },
-			{ text: 'GRV-EPIC-PR1', x: 23, y: 10.4, size: 1.4, align: 'center', weight: 600, color: '#6f757b', spacing: 0.4 }
-		]}
-	/>
-
 	{#each MODULES as m (m.slot)}
 		<!-- on each module: the head's lettering, the status light along the wave (dark when the driver is offline), the cover's print -->
-		<Print w={HEAD.w} h={HEAD.h} position={[cx(m), HEAD.y, MOD.head + 0.45]} items={headInk(m)} paint={rings} plate={{ fill: COVER, radius: 1.6 }} res={16} />
+		<Print w={MOD.w} h={5} position={[cx(m), 113.6, MOD.head + 0.12]} items={headInk(m)} res={16} />
 		<T.Mesh geometry={lens} position={[cx(m), 0, MOD.head - 0.35]}>
 			<T.MeshBasicMaterial color={online ? m.light : '#15191c'} toneMapped={false} />
 		</T.Mesh>
