@@ -16,7 +16,7 @@ import (
 // component a mimic names is the project's, a {Name}.svelte in it.
 var builtinEquipment = map[string]bool{
 	"Tank": true, "Heater": true, "Pump": true, "Valve": true, "Gauge": true,
-	"Sparkline": true, "CommandButton": true, "WriteToggle": true,
+	"Sparkline": true, "CommandButton": true, "WriteToggle": true, "OffPage": true,
 }
 
 // skipDir is what a project search never looks in: dot, dependency and

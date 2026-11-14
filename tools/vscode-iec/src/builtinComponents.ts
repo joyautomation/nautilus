@@ -39,6 +39,12 @@ export const BUILTIN_COMPONENT_PORTS: Record<string, Port[]> = {
   Sparkline: [],
   CommandButton: [],
   WriteToggle: [],
+  OffPage: [
+    { name: "top", part: "body", x: 0.5, y: 0 },
+    { name: "left", part: "body", x: 0, y: 0.5 },
+    { name: "right", part: "body", x: 1, y: 0.5 },
+    { name: "bottom", part: "body", x: 0.5, y: 1 },
+  ],
 };
 
 export const BUILTIN_COMPONENT_NAMES = Object.keys(BUILTIN_COMPONENT_PORTS);
@@ -55,4 +61,5 @@ export const BUILTIN_DEMO_PROPS: Record<string, Record<string, unknown>> = {
   Gauge: { value: 65, setpoint: 65 },
   CommandButton: { label: "Command", tag: "" },
   WriteToggle: { label: "Enable", tag: "", value: true },
+  OffPage: { label: "TO DRAIN" },
 };

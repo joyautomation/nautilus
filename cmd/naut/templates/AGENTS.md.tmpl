@@ -275,7 +275,7 @@ naut builds the operator screen from the project itself, with no npm, and
 - A `*.mimic.json` is a screen: equipment placed on a canvas, pipes between
   it, tags bound to it. A project with mimics gets a page for each. Use
   the kit's equipment (`Tank`, `Pump`, `Valve`, `Gauge`, `CommandButton`,
-  `WriteToggle`, ...) and a `{Name}.svelte` of your own where the kit
+  `WriteToggle`, `OffPage`, ...) and a `{Name}.svelte` of your own where the kit
   doesn't draw what you need, with its pipe ports in `{Name}.component.json`
   and its `examples`: the props for each state it draws
   (`"examples": {"open": {...}, "closed": {...}, "failed": {...}}`).
@@ -294,6 +294,15 @@ naut builds the operator screen from the project itself, with no npm, and
   a 1920×1080 screen under naut's bar. naut's pages fit the whole drawing
   to the window, so a taller canvas is drawn smaller, never cut off; in an
   app, `<Mimic fit="contain">` does the same.
+- Lay the pipes out so an operator can follow each one by eye. Put a
+  header on the side of the equipment its lines leave from (lines leaving
+  the top run to headers above, lines leaving the bottom to headers
+  below), in the order the drops reach them, so no drop crosses more than
+  two to reach its own. Where one would, end the drop at an `OffPage`
+  connector named for its header (`"props": {"label": "TO AIR HEADER",
+  "dir": "down"}`) and draw that header once, by what feeds it. A pipe
+  that ends on another joins it, and the screen dots the tee; one that
+  crosses is drawn broken under it.
 - An operator picks a light or a dark theme. Colour your components from
   the kit's tokens, never a hex (a hex reads in one theme only): text in
   `var(--ink)`, `var(--ink-2)` or `var(--muted)`; grounds in `var(--bg)`,
@@ -311,7 +320,8 @@ naut builds the operator screen from the project itself, with no npm, and
   three and Threlte.
 - With Chrome, Chromium or Edge on the machine, `naut check` also opens
   each page at desktop and phone size and reports what it sees: a page
-  that throws or is blank, a pipe that draws nothing, a shape drawn far
+  that throws or is blank, a pipe that draws nothing, a pipe that passes
+  under three or more others, a shape drawn far
   outside its drawing, a drawing that runs off the bottom of the window or
   is drawn too small to read, text too dim to read in either theme or
   drawn under 9 px, sideways scroll on a phone. Fix them like compile

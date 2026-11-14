@@ -13,6 +13,9 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Added
 
+- **Mimic editor: `OffPage` in the palette.** The kit's off-page
+  connector, with its four ports.
+
 - **Mimic editor: pipes as the screen draws them.** One line on an
   ISA-101 mimic, the walled tube on a realistic one, as the kit's
   `<Mimic>` now draws them.

@@ -150,7 +150,14 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 	Sparkline: [],
 	// Operator controls: no pipe meets a button.
 	CommandButton: [],
-	WriteToggle: []
+	WriteToggle: [],
+	// A P&ID's off-page connector: a line ends on whichever side it meets.
+	OffPage: [
+		{ name: 'top', part: 'body', x: 0.5, y: 0 },
+		{ name: 'left', part: 'body', x: 0, y: 0.5 },
+		{ name: 'right', part: 'body', x: 1, y: 0.5 },
+		{ name: 'bottom', part: 'body', x: 0.5, y: 1 }
+	]
 };
 
 /** Resolve an equipment instance's connection points at the RUNTIME's
@@ -669,6 +676,11 @@ export function pipeCrossings(paths: [number, number][][]): PipeCrossing[] {
 	}
 	return out;
 }
+
+/** How many other pipes one may pass under before it is hard to trace:
+ * a drop crossing two headers to reach the third reads; past that, the eye
+ * loses which line it is on. */
+export const CROSSED_MANY = 3;
 
 /** A point where three or more pipe ends and runs meet: a branch off a
  * run (a tee) or a cross. */

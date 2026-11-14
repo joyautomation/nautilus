@@ -89,6 +89,10 @@ type probeResult struct {
 		ID   string   `json:"id"`
 		Ends []string `json:"ends"`
 	} `json:"pipes"`
+	Crossed []struct {
+		ID string `json:"id"`
+		N  int    `json:"n"`
+	} `json:"crossed"`
 	Outside []struct {
 		Count int      `json:"count"`
 		Names []string `json:"names"`
@@ -253,6 +257,24 @@ func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding
 			} else {
 				f(true, "pipe %s draws nothing: its ends and points are all one spot", p.ID)
 			}
+		}
+		if len(pr.Crossed) > 0 {
+			c := pr.Crossed[0]
+			more := ""
+			if n := len(pr.Crossed) - 1; n > 0 {
+				var ids []string
+				for _, o := range pr.Crossed[1:min(len(pr.Crossed), 6)] {
+					ids = append(ids, o.ID)
+				}
+				if n > 5 {
+					ids = append(ids, "…")
+				}
+				more = fmt.Sprintf(", and %d more pipes pass under 3 or more (%s)", n, strings.Join(ids, ", "))
+				if n == 1 {
+					more = fmt.Sprintf(", and 1 more passes under 3 or more (%s)", ids[0])
+				}
+			}
+			f(false, "pipe %s passes under %d other pipes%s: a line that crosses a stack of headers to reach its own can't be traced by eye. Put each header on the side of the equipment its line leaves from, order the headers so each drop crosses few, or end the drop at an OffPage connector named for its header (\"TO AIR HEADER\") and draw that header once, by what feeds it", c.ID, c.N, more)
 		}
 		for _, o := range pr.Outside {
 			names := strings.Join(o.Names, ", ")
