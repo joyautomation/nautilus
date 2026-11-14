@@ -96,9 +96,25 @@ type probeResult struct {
 		Past  int      `json:"past"`
 		Size  int      `json:"size"`
 	} `json:"outside"`
+	Mimics []struct {
+		Canvas  [2]int  `json:"canvas"`
+		Scale   float64 `json:"scale"`
+		Below   int     `json:"below"`
+		Room    [2]int  `json:"room"`
+		Scrolls bool    `json:"scrolls"`
+	} `json:"mimics"`
+	Drawings []struct {
+		Size    [2]int  `json:"size"`
+		ViewBox *[2]int `json:"viewBox"`
+		Below   int     `json:"below"`
+	} `json:"drawings"`
 	Sideways int `json:"sideways"`
 	Width    int `json:"width"`
 }
+
+// SmallScale is the scale under which a drawing fitted to a desktop window
+// reads too small: the kit's 14 px text at 0.75 is 10.5 px.
+const SmallScale = 0.75
 
 func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second+Settle)
@@ -244,6 +260,29 @@ func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding
 				names += fmt.Sprintf(" and %d more", o.More)
 			}
 			f(false, "%d shape(s) draw far outside their drawing, up to %d px past a %d px drawing: %s (a coordinate passed as text, \"130\" + 8 = \"1308\", or in the wrong units)", o.Count, o.Past, o.Size, names)
+		}
+	}
+	// How a drawing meets a desktop window: whole, and big enough to read.
+	// (A phone shows a drawing however the screen decided to: no rule here.)
+	if !v.mobile {
+		for _, m := range pr.Mimics {
+			pct := int(m.Scale*100 + 0.5)
+			switch {
+			case m.Scrolls:
+			case m.Below > 2:
+				f(false, "the %d×%d drawing runs %d px past the bottom of a %d×%d window, drawn at %d%% to fill the width: an operator scrolls to see the rest. fit=\"contain\" on <Mimic> shows it whole; a canvas drawn for the room (%d×%d here) shows it whole at full size", m.Canvas[0], m.Canvas[1], m.Below, v.width, v.height, pct, m.Room[0], m.Room[1])
+			case m.Scale < SmallScale:
+				f(false, "the %d×%d drawing is drawn at %d%% to fit a %d×%d window, so 14 px text reads as %.0f px: draw the canvas for the room (%d×%d here), or split it into screens", m.Canvas[0], m.Canvas[1], pct, v.width, v.height, 14*m.Scale, m.Room[0], m.Room[1])
+			}
+		}
+	}
+	if !v.mobile {
+		for _, d := range pr.Drawings {
+			vb := ""
+			if d.ViewBox != nil {
+				vb = fmt.Sprintf(" (viewBox %d×%d)", d.ViewBox[0], d.ViewBox[1])
+			}
+			f(false, "a %d×%d drawing%s runs %d px past the bottom of a %d×%d window: an operator scrolls to see the rest. Size it to the room left in the window (an <svg> with a viewBox keeps its shape at any size: width: 100%%; height: 100%% in a container that has a height), or draw it for the room", d.Size[0], d.Size[1], vb, d.Below, v.width, v.height)
 		}
 	}
 	if v.mobile && pr.Sideways > 1 {

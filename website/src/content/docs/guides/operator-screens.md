@@ -249,7 +249,13 @@ serves them at `/`, with the engineering dashboard moved to `/_nautilus/`:
   for each: the first at `/`, the others by file name
   (`screens/pumps.mimic.json` is `/pumps`), under a bar with the project's
   name, the pages, the connection and a theme switch. The pages are live
-  and their controls write, as in the editor.
+  and their controls write, as in the editor. Each page shows its whole
+  drawing at once, fitted to the window's width and height and centred,
+  so draw the canvas for the window it's seen in: about 1880×1000 fills a
+  1920×1080 screen under the bar. A taller canvas is drawn smaller, not
+  cut off. In an app, `<Mimic {doc} fit="contain" />` does the same in a
+  container that has a height of its own; the default, `fit="width"`,
+  fills the width and lets a tall drawing run on below.
 - **For more than mimics**, write the screen as an app and point
   `server.hmi` at its folder: `src/routes/+page.svelte` is `/`,
   `src/routes/trends/+page.svelte` is `/trends`, a `+layout.svelte` wraps
@@ -283,6 +289,9 @@ person would see wrong:
 - a pipe that draws nothing, naming the end that isn't there (an error);
 - a shape drawn far outside its own drawing, usually a coordinate passed
   as text (`y="130"`, so `y + 8` is `"1308"`) (a warning);
+- a drawing that runs past the bottom of a 1920×1080 window, or one
+  fitted so small that 14 px text reads under 10.5 px, with the room it
+  had to fill (a warning);
 - a page that scrolls sideways on a 390 px phone (a warning).
 
 The screen is served from naut's own server over the project's runtime

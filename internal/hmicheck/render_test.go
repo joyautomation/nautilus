@@ -26,6 +26,9 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"/pipes":   `<div data-broken-pipes='[{"id":"p1","ends":["F1_INF.a"]},{"id":"p2","ends":[]}]'><p>screen</p></div>`,
 		"/outside": `<svg viewBox="0 0 300 300" width="300" height="300"><defs><clipPath id="c"><rect width="300" height="300"/></clipPath></defs><g><title>XV-105: closed</title><path d="M 10 10 L 20 10 L 10 1308 L 20 1308 Z"/></g><circle cx="300" cy="150" r="20"/><g clip-path="url(#c)"><path class="hatch" d="M -900 0 L 1200 2000"/></g></svg>`,
 		"/wide":    `<div style="width:900px">a wide table</div>`,
+		"/tall":    `<svg viewBox="0 0 1600 1240" style="display:block;width:100%"><rect x="10" y="10" width="1500" height="1200"/></svg>`,
+		"/small":   `<div class="mimic" data-scale="0.600" data-canvas="2120x1400" style="width:1272px;max-width:100%;height:840px"><p>gallery</p></div>`,
+		"/below":   `<div class="mimic" data-scale="0.900" data-canvas="2120x1400" style="width:1908px;max-width:100%;height:1260px"><p>gallery</p></div>`,
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, ok := pages[r.URL.Path]
@@ -41,7 +44,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var routes []string
-	for _, p := range []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/[id]"} {
+	for _, p := range []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/tall", "/small", "/below", "/[id]"} {
 		routes = append(routes, p)
 	}
 	found, err := Render(ctx, path, srv.URL, routes)
@@ -66,12 +69,15 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"warning: screen /outside (desktop): 1 shape(s) draw far outside their drawing",
 		"XV-105: closed",
 		"warning: screen /wide (phone): scrolls sideways on a 390 px wide phone",
+		"warning: screen /tall (desktop): a 1904×1476 drawing (viewBox 1600×1240) runs 404 px past the bottom of a 1920×1080 window",
+		"warning: screen /small (desktop): the 2120×1400 drawing is drawn at 60% to fit a 1920×1080 window, so 14 px text reads as 8 px",
+		"warning: screen /below (desktop): the 2120×1400 drawing runs 196 px past the bottom of a 1920×1080 window, drawn at 90%",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("missing %q in:\n%s", want, all)
 		}
 	}
-	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle", "hatch"} {
+	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle", "hatch", "/tall (phone)", "/small (phone)", "/below (phone)"} {
 		if strings.Contains(all, not) {
 			t.Errorf("%q should not be reported:\n%s", not, all)
 		}

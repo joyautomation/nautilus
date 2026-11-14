@@ -3,7 +3,7 @@
 (async () => {
 	await document.fonts.ready;
 	await new Promise((r) => setTimeout(r, SETTLE_MS));
-	const out = { blank: false, pipes: [], outside: [], sideways: 0, width: DEVICE_WIDTH };
+	const out = { blank: false, pipes: [], outside: [], mimics: [], drawings: [], sideways: 0, width: DEVICE_WIDTH };
 
 	// Blank: nothing a person would see — no text, no drawing, no control.
 	const shows = (el) => {
@@ -23,6 +23,37 @@
 		try {
 			out.pipes.push(...JSON.parse(el.dataset.brokenPipes));
 		} catch {}
+	}
+
+	// Each kit <Mimic>: its canvas, the scale it is drawn at, where its
+	// bottom lands against the window's, and the room it had (its frame's
+	// width, and the height from its top to the window's bottom).
+	for (const el of document.querySelectorAll('.mimic[data-scale]')) {
+		if (!shows(el)) continue;
+		const r = el.getBoundingClientRect();
+		const [cw, ch] = (el.dataset.canvas || '').split('x').map(Number);
+		out.mimics.push({
+			canvas: [cw || 0, ch || 0],
+			scale: +el.dataset.scale,
+			below: Math.max(0, Math.round(r.bottom - innerHeight)),
+			room: [Math.round(el.clientWidth), Math.max(0, Math.round(innerHeight - Math.max(0, r.top)))],
+			scrolls: el.classList.contains('scrolling')
+		});
+	}
+
+	// A drawing of its own (an <svg> at least half the window wide, not in a
+	// kit <Mimic>) that runs past the bottom of the window.
+	for (const svg of document.querySelectorAll('svg')) {
+		if (svg.parentElement && svg.parentElement.closest('svg, .mimic')) continue;
+		if (!shows(svg)) continue;
+		const r = svg.getBoundingClientRect();
+		if (r.width < innerWidth / 2 || r.bottom <= innerHeight + 2) continue;
+		const vb = svg.viewBox && svg.viewBox.baseVal;
+		out.drawings.push({
+			size: [Math.round(r.width), Math.round(r.height)],
+			viewBox: vb && vb.width ? [Math.round(vb.width), Math.round(vb.height)] : null,
+			below: Math.round(r.bottom - innerHeight)
+		});
 	}
 
 	// Drawings far outside their own box: a shape that reaches more than

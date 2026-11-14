@@ -276,7 +276,7 @@ const defaultPage = `<script>
 	const write = (name, value) => rt.writeTag(name, value);
 </script>
 
-<Mimic {doc} {tags} registry={{ %s }} {write} />
+<Mimic {doc} {tags} registry={{ %s }} {write} fit="contain" />
 `
 
 const defaultHTML = `<!doctype html>

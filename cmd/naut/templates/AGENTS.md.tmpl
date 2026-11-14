@@ -287,6 +287,10 @@ naut builds the operator screen from the project itself, with no npm, and
   (the playground has no Python or Node). Write every file by hand, never
   a script that writes one: `units` (or `{#each}` in an app) is how a
   screen repeats itself.
+- Draw a mimic's canvas for the window it is seen in: about 1880×1000 fills
+  a 1920×1080 screen under naut's bar. naut's pages fit the whole drawing
+  to the window, so a taller canvas is drawn smaller, never cut off; in an
+  app, `<Mimic fit="contain">` does the same.
 - For more than mimics, write an app: `hmi/src/routes/+page.svelte` is `/`,
   components go in `hmi/src/lib`, and `server.hmi: hmi` in the manifest.
   It is SvelteKit's layout, client-side; Go is the only backend.
@@ -300,7 +304,8 @@ naut builds the operator screen from the project itself, with no npm, and
 - With Chrome, Chromium or Edge on the machine, `naut check` also opens
   each page at desktop and phone size and reports what it sees: a page
   that throws or is blank, a pipe that draws nothing, a shape drawn far
-  outside its drawing, sideways scroll on a phone. Fix them like compile
+  outside its drawing, a drawing that runs off the bottom of the window or
+  is drawn too small to read, sideways scroll on a phone. Fix them like compile
   errors. A screen you haven't seen rendered isn't done.
 - In a component that uses `$state(...)`, never name a prop or variable
   `state`: Svelte then reads `$state` as a store subscription and the
