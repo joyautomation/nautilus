@@ -15,10 +15,9 @@
 
 - **`OffPage`: a P&ID's off-page connector.** A built-in mimic component:
   the arrow a line runs into where the drawing stops showing it, named
-  for where it goes (`label: "TO AIR HEADER"`, `dir`: the way it points).
-  A drop that would cross a stack of headers to reach its own ends at
-  one instead, and the header is drawn once, by what feeds it. Ports
-  `top`, `left`, `right`, `bottom`.
+  for where it goes (`label: "TO FILTER GALLERY"`, `dir`: the way it
+  points), for a line that goes on to another screen. Ports `top`,
+  `left`, `right`, `bottom`.
 
 - **Text drawn over text, reported.** `naut check`'s render warns of a
   label drawn over another (a tag over the next valve's state, one
@@ -28,8 +27,8 @@
 - **Pipes that can't be traced, reported.** `<Mimic>` lists a pipe that
   passes under three or more others (`CROSSED_MANY`) on its root
   (`data-crossed`), and `naut check`'s render warns of it with what to do:
-  headers on the side their lines leave from, in the order the drops
-  reach them, or an `OffPage` connector.
+  headers on the side their lines leave from, nearest first in the order
+  the drops reach them, every drop still run to its header.
 
 - **Tees dotted, crossings gapped.** Where a pipe ends on another run (or
   turns onto it), `<Mimic>` and the mimic editor draw a dot on the run, as

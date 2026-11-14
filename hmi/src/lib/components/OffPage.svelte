@@ -1,11 +1,11 @@
 <script lang="ts">
 	// A P&ID's off-page connector: the arrow a line runs into where the
 	// drawing stops showing it, named for where it goes or comes from
-	// ("TO WASTE DRAIN", "FROM P-501"). A screen uses it where a line would
-	// cross a stack of headers to reach its own: the drop ends at a
-	// connector named for its header, and the header is drawn once, beside
-	// what feeds it. `dir` is the way the arrow points: the way the line
-	// flows.
+	// ("TO WASTE DRAIN", "FROM P-501"): where a line goes on to another
+	// screen. Not a way round a crossing on the same screen (a drop that
+	// ends at "TO AIR HEADER" with the header drawn elsewhere reads as a
+	// line that goes nowhere). `dir` is the way the arrow points: the way
+	// the line flows.
 	import type { MimicLook } from '../mimic.js';
 
 	let {

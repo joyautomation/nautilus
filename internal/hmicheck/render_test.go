@@ -80,7 +80,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"warning: screen /tall (desktop): a 1904×1476 drawing (viewBox 1600×1240) runs 404 px past the bottom of a 1920×1080 window",
 		"warning: screen /small (desktop): the 2120×1400 drawing is drawn at 60% to fit a 1920×1080 window, so 14 px text reads as 8 px",
 		"warning: screen /crossed (desktop): pipe F1_AIR passes under 4 other pipes, and 1 more passes under 3 or more (F2_AIR): a line that crosses a stack of headers",
-		"OffPage connector named for its header",
+		"every drop still runs to its header",
 		`warning: screen /overlap (desktop): 1 text is drawn over other text: "XV-104 closed" over "XV-105 open"`,
 		"warning: screen /below (desktop): the 2120×1400 drawing runs 196 px past the bottom of a 1920×1080 window, drawn at 90%",
 	} {

@@ -274,7 +274,7 @@ func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding
 					more = fmt.Sprintf(", and 1 more passes under 3 or more (%s)", ids[0])
 				}
 			}
-			f(false, "pipe %s passes under %d other pipes%s: a line that crosses a stack of headers to reach its own can't be traced by eye. Put each header on the side of the equipment its line leaves from, order the headers so each drop crosses few, or end the drop at an OffPage connector named for its header (\"TO AIR HEADER\") and draw that header once, by what feeds it", c.ID, c.N, more)
+			f(false, "pipe %s passes under %d other pipes%s: a line that crosses a stack of headers to reach its own can't be traced by eye. Put each header on the side of the equipment its line leaves from, nearest first in the order the drops reach them, so each drop crosses at most two; every drop still runs to its header (an OffPage connector is for a line that goes on to another screen)", c.ID, c.N, more)
 		}
 		for _, o := range pr.Outside {
 			names := strings.Join(o.Names, ", ")

@@ -297,12 +297,12 @@ naut builds the operator screen from the project itself, with no npm, and
 - Lay the pipes out so an operator can follow each one by eye. Put a
   header on the side of the equipment its lines leave from (lines leaving
   the top run to headers above, lines leaving the bottom to headers
-  below), in the order the drops reach them, so no drop crosses more than
-  two to reach its own. Where one would, end the drop at an `OffPage`
-  connector named for its header (`"props": {"label": "TO AIR HEADER",
-  "dir": "down"}`) and draw that header once, by what feeds it. A pipe
-  that ends on another joins it, and the screen dots the tee; one that
-  crosses is drawn broken under it.
+  below), nearest first in the order the drops reach them, so no drop
+  crosses more than two headers to reach its own. Every drop still runs to
+  its header: an `OffPage` connector is for a line that goes on to another
+  screen, never a way round a crossing. A pipe that ends on another joins
+  it, and the screen dots the tee; one that crosses is drawn broken under
+  it.
 - An operator picks a light or a dark theme. Colour your components from
   the kit's tokens, never a hex (a hex reads in one theme only): text in
   `var(--ink)`, `var(--ink-2)` or `var(--muted)`; grounds in `var(--bg)`,
