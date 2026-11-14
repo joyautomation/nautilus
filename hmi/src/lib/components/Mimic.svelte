@@ -14,11 +14,11 @@
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import Pipe from './Pipe.svelte';
-	import { BUILTIN_PORTS, brokenPipes, makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
-		doc,
+		doc: source,
 		tags = {},
 		registry = {},
 		onequipmentclick,
@@ -58,6 +58,9 @@
 		 */
 		minScale?: number;
 	} = $props();
+	/** The document with its units drawn out (expandUnits): everything below
+	 * works on this, so a repeated filter cell is one more piece of equipment. */
+	const doc = $derived(expandUnits(source));
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle };

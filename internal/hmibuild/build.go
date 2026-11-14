@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
+
+	"github.com/joyautomation/nautilus/internal/mimicdoc"
 )
 
 // Packages is the closed set an HMI may import (and their own subpaths).
@@ -262,6 +264,12 @@ func (b *builder) plugin() api.Plugin {
 		pb.OnLoad(api.OnLoadOptions{Filter: `\.mimic\.json$`}, func(a api.OnLoadArgs) (api.OnLoadResult, error) {
 			raw, err := os.ReadFile(a.Path)
 			if err != nil {
+				return api.OnLoadResult{}, err
+			}
+			// units drawn out first, so their copies get sidecar ports too
+			if x, _, err := mimicdoc.ExpandUnits(raw); err == nil {
+				raw = x
+			} else {
 				return api.OnLoadResult{}, err
 			}
 			text := string(withSidecarPorts(raw, b.sidecars))

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/joyautomation/nautilus/internal/mimicdoc"
 )
 
 // The kit's own equipment (hmi Mimic.svelte's builtin map): every other
@@ -79,6 +81,13 @@ func defaultApp(project, title string) (*appSource, error) {
 		raw, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(m)))
 		if err != nil {
 			return nil, err
+		}
+		// units drawn out, so the components a unit repeats are registered too
+		if x, _, err := mimicdoc.ExpandUnits(raw); err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", m, err))
+			continue
+		} else {
+			raw = x
 		}
 		var doc mimicDoc
 		if err := json.Unmarshal(raw, &doc); err != nil {

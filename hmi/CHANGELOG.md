@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Units: what repeats, written once.** A mimic's `units` draws its
+  equipment, pipes and labels once per value of `each`, `{n}` filled in
+  and each copy moved by `step`. `<Mimic>` draws them out with
+  `expandUnits(doc)`, which naut's build and `naut check` match (a shared
+  fixture, `testdata/mimic-units`); the mimic editor shows the copies
+  outlined and locked.
+
 - **`brokenPipes(pipes, getPort)`** lists the pipes that draw nothing and
   why: an anchored end whose equipment or port isn't there
   (`"F1_INF.a"`), or ends and points that all land on one spot.
