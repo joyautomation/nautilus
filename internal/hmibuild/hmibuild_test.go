@@ -1,6 +1,7 @@
 package hmibuild
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -114,6 +115,63 @@ func TestAnAppWithNoLayout(t *testing.T) {
 	js := all.String()
 	if !strings.Contains(js, "layouts: []") || strings.Contains(js, "layouts: null") {
 		t.Errorf("the route's layout chain is not []: %q", excerpt(js, "layouts:"))
+	}
+}
+
+// A project's own component declares its pipe ports in a
+// {Name}.component.json; the screen naut builds carries them on the
+// equipment, or every pipe anchored to it draws nothing (bw01 fable-2).
+// An instance's own ports, even none, stay as they are.
+func TestASidecarsPortsReachTheScreen(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "screens/gallery.mimic.json", `{"name":"Gallery","canvas":{"width":400,"height":300},
+		"equipment":[{"id":"F1","component":"FilterCell","x":100,"y":10},
+			{"id":"F2","component":"FilterCell","x":200,"y":10,"ports":[]},
+			{"id":"T1","component":"Tank","x":10,"y":10}],
+		"pipes":[{"id":"p1","from":{"equip":"T1","port":"right"},"to":{"equip":"F1","port":"inlet_zz"}}]}`)
+	write(t, dir, "screens/FilterCell.svelte", "<div>cell</div>\n")
+	write(t, dir, "screens/FilterCell.component.json", `{"ports":[{"name":"inlet_zz","part":"cell","x":0.5,"y":0}]}`)
+	// a deeper one of the same name loses, as it does in the editor
+	write(t, dir, "screens/old/FilterCell.component.json", `{"ports":[{"name":"stale_zz","x":0,"y":0}]}`)
+	res, err := Build(Options{Project: dir, Title: "Gallery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	for name, b := range res.Files {
+		if strings.HasSuffix(name, ".js") {
+			all.Write(b)
+		}
+	}
+	js := all.String()
+	if n := strings.Count(js, "inlet_zz"); n != 2 {
+		t.Errorf("inlet_zz appears %d times, want 2 (F1's port and the pipe end): %q", n, excerpt(js, "inlet_zz"))
+	}
+	if strings.Contains(js, "stale_zz") {
+		t.Errorf("the deeper sidecar's ports were used")
+	}
+}
+
+func TestWithSidecarPorts(t *testing.T) {
+	ports := map[string]json.RawMessage{"Cell": json.RawMessage(`[{"name":"a","x":0,"y":0}]`), "Tank": json.RawMessage(`[]`)}
+	doc := []byte(`{"equipment":[{"id":"c1","component":"Cell"},{"id":"c2","component":"Cell","ports":[]},{"id":"t","component":"Tank"}],"pipes":[]}`)
+	var got struct {
+		Equipment []struct {
+			ID    string          `json:"id"`
+			Ports json.RawMessage `json:"ports"`
+		} `json:"equipment"`
+	}
+	if err := json.Unmarshal(withSidecarPorts(doc, ports), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"c1": `[{"name":"a","x":0,"y":0}]`, "c2": `[]`, "t": ``}
+	for _, e := range got.Equipment {
+		if string(e.Ports) != want[e.ID] {
+			t.Errorf("%s ports = %s, want %s", e.ID, e.Ports, want[e.ID])
+		}
+	}
+	if string(withSidecarPorts([]byte("not json"), ports)) != "not json" {
+		t.Errorf("an unreadable doc changed")
 	}
 }
 
