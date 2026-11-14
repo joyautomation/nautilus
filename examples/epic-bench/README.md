@@ -82,9 +82,9 @@ scratchpad float 0 held the ICTD reading (23.0 °C).
 on the desk: the GRV-EPIC-PR1 with its screen on, the four modules in
 slot order on the GRV-EPIC-CHS4, the clear acrylic stand it leans back
 on, and the small bar of buttons beside it (drawn, not bound to
-anything). The shapes are our own boxes and extrusions at the dimensions
-of Opto 22's published CAD; nothing of the CAD is in the repo or loaded
-by the page. Each discrete channel's lamp is its number on the cover,
+anything). The bodies are the four small models in `hmi/static/models`,
+simplified from Opto 22's published CAD (its README says how); the
+stand, the bar and everything live are drawn by the page. Each discrete channel's lamp is its number on the cover,
 which glows white when the channel is on: the 24 inputs, and the 12
 outputs with the heartbeat on 11. The analog modules' covers are blank,
 as on the unit; their readings sit in a tag over each module (bad

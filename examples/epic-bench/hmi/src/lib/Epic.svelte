@@ -1,13 +1,13 @@
 <script lang="ts" module>
-	// The bench groov EPIC as it stands on the desk: a GRV-EPIC-PR1 and four
-	// modules on a GRV-EPIC-CHS4 chassis, bolted to a clear acrylic demo
-	// stand that leans back, with a small aluminium bar of two pushbuttons,
-	// a knob and a connector beside it. Built from boxes and extrusions of
-	// our own, in millimetres, at the dimensions of Opto 22's published CAD
-	// (chassis 173 x 125.6 x 101; processor 86.5 x 126.6 x 131 with the
-	// screen closed; modules 19.5 wide on a 21.4 pitch, 126.8 tall, 127 deep,
-	// the cover reaching 28 below the body). Lettering, lamp positions, the
-	// stand and the bar follow photographs of the bench unit.
+	// The bench groov EPIC as it stands on the desk: a GRV-EPIC-PR1 with its
+	// power supply and four modules on a GRV-EPIC-CHS4 chassis, bolted to a
+	// clear acrylic demo stand that leans back, with a small aluminium bar of
+	// two pushbuttons, a knob and a connector beside it. The bodies are the
+	// models in static/models (simplified from Opto 22's published CAD: see
+	// the README there); everything live is drawn here, over them: the lit
+	// screen, each module's lettering, status light and channel lamps, the
+	// analog tags. The stand, the bar and the cables are ours, from
+	// photographs of the bench unit.
 	import type { Box3 } from './fit';
 
 	/** World units per millimetre. */
@@ -35,9 +35,9 @@
 		};
 	};
 	/** What the camera keeps in frame in a wide or square window: the whole stand. */
-	export const BOUNDS: Box3[] = [box(PLATE.x0, PLATE.x1, PLATE.y0, PLATE.y1, PLATE.z0, PLATE.z1), box(0, 202, -26, 160, 0, 131)];
+	export const BOUNDS: Box3[] = [box(PLATE.x0, PLATE.x1, PLATE.y0, PLATE.y1, PLATE.z0, PLATE.z1), box(0, 202, -37, 150, 0, 142)];
 	/** And in a tall one: the processor, the modules and their tags. */
-	export const BOUNDS_CORE: Box3[] = [box(0, 202, -26, 160, 60, 131)];
+	export const BOUNDS_CORE: Box3[] = [box(0, 202, -37, 150, 60, 142)];
 
 	export interface Channel {
 		tag: string;
@@ -85,8 +85,9 @@
 <script lang="ts">
 	import { T } from '@threlte/core';
 	import { RoundedBoxGeometry } from '@threlte/extras';
-	import { getContext } from 'svelte';
-	import { AdditiveBlending, CanvasTexture, CatmullRomCurve3, DoubleSide, ExtrudeGeometry, Path, Shape, TubeGeometry, Vector3 } from 'three';
+	import { getContext, onMount } from 'svelte';
+	import { AdditiveBlending, CanvasTexture, CatmullRomCurve3, ExtrudeGeometry, Mesh, MeshStandardMaterial, Shape, TubeGeometry, Vector3, type BufferGeometry } from 'three';
+	import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 	import { SCENE, type SceneContext } from '@joyautomation/nautilus-hmi-3d';
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
@@ -113,22 +114,38 @@
 	};
 	let online = $derived(raw('EPIC__Online') === true);
 
-	// Layout, mm.
-	const CHS = { w: 173, h: 125.6, d: 101 };
-	const PR1 = { x0: 0.8, w: 86.5, y0: 2, h: 126.6, body: 119, front: 131 };
-	const MOD = { x0: 89.3, pitch: 21.4, w: 19.5, top: 130, h: 126.8, back: 2, body: 93, front: 129, reach: 154.8 };
+	// The bodies. Each file is one mesh in this component's own frame, in
+	// metres: x from the chassis's left edge, y up from its floor, z out from
+	// its back. module.glb is the module in slot 0; the other three are the
+	// same geometry moved along by the slot pitch.
+	const PARTS = ['chassis', 'processor', 'power-supply', 'module'] as const;
+	let bodies = $state<Partial<Record<(typeof PARTS)[number], BufferGeometry>>>({});
+	onMount(() => {
+		const loader = new GLTFLoader();
+		for (const name of PARTS)
+			loader.load(`/models/${name}.glb`, (gltf) => {
+				gltf.scene.traverse((o) => {
+					if (o instanceof Mesh) bodies[name] = o.geometry;
+				});
+			});
+	});
+	// Satin black plastic, and the chassis's plain steel (its file carries no normals: flat sheet, shaded flat).
+	const plastic = new MeshStandardMaterial({ color: '#0d0e0f', roughness: 0.55, metalness: 0, envMapIntensity: 0.45 });
+	const steel = new MeshStandardMaterial({ color: '#8b9096', roughness: 0.5, metalness: 0.6, flatShading: true });
+
+	// Where our own parts sit on those bodies, mm, read off the models.
+	const PR1 = { x0: 0.8, w: 87.5, top: 127.8, front: 135.9 };
+	const MOD = { x0: 90, pitch: 21.35, w: 19.6, top: 118, head: 141.8, field: 138.5, reach: -36.7 };
 	const left = (m: Module) => MOD.x0 + m.slot * MOD.pitch;
 	const cx = (m: Module) => left(m) + MOD.w / 2;
 	// The numbers run down the cover's left: 0 under the wave, the last above the paddle.
-	const ROW0 = 43;
-	const ROWS = 88;
+	const ROW_TOP = 71;
+	const ROWS = 76;
 	const pitch = (m: Module) => ROWS / (m.channels - 1);
-	const rowY = (m: Module, ch: number) => MOD.top - ROW0 - ch * pitch(m);
+	const rowY = (m: Module, ch: number) => ROW_TOP - ch * pitch(m);
 	const NUM_X = 6.4;
 
-	const BLACK = '#0b0c0d';
 	const COVER = '#111214';
-	const STEEL = '#8b9096';
 	const ALU = '#aeb3b8';
 
 	function describe(m: Module, ch: number): Channel {
@@ -143,56 +160,17 @@
 		};
 	}
 
-	// A module's hinged cover, seen from the front: its top edge is a wave,
-	// low on the left and high on the right, and its foot is a rounded paddle
-	// below the body. The status light is the band along the wave.
-	const WAVE = { lo: MOD.top - 35, hi: MOD.top - 25 };
-	const HALF = MOD.w / 2 - 0.3;
-	const FOOT = MOD.top - MOD.reach + HALF;
-	const coverFace = (() => {
-		const o = new Shape();
-		o.moveTo(-HALF, FOOT);
-		o.lineTo(-HALF, WAVE.lo);
-		o.bezierCurveTo(-3, WAVE.lo + 4, 4, WAVE.lo + 5, HALF, WAVE.hi);
-		o.lineTo(HALF, FOOT);
-		o.absarc(0, FOOT, HALF, 0, -Math.PI, true);
-		return new ExtrudeGeometry(o, { depth: 3.4, bevelEnabled: true, bevelSize: 0.6, bevelThickness: 0.6, bevelSegments: 3, curveSegments: 24 });
-	})();
+	// A module's status light: the band along the wave where the head meets
+	// the cover, low on the left and high on the right.
 	const lens = (() => {
+		const h = MOD.w / 2;
 		const o = new Shape();
-		o.moveTo(-HALF, WAVE.lo + 0.9);
-		o.bezierCurveTo(-3, WAVE.lo + 4.9, 4, WAVE.lo + 5.9, HALF, WAVE.hi + 0.9);
-		o.lineTo(HALF, WAVE.hi + 1.5);
-		o.bezierCurveTo(4, WAVE.lo + 8.2, -3, WAVE.lo + 8.4, -HALF, WAVE.lo + 4.4);
+		o.moveTo(-h + 0.4, 70.4);
+		o.bezierCurveTo(-h + 4, 80.6, 2, 84.4, h - 0.6, 89.6);
+		o.lineTo(h - 0.6, 91.2);
+		o.bezierCurveTo(2, 87, -h + 3.4, 84.6, -h + 0.4, 74.6);
 		o.closePath();
-		return new ExtrudeGeometry(o, { depth: 0.9, bevelEnabled: false, curveSegments: 24 });
-	})();
-	// Seen from the side (drawn with -z along the shape's x, then turned to
-	// face along the chassis): the body with its full-depth head, and the
-	// cover's side wall, a wedge that thins toward the paddle and leaves the
-	// wiring space open under it.
-	const bodySide = (() => {
-		const o = new Shape();
-		const b = MOD.top - MOD.h;
-		o.moveTo(-MOD.back, b);
-		o.lineTo(-MOD.back, MOD.top);
-		o.lineTo(-(MOD.front - 2.5), MOD.top);
-		o.quadraticCurveTo(-(MOD.front - 0.6), MOD.top, -(MOD.front - 0.6), MOD.top - 2.5);
-		o.lineTo(-(MOD.front - 0.6), MOD.top - 38);
-		o.lineTo(-(MOD.body + 6), MOD.top - 38);
-		o.quadraticCurveTo(-MOD.body, MOD.top - 38, -MOD.body, MOD.top - 46);
-		o.lineTo(-MOD.body, b);
-		o.closePath();
-		return new ExtrudeGeometry(o, { depth: MOD.w, bevelEnabled: false });
-	})();
-	const coverSide = (() => {
-		const o = new Shape();
-		o.moveTo(-(MOD.front - 3), MOD.top - 30);
-		o.lineTo(-(MOD.body + 1), MOD.top - 30);
-		o.quadraticCurveTo(-(MOD.body + 12), MOD.top - 88, -(MOD.front - 4), MOD.top - 112);
-		o.lineTo(-(MOD.front - 3), MOD.top - 112);
-		o.closePath();
-		return new ExtrudeGeometry(o, { depth: 1.3, bevelEnabled: false });
+		return new ExtrudeGeometry(o, { depth: 0.6, bevelEnabled: false, curveSegments: 24 });
 	})();
 	/** The soft light a lit lens throws on the faces round it. */
 	const haze = (() => {
@@ -207,35 +185,26 @@
 		return new CanvasTexture(c);
 	})();
 
-	/** A module's head: what it is, over the two linked rings (gloss on matte). */
-	const headInk = (m: Module): Ink[] => [{ text: m.mark, x: MOD.w / 2, y: 3.2, size: m.mark.length > 8 ? 1.75 : 2.1, align: 'center', color: '#f2f3f4', weight: 650 }];
+	/** A module's head: what it is, over the two linked rings (gloss on satin). The rings are moulded into the
+	 * real head; at this size the model's are only creases, so the head's face is a printed plate. */
+	const HEAD = { w: 17.6, h: 21, y: 105.5 };
+	const headInk = (m: Module): Ink[] => [{ text: m.mark, x: HEAD.w / 2, y: 3.4, size: m.mark.length > 8 ? 1.7 : 2.1, align: 'center', color: '#f2f3f4', weight: 650 }];
 	const rings: Paint = (ctx) => {
-		ctx.strokeStyle = '#030303';
-		ctx.lineWidth = 1.8;
-		for (const x of [MOD.w / 2 - 3.6, MOD.w / 2 + 3.6]) {
+		ctx.strokeStyle = '#020202';
+		ctx.lineWidth = 1.7;
+		for (const x of [HEAD.w / 2 - 3.5, HEAD.w / 2 + 3.5]) {
 			ctx.beginPath();
-			ctx.arc(x, 10.6, 3.1, 0, Math.PI * 2);
+			ctx.arc(x, 11.6, 3, 0, Math.PI * 2);
 			ctx.stroke();
 		}
 	};
-	/** The cover's face, from the module's top down: the raised rim round its field, and the part number low on the paddle. */
-	const COVER_PRINT = { top: MOD.top - 14, h: 142 };
-	const rim: Paint = (ctx) => {
-		ctx.strokeStyle = '#2c2f33';
-		ctx.lineWidth = 0.7;
-		ctx.beginPath();
-		ctx.moveTo(MOD.w - 2.2, 12);
-		ctx.lineTo(MOD.w - 2.2, 118);
-		ctx.quadraticCurveTo(MOD.w - 2.4, 134, 9, 136);
-		ctx.quadraticCurveTo(2.4, 135, 2.2, 122);
-		ctx.lineTo(2.2, 31);
-		ctx.stroke();
-	};
+	/** The cover's field, from y = 80 down: the channel numbers, and the part number low on the right. */
+	const COVER_PRINT = { top: 80, h: 100 };
 	function coverInk(m: Module): Ink[] {
-		const items: Ink[] = [{ text: m.part, x: MOD.w - 5.2, y: 98, size: 1.9, align: 'center', rotate: -90, color: '#7c8288', weight: 600, spacing: 0.15 }];
+		const items: Ink[] = [{ text: m.part, x: MOD.w - 5, y: 62, size: 1.9, align: 'center', rotate: -90, color: '#7c8288', weight: 600, spacing: 0.15 }];
 		// Only the discrete modules carry channel numbers; the analog covers are blank.
 		if (m.kind === 'ai') return items;
-		const size = m.channels > 12 ? 2 : 2.4;
+		const size = m.channels > 12 ? 1.9 : 2.4;
 		for (let ch = 0; ch < m.channels; ch++)
 			items.push({ text: String(ch), x: NUM_X, y: COVER_PRINT.top - rowY(m, ch), size, align: 'center', color: '#e9ebed', weight: 600 });
 		return items;
@@ -267,85 +236,8 @@
 	// Each tag sits over its own module's top, shifted so the two don't meet.
 	const calloutX = (m: Module) => (m.slot === 2 ? cx(m) - CALLOUT.w / 2 + 3 : cx(m) + CALLOUT.w / 2 - 12);
 
-	// Vent slots, as print: on a module's top (back of the module at the top
-	// of the drawing), on its side (front at the left), on the processor's
-	// top, and through the chassis floor.
-	const slot = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {
-		ctx.beginPath();
-		ctx.roundRect(x, y, w, h, 0.5);
-		ctx.fill();
-	};
-	const moduleTop: Paint = (ctx) => {
-		ctx.fillStyle = '#000000';
-		for (let i = 0; i < 10; i++) slot(ctx, 3.6, 12 + i * 6.3, MOD.w - 7.2, 3.3);
-	};
-	const moduleSide: Paint = (ctx) => {
-		ctx.fillStyle = '#000000';
-		for (const x of [28, 60]) for (let i = 0; i < 9; i++) slot(ctx, x, 5 + i * 13.4, 3.4, 10.6);
-		ctx.beginPath();
-		ctx.roundRect(8, 9, 9, 2.2, 1.1);
-		ctx.fill();
-	};
-	const processorTop: Paint = (ctx) => {
-		ctx.fillStyle = '#000000';
-		for (const [x0, cols] of [[4, 3], [45, 3]] as const)
-			for (let c = 0; c < cols; c++)
-				for (let r = 0; r < 12; r++) slot(ctx, x0 + c * 12.6, 10 + r * 7.6 + (r > 5 ? 9 : 0), 10.4, 4.2);
-	};
-	const floor = (() => {
-		const c = document.createElement('canvas');
-		c.width = 692;
-		c.height = 404;
-		const ctx = c.getContext('2d')!;
-		ctx.scale(4, 4);
-		ctx.fillStyle = STEEL;
-		ctx.fillRect(0, 0, CHS.w, CHS.d);
-		ctx.fillStyle = '#0a0b0c';
-		for (let col = 0; col < 6; col++) for (let r = 0; r < 6; r++) slot(ctx, 4 + col * 14, 32 + r * 6.4, 11, 3.6);
-		for (let col = 0; col < 4; col++) for (let r = 0; r < 10; r++) slot(ctx, MOD.x0 + 4 + col * MOD.pitch, 6 + r * 6.4, 12, 3.6);
-		const t = new CanvasTexture(c);
-		t.anisotropy = 8;
-		return t;
-	})();
-
-	// The touchscreen's housing: a bevelled frame round a sunken display, and
-	// under it a skirt whose edge sweeps from high on the left down to the
-	// right. The display shows the sign-in page, as plain blocks.
-	const DISPLAY = { x0: PR1.x0 + 8.5, x1: PR1.x0 + 74.5, y0: PR1.y0 + 9.6, y1: PR1.y0 + 118.6 };
-	const bezel = (() => {
-		const x1 = PR1.x0 + PR1.w;
-		const y1 = PR1.y0 + PR1.h;
-		const o = new Shape();
-		o.moveTo(PR1.x0 + 3, PR1.y0);
-		o.lineTo(x1 - 3, PR1.y0);
-		o.quadraticCurveTo(x1, PR1.y0, x1, PR1.y0 + 3);
-		o.lineTo(x1, y1 - 3);
-		o.quadraticCurveTo(x1, y1, x1 - 3, y1);
-		o.lineTo(PR1.x0 + 3, y1);
-		o.quadraticCurveTo(PR1.x0, y1, PR1.x0, y1 - 3);
-		o.lineTo(PR1.x0, PR1.y0 + 3);
-		o.quadraticCurveTo(PR1.x0, PR1.y0, PR1.x0 + 3, PR1.y0);
-		const hole = new Path();
-		hole.moveTo(DISPLAY.x0, DISPLAY.y0);
-		hole.lineTo(DISPLAY.x1, DISPLAY.y0);
-		hole.lineTo(DISPLAY.x1, DISPLAY.y1);
-		hole.lineTo(DISPLAY.x0, DISPLAY.y1);
-		hole.closePath();
-		o.holes.push(hole);
-		return new ExtrudeGeometry(o, { depth: 8.4, bevelEnabled: true, bevelSize: 1.8, bevelThickness: 1.8, bevelSegments: 3, curveSegments: 12 });
-	})();
-	const skirt = (() => {
-		const x1 = PR1.x0 + PR1.w;
-		const o = new Shape();
-		o.moveTo(PR1.x0, PR1.y0 + 4);
-		o.lineTo(x1, PR1.y0 + 4);
-		o.lineTo(x1, PR1.y0 - 16);
-		o.quadraticCurveTo(x1, PR1.y0 - 26, x1 - 12, PR1.y0 - 26);
-		o.lineTo(PR1.x0 + 50, PR1.y0 - 26);
-		o.bezierCurveTo(PR1.x0 + 26, PR1.y0 - 26, PR1.x0 + 14, PR1.y0 - 12, PR1.x0, PR1.y0 - 5);
-		o.closePath();
-		return new ExtrudeGeometry(o, { depth: 2.6, bevelEnabled: true, bevelSize: 0.8, bevelThickness: 0.8, bevelSegments: 2, curveSegments: 24 });
-	})();
+	// The touchscreen's display, sunk in the model's bezel: it shows the sign-in page, as plain blocks.
+	const DISPLAY = { x0: 9.2, x1: 75.3, y0: 9.6, y1: 119.1, z: 133.9 };
 	const DW = DISPLAY.x1 - DISPLAY.x0;
 	const DH = DISPLAY.y1 - DISPLAY.y0;
 	const signIn: Paint = (ctx) => {
@@ -384,14 +276,14 @@
 	const BAR = { x: 222, y0: 8, y1: 134, parts: [112, 84, 54, 24] };
 	const CABLES = [
 		// Ethernet, from under the processor
-		{ color: '#1d4fb8', g: cable([[34, 4, 86], [33, -30, 98], [26, -80, 128], onDesk(-10, 175), onDesk(-110, 215), onDesk(-230, 235)], 2.4) },
+		{ color: '#1d4fb8', g: cable([[34, 2, 90], [33, -30, 98], [26, -80, 128], onDesk(-10, 175), onDesk(-110, 215), onDesk(-230, 235)], 2.4) },
 		// the grey cable from the bar's connector
 		{ color: '#878b90', g: cable([[BAR.x, 24, 22], [BAR.x + 1, 16, 44], [BAR.x - 2, -40, 70], onDesk(BAR.x - 20, 120), onDesk(150, 210), onDesk(20, 300)], 1.9) }
 	];
 	/** The bar's wiring: a flat run of coloured wires from behind the modules. */
 	const RIBBON = ['#c9302a', '#e8822a', '#e8c62a', '#2a5fc4', '#7d3fb5'].map((color, i) => ({
 		color,
-		g: cable([[CHS.w - 6, 12 + i * 1.6, 6], [CHS.w + 12, 14 + i * 1.6, 2], [BAR.x - 22, 20 + i * 1.6, 2], [BAR.x - 14, 22 + i * 1.6, 4]], 0.7)
+		g: cable([[167, 12 + i * 1.6, 6], [185, 14 + i * 1.6, 2], [BAR.x - 22, 20 + i * 1.6, 2], [BAR.x - 14, 22 + i * 1.6, 4]], 0.7)
 	}));
 </script>
 
@@ -427,83 +319,45 @@
 		</T.Mesh>
 	{/each}
 
-	<!-- GRV-EPIC-CHS4: the steel back, and the slotted floor the processor and modules stand on -->
-	<T.Mesh position={[CHS.w / 2, CHS.h / 2 + 3, -0.2]}>
-		<T.BoxGeometry args={[CHS.w, CHS.h + 6, 3.2]} />
-		<T.MeshStandardMaterial color={STEEL} roughness={0.5} metalness={0.6} />
-	</T.Mesh>
-	<T.Mesh position={[CHS.w / 2, -0.8, CHS.d / 2]} rotation={[-Math.PI / 2, 0, 0]}>
-		<T.BoxGeometry args={[CHS.w, CHS.d, 1.6]} />
-		<T.MeshStandardMaterial map={floor} roughness={0.45} metalness={0.6} />
-	</T.Mesh>
+	<!-- the bodies, from static/models (metres): chassis, processor, power supply, and one module per slot -->
+	<T.Group scale={1000}>
+		{#if bodies.chassis}<T.Mesh geometry={bodies.chassis} material={steel} />{/if}
+		{#if bodies.processor}<T.Mesh geometry={bodies.processor} material={plastic} />{/if}
+		{#if bodies['power-supply']}<T.Mesh geometry={bodies['power-supply']} material={plastic} />{/if}
+		{#if bodies.module}
+			{#each MODULES as m (m.slot)}
+				<T.Mesh geometry={bodies.module} material={plastic} position={[(m.slot * MOD.pitch) / 1000, 0, 0]} />
+			{/each}
+		{/if}
+	</T.Group>
 
-	<!-- GRV-EPIC-PR1: the processor (with its power supply) as one block, vented on top -->
-	<T.Mesh position={[PR1.x0 + PR1.w / 2, PR1.y0 + PR1.h / 2, (PR1.body + 1.6) / 2]}>
-		<RoundedBoxGeometry args={[PR1.w, PR1.h, PR1.body - 1.6]} radius={1.6} />
-		<T.MeshStandardMaterial color={BLACK} roughness={0.6} metalness={0} envMapIntensity={0.3} />
-	</T.Mesh>
-	<Print w={PR1.w} h={PR1.body - 4} position={[PR1.x0 + PR1.w / 2, PR1.y0 + PR1.h + 0.08, PR1.body / 2 + 1]} rotation={[-Math.PI / 2, 0, 0]} items={[]} paint={processorTop} res={8} />
-	<!-- its touchscreen, closed over it and lit: the sign-in page -->
-	<T.Mesh geometry={bezel} position={[0, 0, PR1.body + 1.8]}>
-		<T.MeshStandardMaterial color={COVER} roughness={0.5} metalness={0} envMapIntensity={0.35} />
-	</T.Mesh>
-	<Print w={DW} h={DH} position={[(DISPLAY.x0 + DISPLAY.x1) / 2, (DISPLAY.y0 + DISPLAY.y1) / 2, PR1.body + 6]} items={signInInk} paint={signIn} res={12} />
-	<T.Mesh position={[(DISPLAY.x0 + DISPLAY.x1) / 2, (DISPLAY.y0 + DISPLAY.y1) / 2, PR1.body + 5.6]}>
-		<T.BoxGeometry args={[DW + 4, DH + 4, 0.6]} />
-		<T.MeshStandardMaterial color="#050506" roughness={0.3} />
-	</T.Mesh>
-	<T.Mesh geometry={skirt} position={[0, 0, PR1.front - 4.4]}>
-		<T.MeshStandardMaterial color={COVER} roughness={0.5} metalness={0} envMapIntensity={0.35} />
-	</T.Mesh>
+	<!-- the touchscreen, lit: the sign-in page, behind the bezel; and the wordmark's plate on the skirt -->
+	<Print w={DW + 3} h={DH + 3} position={[(DISPLAY.x0 + DISPLAY.x1) / 2, (DISPLAY.y0 + DISPLAY.y1) / 2, DISPLAY.z]} items={signInInk} paint={signIn} res={12} />
 	<Print
-		w={56}
-		h={20}
-		position={[PR1.x0 + 53, PR1.y0 - 11.5, PR1.front - 0.9]}
+		w={46}
+		h={12.5}
+		position={[55, -9.6, PR1.front + 0.1]}
+		rotation={[0.1, 0, 0]}
+		plate={{ fill: COVER, radius: 2 }}
 		items={[
-			{ text: 'groov', x: 28, y: 7.2, size: 8.6, align: 'center', italic: true, weight: 800, color: '#060607' },
-			{ text: 'GRV-EPIC-PR1', x: 28, y: 16.6, size: 2, align: 'center', weight: 600, color: '#6f757b', spacing: 0.4 }
+			{ text: 'groov', x: 23, y: 5, size: 6.4, align: 'center', italic: true, weight: 800, color: '#2c2f33' },
+			{ text: 'GRV-EPIC-PR1', x: 23, y: 10.4, size: 1.4, align: 'center', weight: 600, color: '#6f757b', spacing: 0.4 }
 		]}
 	/>
 
 	{#each MODULES as m (m.slot)}
-		<!-- one module: the body and its head, the terminals behind the cover, and the cover with its two side walls -->
-		<T.Mesh geometry={bodySide} position={[left(m), 0, 0]} rotation={[0, Math.PI / 2, 0]}>
-			<T.MeshStandardMaterial color={BLACK} roughness={0.6} metalness={0} envMapIntensity={0.3} />
-		</T.Mesh>
-		<T.Mesh position={[cx(m), MOD.top - 80, MOD.body + 6]}>
-			<T.BoxGeometry args={[MOD.w - 5, 84, 12]} />
-			<T.MeshStandardMaterial color="#060607" roughness={0.7} />
-		</T.Mesh>
-		{#each [left(m) + 0.2, left(m) + MOD.w - 1.5] as x}
-			<T.Mesh geometry={coverSide} position={[x, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
-				<T.MeshStandardMaterial color={COVER} roughness={0.5} metalness={0} envMapIntensity={0.35} side={DoubleSide} />
-			</T.Mesh>
-		{/each}
-		<T.Mesh geometry={coverFace} position={[cx(m), 0, MOD.front - 4]}>
-			<T.MeshStandardMaterial color={COVER} roughness={0.45} metalness={0} envMapIntensity={0.35} />
-		</T.Mesh>
-		<!-- the vents and the latch on top; on the last module, the vents down its open side -->
-		<Print w={MOD.w} h={MOD.body - MOD.back} position={[cx(m), MOD.top + 0.08, (MOD.body + MOD.back) / 2]} rotation={[-Math.PI / 2, 0, 0]} items={[]} paint={moduleTop} res={10} />
-		<T.Mesh position={[cx(m), MOD.top + 0.9, MOD.body + 9]}>
-			<RoundedBoxGeometry args={[9, 2.4, 7]} radius={0.6} />
-			<T.MeshStandardMaterial color="#3b3f44" roughness={0.5} />
-		</T.Mesh>
-		{#if m.slot === MODULES.length - 1}
-			<Print w={MOD.body - MOD.back} h={MOD.h} position={[left(m) + MOD.w + 0.08, MOD.top - MOD.h / 2, (MOD.body + MOD.back) / 2]} rotation={[0, Math.PI / 2, 0]} items={[]} paint={moduleSide} res={8} />
-		{/if}
-
-		<!-- the head's lettering, the status light along the wave (dark when the driver is offline), the cover's print -->
-		<Print w={MOD.w} h={16} position={[cx(m), MOD.top - 8.4, MOD.front - 0.5]} items={headInk(m)} paint={rings} res={16} />
-		<T.Mesh geometry={lens} position={[cx(m), 0, MOD.front - 0.55]}>
+		<!-- on each module: the head's lettering, the status light along the wave (dark when the driver is offline), the cover's print -->
+		<Print w={HEAD.w} h={HEAD.h} position={[cx(m), HEAD.y, MOD.head + 0.45]} items={headInk(m)} paint={rings} plate={{ fill: COVER, radius: 1.6 }} res={16} />
+		<T.Mesh geometry={lens} position={[cx(m), 0, MOD.head - 0.35]}>
 			<T.MeshBasicMaterial color={online ? m.light : '#15191c'} toneMapped={false} />
 		</T.Mesh>
 		{#if online}
-			<T.Mesh position={[cx(m) - 3, MOD.top - 32, MOD.front + 0.45]} renderOrder={3}>
-				<T.PlaneGeometry args={[24, 20]} />
+			<T.Mesh position={[cx(m) - 2, 80, MOD.head + 0.4]} renderOrder={3}>
+				<T.PlaneGeometry args={[24, 22]} />
 				<T.MeshBasicMaterial map={haze} color={m.light} transparent opacity={0.42} blending={AdditiveBlending} depthWrite={false} toneMapped={false} />
 			</T.Mesh>
 		{/if}
-		<Print w={MOD.w} h={COVER_PRINT.h} position={[cx(m), COVER_PRINT.top - COVER_PRINT.h / 2, MOD.front + 0.08]} items={coverInk(m)} paint={rim} res={14} />
+		<Print w={MOD.w - 1} h={COVER_PRINT.h} position={[cx(m), COVER_PRINT.top - COVER_PRINT.h / 2, MOD.field + 0.1]} items={coverInk(m)} res={14} />
 
 		{#each { length: m.channels } as _, ch (ch)}
 			{@const tag = tagOf(m, ch)}
@@ -511,26 +365,26 @@
 			<!-- a discrete channel's lamp is its number: lit, the number is a white glow.
 			     The analog covers are blank; their rows only answer the pointer. -->
 			{#if m.kind !== 'ai' && on(tag)}
-				<Led position={[left(m) + NUM_X, y, MOD.front + 0.3]} size={[m.channels > 12 ? 3.4 : 3.8, Math.min(2.8, pitch(m) * 0.72)]} on color="#ffffff" spread={3.2} />
+				<Led position={[left(m) + NUM_X, y, MOD.field + 0.3]} size={[m.channels > 12 ? 3.2 : 3.6, Math.min(2.6, pitch(m) * 0.72)]} on color="#ffffff" spread={3.2} />
 			{/if}
 			{#if hovered === tag}
-				<T.Mesh position={[cx(m), y, MOD.front + 0.15]}>
+				<T.Mesh position={[cx(m), y, MOD.field + 0.2]}>
 					<T.PlaneGeometry args={[MOD.w - 2, Math.max(pitch(m), 3)]} />
 					<T.MeshBasicMaterial color="#ffffff" transparent opacity={0.16} depthWrite={false} toneMapped={false} />
 				</T.Mesh>
 			{/if}
-			<T.Mesh position={[cx(m), y, MOD.front + 0.7]} onpointerenter={() => onhover?.(describe(m, ch))} onpointerleave={() => onhover?.(null)}>
+			<T.Mesh position={[cx(m), y, MOD.head + 0.6]} onpointerenter={() => onhover?.(describe(m, ch))} onpointerleave={() => onhover?.(null)}>
 				<T.PlaneGeometry args={[MOD.w, pitch(m)]} />
 				<T.MeshBasicMaterial transparent opacity={0} depthWrite={false} />
 			</T.Mesh>
 		{/each}
 
 		{#if m.kind === 'ai'}
-			<T.Mesh position={[cx(m), (MOD.top + CALLOUT.y - CALLOUT.h / 2) / 2, MOD.front - 4]}>
+			<T.Mesh position={[cx(m), (MOD.top + CALLOUT.y - CALLOUT.h / 2) / 2, MOD.head - 4]}>
 				<T.BoxGeometry args={[0.5, CALLOUT.y - CALLOUT.h / 2 - MOD.top, 0.5]} />
 				<T.MeshBasicMaterial color="#d8d6d0" toneMapped={false} />
 			</T.Mesh>
-			<Print w={CALLOUT.w} h={CALLOUT.h} position={[calloutX(m), CALLOUT.y, MOD.front - 4]} items={calloutInk(m)} plate={{ fill: 'rgba(22,22,21,0.94)', stroke: '#55554f', radius: 2 }} res={14} />
+			<Print w={CALLOUT.w} h={CALLOUT.h} position={[calloutX(m), CALLOUT.y, MOD.head - 4]} items={calloutInk(m)} plate={{ fill: 'rgba(22,22,21,0.94)', stroke: '#55554f', radius: 2 }} res={14} />
 		{/if}
 	{/each}
 
