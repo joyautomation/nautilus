@@ -9,6 +9,7 @@
 	import Epic, { BOUNDS, BOUNDS_CORE, type Channel } from '$lib/Epic.svelte';
 	import Panel, { type Row } from '$lib/Panel.svelte';
 	import { fitCamera } from '$lib/fit';
+	import { whileVisible } from '$lib/live';
 
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream' });
 
@@ -49,7 +50,8 @@
 	]);
 
 	onMount(() => {
-		rt.start();
+		// One stream, and only while this tab is showing (src/lib/live.ts).
+		const live = whileVisible(rt);
 		const watch = new ResizeObserver(([e]) => {
 			const { width, height } = e.contentRect;
 			if (width > 0 && height > 0) aspect = width / height;
@@ -57,7 +59,7 @@
 		if (stage) watch.observe(stage);
 		return () => {
 			watch.disconnect();
-			rt.stop();
+			live();
 		};
 	});
 </script>

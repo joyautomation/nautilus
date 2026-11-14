@@ -91,8 +91,9 @@ as on the unit; their readings sit in a tag over each module (bad
 quality reads "unwired", never zero). Each module's status light has the
 colour it has on the bench (green, green, orange, blue) and goes dark
 when `EPIC__Online` is false. A side panel has the driver's status and
-the scan times. Hovering a channel names its tag. It only reads:
-`/api/stream`, nothing written.
+the scan times. Hovering a channel names its tag. It only reads: one
+`/api/stream`, held only while the tab is showing (a browser allows six
+connections to a controller across all its tabs), nothing written.
 
 ```sh
 cd hmi
