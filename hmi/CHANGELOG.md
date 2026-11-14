@@ -12,6 +12,11 @@
 
 ### Fixed
 
+- **ScanDiagnostics before the first scan.** A frame from a runtime that
+  hasn't scanned yet (or a standby replica, which doesn't) used to carry
+  `recent: null`, and the panel threw. The runtime now sends `[]`, and the
+  panel reads a missing history as empty either way.
+
 - **A pipe with no points no longer blanks the screen.** A pipe anchored
   at both ends (`from` and `to`) with no bends may leave `points` out, as a
   scene's pipe may; `<Mimic>` reads it as `[]`. One such pipe used to throw

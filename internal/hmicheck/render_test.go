@@ -24,7 +24,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"/logged":  `<p>hi</p><script>console.error(new Error("a page failed to load")); console.error("a plain message")</script>`,
 		"/blank":   `<div></div>`,
 		"/pipes":   `<div data-broken-pipes='[{"id":"p1","ends":["F1_INF.a"]},{"id":"p2","ends":[]}]'><p>screen</p></div>`,
-		"/outside": `<svg viewBox="0 0 300 300" width="300" height="300"><g><title>XV-105: closed</title><path d="M 10 10 L 20 10 L 10 1308 L 20 1308 Z"/></g><circle cx="300" cy="150" r="20"/></svg>`,
+		"/outside": `<svg viewBox="0 0 300 300" width="300" height="300"><defs><clipPath id="c"><rect width="300" height="300"/></clipPath></defs><g><title>XV-105: closed</title><path d="M 10 10 L 20 10 L 10 1308 L 20 1308 Z"/></g><circle cx="300" cy="150" r="20"/><g clip-path="url(#c)"><path class="hatch" d="M -900 0 L 1200 2000"/></g></svg>`,
 		"/wide":    `<div style="width:900px">a wide table</div>`,
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +71,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, all)
 		}
 	}
-	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle"} {
+	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle", "hatch"} {
 		if strings.Contains(all, not) {
 			t.Errorf("%q should not be reported:\n%s", not, all)
 		}

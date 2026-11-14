@@ -39,6 +39,15 @@
 		const cls = (el.getAttribute('class') || '').split(/\s+/).filter((c) => c && !c.startsWith('svelte-'));
 		return el.tagName.toLowerCase() + (cls.length ? '.' + cls.join('.') : '');
 	};
+	const clipped = (el, svg) => {
+		if (el.closest('defs, clipPath, mask, pattern, symbol, marker')) return true;
+		for (let g = el; g && g !== svg; g = g.parentElement) {
+			if (g.hasAttribute('clip-path') || g.hasAttribute('mask')) return true;
+			const cs = getComputedStyle(g);
+			if ((cs.clipPath && cs.clipPath !== 'none') || (cs.mask && cs.mask !== 'none')) return true;
+		}
+		return false;
+	};
 	for (const svg of document.querySelectorAll('svg')) {
 		if (!shows(svg)) continue;
 		const box = svg.getBoundingClientRect();
@@ -49,6 +58,9 @@
 		for (const el of svg.querySelectorAll('path,rect,line,polyline,polygon,circle,ellipse,image')) {
 			if (el.closest('svg') !== svg) continue;
 			if (++n > 4000) break;
+			// clipped, masked or not drawn at all (a hatch drawn oversize and
+			// clipped to its tank is a design, not a coordinate gone wrong)
+			if (clipped(el, svg)) continue;
 			const r = el.getBoundingClientRect();
 			if (!r.width && !r.height) continue;
 			const past = Math.max(box.left - r.left, box.top - r.top, r.right - box.right, r.bottom - box.bottom);

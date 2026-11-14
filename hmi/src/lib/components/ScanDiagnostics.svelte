@@ -90,13 +90,13 @@
 
 	<div class="charts">
 		<div class="chart">
-			<span class="label">scan time — last {scan.recent.length} scans</span>
-			<Sparkline values={scan.recent} yMin={0} height={56} endIndex={scan.count} windowSize={180} />
+			<span class="label">scan time — last {(scan.recent ?? []).length} scans</span>
+			<Sparkline values={scan.recent ?? []} yMin={0} height={56} endIndex={scan.count} windowSize={180} />
 		</div>
 		<div class="chart">
 			<span class="label">scan period — target {fmt(scan.targetMs, 0)} ms</span>
 			<Sparkline
-				values={scan.periods}
+				values={scan.periods ?? []}
 				color="var(--s2)"
 				height={56}
 				endIndex={scan.count}
@@ -105,7 +105,7 @@
 		</div>
 		<div class="chart">
 			<span class="label">scan time distribution</span>
-			<Histogram counts={scan.histogram} />
+			<Histogram counts={scan.histogram ?? []} />
 		</div>
 		{#if late}
 			<div class="chart">
