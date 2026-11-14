@@ -27,6 +27,7 @@
 		makeGetPort,
 		partRect,
 		Pipe,
+		pipeCrossings,
 		pointsToPath,
 		resolveBindings,
 		resolvedPortDir,
@@ -394,6 +395,20 @@
 	 * overlays, matching the kit's Mimic (see the junction note in the kit's
 	 * Pipe.svelte). */
 	const PIPE_LAYERS = ['wall', 'bore', 'flow'] as const;
+	/** Clip-path ids for crossings, unique to this canvas. */
+	const uid = $props.id();
+	/** Half a crossing's square, as the kit's Mimic draws it. */
+	const XING = 9;
+	/** Every pipe drawn (the doc's and its units' copies), routed, and where
+	 * they cross: read by the crossings pass in the pipe layer. */
+	const xingRuns = $derived.by(() => {
+		void boxVersion; // re-route when an equipment's measured box changes
+		return [...(doc?.pipes ?? []), ...(unitCopies?.pipes ?? [])].map((p) => {
+			const pts = routedPoints(pipeRouteInput(p), getPort);
+			return { p, pts, d: pointsToPath(pts) };
+		});
+	});
+	const xings = $derived(pipeCrossings(xingRuns.map((r) => r.pts)));
 
 	/** `{points, from, to}` to feed routedPoints()/resolvePipeEndpoints() for
 	 * `p`, with an in-flight 'anchor' drag on THIS pipe live-substituted in.
@@ -1754,6 +1769,28 @@
 						</g>
 					{/each}
 				{/each}
+				<!-- Crossings as the kit's Mimic draws them: the flatter pipe
+				     passes over, the other is broken either side of it, so the
+				     editor shows the break the screen will. -->
+				{#if xings.length > 0}
+					<defs>
+						{#each xings as c, i (i)}
+							<clipPath id="{uid}-x{i}"><rect x={c.x - XING} y={c.y - XING} width={XING * 2} height={XING * 2} /></clipPath>
+						{/each}
+					</defs>
+					{#each xings as c, i (i)}
+						{@const o = xingRuns[c.over]}
+						<g class="crossing" clip-path="url(#{uid}-x{i})" pointer-events="none">
+							<path d={o.d} fill="none" stroke="var(--pipe-bore, var(--bg, #0d0d0d))" stroke-width="16" />
+							<Pipe
+								d={o.d}
+								{...(o.p.color !== undefined ? { color: o.p.color } : {})}
+								{...(o.p.props ?? {})}
+								{...resolveBindings(o.p.bind, ed.tags ?? {})}
+							/>
+						</g>
+					{/each}
+				{/if}
 				{#each doc.pipes ?? [] as p (p.id)}
 					{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
 					<g class="piperun" class:flagged={pipeFlagged(p)}>

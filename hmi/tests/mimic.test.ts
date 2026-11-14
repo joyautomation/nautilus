@@ -8,6 +8,7 @@ import {
 	attachPipeEnds,
 	brokenPipes,
 	expandUnits,
+	pipeCrossings,
 	connectPorts,
 	routedPoints,
 	makeGetPort,
@@ -336,5 +337,30 @@ describe('expandUnits', () => {
 	it('marks each copy for the editor', () => {
 		const d = expandUnits(unitsIn as unknown as MimicDoc, { mark: true });
 		expect((d.equipment ?? []).map((e) => e.fromUnit ?? '')).toEqual(['', 'filter#1', 'filter#1', 'filter#2', 'filter#2', 'unit2#A', 'unit2#B']);
+	});
+});
+
+describe('pipeCrossings', () => {
+	// A header along y=100 and three drops: one crossing it to a header
+	// below, one ending on it (a tee), one turning a corner on it.
+	const header: [number, number][] = [[0, 100], [400, 100]];
+	const lower: [number, number][] = [[0, 200], [400, 200]];
+	const across: [number, number][] = [[100, 50], [100, 200]];
+	const tee: [number, number][] = [[200, 50], [200, 100]];
+	const corner: [number, number][] = [[300, 50], [300, 100], [380, 100]];
+	it('finds where a drop crosses a header it does not join, header over', () => {
+		expect(pipeCrossings([header, lower, across, tee, corner])).toEqual([{ x: 100, y: 100, over: 0, under: 2 }]);
+	});
+	it('leaves a tee, a corner and a run drawn on another alone', () => {
+		expect(pipeCrossings([header, tee, corner, [[50, 100], [150, 100]]])).toEqual([]);
+	});
+	it('gives a tie in slant to the later pipe', () => {
+		const a: [number, number][] = [[0, 0], [100, 100]];
+		const b: [number, number][] = [[0, 100], [100, 0]];
+		expect(pipeCrossings([a, b])).toEqual([{ x: 50, y: 50, over: 1, under: 0 }]);
+	});
+	it('knows a crossing of a header near (but clear of) an end', () => {
+		expect(pipeCrossings([header, [[13, 50], [13, 150]]]).length).toBe(1);
+		expect(pipeCrossings([header, [[11, 50], [11, 150]]]).length).toBe(0);
 	});
 });

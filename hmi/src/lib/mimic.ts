@@ -607,6 +607,69 @@ export function brokenPipes(
 	return out;
 }
 
+/** Where two pipes cross without joining: `over` is the index (in the list
+ * given) of the pipe drawn across the other, which is broken there. */
+export interface PipeCrossing {
+	x: number;
+	y: number;
+	over: number;
+	under: number;
+}
+
+/** How near a crossing may come to a segment's end and still be a crossing:
+ * nearer, it is a tee (one pipe ends on the other) or a corner, and the
+ * pipes join there. A little more than a pipe's width. */
+export const CROSSING_CLEAR = 12;
+
+/**
+ * Every point where two pipes cross without joining, given each pipe's
+ * routed points. A joint is a pipe's end (or a corner) on or near the other
+ * pipe, which the layered drawing already shows as a tee, so only crossings
+ * clear of every segment end count. P&ID drafting breaks the vertical line
+ * where lines cross: the more horizontal of the two segments passes over
+ * (a header stays whole, the drops cross under it); at equal slant, the
+ * later pipe does. Collinear runs (one pipe drawn on another) aren't
+ * crossings.
+ */
+export function pipeCrossings(paths: [number, number][][]): PipeCrossing[] {
+	type Seg = { p: number; ax: number; ay: number; bx: number; by: number };
+	const segs: Seg[] = [];
+	paths.forEach((pts, p) => {
+		for (let i = 1; i < pts.length; i++) {
+			const [ax, ay] = pts[i - 1];
+			const [bx, by] = pts[i];
+			if (Math.hypot(bx - ax, by - ay) > 2 * CROSSING_CLEAR) segs.push({ p, ax, ay, bx, by });
+		}
+	});
+	const out: PipeCrossing[] = [];
+	for (let i = 0; i < segs.length; i++) {
+		const s = segs[i];
+		const sx = s.bx - s.ax, sy = s.by - s.ay;
+		for (let j = i + 1; j < segs.length; j++) {
+			const t = segs[j];
+			if (t.p === s.p) continue;
+			const tx = t.bx - t.ax, ty = t.by - t.ay;
+			const den = sx * ty - sy * tx;
+			if (Math.abs(den) < 1e-9) continue; // parallel or collinear
+			const qx = t.ax - s.ax, qy = t.ay - s.ay;
+			const u = (qx * ty - qy * tx) / den; // along s
+			const v = (qx * sy - qy * sx) / den; // along t
+			if (u <= 0 || u >= 1 || v <= 0 || v >= 1) continue;
+			const x = s.ax + u * sx, y = s.ay + u * sy;
+			const clear = (g: Seg) =>
+				Math.hypot(x - g.ax, y - g.ay) > CROSSING_CLEAR && Math.hypot(x - g.bx, y - g.by) > CROSSING_CLEAR;
+			if (!clear(s) || !clear(t)) continue;
+			// the flatter segment passes over; a tie goes to the later pipe
+			const flatS = Math.abs(sy) / Math.hypot(sx, sy), flatT = Math.abs(ty) / Math.hypot(tx, ty);
+			const sOver = Math.abs(flatS - flatT) > 1e-6 ? flatS < flatT : s.p > t.p;
+			const over = sOver ? s.p : t.p, under = sOver ? t.p : s.p;
+			if (out.some((c) => Math.abs(c.x - x) < 1 && Math.abs(c.y - y) < 1 && c.over === over)) continue;
+			out.push({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, over, under });
+		}
+	}
+	return out;
+}
+
 /** Resolve a binding map (prop -> tag name) against the live tags. A tag
  * name prefixed with "!" negates a boolean. Absent tags resolve to nothing
  * so the component keeps its default — never a fabricated value. */
