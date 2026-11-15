@@ -111,7 +111,8 @@ export class ComponentPreview implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
   private building = false;
   private rebuildQueued = false;
-  /** Whether the last good bundle is a scene part in its host. */
+  /** Whether the last good bundle imports the 3D runtime (a scene part
+   * in its host, or a component with a canvas of its own). */
   private sceneBundle = false;
   /** Cache-busting generation of the last GOOD bundle; 0 = none yet. */
   private version = 0;
@@ -419,7 +420,7 @@ export class ComponentPreview implements vscode.Disposable {
       );
       if (this.target !== target) return; // retargeted mid-build; the queued rebuild covers it
       if (result.built.includes(target.name)) {
-        this.sceneBundle = scene;
+        this.sceneBundle = !!result.needs3d;
         this.version++;
         this.postBundle();
       }
@@ -449,7 +450,7 @@ export class ComponentPreview implements vscode.Disposable {
       type: "previewBundle",
       src,
       version: this.version,
-      ...(needs ? { needs: [needs] } : {}),
+      ...(needs ? { needs: [{ src: needs, provides: "@threlte/core" }] } : {}),
     });
   }
 

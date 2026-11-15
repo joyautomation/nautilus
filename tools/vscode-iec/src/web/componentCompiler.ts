@@ -36,16 +36,26 @@ export type ReadFile = (path: string) => Promise<string | undefined>;
 export type CompileOptions = {
   /** Text to compile instead of what is saved (an editor's unsaved buffer). */
   sources?: Record<string, string>;
+  /** Whether a component may import the 3D runtime (three, Threlte). Only
+   * the component preview loads it, so anywhere else such an import is a
+   * diagnostic, not a script that fails for every component in it. */
+  scene?: boolean;
 };
 
 /** The script, and the project files it was made from (a change to one
  * of them calls for a rebuild). */
-export type CompileResult = BuildResult & { code: string; files: string[] };
+export type CompileResult = BuildResult & {
+  code: string;
+  files: string[];
+  /** Whether the script runs on the 3D runtime: load it first. */
+  scene: boolean;
+};
 
 type Module = { code: string; deps: Record<string, string> };
 
 const ENTRY = "\0nx-user-components-entry";
-const RUNTIME = new Set<string>([...RUNTIME_MODULES, ...SCENE_MODULES]);
+const RUNTIME = new Set<string>(RUNTIME_MODULES);
+const SCENE = new Set<string>(SCENE_MODULES);
 const STYLES = new Set<string>(KIT_STYLES);
 const TRY_EXTENSIONS = ["", ".svelte", ".ts", ".js", ".svelte.ts", ".svelte.js", ".json", "/index.ts", "/index.js"];
 
@@ -121,8 +131,17 @@ class Graph {
 
   constructor(
     private readonly read: ReadFile,
-    private readonly sources: Record<string, string>
+    private readonly sources: Record<string, string>,
+    private readonly scene = false
   ) {}
+
+  /** Whether anything in it imports the 3D runtime. */
+  usesScene(): boolean {
+    for (const m of this.modules.values()) {
+      for (const to of Object.values(m.deps)) if (to.startsWith("rt:") && SCENE.has(to.slice(3))) return true;
+    }
+    return false;
+  }
 
   private async text(path: string): Promise<string | undefined> {
     return path in this.sources ? this.sources[path] : this.read(path);
@@ -145,6 +164,13 @@ class Graph {
 
   private async resolve(spec: string, importer: string): Promise<string> {
     if (RUNTIME.has(spec)) return "rt:" + spec;
+    if (SCENE.has(spec)) {
+      if (this.scene) return "rt:" + spec;
+      throw new Error(
+        `imports "${spec}", which the playground loads only in the component preview: ` +
+          "a component placed on a mimic has no 3D runtime to draw with"
+      );
+    }
     if (STYLES.has(spec)) return "none:";
     let base: string | undefined;
     if (spec.startsWith("./") || spec.startsWith("../")) base = normalize(dirname(importer) + "/" + spec);
@@ -155,7 +181,7 @@ class Graph {
     } else {
       throw new Error(
         `imports "${spec}", which the playground cannot load: here a component can import svelte, ` +
-          "@joyautomation/nautilus-hmi, three, @threlte/core, @threlte/extras and the project's own files"
+          "@joyautomation/nautilus-hmi and the project's own files (and, in the component preview, three and Threlte)"
       );
     }
     if (base) {
@@ -192,7 +218,7 @@ class Graph {
 
   /** A copy, to try a component on without keeping what fails. */
   fork(): Graph {
-    const g = new Graph(this.read, this.sources);
+    const g = new Graph(this.read, this.sources, this.scene);
     for (const [k, v] of this.modules) g.modules.set(k, v);
     for (const [k, v] of this.svelteRoots) g.svelteRoots.set(k, v);
     return g;
@@ -217,7 +243,7 @@ function load(id) {
     var w = W[id];
     if (w) return w;
     var m = RT[id.slice(3)];
-    if (!m) throw new Error("the playground has no " + id.slice(3) + " here: a 3D part runs in the component preview, not on a mimic");
+    if (!m) throw new Error("the playground's runtime has no " + id.slice(3));
     // Marked an ES module, so the import helpers hand it over as it is.
     // Unmarked, they copy its exports as they stand when the script loads,
     // and Svelte assigns some later: its $.window is set by the first
@@ -263,7 +289,7 @@ export async function compileComponents(
   options: CompileOptions = {}
 ): Promise<CompileResult> {
   const diagnostics: ComponentDiagnostic[] = [];
-  let graph = new Graph(read, options.sources ?? {});
+  let graph = new Graph(read, options.sources ?? {}, !!options.scene);
   const usable: [string, string][] = [];
 
   for (const [name, path] of Object.entries(components)) {
@@ -277,14 +303,14 @@ export async function compileComponents(
     }
   }
   const files = () => [...graph.modules.keys()].filter((id) => id !== ENTRY);
-  if (!usable.length) return { code: EMPTY_BUNDLE_JS, diagnostics, built: [], files: [] };
+  if (!usable.length) return { code: EMPTY_BUNDLE_JS, diagnostics, built: [], files: [], scene: false };
 
   try {
     const entry = compileModule(buildEntrySource(usable), { filename: "nx-user-components-entry.js", generate: "client" });
     await graph.add(ENTRY, toCommonJs(entry.js.code, "nx-user-components-entry.js"));
   } catch (err) {
     diagnostics.push({ component: "*", message: "compiling the user-components entry: " + describeError(err) });
-    return { code: EMPTY_BUNDLE_JS, diagnostics, built: [], files: files() };
+    return { code: EMPTY_BUNDLE_JS, diagnostics, built: [], files: files(), scene: false };
   }
-  return { code: link(graph.modules), diagnostics, built: usable.map(([name]) => name), files: files() };
+  return { code: link(graph.modules), diagnostics, built: usable.map(([name]) => name), files: files(), scene: graph.usesScene() };
 }

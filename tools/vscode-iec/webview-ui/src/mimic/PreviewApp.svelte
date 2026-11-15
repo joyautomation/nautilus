@@ -236,19 +236,29 @@
 	}
 
 	let loading3d = $state(false);
+	let loadSeq = 0;
 	async function loadBundle(src: string, v: number, needs: unknown) {
-		const before = Array.isArray(needs) ? needs.filter((n): n is string => typeof n === 'string') : [];
+		const seq = ++loadSeq;
+		const before = (Array.isArray(needs) ? needs : []).filter(
+			(n): n is { src: string; provides: string } => typeof n?.src === 'string' && typeof n?.provides === 'string'
+		);
 		if (before.length) {
 			loading3d = true;
 			try {
-				await Promise.all(before.map(requireScript));
+				await Promise.all(before.map((n) => requireScript(n.src)));
+				// A script that throws as it runs still "loads".
+				const rt = (window as { __NX_RT__?: Record<string, unknown> }).__NX_RT__ ?? {};
+				const absent = before.find((n) => !rt[n.provides]);
+				if (absent) throw new Error(`${absent.src} ran but did not provide ${absent.provides}`);
 			} catch (err) {
-				log(`bundle v${v}: a script it needs failed to load: ${String(err)}`);
-				loadError = 'the 3D runtime failed to load — see the "nautilus preview" output channel';
+				log(`bundle v${v}: the 3D runtime did not load: ${String(err)}`);
+				if (seq === loadSeq) loadError = 'the 3D runtime failed to load — see the "nautilus preview" output channel';
 				return;
 			} finally {
-				loading3d = false;
+				if (seq === loadSeq) loading3d = false;
 			}
+			// A newer bundle arrived while this one waited: it is the one to show.
+			if (seq !== loadSeq) return;
 		}
 		document.getElementById('nx-preview-bundle')?.remove();
 		const s = document.createElement('script');
@@ -546,9 +556,12 @@
 			{statusText}
 		</span>
 		<span class="spacer"></span>
+		<!-- no ports on a 3D part: a scene places it, and ports mode would
+		     take the drag that orbits the camera -->
 		<button
 			class="mode"
 			class:on={portsMode}
+			class:off={scenePart}
 			data-kind="ports-toggle"
 			title="Ports mode: drag a dot to move it, double-click the render to add one, double-click a dot to remove it"
 			onclick={() => (portsMode = !portsMode)}
@@ -593,7 +606,7 @@
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
 								<svg
 									class="ports"
-									class:on={portsMode}
+									class:on={portsMode && !scenePart}
 									width={box.w}
 									height={box.h}
 									viewBox="0 0 {box.w} {box.h}"
@@ -713,7 +726,7 @@
 				{hasSidecar ? '' : '(created on the first add)'}
 			</p>
 
-			<div class="ports-panel">
+			<div class="ports-panel" class:off={scenePart}>
 				<PortsPanel
 					{ports}
 					{selected}
@@ -865,6 +878,9 @@
 		background: transparent;
 		color: var(--nx-muted);
 		cursor: pointer;
+	}
+	.off {
+		display: none;
 	}
 	.mode.on {
 		background: var(--nx-sel-bg);

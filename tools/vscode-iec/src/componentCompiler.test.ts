@@ -190,11 +190,29 @@ test("a part of a 3D scene compiles inside its host, on the 3D runtime", async (
   const rain = path.join(LIFT, "Rain.svelte");
   assert.equal(isScenePart(fs.readFileSync(rain, "utf8")), true);
   const host = sceneHostPath(rain);
-  const result = await compileComponents({ Rain: host }, disk, { sources: { [host]: sceneHostSource(rain) } });
+  const result = await compileComponents({ Rain: host }, disk, { sources: { [host]: sceneHostSource(rain) }, scene: true });
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.built, ["Rain"]);
+  assert.equal(result.scene, true);
   for (const spec of ["three", "@threlte/core", "three/examples/jsm/controls/OrbitControls.js"]) {
     assert.ok(result.code.includes(JSON.stringify("rt:" + spec)), spec);
   }
   assert.ok(result.code.includes(JSON.stringify(rain)), "the part itself is in the bundle");
+});
+
+test("the 3D runtime is for the preview: elsewhere an import of it leaves that component out", async () => {
+  const files = {
+    "/p/Good.svelte": "<p>ok</p>",
+    "/p/Spin.svelte": '<script>import { Canvas } from "@threlte/core"; import { Vector3 } from "three";</script><Canvas />',
+  };
+  const mimic = await compileComponents({ Good: "/p/Good.svelte", Spin: "/p/Spin.svelte" }, memory(files));
+  assert.deepEqual(mimic.built, ["Good"]);
+  assert.equal(mimic.scene, false);
+  assert.match(mimic.diagnostics[0].message, /"(three|@threlte\/core)", which the playground loads only in the component preview/);
+  assert.equal(typeof (await run(mimic.code)).registered?.Good?.mount, "function");
+  // In the preview a component with its own canvas builds, and asks for the runtime.
+  const preview = await compileComponents({ Spin: "/p/Spin.svelte" }, memory(files), { scene: true });
+  assert.deepEqual(preview.built, ["Spin"]);
+  assert.equal(preview.scene, true);
+  assert.equal((await compileComponents({ Good: "/p/Good.svelte" }, memory(files), { scene: true })).scene, false);
 });

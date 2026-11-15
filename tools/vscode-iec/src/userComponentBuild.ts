@@ -183,8 +183,9 @@ export async function buildUserComponentsBundle(
       format: "iife",
       platform: "browser",
       // Svelte libraries (Threlte, most component kits) export their
-      // source under the "svelte" condition and nothing else.
-      conditions: ["svelte"],
+      // source under the "svelte" condition and nothing else. Naming a
+      // condition drops esbuild's implied "module", so it is named too.
+      conditions: ["svelte", "module"],
       outfile,
       write: true,
       logLevel: "silent",

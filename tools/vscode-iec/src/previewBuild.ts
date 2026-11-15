@@ -13,7 +13,9 @@ import type { UserComponentManager } from "./userComponents";
 
 const BUNDLE_FILE = "component-preview.js";
 
-export type PreviewBuildResult = { built: string[]; diagnostics: ComponentDiagnostic[] };
+/** `needs3d`: the bundle runs on a runtime the pane must load first
+ * (only the browser build has one). */
+export type PreviewBuildResult = { built: string[]; diagnostics: ComponentDiagnostic[]; needs3d?: boolean };
 
 export class PreviewBuilder {
   /** Where the pane may load scripts from. */
