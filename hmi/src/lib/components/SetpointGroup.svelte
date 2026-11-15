@@ -43,19 +43,29 @@
 		return typeof n === 'number' ? n : Number(n);
 	};
 	const noWrite = async () => 'This screen is read-only';
+	// With no `decimals`, a field shows its value as precisely as it is (up
+	// to 4 places): a gain of 4.25 reads 4.25 and 0.07 reads 0.07, never
+	// rounded to a number the controller doesn't hold.
+	const places = (it: Item): number => {
+		if (it.decimals !== undefined) return it.decimals;
+		const v = value(it.tag);
+		if (!Number.isFinite(v)) return 1;
+		for (let d = 0; d < 4; d++) if (Math.abs(Number(v.toFixed(d)) - v) < 1e-9) return d;
+		return 4;
+	};
 </script>
 
 <section class="sg" style:width={width ? `${width}px` : undefined} aria-label={title || label || 'Setpoints'}>
 	{#if title || label}<h3>{title || label}</h3>{/if}
 	<div class="fields" style:grid-template-columns="repeat({Math.max(1, columns)}, minmax(0, 1fr))">
-		{#each items as it (it.tag)}
+		{#each items as it, i (i)}
 			<WriteNumber
 				tag={it.tag}
 				label={it.label ?? it.tag}
 				units={it.unit ?? ''}
 				value={value(it.tag)}
 				present={it.tag in tags}
-				precision={it.decimals ?? 1}
+				precision={places(it)}
 				step={it.step ?? 10 ** -(it.decimals ?? 1)}
 				min={it.min}
 				max={it.max}

@@ -16,6 +16,11 @@
   line on what it shows. `sampleTag` / `tagHistory` keep the series, once
   a second per tag, across page changes.
 
+- **A setpoint field with no `decimals` shows its value as it is** (up to
+  four places): a gain of 4.25 reads 4.25 and 0.07 reads 0.07, where they
+  were rounded to one place (screen evals, arm N: Kp, Ki and Kd in a panel
+  that gave no `decimals` read 4.3, 0.1 and 0.3).
+
 ### Changed
 
 - **Pipes on an ISA-101 screen are single lines.** `<Mimic>` draws a pipe
