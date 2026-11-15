@@ -161,6 +161,83 @@
 		if (count > 0) out.fold = { count, below: Math.max(0, deepest), names };
 	}
 
+	// Labels a pipe runs through: on a kit <Mimic>, a pipe's line visible
+	// inside the box of a line of text (a tag, a reading, a scale mark).
+	// Visible: the first thing painted at that spot, looking down from the
+	// top, is a pipe, not a filled shape or a background over it (a pipe
+	// under an instrument's bubble is hidden by the bubble). The text's own
+	// background doesn't hide it: a label on a patch over the line still
+	// reads as the line running through it.
+	out.through = [];
+	{
+		const pe = document.createElement('style');
+		pe.textContent = '.mimic, .mimic * { pointer-events: auto !important; }';
+		document.head.appendChild(pe);
+		const clear = (c) => !c || c === 'none' || c === 'transparent' || /rgba\([^)]*,\s*0(\.0+)?\)$/.test(c);
+		const covers = (el, own) => {
+			if (own.has(el)) return false;
+			const cs = getComputedStyle(el);
+			if (+cs.opacity < 0.5) return false;
+			if (el instanceof SVGElement) return el.matches('path, rect, circle, ellipse, polygon') && !clear(cs.fill) && +cs.fillOpacity >= 0.5;
+			return !clear(cs.backgroundColor);
+		};
+		for (const root of document.querySelectorAll('.mimic')) {
+			if (!shows(root)) continue;
+			const layer = root.querySelector('svg.pipes');
+			if (!layer) continue;
+			const pipes = [];
+			for (const g of layer.querySelectorAll('[data-pipe]')) {
+				const wall = g.querySelector('path.wall');
+				const m = wall && wall.getScreenCTM();
+				if (!m) continue;
+				const len = wall.getTotalLength(), pts = [];
+				for (let s = 0; s <= len; s += 2) {
+					const q = wall.getPointAtLength(s);
+					pts.push([m.a * q.x + m.c * q.y + m.e, m.b * q.x + m.d * q.y + m.f]);
+				}
+				pipes.push({ id: g.dataset.pipe, pts });
+			}
+			if (!pipes.length) continue;
+			const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+			const hit = new Map(); // text -> pipe
+			for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+				const text = n.textContent.replace(/\s+/g, ' ').trim();
+				const el = n.parentElement;
+				if (!text || !el || el.closest('svg.pipes, title, desc, style, script')) continue;
+				const cs = getComputedStyle(el);
+				if (cs.visibility === 'hidden' || +cs.opacity === 0) continue;
+				const own = new Set();
+				for (let a = el; a && a !== root; a = a.parentElement) own.add(a);
+				const range = document.createRange();
+				range.selectNodeContents(n);
+				let found = null;
+				for (const b of range.getClientRects()) {
+					if (b.width < 3 || b.height < 6) continue;
+					// the glyphs, not the line box's leading
+					const q = { l: b.left + 1, r: b.right - 1, t: b.top + b.height * 0.22, bt: b.bottom - b.height * 0.22 };
+					for (const p of pipes) {
+						let tried = 0;
+						for (const [x, y] of p.pts) {
+							if (x <= q.l || x >= q.r || y <= q.t || y >= q.bt) continue;
+							if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight || ++tried > 4) continue;
+							let on = false;
+							for (const e of document.elementsFromPoint(x, y)) {
+								if (layer.contains(e) && e !== layer) { on = true; break; }
+								if (covers(e, own)) break;
+							}
+							if (on) { found = p.id; break; }
+						}
+						if (found) break;
+					}
+					if (found) break;
+				}
+				if (found && !hit.has(text)) hit.set(text, found);
+			}
+			for (const [text, pipe] of hit) out.through.push({ text: text.length > 28 ? text.slice(0, 27) + '…' : text, pipe });
+		}
+		pe.remove();
+	}
+
 	// Sideways scroll: the page is wider than the device. Measured against
 	// the device's own width, not innerWidth: a phone widens its layout
 	// viewport to fit a page that's too wide, then zooms it out to fit.

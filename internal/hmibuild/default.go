@@ -17,6 +17,7 @@ import (
 var builtinEquipment = map[string]bool{
 	"Tank": true, "Heater": true, "Pump": true, "Valve": true, "Gauge": true,
 	"Sparkline": true, "CommandButton": true, "WriteToggle": true, "OffPage": true,
+	"SetpointGroup": true,
 }
 
 // skipDir is what a project search never looks in: dot, dependency and

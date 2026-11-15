@@ -39,6 +39,7 @@ export const BUILTIN_COMPONENT_PORTS: Record<string, Port[]> = {
   Sparkline: [],
   CommandButton: [],
   WriteToggle: [],
+  SetpointGroup: [],
   OffPage: [
     { name: "top", part: "body", x: 0.5, y: 0 },
     { name: "left", part: "body", x: 0, y: 0.5 },
@@ -62,4 +63,5 @@ export const BUILTIN_DEMO_PROPS: Record<string, Record<string, unknown>> = {
   CommandButton: { label: "Command", tag: "" },
   WriteToggle: { label: "Enable", tag: "", value: true },
   OffPage: { label: "TO DRAIN" },
+  SetpointGroup: { title: "Setpoints", items: [{ tag: "", label: "Setpoint", unit: "" }] },
 };
