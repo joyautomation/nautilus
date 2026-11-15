@@ -25,6 +25,23 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
   header is broken either side of it, as the kit's `<Mimic>` draws them,
   so the editor shows which drop joins which header.
 
+- **Component preview: SVG parts, and the props a component needs.** A
+  component whose root is a `<g>` or a `<path>` (a part drawn inside a
+  page's own `<svg>`) rendered as an empty 0 × 0 stage. It is now shown
+  in an svg fitted to what it draws, marked "svg part". And when the
+  component has props with no default and no sample value, the pane
+  names them, on the stage and in the Props strip, where a click on one
+  starts its sample value.
+
+- **Component preview: overlay panels and 3D parts.** A panel that is
+  closed until a prop opens it (`open`, `selected`) drew nothing and the
+  pane had nothing to suggest: it now names the props to try, each a
+  click away. Opened, a panel positioned over its page (absolute or
+  fixed) collapsed to a sliver on a 0 × 0 stage: it is shown over a frame
+  the size of the pane, marked "overlay". A part of a 3D scene (it imports
+  Threlte and has no canvas of its own) says so instead of showing an
+  error.
+
 - **The component preview in the playground.** A `{Name}.svelte` (or its
   `.component.json`) opens its live preview in the browser too, compiled
   with the playground's Svelte as you type, with its sample props and
@@ -101,6 +118,12 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Fixed
 
+- **`<svelte:window>` in the playground's first component.** In the
+  playground, a project component using `<svelte:window>`,
+  `<svelte:document>` or `<svelte:body>` threw "Cannot read properties of
+  undefined (reading 'addEventListener')" when it was the first one
+  shown, in the preview or on a screen: it read Svelte's runtime as it
+  stood before the first mount.
 - **A mimic whose pipe has no points opens.** A pipe anchored at both ends
   may leave `points` out; the mimic editor reads it as `[]` and writes the
   empty list back on the next edit, instead of failing on it.

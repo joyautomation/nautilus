@@ -1,3 +1,13 @@
+<script lang="ts" module>
+	/** Components found to be SVG parts (see `svgHost`), by name: the next
+	 * mount of one (every good compile re-keys the island) goes straight
+	 * into an svg instead of mounting twice to find out again. */
+	const svgParts = new Set<string>();
+	const SVG_NS = 'http://www.w3.org/2000/svg';
+	/** Room round an SVG part's bounding box, which leaves strokes out. */
+	const SVG_PAD = 4;
+</script>
+
 <script lang="ts">
 	// One user-authored component, mounted as an isolated island via
 	// window.__NX_USER_COMPONENTS__ (userComponents.ts's esbuild bundle,
@@ -11,12 +21,46 @@
 	// and every later prop change flows through handle.update() rather than
 	// remounting — same "gestures mutate, the host confirms" shape as the
 	// rest of the editor, just one level down.
+	//
+	// `svgHost` (the component preview): a component whose root is an SVG
+	// element other than <svg> (a <g>, a <path>: a part drawn inside a
+	// page's own <svg>) draws nothing in a div, so it is mounted in an
+	// <svg> fitted to what it draws. Not in the mimic editor: a screen
+	// places components in HTML boxes, and showing one there that the
+	// built screen would not draw would be a lie.
+	//
+	// `frame` (the component preview too): a component whose roots are all
+	// positioned out of flow (an `aside` laid over the page, absolute or
+	// fixed) takes up no room, and sizes itself against a parent that here
+	// has none: it collapsed to a sliver over a 0 × 0 box. It is given a
+	// frame of this size, in px, to lie over instead, standing in for the
+	// page.
 	import { untrack } from 'svelte';
 	import { hasUserComponent, userComponentApi, userComponentDiagnostic } from './userComponentsState.svelte';
 
-	let { name, props = {} }: { name: string; props?: Record<string, unknown> } = $props();
+	let {
+		name,
+		props = {},
+		svgHost = false,
+		onsvgpart,
+		frame,
+		onframed
+	}: {
+		name: string;
+		props?: Record<string, unknown>;
+		svgHost?: boolean;
+		onsvgpart?: (part: boolean) => void;
+		frame?: { w: number; h: number };
+		onframed?: (framed: boolean) => void;
+	} = $props();
 
 	let el: HTMLDivElement | null = $state(null);
+	let svgEl: SVGSVGElement | null = $state(null);
+	let groupEl: SVGGElement | null = $state(null);
+	let asSvg = $state(untrack(() => svgHost && svgParts.has(name)));
+	$effect(() => onsvgpart?.(asSvg));
+	let framed = $state(false);
+	$effect(() => onframed?.(framed && !asSvg));
 	let handle: { update(p: Record<string, unknown>): void; destroy(): void } | null = null;
 
 	const available = $derived(hasUserComponent(name));
@@ -29,17 +73,20 @@
 	let failed = $state('');
 
 	$effect(() => {
-		if (!available || !el) return;
+		const target = asSvg ? groupEl : el;
+		if (!available || !target) return;
 		const api = userComponentApi(name);
 		if (!api) return;
 		failed = '';
 		try {
-			handle = api.mount(el, { ...untrack(() => props) });
+			handle = api.mount(target, { ...untrack(() => props) });
 		} catch (err) {
 			handle = null;
 			failed = errorText(err);
-			el.replaceChildren();
+			target.replaceChildren();
 		}
+		if (svgHost && handle && !checkRoot(target) && asSvg) fit();
+		if (!asSvg) checkFrame(target);
 		return () => {
 			try {
 				handle?.destroy();
@@ -62,13 +109,94 @@
 		}
 	});
 
+	/** Whether the component is mounted in the wrong kind of parent for
+	 * its root element: if so, switches (the mount effect's teardown takes
+	 * it out and the effect runs again on the other parent). A component
+	 * with no root element yet (an {#if} waiting on a prop) stays put. */
+	function checkRoot(target: Element): boolean {
+		const root = target.firstElementChild;
+		const part = !!root && root.namespaceURI === SVG_NS && root.localName !== 'svg';
+		if (!root || part === asSvg) return false;
+		if (part) svgParts.add(name);
+		else svgParts.delete(name);
+		asSvg = part;
+		return true;
+	}
+	// A root that arrives later (that {#if}, once its prop is set).
+	$effect(() => {
+		if (!svgHost || !el) return;
+		const div = el;
+		const mo = new MutationObserver(() => {
+			if (!checkRoot(div)) checkFrame(div);
+		});
+		mo.observe(div, { childList: true });
+		return () => mo.disconnect();
+	});
+
+	/** Frames the component when everything it renders at its root is out
+	 * of flow; anything in flow (an element, or text) gives the box its
+	 * size as ever. Judged on position alone, never on the size the frame
+	 * itself changes. */
+	function checkFrame(target: Element) {
+		if (!frame) return;
+		const roots = [...target.children];
+		const text = [...target.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim() !== '');
+		framed =
+			roots.length > 0 &&
+			!text &&
+			roots.every((r) => {
+				const position = getComputedStyle(r).position;
+				return position === 'absolute' || position === 'fixed';
+			});
+	}
+
+	/** Sizes the host svg to what the part draws, wherever it draws it
+	 * (a part takes its own x and y): nothing drawn is 0 × 0. */
+	function fit() {
+		if (!svgEl || !groupEl) return;
+		let b: DOMRect;
+		try {
+			b = groupEl.getBBox();
+		} catch {
+			return;
+		}
+		const drawn = [b.x, b.y, b.width, b.height].every(Number.isFinite) && (b.width > 0 || b.height > 0);
+		const w = drawn ? Math.ceil(b.width + 2 * SVG_PAD) : 0;
+		const h = drawn ? Math.ceil(b.height + 2 * SVG_PAD) : 0;
+		const viewBox = `${b.x - SVG_PAD} ${b.y - SVG_PAD} ${w} ${h}`;
+		// Only on a change: these writes are mutations the observer below sees.
+		if (svgEl.getAttribute('width') !== String(w)) svgEl.setAttribute('width', String(w));
+		if (svgEl.getAttribute('height') !== String(h)) svgEl.setAttribute('height', String(h));
+		if (drawn && svgEl.getAttribute('viewBox') !== viewBox) svgEl.setAttribute('viewBox', viewBox);
+	}
+	// A prop change, an {#if} branch: whatever moves the drawing re-fits it.
+	$effect(() => {
+		if (!groupEl) return;
+		const group = groupEl;
+		const mo = new MutationObserver(() => {
+			if (!checkRoot(group)) fit();
+		});
+		mo.observe(group, { subtree: true, childList: true, attributes: true, characterData: true });
+		return () => mo.disconnect();
+	});
+
 	function errorText(err: unknown): string {
 		return err instanceof Error ? err.message : String(err);
 	}
 </script>
 
 {#if available}
-	<div class="nx-user-island" bind:this={el}></div>
+	{#if asSvg}
+		<svg class="nx-user-island-svg" width="0" height="0" bind:this={svgEl}><g bind:this={groupEl}></g></svg>
+	{:else}
+		<div
+			class="nx-user-island"
+			class:framed
+			style:width={framed && frame ? frame.w + 'px' : null}
+			style:height={framed && frame ? frame.h + 'px' : null}
+			bind:this={el}
+		></div>
+	{/if}
 	{#if failed}
 		<span class="broken" title={failed}><b>{name}</b> threw: {failed}</span>
 	{/if}
@@ -81,6 +209,17 @@
 <style>
 	.nx-user-island {
 		display: contents;
+	}
+	/* contain: layout makes it the containing block of a fixed root as well
+	   as an absolute one */
+	.nx-user-island.framed {
+		display: block;
+		position: relative;
+		contain: layout;
+		overflow: hidden;
+	}
+	.nx-user-island-svg {
+		display: block;
 	}
 	/* fills the equipment's box, so the reason is readable on the canvas
 	   and in a screenshot, not only in a tooltip */

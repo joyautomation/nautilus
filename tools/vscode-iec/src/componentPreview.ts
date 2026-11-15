@@ -51,7 +51,7 @@ import {
   writeComponentPortsEdit,
 } from "./mimicComponents";
 import type { UserComponentManager } from "./userComponents";
-import { previewSources, previewTargetForPath } from "./componentPreviewLogic";
+import { previewSources, previewTargetForPath, declaredProps, isScenePart } from "./componentPreviewLogic";
 import { BUILTIN_COMPONENT_NAMES, BUILTIN_COMPONENT_PORTS } from "./builtinComponents";
 
 const BUILD_DEBOUNCE_MS = 300;
@@ -136,6 +136,8 @@ export class ComponentPreview implements vscode.Disposable {
         if (!this.panel || !this.target) return;
         // Any Svelte buffer: the previewed one, or something it imports.
         if (e.document.uri.path.endsWith(".svelte")) this.scheduleBuild();
+        // The previewed source: its `$props()` may have gained or lost a default.
+        if (!this.target.builtin && e.document.uri.toString() === this.target.uri.toString()) this.scheduleDoc();
         else sidecarChanged(e.document.uri);
       }),
       vscode.window.onDidChangeActiveTextEditor((ed) => {
@@ -294,6 +296,13 @@ export class ComponentPreview implements vscode.Disposable {
     const own = validatePortList(entry.ports) ? entry.ports : null;
     const inherited = own === null && target.builtin;
     const ports = own ?? (inherited ? (BUILTIN_COMPONENT_PORTS[target.name] ?? []) : []);
+    // The props the source declares without a default: the pane names the
+    // ones still missing when the component draws nothing.
+    const source = target.builtin ? "" : await readText(target.uri);
+    const declared = declaredProps(source);
+    const needs = declared.filter((p) => p.needed).map((p) => p.name);
+    // The rest: what to try when it draws nothing with its defaults.
+    const optional = declared.filter((p) => !p.needed).map((p) => p.name);
     if (this.target !== target) return; // moved on while reading
     void this.panel.webview.postMessage({
       type: "previewDoc",
@@ -303,6 +312,9 @@ export class ComponentPreview implements vscode.Disposable {
       sidecar: path.basename(sidecar.path),
       hasSidecar: text.trim() !== "",
       props,
+      needs,
+      optional,
+      scenePart: isScenePart(source),
       ports,
       portsInherited: inherited,
       ...(ack === undefined ? {} : { ack }),
@@ -368,6 +380,14 @@ export class ComponentPreview implements vscode.Disposable {
       this.diagnostics = [
         { component: "*", message: "the preview compiles and runs this project's own code — trust the workspace to turn it on" },
       ];
+      this.postDiagnostics();
+      return;
+    }
+    // A part of a 3D scene has nothing to show alone (the pane says so):
+    // compiling it only makes an error of that.
+    if (isScenePart(await readText(target.uri))) {
+      if (this.target !== target) return;
+      this.diagnostics = [];
       this.postDiagnostics();
       return;
     }

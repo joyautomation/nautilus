@@ -60,6 +60,40 @@
 	/** A kit component, rendered from the registry rather than a bundle. */
 	let builtin = $state(false);
 	let props = $state<Record<string, unknown>>({});
+	/** The props the source declares with no default (host-read). */
+	let needs = $state<string[]>([]);
+	/** The props it declares with a default: what to try when it draws
+	 * nothing as it is (a panel closed until `open` or `selected` is set). */
+	let optional = $state<string[]>([]);
+	const untried = $derived(optional.filter((n) => !(n in props)));
+	/** A part of a 3D scene: nothing to show outside a scene's canvas. */
+	let scenePart = $state(false);
+	/** Its roots are all out of flow: shown over a frame (UserIsland). */
+	let overlay = $state(false);
+	/** The frame an overlay lies over: the stage's own room, so the whole
+	 * of it shows at 100% and a panel sized in % has something to take a
+	 * share of. Never smaller than a small page. */
+	let stageEl = $state<HTMLDivElement | null>(null);
+	let frame = $state({ w: 480, h: 360 });
+	const FRAME_MARGIN = 56; // the stage's padding, and a little
+	$effect(() => {
+		if (!stageEl) return;
+		const el = stageEl;
+		const update = () => {
+			const w = Math.max(320, el.clientWidth - FRAME_MARGIN);
+			const h = Math.max(240, el.clientHeight - FRAME_MARGIN);
+			if (w !== frame.w || h !== frame.h) frame = { w, h };
+		};
+		update();
+		const ro = new ResizeObserver(update);
+		ro.observe(el);
+		return () => ro.disconnect();
+	});
+	/** Those of them with no sample value yet. */
+	const missing = $derived(needs.filter((n) => !(n in props)));
+	/** The component is an SVG part (root <g>, <path>…), shown in an svg
+	 * of the pane's own (UserIsland's svgHost). */
+	let svgPart = $state(false);
 	let ports = $state<Port[]>([]);
 	/** The ports shown are the kit's defaults (no sidecar `ports` yet). */
 	let portsInherited = $state(false);
@@ -98,6 +132,9 @@
 				hasSidecar?: boolean;
 				builtin?: boolean;
 				props?: Record<string, unknown>;
+				needs?: string[];
+				optional?: string[];
+				scenePart?: boolean;
 				ports?: Port[];
 				portsInherited?: boolean;
 				ack?: number;
@@ -113,6 +150,9 @@
 				hasSidecar = !!m.hasSidecar;
 				builtin = !!m.builtin;
 				props = m.props ?? {};
+				needs = m.needs ?? [];
+				optional = m.optional ?? [];
+				scenePart = !!m.scenePart;
 				// The host confirms each ports write with a previewDoc carrying
 				// its seq (`ack`). While an edit of ours is still unconfirmed, a
 				// previewDoc's ports are older than what is on screen — the
@@ -215,6 +255,8 @@
 		return () => ro.disconnect();
 	});
 	const ZOOMS = [0.5, 1, 2, 4];
+	/** A render under this many px each way is "little" (the stage hint). */
+	const SMALL = 24;
 
 	// ── the props strip ──────────────────────────────────────────────────────
 	// Every edit is the whole map, posted to the host, which patches the
@@ -237,6 +279,12 @@
 	}
 	let newName = $state('');
 	let newValue = $state('');
+	let newValueEl = $state<HTMLInputElement | null>(null);
+	/** A missing prop's chip: its name in the add row, the cursor on its value. */
+	function startProp(name: string) {
+		newName = name;
+		newValueEl?.focus();
+	}
 	const newNameOk = $derived(isPropName(newName) && !(newName in props));
 	function addProp() {
 		if (!newNameOk) return;
@@ -413,7 +461,7 @@
 		return { left: r.left + p.x * k + 10, top: r.top + p.y * k - 20 };
 	}
 	const statusText = $derived(
-		builtin ? 'built-in' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
+		builtin ? 'built-in' : scenePart ? '3D part' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
 	);
 </script>
 
@@ -434,7 +482,22 @@
 				{file || 'Component Preview'}
 			</button>
 		{/if}
-		{#if box}<span class="size">{box.w} × {box.h}</span>{/if}
+		{#if box && !scenePart}<span class="size">{box.w} × {box.h}</span>{/if}
+		{#if overlay && !builtin && !scenePart}
+			<span
+				class="size"
+				data-kind="overlay"
+				title="Everything at its root is positioned out of flow (absolute or fixed): a panel laid over a page. Shown here over a frame the size of this pane, standing in for the page."
+				>overlay</span
+			>
+		{/if}
+		{#if svgPart && !builtin}
+			<span
+				class="size"
+				data-kind="svg-part"
+				title="Its root is an SVG element (a <g>, a <path>…), a part for a page's own <svg>. Shown here in an svg fitted to what it draws.">svg part</span
+			>
+		{/if}
 		<span class="status" class:s-building={building} class:s-err={!!error && !building} class:s-ok={available && !error && !building}>
 			{statusText}
 		</span>
@@ -462,8 +525,15 @@
 
 	<div class="body">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="stage" class:stale={!!error} ondragstart={(e) => e.preventDefault()}>
-			{#if available}
+		<div class="stage" class:stale={!!error} bind:this={stageEl} ondragstart={(e) => e.preventDefault()}>
+			{#if scenePart}
+				<!-- Not an error and not a compile away: it has no canvas to
+				     draw on here, on any machine. -->
+				<p class="empty hint" data-kind="scene-part">
+					{file} is a part of a 3D scene: it imports Threlte and draws through the canvas of the scene it is placed in, so there
+					is nothing to show of it alone. See it on the page that uses it.
+				</p>
+			{:else if available}
 				{#key version}
 					<div class="scale" style="transform: scale({zoom})">
 						<div class="box" data-theme={themeColorMode.mode} bind:this={measureEl}>
@@ -472,7 +542,14 @@
 									{@const C = registry[component]}
 									<C {...builtinProps} />
 								{:else}
-									<UserIsland name={component} {props} />
+									<UserIsland
+										name={component}
+										{props}
+										svgHost
+										onsvgpart={(part) => (svgPart = part)}
+										{frame}
+										onframed={(f) => (overlay = f)}
+									/>
 								{/if}
 							</div>
 							{#if box}
@@ -516,6 +593,27 @@
 						</div>
 					</div>
 				{/key}
+				{#if !error && !builtin && box && (box.w === 0 || box.h === 0 || (missing.length && box.w < SMALL && box.h < SMALL))}
+					<!-- An empty or near-empty stage says why: a component given
+					     none of the props it needs draws little or nothing. A
+					     render of any size is left alone (the Props strip still
+					     lists them): plenty of props without a default are
+					     callbacks, or optional by a type declared elsewhere. -->
+					<p class="empty hint" data-kind="stage-hint">
+						{#if missing.length}
+							{missing.join(', ')}
+							{missing.length === 1 ? 'has' : 'have'} no default and no sample value yet, so {file} draws little or nothing. Give
+							{missing.length === 1 ? 'it' : 'them'} a value under Props.
+						{:else if untried.length}
+							{file} draws nothing as it is. It may be waiting on a prop: try a value for
+							{#each untried as name (name)}
+								<button class="need" title="Add a sample value for {name}" onclick={() => startProp(name)}>{name}</button>
+							{/each}
+						{:else}
+							{file} draws nothing with these props ({box.w} × {box.h}).
+						{/if}
+					</p>
+				{/if}
 			{:else if component}
 				<p class="empty">{error ? 'nothing to show until it compiles' : 'compiling ' + file + '…'}</p>
 			{:else}
@@ -523,9 +621,16 @@
 			{/if}
 		</div>
 
-		<aside>
+		<aside class:off={scenePart}>
 			<h4>Props <span class="dim">{propNames.length}</span></h4>
-			{#if propNames.length === 0}
+			{#if missing.length}
+				<p class="note needs" data-kind="props-missing">
+					No default, no sample value:
+					{#each missing as name (name)}
+						<button class="need" title="Add a sample value for {name}" onclick={() => startProp(name)}>{name}</button>
+					{/each}
+				</p>
+			{:else if propNames.length === 0}
 				<p class="note">No sample props yet — the component renders with its defaults. Add one below.</p>
 			{/if}
 			{#each propNames as name (name)}
@@ -550,7 +655,7 @@
 				}}
 			>
 				<input class="nx-input" placeholder="prop" bind:value={newName} spellcheck="false" />
-				<input class="nx-input" placeholder="value" bind:value={newValue} spellcheck="false" />
+				<input class="nx-input" placeholder="value" bind:value={newValue} bind:this={newValueEl} spellcheck="false" />
 				<button type="submit" disabled={!newNameOk}>Add</button>
 			</form>
 			<p class="note">
@@ -776,9 +881,43 @@
 		padding: 0;
 		overflow: visible;
 	}
+	aside.off {
+		display: none;
+	}
 	.empty {
 		color: var(--nx-muted);
 		font-size: 12px;
+	}
+	/* the hint shares the stage's one cell with the render, at its top */
+	.stage > * {
+		grid-area: 1 / 1;
+	}
+	.hint {
+		align-self: start;
+		max-width: 34em;
+		margin: 0;
+		padding: 8px 12px;
+		border: 1px dashed var(--nx-border);
+		border-radius: 6px;
+		background: var(--nx-bg);
+		color: var(--nx-ink);
+		line-height: 1.45;
+	}
+	.needs {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 4px;
+	}
+	.need {
+		font: inherit;
+		font-family: var(--nx-mono);
+		padding: 0 6px;
+		border: 1px solid currentColor;
+		border-radius: 4px;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
 	}
 	aside {
 		flex: none;
