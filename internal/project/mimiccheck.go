@@ -31,7 +31,7 @@ var builtinPorts = map[string][]string{
 // width, height, look and write, which <Mimic> hands every one). A bind or
 // a prop it doesn't take shows nothing.
 var builtinProps = map[string][]string{
-	"Tank": {"levelPct", "scale", "shape"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
+	"Tank": {"levelPct", "scale", "shape", "marks", "marksSide"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
 	"Heater": {"powerPct"}, "Gauge": {"value", "min", "max", "unit", "color", "setpoint", "decimals", "sweep", "gap", "thickness"},
 	"Sparkline":     {"values", "color", "yMin", "yMax", "endIndex", "windowSize", "compact"},
 	"CommandButton": {"tag", "kind", "pulseMs", "held", "disabled", "disabledReason"},
@@ -258,6 +258,22 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 						say("%s's item %d writes %s, which the project doesn't declare%s", where, i+1, t, nearest(t, tags))
 					} else if d.Role == runtime.RoleInput {
 						warns = append(warns, fmt.Sprintf("%s: %s's item %d writes %s, an input: the tag API refuses a write to an input a driver owns", f, where, i+1, t))
+					}
+				}
+			}
+			if eq.Component == "Tank" {
+				marks, _ := eq.Props["marks"].([]any)
+				for i, it := range marks {
+					m, _ := it.(map[string]any)
+					t, _ := m["tag"].(string)
+					_, isNum := m["value"].(float64)
+					if l, _ := m["label"].(string); l == "" {
+						say("%s's mark %d has no label", where, i+1)
+					}
+					if t != "" {
+						tag(fmt.Sprintf("%s's mark %d", where, i+1), t)
+					} else if !isNum {
+						say("%s's mark %d has no tag and no value", where, i+1)
 					}
 				}
 			}

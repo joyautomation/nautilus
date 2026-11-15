@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Level marks on a `Tank`.** `marks` puts an arrow and its value at each
+  level that matters (a pump's start and stop from a setpoint tag, a high
+  alarm at a fixed value) against the vessel, on its left or, with
+  `marksSide: "right"`, past its scale, as the lift station's LevelMarks
+  does beside its wet well. They draw outside the tank's box, so the
+  vessel keeps its size and its place on its pipes; labels too close are
+  nudged apart. `<Mimic>` hands a tank with marks the live tags, and
+  `naut check` checks each mark's tag.
+
 - **Panels: what a click on a mimic's equipment opens.** A piece of
   equipment's `panel` lists its live readings, setpoints, commands and
   switches (or names another piece whose panel it opens), and the new

@@ -9,8 +9,19 @@
 	// an `open` basin with no roof, or a below-grade `pit` (a wet well or a
 	// sump: square concrete walls, a cover slab with an access hatch at
 	// grade, and hatched ground around it).
+	//
+	// `marks` are the levels that matter, against the vessel's left wall: an
+	// arrow at each one's level and its name and value (a pump's start and
+	// stop, a high alarm), from a fixed `value` or a `tag` the screen reads.
+	// They draw outside the tank's box, to its left (`marksSide: "right"`:
+	// past the scale, on the side the pipes don't reach), as a label would
+	// (leave them room), so the vessel keeps its size and its place on its pipes
+	// with marks or without. Labels too close to read are nudged apart; their
+	// arrows stay at the true level.
 	import { tankGeometry, type TankShape } from '../drawings.js';
-	import type { MimicLook } from '../mimic.js';
+	import { resolveBindings, type MimicLook } from '../mimic.js';
+
+	type Mark = { label: string; value?: number; tag?: string; alarm?: boolean };
 
 	let {
 		levelPct = 50,
@@ -19,7 +30,10 @@
 		height,
 		look = 'isa101',
 		scale = true,
-		shape = 'vessel'
+		shape = 'vessel',
+		marks = [],
+		marksSide = 'left',
+		tags = {}
 	}: {
 		levelPct?: number;
 		label?: string;
@@ -30,6 +44,13 @@
 		scale?: boolean;
 		/** `vessel` (closed), `open` (no roof) or `pit` (below grade). */
 		shape?: TankShape;
+		/** Levels marked on the vessel's left wall, in % of its height: each a
+		 *  fixed `value` or a `tag`; `alarm` draws it as an alarm level. */
+		marks?: Mark[];
+		/** Which side of the tank the marks stand on. */
+		marksSide?: 'left' | 'right';
+		/** The live tag values a mark's `tag` is read from (<Mimic> passes them). */
+		tags?: Record<string, unknown>;
 	} = $props();
 
 	const uid = `tank${Math.random().toString(36).slice(2, 8)}`;
@@ -59,8 +80,22 @@
 	let liquidH = $derived((clamped / 100) * ih);
 	let liquidY = $derived(iy + ih - liquidH);
 
+	// The marks at their levels, top first; a label pushed down from the one
+	// above when they would touch.
+	let placed = $derived.by(() => {
+		const at = (pct: number) => iy + ih - (Math.max(0, Math.min(100, pct)) / 100) * ih;
+		const out = marks
+			.flatMap((m) => {
+				const raw = m.tag ? resolveBindings({ v: m.tag }, tags).v : m.value;
+				const pct = typeof raw === 'number' && isFinite(raw) ? raw : undefined;
+				return pct === undefined ? [] : [{ ...m, pct, y: at(pct), ly: at(pct) }];
+			})
+			.sort((a, b) => a.y - b.y);
+		for (let i = 1; i < out.length; i++) out[i].ly = Math.max(out[i].ly, out[i - 1].ly + font * 0.95);
+		return out;
+	});
 	// Graduations thin out on a short vessel so the numbers never collide.
-	let marks = $derived(ih < 90 ? [0, 50, 100] : [0, 25, 50, 75, 100]);
+	let grads = $derived(ih < 90 ? [0, 50, 100] : [0, 25, 50, 75, 100]);
 	let stroke = $derived(Math.max(1, 2 * k));
 	let font = $derived(box.font);
 
@@ -179,12 +214,28 @@
 
 	<!-- level graduations -->
 	{#if scale}
-		{#each marks as mark (mark)}
+		{#each grads as mark (mark)}
 			{@const gy = iy + ih - (mark / 100) * ih}
 			<line x1={vx + vw + g + 6 * k} x2={vx + vw + g + 14 * k} y1={gy} y2={gy} stroke="var(--muted, #898781)" stroke-width={Math.max(1, k)} />
 			<text x={vx + vw + g + 18 * k} y={gy + font * 0.3} font-size={font} fill="var(--muted, #898781)">{mark}</text>
 		{/each}
 	{/if}
+
+	<!-- level marks: an arrow at the true level, pointing at the tank -->
+	{#each placed as m, i (i)}
+		{@const c = m.alarm ? 'var(--serious, #ec835a)' : 'var(--ink-2, #c3c2b7)'}
+		{@const ink = m.alarm ? 'var(--ink, #e6e6e6)' : 'var(--ink-2, #c3c2b7)'}
+		{@const r = marksSide === 'right'}
+		{@const ax = r ? box.w + 2 * k : vx - g - 2 * k}
+		{@const d = r ? 1 : -1}
+		<path d="M {ax} {m.y} L {ax + d * 8 * k} {m.y - 4 * k} L {ax + d * 8 * k} {m.y + 4 * k} Z" fill={c} />
+		{#if m.ly !== m.y}
+			<line x1={ax + d * 8 * k} y1={m.y} x2={ax + d * 12 * k} y2={m.ly} stroke={c} stroke-width={Math.max(0.75, 0.75 * k)} />
+		{/if}
+		<text x={ax + d * 14 * k} y={m.ly + font * 0.3} font-size={font * 0.9} fill={ink} text-anchor={r ? 'start' : 'end'}
+			>{m.label} <tspan font-weight="650">{m.pct.toFixed(0)}</tspan></text
+		>
+	{/each}
 
 	{#if label}
 		<text x={vx + vw / 2} y={box.labelRow.start + 21 * k} text-anchor="middle" font-size={font} font-weight="600" fill="var(--ink-2, #c3c2b7)">{label}</text>
@@ -197,6 +248,8 @@
 	svg {
 		max-width: 100%;
 		height: auto;
+		/* level marks draw to the left of the box */
+		overflow: visible;
 	}
 
 	/* Data may arrive at 10 Hz; short linear transitions turn the steps into

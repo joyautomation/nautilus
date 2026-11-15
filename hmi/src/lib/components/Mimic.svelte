@@ -173,7 +173,7 @@
 		...(eq.props ?? {}),
 		...resolveBindings(eq.bind, tags),
 		// a SetpointGroup reads the tags its items name
-		...(eq.component === 'SetpointGroup' ? { tags } : {}),
+		...(eq.component === 'SetpointGroup' || (eq.component === 'Tank' && eq.props?.marks) ? { tags } : {}),
 		write: write ?? readOnly
 	});
 	const readOnly = async (): Promise<string | null> => 'This screen is read-only';

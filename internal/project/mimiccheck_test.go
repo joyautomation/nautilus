@@ -275,3 +275,39 @@ tags:
 		t.Errorf("warnings = %q", warns)
 	}
 }
+
+func TestCheckMimicsTankMarks(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: LeadOnSP, type: REAL, role: setpoint }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"equipment":[
+			{"id":"T1","component":"Tank","x":0,"y":0,"props":{"marks":[
+				{"label":"Lead on","tag":"LeadOnSP"},{"label":"High","value":90,"alarm":true},
+				{"label":"Lag on","tag":"LagOnSp"},{"label":"Off"},{"value":10}]}}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"equipment T1's mark 3 binds LagOnSp, which the project doesn't declare",
+		"equipment T1's mark 4 has no tag and no value",
+		"equipment T1's mark 5 has no label",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 3 || len(warns) != 0 {
+		t.Errorf("errors %q, warnings %q", errs, warns)
+	}
+}

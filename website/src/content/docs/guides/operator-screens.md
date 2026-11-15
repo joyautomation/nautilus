@@ -63,7 +63,7 @@ The same document renders in a SvelteKit HMI through the
 
 | Component | Props to bind | Ports |
 |---|---|---|
-| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`) | `top`, `left`, `right`, `bottom` |
+| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`; `marks`: the levels that matter, `[{"label": "Lead on", "tag": "LeadOnSP"}, {"label": "High alarm", "value": 90, "alarm": true}]`, an arrow and its value at each on the vessel's left, or past its scale with `marksSide: "right"`) | `top`, `left`, `right`, `bottom` |
 | `Pump` | `running`, `speedPct` | `in`, `out` |
 | `Valve` | `openPct` | `in`, `out` |
 | `Heater` | `powerPct` | |

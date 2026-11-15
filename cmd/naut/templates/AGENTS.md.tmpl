@@ -301,6 +301,13 @@ naut builds the operator screen from the project itself, with no npm, and
   goes in the panel of the vessel or unit it runs. The drawing keeps only
   the sequence's own controls (Start, Hold, Abort, a recipe) and the
   plant's state and values.
+- A tank's levels that matter (a pump's start and stop, a high alarm) go
+  on the tank as `marks`, each at its level:
+  `"props": {"marks": [{"label": "Lead on", "tag": "LeadOnSP"},
+  {"label": "High alarm", "value": 90, "alarm": true}]}`. They draw on the
+  tank's left (`"marksSide": "right"` past its scale, on the side its
+  pipes don't reach): leave them room. The setpoints themselves are
+  written in the tank's panel.
 - Every analog value on the drawing is a `labels` entry with `bind` (and
   `unit`, `decimals`) beside what it measures: naut's pages draw it as a
   readout with a trend of its last few minutes (`"min"`/`"max"` fix the
