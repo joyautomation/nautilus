@@ -25,6 +25,14 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
   header is broken either side of it, as the kit's `<Mimic>` draws them,
   so the editor shows which drop joins which header.
 
+- **Component preview: SVG parts, and the props a component needs.** A
+  component whose root is a `<g>` or a `<path>` (a part drawn inside a
+  page's own `<svg>`) rendered as an empty 0 × 0 stage. It is now shown
+  in an svg fitted to what it draws, marked "svg part". And when the
+  component has props with no default and no sample value, the pane
+  names them, on the stage and in the Props strip, where a click on one
+  starts its sample value.
+
 - **The component preview in the playground.** A `{Name}.svelte` (or its
   `.component.json`) opens its live preview in the browser too, compiled
   with the playground's Svelte as you type, with its sample props and

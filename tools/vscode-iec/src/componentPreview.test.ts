@@ -1,7 +1,7 @@
 // The component preview's pure part: which Svelte buffers it compiles from.
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { previewSources, previewTargetForPath } from "./componentPreviewLogic";
+import { previewSources, previewTargetForPath, propsWithoutDefault } from "./componentPreviewLogic";
 
 const doc = (fsPath: string, isDirty: boolean, text: string, isSvelte = fsPath.endsWith(".svelte")) => ({
   fsPath,
@@ -37,4 +37,35 @@ test("previewTargetForPath: a .svelte previews itself, a sidecar its component",
   assert.deepEqual(t("C:\\hmi\\src\\lib\\Pump.component.json"), { kind: "builtin", name: "Pump" });
   assert.equal(t("/hmi/src/routes/+page.svelte"), null);
   assert.equal(t("/hmi/package.json"), null);
+});
+
+test("propsWithoutDefault names the $props() entries with no default", () => {
+  const src = (pattern: string, type = "") => `<script lang="ts">\n  let ${pattern}${type} = $props();\n</script>\n<g />`;
+  assert.deepEqual(
+    propsWithoutDefault(src("{ x, y, tag, status, title = '' }", ": { x: number; y: number; tag: string; status: ValveState; title?: string }")),
+    ["x", "y", "tag", "status"]
+  );
+  // a default holding commas, braces, an arrow or a comparison is still one default
+  assert.deepEqual(
+    propsWithoutDefault(src("{ a = { p: 1, q: [2, 3] }, b = (v) => v >= 2, c = 'x, y', d, class: klass, ...rest }")),
+    ["d", "class"]
+  );
+  assert.deepEqual(propsWithoutDefault(src("{ label = '', width = 26 }")), []);
+  // optional in the inline type, or the children snippet: not needed to draw
+  assert.deepEqual(
+    propsWithoutDefault(
+      src(
+        "{ value, height, label, children, onclick }",
+        ": {\n    value: number;\n    height?: number;\n    readonly label?: string\n    children?: Snippet;\n    onclick?: (e: MouseEvent) => void;\n  }"
+      )
+    ),
+    ["value"]
+  );
+  // a named type says nothing here: every undefaulted name is listed
+  assert.deepEqual(propsWithoutDefault(src("{ value, height }", ": Props")), ["value", "height"]);
+  // an earlier destructure is not the props pattern
+  assert.deepEqual(propsWithoutDefault("<script>\n  const { a } = thing;\n  let { b } = $props();\n</script>"), ["b"]);
+  // no destructure to read, or no $props() at all
+  assert.deepEqual(propsWithoutDefault("<script>\n  let props = $props();\n</script>"), []);
+  assert.deepEqual(propsWithoutDefault("<svg />"), []);
 });
