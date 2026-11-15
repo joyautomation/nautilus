@@ -14,6 +14,7 @@
 // bound node animates with the real process while you place it.
 
 import * as vscode from "vscode";
+import { controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
 import * as fs from "fs";
 import * as path from "path";
 import { webviewOptions } from "./fbdPreview";
@@ -145,8 +146,11 @@ export class SceneEditorProvider implements vscode.CustomTextEditorProvider {
     const postTags = async () => {
       const enabled = liveEnabled();
       const tags = enabled ? await fetchTags() : null;
-      void panel.webview.postMessage({ type: "sceneTags", tags, enabled });
+      void panel.webview.postMessage({ type: "sceneTags", tags, enabled, starting: controllerStarting() });
     };
+    // The playground's controller just came up (or failed to): show it now,
+    // not a poll later.
+    const startingSub = onDidChangeControllerStarting(() => void postTags());
     const tagTimer = setInterval(() => {
       if (panel.visible && liveEnabled()) void postTags();
     }, TAG_POLL_MS);
@@ -220,6 +224,7 @@ export class SceneEditorProvider implements vscode.CustomTextEditorProvider {
     panel.onDidDispose(() => {
       if (debounce) clearTimeout(debounce);
       clearInterval(tagTimer);
+      startingSub.dispose();
       changeSub.dispose();
       configSub.dispose();
       messageSub.dispose();

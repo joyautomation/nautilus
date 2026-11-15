@@ -41,6 +41,24 @@ export class UserComponentManager implements vscode.Disposable {
    * their HTML (new bundle, cache-busted) and re-post diagnostics. */
   readonly onDidChange = this.onDidChangeEmitter.event;
 
+  private readonly onDidChangeBuildingEmitter = new vscode.EventEmitter<void>();
+  /** Fires when a build becomes due or the last one due finishes: panels
+   * show a component that is on its way as loading, not as missing. */
+  readonly onDidChangeBuilding = this.onDidChangeBuildingEmitter.event;
+  private wasBuilding = false;
+
+  /** A build is due or running for components some panel uses. */
+  isBuilding(): boolean {
+    return this.trusted && this.pendingNames.size > 0 && (this.debounce !== undefined || this.building || this.rebuildQueued);
+  }
+
+  private buildingChanged(): void {
+    const now = this.isBuilding();
+    if (now === this.wasBuilding) return;
+    this.wasBuilding = now;
+    this.onDidChangeBuildingEmitter.fire();
+  }
+
   private trusted: boolean;
   private diagnostics: ComponentDiagnostic[] = [];
   private version = 0;
@@ -121,12 +139,17 @@ export class UserComponentManager implements vscode.Disposable {
     if (setsEqual(union, this.pendingNames)) return;
     this.pendingNames = union;
     this.scheduleBuild();
+    this.buildingChanged();
   }
 
   private scheduleBuild(): void {
     if (!this.trusted) return;
     if (this.debounce) clearTimeout(this.debounce);
-    this.debounce = setTimeout(() => void this.rebuild(), DEBOUNCE_MS);
+    this.debounce = setTimeout(() => {
+      this.debounce = undefined;
+      void this.rebuild();
+    }, DEBOUNCE_MS);
+    this.buildingChanged();
   }
 
   private async rebuild(): Promise<void> {
@@ -170,6 +193,7 @@ export class UserComponentManager implements vscode.Disposable {
         this.rebuildQueued = false;
         void this.rebuild();
       }
+      this.buildingChanged();
     }
   }
 
@@ -195,6 +219,7 @@ export class UserComponentManager implements vscode.Disposable {
     if (this.debounce) clearTimeout(this.debounce);
     this.fileWatcher?.dispose();
     this.onDidChangeEmitter.dispose();
+    this.onDidChangeBuildingEmitter.dispose();
   }
 }
 

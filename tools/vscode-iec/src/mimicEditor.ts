@@ -11,6 +11,7 @@
 // bound components animate with the real process.
 
 import * as vscode from "vscode";
+import { controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
 import { webviewOptions } from "./fbdPreview";
 import { applyMimicOp, parseMimic, type MimicOp } from "./mimicOps";
 import { ComponentIndex, writeComponentPortsEdit } from "./mimicComponents";
@@ -211,6 +212,9 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
       void panel.webview.postMessage({
         type: "userComponentDiagnostics",
         diagnostics: this.userComponents.lastDiagnostics(),
+        // A component not drawn yet while a build is due is on its way.
+        building: this.userComponents.isBuilding(),
+        bundle: !!this.userComponents.bundleUri(),
       });
 
     const postDoc = () => {
@@ -245,6 +249,7 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
       panel.webview.html = mimicHtml(panel.webview, this.context.extensionUri, this.userComponents);
       postUserComponentDiagnostics();
     });
+    const userBuildingSub = this.userComponents.onDidChangeBuilding(postUserComponentDiagnostics);
 
     let debounce: NodeJS.Timeout | undefined;
     const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
@@ -373,8 +378,11 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     const postTags = async () => {
       const enabled = liveEnabled();
       const tags = enabled ? await fetchTags() : null;
-      void panel.webview.postMessage({ type: "mimicTags", tags, enabled });
+      void panel.webview.postMessage({ type: "mimicTags", tags, enabled, starting: controllerStarting() });
     };
+    // The playground's controller just came up (or failed to): show it now,
+    // not a poll later.
+    const startingSub = onDidChangeControllerStarting(() => void postTags());
     const tagTimer = setInterval(() => {
       if (panel.visible && liveEnabled()) void postTags();
     }, TAG_POLL_MS);
@@ -383,10 +391,12 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     panel.onDidDispose(() => {
       if (debounce) clearTimeout(debounce);
       clearInterval(tagTimer);
+      startingSub.dispose();
       changeSub.dispose();
       configSub.dispose();
       messageSub.dispose();
       userComponentsSub.dispose();
+      userBuildingSub.dispose();
       this.panels.delete(panel);
       this.panelDocNames.delete(panel);
     });

@@ -20,6 +20,9 @@ export const live = $state({
 	seen: false,
 	enabled: false,
 	fresh: false,
+	// The controller is starting (the playground compiling the project):
+	// no frames yet, but not offline either.
+	starting: false,
 	// Top-level keys are lowercased by the extension; struct members inside
 	// (FB pins, UDT fields) keep their declared casing.
 	values: {} as Record<string, unknown>,
@@ -39,6 +42,7 @@ export const live = $state({
 export function setLive(frame: {
 	enabled: boolean;
 	fresh: boolean;
+	starting?: boolean;
 	values: Record<string, unknown>;
 	forced?: Record<string, unknown>;
 	types?: FlatTypes;
@@ -46,6 +50,7 @@ export function setLive(frame: {
 	live.seen = true;
 	live.enabled = frame.enabled;
 	live.fresh = frame.fresh;
+	live.starting = !!frame.starting;
 	live.values = frame.values;
 	live.forced = frame.forced ?? {};
 	// The extension sends the same object until /api/meta is read again;

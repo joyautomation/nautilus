@@ -16,7 +16,15 @@ declare global {
 	}
 }
 
-export const ucState = $state({ tick: 0, diagnostics: {} as Record<string, string> });
+export const ucState = $state({
+	tick: 0,
+	diagnostics: {} as Record<string, string>,
+	// The host has a build due or running (userComponents.ts isBuilding()):
+	// a component not in the bundle yet is on its way, not missing.
+	building: false,
+	// The page was given a bundle script, which may not have run yet.
+	bundle: false
+});
 
 if (typeof window !== 'undefined') {
 	window.addEventListener('nx:user-components-ready', () => {
@@ -45,4 +53,19 @@ export function userComponentDiagnostic(name: string): string | undefined {
 /** Apply a `userComponentDiagnostics` message's payload. */
 export function setUserComponentDiagnostics(diagnostics: { component: string; message: string }[]): void {
 	ucState.diagnostics = Object.fromEntries(diagnostics.map((d) => [d.component, d.message]));
+}
+
+/** Apply the host's build status (sent with the diagnostics). */
+export function setUserComponentStatus(status: { building?: boolean; bundle?: boolean }): void {
+	if (status.building !== undefined) ucState.building = status.building;
+	if (status.bundle !== undefined) ucState.bundle = status.bundle;
+}
+
+/** Reactive: `name` has no island yet but one is coming: a build is due or
+ * running, or the built script has not run yet. Shown as a loading chip,
+ * not the red "unknown component" one. */
+export function userComponentPending(name: string): boolean {
+	ucState.tick;
+	if (hasUserComponent(name) || ucState.diagnostics[name]) return false;
+	return ucState.building || (ucState.bundle && typeof window !== 'undefined' && !window.__NX_USER_COMPONENTS__);
 }

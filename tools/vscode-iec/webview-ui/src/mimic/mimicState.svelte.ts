@@ -83,6 +83,9 @@ export const ed = $state({
 	/** Mirrors `nautilus.liveValues.enabled` (the shared live switch — see
 	 * toggleLive()); false = the host isn't polling at all. */
 	liveEnabled: true,
+	/** The controller is starting (the playground compiling the project):
+	 * no tags yet, but not offline either. */
+	liveStarting: false,
 	/** Resolved component ports, aggregated from the project's
 	 * *.component.json sidecars and keyed by component name; null until the
 	 * host's first mimicManifest message. */

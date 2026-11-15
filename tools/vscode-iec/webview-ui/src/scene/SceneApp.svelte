@@ -154,9 +154,11 @@
 				? 'Live values are off — click to enable'
 				: ed.tags
 					? 'Live tags from nautilus.runtimeUrl — bound nodes animate with the process. Click to disable'
-					: "Live values enabled but the controller isn't answering — is it running? Click to disable"}
+					: ed.liveStarting
+						? 'The controller is compiling the project and starting: live values follow in a moment'
+						: "Live values enabled but the controller isn't answering — is it running? Click to disable"}
 		>
-			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : '◌ offline'}
+			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : ed.liveStarting ? '◌ starting…' : '◌ offline'}
 		</button>
 	</header>
 

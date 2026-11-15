@@ -14,6 +14,7 @@ import * as https from "https";
 import * as vscode from "vscode";
 import { mirrorStatus, notifyError, notifyInfo, notifyWarning } from "./testHooks";
 import { STATUS_FORCES, STATUS_LIVE, testState } from "./testState";
+import { controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
 import {
   clearForcesConfirmMessage,
   controllerWrite,
@@ -88,6 +89,9 @@ const RENDER_THROTTLE_MS = 150;
 export type LiveFrameListener = (frame: {
   enabled: boolean;
   fresh: boolean;
+  // The controller is on its way up (the playground compiling the project):
+  // a pill with no frames yet says "starting", not "offline".
+  starting: boolean;
   values: Record<string, unknown>;
   // Lowercased forced address → forced value — the diagrams' F badge.
   forced: Record<string, unknown>;
@@ -175,6 +179,10 @@ export class LiveValues implements vscode.Disposable {
       vscode.window.onDidChangeVisibleTextEditors(() => this.onEditorsChanged()),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (isIecDoc(e.document)) this.scheduleRender();
+      }),
+      onDidChangeControllerStarting(() => {
+        this.updateStatus();
+        this.notify();
       })
     );
     this.onEditorsChanged();
@@ -568,6 +576,7 @@ export class LiveValues implements vscode.Disposable {
     const frame = {
       enabled: this.enabled,
       fresh: this.fresh(),
+      starting: controllerStarting(),
       values: Object.fromEntries(this.values),
       forced: this.enabled ? lowerForces(this.forces) : {},
       types: this.types,
@@ -965,6 +974,9 @@ export class LiveValues implements vscode.Disposable {
     } else if (this.fresh()) {
       this.status.text = "$(pulse) nautilus: live";
       this.status.tooltip = `Streaming tag values from ${this.runtimeUrl()} — click to disable`;
+    } else if (controllerStarting()) {
+      this.status.text = "$(sync~spin) nautilus: starting…";
+      this.status.tooltip = "The controller is compiling the project and starting; live values follow in a moment";
     } else {
       this.status.text = "$(debug-disconnect) nautilus: offline";
       this.status.tooltip = `No frames from ${this.runtimeUrl()}/api/stream — is the controller running?`;

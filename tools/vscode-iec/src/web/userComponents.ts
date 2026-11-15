@@ -85,6 +85,24 @@ export class UserComponentManager implements vscode.Disposable {
   /** Fires after every rebuild: panels reload their HTML and diagnostics. */
   readonly onDidChange = this.onDidChangeEmitter.event;
 
+  private readonly onDidChangeBuildingEmitter = new vscode.EventEmitter<void>();
+  /** Fires when a build becomes due or the last one due finishes: panels
+   * show a component that is on its way as loading, not as missing. */
+  readonly onDidChangeBuilding = this.onDidChangeBuildingEmitter.event;
+  private wasBuilding = false;
+
+  /** A build is due or running for components some panel uses. */
+  isBuilding(): boolean {
+    return this.pendingNames.size > 0 && (this.debounce !== undefined || this.building || this.rebuildQueued);
+  }
+
+  private buildingChanged(): void {
+    const now = this.isBuilding();
+    if (now === this.wasBuilding) return;
+    this.wasBuilding = now;
+    this.onDidChangeBuildingEmitter.fire();
+  }
+
   private readonly scripts = new BuiltScripts();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly byPanel = new Map<vscode.WebviewPanel, Set<string>>();
@@ -161,11 +179,16 @@ export class UserComponentManager implements vscode.Disposable {
     if (union.size === this.pendingNames.size && [...union].every((n) => this.pendingNames.has(n))) return;
     this.pendingNames = union;
     this.scheduleBuild();
+    this.buildingChanged();
   }
 
   private scheduleBuild(): void {
     if (this.debounce) clearTimeout(this.debounce);
-    this.debounce = setTimeout(() => void this.rebuild(), DEBOUNCE_MS);
+    this.debounce = setTimeout(() => {
+      this.debounce = undefined;
+      void this.rebuild();
+    }, DEBOUNCE_MS);
+    this.buildingChanged();
   }
 
   /** name -> the project's {name}.svelte, as a desktop finds it. */
@@ -228,6 +251,7 @@ export class UserComponentManager implements vscode.Disposable {
         this.rebuildQueued = false;
         void this.rebuild();
       }
+      this.buildingChanged();
     }
   }
 
@@ -235,6 +259,7 @@ export class UserComponentManager implements vscode.Disposable {
     if (this.debounce) clearTimeout(this.debounce);
     for (const d of this.disposables) d.dispose();
     this.onDidChangeEmitter.dispose();
+    this.onDidChangeBuildingEmitter.dispose();
   }
 }
 

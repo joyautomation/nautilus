@@ -36,7 +36,7 @@
 	// frame of this size, in px, to lie over instead, standing in for the
 	// page.
 	import { untrack } from 'svelte';
-	import { hasUserComponent, userComponentApi, userComponentDiagnostic } from './userComponentsState.svelte';
+	import { hasUserComponent, userComponentApi, userComponentDiagnostic, userComponentPending } from './userComponentsState.svelte';
 
 	let {
 		name,
@@ -65,6 +65,7 @@
 
 	const available = $derived(hasUserComponent(name));
 	const diagnostic = $derived(userComponentDiagnostic(name));
+	const pending = $derived(userComponentPending(name));
 
 	// A component that throws (mounting, or on a later prop change) shows
 	// why in its own box. Uncaught, the throw stopped Svelte's effect flush,
@@ -202,6 +203,13 @@
 	{/if}
 {:else if diagnostic}
 	<span class="broken" title={diagnostic}><b>{name}</b>: {diagnostic}</span>
+{:else if pending}
+	<!-- On its way (the playground compiles components in the browser, which
+	     takes a few seconds the first time): a quiet placeholder, not the red
+	     chip that means something is wrong. -->
+	<span class="pending" role="status" title={`Compiling ${name}.svelte: it appears here when it is built`}>
+		<span class="spin" aria-hidden="true"></span><b>{name}</b><span class="what">compiling…</span>
+	</span>
 {:else}
 	<span class="unknown" title={`no compiled component for ${name}`}>{name}?</span>
 {/if}
@@ -241,6 +249,66 @@
 		font-family: var(--nx-mono);
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
+	}
+	.pending {
+		display: flex;
+		align-items: center;
+		align-content: center;
+		justify-content: center;
+		flex-wrap: wrap;
+		gap: 2px 6px;
+		box-sizing: border-box;
+		width: 100%;
+		height: 100%;
+		min-width: 72px;
+		min-height: 26px;
+		padding: 4px 8px;
+		border: 1px dashed var(--nx-border);
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--nx-muted) 6%, transparent);
+		color: var(--nx-muted);
+		font-size: 11px;
+		font-family: var(--nx-mono);
+		line-height: 1.3;
+		overflow: hidden;
+		animation: nx-pending-breathe 1.6s ease-in-out infinite;
+	}
+	/* a long name in a narrow box ends in an ellipsis, not cut at both ends */
+	.pending b {
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-weight: 600;
+	}
+	.pending .what {
+		opacity: 0.8;
+	}
+	.spin {
+		flex: none;
+		width: 9px;
+		height: 9px;
+		border: 1.5px solid currentColor;
+		border-right-color: transparent;
+		border-radius: 50%;
+		animation: nx-pending-spin 0.9s linear infinite;
+	}
+	@keyframes nx-pending-spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	@keyframes nx-pending-breathe {
+		50% {
+			background: color-mix(in srgb, var(--nx-muted) 14%, transparent);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.pending,
+		.spin {
+			animation: none;
+		}
 	}
 	.unknown {
 		display: inline-block;
