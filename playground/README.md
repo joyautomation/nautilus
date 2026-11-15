@@ -86,6 +86,12 @@ they do on a desktop, compiled in the browser by the extension's web build
 - The compiler (275 KB gzipped) and the runtime (98 KB) load the first time
   a mimic uses a custom component.
 
+`.svelte`, `.ts`, `.js` and `.css` files are coloured (`app/svelte.js`:
+the Svelte extension's grammar from the `tm-grammars` package, and VS
+Code's own for the rest). The grammars alone: no Svelte or TypeScript
+language server runs here, so the component preview is where a compile
+error shows.
+
 The examples carry their HMI sources (lift-station's `hmi/`) for this. Open
 HMI still shows the HMI built with the playground, so it does not follow
 edits to components.

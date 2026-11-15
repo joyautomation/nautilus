@@ -15,6 +15,12 @@ import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-yaml-default-extension';
 import '@codingame/monaco-vscode-json-default-extension';
 import '@codingame/monaco-vscode-markdown-basics-default-extension';
+// What a project's HMI is written in: .svelte (./svelte.js), and the
+// TypeScript, JavaScript and CSS inside it and beside it.
+import '@codingame/monaco-vscode-typescript-basics-default-extension';
+import '@codingame/monaco-vscode-javascript-default-extension';
+import '@codingame/monaco-vscode-css-default-extension';
+import './svelte.js';
 import {
 	initialize,
 	getService,
