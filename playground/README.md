@@ -85,6 +85,11 @@ they do on a desktop, compiled in the browser by the extension's web build
   import. The playground's Svelte is used, not the project's pin.
 - The compiler (275 KB gzipped) and the runtime (98 KB) load the first time
   a mimic uses a custom component.
+- A part of a 3D scene (a component that imports Threlte and has no canvas
+  of its own) is previewed in a bare scene, on `user-runtime.3d.js`
+  (`webview-ui/vite.runtime3d.config.ts`): `three`, `@threlte/core` and
+  `@threlte/extras`, on the same Svelte. It is 1.3 MB gzipped, so only the
+  component preview loads it, and only for such a part.
 
 `.svelte`, `.ts`, `.js` and `.css` files are coloured (`app/svelte.js`:
 the Svelte extension's grammar from the `tm-grammars` package, and VS

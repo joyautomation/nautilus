@@ -18,7 +18,8 @@ ext="$repo/tools/vscode-iec"
 # The editors' bundles, and the runtime custom components compiled in the
 # browser run on (Svelte and the HMI kit: vite.runtime.config.ts).
 ( cd "$ext/webview-ui" && ci && npx vite build --logLevel warn && npx vite build --config vite.mimic.config.ts --logLevel warn \
-    && npx vite build --config vite.runtime.config.ts --logLevel warn )
+    && npx vite build --config vite.runtime.config.ts --logLevel warn \
+    && npx vite build --config vite.runtime3d.config.ts --logLevel error )
 # The extension itself, after webview-ui's install: its custom-component
 # compiler (out/web/component-compiler.js) is built from webview-ui's svelte.
 ( cd "$ext" && ci && node esbuild.web.mjs --minify )

@@ -100,8 +100,8 @@ export function declaredProps(source: string): { name: string; needed: boolean }
  * Threlte and does not bring its own canvas (Threlte's <Canvas>, the kit's
  * <SceneView>). Such a part (rain, a light,
  * a mesh) draws only inside a scene's canvas: mounted alone it has no
- * renderer to draw with, so the preview says that instead of compiling it
- * to an error. Imports only, never a mention in a comment or a string. */
+ * renderer to draw with, so the preview mounts it in a bare scene of its
+ * own (sceneHostSource). Imports only, never a mention in a comment or a string. */
 export function isScenePart(source: string): boolean {
   let threlte = false;
   for (const m of source.matchAll(/^[ \t]*import\s+(type\s+)?([^'";]*?)\s*from\s*['"]@threlte\/[^'"]+['"]/gm)) {
@@ -112,6 +112,89 @@ export function isScenePart(source: string): boolean {
   // The kit's SceneView is a canvas too: a page-like component around it.
   if (/^[ \t]*import\s+(?!type\b)[^'";]*\bSceneView\b[^'";]*from\s*['"]@joyautomation\/nautilus-hmi-3d['"]/m.test(source)) return false;
   return threlte;
+}
+
+/** Where a scene part's host is compiled from: a file that is never
+ * written, beside the part so its imports resolve as the part's do. */
+export function sceneHostPath(partPath: string): string {
+  return partPath.replace(/\.svelte$/, ".nx-scene-host.svelte");
+}
+
+/** Pure: the host a scene part is previewed in — a bare scene around it
+ * (a canvas, a camera to orbit with the mouse, light, a 1 m grid on the
+ * ground), built from the same Threlte and three as the part itself, so
+ * they share one scene. Its root is laid over the pane's frame, as an
+ * overlay is. The props given are the part's. */
+export function sceneHostSource(partPath: string): string {
+  return `<script>
+	import { Canvas, T } from '@threlte/core';
+	import { Box3, Sphere, Vector3 } from 'three';
+	import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+	import Part from ${JSON.stringify(partPath)};
+
+	let { ...props } = $props();
+	let wrap = $state();
+	let part;
+
+	// The camera starts where the whole part shows: looking at the middle
+	// of what it draws, from far enough to take it all in. A part with
+	// nothing to measure (a light) is given a few metres round the origin.
+	function frame(camera, controls) {
+		const box = part ? new Box3().setFromObject(part) : new Box3();
+		const ball = new Sphere(new Vector3(0, 1, 0), 3);
+		if (!box.isEmpty()) box.getBoundingSphere(ball);
+		const radius = Math.max(ball.radius, 0.5);
+		const half = (camera.fov * Math.PI) / 360;
+		const narrow = Math.atan(Math.tan(half) * Math.min(1, camera.aspect || 1));
+		const from = new Vector3(0.55, 0.42, 0.72).normalize().multiplyScalar((radius / Math.sin(narrow)) * 1.05);
+		camera.position.copy(ball.center).add(from);
+		camera.near = radius / 100;
+		camera.far = radius * 100;
+		camera.updateProjectionMatrix();
+		controls.target.copy(ball.center);
+		controls.update();
+	}
+	function orbit(camera) {
+		const controls = new OrbitControls(camera, wrap ?? document.body);
+		frame(camera, controls);
+		// Again when the part has drawn and whenever the canvas takes a new
+		// size (its first comes late), until the view is moved by hand.
+		let id = 0;
+		const refit = () => {
+			cancelAnimationFrame(id);
+			id = requestAnimationFrame(() => (id = requestAnimationFrame(() => frame(camera, controls))));
+		};
+		refit();
+		const sized = new ResizeObserver(refit);
+		if (wrap) sized.observe(wrap);
+		controls.addEventListener('start', () => sized.disconnect());
+		return () => {
+			cancelAnimationFrame(id);
+			sized.disconnect();
+			controls.dispose();
+		};
+	}
+</script>
+
+<div class="nx-scene-host" bind:this={wrap}>
+	<Canvas renderMode="always">
+		<T.PerspectiveCamera makeDefault fov={45} oncreate={orbit} />
+		<T.AmbientLight intensity={0.6} />
+		<T.DirectionalLight position={[6, 10, 4]} intensity={1.2} />
+		<T.GridHelper args={[20, 20, '#7a7973', '#3a3a38']} />
+		<T.Group oncreate={(group) => void (part = group)}>
+			<Part {...props} />
+		</T.Group>
+	</Canvas>
+</div>
+
+<style>
+	.nx-scene-host {
+		position: absolute;
+		inset: 0;
+	}
+</style>
+`;
 }
 
 const CLOSERS: Record<string, string> = { "{": "}", "(": ")", "[": "]" };

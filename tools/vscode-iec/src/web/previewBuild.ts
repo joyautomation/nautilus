@@ -10,7 +10,7 @@ import * as vscode from "vscode";
 import type { ComponentDiagnostic } from "../userComponentEntry";
 import { loadCompiler, type UserComponentManager } from "./userComponents";
 
-export type PreviewBuildResult = { built: string[]; diagnostics: ComponentDiagnostic[] };
+export type PreviewBuildResult = { built: string[]; diagnostics: ComponentDiagnostic[]; needs3d?: boolean };
 
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
@@ -34,6 +34,12 @@ export class PreviewBuilder {
     return `<link rel="stylesheet" href="${styles}">\n<script nonce="${nonce}" src="${runtime}"></script>`;
   }
 
+  /** three and Threlte for a scene part (media/dist/user-runtime.3d.js):
+   * loaded by the pane before the first bundle that needs it. */
+  sceneRuntimeSrc(webview: vscode.Webview): string {
+    return webview.asWebviewUri(this.userComponents.runtimeUri()).toString().replace(/\.js$/, ".3d.js");
+  }
+
   async build(name: string, fsPath: string, sources: Record<string, string>): Promise<PreviewBuildResult> {
     const compile = await loadCompiler(this.context.extensionUri);
     const read = async (p: string) => {
@@ -44,14 +50,14 @@ export class PreviewBuilder {
         return undefined;
       }
     };
-    const result = await compile({ [name]: fsPath }, read, { sources });
+    const result = await compile({ [name]: fsPath }, read, { sources, scene: true });
     if (result.built.includes(name)) {
       const next = `/component-preview.${++this.generation}.js`;
       this.userComponents.putScript(next, result.code);
       if (this.path) this.userComponents.putScript(this.path, null);
       this.path = next;
     }
-    return { built: result.built, diagnostics: result.diagnostics };
+    return { built: result.built, diagnostics: result.diagnostics, needs3d: result.scene };
   }
 
   bundleSrc(webview: vscode.Webview): string {

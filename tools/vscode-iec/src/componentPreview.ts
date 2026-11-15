@@ -51,7 +51,7 @@ import {
   writeComponentPortsEdit,
 } from "./mimicComponents";
 import type { UserComponentManager } from "./userComponents";
-import { previewSources, previewTargetForPath, declaredProps, isScenePart } from "./componentPreviewLogic";
+import { previewSources, previewTargetForPath, declaredProps, isScenePart, sceneHostPath, sceneHostSource } from "./componentPreviewLogic";
 import { BUILTIN_COMPONENT_NAMES, BUILTIN_COMPONENT_PORTS } from "./builtinComponents";
 
 const BUILD_DEBOUNCE_MS = 300;
@@ -90,7 +90,7 @@ function previewHtml(webview: vscode.Webview, extensionUri: vscode.Uri, builder:
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;">
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; img-src ${webview.cspSource} blob: data:; connect-src ${webview.cspSource} blob: data:; worker-src blob:;">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${styleUri}">
 ${builder.headTags(webview, nonce)}
@@ -111,6 +111,9 @@ export class ComponentPreview implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
   private building = false;
   private rebuildQueued = false;
+  /** Whether the last good bundle imports the 3D runtime (a scene part
+   * in its host, or a component with a canvas of its own). */
+  private sceneBundle = false;
   /** Cache-busting generation of the last GOOD bundle; 0 = none yet. */
   private version = 0;
   private diagnostics: ComponentDiagnostic[] = [];
@@ -383,14 +386,6 @@ export class ComponentPreview implements vscode.Disposable {
       this.postDiagnostics();
       return;
     }
-    // A part of a 3D scene has nothing to show alone (the pane says so):
-    // compiling it only makes an error of that.
-    if (isScenePart(await readText(target.uri))) {
-      if (this.target !== target) return;
-      this.diagnostics = [];
-      this.postDiagnostics();
-      return;
-    }
     if (this.building) {
       this.rebuildQueued = true;
       return;
@@ -410,13 +405,22 @@ export class ComponentPreview implements vscode.Disposable {
       // Only a bundle that has the component in it replaces the last good
       // one (previewBuild.ts): a compile error leaves the last good render
       // on screen, under the error.
+      // A part of a 3D scene is compiled inside a bare scene of its own
+      // (a file that exists only here), since alone it has no canvas.
+      let entry = target.uri.fsPath;
+      const scene = isScenePart(sources[entry] ?? (await readText(target.uri)));
+      if (scene) {
+        entry = sceneHostPath(target.uri.fsPath);
+        sources[entry] = sceneHostSource(target.uri.fsPath);
+      }
       const t0 = Date.now();
-      const result = await this.builder.build(target.name, target.uri.fsPath, sources);
+      const result = await this.builder.build(target.name, entry, sources);
       logPreview(
         `built ${target.name} in ${Date.now() - t0} ms: built=[${result.built.join(", ")}] diagnostics=${JSON.stringify(result.diagnostics)} sources=${Object.keys(sources).length}`
       );
       if (this.target !== target) return; // retargeted mid-build; the queued rebuild covers it
       if (result.built.includes(target.name)) {
+        this.sceneBundle = !!result.needs3d;
         this.version++;
         this.postBundle();
       }
@@ -439,7 +443,15 @@ export class ComponentPreview implements vscode.Disposable {
     const raw = this.builder.bundleSrc(this.panel.webview);
     const src = raw + (raw.includes("?") ? "&" : "?") + "v=" + this.version;
     logPreview(`bundle v${this.version} -> ${src}`);
-    void this.panel.webview.postMessage({ type: "previewBundle", src, version: this.version });
+    // The playground's 3D runtime (three, Threlte), only for a bundle that
+    // needs it; a desktop bundle carries the project's own.
+    const needs = this.sceneBundle ? this.builder.sceneRuntimeSrc(this.panel.webview) : "";
+    void this.panel.webview.postMessage({
+      type: "previewBundle",
+      src,
+      version: this.version,
+      ...(needs ? { needs: [{ src: needs, provides: "@threlte/core" }] } : {}),
+    });
   }
 
   private postDiagnostics(): void {

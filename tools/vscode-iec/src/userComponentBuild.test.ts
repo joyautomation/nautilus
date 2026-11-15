@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { buildUserComponentsBundle, customComponentNames } from "./userComponentBuild";
+import { sceneHostPath, sceneHostSource } from "./componentPreviewLogic";
 
 test("customComponentNames excludes built-ins, dedupes, and sorts", () => {
   const builtins = new Set(["Tank", "Pump", "Valve", "Gauge", "Sparkline"]);
@@ -98,5 +99,44 @@ test(
     assert.equal(result.diagnostics.length, 1);
     assert.equal(result.diagnostics[0].component, "Supply");
     assert.ok(result.diagnostics[0].message.length > 0);
+  }
+);
+
+test(
+  "buildUserComponentsBundle builds a file that is only in `sources`, importing one on disk",
+  { skip: !HAS_FIXTURE ? "testdata/user-components fixture missing, or svelte isn't npm-installed here" : false },
+  async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "nx-user-components-"));
+    const outfile = path.join(dir, "user-components.js");
+    // Beside the fixture, never written: the shape of the preview's host for a 3D part.
+    const host = SUPPLY.replace(/\.svelte$/, ".nx-host.svelte");
+    const text = `<script>\n\timport Part from ${JSON.stringify(SUPPLY)};\n</script>\n<div class="nx-only-in-sources"><Part /></div>\n`;
+    const result = await buildUserComponentsBundle({ Supply: host }, outfile, { sources: { [host]: text } });
+    assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(result.built, ["Supply"]);
+    const code = await fs.promises.readFile(outfile, "utf8");
+    assert.match(code, /nx-only-in-sources/);
+    assert.match(code, /tempC/); // and the disk file it imports
+  }
+);
+
+// A part of a 3D scene, in the host the preview gives it, with the
+// project's own Threlte and three: packages that export only under the
+// "svelte" condition. Needs the example's dependencies installed.
+const RAIN = path.join(__dirname, "..", "..", "..", "examples", "lift-station", "hmi", "src", "lib", "Rain.svelte");
+const HAS_THRELTE = fs.existsSync(path.join(RAIN, "..", "..", "..", "node_modules", "@threlte", "core", "package.json"));
+test(
+  "buildUserComponentsBundle builds a 3D part inside its scene host",
+  { skip: !HAS_THRELTE ? "examples/lift-station/hmi isn't npm-installed here" : false },
+  async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "nx-user-components-"));
+    const outfile = path.join(dir, "user-components.js");
+    const host = sceneHostPath(RAIN);
+    const result = await buildUserComponentsBundle({ Rain: host }, outfile, { sources: { [host]: sceneHostSource(RAIN) } });
+    assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(result.built, ["Rain"]);
+    const code = await fs.promises.readFile(outfile, "utf8");
+    assert.match(code, /WebGLRenderer/);
+    assert.match(code, /nx-scene-host/);
   }
 );

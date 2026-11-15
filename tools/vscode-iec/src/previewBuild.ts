@@ -13,7 +13,9 @@ import type { UserComponentManager } from "./userComponents";
 
 const BUNDLE_FILE = "component-preview.js";
 
-export type PreviewBuildResult = { built: string[]; diagnostics: ComponentDiagnostic[] };
+/** `needs3d`: the bundle runs on a runtime the pane must load first
+ * (only the browser build has one). */
+export type PreviewBuildResult = { built: string[]; diagnostics: ComponentDiagnostic[]; needs3d?: boolean };
 
 export class PreviewBuilder {
   /** Where the pane may load scripts from. */
@@ -30,6 +32,12 @@ export class PreviewBuilder {
   /** Tags the pane's <head> needs before any bundle: none here, the
    * desktop bundle carries its own Svelte. */
   headTags(_webview: vscode.Webview, _nonce: string): string {
+    return "";
+  }
+
+  /** The 3D runtime a scene part's bundle runs on: none here, the bundle
+   * carries the project's own three and Threlte. */
+  sceneRuntimeSrc(_webview: vscode.Webview): string {
     return "";
   }
 

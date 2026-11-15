@@ -147,6 +147,9 @@ export async function buildUserComponentsBundle(
         path: ENTRY_SPECIFIER,
         namespace: "nx-entry",
       }));
+      // A source that is only in `sources` (the preview's host for a 3D
+      // part: never written) has no file for esbuild to find.
+      build.onResolve({ filter: /\.svelte$/ }, (args) => (args.path in sources ? { path: args.path } : undefined));
       build.onLoad({ filter: /.*/, namespace: "nx-entry" }, async () => {
         try {
           const compiler = resolveSvelteCompiler(usable[0][1]);
@@ -179,6 +182,10 @@ export async function buildUserComponentsBundle(
       bundle: true,
       format: "iife",
       platform: "browser",
+      // Svelte libraries (Threlte, most component kits) export their
+      // source under the "svelte" condition and nothing else. Naming a
+      // condition drops esbuild's implied "module", so it is named too.
+      conditions: ["svelte", "module"],
       outfile,
       write: true,
       logLevel: "silent",
