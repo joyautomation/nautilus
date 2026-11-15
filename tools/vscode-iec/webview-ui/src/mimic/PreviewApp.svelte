@@ -224,6 +224,8 @@
 		return () => ro.disconnect();
 	});
 	const ZOOMS = [0.5, 1, 2, 4];
+	/** A render under this many px each way is "little" (the stage hint). */
+	const SMALL = 24;
 
 	// ── the props strip ──────────────────────────────────────────────────────
 	// Every edit is the whole map, posted to the host, which patches the
@@ -538,16 +540,19 @@
 						</div>
 					</div>
 				{/key}
-				{#if !error && !builtin && (missing.length || (box && box.w === 0 && box.h === 0))}
+				{#if !error && !builtin && box && (box.w === 0 || box.h === 0 || (missing.length && box.w < SMALL && box.h < SMALL))}
 					<!-- An empty or near-empty stage says why: a component given
-					     none of the props it needs draws little or nothing. -->
+					     none of the props it needs draws little or nothing. A
+					     render of any size is left alone (the Props strip still
+					     lists them): plenty of props without a default are
+					     callbacks, or optional by a type declared elsewhere. -->
 					<p class="empty hint" data-kind="stage-hint">
 						{#if missing.length}
 							{missing.join(', ')}
-							{missing.length === 1 ? 'has' : 'have'} no default and no sample value yet, so {file} may draw little or nothing. Give
+							{missing.length === 1 ? 'has' : 'have'} no default and no sample value yet, so {file} draws little or nothing. Give
 							{missing.length === 1 ? 'it' : 'them'} a value under Props.
 						{:else}
-							{file} draws nothing with these props (0 × 0).
+							{file} draws nothing with these props ({box.w} × {box.h}).
 						{/if}
 					</p>
 				{/if}
@@ -838,7 +843,6 @@
 		line-height: 1.45;
 	}
 	.needs {
-		color: var(--nx-warn);
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;

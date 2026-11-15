@@ -41,7 +41,9 @@ export function previewTargetForPath(
 }
 
 /** Pure: the props a component must be given — the names in its
- * `let { … } = $props()` that have no default (`...rest` aside). The
+ * `let { … } = $props()` that have no default. Not `...rest`, not
+ * `children` (a snippet, not a sample value), and not a prop its inline
+ * type marks optional (`height?: number`: the component copes without). The
  * preview names them when the component draws nothing, since a component
  * given none of them usually can't (`x`, `y` and `status` undefined make
  * every path `M NaN …`). Read off the text, not the compiler: it has to
@@ -59,6 +61,17 @@ export function propsWithoutDefault(source: string): string[] {
   // Between the pattern and `= $props()`: nothing, or a type annotation.
   const between = source.slice(close + 1, call);
   if (!/^\s*(:(?![\s\S]*\b(?:let|const|var|function)\b)[\s\S]*)?$/.test(between)) return [];
+  // `}: { x: number; label?: string }`: the names marked optional.
+  const optional = new Set<string>();
+  const typeOpen = between.indexOf("{");
+  if (typeOpen >= 0 && /^\s*:\s*$/.test(between.slice(0, typeOpen))) {
+    const typeClose = matchingBrace(between, typeOpen);
+    const members = typeClose < 0 ? "" : between.slice(typeOpen + 1, typeClose);
+    for (const member of splitTopLevel(members.replace(/\n/g, ";"), ";")) {
+      const m = /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*\?\s*:/.exec(member);
+      if (m) optional.add(m[1]);
+    }
+  }
   const names: string[] = [];
   for (const entry of splitTopLevel(source.slice(open + 1, close), ",")) {
     const text = entry.trim();
@@ -67,7 +80,7 @@ export function propsWithoutDefault(source: string): string[] {
     if (def.length > 0) continue;
     // `name` or `name: alias` — the prop is the name before the colon.
     const name = target.split(":")[0].trim();
-    if (/^[A-Za-z_$][\w$]*$/.test(name)) names.push(name);
+    if (/^[A-Za-z_$][\w$]*$/.test(name) && name !== "children" && !optional.has(name)) names.push(name);
   }
   return names;
 }
@@ -112,9 +125,10 @@ function matchingBrace(s: string, open: number): number {
   return -1;
 }
 
-/** Splits on `sep` outside brackets, strings and comments. `=` does not
+/** Splits on `sep` outside brackets, strings and comments (a type's `<…>`
+ * are not brackets: a `,` inside one splits, which no caller minds). `=` does not
  * split inside `=>`, `==` or `<=`/`>=`/`!=`. */
-function splitTopLevel(s: string, sep: "," | "="): string[] {
+function splitTopLevel(s: string, sep: "," | "=" | ";"): string[] {
   const out: string[] = [];
   let depth = 0;
   let from = 0;

@@ -51,6 +51,18 @@ test("propsWithoutDefault names the $props() entries with no default", () => {
     ["d", "class"]
   );
   assert.deepEqual(propsWithoutDefault(src("{ label = '', width = 26 }")), []);
+  // optional in the inline type, or the children snippet: not needed to draw
+  assert.deepEqual(
+    propsWithoutDefault(
+      src(
+        "{ value, height, label, children, onclick }",
+        ": {\n    value: number;\n    height?: number;\n    readonly label?: string\n    children?: Snippet;\n    onclick?: (e: MouseEvent) => void;\n  }"
+      )
+    ),
+    ["value"]
+  );
+  // a named type says nothing here: every undefaulted name is listed
+  assert.deepEqual(propsWithoutDefault(src("{ value, height }", ": Props")), ["value", "height"]);
   // an earlier destructure is not the props pattern
   assert.deepEqual(propsWithoutDefault("<script>\n  const { a } = thing;\n  let { b } = $props();\n</script>"), ["b"]);
   // no destructure to read, or no $props() at all

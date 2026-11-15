@@ -67,17 +67,7 @@
 			failed = errorText(err);
 			target.replaceChildren();
 		}
-		if (svgHost && handle) {
-			// Mounted in the wrong kind of parent: this run's teardown takes
-			// it out, and the effect runs again on the other one.
-			const root = target.firstElementChild;
-			const part = !!root && root.namespaceURI === SVG_NS && root.localName !== 'svg';
-			if (root && part !== asSvg) {
-				if (part) svgParts.add(name);
-				else svgParts.delete(name);
-				asSvg = part;
-			} else if (asSvg) fit();
-		}
+		if (svgHost && handle && !checkRoot(target) && asSvg) fit();
 		return () => {
 			try {
 				handle?.destroy();
@@ -98,6 +88,28 @@
 		} catch (err) {
 			failed = errorText(err);
 		}
+	});
+
+	/** Whether the component is mounted in the wrong kind of parent for
+	 * its root element: if so, switches (the mount effect's teardown takes
+	 * it out and the effect runs again on the other parent). A component
+	 * with no root element yet (an {#if} waiting on a prop) stays put. */
+	function checkRoot(target: Element): boolean {
+		const root = target.firstElementChild;
+		const part = !!root && root.namespaceURI === SVG_NS && root.localName !== 'svg';
+		if (!root || part === asSvg) return false;
+		if (part) svgParts.add(name);
+		else svgParts.delete(name);
+		asSvg = part;
+		return true;
+	}
+	// A root that arrives later (that {#if}, once its prop is set).
+	$effect(() => {
+		if (!svgHost || !el) return;
+		const div = el;
+		const mo = new MutationObserver(() => checkRoot(div));
+		mo.observe(div, { childList: true });
+		return () => mo.disconnect();
 	});
 
 	/** Sizes the host svg to what the part draws, wherever it draws it
@@ -122,8 +134,11 @@
 	// A prop change, an {#if} branch: whatever moves the drawing re-fits it.
 	$effect(() => {
 		if (!groupEl) return;
-		const mo = new MutationObserver(fit);
-		mo.observe(groupEl, { subtree: true, childList: true, attributes: true, characterData: true });
+		const group = groupEl;
+		const mo = new MutationObserver(() => {
+			if (!checkRoot(group)) fit();
+		});
+		mo.observe(group, { subtree: true, childList: true, attributes: true, characterData: true });
 		return () => mo.disconnect();
 	});
 
