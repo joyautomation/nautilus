@@ -14,7 +14,7 @@
 // bound node animates with the real process while you place it.
 
 import * as vscode from "vscode";
-import { controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
+import { controllerCompiling, controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
 import * as fs from "fs";
 import * as path from "path";
 import { webviewOptions } from "./fbdPreview";
@@ -145,10 +145,9 @@ export class SceneEditorProvider implements vscode.CustomTextEditorProvider {
 
     const postTags = async () => {
       const enabled = liveEnabled();
-      // A starting controller has nothing to fetch yet: say so now.
-      const starting = enabled && controllerStarting();
-      const tags = enabled && !starting ? await fetchTags() : null;
-      void panel.webview.postMessage({ type: "sceneTags", tags, enabled, starting: starting || controllerStarting() });
+      // A controller still compiling has nothing to answer yet: say so now.
+      const tags = enabled && !controllerCompiling() ? await fetchTags() : null;
+      void panel.webview.postMessage({ type: "sceneTags", tags, enabled, starting: controllerStarting() });
     };
     // The playground's controller just came up (or failed to): show it now,
     // not a poll later.

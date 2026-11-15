@@ -207,7 +207,7 @@
 	<!-- On its way (the playground compiles components in the browser, which
 	     takes a few seconds the first time): a quiet placeholder, not the red
 	     chip that means something is wrong. -->
-	<span class="pending" role="status" title={`Compiling ${name}.svelte: it appears here when it is built`}>
+	<span class="pending" title={`Compiling ${name}.svelte: it appears here when it is built`}>
 		<span class="spin" aria-hidden="true"></span><b>{name}</b><span class="what">compiling…</span>
 	</span>
 {:else}

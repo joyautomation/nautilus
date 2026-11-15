@@ -22,6 +22,7 @@
 				message?: string;
 				tags?: Record<string, unknown> | null;
 				enabled?: boolean;
+				starting?: boolean;
 				snapToGrid?: boolean;
 			};
 			if (m?.type === 'sceneDoc' && m.doc) {
@@ -37,6 +38,8 @@
 			} else if (m?.type === 'sceneTags') {
 				ed.tags = m.tags ?? null;
 				ed.liveEnabled = m.enabled ?? true;
+				ed.liveStarting = !!m.starting;
+				ed.liveSeen = true;
 			} else if (m?.type === 'sceneConfig') {
 				ed.snapToGrid = m.snapToGrid ?? true;
 			}

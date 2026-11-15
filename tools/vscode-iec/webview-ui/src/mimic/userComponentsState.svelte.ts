@@ -23,8 +23,15 @@ export const ucState = $state({
 	// a component not in the bundle yet is on its way, not missing.
 	building: false,
 	// The page was given a bundle script, which may not have run yet.
-	bundle: false
+	bundle: false,
+	// Every script on the page has run or failed (window "load"): a bundle
+	// that has not registered by then never will (it threw, or 404'd).
+	loaded: typeof document !== 'undefined' && document.readyState === 'complete'
 });
+
+if (typeof window !== 'undefined' && !ucState.loaded) {
+	window.addEventListener('load', () => (ucState.loaded = true), { once: true });
+}
 
 if (typeof window !== 'undefined') {
 	window.addEventListener('nx:user-components-ready', () => {
@@ -62,10 +69,11 @@ export function setUserComponentStatus(status: { building?: boolean; bundle?: bo
 }
 
 /** Reactive: `name` has no island yet but one is coming: a build is due or
- * running, or the built script has not run yet. Shown as a loading chip,
+ * running, or the built script has not run yet (once the page has loaded,
+ * a bundle that never registered is a failure). Shown as a loading chip,
  * not the red "unknown component" one. */
 export function userComponentPending(name: string): boolean {
 	ucState.tick;
 	if (hasUserComponent(name) || ucState.diagnostics[name]) return false;
-	return ucState.building || (ucState.bundle && typeof window !== 'undefined' && !window.__NX_USER_COMPONENTS__);
+	return ucState.building || (ucState.bundle && !ucState.loaded && typeof window !== 'undefined' && !window.__NX_USER_COMPONENTS__);
 }

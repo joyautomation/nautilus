@@ -134,7 +134,7 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
   compiles components in the browser, that takes a few seconds the first
   time. While the playground's controller compiles and starts the
   project, the live pills and the status bar say "starting…", not
-  "offline".
+  "offline"; a project that fails to start says "offline" at once.
 
 - **Custom components that import a Svelte library.** On a desktop, a
   project component importing a package that exports only under the

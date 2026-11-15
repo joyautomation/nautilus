@@ -1,23 +1,74 @@
-// Whether the controller is starting up: compiling the project and about to
-// scan. Only the playground sets it (web/platform.ts, while its engine
-// compiles and starts the project the page opened with); a desktop's
-// controller is a `naut run` the extension does not start, so there it is
-// never set. The live pills read it so a controller that is on its way
-// says "starting", not "offline".
-import * as vscode from "vscode";
+// Whether the controller is starting up. Only the playground sets it
+// (web/platform.ts, while its engine compiles and starts a project); a
+// desktop's controller is a `naut run` the extension does not start, so
+// there it is never set. The live pills read it so a controller that is on
+// its way says "starting", not "offline".
+//
+// Starting is two stretches: compiling (a run in flight: there is nothing
+// to ask yet), then a short wait after a run that succeeded, while the
+// first answer is still on its way. A run that fails ends it at once, so a
+// pill that cannot go live says "offline", not "starting". Every consumer
+// shows live as soon as it has data, whatever this says.
 
-let starting = false;
-const changed = new vscode.EventEmitter<void>();
+/** How long after a good start a pill with no data yet still says
+ * "starting": the live stream reconnects, the first scan answers. */
+export const STARTING_GRACE_MS = 8000;
 
-/** Fires when the controller starts or finishes starting. */
-export const onDidChangeControllerStarting = changed.event;
+let compiling = 0;
+let graceUntil = 0;
+let graceTimer: ReturnType<typeof setTimeout> | undefined;
+// Plain listeners, not a vscode.EventEmitter: this module stays free of
+// vscode so its tests run under node alone.
+const listeners = new Set<() => void>();
 
-export function controllerStarting(): boolean {
-  return starting;
+/** Calls `fn` when starting begins or ends (the wait after a start
+ * included); dispose the result to stop. */
+export function onDidChangeControllerStarting(fn: () => void): { dispose(): void } {
+  listeners.add(fn);
+  return { dispose: () => void listeners.delete(fn) };
 }
 
-export function setControllerStarting(value: boolean): void {
-  if (value === starting) return;
-  starting = value;
-  changed.fire();
+function fire(): void {
+  for (const fn of [...listeners]) fn();
+}
+
+/** A run is in flight: the controller has nothing to answer yet. */
+export function controllerCompiling(): boolean {
+  return compiling > 0;
+}
+
+/** Compiling, or just started and not answering yet. */
+export function controllerStarting(): boolean {
+  return compiling > 0 || Date.now() < graceUntil;
+}
+
+/** A run began. Runs can overlap (F5 twice): each one ends with its own
+ * `endControllerStart`. */
+export function beginControllerStart(): void {
+  compiling++;
+  clearGrace();
+  if (compiling === 1) fire();
+}
+
+/** A run ended: `ok` when the project started. */
+export function endControllerStart(ok: boolean): void {
+  if (compiling === 0) return;
+  compiling--;
+  if (compiling > 0) return;
+  clearGrace();
+  if (ok) {
+    graceUntil = Date.now() + STARTING_GRACE_MS;
+    graceTimer = setTimeout(() => {
+      graceTimer = undefined;
+      graceUntil = 0;
+      fire();
+    }, STARTING_GRACE_MS);
+  }
+  fire();
+}
+
+function clearGrace(): void {
+  if (graceTimer) clearTimeout(graceTimer);
+  graceTimer = undefined;
+  graceUntil = 0;
 }

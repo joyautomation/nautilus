@@ -139,7 +139,6 @@ export class UserComponentManager implements vscode.Disposable {
     if (setsEqual(union, this.pendingNames)) return;
     this.pendingNames = union;
     this.scheduleBuild();
-    this.buildingChanged();
   }
 
   private scheduleBuild(): void {

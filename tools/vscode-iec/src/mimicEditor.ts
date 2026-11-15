@@ -11,7 +11,7 @@
 // bound components animate with the real process.
 
 import * as vscode from "vscode";
-import { controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
+import { controllerCompiling, controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
 import { webviewOptions } from "./fbdPreview";
 import { applyMimicOp, parseMimic, type MimicOp } from "./mimicOps";
 import { ComponentIndex, writeComponentPortsEdit } from "./mimicComponents";
@@ -383,11 +383,10 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     let lastTags: Record<string, unknown> | null | undefined;
     const postTags = async () => {
       const enabled = liveEnabled();
-      // A starting controller has nothing to fetch yet: say so now.
-      const starting = enabled && controllerStarting();
-      const tags = enabled && !starting ? await fetchTags() : null;
+      // A controller still compiling has nothing to answer yet: say so now.
+      const tags = enabled && !controllerCompiling() ? await fetchTags() : null;
       lastTags = tags;
-      void panel.webview.postMessage({ type: "mimicTags", tags, enabled, starting: starting || controllerStarting() });
+      void panel.webview.postMessage({ type: "mimicTags", tags, enabled, starting: controllerStarting() });
     };
     // The playground's controller just came up (or failed to): show it now,
     // not a poll later.

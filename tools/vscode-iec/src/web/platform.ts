@@ -5,7 +5,7 @@
 // project's files as saved and starts scanning, and the extension's live
 // values, online edit, forces and Test Explorer reach it through the engine.
 import * as vscode from "vscode";
-import { setControllerStarting } from "../controllerStatus";
+import { beginControllerStart, endControllerStart } from "../controllerStatus";
 import { engine, patchFetch, PLAYGROUND_URL } from "./engine";
 
 export const IS_WEB = true;
@@ -36,7 +36,8 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
   async function run(): Promise<void> {
     // With nothing running yet, the live pills say "starting" until it is
     // (a restart keeps the old program's values on screen meanwhile).
-    if (!running) setControllerStarting(true);
+    const starting = !running;
+    if (starting) beginControllerStart();
     let r: LoadResult;
     try {
       await vscode.workspace.saveAll(false);
@@ -58,13 +59,13 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
         .showErrorMessage(running ? `Not applied, the previous program is still running: ${msg}` : `The project did not start: ${msg}`, "Show Output")
         .then((pick) => pick && out.show(true));
       show();
-      setControllerStarting(false);
+      if (starting) endControllerStart(false);
       return;
     }
     out.appendLine(`run: compiled and started in ${Math.round(r.ms)} ms`);
     running = true;
     show();
-    setControllerStarting(false);
+    if (starting) endControllerStart(true);
     // Live values follow the controller; a fresh one has fresh tags.
     live?.configChanged();
   }
