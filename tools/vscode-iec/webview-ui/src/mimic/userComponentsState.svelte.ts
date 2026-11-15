@@ -22,8 +22,10 @@ export const ucState = $state({
 	// The host has a build due or running (userComponents.ts isBuilding()):
 	// a component not in the bundle yet is on its way, not missing.
 	building: false,
-	// The page was given a bundle script, which may not have run yet.
-	bundle: false,
+	// This page was served with a bundle script, which may not have run yet
+	// (the host marks <body data-user-bundle>: a fact about this page, not
+	// about the next one a rebuild is about to load).
+	bundle: typeof document !== 'undefined' && !!document.body?.hasAttribute('data-user-bundle'),
 	// Every script on the page has run or failed (window "load"): a bundle
 	// that has not registered by then never will (it threw, or 404'd).
 	loaded: typeof document !== 'undefined' && document.readyState === 'complete'
@@ -63,9 +65,8 @@ export function setUserComponentDiagnostics(diagnostics: { component: string; me
 }
 
 /** Apply the host's build status (sent with the diagnostics). */
-export function setUserComponentStatus(status: { building?: boolean; bundle?: boolean }): void {
+export function setUserComponentStatus(status: { building?: boolean }): void {
 	if (status.building !== undefined) ucState.building = status.building;
-	if (status.bundle !== undefined) ucState.bundle = status.bundle;
 }
 
 /** Reactive: `name` has no island yet but one is coming: a build is due or

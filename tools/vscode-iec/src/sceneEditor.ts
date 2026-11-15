@@ -143,10 +143,15 @@ export class SceneEditorProvider implements vscode.CustomTextEditorProvider {
       if (e.affectsConfiguration("nautilus.liveValues.enabled") || e.affectsConfiguration("nautilus.runtimeUrl")) void postTags();
     });
 
+    let tagSeq = 0;
     const postTags = async () => {
       const enabled = liveEnabled();
       // A controller still compiling has nothing to answer yet: say so now.
+      const seq = ++tagSeq;
       const tags = enabled && !controllerCompiling() ? await fetchTags() : null;
+      // A slower, older fetch (a poll still waiting on a controller that
+      // was not answering yet) never overwrites a newer answer.
+      if (seq !== tagSeq) return;
       void panel.webview.postMessage({ type: "sceneTags", tags, enabled, starting: controllerStarting() });
     };
     // The playground's controller just came up (or failed to): show it now,

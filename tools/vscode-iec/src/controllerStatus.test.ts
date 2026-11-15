@@ -2,19 +2,23 @@
 // in flight, the wait after a good start, a failed run ending it at once.
 // Run via `npm test` (compiles then executes with node:test).
 
-import { mock, test } from "node:test";
+import { beforeEach, mock, test } from "node:test";
 import * as assert from "node:assert/strict";
 import {
   STARTING_GRACE_MS,
   beginControllerStart,
   controllerCompiling,
   controllerStarting,
+  controllerStopped,
   endControllerStart,
   onDidChangeControllerStarting,
+  resetControllerStatusForTests,
 } from "./controllerStatus";
 
 // The repo's @types/node predates the object form and Date; node 20.4+ has both.
 mock.timers.enable({ apis: ["setTimeout", "Date"] } as never);
+// Each test starts from no runs and no wait, whatever the last one left.
+beforeEach(() => resetControllerStatusForTests());
 
 function changes(): { count: () => number; dispose(): void } {
   let n = 0;
@@ -59,6 +63,28 @@ test("overlapping runs: starting lasts until the last one ends", () => {
   assert.equal(controllerStarting(), true);
   mock.timers.tick(STARTING_GRACE_MS);
   assert.equal(controllerStarting(), false);
+});
+
+test("overlapping runs: one that started is waited for, even if a later one failed", () => {
+  beginControllerStart();
+  beginControllerStart();
+  endControllerStart(true);
+  endControllerStart(false);
+  assert.equal(controllerStarting(), true, "the first program is coming up");
+});
+
+test("Stop ends the wait after a start at once; with no wait it says nothing", () => {
+  beginControllerStart();
+  endControllerStart(true);
+  const c = changes();
+  controllerStopped();
+  assert.equal(controllerStarting(), false);
+  assert.equal(c.count(), 1);
+  controllerStopped();
+  assert.equal(c.count(), 1);
+  mock.timers.tick(STARTING_GRACE_MS);
+  assert.equal(c.count(), 1, "the cancelled wait does not fire later");
+  c.dispose();
 });
 
 test("a new run during the wait cancels it; an end with no run is ignored", () => {

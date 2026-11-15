@@ -50,7 +50,7 @@ function mimicHtml(webview: vscode.Webview, extensionUri: vscode.Uri, userCompon
 <link rel="stylesheet" href="${styleUri}">
 <title>Mimic</title>
 </head>
-<body data-mimic-mode="mimic">
+<body data-mimic-mode="mimic"${userScript ? " data-user-bundle" : ""}>
 <div id="app"></div>
 <script nonce="${nonce}" src="${scriptUri}"></script>${userScript}
 </body>
@@ -214,7 +214,6 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
         diagnostics: this.userComponents.lastDiagnostics(),
         // A component not drawn yet while a build is due is on its way.
         building: this.userComponents.isBuilding(),
-        bundle: !!this.userComponents.bundleUri(),
       });
 
     const postDoc = () => {
@@ -381,10 +380,15 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     // The last tags posted: a page reloaded for a rebuilt component bundle
     // shows them at once, not "offline" until the next fetch answers.
     let lastTags: Record<string, unknown> | null | undefined;
+    let tagSeq = 0;
     const postTags = async () => {
       const enabled = liveEnabled();
       // A controller still compiling has nothing to answer yet: say so now.
+      const seq = ++tagSeq;
       const tags = enabled && !controllerCompiling() ? await fetchTags() : null;
+      // A slower, older fetch (a poll still waiting on a controller that
+      // was not answering yet) never overwrites a newer answer.
+      if (seq !== tagSeq) return;
       lastTags = tags;
       void panel.webview.postMessage({ type: "mimicTags", tags, enabled, starting: controllerStarting() });
     };

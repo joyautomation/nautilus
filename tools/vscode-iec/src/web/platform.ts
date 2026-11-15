@@ -5,7 +5,7 @@
 // project's files as saved and starts scanning, and the extension's live
 // values, online edit, forces and Test Explorer reach it through the engine.
 import * as vscode from "vscode";
-import { beginControllerStart, endControllerStart } from "../controllerStatus";
+import { beginControllerStart, controllerStopped, endControllerStart } from "../controllerStatus";
 import { engine, patchFetch, PLAYGROUND_URL } from "./engine";
 
 export const IS_WEB = true;
@@ -87,6 +87,7 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
     vscode.commands.registerCommand("nautilus.playground.stop", async () => {
       await engine.call("stop");
       running = false;
+      controllerStopped();
       out.appendLine("stopped");
       show();
     })

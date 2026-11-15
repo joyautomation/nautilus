@@ -15,6 +15,9 @@
 export const STARTING_GRACE_MS = 8000;
 
 let compiling = 0;
+// Some run in the current overlap started: the engine is scanning it, even
+// if a later one failed (that one left the earlier program running).
+let anyOk = false;
 let graceUntil = 0;
 let graceTimer: ReturnType<typeof setTimeout> | undefined;
 // Plain listeners, not a vscode.EventEmitter: this module stays free of
@@ -46,6 +49,7 @@ export function controllerStarting(): boolean {
  * `endControllerStart`. */
 export function beginControllerStart(): void {
   compiling++;
+  if (compiling === 1) anyOk = false;
   clearGrace();
   if (compiling === 1) fire();
 }
@@ -54,9 +58,10 @@ export function beginControllerStart(): void {
 export function endControllerStart(ok: boolean): void {
   if (compiling === 0) return;
   compiling--;
+  anyOk ||= ok;
   if (compiling > 0) return;
   clearGrace();
-  if (ok) {
+  if (anyOk) {
     graceUntil = Date.now() + STARTING_GRACE_MS;
     graceTimer = setTimeout(() => {
       graceTimer = undefined;
@@ -65,6 +70,21 @@ export function endControllerStart(ok: boolean): void {
     }, STARTING_GRACE_MS);
   }
   fire();
+}
+
+/** The controller was stopped: the wait after a start ends now, so the
+ * pills say "offline" for a stopped controller. Runs in flight carry on. */
+export function controllerStopped(): void {
+  if (!graceTimer) return;
+  clearGrace();
+  fire();
+}
+
+/** Tests only: back to no runs and no wait. */
+export function resetControllerStatusForTests(): void {
+  compiling = 0;
+  anyOk = false;
+  clearGrace();
 }
 
 function clearGrace(): void {

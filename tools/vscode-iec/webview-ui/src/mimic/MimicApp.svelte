@@ -30,7 +30,6 @@
 				customComponents?: string[];
 				diagnostics?: { component: string; message: string }[];
 				building?: boolean;
-				bundle?: boolean;
 				starting?: boolean;
 				snapToGrid?: boolean;
 				enabled?: boolean;
@@ -53,7 +52,7 @@
 				ed.customComponents = m.customComponents ?? [];
 			} else if (m?.type === 'userComponentDiagnostics') {
 				setUserComponentDiagnostics(m.diagnostics ?? []);
-				setUserComponentStatus({ building: m.building, bundle: m.bundle });
+				setUserComponentStatus({ building: m.building });
 			} else if (m?.type === 'mimicConfig') {
 				ed.snapToGrid = m.snapToGrid ?? true;
 			} else if (m?.type === 'writeResult' && typeof m.id === 'number') {
