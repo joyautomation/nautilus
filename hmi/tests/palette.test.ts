@@ -1,7 +1,9 @@
 // The palette's outline token holds against every ground equipment is
 // drawn on (src/lib/palette.css): an outline is the only thing that says a
 // stopped pump is there, so --edge must clear WCAG's 3:1 non-text contrast
-// on --surface, --bg and --surface-2 in both the dark and the light set.
+// on --surface, --bg and --surface-2 in both the dark and the light set,
+// and every text token clears AA's 4.5:1 on each of them, since naut check
+// warns of a screen's text under it.
 //
 //	npm test
 import { readFileSync } from 'node:fs';
@@ -40,6 +42,13 @@ for (const [name, selector] of [
 			it(`--edge is at least 3:1 on ${ground}`, () => {
 				expect(contrast(t['--edge'], t[ground]) >= 3).toBe(true);
 			});
+		}
+		for (const text of ['--ink', '--ink-2', '--muted']) {
+			for (const ground of ['--surface', '--bg', '--surface-2']) {
+				it(`${text} text is at least 4.5:1 on ${ground} (WCAG AA, what naut check asks of a screen)`, () => {
+					expect(contrast(t[text], t[ground]) >= 4.5).toBe(true);
+				});
+			}
 		}
 		it('--axis stays fainter than --edge (it is a chart axis, not an outline)', () => {
 			expect(contrast(t['--axis'], t['--surface']) < contrast(t['--edge'], t['--surface'])).toBe(true);

@@ -172,6 +172,14 @@ and the component throws when it mounts. `naut hmi build` stops on it.
 
 Import the kit's helpers and drawings from `@joyautomation/nautilus-hmi`.
 
+An operator picks a light or a dark theme, so colour a component from the
+kit's tokens rather than hex: text in `var(--ink)`, `var(--ink-2)` or
+`var(--muted)`; grounds in `var(--bg)`, `var(--surface)` and
+`var(--surface-2)`; outlines in `var(--edge)`; state in `var(--good)`,
+`var(--warn)` and `var(--crit)`. Each holds AA contrast on each ground in
+both themes. A hex chosen for one theme is unreadable in the other, which
+`naut check` reports.
+
 A `{Name}.component.json` beside the component gives it pipe ports and the
 sample props its preview renders with:
 
@@ -302,6 +310,10 @@ person would see wrong:
 - a drawing that runs past the bottom of a 1920×1080 window, or one
   fitted so small that 14 px text reads under 10.5 px, with the room it
   had to fill (a warning);
+- text that is hard to read: under WCAG's 4.5:1 contrast against what is
+  drawn behind it (3:1 for large text), measured from a screenshot, in
+  the light theme and the dark one for a page on the kit's theme; or
+  drawn under 9 px (a warning);
 - a page that scrolls sideways on a 390 px phone (a warning).
 
 The screen is served from naut's own server over the project's runtime

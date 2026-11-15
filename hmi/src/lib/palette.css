@@ -24,7 +24,7 @@
 	--border: rgba(255, 255, 255, 0.1);
 	--ink: #ffffff;
 	--ink-2: #c3c2b7;
-	--muted: #898781;
+	--muted: #8d8b85; /* 4.6:1 on --surface-2, AA for text */
 	--grid: #2c2c2a;
 	--axis: #383835;
 	--edge: #7a7973;
@@ -62,7 +62,7 @@
 	--border: rgba(0, 0, 0, 0.13);
 	--ink: #1b1a17;
 	--ink-2: #45443d;
-	--muted: #74726a;
+	--muted: #68665e; /* 4.6:1 on --surface-2, AA for text */
 	--grid: #e4e2da;
 	--axis: #c9c7bd;
 	--edge: #7e7c74;

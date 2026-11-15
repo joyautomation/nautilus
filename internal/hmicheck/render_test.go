@@ -28,6 +28,9 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"/wide":    `<div style="width:900px">a wide table</div>`,
 		"/tall":    `<svg viewBox="0 0 1600 1240" style="display:block;width:100%"><rect x="10" y="10" width="1500" height="1200"/></svg>`,
 		"/small":   `<div class="mimic" data-scale="0.600" data-canvas="2120x1400" style="width:1272px;max-width:100%;height:840px"><p>gallery</p></div>`,
+		"/dim":     `<p style="color:#30353b">XV-101</p><p style="color:#c3c2b7">P-501 running</p>`,
+		"/themed":  `<script>document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark'</script><style>[data-theme=dark] body{background:#0d0d0d;color:#e8e6e1} [data-theme=light] body{background:#f3f2ee;color:#f0efe9}</style><p>Filter F-2 washing</p>`,
+		"/tiny":    `<div style="transform:scale(0.5);transform-origin:0 0"><p style="font-size:14px;color:#000">closed</p></div>`,
 		"/below":   `<div class="mimic" data-scale="0.900" data-canvas="2120x1400" style="width:1908px;max-width:100%;height:1260px"><p>gallery</p></div>`,
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +47,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var routes []string
-	for _, p := range []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/tall", "/small", "/below", "/[id]"} {
+	for _, p := range []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/tall", "/small", "/below", "/dim", "/themed", "/tiny", "/[id]"} {
 		routes = append(routes, p)
 	}
 	found, err := Render(ctx, path, srv.URL, routes)
@@ -69,6 +72,9 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"warning: screen /outside (desktop): 1 shape(s) draw far outside their drawing",
 		"XV-105: closed",
 		"warning: screen /wide (phone): scrolls sideways on a 390 px wide phone",
+		`warning: screen /dim (desktop): 1 of 2 texts are hard to read (under 4.5:1 contrast, 3:1 for large text): "P-501 running" #c3c2b7 on #ffffff (1.8:1)`,
+		`warning: screen /themed (desktop): in the light theme, 1 of 1 texts are hard to read`,
+		`warning: screen /tiny (desktop): 1 of 1 texts are drawn under 9 px in a 1920×1080 window (the smallest 7.0 px): "closed"`,
 		"warning: screen /tall (desktop): a 1904×1476 drawing (viewBox 1600×1240) runs 404 px past the bottom of a 1920×1080 window",
 		"warning: screen /small (desktop): the 2120×1400 drawing is drawn at 60% to fit a 1920×1080 window, so 14 px text reads as 8 px",
 		"warning: screen /below (desktop): the 2120×1400 drawing runs 196 px past the bottom of a 1920×1080 window, drawn at 90%",
@@ -77,7 +83,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, all)
 		}
 	}
-	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle", "hatch", "/tall (phone)", "/small (phone)", "/below (phone)"} {
+	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle", "hatch", "/tall (phone)", "/small (phone)", "/below (phone)", "/themed (desktop): in the dark theme", "XV-101"} {
 		if strings.Contains(all, not) {
 			t.Errorf("%q should not be reported:\n%s", not, all)
 		}
