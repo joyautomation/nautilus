@@ -330,8 +330,9 @@ naut builds the operator screen from the project itself, with no npm, and
   under three or more others, a shape drawn far outside its drawing, a
   drawing that runs off the bottom of the window or is drawn too small to
   read, text too dim to read in either theme, drawn under 9 px or drawn
-  over other text, sideways scroll on a phone. Fix them like compile
-  errors. A screen you haven't seen rendered isn't done.
+  over other text or a field, controls an operator has to scroll to reach
+  on a desktop, sideways scroll on a phone. Fix them like compile errors.
+  A screen you haven't seen rendered isn't done.
 - In a component that uses `$state(...)`, never name a prop or variable
   `state`: Svelte then reads `$state` as a store subscription and the
   component throws when it mounts. Name it for what it holds

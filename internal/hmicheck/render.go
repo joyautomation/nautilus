@@ -112,6 +112,11 @@ type probeResult struct {
 		ViewBox *[2]int `json:"viewBox"`
 		Below   int     `json:"below"`
 	} `json:"drawings"`
+	Fold *struct {
+		Count int      `json:"count"`
+		Below int      `json:"below"`
+		Names []string `json:"names"`
+	} `json:"fold"`
 	Sideways int `json:"sideways"`
 	Width    int `json:"width"`
 }
@@ -306,6 +311,19 @@ func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding
 			}
 			f(false, "a %d×%d drawing%s runs %d px past the bottom of a %d×%d window: an operator scrolls to see the rest. Size it to the room left in the window (an <svg> with a viewBox keeps its shape at any size: width: 100%%; height: 100%% in a container that has a height), or draw it for the room", d.Size[0], d.Size[1], vb, d.Below, v.width, v.height)
 		}
+	}
+	// What an operator scrolls to reach. A components page is a catalogue,
+	// long on purpose.
+	if !v.mobile && pr.Fold != nil && page != "/components" {
+		where := ""
+		if pr.Fold.Below > 0 {
+			where = fmt.Sprintf(" (up to %d px past it)", pr.Fold.Below)
+		}
+		var q []string
+		for _, n := range pr.Fold.Names {
+			q = append(q, fmt.Sprintf("%q", n))
+		}
+		f(false, "%d controls and texts sit below the bottom of a %d×%d window%s or in a box that scrolls, so an operator scrolls to reach them: %s: fit the screen to the window (the drawing the room it needs, the rest in a panel beside it, groups denser), or move what is seldom used to a page of its own", pr.Fold.Count, v.width, v.height, where, strings.Join(q, ", "))
 	}
 	// Text a person can read: contrast against what it is drawn on, in each
 	// theme the page has, and size. (A phone's text is the screen's own

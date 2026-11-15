@@ -14,6 +14,10 @@
 	let max = $derived(Math.max(...counts, 1));
 	let bw = $derived(w / counts.length);
 	let total = $derived(counts.reduce((a, c) => a + c, 0));
+	// 12 px numerals run about 7 px a character: a tick stops short of the
+	// unit at the right end, so the last one never prints over it
+	const textW = (s: string) => s.length * 7;
+	let unitLeft = $derived(w - 2 - textW(unit) - 6);
 </script>
 
 <div bind:clientWidth={w} style="width: 100%">
@@ -31,7 +35,7 @@
 			>
 				<title>{i * bucketWidth}–{(i + 1) * bucketWidth} {unit}: {c} ({total ? ((c / total) * 100).toFixed(1) : 0}%)</title>
 			</rect>
-			{#if i % 2 === 0}
+			{#if i % 2 === 0 && i * bw + textW(String(i * bucketWidth)) < unitLeft}
 				<text x={i * bw} y={height - 6} font-size="12" fill="var(--muted)" class="num">{i * bucketWidth}</text>
 			{/if}
 		{/each}

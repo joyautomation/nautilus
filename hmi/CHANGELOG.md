@@ -11,6 +11,13 @@
   under a row of filters read as five lines, not a band of tubes. Tee
   dots are 10 px on a line.
 
+### Fixed
+
+- **`Histogram`: the last tick no longer prints over the unit.** A tick
+  label that would reach the unit at the right end of the axis is left
+  out (`28` over `ms` in the lift station's scan time distribution, found
+  by `naut check`'s new text-over-text warning).
+
 ### Added
 
 - **`OffPage`: a P&ID's off-page connector.** A built-in mimic component:
@@ -18,6 +25,13 @@
   for where it goes (`label: "TO FILTER GALLERY"`, `dir`: the way it
   points), for a line that goes on to another screen. Ports `top`,
   `left`, `right`, `bottom`.
+
+- **What an operator scrolls to reach, reported.** `naut check`'s render
+  warns of controls and text that sit mostly below the bottom of a
+  1920×1080 window, or are hidden in a box that scrolls or clips (a
+  setpoint panel spilling out of its box on a mimic counts), naming
+  them. `/components` is exempt. The text-over-text check also counts
+  what's in a field, so a label drawn over a setpoint box is reported.
 
 - **Text drawn over text, reported.** `naut check`'s render warns of a
   label drawn over another (a tag over the next valve's state, one

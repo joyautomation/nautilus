@@ -3,7 +3,7 @@
 (async () => {
 	await document.fonts.ready;
 	await new Promise((r) => setTimeout(r, SETTLE_MS));
-	const out = { blank: false, pipes: [], crossed: [], outside: [], mimics: [], drawings: [], sideways: 0, width: DEVICE_WIDTH };
+	const out = { blank: false, pipes: [], crossed: [], outside: [], mimics: [], drawings: [], fold: null, sideways: 0, width: DEVICE_WIDTH };
 
 	// Blank: nothing a person would see — no text, no drawing, no control.
 	const shows = (el) => {
@@ -118,6 +118,47 @@
 				size: Math.round(Math.max(box.width, box.height))
 			});
 		}
+	}
+
+	// Below the fold: controls and text an operator scrolls to reach, past
+	// the bottom of the window or hidden inside a box that scrolls (or
+	// clips). Drawings are reported on their own (mimics, drawings above), so
+	// nothing inside an <svg> counts; a panel placed on a <Mimic> that
+	// spills past its box and off the window does.
+	{
+		const hiddenBy = (el) => {
+			for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+				const cs = getComputedStyle(a);
+				if (!/(auto|scroll|hidden)/.test(cs.overflowY)) continue;
+				const ar = a.getBoundingClientRect(), r = el.getBoundingClientRect();
+				if (r.top >= ar.bottom - 2 || r.bottom > ar.bottom + 8) return true;
+			}
+			return false;
+		};
+		const nameOf = (el) => {
+			if (el.matches('input, select, textarea')) {
+				const l = (el.labels && el.labels[0]) || el.closest('label');
+				return ((l && l.textContent) || el.getAttribute('aria-label') || el.name || el.placeholder || el.value || el.tagName.toLowerCase()).replace(/\s+/g, ' ').trim();
+			}
+			return (el.textContent || '').replace(/\s+/g, ' ').trim();
+		};
+		let deepest = 0;
+		const names = [];
+		let count = 0;
+		for (const el of document.querySelectorAll('input, select, textarea, button, body *')) {
+			if (el.closest('svg, script, style, template, [aria-hidden="true"]')) continue;
+			const leafText = !el.matches('input, select, textarea, button') && [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+			if (!leafText && !el.matches('input, select, textarea, button')) continue;
+			if (!shows(el)) continue;
+			const r = el.getBoundingClientRect();
+			const below = (r.top + r.bottom) / 2 > innerHeight; // mostly past the fold
+			if (!below && !hiddenBy(el)) continue;
+			count++;
+			deepest = Math.max(deepest, Math.round(r.bottom - innerHeight));
+			const n = nameOf(el);
+			if (n && names.length < 4 && !names.includes(n)) names.push(n.length > 28 ? n.slice(0, 27) + '…' : n);
+		}
+		if (count > 0) out.fold = { count, below: Math.max(0, deepest), names };
 	}
 
 	// Sideways scroll: the page is wider than the device. Measured against
