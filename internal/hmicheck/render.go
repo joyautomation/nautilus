@@ -117,6 +117,10 @@ type probeResult struct {
 		Below int      `json:"below"`
 		Names []string `json:"names"`
 	} `json:"fold"`
+	Through []struct {
+		Text string `json:"text"`
+		Pipe string `json:"pipe"`
+	} `json:"through"`
 	Sideways int `json:"sideways"`
 	Width    int `json:"width"`
 }
@@ -311,6 +315,22 @@ func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding
 			}
 			f(false, "a %d×%d drawing%s runs %d px past the bottom of a %d×%d window: an operator scrolls to see the rest. Size it to the room left in the window (an <svg> with a viewBox keeps its shape at any size: width: 100%%; height: 100%% in a container that has a height), or draw it for the room", d.Size[0], d.Size[1], vb, d.Below, v.width, v.height)
 		}
+	}
+	// A line through a label: the label can't be read, the line can't be
+	// traced. (The drawing is the same at any size: said once, at desktop.)
+	if !v.mobile && len(pr.Through) > 0 {
+		var q []string
+		for _, t := range pr.Through[:min(len(pr.Through), 5)] {
+			q = append(q, fmt.Sprintf("%q (pipe %s)", t.Text, t.Pipe))
+		}
+		if n := len(pr.Through) - 5; n > 0 {
+			q = append(q, fmt.Sprintf("and %d more", n))
+		}
+		what := fmt.Sprintf("%d texts on the drawing have a pipe running through them", len(pr.Through))
+		if len(pr.Through) == 1 {
+			what = "1 text on the drawing has a pipe running through it"
+		}
+		f(false, "%s: %s. A tag or a reading sits beside its line, never on it: move the text clear of every pipe (to the side of the equipment the pipes don't reach), or route the pipe to a port and around the text", what, strings.Join(q, ", "))
 	}
 	// What an operator scrolls to reach. A components page is a catalogue,
 	// long on purpose.

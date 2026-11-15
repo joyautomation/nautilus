@@ -182,3 +182,44 @@ tags:
 		t.Errorf("warnings = %q", warns)
 	}
 }
+
+func TestCheckMimicsKitProps(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: XV101_ZSO, type: BOOL, role: input }
+  - { name: P101_Run, type: BOOL, role: input }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"equipment":[
+			{"id":"V1","component":"OnOffValve","x":0,"y":0,"vertical":true,"props":{"tag":"XV-101"},"bind":{"zso":"XV101_ZSO"}},
+			{"id":"V2","component":"OnOffValve","x":0,"y":0,"props":{"tag":"XV-102","vertical":true},"bind":{"open":"XV101_ZSO"}},
+			{"id":"P1","component":"Machine","x":0,"y":0,"label":"Pump","bind":{"running":"P101_Run"},"props":{"fault":false}}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	if len(errs) != 0 {
+		t.Errorf("errors: %v", errs)
+	}
+	all := strings.Join(warns, "\n")
+	for _, want := range []string{
+		`equipment V1 has "vertical", which equipment doesn't have`,
+		`put it in "props": {"vertical": true}`,
+		"equipment V1's bind has zso, which OnOffValve doesn't take, so it shows nothing (OnOffValve takes tag, open, travelling, failed, vertical)",
+		"equipment P1's props has fault, which Machine doesn't take",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no warning %q in:\n%s", want, all)
+		}
+	}
+	if len(warns) != 3 {
+		t.Errorf("%d warnings, want 3:\n%s", len(warns), all)
+	}
+}

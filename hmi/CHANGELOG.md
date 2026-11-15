@@ -13,6 +13,15 @@
 
 ### Added
 
+- **A pipe through a label is reported.** `<Mimic>` marks each pipe's
+  line (`data-pipe`), and `naut check`'s render pass reports a tag or a
+  reading on the drawing with a pipe running through it, where the line
+  shows (a pipe under an instrument's bubble is hidden by it, and isn't
+  reported). `naut check` also reports a key a kit component doesn't
+  take: a binding to a prop it doesn't have (`zso` on an `OnOffValve`), a
+  prop put beside `props` instead of in it (`"vertical": true`). Both
+  showed nothing, without a word (screen evals, arm J).
+
 - **ISA-101 building blocks: `OnOffValve`, `Instrument`, `Machine`,
   `SetpointGroup`.** Built-in mimic components for what every generated
   screen was drawing for itself (screen evals: 5 of 8 runs wrote their own

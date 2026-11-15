@@ -28,6 +28,26 @@ var builtinPorts = map[string][]string{
 	"Machine": {"left", "right", "top", "bottom"}, "SetpointGroup": nil,
 }
 
+// builtinProps are the props each kit component takes (beyond label,
+// width, height, look and write, which <Mimic> hands every one). A bind or
+// a prop it doesn't take shows nothing.
+var builtinProps = map[string][]string{
+	"Tank": {"levelPct", "scale", "shape"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
+	"Heater": {"powerPct"}, "Gauge": {"value", "min", "max", "unit", "color", "setpoint", "decimals", "sweep", "gap", "thickness"},
+	"Sparkline":     {"values", "color", "yMin", "yMax", "endIndex", "windowSize", "compact"},
+	"CommandButton": {"tag", "kind", "pulseMs", "held", "disabled", "disabledReason"},
+	"WriteToggle":   {"tag", "value", "present", "onColor", "offColor", "alarm", "invert", "readonly", "readonlyReason"},
+	"OffPage":       {"dir"},
+	"OnOffValve":    {"tag", "open", "travelling", "failed", "vertical"},
+	"Instrument":    {"tag", "value", "unit", "decimals", "alarm", "present"},
+	"Machine":       {"kind", "tag", "running", "faulted", "speedPct"},
+	"SetpointGroup": {"title", "items", "columns"},
+}
+
+// equipmentKeys are the keys a piece of equipment has; anything else in
+// it is ignored when the screen runs.
+var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports"}
+
 // writers are the kit's controls: the `tag` prop is the tag they write.
 var writers = map[string]bool{"CommandButton": true, "WriteToggle": true}
 
@@ -109,6 +129,76 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 					warns = append(warns, fmt.Sprintf("%s: %s binds %s, which this manifest doesn't declare (the screen shows nothing for it here)", f, where, name))
 				}
 			}
+		}
+		// keys equipment doesn't have, and props a kit component doesn't take
+		var keyed struct {
+			Equipment []map[string]json.RawMessage `json:"equipment"`
+		}
+		_ = json.Unmarshal(raw, &keyed)
+		// one warning for each mistake, naming the first piece that makes it
+		// (a unit's copies make it together)
+		type noted struct {
+			ids []string
+			say func(id, more string) string
+		}
+		var order []string
+		notes := map[string]*noted{}
+		note := func(key, id string, say func(id, more string) string) {
+			if notes[key] == nil {
+				notes[key] = &noted{say: say}
+				order = append(order, key)
+			}
+			notes[key].ids = append(notes[key].ids, id)
+		}
+		for i, e := range keyed.Equipment {
+			if i >= len(m.Equipment) {
+				break
+			}
+			eq := m.Equipment[i]
+			takes, kit := builtinProps[eq.Component]
+			has := func(k string) bool {
+				for _, t := range append(takes, "label", "width", "height", "look", "write") {
+					if t == k {
+						return true
+					}
+				}
+				return false
+			}
+			for _, k := range sortedKeys(e) {
+				if hasKey(equipmentKeys, k) || k == "fromUnit" {
+					continue
+				}
+				hint := "a component's own props go in \"props\", its live ones in \"bind\""
+				if kit && has(k) {
+					hint = fmt.Sprintf("put it in \"props\": {%q: %s}", k, string(e[k]))
+				}
+				note("top\x00"+k+"\x00"+hint, eq.ID, func(id, more string) string {
+					return fmt.Sprintf("%s: equipment %s%s has %q, which equipment doesn't have (it has %s), so the screen ignores it: %s", f, id, more, k, strings.Join(equipmentKeys, ", "), hint)
+				})
+			}
+			if !kit {
+				continue
+			}
+			for _, part := range []struct {
+				name string
+				keys []string
+			}{{"bind", sortedKeys(eq.Bind)}, {"props", sortedKeys(eq.Props)}} {
+				for _, k := range part.keys {
+					if !has(k) {
+						note(eq.Component+"\x00"+part.name+"\x00"+k, eq.ID, func(id, more string) string {
+							return fmt.Sprintf("%s: equipment %s's %s%s has %s, which %s doesn't take, so it shows nothing (%s takes %s)", f, id, part.name, more, k, eq.Component, eq.Component, strings.Join(takes, ", "))
+						})
+					}
+				}
+			}
+		}
+		for _, k := range order {
+			n := notes[k]
+			more := ""
+			if len(n.ids) > 1 {
+				more = fmt.Sprintf(" (and %d more like it)", len(n.ids)-1)
+			}
+			warns = append(warns, n.say(n.ids[0], more))
 		}
 		ports := map[string][]string{} // equipment id -> its ports
 		components := map[string]string{}
@@ -288,4 +378,13 @@ func nearest(name string, tags map[string]runtime.TagDef) string {
 		}
 	}
 	return ""
+}
+
+func hasKey(keys []string, k string) bool {
+	for _, x := range keys {
+		if x == k {
+			return true
+		}
+	}
+	return false
 }

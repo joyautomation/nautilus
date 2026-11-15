@@ -330,7 +330,7 @@
 				{/if}
 				{#each PIPE_LAYERS as layer (layer)}
 					{#each pipePaths as { pipe: p, d }, i (p.id)}
-						<g mask={unders.has(i) ? `url(#${uid}-u${i})` : undefined}>
+						<g mask={unders.has(i) ? `url(#${uid}-u${i})` : undefined} data-pipe={layer === 'wall' ? p.id : undefined}>
 							<Pipe
 								{d}
 								{...(p.color !== undefined ? { color: p.color } : {})}

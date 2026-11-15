@@ -330,13 +330,15 @@ naut builds the operator screen from the project itself, with no npm, and
   never point `server.hmi` at one: naut doesn't check it, it can't use the
   kit, and the editor can't show it.
 - `naut check` checks screens: every tag a binding, a label or a control
-  names, every pipe's ports, and the screen builds. A screen imports only
+  names, every pipe's ports, a prop or binding a kit component doesn't
+  take (it shows nothing), and the screen builds. A screen imports only
   Svelte, `@joyautomation/nautilus-hmi`, `@joyautomation/nautilus-hmi-3d`,
   three and Threlte.
 - With Chrome, Chromium or Edge on the machine, `naut check` also opens
   each page at desktop and phone size and reports what it sees: a page
   that throws or is blank, a pipe that draws nothing, a pipe that passes
-  under three or more others, a shape drawn far outside its drawing, a
+  under three or more others, a pipe drawn through a tag or a reading, a
+  shape drawn far outside its drawing, a
   drawing that runs off the bottom of the window or is drawn too small to
   read, text too dim to read in either theme, drawn under 9 px or drawn
   over other text or a field, controls an operator has to scroll to reach
