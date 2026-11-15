@@ -20,8 +20,10 @@
 		if (cs.visibility === 'hidden' || cs.display === 'none') continue;
 		const r = document.createRange();
 		r.selectNodeContents(n);
-		const b = r.getBoundingClientRect();
-		if (b.width < 2 || b.height < 2 || b.right <= 0 || b.bottom <= 0 || b.left >= innerWidth || b.top >= innerHeight) continue;
+		// one box per line: a text that wraps is two lines, not the rectangle
+		// round both (which would cover whatever sits beside its short line)
+		const lines = [...r.getClientRects()].filter((b) => b.width >= 2 && b.height >= 2 && b.right > 0 && b.bottom > 0 && b.left < innerWidth && b.top < innerHeight);
+		if (lines.length === 0) continue;
 		const svg = el instanceof SVGElement;
 		let px = parseFloat(cs.fontSize) || 0;
 		if (svg) {
@@ -30,7 +32,7 @@
 		} else if (el.offsetWidth > 0) {
 			px *= el.getBoundingClientRect().width / el.offsetWidth;
 		}
-		out.push({
+		for (const b of lines) out.push({
 			t: t.length > 28 ? t.slice(0, 27) + '…' : t,
 			x: b.left,
 			y: b.top,

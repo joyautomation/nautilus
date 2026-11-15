@@ -11,6 +11,13 @@
   under a row of filters read as five lines, not a band of tubes. Tee
   dots are 10 px on a line.
 
+### Fixed
+
+- **`Histogram`: the last tick no longer prints over the unit.** A tick
+  label that would reach the unit at the right end of the axis is left
+  out (`28` over `ms` in the lift station's scan time distribution, found
+  by `naut check`'s new text-over-text warning).
+
 ### Added
 
 - **`OffPage`: a P&ID's off-page connector.** A built-in mimic component:
