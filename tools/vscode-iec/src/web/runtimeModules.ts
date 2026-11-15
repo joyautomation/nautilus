@@ -39,4 +39,16 @@ export const KIT_STYLES = [
   "@joyautomation/nautilus-hmi/fonts.css",
 ] as const;
 
+/** What a part of a 3D scene imports: three and Threlte, built into
+ * media/dist/user-runtime.3d.js (vite.runtime3d.config.ts) on the same
+ * Svelte as the rest, and loaded only by the component preview, for a
+ * scene part. A component on a mimic that imports one has no 3D runtime
+ * to find and says so when it mounts. */
+export const SCENE_MODULES = [
+  "three",
+  "three/examples/jsm/controls/OrbitControls.js",
+  "@threlte/core",
+  "@threlte/extras",
+] as const;
+
 export const RUNTIME_MODULES: readonly string[] = [...SVELTE_MODULES, ...KIT_MODULES];

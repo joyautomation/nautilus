@@ -33,14 +33,21 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
   names them, on the stage and in the Props strip, where a click on one
   starts its sample value.
 
-- **Component preview: overlay panels and 3D parts.** A panel that is
-  closed until a prop opens it (`open`, `selected`) drew nothing and the
-  pane had nothing to suggest: it now names the props to try, each a
-  click away. Opened, a panel positioned over its page (absolute or
-  fixed) collapsed to a sliver on a 0 × 0 stage: it is shown over a frame
-  the size of the pane, marked "overlay". A part of a 3D scene (it imports
-  Threlte and has no canvas of its own) says so instead of showing an
-  error.
+- **Component preview: 3D parts.** A part of a 3D scene (a component
+  that imports Threlte and has no canvas of its own: rain, a light, a
+  mesh) is shown in a bare scene: a 1 m grid on the ground, light, and a
+  camera that starts on the whole part and orbits with a drag, zooms with
+  the wheel. Its props are sample values like any other component's. On a
+  desktop it is built with the project's own Threlte and three; in the
+  playground, on a 3D runtime (three, `@threlte/core`,
+  `@threlte/extras`) the pane loads when such a part is opened.
+
+- **Component preview: overlay panels.** A panel that is closed until a
+  prop opens it (`open`, `selected`) drew nothing and the pane had
+  nothing to suggest: it now names the props to try, each a click away.
+  Opened, a panel positioned over its page (absolute or fixed) collapsed
+  to a sliver on a 0 × 0 stage: it is shown over a frame the size of the
+  pane, marked "overlay".
 
 - **The component preview in the playground.** A `{Name}.svelte` (or its
   `.component.json`) opens its live preview in the browser too, compiled
@@ -118,6 +125,10 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Fixed
 
+- **Custom components that import a Svelte library.** On a desktop, a
+  project component importing a package that exports only under the
+  `svelte` condition (Threlte, most Svelte component libraries) failed
+  with "Could not resolve": the build now reads that condition.
 - **`<svelte:window>` in the playground's first component.** In the
   playground, a project component using `<svelte:window>`,
   `<svelte:document>` or `<svelte:body>` threw "Cannot read properties of

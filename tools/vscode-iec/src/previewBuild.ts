@@ -33,6 +33,12 @@ export class PreviewBuilder {
     return "";
   }
 
+  /** The 3D runtime a scene part's bundle runs on: none here, the bundle
+   * carries the project's own three and Threlte. */
+  sceneRuntimeSrc(_webview: vscode.Webview): string {
+    return "";
+  }
+
   /** Compile `name` from `fsPath` (with `sources` standing in for unsaved
    * buffers). Only a bundle that has the component in it replaces the
    * last good one, so a compile error leaves the last render on screen. */

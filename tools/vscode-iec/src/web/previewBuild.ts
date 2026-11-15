@@ -34,6 +34,12 @@ export class PreviewBuilder {
     return `<link rel="stylesheet" href="${styles}">\n<script nonce="${nonce}" src="${runtime}"></script>`;
   }
 
+  /** three and Threlte for a scene part (media/dist/user-runtime.3d.js):
+   * loaded by the pane before the first bundle that needs it. */
+  sceneRuntimeSrc(webview: vscode.Webview): string {
+    return webview.asWebviewUri(this.userComponents.runtimeUri()).toString().replace(/\.js$/, ".3d.js");
+  }
+
   async build(name: string, fsPath: string, sources: Record<string, string>): Promise<PreviewBuildResult> {
     const compile = await loadCompiler(this.context.extensionUri);
     const read = async (p: string) => {

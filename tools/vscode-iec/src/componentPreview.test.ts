@@ -1,7 +1,7 @@
 // The component preview's pure part: which Svelte buffers it compiles from.
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { declaredProps, isScenePart, previewSources, previewTargetForPath, propsWithoutDefault } from "./componentPreviewLogic";
+import { declaredProps, isScenePart, sceneHostPath, sceneHostSource, previewSources, previewTargetForPath, propsWithoutDefault } from "./componentPreviewLogic";
 
 const doc = (fsPath: string, isDirty: boolean, text: string, isSvelte = fsPath.endsWith(".svelte")) => ({
   fsPath,
@@ -93,4 +93,13 @@ test("isScenePart: imports from Threlte without its own Canvas", () => {
   assert.equal(isScenePart(s("// like '@threlte/core' but not\nimport { fly } from 'svelte/transition';")), false);
   assert.equal(isScenePart(s("import type { ThrelteContext } from '@threlte/core';")), false);
   assert.equal(isScenePart(s("import { Vector3 } from 'three';")), false);
+});
+
+test("a scene part's host sits beside it and imports it", () => {
+  assert.equal(sceneHostPath("/p/hmi/src/lib/Rain.svelte"), "/p/hmi/src/lib/Rain.nx-scene-host.svelte");
+  const host = sceneHostSource("/p/hmi/src/lib/Rain.svelte");
+  assert.match(host, /import Part from "\/p\/hmi\/src\/lib\/Rain\.svelte";/);
+  assert.match(host, /<Canvas /);
+  // itself a component with a canvas, so never taken for a part to host again
+  assert.equal(isScenePart(host), false);
 });

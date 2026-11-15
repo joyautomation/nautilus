@@ -66,7 +66,8 @@
 	 * nothing as it is (a panel closed until `open` or `selected` is set). */
 	let optional = $state<string[]>([]);
 	const untried = $derived(optional.filter((n) => !(n in props)));
-	/** A part of a 3D scene: nothing to show outside a scene's canvas. */
+	/** A part of a 3D scene: shown in a bare scene of its own (the host
+	 * compiles it inside one; componentPreviewLogic.ts, sceneHostSource). */
 	let scenePart = $state(false);
 	/** Its roots are all out of flow: shown over a frame (UserIsland). */
 	let overlay = $state(false);
@@ -175,7 +176,7 @@
 				drag = null;
 				if (selected !== null && selected >= ports.length) selected = null;
 			} else if (m?.type === 'previewBundle' && m.src && m.version) {
-				loadBundle(m.src, m.version);
+				void loadBundle(m.src, m.version, (m as { needs?: unknown }).needs);
 			} else if (m?.type === 'previewDiagnostics') {
 				building = !!m.building;
 				diagnostics = m.diagnostics ?? [];
@@ -212,7 +213,43 @@
 		for (const el of document.head.querySelectorAll('style[id^="svelte-"]')) el.remove();
 	}
 
-	function loadBundle(src: string, v: number) {
+	/** Scripts a bundle runs on that the page does not carry from the
+	 * start (the playground's 3D runtime), each loaded once. */
+	const required = new Map<string, Promise<void>>();
+	function requireScript(src: string): Promise<void> {
+		let p = required.get(src);
+		if (!p) {
+			p = new Promise<void>((resolve, reject) => {
+				const s = document.createElement('script');
+				s.nonce = document.body.dataset.nonce ?? '';
+				s.src = src;
+				s.onload = () => resolve();
+				s.onerror = () => {
+					required.delete(src);
+					reject(new Error(src));
+				};
+				document.head.appendChild(s);
+			});
+			required.set(src, p);
+		}
+		return p;
+	}
+
+	let loading3d = $state(false);
+	async function loadBundle(src: string, v: number, needs: unknown) {
+		const before = Array.isArray(needs) ? needs.filter((n): n is string => typeof n === 'string') : [];
+		if (before.length) {
+			loading3d = true;
+			try {
+				await Promise.all(before.map(requireScript));
+			} catch (err) {
+				log(`bundle v${v}: a script it needs failed to load: ${String(err)}`);
+				loadError = 'the 3D runtime failed to load — see the "nautilus preview" output channel';
+				return;
+			} finally {
+				loading3d = false;
+			}
+		}
 		document.getElementById('nx-preview-bundle')?.remove();
 		const s = document.createElement('script');
 		s.id = 'nx-preview-bundle';
@@ -461,7 +498,7 @@
 		return { left: r.left + p.x * k + 10, top: r.top + p.y * k - 20 };
 	}
 	const statusText = $derived(
-		builtin ? 'built-in' : scenePart ? '3D part' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
+		builtin ? 'built-in' : building || loading3d ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
 	);
 </script>
 
@@ -482,8 +519,15 @@
 				{file || 'Component Preview'}
 			</button>
 		{/if}
-		{#if box && !scenePart}<span class="size">{box.w} × {box.h}</span>{/if}
-		{#if overlay && !builtin && !scenePart}
+		{#if box}<span class="size">{box.w} × {box.h}</span>{/if}
+		{#if scenePart && !builtin}
+			<span
+				class="size"
+				data-kind="scene-part"
+				title="A part of a 3D scene (it imports Threlte and has no canvas of its own). Shown here in a bare scene: a 1 m grid on the ground, a light, and a camera you can drag to orbit and scroll to zoom."
+				>3D part</span
+			>
+		{:else if overlay && !builtin}
 			<span
 				class="size"
 				data-kind="overlay"
@@ -526,14 +570,7 @@
 	<div class="body">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="stage" class:stale={!!error} bind:this={stageEl} ondragstart={(e) => e.preventDefault()}>
-			{#if scenePart}
-				<!-- Not an error and not a compile away: it has no canvas to
-				     draw on here, on any machine. -->
-				<p class="empty hint" data-kind="scene-part">
-					{file} is a part of a 3D scene: it imports Threlte and draws through the canvas of the scene it is placed in, so there
-					is nothing to show of it alone. See it on the page that uses it.
-				</p>
-			{:else if available}
+			{#if available}
 				{#key version}
 					<div class="scale" style="transform: scale({zoom})">
 						<div class="box" data-theme={themeColorMode.mode} bind:this={measureEl}>
@@ -621,12 +658,21 @@
 			{/if}
 		</div>
 
-		<aside class:off={scenePart}>
+		<aside>
 			<h4>Props <span class="dim">{propNames.length}</span></h4>
 			{#if missing.length}
 				<p class="note needs" data-kind="props-missing">
 					No default, no sample value:
 					{#each missing as name (name)}
+						<button class="need" title="Add a sample value for {name}" onclick={() => startProp(name)}>{name}</button>
+					{/each}
+				</p>
+			{:else if scenePart && untried.length}
+				<!-- A scene part often draws nothing at its defaults (rain at
+				     intensity 0) and its box is the scene's, never 0 × 0. -->
+				<p class="note needs" data-kind="props-untried">
+					Try a value for:
+					{#each untried as name (name)}
 						<button class="need" title="Add a sample value for {name}" onclick={() => startProp(name)}>{name}</button>
 					{/each}
 				</p>
@@ -880,9 +926,6 @@
 		border-left: none;
 		padding: 0;
 		overflow: visible;
-	}
-	aside.off {
-		display: none;
 	}
 	.empty {
 		color: var(--nx-muted);

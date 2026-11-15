@@ -28,7 +28,7 @@ import {
   type BuildResult,
   type ComponentDiagnostic,
 } from "../userComponentEntry";
-import { KIT_STYLES, RUNTIME_MODULES } from "./runtimeModules";
+import { KIT_STYLES, RUNTIME_MODULES, SCENE_MODULES } from "./runtimeModules";
 
 /** Reads a project file by absolute path; undefined when there is none. */
 export type ReadFile = (path: string) => Promise<string | undefined>;
@@ -45,7 +45,7 @@ export type CompileResult = BuildResult & { code: string; files: string[] };
 type Module = { code: string; deps: Record<string, string> };
 
 const ENTRY = "\0nx-user-components-entry";
-const RUNTIME = new Set(RUNTIME_MODULES);
+const RUNTIME = new Set<string>([...RUNTIME_MODULES, ...SCENE_MODULES]);
 const STYLES = new Set<string>(KIT_STYLES);
 const TRY_EXTENSIONS = ["", ".svelte", ".ts", ".js", ".svelte.ts", ".svelte.js", ".json", "/index.ts", "/index.js"];
 
@@ -155,7 +155,7 @@ class Graph {
     } else {
       throw new Error(
         `imports "${spec}", which the playground cannot load: here a component can import svelte, ` +
-          "@joyautomation/nautilus-hmi and the project's own files"
+          "@joyautomation/nautilus-hmi, three, @threlte/core, @threlte/extras and the project's own files"
       );
     }
     if (base) {
@@ -217,7 +217,7 @@ function load(id) {
     var w = W[id];
     if (w) return w;
     var m = RT[id.slice(3)];
-    if (!m) throw new Error("the playground's runtime has no " + id.slice(3));
+    if (!m) throw new Error("the playground has no " + id.slice(3) + " here: a 3D part runs in the component preview, not on a mimic");
     // Marked an ES module, so the import helpers hand it over as it is.
     // Unmarked, they copy its exports as they stand when the script loads,
     // and Svelte assigns some later: its $.window is set by the first

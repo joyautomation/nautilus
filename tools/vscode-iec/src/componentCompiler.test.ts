@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { compileComponents, type ReadFile } from "./web/componentCompiler";
 import { RUNTIME_MODULES } from "./web/runtimeModules";
+import { isScenePart, sceneHostPath, sceneHostSource } from "./componentPreviewLogic";
 
 const FIXTURES = path.join(__dirname, "..", "src", "testdata", "user-components");
 const LIFT = path.join(__dirname, "..", "..", "..", "examples", "lift-station", "hmi", "src", "lib");
@@ -183,4 +184,17 @@ test("a project barrel can export * from a runtime module", async () => {
   assert.deepEqual(errors, []);
   assert.deepEqual(probe.keys, ["readable", "writable"]);
   assert.equal(probe.w, "w");
+});
+
+test("a part of a 3D scene compiles inside its host, on the 3D runtime", async () => {
+  const rain = path.join(LIFT, "Rain.svelte");
+  assert.equal(isScenePart(fs.readFileSync(rain, "utf8")), true);
+  const host = sceneHostPath(rain);
+  const result = await compileComponents({ Rain: host }, disk, { sources: { [host]: sceneHostSource(rain) } });
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.built, ["Rain"]);
+  for (const spec of ["three", "@threlte/core", "three/examples/jsm/controls/OrbitControls.js"]) {
+    assert.ok(result.code.includes(JSON.stringify("rt:" + spec)), spec);
+  }
+  assert.ok(result.code.includes(JSON.stringify(rain)), "the part itself is in the bundle");
 });
