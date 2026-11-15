@@ -840,6 +840,7 @@
 			...(eq.label !== undefined ? { label: eq.label } : {}),
 			...(eq.props ?? {}),
 			...resolveBindings(eq.bind, ed.tags ?? {}),
+			...(eq.component === 'SetpointGroup' ? { tags: ed.tags ?? {} } : {}),
 			// Operator controls (the kit's CommandButton / WriteToggle, a
 			// project component's own buttons) write through this; it answers
 			// with why not while live values are off or no controller runs.

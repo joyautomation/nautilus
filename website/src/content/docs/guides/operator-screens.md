@@ -64,6 +64,7 @@ The same document renders in a SvelteKit HMI through the
 | `Sparkline` | `values` | |
 | `CommandButton` | `held`, `disabled`, `disabledReason`; the tag it writes is the `tag` prop | |
 | `WriteToggle` | `value`; the tag it writes is the `tag` prop | |
+| `SetpointGroup` | `title`, `items` (`[{"tag": "Kp", "label": "Gain", "unit": "", "decimals": 2}]`), `columns`: it reads and writes the items' tags itself; give it a width, never a height | |
 | `OffPage` | `label` (where the line goes on another screen: `TO FILTER GALLERY`), `dir` (the way it points: `right`, `left`, `up`, `down`) | `top`, `left`, `right`, `bottom` |
 
 ## Pipes and ports

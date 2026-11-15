@@ -280,6 +280,11 @@ naut builds the operator screen from the project itself, with no npm, and
   and its `examples`: the props for each state it draws
   (`"examples": {"open": {...}, "closed": {...}, "failed": {...}}`).
   `/components` draws every one, and `naut check` renders it.
+- Group setpoints in the kit's `SetpointGroup`, a titled panel of fields
+  that reads and writes its items' tags and is as tall as its fields
+  (give it a width, never a height):
+  `{"component": "SetpointGroup", "width": 300, "props": {"title": "Tuning",
+  "items": [{"tag": "Kp", "label": "Gain", "decimals": 2}]}}`.
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
   drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
   and each copy moves by `step`:
@@ -321,18 +326,20 @@ naut builds the operator screen from the project itself, with no npm, and
   never point `server.hmi` at one: naut doesn't check it, it can't use the
   kit, and the editor can't show it.
 - `naut check` checks screens: every tag a binding, a label or a control
-  names, every pipe's ports, and the screen builds. A screen imports only
+  names, every pipe's ports, a prop or binding a kit component doesn't
+  take (it shows nothing), and the screen builds. A screen imports only
   Svelte, `@joyautomation/nautilus-hmi`, `@joyautomation/nautilus-hmi-3d`,
   three and Threlte.
 - With Chrome, Chromium or Edge on the machine, `naut check` also opens
   each page at desktop and phone size and reports what it sees: a page
   that throws or is blank, a pipe that draws nothing, a pipe that passes
-  under three or more others, a shape drawn far outside its drawing, a
-  drawing that runs off the bottom of the window or is drawn too small to
-  read, text too dim to read in either theme, drawn under 9 px or drawn
-  over other text or a field, controls an operator has to scroll to reach
-  on a desktop, sideways scroll on a phone. Fix them like compile errors.
-  A screen you haven't seen rendered isn't done.
+  under three or more others, a pipe drawn through a tag or a reading, a
+  shape drawn far outside its drawing, a drawing that runs off the bottom
+  of the window or is drawn too small to read, text too dim to read in
+  either theme, drawn under 9 px or drawn over other text or a field,
+  controls an operator has to scroll to reach on a desktop, sideways
+  scroll on a phone. Fix them like compile errors. A screen you haven't
+  seen rendered isn't done.
 - In a component that uses `$state(...)`, never name a prop or variable
   `state`: Svelte then reads `$state` as a store subscription and the
   component throws when it mounts. Name it for what it holds

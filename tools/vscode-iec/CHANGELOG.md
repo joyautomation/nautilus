@@ -13,6 +13,9 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Added
 
+- **Mimic editor: `SetpointGroup` in the palette.** The kit's setpoint
+  panel, with sample props; it reads live values.
+
 - **Mimic editor: `OffPage` in the palette.** The kit's off-page
   connector, with its four ports.
 

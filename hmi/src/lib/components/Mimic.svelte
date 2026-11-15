@@ -15,6 +15,7 @@
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import OffPage from './OffPage.svelte';
+	import SetpointGroup from './SetpointGroup.svelte';
 	import Pipe from './Pipe.svelte';
 	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
@@ -78,7 +79,7 @@
 	const doc = $derived(expandUnits(source));
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle, OffPage };
+	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle, OffPage, SetpointGroup };
 	const components = $derived({ ...builtin, ...registry });
 
 	// Scale the logical canvas to the container width (height follows),
@@ -151,6 +152,8 @@
 		...(eq.label !== undefined ? { label: eq.label } : {}),
 		...(eq.props ?? {}),
 		...resolveBindings(eq.bind, tags),
+		// a SetpointGroup reads the tags its items name
+		...(eq.component === 'SetpointGroup' ? { tags } : {}),
 		write: write ?? readOnly
 	});
 	const readOnly = async (): Promise<string | null> => 'This screen is read-only';
@@ -324,7 +327,7 @@
 				{/if}
 				{#each PIPE_LAYERS as layer (layer)}
 					{#each pipePaths as { pipe: p, d }, i (p.id)}
-						<g mask={unders.has(i) ? `url(#${uid}-u${i})` : undefined}>
+						<g mask={unders.has(i) ? `url(#${uid}-u${i})` : undefined} data-pipe={layer === 'wall' ? p.id : undefined}>
 							<Pipe
 								{d}
 								{...(p.color !== undefined ? { color: p.color } : {})}

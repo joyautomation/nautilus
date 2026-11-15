@@ -11,6 +11,24 @@
   under a row of filters read as five lines, not a band of tubes. Tee
   dots are 10 px on a line.
 
+### Added
+
+- **A pipe through a label is reported.** `<Mimic>` marks each pipe's
+  line (`data-pipe`), and `naut check`'s render pass reports a tag or a
+  reading on the drawing with a pipe running through it, where the line
+  shows (a pipe under an instrument's bubble is hidden by it, and isn't
+  reported). `naut check` also reports a key a kit component doesn't
+  take: a binding to a prop it doesn't have (`running` on a `Valve`), a
+  prop put beside `props` instead of in it (`"openPct": 50`). Both
+  showed nothing, without a word (screen evals, arm J).
+
+- **`SetpointGroup`.** A built-in mimic component: a titled group of
+  setpoint fields that reads and writes the tags its `items` name and is
+  as tall as its fields, so no field spills out of its box. `naut check`
+  checks the items' tags; the editor's palette has it. (Screen evals, the
+  batch skid: every setpoint shown and writable in 11 of 12 runs that had
+  it, 4 of 6 without.)
+
 ### Fixed
 
 - **`Histogram`: the last tick no longer prints over the unit.** A tick

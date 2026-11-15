@@ -151,6 +151,8 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 	// Operator controls: no pipe meets a button.
 	CommandButton: [],
 	WriteToggle: [],
+	// A panel of setpoint fields: no pipe meets it.
+	SetpointGroup: [],
 	// A P&ID's off-page connector: a line ends on whichever side it meets.
 	OffPage: [
 		{ name: 'top', part: 'body', x: 0.5, y: 0 },
