@@ -1777,6 +1777,7 @@
 								{...(p.props ?? {})}
 								{...resolveBindings(p.bind, ed.tags ?? {})}
 								{layer}
+								look={doc?.look ?? 'isa101'}
 							/>
 						</g>
 					{/each}
@@ -1788,12 +1789,13 @@
 								{...(p.props ?? {})}
 								{...resolveBindings(p.bind, ed.tags ?? {})}
 								{layer}
+								look={doc?.look ?? 'isa101'}
 							/>
 						</g>
 					{/each}
 				{/each}
 				{#each tees as t, i (i)}
-					<circle class="tee" cx={t.x} cy={t.y} r="7" fill="var(--pipe-wall, var(--edge, #7a7973))" pointer-events="none" />
+					<circle class="tee" cx={t.x} cy={t.y} r={(doc?.look ?? 'isa101') === 'isa101' ? 5 : 7} fill="var(--pipe-wall, var(--edge, #7a7973))" pointer-events="none" />
 				{/each}
 				{#each doc.pipes ?? [] as p (p.id)}
 					{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}

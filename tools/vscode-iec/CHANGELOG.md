@@ -13,6 +13,10 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Added
 
+- **Mimic editor: pipes as the screen draws them.** One line on an
+  ISA-101 mimic, the walled tube on a realistic one, as the kit's
+  `<Mimic>` now draws them.
+
 - **Mimic editor: tees and crossings as the screen draws them.** A pipe
   ending on another run gets a dot there, and a pipe crossing under a
   header is broken either side of it, as the kit's `<Mimic>` draws them,

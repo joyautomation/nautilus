@@ -3,6 +3,11 @@
 	// marches along the path; speed scales with rate (0–1).
 	// Render inside an <svg> element.
 	//
+	// LOOK. `isa101` draws one line, as a P&ID draws a process line, with the
+	// flow dashes on it (no bore: a line has no inside). `realistic`, the
+	// default for a pipe drawn on its own, is the walled tube below. <Mimic>
+	// passes its look.
+	//
 	// JUNCTIONS NEED LAYERED RENDERING. A pipe is a wall stroke with a
 	// background-coloured bore stroke over it; render pipes one-at-a-time and
 	// every tee is a lie — the later pipe's bore punches a slot across the
@@ -30,7 +35,8 @@
 		rate = 1,
 		color = 'var(--s1, #3987e5)',
 		dead = false,
-		layer = undefined
+		layer = undefined,
+		look = 'realistic'
 	}: {
 		d: string;
 		flowing?: boolean;
@@ -40,7 +46,11 @@
 		dead?: boolean;
 		/** Paint only this stratum (see the junction note above). */
 		layer?: 'wall' | 'bore' | 'flow';
+		/** `isa101`: one line, as a P&ID draws a process line, the flow
+		 * dashes on it. `realistic` (the default, alone): a walled tube. */
+		look?: 'isa101' | 'realistic';
 	} = $props();
+	const line = $derived(look === 'isa101');
 
 	// Quantize rate into quarter-steps: a continuously varying duration would
 	// restart the CSS animation on every data frame and read as jitter.
@@ -55,11 +65,11 @@
 			{d}
 			fill="none"
 			stroke="var(--pipe-wall, var(--edge, #7a7973))"
-			stroke-width="10"
+			stroke-width={line ? 4 : 10}
 			stroke-linecap="round"
 		/>
 	{/if}
-	{#if !layer || layer === 'bore'}
+	{#if (!layer || layer === 'bore') && !line}
 		<path
 			class="bore"
 			{d}

@@ -319,12 +319,13 @@
 								{...(p.props ?? {})}
 								{...resolveBindings(p.bind, tags)}
 								{layer}
+								look={drawLook}
 							/>
 						</g>
 					{/each}
 				{/each}
 				{#each tees as t, i (i)}
-					<circle class="tee" cx={t.x} cy={t.y} r="7" fill="var(--pipe-wall, var(--edge, #7a7973))" />
+					<circle class="tee" cx={t.x} cy={t.y} r={drawLook === 'isa101' ? 5 : 7} fill="var(--pipe-wall, var(--edge, #7a7973))" />
 				{/each}
 			</svg>
 
