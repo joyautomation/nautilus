@@ -56,6 +56,11 @@ export const ed = $state({
 	/** Live tag snapshot from the controller; null = offline or live off. */
 	tags: null as Record<string, unknown> | null,
 	liveEnabled: true,
+	/** The controller is starting (the playground): no tags yet, not offline. */
+	liveStarting: false,
+	/** Whether the host has reported live state yet: until it has, the pill
+	 * says it is connecting rather than claiming "offline". */
+	liveSeen: false,
 	/** The palette: built-ins plus the document's own kinds. */
 	kinds: [] as PaletteKind[],
 	assets: [] as AssetReport[],

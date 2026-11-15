@@ -5,6 +5,7 @@
 // project's files as saved and starts scanning, and the extension's live
 // values, online edit, forces and Test Explorer reach it through the engine.
 import * as vscode from "vscode";
+import { beginControllerStart, controllerStopped, endControllerStart } from "../controllerStatus";
 import { engine, patchFetch, PLAYGROUND_URL } from "./engine";
 
 export const IS_WEB = true;
@@ -33,8 +34,17 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
   };
 
   async function run(): Promise<void> {
-    await vscode.workspace.saveAll(false);
-    const r = await engine.call<LoadResult>("run");
+    // With nothing running yet, the live pills say "starting" until it is
+    // (a restart keeps the old program's values on screen meanwhile).
+    const starting = !running;
+    if (starting) beginControllerStart();
+    let r: LoadResult;
+    try {
+      await vscode.workspace.saveAll(false);
+      r = await engine.call<LoadResult>("run");
+    } catch (err) {
+      r = { ok: false, error: err instanceof Error ? err.message : String(err), ms: 0 };
+    }
     problems.clear();
     const notices = r.notices ?? [];
     if (notices.length && notices.join() !== shownNotices) {
@@ -49,11 +59,13 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
         .showErrorMessage(running ? `Not applied, the previous program is still running: ${msg}` : `The project did not start: ${msg}`, "Show Output")
         .then((pick) => pick && out.show(true));
       show();
+      if (starting) endControllerStart(false);
       return;
     }
     out.appendLine(`run: compiled and started in ${Math.round(r.ms)} ms`);
     running = true;
     show();
+    if (starting) endControllerStart(true);
     // Live values follow the controller; a fresh one has fresh tags.
     live?.configChanged();
   }
@@ -75,6 +87,7 @@ export function registerPlatform(context: vscode.ExtensionContext, live: { confi
     vscode.commands.registerCommand("nautilus.playground.stop", async () => {
       await engine.call("stop");
       running = false;
+      controllerStopped();
       out.appendLine("stopped");
       show();
     })

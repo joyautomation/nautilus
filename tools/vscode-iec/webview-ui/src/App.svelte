@@ -602,7 +602,7 @@
 		const msg = ev.data as
 			| Msg
 			| { type: 'diagnostics'; diags?: Diag[] }
-			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown>; types?: FlatTypes }
+			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; starting?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown>; types?: FlatTypes }
 			| { type: 'syncState'; state?: string };
 		if (!msg?.type) return;
 		if (msg.type === 'syncState') {
@@ -611,7 +611,7 @@
 		}
 		if (msg.type === 'liveValues') {
 			// Store-only update: FbdNode pills react directly, no node rebuild.
-			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {}, forced: msg.forced ?? {}, types: msg.types ?? {} });
+			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, starting: !!msg.starting, values: msg.values ?? {}, forced: msg.forced ?? {}, types: msg.types ?? {} });
 			return;
 		}
 		if (msg.type === 'diagnostics') {
@@ -948,14 +948,17 @@
 				<button
 					class="livepill"
 					class:on={live.enabled && live.fresh}
-					class:offline={live.enabled && !live.fresh}
+					class:offline={live.enabled && !live.fresh && !live.starting}
+					class:starting={live.enabled && !live.fresh && live.starting}
 					title={live.enabled
 						? live.fresh
 							? 'Streaming live values from the controller — click to disable'
-							: 'Live values enabled but no frames arriving — is the controller running? Click to disable'
+							: live.starting
+								? 'The controller is compiling the project and starting: live values follow in a moment'
+								: 'Live values enabled but no frames arriving — is the controller running? Click to disable'
 						: 'Live values are off — click to enable'}
 					onclick={() => vscode.postMessage({ type: 'toggleLive' })}
-				>{live.enabled ? (live.fresh ? '● live' : '◌ offline') : '○ live off'}</button>
+				>{live.enabled ? (live.fresh ? '● live' : live.starting ? '◌ starting…' : '◌ offline') : '○ live off'}</button>
 			{/if}
 			{#if hasPins && mode === 'fbd'}
 				<button title="Clear all pinned positions (back to full auto-layout)" onclick={() => postOp({ type: 'clearLayout' })}>auto layout</button>
@@ -1139,6 +1142,20 @@
 	.bar button.livepill.offline {
 		color: var(--nx-warn);
 		border-color: var(--nx-warn);
+	}
+	.bar button.livepill.starting {
+		color: var(--nx-muted);
+		animation: nx-live-starting 1.6s ease-in-out infinite;
+	}
+	@keyframes nx-live-starting {
+		50% {
+			opacity: 0.55;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.bar button.livepill.starting {
+			animation: none;
+		}
 	}
 	.legend {
 		display: inline-flex;

@@ -22,6 +22,7 @@
 				message?: string;
 				tags?: Record<string, unknown> | null;
 				enabled?: boolean;
+				starting?: boolean;
 				snapToGrid?: boolean;
 			};
 			if (m?.type === 'sceneDoc' && m.doc) {
@@ -37,6 +38,8 @@
 			} else if (m?.type === 'sceneTags') {
 				ed.tags = m.tags ?? null;
 				ed.liveEnabled = m.enabled ?? true;
+				ed.liveStarting = !!m.starting;
+				ed.liveSeen = true;
 			} else if (m?.type === 'sceneConfig') {
 				ed.snapToGrid = m.snapToGrid ?? true;
 			}
@@ -149,14 +152,19 @@
 		<button
 			class="live nx-pill"
 			class:off={!ed.liveEnabled || !ed.tags}
+			class:starting={ed.liveEnabled && !ed.tags && (ed.liveStarting || !ed.liveSeen)}
 			onclick={toggleLive}
 			title={!ed.liveEnabled
 				? 'Live values are off — click to enable'
 				: ed.tags
 					? 'Live tags from nautilus.runtimeUrl — bound nodes animate with the process. Click to disable'
-					: "Live values enabled but the controller isn't answering — is it running? Click to disable"}
+					: ed.liveStarting
+						? 'The controller is compiling the project and starting: live values follow in a moment'
+						: !ed.liveSeen
+							? 'Connecting to the controller…'
+						: "Live values enabled but the controller isn't answering — is it running? Click to disable"}
 		>
-			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : '◌ offline'}
+			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : ed.liveStarting ? '◌ starting…' : ed.liveSeen ? '◌ offline' : '◌ connecting…'}
 		</button>
 	</header>
 
@@ -262,6 +270,19 @@
 	}
 	.live.off {
 		opacity: 0.6;
+	}
+	.live.starting {
+		animation: nx-live-starting 1.6s ease-in-out infinite;
+	}
+	@keyframes nx-live-starting {
+		50% {
+			opacity: 0.35;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.live.starting {
+			animation: none;
+		}
 	}
 	.err,
 	.warn {

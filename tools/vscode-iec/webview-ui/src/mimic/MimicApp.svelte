@@ -10,7 +10,13 @@
 	import EditorCanvas from './EditorCanvas.svelte';
 	import EquipPalette from './EquipPalette.svelte';
 	import PropsPanel from './PropsPanel.svelte';
-	import { setUserComponentDiagnostics } from './userComponentsState.svelte';
+	import { setUserComponentDiagnostics, setUserComponentStatus } from './userComponentsState.svelte';
+
+	// Until the host says otherwise (the ready handshake answers at once),
+	// a custom component not drawn yet is assumed to be on its way: the page
+	// opens before its components are built.
+	// (Not in the gesture harness: no host there to say a build finished.)
+	if (!window.__MODEL__) setUserComponentStatus({ building: true });
 
 	$effect(() => {
 		const onMsg = (e: MessageEvent) => {
@@ -23,6 +29,8 @@
 				components?: typeof ed.manifest;
 				customComponents?: string[];
 				diagnostics?: { component: string; message: string }[];
+				building?: boolean;
+				starting?: boolean;
 				snapToGrid?: boolean;
 				enabled?: boolean;
 				id?: number;
@@ -37,11 +45,14 @@
 			} else if (m?.type === 'mimicTags') {
 				ed.tags = m.tags ?? null;
 				ed.liveEnabled = m.enabled ?? true;
+				ed.liveStarting = !!m.starting;
+				ed.liveSeen = true;
 			} else if (m?.type === 'mimicManifest') {
 				ed.manifest = m.components ?? {};
 				ed.customComponents = m.customComponents ?? [];
 			} else if (m?.type === 'userComponentDiagnostics') {
 				setUserComponentDiagnostics(m.diagnostics ?? []);
+				setUserComponentStatus({ building: m.building });
 			} else if (m?.type === 'mimicConfig') {
 				ed.snapToGrid = m.snapToGrid ?? true;
 			} else if (m?.type === 'writeResult' && typeof m.id === 'number') {
@@ -168,14 +179,19 @@
 		<button
 			class="live nx-pill"
 			class:off={!ed.liveEnabled || !ed.tags}
+			class:starting={ed.liveEnabled && !ed.tags && (ed.liveStarting || !ed.liveSeen)}
 			onclick={toggleLive}
 			title={!ed.liveEnabled
 				? 'Live values are off — click to enable'
 				: ed.tags
 					? 'Live tags from nautilus.runtimeUrl — bound equipment animates with the process. Click to disable'
-					: 'Live values enabled but the controller isn\'t answering — is it running? Click to disable'}
+					: ed.liveStarting
+						? 'The controller is compiling the project and starting: live values follow in a moment'
+						: !ed.liveSeen
+							? 'Connecting to the controller…'
+						: 'Live values enabled but the controller isn\'t answering — is it running? Click to disable'}
 		>
-			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : '◌ offline'}
+			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : ed.liveStarting ? '◌ starting…' : ed.liveSeen ? '◌ offline' : '◌ connecting…'}
 		</button>
 	</header>
 
@@ -306,6 +322,19 @@
 		color: var(--nx-muted);
 		background: transparent;
 		border-color: var(--nx-border);
+	}
+	.live.starting {
+		animation: nx-live-starting 1.6s ease-in-out infinite;
+	}
+	@keyframes nx-live-starting {
+		50% {
+			opacity: 0.55;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.live.starting {
+			animation: none;
+		}
 	}
 	.err {
 		flex: none;

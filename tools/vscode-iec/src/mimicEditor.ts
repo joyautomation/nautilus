@@ -11,6 +11,7 @@
 // bound components animate with the real process.
 
 import * as vscode from "vscode";
+import { controllerCompiling, controllerStarting, onDidChangeControllerStarting } from "./controllerStatus";
 import { webviewOptions } from "./fbdPreview";
 import { applyMimicOp, parseMimic, type MimicOp } from "./mimicOps";
 import { ComponentIndex, writeComponentPortsEdit } from "./mimicComponents";
@@ -49,7 +50,7 @@ function mimicHtml(webview: vscode.Webview, extensionUri: vscode.Uri, userCompon
 <link rel="stylesheet" href="${styleUri}">
 <title>Mimic</title>
 </head>
-<body data-mimic-mode="mimic">
+<body data-mimic-mode="mimic"${userScript ? " data-user-bundle" : ""}>
 <div id="app"></div>
 <script nonce="${nonce}" src="${scriptUri}"></script>${userScript}
 </body>
@@ -211,6 +212,8 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
       void panel.webview.postMessage({
         type: "userComponentDiagnostics",
         diagnostics: this.userComponents.lastDiagnostics(),
+        // A component not drawn yet while a build is due is on its way.
+        building: this.userComponents.isBuilding(),
       });
 
     const postDoc = () => {
@@ -245,6 +248,7 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
       panel.webview.html = mimicHtml(panel.webview, this.context.extensionUri, this.userComponents);
       postUserComponentDiagnostics();
     });
+    const userBuildingSub = this.userComponents.onDidChangeBuilding(postUserComponentDiagnostics);
 
     let debounce: NodeJS.Timeout | undefined;
     const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
@@ -280,6 +284,9 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
         if (msg?.type === "mimicReady") {
           postDoc();
           void this.portsReady.then(postPorts);
+          if (lastTags !== undefined) {
+            void panel.webview.postMessage({ type: "mimicTags", tags: lastTags, enabled: liveEnabled(), starting: controllerStarting() });
+          }
           void postTags();
           postUserComponentDiagnostics();
           postConfig();
@@ -370,11 +377,24 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     // tags null = controller offline (the webview shows the pill grey and
     // keeps component defaults). With live values off nothing is fetched at
     // all — the pill reads "live off" and clicking it turns them back on.
+    // The last tags posted: a page reloaded for a rebuilt component bundle
+    // shows them at once, not "offline" until the next fetch answers.
+    let lastTags: Record<string, unknown> | null | undefined;
+    let tagSeq = 0;
     const postTags = async () => {
       const enabled = liveEnabled();
-      const tags = enabled ? await fetchTags() : null;
-      void panel.webview.postMessage({ type: "mimicTags", tags, enabled });
+      // A controller still compiling has nothing to answer yet: say so now.
+      const seq = ++tagSeq;
+      const tags = enabled && !controllerCompiling() ? await fetchTags() : null;
+      // A slower, older fetch (a poll still waiting on a controller that
+      // was not answering yet) never overwrites a newer answer.
+      if (seq !== tagSeq) return;
+      lastTags = tags;
+      void panel.webview.postMessage({ type: "mimicTags", tags, enabled, starting: controllerStarting() });
     };
+    // The playground's controller just came up (or failed to): show it now,
+    // not a poll later.
+    const startingSub = onDidChangeControllerStarting(() => void postTags());
     const tagTimer = setInterval(() => {
       if (panel.visible && liveEnabled()) void postTags();
     }, TAG_POLL_MS);
@@ -383,10 +403,12 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     panel.onDidDispose(() => {
       if (debounce) clearTimeout(debounce);
       clearInterval(tagTimer);
+      startingSub.dispose();
       changeSub.dispose();
       configSub.dispose();
       messageSub.dispose();
       userComponentsSub.dispose();
+      userBuildingSub.dispose();
       this.panels.delete(panel);
       this.panelDocNames.delete(panel);
     });
