@@ -78,7 +78,7 @@
 			{#if p.text}<p class="text">{p.text}</p>{/if}
 			{#if p.readings?.length}
 				<dl class="readings">
-					{#each p.readings as r (r.tag)}
+					{#each p.readings as r, i (i)}
 						{@const v = value(r.tag)}
 						<dt>{r.label ?? r.tag}</dt>
 						<dd>
@@ -101,7 +101,7 @@
 			{/if}
 			{#if p.commands?.length}
 				<div class="commands">
-					{#each p.commands as c (c.tag)}
+					{#each p.commands as c, i (i)}
 						<CommandButton
 							tag={c.tag}
 							label={c.label}
@@ -115,7 +115,7 @@
 			{/if}
 			{#if p.toggles?.length}
 				<div class="toggles">
-					{#each p.toggles as t (t.tag)}
+					{#each p.toggles as t, i (i)}
 						<WriteToggle
 							tag={t.tag}
 							label={t.label}
@@ -132,7 +132,7 @@
 			{/if}
 			{#if p.links?.length}
 				<div class="links">
-					{#each p.links as id (id)}
+					{#each p.links as id, i (i)}
 						<button class="link" onclick={() => (selected = id)}>{titleOf(id)}</button>
 					{/each}
 				</div>
