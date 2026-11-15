@@ -290,6 +290,10 @@ type Runtime struct {
 	// takeover to write back once it has reset the frames.
 	pendingLocals map[string]map[string]any
 
+	// retainPreloaded: LoadRetained restored the store before Run, so the
+	// first takeover skips its own load. Guarded by leadMu.
+	retainPreloaded bool
+
 	// live is what Liveness reads: Run's loops' scan edges and lifecycle.
 	live liveness
 }
