@@ -56,6 +56,7 @@ var agentsPrevious = map[string]string{
 	"7b2ccc530cc3d72c574123fc219908c0589de2235f60235e58bc4bad041ed961": "#675, 2026-11-13",
 	"203b531badb16fcfab9aa6fed2edf0133e78e1ded81bf8f623ff9bdc2ea5b9ba": "#676, 2026-11-14",
 	"55db2a5b4956b7e9d40210efb0e022ff137005d35ea8bc1ae22ad84c6ffbe642": "#677, 2026-11-14",
+	"b8f3cc9632fba2da35f08e7dbc41dce0461e3f1b3aaea849968d2af7deab8bee": "#679, 2026-11-14",
 }
 
 // agentsState is what a project's AGENTS.md is, as far as naut is concerned.

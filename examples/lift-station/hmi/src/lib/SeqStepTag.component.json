@@ -3,5 +3,13 @@
     "props": {
       "text": "something"
     }
+  },
+  "examples": {
+    "a step": {
+      "text": "LEAD RUN"
+    },
+    "no step": {
+      "text": ""
+    }
   }
 }

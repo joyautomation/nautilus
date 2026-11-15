@@ -276,7 +276,10 @@ naut builds the operator screen from the project itself, with no npm, and
   it, tags bound to it. A project with mimics gets a page for each. Use
   the kit's equipment (`Tank`, `Pump`, `Valve`, `Gauge`, `CommandButton`,
   `WriteToggle`, ...) and a `{Name}.svelte` of your own where the kit
-  doesn't draw what you need, with its pipe ports in `{Name}.component.json`.
+  doesn't draw what you need, with its pipe ports in `{Name}.component.json`
+  and its `examples`: the props for each state it draws
+  (`"examples": {"open": {...}, "closed": {...}, "failed": {...}}`).
+  `/components` draws every one, and `naut check` renders it.
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
   drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
   and each copy moves by `step`:

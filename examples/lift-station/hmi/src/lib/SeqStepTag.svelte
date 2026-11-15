@@ -36,7 +36,7 @@
 		flex-shrink: 0;
 	}
 	.v {
-		color: var(--text, #e7e6df);
+		color: var(--ink, #e7e6df);
 		font-family: var(--mono, ui-monospace, monospace);
 	}
 </style>

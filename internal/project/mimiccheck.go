@@ -68,9 +68,10 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 	for _, d := range p.Runtime.Tags {
 		tags[d.Name] = d
 	}
-	files, sources, sidecars := scanScreens(fsys)
+	files, sources, sidecars, examples := scanScreens(fsys)
 	var reports []MimicReport
 	var errs, warns []string
+	unshown := map[string]bool{} // project components without examples, said once
 	for _, f := range files {
 		raw, err := fs.ReadFile(fsys, f)
 		if err != nil {
@@ -124,6 +125,10 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 				say("%s is a %s, and there is no %s.svelte in the project (the kit's own are %s)", where, eq.Component, eq.Component, strings.Join(sortedKeys(builtinPorts), ", "))
 			} else {
 				ports[eq.ID] = sidecars[eq.Component]
+				if !examples[eq.Component] && !unshown[eq.Component] {
+					unshown[eq.Component] = true
+					warns = append(warns, fmt.Sprintf("%s: %s has no examples: give its %s.component.json \"examples\", the props for each state it draws (\"examples\": {\"running\": {...}, \"faulted\": {...}}). The screens' /components page draws each one, and naut check renders it", f, eq.Component, eq.Component))
+				}
 			}
 			for _, prop := range sortedKeys(eq.Bind) {
 				tag(where+"'s "+prop, eq.Bind[prop])
@@ -185,10 +190,11 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 	return reports, errs, warns
 }
 
-// scanScreens finds the project's mimics, its {Name}.svelte components and
-// the ports their {Name}.component.json give them.
-func scanScreens(fsys fs.FS) (mimics []string, sources map[string][]string, ports map[string][]string) {
-	sources, ports = map[string][]string{}, map[string][]string{}
+// scanScreens finds the project's mimics, its {Name}.svelte components,
+// the ports their {Name}.component.json give them, and which give
+// examples (named sets of props, one per state the component draws).
+func scanScreens(fsys fs.FS) (mimics []string, sources map[string][]string, ports map[string][]string, examples map[string]bool) {
+	sources, ports, examples = map[string][]string{}, map[string][]string{}, map[string]bool{}
 	_ = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -211,9 +217,13 @@ func scanScreens(fsys fs.FS) (mimics []string, sources map[string][]string, port
 				Ports []struct {
 					Name string `json:"name"`
 				} `json:"ports"`
+				Examples map[string]json.RawMessage `json:"examples"`
 			}
 			if raw, err := fs.ReadFile(fsys, p); err == nil && json.Unmarshal(raw, &sc) == nil {
 				name := strings.TrimSuffix(n, ".component.json")
+				if len(sc.Examples) > 0 {
+					examples[name] = true
+				}
 				for _, pt := range sc.Ports {
 					ports[name] = append(ports[name], pt.Name)
 				}
@@ -222,7 +232,7 @@ func scanScreens(fsys fs.FS) (mimics []string, sources map[string][]string, port
 		return nil
 	})
 	sort.Strings(mimics)
-	return mimics, sources, ports
+	return mimics, sources, ports, examples
 }
 
 func btoi(b bool) int {

@@ -1,3 +1,33 @@
 {
-	"preview": { "props": { "text": "LIT-101", "value": 46.2, "unit": "%", "min": 0, "max": 100 } }
+	"preview": {
+		"props": {
+			"text": "LIT-101",
+			"value": 46.2,
+			"unit": "%",
+			"min": 0,
+			"max": 100
+		}
+	},
+	"examples": {
+		"mid-range": {
+			"text": "LIT-101",
+			"value": 46.2,
+			"unit": "%",
+			"min": 0,
+			"max": 100
+		},
+		"high": {
+			"text": "LIT-101",
+			"value": 91.5,
+			"unit": "%",
+			"min": 0,
+			"max": 100
+		},
+		"no value yet": {
+			"text": "LIT-101",
+			"unit": "%",
+			"min": 0,
+			"max": 100
+		}
+	}
 }

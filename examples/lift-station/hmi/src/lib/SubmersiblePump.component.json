@@ -1,4 +1,29 @@
 {
-	"ports": [{ "name": "discharge", "part": "elbow", "x": 0.5, "y": 0 }],
-	"preview": { "props": { "running": true, "speedHz": 48.5, "label": "P-101" } }
+	"ports": [
+		{
+			"name": "discharge",
+			"part": "elbow",
+			"x": 0.5,
+			"y": 0
+		}
+	],
+	"preview": {
+		"props": {
+			"running": true,
+			"speedHz": 48.5,
+			"label": "P-101"
+		}
+	},
+	"examples": {
+		"running": {
+			"running": true,
+			"speedHz": 48.5,
+			"label": "P-101"
+		},
+		"stopped": {
+			"running": false,
+			"speedHz": 0,
+			"label": "P-101"
+		}
+	}
 }

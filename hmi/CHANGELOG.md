@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`/components`: every component in every state.** naut's screens get a
+  page that draws each of the project's own components in each of the
+  `examples` its `{Name}.component.json` gives (name → props), at the box
+  a screen gives it, and `naut check` renders it, so a state that throws or
+  reads badly shows before the plant reaches it. A screen component with
+  no examples is a `naut check` warning. The mimic editor's preview pane
+  now reads a `preview` written flat (the props themselves, as the guide
+  showed it) and falls back to the first example.
+
 - **`--muted` text reaches AA contrast.** `#898781` → `#8d8b85` (dark) and
   `#74726a` → `#68665e` (light): 4.6:1 on `--surface-2`, the lowest ground,
   where it was 4.4:1 and 3.9:1. The palette test now holds every text
