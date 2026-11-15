@@ -280,11 +280,31 @@ naut builds the operator screen from the project itself, with no npm, and
   and its `examples`: the props for each state it draws
   (`"examples": {"open": {...}, "closed": {...}, "failed": {...}}`).
   `/components` draws every one, and `naut check` renders it.
-- Group setpoints in the kit's `SetpointGroup`, a titled panel of fields
-  that reads and writes its items' tags and is as tall as its fields
-  (give it a width, never a height):
-  `{"component": "SetpointGroup", "width": 300, "props": {"title": "Tuning",
-  "items": [{"tag": "Kp", "label": "Gain", "decimals": 2}]}}`.
+- naut's pages put a bar over every screen: the project's name and the
+  first mimic's `description`, the screens and Diagnostics, the active
+  alarms with Ack all, the connection and the theme. Don't draw an alarm
+  list, a connection light or a title on the canvas.
+- The drawing shows the plant; an operator changes it in a panel. Give
+  each piece of equipment an operator acts on a `panel`: a click on it
+  opens the panel beside the drawing, with its live readings (a number
+  with a trend of its last few minutes, a true/false as words), its
+  setpoints, its commands and its switches:
+  `"panel": {"title": "P-501 backwash pump", "readings": [{"tag":
+  "P501_Running", "label": "State", "on": "Running", "off": "Stopped"},
+  {"tag": "FIT501_Flow", "label": "Flow", "unit": "gpm", "decimals": 0}],
+  "setpoints": [{"tag": "BW_FlowSP", "label": "Backwash flow", "unit":
+  "gpm"}], "commands": [{"tag": "P501_Start", "label": "Start", "kind":
+  "start"}], "toggles": [{"tag": "P501_OOS", "label": "Out of service"}],
+  "links": ["F1"]}`. Equipment that belongs to another's panel opens it
+  by id (`"panel": "P501"` on the pump's flow meter). Every setpoint,
+  command and switch goes in a panel; a setpoint of the whole process
+  goes in the panel of the vessel or unit it runs. The drawing keeps only
+  the sequence's own controls (Start, Hold, Abort, a recipe) and the
+  plant's state and values.
+- Every analog value on the drawing is a `labels` entry with `bind` (and
+  `unit`, `decimals`) beside what it measures: naut's pages draw it as a
+  readout with a trend of its last few minutes (`"min"`/`"max"` fix the
+  trend's scale, a level's 0-100).
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
   drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
   and each copy moves by `step`:
@@ -325,8 +345,8 @@ naut builds the operator screen from the project itself, with no npm, and
 - Never hand-write an HTML or JavaScript page for the operator screen, and
   never point `server.hmi` at one: naut doesn't check it, it can't use the
   kit, and the editor can't show it.
-- `naut check` checks screens: every tag a binding, a label or a control
-  names, every pipe's ports, a prop or binding a kit component doesn't
+- `naut check` checks screens: every tag a binding, a label, a control or
+  a panel names, every pipe's ports, a prop or binding a kit component doesn't
   take (it shows nothing), and the screen builds. A screen imports only
   Svelte, `@joyautomation/nautilus-hmi`, `@joyautomation/nautilus-hmi-3d`,
   three and Threlte.

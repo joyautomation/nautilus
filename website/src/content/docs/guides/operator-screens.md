@@ -48,7 +48,14 @@ The same document renders in a SvelteKit HMI through the
 - **`pipes`**: a polyline of `points`, or anchored at either end to an
   equipment's named port (`from`, `to`); `routing: "orthogonal"` draws
   right angles. Bind `flowing` (and `rate`) to animate the flow.
-- **`labels`**: static text, or with `bind` a live readout.
+- **`labels`**: static text, or with `bind` a live readout. naut's own
+  pages draw a readout with a trend of its last few minutes after the
+  number (`<Mimic trends>` in an app); `"trend": false` leaves it off,
+  `"min"` and `"max"` fix its scale.
+- **`panel`** on a piece of equipment: what a click on it opens (see
+  [Panels](#panels-what-a-click-opens)).
+- **`description`**: a line on what the screen shows; naut's bar puts the
+  first screen's beside the project's name.
 - **`look`**: `isa101` (the default: flat grey, colour only for a state or
   an abnormal condition) or `realistic`.
 
@@ -126,6 +133,51 @@ on and a controller is running; otherwise, and when the controller refuses
 it (a forced tag, say), the control shows why beside itself. In the editor,
 a click on a control operates it while a controller is connected; with
 live values off, the whole piece is the editor's to select and drag again.
+
+## Panels: what a click opens
+
+The drawing shows the plant's state and values; an operator changes them
+in a panel. A piece of equipment's `panel` lists its live readings, its
+setpoints, its commands and its switches, and a click on it opens them in
+a panel beside the drawing, which moves over to make room. The plant
+keeps running behind it, and × or Escape closes it.
+
+```json
+{ "id": "P501", "component": "Pump", "x": 900, "y": 640,
+  "bind": { "running": "P501_Running" },
+  "panel": {
+    "title": "P-501 backwash pump",
+    "readings": [
+      { "tag": "P501_Running", "label": "State", "on": "Running", "off": "Stopped" },
+      { "tag": "FIT501_Flow", "label": "Flow", "unit": "gpm", "decimals": 0 }
+    ],
+    "setpoints": [{ "tag": "BW_FlowSP", "label": "Backwash flow", "unit": "gpm", "decimals": 0 }],
+    "commands": [
+      { "tag": "P501_Start", "label": "Start", "kind": "start" },
+      { "tag": "P501_Stop", "label": "Stop", "kind": "stop" }
+    ],
+    "toggles": [{ "tag": "P501_OOS", "label": "Out of service" }],
+    "links": ["FIT501"]
+  } }
+```
+
+- **`readings`**: a number shows with its `unit` and a trend of its last
+  few minutes (`min`, `max` fix the trend's scale); a true/false shows the
+  words `on` and `off` give, as an alarm with `"alarm": true`.
+- **`setpoints`**: fields that write their tags, as `SetpointGroup`'s items.
+- **`commands`**: momentary buttons, as `CommandButton` (`held` names the
+  tag that reads back as pressed).
+- **`toggles`**: switches that hold a bit on or off, as `WriteToggle`.
+- **`links`**: other equipment whose panels this one opens.
+- A string opens another's panel: `"panel": "P501"` on the pump's flow
+  meter.
+
+Equipment with no panel isn't clickable, and a click on it reaches what's
+under it, except on its own controls. `naut check` checks every tag a
+panel reads or writes and every id it names. In an app,
+`<EquipmentPanel {doc} {tags} {write} bind:selected />` beside
+`<Mimic ... onequipmentclick={(eq) => (selected = eq.id)} clickable={(eq) => !!panelFor(doc, eq.id)} {selected} />`
+does the same.
 
 ## Your own components
 
@@ -283,8 +335,12 @@ serves them at `/`, with the engineering dashboard moved to `/_nautilus/`:
 - **With no `server.hmi`**, a project with `*.mimic.json` files gets a page
   for each: the first at `/`, the others by file name
   (`screens/pumps.mimic.json` is `/pumps`), under a bar with the project's
-  name, the pages, the connection and a theme switch. The pages are live
-  and their controls write, as in the editor. Each page shows its whole
+  name and the first screen's `description`, the pages and Diagnostics
+  (the controller's scan timing and field drivers), the active alarms
+  (the banner opens `/alarms`, to acknowledge and shelve them) and Ack
+  all, the connection and a theme switch. The pages are live and their
+  controls write, as in the editor; a click on equipment with a `panel`
+  opens it. Each page shows its whole
   drawing at once, fitted to the window's width and height and centred,
   so draw the canvas for the window it's seen in: about 1880×1000 fills a
   1920×1080 screen under the bar. A taller canvas is drawn smaller, not

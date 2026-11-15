@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **Panels: what a click on a mimic's equipment opens.** A piece of
+  equipment's `panel` lists its live readings, setpoints, commands and
+  switches (or names another piece whose panel it opens), and the new
+  `EquipmentPanel` shows it beside the drawing, as the lift station's
+  hand-built panel does. `panelFor(doc, id)` resolves one. `<Mimic>`
+  takes `clickable` (which equipment a click goes to; the rest let a
+  click through to what's under them, all but their own controls) and
+  `trends` (a sparkline of its last few minutes in every bound label;
+  `"trend"`, `"min"` and `"max"` on a label). A doc's `description` is a
+  line on what it shows. `sampleTag` / `tagHistory` keep the series, once
+  a second per tag, across page changes.
+
 ### Changed
 
 - **Pipes on an ISA-101 screen are single lines.** `<Mimic>` draws a pipe

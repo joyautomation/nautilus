@@ -23,7 +23,7 @@ type MimicReport struct {
 var builtinPorts = map[string][]string{
 	"Tank": {"top", "left", "right", "bottom"}, "Pump": {"in", "out"}, "Valve": {"in", "out"},
 	"Heater": nil, "Gauge": nil, "Sparkline": nil, "CommandButton": nil, "WriteToggle": nil,
-	"OffPage":    {"top", "left", "right", "bottom"},
+	"OffPage":       {"top", "left", "right", "bottom"},
 	"SetpointGroup": nil,
 }
 
@@ -42,7 +42,7 @@ var builtinProps = map[string][]string{
 
 // equipmentKeys are the keys a piece of equipment has; anything else in
 // it is ignored when the screen runs.
-var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports"}
+var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports", "panel"}
 
 // writers are the kit's controls: the `tag` prop is the tag they write.
 var writers = map[string]bool{"CommandButton": true, "WriteToggle": true}
@@ -53,6 +53,7 @@ type mimicFile struct {
 		Component string            `json:"component"`
 		Bind      map[string]string `json:"bind"`
 		Props     map[string]any    `json:"props"`
+		Panel     json.RawMessage   `json:"panel"`
 	} `json:"equipment"`
 	Pipes []struct {
 		ID     string            `json:"id"`
@@ -65,6 +66,27 @@ type mimicFile struct {
 		Text string `json:"text"`
 		Bind string `json:"bind"`
 	} `json:"labels"`
+}
+
+// mimicPanel is an equipment's panel (hmi mimic.ts MimicPanel): only what
+// the check reads.
+type mimicPanel struct {
+	Text     string `json:"text"`
+	Readings []struct {
+		Tag string `json:"tag"`
+	} `json:"readings"`
+	Setpoints []struct {
+		Tag string `json:"tag"`
+	} `json:"setpoints"`
+	Commands []struct {
+		Tag   string `json:"tag"`
+		Label string `json:"label"`
+		Held  string `json:"held"`
+	} `json:"commands"`
+	Toggles []struct {
+		Tag string `json:"tag"`
+	} `json:"toggles"`
+	Links []string `json:"links"`
 }
 
 type pipeEnd struct {
@@ -289,6 +311,67 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 					where = "label " + l.Text
 				}
 				tag(where, l.Bind)
+			}
+		}
+		// panels: what each reads and writes is declared, and a panel named
+		// by id is one that's there
+		for _, eq := range m.Equipment {
+			if len(eq.Panel) == 0 || string(eq.Panel) == "null" {
+				continue
+			}
+			where := "equipment " + eq.ID + "'s panel"
+			var ref string
+			if json.Unmarshal(eq.Panel, &ref) == nil {
+				if ref == eq.ID {
+					say("%s names itself; give it the panel itself ({\"readings\": [...], \"setpoints\": [...], \"commands\": [...]})", where)
+				} else if _, ok := components[ref]; !ok {
+					say("%s opens %s's, which isn't on the screen", where, ref)
+				}
+				continue
+			}
+			var pn mimicPanel
+			if err := json.Unmarshal(eq.Panel, &pn); err != nil {
+				say("%s isn't a panel (an object of readings, setpoints, commands, toggles) or an equipment id: %v", where, err)
+				continue
+			}
+			if len(pn.Readings)+len(pn.Setpoints)+len(pn.Commands)+len(pn.Toggles) == 0 && pn.Text == "" {
+				say("%s is empty: give it readings, setpoints, commands or toggles", where)
+			}
+			writes := func(kind string, i int, t string) {
+				if t == "" {
+					say("%s's %s %d has no tag", where, kind, i+1)
+				} else if d, ok := tags[t]; !ok {
+					say("%s's %s %d writes %s, which the project doesn't declare%s", where, kind, i+1, t, nearest(t, tags))
+				} else if d.Role == runtime.RoleInput {
+					warns = append(warns, fmt.Sprintf("%s: %s's %s %d writes %s, an input: the tag API refuses a write to an input a driver owns", f, where, kind, i+1, t))
+				}
+			}
+			for i, r := range pn.Readings {
+				if r.Tag == "" {
+					say("%s's reading %d has no tag", where, i+1)
+				} else {
+					tag(fmt.Sprintf("%s's reading %d", where, i+1), r.Tag)
+				}
+			}
+			for i, x := range pn.Setpoints {
+				writes("setpoint", i, x.Tag)
+			}
+			for i, x := range pn.Commands {
+				writes("command", i, x.Tag)
+				if x.Label == "" {
+					say("%s's command %d has no label", where, i+1)
+				}
+				if x.Held != "" {
+					tag(fmt.Sprintf("%s's command %d's held", where, i+1), x.Held)
+				}
+			}
+			for i, x := range pn.Toggles {
+				writes("toggle", i, x.Tag)
+			}
+			for _, id := range pn.Links {
+				if _, ok := components[id]; !ok {
+					say("%s links to %s, which isn't on the screen", where, id)
+				}
 			}
 		}
 		reports = append(reports, MimicReport{File: f, Equipment: len(m.Equipment), Pipes: len(m.Pipes)})

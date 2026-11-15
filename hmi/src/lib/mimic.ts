@@ -12,6 +12,9 @@ import { builtinParts } from './drawings.js';
 export interface MimicDoc {
 	/** Optional display name. */
 	name?: string;
+	/** A line on what the screen shows: naut's own screens put the first
+	 * screen's beside the project's name in the bar. */
+	description?: string;
 	/** Logical canvas size; the renderer scales it to its container. */
 	canvas: { width: number; height: number };
 	/** How the equipment is drawn (see MimicLook). Default `isa101`; the
@@ -213,8 +216,86 @@ export interface MimicEquipment {
 	 * sidecar entry for `component` (editor only) else the built-in default;
 	 * an explicit `[]` means "no ports" and is NOT the same as absent. */
 	ports?: MimicPort[];
+	/** What a click on it opens: a panel beside the drawing with its live
+	 * readings, its setpoints and its commands (MimicPanel), or the id of
+	 * another piece of equipment whose panel it shares (a float switch
+	 * opens its wet well's). naut's own screens open it; an app opens it
+	 * with <EquipmentPanel> (see panelFor()). Equipment with no panel isn't
+	 * clickable there. */
+	panel?: MimicPanel | string;
 	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
 	fromUnit?: string;
+}
+
+/** The panel a click on a piece of equipment opens: the drawing shows the
+ * plant's state and values, the panel is where an operator changes them.
+ *
+ *   "panel": { "title": "P-501 backwash pump",
+ *     "readings": [{ "tag": "P501_Running", "label": "State", "on": "Running", "off": "Stopped" },
+ *                  { "tag": "FIT501_Flow", "label": "Flow", "unit": "gpm", "decimals": 0 }],
+ *     "setpoints": [{ "tag": "BW_FlowSP", "label": "Backwash flow", "unit": "gpm", "decimals": 0 }],
+ *     "commands": [{ "tag": "P501_StartCmd", "label": "Start", "kind": "start" },
+ *                  { "tag": "P501_StopCmd", "label": "Stop", "kind": "stop" }],
+ *     "toggles": [{ "tag": "P501_OOS", "label": "Out of service" }] } */
+export interface MimicPanel {
+	/** Heading. Default: the equipment's label, else its id. */
+	title?: string;
+	/** A line or two on what it is or does. */
+	text?: string;
+	/** Live values: a number with its unit and a sparkline of its last few
+	 * minutes, a true/false as the words `on` and `off` give. */
+	readings?: MimicPanelReading[];
+	/** Fields that write a setpoint (SetpointGroup's items). */
+	setpoints?: MimicPanelSetpoint[];
+	/** Momentary buttons (CommandButton): each writes true to its tag, then
+	 * false. `held` names the tag that reads back as pressed. */
+	commands?: { tag: string; label: string; kind?: 'start' | 'stop' | 'neutral'; pulseMs?: number; held?: string }[];
+	/** Switches that hold a bit on or off (WriteToggle), each showing its tag. */
+	toggles?: { tag: string; label: string; invert?: boolean }[];
+	/** Ids of other equipment whose panels this one links to. */
+	links?: string[];
+}
+
+export interface MimicPanelReading {
+	tag: string;
+	label?: string;
+	unit?: string;
+	/** Fraction digits (default 1). */
+	decimals?: number;
+	/** Fix the sparkline's scale (a level's 0-100); omitted, it fits the data. */
+	min?: number;
+	max?: number;
+	/** Words for a true/false value. Default `On` / `Off`. */
+	on?: string;
+	off?: string;
+	/** True is abnormal: shown as an alarm, not a state. */
+	alarm?: boolean;
+}
+
+export interface MimicPanelSetpoint {
+	tag: string;
+	label?: string;
+	unit?: string;
+	decimals?: number;
+	step?: number;
+	min?: number;
+	max?: number;
+}
+
+/** What a click on equipment `id` opens in a doc whose units are drawn out
+ * (expandUnits): the panel's owner (the equipment a string `panel` names,
+ * followed once), its heading, and the panel. Undefined when it opens
+ * nothing. */
+export function panelFor(
+	doc: MimicDoc,
+	id: string | null | undefined
+): { id: string; title: string; panel: MimicPanel } | undefined {
+	if (!id) return undefined;
+	const byId = (x: string) => doc.equipment?.find((e) => e.id === x);
+	let eq = byId(id);
+	if (eq && typeof eq.panel === 'string') eq = byId(eq.panel);
+	if (!eq || !eq.panel || typeof eq.panel !== 'object') return undefined;
+	return { id: eq.id, title: eq.panel.title || eq.label || eq.id, panel: eq.panel };
 }
 
 /** A pipe end's attachment to a named equipment port. When set, that end's
@@ -279,6 +360,13 @@ export interface MimicLabel {
 	unit?: string;
 	/** Fraction digits for the live value (default 1). */
 	decimals?: number;
+	/** A sparkline of the value's last few minutes after it. Default: the
+	 * page's choice (<Mimic trends>, on in naut's own screens); false keeps
+	 * it a bare number. */
+	trend?: boolean;
+	/** Fix the sparkline's scale (a level's 0-100); omitted, it fits the data. */
+	min?: number;
+	max?: number;
 	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
 	fromUnit?: string;
 }

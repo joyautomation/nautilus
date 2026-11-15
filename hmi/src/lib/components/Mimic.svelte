@@ -17,6 +17,7 @@
 	import OffPage from './OffPage.svelte';
 	import SetpointGroup from './SetpointGroup.svelte';
 	import Pipe from './Pipe.svelte';
+	import { sampleTag, tagHistory } from '../taghistory.svelte.js';
 	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
@@ -25,8 +26,10 @@
 		tags = {},
 		registry = {},
 		onequipmentclick,
+		clickable,
 		write,
 		selected = null,
+		trends = false,
 		minScale = 0,
 		fit = 'width',
 		look
@@ -40,6 +43,13 @@
 		registry?: Record<string, Component<any>>;
 		/** Present = equipment is clickable (open a faceplate, navigate…). */
 		onequipmentclick?: (eq: MimicEquipment) => void;
+		/** Which equipment a click goes to (with `onequipmentclick`): the
+		 *  rest draw as they would with no click at all. Default: all. */
+		clickable?: (eq: MimicEquipment) => boolean;
+		/** A sparkline of the last few minutes in every bound label whose
+		 *  value is a number, unless the label says `trend: false` (a label
+		 *  that says `trend: true` gets one either way). */
+		trends?: boolean;
 		/**
 		 * Writes one tag on the controller (`RealtimeClient.writeTag` is one):
 		 * resolves to null when it landed, else the refusal reason. Present =
@@ -136,6 +146,16 @@
 		const v = resolveBindings({ value: l.bind! }, tags).value;
 		return typeof v === 'number' && isFinite(v) ? v.toFixed(l.decimals ?? 1) : '—';
 	};
+	const labelRaw = (l: MimicLabel): unknown => resolveBindings({ value: l.bind! }, tags).value;
+	/** The bound labels that draw a sparkline: each keeps the last few
+	 * minutes of its tag (taghistory), sampled once a second. */
+	const trended = (l: MimicLabel): boolean => !!l.bind && (l.trend ?? trends) && typeof labelRaw(l) === 'number';
+	$effect(() => {
+		const id = setInterval(() => {
+			for (const l of doc.labels ?? []) if (l.bind && (l.trend ?? trends)) sampleTag(l.bind, labelRaw(l));
+		}, 1000);
+		return () => clearInterval(id);
+	});
 
 	const drawLook = $derived(look ?? doc.look ?? 'isa101');
 	/** A project component (one passed in `registry`, not a kit built-in) gets
@@ -346,7 +366,7 @@
 
 			{#each doc.equipment ?? [] as eq (eq.id)}
 				{@const C = components[eq.component]}
-				{#if onequipmentclick}
+				{#if onequipmentclick && (!clickable || clickable(eq))}
 					<button
 						type="button"
 						class="eq clickable"
@@ -364,7 +384,7 @@
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</button>
 				{:else}
-					<div class="eq" class:behind={eq.behind} style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}" use:regEl={eq.id}>
+					<div class="eq" class:behind={eq.behind} class:passive={!!onequipmentclick} style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}" use:regEl={eq.id}>
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</div>
 				{/if}
@@ -374,7 +394,9 @@
 				{#if l.bind}
 					<span class="lbl readout" style="left: {l.x}px; top: {l.y}px"
 						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
-						>{#if l.unit}<span>{l.unit}</span>{/if}</span
+						>{#if l.unit}<span>{l.unit}</span>{/if}{#if trended(l)}<span class="spark" aria-hidden="true"
+								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} compact /></span
+							>{/if}</span
 					>
 				{:else}
 					<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
@@ -468,6 +490,15 @@
 		inherits: false;
 		initial-value: 0;
 	}
+	/* On a screen where some equipment opens a panel, the rest let a click
+	   through to whatever is under them (an agitator drawn over its tank),
+	   all but their own controls. */
+	.eq.passive {
+		pointer-events: none;
+	}
+	.eq.passive :global(:is(button, input, select, textarea, a, label, [role='button'], [tabindex])) {
+		pointer-events: auto;
+	}
 	.eq.clickable {
 		cursor: pointer;
 		border-radius: 8px;
@@ -521,6 +552,12 @@
 		background: var(--surface-2, #232321);
 		border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 		border-radius: 6px;
+	}
+	.lbl.readout .spark {
+		display: block;
+		align-self: center;
+		width: 40px;
+		margin-left: 0.2em;
 	}
 	.lbl.readout .num {
 		color: var(--ink, #e6e6e6);

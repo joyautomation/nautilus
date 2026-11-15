@@ -222,3 +222,56 @@ tags:
 		t.Errorf("%d warnings, want 3:\n%s", len(warns), all)
 	}
 }
+
+func TestCheckMimicsPanels(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: FlowSP, type: REAL, role: setpoint }
+  - { name: Start, type: BOOL, role: setpoint }
+  - { name: Running, type: BOOL, role: state }
+  - { name: Flow, type: REAL, role: input }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"equipment":[
+			{"id":"P1","component":"Pump","x":0,"y":0,"panel":{
+				"readings":[{"tag":"Running"},{"tag":"Flw"}],
+				"setpoints":[{"tag":"FlowSP"},{"tag":"Flow"}],
+				"commands":[{"tag":"Start"},{"tag":"Strat","label":"Go","held":"Runing"}],
+				"toggles":[{}],
+				"links":["V9"]}},
+			{"id":"FT1","component":"Gauge","x":0,"y":0,"panel":"P1"},
+			{"id":"V1","component":"Valve","x":0,"y":0,"panel":"P9"},
+			{"id":"V2","component":"Valve","x":0,"y":0,"panel":{}}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"equipment P1's panel's reading 2 binds Flw, which the project doesn't declare",
+		"equipment P1's panel's command 1 has no label",
+		"equipment P1's panel's command 2 writes Strat, which the project doesn't declare",
+		"equipment P1's panel's command 2's held binds Runing",
+		"equipment P1's panel's toggle 1 has no tag",
+		"equipment P1's panel links to V9, which isn't on the screen",
+		"equipment V1's panel opens P9's, which isn't on the screen",
+		"equipment V2's panel is empty",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 8 {
+		t.Errorf("%d errors, want 8:\n%s", len(errs), all)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "P1's panel's setpoint 2 writes Flow, an input") {
+		t.Errorf("warnings = %q", warns)
+	}
+}

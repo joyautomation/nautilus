@@ -57,8 +57,9 @@ func Mimics(project string) []string {
 }
 
 type mimicDoc struct {
-	Name      string `json:"name"`
-	Equipment []struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Equipment   []struct {
 		Component string   `json:"component"`
 		Width     *float64 `json:"width"`
 		Height    *float64 `json:"height"`
@@ -74,7 +75,11 @@ type galleryComp struct {
 
 // defaultApp is the app for a project with mimics and no app of its own:
 // a page per mimic (the first at "/"), live and operable, under a bar
-// with the project's name, the pages, the connection and the theme.
+// with the project's name and the first screen's description, the pages
+// and Diagnostics, the alarms (the banner opens the alarms page) and Ack
+// all, the connection and the theme. A click on equipment with a panel
+// opens it beside the drawing (the kit's EquipmentPanel), and every
+// bound label carries a sparkline.
 func defaultApp(project, title string) (*appSource, error) {
 	mimics := Mimics(project)
 	if len(mimics) == 0 {
@@ -85,6 +90,7 @@ func defaultApp(project, title string) (*appSource, error) {
 	a.layouts = []layout{{Component: "nx:default/layout.svelte"}}
 	var screens []string
 	var problems []string
+	description := ""
 	used := map[string]bool{}
 	takenSlug := map[string]bool{}
 	for i, m := range mimics {
@@ -132,6 +138,9 @@ func defaultApp(project, title string) (*appSource, error) {
 			takenSlug[slug] = true
 			id = "/" + strings.TrimPrefix(slug, "-")
 		}
+		if i == 0 {
+			description = doc.Description
+		}
 		label := doc.Name
 		if label == "" {
 			label = strings.TrimSuffix(filepath.Base(m), ".mimic.json")
@@ -148,6 +157,28 @@ func defaultApp(project, title string) (*appSource, error) {
 	if len(problems) > 0 {
 		return nil, &Error{Messages: problems}
 	}
+	// the pages every project gets, unless a screen has the name
+	alarmsHref := "undefined"
+	for _, pg := range []struct{ slug, label, text string }{
+		{"diagnostics", "Diagnostics", defaultDiagnostics},
+		{"alarms", "", defaultAlarms},
+	} {
+		if takenSlug[pg.slug] {
+			continue
+		}
+		mod := "nx:default/" + pg.slug + ".svelte"
+		a.virtual[mod] = vmod{kind: component, text: pg.text}
+		r, _ := routeFor(pg.slug)
+		r.Page = mod
+		r.Layouts = []int{0}
+		a.routes = append(a.routes, r)
+		if pg.label != "" {
+			screens = append(screens, fmt.Sprintf("{ id: %s, href: %s, label: %s }", jsq("/"+pg.slug), jsq("/"+pg.slug), jsq(pg.label)))
+		}
+		if pg.slug == "alarms" {
+			alarmsHref = jsq("/alarms")
+		}
+	}
 	if !takenSlug["components"] {
 		a.addComponentsPage(project, []int{0})
 	}
@@ -155,7 +186,7 @@ func defaultApp(project, title string) (*appSource, error) {
 		title = filepath.Base(project)
 	}
 	a.generate()
-	a.virtual["nx:default/layout.svelte"] = vmod{kind: component, text: fmt.Sprintf(defaultLayout, jsq(title), strings.Join(screens, ", "))}
+	a.virtual["nx:default/layout.svelte"] = vmod{kind: component, text: fmt.Sprintf(defaultLayout, jsq(title), jsq(description), strings.Join(screens, ", "), alarmsHref)}
 	a.virtual["nx:default/client"] = vmod{kind: plain, text: defaultClient}
 	a.appHTML = strings.Replace(defaultHTML, "%title%", htmlEscape(title), 1)
 	return a, nil
@@ -226,33 +257,44 @@ func builtinNames() []string {
 	return out
 }
 
-const defaultClient = `import { createRealtimeClient } from '@joyautomation/nautilus-hmi';
-// One realtime client for the app: the layout starts it, every page reads it.
+const defaultClient = `import { createRealtimeClient, createAlarmClient } from '@joyautomation/nautilus-hmi';
+// One realtime client (and one alarm client) for the app: the layout
+// starts them, every page reads them.
 export const rt = createRealtimeClient({ url: '/api/stream' });
+export const alarms = createAlarmClient(rt);
 `
 
 const defaultLayout = `<script>
 	import '@joyautomation/nautilus-hmi/theme.css';
 	import '@joyautomation/nautilus-hmi/fonts.css';
 	import { onMount } from 'svelte';
-	import { theme, ConfirmDialog, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
+	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import { rt } from 'nx:default/client';
+	import { rt, alarms } from 'nx:default/client';
 	let { children } = $props();
 	onMount(() => {
 		theme.init();
 		rt.start();
-		return () => rt.stop();
+		void alarms.start();
+		return () => {
+			rt.stop();
+			alarms.stop();
+		};
 	});
 	const title = %s;
+	const description = %s;
 	const screens = [%s];
+	const alarmsHref = %s;
 </script>
 
 <ConfirmDialog />
 <div class="nx-shell">
 	<header>
-		<b>{title}</b>
+		<div class="nx-title">
+			<b>{title}</b>
+			{#if description}<span>{description}</span>{/if}
+		</div>
 		{#if screens.length > 1}
 			<nav aria-label="Screens">
 				{#each screens as s (s.id)}
@@ -260,9 +302,14 @@ const defaultLayout = `<script>
 				{/each}
 			</nav>
 		{/if}
-		<span class="gap"></span>
-		<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
-		<ThemeSwitch />
+		<div class="nx-status">
+			{#if alarms.supported && alarms.summary}
+				<AlarmBanner summary={alarms.summary} compact href={alarmsHref ? resolve(alarmsHref) + page.url.search : undefined} />
+				<AckButton alarms={alarms.active} ids={['*']} label="Ack all" onack={(ids, by) => alarms.ack(ids, by)} />
+			{/if}
+			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
+			<ThemeSwitch />
+		</div>
 	</header>
 	<main>{@render children()}</main>
 </div>
@@ -270,26 +317,109 @@ const defaultLayout = `<script>
 <style>
 	:global(html, body) { margin: 0; height: 100%%; background: var(--bg); color: var(--ink); font-family: var(--font); }
 	.nx-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
-	header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid color-mix(in srgb, var(--ink) 14%%, transparent); }
-	b { font-family: var(--font-display, var(--font)); font-size: var(--font-md); }
-	nav { display: flex; gap: 4px; }
-	nav a { color: var(--muted); text-decoration: none; padding: 4px 10px; border-radius: var(--radius-pill, 999px); }
-	nav a[aria-current='page'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 10%%, transparent); }
-	.gap { flex: 1; }
-	main { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+	/* one row: the project left, the screens in the middle, the status
+	   right; the description gives way first */
+	header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; padding: 10px 16px; border-bottom: 1px solid var(--border, color-mix(in srgb, var(--ink) 14%%, transparent)); background: var(--surface, var(--bg)); }
+	.nx-title { flex: 1 1 0; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+	.nx-title b { font-family: var(--font-display, var(--font)); font-size: var(--font-md); white-space: nowrap; }
+	.nx-title span { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	nav { flex: none; display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border, color-mix(in srgb, var(--ink) 14%%, transparent)); border-radius: 8px; background: var(--surface-2, transparent); }
+	nav a { color: var(--ink-2, var(--muted)); text-decoration: none; padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+	nav a:hover { color: var(--ink); }
+	nav a[aria-current='page'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%%, transparent); }
+	.nx-status { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+	main { flex: 1; min-height: 0; overflow: auto; padding: 16px; position: relative; }
+	@media (max-width: 900px) { .nx-title span { display: none; } }
+</style>
+`
+
+// defaultDiagnostics is the Diagnostics page: the controller's scan timing
+// and its field drivers.
+const defaultDiagnostics = `<script>
+	import { ScanDiagnostics, DriverStatusPanel } from '@joyautomation/nautilus-hmi';
+	import { rt } from 'nx:default/client';
+</script>
+
+<div class="nx-page">
+	<section>
+		<h2>Scan diagnostics</h2>
+		{#if rt.frame?.scan}<ScanDiagnostics scan={rt.frame.scan} />{:else}<p>Waiting for the controller…</p>{/if}
+	</section>
+	<section>
+		<h2>Field drivers</h2>
+		<DriverStatusPanel drivers={rt.frame?.drivers ?? []} />
+	</section>
+</div>
+
+<style>
+	.nx-page { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
+	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
+	p { color: var(--muted); margin: 0; }
+</style>
+`
+
+// defaultAlarms is the alarms page the bar's alarm banner opens: the
+// active ones, to acknowledge and shelve.
+const defaultAlarms = `<script>
+	import { AlarmTable } from '@joyautomation/nautilus-hmi';
+	import { alarms } from 'nx:default/client';
+	let now = $state(Date.now());
+	$effect(() => {
+		const id = setInterval(() => (now = Date.now()), 1000);
+		return () => clearInterval(id);
+	});
+</script>
+
+<div class="nx-page">
+	<h1>Alarms</h1>
+	{#if !alarms.supported}
+		<p>The project defines no alarms (nautilus.yaml's alarms:).</p>
+	{:else}
+		{#if alarms.error}<p role="alert">{alarms.error}</p>{/if}
+		<AlarmTable
+			alarms={alarms.instances}
+			{now}
+			onack={(ids, by) => alarms.ack(ids, by)}
+			onshelve={(id, until, by) => alarms.shelve(id, Math.max(1, Math.round((until - Date.now()) / 1000)), by)}
+			onunshelve={(id, by) => alarms.unshelve(id, by)}
+		/>
+	{/if}
+</div>
+
+<style>
+	.nx-page { max-width: 1400px; margin: 0 auto; display: grid; gap: 12px; }
+	h1 { margin: 0; font-size: var(--font-lg); }
+	p { color: var(--muted); margin: 0; }
 </style>
 `
 
 const defaultPage = `<script>
-	import { Mimic } from '@joyautomation/nautilus-hmi';
+	import { Mimic, EquipmentPanel, expandUnits, panelFor } from '@joyautomation/nautilus-hmi';
 	import doc from %s;
 %s
 	import { rt } from 'nx:default/client';
 	const tags = $derived(rt.frame?.tags ?? {});
 	const write = (name, value) => rt.writeTag(name, value);
+	// a click on equipment with a panel opens it beside the drawing
+	const full = expandUnits(doc);
+	const hasPanel = (eq) => !!panelFor(full, eq.id);
+	let selected = $state(null);
+	const open = $derived(!!panelFor(full, selected));
 </script>
 
-<Mimic {doc} {tags} registry={{ %s }} {write} fit="contain" />
+<div class="nx-stage" class:nx-with-panel={open}>
+	<Mimic {doc} {tags} registry={{ %s }} {write} fit="contain" trends onequipmentclick={(eq) => (selected = eq.id)} clickable={hasPanel} {selected} />
+</div>
+<EquipmentPanel {doc} {tags} {write} bind:selected />
+
+<style>
+	/* the drawing as large as the page allows, moving over for the panel */
+	.nx-stage { position: absolute; inset: 0; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; }
+	.nx-stage.nx-with-panel { padding-right: 348px; }
+	@media (prefers-reduced-motion: no-preference) { .nx-stage { transition: padding-right 260ms cubic-bezier(0.33, 1, 0.68, 1); } }
+	@media (max-width: 900px) { .nx-stage.nx-with-panel { padding-right: 16px; } }
+</style>
 `
 
 const defaultHTML = `<!doctype html>
