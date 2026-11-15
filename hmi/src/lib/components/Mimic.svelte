@@ -1,6 +1,7 @@
 <script lang="ts">
 	// Renders a MimicDoc live: an SVG underlay of pipe runs, kit components
-	// absolutely placed above it, all scaled to the container width. Feed it
+	// absolutely placed above it, all scaled to the container width (or, with
+	// fit="contain", to the room it has, both ways). Feed it
 	// `frame.tags` and the bindings animate with the process. Pass extra
 	// components through `registry` to place your own equipment — the
 	// built-ins are an easy button, not a wall.
@@ -25,6 +26,7 @@
 		write,
 		selected = null,
 		minScale = 0,
+		fit = 'width',
 		look
 	}: {
 		doc: MimicDoc;
@@ -57,6 +59,18 @@
 		 * container width.
 		 */
 		minScale?: number;
+		/**
+		 * How the drawing meets its container. `'width'` (the default): scaled
+		 * to the container's width, as tall as that makes it, so a tall
+		 * drawing runs on below and the page scrolls. `'contain'`: the whole
+		 * drawing at once, scaled to fit the container's width and the height
+		 * from the mimic's top to the container's bottom, and centred across.
+		 * For an overview that must show everything without scrolling (naut's
+		 * own screens use it). The container needs a height of its own (a
+		 * `flex: 1` main in a full-height shell); in one that grows with its
+		 * content this is the same as `'width'`.
+		 */
+		fit?: 'width' | 'contain';
 	} = $props();
 	/** The document with its units drawn out (expandUnits): everything below
 	 * works on this, so a repeated filter cell is one more piece of equipment. */
@@ -71,18 +85,46 @@
 	// shrinking the canvas further.
 	let host = $state<HTMLDivElement | null>(null);
 	let frameWidth = $state(0);
+	/** fit="contain": the height from the mimic's top to the bottom of its
+	 * container's content box, measured with the mimic itself folded to no
+	 * height for the moment of the reading: a container with a height of its
+	 * own gives its room, one that grows with its content gives none (and
+	 * the width rules). 0 = not measured, or no room. */
+	let roomHeight = $state(0);
 	$effect(() => {
 		if (!host) return;
 		const el = host;
-		const update = () => (frameWidth = el.clientWidth);
+		const box = el.parentElement;
+		const contain = fit === 'contain';
+		const update = () => {
+			frameWidth = el.clientWidth;
+			if (!contain || !box) return;
+			const was = el.style.height;
+			const scrolled = box.scrollTop;
+			el.style.height = '0px';
+			const pr = box.getBoundingClientRect();
+			const pb = parseFloat(getComputedStyle(box).paddingBottom) || 0;
+			const bottom = pr.top + box.clientTop + box.clientHeight - pb;
+			const room = Math.floor(bottom - el.getBoundingClientRect().top);
+			el.style.height = was;
+			box.scrollTop = scrolled;
+			// less than a strip is no room at all: the container grows with us
+			roomHeight = room >= 48 ? room : 0;
+		};
 		update();
 		const ro = new ResizeObserver(update);
 		ro.observe(el);
+		if (contain && box) ro.observe(box);
 		return () => ro.disconnect();
 	});
-	const rawScale = $derived(frameWidth ? frameWidth / doc.canvas.width : 1);
+	const widthScale = $derived(frameWidth ? frameWidth / doc.canvas.width : 1);
+	const rawScale = $derived(
+		fit === 'contain' && roomHeight > 0 ? Math.min(widthScale, roomHeight / doc.canvas.height) : widthScale
+	);
 	const floored = $derived(minScale > 0 && frameWidth > 0 && rawScale < minScale);
 	const scale = $derived(floored ? minScale : rawScale);
+	/** Left offset that centres a drawing narrower than its frame (contain). */
+	const inset = $derived(floored || !frameWidth ? 0 : Math.max(0, (frameWidth - doc.canvas.width * rawScale) / 2));
 
 	// A bound label's live value (MimicLabel.bind), resolved through the same
 	// resolveBindings() path equipment bindings use — one mechanism, "!"
@@ -201,7 +243,15 @@
 	const PIPE_LAYERS = ['wall', 'bore', 'flow'] as const;
 </script>
 
-<div class="mimic" class:scrolling={floored} bind:this={host} data-broken-pipes={broken} style="height: {doc.canvas.height * scale}px">
+<div
+	class="mimic"
+	class:scrolling={floored}
+	bind:this={host}
+	data-broken-pipes={broken}
+	data-scale={scale.toFixed(3)}
+	data-canvas="{doc.canvas.width}x{doc.canvas.height}"
+	style="height: {doc.canvas.height * scale}px"
+>
 	<div
 		class="scroll-host"
 		style:width={floored ? `${doc.canvas.width * scale}px` : undefined}
@@ -209,7 +259,7 @@
 	>
 		<div
 			class="canvas"
-			style="width: {doc.canvas.width}px; height: {doc.canvas.height}px; transform: scale({scale})"
+			style="width: {doc.canvas.width}px; height: {doc.canvas.height}px; left: {inset}px; transform: scale({scale})"
 		>
 			<svg
 				class="pipes"

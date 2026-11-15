@@ -4,6 +4,14 @@
 
 ### Added
 
+- **`<Mimic fit="contain">`: the whole drawing at once.** Scaled to fit
+  its container's width and the height from its top to the container's
+  bottom, and centred across, so an overview never runs off the bottom of
+  the window. naut's own pages for `*.mimic.json` use it. The default,
+  `fit="width"`, is unchanged. The root carries `data-scale` and
+  `data-canvas`, which `naut check` reads to say when a drawing runs off
+  the bottom of a 1920×1080 window or is drawn too small to read.
+
 - **Units: what repeats, written once.** A mimic's `units` draws its
   equipment, pipes and labels once per value of `each`, `{n}` filled in
   and each copy moved by `step`. `<Mimic>` draws them out with
