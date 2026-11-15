@@ -100,6 +100,16 @@
 
 ### Added
 
+- **The screen routes a pipe itself.** A mimic pipe with `"routing":
+  "auto"` names what it connects, a port at each end or another pipe it
+  tees into (`"to": {"pipe": "AIR_HDR"}`), and `<Mimic>` draws the line:
+  square, clear of equipment and labels by 10 units, with as few bends
+  and crossings as it can, never along another pipe, its tees dotted.
+  Points on it are waypoints. The router is `routePipes()` (route.ts),
+  and `autoRoutes()` routes a document's pipes for both renderers, so the
+  VS Code editor draws them the same. `naut check` checks the ends, and
+  reports a routed pipe with no clear way (drawn straight across).
+
 - **A pipe through a label is reported.** `<Mimic>` marks each pipe's
   line (`data-pipe`), and `naut check`'s render pass reports a tag or a
   reading on the drawing with a pipe running through it, where the line
