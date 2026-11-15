@@ -86,6 +86,9 @@ export const ed = $state({
 	/** The controller is starting (the playground compiling the project):
 	 * no tags yet, but not offline either. */
 	liveStarting: false,
+	/** Whether the host has reported live state yet: until it has, the pill
+	 * says it is connecting rather than claiming "offline". */
+	liveSeen: false,
 	/** Resolved component ports, aggregated from the project's
 	 * *.component.json sidecars and keyed by component name; null until the
 	 * host's first mimicManifest message. */

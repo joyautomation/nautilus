@@ -145,8 +145,10 @@ export class SceneEditorProvider implements vscode.CustomTextEditorProvider {
 
     const postTags = async () => {
       const enabled = liveEnabled();
-      const tags = enabled ? await fetchTags() : null;
-      void panel.webview.postMessage({ type: "sceneTags", tags, enabled, starting: controllerStarting() });
+      // A starting controller has nothing to fetch yet: say so now.
+      const starting = enabled && controllerStarting();
+      const tags = enabled && !starting ? await fetchTags() : null;
+      void panel.webview.postMessage({ type: "sceneTags", tags, enabled, starting: starting || controllerStarting() });
     };
     // The playground's controller just came up (or failed to): show it now,
     // not a poll later.

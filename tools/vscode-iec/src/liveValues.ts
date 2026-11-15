@@ -84,6 +84,9 @@ const RECONNECT_MS = 2000;
 const RESTART_RECONNECT_MS = 200;
 const RESTART_WINDOW_MS = 5000;
 const RENDER_THROTTLE_MS = 150;
+// How long a controller that has just started may take to send its first
+// frame before the pill stops saying "starting" and says "offline".
+const STARTING_GRACE_MS = 8000;
 
 /** A frame fanned out to non-text consumers (the FBD diagram webviews). */
 export type LiveFrameListener = (frame: {
@@ -130,6 +133,9 @@ export class LiveValues implements vscode.Disposable {
   private readonly monitorsChanged = new vscode.EventEmitter<void>();
   readonly onDidChangeMonitors = this.monitorsChanged.event;
   private lastFrameMs = 0;
+  /** Until when a controller that just finished starting still counts as
+   * starting: its first frame is a moment behind (the stream reconnects). */
+  private startingGraceUntil = 0;
   private req: http.ClientRequest | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private lastRestartMs = 0;
@@ -181,6 +187,7 @@ export class LiveValues implements vscode.Disposable {
         if (isIecDoc(e.document)) this.scheduleRender();
       }),
       onDidChangeControllerStarting(() => {
+        this.startingGraceUntil = controllerStarting() ? 0 : Date.now() + STARTING_GRACE_MS;
         this.updateStatus();
         this.notify();
       })
@@ -576,7 +583,7 @@ export class LiveValues implements vscode.Disposable {
     const frame = {
       enabled: this.enabled,
       fresh: this.fresh(),
-      starting: controllerStarting(),
+      starting: this.starting(),
       values: Object.fromEntries(this.values),
       forced: this.enabled ? lowerForces(this.forces) : {},
       types: this.types,
@@ -728,6 +735,12 @@ export class LiveValues implements vscode.Disposable {
     return Date.now() - this.lastFrameMs < FRESHNESS_MS;
   }
 
+  /** The controller is starting, or has just started and its first frame
+   * has not arrived yet. */
+  private starting(): boolean {
+    return controllerStarting() || (!this.fresh() && Date.now() < this.startingGraceUntil);
+  }
+
   private onStaleCheck(): void {
     // Flip chips to the stale style (and the status bar to offline) when
     // frames stop arriving; no re-render needed while nothing changes.
@@ -741,6 +754,14 @@ export class LiveValues implements vscode.Disposable {
     // freshness windows of silence with a request outstanding means the
     // connection is dead whatever TCP thinks; tear it down and let the
     // normal retry find the controller again.
+    // The grace after a start ran out with no frame: say "offline" now.
+    if (this.startingGraceUntil && Date.now() >= this.startingGraceUntil) {
+      this.startingGraceUntil = 0;
+      if (!this.fresh()) {
+        this.updateStatus();
+        this.notify();
+      }
+    }
     if (this.req && this.lastFrameMs > 0 && Date.now() - this.lastFrameMs > 2 * FRESHNESS_MS) {
       this.req.destroy();
       this.scheduleReconnect();
@@ -974,7 +995,7 @@ export class LiveValues implements vscode.Disposable {
     } else if (this.fresh()) {
       this.status.text = "$(pulse) nautilus: live";
       this.status.tooltip = `Streaming tag values from ${this.runtimeUrl()} — click to disable`;
-    } else if (controllerStarting()) {
+    } else if (this.starting()) {
       this.status.text = "$(sync~spin) nautilus: starting…";
       this.status.tooltip = "The controller is compiling the project and starting; live values follow in a moment";
     } else {

@@ -15,7 +15,8 @@
 	// Until the host says otherwise (the ready handshake answers at once),
 	// a custom component not drawn yet is assumed to be on its way: the page
 	// opens before its components are built.
-	setUserComponentStatus({ building: true });
+	// (Not in the gesture harness: no host there to say a build finished.)
+	if (!window.__MODEL__) setUserComponentStatus({ building: true });
 
 	$effect(() => {
 		const onMsg = (e: MessageEvent) => {
@@ -46,6 +47,7 @@
 				ed.tags = m.tags ?? null;
 				ed.liveEnabled = m.enabled ?? true;
 				ed.liveStarting = !!m.starting;
+				ed.liveSeen = true;
 			} else if (m?.type === 'mimicManifest') {
 				ed.manifest = m.components ?? {};
 				ed.customComponents = m.customComponents ?? [];
@@ -178,7 +180,7 @@
 		<button
 			class="live nx-pill"
 			class:off={!ed.liveEnabled || !ed.tags}
-			class:starting={ed.liveEnabled && !ed.tags && ed.liveStarting}
+			class:starting={ed.liveEnabled && !ed.tags && (ed.liveStarting || !ed.liveSeen)}
 			onclick={toggleLive}
 			title={!ed.liveEnabled
 				? 'Live values are off — click to enable'
@@ -186,9 +188,11 @@
 					? 'Live tags from nautilus.runtimeUrl — bound equipment animates with the process. Click to disable'
 					: ed.liveStarting
 						? 'The controller is compiling the project and starting: live values follow in a moment'
+						: !ed.liveSeen
+							? 'Connecting to the controller…'
 						: 'Live values enabled but the controller isn\'t answering — is it running? Click to disable'}
 		>
-			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : ed.liveStarting ? '◌ starting…' : '◌ offline'}
+			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : ed.liveStarting ? '◌ starting…' : ed.liveSeen ? '◌ offline' : '◌ connecting…'}
 		</button>
 	</header>
 

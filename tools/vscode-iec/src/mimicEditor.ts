@@ -285,6 +285,9 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
         if (msg?.type === "mimicReady") {
           postDoc();
           void this.portsReady.then(postPorts);
+          if (lastTags !== undefined) {
+            void panel.webview.postMessage({ type: "mimicTags", tags: lastTags, enabled: liveEnabled(), starting: controllerStarting() });
+          }
           void postTags();
           postUserComponentDiagnostics();
           postConfig();
@@ -375,10 +378,16 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     // tags null = controller offline (the webview shows the pill grey and
     // keeps component defaults). With live values off nothing is fetched at
     // all — the pill reads "live off" and clicking it turns them back on.
+    // The last tags posted: a page reloaded for a rebuilt component bundle
+    // shows them at once, not "offline" until the next fetch answers.
+    let lastTags: Record<string, unknown> | null | undefined;
     const postTags = async () => {
       const enabled = liveEnabled();
-      const tags = enabled ? await fetchTags() : null;
-      void panel.webview.postMessage({ type: "mimicTags", tags, enabled, starting: controllerStarting() });
+      // A starting controller has nothing to fetch yet: say so now.
+      const starting = enabled && controllerStarting();
+      const tags = enabled && !starting ? await fetchTags() : null;
+      lastTags = tags;
+      void panel.webview.postMessage({ type: "mimicTags", tags, enabled, starting: starting || controllerStarting() });
     };
     // The playground's controller just came up (or failed to): show it now,
     // not a poll later.
