@@ -49,6 +49,17 @@ export function previewTargetForPath(
  * every path `M NaN …`). Read off the text, not the compiler: it has to
  * answer for a buffer that does not compile yet. */
 export function propsWithoutDefault(source: string): string[] {
+  return declaredProps(source)
+    .filter((p) => p.needed)
+    .map((p) => p.name);
+}
+
+/** Pure: every prop the component's `let { … } = $props()` names, in
+ * order, each with whether it must be given (see propsWithoutDefault).
+ * The ones with a default are what the preview offers when a component
+ * draws nothing with its defaults: a panel closed until `open` or
+ * `selected` is set. Never `...rest` or `children`. */
+export function declaredProps(source: string): { name: string; needed: boolean }[] {
   const call = source.search(/=\s*\$props\s*\(/);
   if (call < 0) return [];
   // The pattern is the last `let {` before the call whose braces close
@@ -72,17 +83,32 @@ export function propsWithoutDefault(source: string): string[] {
       if (m) optional.add(m[1]);
     }
   }
-  const names: string[] = [];
+  const props: { name: string; needed: boolean }[] = [];
   for (const entry of splitTopLevel(source.slice(open + 1, close), ",")) {
     const text = entry.trim();
     if (text === "" || text.startsWith("...")) continue;
     const [target, ...def] = splitTopLevel(text, "=");
-    if (def.length > 0) continue;
     // `name` or `name: alias` — the prop is the name before the colon.
     const name = target.split(":")[0].trim();
-    if (/^[A-Za-z_$][\w$]*$/.test(name) && name !== "children" && !optional.has(name)) names.push(name);
+    if (!/^[A-Za-z_$][\w$]*$/.test(name) || name === "children") continue;
+    props.push({ name, needed: def.length === 0 && !optional.has(name) });
   }
-  return names;
+  return props;
+}
+
+/** Pure: whether a component is a part of a 3D scene — it imports from
+ * Threlte and does not bring its own <Canvas>. Such a part (rain, a light,
+ * a mesh) draws only inside a scene's canvas: mounted alone it has no
+ * renderer to draw with, so the preview says that instead of compiling it
+ * to an error. Imports only, never a mention in a comment or a string. */
+export function isScenePart(source: string): boolean {
+  let threlte = false;
+  for (const m of source.matchAll(/^[ \t]*import\s+(type\s+)?([^'";]*?)\s*from\s*['"]@threlte\/[^'"]+['"]/gm)) {
+    if (m[1]) continue; // types only: nothing of Threlte runs
+    if (/\bCanvas\b/.test(m[2])) return false;
+    threlte = true;
+  }
+  return threlte;
 }
 
 const CLOSERS: Record<string, string> = { "{": "}", "(": ")", "[": "]" };

@@ -210,12 +210,19 @@ var M = {
 ${defs.join(",\n")}
 };
 var C = {};
+var W = {};
 function load(id) {
   if (id === "none:") return {};
   if (id.slice(0, 3) === "rt:") {
+    var w = W[id];
+    if (w) return w;
     var m = RT[id.slice(3)];
     if (!m) throw new Error("the playground's runtime has no " + id.slice(3));
-    return m;
+    // Marked an ES module, so the import helpers hand it over as it is.
+    // Unmarked, they copy its exports as they stand when the script loads,
+    // and Svelte assigns some later: its $.window is set by the first
+    // mount, so a <svelte:window> in the first component shown threw.
+    return (W[id] = Object.create(m, { __esModule: { value: true } }));
   }
   var c = C[id];
   if (c) return c.exports;

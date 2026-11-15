@@ -1,7 +1,7 @@
 // The component preview's pure part: which Svelte buffers it compiles from.
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { previewSources, previewTargetForPath, propsWithoutDefault } from "./componentPreviewLogic";
+import { declaredProps, isScenePart, previewSources, previewTargetForPath, propsWithoutDefault } from "./componentPreviewLogic";
 
 const doc = (fsPath: string, isDirty: boolean, text: string, isSvelte = fsPath.endsWith(".svelte")) => ({
   fsPath,
@@ -68,4 +68,25 @@ test("propsWithoutDefault names the $props() entries with no default", () => {
   // no destructure to read, or no $props() at all
   assert.deepEqual(propsWithoutDefault("<script>\n  let props = $props();\n</script>"), []);
   assert.deepEqual(propsWithoutDefault("<svg />"), []);
+});
+
+test("declaredProps lists every $props() entry and whether it must be given", () => {
+  const src = `<script lang="ts">\n  let { selected = $bindable(null), tag, children, ...rest }: { selected?: string | null; tag: string } = $props();\n</script>`;
+  assert.deepEqual(declaredProps(src), [
+    { name: "selected", needed: false },
+    { name: "tag", needed: true },
+  ]);
+  assert.deepEqual(declaredProps("<p>no props</p>"), []);
+});
+
+test("isScenePart: imports from Threlte without its own Canvas", () => {
+  const s = (imports: string) => `<script lang="ts">\n${imports}\n</script>\n<T.Mesh />`;
+  assert.equal(isScenePart(s("\timport { T, useTask } from '@threlte/core';\n\timport { BufferGeometry } from 'three';")), true);
+  assert.equal(isScenePart(s('import { OrbitControls } from "@threlte/extras";')), true);
+  // brings its own canvas: an ordinary component that happens to draw in 3D
+  assert.equal(isScenePart(s("import { Canvas, T } from '@threlte/core';")), false);
+  // a mention is not an import, and a type import runs nothing
+  assert.equal(isScenePart(s("// like '@threlte/core' but not\nimport { fly } from 'svelte/transition';")), false);
+  assert.equal(isScenePart(s("import type { ThrelteContext } from '@threlte/core';")), false);
+  assert.equal(isScenePart(s("import { Vector3 } from 'three';")), false);
 });

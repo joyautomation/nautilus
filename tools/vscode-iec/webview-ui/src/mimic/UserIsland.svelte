@@ -28,6 +28,13 @@
 	// <svg> fitted to what it draws. Not in the mimic editor: a screen
 	// places components in HTML boxes, and showing one there that the
 	// built screen would not draw would be a lie.
+	//
+	// `frame` (the component preview too): a component whose roots are all
+	// positioned out of flow (an `aside` laid over the page, absolute or
+	// fixed) takes up no room, and sizes itself against a parent that here
+	// has none: it collapsed to a sliver over a 0 × 0 box. It is given a
+	// frame of this size, in px, to lie over instead, standing in for the
+	// page.
 	import { untrack } from 'svelte';
 	import { hasUserComponent, userComponentApi, userComponentDiagnostic } from './userComponentsState.svelte';
 
@@ -35,14 +42,25 @@
 		name,
 		props = {},
 		svgHost = false,
-		onsvgpart
-	}: { name: string; props?: Record<string, unknown>; svgHost?: boolean; onsvgpart?: (part: boolean) => void } = $props();
+		onsvgpart,
+		frame,
+		onframed
+	}: {
+		name: string;
+		props?: Record<string, unknown>;
+		svgHost?: boolean;
+		onsvgpart?: (part: boolean) => void;
+		frame?: { w: number; h: number };
+		onframed?: (framed: boolean) => void;
+	} = $props();
 
 	let el: HTMLDivElement | null = $state(null);
 	let svgEl: SVGSVGElement | null = $state(null);
 	let groupEl: SVGGElement | null = $state(null);
 	let asSvg = $state(untrack(() => svgHost && svgParts.has(name)));
 	$effect(() => onsvgpart?.(asSvg));
+	let framed = $state(false);
+	$effect(() => onframed?.(framed && !asSvg));
 	let handle: { update(p: Record<string, unknown>): void; destroy(): void } | null = null;
 
 	const available = $derived(hasUserComponent(name));
@@ -68,6 +86,7 @@
 			target.replaceChildren();
 		}
 		if (svgHost && handle && !checkRoot(target) && asSvg) fit();
+		if (!asSvg) checkFrame(target);
 		return () => {
 			try {
 				handle?.destroy();
@@ -107,10 +126,29 @@
 	$effect(() => {
 		if (!svgHost || !el) return;
 		const div = el;
-		const mo = new MutationObserver(() => checkRoot(div));
+		const mo = new MutationObserver(() => {
+			if (!checkRoot(div)) checkFrame(div);
+		});
 		mo.observe(div, { childList: true });
 		return () => mo.disconnect();
 	});
+
+	/** Frames the component when everything it renders at its root is out
+	 * of flow; anything in flow (an element, or text) gives the box its
+	 * size as ever. Judged on position alone, never on the size the frame
+	 * itself changes. */
+	function checkFrame(target: Element) {
+		if (!frame) return;
+		const roots = [...target.children];
+		const text = [...target.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim() !== '');
+		framed =
+			roots.length > 0 &&
+			!text &&
+			roots.every((r) => {
+				const position = getComputedStyle(r).position;
+				return position === 'absolute' || position === 'fixed';
+			});
+	}
 
 	/** Sizes the host svg to what the part draws, wherever it draws it
 	 * (a part takes its own x and y): nothing drawn is 0 × 0. */
@@ -151,7 +189,13 @@
 	{#if asSvg}
 		<svg class="nx-user-island-svg" width="0" height="0" bind:this={svgEl}><g bind:this={groupEl}></g></svg>
 	{:else}
-		<div class="nx-user-island" bind:this={el}></div>
+		<div
+			class="nx-user-island"
+			class:framed
+			style:width={framed && frame ? frame.w + 'px' : null}
+			style:height={framed && frame ? frame.h + 'px' : null}
+			bind:this={el}
+		></div>
 	{/if}
 	{#if failed}
 		<span class="broken" title={failed}><b>{name}</b> threw: {failed}</span>
@@ -165,6 +209,14 @@
 <style>
 	.nx-user-island {
 		display: contents;
+	}
+	/* contain: layout makes it the containing block of a fixed root as well
+	   as an absolute one */
+	.nx-user-island.framed {
+		display: block;
+		position: relative;
+		contain: layout;
+		overflow: hidden;
 	}
 	.nx-user-island-svg {
 		display: block;
