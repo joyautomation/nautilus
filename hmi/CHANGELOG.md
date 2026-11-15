@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Tees dotted, crossings gapped.** Where a pipe ends on another run (or
+  turns onto it), `<Mimic>` and the mimic editor draw a dot on the run, as
+  a schematic marks a connection; where two pipes cross without joining,
+  the under pipe now stops 6 px clear of the over pipe's walls (masked,
+  not redrawn, so the over pipe has no seams). At the size an operator
+  sees a screen, a tee and a crossing had looked alike: a line meeting a
+  line. `pipeTees(paths)` finds them; two pipes meeting end to end (an
+  elbow) get no dot.
+
 - **`/components`: every component in every state.** naut's screens get a
   page that draws each of the project's own components in each of the
   `examples` its `{Name}.component.json` gives (name → props), at the box

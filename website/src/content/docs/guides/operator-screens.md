@@ -91,8 +91,10 @@ Pipes join where one ends on another: a branch whose end sits on a
 header's line is a tee, drawn as one run. Where two pipes cross without
 either ending there, the screen draws the crossing as a P&ID does: the
 flatter pipe (the header) passes over, unbroken, and the other is broken
-either side of it. So a drop that should join the third header down ends
-on that header's line, and crosses the two above it.
+either side of it. Where a pipe ends on another, the screen draws a dot,
+as a schematic marks a connection. So a drop that should join the third
+header down ends on that header's line (and gets its dot there), and
+crosses the two above it.
 
 A label on a line breaks the line under its text, as a line label does on
 a P&ID, so a header's name can sit on the header.
