@@ -85,6 +85,10 @@ test("isScenePart: imports from Threlte without its own Canvas", () => {
   assert.equal(isScenePart(s('import { OrbitControls } from "@threlte/extras";')), true);
   // brings its own canvas: an ordinary component that happens to draw in 3D
   assert.equal(isScenePart(s("import { Canvas, T } from '@threlte/core';")), false);
+  assert.equal(
+    isScenePart(s("import { T } from '@threlte/core';\nimport { SceneView, LOOKS } from '@joyautomation/nautilus-hmi-3d';")),
+    false
+  );
   // a mention is not an import, and a type import runs nothing
   assert.equal(isScenePart(s("// like '@threlte/core' but not\nimport { fly } from 'svelte/transition';")), false);
   assert.equal(isScenePart(s("import type { ThrelteContext } from '@threlte/core';")), false);

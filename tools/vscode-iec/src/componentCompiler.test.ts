@@ -168,3 +168,19 @@ test("a runtime export assigned after the script loads is read live", async () =
   late = "set";
   assert.equal(probe.read?.(), "set");
 });
+
+test("a project barrel can export * from a runtime module", async () => {
+  const store = Object.freeze({ writable: () => "w", readable: () => "r" });
+  const files = {
+    "/p/barrel.js": 'export * from "svelte/store";',
+    "/p/probe.js": 'import * as b from "./barrel.js"; window.probe.keys = Object.keys(b).sort(); window.probe.w = b.writable();',
+    "/p/A.svelte": '<script>import "./probe.js";</script><p>a</p>',
+  };
+  const result = await compileComponents({ A: "/p/A.svelte" }, memory(files));
+  assert.deepEqual(result.diagnostics, []);
+  const probe: { keys?: string[]; w?: string } = {};
+  const { errors } = await run(result.code, { "svelte/store": store }, { probe });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(probe.keys, ["readable", "writable"]);
+  assert.equal(probe.w, "w");
+});

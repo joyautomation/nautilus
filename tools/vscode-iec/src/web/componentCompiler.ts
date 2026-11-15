@@ -222,7 +222,13 @@ function load(id) {
     // Unmarked, they copy its exports as they stand when the script loads,
     // and Svelte assigns some later: its $.window is set by the first
     // mount, so a <svelte:window> in the first component shown threw.
-    return (W[id] = Object.create(m, { __esModule: { value: true } }));
+    // Each export an own getter: live, and still listed for an export *.
+    w = {};
+    Object.keys(m).forEach(function (k) {
+      Object.defineProperty(w, k, { enumerable: true, get: function () { return m[k]; } });
+    });
+    Object.defineProperty(w, "__esModule", { value: true });
+    return (W[id] = w);
   }
   var c = C[id];
   if (c) return c.exports;

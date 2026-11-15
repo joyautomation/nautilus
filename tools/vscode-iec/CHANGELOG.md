@@ -39,8 +39,8 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
   click away. Opened, a panel positioned over its page (absolute or
   fixed) collapsed to a sliver on a 0 × 0 stage: it is shown over a frame
   the size of the pane, marked "overlay". A part of a 3D scene (it imports
-  Threlte and has no canvas of its own) says so instead of failing to
-  compile or to mount.
+  Threlte and has no canvas of its own) says so instead of showing an
+  error.
 
 - **The component preview in the playground.** A `{Name}.svelte` (or its
   `.component.json`) opens its live preview in the browser too, compiled

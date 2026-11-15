@@ -97,7 +97,8 @@ export function declaredProps(source: string): { name: string; needed: boolean }
 }
 
 /** Pure: whether a component is a part of a 3D scene — it imports from
- * Threlte and does not bring its own <Canvas>. Such a part (rain, a light,
+ * Threlte and does not bring its own canvas (Threlte's <Canvas>, the kit's
+ * <SceneView>). Such a part (rain, a light,
  * a mesh) draws only inside a scene's canvas: mounted alone it has no
  * renderer to draw with, so the preview says that instead of compiling it
  * to an error. Imports only, never a mention in a comment or a string. */
@@ -108,6 +109,8 @@ export function isScenePart(source: string): boolean {
     if (/\bCanvas\b/.test(m[2])) return false;
     threlte = true;
   }
+  // The kit's SceneView is a canvas too: a page-like component around it.
+  if (/^[ \t]*import\s+(?!type\b)[^'";]*\bSceneView\b[^'";]*from\s*['"]@joyautomation\/nautilus-hmi-3d['"]/m.test(source)) return false;
   return threlte;
 }
 
