@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Crossings drawn as crossings.** Where two pipes cross without either
+  ending there, `<Mimic>` (and the mimic editor) breaks the steeper one
+  either side of the flatter one, as P&ID drafting does, instead of
+  letting the layered walls merge them into what reads as a tee. Headers
+  with drops crossing under them no longer turn into a grid of boxes.
+  `pipeCrossings(paths)` finds them. A plain label now has a patch of the
+  bore colour behind its text, so a line under it breaks for it.
+
 - **`<Mimic fit="contain">`: the whole drawing at once.** Scaled to fit
   its container's width and the height from its top to the container's
   bottom, and centred across, so an overview never runs off the bottom of

@@ -87,6 +87,16 @@ into a right-angled L; without it the segments are straight.
   the program), not to the flow in engineering units.
 - **`color`** is the pipe's flow colour; the wall stays the screen's grey.
 
+Pipes join where one ends on another: a branch whose end sits on a
+header's line is a tee, drawn as one run. Where two pipes cross without
+either ending there, the screen draws the crossing as a P&ID does: the
+flatter pipe (the header) passes over, unbroken, and the other is broken
+either side of it. So a drop that should join the third header down ends
+on that header's line, and crosses the two above it.
+
+A label on a line breaks the line under its text, as a line label does on
+a P&ID, so a header's name can sit on the header.
+
 A port is a named point on an equipment's box, as fractions of it: `x: 0,
 y: 0.5` is the middle of the left edge. The built-ins have the ports in the
 table above. A component of your own has none until its

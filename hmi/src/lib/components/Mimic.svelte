@@ -15,7 +15,7 @@
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import Pipe from './Pipe.svelte';
-	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -228,8 +228,23 @@
 	 * the fresh box on every call). */
 	const pipePaths = $derived.by(() => {
 		void boxVersion;
-		return (doc.pipes ?? []).map((p) => ({ pipe: p, d: pointsToPath(routedPoints(p, getPort)) }));
+		return (doc.pipes ?? []).map((p) => {
+			const pts = routedPoints(p, getPort);
+			return { pipe: p, pts, d: pointsToPath(pts) };
+		});
 	});
+
+	/** Where pipes cross without joining. Drawn as on a P&ID: the pipe
+	 * passing over (the flatter one, a header) stays whole and the other is
+	 * broken either side of it, so a crossing never reads as the tee the
+	 * layered walls would otherwise make of it. Each is the over pipe drawn
+	 * again, clipped to a small square on the crossing, over a knockout band
+	 * in the bore colour: its flow dashes stay in step with the rest of it. */
+	const crossings = $derived(pipeCrossings(pipePaths.map((p) => p.pts)));
+	const uid = $props.id();
+	/** Half the side of a crossing's square: half the under pipe's 10 px
+	 * wall plus a 3 px gap, and a px to spare. */
+	const XING = 9;
 
 	/** Pipes that draw nothing (an end that isn't there, or no length), as
 	 * JSON on the root for `naut check`'s render; absent when there are none. */
@@ -284,6 +299,25 @@
 						/>
 					{/each}
 				{/each}
+				{#if crossings.length > 0}
+					<defs>
+						{#each crossings as c, i (i)}
+							<clipPath id="{uid}-x{i}"><rect x={c.x - XING} y={c.y - XING} width={XING * 2} height={XING * 2} /></clipPath>
+						{/each}
+					</defs>
+					{#each crossings as c, i (i)}
+						{@const o = pipePaths[c.over]}
+						<g class="crossing" clip-path="url(#{uid}-x{i})">
+							<path d={o.d} fill="none" stroke="var(--pipe-bore, var(--bg, #0d0d0d))" stroke-width="16" />
+							<Pipe
+								d={o.d}
+								{...(o.pipe.color !== undefined ? { color: o.pipe.color } : {})}
+								{...(o.pipe.props ?? {})}
+								{...resolveBindings(o.pipe.bind, tags)}
+							/>
+						</g>
+					{/each}
+				{/if}
 			</svg>
 
 			{#each doc.equipment ?? [] as eq (eq.id)}
@@ -440,11 +474,18 @@
 		font-size: var(--font-2xs);
 		font-family: var(--mono, monospace);
 	}
+	/* A label set on a line breaks the line, as a line label does on a
+	   P&ID: a patch of the bore colour behind the text keeps a pipe from
+	   running through the letters, and is invisible anywhere else. */
 	.lbl {
 		position: absolute;
 		font-size: var(--font-2xs);
 		color: var(--muted, #8b949e);
 		white-space: nowrap;
+		background: var(--pipe-bore, var(--bg, transparent));
+		padding: 0 3px;
+		margin-left: -3px;
+		border-radius: 3px;
 	}
 	/* A bound label reads as a readout chip: the static text stays muted like
 	   any label, the live value steps up to ink on a --surface-2 pill. */
