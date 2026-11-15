@@ -151,6 +151,27 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 	// Operator controls: no pipe meets a button.
 	CommandButton: [],
 	WriteToggle: [],
+	// The ISA-101 building blocks: a line meets the body (the bubble, the
+	// machine's circle) on whichever side it reaches it from.
+	OnOffValve: [
+		{ name: 'left', part: 'body', x: 0, y: 0.5 },
+		{ name: 'right', part: 'body', x: 1, y: 0.5 },
+		{ name: 'top', part: 'body', x: 0.5, y: 0 },
+		{ name: 'bottom', part: 'body', x: 0.5, y: 1 }
+	],
+	Instrument: [
+		{ name: 'left', part: 'bubble', x: 0, y: 0.5 },
+		{ name: 'right', part: 'bubble', x: 1, y: 0.5 },
+		{ name: 'top', part: 'bubble', x: 0.5, y: 0 },
+		{ name: 'bottom', part: 'bubble', x: 0.5, y: 1 }
+	],
+	Machine: [
+		{ name: 'left', part: 'body', x: 0, y: 0.5 },
+		{ name: 'right', part: 'body', x: 1, y: 0.5 },
+		{ name: 'top', part: 'body', x: 0.5, y: 0 },
+		{ name: 'bottom', part: 'body', x: 0.5, y: 1 }
+	],
+	SetpointGroup: [],
 	// A P&ID's off-page connector: a line ends on whichever side it meets.
 	OffPage: [
 		{ name: 'top', part: 'body', x: 0.5, y: 0 },

@@ -134,3 +134,51 @@ tags:
 		t.Errorf("a good copy was reported:\n%s", all)
 	}
 }
+
+// A SetpointGroup writes each tag its items name: each must be declared,
+// and an input (a driver's) is a warning, as for a CommandButton.
+func TestCheckMimicsSetpointGroup(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: Kp, type: REAL, role: setpoint }
+  - { name: LT101, type: REAL, role: input }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"equipment":[
+			{"id":"S1","component":"SetpointGroup","x":0,"y":0,"props":{"title":"Tuning","items":[
+				{"tag":"Kp","label":"Gain"},{"tag":"kd","label":"Derivative"},{"label":"No tag"},{"tag":"LT101"}]}},
+			{"id":"S2","component":"SetpointGroup","x":0,"y":0},
+			{"id":"V1","component":"OnOffValve","x":0,"y":0,"props":{"tag":"XV-101"}},
+			{"id":"F1","component":"Instrument","x":0,"y":0},
+			{"id":"P1","component":"Machine","x":0,"y":0}],
+		  "pipes":[{"id":"p1","from":{"equip":"V1","port":"right"},"to":{"equip":"F1","port":"left"},"points":[]},
+			{"id":"p2","from":{"equip":"F1","port":"right"},"to":{"equip":"P1","port":"in"},"points":[]}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"equipment S1's item 2 writes kd, which the project doesn't declare",
+		"equipment S1's item 3 has no tag",
+		"equipment S2 is a SetpointGroup with no items",
+		`pipe p2 ends on P1's port "in"; a Machine has ports left, right, top, bottom`,
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 4 {
+		t.Errorf("%d errors, want 4:\n%s", len(errs), all)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "S1's item 4 writes LT101, an input") {
+		t.Errorf("warnings = %q", warns)
+	}
+}

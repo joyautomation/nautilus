@@ -272,14 +272,23 @@ naut builds the operator screen from the project itself, with no npm, and
 `naut run` serves it at `/` (the engineering dashboard moves to
 `/_nautilus/`). Guide: https://nautilus.joyautomation.com/guides/operator-screens/
 
-- A `*.mimic.json` is a screen: equipment placed on a canvas, pipes between
-  it, tags bound to it. A project with mimics gets a page for each. Use
-  the kit's equipment (`Tank`, `Pump`, `Valve`, `Gauge`, `CommandButton`,
-  `WriteToggle`, `OffPage`, ...) and a `{Name}.svelte` of your own where the kit
-  doesn't draw what you need, with its pipe ports in `{Name}.component.json`
-  and its `examples`: the props for each state it draws
-  (`"examples": {"open": {...}, "closed": {...}, "failed": {...}}`).
-  `/components` draws every one, and `naut check` renders it.
+- A `*.mimic.json` is a screen: equipment placed on a canvas, pipes
+  between it, tags bound to it. A project with mimics gets a page for
+  each. Draw it from the kit's ISA-101 pieces first: `OnOffValve` (open,
+  closed, travelling, failed; `vertical` for a drop), `Instrument` (the
+  ISA bubble and its reading; inline ones sit on their line), `Machine` (a
+  pump, blower, compressor or agitator: running, stopped, faulted),
+  `SetpointGroup` (a titled panel of setpoint fields, as tall as its
+  fields), `Tank`, `CommandButton`, `WriteToggle`, `OffPage`:
+  `{"component": "Instrument", "props": {"tag": "FIT-101", "unit": "gpm"},
+  "bind": {"value": "FIT101_Flow"}}`, `{"component": "SetpointGroup",
+  "width": 300, "props": {"title": "Tuning", "items": [{"tag": "Kp",
+  "label": "Gain", "decimals": 2}]}}`. Write a `{Name}.svelte` of your own
+  only for what they don't draw (a process unit drawn in section, a
+  banner), with its pipe ports in `{Name}.component.json` and its
+  `examples`: the props for each state it draws (`"examples": {"open":
+  {...}, "closed": {...}, "failed": {...}}`). `/components` draws every
+  one, and `naut check` renders it.
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
   drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
   and each copy moves by `step`:

@@ -11,6 +11,20 @@
   under a row of filters read as five lines, not a band of tubes. Tee
   dots are 10 px on a line.
 
+### Added
+
+- **ISA-101 building blocks: `OnOffValve`, `Instrument`, `Machine`,
+  `SetpointGroup`.** Built-in mimic components for what every generated
+  screen was drawing for itself (screen evals: 5 of 8 runs wrote their own
+  valve, most their own instrument bubble, machine symbol and setpoint
+  panel). An on/off valve with open, closed, travelling and failed; the
+  ISA bubble (FIT over 501) with its reading, inline on its line; a pump,
+  blower, compressor or agitator, running, stopped or faulted; a titled
+  group of setpoint fields that reads and writes the tags its `items`
+  name and is as tall as its fields. Grey, theme tokens, colour for the
+  abnormal. `naut check` checks a group's item tags; the editor's palette
+  has all four.
+
 ### Fixed
 
 - **`Histogram`: the last tick no longer prints over the unit.** A tick

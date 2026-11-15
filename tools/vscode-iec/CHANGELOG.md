@@ -13,6 +13,10 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Added
 
+- **Mimic editor: the kit's ISA-101 building blocks.** `OnOffValve`,
+  `Instrument`, `Machine` and `SetpointGroup` in the palette, with their
+  ports and sample props; a `SetpointGroup` reads live values.
+
 - **Mimic editor: `OffPage` in the palette.** The kit's off-page
   connector, with its four ports.
 

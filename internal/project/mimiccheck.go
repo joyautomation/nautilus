@@ -23,7 +23,9 @@ type MimicReport struct {
 var builtinPorts = map[string][]string{
 	"Tank": {"top", "left", "right", "bottom"}, "Pump": {"in", "out"}, "Valve": {"in", "out"},
 	"Heater": nil, "Gauge": nil, "Sparkline": nil, "CommandButton": nil, "WriteToggle": nil,
-	"OffPage": {"top", "left", "right", "bottom"},
+	"OffPage":    {"top", "left", "right", "bottom"},
+	"OnOffValve": {"left", "right", "top", "bottom"}, "Instrument": {"left", "right", "top", "bottom"},
+	"Machine": {"left", "right", "top", "bottom"}, "SetpointGroup": nil,
 }
 
 // writers are the kit's controls: the `tag` prop is the tag they write.
@@ -133,6 +135,23 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 			}
 			for _, prop := range sortedKeys(eq.Bind) {
 				tag(where+"'s "+prop, eq.Bind[prop])
+			}
+			if eq.Component == "SetpointGroup" {
+				items, _ := eq.Props["items"].([]any)
+				if len(items) == 0 {
+					say("%s is a SetpointGroup with no items (props.items: [{\"tag\": ..., \"label\": ...}])", where)
+				}
+				for i, it := range items {
+					m, _ := it.(map[string]any)
+					t, _ := m["tag"].(string)
+					if t == "" {
+						say("%s's item %d has no tag", where, i+1)
+					} else if d, ok := tags[t]; !ok {
+						say("%s's item %d writes %s, which the project doesn't declare%s", where, i+1, t, nearest(t, tags))
+					} else if d.Role == runtime.RoleInput {
+						warns = append(warns, fmt.Sprintf("%s: %s's item %d writes %s, an input: the tag API refuses a write to an input a driver owns", f, where, i+1, t))
+					}
+				}
 			}
 			if writers[eq.Component] {
 				t, _ := eq.Props["tag"].(string)

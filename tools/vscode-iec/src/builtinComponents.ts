@@ -39,6 +39,25 @@ export const BUILTIN_COMPONENT_PORTS: Record<string, Port[]> = {
   Sparkline: [],
   CommandButton: [],
   WriteToggle: [],
+  OnOffValve: [
+    { name: "left", part: "body", x: 0, y: 0.5 },
+    { name: "right", part: "body", x: 1, y: 0.5 },
+    { name: "top", part: "body", x: 0.5, y: 0 },
+    { name: "bottom", part: "body", x: 0.5, y: 1 },
+  ],
+  Instrument: [
+    { name: "left", part: "bubble", x: 0, y: 0.5 },
+    { name: "right", part: "bubble", x: 1, y: 0.5 },
+    { name: "top", part: "bubble", x: 0.5, y: 0 },
+    { name: "bottom", part: "bubble", x: 0.5, y: 1 },
+  ],
+  Machine: [
+    { name: "left", part: "body", x: 0, y: 0.5 },
+    { name: "right", part: "body", x: 1, y: 0.5 },
+    { name: "top", part: "body", x: 0.5, y: 0 },
+    { name: "bottom", part: "body", x: 0.5, y: 1 },
+  ],
+  SetpointGroup: [],
   OffPage: [
     { name: "top", part: "body", x: 0.5, y: 0 },
     { name: "left", part: "body", x: 0, y: 0.5 },
@@ -62,4 +81,8 @@ export const BUILTIN_DEMO_PROPS: Record<string, Record<string, unknown>> = {
   CommandButton: { label: "Command", tag: "" },
   WriteToggle: { label: "Enable", tag: "", value: true },
   OffPage: { label: "TO DRAIN" },
+  OnOffValve: { tag: "XV-101", open: true },
+  Instrument: { tag: "FIT-101", value: 42.5, unit: "gpm" },
+  Machine: { kind: "pump", tag: "P-101", running: true },
+  SetpointGroup: { title: "Setpoints", items: [{ tag: "", label: "Setpoint", unit: "" }] },
 };

@@ -178,7 +178,8 @@ func TestAUnitBuildsWithItsComponentAndPorts(t *testing.T) {
 	if n := strings.Count(js, "inlet_qq"); n != 4 {
 		t.Errorf("inlet_qq appears %d times, want 4: %q", n, excerpt(js, "inlet_qq"))
 	}
-	if strings.Contains(js, `"units"`) || strings.Contains(js, "F{n}") {
+	// the doc's own "units": [...] (WriteNumber's `units` prop is in the kit)
+	if strings.Contains(js, `"units":[`) || strings.Contains(js, "F{n}") {
 		t.Errorf("the unit wasn't drawn out: %q", excerpt(js, "units"))
 	}
 }

@@ -65,6 +65,10 @@ export type { CanvasSpec, CanvasNode, CanvasRegistry } from './canvas.js';
 export { default as WriteNumber } from './components/WriteNumber.svelte';
 export { default as WriteToggle } from './components/WriteToggle.svelte';
 export { default as OffPage } from './components/OffPage.svelte';
+export { default as OnOffValve } from './components/OnOffValve.svelte';
+export { default as Instrument } from './components/Instrument.svelte';
+export { default as Machine } from './components/Machine.svelte';
+export { default as SetpointGroup } from './components/SetpointGroup.svelte';
 export { default as CommandButton } from './components/CommandButton.svelte';
 
 // Faceplates: the popup a mimic click opens (chrome + tab bar; compose the

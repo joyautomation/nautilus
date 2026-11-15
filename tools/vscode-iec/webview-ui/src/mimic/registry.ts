@@ -2,13 +2,13 @@
 // the same modules the runtime <Mimic> renders, so the canvas is WYSIWYG.
 // (Custom registry components render as a placeholder chip here; they only
 // exist in the app that supplies them.)
-import { CommandButton, Gauge, Heater, OffPage, Pump, Sparkline, Tank, Valve, WriteToggle } from '@joyautomation/nautilus-hmi';
+import { CommandButton, Gauge, Heater, Instrument, Machine, OffPage, OnOffValve, Pump, SetpointGroup, Sparkline, Tank, Valve, WriteToggle } from '@joyautomation/nautilus-hmi';
 import type { Component } from 'svelte';
 import { PORTS } from './builtinPorts';
 export { PORTS };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const registry: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle, OffPage };
+export const registry: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle, OffPage, OnOffValve, Instrument, Machine, SetpointGroup };
 export const registryNames = Object.keys(registry);
 
 /** Fallbacks merged UNDER doc props/bindings so every component renders on
@@ -25,7 +25,11 @@ export const DEMO_PROPS: Record<string, Record<string, unknown>> = {
 	// write; the canvas hands them `write` (EditorCanvas eqProps).
 	CommandButton: { label: 'Command', tag: '' },
 	WriteToggle: { label: 'Enable', tag: '', value: true },
-	OffPage: { label: 'TO DRAIN' }
+	OffPage: { label: 'TO DRAIN' },
+	OnOffValve: { tag: 'XV-101', open: true },
+	Instrument: { tag: 'FIT-101', value: 42.5, unit: 'gpm' },
+	Machine: { kind: 'pump', tag: 'P-101', running: true },
+	SetpointGroup: { title: 'Setpoints', items: [{ tag: '', label: 'Setpoint', unit: '' }] }
 };
 
 /** Named connection points, as fractions of the rendered box. Pipe drawing
@@ -46,5 +50,9 @@ export const BIND_HINTS: Record<string, string[]> = {
 	CommandButton: ['held', 'disabled'],
 	WriteToggle: ['value'],
 	OffPage: [],
+	OnOffValve: ['open', 'travelling', 'failed'],
+	Instrument: ['value', 'alarm'],
+	Machine: ['running', 'faulted', 'speedPct'],
+	SetpointGroup: [],
 	pipe: ['flowing', 'rate']
 };
