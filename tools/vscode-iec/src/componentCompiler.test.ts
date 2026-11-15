@@ -31,16 +31,21 @@ type Registered = Record<string, { mount: unknown }>;
 
 /** Runs a linked script the way the webview does, with Svelte's client
  * runtime (and an empty kit) as window.__NX_RT__. */
-async function run(code: string): Promise<{ registered: Registered | undefined; events: string[]; errors: unknown[] }> {
+async function run(
+  code: string,
+  override: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {}
+): Promise<{ registered: Registered | undefined; events: string[]; errors: unknown[] }> {
   const rt: Record<string, unknown> = {};
   for (const spec of RUNTIME_MODULES) {
     rt[spec] = spec.startsWith("svelte") ? await import(spec === "svelte" ? "svelte/internal/client" : spec).catch(() => ({})) : {};
   }
   // `svelte` itself: mount/unmount, from the client build (Node would pick the server one).
   rt.svelte = await import(path.join(path.dirname(require.resolve("svelte/package.json")), "src", "index-client.js"));
+  Object.assign(rt, override);
   const events: string[] = [];
   const errors: unknown[] = [];
-  const window: Record<string, unknown> = { __NX_RT__: rt, dispatchEvent: (e: { type: string }) => events.push(e.type) };
+  const window: Record<string, unknown> = { ...extra, __NX_RT__: rt, dispatchEvent: (e: { type: string }) => events.push(e.type) };
   const console = { error: (...a: unknown[]) => errors.push(a) };
   new Function("window", "console", "document", "Event", code)(window, console, {}, class {
     constructor(public type: string) {}
@@ -139,4 +144,43 @@ test("nothing usable: the script still registers (nothing) and says it is ready"
   const { registered, events } = await run(result.code);
   assert.deepEqual(registered, {});
   assert.deepEqual(events, ["nx:user-components-ready"]);
+});
+
+test("a runtime export assigned after the script loads is read live", async () => {
+  // Svelte sets $.window on the first mount: a copy of the runtime module
+  // taken when the script loaded left <svelte:window> with undefined.
+  let late: string | undefined;
+  const store = Object.freeze({
+    get late() {
+      return late;
+    },
+  });
+  const files = {
+    "/p/probe.js": 'import * as store from "svelte/store"; window.probe.read = () => store.late;',
+    "/p/A.svelte": '<script>import "./probe.js";</script><p>a</p>',
+  };
+  const result = await compileComponents({ A: "/p/A.svelte" }, memory(files));
+  assert.deepEqual(result.diagnostics, []);
+  const probe: { read?: () => unknown } = {};
+  const { errors } = await run(result.code, { "svelte/store": store }, { probe });
+  assert.deepEqual(errors, []);
+  assert.equal(probe.read?.(), undefined);
+  late = "set";
+  assert.equal(probe.read?.(), "set");
+});
+
+test("a project barrel can export * from a runtime module", async () => {
+  const store = Object.freeze({ writable: () => "w", readable: () => "r" });
+  const files = {
+    "/p/barrel.js": 'export * from "svelte/store";',
+    "/p/probe.js": 'import * as b from "./barrel.js"; window.probe.keys = Object.keys(b).sort(); window.probe.w = b.writable();',
+    "/p/A.svelte": '<script>import "./probe.js";</script><p>a</p>',
+  };
+  const result = await compileComponents({ A: "/p/A.svelte" }, memory(files));
+  assert.deepEqual(result.diagnostics, []);
+  const probe: { keys?: string[]; w?: string } = {};
+  const { errors } = await run(result.code, { "svelte/store": store }, { probe });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(probe.keys, ["readable", "writable"]);
+  assert.equal(probe.w, "w");
 });

@@ -62,6 +62,33 @@
 	let props = $state<Record<string, unknown>>({});
 	/** The props the source declares with no default (host-read). */
 	let needs = $state<string[]>([]);
+	/** The props it declares with a default: what to try when it draws
+	 * nothing as it is (a panel closed until `open` or `selected` is set). */
+	let optional = $state<string[]>([]);
+	const untried = $derived(optional.filter((n) => !(n in props)));
+	/** A part of a 3D scene: nothing to show outside a scene's canvas. */
+	let scenePart = $state(false);
+	/** Its roots are all out of flow: shown over a frame (UserIsland). */
+	let overlay = $state(false);
+	/** The frame an overlay lies over: the stage's own room, so the whole
+	 * of it shows at 100% and a panel sized in % has something to take a
+	 * share of. Never smaller than a small page. */
+	let stageEl = $state<HTMLDivElement | null>(null);
+	let frame = $state({ w: 480, h: 360 });
+	const FRAME_MARGIN = 56; // the stage's padding, and a little
+	$effect(() => {
+		if (!stageEl) return;
+		const el = stageEl;
+		const update = () => {
+			const w = Math.max(320, el.clientWidth - FRAME_MARGIN);
+			const h = Math.max(240, el.clientHeight - FRAME_MARGIN);
+			if (w !== frame.w || h !== frame.h) frame = { w, h };
+		};
+		update();
+		const ro = new ResizeObserver(update);
+		ro.observe(el);
+		return () => ro.disconnect();
+	});
 	/** Those of them with no sample value yet. */
 	const missing = $derived(needs.filter((n) => !(n in props)));
 	/** The component is an SVG part (root <g>, <path>…), shown in an svg
@@ -106,6 +133,8 @@
 				builtin?: boolean;
 				props?: Record<string, unknown>;
 				needs?: string[];
+				optional?: string[];
+				scenePart?: boolean;
 				ports?: Port[];
 				portsInherited?: boolean;
 				ack?: number;
@@ -122,6 +151,8 @@
 				builtin = !!m.builtin;
 				props = m.props ?? {};
 				needs = m.needs ?? [];
+				optional = m.optional ?? [];
+				scenePart = !!m.scenePart;
 				// The host confirms each ports write with a previewDoc carrying
 				// its seq (`ack`). While an edit of ours is still unconfirmed, a
 				// previewDoc's ports are older than what is on screen — the
@@ -430,7 +461,7 @@
 		return { left: r.left + p.x * k + 10, top: r.top + p.y * k - 20 };
 	}
 	const statusText = $derived(
-		builtin ? 'built-in' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
+		builtin ? 'built-in' : scenePart ? '3D part' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
 	);
 </script>
 
@@ -451,7 +482,15 @@
 				{file || 'Component Preview'}
 			</button>
 		{/if}
-		{#if box}<span class="size">{box.w} × {box.h}</span>{/if}
+		{#if box && !scenePart}<span class="size">{box.w} × {box.h}</span>{/if}
+		{#if overlay && !builtin && !scenePart}
+			<span
+				class="size"
+				data-kind="overlay"
+				title="Everything at its root is positioned out of flow (absolute or fixed): a panel laid over a page. Shown here over a frame the size of this pane, standing in for the page."
+				>overlay</span
+			>
+		{/if}
 		{#if svgPart && !builtin}
 			<span
 				class="size"
@@ -486,8 +525,15 @@
 
 	<div class="body">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="stage" class:stale={!!error} ondragstart={(e) => e.preventDefault()}>
-			{#if available}
+		<div class="stage" class:stale={!!error} bind:this={stageEl} ondragstart={(e) => e.preventDefault()}>
+			{#if scenePart}
+				<!-- Not an error and not a compile away: it has no canvas to
+				     draw on here, on any machine. -->
+				<p class="empty hint" data-kind="scene-part">
+					{file} is a part of a 3D scene: it imports Threlte and draws through the canvas of the scene it is placed in, so there
+					is nothing to show of it alone. See it on the page that uses it.
+				</p>
+			{:else if available}
 				{#key version}
 					<div class="scale" style="transform: scale({zoom})">
 						<div class="box" data-theme={themeColorMode.mode} bind:this={measureEl}>
@@ -496,7 +542,14 @@
 									{@const C = registry[component]}
 									<C {...builtinProps} />
 								{:else}
-									<UserIsland name={component} {props} svgHost onsvgpart={(part) => (svgPart = part)} />
+									<UserIsland
+										name={component}
+										{props}
+										svgHost
+										onsvgpart={(part) => (svgPart = part)}
+										{frame}
+										onframed={(f) => (overlay = f)}
+									/>
 								{/if}
 							</div>
 							{#if box}
@@ -551,6 +604,11 @@
 							{missing.join(', ')}
 							{missing.length === 1 ? 'has' : 'have'} no default and no sample value yet, so {file} draws little or nothing. Give
 							{missing.length === 1 ? 'it' : 'them'} a value under Props.
+						{:else if untried.length}
+							{file} draws nothing as it is. It may be waiting on a prop: try a value for
+							{#each untried as name (name)}
+								<button class="need" title="Add a sample value for {name}" onclick={() => startProp(name)}>{name}</button>
+							{/each}
 						{:else}
 							{file} draws nothing with these props ({box.w} × {box.h}).
 						{/if}
@@ -563,7 +621,7 @@
 			{/if}
 		</div>
 
-		<aside>
+		<aside class:off={scenePart}>
 			<h4>Props <span class="dim">{propNames.length}</span></h4>
 			{#if missing.length}
 				<p class="note needs" data-kind="props-missing">
@@ -822,6 +880,9 @@
 		border-left: none;
 		padding: 0;
 		overflow: visible;
+	}
+	aside.off {
+		display: none;
 	}
 	.empty {
 		color: var(--nx-muted);
