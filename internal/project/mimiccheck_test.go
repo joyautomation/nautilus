@@ -87,3 +87,46 @@ func TestCheckMimicsAgainstAnotherManifest(t *testing.T) {
 		t.Errorf("errs = %q, warns = %q", errs, warns)
 	}
 }
+
+// A unit's copies are checked like any other equipment: a tag its {n}
+// names that isn't declared is an error at the copy that names it, and its
+// pipes end on the copies' ports.
+func TestCheckMimicsUnits(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: F1_Level, type: REAL, role: state }
+  - { name: F2_Level, type: REAL, role: state }
+`),
+		"main.st":                           file("PROGRAM main\nEND_PROGRAM\n"),
+		"screens/FilterCell.svelte":         file("<p></p>"),
+		"screens/FilterCell.component.json": file(`{"ports":[{"name":"inf","x":0.5,"y":0}]}`),
+		"screens/g.mimic.json": file(`{"canvas":{"width":900,"height":400},
+		  "units":[{"id":"filter","each":[1,2,3],"step":[300,0],
+		    "equipment":[{"id":"F{n}","component":"FilterCell","x":10,"y":100,"bind":{"level":"F{n}_Level"}},
+		                 {"id":"V{n}","component":"Valve","x":50,"y":20}],
+		    "pipes":[{"id":"p{n}","from":{"equip":"V{n}","port":"out"},"to":{"equip":"F{n}","port":"inf"}},
+		             {"id":"q{n}","from":{"equip":"V{n}","port":"out"},"to":{"equip":"F{n}","port":"outlet"}}]}]}`),
+	}
+	p, err := Load(fsys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reports, errs, _ := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	if len(reports) != 1 || reports[0].Equipment != 6 || reports[0].Pipes != 6 {
+		t.Errorf("reports = %+v, want 6 equipment and 6 pipes", reports)
+	}
+	for _, want := range []string{"F3_Level", "pipe q1", "pipe q2", "pipe q3"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error naming %s in:\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "pipe p1") || strings.Contains(all, "F1_Level") {
+		t.Errorf("a good copy was reported:\n%s", all)
+	}
+}

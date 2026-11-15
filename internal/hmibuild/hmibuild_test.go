@@ -152,6 +152,36 @@ func TestASidecarsPortsReachTheScreen(t *testing.T) {
 	}
 }
 
+// A component only a unit uses is registered, and each copy carries its
+// sidecar's ports: the screen draws the unit's pipes.
+func TestAUnitBuildsWithItsComponentAndPorts(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "screens/g.mimic.json", `{"canvas":{"width":900,"height":300},
+		"units":[{"each":[1,2],"step":[300,0],
+			"equipment":[{"id":"F{n}","component":"OnlyInUnit","x":10,"y":10}],
+			"pipes":[{"id":"p{n}","points":[[0,0]],"to":{"equip":"F{n}","port":"inlet_qq"}}]}]}`)
+	write(t, dir, "screens/OnlyInUnit.svelte", "<div>cell</div>\n")
+	write(t, dir, "screens/OnlyInUnit.component.json", `{"ports":[{"name":"inlet_qq","x":0.5,"y":0}]}`)
+	res, err := Build(Options{Project: dir, Title: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	for name, b := range res.Files {
+		if strings.HasSuffix(name, ".js") {
+			all.Write(b)
+		}
+	}
+	js := all.String()
+	// two copies' ports, two pipe ends
+	if n := strings.Count(js, "inlet_qq"); n != 4 {
+		t.Errorf("inlet_qq appears %d times, want 4: %q", n, excerpt(js, "inlet_qq"))
+	}
+	if strings.Contains(js, `"units"`) || strings.Contains(js, "F{n}") {
+		t.Errorf("the unit wasn't drawn out: %q", excerpt(js, "units"))
+	}
+}
+
 func TestWithSidecarPorts(t *testing.T) {
 	ports := map[string]json.RawMessage{"Cell": json.RawMessage(`[{"name":"a","x":0,"y":0}]`), "Tank": json.RawMessage(`[]`)}
 	doc := []byte(`{"equipment":[{"id":"c1","component":"Cell"},{"id":"c2","component":"Cell","ports":[]},{"id":"t","component":"Tank"}],"pipes":[]}`)

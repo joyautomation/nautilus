@@ -1,0 +1,180 @@
+{
+  "name": "Units",
+  "canvas": {
+    "width": 800,
+    "height": 400
+  },
+  "equipment": [
+    {
+      "id": "P1",
+      "component": "Pump",
+      "x": 10,
+      "y": 300
+    },
+    {
+      "id": "F1",
+      "component": "FilterCell",
+      "x": 100,
+      "y": 100,
+      "width": 200,
+      "height": 150,
+      "props": {
+        "label": "F-1",
+        "n": 1,
+        "tags": [
+          "F1_Level",
+          7
+        ]
+      },
+      "bind": {
+        "level": "F1_Level",
+        "oos": "!F1_OutOfService"
+      }
+    },
+    {
+      "id": "F1_INF",
+      "component": "Valve",
+      "x": 190,
+      "y": 60
+    },
+    {
+      "id": "F2",
+      "component": "FilterCell",
+      "x": 400,
+      "y": 100,
+      "width": 200,
+      "height": 150,
+      "props": {
+        "label": "F-2",
+        "n": 2,
+        "tags": [
+          "F2_Level",
+          7
+        ]
+      },
+      "bind": {
+        "level": "F2_Level",
+        "oos": "!F2_OutOfService"
+      }
+    },
+    {
+      "id": "F2_INF",
+      "component": "Valve",
+      "x": 490,
+      "y": 60
+    },
+    {
+      "id": "B_A",
+      "component": "Gauge",
+      "x": 600,
+      "y": 300,
+      "props": {
+        "id": "A"
+      }
+    },
+    {
+      "id": "B_B",
+      "component": "Gauge",
+      "x": 600,
+      "y": 340,
+      "props": {
+        "id": "B"
+      }
+    }
+  ],
+  "pipes": [
+    {
+      "id": "header",
+      "points": [
+        [
+          0,
+          50
+        ],
+        [
+          800,
+          50
+        ]
+      ],
+      "bind": {
+        "flowing": "Hdr_Flow"
+      }
+    },
+    {
+      "id": "F1_inf",
+      "points": [
+        [
+          200,
+          50
+        ]
+      ],
+      "to": {
+        "equip": "F1_INF",
+        "port": "in"
+      },
+      "bind": {
+        "flowing": "Disp_F1_Inf"
+      }
+    },
+    {
+      "id": "F1_down",
+      "from": {
+        "equip": "F1_INF",
+        "port": "out"
+      },
+      "to": {
+        "equip": "F1",
+        "port": "inf"
+      },
+      "points": []
+    },
+    {
+      "id": "F2_inf",
+      "points": [
+        [
+          500,
+          50
+        ]
+      ],
+      "to": {
+        "equip": "F2_INF",
+        "port": "in"
+      },
+      "bind": {
+        "flowing": "Disp_F2_Inf"
+      }
+    },
+    {
+      "id": "F2_down",
+      "from": {
+        "equip": "F2_INF",
+        "port": "out"
+      },
+      "to": {
+        "equip": "F2",
+        "port": "inf"
+      },
+      "points": []
+    }
+  ],
+  "labels": [
+    {
+      "text": "INFLUENT",
+      "x": 20,
+      "y": 30
+    },
+    {
+      "text": "F-1 level",
+      "x": 110,
+      "y": 260,
+      "bind": "F1_Level",
+      "unit": "ft"
+    },
+    {
+      "text": "F-2 level",
+      "x": 410,
+      "y": 260,
+      "bind": "F2_Level",
+      "unit": "ft"
+    }
+  ]
+}

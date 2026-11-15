@@ -20,6 +20,36 @@ export interface MimicDoc {
 	equipment?: MimicEquipment[];
 	pipes?: MimicPipe[];
 	labels?: MimicLabel[];
+	/** Equipment, pipes and labels drawn once per value of `each` — four
+	 * filters, eight pumps — instead of written out each time. See
+	 * MimicUnit and expandUnits(). */
+	units?: MimicUnit[];
+}
+
+/** A part of the screen repeated once per value of `each`. In every string
+ * of its equipment, pipes and labels (ids, tag bindings, label text, the
+ * equipment a pipe ends on) `{n}` becomes the value (`as` names a
+ * placeholder other than `n`); a string that is exactly `"{n}"` becomes the
+ * value itself, a number when the value is one. The i-th copy moves by
+ * `step` × i (canvas units), so the first sits where it is written.
+ *
+ *   { "id": "filter", "each": [1, 2, 3, 4], "step": [420, 0],
+ *     "equipment": [{ "id": "F{n}", "component": "FilterCell", "x": 230,
+ *       "y": 370, "props": { "label": "F-{n}" }, "bind": { "level": "F{n}_Level" } }] }
+ *
+ * A copy's items come after the document's own, unit by unit, value by
+ * value; their ids must be unique like any other (use `{n}` in them). */
+export interface MimicUnit {
+	/** Names the unit (for messages and the editor). */
+	id?: string;
+	each: (number | string)[];
+	/** The placeholder, without braces. Default `n`. */
+	as?: string;
+	/** How far each copy moves from the one before: [dx, dy]. Default [0, 0]. */
+	step?: [number, number];
+	equipment?: MimicEquipment[];
+	pipes?: MimicPipe[];
+	labels?: MimicLabel[];
 }
 
 /** How a mimic's equipment is drawn — every component takes it as its
@@ -174,6 +204,8 @@ export interface MimicEquipment {
 	 * sidecar entry for `component` (editor only) else the built-in default;
 	 * an explicit `[]` means "no ports" and is NOT the same as absent. */
 	ports?: MimicPort[];
+	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
+	fromUnit?: string;
 }
 
 /** A pipe end's attachment to a named equipment port. When set, that end's
@@ -218,6 +250,8 @@ export interface MimicPipe {
 	to?: MimicPipeAnchor;
 	props?: Record<string, unknown>;
 	bind?: Record<string, string>;
+	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
+	fromUnit?: string;
 }
 
 /** A free text label on the canvas. Give it a `bind` and it becomes a live
@@ -236,6 +270,8 @@ export interface MimicLabel {
 	unit?: string;
 	/** Fraction digits for the live value (default 1). */
 	decimals?: number;
+	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
+	fromUnit?: string;
 }
 
 /** Polyline points -> SVG path ("M x y L x y …"). */
@@ -495,6 +531,48 @@ export function routedPoints(
 	pts = withDirStub(pts, startDir, true);
 	pts = withDirStub(pts, endDir, false);
 	return pipe.routing === 'orthogonal' ? orthogonalPoints(pts) : pts;
+}
+
+/** The document with its units drawn out: each unit's equipment, pipes and
+ * labels once per value, `{n}` filled in and moved by `step`, after the
+ * document's own; `units` itself is gone. A document with no units comes
+ * back as it is (the same object). Pure, and the same as naut's own
+ * expansion (internal/mimicdoc), which a shared fixture holds them to:
+ * testdata/mimic-units. `mark` tags each copied item with `fromUnit:
+ * "<id>#<value>"` for the editor, which shows them but can't move them. */
+export function expandUnits(doc: MimicDoc, opts: { mark?: boolean } = {}): MimicDoc {
+	const units = doc.units;
+	if (!Array.isArray(units) || units.length === 0) return doc;
+	const out: MimicDoc = { ...doc, equipment: [...(doc.equipment ?? [])], pipes: [...(doc.pipes ?? [])], labels: [...(doc.labels ?? [])] };
+	delete out.units;
+	for (const [u, unit] of units.entries()) {
+		if (!unit || !Array.isArray(unit.each)) continue;
+		const ph = `{${unit.as || 'n'}}`;
+		const [dx, dy] = Array.isArray(unit.step) ? unit.step : [0, 0];
+		unit.each.forEach((v, i) => {
+			const fill = (x: unknown): unknown => {
+				if (typeof x === 'string') return x === ph ? v : x.split(ph).join(String(v));
+				if (Array.isArray(x)) return x.map(fill);
+				if (x && typeof x === 'object') return Object.fromEntries(Object.entries(x).map(([k, y]) => [k, fill(y)]));
+				return x;
+			};
+			const tag = opts.mark ? { fromUnit: `${unit.id ?? `unit${u + 1}`}#${v}` } : {};
+			const ox = (dx || 0) * i, oy = (dy || 0) * i;
+			for (const e of unit.equipment ?? []) {
+				const c = fill(e) as MimicEquipment;
+				out.equipment!.push({ ...c, x: (c.x ?? 0) + ox, y: (c.y ?? 0) + oy, ...tag });
+			}
+			for (const p of unit.pipes ?? []) {
+				const c = fill(p) as MimicPipe;
+				out.pipes!.push({ ...c, points: (c.points ?? []).map(([x, y]) => [x + ox, y + oy] as [number, number]), ...tag });
+			}
+			for (const l of unit.labels ?? []) {
+				const c = fill(l) as MimicLabel;
+				out.labels!.push({ ...c, x: (c.x ?? 0) + ox, y: (c.y ?? 0) + oy, ...tag });
+			}
+		});
+	}
+	return out;
 }
 
 /** A pipe that draws nothing on the screen, and why: an anchored end whose
