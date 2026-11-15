@@ -19,6 +19,13 @@
   points), for a line that goes on to another screen. Ports `top`,
   `left`, `right`, `bottom`.
 
+- **What an operator scrolls to reach, reported.** `naut check`'s render
+  warns of controls and text that sit mostly below the bottom of a
+  1920×1080 window, or are hidden in a box that scrolls or clips (a
+  setpoint panel spilling out of its box on a mimic counts), naming
+  them. `/components` is exempt. The text-over-text check also counts
+  what's in a field, so a label drawn over a setpoint box is reported.
+
 - **Text drawn over text, reported.** `naut check`'s render warns of a
   label drawn over another (a tag over the next valve's state, one
   connector's name over the next), naming the pairs. An `OffPage` with no

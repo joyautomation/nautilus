@@ -34,6 +34,9 @@ type textItem struct {
 	Bold bool    `json:"bold"`
 	O    float64 `json:"o"`
 	PX   float64 `json:"px"`
+	// Field: what's in an input or a select, counted only for what
+	// overlaps it.
+	Field bool `json:"field"`
 }
 
 type textResult struct {
@@ -96,7 +99,7 @@ func (ts *textShot) overlaps() string {
 		}
 		for j := i + 1; j < len(items); j++ {
 			b := items[j]
-			if b.O < 0.1 {
+			if b.O < 0.1 || (a.Field && b.Field) {
 				continue
 			}
 			w := math.Min(a.X+a.W, b.X+b.W) - math.Max(a.X, b.X)
@@ -281,6 +284,9 @@ func (ts *textShot) contrast() string {
 	seen := map[string]bool{}
 	total := 0
 	for _, it := range ts.res.Items {
+		if it.Field {
+			continue
+		}
 		fg, a, ok := parseColor(it.FG)
 		if !ok {
 			continue
@@ -327,8 +333,12 @@ func (ts *textShot) contrast() string {
 func (ts *textShot) small(v view) string {
 	var smalls []textItem
 	least := math.Inf(1)
+	texts := 0
 	for _, it := range ts.res.Items {
-		if it.PX > 0 && it.PX < MinTextPx {
+		if !it.Field {
+			texts++
+		}
+		if !it.Field && it.PX > 0 && it.PX < MinTextPx {
 			smalls = append(smalls, it)
 			least = math.Min(least, it.PX)
 		}
@@ -345,5 +355,5 @@ func (ts *textShot) small(v view) string {
 		seen[it.T] = true
 		ex = append(ex, fmt.Sprintf("%q", it.T))
 	}
-	return fmt.Sprintf("%d of %d texts are drawn under %.0f px in a %d×%d window (the smallest %.1f px): %s: write text at 12 px or more, and draw the canvas for the window so it isn't scaled down", len(smalls), len(ts.res.Items), MinTextPx, v.width, v.height, least, strings.Join(ex, ", "))
+	return fmt.Sprintf("%d of %d texts are drawn under %.0f px in a %d×%d window (the smallest %.1f px): %s: write text at 12 px or more, and draw the canvas for the window so it isn't scaled down", len(smalls), texts, MinTextPx, v.width, v.height, least, strings.Join(ex, ", "))
 }

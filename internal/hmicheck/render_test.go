@@ -32,6 +32,8 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"/themed":  `<script>document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark'</script><style>[data-theme=dark] body{background:#0d0d0d;color:#e8e6e1} [data-theme=light] body{background:#f3f2ee;color:#f0efe9}</style><p>Filter F-2 washing</p>`,
 		"/tiny":    `<div style="transform:scale(0.5);transform-origin:0 0"><p style="font-size:14px;color:#000">closed</p></div>`,
 		"/overlap": `<p style="position:absolute;left:10px;top:10px;margin:0;font-size:14px;color:#fff;background:#000">XV-104 closed</p><p style="position:absolute;left:40px;top:12px;margin:0;font-size:14px;color:#fff">XV-105 open</p><p style="position:absolute;left:10px;top:60px;margin:0;font-size:14px;color:#fff">FIT-501</p><p style="position:absolute;left:10px;top:80px;margin:0;font-size:14px;color:#fff">0 gpm</p>`,
+		"/fold":    `<div style="height:1200px">screen</div><label>Run time <input value="72"></label><label>High-rate flow <input value="7200"></label>`,
+		"/fieldover": `<input value="8.0" style="position:absolute;left:10px;top:10px;width:80px;font-size:14px"><span style="position:absolute;left:20px;top:14px;font-size:14px;color:#fff">Headloss</span>`,
 		"/crossed": `<div data-crossed='[{"id":"F1_AIR","n":4},{"id":"F2_AIR","n":3}]'><p>screen</p></div>`,
 		"/below":   `<div class="mimic" data-scale="0.900" data-canvas="2120x1400" style="width:1908px;max-width:100%;height:1260px"><p>gallery</p></div>`,
 	}
@@ -49,7 +51,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var routes []string
-	for _, p := range []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/tall", "/small", "/below", "/crossed", "/overlap", "/dim", "/themed", "/tiny", "/[id]"} {
+	for _, p := range []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/tall", "/small", "/below", "/crossed", "/overlap", "/fold", "/fieldover", "/dim", "/themed", "/tiny", "/[id]"} {
 		routes = append(routes, p)
 	}
 	found, err := Render(ctx, path, srv.URL, routes)
@@ -82,13 +84,16 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"warning: screen /crossed (desktop): pipe F1_AIR passes under 4 other pipes, and 1 more passes under 3 or more (F2_AIR): a line that crosses a stack of headers",
 		"every drop still runs to its header",
 		`warning: screen /overlap (desktop): 1 text is drawn over other text: "XV-104 closed" over "XV-105 open"`,
+		`warning: screen /fold (desktop): 4 controls and texts sit below the bottom of a 1920×1080 window`,
+		`reach them: "Run time", "High-rate flow"`,
+		`warning: screen /fieldover (desktop): 1 text is drawn over other text: "Headloss" over "[8.0]"`,
 		"warning: screen /below (desktop): the 2120×1400 drawing runs 196 px past the bottom of a 1920×1080 window, drawn at 90%",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("missing %q in:\n%s", want, all)
 		}
 	}
-	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle", "hatch", "/tall (phone)", "/small (phone)", "/below (phone)", "/crossed (phone)", "/overlap (phone)", "FIT-501", "/themed (desktop): in the dark theme", "XV-101"} {
+	for _, not := range []string{"screen /fine", "a plain message", "/[id]", "circle", "hatch", "/tall (phone)", "/small (phone)", "/below (phone)", "/crossed (phone)", "/overlap (phone)", "/fold (phone)", "FIT-501", "/themed (desktop): in the dark theme", "XV-101"} {
 		if strings.Contains(all, not) {
 			t.Errorf("%q should not be reported:\n%s", not, all)
 		}

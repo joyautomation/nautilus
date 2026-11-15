@@ -42,5 +42,16 @@
 			px: Math.round(px * 10) / 10
 		});
 	}
+	// what's in the fields: drawn text too, for what overlaps (not for
+	// contrast: a field's text sits on the field, not on what's round it)
+	for (const el of document.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea')) {
+		if (out.length >= 1200) break;
+		const cs = getComputedStyle(el);
+		if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+		const b = el.getBoundingClientRect();
+		if (b.width < 2 || b.height < 2 || b.right <= 0 || b.bottom <= 0 || b.left >= innerWidth || b.top >= innerHeight) continue;
+		const v = el.tagName === 'SELECT' ? (el.selectedOptions[0] ? el.selectedOptions[0].textContent : '') : el.value;
+		out.push({ t: '[' + (String(v).trim().slice(0, 20) || 'field') + ']', x: b.left, y: b.top, w: b.width, h: b.height, fg: cs.color, bold: false, o: opacity(el), px: parseFloat(cs.fontSize) || 0, field: true });
+	}
 	return { theme: document.documentElement.dataset.theme || '', items: out };
 })()
