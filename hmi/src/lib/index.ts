@@ -64,6 +64,7 @@ export type { CanvasSpec, CanvasNode, CanvasRegistry } from './canvas.js';
 // satisfies it directly, and so does any other transport.
 export { default as WriteNumber } from './components/WriteNumber.svelte';
 export { default as WriteToggle } from './components/WriteToggle.svelte';
+export { default as OffPage } from './components/OffPage.svelte';
 export { default as CommandButton } from './components/CommandButton.svelte';
 
 // Faceplates: the popup a mimic click opens (chrome + tab bar; compose the
@@ -220,6 +221,7 @@ export {
 	pipeCrossings,
 	pipeTees,
 	TEE_NEAR,
+	CROSSED_MANY,
 	CROSSING_CLEAR,
 	expandUnits,
 	portAbsolute,

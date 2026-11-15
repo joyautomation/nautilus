@@ -75,7 +75,56 @@ func (b *browser) legibility(ctx context.Context, s string, v view, reload func(
 	if line := first.small(v); line != "" {
 		out = append(out, line)
 	}
+	if line := first.overlaps(); line != "" {
+		out = append(out, line)
+	}
 	return out
+}
+
+// overlaps says which texts are drawn over other texts: a tag over a
+// state, a connector's name over the next one's. Two boxes overlap when
+// they share a quarter of the smaller one (and 20 px²), so text that only
+// touches, or sits in a row, doesn't count.
+func (ts *textShot) overlaps() string {
+	type pair struct{ a, b string }
+	var pairs []pair
+	items := ts.res.Items
+	for i := range items {
+		a := items[i]
+		if a.O < 0.1 {
+			continue // drawn see-through: not there to read
+		}
+		for j := i + 1; j < len(items); j++ {
+			b := items[j]
+			if b.O < 0.1 {
+				continue
+			}
+			w := math.Min(a.X+a.W, b.X+b.W) - math.Max(a.X, b.X)
+			h := math.Min(a.Y+a.H, b.Y+b.H) - math.Max(a.Y, b.Y)
+			if w <= 0 || h <= 0 {
+				continue
+			}
+			least := math.Min(a.W*a.H, b.W*b.H)
+			if w*h >= 20 && w*h >= least/4 {
+				pairs = append(pairs, pair{a.T, b.T})
+			}
+		}
+	}
+	if len(pairs) == 0 {
+		return ""
+	}
+	var ex []string
+	for _, p := range pairs {
+		if len(ex) == 4 {
+			break
+		}
+		ex = append(ex, fmt.Sprintf("%q over %q", p.a, p.b))
+	}
+	n := fmt.Sprintf("%d texts are", len(pairs))
+	if len(pairs) == 1 {
+		n = "1 text is"
+	}
+	return fmt.Sprintf("%s drawn over other text: %s: give each label room of its own (move it, or the thing beside it), and size a component for the space it is placed in", n, strings.Join(ex, ", "))
 }
 
 type textShot struct {

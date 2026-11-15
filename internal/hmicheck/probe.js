@@ -3,7 +3,7 @@
 (async () => {
 	await document.fonts.ready;
 	await new Promise((r) => setTimeout(r, SETTLE_MS));
-	const out = { blank: false, pipes: [], outside: [], mimics: [], drawings: [], sideways: 0, width: DEVICE_WIDTH };
+	const out = { blank: false, pipes: [], crossed: [], outside: [], mimics: [], drawings: [], sideways: 0, width: DEVICE_WIDTH };
 
 	// Blank: nothing a person would see — no text, no drawing, no control.
 	const shows = (el) => {
@@ -22,6 +22,14 @@
 	for (const el of document.querySelectorAll('[data-broken-pipes]')) {
 		try {
 			out.pipes.push(...JSON.parse(el.dataset.brokenPipes));
+		} catch {}
+	}
+
+	// Pipes that pass under three or more others (the kit's <Mimic> lists
+	// them on its root, most crossings first).
+	for (const el of document.querySelectorAll('[data-crossed]')) {
+		try {
+			out.crossed.push(...JSON.parse(el.dataset.crossed));
 		} catch {}
 	}
 

@@ -14,8 +14,9 @@
 	import Sparkline from './Sparkline.svelte';
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
+	import OffPage from './OffPage.svelte';
 	import Pipe from './Pipe.svelte';
-	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pipeTees, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -77,7 +78,7 @@
 	const doc = $derived(expandUnits(source));
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle };
+	const builtin: Record<string, Component<any>> = { Tank, Heater, Pump, Valve, Gauge, Sparkline, CommandButton, WriteToggle, OffPage };
 	const components = $derived({ ...builtin, ...registry });
 
 	// Scale the logical canvas to the container width (height follows),
@@ -251,6 +252,16 @@
 		for (const c of crossings) m.set(c.under, [...(m.get(c.under) ?? []), c]);
 		return m;
 	});
+	/** Pipes that pass under three or more others, most first, as JSON on
+	 * the root for `naut check`'s render: a drop crossing a stack of
+	 * headers to reach its own can't be traced by eye. Absent when none. */
+	const crossed = $derived.by(() => {
+		const many = [...unders]
+			.filter(([, cs]) => cs.length >= CROSSED_MANY)
+			.map(([i, cs]) => ({ id: pipePaths[i].pipe.id, n: cs.length }))
+			.sort((a, b) => b.n - a.n);
+		return many.length > 0 ? JSON.stringify(many) : undefined;
+	});
 	/** Half the side of a crossing's square: half the over pipe's 10 px
 	 * wall plus a 6 px gap the under pipe stops short by, so a crossing
 	 * reads as one at the size an operator sees it. */
@@ -273,6 +284,7 @@
 	class:scrolling={floored}
 	bind:this={host}
 	data-broken-pipes={broken}
+	data-crossed={crossed}
 	data-scale={scale.toFixed(3)}
 	data-canvas="{doc.canvas.width}x{doc.canvas.height}"
 	style="height: {doc.canvas.height * scale}px"

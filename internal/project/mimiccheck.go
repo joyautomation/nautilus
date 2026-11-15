@@ -23,6 +23,7 @@ type MimicReport struct {
 var builtinPorts = map[string][]string{
 	"Tank": {"top", "left", "right", "bottom"}, "Pump": {"in", "out"}, "Valve": {"in", "out"},
 	"Heater": nil, "Gauge": nil, "Sparkline": nil, "CommandButton": nil, "WriteToggle": nil,
+	"OffPage": {"top", "left", "right", "bottom"},
 }
 
 // writers are the kit's controls: the `tag` prop is the tag they write.
