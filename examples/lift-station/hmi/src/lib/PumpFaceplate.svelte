@@ -100,7 +100,7 @@
 		border-radius: 6px;
 		padding: 7px 8px;
 		font: inherit;
-		font-size: 0.8rem;
+		font-size: 0.875rem;
 		font-weight: 600;
 		cursor: pointer;
 	}
@@ -114,7 +114,7 @@
 		grid-template-columns: 1fr auto;
 		gap: 6px 10px;
 		margin: 0 0 12px;
-		font-size: 12.5px;
+		font-size: 14px;
 	}
 	dt {
 		color: var(--ink-2);
@@ -129,7 +129,7 @@
 	}
 	.src {
 		margin-left: 4px;
-		font-size: 0.72rem;
+		font-size: 0.8125rem;
 		color: var(--muted);
 	}
 	.speed {
@@ -140,7 +140,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
-		font-size: 12.5px;
+		font-size: 14px;
 		color: var(--ink-2);
 	}
 	.speed .note {
@@ -163,7 +163,7 @@
 	}
 	.note {
 		margin: 8px 0 0;
-		font-size: 0.75rem;
+		font-size: 0.8125rem;
 		color: var(--muted);
 	}
 </style>

@@ -14,7 +14,7 @@
 	let { selected = $bindable(null) }: { selected?: string | null } = $props();
 
 	type Panel = { title: string; show: 'P101' | 'P102' | 'wetwell' | 'valve' | 'discharge'; pump?: 'P101' | 'P102' };
-	// Every clickable id opens something: the floats and the sequence tag
+	// Every clickable id opens something: the floats
 	// belong to the wet well, each check valve to its pump's discharge.
 	const PANELS: Record<string, Panel> = {
 		P101: { title: 'P-101 submersible pump', show: 'P101' },
@@ -22,9 +22,7 @@
 		WW101: { title: 'WW-101 wet well', show: 'wetwell' },
 		LSHH101: { title: 'WW-101 wet well', show: 'wetwell' },
 		LSLL101: { title: 'WW-101 wet well', show: 'wetwell' },
-		SEQ: { title: 'WW-101 wet well', show: 'wetwell' },
 		LIT101: { title: 'WW-101 wet well', show: 'wetwell' },
-		LEVELSP: { title: 'WW-101 wet well', show: 'wetwell' },
 		CKV101: { title: 'CKV-101 check valve', show: 'valve', pump: 'P101' },
 		CKV102: { title: 'CKV-102 check valve', show: 'valve', pump: 'P102' },
 		FIT101: { title: 'Discharge to the force main', show: 'discharge' },
@@ -42,7 +40,7 @@
 <svelte:window onkeydown={(e) => e.key === 'Escape' && close()} />
 
 {#if panel}
-	<aside class="panel" aria-label={panel.title} transition:fly={slide}>
+	<aside class="panel" data-nx-panel aria-label={panel.title} transition:fly={slide}>
 		<header>
 			<h2>{panel.title}</h2>
 			<button class="x" onclick={close} aria-label="Close" title="Close (Esc)">×</button>
@@ -124,7 +122,7 @@
 	.failed {
 		margin: 0;
 		padding: 8px 16px;
-		font-size: 0.8rem;
+		font-size: 0.875rem;
 		color: var(--critical, #e5484d);
 		background: color-mix(in srgb, var(--critical, #e5484d) 12%, transparent);
 		border-bottom: 1px solid var(--border);
@@ -145,7 +143,7 @@
 		border-radius: 6px;
 		padding: 6px 10px;
 		font: inherit;
-		font-size: 0.8rem;
+		font-size: 0.875rem;
 		cursor: pointer;
 	}
 	dl {

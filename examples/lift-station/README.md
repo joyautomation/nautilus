@@ -347,17 +347,25 @@ discharge line runs through a swing check valve (`CKV101`/`CKV102`, the
 custom `CheckValve` component: mechanical, so no actuator, no position and
 no tag; it draws in the same box as the kit's `Valve`) to a
 `ToProcess`-style off-page connector labeled "FORCE MAIN".
-Pipe runs carry `flowing` bound to `P101_Running`/`P102_Running`. Two
-`TrendReadout`s (custom) show `LIT101_Level` (%) and `FIT101_Flow` (gpm),
-each with a sparkline of its last five minutes; the mimic binds a value,
-not a series, so the component samples it once a second itself. Beside
-the well's scale, `LevelMarks` (custom) puts an arrow at each level
-setpoint, bound to the setpoint tags, so moving one in the wet well's
-panel moves its arrow. `SeqStep` is a **string**
-tag (`'Idle'`/`'Lead'`/`'Lag'`/…) — the kit's built-in `MimicLabel.bind`
-only formats numeric tags, so it rides a small custom `SeqStepTag`
-component instead, bound the same way an equipment prop is (`bind: {
-text: "SeqStep" }`), which passes any tag value through untouched.
+Each pump's discharge runs carry `flowing` bound to `P101_Running` /
+`P102_Running`; the two meet at a dotted tee and leave as one force main,
+flowing on `FIT101_Flow`. The level setpoints are the well's own `marks`
+(the kit `Tank`'s), each bound to its setpoint tag, so moving one in the
+wet well's panel moves its arrow; the high alarm stays grey with a hollow
+arrow until the level reaches it, and the water itself turns the alarm
+colour while `HighLevelAlm` holds (the tank's `alarm`). The water is
+otherwise a neutral grey: colour on this screen is for state and alarms.
+
+The readings are the kit's bound labels, each with a sparkline of its
+last five minutes (`<Mimic trends>`): LIT-101 above the well and FIT-101
+on the force main after the tee, each joined to the point it reads by a
+dashed sense line (`at`). The space right of the well holds the
+station's state in words: each pump's state as a status chip (`state`:
+Locked out, Fail to run, VFD fault, Running, Stopped, the first that
+holds) with its speed beside it, the lead pump, the sequence step (a
+STRING tag, which a bound label shows as it is) and the lead-call count.
+The pumps say their state twice: the symbol lights up and its discharge
+flows, and the chip says it in words.
 
 ### Custom components
 
@@ -393,8 +401,8 @@ added:
   already carries inline on the `TOPROC` equipment entry. Same idiom as
   `examples/hmi-demo`'s `Supply`/`ToProcess`.
 
-`SeqStepTag.svelte` (the `SeqStep` readout) is custom too, but ports-free
-and unanchored — nothing pipes to a text label, so it has no sidecar.
+`SeqStepTag.svelte` (the `SeqStep` readout in the wet well's panel) is
+custom too, but ports-free and unanchored, so it has no sidecar.
 
 ### The 3D view
 
@@ -411,7 +419,7 @@ on `LSHH101` / `LSLL101`; the discharge pipes flow on the pump's running
 bit and the header on `FIT101_Flow`. The mimic's two readouts become
 label text (`LIT-101 62.3 %` on the well, `195 gpm` on a flow meter
 FIT-101 on the header); the sequence step is in the wet well's panel and
-the alarm banner in the bar above, as on the P&ID. Orbit with the mouse,
+the alarm banner in the bar above. Orbit with the mouse,
 and click equipment for its controls: the page turns off the view's own
 read-only inspector (`inspector={false}`) and opens the P&ID's
 `EquipmentPanel` for the picked id. `?perf` adds the frame rate and
