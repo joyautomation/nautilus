@@ -80,6 +80,7 @@ Every element the grammar accepts:
 | Function contact | `EQ(P101_Mode, 0)` | passes power when the call returns TRUE |
 | Negated function contact | `/EQ(P101_Mode, 0)` | passes power when the call returns FALSE; `/` negates any BOOL term, `/t1.Q` included |
 | Block in the rung | `m101:MotorStarter(Mode := P101_Mode, …)` | power drives its power-in pin, and continues from its power-out pin |
+| Assignment | `{ Dest := Expr; … }` | made while the rung has power, which passes straight through. `Dest` may be a whole array or structure (`{ B := A }` copies it). A `(* … *)` comment may follow an assignment; the compiler ignores it, and the Logix writer reads `(* @logix COP *)` / `(* @logix CPS *)` on an imported copy |
 | Output capture | `Run => P101_RunCmd` | binds an output pin to a variable, inside the block's parentheses; the standard's own `=>` form, for a BOOL pin exactly as for a timer's elapsed time |
 | Output coil | `( Tag )` | `Tag :=` the rung condition, every scan |
 | Set coil | `( S Tag )` | latch: `Tag := Tag OR condition` |

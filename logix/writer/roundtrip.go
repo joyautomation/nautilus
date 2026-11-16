@@ -353,7 +353,13 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 				c.problemf(r.Name, "assignment %q: %v", e.Text, err)
 				continue
 			}
-			for _, a := range as {
+			// A marked copy run (copy.go) is one COP/CPS for all of it.
+			runs := copyRuns(as)
+			for i := 0; i < len(as); i++ {
+				a := as[i]
+				if run, ok := runs[i]; ok {
+					i = run.end
+				}
 				g, ok := c.next(r)
 				if !ok {
 					return
@@ -628,7 +634,7 @@ func roundTripAgainst(src string, opts Options, doc []byte) ([]byte, []string, e
 	return doc, c.problems, nil
 }
 
-var dataInstr = map[string]bool{"MOVE": true, "ADD": true, "SUB": true, "MUL": true, "DIV": true, "ABS": true, "CPT": true}
+var dataInstr = map[string]bool{"MOVE": true, "ADD": true, "SUB": true, "MUL": true, "DIV": true, "ABS": true, "CPT": true, "COP": true, "CPS": true}
 
 // containsOperand reports whether a comma-separated operand list names
 // target as one operand.

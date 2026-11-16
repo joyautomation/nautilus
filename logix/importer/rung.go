@@ -794,6 +794,16 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 				return nil, err
 			}
 			add(texts...)
+		case m == "COP" || m == "CPS":
+			text, err := rt.copyInstr(in)
+			if err != nil {
+				return nil, err
+			}
+			add(text)
+			if last {
+				emit(parts)
+				return out, nil
+			}
 		case dataOp[m]:
 			return nil, refuse(m, "a data operation with no assignment form")
 		default:
@@ -934,6 +944,12 @@ func (rt *routine) series(legs [][]l5x.Term, branch, atHead bool) ([]string, *re
 					return nil, err
 				}
 				parts = append(parts, texts...)
+			case m == "COP" || m == "CPS":
+				text, err := rt.copyInstr(in)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, text)
 			case dataOp[m]:
 				return nil, refuse(m, "a data operation with no assignment form")
 			default:

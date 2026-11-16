@@ -806,6 +806,19 @@ func (t *rungTok) series(inBranch bool) ([]any, error) {
 			start := t.pos + 1
 			depth := 0
 			for t.pos < len(t.src) {
+				// A comment or a string in the box is text: its braces
+				// neither open nor close it.
+				if strings.HasPrefix(t.src[t.pos:], "(*") {
+					if j := strings.Index(t.src[t.pos+2:], "*)"); j >= 0 {
+						t.pos += 2 + j + 2
+						continue
+					}
+				}
+				if c := t.src[t.pos]; c == '\'' || c == '"' {
+					end, _ := st.StringEnd(t.src, t.pos)
+					t.pos = end
+					continue
+				}
 				switch t.src[t.pos] {
 				case '{':
 					depth++
@@ -916,6 +929,11 @@ func splitStatementsOn(s string, sep byte) []string {
 		case c == '\'' || c == '"':
 			end, _ := st.StringEnd(s, i)
 			i = end - 1
+		case strings.HasPrefix(s[i:], "(*"):
+			// A comment: its brackets and separators are text.
+			if j := strings.Index(s[i+2:], "*)"); j >= 0 {
+				i += 2 + j + 1
+			}
 		case c == '(' || c == '[':
 			depth++
 		case c == ')' || c == ']':

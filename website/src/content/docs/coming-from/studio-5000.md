@@ -80,6 +80,7 @@ Two semantic differences are worth knowing before you port logic:
 | `LIM Low Test High` | `GE(Test, Low) LE(Test, High)` | two contacts in series. The IEC `LIMIT(MN, IN, MX)` clamps a value, it does not test one, so it is the wrong spelling for this |
 | `MOV Src Dest` | `{ Dest := Src }` | made while the rung has power; power passes through |
 | `CPT Dest Expr` | `{ Dest := Expr }` | any IEC expression, evaluated every scan |
+| `COP Src Dest Len` / `CPS` | `{ Dest := Src }` for a whole array or structure; element by element for a slice | like for like only. Every nautilus scan reads its tags as one snapshot and commits them as one unit, so each copy is already as uninterruptible as a `CPS`. A write back to Logix restores the instruction: the import marks a slice, or any CPS, with `(* @logix COP *)` / `(* @logix CPS *)` |
 | `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `ABS` | `{ Sum := A + B }` and the matching operators | inside an assignment, or as a function in a comparison |
 | bit of a `DINT` (`Status.3`) | `Status.3` | a BOOL, readable and assignable; bit 0 is least significant |
 
@@ -137,7 +138,7 @@ tag in its own `VAR_EXTERNAL`.
 | `JMP` / `LBL` | not supported. Put the skipped logic in a function block and call it conditionally, or gate its rungs on a shared condition |
 | `MCR` | not supported. Use the function-block pattern below |
 | `GSV` / `SSV` | `dialect: logix` (planned): controller and module attributes as blocks. Not available yet |
-| `COP` / `CPY` | `dialect: logix` (planned). For a UDT, assign the structure or its members in ST |
+| `COP` / `CPS` between types | not supported. A copy from one type to another reinterprets bytes (DINTs into a SINT buffer for a socket payload), and nautilus copies values, not memory. So do copies whose length runs past either end, or that overlap in one array |
 | `AFI`, `NOP` | nothing to translate; they do nothing |
 
 ### JMP and LBL
