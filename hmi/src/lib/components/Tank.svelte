@@ -19,7 +19,14 @@
 	// with marks or without. Labels too close to read are nudged apart; their
 	// arrows stay at the true level. An `alarm` mark is grey with a hollow
 	// arrow until the level reaches it, then turns the alarm colour: alarm
-	// colour only while there is an alarm.
+	// colour only while there is an alarm. An alarm mark also draws as a
+	// dotted line across the vessel at its level.
+	//
+	// `ranges` are the levels a pump runs between: a bracket beside the
+	// scale from its `on` level to its `off` level, each end with its value
+	// ("Lead on 60", "off 30"). A pump's start and stop as one range reads
+	// better than two marks, and ranges that overlap stand in columns of
+	// their own, so their labels never crowd.
 	//
 	// The liquid is a neutral grey; `alarm` (a bound condition: too hot, out
 	// of spec) turns it the alarm colour while it holds.
@@ -27,6 +34,7 @@
 	import { resolveBindings, type MimicLook } from '../mimic.js';
 
 	type Mark = { label: string; value?: number; tag?: string; alarm?: boolean | 'high' | 'low' };
+	type Range = { label: string; on: number | string; off: number | string };
 
 	let {
 		levelPct = 50,
@@ -37,6 +45,7 @@
 		scale = true,
 		shape = 'vessel',
 		marks = [],
+		ranges = [],
 		marksSide = 'left',
 		tags = {},
 		alarm = false,
@@ -56,6 +65,11 @@
 		 *  (reached from below) or `"low"` (from above): `true` is high when
 		 *  the mark is in the tank's upper half, low in its lower half. */
 		marks?: Mark[];
+		/** Levels a pump runs between, each a bracket beside the scale from
+		 *  `on` to `off` (a number in %, or a tag): `{"label": "Lead", "on":
+		 *  "LeadOnLevel", "off": "LeadOffLevel"}`. They stand beside the
+		 *  scale, on the right (marks on the right stand beyond them). */
+		ranges?: Range[];
 		/** Which side of the tank the marks stand on. */
 		marksSide?: 'left' | 'right';
 		/** The live tag values a mark's `tag` is read from (<Mimic> passes them). */
@@ -75,6 +89,7 @@
 	let open = $derived(shape === 'open');
 	let g = $derived(box.ground);
 	let k = $derived(box.k);
+	let font = $derived(box.font);
 
 	// vessel (outer shell) and its interior
 	let vx = $derived(box.vessel.x);
@@ -112,11 +127,39 @@
 		for (let i = 1; i < out.length; i++) out[i].ly = Math.max(out[i].ly, out[i - 1].ly + font * 1.2);
 		return out;
 	});
+	// The ranges at their levels, each in the first column it fits without
+	// touching the one above it.
+	let rangeCols = $derived.by(() => {
+		const num = (v: number | string): number | undefined => {
+			const raw = typeof v === 'string' ? resolveBindings({ v }, tags).v : v;
+			return typeof raw === 'number' && isFinite(raw) ? Math.max(0, Math.min(100, raw)) : undefined;
+		};
+		const at = (pct: number) => iy + ih - (pct / 100) * ih;
+		const rs = ranges
+			.flatMap((r) => {
+				const on = num(r.on), off = num(r.off);
+				if (on === undefined || off === undefined) return [];
+				return [{ ...r, on, off, yOn: at(on), yOff: at(off), top: Math.min(at(on), at(off)), bot: Math.max(at(on), at(off)), col: 0 }];
+			})
+			.sort((a, b) => a.top - b.top);
+		const ends: number[] = [];
+		for (const r of rs) {
+			let c = ends.findIndex((e) => r.top - font * 1.4 > e);
+			if (c < 0) c = ends.length;
+			ends[c] = r.bot;
+			r.col = c;
+		}
+		return { list: rs, n: ends.length };
+	});
+	// A range's column, by its longest top line ("Lead on 60": about 0.6 em
+	// a character at 0.9 of the font), so the marks stand clear beyond them.
+	let rangeW = $derived(
+		ranges.length ? 18 * k + Math.max(...ranges.map((r) => (r.label.length + 6) * font * 0.9 * 0.55)) : 0
+	);
 	// Graduations thin out on a short vessel so the numbers never collide;
 	// a pointer on the scale marks the live level.
 	let grads = $derived(ih < 90 ? [0, 50, 100] : [0, 25, 50, 75, 100]);
 	let stroke = $derived(Math.max(1, 2 * k));
-	let font = $derived(box.font);
 
 	let real = $derived(look === 'realistic');
 	// Neutral, a step off the bore in either theme; the alarm colour while
@@ -251,12 +294,50 @@
 		<path d="M {px} {liquidY} L {px + 9 * k} {liquidY - 5 * k} L {px + 9 * k} {liquidY + 5 * k} Z" fill="var(--ink, #e6e6e6)" />
 	{/if}
 
+	<!-- alarm levels: a dotted line across the vessel, finer than a pipe's dashes -->
+	{#each placed.filter((m) => m.alarm) as m, i (i)}
+		<line
+			x1={ix}
+			x2={ix + iw}
+			y1={m.y}
+			y2={m.y}
+			stroke={m.active ? 'var(--serious, #ec835a)' : 'var(--ink-2, #c3c2b7)'}
+			stroke-width={Math.max(1, k)}
+			stroke-dasharray="{2 * k} {3 * k}"
+			stroke-linecap="round"
+			opacity={m.active ? 1 : 0.75}
+		/>
+	{/each}
+
+	<!-- ranges and marks stand beside the box by design (naut check knows) -->
+	<g data-nx-beside>
+	<!-- ranges: a bracket from on to off, its name at the top -->
+	{#each rangeCols.list as r, i (i)}
+		{@const bx = box.w + 4 * k + r.col * rangeW}
+		{@const lx = bx + 6 * k}
+		{@const tx = bx + 10 * k}
+		{@const anchor = 'start'}
+		<path
+			d="M {bx} {r.yOn} H {lx} V {r.yOff} H {bx}"
+			fill="none"
+			stroke="var(--ink-2, #c3c2b7)"
+			stroke-width={Math.max(1, 1.5 * k)}
+			stroke-linejoin="round"
+		/>
+		<text x={tx} y={r.yOn + font * 0.3} font-size={font * 0.9} fill="var(--ink-2, #c3c2b7)" text-anchor={anchor}
+			><tspan font-weight="650" fill="var(--ink, #e6e6e6)">{r.label}</tspan> on <tspan font-weight="650">{r.on.toFixed(0)}</tspan></text
+		>
+		<text x={tx} y={r.yOff + font * 0.3} font-size={font * 0.9} fill="var(--ink-2, #c3c2b7)" text-anchor={anchor}
+			>off <tspan font-weight="650">{r.off.toFixed(0)}</tspan></text
+		>
+	{/each}
+
 	<!-- level marks: an arrow at the true level, pointing at the tank -->
 	{#each placed as m, i (i)}
 		{@const c = m.active ? 'var(--serious, #ec835a)' : 'var(--ink-2, #c3c2b7)'}
 		{@const ink = m.active ? 'var(--ink, #e6e6e6)' : 'var(--ink-2, #c3c2b7)'}
 		{@const r = marksSide === 'right'}
-		{@const ax = r ? box.w + 2 * k : vx - g - 2 * k}
+		{@const ax = r ? box.w + 2 * k + rangeCols.n * rangeW : vx - g - 2 * k}
 		{@const d = r ? 1 : -1}
 		<path
 			d="M {ax} {m.y} L {ax + d * 8 * k} {m.y - 4 * k} L {ax + d * 8 * k} {m.y + 4 * k} Z"
@@ -272,6 +353,7 @@
 			>{m.label} <tspan font-weight="650">{m.pct.toFixed(0)}</tspan></text
 		>
 	{/each}
+	</g>
 
 	{#if label}
 		<text x={vx + vw / 2} y={box.labelRow.start + 21 * k} text-anchor="middle" font-size={font} font-weight="600" fill="var(--ink-2, #c3c2b7)">{label}</text>

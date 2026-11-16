@@ -571,9 +571,10 @@
 		margin-left: -3px;
 		border-radius: 3px;
 	}
-	/* A bound label reads as a readout chip: the static text stays muted like
-	   any label, the live value steps up to ink on a --surface-2 pill. */
+	/* A bound label reads as a readout chip: its tag in --ink-2 (plain and
+	   well past AA on the chip), the live value in ink on a --surface-2 pill. */
 	.lbl.readout {
+		color: var(--ink-2, #c3c2b7);
 		display: inline-flex;
 		align-items: baseline;
 		gap: 0.35em;
@@ -588,8 +589,9 @@
 		width: 40px;
 		margin-left: 0.2em;
 	}
-	/* A state label: its name, muted, then the state as a status chip. */
+	/* A state label: its name in --ink-2, then the state as a status chip. */
 	.lbl.state {
+		color: var(--ink-2, #c3c2b7);
 		display: inline-flex;
 		align-items: center;
 		gap: 0.45em;

@@ -301,21 +301,28 @@ naut builds the operator screen from the project itself, with no npm, and
   goes in the panel of the vessel or unit it runs. The drawing keeps only
   the sequence's own controls (Start, Hold, Abort, a recipe) and the
   plant's state and values.
-- A tank's levels that matter (a pump's start and stop, a high alarm) go
-  on the tank as `marks`, each at its level:
-  `"props": {"marks": [{"label": "Lead on", "tag": "LeadOnSP"},
-  {"label": "High alarm", "value": 90, "alarm": true}]}`. They draw on the
-  tank's left (`"marksSide": "right"` past its scale, on the side its
-  pipes don't reach): leave them room. An alarm mark stays grey until the
+- A tank's levels that matter go on the tank. A pump's start and stop are
+  one `ranges` entry, drawn as a bracket from on to off:
+  `"ranges": [{"label": "Lead", "on": "LeadOnSP", "off": "LeadOffSP"}]`
+  (a number in % or a tag at each end). Other levels are `marks`, each an
+  arrow at its level: `"marks": [{"label": "High alarm", "value": 90,
+  "alarm": true}, {"label": "Level SP", "tag": "LevelSP"}]`. Both go in
+  the tank's `props`. Ranges stand beside its scale, on the right; marks
+  draw on its left (`"marksSide": "right"` beyond the ranges, on the side
+  its pipes don't reach): leave them room. An alarm
+  mark is also a dotted line across the tank, and stays grey until the
   level reaches it. The setpoints themselves are written in the tank's
   panel.
 - Every analog value on the drawing is a `labels` entry with `bind` (and
-  `unit`, `decimals`) at the point it measures: naut's pages draw it as a
-  readout with a trend of its last few minutes (`"min"`/`"max"` fix the
-  trend's scale, a level's 0-100). Where the readout can't sit right on
-  its line or vessel, `"at": [x, y]` names that point and a dashed sense
-  line joins them. A meter that reads a header's total sits on the header
-  after the junction, not on one branch.
+  `unit`, `decimals`) by what it measures: on its line or vessel, or just
+  under the equipment's name (a well's level under its tag). naut's pages
+  draw it as a readout with a trend of its last few minutes (`"min"`/`"max"`
+  fix the trend's scale, a level's 0-100). Where a reading can't sit by
+  what it measures, `"at": [x, y]` names that point and a dashed sense line
+  joins them. A meter that reads a header's total sits on the header after
+  the junction, not on one branch.
+- Put instruments where they mount: a level float at the vessel's wall,
+  clear of the pumps and their pipes.
 - Everything an operator watches run (a pump, a blower, an agitator, a
   sequence) shows its state twice: on the symbol (the kit's change colour
   and show flow) and in words, a `labels` entry with `state` beside it, drawn

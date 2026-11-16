@@ -101,7 +101,7 @@
 	}
 	.title span {
 		font-size: 0.9375rem;
-		color: var(--muted);
+		color: var(--ink-2);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

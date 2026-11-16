@@ -322,9 +322,9 @@ const defaultLayout = `<script>
 	header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; padding: 10px 16px; border-bottom: 1px solid var(--border, color-mix(in srgb, var(--ink) 14%%, transparent)); background: var(--surface, var(--bg)); }
 	.nx-title { flex: 1 1 0; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 	.nx-title b { font-family: var(--font-display, var(--font)); font-size: var(--font-md); white-space: nowrap; }
-	.nx-title span { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.nx-title span { font-size: 0.875rem; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	nav { flex: none; display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border, color-mix(in srgb, var(--ink) 14%%, transparent)); border-radius: 8px; background: var(--surface-2, transparent); }
-	nav a { color: var(--ink-2, var(--muted)); text-decoration: none; padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+	nav a { color: var(--ink-2, var(--muted)); text-decoration: none; padding: 4px 12px; border-radius: 6px; font-size: 0.875rem; font-weight: 600; }
 	nav a:hover { color: var(--ink); }
 	nav a[aria-current='page'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%%, transparent); }
 	.nx-status { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }

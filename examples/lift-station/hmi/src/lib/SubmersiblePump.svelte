@@ -186,7 +186,7 @@
 	{/if}
 
 	{#if label}
-		<text x={bx} y={box.h - 4 * k} text-anchor="middle" font-size={font} font-weight="600" fill="var(--ink, #e6e6e6)">{label}</text>
+		<text x={bx} y={box.h - 4 * k} text-anchor="middle" font-size={font} font-weight="600" fill="var(--ink, #e6e6e6)" stroke="var(--bg, #0d0d0d)" stroke-width={3 * k} stroke-linejoin="round" paint-order="stroke">{label}</text>
 	{/if}
 </svg>
 

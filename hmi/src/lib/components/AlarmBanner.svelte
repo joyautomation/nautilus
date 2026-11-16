@@ -194,7 +194,7 @@
 	.count.clear {
 		font-family: inherit;
 		font-weight: 500;
-		color: var(--muted);
+		color: var(--ink-2);
 	}
 	.newest {
 		display: flex;
@@ -252,6 +252,7 @@
 		display: block;
 	}
 	.banner.compact .count {
+		font-size: var(--font-sm);
 		margin-right: var(--space-2);
 	}
 	.banner.compact .count:last-child {

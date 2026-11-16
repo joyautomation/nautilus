@@ -13,8 +13,16 @@
   tag shows the text, and `values` gives words for the values a tag takes
   (a step's name, a state code). A pit's `hatchAt` moves its access hatch
   off a riser's line.
+- **A tank's pump ranges** (James's round-2 review, 11-15). A `Tank`'s
+  `ranges` draw a pump's start and stop as one bracket from on to off,
+  each end with its value, beside the scale; ranges that overlap stand in
+  columns of their own, so a lead and a lag pump's levels never crowd. An
+  alarm mark is also a dotted line across the vessel at its level.
 
 ### Changed
+
+- **Readout and state labels' names in `--ink-2`**, not `--muted`: plain
+  text, well past AA on the readout's chip.
 
 - **Colour only for state and alarms.** A `Tank`'s liquid is a neutral
   grey (a project can still set `--fluid`); its new `alarm` turns it the

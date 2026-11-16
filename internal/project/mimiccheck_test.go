@@ -290,7 +290,8 @@ tags:
 		"screen.mimic.json": file(`{"equipment":[
 			{"id":"T1","component":"Tank","x":0,"y":0,"props":{"marks":[
 				{"label":"Lead on","tag":"LeadOnSP"},{"label":"High","value":90,"alarm":true},
-				{"label":"Lag on","tag":"LagOnSp"},{"label":"Off"},{"value":10}]}}]}`),
+				{"label":"Lag on","tag":"LagOnSp"},{"label":"Off"},{"value":10}],
+				"ranges":[{"label":"Lead","on":"LeadOnSP","off":30},{"label":"Lag","on":"LagOn"},{"on":80,"off":55}]}}]}`),
 	}
 	p, err := Load(fsys, ManifestName)
 	if err != nil {
@@ -302,12 +303,15 @@ tags:
 		"equipment T1's mark 3 binds LagOnSp, which the project doesn't declare",
 		"equipment T1's mark 4 has no tag and no value",
 		"equipment T1's mark 5 has no label",
+		"equipment T1's range 2 (on) binds LagOn, which the project doesn't declare",
+		"equipment T1's range 2 has no off level",
+		"equipment T1's range 3 has no label",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("no error %q in:\n%s", want, all)
 		}
 	}
-	if len(errs) != 3 || len(warns) != 0 {
+	if len(errs) != 6 || len(warns) != 0 {
 		t.Errorf("errors %q, warnings %q", errs, warns)
 	}
 }

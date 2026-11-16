@@ -31,7 +31,7 @@ var builtinPorts = map[string][]string{
 // width, height, look and write, which <Mimic> hands every one). A bind or
 // a prop it doesn't take shows nothing.
 var builtinProps = map[string][]string{
-	"Tank": {"levelPct", "scale", "shape", "marks", "marksSide", "alarm", "hatchAt"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
+	"Tank": {"levelPct", "scale", "shape", "marks", "ranges", "marksSide", "alarm", "hatchAt"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
 	"Heater": {"powerPct"}, "Gauge": {"value", "min", "max", "unit", "color", "setpoint", "decimals", "sweep", "gap", "thickness"},
 	"Sparkline":     {"values", "color", "yMin", "yMax", "endIndex", "windowSize", "compact"},
 	"CommandButton": {"tag", "kind", "pulseMs", "held", "disabled", "disabledReason"},
@@ -302,6 +302,22 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 						tag(fmt.Sprintf("%s's mark %d", where, i+1), t)
 					} else if !isNum {
 						say("%s's mark %d has no tag and no value", where, i+1)
+					}
+				}
+				ranges, _ := eq.Props["ranges"].([]any)
+				for i, it := range ranges {
+					r, _ := it.(map[string]any)
+					if l, _ := r["label"].(string); l == "" {
+						say("%s's range %d has no label", where, i+1)
+					}
+					for _, end := range []string{"on", "off"} {
+						switch v := r[end].(type) {
+						case float64:
+						case string:
+							tag(fmt.Sprintf("%s's range %d (%s)", where, i+1, end), v)
+						default:
+							say("%s's range %d has no %s level: a number in %% or a tag", where, i+1, end)
+						}
 					}
 				}
 			}

@@ -349,21 +349,25 @@ no tag; it draws in the same box as the kit's `Valve`) to a
 `ToProcess`-style off-page connector labeled "FORCE MAIN".
 Each pump's discharge runs carry `flowing` bound to `P101_Running` /
 `P102_Running`; the two meet at a dotted tee and leave as one force main,
-flowing on `FIT101_Flow`. The level setpoints are the well's own `marks`
-(the kit `Tank`'s), each bound to its setpoint tag, so moving one in the
-wet well's panel moves its arrow; the high alarm stays grey with a hollow
-arrow until the level reaches it, and the water itself turns the alarm
+flowing on `FIT101_Flow`. The pumps' start and stop levels are the well's
+`ranges` (the kit `Tank`'s): a bracket for the lead pump from on to off, and
+one for the lag pump, each end bound to its setpoint tag, so moving one in
+the wet well's panel moves its bracket. The high alarm and the speed loop's
+level setpoint are `marks`; the high alarm is also a dotted line across the
+well, grey until the level reaches it, and the water itself turns the alarm
 colour while `HighLevelAlm` holds (the tank's `alarm`). The water is
 otherwise a neutral grey: colour on this screen is for state and alarms.
+Both floats hang at the well's left wall, clear of the pumps and risers.
 
 The readings are the kit's bound labels, each with a sparkline of its
-last five minutes (`<Mimic trends>`): LIT-101 above the well and FIT-101
-on the force main after the tee, each joined to the point it reads by a
-dashed sense line (`at`). The space right of the well holds the
-station's state in words: each pump's state as a status chip (`state`:
-Locked out, Fail to run, VFD fault, Running, Stopped, the first that
-holds) with its speed beside it, the lead pump, the sequence step (a
-STRING tag, which a bound label shows as it is) and the lead-call count.
+last five minutes (`<Mimic trends>`): LIT-101 right under the well's tag,
+and FIT-101 on the force main after the tee, joined to it by a dashed
+sense line (`at`). Above each pump, its state in words: Lead or Lag, its
+speed, and its state as a status chip (`state`: Locked out, Fail to run,
+VFD fault, Running, Stopped, the first that holds). Under the well, the
+station's state: the wet well (High level, High-high, Low-low or Normal),
+the sequence step in words (a STRING tag with `values`) and the lead-call
+count.
 The pumps say their state twice: the symbol lights up and its discharge
 flows, and the chip says it in words.
 
