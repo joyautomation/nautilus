@@ -317,7 +317,7 @@
       "chip": false,
       "bind": "P101_SpeedHz",
       "unit": "Hz",
-      "decimals": 1,
+      "decimals": 0,
       "trend": false
     },
     {
@@ -376,7 +376,7 @@
       "chip": false,
       "bind": "P102_SpeedHz",
       "unit": "Hz",
-      "decimals": 1,
+      "decimals": 0,
       "trend": false
     },
     {
