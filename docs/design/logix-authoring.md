@@ -1344,10 +1344,12 @@ The shape (logix/importer/copy.go, logix/writer/copy.go): a whole array
 or structure is `{ B := A }`, which the writer emits as `COP(A,B,n)`;
 Logix assigns neither, and the writer used to emit `MOVE(A,B)` (LD) and
 `B := A;` (ST) for it, both invalid. A slice is spelled element by
-element with `(* @logix COP *)` on its last assignment, and any CPS
-carries `(* @logix CPS *)` (James's call, over "always COP" and "always
-CPS"); the writer folds a marked run back into the one instruction, and
-never folds unmarked code. A comment inside an assignment box is new for
+element with `(* @logix COP n *)` on its last assignment (n, the run's
+length, left out for 1), and any CPS carries `(* @logix CPS n *)`
+(James's call, over "always COP" and "always CPS"); the writer folds
+exactly the n marked assignments back into the one instruction, checks
+they still step through the same two arrays, and never folds unmarked
+code. A comment inside an assignment box is new for
 this: it is ignored by the compiler and kept on the assignment. On
 nautilus every copy already has CPS's guarantee: a scan snapshots its
 tags in and commits them as one unit (runtime/program.go). Refused, each
