@@ -29,9 +29,10 @@ PITCH = 21.35
 # name: (STEP file, rows of the rotation taking CAD axes to the screen's, offset mm, linear tolerance mm, angular tolerance rad, keep(solid index, bbox) -> bool)
 PARTS = {
     "chassis": ("EPIC chassis/GRV-EPIC-CHS4.stp", ((1, 0, 0), (0, 0, -1), (0, 1, 0)), (91.52, 57.5, 2.8), 1.0, 0.6),
-    "processor": ("EPIC controller/GRV-EPIC-PR1.stp", ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (76.7, 70.0, 72.2), 0.5, 0.6),
-    "power-supply": ("EPIC power supplies/GRV-EPIC-PSAC.stp", ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (76.7 - 137.2, 70.0 - 13.7, 72.2 + 111.4), 0.5, 0.6),
-    # in y the module sits where its hold-down screw is over the hole in the chassis's slot tab (y = -5.3)
+    # in y the processor and the module sit where their hold-down screws are over the holes in the chassis's
+    # tabs (y = -4.6 and -5.3); the power supply rides in the processor's bay
+    "processor": ("EPIC controller/GRV-EPIC-PR1.stp", ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (76.7, 70.95, 72.2), 0.5, 0.6),
+    "power-supply": ("EPIC power supplies/GRV-EPIC-PSAC.stp", ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (76.7 - 137.2, 70.95 - 13.7, 72.2 + 111.4), 0.5, 0.6),
     "module": ("EPIC IO/GRV-EPIC-GenericModule_coverLow.stp", ((0, 0, -1), (-1, 0, 0), (0, 1, 0)), (99.8 - 104.675, 54.35, -102.06 + 4.0), 0.5, 0.6),
 }
 # The module's status light is the light pipe that shows along the wave of its cover. Its faces go to a model

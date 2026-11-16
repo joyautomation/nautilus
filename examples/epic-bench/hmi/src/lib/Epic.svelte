@@ -135,7 +135,7 @@
 	const steel = new MeshStandardMaterial({ color: '#8b9096', roughness: 0.5, metalness: 0.6 });
 
 	// Where our own parts sit on those bodies, mm, read off the models.
-	const PR1 = { x0: 0.8, w: 87.5, top: 127.8, front: 135.9 };
+	const PR1 = { x0: 0.8, w: 87.5, top: 128.8, front: 135.9 };
 	const MOD = { x0: 90, pitch: 21.35, w: 19.6, top: 133, head: 141.8, field: 138.5, reach: -21.8 };
 	const left = (m: Module) => MOD.x0 + m.slot * MOD.pitch;
 	const cx = (m: Module) => left(m) + MOD.w / 2;
@@ -215,7 +215,7 @@
 	const calloutX = (m: Module) => (m.slot === 2 ? cx(m) - CALLOUT.w / 2 + 3 : cx(m) + CALLOUT.w / 2 - 12);
 
 	// The touchscreen's display, sunk in the model's bezel: it shows the sign-in page, as plain blocks.
-	const DISPLAY = { x0: 9.2, x1: 75.3, y0: 9.6, y1: 119.1, z: 133.9 };
+	const DISPLAY = { x0: 9.2, x1: 75.3, y0: 10.55, y1: 120.05, z: 133.9 };
 	const DW = DISPLAY.x1 - DISPLAY.x0;
 	const DH = DISPLAY.y1 - DISPLAY.y0;
 	const signIn: Paint = (ctx) => {

@@ -7,10 +7,10 @@ component over them.
 
 | File | What it is | Triangles | Tolerance |
 | --- | --- | --- | --- |
-| `chassis.glb` | GRV-EPIC-CHS4, the four-slot chassis | 41,808 | 1.0 mm, 0.6 rad |
-| `processor.glb` | GRV-EPIC-PR1, the processor with its touchscreen closed | 41,476 | 0.5 mm, 0.6 rad |
-| `power-supply.glb` | GRV-EPIC-PSAC, the power supply, in its bay in the processor | 23,328 | 0.5 mm, 0.6 rad |
-| `module.glb` | The generic groov I/O module with its cover closed, in slot 0 | 34,180 | 0.5 mm, 0.6 rad |
+| `chassis.glb` | GRV-EPIC-CHS4, the four-slot chassis | 41,798 | 1.0 mm, 0.6 rad |
+| `processor.glb` | GRV-EPIC-PR1, the processor with its touchscreen closed | 41,610 | 0.5 mm, 0.6 rad |
+| `power-supply.glb` | GRV-EPIC-PSAC, the power supply, in its bay in the processor | 23,633 | 0.5 mm, 0.6 rad |
+| `module.glb` | The generic groov I/O module with its cover closed, in slot 0 | 34,078 | 0.5 mm, 0.6 rad |
 | `module-light.glb` | That module's status light: the light pipe along the wave of its cover | 107 | 0.5 mm, 0.6 rad |
 
 They are tessellated from the CAD drawings Opto 22 publishes for the
@@ -38,10 +38,11 @@ header has the three commands):
    between neighbours).
 3. Each part is moved into one frame and scaled to **metres**: x from
    the chassis's left edge, y up from the chassis floor, z out from the
-   chassis back. The processor stands on the floor against the back with
-   the power supply in its bay, and the module is in slot 0, at the
-   height that puts its hold-down screw over the hole in the chassis's
-   slot tab; the other slots are the same model moved along x by the
+   chassis back. The processor is against the back with the power supply in its
+   bay, and the module is in slot 0; each is at the height that puts
+   its hold-down screw over its hole in the chassis's tab. (Checked
+   against a photogrammetry scan of the bench unit: the modules' tops
+   stand about a millimetre above the processor's.) The other slots are the same model moved along x by the
    slot pitch, 21.35 mm (measured between the chassis's slot fingers).
    The three CAD faces of the module's light pipe are written as a model
    of their own, so the screen can light them in the module's colour.
@@ -49,5 +50,5 @@ header has the three commands):
    (`KHR_mesh_quantization`), no materials, no textures, no compression.
    The screen loads them with three's own GLTFLoader and nothing else.
 
-The assembled unit measures 173.0 x 157.8 x 141.8 mm (width, height from
+The assembled unit measures 173.0 x 156.8 x 141.8 mm (width, height from
 the processor's foot to the modules' tops, depth).
