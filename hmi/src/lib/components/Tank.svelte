@@ -149,13 +149,31 @@
 			ends[c] = r.bot;
 			r.col = c;
 		}
-		return { list: rs, n: ends.length };
+		// Each bracket stands as close to the scale as it can: clear of the
+		// brackets beside it that it overlaps, and of only those of their
+		// lines ("Lag on 80", "off 55") that sit level with it, not the
+		// widest line on the tank. A line's width: about 0.5 em a character
+		// at 0.9 of the font.
+		const cw = font * 0.9 * 0.55;
+		const lines = (r: (typeof rs)[number]) => [
+			{ y: r.yOn, w: (r.label.length + 4 + String(r.on.toFixed(0)).length) * cw },
+			{ y: r.yOff, w: (4 + String(r.off.toFixed(0)).length) * cw }
+		];
+		const placed: ((typeof rs)[number] & { bx: number })[] = [];
+		let right = 0;
+		for (const r of [...rs].sort((a, b) => a.col - b.col || a.top - b.top)) {
+			let bx = box.w + 4 * k;
+			for (const q of placed) {
+				if (q.col >= r.col || q.bot < r.top - font || q.top > r.bot + font) continue;
+				bx = Math.max(bx, q.bx + 12 * k);
+				for (const ln of lines(q))
+					if (ln.y > r.top - font && ln.y < r.bot + font) bx = Math.max(bx, q.bx + 10 * k + ln.w + 10 * k);
+			}
+			placed.push({ ...r, bx });
+			right = Math.max(right, bx + 10 * k + Math.max(...lines(r).map((l) => l.w)) + 8 * k);
+		}
+		return { list: placed, n: ends.length, right };
 	});
-	// A range's column, by its longest top line ("Lead on 60": about 0.6 em
-	// a character at 0.9 of the font), so the marks stand clear beyond them.
-	let rangeW = $derived(
-		ranges.length ? 18 * k + Math.max(...ranges.map((r) => (r.label.length + 6) * font * 0.9 * 0.55)) : 0
-	);
 	// Graduations thin out on a short vessel so the numbers never collide;
 	// a pointer on the scale marks the live level.
 	let grads = $derived(ih < 90 ? [0, 50, 100] : [0, 25, 50, 75, 100]);
@@ -313,7 +331,7 @@
 	<g data-nx-beside>
 	<!-- ranges: a bracket from on to off, its name at the top -->
 	{#each rangeCols.list as r, i (i)}
-		{@const bx = box.w + 4 * k + r.col * rangeW}
+		{@const bx = r.bx}
 		{@const lx = bx + 6 * k}
 		{@const tx = bx + 10 * k}
 		{@const anchor = 'start'}
@@ -337,7 +355,7 @@
 		{@const c = m.active ? 'var(--serious, #ec835a)' : 'var(--ink-2, #c3c2b7)'}
 		{@const ink = m.active ? 'var(--ink, #e6e6e6)' : 'var(--ink-2, #c3c2b7)'}
 		{@const r = marksSide === 'right'}
-		{@const ax = r ? box.w + 2 * k + rangeCols.n * rangeW : vx - g - 2 * k}
+		{@const ax = r ? (rangeCols.list.length ? rangeCols.right : box.w + 2 * k) : vx - g - 2 * k}
 		{@const d = r ? 1 : -1}
 		<path
 			d="M {ax} {m.y} L {ax + d * 8 * k} {m.y - 4 * k} L {ax + d * 8 * k} {m.y + 4 * k} Z"

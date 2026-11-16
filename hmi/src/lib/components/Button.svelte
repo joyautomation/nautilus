@@ -71,11 +71,11 @@
 	}
 	.nhbtn.md {
 		padding: 7px 14px;
-		font-size: var(--font-xs);
+		font-size: 1rem;
 	}
 	.nhbtn.sm {
 		padding: 4px 10px;
-		font-size: var(--font-xs);
+		font-size: var(--font-sm);
 	}
 	.nhbtn.icon-only.md {
 		padding: 7px;

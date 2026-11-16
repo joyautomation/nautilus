@@ -331,7 +331,8 @@ naut builds the operator screen from the project itself, with no npm, and
   the symbol's middle, one label per line about 20 apart:
   `{"text": "", "x": 640, "y": 650, "chip": false, "align": "center",
   "state": [{"when": "P101_Fault", "text": "Fault", "kind": "critical"},
-  {"when": "P101_Running", "text": "On", "kind": "good"}, {"text": "Off"}]}`,
+  {"when": "P101_Running", "text": "On"}, {"text": "Off"}]}` (On and Off
+  in plain ink: the symbol shows it running; colour is for a fault),
   then `{"text": "", "x": 640, "y": 670, "chip": false, "align": "center",
   "bind": "P101_SpeedHz", "unit": "Hz", "trend": false}`. Without `chip`
   a state is a status chip, for a state beside no one symbol (a

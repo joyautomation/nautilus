@@ -22,7 +22,17 @@
   draws its value or state as bare text with a halo of the background
   colour, legible over a liquid or a pipe, in the state's colour; `align:
   "center"` makes `x` its middle. The lift station's pumps say On/Off,
-  speed and Lead/Lag this way, stacked and centred over each pump.
+  speed and Lead/Lag this way, stacked and centred over each pump, On
+  and Off in plain ink.
+- **A tank's range brackets stand as close to the scale as they can**:
+  one only clears the brackets it overlaps and those of their lines level
+  with it, not the widest line on the tank.
+
+### Changed (11-16)
+
+- **The bar at 16 px.** naut's default bar (title, description, screens),
+  `StatusPill`, the compact `AlarmBanner` and a `md` `Button` are 16 px
+  (`sm` 14 px); the bar's Ack all is `md`.
 
 ### Changed
 

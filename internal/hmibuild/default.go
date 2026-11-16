@@ -305,7 +305,7 @@ const defaultLayout = `<script>
 		<div class="nx-status">
 			{#if alarms.supported && alarms.summary}
 				<AlarmBanner summary={alarms.summary} compact href={alarmsHref ? resolve(alarmsHref) + page.url.search : undefined} />
-				<AckButton alarms={alarms.active} ids={['*']} label="Ack all" onack={(ids, by) => alarms.ack(ids, by)} />
+				<AckButton alarms={alarms.active} ids={['*']} label="Ack all" size="md" onack={(ids, by) => alarms.ack(ids, by)} />
 			{/if}
 			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
 			<ThemeSwitch />
@@ -319,12 +319,12 @@ const defaultLayout = `<script>
 	.nx-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 	/* one row: the project left, the screens in the middle, the status
 	   right; the description gives way first */
-	header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; padding: 10px 16px; border-bottom: 1px solid var(--border, color-mix(in srgb, var(--ink) 14%%, transparent)); background: var(--surface, var(--bg)); }
+	header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; padding: 10px 16px; font-size: 1rem; border-bottom: 1px solid var(--border, color-mix(in srgb, var(--ink) 14%%, transparent)); background: var(--surface, var(--bg)); }
 	.nx-title { flex: 1 1 0; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-	.nx-title b { font-family: var(--font-display, var(--font)); font-size: var(--font-md); white-space: nowrap; }
-	.nx-title span { font-size: 0.875rem; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.nx-title b { font-family: var(--font-display, var(--font)); font-size: 1.125rem; white-space: nowrap; }
+	.nx-title span { font-size: 1rem; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	nav { flex: none; display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border, color-mix(in srgb, var(--ink) 14%%, transparent)); border-radius: 8px; background: var(--surface-2, transparent); }
-	nav a { color: var(--ink-2, var(--muted)); text-decoration: none; padding: 4px 12px; border-radius: 6px; font-size: 0.875rem; font-weight: 600; }
+	nav a { color: var(--ink-2, var(--muted)); text-decoration: none; padding: 4px 12px; border-radius: 6px; font-size: 1rem; font-weight: 600; }
 	nav a:hover { color: var(--ink); }
 	nav a[aria-current='page'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%%, transparent); }
 	.nx-status { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }

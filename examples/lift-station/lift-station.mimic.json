@@ -61,7 +61,7 @@
       "id": "LSLL101",
       "component": "FloatSwitch",
       "x": 218,
-      "y": 338,
+      "y": 328,
       "width": 52,
       "label": "LSLL-101",
       "props": {
@@ -344,8 +344,7 @@
         },
         {
           "when": "P101_Running",
-          "text": "On",
-          "kind": "good"
+          "text": "On"
         },
         {
           "text": "Off"
@@ -403,8 +402,7 @@
         },
         {
           "when": "P102_Running",
-          "text": "On",
-          "kind": "good"
+          "text": "On"
         },
         {
           "text": "Off"

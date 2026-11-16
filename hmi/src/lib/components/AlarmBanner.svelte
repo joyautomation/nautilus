@@ -238,10 +238,10 @@
 	}
 	.banner.compact .unacked {
 		flex: none;
-		font-size: var(--font-xs);
+		font-size: 1rem;
 	}
 	.banner.compact .unacked b {
-		font-size: var(--font-sm);
+		font-size: 1rem;
 	}
 	.banner.compact .counts {
 		flex: 0 1 auto;
@@ -252,7 +252,7 @@
 		display: block;
 	}
 	.banner.compact .count {
-		font-size: var(--font-sm);
+		font-size: 1rem;
 		margin-right: var(--space-2);
 	}
 	.banner.compact .count:last-child {
