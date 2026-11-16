@@ -20,6 +20,16 @@ test('ldElementTag: contacts, edge contacts and coils of a PROGRAM rung', () => 
 	assert.equal(ldElementTag({ scope: 'Seal' }, { kind: 'contact', ref: 'In' }), undefined);
 });
 
+// A .ld FUNCTION_BLOCK's rungs carry `pou`, not `scope`: its pins and locals
+// are members of an instance, so Toggle Bit / Force on one must not reach a
+// controller tag that merely shares the name. Its VAR_EXTERNALs are tags.
+test('ldElementTag: inside a FUNCTION_BLOCK body, only a VAR_EXTERNAL', () => {
+	const ext = (pou: string, name: string) => pou === 'TankCycle' && name === 'Estop';
+	assert.equal(ldElementTag({ pou: 'TankCycle' }, { kind: 'contact', ref: 'Running' }, ext), undefined);
+	assert.equal(ldElementTag({ pou: 'TankCycle' }, { kind: 'coil', ref: 'Fill' }), undefined);
+	assert.equal(ldElementTag({ pou: 'TankCycle' }, { kind: 'contact', ref: 'Estop' }, ext), 'Estop');
+});
+
 test('fbdNodeTag: variable chips of a PROGRAM; not literals, blocks, FB instances or a FUNCTION_BLOCK body', () => {
 	assert.equal(fbdNodeTag({ kind: 'input', label: 'StartPB' }, false), 'StartPB');
 	assert.equal(fbdNodeTag({ kind: 'coil', label: 'Motor' }, undefined), 'Motor');

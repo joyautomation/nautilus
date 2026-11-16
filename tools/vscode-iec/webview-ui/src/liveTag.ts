@@ -20,12 +20,21 @@ export function plainTag(ref: string | undefined | null): string | undefined {
 	return IDENT.test(r) ? r : undefined;
 }
 
-/** A ladder contact, edge contact or coil, outside a FUNCTION_BLOCK body
- * (whose rungs carry a scope). */
-export function ldElementTag(rung: { scope?: unknown }, el: { kind: string; ref?: string }): string | undefined {
+/** A ladder contact, edge contact or coil of a PROGRAM's rung. Not one on
+ * a Logix rung (`scope`); inside a FUNCTION_BLOCK body (`pou`) only a
+ * VAR_EXTERNAL name, which is the controller's tag: a pin or local is a
+ * member of an instance, and a tag that happens to share its name is a
+ * different variable. */
+export function ldElementTag(
+	rung: { scope?: unknown; pou?: string },
+	el: { kind: string; ref?: string },
+	isExternal?: (pou: string, name: string) => boolean
+): string | undefined {
 	if (rung.scope) return undefined;
 	if (el.kind !== 'contact' && el.kind !== 'edge' && el.kind !== 'coil') return undefined;
-	return plainTag(el.ref);
+	const tag = plainTag(el.ref);
+	if (tag && rung.pou && !isExternal?.(rung.pou, tag)) return undefined;
+	return tag;
 }
 
 /** An FBD variable chip (an input read or a coil write), not a literal, in a

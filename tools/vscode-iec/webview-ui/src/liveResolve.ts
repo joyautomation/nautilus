@@ -50,16 +50,21 @@ export function resolveLabel(
 	let v: unknown = values[base];
 	let rest = label.slice(head[1].length);
 	// Which array dimension the next [index] addresses; -1 once we've
-	// stepped somewhere bounds no longer describe (inside a member).
+	// stepped somewhere bounds no longer describe. `path` is the dotted
+	// path so far: a member with bounds of its own ("tank.hist", an array
+	// local of a monitored FUNCTION_BLOCK instance) restarts the count.
 	let dim = 0;
-	const dims = bounds[base];
+	let path = base;
+	let dims = bounds[base];
 	while (rest !== '' && v !== undefined) {
 		if (rest.startsWith('.')) {
 			const m = /^\.([A-Za-z_][A-Za-z0-9_]*)/.exec(rest);
 			if (!m) return undefined;
 			v = member(v, m[1]);
 			rest = rest.slice(m[0].length);
-			dim = -1;
+			path += '.' + m[1].toLowerCase();
+			dims = bounds[path];
+			dim = dims ? 0 : -1;
 		} else if (rest.startsWith('[')) {
 			const m = /^\[([^\][]+)\]/.exec(rest);
 			if (!m || !Array.isArray(v)) return undefined;
@@ -78,6 +83,7 @@ export function resolveLabel(
 			if (at < 0 || at >= v.length) return undefined;
 			v = v[at];
 			if (dim >= 0) dim++;
+			path += '[]';
 			rest = rest.slice(m[0].length);
 		} else {
 			return undefined;
@@ -125,4 +131,40 @@ export function forcedLabel(forced: Record<string, unknown>, label: string): boo
 		if (k === want || want.startsWith(k + '.') || want.startsWith(k + '[') || k.startsWith(want + '.')) return true;
 	}
 	return false;
+}
+
+/**
+ * The controller address of a name written inside a FUNCTION_BLOCK body:
+ * its own pins and locals are members of the MONITORED instance ("Running"
+ * in TankCycle's rungs is `tank.Running`), so the body's label is
+ * re-rooted at the instance, and so is every name an index expression
+ * uses ("hist[i]" → "tank.hist[tank.i]"). A VAR_EXTERNAL name is the
+ * controller's own tag and stays as written. Member steps (".Q") are never
+ * re-rooted.
+ *
+ * undefined when a name needs an instance and none is monitored: a bare
+ * pin has no value of its own, and resolving it as a top-level tag would
+ * show whatever tag happens to share its name.
+ */
+export function fbAddress(label: string, inst: string | undefined, isExternal: (name: string) => boolean): string | undefined {
+	let out = '';
+	let i = 0;
+	while (i < label.length) {
+		const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(label.slice(i));
+		if (!m) {
+			out += label[i++];
+			continue;
+		}
+		const name = m[0];
+		const prev = label.slice(0, i).trimEnd().slice(-1);
+		const rooted = prev === '' || prev === '[' || prev === ',';
+		if (rooted && !isExternal(name)) {
+			if (!inst) return undefined;
+			out += inst + '.' + name;
+		} else {
+			out += name;
+		}
+		i += name.length;
+	}
+	return out;
 }

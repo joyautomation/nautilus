@@ -5,7 +5,7 @@
 // frame rate without rebuilding the Svelte Flow node array, so drags,
 // selections, and open inputs are never disturbed by a data update.
 
-import { resolveLabel, resolveScoped, arrayLowerBounds, member, forcedLabel } from './liveResolve';
+import { resolveLabel, resolveScoped, arrayLowerBounds, member, forcedLabel, fbAddress } from './liveResolve';
 import type { VarDecl } from './layout';
 // Shared with the extension host (vscode-free): the declared-type lookup the
 // text pills and the Live Values panel use, so an enumerated value reads the
@@ -36,8 +36,31 @@ export const live = $state({
 	// Per-dimension array lower bounds by lowercased variable name, parsed
 	// from the header declarations — an IEC ARRAY[1..4] stores element [1]
 	// at position 0, so indexed chips can't resolve without them.
-	bounds: {} as Record<string, number[]>
+	bounds: {} as Record<string, number[]>,
+	// FUNCTION_BLOCK instance monitoring (the extension's, shared with the
+	// text editor's CodeLens): lowercased FB type → the instance its body
+	// reads from, and the instances the project declares of it.
+	monitors: {} as Record<string, string>,
+	fbCandidates: {} as Record<string, string[]>,
+	// Lowercased FB type → its VAR_EXTERNAL names, lowercased: the names in
+	// its body that are controller tags, not members of the instance.
+	fbExternals: {} as Record<string, string[]>
 });
+
+// Array bounds as the header declares them: the program's by name, each
+// FUNCTION_BLOCK's by type then name. live.bounds is these joined with
+// the monitored instances ("tank.hist"), rebuilt when either changes.
+let programBounds: Record<string, number[]> = {};
+let fbBounds: Record<string, Record<string, number[]>> = {};
+function joinBounds(): void {
+	const out: Record<string, number[]> = { ...programBounds };
+	for (const [fb, arrays] of Object.entries(fbBounds)) {
+		const inst = live.monitors[fb];
+		if (!inst) continue;
+		for (const [name, dims] of Object.entries(arrays)) out[inst.toLowerCase() + '.' + name] = dims;
+	}
+	live.bounds = out;
+}
 
 export function setLive(frame: {
 	enabled: boolean;
@@ -46,6 +69,8 @@ export function setLive(frame: {
 	values: Record<string, unknown>;
 	forced?: Record<string, unknown>;
 	types?: FlatTypes;
+	monitors?: Record<string, string>;
+	fbCandidates?: Record<string, string[]>;
 }): void {
 	live.seen = true;
 	live.enabled = frame.enabled;
@@ -56,6 +81,13 @@ export function setLive(frame: {
 	// The extension sends the same object until /api/meta is read again;
 	// reassigning it anyway is cheap (nothing derives from it but labels).
 	live.types = frame.types ?? {};
+	const monitors = frame.monitors ?? {};
+	if (JSON.stringify(monitors) !== JSON.stringify(live.monitors)) {
+		live.monitors = monitors;
+		joinBounds();
+	}
+	const candidates = frame.fbCandidates ?? {};
+	if (JSON.stringify(candidates) !== JSON.stringify(live.fbCandidates)) live.fbCandidates = candidates;
 }
 
 /** True when a diagram label's value is held by a force — the hook every
@@ -64,14 +96,44 @@ export function liveForced(label: string | undefined): boolean {
 	return !!label && live.enabled && live.fresh && forcedLabel(live.forced, label);
 }
 
-/** Refresh the array-bounds map from the model's header declarations. */
+/** Refresh the array bounds (and each FUNCTION_BLOCK's VAR_EXTERNAL
+ * names) from the model's header declarations. */
 export function setVarBounds(vars: VarDecl[]): void {
 	const bounds: Record<string, number[]> = {};
+	const blocks: Record<string, Record<string, number[]>> = {};
+	const externals: Record<string, string[]> = {};
 	for (const v of vars) {
+		const fb = v.pou?.toLowerCase();
+		const external = !!fb && /EXTERNAL/i.test(v.section);
+		if (external) (externals[fb] ??= []).push(v.name.toLowerCase());
 		const dims = arrayLowerBounds(v.type);
-		if (dims) bounds[v.name.toLowerCase()] = dims;
+		if (!dims) continue;
+		// A block's VAR_EXTERNAL is the controller's tag, addressed bare.
+		if (fb && !external) (blocks[fb] ??= {})[v.name.toLowerCase()] = dims;
+		else bounds[v.name.toLowerCase()] = dims;
 	}
-	live.bounds = bounds;
+	programBounds = bounds;
+	fbBounds = blocks;
+	live.fbExternals = externals;
+	joinBounds();
+}
+
+/** The address a label names on the controller. A program's (or a Logix
+ * rung's) label is its own address; inside a FUNCTION_BLOCK body (`pou`,
+ * the block's type) it is a member of the monitored instance — see
+ * fbAddress — and undefined while no instance is monitored. */
+export function liveAddress(label: string | undefined, pou?: string): string | undefined {
+	if (!label || !pou) return label;
+	const fb = pou.toLowerCase();
+	const ext = live.fbExternals[fb] ?? [];
+	return fbAddress(label, live.monitors[fb], (n) => ext.includes(n.toLowerCase()));
+}
+
+/** The instance a FUNCTION_BLOCK body reads from ("" = none), and the
+ * project's instances of it. */
+export function fbMonitor(pou: string): { inst: string; candidates: string[] } {
+	const fb = pou.toLowerCase();
+	return { inst: live.monitors[fb] ?? '', candidates: live.fbCandidates[fb] ?? [] };
 }
 
 /** Resolve a diagram label — "PumpRun", "Motor.Speed", "TempHist[2]",

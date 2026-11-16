@@ -128,6 +128,21 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Fixed
 
+- **Ladder: live values inside a FUNCTION_BLOCK.** A block's rungs name
+  its pins and locals bare (`Sealed`), but on the controller they are
+  members of an instance (`tank.Sealed`), so the diagram showed nothing
+  for a block's internal variables — and showed a controller tag's value
+  for any pin that happened to share its name. The rungs now read from
+  the instance the body monitors, the same choice as the text editor's
+  CodeLens: auto-picked when the project declares one instance, and
+  switched from a chip on the block's heading when it declares more. A
+  VAR_EXTERNAL name is still the controller's tag. This is the PLC-Lab
+  example's shape, and an imported Logix AOI's.
+
+- **Ladder: Toggle Bit / Force inside a FUNCTION_BLOCK.** T, Ctrl+T and
+  the right-click live actions on a block's pin or local acted on a
+  controller tag of the same name. They now act only on a VAR_EXTERNAL.
+
 - **Waiting looks like waiting, not like a failure.** A custom component
   still being built shows as a quiet "compiling…" placeholder, not the
   red `Name?` chip that means it is missing. In the playground, which

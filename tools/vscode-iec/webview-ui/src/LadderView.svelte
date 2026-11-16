@@ -16,7 +16,8 @@
 	import { FB_TYPES } from './suggest';
 	import { layoutRung, rungMinWidth, fitArgs, assignLines, assignLineDy, L, OPERAND_LABEL_MAX, type LSpot, type LNode, type LBranch, type RungLayout } from './ladderLayout';
 	import { afterWrapOr, deleteOrder, inSel, orOp, selPaths, seriesKey, toggleSel, type LdSel } from './ladderSelect';
-	import { live, liveValue, liveForced, liveEnum, liveTypeNote, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveForced, liveEnum, liveTypeNote, formatLive, liveAddress, fbMonitor } from './liveState.svelte';
+	import { fbMonitorTitle } from '../../src/fbMonitorTitle';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 	import { descLine, descTail } from './xref.svelte';
 
@@ -33,6 +34,8 @@
 		onTrace,
 		onSelectTag,
 		onToggleBit,
+		onFbTypes,
+		onPickMonitor,
 		requestInput
 	}: {
 		model: LdModel;
@@ -50,6 +53,11 @@
 		onSelectTag?: (tag: string | null) => void;
 		/** T on a selected contact or coil: the host's Toggle Bit, for its tag. */
 		onToggleBit?: (tag: string) => void;
+		/** The FUNCTION_BLOCKs this file draws: the host finds their
+		 * instances and picks the one each body's live values read from. */
+		onFbTypes?: (types: string[]) => void;
+		/** The monitor chip on a block's heading: choose its instance. */
+		onPickMonitor?: (fbType: string) => void;
 		requestInput?: (
 			init: string,
 			at: { x: number; y: number; w: number },
@@ -68,10 +76,29 @@
 	/** The tag a contact, edge contact or coil names, when it is one the
 	 * live actions can act on (liveTag.ts: not a FUNCTION_BLOCK local, a
 	 * member or an element). */
-	const writableTag = ldElementTag;
+	// Every model, not only when the names change: the same block names in
+	// another file (the preview following a different document) are another
+	// project's instances. The host ignores a repeat. Unmounting (the panel
+	// switching to FBD or SFC) withdraws them.
+	$effect(() => {
+		onFbTypes?.((model.blocks ?? []).map((b) => b.name));
+	});
+	$effect(() => () => onFbTypes?.([]));
+
+	const writableTag = (r: { scope?: unknown; pou?: string }, el: { kind: string; ref?: string }) =>
+		ldElementTag(r, el, (pou, name) => (live.fbExternals[pou.toLowerCase()] ?? []).includes(name.toLowerCase()));
+
+	/** The controller address an operand names (liveAddress): inside a
+	 * FUNCTION_BLOCK body, a member of the monitored instance; undefined
+	 * there while none is monitored, and for a Logix rung, whose scoped
+	 * name is not a controller path. */
+	const addrOf = (r: { scope?: string; pou?: string }, ref: string | undefined) => (r.scope ? undefined : liveAddress(ref, r.pou));
+	/** An operand's live value, through the rung's scope or block. */
+	const lv = (r: { scope?: string; pou?: string }, ref: string | undefined) =>
+		liveValue((r.scope ? ref : liveAddress(ref, r.pou)) ?? '', r.scope);
 
 	/** Right-click context for VS Code (webview/context menus): the tag. */
-	function vsContext(r: { scope?: unknown }, el: { kind: string; ref?: string }): string | undefined {
+	function vsContext(r: { scope?: unknown; pou?: string }, el: { kind: string; ref?: string }): string | undefined {
 		return tagContext(writableTag(r, el));
 	}
 
@@ -103,7 +130,7 @@
 	const rungs = $derived.by(() => {
 		const on = showLive && live.enabled && live.fresh;
 		const annotated = (model.rungs ?? []).map((r) => {
-			const resolve = (label: string) => (on ? liveValue(label, r.scope) : undefined);
+			const resolve = (label: string) => (on ? lv(r, label) : undefined);
 			const all = annotate([...r.elements, ...r.coils], on ? true : undefined, resolve);
 			return { r, elems: all.slice(0, r.elements.length), coils: all.slice(r.elements.length) };
 		});
@@ -152,11 +179,11 @@
 	// Diff-overlay note appended to an element's tooltip.
 	const diffNote = (el: { _diff?: string; _was?: string }) =>
 		el._diff === 'changed' ? ` — changed${el._was ? ` (was ${el._was})` : ''}` : el._diff ? ` — ${el._diff}` : '';
-	const valText = (ref: string | undefined, scope?: string) => {
+	const valText = (r: { scope?: string; pou?: string }, ref: string | undefined) => {
 		if (!showVal || !ref) return '';
-		const v = liveValue(ref, scope);
+		const v = lv(r, ref);
 		// A Logix rung's scoped name is not a controller path: no type.
-		return v === undefined ? '' : formatLive(v, scope ? undefined : ref);
+		return v === undefined ? '' : formatLive(v, addrOf(r, ref));
 	};
 	const trunc = (s: string | undefined, n = OPERAND_LABEL_MAX) => {
 		const t = s ?? '';
@@ -981,7 +1008,7 @@
 	>
 		<rect class="hit" x="-2" y={-L.LABEL_TOP} width={n.w + 4} height={n.h + L.LABEL_TOP + L.LABEL_BOT - 4} rx="3" />
 		{#if n.kind === 'contact'}
-			<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope), r.scope ? undefined : n.ann.el.ref)}{r.scope ? '' : liveTypeNote(n.ann.el.ref)}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag (+Tag / -Tag: an edge) · N: NO/NC · P: NO → P → N → NC · B: branch around · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
+			<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(lv(r, n.ann.el.ref), addrOf(r, n.ann.el.ref))}{liveTypeNote(addrOf(r, n.ann.el.ref))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag (+Tag / -Tag: an edge) · N: NO/NC · P: NO → P → N → NC · B: branch around · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
 			<line x1="0" y1={n.h / 2} x2={n.w / 2 - 5} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 			<line x1={n.w / 2 + 5} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
 			<line x1={n.w / 2 - 5} y1="2" x2={n.w / 2 - 5} y2={n.h - 2} class="post" />
@@ -990,24 +1017,24 @@
 				<line x1={n.w / 2 - 9} y1={n.h - 1} x2={n.w / 2 + 9} y2="1" class="post" />
 			{/if}
 			<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
-			{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
-			{#if valText(n.ann.el.ref, r.scope)}
-				<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={!r.scope && liveEnum(n.ann.el.ref)}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
+			{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(r, n.ann.el.ref) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
+			{#if valText(r, n.ann.el.ref)}
+				<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={liveEnum(addrOf(r, n.ann.el.ref))}>{#if liveForced(addrOf(r, n.ann.el.ref))}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(r, n.ann.el.ref)}</text>
 			{/if}
 		{:else if n.kind === 'edge'}
-			<title>{n.ann.el.mode === 'N' ? '-' : '+'}{n.ann.el.ref} — {n.ann.el.mode === 'N' ? 'falling' : 'rising'}-edge contact: TRUE for one scan when {n.ann.el.ref} goes {n.ann.el.mode === 'N' ? '1→0' : '0→1'} ({n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope), r.scope ? undefined : n.ann.el.ref)}{r.scope ? '' : liveTypeNote(n.ann.el.ref)}){diffNote(n.ann.el)}{editable ? ' — dblclick: retag · P: NO → P → N → NC · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
+			<title>{n.ann.el.mode === 'N' ? '-' : '+'}{n.ann.el.ref} — {n.ann.el.mode === 'N' ? 'falling' : 'rising'}-edge contact: TRUE for one scan when {n.ann.el.ref} goes {n.ann.el.mode === 'N' ? '1→0' : '0→1'} ({n.ann.el.ref} = {formatLive(lv(r, n.ann.el.ref), addrOf(r, n.ann.el.ref))}{liveTypeNote(addrOf(r, n.ann.el.ref))}){diffNote(n.ann.el)}{editable ? ' — dblclick: retag · P: NO → P → N → NC · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
 			<line x1="0" y1={n.h / 2} x2={n.w / 2 - 8} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 			<line x1={n.w / 2 + 8} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
 			<line x1={n.w / 2 - 8} y1="2" x2={n.w / 2 - 8} y2={n.h - 2} class="post" />
 			<line x1={n.w / 2 + 8} y1="2" x2={n.w / 2 + 8} y2={n.h - 2} class="post" />
 			<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="mark edgemark">{n.ann.el.mode === 'N' ? 'N' : 'P'}</text>
 			<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
-			{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
-			{#if valText(n.ann.el.ref, r.scope)}
-				<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={!r.scope && liveEnum(n.ann.el.ref)}>{valText(n.ann.el.ref, r.scope)}</text>
+			{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(r, n.ann.el.ref) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
+			{#if valText(r, n.ann.el.ref)}
+				<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={liveEnum(addrOf(r, n.ann.el.ref))}>{valText(r, n.ann.el.ref)}</text>
 			{/if}
 		{:else if n.kind === 'coil'}
-			<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope), r.scope ? undefined : n.ann.el.ref)}{r.scope ? '' : liveTypeNote(n.ann.el.ref)}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}{descTail(n.ann.el.ref)}</title>
+			<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(lv(r, n.ann.el.ref), addrOf(r, n.ann.el.ref))}{liveTypeNote(addrOf(r, n.ann.el.ref))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}{descTail(n.ann.el.ref)}</title>
 			<line x1="0" y1={n.h / 2} x2={n.w / 2 - 12} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 			<line x1={n.w / 2 + 12} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.val)}" />
 			<path d="M {n.w / 2 - 8} 2 Q {n.w / 2 - 16} {n.h / 2} {n.w / 2 - 8} {n.h - 2}" fill="none" class="post" />
@@ -1016,9 +1043,9 @@
 				<text x={n.w / 2} y={n.h / 2 + 4} text-anchor="middle" class="mark">{n.ann.el.mode}</text>
 			{/if}
 			<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
-			{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
-			{#if valText(n.ann.el.ref, r.scope)}
-				<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={!r.scope && liveEnum(n.ann.el.ref)}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
+			{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(r, n.ann.el.ref) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
+			{#if valText(r, n.ann.el.ref)}
+				<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={liveEnum(addrOf(r, n.ann.el.ref))}>{#if liveForced(addrOf(r, n.ann.el.ref))}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(r, n.ann.el.ref)}</text>
 			{/if}
 		{:else if n.kind === 'fn'}
 			<title>{n.ann.el.fn}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick: edit the call (any function) · Del · drag to move' : ''}</title>
@@ -1204,6 +1231,20 @@
 				<div class="pouhead" title="a FUNCTION_BLOCK written in ladder — callable from any language">
 					<span class="poukw">FUNCTION_BLOCK</span> <span class="pouname">{b.name}</span>
 					{#if b.pins}<span class="poupins">{b.pins}</span>{/if}
+					{#if showLive && live.enabled}
+						{@const mon = fbMonitor(b.name)}
+						<button
+							type="button"
+							class="poumon"
+							class:none={!mon.inst}
+							data-fb-monitor={b.name}
+							title="which called instance this block's live values read from — click to choose"
+							onclick={(e) => {
+								e.stopPropagation();
+								onPickMonitor?.(b.name);
+							}}>{fbMonitorTitle(mon.inst, mon.candidates)}</button
+						>
+					{/if}
 				</div>
 			{:else if b.t === 'note'}
 				<div
@@ -1595,6 +1636,23 @@
 	.poukw {
 		font-weight: 600;
 		opacity: 0.7;
+	}
+	.poumon {
+		margin-left: auto;
+		font: inherit;
+		font-size: 11px;
+		color: var(--vscode-charts-green);
+		background: none;
+		border: 1px solid transparent;
+		border-radius: 4px;
+		padding: 0 6px;
+		cursor: pointer;
+	}
+	.poumon.none {
+		color: var(--vscode-descriptionForeground);
+	}
+	.poumon:hover {
+		border-color: var(--vscode-focusBorder);
 	}
 	.pouname {
 		font-weight: 700;
