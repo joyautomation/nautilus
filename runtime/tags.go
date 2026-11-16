@@ -292,7 +292,8 @@ func (t *Tags) hold(names []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, n := range names {
-		if tv, ok := t.vals[n]; ok {
+		// Folded: a seed may have landed under another spelling of the name.
+		if tv, _, ok := t.lookupLocked(n); ok {
 			tv.held = true
 		}
 	}

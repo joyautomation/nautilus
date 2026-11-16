@@ -585,9 +585,9 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	// An UNTYPED output with no init: is never seeded: it holds nothing
 	// until a program writes it, and a read before that faults the scan
 	// with "undefined tag" (nautilus#560). A typed one starts at the zero
-	// of its type (nautilus#696), so its reads are never early. A seal-in reads its own coil first,
-	// so it faults on scan one and — the faulting rung being the one that
-	// writes the tag — on every scan after. Only a program's own earlier
+	// of its type (nautilus#696), so its reads are never early. A seal-in
+	// reads its own coil first, so it faults on scan one and — the faulting
+	// rung being the one that writes the tag — on every scan after. Only a program's own earlier
 	// write counts: tasks start concurrently. An error when some path the
 	// scan can take reaches the read unwritten; a warning when it is
 	// unwritten only if a loop runs zero times.

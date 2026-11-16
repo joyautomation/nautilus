@@ -335,13 +335,13 @@ type Externals map[string]string
 //
 // Neither source alone is right. The store misses a tag nothing has written
 // yet — an untyped output with no seed exists in no snapshot, and is
-// exactly the sort of tag a first-scan expectation names. The declarations miss a tag
-// only the manifest seeds. A struct-typed (UDT/Template) tag declares as
-// its own TYPE name rather than being left out: the project's library .st
-// already declares that TYPE, exprSource composes those libraries ahead of
-// the generated POU, so `ZONE15_FIT_001.VALUE < X + 5.0` compiles exactly
-// the way `ZONE15_FIT_001.VALUE: {gt: 800}` (the matcher form) already
-// worked. Arrays and FB instances still have no place in a VAR_EXTERNAL
+// exactly the sort of tag a first-scan expectation names. The declarations
+// miss a tag only the manifest seeds. A struct-typed (UDT/Template) tag
+// declares as its own TYPE name rather than being left out: the project's
+// library .st already declares that TYPE, exprSource composes those
+// libraries ahead of the generated POU, so `ZONE15_FIT_001.VALUE < X + 5.0`
+// compiles exactly the way `ZONE15_FIT_001.VALUE: {gt: 800}` (the matcher
+// form) already worked. Arrays and FB instances still have no place in a VAR_EXTERNAL
 // block generated this way, so they stay left out.
 func ExternalsOf(rt *runtime.Runtime) Externals {
 	ext := Externals{}
