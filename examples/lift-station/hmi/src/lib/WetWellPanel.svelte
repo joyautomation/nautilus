@@ -119,7 +119,7 @@
 		color: var(--muted);
 	}
 	.sub {
-		font-size: 0.875rem;
+		font-size: 1rem;
 		color: var(--muted);
 	}
 	.pills {
@@ -134,7 +134,7 @@
 		margin-top: 8px;
 	}
 	h3 {
-		font-size: 0.8125rem;
+		font-size: 1rem;
 		font-weight: 700;
 		letter-spacing: 0.07em;
 		text-transform: uppercase;
@@ -152,7 +152,7 @@
 		align-items: center;
 		gap: 8px;
 		margin: 0;
-		font-size: 0.875rem;
+		font-size: 1rem;
 		color: var(--ink-2);
 	}
 	.grid {
@@ -162,13 +162,13 @@
 		gap: 8px 10px;
 	}
 	.col {
-		font-size: 0.8125rem;
+		font-size: 1rem;
 		font-weight: 650;
 		color: var(--ink-2);
 	}
 	.row,
 	.line > span {
-		font-size: 0.875rem;
+		font-size: 1rem;
 		color: var(--ink-2);
 	}
 	.line {
@@ -196,7 +196,7 @@
 		background: none;
 		color: var(--ink-2);
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: 1rem;
 		font-weight: 600;
 		cursor: pointer;
 	}
@@ -206,7 +206,7 @@
 	}
 	.hint {
 		margin: 4px 0 0;
-		font-size: 0.8125rem;
+		font-size: 1rem;
 		color: var(--muted);
 	}
 </style>

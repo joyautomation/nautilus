@@ -53,7 +53,7 @@
 		container-type: size;
 	}
 	.stage.with-panel {
-		padding-right: 356px;
+		padding-right: 416px;
 	}
 	/* The drawing eases over as the panel slides in, and back as it goes. */
 	@media (prefers-reduced-motion: no-preference) {

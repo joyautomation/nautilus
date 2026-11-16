@@ -35,7 +35,7 @@
 	let box = $derived(fitBox(width, height, [100, 170]));
 	let k = $derived(box.k);
 	// top to bottom: cable, cap, motor (takes the slack), volute, feet, label
-	let rows = $derived(tracks(box.h, [18 * k, 12 * k, '1fr', 30 * k, 14 * k, label ? 18 * k : 3 * k]));
+	let rows = $derived(tracks(box.h, [18 * k, 12 * k, '1fr', 30 * k, 14 * k, label ? Math.max(15, 18 * k) : 3 * k]));
 	let cable = $derived(rows[0]);
 	let cap = $derived(rows[1]);
 	let motor = $derived(rows[2]);
@@ -55,7 +55,7 @@
 	let bodyFill = $derived(real ? `url(#${uid}-steel)` : running ? 'var(--ink-2, #c3c2b7)' : 'var(--surface-2, #232321)');
 	let darkFill = $derived(real ? `url(#${uid}-dark)` : 'var(--surface-2, #232321)');
 	let pipeFill = $derived(real ? `url(#${uid}-steel)` : 'var(--surface-2, #232321)');
-	let font = $derived(Math.max(8, 12 * k));
+	let font = $derived(Math.max(11, 12 * k));
 
 	// discharge: out of the volute low down, the elbow, the stub up to the flange
 	let dy = $derived(volute.end - 9 * k);
@@ -186,7 +186,7 @@
 	{/if}
 
 	{#if label}
-		<text x={bx} y={box.h - 4 * k} text-anchor="middle" font-size={font} font-weight="600" fill="var(--ink-2, #c3c2b7)">{label}</text>
+		<text x={bx} y={box.h - 4 * k} text-anchor="middle" font-size={font} font-weight="600" fill="var(--ink, #e6e6e6)" stroke="var(--bg, #0d0d0d)" stroke-width="3" paint-order="stroke">{label}</text>
 	{/if}
 </svg>
 

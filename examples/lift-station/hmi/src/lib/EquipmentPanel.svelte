@@ -34,7 +34,7 @@
 	// It slides in from the right edge and back out, unless the visitor's
 	// system asks for less motion.
 	const still = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-	const slide = { x: 344, opacity: 1, duration: still ? 0 : 260, easing: cubicOut };
+	const slide = { x: 404, opacity: 1, duration: still ? 0 : 260, easing: cubicOut };
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && close()} />
@@ -83,7 +83,7 @@
 		right: 12px;
 		max-height: calc(100% - 24px);
 		z-index: 5;
-		width: min(320px, calc(100% - 24px));
+		width: min(380px, calc(100% - 24px));
 		display: flex;
 		flex-direction: column;
 		background: color-mix(in srgb, var(--surface) 96%, transparent);
@@ -122,7 +122,7 @@
 	.failed {
 		margin: 0;
 		padding: 8px 16px;
-		font-size: 0.875rem;
+		font-size: 0.9375rem;
 		color: var(--critical, #e5484d);
 		background: color-mix(in srgb, var(--critical, #e5484d) 12%, transparent);
 		border-bottom: 1px solid var(--border);
@@ -143,7 +143,7 @@
 		border-radius: 6px;
 		padding: 6px 10px;
 		font: inherit;
-		font-size: 0.875rem;
+		font-size: 0.9375rem;
 		cursor: pointer;
 	}
 	dl {
@@ -162,5 +162,10 @@
 		font-variant-numeric: tabular-nums;
 		color: var(--ink);
 		text-align: right;
+	}
+	/* status chips at the panel's reading size, for arm's length */
+	.panel :global(.pill) {
+		font-size: 0.9375rem;
+		padding: 4px 11px;
 	}
 </style>

@@ -100,7 +100,7 @@
 		white-space: nowrap;
 	}
 	.title span {
-		font-size: 0.8rem;
+		font-size: 0.9375rem;
 		color: var(--muted);
 		white-space: nowrap;
 		overflow: hidden;
@@ -118,7 +118,7 @@
 	.views a {
 		padding: 4px 12px;
 		border-radius: 6px;
-		font-size: 0.8rem;
+		font-size: 0.9375rem;
 		font-weight: 600;
 		color: var(--ink-2);
 		text-decoration: none;
