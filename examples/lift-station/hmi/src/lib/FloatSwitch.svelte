@@ -72,10 +72,10 @@
 		<rect data-part="clamp" x="7" y="4" width="6" height="4" rx="1" fill={real ? '#55585c' : 'var(--surface-2, #232321)'} stroke={edge} stroke-width="1" />
 
 		{#if label}
-			<text x="26" y="61" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink, #e6e6e6)" stroke="var(--bg, #0d0d0d)" stroke-width="3" paint-order="stroke">{label}</text>
+			<text x="26" y="61" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink, #e6e6e6)">{label}</text>
 		{/if}
 		<!-- its state in words, under its tag: the alarm colour only when tripped -->
-		<text x="26" y="74" text-anchor="middle" font-size="11" font-weight={tripped ? 700 : 500} fill={tripped ? 'var(--serious, #ec835a)' : 'var(--ink-2, #c3c2b7)'} stroke="var(--bg, #0d0d0d)" stroke-width="3" paint-order="stroke"
+		<text x="26" y="74" text-anchor="middle" font-size="11" font-weight={tripped ? 700 : 500} fill={tripped ? 'var(--crit, #e5484d)' : 'var(--ink-2, #c3c2b7)'}
 			>{tripped ? 'Tripped' : 'Normal'}</text
 		>
 	</g>

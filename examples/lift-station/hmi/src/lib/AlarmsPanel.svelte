@@ -132,7 +132,7 @@
 		border-radius: 999px;
 		background: var(--critical, #e5484d);
 		color: #fff;
-		font-size: 0.7rem;
+		font-size: 0.8125rem;
 		text-align: center;
 	}
 	.x {

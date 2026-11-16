@@ -1,7 +1,7 @@
 {
   "name": "Lift station \u2014 wet well WW-101",
   "canvas": {
-    "width": 900,
+    "width": 920,
     "height": 500
   },
   "equipment": [
@@ -10,7 +10,7 @@
       "component": "Tank",
       "x": 60,
       "y": 110,
-      "width": 400,
+      "width": 460,
       "height": 380,
       "behind": true,
       "label": "WW-101",
@@ -54,8 +54,8 @@
     {
       "id": "LSHH101",
       "component": "FloatSwitch",
-      "x": 108,
-      "y": 140,
+      "x": 290,
+      "y": 128,
       "width": 52,
       "label": "LSHH-101",
       "bind": {
@@ -79,7 +79,7 @@
     {
       "id": "P101",
       "component": "SubmersiblePump",
-      "x": 175,
+      "x": 190,
       "y": 317,
       "width": 56,
       "label": "P-101",
@@ -99,7 +99,7 @@
     {
       "id": "P102",
       "component": "SubmersiblePump",
-      "x": 295,
+      "x": 340,
       "y": 317,
       "width": 56,
       "label": "P-102",
@@ -119,7 +119,7 @@
     {
       "id": "CKV101",
       "component": "CheckValve",
-      "x": 199.8,
+      "x": 214.8,
       "y": 64,
       "width": 45,
       "label": "CKV-101",
@@ -144,7 +144,7 @@
     {
       "id": "CKV102",
       "component": "CheckValve",
-      "x": 319.8,
+      "x": 364.8,
       "y": 64,
       "width": 45,
       "label": "CKV-102",
@@ -169,7 +169,7 @@
     {
       "id": "TOPROC",
       "component": "ToProcess",
-      "x": 790,
+      "x": 800,
       "y": 28,
       "width": 96,
       "props": {
@@ -206,11 +206,11 @@
       "id": "ckv101-header",
       "points": [
         [
-          222.3,
+          237.3,
           40
         ],
         [
-          342.3,
+          387.3,
           40
         ]
       ],
@@ -243,7 +243,7 @@
       "id": "ckv102-header",
       "points": [
         [
-          342.3,
+          387.3,
           40
         ]
       ],
@@ -260,7 +260,7 @@
       "id": "force-main",
       "points": [
         [
-          342.3,
+          387.3,
           40
         ]
       ],
@@ -291,20 +291,43 @@
     },
     {
       "text": "FIT-101",
-      "x": 540,
+      "x": 560,
       "y": 58,
       "bind": "FIT101_Flow",
       "unit": "gpm",
       "decimals": 0,
       "min": 0,
       "at": [
-        620,
+        640,
         40
       ]
     },
     {
       "text": "",
-      "x": 125,
+      "x": 150,
+      "y": 214,
+      "state": [
+        {
+          "when": "LeadIsP101",
+          "text": "Lead"
+        },
+        {
+          "text": "Lag"
+        }
+      ]
+    },
+    {
+      "text": "",
+      "x": 140,
+      "y": 248,
+      "bind": "P101_SpeedHz",
+      "unit": "Hz",
+      "decimals": 1,
+      "trend": false
+    },
+    {
+      "text": "",
+      "x": 135,
       "y": 282,
       "state": [
         {
@@ -334,16 +357,30 @@
     },
     {
       "text": "",
-      "x": 125,
+      "x": 300,
+      "y": 214,
+      "state": [
+        {
+          "when": "!LeadIsP101",
+          "text": "Lead"
+        },
+        {
+          "text": "Lag"
+        }
+      ]
+    },
+    {
+      "text": "",
+      "x": 290,
       "y": 248,
-      "bind": "P101_SpeedHz",
+      "bind": "P102_SpeedHz",
       "unit": "Hz",
       "decimals": 1,
       "trend": false
     },
     {
       "text": "",
-      "x": 241,
+      "x": 285,
       "y": 282,
       "state": [
         {
@@ -372,32 +409,9 @@
       ]
     },
     {
-      "text": "",
-      "x": 241,
-      "y": 248,
-      "bind": "P102_SpeedHz",
-      "unit": "Hz",
-      "decimals": 1,
-      "trend": false
-    },
-    {
-      "text": "Lead pump",
-      "x": 640,
-      "y": 366,
-      "state": [
-        {
-          "when": "LeadIsP101",
-          "text": "P-101"
-        },
-        {
-          "text": "P-102"
-        }
-      ]
-    },
-    {
       "text": "Sequence",
-      "x": 640,
-      "y": 402,
+      "x": 700,
+      "y": 272,
       "bind": "SeqStep",
       "trend": false,
       "values": {
@@ -411,16 +425,16 @@
     },
     {
       "text": "Pump cycles",
-      "x": 640,
-      "y": 436,
+      "x": 700,
+      "y": 306,
       "bind": "CycleCount",
       "decimals": 0,
       "trend": false
     },
     {
       "text": "Wet well",
-      "x": 640,
-      "y": 330,
+      "x": 700,
+      "y": 236,
       "state": [
         {
           "when": "HighLevelAlm",
