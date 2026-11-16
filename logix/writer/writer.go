@@ -121,6 +121,16 @@ type Options struct {
 	// (AcceptTmr.ACC) still finds it (#371). Each must be a VAR of the
 	// program; its description comes from Descs.
 	ControllerScoped []string
+	// Channels are the manifest's channels: (msg.go): where a READ or
+	// WRITE block's ID points, and so the ConnectionPath of the MSG it is
+	// written as. Messages carries, per instance, the MSG parameters the
+	// import found that the block does not say (target.logix.messages).
+	Channels []Channel
+	Messages []Message
+	// check: a rules check with no manifest in hand (Check), so a
+	// channel it cannot see is not an error here; naut check resolves
+	// IDs against the manifest itself.
+	check bool
 	// Hardware is the project's I/O configuration (target.logix.hardware):
 	// its <Modules> section replaces the Local module the writer would
 	// generate, verbatim, and every alias of a rack point must name a
@@ -317,7 +327,7 @@ func Check(src string, libs ...string) ([]Diag, error) {
 	if err != nil {
 		return nil, err
 	}
-	lw := lowerSrc(m, src, Options{Libs: libs}.withDefaults(m.Name))
+	lw := lowerSrc(m, src, Options{Libs: libs, check: true}.withDefaults(m.Name))
 	return lw.diags, nil
 }
 
@@ -427,6 +437,9 @@ type tagDef struct {
 	// initial value (a map of members), when any.
 	Struct *udt
 	Init   any
+	// Message is a MESSAGE tag's parameters, from the READ or WRITE call
+	// that sends it (msg.go); nil until a rung calls it.
+	Message *msgParams
 	// AOI marks an Add-On Instruction instance.
 	AOI bool
 	// Alias makes the tag a Logix alias tag of this operand (an I/O point,
@@ -485,6 +498,7 @@ func lowerSrc(m *ld.Model, src string, opts Options) *lowered {
 		lw.rung(r, notes[r.Line])
 	}
 	lw.dropUnusedClocks()
+	lw.checkMessages()
 	lw.side()
 	return lw
 }
@@ -556,7 +570,7 @@ var scalarTypes = map[string]string{
 // blockTypes are the standard blocks with a Logix structure behind them.
 // TONR is the Logix dialect's resettable timer (internal/dialect): a TIMER
 // with a RES rung ahead of the timer's.
-var blockTypes = map[string]string{"TON": "TIMER", "TOF": "TIMER", "TONR": "TIMER", "CTU": "COUNTER"}
+var blockTypes = map[string]string{"TON": "TIMER", "TOF": "TIMER", "TONR": "TIMER", "CTU": "COUNTER", "READ": "MESSAGE", "WRITE": "MESSAGE"}
 
 func (lw *lowered) declare(v ld.VarDecl) {
 	scope := ""

@@ -378,11 +378,17 @@ func scanVars(src string) []VarDecl {
 			}
 		}
 		switch {
-		case u == "VAR" || strings.HasPrefix(u, "VAR_"):
+		case u == "VAR" || strings.HasPrefix(u, "VAR ") || strings.HasPrefix(u, "VAR_"):
 			section = strings.Fields(u)[0]
-			// A compact section — `VAR_INPUT Start : BOOL; END_VAR` all on
-			// one line — declares on the header line itself.
+			// A compact section — `VAR_INPUT Start : BOOL; END_VAR` or
+			// `VAR t1 : TON; END_VAR` all on one line — declares on the
+			// header line itself, after any qualifier.
 			rest := strings.TrimSpace(t[len(strings.Fields(t)[0]):])
+			for _, q := range []string{"CONSTANT", "RETAIN", "NON_RETAIN", "PERSISTENT"} {
+				if f := strings.Fields(rest); len(f) > 0 && strings.EqualFold(f[0], q) {
+					rest = strings.TrimSpace(rest[len(f[0]):])
+				}
+			}
 			if rest == "" {
 				continue
 			}

@@ -131,6 +131,7 @@ programs are not in the subset.
 | STRUCT types in a library | UDTs |
 | enumerations (`TYPE Mode : (Idle := 1, Run := 10);`) | `DINT` tags; a member (`Run`, `Mode#Run`) is its value, `10` — Logix has no enumerated type |
 | user FUNCTION_BLOCKs (ladder or ST) | Add-On Instructions |
+| ladder `rd:READ(ID := 'line2', VAR_1 := 'Remote', RD_1 := Local)`, `WRITE` likewise with `SD_1` | `MSG(rd)` on a `MESSAGE` tag of type CIP Data Table Read / Write, its path from the `cip` channel `line2` (`2, host[, 1, slot]`); `rd.NDR`/`DONE`→`rd.DN`, `rd.ERROR`→`rd.ER`, `rd.STATUS`→`rd.ERR`. Written back from an import and checked by round trip; not yet run on a controller |
 | ST: assignments, IF, CASE, FOR, WHILE, REPEAT, EXIT, operators, maths | Logix ST, close to as written |
 | ST conversions (`DINT_TO_INT`, `INT_TO_REAL`, `BOOL_TO_DINT`, `TRUNC_DINT`, …) | Logix that computes the same result: a narrowing wraps in integer arithmetic, an integer meets REAL as `(v * 1.0)` where it would otherwise divide as integers, a BOOL becomes a number through an `IF`, `REAL_TO_DINT(r)` as the whole right-hand side into a DINT is a plain store (the controller rounds halves to even, as nautilus does) |
 
@@ -323,13 +324,16 @@ reported, because the write cannot create it.
 On the public yardstick, `examples/batch-skid/line/Line.L5X`, the
 comparison finds no differences.
 
-On a corpus of 52 real production exports, 98.0% of rungs import, 83% of
+On a corpus of 52 real production exports, 98.2% of rungs import, 83% of
 ladder routines import whole, and most complete routines write back
 identically or equivalently. `COP` and `CPS` import when they copy like
 for like (a whole array or structure, or a slice at constant indexes) and
-write back as the instruction they were. The largest remaining gap is
-messaging: `MSG` instructions and the byte-buffer copies (a `COP` from one
-type to another) that build their payloads.
+write back as the instruction they were. An `MSG` of type CIP Data Table
+Read or Write imports as a [`READ` or `WRITE`
+block](https://github.com/joyautomation/nautilus/blob/main/docs/functions.md#read-and-write-another-device)
+on a `channels:` entry for its peer, and writes back as the `MSG` it was.
+Socket messages (CIP Generic) and the byte-buffer copies that build their
+payloads stay refused.
 
 ## The loop
 
@@ -508,8 +512,8 @@ and the `resets`. The answer is a stream of JSON lines (`progress` events, then
   controller's tags when it starts, so a tag a download adds shows in
   live values after a restart.
 - **Import is not complete.** A rung with no nautilus form stays a
-  comment and is reported; message instructions (`MSG`) and the
-  byte-buffer copies that feed them are the largest gap.
+  comment and is reported; socket messages (CIP Generic `MSG`) and the
+  byte-buffer copies that feed them stay refused.
 - **No runtime parity promise.** The subset is the set of constructs whose
   behaviour on both runtimes has been checked by running the same
   scenarios on each. Anything outside it is refused, not approximated.

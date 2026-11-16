@@ -657,6 +657,7 @@ func runLogixWrite(args []string) int {
 			}
 			opts.Inits, opts.Descs, opts.Aliases, opts.Side = t.Inits, t.Descs, t.Aliases, t.Side
 			opts.AllTags, opts.ControllerScoped, opts.Hardware = t.AllTags, t.ControllerScoped, t.Hardware
+			opts.Channels, opts.Messages = t.Channels, t.Messages
 		} else if he := (*hardwareError)(nil); errors.As(err, &he) {
 			// A hardware configuration that cannot be read: say so rather
 			// than write the project without it.

@@ -297,8 +297,17 @@ func TestSubsetDiagnosticsStopEverything(t *testing.T) {
 	src := "PROGRAM P\nVAR X : BOOL; Y : BOOL; tp : TP; END_VAR\nLD\n  RUNG r X tp:TP(PT := T#1S) ( Y )\nEND_LD\nEND_PROGRAM\n"
 	_, err := Run(context.Background(), src, Options{Client: c, Target: target(), Mode: Online})
 	var de *DiagError
-	if !errors.As(err, &de) || de.Diags[0].Rule != "logix/fb" {
+	if !errors.As(err, &de) {
 		t.Fatalf("err = %v", err)
+	}
+	// The block's own rule among them (a one-line VAR's declaration now
+	// also gets its type rule, ahead of it).
+	found := false
+	for _, d := range de.Diags {
+		found = found || d.Rule == "logix/fb"
+	}
+	if !found {
+		t.Fatalf("err = %v, want a logix/fb diagnostic", err)
 	}
 	if len(f.calls) != 0 {
 		t.Errorf("the agent was called despite the diagnostic: %v", f.calls)

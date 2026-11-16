@@ -150,10 +150,30 @@ func loadLogixProject(dir string) (*logixProject, error) {
 			PeriodMs: period,
 			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs, Aliases: aliases, Tags: tags, Side: side,
 			AllTags: tgt.AllTags, ControllerScoped: scoped, Hardware: hw,
+			Channels: writerChannels(m.Channels), Messages: writerMessages(tgt.Messages),
 			Language: writer.Language(progPath),
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,
 	}, nil
+}
+
+// writerChannels and writerMessages hand the manifest's channels: and
+// target.logix.messages to the writer, for the MSG a READ or WRITE is
+// written as.
+func writerChannels(cs []project.ChannelConfig) []writer.Channel {
+	var out []writer.Channel
+	for _, c := range cs {
+		out = append(out, writer.Channel{Name: c.Name, Type: c.Type, Host: c.Host, Slot: c.Slot})
+	}
+	return out
+}
+
+func writerMessages(ms []project.LogixMessage) []writer.Message {
+	var out []writer.Message
+	for _, m := range ms {
+		out = append(out, writer.Message{Name: m.Name, ConnectedFlag: m.ConnectedFlag, CacheConnections: m.CacheConnections, ConnectionPath: m.ConnectionPath})
+	}
+	return out
 }
 
 func runLogixDeploy(args []string) int {

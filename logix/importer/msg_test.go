@@ -7,6 +7,8 @@ import (
 	"testing/fstest"
 
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/lang/l5x"
+	"github.com/joyautomation/nautilus/logix/writer"
 )
 
 // msgL5X is miniL5X with a flat UDT (the corpus shape: INT and REAL
@@ -200,6 +202,85 @@ func TestLastBranchConditionLegsStay(t *testing.T) {
 		}
 		if !strings.Contains(string(p.Files["Main.ld"]), "a b ( y )") {
 			t.Errorf("%s: imported as\n%s", rung, p.Files["Main.ld"])
+// The write-back gives every MESSAGE tag back with the parameters it came
+// in with, attribute for attribute, and the MSG rungs as MSG; the poll rung
+// comes back as the three rungs the import split it into.
+func TestMessagesWriteBack(t *testing.T) {
+	tags := []string{"Step:DINT", "PollOn:BOOL", "Send:BOOL", "Ok:BOOL", "PollStat:INT", "Dwell:TIMER=2000",
+		"Line2:LineStatus", "Setpoints:LineStatus"}
+	msgs := []string{
+		"PollLine2|CIP Data Table Read|LineStatusRemote|Line2|2, 192.0.2.12|",
+		`PushSp|CIP Data Table Write|Setpoints|Setpoints|2, 192.0.2.13, 1, 2| CacheConnections="TRUE"`,
+	}
+	doc := msgL5X(tags, msgs,
+		"XIC(Step.3)[XIC(PollOn) MSG(PollLine2) ,[XIC(PollLine2.DN) ,XIC(PollLine2.ER) ] TON(Dwell,?,?) ,[XIC(Dwell.DN) ,XIO(PollOn) ] OTL(Step.4) OTU(Step.3) ];",
+		"MOVE(PollLine2.Flags,PollStat);",
+		"XIC(Send)MSG(PushSp);",
+	)
+	doc = []byte(strings.Replace(string(doc), `ConnectedFlag="2" ConnectionPath="2, 192.0.2.13, 1, 2"`, `ConnectedFlag="1" ConnectionPath="2, 192.0.2.13, 1, 2"`, 1))
+	orig, err := l5x.Parse(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := mustImport(t, doc)
+	fsys := fstest.MapFS{}
+	for name, raw := range p.Files {
+		fsys[name] = &fstest.MapFile{Data: raw}
+	}
+	m, err := project.ReadManifest(fsys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := writer.Options{Controller: "Mini", Libs: libsOf(p)}
+	for _, c := range m.Channels {
+		opts.Channels = append(opts.Channels, writer.Channel{Name: c.Name, Type: c.Type, Host: c.Host, Slot: c.Slot})
+	}
+	for _, x := range m.Target.Logix.Messages {
+		opts.Messages = append(opts.Messages, writer.Message{Name: x.Name, ConnectedFlag: x.ConnectedFlag, CacheConnections: x.CacheConnections, ConnectionPath: x.ConnectionPath})
+	}
+	for _, cs := range m.Target.Logix.ControllerScoped {
+		opts.ControllerScoped = append(opts.ControllerScoped, cs.Name)
+	}
+	src := string(p.Files["Main.ld"])
+	out, diags, err := writer.Write(src, opts)
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writer: %v %v\n%s", err, diags, src)
+	}
+	back, err := l5x.Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"XIC(Step.3)XIC(PollOn)MSG(PollLine2);",
+		"XIC(Step.3)[XIC(PollLine2.DN) ,XIC(PollLine2.ER) ]TON(Dwell,?,?);",
+		"XIC(Step.3)[XIC(Dwell.DN) ,XIO(PollOn) ][OTL(Step.4) ,OTU(Step.3) ];", // the writer's coils, in parallel
+		"MOVE(PollLine2.Flags,PollStat);",
+		"XIC(Send)MSG(PushSp);",
+	}
+	if got := rungTexts(back, "Main", "MainRoutine"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+	params := func(f *l5x.File) map[string]string {
+		out := map[string]string{}
+		for _, tg := range f.Controller.Tags {
+			if tg.DataType != "MESSAGE" {
+				continue
+			}
+			var b strings.Builder
+			for _, a := range tg.Message {
+				fmt.Fprintf(&b, "%s=%q ", a.Name.Local, a.Value)
+			}
+			out[tg.Name] = b.String()
+		}
+		return out
+	}
+	o, g := params(orig), params(back)
+	if len(o) != 2 {
+		t.Fatalf("fixture MESSAGE tags = %v", o)
+	}
+	for name, attrs := range o {
+		if g[name] != attrs {
+			t.Errorf("%s written back at controller scope as\n  %s\nwant\n  %s", name, g[name], attrs)
 		}
 	}
 }
