@@ -383,6 +383,14 @@ export interface MimicLabel {
 	 *             {"when": "P101_Running", "text": "Running", "kind": "good"},
 	 *             {"text": "Stopped"}] */
 	state?: MimicLabelState[];
+	/** `false` draws the value or state as bare text with a halo of the
+	 * background colour around its letters, legible over a liquid or a pipe,
+	 * instead of on a chip: a pump's On/Off, speed and Lead/Lag stacked over
+	 * its symbol. Default true. */
+	chip?: boolean;
+	/** `center` makes `x` the label's middle, for a stack of labels centred
+	 * on one symbol. Default `left` (`x` is its left edge). */
+	align?: 'left' | 'center';
 	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
 	fromUnit?: string;
 }
@@ -392,8 +400,8 @@ export interface MimicLabelState {
 	/** The tag (or `!tag`) that makes this the state; omitted, the default. */
 	when?: string;
 	text: string;
-	/** The chip's kind (StatusPill): `off` (default), `good`, `warning`,
-	 * `serious`, `critical`. */
+	/** The chip's kind (StatusPill), or the text's colour with `chip: false`:
+	 * `off` (default), `good`, `warning`, `serious`, `critical`. */
 	kind?: StatusKind;
 }
 

@@ -415,7 +415,7 @@
 
 			{#each doc.labels ?? [] as l, i (i)}
 				{#if l.bind}
-					<span class="lbl readout" style="left: {l.x}px; top: {l.y}px"
+					<span class="lbl readout" class:plain={l.chip === false} class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px"
 						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
 						>{#if l.unit}<span>{l.unit}</span>{/if}{#if trended(l)}<span class="spark" aria-hidden="true"
 								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} color="var(--ink-2, #c3c2b7)" compact /></span
@@ -423,11 +423,11 @@
 					>
 				{:else if l.state}
 					{@const st = labelState(l, tags)}
-					<span class="lbl state" style="left: {l.x}px; top: {l.y}px"
-						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}</span
+					<span class="lbl state" class:plain={l.chip === false} class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px"
+						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}{#if l.chip === false}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
 					>
 				{:else}
-					<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
+					<span class="lbl" class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px">{l.text}</span>
 				{/if}
 			{/each}
 		</div>
@@ -603,6 +603,43 @@
 		background: var(--pipe-bore, var(--bg, transparent));
 		padding: 0 3px;
 		border-radius: 3px;
+	}
+	/* chip: false: bare text with a halo of the background colour round
+	   its letters (the stroke painted under the fill), legible over a
+	   liquid, a pipe or a hatch with no patch cut out of the drawing. */
+	.lbl.plain,
+	.lbl.plain .name {
+		background: none;
+		border: 0;
+		padding: 0;
+		margin-left: 0;
+		-webkit-text-stroke: 3px var(--bg, #0d0d0d);
+		paint-order: stroke fill;
+		stroke-linejoin: round;
+	}
+	.lbl.plain {
+		font-size: var(--font-xs);
+	}
+	.lbl.plain .word {
+		color: var(--ink, #e6e6e6);
+		font-weight: 650;
+	}
+	.lbl.plain .word.good {
+		color: var(--good, #0ca30c);
+	}
+	.lbl.plain .word.warning {
+		color: var(--warn, #f5a524);
+	}
+	.lbl.plain .word.serious {
+		color: var(--serious, #f76808);
+	}
+	.lbl.plain .word.critical {
+		color: var(--crit, #e5484d);
+	}
+	/* align: center: x is the label's middle */
+	.lbl.center {
+		transform: translateX(-50%);
+		margin-left: 0;
 	}
 	.lbl.readout .num {
 		color: var(--ink, #e6e6e6);

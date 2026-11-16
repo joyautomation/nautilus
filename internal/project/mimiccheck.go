@@ -45,7 +45,7 @@ var builtinProps = map[string][]string{
 var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports", "panel"}
 
 // labelKeys are the keys a label has (hmi mimic.ts MimicLabel).
-var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state", "values"}
+var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state", "values", "chip", "align"}
 
 // stateKinds are a label state's kinds (StatusPill's).
 var stateKinds = []string{"good", "warning", "serious", "critical", "off"}
@@ -75,6 +75,7 @@ type mimicFile struct {
 	Labels []struct {
 		Text  string    `json:"text"`
 		Bind  string    `json:"bind"`
+		Align string    `json:"align"`
 		X     float64   `json:"x"`
 		Y     float64   `json:"y"`
 		At    []float64 `json:"at"`
@@ -380,6 +381,9 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 						warns = append(warns, fmt.Sprintf("%s: %s has %q, which a label doesn't have (it has %s), so the screen ignores it", f, where, k, strings.Join(labelKeys, ", ")))
 					}
 				}
+			}
+			if l.Align != "" && l.Align != "left" && l.Align != "center" {
+				say("%s's align is %q; it is left (x is its left edge) or center (x is its middle)", where, l.Align)
 			}
 			// a sense line runs from the label to a point on the drawing
 			if l.At != nil {

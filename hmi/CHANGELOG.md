@@ -18,6 +18,11 @@
   each end with its value, beside the scale; ranges that overlap stand in
   columns of their own, so a lead and a lag pump's levels never crowd. An
   alarm mark is also a dotted line across the vessel at its level.
+- **Outlined, centred labels** (James, 11-16). A label's `chip: false`
+  draws its value or state as bare text with a halo of the background
+  colour, legible over a liquid or a pipe, in the state's colour; `align:
+  "center"` makes `x` its middle. The lift station's pumps say On/Off,
+  speed and Lead/Lag this way, stacked and centred over each pump.
 
 ### Changed
 

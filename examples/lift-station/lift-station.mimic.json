@@ -295,8 +295,10 @@
     },
     {
       "text": "",
-      "x": 260,
-      "y": 214,
+      "x": 320,
+      "y": 288,
+      "align": "center",
+      "chip": false,
       "state": [
         {
           "when": "LeadIsP101",
@@ -309,8 +311,10 @@
     },
     {
       "text": "",
-      "x": 250,
-      "y": 248,
+      "x": 320,
+      "y": 268,
+      "align": "center",
+      "chip": false,
       "bind": "P101_SpeedHz",
       "unit": "Hz",
       "decimals": 1,
@@ -318,8 +322,10 @@
     },
     {
       "text": "",
-      "x": 245,
-      "y": 282,
+      "x": 320,
+      "y": 248,
+      "align": "center",
+      "chip": false,
       "state": [
         {
           "when": "P101_LockedOut",
@@ -338,18 +344,20 @@
         },
         {
           "when": "P101_Running",
-          "text": "Running",
+          "text": "On",
           "kind": "good"
         },
         {
-          "text": "Stopped"
+          "text": "Off"
         }
       ]
     },
     {
       "text": "",
-      "x": 410,
-      "y": 214,
+      "x": 470,
+      "y": 288,
+      "align": "center",
+      "chip": false,
       "state": [
         {
           "when": "!LeadIsP101",
@@ -362,8 +370,10 @@
     },
     {
       "text": "",
-      "x": 400,
-      "y": 248,
+      "x": 470,
+      "y": 268,
+      "align": "center",
+      "chip": false,
       "bind": "P102_SpeedHz",
       "unit": "Hz",
       "decimals": 1,
@@ -371,8 +381,10 @@
     },
     {
       "text": "",
-      "x": 395,
-      "y": 282,
+      "x": 470,
+      "y": 248,
+      "align": "center",
+      "chip": false,
       "state": [
         {
           "when": "P102_LockedOut",
@@ -391,11 +403,11 @@
         },
         {
           "when": "P102_Running",
-          "text": "Running",
+          "text": "On",
           "kind": "good"
         },
         {
-          "text": "Stopped"
+          "text": "Off"
         }
       ]
     },

@@ -290,7 +290,7 @@ naut builds the operator screen from the project itself, with no npm, and
   with a trend of its last few minutes, a true/false as words), its
   setpoints, its commands and its switches:
   `"panel": {"title": "P-501 backwash pump", "readings": [{"tag":
-  "P501_Running", "label": "State", "on": "Running", "off": "Stopped"},
+  "P501_Running", "label": "State", "on": "On", "off": "Off"},
   {"tag": "FIT501_Flow", "label": "Flow", "unit": "gpm", "decimals": 0}],
   "setpoints": [{"tag": "BW_FlowSP", "label": "Backwash flow", "unit":
   "gpm"}], "commands": [{"tag": "P501_Start", "label": "Start", "kind":
@@ -325,11 +325,18 @@ naut builds the operator screen from the project itself, with no npm, and
   clear of the pumps and their pipes.
 - Everything an operator watches run (a pump, a blower, an agitator, a
   sequence) shows its state twice: on the symbol (the kit's change colour
-  and show flow) and in words, a `labels` entry with `state` beside it, drawn
-  as a status chip: `{"text": "P-101", "x": 610, "y": 700, "state": [{"when":
-  "P101_Fault", "text": "Fault", "kind": "critical"}, {"when": "P101_Running",
-  "text": "Running", "kind": "good"}, {"text": "Stopped"}]}`. The first
-  state whose `when` tag is true shows; the one with no `when` comes last.
+  and show flow) and in words, a `labels` entry with `state`. A pump's
+  words (On or Off, its speed, Lead or Lag) stack over its symbol as
+  outlined text centred on it, `"chip": false, "align": "center"` with `x`
+  the symbol's middle, one label per line about 20 apart:
+  `{"text": "", "x": 640, "y": 650, "chip": false, "align": "center",
+  "state": [{"when": "P101_Fault", "text": "Fault", "kind": "critical"},
+  {"when": "P101_Running", "text": "On", "kind": "good"}, {"text": "Off"}]}`,
+  then `{"text": "", "x": 640, "y": 670, "chip": false, "align": "center",
+  "bind": "P101_SpeedHz", "unit": "Hz", "trend": false}`. Without `chip`
+  a state is a status chip, for a state beside no one symbol (a
+  sequence's step). The first state whose `when` tag is true shows; the
+  one with no `when` comes last.
   A step or a state code is shown in words, never as a raw name or number:
   `"values": {"PostRun": "Post-run delay", "3": "Backwashing"}` on its label.
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
