@@ -39,7 +39,8 @@
 		marks = [],
 		marksSide = 'left',
 		tags = {},
-		alarm = false
+		alarm = false,
+		hatchAt = 0.2
 	}: {
 		levelPct?: number;
 		label?: string;
@@ -61,6 +62,10 @@
 		tags?: Record<string, unknown>;
 		/** The liquid's condition needs attention: it draws in the alarm colour. */
 		alarm?: boolean;
+		/** A pit's access hatch: where its left edge sits across the cover
+		 *  slab, 0 to 1 of the vessel's width (default 0.2). Move it off a
+		 *  riser's line. */
+		hatchAt?: number;
 	} = $props();
 
 	const uid = `tank${Math.random().toString(36).slice(2, 8)}`;
@@ -104,10 +109,11 @@
 				return [{ ...m, pct, active, y: at(pct), ly: at(pct) }];
 			})
 			.sort((a, b) => a.y - b.y);
-		for (let i = 1; i < out.length; i++) out[i].ly = Math.max(out[i].ly, out[i - 1].ly + font * 0.95);
+		for (let i = 1; i < out.length; i++) out[i].ly = Math.max(out[i].ly, out[i - 1].ly + font * 1.2);
 		return out;
 	});
-	// Graduations thin out on a short vessel so the numbers never collide.
+	// Graduations thin out on a short vessel so the numbers never collide;
+	// a pointer on the scale marks the live level.
 	let grads = $derived(ih < 90 ? [0, 50, 100] : [0, 25, 50, 75, 100]);
 	let stroke = $derived(Math.max(1, 2 * k));
 	let font = $derived(box.font);
@@ -140,8 +146,9 @@
 		for (let c = x0 + y0; c <= x1 + y1; c += step) d += `M ${c - y1} ${y1} L ${c - y0} ${y0} `;
 		return d;
 	});
-	// The access hatch in a pit's cover slab, a third of the way across.
-	let hatchX = $derived(vx + vw * 0.2);
+	// The access hatch in a pit's cover slab, a fifth of the way across
+	// unless `hatchAt` says where.
+	let hatchX = $derived(vx + vw * Math.max(0, Math.min(0.72, hatchAt)));
 	let hatchW = $derived(vw * 0.28);
 </script>
 
@@ -239,6 +246,9 @@
 			<line x1={vx + vw + g + 6 * k} x2={vx + vw + g + 14 * k} y1={gy} y2={gy} stroke="var(--muted, #898781)" stroke-width={Math.max(1, k)} />
 			<text x={vx + vw + g + 18 * k} y={gy + font * 0.3} font-size={font} fill="var(--muted, #898781)">{mark}</text>
 		{/each}
+		<!-- the live level against the scale: a pointer at the surface -->
+		{@const px = vx + vw + g + 4 * k}
+		<path d="M {px} {liquidY} L {px + 9 * k} {liquidY - 5 * k} L {px + 9 * k} {liquidY + 5 * k} Z" fill="var(--ink, #e6e6e6)" />
 	{/if}
 
 	<!-- level marks: an arrow at the true level, pointing at the tank -->

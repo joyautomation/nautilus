@@ -323,6 +323,8 @@ naut builds the operator screen from the project itself, with no npm, and
   "P101_Fault", "text": "Fault", "kind": "critical"}, {"when": "P101_Running",
   "text": "Running", "kind": "good"}, {"text": "Stopped"}]}`. The first
   state whose `when` tag is true shows; the one with no `when` comes last.
+  A step or a state code is shown in words, never as a raw name or number:
+  `"values": {"PostRun": "Post-run delay", "3": "Backwashing"}` on its label.
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
   drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
   and each copy moves by `step`:

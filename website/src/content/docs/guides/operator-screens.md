@@ -52,7 +52,9 @@ The same document renders in a SvelteKit HMI through the
   pages draw a readout with a trend of its last few minutes after the
   number (`<Mimic trends>` in an app); `"trend": false` leaves it off,
   `"min"` and `"max"` fix its scale. A STRING tag (a sequence's step)
-  shows as it is. `"at": [x, y]` is the point the reading belongs to: a
+  shows as it is; `values` gives words for the values it takes
+  (`{"PostRun": "Post-run delay", "0": "Out of service"}`), a step's name
+  or a state code. `"at": [x, y]` is the point the reading belongs to: a
   dashed sense line joins the label to it, for a reading that can't sit
   right on its line or vessel. With `state` instead of `bind`, the label
   shows a state in words as a status chip: the first whose `when` tag is
@@ -73,7 +75,7 @@ The same document renders in a SvelteKit HMI through the
 
 | Component | Props to bind | Ports |
 |---|---|---|
-| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`; `marks`: the levels that matter, `[{"label": "Lead on", "tag": "LeadOnSP"}, {"label": "High alarm", "value": 90, "alarm": true}]`, an arrow and its value at each on the vessel's left, or past its scale with `marksSide: "right"`; an `alarm` mark, `true`, `"high"` or `"low"`, stays grey with a hollow arrow until the level reaches it; `alarm`: a condition that turns the liquid, otherwise a neutral grey, the alarm colour while it holds) | `top`, `left`, `right`, `bottom` |
+| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`; `hatchAt`: where a pit's access hatch sits across its slab, 0 to 1; `marks`: the levels that matter, `[{"label": "Lead on", "tag": "LeadOnSP"}, {"label": "High alarm", "value": 90, "alarm": true}]`, an arrow and its value at each on the vessel's left, or past its scale with `marksSide: "right"`; an `alarm` mark, `true`, `"high"` or `"low"`, stays grey with a hollow arrow until the level reaches it; `alarm`: a condition that turns the liquid, otherwise a neutral grey, the alarm colour while it holds) | `top`, `left`, `right`, `bottom` |
 | `Pump` | `running`, `speedPct` | `in`, `out` |
 | `Valve` | `openPct` | `in`, `out` |
 | `Heater` | `powerPct` | |

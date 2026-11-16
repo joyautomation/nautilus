@@ -368,6 +368,10 @@ export interface MimicLabel {
 	/** Fix the sparkline's scale (a level's 0-100); omitted, it fits the data. */
 	min?: number;
 	max?: number;
+	/** Words for the values a bound tag takes: a step's name, a state code
+	 * (`{"PostRun": "Post-run delay", "0": "Out of service"}`). A value not
+	 * listed shows as it is. */
+	values?: Record<string, string>;
 	/** The point on the drawing the label reads, [x, y] in canvas units: a
 	 * thin sense line joins the label to it, ending in a dot, for a reading
 	 * that can't sit right on its line or vessel. */

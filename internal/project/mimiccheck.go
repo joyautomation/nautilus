@@ -31,7 +31,7 @@ var builtinPorts = map[string][]string{
 // width, height, look and write, which <Mimic> hands every one). A bind or
 // a prop it doesn't take shows nothing.
 var builtinProps = map[string][]string{
-	"Tank": {"levelPct", "scale", "shape", "marks", "marksSide", "alarm"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
+	"Tank": {"levelPct", "scale", "shape", "marks", "marksSide", "alarm", "hatchAt"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
 	"Heater": {"powerPct"}, "Gauge": {"value", "min", "max", "unit", "color", "setpoint", "decimals", "sweep", "gap", "thickness"},
 	"Sparkline":     {"values", "color", "yMin", "yMax", "endIndex", "windowSize", "compact"},
 	"CommandButton": {"tag", "kind", "pulseMs", "held", "disabled", "disabledReason"},
@@ -45,7 +45,7 @@ var builtinProps = map[string][]string{
 var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports", "panel"}
 
 // labelKeys are the keys a label has (hmi mimic.ts MimicLabel).
-var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state"}
+var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state", "values"}
 
 // stateKinds are a label state's kinds (StatusPill's).
 var stateKinds = []string{"good", "warning", "serious", "critical", "off"}

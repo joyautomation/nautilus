@@ -146,13 +146,15 @@
 	// tag (a sequence's step) shows as it is.
 	const labelValue = (l: MimicLabel): string => {
 		const v = resolveBindings({ value: l.bind! }, tags).value;
+		const word = l.values && (typeof v === 'string' || typeof v === 'number') ? l.values[String(v)] : undefined;
+		if (word !== undefined) return word;
 		if (typeof v === 'string') return v || '—';
 		return typeof v === 'number' && isFinite(v) ? v.toFixed(l.decimals ?? 1) : '—';
 	};
 	const labelRaw = (l: MimicLabel): unknown => resolveBindings({ value: l.bind! }, tags).value;
 	/** The bound labels that draw a sparkline: each keeps the last few
 	 * minutes of its tag (taghistory), sampled once a second. */
-	const trended = (l: MimicLabel): boolean => !!l.bind && (l.trend ?? trends) && typeof labelRaw(l) === 'number';
+	const trended = (l: MimicLabel): boolean => !!l.bind && !l.values && (l.trend ?? trends) && typeof labelRaw(l) === 'number';
 	$effect(() => {
 		const id = setInterval(() => {
 			for (const l of doc.labels ?? []) if (l.bind && (l.trend ?? trends)) sampleTag(l.bind, labelRaw(l));
@@ -509,7 +511,8 @@
 	   on its own and the filter built from it follows. At rest there is no
 	   filter at all; while glowing, or fading (Mimic adds .fading for
 	   FADE_MS), the filter is built from --glow-a, whose colour stays the
-	   glow's blue at every step, so the fade never passes through a dark
+	   glow's colour at every step (neutral ink, --select-glow: colour is for
+	   state and alarms), so the fade never passes through a dark
 	   halo. */
 	@property --glow-a {
 		syntax: '<number>';
@@ -532,7 +535,7 @@
 	.eq.clickable:is(:hover, :focus-visible, .selected, .fading) {
 		outline: none;
 		filter: brightness(calc(1 + 0.12 * var(--glow-a)))
-			drop-shadow(0 0 calc(4px * var(--glow-a)) rgb(from var(--s1, #3987e5) r g b / calc(0.7 * var(--glow-a))));
+			drop-shadow(0 0 calc(4px * var(--glow-a)) rgb(from var(--select-glow, var(--ink-2, #c3c2b7)) r g b / calc(0.7 * var(--glow-a))));
 		transition: --glow-a 0.18s ease;
 	}
 	.eq.clickable:is(.selected, :focus-visible) {
@@ -591,6 +594,13 @@
 		align-items: center;
 		gap: 0.45em;
 		padding: 1px 3px;
+		/* the chip has its own ground: no patch cut out of a tank's liquid */
+		background: none;
+	}
+	.lbl.state .name {
+		background: var(--pipe-bore, var(--bg, transparent));
+		padding: 0 3px;
+		border-radius: 3px;
 	}
 	.lbl.readout .num {
 		color: var(--ink, #e6e6e6);

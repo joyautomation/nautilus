@@ -10,7 +10,9 @@
   `state` shows a state in words as a status chip, the first whose `when`
   tag is true (`labelState(label, tags)`), so a pump says Running, Stopped
   or Fault beside its symbol as well as on it. A bound label of a STRING
-  tag shows the text.
+  tag shows the text, and `values` gives words for the values a tag takes
+  (a step's name, a state code). A pit's `hatchAt` moves its access hatch
+  off a riser's line.
 
 ### Changed
 
