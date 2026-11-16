@@ -33,7 +33,7 @@
 		d,
 		flowing = false,
 		rate = 1,
-		color = 'var(--s1, #3987e5)',
+		color,
 		dead = false,
 		layer = undefined,
 		look = 'realistic'
@@ -41,6 +41,9 @@
 		d: string;
 		flowing?: boolean;
 		rate?: number;
+		/** The flow dashes' colour. Default: ink on an `isa101` line (motion
+		 *  carries the state, colour stays for alarms; `--pipe-flow` sets it),
+		 *  the accent blue on a `realistic` tube. */
 		color?: string;
 		/** No data for this run — dashed, dimmed, never animated. */
 		dead?: boolean;
@@ -51,6 +54,7 @@
 		look?: 'isa101' | 'realistic';
 	} = $props();
 	const line = $derived(look === 'isa101');
+	const dash = $derived(color ?? (line ? 'var(--pipe-flow, var(--ink-2, #c3c2b7))' : 'var(--s1, #3987e5)'));
 
 	// Quantize rate into quarter-steps: a continuously varying duration would
 	// restart the CSS animation on every data frame and read as jitter.
@@ -85,7 +89,7 @@
 			style="--period: {period}s"
 			{d}
 			fill="none"
-			stroke={color}
+			stroke={dash}
 			stroke-width="4"
 			stroke-linecap="round"
 			stroke-dasharray="7 9"

@@ -21,6 +21,10 @@
 	"examples": {
 		"in line": {
 			"label": "CKV-101"
+		},
+		"in a riser": {
+			"label": "CKV-101",
+			"flow": "up"
 		}
 	}
 }

@@ -12,12 +12,15 @@
 	import Valve from './Valve.svelte';
 	import Gauge from './Gauge.svelte';
 	import Sparkline from './Sparkline.svelte';
+	import ReadoutRow from './ReadoutRow.svelte';
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import OffPage from './OffPage.svelte';
 	import SetpointGroup from './SetpointGroup.svelte';
 	import Pipe from './Pipe.svelte';
-	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import StatusPill from './StatusPill.svelte';
+	import { sampleTag, tagHistory } from '../taghistory.svelte.js';
+	import { BUILTIN_PORTS, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -25,8 +28,10 @@
 		tags = {},
 		registry = {},
 		onequipmentclick,
+		clickable,
 		write,
 		selected = null,
+		trends = false,
 		minScale = 0,
 		fit = 'width',
 		look
@@ -40,6 +45,13 @@
 		registry?: Record<string, Component<any>>;
 		/** Present = equipment is clickable (open a faceplate, navigate…). */
 		onequipmentclick?: (eq: MimicEquipment) => void;
+		/** Which equipment a click goes to (with `onequipmentclick`): the
+		 *  rest draw as they would with no click at all. Default: all. */
+		clickable?: (eq: MimicEquipment) => boolean;
+		/** A sparkline of the last few minutes in every bound label whose
+		 *  value is a number, unless the label says `trend: false` (a label
+		 *  that says `trend: true` gets one either way). */
+		trends?: boolean;
 		/**
 		 * Writes one tag on the controller (`RealtimeClient.writeTag` is one):
 		 * resolves to null when it landed, else the refusal reason. Present =
@@ -131,11 +143,35 @@
 	// A bound label's live value (MimicLabel.bind), resolved through the same
 	// resolveBindings() path equipment bindings use — one mechanism, "!"
 	// negation and all — and formatted for the readout. '—' until the tag
-	// resolves to a finite number, same as Trend/ScanDiagnostics.
+	// resolves to a finite number, same as Trend/ScanDiagnostics. A STRING
+	// tag (a sequence's step) shows as it is.
 	const labelValue = (l: MimicLabel): string => {
 		const v = resolveBindings({ value: l.bind! }, tags).value;
+		const word = l.values && (typeof v === 'string' || typeof v === 'number') ? l.values[String(v)] : undefined;
+		if (word !== undefined) return word;
+		if (typeof v === 'string') return v || '—';
 		return typeof v === 'number' && isFinite(v) ? v.toFixed(l.decimals ?? 1) : '—';
 	};
+	const labelRaw = (l: MimicLabel): unknown => resolveBindings({ value: l.bind! }, tags).value;
+	/** The bound labels that draw a sparkline: each keeps the last few
+	 * minutes of its tag (taghistory), sampled once a second. */
+	const trended = (l: MimicLabel): boolean => !!l.bind && !l.values && (l.trend ?? trends) && typeof labelRaw(l) === 'number';
+	$effect(() => {
+		const id = setInterval(() => {
+			for (const l of doc.labels ?? []) if (l.bind && (l.trend ?? trends)) sampleTag(l.bind, labelRaw(l));
+		}, 1000);
+		return () => clearInterval(id);
+	});
+
+	/** Each label's sense line (MimicLabel.at): a right-angled run from
+	 * just inside the label to its point, which gets a dot. */
+	const senses = $derived(
+		(doc.labels ?? []).flatMap((l) =>
+			Array.isArray(l.at) && l.at.length === 2
+				? [{ d: pointsToPath(orthogonalPoints([[l.x + 10, l.y + 10], l.at])), x: l.at[0], y: l.at[1] }]
+				: []
+		)
+	);
 
 	const drawLook = $derived(look ?? doc.look ?? 'isa101');
 	/** A project component (one passed in `registry`, not a kit built-in) gets
@@ -153,7 +189,7 @@
 		...(eq.props ?? {}),
 		...resolveBindings(eq.bind, tags),
 		// a SetpointGroup reads the tags its items name
-		...(eq.component === 'SetpointGroup' ? { tags } : {}),
+		...(eq.component === 'SetpointGroup' || (eq.component === 'Tank' && eq.props?.marks) ? { tags } : {}),
 		write: write ?? readOnly
 	});
 	const readOnly = async (): Promise<string | null> => 'This screen is read-only';
@@ -342,11 +378,19 @@
 				{#each tees as t, i (i)}
 					<circle class="tee" cx={t.x} cy={t.y} r={drawLook === 'isa101' ? 5 : 7} fill="var(--pipe-wall, var(--edge, #7a7973))" />
 				{/each}
+				<!-- sense lines: a label joined to the point it reads; the label,
+				     drawn over this layer, hides the line's end under it -->
+				{#each senses as s, i (i)}
+					<g class="sense">
+						<path d={s.d} fill="none" stroke="var(--muted, #898781)" stroke-width="1.5" stroke-dasharray="5 4" />
+						<circle cx={s.x} cy={s.y} r="4" fill="var(--muted, #898781)" />
+					</g>
+				{/each}
 			</svg>
 
 			{#each doc.equipment ?? [] as eq (eq.id)}
 				{@const C = components[eq.component]}
-				{#if onequipmentclick}
+				{#if onequipmentclick && (!clickable || clickable(eq))}
 					<button
 						type="button"
 						class="eq clickable"
@@ -364,20 +408,42 @@
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</button>
 				{:else}
-					<div class="eq" class:behind={eq.behind} style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}" use:regEl={eq.id}>
+					<div class="eq" class:behind={eq.behind} class:passive={!!onequipmentclick} style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}" use:regEl={eq.id}>
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
 					</div>
 				{/if}
 			{/each}
 
 			{#each doc.labels ?? [] as l, i (i)}
-				{#if l.bind}
-					<span class="lbl readout" style="left: {l.x}px; top: {l.y}px"
+				{@const st = l.state ? labelState(l, tags) : null}
+				{@const box = `left: ${l.x}px; top: ${l.y}px${l.width ? `; width: ${l.width}px` : ''}`}
+				{#if l.as === 'row'}
+					<span class="lbl rowlbl" class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px"
+						><ReadoutRow
+							name={l.text}
+							value={!l.bind ? undefined : !l.values && typeof labelRaw(l) === 'number' ? (labelRaw(l) as number) : labelValue(l)}
+							unit={l.unit}
+							decimals={l.decimals ?? 1}
+							history={l.bind && trended(l) ? tagHistory(l.bind) : undefined}
+							min={l.min}
+							max={l.max}
+							state={st}
+							width={l.width}
+						/></span
+					>
+				{:else if l.bind}
+					<span class="lbl readout" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box}
 						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
-						>{#if l.unit}<span>{l.unit}</span>{/if}</span
+						>{#if l.unit}<span>{l.unit}</span>{/if}{#if trended(l)}<span class="spark" aria-hidden="true"
+								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} color="var(--ink-2, #c3c2b7)" compact /></span
+							>{/if}</span
+					>
+				{:else if l.state}
+					<span class="lbl state" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box}
+						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}{#if l.as === 'text'}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
 					>
 				{:else}
-					<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
+					<span class="lbl" class:center={l.align === 'center'} style={box}>{l.text}</span>
 				{/if}
 			{/each}
 		</div>
@@ -461,12 +527,22 @@
 	   on its own and the filter built from it follows. At rest there is no
 	   filter at all; while glowing, or fading (Mimic adds .fading for
 	   FADE_MS), the filter is built from --glow-a, whose colour stays the
-	   glow's blue at every step, so the fade never passes through a dark
+	   glow's colour at every step (blue, the kit's highlight and focus
+	   colour; --select-glow sets it), so the fade never passes through a dark
 	   halo. */
 	@property --glow-a {
 		syntax: '<number>';
 		inherits: false;
 		initial-value: 0;
+	}
+	/* On a screen where some equipment opens a panel, the rest let a click
+	   through to whatever is under them (an agitator drawn over its tank),
+	   all but their own controls. */
+	.eq.passive {
+		pointer-events: none;
+	}
+	.eq.passive :global(:is(button, input, select, textarea, a, label, [role='button'], [tabindex])) {
+		pointer-events: auto;
 	}
 	.eq.clickable {
 		cursor: pointer;
@@ -475,7 +551,7 @@
 	.eq.clickable:is(:hover, :focus-visible, .selected, .fading) {
 		outline: none;
 		filter: brightness(calc(1 + 0.12 * var(--glow-a)))
-			drop-shadow(0 0 calc(4px * var(--glow-a)) rgb(from var(--s1, #3987e5) r g b / calc(0.7 * var(--glow-a))));
+			drop-shadow(0 0 calc(4px * var(--glow-a)) rgb(from var(--select-glow, var(--s1, #3987e5)) r g b / calc(0.7 * var(--glow-a))));
 		transition: --glow-a 0.18s ease;
 	}
 	.eq.clickable:is(.selected, :focus-visible) {
@@ -511,9 +587,10 @@
 		margin-left: -3px;
 		border-radius: 3px;
 	}
-	/* A bound label reads as a readout chip: the static text stays muted like
-	   any label, the live value steps up to ink on a --surface-2 pill. */
+	/* A bound label reads as a readout chip: its tag in --ink-2 (plain and
+	   well past AA on the chip), the live value in ink on a --surface-2 pill. */
 	.lbl.readout {
+		color: var(--ink-2, #c3c2b7);
 		display: inline-flex;
 		align-items: baseline;
 		gap: 0.35em;
@@ -521,6 +598,70 @@
 		background: var(--surface-2, #232321);
 		border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 		border-radius: 6px;
+	}
+	.lbl.readout .spark {
+		display: block;
+		align-self: center;
+		width: 40px;
+		margin-left: 0.2em;
+	}
+	/* A state label: its name in --ink-2, then the state as a status chip. */
+	.lbl.state {
+		color: var(--ink-2, #c3c2b7);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45em;
+		padding: 1px 3px;
+		/* the chip has its own ground: no patch cut out of a tank's liquid */
+		background: none;
+	}
+	.lbl.state .name {
+		background: var(--pipe-bore, var(--bg, transparent));
+		padding: 0 3px;
+		border-radius: 3px;
+	}
+	/* as: text: bare text with a halo of the background colour round
+	   its letters (the stroke painted under the fill), legible over a
+	   liquid, a pipe or a hatch with no patch cut out of the drawing. */
+	.lbl.plain,
+	.lbl.plain .name {
+		background: none;
+		border: 0;
+		padding: 0;
+		margin-left: 0;
+		-webkit-text-stroke: 3px var(--bg, #0d0d0d);
+		paint-order: stroke fill;
+		stroke-linejoin: round;
+	}
+	.lbl.plain {
+		font-size: var(--font-xs);
+	}
+	.lbl.plain .word {
+		color: var(--ink, #e6e6e6);
+		font-weight: 650;
+	}
+	.lbl.plain .word.good {
+		color: var(--good, #0ca30c);
+	}
+	.lbl.plain .word.warning {
+		color: var(--warn, #f5a524);
+	}
+	.lbl.plain .word.serious {
+		color: var(--serious, #f76808);
+	}
+	.lbl.plain .word.critical {
+		color: var(--crit, #e5484d);
+	}
+	/* as: row: the label is a ReadoutRow, which brings its own ground */
+	.lbl.rowlbl {
+		background: none;
+		padding: 0;
+		margin-left: 0;
+	}
+	/* align: center: x is the label's middle */
+	.lbl.center {
+		transform: translateX(-50%);
+		margin-left: 0;
 	}
 	.lbl.readout .num {
 		color: var(--ink, #e6e6e6);

@@ -14,6 +14,7 @@ export { default as Pump } from './components/Pump.svelte';
 export { default as Valve } from './components/Valve.svelte';
 export { default as Pipe } from './components/Pipe.svelte';
 export { default as StatusPill } from './components/StatusPill.svelte';
+export { default as ReadoutRow } from './components/ReadoutRow.svelte';
 export { default as Sparkline } from './components/Sparkline.svelte';
 export { sparklineDomain, sparklineMetrics, sparklineGeometry } from './sparkline.js';
 export type {
@@ -51,6 +52,10 @@ export { default as FlowLink } from './components/FlowLink.svelte';
 // Process mimic: a P&ID-style graphic as data (*.mimic.json) rendered live —
 // the spatial parts of an HMI; screens/routing stay ordinary SvelteKit.
 export { default as Mimic } from './components/Mimic.svelte';
+// The panel a click on a mimic's equipment opens (its `panel`): readings
+// with sparklines, setpoints, commands, beside the drawing.
+export { default as EquipmentPanel } from './components/EquipmentPanel.svelte';
+export { sampleTag, tagHistory, HISTORY_SAMPLES } from './taghistory.svelte.js';
 
 // Coordinate canvas: a fixed, scaled plane of absolutely-placed symbols — the
 // shape every legacy HMI screen has. Bring your own spec and component
@@ -232,13 +237,19 @@ export {
 	MIMIC_LOOKS,
 	PORT_STUB,
 	attachPipeEnds,
-	connectPorts
+	connectPorts,
+	panelFor,
+	labelState
 } from './mimic.js';
 export type {
 	MimicDoc,
 	MimicEquipment,
 	MimicPipe,
 	MimicLabel,
+	MimicPanel,
+	MimicLabelState,
+	MimicPanelReading,
+	MimicPanelSetpoint,
 	MimicUnit,
 	MimicPort,
 	MimicLook,

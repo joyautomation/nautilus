@@ -48,7 +48,7 @@
 	<header class="bar">
 		<div class="title">
 			<b>Lift Station</b>
-			<span>WW-101 duplex sewage lift station, P-101 / P-102 duty/standby</span>
+			<span>Duplex sewage lift station, Pump 1 and Pump 2 sharing duty</span>
 		</div>
 		<nav class="views" aria-label="Views">
 			{#each VIEWS as v (v.id)}
@@ -57,7 +57,7 @@
 		</nav>
 		<div class="status">
 			<AlarmBanner summary={alarms.summary} compact onclick={() => (alarmsOpen = !alarmsOpen)} />
-			<AckButton alarms={alarms.active} ids={['*']} onack={(ids, by) => alarms.ack(ids, by)} />
+			<AckButton alarms={alarms.active} ids={['*']} size="md" onack={(ids, by) => alarms.ack(ids, by)} />
 			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
 			<ThemeSwitch />
 		</div>
@@ -81,6 +81,7 @@
 		gap: 12px 20px;
 		flex-wrap: wrap;
 		padding: 10px 16px;
+		font-size: 1rem;
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
 	}
@@ -95,13 +96,13 @@
 		min-width: 0;
 	}
 	.title b {
-		font-size: 1.05rem;
+		font-size: 1.125rem;
 		font-weight: 680;
 		white-space: nowrap;
 	}
 	.title span {
-		font-size: 0.8rem;
-		color: var(--muted);
+		font-size: 1rem;
+		color: var(--ink-2);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -118,7 +119,7 @@
 	.views a {
 		padding: 4px 12px;
 		border-radius: 6px;
-		font-size: 0.8rem;
+		font-size: 1rem;
 		font-weight: 600;
 		color: var(--ink-2);
 		text-decoration: none;

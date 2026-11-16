@@ -33,7 +33,7 @@
 		padding: 3px 10px;
 		border: 1px solid var(--border);
 		border-radius: 999px;
-		font-size: var(--font-2xs);
+		font-size: 1rem;
 		font-weight: 550;
 		color: var(--ink-2);
 		background: var(--surface-2);

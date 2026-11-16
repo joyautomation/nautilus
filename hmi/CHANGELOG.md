@@ -2,6 +2,91 @@
 
 ## Unreleased
 
+### Added
+
+- **Sense lines and state words on a mimic's labels** (James's review of
+  the hand-built lift station, 11-15). A label's `at` names the point its
+  reading belongs to, and a dashed sense line joins them. A label's
+  `state` shows a state in words as a status chip, the first whose `when`
+  tag is true (`labelState(label, tags)`), so a pump says Running, Stopped
+  or Fault beside its symbol as well as on it. A bound label of a STRING
+  tag shows the text, and `values` gives words for the values a tag takes
+  (a step's name, a state code). A pit's `hatchAt` moves its access hatch
+  off a riser's line.
+- **A tank's pump ranges** (James's round-2 review, 11-15). A `Tank`'s
+  `ranges` draw a pump's start and stop as one bracket from on to off,
+  each end with its value, beside the scale; ranges that overlap stand in
+  columns of their own, so a lead and a lag pump's levels never crowd. An
+  alarm mark is also a dotted line across the vessel at its level.
+- **`ReadoutRow`** (James, 11-16): a reading as a two-cell row, its name
+  in a shaded cell, then the value, unit, sparkline and state in words
+  (`<ReadoutRow name="Level" value={62} unit="%" history={buf}
+  state={{ text: 'Normal' }} />`). Rows of one width stack as a table.
+- **A label's `as`** (James, 11-16): `chip` (default), `text` (bare text
+  with a halo of the background colour, legible over a liquid or a pipe)
+  or `row` (a `ReadoutRow`; it may carry both `bind` and `state`), and its
+  `width`. `align: "center"` makes `x` its middle. The lift station's pumps say On/Off,
+  speed and Lead/Lag this way, stacked and centred over each pump, On
+  and Off in plain ink.
+- **A tank's range brackets** carry their name above the bracket and
+  "On 60" / "Off 30" at its ends, and stand as close to the scale as they
+  can:
+  one only clears the brackets it overlaps and those of their lines level
+  with it, not the widest line on the tank.
+
+### Changed (11-16)
+
+- **The bar at 16 px.** naut's default bar (title, description, screens),
+  `StatusPill`, the compact `AlarmBanner` and a `md` `Button` are 16 px
+  (`sm` 14 px); the bar's Ack all is `md`.
+- **The alarm banner says what it counts**: "2 unacked" in the bar too,
+  and "No active alarms" (no bare 0, no "clear") when there are none.
+
+### Changed
+
+- **Readout and state labels' names in `--ink-2`**, not `--muted`: plain
+  text, well past AA on the readout's chip.
+
+- **Colour only for state and alarms.** A `Tank`'s liquid is a neutral
+  grey (a project can still set `--fluid`); its new `alarm` turns it the
+  alarm colour while a condition holds (too hot, out of spec). An alarm
+  mark is grey with a hollow arrow until the level reaches it (`alarm`:
+  `true`, `"high"` or `"low"`). Sparklines on a mimic's readouts and in
+  `EquipmentPanel` draw in ink grey, not the accent blue.
+- **Text as the web asks of it:** `naut check` flags text drawn under 12 px
+  (was 9), on the page and in every panel; `EquipmentPanel` reads at 16 px
+  and is 360 px wide. The selection glow is blue again: blue is the kit's
+  highlight and focus colour.
+- **Status chips read at arm's length:** `StatusPill` is 13 px, not 12. The
+  light theme's `--s1` is a step darker (#2768c0), so white text on it (a
+  selected tab, an Auto button) passes 4.5:1.
+
+- **Level marks on a `Tank`.** `marks` puts an arrow and its value at each
+  level that matters (a pump's start and stop from a setpoint tag, a high
+  alarm at a fixed value) against the vessel, on its left or, with
+  `marksSide: "right"`, past its scale, as the lift station's LevelMarks
+  does beside its wet well. They draw outside the tank's box, so the
+  vessel keeps its size and its place on its pipes; labels too close are
+  nudged apart. `<Mimic>` hands a tank with marks the live tags, and
+  `naut check` checks each mark's tag.
+
+- **Panels: what a click on a mimic's equipment opens.** A piece of
+  equipment's `panel` lists its live readings, setpoints, commands and
+  switches (or names another piece whose panel it opens), and the new
+  `EquipmentPanel` shows it beside the drawing, as the lift station's
+  hand-built panel does. `panelFor(doc, id)` resolves one. `<Mimic>`
+  takes `clickable` (which equipment a click goes to; the rest let a
+  click through to what's under them, all but their own controls) and
+  `trends` (a sparkline of its last few minutes in every bound label;
+  `"trend"`, `"min"` and `"max"` on a label). A doc's `description` is a
+  line on what it shows. `sampleTag` / `tagHistory` keep the series, once
+  a second per tag, across page changes.
+
+- **A setpoint field with no `decimals` shows its value as it is** (up to
+  four places): a gain of 4.25 reads 4.25 and 0.07 reads 0.07, where they
+  were rounded to one place (screen evals, arm N: Kp, Ki and Kd in a panel
+  that gave no `decimals` read 4.3, 0.1 and 0.3).
+
 ### Changed
 
 - **Pipes on an ISA-101 screen are single lines.** `<Mimic>` draws a pipe

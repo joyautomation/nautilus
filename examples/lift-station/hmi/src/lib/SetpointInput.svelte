@@ -76,7 +76,7 @@
 		color: var(--ink);
 		font: inherit;
 		font-family: var(--mono);
-		font-size: 0.82rem;
+		font-size: 1rem;
 		font-variant-numeric: tabular-nums;
 		text-align: right;
 	}
@@ -92,7 +92,7 @@
 	}
 	.u {
 		min-width: 1.4em;
-		font-size: 0.75rem;
+		font-size: 0.8125rem;
 		color: var(--muted);
 	}
 	button {
@@ -102,7 +102,7 @@
 		background: var(--s1);
 		color: var(--bg);
 		font: inherit;
-		font-size: 0.72rem;
+		font-size: 0.8125rem;
 		font-weight: 650;
 		cursor: pointer;
 	}

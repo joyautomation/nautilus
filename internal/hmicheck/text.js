@@ -9,7 +9,9 @@
 		for (let e = el; e && e.nodeType === 1; e = e.parentElement) o *= +getComputedStyle(e).opacity;
 		return o;
 	};
-	const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+	// legible.go's panel pass sets a root: only the text in that box
+	const root = (window.__nxTextRoot && document.querySelector(window.__nxTextRoot)) || document.body;
+	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 	let n;
 	while ((n = walker.nextNode()) && out.length < 1000) {
 		const t = n.textContent.replace(/\s+/g, ' ').trim();
@@ -46,7 +48,7 @@
 	}
 	// what's in the fields: drawn text too, for what overlaps (not for
 	// contrast: a field's text sits on the field, not on what's round it)
-	for (const el of document.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea')) {
+	for (const el of root.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea')) {
 		if (out.length >= 1200) break;
 		const cs = getComputedStyle(el);
 		if (cs.visibility === 'hidden' || cs.display === 'none') continue;

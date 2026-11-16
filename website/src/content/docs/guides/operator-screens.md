@@ -48,7 +48,35 @@ The same document renders in a SvelteKit HMI through the
 - **`pipes`**: a polyline of `points`, or anchored at either end to an
   equipment's named port (`from`, `to`); `routing: "orthogonal"` draws
   right angles. Bind `flowing` (and `rate`) to animate the flow.
-- **`labels`**: static text, or with `bind` a live readout.
+- **`labels`**: static text, or with `bind` a live readout. naut's own
+  pages draw a readout with a trend of its last few minutes after the
+  number (`<Mimic trends>` in an app); `"trend": false` leaves it off,
+  `"min"` and `"max"` fix its scale. A STRING tag (a sequence's step)
+  shows as it is; `values` gives words for the values it takes
+  (`{"PostRun": "Post-run delay", "0": "Out of service"}`), a step's name
+  or a state code. A reading sits by what it measures: on its line
+  or vessel, or just under the equipment's name. `"at": [x, y]` is the
+  point the reading belongs to: a dashed sense line joins the label to
+  it, for a reading that can't sit by what it measures. With `state` instead of `bind`, the label
+  shows a state in words as a status chip: the first whose `when` tag is
+  true, else the one with no `when`, which comes last:
+  `"state": [{"when": "P101_Fault", "text": "Fault", "kind": "critical"},
+  {"when": "P101_Running", "text": "Running", "kind": "good"}, {"text":
+  "Stopped"}]` (`kind`: `off`, the default, `good`, `warning`, `serious`,
+  `critical`). Equipment an operator watches run says its state this way
+  beside its symbol, as well as on it. `"as"` picks how a label is drawn:
+  `chip` (the default), `text` (bare text outlined in the background
+  colour, legible over a liquid or a pipe) or `row` (the `ReadoutRow`: a
+  name cell, then the value, its trend and its state, so a row can carry
+  both `bind` and `state`). Rows stacked under a vessel take one `width`
+  and line up as a table. `"align": "center"` makes `x` the label's middle:
+  a pump's On/Off, speed and Lead/Lag stack over it as `text`, centred.
+  Name things as an operator says them (Pump 1, Level, High Switch); tag
+  numbers go in the panel a click opens.
+- **`panel`** on a piece of equipment: what a click on it opens (see
+  [Panels](#panels-what-a-click-opens)).
+- **`description`**: a line on what the screen shows; naut's bar puts the
+  first screen's beside the project's name.
 - **`look`**: `isa101` (the default: flat grey, colour only for a state or
   an abnormal condition) or `realistic`.
 
@@ -56,7 +84,7 @@ The same document renders in a SvelteKit HMI through the
 
 | Component | Props to bind | Ports |
 |---|---|---|
-| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`) | `top`, `left`, `right`, `bottom` |
+| `Tank` | `levelPct` (`shape`: `vessel`, `open` or `pit`; `hatchAt`: where a pit's access hatch sits across its slab, 0 to 1; `marks`: the levels that matter, `[{"label": "Lead on", "tag": "LeadOnSP"}, {"label": "High alarm", "value": 90, "alarm": true}]`, an arrow and its value at each on the vessel's left, or past its scale with `marksSide: "right"`; an `alarm` mark, `true`, `"high"` or `"low"`, is also a dotted line across the vessel and stays grey with a hollow arrow until the level reaches it; `ranges`: a pump's start and stop as one bracket beside the scale (right-hand marks stand beyond them), `[{"label": "Lead", "on": "LeadOnSP", "off": 30}]`, a number in % or a tag at each end, overlapping ranges in columns of their own; `alarm`: a condition that turns the liquid, otherwise a neutral grey, the alarm colour while it holds) | `top`, `left`, `right`, `bottom` |
 | `Pump` | `running`, `speedPct` | `in`, `out` |
 | `Valve` | `openPct` | `in`, `out` |
 | `Heater` | `powerPct` | |
@@ -126,6 +154,51 @@ on and a controller is running; otherwise, and when the controller refuses
 it (a forced tag, say), the control shows why beside itself. In the editor,
 a click on a control operates it while a controller is connected; with
 live values off, the whole piece is the editor's to select and drag again.
+
+## Panels: what a click opens
+
+The drawing shows the plant's state and values; an operator changes them
+in a panel. A piece of equipment's `panel` lists its live readings, its
+setpoints, its commands and its switches, and a click on it opens them in
+a panel beside the drawing, which moves over to make room. The plant
+keeps running behind it, and × or Escape closes it.
+
+```json
+{ "id": "P501", "component": "Pump", "x": 900, "y": 640,
+  "bind": { "running": "P501_Running" },
+  "panel": {
+    "title": "P-501 backwash pump",
+    "readings": [
+      { "tag": "P501_Running", "label": "State", "on": "Running", "off": "Stopped" },
+      { "tag": "FIT501_Flow", "label": "Flow", "unit": "gpm", "decimals": 0 }
+    ],
+    "setpoints": [{ "tag": "BW_FlowSP", "label": "Backwash flow", "unit": "gpm", "decimals": 0 }],
+    "commands": [
+      { "tag": "P501_Start", "label": "Start", "kind": "start" },
+      { "tag": "P501_Stop", "label": "Stop", "kind": "stop" }
+    ],
+    "toggles": [{ "tag": "P501_OOS", "label": "Out of service" }],
+    "links": ["FIT501"]
+  } }
+```
+
+- **`readings`**: a number shows with its `unit` and a trend of its last
+  few minutes (`min`, `max` fix the trend's scale); a true/false shows the
+  words `on` and `off` give, as an alarm with `"alarm": true`.
+- **`setpoints`**: fields that write their tags, as `SetpointGroup`'s items.
+- **`commands`**: momentary buttons, as `CommandButton` (`held` names the
+  tag that reads back as pressed).
+- **`toggles`**: switches that hold a bit on or off, as `WriteToggle`.
+- **`links`**: other equipment whose panels this one opens.
+- A string opens another's panel: `"panel": "P501"` on the pump's flow
+  meter.
+
+Equipment with no panel isn't clickable, and a click on it reaches what's
+under it, except on its own controls. `naut check` checks every tag a
+panel reads or writes and every id it names. In an app,
+`<EquipmentPanel {doc} {tags} {write} bind:selected />` beside
+`<Mimic ... onequipmentclick={(eq) => (selected = eq.id)} clickable={(eq) => !!panelFor(doc, eq.id)} {selected} />`
+does the same.
 
 ## Your own components
 
@@ -283,8 +356,12 @@ serves them at `/`, with the engineering dashboard moved to `/_nautilus/`:
 - **With no `server.hmi`**, a project with `*.mimic.json` files gets a page
   for each: the first at `/`, the others by file name
   (`screens/pumps.mimic.json` is `/pumps`), under a bar with the project's
-  name, the pages, the connection and a theme switch. The pages are live
-  and their controls write, as in the editor. Each page shows its whole
+  name and the first screen's `description`, the pages and Diagnostics
+  (the controller's scan timing and field drivers), the active alarms
+  (the banner opens `/alarms`, to acknowledge and shelve them) and Ack
+  all, the connection and a theme switch. The pages are live and their
+  controls write, as in the editor; a click on equipment with a `panel`
+  opens it. Each page shows its whole
   drawing at once, fitted to the window's width and height and centred,
   so draw the canvas for the window it's seen in: about 1880×1000 fills a
   1920×1080 screen under the bar. A taller canvas is drawn smaller, not

@@ -13,15 +13,16 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed text.js
 var textJS string
 
 // MinTextPx is the size under which text drawn on a desktop window is too
-// small to read at an operator's distance: the kit's smallest (12 px, all
-// caps labels only) drawn at 75%.
-const MinTextPx = 9.0
+// small to read: the web's floor for small labels (units, captions, chip
+// text), the kit's smallest. Values and body text want 16 px.
+const MinTextPx = 12.0
 
 // textItem is one piece of text the page shows (text.js).
 type textItem struct {
@@ -80,6 +81,67 @@ func (b *browser) legibility(ctx context.Context, s string, v view, reload func(
 	}
 	if line := first.overlaps(); line != "" {
 		out = append(out, line)
+	}
+	return append(out, b.panelLegibility(ctx, s, v)...)
+}
+
+// PanelSelector finds an open equipment panel: the kit's EquipmentPanel,
+// or a project's own that marks itself data-nx-panel.
+const PanelSelector = "aside.nx-panel, [data-nx-panel]"
+
+// panelsLooked is how many equipment a page's panel pass opens at most.
+const panelsLooked = 12
+
+// panelLegibility opens the panel of each piece of equipment a click opens
+// (each panel once, by its title) and looks at its text as legibility looks
+// at the page's: contrast and size, in the theme the page is in. A panel's
+// readings and fault chips are read by the same tired operator.
+func (b *browser) panelLegibility(ctx context.Context, s string, v view) []string {
+	var n int
+	if err := b.eval(ctx, s, "document.querySelectorAll('.eq.clickable').length", &n); err != nil || n == 0 {
+		return nil
+	}
+	wait := func(d time.Duration) bool {
+		select {
+		case <-time.After(d):
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	close := func() {
+		_ = b.eval(ctx, s, "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))", nil)
+		wait(350 * time.Millisecond)
+	}
+	var out []string
+	seen := map[string]bool{}
+	defer func() { _ = b.eval(ctx, s, "delete window.__nxTextRoot", nil) }()
+	for i := 0; i < n && i < panelsLooked*3 && len(seen) < panelsLooked; i++ {
+		if err := b.eval(ctx, s, fmt.Sprintf("document.querySelectorAll('.eq.clickable')[%d].click()", i), nil); err != nil || !wait(450*time.Millisecond) {
+			break
+		}
+		var title string
+		_ = b.eval(ctx, s, fmt.Sprintf("(() => { const p = document.querySelector(%q); return p ? (p.getAttribute('aria-label') || p.querySelector('h2,h3')?.textContent || 'panel').trim() : '' })()", PanelSelector), &title)
+		if title == "" || seen[title] {
+			close()
+			continue
+		}
+		seen[title] = true
+		if err := b.eval(ctx, s, fmt.Sprintf("window.__nxTextRoot = %q", PanelSelector), nil); err == nil {
+			if ts, err := b.textAndShot(ctx, s); err == nil {
+				for _, line := range []string{ts.contrast(), ts.small(v)} {
+					if line != "" {
+						out = append(out, fmt.Sprintf("in %s's panel, %s", title, line))
+					}
+				}
+			}
+			_ = b.eval(ctx, s, "delete window.__nxTextRoot", nil)
+		}
+		close()
+	}
+	// the same fault in many panels (one component's) is said for three
+	if len(out) > 3 {
+		out = append(out[:3], fmt.Sprintf("and %d more like these in other panels", len(out)-3))
 	}
 	return out
 }
@@ -355,5 +417,5 @@ func (ts *textShot) small(v view) string {
 		seen[it.T] = true
 		ex = append(ex, fmt.Sprintf("%q", it.T))
 	}
-	return fmt.Sprintf("%d of %d texts are drawn under %.0f px in a %d×%d window (the smallest %.1f px): %s: write text at 12 px or more, and draw the canvas for the window so it isn't scaled down", len(smalls), texts, MinTextPx, v.width, v.height, least, strings.Join(ex, ", "))
+	return fmt.Sprintf("%d of %d texts are drawn under %.0f px in a %d×%d window (the smallest %.1f px): %s: write values and body text at 16 px and small labels at 12 px or more, and draw the canvas for the window so it isn't scaled down", len(smalls), texts, MinTextPx, v.width, v.height, least, strings.Join(ex, ", "))
 }

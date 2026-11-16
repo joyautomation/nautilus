@@ -57,10 +57,14 @@
 {#snippet content()}
 	<span class="dot" aria-hidden="true"></span>
 
-	<span class="unacked">
-		<b>{summary?.unacked}</b>
-		{#if !compact}unack{/if}
-	</span>
+	<!-- every count says what it counts: "2 unacked", and with nothing
+	     active and nothing to acknowledge, just "No active alarms" -->
+	{#if byPriority.length || summary?.unacked}
+		<span class="unacked">
+			<b>{summary?.unacked}</b>
+			unacked
+		</span>
+	{/if}
 
 	<span class="counts">
 		{#each byPriority as { p, n } (p)}
@@ -69,7 +73,7 @@
 			</span>
 		{/each}
 		{#if !byPriority.length}
-			<span class="count clear">{compact ? 'clear' : 'no active alarms'}</span>
+			<span class="count clear">No active alarms</span>
 		{/if}
 	</span>
 
@@ -194,7 +198,7 @@
 	.count.clear {
 		font-family: inherit;
 		font-weight: 500;
-		color: var(--muted);
+		color: var(--ink-2);
 	}
 	.newest {
 		display: flex;
@@ -238,10 +242,10 @@
 	}
 	.banner.compact .unacked {
 		flex: none;
-		font-size: var(--font-xs);
+		font-size: 1rem;
 	}
 	.banner.compact .unacked b {
-		font-size: var(--font-sm);
+		font-size: 1rem;
 	}
 	.banner.compact .counts {
 		flex: 0 1 auto;
@@ -252,6 +256,7 @@
 		display: block;
 	}
 	.banner.compact .count {
+		font-size: 1rem;
 		margin-right: var(--space-2);
 	}
 	.banner.compact .count:last-child {

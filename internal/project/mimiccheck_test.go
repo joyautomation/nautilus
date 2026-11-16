@@ -222,3 +222,153 @@ tags:
 		t.Errorf("%d warnings, want 3:\n%s", len(warns), all)
 	}
 }
+
+func TestCheckMimicsPanels(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: FlowSP, type: REAL, role: setpoint }
+  - { name: Start, type: BOOL, role: setpoint }
+  - { name: Running, type: BOOL, role: state }
+  - { name: Flow, type: REAL, role: input }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"equipment":[
+			{"id":"P1","component":"Pump","x":0,"y":0,"panel":{
+				"readings":[{"tag":"Running"},{"tag":"Flw"}],
+				"setpoints":[{"tag":"FlowSP"},{"tag":"Flow"}],
+				"commands":[{"tag":"Start"},{"tag":"Strat","label":"Go","held":"Runing"}],
+				"toggles":[{}],
+				"links":["V9"]}},
+			{"id":"FT1","component":"Gauge","x":0,"y":0,"panel":"P1"},
+			{"id":"V1","component":"Valve","x":0,"y":0,"panel":"P9"},
+			{"id":"V2","component":"Valve","x":0,"y":0,"panel":{}}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"equipment P1's panel's reading 2 binds Flw, which the project doesn't declare",
+		"equipment P1's panel's command 1 has no label",
+		"equipment P1's panel's command 2 writes Strat, which the project doesn't declare",
+		"equipment P1's panel's command 2's held binds Runing",
+		"equipment P1's panel's toggle 1 has no tag",
+		"equipment P1's panel links to V9, which isn't on the screen",
+		"equipment V1's panel opens P9's, which isn't on the screen",
+		"equipment V2's panel is empty",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 8 {
+		t.Errorf("%d errors, want 8:\n%s", len(errs), all)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "P1's panel's setpoint 2 writes Flow, an input") {
+		t.Errorf("warnings = %q", warns)
+	}
+}
+
+func TestCheckMimicsTankMarks(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: LeadOnSP, type: REAL, role: setpoint }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"equipment":[
+			{"id":"T1","component":"Tank","x":0,"y":0,"props":{"marks":[
+				{"label":"Lead on","tag":"LeadOnSP"},{"label":"High","value":90,"alarm":true},
+				{"label":"Lag on","tag":"LagOnSp"},{"label":"Off"},{"value":10}],
+				"ranges":[{"label":"Lead","on":"LeadOnSP","off":30},{"label":"Lag","on":"LagOn"},{"on":80,"off":55}]}}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"equipment T1's mark 3 binds LagOnSp, which the project doesn't declare",
+		"equipment T1's mark 4 has no tag and no value",
+		"equipment T1's mark 5 has no label",
+		"equipment T1's range 2 (on) binds LagOn, which the project doesn't declare",
+		"equipment T1's range 2 has no off level",
+		"equipment T1's range 3 has no label",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 6 || len(warns) != 0 {
+		t.Errorf("errors %q, warnings %q", errs, warns)
+	}
+}
+
+// A label's sense line point and its states are checked; a key a label
+// doesn't have is said once.
+func TestCheckMimicsLabelStates(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: P1_Running, type: BOOL, role: state }
+  - { name: P1_Fault, type: BOOL, role: state }
+  - { name: FIT1, type: REAL, role: state }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"canvas":{"width":1000,"height":600},"equipment":[
+			{"id":"T1","component":"Tank","x":0,"y":0,"props":{"alarm":true,"marks":[{"label":"High","value":90,"alarm":"high"},{"label":"Low","value":5,"alarm":"under"}]}}],
+		"labels":[
+			{"text":"P-101","x":10,"y":10,"state":[{"when":"P1_Fault","text":"Fault","kind":"critical"},{"when":"P1_Running","text":"Running","kind":"good"},{"text":"Stopped"}]},
+			{"text":"P-102","x":10,"y":40,"state":[{"text":"Stopped"},{"when":"P2_Running","text":"Running","kind":"green"}]},
+			{"text":"FIT-101","x":10,"y":70,"bind":"FIT1","unit":"gpm","at":[400,300]},
+			{"text":"FIT-102","x":10,"y":100,"bind":"FIT1","at":[1400,300],"colour":"red"},
+			{"text":"FIT-103","x":10,"y":130,"bind":"FIT1","at":[1],"colour":"red"},
+			{"text":"Both","x":10,"y":160,"bind":"FIT1","state":[{"text":"x"}]},
+			{"text":"Mid","x":10,"y":190,"bind":"FIT1","as":"plain","align":"centre"},
+			{"text":"Ok","x":10,"y":220,"bind":"FIT1","as":"text","align":"center"},
+			{"text":"Row","x":10,"y":250,"bind":"FIT1","as":"row","width":200,"state":[{"text":"Normal"}]}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		`equipment T1's mark 2 has alarm "under"; it is true, "high" or "low"`,
+		"label P-102's state 1 has no when, so it always shows and the states after it never do; put it last",
+		"label P-102's state 2 binds P2_Running, which the project doesn't declare",
+		`label P-102's state 2's kind is "green"`,
+		"label FIT-102's at [1400, 300] is off the 1000x600 canvas",
+		"label FIT-103's at is [1]; give the point it measures as [x, y]",
+		"label Both has both bind and state",
+		`label Mid's align is "centre"; it is left (x is its left edge) or center (x is its middle)`,
+		`label Mid's as is "plain"`,
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 9 {
+		t.Errorf("%d errors, want 9:\n%s", len(errs), all)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], `label FIT-102 has "colour", which a label doesn't have`) {
+		t.Errorf("warnings %q", warns)
+	}
+}

@@ -23,7 +23,7 @@
 		border-radius: 999px;
 		background: var(--surface-2, #232321);
 		border: 1px solid var(--axis, #383835);
-		font-size: 11px;
+		font-size: 13px;
 		font-weight: 650;
 		letter-spacing: 0.02em;
 		white-space: nowrap;

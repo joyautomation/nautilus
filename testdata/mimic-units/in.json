@@ -23,7 +23,7 @@
         { "id": "F{n}_inf", "points": [[200, 50]], "to": { "equip": "F{n}_INF", "port": "in" }, "bind": { "flowing": "Disp_F{n}_Inf" } },
         { "id": "F{n}_down", "from": { "equip": "F{n}_INF", "port": "out" }, "to": { "equip": "F{n}", "port": "inf" } }
       ],
-      "labels": [{ "text": "F-{n} level", "x": 110, "y": 260, "bind": "F{n}_Level", "unit": "ft" }]
+      "labels": [{ "text": "F-{n} level", "x": 110, "y": 260, "bind": "F{n}_Level", "unit": "ft", "at": [150, 320] }]
     },
     {
       "as": "p",

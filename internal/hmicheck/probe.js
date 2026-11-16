@@ -80,6 +80,9 @@
 	};
 	const clipped = (el, svg) => {
 		if (el.closest('defs, clipPath, mask, pattern, symbol, marker')) return true;
+		// the kit's own annotations that stand beside a drawing by design (a
+		// tank's level marks and pump ranges)
+		if (el.closest('[data-nx-beside]')) return true;
 		for (let g = el; g && g !== svg; g = g.parentElement) {
 			if (g.hasAttribute('clip-path') || g.hasAttribute('mask')) return true;
 			const cs = getComputedStyle(g);
