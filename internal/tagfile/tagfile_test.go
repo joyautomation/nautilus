@@ -130,31 +130,60 @@ func TestRenderHeader(t *testing.T) {
 	}
 }
 
-// An array type's brackets open a flow sequence inside the tag's flow
-// mapping: left bare, the whole file fails to parse (`naut logix import` of
-// any export with an array tag produced a project `naut run` refused). The
-// output must read back as YAML, with the type intact; a plain type name
-// stays bare.
-func TestRenderArrayTypeParses(t *testing.T) {
-	raw, err := Render(nil, []Tag{
+// Names, roles and types come straight from a generator's source (a
+// spreadsheet's Name column, an L5X type), so any of them can hold what a
+// bare flow-mapping scalar cannot: an array type's brackets (`naut logix
+// import` of any export with an array tag produced a project `naut run`
+// refused), a comma, a colon, or `null`/`true`, which decode as something
+// other than the text. Descriptions can hold CR, tab and other control
+// characters. Every one must read back exactly; a plain identifier stays
+// bare so regenerated files diff as before.
+func TestRenderReadsBack(t *testing.T) {
+	in := []Tag{
 		{Name: "Trend", Role: "input", Type: "ARRAY [0..3] OF REAL"},
 		{Name: "Grid", Role: "input", Type: "ARRAY [0..1, 0..2] OF DINT"},
 		{Name: "P101", Role: "input", Type: "Analog_Input"},
-	})
+		{Name: "Flow, Total", Role: "input"},
+		{Name: "Pump 1: Run", Role: "output"},
+		{Name: "[spare]", Role: "input"},
+		{Name: "NullType", Role: "input", Type: "NULL"},
+		{Name: "true", Role: "state"},
+		{Name: "Crlf", Role: "input", Desc: "line one\r\nline two\tend\x01"},
+	}
+	raw, err := Render(nil, in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []map[string]any
+	var got []struct {
+		Name string `yaml:"name"`
+		Role string `yaml:"role"`
+		Type string `yaml:"type"`
+		Desc string `yaml:"desc"`
+	}
 	if err := yaml.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("output does not parse: %v\n%s", err, raw)
 	}
-	want := map[string]string{"Trend": "ARRAY [0..3] OF REAL", "Grid": "ARRAY [0..1, 0..2] OF DINT", "P101": "Analog_Input"}
+	byName := map[string]Tag{}
 	for _, g := range got {
-		if g["type"] != want[g["name"].(string)] {
-			t.Errorf("%v: type %q, want %q", g["name"], g["type"], want[g["name"].(string)])
+		byName[g.Name] = Tag{Name: g.Name, Role: g.Role, Type: g.Type, Desc: g.Desc}
+	}
+	if len(got) != len(in) {
+		t.Errorf("read back %d tags, wrote %d:\n%s", len(got), len(in), raw)
+	}
+	for _, w := range in {
+		g, ok := byName[w.Name]
+		if !ok {
+			t.Errorf("tag %q did not read back:\n%s", w.Name, raw)
+			continue
+		}
+		if g != w {
+			t.Errorf("tag %q read back as %+v, wrote %+v", w.Name, g, w)
 		}
 	}
-	if !strings.Contains(string(raw), "type: Analog_Input }") {
-		t.Errorf("a plain type name was quoted:\n%s", raw)
+	out := string(raw)
+	for _, bare := range []string{"- { name: P101, role: input, type: Analog_Input }", "- { name: Trend, role: input, type: \"ARRAY [0..3] OF REAL\" }"} {
+		if !strings.Contains(out, bare+"\n") {
+			t.Errorf("want the line %q:\n%s", bare, out)
+		}
 	}
 }

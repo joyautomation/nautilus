@@ -206,13 +206,14 @@ func TestImportTypesEveryControllerTag(t *testing.T) {
 	if strings.Contains(tags, "Delay") {
 		t.Errorf("the program's timer is also a project tag:\n%s", tags)
 	}
-	// And the project reads back: an array type left bare made the whole
-	// tag file unparseable, so `naut run` refused every import with one.
+	// And the project loads as `naut run` loads it (project.Load: manifest,
+	// tag files, programs): an array type left bare made the whole tag file
+	// unparseable, so `naut run` refused every import with one.
 	fsys := fstest.MapFS{}
 	for name, raw := range p.Files {
 		fsys[name] = &fstest.MapFile{Data: raw}
 	}
-	if _, err := project.ReadManifest(fsys, ""); err != nil {
+	if _, err := project.Load(fsys, ""); err != nil {
 		t.Errorf("the imported project does not load: %v", err)
 	}
 	var notes []string
