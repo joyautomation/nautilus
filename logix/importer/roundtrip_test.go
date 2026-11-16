@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/lang/l5x"
 	"github.com/joyautomation/nautilus/logix/writer"
 )
@@ -191,7 +193,7 @@ func TestImportTypesEveryControllerTag(t *testing.T) {
 	for _, want := range []string{
 		"- { name: Run, role: input, type: BOOL }",
 		"- { name: Count, role: input, type: DINT }",
-		"- { name: Hist, role: input, type: ARRAY [0..9] OF INT }",
+		"- { name: Hist, role: input, type: \"ARRAY [0..9] OF INT\" }",
 		"- { name: Grid, role: input }",
 		"- { name: Msg, role: input }",
 		"- { name: Spare, role: input }",
@@ -203,6 +205,16 @@ func TestImportTypesEveryControllerTag(t *testing.T) {
 	}
 	if strings.Contains(tags, "Delay") {
 		t.Errorf("the program's timer is also a project tag:\n%s", tags)
+	}
+	// And the project loads as `naut run` loads it (project.Load: manifest,
+	// tag files, programs): an array type left bare made the whole tag file
+	// unparseable, so `naut run` refused every import with one.
+	fsys := fstest.MapFS{}
+	for name, raw := range p.Files {
+		fsys[name] = &fstest.MapFile{Data: raw}
+	}
+	if _, err := project.Load(fsys, ""); err != nil {
+		t.Errorf("the imported project does not load: %v", err)
 	}
 	var notes []string
 	for _, n := range p.Notes {

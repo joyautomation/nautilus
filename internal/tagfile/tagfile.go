@@ -65,9 +65,9 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 		}
 		seen[t.Name] = true
 
-		fmt.Fprintf(&b, "- { name: %s, role: %s", t.Name, t.Role)
+		fmt.Fprintf(&b, "- { name: %s, role: %s", scalarText(t.Name), scalarText(t.Role))
 		if t.Type != "" {
-			fmt.Fprintf(&b, ", type: %s", t.Type)
+			fmt.Fprintf(&b, ", type: %s", scalarText(t.Type))
 		}
 		if t.Init != nil {
 			fmt.Fprintf(&b, ", init: %s", renderInit(t.Init))
@@ -133,10 +133,60 @@ func scalar(v any) string {
 	return quote(fmt.Sprintf("%v", v))
 }
 
+// scalarText renders a name, role or type: bare when it is a plain
+// identifier YAML reads back as that same string (Pump1, BOOL,
+// Analog_Input), quoted otherwise. Generators pass these through from
+// their source (a spreadsheet's Name column, an L5X type), so a bare
+// value can be anything: an array type's brackets open a flow sequence
+// inside the tag's flow mapping (`type: ARRAY [0..3] OF REAL` made the
+// whole file unparseable), a comma ends the field early, and `null`,
+// `true` or `false` decode as something other than the text.
+func scalarText(s string) string {
+	if s == "" {
+		return quote(s)
+	}
+	for i, r := range s {
+		ok := r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9'
+		if !ok {
+			return quote(s)
+		}
+	}
+	switch strings.ToLower(s) {
+	case "null", "true", "false":
+		return quote(s)
+	}
+	return s
+}
+
 // quote emits a double-quoted YAML scalar. Flow mappings make bare strings
 // ambiguous the moment they contain a comma or a brace, and units are full
-// of neither-quite-safe characters ("°C", "%", "L/s").
+// of neither-quite-safe characters ("°C", "%", "L/s"). Control characters
+// are escaped: an L5X description ends lines in CRLF.
 func quote(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
-	return `"` + r.Replace(s) + `"`
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			// Any other control character is a parse error, or a folded
+			// line, inside a double-quoted scalar: escape it.
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
