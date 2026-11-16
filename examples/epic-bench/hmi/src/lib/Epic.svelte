@@ -35,9 +35,9 @@
 		};
 	};
 	/** What the camera keeps in frame in a wide or square window: the whole stand. */
-	export const BOUNDS: Box3[] = [box(PLATE.x0, PLATE.x1, PLATE.y0, PLATE.y1, PLATE.z0, PLATE.z1), box(0, 202, -37, 150, 0, 142)];
+	export const BOUNDS: Box3[] = [box(PLATE.x0, PLATE.x1, PLATE.y0, PLATE.y1, PLATE.z0, PLATE.z1), box(0, 202, -25, 165, 0, 142)];
 	/** And in a tall one: the processor, the modules and their tags. */
-	export const BOUNDS_CORE: Box3[] = [box(0, 202, -37, 150, 60, 142)];
+	export const BOUNDS_CORE: Box3[] = [box(0, 202, -25, 165, 60, 142)];
 
 	export interface Channel {
 		tag: string;
@@ -86,7 +86,7 @@
 	import { T } from '@threlte/core';
 	import { RoundedBoxGeometry } from '@threlte/extras';
 	import { getContext, onMount } from 'svelte';
-	import { AdditiveBlending, CanvasTexture, CatmullRomCurve3, ExtrudeGeometry, Mesh, MeshStandardMaterial, Shape, TubeGeometry, Vector3, type BufferGeometry } from 'three';
+	import { AdditiveBlending, CanvasTexture, CatmullRomCurve3, Mesh, MeshStandardMaterial, TubeGeometry, Vector3, type BufferGeometry } from 'three';
 	import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 	import { SCENE, type SceneContext } from '@joyautomation/nautilus-hmi-3d';
 	import Led from './Led.svelte';
@@ -116,9 +116,10 @@
 
 	// The bodies. Each file is one mesh in this component's own frame, in
 	// metres: x from the chassis's left edge, y up from its floor, z out from
-	// its back. module.glb is the module in slot 0; the other three are the
-	// same geometry moved along by the slot pitch.
-	const PARTS = ['chassis', 'processor', 'power-supply', 'module'] as const;
+	// its back. module.glb is the module in slot 0, and module-light.glb the
+	// light pipe along its cover's wave; the other three slots are the same
+	// geometry moved along by the slot pitch.
+	const PARTS = ['chassis', 'processor', 'power-supply', 'module', 'module-light'] as const;
 	let bodies = $state<Partial<Record<(typeof PARTS)[number], BufferGeometry>>>({});
 	onMount(() => {
 		const loader = new GLTFLoader();
@@ -135,11 +136,11 @@
 
 	// Where our own parts sit on those bodies, mm, read off the models.
 	const PR1 = { x0: 0.8, w: 87.5, top: 127.8, front: 135.9 };
-	const MOD = { x0: 90, pitch: 21.35, w: 19.6, top: 118, head: 141.8, field: 138.5, reach: -36.7 };
+	const MOD = { x0: 90, pitch: 21.35, w: 19.6, top: 133, head: 141.8, field: 138.5, reach: -21.8 };
 	const left = (m: Module) => MOD.x0 + m.slot * MOD.pitch;
 	const cx = (m: Module) => left(m) + MOD.w / 2;
 	// The numbers run down the cover's left: 0 under the wave, the last above the paddle.
-	const ROW_TOP = 71;
+	const ROW_TOP = 86;
 	const ROWS = 76;
 	const pitch = (m: Module) => ROWS / (m.channels - 1);
 	const rowY = (m: Module, ch: number) => ROW_TOP - ch * pitch(m);
@@ -160,19 +161,7 @@
 		};
 	}
 
-	// A module's status light: the band along the wave where the head meets
-	// the cover, low on the left and high on the right.
-	const lens = (() => {
-		const h = MOD.w / 2;
-		const o = new Shape();
-		o.moveTo(-h + 0.4, 70.4);
-		o.bezierCurveTo(-h + 4, 80.6, 2, 84.4, h - 0.6, 89.6);
-		o.lineTo(h - 0.6, 91.2);
-		o.bezierCurveTo(2, 87, -h + 3.4, 84.6, -h + 0.4, 74.6);
-		o.closePath();
-		return new ExtrudeGeometry(o, { depth: 0.6, bevelEnabled: false, curveSegments: 24 });
-	})();
-	/** The soft light a lit lens throws on the faces round it. */
+	/** The soft light a lit status light throws on the faces round it. */
 	const haze = (() => {
 		const c = document.createElement('canvas');
 		c.width = c.height = 64;
@@ -187,8 +176,8 @@
 
 	/** A module's head: what it is, printed above the two rings moulded into it. */
 	const headInk = (m: Module): Ink[] => [{ text: m.mark, x: MOD.w / 2, y: 2.4, size: m.mark.length > 8 ? 1.7 : 2.1, align: 'center', color: '#f2f3f4', weight: 650 }];
-	/** The cover's field, from y = 80 down: the channel numbers, and the part number low on the right. */
-	const COVER_PRINT = { top: 80, h: 100 };
+	/** The cover's field, from y = 95 down: the channel numbers, and the part number low on the right. */
+	const COVER_PRINT = { top: 95, h: 100 };
 	function coverInk(m: Module): Ink[] {
 		const items: Ink[] = [{ text: m.part, x: MOD.w - 5, y: 62, size: 1.9, align: 'center', rotate: -90, color: '#7c8288', weight: 600, spacing: 0.15 }];
 		// Only the discrete modules carry channel numbers; the analog covers are blank.
@@ -318,18 +307,23 @@
 				<T.Mesh geometry={bodies.module} material={plastic} position={[(m.slot * MOD.pitch) / 1000, 0, 0]} />
 			{/each}
 		{/if}
+		<!-- each module's status light, the CAD's own light pipe: its colour, dark when the driver is offline -->
+		{#if bodies['module-light']}
+			{#each MODULES as m (m.slot)}
+				<T.Mesh geometry={bodies['module-light']} position={[(m.slot * MOD.pitch) / 1000, 0, 0]}>
+					<T.MeshBasicMaterial color={online ? m.light : '#15191c'} toneMapped={false} />
+				</T.Mesh>
+			{/each}
+		{/if}
 	</T.Group>
 
 	<!-- the touchscreen, lit: the sign-in page, behind the bezel -->
 	<Print w={DW + 3} h={DH + 3} position={[(DISPLAY.x0 + DISPLAY.x1) / 2, (DISPLAY.y0 + DISPLAY.y1) / 2, DISPLAY.z]} items={signInInk} paint={signIn} res={12} />
 	{#each MODULES as m (m.slot)}
-		<!-- on each module: the head's lettering, the status light along the wave (dark when the driver is offline), the cover's print -->
-		<Print w={MOD.w} h={5} position={[cx(m), 113.6, MOD.head + 0.12]} items={headInk(m)} res={16} />
-		<T.Mesh geometry={lens} position={[cx(m), 0, MOD.head - 0.35]}>
-			<T.MeshBasicMaterial color={online ? m.light : '#15191c'} toneMapped={false} />
-		</T.Mesh>
+		<!-- on each module: the head's lettering, the status light's haze, the cover's print -->
+		<Print w={MOD.w} h={5} position={[cx(m), MOD.top - 4.4, MOD.head + 0.12]} items={headInk(m)} res={16} />
 		{#if online}
-			<T.Mesh position={[cx(m) - 2, 80, MOD.head + 0.4]} renderOrder={3}>
+			<T.Mesh position={[cx(m), MOD.top - 33, MOD.head + 0.4]} renderOrder={3}>
 				<T.PlaneGeometry args={[24, 22]} />
 				<T.MeshBasicMaterial map={haze} color={m.light} transparent opacity={0.42} blending={AdditiveBlending} depthWrite={false} toneMapped={false} />
 			</T.Mesh>

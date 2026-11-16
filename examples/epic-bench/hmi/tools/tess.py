@@ -31,8 +31,13 @@ PARTS = {
     "chassis": ("EPIC chassis/GRV-EPIC-CHS4.stp", ((1, 0, 0), (0, 0, -1), (0, 1, 0)), (91.52, 57.5, 2.8), 1.0, 0.6),
     "processor": ("EPIC controller/GRV-EPIC-PR1.stp", ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (76.7, 70.0, 72.2), 0.5, 0.6),
     "power-supply": ("EPIC power supplies/GRV-EPIC-PSAC.stp", ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (76.7 - 137.2, 70.0 - 13.7, 72.2 + 111.4), 0.5, 0.6),
-    "module": ("EPIC IO/GRV-EPIC-GenericModule_coverLow.stp", ((0, 0, -1), (-1, 0, 0), (0, 1, 0)), (99.8 - 104.675, 39.4, -102.06 + 4.0), 0.5, 0.6),
+    # in y the module sits where its hold-down screw is over the hole in the chassis's slot tab (y = -5.3)
+    "module": ("EPIC IO/GRV-EPIC-GenericModule_coverLow.stp", ((0, 0, -1), (-1, 0, 0), (0, 1, 0)), (99.8 - 104.675, 54.35, -102.06 + 4.0), 0.5, 0.6),
 }
+# The module's status light is the light pipe that shows along the wave of its cover. Its faces go to a model
+# of their own (module-light.glb), so the screen lights the CAD's window and not a shape drawn over it:
+# the faces that lie wholly inside this box (mm, screen frame, slot 0) and are larger than 8 mm².
+LIGHT = ((92.3, 107.5), (92.5, 107.5), (137.9, 141.6))
 ONLY = [a for a in sys.argv[3:] if not a.startswith("--")]
 
 def keep(name, i, bb, nfaces):
@@ -94,24 +99,31 @@ def write_glb(path, P, N, T):
         f.write(struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(js) + 8 + len(bin_)))
         f.write(struct.pack("<II", len(js), 0x4E4F534A)); f.write(js); f.write(struct.pack("<II", len(bin_), 0x004E4942)); f.write(bin_)
 
-if "--finish" in sys.argv:
-    # stage 2: leave out the faces vis.py found buried, merge identical vertices, check facing, write
+def finish(name, P, N, T, nfaces, allfaces, lin, ang):
+    """Stage 2 for one model: merge identical vertices, check facing, write."""
     import os
+    key = np.concatenate([np.rint(P * 1e6).astype(np.int64), np.rint(N * 127).astype(np.int64)], axis=1)
+    used = np.unique(T); _, first, inv = np.unique(key[used], axis=0, return_index=True, return_inverse=True)
+    remap = np.zeros(len(P), dtype=np.int64); remap[used] = inv.ravel(); P = P[used][first]; N = N[used][first]; T = remap[T]
+    T = T[(T[:, 0] != T[:, 1]) & (T[:, 1] != T[:, 2]) & (T[:, 0] != T[:, 2])]
+    fn = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]]); fn /= np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-18)
+    against = np.einsum("ij,ij->i", fn, N[T].mean(1)) < -0.2
+    # a triangle wound against its surface's normal would be culled as a hole: turn it to agree
+    T[against] = T[against][:, ::-1]
+    write_glb(f"{OUT}/{name}.glb", P, N, T); size = os.path.getsize(f"{OUT}/{name}.glb")
+    print(f"PART {name}: faces {nfaces} of {allfaces}, triangles {len(T)}, vertices {len(P)}, {size} bytes, tolerance {lin} mm / {ang} rad, box mm {np.round(P.min(0) * 1000, 1).tolist()} {np.round(P.max(0) * 1000, 1).tolist()}, re-wound {int(against.sum())}")
+    return size
+
+if "--finish" in sys.argv:
+    # stage 2: leave out the faces vis.py found buried
     total = 0
     for name, (src, rot, off, lin, ang) in PARTS.items():
-        d = np.load(f"{STAGE}/{name}.npz"); P, N, T, F = d["P"], d["N"], d["T"], d["F"]; seen = np.load(f"{STAGE}/{name}_seen.npy")
-        T = T[np.isin(F, seen)]
-        key = np.concatenate([np.rint(P * 1e6).astype(np.int64), np.rint(N * 127).astype(np.int64)], axis=1)
-        used = np.unique(T); _, first, inv = np.unique(key[used], axis=0, return_index=True, return_inverse=True)
-        remap = np.zeros(len(P), dtype=np.int64); remap[used] = inv.ravel(); P = P[used][first]; N = N[used][first]; T = remap[T]
-        T = T[(T[:, 0] != T[:, 1]) & (T[:, 1] != T[:, 2]) & (T[:, 0] != T[:, 2])]
-        fn = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]]); fn /= np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-18)
-        against = np.einsum("ij,ij->i", fn, N[T].mean(1)) < -0.2
-        # a triangle wound against its surface's normal would be culled as a hole: turn it to agree
-        T[against] = T[against][:, ::-1]
-        write_glb(f"{OUT}/{name}.glb", P, N, T); size = os.path.getsize(f"{OUT}/{name}.glb"); total += size
-        print(f"PART {name}: faces {len(seen)} of {int(F.max()) + 1}, triangles {len(T)}, vertices {len(P)}, {size} bytes, tolerance {lin} mm / {ang} rad, box mm {np.round(P.min(0) * 1000, 1).tolist()} {np.round(P.max(0) * 1000, 1).tolist()}, re-wound {int(against.sum())}")
+        d = np.load(f"{STAGE}/{name}.npz"); seen = np.load(f"{STAGE}/{name}_seen.npy")
+        # the module's light pipe is written apart from its body
+        for out, faces in ((name, np.setdiff1d(seen, d["L"])), (name + "-light", d["L"])):
+            if len(faces): total += finish(out, d["P"], d["N"], d["T"][np.isin(d["F"], faces)], len(faces), int(d["F"].max()) + 1, lin, ang)
     print("TOTAL", total, "bytes"); sys.exit()
+
 
 for name, (src, rot, off, lin, ang) in PARTS.items():
     if ONLY and name not in ONLY: continue
@@ -132,5 +144,12 @@ for name, (src, rot, off, lin, ang) in PARTS.items():
     P, N, T, F = tessellate(whole, lin, ang, skip)
     R = np.array(rot, dtype=float); P = (P @ R.T + np.array(off)) / 1000.0; N = N @ R.T
     N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
-    np.savez(f"{STAGE}/{name}.npz", P=P, N=N, T=T, F=F)
+    L = []
+    if name == "module":
+        area = np.linalg.norm(np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]]), axis=1) * 5e5   # mm²
+        for f in np.unique(F):
+            pts = P[T[F == f]].reshape(-1, 3) * 1000
+            if all(lo <= pts[:, k].min() and pts[:, k].max() <= hi for k, (lo, hi) in enumerate(LIGHT)) and area[F == f].sum() > 8:
+                L.append(int(f)); print(f"  light face {f}: {area[F == f].sum():.1f} mm², box {np.round(pts.min(0), 1).tolist()} {np.round(pts.max(0), 1).tolist()}")
+    np.savez(f"{STAGE}/{name}.npz", P=P, N=N, T=T, F=F, L=np.array(L, dtype=np.int64))
     print(f"STAGED {name}: faces {int(F.max()) + 1} tris {len(T)} tol {lin} mm / {ang} rad ({time.time() - t:.0f}s)", flush=True)
