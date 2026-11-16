@@ -2297,6 +2297,56 @@ None of these changes the block. Only the meaning of VAR_1 differs, as
   `naut check` walks user FUNCTION_BLOCK bodies.
 - **Shutdown:** close finishes queued requests and refuses later posts.
 
+**Slice 2, the importer (2026-11-16).**
+
+**The mapping:** `logix/importer/msg.go` turns each CIP Data Table
+MESSAGE into a `READ` or `WRITE` instance of the same name. It is declared
+in the program whose MSG sends it and written back at controller scope
+through `target.logix.controller-scoped`, like a moved timer. The MSG itself
+becomes the block in the rung, and inside an output branch it is hoisted
+like a timer. Each peer becomes a `channels:` entry named
+`cip_<host>[_s<slot>]`.
+
+**Departure from the design:** the connection flags do not ride on a pragma
+on the instance declaration. They go to `target.logix.messages` in
+`nautilus.yaml`, beside the other Logix-only settings, and only when they
+differ from the defaults: `ConnectedFlag` other than 2, any
+`CacheConnections`, or a `ConnectionPath` spelled other than the canonical
+`2, host[, 1, slot]`. The `Flags` copy becomes
+`{ D := SEL(M.NDR, 0, 32) + SEL(M.ERROR, 0, 16) (* @logix MSG.Flags *) }`.
+
+**Also fixed:** an output branch that ends a rung used to drop every leg
+without a coil, silently. That covered timers and data boxes, and now MSG.
+Such a leg is a rung of its own now, in order.
+
+**Found and filed:** #700. A preset computed in the logic
+(`MUL(sp,1000,T.PRE)`) imports as a write that the timer call's literal `PT`
+overrides on every scan. About 2,240 corpus rungs have this shape, mostly
+in AOIs.
+
+**Corpus (aggregates, after the #701 review):**
+
+- **Rungs:** 29,792 → 29,869 (98.0 → 98.3 %).
+- **MESSAGE refusals:** the "type" bucket went from 156 to 14. "MSG" is 62,
+  up from 21: CIP Generic, the two-hop path, `.EN`, and Generic legs the
+  dropped-leg fix makes visible.
+- **The poll idiom:** the round-robin rung and its `Flags` copy import.
+  Five periodic-timer rungs stop at `RES`, which has no form yet.
+- **Routines and write-backs:** complete ladder routines stay at 800, and
+  write-backs at 68 identical / 19 differ of 87.
+
+**Review round (#701):**
+
+- **One-shots and AFI:** a one-shot or AFI leg of a final branch stays a
+  condition, as before. Counting it as acting had cost 2 routines.
+- **Shared messages:** a MESSAGE sent by two MSGs, or read from a program
+  that does not send it, is refused.
+- **Shadowed local element:** a controller MESSAGE whose local element a
+  program tag shadows is refused.
+- **`target.logix.messages`:** it holds entries only for messages the import
+  carries, one per name.
+- **Addresses:** the path's address must parse as an IP.
+
 **Limits, for later:**
 
 - WRITE does not encode a Logix `STRING`.

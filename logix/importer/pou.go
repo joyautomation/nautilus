@@ -242,7 +242,7 @@ func rungComment(text string) (header string, lines []string) {
 
 // ── programs ────────────────────────────────────────────────────────────────
 
-var blockInstr = map[string]bool{"TON": true, "TOF": true, "RTO": true, "CTU": true, "CTD": true}
+var blockInstr = map[string]bool{"TON": true, "TOF": true, "RTO": true, "CTU": true, "CTD": true, "MSG": true}
 
 // progFile is one imported routine: the file it became and where it was.
 type progFile struct{ File, Program, Routine string }
@@ -503,6 +503,27 @@ func (im *importer) declareFound(sc *scope, p *pou, f *found, blockType string) 
 	up := strings.ToUpper(f.dtype)
 	if f.param != nil {
 		return true // declared from the interface
+	}
+	if up == "MESSAGE" {
+		// A MESSAGE is a READ or WRITE instance, by its MessageType.
+		if f.tag == nil || f.dims != "" {
+			return false
+		}
+		m := im.message(f.tag)
+		if m.refused != nil || (blockType != "" && blockType != m.block) {
+			return false
+		}
+		k := strings.ToLower("VAR:" + l5x.Ident(f.tag.Name))
+		if _, ok := p.declIdx[k]; ok {
+			return true
+		}
+		d := decl{Name: l5x.Ident(f.tag.Name), Type: m.block, Section: "VAR", Comment: firstLine(f.tag.Description)}
+		if f.ext && sc.ctrl != nil {
+			d.Comment = strings.TrimSpace(movedComment + d.Comment)
+			im.movedInstance(f)
+		}
+		p.declare(d)
+		return true
 	}
 	if up == "TIMER" || up == "COUNTER" {
 		typ := blockType
