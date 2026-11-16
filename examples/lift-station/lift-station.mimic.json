@@ -410,46 +410,38 @@
       ]
     },
     {
-      "text": "Sequence",
-      "x": 296,
+      "text": "Pump control",
+      "x": 298,
       "y": 528,
       "bind": "SeqStep",
       "trend": false,
       "values": {
-        "Idle": "Idle",
-        "Lead": "Lead pump running",
-        "Lag": "Lead and lag running",
-        "PostRun": "Post-run delay",
-        "Alternate": "Alternating lead",
-        "Failover": "Failover to standby"
+        "Idle": "Waiting for the level to rise",
+        "Lead": "Lead pump pumping down",
+        "Lag": "Lead and lag pumps pumping down",
+        "PostRun": "Running on past the off level",
+        "Alternate": "Swapping the lead pump",
+        "Failover": "Lead pump failed, standby taking over"
       }
     },
     {
-      "text": "Pump cycles",
-      "x": 520,
-      "y": 528,
-      "bind": "CycleCount",
-      "decimals": 0,
-      "trend": false
-    },
-    {
-      "text": "Wet well",
-      "x": 125,
-      "y": 528,
+      "text": "Level",
+      "x": 470,
+      "y": 488,
       "state": [
         {
           "when": "HighLevelAlm",
-          "text": "High level",
+          "text": "High alarm",
           "kind": "critical"
         },
         {
           "when": "LSHH101",
-          "text": "High-high",
+          "text": "High-high float",
           "kind": "critical"
         },
         {
           "when": "LSLL101",
-          "text": "Low-low",
+          "text": "Low-low float",
           "kind": "critical"
         },
         {

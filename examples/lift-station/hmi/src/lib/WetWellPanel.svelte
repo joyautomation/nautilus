@@ -45,6 +45,7 @@
 		<SeqStepTag text={str('SeqStep')} width={96} />
 		<span>{bool('LeadIsP101') ? 'P-101' : 'P-102'} is lead</span>
 	</p>
+	<p class="seq">Pump-downs counted: <b>{num('CycleCount').toFixed(0)}</b></p>
 	<!-- LeadSelect: who takes the next call (sequence.sfc's PickLead). A
 	     pump that is not in Auto and available is passed over either way. -->
 	<div class="line lead">

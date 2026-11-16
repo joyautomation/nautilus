@@ -57,10 +57,14 @@
 {#snippet content()}
 	<span class="dot" aria-hidden="true"></span>
 
-	<span class="unacked">
-		<b>{summary?.unacked}</b>
-		{#if !compact}unack{/if}
-	</span>
+	<!-- every count says what it counts: "2 unacked", and with nothing
+	     active and nothing to acknowledge, just "No active alarms" -->
+	{#if byPriority.length || summary?.unacked}
+		<span class="unacked">
+			<b>{summary?.unacked}</b>
+			unacked
+		</span>
+	{/if}
 
 	<span class="counts">
 		{#each byPriority as { p, n } (p)}
@@ -69,7 +73,7 @@
 			</span>
 		{/each}
 		{#if !byPriority.length}
-			<span class="count clear">{compact ? 'clear' : 'no active alarms'}</span>
+			<span class="count clear">No active alarms</span>
 		{/if}
 	</span>
 

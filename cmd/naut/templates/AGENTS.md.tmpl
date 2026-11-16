@@ -339,7 +339,15 @@ naut builds the operator screen from the project itself, with no npm, and
   sequence's step). The first state whose `when` tag is true shows; the
   one with no `when` comes last.
   A step or a state code is shown in words, never as a raw name or number:
-  `"values": {"PostRun": "Post-run delay", "3": "Backwashing"}` on its label.
+  `"values": {"PostRun": "Running on past the off level", "3": "Backwashing"}`
+  on its label.
+- Write every label for an operator seeing the screen for the first time:
+  it says what it is about and what the plant is doing, in their words.
+  A level's state is `"text": "Level"` beside its reading, not a bare
+  "Normal" under the vessel; a sequence is `"text": "Pump control"` with
+  values like "Lead pump pumping down" and "Waiting for the level to
+  rise", not its step names; a count says what it counts. Numbers an
+  operator seldom needs (cycle counts, run hours) go in the panel.
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
   drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
   and each copy moves by `step`:

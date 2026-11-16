@@ -33,6 +33,8 @@
 - **The bar at 16 px.** naut's default bar (title, description, screens),
   `StatusPill`, the compact `AlarmBanner` and a `md` `Button` are 16 px
   (`sm` 14 px); the bar's Ack all is `md`.
+- **The alarm banner says what it counts**: "2 unacked" in the bar too,
+  and "No active alarms" (no bare 0, no "clear") when there are none.
 
 ### Changed
 
