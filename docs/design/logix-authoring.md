@@ -1913,6 +1913,342 @@ table for generated stubs, not one.
   (1769-L1x/L2x), whose `Local` row #373 left out, should now write from
   its own export's configuration, but no such export has been tried.
 
+### Design — `MSG` as IEC 61131-5 `READ`/`WRITE` on a channel (2026-11-16, proposed)
+
+**Contexts:** Languages (`lang/ir` blocks), Runtime (the scan's host), Manifest
+(`channels:`), Field drivers (`eip` serves the first channel kind), Logix
+target (importer and writer). A new published seam, `io.Channel`, sits beside
+`io.Driver`, so `lang/ir` stays free of the network.
+
+**Decided (James, 2026-11-15):** MSG is no longer refused outright. The 117
+CIP Data Table Read/Write messages become core `READ`/`WRITE` blocks. They
+are IEC 61131-5-shaped and vendor-neutral, and they run on a channel the
+manifest declares. The first channel kind is CIP to a Logix peer, on the
+existing `eip/logix` client. Read Tag and Write Tag are the same services an
+MSG Data Table read/write sends. The importer maps MSG to READ/WRITE plus a
+channel, and the writer maps them back to MSG, so a write-back round-trips.
+CIP Generic (socket) messages stay refused.
+
+#### The standard, and the alternative
+
+**IEC 61131-5 (2000), §"Data acquisition".** These pins come from a
+**secondary source**, a drawing of the standard's block, because the text
+itself is paywalled:
+
+| Block | Inputs | Outputs |
+|---|---|---|
+| `READ` | `REQ` BOOL, `ID` COMM_CHANNEL, `VAR_1..VAR_n` (STRING or a `REMOTE_VAR` address) | `NDR` BOOL, `ERROR` BOOL, `STATUS` INT, `RD_1..RD_n` ANY |
+| `WRITE` | `REQ`, `ID`, `VAR_1..VAR_n`, `SD_1..SD_n` ANY | `DONE` BOOL, `ERROR` BOOL, `STATUS` INT |
+
+- **ID:** `CONNECT` produces it. The 61499 mapping in IEC 61131-3:2007 Annex H
+  also lets ID be an implementation-defined path string.
+- **No BUSY:** the standard has no BUSY pin.
+- **STATUS values:** these are the standard's Table 24, which we have not seen.
+- **Edge and timing, unverified:** whether REQ is edge-triggered, and whether
+  NDR/DONE pulse or hold, are **not verified against the standard**. Vendors
+  that build on it, PLCnext `PCP_READ`/`PDI_READ` and Siemens `GET`/`PUT`,
+  start on the REQ rising edge and **pulse NDR for one cycle**. RD_n is valid
+  only in that cycle. Logix holds DN and ER until the next trigger.
+
+**The alternative: PLCopen OPC UA Client FBs (OPC 30001 v1.02).** This is the
+other vendor-neutral client-block family. Its blocks are `UA_Connect`,
+`UA_Disconnect`, `UA_NamespaceGetIndex`, `UA_NodeGetHandle`, `UA_Read`,
+`UA_Write` and the newer `UA_ReadList`/`UA_WriteList`.
+
+- **Handshake:** `Execute` acts on a rising edge, and the outputs are
+  `Done`/`Busy`/`Error`/`ErrorID` (DWORD).
+- **Handles:** connection and node handles are explicit, there is a `Timeout`
+  input, and the value is a `Variable` IN_OUT.
+- **Fit:** it is OPC UA-shaped, with node handles and namespaces, so a CIP or
+  Modbus channel would have to fake both.
+
+**Recommendation:** use 61131-5. Its ID/VAR_n pair is protocol-neutral by
+design, which is the property we want.
+
+Sources:
+
+- [control.com, 61131-5 blocks](https://control.com/forums/threads/programming-iec-61131-communication-blocks.5445/)
+- [IEC 61131-3 Annex H](https://www.holobloc.com/stds/iec/sc65bwg7tf3/document/annexh_0.0.pdf)
+- [PLCnext PCP_READ](https://engineer.plcnext.help/latest/PCP_READ.htm)
+- [OPC 30001](https://reference.opcfoundation.org/specs/OPC-30001/full)
+- [Rockwell MESSAGE structure](https://www.rockwellautomation.com/en-fi/docs/studio-5000-logix-designer/38-02/contents-ditamap/instruction-set/message-structure.html)
+
+#### What the corpus does with MSG (aggregates only)
+
+**Where the MESSAGE tags are:** 7 of 52 exports have them, 141 tags in all:
+
+- 71 are CIP Data Table Write, 46 are CIP Data Table Read, and 24 are CIP Generic.
+- All of them are controller-scoped.
+- None of them is inside an AOI.
+
+**Data Table parameters (117):**
+
+- **Element counts:** `RequestedLength` is 1 and `LocalIndex` is 0 on every one,
+  so there is one element per message.
+- **Elements:** the remote element is a plain tag on 109 and `Tag.Member` on 8.
+  The local element is a plain tag on 115 and a member on 2. On 110 messages the
+  remote and local names are the same.
+- **Local types:** **111 move a whole UDT** and 6 move a REAL. The UDTs have
+  10–19 members, all INT or REAL, with no arrays and no nested UDTs.
+- **`ConnectionPath`:**
+  - `2,<ip>` on 103: out the local Ethernet port to the peer.
+  - `2,<ip>,1,<slot>` on 9: the peer is in a backplane slot behind that address.
+  - `2,<ip>,2,<ip>` on 5: two hops through a bridge.
+- **`ConnectedFlag` and `CacheConnections`:** `ConnectedFlag` is 2 on 100 and 1
+  on 17. `CacheConnections` appears only with 1: 15 TRUE and 2 FALSE. We do not
+  interpret these values; they are carried verbatim.
+- **Constant on all 117:** `CommTypeCode` is 0, and `LargePacketUsage` is absent.
+- **Peers per export:** 32, 32, 27 and 1, so the importer may generate up to
+  32 channels for one export.
+
+**MSG instructions (116 Data Table rungs, all ladder, none in ST):**
+
+- **Uses per tag:** every Data Table tag but one is used by exactly one MSG.
+  One Read tag and 8 Generic tags are never used.
+- **Round-robin poll, 109 rungs:**
+  `XIC(step.k) [XIC(enabled) MSG(M), …, [XIC(M.DN), XIC(M.ER)] TON(dwell),
+  [XIC(dwell.DN), XIO(enabled)] OTL(step.k+1) OTU(step.k)]`.
+  Each message is one step of a sequencer that polls its peers one at a time.
+  It waits on DN or ER, dwells, then advances. **The TON needs DN/ER held**
+  while the rung stays true.
+- **Periodic, 5 rungs:** `[XIC(T.DN) [MSG(M), RES(T), MOVE(..)], TON(T)]`. A
+  free-running timer re-triggers the message.
+- **Self-retrigger, 2 rungs:** `XIO(M.EN) MSG(M)`, with DN toggling a bit.
+
+**Status members, across all MSG tags:**
+
+- `.DN` is read 135 times and `.ER` 133 times, all in XIC.
+- `.EN` is read 2 times, in XIO.
+- `.ERR`, `.EXERR` and `.ST` are never read.
+- **`MOVE(M.Flags, D)` appears 109 times**, one per polled message, into a
+  plain INT (one into a DINT). D is then read only as `D.5` (108) and `D.4` (107).
+- Rockwell's MESSAGE docs place ER at bit 4 and DN at bit 5. The table there
+  is garbled, so **confirm this on a controller** before the importer relies on
+  it. The other Generic-only members (`.Path`, `.Instance`, `.REQ_LEN`) sit on
+  the refused socket messages.
+
+#### The blocks
+
+```iecst
+VAR  poll : READ;  push : WRITE;  END_VAR
+
+poll(REQ := step.3, ID := 'line2', VAR_1 := 'Line2Status', RD_1 := Line2Status);
+push(REQ := sendNow, ID := 'line2', VAR_1 := 'Setpoints', SD_1 := Setpoints);
+```
+
+**READ pins:**
+
+- Inputs: `REQ` BOOL, `ID` STRING, `VAR_1` STRING.
+- In-out: `RD_1` ANY.
+- Outputs: `NDR`, `ERROR`, `BUSY` (all BOOL), `STATUS` INT.
+
+**WRITE pins:**
+
+- Inputs: `REQ`, `ID`, `VAR_1`, `SD_1` ANY.
+- Outputs: `DONE`, `ERROR`, `BUSY`, `STATUS`.
+
+**Where these pins differ from the standard, and why:**
+
+- **One variable, n = 1:** every corpus message moves one element. The
+  extensible `VAR_n` form can follow later without breaking these pins.
+- **ID and VAR_1 are STRING constants:** ID names a channel in `nautilus.yaml`,
+  in the Annex H style, and `naut check` resolves both. There is no `CONNECT`
+  block: the manifest owns connections, as it does for drivers.
+- **RD_1 is IN_OUT, not an output:**
+  - The standard's output would copy RD_1 to its target on every call, which
+    puts zeros in the destination before the first read completes. On a
+    retained tag that loses data.
+  - As IN_OUT, the block writes the variable only on the call that completes,
+    and Logix does the same.
+  - PLCopen's `UA_Read` takes the same route with its `Variable` IN_OUT.
+- **ANY typing:** the slot takes the bound variable's type, which the IR has no
+  equivalent for yet. The lowering pass gets one rule: an ANY slot of a
+  built-in FB accepts any l-value and keeps its type per instance.
+- **BUSY:** this is an extension, as PLCopen has it, and is needed to say
+  "in flight" without Logix's EN.
+- **STATUS is INT, as in the standard:**
+  - 0 means OK.
+  - 1–255 is the CIP general status the peer returned, which is the code Logix
+    puts in `.ERR`.
+  - Negative values are local: −1 unknown channel, −2 cannot connect, −3
+    timeout, −4 the peer's type does not match the local type, −5 channel queue
+    full, −6 request lost after a restart or takeover.
+  - The standard's Table 24 is unseen. If James has the standard, align with it.
+
+**On the scan (the scan never blocks on the network):**
+
+- **Starting a request:** a REQ rising edge while idle does three things. It
+  snapshots SD_1, clears NDR/DONE/ERROR/STATUS, and sets BUSY. Then it **posts**
+  the request to the channel: a non-blocking enqueue on a bounded queue, which
+  returns a ticket kept in an internal slot. A full queue fails at once with −5.
+- **While BUSY:** each call **polls** the ticket without waiting. A REQ edge
+  while BUSY is ignored, as on Logix. REQ falling does not cancel the request.
+- **Completion:**
+  - On the first call that sees it complete, BUSY clears.
+  - A READ converts the reply into RD_1's type and writes it whole, then sets
+    NDR.
+  - A WRITE sets DONE.
+  - A failure sets ERROR and STATUS and does not write RD_1 at all, not even
+    partly.
+- **Data lands between statements, never mid-statement.** It happens at a call
+  of the block, so a scan sees all of a reply or none of it. That is stricter
+  than Logix, which fills the destination asynchronously during the scan.
+- **Output timing, after completion:** this is question 2 below. The
+  recommendation is that **NDR/DONE/ERROR hold until the next REQ rising
+  edge**, which is Logix's DN/ER behaviour. The corpus timer idiom and the
+  `Flags` readers need that. The 61131-5 vendors pulse instead.
+- **Plumbing:**
+  - `lang/ir` declares a `Channels` Host extension with `Post(id, req)` and
+    `Poll(ticket)`, like `WallClock` and `DivZeroCounter`. `runtime` implements
+    it over the manifest's `io.Channel`s.
+  - A host without it fails a REQ edge with −1. That covers `naut check`'s
+    evaluation, the LSP, the playground, and tests without a fake.
+  - `naut check` errors when ID names no declared channel.
+- **Lifecycle:**
+  - **Online edit:** an instance keeps its internal slots by name, so an
+    in-flight request completes into the migrated instance.
+  - **Restart:** internal slots are not retained, so the block starts idle.
+  - **Leader takeover:** the new leader finds a ticket it never issued, and
+    gets ERROR with −6.
+
+#### The channel
+
+```yaml
+channels:
+  - name: line2        # what ID names
+    type: cip          # first kind; opcua and modbus later
+    host: 192.0.2.12
+    slot: 0            # optional: route 1,<slot> behind the address
+    timeout: 5s        # per request (default 5s)
+    queue: 64          # pending requests before −5 (default 64)
+```
+
+**Kinds:**
+
+- **CIP:** one worker goroutine per channel, serial FIFO.
+  - Connections: one connected CIP session from `logix.Dial`, opened on the
+    first request and kept open, with reconnect and backoff. 32 peers means 32
+    idle sessions, which is the same order a Logix MSG cache keeps.
+  - VAR_1 is a Logix tag path (`Tag`, `Tag.Member`, `Tag[3]`).
+- **OPC UA client (later):** reuses the opcua-client driver's keys (`endpoint`,
+  `security`, …). VAR_1 is a NodeId string.
+- **Modbus (later):** `host`/`unit`. VAR_1 is a register address.
+
+None of these changes the block. Only the meaning of VAR_1 differs, as
+61131-5 intends.
+
+**Whole structures:**
+
+- **Reads:** a READ of a UDT tag returns the structure handle and bytes.
+  `Registry.DecodeStructData` already decodes them with the peer's template,
+  which is read once per type and cached on the channel. The decoded value is
+  matched to RD_1 **by member name and exact elementary type**. A difference is
+  −4, with nothing written.
+- **Writes:** the client has no structure encoder yet, so this is question 3.
+  - The recommendation is one Write Tag of type `0x02A0` + handle, laid out by
+    the **peer's template offsets**. That is one service, as MSG sends it, and
+    atomic on the peer.
+  - This is not the declined "full Logix UDT layout": nautilus never computes
+    a layout. The peer reports it, and the transfer is refused if a member
+    does not match.
+  - The emulator's `writeTag` takes elementary leaves only today, so it gains
+    struct writes for the tests.
+
+**Paths:**
+
+- `2,<ip>` becomes `host`.
+- `2,<ip>,1,<n>` becomes `host` plus `slot: n`.
+- The two-hop `2,<ip>,2,<ip>` (5) is **refused**: `Dial` only routes
+  `1,<slot>`. A `route:` key can follow if a site needs it.
+
+#### MSG ↔ READ/WRITE
+
+| Logix | nautilus |
+|---|---|
+| MESSAGE tag `M`, Data Table Read, + `MSG(M)` on a rung | `M : READ` in the program that uses it; rung power → `REQ`; `RemoteElement` → `VAR_1`; `LocalElement` → `RD_1` |
+| … Data Table Write | `M : WRITE`; `LocalElement` → `SD_1` |
+| `ConnectionPath` peer | a generated `channels:` entry per distinct peer (named from the MESSAGE tag's common prefix, else `peer1…`); `ID` names it |
+| `M.DN` / `M.ER` | `M.NDR` (READ) or `M.DONE` (WRITE) / `M.ERROR` |
+| `M.ERR` | `M.STATUS` (positive codes; not used in the corpus) |
+| `MOVE(M.Flags, D)` | question 4: recommended `D := DONE/NDR at bit 5, ERROR at bit 4, all else 0`, carried with `(* @logix MSG.Flags *)` and folded back to the MOVE |
+| `ConnectedFlag`, `CacheConnections` when not the majority (2, absent) | `(* @logix MSG connected=1 cache=TRUE *)` on the instance declaration; the writer emits them verbatim |
+| controller scope of the MESSAGE tag | the instance lives in its one using program; the pragma records `controller` so the write-back restores the scope |
+
+**Refused, each with its reason:**
+
+- CIP Generic messages, which are socket and other services (24 tags).
+- The two-hop path (5).
+- `M.EN` (2 rungs): Logix's EN is "rung true, or in flight", which no pin
+  states. Mapping it to `REQ OR BUSY` cannot be written back.
+- One MESSAGE instance used by more than one MSG.
+- A MESSAGE tag used from two programs.
+- `RequestedLength` > 1, or a non-zero `LocalIndex` (none in the corpus).
+- Reading any other MESSAGE member (`.EW`, `.ST`, `.TO`, …).
+- A MESSAGE tag no MSG uses (1 Data Table + 8 Generic) is reported and not
+  carried.
+
+**Write-back:**
+
+- **LD:** a READ/WRITE box on a rung becomes `MSG(M)` in the same position.
+  `M` becomes a MESSAGE tag whose `MessageParameters` are:
+  - `MessageType` from the block.
+  - `RemoteElement` = VAR_1, and `LocalElement` = the RD_1/SD_1 binding.
+  - `RequestedLength=1`, `LocalIndex=0`, `CommTypeCode=0`.
+  - `ConnectionPath` = `2, <host>` plus `, 1, <slot>` when `slot:` is set.
+  - `ConnectedFlag`/`CacheConnections` from the pragma, else the corpus
+    majority (`ConnectedFlag="2"`, no cache attribute).
+- **Contacts:** `NDR`/`DONE` become `.DN` and `ERROR` becomes `.ER`. BUSY
+  becomes `XIC(M.EN) XIO(M.DN) XIO(M.ER)`.
+- **The writer refuses:**
+  - READ/WRITE in ST or FBD, because Logix ST's MSG has no rung condition and
+    the corpus has none.
+  - A non-constant ID or VAR_1.
+  - A non-`cip` channel.
+  - An RD_1/SD_1 binding that is not a tag or member.
+- **Authored in nautilus:** blocks written in nautilus take the same path,
+  which is how AB development stays nautilus-first.
+
+#### Tests
+
+- **Every PR, pure Go:**
+  - `lang/ir`, with a fake `Channels`: edge start, ignored edge while busy,
+    held or pulsed outputs, an error leaving RD_1 untouched, an unknown channel.
+    There is also a fake that never completes, and the scan time stays bounded.
+  - `eip` channel against `eip/logixserver`: elementary values and a flat
+    INT/REAL UDT both ways. Peer errors pass through as STATUS 4/5. A mismatched
+    UDT gives −4. Reconnect after the server restarts.
+  - Runtime: `naut run` with a `channels:` entry pointed at a black-hole address,
+    with scan lateness unchanged. That makes the "never blocks" claim a test
+    that can fail.
+- **Importer and writer:**
+  - Fixtures with **synthetic names** for the three rung idioms and the `Flags`
+    mirror.
+  - Structural round trip: `MessageParameters` identical.
+  - A corpus rerun reported as counts before and after.
+- **SDK import and build on ws-test** (`logixd` on ws-test, since echo1's SDK
+  is broken): the written MESSAGE tags and MSG rungs import and build.
+- **On a controller:**
+  - nautilus READ/WRITE against Echo as the CIP peer, on both elementary and
+    UDT tags.
+  - **Open:** whether Echo executes MSG itself. If it does, a written-back
+    poll rung runs between two Echo controllers. It also settles the `Flags`
+    bit positions (DN = 5, ER = 4) and the `ConnectedFlag` meanings by reading
+    them back.
+  - Otherwise those wait for real hardware, and the importer's `Flags` mapping
+    ships marked unverified.
+
+#### Slices (one PR each, after James's calls)
+
+1. **Blocks, runtime and CIP channel.**
+   - `READ`/`WRITE` built-ins, ANY IN_OUT slots, the `Channels` Host
+     extension, `io.Channel`, and `channels:` with `naut check`.
+   - The CIP channel with struct read/write against templates, and emulator
+     struct writes.
+   - May split into 1a (language and runtime on a fake channel) and 1b (CIP).
+2. **Importer:** MSG → READ/WRITE + channels + pragmas + `Flags`, with the
+   refusals above.
+3. **Writer:** READ/WRITE → MSG + MESSAGE tags, round trip and SDK build.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
