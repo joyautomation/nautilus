@@ -160,7 +160,6 @@ func TestLastBranchKeepsActingLegs(t *testing.T) {
 	}
 }
 
-
 // The review's cases: two MSGs on one tag, a program tag shadowing a
 // controller MESSAGE's local element, and a controller MESSAGE read from a
 // program that does not send it.
@@ -202,6 +201,10 @@ func TestLastBranchConditionLegsStay(t *testing.T) {
 		}
 		if !strings.Contains(string(p.Files["Main.ld"]), "a b ( y )") {
 			t.Errorf("%s: imported as\n%s", rung, p.Files["Main.ld"])
+		}
+	}
+}
+
 // The write-back gives every MESSAGE tag back with the parameters it came
 // in with, attribute for attribute, and the MSG rungs as MSG; the poll rung
 // comes back as the three rungs the import split it into.
