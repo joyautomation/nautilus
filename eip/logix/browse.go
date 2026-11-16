@@ -103,6 +103,28 @@ func hiddenSymbol(s Symbol) bool {
 	return s.IsSystem() || strings.HasPrefix(s.Name, "__") || strings.HasPrefix(s.Name, "Routine:")
 }
 
+// ListScope uploads one scope's tag list: "" for the controller's, or
+// "Program:<prog>". Names come back canonical ("Program:<prog>.<name>" in a
+// program scope); system tags and compiler artifacts are left out, and so
+// are the controller scope's program markers.
+func (c *Controller) ListScope(ctx context.Context, scope string) ([]Symbol, error) {
+	syms, err := c.listScope(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	out := syms[:0]
+	for _, s := range syms {
+		if hiddenSymbol(s) || (scope == "" && strings.HasPrefix(s.Name, "Program:")) {
+			continue
+		}
+		if scope != "" {
+			s.Name = scope + "." + s.Name
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 // ListSymbols uploads the full tag list: controller scope plus every program
 // scope. Program-scope symbol names are canonicalized to
 // "Program:<prog>.<name>". System tags, module container entries, and

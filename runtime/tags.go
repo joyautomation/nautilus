@@ -53,6 +53,9 @@ import (
 // StructDef, and a function-block instance is never equal to anything,
 // because an FB is identity (its retained frame), not a value.
 type Tags struct {
+	// comm serves the programs' READ and WRITE blocks (channels.go); nil
+	// when the runtime has no channels.
+	comm *commHub
 	mu   sync.RWMutex
 	vals map[string]*tagVal
 	// fold maps ir.NameKey(name) to the spelling a tag was created under.

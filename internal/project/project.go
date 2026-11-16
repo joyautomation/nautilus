@@ -70,6 +70,11 @@ type Manifest struct {
 	Drivers   []DriverConfig   `yaml:"drivers"`
 	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
 	OPCUA     *OPCUAConfig     `yaml:"opcua"`
+	// Channels are the communication channels the programs' READ and
+	// WRITE blocks name by ID (IEC 61131-5): one peer each, reached by one
+	// protocol. A driver moves the same tags every scan; a channel moves
+	// one variable when a program asks.
+	Channels []ChannelConfig `yaml:"channels"`
 	// Retain persists operator state (setpoints, online edits) across
 	// restarts; Redundancy elects one scanning leader among replicas.
 	// Both are wired by `naut run` — check/build/LSP only validate.
@@ -467,6 +472,56 @@ type DriverConfig struct {
 	PKIDir       string `yaml:"pki-dir"`       // client certificate dir, needed for any policy but None
 }
 
+// ChannelConfig is one entry of channels:. Type cip is a Logix controller
+// over EtherNet/IP; host is its address and slot, when set, routes to a
+// processor in that backplane slot behind it.
+type ChannelConfig struct {
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"`
+	Host    string   `yaml:"host"`
+	Slot    *int     `yaml:"slot"`
+	Port    int      `yaml:"port"`    // default 44818
+	Timeout Duration `yaml:"timeout"` // per request (default 5s)
+	Queue   int      `yaml:"queue"`   // waiting requests before STATUS -5 (default 64)
+}
+
+// buildChannels checks channels: and builds each one's transport.
+func buildChannels(m Manifest) ([]runtime.Channel, error) {
+	seen := map[string]bool{}
+	out := make([]runtime.Channel, 0, len(m.Channels))
+	for i, c := range m.Channels {
+		where := fmt.Sprintf("channels[%d]", i)
+		if c.Name != "" {
+			where += " (" + c.Name + ")"
+		}
+		switch {
+		case c.Name == "":
+			return nil, fmt.Errorf("%s: name is required (it is what a READ or WRITE's ID names)", where)
+		case seen[strings.ToLower(c.Name)]:
+			return nil, fmt.Errorf("%s: another channel has this name", where)
+		case c.Timeout < 0 || c.Queue < 0 || c.Port < 0 || (c.Slot != nil && *c.Slot < 0):
+			return nil, fmt.Errorf("%s: timeout, queue, port and slot cannot be negative", where)
+		}
+		seen[strings.ToLower(c.Name)] = true
+		switch strings.ToLower(c.Type) {
+		case "cip":
+			if c.Host == "" {
+				return nil, fmt.Errorf("%s: host is required", where)
+			}
+		case "":
+			return nil, fmt.Errorf("%s: type is required (cip)", where)
+		default:
+			return nil, fmt.Errorf("%s: unknown type %q (cip is the one kind so far)", where, c.Type)
+		}
+		io, err := buildChannel(c)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", where, err)
+		}
+		out = append(out, runtime.Channel{Name: c.Name, Channel: io, Timeout: time.Duration(c.Timeout), Queue: c.Queue})
+	}
+	return out, nil
+}
+
 // Duration parses "100ms" / "2s" yaml scalars.
 type Duration time.Duration
 
@@ -835,6 +890,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	simulateDrivers(opts.Tags, opts.Driver)
 	markComms(opts.Tags, opts.Driver)
 	if err := checkNetworkSections(m); err != nil {
+		return nil, err
+	}
+	if opts.Channels, err = buildChannels(m); err != nil {
 		return nil, err
 	}
 	if m.OPCUA != nil {

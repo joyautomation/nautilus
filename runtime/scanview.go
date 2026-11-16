@@ -191,5 +191,18 @@ func (v *scanView) DivZero() { v.store.DivZero() }
 // Now forwards the VM's optional ir.WallClock: LOCAL_TIME.
 func (v *scanView) Now() time.Time { return v.store.Now() }
 
+// PostRead, PostWrite and Poll forward the VM's optional ir.Channels: the
+// READ and WRITE blocks. A store without channels refuses every post with
+// ir.CommNoChannel.
+func (v *scanView) PostRead(channel, variable string, shape ir.Value, elem string) (int64, int) {
+	return v.store.comm.PostRead(channel, variable, shape, elem)
+}
+
+func (v *scanView) PostWrite(channel, variable string, data ir.Value, elem string) (int64, int) {
+	return v.store.comm.PostWrite(channel, variable, data, elem)
+}
+
+func (v *scanView) Poll(ticket int64) (ir.CommResult, bool) { return v.store.comm.Poll(ticket) }
+
 // FirstScan is the VM's optional ir.ScanInfo: FIRST_SCAN().
 func (v *scanView) FirstScan() bool { return v.firstScan }

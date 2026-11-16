@@ -261,6 +261,69 @@ func (c *Controller) WriteTag(ctx context.Context, tag string, typeCode uint16, 
 	return nil
 }
 
+// WriteTagStruct writes count instances of a structure-typed tag whole: the
+// type is 0x02A0 followed by the structure handle the controller reported
+// for the type, and data is the instances' bytes in the template's own
+// layout. It is how a Logix MSG writes a UDT, and the controller applies it
+// as one unit. A value too large for one request goes as Write Tag
+// Fragmented.
+func (c *Controller) WriteTagStruct(ctx context.Context, tag string, handle uint16, count uint16, data []byte) error {
+	hdr := make([]byte, 4)
+	binary.LittleEndian.PutUint16(hdr[0:2], cip.TypeStruct)
+	binary.LittleEndian.PutUint16(hdr[2:4], handle)
+	return c.writeWhole(ctx, tag, hdr, count, data)
+}
+
+// WriteTagArray writes count elements of an elementary-typed tag from its
+// first element (a whole array, or a run of one), fragmenting a value too
+// large for one request.
+func (c *Controller) WriteTagArray(ctx context.Context, tag string, typeCode uint16, count uint16, data []byte) error {
+	hdr := make([]byte, 2)
+	binary.LittleEndian.PutUint16(hdr, typeCode)
+	return c.writeWhole(ctx, tag, hdr, count, data)
+}
+
+// writeChunk is the data a Write Tag Fragmented request carries: a
+// multiple of 8, so no element straddles two requests.
+const writeChunk = (maxPayload - 64) &^ 7
+
+// writeWhole sends [hdr][u16 count][data] as one Write Tag, or as Write Tag
+// Fragmented ([hdr][u16 count][u32 offset][chunk]) when it does not fit.
+func (c *Controller) writeWhole(ctx context.Context, tag string, hdr []byte, count uint16, data []byte) error {
+	path, err := EncodeTagPath(tag)
+	if err != nil {
+		return err
+	}
+	if len(path)+len(hdr)+2+len(data) <= maxPayload-8 {
+		body := append(append(append([]byte(nil), hdr...), 0, 0), data...)
+		binary.LittleEndian.PutUint16(body[len(hdr):], count)
+		resp, err := c.sendConnected(ctx, cip.ServiceWriteTag, path, body)
+		if err != nil {
+			return err
+		}
+		if resp.GeneralStatus != cip.StatusSuccess {
+			return statusError("write", tag, resp)
+		}
+		return nil
+	}
+	for off := 0; off < len(data); off += writeChunk {
+		end := min(off+writeChunk, len(data))
+		body := make([]byte, len(hdr)+6, len(hdr)+6+end-off)
+		copy(body, hdr)
+		binary.LittleEndian.PutUint16(body[len(hdr):], count)
+		binary.LittleEndian.PutUint32(body[len(hdr)+2:], uint32(off))
+		body = append(body, data[off:end]...)
+		resp, err := c.sendConnected(ctx, cip.ServiceWriteTagFragmented, path, body)
+		if err != nil {
+			return err
+		}
+		if resp.GeneralStatus != cip.StatusSuccess {
+			return statusError("write fragmented", tag, resp)
+		}
+	}
+	return nil
+}
+
 // ReadResult pairs one tag of a batch read with its outcome.
 type ReadResult struct {
 	Tag string
@@ -383,6 +446,10 @@ func (e *CIPError) Error() string {
 	}
 	return fmt.Sprintf("logix: %s %q: CIP status 0x%02x", e.Op, e.Tag, e.Status)
 }
+
+// CommStatus is the STATUS a READ or WRITE block reports for this error:
+// the controller's CIP general status, as a Logix MSG puts it in .ERR.
+func (e *CIPError) CommStatus() int { return int(e.Status) }
 
 // Permanent reports whether retrying the same request can't succeed while
 // the controller program stays unchanged: the path doesn't resolve (0x04,

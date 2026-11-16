@@ -218,6 +218,15 @@ func driverHealth(d nio.Driver) func() bool {
 	return nil
 }
 
+// buildChannel builds a checked channels: entry's transport.
+func buildChannel(c ChannelConfig) (runtime.ChannelIO, error) {
+	slot := 0
+	if c.Slot != nil {
+		slot = *c.Slot
+	}
+	return eip.NewChannel(c.Host, slot, c.Port, nil), nil
+}
+
 func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 	switch strings.ToLower(d.Type) {
 	case "", "memory":

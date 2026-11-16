@@ -9,11 +9,14 @@
 package project
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -31,6 +34,21 @@ type simulated struct {
 func (s *simulated) InputNames() []string { return s.inputs }
 
 func checkNetworkSections(Manifest) error { return nil }
+
+// offlineChannel stands in for a channel in the browser: a tab reaches no
+// peer, so every request fails as unreachable (STATUS -2), the way a
+// channel whose peer is down does.
+type offlineChannel struct{}
+
+func (offlineChannel) Read(context.Context, string, ir.Value, string) (ir.Value, error) {
+	return ir.Value{}, errOffline
+}
+func (offlineChannel) Write(context.Context, string, ir.Value, string) error { return errOffline }
+func (offlineChannel) Close() error                                          { return nil }
+
+var errOffline = errors.New("channels do not reach a peer in the browser")
+
+func buildChannel(ChannelConfig) (runtime.ChannelIO, error) { return offlineChannel{}, nil }
 
 func buildDriver(_ fs.FS, d DriverConfig) (nio.Driver, error) {
 	switch strings.ToLower(d.Type) {
@@ -97,6 +115,9 @@ func platformNotices(m Manifest) []string {
 			name = t
 		}
 		out = append(out, fmt.Sprintf("driver %s (%s) is simulated: its inputs hold their init: values and its devices read as online. Install naut to run it against real equipment.", name, t))
+	}
+	for _, c := range m.Channels {
+		out = append(out, fmt.Sprintf("channel %s (%s) reaches no peer in the browser: its READ and WRITE blocks report ERROR with STATUS -2. Install naut to run them against real equipment.", c.Name, strings.ToLower(c.Type)))
 	}
 	if m.OPCUA != nil {
 		out = append(out, "opcua: the OPC UA server is off in the browser (nothing can connect to a tab). Install naut to serve this project's tags over OPC UA.")
