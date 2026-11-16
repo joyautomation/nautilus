@@ -86,7 +86,8 @@ export function setLive(frame: {
 		live.monitors = monitors;
 		joinBounds();
 	}
-	live.fbCandidates = frame.fbCandidates ?? {};
+	const candidates = frame.fbCandidates ?? {};
+	if (JSON.stringify(candidates) !== JSON.stringify(live.fbCandidates)) live.fbCandidates = candidates;
 }
 
 /** True when a diagram label's value is held by a force — the hook every
@@ -103,10 +104,12 @@ export function setVarBounds(vars: VarDecl[]): void {
 	const externals: Record<string, string[]> = {};
 	for (const v of vars) {
 		const fb = v.pou?.toLowerCase();
-		if (fb && /EXTERNAL/i.test(v.section)) (externals[fb] ??= []).push(v.name.toLowerCase());
+		const external = !!fb && /EXTERNAL/i.test(v.section);
+		if (external) (externals[fb] ??= []).push(v.name.toLowerCase());
 		const dims = arrayLowerBounds(v.type);
 		if (!dims) continue;
-		if (fb) (blocks[fb] ??= {})[v.name.toLowerCase()] = dims;
+		// A block's VAR_EXTERNAL is the controller's tag, addressed bare.
+		if (fb && !external) (blocks[fb] ??= {})[v.name.toLowerCase()] = dims;
 		else bounds[v.name.toLowerCase()] = dims;
 	}
 	programBounds = bounds;

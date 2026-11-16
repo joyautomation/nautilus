@@ -132,6 +132,7 @@ export class LiveValues implements vscode.Disposable {
   private monitors = new Map<string, string>();
   private candidates = new Map<string, string[]>();
   private candidatesAt = 0;
+  private scanning?: Promise<void>;
   // FUNCTION_BLOCK types a diagram draws (a ladder file's blocks), by
   // panel: their instances are found and monitored like a text body's,
   // with no text editor open.
@@ -776,6 +777,7 @@ export class LiveValues implements vscode.Disposable {
 
   private render(): void {
     const fresh = this.fresh();
+    let wantsCandidates = false;
     for (const editor of this.stEditors()) {
       if (!this.enabled || this.values.size === 0) {
         editor.setDecorations(this.freshDeco, []);
@@ -811,7 +813,7 @@ export class LiveValues implements vscode.Disposable {
       if (cursor < text.length) {
         segs.push({ text: text.slice(cursor), offset: cursor, map: this.values, prefix: "" });
       }
-      if (regions.length > 0) this.ensureCandidates(editor.document.uri);
+      if (regions.length > 0) wantsCandidates = true;
 
       for (const seg of segs) {
         for (const site of scanIdentifiers(seg.text, seg.map)) {
@@ -870,8 +872,7 @@ export class LiveValues implements vscode.Disposable {
       editor.setDecorations(this.forcedDeco, fresh ? forcedDecos : []);
       editor.setDecorations(this.enumDeco, fresh ? enumDecos : []);
     }
-    const diagram = this.diagramFbTypes.values().next().value;
-    if (diagram) this.ensureCandidates(diagram.uri);
+    if (wantsCandidates || this.diagramFbTypes.size > 0) void this.ensureCandidates();
     this.notify();
   }
 
@@ -891,10 +892,11 @@ export class LiveValues implements vscode.Disposable {
    * the file at `uri`: find their instances now, and auto-monitor a type
    * with exactly one, as a text body's CodeLens does. */
   watchFbTypes(key: object, uri: vscode.Uri, types: string[]): void {
+    const prev = this.diagramFbTypes.get(key);
+    if (prev && prev.uri.toString() === uri.toString() && prev.types.join("|") === types.join("|")) return;
     if (types.length === 0) this.diagramFbTypes.delete(key);
     else this.diagramFbTypes.set(key, { uri, types });
-    this.candidatesAt = 0;
-    this.scheduleRender();
+    if (types.length > 0) void this.ensureCandidates(true);
   }
 
   unwatchFbTypes(key: object): void {
@@ -909,54 +911,79 @@ export class LiveValues implements vscode.Disposable {
   }
 
   /** Refresh the instance-declaration index from the project's sources
-   * (at most every few seconds); auto-monitor types with exactly one
-   * declared instance, so the common case needs no clicks at all. */
-  private ensureCandidates(docUri: vscode.Uri): void {
+   * (at most every few seconds, unless `force`); auto-monitor types with
+   * exactly one declared instance, so the common case needs no clicks at
+   * all. Each type is looked up in the project of the file that shows it
+   * (a text editor's FUNCTION_BLOCK regions, a diagram's blocks), so a
+   * multi-root workspace never matches one project's instances against
+   * another's. */
+  private ensureCandidates(force = false): Promise<void> {
     const now = Date.now();
-    if (now - this.candidatesAt < 5000) return;
+    if (!force && now - this.candidatesAt < 5000) return this.scanning ?? Promise.resolve();
     this.candidatesAt = now;
-    void (async () => {
+    this.scanning = this.scanCandidates();
+    return this.scanning;
+  }
+
+  private async scanCandidates(): Promise<void> {
+    const wants: { uri: vscode.Uri; types: string[] }[] = [];
+    for (const editor of this.stEditors()) {
+      const types = scanFbRegions(editor.document.getText()).map((r) => r.type);
+      if (types.length) wants.push({ uri: editor.document.uri, types });
+    }
+    for (const d of this.diagramFbTypes.values()) wants.push(d);
+    const byRoot = new Map<string, { root: vscode.Uri; types: Set<string> }>();
+    for (const w of wants) {
+      let root: vscode.Uri;
+      try {
+        root = await projectDirFor(w.uri);
+      } catch {
+        continue;
+      }
+      const at = byRoot.get(root.toString()) ?? { root, types: new Set<string>() };
+      for (const t of w.types) at.types.add(t);
+      byRoot.set(root.toString(), at);
+    }
+    let changed = false;
+    for (const { root, types } of byRoot.values()) {
       let sources = "";
       try {
         // The project's root and lib/ files: instances are declared in
-        // programs (root) and inside other blocks (often lib/).
-        const root = await projectDirFor(docUri);
-        // .ld too: a ladder program declares its block instances in the
-        // same VAR sections (permissives.ld's MotorStarter instances).
+        // programs (root) and inside other blocks (often lib/). .ld too: a
+        // ladder program declares its block instances in the same VAR
+        // sections (permissives.ld's MotorStarter instances).
         for (const { uri } of await projectFiles(root, /\.(st|fbd|ld)$/i)) {
           const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
           sources += (open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))) + "\n";
         }
       } catch {
-        return;
+        continue;
       }
-      let changed = false;
-      const types = new Set<string>();
-      for (const editor of this.stEditors()) {
-        for (const r of scanFbRegions(editor.document.getText())) types.add(r.type);
-      }
-      for (const d of this.diagramFbTypes.values()) for (const t of d.types) types.add(t);
       for (const type of types) {
         const key = type.toLowerCase();
         const found = scanInstanceDecls(sources, type);
         const prev = this.candidates.get(key) ?? [];
         if (found.join("|") !== prev.join("|")) changed = true;
         this.candidates.set(key, found);
-        if (!this.monitors.has(key) && found.length === 1) {
+        // Auto-monitor the only instance, including in place of one that
+        // was renamed or removed: a monitor no source declares any more
+        // reads nothing.
+        const cur = this.monitors.get(key);
+        if (found.length === 1 && cur !== found[0] && (cur === undefined || !found.includes(cur))) {
           this.monitors.set(key, found[0]);
           changed = true;
         }
       }
-      if (changed) {
-        this.monitorsChanged.fire();
-        this.scheduleRender();
-      }
-    })();
+    }
+    if (changed) {
+      this.monitorsChanged.fire();
+      this.scheduleRender();
+    }
   }
 
   /** The "monitor instance…" command: QuickPick among declared instances. */
   async pickMonitor(fbType: string): Promise<void> {
-    this.candidatesAt = 0; // force a fresh scan next render
+    await this.ensureCandidates(true); // the picker lists what the sources declare NOW
     const current = this.monitorFor(fbType);
     const names = this.candidatesFor(fbType);
     if (names.length === 0) {

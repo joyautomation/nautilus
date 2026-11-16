@@ -76,14 +76,14 @@
 	/** The tag a contact, edge contact or coil names, when it is one the
 	 * live actions can act on (liveTag.ts: not a FUNCTION_BLOCK local, a
 	 * member or an element). */
-	let postedFbTypes = '';
+	// Every model, not only when the names change: the same block names in
+	// another file (the preview following a different document) are another
+	// project's instances. The host ignores a repeat. Unmounting (the panel
+	// switching to FBD or SFC) withdraws them.
 	$effect(() => {
-		const types = (model.blocks ?? []).map((b) => b.name);
-		const key = types.join('|');
-		if (key === postedFbTypes) return;
-		postedFbTypes = key;
-		onFbTypes?.(types);
+		onFbTypes?.((model.blocks ?? []).map((b) => b.name));
 	});
+	$effect(() => () => onFbTypes?.([]));
 
 	const writableTag = (r: { scope?: unknown; pou?: string }, el: { kind: string; ref?: string }) =>
 		ldElementTag(r, el, (pou, name) => (live.fbExternals[pou.toLowerCase()] ?? []).includes(name.toLowerCase()));
