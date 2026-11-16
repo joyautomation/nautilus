@@ -210,6 +210,11 @@ type LogixTarget struct {
 	// records it here so the write-back keeps its tag path
 	// (AcceptTmr.ACC, not Program:MainProgram.AcceptTmr.ACC).
 	ControllerScoped []LogixScoped `yaml:"controller-scoped"`
+	// Messages carries, per READ or WRITE instance, what a Logix MSG holds
+	// that the block and its channel do not, so the write-back gives the
+	// MESSAGE tag back as the import found it. Only what differs from the
+	// writer's defaults is listed.
+	Messages []LogixMessage `yaml:"messages"`
 	// Hardware is an L5X, relative to the project, whose <Modules> section
 	// is the controller's I/O configuration: the chassis, its modules, and
 	// the adapters and modules beyond it that alias: tags name. The writer
@@ -229,6 +234,16 @@ type LogixTarget struct {
 type LogixScoped struct {
 	Name string `yaml:"name"`
 	Desc string `yaml:"desc"`
+}
+
+// LogixMessage is one target.logix.messages entry: MessageParameters
+// attributes, verbatim, for the MESSAGE tag a READ or WRITE instance is
+// written back as.
+type LogixMessage struct {
+	Name             string `yaml:"name"`
+	ConnectedFlag    string `yaml:"connected-flag"`    // default "2"
+	CacheConnections string `yaml:"cache-connections"` // default: absent
+	ConnectionPath   string `yaml:"connection-path"`   // default: from the channel
 }
 
 // LogixSide selects the side code.

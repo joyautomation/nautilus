@@ -552,6 +552,16 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 						}
 						out = append(out, legOut...)
 						condLegs = append(condLegs, leg[:k])
+					} else if last && legActs(leg) {
+						// The branch ends the rung, so nothing reads its
+						// condition after it; a leg that does something
+						// (a timer, a message, a data box) is a rung of its
+						// own, in its place. It used to be dropped.
+						legOut, err := rt.split(leg, parts)
+						if err != nil {
+							return nil, err
+						}
+						out = append(out, legOut...)
 					} else {
 						condLegs = append(condLegs, leg)
 					}
@@ -686,6 +696,17 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 				return nil, err
 			}
 			add(s)
+		case m == "MSG":
+			// READ/WRITE: power is REQ and passes through (msg.go).
+			text, err := rt.msgBlock(in)
+			if err != nil {
+				return nil, err
+			}
+			add(text)
+			if last {
+				emit(parts)
+				return out, nil
+			}
 		case blockInstr[m]:
 			text, err := rt.block(in)
 			if err != nil {
@@ -926,6 +947,12 @@ func (rt *routine) series(legs [][]l5x.Term, branch, atHead bool) ([]string, *re
 					}
 				}
 				return nil, refuse("TON", "a timer inside a branch leg passes its rung-in through in Logix; nautilus continues from Q")
+			case m == "MSG":
+				text, err := rt.msgBlock(in)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, text)
 			case blockInstr[m]:
 				return nil, refuse(m, "a %s inside a branch leg", m)
 			case isCoil(in):
@@ -1112,6 +1139,9 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 		return "", f.alias
 	}
 	up := strings.ToUpper(f.dtype)
+	if up == "MESSAGE" {
+		return rt.msgRef(f, rest, blockType)
+	}
 	if up == "TIMER" || up == "COUNTER" {
 		// An element of an array of timers: Timers[2] is the instance,
 		// Timers[2].DN its member; the array is declared once.
@@ -1461,8 +1491,14 @@ func (rt *routine) hoistBlocks(legs [][]l5x.Term, prefix []string) ([][]l5x.Term
 				continue
 			}
 			m := strings.ToUpper(t.Instr.Mnemonic)
-			if m == "TON" || m == "TOF" || m == "CTU" {
-				text, err := rt.block(t.Instr)
+			if m == "TON" || m == "TOF" || m == "CTU" || m == "MSG" {
+				var text string
+				var err *refusal
+				if m == "MSG" {
+					text, err = rt.msgBlock(t.Instr)
+				} else {
+					text, err = rt.block(t.Instr)
+				}
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1513,6 +1549,19 @@ func (rt *routine) hoistBlocks(legs [][]l5x.Term, prefix []string) ([][]l5x.Term
 		outLegs = append(outLegs, kept)
 	}
 	return outLegs, hoisted, nil
+}
+
+// legActs reports whether a leg does anything beyond conditions: a block,
+// a data box, any instruction that is not a contact or a compare.
+func legActs(leg []l5x.Term) bool {
+	acts := false
+	walkTerms(leg, func(in *l5x.Instr) {
+		m := strings.ToUpper(in.Mnemonic)
+		if m != "XIC" && m != "XIO" && m != "NOP" && compareFn[m] == "" {
+			acts = true
+		}
+	})
+	return acts
 }
 
 // firstCoil is the index of the first coil in a leg, or -1.

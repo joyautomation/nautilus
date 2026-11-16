@@ -93,7 +93,8 @@ func Import(f *l5x.File, opts Options) (*Project, error) {
 	c := f.Controller
 	p := &Project{Files: map[string][]byte{}}
 	im := &importer{file: f, opts: opts, proj: p, aois: map[string]*l5x.AddOnInstruction{}, ctrl: map[string]*l5x.Tag{},
-		moved: map[string]bool{}, external: map[string]bool{}}
+		moved: map[string]bool{}, external: map[string]bool{},
+		msgs: map[*l5x.Tag]*msgInfo{}, chanByKey: map[string]string{}, msgExtras: map[string]msgExtra{}}
 	for _, a := range c.AOIs {
 		im.aois[strings.ToLower(a.Name)] = a
 	}
@@ -338,6 +339,14 @@ type importer struct {
 	usesDialect bool
 	// used marks file names taken, so two routines never collide.
 	used map[string]bool
+	// msgs is what the import made of each MESSAGE tag (msg.go); channels
+	// the channels: entries their peers became, chanByKey by host/slot;
+	// msgExtras the MSG parameters only Logix needs, by instance name, for
+	// target.logix.messages.
+	msgs      map[*l5x.Tag]*msgInfo
+	channels  []msgChannel
+	chanByKey map[string]string
+	msgExtras map[string]msgExtra
 }
 
 // declaredTypes lists the names a generated ST file declares: the
@@ -393,6 +402,18 @@ func (im *importer) manifest(tasks []manifestTask) []byte {
 		b.WriteString("\n")
 	}
 	b.WriteString("tag-files: [tags/logix.yaml]\n")
+	if len(im.channels) > 0 {
+		// The peers the export's MSG instructions reach: what each READ
+		// and WRITE block's ID names (msg.go).
+		b.WriteString("# The controllers the MSG instructions reach, for the READ and WRITE blocks.\nchannels:\n")
+		for _, ch := range im.channels {
+			fmt.Fprintf(&b, "  - { name: %s, type: cip, host: %s", ch.name, ch.host)
+			if ch.slot >= 0 {
+				fmt.Fprintf(&b, ", slot: %d", ch.slot)
+			}
+			b.WriteString(" }\n")
+		}
+	}
 	b.WriteString("target:\n  logix:\n")
 	fmt.Fprintf(&b, "    controller: %s\n", c.Name)
 	if c.ProcessorType != "" {
@@ -433,6 +454,30 @@ func (im *importer) manifest(tasks []manifestTask) []byte {
 			fmt.Fprintf(&b, "      - { name: %s", l5x.Ident(t.Name))
 			if d := strings.TrimSpace(t.Description); d != "" {
 				fmt.Fprintf(&b, ", desc: %s", yamlQuote(d))
+			}
+			b.WriteString(" }\n")
+		}
+	}
+	if len(im.msgExtras) > 0 {
+		// What a Logix MSG holds that the block and its channel do not, so
+		// the write-back gives each MESSAGE tag back as it was.
+		names := make([]string, 0, len(im.msgExtras))
+		for k := range im.msgExtras {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		b.WriteString("    messages:\n")
+		for _, k := range names {
+			x := im.msgExtras[k]
+			fmt.Fprintf(&b, "      - { name: %s", k)
+			if x.connected != "" {
+				fmt.Fprintf(&b, ", connected-flag: %s", yamlQuote(x.connected))
+			}
+			if x.cache != "" {
+				fmt.Fprintf(&b, ", cache-connections: %s", yamlQuote(x.cache))
+			}
+			if x.path != "" {
+				fmt.Fprintf(&b, ", connection-path: %s", yamlQuote(x.path))
 			}
 			b.WriteString(" }\n")
 		}

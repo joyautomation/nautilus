@@ -258,6 +258,21 @@
                 }
               }
             },
+            "messages": {
+              "type": "array",
+              "description": "What a Logix MSG holds that a READ or WRITE block and its channel do not, per instance, so the write-back gives each MESSAGE tag back as `naut logix import` found it. Only values that differ from the writer's defaults are listed.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {
+                  "name": {"type": "string", "description": "A READ or WRITE instance of the task program."},
+                  "connected-flag": {"type": "string", "description": "MessageParameters ConnectedFlag, verbatim (default \"2\")."},
+                  "cache-connections": {"type": "string", "description": "MessageParameters CacheConnections, verbatim (default: absent)."},
+                  "connection-path": {"type": "string", "description": "MessageParameters ConnectionPath, verbatim, when the export spells it other than the channel's \"2, host[, 1, slot]\"."}
+                }
+              }
+            },
             "hardware": {
               "type": "string",
               "description": "An L5X, relative to the project, whose <Modules> section is the controller's I/O configuration: the chassis, its modules, and the adapters and modules beyond it that alias: tags name. The writer carries it into every project it writes, unchanged, in place of the controller's generated Local module, and refuses an alias of a rack point whose module it lacks (logix/io-module). `naut logix import --project` writes one, hardware.L5X, from an export with I/O modules; a Logix Designer export of the whole project works as it is. Its Local module must be the target's processor at the target's revision."

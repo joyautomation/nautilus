@@ -225,6 +225,21 @@ type Tag struct {
 	// Scope is "" for a controller-scoped tag, else the owning program or
 	// AOI name.
 	Scope string
+	// Message is a MESSAGE tag's <MessageParameters>, attribute by
+	// attribute in export order (MessageType, RemoteElement, ...): what an
+	// MSG instruction on the tag sends, and where. nil on any other tag.
+	Message []xml.Attr
+}
+
+// MessageParam is the value of one <MessageParameters> attribute of a
+// MESSAGE tag, "" when the export does not carry it.
+func (t *Tag) MessageParam(name string) string {
+	for _, a := range t.Message {
+		if a.Name.Local == name {
+			return a.Value
+		}
+	}
+	return ""
 }
 
 // Program is one <Program> and its routines.
@@ -635,6 +650,14 @@ func parseTags(dec *xml.Decoder, scope string) ([]*Tag, error) {
 				// copy is redundant (see Normalize's DropL5K). An Add-On
 				// Instruction's local tag carries its value as
 				// DefaultData, the same shape.
+				if attr(se, "Format") == "Message" {
+					return walk(dec, func(se xml.StartElement) error {
+						if se.Name.Local == "MessageParameters" {
+							t.Message = append([]xml.Attr(nil), se.Attr...)
+						}
+						return skip(dec)
+					})
+				}
 				if attr(se, "Format") != "Decorated" {
 					return skip(dec)
 				}

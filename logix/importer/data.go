@@ -18,6 +18,12 @@ import (
 // reports that this one has no mapping.
 func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 	m := strings.ToUpper(in.Mnemonic)
+	if m == "MOVE" || m == "MOV" {
+		// MOVE(M.Flags, D): the message's status word (msg.go).
+		if text, ok, err := rt.msgFlags(in); ok {
+			return text, err
+		}
+	}
 	args := in.Args
 	need := func(n int) *refusal {
 		if len(args) != n {
