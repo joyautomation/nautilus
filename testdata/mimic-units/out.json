@@ -167,14 +167,16 @@
       "x": 110,
       "y": 260,
       "bind": "F1_Level",
-      "unit": "ft"
+      "unit": "ft",
+      "at": [150, 320]
     },
     {
       "text": "F-2 level",
       "x": 410,
       "y": 260,
       "bind": "F2_Level",
-      "unit": "ft"
+      "unit": "ft",
+      "at": [450, 320]
     }
   ]
 }

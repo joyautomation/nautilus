@@ -99,6 +99,10 @@ func ExpandUnits(raw []byte) (out []byte, changed bool, err error) {
 				c := fill(l, ph, v).(map[string]any)
 				c["x"] = shift(c["x"], ox)
 				c["y"] = shift(c["y"], oy)
+				// a sense line's point moves with its label
+				if at, ok := c["at"].([]any); ok && len(at) == 2 {
+					c["at"] = []any{shift(at[0], ox), shift(at[1], oy)}
+				}
 				lists["labels"] = append(lists["labels"], c)
 			}
 		}

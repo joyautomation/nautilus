@@ -237,7 +237,8 @@ export {
 	PORT_STUB,
 	attachPipeEnds,
 	connectPorts,
-	panelFor
+	panelFor,
+	labelState
 } from './mimic.js';
 export type {
 	MimicDoc,
@@ -245,6 +246,7 @@ export type {
 	MimicPipe,
 	MimicLabel,
 	MimicPanel,
+	MimicLabelState,
 	MimicPanelReading,
 	MimicPanelSetpoint,
 	MimicUnit,

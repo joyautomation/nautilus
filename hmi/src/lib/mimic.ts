@@ -7,6 +7,7 @@
 // on a page, for the parts of an HMI that are genuinely spatial.
 
 import { builtinParts } from './drawings.js';
+import type { StatusKind } from './types.js';
 
 /** One mimic document (typically a *.mimic.json file imported by a page). */
 export interface MimicDoc {
@@ -367,8 +368,39 @@ export interface MimicLabel {
 	/** Fix the sparkline's scale (a level's 0-100); omitted, it fits the data. */
 	min?: number;
 	max?: number;
+	/** The point on the drawing the label reads, [x, y] in canvas units: a
+	 * thin sense line joins the label to it, ending in a dot, for a reading
+	 * that can't sit right on its line or vessel. */
+	at?: [number, number];
+	/** Shown instead of a value: the state, in words, as a status chip. The
+	 * first state whose `when` tag is true shows; one with no `when` is the
+	 * default and comes last. `text` is the label's name before the chip.
+	 *   "state": [{"when": "P101_Fault", "text": "Fault", "kind": "critical"},
+	 *             {"when": "P101_Running", "text": "Running", "kind": "good"},
+	 *             {"text": "Stopped"}] */
+	state?: MimicLabelState[];
 	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
 	fromUnit?: string;
+}
+
+/** One of a label's states (MimicLabel.state). */
+export interface MimicLabelState {
+	/** The tag (or `!tag`) that makes this the state; omitted, the default. */
+	when?: string;
+	text: string;
+	/** The chip's kind (StatusPill): `off` (default), `good`, `warning`,
+	 * `serious`, `critical`. */
+	kind?: StatusKind;
+}
+
+/** The state a label shows (MimicLabel.state), or null when it has none
+ * or no state matches. */
+export function labelState(l: MimicLabel, tags: Record<string, unknown>): MimicLabelState | null {
+	for (const s of l.state ?? []) {
+		if (!s.when) return s;
+		if (resolveBindings({ v: s.when }, tags).v === true) return s;
+	}
+	return null;
 }
 
 /** Polyline points -> SVG path ("M x y L x y …"). */
@@ -665,7 +697,9 @@ export function expandUnits(doc: MimicDoc, opts: { mark?: boolean } = {}): Mimic
 			}
 			for (const l of unit.labels ?? []) {
 				const c = fill(l) as MimicLabel;
-				out.labels!.push({ ...c, x: (c.x ?? 0) + ox, y: (c.y ?? 0) + oy, ...tag });
+				// a sense line's point moves with its label
+				const at = Array.isArray(c.at) && c.at.length === 2 ? { at: [c.at[0] + ox, c.at[1] + oy] as [number, number] } : {};
+				out.labels!.push({ ...c, x: (c.x ?? 0) + ox, y: (c.y ?? 0) + oy, ...at, ...tag });
 			}
 		});
 	}

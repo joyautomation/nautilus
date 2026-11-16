@@ -31,7 +31,7 @@ var builtinPorts = map[string][]string{
 // width, height, look and write, which <Mimic> hands every one). A bind or
 // a prop it doesn't take shows nothing.
 var builtinProps = map[string][]string{
-	"Tank": {"levelPct", "scale", "shape", "marks", "marksSide"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
+	"Tank": {"levelPct", "scale", "shape", "marks", "marksSide", "alarm"}, "Pump": {"running", "speedPct"}, "Valve": {"openPct"},
 	"Heater": {"powerPct"}, "Gauge": {"value", "min", "max", "unit", "color", "setpoint", "decimals", "sweep", "gap", "thickness"},
 	"Sparkline":     {"values", "color", "yMin", "yMax", "endIndex", "windowSize", "compact"},
 	"CommandButton": {"tag", "kind", "pulseMs", "held", "disabled", "disabledReason"},
@@ -44,10 +44,20 @@ var builtinProps = map[string][]string{
 // it is ignored when the screen runs.
 var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports", "panel"}
 
+// labelKeys are the keys a label has (hmi mimic.ts MimicLabel).
+var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state"}
+
+// stateKinds are a label state's kinds (StatusPill's).
+var stateKinds = []string{"good", "warning", "serious", "critical", "off"}
+
 // writers are the kit's controls: the `tag` prop is the tag they write.
 var writers = map[string]bool{"CommandButton": true, "WriteToggle": true}
 
 type mimicFile struct {
+	Canvas struct {
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+	} `json:"canvas"`
 	Equipment []struct {
 		ID        string            `json:"id"`
 		Component string            `json:"component"`
@@ -63,8 +73,16 @@ type mimicFile struct {
 		Bind   map[string]string `json:"bind"`
 	} `json:"pipes"`
 	Labels []struct {
-		Text string `json:"text"`
-		Bind string `json:"bind"`
+		Text  string    `json:"text"`
+		Bind  string    `json:"bind"`
+		X     float64   `json:"x"`
+		Y     float64   `json:"y"`
+		At    []float64 `json:"at"`
+		State []struct {
+			When string `json:"when"`
+			Text string `json:"text"`
+			Kind string `json:"kind"`
+		} `json:"state"`
 	} `json:"labels"`
 }
 
@@ -151,6 +169,7 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 		// keys equipment doesn't have, and props a kit component doesn't take
 		var keyed struct {
 			Equipment []map[string]json.RawMessage `json:"equipment"`
+			Labels    []map[string]json.RawMessage `json:"labels"`
 		}
 		_ = json.Unmarshal(raw, &keyed)
 		// one warning for each mistake, naming the first piece that makes it
@@ -270,6 +289,15 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 					if l, _ := m["label"].(string); l == "" {
 						say("%s's mark %d has no label", where, i+1)
 					}
+					switch a := m["alarm"].(type) {
+					case nil, bool:
+					case string:
+						if a != "high" && a != "low" {
+							say("%s's mark %d has alarm %q; it is true, \"high\" or \"low\"", where, i+1, a)
+						}
+					default:
+						say("%s's mark %d has alarm %v; it is true, \"high\" or \"low\"", where, i+1, a)
+					}
 					if t != "" {
 						tag(fmt.Sprintf("%s's mark %d", where, i+1), t)
 					} else if !isNum {
@@ -320,13 +348,49 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 				tag(where+"'s "+prop, pp.Bind[prop])
 			}
 		}
+		labelSaid := map[string]bool{} // a key a label doesn't have, said once
 		for i, l := range m.Labels {
+			where := fmt.Sprintf("label %d", i+1)
+			if l.Text != "" {
+				where = "label " + l.Text
+			}
 			if l.Bind != "" {
-				where := fmt.Sprintf("label %d", i+1)
-				if l.Text != "" {
-					where = "label " + l.Text
-				}
 				tag(where, l.Bind)
+			}
+			if i < len(keyed.Labels) {
+				for _, k := range sortedKeys(keyed.Labels[i]) {
+					if !hasKey(labelKeys, k) && k != "fromUnit" && !labelSaid[k] {
+						labelSaid[k] = true
+						warns = append(warns, fmt.Sprintf("%s: %s has %q, which a label doesn't have (it has %s), so the screen ignores it", f, where, k, strings.Join(labelKeys, ", ")))
+					}
+				}
+			}
+			// a sense line runs from the label to a point on the drawing
+			if l.At != nil {
+				if len(l.At) != 2 {
+					say("%s's at is %v; give the point it measures as [x, y]", where, l.At)
+				} else if c := m.Canvas; c.Width > 0 && (l.At[0] < 0 || l.At[1] < 0 || l.At[0] > c.Width || l.At[1] > c.Height) {
+					say("%s's at [%g, %g] is off the %gx%g canvas", where, l.At[0], l.At[1], c.Width, c.Height)
+				}
+			}
+			// a state chip: the first state whose tag is true, else the one
+			// with no tag; one with no tag ends the list
+			for j, s := range l.State {
+				sw := fmt.Sprintf("%s's state %d", where, j+1)
+				if s.Text == "" {
+					say("%s has no text", sw)
+				}
+				if s.Kind != "" && !hasKey(stateKinds, s.Kind) {
+					say("%s's kind is %q; it is one of %s", sw, s.Kind, strings.Join(stateKinds, ", "))
+				}
+				if s.When != "" {
+					tag(sw, s.When)
+				} else if j < len(l.State)-1 {
+					say("%s has no when, so it always shows and the states after it never do; put it last", sw)
+				}
+			}
+			if l.State != nil && l.Bind != "" {
+				say("%s has both bind and state; a label shows a value or a state, so make two labels", where)
 			}
 		}
 		// panels: what each reads and writes is declared, and a panel named

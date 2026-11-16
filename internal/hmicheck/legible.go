@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed text.js
@@ -80,6 +81,67 @@ func (b *browser) legibility(ctx context.Context, s string, v view, reload func(
 	}
 	if line := first.overlaps(); line != "" {
 		out = append(out, line)
+	}
+	return append(out, b.panelLegibility(ctx, s, v)...)
+}
+
+// PanelSelector finds an open equipment panel: the kit's EquipmentPanel,
+// or a project's own that marks itself data-nx-panel.
+const PanelSelector = "aside.nx-panel, [data-nx-panel]"
+
+// panelsLooked is how many equipment a page's panel pass opens at most.
+const panelsLooked = 12
+
+// panelLegibility opens the panel of each piece of equipment a click opens
+// (each panel once, by its title) and looks at its text as legibility looks
+// at the page's: contrast and size, in the theme the page is in. A panel's
+// readings and fault chips are read by the same tired operator.
+func (b *browser) panelLegibility(ctx context.Context, s string, v view) []string {
+	var n int
+	if err := b.eval(ctx, s, "document.querySelectorAll('.eq.clickable').length", &n); err != nil || n == 0 {
+		return nil
+	}
+	wait := func(d time.Duration) bool {
+		select {
+		case <-time.After(d):
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	close := func() {
+		_ = b.eval(ctx, s, "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))", nil)
+		wait(350 * time.Millisecond)
+	}
+	var out []string
+	seen := map[string]bool{}
+	defer func() { _ = b.eval(ctx, s, "delete window.__nxTextRoot", nil) }()
+	for i := 0; i < n && i < panelsLooked*3 && len(seen) < panelsLooked; i++ {
+		if err := b.eval(ctx, s, fmt.Sprintf("document.querySelectorAll('.eq.clickable')[%d].click()", i), nil); err != nil || !wait(450*time.Millisecond) {
+			break
+		}
+		var title string
+		_ = b.eval(ctx, s, fmt.Sprintf("(() => { const p = document.querySelector(%q); return p ? (p.getAttribute('aria-label') || p.querySelector('h2,h3')?.textContent || 'panel').trim() : '' })()", PanelSelector), &title)
+		if title == "" || seen[title] {
+			close()
+			continue
+		}
+		seen[title] = true
+		if err := b.eval(ctx, s, fmt.Sprintf("window.__nxTextRoot = %q", PanelSelector), nil); err == nil {
+			if ts, err := b.textAndShot(ctx, s); err == nil {
+				for _, line := range []string{ts.contrast(), ts.small(v)} {
+					if line != "" {
+						out = append(out, fmt.Sprintf("in %s's panel, %s", title, line))
+					}
+				}
+			}
+			_ = b.eval(ctx, s, "delete window.__nxTextRoot", nil)
+		}
+		close()
+	}
+	// the same fault in many panels (one component's) is said for three
+	if len(out) > 3 {
+		out = append(out[:3], fmt.Sprintf("and %d more like these in other panels", len(out)-3))
 	}
 	return out
 }

@@ -311,3 +311,55 @@ tags:
 		t.Errorf("errors %q, warnings %q", errs, warns)
 	}
 }
+
+// A label's sense line point and its states are checked; a key a label
+// doesn't have is said once.
+func TestCheckMimicsLabelStates(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file(`name: p
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: P1_Running, type: BOOL, role: state }
+  - { name: P1_Fault, type: BOOL, role: state }
+  - { name: FIT1, type: REAL, role: state }
+`),
+		"main.st": file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"canvas":{"width":1000,"height":600},"equipment":[
+			{"id":"T1","component":"Tank","x":0,"y":0,"props":{"alarm":true,"marks":[{"label":"High","value":90,"alarm":"high"},{"label":"Low","value":5,"alarm":"under"}]}}],
+		"labels":[
+			{"text":"P-101","x":10,"y":10,"state":[{"when":"P1_Fault","text":"Fault","kind":"critical"},{"when":"P1_Running","text":"Running","kind":"good"},{"text":"Stopped"}]},
+			{"text":"P-102","x":10,"y":40,"state":[{"text":"Stopped"},{"when":"P2_Running","text":"Running","kind":"green"}]},
+			{"text":"FIT-101","x":10,"y":70,"bind":"FIT1","unit":"gpm","at":[400,300]},
+			{"text":"FIT-102","x":10,"y":100,"bind":"FIT1","at":[1400,300],"colour":"red"},
+			{"text":"FIT-103","x":10,"y":130,"bind":"FIT1","at":[1],"colour":"red"},
+			{"text":"Both","x":10,"y":160,"bind":"FIT1","state":[{"text":"x"}]}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		`equipment T1's mark 2 has alarm "under"; it is true, "high" or "low"`,
+		"label P-102's state 1 has no when, so it always shows and the states after it never do; put it last",
+		"label P-102's state 2 binds P2_Running, which the project doesn't declare",
+		`label P-102's state 2's kind is "green"`,
+		"label FIT-102's at [1400, 300] is off the 1000x600 canvas",
+		"label FIT-103's at is [1]; give the point it measures as [x, y]",
+		"label Both has both bind and state",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 7 {
+		t.Errorf("%d errors, want 7:\n%s", len(errs), all)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], `label FIT-102 has "colour", which a label doesn't have`) {
+		t.Errorf("warnings %q", warns)
+	}
+}

@@ -58,6 +58,7 @@
 	const shown = (r: MimicPanelReading): string => {
 		const v = value(r.tag);
 		if (typeof v === 'number' && isFinite(v)) return v.toFixed(r.decimals ?? 1);
+		if (typeof v === 'string' && v) return v;
 		return '—';
 	};
 
@@ -91,7 +92,7 @@
 								<span class="num">{shown(r)}</span>{#if r.unit}<span class="unit">{r.unit}</span>{/if}
 								{#if typeof v === 'number'}
 									<span class="spark" aria-hidden="true">
-										<Sparkline values={tagHistory(r.tag)} height={18} yMin={r.min} yMax={r.max} compact />
+										<Sparkline values={tagHistory(r.tag)} height={18} yMin={r.min} yMax={r.max} color="var(--ink-2, #c3c2b7)" compact />
 									</span>
 								{/if}
 							{/if}

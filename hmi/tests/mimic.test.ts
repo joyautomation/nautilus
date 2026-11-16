@@ -15,6 +15,7 @@ import {
 	makeGetPort,
 	resolveRuntimePorts,
 	PORT_STUB,
+	labelState,
 	type MimicDoc,
 	type MimicEquipment
 } from '../src/lib/mimic.js';
@@ -387,5 +388,29 @@ describe('pipeTees', () => {
 	});
 	it('does not dot a drop ending at a header\'s own end', () => {
 		expect(pipeTees([header, [[400, 50], [400, 100]]])).toEqual([]);
+	});
+});
+
+describe('labelState', () => {
+	const l = {
+		text: 'P-101',
+		x: 0,
+		y: 0,
+		state: [
+			{ when: 'Fault', text: 'Fault', kind: 'critical' as const },
+			{ when: 'Run', text: 'Running', kind: 'good' as const },
+			{ text: 'Stopped' }
+		]
+	};
+	it('shows the first state whose tag is true', () => {
+		expect(labelState(l, { Fault: true, Run: true })?.text).toBe('Fault');
+		expect(labelState(l, { Fault: false, Run: true })?.text).toBe('Running');
+	});
+	it('falls back to the state with no tag', () => {
+		expect(labelState(l, { Fault: false, Run: false })?.text).toBe('Stopped');
+		expect(labelState(l, {})?.text).toBe('Stopped');
+	});
+	it('is null with no states', () => {
+		expect(labelState({ text: 'x', x: 0, y: 0 }, {})).toBe(null);
 	});
 });

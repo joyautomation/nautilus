@@ -306,12 +306,23 @@ naut builds the operator screen from the project itself, with no npm, and
   `"props": {"marks": [{"label": "Lead on", "tag": "LeadOnSP"},
   {"label": "High alarm", "value": 90, "alarm": true}]}`. They draw on the
   tank's left (`"marksSide": "right"` past its scale, on the side its
-  pipes don't reach): leave them room. The setpoints themselves are
-  written in the tank's panel.
+  pipes don't reach): leave them room. An alarm mark stays grey until the
+  level reaches it. The setpoints themselves are written in the tank's
+  panel.
 - Every analog value on the drawing is a `labels` entry with `bind` (and
-  `unit`, `decimals`) beside what it measures: naut's pages draw it as a
+  `unit`, `decimals`) at the point it measures: naut's pages draw it as a
   readout with a trend of its last few minutes (`"min"`/`"max"` fix the
-  trend's scale, a level's 0-100).
+  trend's scale, a level's 0-100). Where the readout can't sit right on
+  its line or vessel, `"at": [x, y]` names that point and a dashed sense
+  line joins them. A meter that reads a header's total sits on the header
+  after the junction, not on one branch.
+- Everything an operator watches run (a pump, a blower, an agitator, a
+  sequence) shows its state twice: on the symbol (the kit's change colour
+  and show flow) and in words, a `labels` entry with `state` beside it, drawn
+  as a status chip: `{"text": "P-101", "x": 610, "y": 700, "state": [{"when":
+  "P101_Fault", "text": "Fault", "kind": "critical"}, {"when": "P101_Running",
+  "text": "Running", "kind": "good"}, {"text": "Stopped"}]}`. The first
+  state whose `when` tag is true shows; the one with no `when` comes last.
 - What repeats (four filters, eight pumps) goes in the mimic's `units`,
   drawn once: `{n}` in any id, tag, label or pipe end becomes each value,
   and each copy moves by `step`:
@@ -341,6 +352,17 @@ naut builds the operator screen from the project itself, with no npm, and
   valves XV-201, XV-202, its level LT-201), and use the same numbers
   wherever they appear. An inline instrument (a flow meter, a control
   valve) sits on the line it measures, drawn in it, not beside it.
+- It is an operator screen, reviewed by ISA-101 and by how fast an
+  operator reads it, not a drafting P&ID: draw the plant the way an
+  operator recognises it (a tank in section, a submersible pump in its
+  well), grey and flat, with no instrument bubbles. Colour is for state and
+  alarms only: text in ink, never a coloured label or setpoint; liquid in
+  the tank's neutral grey, and the tank's `alarm` (bound to a condition: too
+  hot, out of spec) turns it the alarm colour while it holds. Use the whole
+  canvas: what an operator wants at a glance (the lead pump and
+  alternation, the sequence's step, a batch's phase) goes in readouts and
+  state labels in the space beside what it describes, never a third of the
+  screen left empty.
 - An operator picks a light or a dark theme. Colour your components from
   the kit's tokens, never a hex (a hex reads in one theme only): text in
   `var(--ink)`, `var(--ink-2)` or `var(--muted)`; grounds in `var(--bg)`,
@@ -363,7 +385,8 @@ naut builds the operator screen from the project itself, with no npm, and
   under three or more others, a pipe drawn through a tag or a reading, a
   shape drawn far outside its drawing, a drawing that runs off the bottom
   of the window or is drawn too small to read, text too dim to read in
-  either theme, drawn under 9 px or drawn over other text or a field,
+  either theme or in an equipment's panel, drawn under 9 px or drawn over
+  other text or a field,
   controls an operator has to scroll to reach on a desktop, sideways
   scroll on a phone. Fix them like compile errors. A screen you haven't
   seen rendered isn't done.

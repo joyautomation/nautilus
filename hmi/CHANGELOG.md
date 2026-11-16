@@ -4,6 +4,26 @@
 
 ### Added
 
+- **Sense lines and state words on a mimic's labels** (James's review of
+  the hand-built lift station, 11-15). A label's `at` names the point its
+  reading belongs to, and a dashed sense line joins them. A label's
+  `state` shows a state in words as a status chip, the first whose `when`
+  tag is true (`labelState(label, tags)`), so a pump says Running, Stopped
+  or Fault beside its symbol as well as on it. A bound label of a STRING
+  tag shows the text.
+
+### Changed
+
+- **Colour only for state and alarms.** A `Tank`'s liquid is a neutral
+  grey (a project can still set `--fluid`); its new `alarm` turns it the
+  alarm colour while a condition holds (too hot, out of spec). An alarm
+  mark is grey with a hollow arrow until the level reaches it (`alarm`:
+  `true`, `"high"` or `"low"`). Sparklines on a mimic's readouts and in
+  `EquipmentPanel` draw in ink grey, not the accent blue.
+- **Status chips read at arm's length:** `StatusPill` is 13 px, not 12. The
+  light theme's `--s1` is a step darker (#2768c0), so white text on it (a
+  selected tab, an Auto button) passes 4.5:1.
+
 - **Level marks on a `Tank`.** `marks` puts an arrow and its value at each
   level that matters (a pump's start and stop from a setpoint tag, a high
   alarm at a fixed value) against the vessel, on its left or, with

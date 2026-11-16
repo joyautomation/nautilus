@@ -17,8 +17,9 @@
 	import OffPage from './OffPage.svelte';
 	import SetpointGroup from './SetpointGroup.svelte';
 	import Pipe from './Pipe.svelte';
+	import StatusPill from './StatusPill.svelte';
 	import { sampleTag, tagHistory } from '../taghistory.svelte.js';
-	import { BUILTIN_PORTS, brokenPipes, expandUnits, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -141,9 +142,11 @@
 	// A bound label's live value (MimicLabel.bind), resolved through the same
 	// resolveBindings() path equipment bindings use — one mechanism, "!"
 	// negation and all — and formatted for the readout. '—' until the tag
-	// resolves to a finite number, same as Trend/ScanDiagnostics.
+	// resolves to a finite number, same as Trend/ScanDiagnostics. A STRING
+	// tag (a sequence's step) shows as it is.
 	const labelValue = (l: MimicLabel): string => {
 		const v = resolveBindings({ value: l.bind! }, tags).value;
+		if (typeof v === 'string') return v || '—';
 		return typeof v === 'number' && isFinite(v) ? v.toFixed(l.decimals ?? 1) : '—';
 	};
 	const labelRaw = (l: MimicLabel): unknown => resolveBindings({ value: l.bind! }, tags).value;
@@ -156,6 +159,16 @@
 		}, 1000);
 		return () => clearInterval(id);
 	});
+
+	/** Each label's sense line (MimicLabel.at): a right-angled run from
+	 * just inside the label to its point, which gets a dot. */
+	const senses = $derived(
+		(doc.labels ?? []).flatMap((l) =>
+			Array.isArray(l.at) && l.at.length === 2
+				? [{ d: pointsToPath(orthogonalPoints([[l.x + 10, l.y + 10], l.at])), x: l.at[0], y: l.at[1] }]
+				: []
+		)
+	);
 
 	const drawLook = $derived(look ?? doc.look ?? 'isa101');
 	/** A project component (one passed in `registry`, not a kit built-in) gets
@@ -362,6 +375,14 @@
 				{#each tees as t, i (i)}
 					<circle class="tee" cx={t.x} cy={t.y} r={drawLook === 'isa101' ? 5 : 7} fill="var(--pipe-wall, var(--edge, #7a7973))" />
 				{/each}
+				<!-- sense lines: a label joined to the point it reads; the label,
+				     drawn over this layer, hides the line's end under it -->
+				{#each senses as s, i (i)}
+					<g class="sense">
+						<path d={s.d} fill="none" stroke="var(--muted, #898781)" stroke-width="1.5" stroke-dasharray="5 4" />
+						<circle cx={s.x} cy={s.y} r="4" fill="var(--muted, #898781)" />
+					</g>
+				{/each}
 			</svg>
 
 			{#each doc.equipment ?? [] as eq (eq.id)}
@@ -395,8 +416,13 @@
 					<span class="lbl readout" style="left: {l.x}px; top: {l.y}px"
 						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
 						>{#if l.unit}<span>{l.unit}</span>{/if}{#if trended(l)}<span class="spark" aria-hidden="true"
-								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} compact /></span
+								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} color="var(--ink-2, #c3c2b7)" compact /></span
 							>{/if}</span
+					>
+				{:else if l.state}
+					{@const st = labelState(l, tags)}
+					<span class="lbl state" style="left: {l.x}px; top: {l.y}px"
+						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}</span
 					>
 				{:else}
 					<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
@@ -558,6 +584,13 @@
 		align-self: center;
 		width: 40px;
 		margin-left: 0.2em;
+	}
+	/* A state label: its name, muted, then the state as a status chip. */
+	.lbl.state {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45em;
+		padding: 1px 3px;
 	}
 	.lbl.readout .num {
 		color: var(--ink, #e6e6e6);

@@ -17,11 +17,16 @@
 	// past the scale, on the side the pipes don't reach), as a label would
 	// (leave them room), so the vessel keeps its size and its place on its pipes
 	// with marks or without. Labels too close to read are nudged apart; their
-	// arrows stay at the true level.
+	// arrows stay at the true level. An `alarm` mark is grey with a hollow
+	// arrow until the level reaches it, then turns the alarm colour: alarm
+	// colour only while there is an alarm.
+	//
+	// The liquid is a neutral grey; `alarm` (a bound condition: too hot, out
+	// of spec) turns it the alarm colour while it holds.
 	import { tankGeometry, type TankShape } from '../drawings.js';
 	import { resolveBindings, type MimicLook } from '../mimic.js';
 
-	type Mark = { label: string; value?: number; tag?: string; alarm?: boolean };
+	type Mark = { label: string; value?: number; tag?: string; alarm?: boolean | 'high' | 'low' };
 
 	let {
 		levelPct = 50,
@@ -33,7 +38,8 @@
 		shape = 'vessel',
 		marks = [],
 		marksSide = 'left',
-		tags = {}
+		tags = {},
+		alarm = false
 	}: {
 		levelPct?: number;
 		label?: string;
@@ -45,12 +51,16 @@
 		/** `vessel` (closed), `open` (no roof) or `pit` (below grade). */
 		shape?: TankShape;
 		/** Levels marked on the vessel's left wall, in % of its height: each a
-		 *  fixed `value` or a `tag`; `alarm` draws it as an alarm level. */
+		 *  fixed `value` or a `tag`; `alarm` makes it an alarm level, `"high"`
+		 *  (reached from below) or `"low"` (from above): `true` is high when
+		 *  the mark is in the tank's upper half, low in its lower half. */
 		marks?: Mark[];
 		/** Which side of the tank the marks stand on. */
 		marksSide?: 'left' | 'right';
 		/** The live tag values a mark's `tag` is read from (<Mimic> passes them). */
 		tags?: Record<string, unknown>;
+		/** The liquid's condition needs attention: it draws in the alarm colour. */
+		alarm?: boolean;
 	} = $props();
 
 	const uid = `tank${Math.random().toString(36).slice(2, 8)}`;
@@ -88,7 +98,10 @@
 			.flatMap((m) => {
 				const raw = m.tag ? resolveBindings({ v: m.tag }, tags).v : m.value;
 				const pct = typeof raw === 'number' && isFinite(raw) ? raw : undefined;
-				return pct === undefined ? [] : [{ ...m, pct, y: at(pct), ly: at(pct) }];
+				if (pct === undefined) return [];
+				const high = m.alarm === 'high' || (m.alarm === true && pct >= 50);
+				const active = !!m.alarm && (high ? clamped >= pct : clamped <= pct);
+				return [{ ...m, pct, active, y: at(pct), ly: at(pct) }];
 			})
 			.sort((a, b) => a.y - b.y);
 		for (let i = 1; i < out.length; i++) out[i].ly = Math.max(out[i].ly, out[i - 1].ly + font * 0.95);
@@ -100,6 +113,13 @@
 	let font = $derived(box.font);
 
 	let real = $derived(look === 'realistic');
+	// Neutral, a step off the bore in either theme; the alarm colour while
+	// `alarm` holds (a project can set --fluid).
+	let liquid = $derived(
+		alarm
+			? 'color-mix(in srgb, var(--serious, #ec835a) 60%, var(--bg, #0d0d0d))'
+			: 'var(--fluid, color-mix(in srgb, var(--ink-2, #c3c2b7) 32%, var(--bg, #0d0d0d)))'
+	);
 	let name = $derived(pit ? 'Pit' : open ? 'Basin' : 'Tank');
 	let shellFill = $derived(real ? (pit ? '#8f8c84' : `url(#${uid}-steel)`) : 'var(--surface-2, #232321)');
 	let edge = $derived(real ? '#2e3134' : 'var(--edge, #7a7973)');
@@ -192,7 +212,7 @@
 			y={liquidY}
 			width={iw}
 			height={liquidH}
-			fill={real ? `url(#${uid}-liq)` : 'var(--fluid, #35618a)'}
+			style:fill={real && !alarm ? `url(#${uid}-liq)` : liquid}
 		/>
 		<!-- surface line -->
 		{#if clamped > 1 && clamped < 99}
@@ -223,12 +243,18 @@
 
 	<!-- level marks: an arrow at the true level, pointing at the tank -->
 	{#each placed as m, i (i)}
-		{@const c = m.alarm ? 'var(--serious, #ec835a)' : 'var(--ink-2, #c3c2b7)'}
-		{@const ink = m.alarm ? 'var(--ink, #e6e6e6)' : 'var(--ink-2, #c3c2b7)'}
+		{@const c = m.active ? 'var(--serious, #ec835a)' : 'var(--ink-2, #c3c2b7)'}
+		{@const ink = m.active ? 'var(--ink, #e6e6e6)' : 'var(--ink-2, #c3c2b7)'}
 		{@const r = marksSide === 'right'}
 		{@const ax = r ? box.w + 2 * k : vx - g - 2 * k}
 		{@const d = r ? 1 : -1}
-		<path d="M {ax} {m.y} L {ax + d * 8 * k} {m.y - 4 * k} L {ax + d * 8 * k} {m.y + 4 * k} Z" fill={c} />
+		<path
+			d="M {ax} {m.y} L {ax + d * 8 * k} {m.y - 4 * k} L {ax + d * 8 * k} {m.y + 4 * k} Z"
+			fill={m.alarm && !m.active ? 'none' : c}
+			stroke={c}
+			stroke-width={m.alarm && !m.active ? Math.max(1, k) : 0}
+			stroke-linejoin="round"
+		/>
 		{#if m.ly !== m.y}
 			<line x1={ax + d * 8 * k} y1={m.y} x2={ax + d * 12 * k} y2={m.ly} stroke={c} stroke-width={Math.max(0.75, 0.75 * k)} />
 		{/if}
