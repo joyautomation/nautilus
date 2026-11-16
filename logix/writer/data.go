@@ -142,7 +142,7 @@ func (c *rungCtx) assign(e ld.Element) ([]string, bool) {
 	for i := 0; i < len(as); i++ {
 		a := as[i]
 		// A whole array or structure, or a run the import marked
-		// `@logix COP`/`CPS`, is a copy (copy.go).
+		// `@logix COP n`/`CPS n`, is a copy (copy.go).
 		var run *copyRun
 		if r, ok := runs[i]; ok {
 			run = &r

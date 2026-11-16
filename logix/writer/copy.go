@@ -60,57 +60,72 @@ func sameType(a, b string) bool {
 	return norm(a) == norm(b)
 }
 
-// copyMnemonic is the instruction a copy's pragma names, "" for none.
-func copyMnemonic(a ld.Assignment) string {
-	switch {
-	case a.Pragma("logix CPS"):
-		return "CPS"
-	case a.Pragma("logix COP"):
-		return "COP"
+// copyPragma reads `@logix COP [n]` / `@logix CPS [n]` from an
+// assignment's comment: the instruction and the number of assignments the
+// copy spans, ending with this one (1 when n is left out). "" for none.
+func copyPragma(a ld.Assignment) (string, int) {
+	f := strings.Fields(strings.ToUpper(a.Comment))
+	for i := 0; i+1 < len(f); i++ {
+		if f[i] != "@LOGIX" || (f[i+1] != "COP" && f[i+1] != "CPS") {
+			continue
+		}
+		n := 1
+		if i+2 < len(f) {
+			if v, err := strconv.Atoi(f[i+2]); err == nil {
+				n = v
+			}
+		}
+		return f[i+1], n
 	}
-	return ""
+	return "", 0
 }
 
 // elemRe splits an element reference: `Path[3]` → Path, 3.
 var elemRe = regexp.MustCompile(`^(.+)\[\s*(-?\d+)\s*\]$`)
 
-// copyRuns finds, in one assignment box, the element-by-element runs the
-// import wrote for a COP/CPS: each ends on an assignment carrying the
-// pragma and reaches back over the contiguous element copies before it
-// (same arrays, indexes stepping by one, no pragma of their own). The map
-// is keyed by the run's first assignment.
+// copyRun is one copy the import spelled element by element: the
+// assignments as[start..end], one instruction. bad says why the marked run
+// is not one (an edit broke it), for the diagnostic.
 type copyRun struct {
 	end   int
 	instr string
+	bad   string
 }
 
+// copyRuns finds, in one assignment box, the runs a `@logix COP n` /
+// `CPS n` pragma marks: the n assignments ending on the marked one, which
+// must be element copies stepping by one through the same two arrays.
+// Nothing outside a marked run is folded. Keyed by the run's first
+// assignment.
 func copyRuns(as []ld.Assignment) map[int]copyRun {
 	runs := map[int]copyRun{}
-	taken := make([]bool, len(as))
 	for i, a := range as {
-		mn := copyMnemonic(a)
+		mn, n := copyPragma(a)
 		if mn == "" {
 			continue
 		}
-		start := i
-		if dp, di, ok := elemOf(a.Target); ok {
-			if sp, si, ok := elemOf(refText(a.Value)); ok {
-				for start > 0 && !taken[start-1] && copyMnemonic(as[start-1]) == "" {
-					p := as[start-1]
-					step := i - start + 1
-					pdp, pdi, ok1 := elemOf(p.Target)
-					psp, psi, ok2 := elemOf(refText(p.Value))
-					if !ok1 || !ok2 || !strings.EqualFold(pdp, dp) || !strings.EqualFold(psp, sp) || pdi != di-step || psi != si-step {
-						break
-					}
-					start--
+		start := i - n + 1
+		run := copyRun{end: i, instr: mn}
+		switch {
+		case n < 1 || start < 0:
+			run.bad = "marks " + strconv.Itoa(n) + " assignments, and the box has " + strconv.Itoa(i+1) + " up to it"
+			start = i
+		case n > 1:
+			dp, di, ok1 := elemOf(a.Target)
+			sp, si, ok2 := elemOf(refText(a.Value))
+			for k := start; k < i && run.bad == ""; k++ {
+				p := as[k]
+				step := i - k
+				pdp, pdi, ok3 := elemOf(p.Target)
+				psp, psi, ok4 := elemOf(refText(p.Value))
+				if m, _ := copyPragma(p); m != "" {
+					run.bad = "overlaps another marked copy"
+				} else if !ok1 || !ok2 || !ok3 || !ok4 || !strings.EqualFold(pdp, dp) || !strings.EqualFold(psp, sp) || pdi != di-step || psi != si-step {
+					run.bad = "is not " + strconv.Itoa(n) + " element copies stepping through the same two arrays"
 				}
 			}
 		}
-		for k := start; k <= i; k++ {
-			taken[k] = true
-		}
-		runs[start] = copyRun{end: i, instr: mn}
+		runs[start] = run
 	}
 	return runs
 }
@@ -142,10 +157,18 @@ func (c *rungCtx) copyText(as []ld.Assignment, i int, run *copyRun) (text string
 	w := &stWriter{lw: c.lw}
 	if run != nil {
 		first, last := as[i], as[run.end]
+		marked := ld.PrintAssignments(as[i : run.end+1])
+		if run.bad != "" {
+			c.lw.diag(ruleDataOp, c.r.Line, c.r.Name, "{ %s }: the @logix %s pragma %s; fix the run or delete the pragma", marked, run.instr, run.bad)
+			return "", run.end + 1, false
+		}
+		if refText(first.Value) == "" {
+			c.lw.diag(ruleDataOp, c.r.Line, c.r.Name, "{ %s }: the @logix %s pragma marks a copy, but %s := %s copies no reference", marked, run.instr, first.Target, first.Value.IEC())
+			return "", run.end + 1, false
+		}
 		src, ok1 := c.ref(refText(first.Value))
 		dst, ok2 := c.ref(first.Target)
-		if refText(first.Value) == "" || !ok1 || !ok2 {
-			c.lw.diag(ruleDataOp, c.r.Line, c.r.Name, "{ %s }: the @logix %s pragma marks a copy, but %s := %s copies no reference", ld.PrintAssignments(as[i:run.end+1]), run.instr, first.Target, first.Value.IEC())
+		if !ok1 || !ok2 {
 			return "", run.end + 1, false
 		}
 		n := run.end - i + 1

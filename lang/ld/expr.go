@@ -407,6 +407,9 @@ type Assignment struct {
 // for `(* @logix CPS *)`.
 func (a Assignment) Pragma(words string) bool {
 	want := strings.Fields(strings.ToLower(words))
+	if len(want) == 0 || a.Comment == "" {
+		return false
+	}
 	got := strings.Fields(strings.ToLower(a.Comment))
 	for i := range got {
 		if got[i] != "@"+want[0] || i+len(want) > len(got) {

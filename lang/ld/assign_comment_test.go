@@ -57,7 +57,7 @@ VAR
 END_VAR
 LD
   RUNG r (* a copy *)
-    Go { B := A (* @logix CPS *) }
+    Go { B := A (* @logix CPS {braces} '} *) }
 END_LD
 END_PROGRAM
 `
@@ -71,7 +71,7 @@ END_PROGRAM
 			text = e.Text
 		}
 	}
-	if text != "B := A (* @logix CPS *)" {
+	if text != "B := A (* @logix CPS {braces} '} *)" {
 		t.Errorf("assign text %q", text)
 	}
 }

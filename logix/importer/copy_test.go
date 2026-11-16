@@ -20,6 +20,8 @@ func TestCopiesImportAndWriteBack(t *testing.T) {
 		"XIC(go)COP(A[1],C[4],3);",
 		"COP(n,m,1);",
 		"XIC(go)CPS(A[0],C[0],1);",
+		"COP(A,m,1);",
+		"COP(n,A,1);",
 	}
 	p := mustImport(t, miniL5X(tags, rungs...))
 	for _, n := range p.Notes {
@@ -31,9 +33,12 @@ func TestCopiesImportAndWriteBack(t *testing.T) {
 	for _, want := range []string{
 		"go { B := A }",
 		"go { B := A (* @logix CPS *) }",
-		"go { C[4] := A[1]; C[5] := A[2]; C[6] := A[3] (* @logix COP *) }",
+		"go { C[4] := A[1]; C[5] := A[2]; C[6] := A[3] (* @logix COP 3 *) }",
 		"{ m := n (* @logix COP *) }",
 		"go { C[0] := A[0] (* @logix CPS *) }",
+		// An array against a single value is its first element.
+		"{ m := A[0] (* @logix COP *) }",
+		"{ A[0] := n (* @logix COP *) }",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("missing %q in\n%s", want, src)
@@ -47,8 +52,15 @@ func TestCopiesImportAndWriteBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rungTexts(back, "Main", "MainRoutine"); strings.Join(got, "\n") != strings.Join(rungs, "\n") {
-		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(rungs, "\n  "))
+	// Logix reads a whole array as its first element, so the two
+	// single-value copies come back naming it.
+	want := append([]string(nil), rungs...)
+	want[5], want[6] = "COP(A[0],m,1);", "COP(n,A[0],1);"
+	if got := rungTexts(back, "Main", "MainRoutine"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+	if _, problems, err := writer.RoundTrip(src, writer.Options{Controller: "Mini"}); err != nil || len(problems) > 0 {
+		t.Errorf("round-trip comparator: %v %v", err, problems)
 	}
 }
 
@@ -57,7 +69,7 @@ func TestCopiesImportAndWriteBack(t *testing.T) {
 // result depends on the direction Logix copies in), a computed length, and
 // bytes reinterpreted between types.
 func TestCopiesRefusedByReason(t *testing.T) {
-	tags := []string{"go:BOOL", "A:DINT[4]", "C:DINT[8]", "n:DINT", "bytes:SINT[4]"}
+	tags := []string{"go:BOOL", "A:DINT[4]", "C:DINT[8]", "n:DINT", "bytes:SINT[4]", "s1:STRING", "s2:STRING"}
 	cases := map[string]string{
 		"COP(A,C,8);":        "runs past the end of A",
 		"COP(C[0],C[1],3);":  "overlap in C",

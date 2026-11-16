@@ -21,10 +21,11 @@ import (
 //
 //   - a whole array or structure is a plain assignment, which the writer
 //     emits as COP (Logix cannot assign either);
-//   - any other copy (a slice, one element, a scalar) carries the pragma
-//     `(* @logix COP *)` on its last assignment, and the writer folds the
-//     run back into the one instruction;
-//   - a CPS always carries `(* @logix CPS *)`.
+//   - any other copy (a slice, one element, a scalar, a STRING) carries
+//     the pragma `(* @logix COP n *)` on its last assignment, n being the
+//     run's length (left out for 1), and the writer folds exactly those n
+//     assignments back into the one instruction;
+//   - a CPS always carries `(* @logix CPS n *)`.
 //
 // A copy between different types reinterprets bytes (DINTs into a SINT
 // buffer for a socket payload); nautilus copies values, not memory, so it
@@ -75,26 +76,37 @@ func (rt *routine) copyInstr(in *l5x.Instr) (string, *refusal) {
 	if _, ok := rt.im.typeText(dst.elem, ""); !ok {
 		return "", refuse("type", "%s: type %s has no nautilus declaration", in.Args[1], dst.elem)
 	}
-	pragma := " (* @logix " + m + " *)"
+	pragma := func(n int) string {
+		if n == 1 {
+			return " (* @logix " + m + " *)"
+		}
+		return " (* @logix " + m + " " + strconv.Itoa(n) + " *)"
+	}
+	for _, o := range []copyOp{src, dst} {
+		if o.start < 0 {
+			return "", refuse(m, "element %d of %s", o.start, o.array)
+		}
+	}
 
 	// A single value (a structure, a scalar, one member): one assignment.
+	// An array on the other side is its first element, as Logix reads it.
 	if src.array == "" || dst.array == "" {
 		if n != 1 {
 			return "", refuse(m, "a length of %d from or into a single %s runs into the memory after it", n, dst.elem)
 		}
-		s, bad := rt.ref(in.Args[0], "")
+		s, bad := rt.ref(src.one(), "")
 		if bad != nil {
 			return "", bad
 		}
-		d, bad := rt.ref(in.Args[1], "")
+		d, bad := rt.ref(dst.one(), "")
 		if bad != nil {
 			return "", bad
 		}
 		rt.markWritten(in.Args[1])
-		if src.array == "" && dst.array == "" && m == "COP" && !rt.im.isElementary(dst.elem) {
+		if src.array == "" && dst.array == "" && m == "COP" && rt.im.isUserType(dst.elem) {
 			return "{ " + d + " := " + s + " }", nil // a whole structure: the writer's COP
 		}
-		return "{ " + d + " := " + s + pragma + " }", nil
+		return "{ " + d + " := " + s + pragma(1) + " }", nil
 	}
 
 	for _, o := range []copyOp{src, dst} {
@@ -117,7 +129,7 @@ func (rt *routine) copyInstr(in *l5x.Instr) (string, *refusal) {
 		}
 		rt.markWritten(in.Args[1])
 		if m == "CPS" {
-			return "{ " + d + " := " + s + pragma + " }", nil
+			return "{ " + d + " := " + s + pragma(1) + " }", nil
 		}
 		return "{ " + d + " := " + s + " }", nil // a whole array: the writer's COP
 	}
@@ -138,7 +150,15 @@ func (rt *routine) copyInstr(in *l5x.Instr) (string, *refusal) {
 		stmts = append(stmts, d+" := "+s)
 	}
 	rt.markWritten(in.Args[1])
-	return "{ " + strings.Join(stmts, "; ") + pragma + " }", nil
+	return "{ " + strings.Join(stmts, "; ") + pragma(n) + " }", nil
+}
+
+// one is the operand as a single value: an array's element at start.
+func (o copyOp) one() string {
+	if o.array == "" {
+		return o.arg
+	}
+	return o.array + "[" + strconv.Itoa(o.start) + "]"
 }
 
 // copyOperand resolves a COP/CPS operand: a tag, a member path, or an
@@ -226,12 +246,15 @@ func (rt *routine) copyOperand(m, a string) (copyOp, *refusal) {
 	return copyOp{arg: a, elem: dtype, whole: true}, nil
 }
 
-// isElementary reports a Logix elementary type: one a plain assignment
-// writes back as a MOVE, so a copy of it keeps its pragma.
-func (im *importer) isElementary(dtype string) bool {
-	switch strings.ToUpper(dtype) {
-	case "BOOL", "BIT", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL":
-		return true
+// isUserType reports a structure the export defines (a UDT): the one kind
+// of whole value the writer copies with COP on its own. Anything else (an
+// elementary type, a STRING, which the writer would MOVE) keeps the
+// pragma.
+func (im *importer) isUserType(dtype string) bool {
+	for _, dt := range im.file.Controller.DataTypes {
+		if strings.EqualFold(dt.Name, dtype) {
+			return true
+		}
 	}
 	return false
 }

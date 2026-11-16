@@ -31,7 +31,7 @@ LD
   RUNG sync (* a whole array, synchronous *)
     Go { B := A (* @logix CPS *) }
   RUNG slice (* the import's slice *)
-    Go { B[1] := A[0]; B[2] := A[1] (* @logix COP *) }
+    Go { B[1] := A[0]; B[2] := A[1] (* @logix COP 2 *) }
   RUNG mixed (* a move, then a one-element CPS, in one box *)
     Go { B[0] := A[3]; B[3] := A[2] (* @logix CPS *) }
 END_LD
@@ -77,6 +77,42 @@ END_PROGRAM
 	for _, want := range []string{"COP(A, B, 4);", "COP(p, q, 1);", "n := A[1];"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in\n%s", want, text)
+		}
+	}
+}
+
+// Only what a pragma marks is folded: a move before a one-element CPS
+// stays a MOVE even when its indexes line up, and a pragma whose count the
+// box does not bear out (an edit broke the run) is a diagnostic, not a
+// guess.
+func TestCopyRunsFoldOnlyWhatIsMarked(t *testing.T) {
+	head := `PROGRAM Main
+VAR_EXTERNAL
+    Go : BOOL;
+    A : ARRAY [0..3] OF DINT;
+    B : ARRAY [0..3] OF DINT;
+END_VAR
+LD
+  RUNG r (* a copy *)
+    Go { `
+	tail := ` }
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, head+"B[2] := A[1]; B[3] := A[2] (* @logix CPS *)"+tail, Options{Controller: "C"})
+	if got := f.Controller.Programs[0].Routines[0].Rungs[0].Text; got != "XIC(Go)MOVE(A[1],B[2])CPS(A[2],B[3],1);" {
+		t.Errorf("rung %s", got)
+	}
+	for body, want := range map[string]string{
+		"B[2] := A[1]; B[3] := A[3] (* @logix COP 2 *)": "is not 2 element copies",
+		"B[3] := A[2] (* @logix COP 2 *)":               "marks 2 assignments",
+	} {
+		_, diags, err := Write(head+body+tail, Options{Controller: "C"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(joinDiags(diags), want) {
+			t.Errorf("%s: want a diagnostic naming %q, got %s", body, want, joinDiags(diags))
 		}
 	}
 }
