@@ -25,7 +25,7 @@ type Channel struct {
 // Message is a target.logix.messages entry: MSG parameters the import
 // found that the block and channel do not say; "" keeps the default.
 type Message struct {
-	Name                                             string
+	Name                                            string
 	ConnectedFlag, CacheConnections, ConnectionPath string
 }
 
