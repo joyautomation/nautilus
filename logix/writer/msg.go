@@ -20,6 +20,7 @@ import (
 type Channel struct {
 	Name, Type, Host string
 	Slot             *int
+	Port             int // 0 or 44818: an MSG path cannot name another
 }
 
 // Message is a target.logix.messages entry: MSG parameters the import
@@ -32,7 +33,7 @@ type Message struct {
 // msgParams is a MESSAGE tag's MessageParameters, written in the order
 // Studio 5000 exports them.
 type msgParams struct {
-	Type, Remote, Connected, Path, Local, Cache string
+	Type, Remote, Length, Connected, Path, Local, Cache string
 }
 
 // message lowers a READ / WRITE call to MSG(inst) and records the tag's
@@ -50,7 +51,7 @@ func (c *rungCtx) message(e ld.Element, typ string) (string, bool) {
 	}
 	var id, remote, local string
 	dataPin := "RD_1"
-	p := msgParams{Type: "CIP Data Table Read", Connected: "2"}
+	p := msgParams{Type: "CIP Data Table Read", Connected: "2", Length: "1"}
 	if typ == "WRITE" {
 		dataPin, p.Type = "SD_1", "CIP Data Table Write"
 	}
@@ -84,6 +85,19 @@ func (c *rungCtx) message(e ld.Element, typ string) (string, bool) {
 				return "", false
 			}
 			local = r
+			// A whole array moves whole, as the block moves it: that many
+			// elements from the first.
+			if base, rest := splitRef(val); rest == "" {
+				if v, ok := c.lw.vars[strings.ToLower(base)]; ok {
+					if n := arrayLen(v.Type); n > 0 {
+						p.Length = fmt.Sprint(n)
+						local = base + "[0]"
+						if lo := arrayLo(v.Type); lo != 0 {
+							return bad("%s := %s: an array from index %d; Logix arrays start at 0", pin, val, lo)
+						}
+					}
+				}
+			}
 		case "REQ":
 			return bad("the rung's power drives REQ; don't bind it")
 		default:
@@ -106,6 +120,8 @@ func (c *rungCtx) message(e ld.Element, typ string) (string, bool) {
 		return bad("ID %q names no channel in channels:", id)
 	case !strings.EqualFold(ch.Type, "cip"):
 		return bad("channel %s is %s; an MSG reaches a Logix controller over a cip channel", id, ch.Type)
+	case ch.Port != 0 && ch.Port != 44818:
+		return bad("channel %s uses port %d; an MSG path reaches the EtherNet/IP port only", id, ch.Port)
 	}
 	p.Path = "2, " + ch.Host
 	if ch.Slot != nil {
@@ -128,8 +144,10 @@ func (c *rungCtx) message(e ld.Element, typ string) (string, bool) {
 	if tag == nil {
 		return "", false
 	}
-	if tag.Message != nil && *tag.Message != p {
-		return bad("a MESSAGE tag has one set of parameters; this call differs from another call of %s", e.Inst)
+	if tag.Message != nil {
+		// One MSG per tag: two would share its EN/DN/ER, as two calls of
+		// one block would share its REQ edge.
+		return bad("%s is called on another rung too; a READ or WRITE instance has one call", e.Inst)
 	}
 	tag.Message = &p
 	return "MSG(" + e.Inst + ")", true
@@ -179,4 +197,30 @@ func (lw *lowered) checkMessages() {
 			}
 		}
 	}
+}
+
+// arrayLen and arrayLo read `ARRAY [lo..hi] OF T`: its element count (0
+// when t is not a one-dimensional array) and its lower bound.
+func arrayLen(t string) int {
+	lo, hi, ok := arrayBounds(t)
+	if !ok {
+		return 0
+	}
+	return int(hi - lo + 1)
+}
+
+func arrayLo(t string) int64 {
+	lo, _, _ := arrayBounds(t)
+	return lo
+}
+
+
+func arrayBounds(t string) (lo, hi int64, ok bool) {
+	m := arrayRe.FindStringSubmatch(strings.TrimSpace(t))
+	if m == nil || m[3] != "" { // one dimension only
+		return 0, 0, false
+	}
+	lo, _ = parseInt(m[1])
+	hi, _ = parseInt(m[2])
+	return lo, hi, hi >= lo
 }

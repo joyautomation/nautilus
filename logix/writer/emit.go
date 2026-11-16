@@ -226,8 +226,8 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 				if m.Cache != "" {
 					cache = fmt.Sprintf(` CacheConnections="%s"`, attr(m.Cache))
 				}
-				w(`<MessageParameters MessageType="%s" RemoteElement="%s" RequestedLength="1" ConnectedFlag="%s" ConnectionPath="%s" CommTypeCode="0" LocalIndex="0" LocalElement="%s"%s/>`,
-					attr(m.Type), attr(m.Remote), attr(m.Connected), attr(m.Path), attr(m.Local), cache)
+				w(`<MessageParameters MessageType="%s" RemoteElement="%s" RequestedLength="%s" ConnectedFlag="%s" ConnectionPath="%s" CommTypeCode="0" LocalIndex="0" LocalElement="%s"%s/>`,
+					attr(m.Type), attr(m.Remote), m.Length, attr(m.Connected), attr(m.Path), attr(m.Local), cache)
 				w(`</Data>`)
 			}
 			w(`</Tag>`)

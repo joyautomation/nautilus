@@ -70,3 +70,57 @@ func TestMessageCheckWithoutManifest(t *testing.T) {
 		t.Fatalf("%v %v", err, diags)
 	}
 }
+
+// The #702 review's cases.
+func TestMessageReviewCases(t *testing.T) {
+	// A whole array moves whole: RequestedLength is its length, from [0].
+	src := "PROGRAM Main\nVAR_EXTERNAL Go : BOOL; END_VAR\nVAR\n  rd : READ;\n  Buf : ARRAY [0..9] OF DINT;\nEND_VAR\nLD\n  RUNG r0\n    Go rd:READ(ID := 'line2', VAR_1 := 'Remote', RD_1 := Buf)\nEND_LD\nEND_PROGRAM\n"
+	out, diags, err := Write(src, Options{Channels: line2})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", err, diags)
+	}
+	if !strings.Contains(string(out), `RemoteElement="Remote" RequestedLength="10"`) || !strings.Contains(string(out), `LocalElement="Buf[0]"`) {
+		t.Errorf("array message:\n%s", out)
+	}
+
+	cases := []struct {
+		src   string
+		chans []Channel
+		want  string
+	}{
+		// A second call, even an identical one.
+		{msgProg("", "Go rd:READ(ID := 'line2', VAR_1 := 'R', RD_1 := X)\n\n  RUNG r1\n    Y rd:READ(ID := 'line2', VAR_1 := 'R', RD_1 := X)"), line2, "called on another rung too"},
+		// A channel on another port.
+		{msgProg("", "Go rd:READ(ID := 'p', VAR_1 := 'R', RD_1 := X)"), []Channel{{Name: "p", Type: "cip", Host: "h", Port: 2222}}, "uses port 2222"},
+		// Inside a FUNCTION_BLOCK.
+		{"FUNCTION_BLOCK Poller\nVAR_INPUT Go : BOOL; END_VAR\nVAR\n  rd : READ;\n  X : DINT;\nEND_VAR\nLD\n  RUNG r0\n    Go rd:READ(ID := 'line2', VAR_1 := 'R', RD_1 := X)\nEND_LD\nEND_FUNCTION_BLOCK\n" +
+			"PROGRAM Main\nVAR_EXTERNAL Go : BOOL; END_VAR\nVAR\n  p : Poller;\nEND_VAR\nLD\n  RUNG r0\n    p:Poller(Go := Go)\nEND_LD\nEND_PROGRAM\n", line2, "an Add-On Instruction cannot hold a MESSAGE tag"},
+	}
+	for _, c := range cases {
+		_, diags, err := Write(c.src, Options{Channels: c.chans})
+		if err != nil {
+			t.Errorf("%v", err)
+			continue
+		}
+		var got []string
+		for _, d := range diags {
+			got = append(got, d.Message)
+		}
+		if !strings.Contains(strings.Join(got, "\n"), c.want) {
+			t.Errorf("diags %q, want one with %q", got, c.want)
+		}
+	}
+
+	// In ST: the message refusal, not the generic subset list.
+	diags, err = CheckST("PROGRAM Main\nVAR rd : READ; X : DINT; END_VAR\nrd(REQ := TRUE, ID := 'line2', VAR_1 := 'R', RD_1 := X);\nEND_PROGRAM\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range diags {
+		found = found || (d.Rule == ruleMessage && strings.Contains(d.Message, "call it from a .ld program"))
+	}
+	if !found {
+		t.Errorf("ST READ: diags %v", diags)
+	}
+}

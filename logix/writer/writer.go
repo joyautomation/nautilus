@@ -655,6 +655,10 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		}
 		lw.clocks[strings.ToLower(v.Name)] = true
 		lw.addTag(tagDef{Name: v.Name, DataType: "DINT", Dim: 7, Scope: scope, Line: v.Line})
+	case lw.blockType(u) == "MESSAGE" && lw.inAOI:
+		lw.diag(ruleMessage, v.Line, "", "%s: a READ or WRITE inside a FUNCTION_BLOCK; an Add-On Instruction cannot hold a MESSAGE tag, so call it from the program", v.Name)
+	case lw.st && (u == "READ" || u == "WRITE"):
+		lw.diag(ruleMessage, v.Line, "", "%s: a READ or WRITE is written as an MSG on a ladder rung; call it from a .ld program", v.Name)
 	case lw.blockType(u) != "":
 		if v.Init != "" {
 			lw.diag(ruleInit, v.Line, "", "%s: a %s instance takes no initializer; the preset comes from the rung (PT := / PV :=)", v.Name, u)

@@ -163,7 +163,7 @@ func loadLogixProject(dir string) (*logixProject, error) {
 func writerChannels(cs []project.ChannelConfig) []writer.Channel {
 	var out []writer.Channel
 	for _, c := range cs {
-		out = append(out, writer.Channel{Name: c.Name, Type: c.Type, Host: c.Host, Slot: c.Slot})
+		out = append(out, writer.Channel{Name: c.Name, Type: c.Type, Host: c.Host, Slot: c.Slot, Port: c.Port})
 	}
 	return out
 }

@@ -74,7 +74,7 @@
           "name": {"type": "string", "description": "What a READ or WRITE block's ID names. Unique (case-insensitively)."},
           "type": {"enum": ["cip"], "description": "cip: a Logix controller over EtherNet/IP (the services a Logix MSG of type CIP Data Table Read/Write sends)."},
           "host": {"type": "string", "description": "The peer's address."},
-          "slot": {"type": "integer", "minimum": 0, "description": "Route to the processor in this backplane slot behind host. Leave it out for the device at host itself."},
+          "slot": {"type": "integer", "minimum": 0, "description": "Route to the processor in this backplane slot behind host: a ControlLogix CPU reached through an Ethernet module. Leave it out for a controller with its own Ethernet port (a CompactLogix); a written MSG then ends at host."},
           "port": {"type": "integer", "minimum": 0, "description": "EtherNet/IP port (default 44818)."},
           "timeout": {"type": "string", "description": "How long one request may take before it fails with STATUS -3 (default 5s)."},
           "queue": {"type": "integer", "minimum": 0, "description": "How many requests may wait before one fails with STATUS -5 (default 64)."}

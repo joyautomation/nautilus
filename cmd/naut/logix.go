@@ -632,6 +632,11 @@ func runLogixWrite(args []string) int {
 				fmt.Fprintf(os.Stderr, "naut logix write: %s: %v\n", filepath.Join(dir, project.ManifestName), err)
 				return 2
 			}
+			// Where a READ or WRITE points, for any program of the project.
+			opts.Channels = writerChannels(m.Channels)
+			if m.Target != nil && m.Target.Logix != nil {
+				opts.Messages = writerMessages(m.Target.Logix.Messages)
+			}
 		}
 		// The project's deployed program: write what `naut logix deploy`
 		// would send — the target: logix envelope, the task's rate and the
@@ -657,7 +662,6 @@ func runLogixWrite(args []string) int {
 			}
 			opts.Inits, opts.Descs, opts.Aliases, opts.Side = t.Inits, t.Descs, t.Aliases, t.Side
 			opts.AllTags, opts.ControllerScoped, opts.Hardware = t.AllTags, t.ControllerScoped, t.Hardware
-			opts.Channels, opts.Messages = t.Channels, t.Messages
 		} else if he := (*hardwareError)(nil); errors.As(err, &he) {
 			// A hardware configuration that cannot be read: say so rather
 			// than write the project without it.

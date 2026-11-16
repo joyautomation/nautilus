@@ -2376,6 +2376,24 @@ so it leaves channel IDs to `naut check`.
 - A second call of an instance with other parameters.
 - An instance no rung calls.
 
+**Review round (#702):**
+
+- **One call:** an instance has one call, so even an identical second call
+  is refused.
+- **Where READ/WRITE is refused:** inside a FUNCTION_BLOCK, because an
+  Add-On Instruction cannot hold a MESSAGE tag, and in ST, with the message
+  rule rather than the subset list.
+- **Arrays:** a whole array is `RequestedLength` n from `[0]`.
+- **Ports:** a channel on another port is refused, since an MSG path cannot
+  name a port.
+- **Redeploy:** a redeploy that keeps values takes a MESSAGE's parameters
+  from the project, never the controller's old copy.
+- **`naut logix write`:** it reads `channels:` for any program of the
+  project.
+- **`lang/ld`'s variable scan:** it now runs on the shared `hdrvars` scanner,
+  one definition with SFC and FBD, so `VAR CONSTANT` keeps its section.
+- **Documented:** `slot:` absent means the controller at `host` itself.
+
 **Measured:** the importer's fixture round-trips every MessageParameters
 attribute identically, both the default flags and `ConnectedFlag="1"` with
 `CacheConnections`. The poll rung comes back as the three rungs the import
