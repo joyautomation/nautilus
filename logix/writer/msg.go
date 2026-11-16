@@ -214,7 +214,6 @@ func arrayLo(t string) int64 {
 	return lo
 }
 
-
 func arrayBounds(t string) (lo, hi int64, ok bool) {
 	m := arrayRe.FindStringSubmatch(strings.TrimSpace(t))
 	if m == nil || m[3] != "" { // one dimension only
