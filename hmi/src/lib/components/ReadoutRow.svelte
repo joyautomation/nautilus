@@ -71,7 +71,10 @@
 		line-height: 1.3;
 		color: var(--ink, #e6e6e6);
 		background: var(--bg, #0d0d0d);
-		border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+		/* stronger than --border (a panel's faint rule): the row stands on
+		   the drawing's ground, so its edge is half way to --edge */
+		--row-edge: color-mix(in srgb, var(--edge, #7a7973) 55%, var(--bg, #0d0d0d));
+		border: 1px solid var(--row-edge);
 		border-radius: 3px;
 		overflow: hidden;
 		white-space: nowrap;
@@ -82,7 +85,7 @@
 		justify-content: center;
 		padding: 5px 12px;
 		background: var(--surface-2, #2a2a28);
-		border-right: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+		border-right: 1px solid var(--row-edge);
 		font-weight: 650;
 	}
 	.val {

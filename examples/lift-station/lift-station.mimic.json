@@ -49,10 +49,13 @@
     {
       "id": "LSHH101",
       "component": "FloatSwitch",
-      "x": 236,
+      "x": 220,
       "y": 128,
       "width": 52,
       "label": "High Switch",
+      "props": {
+        "labelX": 42
+      },
       "bind": {
         "tripped": "LSHH101"
       }
@@ -60,12 +63,13 @@
     {
       "id": "LSLL101",
       "component": "FloatSwitch",
-      "x": 236,
+      "x": 220,
       "y": 328,
       "width": 52,
       "label": "Low Switch",
       "props": {
-        "trip": "low"
+        "trip": "low",
+        "labelX": 42
       },
       "bind": {
         "tripped": "LSLL101"

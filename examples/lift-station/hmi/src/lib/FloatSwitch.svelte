@@ -8,17 +8,21 @@
 	// away and it drops. One component, two instances in
 	// lift-station.mimic.json, each with its own `label`, `trip` and
 	// `tripped` tag. Both ball positions sit inside the box, so neither is
-	// clipped. The clamp is `data-part="clamp"`.
+	// clipped. The clamp is `data-part="clamp"`. `labelX` is where the
+	// label and state centre across the drawing (default 26, the box's
+	// middle): a switch hung tight against a wall keeps its words clear of
+	// the wall and in line with the rest.
 	import { fitBox, motion, type MimicLook } from '@joyautomation/nautilus-hmi';
 
 	let {
 		tripped = false,
 		trip = 'high',
 		label = '',
+		labelX = 26,
 		width = 52,
 		height,
 		look = 'isa101'
-	}: { tripped?: boolean; trip?: 'high' | 'low'; label?: string; width?: number; height?: number; look?: MimicLook } = $props();
+	}: { tripped?: boolean; trip?: 'high' | 'low'; label?: string; labelX?: number; width?: number; height?: number; look?: MimicLook } = $props();
 
 	const uid = `fs${Math.random().toString(36).slice(2, 8)}`;
 
@@ -72,11 +76,11 @@
 		<rect data-part="clamp" x="7" y="4" width="6" height="4" rx="1" fill={real ? '#55585c' : 'var(--surface-2, #232321)'} stroke={edge} stroke-width="1" />
 
 		{#if label}
-			<text x="26" y="61" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink, #e6e6e6)" stroke="var(--bg, #0d0d0d)" stroke-width="3" stroke-linejoin="round" paint-order="stroke">{label}</text>
+			<text x={labelX} y="61" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink, #e6e6e6)" stroke="var(--bg, #0d0d0d)" stroke-width="3" stroke-linejoin="round" paint-order="stroke">{label}</text>
 		{/if}
 		<!-- its state in words, under its tag: the alarm colour only when tripped;
 		     both on a halo of the ground, to read over the liquid -->
-		<text x="26" y="74" text-anchor="middle" font-size="11" font-weight={tripped ? 700 : 500} fill={tripped ? 'var(--crit, #e5484d)' : 'var(--ink, #e6e6e6)'} stroke="var(--bg, #0d0d0d)" stroke-width="3" stroke-linejoin="round" paint-order="stroke"
+		<text x={labelX} y="74" text-anchor="middle" font-size="11" font-weight={tripped ? 700 : 500} fill={tripped ? 'var(--crit, #e5484d)' : 'var(--ink, #e6e6e6)'} stroke="var(--bg, #0d0d0d)" stroke-width="3" stroke-linejoin="round" paint-order="stroke"
 			>{tripped ? 'Tripped' : 'Normal'}</text
 		>
 	</g>

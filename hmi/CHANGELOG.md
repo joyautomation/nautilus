@@ -22,6 +22,8 @@
   in a shaded cell, then the value, unit, sparkline and state in words
   (`<ReadoutRow name="Level" value={62} unit="%" history={buf}
   state={{ text: 'Normal' }} />`). Rows of one width stack as a table.
+  Its outline is half way from the ground to `--edge`, stronger than a
+  panel's `--border`, so the row holds its shape on the drawing.
 - **A label's `as`** (James, 11-16): `chip` (default), `text` (bare text
   with a halo of the background colour, legible over a liquid or a pipe)
   or `row` (a `ReadoutRow`; it may carry both `bind` and `state`), and its
