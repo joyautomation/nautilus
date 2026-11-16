@@ -1913,7 +1913,7 @@ table for generated stubs, not one.
   (1769-L1x/L2x), whose `Local` row #373 left out, should now write from
   its own export's configuration, but no such export has been tried.
 
-### Design — `MSG` as IEC 61131-5 `READ`/`WRITE` on a channel (2026-11-16, proposed)
+### Design — `MSG` as IEC 61131-5 `READ`/`WRITE` on a channel (2026-11-16)
 
 **Contexts:** Languages (`lang/ir` blocks), Runtime (the scan's host), Manifest
 (`channels:`), Field drivers (`eip` serves the first channel kind), Logix
@@ -1928,6 +1928,16 @@ existing `eip/logix` client. Read Tag and Write Tag are the same services an
 MSG Data Table read/write sends. The importer maps MSG to READ/WRITE plus a
 channel, and the writer maps them back to MSG, so a write-back round-trips.
 CIP Generic (socket) messages stay refused.
+
+**James's calls (2026-11-16):**
+
+- **Block family:** IEC 61131-5 `READ`/`WRITE`, not the PLCopen UA style.
+- **Output timing:** NDR/DONE/ERROR hold until the next REQ rising edge.
+- **UDT writes:** a whole UDT goes in one Write Tag, laid out by the peer's
+  template.
+- **The `Flags` copy:** imported as DONE/ERROR at bits 5/4, with a pragma.
+
+Everything else below is the default, as written.
 
 #### The standard, and the alternative
 
