@@ -45,7 +45,7 @@ var builtinProps = map[string][]string{
 var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports", "panel"}
 
 // labelKeys are the keys a label has (hmi mimic.ts MimicLabel).
-var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state", "values", "chip", "align"}
+var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state", "values", "as", "align", "width"}
 
 // stateKinds are a label state's kinds (StatusPill's).
 var stateKinds = []string{"good", "warning", "serious", "critical", "off"}
@@ -76,6 +76,7 @@ type mimicFile struct {
 		Text  string    `json:"text"`
 		Bind  string    `json:"bind"`
 		Align string    `json:"align"`
+		As    string    `json:"as"`
 		X     float64   `json:"x"`
 		Y     float64   `json:"y"`
 		At    []float64 `json:"at"`
@@ -382,6 +383,9 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 					}
 				}
 			}
+			if l.As != "" && l.As != "chip" && l.As != "text" && l.As != "row" {
+				say("%s's as is %q; it is chip (the default), text (bare, outlined) or row (a name cell and a value cell)", where, l.As)
+			}
 			if l.Align != "" && l.Align != "left" && l.Align != "center" {
 				say("%s's align is %q; it is left (x is its left edge) or center (x is its middle)", where, l.Align)
 			}
@@ -409,8 +413,8 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 					say("%s has no when, so it always shows and the states after it never do; put it last", sw)
 				}
 			}
-			if l.State != nil && l.Bind != "" {
-				say("%s has both bind and state; a label shows a value or a state, so make two labels", where)
+			if l.State != nil && l.Bind != "" && l.As != "row" {
+				say("%s has both bind and state; a label shows a value or a state, so make two labels, or make it \"as\": \"row\", which shows both", where)
 			}
 		}
 		// panels: what each reads and writes is declared, and a panel named

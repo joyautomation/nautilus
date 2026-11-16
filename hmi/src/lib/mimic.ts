@@ -383,11 +383,17 @@ export interface MimicLabel {
 	 *             {"when": "P101_Running", "text": "Running", "kind": "good"},
 	 *             {"text": "Stopped"}] */
 	state?: MimicLabelState[];
-	/** `false` draws the value or state as bare text with a halo of the
-	 * background colour around its letters, legible over a liquid or a pipe,
-	 * instead of on a chip: a pump's On/Off, speed and Lead/Lag stacked over
-	 * its symbol. Default true. */
-	chip?: boolean;
+	/** How the label is drawn. `chip` (default): a readout on a small pill,
+	 * a state as a status chip. `text`: bare text with a halo of the
+	 * background colour round its letters, legible over a liquid or a pipe
+	 * (a pump's On/Off, speed and Lead/Lag stacked over it). `row`: a
+	 * two-cell row, its name in a shaded cell and the value (with its
+	 * sparkline) and state in a dark one; with both `bind` and `state` it
+	 * shows the two ("Level | 62 % ~ Normal"). Rows of one `width` stacked
+	 * under a vessel line up as a table. */
+	as?: 'chip' | 'text' | 'row';
+	/** The label's width in canvas units, so rows line up. Default: its text. */
+	width?: number;
 	/** `center` makes `x` the label's middle, for a stack of labels centred
 	 * on one symbol. Default `left` (`x` is its left edge). */
 	align?: 'left' | 'center';
@@ -400,7 +406,7 @@ export interface MimicLabelState {
 	/** The tag (or `!tag`) that makes this the state; omitted, the default. */
 	when?: string;
 	text: string;
-	/** The chip's kind (StatusPill), or the text's colour with `chip: false`:
+	/** The chip's kind (StatusPill), or the text's colour with `as` `text` or `row`:
 	 * `off` (default), `good`, `warning`, `serious`, `critical`. */
 	kind?: StatusKind;
 }

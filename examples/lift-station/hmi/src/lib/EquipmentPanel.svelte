@@ -13,24 +13,27 @@
 
 	let { selected = $bindable(null) }: { selected?: string | null } = $props();
 
-	type Panel = { title: string; show: 'P101' | 'P102' | 'wetwell' | 'valve' | 'discharge'; pump?: 'P101' | 'P102' };
+	type Panel = { title: string; tag?: string; show: 'P101' | 'P102' | 'wetwell' | 'valve' | 'discharge'; pump?: 'P101' | 'P102' };
 	// Every clickable id opens something: the floats
 	// belong to the wet well, each check valve to its pump's discharge.
 	const PANELS: Record<string, Panel> = {
-		P101: { title: 'P-101 submersible pump', show: 'P101' },
-		P102: { title: 'P-102 submersible pump', show: 'P102' },
-		WW101: { title: 'WW-101 wet well', show: 'wetwell' },
-		LSHH101: { title: 'WW-101 wet well', show: 'wetwell' },
-		LSLL101: { title: 'WW-101 wet well', show: 'wetwell' },
-		LIT101: { title: 'WW-101 wet well', show: 'wetwell' },
-		CKV101: { title: 'CKV-101 check valve', show: 'valve', pump: 'P101' },
-		CKV102: { title: 'CKV-102 check valve', show: 'valve', pump: 'P102' },
-		FIT101: { title: 'Discharge to the force main', show: 'discharge' },
-		TOPROC: { title: 'Discharge to the force main', show: 'discharge' }
+		// The drawing names things as an operator does (Pump 1, Wetwell 101);
+		// the tag numbers that tie them to the drawings sit here, beside
+		// the title.
+		P101: { title: 'Pump 1', tag: 'P-101', show: 'P101' },
+		P102: { title: 'Pump 2', tag: 'P-102', show: 'P102' },
+		WW101: { title: 'Wetwell 101', tag: 'WW-101', show: 'wetwell' },
+		LSHH101: { title: 'Wetwell 101', tag: 'WW-101', show: 'wetwell' },
+		LSLL101: { title: 'Wetwell 101', tag: 'WW-101', show: 'wetwell' },
+		LIT101: { title: 'Wetwell 101', tag: 'WW-101', show: 'wetwell' },
+		CKV101: { title: 'Check Valve 1', tag: 'CKV-101', show: 'valve', pump: 'P101' },
+		CKV102: { title: 'Check Valve 2', tag: 'CKV-102', show: 'valve', pump: 'P102' },
+		FIT101: { title: 'Discharge to the force main', tag: 'FIT-101', show: 'discharge' },
+		TOPROC: { title: 'Discharge to the force main', tag: 'FIT-101', show: 'discharge' }
 	};
 	const panel = $derived(selected ? PANELS[selected] : undefined);
 	const close = () => (selected = null);
-	const label = (p: 'P101' | 'P102') => (p === 'P101' ? 'P-101' : 'P-102');
+	const label = (p: 'P101' | 'P102') => (p === 'P101' ? 'Pump 1' : 'Pump 2');
 	// It slides in from the right edge and back out, unless the visitor's
 	// system asks for less motion.
 	const still = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -42,7 +45,7 @@
 {#if panel}
 	<aside class="panel" data-nx-panel aria-label={panel.title} transition:fly={slide}>
 		<header>
-			<h2>{panel.title}</h2>
+			<h2>{panel.title}{#if panel.tag}<span class="tag">{panel.tag}</span>{/if}</h2>
 			<button class="x" onclick={close} aria-label="Close" title="Close (Esc)">×</button>
 		</header>
 		{#if writes.failed}
@@ -67,7 +70,7 @@
 				<button class="link" onclick={() => (selected = panel.pump!)}>{label(panel.pump)} controls</button>
 			{:else if panel.show === 'discharge'}
 				<dl>
-					<dt>Flow, FIT-101</dt><dd>{num('FIT101_Flow').toFixed(0)} gpm</dd>
+					<dt>Flow</dt><dd>{num('FIT101_Flow').toFixed(0)} gpm</dd>
 					<dt>Pumped today</dt><dd>{num('StationFlowGal').toLocaleString(undefined, { maximumFractionDigits: 0 })} gal</dd>
 					<dt>Pumps running</dt><dd>{Number(bool('P101_Running')) + Number(bool('P102_Running'))} of 2</dd>
 				</dl>
@@ -77,6 +80,13 @@
 {/if}
 
 <style>
+	h2 .tag {
+		margin-left: 0.6em;
+		font-family: var(--mono);
+		font-size: var(--font-sm);
+		font-weight: 500;
+		color: var(--ink-2);
+	}
 	.panel {
 		position: absolute;
 		top: 12px;

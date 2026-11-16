@@ -48,7 +48,7 @@
 	<header class="bar">
 		<div class="title">
 			<b>Lift Station</b>
-			<span>WW-101 duplex sewage lift station, P-101 / P-102 duty/standby</span>
+			<span>Duplex sewage lift station, Pump 1 and Pump 2 sharing duty</span>
 		</div>
 		<nav class="views" aria-label="Views">
 			{#each VIEWS as v (v.id)}

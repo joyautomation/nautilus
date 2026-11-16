@@ -18,13 +18,19 @@
   each end with its value, beside the scale; ranges that overlap stand in
   columns of their own, so a lead and a lag pump's levels never crowd. An
   alarm mark is also a dotted line across the vessel at its level.
-- **Outlined, centred labels** (James, 11-16). A label's `chip: false`
-  draws its value or state as bare text with a halo of the background
-  colour, legible over a liquid or a pipe, in the state's colour; `align:
-  "center"` makes `x` its middle. The lift station's pumps say On/Off,
+- **`ReadoutRow`** (James, 11-16): a reading as a two-cell row, its name
+  in a shaded cell, then the value, unit, sparkline and state in words
+  (`<ReadoutRow name="Level" value={62} unit="%" history={buf}
+  state={{ text: 'Normal' }} />`). Rows of one width stack as a table.
+- **A label's `as`** (James, 11-16): `chip` (default), `text` (bare text
+  with a halo of the background colour, legible over a liquid or a pipe)
+  or `row` (a `ReadoutRow`; it may carry both `bind` and `state`), and its
+  `width`. `align: "center"` makes `x` its middle. The lift station's pumps say On/Off,
   speed and Lead/Lag this way, stacked and centred over each pump, On
   and Off in plain ink.
-- **A tank's range brackets stand as close to the scale as they can**:
+- **A tank's range brackets** carry their name above the bracket and
+  "On 60" / "Off 30" at its ends, and stand as close to the scale as they
+  can:
   one only clears the brackets it overlaps and those of their lines level
   with it, not the widest line on the tank.
 

@@ -64,10 +64,15 @@ The same document renders in a SvelteKit HMI through the
   {"when": "P101_Running", "text": "Running", "kind": "good"}, {"text":
   "Stopped"}]` (`kind`: `off`, the default, `good`, `warning`, `serious`,
   `critical`). Equipment an operator watches run says its state this way
-  beside its symbol, as well as on it. `"chip": false` draws the value or
-  state as bare text outlined in the background colour, legible over a
-  liquid or a pipe, and `"align": "center"` makes `x` the label's middle:
-  a pump's On/Off, speed and Lead/Lag stack over it, centred on it.
+  beside its symbol, as well as on it. `"as"` picks how a label is drawn:
+  `chip` (the default), `text` (bare text outlined in the background
+  colour, legible over a liquid or a pipe) or `row` (the `ReadoutRow`: a
+  name cell, then the value, its trend and its state, so a row can carry
+  both `bind` and `state`). Rows stacked under a vessel take one `width`
+  and line up as a table. `"align": "center"` makes `x` the label's middle:
+  a pump's On/Off, speed and Lead/Lag stack over it as `text`, centred.
+  Name things as an operator says them (Pump 1, Level, High Switch); tag
+  numbers go in the panel a click opens.
 - **`panel`** on a piece of equipment: what a click on it opens (see
   [Panels](#panels-what-a-click-opens)).
 - **`description`**: a line on what the screen shows; naut's bar puts the

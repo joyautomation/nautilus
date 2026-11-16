@@ -14,6 +14,7 @@ export { default as Pump } from './components/Pump.svelte';
 export { default as Valve } from './components/Valve.svelte';
 export { default as Pipe } from './components/Pipe.svelte';
 export { default as StatusPill } from './components/StatusPill.svelte';
+export { default as ReadoutRow } from './components/ReadoutRow.svelte';
 export { default as Sparkline } from './components/Sparkline.svelte';
 export { sparklineDomain, sparklineMetrics, sparklineGeometry } from './sparkline.js';
 export type {

@@ -12,6 +12,7 @@
 	import Valve from './Valve.svelte';
 	import Gauge from './Gauge.svelte';
 	import Sparkline from './Sparkline.svelte';
+	import ReadoutRow from './ReadoutRow.svelte';
 	import CommandButton from './CommandButton.svelte';
 	import WriteToggle from './WriteToggle.svelte';
 	import OffPage from './OffPage.svelte';
@@ -414,20 +415,35 @@
 			{/each}
 
 			{#each doc.labels ?? [] as l, i (i)}
-				{#if l.bind}
-					<span class="lbl readout" class:plain={l.chip === false} class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px"
+				{@const st = l.state ? labelState(l, tags) : null}
+				{@const box = `left: ${l.x}px; top: ${l.y}px${l.width ? `; width: ${l.width}px` : ''}`}
+				{#if l.as === 'row'}
+					<span class="lbl rowlbl" class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px"
+						><ReadoutRow
+							name={l.text}
+							value={!l.bind ? undefined : !l.values && typeof labelRaw(l) === 'number' ? (labelRaw(l) as number) : labelValue(l)}
+							unit={l.unit}
+							decimals={l.decimals ?? 1}
+							history={l.bind && trended(l) ? tagHistory(l.bind) : undefined}
+							min={l.min}
+							max={l.max}
+							state={st}
+							width={l.width}
+						/></span
+					>
+				{:else if l.bind}
+					<span class="lbl readout" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box}
 						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
 						>{#if l.unit}<span>{l.unit}</span>{/if}{#if trended(l)}<span class="spark" aria-hidden="true"
 								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} color="var(--ink-2, #c3c2b7)" compact /></span
 							>{/if}</span
 					>
 				{:else if l.state}
-					{@const st = labelState(l, tags)}
-					<span class="lbl state" class:plain={l.chip === false} class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px"
-						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}{#if l.chip === false}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
+					<span class="lbl state" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box}
+						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}{#if l.as === 'text'}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
 					>
 				{:else}
-					<span class="lbl" class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px">{l.text}</span>
+					<span class="lbl" class:center={l.align === 'center'} style={box}>{l.text}</span>
 				{/if}
 			{/each}
 		</div>
@@ -604,7 +620,7 @@
 		padding: 0 3px;
 		border-radius: 3px;
 	}
-	/* chip: false: bare text with a halo of the background colour round
+	/* as: text: bare text with a halo of the background colour round
 	   its letters (the stroke painted under the fill), legible over a
 	   liquid, a pipe or a hatch with no patch cut out of the drawing. */
 	.lbl.plain,
@@ -635,6 +651,12 @@
 	}
 	.lbl.plain .word.critical {
 		color: var(--crit, #e5484d);
+	}
+	/* as: row: the label is a ReadoutRow, which brings its own ground */
+	.lbl.rowlbl {
+		background: none;
+		padding: 0;
+		margin-left: 0;
 	}
 	/* align: center: x is the label's middle */
 	.lbl.center {

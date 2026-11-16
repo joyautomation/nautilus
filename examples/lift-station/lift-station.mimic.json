@@ -13,7 +13,7 @@
       "width": 460,
       "height": 380,
       "behind": true,
-      "label": "WW-101",
+      "label": "Wetwell 101",
       "props": {
         "shape": "pit",
         "marks": [
@@ -49,10 +49,10 @@
     {
       "id": "LSHH101",
       "component": "FloatSwitch",
-      "x": 218,
+      "x": 236,
       "y": 128,
       "width": 52,
-      "label": "LSHH-101",
+      "label": "High Switch",
       "bind": {
         "tripped": "LSHH101"
       }
@@ -60,10 +60,10 @@
     {
       "id": "LSLL101",
       "component": "FloatSwitch",
-      "x": 218,
+      "x": 236,
       "y": 328,
       "width": 52,
-      "label": "LSLL-101",
+      "label": "Low Switch",
       "props": {
         "trip": "low"
       },
@@ -75,9 +75,9 @@
       "id": "P101",
       "component": "SubmersiblePump",
       "x": 300,
-      "y": 317,
+      "y": 311,
       "width": 56,
-      "label": "P-101",
+      "label": "Pump 1",
       "bind": {
         "running": "P101_Running",
         "speedHz": "P101_SpeedHz"
@@ -95,9 +95,9 @@
       "id": "P102",
       "component": "SubmersiblePump",
       "x": 450,
-      "y": 317,
+      "y": 311,
       "width": 56,
-      "label": "P-102",
+      "label": "Pump 2",
       "bind": {
         "running": "P102_Running",
         "speedHz": "P102_SpeedHz"
@@ -117,7 +117,7 @@
       "x": 324.8,
       "y": 64,
       "width": 45,
-      "label": "CKV-101",
+      "label": "Check Valve 1",
       "ports": [
         {
           "name": "in",
@@ -142,7 +142,7 @@
       "x": 474.8,
       "y": 64,
       "width": 45,
-      "label": "CKV-102",
+      "label": "Check Valve 2",
       "ports": [
         {
           "name": "in",
@@ -271,19 +271,11 @@
   ],
   "labels": [
     {
-      "text": "LIT-101",
-      "x": 298,
-      "y": 490,
-      "bind": "LIT101_Level",
-      "unit": "%",
-      "decimals": 1,
-      "min": 0,
-      "max": 100
-    },
-    {
-      "text": "FIT-101",
-      "x": 670,
-      "y": 58,
+      "text": "Flow",
+      "x": 660,
+      "y": 56,
+      "as": "row",
+      "width": 230,
       "bind": "FIT101_Flow",
       "unit": "gpm",
       "decimals": 0,
@@ -296,9 +288,9 @@
     {
       "text": "",
       "x": 320,
-      "y": 288,
+      "y": 282,
       "align": "center",
-      "chip": false,
+      "as": "text",
       "state": [
         {
           "when": "LeadIsP101",
@@ -312,9 +304,9 @@
     {
       "text": "",
       "x": 320,
-      "y": 268,
+      "y": 262,
       "align": "center",
-      "chip": false,
+      "as": "text",
       "bind": "P101_SpeedHz",
       "unit": "Hz",
       "decimals": 0,
@@ -323,9 +315,9 @@
     {
       "text": "",
       "x": 320,
-      "y": 248,
+      "y": 242,
       "align": "center",
-      "chip": false,
+      "as": "text",
       "state": [
         {
           "when": "P101_LockedOut",
@@ -354,9 +346,9 @@
     {
       "text": "",
       "x": 470,
-      "y": 288,
+      "y": 282,
       "align": "center",
-      "chip": false,
+      "as": "text",
       "state": [
         {
           "when": "!LeadIsP101",
@@ -370,9 +362,9 @@
     {
       "text": "",
       "x": 470,
-      "y": 268,
+      "y": 262,
       "align": "center",
-      "chip": false,
+      "as": "text",
       "bind": "P102_SpeedHz",
       "unit": "Hz",
       "decimals": 0,
@@ -381,9 +373,9 @@
     {
       "text": "",
       "x": 470,
-      "y": 248,
+      "y": 242,
       "align": "center",
-      "chip": false,
+      "as": "text",
       "state": [
         {
           "when": "P102_LockedOut",
@@ -410,44 +402,53 @@
       ]
     },
     {
-      "text": "Pump control",
-      "x": 298,
-      "y": 528,
-      "bind": "SeqStep",
-      "trend": false,
-      "values": {
-        "Idle": "Waiting for the level to rise",
-        "Lead": "Lead pump pumping down",
-        "Lag": "Lead and lag pumps pumping down",
-        "PostRun": "Running on past the off level",
-        "Alternate": "Swapping the lead pump",
-        "Failover": "Lead pump failed, standby taking over"
-      }
-    },
-    {
       "text": "Level",
-      "x": 470,
+      "x": 233,
       "y": 488,
+      "as": "row",
+      "width": 290,
+      "bind": "LIT101_Level",
+      "unit": "%",
+      "decimals": 1,
+      "min": 0,
+      "max": 100,
       "state": [
         {
           "when": "HighLevelAlm",
-          "text": "High alarm",
+          "text": "High Alarm",
           "kind": "critical"
         },
         {
           "when": "LSHH101",
-          "text": "High-high float",
+          "text": "High Switch",
           "kind": "critical"
         },
         {
           "when": "LSLL101",
-          "text": "Low-low float",
+          "text": "Low Switch",
           "kind": "critical"
         },
         {
           "text": "Normal"
         }
       ]
+    },
+    {
+      "text": "Pump Control",
+      "x": 233,
+      "y": 522,
+      "as": "row",
+      "width": 290,
+      "bind": "SeqStep",
+      "trend": false,
+      "values": {
+        "Idle": "Waiting For Level To Rise",
+        "Lead": "Lead Pump Pumping Down",
+        "Lag": "Lead And Lag Pumping Down",
+        "PostRun": "Running On Past The Off Level",
+        "Alternate": "Swapping The Lead Pump",
+        "Failover": "Lead Failed, Standby Taking Over"
+      }
     }
   ]
 }

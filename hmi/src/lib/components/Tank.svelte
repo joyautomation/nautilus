@@ -23,8 +23,9 @@
 	// dotted line across the vessel at its level.
 	//
 	// `ranges` are the levels a pump runs between: a bracket beside the
-	// scale from its `on` level to its `off` level, each end with its value
-	// ("Lead on 60", "off 30"). A pump's start and stop as one range reads
+	// scale from its `on` level to its `off` level, its name above it and
+	// each end with its value ("Lead", "On 60", "Off 30"). A pump's start
+	// and stop as one range reads
 	// better than two marks, and ranges that overlap stand in columns of
 	// their own, so their labels never crowd.
 	//
@@ -144,7 +145,7 @@
 			.sort((a, b) => a.top - b.top);
 		const ends: number[] = [];
 		for (const r of rs) {
-			let c = ends.findIndex((e) => r.top - font * 1.4 > e);
+			let c = ends.findIndex((e) => r.top - font * 2.4 > e);
 			if (c < 0) c = ends.length;
 			ends[c] = r.bot;
 			r.col = c;
@@ -156,7 +157,8 @@
 		// at 0.9 of the font.
 		const cw = font * 0.9 * 0.55;
 		const lines = (r: (typeof rs)[number]) => [
-			{ y: r.yOn, w: (r.label.length + 4 + String(r.on.toFixed(0)).length) * cw },
+			{ y: r.top - font * 1.1, w: r.label.length * cw * 1.1 },
+			{ y: r.yOn, w: (3 + String(r.on.toFixed(0)).length) * cw },
 			{ y: r.yOff, w: (4 + String(r.off.toFixed(0)).length) * cw }
 		];
 		const placed: ((typeof rs)[number] & { bx: number })[] = [];
@@ -342,11 +344,12 @@
 			stroke-width={Math.max(1, 1.5 * k)}
 			stroke-linejoin="round"
 		/>
+		<text x={bx} y={r.top - font * 0.75} font-size={font} font-weight="650" fill="var(--ink, #e6e6e6)" text-anchor={anchor}>{r.label}</text>
 		<text x={tx} y={r.yOn + font * 0.3} font-size={font * 0.9} fill="var(--ink-2, #c3c2b7)" text-anchor={anchor}
-			><tspan font-weight="650" fill="var(--ink, #e6e6e6)">{r.label}</tspan> on <tspan font-weight="650">{r.on.toFixed(0)}</tspan></text
+			>On <tspan font-weight="650" fill="var(--ink, #e6e6e6)">{r.on.toFixed(0)}</tspan></text
 		>
 		<text x={tx} y={r.yOff + font * 0.3} font-size={font * 0.9} fill="var(--ink-2, #c3c2b7)" text-anchor={anchor}
-			>off <tspan font-weight="650">{r.off.toFixed(0)}</tspan></text
+			>Off <tspan font-weight="650" fill="var(--ink, #e6e6e6)">{r.off.toFixed(0)}</tspan></text
 		>
 	{/each}
 

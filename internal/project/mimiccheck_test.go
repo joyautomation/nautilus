@@ -340,8 +340,9 @@ tags:
 			{"text":"FIT-102","x":10,"y":100,"bind":"FIT1","at":[1400,300],"colour":"red"},
 			{"text":"FIT-103","x":10,"y":130,"bind":"FIT1","at":[1],"colour":"red"},
 			{"text":"Both","x":10,"y":160,"bind":"FIT1","state":[{"text":"x"}]},
-			{"text":"Mid","x":10,"y":190,"bind":"FIT1","chip":false,"align":"centre"},
-			{"text":"Ok","x":10,"y":220,"bind":"FIT1","chip":false,"align":"center"}]}`),
+			{"text":"Mid","x":10,"y":190,"bind":"FIT1","as":"plain","align":"centre"},
+			{"text":"Ok","x":10,"y":220,"bind":"FIT1","as":"text","align":"center"},
+			{"text":"Row","x":10,"y":250,"bind":"FIT1","as":"row","width":200,"state":[{"text":"Normal"}]}]}`),
 	}
 	p, err := Load(fsys, ManifestName)
 	if err != nil {
@@ -358,13 +359,14 @@ tags:
 		"label FIT-103's at is [1]; give the point it measures as [x, y]",
 		"label Both has both bind and state",
 		`label Mid's align is "centre"; it is left (x is its left edge) or center (x is its middle)`,
+		`label Mid's as is "plain"`,
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("no error %q in:\n%s", want, all)
 		}
 	}
-	if len(errs) != 8 {
-		t.Errorf("%d errors, want 8:\n%s", len(errs), all)
+	if len(errs) != 9 {
+		t.Errorf("%d errors, want 9:\n%s", len(errs), all)
 	}
 	if len(warns) != 1 || !strings.Contains(warns[0], `label FIT-102 has "colour", which a label doesn't have`) {
 		t.Errorf("warnings %q", warns)

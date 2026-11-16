@@ -19,22 +19,22 @@
 	// LeadSelect's values (sequence.sfc): alternate each cycle, or hold one.
 	const LEAD = [
 		{ v: 0, label: 'Alternate' },
-		{ v: 1, label: 'P-101' },
-		{ v: 2, label: 'P-102' }
+		{ v: 1, label: 'Pump 1' },
+		{ v: 2, label: 'Pump 2' }
 	];
 	const set = (tag: string) => (v: number) => writeTag(tag, v);
 </script>
 
 <div class="level">
 	<span class="big">{num('LIT101_Level').toFixed(1)}<small>%</small></span>
-	<span class="sub">LIT-101 level</span>
+	<span class="sub">Level, LIT-101</span>
 </div>
 
 <Trend series={[{ name: 'Level', color: 'var(--s1)', points: levelBuf.points }]} unit="%" yMin={0} yMax={100} height={96} />
 
 <div class="pills">
-	<StatusPill kind={bool('LSHH101') ? 'critical' : 'off'} label="LSHH high-high" />
-	<StatusPill kind={bool('LSLL101') ? 'warning' : 'off'} label="LSLL low-low" />
+	<StatusPill kind={bool('LSHH101') ? 'critical' : 'off'} label="High switch (LSHH-101)" />
+	<StatusPill kind={bool('LSLL101') ? 'warning' : 'off'} label="Low switch (LSLL-101)" />
 	<StatusPill kind={bool('HighLevelAlm') ? 'critical' : 'off'} label="high level alarm" />
 	<StatusPill kind={bool('DryRunHold') ? 'warning' : 'off'} label="dry-run hold" />
 </div>
@@ -43,7 +43,7 @@
 	<h3>Sequence</h3>
 	<p class="seq">
 		<SeqStepTag text={str('SeqStep')} width={96} />
-		<span>{bool('LeadIsP101') ? 'P-101' : 'P-102'} is lead</span>
+		<span>{bool('LeadIsP101') ? 'Pump 1' : 'Pump 2'} is lead</span>
 	</p>
 	<p class="seq">Pump-downs counted: <b>{num('CycleCount').toFixed(0)}</b></p>
 	<!-- LeadSelect: who takes the next call (sequence.sfc's PickLead). A
@@ -59,7 +59,7 @@
 		</div>
 	</div>
 	{#if num('LeadSelect') !== 0 && bool('LeadIsP101') !== (num('LeadSelect') === 1)}
-		<p class="hint">{num('LeadSelect') === 1 ? 'P-101' : 'P-102'} is selected but not in Auto and available, so the other pump leads.</p>
+		<p class="hint">{num('LeadSelect') === 1 ? 'Pump 1' : 'Pump 2'} is selected but not in Auto and available, so the other pump leads.</p>
 	{/if}
 </section>
 
