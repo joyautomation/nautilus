@@ -67,7 +67,7 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 
 		fmt.Fprintf(&b, "- { name: %s, role: %s", t.Name, t.Role)
 		if t.Type != "" {
-			fmt.Fprintf(&b, ", type: %s", t.Type)
+			fmt.Fprintf(&b, ", type: %s", typeText(t.Type))
 		}
 		if t.Init != nil {
 			fmt.Fprintf(&b, ", init: %s", renderInit(t.Init))
@@ -131,6 +131,19 @@ func scalar(v any) string {
 		return quote(x)
 	}
 	return quote(fmt.Sprintf("%v", v))
+}
+
+// typeText renders a type: plain when it is a bare type name (BOOL,
+// Analog_Input), quoted otherwise. An array type's brackets would open a
+// flow sequence inside the tag's flow mapping, so `type: ARRAY [0..3] OF
+// REAL` left bare is a file the loader cannot parse at all.
+func typeText(s string) string {
+	for _, r := range s {
+		if !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+			return quote(s)
+		}
+	}
+	return s
 }
 
 // quote emits a double-quoted YAML scalar. Flow mappings make bare strings

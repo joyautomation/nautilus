@@ -3,6 +3,8 @@ package tagfile
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Sorted output is what makes the review model work: a regenerated file must
@@ -125,5 +127,34 @@ func TestRenderHeader(t *testing.T) {
 	want := "# line one\n#\n# line two\n"
 	if !strings.HasPrefix(string(raw), want) {
 		t.Errorf("header not rendered as comments:\n%s", raw)
+	}
+}
+
+// An array type's brackets open a flow sequence inside the tag's flow
+// mapping: left bare, the whole file fails to parse (`naut logix import` of
+// any export with an array tag produced a project `naut run` refused). The
+// output must read back as YAML, with the type intact; a plain type name
+// stays bare.
+func TestRenderArrayTypeParses(t *testing.T) {
+	raw, err := Render(nil, []Tag{
+		{Name: "Trend", Role: "input", Type: "ARRAY [0..3] OF REAL"},
+		{Name: "Grid", Role: "input", Type: "ARRAY [0..1, 0..2] OF DINT"},
+		{Name: "P101", Role: "input", Type: "Analog_Input"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	if err := yaml.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("output does not parse: %v\n%s", err, raw)
+	}
+	want := map[string]string{"Trend": "ARRAY [0..3] OF REAL", "Grid": "ARRAY [0..1, 0..2] OF DINT", "P101": "Analog_Input"}
+	for _, g := range got {
+		if g["type"] != want[g["name"].(string)] {
+			t.Errorf("%v: type %q, want %q", g["name"], g["type"], want[g["name"].(string)])
+		}
+	}
+	if !strings.Contains(string(raw), "type: Analog_Input }") {
+		t.Errorf("a plain type name was quoted:\n%s", raw)
 	}
 }
