@@ -1,7 +1,6 @@
 package server
 
 import (
-	"strings"
 	"testing"
 
 	nio "github.com/joyautomation/nautilus/io"
@@ -64,8 +63,8 @@ END_PROGRAM`,
 }
 
 // Tag-model: setpoint roots are writable by member path, and a struct-typed
-// output needs an init: so it exists before the first write — without one a
-// member write is refused and creates nothing.
+// output with no init: starts at the zero of its type (#696), so a member
+// write lands on it before anything has written the whole value.
 func TestMemberWritesToSetpointRootAndInitlessStructOutput(t *testing.T) {
 	rt, err := runtime.New(runtime.Options{
 		Program:   udtProgram,
@@ -97,17 +96,13 @@ func TestMemberWritesToSetpointRootAndInitlessStructOutput(t *testing.T) {
 		t.Fatalf("seeded struct output member write = %d, body %s", rec.Code, rec.Body)
 	}
 
-	rec := postTag(t, srv, `{"name": "Cmd.START", "value": true}`)
-	if rec.Code != 400 {
-		t.Fatalf("member write to a struct output with no init: = %d, want 400 (body %s)", rec.Code, rec.Body)
+	if rec := postTag(t, srv, `{"name": "Cmd.START", "value": true}`); rec.Code != 204 {
+		t.Fatalf("member write to a struct output with no init: = %d, want 204 (body %s)", rec.Code, rec.Body)
 	}
-	if !strings.Contains(rec.Body.String(), "Cmd") {
-		t.Errorf("the refusal does not name the tag: %q", rec.Body.String())
-	}
-	if _, made := rt.Tags().All()["Cmd"]; made {
-		t.Error("the refused write created the output tag")
+	if got := tagMember(t, rt, "Cmd", "START"); got != true {
+		t.Errorf("Cmd.START = %v, want true", got)
 	}
 	if _, made := rt.Tags().All()["Cmd.START"]; made {
-		t.Error("the refused write created a top-level tag named Cmd.START")
+		t.Error("the member write created a top-level tag named Cmd.START")
 	}
 }

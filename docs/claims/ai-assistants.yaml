@@ -33,8 +33,8 @@ claims:
       association fails it).
   - id: AI-003
     claim: >-
-      naut check catches an output with no init: that a program reads before
-      writing it, as a seal-in does, which would fault the scan.
+      naut check catches an untyped output with no init: that a program
+      reads before writing it, as a seal-in does, which would fault the scan.
     source: "#working-with-an-agent"
     tests:
       - go ./cmd/naut TestCheckReportsAnOutputReadBeforeItsFirstWrite

@@ -684,7 +684,7 @@ so a driver that never delivers faults instead of running on a silent zero
 | role | `type:` present, no `init:` |
 |---|---|
 | `input` | **not seeded** — reads fault until the first poll, as today |
-| `output` | not seeded (unchanged; seed only when logic reads it back) |
+| `output` | seeded zero-of-type, held from the driver until first written (nautilus#696) |
 | `setpoint`, `state` | seeded zero-of-type |
 
 That last row relaxes a real rule: `tagDefs` currently *requires* `init:` for
@@ -772,8 +772,9 @@ puts writable bindings in the output set (`eip/driver.go:166`) while
 
 Two caveats worth writing into the generator:
 
-1. A writable tag the logic also *reads back* needs `init:` — `RoleOutput` is
-   unseeded. The generator cannot know which those are, so it emits
+1. A writable tag the logic also *reads back* needs `init:` — an untyped
+   `RoleOutput` is unseeded (a typed one starts at its type's zero since
+   nautilus#696). The generator cannot know which those are, so it emits
    `role: output` with no init and **`naut check`'s read-before-write rule
    (3.3) is what catches it.** That is the verification earning its keep.
 2. Imports never produce `setpoint` or `state` — those are project-authored.

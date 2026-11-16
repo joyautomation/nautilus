@@ -33,7 +33,7 @@ setpoint, or state (got "command")`). Pick the role by who owns the value:
 | --- | --- | --- |
 | comes from a sensor, through a driver | `input` | a driver binding that delivers it |
 | goes to an actuator, through a driver | `output` | a program that writes it |
-| goes to an actuator, and the logic also reads it (a seal-in) | `output` | an `init:`, so it exists on scan one |
+| goes to an actuator, and the logic also reads it (a seal-in) | `output` | an `init:` or a `type:`, so it exists on scan one |
 | an operator adjusts: a setpoint, a gain, a limit | `setpoint` | an `init:` or a `type:` |
 | the logic keeps across scans or computes for the HMI: a mode word, an integrator, an alarm | `state` | an `init:` or a `type:` |
 | the logic keeps and must not lose on a restart: run hours, a start count | `state` | `retain: true`, and a `retain:` section |
@@ -48,9 +48,9 @@ What each role does at run time:
 | **OPC UA client write** | refused, even when `opcua.writable` matches it (`Bad_NotWritable` to a trusted writer session; any other session gets `Bad_UserAccessDenied` first, as for every tag) | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client | allowed when `opcua.writable` opens it to a trusted client |
 | **[Sparkplug](/guides/sparkplug/#writes) NCMD/DCMD** | refused (logged and counted in `commandsRefused`), whatever `sparkplug.writable` opens | written when `sparkplug.writable` opens it | written when `sparkplug.writable` opens it | written when `sparkplug.writable` opens it |
 | **Kept across a restart** (needs a `retain:` section) | never; `retain: true` is a load error | never; `retain: true` is a load error | always | only with `retain: true` |
-| **Seeded from `init:`** | only when it has an `init:`, or when a [communications driver](#inputs-from-a-device-that-is-down) delivers it (then the zero of its type); otherwise a read before the first delivery faults the scan | only when it has an `init:`; otherwise it exists from its first write | always: its `init:`, else the zero of its `type:` | always: its `init:`, else the zero of its `type:` |
+| **Seeded from `init:`** | only when it has an `init:`, or when a [communications driver](#inputs-from-a-device-that-is-down) delivers it (then the zero of its type); otherwise a read before the first delivery faults the scan | its `init:`, else the zero of its `type:` ([not sent to the driver](#an-output-with-a-type-starts-at-zero) until something writes it); with neither, it exists from its first write | always: its `init:`, else the zero of its `type:` | always: its `init:`, else the zero of its `type:` |
 | **On a standby replica** | not read: a standby does no field I/O | not written: a standby runs no logic | not changed there: writes go to the leader | not changed there: a standby runs no logic |
-| **After a failover** | the new leader reads it on its first scan | the new leader writes every output on its first scan | reloaded from the retain store; with no `retain:` section, the new leader's own copy (its seed, on a replica that has never led) | the new leader's own copy (its seed, on a replica that has never led), unless `retain: true` reloads it from the retain store |
+| **After a failover** | the new leader reads it on its first scan | the new leader writes every output on its first scan, except a typed one with no `init:` that nothing has written yet | reloaded from the retain store; with no `retain:` section, the new leader's own copy (its seed, on a replica that has never led) | the new leader's own copy (its seed, on a replica that has never led), unless `retain: true` reloads it from the retain store |
 
 A `setpoint` or `state` tag with neither an `init:` nor a `type:` is a
 load error (`tag StartLevel: a setpoint needs init or type (its value from
@@ -123,8 +123,8 @@ store at scan time", and nothing more. Existence comes from a write, and
 there are exactly four writers:
 
 1. a **seed**: the tag's `init:`, or the zero of its type for the roles
-   [the table above](#which-role-fits-which-job) seeds without one (it
-   exists from scan one),
+   [the table above](#which-role-fits-which-job) seeds without one, which
+   is every role but `input` (it exists from scan one),
 2. a **driver** delivering it as an input each scan,
 3. an **operator** writing a tag the project declares through the HMI or
    `POST /api/tags` (a name nothing declares, a CONSTANT's included, is
@@ -137,9 +137,9 @@ The one rule that bites: **writes create, reads fault.** Reading a tag
 nobody has ever written stops the scan with `undefined tag <name>` —
 deliberately, so a mis-wired binding fails loudly instead of running on a
 silent zero. The classic trap is a seal-in latch that *reads its own coil*
-on scan one, before the first write; the fix is a seed, and `naut check`
-reports an output with no `init:` that a program can read before it writes
-it: an error when some path through the scan reaches the read first, a
+on scan one, before the first write; the fix is a seed (an `init:`, or a
+`type:`), and `naut check` reports an untyped output with no `init:` that a
+program can read before it writes it: an error when some path through the scan reaches the read first, a
 warning when only a loop that may run zero times writes it first. A
 program's own earlier write counts, including one made inside a function
 block or function it calls; another task's does not, since tasks start
@@ -154,6 +154,21 @@ when it recovers, with how many scans faulted and for how long. While it
 keeps faulting, a new error message is logged at most once a minute, so a
 flapping fault can't flood the log. A driver read or write that keeps
 failing (`ioErrors`, `lastIOError`) is logged the same way.
+
+### An output with a type starts at zero
+
+A `role: output` tag with a `type:` and no `init:` exists from scan one at
+the zero of its type, as every IEC variable starts at its declared value or
+else its type's zero. So the logic can write one element or member of it
+(`OutArr[1] := 5`, `Cmd.Speed := 60.0`) or read it in a seal-in before its
+first write, where an absent tag would fault the scan with `undefined tag`.
+
+That zero is where the tag starts, not a command. The driver is not handed
+the output until something first writes it: the program (its zero
+included), an operator, or a force. A controller that starts, or a standby
+that takes over, does not drive zero onto a device output the logic has not
+written yet. An output with an `init:` is different: its `init:` goes to the
+driver with the first scan, as it always has.
 
 ### Inputs from a device that is down
 
@@ -428,8 +443,9 @@ plant is already running on.
   same holds for a whole `input`: it is read-only over HTTP, and a
   [force](/guides/forcing/) is how to drive one during bring-up.
   `setpoint`, `state` and `output` roots are writable; an output is exactly
-  how a Sparkplug host commands an edge node, and a struct-typed output needs
-  an `init:` so it exists before the first write.
+  how a Sparkplug host commands an edge node, and a struct-typed output
+  starts at the zero of its type, so a member write lands before anything
+  has written the whole value.
 - **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
   controller that resolves member paths from an older one that swallowed them.
 - Every status code `POST /api/tags` answers, and the rest of the API, is in

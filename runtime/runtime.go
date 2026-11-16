@@ -453,8 +453,8 @@ func New(o Options) (*Runtime, error) {
 			return nil, fmt.Errorf("tag %s: retain is for state the logic owns; %s on the first scan, so it is never retained", d.Name, what)
 		}
 	}
-	var untyped []string
-	if o, untyped, err = expandTags(o, types, unionGlobals(prog, tasks)); err != nil {
+	var held, untyped []string
+	if o, held, untyped, err = expandTags(o, types, unionGlobals(prog, tasks)); err != nil {
 		return nil, err
 	}
 
@@ -469,6 +469,10 @@ func New(o Options) (*Runtime, error) {
 		// writes, which may only address a tag that already exists.
 		tags.setAny(k, v)
 	}
+	// A typed output with no init: starts at its type's zero, but the
+	// driver is not handed that zero until something writes the tag (see
+	// expandTags and Tags.hold).
+	tags.hold(held)
 	// A dt-tag is otherwise unseeded: the scan loop only writes it AFTER a
 	// scan completes (see step() below), so a snapshot taken between New()
 	// and the first scan is missing it — exactly the gap a Sparkplug birth

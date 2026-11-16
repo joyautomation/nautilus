@@ -150,8 +150,8 @@ people to ignore warnings.
   Diagram** (or FBD/SFC). A rung that is hard to follow there is the thing
   to send back, whatever the text looks like.
 - **Watch what `naut check` cannot see.** It compiles; it does not run the
-  logic. It does catch an output with no `init:` that a program reads
-  before writing it (a seal-in), which would fault the scan. It does not
+  logic. It does catch an untyped output with no `init:` that a program
+  reads before writing it (a seal-in), which would fault the scan. It does not
   catch logic that is legal and wrong, such as a BOOL driven by coils on
   two rungs, where the later rung wins. `naut test` and review catch that.
 

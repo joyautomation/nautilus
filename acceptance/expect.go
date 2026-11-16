@@ -334,8 +334,8 @@ type Externals map[string]string
 // the tag store HOLDS and what the programs DECLARE.
 //
 // Neither source alone is right. The store misses a tag nothing has written
-// yet — an output with no seed exists in no snapshot, and is exactly the
-// sort of tag a first-scan expectation names. The declarations miss a tag
+// yet — an untyped output with no seed exists in no snapshot, and is
+// exactly the sort of tag a first-scan expectation names. The declarations miss a tag
 // only the manifest seeds. A struct-typed (UDT/Template) tag declares as
 // its own TYPE name rather than being left out: the project's library .st
 // already declares that TYPE, exprSource composes those libraries ahead of

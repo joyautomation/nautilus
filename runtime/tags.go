@@ -113,6 +113,10 @@ type tagVal struct {
 	gen    uint64
 	out    bool // this tag is bound to a driver output; see Tags.outGen
 	forced bool // the tag has an entry in Tags.forces; see force.go
+	// held: an output seeded at its type's zero (no init:) that nothing has
+	// written yet. The logic and every reader see the zero; readMany, the
+	// driver push, leaves it out until the first write. See Tags.hold.
+	held bool
 }
 
 // Sample is a tag's value together with the store generation it was written
@@ -202,7 +206,12 @@ func (t *Tags) writeLocked(name string, v ir.Value) bool {
 // storeLocked stores v into an existing tag unless it equals what is there,
 // stamping a fresh generation when it changes. Caller holds t.mu.
 func (t *Tags) storeLocked(name string, cur *tagVal, v ir.Value) bool {
-	if sameValue(&cur.v, &v) {
+	if cur.held {
+		// The first write of a held output, whatever it writes — the zero
+		// it already holds included — is what the driver has been waiting
+		// for: it was absent from every push until now, so it is a change.
+		cur.held = false
+	} else if sameValue(&cur.v, &v) {
 		return false
 	}
 	t.gen++
@@ -265,6 +274,26 @@ func (t *Tags) markOutputs(names []string) {
 			// Whatever it holds now is a value the driver has not been told
 			// about, so the first scan after registration must send it.
 			t.outGen = t.gen
+		}
+	}
+}
+
+// hold marks seeded outputs as not yet the driver's: each exists at the
+// seed it was given, the logic reads and writes it like any tag, and
+// readMany leaves it out of the driver push until its first write — by the
+// logic, an operator, a force — clears the mark (storeLocked). The seed is
+// the zero an IEC variable starts at, not a command: an output with no
+// init: used to be absent until the logic wrote it, and a driver is handed
+// it no earlier now (nautilus#696). Names that do not exist are ignored.
+func (t *Tags) hold(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, n := range names {
+		if tv, ok := t.vals[n]; ok {
+			tv.held = true
 		}
 	}
 }
@@ -342,13 +371,14 @@ func (t *Tags) setMany(names []string, in map[string]any) uint64 {
 // readMany fills dst with the named tags' driver-facing values under a
 // SINGLE lock — compound values (UDTs, arrays) as ir.Value so typed drivers
 // keep field names and integer widths, scalars as plain Go values. Names
-// that do not exist are skipped, and dst is cleared of anything stale.
+// that do not exist, or are held (Tags.hold), are skipped, and dst is
+// cleared of anything stale.
 func (t *Tags) readMany(names []string, dst map[string]any) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, name := range names {
 		tv, _, ok := t.lookupLocked(name)
-		if !ok {
+		if !ok || tv.held {
 			delete(dst, name)
 			continue
 		}

@@ -398,14 +398,17 @@ func TestTemplateCommandMembersGoThroughTheFrontDoor(t *testing.T) {
 // "Nope" made a junk tag).
 func TestCommandToADeclaredOutputNotYetWritten(t *testing.T) {
 	rt, err := runtime.New(runtime.Options{
-		Program:   cmdProgramST,
+		Program:   strings.Replace(cmdProgramST, "Motor1 : Motor;", "Motor1 : Motor;\n\tCmd : REAL;", 1),
 		Libraries: []string{cmdTypesST},
 		Driver:    nio.NewMemory(),
 		Scan:      50 * time.Millisecond,
 		Tags: []runtime.TagDef{
 			runtime.State("SpeedSP", 12.5),
 			runtime.Typed("Motor1", runtime.RoleState, "Motor"),
-			runtime.Typed("Cmd", runtime.RoleOutput, "REAL"),
+			// Untyped, so it stays absent until written (a typed output
+			// starts at its type's zero, #696); its REAL comes from the
+			// program's declaration.
+			runtime.Output("Cmd"),
 		},
 	})
 	if err != nil {

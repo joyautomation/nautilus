@@ -248,7 +248,9 @@ waiting out the next interval.
 **There is no baseline rule here.** Where the Modbus and Sparkplug-host
 drivers record the first snapshot after `Start` and send it to nobody, this
 driver commands what the first scan produces — an output tag's `init:` reaches
-the controller. Give every output an `init:` that is safe to command.
+the controller. Give every output an `init:` that is safe to command. A typed
+output with no `init:` starts at zero in the program but is not sent until
+something writes it (see [the tag model](/guides/tag-model/#an-output-with-a-type-starts-at-zero)).
 
 Queued writes go out in tag-name order, a struct's members in field order.
 When the **connection breaks** partway through, the write that broke and

@@ -239,8 +239,9 @@ old drop-and-re-raise had no next scan to be re-raised by. See `runtime/tags.go`
 generations".)
 
 Writable bindings generate as `role: output` with an `init:` (the manifest's, else the type
-zero) so the tag exists from scan one; `RoleOutput` is unseeded by default
-(`runtime/tagdef.go:119-122`) and an unwritten output is simply omitted from the Values map.
+zero) so the tag exists from scan one; an untyped `RoleOutput` with no init is unseeded
+(`runtime/tagdef.go`, expandTags), and an unwritten output — that, or a typed one still at the
+zero it was seeded with — is simply omitted from the Values map.
 
 ## 5. Manifest, schema, project wiring
 
