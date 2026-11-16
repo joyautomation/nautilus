@@ -261,6 +261,31 @@ func (c *Controller) WriteTag(ctx context.Context, tag string, typeCode uint16, 
 	return nil
 }
 
+// WriteTagStruct writes count instances of a structure-typed tag whole, in
+// one Write Tag service: the type is 0x02A0 followed by the structure handle
+// the controller reported for the type, and data is the instances' bytes in
+// the template's own layout. It is how a Logix MSG writes a UDT, and the
+// controller applies it as one unit.
+func (c *Controller) WriteTagStruct(ctx context.Context, tag string, handle uint16, count uint16, data []byte) error {
+	path, err := EncodeTagPath(tag)
+	if err != nil {
+		return err
+	}
+	body := make([]byte, 6+len(data))
+	binary.LittleEndian.PutUint16(body[0:2], cip.TypeStruct)
+	binary.LittleEndian.PutUint16(body[2:4], handle)
+	binary.LittleEndian.PutUint16(body[4:6], count)
+	copy(body[6:], data)
+	resp, err := c.sendConnected(ctx, cip.ServiceWriteTag, path, body)
+	if err != nil {
+		return err
+	}
+	if resp.GeneralStatus != cip.StatusSuccess {
+		return statusError("write", tag, resp)
+	}
+	return nil
+}
+
 // ReadResult pairs one tag of a batch read with its outcome.
 type ReadResult struct {
 	Tag string
@@ -383,6 +408,10 @@ func (e *CIPError) Error() string {
 	}
 	return fmt.Sprintf("logix: %s %q: CIP status 0x%02x", e.Op, e.Tag, e.Status)
 }
+
+// CommStatus is the STATUS a READ or WRITE block reports for this error:
+// the controller's CIP general status, as a Logix MSG puts it in .ERR.
+func (e *CIPError) CommStatus() int { return int(e.Status) }
 
 // Permanent reports whether retrying the same request can't succeed while
 // the controller program stays unchanged: the path doesn't resolve (0x04,

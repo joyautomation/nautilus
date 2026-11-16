@@ -2259,6 +2259,40 @@ None of these changes the block. Only the meaning of VAR_1 differs, as
    refusals above.
 3. **Writer:** READ/WRITE → MSG + MESSAGE tags, round trip and SDK build.
 
+**Slice 1, built (2026-11-16).**
+
+- **Blocks:** `READ`/`WRITE` are in `lang/ir/builtins_comm.go`. `AnyT` marks an
+  ANY pin: the lowering skips the type check and the VM skips coercion.
+  `ir.Channels` is the Host extension, and the scan view forwards it.
+- **Runtime:** `runtime/channels.go` holds a hub with one worker per channel,
+  ticketed and non-blocking. `Run` closes the channels, and closing cancels
+  any request in flight.
+- **Manifest:** `channels:` is in `internal/project`. The browser build stubs
+  each channel to report −2.
+- **CIP:** `eip/channel.go` is the CIP channel. The client gains
+  `WriteTagStruct`, the emulator gains struct writes, and `CIPError.CommStatus`
+  carries the general status.
+- **Check:** `naut check` errors on a constant ID that no channel declares.
+
+**Departures from the design above:**
+
+- **Where the seam lives:** it is `runtime.ChannelIO`, not `io.Channel`, because
+  the context map forbids `io` importing `lang/ir`. A protocol package satisfies
+  it structurally, so `eip` still does not import `runtime`. An error carries
+  its STATUS through a `CommStatus() int` method.
+- **Leader takeover:** it resets program frames, so a block in flight starts
+  idle rather than reporting −6.
+
+**Limits, for later:**
+
+- A structure over about 480 bytes needs Write Tag Fragmented, which is not
+  written yet.
+- WRITE does not encode a Logix `STRING`.
+- `naut check` resolves IDs in program bodies, not inside user
+  FUNCTION_BLOCKs.
+- The emulator serves whole structures only at a root symbol, so a member-path
+  read (`Tag.Member`) is covered by a controller, not by CI.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the

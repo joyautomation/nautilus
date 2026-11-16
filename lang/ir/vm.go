@@ -731,7 +731,7 @@ func coerceValue(v Value, t *Type) Value {
 	if t != nil && t.Enum != nil {
 		return coerceEnum(v, t.Enum)
 	}
-	if t == nil || v.Kind == t.Kind {
+	if t == nil || v.Kind == t.Kind || IsAny(t) {
 		return v
 	}
 	switch t.Kind {

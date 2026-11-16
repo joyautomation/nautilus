@@ -88,6 +88,10 @@ func builtinPowerPins(typ string) (in, out string, ok bool) {
 		return "S1", "Q1", true
 	case "RS":
 		return "S", "Q1", true
+	case "READ", "WRITE":
+		// IEC 61131-5: power is the request; like an output instruction,
+		// power passes through to whatever follows on the rung.
+		return "REQ", "", true
 	case "LOCAL_TIME":
 		// No BOOL pins: it sits on the rail, and power passes through.
 		return "", "", true

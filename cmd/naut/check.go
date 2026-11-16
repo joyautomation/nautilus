@@ -496,6 +496,15 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		return 1, 0
 	}
 
+	// A READ or WRITE whose ID names no channel would fail every request
+	// with STATUS -1; say so now, with the fix.
+	for _, id := range rt.UnknownChannels() {
+		errs++
+		fmt.Printf("%s: error: a READ or WRITE names channel %q, which channels: does not "+
+			"declare — add it to %s (name: %s, type: cip, host: …) or fix the ID\n",
+			loc.file, id, manifestLabel(manifestName), id)
+	}
+
 	// A protocol input reads as its init: (or the zero of its type) until
 	// its device first answers — but only when some type is knowable for
 	// it. One with none stays absent until then, which faults nothing (no

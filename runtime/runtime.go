@@ -108,6 +108,9 @@ type Options struct {
 	// frames, zero the dt clocks) on the edge where it becomes leader.
 	// leader.Elector satisfies this; nil means standalone, always leader.
 	Coordinator Coordinator
+	// Channels are the communication channels READ and WRITE blocks run
+	// on, by name (see channels.go). Run closes them when it returns.
+	Channels []Channel
 }
 
 // Task is one additional program in the resource: its source, its own
@@ -459,6 +462,19 @@ func New(o Options) (*Runtime, error) {
 	}
 
 	tags := NewTags()
+	seenCh := map[string]bool{}
+	for _, c := range o.Channels {
+		if c.Name == "" || c.Channel == nil {
+			return nil, fmt.Errorf("channel %q: needs a name and a channel", c.Name)
+		}
+		if seenCh[c.Name] {
+			return nil, fmt.Errorf("channel %q declared twice", c.Name)
+		}
+		seenCh[c.Name] = true
+	}
+	if len(o.Channels) > 0 {
+		tags.comm = newCommHub(o.Channels)
+	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
 	// Set before any scan or goroutine can observe it, so the store's NowMs
 	// and the scan's dt always read the same clock.
@@ -982,6 +998,9 @@ func (r *Runtime) Run(ctx context.Context) {
 	// Liveness watches the loops from here on; see liveness.go.
 	r.live.state.Store(runRunning)
 	defer r.live.state.Store(runStopped)
+	if r.tags.comm != nil {
+		defer r.tags.comm.close()
+	}
 	var loops sync.WaitGroup
 	for i, tr := range r.tasks {
 		loops.Add(1)

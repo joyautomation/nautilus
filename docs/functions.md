@@ -652,6 +652,8 @@ that declares the instance; another task reads one through a tag (see
 | `SR` | `S1: BOOL, R: BOOL` | `Q1: BOOL` | set-dominant latch |
 | `RS` | `S: BOOL, R1: BOOL` | `Q1: BOOL` | reset-dominant latch |
 | `PID` | see [below](#pid-closed-loop-control) | see below | closed-loop control — proportional/integral/derivative with anti-windup and bumpless auto/manual |
+| `READ` | `REQ: BOOL, ID: STRING, VAR_1: STRING`; in-out `RD_1: ANY` | `NDR, ERROR, BUSY: BOOL, STATUS: INT` | read a variable on another device through a channel; see [below](#read-and-write-another-device) |
+| `WRITE` | `REQ, ID, VAR_1, SD_1: ANY` | `DONE, ERROR, BUSY, STATUS` | write a variable on another device; see below |
 | `LOCAL_TIME` | — | `YEAR`, `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND`, `MILLISECOND`: DINT | the calendar, now: each call reads the runtime's clock once, so the seven outputs are one instant. The names are IEC 61131-3's `SPLIT_DT` outputs. In production the clock is the machine's local time; under `naut test` it is the test's virtual clock, read in UTC (it starts at 2000-01-01 00:00:00), so a test that reads the calendar gives the same answer on every machine |
 
 ## EN/ENO: execution control
@@ -711,6 +713,7 @@ parentheses:
 | `SR` | `S1` | `Q1` |
 | `RS` | `S` | `Q1` |
 | `LOCAL_TIME` | none: it sits on the rail | none: power passes through |
+| `READ`, `WRITE` | `REQ` | none: power passes through, as past a Logix `MSG` |
 | user FUNCTION_BLOCK | `EN`, else the first **BOOL** `VAR_INPUT` the call doesn't bind by name | `ENO`, else the first **BOOL** `VAR_OUTPUT` |
 
 Passing the power pin explicitly in the argument list (`t1:TON(IN := x)`)
@@ -731,6 +734,86 @@ both are meaningful:
   the coils to its right.
 
 A block whose type nothing in the compile declares falls back to `IN`/`Q`.
+
+### READ and WRITE: another device
+
+`READ` and `WRITE` are IEC 61131-5's data-acquisition blocks: a program
+reads or writes one variable on another device when it asks, through a
+**channel** the manifest declares. `ID` names the channel; `VAR_1` is the
+variable's name on the peer, in that channel's own syntax (a Logix tag path
+on a `cip` channel: `Tag`, `Tag.Member`, `Tag[3]`, `Program:Main.Tag`).
+
+```yaml
+channels:
+  - name: line2
+    type: cip          # a Logix controller over EtherNet/IP
+    host: 192.0.2.12
+    slot: 0            # optional: the processor in this slot behind host
+    timeout: 5s        # per request (default)
+```
+
+```iecst
+VAR poll : READ; push : WRITE; END_VAR
+poll(REQ := Step3, ID := 'line2', VAR_1 := 'Line2Status', RD_1 := Line2Status);
+push(REQ := SendNow, ID := 'line2', VAR_1 := 'Setpoints', SD_1 := Setpoints);
+```
+
+In a rung, power is `REQ`: `Step3 poll:READ(ID := 'line2', VAR_1 :=
+'Line2Status', RD_1 := Line2Status)`.
+
+**The scan never waits on the network.** A rising edge on `REQ` posts the
+request and sets `BUSY`; each later call checks on it. The call that sees
+the answer clears `BUSY` and sets `NDR` (READ) or `DONE` (WRITE), or
+`ERROR` and `STATUS`. Then:
+
+- **Outputs hold.** `NDR`, `DONE`, `ERROR` and `STATUS` stay set until
+  the next `REQ` rising edge. That is how a Logix MSG's `DN` and `ER`
+  behave, and it is what logic that times or latches on them expects.
+- **REQ only starts a request.** An edge while `BUSY` is ignored, and
+  `REQ` falling does not cancel a request.
+- **Data lands whole.** `RD_1` is written only by the call that sees a
+  successful reply, all at once, never in part. `WRITE` sends `SD_1` as it
+  was on the `REQ` edge.
+
+Two pins differ from the standard, for the reasons given:
+
+- **`RD_1` is an in-out**, so the variable keeps its value until a reply
+  lands. A plain output would be copied to its target on every call,
+  zeros first.
+- **`BUSY` is added**, as PLCopen's blocks have it.
+
+`RD_1` and `SD_1` take any type: a whole structure, an array or an
+elementary value.
+
+**Matching the peer's value.** A peer value lands only when it matches the
+local variable:
+
+- **Members** match by name (case-insensitively), and none may be missing
+  or extra.
+- **Elementary types** must agree: an `INT` is not a `DINT`, though `REAL`
+  and `LREAL` are interchangeable.
+- **Layout** of a structure always comes from the peer. A `cip` channel
+  moves it in one Read Tag or Write Tag, as a Logix MSG does, laid out by
+  the template the controller reports. nautilus never computes a Logix
+  layout.
+
+**STATUS** is 0 on success. A positive value is the peer's own status
+code; on `cip` that is the CIP general status a Logix MSG puts in `.ERR`
+(4: no such tag, 5: path unknown, …). A negative value is local:
+
+| STATUS | Meaning |
+| --- | --- |
+| −1 | `ID` names no channel (`naut check` catches a constant one) |
+| −2 | the channel could not reach its peer |
+| −3 | no answer within the channel's `timeout:` |
+| −4 | the peer's value does not fit the local variable |
+| −5 | the channel already holds `queue:` requests (default 64) |
+| −6 | the request was lost (a restart while it was in flight) |
+
+**One request at a time per channel.** Each channel works through its
+requests in order on one connection, which opens on the first request and
+reopens after a failure. In the browser playground, channels reach no peer
+and report −2.
 
 ### PID: closed-loop control
 
