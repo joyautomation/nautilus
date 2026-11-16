@@ -2324,18 +2324,28 @@ Such a leg is a rung of its own now, in order.
 overrides on every scan. About 2,240 corpus rungs have this shape, mostly
 in AOIs.
 
-**Corpus (aggregates):**
+**Corpus (aggregates, after the #701 review):**
 
-- **Rungs:** 29,792 → 29,849 (98.0 → 98.2 %).
-- **MESSAGE refusals:** the "type" bucket went from 156 to 13. "MSG" is 62,
+- **Rungs:** 29,792 → 29,869 (98.0 → 98.3 %).
+- **MESSAGE refusals:** the "type" bucket went from 156 to 14. "MSG" is 62,
   up from 21: CIP Generic, the two-hop path, `.EN`, and Generic legs the
   dropped-leg fix makes visible.
 - **The poll idiom:** the round-robin rung and its `Flags` copy import.
   Five periodic-timer rungs stop at `RES`, which has no form yet.
-- **Routines and write-backs:** complete ladder routines went from 800 to
-  798, and write-backs from 68 identical / 19 differ of 87 to 68 / 17 of 85.
-  The two routines that left had been "complete" only because legs were
-  dropped, and their diffs were those legs.
+- **Routines and write-backs:** complete ladder routines stay at 800, and
+  write-backs at 68 identical / 19 differ of 87.
+
+**Review round (#701):**
+
+- **One-shots and AFI:** a one-shot or AFI leg of a final branch stays a
+  condition, as before. Counting it as acting had cost 2 routines.
+- **Shared messages:** a MESSAGE sent by two MSGs, or read from a program
+  that does not send it, is refused.
+- **Shadowed local element:** a controller MESSAGE whose local element a
+  program tag shadows is refused.
+- **`target.logix.messages`:** it holds entries only for messages the import
+  carries, one per name.
+- **Addresses:** the path's address must parse as an IP.
 
 **Limits, for later:**
 

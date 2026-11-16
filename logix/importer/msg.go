@@ -3,11 +3,11 @@ package importer
 import (
 	"fmt"
 	"net"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/l5x"
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // MSG → READ / WRITE (docs/design/logix-authoring.md, "MSG as IEC 61131-5
@@ -35,6 +35,7 @@ type msgInfo struct {
 	remote  string // RemoteElement: VAR_1
 	local   string // LocalElement: RD_1 / SD_1
 	channel string // the channels: entry ID names
+	extra   msgExtra
 	refused *refusal
 }
 
@@ -48,8 +49,6 @@ type msgChannel struct {
 type msgExtra struct {
 	connected, cache, path string
 }
-
-var ipv4 = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
 
 // msgDone is the pin a MESSAGE's DN becomes.
 func msgDone(block string) string {
@@ -77,6 +76,12 @@ func (im *importer) newMessage(t *l5x.Tag) *msgInfo {
 	}
 	if t.Dimensions != "" {
 		m.refused = refuse("MSG", "%s: an array of MESSAGE", t.Name)
+		return m
+	}
+	if n := len(im.msgSenders[t]); n > 1 {
+		// Logix keeps each MSG's rung state apart; one READ instance
+		// called twice would share one REQ edge.
+		m.refused = refuse("MSG", "%s is sent by %d MSG instructions; a READ or WRITE instance has one call", t.Name, n)
 		return m
 	}
 	switch typ := t.MessageParam("MessageType"); typ {
@@ -108,18 +113,52 @@ func (im *importer) newMessage(t *l5x.Tag) *msgInfo {
 		return m
 	}
 	m.channel = im.msgChannel(host, slot)
-	x := msgExtra{}
 	if c := t.MessageParam("ConnectedFlag"); c != "2" {
-		x.connected = c
+		m.extra.connected = c
 	}
-	x.cache = t.MessageParam("CacheConnections")
+	m.extra.cache = t.MessageParam("CacheConnections")
 	if path != canonicalPath(host, slot) {
-		x.path = path
-	}
-	if x != (msgExtra{}) {
-		im.msgExtras[l5x.Ident(t.Name)] = x
+		m.extra.path = path
 	}
 	return m
+}
+
+// msgSenders finds, for every MESSAGE tag an MSG names, the program of each
+// such MSG: a program's own tag first, then the controller's.
+func msgSenders(c *l5x.Controller) map[*l5x.Tag][]string {
+	ctrl := map[string]*l5x.Tag{}
+	for _, t := range c.Tags {
+		ctrl[strings.ToLower(t.Name)] = t
+	}
+	out := map[*l5x.Tag][]string{}
+	for _, prog := range c.Programs {
+		local := map[string]*l5x.Tag{}
+		for _, t := range prog.Tags {
+			local[strings.ToLower(t.Name)] = t
+		}
+		for _, r := range prog.Routines {
+			for _, rg := range r.Rungs {
+				terms, err := l5x.ParseRung(rg.Text)
+				if err != nil {
+					continue
+				}
+				walkTerms(terms, func(in *l5x.Instr) {
+					if !strings.EqualFold(in.Mnemonic, "MSG") || len(in.Args) != 1 {
+						return
+					}
+					k := strings.ToLower(baseOf(in.Args[0]))
+					t := local[k]
+					if t == nil {
+						t = ctrl[k]
+					}
+					if t != nil {
+						out[t] = append(out[t], prog.Name)
+					}
+				})
+			}
+		}
+	}
+	return out
 }
 
 // msgPath reads a ConnectionPath of the two shapes a channel carries: out
@@ -133,7 +172,7 @@ func msgPath(p string) (host string, slot int, ok bool) {
 	if len(parts) != 2 && len(parts) != 4 {
 		return "", 0, false
 	}
-	if parts[0] != "2" || (!ipv4.MatchString(parts[1]) && net.ParseIP(parts[1]) == nil) {
+	if parts[0] != "2" || net.ParseIP(parts[1]) == nil {
 		return "", 0, false
 	}
 	if len(parts) == 2 {
@@ -176,8 +215,11 @@ func (rt *routine) msgTag(operand string) (*found, *msgInfo, *refusal) {
 	if f == nil {
 		return nil, nil, refuse("undefined", "tag %s is not in scope", baseOf(operand))
 	}
-	if !strings.EqualFold(f.dtype, "MESSAGE") || f.tag == nil {
+	if !strings.EqualFold(f.dtype, "MESSAGE") {
 		return nil, nil, refuse("MSG", "%s is a %s, not a MESSAGE", f.name, f.dtype)
+	}
+	if f.tag == nil {
+		return nil, nil, refuse("MSG", "%s: a MESSAGE parameter of an Add-On Instruction", f.name)
 	}
 	m := rt.im.message(f.tag)
 	if m.refused != nil {
@@ -203,9 +245,26 @@ func (rt *routine) msgBlock(in *l5x.Instr) (string, *refusal) {
 	if err != nil {
 		return "", err
 	}
+	if f.ext {
+		// A controller MESSAGE's local element is a controller tag; a
+		// program tag of the same name would take the data instead.
+		if lf := rt.sc.lookup(baseOf(m.local)); lf != nil && !lf.ext {
+			return "", refuse("MSG", "%s's local element %s is a controller tag, but this program has a tag of that name", f.name, baseOf(m.local))
+		}
+	}
 	local, err := rt.ref(m.local, "")
 	if err != nil {
 		return "", refuse("MSG", "%s's local element: %s", f.name, err.text)
+	}
+	if m.extra != (msgExtra{}) {
+		// Only for a message the import carries, and one entry per name:
+		// target.logix.messages names an instance, not a program.
+		key := l5x.Ident(f.tag.Name)
+		if o, taken := rt.im.extraOwner[key]; taken && o != f.tag {
+			return "", refuse("MSG", "%s: another program's MESSAGE of this name also has parameters to keep, and target.logix.messages names one", f.name)
+		}
+		rt.im.extraOwner[key] = f.tag
+		rt.im.msgExtras[key] = m.extra
 	}
 	pin := "RD_1"
 	if m.block == "WRITE" {
@@ -260,9 +319,7 @@ func (rt *routine) msgFlags(in *l5x.Instr) (string, bool, *refusal) {
 }
 
 // stQuote is an IEC string literal.
-func stQuote(s string) string {
-	return "'" + strings.NewReplacer("$", "$$", "'", "$'").Replace(s) + "'"
-}
+func stQuote(s string) string { return st.QuoteString(s) }
 
 // msgRef rewrites an operand on a MESSAGE tag: the instance itself (an
 // MSG's operand, blockType READ or WRITE) or a status member as the
@@ -277,6 +334,9 @@ func (rt *routine) msgRef(f *found, rest, blockType string) (string, *refusal) {
 	m := rt.im.message(f.tag)
 	if m.refused != nil {
 		return "", m.refused
+	}
+	if senders := rt.im.msgSenders[f.tag]; f.ext && len(senders) > 0 && !strings.EqualFold(senders[0], rt.ownerProgram()) {
+		return "", refuse("shared-block", "%s is sent by program %s; its READ/WRITE instance belongs to that program", f.name, senders[0])
 	}
 	if owner, ok := rt.sc.blockOwner[strings.ToLower(f.name)]; ok && rt.sc.ctrl != nil {
 		if !strings.EqualFold(rt.sc.owner, rt.ownerProgram()+"/"+owner) {

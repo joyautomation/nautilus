@@ -94,7 +94,8 @@ func Import(f *l5x.File, opts Options) (*Project, error) {
 	p := &Project{Files: map[string][]byte{}}
 	im := &importer{file: f, opts: opts, proj: p, aois: map[string]*l5x.AddOnInstruction{}, ctrl: map[string]*l5x.Tag{},
 		moved: map[string]bool{}, external: map[string]bool{},
-		msgs: map[*l5x.Tag]*msgInfo{}, chanByKey: map[string]string{}, msgExtras: map[string]msgExtra{}}
+		msgs: map[*l5x.Tag]*msgInfo{}, chanByKey: map[string]string{}, msgExtras: map[string]msgExtra{},
+		extraOwner: map[string]*l5x.Tag{}}
 	for _, a := range c.AOIs {
 		im.aois[strings.ToLower(a.Name)] = a
 	}
@@ -119,6 +120,9 @@ func Import(f *l5x.File, opts Options) (*Project, error) {
 	for _, a := range c.AOIs {
 		im.importAOI(a)
 	}
+
+	// Which program sends each MESSAGE, before any program lowers (msg.go).
+	im.msgSenders = msgSenders(c)
 
 	// Programs: a PROGRAM per routine.
 	selected := map[string]bool{}
@@ -347,6 +351,10 @@ type importer struct {
 	channels  []msgChannel
 	chanByKey map[string]string
 	msgExtras map[string]msgExtra
+	// msgSenders lists, per MESSAGE tag, the program of each MSG that
+	// sends it; extraOwner the tag each msgExtras entry came from.
+	msgSenders map[*l5x.Tag][]string
+	extraOwner map[string]*l5x.Tag
 }
 
 // declaredTypes lists the names a generated ST file declares: the

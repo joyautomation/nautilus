@@ -552,7 +552,7 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 						}
 						out = append(out, legOut...)
 						condLegs = append(condLegs, leg[:k])
-					} else if last && legActs(leg) {
+					} else if last && rt.legActs(leg) {
 						// The branch ends the rung, so nothing reads its
 						// condition after it; a leg that does something
 						// (a timer, a message, a data box) is a rung of its
@@ -1551,13 +1551,14 @@ func (rt *routine) hoistBlocks(legs [][]l5x.Term, prefix []string) ([][]l5x.Term
 	return outLegs, hoisted, nil
 }
 
-// legActs reports whether a leg does anything beyond conditions: a block,
-// a data box, any instruction that is not a contact or a compare.
-func legActs(leg []l5x.Term) bool {
+// legActs reports whether a leg does something a rung of its own carries:
+// a block (timer, counter, message), a data box, a copy, an Add-On
+// Instruction. A one-shot, an AFI or a NOP leaves it a condition, as before.
+func (rt *routine) legActs(leg []l5x.Term) bool {
 	acts := false
 	walkTerms(leg, func(in *l5x.Instr) {
 		m := strings.ToUpper(in.Mnemonic)
-		if m != "XIC" && m != "XIO" && m != "NOP" && compareFn[m] == "" {
+		if blockInstr[m] || assignInstr[m] || m == "COP" || m == "CPS" || rt.im.aois[strings.ToLower(in.Mnemonic)] != nil {
 			acts = true
 		}
 	})

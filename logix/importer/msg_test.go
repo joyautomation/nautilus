@@ -76,8 +76,8 @@ func TestMessagesImportAsReadWrite(t *testing.T) {
 		"channels:\n",
 		"  - { name: cip_192_0_2_12, type: cip, host: 192.0.2.12 }\n",
 		"  - { name: cip_192_0_2_13_s2, type: cip, host: 192.0.2.13, slot: 2 }\n",
-		"    messages:\n",
-		`      - { name: PushSp, connected-flag: "1", cache-connections: "TRUE" }` + "\n",
+		"    messages:\n      - { name: PushSp, connected-flag: \"1\", cache-connections: \"TRUE\" }\n",
+		"    controller-scoped:\n",
 		"      - { name: PollLine2 }\n",
 	} {
 		if !strings.Contains(man, want) {
@@ -155,5 +155,51 @@ func TestLastBranchKeepsActingLegs(t *testing.T) {
 			t.Errorf("%q out of order in\n%s", want, src)
 		}
 		last = i
+	}
+}
+
+
+// The review's cases: two MSGs on one tag, a program tag shadowing a
+// controller MESSAGE's local element, and a controller MESSAGE read from a
+// program that does not send it.
+func TestMessagesSharedAndShadowed(t *testing.T) {
+	tags := []string{"go:BOOL", "b:BOOL", "Line2:LineStatus"}
+	msgs := []string{"M|CIP Data Table Read|R|Line2|2, 192.0.2.1|"}
+
+	p := mustImport(t, msgL5X(tags, msgs, "XIC(go)MSG(M);", "XIC(b)MSG(M);"))
+	if s := fmt.Sprint(p.Notes); !strings.Contains(s, "is sent by 2 MSG instructions") {
+		t.Errorf("two MSGs on M: notes %s", s)
+	}
+
+	doc := strings.Replace(string(msgL5X(tags, msgs, "XIC(go)MSG(M);")), "<Program Name=\"Main\" TestEdits=\"false\" MainRoutineName=\"MainRoutine\" Disabled=\"false\" UseAsFolder=\"false\">\n<Tags/>",
+		"<Program Name=\"Main\" TestEdits=\"false\" MainRoutineName=\"MainRoutine\" Disabled=\"false\" UseAsFolder=\"false\">\n<Tags>\n<Tag Name=\"Line2\" TagType=\"Base\" DataType=\"LineStatus\" ExternalAccess=\"Read/Write\"/>\n</Tags>", 1)
+	p = mustImport(t, []byte(doc))
+	if s := fmt.Sprint(p.Notes); !strings.Contains(s, "this program has a tag of that name") {
+		t.Errorf("shadowed local element: notes %s", s)
+	}
+
+	// A second program reads M.DN; only Main sends M.
+	two := string(msgL5X(tags, msgs, "XIC(go)MSG(M);"))
+	other := "<Program Name=\"Other\" TestEdits=\"false\" MainRoutineName=\"MainRoutine\" Disabled=\"false\" UseAsFolder=\"false\">\n<Tags/>\n<Routines>\n<Routine Name=\"MainRoutine\" Type=\"RLL\">\n<RLLContent>\n<Rung Number=\"0\" Type=\"N\">\n<Text>\n<![CDATA[XIC(M.DN)OTE(b);]]>\n</Text>\n</Rung>\n</RLLContent>\n</Routine>\n</Routines>\n</Program>\n</Programs>"
+	two = strings.Replace(two, "</Programs>", other, 1)
+	p = mustImport(t, []byte(two))
+	if s := fmt.Sprint(p.Notes); !strings.Contains(s, "is sent by program Main") {
+		t.Errorf("M.DN read from Other: notes %s", s)
+	}
+}
+
+// A last output branch's one-shot or AFI leg stays a condition, as before
+// the dropped-leg fix: the rung still imports.
+func TestLastBranchConditionLegsStay(t *testing.T) {
+	for _, rung := range []string{"XIC(a)[XIC(b) OTE(y) ,XIC(b) ONS(s) ];", "XIC(a)[XIC(b) OTE(y) ,AFI() ];"} {
+		p := mustImport(t, miniL5X([]string{"a:BOOL", "b:BOOL", "y:BOOL", "s:BOOL"}, rung))
+		for _, n := range p.Notes {
+			if n.Rung >= 0 {
+				t.Errorf("%s: note %s", rung, n)
+			}
+		}
+		if !strings.Contains(string(p.Files["Main.ld"]), "a b ( y )") {
+			t.Errorf("%s: imported as\n%s", rung, p.Files["Main.ld"])
+		}
 	}
 }
