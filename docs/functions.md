@@ -748,7 +748,8 @@ channels:
   - name: line2
     type: cip          # a Logix controller over EtherNet/IP
     host: 192.0.2.12
-    slot: 0            # optional: the processor in this slot behind host
+    slot: 0            # a ControlLogix CPU's slot behind an Ethernet module;
+                       # leave it out for a controller with its own port
     timeout: 5s        # per request (default)
 ```
 

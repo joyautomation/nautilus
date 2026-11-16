@@ -80,6 +80,11 @@ type Target struct {
 	// written at controller scope (writer.Options.ControllerScoped).
 	AllTags          bool
 	ControllerScoped []string
+	// Channels and Messages are the manifest's channels: and
+	// target.logix.messages, for the MSG a READ or WRITE is written as
+	// (writer.Options.Channels, .Messages).
+	Channels []writer.Channel
+	Messages []writer.Message
 	// Side is the side code to emit (writer.Side).
 	Side writer.Side
 	// Hardware is the project's I/O configuration (writer.Options.Hardware);
@@ -255,6 +260,7 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		PeriodMs: t.PeriodMs, ProcessorType: t.Processor, MajorRev: major, MinorRev: minor, Libs: t.Libs,
 		Inits: t.Inits, Descs: t.Descs, Aliases: t.Aliases, Tags: t.Tags, Side: t.Side,
 		AllTags: t.AllTags, ControllerScoped: t.ControllerScoped, Hardware: t.Hardware,
+		Channels: t.Channels, Messages: t.Messages,
 	}
 	full, diags, err := t.write(src, wopts)
 	if err != nil {

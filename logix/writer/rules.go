@@ -22,6 +22,7 @@ const (
 	ruleName          = "logix/name"           // Logix tag naming limits
 	ruleFB            = "logix/fb"             // a block the v1 subset lacks
 	ruleFBPin         = "logix/fb-pin"         // a pin binding with no mapping
+	ruleMessage       = "logix/message"        // a READ/WRITE the MSG it is written as cannot say
 	rulePreset        = "logix/preset"         // PT / PV that is not a literal or a variable
 	ruleReset         = "logix/reset"          // CTU R that is not a plain reference
 	ruleTOFPosition   = "logix/block-position" // TOF or CTU inside a branch
@@ -48,6 +49,7 @@ var Rules = []struct{ ID, Description string }{
 	{ruleInit, "an initial value must be a literal the tag can carry"},
 	{ruleName, "tag names: at most 40 characters, no consecutive or trailing underscores"},
 	{ruleFB, "TP, CTD, CTUD and R_TRIG/F_TRIG instances are not in the v1 subset; user blocks are, as AOIs"},
+	{ruleMessage, "a READ or WRITE is an MSG on a ladder rung: ID a channel of type cip, VAR_1 a constant tag path, RD_1 / SD_1 a tag, one call per instance"},
 	{ruleFBPin, "timers bind PT (TONR also Reset), counters PV and R, user blocks their declared parameters, each input of an ST call a tag, a member or element of one, or a literal (an expression fails the Logix build); the rung's power drives IN, or a user block's first unbound BOOL input"},
 	{rulePreset, "a preset is a literal or a declared variable"},
 	{ruleReset, "a counter reset is a plain BOOL reference"},

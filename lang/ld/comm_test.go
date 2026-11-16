@@ -30,3 +30,19 @@ END_PROGRAM`
 	}
 	compileST(t, got)
 }
+
+// A one-line VAR section declares its variables, as a one-line VAR_INPUT
+// does: the Logix writer reads instances from here, and used to drop the
+// call of a block declared `VAR t1 : TON; END_VAR` as undeclared.
+func TestScanVarsOneLineVar(t *testing.T) {
+	src := "PROGRAM Main\nVAR_EXTERNAL Go : BOOL; END_VAR\nVAR rd : READ; t1 : TON; END_VAR\nVAR RETAIN n : DINT; END_VAR\nVAR CONSTANT kMax : DINT := 10; END_VAR\nLD\n  RUNG r0\n    Go ( Go )\nEND_LD\nEND_PROGRAM\n"
+	got := map[string]string{}
+	for _, v := range scanVars(src) {
+		got[v.Name] = v.Section + " " + v.Type
+	}
+	for name, want := range map[string]string{"rd": "VAR READ", "t1": "VAR TON", "n": "VAR DINT", "Go": "VAR_EXTERNAL BOOL", "kMax": "VAR CONSTANT DINT"} {
+		if got[name] != want {
+			t.Errorf("%s = %q, want %q (all: %v)", name, got[name], want, got)
+		}
+	}
+}

@@ -143,6 +143,15 @@ func (c *rungCtx) assign(e ld.Element) ([]string, bool) {
 		a := as[i]
 		// A whole array or structure, or a run the import marked
 		// `@logix COP n`/`CPS n`, is a copy (copy.go).
+		if a.Pragma("logix MSG.Flags") {
+			// The import's copy of a message's status word (msg.go).
+			text, ok := c.msgFlags(a)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, text)
+			continue
+		}
 		var run *copyRun
 		if r, ok := runs[i]; ok {
 			run = &r

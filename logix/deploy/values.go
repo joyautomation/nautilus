@@ -128,6 +128,9 @@ func PlanValues(project *l5x.File, running []byte) (*ValuePlan, error) {
 			reason = "the definition of " + t.DataType + " changed"
 		case t.Constant:
 			reason = "a constant takes the project's value"
+		case strings.EqualFold(t.DataType, "MESSAGE"):
+			// Its data is the MSG's parameters, which are the project's.
+			reason = "a message takes the project's parameters"
 		case rawData[pt.key] == nil:
 			reason = "the controller's export carries no value for it"
 		}

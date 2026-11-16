@@ -212,6 +212,27 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 			w(`</Tag>`)
 			continue
 		}
+		if t.DataType == "MESSAGE" {
+			// A READ or WRITE instance (msg.go): its parameters, no value.
+			w(`<Tag Name="%s" TagType="Base" DataType="MESSAGE" ExternalAccess="Read/Write">`, attr(t.Name))
+			if t.Desc != "" {
+				w(`<Description>`)
+				w(`%s`, cdata(t.Desc))
+				w(`</Description>`)
+			}
+			if m := t.Message; m != nil {
+				w(`<Data Format="Message">`)
+				cache := ""
+				if m.Cache != "" {
+					cache = fmt.Sprintf(` CacheConnections="%s"`, attr(m.Cache))
+				}
+				w(`<MessageParameters MessageType="%s" RemoteElement="%s" RequestedLength="%s" ConnectedFlag="%s" ConnectionPath="%s" CommTypeCode="0" LocalIndex="0" LocalElement="%s"%s/>`,
+					attr(m.Type), attr(m.Remote), m.Length, attr(m.Connected), attr(m.Path), attr(m.Local), cache)
+				w(`</Data>`)
+			}
+			w(`</Tag>`)
+			continue
+		}
 		radix := radixOf(t.DataType)
 		if t.AOI {
 			// An Add-On Instruction instance is a structure: a Radix on

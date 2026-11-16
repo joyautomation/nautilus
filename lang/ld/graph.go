@@ -2,14 +2,12 @@ package ld
 
 import (
 	"fmt"
-	"regexp"
+	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/fbcatalog"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
-
-var endVarRe = regexp.MustCompile(`(?i)END_VAR`)
 
 // The ladder render model: rung-structured, because LD layout is CANONICAL
 // — rungs stack top to bottom, elements read left to right, branch legs
@@ -352,89 +350,40 @@ func scanBlocks(src string) []Block {
 	return out
 }
 
-// scanVars reads header declarations line-based, mirroring lang/fbd's vars
-// list: every `name : TYPE [:= init];` inside VAR* sections. Declarations
-// inside a FUNCTION_BLOCK carry that block's name in POU.
-//
-// Scanned on comment-stripped text throughout, so a `(* ... *)` or `//`
-// comment naming a section keyword, or showing an example declaration,
-// can't be read as real header structure or a real declaration.
+// scanVars reads every `name : TYPE [:= init];` in the VAR* sections with
+// the shared header scanner (lang/internal/hdrvars, also lang/sfc's and
+// lang/fbd's): one-line sections, qualifiers, and CONSTANT reported as the
+// "VAR CONSTANT" section the vars panel shows. Rung bodies (LD … END_LD) are
+// blanked first, so a rung naming a tag VAR_x is never read as a section.
+// Declarations inside a FUNCTION_BLOCK carry that block's name in POU.
 func scanVars(src string) []VarDecl {
-	var out []VarDecl
-	section := ""
-	pou := ""
 	lines := strings.Split(stripComments(src), "\n")
+	pouAt := make([]string, len(lines))
+	pou, inLD := "", false
 	for i, raw := range lines {
-		t := strings.TrimSpace(raw)
-		u := strings.ToUpper(t)
-		if section == "" {
-			if m := fbStartRe.FindStringSubmatch(raw); m != nil {
-				pou = m[1]
-				continue
-			}
-			if fbEndRe.MatchString(raw) {
-				pou = ""
-				continue
-			}
-		}
 		switch {
-		case u == "VAR" || strings.HasPrefix(u, "VAR_"):
-			section = strings.Fields(u)[0]
-			// A compact section — `VAR_INPUT Start : BOOL; END_VAR` all on
-			// one line — declares on the header line itself.
-			rest := strings.TrimSpace(t[len(strings.Fields(t)[0]):])
-			if rest == "" {
-				continue
-			}
-			if loc := endVarRe.FindStringIndex(rest); loc != nil {
-				rest = rest[:loc[0]]
-				out = append(out, compactDecls(rest, section, pou, i+1)...)
-				section = ""
-				continue
-			}
-			out = append(out, compactDecls(rest, section, pou, i+1)...)
-			continue
-		case u == "END_VAR":
-			section = ""
-			continue
+		case inLD && ldEndRe.MatchString(raw):
+			inLD = false
+			lines[i] = ""
+		case inLD:
+			lines[i] = ""
+		case ldStartRe.MatchString(raw):
+			inLD = true
+			lines[i] = ""
+		case fbStartRe.MatchString(raw):
+			pou = fbStartRe.FindStringSubmatch(raw)[1]
+		case fbEndRe.MatchString(raw):
+			pou = ""
 		}
-		if section == "" || t == "" || strings.HasPrefix(t, "(*") || strings.HasPrefix(t, "//") {
-			continue
-		}
-		if loc := endVarRe.FindStringIndex(t); loc != nil {
-			out = append(out, compactDecls(t[:loc[0]], section, pou, i+1)...)
-			section = ""
-			continue
-		}
-		out = append(out, compactDecls(t, section, pou, i+1)...)
+		pouAt[i] = pou
 	}
-	return out
-}
-
-// compactDecls reads the `name : TYPE [:= init];` declarations on one line —
-// one, or several separated by `;`.
-func compactDecls(text, section, pou string, line int) []VarDecl {
 	var out []VarDecl
-	for _, decl := range strings.Split(text, ";") {
-		decl = strings.TrimSpace(decl)
-		if decl == "" {
-			continue
+	for _, d := range hdrvars.Scan(strings.Join(lines, "\n")) {
+		sec := d.Section
+		if d.Constant {
+			sec += " CONSTANT"
 		}
-		parts := strings.SplitN(decl, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		name := strings.TrimSpace(parts[0])
-		rest := strings.TrimSpace(parts[1])
-		init := ""
-		if idx := strings.Index(rest, ":="); idx >= 0 {
-			init = strings.TrimSpace(rest[idx+2:])
-			rest = strings.TrimSpace(rest[:idx])
-		}
-		if name == "" || rest == "" {
-			continue
-		}
-		out = append(out, VarDecl{Name: name, Type: rest, Init: init, Section: section, Line: line, POU: pou})
+		out = append(out, VarDecl{Name: d.Name, Type: d.Type, Init: d.Init, Section: sec, Line: d.Line, POU: pouAt[d.Line-1]})
 	}
 	return out
 }

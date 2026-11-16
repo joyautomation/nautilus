@@ -223,6 +223,7 @@ func (c *rungCtx) contact(ref string, neg bool) string {
 var memberRewrite = map[string]map[string]string{
 	"TIMER":   {"Q": "DN", "ET": "ACC", "IN": "EN", "PT": "PRE"},
 	"COUNTER": {"Q": "DN", "CV": "ACC", "CU": "CU", "PV": "PRE"},
+	"MESSAGE": {"NDR": "DN", "DONE": "DN", "ERROR": "ER", "STATUS": "ERR"},
 }
 
 // ref rewrites an operand reference for Logix: timer and counter members
@@ -329,6 +330,8 @@ func membersOf(st string) string {
 	switch st {
 	case "TIMER":
 		return "Q (DN), ET (ACC), IN (EN), PT (PRE)"
+	case "MESSAGE":
+		return "NDR or DONE (DN), ERROR (ER), STATUS (ERR); BUSY has no MESSAGE bit"
 	default:
 		return "Q (DN), CV (ACC), CU, PV (PRE)"
 	}
@@ -563,6 +566,11 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		// The compiler reports an undeclared or mistyped instance; the
 		// writer only needs to know it cannot type the tag.
 		return "", "", false
+	}
+	if st == "MESSAGE" {
+		// READ / WRITE: an MSG, which passes its rung-in on (msg.go).
+		text, ok := c.message(e, typ)
+		return text, "", ok
 	}
 	if splitsRung(typ) && !top {
 		c.lw.diag(ruleTOFPosition, c.r.Line, c.r.Name, "%s:%s inside a branch: a Logix %s passes its rung-in through, and its done bit can be true while the rung-in is false; put it on its own rung and use %s.Q as a contact", e.Inst, typ, typ, e.Inst)

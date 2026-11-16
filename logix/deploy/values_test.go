@@ -271,3 +271,37 @@ func TestTagSpansSkipsAOILocals(t *testing.T) {
 		t.Errorf("T data = %+v", spans[0].data)
 	}
 }
+
+// A MESSAGE tag's data is its MSG's parameters: a redeploy keeping values
+// takes the project's, so a changed channel or element is not undone by
+// the controller's old copy.
+func TestKeepValuesTakesMessagesFromTheProject(t *testing.T) {
+	src := "PROGRAM Main\nVAR_EXTERNAL Go : BOOL; X : DINT; END_VAR\nVAR\n  rd : READ;\nEND_VAR\nLD\n  RUNG r0\n    Go rd:READ(ID := 'line2', VAR_1 := 'Remote', RD_1 := X)\nEND_LD\nEND_PROGRAM\n"
+	write := func(host string) []byte {
+		out, diags, err := writer.Write(src, writer.Options{Channels: []writer.Channel{{Name: "line2", Type: "cip", Host: host}}})
+		if err != nil || len(diags) > 0 {
+			t.Fatalf("write: %v %v", err, diags)
+		}
+		return out
+	}
+	old := write("192.0.2.1")
+	full := write("192.0.2.2")
+	gen, err := l5x.Parse(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := PlanValues(gen, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(p.Reset, "|"), "rd: a message takes the project's parameters") {
+		t.Errorf("reset = %q", p.Reset)
+	}
+	merged, err := p.Apply(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(merged), `ConnectionPath="2, 192.0.2.2"`) || strings.Contains(string(merged), "192.0.2.1") {
+		t.Errorf("merged project keeps the controller's path:\n%s", merged)
+	}
+}

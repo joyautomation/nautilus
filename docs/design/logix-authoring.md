@@ -2347,6 +2347,68 @@ in AOIs.
   carries, one per name.
 - **Addresses:** the path's address must parse as an IP.
 
+**Slice 3, the writer (2026-11-16).**
+
+**The mapping:** `logix/writer/msg.go`. A READ or WRITE instance is a
+`MESSAGE` tag, and its call on a rung is `MSG(inst)`, which passes its
+rung-in on as the block passes power. The MessageParameters are written in
+the order Studio exports them. Their sources:
+
+- **From the call:** `VAR_1`, and `RD_1` / `SD_1` as the local element.
+- **From the channel:** `2, host[, 1, slot]`.
+- **From `target.logix.messages`:** the connection flags, or a path
+  spelled otherwise.
+
+The `@logix MSG.Flags` box folds back to `MOVE(M.Flags,D)`. `writer.Options`
+gains `Channels` and `Messages`, filled from the manifest by deploy,
+`naut logix deploy` and `naut logix write`. `Check` has no manifest in hand,
+so it leaves channel IDs to `naut check`.
+
+**The writer refuses:**
+
+- READ/WRITE in ST.
+- A non-literal ID or VAR_1.
+- A non-`cip` channel.
+- An expression as RD_1 / SD_1.
+- An output capture.
+- `BUSY`, which has no MESSAGE bit; the design's EN/DN/ER spelling of it is
+  not written.
+- A second call of an instance with other parameters.
+- An instance no rung calls.
+
+**Review round (#702):**
+
+- **One call:** an instance has one call, so even an identical second call
+  is refused.
+- **Where READ/WRITE is refused:** inside a FUNCTION_BLOCK, because an
+  Add-On Instruction cannot hold a MESSAGE tag, and in ST, with the message
+  rule rather than the subset list.
+- **Arrays:** a whole array is `RequestedLength` n from `[0]`.
+- **Ports:** a channel on another port is refused, since an MSG path cannot
+  name a port.
+- **Redeploy:** a redeploy that keeps values takes a MESSAGE's parameters
+  from the project, never the controller's old copy.
+- **`naut logix write`:** it reads `channels:` for any program of the
+  project.
+- **`lang/ld`'s variable scan:** it now runs on the shared `hdrvars` scanner,
+  one definition with SFC and FBD, so `VAR CONSTANT` keeps its section.
+- **Documented:** `slot:` absent means the controller at `host` itself.
+
+**Measured:** the importer's fixture round-trips every MessageParameters
+attribute identically, both the default flags and `ConnectedFlag="1"` with
+`CacheConnections`. The poll rung comes back as the three rungs the import
+split it into.
+
+**Also fixed:** `lang/ld`'s variable scan missed a one-line
+`VAR t1 : TON; END_VAR`. The writer then took the instance as undeclared and
+dropped its call without a diagnostic.
+
+**Not yet done:**
+
+- **The SDK build of a written MSG** (logixd on ws-test).
+- **A run on a controller.** That would also settle the `Flags` bits and the
+  `ConnectedFlag` meanings.
+
 **Limits, for later:**
 
 - WRITE does not encode a Logix `STRING`.
