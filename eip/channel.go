@@ -2,10 +2,13 @@ package eip
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/joyautomation/nautilus/eip/cip"
 	"github.com/joyautomation/nautilus/eip/logix"
@@ -32,6 +35,7 @@ type Channel struct {
 	mu        sync.Mutex
 	ctrl      *logix.Controller
 	symbols   map[string]logix.Symbol    // upper-cased name → symbol, per session
+	scopes    map[string]bool            // the scopes symbols holds
 	templates map[uint16]*logix.Template // by template id, per session
 	reg       *logix.Registry
 	peer      map[string]peerType // per variable: what a write must send
@@ -85,9 +89,27 @@ func (c *Channel) conn(ctx context.Context) (*logix.Controller, error) {
 		return nil, &commErr{status: ir.CommUnreachable, err: err}
 	}
 	// A new session may be a re-downloaded controller: learn it again.
-	c.ctrl, c.symbols, c.templates, c.peer = ctrl, nil, map[uint16]*logix.Template{}, map[string]peerType{}
-	c.reg = logix.NewRegistry(c.templates)
+	c.ctrl = ctrl
+	c.forget()
 	return ctrl, nil
+}
+
+// forget drops what the channel learned of the peer: on a new session (it
+// may be a re-downloaded controller), and after the peer refuses a request
+// (an online edit may have retyped or added the tag).
+func (c *Channel) forget() {
+	c.symbols, c.scopes = map[string]logix.Symbol{}, map[string]bool{}
+	c.templates, c.peer = map[uint16]*logix.Template{}, map[string]peerType{}
+	c.reg = logix.NewRegistry(c.templates)
+}
+
+// refused forgets the peer's shape when err is the peer's own refusal.
+func (c *Channel) refused(err error) error {
+	var ce *logix.CIPError
+	if errors.As(err, &ce) {
+		c.forget()
+	}
+	return err
 }
 
 // Close ends the session.
@@ -102,27 +124,39 @@ func (c *Channel) Close() error {
 	return err
 }
 
-// Read reads variable from the peer and returns it in shape's type.
-func (c *Channel) Read(ctx context.Context, variable string, shape ir.Value) (ir.Value, error) {
+// Read reads variable from the peer and returns it in shape's type. An
+// array shape reads that many elements from the one named (the whole array
+// when it names the array).
+func (c *Channel) Read(ctx context.Context, variable string, shape ir.Value, elem string) (ir.Value, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ctrl, err := c.conn(ctx)
 	if err != nil {
 		return ir.Value{}, err
 	}
-	raw, err := ctrl.ReadTag(ctx, variable, 1)
+	count := 1
+	if shape.Kind == ir.TypeArray {
+		if count = len(shape.Arr); count < 1 || count > math.MaxUint16 {
+			return ir.Value{}, clash("an array of %d elements", count)
+		}
+	}
+	raw, err := ctrl.ReadTag(ctx, variable, uint16(count))
 	if err != nil {
-		return ir.Value{}, err
+		return ir.Value{}, c.refused(err)
 	}
 	pv, err := c.decode(ctx, variable, raw)
 	if err != nil {
 		return ir.Value{}, err
 	}
-	return fit(pv, shape, nil)
+	if shape.Kind == ir.TypeArray && pv.Elems == nil {
+		pv = logix.Value{Type: pv.Type, Elems: []logix.Value{pv}} // one element
+	}
+	return fit(pv, shape, rootType(shape, elem))
 }
 
-// Write writes data to variable on the peer, whole.
-func (c *Channel) Write(ctx context.Context, variable string, data ir.Value) error {
+// Write writes data to variable on the peer, whole: a structure in its
+// template's layout, an array as that many elements from the one named.
+func (c *Channel) Write(ctx context.Context, variable string, data ir.Value, elem string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ctrl, err := c.conn(ctx)
@@ -135,7 +169,7 @@ func (c *Channel) Write(ctx context.Context, variable string, data ir.Value) err
 		// its handle and template, from one read.
 		raw, err := ctrl.ReadTag(ctx, variable, 1)
 		if err != nil {
-			return err
+			return c.refused(err)
 		}
 		pt = peerType{code: raw.Type, handle: raw.Handle}
 		if raw.Type == cip.TypeStruct {
@@ -145,25 +179,63 @@ func (c *Channel) Write(ctx context.Context, variable string, data ir.Value) err
 		}
 		c.peer[strings.ToUpper(variable)] = pt
 	}
+	elems, typ := []ir.Value{data}, rootType(data, elem)
+	if data.Kind == ir.TypeArray {
+		if len(data.Arr) < 1 || len(data.Arr) > math.MaxUint16 {
+			return clash("an array of %d elements", len(data.Arr))
+		}
+		elems = data.Arr
+		if typ != nil {
+			typ = typ.Elem
+		}
+	}
 	if pt.code == cip.TypeStruct {
 		if pt.tmpl.IsString() {
 			return clash("%s: a Logix STRING is not written by WRITE yet", variable)
 		}
-		buf := make([]byte, pt.tmpl.StructSize)
-		if err := c.encodeStruct(buf, pt.tmpl, data, nil); err != nil {
-			return err
+		size := int(pt.tmpl.StructSize)
+		buf := make([]byte, size*len(elems))
+		for i, e := range elems {
+			if err := c.encodeStruct(buf[i*size:(i+1)*size], pt.tmpl, e, typ); err != nil {
+				return err
+			}
 		}
-		return ctrl.WriteTagStruct(ctx, variable, pt.handle, 1, buf)
+		return c.refused(ctrl.WriteTagStruct(ctx, variable, pt.handle, uint16(len(elems)), buf))
 	}
 	ti, ok := logix.TypeByCode(pt.code)
 	if !ok {
 		return clash("%s: peer type 0x%04x", variable, pt.code)
 	}
-	b, err := encodeScalar(ti, data, nil)
-	if err != nil {
-		return err
+	var buf []byte
+	for _, e := range elems {
+		b, err := encodeScalar(ti, e, typ)
+		if err != nil {
+			return err
+		}
+		buf = append(buf, b...)
 	}
-	return ctrl.WriteTag(ctx, variable, pt.code, 1, b)
+	if data.Kind == ir.TypeArray {
+		return c.refused(ctrl.WriteTagArray(ctx, variable, pt.code, uint16(len(elems)), buf))
+	}
+	return c.refused(ctrl.WriteTag(ctx, variable, pt.code, 1, buf))
+}
+
+// rootType is the local type a READ or WRITE names, as far as a Value and
+// its declared elementary type say: nil when elem is "" (a structure, whose
+// members carry their own types, or an undeclared width).
+func rootType(v ir.Value, elem string) *ir.Type {
+	if elem == "" {
+		return nil
+	}
+	k := v
+	for k.Kind == ir.TypeArray && len(k.Arr) > 0 {
+		k = k.Arr[0]
+	}
+	et := &ir.Type{Kind: k.Kind, Name: elem}
+	if v.Kind == ir.TypeArray {
+		return &ir.Type{Kind: ir.TypeArray, Elem: et}
+	}
+	return et
 }
 
 func (c *Channel) decode(ctx context.Context, variable string, raw logix.RawTag) (logix.Value, error) {
@@ -181,17 +253,26 @@ func (c *Channel) decode(ctx context.Context, variable string, raw logix.RawTag)
 // symbol's template, then each member's along the path, and loads every
 // template nested in it. handle is what the read reported, and must agree.
 func (c *Channel) templateFor(ctx context.Context, variable string, handle uint16) (*logix.Template, error) {
-	if c.symbols == nil {
-		syms, _, err := c.ctrl.ListSymbols(ctx)
+	root, members := splitVariable(variable)
+	scope := ""
+	if i := strings.IndexByte(root, '.'); i > 0 && strings.HasPrefix(strings.ToUpper(root), "PROGRAM:") {
+		scope = root[:i]
+	}
+	if !c.scopes[strings.ToUpper(scope)] {
+		// The scope's tag list, once per session: one scope, not the whole
+		// controller, and on a budget of its own, since a large program's
+		// list can take longer than one request's timeout.
+		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), symbolListBudget)
+		syms, err := c.ctrl.ListScope(lctx, scope)
+		cancel()
 		if err != nil {
 			return nil, err
 		}
-		c.symbols = make(map[string]logix.Symbol, len(syms))
 		for _, s := range syms {
 			c.symbols[strings.ToUpper(s.Name)] = s
 		}
+		c.scopes[strings.ToUpper(scope)] = true
 	}
-	root, members := splitVariable(variable)
 	sym, ok := c.symbols[strings.ToUpper(root)]
 	if !ok || !sym.IsStruct() {
 		return nil, clash("%s: %s is not a structure on the peer", variable, root)
@@ -244,6 +325,9 @@ func (c *Channel) template(ctx context.Context, id uint16) (*logix.Template, err
 	c.reg = logix.NewRegistry(c.templates)
 	return t, nil
 }
+
+// symbolListBudget bounds the one tag-list upload a scope needs.
+const symbolListBudget = 30 * time.Second
 
 // splitVariable splits a tag path into its root symbol and the member
 // names after it; array subscripts drop out, since an element has its
@@ -447,11 +531,31 @@ func encodeScalar(ti logix.TypeInfo, v ir.Value, typ *ir.Type) ([]byte, error) {
 		x = v.F
 	case v.Kind == ir.TypeInt && ti.Code != cip.TypeBOOL && ti.Name != "REAL" && ti.Name != "LREAL" &&
 		(typ == nil || typ.Enum == nil) && sameName(typ, ti.Name):
+		if !intFits(v.I, ti) {
+			return nil, clash("%d does not fit the peer's %s", v.I, ti.Name)
+		}
 		x = v.I
 	default:
 		return nil, clash("peer %s, local %s", ti.Name, kindName(v, typ))
 	}
 	return logix.EncodeScalar(ti.Code, x)
+}
+
+// intFits reports whether n is in the range of the peer's integer type, so
+// a write never truncates on the wire.
+func intFits(n int64, ti logix.TypeInfo) bool {
+	bits := uint(ti.Size * 8)
+	switch ti.Code {
+	case 0xC2, 0xC3, 0xC4, 0xC5: // SINT, INT, DINT, LINT
+		if bits >= 64 {
+			return true
+		}
+		return n >= -(1<<(bits-1)) && n < 1<<(bits-1)
+	}
+	if n < 0 {
+		return false // the unsigned and bit-string types
+	}
+	return bits >= 64 || n < 1<<bits
 }
 
 // sameName reports whether a local integer type matches the peer's type

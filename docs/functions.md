@@ -783,7 +783,9 @@ Two pins differ from the standard, for the reasons given:
 - **`BUSY` is added**, as PLCopen's blocks have it.
 
 `RD_1` and `SD_1` take any type: a whole structure, an array or an
-elementary value.
+elementary value. An array moves whole, as many elements as it has,
+starting at the element `VAR_1` names. That is the whole peer array when
+`VAR_1` names the array.
 
 **Matching the peer's value.** A peer value lands only when it matches the
 local variable:
@@ -792,10 +794,12 @@ local variable:
   or extra.
 - **Elementary types** must agree: an `INT` is not a `DINT`, though `REAL`
   and `LREAL` are interchangeable.
+- **Range:** a value the peer's type cannot hold is refused, never
+  truncated.
 - **Layout** of a structure always comes from the peer. A `cip` channel
   moves it in one Read Tag or Write Tag, as a Logix MSG does, laid out by
-  the template the controller reports. nautilus never computes a Logix
-  layout.
+  the template the controller reports. A value too large for one request
+  goes in fragments. nautilus never computes a Logix layout.
 
 **STATUS** is 0 on success. A positive value is the peer's own status
 code; on `cip` that is the CIP general status a Logix MSG puts in `.ERR`

@@ -2283,15 +2283,25 @@ None of these changes the block. Only the meaning of VAR_1 differs, as
 - **Leader takeover:** it resets program frames, so a block in flight starts
   idle rather than reporting −6.
 
+**Review round (#699):**
+
+- **Integer width:** a hidden internal on each block carries the bound
+  variable's declared elementary type (`ir.AnyTypeSlot`), so the channel
+  tells INT from DINT on a bare variable. A value outside the peer's range is
+  refused, never truncated.
+- **Transfers:** whole arrays move both ways, and a large value goes as Write
+  Tag Fragmented.
+- **Learning the peer:** a CIP refusal makes the channel learn the peer again.
+  The tag list is uploaded one scope at a time, on a 30 s budget of its own.
+- **Lookup:** channel names match case-insensitively everywhere, and
+  `naut check` walks user FUNCTION_BLOCK bodies.
+- **Shutdown:** close finishes queued requests and refuses later posts.
+
 **Limits, for later:**
 
-- A structure over about 480 bytes needs Write Tag Fragmented, which is not
-  written yet.
 - WRITE does not encode a Logix `STRING`.
-- `naut check` resolves IDs in program bodies, not inside user
-  FUNCTION_BLOCKs.
-- The emulator serves whole structures only at a root symbol, so a member-path
-  read (`Tag.Member`) is covered by a controller, not by CI.
+- The emulator serves whole structures only at a root symbol, so a
+  member-path transfer (`Tag.Member`) is covered by a controller, not by CI.
 
 ## 8. The demo this enables
 

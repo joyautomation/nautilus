@@ -1488,6 +1488,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			boundInOut[nth] = true
 			bindings = append(bindings, ir.FBInput{SlotIdx: idx, Value: target})
 			inoutBack = append(inoutBack, ir.FBOutput{SlotIdx: idx, Target: target})
+			bindings = appendAnyType(bindings, def, na.Name, target.ExprType())
 			continue
 		}
 		if !def.IsInput(idx) {
@@ -1501,6 +1502,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 				return nil, fmt.Errorf("FB %s arg %q: %w", def.Name, na.Name, err)
 			}
 			bindings = append(bindings, ir.FBInput{SlotIdx: idx, Value: v})
+			bindings = appendAnyType(bindings, def, na.Name, v.ExprType())
 			continue
 		}
 		v, err := l.lowerExprHint(na.Value, def.Inputs[idx].Type)
@@ -1547,6 +1549,18 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		return l.gate(n.Call.Name, exec, []ir.Stmt{call})
 	}
 	return call, nil
+}
+
+// appendAnyType binds an ANY pin's hidden type slot (ir.AnyTypeSlot), when
+// the block declares one, to the declared elementary type of what the call
+// binds to the pin: a Value does not carry an integer's width, and a READ
+// or WRITE channel must tell an INT from a DINT.
+func appendAnyType(bindings []ir.FBInput, def *ir.FBDef, pin string, t *ir.Type) []ir.FBInput {
+	idx, ok := def.SlotOf(ir.AnyTypeSlot(strings.ToUpper(pin)))
+	if !ok {
+		return bindings
+	}
+	return append(bindings, ir.FBInput{SlotIdx: idx, Value: &ir.Lit{V: ir.StringVal(ir.ElemTypeName(t)), T: ir.StringT}})
 }
 
 // rootRef follows an lvalue to the slot or global it addresses.

@@ -40,11 +40,11 @@ func checkNetworkSections(Manifest) error { return nil }
 // channel whose peer is down does.
 type offlineChannel struct{}
 
-func (offlineChannel) Read(context.Context, string, ir.Value) (ir.Value, error) {
+func (offlineChannel) Read(context.Context, string, ir.Value, string) (ir.Value, error) {
 	return ir.Value{}, errOffline
 }
-func (offlineChannel) Write(context.Context, string, ir.Value) error { return errOffline }
-func (offlineChannel) Close() error                                  { return nil }
+func (offlineChannel) Write(context.Context, string, ir.Value, string) error { return errOffline }
+func (offlineChannel) Close() error                                          { return nil }
 
 var errOffline = errors.New("channels do not reach a peer in the browser")
 

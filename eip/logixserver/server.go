@@ -37,6 +37,10 @@ type Server struct {
 	// (0x0F), the way real controllers refuse AOI backing tags — members must
 	// then be read individually. For driver leaf-mode tests.
 	DenyStructRoots bool
+
+	// frags holds a fragmented write's bytes until the last chunk lands.
+	fragMu sync.Mutex
+	frags  map[string][]byte
 }
 
 // NewServer wires a tag store and tag/UDT schema into a fresh CIP server
@@ -383,8 +387,11 @@ func (s *Server) assembleElementaryArray(path string) (header []byte, raw []byte
 	return u16(code), raw, true
 }
 
-// writeTag serves Write Tag (0x4D): data is [u16 type][u16 count][value
-// bytes] for an elementary leaf, or a whole structure (writeStruct).
+// writeTag serves Write Tag (0x4D) and Write Tag Fragmented (0x53): data
+// is [u16 type][(struct) u16 handle][u16 count][(fragmented) u32 offset]
+// [value bytes]. An elementary write lands count leaves from the one named;
+// a structure (0x02A0) lands whole (writeStruct). Fragments are put back
+// together by offset until the value is complete.
 func (s *Server) writeTag(mr cip.MessageRouterRequest) cip.MessageRouterResponse {
 	if len(mr.Path) == 0 || mr.Path[0] != cip.AnsiExtendedSymbol {
 		return cip.MRError(mr.Service, cip.StatusPathSegmentError)
@@ -394,56 +401,149 @@ func (s *Server) writeTag(mr cip.MessageRouterRequest) cip.MessageRouterResponse
 		return cip.MRError(mr.Service, cip.StatusPathSegmentError)
 	}
 	path := cip.CanonicalTagPath(segs)
-	if len(mr.Data) < 4 {
+	data := mr.Data
+	if len(data) < 4 {
 		return cip.MRError(mr.Service, cip.StatusNotEnoughData)
 	}
-	typeCode := binary.LittleEndian.Uint16(mr.Data[0:2])
+	typeCode := binary.LittleEndian.Uint16(data[0:2])
+	hdr := 2
+	var tmpl *templateDef
 	if typeCode == 0x02A0 {
-		return s.writeStruct(mr, path)
+		hdr = 4
+		if len(data) < 6 {
+			return cip.MRError(mr.Service, cip.StatusNotEnoughData)
+		}
+		base, _, _ := splitTrailingIndex(path)
+		sym, found := s.schema.lookupSymbol(base)
+		if !found {
+			return cip.MRError(mr.Service, cip.StatusPathDestUnknown)
+		}
+		t, isStruct := s.schema.templateFor(sym)
+		if !isStruct || binary.LittleEndian.Uint16(data[2:4]) != t.handle {
+			return cip.MRError(mr.Service, cip.StatusInvalidParameter)
+		}
+		tmpl = t
 	}
-	leafType, _, ok := s.store.Resolve(path)
-	if !ok {
-		return cip.MRError(mr.Service, cip.StatusPathDestUnknown)
+	count := int(binary.LittleEndian.Uint16(data[hdr : hdr+2]))
+	payload := data[hdr+2:]
+	size := int(sizeForCIPType(typeCode))
+	if tmpl != nil {
+		size = int(tmpl.structSize)
 	}
-	if leafType != typeCode {
-		return cip.MRError(mr.Service, cip.StatusInvalidParameter)
+	total := size * count
+	if mr.Service == cip.ServiceWriteTagFragmented {
+		if len(payload) < 4 {
+			return cip.MRError(mr.Service, cip.StatusNotEnoughData)
+		}
+		off := int(binary.LittleEndian.Uint32(payload[0:4]))
+		whole, done := s.reassemble(path, off, payload[4:], total)
+		if !done {
+			return cip.MROK(mr.Service, nil)
+		}
+		payload = whole
 	}
-	v, ok := DecodeLeaf(typeCode, mr.Data[4:])
-	if !ok {
+	if count < 1 || len(payload) < total {
 		return cip.MRError(mr.Service, cip.StatusNotEnoughData)
 	}
-	s.store.UpdateValue(path, v)
+	if tmpl != nil {
+		return s.writeStruct(mr, path, tmpl, count, payload)
+	}
+	base, index, hasIndex := splitTrailingIndex(path)
+	start := 0
+	if hasIndex {
+		start = atoiOr(index, -1)
+	}
+	for i := 0; i < count; i++ {
+		leaf := path
+		if count > 1 || hasIndex {
+			if start < 0 {
+				return cip.MRError(mr.Service, cip.StatusPathSegmentError)
+			}
+			leaf = base + "[" + itoa(start+i) + "]"
+		}
+		leafType, _, ok := s.store.Resolve(leaf)
+		if !ok {
+			return cip.MRError(mr.Service, cip.StatusPathDestUnknown)
+		}
+		if leafType != typeCode {
+			return cip.MRError(mr.Service, cip.StatusInvalidParameter)
+		}
+		v, ok := DecodeLeaf(typeCode, payload[i*size:])
+		if !ok {
+			return cip.MRError(mr.Service, cip.StatusNotEnoughData)
+		}
+		s.store.UpdateValue(leaf, v)
+	}
 	return cip.MROK(mr.Service, nil)
 }
 
-// writeStruct serves a whole-structure Write Tag: [0x02A0][handle][u16
-// count][instance bytes], the way a Logix MSG writes a UDT. The handle must
-// be the type's, the bytes one whole instance; each member lands in its leaf
-// from its template offset, the mirror of encodeStructInstance.
-func (s *Server) writeStruct(mr cip.MessageRouterRequest, path string) cip.MessageRouterResponse {
-	if len(mr.Data) < 6 {
-		return cip.MRError(mr.Service, cip.StatusNotEnoughData)
+// reassemble collects one fragmented write's chunks by offset; done when
+// all total bytes are in.
+func (s *Server) reassemble(path string, off int, chunk []byte, total int) ([]byte, bool) {
+	s.fragMu.Lock()
+	defer s.fragMu.Unlock()
+	if s.frags == nil {
+		s.frags = map[string][]byte{}
 	}
+	buf := s.frags[path]
+	if off == 0 || len(buf) != total {
+		buf = make([]byte, total)
+	}
+	if off < 0 || off+len(chunk) > total {
+		delete(s.frags, path)
+		return nil, false
+	}
+	copy(buf[off:], chunk)
+	if off+len(chunk) == total {
+		delete(s.frags, path)
+		return buf, true
+	}
+	s.frags[path] = buf
+	return nil, false
+}
+
+func atoiOr(s string, def int) int {
+	n := 0
+	if s == "" {
+		return def
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return def
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
+
+// writeStruct lands count whole structure instances, the way a Logix MSG
+// writes a UDT: the root of a structure tag, an element of an array of
+// them, or the whole array from its first element. Each member lands in
+// its leaf from its template offset, the mirror of encodeStructInstance.
+func (s *Server) writeStruct(mr cip.MessageRouterRequest, path string, tmpl *templateDef, count int, raw []byte) cip.MessageRouterResponse {
 	base, index, hasIndex := splitTrailingIndex(path)
-	sym, found := s.schema.lookupSymbol(base)
-	if !found {
-		return cip.MRError(mr.Service, cip.StatusPathDestUnknown)
+	sym, _ := s.schema.lookupSymbol(base)
+	size := int(tmpl.structSize)
+	switch {
+	case sym.dims[0] == 0 && !hasIndex:
+		if count != 1 {
+			return cip.MRError(mr.Service, cip.StatusInvalidParameter)
+		}
+		s.decodeStructInstance(base, tmpl, raw[:size])
+	default:
+		start := 0
+		if hasIndex {
+			if start = atoiOr(index, -1); start < 0 {
+				return cip.MRError(mr.Service, cip.StatusPathSegmentError)
+			}
+		}
+		if start+count > int(sym.dims[0]) {
+			return cip.MRError(mr.Service, cip.StatusInvalidParameter)
+		}
+		for i := 0; i < count; i++ {
+			s.decodeStructInstance(base+"["+itoa(start+i)+"]", tmpl, raw[i*size:(i+1)*size])
+		}
 	}
-	tmpl, isStruct := s.schema.templateFor(sym)
-	if !isStruct || binary.LittleEndian.Uint16(mr.Data[2:4]) != tmpl.handle {
-		return cip.MRError(mr.Service, cip.StatusInvalidParameter)
-	}
-	if sym.dims[0] > 0 && !hasIndex {
-		return cip.MRError(mr.Service, cip.StatusInvalidParameter) // whole arrays of structs: not served
-	}
-	raw := mr.Data[6:]
-	if binary.LittleEndian.Uint16(mr.Data[4:6]) != 1 || len(raw) < int(tmpl.structSize) {
-		return cip.MRError(mr.Service, cip.StatusNotEnoughData)
-	}
-	if hasIndex {
-		base += "[" + index + "]"
-	}
-	s.decodeStructInstance(base, tmpl, raw[:tmpl.structSize])
 	return cip.MROK(mr.Service, nil)
 }
 
@@ -477,8 +577,10 @@ func (s *Server) decodeStructInstance(prefix string, tmpl *templateDef, buf []by
 		}
 		code := m.typeCode &^ memberArrayBit
 		if !isArray {
-			if v, ok := DecodeLeaf(code, buf[m.offset:]); ok {
-				s.store.UpdateValue(path, v)
+			if int(m.offset) < len(buf) {
+				if v, ok := DecodeLeaf(code, buf[m.offset:]); ok {
+					s.store.UpdateValue(path, v)
+				}
 			}
 			continue
 		}
@@ -492,7 +594,10 @@ func (s *Server) decodeStructInstance(prefix string, tmpl *templateDef, buf []by
 				continue
 			}
 			off := int(m.offset) + i*int(sizeForCIPType(code))
-			if v, ok := DecodeLeaf(code, buf[off:]); ok && off < len(buf) {
+			if off >= len(buf) {
+				break
+			}
+			if v, ok := DecodeLeaf(code, buf[off:]); ok {
 				s.store.UpdateValue(p, v)
 			}
 		}

@@ -53,16 +53,47 @@ type CommResult struct {
 // Channels is an optional Host extension: the communication channels READ
 // and WRITE run on. Every method returns at once. Post* hand a request to
 // the channel and return a ticket (> 0), or 0 and the STATUS that stopped
-// it (CommNoChannel, CommQueueFull). Poll reports a ticket's outcome:
-// done false while it is in flight, and a ticket the host does not know is
-// done with CommLost. A finished ticket is forgotten once polled.
+// it (CommNoChannel, CommQueueFull, CommUnreachable once the host has shut
+// its channels). Poll reports a ticket's outcome: done false while it is
+// in flight, and a ticket the host does not know is done with CommLost. A
+// finished ticket is forgotten once polled. Channel names match
+// case-insensitively, as identifiers do.
 //
 // PostRead's shape is the current value of the variable the reply lands
 // in; the channel converts the peer's value into that shape, off the scan.
+// elem is the variable's declared elementary type, or its elements' for an
+// array (INT, DINT, REAL, ...): a Value does not carry an integer's width,
+// so this is how a channel tells an INT from a DINT. It is "" for a
+// structure (whose members carry their own) or a width nothing declared.
 type Channels interface {
-	PostRead(channel, variable string, shape Value) (ticket int64, status int)
-	PostWrite(channel, variable string, data Value) (ticket int64, status int)
+	PostRead(channel, variable string, shape Value, elem string) (ticket int64, status int)
+	PostWrite(channel, variable string, data Value, elem string) (ticket int64, status int)
 	Poll(ticket int64) (res CommResult, done bool)
+}
+
+// AnyTypeSlot names the hidden internal slot an ANY pin's declared type
+// rides in: the lowering binds "_RD_1_TYPE" to RD_1's elementary type name
+// at every call (ElemTypeName), since only it knows the bound variable's
+// declaration.
+func AnyTypeSlot(pin string) string { return "_" + pin + "_TYPE" }
+
+// ElemTypeName is the declared elementary type of t, or of its elements
+// when t is an array: "INT", "DINT", "REAL", ... It is "" for a structure
+// and for an integer of undeclared width.
+func ElemTypeName(t *Type) string {
+	for t != nil && t.Kind == TypeArray {
+		t = t.Elem
+	}
+	if t == nil || t.Kind == TypeStruct || t.Enum != nil {
+		return ""
+	}
+	if t.Name != "" {
+		return t.Name
+	}
+	if t.Kind == TypeInt {
+		return ""
+	}
+	return t.Kind.String()
 }
 
 func init() {
@@ -84,6 +115,7 @@ const (
 	rdRD
 	rdPrevREQ
 	rdTicket
+	rdType
 )
 
 func registerRead() {
@@ -92,7 +124,7 @@ func registerRead() {
 		Inputs:    []FBSlot{{Name: "REQ", Type: BoolT}, {Name: "ID", Type: StringT}, {Name: "VAR_1", Type: StringT}},
 		Outputs:   []FBSlot{{Name: "NDR", Type: BoolT}, {Name: "ERROR", Type: BoolT}, {Name: "BUSY", Type: BoolT}, {Name: "STATUS", Type: statusT}},
 		InOuts:    []FBSlot{{Name: "RD_1", Type: AnyT}},
-		Internals: []FBSlot{{Name: "_prevREQ", Type: BoolT}, {Name: "_ticket", Type: IntT}},
+		Internals: []FBSlot{{Name: "_prevREQ", Type: BoolT}, {Name: "_ticket", Type: IntT}, {Name: AnyTypeSlot("RD_1"), Type: StringT}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			s := inst.Slots
 			edge := s[rdREQ].B && !s[rdPrevREQ].B
@@ -123,7 +155,7 @@ func registerRead() {
 				s[rdERROR], s[rdSTATUS] = BoolVal(true), IntVal(CommNoChannel)
 				return nil
 			}
-			ticket, st := ch.PostRead(s[rdID].S, s[rdVAR].S, CopyValue(s[rdRD]))
+			ticket, st := ch.PostRead(s[rdID].S, s[rdVAR].S, CopyValue(s[rdRD]), s[rdType].S)
 			startComm(s, rdBUSY, rdERROR, rdSTATUS, rdTicket, ticket, st)
 			return nil
 		},
@@ -142,6 +174,7 @@ const (
 	wrSTATUS
 	wrPrevREQ
 	wrTicket
+	wrType
 )
 
 func registerWrite() {
@@ -149,7 +182,7 @@ func registerWrite() {
 		Name:      "WRITE",
 		Inputs:    []FBSlot{{Name: "REQ", Type: BoolT}, {Name: "ID", Type: StringT}, {Name: "VAR_1", Type: StringT}, {Name: "SD_1", Type: AnyT}},
 		Outputs:   []FBSlot{{Name: "DONE", Type: BoolT}, {Name: "ERROR", Type: BoolT}, {Name: "BUSY", Type: BoolT}, {Name: "STATUS", Type: statusT}},
-		Internals: []FBSlot{{Name: "_prevREQ", Type: BoolT}, {Name: "_ticket", Type: IntT}},
+		Internals: []FBSlot{{Name: "_prevREQ", Type: BoolT}, {Name: "_ticket", Type: IntT}, {Name: AnyTypeSlot("SD_1"), Type: StringT}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			s := inst.Slots
 			edge := s[wrREQ].B && !s[wrPrevREQ].B
@@ -176,7 +209,7 @@ func registerWrite() {
 				s[wrERROR], s[wrSTATUS] = BoolVal(true), IntVal(CommNoChannel)
 				return nil
 			}
-			ticket, st := ch.PostWrite(s[wrID].S, s[wrVAR].S, CopyValue(s[wrSD]))
+			ticket, st := ch.PostWrite(s[wrID].S, s[wrVAR].S, CopyValue(s[wrSD]), s[wrType].S)
 			startComm(s, wrBUSY, wrERROR, wrSTATUS, wrTicket, ticket, st)
 			return nil
 		},

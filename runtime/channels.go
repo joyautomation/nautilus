@@ -20,14 +20,16 @@ import (
 // cancels ctx at the channel's timeout. variable is the peer's name for the
 // value, in the protocol's own syntax (a Logix tag path on a CIP channel).
 // Read returns the peer's value converted to shape's type; a value that does
-// not fit is an error, never a partial value.
+// not fit is an error, never a partial value. elem is the local variable's
+// declared elementary type (ir.Channels): "" for a structure or an
+// undeclared width.
 //
 // The STATUS a block reports for an error is the error's own when it has a
 // CommStatus() int method (the peer's status code, or an ir.Comm* value),
 // ir.CommTimeout for a cancelled ctx, and ir.CommUnreachable otherwise.
 type ChannelIO interface {
-	Read(ctx context.Context, variable string, shape ir.Value) (ir.Value, error)
-	Write(ctx context.Context, variable string, data ir.Value) error
+	Read(ctx context.Context, variable string, shape ir.Value, elem string) (ir.Value, error)
+	Write(ctx context.Context, variable string, data ir.Value, elem string) error
 	Close() error
 }
 
@@ -73,7 +75,7 @@ const (
 // each channel's worker goroutine does the network I/O, one request at a
 // time, in the order posted.
 type commHub struct {
-	byName map[string]*commWorker
+	byName map[string]*commWorker // by ir.NameKey: names match case-insensitively
 	next   atomic.Int64
 
 	mu       sync.Mutex
@@ -81,6 +83,7 @@ type commHub struct {
 	finished map[int64]finishedReq
 
 	stop     chan struct{}
+	stopped  bool // under mu: a post after close is refused
 	base     context.Context // cancelled by close, so no request outlives it
 	cancel   context.CancelFunc
 	stopOnce sync.Once
@@ -99,6 +102,7 @@ type commReq struct {
 	write    bool
 	variable string
 	val      ir.Value
+	elem     string
 }
 
 type finishedReq struct {
@@ -126,7 +130,7 @@ func newCommHub(chs []Channel) *commHub {
 		if c.Queue <= 0 {
 			w.q = make(chan commReq, DefaultChannelQueue)
 		}
-		h.byName[c.Name] = w
+		h.byName[ir.NameKey(c.Name)] = w
 	}
 	return h
 }
@@ -141,11 +145,26 @@ func (h *commHub) start() {
 }
 
 // close stops the workers, cancelling any request in flight, and closes
-// every channel.
+// every channel. A request still queued finishes as lost, and a post after
+// close is refused, so no block waits on a channel that is gone.
 func (h *commHub) close() {
-	h.stopOnce.Do(func() { close(h.stop); h.cancel() })
+	h.stopOnce.Do(func() {
+		h.mu.Lock()
+		h.stopped = true
+		h.mu.Unlock()
+		close(h.stop)
+		h.cancel()
+	})
 	h.wg.Wait()
 	for _, w := range h.byName {
+		for drained := false; !drained; {
+			select {
+			case req := <-w.q:
+				h.finish(req.ticket, ir.CommResult{Status: ir.CommLost})
+			default:
+				drained = true
+			}
+		}
 		_ = w.ch.Close()
 	}
 }
@@ -153,6 +172,11 @@ func (h *commHub) close() {
 func (h *commHub) serve(w *commWorker) {
 	defer h.wg.Done()
 	for {
+		select {
+		case <-h.stop:
+			return
+		default:
+		}
 		select {
 		case <-h.stop:
 			return
@@ -166,9 +190,9 @@ func (w *commWorker) do(base context.Context, req commReq) ir.CommResult {
 	ctx, cancel := context.WithTimeout(base, w.timeout)
 	defer cancel()
 	if req.write {
-		return ir.CommResult{Status: commStatus(w.ch.Write(ctx, req.variable, req.val))}
+		return ir.CommResult{Status: commStatus(w.ch.Write(ctx, req.variable, req.val, req.elem))}
 	}
-	v, err := w.ch.Read(ctx, req.variable, req.val)
+	v, err := w.ch.Read(ctx, req.variable, req.val, req.elem)
 	if err != nil {
 		return ir.CommResult{Status: commStatus(err)}
 	}
@@ -188,37 +212,39 @@ func (h *commHub) finish(ticket int64, res ir.CommResult) {
 	}
 }
 
-func (h *commHub) post(channel string, write bool, variable string, v ir.Value) (int64, int) {
+func (h *commHub) post(channel string, write bool, variable string, v ir.Value, elem string) (int64, int) {
 	if h == nil {
 		return 0, ir.CommNoChannel
 	}
-	w, ok := h.byName[channel]
+	w, ok := h.byName[ir.NameKey(channel)]
 	if !ok {
 		return 0, ir.CommNoChannel
 	}
 	h.start()
-	ticket := h.next.Add(1)
+	// Under mu, so close either sees this request in the queue (and
+	// finishes it) or this post sees close.
 	h.mu.Lock()
-	h.inflight[ticket] = struct{}{}
-	h.mu.Unlock()
+	defer h.mu.Unlock()
+	if h.stopped {
+		return 0, ir.CommUnreachable
+	}
+	ticket := h.next.Add(1)
 	select {
-	case w.q <- commReq{ticket: ticket, write: write, variable: variable, val: v}:
+	case w.q <- commReq{ticket: ticket, write: write, variable: variable, val: v, elem: elem}:
+		h.inflight[ticket] = struct{}{}
 		return ticket, ir.CommOK
 	default:
-		h.mu.Lock()
-		delete(h.inflight, ticket)
-		h.mu.Unlock()
 		return 0, ir.CommQueueFull
 	}
 }
 
 // PostRead, PostWrite and Poll are ir.Channels.
-func (h *commHub) PostRead(channel, variable string, shape ir.Value) (int64, int) {
-	return h.post(channel, false, variable, shape)
+func (h *commHub) PostRead(channel, variable string, shape ir.Value, elem string) (int64, int) {
+	return h.post(channel, false, variable, shape, elem)
 }
 
-func (h *commHub) PostWrite(channel, variable string, data ir.Value) (int64, int) {
-	return h.post(channel, true, variable, data)
+func (h *commHub) PostWrite(channel, variable string, data ir.Value, elem string) (int64, int) {
+	return h.post(channel, true, variable, data, elem)
 }
 
 func (h *commHub) Poll(ticket int64) (ir.CommResult, bool) {
@@ -253,14 +279,21 @@ func (r *Runtime) UnknownChannels() []string {
 		var body []ir.Stmt
 		if p.prog != nil {
 			body = p.prog.Body
+			// A READ or WRITE inside a user FUNCTION_BLOCK counts too.
+			for _, fb := range p.prog.UserFBs {
+				if fb.Body != nil {
+					body = append(append([]ir.Stmt(nil), body...), fb.Body.Body...)
+				}
+			}
 		}
 		p.mu.Unlock()
 		for _, c := range ir.CommCalls(body) {
-			if seen[c.ID] {
+			k := ir.NameKey(c.ID)
+			if seen[k] {
 				continue
 			}
-			seen[c.ID] = true
-			if r.tags.comm == nil || r.tags.comm.byName[c.ID] == nil {
+			seen[k] = true
+			if r.tags.comm == nil || r.tags.comm.byName[k] == nil {
 				out = append(out, c.ID)
 			}
 		}

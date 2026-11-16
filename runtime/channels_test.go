@@ -24,6 +24,7 @@ type fakeReq struct {
 	write    bool
 	variable string
 	val      ir.Value
+	elem     string
 }
 
 type fakeAnswer struct {
@@ -53,12 +54,12 @@ func (f *fakeChannel) do(ctx context.Context, r fakeReq) (ir.Value, error) {
 	}
 }
 
-func (f *fakeChannel) Read(ctx context.Context, variable string, shape ir.Value) (ir.Value, error) {
-	return f.do(ctx, fakeReq{variable: variable, val: shape})
+func (f *fakeChannel) Read(ctx context.Context, variable string, shape ir.Value, elem string) (ir.Value, error) {
+	return f.do(ctx, fakeReq{variable: variable, val: shape, elem: elem})
 }
 
-func (f *fakeChannel) Write(ctx context.Context, variable string, data ir.Value) error {
-	_, err := f.do(ctx, fakeReq{write: true, variable: variable, val: data})
+func (f *fakeChannel) Write(ctx context.Context, variable string, data ir.Value, elem string) error {
+	_, err := f.do(ctx, fakeReq{write: true, variable: variable, val: data, elem: elem})
 	return err
 }
 
@@ -322,7 +323,7 @@ func TestQueueFull(t *testing.T) {
 		t.Fatal("the first queued request should fit")
 	}
 	h := r.tags.comm
-	if tk, st := h.PostRead("peer", "X", ir.IntVal(0)); tk != 0 || st != ir.CommQueueFull {
+	if tk, st := h.PostRead("peer", "X", ir.IntVal(0), ""); tk != 0 || st != ir.CommQueueFull {
 		t.Fatalf("third post = %d, %d; want refused with %d", tk, st, ir.CommQueueFull)
 	}
 }
@@ -398,5 +399,92 @@ END_PROGRAM`
 	}
 	if got := rt.UnknownChannels(); len(got) != 1 || got[0] != "other" {
 		t.Fatalf("UnknownChannels = %v, want [other]", got)
+	}
+}
+
+// Channel names match case-insensitively, as identifiers do, in the hub and
+// in UnknownChannels alike.
+func TestChannelNamesIgnoreCase(t *testing.T) {
+	r := newCommRig(t)
+	setStr(r.tags, "Chan", "PEER")
+	r.tags.SetBool("Go", true)
+	r.scan()
+	r.started()
+	if r.tags.Bool("Err") {
+		t.Fatalf("ID 'PEER' for channel peer: STATUS %d", getInt(r.tags, "St"))
+	}
+}
+
+// After close, a queued request finishes as lost and a new post is
+// refused, so no block stays BUSY on a channel that is gone.
+func TestCloseFinishesQueuedAndRefusesPosts(t *testing.T) {
+	ch := newFakeChannel()
+	h := newCommHub([]Channel{{Name: "peer", Channel: ch, Queue: 4}})
+	first, _ := h.PostRead("peer", "A", ir.IntVal(0), "")
+	<-ch.started // the worker holds the first
+	queued, _ := h.PostRead("peer", "B", ir.IntVal(0), "")
+	h.close()
+	// Lost when close drains it; cancelled (timeout) when the worker took
+	// it as close began. Either way it is finished, never BUSY for good.
+	if res, done := h.Poll(queued); !done || (res.Status != ir.CommLost && res.Status != ir.CommTimeout) {
+		t.Fatalf("queued request after close = %+v %v, want finished", res, done)
+	}
+	if res, done := h.Poll(first); !done || res.Status != ir.CommTimeout {
+		t.Fatalf("in-flight request after close = %+v %v, want cancelled", res, done)
+	}
+	if tk, st := h.PostRead("peer", "C", ir.IntVal(0), ""); tk != 0 || st != ir.CommUnreachable {
+		t.Fatalf("post after close = %d, %d", tk, st)
+	}
+}
+
+// The declared elementary type of the bound variable reaches the channel,
+// so it can tell an INT from a DINT.
+func TestElemTypeReachesChannel(t *testing.T) {
+	src := `PROGRAM Main
+VAR_EXTERNAL Go : BOOL; END_VAR
+VAR rd : READ; wr : WRITE; n : INT; arr : ARRAY[1..4] OF DINT; END_VAR
+rd(REQ := Go, ID := 'peer', VAR_1 := 'R', RD_1 := n);
+wr(REQ := Go, ID := 'peer', VAR_1 := 'W', SD_1 := arr);
+END_PROGRAM`
+	p, err := Compile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := newFakeChannel()
+	tags := NewTags()
+	tags.comm = newCommHub([]Channel{{Name: "peer", Channel: ch}})
+	t.Cleanup(tags.comm.close)
+	tags.SetBool("Go", true)
+	if err := p.Run(tags); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for i := 0; i < 2; i++ {
+		q := <-ch.started
+		got[q.variable] = q.elem
+		ch.answer <- fakeAnswer{val: q.val}
+	}
+	if got["R"] != "INT" || got["W"] != "DINT" {
+		t.Fatalf("elem types = %v, want R: INT, W: DINT", got)
+	}
+}
+
+// naut check sees a READ inside a user FUNCTION_BLOCK too.
+func TestUnknownChannelsInUserFB(t *testing.T) {
+	src := `FUNCTION_BLOCK Poller
+VAR_INPUT Go : BOOL; END_VAR
+VAR rd : READ; X : REAL; END_VAR
+rd(REQ := Go, ID := 'remote2', VAR_1 := 'R', RD_1 := X);
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR p : Poller; END_VAR
+p(Go := TRUE);
+END_PROGRAM`
+	rt, err := New(Options{Program: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.UnknownChannels(); len(got) != 1 || got[0] != "remote2" {
+		t.Fatalf("UnknownChannels = %v, want [remote2]", got)
 	}
 }
