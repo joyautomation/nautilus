@@ -375,7 +375,7 @@ func TestCorpus(t *testing.T) {
 					fmt.Printf("  sample %s: %s\n", n.Reason, n.Text)
 				}
 				switch n.Reason {
-				case "branch", "ONS", "no-output", "TON", "CTU", "type", "array", "RES", "undefined":
+				case "branch", "ONS", "no-output", "TON", "CTU", "type", "array", "RES", "undefined", "COP", "CPS":
 					why := n.Why
 					if len(why) > 60 {
 						why = why[:60]
@@ -614,9 +614,9 @@ func TestHumanIdiomsImport(t *testing.T) {
 
 // What is refused is refused with its reason, and the program still parses.
 func TestRefusalsKeepTheProgramValid(t *testing.T) {
-	tags := []string{"a:BOOL", "b:BOOL", "n:DINT", "m:DINT", "t:TIMER=1000", "c:COUNTER=3", "arr:DINT"}
+	tags := []string{"a:BOOL", "b:BOOL", "n:DINT", "m:DINT", "t:TIMER=1000", "c:COUNTER=3", "arr:DINT", "bytes:SINT[4]"}
 	doc := miniL5X(tags,
-		"XIC(a)COP(n,m,1);",
+		"XIC(a)COP(n,bytes[0],4);",
 		"XIC(a)XIC(b)ONS(s)OTL(b);",
 		"XIC(n.3)OTE(m.12);",
 		"XIC(a)OTE(b)XIC(b);",
@@ -633,7 +633,7 @@ func TestRefusalsKeepTheProgramValid(t *testing.T) {
 		}
 	}
 	src := string(p.Files["Main.ld"])
-	if !strings.Contains(src, "NOT deployable") || !strings.Contains(src, "// not imported (COP: a data operation with no assignment form): XIC(a)COP(n,m,1);") {
+	if !strings.Contains(src, "NOT deployable") || !strings.Contains(src, "// not imported (COP: a copy from DINT to SINT reinterprets bytes; nautilus copies like for like): XIC(a)COP(n,bytes[0],4);") {
 		t.Errorf("source should carry the refusals:\n%s", src)
 	}
 	// The compound one-shot driving a latch: a pulse tag of its own.

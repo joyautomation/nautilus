@@ -395,6 +395,35 @@ func (p *exprParser) number() (Expr, error) {
 type Assignment struct {
 	Target string
 	Value  Expr
+	// Comment is the text of the (* … *) comment(s) written on the
+	// assignment, delimiters stripped; "" for none. The compiled program
+	// ignores it; the Logix writer reads a pragma from it (`@logix CPS`:
+	// a copy written back as CPS, not COP).
+	Comment string
+}
+
+// Pragma reports whether the assignment's comment carries `@<word>` among
+// its whitespace-separated words, case-insensitively: Pragma("logix CPS")
+// for `(* @logix CPS *)`.
+func (a Assignment) Pragma(words string) bool {
+	want := strings.Fields(strings.ToLower(words))
+	got := strings.Fields(strings.ToLower(a.Comment))
+	for i := range got {
+		if got[i] != "@"+want[0] || i+len(want) > len(got) {
+			continue
+		}
+		ok := true
+		for j := 1; j < len(want); j++ {
+			if got[i+j] != want[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseAssignments parses the body of `{ … }`: assignments separated by
@@ -402,8 +431,18 @@ type Assignment struct {
 func ParseAssignments(body string) ([]Assignment, error) {
 	var out []Assignment
 	for _, stmt := range splitStatements(body) {
+		stmt, comment := splitComment(stmt)
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
+			if comment == "" {
+				continue
+			}
+			// A comment after the last `;` belongs to the assignment
+			// before it: `{ B := A; (* @logix CPS *) }`.
+			if len(out) == 0 {
+				return nil, fmt.Errorf("a comment with no assignment")
+			}
+			out[len(out)-1].Comment = joinComment(out[len(out)-1].Comment, comment)
 			continue
 		}
 		i := strings.Index(stmt, ":=")
@@ -420,7 +459,7 @@ func ParseAssignments(body string) ([]Assignment, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%q: %v", stmt, err)
 		}
-		out = append(out, Assignment{Target: target, Value: value})
+		out = append(out, Assignment{Target: target, Value: value, Comment: comment})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("an empty assignment")
@@ -436,6 +475,48 @@ func PrintAssignments(as []Assignment) string {
 	parts := make([]string, len(as))
 	for i, a := range as {
 		parts[i] = a.Target + " := " + a.Value.IEC()
+		if a.Comment != "" {
+			parts[i] += " (* " + a.Comment + " *)"
+		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// splitComment removes the (* … *) comments from one statement (outside
+// string literals), returning the statement without them and their text,
+// trimmed and joined by a space.
+func splitComment(s string) (string, string) {
+	var code strings.Builder
+	var comment string
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '\'' || s[i] == '"':
+			end, _ := st.StringEnd(s, i)
+			code.WriteString(s[i:end])
+			i = end - 1
+		case strings.HasPrefix(s[i:], "(*"):
+			j := strings.Index(s[i+2:], "*)")
+			if j < 0 {
+				// Unclosed: leave it for the expression parser to name.
+				code.WriteString(s[i:])
+				return code.String(), comment
+			}
+			comment = joinComment(comment, strings.TrimSpace(s[i+2:i+2+j]))
+			code.WriteByte(' ')
+			i += 2 + j + 1
+		default:
+			code.WriteByte(s[i])
+		}
+	}
+	return code.String(), comment
+}
+
+func joinComment(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + " " + b
 }

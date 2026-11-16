@@ -230,12 +230,21 @@ func (w *stWriter) stmt(s st.Statement, depth int) {
 		} else {
 			lhs = w.ref(lhs)
 		}
-		if w.boolAssign(lhs, v.Value, depth) {
-			break
-		}
 		var target st.Expression = &st.IdentExpr{Name: v.Target}
 		if v.TargetExpr != nil {
 			target = v.TargetExpr
+		}
+		// A whole array or structure: Logix ST assigns neither; COP does
+		// (copy.go).
+		if n, ok, bad := w.wholeCopy(target, v.Value); ok {
+			w.emitf(depth, "COP(%s, %s, %d);", w.expr(v.Value), lhs, n)
+			break
+		} else if bad != "" {
+			w.lw.diag(ruleDataOp, w.line, "", "%s := …: %s has no Logix copy", lhs, bad)
+			break
+		}
+		if w.boolAssign(lhs, v.Value, depth) {
+			break
 		}
 		w.rhs, w.dest = v.Value, w.typeOf(target)
 		rhs := w.expr(v.Value)

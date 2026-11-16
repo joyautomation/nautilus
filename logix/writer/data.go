@@ -138,7 +138,22 @@ func (c *rungCtx) assign(e ld.Element) ([]string, bool) {
 		return nil, false // the compiler's diagnostic
 	}
 	var out []string
-	for _, a := range as {
+	runs := copyRuns(as)
+	for i := 0; i < len(as); i++ {
+		a := as[i]
+		// A whole array or structure, or a run the import marked
+		// `@logix COP`/`CPS`, is a copy (copy.go).
+		var run *copyRun
+		if r, ok := runs[i]; ok {
+			run = &r
+		}
+		if text, next, ok := c.copyText(as, i, run); ok {
+			out = append(out, text)
+			i = next - 1
+			continue
+		} else if next > i {
+			return nil, false // its diagnostic is given
+		}
 		target, ok := c.ref(a.Target)
 		if !ok {
 			return nil, false

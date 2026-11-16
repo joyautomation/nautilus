@@ -916,6 +916,11 @@ func splitStatementsOn(s string, sep byte) []string {
 		case c == '\'' || c == '"':
 			end, _ := st.StringEnd(s, i)
 			i = end - 1
+		case strings.HasPrefix(s[i:], "(*"):
+			// A comment: its brackets and separators are text.
+			if j := strings.Index(s[i+2:], "*)"); j >= 0 {
+				i += 2 + j + 1
+			}
 		case c == '(' || c == '[':
 			depth++
 		case c == ')' || c == ']':

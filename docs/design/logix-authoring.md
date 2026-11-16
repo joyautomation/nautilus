@@ -1331,6 +1331,36 @@ same-type array copies. Emulating them needs a byte-layout memory model
 nautilus deliberately lacks, and the routines are blocked by `MSG`
 anyway. **James's call:** skip it; the remaining gap is messaging.
 
+**Revisited 2026-11-15: like-for-like COP and CPS.** An instructor's
+student project used CPS, which the corpus never does (0 of 209 copies).
+**James's calls:** import COP/CPS when they copy like for like; byte
+packing between elementary types is a later, separate step; full Logix
+UDT layout is declined (every UDT-to-bytes COP in the corpus sits in an
+export that also messages over sockets, which stays refused); `MSG` comes
+next as IEC 61131-5-shaped `READ`/`WRITE` blocks on the existing CIP
+client, CIP Generic (socket) messages refused.
+
+The shape (logix/importer/copy.go, logix/writer/copy.go): a whole array
+or structure is `{ B := A }`, which the writer emits as `COP(A,B,n)`;
+Logix assigns neither, and the writer used to emit `MOVE(A,B)` (LD) and
+`B := A;` (ST) for it, both invalid. A slice is spelled element by
+element with `(* @logix COP *)` on its last assignment, and any CPS
+carries `(* @logix CPS *)` (James's call, over "always COP" and "always
+CPS"); the writer folds a marked run back into the one instruction, and
+never folds unmarked code. A comment inside an assignment box is new for
+this: it is ignored by the compiler and kept on the assignment. On
+nautilus every copy already has CPS's guarantee: a scan snapshots its
+tags in and commits them as one unit (runtime/program.go). Refused, each
+by reason: a copy between types, a length or index that is not a
+constant, a length past either end, and source and destination
+overlapping in one array (the result depends on Logix's copy direction,
+which is not pinned on a controller).
+
+**Corpus:** COP refusals 35 → 26 rungs (16 byte reinterpretation, 4
+ring-buffer slices at a variable index, the rest other reasons); rungs
+29,791 → 29,792 (most freed rungs stop next on `MSG`/`MESSAGE`);
+write-backs unchanged (68 identical, 19 differ, 0 refused).
+
 **Corpus:** rungs 97.2 % → 97.9 % (29,752 of 30,397); ladder routines
 complete 70.4 % → 81.0 %; AOI routines 73.5 % → 85.8 %; write-backs
 unchanged (53 identical + 15 equivalent of 68, 0 refused). The "status"
@@ -1942,7 +1972,7 @@ Last checked against `main` on 2026-10-14.
 | 14 | A download still stops the controller; it keeps tag values it can match, but reads them about thirty seconds before the stop, so a value the program changes in that window is not carried. | #273; LGA-047; `deploy.PlanValues` | open, 2026-10-14 |
 | 15 | A tag that a download adds does not appear in live values until `naut logix serve` is restarted. | #375 Echo run (§7b); `logix/facade` browses the controller once at startup | open, 2026-10-14 |
 | 16 | nautilus does not create I/O modules itself: a program that uses rack I/O takes its modules from a Logix Designer export kept in the project, which the import writes, so a new module is added in Logix Designer first. | #275; LGA-052, LGA-053; §7b "Follow-up — the hardware configuration" | open, 2026-10-14 |
-| 17 | Import keeps a rung it cannot express as a comment and reports it; message instructions and the buffer copies that feed them are the largest gap. | corpus of 52 exports: 97.9% of rungs, 81% of routines whole (guide) | open, 2026-10-14 |
+| 17 | Import keeps a rung it cannot express as a comment and reports it; message instructions and the buffer copies that feed them are the largest gap. | corpus of 52 exports: 98.0% of rungs, 83% of routines whole (guide); like-for-like COP/CPS import since 2026-11-15 | open, 2026-11-15 |
 | 18 | Commercial licence terms (automation interface, pooling) are not settled. | §7b Phase A licence check (§1.4.10, §1.4.7) | open, 2026-10-14 |
 
 **Closed since the issue was filed (2026-10-10)**

@@ -323,11 +323,13 @@ reported, because the write cannot create it.
 On the public yardstick, `examples/batch-skid/line/Line.L5X`, the
 comparison finds no differences.
 
-On a corpus of 52 real production exports, 97.9% of rungs import, 81% of
+On a corpus of 52 real production exports, 98.0% of rungs import, 83% of
 ladder routines import whole, and most complete routines write back
-identically or equivalently. The largest remaining gap is messaging:
-`MSG` instructions and the byte-buffer copies (`COP`) that build their
-payloads.
+identically or equivalently. `COP` and `CPS` import when they copy like
+for like (a whole array or structure, or a slice at constant indexes) and
+write back as the instruction they were. The largest remaining gap is
+messaging: `MSG` instructions and the byte-buffer copies (a `COP` from one
+type to another) that build their payloads.
 
 ## The loop
 
@@ -506,8 +508,8 @@ and the `resets`. The answer is a stream of JSON lines (`progress` events, then
   controller's tags when it starts, so a tag a download adds shows in
   live values after a restart.
 - **Import is not complete.** A rung with no nautilus form stays a
-  comment and is reported; message instructions (`MSG`) and the buffer
-  copies that feed them are the largest gap.
+  comment and is reported; message instructions (`MSG`) and the
+  byte-buffer copies that feed them are the largest gap.
 - **No runtime parity promise.** The subset is the set of constructs whose
   behaviour on both runtimes has been checked by running the same
   scenarios on each. Anything outside it is refused, not approximated.
