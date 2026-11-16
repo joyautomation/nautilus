@@ -28,9 +28,11 @@ import (
 //	                         starts costs its own tags, not every program
 //	                         that reads them (see TagDef.Comms).
 //	Output(name)           — the logic produces it; copied tags → driver
-//	                         after each scan. Add Init(...) when the logic
-//	                         also READS it (a seal-in latch reads its own
-//	                         coil on scan one, before the first write).
+//	                         after each scan. A typed output (Typed) starts
+//	                         at the zero of its type; an untyped one needs
+//	                         Init(...) when the logic also READS it (a
+//	                         seal-in latch reads its own coil on scan one,
+//	                         before the first write).
 //	Setpoint(name, init)   — operator/config value: seeded so it exists on
 //	                         scan one, written later by an HMI or the API.
 //	State(name, init)      — logic-owned value that must survive read-
@@ -123,9 +125,10 @@ func Desc(s string) TagOpt { return func(d *TagDef) { d.Meta.Desc = s } }
 // Unit sets the engineering unit ("°C", "%", "L/s", ...).
 func Unit(s string) TagOpt { return func(d *TagDef) { d.Meta.Unit = s } }
 
-// Init seeds an initial value. Required on an Output the logic also READS:
-// a seal-in latch reads its own coil before the first write, and a read of
-// a tag that was never written faults the scan.
+// Init seeds an initial value. Required on an untyped Output the logic also
+// READS: a seal-in latch reads its own coil before the first write, and a
+// read of a tag that was never written faults the scan. A typed Output
+// without one starts at the zero of its type.
 func Init(v any) TagOpt { return func(d *TagDef) { d.Init = v } }
 
 // Comms marks an Input as delivered by a communications driver, so it is
@@ -149,7 +152,8 @@ func newDef(name string, role TagRole, init any, opts []TagOpt) TagDef {
 func Input(name string, opts ...TagOpt) TagDef { return newDef(name, RoleInput, nil, opts) }
 
 // Output declares a logic-fed field output (pump command, valve position).
-// Add Init(...) when the logic reads it back (seal-in latches).
+// Add Init(...) when the logic reads it back (seal-in latches), or declare
+// it with Typed, which starts it at the zero of its type.
 func Output(name string, opts ...TagOpt) TagDef { return newDef(name, RoleOutput, nil, opts) }
 
 // Setpoint declares an operator/config value with its initial state.
@@ -179,10 +183,23 @@ func Typed(name string, role TagRole, typeName string, opts ...TagOpt) TagDef {
 // A typed tag with no explicit Init seeds the ZERO of its type for the roles
 // that are seeded at all — so a `Motor` setpoint exists on scan one with its
 // fields correctly named and its StructDef attached, instead of being absent
-// until something writes it. Outputs stay unseeded, and so do inputs that a
-// LOCAL I/O driver delivers (or that no driver claims at all): an input the
-// driver has not delivered must still fault loudly rather than run on a
-// silent zero, which is the whole reason RoleInput exists.
+// until something writes it. That includes outputs (nautilus#696): IEC
+// 61131-3 gives every variable an initial value, the declared one or else
+// its type's zero, and an output the logic writes one element or member of
+// (`OutArr[1] := 5`) has to exist before that write can land. Inputs that a
+// LOCAL I/O driver delivers (or that no driver claims at all) stay
+// unseeded: an input the driver has not delivered must still fault loudly
+// rather than run on a silent zero, which is the whole reason RoleInput
+// exists.
+//
+// An output seeded that way comes back in the second result, held: the
+// logic sees it at zero, but the driver is not handed it until something
+// first writes it (Tags.hold). The zero is the store's starting value, not
+// a command, so it reaches the field no earlier than the logic's own first
+// write did when the tag was absent — a comms driver without a start-up
+// baseline (EtherNet/IP), or any driver on a takeover, would otherwise push
+// zero over whatever the device holds. An output with an init: is not
+// held: its init was always pushed on the first scan.
 //
 // A Comms input (TagDef.Comms — one a communications driver delivers) is
 // the exception, and it is seeded: with its Init when it has one (as any
@@ -215,11 +232,11 @@ func Typed(name string, role TagRole, typeName string, opts ...TagOpt) TagDef {
 // the logic declares `Counter : DINT` seeds an integer (and births as one),
 // while `init: 65` on `TempSP : REAL` is still a REAL. A tag no program
 // declares keeps the raw init, as before: a number seeds a REAL.
-func expandTags(o Options, types, globals map[string]*ir.Type) (Options, []string, error) {
+func expandTags(o Options, types, globals map[string]*ir.Type) (Options, []string, []string, error) {
 	if len(o.Tags) == 0 {
-		return o, nil, nil
+		return o, nil, nil, nil
 	}
-	var untyped []string
+	var held, untyped []string
 	seed := make(nio.Values, len(o.Seed)+len(o.Tags))
 	for k, v := range o.Seed {
 		seed[k] = v
@@ -253,24 +270,28 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, []strin
 			// mistake to report, not a REAL to store.
 			t, err := ResolveTagType(d.Type, types)
 			if err != nil {
-				return o, nil, fmt.Errorf("tag %s: %w", d.Name, err)
+				return o, nil, nil, fmt.Errorf("tag %s: %w", d.Name, err)
 			}
 			if d.Init == nil {
-				if d.Role == RoleSetpoint || d.Role == RoleState || commsInput(d) {
+				switch {
+				case d.Role == RoleSetpoint || d.Role == RoleState || commsInput(d):
 					seed[d.Name] = ir.Zero(t)
+				case d.Role == RoleOutput:
+					seed[d.Name] = ir.Zero(t)
+					held = append(held, d.Name)
 				}
 				break
 			}
 			v, err := ir.SeedFromInit(t, d.Init)
 			if err != nil {
-				return o, nil, fmt.Errorf("tag %s (type %s): %w", d.Name, d.Type, err)
+				return o, nil, nil, fmt.Errorf("tag %s (type %s): %w", d.Name, d.Type, err)
 			}
 			seed[d.Name] = v
 		case d.Init != nil:
 			if t := scalarGlobal(folded, d.Name); t != nil {
 				v, err := ir.SeedFromInit(t, d.Init)
 				if err != nil {
-					return o, nil, fmt.Errorf("tag %s (declared %s by a program): %w", d.Name, t.String(), err)
+					return o, nil, nil, fmt.Errorf("tag %s (declared %s by a program): %w", d.Name, t.String(), err)
 				}
 				seed[d.Name] = v
 				break
@@ -279,7 +300,7 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, []strin
 				// `init: T#5s` with no type: is a TIME, and seeds as one.
 				v, err := ir.SeedFromInit(t, d.Init)
 				if err != nil {
-					return o, nil, fmt.Errorf("tag %s: %w", d.Name, err)
+					return o, nil, nil, fmt.Errorf("tag %s: %w", d.Name, err)
 				}
 				seed[d.Name] = v
 				break
@@ -312,7 +333,7 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, []strin
 		}
 	}
 	o.Inputs, o.Outputs, o.Seed, o.Meta = inputs, outputs, seed, meta
-	return o, untyped, nil
+	return o, held, untyped, nil
 }
 
 // commsInput is an input a communications driver delivers — the one input

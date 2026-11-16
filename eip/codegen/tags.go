@@ -86,8 +86,9 @@ func TagsYAML(m eip.Manifest, host, online string, skip []string) ([]byte, error
 		tag := tagfile.Tag{Name: t.Name, Role: "input"}
 		if t.Writable {
 			// Writable bindings are the driver's output set: the runtime's
-			// value propagates to the controller. A program that also READS
-			// one back needs an init, which the import cannot know — and
+			// value propagates to the controller. A typed (UDT) one starts
+			// at its type's zero; an untyped one that a program also READS
+			// back needs an init, which the import cannot know — and
 			// `naut check` reports as a read of an unseeded tag.
 			tag.Role = "output"
 		}

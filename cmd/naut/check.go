@@ -582,11 +582,12 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		}
 	}
 
-	// An output with no init: is never seeded: it holds nothing until a
-	// program writes it, and a read before that faults the scan with
-	// "undefined tag" (nautilus#560). A seal-in reads its own coil first,
-	// so it faults on scan one and — the faulting rung being the one that
-	// writes the tag — on every scan after. Only a program's own earlier
+	// An UNTYPED output with no init: is never seeded: it holds nothing
+	// until a program writes it, and a read before that faults the scan
+	// with "undefined tag" (nautilus#560). A typed one starts at the zero
+	// of its type (nautilus#696), so its reads are never early. A seal-in
+	// reads its own coil first, so it faults on scan one and — the faulting
+	// rung being the one that writes the tag — on every scan after. Only a program's own earlier
 	// write counts: tasks start concurrently. An error when some path the
 	// scan can take reaches the read unwritten; a warning when it is
 	// unwritten only if a loop runs zero times.
@@ -599,7 +600,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		writtenAnywhere[ir.NameKey(name)] = true
 	}
 	for _, d := range proj.Runtime.Tags {
-		if d.Role != runtime.RoleOutput || d.Init != nil {
+		if d.Role != runtime.RoleOutput || d.Init != nil || d.Type != "" {
 			continue
 		}
 		var sure, maybe []runtime.EarlyRead
@@ -613,14 +614,15 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		switch {
 		case len(sure) > 0:
 			errs++
-			fmt.Printf("%s: error: output %q has no init:, and %s — an output with no init: holds "+
-				"nothing until it is written, so that read faults the scan with \"undefined tag %s\"; "+
-				"give it an init:%s\n",
+			fmt.Printf("%s: error: output %q has no init: or type:, and %s — an untyped output with "+
+				"no init: holds nothing until it is written, so that read faults the scan with "+
+				"\"undefined tag %s\"; give it an init:%s, or a type: to start it at that type's zero\n",
 				loc.tag(d.Name), d.Name, earlyReads(sure, writtenAnywhere[ir.NameKey(d.Name)]), d.Name, initHint(d, rt))
 		case len(maybe) > 0:
 			warns++
-			fmt.Printf("%s: warning: output %q has no init:, and %s — if a read comes first it "+
-				"faults the scan with \"undefined tag %s\"; give it an init:%s\n",
+			fmt.Printf("%s: warning: output %q has no init: or type:, and %s — if a read comes "+
+				"first it faults the scan with \"undefined tag %s\"; give it an init:%s, or a "+
+				"type: to start it at that type's zero\n",
 				loc.tag(d.Name), d.Name, earlyReads(maybe, true), d.Name, initHint(d, rt))
 		}
 	}

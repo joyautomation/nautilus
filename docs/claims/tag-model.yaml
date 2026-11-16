@@ -658,8 +658,8 @@ claims:
       - go ./tools/blackbox TestBlackbox/001-F06-overflow-int64
   - id: TAG-053
     claim: >-
-      naut check reports an output with no init: that a program can read
-      before it writes it: an error, on the tag's line, when some path
+      naut check reports an untyped output with no init: that a program can
+      read before it writes it: an error, on the tag's line, when some path
       through the scan reaches the read first (and the scan then faults with
       "undefined tag"), a warning when only a loop that may run zero times
       writes it first. A program's own earlier write counts, including one
@@ -673,3 +673,18 @@ claims:
       - go ./cmd/naut TestCheckPlacesATagFileTagAtItsLine
       - go ./lang/ir TestReadBeforeWrite
       - go ./lang/ir TestReadBeforeWriteFollowsCalls
+  - id: TAG-057
+    claim: >-
+      A role: output tag with a type: and no init: exists from scan one at
+      the zero of its type, so the logic can write one element or member of
+      it, or read it in a seal-in, without faulting the scan; typed inputs
+      stay unseeded. The zero is not sent to the driver until something
+      first writes the output (the program, its zero included, or an
+      operator), on a start or on a takeover; an output with an init: is
+      sent on the first scan.
+    source: "#an-output-with-a-type-starts-at-zero"
+    tests:
+      - go ./runtime TestTypedOutputStartsAtZeroSoElementWritesLand
+      - go ./runtime TestTypedOutputZeroIsNotPushedUntilWritten
+      - go ./runtime TestTypedOutputZeroIsNotPushedOnTakeover
+      - go ./runtime TestTypedInputStillFaultsUntilDelivered

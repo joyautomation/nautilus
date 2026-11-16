@@ -33,9 +33,9 @@ func checkAndScan(t *testing.T, files map[string]string) (out string, code int, 
 	return out, code, rt.Stats().LastError
 }
 
-// An output with no init: that a program reads before writing it faults
-// the scan with "undefined tag" — a seal-in reads its own coil — and naut
-// check used to pass it (nautilus#560). Now it is an error on the tag's
+// An untyped output with no init: that a program reads before writing it
+// faults the scan with "undefined tag" — a seal-in reads its own coil — and
+// naut check used to pass it (nautilus#560). Now it is an error on the tag's
 // manifest line, and each case below is also run for one scan, so the
 // check and the runtime are held to the same answer: an error exactly when
 // the scan faults, nothing when it does not. A warning is the analysis
@@ -49,7 +49,10 @@ func TestCheckReportsAnOutputReadBeforeItsFirstWrite(t *testing.T) {
 		faults    bool   // the first scan faults with undefined tag Horn
 		cause     string // the error's stated reason, when want is "error"
 	}
-	const noInit = "  - { name: Horn,  role: output,   type: BOOL }\n"
+	const noInit = "  - { name: Horn,  role: output }\n"
+	// A typed output with no init: starts at its type's zero (#696), so
+	// none of these shapes faults or is reported once Horn has a type:.
+	const typedNoInit = "  - { name: Horn,  role: output,   type: BOOL }\n"
 	const withInit = "  - { name: Horn,  role: output,   type: BOOL, init: false }\n"
 	sealLD := "PROGRAM Main\nLD\n  RUNG horn (* seals in until acknowledged *)\n    [ Alarm | Horn ] /Ack ( Horn )\nEND_LD\nEND_PROGRAM\n"
 	// Siren writes Horn through its own VAR_EXTERNAL.
@@ -57,7 +60,12 @@ func TestCheckReportsAnOutputReadBeforeItsFirstWrite(t *testing.T) {
 	cases := map[string]tc{
 		"ladder seal-in, no init": {ext: "ld", prog: sealLD, horn: noInit, want: "error", faults: true,
 			cause: "Main reads it before writing it (a seal-in or set/reset coil reads its own coil)"},
-		"ladder seal-in, init": {ext: "ld", prog: sealLD, horn: withInit},
+		"ladder seal-in, init":  {ext: "ld", prog: sealLD, horn: withInit},
+		"ladder seal-in, typed": {ext: "ld", prog: sealLD, horn: typedNoInit},
+		"ST self-assignment, typed": {ext: "st", horn: typedNoInit,
+			prog: "PROGRAM Main\nHorn := Horn OR Alarm;\nEND_PROGRAM\n"},
+		"read before a later write, typed": {ext: "st", horn: typedNoInit,
+			prog: "PROGRAM Main\nVAR copy : BOOL; END_VAR\ncopy := Horn;\nHorn := Alarm;\nEND_PROGRAM\n"},
 		"set coil reads its tag": {ext: "ld", horn: noInit, want: "error", faults: true,
 			prog:  "PROGRAM Main\nLD\n  RUNG s\n    Alarm ( S Horn )\n  RUNG r\n    Ack ( R Horn )\nEND_LD\nEND_PROGRAM\n",
 			cause: "Main reads it before writing it (a seal-in or set/reset coil reads its own coil)"},
@@ -112,6 +120,11 @@ func TestCheckReportsAnOutputReadBeforeItsFirstWrite(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			if c.horn == noInit {
+				// An untyped tag takes its type from the program's own
+				// declaration.
+				c.prog = strings.Replace(c.prog, "PROGRAM Main\n", "PROGRAM Main\nVAR_EXTERNAL Horn : BOOL; END_VAR\n", 1)
+			}
 			out, code, fault := checkAndScan(t, map[string]string{
 				"nautilus.yaml": "name: horn\ntasks:\n  - program: main." + c.ext + "\n    scan: 100ms\n" +
 					"tags:\n" +
@@ -162,13 +175,13 @@ func TestCheckReportsAnOutputAnotherTaskWrites(t *testing.T) {
 		"nautilus.yaml": "name: two\ntasks:\n  - program: writer.st\n    scan: 100ms\n" +
 			"  - name: reader\n    program: reader.st\n    scan: 100ms\ntags:\n" +
 			"  - { name: Alarm, role: input, type: BOOL, init: false }\n" +
-			"  - { name: Horn,  role: output, type: BOOL }\n" +
+			"  - { name: Horn,  role: output }\n" +
 			"  - { name: Lamp,  role: output, type: BOOL, init: false }\n" +
 			"driver:\n  type: memory\n",
-		"writer.st": "PROGRAM Writer\nHorn := Alarm;\nEND_PROGRAM\n",
-		"reader.st": "PROGRAM Reader\nLamp := Horn;\nEND_PROGRAM\n",
+		"writer.st": "PROGRAM Writer\nVAR_EXTERNAL Horn : BOOL; END_VAR\nHorn := Alarm;\nEND_PROGRAM\n",
+		"reader.st": "PROGRAM Reader\nVAR_EXTERNAL Horn : BOOL; END_VAR\nLamp := Horn;\nEND_PROGRAM\n",
 	})
-	if code == 0 || !strings.Contains(out, `output "Horn" has no init:, and Reader reads it, and only another task writes it (tasks start together`) {
+	if code == 0 || !strings.Contains(out, `output "Horn" has no init: or type:, and Reader reads it, and only another task writes it (tasks start together`) {
 		t.Errorf("want an error naming Reader (exit %d):\n%s", code, out)
 	}
 	if strings.Contains(out, "seal-in") {
@@ -184,12 +197,12 @@ func TestCheckReportsAnOutputAnotherTaskWrites(t *testing.T) {
 func TestCheckReportsAnOutputNothingWrites(t *testing.T) {
 	out, code, fault := checkAndScan(t, map[string]string{
 		"nautilus.yaml": "name: none\ntasks:\n  - program: main.st\n    scan: 100ms\ntags:\n" +
-			"  - { name: Horn,  role: output, type: BOOL }\n" +
+			"  - { name: Horn,  role: output }\n" +
 			"  - { name: Lamp,  role: output, type: BOOL, init: false }\n" +
 			"driver:\n  type: memory\n",
-		"main.st": "PROGRAM Main\nLamp := Horn;\nEND_PROGRAM\n",
+		"main.st": "PROGRAM Main\nVAR_EXTERNAL Horn : BOOL; END_VAR\nLamp := Horn;\nEND_PROGRAM\n",
 	})
-	if code == 0 || !strings.Contains(out, `output "Horn" has no init:, and Main reads it, and no program writes it`) {
+	if code == 0 || !strings.Contains(out, `output "Horn" has no init: or type:, and Main reads it, and no program writes it`) {
 		t.Errorf("want an error saying no program writes Horn (exit %d):\n%s", code, out)
 	}
 	if strings.Contains(out, "another task") {
@@ -210,8 +223,8 @@ func TestCheckPlacesATagFileTagAtItsLine(t *testing.T) {
 	files := map[string]string{
 		"nautilus.yaml": "name: field\ntasks:\n  - program: main.st\n    scan: 100ms\ntag-files: [tags/io.yaml]\n" +
 			"tags:\n  - { name: Lamp, role: output, type: BOOL, init: false }\ndriver:\n  type: memory\n",
-		"tags/io.yaml": "# generated\n- { name: Alarm, role: input, type: BOOL }\n- { name: Horn, role: output, type: BOOL }\n",
-		"main.st":      "PROGRAM Main\nHorn := Horn OR Alarm;\nLamp := Horn;\nEND_PROGRAM\n",
+		"tags/io.yaml": "# generated\n- { name: Alarm, role: input, type: BOOL }\n- { name: Horn, role: output }\n",
+		"main.st":      "PROGRAM Main\nVAR_EXTERNAL Horn : BOOL; END_VAR\nHorn := Horn OR Alarm;\nLamp := Horn;\nEND_PROGRAM\n",
 	}
 	for n, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(body), 0o644); err != nil {

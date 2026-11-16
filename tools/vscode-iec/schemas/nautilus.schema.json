@@ -362,7 +362,7 @@
             "setpoint",
             "state"
           ],
-          "description": "input: driver \u2192 tag each scan, deliberately unseeded so a missing value faults loudly. output: tag \u2192 driver each scan; add init when the logic reads it back. setpoint: seeded operator/config value. state: seeded logic-owned value (latches, integrators)."
+          "description": "input: driver \u2192 tag each scan, deliberately unseeded so a missing value faults loudly. output: tag \u2192 driver each scan; with a type it starts at that type's zero, else add init when the logic reads it back. setpoint: seeded operator/config value. state: seeded logic-owned value (latches, integrators)."
         },
         "type": {
           "type": "string",

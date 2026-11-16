@@ -204,7 +204,9 @@ func newFoldNode(t *testing.T, patterns ...string) (*Node, *bytes.Buffer) {
 		Program: "PROGRAM Main\nVAR_EXTERNAL\n\tpumpInlet : REAL;\n\tGain : REAL;\n\tLimit : REAL;\nEND_VAR\nEND_PROGRAM\n",
 		Driver:  nio.NewMemory(), Scan: 50 * time.Millisecond,
 		Tags: []runtime.TagDef{
-			runtime.Typed("pumpInlet", runtime.RoleOutput, "REAL"),
+			// Untyped, so it stays absent until written (a typed output
+			// starts at its type's zero, #696).
+			runtime.Output("pumpInlet"),
 			runtime.Input("Limit", runtime.Init(4.5)),
 		},
 	})

@@ -744,7 +744,8 @@ Tags: []runtime.TagDef{
     runtime.Setpoint("TempSP", 65.0, runtime.Unit("°C")),
 
     // Field output: the logic produces it, the driver consumes it.
-    // Init() any output the logic also READS — the seal-in latch.
+    // Init() any untyped output the logic also READS — the seal-in latch.
+    // (One declared with Typed starts at the zero of its type.)
     runtime.Output("PumpRun", runtime.Init(false), runtime.Desc("Pump run command")),
 
     // Logic-owned state that must survive read-before-write: latches,

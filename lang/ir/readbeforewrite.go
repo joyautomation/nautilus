@@ -3,7 +3,7 @@ package ir
 // ReadBeforeWrite answers the question GlobalUses cannot: which globals can
 // one scan of this program READ before the same scan has WRITTEN them?
 //
-// A tag the manifest never seeds (an output with no init:) holds nothing
+// A tag the manifest never seeds (an untyped output with no init:) holds nothing
 // until a program writes it, and reading nothing faults the scan with
 // "undefined tag". A program that writes such a tag on every path before it
 // reads it is safe; a seal-in (`Horn := (Alarm OR Horn) AND NOT Ack`) reads

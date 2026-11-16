@@ -398,14 +398,17 @@ func TestTemplateCommandMembersGoThroughTheFrontDoor(t *testing.T) {
 // "Nope" made a junk tag).
 func TestCommandToADeclaredOutputNotYetWritten(t *testing.T) {
 	rt, err := runtime.New(runtime.Options{
-		Program:   cmdProgramST,
+		Program:   strings.Replace(cmdProgramST, "Motor1 : Motor;", "Motor1 : Motor;\n\tCmd : REAL;", 1),
 		Libraries: []string{cmdTypesST},
 		Driver:    nio.NewMemory(),
 		Scan:      50 * time.Millisecond,
 		Tags: []runtime.TagDef{
 			runtime.State("SpeedSP", 12.5),
 			runtime.Typed("Motor1", runtime.RoleState, "Motor"),
-			runtime.Typed("Cmd", runtime.RoleOutput, "REAL"),
+			// Untyped, so it stays absent until written (a typed output
+			// starts at its type's zero, #696); its REAL comes from the
+			// program's declaration.
+			runtime.Output("Cmd"),
 		},
 	})
 	if err != nil {
@@ -437,6 +440,52 @@ func TestCommandToADeclaredOutputNotYetWritten(t *testing.T) {
 	n.applyCommand("", Payload{Metrics: []Metric{{Name: "Nope", Datatype: spb.DataType_Double, Value: 1.0}}})
 	if _, err := tags.ReadGlobal("Nope"); err == nil {
 		t.Error("a command for an undeclared name created a tag")
+	}
+}
+
+// A typed output with no init: starts at its type's zero (#696): it is in
+// the store before any write, a command lands on it under its declared
+// name, and the runtime hands that value to the driver on the next scan.
+func TestCommandToATypedOutputNotYetWritten(t *testing.T) {
+	drv := nio.NewMemory()
+	rt, err := runtime.New(runtime.Options{
+		Program:   strings.Replace(cmdProgramST, "Motor1 : Motor;", "Motor1 : Motor;\n\tCmd : REAL;", 1),
+		Libraries: []string{cmdTypesST},
+		Driver:    drv,
+		Scan:      50 * time.Millisecond,
+		Tags: []runtime.TagDef{
+			runtime.State("SpeedSP", 12.5),
+			runtime.Typed("Motor1", runtime.RoleState, "Motor"),
+			runtime.Typed("Cmd", runtime.RoleOutput, "REAL"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: slog.New(slog.NewTextHandler(&buf, nil))}, WithWritable("*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := rt.Tags()
+	if v, err := tags.ReadGlobal("Cmd"); err != nil || v.Kind != ir.TypeReal || v.F != 0 {
+		t.Fatalf("Cmd before any write = %+v (%v), want REAL 0", v, err)
+	}
+	rt.Scan()
+	if held, _ := drv.ReadInputs(); held["Cmd"] != nil {
+		t.Fatalf("the first scan handed the driver Cmd = %v before anything wrote it", held["Cmd"])
+	}
+	n.applyCommand("", Payload{Metrics: []Metric{{Name: "cmd", Datatype: spb.DataType_Double, Value: 2.5}}})
+	if v, err := tags.ReadGlobal("Cmd"); err != nil || v.F != 2.5 {
+		t.Fatalf("Cmd after a Double 2.5 command = %+v (%v), want 2.5\n%s", v, err, buf.String())
+	}
+	if _, ok := tags.Snapshot()["cmd"]; ok {
+		t.Error("the command created a second tag under the host's spelling")
+	}
+	rt.Scan()
+	if held, _ := drv.ReadInputs(); held["Cmd"] != 2.5 {
+		got := held["Cmd"]
+		t.Errorf("the driver got Cmd = %#v after the command, want 2.5", got)
 	}
 }
 

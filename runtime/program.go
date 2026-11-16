@@ -353,9 +353,9 @@ func (p *Program) Locals() map[string]any {
 // calls, contributes nothing.
 //
 // This is introspection for tooling, not a scan path. It answers a question
-// the tag store cannot until something has run: an output tag with no seed
-// exists in no snapshot, yet the program declares its type and a test may
-// well assert on it.
+// the tag store cannot until something has run: an untyped output tag
+// with no seed exists in no snapshot, yet the program declares its type and
+// a test may well assert on it.
 func (p *Program) Globals() map[string]*ir.Type {
 	p.mu.Lock()
 	defer p.mu.Unlock()
