@@ -63,7 +63,7 @@
 	};
 
 	const still = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-	const slide = { x: 344, opacity: 1, duration: still ? 0 : 260, easing: cubicOut };
+	const slide = { x: 384, opacity: 1, duration: still ? 0 : 260, easing: cubicOut };
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && open && close()} />
@@ -149,7 +149,7 @@
 		right: 12px;
 		max-height: calc(100% - 24px);
 		z-index: 5;
-		width: min(320px, calc(100% - 24px));
+		width: min(360px, calc(100% - 24px));
 		box-sizing: border-box;
 		display: flex;
 		flex-direction: column;
@@ -169,7 +169,7 @@
 	}
 	h2 {
 		margin: 0;
-		font-size: 0.95rem;
+		font-size: 1.05rem;
 		font-weight: 650;
 	}
 	.x {
@@ -194,7 +194,7 @@
 	}
 	.text {
 		margin: 0;
-		font-size: 0.85rem;
+		font-size: 1rem;
 		color: var(--ink-2, #c3c2b7);
 	}
 	.readings {
@@ -203,7 +203,7 @@
 		align-items: center;
 		gap: 8px 10px;
 		margin: 0;
-		font-size: 0.85rem;
+		font-size: 1rem;
 	}
 	dt {
 		color: var(--ink-2, #c3c2b7);
@@ -245,7 +245,7 @@
 		border-radius: 6px;
 		padding: 6px 10px;
 		font: inherit;
-		font-size: 0.8rem;
+		font-size: 0.875rem;
 		cursor: pointer;
 	}
 </style>

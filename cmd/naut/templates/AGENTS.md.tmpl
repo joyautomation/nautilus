@@ -369,7 +369,9 @@ naut builds the operator screen from the project itself, with no npm, and
   the kit's tokens, never a hex (a hex reads in one theme only): text in
   `var(--ink)`, `var(--ink-2)` or `var(--muted)`; grounds in `var(--bg)`,
   `var(--surface)`, `var(--surface-2)`; outlines in `var(--edge)`; state
-  in `var(--good)`, `var(--warn)`, `var(--crit)`. Text at 12 px or more.
+  in `var(--good)`, `var(--warn)`, `var(--crit)`. Text as the web asks of
+  it: values and body text at 16 px, small labels (units, captions) at
+  12 px or more, as drawn in the window.
 - For more than mimics, write an app: `hmi/src/routes/+page.svelte` is `/`,
   components go in `hmi/src/lib`, and `server.hmi: hmi` in the manifest.
   It is SvelteKit's layout, client-side; Go is the only backend.
@@ -387,7 +389,7 @@ naut builds the operator screen from the project itself, with no npm, and
   under three or more others, a pipe drawn through a tag or a reading, a
   shape drawn far outside its drawing, a drawing that runs off the bottom
   of the window or is drawn too small to read, text too dim to read in
-  either theme or in an equipment's panel, drawn under 9 px or drawn over
+  either theme or in an equipment's panel, drawn under 12 px or drawn over
   other text or a field,
   controls an operator has to scroll to reach on a desktop, sideways
   scroll on a phone. Fix them like compile errors. A screen you haven't

@@ -416,7 +416,7 @@ const defaultPage = `<script>
 <style>
 	/* the drawing as large as the page allows, moving over for the panel */
 	.nx-stage { position: absolute; inset: 0; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; }
-	.nx-stage.nx-with-panel { padding-right: 348px; }
+	.nx-stage.nx-with-panel { padding-right: 388px; }
 	@media (prefers-reduced-motion: no-preference) { .nx-stage { transition: padding-right 260ms cubic-bezier(0.33, 1, 0.68, 1); } }
 	@media (max-width: 900px) { .nx-stage.nx-with-panel { padding-right: 16px; } }
 </style>

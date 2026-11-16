@@ -20,9 +20,9 @@ import (
 var textJS string
 
 // MinTextPx is the size under which text drawn on a desktop window is too
-// small to read at an operator's distance: the kit's smallest (12 px, all
-// caps labels only) drawn at 75%.
-const MinTextPx = 9.0
+// small to read: the web's floor for small labels (units, captions, chip
+// text), the kit's smallest. Values and body text want 16 px.
+const MinTextPx = 12.0
 
 // textItem is one piece of text the page shows (text.js).
 type textItem struct {
@@ -417,5 +417,5 @@ func (ts *textShot) small(v view) string {
 		seen[it.T] = true
 		ex = append(ex, fmt.Sprintf("%q", it.T))
 	}
-	return fmt.Sprintf("%d of %d texts are drawn under %.0f px in a %d×%d window (the smallest %.1f px): %s: write text at 12 px or more, and draw the canvas for the window so it isn't scaled down", len(smalls), texts, MinTextPx, v.width, v.height, least, strings.Join(ex, ", "))
+	return fmt.Sprintf("%d of %d texts are drawn under %.0f px in a %d×%d window (the smallest %.1f px): %s: write values and body text at 16 px and small labels at 12 px or more, and draw the canvas for the window so it isn't scaled down", len(smalls), texts, MinTextPx, v.width, v.height, least, strings.Join(ex, ", "))
 }

@@ -22,6 +22,10 @@
   mark is grey with a hollow arrow until the level reaches it (`alarm`:
   `true`, `"high"` or `"low"`). Sparklines on a mimic's readouts and in
   `EquipmentPanel` draw in ink grey, not the accent blue.
+- **Text as the web asks of it:** `naut check` flags text drawn under 12 px
+  (was 9), on the page and in every panel; `EquipmentPanel` reads at 16 px
+  and is 360 px wide. The selection glow is blue again: blue is the kit's
+  highlight and focus colour.
 - **Status chips read at arm's length:** `StatusPill` is 13 px, not 12. The
   light theme's `--s1` is a step darker (#2768c0), so white text on it (a
   selected tab, an Auto button) passes 4.5:1.

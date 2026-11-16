@@ -511,8 +511,8 @@
 	   on its own and the filter built from it follows. At rest there is no
 	   filter at all; while glowing, or fading (Mimic adds .fading for
 	   FADE_MS), the filter is built from --glow-a, whose colour stays the
-	   glow's colour at every step (neutral ink, --select-glow: colour is for
-	   state and alarms), so the fade never passes through a dark
+	   glow's colour at every step (blue, the kit's highlight and focus
+	   colour; --select-glow sets it), so the fade never passes through a dark
 	   halo. */
 	@property --glow-a {
 		syntax: '<number>';
@@ -535,7 +535,7 @@
 	.eq.clickable:is(:hover, :focus-visible, .selected, .fading) {
 		outline: none;
 		filter: brightness(calc(1 + 0.12 * var(--glow-a)))
-			drop-shadow(0 0 calc(4px * var(--glow-a)) rgb(from var(--select-glow, var(--ink-2, #c3c2b7)) r g b / calc(0.7 * var(--glow-a))));
+			drop-shadow(0 0 calc(4px * var(--glow-a)) rgb(from var(--select-glow, var(--s1, #3987e5)) r g b / calc(0.7 * var(--glow-a))));
 		transition: --glow-a 0.18s ease;
 	}
 	.eq.clickable:is(.selected, :focus-visible) {

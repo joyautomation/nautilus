@@ -79,7 +79,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 		"warning: screen /wide (phone): scrolls sideways on a 390 px wide phone",
 		`warning: screen /dim (desktop): 1 of 2 texts are hard to read (under 4.5:1 contrast, 3:1 for large text): "P-501 running" #c3c2b7 on #ffffff (1.8:1)`,
 		`warning: screen /themed (desktop): in the light theme, 1 of 1 texts are hard to read`,
-		`warning: screen /tiny (desktop): 1 of 1 texts are drawn under 9 px in a 1920×1080 window (the smallest 7.0 px): "closed"`,
+		`warning: screen /tiny (desktop): 1 of 1 texts are drawn under 12 px in a 1920×1080 window (the smallest 7.0 px): "closed"`,
 		"warning: screen /tall (desktop): a 1904×1476 drawing (viewBox 1600×1240) runs 404 px past the bottom of a 1920×1080 window",
 		"warning: screen /small (desktop): the 2120×1400 drawing is drawn at 60% to fit a 1920×1080 window, so 14 px text reads as 8 px",
 		"warning: screen /crossed (desktop): pipe F1_AIR passes under 4 other pipes, and 1 more passes under 3 or more (F2_AIR): a line that crosses a stack of headers",
