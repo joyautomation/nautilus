@@ -99,6 +99,11 @@ export type LiveFrameListener = (frame: {
   // enumerations, and their members (#246). Sent whole with every frame —
   // small, and the stream itself stays type-free.
   types: FlatTypes;
+  // FUNCTION_BLOCK instance monitoring, as the text editor's CodeLens has
+  // it: lowercased FB type → the instance its body reads from, and the
+  // instances the project declares of each type.
+  monitors: Record<string, string>;
+  fbCandidates: Record<string, string[]>;
 }) => void;
 
 export class LiveValues implements vscode.Disposable {
@@ -127,6 +132,10 @@ export class LiveValues implements vscode.Disposable {
   private monitors = new Map<string, string>();
   private candidates = new Map<string, string[]>();
   private candidatesAt = 0;
+  // FUNCTION_BLOCK types a diagram draws (a ladder file's blocks), by
+  // panel: their instances are found and monitored like a text body's,
+  // with no text editor open.
+  private diagramFbTypes = new Map<object, { uri: vscode.Uri; types: string[] }>();
   private readonly monitorsChanged = new vscode.EventEmitter<void>();
   readonly onDidChangeMonitors = this.monitorsChanged.event;
   private lastFrameMs = 0;
@@ -580,6 +589,8 @@ export class LiveValues implements vscode.Disposable {
       values: Object.fromEntries(this.values),
       forced: this.enabled ? lowerForces(this.forces) : {},
       types: this.types,
+      monitors: Object.fromEntries(this.monitors),
+      fbCandidates: Object.fromEntries(this.candidates),
     };
     for (const l of this.listeners) l(frame);
   }
@@ -800,7 +811,7 @@ export class LiveValues implements vscode.Disposable {
       if (cursor < text.length) {
         segs.push({ text: text.slice(cursor), offset: cursor, map: this.values, prefix: "" });
       }
-      if (regions.length > 0) this.ensureCandidates(editor.document);
+      if (regions.length > 0) this.ensureCandidates(editor.document.uri);
 
       for (const seg of segs) {
         for (const site of scanIdentifiers(seg.text, seg.map)) {
@@ -859,6 +870,8 @@ export class LiveValues implements vscode.Disposable {
       editor.setDecorations(this.forcedDeco, fresh ? forcedDecos : []);
       editor.setDecorations(this.enumDeco, fresh ? enumDecos : []);
     }
+    const diagram = this.diagramFbTypes.values().next().value;
+    if (diagram) this.ensureCandidates(diagram.uri);
     this.notify();
   }
 
@@ -874,6 +887,20 @@ export class LiveValues implements vscode.Disposable {
     return this.candidates.get(fbType.toLowerCase()) ?? [];
   }
 
+  /** A diagram (keyed by its panel) draws these FUNCTION_BLOCK types from
+   * the file at `uri`: find their instances now, and auto-monitor a type
+   * with exactly one, as a text body's CodeLens does. */
+  watchFbTypes(key: object, uri: vscode.Uri, types: string[]): void {
+    if (types.length === 0) this.diagramFbTypes.delete(key);
+    else this.diagramFbTypes.set(key, { uri, types });
+    this.candidatesAt = 0;
+    this.scheduleRender();
+  }
+
+  unwatchFbTypes(key: object): void {
+    this.diagramFbTypes.delete(key);
+  }
+
   /** Point an FB type's body at a called instance and re-render. */
   setMonitor(fbType: string, instance: string): void {
     this.monitors.set(fbType.toLowerCase(), instance);
@@ -884,7 +911,7 @@ export class LiveValues implements vscode.Disposable {
   /** Refresh the instance-declaration index from the project's sources
    * (at most every few seconds); auto-monitor types with exactly one
    * declared instance, so the common case needs no clicks at all. */
-  private ensureCandidates(doc: vscode.TextDocument): void {
+  private ensureCandidates(docUri: vscode.Uri): void {
     const now = Date.now();
     if (now - this.candidatesAt < 5000) return;
     this.candidatesAt = now;
@@ -893,7 +920,7 @@ export class LiveValues implements vscode.Disposable {
       try {
         // The project's root and lib/ files: instances are declared in
         // programs (root) and inside other blocks (often lib/).
-        const root = await projectDirFor(doc.uri);
+        const root = await projectDirFor(docUri);
         // .ld too: a ladder program declares its block instances in the
         // same VAR sections (permissives.ld's MotorStarter instances).
         for (const { uri } of await projectFiles(root, /\.(st|fbd|ld)$/i)) {
@@ -904,17 +931,20 @@ export class LiveValues implements vscode.Disposable {
         return;
       }
       let changed = false;
+      const types = new Set<string>();
       for (const editor of this.stEditors()) {
-        for (const r of scanFbRegions(editor.document.getText())) {
-          const key = r.type.toLowerCase();
-          const found = scanInstanceDecls(sources, r.type);
-          const prev = this.candidates.get(key) ?? [];
-          if (found.join("|") !== prev.join("|")) changed = true;
-          this.candidates.set(key, found);
-          if (!this.monitors.has(key) && found.length === 1) {
-            this.monitors.set(key, found[0]);
-            changed = true;
-          }
+        for (const r of scanFbRegions(editor.document.getText())) types.add(r.type);
+      }
+      for (const d of this.diagramFbTypes.values()) for (const t of d.types) types.add(t);
+      for (const type of types) {
+        const key = type.toLowerCase();
+        const found = scanInstanceDecls(sources, type);
+        const prev = this.candidates.get(key) ?? [];
+        if (found.join("|") !== prev.join("|")) changed = true;
+        this.candidates.set(key, found);
+        if (!this.monitors.has(key) && found.length === 1) {
+          this.monitors.set(key, found[0]);
+          changed = true;
         }
       }
       if (changed) {

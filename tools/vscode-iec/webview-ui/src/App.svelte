@@ -602,7 +602,7 @@
 		const msg = ev.data as
 			| Msg
 			| { type: 'diagnostics'; diags?: Diag[] }
-			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; starting?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown>; types?: FlatTypes }
+			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; starting?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown>; types?: FlatTypes; monitors?: Record<string, string>; fbCandidates?: Record<string, string[]> }
 			| { type: 'syncState'; state?: string };
 		if (!msg?.type) return;
 		if (msg.type === 'syncState') {
@@ -611,7 +611,7 @@
 		}
 		if (msg.type === 'liveValues') {
 			// Store-only update: FbdNode pills react directly, no node rebuild.
-			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, starting: !!msg.starting, values: msg.values ?? {}, forced: msg.forced ?? {}, types: msg.types ?? {} });
+			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, starting: !!msg.starting, values: msg.values ?? {}, forced: msg.forced ?? {}, types: msg.types ?? {}, monitors: msg.monitors, fbCandidates: msg.fbCandidates });
 			return;
 		}
 		if (msg.type === 'diagnostics') {
@@ -992,6 +992,8 @@
 				onTrace={(msg) => vscode.postMessage({ type: 'ldTrace', msg })}
 				onSelectTag={(tag) => vscode.postMessage({ type: 'diagramSelection', tag })}
 				onToggleBit={(tag) => vscode.postMessage({ type: 'toggleBit', tag })}
+				onFbTypes={(types) => vscode.postMessage({ type: 'ldFbTypes', types })}
+				onPickMonitor={(fbType) => vscode.postMessage({ type: 'pickFbMonitor', fbType })}
 				{requestInput}
 			/>
 		</ZoomPane>

@@ -93,5 +93,10 @@ test("handleDiagramLiveMessage: every diagram surface's selection and Toggle Bit
     assert.equal(handleDiagramLiveMessage(p, m, run), false, JSON.stringify(m));
   }
   assert.equal(ran.length, 1);
+  // A FUNCTION_BLOCK heading's monitor chip: the CodeLens's instance picker.
+  assert.equal(handleDiagramLiveMessage(p, { type: "pickFbMonitor", fbType: "TankCycle" }, run), true);
+  assert.deepEqual(ran[1], ["nautilus.fb.monitor", "TankCycle"]);
+  assert.equal(handleDiagramLiveMessage(p, { type: "pickFbMonitor" }, run), true);
+  assert.equal(ran.length, 2);
   p.dispose();
 });

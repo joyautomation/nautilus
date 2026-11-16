@@ -148,6 +148,17 @@ function docPath(doc: vscode.TextDocument): string | undefined {
   return doc.uri.scheme === "file" ? doc.uri.fsPath : undefined;
 }
 
+/** The FUNCTION_BLOCKs a ladder webview draws (it posts them as its model
+ * changes): their instances are found and monitored so each body's live
+ * values read from one. True when the message was this. */
+function watchLdFbTypes(live: LiveValues | undefined, panel: vscode.WebviewPanel, uri: vscode.Uri, msg: unknown): boolean {
+  const m = msg as { type?: unknown; types?: unknown } | undefined;
+  if (m?.type !== "ldFbTypes") return false;
+  const types = Array.isArray(m.types) ? m.types.filter((t): t is string => typeof t === "string") : [];
+  live?.watchFbTypes(panel, uri, types);
+  return true;
+}
+
 /** Post the ladder model (or the parse error) into a webview. */
 async function postLdModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
   const res = await ldGraph(doc.getText(), docPath(doc));
@@ -202,6 +213,7 @@ export class LdEditorProvider implements vscode.CustomTextEditorProvider {
     });
     const messageSub = panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => {
       if (handleDiagramLiveMessage(panel, msg, (command, tag) => void vscode.commands.executeCommand(command, tag))) return;
+      if (watchLdFbTypes(this.live, panel, document.uri, msg)) return;
       handleLdMessage(document, msg);
     });
     const diagSub = vscode.languages.onDidChangeDiagnostics((e) => {
@@ -214,6 +226,7 @@ export class LdEditorProvider implements vscode.CustomTextEditorProvider {
     // re-posts it, or an offer to declare a now-declared tag stays up.
     const tagsSub = onProjectTagsChange(() => void postLdModel(panel.webview, document));
     panel.onDidDispose(() => {
+      this.live?.unwatchFbTypes(panel);
       if (debounce) clearTimeout(debounce);
       tagsSub.dispose();
       changeSub.dispose();
@@ -437,6 +450,7 @@ export class LdPreview implements vscode.Disposable {
       const inOrder = serialQueue();
       const onMessage = (msg: { type?: string; op?: unknown }) => void inOrder(async () => {
         if (this.panel && handleDiagramLiveMessage(this.panel, msg, (command, tag) => void vscode.commands.executeCommand(command, tag))) return;
+        if (this.panel && this.docUri && watchLdFbTypes(this.live, this.panel, this.docUri, msg)) return;
         const doc = await sourceDocument(this.docUri);
         if (isDiagramKeyMessage(msg)) {
           if (doc && this.panel) {
@@ -457,7 +471,9 @@ export class LdPreview implements vscode.Disposable {
       registerPreviewKeys(this.panel, (action) => onMessage({ type: "diagramKey", action } as { type?: string }));
       attachLiveValues(this.live, this.panel);
       const sync = addSyncTarget(this.panel.webview, () => this.docUri);
+      const panel = this.panel;
       this.panel.onDidDispose(() => {
+        this.live?.unwatchFbTypes(panel);
         sync.dispose();
         this.panel = undefined;
         this.diffBase = undefined;

@@ -1,0 +1,17 @@
+# Smoke check 24 (live values inside a ladder FUNCTION_BLOCK): the shape the
+# PLC-Lab example uses — the rungs are a FUNCTION_BLOCK (tankcycle.ld, a
+# library), called once from main.st as `tank`. StartPB is a setpoint so the
+# tag API's write sticks. `Running` is ALSO a controller tag, held TRUE, with
+# the block's own Running output FALSE until started: a pill inside the block
+# that reads the controller tag instead of the instance shows the lie.
+name: ld-fb-live
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: StartPB, role: setpoint, init: false, desc: "start pushbutton, NO" }
+  - { name: StopPB, role: setpoint, init: true, desc: "stop pushbutton, NC" }
+  # A decoy no program binds (naut check warns, on purpose): it shares the
+  # block output's name.
+  - { name: Running, role: setpoint, init: true, desc: "a controller tag sharing the block output's name" }
+  - { name: Lamp, role: output, init: false, desc: "run lamp" }

@@ -30,7 +30,13 @@ export function handleDiagramLiveMessage(
   run: (command: string, tag: string) => void,
 ): boolean {
   if (trackDiagramSelection(panel, msg)) return true;
-  const m = msg as { type?: unknown; tag?: unknown } | undefined;
+  const m = msg as { type?: unknown; tag?: unknown; fbType?: unknown } | undefined;
+  // A FUNCTION_BLOCK heading's monitor chip: the same instance picker as
+  // the text editor's CodeLens (nautilus.fb.monitor).
+  if (m?.type === "pickFbMonitor") {
+    if (typeof m.fbType === "string" && m.fbType) run("nautilus.fb.monitor", m.fbType);
+    return true;
+  }
   if (m?.type !== "toggleBit") return false;
   if (typeof m.tag === "string" && m.tag) run("nautilus.toggleBit", m.tag);
   return true;
