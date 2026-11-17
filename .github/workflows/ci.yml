@@ -552,6 +552,33 @@ jobs:
           name: evidence-opcua
           path: evidence/
           retention-days: 14
+  opcua-client-matrix:
+    name: OPC UA client — server matrix (open62541, Milo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      # The client driver against other people's servers, in containers
+      # the test starts itself (opcua/matrix_test.go): import, typed reads,
+      # writes, namespace remap, and recovery from a restart and from a
+      # blackhole (docker pause). open62541 is built from a tagged release
+      # (opcua/testdata/matrix/open62541); Milo's image is pinned by digest
+      # in the profile.
+      - name: Build the open62541 fixture
+        run: docker build -t nautilus-test/open62541:v1.4.22 opcua/testdata/matrix/open62541
+      - name: Server matrix
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_OPCUA_MATRIX=all \
+            go test -json ./opcua/ -run TestForeignServerMatrix -v -timeout 600s | tee evidence/opcua-client-matrix.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-opcua-client-matrix
+          path: evidence/
+          retention-days: 14
   snmp-sim:
     name: SNMP — foreign stack (snmpsim)
     runs-on: ubuntu-latest
@@ -700,7 +727,7 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [go, sparkplug-tck, modbus-sim, opcua-foreign, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    needs: [go, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
