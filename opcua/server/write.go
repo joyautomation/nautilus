@@ -386,6 +386,9 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		// since its node ids are whatever the client chose to send.
 		if cl.writer && addrs[i] != "" && code != ua.StatusBadNodeIDUnknown && code != ua.StatusBadNodeIDInvalid {
 			r.node, r.known = ns.nodeID(member{addr: addrs[i]}).String(), true
+			if _, mapped := ns.mapped.node(req.NodesToWrite[i].NodeID); mapped {
+				r.node = paths[i] // the device's node id, not the tag behind it
+			}
 		}
 		refused = append(refused, r)
 	}
@@ -403,7 +406,7 @@ func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl clie
 	switch {
 	case n == nil || n.NodeID == nil:
 		return ua.StatusBadNodeIDInvalid, member{}, nil, "no node id"
-	case n.NodeID.Namespace() != ns.id:
+	case !ns.owns(n.NodeID):
 		// gopcua's Server object and its variables: read-only for every
 		// session (an anonymous rewrite of NamespaceArray would break
 		// every other client's namespace mapping). No user may write them,

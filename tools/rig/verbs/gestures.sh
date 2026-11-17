@@ -2062,15 +2062,30 @@ ld_or_select() {
 # wrapper's hit area, left of every leg), press O: one more OR leg, a `_`
 # placeholder (#91). Read back: the wrapper's g.leg count grew by one.
 ld_branch_or_leg() {
-  local rung=$1 path=${2:-} el n0 fx
+  local rung=$1 path=${2:-} el n0 p
   G_WHAT="O on the branch ${path:-first} of $rung"
   el=$(ld_branch_el "$rung" "$path")
   n0=$(js "($el)?.querySelectorAll(':scope > g.leg').length ?? 0")
   [[ $n0 -gt 0 ]] || { g_err "no branch ${path:-at all} on $rung"; return 1; }
   # 4 layout units in from the box's left edge: the strip outside the left
-  # rail that no leg element covers.
-  fx=$(js "(() => { const r = ($el).querySelector('rect.branch-hit'); return (4 / r.width.baseVal.value).toFixed(4); })()" | tr -d '"')
-  click_el "($el).querySelector('rect.branch-hit')" "$fx" 0.5 || return 1
+  # rail that no leg element covers. A branch that is already selected (as
+  # ld_or_select leaves it) draws a ✕ per leg in that same strip (#655),
+  # and a click on one deletes that leg (#691: legs 3 → 2 → 3, and O looked
+  # like it did nothing). So aim down the strip for a point the hit test
+  # gives to this branch's own rails or OR tab: not a ✕, not an overlay.
+  g_reveal "($el).querySelector('rect.branch-hit')" || true
+  p=$(cdp point "(() => {
+    const g = ($el), r = g?.querySelector('rect.branch-hit'); if (!r) return null;
+    const b = r.getBoundingClientRect(), x = b.left + b.width * (4 / r.width.baseVal.value);
+    for (const fy of [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82]) {
+      const y = b.top + b.height * fy;
+      if (y < 0 || y > win.innerHeight) continue;
+      const hit = doc.elementFromPoint(x, y);
+      if (hit && !hit.closest('.leg-del') && hit.closest('.branch-hit, .branch-tab')?.parentElement === g) return { x, y };
+    }
+    return null;
+  })()") || { g_err "no clear point on the rails of branch ${path:-first} of $rung"; return 1; }
+  g_click $p
   wait_js "($el)?.classList.contains('selected')" 3 || { g_err "clicking its rails did not select the branch"; return 1; }
   g_key o
   ld_wait "(($el)?.querySelectorAll(':scope > g.leg').length ?? 0) > $n0" || return 1

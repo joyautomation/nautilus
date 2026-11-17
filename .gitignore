@@ -19,6 +19,12 @@ tools/vscode-iec/.vscode-test/
 # Local live-site test project (real site hostnames and tag names); never commit
 /examples/client60/
 
+# The OPC UA server's certificate store (opcua.pki, default ./pki) that
+# `naut run` makes in an example: the server's private key and the client
+# certificates it trusts. Per machine, never committed (as `naut new`'s own
+# .gitignore has it).
+/examples/**/pki/
+
 # Locally built binaries
 /nautilus
 /naut

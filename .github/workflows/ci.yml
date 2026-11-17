@@ -8,8 +8,49 @@ on:
 # breaks for everyone on the documented minimum (this bit v0.4.1).
 env:
   GOTOOLCHAIN: local
+# A new push to a PR cancels that PR's run still in progress: only its latest
+# commit can merge, and a run is 20-odd jobs on a shared pool of runners.
+# On main the group is the commit itself, so no main run (and none of the
+# runtime evidence it keeps) is ever cancelled or replaced.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # How much of this workflow a PR needs (#752): .github/scripts/ci-scope.sh
+  # reads the PR's changed paths. A PR whose every path is on its light list
+  # (an example's HMI app, the docs site, the playground's app shell, design
+  # notes) skips the Go, driver, foreign-stack and extension jobs and runs
+  # the checks that apply to it: naut check + naut test on the example
+  # projects it touched, the HMI 3D and playground builds, version-sync and
+  # the docs-claims drift warning. Anything else, and every push to main,
+  # runs everything. A skipped job reports "skipped", which branch
+  # protection counts as passing.
+  changes:
+    name: Changes — full suite or light
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      examples: ${{ steps.scope.outputs.examples }}
+      hmibuild: ${{ steps.scope.outputs.hmibuild }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 2} # a PR's merge commit: HEAD^1 is the base
+      - name: the scope rules pass their own table test
+        run: .github/scripts/ci-scope.test.sh
+      - name: scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ] && changed=$(git diff --name-only HEAD^1 HEAD); then
+            printf '%s\n' "$changed"
+            printf '%s\n' "$changed" | .github/scripts/ci-scope.sh | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "full=true" | tee -a "$GITHUB_OUTPUT"
+          fi
   go:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: Go — vet, test, build
     runs-on: ubuntu-latest
     steps:
@@ -20,11 +61,14 @@ jobs:
       # -json and the coverage profile are kept as runtime evidence (the
       # runtime-evidence job joins them to docs/claims); `evidence cat`
       # prints the stream as the usual go test output.
+      # TestReleaseTargetsBuildWithoutCgo cross-compiles the CLI seven times
+      # (about 4 minutes, most of cmd/naut's time): the go-crossbuild job runs
+      # it in parallel instead (#752).
       - name: go test ./...
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json -coverprofile=evidence/cover.out ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          go test -json -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
       # The browser playground (playground/, cmd/naut-wasm): GOOS=js swaps
       # internal/project's drivers for simulated ones, so a change that
@@ -41,69 +85,6 @@ jobs:
       # from a cold cache); the numbers are not kept.
       - name: benchmarks compile and run (1 iteration)
         run: go test -run '^$' -bench . -benchtime 1x ./...
-      # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
-      # release, not in git (examples/spatial-rig/hmi/assets.json); naut
-      # check holds the scene file to files that exist, so fetch them first.
-      - name: fetch the spatial rig's assets
-        run: node examples/spatial-rig/hmi/fetch-assets.mjs
-      - name: naut check (examples)
-        run: go run ./cmd/naut check examples
-      - name: naut check + naut test (psu-lab fixture)
-        # testdata/projects/psu-lab links examples/it-cluster's lib/server.st,
-        # so it gates here; the other testdata projects are read by go test.
-        run: |
-          go run ./cmd/naut check testdata/projects/psu-lab
-          go run ./cmd/naut test testdata/projects/psu-lab
-      - name: naut check + naut test (every example project's every manifest)
-        # Discovers project roots by their nautilus.yaml (so go-sdk, which
-        # has none, is skipped automatically) and, in each one, every
-        # sibling *.yaml with a top-level `tasks:` key — nautilus.yaml
-        # itself plus a field/line/site variant (field.yaml, line.yaml,
-        # ...) — skipping generated tag/device files. A new example project
-        # is covered the moment it gets a nautilus.yaml; nothing here names
-        # lift-station/batch-skid/remote-fleet by hand.
-        run: |
-          set -u
-          fail=0
-          while IFS= read -r -d '' root_manifest; do
-            root=$(dirname "$root_manifest")
-            for manifest in "$root"/*.yaml; do
-              [ -e "$manifest" ] || continue
-              name=$(basename "$manifest")
-              case "$name" in
-                *_manifest.yaml|devices.yaml|sites.yaml) continue ;;
-              esac
-              grep -q '^tasks:' "$manifest" || continue
-              if [ "$name" = nautilus.yaml ]; then
-                echo "::group::naut check $root"
-                go run ./cmd/naut check "$root" || fail=1
-              else
-                echo "::group::naut check -m $name $root"
-                go run ./cmd/naut check -m "$name" "$root" || fail=1
-              fi
-              echo "::endgroup::"
-            done
-            if ls "$root"/*_test.yaml >/dev/null 2>&1; then
-              echo "::group::naut test $root"
-              go run ./cmd/naut test "$root" || fail=1
-              echo "::endgroup::"
-            fi
-          done < <(find examples -name nautilus.yaml -print0 | sort -z)
-          exit $fail
-      # Every acceptance suite again as JSON, tagged with its project root,
-      # for the runtime evidence (docs/claims can name a test with
-      # `naut <root> <name>`). Verdicts only: the step above gates. The
-      # Logix conformance projects run here on nautilus; their controller
-      # half (`naut test --target logix`) needs a Logix controller and is
-      # not in CI.
-      - name: naut test -json (runtime evidence)
-        run: |
-          go build -o "$RUNNER_TEMP/naut" ./cmd/naut
-          while IFS= read -r -d '' m; do
-            root=$(dirname "$m")
-            ls "$root"/*_test.yaml >/dev/null 2>&1 || continue
-            "$RUNNER_TEMP/naut" test -json "$root" | jq -c --arg root "$root" '. + {root: $root}' >> evidence/naut-tests.ndjson || true
-          done < <(find examples testdata/projects logix/writer/testdata/conformance -name nautilus.yaml -print0 | sort -z)
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -111,10 +92,146 @@ jobs:
           path: evidence/
           retention-days: 14
 
+  # Every example project through naut itself, beside go test rather than
+  # after it (#752): naut check builds and renders each HMI, which is most
+  # of this job's time. On a light PR (the changes job) it checks only the
+  # example projects whose HMI the PR changed, and carries the docs-claims
+  # drift warning that runtime-evidence gives a full run.
+  examples:
+    name: Examples — naut check, naut test (every manifest)
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      FULL: ${{ needs.changes.outputs.full }}
+      EXAMPLES: ${{ needs.changes.outputs.examples }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 2} # the light drift check diffs HEAD^1
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - run: mkdir -p evidence
+      - name: build naut
+        run: go build -o "$RUNNER_TEMP/naut" ./cmd/naut
+      # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
+      # release, not in git (examples/spatial-rig/hmi/assets.json); naut
+      # check holds the scene file to files that exist, so fetch them first.
+      - name: fetch the spatial rig's assets
+        run: node examples/spatial-rig/hmi/fetch-assets.mjs
+      - name: naut check (examples)
+        if: env.FULL == 'true'
+        run: '"$RUNNER_TEMP/naut" check examples'
+      - name: naut check + naut test (psu-lab fixture)
+        if: env.FULL == 'true'
+        # testdata/projects/psu-lab links examples/it-cluster's lib/server.st,
+        # so it gates here; the other testdata projects are read by go test.
+        run: |
+          "$RUNNER_TEMP/naut" check testdata/projects/psu-lab
+          "$RUNNER_TEMP/naut" test testdata/projects/psu-lab
+      - name: naut check + naut test (every example project's every manifest)
+        # Discovers project roots by their nautilus.yaml (so go-sdk, which
+        # has none, is skipped automatically) and runs
+        # .github/scripts/naut-example.sh on each: every manifest checked,
+        # the suites tested. A new example project is covered the moment it
+        # gets a nautilus.yaml; nothing here names lift-station/batch-skid/
+        # remote-fleet by hand. Two projects at a time: each naut check
+        # renders its HMI in its own Chrome, with its own profile, port and
+        # preview server, and writes nothing into the project. The renders
+        # are CPU-bound (software WebGL), so more at once on a 4-CPU runner
+        # only slows each one down (three at a time doubled the render times
+        # and saved a minute) and brings Chrome closer to its 20 s start
+        # limit. Each project's output is printed whole, in order. A light
+        # PR: only the projects it touched (none for a docs-only PR).
+        run: |
+          set -u
+          logs=$RUNNER_TEMP/examples
+          mkdir -p "$logs"
+          if [ "$FULL" = true ]; then
+            mapfile -t roots < <(find examples -name nautilus.yaml -printf '%h\n' | sort)
+          else
+            read -r -a roots <<<"$EXAMPLES"
+            echo "light PR: example projects touched: ${roots[*]:-none}"
+            [ ${#roots[@]} -gt 0 ] || exit 0
+          fi
+          printf '%s\n' "${roots[@]}" | xargs -P 2 -I{} bash -c \
+            'log="$3/$(tr / _ <<<"$2")"; .github/scripts/naut-example.sh "$1" "$2" >"$log.log" 2>&1 || touch "$log.failed"' \
+            _ "$RUNNER_TEMP/naut" {} "$logs"
+          failed=()
+          for root in "${roots[@]}"; do
+            log="$logs/$(tr / _ <<<"$root")"
+            if [ -e "$log.failed" ]; then
+              failed+=("$root")
+              echo "::group::$root — FAILED"
+            else
+              echo "::group::$root"
+            fi
+            cat "$log.log"
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::naut check / naut test failed in: ${failed[*]} (open the group for its output)"
+            exit 1
+          fi
+      # Every acceptance suite again as JSON, tagged with its project root,
+      # for the runtime evidence (docs/claims can name a test with
+      # `naut <root> <name>`). Verdicts only: the step above gates. The
+      # Logix conformance projects run here on nautilus; their controller
+      # half (`naut test --target logix`) needs a Logix controller and is
+      # not in CI.
+      # The one Go test that builds an example's HMI (it pins the lift
+      # station's pages): a light PR skips go test, so it runs here.
+      - name: TestBuildsTheLiftStationApp (light PR touching its HMI)
+        if: env.FULL != 'true' && needs.changes.outputs.hmibuild == 'true'
+        run: go test ./internal/hmibuild -run '^TestBuildsTheLiftStationApp$' -v
+      # A docs page that changed while its claims file didn't: a warning,
+      # never a failure. runtime-evidence gives it on a full run.
+      - name: Docs changed, claims didn't (light PR)
+        if: env.FULL != 'true'
+        run: git diff --name-only HEAD^1 HEAD | go run ./tools/evidence drift -github -summary "$GITHUB_STEP_SUMMARY"
+      - name: naut test -json (runtime evidence)
+        if: env.FULL == 'true'
+        run: |
+          while IFS= read -r -d '' m; do
+            root=$(dirname "$m")
+            ls "$root"/*_test.yaml >/dev/null 2>&1 || continue
+            "$RUNNER_TEMP/naut" test -json "$root" | jq -c --arg root "$root" '. + {root: $root}' >> evidence/naut-tests.ndjson || true
+          done < <(find examples testdata/projects logix/writer/testdata/conformance -name nautilus.yaml -print0 | sort -z)
+      - name: Keep the results as runtime evidence
+        if: env.FULL == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-examples
+          path: evidence/
+          retention-days: 14
+  # The release build's promise (macOS, Linux and Windows, amd64 and arm64,
+  # Linux ARMv7, CGO off): seven cross-compiles of the CLI, about 4 minutes.
+  # Its own job so it runs beside go test, not inside it; the go job skips it.
+  go-crossbuild:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
+    name: Go — release targets cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - name: TestReleaseTargetsBuildWithoutCgo
+        shell: bash
+        run: |
+          mkdir -p evidence
+          go test -json ./cmd/naut -run '^TestReleaseTargetsBuildWithoutCgo$' -v -timeout 20m | tee evidence/crossbuild.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-crossbuild
+          path: evidence/
+          retention-days: 14
+
   # Packages a native Windows service depends on (argonaut's second site
   # runs on Windows Server): file semantics differ there, a rename over an
   # open file above all, so they are tested on Windows, not assumed.
   go-windows:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: Go — Windows file semantics
     runs-on: windows-latest
     steps:
@@ -123,6 +240,8 @@ jobs:
         with: {go-version: '1.25'}
       - run: go test ./oplog/ ./alarm/
   sparkplug-tck:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: Sparkplug B — TCK conformance
     runs-on: ubuntu-latest
     steps:
@@ -182,6 +301,8 @@ jobs:
       - run: npm ci && npm run check && npm run build
         working-directory: examples/lift-station/hmi
   hmi-packs:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     # naut builds HMIs from a committed pack of the packages it carries
     # (internal/hmibuild): this rebuilds it from the kits in this tree and
     # the pins in packs/package.json, and fails when the committed one
@@ -203,6 +324,8 @@ jobs:
           }
 
   vscode-iec:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest
     defaults:
@@ -284,6 +407,8 @@ jobs:
   # The webview's real-input gesture harness (CDP-driven headless Chrome over
   # the production bundles: mimic, FBD, LD, SFC). ubuntu-latest ships Chrome.
   vscode-iec-gestures:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: VS Code extension — webview gesture harness
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -333,6 +458,8 @@ jobs:
   # ~/go/bin (language-server diagnostics, diagram editors), and without a
   # CLI still activate and say how to fix it. See src/e2e/run.ts.
   vscode-iec-e2e:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: VS Code extension — CLI discovery e2e (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -434,6 +561,8 @@ jobs:
           fi
 
   release-config:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: Release config — goreleaser check
     runs-on: ubuntu-latest
     steps:
@@ -448,6 +577,8 @@ jobs:
       - name: Build nautilus_io (PLCnext, ARMv7)
         run: rt/plcnext-io/build.sh
   postgres:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     # The historian's Postgres store and the alarm journal's Postgres table
     # skip unless NAUTILUS_TEST_DATABASE_URL is set; here they run against a
     # real Postgres, so the docs' Postgres claims have evidence.
@@ -480,6 +611,8 @@ jobs:
           retention-days: 14
 
   modbus-sim:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: Modbus TCP — foreign stack (pymodbus)
     runs-on: ubuntu-latest
     steps:
@@ -523,6 +656,8 @@ jobs:
           path: evidence/
           retention-days: 14
   opcua-foreign:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: OPC UA — foreign stack (asyncua)
     runs-on: ubuntu-latest
     steps:
@@ -553,6 +688,8 @@ jobs:
           path: evidence/
           retention-days: 14
   opcua-client-matrix:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: OPC UA client — server matrix (open62541, Milo; poll + subscribe)
     runs-on: ubuntu-latest
     steps:
@@ -580,6 +717,8 @@ jobs:
           path: evidence/
           retention-days: 14
   snmp-sim:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: SNMP — foreign stack (snmpsim)
     runs-on: ubuntu-latest
     steps:
@@ -616,6 +755,8 @@ jobs:
           path: evidence/
           retention-days: 14
   redfish-sim:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: Redfish — foreign stack (DMTF mockup server)
     runs-on: ubuntu-latest
     steps:
@@ -642,6 +783,8 @@ jobs:
           path: evidence/
           retention-days: 14
   prom-sim:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     name: Prometheus — foreign stack (node_exporter)
     runs-on: ubuntu-latest
     steps:
@@ -671,6 +814,8 @@ jobs:
           path: evidence/
           retention-days: 14
   blackbox-gate:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     # The independent tester's checks (tools/blackbox, docs/design/blackbox.md):
     # scripts a foreign client wrote against the public docs and the specs,
     # imported verbatim and run against naut built from this PR. One subtest
@@ -727,7 +872,8 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [go, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    needs: [changes, go, examples, go-crossbuild, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:

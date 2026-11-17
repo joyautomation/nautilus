@@ -128,6 +128,7 @@ programs are not in the subset.
 | `Timers : ARRAY [0..3] OF TON` | one `TIMER[4]` tag |
 | BOOL, SINT, INT, DINT, REAL, LREAL | the same types |
 | `TIME` | a DINT of milliseconds, where it feeds a preset |
+| `t:TON(PT := TO_TIME(ms))`, `ms` a DINT | `MOVE(ms,t.PRE)` ahead of the timer's rung: a preset the logic computes, in milliseconds as `.PRE` is |
 | STRUCT types in a library | UDTs |
 | enumerations (`TYPE Mode : (Idle := 1, Run := 10);`) | `DINT` tags; a member (`Run`, `Mode#Run`) is its value, `10` — Logix has no enumerated type |
 | user FUNCTION_BLOCKs (ladder or ST) | Add-On Instructions |
@@ -168,7 +169,7 @@ message:
 | `logix/function-block` | user FUNCTIONs have no Logix form (inline them); an AOI cannot reach a controller tag |
 | `logix/var-section` | a program takes no parameters: only `VAR` and `VAR_EXTERNAL` |
 | `logix/time` | `TIME` only where it feeds a preset |
-| `logix/preset` | a preset is a literal or a declared variable |
+| `logix/preset` | a preset is a literal, a declared variable, or `TO_TIME` of an integer variable (milliseconds) |
 | `logix/reset` | a counter reset is a plain BOOL reference |
 | `logix/block-position` | a `TOF` or `CTU` sits on the rung itself, not inside a branch |
 | `logix/array-shape` | arrays start at 0, are one-dimensional; BOOL arrays are a multiple of 32 |
@@ -289,7 +290,14 @@ configuration: `hardware.L5X`, holding the export's `<Modules>` section
 unchanged, and `hardware: hardware.L5X` in the manifest, so the write-back
 carries the same modules and the alias tags land on them. (An export whose
 only module is the controller's own gets none: the writer generates that
-module from the processor.) A rung with no nautilus form is kept
+module from the processor.) A preset the logic writes, such as
+`MUL(DelaySec,1000,t.PRE)` ahead of the timer (common in Add-On
+Instructions), comes in as a DINT of its own, `t_PRE`, seeded with the
+export's `PRE`. The logic writes it, a read of `t.PRE` reads it, and the
+call runs on it (`t:TON(PT := TO_TIME(t_PRE))`), so the timer times what
+the logic computed rather than the export's value. An element at a literal
+index (`Ts[3].PRE`) gets `Ts_3_PRE`; one at a computed index is refused by
+name. A rung with no nautilus form is kept
 as a comment and reported, never guessed at. `--comm-path` and `--host`
 fill in how to reach the controller.
 

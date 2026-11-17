@@ -184,6 +184,8 @@ func (s *Server) serve(c net.Conn) {
 			resp = exception(txid, unit, fc, 0x0B) // gateway target failed to respond
 		} else if code, ok := u.injectedFor(fc, data); ok {
 			resp = exception(txid, unit, fc, code)
+		} else if u.refused(fc, data) {
+			resp = exception(txid, unit, fc, 0x02) // illegal data address
 		} else if out, exc := s.dispatch(u, fc, data); exc != 0 {
 			resp = exception(txid, unit, fc, exc)
 		} else {

@@ -55,6 +55,18 @@ type routine struct {
 	curName string
 	// synth are the tags this import made (one-shots), resolvable by name.
 	synth map[string]bool
+	// presetCalc maps a timer/counter instance whose PRE the logic writes
+	// (MUL(sp,1000,t.PRE)) to the variable that carries it (#700): every
+	// write and read of t.PRE goes to it, and the call binds it, so the
+	// computed preset is what the block runs on. presetBad names an
+	// instance whose written preset has no such form, with why.
+	presetCalc map[string]string
+	presetBad  map[string]string
+	// presetMs maps a timer to the DINT a MOVE ahead of its rung fed its
+	// preset from, when that DINT is also used elsewhere (so it stays a
+	// DINT): the call binds PT := TO_TIME(v). It is how the writer writes
+	// a computed preset back (#700).
+	presetMs map[string]string
 }
 
 type refusal struct {
@@ -93,6 +105,7 @@ func (im *importer) lowerRoutine(sc *scope, r *l5x.Routine, p *pou) {
 	}
 	p.total = len(r.Rungs)
 	rt.prepass()
+	rt.scanPresetWrites()
 	for i, pr := range rt.rungs {
 		if pr.drop {
 			continue
@@ -210,7 +223,7 @@ func (rt *routine) prepass() {
 				inst := mv.Args[1][:len(mv.Args[1])-4]
 				if blk := rt.blockRungAfter(i, inst); blk != "" {
 					v := rt.sc.lookup(mv.Args[0])
-					f := rt.sc.lookup(inst)
+					f := rt.sc.lookup(baseOf(inst))
 					if v != nil && f != nil && v.tag != nil && v.dims == "" {
 						vt := strings.ToUpper(v.dtype)
 						ok := false
@@ -222,8 +235,20 @@ func (rt *routine) prepass() {
 						case "COUNTER":
 							ok = vt == "DINT" || vt == "INT" || vt == "SINT"
 						}
-						if ok {
+						if ok && inst == baseOf(inst) {
 							rt.presetVar[strings.ToLower(inst)] = mv.Args[0]
+							pr.drop = true
+							rt.p.imported++
+							continue
+						}
+						// A DINT of milliseconds the logic also uses
+						// elsewhere: it stays a DINT, and the timer
+						// runs on it (#700).
+						if strings.EqualFold(f.dtype, "TIMER") && vt == "DINT" && presetInst(inst, f) {
+							if rt.presetMs == nil {
+								rt.presetMs = map[string]string{}
+							}
+							rt.presetMs[strings.ToLower(inst)] = mv.Args[0]
 							pr.drop = true
 							rt.p.imported++
 							continue
@@ -1190,6 +1215,11 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 		if !strings.HasPrefix(rest, ".") {
 			return "", refuse("member", "%s on a %s", rest, up)
 		}
+		if strings.EqualFold(rest, ".PRE") {
+			if v, ok := rt.presetCalc[strings.ToLower(f.name+strings.ReplaceAll(index, " ", ""))]; ok {
+				return v, nil
+			}
+		}
 		table := timerMember
 		if up == "COUNTER" {
 			table = counterMember
@@ -1300,6 +1330,7 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 	var binds []string
 	resetBind := ""
 	pv, hasVar := rt.presetVar[strings.ToLower(inst)]
+	calc, hasCalc := rt.presetCalcOf(inst)
 	switch m {
 	case "TON", "TOF":
 		if !strings.EqualFold(f.dtype, "TIMER") {
@@ -1310,7 +1341,15 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 			rt.im.usesDialect = true
 			resetBind = "Reset := " + cond
 		}
-		if hasVar {
+		if hasCalc {
+			binds = append(binds, "PT := TO_TIME("+calc+")")
+		} else if ms, ok := rt.presetMs[strings.ToLower(inst)]; ok {
+			v := rt.sc.lookup(ms)
+			if !rt.im.declareFound(rt.sc, rt.p, v, "") {
+				return "", refuse("type", "%s has no nautilus declaration", ms)
+			}
+			binds = append(binds, "PT := TO_TIME("+v.name+")")
+		} else if hasVar {
 			v := rt.sc.lookup(pv)
 			rt.p.declare(decl{Name: v.name, Type: "TIME", Section: rt.sectionOf(v), Comment: "DINT milliseconds in the export; feeds a timer preset"})
 			binds = append(binds, "PT := "+v.name)
@@ -1323,7 +1362,9 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 		if !strings.EqualFold(f.dtype, "COUNTER") {
 			return "", refuse("block-type", "%s is a %s, not a COUNTER", inst, f.dtype)
 		}
-		if hasVar {
+		if hasCalc {
+			binds = append(binds, "PV := "+calc)
+		} else if hasVar {
 			v := rt.sc.lookup(pv)
 			if !rt.im.declareFound(rt.sc, rt.p, v, "") {
 				return "", refuse("type", "%s has no nautilus declaration", pv)

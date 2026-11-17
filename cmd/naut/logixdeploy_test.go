@@ -133,7 +133,7 @@ func TestLogixModeRefusesAChangeWithoutConfirmation(t *testing.T) {
 
 func TestLogixModeTakesTheProjectDirectory(t *testing.T) {
 	out, code := captureStderr(t, func() int { return runLogixMode([]string{"run", demoProject}) })
-	if code != 2 || !strings.Contains(out, "without --yes") || !strings.Contains(out, `AB_ETH-1\100.93.56.45\Backplane\0`) {
+	if code != 2 || !strings.Contains(out, "without --yes") || !strings.Contains(out, `AB_ETH-1\192.0.2.21\Backplane\0`) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 }

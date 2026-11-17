@@ -1,0 +1,40 @@
+profile: ifm-al1590
+title: ifm AL1590 8-port IO-Link master, OPC UA server
+maker: ifm electronic
+model: AL1590
+version: 1
+docs:
+  - id: al1427
+    title: "AL1427 IO-Link master with EtherNet/IP interface, operating instructions, §5.6 OPC UA server and §10.4.3 address space (11/2025), the ifm OPC UA tree the AL1590's follows"
+    code: "11701454 / 00"
+    url: https://www.instrumart.com/assets/ifm-efector-performanceline-io-link-master-AL1427.pdf
+  - id: measured
+    title: >-
+      The node ids a deployed controller's program reads from AL1590 masters, 2026-10:
+      port 4843; ns=5;s=<location>/iolinkmaster/port[n]/iolinkdevice/pdin as STRING,
+      the process data as hex text ('0286' is 0x0286).
+protocol: opcua
+params:
+  location: AL1590     # the master's configured name; it prefixes every node id
+opcua:
+  port: 4843           # measured; the AL1427 manual gives 4840 for that model
+  namespaces:
+    - urn:virtual:ifm:ns1      # indices 1-4: present on the device, URIs not published
+    - urn:virtual:ifm:ns2
+    - urn:virtual:ifm:ns3
+    - urn:virtual:ifm:ns4
+    - urn:virtual:ifm:al1590   # index 5: where the ports are
+  object-namespace: 5
+points:
+  - { name: "Port{n}_Pdin", type: STRING, repeat: 8,
+      node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdin",
+      path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/pdin",
+      desc: "Port {n}: IO-Link process data in, as hex text", doc: "measured pdin; tree per al1427 §10.4.3" }
+simulator: { block: IFM_AL1590_SIM, source: ifm-al1590.st }
+notes: |
+  The simulator turns a word the process model writes (<Master>_Port<n>_Word)
+  into the four hex digits pdin carries; a sensor with other process data
+  writes Port<n>_Pdin through its own simulator. The objects on the way are
+  served as ns=5;s=<path>, the scheme the measured ids follow (not measured
+  themselves). Not served yet: pdout, pin2/pin4 states, the identification
+  and diagnosis variables of al1427 §12.2, and the methods.
