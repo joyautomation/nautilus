@@ -16,9 +16,9 @@ import (
 )
 
 // FileName is the project file that lists a project's virtual devices.
-const FileName = "devices.yaml"
+const FileName = "virtual-devices.yaml"
 
-// Set is a project's virtual devices and its process model: devices.yaml.
+// Set is a project's virtual devices and its process model: virtual-devices.yaml.
 type Set struct {
 	Devices []Instance `yaml:"devices"`
 	// Model is the process model: what the devices are connected to.
@@ -26,7 +26,7 @@ type Set struct {
 	// Scan is how often the simulators run; 0 means 50ms.
 	Scan Duration `yaml:"scan"`
 
-	// Dir is the project directory devices.yaml was read from: profile
+	// Dir is the project directory virtual-devices.yaml was read from: profile
 	// paths and the model program resolve against it.
 	Dir string `yaml:"-"`
 	// profiles holds each instance's resolved profile, by instance name.
@@ -76,7 +76,7 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// LoadSet reads devices.yaml from dir and resolves every profile.
+// LoadSet reads virtual-devices.yaml from dir and resolves every profile.
 func LoadSet(dir string) (*Set, error) {
 	file := filepath.Join(dir, FileName)
 	raw, err := os.ReadFile(file)
@@ -86,7 +86,7 @@ func LoadSet(dir string) (*Set, error) {
 	return ParseSet(raw, dir)
 }
 
-// ParseSet decodes a devices.yaml whose relative paths resolve against dir.
+// ParseSet decodes a virtual-devices.yaml whose relative paths resolve against dir.
 func ParseSet(data []byte, dir string) (*Set, error) {
 	var s Set
 	dec := yaml.NewDecoder(bytes.NewReader(data))

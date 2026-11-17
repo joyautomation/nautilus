@@ -18,7 +18,7 @@ type Endpoint struct {
 	Profile  string
 	Protocol string
 	// Endpoint is the address the project's driver dials for the real
-	// device, as devices.yaml declares it ("" if it declares none).
+	// device, as virtual-devices.yaml declares it ("" if it declares none).
 	Endpoint string
 	// Listen is the address the virtual device is actually bound to.
 	Listen string

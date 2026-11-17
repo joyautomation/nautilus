@@ -15,7 +15,7 @@ import (
 	"github.com/joyautomation/nautilus/modbus"
 )
 
-// writeTestProject lays a project's devices.yaml (and anything beside it)
+// writeTestProject lays a project's virtual-devices.yaml (and anything beside it)
 // into a temp dir.
 func writeTestProject(t *testing.T, files map[string]string) string {
 	t.Helper()
@@ -107,7 +107,7 @@ END_FUNCTION_BLOCK
 
 func TestWireFace(t *testing.T) {
 	dir := writeTestProject(t, map[string]string{
-		"devices.yaml": `
+		"virtual-devices.yaml": `
 devices:
   - name: RB1
     profile: asi-275m

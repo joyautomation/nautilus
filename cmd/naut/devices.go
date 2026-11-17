@@ -20,17 +20,17 @@ import (
 const devicesUsage = `naut devices — virtual field devices for a project
 
 Usage:
-  naut devices up [dir]          start every device in devices.yaml on its wire
+  naut devices up [dir]          start every device in virtual-devices.yaml on its wire
                                  face and run the simulators and process model
                                  until ctrl-c
-  naut devices check [dir]       load devices.yaml, its profiles, simulators and
+  naut devices check [dir]       load virtual-devices.yaml, its profiles, simulators and
                                  process model, and compile the plant; no sockets
   naut devices profiles          list the built-in device profiles
   naut devices show <profile>    print a profile's points (a built-in id, or a
                                  path to a project's own .yaml)
 
 A virtual device speaks the real device's protocol and register map, built
-from public documentation. A project lists its devices in devices.yaml:
+from public documentation. A project lists its devices in virtual-devices.yaml:
 
   devices:
     - name: RB1                    # IEC identifier; its points are RB1_<Point>

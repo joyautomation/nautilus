@@ -7,7 +7,7 @@
 // built from, its points (one row per register or node, in the spellings the
 // driver manifests already use) and optionally a simulator, an ST
 // FUNCTION_BLOCK that gives it behaviour. A project lists instances in
-// devices.yaml (devices.go). The instances' simulators and the project's
+// virtual-devices.yaml (devices.go). The instances' simulators and the project's
 // process model run in one plant runtime (plant.go) over a store per device;
 // the store is served on a socket (the wire face) or read in process by a
 // test in virtual time.
@@ -33,7 +33,7 @@ const (
 
 // Profile is one device type.
 type Profile struct {
-	// ID names the profile ("asi-275m"): what devices.yaml's
+	// ID names the profile ("asi-275m"): what virtual-devices.yaml's
 	// `profile:` refers to.
 	ID string `yaml:"profile"`
 	// Title is one line for a person ("16-in/16-out Modbus TCP relay board").
@@ -74,7 +74,7 @@ type Doc struct {
 	URL  string `yaml:"url"`
 }
 
-// ModbusSpec is a Modbus device's defaults; a devices.yaml entry can
+// ModbusSpec is a Modbus device's defaults; a virtual-devices.yaml entry can
 // override the unit id.
 type ModbusSpec struct {
 	// Port is the TCP port the device listens on; 0 means 502.

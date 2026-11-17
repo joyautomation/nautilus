@@ -54,7 +54,7 @@ func loadBuiltin(id string) (*Profile, error) {
 	return p, nil
 }
 
-// ResolveProfile finds a profile by what devices.yaml wrote: a path ending
+// ResolveProfile finds a profile by what virtual-devices.yaml wrote: a path ending
 // in .yaml (relative to dir) is a project's own profile; anything else is
 // a built-in id.
 func ResolveProfile(dir, ref string) (*Profile, error) {

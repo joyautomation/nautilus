@@ -77,7 +77,7 @@ device-profile library (#717), which will add the parts a running project
 needs (UDT, alarms, faceplate) around the same points.
 
 ```yaml
-profile: abb-drive-fmbt21          # id: what devices.yaml refers to
+profile: abb-drive-fmbt21          # id: what virtual-devices.yaml refers to
 title: ABB drive, Modbus/TCP via FMBT-21, ABB Drives profile
 maker: ABB
 model: ACS380 / ACS580 with FMBT-21
@@ -118,7 +118,7 @@ notes: what is simplified and what is not modelled
 - Built-in profiles ship in naut (`virtdev/profiles/`); a project's own
   profile is a path ending in `.yaml`.
 
-## 4. A project's devices: `devices.yaml`
+## 4. A project's devices: `virtual-devices.yaml`
 
 ```yaml
 devices:
@@ -133,11 +133,11 @@ model:
   scan: 100ms
 ```
 
-`devices.yaml` is dev-time, like `*_test.yaml`, and stays out of
+`virtual-devices.yaml` is dev-time, like `*_test.yaml`, and stays out of
 `nautilus.yaml` (the deployment artifact). An entry's first three keys are
 the shape a project will declare its *real* devices with once profiles live
 in `nautilus.yaml` (#717): name, profile, endpoint. At that point the
-virtual devices derive from the manifest, and `devices.yaml` keeps only what
+virtual devices derive from the manifest, and `virtual-devices.yaml` keeps only what
 a simulation adds (listen, init, the model).
 
 `endpoint` is matched against the project's own driver configuration, so
