@@ -40,6 +40,7 @@ import (
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
+	"github.com/joyautomation/nautilus/virtdev"
 )
 
 // electorFor builds the elector for a manifest with a `redundancy:` section
@@ -876,6 +877,20 @@ func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string]
 	// 2. the project archive.
 	zipStart := base
 	var archiveBytes int64
+	// The virtual devices are test fixtures, like the suites: they gate
+	// the deploy and do not ride along on the controller.
+	fixtures := map[string]bool{}
+	if set, err := virtdev.LoadSet(dir); err == nil {
+		for _, f := range set.Files() {
+			if abs, err := filepath.Abs(f); err == nil {
+				fixtures[abs] = true
+			}
+		}
+	} else if _, serr := os.Stat(filepath.Join(dir, virtdev.FileName)); serr == nil {
+		if abs, err := filepath.Abs(filepath.Join(dir, virtdev.FileName)); err == nil {
+			fixtures[abs] = true
+		}
+	}
 	zw := zip.NewWriter(f)
 	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -897,6 +912,9 @@ func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string]
 		// ride along on the controller.
 		if strings.HasPrefix(rel, ".") || rel == out || rel == filepath.Base(out) ||
 			strings.HasSuffix(rel, acceptance.SuffixTest) {
+			return nil
+		}
+		if abs, err := filepath.Abs(p); err == nil && fixtures[abs] {
 			return nil
 		}
 		raw, err := os.ReadFile(p)

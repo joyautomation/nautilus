@@ -2,9 +2,10 @@
 
 **Context:** Virtual devices (`virtdev`), see the context map. Issue #712,
 part of the parity epic #725. Status: **in progress.** The format, the plant,
-the Modbus wire face and `naut devices` are built (PR 1); the OPC UA wire
-face and three makers' IO-Link masters (PR 2); the in-process face in
-`naut test`, the drive and the burner follow (§7).
+the Modbus wire face and `naut devices` (PR 1); the OPC UA wire face and
+three makers' IO-Link masters (PR 2); ABB drives, the in-process face in
+`naut test` and a sequence test (PR 3) are built. The burner, the OPC 30120
+base profile and `naut run --devices` follow (§7).
 
 ## 0. Why
 
@@ -154,6 +155,49 @@ and `naut run --devices` redirects that address to the wire face in memory.
 Modbus devices that share an endpoint (unit ids behind one gateway) share
 one listener, as in the field.
 
+## 4a. The in-process face, as built
+
+`virtdev.InProcess` is the driver a `devices: true` suite runs on, built
+fresh per test (`acceptance.WithDevices`) over a fresh plant on the test's
+virtual clock. It reads through the project's drivers as configured
+(`Project.Drivers()`): a Modbus driver's planned block reads go to the
+device's unit as requests (`slave.Unit.Handle`, the code the wire face
+answers with), each binding decoded with its source's word and byte order
+and scale; writes go as FC 05 / FC 10 requests; an OPC UA binding resolves
+its node id (by namespace URI when it names one) against the device's
+mapped address space. A source or endpoint no device answers is refused
+before the first scan; a refused request is a fault that fails the test.
+The real drivers' companions (`<source>__Online`, `__Outages`, an OPC UA
+driver's `__Online`) are delivered. Before every read the plant is stepped
+to the controller's virtual time, so two runs are identical.
+
+It also keeps the Modbus driver's start-up baseline: the first output push
+is recorded and never sent, and after it only changes go out. That is the
+trap a start sequence falls into when it relies on its first-scan control
+word reaching a drive (the bin-fill tests keep a case of it).
+
+**What it does not model, by design:** poll timing. Every binding is read on
+every controller scan, where the real driver polls each scan class at its
+own rate over a network with latency; a test that depends on a value
+arriving late, or on two classes arriving in a given order, belongs on the
+wire face (`naut devices up`, wall clock). The agreement test
+(`virtdev/agree_test.go`) runs the project's real drivers against the wire
+face and checks the two faces deliver the same values for the same writes.
+
+A step's `plant:` writes a plant tag: a device point, a simulator hook
+(`CONV_Trip`) or the model's own. That is how a sequence test plugs a
+conveyor or trips a drive.
+
+`naut check` knows the file too: the process model and project-local
+simulators are compiled as the plant, not as controller programs.
+
+The worked example is `virtdev/testdata/bin-fill`: an ACS355 conveyor
+drive, an ASI-275M gate, a P+F master with the high-level and plug
+switches, a process model in `devices/plant.st`, and `fill_test.yaml`. The
+Go tests in `cmd/naut/devices_test.go` run it, and run copies with a wrong
+register, a mistyped node id, a wrong scale and a wrong unit id, each of
+which fails.
+
 ## 5. Commands
 
 | Command | Does |
@@ -163,7 +207,7 @@ one listener, as in the field.
 | `naut devices profiles` | the built-in profiles |
 | `naut devices show <profile>` | a profile's points, with the document each row came from |
 | `naut run --devices` (PR 3) | the devices, plus the project with its drivers redirected to them |
-| `naut test` (PR 3) | suites with `devices: true` run against the in-process face |
+| `naut test` | suites with `devices: true` run against the in-process face |
 
 ## 5a. OPC UA wire face
 
@@ -214,7 +258,8 @@ needs an importer that does.
    `opcua/server`, P+F, SICK and ifm variants; endpoints and node ids for
    #704 (§5a). The OPC 30120 base profile with the companion NodeSet's types
    follows in its own PR.
-3. ABB drive (FMBT-21 / RETA-01, ABB Drives profile), the in-process face in
-   `naut test`, `naut run --devices`, an example project with a sequence
-   test.
-4. A burner controller over Modbus.
+3. ABB drives (ACS550 + RETA-01 and ACS355 + FMBT-21 Classic, ACS580 +
+   FMBT-21 Enhanced), the in-process face in `naut test`, `plant:`, the
+   bin-fill sequence test.
+4. A burner controller over Modbus; the OPC 30120 base profile; `naut run
+   --devices` (needs a driver-endpoint override at project load).
