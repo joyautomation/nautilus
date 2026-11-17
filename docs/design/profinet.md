@@ -161,7 +161,7 @@ On the device, `dir` is seen from the **PLC**, because that is how the
 GSDML and the engineering tool read it. On the nautilus side, a PLC
 output is an input tag and a PLC input is an output tag; the generated
 tag file says so. `naut profinet gsdml -m profinet_device.yaml` writes
-`GSDML-V2.4-<vendor>-<name>-<date>.xml` from the same file the driver
+`GSDML-V2.35-<vendor>-<station>-<date>.xml` from the same file the driver
 loads, so the PLC's configuration and what the driver serves come from one
 source.
 
@@ -389,7 +389,10 @@ the bench start-up fails, bisect over these first:
   placed after the AlarmCR response and before ARServerBlockRes;
 - ARData alignment counts from the block payload, as the source did;
   check it against the capture;
-- inputs start IOPS Bad until the program's first push.
+- inputs start IOPS Bad until the program's first push;
+- the 24-subslot cap (to keep a Connect within one RPC fragment) is an
+  estimate from block sizes, not a measurement: check the largest
+  Connect the PLC sends.
 
 ## 6. Wiring
 
@@ -397,9 +400,12 @@ the bench start-up fails, bisect over these first:
   and `profinet-device`, both taking `manifest:`.
 - `drivers.go`: a status row per device or AR.
 - The schema enum plus `schema_test`.
-- `naut profinet gsdml | identify | tags`:
-  - `identify` is a read-only DCP Identify All on an interface;
-  - it is the commissioning tool, and never sends a Set.
+- `naut profinet gsdml | tags` (built, #738): both offline, from the
+  manifest. A read-only `naut profinet identify` (DCP Identify All on an
+  interface, never a Set) comes with the controller.
+- `Load` refuses a device manifest that binds data to the PLC under a
+  tag the project does not declare as an output (#738): the PLC would
+  read its never-written zeros as valid.
 - The context map lists `profinet` among the field drivers, and
   `internal/contextmap` holds it to the driver rule.
 
