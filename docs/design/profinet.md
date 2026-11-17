@@ -88,9 +88,9 @@ What crosses the seam:
 - `internal/tagfile.Tag` rows from the generator.
 
 **Dependency.** The source uses `mdlayher/packet` for AF_PACKET.
-nautilus's core is pure stdlib plus a few vetted dependencies.
-`golang.org/x/sys/unix` is already in `go.mod` (indirect today) and is enough for an
-AF_PACKET socket with a BPF EtherType filter and `PACKET_ADD_MEMBERSHIP`.
+nautilus's core is pure stdlib plus a few vetted dependencies, and the
+stdlib `syscall` package is enough (built, #728). It gives an AF_PACKET
+socket with a classic BPF EtherType filter and `PACKET_ADD_MEMBERSHIP`.
 That last option joins the DCP multicast group (01:0E:CF:00:00:00) instead
 of putting the NIC in promiscuous mode. The source added promiscuous mode
 because its library did not expose the membership call. Promiscuous mode
@@ -213,11 +213,27 @@ the frame says, not whether frames flow.
   Run is built from the program's values, never from the previous term's.
 - **Device, gate closed:** the IOPS on every input subslot to the PLC goes
   Bad. The PLC sees our data as invalid rather than frozen-good.
+- **Device, before the program's first push:** inputs are invalid (IOPS
+  Bad) from start-up until the driver has delivered the program's values
+  with the gate open. A PLC that connects early sees invalid data, not
+  zeros that look good (built, #732).
 - A **hung scan** closes the gate within the live-scan lease (about 5 s),
   which is far slower than the PROFINET watchdog (3 × 8 ms). The frame
   keeps flowing on purpose: what protects the process is Stop/Bad, not
   silence. If the process dies, frames stop and the peer's watchdog acts
   within milliseconds.
+
+**Which gate, in this wave.** `naut run` gives a plain gate
+(`io.PlainGated`) the live-scan lease when there is no `redundancy:`. It
+gives every gated driver leadership when there is. One func cannot carry
+both PROFINET behaviours. A standby device must go silent on the network
+(§4.5), not merely mark its data invalid while it keeps answering DCP for
+the leader's station name. So in this wave:
+- both drivers are **plain-gated**: the gate controls the frame contents
+  above, and the hung-scan protection works in every project;
+- `naut check` **refuses `profinet-device` and `profinet-controller`
+  together with `redundancy:`** and names §8.1. The standby behaviour
+  of §4.5 lands with James's answer, as its own PR.
 
 ### 4.3 Controller
 
@@ -254,17 +270,28 @@ NIC otherwise burns two cores).
 ### 4.4 Device
 
 The port is the source's state machine, plus the rules §1 found missing:
-- **Watchdog.** No output frame for watchdog-factor × cycle means the AR
-  is aborted (RTA), the tags go Stale and `__Online` goes false. The PLC
-  reconnects on its own.
+- **Watchdog.** No output frame for max(watchdog, data-hold factor) ×
+  cycle, never below 100 ms, ends the AR. The tags go Stale and `__Online`
+  goes false. No RTA is sent, because the controller's own watchdog sees
+  our silence, and it reconnects on its own. In Advanced Startup the
+  first output frame may take up to 10 s after Connect.
 - **Run/Stop and IOPS.** DataStatus and IOPS are read on every frame
   (§4.1).
 - **ModuleDiff.** The ExpectedSubmodules are compared against the
   manifest. A wrong ident or length is reported in a ModuleDiff block, so
   the engineering tool shows the mismatch instead of the AR running on a
   layout nobody agreed to.
-- **Single AR.** A second Connect while one is running is refused. A stale
-  AR (watchdog-expired) is cleared before a new one is accepted.
+- **Single AR.** A Connect from another controller while an AR runs is
+  refused (CMRPC "out of AR resources"). A Connect from the **same**
+  controller replaces its AR: it lost the old one (a restart, or its
+  watchdog fired before ours).
+- **Retransmissions.** DCE/RPC over UDP retransmits a request whose
+  response was lost. The device answers a repeat (same activity and
+  sequence) from a reply cache and does not execute it twice. A doubled
+  Connect would otherwise open a second AR.
+- **Fragmentation.** A request split over several RPC fragments is
+  ignored with an event; reassembly is not built. Layouts are capped at
+  24 subslots so a Connect fits one fragment.
 
 **DCP Set (host network).** DCP is unauthenticated: anything on the
 segment can send a Set.
@@ -273,11 +300,17 @@ segment can send a Set.
   manifest. It does not persist: the manifest stays the source of truth
   across restarts.
 - **Set IP is never applied to the host.** The tentacle netplan path is
-  not ported. A Set IP that matches the interface's address is
-  acknowledged. A different one is refused with a DCP error, and the
-  refusal is logged and counted on the driver row. The device never
-  advertises an address it does not hold.
-- Factory reset and Signal (flash LED) are acknowledged. Signal is logged.
+  not ported. A Set IP naming any address the interface holds (a host NIC
+  often holds several) is acknowledged, and the device then advertises
+  the suite that was set. Any other is refused with a DCP error, and the
+  refusal is logged and counted on the driver row with the remedy: give
+  the device one of the interface's addresses in the controller's
+  project. The device never advertises an address it does not hold.
+  Until an IP suite is set it reports none, because a Siemens PLC
+  assigns the address itself and will not open an AR to a device that
+  reports one on first contact (from the source).
+- A DHCP Set is refused: nautilus does not reconfigure the host.
+  DCP Control (Signal, which flashes an LED) is acknowledged and logged.
 
 ### 4.5 Redundancy
 
@@ -340,6 +373,23 @@ The guide page documents both.
 5. **Bench.** nautilus as device to the bench PLC. nautilus as controller
    to a PROFINET device. Pull the cable and put the PLC in STOP, then
    record what each side shows and how long it takes.
+
+**Bench checklist: where the port departs from the TIA-proven source.**
+Each item is a change from the code that passed a TIA Portal start-up. If
+the bench start-up fails, bisect over these first:
+- the cycle counter steps by SendClockFactor × ReductionRatio, not 1;
+- the I&M0 OrderID and serial are space-padded, not zero-padded;
+- each service's own PNIO ErrorCode (0xDB connect, …), not 0xDE for all;
+- the LLDP PROFINET port-status TLV is 8 bytes, not 7;
+- an Identify answers at once for ResponseDelay ≤ 1, and is delayed
+  otherwise;
+- write responses are built as IODWriteResHeader, not echoed request
+  headers, and multiple write (0xE040) is parsed;
+- a ModuleDiffBlock is sent on a mismatch (the source never sent one),
+  placed after the AlarmCR response and before ARServerBlockRes;
+- ARData alignment counts from the block payload, as the source did;
+  check it against the capture;
+- inputs start IOPS Bad until the program's first push.
 
 ## 6. Wiring
 
