@@ -8,6 +8,13 @@ on:
 # breaks for everyone on the documented minimum (this bit v0.4.1).
 env:
   GOTOOLCHAIN: local
+# A new push to a PR cancels that PR's run still in progress: only its latest
+# commit can merge, and a run is 20-odd jobs on a shared pool of runners.
+# On main the group is the commit itself, so no main run (and none of the
+# runtime evidence it keeps) is ever cancelled or replaced.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   go:
     name: Go — vet, test, build
@@ -20,11 +27,14 @@ jobs:
       # -json and the coverage profile are kept as runtime evidence (the
       # runtime-evidence job joins them to docs/claims); `evidence cat`
       # prints the stream as the usual go test output.
+      # TestReleaseTargetsBuildWithoutCgo cross-compiles the CLI seven times
+      # (about 4 minutes, most of cmd/naut's time): the go-crossbuild job runs
+      # it in parallel instead (#752).
       - name: go test ./...
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json -coverprofile=evidence/cover.out ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          go test -json -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
       # The browser playground (playground/, cmd/naut-wasm): GOOS=js swaps
       # internal/project's drivers for simulated ones, so a change that
@@ -41,55 +51,76 @@ jobs:
       # from a cold cache); the numbers are not kept.
       - name: benchmarks compile and run (1 iteration)
         run: go test -run '^$' -bench . -benchtime 1x ./...
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-go
+          path: evidence/
+          retention-days: 14
+
+  # Every example project through naut itself, beside go test rather than
+  # after it (#752): naut check builds and renders each HMI, which is most
+  # of this job's time.
+  examples:
+    name: Examples — naut check, naut test (every manifest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - run: mkdir -p evidence
+      - name: build naut
+        run: go build -o "$RUNNER_TEMP/naut" ./cmd/naut
       # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
       # release, not in git (examples/spatial-rig/hmi/assets.json); naut
       # check holds the scene file to files that exist, so fetch them first.
       - name: fetch the spatial rig's assets
         run: node examples/spatial-rig/hmi/fetch-assets.mjs
       - name: naut check (examples)
-        run: go run ./cmd/naut check examples
+        run: '"$RUNNER_TEMP/naut" check examples'
       - name: naut check + naut test (psu-lab fixture)
         # testdata/projects/psu-lab links examples/it-cluster's lib/server.st,
         # so it gates here; the other testdata projects are read by go test.
         run: |
-          go run ./cmd/naut check testdata/projects/psu-lab
-          go run ./cmd/naut test testdata/projects/psu-lab
+          "$RUNNER_TEMP/naut" check testdata/projects/psu-lab
+          "$RUNNER_TEMP/naut" test testdata/projects/psu-lab
       - name: naut check + naut test (every example project's every manifest)
         # Discovers project roots by their nautilus.yaml (so go-sdk, which
-        # has none, is skipped automatically) and, in each one, every
-        # sibling *.yaml with a top-level `tasks:` key — nautilus.yaml
-        # itself plus a field/line/site variant (field.yaml, line.yaml,
-        # ...) — skipping generated tag/device files. A new example project
-        # is covered the moment it gets a nautilus.yaml; nothing here names
-        # lift-station/batch-skid/remote-fleet by hand.
+        # has none, is skipped automatically) and runs
+        # .github/scripts/naut-example.sh on each: every manifest checked,
+        # the suites tested. A new example project is covered the moment it
+        # gets a nautilus.yaml; nothing here names lift-station/batch-skid/
+        # remote-fleet by hand. Two projects at a time: each naut check
+        # renders its HMI in its own Chrome, with its own profile, port and
+        # preview server, and writes nothing into the project. The renders
+        # are CPU-bound (software WebGL), so more at once on a 4-CPU runner
+        # only slows each one down (three at a time doubled the render times
+        # and saved a minute) and brings Chrome closer to its 20 s start
+        # limit. Each project's output is printed whole, in order.
         run: |
           set -u
-          fail=0
-          while IFS= read -r -d '' root_manifest; do
-            root=$(dirname "$root_manifest")
-            for manifest in "$root"/*.yaml; do
-              [ -e "$manifest" ] || continue
-              name=$(basename "$manifest")
-              case "$name" in
-                *_manifest.yaml|devices.yaml|sites.yaml) continue ;;
-              esac
-              grep -q '^tasks:' "$manifest" || continue
-              if [ "$name" = nautilus.yaml ]; then
-                echo "::group::naut check $root"
-                go run ./cmd/naut check "$root" || fail=1
-              else
-                echo "::group::naut check -m $name $root"
-                go run ./cmd/naut check -m "$name" "$root" || fail=1
-              fi
-              echo "::endgroup::"
-            done
-            if ls "$root"/*_test.yaml >/dev/null 2>&1; then
-              echo "::group::naut test $root"
-              go run ./cmd/naut test "$root" || fail=1
-              echo "::endgroup::"
+          logs=$RUNNER_TEMP/examples
+          mkdir -p "$logs"
+          mapfile -t roots < <(find examples -name nautilus.yaml -printf '%h\n' | sort)
+          printf '%s\n' "${roots[@]}" | xargs -P 2 -I{} bash -c \
+            'log="$3/$(tr / _ <<<"$2")"; .github/scripts/naut-example.sh "$1" "$2" >"$log.log" 2>&1 || touch "$log.failed"' \
+            _ "$RUNNER_TEMP/naut" {} "$logs"
+          failed=()
+          for root in "${roots[@]}"; do
+            log="$logs/$(tr / _ <<<"$root")"
+            if [ -e "$log.failed" ]; then
+              failed+=("$root")
+              echo "::group::$root — FAILED"
+            else
+              echo "::group::$root"
             fi
-          done < <(find examples -name nautilus.yaml -print0 | sort -z)
-          exit $fail
+            cat "$log.log"
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::naut check / naut test failed in: ${failed[*]} (open the group for its output)"
+            exit 1
+          fi
       # Every acceptance suite again as JSON, tagged with its project root,
       # for the runtime evidence (docs/claims can name a test with
       # `naut <root> <name>`). Verdicts only: the step above gates. The
@@ -98,7 +129,6 @@ jobs:
       # not in CI.
       - name: naut test -json (runtime evidence)
         run: |
-          go build -o "$RUNNER_TEMP/naut" ./cmd/naut
           while IFS= read -r -d '' m; do
             root=$(dirname "$m")
             ls "$root"/*_test.yaml >/dev/null 2>&1 || continue
@@ -107,7 +137,28 @@ jobs:
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-go
+          name: evidence-examples
+          path: evidence/
+          retention-days: 14
+  # The release build's promise (macOS, Linux and Windows, amd64 and arm64,
+  # Linux ARMv7, CGO off): seven cross-compiles of the CLI, about 4 minutes.
+  # Its own job so it runs beside go test, not inside it; the go job skips it.
+  go-crossbuild:
+    name: Go — release targets cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - name: TestReleaseTargetsBuildWithoutCgo
+        shell: bash
+        run: |
+          mkdir -p evidence
+          go test -json ./cmd/naut -run '^TestReleaseTargetsBuildWithoutCgo$' -v -timeout 20m | tee evidence/crossbuild.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-crossbuild
           path: evidence/
           retention-days: 14
 
@@ -700,7 +751,7 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [go, sparkplug-tck, modbus-sim, opcua-foreign, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    needs: [go, examples, go-crossbuild, sparkplug-tck, modbus-sim, opcua-foreign, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
