@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 func TestBuiltinProfilesLoad(t *testing.T) {
@@ -21,8 +23,15 @@ func TestBuiltinProfilesLoad(t *testing.T) {
 			t.Errorf("%s: %v", p.ID, err)
 			continue
 		}
-		if _, err := NewPlant(set); err != nil {
+		plant, err := NewPlant(set)
+		if err != nil {
 			t.Errorf("%s: plant: %v", p.ID, err)
+			continue
+		}
+		// A profile with no simulator generates a main program with an
+		// empty body; it must still compile.
+		if _, err := runtime.New(plant.Options()); err != nil {
+			t.Errorf("%s: plant does not compile: %v\n%s", p.ID, err, plant.Program())
 		}
 	}
 }
