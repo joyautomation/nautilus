@@ -3,7 +3,7 @@ package optommp
 // live_test.go runs the driver against a real processor. Skipped unless
 // NAUT_OPTOMMP_LIVE names one:
 //
-//	NAUT_OPTOMMP_LIVE=192.0.2.11 go test ./optommp -run Live -v
+//	NAUT_OPTOMMP_LIVE=192.168.82.243 go test ./optommp -run Live -v
 //
 // Read-only by default. NAUT_OPTOMMP_LOOPBACK="1.3>0.6" also drives
 // output slot 1 channel 3 on and off and expects input slot 0 channel 6

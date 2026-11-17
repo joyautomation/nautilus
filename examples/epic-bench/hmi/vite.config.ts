@@ -4,7 +4,7 @@ import { defineConfig, loadEnv } from 'vite';
 // The controller to talk to. `npm run dev` and `npm run preview` proxy /api
 // to it, so the page is same-origin exactly as it is when naut serves the
 // build from server.hmi:
-//   CONTROLLER_URL=http://192.0.2.11:8086 npm run dev
+//   CONTROLLER_URL=http://192.168.82.243:8086 npm run dev
 export default defineConfig(({ mode }) => {
 	const env = loadEnv(mode, process.cwd(), '');
 	const controller = env.CONTROLLER_URL ?? 'http://localhost:8086';
