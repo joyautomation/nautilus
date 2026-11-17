@@ -81,6 +81,36 @@ func TestVarRetainAndRetainedStateSurviveARestart(t *testing.T) {
 	}
 }
 
+// The same restart with the store loaded before Run, as naut run does
+// (LoadRetained, nautilus#531's startup half): the first takeover skips its
+// own load but still resets the frames and writes VAR RETAIN locals back.
+func TestVarRetainSurvivesARestartLoadedBeforeRun(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "retain.json")
+	rt := newRetainRuntime(t, retain.New("", file))
+	for range 3 {
+		rt.Scan()
+	}
+	rt.saveRetained(nil)
+
+	rt2 := newRetainRuntime(t, retain.New("", file))
+	rt2.LoadRetained()
+	if v, _ := rt2.Tags().ReadGlobal("Stats"); v.I != 3 {
+		t.Errorf("retained state tag Stats = %d before the first scan, want 3", v.I)
+	}
+	rt2.Scan()
+	locals := rt2.prog.Locals()
+	if locals["total"] != int64(4) {
+		t.Errorf("VAR RETAIN total = %v, want 4 (3 kept + 1)", locals["total"])
+	}
+	rh, _ := locals["rh"].(map[string]any)
+	if rh["hours"] != 4.0 || rh["starts"] != int64(1) {
+		t.Errorf("VAR RETAIN RunHours = %v, want hours 4 and starts 1", rh)
+	}
+	if v, _ := rt2.Tags().ReadGlobal("Stats"); v.I != 4 {
+		t.Errorf("retained state tag Stats = %d, want 4", v.I)
+	}
+}
+
 // A retained local whose type changed keeps its initial value and is
 // reported; one the program no longer declares RETAIN is ignored.
 func TestRestoreLocalsSkipsWhatNoLongerFits(t *testing.T) {

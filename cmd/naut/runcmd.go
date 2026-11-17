@@ -229,6 +229,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		defer alarms.Close()
 	}
 
+	// Retained values go in before anything can read or write a tag: the
+	// tag API, OPC UA and the HMI all start below (nautilus#531's startup
+	// half). Standalone only; a replica loads the store on takeover.
+	rt.LoadRetained()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var dec decider
