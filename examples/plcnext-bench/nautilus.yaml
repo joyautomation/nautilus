@@ -24,6 +24,11 @@ name: plcnext-bench
 server:
   addr: ":8080"
   online-edits: true
+  # The 3D screen, once built (cd hmi && npm install && npm run build): the
+  # controller and its Smart Elements with their channel lamps lit from the
+  # tags. Build it before `naut build`, which embeds it. Tolerates being
+  # absent. Serves it at "/"; the built-in dashboard moves to "/_nautilus/".
+  hmi: hmi/build
 
 driver:
   type: plcnext
