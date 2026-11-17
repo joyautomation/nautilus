@@ -223,7 +223,7 @@ across all its tabs), nothing written.
 cd hmi
 npm install
 npm run build                                          # → hmi/build; do this before `naut build`, which embeds it
-CONTROLLER_URL=http://192.168.82.216:8080 npm run dev  # or work on it against the controller
+CONTROLLER_URL=http://$PLC:8080 npm run dev  # or work on it against the controller
 ```
 
 The model is plain Threlte (`hmi/src/lib/Axc.svelte`) placed inside

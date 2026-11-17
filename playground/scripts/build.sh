@@ -42,6 +42,9 @@ ci() { [ -n "${SKIP_NPM:-}" ] || npm ci --no-audit --no-fund --silent; }
 lift="$repo/examples/lift-station/hmi"
 ( cd "$lift" && ci && HMI_BASE="$base/view/lift-station" npx vite build --logLevel warn >/dev/null )
 mkdir -p "$out/hmi" && cp -r "$lift/build" "$out/hmi/lift-station"
+bench="$repo/examples/plcnext-bench/hmi"
+( cd "$bench" && ci && HMI_BASE="$base/view/plcnext-bench" npx vite build --logLevel warn >/dev/null )
+cp -r "$bench/build" "$out/hmi/plcnext-bench"
 
 # Examples, as the JSON file maps the client loads.
 demo="$(mktemp -d)"
@@ -49,14 +52,21 @@ demo="$(mktemp -d)"
 ( cd "$repo" && go build -o "$demo/naut" ./cmd/naut ) && ( cd "$demo" && ./naut new --template demo --no-input demo >/dev/null )
 # The playground adds an HMI drawn from the kit's built-in equipment.
 cp "$here"/examples/demo/*.mimic.json "$demo/demo/"
+# The PLCnext bench runs its simulated build (sim.yaml) as nautilus.yaml: a
+# tab has no controller. The controller build rides along as controller.yaml.
+plcnext="$demo/plcnext-bench"
+cp -r "$repo/examples/plcnext-bench" "$plcnext"
+mv "$plcnext/nautilus.yaml" "$plcnext/controller.yaml" && mv "$plcnext/sim.yaml" "$plcnext/nautilus.yaml"
 # --try: what each example's terminal suggests first (nautShell.js).
 python3 -I "$here/scripts/examples.py" "$out/examples" \
   "--try=sealin=set StartPB true;set StartPB false;tags Motor;naut test" \
   "--try=demo=set TempSP 70;watch TempC Heater;naut test" \
   "--try=lift-station=set InflowGpm 950;watch LIT101_Level;naut test" \
+  "--try=plcnext-bench=set DI_02 true;set SliderV 7.5;watch DO_02 AI_00;set DI_02 false;naut test" \
   "sealin=$here/examples/sealin:program.ld:Start/stop seal-in (ladder):The first circuit everyone learns. Press StartPB in the Tags panel and the motor keeps running after you let go, because the rung reads its own Motor contact. StopPB breaks it." \
   "demo=$demo/demo:interlocks.ld,program.fbd,tank.mimic.json:Tank demo (ladder, FBD, ST, HMI):What naut new makes: a heated tank with a PI loop and pump seal-in in FBD, the alarm annunciator in ladder, the plant simulated in ST, and acceptance tests. Change TempSP and watch the loop follow, on the diagrams and in tank.mimic.json." \
-  "lift-station=$repo/examples/lift-station:permissives.ld,sequence.sfc,level.fbd:Lift station (all four languages):A duplex sewage lift station: duty/standby sequencing in SFC, level control in FBD, permissives in ladder, the plant simulated in ST, with alarms and 20 tests. Set InflowGpm to 950 for a storm."
+  "lift-station=$repo/examples/lift-station:permissives.ld,sequence.sfc,level.fbd:Lift station (all four languages):A duplex sewage lift station: duty/standby sequencing in SFC, level control in FBD, permissives in ladder, the plant simulated in ST, with alarms and 20 tests. Set InflowGpm to 950 for a storm." \
+  "plcnext-bench=$plcnext:bench.st,tags/sim.yaml:PLCnext starter kit (3D):A Phoenix Contact AXC F 2152 with four Axioline elements, as it runs on our bench, here with the board simulated. Hold a pushbutton with set DI_02 true (S1..S4 are DI_00..DI_03) and its output lights; move the slider with SliderV. The real build is controller.yaml."
 rm -rf "$demo"
 
 # What a page hosting dist/ reads first: the version and the build id, for
