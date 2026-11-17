@@ -182,12 +182,15 @@ jobs:
         with:
           fetch-depth: 0 # git describe names the release by its tag
       - name: install naut
+        # Outside the checkout: naut build embeds the project directory,
+        # and a naut binary left in it would ship inside the controller.
         run: |
           case $(uname -m) in aarch64) a=arm64 ;; *) a=amd64 ;; esac
           v=$NAUT_VERSION
-          curl -fsSL -o naut.tar.gz "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_$a.tar.gz"
-          tar xzf naut.tar.gz naut && rm naut.tar.gz
-      - run: ./naut check . && ./naut test .
+          curl -fsSL -o "$RUNNER_TEMP/naut.tar.gz" "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_$a.tar.gz"
+          tar xzf "$RUNNER_TEMP/naut.tar.gz" -C "$RUNNER_TEMP" naut
+          echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
+      - run: naut check . && naut test .
       - name: deploy
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -197,11 +200,12 @@ jobs:
           (umask 077; printf '%s\n' "$SSH_KEY" >"$RUNNER_TEMP/key")
           printf '%s\n' "$KNOWN_HOSTS" >"$RUNNER_TEMP/known_hosts"
           export NAUT_SSH_OPTS="-i $RUNNER_TEMP/key -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
-          ./naut deploy update "$TARGET"
+          naut deploy update "$TARGET"
 ```
 
-A person deploying by hand runs the same command with the same naut
-version and gets the same release. Going back is `naut deploy rollback`
+A person deploying by hand from a clean checkout of the same tag, with
+the same naut version, gets the same release: the build embeds the
+project directory, so an untracked file in it changes the controller. Going back is `naut deploy rollback`
 from either.
 
 `tools/deploy/check.sh <ssh-target>` proves all of this against a real
