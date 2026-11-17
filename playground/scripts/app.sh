@@ -45,7 +45,7 @@ files_json "$appext"
 yaml_version=2.0.0
 yaml_sha256=4bba62ccda962b720dcb0829e85cf4109c94e86653dcd39fd7500c3687ad8c60
 vsix="$(mktemp)"
-curl -fsSL -o "$vsix" "https://open-vsx.org/api/redhat/vscode-yaml/$yaml_version/file/redhat.vscode-yaml-$yaml_version.vsix"
+curl -fsSL --retry 3 -o "$vsix" "https://open-vsx.org/api/redhat/vscode-yaml/$yaml_version/file/redhat.vscode-yaml-$yaml_version.vsix"
 echo "$yaml_sha256  $vsix" | sha256sum -c --quiet
 python3 -I - "$vsix" "$out/app/yaml-extension" <<'PY'
 import sys, zipfile, os
