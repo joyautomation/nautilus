@@ -75,10 +75,10 @@
 </script>
 
 <script lang="ts">
-	import { T } from '@threlte/core';
+	import { T, useThrelte } from '@threlte/core';
 	import { RoundedBoxGeometry } from '@threlte/extras';
 	import { getContext, onMount } from 'svelte';
-	import { CatmullRomCurve3, Mesh, TubeGeometry, Vector3, type BufferGeometry } from 'three';
+	import { CatmullRomCurve3, Mesh, Plane, Raycaster, TubeGeometry, Vector2, Vector3, type BufferGeometry } from 'three';
 	import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 	import { SCENE, type SceneContext } from '@joyautomation/nautilus-hmi-3d';
 	import Led from './Led.svelte';
@@ -89,13 +89,18 @@
 	let {
 		online = false,
 		hovered = null,
-		onhover
+		onhover,
+		write
 	}: {
 		/** The driver is exchanging the process image with the local bus. */
 		online?: boolean;
 		/** The channel under the pointer, to mark its row. */
 		hovered?: string | null;
 		onhover?: (ch: Channel | null) => void;
+		/** Given, the pushbuttons press and the slider slides: the simulated
+		 *  build (sim.yaml), whose board inputs are tags. On the controller
+		 *  they are the bus's, so the page leaves this out. */
+		write?: (tag: string, value: boolean | number) => void;
 	} = $props();
 
 	// The frame's tags come from the scene this model is placed in
@@ -332,10 +337,114 @@
 	/** An Axioline analog input in its standard format reads 0..30000 counts over 0..10 V. */
 	const FULL_SCALE = 30000;
 	let slide = $derived.by(() => {
+		if (dragFrac !== null) return dragFrac;
 		const v = raw('AI_00');
 		if (typeof v !== 'number' || analogFault(v)) return null;
 		return Math.min(1, Math.max(0, v / FULL_SCALE));
 	});
+	// Pressing and sliding, on the simulated build only (`write` given). The
+	// view's OrbitControls would take a drag on the slider as an orbit, so a
+	// press is caught on the window before the canvas sees it: when it lands
+	// on a pushbutton or the slider, the board has it and the camera never
+	// does; anywhere else it goes on to the controls as before. Our own
+	// raycast, not the hover state, so a touch (no hover first) works too.
+	const { camera, renderer } = useThrelte();
+	let held = $state<string | null>(null);
+	let dragFrac = $state<number | null>(null);
+	let buttonHits = $state<(Mesh | undefined)[]>([]);
+	let sliderHit = $state<Mesh>();
+	const ray = new Raycaster();
+	const ndc = new Vector2();
+	function aim(e: PointerEvent) {
+		const r = renderer.domElement.getBoundingClientRect();
+		ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+		ray.setFromCamera(ndc, camera.current);
+	}
+	/** Where along its travel the pointer holds the knob, 0 (0 V) .. 1 (10 V). */
+	function fracAt(e: PointerEvent): number | null {
+		const m = sliderHit;
+		if (!m?.parent) return null;
+		aim(e);
+		m.updateWorldMatrix(true, false);
+		const normal = new Vector3(0, 0, 1).transformDirection(m.matrixWorld);
+		const at = new Vector3().setFromMatrixPosition(m.matrixWorld);
+		const hit = ray.ray.intersectPlane(new Plane().setFromNormalAndCoplanarPoint(normal, at), new Vector3());
+		if (!hit) return null;
+		const y = m.parent.worldToLocal(hit).y;
+		return Math.min(1, Math.max(0, (y - SLIDER.y0) / (SLIDER.y1 - SLIDER.y0)));
+	}
+	// SliderV in 0.1 V steps, at most one write per 60 ms while dragging.
+	let sent = -1;
+	let pending: number | null = null;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let settle: ReturnType<typeof setTimeout> | undefined;
+	function flush() {
+		timer = undefined;
+		if (pending === null) return;
+		write?.('SliderV', pending);
+		sent = pending;
+		pending = null;
+		timer = setTimeout(flush, 60);
+	}
+	function slideTo(frac: number) {
+		dragFrac = frac;
+		const v = Math.round(frac * 100) / 10;
+		if (v === sent && pending === null) return;
+		pending = v;
+		if (!timer) flush();
+	}
+	$effect(() => {
+		if (!write) return;
+		const canvas = renderer.domElement;
+		const down = (e: PointerEvent) => {
+			if (e.target !== canvas || e.button !== 0) return;
+			aim(e);
+			const targets = [...buttonHits, sliderHit].filter((m): m is Mesh => !!m);
+			const hit = ray.intersectObjects(targets, false)[0];
+			if (!hit) return;
+			e.stopPropagation();
+			e.preventDefault();
+			clearTimeout(settle);
+			if (hit.object === sliderHit) {
+				const f = fracAt(e);
+				if (f !== null) slideTo(f);
+			} else {
+				held = switchTag(buttonHits.indexOf(hit.object as Mesh));
+				write(held, true);
+			}
+		};
+		const move = (e: PointerEvent) => {
+			if (dragFrac === null || settle !== undefined) return;
+			const f = fracAt(e);
+			if (f !== null) slideTo(f);
+		};
+		const up = () => {
+			if (held) {
+				write(held, false);
+				held = null;
+			}
+			if (dragFrac !== null && settle === undefined) {
+				clearTimeout(timer);
+				flush();
+				// Hold the knob where it was let go until AI_00 has caught up.
+				settle = setTimeout(() => {
+					dragFrac = null;
+					settle = undefined;
+				}, 400);
+			}
+		};
+		window.addEventListener('pointerdown', down, true);
+		window.addEventListener('pointermove', move, true);
+		window.addEventListener('pointerup', up, true);
+		window.addEventListener('pointercancel', up, true);
+		return () => {
+			window.removeEventListener('pointerdown', down, true);
+			window.removeEventListener('pointermove', move, true);
+			window.removeEventListener('pointerup', up, true);
+			window.removeEventListener('pointercancel', up, true);
+		};
+	});
+	const cursor = (c: string) => write && (renderer.domElement.style.cursor = c);
 	const scaleInk: Ink[] = [
 		{ text: '10V', x: 5.6, y: 2.4, size: 2.3, align: 'center', color: '#e3e4e4', weight: 600 },
 		{ text: '0V', x: 9, y: 61.6, size: 2.3, align: 'center', color: '#e3e4e4', weight: 600 }
@@ -451,7 +560,7 @@
 	     one sits in, and its collar lights so it reads from across the room -->
 	{#each SWITCHES.ys as y, i}
 		{@const tag = switchTag(i)}
-		{@const pressed = on(tag)}
+		{@const pressed = on(tag) || held === tag}
 		<T.Mesh position={[SWITCHES.x, y, BOARD.z + 4.4]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[4.8, 4.8, 2.8, 6]} />
 			<T.MeshStandardMaterial color="#9a9ea2" roughness={0.4} metalness={0.7} />
@@ -475,7 +584,18 @@
 				<T.MeshBasicMaterial color="#ffffff" transparent opacity={0.14} depthWrite={false} toneMapped={false} />
 			</T.Mesh>
 		{/if}
-		<T.Mesh position={[SWITCHES.x + 7, y, BOARD.z + 20]} onpointerenter={() => onhover?.({ tag, text: () => (on(tag) ? 'on' : 'off') })} onpointerleave={() => onhover?.(null)}>
+		<T.Mesh
+			bind:ref={buttonHits[i]}
+			position={[SWITCHES.x + 7, y, BOARD.z + 20]}
+			onpointerenter={() => {
+				cursor('pointer');
+				onhover?.({ tag, text: () => (on(tag) ? 'on' : 'off') + (write ? ' · hold to press' : '') });
+			}}
+			onpointerleave={() => {
+				cursor('');
+				onhover?.(null);
+			}}
+		>
 			<T.PlaneGeometry args={[36, 20]} />
 			<T.MeshBasicMaterial transparent opacity={0} depthWrite={false} />
 		</T.Mesh>
@@ -500,6 +620,24 @@
 			</T.Mesh>
 		{/each}
 	</T.Group>
+	{#if write}
+		<!-- the simulated build's grip on the slider: the whole slot, knob and all -->
+		<T.Mesh
+			bind:ref={sliderHit}
+			position={[SLIDER.x, (SLIDER.y0 + SLIDER.y1) / 2, BOARD.z + 14]}
+			onpointerenter={() => {
+				cursor('ns-resize');
+				onhover?.({ tag: 'SliderV', text: () => `${typeof raw('SliderV') === 'number' ? (raw('SliderV') as number).toFixed(1) : '—'} V · drag` });
+			}}
+			onpointerleave={() => {
+				cursor('');
+				onhover?.(null);
+			}}
+		>
+			<T.PlaneGeometry args={[24, SLIDER.y1 - SLIDER.y0 + 26]} />
+			<T.MeshBasicMaterial transparent opacity={0} depthWrite={false} />
+		</T.Mesh>
+	{/if}
 
 	<!-- AXC F 2152: bus base and housing (vented down its left side); the lower-left corner of the face steps
 	     back and the supply plug sits inside the step; the sockets are underneath -->
