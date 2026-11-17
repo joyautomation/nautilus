@@ -1,0 +1,32 @@
+# plcnext-bench, simulated: the same program with no controller behind it.
+#
+# nautilus.yaml is the build that runs ON the AXC F 2152 and drives its
+# Axioline modules. This one swaps the plcnext driver for memory and the
+# generated I/O tags for tags/sim.yaml, where every input is a setpoint
+# you write in place of the board: S1..S4 are DI_00..DI_03, SliderV is the
+# slider (board.st puts it on AI_00), and AXC__Online false is an outage. The nautilus playground
+# serves this build as the example's nautilus.yaml.
+#
+#   naut run  -m sim.yaml .     dashboard + tag API on http://localhost:8080
+#   naut test -m sim.yaml .     the acceptance suite, here too
+name: plcnext-bench
+
+server:
+  addr: ":8080"
+  online-edits: true
+
+driver:
+  type: memory
+  scan-rate: 50ms
+
+tasks:
+  - program: bench.st
+    scan: 50ms
+    dt-tag: BenchDtS
+  - name: board
+    program: board.st
+    scan: 100ms
+
+tag-files:
+  - tags/sim.yaml
+  - tags/bench.yaml
