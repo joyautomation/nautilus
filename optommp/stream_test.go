@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"reflect"
 	"strings"
@@ -429,4 +430,47 @@ func TestDriverOutputNotInItsCommandedStateIsBad(t *testing.T) {
 	if q := drv.Quality()["EPIC_M1_DO07"]; q != nio.Good {
 		t.Errorf("DO07 just commanded on: %s", q)
 	}
+}
+
+// A writable Scratch Pad element follows the digital-output rule: another
+// client writing over nautilus's command makes its tag Bad until the
+// element holds the command again. A read-only element is that other
+// client's to write, and reads Good whatever it holds.
+func TestDriverScratchpadSecondWriterIsBad(t *testing.T) {
+	dev := newBenchDevice()
+	drv := startDriver(t, dev, benchManifest(t, dev, ManifestOptions{ScratchBits: 1, ScratchInts: 1, ScratchFloats: 1, ScratchFloatsIn: 1}))
+	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
+	drv.WriteOutputs(nio.Values{"EPIC_SP_B0": true, "EPIC_SP_I0": int64(42), "EPIC_SP_F0": 2.5})
+	eventually(t, "commands written", func() bool {
+		return dev.U32(addrScratchInts) == 42 && dev.U32(addrScratchFloats) == math.Float32bits(2.5) && dev.U32(addrScratchBits+4)&1 == 1
+	})
+	time.Sleep(2 * readbackSettle)
+	for _, n := range []string{"EPIC_SP_B0", "EPIC_SP_I0", "EPIC_SP_F0"} {
+		if q := drv.Quality()[n]; q != nio.Good {
+			t.Fatalf("%s holding its command: %s", n, q)
+		}
+	}
+
+	dev.PutU32(addrScratchInts, 7)                          // another client
+	dev.PutU32(addrScratchFloats, math.Float32bits(1.25))   // another client
+	dev.PutU32(addrScratchBits+4, 0)                        // another client
+	dev.PutU32(addrScratchFloats+4, math.Float32bits(99.5)) // the read-only element, its writer's to set
+	eventually(t, "second writer seen", func() bool {
+		q := drv.Quality()
+		return q["EPIC_SP_I0"] == nio.Bad && q["EPIC_SP_F0"] == nio.Bad && q["EPIC_SP_B0"] == nio.Bad
+	})
+	if v := value(t, drv, "EPIC_SP_I0"); v != int64(7) {
+		t.Errorf("EPIC_SP_I0 reads %v, want what the unit holds (7)", v)
+	}
+	if v, q := value(t, drv, "EPIC_SP_F1"), drv.Quality()["EPIC_SP_F1"]; v != 99.5 || q != nio.Good {
+		t.Errorf("read-only EPIC_SP_F1: %v %s, want 99.5 Good", v, q)
+	}
+
+	dev.PutU32(addrScratchInts, 42)
+	dev.PutU32(addrScratchFloats, math.Float32bits(2.5))
+	dev.PutU32(addrScratchBits+4, 1)
+	eventually(t, "Good again", func() bool {
+		q := drv.Quality()
+		return q["EPIC_SP_I0"] == nio.Good && q["EPIC_SP_F0"] == nio.Good && q["EPIC_SP_B0"] == nio.Good
+	})
 }
