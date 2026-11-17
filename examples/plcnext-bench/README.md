@@ -102,19 +102,30 @@ says so; `naut plcnext tags` derives `tags/plcnext.yaml` from it.
 import plcnext_devices.yaml --transport shm` generates the same modules
 and bindings from it (a test in `plcnext/` holds the two equal).
 
+## Without the controller
+
+`sim.yaml` is the same program with the `memory` driver: the inputs are
+tags you write (`DI_00`..`DI_03` are the board's pushbuttons S1..S4,
+`SliderV` is the 0–10 V slider, which `board.st` puts on `AI_00`,
+`SupplyMissing` reads `0x8020` on the analog element, and `AXC__Online` false is an
+outage). `naut run -m sim.yaml .` on a laptop, `naut test -m sim.yaml .`
+for the same suite. Nothing about the bus or its timing is simulated.
+
 ## Deploy, from nothing
 
 ```sh
+PLC=192.0.2.10   # the controller's address (this one is a documentation placeholder)
+
 # 1. BusConductor as its own project, from upstream, with this example's three edited files on top
 git clone https://github.com/PLCnext/BusConductor /tmp/bc
 mkdir -p /tmp/bcp && cp -r /tmp/bc/generic_axioline/. /tmp/bc/no_engineer/. /tmp/bcp/
 cp controller/PCWE.gds.config   /tmp/bcp/Plc/Gds/        # the two Axioline connectors
 cp controller/pcwe.plm.config   /tmp/bcp/Plc/Plm/        # library path inside this project dir
 cp controller/PCWE.opcua.config /tmp/bcp/Services/OpcUA/ # GdsPortsToProvide=All (optional: lets an OPC UA client see the GDS)
-tar czf BusConductor-project.tgz -C /tmp/bcp . && scp BusConductor-project.tgz admin@192.168.82.216:/opt/plcnext/
+tar czf BusConductor-project.tgz -C /tmp/bcp . && scp BusConductor-project.tgz admin@$PLC:/opt/plcnext/
 
 # 2. on the controller: install it, point `current` at it, restart the runtime (~1 min)
-ssh admin@192.168.82.216
+ssh admin@$PLC
 mkdir -p /opt/plcnext/projects/BusConductor
 tar xzf /opt/plcnext/BusConductor-project.tgz -C /opt/plcnext/projects/BusConductor
 cd /opt/plcnext/projects && rm current && ln -s BusConductor current
@@ -122,14 +133,14 @@ sudo /etc/init.d/plcnext restart
 
 # 3. nautilus
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags='-s -w' -o naut-arm ./cmd/naut
-scp naut-arm admin@192.168.82.216:/opt/plcnext/apps/nautilus/naut
-scp -r examples/plcnext-bench admin@192.168.82.216:/opt/plcnext/apps/nautilus/
-ssh admin@192.168.82.216 'cd /opt/plcnext/apps/nautilus && ./naut plcnext browse'   # CONFIGURED=true NUM_MODULES=4 RUN=true + both images
+scp naut-arm admin@$PLC:/opt/plcnext/apps/nautilus/naut
+scp -r examples/plcnext-bench admin@$PLC:/opt/plcnext/apps/nautilus/
+ssh admin@$PLC 'cd /opt/plcnext/apps/nautilus && ./naut plcnext browse'   # CONFIGURED=true NUM_MODULES=4 RUN=true + both images
 # 4. the shim (transport: shm) — build, deploy and recovery in rt/plcnext-io/README.md;
 #    before its restart, pin the shim to CPU 1 and naut to CPU 0 (its README's lateness table says why)
-ssh admin@192.168.82.216 'cd /opt/plcnext/apps/nautilus && echo 1 > io/nautilus_io.cpu && echo 0 > naut.cpu'
-ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/naut plcnext shm            # status 0x0f: PLC started, frames, RUN
-ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh   # dashboard + tag API on :8080
+ssh admin@$PLC 'cd /opt/plcnext/apps/nautilus && echo 1 > io/nautilus_io.cpu && echo 0 > naut.cpu'
+ssh admin@$PLC /opt/plcnext/apps/nautilus/naut plcnext shm            # status 0x0f: PLC started, frames, RUN
+ssh admin@$PLC /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh   # dashboard + tag API on :8080
 ```
 
 **Surviving a reboot.** The controller has no systemd and `admin`
@@ -139,7 +150,7 @@ starts `naut run` for this project unless it is already running (pid in
 `naut.pid`, log in `naut-run.log`, one 1 MB generation kept), so
 
 ```sh
-ssh admin@192.168.82.216 'printf "@reboot %s\n* * * * * %s\n" \
+ssh admin@$PLC 'printf "@reboot %s\n* * * * * %s\n" \
   /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh \
   /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh | crontab -'
 ```

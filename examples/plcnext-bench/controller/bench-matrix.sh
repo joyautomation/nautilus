@@ -6,8 +6,8 @@
 # best-effort, pinned, then with SCHED_FIFO — rt/plcnext-io/README.md),
 # and compare the lines; each line records the CPUs the shim and naut ran on.
 #
-#   bench-matrix.sh normal 5m
-#   SSH="ssh admin@192.168.82.216" bench-matrix.sh fifo50 5m
+#   PLC=<controller address> bench-matrix.sh normal 5m
+#   PLC=<controller address> bench-matrix.sh fifo50 5m
 #
 # Loads:  quiet  nothing added
 #         cpu    two busy loops on the controller at normal priority, one
@@ -17,7 +17,7 @@
 set -eu
 MODE=${1:?usage: bench-matrix.sh <mode label> [window, default 5m]}
 WINDOW=${2:-5m}
-SSH=${SSH:-ssh admin@192.168.82.216}
+SSH=${SSH:-ssh admin@${PLC:?set PLC to the controller address, or SSH to the whole ssh command}}
 APP=/opt/plcnext/apps/nautilus
 OUT=$APP/bench.jsonl
 secs=$(echo "$WINDOW" | awk '/m$/ {print $0*60; next} /s$/ {print $0+0; next} {print $0+0}')
