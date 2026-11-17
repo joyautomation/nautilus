@@ -138,3 +138,77 @@ func TestComputedPresetsWithNoFormAreRefused(t *testing.T) {
 		t.Errorf("the routine should say it is incomplete:\n%s", src)
 	}
 }
+
+// Most computed presets in real exports are Add-On Instruction logic: a
+// parameter in seconds × 1000 into a local timer's PRE. The AOI
+// conformance block, exported by the writer, with such a MUL put ahead of
+// its timer: the variable is a local of the FUNCTION_BLOCK, the call runs
+// on it, and the block writes back and imports again unchanged.
+func TestComputedPresetInsideAnAddOnInstruction(t *testing.T) {
+	src, libs, program := conformance(t, "aoi")
+	doc, diags, err := writer.Write(src, writer.Options{Controller: "C", Libs: libs})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writer: %v %v", err, diags)
+	}
+	const orig = "XIC(Run)XIO(RunFb)TON(t1,?,?)"
+	if !strings.Contains(string(doc), orig) {
+		t.Fatalf("the conformance AOI no longer has %q", orig)
+	}
+	doc = []byte(strings.Replace(string(doc), orig, "XIC(Run)XIO(RunFb)MUL(Mode,1000,t1.PRE)TON(t1,?,?)", 1))
+
+	check := func(p *Project, when string) {
+		t.Helper()
+		for _, nt := range p.Notes {
+			if nt.Rung >= 0 {
+				t.Errorf("%s: note: %s", when, nt)
+			}
+		}
+		fb := string(p.Files["lib/MotorStarter.ld"])
+		if !strings.Contains(strings.Join(strings.Fields(fb), " "), "t1_PRE : DINT := 5000;") {
+			t.Errorf("%s: no t1_PRE local in\n%s", when, fb)
+		}
+		if !strings.Contains(fb, "Run /RunFb { t1_PRE := Mode * 1000 } t1:TON(PT := TO_TIME(t1_PRE)) ( S FailToRun )") {
+			t.Errorf("%s: the timer does not run on the computed preset:\n%s", when, fb)
+		}
+	}
+	p := mustImport(t, doc)
+	check(p, "import")
+	fsys := fstest.MapFS{}
+	for name, raw := range p.Files {
+		fsys[name] = &fstest.MapFile{Data: raw}
+	}
+	if _, err := project.Load(fsys, ""); err != nil {
+		t.Fatalf("the imported project does not load: %v", err)
+	}
+	out, diags, err := writer.Write(string(p.Files[program+".ld"]), writer.Options{Controller: "C", Libs: libsOf(p)})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("write-back: %v %v", err, diags)
+	}
+	for _, want := range []string{"MOVE(t1_PRE,t1.PRE)", "MUL(Mode,1000,t1_PRE)TON(t1,?,?)"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("write-back lacks %q", want)
+		}
+	}
+	check(mustImport(t, out), "re-import")
+}
+
+// A REAL source (seconds as a REAL) into a timer's PRE comes across as
+// the assignment into the DINT preset variable, as MUL(secs,1000,n) into
+// any DINT does, and loads and writes back.
+func TestComputedPresetFromAReal(t *testing.T) {
+	p := mustImport(t, miniL5X([]string{"go:BOOL", "secs:REAL", "t:TIMER=5000"}, "XIC(go)MUL(secs,1000,t.PRE)TON(t,?,?);"))
+	src := string(p.Files["Main.ld"])
+	if !strings.Contains(src, "go { t_PRE := secs * 1000 } t:TON(PT := TO_TIME(t_PRE))") {
+		t.Errorf("import:\n%s", src)
+	}
+	fsys := fstest.MapFS{}
+	for name, raw := range p.Files {
+		fsys[name] = &fstest.MapFile{Data: raw}
+	}
+	if _, err := project.Load(fsys, ""); err != nil {
+		t.Fatalf("does not load: %v", err)
+	}
+	if _, diags, err := writer.Write(src, writer.Options{Controller: "Mini"}); err != nil || len(diags) > 0 {
+		t.Fatalf("write-back: %v %v", err, diags)
+	}
+}
