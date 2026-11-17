@@ -138,3 +138,19 @@ claims:
     note: >-
       The runtime in the test is a hand-made ELF header, not a real arm64
       naut, and the built controller is not run on an ARM64 machine here.
+  - id: DEP-013
+    claim: >-
+      Under a Type=notify systemd unit the controller sends READY=1 after
+      its first completed scan, a WATCHDOG=1 heartbeat at half of
+      WatchdogSec while its scans are live, none once a scan hangs (with a
+      "scans not live" status line), and STOPPING=1 on an orderly stop.
+    source: "#without-a-cluster-systemd"
+    tests:
+      - go ./cmd/naut TestNautRunSystemdNotify
+      - go ./cmd/naut TestLiveWatch
+    partial: true
+    note: >-
+      Against a stand-in notification socket, not systemd. systemd killing
+      and restarting the process on the missing heartbeat was observed by
+      hand under a user unit (2026-11-17), not in a test. The standby case
+      of READY=1 is not tested.

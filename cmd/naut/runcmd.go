@@ -220,6 +220,15 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// The write gate needs live scans, with redundancy or without (#621,
 	// #625). Set before gate.Run below.
 	gate := gateOnLiveScans(proj, el, rt, localGateLease)
+	// Under systemd (Type=notify), the watchdog heartbeat follows the same
+	// liveness verdicts the gate takes: recorded as the elector checks, not
+	// asked a second time. A verdict older than two leases (eight of the
+	// elector's ticks) counts as not live.
+	sd := newNotifier()
+	watch := &liveWatch{stale: 2 * localGateLease}
+	if sd != nil {
+		gate.SetHealth(watch.wrap(rt.Liveness))
+	}
 
 	alarms, err := startAlarms(proj, rt)
 	if err != nil {
@@ -405,6 +414,22 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		banner += " — redundancy: " + el.Status().Mode
 	}
 	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
+	// READY=1 once a scan has completed or, as a replica, once the elector
+	// has decided this one is a standby, which does not scan.
+	go systemdNotify(ctx, sd, watch, func() bool {
+		if rt.Stats().Count > 0 {
+			return true
+		}
+		if el == nil {
+			return false
+		}
+		select {
+		case <-el.Decided():
+			return !el.IsLeader()
+		default:
+			return false
+		}
+	})
 	<-ctx.Done()
 	// Give the HTTP port back first. Held through the wait below, a `naut
 	// run` started right after the stop lost the bind and ran without its

@@ -72,6 +72,43 @@ Rolling by sha rather than `latest` is deliberate: a sha pins the code,
 while a Deployment that says `:latest` redeploys to whatever was pushed most
 recently.
 
+## Without a cluster: systemd
+
+On a single industrial PC the controller is a systemd service. Make it
+`Type=notify` and give it a watchdog:
+
+```ini
+[Service]
+Type=notify
+ExecStart=/opt/nautilus/current/controller
+WorkingDirectory=/var/lib/nautilus
+WatchdogSec=10s
+Restart=on-failure
+RestartSec=2
+```
+
+- **Started means scanning.** The controller tells systemd it is ready
+  (`READY=1`) once its first scan has completed, or, as a redundant
+  replica, once it has decided it is the standby. `systemctl start` and
+  `restart` return only then, so a release that cannot start fails the
+  command instead of reporting success.
+- **A hung scan is restarted.** While the scans complete, the controller
+  sends systemd a heartbeat at half of `WatchdogSec`. It stops when a
+  scan stops finishing, judged by the same check that closes the
+  [write gate](/guides/redundancy/#redundancy), about 2 to 4 s into the
+  hang. systemd then kills the process (`SIGABRT`, so the journal holds
+  every goroutine's stack) and `Restart=` starts it again.
+  `systemctl status` shows why, in its status line: `scans not live: …`.
+- **How long to set.** At least 8 s; naut warns below that, where a
+  scan that overruns and then finishes could get a healthy controller
+  killed. Measured with 10 s: the kill came 10 s after the last
+  heartbeat and the restart 1 s after that (`RestartSec=1`).
+- A retained value that hangs the scan comes back with the restart, so a
+  controller can restart in a loop. systemd's default start limit (five
+  starts in 10 s) never catches it, because each round takes the
+  watchdog's 10 s and more. To stop after five rounds, widen the window
+  in `[Unit]`: `StartLimitIntervalSec=5min` and `StartLimitBurst=5`.
+
 ## The artifact carries its own provenance
 
 `naut build` embeds the project's git history in the binary it emits —
