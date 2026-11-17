@@ -14,6 +14,7 @@ import (
 	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -61,11 +62,31 @@ func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err err
 	}
 	// SubjectKeyIdentifier per RFC 5280 method 1 — some servers insist.
 	ski := sha1.Sum(x509.MarshalPKCS1PublicKey(&key.PublicKey))
+	// A subject of its own, and an AuthorityKeyIdentifier naming its own
+	// key. A CODESYS runtime trusting several certificates that shared one
+	// subject (and had no AKI) accepted only one of them: trusting a second
+	// nautilus client broke the first. Go leaves the AKI out of
+	// self-signed certificates, so it is added by hand.
+	aki, err := asn1.Marshal(struct {
+		KeyID []byte `asn1:"optional,tag:0"`
+	}{ski[:]})
+	if err != nil {
+		return "", "", fmt.Errorf("opcua-client: authority key id: %w", err)
+	}
+	cn := "nautilus"
+	if hostname != "" {
+		cn += "@" + hostname
+	}
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "nautilus", Organization: []string{"Joy Automation"}},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().AddDate(10, 0, 0),
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{"Joy Automation"},
+			SerialNumber: fmt.Sprintf("%032x", serial)[:16],
+		},
+		ExtraExtensions: []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 35}, Value: aki}},
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().AddDate(10, 0, 0),
 		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageContentCommitment |
 			x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},

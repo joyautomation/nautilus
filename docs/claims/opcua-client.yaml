@@ -271,3 +271,17 @@ claims:
     source: "#security"
     tests: []
     note: The test server advertises the address it is dialled on.
+
+  - id: UAC-030
+    claim: >-
+      Each generated client certificate has a subject of its own and an
+      Authority Key Identifier naming its own key, so two nautilus clients'
+      certificates can be told apart; an existing certificate is kept as it
+      is.
+    source: "#security"
+    tests:
+      - go ./opcua TestCertificatesAreDistinguishable
+      - go ./opcua TestCertificateIsKept
+    note: >-
+      Found on CODESYS Control Win V3 in the OPC UA lab (#704), where of two
+      trusted certificates that shared CN=nautilus only one was accepted.
