@@ -1,7 +1,8 @@
 # plcnext-bench, simulated: the same program with no controller behind it.
 #
 # nautilus.yaml is the build that runs ON the AXC F 2152 and drives its
-# Axioline modules. This one swaps the plcnext driver for memory and the
+# Axioline modules (in the playground, where this file is nautilus.yaml,
+# that one is controller.yaml). This one swaps the plcnext driver for memory and the
 # generated I/O tags for tags/sim.yaml, where every input is a setpoint
 # you write in place of the board: S1..S4 are DI_00..DI_03, SliderV is the
 # slider (board.st puts it on AI_00), and AXC__Online false is an outage. The nautilus playground
@@ -14,6 +15,9 @@ name: plcnext-bench
 server:
   addr: ":8080"
   online-edits: true
+  # The 3D screen of the board (hmi/, built as in README.md), its lamps lit
+  # from these tags as they are from the controller's.
+  hmi: hmi/build
 
 driver:
   type: memory
