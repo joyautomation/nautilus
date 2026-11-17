@@ -33,6 +33,7 @@ import (
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/codegen"
 	"github.com/joyautomation/nautilus/modbus/slave"
+	"github.com/joyautomation/nautilus/virtdev"
 )
 
 const modbusUsage = `naut modbus — Modbus TCP tools
@@ -610,71 +611,10 @@ func startModbusServe(m modbus.Manifest, listen string, values map[string]any, r
 }
 
 // seedBinding writes one engineering value into the slave's store through
-// the binding — the same codec the driver will read it back with.
+// the binding — the same codec the driver will read it back with, and the
+// one virtual devices use (virtdev.PutBinding).
 func seedBinding(srv *slave.Server, src modbus.Source, t modbus.TagBinding, v any) error {
-	u := srv.Unit(src.UnitID)
-	switch t.Table {
-	case modbus.TableCoil:
-		u.SetCoil(t.Address, truthy(v))
-		return nil
-	case modbus.TableDiscrete:
-		u.SetDiscrete(t.Address, truthy(v))
-		return nil
-	}
-	format := t.Format
-	if format == "" {
-		format = "uint16"
-	}
-	f, err := modbus.ParseFormat(format)
-	if err != nil {
-		return err
-	}
-	if f.Kind == "bit" {
-		// Encode(true) carries exactly the mask for this bit in this byte
-		// order; merge it so the register's other bits survive.
-		mask, err := modbus.Encode(f, true, src.WordOrder, src.ByteOrder, 0, 0)
-		if err != nil {
-			return err
-		}
-		cur := u.Holding(t.Address)
-		if t.Table == modbus.TableInput {
-			cur = u.Input(t.Address)
-		}
-		if truthy(v) {
-			cur |= mask[0]
-		} else {
-			cur &^= mask[0]
-		}
-		if t.Table == modbus.TableInput {
-			u.SetInput(t.Address, cur)
-		} else {
-			u.SetHolding(t.Address, cur)
-		}
-		return nil
-	}
-	regs, err := modbus.Encode(f, v, src.WordOrder, src.ByteOrder, t.Scale, t.Offset)
-	if err != nil {
-		return err
-	}
-	for i, r := range regs {
-		if t.Table == modbus.TableInput {
-			u.SetInput(t.Address+uint16(i), r)
-		} else {
-			u.SetHolding(t.Address+uint16(i), r)
-		}
-	}
-	return nil
-}
-
-// truthy is the JSON-value face of a bool seed: true, or any nonzero number.
-func truthy(v any) bool {
-	switch x := v.(type) {
-	case bool:
-		return x
-	case float64:
-		return x != 0
-	}
-	return false
+	return virtdev.PutBinding(srv.Unit(src.UnitID), t, src.WordOrder, src.ByteOrder, v)
 }
 
 // browseAddr is the dial address for --host/--port.

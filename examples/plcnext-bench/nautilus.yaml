@@ -13,8 +13,9 @@
 #   naut test  .                       the acceptance suite, virtual time
 #   CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o naut-arm ./cmd/naut
 #   ./naut-arm build -o controller .   the project embedded on the ARM binary
-#   scp controller admin@192.168.82.216:/opt/plcnext/apps/nautilus/
-#   ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/controller
+#   PLC=<the controller's address>
+#   scp controller admin@$PLC:/opt/plcnext/apps/nautilus/
+#   ssh admin@$PLC /opt/plcnext/apps/nautilus/controller
 #                                      dashboard + tag API on the controller's :8080
 #
 # README.md has what the controller needs first (the BusConductor files
@@ -24,6 +25,11 @@ name: plcnext-bench
 server:
   addr: ":8080"
   online-edits: true
+  # The 3D screen, once built (cd hmi && npm install && npm run build): the
+  # controller and its Smart Elements with their channel lamps lit from the
+  # tags. Build it before `naut build`, which embeds it. Tolerates being
+  # absent. Serves it at "/"; the built-in dashboard moves to "/_nautilus/".
+  hmi: hmi/build
 
 driver:
   type: plcnext
@@ -36,12 +42,6 @@ tasks:
     dt-tag: BenchDtS
 
 tag-files:
-  - tags/plcnext.yaml
+  - tags/plcnext.yaml   # the I/O, generated from plcnext_manifest.yaml
+  - tags/bench.yaml     # the program's own: heartbeat, outage hold
 
-tags:
-  - { name: BenchDtS,     role: state, init: 0.0, unit: "s", desc: "Scan interval handed to bench.st" }
-  - { name: BlinkPeriodS, role: setpoint, init: 1.0, unit: "s", desc: "Heartbeat period on the DO16's output 16" }
-  - { name: Blink,        role: state, init: false, desc: "Heartbeat state" }
-  - { name: HoldAfterOutage, role: setpoint, init: false, desc: "Hold the mirrored outputs off after an outage until BenchAck (off: they come back on their own)" }
-  - { name: BenchAck,     role: setpoint, init: false, desc: "Operator acknowledge: release the outputs after an outage (momentary)" }
-  - { name: BenchHeld,    role: state, init: false, desc: "Outputs held off after an outage or watchdog trip until BenchAck" }

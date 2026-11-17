@@ -331,10 +331,10 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 		if dv == nil {
 			dv = status(ua.StatusBadNodeIDUnknown)
 		}
-		if dv.Status == ua.StatusBadAttributeIDInvalid && n.NodeID.Namespace() != ns.id {
+		if dv.Status == ua.StatusBadAttributeIDInvalid && !ns.owns(n.NodeID) {
 			dv = accessAttribute(srv, n.NodeID, n.AttributeID, dv)
 		}
-		if n.AttributeID == ua.AttributeIDUserAccessLevel && n.NodeID.Namespace() == ns.id && dv.Status == ua.StatusGood {
+		if n.AttributeID == ua.AttributeIDUserAccessLevel && ns.owns(n.NodeID) && dv.Status == ua.StatusGood {
 			if writer == nil {
 				// As the Write service judges it, once per request: a
 				// certificate since untrusted or expired reads CurrentRead.

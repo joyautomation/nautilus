@@ -185,7 +185,7 @@ func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureC
 			RevisedQueueSize:        1,
 			FilterResult:            ua.NewExtensionObject(nil),
 		}
-		if item.ItemToMonitor.NodeID.Namespace() != ns.id && item.MonitoringMode == ua.MonitoringModeReporting {
+		if !ns.owns(item.ItemToMonitor.NodeID) && item.MonitoringMode == ua.MonitoringModeReporting {
 			foreign = append(foreign, owed{booked, item})
 		}
 	}
@@ -265,7 +265,7 @@ func monitorable(srv *opcserver.Server, ns *namespace, item *ua.MonitoredItemCre
 	}
 	nid, attr, rng := item.ItemToMonitor.NodeID, item.ItemToMonitor.AttributeID, item.ItemToMonitor.IndexRange
 	var dv *ua.DataValue
-	if nid.Namespace() == ns.id {
+	if ns.owns(nid) {
 		dv = ns.Attribute(nid, attr)
 	} else if space, err := srv.Namespace(int(nid.Namespace())); err == nil && srv.Node(nid) != nil {
 		dv = space.Attribute(nid, attr)
@@ -421,7 +421,7 @@ func modifyMonitoredItems(srv *opcserver.Server, ns *namespace, r ua.Request) (u
 		old := item.Req
 		item.Req = &ua.MonitoredItemCreateRequest{ItemToMonitor: old.ItemToMonitor, MonitoringMode: old.MonitoringMode, RequestedParameters: &params}
 		if params.ClientHandle != old.RequestedParameters.ClientHandle {
-			if old.ItemToMonitor.NodeID.Namespace() != ns.id {
+			if !ns.owns(old.ItemToMonitor.NodeID) {
 				if item.Mode == ua.MonitoringModeReporting {
 					foreign = append(foreign, owed{item, item.Req})
 				}
@@ -521,7 +521,7 @@ func resendValues(srv *opcserver.Server, ns *namespace, sub *opcserver.Subscript
 		if !watching(item, item.Req) || item.Mode != ua.MonitoringModeReporting {
 			continue
 		}
-		if item.Req.ItemToMonitor.NodeID.Namespace() != ns.id {
+		if !ns.owns(item.Req.ItemToMonitor.NodeID) {
 			foreign = append(foreign, owed{item, item.Req})
 			continue
 		}

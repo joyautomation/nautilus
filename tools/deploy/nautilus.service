@@ -1,0 +1,42 @@
+# nautilus controller, installed by tools/deploy/naut-release.sh.
+#
+# The binary is whatever /opt/nautilus/current points at (a `naut build`
+# controller); update and rollback move that link and restart this unit.
+# Retained values live in /var/lib/nautilus, outside every release, so
+# both keep them.
+#
+# naut-release.sh writes Type=simple and drops WatchdogSec= when the
+# release predates systemd notification (it never sends READY=1).
+
+[Unit]
+Description=nautilus controller
+Wants=network-online.target
+After=network-online.target
+# A retained value that hangs the scan returns with every restart; stop
+# after five rounds instead of looping. Each round takes the watchdog's
+# 10 s and more, so systemd's default window (10 s) would never trip.
+StartLimitIntervalSec=5min
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/opt/nautilus/current/controller
+WorkingDirectory=/var/lib/nautilus
+StateDirectory=nautilus
+StateDirectoryMode=0750
+# NAUTILUS_ADDR, NAUTILUS_TOKEN, NAUTILUS_HISTORIAN_URL, one per line.
+EnvironmentFile=-/etc/nautilus/env
+DynamicUser=yes
+# SCHED_FIFO for the manifest's priority:, and ports under 1024 (a
+# Modbus server on 502).
+AmbientCapabilities=CAP_SYS_NICE CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_SYS_NICE CAP_NET_BIND_SERVICE
+WatchdogSec=10s
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=60
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

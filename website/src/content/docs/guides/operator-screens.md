@@ -47,7 +47,8 @@ The same document renders in a SvelteKit HMI through the
   draws it under the pipes (a wet well with pumps inside it).
 - **`pipes`**: a polyline of `points`, or anchored at either end to an
   equipment's named port (`from`, `to`); `routing: "orthogonal"` draws
-  right angles. Bind `flowing` (and `rate`) to animate the flow.
+  right angles, and `routing: "auto"` routes the line for you. Bind
+  `flowing` (and `rate`) to animate the flow.
 - **`labels`**: static text, or with `bind` a live readout. naut's own
   pages draw a readout with a trend of its last few minutes after the
   number (`<Mimic trends>` in an app); `"trend": false` leaves it off,
@@ -109,6 +110,26 @@ Anchor an end to a piece of equipment instead with `from` or `to`,
 equipment wherever it moves, and `points` holds only the bends in between
 (it may be empty: `[]`). `routing: "orthogonal"` turns each pair of points
 into a right-angled L; without it the segments are straight.
+
+With `routing: "auto"` the screen routes the pipe itself: give it its two
+ends and no points, and it draws the line square, clear of every piece of
+equipment and every label, with as few bends and crossings as it can, and
+never along another pipe. An end can also be another pipe, which it tees
+into wherever is best, so a drop runs to its header without you working
+out where:
+
+```json
+{ "id": "AIR_HDR", "routing": "auto",
+  "from": { "equip": "AIR_IN", "port": "right" }, "to": { "equip": "AIR_END", "port": "left" } },
+{ "id": "F1_AIR", "routing": "auto",
+  "from": { "equip": "XV104", "port": "top" }, "to": { "pipe": "AIR_HDR" } }
+```
+
+Points on a routed pipe are waypoints it passes through, to steer a line.
+Once routed, it is drawn like any other pipe: a drop routed to its header
+ends on the header's line and gets the tee's dot, and a crossing is broken
+as below. A routed pipe the screen can't get through draws straight
+across, and `naut check` says which.
 
 - **`flowing`** (a BOOL, or a number above zero) animates the flow in the
   direction the points run, so draw a pipe from where the water comes from.

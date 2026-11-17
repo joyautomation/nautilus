@@ -3,7 +3,7 @@
 (async () => {
 	await document.fonts.ready;
 	await new Promise((r) => setTimeout(r, SETTLE_MS));
-	const out = { blank: false, pipes: [], crossed: [], outside: [], mimics: [], drawings: [], fold: null, sideways: 0, width: DEVICE_WIDTH };
+	const out = { blank: false, pipes: [], unrouted: [], crossed: [], outside: [], mimics: [], drawings: [], fold: null, sideways: 0, width: DEVICE_WIDTH };
 
 	// Blank: nothing a person would see — no text, no drawing, no control.
 	const shows = (el) => {
@@ -22,6 +22,13 @@
 	for (const el of document.querySelectorAll('[data-broken-pipes]')) {
 		try {
 			out.pipes.push(...JSON.parse(el.dataset.brokenPipes));
+		} catch {}
+	}
+
+	// Routed pipes (routing "auto") with no clear way round the equipment.
+	for (const el of document.querySelectorAll('[data-unrouted]')) {
+		try {
+			out.unrouted.push(...JSON.parse(el.dataset.unrouted));
 		} catch {}
 	}
 

@@ -1,0 +1,51 @@
+profile: pepperl-fuchs-ice3
+title: Pepperl+Fuchs ICE3 8-port IO-Link master, OPC UA server
+maker: Pepperl+Fuchs
+model: ICE3-8IOL
+version: 1
+docs:
+  - id: pf
+    title: "IO-Link master PROFINET IO (PNIO) and Modbus/TCP User Guide, ICE3-8IOL family, ch. 12 OPC UA Supporting Information (2025-06)"
+    code: TDOCT-6418D
+    url: https://files.pepperl-fuchs.com/webcat/navi/productInfo/doct/tdoct6418d_eng.pdf
+  - id: measured
+    title: "The node ids a deployed controller's program reads from P+F masters: ns=1;s=IOLM/Port N/SIO Input as BOOL, port 4840"
+protocol: opcua
+opcua:
+  port: 4840           # pf §12.1: "the IO-Link master uses the standard port of 4840"
+  namespaces:
+    - urn:virtual:pepperl-fuchs:iolm    # index 1 per pf §12.2; the URI itself is not published
+points:
+  # The master (pf §12.2, p. 170)
+  - { name: Model,        type: STRING, init: "ICE3-8IOL-K45S-RJ45", node-id: "ns=1;s=IOLM/Model",        path: "IOLM/Model",        desc: "IO-Link master type name", doc: "pf §12.2 p. 170" }
+  - { name: Serial,       type: STRING, node-id: "ns=1;s=IOLM/Serial",       path: "IOLM/Serial",       desc: "IO-Link master serial number", doc: "pf §12.2 p. 170" }
+  - { name: Manufacturer, type: STRING, init: "Pepperl+Fuchs", node-id: "ns=1;s=IOLM/Manufacturer", path: "IOLM/Manufacturer", desc: "IO-Link master manufacturer", doc: "pf §12.2 p. 170" }
+  - { name: Version,      type: STRING, node-id: "ns=1;s=IOLM/Version",      path: "IOLM/Version",      desc: "IO-Link master firmware version", doc: "pf §12.2 p. 170" }
+  - { name: Hostname,     type: STRING, node-id: "ns=1;s=IOLM/Hostname",     path: "IOLM/Hostname",     desc: "IO-Link master hostname", doc: "pf §12.2 p. 170" }
+  - { name: Uptime,       type: UDINT,  node-id: "ns=1;s=IOLM/Uptime",       path: "IOLM/Uptime",       desc: "Operational time (s)", unit: s, doc: "pf §12.2 p. 170" }
+  # Each port (pf §12.2, pp. 170-171)
+  - { name: "Port{n}_Name",      type: STRING, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Name",       path: "IOLM/Port {n}/Name",       desc: "Port {n}: user configured port name", doc: "pf §12.2 p. 170" }
+  - { name: "Port{n}_AuxInput",  type: BOOL,   repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Aux Input",  path: "IOLM/Port {n}/Aux Input",  desc: "Port {n}: state of AUX input (pin 2)", doc: "pf §12.2 p. 170" }
+  - { name: "Port{n}_Uptime",    type: UDINT,  repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Uptime",     path: "IOLM/Port {n}/Uptime",     desc: "Port {n}: operational time (s)", unit: s, doc: "pf §12.2 p. 170" }
+  - { name: "Port{n}_SioInput",  type: BOOL,   repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/SIO Input",  path: "IOLM/Port {n}/SIO Input",  desc: "Port {n}: SIO input state", doc: "pf §12.2 p. 170" }
+  - { name: "Port{n}_SioOutput", type: BOOL,   repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/SIO Output", path: "IOLM/Port {n}/SIO Output", desc: "Port {n}: SIO output state", doc: "pf §12.2 p. 170" }
+  - { name: "Port{n}_Mode",      type: STRING, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Mode",       path: "IOLM/Port {n}/Mode",       desc: "Port {n}: port I/O mode", doc: "pf §12.2 p. 170" }
+  - { name: "Port{n}_Status",    type: STRING, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Status",     path: "IOLM/Port {n}/Status",     desc: "Port {n}: port connection status", doc: "pf §12.2 p. 170" }
+  # The device attached to each port (pf §12.2, pp. 170-171)
+  - { name: "Port{n}_VendorID",    type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/Vendor ID",     path: "IOLM/Port {n}/Attached Device/Vendor ID",     desc: "Port {n}: attached device vendor ID", doc: "pf §12.2 p. 171" }
+  - { name: "Port{n}_DeviceID",    type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/Device ID",     path: "IOLM/Port {n}/Attached Device/Device ID",     desc: "Port {n}: attached device ID", doc: "pf §12.2 p. 171" }
+  - { name: "Port{n}_PdiBytecount", type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDI Bytecount", path: "IOLM/Port {n}/Attached Device/PDI Bytecount", desc: "Port {n}: PDI size in bytes", doc: "pf §12.2 p. 171" }
+  - { name: "Port{n}_PdoBytecount", type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDO Bytecount", path: "IOLM/Port {n}/Attached Device/PDO Bytecount", desc: "Port {n}: PDO size in bytes", doc: "pf §12.2 p. 171" }
+  - { name: "Port{n}_PdiU32",      type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDI Data Unsigned32", path: "IOLM/Port {n}/Attached Device/PDI Data Unsigned32", desc: "Port {n}: PDI data as an unsigned 32-bit integer", doc: "pf §12.2 p. 171" }
+  - { name: "Port{n}_PdiValid",    type: BOOL,  repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDI Valid",     path: "IOLM/Port {n}/Attached Device/PDI Valid",     desc: "Port {n}: PDI data valid", doc: "pf §12.2 p. 172" }
+  - { name: "Port{n}_PdoU32",      type: UDINT, repeat: 8, writable: true, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDO Data Unsigned32", path: "IOLM/Port {n}/Attached Device/PDO Data Unsigned32", desc: "Port {n}: PDO data as an unsigned 32-bit integer", doc: "pf §12.2 p. 172" }
+  - { name: "Port{n}_PdoValid",    type: BOOL,  repeat: 8, writable: true, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDO Valid",     path: "IOLM/Port {n}/Attached Device/PDO Valid",     desc: "Port {n}: PDO data valid flag sent to the device", doc: "pf §12.2 p. 172" }
+notes: |
+  Node ids and data types are the manual's table (pf §12.2). The Objects on
+  the way (IOLM, IOLM/Port n, IOLM/Port n/Attached Device) are not listed
+  there; they are served as ns=1;s=<path>, the scheme the table's ids follow.
+  Not served yet: PDI/PDO Data Byte String and Byte Array (no plant type for
+  them), the Event Queue nodes, IODD-parsed PDI/PDO Fields, and the ISDU
+  methods. A real ICE3 writes PDO only on ports enabled for it (pf §12.1);
+  here every PDO node is writable. Aux Input is R/W in the table with a
+  condition; here it is the process model's to set.
