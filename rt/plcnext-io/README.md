@@ -155,7 +155,7 @@ else.
 
 A CLI release attaches the build as
 `nautilus-plcnext-io_<version>_linux_armv7.tar.gz` (with a `.sha256`
-beside it): `nautilus_io`, the two ACF files and this README, under one
+beside it): `nautilus_io`, `naut-launch`, the two ACF files and this README, under one
 directory. Unpack it and run the copy steps below from inside that
 directory, with the `dist/plcnext-io/` and `rt/plcnext-io/` prefixes
 dropped. To build it instead
@@ -213,6 +213,26 @@ ESM (97–98); the FIFO table above is why not 50. A `nautilus_io.prio`
 file beside the binary holding one number (1–96) asks for another; the
 page reports what was asked (`NIO_OFF_PRIO`) and whether it was granted
 (`NIO_ST_FIFO`).
+
+### naut-launch: priority that survives an update
+
+naut changes with every release, so a capability on `naut` itself has
+to be set again by root after each update. `naut-launch` (`naut_launch.c`,
+built and shipped beside `nautilus_io`) carries it instead, set once:
+
+```sh
+ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut-launch; getcap /opt/plcnext/apps/nautilus/naut-launch"; sudo passwd -l root'
+```
+
+It raises `CAP_SYS_NICE` into its inheritable and ambient sets and execs
+`current/controller` beside it, with its own arguments and pid, so the
+release behind `current` gains that one capability and nothing else.
+It starts nothing else: the caller must own `naut-launch`, and its
+directory, the resolved controller and the controller's directory must
+belong to that user (or root) and not be writable by group or others;
+otherwise it exits 126. Without the capability it says so on stderr and
+starts the controller anyway, at normal priority. The shim still needs
+its own `setcap`, but it changes rarely.
 
 A `nautilus_io.cpu` file beside the binary pins the cycle to one CPU;
 that needs no capability. Use CPU 1, with naut on CPU 0 (`naut.cpu`
