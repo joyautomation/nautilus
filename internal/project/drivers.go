@@ -913,8 +913,9 @@ func profinetDeviceStatus(h profinet.DeviceHealth) server.DriverStatus {
 	default:
 		s.State, s.Message = "waiting", "Waiting for a PLC to connect"
 	}
-	if h.LastEvent != "" && s.LastError == "" {
-		s.LastError = h.LastEvent
+	// Only refusals and aborts are errors; "AR from …" is news, not one.
+	if ev := h.LastEvent; s.LastError == "" && (strings.Contains(ev, "refused") || strings.Contains(ev, "stopped") || strings.Contains(ev, "aborted") || strings.Contains(ev, "fragmented")) {
+		s.LastError = ev
 	}
 	s.Metrics = []server.DriverMetric{
 		{Label: "tags", Value: float64(h.Tags)},

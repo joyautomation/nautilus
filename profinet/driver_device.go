@@ -33,9 +33,11 @@ import (
 // The write gate (plain: the live-scan lease, or leadership) decides
 // whether the PLC may believe our data: closed, every input subslot to
 // the PLC goes IOPS Bad. Reopened, the driver forgets what it sent and
-// asks for every output; the data turns valid again only when all of
-// them have been pushed. The same holds from start-up: nothing is valid
-// before the program's first full push.
+// asks for every output; the data turns valid again with the push that
+// answers. The same holds from start-up: nothing is valid before the
+// program's first push. (The runtime hands a driver every output on each
+// push, and Load refuses a manifest binding to the PLC that the project
+// does not declare, so one push is the whole image.)
 type DeviceDriver struct {
 	m       DeviceManifest
 	log     *slog.Logger
@@ -52,7 +54,7 @@ type DeviceDriver struct {
 	img       map[device.Addr][]byte // nautilus outputs, per subslot
 	last      map[string]any
 	q         map[string]nio.Quality
-	pushed    map[string]bool
+	pushed    bool // a push since the gate last (re)opened
 	valid     bool
 	lastErr   string
 	state     string
@@ -116,7 +118,7 @@ func NewDevice(m DeviceManifest, opts ...DeviceOption) (*DeviceDriver, error) {
 		m: m, log: slog.New(slog.DiscardHandler), open: OpenInterface,
 		outBind: map[string]Binding{}, retry: [2]time.Duration{time.Second, 30 * time.Second},
 		img: map[device.Addr][]byte{}, last: map[string]any{}, q: map[string]nio.Quality{},
-		pushed: map[string]bool{}, state: "starting", since: time.Now(),
+		state: "starting", since: time.Now(),
 	}
 	for _, o := range opts {
 		o(d)
@@ -148,6 +150,14 @@ func containsBinding(bs []Binding, name string) bool {
 		}
 	}
 	return false
+}
+
+// Apply sets options after New and before Start (a test that loads a
+// project and points its driver at an in-memory network).
+func (d *DeviceDriver) Apply(opts ...DeviceOption) {
+	for _, o := range opts {
+		o(d)
+	}
 }
 
 // OpenInterface is the real opener: AF_PACKET on iface (DCP, RT, RTA and
@@ -228,7 +238,6 @@ func (d *DeviceDriver) run(ctx context.Context) {
 			wait = min(wait*2, d.retry[1])
 			continue
 		}
-		wait = d.retry[0]
 		dev, err := device.New(device.Config{
 			Identity: d.m.Identity(), Subslots: d.m.Subslots(), Port: port, RPC: rpc,
 			InterfaceAddrs: addrs, MinWatchdog: d.minWD, ControllerCMPort: d.cmPort, Log: d.log,
@@ -248,11 +257,21 @@ func (d *DeviceDriver) run(ctx context.Context) {
 		d.lastErr = ""
 		d.mu.Unlock()
 		d.setState("running", "")
+		start := time.Now()
 		err = dev.Run(ctx)
+		if time.Since(start) > d.retry[1] {
+			wait = d.retry[0] // it ran a good while: start the backoff over
+		}
 		if ctx.Err() != nil {
 			return
 		}
 		d.setState("error", fmt.Sprintf("device stopped: %v", err))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, d.retry[1])
 	}
 }
 
@@ -350,16 +369,19 @@ func (d *DeviceDriver) WriteOutputs(v nio.Values) error {
 			continue
 		}
 		touched[b.addr()] = true
-		if open {
-			d.pushed[name] = true
-		}
 	}
 	if d.dev != nil {
 		for a := range touched {
 			d.dev.SetInput(a, d.img[a])
 		}
 	}
-	d.updateValid(open)
+	// The runtime hands over every output on each push, so one push with
+	// the gate open is the program's whole image. A value that did not
+	// fit leaves its bytes as they were; the push still counts.
+	if open && d.gateOpenLocked() {
+		d.pushed = true
+	}
+	d.updateValid()
 	if err := errors.Join(errs...); err != nil {
 		d.encodeErr = err.Error()
 		return err
@@ -367,10 +389,15 @@ func (d *DeviceDriver) WriteOutputs(v nio.Values) error {
 	return nil
 }
 
+// gateOpenLocked reports the gate as the last look found it. Checked
+// under d.mu, so a close seen by a look between WriteOutputs' own look
+// and taking the lock is not undone.
+func (d *DeviceDriver) gateOpenLocked() bool { return !d.gateShut.Load() }
+
 // updateValid sets the data the PLC reads valid only with the gate open
-// and every output pushed since it (re)opened (d.mu held).
-func (d *DeviceDriver) updateValid(open bool) {
-	valid := open && len(d.pushed) == len(d.outBind)
+// and a push since it (re)opened (d.mu held).
+func (d *DeviceDriver) updateValid() {
+	valid := d.pushed && d.gateOpenLocked()
 	if valid != d.valid {
 		d.valid = valid
 		if d.dev != nil {
@@ -406,8 +433,8 @@ func (d *DeviceDriver) gateOpen() bool {
 		d.mu.Lock()
 		if !open {
 			d.gateShut.Store(true)
-			clear(d.pushed)
-			d.updateValid(false)
+			d.pushed = false
+			d.updateValid()
 			d.log.Info("profinet-device: write gate closed; the PLC sees our data as invalid")
 		} else {
 			d.gateShut.Store(false)

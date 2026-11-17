@@ -904,6 +904,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	// local I/O keeps the loud fault. Per tag, by its driver — comms.go.
 	simulateDrivers(opts.Tags, opts.Driver)
 	markComms(opts.Tags, opts.Driver)
+	if err := checkDriverOutputs(opts.Tags, opts.Driver); err != nil {
+		return nil, err
+	}
 	if err := checkNetworkSections(m); err != nil {
 		return nil, err
 	}

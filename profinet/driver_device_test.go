@@ -170,14 +170,8 @@ func TestDeviceDriverEndToEnd(t *testing.T) {
 		_, iops, _, ok := r.ctrl.LastInput(sub11)
 		return ok && iops == wire.IOxSBad
 	})
-	if err := r.drv.WriteOutputs(nio.Values{"Level": 1.5, "Running": true}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(30 * time.Millisecond)
-	if _, iops, _, _ := r.ctrl.LastInput(sub11); iops != wire.IOxSBad {
-		t.Fatal("valid after a partial push")
-	}
-	if err := r.drv.WriteOutputs(nio.Values{"Count": int64(7)}); err != nil {
+	// The runtime pushes every output at once; that push makes it valid.
+	if err := r.drv.WriteOutputs(nio.Values{"Level": 1.5, "Running": true, "Count": int64(7)}); err != nil {
 		t.Fatal(err)
 	}
 	want := []byte{0x3F, 0xC0, 0, 0, 0x01, 0x07}

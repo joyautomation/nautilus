@@ -601,3 +601,41 @@ func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) 
 func simulateDrivers([]runtime.TagDef, nio.Driver) {}
 
 func platformNotices(Manifest) []string { return nil }
+
+// checkDriverOutputs refuses a profinet-device whose manifest binds data
+// to the PLC under a tag the project does not declare as an output.
+// Nothing would ever write it, and once the program's first push makes
+// the device's data valid, the PLC would read its zero bytes as a good
+// value. Other drivers bind catalogs freely; this one's bindings ARE the
+// PLC's input image.
+func checkDriverOutputs(defs []runtime.TagDef, d nio.Driver) error {
+	declared := map[string]bool{}
+	for _, t := range defs {
+		if t.Role == runtime.RoleOutput {
+			declared[t.Name] = true
+		}
+	}
+	var check func(nio.Driver) error
+	check = func(d nio.Driver) error {
+		switch drv := d.(type) {
+		case *nio.Multi:
+			for _, c := range drv.Children() {
+				if err := check(c.Driver); err != nil {
+					return err
+				}
+			}
+		case *profinet.DeviceDriver:
+			var missing []string
+			for _, n := range drv.OutputNames() {
+				if !declared[n] {
+					missing = append(missing, n)
+				}
+			}
+			if len(missing) > 0 {
+				return fmt.Errorf("driver profinet-device: %s bound to the PLC but not declared as output tags; the PLC would read them as valid zeros (declare them, e.g. with `naut profinet tags`)", strings.Join(missing, ", "))
+			}
+		}
+		return nil
+	}
+	return check(d)
+}

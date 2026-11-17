@@ -1,11 +1,20 @@
 package project
 
 import (
+	"bytes"
+	"context"
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/joyautomation/nautilus/profinet"
+	"github.com/joyautomation/nautilus/profinet/device"
+	"github.com/joyautomation/nautilus/profinet/pntest"
+	"github.com/joyautomation/nautilus/profinet/transport"
+	"github.com/joyautomation/nautilus/profinet/wire"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -83,4 +92,132 @@ func TestProfinetDeviceManifestErrors(t *testing.T) {
 	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "does not fit") {
 		t.Fatalf("got %v", err)
 	}
+}
+
+// A manifest binding data to the PLC under a tag the project does not
+// declare is refused: nothing would write it, and the PLC would read its
+// zeros as valid once the program's first push validates the data.
+func TestProfinetRefusesUndeclaredOutput(t *testing.T) {
+	fs := profinetProject("")
+	y := strings.Replace(profinetDeviceYAML, "inputs: 4", "inputs: 5", 1) + "  - {name: Extra, slot: 1, subslot: 1, dir: input, offset: 4, format: uint8}\n"
+	fs["profinet_device.yaml"] = &fstest.MapFile{Data: []byte(y)}
+	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "Extra") || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// The validity rule under the real runtime: a project with two tasks
+// loads, its driver serves an in-process PLC, real scans push the
+// outputs, and the data the PLC reads turns valid with the first push,
+// follows the program, goes invalid when the write gate closes and valid
+// again with the push that answers the reopen.
+func TestProfinetDeviceUnderTheRuntime(t *testing.T) {
+	files := profinetProject("")
+	files["nautilus.yaml"] = &fstest.MapFile{Data: []byte(`
+name: pn
+tasks:
+  - program: program.st
+    scan: 10ms
+  - program: count.st
+    scan: 15ms
+tags:
+  - { name: Bin1_Level, role: output, type: REAL }
+  - { name: Bin1_Count, role: output, type: USINT }
+  - { name: Bin1_Fill, role: input, type: BOOL }
+  - { name: profinet_device__Online, role: input, type: BOOL }
+driver:
+  type: profinet-device
+  manifest: profinet_device.yaml
+`)}
+	files["count.st"] = &fstest.MapFile{Data: []byte(`PROGRAM Count
+VAR_EXTERNAL Bin1_Count : USINT; END_VAR
+IF Bin1_Count < 200 THEN Bin1_Count := Bin1_Count + 1; END_IF;
+END_PROGRAM`)}
+	files["profinet_device.yaml"] = &fstest.MapFile{Data: []byte(strings.Replace(profinetDeviceYAML, "inputs: 4", "inputs: 5", 1) +
+		"  - {name: Bin1_Count, slot: 1, subslot: 1, dir: input, offset: 4, format: uint8}\n")}
+	p, err := Load(files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv := p.Runtime.Driver.(*profinet.DeviceDriver)
+
+	hub := transport.NewHub()
+	rpc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: pntest.Loopback})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devMAC := net.HardwareAddr{2, 0, 0, 0, 0xDE, 1}
+	plc, err := pntest.NewController(hub, net.HardwareAddr{2, 0, 0, 0, 0xC0, 1}, devMAC, rpc.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plc.Close()
+	var gate atomic.Bool
+	gate.Store(true)
+	drv.SetWriteGate(gate.Load)
+	drv.Apply(
+		profinet.WithDeviceOpener(func(string) (transport.Port, net.PacketConn, func() []net.IP, error) {
+			return hub.Port(devMAC, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr}}),
+				rpc, func() []net.IP { return []net.IP{pntest.Loopback} }, nil
+		}),
+		profinet.WithDeviceControllerPort(plc.CMPort()))
+
+	rt, err := runtime.New(p.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	drv.Start(ctx)
+	defer drv.Stop()
+	go rt.Run(ctx)
+
+	wait := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s (%+v)", what, drv.Health())
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	wait("device up", func() bool { return drv.Health().State == "running" })
+	m, _ := profinet.ParseDeviceManifest(files["profinet_device.yaml"].Data)
+	if st, _, err := plc.Connect(m.Subslots(), false); err != nil || !st.IsOK() {
+		t.Fatalf("connect %v %v", st, err)
+	}
+	if err := plc.PrmEnd(); err != nil {
+		t.Fatal(err)
+	}
+	sub := device.Addr{Slot: 1, Subslot: 1}
+	plc.StartOutputs(map[device.Addr][]byte{sub: {0x01}}, wire.DataStatusRunNormal) // Fill = TRUE
+
+	// Valid with real pushes, following the program: Level climbs while
+	// online and filling, and the second task's counter arrives too.
+	var first []byte
+	wait("valid data that follows the program", func() bool {
+		b, iops, _, ok := plc.LastInput(sub)
+		if !ok || iops != wire.IOxSGood || b[4] == 0 {
+			return false
+		}
+		if first == nil {
+			first = b
+			return false
+		}
+		return !bytes.Equal(b[:4], first[:4])
+	})
+
+	// The gate closes: invalid without any help from the runtime.
+	gate.Store(false)
+	wait("invalid with the gate closed", func() bool {
+		_, iops, _, _ := plc.LastInput(sub)
+		return iops == wire.IOxSBad
+	})
+	// Reopened: the runtime's answering push makes it valid again.
+	gate.Store(true)
+	wait("valid after the reopen", func() bool {
+		_, iops, _, _ := plc.LastInput(sub)
+		return iops == wire.IOxSGood
+	})
 }
