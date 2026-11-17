@@ -11,6 +11,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"debug/elf"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
@@ -595,12 +596,24 @@ func runBuild(args []string) int {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	out := fs.String("o", "", "output binary name (default: the manifest's name)")
 	manifest := fs.String("m", "", manifestFlagUsage)
+	runner := fs.String("runtime", "", "the naut binary the controller is built on (default: this one); a release's linux_arm64 naut builds an ARM64 controller from any machine")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	dir := "."
 	if fs.NArg() > 0 {
 		dir = fs.Arg(0)
+	}
+	// Check the runtime before the project, so a wrong path fails fast and
+	// before any HMI build spends its seconds.
+	var target string
+	if *runner != "" {
+		t, err := checkRuntime(*runner)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut build: -runtime:", err)
+			return 1
+		}
+		target = t
 	}
 
 	// The project must load AND compile before it ships.
@@ -651,10 +664,13 @@ func runBuild(args []string) int {
 	if name == "" {
 		name = proj.Name
 	}
-	self, err := os.Executable()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "naut build:", err)
-		return 1
+	self := *runner
+	if self == "" {
+		var err error
+		if self, err = os.Executable(); err != nil {
+			fmt.Fprintln(os.Stderr, "naut build:", err)
+			return 1
+		}
 	}
 	// Provenance rides the artifact: capture the project's git history here,
 	// where .git exists, so the deployed controller can answer for its own
@@ -666,6 +682,9 @@ func runBuild(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut build:", err)
 		return 1
 	}
+	if target != "" {
+		note += " — for " + target
+	}
 	fmt.Printf("built %s — a self-contained controller (run it like any binary; NAUTILUS_ADDR/NAUTILUS_TOKEN apply)%s\n", name, note)
 	if archiveBytes > embedSizeWarning {
 		fmt.Fprintf(os.Stderr,
@@ -675,6 +694,49 @@ func runBuild(args []string) int {
 			float64(archiveBytes)/(1024*1024), embedSizeWarning/(1024*1024))
 	}
 	return 0
+}
+
+// checkRuntime vets a -runtime path: it must be an executable, not the
+// release archive it came in (the likeliest mistake is passing
+// nautilus_<v>_linux_arm64.tar.gz). It returns the platform it targets
+// ("linux/arm64") for the build line when the file is ELF, which every
+// controller nautilus runs on is, and "" for another executable format.
+func checkRuntime(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil {
+		return "", err
+	} else if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a file", path)
+	}
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return "", fmt.Errorf("%s is not an executable", path)
+	}
+	switch {
+	case magic == [4]byte{0x7f, 'E', 'L', 'F'}:
+		ef, err := elf.NewFile(f)
+		if err != nil {
+			return "", fmt.Errorf("%s: %v", path, err)
+		}
+		arch := map[elf.Machine]string{
+			elf.EM_AARCH64: "arm64", elf.EM_ARM: "arm", elf.EM_X86_64: "amd64",
+			elf.EM_386: "386", elf.EM_RISCV: "riscv64",
+		}[ef.Machine]
+		if arch == "" {
+			arch = ef.Machine.String()
+		}
+		return "linux/" + arch, nil
+	case magic[0] == 'M' && magic[1] == 'Z', // Windows
+		magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}: // Mach-O 64-bit
+		return "", nil
+	case magic[0] == 0x1f && magic[1] == 0x8b:
+		return "", fmt.Errorf("%s is a gzip archive: extract naut from it first (tar xzf %s naut)", path, filepath.Base(path))
+	}
+	return "", fmt.Errorf("%s is not an executable", path)
 }
 
 // embedSizeWarning is where `naut build` starts saying something: a

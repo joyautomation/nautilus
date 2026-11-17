@@ -26,6 +26,23 @@ on `distroless/static`: no shell, no package manager, CA roots included
 for MQTT/TLS. The base has no libc, so the binary must be static: release
 CLIs are, and the workflow sets `CGO_ENABLED=0` for its own `go install`.
 
+A controller for another platform builds from any machine: give
+`naut build` that platform's `naut` as its runtime. Take it from the same
+release as the `naut` you build with, since one checks the project and
+the other runs it.
+
+```sh
+tar xzf nautilus_<version>_linux_arm64.tar.gz naut
+mv naut naut-arm64
+naut build -runtime ./naut-arm64 -o my-plant-arm64
+# built my-plant-arm64 — … — for linux/arm64
+```
+
+The controller is that binary byte for byte with the project appended,
+so it runs on an ARM64 IPC and reports that release's version. Pass the
+`naut` inside the archive, not the archive itself; `naut build` refuses
+anything that is not an executable.
+
 ## The cluster
 
 `deploy/k8s.yaml` runs **two replicas** with the manifest's `retain: {}`
