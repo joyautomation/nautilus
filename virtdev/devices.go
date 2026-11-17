@@ -54,6 +54,9 @@ type Instance struct {
 	Listen string `yaml:"listen"`
 	// Init overrides points' power-up values, and seeds simulator hooks.
 	Init map[string]any `yaml:"init"`
+	// Params sets the profile's params ({location} in an ifm master's
+	// node ids).
+	Params map[string]string `yaml:"params"`
 }
 
 // Model is the process model: an ST PROGRAM, run as its own task in the
@@ -131,9 +134,27 @@ func (s *Set) resolve() error {
 			return fmt.Errorf("device %s: %w", d.Name, err)
 		}
 		s.profiles[k] = p
+		for k := range d.Params {
+			if _, ok := p.Params[k]; !ok {
+				return fmt.Errorf("device %s: params: %s is not a param of %s", d.Name, k, p.ID)
+			}
+		}
 		for name := range d.Init {
 			if _, ok := p.Point(name); !ok && p.Simulator == nil {
 				return fmt.Errorf("device %s: init: %s is not a point of %s", d.Name, name, p.ID)
+			}
+		}
+		if p.Protocol == ProtoOPCUA {
+			ep, err := opcuaEndpoint(*d, p)
+			if err != nil {
+				return fmt.Errorf("device %s: %w", d.Name, err)
+			}
+			if ep != "" {
+				w := wire{ep, 0}
+				if prev, ok := endpoints[w]; ok {
+					return fmt.Errorf("devices %s and %s both answer at %s", prev, d.Name, ep)
+				}
+				endpoints[w] = d.Name
 			}
 		}
 		if p.Protocol == ProtoModbus {

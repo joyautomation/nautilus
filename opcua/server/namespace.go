@@ -66,6 +66,10 @@ type namespace struct {
 	// enums is the project's enumerations, each served as a DataType node
 	// (enums.go), as of Start.
 	enums enumTypes
+
+	// mapped is a device's address space laid over the store (mapped.go);
+	// nil when the server shows the store as itself.
+	mapped *mappedTree
 }
 
 type mstamp struct {
@@ -135,10 +139,18 @@ func text(s string) *ua.LocalizedText {
 // resolve finds the member a node id addresses. ok is false for a node id
 // in another namespace, of another id type, or naming no tag or member.
 func (ns *namespace) resolve(nid *ua.NodeID) (member, bool) {
+	if n, ok := ns.mapped.node(nid); ok {
+		return ns.mappedVariable(n)
+	}
 	if nid == nil || nid.Namespace() != ns.id || nid.Type() != ua.NodeIDTypeString {
 		return member{}, false
 	}
-	root, segs := ir.SplitAddress(nid.StringID())
+	return ns.resolveAddr(nid.StringID())
+}
+
+// resolveAddr finds the member at a tag address ("P101.Drive.Speed").
+func (ns *namespace) resolveAddr(addr string) (member, bool) {
+	root, segs := ir.SplitAddress(addr)
 	tags := ns.rt.Tags()
 	canon, ok := tags.Canonical(root)
 	if !ok {
@@ -427,6 +439,11 @@ func wantRef(bd *ua.BrowseDescription, r *ua.ReferenceDescription) bool {
 // ── Attributes ──────────────────────────────────────────────────────────
 
 func (ns *namespace) Attribute(nid *ua.NodeID, attr ua.AttributeID) *ua.DataValue {
+	if n, ok := ns.mapped.node(nid); ok {
+		if dv, handled := ns.mappedAttribute(n, attr); handled {
+			return dv
+		}
+	}
 	if ns.isFolder(nid) {
 		return ns.folderAttribute(attr)
 	}

@@ -1,6 +1,6 @@
 profile: asi-275m
 title: RTA ASI-275M 16-in/16-out relay board, Modbus TCP
-maker: RTA
+maker: RTA          # as recorded where the board is in use; no maker page was found
 model: ASI-275M
 version: 1
 docs:
