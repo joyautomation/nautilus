@@ -1,0 +1,27 @@
+profile: asi-275m
+title: RTA ASI-275M 16-in/16-out relay board, Modbus TCP
+maker: RTA
+model: ASI-275M
+version: 1
+docs:
+  - id: measured
+    title: >-
+      Measured on a deployed ASI-275M, 2026-10-13 (bench) and 2026-10-15 (field):
+      unit id 1 answers on port 502; the outputs are one holding register written
+      with FC 16, the inputs one holding register read with FC 03; point n is bit n-1
+      in both. No public register map of this board was found.
+protocol: modbus
+modbus:
+  port: 502
+  unit-id: 1
+points:
+  - { name: Outputs, type: WORD, table: holding, address: 199, writable: true,
+      desc: "Relay outputs 1-16, output n on bit n-1", doc: "measured holding 199 (protocol address), FC 16" }
+  - { name: Inputs, type: WORD, table: holding, address: 99,
+      desc: "Digital inputs 1-16, input n on bit n-1", doc: "measured holding 99 (protocol address), FC 03" }
+simulator: { block: ASI_275M_SIM, source: asi-275m.st }
+notes: |
+  The simulator unpacks Outputs into Relay1..Relay16 and packs Input1..Input16
+  into Inputs, so a process model reads <Board>_Relay3 and writes <Board>_Input5.
+  Only the two registers the board was seen to answer are mapped; every other
+  address answers exception 02 here, which is not measured.

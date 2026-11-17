@@ -86,20 +86,34 @@ func TestProfileErrors(t *testing.T) {
 func TestSetErrors(t *testing.T) {
 	cases := map[string]string{
 		"no devices":      "devices: []\n",
-		"bad name":        "devices: [{ name: 1x, profile: relay-board-16 }]\n",
+		"bad name":        "devices: [{ name: 1x, profile: waveshare-relay-16ch }]\n",
 		"no profile":      "devices: [{ name: A }]\n",
 		"unknown profile": "devices: [{ name: A, profile: nope }]\n",
-		"twice":           "devices: [{ name: A, profile: relay-board-16 }, { name: a, profile: relay-board-16 }]\n",
-		"same unit twice": "devices: [{ name: A, profile: relay-board-16, endpoint: 10.0.0.1 }, { name: B, profile: relay-board-16, endpoint: '10.0.0.1:502' }]\n",
-		"init no point":   "devices: [{ name: A, profile: relay-board-16, init: { Nope: true } }]\n",
+		"twice":           "devices: [{ name: A, profile: waveshare-relay-16ch }, { name: a, profile: waveshare-relay-16ch }]\n",
+		"same unit twice": "devices: [{ name: A, profile: waveshare-relay-16ch, endpoint: 10.0.0.1 }, { name: B, profile: waveshare-relay-16ch, endpoint: '10.0.0.1:502' }]\n",
+		"init no point":   "devices: [{ name: A, profile: waveshare-relay-16ch, init: { Nope: true } }]\n",
 	}
 	for name, body := range cases {
 		if _, err := ParseSet([]byte(body), t.TempDir()); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}
+	// A device with a simulator takes init for its points and its hooks,
+	// and nothing else.
+	for body, ok := range map[string]bool{
+		"devices: [{ name: A, profile: asi-275m, init: { Input3: true, Outputs: 5 } }]\n": true,
+		"devices: [{ name: A, profile: asi-275m, init: { Input33: true } }]\n":            false,
+	} {
+		set, err := ParseSet([]byte(body), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewPlant(set); (err == nil) != ok {
+			t.Errorf("%s: plant error %v", body, err)
+		}
+	}
 	// Two boards behind one address with different unit ids are fine.
-	if _, err := ParseSet([]byte("devices: [{ name: A, profile: relay-board-16, endpoint: 10.0.0.1 }, { name: B, profile: relay-board-16, endpoint: 10.0.0.1, unit-id: 2 }]\n"), t.TempDir()); err != nil {
+	if _, err := ParseSet([]byte("devices: [{ name: A, profile: waveshare-relay-16ch, endpoint: 10.0.0.1 }, { name: B, profile: waveshare-relay-16ch, endpoint: 10.0.0.1, unit-id: 2 }]\n"), t.TempDir()); err != nil {
 		t.Errorf("two units behind one endpoint: %v", err)
 	}
 }

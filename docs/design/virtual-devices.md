@@ -123,7 +123,7 @@ notes: what is simplified and what is not modelled
 ```yaml
 devices:
   - name: RB1                    # IEC identifier; its points are RB1_<Point>
-    profile: relay-board-16
+    profile: asi-275m
     endpoint: 192.168.10.21      # the address the project's driver dials
     listen: 127.0.0.1:15021      # wire face; default an ephemeral loopback port
     init: { Input3: true }       # power-up values, simulator hooks

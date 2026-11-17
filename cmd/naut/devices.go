@@ -34,7 +34,7 @@ from public documentation. A project lists its devices in devices.yaml:
 
   devices:
     - name: RB1                    # IEC identifier; its points are RB1_<Point>
-      profile: relay-board-16      # built-in id, or profiles/mine.yaml
+      profile: asi-275m      # built-in id, or profiles/mine.yaml
       endpoint: 192.168.10.21      # what the project's driver dials
       listen: 127.0.0.1:15021      # wire face (default: an ephemeral port)
       init: { Input3: true }       # power-up values, simulator hooks

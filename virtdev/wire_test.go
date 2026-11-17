@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -109,7 +110,7 @@ func TestWireFace(t *testing.T) {
 		"devices.yaml": `
 devices:
   - name: RB1
-    profile: relay-board-16
+    profile: asi-275m
     endpoint: 192.168.10.21
   - name: Ctr
     profile: profiles/counter.yaml
@@ -158,17 +159,18 @@ END_PROGRAM
 	}
 	defer raw.Close()
 
-	// Relay 1 on, through the board, through the model, back on input 1.
-	if fc := rawWrite(t, raw, 1, 0x05, 0, 0xFF00); fc != 0x05 {
-		t.Fatalf("write coil: fc %02X", fc)
+	// Relay 1 on (bit 0 of the output word), through the board's
+	// simulator and the model, back on input 1 (bit 0 of the input word).
+	if fc := rawWrite(t, raw, 1, 0x06, 199, 0x0001); fc != 0x06 {
+		t.Fatalf("write outputs: fc %02X", fc)
 	}
 	eventually(t, "input 1 follows relay 1", func() error {
-		bits, err := cl.ReadBits(ctx, 1, "discrete", 0, 16)
+		regs, err := cl.ReadRegisters(ctx, 1, "holding", 99, 1)
 		if err != nil {
 			return err
 		}
-		if !bits[0] {
-			return errors.New("input 1 still off")
+		if regs[0]&1 == 0 {
+			return fmt.Errorf("inputs %04X", regs[0])
 		}
 		return nil
 	})
@@ -183,11 +185,11 @@ END_PROGRAM
 		if err != nil {
 			return err
 		}
-		bits, err := cl.ReadBits(ctx, 1, "discrete", 1, 1)
+		in, err := cl.ReadRegisters(ctx, 1, "holding", 99, 1)
 		if err != nil {
 			return err
 		}
-		if regs[0] < 3 || !bits[0] {
+		if regs[0] < 3 || in[0]&2 == 0 {
 			return errors.New("not yet")
 		}
 		return nil

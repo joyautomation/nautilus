@@ -33,7 +33,7 @@ const (
 
 // Profile is one device type.
 type Profile struct {
-	// ID names the profile ("relay-board-16"): what devices.yaml's
+	// ID names the profile ("asi-275m"): what devices.yaml's
 	// `profile:` refers to.
 	ID string `yaml:"profile"`
 	// Title is one line for a person ("16-in/16-out Modbus TCP relay board").
