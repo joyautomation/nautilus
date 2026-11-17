@@ -23,8 +23,11 @@ jobs:
   # the checks that apply to it: naut check + naut test on the example
   # projects it touched, the HMI 3D and playground builds, version-sync and
   # the docs-claims drift warning. Anything else, and every push to main,
-  # runs everything. A skipped job reports "skipped", which branch
-  # protection counts as passing.
+  # runs everything. Separately, the VS Code extension's jobs (compile/test,
+  # gesture harness, the macOS and Windows e2e legs) run only when the
+  # extension or the hmi/ and hmi-3d/ kits it bundles change, or .github/.
+  # A skipped job reports "skipped", which branch protection counts as
+  # passing.
   changes:
     name: Changes — full suite or light
     runs-on: ubuntu-latest
@@ -32,6 +35,11 @@ jobs:
       full: ${{ steps.scope.outputs.full }}
       examples: ${{ steps.scope.outputs.examples }}
       hmibuild: ${{ steps.scope.outputs.hmibuild }}
+      extension: ${{ steps.scope.outputs.extension }}
+      # The CLI-discovery e2e's OS legs: all three when the extension
+      # changed; Linux only otherwise (it drives a naut built from the PR,
+      # so a Go change still runs it, without the macOS/Windows queues).
+      e2e-os: ${{ steps.scope.outputs.extension == 'true' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]' }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 2} # a PR's merge commit: HEAD^1 is the base
@@ -46,7 +54,7 @@ jobs:
             printf '%s\n' "$changed"
             printf '%s\n' "$changed" | .github/scripts/ci-scope.sh | tee -a "$GITHUB_OUTPUT"
           else
-            echo "full=true" | tee -a "$GITHUB_OUTPUT"
+            printf 'full=true\nextension=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
   go:
     needs: changes
@@ -325,7 +333,7 @@ jobs:
 
   vscode-iec:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.extension == 'true'
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest
     defaults:
@@ -408,7 +416,7 @@ jobs:
   # the production bundles: mimic, FBD, LD, SFC). ubuntu-latest ships Chrome.
   vscode-iec-gestures:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.extension == 'true'
     name: VS Code extension — webview gesture harness
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -464,7 +472,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.e2e-os) }}
     runs-on: ${{ matrix.os }}
     # A hung VS Code otherwise holds the runner for the 6-hour default.
     timeout-minutes: 15

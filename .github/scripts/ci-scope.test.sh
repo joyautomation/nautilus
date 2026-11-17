@@ -13,8 +13,8 @@ check() { # check <want output, \n-separated> <paths...>
     fail=1
   fi
 }
-light() { printf 'full=false\nexamples=%s\nhmibuild=%s' "$1" "$2"; }
-full() { printf 'full=true\nexamples=%s\nhmibuild=%s' "$1" "$2"; }
+light() { printf 'full=false\nexamples=%s\nhmibuild=%s\nextension=false' "$1" "$2"; }
+full() { printf 'full=true\nexamples=%s\nhmibuild=%s\nextension=%s' "$1" "$2" "${3:-false}"; }
 
 # The #747 shape: one Svelte line in an example HMI.
 check "$(light examples/plcnext-bench false)" examples/plcnext-bench/hmi/src/routes/+page.svelte
@@ -36,11 +36,16 @@ check "$(full '' false)" examples/lift-station/hmi/lib/motor.ld
 check "$(full '' false)" examples/lift-station/nautilus.yaml
 check "$(full '' false)" examples/batch-skid/screens/line.mimic.json
 check "$(full '' false)" README.md
-check "$(full '' false)" .github/workflows/ci.yml
+check "$(full '' false true)" .github/workflows/ci.yml
 check "$(full '' false)" go.mod
 check "$(full '' false)" playground/scripts/build.sh
-check "$(full '' false)" hmi/src/lib/Tank.svelte
-# Nothing changed (or the diff failed): full.
-check "$(full '' false)"
+check "$(full '' false true)" hmi/src/lib/Tank.svelte
+# The extension and the kits it bundles; a Go change alone leaves them out.
+check "$(full '' false true)" tools/vscode-iec/src/extension.ts
+check "$(full '' false true)" hmi-3d/src/lib/Scene.svelte
+check "$(full '' false true)" tools/vscode-iec/package.json cmd/naut/main.go
+check "$(full '' false)" cmd/naut/main.go internal/lsp/server.go
+# Nothing changed (or the diff failed): full, extension included.
+check "$(full '' false true)"
 if [ $fail = 0 ]; then echo "ci-scope: all cases pass"; fi
 exit $fail

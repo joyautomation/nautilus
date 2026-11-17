@@ -8,6 +8,11 @@
 #   hmibuild=true|false examples/lift-station/hmi changed: run
 #                       internal/hmibuild's TestBuildsTheLiftStationApp,
 #                       the one Go test that builds an example's HMI
+#   extension=true|false the VS Code extension or what it bundles changed:
+#                       tools/vscode-iec/, the hmi/ and hmi-3d/ kits it links
+#                       (file:), or .github/. The extension's own jobs need
+#                       it; a Go-only PR leaves them out (the CLI-discovery
+#                       e2e still runs on Linux, since it drives naut).
 #
 # The light list is paths no Go test, embed or naut binary reads, found by
 # grepping the tests and by changing one file per area with a warm test
@@ -29,6 +34,7 @@ set -u
 full=false
 any=false
 hmibuild=false
+extension=false
 roots=()
 add_root() {
   local r
@@ -38,6 +44,9 @@ add_root() {
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   any=true
+  case "$path" in
+    tools/vscode-iec/*|hmi/*|hmi-3d/*|.github/*) extension=true ;;
+  esac
   case "$path" in
     examples/*/hmi/*.st|examples/*/hmi/*.ld|examples/*/hmi/*.fbd|examples/*/hmi/*.sfc)
       full=true ;;
@@ -58,7 +67,8 @@ while IFS= read -r path; do
       full=true ;;
   esac
 done
-[ "$any" = true ] || full=true
+if [ "$any" != true ]; then full=true; extension=true; fi
 echo "full=$full"
 echo "examples=${roots[*]+"${roots[*]}"}"
 echo "hmibuild=$hmibuild"
+echo "extension=$extension"
