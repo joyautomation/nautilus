@@ -1,0 +1,12 @@
+# Placeholder, replaced once the public register map is confirmed.
+profile: relay-board-16
+title: 16-in/16-out Modbus TCP relay board
+maker: generic
+model: 16DI/16DO relay board
+version: 1
+protocol: modbus
+modbus:
+  unit-id: 1
+points:
+  - { name: "Relay{n}", type: BOOL, repeat: 16, table: coil, address: 0, writable: true, desc: "Relay output {n}", unverified: true }
+  - { name: "Input{n}", type: BOOL, repeat: 16, table: discrete, address: 0, desc: "Digital input {n}", unverified: true }
