@@ -1,4 +1,4 @@
-package device
+package device_test
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	. "github.com/joyautomation/nautilus/profinet/device"
+	"github.com/joyautomation/nautilus/profinet/pntest"
 	"github.com/joyautomation/nautilus/profinet/transport"
 	"github.com/joyautomation/nautilus/profinet/wire"
 )
@@ -15,7 +17,7 @@ var (
 	devMAC  = net.HardwareAddr{0x02, 0, 0, 0, 0xDE, 0x01}
 	ctrlMAC = net.HardwareAddr{0x02, 0, 0, 0, 0xC0, 0x01}
 	ctrl2   = net.HardwareAddr{0x02, 0, 0, 0, 0xC0, 0x02}
-	loIP    = net.IPv4(127, 0, 0, 1)
+	loIP    = pntest.Loopback
 )
 
 // layout is the device under test: slot 1 in/out, slot 2 input only.
@@ -28,7 +30,8 @@ type rig struct {
 	t    *testing.T
 	hub  *transport.Hub
 	dev  *Device
-	ctrl *testController
+	ctrl tctl
+	rpc  *net.UDPAddr
 	stop func()
 }
 
@@ -39,7 +42,10 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctrl := newController(t, hub, ctrlMAC, devRPC.LocalAddr().(*net.UDPAddr))
+	ctrl, err := pntest.NewController(hub, ctrlMAC, devMAC, devRPC.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
 	dev, err := New(Config{
 		Identity: Identity{Station: "dev-1", VendorName: "nautilus", VendorID: 0x1234, DeviceID: 0x0001, OrderNumber: "NAUT-PN"},
 		Subslots: layout,
@@ -47,7 +53,7 @@ func newRig(t *testing.T) *rig {
 			EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr},
 		}),
 		RPC:              devRPC,
-		ControllerCMPort: ctrl.cm.LocalAddr().(*net.UDPAddr).Port,
+		ControllerCMPort: ctrl.CMPort(),
 		// Two addresses, the one the controller sets second: a bench NIC
 		// often holds several.
 		InterfaceAddrs: func() []net.IP { return []net.IP{net.IPv4(127, 0, 0, 2), loIP} },
@@ -59,8 +65,8 @@ func newRig(t *testing.T) *rig {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { dev.Run(ctx); close(done) }()
-	r := &rig{t: t, hub: hub, dev: dev, ctrl: ctrl}
-	r.stop = func() { cancel(); <-done; ctrl.close() }
+	r := &rig{t: t, hub: hub, dev: dev, ctrl: tctl{ctrl, t}, rpc: devRPC.LocalAddr().(*net.UDPAddr)}
+	r.stop = func() { cancel(); <-done; ctrl.Close() }
 	t.Cleanup(r.stop)
 	return r
 }
@@ -74,15 +80,6 @@ func eventually(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-}
-
-// expectedFor is what a controller configured with layout expects.
-func expectedFor(subs []Subslot) []wire.IOSubmodule {
-	io := []wire.IOSubmodule{{Slot: 0, Subslot: 1}, {Slot: 0, Subslot: InterfaceSubslot}, {Slot: 0, Subslot: PortSubslot}}
-	for _, s := range subs {
-		io = append(io, wire.IOSubmodule{Slot: s.Slot, Subslot: s.Subslot, InputLen: s.InputLen, OutputLen: s.OutputLen})
-	}
-	return io
 }
 
 func TestIdentifyAndStartup(t *testing.T) {
@@ -161,8 +158,12 @@ func TestIdentifyAndStartup(t *testing.T) {
 func TestOneARAtATime(t *testing.T) {
 	r := newRig(t)
 	r.ctrl.connect(t, layout, false)
-	other := newController(t, r.hub, ctrl2, r.ctrl.devRPC)
-	defer other.close()
+	o, err := pntest.NewController(r.hub, ctrl2, devMAC, r.rpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	other := tctl{o, t}
 	if st := other.connectStatus(t, layout); st.IsOK() || st.ErrorCode1 != 0x40 || st.ErrorCode2 != 0x04 {
 		t.Fatalf("second controller: %+v, want out of AR resources", st)
 	}
@@ -218,7 +219,7 @@ func TestModuleDiff(t *testing.T) {
 func TestDCPSetNeverTouchesTheHost(t *testing.T) {
 	r := newRig(t)
 	c := r.ctrl
-	if code := c.setIP(net.IPv4(192, 0, 2, 9)); code != dcpNotSet {
+	if code := c.setIP(net.IPv4(192, 0, 2, 9)); code != 0x03 {
 		t.Fatalf("foreign IP: code %d", code)
 	}
 	if s := r.dev.Snapshot(); s.SetIPRefused != 1 {
@@ -227,13 +228,13 @@ func TestDCPSetNeverTouchesTheHost(t *testing.T) {
 	if _, ip := c.identify("dev-1"); !ip.Equal(net.IPv4zero) {
 		t.Fatalf("advertises %v after a refused Set", ip)
 	}
-	if code := c.setIP(loIP); code != dcpOK {
+	if code := c.setIP(loIP); code != 0x00 {
 		t.Fatalf("interface IP: code %d", code)
 	}
 	if _, ip := c.identify("dev-1"); !ip.Equal(loIP) {
 		t.Fatalf("advertises %v, want the interface's", ip)
 	}
-	if code := c.setName("renamed"); code != dcpOK {
+	if code := c.setName("renamed"); code != 0x00 {
 		t.Fatalf("set name: %d", code)
 	}
 	if n, _ := c.identify("renamed"); n != "renamed" {
@@ -288,9 +289,9 @@ func TestReleaseAndWrite(t *testing.T) {
 func TestAdvancedStartup(t *testing.T) {
 	r := newRig(t)
 	c := r.ctrl
-	c.props = 0x11 | startupModeBit
+	c.Props = 0x11 | 1<<30 // Advanced Startup
 	c.connect(t, layout, false)
-	if !c.sawARServer {
+	if !c.SawARServer() {
 		t.Fatal("no ARServerBlockRes in an Advanced Startup Connect response")
 	}
 	eventually(t, "input frames before PrmEnd", func() bool {

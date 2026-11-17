@@ -27,6 +27,7 @@ import (
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
+	"github.com/joyautomation/nautilus/profinet"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/replay"
@@ -39,6 +40,14 @@ import (
 // checkNetworkSections validates the server sections that open sockets,
 // offline, so naut check reports them before anything listens.
 func checkNetworkSections(m Manifest) error {
+	if m.Redundancy != nil {
+		configs := append([]DriverConfig{m.Driver}, m.Drivers...)
+		for _, d := range configs {
+			if strings.HasPrefix(strings.ToLower(d.Type), "profinet") {
+				return fmt.Errorf("driver %s with redundancy: is not supported yet: a standby must go silent on the PROFINET network, and how it hands over is an open question (docs/design/profinet.md §8.1)", d.Type)
+			}
+		}
+	}
 	if m.OPCUA != nil && m.OPCUA.Endpoint != "" {
 		if _, _, err := opcuaserver.ParseEndpoint(m.OPCUA.Endpoint); err != nil {
 			return err
@@ -214,6 +223,8 @@ func driverHealth(d nio.Driver) func() bool {
 		return func() bool { return drv.Status().Connected }
 	case *opcua.Driver:
 		return drv.Online
+	case *profinet.DeviceDriver:
+		return func() bool { h := drv.Health(); return h.AR == "data" }
 	}
 	return nil
 }
@@ -520,6 +531,28 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opts = append(opts, opcua.WithTagClass(class, patterns...))
 		}
 		return opcua.New(d.Endpoint, om, opts...)
+	case "profinet-device":
+		// nautilus as a PROFINET IO device to a PLC (brief
+		// docs/design/profinet.md). New never opens a socket, so check and
+		// build pass anywhere; Start needs CAP_NET_RAW on the interface.
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver profinet-device: manifest (the profinet_device.yaml) is required")
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver profinet-device: %w", err)
+		}
+		m, err := profinet.ParseDeviceManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("driver profinet-device: %s: %w", d.Manifest, err)
+		}
+		name := d.Name
+		if name == "" {
+			name = "profinet-device"
+		}
+		return profinet.NewDevice(m,
+			profinet.WithDeviceLogger(slog.Default().With("driver", name)),
+			profinet.WithDeviceOnlineTag(onlineTagFor(d.Name, "profinet-device")))
 	case "replay":
 		// A recording played back as live tags at a steerable clock: the
 		// baseline of a plant simulation. The recording itself is read on
@@ -537,7 +570,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, opcua-client, snmp, redfish, prometheus, plcnext, optommp and replay — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, opcua-client, snmp, redfish, prometheus, plcnext, optommp, profinet-device and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }
 
