@@ -471,7 +471,7 @@ it. Tested against a fake agent and the in-repo emulator.
 
 **On the controller (2026-10-03, James created it):** Echo 5580 v38 in
 slot 0, bound to the VM's Tailscale address; comm path
-`AB_ETH-1\100.93.56.45\Backplane\0`, found by probing slots over
+`AB_ETH-1\192.0.2.21\Backplane\0`, found by probing slots over
 EtherNet/IP and reading FT Linx's driver list (no device had been browsed;
 the path resolves anyway). An upload from a never-downloaded controller
 fails with `RxE_NOT_FOUND`; deploy now reads that as "first download".
@@ -2442,7 +2442,7 @@ Z: (client work).
 - This is a proof of concept with kill criteria (§7a). Check the SDK licence
   terms during Phase A, and at the end of each phase measure every criterion
   and log it in §7b before asking James whether to continue.
-- Echo: `ssh echo1` (10.154.92.210; CIP on :44818 when Tailscale refuses).
+- Echo: `ssh echo1` (192.0.2.20; CIP on :44818 when Tailscale refuses).
   Fast Startup is off; restart with `incus restart echo-vm --timeout 300`.
   Don't change the controller's mode without asking James.
 
