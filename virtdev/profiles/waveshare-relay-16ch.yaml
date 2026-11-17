@@ -1,0 +1,25 @@
+profile: waveshare-relay-16ch
+title: Waveshare Modbus POE ETH Relay 16CH
+maker: Waveshare
+model: Modbus POE ETH Relay 16CH
+version: 1
+docs:
+  - id: wiki
+    title: "Modbus POE ETH Relay 16CH, Waveshare wiki: Modbus RTU Development Protocol"
+    url: https://www.waveshare.com/wiki/Modbus_POE_ETH_Relay_16CH
+protocol: modbus
+modbus:
+  port: 502            # the wiki's Modbus TCP gateway mode moves the device port to 502
+  unit-id: 1           # device address register 0x4000, factory 1 (wiki: 0x01-0xFF)
+points:
+  - { name: "Relay{n}", type: BOOL, repeat: 16, table: coil, address: 0x0000, writable: true,
+      desc: "Channel {n} relay (FC 01/05/0F)", doc: "wiki register table, 0x0000-0x000F" }
+  - { name: DeviceAddress, type: UINT, table: holding, address: 0x4000, writable: true, init: 1,
+      desc: "Device (Modbus) address, 1-255", doc: "wiki device address register 0x4000" }
+  - { name: SoftwareVersion, type: UINT, table: holding, address: 0x8000, init: 0x012C,
+      desc: "Software version", doc: "wiki software version register 0x8000 (the example reply is 0x012C)" }
+notes: |
+  Not modelled: the toggle (value 0x5500) and flash commands (0x00FF, 0x0100-0x010F,
+  0x01FF, 0x0200-0x020F, 0x0400-0x040F); those addresses answer exception 02 here.
+  Writing DeviceAddress does not move the device to a new unit id.
+  The board has no inputs.

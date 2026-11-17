@@ -172,7 +172,7 @@ one listener, as in the field.
 
 1. This brief, the format, the plant, the Modbus wire face, `naut devices`,
    a 16-in/16-out relay board.
-2. IO-Link master as an OPC UA server shaped by OPC 30100, with maker
+2. IO-Link master as an OPC UA server shaped by OPC 30120, with maker
    variants; endpoint and node ids documented for #704.
 3. ABB drive (FMBT-21 / RETA-01, ABB Drives profile), the in-process face in
    `naut test`, `naut run --devices`, an example project with a sequence
