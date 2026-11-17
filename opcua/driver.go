@@ -4,13 +4,12 @@
 // session, requests strictly sequential; the connection is client.go, the
 // value codec value.go.
 //
-// Reads are polled, not subscribed. Each scan class is one batched Read
-// service call on its own timer — the same shape eip and modbus have, and
-// for the hundreds of tags a gateway or a skid exposes it is a few
-// kilobytes a second. Subscriptions (monitored items, the Publish queue)
-// are the protocol's own change-notification mechanism and would cut that
-// further for very large sites; they are deliberately NOT in this first cut,
-// because the polled path has no reconnect-era state to get wrong.
+// Reads are polled by default: each scan class is one batched Read service
+// call on its own timer — the same shape eip and modbus have, and for the
+// hundreds of tags a gateway or a skid exposes it is a few kilobytes a
+// second. WithReadMode(ReadModeSubscribe) makes each scan class an OPC UA
+// subscription instead (subscribe.go), with the same session, priming,
+// quality, reconnect and write rules; only how values arrive differs.
 //
 // New NEVER dials. buildDriver runs inside `naut check` and `naut build`,
 // i.e. in CI with no server in sight, so everything that can fail on bad
@@ -166,6 +165,7 @@ type Driver struct {
 	retryMin  time.Duration
 	retryMax  time.Duration
 	maxNodes  int
+	readMode  string
 	log       *slog.Logger
 
 	classRates  map[string]time.Duration
@@ -213,6 +213,8 @@ type Driver struct {
 	reads   atomic.Uint64
 	writes  atomic.Uint64
 	errs    atomic.Uint64
+	// notifications counts data change notifications (read-mode: subscribe).
+	notifications atomic.Uint64
 
 	kick   chan struct{}
 	cancel context.CancelFunc
@@ -225,6 +227,13 @@ type serverInfo struct {
 	mode       string
 	namespaces []string
 	maxNodes   int
+	// maxItems caps monitored items per CreateMonitoredItems call
+	// (read-mode: subscribe); subscriptions and revised are what the
+	// server granted on this session: how many, and each class's revised
+	// publishing interval.
+	maxItems      int
+	subscriptions int
+	revised       map[string]time.Duration
 }
 
 // binding is one manifest binding plus its live state. node is the id as
@@ -271,6 +280,7 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 		retryMin:   defaultRetryMin,
 		retryMax:   defaultRetryMax,
 		maxNodes:   defaultMaxNodes,
+		readMode:   ReadModePoll,
 		log:        slog.Default(),
 		classRates: map[string]time.Duration{},
 		byName:     map[string]*binding{},
@@ -292,6 +302,13 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 	}
 	if d.retryMax < d.retryMin {
 		d.retryMax = d.retryMin
+	}
+	switch d.readMode {
+	case "":
+		d.readMode = ReadModePoll
+	case ReadModePoll, ReadModeSubscribe:
+	default:
+		return nil, fmt.Errorf("opcua-client: read-mode %q: want %q or %q", d.readMode, ReadModePoll, ReadModeSubscribe)
 	}
 	policyURI, mode, err := d.conn.Security.parse()
 	if err != nil {
@@ -781,7 +798,11 @@ func (d *Driver) run(ctx context.Context) {
 		}
 
 		d.onConnect(ctx, sess)
-		d.serve(ctx, sess)
+		if d.readMode == ReadModeSubscribe {
+			d.serveSubscribed(ctx, sess)
+		} else {
+			d.serve(ctx, sess)
+		}
 
 		// Offline first: Close can take its timeout, and the values must
 		// not read Good meanwhile.
@@ -821,24 +842,33 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 		mode:       modeName(sess.Endpoint.SecurityMode),
 		namespaces: nss,
 		maxNodes:   d.maxNodes,
+		maxItems:   d.maxNodes,
 	}
 	index := make(map[string]uint16, len(nss))
 	for i, uri := range nss {
 		index[uri] = uint16(i)
 	}
-	// MaxNodesPerRead is Server/ServerCapabilities/OperationLimits; a
-	// server that does not publish it (or answers 0) keeps our default.
+	// MaxNodesPerRead and MaxMonitoredItemsPerCall are Server/
+	// ServerCapabilities/OperationLimits; a server that does not publish
+	// one (or answers 0) keeps our default.
 	rctx, cancel := context.WithTimeout(ctx, d.conn.Timeout)
-	resp, err := sess.Client.Read(rctx, &ua.ReadRequest{NodesToRead: []*ua.ReadValueID{{
-		NodeID: ua.NewNumericNodeID(0, maxNodesPerReadNode), AttributeID: ua.AttributeIDValue}}})
+	resp, err := sess.Client.Read(rctx, &ua.ReadRequest{NodesToRead: []*ua.ReadValueID{
+		{NodeID: ua.NewNumericNodeID(0, maxNodesPerReadNode), AttributeID: ua.AttributeIDValue},
+		{NodeID: ua.NewNumericNodeID(0, maxMonitoredItemsPerCallNode), AttributeID: ua.AttributeIDValue},
+	}})
 	cancel()
-	if err == nil && len(resp.Results) == 1 && good(resp.Results[0].Status) && resp.Results[0].Value != nil {
-		if n, ok := toValue(resp.Results[0].Value); ok {
-			if lim, _ := toInt(n); lim > 0 && int(lim) < info.maxNodes {
-				info.maxNodes = int(lim)
+	limit := func(i int, into *int) {
+		if err != nil || len(resp.Results) != 2 || !good(resp.Results[i].Status) || resp.Results[i].Value == nil {
+			return
+		}
+		if n, ok := toValue(resp.Results[i].Value); ok {
+			if lim, _ := toInt(n); lim > 0 && int(lim) < *into {
+				*into = int(lim)
 			}
 		}
 	}
+	limit(0, &info.maxNodes)
+	limit(1, &info.maxItems)
 
 	d.mu.Lock()
 	remapped := 0
@@ -868,7 +898,7 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 	d.mu.Unlock()
 	d.setState("connected", nil)
 	d.log.Info("opcua-client: connected", "driver", d.name, "endpoint", d.endpoint,
-		"policy", info.policy, "mode", info.mode, "tags", len(d.bindings), "remapped", remapped, "missing", missing, "maxNodes", info.maxNodes)
+		"policy", info.policy, "mode", info.mode, "readMode", d.readMode, "tags", len(d.bindings), "remapped", remapped, "missing", missing, "maxNodes", info.maxNodes)
 }
 
 // serverStateNode is Server_ServerStatus_State (ns=0;i=2259), the liveness
@@ -1049,33 +1079,39 @@ func (d *Driver) pollClass(ctx context.Context, sess *Session, c *scanClass) boo
 		}
 		d.answered = true
 		for i, b := range chunk {
-			dv := resp.Results[i]
-			b.answered = true
-			if dv == nil || !good(dv.Status) {
-				if !b.bad {
-					if dv != nil {
-						d.lastErr = fmt.Errorf("tag %s: %v", b.Name, dv.Status)
-					}
-				}
-				b.bad = true
-				continue
-			}
-			v, ok := toValue(dv.Value)
-			if !ok {
-				if !b.bad {
-					d.lastErr = fmt.Errorf("tag %s: value is not a scalar built-in", b.Name)
-				}
-				b.bad = true
-				continue
-			}
-			b.bad = false
-			b.delivered = true
-			d.snapshot[b.Name] = v
+			d.apply(b, resp.Results[i])
 		}
 		d.mu.Unlock()
 		start = end
 	}
 	return true
+}
+
+// apply takes one node's value as the server reported it — a Read result
+// or a data change notification, the same rules for both — into the
+// binding's state and the snapshot. A non-good status or a value that is
+// not a scalar built-in makes the binding Bad, keeping its last value.
+// Caller holds d.mu.
+func (d *Driver) apply(b *binding, dv *ua.DataValue) {
+	b.answered = true
+	if dv == nil || !good(dv.Status) {
+		if !b.bad && dv != nil {
+			d.lastErr = fmt.Errorf("tag %s: %v", b.Name, dv.Status)
+		}
+		b.bad = true
+		return
+	}
+	v, ok := toValue(dv.Value)
+	if !ok {
+		if !b.bad {
+			d.lastErr = fmt.Errorf("tag %s: value is not a scalar built-in", b.Name)
+		}
+		b.bad = true
+		return
+	}
+	b.bad = false
+	b.delivered = true
+	d.snapshot[b.Name] = v
 }
 
 // flushWrites pushes the pending writes with the Write service. Returns

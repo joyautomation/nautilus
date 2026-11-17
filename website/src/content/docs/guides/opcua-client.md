@@ -90,11 +90,39 @@ not read or written at all (its old index may now belong to another
 namespace with a node of the same id), and the log says why. It reads
 again once a connect finds the URI.
 
-## Polling, quality and `__Online`
+## Polling or subscribing, quality and `__Online`
 
-Each scan class is one batched Read on its own timer, chunked to the
-server's advertised `MaxNodesPerRead` (halved if the server answers
-`Bad_TooManyOperations`). Subscriptions are not used.
+By default each scan class is one batched Read on its own timer, chunked
+to the server's advertised `MaxNodesPerRead` (halved if the server answers
+`Bad_TooManyOperations`).
+
+With `read-mode: subscribe` each scan class is instead one OPC UA
+subscription: its publishing interval is the class rate, and the server
+sends a value only when it changes. That cuts traffic and server load when
+most values sit still, which is most of a plant most of the time. Use it
+when a server has many tags or many clients. Polling is the
+simpler path, and the right one for a handful of tags.
+
+```yaml
+driver:
+  type: opcua-client
+  endpoint: opc.tcp://10.0.0.5:4840
+  manifest: opcua_manifest.yaml
+  read-mode: subscribe     # poll (default) | subscribe
+  scan-rate: 200ms         # the default class's publishing interval
+```
+
+Everything below holds in both modes. A subscribed session is first read
+once per class, so `__Online` and quality mean the same thing; then it is
+checked once a second, because a subscription on its own does not tell a
+client that its server has gone. A restart is noticed within that second,
+a server that goes silent after one request timeout. Subscriptions are
+created fresh on every new session. A server may publish slower than the
+class asks; the driver logs it and the status card shows the interval the
+server granted. If the server refuses a subscription the session fails
+and is retried with backoff, and the error says why: the driver never
+falls back to polling on its own. A node the server will not monitor
+reads **Bad**.
 
 - `<name>__Online` (BOOL) is true once the session is up and every scan
   class has been read on it, false otherwise. Its name follows the driver's
@@ -195,11 +223,13 @@ growth in goroutines.
 | open62541 v1.4.22 (a fixture server built against the release) | Basic256Sha256 / SignAndEncrypt | Namespace 1 is the server's own application URI; a server's variables start at namespace 2. A write to a read-only node is refused with `Bad_NotWritable`. |
 | Eclipse Milo 1.1.1 (its demo server 1.0.3) | Basic256Sha256 / SignAndEncrypt, once trusted | Refuses an untrusted client certificate by closing the connection and files it under `security/rejected`; moving it to `security/pki/trusted/certs` lets the next retry in, with no restart. Namespace 1's URI carries a per-install UUID, so a reinstalled server renumbers it. A write to a read-only node is refused with `Bad_UserAccessDenied`, not `Bad_NotWritable`. It advertises its own idea of its address (port 4840 inside the container); the driver dials the mapped port it was given. The demo address space includes a 25,000-node folder, so import with `--root`. |
 
-How quickly the driver notices: a restart closes the connection, so the
-next read fails at once and `__Online` falls within a scan; a blackhole is
-silent, so it falls after one request timeout (5 s by default). Once the
-server answers again the driver is back within one retry step of the
-backoff ladder.
+Both read modes run every scenario. How quickly the driver notices: a
+restart closes the connection, so `__Online` falls within a scan when
+polling and within a second when subscribed; a blackhole is silent, so it
+falls after one request timeout (5 s by default), plus up to a second when
+subscribed. Once the server answers again the driver is back within one
+retry step of the backoff ladder. Both servers granted a 200 ms publishing
+interval as asked.
 
 ## Reading an Ignition gateway
 

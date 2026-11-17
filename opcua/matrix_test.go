@@ -142,6 +142,7 @@ var matrixModes = []struct {
 	opts []opcua.Option
 }{
 	{"poll", nil},
+	{"subscribe", []opcua.Option{opcua.WithReadMode(opcua.ReadModeSubscribe)}},
 }
 
 func TestForeignServerMatrix(t *testing.T) {
@@ -283,9 +284,24 @@ func matrixReads(t *testing.T, s matrixServer, url string, opts []opcua.Option) 
 	}
 
 	first := v["Changing"]
+	reads := d.Health().Reads
 	waitUntil(t, "the changing node to change", 10*time.Second, func() bool {
 		return readAll(t, d)["Changing"] != first
 	})
+	if h := d.Health(); h.ReadMode == opcua.ReadModeSubscribe {
+		// Subscribed: the change arrived as a notification; the session
+		// was read once to prime it and not polled since.
+		if h.Notifications == 0 {
+			t.Errorf("subscribed, yet no data change notification counted: %+v", h)
+		}
+		if h.Reads != reads {
+			t.Errorf("subscribed, yet the driver read %d more times after priming", h.Reads-reads)
+		}
+		if h.Subscriptions != 1 {
+			t.Errorf("subscriptions = %d, want one per scan class (1)", h.Subscriptions)
+		}
+		t.Logf("%s: publishing interval revised to %v ms", s.name, h.RevisedMs)
+	}
 }
 
 func matrixWrites(t *testing.T, s matrixServer, url string, opts []opcua.Option) {

@@ -84,11 +84,20 @@ func TestCheckOPCUAClientDriver(t *testing.T) {
 	if !strings.Contains(out, "NAUTILUS_OPCUA_PASSWORD") {
 		t.Errorf("check did not warn about the missing password:\n%s", out)
 	}
+	out, code = checkIn(t, map[string]string{
+		"nautilus.yaml":       driver("  endpoint: opc.tcp://192.0.2.1:4840\n  security: None\n  read-mode: subscribe\n"),
+		"opcua_manifest.yaml": manifest,
+		"program.st":          programBinding("", ""),
+	})
+	if code != 0 {
+		t.Errorf("check refused read-mode: subscribe:\n%s", out)
+	}
 	for name, extra := range map[string]string{
 		"no endpoint":        "",
 		"bad policy":         "  endpoint: opc.tcp://192.0.2.1:4840\n  security: Basic256Sha265\n",
 		"bad mode":           "  endpoint: opc.tcp://192.0.2.1:4840\n  security-mode: Encrypt\n",
 		"username over None": "  endpoint: opc.tcp://192.0.2.1:4840\n  security: None\n  username: op\n",
+		"bad read-mode":      "  endpoint: opc.tcp://192.0.2.1:4840\n  read-mode: push\n",
 	} {
 		out, code := checkIn(t, map[string]string{
 			"nautilus.yaml":       driver(extra),

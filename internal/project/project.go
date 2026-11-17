@@ -485,6 +485,10 @@ type DriverConfig struct {
 	Security     string `yaml:"security"`      // policy: None, Basic256Sha256, … (default: strongest offered)
 	SecurityMode string `yaml:"security-mode"` // None, Sign, SignAndEncrypt (default: strongest of the policy)
 	PKIDir       string `yaml:"pki-dir"`       // client certificate dir, needed for any policy but None
+	// ReadMode is how values arrive: poll (default; one batched Read per
+	// scan class per tick) or subscribe (one subscription per scan class,
+	// notified on change). Both keep the same quality and reconnect rules.
+	ReadMode string `yaml:"read-mode"`
 }
 
 // ChannelConfig is one entry of channels:. Type cip is a Logix controller

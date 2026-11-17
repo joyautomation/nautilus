@@ -5,6 +5,8 @@
 package opcua
 
 import (
+	"time"
+
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -32,6 +34,15 @@ type Health struct {
 	Reads        uint64 `json:"reads"`
 	Writes       uint64 `json:"writes"`
 	Errors       uint64 `json:"errors"`
+	// ReadMode is poll or subscribe. With subscribe, Subscriptions is how
+	// many the server granted on this session, Notifications counts the
+	// data change notifications received, and RevisedMs is each scan
+	// class's publishing interval as the server revised it (a server may
+	// publish slower than the class asked).
+	ReadMode      string             `json:"readMode"`
+	Subscriptions int                `json:"subscriptions,omitempty"`
+	Notifications uint64             `json:"notifications,omitempty"`
+	RevisedMs     map[string]float64 `json:"revisedMs,omitempty"`
 }
 
 // Health returns the current state and counters.
@@ -54,6 +65,17 @@ func (d *Driver) Health() Health {
 		Reads:        d.reads.Load(),
 		Writes:       d.writes.Load(),
 		Errors:       d.errs.Load(),
+		ReadMode:     d.readMode,
+	}
+	if d.readMode == ReadModeSubscribe {
+		h.Subscriptions = d.server.subscriptions
+		h.Notifications = d.notifications.Load()
+		if len(d.server.revised) > 0 {
+			h.RevisedMs = map[string]float64{}
+			for class, r := range d.server.revised {
+				h.RevisedMs[class] = float64(r) / float64(time.Millisecond)
+			}
+		}
 	}
 	if d.lastErr != nil {
 		h.LastError = d.lastErr.Error()
