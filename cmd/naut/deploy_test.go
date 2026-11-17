@@ -252,3 +252,11 @@ func TestDeployBoxDoesNotMatchItself(t *testing.T) {
 		t.Error("box.sh no longer looks for WATCHDOG=1 the way this test expects")
 	}
 }
+
+// deploy.go uploads into deployRoot and box.sh works in ROOT: one place
+// each, and they must agree.
+func TestDeployRootMatchesBox(t *testing.T) {
+	if !strings.Contains(deployBoxSh, "ROOT=${NAUT_ROOT:-"+deployRoot+"}\n") {
+		t.Errorf("box.sh's default ROOT is not deployRoot (%s)", deployRoot)
+	}
+}

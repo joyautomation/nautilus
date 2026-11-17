@@ -4,8 +4,10 @@
 #
 # Messages go to stderr; stdout is reserved for data (a backup's tar).
 set -eu
-ROOT=/opt/nautilus
-STATE=/var/lib/nautilus
+# Where releases and retained values live. The defaults are the systemd
+# layout; a caller may set others (deploy.go's deployRoot is ROOT's default).
+ROOT=${NAUT_ROOT:-/opt/nautilus}
+STATE=${NAUT_STATE:-/var/lib/nautilus}
 UNIT=nautilus.service
 KEEP=3 # releases kept besides current and previous
 say() { echo "$*" >&2; }

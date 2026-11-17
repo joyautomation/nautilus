@@ -32,6 +32,11 @@ import (
 //go:embed deploybox/box.sh
 var deployBoxSh string
 
+// deployRoot is where releases go on the box: box.sh's default ROOT, and
+// the one place deploy.go names it. asRoot is the one place privilege is
+// added.
+const deployRoot = "/opt/nautilus"
+
 //go:embed deploybox/nautilus.service
 var deployUnit []byte
 
@@ -524,8 +529,8 @@ func (b *sshBox) upload(r io.Reader, name string) int {
 		fmt.Fprintf(os.Stderr, "naut deploy: %q cannot go to the box unquoted\n", name)
 		return 2
 	}
-	in := "/opt/nautilus/incoming/" + name
-	return b.run(r, os.Stdout, asRoot("mkdir -p /opt/nautilus/incoming")+" && "+
+	in := deployRoot + "/incoming/" + name
+	return b.run(r, os.Stdout, asRoot("mkdir -p "+deployRoot+"/incoming")+" && "+
 		asRoot(fmt.Sprintf("sh -c 'cat > %s.part && mv %s.part %s'", in, in, in)))
 }
 
