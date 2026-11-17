@@ -87,8 +87,9 @@ The Scratch Pad is the processor's shared memory: 64 bits, and tables of
 integers and floats (form 1465, appendix A). A PAC Control strategy
 reaches it through its Scratch Pad commands, groov Manage's REST API at
 `/manage/api/v1/io/local/scratchpad/`, Node-RED through the groov I/O
-nodes, and nautilus through the same OptoMMP addresses. Each element has
-one writer:
+nodes, and nautilus through the same OptoMMP addresses. Those routes are
+taken from Opto's documents; the bench has proven nautilus's side over
+OptoMMP, not yet the others. Each element has one writer:
 
 - **nautilus writes it** (`writable: true`, `--scratch-floats` and its
   siblings): an output tag. Like a digital output, it reads **bad** while
