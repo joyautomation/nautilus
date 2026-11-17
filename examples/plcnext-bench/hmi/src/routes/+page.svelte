@@ -140,3 +140,5 @@
 		color: var(--ink-2, #c3c2b7);
 	}
 </style>
+
+<!-- CI light-mode probe for #754: not for merge -->
