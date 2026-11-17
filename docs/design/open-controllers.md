@@ -43,7 +43,7 @@ I/O.
 
 ### 2.1 What the bench unit is
 
-`192.168.82.243`, `GRV-EPIC-PR1`, four modules. Ports open: 80/443 (groov
+A `GRV-EPIC-PR1` on the bench LAN, four modules. Ports open: 80/443 (groov
 Manage), **502 Modbus/TCP**, **2001 OptoMMP**, 8088 (Jetty, which that first scan took for Ignition
 Edge), 22001 (PAC Control engine). 22 was closed on the first day; the shell
 license was already on the unit and James enabled the shell server and a
@@ -456,7 +456,7 @@ priority. The 1-2-5 buckets are too coarse to separate scan times inside
 
 ### 3.1 What the bench unit is
 
-`192.168.82.216`, `AXC F 2152`, firmware `23.0.0.65` (2023.0 LTS), Linux
+An `AXC F 2152` on the bench LAN, firmware `23.0.0.65` (2023.0 LTS), Linux
 5.4 PREEMPT_RT, ARMv7 dual-core, 490 MB RAM, 427 MB free on `/`. SSH as
 `admin` works (the `tentacle-plcnext` credentials). Ports: 22, 80/443,
 4840 (OPC UA), 41100 (Engineer), 44818 (EtherNet/IP). The gRPC server is
