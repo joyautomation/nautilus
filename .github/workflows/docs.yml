@@ -6,7 +6,7 @@ on:
     # The docs' own sources, and everything the playground (/playground/) is
     # built from: it follows main, so a Go or extension change redeploys it.
     paths: ['website/**', 'docs/**', 'hmi/**', 'hmi-3d/**', 'tools/vscode-iec/**', 'playground/**',
-            'examples/lift-station/**', 'examples/plcnext-bench/**', '**.go', 'go.mod', 'go.sum']
+            'examples/lift-station/**', 'examples/plcnext-bench/**', 'examples/epic-bench/**', '**.go', 'go.mod', 'go.sum']
   pull_request:
     paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**', 'tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md']
 
