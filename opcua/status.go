@@ -43,6 +43,10 @@ type Health struct {
 	Subscriptions int                `json:"subscriptions,omitempty"`
 	Notifications uint64             `json:"notifications,omitempty"`
 	RevisedMs     map[string]float64 `json:"revisedMs,omitempty"`
+	// Probe is how a subscribed session is checked: SetPublishingMode on
+	// the driver's subscriptions, or a Read where the server does not
+	// support that service.
+	Probe string `json:"probe,omitempty"`
 }
 
 // Health returns the current state and counters.
@@ -70,6 +74,7 @@ func (d *Driver) Health() Health {
 	if d.readMode == ReadModeSubscribe {
 		h.Subscriptions = d.server.subscriptions
 		h.Notifications = d.notifications.Load()
+		h.Probe = d.server.probe
 		if len(d.server.revised) > 0 {
 			h.RevisedMs = map[string]float64{}
 			for class, r := range d.server.revised {

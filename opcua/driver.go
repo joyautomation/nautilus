@@ -166,7 +166,10 @@ type Driver struct {
 	retryMax  time.Duration
 	maxNodes  int
 	readMode  string
-	log       *slog.Logger
+	// refreshFloor is refreshEvery's floor (defaultRefreshFloor; tests
+	// lower it).
+	refreshFloor time.Duration
+	log          *slog.Logger
 
 	classRates  map[string]time.Duration
 	assignments []classAssignment
@@ -215,6 +218,9 @@ type Driver struct {
 	errs    atomic.Uint64
 	// notifications counts data change notifications (read-mode: subscribe).
 	notifications atomic.Uint64
+	// probeByRead: the server refused SetPublishingMode once, so every
+	// subscribed session on this driver is probed with a Read (subscribe.go).
+	probeByRead atomic.Bool
 
 	kick   chan struct{}
 	cancel context.CancelFunc
@@ -234,6 +240,9 @@ type serverInfo struct {
 	maxItems      int
 	subscriptions int
 	revised       map[string]time.Duration
+	// probe is how the subscribed session is being checked (probeRead or
+	// probeSetPublishingMode); empty until the first probe answers.
+	probe string
 }
 
 // binding is one manifest binding plus its live state. node is the id as
@@ -273,23 +282,24 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 		return nil, fmt.Errorf("opcua-client: manifest: %w", err)
 	}
 	d := &Driver{
-		endpoint:   endpoint,
-		name:       defaultName,
-		manifest:   m,
-		scanRate:   defaultScanRate,
-		retryMin:   defaultRetryMin,
-		retryMax:   defaultRetryMax,
-		maxNodes:   defaultMaxNodes,
-		readMode:   ReadModePoll,
-		log:        slog.Default(),
-		classRates: map[string]time.Duration{},
-		byName:     map[string]*binding{},
-		snapshot:   nio.Values{},
-		state:      "connecting",
-		pending:    map[string]any{},
-		written:    map[string]any{},
-		baseline:   true,
-		kick:       make(chan struct{}, 1),
+		endpoint:     endpoint,
+		name:         defaultName,
+		manifest:     m,
+		scanRate:     defaultScanRate,
+		retryMin:     defaultRetryMin,
+		retryMax:     defaultRetryMax,
+		maxNodes:     defaultMaxNodes,
+		readMode:     ReadModePoll,
+		refreshFloor: defaultRefreshFloor,
+		log:          slog.Default(),
+		classRates:   map[string]time.Duration{},
+		byName:       map[string]*binding{},
+		snapshot:     nio.Values{},
+		state:        "connecting",
+		pending:      map[string]any{},
+		written:      map[string]any{},
+		baseline:     true,
+		kick:         make(chan struct{}, 1),
 	}
 	for _, o := range opts {
 		o(d)

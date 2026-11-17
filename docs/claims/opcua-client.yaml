@@ -330,6 +330,7 @@ claims:
     tests:
       - go ./opcua TestSubscribeFollowsChangesWithoutPolling
       - go ./opcua TestSubscribeBadNodeIsBadNotFatal
+      - go ./opcua TestSubscribeSeveralClasses
       - go ./opcua TestForeignServerMatrix/open62541/reads/subscribe
       - go ./opcua TestForeignServerMatrix/open62541/writes/subscribe
       - go ./opcua TestForeignServerMatrix/milo/reads/subscribe
@@ -357,3 +358,22 @@ claims:
     tests:
       - go ./opcua TestReadModeIsChecked
       - go ./cmd/naut TestCheckOPCUAClientDriver
+
+  - id: UAC-028
+    claim: >-
+      A subscribed value that sits still across several keep-alives and
+      then changes once is delivered as a notification.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeQuietValueStillArrives
+      - go ./opcua TestSubscriptionParams
+      - go ./opcua TestForeignServerMatrix/open62541/quiet/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/quiet/subscribe
+
+  - id: UAC-029
+    claim: >-
+      Each subscribed class is also read in full every 30 s, or every ten of
+      its periods for a slower class.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeRefreshReads

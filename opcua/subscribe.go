@@ -30,9 +30,14 @@
 // subscription the server has dropped. A server that does not implement
 // SetPublishingMode (Bad_ServiceUnsupported) is probed with a Read of
 // Server/ServerStatus/State instead, which still catches a dead transport.
-// A StatusChangeNotification or an error on the notification channel also
-// ends the session. Ending it is the same as a failed read when polling:
-// close, back off, dial again, prime, subscribe.
+// The probe also checks gopcua's client state: any service fault stops
+// gopcua's publish loop while reads go on working (see probe), and the
+// state is the only sign of it. A StatusChangeNotification or an error on
+// the notification channel also ends the session. Ending it is the same as
+// a failed read when polling: close, back off, dial again, prime,
+// subscribe. On top of that each class is read in full now and then
+// (refreshEvery), which bounds how long a lost notification can go
+// unnoticed whatever lost it.
 //
 // A server that refuses a subscription (Bad_TooManySubscriptions, say) is
 // a failed session, logged and retried on the ladder. The driver does not
@@ -74,24 +79,42 @@ const maxMonitoredItemsPerCallNode = 11714
 // stopped publishing without closing its session (a client that lost power
 // or its link). The driver has long since given that session up and
 // subscribed afresh on a new one, so a long lifetime only holds server
-// resources; the keep-alive is set so the lifetime is at least three of
-// them, the spec's floor.
-const (
-	orphanLifetime = time.Minute
-	keepAliveEvery = 10 * time.Second
-)
+// resources. The lifetime is never under three keep-alives, the spec's
+// floor.
+const orphanLifetime = time.Minute
 
-// subscriptionCounts derives the keep-alive and lifetime counts (in
-// publishing intervals) for a class publishing every rate.
-func subscriptionCounts(rate time.Duration) (keepAlive, lifetime uint32) {
-	per := func(d time.Duration) uint32 {
-		n := math.Ceil(float64(d) / float64(rate))
-		return uint32(max(n, 1))
+// subscriptionParams derives a class's subscription from its rate and the
+// request timeout:
+//
+//   - The keep-alive window (keep-alive count × publishing interval) is at
+//     most half the request timeout. gopcua gives up on a Publish after
+//     max(keep-alive window, request timeout) and drops whatever answers
+//     it later; with the window equal to that deadline, a quiet
+//     subscription races its own keep-alive, and a notification that loses
+//     the race is gone (the next one only comes with the next change).
+//   - So the publishing interval is the class rate, but never more than a
+//     quarter of the timeout: a 60 s class is SAMPLED every 60 s and
+//     published every 1.25 s (with a 5 s timeout), which costs a keep-alive
+//     message every couple of seconds and nothing else.
+func subscriptionParams(rate, timeout time.Duration) (interval time.Duration, keepAlive, lifetime uint32) {
+	interval = min(rate, timeout/4)
+	if interval <= 0 {
+		interval = rate
 	}
-	keepAlive = per(keepAliveEvery)
-	lifetime = max(per(orphanLifetime), 3*keepAlive)
-	return keepAlive, lifetime
+	keepAlive = uint32(max(int64(timeout/2)/int64(interval), 1))
+	lifetime = max(uint32(math.Ceil(float64(orphanLifetime)/float64(interval))), 3*keepAlive)
+	return interval, keepAlive, lifetime
 }
+
+// refreshEvery is how often a subscribed class is also read once, in full:
+// every 30 s, or every ten of its periods for a slower class. A
+// notification can be lost without the session failing (a publish the
+// library gave up on, a publish loop it paused on an error it does not
+// report); the refresh bounds how long a value can be wrong while reading
+// Good to this, instead of until the value next changes.
+func refreshEvery(rate, floor time.Duration) time.Duration { return max(floor, 10*rate) }
+
+const defaultRefreshFloor = 30 * time.Second
 
 // subSession is one session's subscriptions: the client handle of every
 // monitored item indexes handles (handle-1), shared across the classes,
@@ -100,9 +123,9 @@ type subSession struct {
 	ids     []uint32
 	handles []*binding
 	ch      chan *opcua.PublishNotificationData
-	// probeRead: the server answered SetPublishingMode with
-	// Bad_ServiceUnsupported, so the session is probed with a Read.
-	probeRead bool
+	// refresh is when each class (by index in d.classes) is next read in
+	// full (refreshEvery).
+	refresh []time.Time
 }
 
 // serveSubscribed is serve for read-mode: subscribe. Same entry (flush the
@@ -133,6 +156,10 @@ func (d *Driver) serveSubscribed(ctx context.Context, sess *Session) {
 	d.mu.Lock()
 	d.primed = true
 	d.mu.Unlock()
+	now := time.Now()
+	for _, c := range d.classes {
+		ss.refresh = append(ss.refresh, now.Add(refreshEvery(c.rate, d.refreshFloor)))
+	}
 
 	probe := time.NewTicker(probeInterval)
 	defer probe.Stop()
@@ -151,6 +178,16 @@ func (d *Driver) serveSubscribed(ctx context.Context, sess *Session) {
 			}
 			if !d.probe(ctx, sess, ss) {
 				return
+			}
+			now := time.Now()
+			for i, c := range d.classes {
+				if now.Before(ss.refresh[i]) {
+					continue
+				}
+				if !d.pollClass(ctx, sess, c) {
+					return
+				}
+				ss.refresh[i] = time.Now().Add(refreshEvery(c.rate, d.refreshFloor))
 			}
 		case n := <-ss.ch:
 			if !d.notified(ss, n) {
@@ -171,10 +208,10 @@ func (d *Driver) subscribe(ctx context.Context, sess *Session) (*subSession, err
 	d.mu.Unlock()
 	revised := map[string]time.Duration{}
 	for _, c := range d.classes {
-		keepAlive, lifetime := subscriptionCounts(c.rate)
+		interval, keepAlive, lifetime := subscriptionParams(c.rate, d.conn.Timeout)
 		rctx, cancel := context.WithTimeout(ctx, d.conn.Timeout)
 		sub, err := sess.Client.Subscribe(rctx, &opcua.SubscriptionParameters{
-			Interval:          c.rate,
+			Interval:          interval,
 			MaxKeepAliveCount: keepAlive,
 			LifetimeCount:     lifetime,
 		}, ss.ch)
@@ -184,9 +221,13 @@ func (d *Driver) subscribe(ctx context.Context, sess *Session) (*subSession, err
 		}
 		ss.ids = append(ss.ids, sub.SubscriptionID)
 		revised[c.name] = sub.RevisedPublishingInterval
-		if sub.RevisedPublishingInterval > c.rate {
-			d.log.Info("opcua-client: the server publishes slower than the scan class asked", "driver", d.name,
-				"class", c.name, "requested", c.rate, "revised", sub.RevisedPublishingInterval)
+		if sub.RevisedPublishingInterval > interval {
+			d.log.Info("opcua-client: the server publishes slower than asked", "driver", d.name,
+				"class", c.name, "requested", interval, "revised", sub.RevisedPublishingInterval)
+		}
+		if window := time.Duration(sub.RevisedMaxKeepAliveCount) * sub.RevisedPublishingInterval; window >= d.conn.Timeout {
+			d.log.Warn("opcua-client: the server's keep-alive is not shorter than the request timeout, so a quiet subscription can lose a notification until the next refresh read; raise the timeout",
+				"driver", d.name, "class", c.name, "keepAlive", window, "timeout", d.conn.Timeout)
 		}
 
 		var reqs []*ua.MonitoredItemCreateRequest
@@ -291,10 +332,24 @@ func (d *Driver) notified(ss *subSession, n *opcua.PublishNotificationData) bool
 
 // probe checks the session is alive and the server still has its
 // subscriptions (see the package comment above). False ends the session.
+//
+// It also asks gopcua whether its own subscription machinery is still
+// running. In gopcua v0.9.1 ANY response whose ServiceResult is not Good
+// (a service fault: Bad_ServiceUnsupported, Bad_TooManyOperations, a
+// server-side Bad_Timeout on a Publish, ...) reaches the client's monitor,
+// which, with AutoReconnect off, marks the client closed and stops the
+// publish loop for good while the secure channel stays open. Reads keep
+// working; notifications silently stop. The client's state is the only
+// sign of it, so a state other than Connected ends the session.
 func (d *Driver) probe(ctx context.Context, sess *Session, ss *subSession) bool {
+	if !d.libraryRunning(sess) {
+		return false
+	}
 	rctx, cancel := context.WithTimeout(ctx, d.conn.Timeout)
 	defer cancel()
-	if !ss.probeRead {
+	kind := probeRead
+	if !d.probeByRead.Load() {
+		kind = probeSetPublishingMode
 		var res *ua.SetPublishingModeResponse
 		err := sess.Client.Send(rctx, &ua.SetPublishingModeRequest{PublishingEnabled: true, SubscriptionIDs: ss.ids},
 			func(v ua.Response) error {
@@ -307,33 +362,58 @@ func (d *Driver) probe(ctx context.Context, sess *Session, ss *subSession) bool 
 			})
 		switch {
 		case errors.Is(err, ua.StatusBadServiceUnsupported):
-			ss.probeRead = true
-			d.log.Info("opcua-client: the server does not support SetPublishingMode; probing the session with a Read instead", "driver", d.name)
+			// The fault itself has stopped gopcua's publish loop (see
+			// above), so this session is done. Every later session on this
+			// driver probes with a Read, which a server never faults.
+			d.probeByRead.Store(true)
+			d.lost(fmt.Errorf("the server does not support SetPublishingMode, and its refusal stopped the subscription loop; subscribing again, probed by a Read from now on"))
+			return false
 		case err != nil:
 			if ctx.Err() == nil {
 				d.lost(fmt.Errorf("probe: %w", err))
 			}
 			return false
-		default:
-			for i, sc := range res.Results {
-				if sc != ua.StatusOK && i < len(ss.ids) {
-					d.lost(fmt.Errorf("subscription %d: %v", ss.ids[i], sc))
-					return false
-				}
+		}
+		for i, sc := range res.Results {
+			if sc != ua.StatusOK && i < len(ss.ids) {
+				d.lost(fmt.Errorf("subscription %d: %v", ss.ids[i], sc))
+				return false
 			}
-			return true
+		}
+	} else {
+		_, err := sess.Client.Read(rctx, &ua.ReadRequest{NodesToRead: []*ua.ReadValueID{{
+			NodeID: ua.NewNumericNodeID(0, serverStateNode), AttributeID: ua.AttributeIDValue}}})
+		if err != nil {
+			if ctx.Err() == nil {
+				d.lost(fmt.Errorf("probe: %w", err))
+			}
+			return false
 		}
 	}
-	_, err := sess.Client.Read(rctx, &ua.ReadRequest{NodesToRead: []*ua.ReadValueID{{
-		NodeID: ua.NewNumericNodeID(0, serverStateNode), AttributeID: ua.AttributeIDValue}}})
-	if err != nil {
-		if ctx.Err() == nil {
-			d.lost(fmt.Errorf("probe: %w", err))
-		}
+	if !d.libraryRunning(sess) {
+		return false
+	}
+	d.mu.Lock()
+	d.server.probe = kind
+	d.mu.Unlock()
+	return true
+}
+
+// libraryRunning reports whether gopcua's client is still Connected, its
+// publish loop alive (see probe). False records why the session ends.
+func (d *Driver) libraryRunning(sess *Session) bool {
+	if st := sess.Client.State(); st != opcua.Connected {
+		d.lost(fmt.Errorf("the OPC UA client stopped its subscription loop (state %v), usually after the server answered a request with a service fault; subscribing again", st))
 		return false
 	}
 	return true
 }
+
+// The session probes, as Health.Probe names them.
+const (
+	probeSetPublishingMode = "SetPublishingMode"
+	probeRead              = "Read"
+)
 
 // lost records why a subscribed session is being given up.
 func (d *Driver) lost(err error) {

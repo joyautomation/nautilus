@@ -102,14 +102,30 @@ purpose, so the two cannot drift:
   driver that only listened would hold Good values through an outage.
   Once a second the driver sends `SetPublishingMode(true)` on its own
   subscription ids: a dead transport fails it, a subscription the server
-  dropped answers `Bad_SubscriptionIdInvalid`. A server without that
-  service (`Bad_ServiceUnsupported`, gopcua's own) is probed with a Read of
-  ServerStatus/State. A bad StatusChangeNotification or an error on the
-  notification channel also ends the session.
-- **Orphans are short-lived.** Keep-alive about every 10 s and lifetime
-  about 60 s (never under three keep-alives), so a subscription left on a
-  server by a client that lost its link is gone in a minute rather than
-  the library default's hours.
+  dropped answers `Bad_SubscriptionIdInvalid`. A bad StatusChangeNotification
+  or an error on the notification channel also ends the session.
+- **gopcua stops on any service fault.** Every response whose ServiceResult
+  is not Good reaches the client's monitor, which (AutoReconnect off) marks
+  the client closed and ends the publish loop while the secure channel
+  stays open: reads keep working, notifications silently stop. The probe
+  therefore also checks the client's state and ends the session when it
+  is not Connected. A server without SetPublishingMode
+  (`Bad_ServiceUnsupported`, gopcua's own server) is exactly such a fault:
+  that first session is given up and the driver probes every later one
+  with a Read of ServerStatus/State, which a server never faults.
+- **Keep-alive inside the Publish deadline.** gopcua abandons a Publish
+  after max(keep-alive window, request timeout) and drops a late answer.
+  A keep-alive window equal to that deadline makes a quiet subscription
+  race its own keep-alive and lose the change that wins the race. So the
+  window is at most half the request timeout, and the publishing interval
+  is the class rate but at most a quarter of the timeout: a 60 s class is
+  sampled every 60 s and published every 1.25 s (5 s timeout). Lifetime is
+  about 60 s, never under three keep-alives, so a subscription orphaned by
+  a client that lost its link is gone in a minute.
+- **Refresh reads bound the rest.** Each class is also read in full every
+  30 s, or every ten of its periods if slower, so a notification lost
+  without the session failing, whatever lost it, leaves a wrong Good
+  value for at most that long rather than until the value next changes.
 - **A refusal fails loudly.** A refused subscription is a failed session
   on the ladder, never a silent fallback to polling; a refused monitored
   item makes its binding Bad. The status card shows the mode, the count of

@@ -116,7 +116,12 @@ Everything below holds in both modes. A subscribed session is first read
 once per class, so `__Online` and quality mean the same thing; then it is
 checked once a second, because a subscription on its own does not tell a
 client that its server has gone. A restart is noticed within that second,
-a server that goes silent after one request timeout. Subscriptions are
+a server that goes silent after one request timeout. Each class is also
+read in full every 30 s (every ten periods for a slower class), so a
+notification lost on the way costs at most that long. A class slower
+than a quarter of the request timeout is still sampled at its own rate;
+the server just publishes more often than that, so its keep-alive stays
+well inside the timeout. Subscriptions are
 created fresh on every new session. A server may publish slower than the
 class asks; the driver logs it and the status card shows the interval the
 server granted. If the server refuses a subscription the session fails
@@ -229,7 +234,9 @@ polling and within a second when subscribed; a blackhole is silent, so it
 falls after one request timeout (5 s by default), plus up to a second when
 subscribed. Once the server answers again the driver is back within one
 retry step of the backoff ladder. Both servers granted a 200 ms publishing
-interval as asked.
+interval as asked and support `SetPublishingMode`, which the driver uses
+to check a subscribed session. A value that sits still for several
+keep-alives and then changes once arrives as a notification on both.
 
 ## Reading an Ignition gateway
 
