@@ -41,8 +41,11 @@ type testController struct {
 	outDS    uint8
 	sending  bool
 	dcp      chan *wire.DCPFrame
-	ctx      context.Context
-	cancel   context.CancelFunc
+	props    uint32 // ARProperties; 0 = 0x11 (legacy start-up)
+
+	sawARServer bool
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 func newController(t *testing.T, hub *transport.Hub, mac net.HardwareAddr, devRPC *net.UDPAddr) *testController {
@@ -336,7 +339,7 @@ func (c *testController) connectArgs(subs []Subslot) []byte {
 	}
 	args := wire.MarshalARBlockReq(&wire.ARBlockReq{
 		ARType: 1, ARUUID: c.arUUID, SessionKey: c.session, CMInitiatorMAC: c.port.MAC(),
-		CMInitiatorObjUUID: randUUID(), ARProperties: 0x11, CMInitiatorActivityTimeout: 100,
+		CMInitiatorObjUUID: randUUID(), ARProperties: c.arProps(), CMInitiatorActivityTimeout: 100,
 		CMInitiatorUDPRTPort: wire.ProfinetRTUDPPort, CMInitiatorStationName: "ctrl",
 	})
 	c.mu.Unlock()
@@ -417,6 +420,8 @@ func (c *testController) connect(t *testing.T, subs []Subslot, twice bool) []wir
 				c.outFrame = binary.BigEndian.Uint16(b.Data[4:6])
 				c.mu.Unlock()
 			}
+		case wire.BlockTypeARServerBlockRes:
+			c.sawARServer = true
 		case wire.BlockTypeModuleDiffBlock:
 			d, err := wire.ParseModuleDiff(b.Data)
 			if err != nil {
@@ -502,4 +507,11 @@ func (c *testController) write(t *testing.T, ws []wire.Write) wire.PNIOStatus {
 
 func dd(dir, n uint16) wire.SubmoduleDataDesc {
 	return wire.SubmoduleDataDesc{DataDirection: dir, DataLength: n, LengthIOCS: 1, LengthIOPS: 1}
+}
+
+func (c *testController) arProps() uint32 {
+	if c.props == 0 {
+		return 0x11
+	}
+	return c.props
 }

@@ -48,8 +48,10 @@ func newRig(t *testing.T) *rig {
 		}),
 		RPC:              devRPC,
 		ControllerCMPort: ctrl.cm.LocalAddr().(*net.UDPAddr).Port,
-		InterfaceIP:      func() (net.IP, net.IP) { return loIP.To4(), net.IP(net.IPv4Mask(255, 0, 0, 0)) },
-		MinWatchdog:      60 * time.Millisecond,
+		// Two addresses, the one the controller sets second: a bench NIC
+		// often holds several.
+		InterfaceAddrs: func() []net.IP { return []net.IP{net.IPv4(127, 0, 0, 2), loIP} },
+		MinWatchdog:    60 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -110,9 +112,17 @@ func TestIdentifyAndStartup(t *testing.T) {
 		return bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0xAB, 0xCD}) && s.OutputGood[Addr{1, 1}] && s.Meaning == wire.StatusRun
 	})
 
+	// Until the driver says the inputs are in, they go out IOPS Bad, never
+	// as zeros that look valid.
+	eventually(t, "IOPS Bad before the first push", func() bool {
+		_, iops, _, ok := c.lastInput(Addr{1, 1})
+		return ok && iops == wire.IOxSBad
+	})
+
 	// Inputs reach the controller at their FrameOffsets with IOPS Good, and
 	// Run once the controller acknowledged ApplicationReady.
 	r.dev.SetInput(Addr{1, 1}, []byte{1, 2, 3, 4})
+	r.dev.SetInputsValid(true)
 	r.dev.SetInput(Addr{2, 1}, []byte{9, 9})
 	eventually(t, "inputs", func() bool {
 		in, iops, ds, ok := c.lastInput(Addr{1, 1})
@@ -197,6 +207,7 @@ func TestModuleDiff(t *testing.T) {
 	// The wrong subslot's inputs go out Bad; the right one's Good.
 	r.ctrl.prmEnd(t)
 	r.dev.SetInput(Addr{2, 1}, []byte{7, 7})
+	r.dev.SetInputsValid(true)
 	eventually(t, "IOPS per subslot", func() bool {
 		_, bad, _, ok1 := r.ctrl.lastInput(Addr{1, 1})
 		in2, good, _, ok2 := r.ctrl.lastInput(Addr{2, 1})
@@ -268,4 +279,62 @@ func TestReleaseAndWrite(t *testing.T) {
 	}
 	r.ctrl.release(t)
 	eventually(t, "idle", func() bool { return r.dev.Snapshot().State == StateIdle })
+}
+
+// TestAdvancedStartup is the start-up a TIA Portal controller uses
+// (ARProperties bit 30): ARServerBlockRes in the Connect response, cyclic
+// input frames from Connect on (before PrmEnd), Run only after the
+// controller acknowledges ApplicationReady.
+func TestAdvancedStartup(t *testing.T) {
+	r := newRig(t)
+	c := r.ctrl
+	c.props = 0x11 | startupModeBit
+	c.connect(t, layout, false)
+	if !c.sawARServer {
+		t.Fatal("no ARServerBlockRes in an Advanced Startup Connect response")
+	}
+	eventually(t, "input frames before PrmEnd", func() bool {
+		_, _, ds, ok := c.lastInput(Addr{1, 1})
+		return ok && ds&wire.DataStatusRun == 0
+	})
+	if s := r.dev.Snapshot(); s.State != StateStartup {
+		t.Fatalf("state %v before PrmEnd", s.State)
+	}
+	// A slow parameterisation with the controller's frames flowing does
+	// not trip the watchdog.
+	c.startOutputs(map[Addr][]byte{{1, 1}: {1, 1}}, wire.DataStatusNormal)
+	time.Sleep(300 * time.Millisecond)
+	c.prmEnd(t)
+	eventually(t, "Run after ApplicationReady", func() bool {
+		_, _, ds, ok := c.lastInput(Addr{1, 1})
+		return ok && ds&wire.DataStatusRun != 0 && c.appReadySeen()
+	})
+	if s := r.dev.Snapshot(); s.State != StateData || s.Aborts != 0 {
+		t.Fatalf("snapshot %+v", s)
+	}
+}
+
+func TestNewValidates(t *testing.T) {
+	hub := transport.NewHub()
+	conn, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: loIP})
+	defer conn.Close()
+	base := Config{Identity: Identity{Station: "d"}, Port: hub.Port(devMAC, transport.Options{}), RPC: conn}
+	for name, subs := range map[string][]Subslot{
+		"slot 0":           {{Addr: Addr{0, 2}}},
+		"duplicate":        {{Addr: Addr{1, 1}, ModuleIdent: 1}, {Addr: Addr{1, 1}, ModuleIdent: 1}},
+		"two module ident": {{Addr: Addr{1, 1}, ModuleIdent: 1}, {Addr: Addr{1, 2}, ModuleIdent: 2}},
+		"too many":         make([]Subslot, MaxSubslots+1),
+		"none":             nil,
+	} {
+		cfg := base
+		cfg.Subslots = subs
+		if name == "too many" {
+			for i := range cfg.Subslots {
+				cfg.Subslots[i] = Subslot{Addr: Addr{uint16(i + 1), 1}}
+			}
+		}
+		if _, err := New(cfg); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
 }

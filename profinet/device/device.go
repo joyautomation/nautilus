@@ -46,6 +46,10 @@ const (
 	PortSubslot          uint16 = 0x8001
 )
 
+// MaxSubslots bounds the layout: a Connect for many more subslots exceeds
+// one DCE/RPC fragment, and fragment reassembly is not implemented yet.
+const MaxSubslots = 24
+
 // Addr names one subslot.
 type Addr struct{ Slot, Subslot uint16 }
 
@@ -86,10 +90,10 @@ type Config struct {
 	// ControllerCMPort is the controller's DCE/RPC port, where the device
 	// sends its CControl(ApplicationReady). 0 means 34964.
 	ControllerCMPort int
-	// InterfaceIP reports the address the device's interface holds (nil
-	// when it has none). A DCP Set IP is accepted only when it names this
-	// address. nil means none.
-	InterfaceIP func() (ip, mask net.IP)
+	// InterfaceAddrs reports the IPv4 addresses the device's interface
+	// holds (an interface can hold several). A DCP Set IP is accepted only
+	// when it names one of them; nil means the interface holds none.
+	InterfaceAddrs func() []net.IP
 	// MinWatchdog is the shortest output watchdog the device applies,
 	// however small the controller's cycle × factor: a non-real-time host
 	// stalls for longer than 3 × 1 ms now and then. 0 means 100 ms.
@@ -108,13 +112,15 @@ type Device struct {
 	mu sync.Mutex
 	// The device's process image: inputs set by the driver, outputs as
 	// last received.
-	in       map[Addr][]byte
-	inValid  bool
-	out      map[Addr][]byte
-	outGood  map[Addr]bool
-	ar       *ar // the current AR, nil when none
-	station  string
-	ipSet    bool // DCP: an IP suite has been set (and matches the interface)
+	in      map[Addr][]byte
+	inValid bool
+	out     map[Addr][]byte
+	outGood map[Addr]bool
+	ar      *ar // the current AR, nil when none
+	station string
+	// suite is the IP suite a DCP Set gave the device, nil until one is
+	// accepted (its address is one the interface holds).
+	suite    *ipSuite
 	snapInfo snapInfo
 
 	counters counters
@@ -133,6 +139,8 @@ type snapInfo struct {
 	lastEvent  string
 	diff       []wire.DiffModule
 }
+
+type ipSuite struct{ ip, mask, gw net.IP }
 
 type counters struct {
 	ars, aborts, refusedARs, setIPRefused, nameSets, alarms, outputFrames uint64
@@ -171,6 +179,9 @@ func New(cfg Config) (*Device, error) {
 	if len(cfg.Subslots) == 0 {
 		return nil, errors.New("profinet device: no subslots")
 	}
+	if len(cfg.Subslots) > MaxSubslots {
+		return nil, fmt.Errorf("profinet device: %d subslots; at most %d until fragmented RPC requests are supported", len(cfg.Subslots), MaxSubslots)
+	}
 	if cfg.ControllerCMPort == 0 {
 		cfg.ControllerCMPort = wire.PNIOCMPort
 	}
@@ -191,7 +202,6 @@ func New(cfg Config) (*Device, error) {
 		out:     map[Addr][]byte{},
 		outGood: map[Addr]bool{},
 		station: cfg.Station,
-		inValid: true,
 		boot:    uint32(time.Now().Unix()),
 	}
 	for _, s := range dapSubslots() {
@@ -204,6 +214,11 @@ func New(cfg Config) (*Device, error) {
 		}
 		if _, dup := d.subs[s.Addr]; dup {
 			return nil, fmt.Errorf("profinet device: subslot %s twice", s.Addr)
+		}
+		for _, o := range d.subs {
+			if o.Slot == s.Slot && o.ModuleIdent != s.ModuleIdent {
+				return nil, fmt.Errorf("profinet device: slot %d has two module idents (%#x, %#x)", s.Slot, o.ModuleIdent, s.ModuleIdent)
+			}
 		}
 		d.subs[s.Addr] = &s
 		d.in[s.Addr] = make([]byte, s.InputLen)
@@ -235,8 +250,10 @@ func (d *Device) SetInput(a Addr, data []byte) {
 }
 
 // SetInputsValid says whether the inputs are worth believing: false (a
-// standby, a hung scan) sends IOPS Bad on every input subslot, so the
-// controller sees invalid data rather than frozen-good values.
+// standby, a hung scan, nothing written yet) sends IOPS Bad on every
+// input subslot, so the controller sees invalid data rather than zeros or
+// frozen values. A new device starts invalid: the driver turns it on once
+// the program's values are in.
 func (d *Device) SetInputsValid(ok bool) {
 	d.mu.Lock()
 	d.inValid = ok
@@ -376,8 +393,8 @@ func (d *Device) lldpLoop(ctx context.Context) {
 			StationName: d.station,
 			SysDesc:     "nautilus PROFINET IO device",
 		}
-		if d.ipSet && d.cfg.InterfaceIP != nil {
-			info.IP, _ = d.cfg.InterfaceIP()
+		if d.suite != nil {
+			info.IP = d.suite.ip
 		}
 		d.mu.Unlock()
 		if err := d.cfg.Port.Send(wire.LLDPMulticastMAC, wire.EtherTypeLLDP, wire.BuildLLDP(info)); err != nil && ctx.Err() == nil {

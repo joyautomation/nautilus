@@ -150,6 +150,9 @@ func (d *Device) connect(blocks []wire.PNIOBlock, from *net.UDPAddr) ([]byte, wi
 	resp := wire.MarshalARBlockRes(arb.ARType, arb.ARUUID, arb.SessionKey, d.cfg.Port.MAC(), wire.ProfinetRTUDPPort)
 	used := map[uint16]bool{}
 	for _, r := range iocrs {
+		if r.DataLength < wire.MinCSDU {
+			return refuse(0x02, 0x08) // IOCRBlockReq: DataLength
+		}
 		id := r.FrameID
 		if id == 0xFFFF {
 			id = allocFrameID(r.IOCRProperties&0x0F, used)

@@ -76,6 +76,16 @@ func (d *Device) handleRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
 	if int(h.FragmentLen) < len(body) {
 		body = body[:h.FragmentLen]
 	}
+	if h.Flags1&wire.RPCFlagFrag != 0 {
+		// A request split over several datagrams. Reassembly is not built
+		// (New caps the layout so a Connect fits one fragment); say so
+		// rather than act on a partial request.
+		d.mu.Lock()
+		d.snapInfo.lastEvent = fmt.Sprintf("fragmented RPC request (op %d) from %s ignored: not supported", h.OpNum, from)
+		d.mu.Unlock()
+		d.log.Warn("profinet device: fragmented RPC request ignored", "op", h.OpNum, "from", from)
+		return
+	}
 	key := replyKey{h.ActivityUUID, h.SequenceNum, h.OpNum}
 	if resp := cache.get(key); resp != nil {
 		d.cfg.RPC.WriteTo(resp, from)
@@ -261,9 +271,11 @@ func (d *Device) epm(h *wire.RPCHeader, body []byte) []byte {
 		return d.reply(h, r)
 	}
 	var ip net.IP
-	if d.cfg.InterfaceIP != nil {
-		ip, _ = d.cfg.InterfaceIP()
+	d.mu.Lock()
+	if d.suite != nil {
+		ip = d.suite.ip
 	}
+	d.mu.Unlock()
 	tower := buildTower(ip)
 	obj := wire.UUIDPNIOObjectBase
 	obj[10], obj[11] = 0x00, 0x01

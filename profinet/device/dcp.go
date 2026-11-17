@@ -62,10 +62,8 @@ func (d *Device) dcpIdentify(req *wire.DCPFrame, to net.HardwareAddr) {
 // a device that reports one on first contact.
 func (d *Device) identityBlocks() []wire.DCPBlock {
 	ip, mask, gw, info := net.IPv4zero.To4(), net.IPv4zero.To4(), net.IPv4zero.To4(), wire.DCPBlockInfoIPNotSet
-	if d.ipSet && d.cfg.InterfaceIP != nil {
-		if hip, hmask := d.cfg.InterfaceIP(); hip != nil {
-			ip, mask, info = hip.To4(), hmask, wire.DCPBlockInfoIPSet
-		}
+	if s := d.suite; s != nil && d.holds(s.ip) {
+		ip, mask, gw, info = s.ip, s.mask, s.gw, wire.DCPBlockInfoIPSet
 	}
 	return []wire.DCPBlock{
 		wire.DCPBlockNameOfStation(d.station),
@@ -123,24 +121,24 @@ func (d *Device) setIP(data []byte) uint8 {
 	if len(data) < 14 {
 		return dcpNotSet
 	}
-	ip, _, _, err := wire.ParseIPSuiteBlock(data[2:])
+	ip, mask, gw, err := wire.ParseIPSuiteBlock(data[2:])
 	if err != nil {
 		return dcpNotSet
 	}
 	if ip.Equal(net.IPv4zero) {
-		d.ipSet = false // "reset to no address": nothing to apply either
+		d.suite = nil // "reset to no address": nothing to apply either
 		return dcpOK
 	}
-	var have net.IP
-	if d.cfg.InterfaceIP != nil {
-		have, _ = d.cfg.InterfaceIP()
-	}
-	if have != nil && have.Equal(ip) {
-		d.ipSet = true
+	if d.holds(ip) {
+		d.suite = &ipSuite{ip: ip.To4(), mask: mask.To4(), gw: gw.To4()}
 		return dcpOK
 	}
 	d.counters.setIPRefused++
-	d.snapInfo.lastEvent = fmt.Sprintf("refused DCP Set IP %s: the interface has %v; set the device's address in the controller's project to the interface's", ip, have)
+	var have []net.IP
+	if d.cfg.InterfaceAddrs != nil {
+		have = d.cfg.InterfaceAddrs()
+	}
+	d.snapInfo.lastEvent = fmt.Sprintf("refused DCP Set IP %s: the interface holds %v; give the device one of those addresses in the controller's project", ip, have)
 	d.log.Warn("profinet device: " + d.snapInfo.lastEvent)
 	return dcpNotSet
 }
@@ -187,4 +185,17 @@ func (d *Device) handleAlarm(f transport.Frame) {
 		d.endAR(a, "the controller aborted the AR (RTA ERR)")
 	}
 	d.mu.Unlock()
+}
+
+// holds reports whether the interface has address ip.
+func (d *Device) holds(ip net.IP) bool {
+	if d.cfg.InterfaceAddrs == nil {
+		return false
+	}
+	for _, a := range d.cfg.InterfaceAddrs() {
+		if a.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
