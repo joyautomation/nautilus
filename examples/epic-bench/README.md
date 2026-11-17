@@ -18,9 +18,11 @@ IEC program that drives it.
 
 ## How the files got here
 
+`192.0.2.11` stands for your EPIC's address throughout.
+
 ```sh
-naut optommp browse --host 192.168.82.243   # what the processor reports: modules, channel types, live values
-naut optommp import --host 192.168.82.243 --scan-rate 20ms --scratch-floats 1
+naut optommp browse --host 192.0.2.11   # what the processor reports: modules, channel types, live values
+naut optommp import --host 192.0.2.11 --scan-rate 20ms --scratch-floats 1
                                             # → optommp_manifest.yaml + tags/optommp.yaml
 ```
 
@@ -99,7 +101,7 @@ connections to a controller across all its tabs), nothing written.
 cd hmi
 npm install
 npm run build                                          # → hmi/build, which server.hmi serves at /
-CONTROLLER_URL=http://192.168.82.243:8086 npm run dev  # or work on it against a running controller
+CONTROLLER_URL=http://192.0.2.11:8086 npm run dev  # or work on it against a running controller
 ```
 
 The model is plain Threlte (`hmi/src/lib/Epic.svelte`) placed inside
@@ -120,9 +122,9 @@ static ARM build of `naut` runs unchanged:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags='-s -w' -o naut-arm ./cmd/naut
-scp naut-arm <shell-user>@192.168.82.243:nautilus/naut
-scp -r examples/epic-bench <shell-user>@192.168.82.243:nautilus/
-ssh <shell-user>@192.168.82.243 'cd nautilus/epic-bench && ../naut run .'
+scp naut-arm <shell-user>@192.0.2.11:nautilus/naut
+scp -r examples/epic-bench <shell-user>@192.0.2.11:nautilus/
+ssh <shell-user>@192.0.2.11 'cd nautilus/epic-bench && ../naut run .'
 ```
 
 Shell access needs Opto 22's free **GROOV-LIC-SHELL** license (groov
@@ -133,7 +135,7 @@ password; nothing here needs it.
 
 Verified 2026-10-24 on the bench, `naut run` on the EPIC with the
 OptoMMP driver dialing the processor's own address (the manifest's
-`192.168.82.243`; `--manifest-host 127.0.0.1` writes loopback, which
+`192.0.2.11`; `--manifest-host 127.0.0.1` writes loopback, which
 costs the same per request), the EPIC's own stack (PAC Control engine,
 groov View, Node-RED) still running beside it. DO11 read off the processor
 from the laptop every 100 ms went `0011111000001111100000111111000001111100`;

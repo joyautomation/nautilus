@@ -7,8 +7,8 @@
 # no PAC Control strategy, no CODESYS, no license. The chassis was imported,
 # not typed:
 #
-#   naut optommp browse --host 192.168.82.243     what the processor reports
-#   naut optommp import --host 192.168.82.243 --scan-rate 20ms --scratch-floats 1
+#   naut optommp browse --host 192.0.2.11     what the processor reports
+#   naut optommp import --host 192.0.2.11 --scan-rate 20ms --scratch-floats 1
 #                                                  → optommp_manifest.yaml + tags/optommp.yaml
 #
 #   naut check .     validate offline
