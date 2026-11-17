@@ -75,7 +75,6 @@ import { SearchProviderType } from '@codingame/monaco-vscode-api/vscode/vs/workb
 import { Schemas } from '@codingame/monaco-vscode-api/vscode/vs/base/common/network';
 
 const ENGINE = new URL('../', location.href); // the package's dist/: worker.js, naut.wasm, examples/
-const EXTENSION = new URL('./extension/', location.href); // the extension's web build and assets
 const PLAYGROUND_URL = 'http://playground.nautilus'; // the extension's controller URL (src/web/engine.ts)
 const SAVED = new URL('/playground/api/p', location.origin); // playground/share, beside the docs site
 
@@ -383,6 +382,11 @@ async function main() {
 			'editor.experimental.asyncTokenization': false,
 			'security.workspace.trust.enabled': false,
 			'telemetry.telemetryLevel': 'off',
+			// The YAML extension: no telemetry (or its opt-in prompt), and no
+			// schemastore.org catalog fetched by every visitor; the schemas
+			// are the nautilus extension's own.
+			'redhat.telemetry.enabled': false,
+			'yaml.schemaStore.enable': false,
 			'terminal.integrated.defaultProfile.linux': 'nautilus',
 			'terminal.integrated.defaultProfile.osx': 'nautilus',
 			'terminal.integrated.defaultProfile.windows': 'nautilus',
@@ -449,16 +453,32 @@ async function main() {
 	// Its files carry the build's ?v= like the engine's, so a returning
 	// visitor gets the extension that matches this build, not a cached one.
 	const v = params.get('v');
-	const extUrl = (f) => new URL(f + (v ? '?v=' + encodeURIComponent(v) : ''), EXTENSION).href;
-	const manifest = await (await fetch(extUrl('package.json'))).json();
-	// The Marketplace extension is desktop-only for now (no "browser" entry,
-	// so vscode.dev does not offer it without an engine); the playground
-	// supplies the engine, so it names the web build itself.
-	manifest.browser = './out/web/extension.js';
-	const files = await (await fetch(extUrl('files.json'))).json();
-	const ext = registerExtension(manifest, ExtensionHostKind.LocalWebWorker, { system: true });
-	for (const f of files) ext.registerFileUrl('/' + f, extUrl(f));
-	await ext.whenReady();
+	const served = async (dir, fix) => {
+		const url = (f) => new URL(f + (v ? '?v=' + encodeURIComponent(v) : ''), new URL(dir, location.href)).href;
+		const manifest = await (await fetch(url('package.json'))).json();
+		fix(manifest, url);
+		const files = await (await fetch(url('files.json'))).json();
+		const ext = registerExtension(manifest, ExtensionHostKind.LocalWebWorker, { system: true });
+		for (const f of files) ext.registerFileUrl('/' + f, url(f));
+		return ext.whenReady();
+	};
+	await Promise.all([
+		// The Marketplace extension is desktop-only for now (no "browser" entry,
+		// so vscode.dev does not offer it without an engine); the playground
+		// supplies the engine, so it names the web build itself.
+		// Its YAML schemas by their URL here: in a browser the YAML server
+		// fetches a schema over http(s) and cannot read an extension's
+		// own ./schemas/... (extension-file://).
+		served('./extension/', (m, url) => {
+			m.browser = './out/web/extension.js';
+			for (const s of m.contributes.yamlValidation) s.url = url(s.url.replace(/^\.\//, ''));
+		}),
+		// Red Hat's YAML extension (scripts/app.sh): completion, hover and
+		// validation from the nautilus extension's yamlValidation schemas.
+		// Colouring stays VS Code's own grammar, which the nautilus test
+		// grammar injects into, so its grammar (not shipped) is left out.
+		served('./yaml-extension/', (m) => delete m.contributes.grammars)
+	]);
 	await openProject(project);
 	await terminalBelow(await getService(ICommandService));
 	splash?.remove();
