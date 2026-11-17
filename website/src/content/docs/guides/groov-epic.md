@@ -550,10 +550,16 @@ errors.
   OptoMMP.
 - **Counter reset and analog min/max.** `_Count` reads a counter; clearing
   it, and the per-channel min/max the processor keeps, are not exposed.
-- **The watchdog on real outputs.** It has tripped on the bench unit
-  (2026-10-27). The rewrite after a trip, and the status tags that count
-  it, are tested against an in-process fake of the chassis, not yet on
-  the bench.
+- **The watchdog, checked by hand only.** On the bench unit (2026-10-27)
+  a 1 s watchdog tripped during a 15 s freeze of `naut`, and the outputs
+  were back to their commands within a second of the resume. That run is
+  not automated, the bench has no analog output module, and the status
+  tags that count trips are tested against an in-process fake only.
+- **Sharing the custom area or the stream.** The processor has one set of
+  custom-area pointers and one stream configuration. With `--custom-area`
+  or `--stream`, nautilus owns pointers from 0 and stream target 1 while
+  it runs, so Opto's CODESYS runtime or a second nautilus using them on
+  the same unit would fight over them. Polling shares nothing.
 - **Holding outputs without a program.** The acknowledge lives in your
   program; there is no manifest setting that keeps outputs at their
   watchdog values until one is written.
