@@ -154,3 +154,27 @@ claims:
       and restarting the process on the missing heartbeat was observed by
       hand under a user unit (2026-11-17), not in a test. The standby case
       of READY=1 is not tested.
+  - id: DEP-014
+    claim: >-
+      naut deploy asks the box its architecture, builds on naut's own
+      release for it (downloaded, checked against checksums.txt, cached)
+      or on -runtime, uploads the controller and unit, runs the box's
+      install or update on a release named <project>-<git describe>-<sha256:8>,
+      and exits with the box's status (3 when the update rolled back).
+    source: "#to-a-box-over-ssh"
+    tests:
+      - go ./cmd/naut TestDeployUpdateBuildsForTheBox
+      - go ./cmd/naut TestDeployUpdateExitStatusIsTheBoxs
+      - go ./cmd/naut TestDeployRefusesARuntimeThatFailsItsChecksum
+      - go ./cmd/naut TestDeployDevBuildNeedsARuntimeForAnotherArch
+      - go ./cmd/naut TestReleaseID
+      - go ./cmd/naut TestDeployBoxDoesNotMatchItself
+    partial: true
+    note: >-
+      The tests use a stand-in ssh and release server. The box's half
+      (links, rollback on a failed or hung start, retained values kept,
+      backup and restore, the no-op redeploy) is proven by
+      tools/deploy/check.sh, run by hand against an Ubuntu 24.04 systemd
+      container as a sudo user, 2026-11-17, under Type=simple and
+      Type=notify; not yet on ARM64 hardware. The CD workflow has not run
+      in GitHub Actions.

@@ -109,6 +109,106 @@ RestartSec=2
   watchdog's 10 s and more. To stop after five rounds, widen the window
   in `[Unit]`: `StartLimitIntervalSec=5min` and `StartLimitBurst=5`.
 
+## To a box over SSH
+
+`naut deploy` installs that service on a Linux box and moves it from one
+release to the next, from the project's directory:
+
+```sh
+naut deploy install deploy@ipc       # build, install nautilus.service, start
+naut deploy update deploy@ipc        # build, swap in, restart; exit 3 if it rolled back
+naut deploy rollback deploy@ipc      # back to the release before; again goes forward
+naut deploy status deploy@ipc
+naut deploy backup deploy@ipc        # retained values -> nautilus-retain-….tgz
+naut deploy restore deploy@ipc nautilus-retain-….tgz
+```
+
+The box needs systemd, `sh`, coreutils and `tar`, and nothing else. The
+SSH user must be root or have `sudo` without a password. ssh is the
+system's, so `~/.ssh/config`, keys and the agent work as usual, and
+`NAUT_SSH_OPTS` adds options (`-p 2222 -i ~/.ssh/ipc`).
+
+- **What it builds on.** For a box of another architecture, naut
+  downloads its own release for that architecture and checks it against
+  the release's `checksums.txt`. A box like the machine it runs on uses
+  naut itself. `-runtime vX.Y.Z` or `-runtime <naut>` overrides it.
+  Builds are reproducible, so the same project on the same naut version
+  is the same controller, whether a person deploys it or CD does.
+- **Releases.** Each release is
+  `/opt/nautilus/releases/<project>-<git describe>-<sha256:8>`, for
+  example `plant-v1.4.0-3f2a91bc`. `current` and `previous` link to two
+  of them, and `status` names both. The same binary again is a no-op. The
+  same commit built on another naut is a new release.
+- **An update that does not start rolls itself back.** That covers a
+  release that will not start, one that exits within 3 s, and, under
+  `Type=notify`, one whose first scan never finishes. The last waits for
+  the 60 s start timeout. In each case `update` puts both links back,
+  restarts the release before it, and exits 3.
+- **Retained values stay where they are.** They live in
+  `/var/lib/nautilus`, outside every release, so update and rollback keep
+  them. A copy is taken before each update. `restore` stops the controller
+  first, because it saves every 2 s and once more on its way out.
+- **The unit.** `Type=notify` with `WatchdogSec=10s` and the start limit
+  above. It runs as a dynamic user holding only `CAP_SYS_NICE` (for
+  `priority:`) and `CAP_NET_BIND_SERVICE` (ports under 1024). A
+  controller built on a naut that predates notification gets
+  `Type=simple` without a watchdog instead; this is chosen per release.
+- Everything is `sync`ed before a link moves. If power is lost
+  mid-update, the box boots the old release or the whole new one.
+
+### Through CD
+
+A deployment repository holds the project and pins the naut version
+that builds it. A tag runs `naut deploy update` on a runner that can
+reach the box. Plant boxes are rarely reachable from GitHub's hosted
+runners, so that is a self-hosted runner on the plant network:
+
+```yaml
+# .github/workflows/deploy.yml
+name: deploy
+on:
+  push:
+    tags: ["v*"]
+concurrency: deploy # one at a time
+jobs:
+  deploy:
+    runs-on: [self-hosted, plant] # a runner that reaches the box over SSH
+    environment: plant # optional: a reviewer approves each deploy
+    env:
+      NAUT_VERSION: v0.23.0 # the naut every build uses; change it in a commit
+      TARGET: deploy@10.0.0.20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe names the release by its tag
+      - name: install naut
+        run: |
+          case $(uname -m) in aarch64) a=arm64 ;; *) a=amd64 ;; esac
+          v=$NAUT_VERSION
+          curl -fsSL -o naut.tar.gz "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_$a.tar.gz"
+          tar xzf naut.tar.gz naut && rm naut.tar.gz
+      - run: ./naut check . && ./naut test .
+      - name: deploy
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/key"' EXIT
+          (umask 077; printf '%s\n' "$SSH_KEY" >"$RUNNER_TEMP/key")
+          printf '%s\n' "$KNOWN_HOSTS" >"$RUNNER_TEMP/known_hosts"
+          export NAUT_SSH_OPTS="-i $RUNNER_TEMP/key -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          ./naut deploy update "$TARGET"
+```
+
+A person deploying by hand runs the same command with the same naut
+version and gets the same release. Going back is `naut deploy rollback`
+from either.
+
+`tools/deploy/check.sh <ssh-target>` proves all of this against a real
+box. It installs, updates, rolls back, backs up and restores, deploys a
+release that cannot start and one that hangs, and asserts after every
+step which release answers and that a retained setpoint survived.
+
 ## The artifact carries its own provenance
 
 `naut build` embeds the project's git history in the binary it emits —
