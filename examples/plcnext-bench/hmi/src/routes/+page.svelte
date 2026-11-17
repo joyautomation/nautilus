@@ -52,7 +52,10 @@
 
 	let rows = $derived<Row[]>(
 		[
-			{ label: 'Driver', value: driver ? `${driver.kind} ${driver.state}` : '—', tone: driver && driver.state !== 'connected' ? 'crit' : undefined },
+			// No driver in a frame that has arrived is the simulated build
+			// (sim.yaml, the playground): memory is no field driver, so it
+			// reports no status.
+			{ label: 'Driver', value: driver ? `${driver.kind} ${driver.state}` : rt.frame ? 'none (simulated)' : '—', tone: driver && driver.state !== 'connected' ? 'crit' : undefined },
 			has('AXC__Online') && { label: 'I/O online', value: tags.AXC__Online === true ? 'yes' : 'no', tone: tags.AXC__Online === false ? 'crit' : undefined },
 			has('AXC__Outages') && { label: 'Outages', value: count('AXC__Outages') },
 			has('AXC__WatchdogTrips') && { label: 'Watchdog trips', value: count('AXC__WatchdogTrips') },
