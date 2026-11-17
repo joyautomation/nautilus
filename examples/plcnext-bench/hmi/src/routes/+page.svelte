@@ -67,6 +67,12 @@
 		].filter((r) => r !== false) as Row[]
 	);
 
+	// The simulated build (sim.yaml, the playground) declares SliderV and
+	// takes the board's inputs as tags, so its buttons press and its slider
+	// slides. A write the server refuses changes nothing on screen.
+	const write = (name: string, value: boolean | number) =>
+		void fetch('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, value }) }).catch(() => {});
+
 	onMount(() => {
 		// One stream, and only while this tab is showing (src/lib/live.ts).
 		const live = whileVisible(rt);
@@ -88,7 +94,7 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="stage" bind:this={stage} onpointermove={(e) => (pointer = { x: e.clientX, y: e.clientY })}>
 		<SceneView {rt} {camera} inspector={false}>
-			<Axc {online} hovered={hover?.tag ?? null} onhover={(ch) => (hover = ch)} />
+			<Axc {online} hovered={hover?.tag ?? null} onhover={(ch) => (hover = ch)} write={has('SliderV') ? write : undefined} />
 			{#snippet hud()}
 				<ConnectionBadge state={rt.connected ? 'connected' : 'offline'} label="plcnext-bench" size="sm" />
 			{/snippet}
