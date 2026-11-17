@@ -64,6 +64,11 @@ func rules(u universe) []rule {
 			why:  "the operator surface serves a runtime and alarms; it knows no protocol and is composed by the manifest, not the reverse",
 		},
 		{
+			from: u.allBut("cmd", "virtdev"),
+			to:   []string{"virtdev"},
+			why:  "virtual devices are a test and commissioning context; only the CLI and verification compose them",
+		},
+		{
 			from: u.allBut("cmd", "internal/lsp"),
 			to:   []string{"internal/project"},
 			why:  "internal/project is the composition root; only the CLI and the editor-facing services may import it",
