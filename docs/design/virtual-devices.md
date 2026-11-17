@@ -3,8 +3,8 @@
 **Context:** Virtual devices (`virtdev`), see the context map. Issue #712,
 part of the parity epic #725. Status: **in progress.** The format, the plant,
 the Modbus wire face and `naut devices` are built (PR 1); the OPC UA wire
-face, the in-process face in `naut test` and the first four device profiles
-follow (§7).
+face and three makers' IO-Link masters (PR 2); the in-process face in
+`naut test`, the drive and the burner follow (§7).
 
 ## 0. Why
 
@@ -101,6 +101,14 @@ notes: what is simplified and what is not modelled
   `opcua.TagBinding`, plus a browse `path` the server builds its tree from.
   A profile can therefore be rendered into the manifest a project's driver
   reads, and into the UDT a project's logic uses, from one file.
+- **OPC UA rows** carry `node-id` (index into the profile's
+  `opcua.namespaces`, so the ids land at the indices the device uses: a
+  client that addresses nodes by index, as CODESYS does, finds them) and
+  `path` (the browse path under Objects; its last element is the
+  BrowseName). The Objects on a path get ids from `opcua.objects`, or
+  `ns=<object-namespace>;s=<path>`. A repeated numeric id advances by
+  `stride`. `params:` declares per-instance values a node id refers to as
+  `{name}` (an ifm master's location prefix).
 - `type` is the IEC type; `format` defaults from it (`WORD` → `uint16`,
   `REAL` → `float32`); a scaled point is `REAL` or `LREAL`.
 - `repeat: N` expands a row N times, `{n}` substituted and the address
@@ -157,6 +165,36 @@ one listener, as in the field.
 | `naut run --devices` (PR 3) | the devices, plus the project with its drivers redirected to them |
 | `naut test` (PR 3) | suites with `devices: true` run against the in-process face |
 
+## 5a. OPC UA wire face
+
+An OPC UA device is served by `opcua/server` over the plant's tag store,
+with `Options.Mapped` laying the device's address space over it
+(`opcua/server/mapped.go`): the device's namespaces first, at its indices;
+its tree under Objects instead of the project folder; each Variable a plant
+tag, so Read, Write and its checks, AccessLevel, subscriptions and the
+change sweep are the server's own, unchanged. BuildInfo names the device's
+maker and model. Security None, anonymous; a writable point is open to
+anonymous writes, as the masters are in their default setup. Sweep 20 ms.
+
+### IO-Link masters (for the OPC UA client's test matrix, #704)
+
+The masters the reference plant reads, at the node ids its controller uses.
+`naut devices up` prints each one's listen URL; `naut devices show <profile>`
+lists every node.
+
+| Profile | Port | Node ids | Types | Provenance |
+|---|---|---|---|---|
+| `pepperl-fuchs-ice3` | 4840 | `ns=1;s=IOLM/Port {n}/SIO Input`, `…/Status`, `…/Mode`, `…/Attached Device/PDI Data Unsigned32`, `…/PDO Data Unsigned32` (writable), `…/PDO Valid` (writable), `ns=1;s=IOLM/Model` …; n = 1–8 | Boolean, String, UInt32 | P+F TDOCT-6418D §12.2, all rows; Objects on the path follow the table's scheme |
+| `sick-sig300` | 4840 | `ns=3;i=8008+4n` port n pin 4, `ns=3;i=8007+4n` port n pin 2; n = 1–8 | Boolean | ids a deployed controller's program reads; browse names, paths and namespace URIs **unverified** |
+| `ifm-al1590` | 4843 | `ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdin`; n = 1–8 | String (hex text, `'0286'`) | ids a deployed controller's program reads; tree per ifm AL1427 manual §10.4.3 |
+
+Namespace URIs are not published by any of the three makers and are
+stand-ins (`urn:virtual:…`); a client should address these nodes by index
+or by the ids above, as the real ones are addressed. The OPC 30120 base
+profile (IOLinkMasterType and friends, from the companion NodeSet) is the
+next step: gopcua's NodeSet import does not remap namespace indices, so it
+needs an importer that does.
+
 ## 6. Not built here
 
 - **AI generation** of a profile and its simulator from a manual, register
@@ -172,8 +210,10 @@ one listener, as in the field.
 
 1. This brief, the format, the plant, the Modbus wire face, `naut devices`,
    a 16-in/16-out relay board.
-2. IO-Link master as an OPC UA server shaped by OPC 30120, with maker
-   variants; endpoint and node ids documented for #704.
+2. IO-Link masters over OPC UA: the mapped address space in
+   `opcua/server`, P+F, SICK and ifm variants; endpoints and node ids for
+   #704 (§5a). The OPC 30120 base profile with the companion NodeSet's types
+   follows in its own PR.
 3. ABB drive (FMBT-21 / RETA-01, ABB Drives profile), the in-process face in
    `naut test`, `naut run --devices`, an example project with a sequence
    test.

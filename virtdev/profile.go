@@ -50,6 +50,13 @@ type Profile struct {
 	Protocol string `yaml:"protocol"`
 	// Modbus holds the device's Modbus TCP defaults.
 	Modbus *ModbusSpec `yaml:"modbus"`
+	// OPCUA holds an OPC UA device's server: port, namespace array, the
+	// objects its tree is built from.
+	OPCUA *OPCUASpec `yaml:"opcua"`
+	// Params are values an instance may set and the node columns refer to
+	// as {name}: an ifm master's location name prefixes every node id.
+	// The map holds each one's default.
+	Params map[string]string `yaml:"params"`
 	// Points are the device's data, one row per register, coil or node.
 	Points []Point `yaml:"points"`
 	// Simulator gives the device behaviour; nil means its points hold what
@@ -91,6 +98,31 @@ type ModbusSpec struct {
 	Open bool `yaml:"open"`
 }
 
+// OPCUASpec is an OPC UA device's server.
+type OPCUASpec struct {
+	// Port is the TCP port; 0 means 4840.
+	Port int `yaml:"port"`
+	// Namespaces is the server's namespace array from index 1 on, so the
+	// node ids' indices land where the device keeps them.
+	Namespaces []string `yaml:"namespaces"`
+	// Objects names the node ids of the Objects a point's path passes
+	// through, by path ("IOLM/Port {n}"). An Object no row names gets a
+	// string id of its path in ObjectNamespace.
+	Objects []OPCUAObject `yaml:"objects"`
+	// ObjectNamespace is the namespace index of Objects no row names;
+	// 0 means 1.
+	ObjectNamespace int `yaml:"object-namespace"`
+}
+
+// OPCUAObject is one Object of an OPC UA device's tree.
+type OPCUAObject struct {
+	Path   string `yaml:"path"`
+	NodeID string `yaml:"node-id"`
+	Desc   string `yaml:"desc"`
+	Repeat int    `yaml:"repeat"`
+	From   *int   `yaml:"from"`
+}
+
 // Point is one datum of the device. The protocol columns reuse the driver
 // manifests' spellings (modbus.TagBinding: table, address, format, scale,
 // offset, writable), so a profile can be rendered into the manifest a
@@ -121,6 +153,14 @@ type Point struct {
 	Repeat int  `yaml:"repeat"`
 	From   *int `yaml:"from"`
 	Stride int  `yaml:"stride"`
+
+	// OPC UA columns, as opcua.TagBinding names them: the node id ("ns=1;s=
+	// IOLM/Port {n}/SIO Input", "ns=3;i=8012"; a repeated numeric id
+	// advances by Stride, default 1), and the browse path the node sits at
+	// under Objects ("IOLM/Port {n}/SIO Input"): its last element is the
+	// BrowseName.
+	NodeID string `yaml:"node-id"`
+	Path   string `yaml:"path"`
 
 	// Modbus columns.
 	Table   string  `yaml:"table"`
@@ -192,6 +232,16 @@ func (p *Profile) expand() error {
 			c.Name = strings.ReplaceAll(pt.Name, "{n}", n)
 			c.Desc = strings.ReplaceAll(pt.Desc, "{n}", n)
 			c.Doc = strings.ReplaceAll(pt.Doc, "{n}", n)
+			c.Path = strings.ReplaceAll(pt.Path, "{n}", n)
+			if pt.NodeID != "" {
+				id, err := stepNodeID(pt.NodeID, n, i*max(pt.Stride, 1))
+				if err != nil {
+					return fmt.Errorf("point %s: %w", c.Name, err)
+				}
+				c.NodeID = id
+				out = append(out, c)
+				continue
+			}
 			a := int(pt.Address) + i*stride
 			if a > 0xFFFF {
 				return fmt.Errorf("point %s: repeat runs past address 65535", c.Name)
@@ -201,7 +251,46 @@ func (p *Profile) expand() error {
 		}
 	}
 	p.Points = out
+	if p.OPCUA != nil {
+		var objs []OPCUAObject
+		for _, o := range p.OPCUA.Objects {
+			if o.Repeat == 0 {
+				objs = append(objs, o)
+				continue
+			}
+			from := 1
+			if o.From != nil {
+				from = *o.From
+			}
+			for i := range o.Repeat {
+				n := strconv.Itoa(from + i)
+				id, err := stepNodeID(o.NodeID, n, i)
+				if err != nil {
+					return fmt.Errorf("object %s: %w", o.Path, err)
+				}
+				objs = append(objs, OPCUAObject{Path: strings.ReplaceAll(o.Path, "{n}", n), NodeID: id, Desc: strings.ReplaceAll(o.Desc, "{n}", n)})
+			}
+		}
+		p.OPCUA.Objects = objs
+	}
 	return nil
+}
+
+// stepNodeID is a repeated row's node id: {n} substituted, or, for a
+// numeric id with no {n}, the identifier advanced by step.
+func stepNodeID(nid, n string, step int) (string, error) {
+	if strings.Contains(nid, "{n}") {
+		return strings.ReplaceAll(nid, "{n}", n), nil
+	}
+	i := strings.LastIndex(nid, "i=")
+	if i < 0 {
+		return "", fmt.Errorf("a repeated node id needs {n}, or a numeric identifier to advance")
+	}
+	v, err := strconv.ParseUint(nid[i+2:], 10, 32)
+	if err != nil {
+		return "", fmt.Errorf("node id %s: %w", nid, err)
+	}
+	return nid[:i+2] + strconv.FormatUint(v+uint64(step), 10), nil
 }
 
 func (p *Profile) validate() error {
@@ -214,7 +303,9 @@ func (p *Profile) validate() error {
 			p.Modbus = &ModbusSpec{}
 		}
 	case ProtoOPCUA:
-		return fmt.Errorf("protocol opcua: not supported yet")
+		if p.OPCUA == nil || len(p.OPCUA.Namespaces) == 0 {
+			return fmt.Errorf("opcua: namespaces is required (the namespace array from index 1)")
+		}
 	default:
 		return fmt.Errorf("protocol must be modbus or opcua (got %q)", p.Protocol)
 	}
@@ -244,7 +335,13 @@ func (p *Profile) validate() error {
 		} else if !pt.Unverified {
 			return fmt.Errorf("point %s: cite a document (doc:) or mark it unverified: true", pt.Name)
 		}
-		if err := p.validateModbus(pt); err != nil {
+		var err error
+		if p.Protocol == ProtoOPCUA {
+			err = p.validateOPCUA(pt)
+		} else {
+			err = p.validateModbus(pt)
+		}
+		if err != nil {
 			return fmt.Errorf("point %s: %w", pt.Name, err)
 		}
 	}
@@ -262,7 +359,31 @@ var iecTypes = map[string]string{
 	"REAL": "float32", "LREAL": "float64",
 }
 
+// opcuaTypes are the point types an OPC UA device may declare: the Modbus
+// set plus the ones OPC UA carries and registers do not.
+var opcuaTypes = map[string]bool{
+	"BOOL": true, "BYTE": true, "INT": true, "UINT": true, "WORD": true, "DINT": true,
+	"UDINT": true, "DWORD": true, "LINT": true, "ULINT": true, "REAL": true, "LREAL": true, "STRING": true,
+}
+
+func (p *Profile) validateOPCUA(pt *Point) error {
+	pt.Type = strings.ToUpper(pt.Type)
+	if !opcuaTypes[pt.Type] {
+		return fmt.Errorf("type %q: not one an OPC UA point can be", pt.Type)
+	}
+	if pt.Table != "" || pt.Format != "" || pt.Scale != 0 || pt.Offset != 0 {
+		return fmt.Errorf("an OPC UA point has no Modbus columns")
+	}
+	if pt.NodeID == "" || pt.Path == "" {
+		return fmt.Errorf("an OPC UA point needs node-id and path")
+	}
+	return nil
+}
+
 func (p *Profile) validateModbus(pt *Point) error {
+	if pt.NodeID != "" || pt.Path != "" {
+		return fmt.Errorf("a Modbus point has no node-id or path")
+	}
 	pt.Type = strings.ToUpper(pt.Type)
 	def, ok := iecTypes[pt.Type]
 	if !ok {

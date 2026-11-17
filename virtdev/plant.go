@@ -48,14 +48,13 @@ func NewPlant(s *Set) (*Plant, error) {
 
 	for _, d := range s.Devices {
 		prof := s.Profile(d.Name)
+		// A Modbus device's data is its unit's tables; an OPC UA device's
+		// is the plant's own tags, which its server reads and writes.
 		var stor store
-		switch prof.Protocol {
-		case ProtoModbus:
+		if prof.Protocol == ProtoModbus {
 			stor = newModbusStore(prof)
-		default:
-			return nil, fmt.Errorf("device %s: protocol %s has no store", d.Name, prof.Protocol)
+			p.stores[strings.ToLower(d.Name)] = stor
 		}
-		p.stores[strings.ToLower(d.Name)] = stor
 
 		// Points: the controller's to write are plant inputs, the device's
 		// to show are plant outputs. Each powers up at its init.
@@ -64,8 +63,10 @@ func NewPlant(s *Set) (*Plant, error) {
 			if err != nil {
 				return nil, fmt.Errorf("device %s: %w", d.Name, err)
 			}
-			if err := stor.put(pt, v); err != nil {
-				return nil, fmt.Errorf("device %s: point %s: init %v: %w", d.Name, pt.Name, v, err)
+			if stor != nil {
+				if err := stor.put(pt, v); err != nil {
+					return nil, fmt.Errorf("device %s: point %s: init %v: %w", d.Name, pt.Name, v, err)
+				}
 			}
 			tag := d.Name + "_" + pt.Name
 			opts := []runtime.TagOpt{runtime.Init(v)}
@@ -77,10 +78,16 @@ func NewPlant(s *Set) (*Plant, error) {
 			}
 			var def runtime.TagDef
 			b := binding{tag: tag, st: stor, pt: pt}
-			if pt.Writable {
+			switch {
+			case stor == nil && pt.Writable:
+				// The server writes it, as an operator would.
+				def = runtime.Setpoint(tag, v, opts...)
+			case stor == nil:
+				def = runtime.State(tag, v, opts...)
+			case pt.Writable:
 				def = runtime.Input(tag, opts...)
 				p.driver.ins = append(p.driver.ins, b)
-			} else {
+			default:
 				def = runtime.Output(tag, opts...)
 				p.driver.outs[tag] = b
 			}
@@ -229,6 +236,8 @@ func pointInit(d Instance, pt Point) (any, error) {
 		switch pt.Type {
 		case "BOOL":
 			return false, nil
+		case "STRING":
+			return "", nil
 		case "REAL", "LREAL":
 			return 0.0, nil
 		default:
@@ -240,6 +249,10 @@ func pointInit(d Instance, pt Point) (any, error) {
 	case "BOOL":
 		if _, ok := v.(bool); !ok {
 			return nil, fmt.Errorf("point %s: init %v is not a BOOL", pt.Name, v)
+		}
+	case "STRING":
+		if _, ok := v.(string); !ok {
+			return nil, fmt.Errorf("point %s: init %v is not a STRING", pt.Name, v)
 		}
 	case "REAL", "LREAL":
 		if i, ok := v.(int64); ok {

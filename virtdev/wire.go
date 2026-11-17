@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/joyautomation/nautilus/modbus/slave"
+	uaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -35,6 +36,7 @@ type Running struct {
 
 	redirect map[string]string
 	servers  []*slave.Server
+	ua       []*uaserver.Server
 	cancel   context.CancelFunc
 	done     chan struct{}
 	stopOnce sync.Once
@@ -131,10 +133,32 @@ func Start(ctx context.Context, s *Set, o StartOptions) (*Running, error) {
 			}
 		}
 	}
-	sort.SliceStable(r.Endpoints, func(i, j int) bool { return r.Endpoints[i].Listen < r.Endpoints[j].Listen })
-
 	rctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
+
+	// One OPC UA server per OPC UA device, each over the plant.
+	for _, d := range s.Devices {
+		p := s.Profile(d.Name)
+		if p.Protocol != ProtoOPCUA {
+			continue
+		}
+		srv, err := startOPCUA(rctx, rt, s, d, log)
+		if err != nil {
+			cancel()
+			r.stopServers()
+			return nil, err
+		}
+		r.ua = append(r.ua, srv)
+		ep, _ := opcuaEndpoint(d, p)
+		r.Endpoints = append(r.Endpoints, Endpoint{
+			Device: d.Name, Profile: p.ID, Protocol: p.Protocol, Endpoint: ep, Listen: srv.URL(),
+		})
+		if ep != "" {
+			r.redirect[ep] = srv.URL()
+		}
+	}
+	sort.SliceStable(r.Endpoints, func(i, j int) bool { return r.Endpoints[i].Device < r.Endpoints[j].Device })
+
 	r.done = make(chan struct{})
 	go func() {
 		defer close(r.done)
@@ -166,4 +190,8 @@ func (r *Running) stopServers() {
 		s.Stop()
 	}
 	r.servers = nil
+	for _, s := range r.ua {
+		s.Stop()
+	}
+	r.ua = nil
 }

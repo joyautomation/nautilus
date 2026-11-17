@@ -185,7 +185,20 @@ func runDevicesShow(args []string, w io.Writer) int {
 	if p.Maker != "" || p.Model != "" {
 		fmt.Fprintf(w, "maker: %s  model: %s\n", p.Maker, p.Model)
 	}
-	if m := p.Modbus; m != nil {
+	if o := p.OPCUA; o != nil {
+		port := o.Port
+		if port == 0 {
+			port = 4840
+		}
+		fmt.Fprintf(w, "opcua: port %d, security None, anonymous\n", port)
+		for i, uri := range o.Namespaces {
+			fmt.Fprintf(w, "  ns=%d %s\n", i+1, uri)
+		}
+		for k, v := range p.Params {
+			fmt.Fprintf(w, "param {%s} default %q\n", k, v)
+		}
+	}
+	if m := p.Modbus; m != nil && p.Protocol == virtdev.ProtoModbus {
 		port := m.Port
 		if port == 0 {
 			port = 502
@@ -208,13 +221,16 @@ func runDevicesShow(args []string, w io.Writer) int {
 	}
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "POINT\tTYPE\tACCESS\tADDRESS\tFORMAT\tSOURCE\tDESCRIPTION")
+	fmt.Fprintln(tw, "POINT\tTYPE\tACCESS\tADDRESS / NODE ID\tFORMAT\tSOURCE\tDESCRIPTION")
 	for _, pt := range p.Points {
 		access := "read"
 		if pt.Writable {
 			access = "write"
 		}
 		addr := fmt.Sprintf("%s %d", pt.Table, pt.Address)
+		if pt.NodeID != "" {
+			addr = pt.NodeID
+		}
 		src := pt.Doc
 		if pt.Unverified {
 			src = "UNVERIFIED"
