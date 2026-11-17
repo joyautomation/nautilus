@@ -198,3 +198,5 @@ seam it crosses, in one line near the top. For example:
 
 That line is what lets an agent that sees one slice behave as if it saw the
 whole, and it is what a reviewer checks first.
+
+<!-- CI light-mode probe for #754: not for merge -->
