@@ -44,7 +44,9 @@ Usage:
                           responses assert exactly (-run re, -v, -json).
   naut build [dir]    Emit a self-contained controller binary from a
                           manifest project (-o name). Ships like any compiled
-                          program; no Go toolchain involved.
+                          program; no Go toolchain involved. -runtime <naut>
+                          builds on another naut binary: a release's
+                          linux_arm64 naut makes an ARM64 controller.
 
                           run, test, and build take -m <manifest> to load one
                           other than nautilus.yaml. That is how one project

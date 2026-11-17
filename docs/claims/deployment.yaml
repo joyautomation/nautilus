@@ -124,3 +124,17 @@ claims:
       Asserts the history rides the built archive and decodes back; serving
       it over GET /api/program/history from the built binary, and the
       no-git runtime environment, are not exercised here (see PH-004).
+  - id: DEP-012
+    claim: >-
+      naut build -runtime <naut> builds the controller on another naut
+      binary, byte for byte, names the platform it targets on the build
+      line, and refuses a file that is not an executable (a release
+      archive included) without writing an output.
+    source: "#the-image"
+    tests:
+      - go ./cmd/naut TestBuildOnAnotherRuntime
+      - go ./cmd/naut TestBuildRuntimeRefusesNonExecutables
+    partial: true
+    note: >-
+      The runtime in the test is a hand-made ELF header, not a real arm64
+      naut, and the built controller is not run on an ARM64 machine here.
