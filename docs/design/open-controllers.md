@@ -43,7 +43,7 @@ I/O.
 
 ### 2.1 What the bench unit is
 
-A `GRV-EPIC-PR1` on the bench LAN, four modules. Ports open: 80/443 (groov
+`192.168.82.243`, `GRV-EPIC-PR1`, four modules. Ports open: 80/443 (groov
 Manage), **502 Modbus/TCP**, **2001 OptoMMP**, 8088 (Jetty, which that first scan took for Ignition
 Edge), 22001 (PAC Control engine). 22 was closed on the first day; the shell
 license was already on the unit and James enabled the shell server and a
