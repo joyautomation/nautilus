@@ -1,0 +1,36 @@
+# epic-bench, simulated: the same program with no processor behind it.
+#
+# nautilus.yaml is the build that drives the groov EPIC's modules over
+# OptoMMP (in the playground, where this file is nautilus.yaml, that one is
+# controller.yaml). This one swaps the optommp driver for memory and the
+# generated I/O tags for tags/sim.yaml, keeping their names: each input is a
+# setpoint you write in place of the chassis, the bench's four field wires
+# are board.st, and EPIC__Online false is an outage. The nautilus
+# playground serves this build as the example's nautilus.yaml.
+#
+#   naut run  -m sim.yaml .     dashboard + tag API on http://localhost:8086
+#   naut test -m sim.yaml .     the acceptance suite, here too
+name: epic-bench
+
+server:
+  addr: "localhost:8086"
+  online-edits: true
+  # The 3D screen of the chassis (hmi/, built as in README.md), its lamps
+  # lit from these tags as they are from the processor's.
+  hmi: hmi/build
+
+driver:
+  type: memory
+  scan-rate: 20ms
+
+tasks:
+  - program: bench.st
+    scan: 20ms
+    dt-tag: BenchDtS
+  - name: board
+    program: board.st
+    scan: 20ms
+
+tag-files:
+  - tags/sim.yaml
+  - tags/bench.yaml
