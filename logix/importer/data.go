@@ -99,6 +99,9 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 	default:
 		return "", refuse(m, "a data operation with no assignment form")
 	}
+	if err := rt.presetWrite(target); err != nil {
+		return "", err
+	}
 	t, err := rt.ref(target, "")
 	if err != nil {
 		return "", err
