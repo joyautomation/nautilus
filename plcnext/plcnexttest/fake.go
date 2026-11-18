@@ -1,14 +1,15 @@
 // Package plcnexttest is an in-process PLCnext controller for tests: the
 // firmware's gRPC data-access service (GDS) with BusConductor behind it,
 // served on a Unix socket the plcnext driver dials as a manifest's
-// `socket:`. Its port names are spelled out here, independently of
-// package plcnext (which it must not import: plcnext's in-package tests
-// would cycle), so a test is checked against the bench, not against the
-// driver's own constants.
+// `socket:`. plcnext's own tests run against it, so it must not import
+// plcnext (they would cycle); its port names are spelled out here, and a
+// test holds them equal to the driver's defaults. It is for tests only:
+// nothing shipped may import it.
 package plcnexttest
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,7 +34,7 @@ const (
 	Component = "BcComponent1"
 	// ImageSize is the length of each process image, in bytes.
 	ImageSize = 512
-	// Modules is what BusConductor's NUM_MODULES reports.
+	// Modules is what BusConductor's NUM_MODULES reports until SetModules.
 	Modules = 4
 
 	bc           = Component + "/BusConductor."
@@ -60,7 +61,10 @@ type GDS struct {
 	in, out    []byte
 	configured bool
 	faulted    bool // SetRun(false): START_IO_REQ does not raise RUN
+	modules    int
+	portErrs   map[string]gdspb.DataAccessError
 	writes     []string
+	tb         testing.TB // Listen's, for misuse reports
 
 	requests atomic.Int64
 
@@ -77,9 +81,11 @@ func New() *GDS {
 		bools: map[string]bool{
 			configReq: false, configMatch: false, startReq: false, RunPort: false,
 		},
-		in:    make([]byte, ImageSize),
-		out:   make([]byte, ImageSize),
-		conns: map[net.Conn]bool{},
+		in:       make([]byte, ImageSize),
+		out:      make([]byte, ImageSize),
+		modules:  Modules,
+		portErrs: map[string]gdspb.DataAccessError{},
+		conns:    map[net.Conn]bool{},
 	}
 }
 
@@ -93,6 +99,9 @@ func (g *GDS) Listen(t testing.TB) string {
 	if err != nil {
 		t.Fatalf("plcnexttest: %v", err)
 	}
+	g.mu.Lock()
+	g.tb = t
+	g.mu.Unlock()
 	path := filepath.Join(dir, socketName)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -194,17 +203,80 @@ func (g *GDS) Running() bool {
 	return g.bools[RunPort]
 }
 
-// SetInput sets one byte of the input image.
+// SetConfigured sets BusConductor's CONFIGURED, as a bus configured (or
+// not) before the driver came.
+func (g *GDS) SetConfigured(v bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.configured = v
+}
+
+// SetModules sets what NUM_MODULES reports (Modules until then).
+func (g *GDS) SetModules(n int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.modules = n
+}
+
+// SetPortError makes every read and write of port, and of its `port[i]`
+// elements, answer code: DAE_NotExists for a port the firmware lacks (a
+// GDS connector never made), DAE_NotSupported, and so on. DAE_None
+// clears it.
+func (g *GDS) SetPortError(port string, code gdspb.DataAccessError) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if code == gdspb.DataAccessError_DAE_None {
+		delete(g.portErrs, port)
+	} else {
+		g.portErrs[port] = code
+	}
+}
+
+// Restart is the PLCnext runtime restarting under a connected driver: the
+// bus comes back unconfigured and stopped, BusConductor's flags low (a
+// fault from SetRun(false) is cleared). Live connections are not touched;
+// Drop for that.
+func (g *GDS) Restart() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.configured, g.faulted = false, false
+	for k := range g.bools {
+		g.bools[k] = false
+	}
+}
+
+// misuse reports a caller's mistake through Listen's test (t.Errorf is
+// safe from any goroutine), or panics before Listen.
+func (g *GDS) misuse(format string, args ...any) {
+	if g.tb != nil {
+		g.tb.Helper()
+		g.tb.Errorf("plcnexttest: "+format, args...)
+		return
+	}
+	panic(fmt.Sprintf("plcnexttest: "+format, args...))
+}
+
+// SetInput sets one byte of the input image. An offset outside it fails
+// the test (and sets nothing).
 func (g *GDS) SetInput(offset int, b byte) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if offset < 0 || offset >= len(g.in) {
+		g.misuse("SetInput(%d): the input image is %d bytes", offset, len(g.in))
+		return
+	}
 	g.in[offset] = b
 }
 
-// Output is one byte of the output image.
+// Output is one byte of the output image. An offset outside it fails the
+// test (and reads 0).
 func (g *GDS) Output(offset int) byte {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if offset < 0 || offset >= len(g.out) {
+		g.misuse("Output(%d): the output image is %d bytes", offset, len(g.out))
+		return 0
+	}
 	return g.out[offset]
 }
 
@@ -274,15 +346,32 @@ func number(v *arptypes.ObjectType) (int64, bool) {
 	return 0, false
 }
 
+// portErr is SetPortError's code for name or the port it is an element
+// of; the caller holds mu.
+func (g *GDS) portErr(name string) (gdspb.DataAccessError, bool) {
+	if code, ok := g.portErrs[name]; ok {
+		return code, true
+	}
+	if port, _, ok := element(name); ok {
+		code, ok := g.portErrs[port]
+		return code, ok
+	}
+	return gdspb.DataAccessError_DAE_None, false
+}
+
 // readOne is the firmware's resolution of one name; the caller holds mu.
 func (g *GDS) readOne(name string) *gdspb.ReadItem {
 	item := &gdspb.ReadItem{Error: gdspb.DataAccessError_DAE_None}
+	if code, ok := g.portErr(name); ok {
+		item.Error = code
+		return item
+	}
 	switch name {
 	case configured:
 		item.Value = boolValue(g.configured)
 		return item
 	case numModules:
-		item.Value = &arptypes.ObjectType{TypeCode: arptypes.CoreType_CT_Uint16, Value: &arptypes.ObjectType_Uint16Value{Uint16Value: Modules}}
+		item.Value = &arptypes.ObjectType{TypeCode: arptypes.CoreType_CT_Uint16, Value: &arptypes.ObjectType_Uint16Value{Uint16Value: uint32(g.modules)}}
 		return item
 	}
 	if v, ok := g.bools[name]; ok {
@@ -315,6 +404,9 @@ func (g *GDS) writeOne(w *gdspb.WriteItem) gdspb.DataAccessError {
 	} else {
 		n, _ := number(v)
 		g.writes = append(g.writes, port+"="+strconv.FormatInt(n, 10))
+	}
+	if code, ok := g.portErr(port); ok {
+		return code
 	}
 	if was, ok := g.bools[port]; ok {
 		now := v.GetBoolValue()

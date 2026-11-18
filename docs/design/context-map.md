@@ -94,6 +94,11 @@ break one changes this section first and says why.
   controller.
 - `internal/project` is imported only by the CLI and the LSP. Nothing
   imports the CLI.
+- A driver's test fake (`optommp/optommptest`, `plcnext/plcnexttest`)
+  and `internal/testmqtt` are imported only by test files: nothing shipped
+  carries a fake device or broker. Each package checks this itself
+  (`TestOnlyTestsImport…`, by `go list` over the module), not
+  `internal/contextmap`.
 
 Verification packages, `examples/`, `testdata/` and `tools/` compose freely
 and are excluded from the check. Test files may import anything.
