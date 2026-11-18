@@ -498,7 +498,11 @@ func opcuaClientStatus(h opcua.Health) server.DriverStatus {
 		s.Message = fmt.Sprintf("%d of %d %s refused by the server — check node ids and namespaces", h.BadTags, h.Tags, plural(h.Tags, "tag"))
 	case h.State == "connected":
 		s.State = "connected"
-		s.Message = fmt.Sprintf("Polling %d %s in %d %s", h.Tags, plural(h.Tags, "tag"), h.Classes, plural(h.Classes, "scan class"))
+		verb := "Polling"
+		if h.ReadMode == opcua.ReadModeSubscribe {
+			verb = "Subscribed to"
+		}
+		s.Message = fmt.Sprintf("%s %d %s in %d %s", verb, h.Tags, plural(h.Tags, "tag"), h.Classes, plural(h.Classes, "scan class"))
 	case h.LastError != "":
 		s.State = "error"
 		s.Message = "Connect failed — retrying"
@@ -513,11 +517,17 @@ func opcuaClientStatus(h opcua.Health) server.DriverStatus {
 		{Label: "writes", Value: float64(h.Writes), Volatile: true},
 		{Label: "errors", Value: float64(h.Errors), Volatile: true},
 	}
+	if h.ReadMode == opcua.ReadModeSubscribe {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "notifications", Value: float64(h.Notifications), Volatile: true})
+	}
 	if h.QueuedWrites > 0 {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "queued writes", Value: float64(h.QueuedWrites)})
 	}
 	s.Devices = []server.DriverDevice{{ID: h.Name, Online: h.State == "connected", Detail: opcuaClientDetail(h)}}
-	s.Extra = map[string]any{"policy": h.Policy, "mode": h.Mode, "maxNodes": h.MaxNodes, "retries": h.Retries}
+	s.Extra = map[string]any{"policy": h.Policy, "mode": h.Mode, "maxNodes": h.MaxNodes, "retries": h.Retries, "readMode": h.ReadMode}
+	if len(h.RevisedMs) > 0 {
+		s.Extra["publishingMs"] = h.RevisedMs // as the server revised each class's interval
+	}
 	s.VolatileExtra = []string{"retries"}
 	return s
 }

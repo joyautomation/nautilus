@@ -90,8 +90,9 @@ type Manifest struct {
 	Alarms     *AlarmsConfig `yaml:"alarms"`
 	AlarmFiles []string      `yaml:"alarm-files"`
 	// Target names a controller this project is DEPLOYED to instead of
-	// being run by the nautilus runtime: today, an Allen-Bradley Logix
-	// controller (docs/design/logix-authoring.md). With a target set,
+	// being run by the nautilus runtime: an Allen-Bradley Logix
+	// controller (docs/design/logix-authoring.md) or a Siemens S7-1500
+	// (docs/design/siemens-ide.md). With a target set,
 	// `naut check` also runs that target's rules, so a construct the
 	// target cannot take is a diagnostic on the keystroke that wrote it.
 	Target *TargetConfig `yaml:"target"`
@@ -157,10 +158,10 @@ func (c *CheckConfig) Structure() (lint.Config, error) {
 	return cfg, nil
 }
 
-// TargetConfig is the deploy target. One kind at a time; logix is the
-// only one so far.
+// TargetConfig is the deploy target. One kind at a time.
 type TargetConfig struct {
-	Logix *LogixTarget `yaml:"logix"`
+	Logix   *LogixTarget   `yaml:"logix"`
+	Siemens *SiemensTarget `yaml:"siemens"` // siemens.go
 }
 
 // LogixTarget is an Allen-Bradley Logix controller as a deploy target:
@@ -485,6 +486,10 @@ type DriverConfig struct {
 	Security     string `yaml:"security"`      // policy: None, Basic256Sha256, … (default: strongest offered)
 	SecurityMode string `yaml:"security-mode"` // None, Sign, SignAndEncrypt (default: strongest of the policy)
 	PKIDir       string `yaml:"pki-dir"`       // client certificate dir, needed for any policy but None
+	// ReadMode is how values arrive: poll (default; one batched Read per
+	// scan class per tick) or subscribe (one subscription per scan class,
+	// notified on change). Both keep the same quality and reconnect rules.
+	ReadMode string `yaml:"read-mode"`
 }
 
 // ChannelConfig is one entry of channels:. Type cip is a Logix controller

@@ -28,6 +28,8 @@ package opcua_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -142,6 +144,7 @@ var matrixModes = []struct {
 	opts []opcua.Option
 }{
 	{"poll", nil},
+	{"subscribe", []opcua.Option{opcua.WithReadMode(opcua.ReadModeSubscribe)}},
 }
 
 func TestForeignServerMatrix(t *testing.T) {
@@ -193,6 +196,9 @@ func runMatrix(t *testing.T, s matrixServer) {
 		t.Run("reads/"+mode.name, func(t *testing.T) { matrixReads(t, s, url, opts) })
 		t.Run("writes/"+mode.name, func(t *testing.T) { matrixWrites(t, s, url, opts) })
 		t.Run("remap/"+mode.name, func(t *testing.T) { matrixRemap(t, s, url, opts) })
+		if mode.name == "subscribe" {
+			t.Run("quiet/"+mode.name, func(t *testing.T) { matrixQuiet(t, s, url, conn, opts) })
+		}
 		t.Run("restart/"+mode.name, func(t *testing.T) {
 			matrixOutage(t, s, url, opts, "restart", func() { c.docker(t, "restart", "-t", "1", c.name) }, nil)
 		})
@@ -283,9 +289,28 @@ func matrixReads(t *testing.T, s matrixServer, url string, opts []opcua.Option) 
 	}
 
 	first := v["Changing"]
+	reads := d.Health().Reads
 	waitUntil(t, "the changing node to change", 10*time.Second, func() bool {
 		return readAll(t, d)["Changing"] != first
 	})
+	if h := d.Health(); h.ReadMode == opcua.ReadModeSubscribe {
+		// Subscribed: the change arrived as a notification; the session
+		// was read once to prime it and not polled since.
+		if h.Notifications == 0 {
+			t.Errorf("subscribed, yet no data change notification counted: %+v", h)
+		}
+		if h.Reads != reads {
+			t.Errorf("subscribed, yet the driver read %d more times after priming", h.Reads-reads)
+		}
+		if h.Subscriptions != 1 {
+			t.Errorf("subscriptions = %d, want one per scan class (1)", h.Subscriptions)
+		}
+		waitUntil(t, "the first probe", 5*time.Second, func() bool { return d.Health().Probe != "" })
+		if p := d.Health().Probe; p != "SetPublishingMode" {
+			t.Errorf("session probe %q: a conformant server supports SetPublishingMode", p)
+		}
+		t.Logf("%s: publishing interval revised to %v ms; session probe %s", s.name, h.RevisedMs, d.Health().Probe)
+	}
 }
 
 func matrixWrites(t *testing.T, s matrixServer, url string, opts []opcua.Option) {
@@ -337,6 +362,55 @@ func matrixWrites(t *testing.T, s matrixServer, url string, opts []opcua.Option)
 	if !d.Online() {
 		t.Errorf("a refused write took the session down: %+v", h)
 	}
+}
+
+// matrixQuiet: a subscribed value that sits still across several
+// keep-alives and then changes once is delivered by notification. The
+// keep-alive window is inside the Publish deadline (subscriptionParams);
+// were it not, the quiet subscription would race its own keep-alive and
+// the change could be lost.
+func matrixQuiet(t *testing.T, s matrixServer, url string, conn opcua.Connect, opts []opcua.Option) {
+	m := opcua.Manifest{Tags: []opcua.TagBinding{{Name: "Quiet", NodeID: s.scalars["Int32"], Namespace: s.nsURI, Type: "Int32"}}}
+	d := startMatrixDriver(t, url, m, opts...)
+	waitUntil(t, "online", 30*time.Second, d.Online)
+	before := readAll(t, d)["Quiet"]
+	reads := d.Health().Reads
+	time.Sleep(5 * time.Second) // ≥ five keep-alive windows at a 2 s request timeout
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sess, err := opcua.Dial(ctx, url, conn)
+	if err != nil {
+		t.Fatalf("writer session: %v", err)
+	}
+	defer sess.Close()
+	next := int32(1234567)
+	if before == int64(next) {
+		next++
+	}
+	v, _ := ua.NewVariant(next)
+	resp, err := sess.Client.Write(ctx, &ua.WriteRequest{NodesToWrite: []*ua.WriteValue{{
+		NodeID: mustNodeID(t, s.scalars["Int32"]), AttributeID: ua.AttributeIDValue,
+		Value: &ua.DataValue{EncodingMask: ua.DataValueValue, Value: v},
+	}}})
+	if err != nil || len(resp.Results) != 1 || resp.Results[0] != ua.StatusOK {
+		t.Fatalf("writer: %v %v", err, resp)
+	}
+	waitUntil(t, "the one change after a quiet spell", 3*time.Second, func() bool {
+		return readAll(t, d)["Quiet"] == int64(next)
+	})
+	if h := d.Health(); h.Reads != reads {
+		t.Errorf("delivered by %d read(s), not a notification", h.Reads-reads)
+	}
+}
+
+func mustNodeID(t *testing.T, s string) *ua.NodeID {
+	t.Helper()
+	n, err := ua.ParseNodeID(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func matrixRemap(t *testing.T, s matrixServer, url string, opts []opcua.Option) {
@@ -507,6 +581,9 @@ type container struct {
 func startContainer(t *testing.T, s matrixServer) *container {
 	t.Helper()
 	if s.build != "" {
+		// Tagged by the build directory's content, so an edited fixture
+		// is built afresh rather than an older image reused.
+		s.image += "-" + dirHash(t, s.build)
 		if err := exec.Command("docker", "image", "inspect", s.image).Run(); err != nil {
 			t.Logf("building %s from %s", s.image, s.build)
 			dir, _ := filepath.Abs(s.build)
@@ -530,6 +607,28 @@ func startContainer(t *testing.T, s matrixServer) *container {
 		_ = exec.Command("docker", "rm", "-f", c.name).Run()
 	})
 	return c
+}
+
+// dirHash is a short hash of every file under dir (names and contents).
+func dirHash(t *testing.T, dir string) string {
+	t.Helper()
+	h := sha256.New()
+	err := filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s %d\n", filepath.ToSlash(p), len(b))
+		h.Write(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("hash %s: %v", dir, err)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 func (c *container) docker(t *testing.T, args ...string) {
