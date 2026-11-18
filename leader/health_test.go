@@ -546,6 +546,74 @@ func TestASlowTaskDoesNotFlapTheLease(t *testing.T) {
 	}
 }
 
+// A task slower than the lease that scans at its slot and sleeps again
+// does not make the lease flap either: its sleep follows the test's own
+// clock (runtime.Options.LoopSleep), so the 15 s window crosses its first
+// slot at +10 s, where it scans, and it then sleeps to +20 s (#616, from
+// #859's review). The main task sleeps on the wall clock as usual.
+func TestASlowTaskThatScansAtItsSlotKeepsTheLease(t *testing.T) {
+	const period = 10 * time.Second // ten leases
+	var synth atomic.Int64          // the test's now, in Unix ns
+	sleep := func(task string, ctx context.Context, until time.Time) bool {
+		if task != "reports" {
+			tm := time.NewTimer(time.Until(until))
+			defer tm.Stop()
+			select {
+			case <-ctx.Done():
+				return false
+			case <-tm.C:
+				return true
+			}
+		}
+		for synth.Load() < until.UnixNano() {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(time.Millisecond):
+			}
+		}
+		return true
+	}
+	srv, _ := newFakeServer(t)
+	a := newReplicaSleeping(t, newTestElector(t, srv, "pod-a", "10.0.0.1:8080"), 5*time.Millisecond, sleep, runtime.Task{
+		Name:    "reports",
+		Program: `PROGRAM Reports VAR n : DINT; END_VAR n := n + 1; END_PROGRAM`,
+		Scan:    period,
+	})
+	b := newReplica(t, newTestElector(t, srv, "pod-b", "10.0.0.2:8080"), time.Hour)
+	t0 := time.Now()
+	synth.Store(t0.UnixNano())
+	a.el.tick(t0)
+	b.el.tick(t0)
+	a.run(t)
+	b.run(t)
+	reports := func() uint64 { return a.rt.Stats().Tasks[0].Count }
+	now := t0
+	for i := 0; i < 60; i++ { // 15 s: fifteen leases, across the task's first slot
+		a.progress(t)
+		before := reports()
+		now = now.Add(testTick)
+		synth.Store(now.UnixNano())
+		if now.Sub(t0) >= period+testTick && before == 0 {
+			// Past the slot (the schedule started a little after t0): give
+			// the scan a moment to land before the elector looks. Not a
+			// failure here if it does not: a task that never scans is
+			// starved, and the elector must say so below.
+			for deadline := time.Now().Add(time.Second); reports() == 0 && time.Now().Before(deadline); {
+				time.Sleep(time.Millisecond)
+			}
+		}
+		a.el.tick(now)
+		b.el.tick(now)
+		if !a.el.IsLeader() || b.el.IsLeader() {
+			t.Fatalf("at +%s: a=%v b=%v (reports scanned %d times), want the leader to keep the lease", now.Sub(t0), a.el.IsLeader(), b.el.IsLeader(), reports())
+		}
+	}
+	if n := reports(); n != 1 {
+		t.Fatalf("the task scanned %d times in the window, want once, at its slot", n)
+	}
+}
+
 // A leader that decided before its first scan (the start-up grace) but
 // whose scan loops never start does not hold the lease for good: after
 // the grace (twice the lease) it stops renewing and the standby takes
