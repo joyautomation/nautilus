@@ -410,6 +410,21 @@ func l5kValue(t tagDef) string {
 	if t.Dim == 0 {
 		return one()
 	}
+	if t.DataType == "BOOL" {
+		// L5K packs a BOOL array into 32-bit words: BOOL[32] with
+		// element 3 set is [8].
+		words := make([]int32, (t.Dim+31)/32)
+		for i, e := range t.Elems {
+			if e == "1" && i < t.Dim {
+				words[i/32] |= int32(uint32(1) << (i % 32))
+			}
+		}
+		out := make([]string, len(words))
+		for i, w := range words {
+			out[i] = strconv.FormatInt(int64(w), 10)
+		}
+		return "[" + strings.Join(out, ",") + "]"
+	}
 	elems := make([]string, t.Dim)
 	for i := range elems {
 		switch {

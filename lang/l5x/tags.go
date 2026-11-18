@@ -154,9 +154,9 @@ func scalarInit(v any) any {
 }
 
 // structInit returns a struct tag's per-member seed — the flow mapping
-// tagfile renders as `init: { PRE: 6, ACC: 0 }` — or nil when the export
-// carries no decorated value. Array members are dropped: a tag file's
-// init mapping has no syntax for a list.
+// tagfile renders as `init: { PRE: 6, ACC: 0, HIST: [11, 12] }` — or nil
+// when the export carries no decorated value. A member array of atomics
+// is a list; an array of structures is left out (it starts at zero).
 //
 // Keys go through the same identifier mapping the type declaration used,
 // so a seed lands on the field it names. A UDT member called "retain"
@@ -177,10 +177,42 @@ func structInit(v any) any {
 			}
 		case bool, int64, float64, string:
 			out[k] = mv
+		case []any:
+			// A member array: its elements, trimmed after the last
+			// non-zero one (the loader pads with zeros). An array of
+			// structures is left out, and starts at zero.
+			if list, ok := memberList(x); ok {
+				out[k] = list
+			}
 		}
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// memberList is a member array's seed: its elements, trimmed after the
+// last non-zero one; false when an element is not a plain value.
+func memberList(list []any) ([]any, bool) {
+	last := -1
+	for i, e := range list {
+		switch x := e.(type) {
+		case bool:
+			if x {
+				last = i
+			}
+		case int64:
+			if x != 0 {
+				last = i
+			}
+		case float64:
+			if x != 0 {
+				last = i
+			}
+		default:
+			return nil, false
+		}
+	}
+	return append([]any{}, list[:last+1]...), true
 }
