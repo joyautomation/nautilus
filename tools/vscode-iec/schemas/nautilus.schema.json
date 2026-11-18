@@ -527,7 +527,8 @@
             "plcnext",
             "optommp",
             "profinet-device",
-            "replay"
+            "replay",
+            "runtime"
           ],
           "description": "memory: loopback for bring-up, so logic and HMI run before hardware exists. eip: polls an Allen-Bradley Logix controller. sparkplug-host: consumes a Sparkplug B group as a host application, presenting every edge node's metrics as tags. modbus: polls a set of Modbus TCP sources with coalesced block reads. opcua-client: the OPC UA client \u2014 polls one OPC UA server (an Ignition gateway's, a PLC's embedded one, a Kepware) per scan class from a manifest `naut opcua import` writes; not the top-level opcua: section, which serves this project's tags. snmp / redfish / prometheus: IT hardware as tags — switches, PDUs and UPSes over SNMP, server BMCs over Redfish, hosts over node_exporter — generated manifests, credentials from the environment. plcnext: the runtime running ON a Phoenix Contact PLCnext controller, driving its local Axioline I/O through the firmware's data-access socket (BusConductor process image). optommp: an Opto 22 groov EPIC or groov RIO chassis over OptoMMP (TCP 2001) — every channel's state or value with per-channel quality, outputs, optional counters, latches, quality codes and scratchpad — from the LAN or from nautilus running on the EPIC itself (127.0.0.1); manifest from `naut optommp import`. profinet-device: nautilus as a PROFINET IO device to a PLC (RT, one AR) on a raw-Ethernet interface; the PLC's outputs are input tags and its inputs output tags, laid out by the profinet_device.yaml, whose GSDML `naut profinet gsdml` writes; needs CAP_NET_RAW. replay: a recorded history played back as the same IT-hardware tags at a clock the project steers (Replay_Speed, Replay_Pause, Replay_SeekS) — the baseline of a plant simulation. Custom buses are the Go tier."
         },
@@ -668,6 +669,24 @@
             "subscribe"
           ],
           "description": "opcua-client: how values arrive. poll (default): one batched Read per scan class per tick. subscribe: one OPC UA subscription per scan class (publishing interval = the class rate), the server sending values when they change. Quality, __Online and reconnect behave the same in both."
+        },
+        "tags": {
+          "type": "array",
+          "minItems": 1,
+          "description": "runtime: binds input tags to the runtime's own health, so alarms and the historian can see it. Polled every scan-rate (default 1s); every status reads false / 0 until the first poll. A standby never scans, so these tags move only on the replica that leads. Beside field drivers under drivers:, or alone as driver:, where it keeps the memory loopback a project with no driver has. Any other driver type refuses tags:.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "task", "status"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1, "description": "The input tag (declare it role: input)."},
+              "task": {"type": "string", "minLength": 1, "description": "main, or another task's name (an unnamed task's is its program's file name without the extension)."},
+              "status": {
+                "enum": ["demoted", "faulting", "logic-errors", "late", "overruns"],
+                "description": "demoted (BOOL): the task's real-time priority was withdrawn, until restart. faulting (BOOL): its last scan raised a logic error. logic-errors, late, overruns (UDINT): counts since start."
+              }
+            }
+          }
         }
       },
       "allOf": [

@@ -257,6 +257,9 @@ func buildChannel(c ChannelConfig) (runtime.ChannelIO, error) {
 }
 
 func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
+	if err := statusTagsOnlyOnRuntime(d); err != nil {
+		return nil, err
+	}
 	switch strings.ToLower(d.Type) {
 	case "", "memory":
 		// Loopback for bring-up: inputs read back whatever was written,
@@ -572,6 +575,8 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		return profinet.NewDevice(m,
 			profinet.WithDeviceLogger(slog.Default().With("driver", name)),
 			profinet.WithDeviceOnlineTag(onlineTagFor(d.Name, "profinet-device")))
+	case "runtime":
+		return newRuntimeStatus(d)
 	case "replay":
 		// A recording played back as live tags at a steerable clock: the
 		// baseline of a plant simulation. The recording itself is read on
@@ -589,7 +594,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, opcua-client, snmp, redfish, prometheus, plcnext, optommp, profinet-device and replay — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, opcua-client, snmp, redfish, prometheus, plcnext, optommp, profinet-device, replay and runtime — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }
 

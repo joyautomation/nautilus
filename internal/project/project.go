@@ -543,6 +543,10 @@ type DriverConfig struct {
 	// scan class per tick) or subscribe (one subscription per scan class,
 	// notified on change). Both keep the same quality and reconnect rules.
 	ReadMode string `yaml:"read-mode"`
+
+	// Tags binds a `type: runtime` status driver's inputs to the
+	// runtime's own health (runtimestatus.go, #850).
+	Tags []RuntimeStatusConfig `yaml:"tags"`
 }
 
 // ChannelConfig is one entry of channels:. Type cip is a Logix controller
@@ -972,6 +976,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	opts.Meta = applyTagMeta(opts.Tags, m.TagMeta)
 	var drivers []nio.NamedDriver
 	if opts.Driver, drivers, err = buildDrivers(fsys, m); err != nil {
+		return nil, err
+	}
+	if opts.Driver, err = pairRuntimeStatus(opts.Driver, taskNames(opts)); err != nil {
 		return nil, err
 	}
 	// Protocol inputs read as their init (or zero) until first delivered;

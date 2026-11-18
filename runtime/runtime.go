@@ -157,6 +157,9 @@ type TaskStats struct {
 	LastMs      float64 `json:"lastMs"`
 	LogicErrors uint64  `json:"logicErrors"`
 	LastError   string  `json:"lastError,omitempty"`
+	// Faulting: the task's last scan raised a logic error (a fault episode
+	// is open; it closes on the first clean scan).
+	Faulting bool `json:"faulting,omitempty"`
 	// Lateness is this task's wake-up timing — see Lateness.
 	Lateness Lateness `json:"lateness"`
 	// Sched is what was asked of the OS scheduler for this task's thread
@@ -407,6 +410,9 @@ type ScanStats struct {
 	IOErrors    uint64 `json:"ioErrors"`
 	LogicErrors uint64 `json:"logicErrors"`
 	LastError   string `json:"lastError,omitempty"` // message of the last main-task fault
+	// Faulting: the main task's last scan raised a LOGIC error (its program
+	// failed; an I/O fault is IOHealthy). It closes on the first clean scan.
+	Faulting bool `json:"faulting,omitempty"`
 	// DivZero counts divisions (and MODs) by zero evaluated by any task
 	// since start. The VM yields 0 and the scan keeps running, so this is
 	// the only trace a bad divisor leaves — the Logix S:V of nautilus.
@@ -1054,6 +1060,8 @@ func (r *Runtime) Run(ctx context.Context) {
 		saved = make(chan []byte, 1)
 		go func() { saved <- r.retainSaver(ctx) }()
 	}
+	// Before the first scan: a status driver reads this runtime's health.
+	r.bindStatsReaders(r.driver)
 	// Liveness watches the loops from here on; see liveness.go.
 	r.live.state.Store(runRunning)
 	defer r.live.state.Store(runStopped)
@@ -1331,6 +1339,7 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 		tr.stats.LastError = msg
 	}
 	ev := tr.fault.observe(msg, t1)
+	tr.stats.Faulting = tr.fault.faulting
 	tr.mu.Unlock()
 	// After the unlock: Stats() takes tr.mu, and a log sink may be slow;
 	// the demotion's callback takes tr.mu too.
@@ -1484,6 +1493,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 	r.recordScanLocked(t0, t1, t2, t3, periodS, first, ioMsg, logicMsg, lateUs)
 	ioEv := r.ioFault.observe(ioMsg, t3)
 	logicEv := r.logicFault.observe(logicMsg, t3)
+	r.stats.Faulting = r.logicFault.faulting
 	r.mu.Unlock()
 	r.logFault(MainTaskName, "I/O", ioEv)
 	r.logFault(MainTaskName, "logic", logicEv)
