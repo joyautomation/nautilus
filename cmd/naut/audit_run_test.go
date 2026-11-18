@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,6 +26,10 @@ func TestNautRunJournalsWrites(t *testing.T) {
 	for _, c := range []struct{ name, section, dir string }{
 		{"default", "", "audit"},
 		{"audit.path", "audit:\n  path: var/journal\n  keep-days: 30\n", filepath.Join("var", "journal")},
+		// A path that cannot be a directory: the controller runs, with the
+		// journal in memory only, said on stderr and on the drivers block
+		// (provisional, #709 question 5).
+		{"unopenable", "audit:\n  path: main.st\n", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -74,6 +79,21 @@ func TestNautRunJournalsWrites(t *testing.T) {
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusNoContent {
 				t.Fatalf("write = %d; stderr:\n%s", resp.StatusCode, stderr.String())
+			}
+			if c.dir == "" {
+				if !strings.Contains(stderr.String(), "audit: ERROR") {
+					t.Errorf("no error on stderr:\n%s", stderr.String())
+				}
+				resp, err := http.Get("http://" + api + "/api/drivers")
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if !strings.Contains(string(b), `"kind":"audit"`) || !strings.Contains(string(b), "memory only") {
+					t.Errorf("/api/drivers = %s, want the audit journal's error card", b)
+				}
+				return
 			}
 			// Answered, so already on disk: no waiting.
 			jdir := filepath.Join(dir, c.dir)

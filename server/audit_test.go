@@ -1,17 +1,24 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,36 +30,84 @@ import (
 	"github.com/joyautomation/nautilus/runtime"
 )
 
-// writeRoute matches a route registration whose method changes something.
-var writeRoute = regexp.MustCompile(`mux\.Handle(?:Func)?\("((?:POST|PUT|PATCH|DELETE) [^"]+)"`)
-
-// writeRoutes scans server/'s sources for the write routes: the pattern of
-// each, and whether its line wraps the handler in s.audited.
+// writeRoutes reads server/'s sources for the route registrations: every
+// Handle or HandleFunc call, on any mux, whose pattern is not a GET or HEAD
+// (a pattern with no method takes every method, so it is a write route
+// too), with whether its handler is an s.audited(...) call. A pattern that
+// is not a string literal cannot be judged and fails the test.
 func writeRoutes(t *testing.T) map[string]bool {
 	t.Helper()
-	files, err := filepath.Glob("*.go")
+	return scanWriteRoutes(t, ".", 12)
+}
+
+func scanWriteRoutes(t *testing.T, dir string, atLeast int) map[string]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]bool{}
-	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") {
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		src, err := os.ReadFile(f)
+		f, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, line := range strings.Split(string(src), "\n") {
-			if m := writeRoute.FindStringSubmatch(line); m != nil {
-				out[m[1]] = strings.Contains(line, "s.audited(")
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 2 {
+				return true
 			}
-		}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "Handle" && sel.Sel.Name != "HandleFunc") {
+				return true
+			}
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				t.Errorf("%s: a route registered with a pattern that is not a string literal; the audit test cannot tell whether it writes", fset.Position(call.Pos()))
+				return true
+			}
+			pattern, _ := strconv.Unquote(lit.Value)
+			if method, _, ok := strings.Cut(pattern, " "); ok && (method == "GET" || method == "HEAD") {
+				return true
+			}
+			wrapped := false
+			if h, ok := call.Args[1].(*ast.CallExpr); ok {
+				if hs, ok := h.Fun.(*ast.SelectorExpr); ok && hs.Sel.Name == "audited" {
+					wrapped = true
+				}
+			}
+			out[pattern] = wrapped
+			return true
+		})
 	}
-	if len(out) < 12 {
-		t.Fatalf("the scan found %d write routes, want at least the 12 of #709's PR 3: %v", len(out), out)
+	if len(out) < atLeast {
+		t.Fatalf("the scan found %d write routes, want at least %d: %v", len(out), atLeast, out)
 	}
 	return out
+}
+
+// The scan itself: a route with no method, one on another mux, and one
+// with a method other than GET are all write routes it must see.
+func TestWriteRouteScanSeesEveryRegistration(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "routes.go"), []byte(`package server
+
+func routes(s *Server, mux, other *http.ServeMux) {
+	mux.HandleFunc("GET /api/state", s.handleState)
+	mux.HandleFunc("/api/anything", s.handleWriteTag)
+	other.Handle("PATCH /api/x", http.HandlerFunc(s.handleWriteTag))
+	mux.Handle("POST /api/tags", s.audited("tag.write", s.tagTarget, s.handleWriteTag))
+}
+`), 0o644)
+	got := scanWriteRoutes(t, dir, 0)
+	want := map[string]bool{"/api/anything": false, "PATCH /api/x": false, "POST /api/tags": true}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("scan = %v, want %v", got, want)
+	}
 }
 
 // Every route that changes something records its entry through the
@@ -130,16 +185,21 @@ func auditRows() []auditRow {
 		{name: "tag write with a wrong token", pattern: "POST /api/tags", server: tok,
 			method: "POST", path: "/api/tags", body: `{"name":"SP","value":71}`,
 			header: map[string]string{"X-Nautilus-Token": "guess"},
-			action: "tag.write", target: "SP", user: "anonymous", source: "api", result: "refused",
+			// Refused by the write policy: the body is never read, so the
+			// entry names no target and no value.
+			action: "tag.write", target: "", user: "anonymous", source: "api", result: "refused",
 			check: func(t *testing.T, e audit.Entry) {
 				if strings.Contains(fmt.Sprint(e), "guess") {
 					t.Errorf("the presented token is in the entry: %+v", e)
+				}
+				if e.Before != nil || e.After != nil {
+					t.Errorf("an unauthorized refusal journalled values: %+v", e)
 				}
 			}},
 		{name: "tag write from a cross-origin page", pattern: "POST /api/tags", server: none,
 			method: "POST", path: "/api/tags", body: `{"name":"SP","value":1}`,
 			header: map[string]string{"Origin": "http://evil.example"},
-			action: "tag.write", target: "SP", user: "anonymous", source: "hmi", result: "refused"},
+			action: "tag.write", target: "", user: "anonymous", source: "hmi", result: "refused"},
 		{name: "tag write through a facade's TagWriter", pattern: "POST /api/tags",
 			server: plain(Options{TagWriter: func(string, any) error { return nil }}),
 			method: "POST", path: "/api/tags", body: `{"name":"SP","value":3}`,
@@ -313,6 +373,10 @@ func TestEveryWritePathJournalsExactlyOneEntry(t *testing.T) {
 			}
 			if e.ID == "" || e.TS.IsZero() || e.From == "" {
 				t.Errorf("entry lacks id, ts or from: %+v", e)
+			}
+			// from is the client's address without the port (design §4).
+			if e.From != "192.0.2.1" {
+				t.Errorf("from = %q, want the address without its port", e.From)
 			}
 			if row.before != nil && fmt.Sprint(e.Before) != fmt.Sprint(row.before) {
 				t.Errorf("before = %v, want %v", e.Before, row.before)
@@ -642,12 +706,14 @@ func TestRunWritesTheSummaryAfterSilence(t *testing.T) {
 	t.Fatalf("no summary after the window closed: %+v", srv.audit.ring.Recent())
 }
 
-// A write body is capped before the handler authorizes it: past the cap
-// the request is refused (413), journalled once, and its body never held.
+// An authorized write's body is capped: past the cap the request is
+// refused (413), journalled once, and its body never held.
 func TestWriteBodyIsCapped(t *testing.T) {
 	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
 	big := `{"name":"SP","value":"` + strings.Repeat("x", maxWriteBody) + `"}`
-	rec := call(t, srv, "POST", "/api/tags", big)
+	rec := call(t, srv, "POST", "/api/tags", big, func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer s3cret")
+	})
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("a body over the cap = %d, want 413", rec.Code)
 	}
@@ -674,5 +740,243 @@ func TestFlushAuditClosesOpenWindows(t *testing.T) {
 	es := srv.audit.ring.Recent()
 	if len(es) != refuseFull+1 || es[0].Detail["coalesced"] != 3 {
 		t.Fatalf("after FlushAudit: %+v, want the refused ×3 summary", es)
+	}
+}
+
+// countingBody counts what a handler reads of a request body.
+type countingBody struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingBody) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+func (c *countingBody) Close() error { return nil }
+
+// A request the write policy refuses (no token, a cross-origin page) has
+// its body neither read nor journalled: a probe with a 1 MiB tag name and
+// a 15 MiB value costs one small entry, not 16 MiB in the ring and on disk.
+func TestUnauthorizedRefusalReadsNoBody(t *testing.T) {
+	big := `{"name":"` + strings.Repeat("n", 1<<20) + `","value":"` + strings.Repeat("v", 15<<20) + `"}`
+	for _, tc := range []struct {
+		name string
+		srv  *Server
+		mod  func(*http.Request)
+		code int
+	}{
+		{"no token", New(newTestRuntime(t), Options{AuthToken: "s3cret"}), func(*http.Request) {}, http.StatusUnauthorized},
+		{"cross-origin", New(newTestRuntime(t)), func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }, http.StatusForbidden},
+	} {
+		body := &countingBody{r: strings.NewReader(big)}
+		rec := call(t, tc.srv, "POST", "/api/tags", "", tc.mod, func(r *http.Request) { r.Body = body })
+		if rec.Code != tc.code {
+			t.Fatalf("%s: %d %s, want %d", tc.name, rec.Code, rec.Body, tc.code)
+		}
+		if body.n != 0 {
+			t.Errorf("%s: %d bytes of the body were read", tc.name, body.n)
+		}
+		es := tc.srv.audit.ring.Recent()
+		if len(es) != 1 {
+			t.Fatalf("%s: %d entries", tc.name, len(es))
+		}
+		if b, _ := json.Marshal(es[0]); len(b) > 2048 || es[0].Target != "" || es[0].After != nil {
+			t.Errorf("%s: the entry is %d bytes: %.300s", tc.name, len(b), b)
+		}
+	}
+}
+
+// What an authorized client sends is capped too: a target at targetMax,
+// a refused action's values at refusedValueMax, an accepted one's at
+// valueMax, each over its cap replaced by a marker with its size and hash.
+func TestJournalledValuesAreCapped(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	call(t, srv, "POST", "/api/tags", `{"name":"`+strings.Repeat("n", 1<<20)+`","value":1}`)
+	big := strings.Repeat("v", 100<<10)
+	// 10 KiB: under valueMax, over the refusal's cap.
+	mid := strings.Repeat("m", 10<<10)
+	call(t, srv, "POST", "/api/tags", `{"name":"Level","value":"`+mid+`"}`)
+	es := srv.audit.ring.Recent()
+	if len(es) != 2 {
+		t.Fatalf("entries: %d", len(es))
+	}
+	if n := len(es[1].Target); es[1].Result != "refused" || n > targetMax+len("…") {
+		t.Errorf("an unknown 1 MiB tag name journalled a %d-byte target (%s)", n, es[1].Result)
+	}
+	sum := sha256.Sum256([]byte(`"` + mid + `"`))
+	m, _ := es[0].After.(map[string]any)
+	if es[0].Result != "refused" || m["truncated"] != true || m["sha256"] != hex.EncodeToString(sum[:]) {
+		t.Errorf("a refused 10 KiB value journalled as %.200v", es[0].After)
+	}
+	if b, _ := json.Marshal(es[0]); len(b) > 2*refusedValueMax {
+		t.Errorf("the refused entry is %d bytes", len(b))
+	}
+
+	// An accepted value is kept whole up to valueMax.
+	fac := New(newTestRuntime(t), Options{TagWriter: func(string, any) error { return nil }})
+	call(t, fac, "POST", "/api/tags", `{"name":"SP","value":"`+mid+`"}`)
+	call(t, fac, "POST", "/api/tags", `{"name":"SP","value":"`+big+`"}`)
+	es = fac.audit.ring.Recent()
+	if len(es) != 2 || es[1].Result != "ok" || es[1].After != mid {
+		t.Fatalf("an accepted 10 KiB value was not kept whole: %.200v", es)
+	}
+	if m, _ := es[0].After.(map[string]any); m["truncated"] != true {
+		t.Errorf("an accepted 100 KiB value journalled as %.200v", es[0].After)
+	}
+}
+
+func auditCard(t *testing.T, srv *Server) *DriverStatus {
+	t.Helper()
+	var ds []DriverStatus
+	if err := json.Unmarshal(call(t, srv, "GET", "/api/drivers", "").Body.Bytes(), &ds); err != nil {
+		t.Fatal(err)
+	}
+	for i := range ds {
+		if ds[i].Kind == "audit" {
+			return &ds[i]
+		}
+	}
+	return nil
+}
+
+// While actions are allowed without being journalled to disk (provisional,
+// #709 question 5), the drivers block says so: a journal that could not be
+// opened, or one that cannot be written, until it catches up.
+func TestJournalTroubleIsOnTheDriversBlock(t *testing.T) {
+	if c := auditCard(t, New(newTestRuntime(t))); c != nil {
+		t.Errorf("a healthy server shows %+v", c)
+	}
+	off := New(newTestRuntime(t), Options{AuditUnavailable: errors.New("audit: mkdir /ro/audit: read-only file system")})
+	if c := auditCard(t, off); c == nil || c.State != "error" || !strings.Contains(c.LastError, "read-only") ||
+		!strings.Contains(c.Message, "memory only") {
+		t.Errorf("an unopened journal shows %+v", c)
+	}
+
+	captureLog(t)
+	j := &flaky{down: true}
+	srv := New(newTestRuntime(t), Options{Audit: j})
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`)
+	c := auditCard(t, srv)
+	if c == nil || c.State != "error" || c.LastError != "disk full" || len(c.Metrics) == 0 || c.Metrics[0].Value != 1 {
+		t.Fatalf("a failing journal shows %+v", c)
+	}
+	j.mu.Lock()
+	j.down = false
+	j.mu.Unlock()
+	srv.audit.tick()
+	if c := auditCard(t, srv); c != nil {
+		t.Errorf("after the journal caught up: %+v", c)
+	}
+}
+
+// A write a standby answers itself never reaches the leader's seam, so the
+// standby journals it: the held lease's 503 and the dead leader's 502,
+// coalesced like any refusal.
+func TestStandbyAnswersAreJournalled(t *testing.T) {
+	held := New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{
+		Mode: "cluster", Pod: "plc-0", Leader: "plc-0", LeaderAddr: "127.0.0.1:1",
+	}}})
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	held.audit.now = func() time.Time { return now }
+	for i := 0; i < refuseFull+3; i++ {
+		if rec := call(t, held, "POST", "/api/tags", `{"name":"SP","value":70}`); rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("held lease: %d", rec.Code)
+		}
+	}
+	call(t, held, "GET", "/api/state", "")
+	held.FlushAudit()
+	es := held.audit.ring.Recent()
+	if len(es) != refuseFull+1 || es[0].Detail["coalesced"] != 3 || es[1].Action != "tag.write" ||
+		es[1].Result != "error" || es[1].Detail["status"] != http.StatusServiceUnavailable ||
+		!strings.Contains(fmt.Sprint(es[1].Detail["reason"]), "write gate is closed") {
+		t.Fatalf("held lease journal: %+v", es)
+	}
+
+	defer func(d time.Duration) { failoverWait = d }(failoverWait)
+	failoverWait = 50 * time.Millisecond
+	gone := httptest.NewServer(http.NotFoundHandler())
+	addr := standbyAddr(gone)
+	gone.Close()
+	standby := New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{
+		Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: addr,
+	}}})
+	if rec := call(t, standby, "DELETE", "/api/forces/SP", ""); rec.Code != http.StatusBadGateway {
+		t.Fatalf("dead leader: %d", rec.Code)
+	}
+	es = standby.audit.ring.Recent()
+	if len(es) != 1 || es[0].Action != "force.clear" || es[0].Result != "error" || es[0].Detail["status"] != http.StatusBadGateway {
+		t.Fatalf("dead leader journal: %+v", es)
+	}
+}
+
+// stuck takes one entry, fails the next, then blocks every later write
+// until released: a journal catching up on a slow disk.
+type stuck struct {
+	mu       sync.Mutex
+	n        int
+	blocked  chan struct{}
+	release  chan struct{}
+	signaled bool
+}
+
+func (s *stuck) Record(e audit.Entry) (audit.Entry, error) {
+	s.mu.Lock()
+	s.n++
+	n := s.n
+	if n > 1 && !s.signaled {
+		s.signaled = true
+		close(s.blocked)
+	}
+	s.mu.Unlock()
+	if n == 1 {
+		return e, errors.New("disk full")
+	}
+	<-s.release
+	return e, nil
+}
+
+// The journal's upkeep runs beside the broadcast loop: while it is stuck
+// catching up (fsyncing a backlog), the live frames keep coming.
+func TestAuditUpkeepDoesNotStallTheFrames(t *testing.T) {
+	prev := auditUpkeep
+	auditUpkeep = 5 * time.Millisecond
+	t.Cleanup(func() { auditUpkeep = prev })
+	captureLog(t)
+	j := &stuck{blocked: make(chan struct{}), release: make(chan struct{})}
+	srv := New(newTestRuntime(t), Options{Audit: j, Interval: 5 * time.Millisecond})
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`) // kept: the journal failed
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx)
+	select {
+	case <-j.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the upkeep never retried the kept entry")
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	// Unstick the journal first, so ts.Close does not wait on a handler
+	// the test has failed on.
+	defer close(j.release)
+	rctx, rcancel := context.WithTimeout(ctx, 3*time.Second)
+	defer rcancel()
+	req, _ := http.NewRequestWithContext(rctx, "GET", ts.URL+"/api/stream", nil)
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(nil, 1<<20)
+	frames := 0
+	for frames < 3 && sc.Scan() {
+		if strings.HasPrefix(sc.Text(), "data: ") {
+			frames++
+		}
+	}
+	if frames < 3 {
+		t.Fatalf("%d frames while the journal was catching up, want 3 (%v)", frames, sc.Err())
 	}
 }

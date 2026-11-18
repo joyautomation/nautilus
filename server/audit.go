@@ -8,6 +8,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -27,10 +29,10 @@ import (
 )
 
 const (
-	// refuseFull is how many refusals of one action from one address a
-	// refuseWindow journals in full; the rest of the window's become one
-	// summary entry, so an unauthenticated client cannot force an fsynced
-	// entry per request. Accepted actions are never coalesced.
+	// refuseFull is how many refusals (or errors) of one action from one
+	// address a refuseWindow journals in full; the rest of the window's
+	// become one summary entry, so an unauthenticated client cannot force an
+	// fsynced entry per request. Accepted actions are never coalesced.
 	refuseFull   = 5
 	refuseWindow = time.Minute
 	// coalesceKeys bounds the refusal windows kept at once; past it, new
@@ -50,6 +52,12 @@ const (
 	// make the controller hold an arbitrarily large body. The largest real
 	// body is an online edit's source.
 	maxWriteBody = 16 << 20
+	// targetMax caps an entry's target, and valueMax its before and after
+	// (their JSON; audit.Cap). A refused or failed action's values are
+	// capped harder: they are what a client sent, and are kept anyway.
+	targetMax       = 1024
+	valueMax        = 64 << 10
+	refusedValueMax = 4 << 10
 )
 
 // auditUpkeep is how often Server.Run calls the auditor's tick.
@@ -79,15 +87,34 @@ type auditor struct {
 	ring *audit.Ring
 	now  func() time.Time
 
+	// unavailable is why the configured journal could not be opened
+	// (Options.AuditUnavailable): the entries are in the ring only.
+	unavailable string
+
 	mu      sync.Mutex
 	pending []audit.Entry // entries rec failed to take, oldest first
 	dropped int           // pending entries dropped past pendingMax
 	failing bool
+	failErr string    // the last write error, while failing
+	failAt  time.Time // when the journal began failing
+
+	// health is what status shows, kept apart from mu: the broadcast loop
+	// renders it every frame, and must not wait on a.mu while a write or
+	// a catch-up holds it through an fsync.
+	health  atomic.Pointer[journalHealth]
 	windows map[refusalKey]*refusals
 	swept   time.Time
 }
 
-type refusalKey struct{ from, action string }
+// journalHealth is the journal's state for its card: nil while it is
+// written as it should be.
+type journalHealth struct {
+	since            time.Time
+	err              string
+	pending, dropped int
+}
+
+type refusalKey struct{ from, action, result string }
 
 type refusals struct {
 	since time.Time
@@ -103,7 +130,8 @@ func newAuditor(rec audit.Recorder) *auditor {
 	return &auditor{rec: rec, ring: ring, now: time.Now, windows: map[refusalKey]*refusals{}}
 }
 
-// record journals e, unless it is a refusal past its window's allowance.
+// record journals e, unless it is a refusal or an error past its window's
+// allowance.
 func (a *auditor) record(e audit.Entry) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -116,7 +144,7 @@ func (a *auditor) record(e audit.Entry) {
 		e.ID = audit.NewID(e.TS)
 	}
 	a.sweepLocked(now, false)
-	if e.Result == audit.ResultRefused && !a.admitLocked(e, now) {
+	if e.Result != audit.ResultOK && !a.admitLocked(e, now) {
 		return
 	}
 	a.writeLocked(e)
@@ -130,6 +158,46 @@ func (a *auditor) tick() {
 	defer a.mu.Unlock()
 	a.retryLocked()
 	a.sweepLocked(a.now(), true)
+}
+
+// upkeep ticks until ctx ends, then flushes.
+func (a *auditor) upkeep(ctx context.Context) {
+	t := time.NewTicker(auditUpkeep)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			a.flush()
+			return
+		case <-t.C:
+			a.tick()
+		}
+	}
+}
+
+// status is the journal's card on the drivers block, shown only while
+// something is wrong with it: it could not be opened, or it cannot be
+// written. Either way actions are allowed (the interim policy until #709's
+// question 5 is answered), so this card is how an operator learns that
+// they are not being journalled to disk.
+func (a *auditor) status() *DriverStatus {
+	h := a.health.Load()
+	switch {
+	case a.unavailable != "":
+		return &DriverStatus{Kind: "audit", Name: "audit journal", State: "error",
+			Message: "the audit journal could not be opened: actions are allowed and journalled in memory only (the last " +
+				strconv.Itoa(auditRing) + ", lost on restart)",
+			LastError: a.unavailable}
+	case h != nil:
+		return &DriverStatus{Kind: "audit", Name: "audit journal", State: "error",
+			Message: "the audit journal cannot be written: actions are allowed, and their entries are kept in memory until it can be",
+			SinceMs: h.since.UnixMilli(), LastError: h.err,
+			Metrics: []DriverMetric{
+				{Label: "waiting", Value: float64(h.pending), Volatile: true},
+				{Label: "dropped", Value: float64(h.dropped), Volatile: true},
+			}}
+	}
+	return nil
 }
 
 // flush writes everything owed now: the kept entries, and a summary for
@@ -169,12 +237,15 @@ func (a *auditor) writeLocked(e audit.Entry) {
 func (a *auditor) retryLocked() bool {
 	for len(a.pending) > 0 {
 		if _, err := a.rec.Record(a.pending[0]); err != nil {
+			a.failErr = err.Error()
+			a.health.Store(&journalHealth{since: a.failAt, err: a.failErr, pending: len(a.pending), dropped: a.dropped})
 			return false
 		}
 		a.pending = a.pending[1:]
 	}
 	if a.failing {
-		a.failing = false
+		a.failing, a.failErr = false, ""
+		a.health.Store(nil)
 		slog.Warn("audit journal: writable again; the entries kept meanwhile are written", "dropped", a.dropped)
 		if a.dropped > 0 {
 			n := a.dropped
@@ -194,17 +265,24 @@ func (a *auditor) keepLocked(e audit.Entry, err error) {
 		a.pending = a.pending[1:]
 		a.dropped++
 	}
+	if err != nil {
+		a.failErr = err.Error()
+	}
+	if !a.failing {
+		a.failAt = a.now()
+	}
 	if !a.failing || len(a.pending)%100 == 0 {
 		slog.Error("audit journal: unwritable; the action was allowed and its entry is kept in memory until the journal can be written",
 			"err", err, "pending", len(a.pending), "dropped", a.dropped)
 	}
 	a.failing = true
+	a.health.Store(&journalHealth{since: a.failAt, err: a.failErr, pending: len(a.pending), dropped: a.dropped})
 }
 
 // admitLocked counts a refusal in its (address, action) window and
 // reports whether it is journalled in full.
 func (a *auditor) admitLocked(e audit.Entry, now time.Time) bool {
-	key := refusalKey{hostOf(e.From), e.Action}
+	key := refusalKey{hostOf(e.From), e.Action, e.Result}
 	w := a.windows[key]
 	if w != nil && now.Sub(w.since) >= refuseWindow {
 		a.closeLocked(key, w)
@@ -274,62 +352,107 @@ func (a *auditor) closeLocked(k refusalKey, w *refusals) {
 // (Server.Run does too, when its context ends).
 func (s *Server) FlushAudit() { s.audit.flush() }
 
+// auditedRoute is a write route's handler behind the audit seam. The
+// route table registers it with mux.Handle, so a standby that answers a
+// write itself (proxyStandby) finds the route's action and journals that
+// answer through the same seam.
+type auditedRoute struct {
+	s      *Server
+	action string
+	tf     targetFunc
+	h      http.HandlerFunc
+}
+
 // audited wraps a write route's handler: it reads the target, runs the
 // handler into a buffer, records one entry from the outcome, and only then
 // answers the client, so an action is never answered before it is
-// journalled.
-func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var body []byte
-		tooLarge := false
-		if r.Body != nil {
-			body, _ = io.ReadAll(io.LimitReader(r.Body, maxWriteBody+1))
-			r.Body.Close()
-			if tooLarge = len(body) > maxWriteBody; tooLarge {
-				body = nil
-			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-		}
-		var t auditTarget
-		if tf != nil && !tooLarge {
-			t = tf(r, body)
-		}
-		buf := &bufferedResponse{header: w.Header()}
-		if tooLarge {
-			http.Error(buf, "request body over "+strconv.Itoa(maxWriteBody>>20)+" MiB", http.StatusRequestEntityTooLarge)
-		} else {
-			h(buf, r)
-		}
-		status := buf.status
-		if status == 0 {
-			status = http.StatusOK
-		}
-		e := audit.Entry{
-			User:   s.principal(r),
-			Source: clientSource(r),
-			Action: action,
-			Target: t.target,
-			Before: t.before,
-			After:  t.after,
-			Detail: t.detail,
-			From:   r.RemoteAddr,
-			Result: resultOf(status),
-		}
-		if e.Result == audit.ResultOK {
-			if t.done != nil {
-				e.After = t.done()
-			}
-		} else {
-			if e.Detail == nil {
-				e.Detail = map[string]any{}
-			}
-			e.Detail["status"] = status
-			e.Detail["reason"] = reasonOf(buf.body.Bytes())
-		}
-		s.audit.record(e)
-		w.WriteHeader(status)
-		w.Write(buf.body.Bytes())
+// journalled. A request the write policy refuses (authorizeWrite: no
+// token, a cross-origin page) has its body neither read nor journalled:
+// its entry says who, from where and which action, and every handler
+// refuses it before reading anything.
+func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc) *auditedRoute {
+	return &auditedRoute{s: s, action: action, tf: tf, h: h}
+}
+
+func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if code, _ := a.s.authorizeWrite(r); code != 0 {
+		r.Body, r.ContentLength = http.NoBody, 0
+		a.answer(w, r, auditTarget{}, a.h)
+		return
 	}
+	var body []byte
+	if r.Body != nil {
+		body, _ = io.ReadAll(io.LimitReader(r.Body, maxWriteBody+1))
+		r.Body.Close()
+		if len(body) > maxWriteBody {
+			a.answer(w, r, auditTarget{}, func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "request body over "+strconv.Itoa(maxWriteBody>>20)+" MiB", http.StatusRequestEntityTooLarge)
+			})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	var t auditTarget
+	if a.tf != nil {
+		t = a.tf(r, body)
+	}
+	a.answer(w, r, t, a.h)
+}
+
+// refuse answers r with h instead of the route's handler, through the
+// seam: a standby that cannot pass a write on still journals its answer.
+func (a *auditedRoute) refuse(w http.ResponseWriter, r *http.Request, h http.HandlerFunc) {
+	a.answer(w, r, auditTarget{}, h)
+}
+
+// auditedAnswer answers r with h; when r is for a write route, through
+// that route's seam, so the answer is journalled.
+func auditedAnswer(routes *http.ServeMux, w http.ResponseWriter, r *http.Request, h http.HandlerFunc) {
+	if route, _ := routes.Handler(r); route != nil {
+		if a, ok := route.(*auditedRoute); ok {
+			a.refuse(w, r, h)
+			return
+		}
+	}
+	h(w, r)
+}
+
+// answer runs h into a buffer, records the entry, then answers.
+func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc) {
+	buf := &bufferedResponse{header: w.Header()}
+	h(buf, r)
+	status := buf.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	e := audit.Entry{
+		User:   a.s.principal(r),
+		Source: clientSource(r),
+		Action: a.action,
+		Target: capText(t.target, targetMax),
+		Before: t.before,
+		After:  t.after,
+		Detail: t.detail,
+		From:   hostOf(r.RemoteAddr),
+		Result: resultOf(status),
+	}
+	valueCap := valueMax
+	if e.Result == audit.ResultOK {
+		if t.done != nil {
+			e.After = t.done()
+		}
+	} else {
+		valueCap = refusedValueMax
+		if e.Detail == nil {
+			e.Detail = map[string]any{}
+		}
+		e.Detail["status"] = status
+		e.Detail["reason"] = reasonOf(buf.body.Bytes())
+	}
+	e.Before, e.After = audit.Cap(e.Before, valueCap), audit.Cap(e.After, valueCap)
+	a.s.audit.record(e)
+	w.WriteHeader(status)
+	w.Write(buf.body.Bytes())
 }
 
 // bufferedResponse holds a handler's answer until its entry is recorded.

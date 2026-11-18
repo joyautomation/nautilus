@@ -1,11 +1,14 @@
 package audit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
 	"strings"
+	"unicode/utf8"
 )
 
 // jsonSafe returns v with every NaN and ±Inf float as the strings "NaN",
@@ -179,4 +182,30 @@ func structFields(rv reflect.Value, depth int, out map[string]any) {
 		}
 		out[name] = rebuild(fv, depth+1)
 	}
+}
+
+// Cap returns v unchanged when its JSON is at most max bytes, and
+// otherwise a marker that says so: {"truncated": true, "bytes": n,
+// "sha256": hex of the full JSON, "head": its first bytes}. A value a
+// client sent can be as large as its request, and an entry is fsynced and
+// kept in memory: Cap bounds what one costs, and the hash still lets the
+// full value be matched against a copy kept elsewhere.
+func Cap(v any, max int) any {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(jsonSafe(v))
+	if err != nil || len(b) <= max {
+		return v
+	}
+	sum := sha256.Sum256(b)
+	head := max / 4
+	if head > 256 {
+		head = 256
+	}
+	h := string(b[:head])
+	for !utf8.ValidString(h) {
+		h = h[:len(h)-1]
+	}
+	return map[string]any{"truncated": true, "bytes": len(b), "sha256": hex.EncodeToString(sum[:]), "head": h}
 }

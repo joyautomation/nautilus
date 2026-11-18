@@ -972,7 +972,7 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 
 Every request to a route above that changes something (`POST /api/tags`,
 the force, SFC, alarm and program routes) leaves **exactly one** audit
-entry, accepted or refused, and is answered only once the entry is
+entry, accepted or refused, and is answered only after the entry is
 recorded. `naut run` writes the entries to a hash-chained journal on disk
 (the manifest's `audit:` section, default `./audit`), which
 `naut audit verify` checks.
@@ -982,12 +982,49 @@ Each entry has:
 - `source`: `X-Nautilus-Client` (`hmi`, `ide`, `cli` or `api`) when the client sends it, else `hmi` for a browser and `api` for anything else.
 - `action` (`tag.write`, `force.set`, `alarm.ack`, `program.edit`, …), `target`, and `before` and `after` values.
 - `result`: `ok`, `refused` (with `detail.reason`) or `error`.
-- `from`: the client's address.
+- `from`: the client's IP address.
 
-An online edit is journalled as program hashes, never the source. Refusals
-from one address are coalesced: five a minute in full, then one entry
-counting the rest (`detail.coalesced`). A write body over 16 MiB is refused
-with `413`.
+An online edit is journalled as program hashes, never the source. A
+request refused for want of the token (or from a cross-origin page) is
+journalled without reading its body: who, from where and which action,
+with no target or values. Otherwise the target is capped at 1 KiB, and
+`before` and `after` at 64 KiB of JSON (4 KiB on a refusal); a larger
+value is journalled as `{"truncated": true, "bytes": …, "sha256": …}`.
+Refusals and errors from one address are coalesced: five a minute in full
+per action, then one entry counting the rest (`detail.coalesced`). A write
+body over 16 MiB is refused with `413`. On a redundant pair, a write is
+journalled by the leader that applies it; one a standby answers itself
+(`503` while it holds the lease with its scans stalled, `502` when the
+leader cannot be reached) is journalled by the standby.
+
+:::caution[Provisional]
+These answer questions still open in the design
+(`docs/design/identity-audit.md` §6) and may change:
+
+- **A journal that cannot be written does not stop the controller.**
+  If the journal fails, the action is still carried out, an error is
+  logged, and the entry is kept in memory (up to 10,000; past that the
+  oldest are counted in an `audit.dropped` entry) and written, with
+  its id, once the disk recovers. If `naut run` cannot open the journal
+  (an unwritable `audit.path`, or another `naut run` already using it),
+  the controller runs with the entries in memory only (the last 1000,
+  lost on restart). Either way an `audit` card with state `error` appears
+  on the drivers block (`GET /api/drivers`, `/api/state`, the live
+  stream), until the journal recovers or the controller restarts. Refusing
+  elevated actions (forces, program edits) while the journal is down is
+  the alternative under consideration (question 5).
+- **`GET /api/audit` is open when no auth token is set**, as every read
+  is. Its entries carry client addresses (question 1).
+:::
+
+Known limits:
+
+- The action takes effect before its entry is written: a crash
+  between the two leaves an applied action without an entry.
+- The program routes `naut logix serve` answers itself (`PUT /api/program`,
+  which edits the Logix project, and `POST /api/logix/deploy`) are not
+  journalled yet, nor are the refusals of the program routes on a Siemens
+  facade.
 
 ### `GET /api/audit`
 
@@ -996,7 +1033,7 @@ The last 1000 entries, newest first:
 ```json
 {"entries": [{"id": "01J…", "seq": 42, "ts": "2026-11-18T14:02:11.204Z",
   "user": "token", "source": "hmi", "action": "tag.write", "target": "SP",
-  "before": 65, "after": 70, "result": "ok", "from": "192.0.2.22:51334",
+  "before": 65, "after": 70, "result": "ok", "from": "192.0.2.22",
   "prev": "sha256:…"}], "truncated": false}
 ```
 
@@ -1006,7 +1043,7 @@ Query parameters filter it: `from` and `to` (epoch ms or RFC 3339),
 
 | Status | When |
 | --- | --- |
-| `401` | An auth token is set and the request does not carry it: the entries say who did what from where |
+| `401` | An auth token is set and the request does not carry it: the entries say who did what from where. With no token set, it is open, like every read (provisional, see above) |
 | `400` | A bad `from`, `to` or `limit` |
 
 ## Historian proxy

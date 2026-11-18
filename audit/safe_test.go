@@ -1,8 +1,11 @@
 package audit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -85,5 +88,29 @@ func TestFiniteTypedContainersUnchanged(t *testing.T) {
 	}
 	if _, ok := jsonSafe([]float64{1, 2}).([]float64); !ok {
 		t.Error("a finite []float64 was rebuilt")
+	}
+}
+
+// Cap keeps a value whose JSON fits and replaces one that does not with a
+// marker carrying the full JSON's size and SHA-256; NaN does not stop it.
+func TestCap(t *testing.T) {
+	if got := Cap([]float64{1, 2}, 64); !reflect.DeepEqual(got, []float64{1, 2}) {
+		t.Errorf("a small value: %v", got)
+	}
+	if Cap(nil, 1) != nil {
+		t.Error("nil is not nil")
+	}
+	v := map[string]any{"a": strings.Repeat("x", 100), "b": math.NaN()}
+	full, _ := json.Marshal(jsonSafe(v))
+	m, ok := Cap(v, 64).(map[string]any)
+	sum := sha256.Sum256(full)
+	if !ok || m["truncated"] != true || m["bytes"] != len(full) || m["sha256"] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("Cap = %v", m)
+	}
+	if h, _ := m["head"].(string); len(h) > 16 || !strings.HasPrefix(string(full), h) {
+		t.Errorf("head %q", h)
+	}
+	if b, err := json.Marshal(m); err != nil || len(b) > 256 {
+		t.Errorf("the marker is %d bytes (%v)", len(b), err)
 	}
 }
