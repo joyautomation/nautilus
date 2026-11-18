@@ -169,6 +169,7 @@ the session is gone.
 | `gate` | 412 | A probe gate failed (TIA, group, licence). The message names it |
 | `target_refused` | 403 | The CPU address is not in `TIAD_TARGETS` |
 | `decision_required` | 409 | A download question has no answer in the request. `data.questions` lists them |
+| `declined` | 409 | A download question was answered no. `data.questions` lists them, and nothing is loaded |
 | `compile_failed` | 422 | Compile errors. `data` is the compile result |
 | `operation_failed` | 500 | Openness threw. The message carries its text |
 
@@ -209,6 +210,8 @@ The rules for applying a spec:
 - **Applying a spec makes the project match it.** A device or module that
   is not in the spec is removed. That is how naut-profinet's
   module-difference test removes a module.
+- **Every device's GSDML must already be installed** (`gsd/install`).
+- **Every web user needs a password** in `secrets.webUsers`.
 - **I-device transfer areas come later**, as `iDevice:` (P6).
 
 **Where a PROFINET device's entry comes from.** In `nautilus.yaml`, a
@@ -268,7 +271,7 @@ Response: `{dryRun, downloaded, questions: [{id, message, detail}], state}`.
 - **A dry run** runs TIA's pre-download checks and returns them as
   `questions`. The `id` is one of:
   - `stop-cpu`
-  - `reinitialize` (detail lists the DBs)
+  - `reinitialize` (`objects` lists the DBs)
   - `overwrite`
   - `start-after`
   - `password`
@@ -282,7 +285,11 @@ Response: `{dryRun, downloaded, questions: [{id, message, detail}], state}`.
   - An `other` question always refuses, so a check tiad has never seen
     cannot be answered by accident.
 - **`address`** must be in `TIAD_TARGETS`, or the call fails with
-  `target_refused`.
+  `target_refused`. It must also equal the station's `cpu.address`
+  (one station spec per CPU).
+- **The project must be fully compiled** (hardware and software) since its
+  last change.
+- **An answer of no** fails the call with `declined`. Nothing is loaded.
 - **`announced`** must be true for a real download. It records that the
   shared-CPU rule was followed (tell naut-lead first). It is a convention,
   not a safety.
@@ -379,7 +386,7 @@ Copied from [logix-authoring.md](logix-authoring.md) §5 and §7a.
 
 | Package | Role |
 |---|---|
-| `siemens/tiad` | Go client for tiad + `tiadtest`, an in-memory fake that enforces §3.2–§3.5 |
+| `siemens/tiad` | Go client for tiad: the station spec and its validation, the download rule (`Resolve`), the sandbox rule (`CleanPath`). `tiadtest` is an in-memory fake agent that enforces §3.2–§3.5 and is the executable half of this contract |
 | `siemens/webapi` | Go Web API client |
 | `siemens/writer` | nautilus → SCL, tag tables, station spec |
 | `siemens/facade` | `naut siemens serve` |
