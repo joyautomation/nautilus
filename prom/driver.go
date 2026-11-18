@@ -213,9 +213,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		d.tags[tg.Name] = tr
 		cfg.Tags = append(cfg.Tags, hw.TagDecl{Name: tg.Name, Type: tg.Type, Source: tg.Source, Members: hwMembers})
 	}
-	for _, w := range m.Writes {
-		cfg.Writes = append(cfg.Writes, w)
-	}
+	cfg.Writes = append(cfg.Writes, m.Writes...)
 
 	base, err := hw.NewBase(cfg)
 	if err != nil {

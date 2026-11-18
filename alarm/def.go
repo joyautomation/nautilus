@@ -294,7 +294,7 @@ func (m *Match) UnmarshalYAML(node *yaml.Node) error {
 	if err := strictDecode(node, &w); err != nil {
 		return err
 	}
-	*m = Match{Type: w.Type, Member: w.Member, Tag: w.Tag}
+	*m = Match(w)
 	return nil
 }
 

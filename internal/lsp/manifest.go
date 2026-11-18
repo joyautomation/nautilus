@@ -567,11 +567,11 @@ func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []badTag, []string,
 // A role:input tag may have no init, in which case the type is unknown and
 // saying nothing beats guessing.
 func iecTypeOf(init any) string {
-	switch init.(type) {
+	switch v := init.(type) {
 	case bool:
 		return "BOOL"
 	case string:
-		if x := strings.ToUpper(strings.TrimSpace(init.(string))); strings.HasPrefix(x, "T#") || strings.HasPrefix(x, "TIME#") {
+		if x := strings.ToUpper(strings.TrimSpace(v)); strings.HasPrefix(x, "T#") || strings.HasPrefix(x, "TIME#") {
 			return "TIME"
 		}
 		return "STRING"

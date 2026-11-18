@@ -51,10 +51,7 @@ func TestRenderSaysWhatAPersonWouldSee(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	var routes []string
-	for _, p := range []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/tall", "/small", "/below", "/crossed", "/through", "/overlap", "/fold", "/fieldover", "/dim", "/themed", "/tiny", "/[id]"} {
-		routes = append(routes, p)
-	}
+	routes := []string{"/fine", "/throws", "/logged", "/blank", "/pipes", "/outside", "/wide", "/tall", "/small", "/below", "/crossed", "/through", "/overlap", "/fold", "/fieldover", "/dim", "/themed", "/tiny", "/[id]"}
 	found, err := Render(ctx, path, srv.URL, routes)
 	if err != nil {
 		t.Fatal(err)
