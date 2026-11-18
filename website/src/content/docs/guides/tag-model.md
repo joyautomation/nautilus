@@ -722,7 +722,7 @@ derivation (a driver-bound input whose last read failed is stale, and on a
 redundant pair's standby everything a scan refreshes is stale); and the
 server puts the non-`good` entries on `/api/state` and every stream frame
 as a `quality` map. An absent name means `good`, so a healthy plant pays
-nothing for it. The full model — the four values, where each comes from,
+nothing for it. The full model — the five values, where each comes from,
 and why an HMI must check `/api/meta`'s capability flag before drawing a
 quality badge — is in
 [Streaming and data quality](/guides/streaming/#per-tag-quality).

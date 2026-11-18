@@ -443,3 +443,21 @@ func TestVariantAgreesWithDataTypeWhenKindsDiffer(t *testing.T) {
 		}
 	}
 }
+
+// Every quality maps to an OPC UA status, Good only for Good; Substituted
+// is Uncertain_SubstituteValue; a quality this build does not know is Bad
+// (#707: fail closed).
+func TestStatusOfEveryQuality(t *testing.T) {
+	for _, q := range nio.AllQualities() {
+		st := statusOf(q)
+		if (st == ua.StatusGood) != (q == nio.Good) {
+			t.Errorf("%s -> %v", q, st)
+		}
+	}
+	if st := statusOf(nio.Substituted); st != ua.StatusUncertainSubstituteValue {
+		t.Errorf("substituted -> %v, want Uncertain_SubstituteValue", st)
+	}
+	if st := statusOf(nio.Quality(len(nio.AllQualities()))); st&0xC0000000 != 0x80000000 {
+		t.Errorf("an unknown quality -> %v, want a Bad status", st)
+	}
+}

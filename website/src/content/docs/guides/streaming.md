@@ -277,7 +277,7 @@ Frames now carry a `quality` map:
 }
 ```
 
-Four values, because an operator screen makes exactly four distinctions:
+Five values, because an operator screen makes exactly five distinctions:
 
 | Value | Meaning | What a screen should do |
 | --- | --- | --- |
@@ -285,6 +285,12 @@ Four values, because an operator screen makes exactly four distinctions:
 | `stale` | was good, no longer refreshed — this is its last reading | show it, greyed, with its age |
 | `bad` | the source calls this reading untrustworthy | show the fault, not the number |
 | `notConnected` | the source has never delivered | show "no data" — there may be no value at all |
+| `substituted` | an operator put this value in place of a bad sensor's; the logic runs on it (#707) | show it, marked as not the plant's reading |
+
+A value a screen does not know (a controller newer than the screen) must
+be drawn as **bad**, never as good: the HMI kit does that, and a hand-built
+screen should too. OPC UA clients see `substituted` as
+`Uncertain_SubstituteValue`.
 
 Two rules keep it affordable on a 10,000-tag controller:
 

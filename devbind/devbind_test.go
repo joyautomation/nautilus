@@ -260,3 +260,33 @@ func TestResolveTypeRules(t *testing.T) {
 		t.Errorf("a path for a profile id: %v", err)
 	}
 }
+
+// The device roll-up: a substituted member makes the device Substituted
+// (below Bad, above Stale), and a quality this build does not know counts as
+// Bad, never as Good (#707).
+func TestRollupSubstitutedAndUnknown(t *testing.T) {
+	asm := []*assembler{{dev: "P1", members: []string{"a", "b"}}}
+	member := map[string]int{"a": 0, "b": 1}
+	for _, c := range []struct {
+		in   map[string]nio.Quality
+		want nio.Quality
+		good bool
+	}{
+		{map[string]nio.Quality{"a": nio.Substituted}, nio.Substituted, false},
+		{map[string]nio.Quality{"a": nio.Substituted, "b": nio.Stale}, nio.Substituted, false},
+		{map[string]nio.Quality{"a": nio.Substituted, "b": nio.Bad}, nio.Bad, false},
+		{map[string]nio.Quality{"a": nio.Quality(len(nio.AllQualities()))}, nio.Bad, false},
+		{map[string]nio.Quality{"a": nio.Good}, nio.Good, true},
+	} {
+		got, ok := rollup(asm, member, c.in)["P1"]
+		if c.good {
+			if ok && got != nio.Good {
+				t.Errorf("%v: device %v, want Good", c.in, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%v: device %v, want %v", c.in, got, c.want)
+		}
+	}
+}
