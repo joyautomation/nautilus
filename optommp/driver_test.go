@@ -3,11 +3,13 @@ package optommp
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"net"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -400,4 +402,51 @@ func TestDriverLocalProcessorRetriesFast(t *testing.T) {
 	if far.retryMin != defaultRetryMin || far.retryMax != defaultRetryMax {
 		t.Errorf("remote processor backoff %s..%s, want %s..%s", far.retryMin, far.retryMax, defaultRetryMin, defaultRetryMax)
 	}
+}
+
+// A processor that stays away is logged once, not on every redial; the
+// error count in Health still counts every attempt.
+func TestDriverLogsARepeatedSessionErrorOnce(t *testing.T) {
+	dev := newBenchDevice()
+	var mu sync.Mutex
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&lockedWriter{mu: &mu, w: &buf}, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	var tries atomic.Int32
+	drv, err := New(benchManifest(t, dev, ManifestOptions{}), WithLogger(log), WithDialer(func(ctx context.Context) (net.Conn, error) {
+		tries.Add(1)
+		return nil, errors.New("connection refused")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv.retryMin = 5 * time.Millisecond
+	drv.Start(context.Background())
+	defer drv.Stop()
+	deadline := time.Now().Add(3 * time.Second)
+	for tries.Load() < 5 {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d dial attempts", tries.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	if n := strings.Count(out, "session ended"); n != 1 {
+		t.Errorf("%d warnings for %d identical failures, want 1:\n%s", n, tries.Load(), out)
+	}
+	if h := drv.Health(); h.Errors < 5 {
+		t.Errorf("health counts %d errors, want every attempt (≥ 5)", h.Errors)
+	}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *strings.Builder
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

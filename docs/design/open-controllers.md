@@ -710,8 +710,10 @@ wired). A reboot is verified (§3.4).
 2. ~~James: order the free `GROOV-LIC-SHELL`; then the EPIC run moves onto
    the EPIC.~~ Done 2026-10-24: the license was already on the unit, the
    shell is on, nautilus ran on the EPIC. The systemd unit followed on
-   2026-10-25 and survives a reboot (§2.4). Next on that side: what the
-   outputs do between power-on and nautilus's first write.
+   2026-10-25 and survives a reboot (§2.4). What the outputs do between
+   power-on and nautilus's first write was measured on 2026-11-17 (#767;
+   the guide's "From power-on to the first write"). Next on that side:
+   installing through `naut deploy` with the systemd watchdog (#771).
 3. Record both for N-90 (the three-controllers piece) while they are live.
 4. ~~`naut plcnext import` from a bus scan (module list → manifest).~~
    Built 2026-10-28, from a device list file rather than a scan: the

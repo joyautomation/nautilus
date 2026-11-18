@@ -500,6 +500,11 @@ func (d *Driver) run(ctx context.Context) {
 		}
 	}
 	backoff := d.retryMin
+	// lastLogged is the session error last logged at Warn: the same error
+	// again (a processor that stays away, the committed loopback manifest
+	// run off the EPIC) is logged at Debug until a session polls or the
+	// error changes, not once a second.
+	lastLogged := ""
 	for {
 		// A look (see SetWriteGate), on every connect attempt; Health
 		// reports a standby's mode before its first session too.
@@ -544,10 +549,16 @@ func (d *Driver) run(ctx context.Context) {
 		d.setOnline(false)
 		if polled {
 			backoff = d.retryMin
+			lastLogged = ""
 		}
 		if err != nil {
 			d.fail(err)
-			d.log.Warn("optommp: session ended", "host", d.m.Host, "err", err, "retry", backoff)
+			if msg := err.Error(); msg != lastLogged {
+				d.log.Warn("optommp: session ended", "host", d.m.Host, "err", err, "retry", backoff)
+				lastLogged = msg
+			} else {
+				d.log.Debug("optommp: session ended again", "host", d.m.Host, "err", err, "retry", backoff)
+			}
 		}
 		select {
 		case <-ctx.Done():
