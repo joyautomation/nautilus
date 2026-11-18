@@ -285,6 +285,10 @@ type Driver struct {
 	// values is the snapshot ReadInputs returns: nautilus tag name → value.
 	// Values survive death — Sparkplug's last value *is* the value.
 	values nio.Values
+	// nulled marks a data binding whose metric last arrived is_null: the
+	// edge has no value for it, so its last value reads Bad until a real
+	// one arrives (#941).
+	nulled map[string]bool
 	// unknown counts metrics seen but not bound, keyed by their manifest
 	// line, for Discovered() and /api/drivers extra.unknown.
 	unknown map[metricKey]*discovery

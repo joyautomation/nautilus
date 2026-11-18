@@ -650,7 +650,13 @@ func isDefinition(m sparkplug.Metric) bool {
 // Caller holds d.mu.
 func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric) {
 	if m.IsNull {
-		return // "no value" — keep whatever we had
+		// "No value": keep the last one, but it is not a reading any
+		// more, so Quality says Bad until a real value arrives (#941).
+		if d.nulled == nil {
+			d.nulled = map[string]bool{}
+		}
+		d.nulled[b.Name] = true
+		return
 	}
 	if d.values == nil {
 		d.values = nio.Values{}
@@ -681,6 +687,7 @@ func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric
 			"tag", b.Name, "type", b.Type, "member", u)
 	}
 	d.values[b.Name] = plainOrIR(v)
+	delete(d.nulled, b.Name)
 	d.adoptMembersLocked(b, v)
 }
 
