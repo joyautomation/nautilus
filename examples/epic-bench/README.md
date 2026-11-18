@@ -52,9 +52,20 @@ naut run   .     # on the EPIC: dashboard + tag API on http://localhost:8086
 ```
 
 The manifest dials `127.0.0.1`, as the project runs on the processor
-([On the EPIC itself](#on-the-epic-itself)). To poll it from another
-machine instead, set `host:` in `optommp_manifest.yaml` to the EPIC's
-address, or re-import without `--manifest-host`.
+([On the EPIC itself](#on-the-epic-itself)). To run it from a laptop
+against the EPIC over the network instead, point `host:` at the EPIC,
+on your copy only:
+
+```sh
+sed -i 's/^host: 127.0.0.1$/host: <epic>/' optommp_manifest.yaml   # <epic>: the processor's address
+naut run .
+git checkout optommp_manifest.yaml                                  # back to loopback before you commit
+```
+
+or re-import with `--host <epic>` and no `--manifest-host`, which
+writes the address into both generated files. Either way the dashboard
+is on the laptop, and the program and its outputs then depend on the
+network between the two.
 
 ## Without the EPIC
 
@@ -64,8 +75,13 @@ The four field wires on the bench, DO3→DI6, DO4→DI8, DO5→DI10 and
 DO6→DI12, are `board.st`, so `EPIC_M0_DI03` on lights DO3, then DI6, DO6
 and DI12, as on the desk. `EPIC_M2_AI00` is the ICTD probe (°C),
 `EPIC_M3_AI00` the voltage input, and `EPIC__Online` false is an outage.
-The eleven unwired ICTD channels read 0 here, not NaN (bad quality) as
-on the bench.
+
+**Unwired channels differ.** Only ICTD channel 0 is wired on the bench;
+the other eleven read NaN there, so their tags are Bad and the 3D screen
+shows them as unwired. A simulated tag starts at its `init:` and a tag
+file cannot spell NaN, so here those eleven read 0 °C with good
+quality. Don't read a 0 on them as a measurement, and write a value to
+one if a test needs it.
 
 ```sh
 naut test -m sim.yaml .     # the same suite
