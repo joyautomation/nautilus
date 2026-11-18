@@ -108,7 +108,9 @@ Red Hat's YAML extension (pinned, sha256-checked) into `dist/app/yaml-extension/
 and it loads when a YAML file first opens (about 350 KB gzipped). In a
 browser its server reads schemas over http(s) only, so `app/main.js` gives
 it the extension's schemas by their URLs here. Its telemetry and the
-schemastore.org catalog are off.
+schemastore.org catalog are off. `app/yaml-schema.browser.test.mjs` checks
+that in headless Chrome after a build: `node --test
+playground/app/yaml-schema.browser.test.mjs`.
 
 The app also gives the workbench a file search over the project
 (`app/fileSearch.js`): without it `workspace.findFiles` ignored its glob,
