@@ -22,39 +22,50 @@ import (
 // DDEATH.
 
 // cuttableBench serves the in-process bench chassis on a listener the test
-// can take down: cut closes it and every connection, so the driver loses
-// its session and cannot get a new one.
-func cuttableBench(t *testing.T) (port int, cut func()) {
+// can take down and bring back: cut closes it and every connection, so the
+// driver loses its session and cannot get a new one; restore listens on
+// the same port again, as a processor back on the network.
+func cuttableBench(t *testing.T) (port int, cut, restore func()) {
 	t.Helper()
 	dev := optommptest.NewBench()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var mu sync.Mutex
+	var ln net.Listener
 	var conns []net.Conn
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			conns = append(conns, c)
-			mu.Unlock()
-			go dev.Serve(c)
+	listen := func(addr string) {
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}()
-	cut = func() {
-		ln.Close()
 		mu.Lock()
+		ln = l
+		mu.Unlock()
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				conns = append(conns, c)
+				mu.Unlock()
+				go dev.Serve(c)
+			}
+		}()
+	}
+	listen("127.0.0.1:0")
+	port = ln.Addr().(*net.TCPAddr).Port
+	cut = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		ln.Close()
 		for _, c := range conns {
 			c.Close()
 		}
-		mu.Unlock()
+		conns = nil
 	}
+	restore = func() { listen(fmt.Sprintf("127.0.0.1:%d", port)) }
 	t.Cleanup(cut)
-	return ln.Addr().(*net.TCPAddr).Port, cut
+	return port, cut, restore
 }
 
 func waitHealth(t *testing.T, what string, d time.Duration, cond func() bool) {
@@ -69,7 +80,7 @@ func waitHealth(t *testing.T, what string, d time.Duration, cond func() bool) {
 }
 
 func TestOptommpSparkplugDeviceDiesWithItsProcessor(t *testing.T) {
-	port, cut := cuttableBench(t)
+	port, cut, restore := cuttableBench(t)
 	m, err := optommp.ParseManifest([]byte(fmt.Sprintf(`host: 127.0.0.1
 port: %d
 modules:
@@ -100,6 +111,10 @@ tags:
 	waitHealth(t, "the device to read healthy once connected", 5*time.Second, dev.Health)
 	cut()
 	waitHealth(t, "the device to read unhealthy once the processor is gone", 5*time.Second, func() bool { return !dev.Health() })
+	// Back on the network: the driver's next redial (1 s, then backing off)
+	// finds it, and the device births again.
+	restore()
+	waitHealth(t, "the device to read healthy again once the processor is back", 10*time.Second, dev.Health)
 }
 
 func TestPLCnextSparkplugDeviceIsDeadWithoutItsController(t *testing.T) {
