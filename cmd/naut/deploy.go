@@ -199,6 +199,14 @@ func runDeploy(args []string) int {
 			return 1
 		}
 		code := b.root(f, "backup")
+		// On disk before it takes the name (#842): the operator's only copy
+		// of the retained values must not be an empty file after a crash.
+		if code == 0 {
+			if serr := syncBackup(f); serr != nil {
+				fmt.Fprintln(os.Stderr, "naut deploy:", serr)
+				code = 1
+			}
+		}
 		if cerr := f.Close(); code == 0 && cerr != nil {
 			fmt.Fprintln(os.Stderr, "naut deploy:", cerr)
 			code = 1
@@ -300,6 +308,10 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string) int {
 	}
 	return b.root(os.Stdout, cmd, id)
 }
+
+// syncBackup is (*os.File).Sync, a variable so a test can see the backup
+// synced before it is renamed into place.
+var syncBackup = (*os.File).Sync
 
 // releaseID names a release on the box: readable (the project and its git
 // tag or commit) and unique per binary (its hash), so a rebuild of the same

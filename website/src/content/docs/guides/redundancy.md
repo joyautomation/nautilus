@@ -66,7 +66,14 @@ retain:
   saves once more after the last scan, so what was written before the stop
   is kept. It waits up to 5 seconds for that save, and logs it when the
   save fails or does not finish in time. A hard kill can lose at most 2
-  seconds of operator input.
+  seconds of operator input. The file store writes the new file whole
+  under another name, syncs it to disk, renames it over the old one and
+  syncs the directory, so on a journaling file system (ext4, the overlay
+  file systems controllers boot from) a power cut leaves the old file or
+  the new one, never an empty or half-written one. FAT, on some SD cards,
+  makes no such promise. A file that cannot be read is moved aside to
+  `retain.json.corrupt-<time>`, the error is logged, and the tags start
+  from their initial values.
 - **Load order:** retained values are applied before the first scan and
   win over the manifest's `init:` seeds — what the operator set last
   outlives what the project file said first. A single controller applies
