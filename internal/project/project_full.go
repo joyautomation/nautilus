@@ -237,6 +237,12 @@ func driverHealth(d nio.Driver) func() bool {
 		return drv.Online
 	case *profinet.DeviceDriver:
 		return func() bool { h := drv.Health(); return h.AR == "data" }
+	case *optommp.Driver:
+		// What <id>__Online delivers: a session is up and, when
+		// streaming, the stream is not late (#861 G2).
+		return func() bool { return drv.Health().Online }
+	case *plcnext.Driver:
+		return func() bool { return drv.Health().Online }
 	}
 	return nil
 }
