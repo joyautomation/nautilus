@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/modbus/slave"
 	uaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/runtime"
@@ -78,7 +79,7 @@ func Start(ctx context.Context, s *Set, o StartOptions) (*Running, error) {
 	byKey := map[string]*group{}
 	for i, d := range s.Devices {
 		p := s.Profile(d.Name)
-		if p.Protocol != ProtoModbus {
+		if p.Protocol != devprofile.ProtoModbus {
 			continue
 		}
 		ep, _ := d.modbusEndpoint(p)
@@ -139,7 +140,7 @@ func Start(ctx context.Context, s *Set, o StartOptions) (*Running, error) {
 	// One OPC UA server per OPC UA device, each over the plant.
 	for _, d := range s.Devices {
 		p := s.Profile(d.Name)
-		if p.Protocol != ProtoOPCUA {
+		if p.Protocol != devprofile.ProtoOPCUA {
 			continue
 		}
 		srv, err := startOPCUA(rctx, rt, s, d, log)

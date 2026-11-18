@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,7 +31,7 @@ type Set struct {
 	// paths and the model program resolve against it.
 	Dir string `yaml:"-"`
 	// profiles holds each instance's resolved profile, by instance name.
-	profiles map[string]*Profile
+	profiles map[string]*devprofile.Profile
 }
 
 // Instance is one virtual device. The entry's shape is the one a project
@@ -111,7 +112,7 @@ func (s *Set) resolve() error {
 	if len(s.Devices) == 0 {
 		return fmt.Errorf("no devices")
 	}
-	s.profiles = map[string]*Profile{}
+	s.profiles = map[string]*devprofile.Profile{}
 	type wire struct {
 		addr string
 		unit uint8
@@ -119,7 +120,7 @@ func (s *Set) resolve() error {
 	endpoints := map[wire]string{}
 	for i := range s.Devices {
 		d := &s.Devices[i]
-		if !identRE.MatchString(d.Name) {
+		if !devprofile.IsIdent(d.Name) {
 			return fmt.Errorf("device %q: the name must be an IEC identifier", d.Name)
 		}
 		k := strings.ToLower(d.Name)
@@ -129,7 +130,7 @@ func (s *Set) resolve() error {
 		if d.Profile == "" {
 			return fmt.Errorf("device %s: a profile is required", d.Name)
 		}
-		p, err := ResolveProfile(s.Dir, d.Profile)
+		p, err := devprofile.ResolveProfile(s.Dir, d.Profile)
 		if err != nil {
 			return fmt.Errorf("device %s: %w", d.Name, err)
 		}
@@ -144,7 +145,7 @@ func (s *Set) resolve() error {
 				return fmt.Errorf("device %s: init: %s is not a point of %s", d.Name, name, p.ID)
 			}
 		}
-		if p.Protocol == ProtoOPCUA {
+		if p.Protocol == devprofile.ProtoOPCUA {
 			ep, err := opcuaEndpoint(*d, p)
 			if err != nil {
 				return fmt.Errorf("device %s: %w", d.Name, err)
@@ -157,7 +158,7 @@ func (s *Set) resolve() error {
 				endpoints[w] = d.Name
 			}
 		}
-		if p.Protocol == ProtoModbus {
+		if p.Protocol == devprofile.ProtoModbus {
 			ep, err := d.modbusEndpoint(p)
 			if err != nil {
 				return fmt.Errorf("device %s: %w", d.Name, err)
@@ -175,10 +176,10 @@ func (s *Set) resolve() error {
 }
 
 // Profile returns an instance's resolved profile.
-func (s *Set) Profile(name string) *Profile { return s.profiles[strings.ToLower(name)] }
+func (s *Set) Profile(name string) *devprofile.Profile { return s.profiles[strings.ToLower(name)] }
 
 // Unit is the instance's Modbus unit id.
-func (d Instance) Unit(p *Profile) uint8 {
+func (d Instance) Unit(p *devprofile.Profile) uint8 {
 	if d.UnitID != nil {
 		return *d.UnitID
 	}
@@ -191,7 +192,7 @@ func (d Instance) Unit(p *Profile) uint8 {
 // modbusEndpoint normalises Endpoint to host:port, applying the profile's
 // port. "" when the instance names none (it is then reachable only on its
 // wire face).
-func (d Instance) modbusEndpoint(p *Profile) (string, error) {
+func (d Instance) modbusEndpoint(p *devprofile.Profile) (string, error) {
 	if d.Endpoint == "" {
 		return "", nil
 	}
@@ -222,9 +223,9 @@ func (s *Set) Files() []string {
 	out = append(out, s.SourceFiles()...)
 	seen := map[string]bool{}
 	for _, d := range s.Devices {
-		if p := s.Profile(d.Name); p != nil && p.file != "" && !seen[p.file] {
-			seen[p.file] = true
-			out = append(out, p.file)
+		if p := s.Profile(d.Name); p != nil && p.File() != "" && !seen[p.File()] {
+			seen[p.File()] = true
+			out = append(out, p.File())
 		}
 	}
 	return out
@@ -242,10 +243,10 @@ func (s *Set) SourceFiles() []string {
 	seen := map[string]bool{}
 	for _, d := range s.Devices {
 		p := s.Profile(d.Name)
-		if p == nil || p.dir == "" || p.Simulator == nil {
+		if p == nil || p.Dir() == "" || p.Simulator == nil {
 			continue
 		}
-		f := filepath.Join(p.dir, p.Simulator.Source)
+		f := filepath.Join(p.Dir(), p.Simulator.Source)
 		if !seen[f] {
 			seen[f] = true
 			out = append(out, f)
