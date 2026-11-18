@@ -479,7 +479,7 @@ func New(o Options) (*Runtime, error) {
 		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority, shareCPU: td.ShareCPU, guard: td.Guard.withDefaults()}
 		tr.watch.limit = tr.guard.Overruns
 		tr.stats.Name = name
-		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard)}
+		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard, 0)}
 		tr.stats.TargetMs = scan.Seconds() * 1000
 		lt := td.LateThreshold
 		if lt <= 0 {
@@ -610,7 +610,7 @@ func New(o Options) (*Runtime, error) {
 	r.guard = o.Guard.withDefaults()
 	r.shareCPU = o.ShareCPU
 	r.watch.limit = r.guard.Overruns
-	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard)}
+	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard, 0)}
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -1061,14 +1061,23 @@ func (r *Runtime) Run(ctx context.Context) {
 		defer r.tags.comm.close()
 	}
 	var guarded []*guarded
+	var rtLimit time.Duration // the strictest RTLimit asked for (prioguard.go)
+	ask := func(g PriorityGuard) {
+		if g.RTLimit > 0 && (rtLimit == 0 || g.RTLimit < rtLimit) {
+			rtLimit = g.RTLimit
+		}
+	}
 	if r.prio > 0 {
 		guarded = append(guarded, r.guardLoop(r.live.loops[0], r.scan, r.guard, &r.tid))
+		ask(r.guard)
 	}
 	for i, tr := range r.tasks {
 		if tr.prio > 0 {
 			guarded = append(guarded, r.guardLoop(r.live.loops[i+1], tr.scan, tr.guard, &tr.tid))
+			ask(tr.guard)
 		}
 	}
+	requestRTLimit(rtLimit) // before any loop takes its priority
 	if len(guarded) > 0 {
 		go monitorPriority(ctx, guarded, demoteTid)
 	}
@@ -1098,7 +1107,7 @@ func (r *Runtime) Run(ctx context.Context) {
 				}
 				tr.mu.Lock()
 				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
-				tr.stats.Sched.Guard = guardStat(tr.prio, tr.guard)
+				tr.stats.Sched.Guard = guardStat(tr.prio, tr.guard, rtLimitInForce())
 				tr.mu.Unlock()
 				logSched(tr.name, tr.cpus, tr.prio, err)
 			})
@@ -1124,7 +1133,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		}
 		r.mu.Lock()
 		r.stats.Sched = schedResult(r.cpus, r.prio, err)
-		r.stats.Sched.Guard = guardStat(r.prio, r.guard)
+		r.stats.Sched.Guard = guardStat(r.prio, r.guard, rtLimitInForce())
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
@@ -1153,11 +1162,13 @@ func (r *Runtime) guardLoop(l *loopLive, period time.Duration, g PriorityGuard, 
 	return &guarded{live: l, bound: guardBound(period, g.ScanMultiple), tid: tid, held: holdsPriority}
 }
 
-// guardStat is the guard shown in a task's stats: only with a priority.
-func guardStat(prio int, g PriorityGuard) *PriorityGuard {
+// guardStat is the guard shown in a task's stats: only with a priority,
+// with the kernel bound in force (rtLimit, 0 before Run: omitted).
+func guardStat(prio int, g PriorityGuard, rtLimit time.Duration) *PriorityGuard {
 	if prio <= 0 {
 		return nil
 	}
+	g.RTLimitMs = float64(rtLimit) / float64(time.Millisecond)
 	return &g
 }
 

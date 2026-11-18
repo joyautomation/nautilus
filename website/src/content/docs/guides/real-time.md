@@ -155,8 +155,12 @@ the limit gets `SIGXCPU`, and the runtime then moves every task with
 `priority:` back to normal scheduling. It logs an error, and each task's
 `scan.sched` shows `applied: false` with the reason, until the controller
 restarts. Past 2.5 × the limit the kernel kills the process, in case that
-did not happen. `NAUTILUS_RT_LIMIT_MS` changes the limit (10 ms or more).
-A stricter limit already in place, from a launcher for instance, is kept.
+did not happen. A task's `priority-guard: rt-limit:` tightens the limit
+(from 10 ms to 10 s), and so does `NAUTILUS_RT_LIMIT_MS` (10 ms or more).
+The kernel keeps one limit for the whole process, so the strictest of
+every task's `rt-limit`, the variable, and a limit already in place (from
+a launcher, for instance) is the one in force; each task's `guard` in
+`scan.sched` shows it as `rtLimitMs`.
 A task that cannot be bounded is not given the priority.
 
 What this limit does **not** catch:
@@ -205,6 +209,7 @@ tasks:
     priority-guard:
       overruns: 200       # scans in a row over the period (default 50, at most 100000)
       scan-multiple: 100  # one scan longer than this many periods (default 20, from 2 to 10000)
+      rt-limit: 50ms      # the kernel bound above (default 200ms, from 10ms to 10s; the strictest task wins)
 ```
 
 **`cpu:` alone makes things worse.** Pinned, a task can no longer move off

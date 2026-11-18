@@ -387,6 +387,10 @@ type TaskConfig struct {
 type PriorityGuardConfig struct {
 	Overruns     int     `yaml:"overruns"`      // scans in a row longer than the period
 	ScanMultiple float64 `yaml:"scan-multiple"` // one scan longer than this many periods
+	// RTLimit tightens the kernel's bound (RLIMIT_RTTIME) on a real-time
+	// thread running without blocking; one per process, the strictest
+	// asked for wins (runtime.PriorityGuard.RTLimit, #907).
+	RTLimit Duration `yaml:"rt-limit"`
 }
 
 // The priority-guard bounds a manifest may set: generous, but finite, so a
@@ -394,6 +398,7 @@ type PriorityGuardConfig struct {
 const (
 	maxGuardOverruns     = 100000
 	maxGuardScanMultiple = 10000
+	maxGuardRTLimit      = 10 * time.Second
 )
 
 // guard checks a task's priority-guard: block and converts it.
@@ -409,7 +414,15 @@ func (t TaskConfig) guard() (runtime.PriorityGuard, error) {
 	if m := g.ScanMultiple; m != 0 && (math.IsNaN(m) || m < 2 || m > maxGuardScanMultiple) {
 		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: scan-multiple %g: from 2 (below that, ordinary jitter would trip it) to %d (or leave it out for %g)", t.Program, m, maxGuardScanMultiple, runtime.DefaultGuardScanMultiple)
 	}
-	return runtime.PriorityGuard{Overruns: g.Overruns, ScanMultiple: g.ScanMultiple}, nil
+	if d := time.Duration(g.RTLimit); d != 0 {
+		if d < runtime.MinRTLimit || d > maxGuardRTLimit {
+			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit %s: from %s (shorter, an ordinary page fault would demote the task) to %s (or leave it out for %s)", t.Program, d, runtime.MinRTLimit, maxGuardRTLimit, runtime.DefaultRTLimit)
+		}
+		if t.Priority <= 0 {
+			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit bounds a task at a priority, and this task has no priority:", t.Program)
+		}
+	}
+	return runtime.PriorityGuard{Overruns: g.Overruns, ScanMultiple: g.ScanMultiple, RTLimit: time.Duration(g.RTLimit)}, nil
 }
 
 // TagConfig declares one tag by role — the manifest form of runtime.TagDef.
