@@ -326,7 +326,7 @@ func TestPartialAccessUnsignedAndL(t *testing.T) {
 PROGRAM P
 VAR_EXTERNAL
   d : DINT; l : LINT; out : LINT;
-  b3 : LINT; w1 : LINT; d0 : LINT; d1 : LINT; l0 : LINT;
+  b3 : BYTE; w1 : WORD; d0 : DWORD; d1 : DWORD; l0 : LWORD; (* a part is a bit string (#782) *)
 END_VAR
 b3 := d.%B3;
 w1 := d.%W1;
@@ -334,7 +334,7 @@ d0 := d.%D0;
 d1 := l.%D1;
 l0 := l.%L0;
 out := 0;
-out.%L0 := l;
+out.%L0 := LINT_TO_LWORD(l);
 out.%D1 := d.%D0;
 END_PROGRAM`
 	seed := map[string]ir.Value{

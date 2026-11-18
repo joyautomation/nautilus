@@ -66,6 +66,12 @@ func (c *rungCtx) logixExpr(e ld.Expr) (string, string) {
 		return ref, ""
 	case *ld.Call:
 		name := strings.ToUpper(x.Name)
+		if ref, ok := c.timerMillis(x); ok {
+			return ref, ""
+		}
+		if a, ok := intToRealOperand(x); ok {
+			return c.logixExpr(a)
+		}
 		if name == "EXPT" && len(x.Args) == 2 {
 			l, bad := c.logixExpr(x.Args[0])
 			if bad != "" {
@@ -123,8 +129,49 @@ func (c *rungCtx) simple(e ld.Expr) (string, bool) {
 	case *ld.Lit, *ld.Ref:
 		s, bad := c.logixExpr(x)
 		return s, bad == ""
+	case *ld.Call:
+		if ref, ok := c.timerMillis(x); ok {
+			return ref, true
+		}
+		if a, ok := intToRealOperand(x); ok {
+			return c.simple(a)
+		}
 	}
 	return "", false
+}
+
+// timerMillis reads TIME_TO_DINT(t.ET) / TIME_TO_DINT(t.PT) as the timer's
+// ACC / PRE, which Logix holds as that DINT of milliseconds (#793), and
+// TIME_TO_REAL of one, its milliseconds beside a REAL (#782).
+func (c *rungCtx) timerMillis(x *ld.Call) (string, bool) {
+	if !(strings.EqualFold(x.Name, "TIME_TO_DINT") || strings.EqualFold(x.Name, "TIME_TO_REAL")) || len(x.Args) != 1 {
+		return "", false
+	}
+	r, ok := x.Args[0].(*ld.Ref)
+	if !ok {
+		return "", false
+	}
+	up := strings.ToUpper(r.Text)
+	if !strings.HasSuffix(up, ".ET") && !strings.HasSuffix(up, ".PT") {
+		return "", false
+	}
+	return c.ref(r.Text)
+}
+
+// intToRealOperand reads DINT_TO_REAL(x) (an integer tag or literal into
+// a REAL) as x: as an operand beside a REAL, Logix converts it the same
+// way as it computes the box in REAL (#782; the ST writer does the same,
+// convert.go intToReal).
+func intToRealOperand(x *ld.Call) (ld.Expr, bool) {
+	from, to, trunc, ok := splitConversion(x.Name)
+	if !ok || trunc || len(x.Args) != 1 || (strings.ToUpper(to) != "REAL" && strings.ToUpper(to) != "LREAL") || !isConvInt(strings.ToUpper(from)) || strings.EqualFold(from, "TIME") {
+		return nil, false
+	}
+	switch x.Args[0].(type) {
+	case *ld.Ref, *ld.Lit:
+		return x.Args[0], true
+	}
+	return nil, false
 }
 
 // binaryInstr: the arithmetic with an instruction of its own. MOD, NEG,
@@ -259,6 +306,14 @@ func (c *rungCtx) storeConversion(a ld.Assignment) (ld.Expr, bool) {
 		return call.Args[0], true
 	case from == "TIME" && at == "TIME" && (to == "SINT" || to == "INT" || to == "DINT"):
 		// A timer's ET or PT is the DINT of milliseconds the box moves.
+		return call.Args[0], true
+	case to == "TIME" && isConvInt(from) && from != "TIME" && (at == from || at == anyInt):
+		// Into a timer's ET or PT: the box moves milliseconds into ACC or
+		// PRE (#793).
+		return call.Args[0], true
+	case (to == "REAL" || to == "LREAL") && isConvInt(from) && from != "TIME" && (at == from || at == anyInt):
+		// An integer into a REAL: the box converts as it stores (#782;
+		// a REAL is 32 bits on the controller, as ever).
 		return call.Args[0], true
 	}
 	return nil, false

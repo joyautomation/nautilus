@@ -2,10 +2,9 @@ package tiad
 
 import (
 	"fmt"
-	"net"
-	"regexp"
 	"strings"
-	"time"
+
+	"github.com/joyautomation/nautilus/siemens/station"
 )
 
 // Station is the whole hardware config of one CPU, declared
@@ -87,9 +86,6 @@ type Secrets struct {
 	WebUsers   map[string]string `json:"webUsers,omitempty"`
 	Protection string            `json:"protection,omitempty"`
 }
-
-// MinUpdateTime is the shortest PROFINET update time a spec may ask for.
-const MinUpdateTime = 16 * time.Millisecond
 
 // Validate checks the rules tiad enforces before touching TIA, so a bad
 // spec fails at the caller with a precise message rather than deep inside
@@ -214,8 +210,6 @@ func (s Station) Validate() error {
 	return nil
 }
 
-var knownRight = map[string]bool{"read": true, "write": true, "mode": true, "diagnostics": true}
-
 func checkStart(bad func(string, ...any), at string, in, out *int) {
 	if in != nil && *in < 0 {
 		bad("%s.inputStart %d is negative", at, *in)
@@ -225,79 +219,14 @@ func checkStart(bad func(string, ...any), at string, in, out *int) {
 	}
 }
 
-func checkUpdateTime(s string) error {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return fmt.Errorf("%q is not a duration", s)
-	}
-	if d < MinUpdateTime {
-		return fmt.Errorf("%s is below the %s minimum", d, MinUpdateTime)
-	}
-	return nil
-}
+// The rule primitives are siemens/station's, so the manifest and the wire
+// form obey one set of rules.
+var (
+	knownRight       = station.KnownRights
+	checkUpdateTime  = station.CheckUpdateTime
+	isIPv4           = station.IsIPv4
+	checkStationName = station.CheckStationName
+)
 
-func isIPv4(s string) bool {
-	ip := net.ParseIP(s)
-	return ip != nil && ip.To4() != nil && !strings.Contains(s, ":")
-}
-
-// checkStationName applies the PROFINET name-of-station rules (IEC 61158-6
-// DNS-style labels): at most 240 characters; labels of 1 to 63 lowercase
-// letters, digits and hyphens, not starting or ending with a hyphen; not
-// shaped like an IPv4 address; not starting with "port-NNN".
-func checkStationName(n string) error {
-	if n == "" {
-		return fmt.Errorf("empty (names are always explicit)")
-	}
-	if len(n) > 240 {
-		return fmt.Errorf("%q is longer than 240 characters", n)
-	}
-	for _, label := range strings.Split(n, ".") {
-		if label == "" || len(label) > 63 {
-			return fmt.Errorf("%q has a label that is empty or longer than 63 characters", n)
-		}
-		if label[0] == '-' || label[len(label)-1] == '-' {
-			return fmt.Errorf("%q has a label starting or ending with a hyphen", n)
-		}
-		for _, r := range label {
-			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
-				return fmt.Errorf("%q: only lowercase letters, digits, hyphens and dots are allowed", n)
-			}
-		}
-	}
-	if ipShaped(n) {
-		return fmt.Errorf("%q has the form n.n.n.n (n = 0-999), which PROFINET forbids", n)
-	}
-	if reservedPort.MatchString(strings.Split(n, ".")[0]) {
-		return fmt.Errorf("%q: a first label of the form port-xyz or port-xyz-abcde is reserved by PROFINET", n)
-	}
-	return nil
-}
-
-// reservedPort is the first label PROFINET reserves for port names:
-// port-xyz or port-xyz-abcde, with digits.
-var reservedPort = regexp.MustCompile(`^port-[0-9]{3}(-[0-9]{5})?$`)
-
-// ipShaped reports the form n.n.n.n with each n one to three digits, which
-// is broader than a valid IPv4 address (300.1.1.1 and 01.2.3.4 count).
-func ipShaped(n string) bool {
-	labels := strings.Split(n, ".")
-	if len(labels) != 4 {
-		return false
-	}
-	for _, l := range labels {
-		if len(l) < 1 || len(l) > 3 || !isDigits(l) {
-			return false
-		}
-	}
-	return true
-}
-
-func isDigits(s string) bool {
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return s != ""
-}
+// MinUpdateTime is the shortest PROFINET update time a spec may ask for.
+const MinUpdateTime = station.MinUpdateTime

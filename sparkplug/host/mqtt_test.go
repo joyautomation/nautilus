@@ -55,8 +55,20 @@ func freePort(t *testing.T) string {
 }
 
 // startBroker brings up an in-process broker on addr ("" = any free port) and
-// returns it with the address it actually bound.
+// returns it with the address it actually bound. It closes the broker itself
+// at cleanup, through closeBroker: a test never closes one with srv.Close
+// (TestTestBrokersCloseThroughCloseBroker holds every test file to that).
 func startBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
+	t.Helper()
+	srv, bound := newBroker(t, addr)
+	t.Cleanup(func() { _ = closeBroker(srv) })
+	return srv, bound
+}
+
+// newBroker is startBroker without the cleanup, for a test that must close
+// the broker itself and must not hang in cleanup if closing ever does
+// (TestCloseBrokerUnderClientChurn).
+func newBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
 	t.Helper()
 	if addr == "" {
 		addr = "127.0.0.1:0"
@@ -85,7 +97,33 @@ func startBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
 // entirely. The clients are disconnected from GetAll's copy instead (one
 // read lock), repeatedly while srv.Close waits for their goroutines, which
 // also catches one accepted just before the listener shut.
+//
+// It is idempotent: startBroker registers it as a cleanup, and a test that
+// takes the broker down mid-run (broker loss) closes it again harmlessly;
+// mochi's own Close panics on a second call.
 func closeBroker(srv *mqttsrv.Server) error {
+	brokersMu.Lock()
+	once, ok := brokerClose[srv]
+	if !ok {
+		once = new(closeOnce)
+		brokerClose[srv] = once
+	}
+	brokersMu.Unlock()
+	once.Do(func() { once.err = closeBrokerNow(srv) })
+	return once.err
+}
+
+type closeOnce struct {
+	sync.Once
+	err error
+}
+
+var (
+	brokersMu   sync.Mutex
+	brokerClose = map[*mqttsrv.Server]*closeOnce{}
+)
+
+func closeBrokerNow(srv *mqttsrv.Server) error {
 	srv.Listeners.Close("t", func(string) {})
 	done := make(chan error, 1)
 	go func() { done <- srv.Close() }()

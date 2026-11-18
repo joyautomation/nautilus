@@ -109,6 +109,171 @@ RestartSec=2
   watchdog's 10 s and more. To stop after five rounds, widen the window
   in `[Unit]`: `StartLimitIntervalSec=5min` and `StartLimitBurst=5`.
 
+## To a box over SSH
+
+`naut deploy` installs that service on a Linux box and moves it from one
+release to the next, from the project's directory:
+
+```sh
+naut deploy install deploy@ipc       # build, install nautilus.service, start
+naut deploy update deploy@ipc        # build, swap in, restart; exit 3 if it rolled back
+naut deploy rollback deploy@ipc      # back to the release before; again goes forward
+naut deploy status deploy@ipc
+naut deploy backup deploy@ipc        # retained values -> nautilus-retain-….tgz
+naut deploy restore deploy@ipc nautilus-retain-….tgz
+```
+
+The box needs systemd, `sh`, coreutils and `tar`, and nothing else. The
+SSH user must be root or have `sudo` without a password. ssh is the
+system's, so `~/.ssh/config`, keys and the agent work as usual, and
+`NAUT_SSH_OPTS` adds options (`-p 2222 -i ~/.ssh/ipc`).
+
+Where a password can come from decides how ssh signs in:
+
+- **A person at a terminal** gets ssh's own prompts on any box: the
+  password, when keys do not get in, and an unknown host key's yes/no.
+- **No terminal (CD)** signs in with keys only (`BatchMode`), so a job
+  fails in seconds instead of waiting at a prompt nobody will answer.
+- **`NAUT_SSH_ASKPASS=<program>`** lets an unattended run use a password:
+  the program prints it. `tools/deploy/askpass-bw.sh` reads it from a
+  Bitwarden item named by `NAUT_BW_ITEM`, from an already unlocked vault,
+  and answers nothing but a password prompt, so make the host key known
+  first. The standard `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force`
+  works too.
+
+Whenever a password can be asked, ssh asks once per connection, so a
+wrong answer is one failed login, not three, on a box that locks an
+account out. Each command asks once (one connection serves it all), and
+a box that does not answer gives up after 10 seconds.
+
+- **What it builds on.** For a box of another architecture, naut
+  downloads its own release for that architecture and checks it against
+  the release's `checksums.txt`. A box like the machine it runs on uses
+  naut itself. `-runtime vX.Y.Z` or `-runtime <naut>` overrides it.
+  Builds are reproducible: the same project on the same naut release
+  binary is the same controller, whether a person deploys it or CD does.
+  A naut from `go install` is a different binary from the release, so for
+  a box like its own machine it builds a different controller. Pass
+  `-runtime vX.Y.Z` to match CD.
+- **Releases.** Each release is
+  `/opt/nautilus/releases/<project>-<git describe>-<sha256:8>`, for
+  example `plant-v1.4.0-3f2a91bc`. `current` and `previous` link to two
+  of them, and `status` names both. The same binary again is a no-op. The
+  same commit built on another naut is a new release.
+- **An update that does not start rolls itself back.** That covers a
+  release that will not start, one that exits within 3 s, and, under
+  `Type=notify`, one whose first scan never finishes. The last waits for
+  the 60 s start timeout. In each case `update` puts both links back,
+  puts back the retained values the failed release may have saved over,
+  restarts the release before it, and exits 3. An `install` that does not
+  start leaves nothing installed, so it can simply run again. Updating to
+  the release that is already current is a no-op while it runs, and
+  starts it if it is down. A retried CD job therefore cannot pass while
+  the controller is stopped.
+- **Retained values stay where they are.** They live in
+  `/var/lib/nautilus`, outside every release, so update and rollback keep
+  them. A copy is taken before each update, with the controller stopped,
+  and is what a rolled-back update puts back. `restore` stops the controller
+  first, because it saves every 2 s and once more on its way out.
+- **The unit.** `Type=notify` with `WatchdogSec=10s` and the start limit
+  above. It runs as a dynamic user holding only `CAP_SYS_NICE` (for
+  `priority:`) and `CAP_NET_BIND_SERVICE` (ports under 1024). A
+  controller built on a naut that predates notification gets
+  `Type=simple` without a watchdog instead; this is chosen per release.
+- Everything is `sync`ed before a link moves. If power is lost
+  mid-update, the box boots the old release or the whole new one.
+
+### Without systemd or root: cron
+
+Some controllers run Linux without systemd and give their SSH user no
+root: a PLCnext has sysvinit, and `admin` has only an allowlisted
+`sudo`. Install once with `-supervisor cron` and a directory that user
+can write:
+
+```sh
+naut deploy install admin@plc -supervisor cron -root /opt/plcnext/apps/nautilus
+naut deploy update admin@plc         # the box remembers cron mode and the root
+```
+
+Nothing runs under `sudo`. The layout is the same under `-root`
+(`releases/`, `current`, `previous`), with retained values and the log
+in `state/` and optional variables in `env`. `env` is read by `sh`, not
+systemd, so it is shell syntax: quote a value with spaces
+(`NAUTILUS_TOKEN='a b'`). Two lines in that user's crontab run
+`keepalive.sh`: every minute, which is what keeps it running, and at
+boot, which only makes the first start sooner (some crons ignore
+`@reboot`). It starts `current` unless it is already running. Update, rollback, backup and
+restore work as above. An update that does not start, or exits within
+3 s, rolls back and exits 3; as under `Type=simple`, a first scan that
+hangs is not caught. A crash is restarted within a minute rather than
+2 s. If `naut-launch` (from the PLCnext I/O release) sits in the root,
+the keepalive starts the controller through it, so `priority:` keeps
+working across updates without root (see the
+[PLCnext guide](/guides/plcnext/#start-on-boot)). Uninstall removes
+the crontab lines and what deploy made, and leaves the root and
+`naut-launch`.
+
+### Through CD
+
+A deployment repository holds the project and pins the naut version
+that builds it. A tag runs `naut deploy update` on a runner that can
+reach the box. Plant boxes are rarely reachable from GitHub's hosted
+runners, so that is a self-hosted runner on the plant network:
+
+```yaml
+# .github/workflows/deploy.yml
+name: deploy
+on:
+  push:
+    tags: ["v*"]
+concurrency: deploy # one at a time
+jobs:
+  deploy:
+    runs-on: [self-hosted, plant] # a runner that reaches the box over SSH
+    environment: plant # optional: a reviewer approves each deploy
+    env:
+      NAUT_VERSION: v0.23.0 # the naut every build uses; change it in a commit
+      TARGET: deploy@10.0.0.20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe names the release by its tag
+      - name: install naut
+        # Outside the checkout: naut build embeds the project directory,
+        # and a naut binary left in it would ship inside the controller.
+        run: |
+          case $(uname -m) in aarch64) a=arm64 ;; *) a=amd64 ;; esac
+          v=$NAUT_VERSION
+          f=nautilus_${v#v}_linux_$a.tar.gz
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/joyautomation/nautilus/releases/download/$v/$f"
+          curl -fsSLO "https://github.com/joyautomation/nautilus/releases/download/$v/checksums.txt"
+          grep " $f\$" checksums.txt | sha256sum -c -
+          tar xzf "$f" naut
+          echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
+      - run: naut check . && naut test .
+      - name: deploy
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/key"' EXIT
+          (umask 077; printf '%s\n' "$SSH_KEY" >"$RUNNER_TEMP/key")
+          printf '%s\n' "$KNOWN_HOSTS" >"$RUNNER_TEMP/known_hosts"
+          export NAUT_SSH_OPTS="-i $RUNNER_TEMP/key -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          naut deploy update "$TARGET"
+```
+
+A person deploying by hand from a clean checkout of the same tag, with
+the same naut release, gets the same release: the build embeds the
+project directory, so an untracked file in it changes the controller. Going back is `naut deploy rollback`
+from either.
+
+`tools/deploy/check.sh <ssh-target>` proves all of this against a real
+box. It installs, updates, rolls back, backs up and restores, deploys a
+release that cannot start and one that hangs, and asserts after every
+step which release answers and that a retained setpoint survived.
+
 ## The artifact carries its own provenance
 
 `naut build` embeds the project's git history in the binary it emits —

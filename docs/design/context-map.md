@@ -55,7 +55,7 @@ into another's.
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
 | **Authoring** | `internal/lsp` `tools/vscode-iec` | diagnostics, hover, completion, diagram editor, live values, component preview, kind editor. | the person | Reads the Manifest and Languages; the only non-CLI importer of `internal/project` |
 | **Logix target** | `logix/writer` `logix/importer` `logix/deploy` `logix/logixd` `logix/facade` `lang/l5x` `eip/logixserver` | Rockwell's: L5X, controller, routine, rung, AOI, alias tag, download. | nothing | **Anti-corruption layer, both directions.** Writer and importer are the only places vendor spellings may appear (see *Language stays vendor-neutral*). `logix/facade` is an application layer for `naut logix serve`, so it may import Runtime and Operator surface |
-| **Siemens target** | `siemens/tiad` `siemens/webapi` `siemens/writer` `siemens/importer` `siemens/facade` (planned, [siemens-ide.md](siemens-ide.md)) | Siemens': OB, FB, DB, SCL, tag table, station, GSDML device, download, online compare. | nothing | **Anti-corruption layer, both directions**, like the Logix target. Writer, agent client and importer are the only places Siemens spellings may appear. `siemens/facade` is an application layer for `naut siemens serve` and may import Runtime and Operator surface |
+| **Siemens target** | `siemens/station` `siemens/tiad` `siemens/webapi` `siemens/writer` `siemens/facade`, and `siemens/importer` (planned) ([siemens-ide.md](siemens-ide.md)) | Siemens': OB, FB, DB, SCL, tag table, station, GSDML device, download, online compare. | nothing | **Anti-corruption layer, both directions**, like the Logix target. Writer, agent client and importer are the only places Siemens spellings may appear. `siemens/facade` is an application layer for `naut siemens serve` and may import Runtime and Operator surface |
 | **HMI 2D** | `hmi` (npm) | mimic, component, port, catalog, realtime, trend, quality, alarms view. | the operator | Consumes Operator surface over HTTP/SSE; no Go |
 | **HMI 3D** | `hmi-3d` (npm) `internal/scene` | scene, kind, node, pipe, port, look, assembly. `internal/scene` is the offline half (`naut check`, `naut scene init`). | the operator, Authoring | Consumes Operator surface. **Open edge:** argonaut's `parts` format is a second model of the same things; §2.4 |
 | **Tag file** | `internal/tagfile` | one row: name, role, type, init, unit, desc, alias. | every codegen, `lang/l5x` | **Shared kernel.** The one format every importer renders and the manifest reads |
@@ -84,8 +84,8 @@ break one changes this section first and says why.
 - Field and IT drivers and `sparkplug/host` never import `runtime`,
   `server`, `alarm`, `acceptance`, `internal/project`, `internal/lsp` or
   the CLI.
-- The Siemens target's `siemens/tiad`, `siemens/webapi`, `siemens/writer`
-  and `siemens/importer` keep the same distance. Only `siemens/facade`
+- The Siemens target's `siemens/station`, `siemens/tiad`, `siemens/webapi`,
+  `siemens/writer` and `siemens/importer` keep the same distance. Only `siemens/facade`
   composes the runtime side.
 - The operator surface never imports a protocol package, the Logix or
   Siemens target, or the manifest.

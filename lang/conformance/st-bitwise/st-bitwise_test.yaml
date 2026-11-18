@@ -1,5 +1,6 @@
-# AND, OR, XOR and NOT on INT operate on every bit of the 64-bit value
-# (two's complement), as in Codesys, Studio 5000 and TIA Portal. BOOL
+# AND, OR, XOR and NOT on INT operate on its two's-complement bits, and
+# the result stores into the INT's 16 bits (#782), as in Codesys, Studio
+# 5000 and TIA Portal. BOOL
 # operands keep their logical meaning (st-xor, ld-coils). Every step
 # asserts the ST operators and the FBD blocks together.
 tests:
@@ -30,8 +31,8 @@ tests:
         scans: 1
         expect: { st_AND: -8, fbd_AND: -8, st_OR: -1, fbd_OR: -1, st_XOR: 7, fbd_XOR: 7, st_NOT: 5, fbd_NOT: 5 }
 
-  - name: bits above 32 survive - the width is 64 bits
+  - name: an INT's 16 bits - bit 15 is the sign
     steps:
-      - given: { X: 1099511627777, Y: 1099511627776 } # bit 40 + bit 0, bit 40
+      - given: { X: -32768, Y: -1 } # 16#8000, 16#FFFF
         scans: 1
-        expect: { st_AND: 1099511627776, fbd_AND: 1099511627776, st_OR: 1099511627777, fbd_OR: 1099511627777, st_XOR: 1, fbd_XOR: 1, st_NOT: -1099511627778, fbd_NOT: -1099511627778 }
+        expect: { st_AND: -32768, fbd_AND: -32768, st_OR: -1, fbd_OR: -1, st_XOR: 32767, fbd_XOR: 32767, st_NOT: 32767, fbd_NOT: 32767 }

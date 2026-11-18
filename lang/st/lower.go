@@ -879,8 +879,12 @@ func resolveScalar(name string) (*ir.Type, error) {
 		// One int64 at run time, but the declared name stays on the type so
 		// a diagnostic says DINT, and w.%X31 knows a DINT has 32 bits.
 		return ir.IntNamed(strings.ToUpper(name)), nil
-	case "REAL", "LREAL":
+	case "REAL":
 		return ir.RealT, nil
+	case "LREAL":
+		// The same float64 as REAL, named so an LREAL into a REAL and an
+		// integer into either follow IEC's table (#782).
+		return ir.LRealT(), nil
 	case "TIME", "LTIME":
 		return ir.TimeT, nil
 	case "STRING", "WSTRING", "CHAR", "WCHAR":
@@ -975,7 +979,7 @@ func (l *lowerer) constValue(e Expression, t *ir.Type) (ir.Value, error) {
 	l.warnIntLiteralAsTime(e, t, "initial value")
 	if t == nil || t.Enum == nil {
 		if v, err := evalConstValue(e, t); err == nil {
-			return v, nil
+			return v, initInRange(e, t, v)
 		}
 	}
 	x, err := l.lowerExprHint(e, t)
@@ -983,6 +987,9 @@ func (l *lowerer) constValue(e Expression, t *ir.Type) (ir.Value, error) {
 		return ir.Value{}, err
 	}
 	if t != nil {
+		if err := realRule(t, x); err != nil {
+			return ir.Value{}, errNode(e, fmt.Errorf("initial value: %w", err))
+		}
 		x = coerce(x, t)
 		if !assignable(t, x.ExprType()) {
 			return ir.Value{}, errNode(e, fmt.Errorf("cannot initialise a %s with a %s", t, x.ExprType()))
@@ -993,9 +1000,25 @@ func (l *lowerer) constValue(e Expression, t *ir.Type) (ir.Value, error) {
 		return ir.Value{}, errNode(e, fmt.Errorf("initial value must be a constant: a literal, a named constant, or arithmetic on them"))
 	}
 	if t != nil {
+		if _, err := storeRule(t, x, e); err != nil {
+			return ir.Value{}, errNode(e, fmt.Errorf("initial value: %w", err))
+		}
 		v = ir.CoerceValue(v, t)
 	}
-	return v, nil
+	return v, initInRange(e, t, v)
+}
+
+// initInRange refuses an integer initial value its declared type cannot
+// hold (VAR i : INT := 70000), as an assignment would be (#782).
+func initInRange(e Expression, t *ir.Type, v ir.Value) error {
+	if t == nil || t.Kind != ir.TypeInt || t.Enum != nil || v.Kind != ir.TypeInt {
+		return nil
+	}
+	lo, hi, ok := ir.IntRange(t.Name)
+	if ok && (v.I < lo || v.I > hi) {
+		return errNode(e, fmt.Errorf("initial value %d does not fit %s (%d..%d)", v.I, t.Name, lo, hi))
+	}
+	return nil
 }
 
 // constInt folds an integer constant expression: an array bound, an
@@ -1295,6 +1318,21 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 				return nil, err
 			}
 		}
+		// The bounds and the step are stored into, or compared with, the
+		// loop variable: they must fit its type (#782), or a SINT counting
+		// to 200 would never stop.
+		for _, b := range []struct {
+			what string
+			v    ir.Expr
+			src  Expression
+		}{{"start", start, n.Start}, {"end", end, n.End}, {"step", step, n.Step}} {
+			if b.v == nil {
+				continue
+			}
+			if _, err := storeRule(sym.typ, b.v, b.src); err != nil {
+				return nil, errNode(b.src, fmt.Errorf("FOR %s %s: %w", n.Variable, b.what, err))
+			}
+		}
 		body, err := l.lowerStmts(n.Body)
 		if err != nil {
 			return nil, err
@@ -1509,11 +1547,22 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		if err != nil {
 			return nil, fmt.Errorf("FB %s arg %q: %w", def.Name, na.Name, err)
 		}
+		// A standard block's numeric pins are generic (ANY_REAL, ANY_INT:
+		// a PID's PV takes a REAL or an LREAL); a user block's input is a
+		// declared variable, and storing into it follows the table (#782).
+		if !builtinFB(def) {
+			if err := realRule(def.Inputs[idx].Type, v); err != nil {
+				return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: %w", def.Name, na.Name, err))
+			}
+		}
 		v = coerce(v, def.Inputs[idx].Type)
 		if !assignable(def.Inputs[idx].Type, v.ExprType()) && (def.Inputs[idx].Type.Enum != nil || v.ExprType().Enum != nil) {
 			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
 		}
 		l.warnIntAsTime(na.Value, def.Inputs[idx].Type, v, fmt.Sprintf("%s input %s", def.Name, def.Inputs[idx].Name))
+		if v, err = storeInput(def.Inputs[idx].Type, v, na.Value); err != nil {
+			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: %w", def.Name, na.Name, err))
+		}
 		bindings = append(bindings, ir.FBInput{SlotIdx: idx, Value: v})
 	}
 	// Every VAR_IN_OUT must be bound at every call site: unlike an input it
@@ -1541,6 +1590,17 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		target, err := l.lowerLValue(ob.Target)
 		if err != nil {
 			return nil, fmt.Errorf("FB %s output %q target: %w", def.Name, ob.Name, err)
+		}
+		// out => o stores the output into o: the same rule as o := fb.out
+		// (#782). The output already holds its own type's width.
+		if ot := def.OutputType(idx); ot != nil {
+			err := realRule(target.ExprType(), &ir.Lit{T: ot})
+			if err == nil {
+				_, err = storeRule(target.ExprType(), &ir.Lit{T: ot}, nil)
+			}
+			if err != nil {
+				return nil, errName(ob.Pos, ob.Name, fmt.Errorf("FB %s output %s => %s: %w", def.Name, ob.Name, exprShort(ob.Target), err))
+			}
 		}
 		outputs = append(outputs, ir.FBOutput{SlotIdx: idx, Target: target})
 	}
@@ -1621,11 +1681,132 @@ func (l *lowerer) lowerAssign(a *AssignStmt) (ir.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := realRule(target.ExprType(), value); err != nil {
+		return nil, err
+	}
 	value = coerce(value, target.ExprType())
 	if !assignable(target.ExprType(), value.ExprType()) {
 		return nil, fmt.Errorf("cannot assign %s to %s", value.ExprType(), target.ExprType())
 	}
-	return &ir.Assign{Target: target, Value: value}, nil
+	wrap, err := storeRule(target.ExprType(), value, a.Value)
+	if err != nil {
+		return nil, err
+	}
+	if _, isLit := value.(*ir.Lit); wrap == nil && !isLit {
+		// A same-type copy is cut too: a value from outside the program's
+		// own stores (a force, a driver) may hold more than its width, and
+		// the next assignment of it keeps the width (#782). Inline, a mask.
+		wrap = ir.NewWrap(target.ExprType())
+	}
+	return &ir.Assign{Target: target, Value: value, Wrap: wrap}, nil
+}
+
+// storeRule applies the integer store rules (#782) to a value stored into
+// a variable of declared type t, at every place a program stores one (an
+// assignment, an FB or function input, an output binding, a FOR variable,
+// a declaration's initial value). IEC 61131-3 converts implicitly only as
+// its Figure 11 allows (ir.ImplicitConversion): within a family and
+// wider, or unsigned into a wider signed type. Anything else is refused
+// with the conversion to write, which wraps. A constant must fit t's range.
+// What is left is stored at t's width: arithmetic never wraps on its own
+// (#326), so INT + INT = 60000 stores -5536 in an INT, as on a PLC. The
+// returned Wrap is that width, nil when the value needs no cut.
+func storeRule(t *ir.Type, value ir.Expr, src Expression) (*ir.Wrap, error) {
+	vt := value.ExprType()
+	if t == nil || vt == nil || t.Kind != ir.TypeInt || t.Enum != nil || !vt.IsInteger() || vt.Enum != nil || t.Name == "" {
+		return nil, nil
+	}
+	if vt.Name != "" && vt.Name != t.Name && !ir.ImplicitConversion(vt.Name, t.Name) {
+		return nil, fmt.Errorf("cannot assign %s to %s implicitly; write %s_TO_%s(…)", vt.Name, t.Name, vt.Name, t.Name)
+	}
+	lo, hi, ranged := ir.IntRange(t.Name)
+	if !ranged {
+		return nil, nil // 64 bits: whatever the VM holds
+	}
+	// A constant, literal or folded (30000 + 30000, a named constant),
+	// must fit: it is refused, never wrapped.
+	c, isConst := int64(0), false
+	if lit, ok := value.(*ir.Lit); ok {
+		c, isConst = lit.V.I, true
+	} else if v, ok := ir.ConstValue(value); ok && v.Kind == ir.TypeInt {
+		c, isConst = v.I, true
+	} else if src != nil {
+		if v, err := evalConstInt(src); err == nil {
+			c, isConst = v, true
+		}
+	}
+	if isConst {
+		if c < lo || c > hi {
+			return nil, fmt.Errorf("cannot assign %d to %s: it holds %d..%d; write a value in range, or %s(%d) to keep its low bits", c, t.Name, lo, hi, convName(vt, t), c)
+		}
+		return nil, nil
+	}
+	if vt.Name == t.Name && !vt.Computed {
+		return nil, nil // a declared value of the target's own type
+	}
+	if vt.Name != "" && !vt.Computed {
+		return nil, nil // an implicit widening: it fits
+	}
+	return ir.NewWrap(t), nil
+}
+
+// realRule is IEC 61131-3's table for a store into a REAL or an LREAL
+// (#782, held for James's call): an integer goes into a REAL only when
+// REAL's 24-bit mantissa holds it (SINT, INT, USINT, UINT), into an LREAL
+// up to the 32-bit types, and an LREAL never into a REAL; anything else
+// names the conversion to write. A value with no declared width (a
+// literal, an untyped result) converts as before.
+func realRule(t *ir.Type, v ir.Expr) error {
+	vt := v.ExprType()
+	if t == nil || vt == nil || t.Kind != ir.TypeReal {
+		return nil
+	}
+	to := "REAL"
+	if t.Name == "LREAL" {
+		to = "LREAL"
+	}
+	from := vt.Name
+	if vt.Kind == ir.TypeReal {
+		if from != "LREAL" {
+			from = "REAL"
+		}
+	} else if !vt.IsInteger() || vt.Enum != nil || from == "" {
+		return nil
+	}
+	if from == to || ir.ImplicitRealConversion(from, to) {
+		return nil
+	}
+	return fmt.Errorf("cannot assign %s to %s implicitly; write %s_TO_%s(…)", from, to, from, to)
+}
+
+// builtinFB reports a standard function block (TON, CTU, PID, ...), whose
+// definition is the one registered in ir.FBs.
+func builtinFB(def *ir.FBDef) bool {
+	d, _, ok := ir.Lookup(ir.FBs, def.Name)
+	return ok && d == def
+}
+
+// storeInput is storeRule for a value bound to an FB or FUNCTION input:
+// refused as an assignment would be, and wrapped (ir.StoreWrap) when it
+// needs the input's width.
+func storeInput(t *ir.Type, v ir.Expr, src Expression) (ir.Expr, error) {
+	w, err := storeRule(t, v, src)
+	if err != nil {
+		return nil, err
+	}
+	if w != nil {
+		return ir.StoreWrap(v, t), nil
+	}
+	return v, nil
+}
+
+// convName is the conversion a refusal suggests: DINT_TO_INT, or the
+// LINT_TO_ form for an untyped literal.
+func convName(vt, t *ir.Type) string {
+	if vt.Name == "" {
+		return "LINT_TO_" + t.Name
+	}
+	return vt.Name + "_TO_" + t.Name
 }
 
 // ─── Expression lowering ──────────────────────────────────────────────────
@@ -1644,7 +1825,22 @@ func (l *lowerer) lowerExpr(e Expression) (ir.Expr, error) {
 		if id, ok := n.Inner.(*IdentExpr); ok {
 			return l.lowerEnumLiteral(n, id)
 		}
-		return l.lowerExpr(n.Inner)
+		x, err := l.lowerExpr(n.Inner)
+		if err != nil {
+			return nil, err
+		}
+		// BYTE#1 is a BYTE: an integer literal takes its prefix's type
+		// (#782), so a shift of it acts on 8 bits and its store follows
+		// the IEC table.
+		if lit, ok := x.(*ir.Lit); ok && lit.V.Kind == ir.TypeInt {
+			if t := ir.IntNamed(strings.ToUpper(n.TypeName)); t != nil {
+				if lo, hi, ranged := ir.IntRange(t.Name); ranged && (lit.V.I < lo || lit.V.I > hi) {
+					return nil, errNode(n, fmt.Errorf("%s#%d does not fit %s (%d..%d)", t.Name, lit.V.I, t.Name, lo, hi))
+				}
+				return &ir.Lit{V: lit.V, T: t}, nil
+			}
+		}
+		return x, nil
 	case *IdentExpr:
 		return l.lowerIdent(n)
 	case *MemberExpr:
@@ -1728,6 +1924,14 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 			return nil, err
 		}
 		resultT = t
+	case resultT != nil && resultT.Kind == ir.TypeReal && resultT.Name == "" && !ir.IsConversion(sig.Name):
+		// SQRT, SIN, EXPT, ...: an LREAL argument (or a DINT one) gives an
+		// LREAL, so the result keeps its width into a store (#782).
+		t, err := ir.RealResult(argTypes)
+		if err != nil {
+			return nil, errNode(srcArgs[0], fmt.Errorf("function %s: %w", sig.Name, err))
+		}
+		resultT = t
 	}
 	for i, p := range sig.Params {
 		if p == nil || i >= len(args) {
@@ -1770,9 +1974,15 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION %s arg %s: %w", def.Name, na.Name, err)
 			}
+			if err := realRule(def.Inputs[idx].Type, v); err != nil {
+				return nil, errNode(na.Value, fmt.Errorf("FUNCTION %s arg %s: %w", def.Name, na.Name, err))
+			}
 			v = coerce(v, def.Inputs[idx].Type)
 			if !assignable(def.Inputs[idx].Type, v.ExprType()) {
 				return nil, errNode(na.Value, fmt.Errorf("FUNCTION %s arg %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
+			}
+			if v, err = storeInput(def.Inputs[idx].Type, v, na.Value); err != nil {
+				return nil, errNode(na.Value, fmt.Errorf("FUNCTION %s arg %s: %w", def.Name, na.Name, err))
 			}
 			bound[idx] = v
 			have[idx] = true
@@ -1791,9 +2001,15 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION %s arg %d: %w", def.Name, i+1, err)
 			}
+			if err := realRule(def.Inputs[i].Type, v); err != nil {
+				return nil, errNode(a, fmt.Errorf("FUNCTION %s arg %d: %w", def.Name, i+1, err))
+			}
 			v = coerce(v, def.Inputs[i].Type)
 			if !assignable(def.Inputs[i].Type, v.ExprType()) {
 				return nil, errNode(a, fmt.Errorf("FUNCTION %s arg %d: cannot pass %s as %s", def.Name, i+1, v.ExprType(), def.Inputs[i].Type))
+			}
+			if v, err = storeInput(def.Inputs[i].Type, v, a); err != nil {
+				return nil, errNode(a, fmt.Errorf("FUNCTION %s arg %d: %w", def.Name, i+1, err))
 			}
 			bound[i] = v
 		}
@@ -1990,7 +2206,9 @@ func (l *lowerer) lowerUnary(u *UnaryExpr) (ir.Expr, error) {
 		if !x.ExprType().IsNumeric() {
 			return nil, errNode(u.Operand, fmt.Errorf("unary - on non-numeric %s", x.ExprType()))
 		}
-		return &ir.UnOp{Op: ir.OpNeg, X: x, T: x.ExprType()}, nil
+		// Computed: -x of an INT at -32768 is 32768, which its store cuts
+		// back to the INT's width (#782).
+		return &ir.UnOp{Op: ir.OpNeg, X: x, T: ir.Computed(x.ExprType())}, nil
 	case "NOT":
 		// Logical on BOOL, bitwise complement (of the 64-bit value) on INT.
 		switch {
@@ -2040,6 +2258,17 @@ func mapBinOp(op string) (ir.BinKind, error) {
 	return 0, fmt.Errorf("unknown operator %q", op)
 }
 
+// bitwiseType is the type of AND, OR or XOR on two integers: the
+// arithmetic common type within one family or with an untyped operand
+// (WORD AND 16#FF is a WORD), so a shift or a store of it keeps the
+// width (#782); a bit string with a number is untyped, as before.
+func bitwiseType(lt, rt *ir.Type) *ir.Type {
+	if lt.Name != "" && rt.Name != "" && ir.IsBitString(lt.Name) != ir.IsBitString(rt.Name) {
+		return ir.IntT
+	}
+	return ir.CommonInt(lt, rt)
+}
+
 func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 	if lt.Enum != nil || rt.Enum != nil {
 		return resolveEnumBinType(op, lt, rt)
@@ -2050,7 +2279,7 @@ func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 			return nil, fmt.Errorf("arithmetic requires numeric operands")
 		}
 		if lt.Kind == ir.TypeReal || rt.Kind == ir.TypeReal {
-			return ir.RealT, nil
+			return ir.RealResult([]*ir.Type{lt, rt})
 		}
 		if lt.Kind == ir.TypeTime && rt.Kind == ir.TypeTime {
 			return ir.TimeT, nil
@@ -2076,7 +2305,7 @@ func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 			return ir.BoolT, nil
 		}
 		if lt.IsInteger() && rt.IsInteger() {
-			return ir.IntT, nil
+			return bitwiseType(lt, rt), nil
 		}
 		return nil, fmt.Errorf("logical op requires BOOL or INT operands")
 	case ir.OpXor:
@@ -2084,7 +2313,7 @@ func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 			return ir.BoolT, nil
 		}
 		if lt.IsInteger() && rt.IsInteger() {
-			return ir.IntT, nil
+			return bitwiseType(lt, rt), nil
 		}
 		return nil, fmt.Errorf("XOR requires BOOL or INT operands")
 	}

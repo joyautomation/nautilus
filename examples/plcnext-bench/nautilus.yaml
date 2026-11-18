@@ -40,6 +40,11 @@ tasks:
   - program: bench.st
     scan: 50ms
     dt-tag: BenchDtS
+    # SCHED_FIFO 40, under the shim's 80 and the firmware's own real-time
+    # tasks (rt/plcnext-io/README.md, Real-time priority). It needs
+    # CAP_SYS_NICE, which naut-launch passes on; without it the task runs
+    # best-effort and /api/state's scan.sched says so.
+    priority: 40
 
 tag-files:
   - tags/plcnext.yaml   # the I/O, generated from plcnext_manifest.yaml

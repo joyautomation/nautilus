@@ -21,13 +21,13 @@ VAR_EXTERNAL
 END_VAR
 LD
   RUNG div (* DIV into a DINT and an INT *)
-    { dq := a / b; iq := a / 2 }
+    { dq := a / b; iq := DINT_TO_INT(a / 2) }
 
   RUNG cpt (* CPT into a DINT *)
     { dc := a / b + c }
 
   RUNG viatag (* the quotient into a DINT tag, then into a REAL *)
-    { q := a / b; rq := q }
+    { q := a / b; rq := DINT_TO_REAL(q) }
 
   RUNG real (* a REAL divided by an integer is a REAL division on both *)
     { rr := x / b }

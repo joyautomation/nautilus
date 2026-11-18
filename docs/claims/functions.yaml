@@ -548,8 +548,9 @@ claims:
   # ── Types ───────────────────────────────────────────────────────────
   - id: FN-039
     claim: >-
-      Integer kinds share one 64-bit runtime representation, so arithmetic
-      on INT, DINT, UINT or WORD never wraps at the declared width.
+      Integer arithmetic is computed in 64 bits; a store into a declared
+      INT, DINT, UINT or WORD keeps that type's width (INT + INT = 60000
+      stores -5536), and an implicit conversion follows IEC 61131-3's table.
     source: "#types"
     tests:
       - go ./lang/conformance TestConformance/st-int-width
@@ -866,8 +867,8 @@ claims:
   # ── Operators ───────────────────────────────────────────────────────
   - id: FN-064
     claim: >-
-      AND, OR and XOR are logical on BOOL and bitwise on integers, over all
-      64 bits (-8 AND 6 = 0).
+      AND, OR and XOR are logical on BOOL and bitwise on integers, two's
+      complement (-8 AND 6 = 0).
     source: "#operators"
     tests:
       - go ./lang/conformance TestConformance/st-bitwise
@@ -907,7 +908,7 @@ claims:
       - go ./lang/st TestLowerRealArithmetic
       - go ./lang/conformance TestConformance/fn-ops/ADD and MUL are n-ary - the third input counts; SUB is the binary difference
       - go ./lang/conformance TestConformance/fn-ops/an INT combined with a REAL gives a REAL - the common type, nothing truncated
-      - go ./lang/conformance TestConformance/fn-ops/DINT + DINT keeps its value past INT's range; a conversion of it wraps only to the target
+      - go ./lang/conformance TestConformance/fn-ops/DINT + DINT keeps its value past INT's range; a DINT store wraps at 32 bits, a conversion to its target
       - go ./lang/conformance TestArithmeticTakesTheCommonWidth
       - go ./lang/conformance TestArithmeticLiteralTakesTheOperandWidth
       - go ./lang/conformance TestArithmeticBlocksTakeTheCommonWidth
@@ -1094,13 +1095,13 @@ claims:
 
   - id: FN-080
     claim: >-
-      SHL and SHR shift left / right (SHR zero-fills) and ROL and ROR rotate;
-      all operate over 64 bits, so a WORD you think of as 16 bits rotates as
-      a 64-bit value.
+      SHL and SHR shift left / right (SHR zero-fills) and ROL and ROR rotate,
+      over the first operand's declared width: a WORD rotates over 16 bits.
     source: "#bit-operations"
     tests:
-      - go ./lang/conformance TestConformance/st-int-width/shifts act on 64 bits
-      - go ./lang/conformance TestConformance/st-int-width/ROL and ROR rotate over 64 bits, not the declared 16
+      - go ./lang/st TestIntegerStoreWrapsToTheTargetWidth
+      - go ./lang/conformance TestConformance/st-int-width/shifts act on the operand's 16 bits, and an INT reads bit 15 as the sign
+      - go ./lang/conformance TestConformance/st-int-width/ROL and ROR rotate over the declared 16 bits
       - go ./lang/st TestBuiltinBitOps
 
   - id: FN-081

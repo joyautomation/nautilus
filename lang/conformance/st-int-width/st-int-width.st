@@ -1,6 +1,7 @@
 PROGRAM IntWidthSt
-(* One value of each declared integer kind, pushed past its nominal range.
-   If widths were honoured, st_I16 would wrap at 32767 and st_U16 at 0. *)
+(* One value of each declared integer kind, pushed past its nominal range:
+   each store wraps at its type's width, as on a PLC (st_I16 at 32767,
+   st_U16 at 0), and the shifts and rotates act on the WORD's 16 bits. *)
 VAR_EXTERNAL
     I16 : INT;
     D32 : DINT;
@@ -12,7 +13,8 @@ VAR_EXTERNAL
     st_U16 : UINT;
     st_W16 : WORD;
     st_Mul : DINT;
-    st_Shl, st_Shr, st_Rol, st_Ror : INT;
+    st_Shl, st_Rol, st_Ror : WORD;
+    st_Shr : INT;
 END_VAR
 
 st_I16 := I16 + 1;

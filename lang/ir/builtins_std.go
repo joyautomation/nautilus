@@ -12,8 +12,8 @@ import (
 // one table, both languages (ST and FBD) pick them up.
 //
 // Deviations from the letter of the spec, chosen deliberately:
-//   - Bit operations act on the VM's 64-bit integer values (the IR does
-//     not track declared bit widths), so ROL/ROR rotate over 64 bits.
+//   - Bit shifts and rotates act on the first operand's declared width
+//     (ROL of a WORD rotates over 16 bits); an undeclared width is 64.
 //   - String position/length arguments out of range CLAMP to the valid
 //     range instead of faulting the scan; MUX with K out of range still
 //     faults (selecting nothing is a logic error, not a boundary case).
@@ -79,6 +79,22 @@ func commonType(name string, ts []*Type) (*Type, error) {
 		}
 	}
 	if same {
+		// Integers: the arithmetic common type, computed, so a selected
+		// value is stored at its target's width like any result (#782): a
+		// ladder assignment is SEL(power, old, new).
+		if ts[0].Kind == TypeReal {
+			return RealResult(ts)
+		}
+		if ts[0].Kind == TypeInt && ts[0].Enum == nil {
+			t := ts[0]
+			for _, u := range ts[1:] {
+				if u.Enum != nil {
+					return ts[0], nil
+				}
+				t = CommonInt(t, u)
+			}
+			return t, nil
+		}
 		return ts[0], nil
 	}
 	allNumeric := true
@@ -94,40 +110,92 @@ func commonType(name string, ts []*Type) (*Type, error) {
 }
 
 func registerBitBuiltins() {
-	shift := func(name string, fn func(v uint64, n uint) uint64) {
-		RegisterBuiltin(BuiltinSig{
-			Name:   name,
-			Params: []*Type{IntT, IntT},
-			Result: IntT,
-			Fn: func(args []Value) (Value, error) {
+	// A shift or rotate acts on the first operand's declared width (#782):
+	// ROL of a WORD rotates over 16 bits, as IEC 61131-3 has it, and a
+	// result goes back into that width. An operand of no declared width (a
+	// literal, an arithmetic result) is 64 bits, the VM's own.
+	shift := func(name string, fn func(v uint64, n, w uint) uint64) {
+		run := func(w uint) BuiltinFn {
+			mask := ^uint64(0)
+			if w < 64 {
+				mask = uint64(1)<<w - 1
+			}
+			return func(args []Value) (Value, error) {
 				n := args[1].I
 				if n < 0 {
 					return Value{}, fmt.Errorf("%s shift count %d is negative", name, n)
 				}
-				return IntVal(int64(fn(uint64(args[0].I), uint(n)))), nil
+				u := fn(uint64(args[0].I)&mask, uint(n), w) & mask
+				if w < 64 && u&(uint64(1)<<(w-1)) != 0 {
+					u |= ^mask // a signed type's sign, from its top bit
+				}
+				return IntVal(int64(u)), nil
+			}
+		}
+		RegisterBuiltin(BuiltinSig{
+			Name:    name,
+			Params:  []*Type{nil, IntT},
+			Result:  IntT,
+			Generic: "ANY_BIT",
+			Resolve: func(ts []*Type) (*Type, BuiltinFn, error) {
+				if len(ts) != 2 || !ts[0].IsInteger() || !ts[1].IsInteger() {
+					return nil, nil, fmt.Errorf("%s takes an integer and a count", name)
+				}
+				t := ts[0]
+				if t.Name == "" || t.Enum != nil {
+					return IntT, run(64), nil
+				}
+				w := uint(t.BitWidth())
+				if c, _ := intClass(t.Name); c == 'u' || c == 'b' {
+					return t, runUnsigned(name, fn, w), nil
+				}
+				return t, run(w), nil
 			},
+			Fn: run(64),
 		})
 	}
-	shift("SHL", func(v uint64, n uint) uint64 {
-		if n >= 64 {
+	shift("SHL", func(v uint64, n, w uint) uint64 {
+		if n >= w {
 			return 0
 		}
 		return v << n
 	})
-	shift("SHR", func(v uint64, n uint) uint64 { // logical: zero-fill
-		if n >= 64 {
+	shift("SHR", func(v uint64, n, w uint) uint64 { // logical: zero-fill
+		if n >= w {
 			return 0
 		}
 		return v >> n
 	})
-	shift("ROL", func(v uint64, n uint) uint64 {
-		n %= 64
-		return v<<n | v>>(64-n)
+	shift("ROL", func(v uint64, n, w uint) uint64 {
+		n %= w
+		if n == 0 {
+			return v
+		}
+		return v<<n | v>>(w-n)
 	})
-	shift("ROR", func(v uint64, n uint) uint64 {
-		n %= 64
-		return v>>n | v<<(64-n)
+	shift("ROR", func(v uint64, n, w uint) uint64 {
+		n %= w
+		if n == 0 {
+			return v
+		}
+		return v>>n | v<<(w-n)
 	})
+}
+
+// runUnsigned is a shift over w bits whose result stays unsigned (a WORD,
+// a UINT).
+func runUnsigned(name string, fn func(v uint64, n, w uint) uint64, w uint) BuiltinFn {
+	mask := ^uint64(0)
+	if w < 64 {
+		mask = uint64(1)<<w - 1
+	}
+	return func(args []Value) (Value, error) {
+		n := args[1].I
+		if n < 0 {
+			return Value{}, fmt.Errorf("%s shift count %d is negative", name, n)
+		}
+		return IntVal(int64(fn(uint64(args[0].I)&mask, uint(n), w) & mask)), nil
+	}
 }
 
 func registerNumericBuiltins() {
