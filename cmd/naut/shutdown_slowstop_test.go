@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"io"
 	"log/slog"
 	"net"
@@ -75,7 +74,7 @@ func TestNautRunGivesBackTheHTTPPortBeforeSlowStops(t *testing.T) {
 
 	bin := buildNautCLI(t, t.TempDir(), nil)
 	dir := t.TempDir()
-	apiAddr := freeAddr(t)
+	apiAddr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 	files := map[string]string{
 		"nautilus.yaml": `name: slowstop
 tasks:
@@ -103,9 +102,8 @@ sparkplug:
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	var stderr lockedBuffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = new(bytes.Buffer)
+	var stdout, stderr lockedBuffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +119,7 @@ sparkplug:
 			}
 		}
 	})
+	apiAddr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {
