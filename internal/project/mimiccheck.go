@@ -66,11 +66,12 @@ type mimicFile struct {
 		Panel     json.RawMessage   `json:"panel"`
 	} `json:"equipment"`
 	Pipes []struct {
-		ID     string            `json:"id"`
-		Points [][]float64       `json:"points"`
-		From   *pipeEnd          `json:"from"`
-		To     *pipeEnd          `json:"to"`
-		Bind   map[string]string `json:"bind"`
+		ID      string            `json:"id"`
+		Points  [][]float64       `json:"points"`
+		Routing string            `json:"routing"`
+		From    *pipeEnd          `json:"from"`
+		To      *pipeEnd          `json:"to"`
+		Bind    map[string]string `json:"bind"`
 	} `json:"pipes"`
 	Labels []struct {
 		Text  string    `json:"text"`
@@ -112,6 +113,8 @@ type mimicPanel struct {
 type pipeEnd struct {
 	Equip string `json:"equip"`
 	Port  string `json:"port"`
+	// Pipe: this end tees into another pipe (routing "auto" only).
+	Pipe string `json:"pipe"`
 }
 
 // CheckMimics checks every *.mimic.json against the project, offline, as
@@ -334,14 +337,33 @@ func (p *Project) CheckMimics(fsys fs.FS, strict bool) ([]MimicReport, []string,
 				}
 			}
 		}
+		pipeIDs := map[string]bool{}
+		for _, pp := range m.Pipes {
+			pipeIDs[pp.ID] = true
+		}
 		for _, pp := range m.Pipes {
 			where := "pipe " + pp.ID
+			if pp.Routing != "" && pp.Routing != "direct" && pp.Routing != "orthogonal" && pp.Routing != "auto" {
+				say("%s has routing %q; routing is \"auto\" (the screen routes it), \"orthogonal\" or \"direct\"", where, pp.Routing)
+			}
 			// a pipe draws through its points and its anchored ends; with both
 			// ends anchored it needs no points at all
-			if n := len(pp.Points) + btoi(pp.From != nil && pp.From.Equip != "") + btoi(pp.To != nil && pp.To.Equip != ""); n < 2 {
+			anchored := func(e *pipeEnd) bool { return e != nil && (e.Equip != "" || e.Pipe != "") }
+			if n := len(pp.Points) + btoi(anchored(pp.From)) + btoi(anchored(pp.To)); n < 2 {
 				say("%s has nothing to draw: give it points, or anchor both ends with from and to", where)
 			}
 			for _, end := range []*pipeEnd{pp.From, pp.To} {
+				if end != nil && end.Pipe != "" {
+					switch {
+					case pp.Routing != "auto":
+						say("%s ends on pipe %s, which only a routed pipe can (\"routing\": \"auto\")", where, end.Pipe)
+					case end.Pipe == pp.ID:
+						say("%s ends on itself", where)
+					case !pipeIDs[end.Pipe]:
+						say("%s ends on pipe %s, which isn't on the screen", where, end.Pipe)
+					}
+					continue
+				}
 				if end == nil || end.Equip == "" {
 					continue
 				}

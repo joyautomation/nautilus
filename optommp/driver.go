@@ -1011,8 +1011,9 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 	refs := d.cur.refs
 	now := time.Now()
 	type turn struct {
-		name     string
-		off, set bool
+		name string
+		off  bool
+		got  any
 	}
 	var turned []turn // digital outputs that began or stopped disagreeing
 	d.mu.Lock()
@@ -1060,11 +1061,11 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 				}
 			}
 		}
-		if b.Point == PointDO && checkOut {
-			off := d.disagreesLocked(b.Name, set, now)
+		if checkOut && b.isOutput() && b.Point != PointAO {
+			off := d.disagreesLocked(b.Name, v, now)
 			if off != d.disagree[b.Name] {
 				d.disagree[b.Name] = off
-				turned = append(turned, turn{b.Name, off, set})
+				turned = append(turned, turn{b.Name, off, v})
 			}
 			if off {
 				q = nio.Bad
@@ -1081,7 +1082,7 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 	for _, t := range turned {
 		if t.off {
 			d.log.Warn("optommp: an output is not in its commanded state; its tag is Bad until it is",
-				"host", d.m.Host, "tag", t.name, "state", t.set)
+				"host", d.m.Host, "tag", t.name, "value", t.got)
 		} else {
 			d.log.Info("optommp: an output is in its commanded state again", "host", d.m.Host, "tag", t.name)
 		}
@@ -1334,10 +1335,11 @@ func (d *Driver) requeueLocked(watchdog bool) int {
 	return n
 }
 
-// disagreesLocked reports whether a digital output's state as read (set)
-// is not its command, counting only a command written at least
+// disagreesLocked reports whether an output's value as read (got) is not
+// its command — a digital output's state, or a writable Scratch Pad
+// element another client has written over — counting only a command written at least
 // readbackSettle (or three intervals) before now and not since replaced.
-func (d *Driver) disagreesLocked(name string, set bool, now time.Time) bool {
+func (d *Driver) disagreesLocked(name string, got any, now time.Time) bool {
 	cmd, ok := d.commanded[name]
 	if !ok {
 		return false
@@ -1352,8 +1354,18 @@ func (d *Driver) disagreesLocked(name string, set bool, now time.Time) bool {
 	if now.Sub(d.wrote[name]) < max(readbackSettle, 3*every) {
 		return false
 	}
-	want, err := toBool(cmd)
-	return err == nil && want != set
+	switch g := got.(type) {
+	case bool:
+		want, err := toBool(cmd)
+		return err == nil && want != g
+	case int64:
+		want, err := toInt(cmd)
+		return err == nil && int64(int32(want)) != g
+	case float64:
+		want, err := toFloat(cmd)
+		return err == nil && float64(float32(want)) != g && !(math.IsNaN(want) && math.IsNaN(g))
+	}
+	return false
 }
 
 func (d *Driver) fail(err error) {

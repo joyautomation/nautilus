@@ -5,7 +5,7 @@ package optommp
 // import` writes it from a live chassis; `naut check` validates it with no
 // processor in sight.
 //
-//	host: 192.168.82.243
+//	host: 127.0.0.1
 //	scan-rate: 20ms
 //	unit: GRV-EPIC-PR1
 //	modules:

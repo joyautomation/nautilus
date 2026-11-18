@@ -22,9 +22,11 @@ type Tag struct {
 	Role string
 	Type string
 	// Init is a scalar (bool/float64/int/int64/string) for an untyped or
-	// scalar tag, or a map[string]any for a struct-typed tag's per-member
-	// seed — nested map[string]any for a nested struct member. nil omits
-	// init: entirely (zero-of-type, for a Type tag).
+	// scalar tag, a map[string]any for a struct-typed tag's per-member
+	// seed — nested map[string]any for a nested struct member — or a []any
+	// for an array tag's elements in order (the loader pads a short list
+	// with zeros, so [] seeds an all-zero array). nil omits init: entirely
+	// (zero-of-type, for a Type tag).
 	Init any
 	Unit string
 	Desc string
@@ -86,9 +88,10 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// renderInit renders a tag's init value: a scalar as before, or — for a
-// struct-typed tag's per-member seed (internal/project's `init:` mapping) —
-// a flow-style YAML mapping, recursively for a nested struct member. This is
+// renderInit renders a tag's init value: a scalar as before, a flow-style
+// YAML sequence for an array's elements, or — for a struct-typed tag's
+// per-member seed (internal/project's `init:` mapping) — a flow-style YAML
+// mapping, recursively for a nested struct member. This is
 // what lets a generator emit `init: { RAWMIN: 6553.0, LVL: { HSP: 85.0 } }`
 // instead of only ever seeding zero-of-type, and it is the same shape the
 // loader (`ir.SeedFromInit`) accepts back — round-tripping a manifest tag
@@ -97,6 +100,13 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 // Keys are sorted for the same reason the tag list itself is: a regenerated
 // file must diff cleanly, not reshuffle.
 func renderInit(v any) string {
+	if list, ok := v.([]any); ok {
+		parts := make([]string, len(list))
+		for i, e := range list {
+			parts[i] = renderInit(e)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	}
 	m, ok := v.(map[string]any)
 	if !ok {
 		return scalar(v)

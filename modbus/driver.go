@@ -1863,3 +1863,8 @@ var (
 	_ nio.QualityReporter  = (*Driver)(nil)
 	_ nio.OutputsRequester = (*Driver)(nil)
 )
+
+// Manifest is the manifest the driver was built from: its sources and
+// bindings, for a caller that serves the same register map in process
+// (virtdev's in-process face reads through the driver's own Plan).
+func (d *Driver) Manifest() Manifest { return d.manifest }

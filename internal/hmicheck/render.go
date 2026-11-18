@@ -89,7 +89,8 @@ type probeResult struct {
 		ID   string   `json:"id"`
 		Ends []string `json:"ends"`
 	} `json:"pipes"`
-	Crossed []struct {
+	Unrouted []string `json:"unrouted"`
+	Crossed  []struct {
 		ID string `json:"id"`
 		N  int    `json:"n"`
 	} `json:"crossed"`
@@ -266,6 +267,13 @@ func (b *browser) look(ctx context.Context, url, page string, v view) ([]Finding
 			} else {
 				f(true, "pipe %s draws nothing: its ends and points are all one spot", p.ID)
 			}
+		}
+		if n := len(pr.Unrouted); n > 0 {
+			ids := strings.Join(pr.Unrouted[:min(n, 6)], ", ")
+			if n > 6 {
+				ids += ", …"
+			}
+			f(false, "%d routed %s no clear way round the equipment and labels (%s), so %s drawn straight across: leave a lane for each line (move a piece of equipment or a label out of its way)", n, map[bool]string{true: "pipe has", false: "pipes have"}[n == 1], ids, map[bool]string{true: "it is", false: "they are"}[n == 1])
 		}
 		if len(pr.Crossed) > 0 {
 			c := pr.Crossed[0]

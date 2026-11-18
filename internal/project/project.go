@@ -619,6 +619,12 @@ type Project struct {
 
 // RetainNames resolves the retain section's defaults against the project
 // name: (configMapName, filePath), ready for retain.New.
+// Drivers are the project's configured drivers, each with its name, as
+// Load built them (none dials until started): what a test that answers
+// them in process, with virtual devices, resolves its bindings from. Nil
+// for the implicit memory loopback.
+func (p *Project) Drivers() []nio.NamedDriver { return p.drivers }
+
 func (p *Project) RetainNames() (configMap, file string) {
 	configMap, file = p.Name+"-retain", "retain.json"
 	if p.Retain.ConfigMap != "" {

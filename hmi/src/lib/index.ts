@@ -70,6 +70,7 @@ export type { CanvasSpec, CanvasNode, CanvasRegistry } from './canvas.js';
 export { default as WriteNumber } from './components/WriteNumber.svelte';
 export { default as WriteToggle } from './components/WriteToggle.svelte';
 export { default as OffPage } from './components/OffPage.svelte';
+export { routePipes, ROUTE_GRID, ROUTE_CLEAR, ROUTE_BEND, ROUTE_CROSS, ROUTE_NEAR, type RouteJob, type RouteEnd, type RouteInput, type RouteResult } from './route.js';
 export { default as SetpointGroup } from './components/SetpointGroup.svelte';
 export { default as CommandButton } from './components/CommandButton.svelte';
 
@@ -224,6 +225,8 @@ export {
 	resolveRuntimePorts,
 	resolvePipeEndpoints,
 	brokenPipes,
+	autoRoutes,
+	isPipeEnd,
 	pipeCrossings,
 	pipeTees,
 	TEE_NEAR,

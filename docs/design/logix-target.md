@@ -79,7 +79,7 @@ The shipped Python examples are the authoritative capability list:
 | Upload | `upload_project.py`, `upload_to_new_project.py` | Controller → ACD. |
 | Go online / offline, read mode, change mode | `go_online_offline.py`, `read_controller_mode.py`, `change_controller_mode.py` | |
 | Get / set tag value | `get_tag_value.py`, `set_tag_value.py` | Typed per data type (`set_tag_value_dint`), XPath tag path, `OperationMode.OFFLINE` \| `ONLINE`, **one tag per call**. |
-| Comm path | `get_comm_path.py`, `set_comm_path.py` | FactoryTalk Linx syntax: `AB_ETH-1\10.88.45.25\Backplane\0`. |
+| Comm path | `get_comm_path.py`, `set_comm_path.py` | FactoryTalk Linx syntax: `AB_ETH-1\192.0.2.50\Backplane\0`. |
 | Enumerate executables | `get_all_executables.py` | Programs / routines / AOIs. |
 | SD card, safety signature, source protection, convert version/controller type | several | Not on the critical path. |
 
@@ -150,7 +150,7 @@ This is the part that makes the project plausible rather than speculative.
   truncated tag names, continuous tasks in a redundant controller, local-chassis
   modules, L8x-unsupported attributes). Plus a PLC-5 `.PC5` parser and a
   PLC-5 → Logix rung translator. Grown out of a delivered conversion.
-- `rockwell-vm` (incus, 10.154.92.130, SSH alias `rockwell`) — Studio 5000
+- `rockwell-vm` (incus, 192.0.2.30, SSH alias `rockwell`) — Studio 5000
   v21–v38, SDK 2.02, FactoryTalk Linx, **FactoryTalk Logix Echo 4.00 with
   ControlLogix 5580 v33–38, 5590 v38, CompactLogix/GuardLogix 5380 v36–38
   emulators installed**, and prior builds left in place at `C:\acdwork`:
@@ -1007,7 +1007,7 @@ multi-hour one.
 
 ### 13.5 ECHO1: the SDK runs, and the blocker is not licensing
 
-`echo-vm` (hostname **ECHO1**, 10.154.92.210, incus description *"FactoryTalk
+`echo-vm` (hostname **ECHO1**, 192.0.2.20, incus description *"FactoryTalk
 Logix Echo FAT rig — client FAT rig"*) turns out to be a better SDK host than
 `rockwell-vm`, and testing there moved the failure past licensing entirely.
 
@@ -1093,8 +1093,8 @@ and live monitoring — is high-feasibility and mostly built. **Tier B**
 
 | Host | Access | State |
 |---|---|---|
-| **ECHO1** (`echo-vm`, 10.154.92.210) | `ssh echo1` (alias added; key `~/.ssh/echo_vm`, user `windows`) | **The SDK box.** Licensed, FactoryTalk Local Directory configured, .NET SDK 10.0.401 at `C:\dotnet10`, built `OpenAndSaveFile.exe` at `C:\s3build`. Logix Echo installed but its activation lapsed 2026-09-06. |
-| **rockwell-vm** (`ssh rockwell`, 10.154.92.130) | working | **Not licensed for the SDK.** Its CodeMeter Rockwell container is healthy and *empty* (§13.4). Logix Designer's GUI works via FlexNet; the SDK does not. Don't burn time here. |
+| **ECHO1** (`echo-vm`, 192.0.2.20) | `ssh echo1` (alias added; key `~/.ssh/echo_vm`, user `windows`) | **The SDK box.** Licensed, FactoryTalk Local Directory configured, .NET SDK 10.0.401 at `C:\dotnet10`, built `OpenAndSaveFile.exe` at `C:\s3build`. Logix Echo installed but its activation lapsed 2026-09-06. |
+| **rockwell-vm** (`ssh rockwell`, 192.0.2.30) | working | **Not licensed for the SDK.** Its CodeMeter Rockwell container is healthy and *empty* (§13.4). Logix Designer's GUI works via FlexNet; the SDK does not. Don't burn time here. |
 
 `Z:` on both VMs is the same host directory (`<client>/site-b/conversion/output`).
 Files there can be locked by a Logix Designer session on the *other* VM —
@@ -1497,7 +1497,7 @@ Echo. `LGXNGEMU.SIM` is denied once a minute, every minute
 (`UNSUPPORTED … No such feature exists`), which matches the term activation
 that lapsed 2026-09-06 on the other host. An `EmulateControlLogix5580`
 process is nonetheless running and answering EtherNet/IP on
-`100.93.56.45:44818` — `naut eip browse` connects and returns zero tags,
+`192.0.2.21:44818` — `naut eip browse` connects and returns zero tags,
 which is consistent with an empty controller and does not prove the
 emulator will actually execute logic. **Whether an unactivated Echo node
 runs a downloaded program is untested.**
