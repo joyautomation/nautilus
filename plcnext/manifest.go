@@ -282,6 +282,13 @@ func (m *Manifest) fillDefaults() {
 const DefaultOutputWatchdog = time.Second
 
 // watchdog is the validated OutputWatchdog.
+// safeOnStop reports whether something takes the outputs to a safe state
+// when this driver stops writing: the shim's output watchdog, on transport
+// shm with a non-zero output-watchdog. Otherwise they hold.
+func (m Manifest) safeOnStop() bool {
+	return m.Transport == TransportShm && m.watchdog() > 0
+}
+
 func (m Manifest) watchdog() time.Duration {
 	wd, _ := time.ParseDuration(m.OutputWatchdog)
 	return wd

@@ -46,17 +46,17 @@ func checkNetworkSections(m Manifest) error {
 	// first. Until `redundancy:` can name it and check it (#787 step 6),
 	// the combination is refused.
 	//
-	// The plcnext driver flushes its output image from its own loop, every
-	// scan on the shm route (the write is the shim's watchdog heartbeat),
-	// with no leadership check: a standby would drive the controller's
-	// outputs. Refused until PLCnext under redundancy is designed (#710).
+	// The plcnext driver has a write gate (#863), but what a standby's
+	// gated driver does to its own controller (on shm the shim's watchdog
+	// zeroes its outputs) and how BusConductor hands over are not designed
+	// or tested. Refused until PLCnext under redundancy is (#710).
 	if m.Redundancy != nil {
 		for _, d := range append([]DriverConfig{m.Driver}, m.Drivers...) {
 			switch t := strings.ToLower(d.Type); {
 			case strings.HasPrefix(t, "profinet"):
 				return fmt.Errorf("driver %s with redundancy: is not supported yet: a takeover needs the station's floating IP address on the new leader, and redundancy: cannot name and check one yet (#787 step 6)", d.Type)
 			case t == "plcnext":
-				return fmt.Errorf("driver plcnext with redundancy: is not supported yet: the driver writes the controller's output image from its own loop, with no leadership check, so a standby would drive the outputs; PLCnext under redundancy is #710")
+				return fmt.Errorf("driver plcnext with redundancy: is not supported yet: a standby's driver and the Axioline bus hand-over are not designed or tested yet; PLCnext under redundancy is #710")
 			}
 		}
 	}
