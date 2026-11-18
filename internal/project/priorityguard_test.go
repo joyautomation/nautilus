@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -100,5 +101,41 @@ func TestShareCPUFromTheManifest(t *testing.T) {
 	}
 	if p.Runtime.ShareCPU || !p.Runtime.Tasks[0].ShareCPU {
 		t.Errorf("main share-cpu %v, task %v; want false, true", p.Runtime.ShareCPU, p.Runtime.Tasks[0].ShareCPU)
+	}
+}
+
+// priority-guard: rt-limit reaches the runtime's guard for the task that
+// set it (#907); the runtime arms the strictest one when it runs.
+func TestPriorityGuardRTLimitFromTheManifest(t *testing.T) {
+	p, err := Load(guardProject("    priority-guard: {rt-limit: 80ms}", "    priority-guard: {rt-limit: 25ms, overruns: 9}"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Runtime.Guard.RTLimit; got != 80*time.Millisecond {
+		t.Errorf("main task rt-limit %s, want 80ms", got)
+	}
+	if got := p.Runtime.Tasks[0].Guard; got.RTLimit != 25*time.Millisecond || got.Overruns != 9 {
+		t.Errorf("task guard %+v, want rt-limit 25ms beside overruns 9", got)
+	}
+}
+
+// rt-limit is refused outside 10ms..200ms (it only tightens the default:
+// a larger value would do nothing), and on a task with no priority (it
+// bounds only a real-time thread).
+func TestPriorityGuardRTLimitRefusals(t *testing.T) {
+	for _, c := range []struct{ guard, want string }{
+		{"    priority-guard: {rt-limit: 5ms}", "rt-limit 5ms: at least 10ms"},
+		{"    priority-guard: {rt-limit: 201ms}", "rt-limit 201ms: at most 200ms: rt-limit only tightens"},
+		{"    priority-guard: {rt-limit: 11s}", "rt-limit 11s: at most 200ms"},
+		{"    priority-guard: {rt-limit: -20ms}", "rt-limit -20ms: at least 10ms"},
+	} {
+		if _, err := Load(guardProject("", c.guard), ""); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want a refusal naming %q", c.guard, err, c.want)
+		}
+	}
+	fs := guardProject("", "")
+	fs["nautilus.yaml"].Data = []byte(strings.Replace(string(fs["nautilus.yaml"].Data), "    priority: 30\n", "    priority-guard: {rt-limit: 50ms}\n", 1))
+	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "has no priority:") {
+		t.Errorf("rt-limit on a task with no priority: got %v, want a refusal", err)
 	}
 }

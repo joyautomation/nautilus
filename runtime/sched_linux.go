@@ -92,10 +92,6 @@ const (
 	schedOther   = 0
 	schedFIFO    = 1
 	rlimitRTTime = 15 // RLIMIT_RTTIME, in microseconds
-	// DefaultRTLimit is how long a real-time task thread may run without
-	// blocking before it is moved to normal scheduling: far above any
-	// scan's execution, far below what starves a core's other work.
-	DefaultRTLimit = 200 * time.Millisecond
 )
 
 // rtGuard bounds every thread this process moves to SCHED_FIFO (#836).
@@ -108,21 +104,65 @@ const (
 var rtGuard struct {
 	once    sync.Once
 	err     error
-	soft    time.Duration
 	mu      sync.Mutex
+	soft    time.Duration        // under mu: the soft limit in force, once armed
+	want    time.Duration        // under mu: the strictest RTLimit asked for (requestRTLimit), 0 = none
 	threads map[int]func(string) // tid → told when demoted (may be nil)
 }
 
-// rtLimit is the soft limit: NAUTILUS_RT_LIMIT_MS when set (10 ms or more),
-// else DefaultRTLimit.
-func rtLimit() time.Duration {
+// rtLimit is the soft limit to arm: the stricter of NAUTILUS_RT_LIMIT_MS
+// (when set, 10 ms or more; else DefaultRTLimit) and want, a runtime's
+// RTLimit (0 = none).
+func rtLimit(want time.Duration) time.Duration {
+	lim := DefaultRTLimit
 	if v := os.Getenv("NAUTILUS_RT_LIMIT_MS"); v != "" {
-		if ms, err := strconv.Atoi(v); err == nil && ms >= 10 {
-			return time.Duration(ms) * time.Millisecond
+		if ms, err := strconv.Atoi(v); err == nil && ms >= int(MinRTLimit/time.Millisecond) {
+			lim = time.Duration(ms) * time.Millisecond
+		} else {
+			slog.Warn("runtime: NAUTILUS_RT_LIMIT_MS is not a whole number of milliseconds ≥ 10; using the default", "value", v, "default", DefaultRTLimit)
 		}
-		slog.Warn("runtime: NAUTILUS_RT_LIMIT_MS is not a whole number of milliseconds ≥ 10; using the default", "value", v, "default", DefaultRTLimit)
 	}
-	return DefaultRTLimit
+	if want > 0 {
+		lim = min(lim, max(want, MinRTLimit))
+	}
+	return lim
+}
+
+// requestRTLimit asks for a soft limit no longer than d (PriorityGuard's
+// RTLimit; 0 asks nothing). Before the guard is armed it is folded into the
+// limit armed; after, a stricter request tightens the limit in force (it
+// never loosens: another runtime in the process may have asked for it).
+func requestRTLimit(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	d = max(d, MinRTLimit)
+	rtGuard.mu.Lock()
+	defer rtGuard.mu.Unlock()
+	if rtGuard.want == 0 || d < rtGuard.want {
+		rtGuard.want = d
+	}
+	if rtGuard.soft == 0 || d >= rtGuard.soft {
+		return // not armed yet, or already as strict
+	}
+	var cur syscall.Rlimit
+	if err := syscall.Getrlimit(rlimitRTTime, &cur); err != nil {
+		slog.Error("runtime: could not tighten RLIMIT_RTTIME", "want", d, "error", err)
+		return
+	}
+	lim := rtLimits(cur, d)
+	if err := syscall.Setrlimit(rlimitRTTime, &lim); err != nil {
+		slog.Error("runtime: could not tighten RLIMIT_RTTIME", "want", d, "error", err)
+		return
+	}
+	rtGuard.soft = time.Duration(lim.Cur) * time.Microsecond
+}
+
+// rtLimitInForce is the soft limit armed, 0 before the guard is.
+func rtLimitInForce() time.Duration {
+	rtGuard.mu.Lock()
+	defer rtGuard.mu.Unlock()
+	return rtGuard.soft
 }
 
 // rtLimits is the RLIMIT_RTTIME to set for a soft limit, given the one in
@@ -145,19 +185,19 @@ func rtLimits(cur syscall.Rlimit, soft time.Duration) syscall.Rlimit {
 // armRTGuard sets the limit and the SIGXCPU handler, once per process.
 func armRTGuard() error {
 	rtGuard.once.Do(func() {
-		// Under mu: a loop on another thread may be releasing or
-		// registering already (#870).
+		// Under mu throughout: a loop on another thread may be releasing
+		// or registering already (#870), or a runtime asking for a limit.
 		rtGuard.mu.Lock()
+		defer rtGuard.mu.Unlock()
 		if rtGuard.threads == nil {
 			rtGuard.threads = map[int]func(string){}
 		}
-		rtGuard.mu.Unlock()
 		var cur syscall.Rlimit
 		if err := syscall.Getrlimit(rlimitRTTime, &cur); err != nil {
 			rtGuard.err = fmt.Errorf("RLIMIT_RTTIME: %w", err)
 			return
 		}
-		lim := rtLimits(cur, rtLimit())
+		lim := rtLimits(cur, rtLimit(rtGuard.want))
 		if err := syscall.Setrlimit(rlimitRTTime, &lim); err != nil {
 			rtGuard.err = fmt.Errorf("RLIMIT_RTTIME: %w", err)
 			return
@@ -170,7 +210,7 @@ func armRTGuard() error {
 			// (ours) or RLIMIT_CPU (someone's ulimit -t). Either way the
 			// process is past a CPU bound, and the real-time threads go.
 			for range c {
-				demoteAll(fmt.Sprintf("SIGXCPU: a CPU-time limit was passed (most likely RLIMIT_RTTIME: a real-time task thread ran %s without blocking; NAUTILUS_RT_LIMIT_MS); every task with priority: now runs at normal priority until restart", rtGuard.soft))
+				demoteAll(fmt.Sprintf("SIGXCPU: a CPU-time limit was passed (most likely RLIMIT_RTTIME: a real-time task thread ran %s without blocking; priority-guard: rt-limit or NAUTILUS_RT_LIMIT_MS); every task with priority: now runs at normal priority until restart", rtLimitInForce()))
 			}
 		}()
 	})

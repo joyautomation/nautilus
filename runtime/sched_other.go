@@ -2,7 +2,10 @@
 
 package runtime
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Pinning and real-time priority are Linux features (sched_setaffinity,
 // SCHED_FIFO). Elsewhere a task that asks for them runs normally and says
@@ -15,6 +18,9 @@ func applySched(cpus []int, prio int, _ bool, _ func(string)) error {
 }
 
 func releaseSched() {}
+
+func requestRTLimit(time.Duration)  {}
+func rtLimitInForce() time.Duration { return 0 }
 
 func currentTid() int            { return 0 }
 func demoteTid(int, string) bool { return false }

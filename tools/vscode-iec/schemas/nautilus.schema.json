@@ -393,6 +393,10 @@
               "type": "number",
               "minimum": 2,
               "description": "One scan in progress for longer than this many periods. Default 20."
+            },
+            "rt-limit": {
+              "$ref": "#/definitions/duration",
+              "description": "How long a real-time thread may run without blocking before the kernel's RLIMIT_RTTIME demotes every task with priority:, from 10ms to 200ms: it only tightens the 200ms default, never loosens it. One limit per process: the strictest of every task's rt-limit and NAUTILUS_RT_LIMIT_MS is the one in force. Only on a task with priority:."
             }
           }
         }
