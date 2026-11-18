@@ -24,10 +24,12 @@ import (
 	"github.com/joyautomation/nautilus/internal/project"
 )
 
-// naut deploy puts a controller on a Linux box with systemd over SSH (#721).
-// The half that runs on the box is deploybox/box.sh, fed to `sh -s` as
-// root; this file builds, uploads and calls it. Nothing is installed on the
-// box beyond the controller and its unit.
+// naut deploy puts a controller on a Linux box with systemd over SSH (#721),
+// or, with -supervisor cron, on one without systemd or root (#768: a
+// PLCnext). The half that runs on the box is deploybox/box.sh, fed to
+// `sh -s` as root (as the SSH user in cron mode); this file builds, uploads
+// and calls it. Nothing is installed on the box beyond the controller and
+// its unit (its keepalive and crontab lines in cron mode).
 
 //go:embed deploybox/box.sh
 var deployBoxSh string
@@ -43,7 +45,8 @@ var deployUnit []byte
 const deployUsage = `usage: naut deploy <command> <ssh-target> ...
 
 Puts a controller on a Linux box with systemd, over SSH, and keeps the
-release before it so that one command goes back.
+release before it so that one command goes back. A box without systemd or
+root (a PLCnext) takes -supervisor cron at install.
 
   install   <ssh-target> [project-dir]  build the project, install it as nautilus.service, start it
   update    <ssh-target> [project-dir]  build, make it current and restart; if it does not start,
@@ -65,9 +68,20 @@ install and update:
   -id <id>                the release's name on the box
                           (default <name>-<git describe>-<first 8 hex of its sha256>)
 
+install only:
+  -supervisor cron        no systemd and no root: everything runs as the SSH user, under -root,
+                          started by <root>/keepalive.sh from that user's crontab (at boot and
+                          every minute); through <root>/naut-launch when it is there, for
+                          priority: without root (rt/plcnext-io). The box remembers the mode
+                          and root in ~/.config/naut-deploy, so later commands need neither.
+                          "Started" means still running 3 s later: a first scan that hangs is
+                          not caught, as under Type=simple.
+  -root <dir>             with -supervisor cron: where releases, current, previous and state/
+                          (retain.json, nautilus.log) go; the SSH user must be able to write it
+
 <ssh-target> is anything ssh takes: user@host, or a Host from ~/.ssh/config.
-The user must be root or have sudo without a password. NAUT_SSH_OPTS adds
-ssh options, e.g. "-p 2222 -i ~/.ssh/ipc".
+The user must be root or have sudo without a password (any user that can write
+-root in cron mode). NAUT_SSH_OPTS adds ssh options, e.g. "-p 2222 -i ~/.ssh/ipc".
 
 On the box:
   /opt/nautilus/releases/<id>/controller   one per release (the newest 3 besides current and previous)
@@ -90,6 +104,7 @@ func runDeploy(args []string) int {
 	fs.Usage = func() { fmt.Fprint(os.Stderr, deployUsage) }
 	var (
 		runner, ctl, manifest, id, out string
+		supervisor, root               string
 		purge                          bool
 	)
 	nargs := [2]int{1, 1} // positional arguments, min and max
@@ -99,6 +114,10 @@ func runDeploy(args []string) int {
 		fs.StringVar(&ctl, "controller", "", "deploy this controller instead of building one")
 		fs.StringVar(&manifest, "m", "", manifestFlagUsage)
 		fs.StringVar(&id, "id", "", "the release's name on the box")
+		if cmd == "install" {
+			fs.StringVar(&supervisor, "supervisor", "", "cron: a box without systemd or root (see usage)")
+			fs.StringVar(&root, "root", "", "with -supervisor cron: the directory releases and state go in")
+		}
 		nargs = [2]int{1, 2}
 	case "backup":
 		fs.StringVar(&out, "o", "", "the file to write (default nautilus-retain-<target>-<time>.tgz)")
@@ -127,12 +146,21 @@ func runDeploy(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut deploy: -controller and a project directory: give one")
 		return 2
 	}
+	if err := checkSupervisor(supervisor, root); err != nil {
+		fmt.Fprintln(os.Stderr, "naut deploy:", err)
+		return 2
+	}
 	b, err := newSSHBox(pos[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
 		return 1
 	}
 	defer b.close()
+	if supervisor == "cron" {
+		b.cron, b.cronRoot, b.known = true, filepath.Clean(root), true
+	} else if supervisor == "systemd" {
+		b.known = true
+	}
 
 	switch cmd {
 	case "install", "update":
@@ -245,8 +273,10 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string) int {
 	if code := b.upload(f, id); code != 0 {
 		return code
 	}
-	if code := b.upload(bytes.NewReader(deployUnit), "nautilus.service"); code != 0 {
-		return code
+	if !b.cron { // set by now: the controller's upload discovered the mode
+		if code := b.upload(bytes.NewReader(deployUnit), "nautilus.service"); code != 0 {
+			return code
+		}
 	}
 	return b.root(os.Stdout, cmd, id)
 }
@@ -479,6 +509,109 @@ type sshBox struct {
 	target string
 	ctlDir string
 	opts   []string
+	// cron mode (#768): no systemd and no root; box.sh runs as the SSH user
+	// with releases and state under cronRoot.
+	cron     bool
+	cronRoot string
+	known    bool // the mode is known: from install's flags, or discovered
+}
+
+// checkSupervisor vets install's -supervisor and -root. The root goes into
+// remote shell commands and a crontab unquoted, so it is held to an
+// absolute path of plain characters.
+func checkSupervisor(supervisor, root string) error {
+	switch supervisor {
+	case "", "systemd":
+		if root != "" {
+			return errors.New("-root goes with -supervisor cron (systemd boxes use " + deployRoot + ")")
+		}
+		return nil
+	case "cron":
+	default:
+		return fmt.Errorf("-supervisor %q: the choices are systemd (the default) and cron", supervisor)
+	}
+	if root == "" {
+		return errors.New("-supervisor cron needs -root <dir>: where releases and retained values go")
+	}
+	return checkCronRoot(root)
+}
+
+func checkCronRoot(root string) error {
+	clean := filepath.Clean(root)
+	if !strings.HasPrefix(clean, "/") || clean == "/" {
+		return fmt.Errorf("-root %q: an absolute directory, not /", root)
+	}
+	for _, c := range clean {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("/._+-", c)) {
+			return fmt.Errorf("-root %q: letters, digits and / . _ + - only", root)
+		}
+	}
+	for _, part := range strings.Split(root, "/") {
+		if part == ".." {
+			return fmt.Errorf("-root %q: no ..", root)
+		}
+	}
+	return nil
+}
+
+// discover reads the mode an earlier `install -supervisor cron` left on the
+// box, once, just before the first upload or box.sh call (so everything
+// refused before that never reaches the box); a box without it is a
+// systemd box.
+func (b *sshBox) discover() error {
+	if b.known {
+		return nil
+	}
+	b.known = true
+	var out bytes.Buffer
+	if code := b.run(nil, &out, `cat "$HOME/.config/naut-deploy" 2>/dev/null || true`); code != 0 {
+		return fmt.Errorf("could not reach %s (ssh exit %d)", b.target, code)
+	}
+	return b.parseMode(out.String())
+}
+
+func (b *sshBox) parseMode(text string) error {
+	mode, root := "", ""
+	for _, line := range strings.Split(text, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "supervisor":
+			mode = v
+		case "root":
+			root = v
+		}
+	}
+	switch mode {
+	case "":
+		return nil
+	case "cron":
+		if err := checkCronRoot(root); err != nil {
+			return fmt.Errorf("%s: ~/.config/naut-deploy: %v", b.target, err)
+		}
+		b.cron, b.cronRoot = true, filepath.Clean(root)
+		return nil
+	}
+	return fmt.Errorf("%s: ~/.config/naut-deploy: unknown supervisor %q", b.target, mode)
+}
+
+// boxRoot is where releases go on this box.
+func (b *sshBox) boxRoot() string {
+	if b.cron {
+		return b.cronRoot
+	}
+	return deployRoot
+}
+
+// priv wraps a remote command with the privilege the box's mode needs:
+// root for systemd (asRoot), none in cron mode.
+func (b *sshBox) priv(cmd string) string {
+	if b.cron {
+		return cmd
+	}
+	return asRoot(cmd)
 }
 
 func newSSHBox(target string) (*sshBox, error) {
@@ -526,8 +659,9 @@ func asRoot(cmd string) string {
 	return fmt.Sprintf(`if [ "$(id -u)" = 0 ]; then %s; else sudo -n %s; fi`, cmd, cmd)
 }
 
-// root runs box.sh <args> on the box as root. Every arg is a command name,
-// a flag or a cleanID id, so none needs quoting.
+// root runs box.sh <args> on the box as root (as the SSH user, with the
+// mode and root in its environment, in cron mode). Every arg is a command
+// name, a flag or a cleanID id, so none needs quoting.
 func (b *sshBox) root(stdout io.Writer, args ...string) int {
 	for _, a := range args {
 		if a == "" || cleanID(a) != a && a != "-purge" {
@@ -535,19 +669,31 @@ func (b *sshBox) root(stdout io.Writer, args ...string) int {
 			return 2
 		}
 	}
-	return b.run(strings.NewReader(deployBoxSh), stdout, asRoot("sh -s -- "+strings.Join(args, " ")))
+	if err := b.discover(); err != nil {
+		fmt.Fprintln(os.Stderr, "naut deploy:", err)
+		return 1
+	}
+	sh := "sh -s -- " + strings.Join(args, " ")
+	if b.cron {
+		sh = "NAUT_SUPERVISOR=cron NAUT_ROOT=" + b.cronRoot + " " + sh
+	}
+	return b.run(strings.NewReader(deployBoxSh), stdout, b.priv(sh))
 }
 
-// upload writes r to /opt/nautilus/incoming/<name> on the box, whole or
-// not at all (it lands as .part and is renamed).
+// upload writes r to <root>/incoming/<name> on the box, whole or not at
+// all (it lands as .part and is renamed).
 func (b *sshBox) upload(r io.Reader, name string) int {
 	if cleanID(name) != name {
 		fmt.Fprintf(os.Stderr, "naut deploy: %q cannot go to the box unquoted\n", name)
 		return 2
 	}
-	in := deployRoot + "/incoming/" + name
-	return b.run(r, os.Stdout, asRoot("mkdir -p "+deployRoot+"/incoming")+" && "+
-		asRoot(fmt.Sprintf("sh -c 'cat > %s.part && mv %s.part %s'", in, in, in)))
+	if err := b.discover(); err != nil {
+		fmt.Fprintln(os.Stderr, "naut deploy:", err)
+		return 1
+	}
+	in := b.boxRoot() + "/incoming/" + name
+	return b.run(r, os.Stdout, b.priv("mkdir -p "+b.boxRoot()+"/incoming")+" && "+
+		b.priv(fmt.Sprintf("sh -c 'cat > %s.part && mv %s.part %s'", in, in, in)))
 }
 
 // arch is the box's architecture as a release archive names it. It

@@ -1,6 +1,9 @@
-# box.sh: the half of `naut deploy` that runs on the box, as root, fed to
+# box.sh: the half of `naut deploy` that runs on the box, fed to
 # `sh -s -- <command> [args]` over SSH. POSIX sh: the box needs systemd,
-# coreutils and tar, nothing else. See cmd/naut/deploy.go.
+# coreutils and tar, nothing else, and it runs as root. With
+# NAUT_SUPERVISOR=cron (#768) it needs crontab instead of systemd and runs
+# as the SSH user, who must be able to write NAUT_ROOT. See
+# cmd/naut/deploy.go.
 #
 # Messages go to stderr; stdout is reserved for data (a backup's tar).
 set -eu
@@ -8,6 +11,7 @@ set -eu
 # layout (deploy.go's deployRoot is ROOT's default). Setting them is for a
 # mode without systemd (#768): nautilus.service and uninstall -purge keep
 # the systemd paths.
+SUPERVISOR=${NAUT_SUPERVISOR:-systemd}
 ROOT=${NAUT_ROOT:-/opt/nautilus}
 STATE=${NAUT_STATE:-/var/lib/nautilus}
 UNIT=nautilus.service
@@ -15,6 +19,22 @@ UNITDIR=${NAUT_UNITDIR:-/etc/systemd/system} # set only by deploy_box_test.go
 KEEP=3 # releases kept besides current and previous
 say() { echo "$*" >&2; }
 fail() { echo "naut deploy (on box): $*" >&2; exit 1; }
+case $SUPERVISOR in
+systemd) ;;
+cron)
+	# The supervisor is a keepalive script run from the SSH user's crontab;
+	# its state sits under ROOT, which that user can write.
+	[ -n "${NAUT_ROOT:-}" ] || fail "cron mode needs NAUT_ROOT"
+	STATE=${NAUT_STATE:-$ROOT/state}
+	# While this script stops a controller and moves links, the keepalive
+	# must not start the old release; one older than 10 minutes is a
+	# deploy that never finished, and the keepalive ignores it.
+	mkdir -p "$ROOT"
+	touch "$ROOT/hold"
+	trap 'rm -f "$ROOT/hold"' EXIT
+	;;
+*) fail "unknown supervisor $SUPERVISOR" ;;
+esac
 
 # setlink <link> <release id>: point a link at a release, atomically where
 # mv -T exists.
@@ -30,6 +50,10 @@ target() { if [ -L "$ROOT/$1" ]; then basename "$(readlink "$ROOT/$1")"; fi; }
 # two: this script is embedded in every naut, and so in every controller,
 # and must not match itself.
 writeunit() {
+	if [ "$SUPERVISOR" = cron ]; then
+		writekeepalive
+		return
+	fi
 	tmp=$UNITDIR/$UNIT.new
 	if grep -q 'WATCHDOG''=1' "$ROOT/current/controller"; then
 		cp "$ROOT/nautilus.service.in" "$tmp"
@@ -46,10 +70,99 @@ writeunit() {
 	fi
 }
 
-# started: the unit is active and still the same process a few seconds
+# writekeepalive (cron mode): the script the crontab runs, @reboot and
+# every minute. It starts the current release unless it is running: through
+# naut-launch when that sits in ROOT (rt/plcnext-io: it carries the
+# capability for priority:), pinned with taskset when ROOT/cpu holds a CPU,
+# in STATE (where retain.json goes) with ROOT/env's variables. Output goes
+# to STATE/nautilus.log, one generation of a megabyte kept.
+writekeepalive() {
+	cat >"$ROOT/keepalive.sh.new" <<EOF
+#!/bin/sh
+# Written by naut deploy. Run by cron: starts $ROOT/current unless it is
+# running or a deploy holds it; "start" ignores the hold (naut deploy's own).
+ROOT='$ROOT'
+STATE='$STATE'
+EOF
+	cat >>"$ROOT/keepalive.sh.new" <<'EOF'
+if [ "${1:-}" != start ] && [ -e "$ROOT/hold" ] && [ -z "$(find "$ROOT/hold" -mmin +10 2>/dev/null)" ]; then
+	exit 0
+fi
+[ -x "$ROOT/current/controller" ] || exit 0
+real=$(cd "$ROOT" && pwd -P)
+if [ -f "$STATE/nautilus.pid" ]; then
+	case $(readlink "/proc/$(cat "$STATE/nautilus.pid")/exe" 2>/dev/null) in
+	"$real"/releases/*) exit 0 ;;
+	esac
+fi
+mkdir -p "$STATE"
+cd "$STATE" || exit 1
+log=$STATE/nautilus.log
+if [ -f "$log" ] && [ "$(wc -c <"$log")" -gt 1048576 ]; then mv "$log" "$log.1"; fi
+run=$ROOT/current/controller
+[ -x "$ROOT/naut-launch" ] && run=$ROOT/naut-launch
+pin=
+if [ -f "$ROOT/cpu" ] && command -v taskset >/dev/null; then pin="taskset -c $(cat "$ROOT/cpu")"; fi
+if [ -f "$ROOT/env" ]; then set -a; . "$ROOT/env"; set +a; fi
+echo "naut keepalive: starting $(basename "$(readlink "$ROOT/current")") at $(date)" >>"$log"
+setsid nohup $pin "$run" </dev/null >>"$log" 2>&1 &
+echo $! >"$STATE/nautilus.pid"
+EOF
+	chmod 0755 "$ROOT/keepalive.sh.new"
+	mv "$ROOT/keepalive.sh.new" "$ROOT/keepalive.sh"
+}
+
+# cronpid (cron mode): the controller's pid when one of ROOT's releases is
+# running under the keepalive's pid file, else nothing.
+cronpid() {
+	[ -f "$STATE/nautilus.pid" ] || return 0
+	p=$(cat "$STATE/nautilus.pid")
+	case $(readlink "/proc/$p/exe" 2>/dev/null) in
+	"$(cd "$ROOT" && pwd -P)"/releases/*) echo "$p" ;;
+	esac
+}
+
+# sv_running: the controller is up.
+sv_running() {
+	if [ "$SUPERVISOR" = cron ]; then
+		[ -n "$(cronpid)" ]
+	else
+		systemctl is-active -q "$UNIT"
+	fi
+}
+
+# sv_stop: the controller is down. Cron mode allows it the unit's 15 s
+# (TimeoutStopSec) to save and exit before it is killed.
+sv_stop() {
+	if [ "$SUPERVISOR" != cron ]; then
+		systemctl stop "$UNIT"
+		return
+	fi
+	p=$(cronpid)
+	[ -n "$p" ] || return 0
+	kill "$p" 2>/dev/null || true
+	n=0
+	while [ $n -lt 15 ] && kill -0 "$p" 2>/dev/null; do
+		sleep 1
+		n=$((n + 1))
+	done
+	kill -9 "$p" 2>/dev/null || true
+	rm -f "$STATE/nautilus.pid"
+}
+
+# started: the controller is up and still the same process a few seconds
 # later. With Type=notify, `systemctl restart` already waited for the first
-# scan; the wait catches a controller that exits just after.
+# scan; the wait catches a controller that exits just after. Cron mode, like
+# Type=simple, cannot see the first scan.
 started() {
+	if [ "$SUPERVISOR" = cron ]; then
+		sleep 1
+		p0=$(cronpid)
+		[ -n "$p0" ] || return 1
+		sleep 3
+		[ "$(cronpid)" = "$p0" ]
+		return
+	fi
 	systemctl is-active -q "$UNIT" || return 1
 	pid=$(systemctl show -p MainPID --value "$UNIT")
 	sleep 3
@@ -57,11 +170,41 @@ started() {
 }
 
 restart() {
+	if [ "$SUPERVISOR" = cron ]; then
+		sv_stop
+		"$ROOT/keepalive.sh" start && started
+		return
+	fi
 	systemctl reset-failed "$UNIT" 2>/dev/null || true
 	systemctl restart "$UNIT" && started
 }
 
+# sv_enable / sv_disable: the controller starts at boot, or no longer.
+sv_enable() {
+	if [ "$SUPERVISOR" = cron ]; then
+		{
+			crontab -l 2>/dev/null | grep -v '# naut deploy$' || true
+			echo "@reboot $ROOT/keepalive.sh # naut deploy"
+			echo "* * * * * $ROOT/keepalive.sh # naut deploy"
+		} | crontab -
+		return
+	fi
+	systemctl enable -q "$UNIT"
+}
+sv_disable() {
+	if [ "$SUPERVISOR" = cron ]; then
+		crontab -l 2>/dev/null | grep -v '# naut deploy$' | crontab - || true
+		return
+	fi
+	systemctl disable -q "$UNIT" 2>/dev/null || true
+}
+
 why() {
+	if [ "$SUPERVISOR" = cron ]; then
+		say "--- last log lines ($STATE/nautilus.log) ---"
+		tail -n 15 "$STATE/nautilus.log" >&2 2>/dev/null || true
+		return
+	fi
 	say "--- last journal lines ---"
 	journalctl -u "$UNIT" -n 15 --no-pager -o cat >&2 || true
 }
@@ -112,7 +255,7 @@ snapshot() {
 # release that failed may have saved over them before it died; it is
 # stopped first, since systemd keeps restarting it.
 unsnapshot() {
-	systemctl stop "$UNIT" 2>/dev/null || true
+	sv_stop 2>/dev/null || true
 	rm -f "$STATE/retain.json.tmp"
 	if [ -n "$snap" ]; then
 		cp "$snap" "$STATE/retain.json"
@@ -128,21 +271,33 @@ case $cmd in
 install)
 	id=$1
 	[ -z "$(target current)" ] || fail "already installed (current is $(target current)); use update"
-	command -v systemctl >/dev/null || fail "no systemctl: this box does not run systemd"
+	if [ "$SUPERVISOR" = cron ]; then
+		command -v crontab >/dev/null || fail "no crontab: cron mode needs the SSH user's crontab"
+		mkdir -p "$STATE"
+	else
+		command -v systemctl >/dev/null || fail "no systemctl: this box does not run systemd (naut deploy -supervisor cron)"
+	fi
 	place "$id"
 	snapshot install # retained values kept from an earlier install, if any
 	setlink current "$id"
 	writeunit
 	sync
-	systemctl enable -q "$UNIT"
+	sv_enable
 	if restart; then
-		say "installed $id; nautilus.service is running"
+		if [ "$SUPERVISOR" = cron ]; then
+			# Later commands find the mode and root here (deploy.go).
+			mkdir -p "$HOME/.config"
+			printf 'supervisor=cron\nroot=%s\n' "$ROOT" >"$HOME/.config/naut-deploy"
+			say "installed $id; started by $ROOT/keepalive.sh from the crontab"
+		else
+			say "installed $id; nautilus.service is running"
+		fi
 	else
 		why
 		# Leave nothing installed, so install can simply run again, and
 		# the retained values as they were.
 		unsnapshot
-		systemctl disable -q "$UNIT" 2>/dev/null || true
+		sv_disable
 		rm -f "$ROOT/current"
 		fail "$id did not start; nothing is installed (the release stays under releases/)"
 	fi
@@ -154,7 +309,7 @@ update)
 	[ -n "$cur" ] || fail "nothing installed; use install"
 	if [ "$id" = "$cur" ]; then
 		rm -f "$ROOT/incoming/$id"
-		if systemctl is-active -q "$UNIT"; then
+		if sv_running; then
 			say "$id is already current and running"
 			exit 0
 		fi
@@ -176,7 +331,7 @@ update)
 		exit 3
 	fi
 	place "$id"
-	systemctl stop "$UNIT"
+	sv_stop
 	snapshot "$cur"
 	setlink previous "$cur"
 	setlink current "$id"
@@ -218,7 +373,13 @@ status)
 	echo "current:  $cur ($(NAUTILUS_CLI=1 "$ROOT/current/controller" version 2>/dev/null || echo '?'))"
 	echo "previous: $(target previous)"
 	echo "releases: $(ls -1t "$ROOT/releases" | tr '\n' ' ')"
-	systemctl show -p ActiveState -p SubState -p Type -p NRestarts -p StatusText -p ExecMainStartTimestamp "$UNIT"
+	if [ "$SUPERVISOR" = cron ]; then
+		p=$(cronpid)
+		if [ -n "$p" ]; then echo "running:  pid $p (cron keepalive, $ROOT)"; else echo "running:  no (the keepalive starts it within a minute)"; fi
+		echo "last log: $(tail -n 1 "$STATE/nautilus.log" 2>/dev/null)"
+	else
+		systemctl show -p ActiveState -p SubState -p Type -p NRestarts -p StatusText -p ExecMainStartTimestamp "$UNIT"
+	fi
 	;;
 backup)
 	[ -f "$STATE/retain.json" ] || fail "no $STATE/retain.json yet (does the project have a retain: block?)"
@@ -238,7 +399,7 @@ restore)
 	[ "$from" = "$(target current)" ] || say "note: the backup was taken on release $from; current is $(target current)"
 	# Stopped first: the controller saves every 2 s and once more on
 	# its way out, and either would overwrite the restored file.
-	systemctl stop "$UNIT"
+	sv_stop
 	cp "$tmp/retain.json" "$STATE/retain.json"
 	chown "$(stat -c %u:%g "$STATE/")" "$STATE/retain.json"
 	rm -f "$STATE/retain.json.tmp"
@@ -251,6 +412,21 @@ restore)
 	fi
 	;;
 uninstall)
+	if [ "$SUPERVISOR" = cron ]; then
+		# Only what deploy made: ROOT itself stays, and so does a
+		# naut-launch in it (its capability takes root to set again).
+		sv_disable
+		sv_stop
+		rm -rf "${ROOT:?}/releases" "$ROOT/incoming" "$ROOT/current" "$ROOT/previous" "$ROOT/keepalive.sh" "$ROOT/nautilus.service.in"
+		rm -f "$HOME/.config/naut-deploy"
+		if [ "${1:-}" = -purge ]; then
+			rm -rf "$STATE"
+			say "uninstalled; retained values deleted"
+		else
+			say "uninstalled; retained values kept in $STATE"
+		fi
+		exit 0
+	fi
 	systemctl disable -q --now "$UNIT" 2>/dev/null || true
 	rm -f "$UNITDIR/$UNIT"
 	systemctl daemon-reload
