@@ -195,17 +195,28 @@ three rules:
 
 1. **Check before each send.** The gate is read immediately before every send: one request,
    one datagram or one frame. It is never read once per batch.
-2. **A send deadline.** The gate also reports `remaining()`, the time left on this replica's
-   lease. Each send runs with a deadline of `remaining() − d_net`. `d_net` is an assumed
-   one-way delivery bound for the plant network, 50 ms by default and set in the manifest. A
-   send whose deadline has already passed is not started.
+2. **A fence margin and a send deadline.** The gate closes a margin **before** the lease
+   expires, not at expiry: `IsLeader` is false once `remaining() < m_fence`.
+   - `m_fence = d_net + m_send`. `d_net` is an assumed one-way delivery bound for the plant
+     network, 50 ms by default. `m_send` bounds the gap between a send path's gate check and
+     its send system call under normal scheduling, 20 ms by default. Both are set in the
+     manifest.
+   - Each send also runs with a deadline of `remaining() − d_net`, and a send whose deadline
+     has passed is not started.
+   - **Why the margin is needed.** Any sender that checks and then sends can let one frame
+     through after the check (the PROFINET review of #790 confirmed it: at most one frame per
+     sending goroutine). With the margin, that frame still leaves while the lease is valid,
+     and it arrives before any voter's promise expires.
+   - The margin comes out of the time the leader may write. It is not added to takeover time.
 3. **Fencing closes sockets.** When the gate closes, every field socket with a write in flight
    or queued is closed with `SO_LINGER` 0. The close sends a reset and discards whatever was
    still in the kernel's send buffer.
 
-**The residual risk, stated.** A freeze that lands between the last deadline check and the
-send system call, or bytes already in a NIC queue or a switch, can reach a device up to
-`d_net` plus the freeze late. No user-space rule removes that window. The device's own comm
+**The residual risk, stated.** The margin covers ordinary scheduling delay between check and
+send. It does not cover a **freeze longer than `m_fence`** (a SIGSTOP, a long GC pause, a
+stalled host) that lands between the last check and the send system call. Then at most one
+frame per sending goroutine can reach a device late, by up to the freeze minus the margin.
+Bytes delayed in a NIC queue or a switch beyond `d_net` are the same case. No user-space rule removes that window. The device's own comm
 watchdog and the hardwired safety chain cover it (#725, "deliberately not built"). The test
 plan measures it with a pause hook in exactly that spot.
 

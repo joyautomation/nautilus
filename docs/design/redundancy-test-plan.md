@@ -124,6 +124,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | hot takeover with no image-age check | I5 | 4 |
 | the gate is checked once per batch, not before each send (as `hw/base.go` does today) | design §3.4 | 3 |
 | a send with no deadline | design §3.4 | 3 |
+| no fence margin (the gate closes at lease expiry) | design §3.4 | 3 |
 | no back-off after a lease lapses unconfirmed | design §3.1, one-way partitions | 2 |
 | grants accepted from any witness incarnation | design §3.1, the witness incarnation | 2 |
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
@@ -145,9 +146,12 @@ at three points:
 Each case sweeps pauses of 0.1, 0.5, 1 and 2 × lease, in T2 and T3:
 
 - **At points 1 and 2,** nothing may leave late (I3).
-- **At point 3,** the stated residual (design §3.4): a send can reach the device late. The case
-  is an expected one, and it measures the lateness, which must not exceed `d_net` plus the
-  pause. It is excluded from I1 by name.
+- **At point 3, with pauses shorter than `m_fence`,** nothing may leave late either: the fence
+  margin covers them (design §3.4). This is the case that proves the margin.
+- **At point 3, with pauses longer than `m_fence`,** the stated residual: at most **one frame
+  per sending goroutine** can reach the device late, by no more than the pause minus the
+  margin. The case is an expected one: it measures both the count and the lateness, and it is
+  excluded from I1 by name.
 
 ### 3.5 The same proofs on real processes (T3, T4)
 
