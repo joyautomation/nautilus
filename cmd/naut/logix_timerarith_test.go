@@ -45,6 +45,30 @@ const timerArithL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Tag Name="T2" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
 <Data Format="Decorated"><Structure DataType="TIMER"><DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="1000"/><DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/><DataValueMember Name="DN" DataType="BOOL" Value="0"/></Structure></Data>
 </Tag>
+<Tag Name="Echo3" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Echo4" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Echo5" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Echo6" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Neg" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="D4" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="T3" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><Structure DataType="TIMER"><DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="1000"/><DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/><DataValueMember Name="DN" DataType="BOOL" Value="0"/></Structure></Data>
+</Tag>
+<Tag Name="T4" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><Structure DataType="TIMER"><DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="1000"/><DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/><DataValueMember Name="DN" DataType="BOOL" Value="0"/></Structure></Data>
+</Tag>
 </Tags>
 <Programs>
 <Program Name="Main" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">
@@ -61,6 +85,29 @@ const timerArithL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Rung Number="6" Type="N"><Text><![CDATA[MOV(T2.ACC,Echo);]]></Text></Rung>
 <Rung Number="7" Type="N"><Text><![CDATA[MOV(250,T2.PRE);]]></Text></Rung>
 <Rung Number="8" Type="N"><Text><![CDATA[MOV(T2.PRE,Echo2);]]></Text></Rung>
+<Rung Number="9" Type="N"><Text><![CDATA[ADD(T2.ACC,100,T2.ACC);]]></Text></Rung>
+<Rung Number="10" Type="N"><Text><![CDATA[MOV(T2.ACC,Echo3);]]></Text></Rung>
+<Rung Number="11" Type="N"><Text><![CDATA[MOV(16#EE,T2.PRE);]]></Text></Rung>
+<Rung Number="12" Type="N"><Text><![CDATA[MOV(T2.PRE,Echo4);]]></Text></Rung>
+<Rung Number="13" Type="N"><Text><![CDATA[CPT(T2.PRE,Ms*2);]]></Text></Rung>
+<Rung Number="14" Type="N"><Text><![CDATA[MOV(T2.PRE,Echo5);]]></Text></Rung>
+<Rung Number="15" Type="N"><Text><![CDATA[CPT(T2.PRE,T1.ACC);]]></Text></Rung>
+<Rung Number="16" Type="N"><Text><![CDATA[MOV(T2.PRE,Echo6);]]></Text></Rung>
+<Rung Number="17" Type="N"><Text><![CDATA[NEG(T1.ACC,Neg);]]></Text></Rung>
+<Rung Number="18" Type="N"><Text><![CDATA[MOV(Ms,T1.ACC);]]></Text></Rung>
+<Rung Number="19" Type="N"><Text><![CDATA[XIC(go)MUL(Ms,2,T4.PRE)TON(T4,?,?);]]></Text></Rung>
+<Rung Number="20" Type="N"><Text><![CDATA[MOV(T4.PRE,D4);]]></Text></Rung>
+<Rung Number="22" Type="N"><Text><![CDATA[XIC(go)TON(T3,?,?);]]></Text></Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+<Program Name="Other" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">
+<Tags/>
+<Routines>
+<Routine Name="MainRoutine" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N"><Text><![CDATA[MOV(Ms,T3.PRE);]]></Text></Rung>
 </RLLContent>
 </Routine>
 </Routines>
@@ -68,7 +115,7 @@ const timerArithL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </Programs>
 <Tasks>
 <Task Name="MainTask" Type="PERIODIC" Rate="10" Priority="10" Watchdog="500">
-<ScheduledPrograms><ScheduledProgram Name="Main"/></ScheduledPrograms>
+<ScheduledPrograms><ScheduledProgram Name="Main"/><ScheduledProgram Name="Other"/></ScheduledPrograms>
 </Task>
 </Tasks>
 </Controller>
@@ -103,10 +150,26 @@ func TestLogixImportTimerMembersInArithmetic(t *testing.T) {
 		// Milliseconds into a timer's ACC or PRE (#793, the mirror case).
 		"{ T2.ET := DINT_TO_TIME(Ms) }",
 		"{ T2.PT := DINT_TO_TIME(250) }",
+		"{ T2.ET := DINT_TO_TIME(TIME_TO_DINT(T2.ET) + 100) }",
+		"{ T2.PT := DINT_TO_TIME(16#EE) }",
+		"{ T2.PT := DINT_TO_TIME(Ms * 2) }",
+		"{ T2.PT := DINT_TO_TIME(TIME_TO_DINT(T1.ET)) }",
+		"{ Neg := -TIME_TO_DINT(T1.ET) }",
+		// A preset the logic writes goes through its DINT preset variable.
+		"{ D4 := T4_PRE }",
+		// A write to a timer a TON runs would be lost: refused.
+		"// not imported (timer: T1.ACC: written while a TON/TOF runs T1",
 	} {
 		if !strings.Contains(ld, want) {
 			t.Errorf("Main.ld lacks %q:\n%s", want, ld)
 		}
+	}
+	other, err := os.ReadFile(filepath.Join(proj, "Other.ld"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(other), "// not imported") || !strings.Contains(string(other), "MOV(Ms,T3.PRE)") {
+		t.Errorf("a write to a timer another program runs is not refused:\n%s", other)
 	}
 	for _, args := range [][]string{{proj}, {"--target", "logix", proj}} {
 		if out, code := capture(t, func() int { return runCheck(args) }); code != 0 {
@@ -117,7 +180,7 @@ func TestLogixImportTimerMembersInArithmetic(t *testing.T) {
   - name: the timer's milliseconds, as the controller computes with them
     steps:
       - advance: 1s
-        expect: { Remain: { near: 4000, tol: 10 }, RemI: { near: 4000, tol: 10 }, Half: { near: 500, tol: 5 }, Secs: { near: 1.0, tol: 0.011 }, Echo: 750, Echo2: 250 }
+        expect: { Remain: { near: 4000, tol: 10 }, RemI: { near: 4000, tol: 10 }, Half: { near: 500, tol: 5 }, Secs: { near: 1.0, tol: 0.011 }, Echo: 750, Echo2: 250, Echo3: 850, Echo4: 238, Echo5: 1500, Echo6: { near: 1000, tol: 10 }, Neg: { near: -1000, tol: 10 }, D4: 1500 }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +197,7 @@ func TestLogixImportTimerMembersInArithmetic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"SUB(T1.PRE,T1.ACC,Remain);", "SUB(T1.PRE,T1.ACC,RemI);", "MUL(T1.ACC,0.001,Secs);", "DIV(T1.ACC,2,Half);", "MOVE(Ms,T2.ACC);", "MOVE(250,T2.PRE);"} {
+	for _, want := range []string{"SUB(T1.PRE,T1.ACC,Remain);", "SUB(T1.PRE,T1.ACC,RemI);", "MUL(T1.ACC,0.001,Secs);", "DIV(T1.ACC,2,Half);", "MOVE(Ms,T2.ACC);", "MOVE(250,T2.PRE);", "ADD(T2.ACC,100,T2.ACC);", "MOVE(16#EE,T2.PRE);", "MUL(Ms,2,T2.PRE);", "CPT(T2.PRE,T1.ACC);", "CPT(Neg,-T1.ACC);"} {
 		if !strings.Contains(string(written), want) {
 			t.Errorf("written back without %q", want)
 		}

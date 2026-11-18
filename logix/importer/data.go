@@ -62,7 +62,7 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 		if err := need(2); err != nil {
 			return "", err
 		}
-		a, err := rt.exprOperand(args[0])
+		a, err := rt.arithOperand(args[0])
 		if err != nil {
 			return "", err
 		}
@@ -71,7 +71,7 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 		if err := need(2); err != nil {
 			return "", err
 		}
-		a, err := rt.exprOperand(args[0])
+		a, err := rt.arithOperand(args[0])
 		if err != nil {
 			return "", err
 		}
@@ -106,6 +106,12 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 	t, err := rt.ref(target, "")
 	if err != nil {
 		return "", err
+	}
+	if timeMember(rt.operandType(target), t) && rt.im.timerRun[strings.ToLower(baseOf(target))] {
+		// nautilus's TON/TOF computes ET, and takes PT from its call, every
+		// scan: a write to either would be lost (#793). Logix lets a rung
+		// set ACC or PRE of a running timer.
+		return "", refuse("timer", "%s: written while a TON/TOF runs %s; nautilus's timer sets ET and PT itself every scan, so the write would be lost; give the preset through the call (PT :=), or rewrite the timing", target, baseOf(target))
 	}
 	if conv := rt.storeConversion(m, args, target, t); conv != "" {
 		value = conv + "(" + value + ")"
@@ -147,19 +153,20 @@ func (rt *routine) storeConversion(m string, args []string, target, rendered str
 	if dst == "TIME" {
 		// A timer's PRE that a TON/TOF runs on is written through its
 		// DINT preset variable (t_PRE). Any other timer member stays the
-		// TIME it is (.PT, .ET): a TIME source goes in as it is, and an
-		// integer, Logix's milliseconds, through <INT>_TO_TIME (#793).
-		up := strings.ToUpper(rendered)
-		if strings.HasSuffix(up, ".PT") || strings.HasSuffix(up, ".ET") {
-			if len(srcs) != 1 || m == "CPT" {
-				return ""
+		// TIME it is (.PT, .ET), and what goes in is Logix's milliseconds
+		// (#793): a TIME as it is, an integer through <INT>_TO_TIME, and
+		// arithmetic or a CPT (its timer operands already DINT
+		// milliseconds, arithOperand) through DINT_TO_TIME.
+		if timeMember("TIME", rendered) {
+			if m != "MOV" && m != "MOVE" {
+				return "DINT_TO_TIME"
 			}
-			switch t := rt.operandType(srcs[0]); {
+			switch t := rt.srcType(srcs[0]); {
 			case t == "TIME":
 				return ""
 			case intWidth[t] > 0:
 				return t + "_TO_TIME"
-			case t == "" && numLit.MatchString(srcs[0]) && !strings.ContainsAny(srcs[0], ".eE"):
+			case t == "" && intLiteral(srcs[0]):
 				return "DINT_TO_TIME"
 			}
 			return ""
@@ -171,14 +178,14 @@ func (rt *routine) storeConversion(m string, args []string, target, rendered str
 	}
 	from := ""
 	for _, a := range srcs {
-		t := rt.operandType(a)
+		t := rt.srcType(a)
 		if t == "" && numLit.MatchString(a) && !fitsInt(a, dst) {
 			// An integer literal the destination cannot hold is a DINT:
 			// MOV(70000,i) keeps the low 16 bits on the controller.
 			t = "DINT"
 		}
 		switch {
-		case t == "TIME" && (len(srcs) > 1 || m == "CPT"):
+		case t == "TIME" && m != "MOV" && m != "MOVE":
 			// In arithmetic a timer's ACC or PRE is already its DINT of
 			// milliseconds (arithOperand, #793).
 			if intWidth["DINT"] > intWidth[from] {
@@ -331,6 +338,25 @@ func (rt *routine) operandType(a string) string {
 		return up
 	}
 	return ""
+}
+
+// srcType is operandType as the operand renders: a timer's PRE that a
+// block runs on renders as its DINT preset variable (t_PRE), not the TIME
+// PT, so it is a DINT.
+func (rt *routine) srcType(a string) string {
+	t := rt.operandType(a)
+	if t == "TIME" {
+		if r, err := rt.exprOperand(a); err == nil && !timeMember(t, r) {
+			return "DINT"
+		}
+	}
+	return t
+}
+
+// intLiteral reports an integer literal: decimal, or base#digits (16#EE,
+// whose E is a digit, not an exponent).
+func intLiteral(a string) bool {
+	return numLit.MatchString(a) && (strings.Contains(a, "#") || !strings.ContainsAny(a, ".eE"))
 }
 
 // arithOperand is an arithmetic operand: a timer's ACC or PRE reads as
