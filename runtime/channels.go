@@ -83,11 +83,13 @@ type commHub struct {
 	finished map[int64]finishedReq
 
 	// gate is the runtime's write gate (Coordinator.IsLeader), nil when
-	// uncoordinated. gen counts leaderships: takeover bumps it. A write
-	// leaves only while the gate is open and under the leadership that
-	// posted it, so a replica that stepped down never drains its queue
-	// onto a peer the next leader is writing (see do).
+	// uncoordinated. term names the current leadership (Termed.Term), nil
+	// when the coordinator has none; gen is the fallback then: takeover
+	// bumps it. A write leaves only while the gate is open and under the
+	// leadership that posted it, so a replica that stepped down never
+	// drains its queue onto a peer the next leader is writing (see do).
 	gate func() bool
+	term func() uint64
 	gen  atomic.Uint64
 
 	stop     chan struct{}
@@ -107,7 +109,7 @@ type commWorker struct {
 
 type commReq struct {
 	ticket   int64
-	gen      uint64 // the leadership that posted it (commHub.gen)
+	lead     uint64 // the leadership that posted it (commHub.leadership)
 	write    bool
 	variable string
 	val      ir.Value
@@ -144,16 +146,30 @@ func newCommHub(chs []Channel) *commHub {
 	return h
 }
 
-// setGate makes every write wait on gate: false drops it as lost. Call
-// before the first post.
-func (h *commHub) setGate(gate func() bool) {
+// setGate makes every write wait on gate: false drops it as lost. term,
+// when not nil, names the leadership (Termed.Term): a write posted under
+// another term is dropped too. Call before the first post.
+func (h *commHub) setGate(gate func() bool, term func() uint64) {
 	if h != nil {
-		h.gate = gate
+		h.gate, h.term = gate, term
 	}
+}
+
+// leadership names the current leadership: the coordinator's term when it
+// has one, else the count of takeovers (newLeadership). The term moves the
+// moment a new lease is won, before the runtime's takeover runs (it waits
+// for the next scan and for live inputs), so a write queued in the old
+// term cannot slip out in that window.
+func (h *commHub) leadership() uint64 {
+	if h.term != nil {
+		return h.term()
+	}
+	return h.gen.Load()
 }
 
 // newLeadership marks a takeover: writes posted before it are dropped as
 // lost instead of sent, since the leadership that computed them is over.
+// With a term (setGate) it is redundant, and harmless.
 func (h *commHub) newLeadership() {
 	if h != nil {
 		h.gen.Add(1)
@@ -217,7 +233,7 @@ func (h *commHub) serve(w *commWorker) {
 // may have stepped down. Reads are not gated; they change nothing on the
 // peer.
 func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
-	if req.write && (req.gen != h.gen.Load() || h.gate != nil && !h.gate()) {
+	if req.write && (req.lead != h.leadership() || h.gate != nil && !h.gate()) {
 		return ir.CommResult{Status: ir.CommLost}
 	}
 	ctx, cancel := context.WithTimeout(h.base, w.timeout)
@@ -263,7 +279,7 @@ func (h *commHub) post(channel string, write bool, variable string, v ir.Value, 
 	}
 	ticket := h.next.Add(1)
 	select {
-	case w.q <- commReq{ticket: ticket, gen: h.gen.Load(), write: write, variable: variable, val: v, elem: elem}:
+	case w.q <- commReq{ticket: ticket, lead: h.leadership(), write: write, variable: variable, val: v, elem: elem}:
 		h.inflight[ticket] = struct{}{}
 		return ticket, ir.CommOK
 	default:

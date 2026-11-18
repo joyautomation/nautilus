@@ -524,7 +524,11 @@ func New(o Options) (*Runtime, error) {
 	if len(o.Channels) > 0 {
 		tags.comm = newCommHub(o.Channels)
 		if o.Coordinator != nil {
-			tags.comm.setGate(o.Coordinator.IsLeader)
+			var term func() uint64
+			if t, ok := o.Coordinator.(Termed); ok {
+				term = t.Term
+			}
+			tags.comm.setGate(o.Coordinator.IsLeader, term)
 		}
 	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))

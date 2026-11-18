@@ -183,13 +183,19 @@ never computes.
   the hours it spent standing by. Process state is deliberately **not**
   replicated — configuration travels through the retain store, process
   state re-derives from the field.
-- **A `READ`/`WRITE` channel write leaves only from the leader that
+- **A `READ`/`WRITE` channel write leaves only from the leadership that
   posted it.** Each channel sends its requests one at a time, so a write
   can wait seconds behind another. It is checked against the write gate
-  and the leadership right before it is sent. A write still queued when
-  its replica steps down or loses the lease, or queued under a leadership
-  that has since ended, is dropped. The block sees `STATUS` -6 (lost), the
-  same as a restart. Reads are not gated.
+  and the leadership (the lease's term) at the moment it is sent, not
+  when it was posted:
+  - if its turn comes while the gate is closed, it is dropped;
+  - if it was posted in an earlier term, it is dropped, even with the
+    gate open again: another replica may have led in between;
+  - if the gate closed and reopened in the same term (a stalled scan that
+    resumed, with nobody else leading), a write still waiting is sent.
+
+  A dropped write ends with `ERROR` and `STATUS` -6 (lost), as on a
+  restart. Reads are not gated.
 - **A replica that takes over from standby sends every output once**
   through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers,
   with the program's value, changed or not: the runtime hands the

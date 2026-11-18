@@ -496,7 +496,7 @@ func TestQueuedWriteDroppedWhenGateCloses(t *testing.T) {
 	h := newCommHub([]Channel{{Name: "peer", Channel: f}})
 	var leading atomicBool
 	leading.set(true)
-	h.setGate(leading.get)
+	h.setGate(leading.get, nil)
 	defer h.close()
 
 	t1, st := h.PostWrite("peer", "A", ir.IntVal(1), "DINT")
@@ -526,7 +526,7 @@ func TestQueuedWriteDroppedWhenGateCloses(t *testing.T) {
 func TestQueuedWriteDroppedAcrossTakeover(t *testing.T) {
 	f := newFakeChannel()
 	h := newCommHub([]Channel{{Name: "peer", Channel: f}})
-	h.setGate(func() bool { return true })
+	h.setGate(func() bool { return true }, nil)
 	defer h.close()
 
 	t1, _ := h.PostWrite("peer", "A", ir.IntVal(1), "DINT")
