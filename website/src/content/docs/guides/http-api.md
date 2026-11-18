@@ -64,12 +64,27 @@ where marked `…`.
   {"error":"no such API endpoint: GET /api/tags"}
   ```
 
-- **CORS is open.** Every response carries
-  `Access-Control-Allow-Origin: *`. An `OPTIONS` preflight answers `204`
-  and allows the methods `GET, POST, PUT, DELETE, OPTIONS` and the headers
-  `Content-Type, Authorization, X-Nautilus-Token`. A browser page on
-  another origin can read freely. Whether it can write is decided by the
-  next section.
+- **CORS is for this machine and the controller's own names.** A browser
+  page on another origin can read the API only when it cannot be someone
+  else's site: a page on this machine (`http://localhost:5173`, any
+  loopback address, any port), the controller's own address on another
+  port (`http://192.168.1.10:3000` calling `192.168.1.10:8080`), a name in
+  `NAUTILUS_ALLOWED_HOSTS`, or, with a token configured, a request that
+  carries the token. For those the response echoes the page's origin in
+  `Access-Control-Allow-Origin` (with `Vary: Origin`); every other site
+  gets no CORS header, so its page cannot read the tags, the alarms, the
+  history or the program source. An `OPTIONS` preflight answers `204` and,
+  for the same origins (any origin when a token is configured), allows the
+  methods `GET, POST, PUT, DELETE, OPTIONS` and the headers `Content-Type,
+  Authorization, X-Nautilus-Token`. Whether a page can write is decided by
+  the next section. A screen served by the controller itself, the HMI dev
+  servers (their proxy presents the controller's origin), scripts and the
+  VS Code extension need none of this. A screen served from another host
+  must be at a name in `NAUTILUS_ALLOWED_HOSTS` to show live values: the
+  live stream (`GET /api/stream`) is an `EventSource`, which cannot send a
+  header, so the token cannot open it across origins. A token lets that
+  screen's own `fetch` reads and writes through, not its stream. (There is
+  deliberately no token in the query string: URLs end up in logs.)
 
 ## Authentication
 
@@ -240,7 +255,6 @@ curl -sN 'localhost:8080/api/stream?tags=Level,PumpRun'
 ```
 ```text
 HTTP/1.1 200 OK
-Access-Control-Allow-Origin: *
 Cache-Control: no-cache
 Connection: keep-alive
 Content-Type: text/event-stream

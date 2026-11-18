@@ -646,7 +646,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /assets/", handleAsset)
 		mux.HandleFunc("GET /", s.handleIndex)
 	}
-	return withCORS(s.proxyStandby(apiNotFound(mux)))
+	return s.withCORS(s.proxyStandby(apiNotFound(mux)))
 }
 
 // apiNotFound makes every /api/ path no API route matches a JSON 404,
@@ -826,25 +826,63 @@ func (s *Server) awaitLeaderChange(ctx context.Context, old string) (addr string
 	}
 }
 
-// withCORS allows browser HMIs served from another origin (e.g. a Vite dev
-// server) to call the API. The controller API carries no credentials, so a
-// wildcard is appropriate; put a real gateway in front for anything exposed
-// beyond the machine/plant network.
-func withCORS(next http.Handler) http.Handler {
+// withCORS lets a browser page on another origin read (and, with a token,
+// write) the API only when that page cannot be someone else's site (#815):
+// a page on this machine (a loopback origin, any port: a dev server), the
+// controller's own host on another port (when that host is one #811
+// trusts), a name in AllowedHosts, or a request that carries the token. It
+// echoes that Origin, with Vary: Origin, and sends nothing for any other,
+// so a website the operator happens to have open cannot read the tags,
+// the alarms, the history or the program source. It once sent "*".
+//
+// A preflight (OPTIONS) reads nothing; with a token configured it is
+// answered for any origin, so an authorized cross-origin client can send
+// its token header, and the real request is then judged as above.
+func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		// Always: a cache must not hand one origin's answer (with or
+		// without the CORS header) to another.
+		w.Header().Add("Vary", "Origin")
 		if r.Method == http.MethodOptions {
-			// Every method a route below answers: PUT is the online-edit
-			// push (PUT /api/program), DELETE the per-tag unforce.
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			// Allow the auth headers so an authorized cross-origin writer's
-			// preflight succeeds; Content-Type for JSON bodies.
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
+			if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "") {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				// Every method a route below answers: PUT is the online-edit
+				// push (PUT /api/program), DELETE the per-tag unforce.
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				// The auth headers, so an authorized cross-origin writer's
+				// preflight succeeds; Content-Type for JSON bodies.
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "" && tokenMatches(r, s.authToken)) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// corsOrigin reports a browser Origin whose page may read the API across
+// origins without a token: loopback, this controller's own (trusted) host,
+// or an allowed name. Any port.
+func (s *Server) corsOrigin(r *http.Request, origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false // "null" (a sandboxed frame, a file), or garbage
+	}
+	oh := strings.ToLower(hostOnly(u.Host))
+	if oh == "localhost" || strings.HasSuffix(oh, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(oh); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	if s.allowHosts[oh] {
+		return true
+	}
+	return oh == strings.ToLower(hostOnly(r.Host)) && s.trustedHost(r.Host)
 }
 
 // handleIndex serves the landing page at exactly "/". Because "GET /" is

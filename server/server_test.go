@@ -247,6 +247,71 @@ func TestWriteAuthRefusesARebindableHost(t *testing.T) {
 	}
 }
 
+// #815: a browser page on another site cannot read the API: the server
+// echoes Access-Control-Allow-Origin (with Vary: Origin) only for a page
+// on this machine, the controller's own trusted host on another port, an
+// allowed name, or a request with the token. It once sent "*".
+func TestCORSAllowsOnlyOriginsThatCannotBeAnotherSite(t *testing.T) {
+	get := func(srv *Server, method, path, host, origin, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "http://"+host+path, nil)
+		req.Host = host
+		req.Header.Set("Origin", origin)
+		if token != "" {
+			req.Header.Set("X-Nautilus-Token", token)
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	open := New(newTestRuntime(t), Options{AllowedHosts: []string{"hmi.plant.lan"}})
+	for _, tc := range []struct {
+		what, method, path, host, origin string
+		echo                             bool
+	}{
+		{"a website reading tags", "GET", "/api/state", "localhost:8080", "https://evil.example", false},
+		{"a website reading the program source", "GET", "/api/program", "192.168.1.10:8080", "https://evil.example", false},
+		{"a website on another IP", "GET", "/api/state", "192.168.1.10:8080", "http://203.0.113.7", false},
+		{"a sandboxed frame", "GET", "/api/state", "localhost:8080", "null", false},
+		{"a website preflighting a write", "OPTIONS", "/api/tags", "localhost:8080", "https://evil.example", false},
+		{"a rebound name", "GET", "/api/state", "evil.example:8080", "http://evil.example:3000", false},
+		{"a name that starts with localhost", "GET", "/api/state", "localhost:8080", "http://localhost.evil.com", false},
+		{"a name that resolves to loopback", "GET", "/api/state", "localhost:8080", "http://127.0.0.1.nip.io", false},
+		{"a dev server on this machine", "GET", "/api/state", "localhost:8080", "http://localhost:5173", true},
+		{"a dev server by 127.0.0.1", "GET", "/api/state", "192.168.1.10:8080", "http://127.0.0.1:5173", true},
+		{"the controller's own address, another port", "GET", "/api/state", "192.168.1.10:8080", "http://192.168.1.10:3000", true},
+		{"an allowed name", "GET", "/api/state", "192.168.1.10:8080", "https://hmi.plant.lan", true},
+		{"a dev server's preflight", "OPTIONS", "/api/tags", "localhost:8080", "http://localhost:5173", true},
+	} {
+		rec := get(open, tc.method, tc.path, tc.host, tc.origin, "")
+		got := rec.Header().Get("Access-Control-Allow-Origin")
+		if tc.echo && got != tc.origin || !tc.echo && got != "" {
+			t.Errorf("%s (Origin %s): Access-Control-Allow-Origin %q, echo want %v", tc.what, tc.origin, got, tc.echo)
+		}
+		if rec.Header().Get("Vary") != "Origin" {
+			t.Errorf("%s: Vary %q, want Origin", tc.what, rec.Header().Get("Vary"))
+		}
+	}
+	// Vary: Origin is sent with or without an Origin, so a cache keeps
+	// one origin's answer from another.
+	if v := get(open, "GET", "/api/state", "localhost:8080", "", "").Header().Get("Vary"); v != "Origin" {
+		t.Errorf("no-Origin request: Vary %q, want Origin", v)
+	}
+	// With a token configured: a request carrying it may read from any
+	// origin (the authorized cross-origin client), and its preflight is
+	// answered so it can send the token header; without the token, still
+	// nothing.
+	locked := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	if got := get(locked, "GET", "/api/state", "localhost:8080", "https://hmi.cloud.example", "s3cret").Header().Get("Access-Control-Allow-Origin"); got != "https://hmi.cloud.example" {
+		t.Errorf("token reader: %q", got)
+	}
+	if got := get(locked, "GET", "/api/state", "localhost:8080", "https://evil.example", "").Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("tokenless reader on a token controller: %q", got)
+	}
+	if got := get(locked, "OPTIONS", "/api/tags", "localhost:8080", "https://hmi.cloud.example", "").Header().Get("Access-Control-Allow-Origin"); got != "https://hmi.cloud.example" {
+		t.Errorf("preflight on a token controller: %q", got)
+	}
+}
+
 func TestWriteAuthToken(t *testing.T) {
 	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
 	post := func(setup func(*http.Request)) int {
@@ -307,8 +372,10 @@ func TestLandingPage(t *testing.T) {
 func TestCORSPreflight(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("OPTIONS", "/api/tags", nil))
-	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+	req := httptest.NewRequest("OPTIONS", "/api/tags", nil)
+	req.Header.Set("Origin", "http://localhost:5173") // a dev server on this machine
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
 		t.Errorf("preflight: code=%d headers=%v", rec.Code, rec.Header())
 	}
 }
@@ -383,7 +450,7 @@ func TestCORSPreflightAllowsEveryMethodTheAPIServes(t *testing.T) {
 		{"DELETE", "/api/forces/Level"},
 	} {
 		rec := call(t, srv, "OPTIONS", tc.path, "", func(r *http.Request) {
-			r.Header.Set("Origin", "http://hmi.example.test")
+			r.Header.Set("Origin", "http://localhost:5173")
 			r.Header.Set("Access-Control-Request-Method", tc.method)
 		})
 		if rec.Code != http.StatusNoContent {
