@@ -50,4 +50,23 @@ Definitions (the same ones `runtime.Lateness` uses):
   (an overrun, a stall): scans that should have run and did not. `ran / due`
   in the table is the same fact from the outside.
 
+**The run guard** (`guard.go`, #836). jitter puts real-time load on a box,
+and stops when the box cannot keep up:
+
+- **Triggers:** the fast task makes no scan for 2 s, a task's priority is
+  withdrawn mid-run (the runtime's priority watchdog or the kernel's CPU
+  limit), or the run goes past 1.5 × `-duration` + 10 s.
+- **What happens:** the report is marked `INVALID` and jitter exits 3. If
+  the scan loops don't end within 2 s of the stop, jitter exits at once,
+  without a report.
+- **The backstop:** a kernel timer armed at start (`timer_create`, SIGKILL)
+  ends the process 20 s after the deadline, whatever its threads are doing.
+
+The first trigger is what the runtime's own watchdogs do not see. A task
+that never gets to run is neither overrunning nor stuck in a scan, and
+that is what happened on the PLCnext.
+
+A placement asked for and not held to the end also marks the report
+`INVALID`.
+
 Stdlib only, like the runtime it measures.
