@@ -5,7 +5,7 @@ half (§2, §3) waits on the open questions in §6.
 Issues: #708 (users, roles, sign-in), #709 (the runtime audit journal). Part of #725.
 Context: **Operator surface**, with two new packages, `audit` and `auth`.
 Builds on the browser-security set (#812, #818, #826, #846, #849) and on the audit record that
-[redundancy.md](redundancy.md) §7.1 shapes for #709 (#787).
+#787's redundancy design (`docs/design/redundancy.md` §7.1, in review) shapes for #709.
 
 ---
 
@@ -40,7 +40,7 @@ With no `auth:` block, permissions don't change; `naut run` only starts journall
 **Nothing records runtime actions.**
 
 **Changes:**
-- **New packages:** `audit` (standard library only, like `alarm`) and `auth`, plus `auth/oidc` for the OIDC libraries.
+- **New packages:** `audit` (standard library only) and `auth`, plus `auth/oidc` for the OIDC libraries.
 - **`server`** composes them.
 - **Other surfaces** (the OPC UA server, the Sparkplug edge, the Logix and Siemens facades) are handed a principal and a record function. They don't import `server`.
 - **[context-map.md](context-map.md)** lists both packages under Operator surface, and `internal/contextmap` gains their import rules with the packages.
@@ -190,12 +190,13 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 
 **Where it lives:**
 - **For `naut run`, always:** an append-only JSONL file in `audit/` under the controller's working directory (as `retain.json` defaults there), or at `audit.path`.
-  - Each entry is fsynced before the action is answered.
-  - Files rotate daily and by size.
-  - A torn last line is dropped on open, as in `oplog`.
+  - Each entry is fsynced before the action is answered. Entries are numbered `seq` 1, 2, 3, … per controller, across files, restarts and pruning.
+  - **A failed write is cut back.** If the write or the fsync fails, the file is cut back to its last complete line, so a failed entry never leaves a line the next one would chain past. If the cut-back fails too, the journal refuses until it is reopened.
+  - **Files follow write order.** Files rotate daily and by size. A file's day is never earlier than the one before it, so entries out of time order (across midnight, or after the clock steps back) stay in write order.
+  - **A torn tail is cut and recorded.** On open, bytes after the last newline (a crash mid-write) are cut off, and the cut is recorded as an `audit.tail_dropped` entry with the length and hash. A complete line is never removed.
   - An in-memory ring serves the recent view, as the alarm journal's does.
 - **Optional:** a Postgres sink (`audit.sink: postgres`, the historian's DSN by default) for queries, screens and export.
-  - It **tails the files** with a cursor (the last `id` applied, kept in Postgres), so it catches up from the local file after any outage.
+  - It **tails the files** with a cursor kept in Postgres: the file and byte offset of the last line applied, with its `seq` as a check, so it catches up from the local file after any outage. Not by `id`: a ULID is wall-clock and random within a millisecond, so ordering by it would skip entries.
   - The file is the source of truth; Postgres is a copy.
 - **With redundancy (#710):** entries go through `oplog`, so both controllers hold the same history. #787's override records are written locally first, then to `oplog` when quorum returns; that path is kept as is.
   - **One entry per action, on the leader.** A write the standby proxies is journalled once, by the leader that applies it. `from` is the client's address (the standby's proxy adds it, and the leader believes it only from an authenticated peer), and `detail.via` names the standby.
@@ -203,17 +204,37 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 
 **When the journal can't be written** (disk full, read-only filesystem), the action and the entry must not part ways silently.
 - Proposed: elevated actions (force, edit, activate, deploy, config, users, override) are **refused** (503, "audit journal unwritable").
-- Operator actions (write, ack, sfc) are **allowed, and an "audit journal unwritable" system alarm is raised**, so a full disk can't stop an operator running the plant. The entries are kept in the ring and flushed when the file can be written again.
+- Operator actions (write, ack, sfc) are **allowed, and an "audit journal unwritable" system alarm is raised**, so a full disk can't stop an operator running the plant. A failed entry leaves nothing in the file (it is cut back), so the server's recording seam keeps it in the ring and records it again, with the same `id`, when the file can be written.
 - This is question 5 (§6).
 
 **Flooding:** an unauthenticated client could force an fsynced entry per refused request. Refusals are coalesced per (source address, action): the first few in a minute are written in full, the rest as one `refused ×n` summary entry. Accepted actions are never coalesced.
 
-**Retention:** `audit.keep` (default 365 days) and `audit.max-size`, for small flash. Pruning the oldest file writes an `audit.prune` entry carrying the pruned file's last hash, so `verify` knows where the chain legitimately begins.
+**Retention:** `audit.keep` (default 365 days) and `audit.max-size`, for small flash. Pruning the oldest file writes an `audit.prune` entry carrying the pruned file's last hash and `seq`, so `verify` knows where the chain legitimately begins.
 
-**Tamper evidence**, always on since it is cheap:
-- Each line carries `prev`, the SHA-256 of the previous line's bytes. A rotated file's first line chains to the last line of the file before it.
-- `naut audit verify [dir]` walks the chain and reports the first break: an edited or deleted line, or a missing file.
-- **What it doesn't stop:** someone with root who rewrites the whole tail and recomputes the chain. The answer is an **external anchor**: the head hash goes to the Postgres sink (when configured), and to the peer once #710 runs. `verify` compares against an anchor when it has one. The guide states this boundary plainly rather than claiming more.
+**Tamper evidence.** Proposed always on, since it is cheap; that is question 8 (§6).
+- Each line carries `prev`, the SHA-256 of the previous line's bytes, and `seq`. A rotated file's first line chains to the last line of the file before it.
+- `naut audit verify [dir]` walks the chain and reports the first break: an edited, removed, inserted or moved line, a seq gap, a missing file, or a start no prune record explains. It also lists every recorded tail cut.
+
+**What a single controller without an anchor can and can't prove.**
+- **Can:** that the journal is internally consistent. That catches accidental damage (a bad disk, a botched copy, a crash) and any edit made without recomputing the chain.
+- **Can't: anything against someone who can write the journal's files**, which includes the controller's own service user, not only root. They can cut lines off the end, delete files and append a forged `audit.prune` line, or rewrite everything with a recomputed chain, and `verify` still passes. A probe in review did exactly that.
+- **So on its own the journal is a record, not proof.** The guide says so in those words.
+
+**The anchor.** Proof needs the head kept somewhere the controller's service user can't rewrite.
+- **What it is:** the head's `seq` and hash, the controller's name and the time, published:
+  - every `audit.anchor-every` (default 5 min, and only when the head has moved);
+  - and on every `audit.prune`.
+- **Where it goes:** any of these the deployment has.
+  - **The Postgres sink** (a table the sink writes, under a role the controller's service user doesn't hold).
+  - **The redundancy peer** (through `oplog` once #710 runs: each controller keeps the other's anchors).
+  - **An MQTT/Sparkplug message** to the SCADA or historian, which keeps it.
+  - **A file the historian keeps.**
+  - Each is a later PR. The first is the Postgres sink's, since it's the one copy already planned.
+- **What `verify` checks against an anchor:**
+  - the line with that `seq` exists, and its hash matches;
+  - the head's `seq` is at least the anchor's.
+  - So cutting lines off the end, deleting files, forging a prune record or rewriting the chain is caught back to the last anchor. Only what happened after it, at most one interval, rests on the file alone.
+- **On the command line:** `naut audit verify --anchor <source>` reads anchors from Postgres or a file.
 
 **What is audited:** every action that changes something, exactly one entry each, accepted **and refused**.
 
@@ -249,12 +270,12 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 6. **OIDC**, against Keycloak in CI.
 7. **HMI kit:** sign-in, role-aware controls, the elevation prompt, `AuditTable`.
 8. **Other surfaces**, each coordinated with the work already in that area:
-   - **OPC UA server:** UserName tokens checked against local users. This is `opcua-server-writes.md` slice 4; the maintainer decided on 2026-10-31 that UserName tokens come "when a site needs per-person audit", which is now.
+   - **OPC UA server:** UserName tokens checked against local users. This is `opcua-server-writes.md` slice 4; the maintainer decided on 2026-10-31 that UserName tokens come "when a site needs per-person audit". Proposed: this is that point. That is question 9 (§6).
    - **Sparkplug commands:** run as principal `sparkplug:<host>`, with an allowed-actions list.
    - **#707 suppress:** journalled with whoever builds #707.
    - **`oplog` integration:** with #710's pair.
    - **Keycloak in CI** (PR 6): a CI job of its own.
-9. **Postgres audit sink** with catch-up.
+9. **Postgres audit sink** with catch-up (file and offset cursor), and the first anchor: the head's `seq` and hash published to it, and `naut audit verify --anchor`.
 10. **Demo** for the #725 checkpoint. What it must prove is question 7, and it isn't scripted before that's answered.
 
 The redundancy hooks (sessions and entries through `oplog`) land with #710's pair, not before.
@@ -268,3 +289,5 @@ The redundancy hooks (sessions and entries through `oplog`) land with #710's pai
 5. **When the journal can't be written:** refuse elevated actions, and allow operator actions with an alarm, as proposed? Or refuse everything, or allow everything?
 6. **TLS:** is `server.tls` with operator-supplied certificate files plus `trusted-proxies` the right v1? Is refusing password sign-in over plain HTTP from anywhere but loopback acceptable?
 7. **The demo** for the #725 checkpoint: what must it prove, and to whom?
+8. **The hash chain always on**, with anchors published to whatever the deployment has (§4), as proposed? Or optional?
+9. **OPC UA UserName tokens now**, as part of #708 (slice 4 of the OPC UA server's writes), as proposed? Or later?
