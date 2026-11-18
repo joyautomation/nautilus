@@ -194,11 +194,12 @@ func TestComputedPresetInsideAnAddOnInstruction(t *testing.T) {
 
 // A REAL source (seconds as a REAL) into a timer's PRE comes across as
 // the assignment into the DINT preset variable, as MUL(secs,1000,n) into
-// any DINT does, and loads and writes back.
+// any DINT does: with the REAL_TO_DINT the box's store makes (#777; a bare
+// REAL into a DINT fails naut check), and loads and writes back as the MUL.
 func TestComputedPresetFromAReal(t *testing.T) {
 	p := mustImport(t, miniL5X([]string{"go:BOOL", "secs:REAL", "t:TIMER=5000"}, "XIC(go)MUL(secs,1000,t.PRE)TON(t,?,?);"))
 	src := string(p.Files["Main.ld"])
-	if !strings.Contains(src, "go { t_PRE := secs * 1000 } t:TON(PT := TO_TIME(t_PRE))") {
+	if !strings.Contains(src, "go { t_PRE := REAL_TO_DINT(secs * 1000) } t:TON(PT := TO_TIME(t_PRE))") {
 		t.Errorf("import:\n%s", src)
 	}
 	fsys := fstest.MapFS{}
@@ -208,7 +209,11 @@ func TestComputedPresetFromAReal(t *testing.T) {
 	if _, err := project.Load(fsys, ""); err != nil {
 		t.Fatalf("does not load: %v", err)
 	}
-	if _, diags, err := writer.Write(src, writer.Options{Controller: "Mini"}); err != nil || len(diags) > 0 {
+	out, diags, err := writer.Write(src, writer.Options{Controller: "Mini"})
+	if err != nil || len(diags) > 0 {
 		t.Fatalf("write-back: %v %v", err, diags)
+	}
+	if !strings.Contains(string(out), "XIC(go)MUL(secs,1000,t_PRE)TON(t,?,?);") {
+		t.Errorf("write-back lacks the MUL:\n%s", out)
 	}
 }

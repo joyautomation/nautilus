@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
 )
@@ -175,6 +176,11 @@ func (c *rungCtx) assign(e ld.Element) ([]string, bool) {
 			c.lw.diag(ruleDataOp, c.r.Line, c.r.Name, "{ %s := %s }: a comparison or boolean operator in an assignment has no Logix data instruction; drive the BOOL with a coil", a.Target, a.Value.IEC())
 			return nil, false
 		}
+		// A conversion that is the whole right-hand side, into a tag of
+		// its own type, is the store a data box makes anyway (#777).
+		if inner, ok := c.storeConversion(a); ok {
+			a.Value = inner
+		}
 		if c.realQuotient(a.Target, a.Value.IEC()) {
 			c.lw.diag(ruleConversion, c.r.Line, c.r.Name, "{ %s := %s }: %s", a.Target, a.Value.IEC(), realQuotientMsg)
 			return nil, false
@@ -211,6 +217,46 @@ func (c *rungCtx) assign(e ld.Element) ([]string, bool) {
 		out = append(out, texts...)
 	}
 	return out, true
+}
+
+// storeConversion reads `{ y := X_TO_Y(v) }` as `{ y := v }` when the
+// conversion is the one a Logix data box makes as it stores into y, so the
+// box (MOV, MUL, CPT, …) computes nautilus's value with no conversion of
+// its own (#777):
+//
+//	REAL → SINT/INT/DINT   the store rounds halves to even, as nautilus
+//	                       does (verified on a v38 controller; convert.go)
+//	DINT/INT → INT/SINT    the store keeps the low bits, which is
+//	                       nautilus's wrap (Logix's documented integer
+//	                       conversion; not yet run on a controller)
+//
+// Only from a source of the conversion's own type: an LREAL, or a source
+// the writer cannot type, keeps the conversion, which is then refused.
+func (c *rungCtx) storeConversion(a ld.Assignment) (ld.Expr, bool) {
+	call, ok := a.Value.(*ld.Call)
+	if !ok || len(call.Args) != 1 {
+		return nil, false
+	}
+	from, to, trunc, ok := splitConversion(call.Name)
+	if !ok || trunc || from == "" || !ir.IsConversion(call.Name) {
+		return nil, false
+	}
+	from, to = strings.ToUpper(from), strings.ToUpper(to)
+	w := &stWriter{lw: c.lw}
+	t := parseSTExpr(a.Target)
+	arg := parseSTExpr(call.Args[0].IEC())
+	if t == nil || arg == nil || w.typeOf(t) != to {
+		return nil, false
+	}
+	at := w.typeOf(arg)
+	switch {
+	case from == "REAL" && at == "REAL" && (to == "SINT" || to == "INT" || to == "DINT"):
+		return call.Args[0], true
+	case isConvInt(from) && isConvInt(to) && from != "TIME" && to != "TIME" &&
+		convWidth[from] > convWidth[to] && (at == from || at == anyInt):
+		return call.Args[0], true
+	}
+	return nil, false
 }
 
 // cpt lowers an assignment whose value is a whole expression.

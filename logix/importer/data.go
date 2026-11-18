@@ -106,8 +106,111 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 	if err != nil {
 		return "", err
 	}
+	if conv := rt.storeConversion(m, args, target); conv != "" {
+		value = conv + "(" + value + ")"
+	}
 	rt.markWritten(target)
 	return "{ " + t + " := " + value + " }", nil
+}
+
+// storeConversion is the IEC conversion a data box's store makes, or ""
+// when it makes none nautilus would not make too (#777). A Logix box
+// converts as it stores: a REAL result into an integer rounds, halves to
+// even (REAL_TO_INT); an integer result into a narrower integer keeps the
+// low bits (DINT_TO_INT, which wraps). nautilus refuses the first as a
+// bare assignment and does not narrow the second, so the import writes the
+// conversion; the writer folds it back into the box. The result's type is
+// REAL when an operand is, else the widest operand that names a tag (an
+// integer literal is read at the destination's width).
+func (rt *routine) storeConversion(m string, args []string, target string) string {
+	var srcs []string
+	switch m {
+	case "MOVE", "MOV", "NEG", "ABS":
+		srcs = args[:1]
+	case "ADD", "SUB", "MUL", "DIV", "MOD":
+		srcs = args[:2]
+	default:
+		return ""
+	}
+	dst := rt.operandType(target)
+	if intWidth[dst] == 0 {
+		return ""
+	}
+	from := ""
+	for _, a := range srcs {
+		t := rt.operandType(a)
+		switch {
+		case t == "LREAL" || from == "LREAL":
+			from = "LREAL"
+		case t == "REAL" || from == "REAL":
+			from = "REAL"
+		case intWidth[t] > intWidth[from]:
+			from = t
+		}
+	}
+	if from == "REAL" || from == "LREAL" || intWidth[from] > intWidth[dst] {
+		return from + "_TO_" + dst
+	}
+	return ""
+}
+
+// intWidth is a Logix integer type's width, for which way a store narrows.
+var intWidth = map[string]int{"SINT": 8, "INT": 16, "DINT": 32, "LINT": 64}
+
+// operandType is the Logix elementary type an operand reads as: a
+// literal's (REAL when it has a point or an exponent, "" for an integer,
+// which takes the width it is stored at), or the type a tag reference
+// reaches through its indexes, members and bits. "" when it is not an
+// elementary value or cannot be told.
+func (rt *routine) operandType(a string) string {
+	a = strings.TrimSpace(a)
+	if numLit.MatchString(a) {
+		if !strings.Contains(a, "#") && strings.ContainsAny(a, ".eE") {
+			return "REAL"
+		}
+		return ""
+	}
+	f := rt.sc.lookup(baseOf(a))
+	if f == nil || f.alias != nil {
+		return ""
+	}
+	dtype, dims, rest := f.dtype, f.dims, a[len(baseOf(a)):]
+	for rest != "" {
+		switch rest[0] {
+		case '[':
+			j := strings.IndexByte(rest, ']')
+			if j < 0 || dims == "" {
+				return ""
+			}
+			dims, rest = "", rest[j+1:]
+		case '.':
+			j := 1
+			for j < len(rest) && rest[j] != '.' && rest[j] != '[' {
+				j++
+			}
+			name := rest[1:j]
+			rest = rest[j:]
+			if name != "" && name[0] >= '0' && name[0] <= '9' {
+				dtype, dims = "BOOL", "" // a bit of an integer
+				continue
+			}
+			dt, dm, ok := rt.im.memberType(dtype, name)
+			if !ok {
+				return ""
+			}
+			dtype, dims = dt, dm
+		default:
+			return ""
+		}
+	}
+	if dims != "" {
+		return ""
+	}
+	up := strings.ToUpper(dtype)
+	if up == "REAL" || up == "LREAL" || intWidth[up] > 0 {
+		return up
+	}
+	return ""
 }
 
 // exprOperand renders one instruction operand: a literal as is, a
