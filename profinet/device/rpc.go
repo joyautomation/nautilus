@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/profinet/wire"
@@ -122,6 +123,11 @@ func (d *Device) rpcLoop(ctx context.Context, conn net.PacketConn) {
 	}
 }
 
+// rpcTestHook, when set (tests only), runs inside the device lock before
+// each PNIO request is handled: a test makes it panic to prove the
+// recover and the lock release.
+var rpcTestHook atomic.Pointer[func(op uint16)]
+
 // serveRPC is handleRPC behind a recover: a datagram that trips a bug is
 // logged and dropped, never the process. The parsers are fuzzed; this is
 // defence in depth for the code between them and the reply. The device
@@ -203,6 +209,9 @@ func (d *Device) pnio(h *wire.RPCHeader, body []byte, from *net.UDPAddr) ([]byte
 	known := func() bool {
 		d.mu.Lock()
 		defer d.mu.Unlock() // released on a panic too (serveRPC recovers)
+		if hook := rpcTestHook.Load(); hook != nil {
+			(*hook)(h.OpNum)
+		}
 		switch h.OpNum {
 		case wire.RPCOpConnect:
 			resp, status = d.connect(blocks(), from)
