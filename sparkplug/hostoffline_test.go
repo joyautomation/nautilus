@@ -15,6 +15,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
@@ -201,6 +202,48 @@ func TestPrimaryHostOfflineDefaultKeepsTheSession(t *testing.T) {
 	setState(true, 3000)
 	waitFor(t, "the node to see the host online", func() bool { return n.Status().HostOnline })
 	noneOf(t, events, 500*time.Millisecond, "NDEATH", "NBIRTH")
+}
+
+// The CI flake in TestPrimaryHostOfflineDisconnectEndsTheSession, held
+// open: the node ends its session for the offline host and reconnects with
+// the same client ID at once, while the broker is still tearing the old
+// session down (testmqtt.HoldTeardown keeps it in mochi's window). Without
+// testBroker's SameIDSerializer, mochi v2.7.9's teardown then deletes the
+// NEW session from its client map: the node got the retained offline STATE
+// on subscribe and nothing after, and never births when the host returns
+// ("no [NBIRTH NDEATH] arrived", runs 44237035250, 44202630486,
+// 44147322368).
+func TestHostOfflineReconnectHearsTheHostDuringASlowTeardown(t *testing.T) {
+	hold := testmqtt.NewHoldTeardown("Plant-Edge1", 300*time.Millisecond)
+	addr := testBroker(t, hold)
+	events := watchNode(t, addr)
+	setState := stateHost(t, addr)
+	n, _ := startHostNode(t, addr, HostOfflineDisconnect, filepath.Join(t.TempDir(), "edge1.bdseq"))
+
+	setState(true, 1000)
+	if b := nextOf(t, events, "NBIRTH", "NDEATH"); b.kind != "NBIRTH" || b.bdSeq != 0 {
+		t.Fatalf("first message %s bdSeq %d, want NBIRTH bdSeq 0", b.kind, b.bdSeq)
+	}
+	first := n.client()
+	setState(false, 2000)
+	if d := nextOf(t, events, "NBIRTH", "NDEATH"); d.kind != "NDEATH" || d.bdSeq != 0 {
+		t.Fatalf("after the host went offline: %s bdSeq %d, want NDEATH bdSeq 0", d.kind, d.bdSeq)
+	}
+	select {
+	case <-hold.Disconnected: // the old session's teardown has begun, and is held
+	case <-time.After(5 * time.Second):
+		t.Fatal("the broker never began tearing the first session down")
+	}
+	waitFor(t, "a new connection", func() bool {
+		c := n.client()
+		return c != first && c.IsConnectionOpen()
+	})
+	time.Sleep(400 * time.Millisecond) // past the held teardown
+
+	setState(true, 3000)
+	if b := nextOf(t, events, "NBIRTH", "NDEATH"); b.kind != "NBIRTH" || b.bdSeq != 1 {
+		t.Fatalf("after the host returned: %s bdSeq %d, want NBIRTH bdSeq 1", b.kind, b.bdSeq)
+	}
 }
 
 // HostOfflineDisconnect: on the host's offline STATE the node publishes
