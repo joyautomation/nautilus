@@ -48,7 +48,8 @@ Flags:
               "Program:MainProgram.*"). Default: every user tag except
               module I/O.
   --poll      Poll rate (default 250ms)
-  --listen    API address (default :8080)
+  --listen    API address (default localhost:8080); anything but
+              loopback needs NAUTILUS_TOKEN
   --l5x       An L5X export of the running project: its tag descriptions
               are served on /api/meta, which a live browse cannot recover.
   --project   A nautilus project directory with a target: logix section.
@@ -65,9 +66,10 @@ Flags:
               "resetValues": true), with progress streamed as NDJSON.
               --host defaults to target.logix.host.
 
-Writes are open to non-browser clients and same-origin pages, like
-` + "`naut run`" + `. Set NAUTILUS_TOKEN to require a bearer token — and do,
-before listening anywhere but loopback: a write here changes a running PLC.
+Writes are open to non-browser clients and same-origin pages on
+localhost, an IP address or a name in NAUTILUS_ALLOWED_HOSTS, like
+` + "`naut run`" + `. A write here changes a running PLC, so --listen on
+anything but loopback is refused without NAUTILUS_TOKEN.
 `
 
 func runLogixServe(args []string) int {
@@ -78,10 +80,16 @@ func runLogixServe(args []string) int {
 	port := fs.Int("port", 0, "EtherNet/IP TCP port")
 	tags := fs.String("tags", "", "comma-separated tag globs")
 	poll := fs.Duration("poll", 0, "poll rate")
-	listen := fs.String("listen", ":8080", "API address")
+	listen := fs.String("listen", "localhost:8080", "API address")
 	l5xPath := fs.String("l5x", "", "L5X export for tag descriptions")
 	projectDir := fs.String("project", "", "nautilus project with a target: logix section")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	// A write here changes a running PLC: beyond this machine it needs a
+	// token (#811).
+	if !loopbackListen(*listen) && os.Getenv("NAUTILUS_TOKEN") == "" {
+		fmt.Fprintf(os.Stderr, "naut logix serve: --listen %s reaches beyond this machine, and a write here changes a running PLC; set NAUTILUS_TOKEN to listen there (or listen on localhost)\n", *listen)
 		return 2
 	}
 	var plane *facade.ProgramPlane
@@ -142,7 +150,7 @@ func runLogixServe(args []string) int {
 		Tags:    splitPatterns(*tags),
 		Poll:    *poll,
 		Meta:    meta,
-		Server:  server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")},
+		Server:  server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN"), AllowedHosts: allowedHosts()},
 		Program: plane,
 	})
 	cancel()
