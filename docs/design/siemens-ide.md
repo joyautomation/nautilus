@@ -1,7 +1,7 @@
 # Design brief: nautilus as the IDE for a Siemens S7-1500
 
-Status: **design, nothing built.** Issue #789, part of #725. Decisions D1–D6
-(§8) are open with the maintainer.
+Status: **design.** Issue #789, part of #725. Decisions D1–D6 are taken
+(§8, 2026-11-17).
 
 > Siemens target: an anti-corruption layer in both directions, the same
 > place on the map as the Logix target. Its writer, agent and importer are
@@ -71,7 +71,7 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
 | HMI, alarms, history, Sparkplug publish | **Maps**: `naut siemens serve` hosts them against the CPU's values |
 | Download of a change | **Partly.** Changed blocks load in RUN. An interface change reinitialises a DB unless it has a memory reserve *(verify)*, so the writer reserves memory on generated DBs and the dry run names any DB that would be reinitialised. There is no warm reload with state migration |
 | Force | **No direct mapping** (D4). The Web API writes but does not force, and Siemens' own force is I/O-only and a TIA online function. Until D4, `/api/forces` answers 501 as the Logix facade does. A write is never called a force |
-| SFC | Refused in v1 |
+| SFC | Not in the first writer subset. v1.x: an SCL state machine with step flags and step timers in statics, so the SFC view shows active steps live |
 | Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) | **Do not map**: they run in `naut`. `naut check --target siemens` refuses them. The CPU's I/O comes from its local modules and its PROFINET devices |
 | Tests | `naut test` runs on nautilus in virtual time. `naut test --target siemens` replays the same scenarios on the CPU in real time |
 
@@ -116,6 +116,35 @@ config, so two projects aimed at one CPU erase each other. The shared bench
 CPU has exactly one spec, in `examples/siemens-bench`, and the PROFINET
 work owns its `profinet:` section (#723).
 
+## 2a. Adopting an existing project (D5)
+
+Adopting an existing TIA project is what lets nautilus drive a legacy PLC.
+It is the Logix pattern: import, edit in nautilus, write back, download
+only what changed, and verify that nothing else moved.
+
+**Ownership.** An adopted project declares the blocks nautilus owns.
+Everything else is carried through untouched, and the online compare after
+a download must show it unchanged.
+
+**Where the project lives.** Its source of truth is in the repo: the
+project archive as last uploaded or committed, plus the nautilus sources
+for the owned blocks. Each deploy then:
+
+1. opens the archive on a fresh clone;
+2. replaces the owned blocks;
+3. compiles;
+4. downloads only what changed;
+5. runs the online compare.
+
+| TIA block language | v1 | Full adoption needs |
+|---|---|---|
+| SCL | Import → nautilus ST, edit, write back as SCL, download that block only. Logic equality after the round trip (formatting may change) | A tolerant SCL front end (`#`, `"quoted"` globals, `REGION`, instruction names) over the existing ST parser |
+| LAD, FBD | Imported for viewing and live monitoring, never written. Editing one is an explicit opt-in conversion to SCL, which changes its language in TIA | SimaticML LAD/FBD reader, then a writer, sized by how much of a real project is LAD (S3) |
+| GRAPH | View-only later; untouched | A GRAPH reader |
+| STL | Untouched; viewable as text | None planned |
+| F-blocks, know-how-protected blocks | Never touched. A deploy that would change one refuses | — |
+| Hardware config, tag tables, UDTs, global DBs, technology objects, HMI, libraries | Preserved as they are | Per-object import later |
+
 ## 3. tiad: the Openness agent
 
 ### 3.1 Process
@@ -124,6 +153,12 @@ A C# agent on a Windows VM built from the `STACK=tia` golden image. It runs
 TIA Portal Openness without a user interface and serves JSON over HTTP. It
 copies `logixd`, the Logix agent:
 
+- **Stateless across clones (D1).** The TIA VM is recreated from the golden
+  image, so tiad keeps nothing that must survive a clone. Every deploy
+  rebuilds the TIA project from what naut sends: the station spec and
+  sources, plus the project archive for an adopted project. The work dir is
+  scratch, and anything worth keeping (exports, uploads) goes back to naut
+  as files and into git.
 - **.NET Framework 4.8.** The Openness assemblies do not load under modern .NET.
 - **Interactive scheduled task at logon, not a service.** Clones boot
   logged in. TIA and its licence manager are assumed to behave like
@@ -417,35 +452,52 @@ an application layer, as `logix/facade` is.
 
 ## 7. Order
 
-**Now, without the TIA image or the bench:**
-1. this brief;
-2. the tiad client and fake;
-3. the Web API client against a fake JSON-RPC server;
-4. `target: siemens` in the manifest (additive);
-5. the writer's minimal subset with goldens;
-6. the C# source for tiad (untested until the image);
-7. the serve facade.
+1. **S1, read-only (done 2026-11-17).**
+   - The S7 identity read confirmed the CPU and FW 3.1.3.
+   - The web server is off (80/443 closed), and OPC UA and SNMP don't answer.
+   - The Web API checks therefore move to S2b.
+2. **S2a, the first TIA session, read-only towards the CPU.**
+   - probe;
+   - upload from the CPU;
+   - export everything (SCL, SimaticML, station) twice and diff the two
+     exports (determinism);
+   - learn the rack modules and the protection level.
+3. **S2b, the regenerate loop on the bench** (naut-lead told first).
+   - The station spec is the uploaded modules plus the web server and a
+     user, with a minimal SCL program.
+   - compile → dry run → download → compare.
+   - Then the Web API checks run (`Api.Version`, `Api.GetMethods`).
+   - Also in S2b: does the trial start headless on a clone's first TIA
+     start, and can a download's checks be listed and cancelled with
+     nothing loaded (§3.5)?
+4. **S3, the adoption spike (§2a).**
+   - Import the SCL blocks of a legacy-style project and edit one.
+   - Download only that block, in RUN.
+   - Show with the online compare that everything else is untouched.
+   - Watch live values in the extension.
+   - Count blocks by language.
+5. **Then:**
+   - writer breadth (SFC) and serve polish;
+   - the override force layer (D4);
+   - the LAD reader/writer sized by S3.
 
-**Then:**
-- **S1, bench, read-only, needs the maintainer's OK:** `Api.Version`,
-  `Api.GetMethods`.
-- **S2, image plus trial:**
-  - does the trial start headless on a clone's first TIA start, or does
-    it need one GUI acknowledgement (D1)?
-  - can a download's pre-download checks be listed and the download
-    cancelled with nothing loaded (the dry run, §3.5)?
-  - two exports, diffed;
-  - SCL import → compile → dry run → download → compare, after telling
-    naut-lead;
-  - measure edit-to-running.
+**Code that doesn't need the image,** in order:
+1. the Web API client;
+2. `target: siemens`;
+3. the writer's first subset;
+4. the SCL importer;
+5. the tiad C# source;
+6. the serve facade.
 
-## 8. Decisions
+The SimaticML reader waits for real S2a exports to use as fixtures.
 
-| | Decision | Proposal |
-|---|---|---|
-| D1 | Trial for the spikes, or buy STEP 7 Professional now (get a quote)? If starting the trial needs one GUI acknowledgement on the clone, is that a one-time step the maintainer does? | Trial for S1/S2; decide at S2's go/no-go |
-| D2 | SIMATIC AX? | Not now. It covers the S7-1500 only, is sales-gated and still needs TIA for hardware |
-| D3 | How far LAD goes | SCL in v1; native LAD only if a site needs TIA-side ladder |
-| D4 | Force | (a) none, writes only; (b) an opt-in generated override layer for I/O-bound tags (inputs before the scan, outputs after it), shown in nautilus, but the CPU's FORCE LED stays dark; (c) Siemens' force through Openness, if it can activate one *(verify, unlikely)*. Proposal: (a) now, (b) after the loop works |
-| D5 | Project ownership | Regenerate the whole TIA project from the repo on every build. Adopting an existing project comes later, for legacy sites |
-| D6 | Bench | OK for the read-only S1 probe? Which modules are on the rack, is there a protection password, is the web server on? |
+## 8. Decisions (2026-11-17)
+
+| | Decision |
+|---|---|
+| D1 | The trial licence. The TIA VM is recreated from the golden image, so tiad is stateless across clones (§3.1) |
+| D2 | No SIMATIC AX |
+| D3 | SCL only in v1; nautilus shows the ladder (§1, §2a) |
+| D4 | Write-only first, then the opt-in override layer for I/O-bound tags. Forcing is required, so it is on the roadmap. The CPU's FORCE LED stays dark under it, and the docs must say so |
+| D5 | Adoption early: S3 follows the first bench download (§2a, §7) |
+| D6 | The read-only S1 probe is approved. Anything that is not read-only is announced to naut-lead first |
