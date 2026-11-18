@@ -1180,21 +1180,21 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	// send what it queued while it led. Dropped commands are forgotten
 	// (not recorded as written), so the same value is a command again
 	// once the gate reopens.
-	drop := func(names []string) {
+	forget := func(names []string) {
 		d.mu.Lock()
 		for _, name := range names {
 			delete(d.written, name)
 		}
 		d.mu.Unlock()
 		d.wanted.Store(true) // the commands it dropped: ask for them (#601)
-		d.log.Warn("opcua-client: write gate closed; queued writes dropped", "driver", d.name, "count", len(names))
 	}
 	if !d.gateOpen() {
 		all := make([]string, 0, len(work))
 		for name := range work {
 			all = append(all, name)
 		}
-		drop(all)
+		forget(all)
+		d.log.Warn("opcua-client: write gate closed; queued writes dropped", "driver", d.name, "count", len(all))
 		return true
 	}
 
@@ -1247,7 +1247,13 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 		// And before every chunk after the first: a demotion while a
 		// batch is on the wire stops the rest of it (G1c, #861).
 		if start > 0 && !d.gateOpen() {
-			drop(names[start:])
+			// Part of the batch already reached the server: say how much,
+			// and name what did not, so an operator can tell what the PLC
+			// got.
+			rest := names[start:]
+			forget(rest)
+			d.log.Warn("opcua-client: write gate closed mid-batch; the rest dropped",
+				"driver", d.name, "sent", start, "dropped", len(rest), "tags", rest)
 			return true
 		}
 		end := min(start+limit, len(items))

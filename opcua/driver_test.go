@@ -6,8 +6,10 @@
 package opcua
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"reflect"
 	"strings"
@@ -754,7 +756,9 @@ func TestWriteGateClosingMidBatchStopsTheRest(t *testing.T) {
 	for _, n := range []string{"SetA", "SetB"} {
 		m.Tags = append(m.Tags, TagBinding{Name: n, NodeID: "ns=2;s=Setpoint", Namespace: "urn:nautilus:test", Type: "Double", Writable: true})
 	}
-	d := startDriver(t, ts.url, m, WithMaxNodes(1))
+	logs := &lockedBuffer{}
+	d := startDriver(t, ts.url, m, WithMaxNodes(1),
+		WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
 	d.SetWriteGate(open.Load)
 	waitFor(t, "online", d.Online)
 
@@ -771,4 +775,46 @@ func TestWriteGateClosingMidBatchStopsTheRest(t *testing.T) {
 	if !d.OutputsWanted() {
 		t.Error("the commands dropped mid-batch must be asked for again")
 	}
+	// The log says the batch was cut short, how much went out, and which
+	// tags did not, so an operator can tell what reached the PLC. Map
+	// order decides which tag went first; the other two were dropped.
+	var line string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, "mid-batch") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no mid-batch log line; got:\n%s", logs.String())
+	}
+	if !strings.Contains(line, "sent=1") || !strings.Contains(line, "dropped=2") {
+		t.Errorf("log line should give sent=1 dropped=2: %s", line)
+	}
+	named := 0
+	for _, n := range []string{"Setpoint", "SetA", "SetB"} {
+		if strings.Contains(line, n) {
+			named++
+		}
+	}
+	if named != 2 {
+		t.Errorf("log line names %d of the tags, want the 2 dropped: %s", named, line)
+	}
+}
+
+// lockedBuffer is a log sink the driver's goroutines and the test can share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
