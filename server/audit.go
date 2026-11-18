@@ -369,7 +369,10 @@ type auditedRoute struct {
 // journalled. A request the write policy refuses (authorizeWrite: no
 // token, a cross-origin page) has its body neither read nor journalled:
 // its entry says who, from where and which action, and every handler
-// refuses it before reading anything.
+// refuses it before reading anything. A write handler must therefore
+// apply authorizeWrite (or a stricter check that includes it) before it
+// reads its body: given an empty one, a handler that did not would
+// answer 400 where it should have said 401.
 func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc) *auditedRoute {
 	return &auditedRoute{s: s, action: action, tf: tf, h: h}
 }
