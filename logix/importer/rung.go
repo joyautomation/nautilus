@@ -570,6 +570,16 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 				// A leg that ends in coils is a rung of its own: prefix +
 				// the leg. Its coils pass power on in Logix, so the branch
 				// still carries the leg's conditions for what follows.
+				// Each such rung re-reads the prefix, which Logix read
+				// once: a leg that writes what the prefix reads, with a
+				// rung after it, is refused (#778).
+				writers := t.Legs
+				if last {
+					writers = t.Legs[:len(t.Legs)-1]
+				}
+				if w := conditionWrites(terms[:i], writers); w != "" {
+					return nil, refuse("branch-order", "a leg writes %s, which the rung's condition ahead of the branch reads; Logix read it once, before the legs ran, and the rungs the branch becomes would each read it again; split the rung", w)
+				}
 				var condLegs [][]l5x.Term
 				for _, leg := range t.Legs {
 					if k := firstCoil(leg); k >= 0 {
@@ -621,16 +631,33 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 			}
 			// Logix runs the legs top to bottom. The block rungs go ahead
 			// of the rung that keeps the legs' data boxes, which is right
-			// when the boxes come after the blocks; when every box comes
-			// first and the branch ends the rung, they go after it, so a
-			// box reading the block's state reads it before the block
-			// runs, as on the controller (#778).
-			if last && len(hoisted) > 0 && boxesBeforeBlocks(t.Legs) {
-				if w := conditionWrites(terms[:i], t.Legs); w != "" {
-					return nil, refuse("branch-order", "a data box on an earlier leg writes %s, which a condition of the timer or counter on a later leg reads; split the rung so each runs in the order Logix runs it", w)
+			// when the boxes come after the blocks. When every box comes
+			// first and the branch ends the rung, the blocks go after it,
+			// so a box reading a block's state reads it before the block
+			// runs, as on the controller (#778); a one-shot's pulse rung
+			// stays ahead, since the legs read it. Boxes on both sides of
+			// a block fit neither order, so that rung is refused.
+			if len(hoisted) > 0 {
+				switch branchOrder(t.Legs) {
+				case "both":
+					return nil, refuse("branch-order", "data boxes both before and after a timer, counter or message in one branch; Logix runs the legs top to bottom, which one nautilus rung cannot; split the branch into rungs in that order")
+				case "before":
+					if !last {
+						break
+					}
+					if w := conditionWrites(terms[:i], t.Legs); w != "" {
+						return nil, refuse("branch-order", "a leg writes %s, which the rung's condition ahead of the branch reads; Logix read it before the legs ran, and the timer or counter's own rung would read it after; split the rung", w)
+					}
+					var ahead [][]string
+					for _, h := range hoisted {
+						if strings.HasPrefix(h[len(h)-1], "( P ") {
+							ahead = append(ahead, h) // a pulse the legs read
+						} else {
+							after = append(after, h)
+						}
+					}
+					hoisted = ahead
 				}
-				after = append(after, hoisted...)
-				hoisted = nil
 			}
 			out = append(out, hoisted...)
 			if allEmpty(legs) {
@@ -890,50 +917,66 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 // hoistable are the instructions hoistBlocks gives a rung of their own.
 var hoistable = map[string]bool{"TON": true, "TOF": true, "CTU": true, "MSG": true}
 
-// boxesBeforeBlocks reports a branch whose data boxes all come before its
-// first timer, counter or message, in Logix's order (leg by leg, top to
-// bottom), with at least one of each.
-func boxesBeforeBlocks(legs [][]l5x.Term) bool {
-	block, box, boxAfter := false, false, false
+// isBox reports a data box: an instruction that writes an operand
+// (assignInstr, and the copies).
+func isBox(m string) bool { return assignInstr[m] || m == "COP" || m == "CPS" }
+
+// branchOrder says where a branch's data boxes sit against its timers,
+// counters and messages, in Logix's order (leg by leg, top to bottom):
+// "before" (every box ahead of the first block), "both" (boxes on both
+// sides of one), or "" (no boxes, or every box after the blocks).
+func branchOrder(legs [][]l5x.Term) string {
+	block, boxBefore, boxAfter := false, false, false
 	for _, leg := range legs {
 		walkTerms(leg, func(in *l5x.Instr) {
 			m := strings.ToUpper(in.Mnemonic)
 			switch {
 			case hoistable[m]:
 				block = true
-			case assignInstr[m] || m == "COP" || m == "CPS":
-				box = true
+			case isBox(m):
 				if block {
 					boxAfter = true
+				} else {
+					boxBefore = true
 				}
 			}
 		})
 	}
-	return block && box && !boxAfter
+	switch {
+	case !block:
+		return ""
+	case boxBefore && boxAfter:
+		return "both"
+	case boxBefore:
+		return "before"
+	}
+	return ""
 }
 
-// conditionWrites names a tag a data box in legs writes that a condition
-// reads, in the rung's terms before the branch or in the legs themselves;
-// "" when none. Hoisted after the boxes, a block's rung reads its
-// conditions after they ran, where Logix read them before.
+// conditionWrites names a tag a leg writes (a data box's destination, or
+// a coil's) that the rung's condition ahead of the branch reads; "" when
+// none. Logix read that condition once, before the legs ran; a block
+// hoisted after the boxes re-reads it on its own rung, after they ran.
+// (A later leg's own conditions are read after the earlier legs in Logix
+// too, so they are not a hazard.)
 func conditionWrites(before []l5x.Term, legs [][]l5x.Term) string {
 	reads := map[string]bool{}
-	readOf := func(in *l5x.Instr) {
+	walkTerms(before, func(in *l5x.Instr) {
 		m := strings.ToUpper(in.Mnemonic)
 		if m == "XIC" || m == "XIO" || compareFn[m] != "" || m == "CMP" || m == "LIM" {
 			for _, a := range in.Args {
 				reads[strings.ToLower(baseOf(strings.TrimSpace(a)))] = true
 			}
 		}
-	}
-	walkTerms(before, readOf)
-	for _, leg := range legs {
-		walkTerms(leg, readOf)
-	}
+	})
 	var hit string
 	for _, leg := range legs {
 		walkTerms(leg, func(in *l5x.Instr) {
-			if d := boxDest(in); d != "" && hit == "" && reads[strings.ToLower(baseOf(d))] {
+			d := boxDest(in)
+			if d == "" && isCoil(in) && len(in.Args) == 1 {
+				d = strings.TrimSpace(in.Args[0])
+			}
+			if d != "" && hit == "" && reads[strings.ToLower(baseOf(d))] {
 				hit = d
 			}
 		})
@@ -1624,7 +1667,7 @@ func (rt *routine) hoistBlocks(legs [][]l5x.Term, prefix []string) ([][]l5x.Term
 				continue
 			}
 			m := strings.ToUpper(t.Instr.Mnemonic)
-			if m == "TON" || m == "TOF" || m == "CTU" || m == "MSG" {
+			if hoistable[m] {
 				var text string
 				var err *refusal
 				if m == "MSG" {
