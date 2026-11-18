@@ -217,8 +217,7 @@ func mustStruct(t *testing.T, d *Driver, tag string) ir.Value {
 // (NCMD), death (values survive, __Online clears), and a restart (bdSeq
 // increments, __Online recovers).
 func TestEdgeToHostDogfood(t *testing.T) {
-	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	_, addr := startBroker(t, "")
 
 	// Host first, edge second — deliberately. With RebirthOnStart (below)
 	// the host fires an NCMD Rebirth the instant it connects; started this
@@ -406,8 +405,7 @@ func TestEdgeToHostDogfood(t *testing.T) {
 // field (only the WithDevice(Device{...}) option), so that is what this
 // drives.
 func TestEdgeToHostStatus(t *testing.T) {
-	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	_, addr := startBroker(t, "")
 
 	// Host before edge — see the ordering note in TestEdgeToHostDogfood.
 	host := startHostDriver(t, edgeDogfoodManifest(), testConfig(addr, "h-status2"))
@@ -451,8 +449,7 @@ func TestEdgeToHostStatus(t *testing.T) {
 	// A device registered on the edge (sparkplug.WithDevice) becomes a
 	// device sub-row on the host side, with its own __Online companion.
 	t.Run("WithDevice", func(t *testing.T) {
-		srv2, addr2 := startBroker(t, "")
-		t.Cleanup(func() { _ = srv2.Close() })
+		_, addr2 := startBroker(t, "")
 
 		// Host before edge again — see the ordering note in
 		// TestEdgeToHostDogfood: it avoids racing RebirthOnStart's
@@ -564,8 +561,7 @@ func startDogfoodEdge(t *testing.T, host *Driver, addr string, speedSP float64) 
 // runtime would hand it — every output, every scan, all at their init: — and
 // the edge's tags must not move.
 func TestEdgeToHostStartKeepsSetpoints(t *testing.T) {
-	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	_, addr := startBroker(t, "")
 
 	obs := newObserver(t, addr, "obs-keepsp", "spBv1.0/G/NCMD/+", "spBv1.0/G/DCMD/+/+")
 
@@ -617,8 +613,7 @@ func TestEdgeToHostStartKeepsSetpoints(t *testing.T) {
 // nothing; dialling it anywhere else is one command. Driven against the real
 // edge, so the birth that teaches the host is a real birth.
 func TestEdgeToHostMemberBaselineAdoptsLiveValue(t *testing.T) {
-	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	_, addr := startBroker(t, "")
 
 	obs := newObserver(t, addr, "obs-adoptlive", "spBv1.0/G/NCMD/+")
 	host := startHostDriver(t, edgeDogfoodManifest(), testConfig(addr, "h-adoptlive"))
@@ -676,8 +671,7 @@ func TestEdgeToHostMemberBaselineAdoptsLiveValue(t *testing.T) {
 // next call until the tag moves again, so the operator's command evaporated
 // and the site came back holding its old value.
 func TestEdgeToHostQueuedWriteReachesAWokenSite(t *testing.T) {
-	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	_, addr := startBroker(t, "")
 
 	obs := newObserver(t, addr, "obs-darkwrite", "spBv1.0/G/NCMD/+")
 	host := startHostDriver(t, edgeDogfoodManifest(), testConfig(addr, "h-darkwrite"))

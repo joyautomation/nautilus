@@ -287,3 +287,13 @@ func MarshalPNIOResponseBody(status PNIOStatus, responseBlocks []byte, argsMax u
 
 	return buf
 }
+
+// UUIDPNIOObjectBase is the PROFINET IO object instance UUID base:: DEA00000-6C97-11D1-8271-00xx-xxxx-xxxx
+// The node bytes encode: interface_index(2) + DeviceID(2) + VendorID(2)
+var UUIDPNIOObjectBase = [16]byte{
+	0xDE, 0xA0, 0x00, 0x00,
+	0x6C, 0x97,
+	0x11, 0xD1,
+	0x82, 0x71,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+}

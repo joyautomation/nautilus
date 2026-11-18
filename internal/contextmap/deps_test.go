@@ -59,7 +59,7 @@ func rules(u universe) []rule {
 			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side, nor knows the device library above it",
 		},
 		{
-			from: []string{"siemens/tiad", "siemens/webapi", "siemens/writer", "siemens/importer"},
+			from: []string{"siemens/station", "siemens/tiad", "siemens/webapi", "siemens/writer", "siemens/importer"},
 			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd"},
 			why:  "the Siemens target's agent client, Web API client, writer and importer are an anti-corruption layer; only siemens/facade, an application layer, composes the runtime side",
 		},

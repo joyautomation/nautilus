@@ -98,8 +98,9 @@ type Manifest struct {
 	Alarms     *AlarmsConfig `yaml:"alarms"`
 	AlarmFiles []string      `yaml:"alarm-files"`
 	// Target names a controller this project is DEPLOYED to instead of
-	// being run by the nautilus runtime: today, an Allen-Bradley Logix
-	// controller (docs/design/logix-authoring.md). With a target set,
+	// being run by the nautilus runtime: an Allen-Bradley Logix
+	// controller (docs/design/logix-authoring.md) or a Siemens S7-1500
+	// (docs/design/siemens-ide.md). With a target set,
 	// `naut check` also runs that target's rules, so a construct the
 	// target cannot take is a diagnostic on the keystroke that wrote it.
 	Target *TargetConfig `yaml:"target"`
@@ -165,10 +166,10 @@ func (c *CheckConfig) Structure() (lint.Config, error) {
 	return cfg, nil
 }
 
-// TargetConfig is the deploy target. One kind at a time; logix is the
-// only one so far.
+// TargetConfig is the deploy target. One kind at a time.
 type TargetConfig struct {
-	Logix *LogixTarget `yaml:"logix"`
+	Logix   *LogixTarget   `yaml:"logix"`
+	Siemens *SiemensTarget `yaml:"siemens"` // siemens.go
 }
 
 // LogixTarget is an Allen-Bradley Logix controller as a deploy target:
@@ -952,6 +953,10 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	// local I/O keeps the loud fault. Per tag, by its driver — comms.go.
 	simulateDrivers(opts.Tags, opts.Driver)
 	markComms(opts.Tags, opts.Driver)
+	if err := checkDriverOutputs(opts.Tags, opts.Driver); err != nil {
+		return nil, err
+	}
+	markReplicas(opts.Driver, m.Redundancy != nil)
 	if err := checkNetworkSections(m); err != nil {
 		return nil, err
 	}

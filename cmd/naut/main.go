@@ -47,6 +47,10 @@ Usage:
                           program; no Go toolchain involved. -runtime <naut>
                           builds on another naut binary: a release's
                           linux_arm64 naut makes an ARM64 controller.
+  naut deploy <cmd> <ssh-target>
+                      Install, update (rolled back if it does not start),
+                          roll back, back up or restore a controller on a
+                          Linux box with systemd, over SSH (naut deploy help).
 
                           run, test, and build take -m <manifest> to load one
                           other than nautilus.yaml. That is how one project
@@ -63,6 +67,9 @@ Usage:
                           is detectable, info; with a logixd agent, build,
                           drift and online edits. Experimental: write and
                           deploy a nautilus program to a Logix controller.
+  naut siemens <cmd>  Siemens S7-1500 (experimental): serve a running CPU on
+                          the runtime API over the PLC Web API; cert prints
+                          the CPU certificate's SHA-256 to pin.
   naut sparkplug <cmd> Sparkplug B host tools: import (listen to a group
                           and generate types + manifest + tag file), browse,
                           and tags (re-derive the tag file, no broker).
@@ -91,6 +98,10 @@ Usage:
                           state and the process image, on the controller),
                           import (a manifest from the bus's device list)
                           and tags (the tag file for a plcnext manifest).
+  naut profinet <cmd> PROFINET IO device tools (offline): gsdml (the
+                          GSDML file the PLC's engineering tool imports)
+                          and tags (the tag file), both from the
+                          profinet_device.yaml the driver serves.
   naut snmp <cmd>     SNMP tools: import | browse | serve | tags (switches, PDUs, UPSes)
   naut redfish <cmd>  Redfish tools: import | browse | serve | tags (server BMCs)
   naut prometheus <cmd>  node_exporter tools: import | browse | serve | tags (hosts)
@@ -144,6 +155,8 @@ func main() {
 		os.Exit(runRun(os.Args[2:]))
 	case "build":
 		os.Exit(runBuild(os.Args[2:]))
+	case "deploy":
+		os.Exit(runDeploy(os.Args[2:]))
 	case "hmi":
 		os.Exit(runHMI(os.Args[2:]))
 	case "test":
@@ -156,6 +169,8 @@ func main() {
 		os.Exit(runEIP(os.Args[2:]))
 	case "logix":
 		os.Exit(runLogix(os.Args[2:]))
+	case "siemens":
+		os.Exit(runSiemens(os.Args[2:]))
 	case "sparkplug":
 		os.Exit(runSparkplug(os.Args[2:]))
 	case "modbus":
@@ -168,6 +183,8 @@ func main() {
 		os.Exit(runOptommp(os.Args[2:]))
 	case "plcnext":
 		os.Exit(runPlcnext(os.Args[2:]))
+	case "profinet":
+		os.Exit(runProfinet(os.Args[2:]))
 	case "snmp":
 		os.Exit(runSnmp(os.Args[2:]))
 	case "redfish":

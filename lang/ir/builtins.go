@@ -86,7 +86,9 @@ func registerArithBuiltins() {
 			if len(t) != 1 || !t[0].IsNumeric() {
 				return nil, fmt.Errorf("ABS expects one numeric argument")
 			}
-			return t[0], nil
+			// Computed: ABS of an INT at -32768 is 32768, which its store
+			// cuts back to the INT's width (#782).
+			return Computed(t[0]), nil
 		},
 		Fn: func(args []Value) (Value, error) {
 			x := args[0]
@@ -222,12 +224,22 @@ func numericResultOfArgs(name string) func([]*Type) (*Type, error) {
 			}
 		}
 		if anyReal {
-			return RealT, nil
+			return RealResult(ts)
 		}
 		if allTime {
 			return TimeT, nil
 		}
-		return IntT, nil
+		// Integers: the arithmetic common type (CommonInt), so MAX(i, d)
+		// is a computed DINT and a store of it into an INT is refused, as
+		// i + d is (#782).
+		t := ts[0]
+		for _, u := range ts[1:] {
+			t = CommonInt(t, u)
+		}
+		if t.Name != "" && !t.Computed {
+			t = exprIntTypes[t.Name]
+		}
+		return t, nil
 	}
 }
 

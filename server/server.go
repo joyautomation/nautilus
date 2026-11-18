@@ -232,6 +232,15 @@ type Options struct {
 	// never gated — dashboards and editor live values stay open on the LAN.
 	AuthToken string
 
+	// AllowedHosts are host names (no port) a browser page may write from
+	// when no AuthToken is set, besides localhost and an IP address
+	// (#811): a name an operator really uses for this controller, such as
+	// "epic1.plant.lan". Without a token, a browser write whose Host is any
+	// other name is refused, because a page on an attacker's domain can
+	// rebind that name to this machine (DNS rebinding) and its Origin then
+	// matches its Host. NAUTILUS_ALLOWED_HOSTS sets it from the CLI.
+	AllowedHosts []string
+
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
 	// /api/program/rollback) — PLC-style online edits of the running ST
 	// program. Off by default: pushing logic is remote code execution on a
@@ -421,6 +430,7 @@ type Server struct {
 	rt          *runtime.Runtime
 	interval    time.Duration
 	authToken   string
+	allowHosts  map[string]bool
 	onlineEdits bool
 	drivers     func() []DriverStatus
 	cluster     interface{ Status() leader.Status }
@@ -494,10 +504,19 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		resync:      resync,
 		diag:        diag,
 		authToken:   token,
+		allowHosts:  map[string]bool{},
 		onlineEdits: onlineEdits,
 		clients:     map[*client]struct{}{},
 	}
 	if len(opts) > 0 {
+		for _, h := range opts[0].AllowedHosts {
+			// "epic1.plant.lan:8086" or "epic1.plant.lan." name the same
+			// host a request's Host does without its port or root dot.
+			h = strings.TrimSuffix(strings.ToLower(hostOnly(strings.TrimSpace(h))), ".")
+			if h != "" {
+				s.allowHosts[h] = true
+			}
+		}
 		s.drivers = opts[0].Drivers
 		s.cluster = opts[0].Cluster
 		s.historian = opts[0].HistorianURL
@@ -1167,7 +1186,9 @@ func nonNilStrings(s []string) []string {
 // browser page from another origin (the drive-by CSRF case) carries an
 // Origin header that won't match the host and is refused; non-browser
 // clients (curl, the LSP, server-to-server) send no Origin and are allowed.
-// This costs nothing to run and needs no setup.
+// A same-origin browser write must also be addressed to a Host no page can
+// rebind: localhost, an IP address, or a name in AllowedHosts (#811).
+// This costs nothing to run and needs no setup on localhost or by IP.
 //
 // Progressive enhancement — AuthToken set: the request must present the
 // token, and a valid token authorizes the write from any origin (an
@@ -1184,10 +1205,40 @@ func (s *Server) authorizeWrite(r *http.Request) (int, string) {
 		}
 		return http.StatusUnauthorized, "missing or invalid auth token"
 	}
-	if sameOrigin(r) {
-		return 0, ""
+	if !sameOrigin(r) {
+		return http.StatusForbidden, "cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILUS_TOKEN)"
 	}
-	return http.StatusForbidden, "cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILUS_TOKEN)"
+	// A browser request whose Origin matches its Host can still come from
+	// an attacker's page: rebind that page's name to this machine (DNS
+	// rebinding) and Host and Origin are both the attacker's name. Without a
+	// token, trust only a Host no one can rebind (#811).
+	if r.Header.Get("Origin") != "" && !s.trustedHost(r.Host) {
+		return http.StatusForbidden, fmt.Sprintf("a browser write addressed to %q is refused without an auth token: only localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS is trusted (a page on another site could rebind %q to this machine); set NAUTILUS_TOKEN, or add the name to NAUTILUS_ALLOWED_HOSTS", r.Host, hostOnly(r.Host))
+	}
+	return 0, ""
+}
+
+// trustedHost reports a request Host a page cannot have been rebound to:
+// localhost (and *.localhost, which browsers keep on loopback), an IP
+// literal (a browser sends one only for a page it loaded from that very
+// address), or a name configured in AllowedHosts.
+func (s *Server) trustedHost(host string) bool {
+	h := strings.ToLower(hostOnly(host))
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	if net.ParseIP(h) != nil {
+		return true
+	}
+	return s.allowHosts[h]
+}
+
+// hostOnly strips the port (and an IPv6 address's brackets) from a Host.
+func hostOnly(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 }
 
 // tokenMatches reports whether the request carries the expected token, in

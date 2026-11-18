@@ -17,10 +17,11 @@ import (
 //
 // The rules (docs/functions.md "Type conversions" is the user-facing copy):
 //
-//   - The argument is first taken as a value of the source type: an integer
-//     variable holds a 64-bit value at run time and does not wrap on
-//     arithmetic (st-int-width), so `UINT_TO_STRING(u)` with u at -1 reads
-//     it as the UINT it would be on a PLC, 65535.
+//   - The argument is first taken as a value of the source type: arithmetic
+//     is computed in 64 bits and only a store cuts it to a width (#782), and
+//     a value from outside a program (a force) may hold more than its
+//     width, so `UINT_TO_STRING(u)` with u at -1 reads it as the UINT it
+//     would be on a PLC, 65535.
 //   - Integer and bit-string NARROWING WRAPS: the result keeps the target's
 //     low bits, read signed or unsigned as the target is (DINT_TO_INT(70000)
 //     = 4464, INT_TO_USINT(-1) = 255, BYTE_TO_SINT(255) = -1). Codesys
@@ -463,6 +464,49 @@ func fitInt(v int64, t convType) int64 {
 	return int64(u)
 }
 
+// IntRange is the value range of the integer type declared as name
+// (SINT is -128..127, UINT 0..65535); ok is false for any other name and
+// for the 64-bit types, whose range is the VM's own.
+func IntRange(name string) (lo, hi int64, ok bool) {
+	t, found := convTypeNamed(name)
+	if !found || t.class != ccInt || t.width == 0 || t.width >= 64 {
+		return 0, 0, false
+	}
+	if t.signed {
+		return -(int64(1) << (t.width - 1)), int64(1)<<(t.width-1) - 1, true
+	}
+	return 0, int64(1)<<t.width - 1, true
+}
+
+// NewWrap is the width a store into t keeps (#782): nil when t is not a
+// declared integer narrower than 64 bits (a LINT, an enumeration, the
+// canonical INT of an expression take any value the VM holds).
+func NewWrap(t *Type) *Wrap {
+	if t == nil || t.Kind != TypeInt || t.Enum != nil {
+		return nil
+	}
+	ct, ok := convTypeNamed(t.Name)
+	if !ok || ct.class != ccInt || ct.width == 0 || ct.width >= 64 {
+		return nil
+	}
+	return &Wrap{Bits: uint8(ct.width), Signed: ct.signed}
+}
+
+// StoreWrap wraps x, an integer about to be stored into a variable of
+// type t outside an Assign (an FB or function input), to t's width, as
+// Assign.Wrap does. x is returned as is when t has no width to keep.
+func StoreWrap(x Expr, t *Type) Expr {
+	w := NewWrap(t)
+	if w == nil {
+		return x
+	}
+	return &Call{Name: "TO_" + t.Name, Args: []Expr{x}, T: t, Fn: func(args []Value) (Value, error) {
+		v := args[0]
+		v.I = w.Apply(v.I)
+		return v, nil
+	}}
+}
+
 // intRange is t's value range as float64 bounds [lo, hiExcl).
 func intRange(t convType) (lo, hiExcl float64) {
 	if t.signed {
@@ -546,3 +590,6 @@ func parseIntInto(name string, t convType, s string) (Value, error) {
 	}
 	return IntVal(int64(mag)), nil
 }
+
+// LRealT is the declared LREAL type: the float64 every REAL is, named.
+func LRealT() *Type { return lrealT }

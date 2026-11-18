@@ -184,6 +184,7 @@ last (or initial) value, and the logic checks the connection's fault bit.
 | `eip` | reads its `init:`, or the zero of its type | `<driver name>__Online` (`eip__Online`) |
 | `sparkplug-host` | reads its `init:`, or the zero of its type | `<site>__Online`, `<site>_<device>__Online` |
 | `snmp`, `redfish`, `prometheus` | reads its `init:`, or the zero of its type | `<source>__Online` |
+| `profinet-device` | reads its `init:`, or the zero of its type | `<driver name>__Online` (`profinet_device__Online`) |
 | `plcnext`, `optommp` (local I/O) | faults the scan, as before | `<id>__Online` |
 | `replay`, `memory` | faults the scan, as before | — |
 

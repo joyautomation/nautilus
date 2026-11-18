@@ -26,7 +26,7 @@ VAR_EXTERNAL
   WithInit : REAL;
   Out : REAL;
 END_VAR
-Out := WithInit + Declared;
+Out := WithInit + DINT_TO_REAL(Declared); (* IEC: a DINT into a REAL is explicit, #782 *)
 END_PROGRAM`,
 		Driver: nio.NewMemory(),
 		Tags: []TagDef{
