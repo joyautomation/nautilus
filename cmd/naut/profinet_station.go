@@ -64,6 +64,7 @@ func expandProfinet(projectDir string, cpu station.CPU, p *station.Profinet, dat
 	var files []gsdFile
 	names := map[string]string{cpu.ProfinetName: "the CPU"}
 	addrs := map[string]string{cpu.Address: "the CPU"}
+	gsdNames := map[string]string{}
 	claim := func(at, name, addr string) {
 		if owner, used := names[name]; used {
 			bad(at, "name of station %q is already %s's", name, owner)
@@ -105,6 +106,12 @@ func expandProfinet(projectDir string, cpu station.CPU, p *station.Profinet, dat
 			bad(at, "%s: %v", d.ProfinetManifest, err)
 			continue
 		}
+		if owner, used := gsdNames[f.Name]; used {
+			// gsdml.Filename keeps only [A-Za-z0-9_-], so "a.b" and "ab" share one.
+			bad(at, "its GSDML file name %s is already %s's", f.Name, owner)
+			continue
+		}
+		gsdNames[f.Name] = at
 		files = append(files, f)
 		out.Devices = append(out.Devices, tiad.Device{
 			GSDML:      f.Name,
@@ -144,23 +151,46 @@ func readDeviceManifest(projectDir, ref string) (profinet.DeviceManifest, error)
 	return m, nil
 }
 
+// The generated GSDML offers a 1 ms send clock with reduction ratios
+// 1, 2, 4 … 512, so the update times TIA can set for a nautilus device are
+// the powers of two from 1 ms to 512 ms.
+const maxUpdateTime = 512 * time.Millisecond
+
+func onLadder(d time.Duration) bool {
+	for r := time.Millisecond; r <= maxUpdateTime; r *= 2 {
+		if d == r {
+			return true
+		}
+	}
+	return false
+}
+
 // referenceUpdateTime is a reference's update time, as tiad receives it:
-// the device's own, else the IO system's, else the slowest of the 16 ms
-// minimum and the device's min-cycle. It is always explicit, so TIA never
-// picks a faster automatic time for a software device. A time below the
-// device's min-cycle is refused: the device would refuse that connection.
+// the device's own, else the IO system's, else the first rung of the
+// ladder at or above both the 16 ms minimum and the device's min-cycle. It
+// is always explicit, so TIA never picks a faster automatic time for a
+// software device. Refused: a time off the ladder (TIA cannot set it) and
+// one below the device's min-cycle (the device would refuse that
+// connection).
 func referenceUpdateTime(own, system string, minCycle time.Duration) (string, error) {
 	s := own
 	if s == "" {
 		s = system
 	}
 	if s == "" {
-		return max(station.MinUpdateTime, minCycle).String(), nil
+		r := station.MinUpdateTime
+		for r < minCycle {
+			r *= 2
+		}
+		return r.String(), nil // ≤ 512 ms: a manifest's min-cycle is at most 512 ms
 	}
 	if err := station.CheckUpdateTime(s); err != nil {
 		return "", err
 	}
 	d, _ := time.ParseDuration(s) // CheckUpdateTime parsed it
+	if !onLadder(d) {
+		return "", fmt.Errorf("%s is not an update time the device offers (16ms, 32ms, 64ms … 512ms)", d)
+	}
 	if d < minCycle {
 		return "", fmt.Errorf("%s is below the device's min-cycle %s", d, minCycle)
 	}

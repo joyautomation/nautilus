@@ -177,8 +177,9 @@ func TestExpandProfinetRefuses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			p:    station.Profinet{Devices: []station.Device{ref("link.yaml", "192.0.2.20")}},
-			want: "profinet.devices[0].profinet-manifest: openat link.yaml: path escapes from parent"},
+			p: station.Profinet{Devices: []station.Device{ref("link.yaml", "192.0.2.20")}},
+			// The target is a valid manifest, so only the escape can refuse it.
+			want: "profinet.devices[0].profinet-manifest: "},
 		{name: "a manifest that is not there",
 			p:    station.Profinet{Devices: []station.Device{ref("missing.yaml", "192.0.2.20")}},
 			want: "profinet.devices[0].profinet-manifest: open"},
@@ -218,6 +219,19 @@ func TestExpandProfinetRefuses(t *testing.T) {
 			},
 			p:    station.Profinet{UpdateTime: "16ms", Devices: []station.Device{ref("slow.yaml", "192.0.2.20")}},
 			want: "profinet.devices[0].update-time: 16ms is below the device's min-cycle 32ms"},
+		{name: "an update time TIA cannot set",
+			p:    station.Profinet{Devices: []station.Device{{ProfinetManifest: "profinet_device.yaml", Address: "192.0.2.20", UpdateTime: "20ms"}}},
+			want: "profinet.devices[0].update-time: 20ms is not an update time the device offers"},
+		{name: "an update time above the ladder",
+			p:    station.Profinet{Devices: []station.Device{{ProfinetManifest: "profinet_device.yaml", Address: "192.0.2.20", UpdateTime: "1024ms"}}},
+			want: "profinet.devices[0].update-time: 1.024s is not an update time the device offers"},
+		{name: "two stations that share a GSDML file name",
+			setup: func(t *testing.T, dir string) {
+				writeManifest(t, dir, "dotted.yaml", strings.Replace(benchDevice, "station: naut-1", "station: naut.1", 1))
+				writeManifest(t, dir, "plain.yaml", strings.Replace(benchDevice, "station: naut-1", "station: naut1", 1))
+			},
+			p:    station.Profinet{Devices: []station.Device{ref("dotted.yaml", "192.0.2.20"), ref("plain.yaml", "192.0.2.21")}},
+			want: "profinet.devices[1]: its GSDML file name GSDML-V2.35-nautilus-naut1-20261117.xml is already profinet.devices[0]'s"},
 		{name: "an update time below 16 ms",
 			p:    station.Profinet{Devices: []station.Device{{ProfinetManifest: "profinet_device.yaml", Address: "192.0.2.20", UpdateTime: "8ms"}}},
 			want: "profinet.devices[0].update-time: 8ms is below the 16ms minimum"},
@@ -253,6 +267,8 @@ func TestReferenceUpdateTime(t *testing.T) {
 		{"", "32ms", 8 * time.Millisecond, "32ms"},
 		{"", "", 8 * time.Millisecond, "16ms"},
 		{"", "", 32 * time.Millisecond, "32ms"},
+		{"", "", 20 * time.Millisecond, "32ms"}, // rounded up to the ladder
+		{"", "", 300 * time.Millisecond, "512ms"},
 		{"32ms", "", 32 * time.Millisecond, "32ms"},
 	} {
 		got, err := referenceUpdateTime(tc.own, tc.system, tc.minCycle)
