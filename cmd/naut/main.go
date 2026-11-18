@@ -85,6 +85,9 @@ Usage:
                           on the real device's protocol and register map,
                           with simulators and a process model), check,
                           profiles, show.
+  naut iolink <cmd>   IO-Link tools: import (check an IODD and copy it
+                          into the project's iodd/ folder) and show (what
+                          an IODD's process data and variables are).
   naut scene <cmd>    3D HMI scene tools: init (generate a starter
                           *.scene.json from the manifest's struct tags —
                           one node per UDT tag a kind can draw, laid out
@@ -181,6 +184,8 @@ func main() {
 		os.Exit(runOPCUA(os.Args[2:]))
 	case "devices":
 		os.Exit(runDevices(os.Args[2:]))
+	case "iolink":
+		os.Exit(runIOLink(os.Args[2:]))
 	case "optommp":
 		os.Exit(runOptommp(os.Args[2:]))
 	case "plcnext":

@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test IODD: "Acme" is a made-up vendor and its ids are made
+     up; no real device is described. Written to the IODD 1.1 schema's
+     shape for nautilus's tests (docs/design/iolink.md §10). -->
+<IODevice xmlns="http://www.io-link.com/IODD/2010/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <DocumentInfo version="V1.0" releaseDate="2026-11-18" copyright="nautilus test data"/>
+  <ProfileHeader>
+    <ProfileIdentification>IO Device Profile</ProfileIdentification>
+    <ProfileRevision>1.1</ProfileRevision>
+    <ProfileName>Device Profile for IO Devices</ProfileName>
+    <ProfileSource>IO-Link Consortium</ProfileSource>
+    <ProfileClassID>Device</ProfileClassID>
+  </ProfileHeader>
+  <ProfileBody>
+    <DeviceIdentity vendorId="65261" vendorName="Acme" deviceId="1048577" additionalDeviceIds="1048578">
+      <VendorText textId="TI_VendorText"/>
+      <VendorUrl textId="TI_VendorUrl"/>
+      <DeviceName textId="TI_DeviceName"/>
+      <DeviceFamily textId="TI_DeviceFamily"/>
+      <DeviceVariantCollection>
+        <DeviceVariant productId="LV-100-A" deviceSymbol="sym.png" deviceIcon="icon.png">
+          <Name textId="TI_Variant1_Name"/>
+          <Description textId="TI_Variant1_Desc"/>
+        </DeviceVariant>
+        <DeviceVariant productId="LV-100-B">
+          <Name textId="TI_Variant2_Name"/>
+          <Description textId="TI_Variant2_Desc"/>
+        </DeviceVariant>
+      </DeviceVariantCollection>
+    </DeviceIdentity>
+    <DeviceFunction>
+      <Features blockParameter="false" dataStorage="true" profileCharacteristic="1"/>
+      <DatatypeCollection>
+        <Datatype id="DT_Window" xsi:type="RecordT" bitLength="32" subindexAccessSupported="true">
+          <RecordItem subindex="1" bitOffset="16">
+            <SimpleDatatype xsi:type="UIntegerT" bitLength="16"/>
+            <Name textId="TN_WindowLow"/>
+          </RecordItem>
+          <RecordItem subindex="2" bitOffset="0">
+            <SimpleDatatype xsi:type="UIntegerT" bitLength="16"/>
+            <Name textId="TN_WindowHigh"/>
+          </RecordItem>
+        </Datatype>
+      </DatatypeCollection>
+      <VariableCollection>
+        <StdVariableRef id="V_DirectParameters_1"/>
+        <StdVariableRef id="V_SystemCommand"/>
+        <StdVariableRef id="V_VendorName" defaultValue="Acme"/>
+        <StdVariableRef id="V_SerialNumber"/>
+        <StdVariableRef id="V_ApplicationSpecificTag" defaultValue="***"/>
+        <StdVariableRef id="V_DeviceStatus"/>
+        <Variable id="V_Setpoint" index="64" accessRights="rw" defaultValue="100">
+          <Datatype xsi:type="UIntegerT" bitLength="16">
+            <ValueRange lowerValue="0" upperValue="1000"/>
+          </Datatype>
+          <Name textId="TN_V_Setpoint"/>
+          <Description textId="TD_V_Setpoint"/>
+        </Variable>
+        <Variable id="V_Window" index="65" accessRights="rw">
+          <DatatypeRef datatypeId="DT_Window"/>
+          <Name textId="TN_V_Window"/>
+        </Variable>
+      </VariableCollection>
+      <ProcessDataCollection>
+        <ProcessData id="PD_Level">
+          <!-- PD in, 32 bits; bit 0 is the LSB of the last octet.
+               bits 31..18 Level   IntegerT 14, scaled ×0.1
+               bit  17     (unused)
+               bit  16     Ready   BooleanT
+               bits 15..4  Temp    IntegerT 12 (straddles octets 2 and 3)
+               bits 3..2   (unused)
+               bit  1      SP2     BooleanT
+               bit  0      SP1     BooleanT -->
+          <ProcessDataIn id="PDI_Level" bitLength="32">
+            <Datatype xsi:type="RecordT" bitLength="32" subindexAccessSupported="false">
+              <RecordItem subindex="1" bitOffset="18">
+                <SimpleDatatype xsi:type="IntegerT" bitLength="14"/>
+                <Name textId="TN_PDI_Level"/>
+              </RecordItem>
+              <RecordItem subindex="2" bitOffset="4">
+                <SimpleDatatype xsi:type="IntegerT" bitLength="12"/>
+                <Name textId="TN_PDI_Temp"/>
+              </RecordItem>
+              <RecordItem subindex="3" bitOffset="16">
+                <SimpleDatatype xsi:type="BooleanT"/>
+                <Name textId="TN_PDI_Ready"/>
+              </RecordItem>
+              <RecordItem subindex="4" bitOffset="0">
+                <SimpleDatatype xsi:type="BooleanT">
+                  <SingleValue value="false"><Name textId="TN_Off"/></SingleValue>
+                  <SingleValue value="true"><Name textId="TN_On"/></SingleValue>
+                </SimpleDatatype>
+                <Name textId="TN_PDI_SP1"/>
+              </RecordItem>
+              <RecordItem subindex="5" bitOffset="1">
+                <SimpleDatatype xsi:type="BooleanT"/>
+                <Name textId="TN_PDI_SP2"/>
+              </RecordItem>
+            </Datatype>
+            <Name textId="TN_PDI"/>
+          </ProcessDataIn>
+          <!-- PD out, 8 bits: bit 7 Lock, bits 3..1 Mode, bit 0 Teach. -->
+          <ProcessDataOut id="PDO_Level" bitLength="8">
+            <Datatype xsi:type="RecordT" bitLength="8" subindexAccessSupported="false">
+              <RecordItem subindex="1" bitOffset="0">
+                <SimpleDatatype xsi:type="BooleanT"/>
+                <Name textId="TN_PDO_Teach"/>
+              </RecordItem>
+              <RecordItem subindex="2" bitOffset="1">
+                <SimpleDatatype xsi:type="UIntegerT" bitLength="3">
+                  <SingleValue value="0"><Name textId="TN_ModeOff"/></SingleValue>
+                  <SingleValue value="5"><Name textId="TN_ModeAuto"/></SingleValue>
+                </SimpleDatatype>
+                <Name textId="TN_PDO_Mode"/>
+              </RecordItem>
+              <RecordItem subindex="3" bitOffset="7">
+                <SimpleDatatype xsi:type="BooleanT"/>
+                <Name textId="TN_PDO_Lock"/>
+              </RecordItem>
+            </Datatype>
+            <Name textId="TN_PDO"/>
+          </ProcessDataOut>
+        </ProcessData>
+      </ProcessDataCollection>
+      <UserInterface>
+        <ProcessDataRefCollection>
+          <ProcessDataRef processDataId="PDI_Level">
+            <ProcessDataRecordItemInfo subindex="1" gradient="0.1" offset="0" unitCode="1013" displayFormat="Dec.1"/>
+            <ProcessDataRecordItemInfo subindex="2" unitCode="1001"/>
+          </ProcessDataRef>
+        </ProcessDataRefCollection>
+        <MenuCollection>
+          <Menu id="M_Ident"><VariableRef variableId="V_VendorName"/></Menu>
+        </MenuCollection>
+      </UserInterface>
+    </DeviceFunction>
+  </ProfileBody>
+  <CommNetworkProfile xsi:type="IOLinkCommNetworkProfileT" iolinkRevision="V1.1">
+    <TransportLayers>
+      <PhysicalLayer bitrate="COM2" minCycleTime="2300" sioSupported="true" mSequenceCapability="1"/>
+    </TransportLayers>
+  </CommNetworkProfile>
+  <ExternalTextCollection>
+    <PrimaryLanguage xml:lang="en">
+      <Text id="TI_VendorText" value="Acme test devices"/>
+      <Text id="TI_VendorUrl" value="https://example.com"/>
+      <Text id="TI_DeviceName" value="LV-100 level sensor"/>
+      <Text id="TI_DeviceFamily" value="Level"/>
+      <Text id="TI_Variant1_Name" value="LV-100-A"/>
+      <Text id="TI_Variant1_Desc" value="Level sensor, 1 m probe"/>
+      <Text id="TI_Variant2_Name" value="LV-100-B"/>
+      <Text id="TI_Variant2_Desc" value="Level sensor, 2 m probe"/>
+      <Text id="TN_WindowLow" value="Window low"/>
+      <Text id="TN_WindowHigh" value="Window high"/>
+      <Text id="TN_V_Setpoint" value="Setpoint"/>
+      <Text id="TD_V_Setpoint" value="Switch point 1 setpoint"/>
+      <Text id="TN_V_Window" value="Window"/>
+      <Text id="TN_PDI_Level" value="Level"/>
+      <Text id="TN_PDI_Temp" value="Temperature"/>
+      <Text id="TN_PDI_Ready" value="Ready"/>
+      <Text id="TN_PDI_SP1" value="Switch point 1"/>
+      <Text id="TN_PDI_SP2" value="Switch point 2"/>
+      <Text id="TN_Off" value="Off"/>
+      <Text id="TN_On" value="On"/>
+      <Text id="TN_PDI" value="Process data in"/>
+      <Text id="TN_PDO_Teach" value="Teach"/>
+      <Text id="TN_PDO_Mode" value="Mode"/>
+      <Text id="TN_ModeOff" value="Off"/>
+      <Text id="TN_ModeAuto" value="Auto"/>
+      <Text id="TN_PDO_Lock" value="Lock"/>
+      <Text id="TN_PDO" value="Process data out"/>
+    </PrimaryLanguage>
+    <Language xml:lang="de">
+      <Text id="TN_PDI_Level" value="Füllstand"/>
+    </Language>
+  </ExternalTextCollection>
+  <Stamp crc="0"><Checker name="none" version="0"/></Stamp>
+</IODevice>

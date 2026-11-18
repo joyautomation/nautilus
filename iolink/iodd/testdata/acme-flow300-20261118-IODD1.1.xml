@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test IODD: "Acme" is a made-up vendor and its ids are made
+     up (docs/design/iolink.md §10). Two process data layouts, chosen by
+     V_PdSelect: 0 is one scaled value, 1 a record with a string and an
+     octet string from the DatatypeCollection. -->
+<IODevice xmlns="http://www.io-link.com/IODD/2010/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <DocumentInfo version="V1.0" releaseDate="2026-11-18" copyright="nautilus test data"/>
+  <ProfileBody>
+    <DeviceIdentity vendorId="65261" vendorName="Acme" deviceId="3145729">
+      <DeviceName textId="TI_DeviceName"/>
+    </DeviceIdentity>
+    <DeviceFunction>
+      <DatatypeCollection>
+        <Datatype id="DT_Tagged" xsi:type="RecordT" bitLength="48">
+          <RecordItem subindex="1" bitOffset="16">
+            <SimpleDatatype xsi:type="StringT" fixedLength="4" encoding="UTF-8"/>
+            <Name textId="TN_Name"/>
+          </RecordItem>
+          <RecordItem subindex="2" bitOffset="0">
+            <SimpleDatatype xsi:type="OctetStringT" fixedLength="2"/>
+            <Name textId="TN_Raw"/>
+          </RecordItem>
+        </Datatype>
+      </DatatypeCollection>
+      <VariableCollection>
+        <Variable id="V_PdSelect" index="120" accessRights="rw" defaultValue="0">
+          <Datatype xsi:type="UIntegerT" bitLength="8"/>
+          <Name textId="TN_PdSelect"/>
+        </Variable>
+      </VariableCollection>
+      <ProcessDataCollection>
+        <ProcessData id="PD_Flow">
+          <Condition variableId="V_PdSelect" value="0"/>
+          <ProcessDataIn id="PDI_Flow" bitLength="16">
+            <Datatype xsi:type="UIntegerT" bitLength="16"/>
+            <Name textId="TN_Flow"/>
+          </ProcessDataIn>
+        </ProcessData>
+        <ProcessData id="PD_Tagged">
+          <Condition variableId="V_PdSelect" value="1"/>
+          <ProcessDataIn id="PDI_Tagged" bitLength="48">
+            <DatatypeRef datatypeId="DT_Tagged"/>
+            <Name textId="TN_Tagged"/>
+          </ProcessDataIn>
+        </ProcessData>
+      </ProcessDataCollection>
+      <UserInterface>
+        <ProcessDataRefCollection>
+          <ProcessDataRef processDataId="PDI_Flow">
+            <ProcessDataInfo gradient="0.5" offset="-10" unitCode="1352"/>
+          </ProcessDataRef>
+        </ProcessDataRefCollection>
+      </UserInterface>
+    </DeviceFunction>
+  </ProfileBody>
+  <ExternalTextCollection>
+    <PrimaryLanguage xml:lang="en">
+      <Text id="TI_DeviceName" value="FL-300 flow meter"/>
+      <Text id="TN_Name" value="Name"/>
+      <Text id="TN_Raw" value="Raw"/>
+      <Text id="TN_PdSelect" value="Process data select"/>
+      <Text id="TN_Flow" value="Flow"/>
+      <Text id="TN_Tagged" value="Tagged"/>
+    </PrimaryLanguage>
+  </ExternalTextCollection>
+</IODevice>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test IODD, IODD 1.0.1 shape: "Acme" is a made-up vendor
+     and its ids are made up (docs/design/iolink.md §10). -->
+<IODevice xmlns="http://www.io-link.com/IODD/2009/11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <DocumentInfo version="V1.0" releaseDate="2026-11-18" copyright="nautilus test data"/>
+  <ProfileHeader>
+    <ProfileRevision>1.00</ProfileRevision>
+  </ProfileHeader>
+  <ProfileBody>
+    <DeviceIdentity vendorId="65261" vendorName="Acme" deviceId="2097153">
+      <VendorText textId="TI_VendorText"/>
+      <DeviceFamily textId="TI_DeviceFamily"/>
+      <DeviceVariantCollection>
+        <DeviceVariant productId="PR-200">
+          <Name textId="TI_Variant_Name"/>
+          <Description textId="TI_Variant_Desc"/>
+        </DeviceVariant>
+      </DeviceVariantCollection>
+    </DeviceIdentity>
+    <DeviceFunction>
+      <VariableCollection>
+        <StdVariableRef id="V_VendorName" defaultValue="Acme"/>
+        <StdVariableRef id="V_ApplicationSpecificName"/>
+        <StdVariableRef id="V_ProcessDataIn"/>
+      </VariableCollection>
+      <ProcessDataCollection>
+        <ProcessData id="PD_Press">
+          <!-- 48 bits: bits 47..16 Pressure Float32T (octets 0..3),
+               bits 15..8 Status UIntegerT 8 (octet 4), bit 0 Alarm. -->
+          <ProcessDataIn id="PDI_Press" bitLength="48">
+            <Datatype xsi:type="RecordT" bitLength="48">
+              <RecordItem subindex="1" bitOffset="16">
+                <SimpleDatatype xsi:type="Float32T"/>
+                <Name textId="TN_Pressure"/>
+              </RecordItem>
+              <RecordItem subindex="2" bitOffset="8">
+                <SimpleDatatype xsi:type="UIntegerT" bitLength="8"/>
+                <Name textId="TN_Status"/>
+              </RecordItem>
+              <RecordItem subindex="3" bitOffset="0">
+                <SimpleDatatype xsi:type="BooleanT"/>
+                <Name textId="TN_Alarm"/>
+              </RecordItem>
+            </Datatype>
+            <Name textId="TN_PDI"/>
+          </ProcessDataIn>
+        </ProcessData>
+      </ProcessDataCollection>
+    </DeviceFunction>
+  </ProfileBody>
+  <ExternalTextCollection>
+    <PrimaryLanguage xml:lang="en">
+      <Text id="TI_VendorText" value="Acme test devices"/>
+      <Text id="TI_DeviceFamily" value="Pressure"/>
+      <Text id="TI_Variant_Name" value="PR-200"/>
+      <Text id="TI_Variant_Desc" value="Pressure sensor"/>
+      <Text id="TN_Pressure" value="Pressure"/>
+      <Text id="TN_Status" value="Status"/>
+      <Text id="TN_Alarm" value="Alarm"/>
+      <Text id="TN_PDI" value="Process data in"/>
+    </PrimaryLanguage>
+  </ExternalTextCollection>
+</IODevice>
