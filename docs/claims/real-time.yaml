@@ -308,8 +308,8 @@ claims:
       alone). A higher thread that may float elsewhere, one at or below the
       priority confined there, an unpinned task that may land beside a
       confined higher thread, entries it cannot read or a /proc hiding
-      processes, and the kernel's RT throttle off before 6.12 (once per
-      process) are warnings; kernel threads, the process's own threads and
+      processes, and the kernel's RT throttle off (-1 on any kernel, runtime =
+      period before 6.12; once per process) are warnings; kernel threads, the process's own threads and
       lower threads that float are not counted.
     source: "#priority-and-pinning"
     tests:

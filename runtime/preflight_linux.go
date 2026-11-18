@@ -115,20 +115,22 @@ func preflight(root string, self int, cpus []int, prio int, shareCPU bool) (warn
 		cpuText(cpus), prio, strings.Join(above, "; "))
 }
 
-// throttleWarning is a warning when nothing in the kernel keeps a
-// real-time thread that never sleeps from owning its core: sched_rt_runtime_us
-// -1 or the whole period, on a kernel before 6.12. From 6.12 the fair
-// server reserves normal tasks their share whatever that sysctl says.
+// throttleWarning is a warning when the kernel's real-time throttle is off.
+// sched_rt_runtime_us -1 turns it off on every kernel: from 6.12 the fair
+// server still reserves normal tasks a share, but not a lower-priority
+// kernel FIFO thread on the core. runtime = period is "off" only before
+// 6.12; with the fair server it is the normal setting.
 func throttleWarning(root string) string {
-	if v, err := os.ReadFile(filepath.Join(root, "sys/kernel/osrelease")); err == nil && kernelAtLeast(string(v), 6, 12) {
-		return ""
-	}
 	rt, err1 := readInt(filepath.Join(root, "sys/kernel/sched_rt_runtime_us"))
 	period, err2 := readInt(filepath.Join(root, "sys/kernel/sched_rt_period_us"))
 	if err1 != nil {
 		return ""
 	}
-	if rt < 0 || (err2 == nil && rt >= period) {
+	fairServer := false
+	if v, err := os.ReadFile(filepath.Join(root, "sys/kernel/osrelease")); err == nil {
+		fairServer = kernelAtLeast(string(v), 6, 12)
+	}
+	if rt < 0 || (err2 == nil && rt >= period && !fairServer) {
 		return fmt.Sprintf("the kernel's real-time throttle is off (sched_rt_runtime_us %d): nothing but nautilus's own guards stops a real-time thread that never sleeps from owning its core", rt)
 	}
 	return ""

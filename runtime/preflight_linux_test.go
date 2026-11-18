@@ -178,9 +178,9 @@ func TestPreflightSaysWhatItCannotSee(t *testing.T) {
 	}
 }
 
-// The kernel's real-time throttle off (-1, or the whole period) is warned
-// about before 6.12; from 6.12 the fair server reserves normal tasks their
-// share regardless.
+// The kernel's real-time throttle off is warned about: -1 on every kernel
+// (the fair server does not cover lower kernel FIFO threads), runtime =
+// period only before 6.12 (with the fair server it is the normal setting).
 func TestPreflightThrottleWarning(t *testing.T) {
 	for _, c := range []struct {
 		runtime, period, release string
@@ -189,8 +189,8 @@ func TestPreflightThrottleWarning(t *testing.T) {
 		{"950000", "1000000", "5.4.193-rt74", false},
 		{"-1", "1000000", "5.4.193-rt74", true},
 		{"1000000", "1000000", "6.1.0", true},
-		{"1000000", "1000000", "7.2.6-76070206-generic", false},
-		{"-1", "1000000", "6.12.0", false},
+		{"1000000", "1000000", "7.2.6-76070206-generic", false}, // fair server: the normal setting
+		{"-1", "1000000", "6.12.0", true},                       // off on every kernel
 	} {
 		root := fakeProc(t, c.runtime, c.period)
 		os.WriteFile(filepath.Join(root, "sys/kernel/osrelease"), []byte(c.release+"\n"), 0o644)

@@ -120,8 +120,9 @@ REFUSED` note on the startup banner, and the reason in the task's
 `scan.sched`. The task runs unpinned at normal priority. Pin it to another
 CPU, or set `share-cpu: true` on the task if you mean it. A real-time
 thread at the same or a lower priority there is a warning, and so is the
-kernel's real-time throttle being off (`sched_rt_runtime_us` -1, on
-kernels before 6.12, where nothing else reserves normal tasks a share).
+kernel's real-time throttle being off (`sched_rt_runtime_us` -1 on any
+kernel; the whole period only before 6.12, after which the fair server
+makes that the normal setting).
 Kernel threads don't count: every core has some at the top priority. A
 higher thread that may run on other CPUs too (a desktop's `rtkit-daemon`,
 for one) is only a warning. The check is what the refusal describes: a
