@@ -2,9 +2,10 @@
 
 Status: **built** — `opcua/` (manifest, client, driver, status, browse,
 `codegen/`), `naut opcua import|browse|tags`, project wiring and schema.
-Verified against gopcua's in-process server as a foreign implementation
-(§6). Not yet run against a production server; the first intended target is
-an Ignition gateway's OPC UA server.
+Verified against gopcua's in-process server, and in CI against open62541
+and Eclipse Milo in containers (§6, the server matrix of #704). Not yet run
+against a production server; the first intended target is an Ignition
+gateway's OPC UA server.
 
 The driver type is `opcua-client`, not `opcua`, so it cannot be mistaken
 for the `opcua:` server section; the CLI stays `naut opcua`, a tool
@@ -148,10 +149,22 @@ byte-identical), `naut check`, and `naut run` reading values, following a
 change, and writing a changed output back to the one binding `--writable`
 named.
 
-Still to run: Ignition 8.1 (a trial gateway in docker, then a production
-gateway), node-opcua for a second foreign implementation, and a
-`Basic256Sha256 / SignAndEncrypt` session with the certificate trusted on
-the server side.
+`opcua/matrix_test.go` is the server matrix (#704): the driver's public
+surface against other people's stacks in containers the test starts
+itself, gated by `NAUTILUS_OPCUA_MATRIX` (the `opcua-client-matrix` CI
+job). One profile per server names its scalar folder, a value that
+changes on its own and a read-only node; every server runs import, typed
+reads, writes, namespace remap, and two outages twice each: `docker
+restart` (a clean close) and `docker pause` (a blackhole, the wire's view
+of a power cycle), checking `__Online`, Stale holding and goroutine count.
+open62541 is a fixture server (`opcua/testdata/matrix/open62541`) built
+against a tagged release, since Docker Hub stops at a 2021 master build;
+Milo is its demo server pinned by digest, trusted the way a site would
+(the refused certificate moved from `rejected` to `trusted`). Each
+server's quirks are in the guide.
+
+Still to run: the UA-.NETStandard reference server, Prosys, a CODESYS
+Control runtime, Ignition 8.1, and the IO-Link master simulator (#712).
 
 ## 7. Manifest, schema, project wiring
 

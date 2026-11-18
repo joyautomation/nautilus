@@ -193,7 +193,8 @@ func TestImportTypesEveryControllerTag(t *testing.T) {
 	for _, want := range []string{
 		"- { name: Run, role: input, type: BOOL }",
 		"- { name: Count, role: input, type: DINT }",
-		"- { name: Hist, role: input, type: \"ARRAY [0..9] OF INT\" }",
+		// An array starts at the export's values, here none: all zero (#774).
+		"- { name: Hist, role: input, type: \"ARRAY [0..9] OF INT\", init: [] }",
 		"- { name: Grid, role: input }",
 		"- { name: Msg, role: input }",
 		"- { name: Spare, role: input }",

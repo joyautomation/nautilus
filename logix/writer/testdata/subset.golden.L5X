@@ -241,7 +241,7 @@
 </Tag>
 <Tag Name="Bits" TagType="Base" DataType="BOOL" Dimensions="32" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
 <Data Format="L5K">
-<![CDATA[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]]>
+<![CDATA[[0]]]>
 </Data>
 <Data Format="Decorated">
 <Array DataType="BOOL" Dimensions="32" Radix="Decimal">

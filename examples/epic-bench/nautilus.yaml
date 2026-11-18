@@ -28,6 +28,10 @@ name: epic-bench
 server:
   addr: "localhost:8086"
   online-edits: true
+  # The 3D screen, once built (cd hmi && npm install && npm run build): the
+  # chassis itself with its channel lamps lit from the tags. Tolerates being
+  # absent. Serves it at "/"; the built-in dashboard moves to "/_nautilus/".
+  hmi: hmi/build
 
 driver:
   type: optommp

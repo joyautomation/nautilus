@@ -296,6 +296,16 @@ claims:
     tests:
       - go ./cmd/naut TestCheckRejects/MCR
 
+  - id: LD-032
+    claim: >-
+      Rungs run top to bottom: a rung above the one that calls a block reads
+      the block's output from the previous scan, a rung below reads this
+      scan's, a call on an element of an array of instances included.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestRungsRunTopToBottom
+      - go ./lang/ld TestInstanceArrayCallRunsInItsRung
+
   - id: LD-029
     claim: Negated coils ( /Tag ) are rejected.
     source: "#not-supported"

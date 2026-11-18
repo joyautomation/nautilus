@@ -43,7 +43,7 @@ I/O.
 
 ### 2.1 What the bench unit is
 
-`192.168.82.243`, `GRV-EPIC-PR1`, four modules. Ports open: 80/443 (groov
+A `GRV-EPIC-PR1` on the office bench, four modules. Ports open: 80/443 (groov
 Manage), **502 Modbus/TCP**, **2001 OptoMMP**, 8088 (Jetty, which that first scan took for Ignition
 Edge), 22001 (PAC Control engine). 22 was closed on the first day; the shell
 license was already on the unit and James enabled the shell server and a
@@ -446,9 +446,10 @@ priority. The 1-2-5 buckets are too coarse to separate scan times inside
   scan for a value groov Manage already shows.
 - `naut optommp import` names tags by slot and channel; channel names
   configured in groov Manage are not reachable over OptoMMP.
-- **Start on boot.** The on-EPIC runs were hand-started over SSH; a systemd
-  unit for the shell user (systemd is there) is the obvious next step,
-  with a `naut build` of the project so one binary is the deliverable.
+- ~~**Start on boot.**~~ Done 2026-10-25: a systemd unit (the guide's
+  "Start it on boot") starts `naut` 31 s after the kernel, reboot-proven
+  on the bench. A one-command install, update and rollback is the shared
+  `tools/deploy` work (#741), to adopt once it lands.
 - `plcnext` reports one quality for the whole image; a NaN in a float32
   binding there renders null but is not marked bad yet.
 
@@ -456,7 +457,7 @@ priority. The 1-2-5 buckets are too coarse to separate scan times inside
 
 ### 3.1 What the bench unit is
 
-`192.168.82.216`, `AXC F 2152`, firmware `23.0.0.65` (2023.0 LTS), Linux
+An `AXC F 2152` on the bench LAN, firmware `23.0.0.65` (2023.0 LTS), Linux
 5.4 PREEMPT_RT, ARMv7 dual-core, 490 MB RAM, 427 MB free on `/`. SSH as
 `admin` works (the `tentacle-plcnext` credentials). Ports: 22, 80/443,
 4840 (OPC UA), 41100 (Engineer), 44818 (EtherNet/IP). The gRPC server is
@@ -708,8 +709,9 @@ wired). A reboot is verified (§3.4).
    so the analog element reads. The boot start is proven (§3.4).
 2. ~~James: order the free `GROOV-LIC-SHELL`; then the EPIC run moves onto
    the EPIC.~~ Done 2026-10-24: the license was already on the unit, the
-   shell is on, nautilus ran on the EPIC. Next on that side: a systemd
-   unit so it survives a reboot.
+   shell is on, nautilus ran on the EPIC. The systemd unit followed on
+   2026-10-25 and survives a reboot (§2.4). Next on that side: what the
+   outputs do between power-on and nautilus's first write.
 3. Record both for N-90 (the three-controllers piece) while they are live.
 4. ~~`naut plcnext import` from a bus scan (module list → manifest).~~
    Built 2026-10-28, from a device list file rather than a scan: the

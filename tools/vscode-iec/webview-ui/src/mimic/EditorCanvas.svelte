@@ -33,7 +33,9 @@
 		resolveBindings,
 		resolvedPortDir,
 		resolvePipeEndpoints,
-		routedPoints
+		routedPoints,
+		autoRoutes,
+		isPipeEnd
 	} from '@joyautomation/nautilus-hmi';
 	import type { GetPort, MimicEquipment, MimicPipe, MimicPipeAnchor, PartRect, PortDir } from '@joyautomation/nautilus-hmi';
 	import { DEMO_PROPS, registry } from './registry';
@@ -402,10 +404,26 @@
 	const XING = 11;
 	/** Every pipe drawn (the doc's and its units' copies), routed, and where
 	 * they cross: read by the crossings pass in the pipe layer. */
+	/** The `routing: 'auto'` pipes, routed round the equipment as the
+	 * screen routes them (autoRoutes). */
+	const autoPaths = $derived.by(() => {
+		void boxVersion;
+		if (!doc) return new Map<string, [number, number][]>();
+		const all = { canvas: doc.canvas, equipment: allEquipment, pipes: [...(doc.pipes ?? []), ...(unitCopies?.pipes ?? [])] };
+		return autoRoutes(all, getPort, (id) => {
+			const eq = allEquipment.find((e) => e.id === id);
+			return eq ? eqBox(eq) : undefined;
+		}).paths;
+	});
+	/** The points a pipe draws through: routed, or as routedPoints() draws it. */
+	function drawPts(p: MimicPipe): [number, number][] {
+		if (p.routing === 'auto' && !(drag?.kind === 'anchor' && drag.id === p.id)) return autoPaths.get(p.id) ?? [];
+		return routedPoints(pipeRouteInput(p), getPort);
+	}
 	const xingRuns = $derived.by(() => {
 		void boxVersion; // re-route when an equipment's measured box changes
 		return [...(doc?.pipes ?? []), ...(unitCopies?.pipes ?? [])].map((p) => {
-			const pts = routedPoints(pipeRouteInput(p), getPort);
+			const pts = drawPts(p);
 			return { p, pts, d: pointsToPath(pts) };
 		});
 	});
@@ -472,8 +490,8 @@
 	 * falls back rather than refusing); this just flags it visually so
 	 * PropsPanel's fix affordance has something to point at. */
 	function pipeFlagged(p: MimicPipe): boolean {
-		const fromBad = !!p.from && !getPort(p.from.equip, p.from.port);
-		const toBad = !!p.to && !getPort(p.to.equip, p.to.port);
+		const fromBad = !!p.from && !isPipeEnd(p.from) && !getPort(p.from.equip, p.from.port);
+		const toBad = !!p.to && !isPipeEnd(p.to) && !getPort(p.to.equip, p.to.port);
 		return fromBad || toBad;
 	}
 
@@ -1767,7 +1785,7 @@
 				{/if}
 				{#each PIPE_LAYERS as layer (layer)}
 					{#each doc.pipes ?? [] as p, pi (p.id)}
-						{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
+						{@const d = pointsToPath(drawPts(p))}
 						<g class="piperun" class:sel={selected('pipe', p.id)} class:flagged={pipeFlagged(p)} data-id={p.id} data-kind="pipe" mask={underMask(pi)}>
 							{#if layer === 'wall' && selected('pipe', p.id)}
 								<path class="pipesel" {d} style="stroke-width: {10 / scale}" />
@@ -1785,7 +1803,7 @@
 					{#each unitCopies?.pipes ?? [] as p, ui (p.id)}
 						<g class="piperun unitcopy" data-unit={p.fromUnit} mask={underMask((doc.pipes?.length ?? 0) + ui)}>
 							<Pipe
-								d={pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
+								d={pointsToPath(drawPts(p))}
 								{...(p.color !== undefined ? { color: p.color } : {})}
 								{...(p.props ?? {})}
 								{...resolveBindings(p.bind, ed.tags ?? {})}
@@ -1799,7 +1817,7 @@
 					<circle class="tee" cx={t.x} cy={t.y} r={(doc?.look ?? 'isa101') === 'isa101' ? 5 : 7} fill="var(--pipe-wall, var(--edge, #7a7973))" pointer-events="none" />
 				{/each}
 				{#each doc.pipes ?? [] as p (p.id)}
-					{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
+					{@const d = pointsToPath(drawPts(p))}
 					<g class="piperun" class:flagged={pipeFlagged(p)}>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<path class="hit" {d} data-id={p.id} data-kind="pipe" style="stroke-width: {14 / scale}" onpointerdown={(e) => pipeDown(e, p)} />

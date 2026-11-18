@@ -8,6 +8,7 @@
 
 import { builtinParts } from './drawings.js';
 import type { StatusKind } from './types.js';
+import { routePipes, type Rect, type RouteEnd, type RouteJob } from './route.js';
 
 /** One mimic document (typically a *.mimic.json file imported by a page). */
 export interface MimicDoc {
@@ -312,6 +313,15 @@ export function panelFor(
 export interface MimicPipeAnchor {
 	equip: string;
 	port: string;
+	/** Instead of a port: another pipe, which this one tees into wherever
+	 * its route meets it best. Only on a pipe with `routing: 'auto'`
+	 * (equip and port are then absent). */
+	pipe?: string;
+}
+
+/** An end that names another pipe (`{ "pipe": "AIR_HDR" }`), not a port. */
+export function isPipeEnd(a: MimicPipeAnchor | undefined): a is MimicPipeAnchor & { pipe: string } {
+	return !!a && typeof a.pipe === 'string' && a.pipe !== '';
 }
 
 /** A pipe run: a polyline in canvas units. Bind `flowing` (and optionally
@@ -331,8 +341,12 @@ export interface MimicPipe {
 	 * already whatever shape the user drew) or an orthogonal (90°) L between
 	 * each pair ('orthogonal' — see routedPoints()). This is a document
 	 * property, not an editor preference, because both the VS Code mimic
-	 * editor and the runtime <Mimic> render pipes and must draw identically. */
-	routing?: 'direct' | 'orthogonal';
+	 * editor and the runtime <Mimic> render pipes and must draw identically.
+	 * 'auto': the screen routes the line itself (autoRoutes(), route.ts),
+	 * square and clear of equipment and labels, from its `from` to its `to`
+	 * (a port, or `{ pipe }` to tee into another pipe), through `points` as
+	 * waypoints when it has any. */
+	routing?: 'direct' | 'orthogonal' | 'auto';
 	/** Anchor the pipe's first/last point to a named equipment port instead
 	 * of a stored [x, y] — see MimicPipeAnchor. Absent = a plain point (or
 	 * no point at all if `points` is also empty on that end, which is only
@@ -741,8 +755,21 @@ export function brokenPipes(
 	getPort: GetPort
 ): BrokenPipe[] {
 	const out: BrokenPipe[] = [];
+	const ids = new Set(pipes.map((p) => p.id));
 	for (const p of pipes) {
 		const ends: string[] = [];
+		if (p.routing === 'auto') {
+			// routed by autoRoutes(): each end a port that is there or a pipe that is
+			for (const a of [p.from, p.to]) {
+				if (!a) continue;
+				if (isPipeEnd(a)) {
+					if (!ids.has(a.pipe) || a.pipe === p.id) ends.push(`pipe ${a.pipe}`);
+				} else if (!getPort(a.equip, a.port)) ends.push(`${a.equip}.${a.port}`);
+			}
+			const n = (p.from ? 1 : 0) + (p.to ? 1 : 0) + (p.points?.length ?? 0);
+			if (ends.length > 0 || n < 2) out.push({ id: p.id, ends });
+			continue;
+		}
 		if (p.from || p.to) {
 			const r = resolvePipeEndpoints(p, getPort);
 			if (r.startFlagged && p.from) ends.push(`${p.from.equip}.${p.from.port}`);
@@ -1310,4 +1337,50 @@ export function connectPorts(doc: MimicDoc, opts: ConnectOptions): { doc: MimicD
 	}
 
 	return { doc: { ...doc, pipes: [...pipes, ...added] }, report };
+}
+
+/** The lines of a document's `routing: 'auto'` pipes, routed around its
+ * equipment (`getBox`, measured) and labels (`labels`, measured), each
+ * seeing the pipes drawn before it: every other pipe as routedPoints()
+ * draws it, then the routed ones in order. A pipe whose ends don't resolve
+ * is left out (brokenPipes() reports it); `failed` are those with no clear
+ * way, drawn square and direct. Both renderers call this. */
+export function autoRoutes(
+	doc: Pick<MimicDoc, 'canvas' | 'equipment' | 'pipes'>,
+	getPort: GetPort,
+	getBox: (equip: string) => EquipmentBox | undefined,
+	labels: EquipmentBox[] = []
+): { paths: Map<string, [number, number][]>; failed: string[] } {
+	const pipes = doc.pipes ?? [];
+	if (!pipes.some((p) => p.routing === 'auto')) return { paths: new Map(), failed: [] };
+	const obstacles: Rect[] = [];
+	const own = new Map<string, number>();
+	for (const eq of doc.equipment ?? []) {
+		if (eq.behind) continue; // pipes run into a vessel drawn behind them
+		const b = getBox(eq.id);
+		if (!b) continue;
+		own.set(eq.id, obstacles.length);
+		obstacles.push(b);
+	}
+	obstacles.push(...labels);
+	const fixed = pipes.filter((p) => p.routing !== 'auto').map((p) => ({ id: p.id, pts: routedPoints(p, getPort) }));
+	const jobs: RouteJob[] = [];
+	for (const p of pipes) {
+		if (p.routing !== 'auto') continue;
+		const pts = p.points ?? [];
+		const end = (a: MimicPipeAnchor | undefined, free: [number, number] | undefined): RouteEnd | undefined => {
+			if (isPipeEnd(a)) return { pipe: a.pipe };
+			if (a) {
+				const r = getPort(a.equip, a.port);
+				return r ? { x: r.x, y: r.y, dir: r.dir, own: own.get(a.equip) } : undefined;
+			}
+			return free ? { x: free[0], y: free[1] } : undefined;
+		};
+		const from = end(p.from, p.from ? undefined : pts[0]);
+		const to = end(p.to, p.to ? undefined : pts[pts.length - 1]);
+		if (!from || !to) continue;
+		const via = pts.slice(p.from ? 0 : 1, p.to ? pts.length : pts.length - 1);
+		jobs.push({ id: p.id, from, to, via });
+	}
+	return routePipes({ width: doc.canvas.width, height: doc.canvas.height, obstacles, fixed, jobs });
 }

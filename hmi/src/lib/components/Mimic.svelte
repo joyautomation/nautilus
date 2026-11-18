@@ -20,7 +20,7 @@
 	import Pipe from './Pipe.svelte';
 	import StatusPill from './StatusPill.svelte';
 	import { sampleTag, tagHistory } from '../taghistory.svelte.js';
-	import { BUILTIN_PORTS, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, autoRoutes, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -266,13 +266,49 @@
 	 * equipment must move the pipe with it, with no explicit wiring beyond
 	 * this dependency: routedPoints() re-derives the anchor's position from
 	 * the fresh box on every call). */
+	// Labels, measured: a routed pipe keeps off them.
+	const labelEls: (HTMLElement | undefined)[] = [];
+	function regLabel(node: HTMLElement, i: number) {
+		labelEls[i] = node;
+		const ro = new ResizeObserver(() => boxVersion++);
+		ro.observe(node);
+		return {
+			destroy() {
+				if (labelEls[i] === node) labelEls[i] = undefined;
+				ro.disconnect();
+			}
+		};
+	}
+	/** The `routing: 'auto'` pipes, routed round the equipment and labels
+	 * as measured (autoRoutes; route.ts). */
+	const routes = $derived.by(() => {
+		void boxVersion;
+		// placed from the doc (fresh as it moves), sized as measured: a label
+		// sits 3px left of its x (.lbl's margin) but for a row, a bound or
+		// state label drawn as bare text, and a centred one, whose x is its
+		// middle
+		const labels = (doc.labels ?? []).flatMap((l, i) => {
+			const el = labelEls[i];
+			if (!el) return [];
+			const w = el.offsetWidth;
+			const flush = l.as === 'row' || (l.as === 'text' && (!!l.bind || !!l.state));
+			const x = l.align === 'center' ? l.x - w / 2 : flush ? l.x : l.x - 3;
+			return [{ x, y: l.y, w, h: el.offsetHeight }];
+		});
+		return autoRoutes(doc, getPort, (id) => {
+			const eq = findEq(id);
+			return eq ? eqBox(eq) : undefined;
+		}, labels);
+	});
 	const pipePaths = $derived.by(() => {
 		void boxVersion;
 		return (doc.pipes ?? []).map((p) => {
-			const pts = routedPoints(p, getPort);
-			return { pipe: p, pts, d: pointsToPath(pts) };
+			const pts = p.routing === 'auto' ? (routes.paths.get(p.id) ?? []) : routedPoints(p, getPort);
+			return { pipe: p, pts, d: pts.length > 1 ? pointsToPath(pts) : '' };
 		});
 	});
+	/** Routed pipes with no clear way, for naut check. */
+	const unrouted = $derived(routes.failed.length > 0 ? JSON.stringify(routes.failed) : undefined);
 
 	/** Where pipes cross without joining. Drawn as on a P&ID: the pipe
 	 * passing over (the flatter one, a header) stays whole and the other is
@@ -324,6 +360,7 @@
 	bind:this={host}
 	data-broken-pipes={broken}
 	data-crossed={crossed}
+	data-unrouted={unrouted}
 	data-scale={scale.toFixed(3)}
 	data-canvas="{doc.canvas.width}x{doc.canvas.height}"
 	style="height: {doc.canvas.height * scale}px"
@@ -418,7 +455,7 @@
 				{@const st = l.state ? labelState(l, tags) : null}
 				{@const box = `left: ${l.x}px; top: ${l.y}px${l.width ? `; width: ${l.width}px` : ''}`}
 				{#if l.as === 'row'}
-					<span class="lbl rowlbl" class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px"
+					<span class="lbl rowlbl" class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px" use:regLabel={i}
 						><ReadoutRow
 							name={l.text}
 							value={!l.bind ? undefined : !l.values && typeof labelRaw(l) === 'number' ? (labelRaw(l) as number) : labelValue(l)}
@@ -432,18 +469,18 @@
 						/></span
 					>
 				{:else if l.bind}
-					<span class="lbl readout" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box}
+					<span class="lbl readout" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box} use:regLabel={i}
 						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
 						>{#if l.unit}<span>{l.unit}</span>{/if}{#if trended(l)}<span class="spark" aria-hidden="true"
 								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} color="var(--ink-2, #c3c2b7)" compact /></span
 							>{/if}</span
 					>
 				{:else if l.state}
-					<span class="lbl state" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box}
+					<span class="lbl state" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box} use:regLabel={i}
 						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}{#if l.as === 'text'}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
 					>
 				{:else}
-					<span class="lbl" class:center={l.align === 'center'} style={box}>{l.text}</span>
+					<span class="lbl" class:center={l.align === 'center'} style={box} use:regLabel={i}>{l.text}</span>
 				{/if}
 			{/each}
 		</div>
