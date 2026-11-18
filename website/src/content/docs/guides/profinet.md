@@ -79,9 +79,13 @@ sudo setcap cap_net_raw+ep "$(command -v naut)"
 ```
 
 Without it the project still loads, checks and runs. The driver's status
-row says what is missing and the driver keeps retrying. The connection
-setup (DCE/RPC) uses UDP 34964 on the host's IP stack, so the interface
-needs an address on the PROFINET subnet.
+row says what is missing and the driver keeps retrying.
+
+The connection setup (DCE/RPC) uses UDP 34964 on the host's IP stack, so
+the interface needs an address on the PROFINET subnet. The port is opened
+only on the station's own address, once the PLC has assigned it. It is
+never open on all of the host's networks, and replies always come from
+the address the PLC talks to.
 
 **nautilus never changes the host's network settings.** A PLC assigns its
 devices' IP addresses over DCP, and DCP has no authentication.
@@ -107,7 +111,10 @@ The input tags (the PLC's outputs) carry quality:
 | Bad | The PLC is in STOP, its status for the subslot is bad, or the module differs from the layout. |
 | Stale | The connection ended: the PLC stopped sending, released it, or the cable is out. |
 
-The last good value is held through Bad and Stale.
+The last good value is held through Bad and Stale. When the connection
+ends, the input tags go Stale with their last good value and
+`profinet_device__Online` goes false. They read Good again only once a
+new connection delivers fresh data.
 
 The data nautilus provides is marked **invalid** to the PLC (IOPS bad)
 in three cases:
@@ -119,6 +126,11 @@ The PLC sees invalid data rather than zeros or a frozen value, and
 handles it as it would a faulty module.
 
 ## Redundancy
+
+`naut check` still refuses PROFINET together with `redundancy:`. On
+takeover the new leader must already hold the station's address, and
+`redundancy:` cannot name and check that floating address yet. What
+follows is how it will behave once it can.
 
 Under `redundancy:`, only the leader is a PROFINET device. Every frame
 it sends first checks that its lease is still current, so a leader that
@@ -145,7 +157,8 @@ measured yet**.
 
 ## What it does not do yet
 
-- A measured, bench-proven redundant hand-over (see above).
+- Run with `redundancy:`: refused until the floating station address can
+  be named and checked (see above); the hand-over is not measured yet.
 - Be a PROFINET **controller** that drives devices. That comes next.
 - IRT, MRP, system redundancy, PROFIsafe, more than one AR, alarms raised
   to the PLC, strings or arrays.

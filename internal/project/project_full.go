@@ -40,6 +40,18 @@ import (
 // checkNetworkSections validates the server sections that open sockets,
 // offline, so naut check reports them before anything listens.
 func checkNetworkSections(m Manifest) error {
+	// A replica set's standby is silent on the PROFINET network (#790), but
+	// on takeover the PLC re-assigns the station address, which the new
+	// leader must already hold: the floating address has to be in place
+	// first. Until `redundancy:` can name it and check it (#787 step 6),
+	// the combination is refused.
+	if m.Redundancy != nil {
+		for _, d := range append([]DriverConfig{m.Driver}, m.Drivers...) {
+			if strings.HasPrefix(strings.ToLower(d.Type), "profinet") {
+				return fmt.Errorf("driver %s with redundancy: is not supported yet: a takeover needs the station's floating IP address on the new leader, and redundancy: cannot name and check one yet (#787)", d.Type)
+			}
+		}
+	}
 	if m.OPCUA != nil && m.OPCUA.Endpoint != "" {
 		if _, _, err := opcuaserver.ParseEndpoint(m.OPCUA.Endpoint); err != nil {
 			return err

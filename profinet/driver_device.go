@@ -79,10 +79,20 @@ type DeviceDriver struct {
 	done   chan struct{}
 }
 
-// DeviceOpener opens the raw Ethernet port and the DCE/RPC socket on an
-// interface, and says which addresses the interface holds. Tests replace
+// DeviceOpener opens the raw Ethernet port on an interface and says how
+// DCE/RPC is reached and which addresses the interface holds. Tests replace
 // it with an in-memory hub.
-type DeviceOpener func(iface string) (transport.Port, net.PacketConn, func() []net.IP, error)
+type DeviceOpener func(iface string) (Opened, error)
+
+// Opened is what a DeviceOpener hands the device: exactly one of RPC (one
+// socket, tests) and ListenRPC (the field: a socket on the station address
+// once the PLC sets it; see device.Config).
+type Opened struct {
+	Port      transport.Port
+	RPC       net.PacketConn
+	ListenRPC func(ip net.IP) (net.PacketConn, error)
+	Addrs     func() []net.IP
+}
 
 // DeviceOption configures NewDevice.
 type DeviceOption func(*DeviceDriver)
@@ -177,19 +187,23 @@ func (d *DeviceDriver) Apply(opts ...DeviceOption) {
 }
 
 // OpenInterface is the real opener: AF_PACKET on iface (DCP, RT, RTA and
-// LLDP), UDP 34964 for DCE/RPC, and the interface's IPv4 addresses.
-func OpenInterface(iface string) (transport.Port, net.PacketConn, func() []net.IP, error) {
+// LLDP), DCE/RPC on UDP 34964 of the station address only (never all
+// interfaces: it is opened once the PLC sets that address, which must be
+// one iface holds), and the interface's IPv4 addresses.
+func OpenInterface(iface string) (Opened, error) {
 	port, err := transport.Open(iface, transport.Options{
 		EtherTypes: []uint16{wire.EtherTypePNIO},
 		Multicast:  []net.HardwareAddr{wire.DCPMulticastAddr},
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return Opened{}, err
 	}
-	rpc, err := net.ListenPacket("udp4", fmt.Sprintf(":%d", wire.PNIOCMPort))
-	if err != nil {
-		port.Close()
-		return nil, nil, nil, fmt.Errorf("DCE/RPC on UDP %d: %w", wire.PNIOCMPort, err)
+	listen := func(ip net.IP) (net.PacketConn, error) {
+		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: ip, Port: wire.PNIOCMPort})
+		if err != nil {
+			return nil, fmt.Errorf("DCE/RPC on %s:%d: %w", ip, wire.PNIOCMPort, err)
+		}
+		return c, nil
 	}
 	addrs := func() []net.IP {
 		ifi, err := net.InterfaceByName(iface)
@@ -205,7 +219,7 @@ func OpenInterface(iface string) (transport.Port, net.PacketConn, func() []net.I
 		}
 		return out
 	}
-	return port, rpc, addrs, nil
+	return Opened{Port: port, ListenRPC: listen, Addrs: addrs}, nil
 }
 
 // InputNames and OutputNames are the bound tags by nautilus direction
@@ -252,7 +266,7 @@ func (d *DeviceDriver) run(ctx context.Context) {
 			wait = d.retry[0]
 			continue
 		}
-		port, rpc, addrs, err := d.open(d.m.Interface)
+		o, err := d.open(d.m.Interface)
 		if err != nil {
 			d.setState("error", err.Error())
 			d.log.Warn("profinet-device: open", "interface", d.m.Interface, "error", err)
@@ -265,13 +279,15 @@ func (d *DeviceDriver) run(ctx context.Context) {
 			continue
 		}
 		dev, err := device.New(device.Config{
-			Identity: d.m.Identity(), Subslots: d.m.Subslots(), Port: port, RPC: rpc,
-			InterfaceAddrs: addrs, MinWatchdog: d.minWD, ControllerCMPort: d.cmPort, Log: d.log,
+			Identity: d.m.Identity(), Subslots: d.m.Subslots(), Port: o.Port, RPC: o.RPC, ListenRPC: o.ListenRPC,
+			InterfaceAddrs: o.Addrs, MinWatchdog: d.minWD, ControllerCMPort: d.cmPort, Log: d.log,
 			MaySend: d.maySend(),
 		})
 		if err != nil { // the manifest was validated; this is a bug
-			port.Close()
-			rpc.Close()
+			o.Port.Close()
+			if o.RPC != nil {
+				o.RPC.Close()
+			}
 			d.setState("error", err.Error())
 			return
 		}
@@ -336,6 +352,16 @@ func (d *DeviceDriver) leading() bool {
 // It takes no driver lock, since the device calls it from its own send
 // paths. The 200 ms look only stops the device; this is what keeps a
 // leader frozen past its lease from sending a single frame on resume.
+//
+// Two limits:
+//   - It relies on the gate being time-fenced: cluster mode's IsLeader
+//     compares the clock with the lease, so it turns false by itself when
+//     the lease runs out. A future pair mode must keep that property.
+//   - Check and send are not atomic. A sending goroutine that passed the
+//     check just before the lease ran out can still put one frame on the
+//     wire. Closing that needs a margin in the elector's fence (the new
+//     leader takes over a little after the old lease ends); noted for the
+//     redundancy work (#787).
 func (d *DeviceDriver) maySend() func() bool {
 	if !d.replica {
 		return nil

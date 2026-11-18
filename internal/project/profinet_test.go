@@ -77,24 +77,26 @@ func TestLoadProfinetDevice(t *testing.T) {
 	}
 }
 
-// Under redundancy: the device driver is one replica of the set, so a
-// standby goes silent on the PROFINET network instead of only marking its
-// data invalid (docs/design/profinet.md §4.5). Without it, the gate stays
-// plain.
-func TestProfinetDeviceReplicaUnderRedundancy(t *testing.T) {
-	p, err := Load(profinetProject("redundancy:\n  lease: pn-lease\n"), "")
+// Under redundancy: Load still refuses PROFINET, until the floating
+// station address can be named and checked (#787 step 6). The replica
+// marking is in place for when it lands: a marked driver's standby goes
+// silent on the network instead of only marking its data invalid.
+func TestProfinetDeviceUnderRedundancy(t *testing.T) {
+	_, err := Load(profinetProject("redundancy:\n  lease: pn-lease\n"), "")
+	if err == nil || !strings.Contains(err.Error(), "floating IP") {
+		t.Fatalf("got %v, want the floating-IP refusal", err)
+	}
+	p, err := Load(profinetProject(""), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.Runtime.Driver.(*profinet.DeviceDriver).Replica() {
-		t.Fatal("profinet-device under redundancy: is not a replica")
-	}
-	p, err = Load(profinetProject(""), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Runtime.Driver.(*profinet.DeviceDriver).Replica() {
+	drv := p.Runtime.Driver.(*profinet.DeviceDriver)
+	if drv.Replica() {
 		t.Fatal("profinet-device without redundancy: is a replica")
+	}
+	markReplicas(drv, true)
+	if !drv.Replica() {
+		t.Fatal("markReplicas did not mark the driver")
 	}
 }
 
@@ -168,9 +170,11 @@ END_PROGRAM`)}
 	gate.Store(true)
 	drv.SetWriteGate(gate.Load)
 	drv.Apply(
-		profinet.WithDeviceOpener(func(string) (transport.Port, net.PacketConn, func() []net.IP, error) {
-			return hub.Port(devMAC, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr}}),
-				rpc, func() []net.IP { return []net.IP{pntest.Loopback} }, nil
+		profinet.WithDeviceOpener(func(string) (profinet.Opened, error) {
+			return profinet.Opened{
+				Port: hub.Port(devMAC, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr}}),
+				RPC:  rpc, Addrs: func() []net.IP { return []net.IP{pntest.Loopback} },
+			}, nil
 		}),
 		profinet.WithDeviceControllerPort(plc.CMPort()))
 

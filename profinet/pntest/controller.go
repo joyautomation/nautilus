@@ -34,7 +34,14 @@ type Controller struct {
 	// Props is the ARProperties of the next Connect (0: 0x11, legacy
 	// start-up; set bit 30 for Advanced Startup).
 	Props uint32
+	// Activity is the CMInitiatorActivityTimeout of the next Connect in
+	// 100 ms units (0: 100, ten seconds).
+	Activity uint16
+	// NoOutputIOCR leaves the output IOCR out of the next Connect (a
+	// malformed request the device must refuse).
+	NoOutputIOCR bool
 
+	cmFrom      net.IP // source of the last CControl
 	mu          sync.Mutex
 	arUUID      [16]byte
 	session     uint16
@@ -146,6 +153,7 @@ func (c *Controller) cmLoop() {
 		}
 		c.mu.Lock()
 		c.appReady = ctl.ARUUID == c.arUUID
+		c.cmFrom = from.IP
 		c.mu.Unlock()
 		ctl.Command = wire.ControlCmdDone
 		body := wire.MarshalPNIOResponseBody(wire.PNIOStatusOK, wire.MarshalIODControl(wire.BlockTypeAppRdyBlockRes, ctl), argsMax, false)
@@ -419,7 +427,7 @@ func (c *Controller) connectArgs(subs []device.Subslot) []byte {
 	}
 	args := wire.MarshalARBlockReq(&wire.ARBlockReq{
 		ARType: 1, ARUUID: c.arUUID, SessionKey: c.session, CMInitiatorMAC: c.port.MAC(),
-		CMInitiatorObjUUID: randUUID(), ARProperties: props, CMInitiatorActivityTimeout: 100,
+		CMInitiatorObjUUID: randUUID(), ARProperties: props, CMInitiatorActivityTimeout: c.activity(),
 		CMInitiatorUDPRTPort: wire.ProfinetRTUDPPort, CMInitiatorStationName: "ctrl",
 	})
 	c.mu.Unlock()
@@ -431,7 +439,9 @@ func (c *Controller) connectArgs(subs []device.Subslot) []byte {
 		})
 	}
 	args = append(args, iocr(wire.IOCRTypeInput, 1, 0xC001, in)...)
-	args = append(args, iocr(wire.IOCRTypeOutput, 2, 0xFFFF, out)...)
+	if !c.NoOutputIOCR {
+		args = append(args, iocr(wire.IOCRTypeOutput, 2, 0xFFFF, out)...)
+	}
 	args = append(args, wire.MarshalAlarmCRBlockReq(&wire.AlarmCRBlockReq{AlarmCRType: 1, LT: wire.EtherTypePNIO, RTATimeoutFactor: 1, RTARetries: 3, LocalAlarmRef: 7, MaxAlarmDataLen: 200})...)
 	api := wire.ExpectedAPI{API: 0}
 	for _, s := range all {
@@ -508,8 +518,38 @@ func (c *Controller) control(op, cmd uint16) error {
 // PrmEnd ends parameterisation.
 func (c *Controller) PrmEnd() error { return c.control(wire.RPCOpControl, wire.ControlCmdPrmEnd) }
 
-// Release ends the AR.
-func (c *Controller) Release() error { return c.control(wire.RPCOpRelease, wire.ControlCmdRelease) }
+// Release ends the AR with an IODReleaseBlockReq (0x0114) and checks the
+// reply is an IODReleaseBlockRes (0x8114).
+func (c *Controller) Release() error {
+	c.mu.Lock()
+	ctl := wire.IODControl{ARUUID: c.arUUID, SessionKey: c.session, Command: wire.ControlCmdRelease}
+	c.mu.Unlock()
+	st, blocks, err := c.call(wire.RPCOpRelease, wire.MarshalIODControl(wire.BlockTypeIODReleaseReq, ctl), false)
+	switch {
+	case err != nil:
+		return err
+	case !st.IsOK():
+		return fmt.Errorf("status %x", st.Marshal())
+	case len(blocks) != 1 || blocks[0].Type != wire.BlockTypeIODReleaseRes:
+		return fmt.Errorf("release reply blocks %+v, want one IODReleaseBlockRes (0x8114)", blocks)
+	}
+	return nil
+}
+
+// CControlFrom is the source address of the device's last CControl
+// (ApplicationReady): the station address the controller talks to.
+func (c *Controller) CControlFrom() net.IP {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cmFrom
+}
+
+func (c *Controller) activity() uint16 {
+	if c.Activity == 0 {
+		return 100
+	}
+	return c.Activity
+}
 
 // Read reads a record and returns its data (after the response header)
 // and the PNIO status.
