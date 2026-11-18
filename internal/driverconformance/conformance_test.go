@@ -20,10 +20,13 @@
 //	   same as C5, for a driver that reads any gate as "one replica of a
 //	   redundant set"
 //
-// C5 and C8 hold for either of two designs, which each subject declares
+// C5 and C8 hold for any of three designs, which each subject declares
 // (gate): drop the commands pushed while the gate is closed and ask for
-// every output when it reopens (dropAndAsk), or hold the latest one and
-// send it on reopen (holdAndDeliver), never a superseded one.
+// every output when it reopens (dropAndAsk); hold the latest one and send
+// it on reopen, never a superseded one (holdAndDeliver); or drop them and
+// take the first push after reopening as a baseline, so an event command
+// is never replayed (dropAndRebaseline). In every design nothing reaches
+// the device while the gate is closed.
 //
 // A driver that does not keep a contract is listed in expect with the
 // issue that tracks the gap. Its row still runs: it must keep failing, and
@@ -136,8 +139,17 @@ const (
 	// holdAndDeliver: the driver keeps the latest command pushed while
 	// closed and sends it when the gate reopens, with no further push. A
 	// command superseded while the gate was closed is never sent: a stale
-	// command delivered on reopen is the danger this design carries.
+	// command delivered on reopen is the danger this design carries. The
+	// Sparkplug host.
 	holdAndDeliver
+	// dropAndRebaseline: for event commands (a reset, a ForceOff), which
+	// must never be sent twice. Nothing pushed while closed is kept or
+	// recorded; after the gate reopens the first push is a baseline, like
+	// the first after Start, and sends nothing; the next change goes out.
+	// The trade: after a gate cycle the device and the tag can disagree
+	// until the program changes the command again. hw.Base (snmp, redfish,
+	// prom), hw/base.go WriteOutputs rule 2.
+	dropAndRebaseline
 )
 
 var subjects []subject
@@ -245,7 +257,7 @@ func validate(s subject, cs []contract) []string {
 		return u || b
 	}
 	if s.gate == gateUnset && !(skipped("C5") && skipped("C8")) {
-		errs = append(errs, "no gate mode: declare gate dropAndAsk or holdAndDeliver (C5, C8)")
+		errs = append(errs, "no gate mode: declare gate dropAndAsk, holdAndDeliver or dropAndRebaseline (C5, C8)")
 	}
 	return errs
 }
@@ -482,9 +494,11 @@ func c8(t tb, s subject) {
 // gateFlow is C5 and C8: start the driver with a gate installed by
 // install, check it took (took), then close the gate, push a change, see
 // nothing arrive, and reopen it. Then, by the subject's gate mode: see the
-// driver ask for every output and the next push arrive (dropAndAsk), or
-// see the held command arrive with no push, and a command superseded
-// while the gate was closed never arrive (holdAndDeliver).
+// driver ask for every output and the next push arrive (dropAndAsk); see
+// the held command arrive with no push, and a command superseded while the
+// gate was closed never arrive (holdAndDeliver); or see the command pushed
+// while closed not arrive when pushed again after reopening, and the next
+// change arrive (dropAndRebaseline).
 func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func()) {
 	var mu sync.Mutex
 	open := true
@@ -506,13 +520,45 @@ func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func(
 	push(b)
 	wait(t, 5*time.Second, fmt.Sprintf("%s = %v at the device with the gate open", r.out, b), func() bool { return r.field() == b })
 
-	setGate(false)
-	settle(t, r, 2) // the driver has looked at the closed gate
-	push(a)
-	settle(t, r, 3)
-	if got := r.field(); got != b {
-		t.Fatalf("%s reached the device as %v while the write gate was closed", r.out, got)
+	if r.sent == nil {
+		t.Logf("%s: the rig has no sent history, so the gate checks sample the device value: a write overwritten within about a millisecond can be missed", r.out)
 	}
+	// watch starts watching what reaches the device: every value sent (the
+	// rig's sent history, exact) or, without one, every value field shows
+	// other than the one it shows now (sampled). Call the func it returns
+	// once.
+	watch := func() func() []any {
+		if r.sent != nil {
+			mark := len(r.sent())
+			return func() []any { return r.sent()[mark:] }
+		}
+		now := r.field()
+		stop := sample(r.field)
+		return func() []any {
+			var out []any
+			for _, v := range stop() {
+				if v != now {
+					out = append(out, v)
+				}
+			}
+			return out
+		}
+	}
+	// closed runs body with the gate closed and fails if anything reached
+	// the device meanwhile, the same value sent again included.
+	closed := func(body func()) {
+		t.Helper()
+		setGate(false)
+		settle(t, r, 2) // the driver has looked at the closed gate
+		w := watch()
+		body()
+		settle(t, r, 3)
+		if got := w(); len(got) > 0 {
+			t.Fatalf("%s reached the device as %v while the write gate was closed", r.out, got)
+		}
+	}
+
+	closed(func() { push(a) })
 
 	switch s.gate {
 	case dropAndAsk:
@@ -532,28 +578,36 @@ func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func(
 		// device already holds. Nothing is owed. b went stale the moment a
 		// was pushed, and must never reach the device: not while the gate
 		// is closed, not when it reopens.
-		setGate(false)
-		settle(t, r, 2)
-		var mark int
-		if r.sent != nil {
-			mark = len(r.sent())
-		}
-		seen := sample(r.field)
-		push(b)
-		push(a)
-		settle(t, r, 3)
+		closed(func() { push(b); push(a) })
+		w := watch()
 		setGate(true)
 		settle(t, r, 5)
-		got := seen()
-		if r.sent != nil {
-			got = r.sent()[mark:]
-		}
+		got := w()
 		for _, v := range got {
 			if v != a {
-				t.Fatalf("%s at the device went through %v; want only %v: %v was pushed while the gate was closed and superseded by %v before it reopened, so it must never be sent",
+				t.Fatalf("%s reached the device as %v after the gate reopened; want only %v: %v was pushed while the gate was closed and superseded by %v before it reopened, so it must never be sent",
 					r.out, got, a, b, a)
 			}
 		}
+	case dropAndRebaseline:
+		// The value pushed while the gate was closed is, once it reopens,
+		// a baseline like the first push after Start: nothing goes out.
+		// The device keeps b while the tag says a, until the program
+		// changes the command again; that is the trade this design makes
+		// so an event command (a ForceOff) is never sent twice.
+		w := watch()
+		setGate(true)
+		settle(t, r, 2) // the driver has looked at the reopened gate
+		push(a)
+		settle(t, r, 3)
+		if got := w(); len(got) > 0 {
+			t.Fatalf("%s reached the device as %v after the gate reopened: %v, pushed while it was closed, is a baseline there and must not be sent (no replay)", r.out, got, a)
+		}
+		// The next change goes out.
+		push(b)
+		settle(t, r, 3)
+		push(a)
+		wait(t, 5*time.Second, fmt.Sprintf("%s = %v at the device: a change after the baseline goes out", r.out, a), func() bool { return r.field() == a })
 	default:
 		t.Fatalf("the subject declares no gate mode")
 	}
