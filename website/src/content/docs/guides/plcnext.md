@@ -287,7 +287,10 @@ the file: copying a new build into place drops it**, and the step is
 needed again. Without it both programs run best-effort and say so in the
 shim's log, the page, and naut's `scan.sched`. With it the shim asks for
 priority 80 (a `nautilus_io.prio` file asks for another), and a naut
-task may set `priority:`.
+task may set `priority:`. naut changes with every update, so give the
+capability to `naut-launch` instead, which ships beside the shim: it
+hands it on to whichever release it starts, and only it needs the
+step again, when it is itself replaced (see Start on boot).
 
 Shim lateness on the bench unit, 3-minute windows, naut at a 50 ms scan
 on CPU 0, late meaning more than 200 µs past the shim's 1 ms deadline,
@@ -374,11 +377,37 @@ the acknowledge, the restart case and the hold switched off.
 
 ## Start on boot
 
-The controller has no systemd, and `admin` cannot write `/etc/init.d`,
-but it may keep a crontab, and cron starts before the PLCnext runtime.
-`examples/plcnext-bench/controller/naut-keepalive.sh` starts `naut run`
-for the project unless it is already running, pinned to the CPU in
-`naut.cpu` if that file exists:
+The controller has no systemd, and `admin` cannot write `/etc/init.d`
+or use `sudo` for much, but it may keep a crontab, and cron starts
+before the PLCnext runtime. `naut deploy` has a mode for exactly that
+(the [deployment guide](/guides/deployment/#without-systemd-or-root-cron)).
+Once, as admin: put `naut-launch` from the I/O release in the root,
+have the controller's owner give it `cap_sys_nice` (the one-line recipe
+in `rt/plcnext-io/README.md`), and pin naut to CPU 0:
+
+```sh
+scp naut-launch admin@<controller>:/opt/plcnext/apps/nautilus/
+ssh admin@<controller> 'chmod 755 /opt/plcnext/apps/nautilus/naut-launch; echo 0 > /opt/plcnext/apps/nautilus/cpu'
+```
+
+Then, from the project, with an SSH key for admin:
+
+```sh
+naut deploy install admin@<controller> -supervisor cron -root /opt/plcnext/apps/nautilus
+naut deploy update admin@<controller>      # every later release; rollback, status, backup as usual
+```
+
+The controller is built for `linux/armv7` on the matching naut release.
+It starts at boot and is restarted within a minute of a crash, through
+`naut-launch`, so a task's `priority:` holds across updates with no
+root step. naut need not wait for the runtime: the driver retries the
+socket and the page. The shim starts with the runtime, because the
+firmware starts it.
+
+Without `naut deploy`,
+`examples/plcnext-bench/controller/naut-keepalive.sh` does the same for
+a project copied by hand and run with `naut run` (pinned to the CPU in
+`naut.cpu`):
 
 ```sh
 ssh admin@<controller> 'printf "@reboot %s\n* * * * * %s\n" \
@@ -386,12 +415,9 @@ ssh admin@<controller> 'printf "@reboot %s\n* * * * * %s\n" \
   /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh | crontab -'
 ```
 
-It starts naut at boot and restarts it within a minute of a crash;
-`crontab -r` takes it out. naut need not wait for the runtime: the
-driver retries the socket and the page. The shim starts with the
-runtime, because the firmware starts it. On the bench, after a reboot
-naut, the shim (FIFO 80, capabilities intact) and the heartbeat were all
-back about a minute after the controller answered ssh.
+On the bench, after a reboot naut, the shim (FIFO 80, capabilities
+intact) and the heartbeat were all back about a minute after the
+controller answered ssh.
 
 ## What it does not do yet
 

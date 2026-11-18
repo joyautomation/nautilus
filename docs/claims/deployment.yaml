@@ -189,3 +189,24 @@ claims:
       Type=notify; and on a Toradex Verdin AM62 (ARM64) running Torizon
       OS 7.8.0, 2026-11-17, under Type=notify with an ARM64 runtime built
       on amd64. The CD workflow has not run in GitHub Actions.
+  - id: DEP-015
+    claim: >-
+      naut deploy install -supervisor cron -root <dir> runs as the SSH user
+      with no sudo, starts the controller from a keepalive in that user's
+      crontab (at boot and every minute), and the box remembers the mode
+      for later commands. Under it, update, an update that does not start
+      (rolled back, exit 3), rollback, status and uninstall work, the
+      keepalive restarts a dead controller but not while a deploy holds it,
+      and uninstall leaves the root and naut-launch.
+    source: "#without-systemd-or-root-cron"
+    tests:
+      - go ./cmd/naut TestDeployCronInstallRunsAsTheUser
+      - go ./cmd/naut TestDeployCronModeIsDiscovered
+      - go ./cmd/naut TestDeploySupervisorFlags
+      - go ./cmd/naut TestDeployBoxCronMode
+    partial: true
+    note: >-
+      TestDeployBoxCronMode runs box.sh's cron mode on the test machine
+      with a stand-in crontab and controller. A run against a PLCnext
+      (no systemd, admin's allowlisted sudo) through naut-launch is the
+      bench check still to come.

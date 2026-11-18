@@ -165,6 +165,33 @@ system's, so `~/.ssh/config`, keys and the agent work as usual, and
 - Everything is `sync`ed before a link moves. If power is lost
   mid-update, the box boots the old release or the whole new one.
 
+### Without systemd or root: cron
+
+Some controllers run Linux without systemd and give their SSH user no
+root: a PLCnext has sysvinit, and `admin` has only an allowlisted
+`sudo`. Install once with `-supervisor cron` and a directory that user
+can write:
+
+```sh
+naut deploy install admin@plc -supervisor cron -root /opt/plcnext/apps/nautilus
+naut deploy update admin@plc         # the box remembers cron mode and the root
+```
+
+Nothing runs under `sudo`. The layout is the same under `-root`
+(`releases/`, `current`, `previous`), with retained values and the log
+in `state/` and optional variables in `env`. Two lines in that user's
+crontab, at boot and every minute, run `keepalive.sh`, which starts
+`current` unless it is already running. Update, rollback, backup and
+restore work as above. An update that does not start, or exits within
+3 s, rolls back and exits 3; as under `Type=simple`, a first scan that
+hangs is not caught. A crash is restarted within a minute rather than
+2 s. If `naut-launch` (from the PLCnext I/O release) sits in the root,
+the keepalive starts the controller through it, so `priority:` keeps
+working across updates without root (see the
+[PLCnext guide](/guides/plcnext/#start-on-boot)). Uninstall removes
+the crontab lines and what deploy made, and leaves the root and
+`naut-launch`.
+
 ### Through CD
 
 A deployment repository holds the project and pins the naut version
