@@ -656,6 +656,9 @@ jobs:
   playground:
     name: Playground — full build, docs and share images
     runs-on: ubuntu-latest
+    # About 4 min on main; a hung Chrome must not hold a runner and the
+    # required check for GitHub's 6-hour default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -668,8 +671,8 @@ jobs:
       # The built playground in a real headless Chrome (#906, #833): every
       # example reaches "nautilus: live" (#891's offline bug), and YAML files
       # get their schemas. No Chrome fails the job; the tests never skip.
-      # The job sets no timeout-minutes, so the live test's own 300 s (Chrome
-      # can take 90 s to start on a slow runner) is the limit.
+      # The live test allows 300 s (Chrome can take 90 s to start on a slow
+      # runner), well inside the job's 30 min.
       - name: Chrome for the browser tests
         run: .github/scripts/require-chrome.test.sh && .github/scripts/require-chrome.sh
       - name: playground browser tests
