@@ -153,6 +153,17 @@ func (d *Device) handleOutputFrame(f transport.Frame) {
 	if err != nil {
 		return
 	}
+	// TransferStatus other than 0 marks a frame damaged in transit: drop
+	// it. A repeated CycleCounter is the same frame again (a duplicate on
+	// the segment, or a controller that stalled): it carries nothing new
+	// and does not feed the watchdog.
+	if fr.TransferStatus != 0 {
+		return
+	}
+	if a.haveCycle && fr.CycleCounter == a.lastCycle {
+		return
+	}
+	a.haveCycle, a.lastCycle = true, fr.CycleCounter
 	a.lastOut = time.Now()
 	d.counters.outputFrames++
 	d.snapInfo.fresh = true

@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,14 +80,23 @@ type Identity struct {
 	SWRevision  [3]byte
 }
 
-// Config is everything New needs. Port and RPC are owned by the device
-// from New on and closed by Run when it returns.
+// Config is everything New needs. Port, RPC and every socket ListenRPC
+// opens are owned by the device and closed by Run when it returns.
 type Config struct {
 	Identity
 	Subslots []Subslot // user slots (≥ 1); slot 0 is the DAP and implicit
 
 	Port transport.Port // raw Ethernet: DCP, RT, RTA, LLDP
-	RPC  net.PacketConn // UDP for DCE/RPC (34964 in the field)
+	// DCE/RPC (UDP 34964 in the field): exactly one of RPC and ListenRPC.
+	// RPC is one socket, open from the start (tests). ListenRPC opens the
+	// socket on the station address once a controller sets it over DCP
+	// (an address the interface holds), and again if it changes; until then
+	// the device has no RPC socket at all. Bound to that one address, RPC
+	// is not exposed on the host's other networks, and every reply and
+	// CControl leaves from the address the controller talks to, a floating
+	// one included.
+	RPC       net.PacketConn
+	ListenRPC func(ip net.IP) (net.PacketConn, error)
 
 	// ControllerCMPort is the controller's DCE/RPC port, where the device
 	// sends its CControl(ApplicationReady). 0 means 34964.
@@ -140,6 +151,19 @@ func (c gatedConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 // maySend reports whether the device may send now.
 func (d *Device) maySend() bool { return d.cfg.MaySend == nil || d.cfg.MaySend() }
 
+// stationNameRE is a PROFINET NameOfStation: DNS-like labels of lowercase
+// letters, digits and hyphens, at most 240 characters, not port-xyz.
+var stationNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// ValidStationName checks a NameOfStation: the manifest's station, and a
+// name a controller sets over DCP.
+func ValidStationName(name string) error {
+	if len(name) > 240 || !stationNameRE.MatchString(name) || strings.HasPrefix(name, "port-") {
+		return fmt.Errorf("station %q: want lowercase letters, digits and hyphens in dot-separated labels, at most 240 characters (and not port-…)", name)
+	}
+	return nil
+}
+
 // Device is one running IO device. Use New, then Run.
 type Device struct {
 	cfg  Config
@@ -157,7 +181,10 @@ type Device struct {
 	station string
 	// suite is the IP suite a DCP Set gave the device, nil until one is
 	// accepted (its address is one the interface holds).
-	suite    *ipSuite
+	suite *ipSuite
+	// rpcAt tells rpcServe the station address to listen on (ListenRPC);
+	// one slot, the latest wins.
+	rpcAt    chan net.IP
 	snapInfo snapInfo
 
 	counters counters
@@ -207,11 +234,11 @@ func (s State) String() string {
 
 // New validates cfg and builds a device. It does not touch the network.
 func New(cfg Config) (*Device, error) {
-	if cfg.Port == nil || cfg.RPC == nil {
-		return nil, errors.New("profinet device: Port and RPC are required")
+	if cfg.Port == nil || (cfg.RPC == nil) == (cfg.ListenRPC == nil) {
+		return nil, errors.New("profinet device: Port and exactly one of RPC and ListenRPC are required")
 	}
-	if cfg.Station == "" {
-		return nil, errors.New("profinet device: station name is required")
+	if err := ValidStationName(cfg.Station); err != nil {
+		return nil, fmt.Errorf("profinet device: %w", err)
 	}
 	if len(cfg.Subslots) == 0 {
 		return nil, errors.New("profinet device: no subslots")
@@ -231,9 +258,20 @@ func New(cfg Config) (*Device, error) {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
-	if cfg.MaySend != nil {
-		cfg.Port = gatedPort{cfg.Port, cfg.MaySend}
-		cfg.RPC = gatedConn{cfg.RPC, cfg.MaySend}
+	if may := cfg.MaySend; may != nil {
+		cfg.Port = gatedPort{cfg.Port, may}
+		if cfg.RPC != nil {
+			cfg.RPC = gatedConn{cfg.RPC, may}
+		}
+		if listen := cfg.ListenRPC; listen != nil {
+			cfg.ListenRPC = func(ip net.IP) (net.PacketConn, error) {
+				c, err := listen(ip)
+				if err != nil {
+					return nil, err
+				}
+				return gatedConn{c, may}, nil
+			}
+		}
 	}
 	d := &Device{
 		cfg:     cfg,
@@ -244,7 +282,9 @@ func New(cfg Config) (*Device, error) {
 		outGood: map[Addr]bool{},
 		station: cfg.Station,
 		boot:    uint32(time.Now().Unix()),
+		rpcAt:   make(chan net.IP, 1),
 	}
+
 	for _, s := range dapSubslots() {
 		d.subs[s.Addr] = &s
 	}
@@ -382,13 +422,12 @@ func (d *Device) Run(ctx context.Context) error {
 	d.mu.Unlock()
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); d.rpcLoop(ctx) }()
+	go func() { defer wg.Done(); d.rpcServe(ctx) }()
 	go func() { defer wg.Done(); d.lldpLoop(ctx) }()
 	err := d.frameLoop(ctx)
 	cancel()
 	d.cfg.Port.Close()
-	d.cfg.RPC.Close()
-	wg.Wait()
+	wg.Wait() // rpcServe closes its sockets on the way out
 	d.mu.Lock()
 	if d.ar != nil {
 		d.endAR(d.ar, "stopped")

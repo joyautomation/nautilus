@@ -123,7 +123,7 @@ type gsdmlDAPItem struct {
 	FixedInSlots                 string `xml:"FixedInSlots,attr"`
 	ObjectUUID_LocalIndex        string `xml:"ObjectUUID_LocalIndex,attr"`
 	DeviceAccessSupported        string `xml:"DeviceAccessSupported,attr"`
-	NumberOfDeviceAccessAR       string `xml:"NumberOfDeviceAccessAR,attr"`
+	NumberOfDeviceAccessAR       string `xml:"NumberOfDeviceAccessAR,attr,omitempty"`
 	MultipleWriteSupported       string `xml:"MultipleWriteSupported,attr"`
 	CheckDeviceID_Allowed        string `xml:"CheckDeviceID_Allowed,attr"`
 	NameOfStationNotTransferable string `xml:"NameOfStationNotTransferable,attr"`
@@ -344,14 +344,18 @@ func build(d Device) gsdmlISO15745Profile {
 		ID: "IDD_1", PNIO_Version: "V2.4", PhysicalSlots: fmt.Sprintf("0..%d", maxSlot),
 		ModuleIdentNumber: fmt.Sprintf("0x%08X", device.DAPModuleIdent), MinDeviceInterval: fmt.Sprintf("%d", minInterval),
 		DNS_CompatibleName: d.Station, FixedInSlots: "0", ObjectUUID_LocalIndex: "1",
-		DeviceAccessSupported: "true", NumberOfDeviceAccessAR: "1", MultipleWriteSupported: "true",
+		// Claim only what the engine does: it refuses an AR without IOCRs,
+		// so no Device Access AR; it answers LLDP but runs no SNMP agent,
+		// so conformance class A (B requires SNMP); and no netload test has
+		// been run, so the lowest netload class.
+		DeviceAccessSupported: "false", MultipleWriteSupported: "true",
 		CheckDeviceID_Allowed: "false", NameOfStationNotTransferable: "false", LLDP_NoD_Supported: "true",
 		ResetToFactoryModes: "2",
 		ModuleInfo: &gsdmlModuleInfo{
 			Name: &gsdmlTextRef{TextId: "IDT_NAME_DAP"}, InfoText: &gsdmlTextRef{TextId: "IDT_INFO_DAP"},
 			VendorName: &gsdmlValue{Value: d.VendorName}, OrderNumber: &gsdmlValue{Value: d.OrderNumber},
 		},
-		CertificationInfo: &gsdmlCertificationInfo{ConformanceClass: "B", NetloadClass: "III"},
+		CertificationInfo: &gsdmlCertificationInfo{ConformanceClass: "A", NetloadClass: "I"},
 		IOConfigData:      &gsdmlIOConfigData{MaxInputLength: "244", MaxOutputLength: "244"},
 		UseableModules:    &gsdmlUseableModules{ModuleItemRef: refs},
 		VirtualSubmoduleList: &gsdmlVirtualSubmoduleList{VirtualSubmoduleItem: []gsdmlVirtualSubmoduleItem{{
@@ -363,7 +367,7 @@ func build(d Device) gsdmlISO15745Profile {
 			InterfaceSubmoduleItem: []gsdmlInterfaceSubmodule{{
 				ID: "IDS_I", SubmoduleIdentNumber: fmt.Sprintf("0x%08X", device.InterfaceSubmodIdent),
 				SubslotNumber: fmt.Sprintf("%d", device.InterfaceSubslot), TextId: "IDT_NAME_Interface",
-				SupportedRT_Classes: "RT_CLASS_1", SupportedProtocols: "LLDP;SNMP",
+				SupportedRT_Classes: "RT_CLASS_1", SupportedProtocols: "LLDP",
 				PTP_BoundarySupported: "true", DCP_BoundarySupported: "true",
 				ApplicationRelations: &gsdmlApplicationRelations{
 					StartupMode:      "Legacy;Advanced",

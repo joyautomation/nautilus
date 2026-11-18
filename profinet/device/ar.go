@@ -38,11 +38,16 @@ type ar struct {
 	wrong    map[Addr]bool
 
 	appReady atomic.Bool // the controller acknowledged our CControl(AppReady)
+	prmEnd   bool        // the controller's PrmEnd arrived
+	startup  *time.Timer // CMInitiatorActivityTimeout: ends an AR that never reaches PrmEnd
 	cancel   context.CancelFunc
 	cyclic   bool
 	lastOut  time.Time // last output frame (zero: none yet in this AR)
-	dataAt   time.Time // when the AR entered DATA
-	watchdog time.Duration
+	// lastCycle is the CycleCounter of the last output frame taken.
+	lastCycle uint16
+	haveCycle bool
+	dataAt    time.Time // when the AR entered DATA
+	watchdog  time.Duration
 }
 
 type iocr struct {
@@ -67,6 +72,20 @@ type expect struct{ inLen, outLen uint16 }
 // firstOutputGrace is how long after entering DATA the device waits for
 // the controller's first output frame before it gives the AR up.
 const firstOutputGrace = 10 * time.Second
+
+// startupTimeout is how long an AR may take from Connect to PrmEnd: the
+// controller's CMInitiatorActivityTimeout (in 100 ms units, 1-1000), or
+// defaultStartupTimeout when it sends 0. Without it, a Connect that never
+// goes on (a tool, a crashed supervisor) would hold the one AR for good
+// and every other controller would get "out of AR resources".
+func startupTimeout(factor uint16) time.Duration {
+	if factor == 0 {
+		return defaultStartupTimeout
+	}
+	return time.Duration(factor) * 100 * time.Millisecond
+}
+
+const defaultStartupTimeout = 30 * time.Second
 
 func newIOCR(r *wire.IOCRBlockReq, frameID uint16) *iocr {
 	c := &iocr{
@@ -168,7 +187,10 @@ func (d *Device) connect(blocks []wire.PNIOBlock, from *net.UDPAddr) ([]byte, wi
 		}
 		resp = append(resp, wire.MarshalIOCRBlockRes(r.IOCRType, r.IOCRReference, id)...)
 	}
-	if a.in == nil {
+	// Both directions, always: the output IOCR carries the controller's
+	// frames, whose absence is what the watchdog detects. An AR without one
+	// would have no watchdog at all.
+	if a.in == nil || a.out == nil {
 		return refuse(0x02, 0x00)
 	}
 	if alarm != nil {
@@ -186,6 +208,9 @@ func (d *Device) connect(blocks []wire.PNIOBlock, from *net.UDPAddr) ([]byte, wi
 
 	a.watchdog = d.watchdogFor(a)
 	d.ar = a
+	d.clearOutputs()
+	limit := startupTimeout(arb.CMInitiatorActivityTimeout)
+	a.startup = time.AfterFunc(limit, func() { d.startupExpired(a, limit) })
 	d.counters.ars++
 	d.snapInfo.controller, d.snapInfo.ctrlMAC = a.ctrlStation, a.ctrlMAC
 	d.snapInfo.fresh, d.snapInfo.dataStatus = false, 0
@@ -294,10 +319,34 @@ func allocFrameID(rtClass uint32, used map[uint16]bool) uint16 {
 	return 0xFFFF
 }
 
-// release ends the AR the request names (d.mu held).
+// startupExpired ends an AR still short of PrmEnd when its startup time
+// runs out.
+func (d *Device) startupExpired(a *ar, limit time.Duration) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.ar != a || a.prmEnd {
+		return
+	}
+	d.counters.aborts++
+	d.endAR(a, fmt.Sprintf("no PrmEnd from %s within %s (CMInitiatorActivityTimeout)", a.ctrlStation, limit))
+}
+
+// clearOutputs forgets the last AR's outputs (d.mu held): a subslot the
+// next AR does not carry must not read as good with old bytes. The driver
+// holds its own last good value for Stale.
+func (d *Device) clearOutputs() {
+	for a, b := range d.out {
+		clear(b)
+		d.outGood[a] = false
+	}
+}
+
+// release ends the AR the request names (d.mu held). The request block is
+// an IODReleaseBlockReq (0x0114); the reply an IODReleaseBlockRes (0x8114).
+// An IODControlReq carrying the Release command is taken too.
 func (d *Device) release(blocks []wire.PNIOBlock) ([]byte, wire.PNIOStatus) {
 	for _, b := range blocks {
-		if b.Type != wire.BlockTypeIODControlReq && b.Type != wire.BlockTypeARRPCBlockReq {
+		if b.Type != wire.BlockTypeIODReleaseReq && b.Type != wire.BlockTypeIODControlReq {
 			continue
 		}
 		c, err := wire.ParseIODControl(b.Data)
@@ -305,7 +354,7 @@ func (d *Device) release(blocks []wire.PNIOBlock) ([]byte, wire.PNIOStatus) {
 			break
 		}
 		d.endAR(d.ar, "released by the controller")
-		return wire.MarshalIODControl(wire.BlockTypeIODControlRes, wire.IODControl{ARUUID: c.ARUUID, SessionKey: c.SessionKey, Command: wire.ControlCmdDone}), wire.PNIOStatusOK
+		return wire.MarshalIODControl(wire.BlockTypeIODReleaseRes, wire.IODControl{ARUUID: c.ARUUID, SessionKey: c.SessionKey, Command: wire.ControlCmdDone}), wire.PNIOStatusOK
 	}
 	return nil, wire.PNIOStatus{ErrorCode: wire.ErrorCodeRelease, ErrorDecode: wire.ErrorDecodePNIO, ErrorCode1: 0x40, ErrorCode2: 0x05} // unknown AR
 }
@@ -316,7 +365,7 @@ func (d *Device) control(blocks []wire.PNIOBlock) ([]byte, wire.PNIOStatus, func
 	var resp []byte
 	var after func()
 	for _, b := range blocks {
-		if b.Type != wire.BlockTypeIODControlReq && b.Type != wire.BlockTypeARRPCBlockReq {
+		if b.Type != wire.BlockTypeIODControlReq && b.Type != wire.BlockTypeIODReleaseReq {
 			continue
 		}
 		c, err := wire.ParseIODControl(b.Data)
@@ -327,6 +376,10 @@ func (d *Device) control(blocks []wire.PNIOBlock) ([]byte, wire.PNIOStatus, func
 		done := wire.MarshalIODControl(wire.BlockTypeIODControlRes, wire.IODControl{ARUUID: c.ARUUID, SessionKey: c.SessionKey, Command: wire.ControlCmdDone})
 		switch {
 		case c.Command&wire.ControlCmdPrmEnd != 0:
+			a.prmEnd = true
+			if a.startup != nil {
+				a.startup.Stop()
+			}
 			resp = append(resp, done...)
 			after = func() { d.applicationReady(a) }
 		case c.Command&wire.ControlCmdApplicationReady != 0:
@@ -360,13 +413,18 @@ func (d *Device) applicationReady(a *ar) {
 }
 
 // endAR stops the AR's cyclic exchange and forgets it (d.mu held). The
-// last outputs stay in the image: the driver marks them Stale.
+// image's outputs are cleared; the driver keeps its own last good value
+// and marks it Stale.
 func (d *Device) endAR(a *ar, why string) {
 	if a.cancel != nil {
 		a.cancel()
 	}
+	if a.startup != nil {
+		a.startup.Stop()
+	}
 	if d.ar == a {
 		d.ar = nil
+		d.clearOutputs()
 	}
 	d.snapInfo.fresh = false
 	d.setState(StateIdle, "AR ended: "+why)

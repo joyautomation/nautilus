@@ -108,9 +108,9 @@ func newDriverRig(t *testing.T) *driverRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opener := func(string) (transport.Port, net.PacketConn, func() []net.IP, error) {
+	opener := func(string) (Opened, error) {
 		port := hub.Port(devMAC, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr}})
-		return port, rpc, func() []net.IP { return []net.IP{pntest.Loopback} }, nil
+		return Opened{Port: port, RPC: rpc, Addrs: func() []net.IP { return []net.IP{pntest.Loopback} }}, nil
 	}
 	drv, err := NewDevice(m, WithDeviceOpener(opener), WithDeviceOnlineTag("pn__Online"),
 		WithDeviceMinWatchdog(60*time.Millisecond), WithDeviceControllerPort(ctrl.CMPort()))
@@ -222,7 +222,7 @@ func TestDeviceDriverWithoutCapability(t *testing.T) {
 	m, _ := ParseDeviceManifest([]byte(sampleManifest))
 	perm := &transport.PermissionError{Interface: "eth1", Err: errors.New("operation not permitted")}
 	drv, err := NewDevice(m, WithDeviceRetry(10*time.Millisecond, 20*time.Millisecond),
-		WithDeviceOpener(func(string) (transport.Port, net.PacketConn, func() []net.IP, error) { return nil, nil, nil, perm }))
+		WithDeviceOpener(func(string) (Opened, error) { return Opened{}, perm }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,13 +270,13 @@ func newReplica(t *testing.T, hub *transport.Hub, mac net.HardwareAddr) *replica
 	}
 	r := &replica{mac: mac, rpc: probe.LocalAddr().(*net.UDPAddr)}
 	probe.Close()
-	opener := func(string) (transport.Port, net.PacketConn, func() []net.IP, error) {
+	opener := func(string) (Opened, error) {
 		rpc, err := net.ListenUDP("udp4", r.rpc)
 		if err != nil {
-			return nil, nil, nil, err
+			return Opened{}, err
 		}
 		port := hub.Port(mac, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr}})
-		return port, rpc, func() []net.IP { return []net.IP{pntest.Loopback} }, nil
+		return Opened{Port: port, RPC: rpc, Addrs: func() []net.IP { return []net.IP{pntest.Loopback} }}, nil
 	}
 	r.drv, err = NewDevice(m, WithDeviceOpener(opener), WithDeviceOnlineTag("pn__Online"), WithDeviceReplica(),
 		WithDeviceMinWatchdog(60*time.Millisecond), WithDeviceRetry(20*time.Millisecond, 100*time.Millisecond))

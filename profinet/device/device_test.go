@@ -3,7 +3,10 @@ package device_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,8 +153,10 @@ func TestIdentifyAndStartup(t *testing.T) {
 		s := r.dev.Snapshot()
 		return s.State == StateIdle && s.Aborts == 1
 	})
-	if s := r.dev.Snapshot(); !bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0xAB, 0xCD}) {
-		t.Fatalf("last outputs not held: % x", s.Outputs[Addr{1, 1}])
+	// The image forgets the ended AR's outputs (the driver holds its own
+	// last good value as Stale): nothing reads as good with old bytes.
+	if s := r.dev.Snapshot(); !bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0, 0}) || s.OutputGood[Addr{1, 1}] {
+		t.Fatalf("outputs after the AR ended: % x good=%v", s.Outputs[Addr{1, 1}], s.OutputGood[Addr{1, 1}])
 	}
 }
 
@@ -242,6 +247,70 @@ func TestDCPSetNeverTouchesTheHost(t *testing.T) {
 	}
 	if s := r.dev.Snapshot(); s.Station != "renamed" || s.NameSets != 1 {
 		t.Fatalf("snapshot %+v", s)
+	}
+	// A name that breaks NameOfStation is refused and changes nothing; one
+	// over 511 bytes would not even fit LLDP's 9-bit TLV length.
+	for _, bad := range []string{"Bad_Name", strings.Repeat("a", 600), "port-001"} {
+		if code := c.setName(bad); code != 0x03 { // not set
+			t.Fatalf("set name %.20q: code %d, want refused", bad, code)
+		}
+	}
+	if s := r.dev.Snapshot(); s.Station != "renamed" || s.NameSets != 1 {
+		t.Fatalf("after refused names: %+v", s)
+	}
+}
+
+// A new AR that leaves a subslot out must not inherit the last AR's good
+// status and bytes for it (review on #732: the driver read those as Good
+// with frozen data).
+func TestReARForgetsOmittedSubslot(t *testing.T) {
+	r := newRig(t)
+	c := r.ctrl
+	c.connect(t, layout, false)
+	c.prmEnd(t)
+	c.startOutputs(map[Addr][]byte{{1, 1}: {0xAB, 0xCD}}, wire.DataStatusRunNormal)
+	eventually(t, "outputs", func() bool { return r.dev.Snapshot().OutputGood[Addr{1, 1}] })
+
+	c.stopOutputs()
+	c.connect(t, layout[1:], false) // same controller, slot 1 left out
+	c.prmEnd(t)
+	c.startOutputs(map[Addr][]byte{}, wire.DataStatusRunNormal)
+	eventually(t, "DATA again", func() bool { s := r.dev.Snapshot(); return s.State == StateData && s.Fresh })
+	time.Sleep(50 * time.Millisecond)
+	if s := r.dev.Snapshot(); s.OutputGood[Addr{1, 1}] || !bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0, 0}) {
+		t.Fatalf("slot 1 after a re-AR without it: good=%v % x", s.OutputGood[Addr{1, 1}], s.Outputs[Addr{1, 1}])
+	}
+}
+
+// A Connect that never reaches PrmEnd ends after the controller's
+// CMInitiatorActivityTimeout, so it cannot hold the one AR for good and
+// lock the real PLC out.
+func TestStartupTimeoutFreesTheAR(t *testing.T) {
+	r := newRig(t)
+	r.ctrl.Activity = 3 // 300 ms
+	r.ctrl.connect(t, layout, false)
+	o, err := pntest.NewController(r.hub, ctrl2, devMAC, r.rpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	other := tctl{o, t}
+	if st := other.connectStatus(t, layout); st.IsOK() {
+		t.Fatal("second controller admitted while the first is in start-up")
+	}
+	eventually(t, "start-up timeout", func() bool { s := r.dev.Snapshot(); return s.State == StateIdle && s.Aborts == 1 })
+	if st := other.connectStatus(t, layout); !st.IsOK() {
+		t.Fatalf("after the timeout: %+v", st)
+	}
+}
+
+// Both IOCRs are required: without the output IOCR the AR would have no
+// watchdog.
+func TestConnectNeedsOutputIOCR(t *testing.T) {
+	r := newRig(t)
+	r.ctrl.NoOutputIOCR = true
+	if st := r.ctrl.connectStatus(t, layout); st.IsOK() || st.ErrorCode1 != 0x02 {
+		t.Fatalf("connect without an output IOCR: %+v", st)
 	}
 }
 
@@ -337,5 +406,80 @@ func TestNewValidates(t *testing.T) {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// ListenRPC (the field mode): no DCE/RPC socket until a controller sets
+// the station address, then one bound to exactly that address, moved when
+// the address changes. So RPC is not open on the host's other networks,
+// and replies leave from the address the controller talks to (review on
+// #738).
+func TestRPCListensOnTheStationAddress(t *testing.T) {
+	hub := transport.NewHub()
+	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: loIP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	probe.Close()
+	var mu sync.Mutex
+	var bound []string
+	station := net.IPv4(127, 0, 0, 2) // not the loopback default source
+	pc, err := pntest.NewController(hub, ctrlMAC, devMAC, &net.UDPAddr{IP: station, Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	ctrl := tctl{pc, t}
+	dev, err := New(Config{
+		Identity: Identity{Station: "dev-1", VendorName: "nautilus", VendorID: 0x1234, DeviceID: 0x0001, OrderNumber: "NAUT-PN"},
+		Subslots: layout,
+		Port: hub.Port(devMAC, transport.Options{
+			EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr},
+		}),
+		ListenRPC: func(ip net.IP) (net.PacketConn, error) {
+			c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: ip, Port: port})
+			if err == nil {
+				mu.Lock()
+				bound = append(bound, c.LocalAddr().String())
+				mu.Unlock()
+			}
+			return c, err
+		},
+		ControllerCMPort: ctrl.CMPort(),
+		InterfaceAddrs:   func() []net.IP { return []net.IP{net.IPv4(127, 0, 0, 2), loIP} },
+		MinWatchdog:      60 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { dev.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	got := func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), bound...) }
+
+	time.Sleep(50 * time.Millisecond)
+	if b := got(); len(b) != 0 {
+		t.Fatalf("RPC open before any address was set: %v", b)
+	}
+	if code := ctrl.setIP(loIP); code != 0x00 {
+		t.Fatalf("set IP: %d", code)
+	}
+	eventually(t, "bound to .1", func() bool { b := got(); return len(b) == 1 })
+	if code := ctrl.setIP(station); code != 0x00 {
+		t.Fatalf("set IP: %d", code)
+	}
+	eventually(t, "moved to .2", func() bool { b := got(); return len(b) == 2 })
+	want := []string{fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("127.0.0.2:%d", port)}
+	if b := got(); b[0] != want[0] || b[1] != want[1] {
+		t.Fatalf("bound %v, want %v", b, want)
+	}
+	// The controller connects to the station address and the AR runs.
+	ctrl.connect(t, layout, false)
+	ctrl.prmEnd(t)
+	eventually(t, "ApplicationReady", func() bool { return ctrl.appReadySeen() })
+	if from := ctrl.CControlFrom(); !from.Equal(station) {
+		t.Fatalf("CControl from %v, want the station address %v", from, station)
 	}
 }

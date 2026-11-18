@@ -92,6 +92,17 @@ func (d *Device) dcpSet(req *wire.DCPFrame, to net.HardwareAddr) {
 			if len(b.Data) >= 2 {
 				name = string(b.Data[2:])
 			}
+			// An empty name clears it (a reset); any other must be a
+			// valid NameOfStation, which also keeps it short enough for
+			// LLDP's 9-bit TLV length.
+			if name != "" {
+				if err := ValidStationName(name); err != nil {
+					code = dcpNotSet
+					d.snapInfo.lastEvent = fmt.Sprintf("station name from %s refused: %v", to, err)
+					d.log.Warn("profinet device: " + d.snapInfo.lastEvent)
+					break
+				}
+			}
 			if name != d.station {
 				d.counters.nameSets++
 				d.snapInfo.lastEvent = fmt.Sprintf("station name set over DCP by %s: %q (manifest: %q, not saved)", to, name, d.cfg.Station)
@@ -127,10 +138,12 @@ func (d *Device) setIP(data []byte) uint8 {
 	}
 	if ip.Equal(net.IPv4zero) {
 		d.suite = nil // "reset to no address": nothing to apply either
+		d.listenAt(nil)
 		return dcpOK
 	}
 	if d.holds(ip) {
 		d.suite = &ipSuite{ip: ip.To4(), mask: mask.To4(), gw: gw.To4()}
+		d.listenAt(d.suite.ip)
 		return dcpOK
 	}
 	d.counters.setIPRefused++
