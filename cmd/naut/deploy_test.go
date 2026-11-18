@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/internal/lsp"
 )
 
 // fakeSSH puts an `ssh` on PATH that records each remote command and its
@@ -199,11 +201,48 @@ func TestDeployDevBuildNeedsARuntimeForAnotherArch(t *testing.T) {
 		other = "x86_64"
 	}
 	log := fakeSSH(t, other, 0)
-	if code := runDeploy([]string{"install", "root@ipc", deployProject(t)}); code != 1 {
+	t.Setenv("NAUT_RELEASES_URL", "http://127.0.0.1:1") // a regression must not reach GitHub
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	saved := lsp.Version
+	lsp.Version = "dev"
+	defer func() { lsp.Version = saved }()
+	msg, code := captureStderr(t, func() int { return runDeploy([]string{"install", "root@ipc", deployProject(t)}) })
+	if code != 1 {
 		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(msg, "development build") || !strings.Contains(msg, "-runtime") {
+		t.Errorf("it should say this naut is a development build and to pass -runtime:\n%s", msg)
 	}
 	if calls := sshCalls(t, log); len(calls) != 1 {
 		t.Errorf("nothing but the architecture question should reach the box, got %+v", calls)
+	}
+}
+
+// Without -runtime, a released naut builds a box of another architecture
+// on its own release for that architecture: the same version a CD job
+// pinned, so a hand deploy and CD build the same controller.
+func TestDeployFetchesItsOwnReleaseForTheBox(t *testing.T) {
+	m, arch, machine := "aarch64", "arm64", uint16(183) // EM_AARCH64
+	if goruntime.GOARCH == "arm64" {
+		m, arch, machine = "x86_64", "amd64", 62 // EM_X86_64
+	}
+	log := fakeSSH(t, m, 0)
+	runner := append(fakeELF(machine), []byte("OWN-RELEASE")...)
+	fakeReleases(t, "7.7.7", arch, runner, false)
+	saved := lsp.Version
+	lsp.Version = "7.7.7"
+	defer func() { lsp.Version = saved }()
+	if code := runDeploy([]string{"install", "root@ipc", deployProject(t)}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	var ctl string
+	for _, c := range sshCalls(t, log) {
+		if strings.Contains(c.cmd, "/incoming/plant-") {
+			ctl = c.in
+		}
+	}
+	if !strings.HasPrefix(ctl, string(runner)) {
+		t.Errorf("the controller was not built on naut v7.7.7 for linux/%s", arch)
 	}
 }
 

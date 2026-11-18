@@ -172,9 +172,14 @@ claims:
       - go ./cmd/naut TestDeployRootMatchesBox
       - go ./cmd/naut TestDeployRefusesReservedIDs
       - go ./cmd/naut TestDeployRefusesUnquotableArgs
+      - go ./cmd/naut TestDeployFetchesItsOwnReleaseForTheBox
+      - go ./cmd/naut TestDeployBoxFailedInstallLeavesNothing
+      - go ./cmd/naut TestDeployBoxFailedUpdateRestoresRetain
+      - go ./cmd/naut TestDeployBoxRedeployWhileDown
     partial: true
     note: >-
-      The tests use a stand-in ssh and release server. The box's half
+      The Go tests use a stand-in ssh and release server, and run box.sh
+      itself against a stand-in systemctl (Type=simple-like). The box's half
       (links, rollback on a failed or hung start with the retained values
       put back, a failed install leaving nothing installed, backup and
       restore, the redeploy that is a no-op while running and starts the

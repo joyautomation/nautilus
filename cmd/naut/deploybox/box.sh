@@ -11,6 +11,7 @@ set -eu
 ROOT=${NAUT_ROOT:-/opt/nautilus}
 STATE=${NAUT_STATE:-/var/lib/nautilus}
 UNIT=nautilus.service
+UNITDIR=${NAUT_UNITDIR:-/etc/systemd/system} # set only by deploy_box_test.go
 KEEP=3 # releases kept besides current and previous
 say() { echo "$*" >&2; }
 fail() { echo "naut deploy (on box): $*" >&2; exit 1; }
@@ -29,7 +30,7 @@ target() { if [ -L "$ROOT/$1" ]; then basename "$(readlink "$ROOT/$1")"; fi; }
 # two: this script is embedded in every naut, and so in every controller,
 # and must not match itself.
 writeunit() {
-	tmp=/etc/systemd/system/$UNIT.new
+	tmp=$UNITDIR/$UNIT.new
 	if grep -q 'WATCHDOG''=1' "$ROOT/current/controller"; then
 		cp "$ROOT/nautilus.service.in" "$tmp"
 	else
@@ -37,10 +38,10 @@ writeunit() {
 			"$ROOT/nautilus.service.in" >"$tmp"
 		say "note: this release does not notify systemd; running it as Type=simple without a watchdog"
 	fi
-	if cmp -s "$tmp" "/etc/systemd/system/$UNIT"; then
+	if cmp -s "$tmp" "$UNITDIR/$UNIT"; then
 		rm -f "$tmp"
 	else
-		mv "$tmp" "/etc/systemd/system/$UNIT"
+		mv "$tmp" "$UNITDIR/$UNIT"
 		systemctl daemon-reload
 	fi
 }
@@ -251,7 +252,7 @@ restore)
 	;;
 uninstall)
 	systemctl disable -q --now "$UNIT" 2>/dev/null || true
-	rm -f "/etc/systemd/system/$UNIT"
+	rm -f "$UNITDIR/$UNIT"
 	systemctl daemon-reload
 	rm -rf "$ROOT"
 	if [ "${1:-}" = -purge ]; then
