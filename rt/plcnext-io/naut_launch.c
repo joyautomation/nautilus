@@ -13,11 +13,21 @@
 // keeping its pid. The release behind `current` can then change freely and
 // keeps the capability; it gains nothing else.
 //
-// It starts only that one program, and only for the user who owns this
-// file, so the capability cannot be borrowed:
-//   - the caller's real uid must own naut-launch;
-//   - <dir>, current/controller (resolved) and the directory it is in must
-//     be owned by that user (or root) and not writable by group or others.
+// Checks, before anything is exec'd:
+//   - the caller's real uid must own naut-launch, so no other user can run it;
+//   - current/controller, resolved, must be a regular file owned by that
+//     user, and <dir> and the controller's directory must belong to that
+//     user (or root); none of the three may be writable by group or others.
+//
+// What that does not do: it does not confine the capability to nautilus.
+// Anyone who can act as the owner (admin on a PLCnext) effectively holds
+// CAP_SYS_NICE. They choose what `current` points at, every process the
+// controller starts inherits the ambient capability, and an owner's
+// process may ptrace the controller. CAP_SYS_NICE reaches every pid, the
+// firmware's own FIFO tasks included, so misused it can starve the
+// controller: the risk is availability, not confidentiality or more
+// privilege. On a PLCnext, admin already has a documented way to root
+// (`sudo passwd root`), so this hands admin nothing it could not take.
 // Without the capability (setcap not run yet, or lost when this file was
 // replaced) it says so on stderr and starts the controller anyway: nautilus
 // then runs its tasks at normal priority, as it does on any box.
@@ -48,9 +58,9 @@ static void say(const char *msg, const char *arg) {
 	fprintf(stderr, "naut-launch: %s%s%s\n", msg, arg ? ": " : "", arg ? arg : "");
 }
 
-// owned_safe: path is owned by uid or root and is not writable by group or
-// others.
-static int owned_safe(const char *path, uid_t uid, int want_dir) {
+// owned_safe: path is owned by uid (or root, when root_ok) and is not
+// writable by group or others.
+static int owned_safe(const char *path, uid_t uid, int want_dir, int root_ok) {
 	struct stat st;
 	if (stat(path, &st) != 0) {
 		say(strerror(errno), path);
@@ -60,7 +70,7 @@ static int owned_safe(const char *path, uid_t uid, int want_dir) {
 		say(want_dir ? "not a directory" : "not a regular file", path);
 		return 0;
 	}
-	if (st.st_uid != uid && st.st_uid != 0) {
+	if (st.st_uid != uid && !(root_ok && st.st_uid == 0)) {
 		say("owned by another user", path);
 		return 0;
 	}
@@ -102,7 +112,12 @@ static int pass_sys_nice(void) {
 }
 
 int main(int argc, char **argv) {
-	(void)argc;
+	// execve allows an empty argv; then argv[0] is the NULL terminator and
+	// overwriting it below would turn the environment into arguments.
+	if (argc < 1) {
+		say("started with no arguments at all, not even its name", NULL);
+		return 127;
+	}
 	char self[PATH_MAX], dir[PATH_MAX], target[PATH_MAX], real[PATH_MAX];
 	if (!realpath("/proc/self/exe", self)) {
 		say("cannot find itself", strerror(errno));
@@ -135,12 +150,14 @@ int main(int argc, char **argv) {
 	char realdir[PATH_MAX];
 	snprintf(realdir, sizeof realdir, "%s", real);
 	*strrchr(realdir, '/') = '\0';
-	if (!owned_safe(dir, me.st_uid, 1) || !owned_safe(realdir, me.st_uid, 1) ||
-	    !owned_safe(real, me.st_uid, 0)) {
+	if (!owned_safe(dir, me.st_uid, 1, 1) || !owned_safe(realdir, me.st_uid, 1, 1) ||
+	    !owned_safe(real, me.st_uid, 0, 0)) {
 		return 126;
 	}
-	// Nothing from the caller's environment may steer a loader with the
-	// capability in hand (the controller is static, but this costs nothing).
+	// Defence in depth: the controller is a static Go binary and glibc
+	// already drops these for a file-capability program like this one, but
+	// nothing from the caller's environment should steer a loader that runs
+	// with the capability.
 	unsetenv("LD_PRELOAD");
 	unsetenv("LD_LIBRARY_PATH");
 	unsetenv("LD_AUDIT");

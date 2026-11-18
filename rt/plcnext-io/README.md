@@ -218,21 +218,44 @@ page reports what was asked (`NIO_OFF_PRIO`) and whether it was granted
 
 naut changes with every release, so a capability on `naut` itself has
 to be set again by root after each update. `naut-launch` (`naut_launch.c`,
-built and shipped beside `nautilus_io`) carries it instead, set once:
+built and shipped beside `nautilus_io`) carries it instead. It raises
+`CAP_SYS_NICE` into its inheritable and ambient sets and execs
+`current/controller` beside it, with its own arguments and pid, so
+whatever release `current` points at runs with that one capability.
+
+Install it once, as admin, in the directory that holds `current`:
 
 ```sh
+scp dist/plcnext-io/naut-launch admin@<plc>:/opt/plcnext/apps/nautilus/
+ssh admin@<plc> 'chmod 755 /opt/plcnext/apps/nautilus/naut-launch'   # owned by admin, as copied
 ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut-launch; getcap /opt/plcnext/apps/nautilus/naut-launch"; sudo passwd -l root'
 ```
 
-It raises `CAP_SYS_NICE` into its inheritable and ambient sets and execs
-`current/controller` beside it, with its own arguments and pid, so the
-release behind `current` gains that one capability and nothing else.
-It starts nothing else: the caller must own `naut-launch`, and its
-directory, the resolved controller and the controller's directory must
-belong to that user (or root) and not be writable by group or others;
-otherwise it exits 126. Without the capability it says so on stderr and
-starts the controller anyway, at normal priority. The shim still needs
-its own `setcap`, but it changes rarely.
+The last line is the controller owner's, typed once; it is needed
+again only when `naut-launch` itself is replaced. `current/controller`
+is a `naut build` controller. Once `naut deploy` has its cron mode
+(#768, after #764) it lays out `releases/`, `current` and `previous`
+here and starts the controller through `naut-launch`; until then
+`current` is placed by hand.
+
+Before it execs anything it checks that the caller's real uid owns
+`naut-launch`, that the resolved controller is a regular file owned by
+that user, and that `naut-launch`'s directory and the controller's
+belong to that user (or root). None of the three may be writable by
+group or others; otherwise it exits 126. Without the capability (not
+set yet, or lost when the file was replaced) it says so on stderr and
+starts the controller anyway, at normal priority.
+
+What it does not do is confine the capability to nautilus. Anyone who
+can act as the owner (admin) effectively holds `CAP_SYS_NICE`: they
+decide what `current` points at, every process the controller starts
+inherits the ambient capability, and an admin process can ptrace the
+controller. `CAP_SYS_NICE` reaches every pid, the firmware's own FIFO
+97–98 tasks included, so misused it can starve the controller. The
+risk is availability, not confidentiality or more privilege, and it
+gives admin nothing new: admin already has a documented way to root
+(`sudo passwd root`, above). The shim still needs its own `setcap`,
+but it changes rarely.
 
 A `nautilus_io.cpu` file beside the binary pins the cycle to one CPU;
 that needs no capability. Use CPU 1, with naut on CPU 0 (`naut.cpu`
