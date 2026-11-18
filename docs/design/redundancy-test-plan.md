@@ -434,14 +434,29 @@ requirements agreed on #707. They join the run in #707's oplog PR, which builds 
 8. **Only the leader expires a substitute, and the expiry is an entry.**
    - At the end of the granted duration the leader appends `unsubstitute` (`by: system`,
      `reason: expired`). The standby never expires one on its own.
-   - A takeover evaluates expiry once.
+   - A takeover evaluates expiry once, as in case 9.
    - A substitute that expired on the old leader just before a takeover is not revived.
-9. **A wall-clock step neither ends nor extends a substitute** (F23-style).
-   - Step the leader's clock ±1 h mid-substitute, then repeat on the standby before a
-     takeover.
-   - The substitute ends at its granted duration, timed on `CLOCK_BOOTTIME` from when the
-     leader applied it or took over. The wall-clock `until` is display only.
-   - Mutation: expiry taken from the wall-clock `until`. Case 9 must go red.
+9. **How a leader times a substitute, and a wall-clock step** (F23-style).
+   - **The leader that applies it** times the granted duration on `CLOCK_BOOTTIME`, from
+     when it applied it.
+   - **A new leader** computes the remainder **once, at takeover**, from the entry's
+     wall-clock `until` on its own clock: `until − now`. NTP-level skew between the pair
+     (seconds) is accepted. Then it times that remainder on `CLOCK_BOOTTIME`. A takeover
+     never restarts the full duration.
+   - **A remainder outside its bounds** means the new leader's wall clock was stepped: below
+     zero, the substitute has expired. Above the granted duration plus the skew bound, it is
+     capped at the granted duration and raises the alarm.
+   - **A single controller across a restart** works the same way: the remainder comes from
+     `until`, so downtime counts toward the duration.
+   - Steps: step the leader's clock ±1 h mid-substitute; it still ends at its granted time.
+     Then step the standby's clock before a takeover. Set 1 h ahead, the remainder
+     shrinks by 1 h: it ends early, at worst at once, with the usual expiry audit and
+     `__Substitute_Expired` pulse. Set 1 h behind, the remainder grows past the granted
+     duration: it is capped there, and the alarm is raised.
+   - **Repeated takeovers inside one substitute:** take over A→B→A→B at intervals shorter than
+     the granted duration. The substitute still ends at its granted time, ± the skew.
+   - Mutations: expiry taken from the wall-clock `until` on a steady leader (a step then
+     moves it), and a takeover restarting the full duration. Both turn case 9 red.
 10. **Expiry doesn't wait for quorum.**
     - With no quorum, starting or stopping a substitute is refused like any operator write
       (case 5).
