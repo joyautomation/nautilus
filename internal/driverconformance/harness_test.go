@@ -54,19 +54,27 @@ func TestHarnessVerdicts(t *testing.T) {
 }
 
 func TestHarnessValidatesMarks(t *testing.T) {
-	cs := []contract{{id: "C1"}, {id: "C2"}}
+	cs := []contract{{id: "C1"}, {id: "C2"}, {id: "C5"}, {id: "C8"}}
 	for _, tc := range []struct {
 		name string
 		s    subject
 		want []string // substrings, one per expected complaint, in order
 	}{
-		{"clean", subject{expect: map[string]string{"C1": "#865"}, unsupported: map[string]string{"C2": "no hook"}}, nil},
-		{"unknown expect", subject{expect: map[string]string{"C9": "#1"}}, []string{`unknown contract "C9"`}},
-		{"no issue", subject{expect: map[string]string{"C1": "later"}}, []string{`cites the issue`}},
-		{"empty issue", subject{expect: map[string]string{"C1": ""}}, []string{`cites the issue`}},
-		{"unknown unsupported", subject{unsupported: map[string]string{"C7": "why"}}, []string{`unsupported names unknown contract "C7"`}},
-		{"no reason", subject{unsupported: map[string]string{"C1": " "}}, []string{`gives no reason`}},
-		{"both", subject{expect: map[string]string{"C1": "#1"}, unsupported: map[string]string{"C1": "why"}}, []string{`both expected to fail and unsupported`}},
+		{"clean", subject{gate: dropAndAsk, expect: map[string]string{"C1": "#865"}, unsupported: map[string]string{"C2": "no hook"}}, nil},
+		{"unknown expect", subject{gate: dropAndAsk, expect: map[string]string{"C9": "#1"}}, []string{`unknown contract "C9"`}},
+		{"no issue", subject{gate: dropAndAsk, expect: map[string]string{"C1": "later"}}, []string{`cites the issue`}},
+		{"empty issue", subject{gate: dropAndAsk, expect: map[string]string{"C1": ""}}, []string{`cites the issue`}},
+		{"unknown unsupported", subject{gate: dropAndAsk, unsupported: map[string]string{"C7": "why"}}, []string{`unsupported names unknown contract "C7"`}},
+		{"no reason", subject{gate: dropAndAsk, unsupported: map[string]string{"C1": " "}}, []string{`unsupported[C1] gives no reason`}},
+		{"both", subject{gate: dropAndAsk, expect: map[string]string{"C1": "#1"}, unsupported: map[string]string{"C1": "why"}}, []string{`C1 carries more than one mark: expect, unsupported`}},
+		{"byDesign clean", subject{gate: holdAndDeliver, byDesign: map[string]string{"C2": "no device once loaded"}}, nil},
+		{"unknown byDesign", subject{gate: dropAndAsk, byDesign: map[string]string{"C9": "why"}}, []string{`byDesign names unknown contract "C9"`}},
+		{"byDesign no reason", subject{gate: dropAndAsk, byDesign: map[string]string{"C1": ""}}, []string{`byDesign[C1] gives no reason`}},
+		{"byDesign and expect", subject{gate: dropAndAsk, expect: map[string]string{"C2": "#1"}, byDesign: map[string]string{"C2": "why"}}, []string{`C2 carries more than one mark: expect, byDesign`}},
+		{"byDesign and unsupported", subject{gate: dropAndAsk, unsupported: map[string]string{"C2": "why"}, byDesign: map[string]string{"C2": "why"}}, []string{`C2 carries more than one mark: unsupported, byDesign`}},
+		{"no gate mode", subject{}, []string{`no gate mode`}},
+		{"no gate mode, C5 skipped only", subject{byDesign: map[string]string{"C5": "no outputs"}}, []string{`no gate mode`}},
+		{"no gate mode, both gates skipped", subject{byDesign: map[string]string{"C5": "no outputs"}, unsupported: map[string]string{"C8": "no hook"}}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := validate(tc.s, cs)

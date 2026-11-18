@@ -559,7 +559,17 @@ becomes `output`. Then:
   `On` is what the device reports; the first snapshot after `Start` is a
   baseline never written back (no `Rewrite` here — a PDU that reverts an
   outlet is a fault to alarm on, not a keep-alive to feed). A write to a
-  parked source is queued (last value per tag) and delivered on reconnect.
+  parked source is neither queued nor recorded, like one under a closed
+  write gate (`hw/base.go` `WriteOutputs`, rules 2 and 5).
+- **A closed write gate drops commands, and reopening rebaselines.** While
+  the gate is closed (a standby, a demoted leader) no command is queued or
+  recorded. The first value after the gate reopens is a baseline, like the
+  first after `Start`, so a command is never replayed: a ForceOff sent
+  twice is a server powered off twice. The trade is that after a gate
+  cycle the device and the command tag can disagree until the program
+  changes the command again. The read-back member (`On`, `PowerOn`) shows
+  the device's truth. The driver conformance suite checks this design as
+  `dropAndRebaseline` (`internal/driverconformance`).
 - **Commands are scalar output tags, never UDT members** — `hw.WriteDecl`
   binds `<tag>_Cmd` (a BOOL for an outlet, an INT for server power: 0 none,
   1 on, 2 graceful shutdown, 3 force off, 4 restart, posted as
