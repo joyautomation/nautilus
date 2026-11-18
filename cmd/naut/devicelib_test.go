@@ -3,14 +3,19 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
@@ -168,10 +173,10 @@ func TestBuildShipsVendoredProfiles(t *testing.T) {
 }
 
 // buildArchive runs naut build on dir and opens the project it embeds.
-func buildArchive(t *testing.T, dir string) (map[string]bool, *zip.Reader) {
+func buildArchive(t *testing.T, dir string, flags ...string) (map[string]bool, *zip.Reader) {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "ctl")
-	if output, code := buildIn(t, dir, "-o", out); code != 0 {
+	if output, code := buildIn(t, dir, append([]string{"-o", out}, flags...)...); code != 0 {
 		t.Fatalf("build: %d\n%s", code, output)
 	}
 	f, err := os.Open(out)
@@ -218,6 +223,7 @@ tags:
   - { name: Speed, role: state, type: INT }
   - { name: Running, role: state, type: BOOL }
   - { name: Tripped, role: state, type: BOOL }
+  - { name: Amps, role: state, type: REAL }
 `)
 	// The first value written is the driver's start-up baseline, never
 	// sent; the sequence starts from the change after it, as on the wire.
@@ -237,6 +243,7 @@ END_IF;
 Speed := CONV.Actual1;
 Running := CONV.StatusWord.2;
 Tripped := CONV.StatusWord.3;
+Amps := CONV.Current;
 END_PROGRAM
 `)
 	write("main_test.yaml", `devices: true
@@ -248,6 +255,10 @@ tests:
       - given: { Start: true }
         until: 30s
         expect: { Running: true, Speed: 10000 }
+      # Current, register 103 in 0.1 A (fena p. 103): the drive's model
+      # draws 0.3 x its 10 A nominal x half speed, unloaded, 1.5 A (15 raw).
+      - advance: 1s
+        expect: { Amps: { near: 1.5, tol: 0.01 } }
   - name: a trip reads back
     steps:
       - given: { Start: true }
@@ -331,6 +342,133 @@ func TestCheckCompilesTheRowsPlant(t *testing.T) {
 	}
 	if code := runCheck([]string{dir}); code == 0 {
 		t.Fatal("naut check passed a vendored profile whose simulator block does not exist")
+	}
+}
+
+// A manifest that does not read is check's one error: the plant falls
+// back to virtual-devices.yaml's own entries, so the process model is
+// still not checked as one of the controller's programs.
+func TestCheckBrokenManifestKeepsThePlantApart(t *testing.T) {
+	dir := copyFixture(t, nil)
+	mf := filepath.Join(dir, "nautilus.yaml")
+	if err := os.WriteFile(mf, append(mustRead(t, mf), []byte("bogus: 1\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := capture(t, func() int { return runCheck([]string{dir}) })
+	if code == 0 {
+		t.Fatal("naut check passed a manifest that does not read")
+	}
+	if !strings.Contains(out, "1 file(s), 1 with errors") {
+		t.Errorf("want the manifest as check's one error (fill.st, not the plant):\n%s", out)
+	}
+}
+
+// -m picks the manifest the virtual devices are composed from, for test,
+// check and build alike: field.yaml declares a second device (SPARE) that
+// nautilus.yaml does not, and virtual-devices.yaml adds init to it, which
+// only composes against field.yaml (against nautilus.yaml, SPARE would be
+// an entry with no profile). Built with -m, the process model stays behind.
+func TestManifestFlagComposesItsDevices(t *testing.T) {
+	dir := driveProject(t)
+	if err := addProfile(dir, "asi-275m", "", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	base := string(mustRead(t, filepath.Join(dir, "nautilus.yaml")))
+	field := strings.Replace(base, "devices:\n", "devices:\n  - { name: SPARE, profile: asi-275m, endpoint: 10.0.0.12 }\n", 1)
+	if field == base {
+		t.Fatal("the fixture edit did not apply")
+	}
+	for name, body := range map[string]string{
+		"field.yaml":     field,
+		virtdev.FileName: "devices:\n  - { name: SPARE, init: { Input3: true } }\nmodel: { program: process.st }\n",
+		"process.st":     "PROGRAM Process\nCONV_Running := CONV_Running;\nEND_PROGRAM\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, run := range map[string]func([]string) int{"test": runTest, "check": runCheck} {
+		if code := run([]string{"-m", "field.yaml", dir}); code != 0 {
+			t.Errorf("naut %s -m field.yaml exited %d", name, code)
+		}
+		if code := run([]string{dir}); code == 0 {
+			t.Errorf("naut %s (nautilus.yaml) passed an entry for a device it does not declare", name)
+		}
+	}
+	names, _ := buildArchive(t, dir, "-m", "field.yaml")
+	if names["process.st"] {
+		t.Error("the process model shipped in the controller built with -m")
+	}
+	if !names["profiles/abb-acs355-fmbt21.yaml"] || !names["profiles/asi-275m.yaml"] {
+		t.Errorf("the vendored profiles did not ship: %v", names)
+	}
+}
+
+// A devices: row's virtual device is on the wire too (naut devices up): it
+// answers at the row's unit id with the vendored register map, and the
+// project's own driver, built from the same row and wrapped as the
+// controller wraps it, reads the device back as its struct. Powered up
+// with a zero control word, an ABB Drives profile drive is SWITCH-ON
+// INHIBITED with OFF2 and OFF3 active (fena pp. 93-94): status bits 6
+// (SWC ON INHIB), 9 (REMOTE) and 12 (EXT RUN ENABLE), 16#1240.
+func TestDevicesRowOnTheWireFace(t *testing.T) {
+	dir := driveProject(t)
+	set, err := loadVirtualDevices(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run, err := virtdev.Start(ctx, set, virtdev.StartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Stop()
+	if len(run.Endpoints) != 1 {
+		t.Fatalf("endpoints: %+v", run.Endpoints)
+	}
+	ep := run.Endpoints[0]
+	if ep.Device != "CONV" || ep.Endpoint != "10.0.0.11:502" || ep.Unit != 3 {
+		t.Fatalf("endpoint: %+v, want CONV at 10.0.0.11:502 unit 3", ep)
+	}
+
+	m, err := project.ReadManifest(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := m.DeviceSet().Rows()
+	rows[0].Endpoint = ep.Listen // the project's driver, dialling the wire face
+	devs, err := devbind.Resolve(os.DirFS(dir), rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm, err := devs.MergeModbus(modbus.Manifest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, err := modbus.New(mm, modbus.WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := devs.WrapModbus(md)
+	w.Start(ctx)
+	defer w.Stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		vals, err := w.ReadInputs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v, ok := vals["CONV"].(ir.Value); ok {
+			if sw := v.Fld[v.Struct.FieldIndex["StatusWord"]].I; sw == 0x1240 {
+				break
+			} else if time.Now().After(deadline) {
+				t.Fatalf("CONV.StatusWord = 16#%04X, want 16#1240", sw)
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("CONV never arrived: %v", vals)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

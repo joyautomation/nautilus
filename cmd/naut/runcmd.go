@@ -907,7 +907,7 @@ func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string]
 	// The virtual devices are test fixtures, like the suites: they gate
 	// the deploy and do not ride along on the controller.
 	fixtures := map[string]bool{}
-	if set, err := loadVirtualDevices(dir); err == nil {
+	if set, err := loadVirtualDevices(dir, manifest); err == nil {
 		for _, f := range set.Files() {
 			if abs, err := filepath.Abs(f); err == nil {
 				fixtures[abs] = true

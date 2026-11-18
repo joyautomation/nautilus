@@ -105,7 +105,7 @@ func devicesDir(name string, args []string) (string, bool) {
 }
 
 func loadDeviceSet(cmd, dir string) (*virtdev.Set, bool) {
-	set, err := loadVirtualDevices(dir)
+	set, err := loadVirtualDevices(dir, "")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "naut devices %s: no virtual devices in %s (no devices: in %s, no %s)\n", cmd, dir, project.ManifestName, virtdev.FileName)

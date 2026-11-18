@@ -32,24 +32,26 @@ func composeVirtualDevices(dir string, devs *devbind.Set) (*virtdev.Set, error) 
 	return virtdev.Compose(dir, declared)
 }
 
-// manifestDevices are the devices dir's nautilus.yaml declares: nil, with
-// no error, when there is no nautilus.yaml.
-func manifestDevices(dir string) (*devbind.Set, error) {
-	m, err := project.ReadManifest(os.DirFS(dir), "")
+// manifestDevices are the devices dir's manifest declares (name, or
+// nautilus.yaml when ""): nil, with no error, when there is no manifest.
+func manifestDevices(dir, name string) (*devbind.Set, error) {
+	if name == "" {
+		name = project.ManifestName
+	}
+	m, err := project.ReadManifest(os.DirFS(dir), name)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			if _, serr := os.Stat(filepath.Join(dir, project.ManifestName)); errors.Is(serr, fs.ErrNotExist) {
-				return nil, nil
-			}
+		if _, serr := os.Stat(filepath.Join(dir, name)); errors.Is(serr, fs.ErrNotExist) {
+			return nil, nil
 		}
 		return nil, err
 	}
 	return m.DeviceSet(), nil
 }
 
-// loadVirtualDevices is composeVirtualDevices for dir's own nautilus.yaml.
-func loadVirtualDevices(dir string) (*virtdev.Set, error) {
-	devs, err := manifestDevices(dir)
+// loadVirtualDevices is composeVirtualDevices for dir's manifest (name, or
+// nautilus.yaml when "").
+func loadVirtualDevices(dir, name string) (*virtdev.Set, error) {
+	devs, err := manifestDevices(dir, name)
 	if err != nil {
 		return nil, err
 	}

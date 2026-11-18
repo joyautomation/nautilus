@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/devprofile"
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/modbus"
 )
 
 // vendored writes a project folder with profile id vendored in profiles/
@@ -191,5 +194,47 @@ func TestComposeFilesKeepTheVendoredProfile(t *testing.T) {
 		if !files[want] {
 			t.Errorf("%s is not listed as a fixture: %v", want, s.Files())
 		}
+	}
+}
+
+// wrapStub carries devices around a driver the in-process face cannot
+// answer, or without the adapter's assembly.
+type wrapStub struct {
+	*nio.Memory
+	inner nio.Driver
+}
+
+func (w wrapStub) Unwrap() nio.Driver { return w.inner }
+
+type assemblingStub struct{ wrapStub }
+
+func (assemblingStub) NewAssembly() func(nio.Values) { return func(nio.Values) {} }
+
+// A driver that carries devices is answered only when it is a Modbus
+// driver under the device library's adapter: anything else is refused by
+// name before a scan, not delivered without its structs.
+func TestInProcessRefusesAnUnknownDevicesDriver(t *testing.T) {
+	set, err := LoadSet(binFill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm, err := modbus.ParseManifest([]byte("sources: [{ id: CONV, host: 10.77.1.101, unitid: 1 }]\ntags: [{ name: S, source: CONV, table: holding, address: 3, format: uint16 }]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, err := modbus.New(mm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, d := range map[string]nio.Driver{
+		"not modbus underneath": assemblingStub{wrapStub{nio.NewMemory(), nio.NewMemory()}},
+		"no assembly":           wrapStub{nio.NewMemory(), md},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewInProcess(set, acceptance.NewClock(), []nio.NamedDriver{{Name: "field", Driver: d}})
+			if err == nil || !strings.Contains(err.Error(), "answer the devices: of a modbus driver only") {
+				t.Errorf("NewInProcess: %v", err)
+			}
+		})
 	}
 }
