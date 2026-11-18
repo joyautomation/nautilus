@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds nautilus_io for the PLCnext AXC F 2152 (ARMv7 hard float, glibc
+# Builds nautilus_io and naut-launch for the PLCnext AXC F 2152 (ARMv7 hard float, glibc
 # 2.35) with zig, and with -p packages it as the release tarball:
 #
 #   rt/plcnext-io/build.sh [-p] [out dir]     (default out dir: dist/plcnext-io)
@@ -22,13 +22,16 @@ mkdir -p "$out"
 	-Wall -Wextra -Werror -DNAUTILUS_IO_VERSION="\"$version\"" \
 	-o "$out/nautilus_io" "$here/nautilus_io.c" -ldl -lpthread
 echo "built $out/nautilus_io ($version)"
+"$zig" cc -target arm-linux-gnueabihf.2.35 -mcpu=cortex_a9 -O2 -std=c11 \
+	-Wall -Wextra -Werror -o "$out/naut-launch" "$here/naut_launch.c"
+echo "built $out/naut-launch"
 
 if ((pack)); then
 	# Everything the README's deploy steps copy, under one directory.
 	name=nautilus-plcnext-io_${version}_linux_armv7
 	stage=$(mktemp -d)
 	mkdir "$stage/$name"
-	cp "$out/nautilus_io" "$here/NautilusIo.acf.settings" "$here/NautilusIo.acf.config" \
+	cp "$out/nautilus_io" "$out/naut-launch" "$here/NautilusIo.acf.settings" "$here/NautilusIo.acf.config" \
 		"$here/README.md" "$stage/$name/"
 	tar -C "$stage" -czf "$out/$name.tar.gz" "$name"
 	(cd "$out" && sha256sum "$name.tar.gz" >"$name.tar.gz.sha256")
