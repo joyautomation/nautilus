@@ -213,9 +213,10 @@ without sleeping (it sleeps every 1 ms when healthy) gets `SIGXCPU`. The
 shim then moves itself back to normal priority and says so in the log
 (`SCHED_FIFO withdrawn`), and the page's `NIO_ST_FIFO` drops, until a
 restart. If the limit can't be set, the shim doesn't take FIFO at all.
-At 500 ms the kernel kills it, as a backstop. That ends the PLCnext
-runtime's session with it: the firmware restarts it, and the output
-watchdog holds the outputs at zero meanwhile.
+At 500 ms the kernel kills it, as a backstop. What the firmware then does
+with its ACF process, and what the output frame holds once the shim is
+gone, has not been tried on the bench. The shim's own output watchdog
+dies with it. The demotion is the path this is built for.
 
 The shim asks for priority 80 — over the firmware's interrupt threads
 (50), under `T_Cyclic100` (82), its network receive task (95) and the
