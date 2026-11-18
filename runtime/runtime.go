@@ -281,6 +281,10 @@ type Runtime struct {
 	// takeover sequence when this replica becomes leader. See retain.go.
 	leadMu  sync.Mutex
 	leading bool
+	// led mirrors leading for readers that must not wait on leadMu:
+	// Quality, answered from the server's goroutine while a takeover may
+	// hold leadMu through a retain-store load. Set only by setLeading.
+	led atomic.Bool
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
 	// readyWait how long a takeover waits for it, and readySince when the
 	// pending takeover began waiting (zero when none is). See inputsReady.

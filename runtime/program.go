@@ -52,6 +52,14 @@ type Program struct {
 	exts    []string
 	extsFor *ir.Program
 
+	// written is, by ir.NameKey, every global this program writes
+	// (GlobalUses().Written), derived from prog on first use and again
+	// after a swap replaces it (writtenFor is the prog it belongs to). A
+	// standby's Quality asks for it a few times a second, and walking the
+	// IR each time would be a cost for nothing.
+	written    map[string]bool
+	writtenFor *ir.Program
+
 	// opts is the compile context every (re)compile of this program uses:
 	// the project's tags, visible without a VAR_EXTERNAL (see TagScope).
 	// An online edit compiles against the same tag table the boot did.
@@ -403,6 +411,25 @@ func (p *Program) GlobalUses() ir.GlobalUse {
 		return ir.GlobalUse{Read: map[string]bool{}, Written: map[string]bool{}}
 	}
 	return p.prog.GlobalUses()
+}
+
+// writtenKeys returns the ir.NameKey of every global this program writes,
+// cached per compiled program (see written). The map is replaced, never
+// changed, after it is returned: the caller reads it and must not write.
+func (p *Program) writtenKeys() map[string]bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prog == nil {
+		return nil
+	}
+	if p.writtenFor != p.prog {
+		w := map[string]bool{}
+		for name := range p.prog.GlobalUses().Written {
+			w[ir.NameKey(name)] = true
+		}
+		p.written, p.writtenFor = w, p.prog
+	}
+	return p.written
 }
 
 // ReadBeforeWrite lists the globals one scan of this program can read

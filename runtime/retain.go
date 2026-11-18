@@ -118,13 +118,13 @@ func (r *Runtime) gate() bool {
 		// The drivers get the whole output set on this scan, as after any
 		// gap in what was sent.
 		r.outSent.Store(false)
-		r.leading = true
+		r.setLeading(true)
 	case lead && (!r.leading || termed != nil && termed.Term() != r.ledTerm):
 		// Leadership from standby, or a new term this replica never saw
 		// the gate close for (lost and regained between two scans): another
 		// replica may have led meanwhile.
 		r.takeover()
-		r.leading = true
+		r.setLeading(true)
 		if termed != nil {
 			r.ledTerm = termed.Term()
 		}
@@ -133,9 +133,16 @@ func (r *Runtime) gate() bool {
 			// Stepping down: forces belong to the active controller only.
 			r.dropForces("lost leadership")
 		}
-		r.leading = false
+		r.setLeading(false)
 	}
 	return lead
+}
+
+// setLeading records the leadership edge: leading for everything under
+// leadMu, led for Quality outside it. Called under leadMu.
+func (r *Runtime) setLeading(v bool) {
+	r.leading = v
+	r.led.Store(v)
 }
 
 // DefaultTakeoverInputsWait is how long a takeover waits for live inputs
