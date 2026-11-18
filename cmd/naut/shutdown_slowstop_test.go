@@ -68,7 +68,7 @@ func TestNautRunGivesBackTheHTTPPortBeforeSlowStops(t *testing.T) {
 	if err := broker.AddHook(hook, nil); err != nil {
 		t.Fatal(err)
 	}
-	tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: "127.0.0.1:0"})
+	tcp := testmqtt.NewTCP(broker, listeners.Config{ID: "t", Address: "127.0.0.1:0"})
 	if err := broker.AddListener(tcp); err != nil {
 		t.Fatal(err)
 	}
