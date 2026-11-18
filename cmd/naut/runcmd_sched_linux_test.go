@@ -42,6 +42,9 @@ func TestRunBannerSaysRealTimeWasRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	run := exec.CommandContext(ctx, naut, "run", proj)
+	// naut run keeps its audit journal in its working directory: the
+	// test's, not the package's.
+	run.Dir = dir
 	run.Env = append(os.Environ(), "NAUTILUS_ADDR=127.0.0.1:0")
 	stdout, _ := run.StdoutPipe()
 	run.Stderr = io.Discard
