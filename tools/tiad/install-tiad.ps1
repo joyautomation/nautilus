@@ -85,9 +85,10 @@ function IsReparse ($path) {
 # elevated administrator, which owns what its earlier installs made).
 function Trusted ($sid) { $sid -eq $SidAdmins -or $sid -eq $SidSystem -or $sid -eq $SidUser }
 
-# Lock makes Administrators the owner, and Administrators and SYSTEM the
-# only entries, with inheritance from the parent off.
-function Lock ($path, [switch] $Dir) {
+# LockedAcl is the security every locked path gets: Administrators the
+# owner, and Administrators and SYSTEM the only entries, with inheritance
+# from the parent off.
+function LockedAcl ([switch] $Dir) {
     if ($Dir) {
         $acl = New-Object Security.AccessControl.DirectorySecurity
         $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
@@ -100,7 +101,31 @@ function Lock ($path, [switch] $Dir) {
     foreach ($sid in $SidAdmins, $SidSystem) {
         $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', $inherit, 'None', 'Allow')))
     }
-    Set-Acl -LiteralPath $path -AclObject $acl
+    return $acl
+}
+
+function Lock ($path, [switch] $Dir) {
+    Set-Acl -LiteralPath $path -AclObject (LockedAcl -Dir:$Dir)
+}
+
+# NotLocked says why path is not exactly as Lock leaves it, or returns
+# nothing when it is: not a link, owned by Administrators, protected, and
+# only Administrators and SYSTEM.
+function NotLocked ($path) {
+    if (IsReparse $path) { return "it is a link or junction" }
+    $acl = Get-Acl -LiteralPath $path
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]) -ne $SidAdmins) { return "Administrators do not own it" }
+    if (-not $acl.AreAccessRulesProtected) { return "it inherits from its parent" }
+    foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($r.IdentityReference -ne $SidAdmins -and $r.IdentityReference -ne $SidSystem) { return "it grants $($r.IdentityReference)" }
+    }
+}
+
+# Links counts a file's names (hard links), or returns 0 when it cannot.
+function Links ($path) {
+    $names = @(& "$env:WINDIR\System32\fsutil.exe" hardlink list $path 2>$null)
+    if ($LASTEXITCODE -ne 0) { return 0 }
+    return $names.Count
 }
 
 # Assert-Tree refuses a tree that holds a link or junction, or anything
@@ -119,17 +144,22 @@ function Assert-Tree ($root) {
 }
 
 # Secure-Dir makes path a directory that only Administrators and SYSTEM can
-# change. It refuses one that is a link or that another account made, and
-# checks what is inside once nobody else can add to it.
+# change. A new one is created locked, so nobody else ever holds it. An
+# existing one must not be a link, nor made by another account. Once
+# locked, the directory itself is checked again (it could have been swapped
+# for a junction before the lock), and then what is inside, now that nobody
+# else can add to it.
 function Secure-Dir ($path) {
     if (Test-Path -LiteralPath $path) {
         if (IsReparse $path) { Die "$path is a link or junction: remove it, then re-run" }
         if (-not [IO.Directory]::Exists($path)) { Die "$path is not a directory" }
         if (-not (Trusted (OwnerSid $path))) { Die "$path was made by another account: remove it, then re-run" }
+        Lock $path -Dir
     } else {
-        [void][IO.Directory]::CreateDirectory($path)
+        [void][IO.Directory]::CreateDirectory($path, (LockedAcl -Dir))
     }
-    Lock $path -Dir
+    $why = NotLocked $path
+    if ($why) { Die "$path is not locked after locking it ($why): remove it, then re-run" }
     Assert-Tree $path
 }
 
@@ -300,12 +330,16 @@ Write-Host "`n4. Token"
 # is never readable by anyone else, not even for a moment.
 Secure-Dir $CfgDir
 if (Test-Path -LiteralPath $TokenFile) {
-    # A token this script wrote is owned by Administrators. Any other owner
-    # means someone else put it there, perhaps knowing it: never reuse it.
-    $o = OwnerSid $TokenFile
-    if ((IsReparse $TokenFile) -or -not ($o -eq $SidAdmins -or $o -eq $SidSystem)) {
+    # Reuse only a token exactly as this script leaves one: locked (which a
+    # token from before 0.1.0's fixes, briefly readable, is not), one name
+    # (a hard link would make another file's contents the token), and 64
+    # hex characters. Anything else may be known to someone: replace it.
+    $why = NotLocked $TokenFile
+    if (-not $why -and (Links $TokenFile) -ne 1) { $why = "it has another name (a hard link)" }
+    if (-not $why -and [IO.File]::ReadAllText($TokenFile) -cnotmatch '^[0-9a-f]{64}$') { $why = "it is not a token this script wrote" }
+    if ($why) {
         Remove-Item -LiteralPath $TokenFile -Force
-        Warn "replaced a token file that Administrators did not own"
+        Warn "replaced the token file: $why"
     }
 }
 if (Test-Path -LiteralPath $TokenFile) {
@@ -313,10 +347,15 @@ if (Test-Path -LiteralPath $TokenFile) {
 } else {
     $b = New-Object byte[] 32
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
-    [IO.File]::WriteAllText($TokenFile, (($b | ForEach-Object { $_.ToString('x2') }) -join ''), [Text.Encoding]::ASCII)
+    $text = [Text.Encoding]::ASCII.GetBytes((($b | ForEach-Object { $_.ToString('x2') }) -join ''))
+    # Created new (never through an existing name) and locked from the start.
+    $fs = New-Object IO.FileStream($TokenFile, [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::FullControl,
+        [IO.FileShare]::None, 4096, [IO.FileOptions]::None, (LockedAcl))
+    try { $fs.Write($text, 0, $text.Length) } finally { $fs.Close() }
     Ok "generated a new token"
 }
-Lock $TokenFile
+$why = NotLocked $TokenFile
+if ($why) { Die "the token file is not locked ($why)" }
 Ok "token at $TokenFile (Administrators and SYSTEM only; the agent runs elevated)"
 
 # --------------------------------------------------------------- 5. runner
@@ -344,7 +383,7 @@ if (Get-ScheduledTask -TaskName $TaskName -EA SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 # Highest: HttpListener binds without a urlacl for an administrator.
-$action    = New-ScheduledTaskAction  -Execute 'cmd.exe' -Argument "/c `"$bat`""
+$action    = New-ScheduledTaskAction  -Execute "$env:WINDIR\System32\cmd.exe" -Argument "/c `"$bat`""
 $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)

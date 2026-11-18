@@ -7,7 +7,8 @@
     a privilege escalation. This script installs tiad several times, always
     with -NoTia (TIA never starts), and checks:
 
-      1. a token file someone else left in place is never reused;
+      1. a token is reused only as the installer leaves it: locked, owned
+         by Administrators, one name (no hard link), 64 hex characters;
       2. the token, its directory, the work dir and the install dir are
          owned by Administrators, with Administrators and SYSTEM the only
          entries and inheritance off;
@@ -66,6 +67,17 @@ function TiadRules {
     @(Get-NetFirewallRule -EA SilentlyContinue | Where-Object { $_.DisplayName -like 'tiad*' })
 }
 
+# LockedAcl is what the installer gives a locked file.
+function LockedAcl {
+    $acl = New-Object Security.AccessControl.FileSecurity
+    $acl.SetOwner($SidAdmins)
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in $SidAdmins, $SidSystem) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
+    }
+    return $acl
+}
+
 # Locked: owner Administrators, protected, only Administrators and SYSTEM.
 function Locked ($path) {
     if (-not (Test-Path -LiteralPath $path)) { return "missing" }
@@ -84,16 +96,52 @@ Write-Host "`nChecking $Installer`n"
 # A first install, so the directories exist.
 Check "a loopback install succeeds" ((Install) -eq 0) "exit code"
 
-# 1. A token someone else put there: written while the agent is stopped, and
-#    owned by this account (not Administrators), as a planted file would be.
-Stop-ScheduledTask -TaskName $TaskName -EA SilentlyContinue
-$planted = 'planted' + [guid]::NewGuid().ToString('N')
-$acl = Get-Acl -LiteralPath $TokenFile
-$acl.SetOwner($SidUser)
-Set-Acl -LiteralPath $TokenFile -AclObject $acl
-[IO.File]::WriteAllText($TokenFile, $planted)
+# 1. Tokens. Each case breaks exactly one property of a token the installer
+#    wrote (locked, Administrators-owned, one name, 64 hex characters) and
+#    keeps the rest, so only that check can replace it. Each is written
+#    while the agent is stopped.
+function Token { [IO.File]::ReadAllText($TokenFile) }
+function Known { -join (1..64 | ForEach-Object { '0123456789abcdef'[(Get-Random -Maximum 16)] }) }
+function Plant ($value) {
+    Stop-ScheduledTask -TaskName $TaskName -EA SilentlyContinue
+    if (Test-Path -LiteralPath $TokenFile) { Remove-Item -LiteralPath $TokenFile -Force }
+    [IO.File]::WriteAllText($TokenFile, $value)
+    Set-Acl -LiteralPath $TokenFile -AclObject (LockedAcl)
+}
+
+$before = Token
 $code = Install
-Check "a planted token is not reused" ($code -eq 0 -and ([IO.File]::ReadAllText($TokenFile)).Trim() -ne $planted) "exit $code, or the token is still the planted one"
+Check "a token the installer wrote is reused" ($code -eq 0 -and (Token) -eq $before) "exit $code, or the token changed"
+
+$k = Known; Plant $k
+$acl = Get-Acl -LiteralPath $TokenFile; $acl.SetOwner($SidUser); Set-Acl -LiteralPath $TokenFile -AclObject $acl
+$code = Install
+Check "a token Administrators do not own is replaced" ($code -eq 0 -and (Token) -ne $k) "exit $code, or it was reused"
+
+$k = Known; Plant $k
+$acl = Get-Acl -LiteralPath $TokenFile
+$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545'), 'Read', 'Allow')))
+Set-Acl -LiteralPath $TokenFile -AclObject $acl
+$code = Install
+Check "a token others could read (as 0.1.0 left one) is replaced" ($code -eq 0 -and (Token) -ne $k) "exit $code, or it was reused"
+
+$k = 'planted-' + [guid]::NewGuid().ToString('N'); Plant $k
+$code = Install
+Check "a token that is not 64 hex characters is replaced" ($code -eq 0 -and (Token) -ne $k) "exit $code, or it was reused"
+
+# A hard link to another locked, Administrators-owned file of 64 hex
+# characters: everything but its second name is as the installer leaves it.
+$k = Known
+$other = Join-Path $env:TEMP ('tiad-other-' + [guid]::NewGuid().ToString('N'))
+[IO.File]::WriteAllText($other, $k)
+Set-Acl -LiteralPath $other -AclObject (LockedAcl)
+Stop-ScheduledTask -TaskName $TaskName -EA SilentlyContinue
+Remove-Item -LiteralPath $TokenFile -Force
+& cmd.exe /c mklink /H "$TokenFile" "$other" *> $null
+$linked = (Test-Path -LiteralPath $TokenFile) -and (Token) -eq $k
+$code = Install
+Check "a hard-linked token is replaced, and the other file left alone" ($linked -and $code -eq 0 -and (Token) -ne $k -and [IO.File]::ReadAllText($other) -eq $k) "linked=$linked, exit $code, or it was reused"
+Remove-Item -LiteralPath $other -Force
 
 # 2. Ownership and ACLs.
 foreach ($p in $CfgDir, $TokenFile, $WorkDir, $InstallDir) {
