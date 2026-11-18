@@ -1329,6 +1329,12 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 			if b.v == nil {
 				continue
 			}
+			// An integer loop has integer bounds (IEC 61131-3): a REAL
+			// end of 3.0 read as an integer is 0, so the loop silently
+			// never ran (#893). storeRule judges integer stores only.
+			if err := forOperandRule(sym.typ, b.v, b.src); err != nil {
+				return nil, errNode(b.src, fmt.Errorf("FOR %s %s: %w", n.Variable, b.what, err))
+			}
 			if _, err := storeRule(sym.typ, b.v, b.src); err != nil {
 				return nil, errNode(b.src, fmt.Errorf("FOR %s %s: %w", n.Variable, b.what, err))
 			}
@@ -1748,6 +1754,36 @@ func storeRule(t *ir.Type, value ir.Expr, src Expression) (*ir.Wrap, error) {
 		return nil, nil // an implicit widening: it fits
 	}
 	return ir.NewWrap(t), nil
+}
+
+// forOperandRule refuses a FOR start, end or step that is not an integer,
+// naming the conversion to write into the loop variable's type t. A value
+// of no known type is left to the VM, as before.
+func forOperandRule(t *ir.Type, v ir.Expr, src Expression) error {
+	vt := v.ExprType()
+	if vt == nil || vt.IsInteger() {
+		return nil
+	}
+	from := vt.Name
+	switch {
+	case vt.Kind == ir.TypeReal && from != "LREAL":
+		from = "REAL"
+	case from == "":
+		from = vt.Kind.String()
+	}
+	if from == "" || from == "VOID" {
+		return nil
+	}
+	to := t.Name
+	if to == "" {
+		to = "DINT"
+	}
+	what, arg := "the value", "…"
+	if id, ok := src.(*IdentExpr); ok {
+		what, arg = id.Name, id.Name
+	}
+	return fmt.Errorf("%s is %s, and a FOR's bounds and step are integers like its variable; write %s_TO_%s(%s)",
+		what, from, from, to, arg)
 }
 
 // realRule is IEC 61131-3's table for a store into a REAL or an LREAL
