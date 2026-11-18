@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
@@ -60,7 +61,7 @@ func NewPlant(s *Set) (*Plant, error) {
 		// A Modbus device's data is its unit's tables; an OPC UA device's
 		// is the plant's own tags, which its server reads and writes.
 		var stor store
-		if prof.Protocol == ProtoModbus {
+		if prof.Protocol == devprofile.ProtoModbus {
 			stor = newModbusStore(prof)
 			p.stores[strings.ToLower(d.Name)] = stor
 		}
@@ -107,11 +108,11 @@ func NewPlant(s *Set) (*Plant, error) {
 		if prof.Simulator == nil {
 			continue
 		}
-		src, err := prof.simulatorSource()
+		src, err := prof.SimulatorSource()
 		if err != nil {
 			return nil, fmt.Errorf("device %s: simulator %s: %w", d.Name, prof.Simulator.Source, err)
 		}
-		key := prof.ID + "\x00" + prof.dir
+		key := prof.ID + "\x00" + prof.Dir()
 		if !seenLib[key] {
 			seenLib[key] = true
 			libs = append(libs, src)
@@ -197,7 +198,7 @@ func (p *Plant) Program() string { return p.options.Program }
 // call: inputs from the device's tags, outputs back to them. VAR_INPUTs
 // and VAR_OUTPUTs named like no point are hooks, returned as state tags
 // <Device>_<Var> the process model reads or writes.
-func wireSimulator(d Instance, prof *Profile, src string, decls, body *strings.Builder) (hooks []runtime.TagDef, shared []Point, err error) {
+func wireSimulator(d Instance, prof *devprofile.Profile, src string, decls, body *strings.Builder) (hooks []runtime.TagDef, shared []devprofile.Point, err error) {
 	prog, err := st.Parse(src)
 	if err != nil {
 		return nil, nil, err
@@ -279,7 +280,7 @@ const sharedSuffix = "__dev"
 
 // pointInit is a point's power-up value: the instance's init, else the
 // profile's, else zero of its type.
-func pointInit(d Instance, pt Point) (any, error) {
+func pointInit(d Instance, pt devprofile.Point) (any, error) {
 	v, ok := lookupFold(d.Init, pt.Name)
 	if !ok {
 		v = pt.Init
@@ -349,7 +350,7 @@ func lookupFold(m map[string]any, name string) (any, bool) {
 type binding struct {
 	tag string
 	st  store
-	pt  Point
+	pt  devprofile.Point
 }
 
 // plantDriver is the plant's io.Driver: before each main scan it reads

@@ -34,7 +34,28 @@ import (
 type PriorityGuard struct {
 	Overruns     int     `json:"overruns"`     // scans in a row longer than the period; default 50
 	ScanMultiple float64 `json:"scanMultiple"` // one scan longer than this many periods; default 20
+	// RTLimit asks for a tighter kernel bound (RLIMIT_RTTIME, sched_linux.go)
+	// than DefaultRTLimit: how long a real-time thread may run without
+	// blocking. The kernel's limit is one per process, so the strictest
+	// of every task's RTLimit, NAUTILUS_RT_LIMIT_MS and a launcher's
+	// limit is the one in force (RTLimitMs). Zero asks for nothing; below
+	// MinRTLimit counts as MinRTLimit.
+	RTLimit time.Duration `json:"-"`
+	// RTLimitMs is the bound in force, once the task holds its priority
+	// (stats only).
+	RTLimitMs float64 `json:"rtLimitMs,omitempty"`
 }
+
+// DefaultRTLimit is how long a real-time task thread may run without
+// blocking before it is moved to normal scheduling (RLIMIT_RTTIME,
+// sched_linux.go): far above any scan's execution, far below what starves
+// a core's other work.
+const DefaultRTLimit = 200 * time.Millisecond
+
+// MinRTLimit is the shortest RTLimit taken (NAUTILUS_RT_LIMIT_MS's floor
+// too): shorter, and an ordinary scan with a page fault in it would be
+// demoted.
+const MinRTLimit = 10 * time.Millisecond
 
 const (
 	DefaultGuardOverruns     = 50

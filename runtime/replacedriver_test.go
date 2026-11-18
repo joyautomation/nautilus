@@ -380,3 +380,30 @@ func TestReplaceDriverGivesUpOnAHungScan(t *testing.T) {
 		t.Errorf("it waited %v", time.Since(start))
 	}
 }
+
+// statsDriver is a swap driver that reads the runtime's health
+// (runtime.StatsReader, #850).
+type statsDriver struct {
+	*askingDriver
+	stats func() runtime.ScanStats
+}
+
+func (s *statsDriver) ReadStatsFrom(f func() runtime.ScanStats) { s.stats = f }
+
+// A driver swapped in that reads the runtime's stats is handed them, as
+// Run hands the drivers it starts with: the status driver's tags keep
+// moving after a live swap.
+func TestReplaceDriverBindsAStatsReader(t *testing.T) {
+	rt, _, _ := swapRig(t)
+	rt.Scan()
+	b2 := &statsDriver{askingDriver: swapDriver([]string{"B_In"}, []string{"B_Out"}, nio.Values{"B_In": 3.0})}
+	if _, err := rt.ReplaceDriver(context.Background(), "b", b2); err != nil {
+		t.Fatal(err)
+	}
+	if b2.stats == nil {
+		t.Fatal("the swapped-in StatsReader was not handed the runtime's Stats")
+	}
+	if got := b2.stats().Count; got != 1 {
+		t.Errorf("its Stats read Count %d, want this runtime's 1 scan", got)
+	}
+}

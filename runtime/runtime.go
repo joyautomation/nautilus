@@ -157,6 +157,9 @@ type TaskStats struct {
 	LastMs      float64 `json:"lastMs"`
 	LogicErrors uint64  `json:"logicErrors"`
 	LastError   string  `json:"lastError,omitempty"`
+	// Faulting: the task's last scan raised a logic error (a fault episode
+	// is open; it closes on the first clean scan).
+	Faulting bool `json:"faulting,omitempty"`
 	// Lateness is this task's wake-up timing — see Lateness.
 	Lateness Lateness `json:"lateness"`
 	// Sched is what was asked of the OS scheduler for this task's thread
@@ -407,6 +410,9 @@ type ScanStats struct {
 	IOErrors    uint64 `json:"ioErrors"`
 	LogicErrors uint64 `json:"logicErrors"`
 	LastError   string `json:"lastError,omitempty"` // message of the last main-task fault
+	// Faulting: the main task's last scan raised a LOGIC error (its program
+	// failed; an I/O fault is IOHealthy). It closes on the first clean scan.
+	Faulting bool `json:"faulting,omitempty"`
 	// DivZero counts divisions (and MODs) by zero evaluated by any task
 	// since start. The VM yields 0 and the scan keeps running, so this is
 	// the only trace a bad divisor leaves — the Logix S:V of nautilus.
@@ -479,7 +485,7 @@ func New(o Options) (*Runtime, error) {
 		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority, shareCPU: td.ShareCPU, guard: td.Guard.withDefaults()}
 		tr.watch.limit = tr.guard.Overruns
 		tr.stats.Name = name
-		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard)}
+		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard, 0)}
 		tr.stats.TargetMs = scan.Seconds() * 1000
 		lt := td.LateThreshold
 		if lt <= 0 {
@@ -523,6 +529,13 @@ func New(o Options) (*Runtime, error) {
 	}
 	if len(o.Channels) > 0 {
 		tags.comm = newCommHub(o.Channels)
+		if o.Coordinator != nil {
+			var term func() uint64
+			if t, ok := o.Coordinator.(Termed); ok {
+				term = t.Term
+			}
+			tags.comm.setGate(o.Coordinator.IsLeader, term)
+		}
 	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
 	// Set before any scan or goroutine can observe it, so the store's NowMs
@@ -610,7 +623,7 @@ func New(o Options) (*Runtime, error) {
 	r.guard = o.Guard.withDefaults()
 	r.shareCPU = o.ShareCPU
 	r.watch.limit = r.guard.Overruns
-	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard)}
+	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard, 0)}
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -1054,6 +1067,8 @@ func (r *Runtime) Run(ctx context.Context) {
 		saved = make(chan []byte, 1)
 		go func() { saved <- r.retainSaver(ctx) }()
 	}
+	// Before the first scan: a status driver reads this runtime's health.
+	r.bindStatsReaders(r.driver)
 	// Liveness watches the loops from here on; see liveness.go.
 	r.live.state.Store(runRunning)
 	defer r.live.state.Store(runStopped)
@@ -1061,14 +1076,23 @@ func (r *Runtime) Run(ctx context.Context) {
 		defer r.tags.comm.close()
 	}
 	var guarded []*guarded
+	var rtLimit time.Duration // the strictest RTLimit asked for (prioguard.go)
+	ask := func(g PriorityGuard) {
+		if g.RTLimit > 0 && (rtLimit == 0 || g.RTLimit < rtLimit) {
+			rtLimit = g.RTLimit
+		}
+	}
 	if r.prio > 0 {
 		guarded = append(guarded, r.guardLoop(r.live.loops[0], r.scan, r.guard, &r.tid))
+		ask(r.guard)
 	}
 	for i, tr := range r.tasks {
 		if tr.prio > 0 {
 			guarded = append(guarded, r.guardLoop(r.live.loops[i+1], tr.scan, tr.guard, &tr.tid))
+			ask(tr.guard)
 		}
 	}
+	requestRTLimit(rtLimit) // before any loop takes its priority
 	if len(guarded) > 0 {
 		go monitorPriority(ctx, guarded, demoteTid)
 	}
@@ -1098,7 +1122,7 @@ func (r *Runtime) Run(ctx context.Context) {
 				}
 				tr.mu.Lock()
 				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
-				tr.stats.Sched.Guard = guardStat(tr.prio, tr.guard)
+				tr.stats.Sched.Guard = guardStat(tr.prio, tr.guard, rtLimitInForce())
 				tr.mu.Unlock()
 				logSched(tr.name, tr.cpus, tr.prio, err)
 			})
@@ -1124,7 +1148,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		}
 		r.mu.Lock()
 		r.stats.Sched = schedResult(r.cpus, r.prio, err)
-		r.stats.Sched.Guard = guardStat(r.prio, r.guard)
+		r.stats.Sched.Guard = guardStat(r.prio, r.guard, rtLimitInForce())
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
@@ -1153,11 +1177,13 @@ func (r *Runtime) guardLoop(l *loopLive, period time.Duration, g PriorityGuard, 
 	return &guarded{live: l, bound: guardBound(period, g.ScanMultiple), tid: tid, held: holdsPriority}
 }
 
-// guardStat is the guard shown in a task's stats: only with a priority.
-func guardStat(prio int, g PriorityGuard) *PriorityGuard {
+// guardStat is the guard shown in a task's stats: only with a priority,
+// with the kernel bound in force (rtLimit, 0 before Run: omitted).
+func guardStat(prio int, g PriorityGuard, rtLimit time.Duration) *PriorityGuard {
 	if prio <= 0 {
 		return nil
 	}
+	g.RTLimitMs = float64(rtLimit) / float64(time.Millisecond)
 	return &g
 }
 
@@ -1320,6 +1346,7 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 		tr.stats.LastError = msg
 	}
 	ev := tr.fault.observe(msg, t1)
+	tr.stats.Faulting = tr.fault.faulting
 	tr.mu.Unlock()
 	// After the unlock: Stats() takes tr.mu, and a log sink may be slow;
 	// the demotion's callback takes tr.mu too.
@@ -1473,6 +1500,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 	r.recordScanLocked(t0, t1, t2, t3, periodS, first, ioMsg, logicMsg, lateUs)
 	ioEv := r.ioFault.observe(ioMsg, t3)
 	logicEv := r.logicFault.observe(logicMsg, t3)
+	r.stats.Faulting = r.logicFault.faulting
 	r.mu.Unlock()
 	r.logFault(MainTaskName, "I/O", ioEv)
 	r.logFault(MainTaskName, "logic", logicEv)

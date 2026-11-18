@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	uaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -23,7 +24,7 @@ const opcuaSweep = 20 * time.Millisecond
 // instance's plant tag. Writable lists the tags a client may write.
 func (s *Set) Mapped(d Instance) (m *uaserver.Mapped, writable []string, err error) {
 	p := s.Profile(d.Name)
-	if p == nil || p.Protocol != ProtoOPCUA {
+	if p == nil || p.Protocol != devprofile.ProtoOPCUA {
 		return nil, nil, fmt.Errorf("device %s is not an OPC UA device", d.Name)
 	}
 	params := map[string]string{}
@@ -107,7 +108,7 @@ func opcuaListen(d Instance) string {
 
 // opcuaEndpoint normalises an instance's Endpoint to opc.tcp://host:port,
 // applying the profile's port; "" when it declares none.
-func opcuaEndpoint(d Instance, p *Profile) (string, error) {
+func opcuaEndpoint(d Instance, p *devprofile.Profile) (string, error) {
 	if d.Endpoint == "" {
 		return "", nil
 	}

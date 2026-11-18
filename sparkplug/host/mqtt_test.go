@@ -84,7 +84,7 @@ func newBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
 	if err := srv.AddHook(&testmqtt.SameIDSerializer{Server: srv}, nil); err != nil {
 		t.Fatalf("same-id hook: %v", err)
 	}
-	tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: addr})
+	tcp := testmqtt.NewTCP(srv, listeners.Config{ID: "t", Address: addr})
 	if err := srv.AddListener(tcp); err != nil {
 		t.Fatalf("listen: %v", err)
 	}

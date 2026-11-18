@@ -82,8 +82,18 @@ type commHub struct {
 	inflight map[int64]struct{}
 	finished map[int64]finishedReq
 
+	// gate is the runtime's write gate (Coordinator.IsLeader), nil when
+	// uncoordinated. term names the current leadership (Termed.Term), nil
+	// when the coordinator has none; gen is the fallback then: takeover
+	// bumps it. A write leaves only while the gate is open and under the
+	// leadership that posted it, so a replica that stepped down never
+	// drains its queue onto a peer the next leader is writing (see do).
+	gate func() bool
+	term func() uint64
+	gen  atomic.Uint64
+
 	stop     chan struct{}
-	stopped  bool // under mu: a post after close is refused
+	stopped  bool            // under mu: a post after close is refused
 	base     context.Context // cancelled by close, so no request outlives it
 	cancel   context.CancelFunc
 	stopOnce sync.Once
@@ -99,6 +109,7 @@ type commWorker struct {
 
 type commReq struct {
 	ticket   int64
+	lead     uint64 // the leadership that posted it (commHub.leadership)
 	write    bool
 	variable string
 	val      ir.Value
@@ -133,6 +144,36 @@ func newCommHub(chs []Channel) *commHub {
 		h.byName[ir.NameKey(c.Name)] = w
 	}
 	return h
+}
+
+// setGate makes every write wait on gate: false drops it as lost. term,
+// when not nil, names the leadership (Termed.Term): a write posted under
+// another term is dropped too. Call before the first post.
+func (h *commHub) setGate(gate func() bool, term func() uint64) {
+	if h != nil {
+		h.gate, h.term = gate, term
+	}
+}
+
+// leadership names the current leadership: the coordinator's term when it
+// has one, else the count of takeovers (newLeadership). The term moves the
+// moment a new lease is won, before the runtime's takeover runs (it waits
+// for the next scan and for live inputs), so a write queued in the old
+// term cannot slip out in that window.
+func (h *commHub) leadership() uint64 {
+	if h.term != nil {
+		return h.term()
+	}
+	return h.gen.Load()
+}
+
+// newLeadership marks a takeover: writes posted before it are dropped as
+// lost instead of sent, since the leadership that computed them is over.
+// With a term (setGate) it is redundant, and harmless.
+func (h *commHub) newLeadership() {
+	if h != nil {
+		h.gen.Add(1)
+	}
 }
 
 func (h *commHub) start() {
@@ -181,13 +222,34 @@ func (h *commHub) serve(w *commWorker) {
 		case <-h.stop:
 			return
 		case req := <-w.q:
-			h.finish(req.ticket, w.do(h.base, req))
+			h.finish(req.ticket, h.do(w, req))
 		}
 	}
 }
 
-func (w *commWorker) do(base context.Context, req commReq) ir.CommResult {
-	ctx, cancel := context.WithTimeout(base, w.timeout)
+// do runs one request on w's channel. A write is checked against the gate
+// and the leadership right before it is sent, not when it was posted: a
+// queued write may wait seconds behind another, and by then this replica
+// may have stepped down. Reads are not gated; they change nothing on the
+// peer.
+//
+// The GATE is read before the TERM, and the order matters. Read the other
+// way, a freeze longer than a lease between the two reads (the term still
+// the one that posted, then the lease lost and won back in a new term)
+// finds an open gate that belongs to the new term, and an old term's write
+// goes out under it. In this order an open gate followed by an unchanged
+// term pins the gate to the posting term: the term only grows, the write
+// was stamped before the gate was read, and it is still the same after.
+func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
+	if req.write {
+		if h.gate != nil && !h.gate() {
+			return ir.CommResult{Status: ir.CommLost}
+		}
+		if req.lead != h.leadership() {
+			return ir.CommResult{Status: ir.CommLost}
+		}
+	}
+	ctx, cancel := context.WithTimeout(h.base, w.timeout)
 	defer cancel()
 	if req.write {
 		return ir.CommResult{Status: commStatus(w.ch.Write(ctx, req.variable, req.val, req.elem))}
@@ -230,7 +292,7 @@ func (h *commHub) post(channel string, write bool, variable string, v ir.Value, 
 	}
 	ticket := h.next.Add(1)
 	select {
-	case w.q <- commReq{ticket: ticket, write: write, variable: variable, val: v, elem: elem}:
+	case w.q <- commReq{ticket: ticket, lead: h.leadership(), write: write, variable: variable, val: v, elem: elem}:
 		h.inflight[ticket] = struct{}{}
 		return ticket, ir.CommOK
 	default:

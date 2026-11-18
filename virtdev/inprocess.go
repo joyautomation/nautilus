@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/devprofile"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/modbus"
@@ -47,6 +48,9 @@ type InProcess struct {
 	mb  []*mbFace
 	ua  []*uaFace
 	ins []string
+	// status: the project's runtime status drivers (runtime.StatsReader,
+	// #850). No device answers them; they deliver their own values.
+	status []nio.Driver
 
 	mu     sync.Mutex
 	faults []string
@@ -117,6 +121,9 @@ func NewInProcess(s *Set, clock runtime.Clock, drivers []nio.NamedDriver) (*InPr
 				return nil, fmt.Errorf("driver %s: %w", nd.Name, err)
 			}
 			ip.ua = append(ip.ua, f)
+		case runtime.StatsReader:
+			// The runtime's own health, not a device's: kept as it is.
+			ip.status = append(ip.status, nd.Driver)
 		default:
 			return nil, fmt.Errorf("driver %s (%T): virtual devices answer modbus and opcua-client drivers only", nd.Name, nd.Driver)
 		}
@@ -163,7 +170,7 @@ func (ip *InProcess) bindModbus(d *modbus.Driver) (*mbFace, error) {
 func (ip *InProcess) modbusDevice(addr string, unit uint8) (string, bool) {
 	for _, d := range ip.set.Devices {
 		p := ip.set.Profile(d.Name)
-		if p.Protocol != ProtoModbus {
+		if p.Protocol != devprofile.ProtoModbus {
 			continue
 		}
 		if ep, _ := d.modbusEndpoint(p); ep == addr && d.Unit(p) == unit {
@@ -178,7 +185,7 @@ func (ip *InProcess) bindOPCUA(d *opcua.Driver) (*uaFace, error) {
 	for i := range ip.set.Devices {
 		dv := &ip.set.Devices[i]
 		p := ip.set.Profile(dv.Name)
-		if p.Protocol != ProtoOPCUA {
+		if p.Protocol != devprofile.ProtoOPCUA {
 			continue
 		}
 		if ep, _ := opcuaEndpoint(*dv, p); ep != "" && sameEndpoint(ep, d.Endpoint()) {
@@ -300,6 +307,15 @@ func (ip *InProcess) ReadInputs() (nio.Values, error) {
 	}
 	for _, f := range ip.ua {
 		ip.readOPCUA(f, out)
+	}
+	for _, d := range ip.status {
+		v, err := d.ReadInputs()
+		if err != nil {
+			return nil, err
+		}
+		for k, x := range v {
+			out[k] = x
+		}
 	}
 	return out, nil
 }
