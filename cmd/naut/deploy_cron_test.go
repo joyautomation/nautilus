@@ -160,10 +160,10 @@ func main() {
 		signal.Notify(c, syscall.SIGTERM)
 		go func() { <-c; time.Sleep(time.Duration(n) * time.Second); os.Exit(0) }()
 	}
-	// Released as "late": start, then die 1.5 s in, as a release that
+	// Released as "late": start, then die 2.5 s in, as a release that
 	// fails just after its start check does.
 	if self, _ := filepath.EvalSymlinks(os.Args[0]); strings.Contains(self, "/releases/late/") {
-		go func() { time.Sleep(1500 * time.Millisecond); os.Exit(1) }()
+		go func() { time.Sleep(2500 * time.Millisecond); os.Exit(1) }()
 	}
 	// Not dumpable, like a controller naut-launch gave a capability: its
 	// /proc/<pid>/exe is unreadable, even to its owner.
@@ -296,10 +296,10 @@ esac
 	}
 
 	// an update that starts and dies a moment later: the settle wait
-	// catches it (it dies 1.5 s in, after the 1 s first look, inside a 2 s
-	// settle); back to r2, exit 3
+	// catches it (it dies 2.5 s in, 1.5 s after the 1 s first look and
+	// 1.5 s before a 3 s settle ends); back to r2, exit 3
 	incoming("late", sleeperBytes)
-	settle = "2"
+	settle = "3"
 	out, code := box("update", "late")
 	settle = ""
 	if code != 3 {

@@ -204,17 +204,18 @@ func TestDeployBoxFailedUpdateRestoresRetain(t *testing.T) {
 }
 
 // A release that passes the start check and dies a moment later is caught
-// by the settle wait: the update rolls back (exit 3). Here it dies 1 s in,
-// after the stand-in systemctl's own 0.5 s check, inside a 2 s settle.
+// by the settle wait: the update rolls back (exit 3). Here it dies 1.5 s
+// in, 1 s after the stand-in systemctl's own 0.5 s check, and 2 s before a
+// 3 s settle ends: margins a loaded runner cannot wobble.
 func TestDeployBoxUpdateCatchesALateDeath(t *testing.T) {
 	e := newBoxEnv(t)
 	if out, code := e.deploy("install", "good", e.good); code != 0 {
 		t.Fatalf("install: exit %d\n%s", code, out)
 	}
-	e.env = append(e.env, "FAKE_SETTLE=2")
-	out, code := e.deploy("update", "late", "#!/bin/sh\nsleep 1\nexit 3\n")
+	e.env = append(e.env, "FAKE_SETTLE=3")
+	out, code := e.deploy("update", "late", "#!/bin/sh\nsleep 1.5\nexit 3\n")
 	if code != 3 {
-		t.Fatalf("update to a release that dies 1 s after starting: exit %d, want 3\n%s", code, out)
+		t.Fatalf("update to a release that dies 1.5 s after starting: exit %d, want 3\n%s", code, out)
 	}
 	if e.link("current") != "good" || !e.running() {
 		t.Errorf("after the rollback: current %q, running %v; want good, running", e.link("current"), e.running())
