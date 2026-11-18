@@ -280,13 +280,16 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
       # Every parser of bytes from the wire or a UDP datagram has a Fuzz
-      # target (profinet/wire/fuzz_test.go); none may panic. 20 s each.
+      # target (profinet/wire/fuzz_test.go); none may panic. A count, not a
+      # duration: a time budget can end with "context deadline exceeded"
+      # while a worker is busy, failing the job with no crasher found.
       - shell: bash
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           for f in $(go test -list '^Fuzz' ./profinet/wire/ | grep '^Fuzz'); do
             echo "== $f"
-            go test ./profinet/wire/ -run '^$' -fuzz "^$f\$" -fuzztime 20s
+            go test ./profinet/wire/ -run '^$' -fuzz "^$f\$" -fuzztime 1000000x
           done
   sparkplug-tck:
     needs: changes
