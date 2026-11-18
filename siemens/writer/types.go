@@ -2,7 +2,6 @@ package writer
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/st"
@@ -200,30 +199,6 @@ func zero(t string) (string, bool) {
 		return "T#0ms", true
 	}
 	return "", false
-}
-
-// intConstant evaluates an integer literal, or the negation of one.
-func intConstant(e st.Expression) (int64, bool) {
-	neg := false
-	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
-		neg, e = true, u.Operand
-	}
-	n, ok := e.(*st.NumberLit)
-	if !ok {
-		return 0, false
-	}
-	base := n.Base
-	if base == 0 {
-		base = 10
-	}
-	v, err := strconv.ParseInt(strings.ReplaceAll(n.Value, "_", ""), base, 64)
-	if err != nil {
-		return 0, false
-	}
-	if neg {
-		v = -v
-	}
-	return v, true
 }
 
 // inRange reports whether n fits the integer type t.

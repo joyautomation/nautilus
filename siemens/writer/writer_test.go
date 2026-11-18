@@ -381,30 +381,21 @@ func TestStoresThatChangeWidthOrSignednessWrap(t *testing.T) {
 	}
 }
 
-// TestImplicitStoreThatChangesSignedness covers the bare store the review
-// found (u := a): written with nautilus's wrap, or refused by nautilus's
-// own lowering once #800's table is in.
-func TestImplicitStoreThatChangesSignedness(t *testing.T) {
-	src := "PROGRAM P\nVAR a : INT; u : UINT; END_VAR\nu := a;\nEND_PROGRAM\n"
-	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(diags) > 0 {
-		if diags[0].Rule != "siemens/nautilus" {
-			t.Fatalf("%v", diags)
+// TestImplicitNarrowingIsRefusedByNautilus pins #800 as the writer meets
+// it: nautilus's own lowering refuses an implicit store that changes width
+// or signedness, and an out-of-range literal, before the writer writes
+// anything. (A value nautilus types as its 64-bit int, a counter's CV, is
+// accepted and wrapped by the writer: TestIntegerArithmeticIsWidenedAndWrapped.)
+func TestImplicitNarrowingIsRefusedByNautilus(t *testing.T) {
+	for _, body := range []string{"u := a;", "s := d;", "u := 70000;"} {
+		src := "PROGRAM P\nVAR a : INT; u : UINT; d : DINT; s : SINT; END_VAR\n" + body + "\nEND_PROGRAM\n"
+		out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return
-	}
-	if fb := string(out.Files[0].Data); !strings.Contains(fb, "#u := LINT_TO_UINT(((INT_TO_LINT(#a)) MOD LINT#65536") {
-		t.Errorf("bare signedness change:\n%s", fb)
-	}
-}
-
-func TestLiteralOutOfRangeIsRefused(t *testing.T) {
-	_, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR u : USINT; END_VAR\nu := 300;\nEND_PROGRAM\n"}}})
-	if err != nil || len(diags) == 0 {
-		t.Fatalf("u := 300 into a USINT must be refused (by the writer or by nautilus): %v %v", diags, err)
+		if len(out.Files) != 0 || len(diags) != 1 || diags[0].Rule != "siemens/nautilus" || diags[0].Line != 3 {
+			t.Errorf("%s: want one siemens/nautilus refusal on line 3, got %v", body, diags)
+		}
 	}
 }
 

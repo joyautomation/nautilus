@@ -317,7 +317,10 @@ func (pw *progWriter) ident(name string, line int) string {
 // store prints the value of an assignment to a target of type tt the way
 // nautilus stores it (#800): integer arithmetic at 64 bits, and any
 // integer whose width or signedness differs from the target's, wrapped to
-// the target (-1 stored into a UINT is 65535).
+// the target. nautilus's own lowering, which runs first, already refuses
+// an implicit narrowing (u := a, INT into UINT) and an out-of-range
+// literal; what reaches the wrap here is a value nautilus types as its
+// 64-bit int (a counter's CV) and the result of integer arithmetic.
 func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 	vt := pw.typ(v)
 	switch {
@@ -339,11 +342,6 @@ func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 			return pw.expr(v, 0) // exact: TIA converts a widening store implicitly
 		}
 		return wrap(toLINT(vt, pw.expr(v, 0)), tt)
-	case vt == tAnyInt && isInt(tt):
-		if n, ok := intConstant(v); ok && !inRange(n, tt) {
-			pw.diag("siemens/int-width", line, fmt.Sprintf("%d does not fit a %s", n, tt))
-			return ""
-		}
 	}
 	return pw.expr(v, 0)
 }
