@@ -303,6 +303,52 @@ jobs:
           name: evidence-examples
           path: evidence/
           retention-days: 14
+  # The race detector over the module (#752): a data race in runtime (#870)
+  # went unnoticed because no job ran -race on it. Every package runs here
+  # except the three slowest under -race (about 680 s of the module's 1300 s
+  # locally): opcua, opcua/server and cmd/naut, which the go job still runs
+  # without it and race-nightly.yml runs under -race with the whole module
+  # every night (not a PR gate; it files what it finds). Among what runs: the test brokers' churn test (1000 rounds
+  # under -race, the window where mochi's own Close deadlocks) and every
+  # concurrency-heavy package (runtime, leader, server, io, sparkplug),
+  # the real-time guard's thread-table tests among them (#870, #872).
+  go-race:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Go — race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25', cache: false}
+      # Its own build cache: -race builds every package apart from the go
+      # job's. Main saves one a day; a PR restores the newest.
+      - id: key
+        run: |
+          echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gocache
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-
+      - name: go test -race (every package but opcua, opcua/server, cmd/naut)
+        run: |
+          pkgs=$(go list ./... | grep -vxE 'github.com/joyautomation/nautilus/(opcua|opcua/server|cmd/naut)')
+          go test -race -count=1 $pkgs
+      - name: Save the Go build cache (main, once a day)
+        if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
   # The release build's promise (macOS, Linux and Windows, amd64 and arm64,
   # Linux ARMv7, CGO off): seven cross-compiles of the CLI, about 4 minutes.
   # Its own job so it runs beside go test, not inside it; the go job skips it.
@@ -436,19 +482,6 @@ jobs:
       - name: Host-application profile
         shell: bash
         run: NAUTILUS_TCK=1 go test -json ./sparkplug/host/ -run TestTCKHostConformance -v -timeout 120s | tee evidence/tck-host.json | go run ./tools/evidence cat
-      # The in-process test broker (mochi-mqtt v2.7.9) can deadlock in its own
-      # Close when a client disconnects at that moment; the tests close it
-      # through testmqtt.Close instead. The window only opens wide enough to hit
-      # under the race detector, so the churn test that proves closeBroker
-      # never hangs runs here with -race (it hangs mochi's Close within a few
-      # hundred of its 1000 rounds).
-      - name: test broker teardown under client churn (-race)
-        run: go test -race -cpu 4 -count=1 -run '^TestCloseUnderClientChurn$' ./internal/testmqtt
-      # The real-time guard's thread table is touched from every loop's own
-      # thread (arm, register, release, demote); a lock missed there shows
-      # only under the race detector (#870), so its tests run here with -race.
-      - name: real-time guard and scheduling (-race)
-        run: go test -race -count=1 -run 'RTGuard|TestRunReportsSched|TestApplySched' ./runtime
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -1241,7 +1274,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, go, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
+    needs: [changes, go, go-race, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

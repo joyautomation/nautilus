@@ -1,0 +1,80 @@
+# The race detector over the WHOLE module, nightly (#752). ci.yml's go-race
+# job runs -race on every PR but leaves out the three packages slowest under
+# it (opcua, opcua/server, cmd/naut: about 680 s of -race time); they are
+# concurrency-heavy too, so here they run with everything else. Not a PR
+# gate: a race found here opens (or updates) the rolling "race detector:
+# nightly" issue with the run and the race reports, and a clean run closes
+# it. By hand: Actions → race-nightly → Run workflow.
+name: race-nightly
+on:
+  schedule:
+    - cron: '41 5 * * *' # daily, 05:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  race:
+    name: Go — race detector, whole module
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write # the rolling issue
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25', cache: false}
+      - id: key
+        run: |
+          echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      # ci.yml's go-race job keeps this cache fresh (main, daily).
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-
+      - name: go test -race ./...
+        id: race
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -count=1 -timeout 30m -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... 2>&1 | tee "$RUNNER_TEMP/race.log"
+      - name: Rolling issue
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.race.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="race detector: nightly"
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number,title --jq "[.[]|select(.title==\"$title\")][0].number // empty")
+          if [ "$OUTCOME" = success ]; then
+            [ -z "$num" ] || gh issue close "$num" --repo "$GITHUB_REPOSITORY" --comment "Clean again: $RUN_URL"
+            exit 0
+          fi
+          body=$RUNNER_TEMP/issue.md
+          {
+            echo "Main at **${GITHUB_SHA::8}**: the whole-module \`go test -race\` run failed: $RUN_URL"
+            echo
+            echo "Data races and failing packages (the run's log has the rest):"
+            echo
+            echo '```'
+            grep -E -A12 'WARNING: DATA RACE' "$RUNNER_TEMP/race.log" | head -150
+            grep -E '^(--- FAIL|FAIL|panic:)' "$RUNNER_TEMP/race.log" | head -40
+            echo '```'
+          } > "$body"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
+          fi
