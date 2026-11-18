@@ -14,7 +14,6 @@ import (
 	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -65,17 +64,14 @@ func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err err
 	// A subject of its own, and an AuthorityKeyIdentifier naming its own
 	// key. A CODESYS runtime trusting several certificates that shared one
 	// subject (and had no AKI) accepted only one of them: trusting a second
-	// nautilus client broke the first. Go leaves the AKI out of
-	// self-signed certificates, so it is added by hand.
-	aki, err := asn1.Marshal(struct {
-		KeyID []byte `asn1:"optional,tag:0"`
-	}{ski[:]})
-	if err != nil {
-		return "", "", fmt.Errorf("opcua-client: authority key id: %w", err)
-	}
+	// nautilus client broke the first. For a self-signed certificate Go
+	// takes the AKI from the template.
 	cn := "nautilus"
 	if hostname != "" {
 		cn += "@" + hostname
+	}
+	if len(cn) > 64 { // ub-common-name (RFC 5280)
+		cn = cn[:64]
 	}
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
@@ -84,14 +80,14 @@ func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err err
 			Organization: []string{"Joy Automation"},
 			SerialNumber: fmt.Sprintf("%032x", serial)[:16],
 		},
-		ExtraExtensions: []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 35}, Value: aki}},
-		NotBefore:       time.Now().Add(-time.Hour),
-		NotAfter:        time.Now().AddDate(10, 0, 0),
+		NotBefore: time.Now().Add(-time.Hour),
+		NotAfter:  time.Now().AddDate(10, 0, 0),
 		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageContentCommitment |
 			x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		SubjectKeyId:          ski[:],
+		AuthorityKeyId:        ski[:],
 		DNSNames:              dns,
 		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
 		URIs:                  []*url.URL{uri},
