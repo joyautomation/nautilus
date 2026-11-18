@@ -535,9 +535,10 @@ claims:
     claim: >-
       Without `redundancy:`, the driver takes naut run's liveness gate. With
       `watchdog:` set, a closed gate (a hung or starved scan) means no
-      session, so nothing feeds the unit's watchdog and outputs with a
-      watchdog value go to it; without `watchdog:` the driver keeps reading
-      and writes nothing. When the scans resume it reconnects, counts the
+      session, so nothing the driver sends feeds the unit's watchdog and
+      outputs with a watchdog value go to it; without `watchdog:` the
+      driver keeps reading and sends no output writes (a reconnect still
+      writes its configuration). When the scans resume it reconnects, counts the
       trip in __WatchdogTrips and commands every output again; a clean stop
       restores its configuration even while the gate is closed. A gate
       installed for redundancy keeps the replica behaviour.
@@ -550,6 +551,9 @@ claims:
     partial: true
     note: >-
       Against the in-process fake, which trips its watchdog when no request
-      arrives for the watchdog time. On the bench unit a hung scan in a task
-      at normal priority is the check still to run (#865), after the unit
-      moves to naut deploy (#771).
+      arrives for the watchdog time. Still to run on the bench unit (#865),
+      as a hung scan in a task at normal priority: the trip itself, and
+      that the stream the driver leaves configured on the unit while the
+      gate is held (unit-to-nautilus datagrams) does not feed the unit's
+      watchdog. If it does, the driver must stop the stream when the gate
+      closes.

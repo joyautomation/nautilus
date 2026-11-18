@@ -244,14 +244,24 @@ blocks) or is starved, the driver goes silent so the watchdog can act.
 completed for its lease (4 s; about 5 to 8 s into the hang), and the
 driver takes it:
 
-- **With `watchdog:` set**, a closed gate means no session: no request
-  and no stream. Nothing feeds the unit's watchdog, and every output with
-  a watchdog value goes to it, about the gate's 5 to 8 s plus the
-  watchdog time into the hang. The inputs go stale, `EPIC__Online` falls,
-  and the driver's status row reads "held (scans not live)".
+- **With `watchdog:` set**, a closed gate means no session: the driver
+  sends no request and stops reading the stream. Nothing it sends feeds
+  the unit's watchdog, and every output with a watchdog value goes to it,
+  about the gate's 5 to 8 s plus the watchdog time into the hang. The
+  inputs go stale, `EPIC__Online` falls, and the driver's status row
+  reads "held (scans not live)".
 - **Without `watchdog:`**, there is nothing to starve: the driver keeps
-  reading the unit (poll, custom area or stream, as configured) and
-  writes nothing until the scans are live again.
+  reading the unit (poll, custom area or stream, as configured) and sends
+  no output writes until the scans are live again. If the connection
+  drops meanwhile, the reconnect still writes the driver's configuration
+  (power-up clear, custom-area pointers, stream setup); only outputs wait.
+
+While the gate is held, the configuration the driver set on the unit (its
+custom area, its stream and its watchdog time) stays there: with no
+session, nothing puts it back. In particular a stream stays on, and the
+unit keeps sending its datagrams to a port nautilus is not reading. A
+clean stop of `naut run` restores the configuration as usual, gate open
+or closed.
 
 When the scans resume, the driver reconnects as after an outage: the
 power-up clear if one is owed, its configuration, a watchdog trip counted

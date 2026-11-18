@@ -406,7 +406,7 @@ func (d *Driver) gateOpen() bool {
 				if d.skipsStandby() {
 					d.log.Warn("optommp: the scans are not live; holding no session so the unit's watchdog takes the outputs", "host", d.m.Host)
 				} else {
-					d.log.Warn("optommp: the scans are not live; writing nothing until they are", "host", d.m.Host)
+					d.log.Warn("optommp: the scans are not live; writing no outputs until they are", "host", d.m.Host)
 				}
 			}
 		case open && d.gateShut.Load():
@@ -463,13 +463,18 @@ func (d *Driver) PlainWriteGate() { d.plain.Store(true) }
 // single controller should when they are not:
 //
 //   - with `watchdog:` above 0s, a closed gate means no session: no
-//     request and no stream (the redundancy standby's path,
+//     request, and the stream is not read (the redundancy standby's path,
 //     watchdogStandbyNote), so the unit's watchdog trips and every output
 //     with a watchdog value goes to it, about the gate's lease plus the
 //     watchdog into a hung or starved scan. Inputs go Stale; online falls.
 //   - without it, the driver keeps leading the unit and polling (or
-//     streaming) its inputs, and writes nothing: there is no watchdog to
-//     starve, and live inputs keep the HMI and Sparkplug honest.
+//     streaming) its inputs, and sends no output writes: there is no
+//     watchdog to starve, and live inputs keep the HMI and Sparkplug
+//     honest. A reconnect still writes the configuration (configure).
+//
+// While the gate is held the unit keeps what the driver configured (custom
+// area, stream, watchdog time): with no session nothing restores it, so a
+// stream keeps sending to a socket nobody reads.
 //
 // When the scans are live again the gate reopens: the driver reconnects
 // (power-up clear if owed, its configuration), counts the gap as a
