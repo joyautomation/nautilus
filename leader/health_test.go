@@ -12,6 +12,7 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -760,20 +761,23 @@ func TestNewLocalIsOpenFromTheStart(t *testing.T) {
 // loopStarver starves one task's loop between scans on demand: its sleep
 // to the next slot blocks, as a task does that never gets the CPU (#858).
 type loopStarver struct {
-	task   string
-	starve atomic.Bool
-	free   chan struct{}
-	once   sync.Once
+	task       string
+	starve     atomic.Bool
+	free       chan struct{}
+	once       sync.Once
+	parked     chan struct{} // closed once the loop is blocked in its sleep
+	parkedOnce sync.Once
 }
 
 func newLoopStarver(task string) *loopStarver {
-	return &loopStarver{task: task, free: make(chan struct{})}
+	return &loopStarver{task: task, free: make(chan struct{}), parked: make(chan struct{})}
 }
 
 func (s *loopStarver) release() { s.starve.Store(false); s.once.Do(func() { close(s.free) }) }
 
 func (s *loopStarver) sleep(task string, ctx context.Context, until time.Time) bool {
 	if task == s.task && s.starve.Load() {
+		s.parkedOnce.Do(func() { close(s.parked) })
 		select {
 		case <-s.free:
 		case <-ctx.Done():
@@ -809,7 +813,7 @@ func starvedLeader(t *testing.T) (a, b *replica, st *loopStarver, t0 time.Time) 
 		time.Sleep(time.Millisecond)
 	}
 	st.starve.Store(true)
-	time.Sleep(30 * time.Millisecond) // into its next sleep
+	waitFor(t, st.parked, "the starved task to park in its sleep")
 	return a, b, st, t0
 }
 
@@ -860,6 +864,7 @@ func TestAStarvedReplicaDoesNotTakeTheLease(t *testing.T) {
 		t.Fatal("setup: the standby never took over from the starved leader")
 	}
 	for i := 0; i < 12; i++ { // pod-b dies: its lease lapses
+		time.Sleep(15 * time.Millisecond) // a's main task ticks: only the starved task is on trial
 		now = now.Add(testTick)
 		a.el.tick(now)
 		if a.el.IsLeader() {
@@ -880,5 +885,102 @@ func TestAStarvedReplicaDoesNotTakeTheLease(t *testing.T) {
 	a.el.tick(now)
 	if !a.el.IsLeader() {
 		t.Fatal("once its task runs again the replica takes the lapsed lease")
+	}
+}
+
+// slowSaveStore is a retain store whose Save is slow: it holds Run's
+// orderly stop open (the saver's in-flight tick, then the final save).
+type slowSaveStore struct {
+	delay   time.Duration
+	started chan struct{}
+	once    sync.Once
+	saves   atomic.Int64
+}
+
+func (s *slowSaveStore) Load() (retain.State, error) { return retain.State{}, nil }
+func (s *slowSaveStore) Save(retain.State) error {
+	s.once.Do(func() { close(s.started) })
+	time.Sleep(s.delay)
+	s.saves.Add(1)
+	return nil
+}
+func (s *slowSaveStore) Kind() string { return "slow" }
+
+// An orderly stop that takes a while, with the elector ticking through it
+// as naut run keeps it (#531), is not starvation: the leader keeps the
+// lease, the standby does not take it, and the final retained save is made
+// under the leader check. Read as starved, the gate would close and that
+// save would be skipped, losing what changed since the last tick.
+func TestASlowOrderlyStopKeepsTheLeaseForTheFinalSave(t *testing.T) {
+	srv, _ := newFakeServer(t)
+	e := newTestElector(t, srv, "pod-a", "10.0.0.1:8080")
+	b := newReplica(t, newTestElector(t, srv, "pod-b", "10.0.0.2:8080"), time.Hour)
+	store := &slowSaveStore{delay: 1500 * time.Millisecond, started: make(chan struct{})}
+	rt, err := runtime.New(runtime.Options{
+		Program: `PROGRAM Counter
+VAR_EXTERNAL Out : DINT; END_VAR
+Out := Out + 1;
+END_PROGRAM`,
+		Outputs:     []string{"Out"},
+		Seed:        nio.Values{"Out": int64(0)},
+		Scan:        10 * time.Millisecond,
+		Coordinator: e,
+		Retain:      store,
+		RetainTags:  []string{"Out"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.SetHealth(rt.Liveness)
+	t0 := time.Now()
+	e.tick(t0)
+	b.el.tick(t0)
+	if !e.IsLeader() {
+		t.Fatal("setup: pod-a does not lead")
+	}
+	b.run(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	now := t0
+	tick := func() {
+		now = now.Add(testTick)
+		e.tick(now)
+		b.el.tick(now)
+	}
+	// The leader is healthy and renewing while the saver's first tick
+	// comes round (~2 s), then a few more scans, so the final save has
+	// something new to write.
+	for wait := time.Now().Add(5 * time.Second); ; time.Sleep(15 * time.Millisecond) {
+		tick()
+		select {
+		case <-store.started:
+		default:
+			if time.Now().After(wait) {
+				t.Fatal("the saver never saved")
+			}
+			continue
+		}
+		break
+	}
+	for deadline := time.Now().Add(50 * time.Millisecond); time.Now().Before(deadline); time.Sleep(15 * time.Millisecond) {
+		tick()
+	}
+	cancel() // mid-save: the stop takes ~3 s
+	for stopping := true; stopping; {
+		select {
+		case <-done:
+			stopping = false
+		case <-time.After(15 * time.Millisecond):
+			tick()
+			if !e.IsLeader() || b.el.IsLeader() {
+				t.Fatalf("at +%s into the orderly stop: a=%v b=%v, want the leader to keep the lease until it is done", now.Sub(t0), e.IsLeader(), b.el.IsLeader())
+			}
+		}
+	}
+	if n := store.saves.Load(); n < 2 {
+		t.Fatalf("%d saves, want the in-flight one and the final one", n)
 	}
 }

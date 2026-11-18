@@ -262,6 +262,8 @@ claims:
       - go ./runtime TestLivenessALoopStarvedBetweenScansIsStuck
       - go ./runtime TestLivenessAGatedStandbyIsNotStarved
       - go ./cmd/naut TestSystemdHeartbeatStopsForAStarvedTask
+      - go ./runtime TestLivenessAnOrderlyStopIsNotStarved
+      - go ./leader TestASlowOrderlyStopKeepsTheLeaseForTheFinalSave
     partial: true
     note: >-
       The leader tests run two electors against the fake Lease API with a

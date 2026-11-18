@@ -142,12 +142,14 @@ claims:
     claim: >-
       Under a Type=notify systemd unit the controller sends READY=1 after
       its first completed scan, a WATCHDOG=1 heartbeat at half of
-      WatchdogSec while its scans are live, none once a scan hangs (with a
-      "scans not live" status line), and STOPPING=1 on an orderly stop.
+      WatchdogSec while its scans are live, none once a scan hangs or a task
+      is starved past its slot (with a "scans not live" status line), and
+      STOPPING=1 on an orderly stop.
     source: "#without-a-cluster-systemd"
     tests:
       - go ./cmd/naut TestNautRunSystemdNotify
       - go ./cmd/naut TestLiveWatch
+      - go ./cmd/naut TestSystemdHeartbeatStopsForAStarvedTask
     partial: true
     note: >-
       Against a stand-in notification socket, not systemd. systemd killing

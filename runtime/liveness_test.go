@@ -191,15 +191,20 @@ func TestLivenessASlowTaskIsLiveBetweenScans(t *testing.T) {
 // slot blocks until released, as a task does that never gets the CPU
 // (#858). Every other sleep is the wall clock's.
 type starver struct {
-	task    string
-	starve  atomic.Bool
-	release chan struct{}
+	task       string
+	starve     atomic.Bool
+	release    chan struct{}
+	parked     chan struct{} // closed once the loop is blocked in its sleep
+	parkedOnce sync.Once
 }
 
-func newStarver(task string) *starver { return &starver{task: task, release: make(chan struct{})} }
+func newStarver(task string) *starver {
+	return &starver{task: task, release: make(chan struct{}), parked: make(chan struct{})}
+}
 
 func (s *starver) sleep(task string, ctx context.Context, until time.Time) bool {
 	if task == s.task && s.starve.Load() {
+		s.parkedOnce.Do(func() { close(s.parked) })
 		select {
 		case <-s.release:
 		case <-ctx.Done():
@@ -245,10 +250,10 @@ func TestLivenessALoopStarvedBetweenScansIsStuck(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	st.starve.Store(true)
-	// Let it finish the scan it may be in and reach its next sleep.
+	waitClosed(t, st.parked, "the loop to park in its sleep")
 	n := fastScans()
-	time.Sleep(50 * time.Millisecond)
-	if fastScans() > n+1 {
+	time.Sleep(30 * time.Millisecond)
+	if fastScans() != n {
 		t.Fatal("the starved loop kept scanning")
 	}
 
@@ -287,22 +292,46 @@ func TestLivenessALoopStarvedBetweenScansIsStuck(t *testing.T) {
 
 // A standby's loops tick on schedule with every scan gated out: they are
 // live, never starved, or a healthy standby could never take the lease.
+// And the rule does apply to a standby: one whose loop really is starved
+// reads as starved, and so does not campaign.
 func TestLivenessAGatedStandbyIsNotStarved(t *testing.T) {
 	const max = 2 * time.Second
 	coord := &leadFlag{} // never the leader: every scan gates out
-	rt := newHangRuntime(t, nil, coord, 10*time.Millisecond)
-	startRun(t, rt)
-	if rt.Stats().Count != 0 {
-		t.Fatal("a standby ran a scan")
+	st := newStarver(runtime.MainTaskName)
+	rt, err := runtime.New(runtime.Options{
+		Program:     countProgram,
+		Outputs:     []string{"Out"},
+		Seed:        nio.Values{"Out": int64(0)},
+		Scan:        10 * time.Millisecond,
+		Coordinator: coord,
+		LoopSleep:   st.sleep,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	deadline := time.Now().Add(1500 * time.Millisecond)
+	startRun(t, rt, func() {
+		if st.starve.Swap(false) {
+			close(st.release)
+		}
+	})
+	deadline := time.Now().Add(1500 * time.Millisecond) // past 10 ms + 1 s in real time
 	for now := time.Now(); now.Before(deadline); now = time.Now() {
 		if err := rt.Liveness(now, max); err != nil {
 			t.Fatalf("a standby ticking on schedule reads as %v", err)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	// Past a 10 ms loop's period plus its bound (1.01 s) in real time.
+	if rt.Stats().Count != 0 {
+		t.Fatal("a standby ran a scan")
+	}
+
+	st.starve.Store(true)
+	waitClosed(t, st.parked, "the standby's loop to park in its sleep")
+	t0 := time.Now()
+	rt.Liveness(t0, max)
+	if err := rt.Liveness(t0.Add(2*time.Second), max); err == nil || !strings.Contains(err.Error(), "task main: its next scan is overdue") {
+		t.Fatalf("a standby starved between ticks: %v, want it read as starved", err)
+	}
 }
 
 // Before Run, Liveness answers live for a start-up grace from its first
@@ -512,5 +541,74 @@ func TestANewTermAfterTheGateClosedIsATakeover(t *testing.T) {
 	}
 	if n := store.loads.Load(); n != 2 {
 		t.Fatalf("%d retained loads, want 2: the new term did not reload what the other leader saved", n)
+	}
+}
+
+// slowStore is a retain store whose Save takes a while (a ConfigMap over a
+// slow API, say): it holds Run's orderly stop open. started is signalled
+// at the first Save.
+type slowStore struct {
+	delay   time.Duration
+	started chan struct{}
+	once    sync.Once
+	saves   atomic.Int64
+}
+
+func (s *slowStore) Load() (retain.State, error) { return retain.State{}, nil }
+func (s *slowStore) Save(retain.State) error {
+	s.once.Do(func() { close(s.started) })
+	time.Sleep(s.delay)
+	s.saves.Add(1)
+	return nil
+}
+func (s *slowStore) Kind() string { return "slow" }
+
+// An orderly stop that takes a while (the saver's in-flight tick, the final
+// retained save) is not a loop starved between scans: the loops have
+// returned with frozen counts on purpose. Liveness stays live through it
+// and reports the stop once Run returns, and the final save is made.
+func TestLivenessAnOrderlyStopIsNotStarved(t *testing.T) {
+	store := &slowStore{delay: 1500 * time.Millisecond, started: make(chan struct{})}
+	rt, err := runtime.New(runtime.Options{
+		Program:    countProgram,
+		Outputs:    []string{"Out"},
+		Seed:       nio.Values{"Out": int64(0)},
+		Scan:       10 * time.Millisecond,
+		Retain:     store,
+		RetainTags: []string{"Out"},
+		Tasks: []runtime.Task{{Name: "fast", Scan: 10 * time.Millisecond,
+			Program: `PROGRAM Fast VAR n : DINT; END_VAR n := n + 1; END_PROGRAM`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitClosed(t, store.started, "the saver's first save") // ~2 s in
+	// A few more scans, so the final save has something new to write, then
+	// stop mid-save: the stop takes ~3 s.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	const max = 2 * time.Second
+	t0 := time.Now()
+	for i := 1; ; i++ {
+		select {
+		case <-done:
+			if err := rt.Liveness(t0.Add(time.Duration(i)*time.Hour), max); !errors.Is(err, runtime.ErrStopped) {
+				t.Fatalf("after Run returned: %v, want the orderly stop", err)
+			}
+			if n := store.saves.Load(); n < 2 {
+				t.Fatalf("%d saves, want the in-flight one and the final one", n)
+			}
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+		// The test's time runs an hour per look: frozen counts would read
+		// overdue at once.
+		if err := rt.Liveness(t0.Add(time.Duration(i)*time.Hour), max); err != nil {
+			t.Fatalf("during the orderly stop: %v", err)
+		}
 	}
 }

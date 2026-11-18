@@ -100,9 +100,10 @@ func (e *Elector) Term() uint64 {
 }
 
 // Health reports whether this replica's scans are live at now: nil when
-// they are, else an error naming what is stuck. max is the longest one
-// scan may be in progress before it counts as stuck: the elector passes
-// half its lease. runtime.(*Runtime).Liveness is one.
+// they are, else an error naming what is stuck. max caps how long one scan
+// may be in progress, and how far past its slot a task between scans may
+// be (starved), before it counts as stuck: the elector passes half its
+// lease. runtime.(*Runtime).Liveness is one.
 type Health func(now time.Time, max time.Duration) error
 
 // SetHealth makes the lease depend on live scans (#621): the elector asks

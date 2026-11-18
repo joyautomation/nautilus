@@ -1062,6 +1062,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		live := r.live.loops[i+1]
 		go func(tr *taskRun) {
 			defer loops.Done()
+			defer live.exited.Store(true)
 			runLoop(ctx, tr.scan, r.loopClockFor(tr.name), func(due time.Time) {
 				live.begin()
 				r.scanTaskAt(tr, due)
@@ -1111,6 +1112,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
+	mainLive.exited.Store(true)
 	loops.Wait()
 	if saved != nil {
 		r.mu.Lock()
