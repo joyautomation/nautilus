@@ -41,6 +41,9 @@ esac
 # Under systemd STATE is itself a link (DynamicUser: /var/lib/nautilus ->
 # private/nautilus, made by systemd and root's). Resolved once, so every
 # path below is inside the real directory; links inside it are refused.
+# STATE_PATH keeps the path as given, so uninstall -purge removes the link
+# as well as the directory.
+STATE_PATH=$STATE
 if [ -d "$STATE" ]; then STATE=$(cd "$STATE" && pwd -P); fi
 if [ -n "$HELPER" ]; then
 	[ "$SUPERVISOR" = systemd ] || fail "the helper runs the systemd mode only"
@@ -78,6 +81,10 @@ stateread() {
 		rm -f "$2"
 		fail "$STATE/$1 is not a regular file of the controller's own; refusing to read it as root"
 	fi
+	# Checked: now root's own copy, which the controller can neither read
+	# nor change (it kept the controller's owner only for the check).
+	chown -h "$(id -u):$(id -g)" "$2"
+	chmod 600 "$2"
 }
 
 # statewrite <file> <name>: <file> becomes STATE/<name>, owned by STATE's
@@ -538,6 +545,7 @@ uninstall)
 		rm -f "$HOME/.config/naut-deploy"
 		if [ "${1:-}" = -purge ]; then
 			rm -rf "$STATE"
+			if [ -L "$STATE_PATH" ]; then rm -f "$STATE_PATH"; fi
 			say "uninstalled; retained values deleted"
 		else
 			say "uninstalled; retained values kept in $STATE"
@@ -549,7 +557,13 @@ uninstall)
 	systemctl daemon-reload
 	rm -rf "$ROOT"
 	if [ "${1:-}" = -purge ]; then
-		rm -rf "$STATE" /var/lib/private/nautilus
+		rm -rf "$STATE"
+		# DynamicUser's own directory even when its link was already gone,
+		# for the real layout only (a test's STATE must not reach it).
+		if [ "$STATE_PATH" = /var/lib/nautilus ]; then rm -rf /var/lib/private/nautilus; fi
+		# The path as given, when it was a link to STATE (DynamicUser's
+		# /var/lib/nautilus): not left pointing at nothing.
+		if [ -L "$STATE_PATH" ]; then rm -f "$STATE_PATH"; fi
 		say "uninstalled; retained values deleted"
 	else
 		say "uninstalled; retained values kept in $STATE"

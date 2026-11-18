@@ -360,3 +360,50 @@ func TestDeployBoxReadsOnlyTheControllersOwnFiles(t *testing.T) {
 		t.Errorf("backup of a file that is not the controller's own: exit %d\n%s", code, out)
 	}
 }
+
+// The copy of the retained values root keeps across an update is root's
+// own and private: the controller's owner and mode are only for the check.
+func TestDeployBoxRootsSnapshotIsPrivate(t *testing.T) {
+	e := newBoxEnv(t)
+	saver := "#!/bin/sh\necho '{\"SP\":1}' >retain.json\nchmod 644 retain.json\nexec sleep 300\n"
+	if out, code := e.deploy("install", "one", saver); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if out, code := e.deploy("update", "two", e.good2); code != 0 {
+		t.Fatalf("update: %d\n%s", code, out)
+	}
+	fi, err := os.Stat(filepath.Join(e.root, "snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := fi.Mode().Perm(); m != 0o600 {
+		t.Errorf("ROOT/snapshot.json mode %o, want 600", m)
+	}
+}
+
+// uninstall -purge with STATE given as a link (DynamicUser's
+// /var/lib/nautilus -> private/nautilus) removes the directory and the
+// link, leaving nothing that points at nothing.
+func TestDeployBoxPurgeRemovesAStateLink(t *testing.T) {
+	e := newBoxEnv(t)
+	real := filepath.Join(filepath.Dir(e.state), "private-state")
+	os.RemoveAll(e.state)
+	os.MkdirAll(real, 0o750)
+	if err := os.Symlink(real, e.state); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := e.deploy("install", "one", e.good); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	os.WriteFile(filepath.Join(real, "retain.json"), []byte(`{"SP":1}`), 0o600)
+	if out, code := e.box("uninstall", "-purge"); code != 0 {
+		t.Fatalf("uninstall -purge: %d\n%s", code, out)
+	}
+	if _, err := os.Lstat(e.state); err == nil {
+		t.Error("the STATE link is still there (pointing at nothing)")
+	}
+	if _, err := os.Stat(real); err == nil {
+		t.Error("the state directory is still there")
+	}
+}
