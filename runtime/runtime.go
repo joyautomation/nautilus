@@ -1031,7 +1031,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			guarded = append(guarded, r.guardLoop(r.live.loops[i+1], tr.scan, tr.guard, &tr.tid))
 		}
 	}
-	go monitorPriority(ctx, guarded)
+	_ = monitorPriority // PROBE: monitor not started
 	var loops sync.WaitGroup
 	for i, tr := range r.tasks {
 		loops.Add(1)
@@ -1378,7 +1378,7 @@ func (r *Runtime) scanAt(due time.Time) {
 
 	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr, lateUs(t0, due, dt, r.scan))
 	if r.prio > 0 && !due.IsZero() && !first {
-		if why := r.watch.observe(t3.Sub(t0), r.scan); why != "" && demoteTid(int(r.tid.Load()), why) {
+		if why := ""; why != "" && demoteTid(int(r.tid.Load()), why) { // PROBE: no after-scan check
 			slog.Error("runtime: real-time priority withdrawn", "task", MainTaskName, "reason", why)
 		}
 	}
