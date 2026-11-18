@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -208,8 +209,8 @@ func (d *Driver) run(ctx context.Context) {
 		backoff = backoffMin
 
 		dropped := d.serve(ctx, lost) && ctx.Err() == nil && !d.isStopping()
-		if afterServe != nil {
-			afterServe()
+		if hook := afterServe.Load(); hook != nil {
+			(*hook)()
 		}
 
 		d.mu.Lock()
@@ -227,10 +228,11 @@ func (d *Driver) run(ctx context.Context) {
 	}
 }
 
-// afterServe, nil outside tests, runs between a session ending (serve
+// afterServe, unset outside tests, runs between a session ending (serve
 // returning) and the run loop tearing it down: a test sets it to hold that
-// window open (TestDemotionIsDisconnectedBeforeItsDeathIsSeen).
-var afterServe func()
+// window open (TestDemotionIsDisconnectedBeforeItsDeathIsSeen). Atomic, so
+// a driver another test left running can read it while a test sets it.
+var afterServe atomic.Pointer[func()]
 
 // serve holds a live session open until the connection drops, the context
 // ends, or leadership changes (which needs a new CONNECT to install — or

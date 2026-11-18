@@ -265,8 +265,9 @@ func TestWriteGateDrivesStateAndCommands(t *testing.T) {
 // ("connection lost before Publish completed"). afterServe holds that
 // window open, so this fails every time without the fix.
 func TestDemotionIsDisconnectedBeforeItsDeathIsSeen(t *testing.T) {
-	afterServe = func() { time.Sleep(400 * time.Millisecond) }
-	t.Cleanup(func() { afterServe = nil }) // after the driver stops (cleanups run last-first)
+	hold := func() { time.Sleep(400 * time.Millisecond) }
+	afterServe.Store(&hold)
+	t.Cleanup(func() { afterServe.Store(nil) }) // after the driver stops (cleanups run last-first)
 
 	_, addr := startBroker(t, "")
 	var leader atomic.Bool
