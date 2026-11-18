@@ -9,3 +9,6 @@ sites/well-1/well-1
 sites/well-2/well-2
 sites/booster-1/booster-1
 scada/water-scada
+# The audit journal naut run keeps (audit.path, default ./audit): this
+# machine's record of who changed what, never committed.
+**/audit/audit-*.jsonl

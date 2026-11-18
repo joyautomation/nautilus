@@ -299,6 +299,10 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		"pki/trusted/certs/a.der":   "CERT",
 		"certs/own/private/key.pem": "-----BEGIN PRIVATE KEY-----",                                           // a store under another name
 		"opcua-client/key.pem":      "-----BEGIN RSA PRIVATE KEY-----\nMII\n-----END RSA PRIVATE KEY-----\n", // a flat client pki-dir
+		// `naut run` keeps the audit journal there too (#709): who did
+		// what on this machine, never part of the program.
+		"audit/audit-20261118.jsonl":     `{"id":"01J","user":"anonymous"}`,
+		"var/log/audit-20261119-1.jsonl": `{"id":"01K","user":"anonymous"}`,
 	}
 	for name, body := range files {
 		p := filepath.Join(proj, filepath.FromSlash(name))
@@ -341,7 +345,7 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		t.Error("the hmi build output must still be embedded")
 	}
 	for name := range names {
-		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "pki/") || strings.HasPrefix(name, "certs/") || strings.HasSuffix(name, "key.pem") {
+		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "pki/") || strings.HasPrefix(name, "certs/") || strings.HasSuffix(name, "key.pem") || strings.HasSuffix(name, ".jsonl") {
 			t.Errorf("archive contains %q, which should have been skipped", name)
 		}
 	}

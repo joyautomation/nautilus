@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -175,10 +174,6 @@ func (j *FileJournal) Record(e Entry) (Entry, error) {
 	}
 	e.Seq = j.seq + 1
 	e.Prev = j.head
-	e.Before, e.After = jsonSafe(e.Before), jsonSafe(e.After)
-	if e.Detail != nil {
-		e.Detail = jsonSafe(e.Detail).(map[string]any)
-	}
 	line, err := json.Marshal(e)
 	if err != nil {
 		return e, err
@@ -209,43 +204,6 @@ func (j *FileJournal) undo() error {
 		return err
 	}
 	return j.sync(j.f)
-}
-
-// jsonSafe returns v with every NaN and ±Inf float, at any depth in maps
-// and slices, as the strings "NaN", "+Inf" and "-Inf", so a REAL that holds
-// one can still be journalled. Everything else is returned as is.
-func jsonSafe(v any) any {
-	switch x := v.(type) {
-	case float64:
-		return safeFloat(x, v)
-	case float32:
-		return safeFloat(float64(x), v)
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, e := range x {
-			out[k] = jsonSafe(e)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = jsonSafe(e)
-		}
-		return out
-	}
-	return v
-}
-
-func safeFloat(f float64, v any) any {
-	switch {
-	case math.IsNaN(f):
-		return "NaN"
-	case math.IsInf(f, 1):
-		return "+Inf"
-	case math.IsInf(f, -1):
-		return "-Inf"
-	}
-	return v
 }
 
 // rotate opens a new file when the day has moved on, the current file is
@@ -382,12 +340,19 @@ func listFiles(dir string) ([]string, error) {
 	var out []string
 	for _, e := range ents {
 		n := e.Name()
-		if !e.IsDir() && strings.HasPrefix(n, filePrefix) && strings.HasSuffix(n, fileSuffix) && dayOf(n) != "" {
+		if !e.IsDir() && IsJournalFile(n) {
 			out = append(out, n)
 		}
 	}
 	sort.Slice(out, func(a, b int) bool { return fileKey(out[a]) < fileKey(out[b]) })
 	return out, nil
+}
+
+// IsJournalFile reports whether name (a base name) is one of the
+// journal's files, audit-YYYYMMDD[-N].jsonl: what `naut build` leaves out
+// of a built binary, wherever in the project it sits.
+func IsJournalFile(name string) bool {
+	return strings.HasPrefix(name, filePrefix) && strings.HasSuffix(name, fileSuffix) && dayOf(name) != ""
 }
 
 // dayOf is a file name's YYYYMMDD, or "" when it is not a journal file.

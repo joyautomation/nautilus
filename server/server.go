@@ -23,6 +23,9 @@
 //	GET  /api/sfc      running SFC charts; POST /api/sfc/step and
 //	                   /api/sfc/transition jump or fire once (force.go)
 //	GET  /api/cluster  this replica's redundancy status (leader.Status JSON)
+//	GET  /api/audit    the audit journal's recent entries (server/audit.go):
+//	                   every write route above records one per request,
+//	                   accepted or refused, before it is answered
 //	GET  /assets/…     the dashboard's logo, favicon and brand fonts
 //
 // The Frame shape is deliberately generic (every tag, plus the scan loop's
@@ -77,6 +80,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
@@ -248,6 +252,13 @@ type Options struct {
 	// with it. NAUTILUS_ALLOWED_HOSTS adds to it in every embedder (New
 	// reads it).
 	AllowedHosts []string
+
+	// Audit is the runtime audit journal (#709): every write route records
+	// one entry per request to it, accepted or refused, before the client
+	// is answered (server/audit.go). naut run gives it the file journal
+	// (audit.OpenFile). Nil keeps entries in memory only. Either way the
+	// last 1000 are kept in a ring that GET /api/audit serves.
+	Audit audit.Recorder
 
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
 	// /api/program/rollback) — PLC-style online edits of the running ST
@@ -457,6 +468,7 @@ type Server struct {
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
 	tagWriter   func(name string, value any) error
+	audit       *auditor
 
 	resync time.Duration
 	diag   time.Duration
@@ -544,6 +556,11 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.shelveTimes = opts[0].AlarmShelveTimes
 		s.tagWriter = opts[0].TagWriter
 	}
+	var rec audit.Recorder
+	if len(opts) > 0 {
+		rec = opts[0].Audit
+	}
+	s.audit = newAuditor(rec)
 	if len(s.shelveTimes) == 0 {
 		s.shelveTimes = alarm.DefaultShelveTimes
 	}
@@ -555,12 +572,19 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 func (s *Server) Run(ctx context.Context) {
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
+	// The audit journal's upkeep: entries kept while it could not be
+	// written, and the summaries of closed refusal windows.
+	at := time.NewTicker(auditUpkeep)
+	defer at.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			s.audit.tick()
 			return
 		case <-t.C:
 			s.broadcast()
+		case <-at.C:
+			s.audit.tick()
 		}
 	}
 }
@@ -632,29 +656,30 @@ func (s *Server) Handler() http.Handler {
 	// no alarm engine" a message rather than a bare route-not-found.
 	mux.HandleFunc("GET /api/alarms", s.handleAlarms)
 	mux.HandleFunc("GET /api/alarms/journal", s.handleAlarmJournal)
-	mux.HandleFunc("POST /api/alarms/ack", s.handleAlarmAck)
-	mux.HandleFunc("POST /api/alarms/shelve", s.handleAlarmShelve)
-	mux.HandleFunc("POST /api/alarms/unshelve", s.handleAlarmUnshelve)
+	mux.HandleFunc("POST /api/alarms/ack", s.audited("alarm.ack", ackTarget, s.handleAlarmAck))
+	mux.HandleFunc("POST /api/alarms/shelve", s.audited("alarm.shelve", shelveTarget, s.handleAlarmShelve))
+	mux.HandleFunc("POST /api/alarms/unshelve", s.audited("alarm.unshelve", unshelveTarget, s.handleAlarmUnshelve))
 	mux.HandleFunc("GET /api/stream", s.handleStream)
-	mux.HandleFunc("POST /api/tags", s.handleWriteTag)
+	mux.HandleFunc("POST /api/tags", s.audited("tag.write", s.tagTarget, s.handleWriteTag))
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
-	mux.HandleFunc("PUT /api/program", s.handlePutProgram)
-	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
+	mux.HandleFunc("PUT /api/program", s.audited("program.edit", s.programTarget, s.handlePutProgram))
+	mux.HandleFunc("POST /api/program/rollback", s.audited("program.rollback", s.rollbackTarget, s.handleRollback))
 	mux.HandleFunc("GET /api/program/history", s.handleProgramHistory)
-	mux.HandleFunc("POST /api/program/activate", s.handleActivate)
+	mux.HandleFunc("POST /api/program/activate", s.audited("program.activate", s.activateTarget, s.handleActivate))
 	mux.HandleFunc("GET /api/io", s.handleIO)
 	mux.HandleFunc("POST /api/io/staged", s.handleIOStage)
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
 	mux.HandleFunc("POST /api/io/staged/{id}/validate", s.handleIOValidate)
 	mux.HandleFunc("POST /api/io/staged/{id}/apply", s.handleIOApply)
 	mux.HandleFunc("GET /api/forces", s.handleForces)
-	mux.HandleFunc("POST /api/forces", s.handleForce)
-	mux.HandleFunc("POST /api/forces/clear", s.handleUnforceAll)
-	mux.HandleFunc("DELETE /api/forces/{name}", s.handleUnforce)
+	mux.HandleFunc("POST /api/forces", s.audited("force.set", s.forceTarget, s.handleForce))
+	mux.HandleFunc("POST /api/forces/clear", s.audited("force.clear-all", s.unforceAllTarget, s.handleUnforceAll))
+	mux.HandleFunc("DELETE /api/forces/{name}", s.audited("force.clear", s.unforceTarget, s.handleUnforce))
 	mux.HandleFunc("GET /api/sfc", s.handleSFC)
-	mux.HandleFunc("POST /api/sfc/step", s.handleSFCStep)
-	mux.HandleFunc("POST /api/sfc/transition", s.handleSFCTransition)
+	mux.HandleFunc("POST /api/sfc/step", s.audited("sfc.step", sfcTarget(true), s.handleSFCStep))
+	mux.HandleFunc("POST /api/sfc/transition", s.audited("sfc.transition", sfcTarget(false), s.handleSFCTransition))
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
+	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -889,7 +914,7 @@ func (s *Server) answerPreflight(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		// The auth headers, so an authorized cross-origin writer's
 		// preflight succeeds; Content-Type for JSON bodies.
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token, X-Nautilus-Client")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

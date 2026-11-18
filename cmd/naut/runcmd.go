@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -367,6 +368,14 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	builtHMI := buildHMIForRun(proj, dir, os.Stderr)
 	if proj.Server.HMI != nil {
 		sopts.HMI = proj.Server.HMI
+	}
+	// The audit journal (#709): every write through the tag API, accepted
+	// or refused, fsynced before it is answered. If it cannot be opened the
+	// controller still runs, with the entries kept in memory only.
+	if j := openAudit(proj, os.Stderr); j != nil {
+		defer j.Close()
+		sopts.Audit = j
+		go pruneAudit(ctx, j, os.Stderr)
 	}
 	srv := server.New(rt, sopts)
 	go srv.Run(ctx)
@@ -861,6 +870,37 @@ func embeddedManifest(fsys fs.FS) string {
 	return strings.TrimSpace(string(raw))
 }
 
+// openAudit opens the audit journal the manifest's audit: section places
+// (default ./audit). A failure is reported, not fatal: a read-only working
+// directory must not stop a controller, and the server keeps the entries
+// in memory instead.
+func openAudit(proj *project.Project, stderr io.Writer) *audit.FileJournal {
+	dir, keep := proj.AuditJournal()
+	j, err := audit.OpenFile(dir, audit.FileOptions{Keep: keep})
+	if err != nil {
+		fmt.Fprintf(stderr, "audit: %v: the journal is kept in memory only (set audit.path in nautilus.yaml to a writable directory)\n", err)
+		return nil
+	}
+	return j
+}
+
+// pruneAudit removes journal files older than audit.keep-days, at start
+// and then daily.
+func pruneAudit(ctx context.Context, j *audit.FileJournal, stderr io.Writer) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		if _, err := j.Prune(); err != nil {
+			fmt.Fprintf(stderr, "audit: prune: %v\n", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // embedSkipDirs names project subdirectories that never ship, however large
 // they are on disk: dependency trees a package manager can regenerate, not
 // project sources. This matters more once an hmi/ directory can sit inside
@@ -958,6 +998,11 @@ func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string]
 		// A vendored profile ships (the project loads its devices from it);
 		// the simulator beside it is a test fixture and does not.
 		if strings.HasPrefix(rel, devprofile.ProjectDir+"/") && path.Ext(rel) != ".yaml" {
+			return nil
+		}
+		// The audit journal `naut run` keeps (./audit by default) is this
+		// machine's record, never part of the program.
+		if audit.IsJournalFile(d.Name()) {
 			return nil
 		}
 		raw, err := os.ReadFile(p)

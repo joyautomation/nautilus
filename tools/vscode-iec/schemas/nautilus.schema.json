@@ -115,6 +115,24 @@
         }
       }
     },
+    "audit": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The runtime audit journal `naut run` always keeps: every action that changes something (tag writes, forces, alarm acks, online edits), accepted or refused, as one fsynced, hash-chained line. `naut audit verify` checks it. This section only moves it or changes how long it is kept.",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The journal's directory (default audit, in the working directory)."
+        },
+        "keep-days": {
+          "type": "integer",
+          "description": "Days of journal files kept (default 365). A negative number keeps every file."
+        }
+      }
+    },
     "redundancy": {
       "type": [
         "object",

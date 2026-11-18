@@ -89,6 +89,9 @@ type Manifest struct {
 	// Both are wired by `naut run` — check/build/LSP only validate.
 	Retain     *RetainConfig     `yaml:"retain"`
 	Redundancy *RedundancyConfig `yaml:"redundancy"`
+	// Audit places the runtime audit journal `naut run` always keeps
+	// (#709); absent takes the defaults.
+	Audit *AuditConfig `yaml:"audit"`
 	// Alarms turns BOOL tags into ISA-18.2 alarm state — the active list,
 	// acknowledge, shelve, and the journal behind /api/alarms. Absent (the
 	// default): no engine, and behaviour identical to before it existed.
@@ -271,6 +274,38 @@ type RetainConfig struct {
 	File string `yaml:"file"`
 	// ConfigMap is the in-cluster store's name (default <name>-retain).
 	ConfigMap string `yaml:"configmap"`
+}
+
+// AuditConfig places the runtime audit journal (#709). `naut run` always
+// keeps one: every action that changes something, accepted or refused,
+// one fsynced line, hash-chained (docs/design/identity-audit.md §4). This
+// section only moves it or changes how long its files are kept.
+type AuditConfig struct {
+	// Path is the journal's directory (default audit, in the working
+	// directory, as retain.json is).
+	Path string `yaml:"path"`
+	// KeepDays is how many days of files are kept (default 365); a
+	// negative number keeps every file.
+	KeepDays int `yaml:"keep-days"`
+}
+
+// AuditJournal resolves the audit section's defaults: the journal's
+// directory and how long its files are kept (negative: forever).
+func (p *Project) AuditJournal() (dir string, keep time.Duration) {
+	dir, keep = "audit", 365*24*time.Hour
+	if p.Audit == nil {
+		return dir, keep
+	}
+	if p.Audit.Path != "" {
+		dir = p.Audit.Path
+	}
+	switch {
+	case p.Audit.KeepDays < 0:
+		keep = -1
+	case p.Audit.KeepDays > 0:
+		keep = time.Duration(p.Audit.KeepDays) * 24 * time.Hour
+	}
+	return dir, keep
 }
 
 // RedundancyConfig turns on Lease-based leader election: replicas of this
@@ -682,6 +717,7 @@ type Project struct {
 	// load projects too, and must not touch a cluster to do it.
 	Retain     *RetainConfig
 	Redundancy *RedundancyConfig
+	Audit      *AuditConfig
 
 	// Alarms is the composed `alarms:` section (alarm-files folded in),
 	// or nil when the manifest declares none. Load composes and validates
@@ -1145,6 +1181,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		devices:    m.devices,
 		OPCUA:      m.OPCUA,
 		Retain:     m.Retain,
+		Audit:      m.Audit,
 		Redundancy: m.Redundancy,
 		Alarms:     m.Alarms,
 		HMIDir:     hmiDir,

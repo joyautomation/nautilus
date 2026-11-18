@@ -82,7 +82,7 @@ func (s *Server) handleForce(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	audit(r, "force: set", "tag", req.Name, "value", req.Value)
+	logAction(r, "force: set", "tag", req.Name, "value", req.Value)
 	s.handleForces(w, r)
 }
 
@@ -99,7 +99,7 @@ func (s *Server) handleUnforce(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("%s is not forced", name), http.StatusNotFound)
 		return
 	}
-	audit(r, "force: removed", "tag", name)
+	logAction(r, "force: removed", "tag", name)
 	s.handleForces(w, r)
 }
 
@@ -112,7 +112,7 @@ func (s *Server) handleUnforceAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := s.rt.Tags().UnforceAll()
-	audit(r, "force: cleared all", "removed", n)
+	logAction(r, "force: cleared all", "removed", n)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"removed": n})
 }
@@ -184,17 +184,17 @@ func (s *Server) sfcCommand(w http.ResponseWriter, r *http.Request, step bool) {
 		return
 	}
 	if step {
-		audit(r, "sfc: set active step", "pou", p.POU(), "step", did)
+		logAction(r, "sfc: set active step", "pou", p.POU(), "step", did)
 	} else {
-		audit(r, "sfc: fired transition", "pou", p.POU(), "transition", did)
+		logAction(r, "sfc: fired transition", "pou", p.POU(), "transition", did)
 	}
 	info, _ := p.SFC()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
 }
 
-// audit leaves one log line per operator action that changes what the
+// logAction leaves one log line per operator action that changes what the
 // controller does outside its own logic — who (remote address) and what.
-func audit(r *http.Request, msg string, args ...any) {
+func logAction(r *http.Request, msg string, args ...any) {
 	slog.Info(msg, append(args, "remote", r.RemoteAddr)...)
 }
