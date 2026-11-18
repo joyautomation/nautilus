@@ -85,6 +85,24 @@ kubectl apply -f deploy/k8s.yaml   # after pointing image: at your GHCR
 Uncomment the rollout step in deploy.yml (and add a `KUBE_CONFIG`
 secret) to close the loop: a merged PR is running on the plant floor
 minutes later, by sha, with `kubectl rollout undo` as the way back.
+{{end}}{{if .DeploySSH}}
+## Deploy to a box over SSH
+
+`.github/workflows/deploy-ssh.yml` deploys every `v*` tag that passes
+`check` + `test` with `naut deploy update`: built for the box's
+architecture on naut {{if .NautVersion}}{{.NautVersion}}{{else}}(set `NAUT_VERSION` in the workflow){{end}}, swapped in and restarted, and
+rolled back on the box if it does not start. It runs on a self-hosted
+runner labelled `plant` that reaches the box; set the repository
+variable `DEPLOY_TARGET` and the secrets `DEPLOY_SSH_KEY` and
+`DEPLOY_KNOWN_HOSTS` (the workflow's header says what each holds).
+
+By hand, from a clean checkout with the same naut:
+
+```sh
+naut deploy install deploy@10.0.0.20   # once
+naut deploy update deploy@10.0.0.20
+naut deploy rollback deploy@10.0.0.20
+```
 {{end}}
 
 When you need a custom field bus or richer simulation physics, that's the

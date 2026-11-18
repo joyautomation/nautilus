@@ -250,3 +250,27 @@ claims:
       enough to see a link followed or a file outside read or written; the
       helper has not yet run as root on a real box through a sudoers
       drop-in (the groov EPIC, #771, is first).
+  - id: DEP-017
+    claim: >-
+      naut new --deploy-ssh writes .github/workflows/deploy-ssh.yml on a
+      manifest project: on a v* tag it installs the pinned naut release
+      (the scaffolding naut's version) into the runner's temp directory,
+      checked against checksums.txt, runs naut check and naut test, and
+      runs naut deploy update on the repository variable DEPLOY_TARGET,
+      with the key readable only by the runner's user and removed after;
+      an unpinned naut or an empty DEPLOY_TARGET fails the job, and so
+      does an update the box rolled back.
+    source: "#through-cd"
+    tests:
+      - go ./cmd/naut TestDeploySSHWorkflowRenders
+      - go ./cmd/naut TestNewDeploySSHFlag
+      - go ./cmd/naut TestDeploySSHPinsTheScaffoldingNaut
+      - go ./cmd/naut TestDeploySSHInstallStep
+      - go ./cmd/naut TestDeploySSHDeployStep
+    partial: true
+    note: >-
+      The install and deploy steps' shell is run by the tests, against a
+      stand-in release server and a stand-in naut; the workflow itself has
+      not run in GitHub Actions, and the steps skip where curl,
+      sha256sum or bash are missing. Each guarantee was mutation-checked:
+      removing it turns its test red.
