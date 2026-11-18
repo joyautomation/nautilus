@@ -81,18 +81,25 @@ jobs:
       # job rebuilt nearly all of nautilus every run. Main saves one a day
       # (about 220 MB compressed); a PR restores the newest and never
       # saves. Tests still all run: -count=1 keeps cached results out.
-      - id: day
-        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      # The key carries the resolved toolchain ('1.25' floats to the newest
+      # patch): after a patch release, entries from the old toolchain would
+      # only miss, so a new patch starts its own line. Go itself trims cache
+      # entries unused for 5 days, so the saved cache does not grow without
+      # bound.
+      - id: key
+        run: |
+          echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
         id: gocache
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          key: go-test-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
           restore-keys: |
-            go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-
-            go-test-${{ runner.os }}-
+            go-test-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
+            go-test-${{ runner.os }}-${{ steps.key.outputs.go }}-
       - run: go vet ./...
       # -json and the coverage profile are kept as runtime evidence (the
       # runtime-evidence job joins them to docs/claims); `evidence cat`
@@ -128,7 +135,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          key: go-test-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -263,18 +270,25 @@ jobs:
       # job rebuilt nearly all of nautilus every run. Main saves one a day
       # (about 570 MB compressed); a PR restores the newest and never
       # saves. Tests still all run: -count=1 keeps cached results out.
-      - id: day
-        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      # The key carries the resolved toolchain ('1.25' floats to the newest
+      # patch): after a patch release, entries from the old toolchain would
+      # only miss, so a new patch starts its own line. Go itself trims cache
+      # entries unused for 5 days, so the saved cache does not grow without
+      # bound.
+      - id: key
+        run: |
+          echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
         id: gocache
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          key: go-cross-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
           restore-keys: |
-            go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-
-            go-cross-${{ runner.os }}-
+            go-cross-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
+            go-cross-${{ runner.os }}-${{ steps.key.outputs.go }}-
       - name: TestReleaseTargetsBuildWithoutCgo
         shell: bash
         run: |
@@ -287,7 +301,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          key: go-cross-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
