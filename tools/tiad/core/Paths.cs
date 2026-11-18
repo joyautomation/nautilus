@@ -84,11 +84,14 @@ namespace Tiad
 
         static HashSet<string> MakeReserved()
         {
+            // CON, PRN, AUX, NUL, and COM and LPT followed by a digit 0-9
+            // or a superscript one, two or three: Windows reserves them in
+            // every directory.
             var m = new HashSet<string>(StringComparer.Ordinal) { "CON", "PRN", "AUX", "NUL" };
-            for (int i = 1; i <= 9; i++)
+            foreach (string d in new[] { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "\u00b9", "\u00b2", "\u00b3" })
             {
-                m.Add("COM" + i.ToString(CultureInfo.InvariantCulture));
-                m.Add("LPT" + i.ToString(CultureInfo.InvariantCulture));
+                m.Add("COM" + d);
+                m.Add("LPT" + d);
             }
             return m;
         }
@@ -158,7 +161,19 @@ namespace Tiad
         public string Resolve(string requestPath)
         {
             string clean = Paths.CleanPath(requestPath);
-            string full = Path.GetFullPath(Path.Combine(Root, clean.Replace('/', Path.DirectorySeparatorChar)));
+            string full;
+            try
+            {
+                full = Path.GetFullPath(Path.Combine(Root, clean.Replace('/', Path.DirectorySeparatorChar)));
+            }
+            catch (Exception e)
+            {
+                if (e is PathTooLongException || e is NotSupportedException || e is ArgumentException)
+                {
+                    throw TiadException.BadRequest("path {0} is not usable here: {1}", Json.Quote(requestPath), e.GetType().Name);
+                }
+                throw;
+            }
             if (!full.StartsWith(Root + Path.DirectorySeparatorChar, Cmp))
             {
                 throw TiadException.BadRequest("path {0} resolves outside the work dir", Json.Quote(requestPath));
@@ -179,6 +194,16 @@ namespace Tiad
                 catch (DirectoryNotFoundException)
                 {
                     break;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    throw new TiadException(403, Kinds.BadRequest, "path " + Json.Quote(requestPath) + ": access denied");
+                }
+                catch (IOException e)
+                {
+                    // A name too long for the file system, or a part of
+                    // the path that is a file.
+                    throw TiadException.BadRequest("path {0} is not usable here: {1}", Json.Quote(requestPath), e.GetType().Name);
                 }
                 if ((a & FileAttributes.ReparsePoint) != 0)
                 {

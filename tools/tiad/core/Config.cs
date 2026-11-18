@@ -46,6 +46,9 @@ namespace Tiad
         public string WorkDir;
         public List<string> Targets = new List<string>();
 
+        // MaxFileBytes caps one uploaded file (TIAD_MAX_FILE_BYTES).
+        public long MaxFileBytes = 1L << 30;
+
         static string Env(string name)
         {
             return Environment.GetEnvironmentVariable(name) ?? "";
@@ -53,8 +56,8 @@ namespace Tiad
 
         // FromEnv reads TIAD_ADDR, TIAD_TOKEN or TIAD_TOKEN_FILE,
         // TIAD_WORKDIR and TIAD_TARGETS, and refuses a configuration that
-        // would be unsafe: a listener off loopback with no token, or a
-        // target that is not an IPv4 address.
+        // would be unsafe: no token, or a target that is not an IPv4
+        // address.
         public static Config FromEnv()
         {
             var c = new Config();
@@ -85,11 +88,12 @@ namespace Tiad
                 }
                 if (c.Token == "") throw new ConfigException("TIAD_TOKEN_FILE " + tokenFile + " is empty");
             }
-            if (!c.Loopback && c.Token == "")
+            if (c.Token == "")
             {
-                // A download stops a CPU. An endpoint that can do that,
-                // reachable from the network without a token, is refused.
-                throw new ConfigException("TIAD_ADDR " + addr + " is not loopback, so a token is required (TIAD_TOKEN or TIAD_TOKEN_FILE)");
+                // A download stops a CPU. Loopback is no exception: any
+                // process on the machine, or a browser on it, reaches
+                // loopback too.
+                throw new ConfigException("a token is required (TIAD_TOKEN or TIAD_TOKEN_FILE), on loopback too");
             }
 
             c.WorkDir = Env("TIAD_WORKDIR");
@@ -97,6 +101,12 @@ namespace Tiad
             {
                 if (Path.DirectorySeparatorChar != '\\') throw new ConfigException("TIAD_WORKDIR is required off Windows");
                 c.WorkDir = @"C:\tiad-work";
+            }
+
+            string max = Env("TIAD_MAX_FILE_BYTES");
+            if (max != "" && (!long.TryParse(max, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out c.MaxFileBytes) || c.MaxFileBytes < 1))
+            {
+                throw new ConfigException("TIAD_MAX_FILE_BYTES must be a positive number of bytes");
             }
 
             foreach (string t in Env("TIAD_TARGETS").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))

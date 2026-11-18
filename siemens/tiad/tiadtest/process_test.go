@@ -3,10 +3,15 @@ package tiadtest_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,25 +27,30 @@ var ctx = context.Background()
 
 func TestAgentRefusesUnsafeConfig(t *testing.T) {
 	bin := fakeBin(t)
-	wd := "TIAD_WORKDIR=" + t.TempDir()
+	wd, tok := "TIAD_WORKDIR="+t.TempDir(), "TIAD_TOKEN=t"
 	cases := []struct {
 		name string
 		env  []string
 		want string
 	}{
-		{"off loopback without a token", []string{wd, "TIAD_ADDR=http://0.0.0.0:0"}, "token is required"},
-		{"any address without a token", []string{wd, "TIAD_ADDR=http://*:0"}, "TIAD_ADDR"},
-		{"https", []string{wd, "TIAD_ADDR=https://127.0.0.1:0"}, "TIAD_ADDR"},
-		{"a path", []string{wd, "TIAD_ADDR=http://127.0.0.1:0/tiad"}, "TIAD_ADDR"},
-		{"user info", []string{wd, "TIAD_ADDR=http://u:p@127.0.0.1:0"}, "TIAD_ADDR"},
-		{"target out of range", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=192.0.2.300"}, "TIAD_TARGETS"},
-		{"target leading zero", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=192.0.2.10,01.2.3.4"}, "TIAD_TARGETS"},
-		{"target short", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=10.1"}, "TIAD_TARGETS"},
-		{"target hex", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=0x7f.0.0.1"}, "TIAD_TARGETS"},
-		{"target ipv6", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=::1"}, "TIAD_TARGETS"},
-		{"target name", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=plc.local"}, "TIAD_TARGETS"},
+		{"no token on loopback", []string{wd, "TIAD_ADDR=http://127.0.0.1:0"}, "token is required"},
+		{"no token off loopback", []string{wd, "TIAD_ADDR=http://0.0.0.0:0"}, "token is required"},
+		{"a blank token", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TOKEN=  "}, "token is required"},
+		{"an empty token file", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TOKEN_FILE=" + emptyFile(t)}, "is empty"},
+		{"any address", []string{wd, tok, "TIAD_ADDR=http://*:0"}, "TIAD_ADDR"},
+		{"https", []string{wd, tok, "TIAD_ADDR=https://127.0.0.1:0"}, "TIAD_ADDR"},
+		{"a path", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0/tiad"}, "TIAD_ADDR"},
+		{"user info", []string{wd, tok, "TIAD_ADDR=http://u:p@127.0.0.1:0"}, "TIAD_ADDR"},
+		{"target out of range", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=192.0.2.300"}, "TIAD_TARGETS"},
+		{"target leading zero", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=192.0.2.10,01.2.3.4"}, "TIAD_TARGETS"},
+		{"target short", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=10.1"}, "TIAD_TARGETS"},
+		{"target hex", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=0x7f.0.0.1"}, "TIAD_TARGETS"},
+		{"target ipv6", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=::1"}, "TIAD_TARGETS"},
+		{"target name", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TARGETS=plc.local"}, "TIAD_TARGETS"},
 		{"missing token file", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TOKEN_FILE=" + filepath.Join(t.TempDir(), "none")}, "TIAD_TOKEN_FILE"},
-		{"no work dir off Windows", []string{"TIAD_ADDR=http://127.0.0.1:0"}, "TIAD_WORKDIR"},
+		{"no work dir off Windows", []string{tok, "TIAD_ADDR=http://127.0.0.1:0"}, "TIAD_WORKDIR"},
+		{"file cap not a number", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=1e9"}, "TIAD_MAX_FILE_BYTES"},
+		{"file cap zero", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=0"}, "TIAD_MAX_FILE_BYTES"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -58,7 +68,7 @@ func TestAgentTokenFile(t *testing.T) {
 	if err := os.WriteFile(f, []byte("from-the-file\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := tiadtest.StartProcess(t, bin, tiadtest.Config{}, "TIAD_TOKEN_FILE="+f)
+	p := tiadtest.StartProcess(t, bin, tiadtest.Config{}, "TIAD_TOKEN=", "TIAD_TOKEN_FILE="+f)
 	if _, err := tiad.New(p.URL, "from-the-file").Health(ctx); err != nil {
 		t.Fatalf("the file's token: %v", err)
 	}
@@ -113,6 +123,150 @@ func TestAgentNeverFollowsALink(t *testing.T) {
 		if strings.Contains(f.Path, "link") || strings.Contains(f.Path, "secret") {
 			t.Errorf("list shows %s through a link", f.Path)
 		}
+	}
+}
+
+func emptyFile(t *testing.T) string {
+	f := filepath.Join(t.TempDir(), "empty.token")
+	if err := os.WriteFile(f, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func put(t *testing.T, p *tiadtest.Process, rawPath string, body []byte) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPut, p.URL+rawPath, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+p.Client().Token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// TestAgentKeepsAbsolutePathsOut: an escaped '/' makes a segment that is
+// an absolute path. The lexical rule refuses it, and the full-path
+// containment check refuses it again if the lexical rule ever lets it by.
+func TestAgentKeepsAbsolutePathsOut(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+	outside := t.TempDir()
+	for _, target := range []string{filepath.Join(outside, "abs.txt"), filepath.Join(outside, "sub", "abs.txt")} {
+		status, body := put(t, p, "/v1/files/"+url.PathEscape(target), []byte("x"))
+		if status != http.StatusBadRequest {
+			t.Errorf("PUT %s = HTTP %d %s, want 400", target, status, body)
+		}
+		if _, err := os.Stat(target); err == nil {
+			t.Errorf("PUT wrote %s, outside the work dir", target)
+		}
+	}
+}
+
+func TestAgentCapsFileSize(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{}, "TIAD_MAX_FILE_BYTES=1000")
+	c := p.Client()
+	if _, err := c.PutFile(ctx, "fits.bin", make([]byte, 1000)); err != nil {
+		t.Fatalf("a file at the cap: %v", err)
+	}
+	_, err := c.PutFile(ctx, "big.bin", make([]byte, 1001))
+	var te *tiad.Error
+	if !errors.As(err, &te) || te.Kind != tiad.KindBadRequest || te.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a file over the cap: %v, want 413 bad_request", err)
+	}
+	if fs := files(t, c); len(fs) != 1 || fs[0].Path != "fits.bin" {
+		t.Fatalf("files = %+v, want only fits.bin", fs)
+	}
+}
+
+// TestAgentRefusesAnUnusableName: a name the file system cannot hold is a
+// bad request, not an agent failure.
+func TestAgentRefusesAnUnusableName(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+	c := p.Client()
+	long := strings.Repeat("a", 300)
+	if _, err := c.PutFile(ctx, long, []byte("x")); tiad.Kind(err) != tiad.KindBadRequest {
+		t.Fatalf("PUT a 300-character name: %v, want bad_request", err)
+	}
+	if _, err := c.GetFile(ctx, "d/"+long); tiad.Kind(err) != tiad.KindBadRequest && tiad.Kind(err) != tiad.KindNotFound {
+		t.Fatalf("GET a 300-character name: %v", err)
+	}
+}
+
+// TestAgentReplacesFilesAtomically: puts of one path race each other
+// without failing, and a reader never finds the file missing.
+func TestAgentReplacesFilesAtomically(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+	c := p.Client()
+	if _, err := c.PutFile(ctx, "hot.txt", []byte("v0")); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 200)
+	for w := 0; w < 8; w++ {
+		wg.Add(2)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				if _, err := c.PutFile(ctx, "hot.txt", []byte(fmt.Sprintf("v%d-%d", w, i))); err != nil {
+					errs <- fmt.Errorf("put: %w", err)
+				}
+			}
+		}(w)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				if b, err := c.GetFile(ctx, "hot.txt"); err != nil || !bytes.HasPrefix(b, []byte("v")) {
+					errs <- fmt.Errorf("get: %q %w", b, err)
+				}
+			}
+		}()
+	}
+	// The first put of a new path, many at once: one wins, none fails.
+	for r := 0; r < 20; r++ {
+		name := fmt.Sprintf("fresh-%d.txt", r)
+		for w := 0; w < 8; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				if _, err := c.PutFile(ctx, name, []byte(fmt.Sprintf("w%d", w))); err != nil {
+					errs <- fmt.Errorf("first put of %s: %w", name, err)
+				}
+			}(w)
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// TestAgentJSONNeedsItsContentType: a JSON body is read only as
+// application/json (here through tiad-fake's control call, which reads its
+// body the way every JSON call of the agent does).
+func TestAgentJSONNeedsItsContentType(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+	body := []byte(`{"gates":[{"name":"licence","ok":false}]}`)
+	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded", "application/octet-stream"} {
+		req, _ := http.NewRequest(http.MethodPut, p.URL+"/fake/gates", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+p.Client().Token)
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnsupportedMediaType {
+			t.Errorf("JSON body as %q = HTTP %d, want 415", ct, resp.StatusCode)
+		}
+	}
+	if pr, err := p.Client().Probe(ctx); err != nil || !pr.Usable {
+		t.Fatalf("a refused body changed the gates: %+v %v", pr, err)
 	}
 }
 

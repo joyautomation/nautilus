@@ -13,9 +13,12 @@ package tiadtest
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -31,7 +34,9 @@ import (
 // Fake is one fake agent. Set the exported fields before serving; read
 // what happened through the accessor methods.
 type Fake struct {
-	// Token, when set, is the bearer token every request must carry.
+	// Token is the bearer token every request must carry. New sets a
+	// random one; the agent never runs without a token, and neither does
+	// the fake (an empty Token refuses every request).
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
@@ -73,8 +78,17 @@ type Download struct {
 	State   string
 }
 
-// New returns an empty fake.
-func New() *Fake { return &Fake{} }
+// New returns an empty fake with a random token.
+func New() *Fake { return &Fake{Token: RandomToken()} }
+
+// RandomToken is a fresh bearer token.
+func RandomToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
 
 // Serve starts the fake on a loopback port, closed when the test ends, and
 // returns a client for it.
@@ -178,7 +192,12 @@ func (f *Fake) init() {
 // ServeHTTP makes the fake an http.Handler.
 func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.init()
-	if f.Token != "" && r.Header.Get("Authorization") != "Bearer "+f.Token {
+	// No browser ever calls the agent.
+	if r.Header.Get("Origin") != "" {
+		reply(w, nil, fail(http.StatusForbidden, tiad.KindUnauthorized, "a request with an Origin header (a browser) is refused"))
+		return
+	}
+	if f.Token == "" || r.Header.Get("Authorization") != "Bearer "+f.Token {
 		reply(w, nil, fail(http.StatusUnauthorized, tiad.KindUnauthorized, "missing or wrong token"))
 		return
 	}
@@ -218,7 +237,19 @@ func reply(w http.ResponseWriter, data any, fl *failure) {
 	_ = json.NewEncoder(w).Encode(env)
 }
 
+// contentType refuses a body of any other media type.
+func contentType(r *http.Request, want string) *failure {
+	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if !strings.EqualFold(ct, want) {
+		return fail(http.StatusUnsupportedMediaType, tiad.KindBadRequest, "Content-Type must be %s", want)
+	}
+	return nil
+}
+
 func decode(r *http.Request, v any) *failure {
+	if fl := contentType(r, "application/json"); fl != nil {
+		return fl
+	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
@@ -266,6 +297,9 @@ func (f *Fake) listFiles(*http.Request) (any, *failure) {
 }
 
 func (f *Fake) putFile(r *http.Request) (any, *failure) {
+	if fl := contentType(r, "application/octet-stream"); fl != nil {
+		return nil, fl
+	}
 	p, fl := cleanPath(r.PathValue("path"))
 	if fl != nil {
 		return nil, fl

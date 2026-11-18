@@ -27,7 +27,7 @@ namespace Tiad
         static JavaScriptSerializer New()
         {
             var s = new JavaScriptSerializer();
-            s.MaxJsonLength = int.MaxValue;
+            s.MaxJsonLength = Call.MaxJsonBody;
             s.RecursionLimit = 64;
             return s;
         }

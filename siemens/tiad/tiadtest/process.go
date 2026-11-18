@@ -73,6 +73,9 @@ func (w logWriter) Write(b []byte) (int, error) {
 // to, or overrides, the agent's environment.
 func StartProcess(t testing.TB, bin string, cfg Config, env ...string) *Process {
 	t.Helper()
+	if cfg.Token == "" {
+		cfg.Token = RandomToken()
+	}
 	p := &Process{WorkDir: t.TempDir(), done: make(chan struct{})}
 	p.cmd = Command(bin)
 	p.cmd.Env = AgentEnv(append([]string{
@@ -182,9 +185,8 @@ func (p *Process) control(t testing.TB, method, path string, body any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.client.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.client.Token)
-	}
+	req.Header.Set("Authorization", "Bearer "+p.client.Token)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

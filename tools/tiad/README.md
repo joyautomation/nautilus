@@ -36,10 +36,17 @@ From the environment only; nothing in a request changes it.
 
 | Variable | Default | |
 |---|---|---|
-| `TIAD_ADDR` | `http://127.0.0.1:8190` | Port 0 picks a free port (tests). Off loopback, a token is required, or the agent refuses to start |
-| `TIAD_TOKEN` / `TIAD_TOKEN_FILE` | none | The bearer token, or a file holding it |
+| `TIAD_ADDR` | `http://127.0.0.1:8190` | Port 0 picks a free port (tests) |
+| `TIAD_TOKEN` / `TIAD_TOKEN_FILE` | none | The bearer token, or a file holding it. Required, on loopback too: the agent refuses to start without one |
+| `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
 | `TIAD_WORKDIR` | `C:\tiad-work` | Required off Windows |
 | `TIAD_TARGETS` | none | The only CPU addresses tiad goes online or downloads to. Strict dotted quads |
+
+A request with an `Origin` header (a browser) is refused with 403, whatever
+its token. A JSON body must be `application/json` and a file
+`application/octet-stream` (415 otherwise). An unexpected failure answers
+`operation_failed` with the exception's type only; the detail, which can
+carry the machine's paths, goes to the log.
 
 On start it prints `tiad: listening on http://host:port` to stdout. It logs
 one line per call to stderr: method, path, status, kind and time. It never

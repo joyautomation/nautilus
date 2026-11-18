@@ -154,8 +154,16 @@ namespace Tiad
             return o;
         }
 
+        // replaceLock serializes the last step of a put and a delete, so two
+        // puts of one path never race each other's rename. Windows needs it:
+        // MoveFile refuses an existing target, so two first puts of a new
+        // path collide. POSIX rename overwrites, so Mono never shows the
+        // race; the suite under TIAD_BIN, on Windows, does.
+        readonly object replaceLock = new object();
+
         object PutFile(Call c)
         {
+            c.RequireContentType("application/octet-stream");
             string full = UrlPath(c);
             if (Directory.Exists(full))
             {
@@ -183,12 +191,21 @@ namespace Tiad
                     int n;
                     while ((n = c.Body.Read(buf, 0, buf.Length)) > 0)
                     {
-                        f.Write(buf, 0, n);
                         size += n;
+                        if (size > cfg.MaxFileBytes)
+                        {
+                            throw new TiadException(413, Kinds.BadRequest, "file larger than " + cfg.MaxFileBytes + " bytes (TIAD_MAX_FILE_BYTES)");
+                        }
+                        f.Write(buf, 0, n);
                     }
                 }
-                if (File.Exists(full)) File.Delete(full);
-                File.Move(tmp, full);
+                lock (replaceLock)
+                {
+                    // Replace is one rename: a reader sees the old file or
+                    // the new one, never none.
+                    if (File.Exists(full)) File.Replace(tmp, full, null);
+                    else File.Move(tmp, full);
+                }
             }
             finally
             {
@@ -204,7 +221,7 @@ namespace Tiad
             {
                 throw TiadException.NotFound("no file {0}", c.Var("path"));
             }
-            return new Bytes(File.ReadAllBytes(full));
+            return new FileReply(full);
         }
 
         object DeleteFile(Call c)
@@ -214,7 +231,10 @@ namespace Tiad
             {
                 throw TiadException.NotFound("no file {0}", c.Var("path"));
             }
-            File.Delete(full);
+            lock (replaceLock)
+            {
+                File.Delete(full);
+            }
             return new Obj();
         }
 

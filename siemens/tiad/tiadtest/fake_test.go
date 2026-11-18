@@ -258,7 +258,10 @@ func TestProjectNameIsOneSafeSegment(t *testing.T) {
 	// The agent refuses them too, for a client that skips the check.
 	for _, n := range bad {
 		body, _ := json.Marshal(map[string]any{"name": n, "station": station(), "secrets": secrets})
-		resp, err := http.Post(srv.URL+"/v1/projects", "application/json", bytes.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/projects", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+f.Token)
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -405,5 +408,41 @@ func TestFilesAndExport(t *testing.T) {
 	p, err := s.Save(ctx, true)
 	if err != nil || p != "projects/p/p.zap21" {
 		t.Fatalf("save: %q %v", p, err)
+	}
+}
+
+func TestFakeJSONNeedsItsContentType(t *testing.T) {
+	f := tiadtest.New()
+	srv, _ := f.Serve(t)
+	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded"} {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/sessions", strings.NewReader(`{"path":"p.ap21"}`))
+		req.Header.Set("Authorization", "Bearer "+f.Token)
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnsupportedMediaType {
+			t.Errorf("JSON body as %q = HTTP %d, want 415", ct, resp.StatusCode)
+		}
+	}
+}
+
+// TestFakeNeverRunsWithoutAToken: like the agent, a fake with no token
+// refuses everything rather than serving everyone.
+func TestFakeNeverRunsWithoutAToken(t *testing.T) {
+	f := tiadtest.New()
+	f.Token = ""
+	_, c := f.Serve(t)
+	c.Token = ""
+	if _, err := c.Health(context.Background()); tiad.Kind(err) != tiad.KindUnauthorized {
+		t.Fatalf("health from a fake with no token: %v", err)
+	}
+	c.Token = "anything"
+	if _, err := c.Health(context.Background()); tiad.Kind(err) != tiad.KindUnauthorized {
+		t.Fatalf("health with some token: %v", err)
 	}
 }

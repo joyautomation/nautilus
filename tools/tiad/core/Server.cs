@@ -17,14 +17,15 @@ namespace Tiad
     // Handler answers one call: the reply's data, or Bytes for raw bytes.
     public delegate object Handler(Call c);
 
-    // Bytes is a reply that is raw bytes, not an envelope.
-    public sealed class Bytes
+    // FileReply is a reply that is a file's raw bytes, not an envelope.
+    // The file is streamed, never read whole into memory.
+    public sealed class FileReply
     {
-        public readonly byte[] Data;
+        public readonly string Path;
 
-        public Bytes(byte[] data)
+        public FileReply(string path)
         {
-            Data = data;
+            Path = path;
         }
     }
 
@@ -52,14 +53,39 @@ namespace Tiad
             get { return Request.InputStream; }
         }
 
+        // MaxJsonBody caps a JSON request body.
+        public const int MaxJsonBody = 16 << 20;
+
+        // RequireContentType refuses a body of any other media type (415).
+        // A browser can send a cross-origin text/plain POST without asking
+        // first, and tiad never takes one.
+        public void RequireContentType(string mediaType)
+        {
+            string ct = Request.ContentType ?? "";
+            int semi = ct.IndexOf(';');
+            if (semi >= 0) ct = ct.Substring(0, semi);
+            if (!string.Equals(ct.Trim(), mediaType, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new TiadException(415, Kinds.BadRequest, "Content-Type must be " + mediaType);
+            }
+        }
+
         // Json reads the body as one JSON object, strictly (see Reader).
         public Reader Json()
         {
-            string text;
-            using (var sr = new StreamReader(Request.InputStream, new UTF8Encoding(false)))
+            RequireContentType("application/json");
+            var buf = new MemoryStream();
+            var chunk = new byte[65536];
+            int n;
+            while ((n = Request.InputStream.Read(chunk, 0, chunk.Length)) > 0)
             {
-                text = sr.ReadToEnd();
+                if (buf.Length + n > MaxJsonBody)
+                {
+                    throw new TiadException(413, Kinds.BadRequest, "body: larger than " + MaxJsonBody + " bytes");
+                }
+                buf.Write(chunk, 0, n);
             }
+            string text = new UTF8Encoding(false).GetString(buf.GetBuffer(), 0, (int)buf.Length);
             if (text.Trim() == "") throw TiadException.BadRequest("body: EOF");
             return Reader.Root(Tiad.Json.Parse(text));
         }
@@ -154,7 +180,8 @@ namespace Tiad
         {
             this.cfg = cfg;
             this.router = router;
-            want = cfg.Token == "" ? null : Encoding.UTF8.GetBytes("Bearer " + cfg.Token);
+            if (cfg.Token == "") throw new ConfigException("a token is required");
+            want = Encoding.UTF8.GetBytes("Bearer " + cfg.Token);
         }
 
         // Start binds the listener. Port 0 picks a free loopback port; a
@@ -207,7 +234,6 @@ namespace Tiad
 
         bool Authorized(HttpListenerRequest r)
         {
-            if (want == null) return true;
             byte[] got = Encoding.UTF8.GetBytes(r.Headers["Authorization"] ?? "");
             // Constant time in the token's length.
             int diff = got.Length ^ want.Length;
@@ -241,6 +267,12 @@ namespace Tiad
             string kind = "";
             try
             {
+                // No browser ever calls tiad. A page the operator happens
+                // to have open must not reach it, token or not.
+                if (req.Headers["Origin"] != null)
+                {
+                    throw new TiadException(403, Kinds.Unauthorized, "a request with an Origin header (a browser) is refused");
+                }
                 if (!Authorized(req))
                 {
                     throw new TiadException(401, Kinds.Unauthorized, "missing or wrong token");
@@ -254,10 +286,10 @@ namespace Tiad
                     throw TiadException.NotFound("no such call {0} {1}", req.HttpMethod, Path0(req.RawUrl));
                 }
                 object data = h(new Call(req, vars));
-                var raw = data as Bytes;
-                if (raw != null)
+                var file = data as FileReply;
+                if (file != null)
                 {
-                    Write(ctx, 200, "application/octet-stream", raw.Data);
+                    WriteFile(ctx, file.Path);
                 }
                 else
                 {
@@ -276,9 +308,12 @@ namespace Tiad
             }
             catch (Exception e)
             {
+                // The framework's message can carry absolute paths of the
+                // agent's machine: it goes to the log, not to the caller.
                 status = 500;
                 kind = Kinds.OperationFailed;
-                WriteEnvelope(ctx, 500, Failure(Kinds.OperationFailed, e.GetType().Name + ": " + e.Message, false, null));
+                Log.Line("{0} {1}: {2}", req.HttpMethod, Path0(req.RawUrl), e);
+                WriteEnvelope(ctx, 500, Failure(Kinds.OperationFailed, "internal error in the agent (" + e.GetType().Name + "); see its log", false, null));
             }
             finally
             {
@@ -310,6 +345,26 @@ namespace Tiad
         static void WriteEnvelope(HttpListenerContext ctx, int status, Obj env)
         {
             Write(ctx, status, "application/json", Encoding.UTF8.GetBytes(Json.Write(env) + "\n"));
+        }
+
+        static void WriteFile(HttpListenerContext ctx, string path)
+        {
+            using (var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                try
+                {
+                    var resp = ctx.Response;
+                    resp.StatusCode = 200;
+                    resp.ContentType = "application/octet-stream";
+                    resp.ContentLength64 = f.Length;
+                    f.CopyTo(resp.OutputStream, 81920);
+                    resp.OutputStream.Close();
+                }
+                catch (HttpListenerException e)
+                {
+                    Log.Line("reply lost: {0}", e.Message);
+                }
+            }
         }
 
         static void Write(HttpListenerContext ctx, int status, string contentType, byte[] body)

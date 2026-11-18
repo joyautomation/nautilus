@@ -28,7 +28,8 @@ type Target interface {
 }
 
 // Config is the agent-side configuration a Target starts with: what the
-// real agent reads from TIAD_TOKEN and TIAD_TARGETS.
+// real agent reads from TIAD_TOKEN and TIAD_TARGETS. An empty Token means
+// a random one: the agent never runs without a token.
 type Config struct {
 	Token   string
 	Targets []string
@@ -40,7 +41,9 @@ type Starter func(t *testing.T, cfg Config) Target
 // GoFake starts the in-memory Go fake.
 func GoFake(t *testing.T, cfg Config) Target {
 	f := New()
-	f.Token = cfg.Token
+	if cfg.Token != "" {
+		f.Token = cfg.Token
+	}
 	f.Targets = cfg.Targets
 	_, c := f.Serve(t)
 	return goFake{f, c}
@@ -60,6 +63,8 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Health", func(t *testing.T) { contractHealth(t, start) })
 	t.Run("Probe", func(t *testing.T) { contractProbe(t, start) })
 	t.Run("Token", func(t *testing.T) { contractToken(t, start) })
+	t.Run("NoBrowser", func(t *testing.T) { contractNoBrowser(t, start) })
+	t.Run("ContentType", func(t *testing.T) { contractContentType(t, start) })
 	t.Run("Files", func(t *testing.T) { contractFiles(t, start) })
 	t.Run("PathsRefused", func(t *testing.T) { contractPathsRefused(t, start) })
 	t.Run("PathsAccepted", func(t *testing.T) { contractPathsAccepted(t, start) })
@@ -129,16 +134,27 @@ func contractProbe(t *testing.T, start Starter) {
 	}
 }
 
-// raw sends a request without the client's own checks. It never follows
-// a redirect: an agent that redirects has not served the request.
-func raw(t *testing.T, c *tiad.Client, method, rawPath, auth string, body []byte) (int, []byte) {
+// raw sends a request without the client's own checks, with the client's
+// token and, on a PUT, the file content type.
+func raw(t *testing.T, c *tiad.Client, method, rawPath string, body []byte) (int, []byte) {
+	t.Helper()
+	h := http.Header{"Authorization": {"Bearer " + c.Token}}
+	if method == http.MethodPut {
+		h.Set("Content-Type", "application/octet-stream")
+	}
+	return rawWith(t, c, method, rawPath, h, body)
+}
+
+// rawWith sends a request with exactly the headers h. It never follows a
+// redirect: an agent that redirects has not served the request.
+func rawWith(t *testing.T, c *tiad.Client, method, rawPath string, h http.Header, body []byte) (int, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(method, c.BaseURL+rawPath, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if auth != "" {
-		req.Header.Set("Authorization", auth)
+	for k, v := range h {
+		req.Header[k] = v
 	}
 	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := hc.Do(req)
@@ -200,7 +216,11 @@ func contractToken(t *testing.T, start Starter) {
 	// Only exactly "Bearer <token>" passes, on every call.
 	for _, auth := range []string{"", "Bearer", "Bearer ", "Bearer s3cre", "Bearer s3cretX", "bearer s3cret", "Basic s3cret", "Bearer  s3cret", "s3cret"} {
 		for _, call := range []struct{ method, path string }{{"GET", "/v1/health"}, {"GET", "/v1/files"}, {"PUT", "/v1/files/a.txt"}, {"GET", "/v1/nope"}} {
-			status, b := raw(t, c, call.method, call.path, auth, []byte("x"))
+			h := http.Header{"Content-Type": {"application/octet-stream"}}
+			if auth != "" {
+				h.Set("Authorization", auth)
+			}
+			status, b := rawWith(t, c, call.method, call.path, h, []byte("x"))
 			if status != http.StatusUnauthorized || envelopeKind(b) != tiad.KindUnauthorized {
 				t.Errorf("%s %s with Authorization %q = HTTP %d %s, want 401 unauthorized", call.method, call.path, auth, status, b)
 			}
@@ -208,6 +228,47 @@ func contractToken(t *testing.T, start Starter) {
 	}
 	if fs := files(t, c); len(fs) != 0 {
 		t.Fatalf("a refused put wrote %v", fs)
+	}
+}
+
+// contractNoBrowser: a request with an Origin header is a browser's, and
+// no browser ever calls the agent, whatever token it carries.
+func contractNoBrowser(t *testing.T, start Starter) {
+	c := start(t, Config{}).Client()
+	for _, call := range []struct{ method, path string }{{"GET", "/v1/health"}, {"GET", "/v1/files"}, {"PUT", "/v1/files/a.txt"}} {
+		for _, origin := range []string{"http://127.0.0.1:8190", "null", "https://example.com"} {
+			h := http.Header{"Authorization": {"Bearer " + c.Token}, "Origin": {origin}, "Content-Type": {"application/octet-stream"}}
+			status, b := rawWith(t, c, call.method, call.path, h, []byte("x"))
+			if status != http.StatusForbidden || envelopeKind(b) != tiad.KindUnauthorized {
+				t.Errorf("%s %s with Origin %q = HTTP %d %s, want 403 unauthorized", call.method, call.path, origin, status, b)
+			}
+		}
+	}
+	if fs := files(t, c); len(fs) != 0 {
+		t.Fatalf("a browser's put wrote %v", fs)
+	}
+}
+
+// contractContentType: a file is put as application/octet-stream and
+// nothing else; a browser can send text/plain without asking first.
+func contractContentType(t *testing.T, start Starter) {
+	c := start(t, Config{}).Client()
+	for _, ct := range []string{"", "text/plain", "application/json", "multipart/form-data; boundary=x", "application/x-www-form-urlencoded"} {
+		h := http.Header{"Authorization": {"Bearer " + c.Token}}
+		if ct != "" {
+			h.Set("Content-Type", ct)
+		}
+		status, b := rawWith(t, c, "PUT", "/v1/files/a.txt", h, []byte("x"))
+		if status != http.StatusUnsupportedMediaType || envelopeKind(b) != tiad.KindBadRequest {
+			t.Errorf("PUT with Content-Type %q = HTTP %d %s, want 415 bad_request", ct, status, b)
+		}
+	}
+	if fs := files(t, c); len(fs) != 0 {
+		t.Fatalf("a refused put wrote %v", fs)
+	}
+	h := http.Header{"Authorization": {"Bearer " + c.Token}, "Content-Type": {"Application/Octet-Stream; x=y"}}
+	if status, b := rawWith(t, c, "PUT", "/v1/files/a.txt", h, []byte("x")); status != http.StatusOK {
+		t.Fatalf("PUT with a parameterised octet-stream = HTTP %d %s", status, b)
 	}
 }
 
@@ -258,6 +319,7 @@ func contractFiles(t *testing.T, start Starter) {
 // agent's own check must refuse them: 400, bad_request.
 var RefusedPaths = []string{
 	"NUL", "a/con.txt", "Com1.scl", "LPT9", "aux.txt.bak", "CON .txt",
+	"COM0.txt", "lpt0", "COM¹", "lpt².txt", "a/Com³.scl", "LPT¹",
 	"x.", "a/x./b", "dir /x", "trail ",
 	"a|b", "a?b", "a*b", "a<b", "a>b", `a"b`,
 	`a\b`, "C:/x", "c:x", "file.scl:stream",
@@ -274,7 +336,7 @@ var UncleanURLs = []string{
 
 // AcceptedPaths obey the rule and must round-trip through the work dir.
 var AcceptedPaths = []string{
-	"a/b c.txt", "COM0.txt", "lpt10", "con-x.txt", "CONSOLE", "nul_device", "a.b/c",
+	"a/b c.txt", "COM10", "COM", "lpt10", "COM⁴", "LPT₁", "con-x.txt", "CONSOLE", "nul_device", "a.b/c",
 	"port-001/aux1", "ünï/çödé.txt", "x/.hidden", "100%", "a+b=c&d;e,f@g$h",
 	"deep/er/than/you/think.scl",
 }
@@ -292,7 +354,7 @@ func contractPathsRefused(t *testing.T, start Starter) {
 	for _, p := range RefusedPaths {
 		u := "/v1/files/" + escapePath(p)
 		for _, method := range []string{"PUT", "GET", "DELETE"} {
-			status, b := raw(t, c, method, u, "", []byte("x"))
+			status, b := raw(t, c, method, u, []byte("x"))
 			if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest {
 				t.Errorf("%s %q = HTTP %d %s, want 400 bad_request", method, p, status, b)
 			}
@@ -300,7 +362,7 @@ func contractPathsRefused(t *testing.T, start Starter) {
 	}
 	for _, u := range UncleanURLs {
 		for _, method := range []string{"PUT", "GET", "DELETE"} {
-			if status, b := raw(t, c, method, "/v1/files/"+u, "", []byte("x")); status/100 == 2 {
+			if status, b := raw(t, c, method, "/v1/files/"+u, []byte("x")); status/100 == 2 {
 				t.Errorf("%s %s = HTTP %d %s, want a refusal", method, u, status, b)
 			}
 		}
