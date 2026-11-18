@@ -685,11 +685,21 @@ func sample(field func() any) (stop func() []any) {
 	}
 }
 
+// cannotHold is a link with nothing that can hang (a file read from
+// memory): C6 then only checks that Stop returns within the bound.
+type cannotHold interface{ cannotHold() }
+
 func c6(t tb, s subject) {
 	r := up(t, s, startOpts{})
 	stopper, ok := r.drv.(interface{ Stop() })
 	if !ok {
 		t.Fatalf("the driver has no Stop")
+	}
+	if _, ok := r.link.(cannotHold); ok {
+		if !returnsWithin(stopBound, stopper.Stop) {
+			t.Fatalf("Stop still running after %s", stopBound)
+		}
+		return
 	}
 	r.link.freeze()
 	// Registered last, so it runs first: the link thaws before the rig's

@@ -17,17 +17,16 @@ import (
 // replay against a recording in an in-memory file system. Its link is the
 // recording itself: cut, the file is not there (a dataset not mounted
 // yet). Once loaded, the recording is in memory, so most contracts cannot
-// apply: nothing can fail, go stale or hang, and its outputs steer its own
-// clock, not a device.
+// apply: nothing can fail or go stale after the load, and its outputs
+// steer its own clock, not a device. Stop has nothing to wait for (C6).
 func init() {
-	const noLink = "once loaded, the recording is in memory: there is no link or device left to lose, fail or hang"
+	const loaded = "once loaded, the recording is in memory: no read of it can fail, and there is no connection to lose or regain (a tag the recording has no series for reads Bad from the load, not after a failed read)"
 	register(subject{
 		name: "replay",
 		byDesign: map[string]string{
-			"C3": noLink,
-			"C4": noLink,
-			"C6": noLink,
-			"C7": noLink,
+			"C3": loaded,
+			"C4": loaded,
+			"C7": loaded,
 			"C5": "its outputs (speed, pause, seek) steer its own clock: nothing reaches a device",
 			"C8": "its outputs (speed, pause, seek) steer its own clock: nothing reaches a device",
 		},
@@ -65,7 +64,7 @@ func init() {
 
 // fsLink is a file system holding one recording, which cut takes away:
 // every look at it while cut is refused. Nothing to freeze: a read of an
-// in-memory file cannot hang.
+// in-memory file cannot hang (cannotHold), so C6 checks Stop alone.
 type fsLink struct {
 	fs   fstest.MapFS
 	name string
@@ -110,3 +109,4 @@ func (l *fsLink) freeze()        {}
 func (l *fsLink) thaw()          {}
 func (l *fsLink) refused() int64 { return l.refusals.Load() }
 func (l *fsLink) held() int64    { return 0 }
+func (l *fsLink) cannotHold()    {}
