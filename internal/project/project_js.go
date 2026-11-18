@@ -58,6 +58,8 @@ func buildDriver(_ fs.FS, d DriverConfig) (nio.Driver, error) {
 	switch strings.ToLower(d.Type) {
 	case "", "memory":
 		return nio.NewMemory(), nil
+	case "runtime": // the runtime's own health: real in the browser too
+		return newRuntimeStatus(d)
 	}
 	return &simulated{Memory: nio.NewMemory(), typ: strings.ToLower(d.Type)}, nil
 }

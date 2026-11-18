@@ -187,6 +187,7 @@ last (or initial) value, and the logic checks the connection's fault bit.
 | `profinet-device` | reads its `init:`, or the zero of its type | `<driver name>__Online` (`profinet_device__Online`) |
 | `plcnext`, `optommp` (local I/O) | faults the scan, as before | `<id>__Online` |
 | `replay`, `memory` | faults the scan, as before | — |
+| `runtime` (the runtime's own health) | never undelivered: false / 0 until the first poll | — |
 
 The decision is per tag, by the driver that delivers it, so a `drivers:`
 list that mixes a Modbus skid with a controller's own I/O seeds only the
