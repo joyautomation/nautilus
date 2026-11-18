@@ -13,6 +13,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/sparkplug"
 	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
 
@@ -855,7 +856,7 @@ func TestSparkplugDeviceDeathDelay(t *testing.T) {
 	section := func(extra string) string {
 		return manifest + "\nsparkplug:\n  broker: tcp://x:1883\n  group-id: Joy\n" + extra
 	}
-	for extra, want := range map[string]int64{"": 0, "  device-death-delay: 2s\n": 2000} {
+	for extra, want := range map[string]int64{"": 0, "  device-death-delay: 2s\n": 2000, "  device-death-delay: 1m\n": 60000} {
 		p, err := Load(fsys(section(extra)), "")
 		if err != nil {
 			t.Fatalf("%q: %v", extra, err)
@@ -877,7 +878,7 @@ func TestSparkplugDeviceDeathDelay(t *testing.T) {
 				row = m.Text
 			}
 		}
-		if wantRow := map[int64]string{0: "", 2000: "2s"}[want]; row != wantRow {
+		if wantRow := map[int64]string{0: "", 2000: "2s", 60000: "1m0s"}[want]; row != wantRow {
 			t.Errorf("%q: the node's status row says DDEATH held %q, want %q", extra, row, wantRow)
 		}
 	}
@@ -885,5 +886,21 @@ func TestSparkplugDeviceDeathDelay(t *testing.T) {
 		if _, err := Load(fsys(section(extra)), ""); err == nil || !strings.Contains(err.Error(), "sparkplug.device-death-delay") {
 			t.Errorf("%q: error %v, want a refusal", extra, err)
 		}
+	}
+}
+
+// The node's row names the devices whose DDEATH is held right now.
+func TestSparkplugStatusRowNamesHeldDevices(t *testing.T) {
+	st := sparkplug.Status{Connected: true, Born: true, DeviceDeathDelayMs: 2000, Devices: []sparkplug.DeviceStatus{
+		{ID: "RTU53", Online: true, DeathHeld: true}, {ID: "RTU54", Online: true},
+	}}
+	row := ""
+	for _, m := range sparkplugStatus(st).Metrics {
+		if m.Label == "devices held" {
+			row = m.Text
+		}
+	}
+	if row != "RTU53" {
+		t.Errorf("devices held row %q, want RTU53 only", row)
 	}
 }

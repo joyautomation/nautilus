@@ -153,14 +153,16 @@ sparkplug:
 A device that recovers inside the delay sends nothing: no DDEATH, no
 DBIRTH, one continuous life. One still unhealthy past it dies on the next
 tick, so the DDEATH comes at most one publish interval after the delay.
-Births are never delayed. **The trade:** Sparkplug carries no tag quality,
-so while a death is held the device's metrics simply stop changing, and to
-every host the device looks alive and quiet. A real loss is announced the
-delay late. 1–5 s suits a link known to blip; leave it at 0 where a host
+Births are never delayed. **The trade:** nothing is sent for the device
+while its death is held (no DDATA, not even a `max-interval` heartbeat),
+so SCADA shows its last values with no quality and no updates, and a real
+loss is announced the delay late. A change made meanwhile goes out once
+the device recovers. 1–5 s suits a link known to blip; leave it at 0 where a host
 must know at once. A rebirth (NBIRTH) decides every device afresh, so a
 device unhealthy at that moment is left out of it, held or not.
-The node's row on the dashboard (and in `/api/drivers`) shows it as
-"DDEATH held".
+The node's row on the dashboard (and in `/api/drivers`) shows the delay
+as "DDEATH held", and any device whose death is being held right now
+under "devices held".
 
 ## Writes
 

@@ -1023,7 +1023,7 @@
         },
         "device-death-delay": {
           "$ref": "#/definitions/duration",
-          "description": "Hold a device's DDEATH until its connection has been unhealthy this long (0 to 1m); one that recovers inside it sends no DDEATH and no DBIRTH. Default 0: DDEATH on the first unhealthy tick. Sparkplug carries no tag quality, so while a death is held the device looks alive and quiet to every host. 1-5s suits a link known to blip."
+          "description": "Hold a device's DDEATH until its connection has been unhealthy this long (0 to 1m); one that recovers inside it sends no DDEATH and no DBIRTH. Default 0: DDEATH on the first unhealthy tick. Nothing is sent for the device while its death is held, so SCADA shows its last values with no quality and no updates. 1-5s suits a link known to blip."
         },
         "flatten-udts": {
           "type": "boolean",

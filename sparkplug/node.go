@@ -43,11 +43,11 @@ type Config struct {
 	// Ignored without a PrimaryHostID.
 	PrimaryHostOffline HostOfflineAction
 	// DeviceDeathDelay is how long a born device must stay unhealthy
-	// before its DDEATH. One that recovers inside it sends nothing: no
-	// DDEATH, no DBIRTH, one continuous device life. Zero (the default)
-	// sends DDEATH on the first unhealthy tick. Sparkplug carries no tag
-	// quality, so while a death is held the device's metrics just stop
-	// changing: to a host it looks alive and quiet. Births are not delayed.
+	// before its DDEATH. One that recovers inside it sends no DDEATH and no
+	// DBIRTH: one continuous device life. Zero (the default) sends DDEATH on
+	// the first unhealthy tick. Nothing is sent for the device while its
+	// death is held (no DDATA, no heartbeat), so a host shows its last
+	// values with no quality and no updates. Births are not delayed.
 	DeviceDeathDelay time.Duration
 	Log              *slog.Logger
 }
@@ -787,7 +787,10 @@ type StoreForwardStatus struct {
 type DeviceStatus struct {
 	ID     string `json:"id"`
 	Online bool   `json:"online"` // DBIRTH published, not yet DDEATH
-	Tags   int    `json:"tags"`
+	// DeathHeld: online, but its connection is unhealthy and its DDEATH is
+	// held (Config.DeviceDeathDelay); nothing is sent for it meanwhile.
+	DeathHeld bool `json:"deathHeld,omitempty"`
+	Tags      int  `json:"tags"`
 }
 
 // Status returns the node's current health snapshot.
@@ -823,6 +826,9 @@ func (n *Node) Status() Status {
 			Online: n.devHealth[d.ID],
 			Tags:   len(d.Tags),
 		})
+		if _, held := n.devDownSince[d.ID]; held {
+			s.Devices[len(s.Devices)-1].DeathHeld = true
+		}
 	}
 	return s
 }

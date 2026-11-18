@@ -182,6 +182,13 @@ func (n *Node) publishPassLocked(now time.Time) (msgs []sfRecord, deviceEvents [
 		if !n.devHealth[d.ID] {
 			continue
 		}
+		if _, held := n.devDownSince[d.ID]; held {
+			// Its death is held: nothing goes out for it, not a heartbeat
+			// (max-interval) with a fresh timestamp nor a stored write, so
+			// a lost device never looks current. Its RBE state is left
+			// alone: a change made meanwhile goes out once it recovers.
+			continue
+		}
 		if ms := n.collectChanged(snap, now, d.ID); len(ms) > 0 {
 			devChanged[d.ID] = ms
 		}
