@@ -8,6 +8,7 @@ package optommptest
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -459,6 +460,40 @@ func (d *Device) SetDigital(slot, ch int, on bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.setDigital(slot, ch, on)
+}
+
+// SetChannelBad sets (true) or clears (false) a digital channel's bit in
+// its module's quality mask (the expanded digital packed data, set = bad),
+// as the processor does when it loses the channel. The link stays up.
+func (d *Device) SetChannelBad(slot, ch int, bad bool) {
+	checkChannel("SetChannelBad", slot, ch)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	row := addrDigitalPacked + uint32(slot)*digitalModuleStride + 4
+	mask, bit := d.u32(row), uint32(1)<<uint(ch)
+	if bad {
+		mask |= bit
+	} else {
+		mask &^= bit
+	}
+	d.putU32(row, mask)
+}
+
+// SetAnalog sets an analog input channel's value in engineering units, as
+// the module would; the expanded per-channel read mirrors it. The
+// processor reports a bad-quality analog reading as NaN, so a NaN v makes
+// the channel read bad while the link stays up.
+func (d *Device) SetAnalog(slot, ch int, v float32) {
+	checkChannel("SetAnalog", slot, ch)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.putU32(addrPackedValues+uint32(slot)*valuesModuleStride+uint32(ch)*4, math.Float32bits(v))
+}
+
+func checkChannel(op string, slot, ch int) {
+	if slot < 0 || slot >= maxModules || ch < 0 || ch >= maxChannels {
+		panic(fmt.Sprintf("optommptest: %s(%d, %d): slot must be 0..%d and channel 0..%d", op, slot, ch, maxModules-1, maxChannels-1))
+	}
 }
 
 // Drop makes the device close the connection on its next request.
