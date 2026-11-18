@@ -513,6 +513,11 @@ func TestQualityStaleWhenAStepDownRacesTheMainRead(t *testing.T) {
 	coord.lead.Store(true) // back, but no gate has run
 	release()
 	assertStandby(t, rt, nil)
+
+	rt.Scan() // this gate takes over, and its read lands
+	if q := rt.Quality(); len(q) != 0 {
+		t.Errorf("after the next scan quality = %v, want nothing", q)
+	}
 }
 
 // The same race with a new term: during the main read the lease moves on
@@ -533,4 +538,10 @@ func TestQualityStaleWhenAHeldTakeoverRacesTheMainRead(t *testing.T) {
 	}
 	release()
 	assertStandby(t, rt, nil)
+
+	drv.ready.Store(true)
+	rt.Scan() // term 2's takeover runs, and its read lands
+	if q := rt.Quality(); len(q) != 0 {
+		t.Errorf("after term 2's first scan quality = %v, want nothing", q)
+	}
 }
