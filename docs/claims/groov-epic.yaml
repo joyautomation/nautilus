@@ -531,3 +531,25 @@ claims:
       (2026-11-17, three reboots, three I/O server restarts; the first restart
       ran before this retry, reconnecting 4.2 s after the server), written up
       on issue #767. Not repeatable in CI.
+  - id: EPIC-039
+    claim: >-
+      Without `redundancy:`, the driver takes naut run's liveness gate. With
+      `watchdog:` set, a closed gate (a hung or starved scan) means no
+      session, so nothing feeds the unit's watchdog and outputs with a
+      watchdog value go to it; without `watchdog:` the driver keeps reading
+      and writes nothing. When the scans resume it reconnects, counts the
+      trip in __WatchdogTrips and commands every output again; a clean stop
+      restores its configuration even while the gate is closed. A gate
+      installed for redundancy keeps the replica behaviour.
+    source: "#the-communication-watchdog"
+    tests:
+      - go ./optommp TestPlainGateWithWatchdogGoesSilentSoTheUnitTrips
+      - go ./optommp TestPlainGateWithoutWatchdogReadsOnAndWritesNothing
+      - go ./optommp TestPlainGateStopRestoresWhileClosed
+      - go ./optommp TestSetWriteGateAloneIsStillARedundancyLease
+    partial: true
+    note: >-
+      Against the in-process fake, which trips its watchdog when no request
+      arrives for the watchdog time. On the bench unit a hung scan in a task
+      at normal priority is the check still to run (#865), after the unit
+      moves to naut deploy (#771).

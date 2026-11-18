@@ -304,8 +304,11 @@ func (m *Multi) SetWriteGate(gate func() bool) {
 // that has nothing to do with redundancy. `naut run` gives it one in
 // every project, open while the scans are live, so a hung scan stops its
 // keep-alives (#625). A driver that reads "a gate is installed" as "I am
-// one replica of a redundant set" (optommp's passive standby, a
-// Sparkplug host's client ID and STATE hand-over) is not PlainGated.
+// one replica of a redundant set" (a Sparkplug host's client ID and STATE
+// hand-over) is not PlainGated. SetPlainGate calls PlainWriteGate after
+// installing the gate, so a driver that does treat a redundancy lease
+// differently (optommp's passive standby, #865) can tell the two apart;
+// for the rest it is only the marker.
 type PlainGated interface {
 	SetWriteGate(func() bool)
 	PlainWriteGate()
@@ -324,6 +327,7 @@ func SetPlainGate(d Driver, gate func() bool) int {
 	}
 	if g, ok := d.(PlainGated); ok {
 		g.SetWriteGate(gate)
+		g.PlainWriteGate() // so a driver can tell this gate from a redundancy lease
 		return 1
 	}
 	return 0

@@ -129,8 +129,7 @@ func (s *span) add(i int) {
 	}
 }
 
-func (s span) empty() bool { return s.lo < 0 }
-func (s span) n() int      { return s.hi - s.lo + 1 }
+func (s span) n() int { return s.hi - s.lo + 1 }
 
 func newSpan() span { return span{lo: -1, hi: -1} }
 
@@ -218,9 +217,12 @@ type Driver struct {
 	// wanted is the request OutputsWanted answers.
 	gateMu    sync.Mutex
 	writeGate func() bool
-	gateShut  atomic.Bool
-	turnMu    sync.Mutex
-	wanted    atomic.Bool
+	// plain: the gate is naut run's liveness gate, not a redundancy lease
+	// (PlainWriteGate, plainNote).
+	plain    atomic.Bool
+	gateShut atomic.Bool
+	turnMu   sync.Mutex
+	wanted   atomic.Bool
 
 	connected atomic.Bool
 	online    atomic.Bool   // the status point: a session up, inputs fresh
@@ -400,6 +402,13 @@ func (d *Driver) gateOpen() bool {
 		switch {
 		case !open && !d.gateShut.Load():
 			d.gateShut.Store(true)
+			if d.plain.Load() {
+				if d.skipsStandby() {
+					d.log.Warn("optommp: the scans are not live; holding no session so the unit's watchdog takes the outputs", "host", d.m.Host)
+				} else {
+					d.log.Warn("optommp: the scans are not live; writing nothing until they are", "host", d.m.Host)
+				}
+			}
 		case open && d.gateShut.Load():
 			d.forgetCommanded()
 			if d.skipsStandby() {
@@ -440,7 +449,46 @@ func (d *Driver) forgetCommanded() {
 func (d *Driver) replicated() bool {
 	d.gateMu.Lock()
 	defer d.gateMu.Unlock()
-	return d.writeGate != nil
+	return d.writeGate != nil && !d.plain.Load()
+}
+
+// PlainWriteGate makes the driver io.PlainGated (#865): `naut run` gives
+// it the liveness gate of a project without `redundancy:`, open while the
+// scans are live, and io.SetPlainGate calls this after installing it, so
+// the driver knows the gate is not a redundancy lease (plainNote).
+func (d *Driver) PlainWriteGate() { d.plain.Store(true) }
+
+// plainNote: under a plain gate (#865) there is no other replica, so the
+// gate only says whether the scans are live, and the driver does what a
+// single controller should when they are not:
+//
+//   - with `watchdog:` above 0s, a closed gate means no session: no
+//     request and no stream (the redundancy standby's path,
+//     watchdogStandbyNote), so the unit's watchdog trips and every output
+//     with a watchdog value goes to it, about the gate's lease plus the
+//     watchdog into a hung or starved scan. Inputs go Stale; online falls.
+//   - without it, the driver keeps leading the unit and polling (or
+//     streaming) its inputs, and writes nothing: there is no watchdog to
+//     starve, and live inputs keep the HMI and Sparkplug honest.
+//
+// When the scans are live again the gate reopens: the driver reconnects
+// (power-up clear if owed, its configuration), counts the gap as a
+// watchdog trip when it was longer than the watchdog, and commands every
+// output once the runtime has read fresh inputs, as after an outage. A
+// clean stop restores what the driver configured whatever the gate says:
+// no other replica's configuration can be under it.
+
+// leads reports whether the driver takes the leader's role on the unit
+// (standbyNote): configures it and is its one writing client. Under
+// redundancy that is the write gate. Under a plain gate the driver always
+// leads, except with `watchdog:`, where a closed gate means no session
+// (plainNote). Every call is a look at the gate (see SetWriteGate).
+func (d *Driver) leads() bool {
+	open := d.gateOpen()
+	if d.plain.Load() && !d.skipsStandby() {
+		return true
+	}
+	return open
 }
 
 // OutputsWanted is the driver's io.OutputsRequester: true once after it
@@ -508,7 +556,7 @@ func (d *Driver) run(ctx context.Context) {
 	for {
 		// A look (see SetWriteGate), on every connect attempt; Health
 		// reports a standby's mode before its first session too.
-		lead := d.gateOpen()
+		lead := d.leads()
 		if !lead && d.skipsStandby() {
 			// No connection while standing by (watchdogStandbyNote): wait
 			// for the gate, then connect at once as the leader.
@@ -631,9 +679,15 @@ func (d *Driver) standOff(ctx context.Context) bool {
 	d.standby.Store(true)
 	defer d.idle.Store(false)
 	d.online.Store(false)
-	d.lastSent = time.Time{} // the leader feeds the unit meanwhile: no gap to count
-	d.log.Info("optommp: write gate closed and the manifest sets the unit's watchdog: standing by without a connection, so a leader that loses the unit lets the watchdog trip",
-		"host", d.m.Host)
+	if d.plain.Load() {
+		// No other replica feeds the unit meanwhile (plainNote): the gap
+		// is real, and the reconnect counts it as a watchdog trip.
+		d.log.Info("optommp: holding no session while the scans are not live", "host", d.m.Host)
+	} else {
+		d.lastSent = time.Time{} // the leader feeds the unit meanwhile: no gap to count
+		d.log.Info("optommp: write gate closed and the manifest sets the unit's watchdog: standing by without a connection, so a leader that loses the unit lets the watchdog trip",
+			"host", d.m.Host)
+	}
 	tick := time.NewTicker(min(d.scanRate, lookEvery))
 	defer tick.Stop()
 	for {
@@ -703,7 +757,7 @@ func (d *Driver) noteFedWatchdog(standby bool) {
 // polls or receives the stream; a standby polls the packed areas. polled
 // reports whether at least one scan completed.
 func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error) {
-	lead := d.gateOpen()
+	lead := d.leads()
 	if !lead && d.skipsStandby() {
 		return false, errStandby // closed since run looked: send nothing
 	}
@@ -734,7 +788,7 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 		// loop looked again must not put its configuration back over the
 		// new leader's. A leader's ordinary stop still restores, since
 		// `naut run` stops the drivers before it gives up the lease.
-		if ctx.Err() != nil && leading && d.gateOpen() {
+		if ctx.Err() != nil && leading && (d.plain.Load() || d.gateOpen()) {
 			d.restore(c)
 		}
 	}()
@@ -835,7 +889,7 @@ func (d *Driver) pollLoop(ctx context.Context, c *Client, lead bool) (polled boo
 			return polled, err
 		}
 		polled = true
-		if d.gateOpen() != lead {
+		if d.leads() != lead {
 			return polled, errSwitch
 		}
 		if time.Now().After(nextChassis) {
@@ -867,7 +921,7 @@ func (d *Driver) pollLoop(ctx context.Context, c *Client, lead bool) (polled boo
 				waiting = false
 				slot = start.Add(time.Since(start) / d.scanRate * d.scanRate)
 			case <-look:
-				if d.gateOpen() != lead { // see SetWriteGate
+				if d.leads() != lead { // see SetWriteGate
 					return polled, errSwitch
 				}
 			case <-d.kick:
@@ -971,7 +1025,7 @@ func (d *Driver) sleepTo(ctx context.Context, c *Client, deadline time.Time, lea
 	looked := time.Now()
 	for {
 		if time.Since(looked) >= lookEvery {
-			if d.gateOpen() != lead { // a look between slow scans (see SetWriteGate)
+			if d.leads() != lead { // a look between slow scans (see SetWriteGate)
 				return false, errSwitch
 			}
 			looked = time.Now()
@@ -1549,6 +1603,8 @@ type Health struct {
 
 func (d *Driver) mode() string {
 	switch {
+	case d.idle.Load() && d.plain.Load():
+		return "held (scans not live)" // no session (see plainNote)
 	case d.idle.Load():
 		return "standby (watchdog)" // no session (see watchdogStandbyNote)
 	case d.standby.Load():

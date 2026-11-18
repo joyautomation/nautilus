@@ -171,9 +171,11 @@ func gateOnLiveScans(proj *project.Project, el *leader.Elector, rt *runtime.Runt
 	if gate == nil {
 		gate = leader.NewLocal(proj.Name, lease)
 		if proj.Runtime.Driver != nil {
-			// Only drivers whose gate is just a gate (io.PlainGated):
-			// optommp and a Sparkplug host read any gate as "one replica
-			// of a redundant set" and would change how they behave.
+			// Only drivers whose gate is just a gate (io.PlainGated): a
+			// Sparkplug host reads any gate as "one replica of a redundant
+			// set" and would change how it behaves. optommp takes it and
+			// is told it is plain (#865), so a hung scan lets the unit's
+			// watchdog act.
 			nio.SetPlainGate(proj.Runtime.Driver, gate.IsLeader)
 		}
 	}
