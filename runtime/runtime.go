@@ -290,6 +290,11 @@ type Runtime struct {
 	// read anything. Atomic, so Quality never waits on leadMu, which a
 	// takeover holds through a retain-store load.
 	fresh atomic.Bool
+	// edges counts gate edges (unfresh), under leadMu: a main scan sets
+	// fresh only if the count is unchanged since its own gate passed, so an
+	// additional task's gate that steps down or holds a takeover while the
+	// main read is in flight is not overwritten when that read lands.
+	edges uint64
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
 	// readyWait how long a takeover waits for it, and readySince when the
 	// pending takeover began waiting (zero when none is). See inputsReady.
@@ -1375,7 +1380,8 @@ func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
 // scanAt is Scan with the slot the scan was due at (zero when the caller
 // is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanAt(due time.Time) {
-	if !r.gate() {
+	ok, edge := r.gateEdge()
+	if !ok {
 		return
 	}
 	t0 := time.Now()
@@ -1421,10 +1427,18 @@ func (r *Runtime) scanAt(due time.Time) {
 		}
 	}
 	// The read is back (or there is no driver to read): from here on the
-	// tags are this leadership's, and quality is the drivers' again. One
-	// atomic load per scan on a steady leader.
+	// tags are this leadership's, and quality is the drivers' again, unless
+	// a gate edge (another task's gate) came after this scan's own gate.
+	// One atomic load per scan on a steady leader; leadMu only while fresh
+	// is false. A failed read sets it too: the inputs are Stale through
+	// readOK, and what the program writes this scan is current, as on a
+	// standalone controller.
 	if r.coord != nil && !r.fresh.Load() {
-		r.fresh.Store(true)
+		r.leadMu.Lock()
+		if r.edges == edge {
+			r.fresh.Store(true)
+		}
+		r.leadMu.Unlock()
 	}
 	if r.dtTag != "" {
 		r.tags.SetReal(r.dtTag, dt)

@@ -388,3 +388,5 @@ claims:
       - go ./runtime TestQualityGoodAfterSameTermResume
       - go ./runtime TestQualityStandbyMatchesTheStoredSpelling
       - go ./runtime TestQualityStandbyFollowsOnlineEdits
+      - go ./runtime TestQualityStaleWhenAStepDownRacesTheMainRead
+      - go ./runtime TestQualityStaleWhenAHeldTakeoverRacesTheMainRead

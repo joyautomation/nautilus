@@ -463,3 +463,74 @@ END_PROGRAM
 	}
 	check("after the rollback", "Calc", "SP")
 }
+
+// taskOpts adds an additional task whose gate the test can drive while a
+// main scan is held in its read.
+func taskOpts(o *runtime.Options) {
+	o.Tasks = []runtime.Task{{Name: "t", Program: `PROGRAM T
+VAR_EXTERNAL TaskOut : REAL; END_VAR
+TaskOut := TaskOut + 1.0;
+END_PROGRAM
+`}}
+	o.Seed["TaskOut"] = 0.0
+}
+
+// holdMainRead starts a main scan and returns once its read is in flight;
+// release lets the read finish and waits for the scan.
+func holdMainRead(t *testing.T, rt *runtime.Runtime, drv *gatedDriver) (release func()) {
+	t.Helper()
+	ch := make(chan struct{})
+	drv.mu.Lock()
+	drv.hold = ch
+	drv.mu.Unlock()
+	done := make(chan struct{})
+	go func() { rt.Scan(); close(done) }()
+	<-drv.entered
+	return func() {
+		drv.mu.Lock()
+		drv.hold = nil
+		drv.mu.Unlock()
+		close(ch)
+		<-done
+	}
+}
+
+// A main scan passed its gate as a steady leader and is in its read when
+// an additional task's gate steps down; the coordinator then says "leader"
+// again before any gate has run. The read that lands belongs to the old
+// leadership, so it must not mark the tags current.
+func TestQualityStaleWhenAStepDownRacesTheMainRead(t *testing.T) {
+	drv := newGatedDriver()
+	coord := &standbyFlag{}
+	coord.lead.Store(true)
+	rt := newStandbyRuntime(t, drv, coord, taskOpts)
+	rt.Scan()
+	release := holdMainRead(t, rt, drv)
+	coord.lead.Store(false)
+	if err := rt.ScanTask("t"); err != nil { // steps down
+		t.Fatal(err)
+	}
+	coord.lead.Store(true) // back, but no gate has run
+	release()
+	assertStandby(t, rt, nil)
+}
+
+// The same race with a new term: during the main read the lease moves on
+// and comes back as term 2, the inputs are not live, and the task's gate
+// holds the takeover. Nothing of term 2 has read anything.
+func TestQualityStaleWhenAHeldTakeoverRacesTheMainRead(t *testing.T) {
+	drv := newGatedDriver()
+	coord := &termFlag{}
+	coord.term.Store(1)
+	coord.lead.Store(true)
+	rt := newStandbyRuntime(t, drv, coord, taskOpts)
+	rt.Scan()
+	release := holdMainRead(t, rt, drv)
+	drv.ready.Store(false)
+	coord.term.Store(2)
+	if err := rt.ScanTask("t"); err != nil { // holds: new term, inputs not live
+		t.Fatal(err)
+	}
+	release()
+	assertStandby(t, rt, nil)
+}
