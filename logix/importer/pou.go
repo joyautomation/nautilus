@@ -357,7 +357,7 @@ func (im *importer) importAOI(a *l5x.AddOnInstruction) {
 		}
 		typ, ok := im.typeText(pr.DataType, dimText(pr.Dimension))
 		if !ok {
-			im.proj.note(owner, -1, "type", pr.Name+": parameter type "+pr.DataType+" has no nautilus declaration")
+			im.proj.note(owner, -1, "type", pr.Name+": parameter "+typeMissing(pr.DataType)+", so it is left out, and so is every rung that names it")
 			continue
 		}
 		sec := map[string]string{"Input": "VAR_INPUT", "Output": "VAR_OUTPUT", "InOut": "VAR_IN_OUT"}[pr.Usage]
@@ -373,6 +373,17 @@ func (im *importer) importAOI(a *l5x.AddOnInstruction) {
 	}
 	im.lowerRoutine(sc, logic, p)
 	im.proj.Files["lib/"+im.fileName(p.name, ".ld")] = p.source(im.ldPragma())
+}
+
+// typeMissing says why a type has no nautilus declaration: a
+// module-defined type (_0001:Device_1234ABCD:I:0, a device's I/O
+// structure, which the export keeps with the module, not in DataTypes) is
+// not carried; anything else is simply not declared.
+func typeMissing(dtype string) string {
+	if strings.Contains(dtype, ":") {
+		return "type " + dtype + " is module-defined (a device's I/O structure), which the import does not carry"
+	}
+	return "type " + dtype + " has no nautilus declaration"
 }
 
 func firstLine(s string) string {
@@ -502,7 +513,11 @@ func (im *importer) typeText(dtype, dims string) (string, bool) {
 func (im *importer) declareFound(sc *scope, p *pou, f *found, blockType string) bool {
 	up := strings.ToUpper(f.dtype)
 	if f.param != nil {
-		return true // declared from the interface
+		// Declared from the interface, unless its type has no nautilus
+		// declaration: then the interface left it out, and a rung naming
+		// it would not compile (#776).
+		_, ok := im.typeText(f.param.DataType, dimText(f.param.Dimension))
+		return ok
 	}
 	if up == "MESSAGE" {
 		// A MESSAGE is a READ or WRITE instance, by its MessageType.

@@ -1234,7 +1234,7 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 		return "", refuse("block-type", "%s is a %s, not a timer or counter", f.name, f.dtype)
 	}
 	if !rt.im.declareFound(rt.sc, rt.p, f, "") {
-		return "", refuse("type", "%s: type %s has no nautilus declaration", f.name, f.dtype)
+		return "", refuse("type", "%s: %s", f.name, typeMissing(f.dtype))
 	}
 	out, err := rt.accessors(rest)
 	if err != nil {
@@ -1294,7 +1294,7 @@ func (rt *routine) accessors(rest string) (string, *refusal) {
 					return "", f.alias
 				}
 				if !rt.im.declareFound(rt.sc, rt.p, f, "") {
-					return "", refuse("type", "%s: type %s has no nautilus declaration", f.name, f.dtype)
+					return "", refuse("type", "%s: %s", f.name, typeMissing(f.dtype))
 				}
 				idx = f.name
 			}
