@@ -229,6 +229,8 @@ func (c *rungCtx) assign(e ld.Element) ([]string, bool) {
 //	DINT/INT → INT/SINT    the store keeps the low bits, which is
 //	                       nautilus's wrap (Logix's documented integer
 //	                       conversion; not yet run on a controller)
+//	TIME → SINT/INT/DINT   a timer's ET or PT is a DINT of milliseconds
+//	                       on Logix (ACC, PRE), narrowed as above
 //
 // Only from a source of the conversion's own type: an LREAL, or a source
 // the writer cannot type, keeps the conversion, which is then refused.
@@ -254,6 +256,9 @@ func (c *rungCtx) storeConversion(a ld.Assignment) (ld.Expr, bool) {
 		return call.Args[0], true
 	case isConvInt(from) && isConvInt(to) && from != "TIME" && to != "TIME" &&
 		convWidth[from] > convWidth[to] && (at == from || at == anyInt):
+		return call.Args[0], true
+	case from == "TIME" && at == "TIME" && (to == "SINT" || to == "INT" || to == "DINT"):
+		// A timer's ET or PT is the DINT of milliseconds the box moves.
 		return call.Args[0], true
 	}
 	return nil, false

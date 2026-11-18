@@ -1412,8 +1412,15 @@ an array index count as computations of their own. Two divergences stay,
 as they do for every value: a REAL is 32 bits on the controller and 64 in
 nautilus, and a REAL with no value in the target faults the nautilus scan
 where the controller rounds it and stores the result's low bits (below).
-Ladder is unchanged:
-`{ y := X_TO_Y(v) }` was and is refused by `logix/data-op`
+In ladder (#777), `{ y := X_TO_Y(v) }` with the conversion as the whole
+right-hand side, into a tag of type Y, is the box's own store: REAL → SINT/
+INT/DINT (the store rounds halves to even, verified below), DINT/INT →
+INT/SINT and a timer's TIME → SINT/INT/DINT (the store keeps the low
+bits: Logix's documented integer conversion, not yet run on a
+controller). The box is written as it would be for `{ y := v }`. The
+import writes exactly these conversions for a MOV, an arithmetic box or
+a CPT that narrows, so a brownfield rung round-trips. Any other
+conversion in a ladder assignment is still refused by `logix/data-op`
 (`logix/operand` in a compare).
 
 **Verified on Echo** (v38, 1756-L85E emulation, 2026-10-14, #297): the
