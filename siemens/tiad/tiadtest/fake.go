@@ -85,6 +85,14 @@ func (f *Fake) Serve(t testing.TB) (*httptest.Server, *tiad.Client) {
 	return srv, tiad.New(srv.URL, f.Token)
 }
 
+// SetGates replaces what probe reports while the fake is serving. Nil
+// means every gate passes.
+func (f *Fake) SetGates(gates []tiad.Gate) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Gates = append([]tiad.Gate(nil), gates...)
+}
+
 // Downloads returns every real download so far.
 func (f *Fake) Downloads() []Download {
 	f.mu.Lock()
