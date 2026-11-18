@@ -95,6 +95,8 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 		PrimaryHostID:   c.PrimaryHost,
 		PublishInterval: time.Duration(c.PublishInterval),
 		BdSeqFile:       c.BdSeqFile,
+
+		DeviceDeathDelay: time.Duration(c.DeviceDeathDelay),
 	}
 	if c.PrimaryHostOffline == "disconnect" { // Load refused anything but buffer/disconnect
 		cfg.PrimaryHostOffline = sparkplug.HostOfflineDisconnect
