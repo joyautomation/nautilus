@@ -31,8 +31,32 @@ type Process struct {
 	stdin  io.WriteCloser
 	done   chan struct{}
 
-	mu  sync.Mutex
-	log bytes.Buffer
+	mu     sync.Mutex
+	log    bytes.Buffer
+	script Script
+}
+
+// Script is what tiad-fake's ITia does (PUT /fake/script): what compile
+// returns, and calls that are slow or that fail the way TIA fails.
+type Script struct {
+	CompileResult *tiad.CompileResult `json:"compileResult,omitempty"`
+	Delays        []ScriptedCall      `json:"delays,omitempty"`
+	Failures      []ScriptedCall      `json:"failures,omitempty"`
+}
+
+// ScriptedCall names an ITia call ("Compile", "OpenProject", ...).
+type ScriptedCall struct {
+	Call    string `json:"call"`
+	MS      int    `json:"ms,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// TiaCall is one ITia call tiad-fake made, and the thread it ran on.
+// "start" is when the ITia was made: when TIA would start.
+type TiaCall struct {
+	Call   string `json:"call"`
+	Thread int    `json:"thread"`
+	STA    bool   `json:"sta"`
 }
 
 // Command is how bin runs here: a .exe off Windows runs under Mono
@@ -175,7 +199,41 @@ func (p *Process) SetGates(t testing.TB, gates []tiad.Gate) {
 	p.control(t, http.MethodPut, "/fake/gates", map[string]any{"gates": gates})
 }
 
+// SetCompileResult scripts what compile returns.
+func (p *Process) SetCompileResult(t testing.TB, r tiad.CompileResult) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.CompileResult = &r
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetScript replaces tiad-fake's whole script.
+func (p *Process) SetScript(t testing.TB, s Script) {
+	t.Helper()
+	p.mu.Lock()
+	p.script = s
+	p.mu.Unlock()
+	p.control(t, http.MethodPut, "/fake/script", s)
+}
+
+// Calls lists every ITia call tiad-fake made so far.
+func (p *Process) Calls(t testing.TB) []TiaCall {
+	t.Helper()
+	var out struct {
+		Calls []TiaCall `json:"calls"`
+	}
+	p.controlInto(t, http.MethodGet, "/fake/calls", nil, &out)
+	return out.Calls
+}
+
 func (p *Process) control(t testing.TB, method, path string, body any) {
+	t.Helper()
+	p.controlInto(t, method, path, body, nil)
+}
+
+func (p *Process) controlInto(t testing.TB, method, path string, body, out any) {
 	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -192,9 +250,17 @@ func (p *Process) control(t testing.TB, method, path string, body any) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		rb, _ := io.ReadAll(resp.Body)
 		t.Fatalf("%s %s: HTTP %d %s", method, path, resp.StatusCode, rb)
+	}
+	if out != nil {
+		var env struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(rb, &env); err != nil || json.Unmarshal(env.Data, out) != nil {
+			t.Fatalf("%s %s: reply %s", method, path, rb)
+		}
 	}
 }
 

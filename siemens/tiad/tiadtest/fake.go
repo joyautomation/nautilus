@@ -107,6 +107,14 @@ func (f *Fake) SetGates(gates []tiad.Gate) {
 	f.Gates = append([]tiad.Gate(nil), gates...)
 }
 
+// SetCompileResult replaces what compile returns while the fake is
+// serving.
+func (f *Fake) SetCompileResult(r tiad.CompileResult) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.CompileResult = r
+}
+
 // Downloads returns every real download so far.
 func (f *Fake) Downloads() []Download {
 	f.mu.Lock()
@@ -394,9 +402,11 @@ func (f *Fake) newSession(project string) *session {
 	return s
 }
 
+// projectOpen compares paths case-insensitively: the work dir is on
+// Windows, where projects/P/P.ap21 and projects/p/p.ap21 are one file.
 func (f *Fake) projectOpen(project string) bool {
 	for _, s := range f.sessions {
-		if s.project == project {
+		if strings.EqualFold(s.project, project) {
 			return true
 		}
 	}

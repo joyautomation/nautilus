@@ -194,6 +194,8 @@ copies `logixd`, the Logix agent:
   | `TIAD_WORKDIR` | `C:\tiad-work` | Every path in a request is relative to this |
   | `TIAD_TARGETS` | — | The only CPU addresses tiad will go online to or download to |
   | `TIAD_PGPC_INTERFACE` | — | The NIC TIA uses to reach the CPUs |
+  | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes a session unused this long (a Go duration). The clock starts when a call ends; a session with a call in flight is never closed |
+  | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
 
 - **No browser ever calls tiad.** A request that carries an `Origin`
   header is refused (403), whatever token it has. A JSON body must be

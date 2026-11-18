@@ -17,6 +17,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="$here/out"
 mkdir -p "$out"
 
+# The stock csc on the TIA machine reads a source without a BOM in the
+# system code page, so any non-ASCII character must be a \u escape.
+if LC_ALL=C grep -nP '[^\x00-\x7F]' "$here"/core/*.cs "$here"/fake/*.cs; then
+  echo "build-fake.sh: non-ASCII characters in C# sources (use \\uXXXX escapes)" >&2
+  exit 1
+fi
+
 mcs="${MCS:-mcs}"
 common=(-langversion:5 -sdk:4.8 -warnaserror+ -nologo -debug -r:System.Web.Extensions.dll)
 

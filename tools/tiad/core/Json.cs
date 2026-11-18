@@ -79,17 +79,22 @@ namespace Tiad
     }
 
     // Reader reads one JSON object strictly. Ask for each field with the
-    // typed getter, then call Done, which refuses any field not asked for.
+    // typed getter, then call Done on the root, which refuses any field not
+    // asked for, at any depth.
     public sealed class Reader
     {
         readonly string at;
         readonly IDictionary<string, object> o;
         readonly HashSet<string> asked = new HashSet<string>(StringComparer.Ordinal);
+        // tree holds every reader made from one root, the root included.
+        readonly List<Reader> tree;
 
-        Reader(string at, IDictionary<string, object> o)
+        Reader(string at, IDictionary<string, object> o, List<Reader> tree)
         {
             this.at = at;
             this.o = o;
+            this.tree = tree;
+            tree.Add(this);
         }
 
         // Root reads a parsed body, which must be an object.
@@ -100,7 +105,7 @@ namespace Tiad
             {
                 throw TiadException.BadRequest("body: want a JSON object");
             }
-            return new Reader("", d);
+            return new Reader("", d, new List<Reader>());
         }
 
         string Name(string key)
@@ -221,7 +226,7 @@ namespace Tiad
             if (v == null) return null;
             var d = v as IDictionary<string, object>;
             if (d == null) throw Wrong(key, "an object", v);
-            return new Reader(Name(key), d);
+            return new Reader(Name(key), d, tree);
         }
 
         // Children returns an array of objects, empty when absent or null.
@@ -236,20 +241,24 @@ namespace Tiad
             {
                 var d = l[i] as IDictionary<string, object>;
                 if (d == null) throw Wrong(key, "an array of objects", l[i]);
-                outp.Add(new Reader(Name(key) + "[" + i.ToString(CultureInfo.InvariantCulture) + "]", d));
+                outp.Add(new Reader(Name(key) + "[" + i.ToString(CultureInfo.InvariantCulture) + "]", d, tree));
             }
             return outp;
         }
 
-        // Done refuses any field that no getter asked for, so a misspelt
-        // field is an error, not a silently ignored request.
+        // Done refuses any field that no getter asked for, in this object
+        // and in every object read from the same root, so a misspelt field
+        // is an error, not a silently ignored request.
         public void Done()
         {
-            foreach (var k in o.Keys)
+            foreach (var r in tree)
             {
-                if (!asked.Contains(k))
+                foreach (var k in r.o.Keys)
                 {
-                    throw TiadException.BadRequest("body: json: unknown field {0}", Json.Quote(Name(k)));
+                    if (!r.asked.Contains(k))
+                    {
+                        throw TiadException.BadRequest("body: json: unknown field {0}", Json.Quote(r.Name(k)));
+                    }
                 }
             }
         }

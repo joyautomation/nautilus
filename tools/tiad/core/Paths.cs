@@ -1,4 +1,4 @@
-// Paths.cs: the work-dir sandbox (siemens-ide.md §3.4).
+// Paths.cs: the work-dir sandbox (siemens-ide.md section 3.4).
 //
 // Every path in a request is relative to the work dir and obeys one rule,
 // tiad.CleanPath in the Go client. The client checks each path and the

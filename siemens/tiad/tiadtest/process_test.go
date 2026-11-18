@@ -50,6 +50,8 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 		{"missing token file", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TOKEN_FILE=" + filepath.Join(t.TempDir(), "none")}, "TIAD_TOKEN_FILE"},
 		{"no work dir off Windows", []string{tok, "TIAD_ADDR=http://127.0.0.1:0"}, "TIAD_WORKDIR"},
 		{"file cap not a number", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=1e9"}, "TIAD_MAX_FILE_BYTES"},
+		{"idle not a duration", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_SESSION_IDLE=60"}, "TIAD_SESSION_IDLE"},
+		{"idle too short", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_SESSION_IDLE=1us"}, "TIAD_SESSION_IDLE"},
 		{"file cap zero", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=0"}, "TIAD_MAX_FILE_BYTES"},
 	}
 	for _, c := range cases {

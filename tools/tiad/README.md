@@ -7,9 +7,21 @@ a CPU's project. The contract is `docs/design/siemens-ide.md` §3. The Go client
 is `siemens/tiad`, and `siemens/tiad/tiadtest` holds an in-memory fake and the
 contract suite.
 
-**Status:** this is the core (envelope, token, health, probe, work-dir files)
-and `tiad-fake`. The TIA side (`tiad.Openness`) and `install-tiad.ps1` follow;
-the plan is on #789.
+**Status:** the core, which serves every call up to compile (health, probe,
+files, GSDML install, projects, sessions, station, software, compile), and
+`tiad-fake`. Download, compare, export, upload and save follow, then the TIA
+side (`tiad.Openness`) and `install-tiad.ps1`. The plan is on #789.
+
+## How a TIA call runs
+
+Every TIA call goes through `ITia` (`core/Tia.cs`), on one STA thread behind
+a queue. The agent makes the `ITia` on that thread with the first call that
+needs it. Health, probe, the files and the session list never need it, so
+they cost no trial time. Before any `ITia` call the agent checks every gate
+(412 `gate`) and applies its own rules: the sandbox, the station rules, the
+project name, one writer per project (compared case-insensitively, as
+Windows compares paths). A failure TIA reports answers `operation_failed`
+with TIA's text, and the thread carries on.
 
 ## Layout
 
@@ -26,7 +38,9 @@ The TIA machine has the .NET Framework 4.8 and its stock compiler
 or network. That compiler knows C# 5, so these sources are C# 5: no string
 interpolation, no `?.`, no `nameof`, no expression-bodied members, no
 `out var`. `build-fake.sh` compiles with `mcs -langversion:5`, so anything
-newer fails here first. JSON goes through the framework's own
+newer fails here first. The sources are ASCII only, because that `csc` reads
+a file without a BOM in the machine's code page: write `"\u00b5s"`, not the
+character. `build-fake.sh` refuses anything else. JSON goes through the framework's own
 `JavaScriptSerializer`, read strictly by `Reader` (unknown fields and wrong
 types are refused, as the Go side refuses them).
 
@@ -41,6 +55,7 @@ From the environment only; nothing in a request changes it.
 | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
 | `TIAD_WORKDIR` | `C:\tiad-work` | Required off Windows |
 | `TIAD_TARGETS` | none | The only CPU addresses tiad goes online or downloads to. Strict dotted quads |
+| `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes sessions unused this long (a Go duration) |
 
 A request with an `Origin` header (a browser) is refused with 403, whatever
 its token. A JSON body must be `application/json` and a file
@@ -73,6 +88,14 @@ The rules exist twice, in Go (`siemens/tiad`, `siemens/station`) and in C#
 (`RefusedPaths`, `UncleanURLs`, `AcceptedPaths`). A change to a rule changes
 both copies and the table.
 
-`tiad-fake` answers one control call the real agent never has:
-`PUT /fake/gates {"gates": [{name, ok, detail, remedy}]}` scripts the machine
-gates probe reports. The work-dir gate stays real.
+`tiad-fake` answers control calls the real agent never has
+(`fake/FakeMain.cs`):
+
+| Call | |
+|---|---|
+| `PUT /fake/gates` | The machine gates probe reports. The work-dir gate stays real |
+| `PUT /fake/script` | What compile returns, and `ITia` calls that are slow or fail the way TIA fails |
+| `GET /fake/calls` | Every `ITia` call so far, with its thread. `start` is when TIA would start |
+
+Its `ITia` keeps projects in memory and answers what the Go fake answers. Like
+TIA, it refuses to create a project over an existing one.

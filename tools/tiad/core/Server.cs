@@ -1,4 +1,4 @@
-// Server.cs: HTTP, the token and the envelope (siemens-ide.md §3.2).
+// Server.cs: HTTP, the token and the envelope (siemens-ide.md section 3.2).
 //
 // Every reply is {ok, data, events}; a failure carries {kind, message,
 // fatal}. The one exception is a file read, which answers raw bytes.
