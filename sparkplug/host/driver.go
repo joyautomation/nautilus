@@ -192,7 +192,17 @@ func (d *Driver) Stop() {
 	d.gateMu.Lock()
 	d.stopping = true
 	d.gateMu.Unlock()
-	d.publishStateDeath()
+	died := make(chan struct{})
+	go func() {
+		defer close(died)
+		d.publishStateDeath()
+	}()
+	select {
+	case <-died:
+	case <-time.After(stopDeathWait):
+		d.log.Warn("host: the broker did not take the STATE death certificate; disconnecting anyway (it fires the will)",
+			"broker", d.cfg.BrokerURL, "waited", stopDeathWait)
+	}
 	d.cancel()
 	<-d.done
 }
