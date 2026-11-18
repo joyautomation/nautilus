@@ -1,7 +1,7 @@
 # Design: a redundant controller pair and a witness, without Kubernetes
 
 Status: **designed, not built.** The maintainer answered the first round of questions on
-2026-11-17. One question is still open (§9).
+2026-11-17, and no question is open (§9).
 The test plan is [redundancy-test-plan.md](redundancy-test-plan.md).
 Issues: #710 (the pair), #716 (clients that follow the active controller). Part of #725.
 Context: **Runtime** (`leader`, `retain`, `runtime`), plus a new `quorum` package and
@@ -12,7 +12,8 @@ Context: **Runtime** (`leader`, `retain`, `runtime`), plus a new `quorum` packag
 ## 0. The shape, in one paragraph
 
 Two controllers, A and B, run the same build. A third voter, the **witness**, holds no process
-data. Leadership is a **lease granted by a majority** of the three, numbered by a **term**. The
+data: only its votes and a copy of the operator-intent log (`oplog`), and it can be rebuilt
+from scratch. Leadership is a **lease granted by a majority** of the three, numbered by a **term**. The
 leader scans and writes. It also streams its state image (program frames, timers, SFC steps,
 retained values, alarm acknowledgements) to the standby after every scan. When the leader can't
 renew with a majority before its lease runs out, it **fences itself**: its write gate closes and
@@ -38,11 +39,29 @@ bumpless, and the measured takeover time is published instead.
   clocks (`runtime/retain.go`). The pair adds a hot path (§4). Kubernetes mode keeps cold.
 - **`retain` has no shared store off-cluster.** Each controller keeps its own file, and the
   state stream keeps the two equal.
-- **`oplog` (open question, §9).** Under Kubernetes, `oplog` replicates operator intent (acks,
-  shelves) by majority, so that a failover never loses an acknowledgement. The proposal is to
-  keep that guarantee: the witness joins `oplog` as its third peer. It stores operator intent
-  (kilobytes a day), never process data. Without that, intent rides the stream, and an action
-  the stream had not yet carried is lost on failover.
+- **`oplog`: the witness is its third peer** (decision 6). Operator intent (acks, shelves) is
+  committed by a majority of A, B and the witness, as `oplog` does under Kubernetes, so an ack
+  survives a failover. The leader sequences. The witness stores the entries (kilobytes a day)
+  and follows the leader that its own vote state names.
+  - **Where acks come from.** The state stream still carries alarm state for a hot takeover,
+    but the log is where an ack comes from.
+  - **A new leader catches up first.** It catches up the log from the other peers (`oplog`'s
+    `leaderCatchUp`) before it applies alarm state or accepts operator writes.
+  - **No quorum, no operator writes.** A lone survivor has no majority, so its operator writes
+    are refused. This matches the read-only HMI in §7.
+- **The witness can be rebuilt from scratch.** A witness that comes back with an empty disk
+  loses nothing the pair needs:
+  - **Its votes:** it grants nothing for one lease (§3.1).
+  - **Its in-sync mark:** it counts as unknown until the leader's next renewal records it
+    again (§3.3).
+  - **Its `oplog` copy:** it re-copies the whole log from the leader, as any peer that was away
+    does.
+
+  While both controllers are up, every committed entry is on at least one of them.
+
+  **The only loss takes three faults in a row.** First, B is down while A and the witness
+  commit an ack. Then the witness loses its disk. Then A dies before B or the rebuilt witness
+  has copied the ack. The guide states that bound.
 - **`naut run` under systemd** comes from #733. Install, update and rollback come from
   `tools/deploy` (#741). The pair uses both and duplicates neither.
 - **Waiting for live inputs** before the first scan after a start or a takeover is #786. That
@@ -335,11 +354,9 @@ Settled with the maintainer, 2026-11-17:
    - it runs in containers first, then on two ARM64 controllers once they deploy through
      `tools/deploy`.
 
-### Open
-
-6. **`oplog` and the witness (§1).** Should the witness join `oplog` as its third peer, so that
-   operator intent survives a failover by majority, as it does under Kubernetes? The
-   alternative is that intent rides the stream, and an action not yet streamed is lost.
+6. **`oplog`: the witness joins as the third peer**, so that an operator ack survives a
+   failover. The condition is that the witness can be rebuilt from scratch: a lost witness
+   disk loses nothing the pair needs (§1).
 
 ## 10. Order of work
 
@@ -349,7 +366,8 @@ Each step is its own PR, "Part of #725":
 2. The `quorum` package (voter, candidate, lease), a simulated network, and the deterministic
    partition matrix. No runtime wiring yet.
 3. `naut witness`, the manifest section and the `naut run` wiring, with **cold** takeover only.
-   This is today's behaviour, without Kubernetes. The container harness arrives here.
+   This is today's behaviour, without Kubernetes. `oplog` runs on the three peers, with the
+   witness as the third. The container harness arrives here.
 4. The state stream and hot takeover, with stale or mismatched images falling back to cold.
 5. Lone-survivor mode, the override and its audit journal.
 6. #716: the clients and the floating IP.

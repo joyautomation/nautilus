@@ -118,6 +118,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a voter answers before its fsync | design §3.1, fsync before answer | 2 |
 | the leader times its lease from the reply, not the request | design §3.1 | 2 |
 | the gate is judged on the elector's tick, not when it is read | design §3.2 | 3 |
+| a new leader applies alarm state before its `oplog` catch-up | design §1, `oplog` | 3 |
 | the in-sync mark is not persisted | design §3.3 | 4 |
 | a stream frame of an older term is applied | I5 | 4 |
 | hot takeover with no image-age check | I5 | 4 |
@@ -202,7 +203,7 @@ T4 where only hardware can.
 | F12 | **Leader isolated from B and W** | nftables | The leader fences at the end of its lease. B+W elect B, which takes over hot or cold. When it is healed, A returns as standby, writes nothing, and resyncs. | ✓ | ✓ | ✓ |
 | F13 | Witness down | stop it | No change. Alarm: "one more failure stops control". | ✓ | ✓ | ✓ |
 | F14 | Witness restart, state file kept | restart | No change. | ✓ | ✓ | ✓ |
-| F15 | Witness restart **without** its state file (HA-cluster reschedule) | wipe the file and restart; T3 also runs it as a pod on a kind cluster | It grants nothing for one lease, and no double grant happens. | ✓ | ✓ | |
+| F15 | Witness restart **without** its state file (HA-cluster reschedule) | wipe the file and restart; T3 also runs it as a pod on a kind cluster | It grants nothing for one lease, and no double grant happens. It re-copies the whole `oplog` from the leader, and no committed ack is lost while both controllers are up (§8.1). | ✓ | ✓ | |
 | F16 | Witness + standby down | stop both | With one voter of three left, the leader has no majority, so it fences at the end of its lease. The no-quorum alarm is raised, and the device watchdogs act. | ✓ | ✓ | ✓ |
 | F17 | Witness + leader down | stop both | The standby has no majority: it stays standby, raises no-quorum, and offers the override. | ✓ | ✓ | ✓ |
 | F18 | Both controllers down, witness up; restart in each order, at each delay | stop and start | The first controller back forms a majority with the witness and leads. It takes over hot only on a current image. If it was the out-of-sync standby, or the mark is unknown, it takes over cold with the alarm (decision 4). The second joins as standby and resyncs. | ✓ | ✓ | ✓ |
@@ -323,6 +324,26 @@ changed manifest.
     - The guide states the window. The case is excluded from the I1 oracle by name, and nowhere
       else.
 
+### 8.1 Operator intent through `oplog`, with the witness as third peer
+
+1. **Ack while B is down.** A and the witness commit the ack, then A dies. When B is back,
+   B and the witness elect B, which catches up from the witness. The ack is present and
+   is not doubled.
+2. **Ack while the witness is down.** A and B commit it. The witness, on its return, catches up.
+3. **Witness rebuilt from scratch** (wiped disk, or a pod rescheduled without a volume):
+   - it re-copies the whole log from the leader;
+   - with both controllers up, nothing committed is lost;
+   - its election state follows F15.
+4. **The three-fault loss, measured and documented.** B is down while A and the witness commit,
+   then the witness loses its disk, then A dies before anyone has copied the entry. The test
+   **expects** that ack to be lost, asserts it is the only case that loses one, and the guide
+   states it.
+5. **Lone survivor.** An ack or shelve is refused with a "no quorum" error, and the HMI shows
+   it read-only.
+6. **The witness only follows the leader its votes name.** Replication from any other source
+   is refused, a stale term included.
+7. **Every case runs** in T2 (the simulated disk and network), and cases 1–5 also run in T3.
+
 ## 9. Clients follow the active controller (#716)
 
 Each case runs during F1, F3, F4, F12 and F27 in T3. F1 and F12 also run in T4.
@@ -384,7 +405,7 @@ then the override. It runs as a test, so it can't silently regress.
 | PR | Must pass before merge |
 |---|---|
 | 2 `quorum` + sim | T1. T2 matrix + 2,000 seeds. The PR-2 mutations caught (§3.3). F22, F24–F26 and the vote half of F31 in T2. |
-| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3, F4, F8, F10, F12, F13, F15–F19 and F30. The PR-3 mutation caught. Kubernetes `leader` tests unchanged. |
+| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3, F4, F8, F10, F12, F13, F15–F19 and F30. §8.1. The PR-3 mutations caught. Kubernetes `leader` tests unchanged. |
 | 4 stream + hot takeover | §6 in T2 and T3. I5 and I10 in the nightly run. §7 rolling update in T3. The PR-4 mutations caught, and the stream half of F31. |
 | 5 survivor + override | §8 in full. F16 and F17 with the device-watchdog assertion. The PR-5 mutations caught. |
 | 6 clients (#716) | §9 in T3, including F32–F34 for PROFINET. |
