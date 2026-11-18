@@ -40,14 +40,6 @@ import (
 // checkNetworkSections validates the server sections that open sockets,
 // offline, so naut check reports them before anything listens.
 func checkNetworkSections(m Manifest) error {
-	if m.Redundancy != nil {
-		configs := append([]DriverConfig{m.Driver}, m.Drivers...)
-		for _, d := range configs {
-			if strings.HasPrefix(strings.ToLower(d.Type), "profinet") {
-				return fmt.Errorf("driver %s with redundancy: is not supported yet: a standby must go silent on the PROFINET network, and how it hands over is an open question (docs/design/profinet.md §8.1)", d.Type)
-			}
-		}
-	}
 	if m.OPCUA != nil && m.OPCUA.Endpoint != "" {
 		if _, _, err := opcuaserver.ParseEndpoint(m.OPCUA.Endpoint); err != nil {
 			return err
@@ -608,6 +600,24 @@ func platformNotices(Manifest) []string { return nil }
 // the device's data valid, the PLC would read its zero bytes as a good
 // value. Other drivers bind catalogs freely; this one's bindings ARE the
 // PLC's input image.
+// markReplicas tells the drivers that read the write gate as leadership
+// that they are one replica of a redundant set. A PROFINET device must
+// then go silent as a standby, not just mark its data invalid: two
+// replicas cannot both answer for one station name.
+func markReplicas(d nio.Driver, redundant bool) {
+	if !redundant {
+		return
+	}
+	switch drv := d.(type) {
+	case *nio.Multi:
+		for _, c := range drv.Children() {
+			markReplicas(c.Driver, redundant)
+		}
+	case *profinet.DeviceDriver:
+		drv.Apply(profinet.WithDeviceReplica())
+	}
+}
+
 func checkDriverOutputs(defs []runtime.TagDef, d nio.Driver) error {
 	declared := map[string]bool{}
 	for _, t := range defs {

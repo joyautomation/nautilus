@@ -77,12 +77,24 @@ func TestLoadProfinetDevice(t *testing.T) {
 	}
 }
 
-// Redundancy needs a standby that goes silent on the PROFINET network;
-// until that is designed, the combination is refused at load.
-func TestProfinetRefusesRedundancy(t *testing.T) {
-	_, err := Load(profinetProject("redundancy:\n  lease: pn-lease\n"), "")
-	if err == nil || !strings.Contains(err.Error(), "redundancy") || !strings.Contains(err.Error(), "profinet") {
-		t.Fatalf("got %v", err)
+// Under redundancy: the device driver is one replica of the set, so a
+// standby goes silent on the PROFINET network instead of only marking its
+// data invalid (docs/design/profinet.md §4.5). Without it, the gate stays
+// plain.
+func TestProfinetDeviceReplicaUnderRedundancy(t *testing.T) {
+	p, err := Load(profinetProject("redundancy:\n  lease: pn-lease\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Runtime.Driver.(*profinet.DeviceDriver).Replica() {
+		t.Fatal("profinet-device under redundancy: is not a replica")
+	}
+	p, err = Load(profinetProject(""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Runtime.Driver.(*profinet.DeviceDriver).Replica() {
+		t.Fatal("profinet-device without redundancy: is a replica")
 	}
 }
 
@@ -220,4 +232,13 @@ END_PROGRAM`)}
 		_, iops, _, _ := plc.LastInput(sub)
 		return iops == wire.IOxSGood
 	})
+}
+
+// A standby replica is silent on purpose; its row says so instead of
+// "opening the interface".
+func TestProfinetDeviceStandbyStatus(t *testing.T) {
+	s := profinetDeviceStatus(profinet.DeviceHealth{Station: "pn-1", Interface: "eth1", State: "standby", AR: "idle"})
+	if s.State != "waiting" || !strings.Contains(s.Message, "Standby") {
+		t.Fatalf("got %+v", s)
+	}
 }

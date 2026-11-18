@@ -37,6 +37,8 @@ func checkNetworkSections(Manifest) error { return nil }
 
 func checkDriverOutputs([]runtime.TagDef, nio.Driver) error { return nil }
 
+func markReplicas(nio.Driver, bool) {}
+
 // offlineChannel stands in for a channel in the browser: a tab reaches no
 // peer, so every request fails as unreachable (STATUS -2), the way a
 // channel whose peer is down does.
