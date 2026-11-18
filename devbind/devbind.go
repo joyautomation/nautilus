@@ -113,7 +113,7 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 		st := devprofile.Struct{Name: p.TypeName(), Points: d.points}
 		if prev := byType[strings.ToLower(st.Name)]; prev != nil {
 			if err := sameMembers(prev.st, st); err != nil {
-				return nil, fmt.Errorf("devices %s and %s are both of type %s, %w: select the same points, or give one profile its own udt:", prev.dev, r.Name, st.Name, err)
+				return nil, fmt.Errorf("devices %s and %s are both of type %s, %w: select the same points, or give one profile a udt of its own", prev.dev, r.Name, st.Name, err)
 			}
 		} else {
 			byType[strings.ToLower(st.Name)] = &typed{st: st, dev: r.Name}
