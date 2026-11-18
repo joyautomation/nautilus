@@ -1,0 +1,36 @@
+profile: sick-sig300
+title: SICK SIG300 8-port IO-Link master, OPC UA server
+maker: SICK
+model: SIG300
+version: 1
+docs:
+  - id: measured
+    title: >-
+      The node ids a deployed controller's program reads from SIG300 masters, 2026-10:
+      port 4840; ns=3;i=8008+4n as port n pin 4 and ns=3;i=8007+4n as port n pin 2, both
+      as BOOL (SIO), for ports 1-8. Not every master was confirmed answering: one
+      SIG300's server was refusing that client at the time. SICK publishes no OPC UA node list for the SIG300;
+      its datasheets say only that the server follows the IO-Link companion
+      specification (OPC 30120) V1.0.
+protocol: opcua
+opcua:
+  port: 4840
+  namespaces:
+    - urn:virtual:sick:ns1     # indices 1 and 2: present on the device, URIs not published
+    - urn:virtual:sick:ns2
+    - urn:virtual:sick:sig300  # index 3: where the port nodes are
+  object-namespace: 3
+points:
+  - { name: "Port{n}_Pin4", type: BOOL, repeat: 8, node-id: "ns=3;i=8012", stride: 4, path: "SIG300/Port {n}/Pin 4",
+      desc: "Port {n}: pin 4 (C/Q) digital input", doc: "measured ns=3;i=8008+4n" }
+  - { name: "Port{n}_Pin2", type: BOOL, repeat: 8, node-id: "ns=3;i=8011", stride: 4, path: "SIG300/Port {n}/Pin 2",
+      desc: "Port {n}: pin 2 digital input", doc: "measured ns=3;i=8007+4n" }
+notes: |
+  UNVERIFIED: every browse name and path here (SIG300/Port n/Pin 4) and the
+  URIs of namespaces 1-3 are stand-ins; only the node ids and their BOOL type
+  were seen on a device. A client that addresses the nodes by id, as the
+  measured CODESYS client does, sees the device's address space; one that
+  browses by name does not. Replace from an export of a real SIG300's
+  address space (UaExpert can export one). ns=3;i=8029 (port 5, the id after
+  pin 4) was also read as BOOL; what it is was not established, so it is not
+  served.

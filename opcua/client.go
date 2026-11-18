@@ -13,7 +13,9 @@ package opcua
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -114,6 +116,7 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 		}
 	}
 	pinNew := false
+	certFile := ""
 	if ep.SecurityPolicyURI != ua.SecurityPolicyURINone {
 		if c.PKIDir == "" {
 			return nil, fmt.Errorf("endpoint %s needs a client certificate: set pki-dir", policyName(ep.SecurityPolicyURI))
@@ -123,10 +126,11 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 			return nil, err
 		}
 		pinNew = !pinned
-		certFile, keyFile, err := EnsureCertificate(c.PKIDir, c.ApplicationURI)
+		cert, keyFile, err := EnsureCertificate(c.PKIDir, c.ApplicationURI)
 		if err != nil {
 			return nil, err
 		}
+		certFile = cert
 		opts = append(opts, opcua.CertificateFile(certFile), opcua.PrivateKeyFile(keyFile))
 	}
 
@@ -137,6 +141,13 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 	cctx, cancel2 := context.WithTimeout(ctx, c.Timeout)
 	defer cancel2()
 	if err := client.Connect(cctx); err != nil {
+		if certFile != "" && errors.Is(err, io.EOF) {
+			// Some servers (Eclipse Milo among them) refuse a client
+			// certificate they do not trust by closing the connection
+			// mid-handshake, with no status code to say so.
+			return nil, fmt.Errorf("connect %s (%s/%s): %w: the server closed the connection during the secured handshake, which is how some servers refuse a client certificate they do not trust yet; trust %s on the server (it is usually in its rejected list) and the next retry connects",
+				endpoint, policyName(ep.SecurityPolicyURI), modeName(ep.SecurityMode), err, certFile)
+		}
 		return nil, fmt.Errorf("connect %s (%s/%s): %w", endpoint, policyName(ep.SecurityPolicyURI), modeName(ep.SecurityMode), err)
 	}
 	if pinNew {

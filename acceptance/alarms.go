@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -90,8 +91,33 @@ type AlarmBuilder func(*runtime.Runtime) (*alarm.Engine, error)
 type Option func(*runOptions)
 
 type runOptions struct {
-	alarms AlarmBuilder
+	alarms  AlarmBuilder
+	devices DeviceBuilder
 }
+
+// DeviceDriver is what a DeviceBuilder returns: the driver that answers
+// the project's drivers from its virtual devices (virtdev.InProcess).
+type DeviceDriver interface {
+	nio.Driver
+	// Err reports every protocol fault so far: a request a device
+	// refused, a binding no device answers. A test that saw one fails.
+	Err() error
+}
+
+// PlantWriter is a DeviceDriver that takes a step's `plant:` writes.
+type PlantWriter interface {
+	SetPlant(name string, value any) error
+}
+
+// DeviceBuilder builds one test's virtual devices on that test's virtual
+// clock, fresh per test like the runtime, so a device's state never leaks
+// from one test into the next.
+type DeviceBuilder func(clock runtime.Clock) (DeviceDriver, error)
+
+// WithDevices gives the run a project's virtual devices, which is what a
+// suite with `devices: true` runs against. Without it such a suite is an
+// error, not a silent fall-back to the memory stub.
+func WithDevices(b DeviceBuilder) Option { return func(o *runOptions) { o.devices = b } }
 
 // WithAlarms gives a run an alarm engine, which is what makes the
 // `alarms:` key and the ack/shelve verbs mean anything. Without it a test

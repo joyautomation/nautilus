@@ -1,0 +1,45 @@
+# The bin-fill sequence against its virtual devices: the drive, relay board
+# and IO-Link master answer the project's own Modbus and OPC UA bindings in
+# process, in virtual time; devices/plant.st is the process.
+devices: true
+tests:
+  - name: fills the bin and purges the conveyor
+    steps:
+      - given: { StartReq: true }
+        until: 10s
+        expect: { Step: 2, GateOpen: true, Conv_Speed: 20000 }
+      - until: 30s
+        expect: { Step: 3, BinHigh: true }
+        always: { Plugged: false }
+      - advance: 3500ms
+        expect: { Step: 4, Conv_CW: 1142 }        # 16#0476, READY TO SWITCH ON
+      - until: 5s
+        expect: { Conv_Speed: 0, GateOpen: false, Conv_Amps: 0.0 }
+
+  - name: carrying grain loads the motor
+    steps:
+      - given: { StartReq: true }
+        until: 10s
+        expect: { GateOpen: true }
+      - advance: 1s
+        expect: { Conv_Amps: { near: 12.0, tol: 0.2 } }
+
+  - name: a plug stops the conveyor and closes the gate
+    steps:
+      - given: { StartReq: true }
+        until: 10s
+        expect: { Step: 2 }
+      - plant: { IOLM_Port2_SioInput: true }
+        advance: 1s
+        expect: { Step: 9, Plugged: true, RB_Out: 0, Conv_CW: 1142 }
+      - until: 5s
+        expect: { Conv_Speed: 0 }
+
+  - name: a drive trip stops the sequence
+    steps:
+      - given: { StartReq: true }
+        until: 10s
+        expect: { Step: 2 }
+      - plant: { CONV_Trip: true }
+        advance: 500ms
+        expect: { Step: 9, RB_Out: 0 }

@@ -1,0 +1,52 @@
+# The I/O of sim.yaml: tags/plcnext.yaml's names, with no controller behind
+# them. Each input is a setpoint you write (the tag API, the dashboard, or
+# `set` in the playground's terminal) in place of the board and the bus:
+#
+#   set DI_02 true        hold S3 down (S1..S4 are DI_00..DI_03, momentary)
+#   set SliderV 5         the slider at 5 V: AI_00 reads 15000 counts (board.st)
+#   set SupplyMissing true the AI4 U without its supply: AI_00..03 read 0x8020
+#   set AXC__Online false an outage (then AXC__Outages 1, as the driver counts it)
+#
+# Hand-written, unlike tags/plcnext.yaml; keep the names in step with it.
+# The acceptance suite runs on both manifests, so a rename shows there.
+- { name: AI_00, role: state, type: INT, init: 0, desc: "slot 4 analog input 0, raw counts, written by board.st from SliderV" }
+- { name: AI_01, role: state, type: INT, init: 0, desc: "slot 4 analog input 1, raw counts, written by board.st: unwired, 0 V" }
+- { name: AI_02, role: state, type: INT, init: 0, desc: "slot 4 analog input 2, raw counts, written by board.st: unwired, 0 V" }
+- { name: AI_03, role: state, type: INT, init: 0, desc: "slot 4 analog input 3, raw counts, written by board.st: unwired, 0 V" }
+- { name: AXC__Online, role: setpoint, type: BOOL, init: true, desc: "stands in for the driver status: the process image is being exchanged (false = an outage)" }
+- { name: AXC__Outages, role: setpoint, type: DINT, init: 0, desc: "stands in for the driver status: outages since start" }
+- { name: AXC__WatchdogTrips, role: setpoint, type: DINT, init: 0, desc: "stands in for the driver status: output-watchdog trips" }
+- { name: DI_00, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 01; pushbutton S1 on the board (momentary)" }
+- { name: DI_01, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 02; pushbutton S2 on the board (momentary)" }
+- { name: DI_02, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 03; pushbutton S3 on the board (momentary)" }
+- { name: DI_03, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 04; pushbutton S4 on the board (momentary)" }
+- { name: DI_04, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 05" }
+- { name: DI_05, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 06" }
+- { name: DI_06, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 07" }
+- { name: DI_07, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 08" }
+- { name: DI_08, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 09" }
+- { name: DI_09, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 10" }
+- { name: DI_10, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 11" }
+- { name: DI_11, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 12" }
+- { name: DI_12, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 13" }
+- { name: DI_13, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 14" }
+- { name: DI_14, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 15" }
+- { name: DI_15, role: setpoint, type: BOOL, init: false, desc: "slot 2 input 16" }
+- { name: DO_00, role: output, type: BOOL, init: false, desc: "slot 1 output 01" }
+- { name: DO_01, role: output, type: BOOL, init: false, desc: "slot 1 output 02" }
+- { name: DO_02, role: output, type: BOOL, init: false, desc: "slot 1 output 03" }
+- { name: DO_03, role: output, type: BOOL, init: false, desc: "slot 1 output 04" }
+- { name: DO_04, role: output, type: BOOL, init: false, desc: "slot 1 output 05" }
+- { name: DO_05, role: output, type: BOOL, init: false, desc: "slot 1 output 06" }
+- { name: DO_06, role: output, type: BOOL, init: false, desc: "slot 1 output 07" }
+- { name: DO_07, role: output, type: BOOL, init: false, desc: "slot 1 output 08" }
+- { name: DO_08, role: output, type: BOOL, init: false, desc: "slot 1 output 09" }
+- { name: DO_09, role: output, type: BOOL, init: false, desc: "slot 1 output 10" }
+- { name: DO_10, role: output, type: BOOL, init: false, desc: "slot 1 output 11" }
+- { name: DO_11, role: output, type: BOOL, init: false, desc: "slot 1 output 12" }
+- { name: DO_12, role: output, type: BOOL, init: false, desc: "slot 1 output 13" }
+- { name: DO_13, role: output, type: BOOL, init: false, desc: "slot 1 output 14" }
+- { name: DO_14, role: output, type: BOOL, init: false, desc: "slot 1 output 15" }
+- { name: DO_15, role: output, type: BOOL, init: false, desc: "slot 1 output 16; the heartbeat" }
+- { name: SliderV,       role: setpoint, type: REAL, init: 0.0, unit: "V", desc: "the board's 0..10 V slider, wired to the AI4 U's input 0 (board.st)" }
+- { name: SupplyMissing, role: setpoint, type: BOOL, init: false, desc: "the AI4 U's UP supply unwired, as on the bench: every channel reads 0x8020 (board.st)" }

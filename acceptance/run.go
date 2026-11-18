@@ -138,6 +138,7 @@ type testRun struct {
 	rt     *runtime.Runtime
 	sch    *Scheduler
 	drv    *nio.Memory
+	dev    DeviceDriver // the virtual devices, when the suite runs against them
 	libs   []string
 	tol    float64
 	inputs map[string]bool // tags the driver produces — `given` routes there
@@ -161,12 +162,29 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 	drv := nio.NewMemory()
 	o.Driver = drv
 
-	rt, sch, err := NewRuntime(o)
+	// A suite that asks for the virtual devices gets them in place of the
+	// stub: still no socket, but the project's own drivers' bindings are
+	// answered through each device's register map or address space.
+	var dev DeviceDriver
+	clk := NewClock()
+	if s.Devices {
+		if cfg.devices == nil {
+			return res, fmt.Errorf("%s: devices: true, but the project has no virtual devices (virtual-devices.yaml)", s.Path)
+		}
+		var err error
+		if dev, err = cfg.devices(clk); err != nil {
+			return res, fmt.Errorf("%s: devices: %w", s.Path, err)
+		}
+		o.Driver = dev
+	}
+	o.Clock = clk
+	rt, err := runtime.New(o)
 	if err != nil {
 		return res, fmt.Errorf("%s: compile: %w", s.Path, err)
 	}
+	sch := NewScheduler(rt, clk)
 	r := &testRun{
-		rt: rt, sch: sch, drv: drv, libs: o.Libraries,
+		rt: rt, sch: sch, drv: drv, dev: dev, libs: o.Libraries,
 		tol:    firstNonZero(deref(t.Tolerance), s.Tolerance),
 		inputs: inputSet(o),
 		known:  knownTags(o),
@@ -207,6 +225,14 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 		if err != nil {
 			return res, fmt.Errorf("%s:%d: test %q: %w", s.Path, st.Line, t.Name, err)
 		}
+		// A protocol fault is the reason, ahead of whatever expectation
+		// it made fail: the project asked a device for something the
+		// device does not have.
+		if fail == nil {
+			fail = r.deviceFault(st.Line)
+		} else if df := r.deviceFault(st.Line); df != nil {
+			fail = df
+		}
 		if fail != nil {
 			fail.Step = i + 1
 			fail.StepLine = st.Line
@@ -238,6 +264,47 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 	return res, nil
 }
 
+// plant applies a step's `plant:` writes to the virtual devices, in name
+// order.
+func (r *testRun) plant(writes map[string]any) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	pw, ok := r.dev.(PlantWriter)
+	if r.dev == nil || !ok {
+		return fmt.Errorf("plant: writes the virtual devices' plant, which needs devices: true at the top of the file")
+	}
+	names := make([]string, 0, len(writes))
+	for k := range writes {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if err := pw.SetPlant(k, writes[k]); err != nil {
+			return fmt.Errorf("plant: %s: %w", k, err)
+		}
+	}
+	return nil
+}
+
+// deviceFault is a failure for the protocol faults the virtual devices saw,
+// nil when there were none (or the suite has no devices).
+func (r *testRun) deviceFault(line int) *Failure {
+	if r.dev == nil {
+		return nil
+	}
+	err := r.dev.Err()
+	if err == nil {
+		return nil
+	}
+	return &Failure{
+		At:     r.sch.Elapsed(),
+		Line:   line,
+		Reason: "virtual devices: the project's drivers asked for something the devices do not answer",
+		Detail: err.Error(),
+	}
+}
+
 // runStep applies the step's writes, spends its virtual time, and checks
 // what must hold. A nil Failure means it passed.
 func (r *testRun) runStep(st *Step) (*Failure, error) {
@@ -245,6 +312,9 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 		return nil, err
 	}
 	if err := r.forces(st); err != nil {
+		return nil, err
+	}
+	if err := r.plant(st.Plant); err != nil {
 		return nil, err
 	}
 	// The operator verbs land with `given:`, before the step spends its
@@ -584,6 +654,9 @@ func (r *testRun) apply(given map[string]any) error {
 		if err != nil {
 			return fmt.Errorf("given: %w", err)
 		}
+		if r.inputs[name] && r.dev != nil {
+			return fmt.Errorf("given: %s is delivered by a virtual device; set what the process model drives instead", name)
+		}
 		if r.inputs[name] {
 			if err := r.drv.WriteOutputs(nio.Values{name: v}); err != nil {
 				return err
@@ -667,6 +740,9 @@ func (r *testRun) applyFields(tag string, edits map[string]any) error {
 			return err
 		}
 		base = updated
+	}
+	if r.inputs[tag] && r.dev != nil {
+		return fmt.Errorf("given: %s is delivered by a virtual device; set what the process model drives instead", tag)
 	}
 	if r.inputs[tag] {
 		return r.drv.WriteOutputs(nio.Values{tag: base})

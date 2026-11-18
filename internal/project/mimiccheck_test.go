@@ -372,3 +372,39 @@ tags:
 		t.Errorf("warnings %q", warns)
 	}
 }
+
+func TestCheckMimicsRoutedPipes(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file("name: p\ntasks:\n  - program: main.st\n    scan: 100ms\n"),
+		"main.st":       file("PROGRAM main\nEND_PROGRAM\n"),
+		"screen.mimic.json": file(`{"equipment":[
+			{"id":"V1","component":"Valve","x":0,"y":0},{"id":"V2","component":"Valve","x":0,"y":0}],
+		  "pipes":[
+			{"id":"HDR","routing":"auto","from":{"equip":"V1","port":"out"},"to":{"equip":"V2","port":"in"}},
+			{"id":"ok","routing":"auto","from":{"equip":"V1","port":"in"},"to":{"pipe":"HDR"}},
+			{"id":"notauto","from":{"equip":"V1","port":"in"},"to":{"pipe":"HDR"},"points":[[0,0]]},
+			{"id":"nowhere","routing":"auto","from":{"equip":"V1","port":"in"},"to":{"pipe":"GONE"}},
+			{"id":"self","routing":"auto","from":{"equip":"V1","port":"in"},"to":{"pipe":"self"}},
+			{"id":"odd","routing":"curvy","points":[[0,0],[1,1]]}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, _ := p.CheckMimics(fsys, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		`pipe notauto ends on pipe HDR, which only a routed pipe can ("routing": "auto")`,
+		"pipe nowhere ends on pipe GONE, which isn't on the screen",
+		"pipe self ends on itself",
+		`pipe odd has routing "curvy"`,
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("no error %q in:\n%s", want, all)
+		}
+	}
+	if len(errs) != 4 {
+		t.Errorf("%d errors, want 4:\n%s", len(errs), all)
+	}
+}

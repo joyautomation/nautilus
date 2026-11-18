@@ -26,6 +26,23 @@ on `distroless/static`: no shell, no package manager, CA roots included
 for MQTT/TLS. The base has no libc, so the binary must be static: release
 CLIs are, and the workflow sets `CGO_ENABLED=0` for its own `go install`.
 
+A controller for another platform builds from any machine: give
+`naut build` that platform's `naut` as its runtime. Take it from the same
+release as the `naut` you build with, since one checks the project and
+the other runs it.
+
+```sh
+tar xzf nautilus_<version>_linux_arm64.tar.gz naut
+mv naut naut-arm64
+naut build -runtime ./naut-arm64 -o my-plant-arm64
+# built my-plant-arm64 — … — for linux/arm64
+```
+
+The controller is that binary byte for byte with the project appended,
+so it runs on an ARM64 IPC and reports that release's version. Pass the
+`naut` inside the archive, not the archive itself; `naut build` refuses
+anything that is not an executable.
+
 ## The cluster
 
 `deploy/k8s.yaml` runs **two replicas** with the manifest's `retain: {}`
@@ -54,6 +71,43 @@ it needs one secret only you can add: a namespace-scoped kubeconfig as
 Rolling by sha rather than `latest` is deliberate: a sha pins the code,
 while a Deployment that says `:latest` redeploys to whatever was pushed most
 recently.
+
+## Without a cluster: systemd
+
+On a single industrial PC the controller is a systemd service. Make it
+`Type=notify` and give it a watchdog:
+
+```ini
+[Service]
+Type=notify
+ExecStart=/opt/nautilus/current/controller
+WorkingDirectory=/var/lib/nautilus
+WatchdogSec=10s
+Restart=on-failure
+RestartSec=2
+```
+
+- **Started means scanning.** The controller tells systemd it is ready
+  (`READY=1`) once its first scan has completed, or, as a redundant
+  replica, once it has decided it is the standby. `systemctl start` and
+  `restart` return only then, so a release that cannot start fails the
+  command instead of reporting success.
+- **A hung scan is restarted.** While the scans complete, the controller
+  sends systemd a heartbeat at half of `WatchdogSec`. It stops when a
+  scan stops finishing, judged by the same check that closes the
+  [write gate](/guides/redundancy/#redundancy), about 2 to 4 s into the
+  hang. systemd then kills the process (`SIGABRT`, so the journal holds
+  every goroutine's stack) and `Restart=` starts it again.
+  `systemctl status` shows why, in its status line: `scans not live: …`.
+- **How long to set.** At least 8 s; naut warns below that, where a
+  scan that overruns and then finishes could get a healthy controller
+  killed. Measured with 10 s: the kill came 10 s after the last
+  heartbeat and the restart 1 s after that (`RestartSec=1`).
+- A retained value that hangs the scan comes back with the restart, so a
+  controller can restart in a loop. systemd's default start limit (five
+  starts in 10 s) never catches it, because each round takes the
+  watchdog's 10 s and more. To stop after five rounds, widen the window
+  in `[Unit]`: `StartLimitIntervalSec=5min` and `StartLimitBurst=5`.
 
 ## The artifact carries its own provenance
 

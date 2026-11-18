@@ -78,7 +78,38 @@ range. Optional tags ride on a channel's name:
 | (a digital channel with a feature configured) | `_Count`, the counter or totalizer value | DINT |
 | `--latches` | `_OnLatch` / `_OffLatch` for every digital input: it changed since the last scan, however briefly | BOOL |
 | `--quality` | `_Quality` for every analog channel: the processor's quality code, 0 = good | DINT |
-| `--scratch-bits/-ints/-floats N` | writable scratchpad registers, the processor's shared memory with PAC Control, groov View and Node-RED | BOOL / DINT / REAL |
+| `--scratch-bits/-ints/-floats N` | writable Scratch Pad elements from 0: values the program publishes to Opto's software ([Sharing values with Opto's software](#sharing-values-with-optos-software)) | BOOL / DINT / REAL |
+| `--scratch-bits-in/-ints-in/-floats-in N` | read-only Scratch Pad elements right after the writable ones: values Opto's software writes for the program to read | BOOL / DINT / REAL |
+
+## Sharing values with Opto's software
+
+The Scratch Pad is the processor's shared memory: 64 bits, and tables of
+integers and floats (form 1465, appendix A). A PAC Control strategy
+reaches it through its Scratch Pad commands, groov Manage's REST API at
+`/manage/api/v1/io/local/scratchpad/`, Node-RED through the groov I/O
+nodes, and nautilus through the same OptoMMP addresses. Those routes are
+taken from Opto's documents; the bench has proven nautilus's side over
+OptoMMP, not yet the others. Each element has one writer:
+
+- **nautilus writes it** (`writable: true`, `--scratch-floats` and its
+  siblings): an output tag. Like a digital output, it reads **bad** while
+  the element does not hold what the program commanded, so a second
+  writer shows up in the tag's quality and a warning in the log instead
+  of a silent tug-of-war. nautilus writes an element only when its
+  command changes, and again after every reconnect.
+- **Opto's software writes it** (`writable: false`, `--scratch-floats-in`
+  and its siblings): an input tag, good whatever it holds.
+
+```sh
+naut optommp import --host <epic> --scratch-floats 2 --scratch-floats-in 2
+```
+
+gives `EPIC_SP_F0` and `EPIC_SP_F1` for the program to publish and
+`EPIC_SP_F2` and `EPIC_SP_F3` for a strategy to fill in. Agree the element
+numbers with whoever writes the other side; nothing on the processor
+names them. nautilus binds bits, integers 0–1023 and floats 0–1023; the
+upper integer and float elements, the 64-bit integers and the strings
+are not bound yet.
 
 `--modbus` writes the older route instead: every channel bound to the
 processor's own Modbus/TCP server (form 1678's fixed map: digital state
@@ -550,10 +581,16 @@ errors.
   OptoMMP.
 - **Counter reset and analog min/max.** `_Count` reads a counter; clearing
   it, and the per-channel min/max the processor keeps, are not exposed.
-- **The watchdog on real outputs.** It has tripped on the bench unit
-  (2026-10-27). The rewrite after a trip, and the status tags that count
-  it, are tested against an in-process fake of the chassis, not yet on
-  the bench.
+- **The watchdog, checked by hand only.** On the bench unit (2026-10-27)
+  a 1 s watchdog tripped during a 15 s freeze of `naut`, and the outputs
+  were back to their commands within a second of the resume. That run is
+  not automated, the bench has no analog output module, and the status
+  tags that count trips are tested against an in-process fake only.
+- **Sharing the custom area or the stream.** The processor has one set of
+  custom-area pointers and one stream configuration. With `--custom-area`
+  or `--stream`, nautilus owns pointers from 0 and stream target 1 while
+  it runs, so Opto's CODESYS runtime or a second nautilus using them on
+  the same unit would fight over them. Polling shares nothing.
 - **Holding outputs without a program.** The acknowledge lives in your
   program; there is no manifest setting that keeps outputs at their
   watchdog values until one is written.

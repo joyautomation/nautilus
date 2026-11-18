@@ -62,6 +62,31 @@ func (r *Runtime) alarmRetainer() retain.AlarmRetainer {
 	return r.alarms
 }
 
+// LoadRetained restores the retain store now, before Run, for a controller
+// with no coordinator. Call it after SetAlarms and before the tag API
+// serves: otherwise the API answers with the manifest's seeds until the
+// first scan's takeover loads the store, and a write that lands in that
+// window is answered 204 and then quietly overwritten by the load
+// (nautilus#531's startup half). The first takeover then skips its own
+// load; frames are still reset and VAR RETAIN locals still restored there.
+//
+// With a coordinator it does nothing: a replica's takeover must re-read
+// the store, because another replica may have led (and saved) since.
+func (r *Runtime) LoadRetained() {
+	if r.coord != nil || r.retainStore == nil {
+		return
+	}
+	r.leadMu.Lock()
+	defer r.leadMu.Unlock()
+	if r.leading || r.retainPreloaded {
+		return
+	}
+	if err := r.loadRetained(); err != nil {
+		r.noteRetainError(err)
+	}
+	r.retainPreloaded = true
+}
+
 // gate is the first thing every scan does. It answers "should this replica
 // scan?", and on the standby→leader edge it performs the takeover sequence
 // before any logic runs. With no coordinator and no retain store it is a
@@ -179,7 +204,12 @@ func (r *Runtime) takeover() {
 	if r.coord != nil {
 		r.dropForces("takeover")
 	}
-	if r.retainStore != nil {
+	// LoadRetained already restored the store before the API answered
+	// (standalone only): loading it again here would undo a write made
+	// in between (nautilus#531's startup half).
+	if r.retainPreloaded {
+		r.retainPreloaded = false
+	} else if r.retainStore != nil {
 		if err := r.loadRetained(); err != nil {
 			r.noteRetainError(err)
 		}
