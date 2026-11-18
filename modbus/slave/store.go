@@ -17,6 +17,9 @@ type Unit struct {
 	discrete map[uint16]bool
 	excepts  map[byte]byte // fc -> injected exception code
 	exceptAt map[fcAddr]byte
+	// defined is the address map Define builds (addrmap.go): table ->
+	// address -> writable. Nil means every address is implemented.
+	defined map[string]map[uint16]bool
 }
 
 // fcAddr keys an exception injected for one function code at one start

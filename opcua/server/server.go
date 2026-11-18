@@ -99,6 +99,10 @@ type Options struct {
 	// Logger takes the write audit (an Info line per landed write, a Warn
 	// once per client, node and reason for a refusal); nil is slog.Default.
 	Logger *slog.Logger
+	// Mapped lays a device's address space over the tag store (mapped.go):
+	// its namespaces come first, its tree is what Objects organizes, and
+	// the project folder is left off. Nil serves the tag store as itself.
+	Mapped *Mapped
 }
 
 // serverDiagnosticsLeftOut are the static diagnostic nodes under the Server
@@ -188,6 +192,11 @@ func New(rt *runtime.Runtime, o Options) (*Server, error) {
 	}
 	if err := writable.Patterns(o.Writable).Validate(); err != nil {
 		return nil, fmt.Errorf("opcua.%w", err)
+	}
+	if o.Mapped != nil {
+		if _, err := newMappedTree(o.Mapped); err != nil {
+			return nil, fmt.Errorf("opcua: %w", err)
+		}
 	}
 	w := &writeAccess{patterns: writable.Patterns(o.Writable), anonymous: o.AnonymousWrites, log: o.Logger}
 	if w.log == nil {
@@ -292,13 +301,21 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 	if s.version != "" {
 		build.version = s.version
 	}
+	serverName, manufacturer, product, productURI := "Nautilus · "+s.opts.Name, "Joy Automation", "Nautilus", ProductURI
+	if m := s.opts.Mapped; m != nil && m.Product != nil {
+		p := m.Product
+		serverName, manufacturer, product, productURI = p.Name, p.Manufacturer, p.Name, p.URI
+		if p.Version != "" {
+			build.version = p.Version
+		}
+	}
 	opts := []opcserver.Option{
 		opcserver.EndPoint(listen, port),
-		opcserver.ServerName("Nautilus · " + s.opts.Name),
+		opcserver.ServerName(serverName),
 		opcserver.ApplicationURI(s.opts.ApplicationURI),
-		opcserver.ManufacturerName("Joy Automation"),
-		opcserver.ProductName("Nautilus"),
-		opcserver.ProductURI(ProductURI),
+		opcserver.ManufacturerName(manufacturer),
+		opcserver.ProductName(product),
+		opcserver.ProductURI(productURI),
 		opcserver.SoftwareVersion(build.version),
 		opcserver.BuildNumber(build.number),
 		opcserver.BuildDate(build.date),
@@ -317,7 +334,13 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 		opts = append(opts, sec...)
 	}
 	srv := opcserver.New(opts...)
+	tree, err := s.mappedTree()
+	if err != nil {
+		s.lastErr = err
+		return err
+	}
 	ns := &namespace{
+		mapped:  tree,
 		rt:      s.rt,
 		uri:     "urn:joyautomation:nautilus:" + s.opts.Name,
 		title:   s.opts.Name,
@@ -326,6 +349,12 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 		mstamps: map[string]mstamp{},
 		w:       s.w,
 		enums:   collectEnums(s.rt),
+	}
+	// A map's namespaces take the indices the device uses, ahead of ours.
+	if m := s.opts.Mapped; m != nil {
+		for _, uri := range m.Namespaces {
+			srv.AddNamespace(&mappedSpace{uri: uri, ns: ns})
+		}
 	}
 	srv.AddNamespace(ns)
 	registerServices(srv, ns)
@@ -389,7 +418,18 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 	if objects == nil {
 		return errors.New("opcua: gopcua has no Objects folder")
 	}
-	objects.AddRef(ns.folderNode(), opcserver.RefTypeIDOrganizes, true)
+	if tree == nil {
+		objects.AddRef(ns.folderNode(), opcserver.RefTypeIDOrganizes, true)
+	} else {
+		// A device's tree instead of the project folder: its top nodes.
+		for _, top := range tree.top {
+			if sp, err := srv.Namespace(int(top.nid.Namespace())); err == nil {
+				if n := sp.Node(top.nid); n != nil {
+					objects.AddRef(n, opcserver.RefTypeIDOrganizes, true)
+				}
+			}
+		}
+	}
 	// Each enumeration the project declares is a DataType under ns=0's
 	// Enumeration, where a client looks for the member names (#425).
 	if enumeration := root.Node(ua.NewNumericNodeID(0, id.Enumeration)); enumeration != nil {
@@ -735,7 +775,7 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 			}
 		}
 		for _, mon := range mons {
-			root, _ := ir.SplitAddress(mon.nid.StringID())
+			root, _ := ir.SplitAddress(s.ns.addrOf(mon.nid))
 			rk := ir.NameKey(root)
 			liveRoots[rk] = struct{}{}
 			if prev, seen := lastQual[rk]; seen && prev != qual[rk] {
@@ -757,7 +797,7 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 					owed = true
 				}
 			}
-			root, _ := ir.SplitAddress(mon.nid.StringID())
+			root, _ := ir.SplitAddress(s.ns.addrOf(mon.nid))
 			rk := ir.NameKey(root)
 			_, moved := changed[rk]
 			_, requalified := requal[rk]
@@ -844,7 +884,7 @@ func (s *Server) monitored() []monitoredNode {
 	out := make([]monitoredNode, 0, len(mi.Nodes))
 	for k, items := range mi.Nodes {
 		nid, err := ua.ParseNodeID(k)
-		if err != nil || nid.Namespace() != s.ns.id || nid.Type() != ua.NodeIDTypeString {
+		if err != nil || !s.ns.owns(nid) || s.ns.addrOf(nid) == "" {
 			continue
 		}
 		mon := monitoredNode{key: k, nid: nid, items: make([]watched, 0, len(items))}

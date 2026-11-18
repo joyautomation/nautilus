@@ -3,16 +3,20 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.21.1] - 2026-11-17
 
 Works with naut 0.20.0: Toggle Bit and the diagram live actions use the
 controller's tag API the extension already writes through. The AGENTS.md
-offer needs the next naut, the first with `naut agents`. Deleting one leg
+offer needs naut 0.21.0, the first with `naut agents`. Deleting one leg
 of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 `naut ld edit` has `deleteLeg`; an older one refuses the edit.
 
 ### Added
 
+- **Test files: `devices: true` and `plant:`.** The schema knows the keys a
+  test file uses to run against a project's virtual devices
+  (`virtual-devices.yaml`, naut newer than 0.21.0): `devices: true` at the
+  top, `plant:` in a step to make the process plug or trip.
 - **Mimic editor: `SetpointGroup` in the palette.** The kit's setpoint
   panel, with sample props; it reads live values.
 

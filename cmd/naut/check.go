@@ -24,6 +24,7 @@ import (
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug"
+	"github.com/joyautomation/nautilus/virtdev"
 )
 
 // runCheck compiles every .st file under the given paths (files or
@@ -65,6 +66,7 @@ func runCheck(args []string) int {
 	}
 
 	var files []string
+	var deviceDirs []string // directories holding a virtual-devices.yaml
 	for _, p := range paths {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -87,6 +89,9 @@ func runCheck(args []string) int {
 				}
 				return nil
 			}
+			if d.Name() == virtdev.FileName {
+				deviceDirs = append(deviceDirs, filepath.Dir(path))
+			}
 			if ext := strings.ToLower(filepath.Ext(path)); ext == ".st" || ext == ".fbd" || ext == ".ld" || ext == ".sfc" {
 				files = append(files, path)
 			}
@@ -98,7 +103,45 @@ func runCheck(args []string) int {
 		}
 	}
 
+	// A project's virtual devices compile into a plant of their own: their
+	// process model and project-local simulators are not the controller's
+	// programs, so they leave the per-file pass and the plant is compiled
+	// whole instead, its errors reported against virtual-devices.yaml.
+	plantBad := 0
+	if len(deviceDirs) > 0 {
+		skip := map[string]bool{}
+		for _, dir := range deviceDirs {
+			where := filepath.Join(dir, virtdev.FileName)
+			set, err := virtdev.LoadSet(dir)
+			if err != nil {
+				plantBad++
+				fmt.Printf("%s: %v\n", where, err)
+				continue
+			}
+			for _, f := range set.SourceFiles() {
+				if abs, err := filepath.Abs(f); err == nil {
+					skip[abs] = true
+				}
+			}
+			if err := checkPlant(set); err != nil {
+				plantBad++
+				fmt.Printf("%s: the virtual devices' plant does not compile: %v\n", where, err)
+			}
+		}
+		kept := files[:0]
+		for _, f := range files {
+			if abs, err := filepath.Abs(f); err == nil && skip[abs] {
+				continue
+			}
+			kept = append(kept, f)
+		}
+		files = kept
+	}
+
 	if len(files) == 0 {
+		if plantBad > 0 {
+			return 1
+		}
 		// A manifest that cannot be read is the project's whole problem, and
 		// check is the CI gate: a tree with nothing to compile must not pass
 		// just because the file that names the programs is empty or malformed.
@@ -112,7 +155,7 @@ func runCheck(args []string) int {
 		return 0
 	}
 
-	bad, blankWarns := 0, 0
+	bad, blankWarns := plantBad, 0
 	// #199: an error inside a library is reported once, on the library's
 	// own line — by that file's own check when it is one of the files
 	// checked, else from the first program that composes it. The programs
@@ -1057,4 +1100,15 @@ func driverWarnings(d nio.Driver) []string {
 		return drv.Warnings()
 	}
 	return nil
+}
+
+// checkPlant compiles a set's plant: its simulators and process model over
+// the devices' tags.
+func checkPlant(set *virtdev.Set) error {
+	plant, err := virtdev.NewPlant(set)
+	if err != nil {
+		return err
+	}
+	_, err = runtime.New(plant.Options())
+	return err
 }

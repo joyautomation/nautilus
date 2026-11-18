@@ -69,7 +69,9 @@ retain:
   seconds of operator input.
 - **Load order:** retained values are applied before the first scan and
   win over the manifest's `init:` seeds — what the operator set last
-  outlives what the project file said first.
+  outlives what the project file said first. A single controller applies
+  them before its tag API, OPC UA server and HMI answer, so no client ever
+  reads a seed in their place; a replica applies them when it takes over.
 - A retained online edit still shows as *modified* in the dashboard and
   `naut pull`, so the git loop closes the same way it always did.
 - **A deploy wins:** an online edit is reloaded only by the same build it

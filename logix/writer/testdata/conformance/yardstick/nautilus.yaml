@@ -20,7 +20,7 @@ target:
     routine: Receive
     processor: 1756-L85E
     revision: "38.11"
-    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
-    host: 100.93.56.45
+    comm-path: AB_ETH-1\192.0.2.21\Backplane\0
+    host: 192.0.2.21
     side:
       heartbeat: Nautilus_Scan

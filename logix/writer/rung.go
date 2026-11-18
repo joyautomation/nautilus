@@ -757,7 +757,19 @@ func (c *rungCtx) preset(e ld.Element, st, val string) bool {
 			}
 		}
 	}
-	want := "a TIME literal (T#10S) or a TIME variable"
+	// TO_TIME(ms): a DINT of milliseconds feeds the timer, as .PRE is one
+	// in Logix (a preset the logic computes, #700).
+	if st == "TIMER" {
+		if v, ok := toTimeOfVar(val); ok {
+			if d, ok := c.lw.vars[strings.ToLower(v)]; ok {
+				if typ := strings.ToUpper(strings.TrimSpace(d.Type)); typ == "SINT" || typ == "INT" || typ == "DINT" {
+					c.pre = append(c.pre, rungOut{Text: "MOVE(" + v + "," + e.Inst + ".PRE)", Source: c.r.Name, Line: c.r.Line})
+					return true
+				}
+			}
+		}
+	}
+	want := "a TIME literal (T#10S), a TIME variable or TO_TIME(<integer variable of milliseconds>)"
 	if st == "COUNTER" {
 		want = "an integer literal or a SINT/INT/DINT variable"
 	}
@@ -872,4 +884,24 @@ func elemType(typ string) string {
 		return strings.TrimSpace(up[i+4:])
 	}
 	return up
+}
+
+// toTimeOfVar reads TO_TIME(v) or DINT_TO_TIME(v) (INT_TO_TIME, SINT_TO_TIME)
+// of a plain variable v.
+func toTimeOfVar(val string) (string, bool) {
+	val = strings.TrimSpace(val)
+	open := strings.IndexByte(val, '(')
+	if open < 0 || !strings.HasSuffix(val, ")") {
+		return "", false
+	}
+	switch strings.ToUpper(strings.TrimSpace(val[:open])) {
+	case "TO_TIME", "DINT_TO_TIME", "INT_TO_TIME", "SINT_TO_TIME":
+	default:
+		return "", false
+	}
+	v := strings.TrimSpace(val[open+1 : len(val)-1])
+	if !isRef(v) || strings.ContainsAny(v, ".[") {
+		return "", false
+	}
+	return v, true
 }

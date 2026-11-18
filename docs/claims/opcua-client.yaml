@@ -10,9 +10,11 @@ claims:
     tests:
       - go ./cmd/naut TestNautOPCUAClientImportAndRun
       - go ./opcua TestReadsAndQuality
+      - go ./opcua TestForeignServerMatrix/open62541/reads/poll
+      - go ./opcua TestForeignServerMatrix/milo/reads/poll
     note: >-
-      Against gopcua's in-process server only; not yet run against
-      Ignition, Kepware, node-opcua or a PLC's embedded server.
+      Against gopcua's in-process server, open62541 and Eclipse Milo; not
+      yet run against Ignition, Kepware or a PLC's embedded server.
 
   - id: UAC-002
     claim: >-
@@ -269,5 +271,51 @@ claims:
       The driver dials the endpoint: written even when the server
       advertises a different address.
     source: "#security"
-    tests: []
-    note: The test server advertises the address it is dialled on.
+    tests:
+      - go ./opcua TestForeignServerMatrix/milo/reads/poll
+      - go ./opcua TestForeignServerMatrix/open62541/reads/poll
+    note: >-
+      In the matrix each server runs in a container that advertises port
+      4840 while the driver dials the mapped host port.
+
+  - id: UAC-022
+    claim: >-
+      Against open62541 and Eclipse Milo over Basic256Sha256 /
+      SignAndEncrypt, the driver imports a folder byte-identically on
+      re-run, reads and writes every scalar type, reads an unknown node Bad
+      without dropping the session, refuses a write to a read-only node
+      without dropping it, and reads a binding whose namespace index is
+      wrong by its namespace URI.
+    source: "#servers-it-has-been-run-against"
+    tests:
+      - go ./opcua TestForeignServerMatrix/open62541/import
+      - go ./opcua TestForeignServerMatrix/open62541/reads/poll
+      - go ./opcua TestForeignServerMatrix/open62541/writes/poll
+      - go ./opcua TestForeignServerMatrix/open62541/remap/poll
+      - go ./opcua TestForeignServerMatrix/milo/import
+      - go ./opcua TestForeignServerMatrix/milo/reads/poll
+      - go ./opcua TestForeignServerMatrix/milo/writes/poll
+      - go ./opcua TestForeignServerMatrix/milo/remap/poll
+
+  - id: UAC-023
+    claim: >-
+      When the server restarts or goes silent (a paused container, as on a
+      power loss), __Online falls, delivered values hold as Stale, and the
+      session comes back on its own once the server answers, with no growth
+      in goroutines across repeated outages.
+    source: "#servers-it-has-been-run-against"
+    tests:
+      - go ./opcua TestForeignServerMatrix/open62541/restart/poll
+      - go ./opcua TestForeignServerMatrix/open62541/blackhole/poll
+      - go ./opcua TestForeignServerMatrix/milo/restart/poll
+      - go ./opcua TestForeignServerMatrix/milo/blackhole/poll
+
+  - id: UAC-024
+    claim: >-
+      A server that refuses an untrusted client certificate by closing the
+      connection mid-handshake gets an error that says so and names the
+      certificate file to trust, and once the server trusts it the next
+      retry connects with no restart.
+    source: "#security"
+    tests:
+      - go ./opcua TestForeignServerMatrix/milo

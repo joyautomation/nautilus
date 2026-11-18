@@ -1,0 +1,25 @@
+# A bin-fill sequence, small and synthetic: a conveyor on an ABB drive
+# (Modbus, ABB Drives profile), a gate on a relay board (Modbus), and a
+# bin high-level switch and a plug switch on an IO-Link master (OPC UA).
+# virtual-devices.yaml stands the three devices up; fill_test.yaml runs the
+# sequence against them in virtual time.
+name: bin-fill
+tasks:
+  - { program: fill.st, scan: 100ms }
+drivers:
+  - { type: modbus, manifest: modbus_manifest.yaml, scan-rate: 100ms }
+  - { type: opcua-client, endpoint: "opc.tcp://10.77.1.103:4840", manifest: opcua_manifest.yaml, scan-rate: 100ms, security: None }
+tags:
+  - { name: StartReq,   role: setpoint, type: BOOL, init: false, desc: "Operator: fill the bin" }
+  - { name: StopReq,    role: setpoint, type: BOOL, init: false, desc: "Operator: stop filling" }
+  - { name: Conv_CW,    role: output,   type: WORD, init: 0, desc: "Conveyor drive control word" }
+  - { name: Conv_Ref,   role: output,   type: INT,  init: 0, desc: "Conveyor drive speed reference (+-20000)" }
+  - { name: Conv_SW,    role: input,    type: WORD, init: 0, desc: "Conveyor drive status word" }
+  - { name: Conv_Speed, role: input,    type: INT,  init: 0, desc: "Conveyor drive actual speed (+-20000)" }
+  - { name: Conv_Amps,  role: input,    type: REAL, init: 0.0, unit: A, desc: "Conveyor motor current" }
+  - { name: RB_Out,     role: output,   type: WORD, init: 0, desc: "Relay board outputs: bit 0 opens the gate" }
+  - { name: RB_In,      role: input,    type: WORD, init: 0, desc: "Relay board inputs: bit 0 gate open limit" }
+  - { name: BinHigh,    role: input,    type: BOOL, init: false, desc: "Bin high-level switch" }
+  - { name: Plugged,    role: input,    type: BOOL, init: false, desc: "Conveyor discharge plug switch" }
+  - { name: Step,       role: state,    type: INT,  init: 0, desc: "0 idle, 1 conveyor starting, 2 filling, 3 purging, 4 done, 9 fault" }
+  - { name: GateOpen,   role: state,    type: BOOL, init: false, desc: "Gate open limit made" }

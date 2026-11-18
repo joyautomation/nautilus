@@ -1,0 +1,419 @@
+package virtdev
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/st"
+	"github.com/joyautomation/nautilus/runtime"
+)
+
+// MainTask is the plant task that runs the simulators and owns the stores.
+const MainTask = "devices"
+
+// DtTag is the plant tag the main task's scan-to-scan seconds land in. A
+// simulator that declares VAR_INPUT Dt : REAL is handed it, so a ramp or a
+// timer it integrates by hand follows the clock it runs on, virtual or not.
+const DtTag = "Plant_Dt"
+
+// ModelDtTag is the process model task's scan-to-scan seconds, for a model
+// that integrates (a level from a flow).
+const ModelDtTag = "Model_Dt"
+
+// ModelTask is the plant task that runs the process model.
+const ModelTask = "model"
+
+// Plant is the runtime every virtual device of a project runs in: one tag
+// store holding each device's points as <Device>_<Point>, the simulators in
+// the main task, the process model in a second task, and a driver that
+// moves values between the tag store and the devices' protocol stores
+// before and after each main scan (what the controller wrote in; what the
+// device shows out).
+//
+// The plant is an ordinary nautilus runtime, so its clock is injectable:
+// run it in wall time beside a wire face (Start), or step it in virtual
+// time beside a test.
+type Plant struct {
+	set     *Set
+	options runtime.Options
+	stores  map[string]store // by lower-cased device name
+	driver  *plantDriver
+}
+
+// NewPlant composes the plant for a set. Nothing runs until the caller
+// builds a runtime from Options.
+func NewPlant(s *Set) (*Plant, error) {
+	p := &Plant{set: s, stores: map[string]store{}, driver: &plantDriver{outs: map[string]binding{}}}
+	var main strings.Builder
+	var decls, body strings.Builder
+	var libs []string
+	seenLib := map[string]bool{}
+
+	for _, d := range s.Devices {
+		prof := s.Profile(d.Name)
+		// A Modbus device's data is its unit's tables; an OPC UA device's
+		// is the plant's own tags, which its server reads and writes.
+		var stor store
+		if prof.Protocol == ProtoModbus {
+			stor = newModbusStore(prof)
+			p.stores[strings.ToLower(d.Name)] = stor
+		}
+
+		// Points: the controller's to write are plant inputs, the device's
+		// to show are plant outputs. Each powers up at its init.
+		for _, pt := range prof.Points {
+			v, err := pointInit(d, pt)
+			if err != nil {
+				return nil, fmt.Errorf("device %s: %w", d.Name, err)
+			}
+			if stor != nil {
+				if err := stor.put(pt, v); err != nil {
+					return nil, fmt.Errorf("device %s: point %s: init %v: %w", d.Name, pt.Name, v, err)
+				}
+			}
+			tag := d.Name + "_" + pt.Name
+			opts := []runtime.TagOpt{runtime.Init(v)}
+			if pt.Desc != "" {
+				opts = append(opts, runtime.Desc(d.Name+": "+pt.Desc))
+			}
+			if pt.Unit != "" {
+				opts = append(opts, runtime.Unit(pt.Unit))
+			}
+			var def runtime.TagDef
+			b := binding{tag: tag, st: stor, pt: pt}
+			switch {
+			case stor == nil && pt.Writable:
+				// The server writes it, as an operator would.
+				def = runtime.Setpoint(tag, v, opts...)
+			case stor == nil:
+				def = runtime.State(tag, v, opts...)
+			case pt.Writable:
+				def = runtime.Input(tag, opts...)
+				p.driver.ins = append(p.driver.ins, b)
+			default:
+				def = runtime.Output(tag, opts...)
+				p.driver.outs[tag] = b
+			}
+			def.Type = pt.Type
+			p.options.Tags = append(p.options.Tags, def)
+		}
+
+		if prof.Simulator == nil {
+			continue
+		}
+		src, err := prof.simulatorSource()
+		if err != nil {
+			return nil, fmt.Errorf("device %s: simulator %s: %w", d.Name, prof.Simulator.Source, err)
+		}
+		key := prof.ID + "\x00" + prof.dir
+		if !seenLib[key] {
+			seenLib[key] = true
+			libs = append(libs, src)
+		}
+		hooks, shared, err := wireSimulator(d, prof, src, &decls, &body)
+		if err != nil {
+			return nil, fmt.Errorf("device %s: simulator %s: %w", d.Name, prof.Simulator.Block, err)
+		}
+		p.options.Tags = append(p.options.Tags, hooks...)
+		if len(shared) > 0 && stor == nil {
+			return nil, fmt.Errorf("device %s: a VAR_IN_OUT point needs a register store; an OPC UA device's writable point is its server's to write", d.Name)
+		}
+		for _, pt := range shared {
+			tag := d.Name + "_" + pt.Name + sharedSuffix
+			v, _ := pointInit(d, pt)
+			def := runtime.Output(tag, runtime.Init(v), runtime.Desc(d.Name+": "+pt.Name+" as the device leaves it"))
+			def.Type = pt.Type
+			p.options.Tags = append(p.options.Tags, def)
+			p.driver.outs[tag] = binding{tag: tag, st: stor, pt: pt}
+		}
+		for key := range d.Init {
+			if _, ok := prof.Point(key); ok {
+				continue
+			}
+			known := false
+			for _, h := range hooks {
+				known = known || strings.EqualFold(h.Name, d.Name+"_"+key)
+			}
+			if !known {
+				return nil, fmt.Errorf("device %s: init: %s is neither a point of %s nor a hook of its simulator", d.Name, key, prof.ID)
+			}
+		}
+	}
+
+	fmt.Fprintf(&main, "PROGRAM VirtualDevices\n(* Generated by naut from %s: one simulator per device. *)\n", FileName)
+	if decls.Len() > 0 {
+		fmt.Fprintf(&main, "VAR\n%sEND_VAR\n", decls.String())
+	}
+	main.WriteString(body.String())
+	main.WriteString("END_PROGRAM\n")
+
+	scan := time.Duration(s.Scan)
+	if scan <= 0 {
+		scan = 50 * time.Millisecond
+	}
+	p.options.Program = main.String()
+	p.options.Scan = scan
+	p.options.DtTag = DtTag
+	p.options.Tags = append(p.options.Tags, runtime.State(DtTag, scan.Seconds(), runtime.Desc("seconds since the simulators' last scan")))
+	p.options.Libraries = libs
+	p.options.Driver = p.driver
+	// Every output every scan: a shared point's register may have been
+	// written by the controller since, and the device's value must land
+	// over it even when the simulator's own value has not moved.
+	p.options.AlwaysWriteOutputs = true
+	if m := s.Model; m != nil && m.Program != "" {
+		raw, err := os.ReadFile(filepath.Join(s.Dir, m.Program))
+		if err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
+		ms := time.Duration(m.Scan)
+		if ms <= 0 {
+			ms = 100 * time.Millisecond
+		}
+		p.options.Tasks = append(p.options.Tasks, runtime.Task{
+			Name: ModelTask, Program: string(raw), Libraries: libs, Scan: ms, DtTag: ModelDtTag,
+		})
+		p.options.Tags = append(p.options.Tags, runtime.State(ModelDtTag, ms.Seconds(), runtime.Desc("seconds since the process model's last scan")))
+	}
+	return p, nil
+}
+
+// Options is the plant's runtime configuration: hand it to runtime.New
+// (wall time) or to the acceptance harness's NewRuntime (virtual time),
+// adding a Clock for the latter.
+func (p *Plant) Options() runtime.Options { return p.options }
+
+// Program is the generated main program, for `naut devices show` and
+// for error messages that point into it.
+func (p *Plant) Program() string { return p.options.Program }
+
+// wireSimulator declares one device's simulator instance and writes its
+// call: inputs from the device's tags, outputs back to them. VAR_INPUTs
+// and VAR_OUTPUTs named like no point are hooks, returned as state tags
+// <Device>_<Var> the process model reads or writes.
+func wireSimulator(d Instance, prof *Profile, src string, decls, body *strings.Builder) (hooks []runtime.TagDef, shared []Point, err error) {
+	prog, err := st.Parse(src)
+	if err != nil {
+		return nil, nil, err
+	}
+	var fb *st.FunctionBlockDecl
+	for _, f := range prog.FBDecls {
+		if strings.EqualFold(f.Name, prof.Simulator.Block) {
+			fb = f
+		}
+	}
+	if fb == nil {
+		return nil, nil, fmt.Errorf("no FUNCTION_BLOCK %s in %s", prof.Simulator.Block, prof.Simulator.Source)
+	}
+	inst := d.Name
+	fmt.Fprintf(decls, "  %s : %s;\n", inst, fb.Name)
+	var args, pre, outs []string
+	for _, vb := range fb.VarBlocks {
+		if vb.Kind != "VAR_INPUT" && vb.Kind != "VAR_OUTPUT" && vb.Kind != "VAR_IN_OUT" {
+			continue
+		}
+		for _, v := range vb.Variables {
+			if vb.Kind == "VAR_INPUT" && strings.EqualFold(v.Name, "Dt") {
+				args = append(args, fmt.Sprintf("%s := %s", v.Name, DtTag))
+				continue
+			}
+			tag := d.Name + "_" + v.Name
+			pt, isPoint := prof.Point(v.Name)
+			if isPoint {
+				tag = d.Name + "_" + pt.Name
+			}
+			switch vb.Kind {
+			case "VAR_INPUT":
+				args = append(args, fmt.Sprintf("%s := %s", v.Name, tag))
+			case "VAR_OUTPUT":
+				if isPoint && pt.Writable {
+					return nil, nil, fmt.Errorf("VAR_OUTPUT %s: %s is the controller's to write; declare it VAR_IN_OUT for a point both sides write", v.Name, pt.Name)
+				}
+				outs = append(outs, fmt.Sprintf("%s := %s.%s;", tag, inst, v.Name))
+			case "VAR_IN_OUT":
+				// A point both sides write (a loop's %Out: the controller's
+				// in manual, the device's in auto): the simulator gets what
+				// the register holds and the register gets what it leaves.
+				if !isPoint || !pt.Writable {
+					return nil, nil, fmt.Errorf("VAR_IN_OUT %s: only a writable point can be shared with the controller", v.Name)
+				}
+				local := inst + "_" + pt.Name + "_io"
+				fmt.Fprintf(decls, "  %s : %s;\n", local, v.Datatype)
+				pre = append(pre, fmt.Sprintf("%s := %s;", local, tag))
+				args = append(args, fmt.Sprintf("%s := %s", v.Name, local))
+				outs = append(outs, fmt.Sprintf("%s := %s;", tag+sharedSuffix, local))
+				shared = append(shared, pt)
+				continue
+			}
+			if isPoint {
+				continue
+			}
+			init, ok := lookupFold(d.Init, v.Name)
+			if !ok {
+				init = nil
+			}
+			def := runtime.State(tag, normalizeInit(init), runtime.Desc(d.Name+": simulator hook "+v.Name))
+			def.Type = strings.ToUpper(v.Datatype)
+			hooks = append(hooks, def)
+		}
+	}
+	for _, p := range pre {
+		body.WriteString(p + "\n")
+	}
+	fmt.Fprintf(body, "%s(%s);\n", inst, strings.Join(args, ", "))
+	for _, o := range outs {
+		body.WriteString(o + "\n")
+	}
+	return hooks, shared, nil
+}
+
+// sharedSuffix names the plant output a shared point's simulator value
+// goes back to the register through: <Device>_<Point>__dev.
+const sharedSuffix = "__dev"
+
+// pointInit is a point's power-up value: the instance's init, else the
+// profile's, else zero of its type.
+func pointInit(d Instance, pt Point) (any, error) {
+	v, ok := lookupFold(d.Init, pt.Name)
+	if !ok {
+		v = pt.Init
+	}
+	if v == nil {
+		switch pt.Type {
+		case "BOOL":
+			return false, nil
+		case "STRING":
+			return "", nil
+		case "REAL", "LREAL":
+			return 0.0, nil
+		default:
+			return int64(0), nil
+		}
+	}
+	v = normalizeInit(v)
+	switch pt.Type {
+	case "BOOL":
+		if _, ok := v.(bool); !ok {
+			return nil, fmt.Errorf("point %s: init %v is not a BOOL", pt.Name, v)
+		}
+	case "STRING":
+		if _, ok := v.(string); !ok {
+			return nil, fmt.Errorf("point %s: init %v is not a STRING", pt.Name, v)
+		}
+	case "REAL", "LREAL":
+		if i, ok := v.(int64); ok {
+			v = float64(i)
+		}
+		if _, ok := v.(float64); !ok {
+			return nil, fmt.Errorf("point %s: init %v is not a number", pt.Name, v)
+		}
+	default:
+		if f, ok := v.(float64); ok && f == float64(int64(f)) {
+			v = int64(f)
+		}
+		if _, ok := v.(int64); !ok {
+			return nil, fmt.Errorf("point %s: init %v is not an integer", pt.Name, v)
+		}
+	}
+	return v, nil
+}
+
+// normalizeInit turns YAML's decoded scalars into the shapes the tag
+// store takes (int → int64).
+func normalizeInit(v any) any {
+	switch x := v.(type) {
+	case int:
+		return int64(x)
+	case uint64:
+		return int64(x)
+	}
+	return v
+}
+
+func lookupFold(m map[string]any, name string) (any, bool) {
+	for k, v := range m {
+		if strings.EqualFold(k, name) {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// binding ties one plant tag to one point of one device's store.
+type binding struct {
+	tag string
+	st  store
+	pt  Point
+}
+
+// plantDriver is the plant's io.Driver: before each main scan it reads
+// what the controller wrote (the writable points) out of the stores; after
+// it, it writes what the devices show into them.
+type plantDriver struct {
+	ins  []binding
+	outs map[string]binding
+
+	mu   sync.Mutex
+	errs map[string]string // last error per tag, logged once
+}
+
+func (d *plantDriver) ReadInputs() (nio.Values, error) {
+	out := make(nio.Values, len(d.ins))
+	for _, b := range d.ins {
+		v, err := b.st.get(b.pt)
+		if err != nil {
+			d.note(b.tag, err)
+			continue
+		}
+		out[b.tag] = v
+	}
+	return out, nil
+}
+
+func (d *plantDriver) WriteOutputs(vals nio.Values) error {
+	// Sorted, so a bit:N pair sharing a register merges the same way on
+	// every run.
+	names := make([]string, 0, len(vals))
+	for k := range vals {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		b, ok := d.outs[k]
+		if !ok {
+			continue
+		}
+		if err := b.st.put(b.pt, vals[k]); err != nil {
+			d.note(k, err)
+		}
+	}
+	return nil
+}
+
+// note keeps the last error per tag; a plant whose simulator drives a
+// value out of its register's range keeps running.
+func (d *plantDriver) note(tag string, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.errs == nil {
+		d.errs = map[string]string{}
+	}
+	d.errs[tag] = err.Error()
+}
+
+// Errors returns the store errors seen so far, by plant tag.
+func (p *Plant) Errors() map[string]string {
+	p.driver.mu.Lock()
+	defer p.driver.mu.Unlock()
+	out := make(map[string]string, len(p.driver.errs))
+	for k, v := range p.driver.errs {
+		out[k] = v
+	}
+	return out
+}

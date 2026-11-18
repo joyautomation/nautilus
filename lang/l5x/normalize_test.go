@@ -125,7 +125,7 @@ func TestNormalizeDropsTheCommPath(t *testing.T) {
 <Rung><Text><![CDATA[GE(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]></Text></Rung>
 </Controller></RSLogix5000Content>`
 	const uploaded = `<RSLogix5000Content ExportDate="Tue Sep 22 09:01:02 2026">
-<Controller Name="DemoLine" ProcessorType="1756-L85E" CommPath="AB_ETH-1\10.154.92.210\Backplane\0" ProjectSN="16#0000_0000">
+<Controller Name="DemoLine" ProcessorType="1756-L85E" CommPath="AB_ETH-1\192.0.2.20\Backplane\0" ProjectSN="16#0000_0000">
 <Rung><Text><![CDATA[GE(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]></Text></Rung>
 </Controller></RSLogix5000Content>`
 
@@ -138,7 +138,7 @@ func TestNormalizeDropsTheCommPath(t *testing.T) {
 		t.Errorf("CommPath should be dropped, got:\n%s", got)
 	}
 	// Two uploads of the same controller over DIFFERENT paths agree too.
-	other := strings.Replace(uploaded, `10.154.92.210`, `10.0.0.7`, 1)
+	other := strings.Replace(uploaded, `192.0.2.20`, `10.0.0.7`, 1)
 	if !Equivalent([]byte(uploaded), []byte(other), NormalizeOptions{}) {
 		t.Error("the same controller over two paths should compare equal")
 	}

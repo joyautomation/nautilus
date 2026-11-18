@@ -238,10 +238,17 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 					name = fmt.Sprintf("rung%d", n)
 				}
 				rung = &rungParse{name: name, line: n, text: hdr.tail}
-				// A named rung reads as a comment above its network. Any
-				// lines the header's own (* … *) comment ran on to (it may
-				// span several) are consumed here as part of the header —
-				// they carry no code of their own.
+				// Each rung is an FBD network of its own, so rungs run top
+				// to bottom: within a network an FB call runs before the
+				// statements that read it, which across rungs would let a
+				// rung read a block a LATER rung calls in the same scan
+				// (#783). Between networks a read of a later block sees
+				// last scan's value, as on any PLC. A named rung reads as a
+				// comment above its network. Any lines the header's own
+				// (* … *) comment ran on to (it may span several) are
+				// consumed here as part of the header — they carry no code
+				// of their own.
+				emit("  NETWORK", n)
 				emit("  // RUNG "+name, n)
 				i = hdr.endLine
 			} else if trimmed == "" || strings.HasPrefix(trimmed, "//") {

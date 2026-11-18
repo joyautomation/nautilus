@@ -1,0 +1,3 @@
+tags:
+  - { name: BinHigh, nodeid: "ns=1;s=IOLM/Port 1/SIO Input", type: Boolean }
+  - { name: Plugged, nodeid: "ns=1;s=IOLM/Port 2/SIO Input", type: Boolean }

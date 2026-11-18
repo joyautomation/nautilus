@@ -98,6 +98,35 @@ func TestRenderStructInitAsFlowMapping(t *testing.T) {
 	}
 }
 
+// An array's init renders as a flow sequence the loader reads back as a
+// list (ir.SeedFromInit pads a short one with zeros, so [] is all zero),
+// its REALs keeping their decimal point (#774).
+func TestRenderArrayInitAsFlowSequence(t *testing.T) {
+	raw, err := Render(nil, []Tag{
+		{Name: "A", Role: "input", Type: "ARRAY [0..3] OF DINT", Init: []any{int64(0), int64(5), int64(7)}},
+		{Name: "B", Role: "input", Type: "ARRAY [0..2] OF REAL", Init: []any{}},
+		{Name: "C", Role: "input", Type: "ARRAY [0..1] OF REAL", Init: []any{2.0, -0.5}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `- { name: A, role: input, type: "ARRAY [0..3] OF DINT", init: [0, 5, 7] }
+- { name: B, role: input, type: "ARRAY [0..2] OF REAL", init: [] }
+- { name: C, role: input, type: "ARRAY [0..1] OF REAL", init: [2.0, -0.5] }`
+	if out := strings.TrimSpace(string(raw)); out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	var back []struct {
+		Init []any `yaml:"init"`
+	}
+	if err := yaml.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("output does not parse: %v\n%s", err, raw)
+	}
+	if len(back) != 3 || len(back[0].Init) != 3 || back[1].Init == nil || len(back[1].Init) != 0 {
+		t.Errorf("read back %#v", back)
+	}
+}
+
 // Nested struct members render as nested flow mappings, keys sorted at
 // every level — the same shape a manifest author would hand-write.
 func TestRenderNestedStructInit(t *testing.T) {
