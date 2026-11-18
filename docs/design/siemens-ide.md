@@ -268,7 +268,12 @@ The rules for applying a spec:
   - no first label of the form `port-xyz` or `port-xyz-abcde`.
 - **Slot 1 is the CPU's own.** Local modules go in slot 2 and up
   *(verify on the S2a upload)*.
-- **The update time is at least 16 ms.**
+- **The update time is at least 16 ms.** For a nautilus device (a
+  `profinet-manifest:` reference) it is also one its GSDML offers:
+  RT_CLASS_1 at a 1 ms send clock, reduction ratio 1 … 512, so 16, 32,
+  64, 128, 256 or 512 ms and not below the device's `min-cycle`. A
+  reference with no update time gets the first of those at or above
+  `min-cycle`, set explicitly (#898).
 - **Modules are found by their GSDML module ID.** I/O starts are optional,
   and TIA assigns any that are left out.
 - **Applying a spec makes the project match it.** A device or module that
