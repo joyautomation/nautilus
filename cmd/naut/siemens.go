@@ -233,7 +233,7 @@ func siemensFacadeOptions(cfg siemensServeConfig, client *webapi.Client) facade.
 		Host:   cfg.host,
 		Roots:  cfg.roots,
 		Poll:   cfg.poll,
-		Server: server.Options{AuthToken: cfg.token},
+		Server: server.Options{AuthToken: cfg.token, AllowedHosts: allowedHosts()},
 	}
 }
 
