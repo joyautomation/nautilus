@@ -60,7 +60,7 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"server"},
-			to:   []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug", "logix", "internal/project"},
+			to:   []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug", "logix", "siemens", "internal/project"},
 			why:  "the operator surface serves a runtime and alarms; it knows no protocol and is composed by the manifest, not the reverse",
 		},
 		{
