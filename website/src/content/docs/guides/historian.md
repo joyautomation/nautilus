@@ -32,6 +32,10 @@ naut historian \
   historian's environment (the poll sends it). When the controller
   refuses, the historian says so on stderr (`/api/state answered 403, so
   nothing is archived`) rather than archiving nothing in silence.
+- **`NAUTILUS_TOKEN` does two jobs on the historian.** The poll sends it
+  to the controller, and the historian's own API accepts it (below). So it
+  must be the **same secret** as the controller's `NAUTILUS_TOKEN`: one
+  token for the pair, not one per side.
 - **Retention** is a rolling window (`-retention`, default 7 days),
   pruned hourly.
 
@@ -126,10 +130,12 @@ historian's `NAUTILUS_ALLOWED_HOSTS`, or one that carries the historian's
 `NAUTILUS_TOKEN` (the token its poll sends). Any other name gets `403`, so
 a page on another site can't point a name at the historian (DNS
 rebinding) and read the archive. The controller's proxy addresses the
-historian by the name in `server.historian` and doesn't pass the
-controller's token on, so with `server.historian: http://historian:9100`
-the historian needs `NAUTILUS_ALLOWED_HOSTS=historian` (a URL by IP or
-`localhost` needs nothing). In Kubernetes, list the historian Service's
+historian by the name in `server.historian` and strips any token from the
+request, so the historian's token does **not** let the proxy in: a
+historian the controller reaches by name must list that name in its
+`NAUTILUS_ALLOWED_HOSTS`. With `server.historian: http://historian:9100`,
+that's `NAUTILUS_ALLOWED_HOSTS=historian` (a URL by IP or `localhost` needs
+nothing). In Kubernetes, list the historian Service's
 names as the controller's deployment lists its own.
 
 ## Aggregates
