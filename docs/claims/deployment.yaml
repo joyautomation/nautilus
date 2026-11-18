@@ -223,3 +223,30 @@ claims:
       password through NAUT_SSH_ASKPASS=tools/deploy/askpass-bw.sh from a
       Bitwarden item, and with neither askpass nor a terminal naut deploy
       failed in under a second rather than waiting at a prompt.
+  - id: DEP-016
+    claim: >-
+      With the release helper installed (naut deploy helper), naut deploy
+      runs the box's side as sudo -n <helper> <command> and uploads through
+      it, sends no unit, and refuses a helper of another version. The
+      helper pins its settings, refuses any command or name it does not
+      know, installs only its root-owned unit template, and does not run
+      the uploaded controller for status. In every mode, box.sh reads and
+      writes /var/lib/nautilus without following a link or reading a file
+      that is not the controller's own, and restore reads the backup's
+      members as data.
+    source: "#with-sudo-for-one-command-only-the-release-helper"
+    tests:
+      - go ./cmd/naut TestHelperScriptIsBoxShWithAPinningPrologue
+      - go ./cmd/naut TestDeployHelperRefusesWhatItIsNotFor
+      - go ./cmd/naut TestDeployHelperInstallsWithItsOwnUnitAndNeverRunsTheController
+      - go ./cmd/naut TestDeployUsesTheHelper
+      - go ./cmd/naut TestDeployBoxNeverFollowsLinksInState
+      - go ./cmd/naut TestDeployBoxFailedUpdateRestoresThroughNoLink
+      - go ./cmd/naut TestDeployBoxRestoreTakesTheArchiveAsData
+      - go ./cmd/naut TestDeployBoxReadsOnlyTheControllersOwnFiles
+    partial: true
+    note: >-
+      box.sh runs under a stand-in systemctl as the test user, which is
+      enough to see a link followed or a file outside read or written; the
+      helper has not yet run as root on a real box through a sudoers
+      drop-in (the groov EPIC, #771, is first).
