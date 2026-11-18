@@ -3,14 +3,13 @@
 // playground). On the controller the inputs belong to the modules and the
 // screen writes nothing.
 //
-// WIRING (#837), from Opto 22's I/O mapping for the load panel and James:
-// the top push button latches, on DI0, and lights while it is in; the
-// bottom one is momentary, on DI1, and its blue LED ring is an output,
-// DO0, which the program drives (bench.st mirrors DI0 to DO0, so latching
-// the top button lights the bottom one's ring). The knob is the panel's
-// potentiometer; on this bench it reads on the voltage input slot 3
-// channel 0 (8.4 V, then 7.9 V, with the other 23 channels at 0 V); the
-// panel's mapping names a universal I/O module this bench does not have.
+// WIRING (#837), from the I/O mapping of this bench unit's load panel
+// (Opto 22's documentation for it): the top push button latches, on DI0,
+// and lights while it is in; the bottom one is momentary, on DI1, and its
+// blue LED ring is an output, DO0, which the program drives (bench.st
+// mirrors DI0 to DO0, so latching the top button lights the bottom one's
+// ring); the knob is the potentiometer on the voltage input slot 3
+// channel 0 (GRV-IV-24 ch 0).
 export type ButtonKind = 'latching' | 'momentary';
 export const BAR_WIRING = {
 	/** Top button, then bottom; ring: the tag that lights it, and its colour. */

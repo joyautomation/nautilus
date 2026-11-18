@@ -106,7 +106,7 @@
 		/** Given, the bar's buttons press and its knob turns: the
 		 *  simulated build (sim.yaml), whose inputs are tags. On the
 		 *  controller they are the modules', so the page leaves this out
-		 *  and the bar stays as drawn. Wiring: ./bar.ts (provisional). */
+		 *  and the bar stays as drawn. Wiring: ./bar.ts. */
 		write?: (tag: string, value: boolean | number) => void;
 	} = $props();
 
@@ -494,7 +494,7 @@
 
 	<!-- the bar beside the chassis: two pushbuttons, a knob and a connector on an
 	     aluminium plate. Bound on the simulated build only (`write`), to the
-	     provisional wiring in ./bar.ts; on the controller it stays as drawn. -->
+	     wiring in ./bar.ts; on the controller it stays as drawn. -->
 	<T.Mesh position={[BAR.x, (BAR.y0 + BAR.y1) / 2, 6]}>
 		<RoundedBoxGeometry args={[26, BAR.y1 - BAR.y0 - 8, 16]} radius={2} />
 		<T.MeshStandardMaterial color="#8d9297" roughness={0.45} metalness={0.6} />

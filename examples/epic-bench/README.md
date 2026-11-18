@@ -127,10 +127,9 @@ works. The top button latches (DI0; a click turns it on or off) and lights
 while it is in. The bottom one is momentary (DI1; hold to press) and its
 blue LED ring is DO0, an output the program drives. `bench.st` mirrors
 DI0 to DO0, so latching the top button lights the bottom one's ring.
-Drag around the knob to turn it: the panel's potentiometer, which on this
-bench reads on the voltage input slot 3 channel 0 (0 to 10 V here). The
-wiring is in `hmi/src/lib/bar.ts`, from Opto 22's I/O mapping for the load
-panel. On the processor the bar stays as drawn and the screen writes
+Drag around the knob to turn it: the panel's potentiometer, on the
+voltage input slot 3 channel 0 (0 to 10 V here). The wiring is in
+`hmi/src/lib/bar.ts`, from the I/O mapping of this unit's load panel. On the processor the bar stays as drawn and the screen writes
 nothing. The bar sits to the right of the chassis; orbit the view to
 reach it. The bodies are the four small models in `hmi/static/models`,
 simplified from Opto 22's published CAD (its README says how); the
