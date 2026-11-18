@@ -106,6 +106,14 @@ type Driver struct {
 	lastErr    atomic.Value  // string
 	rttUs      atomic.Int64
 
+	// The write gate (gate.go): closed, nothing leaves the driver.
+	gateMu    sync.Mutex
+	writeGate func() bool
+	gateShut  atomic.Bool // the last look found it closed
+	wanted    atomic.Bool // OutputsWanted: every output, after a reopen
+	pushed    bool        // under mu: the runtime has handed us an output
+	awaitPush bool        // under mu: reopened, write nothing until it does again
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -202,15 +210,21 @@ func (d *Driver) run(ctx context.Context) {
 func (d *Driver) session(ctx context.Context) error {
 	st := BusState{Configured: true, Running: true}
 	var im image
+	var conduct bool // BusConductor still to be conducted: the gate was closed
+	var conductOn dataAccess
 	if d.m.Transport == TransportGRPC || d.m.BusConductor != "" {
 		c, err := d.dial(ctx)
 		if err != nil {
 			return err
 		}
 		defer c.Close()
-		if st, err = conductBus(ctx, c, d.m.BusConductor, d.m.RunPort); err != nil {
+		// BusConductor's configure/start are commands: the gate is looked
+		// at before each, and once it is found closed the bus is only read
+		// and the rest is conducted after it opens.
+		if st, conduct, err = conductBusGated(ctx, c, d.m.BusConductor, d.m.RunPort, d.gateOpen); err != nil {
 			return err
 		}
+		conductOn = c
 		im = grpcImage{c: c, m: &d.m}
 	}
 	if d.m.Transport == TransportShm {
@@ -236,7 +250,20 @@ func (d *Driver) session(ctx context.Context) error {
 	tick := time.NewTicker(d.scanRate)
 	defer tick.Stop()
 	for {
-		if err := d.poll(ctx, im); err != nil {
+		if conduct && d.gateOpen() { // before any output of the new term
+			st, deferred, err := conductBusGated(ctx, conductOn, d.m.BusConductor, d.m.RunPort, d.gateOpen)
+			if err != nil {
+				return err
+			}
+			conduct = deferred // closed again partway: the rest waits for the next open
+			d.configured.Store(st.Configured)
+			d.running.Store(st.Running)
+			d.modules.Store(int64(st.Modules))
+			if !deferred {
+				d.log.Info("plcnext: write gate open: bus conducted", "bus_running", st.Running, "modules", st.Modules)
+			}
+		}
+		if err := d.poll(ctx, im, conduct); err != nil {
 			return err
 		}
 		select {
@@ -261,7 +288,21 @@ type BusState struct {
 // set, is the controller's own AXIO RUN diagnostic — the truth about
 // whether process data is being exchanged, which CONFIGURED is not.
 func conductBus(ctx context.Context, c dataAccess, component, runPort string) (BusState, error) {
-	var st BusState
+	st, _, err := conductBusGated(ctx, c, component, runPort, nil)
+	return st, err
+}
+
+// conductBusGated is conductBus under a write gate: may is looked at
+// before each request the handshake would write, and once it finds it
+// closed nothing more is written: the bus is only read, and deferred
+// reports that the handshake is unfinished. may nil is always open.
+func conductBusGated(ctx context.Context, c dataAccess, component, runPort string, may func() bool) (st BusState, deferred bool, err error) {
+	allowed := func() bool {
+		if !deferred && may != nil && !may() {
+			deferred = true
+		}
+		return !deferred
+	}
 	call := func(f func(context.Context) error) error {
 		cctx, cancel := withTimeout(ctx, defaultCallTO)
 		defer cancel()
@@ -287,12 +328,18 @@ func conductBus(ctx context.Context, c dataAccess, component, runPort string) (B
 			return nil
 		}
 	}
+	// edge is a held rising edge. The rising write is the request, so
+	// the gate is looked at just before it too; a closed gate leaves the
+	// flag low (deferred).
 	edge := func(port string) error {
 		if err := writeBool(port, false); err != nil {
 			return err
 		}
 		if err := wait(edgeHold); err != nil {
 			return err
+		}
+		if !allowed() {
+			return nil
 		}
 		return writeBool(port, true)
 	}
@@ -321,20 +368,25 @@ func conductBus(ctx context.Context, c dataAccess, component, runPort string) (B
 		p := func(name string) string { return component + busConductorPorts + name }
 		configured, err := readBool(p("CONFIGURED"))
 		if err != nil {
-			return st, err
+			return st, deferred, err
 		}
-		if !configured {
+		if !configured && allowed() {
 			if err := writeBool(p("CONFIG_MUST_MATCH"), false); err != nil {
-				return st, err
+				return st, deferred, err
 			}
-			if err := edge(p("CONFIG_REQ")); err != nil {
-				return st, err
+			if allowed() {
+				if err := edge(p("CONFIG_REQ")); err != nil {
+					return st, deferred, err
+				}
 			}
-			if err := until(p("CONFIGURED"), "BusConductor did not report CONFIGURED"); err != nil {
-				return st, err
+			if !deferred {
+				if err := until(p("CONFIGURED"), "BusConductor did not report CONFIGURED"); err != nil {
+					return st, deferred, err
+				}
+				configured = true
 			}
 		}
-		st.Configured = true
+		st.Configured = configured
 		_ = call(func(cx context.Context) error {
 			n, err := c.ReadNumber(cx, p("NUM_MODULES"))
 			st.Modules = int(n)
@@ -343,31 +395,33 @@ func conductBus(ctx context.Context, c dataAccess, component, runPort string) (B
 		running := false
 		if runPort != "" {
 			if running, err = readBool(runPort); err != nil {
-				return st, err
+				return st, deferred, err
 			}
 		}
-		if !running {
+		if !running && configured && allowed() {
 			if err := edge(p("START_IO_REQ")); err != nil {
-				return st, err
+				return st, deferred, err
 			}
+		}
+		if !running && !deferred {
 			if runPort != "" {
 				if err := until(runPort, "the Axioline bus did not report RUN"); err != nil {
-					return st, err
+					return st, deferred, err
 				}
 			} else if err := wait(edgeHold); err != nil {
-				return st, err
+				return st, deferred, err
 			}
 		}
 	}
-	st.Running = true
+	st.Running = !deferred // with no RUN port, a start not requested is not running
 	if runPort != "" {
 		running, err := readBool(runPort)
 		if err != nil {
-			return st, err
+			return st, deferred, err
 		}
 		st.Running = running
 	}
-	return st, nil
+	return st, deferred, nil
 }
 
 // image is one scan's route for the bytes: the GDS mirror ports over
@@ -499,16 +553,30 @@ func (*shmImage) everyScan() bool { return true }
 
 // poll reads the input span (and the RUN bit) once and flushes the output
 // span — when it changed, or every scan on a route that wants that.
-func (d *Driver) poll(ctx context.Context, im image) error {
+// unconducted holds the outputs back too: the BusConductor handshake is
+// still to finish, and it goes first once the gate opens.
+func (d *Driver) poll(ctx context.Context, im image, unconducted bool) error {
 	t0 := time.Now()
 	r, err := im.read(ctx, d.inLen)
 	if err != nil {
 		return err
 	}
+	// The gate is looked at after the read (a gRPC read may take up to
+	// its call timeout) and just before the write decision below.
+	open := d.gateOpen()
+	// held: nothing of ours leaves this poll (see the switch below).
+	held := !open || unconducted
 	d.rttUs.Store(time.Since(t0).Microseconds())
 	d.reads.Add(1)
 	if r.held {
 		d.held.Add(1)
+	}
+	if unconducted && d.m.RunPort == "" && r.running {
+		// No RUN bit to read, and START_IO_REQ is still to be sent (the
+		// write gate deferred it): the bus was not started, so this is a
+		// stopped bus, as a RUN bit reading false would say (#874).
+		r.running, r.q = false, nio.Bad
+		r.why, r.cause = "the Axioline bus is not started yet: the write gate is closed", "unstarted"
 	}
 	d.running.Store(r.running)
 
@@ -546,7 +614,15 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 		}
 		if wd := s.st.Watchdog(); wd != d.wdSeen {
 			d.wdSeen = wd
-			if wd {
+			switch {
+			case !wd:
+			case held || d.awaitPush:
+				// The gate's doing: the driver chose to stop writing, so
+				// this is not a trip (StatusWatchdogTrips counts the
+				// zeroings it did not choose).
+				d.log.Info("plcnext: the write gate is closed, so the shim drove the output frame to zero (its watchdog)",
+					"watchdog_ms", s.st.WatchdogMs)
+			default:
 				d.trips.Add(1)
 				d.log.Warn("plcnext: the shim drove the output frame to zero: this driver's outputs were older than its watchdog",
 					"watchdog_ms", s.st.WatchdogMs)
@@ -554,7 +630,14 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 		}
 	}
 	var flush []byte
-	if d.outDirty || im.everyScan() {
+	switch {
+	case held, d.awaitPush:
+		// Closed: nothing leaves, the shm heartbeat included, so the
+		// shim's watchdog takes the frame to zero; over gRPC the outputs
+		// hold. Reopened, nothing leaves either until the runtime answers
+		// OutputsWanted: the frame from before the gate closed is the
+		// previous term's, not a command of this one.
+	case d.outDirty || im.everyScan():
 		flush = append([]byte(nil), d.out...)
 		d.outDirty = false
 	}
@@ -568,6 +651,8 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 			return err
 		}
 		d.writes.Add(1)
+		// A zeroing while the gate held writes back was seen by a read
+		// meanwhile (wdSeen), so the check below does not count it.
 		if s, ok := im.(*shmImage); ok && s.late > 0 {
 			// This driver stalled between writes (a read taken before
 			// the stall shows no watchdog bit, so this is how it learns).
@@ -651,6 +736,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		d.outDirty = true
+		d.pushed, d.awaitPush = true, false
 	}
 	return errors.Join(errs...)
 }
@@ -693,6 +779,10 @@ type Health struct {
 	// deliver (whether or not the manifest has any).
 	Online                 bool
 	Outages, WatchdogTrips uint64
+	// GateClosed: the write gate is closed and nothing is written (gate.go).
+	// GateHolds: … and nothing takes the outputs to a safe state, so they
+	// hold their last values (gRPC, or shm with output-watchdog: 0).
+	GateClosed, GateHolds bool
 }
 
 // ShimHealth is rt/plcnext-io/nautilus_io's cycle as it reports it.
@@ -716,7 +806,9 @@ func (d *Driver) Health() Health {
 		Reads: d.reads.Load(), Writes: d.writes.Load(), Errors: d.errs.Load(),
 		RTTus: d.rttUs.Load(), LastError: d.lastErr.Load().(string), Tags: len(d.m.Tags),
 		Online: d.online.Load(), Outages: d.outages.Load(), WatchdogTrips: d.trips.Load(),
+		GateClosed: d.gateShut.Load(),
 	}
+	h.GateHolds = h.GateClosed && !d.m.safeOnStop()
 	if d.m.Transport == TransportShm {
 		h.Shm = d.m.Shm
 	}

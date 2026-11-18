@@ -495,13 +495,6 @@ func opRenameStep(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	return edits, nil
 }
 
-func stepKeyword(s *GStep) string {
-	if s.Initial {
-		return "INITIAL_STEP"
-	}
-	return "STEP"
-}
-
 // ── addTransition / deleteTransition / setCondition ─────────────────────
 
 func opAddTransition(lines []string, m *Model, op EditOp) ([]TextEdit, error) {

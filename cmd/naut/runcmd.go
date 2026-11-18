@@ -171,9 +171,11 @@ func gateOnLiveScans(proj *project.Project, el *leader.Elector, rt *runtime.Runt
 	if gate == nil {
 		gate = leader.NewLocal(proj.Name, lease)
 		if proj.Runtime.Driver != nil {
-			// Only drivers whose gate is just a gate (io.PlainGated):
-			// optommp and a Sparkplug host read any gate as "one replica
-			// of a redundant set" and would change how they behave.
+			// Only drivers whose gate is just a gate (io.PlainGated): a
+			// Sparkplug host reads any gate as "one replica of a redundant
+			// set" and would change how it behaves. optommp takes it and
+			// is told it is plain (#865), so a hung scan lets the unit's
+			// watchdog act.
 			nio.SetPlainGate(proj.Runtime.Driver, gate.IsLeader)
 		}
 	}
@@ -323,7 +325,6 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if tok := os.Getenv("NAUTILUS_TOKEN"); tok != "" {
 		sopts.AuthToken = tok
 	}
-	sopts.AllowedHosts = append(sopts.AllowedHosts, allowedHosts()...)
 	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
 		sopts.HistorianURL = h
 	}
@@ -376,6 +377,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	} else {
 		apiUp = true
 		apiLn = ln
+		// Name the port actually bound: with server.addr ":0" (or
+		// "127.0.0.1:0") the banner and the warnings below would otherwise
+		// say port 0, and nothing could find the tag API.
+		addr = boundAddr(addr, ln)
 		if sopts.AuthToken == "" && !loopbackListen(addr) {
 			fmt.Fprintf(os.Stderr, openListenWarning, addr)
 		}
@@ -418,6 +423,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if el != nil {
 		banner += " — redundancy: " + el.Status().Mode
 	}
+	banner += schedBannerSuffix(settledSched(rt, 500*time.Millisecond))
 	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
 	// READY=1 once a scan has completed or, as a replica, once the elector
 	// has decided this one is a standby, which does not scan.
@@ -482,6 +488,21 @@ func startAlarms(proj *project.Project, rt *runtime.Runtime) (*project.Alarms, e
 // Ctrl+C, so it isn't a convenient thing to unit test directly) so this
 // decision — the same one `naut build` makes about its own warning — has
 // a testable entry point of its own.
+// boundAddr is the configured address with the port the listener actually
+// got: the host stays as written ("", "0.0.0.0", "localhost"), so the banner
+// reads like the manifest, and only a port 0 changes.
+func boundAddr(configured string, ln net.Listener) string {
+	host, _, err := net.SplitHostPort(configured)
+	if err != nil {
+		return ln.Addr().String()
+	}
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		return configured
+	}
+	return net.JoinHostPort(host, port)
+}
+
 func hmiBannerSuffix(proj *project.Project, addr, built string, stderr io.Writer) string {
 	switch {
 	case built != "":
@@ -1042,9 +1063,10 @@ this file.
 
 Environment:
   NAUTILUS_ADDR            listen address, overriding server.addr in the manifest
-  NAUTILUS_TOKEN           bearer token the tag API and dashboard require
-  NAUTILUS_ALLOWED_HOSTS   host names (comma-separated) a browser page may
-                           write from without a token, besides localhost
+  NAUTILUS_TOKEN           bearer token every write requires, and every
+                           request by a name not listed below
+  NAUTILUS_ALLOWED_HOSTS   host names (comma-separated) the controller
+                           answers by without the token, besides localhost
                            and an IP address
   NAUTILUS_HISTORIAN_URL   historian the dashboard queries for trends
   NAUTILUS_CLI=1           run the naut command line instead of the controller
@@ -1082,4 +1104,64 @@ func embeddedProject() (fs.FS, bool) {
 	}
 	// f stays open for the process lifetime — the zip reads from it lazily.
 	return zr, true
+}
+
+// settledSched is the runtime's stats once every task that asked for a CPU
+// or a priority has been placed or refused (the loops do it as they start),
+// or after wait, whichever is first.
+func settledSched(rt *runtime.Runtime, wait time.Duration) runtime.ScanStats {
+	deadline := time.Now().Add(wait)
+	for {
+		s := rt.Stats()
+		pending := schedPending(s.Sched)
+		for _, t := range s.Tasks {
+			pending = pending || schedPending(t.Sched)
+		}
+		if !pending || time.Now().After(deadline) {
+			return s
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func schedPending(s runtime.SchedStats) bool {
+	return (len(s.CPUs) > 0 || s.Priority > 0) && !s.Applied && s.Error == ""
+}
+
+// schedBannerSuffix says, on the banner, which tasks did not get the CPU or
+// real-time priority they asked for: a refusal is in the log and the task's
+// scan.sched too, but a controller meant to run real-time that silently
+// does not is the kind of wrong to say at start (#836).
+func schedBannerSuffix(s runtime.ScanStats) string {
+	var realtime, pin []string
+	note := func(name string, sc runtime.SchedStats) {
+		switch {
+		case sc.Error == "":
+		case sc.Priority > 0:
+			realtime = append(realtime, name)
+		default: // cpu: alone, no priority asked
+			pin = append(pin, name)
+		}
+	}
+	note(runtime.MainTaskName, s.Sched)
+	for _, t := range s.Tasks {
+		note(t.Name, t.Sched)
+	}
+	out := ""
+	if len(realtime) > 0 {
+		out += " — REAL-TIME REFUSED for " + strings.Join(realtime, ", ")
+	}
+	if len(pin) > 0 {
+		out += " — CPU PIN FAILED for " + strings.Join(pin, ", ")
+	}
+	if out != "" {
+		out += " (see the log)"
+	}
+	// The runtime raised GOMAXPROCS for a task at a priority on a box with
+	// few cores (#830); an operator who set it, or a box with cores to
+	// spare, sees nothing here.
+	if s.Procs.RaisedFrom > 0 {
+		out += fmt.Sprintf(" — GOMAXPROCS %d (raised from %d: a task requests a real-time priority)", s.Procs.Value, s.Procs.RaisedFrom)
+	}
+	return out
 }

@@ -414,34 +414,34 @@ func TestBuildEmbedsHMIAndBuiltBinaryServesIt(t *testing.T) {
 	h := server.New(rt, p.Server).Handler()
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/", nil))
 	if rec.Code != 200 || rec.Body.String() != "<html>hmi shell</html>" {
 		t.Fatalf("GET / = %d %q, want the embedded HMI's index.html", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/assets/app.js", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/assets/app.js", nil))
 	if rec.Code != 200 || rec.Body.String() != "console.log('hi')" {
 		t.Fatalf("GET /assets/app.js = %d %q", rec.Code, rec.Body.String())
 	}
 
 	// A client-side route with no matching file falls back to index.html.
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/some/spa/route", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/some/spa/route", nil))
 	if rec.Code != 200 || rec.Body.String() != "<html>hmi shell</html>" {
 		t.Fatalf("GET /some/spa/route = %d %q, want SPA fallback", rec.Code, rec.Body.String())
 	}
 
 	// /api/* must still work — the HMI owns "/", not the API.
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /api/state = %d, want 200", rec.Code)
 	}
 
 	// The built-in dashboard is still there, moved to /_nautilus/.
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_nautilus/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/_nautilus/", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /_nautilus/ = %d, want 200 (the built-in dashboard)", rec.Code)
 	}

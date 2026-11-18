@@ -106,7 +106,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		*f.dst = t
 	}
 	for _, t := range y.Tags {
-		m.Tags = append(m.Tags, Tag{Name: t.Name, Type: t.Type, Series: t.Series, Const: t.Const})
+		m.Tags = append(m.Tags, Tag(t))
 	}
 	if err := errors.Join(append(errs, m.Validate())...); err != nil {
 		return Manifest{}, fmt.Errorf("replay: %w", err)
@@ -122,6 +122,7 @@ func (m Manifest) Validate() error {
 		errs = append(errs, errors.New("history: is required (the history.json.gz to replay)"))
 	}
 	if !m.From.IsZero() && !m.To.IsZero() && !m.To.After(m.From) {
+		//lint:ignore ST1005 the message ends with the manifest key it points at (from:)
 		errs = append(errs, errors.New("to: must be after from:"))
 	}
 	names := map[string]bool{TagSpeed: true, TagPause: true, TagSeek: true, TagAt: true, TagFrom: true, TagTo: true}

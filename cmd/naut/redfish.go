@@ -99,7 +99,8 @@ Serve flags:
   --auth          none (default) | session | basic — what the stand-in demands
   --user          account the stand-in accepts (with --auth)
   --password-env  variable holding the password it accepts
-  --from          a plant controller's URL: serve its tags (polls /api/state)
+  --from          a plant controller's URL: serve its tags (polls /api/state,
+                  sending NAUTILUS_TOKEN when set)
   --manifest      the redfish_manifest.yaml the monitoring project polls with
                   (required with --from: the bindings, read backwards)
   --source        the manifest source this BMC is (default: the only one);

@@ -76,6 +76,14 @@ func startEmulator(t *testing.T) (host string, port int, store *logixserver.TagS
 
 func startEmulatorWith(t *testing.T, denyStructRoots bool) (host string, port int, store *logixserver.TagStore) {
 	t.Helper()
+	host, port, store, _, _ = startEmulatorFull(t, denyStructRoots)
+	return host, port, store
+}
+
+// startEmulatorFull also returns the server (for fault injection) and a
+// stop that takes it off the network (a dropped session).
+func startEmulatorFull(t *testing.T, denyStructRoots bool) (host string, port int, store *logixserver.TagStore, srv *logixserver.Server, stop func()) {
+	t.Helper()
 	schema, tags, name, err := logixserver.CompileSurface(testSpec())
 	if err != nil {
 		t.Fatalf("compile surface: %v", err)
@@ -86,7 +94,7 @@ func startEmulatorWith(t *testing.T, denyStructRoots bool) (host string, port in
 	}
 	// Bind :0 inside the server and read the real address back: no window
 	// between choosing a port and listening on it for another test to take.
-	srv := logixserver.NewServer(store, schema, name, "127.0.0.1:0", nil)
+	srv = logixserver.NewServer(store, schema, name, "127.0.0.1:0", nil)
 	srv.DenyStructRoots = denyStructRoots
 	if err := srv.Listen(); err != nil {
 		t.Fatalf("emulator listen: %v", err)
@@ -96,7 +104,7 @@ func startEmulatorWith(t *testing.T, denyStructRoots bool) (host string, port in
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() { _ = srv.Run(ctx) }()
-	return "127.0.0.1", port, store
+	return "127.0.0.1", port, store, srv, func() { cancel(); srv.Stop() }
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {

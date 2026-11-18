@@ -36,12 +36,12 @@ tests:
   - name: the pushbuttons mirror to the lamps
     given: *inputs
     steps:
-      - given: { EPIC_M0_DI00: true, EPIC_M0_DI10: true }
+      - given: { EPIC_M0_DI00: true, EPIC_M0_DI09: true }
         advance: 200ms
-        expect: { EPIC_M1_DO00: true, EPIC_M1_DO10: true, EPIC_M1_DO05: false }
+        expect: { EPIC_M1_DO00: true, EPIC_M1_DO09: true, EPIC_M1_DO05: false }
       - given: { EPIC_M0_DI00: false }
         advance: 200ms
-        expect: { EPIC_M1_DO00: false, EPIC_M1_DO10: true }
+        expect: { EPIC_M1_DO00: false, EPIC_M1_DO09: true }
 
   - name: analog channels land on their engineering tags and the scratchpad
     given: *inputs

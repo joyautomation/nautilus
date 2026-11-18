@@ -426,16 +426,20 @@ func writeSynced(path string, data []byte) error {
 		_ = f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
+	if err := fsyncFile(f); err != nil {
 		_ = f.Close()
 		return err
 	}
 	return f.Close()
 }
 
+// fsyncFile and syncDir are variables so a test can see when they run
+// (the bdSeq and journal saves sync before their rename and after it).
+var fsyncFile = (*os.File).Sync
+
 // syncDir makes a rename durable where the platform allows it (best effort:
 // a directory cannot be synced on Windows).
-func syncDir(dir string) {
+var syncDir = func(dir string) {
 	if d, err := os.Open(dir); err == nil {
 		_ = d.Sync()
 		_ = d.Close()

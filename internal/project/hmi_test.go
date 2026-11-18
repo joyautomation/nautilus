@@ -178,7 +178,7 @@ func serveOnce(t *testing.T, p *Project, path string) *httptest.ResponseRecorder
 	}
 	h := server.New(rt, p.Server).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+path, nil))
 	return rec
 }
 

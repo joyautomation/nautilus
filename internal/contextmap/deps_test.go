@@ -29,7 +29,7 @@ type rule struct {
 func rules(u universe) []rule {
 	return []rule{
 		{
-			from: []string{"io", "lang/ir", "hist", "oplog"},
+			from: []string{"io", "lang/ir", "hist", "oplog", "audit"},
 			to:   u.allBut(),
 			why:  "substrates and seams import no other nautilus package",
 		},
@@ -169,6 +169,33 @@ func TestContextMap(t *testing.T) {
 				if matchesAny(d, r.to) {
 					t.Errorf("%s imports %s: %s (docs/design/context-map.md §2)", pkg, d, r.why)
 				}
+			}
+		}
+	}
+}
+
+// stdlibOnly are packages that import nothing outside the standard library,
+// not even a third-party module: the audit journal's integrity rests on it
+// (docs/design/identity-audit.md §4).
+var stdlibOnly = []string{"audit"}
+
+func TestStdlibOnlyPackages(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	root := filepath.Dir(strings.TrimSpace(string(out)))
+	for _, pkg := range stdlibOnly {
+		cmd := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}} {{.Standard}}", "./"+pkg)
+		cmd.Dir = root
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("go list -deps ./%s: %v", pkg, err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			imp, std, _ := strings.Cut(line, " ")
+			if std != "true" && imp != module+"/"+pkg {
+				t.Errorf("%s depends on %s: it imports only the standard library (docs/design/context-map.md §2)", pkg, imp)
 			}
 		}
 	}

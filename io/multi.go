@@ -4,9 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 )
+
+// BaselineDisarmer is a driver whose first write after Start records the
+// outputs rather than sending them (a start-up baseline: the world at t=0
+// is not a command), and that can be told not to: a driver swapped in live
+// (#706) can then start from the current commands.
+type BaselineDisarmer interface{ DisarmBaseline() }
+
+// StartReporter says whether Start has run. A driver that has not been
+// started cannot be read (Modbus and OPC UA error), so Replace refuses one.
+type StartReporter interface{ Started() bool }
+
+// closedGate is the gate a child replaced out of a set gets: whatever it
+// still holds queued, it must not write any more.
+func closedGate() bool { return false }
 
 // NamedDriver is one member of a multi-driver set: the Driver itself plus
 // the name status rows and error messages know it by ("modbus", "eip-2").
@@ -35,6 +50,11 @@ type tagOwner interface {
 // by two children — so a merged read can never have two writers for one
 // key and a routed write always has exactly one destination.
 type Multi struct {
+	// set guards the composition (children, ownership, askers, gates)
+	// against Replace (#706): reads, writes, quality and the rest take it
+	// shared; Replace takes it alone, so a swap lands between two calls.
+	set sync.RWMutex
+
 	children []NamedDriver
 	inOwner  map[string]int // input tag name → index into children
 	outOwner map[string]int // output tag name → index into children
@@ -50,6 +70,10 @@ type Multi struct {
 	// stays.
 	mu      sync.Mutex
 	scratch []Values
+
+	// gates are the write gates installed so far (SetWriteGate, then any
+	// SetPlainGate), in order, replayed onto a child Replace brings in.
+	gates []func(Driver)
 }
 
 // NewMulti composes drivers into one. Every child must be named, the names
@@ -107,12 +131,129 @@ func NewMulti(children ...NamedDriver) (*Multi, error) {
 // Children returns the composed drivers in configuration order — for status
 // reporting, which keeps one row per child rather than blending them.
 func (m *Multi) Children() []NamedDriver {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	return append([]NamedDriver(nil), m.children...)
+}
+
+// Child returns the composed driver named name.
+func (m *Multi) Child(name string) (Driver, bool) {
+	m.set.RLock()
+	defer m.set.RUnlock()
+	for _, c := range m.children {
+		if c.Name == name {
+			return c.Driver, true
+		}
+	}
+	return nil, false
+}
+
+// Gate installs on d the write gates installed on the set so far, as
+// Replace will: call it before starting a replacement, so it never runs,
+// and never arms a leader's baseline on a standby, ungated.
+func (m *Multi) Gate(d Driver) {
+	m.set.RLock()
+	defer m.set.RUnlock()
+	for _, g := range m.gates {
+		g(d)
+	}
+}
+
+// sameDriver reports whether a and b are the same driver value, without
+// panicking on a type that cannot be compared.
+func sameDriver(a, b Driver) bool {
+	ta := reflect.TypeOf(a)
+	if ta != reflect.TypeOf(b) || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+// Replace puts d in place of the child named name and returns the child it
+// replaced (#706: an I/O configuration applied live). The same checks as
+// NewMulti apply: d is not nil and declares its tags, and none of them is
+// owned by another child. Routing, the cached OutputsRequesters and the
+// write gates installed so far follow the new child, and the old child is
+// gated closed, so it writes nothing more while it winds down; the rest of
+// the set is untouched. Gate and Start d before (an unstarted d is refused,
+// as is the current child itself), and Stop the old child after, outside
+// any lock a scan holds: Replace itself only swaps.
+func (m *Multi) Replace(name string, d Driver) (Driver, error) {
+	if d == nil {
+		return nil, fmt.Errorf("multi-driver: the replacement for %q is nil", name)
+	}
+	if sr, ok := d.(StartReporter); ok && !sr.Started() {
+		return nil, fmt.Errorf("multi-driver: the replacement for %q has not been started; start it (gated with Gate) first, or every input of the set reads stale", name)
+	}
+	owner, ok := d.(tagOwner)
+	if !ok {
+		return nil, fmt.Errorf("multi-driver: the replacement for %q (%T) does not declare which tags it owns (no InputNames/OutputNames)", name, d)
+	}
+	m.set.Lock()
+	defer m.set.Unlock()
+	at := -1
+	for i, c := range m.children {
+		if c.Name == name {
+			at = i
+		}
+	}
+	if at < 0 {
+		return nil, fmt.Errorf("multi-driver: no driver named %q to replace", name)
+	}
+	if sameDriver(m.children[at].Driver, d) {
+		return nil, fmt.Errorf("multi-driver: %q is already that driver; replacing it with itself would hand it back as the old one to stop", name)
+	}
+	in, out := map[string]int{}, map[string]int{}
+	for tag, i := range m.inOwner {
+		if i != at {
+			in[tag] = i
+		}
+	}
+	for tag, i := range m.outOwner {
+		if i != at {
+			out[tag] = i
+		}
+	}
+	for _, tag := range owner.InputNames() {
+		if j, dup := in[tag]; dup {
+			return nil, fmt.Errorf("multi-driver: input tag %q of the replacement for %q is delivered by driver %q already", tag, name, m.children[j].Name)
+		}
+		in[tag] = at
+	}
+	for _, tag := range owner.OutputNames() {
+		if j, dup := out[tag]; dup {
+			return nil, fmt.Errorf("multi-driver: output tag %q of the replacement for %q is accepted by driver %q already", tag, name, m.children[j].Name)
+		}
+		out[tag] = at
+	}
+	for _, g := range m.gates {
+		g(d)
+	}
+	old := m.children[at].Driver
+	// The old child writes nothing more, whatever it holds queued (a write
+	// held across a disconnect, a rewrite: keep-alive) until it is stopped.
+	if g, ok := old.(interface{ SetWriteGate(func() bool) }); ok {
+		g.SetWriteGate(closedGate)
+	}
+	m.children[at].Driver = d
+	m.inOwner, m.outOwner = in, out
+	m.askers = m.askers[:0]
+	for _, c := range m.children {
+		if r, ok := c.Driver.(OutputsRequester); ok {
+			m.askers = append(m.askers, r)
+		}
+	}
+	m.mu.Lock()
+	m.scratch[at] = nil // the old child's delivery map is not the new one's
+	m.mu.Unlock()
+	return old, nil
 }
 
 // InputNames merges the children's input tags; with ownership disjoint the
 // union is exact. Sorted, like every child's own list.
 func (m *Multi) InputNames() []string {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	out := make([]string, 0, len(m.inOwner))
 	for tag := range m.inOwner {
 		out = append(out, tag)
@@ -123,6 +264,8 @@ func (m *Multi) InputNames() []string {
 
 // OutputNames merges the children's writable tags.
 func (m *Multi) OutputNames() []string {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	out := make([]string, 0, len(m.outOwner))
 	for tag := range m.outOwner {
 		out = append(out, tag)
@@ -154,6 +297,8 @@ func (m *Multi) ReadInputs() (Values, error) {
 // per-child partial delivery is a quality story (Stale via Quality()), not
 // a partial-read story.
 func (m *Multi) ReadInputsInto(dst Values) error {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var errs []error
@@ -200,6 +345,8 @@ func (m *Multi) ReadInputsInto(dst Values) error {
 // to a tag it has no binding for. Errors from several children are joined,
 // each naming its child.
 func (m *Multi) WriteOutputs(vals Values) error {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	perChild := make([]Values, len(m.children))
 	for k, v := range vals {
 		i, ok := m.outOwner[k]
@@ -227,6 +374,8 @@ func (m *Multi) WriteOutputs(vals Values) error {
 // merge can never see two opinions about one tag; children that report
 // nothing contribute nothing, exactly as if they ran alone.
 func (m *Multi) Quality() map[string]Quality {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	var out map[string]Quality
 	for _, c := range m.children {
 		qr, ok := c.Driver.(QualityReporter)
@@ -248,6 +397,8 @@ func (m *Multi) Quality() map[string]Quality {
 // a read-and-clear, and the one push the runtime makes hands every child
 // its outputs, so it answers them all at once.
 func (m *Multi) OutputsWanted() bool {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	wanted := false
 	for _, r := range m.askers {
 		if r.OutputsWanted() {
@@ -262,6 +413,8 @@ func (m *Multi) OutputsWanted() bool {
 // Every such child is asked (each may look at its write gate). A set with
 // no such child is always ready.
 func (m *Multi) InputsReady() bool {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	ready := true
 	for _, c := range m.children {
 		if r, ok := c.Driver.(InputsReadier); ok && !r.InputsReady() {
@@ -275,6 +428,8 @@ func (m *Multi) InputsReady() bool {
 // loop, a Sparkplug host's MQTT session); a child without Start has
 // nothing to start, exactly as `naut run` treats a lone driver.
 func (m *Multi) Start(ctx context.Context) {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	for _, c := range m.children {
 		if s, ok := c.Driver.(interface{ Start(context.Context) }); ok {
 			s.Start(ctx)
@@ -290,10 +445,16 @@ func (m *Multi) Start(ctx context.Context) {
 // child without a gate (eip) is skipped, exactly as it would be running
 // alone.
 func (m *Multi) SetWriteGate(gate func() bool) {
-	for _, c := range m.children {
-		if g, ok := c.Driver.(interface{ SetWriteGate(func() bool) }); ok {
+	install := func(d Driver) {
+		if g, ok := d.(interface{ SetWriteGate(func() bool) }); ok {
 			g.SetWriteGate(gate)
 		}
+	}
+	m.set.Lock()
+	defer m.set.Unlock()
+	m.gates = append(m.gates, install)
+	for _, c := range m.children {
+		install(c.Driver)
 	}
 }
 
@@ -304,8 +465,11 @@ func (m *Multi) SetWriteGate(gate func() bool) {
 // that has nothing to do with redundancy. `naut run` gives it one in
 // every project, open while the scans are live, so a hung scan stops its
 // keep-alives (#625). A driver that reads "a gate is installed" as "I am
-// one replica of a redundant set" (optommp's passive standby, a
-// Sparkplug host's client ID and STATE hand-over) is not PlainGated.
+// one replica of a redundant set" (a Sparkplug host's client ID and STATE
+// hand-over) is not PlainGated. SetPlainGate calls PlainWriteGate after
+// installing the gate, so a driver that does treat a redundancy lease
+// differently (optommp's passive standby, #865) can tell the two apart;
+// for the rest it is only the marker.
 type PlainGated interface {
 	SetWriteGate(func() bool)
 	PlainWriteGate()
@@ -316,6 +480,10 @@ type PlainGated interface {
 // how many drivers took the gate.
 func SetPlainGate(d Driver, gate func() bool) int {
 	if m, ok := d.(*Multi); ok {
+		m.set.Lock()
+		defer m.set.Unlock()
+		// Remembered, so a child Replace brings in gets it too.
+		m.gates = append(m.gates, func(c Driver) { SetPlainGate(c, gate) })
 		n := 0
 		for _, c := range m.children {
 			n += SetPlainGate(c.Driver, gate)
@@ -324,6 +492,7 @@ func SetPlainGate(d Driver, gate func() bool) int {
 	}
 	if g, ok := d.(PlainGated); ok {
 		g.SetWriteGate(gate)
+		g.PlainWriteGate() // so a driver can tell this gate from a redundancy lease
 		return 1
 	}
 	return 0
@@ -333,6 +502,8 @@ func SetPlainGate(d Driver, gate func() bool) int {
 // says goodbye on the wire (a Sparkplug host's STATE death certificate)
 // does it on a session nothing has pulled down yet.
 func (m *Multi) Stop() {
+	m.set.RLock()
+	defer m.set.RUnlock()
 	for i := len(m.children) - 1; i >= 0; i-- {
 		if s, ok := m.children[i].Driver.(interface{ Stop() }); ok {
 			s.Stop()

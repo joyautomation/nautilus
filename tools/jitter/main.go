@@ -173,8 +173,11 @@ type gcReport struct {
 }
 
 type report struct {
-	Tool    string       `json:"tool"`
-	Started time.Time    `json:"started"`
+	Tool    string    `json:"tool"`
+	Started time.Time `json:"started"`
+	// Invalid says why the numbers must not be used: the run guard stopped
+	// the run, or a priority asked for was withdrawn (guard.go).
+	Invalid string       `json:"invalid,omitempty"`
 	Config  config       `json:"config"`
 	Env     env          `json:"env"`
 	Tasks   []taskReport `json:"tasks"`
@@ -282,8 +285,23 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "jitter: %s on %s (%s, %s), %d tasks, %v…\n",
 		rep.Env.GoVersion, rep.Env.Hostname, rep.Env.CPUModel, rep.Env.Kernel, len(tasks)+1, c.Duration)
+	// The run guard (guard.go): stop a run the box cannot keep up with, and
+	// behind it a kernel timer that kills this process, whatever its
+	// threads are doing, a little after the guard's own deadline.
+	gc := defaultGuard(c.Duration)
+	if err := armKillTimer(gc.Deadline + 20*time.Second); err != nil {
+		fmt.Fprintln(os.Stderr, "jitter: warning: no kill timer (", err, "); only the run guard bounds this run")
+	}
 	start := time.Now()
-	rt.Run(ctx)
+	reason, finished := runGuarded(ctx, rt.Run, rt.Stats, gc)
+	if !finished {
+		fmt.Fprintln(os.Stderr, "jitter: stopped:", reason, "— the scan loops did not end; exiting without a report")
+		os.Exit(3)
+	}
+	if reason != "" {
+		fmt.Fprintln(os.Stderr, "jitter: stopped:", reason)
+		rep.Invalid = reason
+	}
 	elapsed := time.Since(start)
 	rep.Env.LoadEnd = readFirst("/proc/loadavg")
 
@@ -301,6 +319,11 @@ func main() {
 		})
 	}
 	rep.GC = readGC()
+	// Placement, checked again now: a priority withdrawn mid-run (and not
+	// caught by the guard's last look) must not leave a report saying FIFO.
+	if (c.CPU >= 0 || c.Priority > 0) && st.Sched.Error != "" && rep.Invalid == "" {
+		rep.Invalid = "the main task's placement did not hold to the end: " + st.Sched.Error
+	}
 
 	md := markdown(&rep, elapsed)
 	fmt.Print(md)
@@ -313,6 +336,9 @@ func main() {
 		must(os.WriteFile(filepath.Join(*out, "report.json"), append(js, '\n'), 0o644))
 		must(os.WriteFile(filepath.Join(*out, "report.md"), []byte(md), 0o644))
 		fmt.Fprintf(os.Stderr, "jitter: wrote %s/report.{json,md}\n", *out)
+	}
+	if rep.Invalid != "" {
+		os.Exit(3)
 	}
 }
 
@@ -475,6 +501,9 @@ func markdown(r *report, elapsed time.Duration) string {
 	var b strings.Builder
 	e := r.Env
 	fmt.Fprintf(&b, "## Scan lateness — %s, %s\n\n", e.Hostname, r.Started.Format("2006-01-02 15:04"))
+	if r.Invalid != "" {
+		fmt.Fprintf(&b, "**INVALID: %s.** Do not use these numbers.\n\n", r.Invalid)
+	}
 	rtk := ""
 	if e.PreemptRT {
 		rtk = " (PREEMPT_RT)"

@@ -33,7 +33,7 @@ func TestNautRunServesOPCUA(t *testing.T) {
 	}
 	bin := buildNautCLI(t, t.TempDir(), nil)
 	dir := t.TempDir()
-	apiAddr := freeAddr(t)
+	apiAddr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 	files := map[string]string{
 		"nautilus.yaml": `name: wetwell
 tasks:
@@ -90,6 +90,7 @@ END_PROGRAM
 		cmd.Process.Kill()
 		<-exited
 	})
+	apiAddr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 
 	get := func(path string) (int, string, bool) {
 		resp, err := http.Get("http://" + apiAddr + path)
@@ -242,7 +243,7 @@ func TestNautRunContinuesWhenOPCUAPortIsTaken(t *testing.T) {
 	}
 	bin := buildNautCLI(t, t.TempDir(), nil)
 	dir := t.TempDir()
-	apiAddr := freeAddr(t)
+	apiAddr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -272,8 +273,8 @@ opcua:
 	}
 	// Not a strings.Builder: exec copies the child's stderr into it from
 	// its own goroutine while the test reads it, a data race under -race.
-	var stderr lockedBuffer
-	cmd.Stderr = &stderr
+	var stdout, stderr lockedBuffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -283,6 +284,7 @@ opcua:
 		cmd.Process.Kill()
 		<-exited
 	})
+	apiAddr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 	deadline := time.Now().Add(30 * time.Second)
 	var body string
 	for {

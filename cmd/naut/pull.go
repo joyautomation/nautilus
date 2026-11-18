@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/apiclient"
 	"github.com/joyautomation/nautilus/internal/stproject"
 )
 
@@ -34,7 +35,10 @@ Usage:
   naut pull --host <controller> [--dir <project>] [--check]
 
 Flags:
-  --host    Controller hostname or IP serving the tag API (required)
+  --host    Controller hostname or IP serving the tag API (required).
+            A controller with a token answers a name not in its
+            NAUTILUS_ALLOWED_HOSTS only with the token: set NAUTILUS_TOKEN
+            here and naut pull sends it.
   --port    Tag API port (default 8080)
   --dir     Project directory (default ".")
   --check   Report drift and exit non-zero if the controller differs;
@@ -224,7 +228,13 @@ func fetchProgram(host string, port int, task string) (programInfo, error) {
 		url += "?task=" + task
 	}
 	client := http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return programInfo{}, err
+	}
+	// --host by name reaches a token controller only with its token (#819).
+	apiclient.Authorize(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return programInfo{}, fmt.Errorf("no controller at %s: %w", url, err)
 	}

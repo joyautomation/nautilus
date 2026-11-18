@@ -207,6 +207,29 @@ Without it both run best-effort and say so (the page's `NIO_ST_FIFO`,
 the log's `refused`, naut's `scan.sched`). naut needs it only for a
 task with `priority:`; the bench's scan task is at 40 once it is set.
 
+**The cycle is bounded** (`rtguard.h`, #836). Before it takes
+`SCHED_FIFO` the shim sets `RLIMIT_RTTIME`. A cycle that runs 200 ms
+without sleeping (it sleeps every 1 ms when healthy) gets `SIGXCPU`, and
+the handler moves the cycle thread back to normal priority until a
+restart. That frees the core either way. What follows depends on whether
+the cycle comes round again:
+
+- **A cycle that was merely slow comes round.** It logs `SCHED_FIFO
+  withdrawn`, the page's `NIO_ST_FIFO` drops, and it carries on at normal
+  priority.
+- **A cycle that is stuck doesn't** (inside the firmware's
+  `BeginWrite`, say). Nothing is logged, the bit never drops, and the
+  output watchdog never runs, because it runs on that same thread. The
+  output frame keeps its last values. The 500 ms kill never comes either:
+  the limit stops counting once the thread is no longer real-time. Only
+  naut sees it, when the page's cycle stamp goes stale for 100 ms.
+
+If the limit can't be set, the shim doesn't take FIFO at all.
+At 500 ms the kernel kills it, as a backstop. What the firmware then does
+with its ACF process, and what the output frame holds once the shim is
+gone, has not been tried on the bench. The shim's own output watchdog
+dies with it. The demotion is the path this is built for.
+
 The shim asks for priority 80 — over the firmware's interrupt threads
 (50), under `T_Cyclic100` (82), its network receive task (95) and the
 ESM (97–98); the FIFO table above is why not 50. A `nautilus_io.prio`
@@ -222,6 +245,12 @@ built and shipped beside `nautilus_io`) carries it instead. It raises
 `CAP_SYS_NICE` into its inheritable and ambient sets and execs
 `current/controller` beside it, with its own arguments and pid, so
 whatever release `current` points at runs with that one capability.
+First it sets `RLIMIT_RTTIME` (200 ms of real-time CPU without blocking,
+then `SIGXCPU`; at 500 ms, `SIGKILL`; `NAUTILUS_RT_LIMIT_MS` changes it,
+and a stricter limit already in force is kept). Limits survive the exec,
+so whatever it starts is bounded, including a program that sets no limit
+of its own, such as `tools/jitter`. naut sets the same limit itself, and
+demotes instead of dying.
 
 Install it once, as admin, in the directory that holds `current`:
 

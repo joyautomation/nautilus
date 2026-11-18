@@ -374,6 +374,31 @@
           "minimum": 1,
           "maximum": 99,
           "description": "Run this task's thread under SCHED_FIFO at this priority (Linux). Needs CAP_SYS_NICE (setcap cap_sys_nice+ep on the binary) or an rtprio rlimit; a refused request is logged and shown in the task's stats, and the task runs at normal priority."
+        },
+        "share-cpu": {
+          "type": "boolean",
+          "description": "Pin to cpu: even where another program already runs a real-time thread above this task's priority (a vendor runtime or I/O shim, most likely), which is otherwise refused at start, with the task running unpinned at normal priority. Default false."
+        },
+        "priority-guard": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Bounds the task while it runs at priority: past either bound its thread goes back to normal scheduling until a restart, logged and shown in its scan.sched, so a runaway task cannot starve its core. Leave it out for the defaults.",
+          "properties": {
+            "overruns": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Scans in a row that each take longer than the period. Default 50."
+            },
+            "scan-multiple": {
+              "type": "number",
+              "minimum": 2,
+              "description": "One scan in progress for longer than this many periods. Default 20."
+            },
+            "rt-limit": {
+              "$ref": "#/definitions/duration",
+              "description": "How long a real-time thread may run without blocking before the kernel's RLIMIT_RTTIME demotes every task with priority:, from 10ms to 200ms: it only tightens the 200ms default, never loosens it. One limit per process: the strictest of every task's rt-limit and NAUTILUS_RT_LIMIT_MS is the one in force. Only on a task with priority:."
+            }
+          }
         }
       }
     },
@@ -1463,7 +1488,7 @@
       "properties": {
         "update-time": {
           "type": "string",
-          "description": "Default update time for devices, at least 16ms."
+          "description": "Default update time for devices, at least 16ms. A nautilus device (profinet-manifest) takes only 16ms, 32ms, 64ms, 128ms, 256ms or 512ms (powers of two at a 1ms send clock), not below its min-cycle; with none set, the deploy rounds up to the first of those at or above min-cycle."
         },
         "devices": {
           "type": "array",
@@ -1500,7 +1525,7 @@
         },
         "update-time": {
           "type": "string",
-          "description": "Update time, at least 16ms."
+          "description": "Update time, at least 16ms. For a profinet-manifest device: 16ms, 32ms, 64ms, 128ms, 256ms or 512ms, not below its min-cycle; when absent (here and on the IO system), the deploy rounds up to the first of those at or above min-cycle."
         },
         "modules": {
           "type": "array",

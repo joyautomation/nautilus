@@ -98,7 +98,7 @@ type slowRun struct {
 func startSlowRun(t *testing.T, bin string, n int64) *slowRun {
 	t.Helper()
 	dir := t.TempDir()
-	addr := freeAddr(t)
+	addr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 	files := map[string]string{
 		"nautilus.yaml": `name: slowstop
 tasks:
@@ -134,12 +134,15 @@ END_PROGRAM
 			r.cmd.Env = append(r.cmd.Env, kv)
 		}
 	}
-	r.cmd.Stderr = r.stderr
+	stdout := &lockedBuffer{}
+	r.cmd.Stdout, r.cmd.Stderr = stdout, r.stderr
 	if err := r.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	go func() { r.cmd.Wait(); close(r.exited) }()
 	t.Cleanup(r.kill)
+	addr = apiAddrFromBanner(t, stdout.String, r.exited, r.stderr.String)
+	r.addr = addr
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if resp, err := http.Get("http://" + addr + "/api/state"); err == nil {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/hw"
+	"github.com/joyautomation/nautilus/internal/apiclient"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/redfish/mockup"
 )
@@ -393,6 +394,9 @@ func StateFetcher(base string, patterns []string) func(context.Context) (map[str
 		if err != nil {
 			return nil, err
 		}
+		// A token controller reached by name answers only with its
+		// token (#819).
+		apiclient.Authorize(req)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err

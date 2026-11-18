@@ -120,7 +120,7 @@ func TestOnlineEditsRequireTheTokenButReadsStayOpen(t *testing.T) {
 	h := New(rt, Options{OnlineEdits: true, AuthToken: "s3cret"}).Handler()
 
 	send := func(method, path, body, auth string) int {
-		req := httptest.NewRequest(method, "http://plc.local"+path, bytes.NewBufferString(body))
+		req := httptest.NewRequest(method, "http://localhost"+path, bytes.NewBufferString(body))
 		req.Header.Set("Origin", "http://plc.local") // same-origin: only the token can tell these apart
 		if auth != "" {
 			req.Header.Set("Authorization", auth)

@@ -165,3 +165,51 @@ func TestSiemensServeLogsOut(t *testing.T) {
 		t.Fatalf("sessions after a failed start = %d, want 0", n)
 	}
 }
+
+// TestSiemensServeEndsOpenStreamsOnStop: VS Code holds /api/stream open;
+// stopping serve must end it at once (not after Shutdown's 5 s timeout)
+// and still log the Web API session out.
+func TestSiemensServeEndsOpenStreamsOnStop(t *testing.T) {
+	s := webapitest.New()
+	s.Users["naut"] = webapitest.User{Password: "pw", Permissions: []string{"read_value"}}
+	s.Vars[`"Tags"`] = &webapitest.Var{Datatype: "struct"}
+	s.Vars[`"Tags".Level`] = &webapitest.Var{Datatype: "real", Value: 1.0}
+	url, pin := s.Start(t)
+	c, err := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := siemensServeConfig{host: url, listen: "127.0.0.1:0", poll: 10 * time.Millisecond, roots: []facade.Root{{DB: "Tags"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan string, 1)
+	done := make(chan int, 1)
+	go func() { done <- serveSiemens(ctx, cfg, c, io.Discard, io.Discard, ready) }()
+	addr := <-ready
+
+	res, err := http.Get("http://" + addr + "/api/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	buf := make([]byte, 64)
+	if _, err := res.Body.Read(buf); err != nil {
+		t.Fatalf("the stream sent nothing: %v", err)
+	}
+
+	start := time.Now()
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("serve waited on the open stream instead of ending it")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("stopping took %s with a stream open", took)
+	}
+	if n := s.Sessions(); n != 0 {
+		t.Fatalf("sessions after stop = %d, want 0", n)
+	}
+}

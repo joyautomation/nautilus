@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/profinet"
-	"github.com/joyautomation/nautilus/profinet/gsdml"
 )
 
 const profinetUsage = `naut profinet — PROFINET IO device tools (offline)
@@ -83,8 +82,7 @@ func runProfinetGSDML(args []string) int {
 		}
 		when = t
 	}
-	d := gsdml.Device{Identity: m.Identity(), Subslots: m.Subslots(), MinCycle: time.Duration(m.MinCycle)}
-	body, err := gsdml.Generate(d)
+	f, err := profinetGSDML(m, when)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut profinet gsdml:", err)
 		return 1
@@ -93,12 +91,12 @@ func runProfinetGSDML(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut profinet gsdml:", err)
 		return 1
 	}
-	out := filepath.Join(*dir, gsdml.Filename(d, when))
-	if err := os.WriteFile(out, body, 0o644); err != nil {
+	out := filepath.Join(*dir, f.Name)
+	if err := os.WriteFile(out, f.Body, 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "naut profinet gsdml:", err)
 		return 1
 	}
-	fmt.Printf("wrote %s: station %s, %d subslot(s); import it into the PLC's engineering tool\n", out, m.Station, len(d.Subslots))
+	fmt.Printf("wrote %s: station %s, %d subslot(s); import it into the PLC's engineering tool\n", out, m.Station, len(m.Subslots()))
 	return 0
 }
 

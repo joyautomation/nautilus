@@ -21,7 +21,7 @@ func call(t *testing.T, srv *Server, method, path, body string, mod ...func(*htt
 	} else {
 		rd = &bytes.Buffer{}
 	}
-	req := httptest.NewRequest(method, path, rd)
+	req := httptest.NewRequest(method, "http://localhost"+path, rd)
 	for _, m := range mod {
 		m(req)
 	}
@@ -141,11 +141,11 @@ func TestForceAuth(t *testing.T) {
 	}); rec.Code != 200 {
 		t.Errorf("token force = %d, want 200", rec.Code)
 	}
-	// Reads stay open.
+	// Reads by a trusted Host need no token.
 	if rec := call(t, tok, "GET", "/api/forces", ""); rec.Code != 200 {
 		t.Errorf("GET /api/forces = %d", rec.Code)
 	}
-	if rec := call(t, srv, "OPTIONS", "/api/forces/Level", ""); !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "DELETE") {
+	if rec := call(t, srv, "OPTIONS", "/api/forces/Level", "", func(r *http.Request) { r.Header.Set("Origin", "http://localhost:5173") }); !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "DELETE") {
 		t.Error("CORS preflight does not allow DELETE")
 	}
 }

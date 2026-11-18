@@ -277,7 +277,14 @@ holds the Linux capability to ask for `SCHED_FIFO`, and the processes it
 starts do not inherit it. Pin the shim to CPU 1 (`echo 1 >
 io/nautilus_io.cpu` beside the binary) and naut to CPU 0: CPU 0 carries
 the firmware's periodic real-time tasks, and naut's threads sharing the
-shim's core were most of its lateness.
+shim's core were most of its lateness. Never pin a naut task with
+`priority:` to the shim's CPU: nautilus refuses it at start (the shim's
+FIFO 80 thread is above it) and runs the task unpinned at normal
+priority, and says so on the banner. That core also carries the NIC's
+receive path: `stmmacNapiRxTsk` at FIFO 1, the eth0 IRQ thread at 50 and
+`stmmacRxTsk` at 95. A real-time task above the NAPI thread there starves
+the network. It happened on the bench: the box was unreachable for hours,
+until the test ended.
 
 To run the shim at `SCHED_FIFO`, the controller's owner gives both
 binaries the `cap_sys_nice` file capability once, as root
@@ -328,7 +335,8 @@ protocol driver's input, which reads as zero until delivered (see [Inputs
 from a device that is
 down](/guides/tag-model/#inputs-from-a-device-that-is-down)). `__Outages` (DINT) counts the times it went false.
 `__WatchdogTrips` (DINT) counts the times the output frame went to zero
-without the driver choosing it: naut stalled for longer than
+without the driver choosing it (a closed [write
+gate](#when-the-scans-stop-the-write-gate) is the driver's choice): naut stalled for longer than
 `output-watchdog` between two writes to the page, the shim reported its
 watchdog had fired, or the shim restarted. A naut killed and restarted
 by the keepalive finds the shim's watchdog bit set by its predecessor's
@@ -374,6 +382,34 @@ Pump1_Run := Pump1_Cmd AND NOT held;
 start: with it on, every redeploy that outlasts the shim's 1 s watchdog
 holds until acknowledged), and its `naut test` suite covers the hold,
 the acknowledge, the restart case and the hold switched off.
+
+## When the scans stop: the write gate
+
+`naut run` keeps a write gate on the driver, open while the program's
+scans are live. It closes on a scan that hangs, or a task starved past
+its slot. Closed, the driver writes nothing to the controller, and what
+the outputs then do depends on the transport:
+
+- **shm:** the page isn't written, its heartbeat included. The shim's
+  output watchdog (`output-watchdog`, 1 s by default) drives the output
+  frame to **zero**. That's a safe state, provided zero is safe for your
+  outputs. The driver chose it, so it doesn't count in `__WatchdogTrips`.
+- **gRPC, or shm with `output-watchdog: 0`:** nothing is written, and the
+  outputs **hold their last values**. Nothing on these routes takes them
+  to a safe state, and nautilus won't invent output values to send. The
+  hold shows in three places only: an error in the log, `GateHolds` in the
+  driver's health, and the status row ("outputs held (no safe state…)").
+  No status binding reports it, and the outputs carry no quality.
+- **BusConductor:** the gate is looked at before each request the
+  handshake writes. Once it's closed, the bus is only read, and the rest
+  of the handshake runs, before any output, once the gate opens.
+
+The gate is looked at once per poll, just before the write, so a gate that
+closes after that look still lets that one write out. When the gate opens
+again, nothing is written until the program's next scan hands the driver
+its outputs, and then the whole frame goes out. **For production with
+outputs, use the shm transport with its output watchdog on.** It's the
+only route with a safe state when the program stops.
 
 ## Start on boot
 
@@ -429,6 +465,11 @@ controller answered ssh.
 
 ## What it does not do yet
 
+- **Redundancy.** A project with a `plcnext` driver and a `redundancy:`
+  section is refused at load (`naut check` says so). The driver writes
+  the output image from its own loop, every scan on the shm route,
+  without asking whether this replica leads, so a standby would drive the
+  outputs. PLCnext under redundancy is #710.
 - **Per-channel quality.** The driver has one quality for the whole
   image: the bus `RUN` bit. False makes every input `bad`.
 - **The status tags on the controller.** `__Online`, `__Outages` and

@@ -4,6 +4,12 @@
 
 ### Added
 
+- **A demoted task says so** (#836). The scan diagnostics show
+  `DEMOTED (overrun)` or `DEMOTED (CPU limit)` for a task whose real-time
+  priority the runtime withdrew mid-run, instead of `REFUSED`, which now
+  means only a request the OS turned down at start (`schedVerdict`,
+  `SchedStats.demoted` and `guard`).
+
 - **Sense lines and state words on a mimic's labels** (James's review of
   the hand-built lift station, 11-15). A label's `at` names the point its
   reading belongs to, and a dashed sense line joins them. A label's

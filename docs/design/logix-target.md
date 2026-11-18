@@ -114,8 +114,8 @@ This is the part that makes the project plausible rather than speculative.
 
 - `eip/cip/` (~2.9k LOC) — a pure-Go EtherNet/IP + CIP stack. Encapsulation,
   CPF, message router, EPATH with both symbolic (0x91) and logical/instance
-  addressing, Forward_Open (standard + large), multi-service packets, Class 1
-  implicit I/O.
+  addressing, Forward_Open (standard + large), multi-service packets. (It also carried Class 1
+  implicit I/O, never wired to anything; removed in #861.)
 - `eip/logix/` (~1.7k LOC) — the Logix tag surface: Class 3 connected
   messaging, `ReadTag`/`ReadTagFragmented`/`WriteTag`, batched `ReadTags`,
   symbol browse over class 0x6B, **UDT template upload** over class 0x6C,

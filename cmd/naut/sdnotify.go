@@ -116,9 +116,10 @@ func (w *liveWatch) live(now time.Time) (bool, string) {
 
 // minWatchdog is the shortest WatchdogSec= naut runs without a warning.
 // A scan counts as stuck after runtime.StallBound (1 to 2 s with the 4 s
-// lease), found on the elector's next check (every second), and the
-// heartbeat goes quiet at the next beat: about 2 to 4 s from the start of
-// the scan. Twice the lease leaves room for one slow scan, a busy
+// lease), and so does a task starved that long past its slot (#858), found
+// on the elector's next check (every second); the heartbeat goes quiet at
+// the next beat: about 2 to 4 s from the start of the scan or the missed
+// slot. Twice the lease leaves room for one slow scan, a busy
 // machine's late checks and a beat that just missed, so that a scan that
 // overruns but finishes does not get a healthy controller killed.
 const minWatchdog = 2 * localGateLease

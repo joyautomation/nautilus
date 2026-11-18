@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/plcnext/plcnexttest"
 )
 
 // The bench's device list imports to the hand-corrected manifest in
@@ -166,8 +168,8 @@ func ptr(n int) *int { return &n }
 // BusModules reads CONFIGURED and NUM_MODULES and writes nothing: an
 // import never starts or reconfigures a bus.
 func TestBusModulesReadsTheCountWithoutTouchingTheBus(t *testing.T) {
-	f := newFakeGDS()
-	addr := serve(t, f)
+	f := plcnexttest.New()
+	addr := SocketTarget(f.Listen(t))
 	ctx := context.Background()
 	c, err := Dial(ctx, addr)
 	if err != nil {
@@ -177,14 +179,12 @@ func TestBusModulesReadsTheCountWithoutTouchingTheBus(t *testing.T) {
 	if _, err := BusModules(ctx, c, ""); err == nil || !strings.Contains(err.Error(), "naut plcnext browse") {
 		t.Errorf("an unconfigured bus: %v", err)
 	}
-	f.mu.Lock()
-	f.bools["configured"] = true
-	f.mu.Unlock()
+	f.SetConfigured(true)
 	n, err := BusModules(ctx, c, DefaultComponent)
 	if err != nil || n != 4 {
 		t.Fatalf("NUM_MODULES = %d, %v", n, err)
 	}
-	if w := f.wrote(); w != "" {
+	if w := wrote(f); w != "" {
 		t.Errorf("BusModules wrote: %s", w)
 	}
 	bench := DeviceList{Devices: make([]Device, 4)}

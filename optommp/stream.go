@@ -305,7 +305,7 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 			return err
 		}
 		polled = true
-		if !d.gateOpen() {
+		if !d.leads() {
 			return errSwitch // standing by: stop using the stream (see standbyNote)
 		}
 		d.requests.Store(int64(n))
@@ -315,7 +315,7 @@ func (d *Driver) streamLoop(ctx context.Context, c *Client, uc *net.UDPConn) (po
 		return nil
 	}
 	onCheck := func() error {
-		if !d.gateOpen() { // a look (see SetWriteGate), even with no datagram
+		if !d.leads() { // a look (see SetWriteGate), even with no datagram
 			return errSwitch // standing by: stop using the stream (see standbyNote)
 		}
 		idle := time.Since(last)

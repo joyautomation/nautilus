@@ -259,12 +259,12 @@ func LoadManifest(r io.Reader) (Manifest, error) {
 	for _, t := range y.Tags {
 		tag := Tag{Name: t.Name, Type: t.Type, Source: t.Source, Members: map[string]Member{}}
 		for k, v := range t.Members {
-			tag.Members[k] = Member{OID: v.OID, Binding: v.Binding}
+			tag.Members[k] = Member(v)
 		}
 		m.Tags = append(m.Tags, tag)
 	}
 	for _, w := range y.Writes {
-		m.Writes = append(m.Writes, Write{Name: w.Name, Tag: w.Tag, Member: w.Member, OID: w.OID, Set: w.Set})
+		m.Writes = append(m.Writes, Write(w))
 	}
 	return m, nil
 }

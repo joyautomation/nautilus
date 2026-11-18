@@ -260,10 +260,9 @@ func (d *Driver) PollOnce(ctx context.Context) {
 		}
 		d.connected = false
 		d.lastErr = err.Error()
-		switch {
-		case d.backoff == 0:
+		if d.backoff == 0 {
 			d.backoff = d.BackoffMin
-		case d.backoff < d.BackoffMax:
+		} else {
 			d.backoff *= 2
 		}
 		if d.backoff > d.BackoffMax {

@@ -182,7 +182,9 @@ func (f *Facade) Handler() http.Handler {
 	mux.HandleFunc("GET /api/program/history", programGone)
 	mux.HandleFunc("POST /api/program/rollback", programLocked)
 	mux.HandleFunc("POST /api/program/activate", programLocked)
-	return mux
+	// The facade's own routes (the program source among them) keep the
+	// server's Host rule (#819), as the server's routes do.
+	return f.srv.GuardHost(mux)
 }
 
 // The messages are what the extension shows: it surfaces a refused

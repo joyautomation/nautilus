@@ -132,6 +132,28 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 	return f, nil
 }
 
+// RootsFromWriter turns siemens/writer's Output.Roots (a nautilus scope →
+// a quoted DB name: "" → `"Tags"`, "Main" → `"Main_DB"`) into the roots to
+// browse, so serve binds exactly the names the writer generated. The order
+// is stable: the tags DB first, then the programs by name.
+func RootsFromWriter(roots map[string]string) []Root {
+	var out []Root
+	var progs []string
+	for scope := range roots {
+		if scope != "" {
+			progs = append(progs, scope)
+		}
+	}
+	sort.Strings(progs)
+	if db, ok := roots[""]; ok {
+		out = append(out, Root{DB: strings.Trim(db, `"`)})
+	}
+	for _, p := range progs {
+		out = append(out, Root{DB: strings.Trim(roots[p], `"`), Prefix: p})
+	}
+	return out
+}
+
 func rootNames(rs []Root) string {
 	var ns []string
 	for _, r := range rs {
@@ -173,7 +195,8 @@ func (f *Facade) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/program", programLocked)
 	mux.HandleFunc("POST /api/program/rollback", programLocked)
 	mux.HandleFunc("POST /api/program/activate", programLocked)
-	return mux
+	// The facade's own routes keep the server's Host rule (#819).
+	return f.srv.GuardHost(mux)
 }
 
 // The messages are what the extension shows.

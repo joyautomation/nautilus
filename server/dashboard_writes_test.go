@@ -131,7 +131,7 @@ func dashboardRun(t *testing.T, rt *runtime.Runtime, tags map[string]any, expand
 		t.Skip("node not installed — cannot run the dashboard script")
 	}
 	rec := httptest.NewRecorder()
-	New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
 	var meta any
 	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
 		t.Fatal(err)

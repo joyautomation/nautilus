@@ -40,6 +40,7 @@ esac
 type boxEnv struct {
 	t                *testing.T
 	root, state, sd  string
+	bin, units       string
 	env              []string
 	good, good2, bad string
 }
@@ -56,6 +57,7 @@ func newBoxEnv(t *testing.T) *boxEnv {
 	e := &boxEnv{t: t, root: filepath.Join(dir, "opt"), state: filepath.Join(dir, "state"), sd: filepath.Join(dir, "sd")}
 	bin := filepath.Join(dir, "bin")
 	units := filepath.Join(dir, "units")
+	e.bin, e.units = bin, units
 	for _, d := range []string{e.root, e.state, e.sd, bin, units} {
 		os.MkdirAll(d, 0o755)
 	}
@@ -209,5 +211,117 @@ func TestDeployBoxRedeployWhileDown(t *testing.T) {
 	}
 	if e.link("current") != "one" || !e.running() {
 		t.Errorf("after it: current %q, running %v; want one, running", e.link("current"), e.running())
+	}
+}
+
+// prepRestore installs a release, puts OLD in retain.json and uploads a
+// backup whose retain.json is NEW, ready for box.sh restore.
+func prepRestore(t *testing.T, e *boxEnv) {
+	t.Helper()
+	if out, code := e.deploy("install", "good", e.good); code != 0 {
+		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	os.WriteFile(filepath.Join(e.state, "retain.json"), []byte("OLD"), 0o644)
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "retain.json"), []byte("NEW"), 0o644)
+	os.WriteFile(filepath.Join(src, "release"), []byte("good"), 0o644)
+	tgz := filepath.Join(e.root, "incoming", "restore.tgz")
+	os.MkdirAll(filepath.Dir(tgz), 0o755)
+	if out, err := exec.Command("tar", "-C", src, "-czf", tgz, "retain.json", "release").CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+}
+
+// standIn puts a script named name first on box.sh's PATH. real is the
+// absolute path of the real command, for the script to hand on to.
+func standIn(t *testing.T, e *boxEnv, name, script string) {
+	t.Helper()
+	real, err := exec.LookPath(name)
+	if err != nil {
+		t.Skipf("no %s", name)
+	}
+	body := strings.ReplaceAll(script, "REAL", real)
+	if err := os.WriteFile(filepath.Join(e.bin, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A restore writes retain.json whole under another name, syncs, renames
+// it over the old one and syncs again (#842): at no point is there no
+// retain.json, or half of one, for a power cut to leave behind. A stand-in
+// sync records what retain.json holds each time: the old values at the
+// first sync, the new ones at the second. A stand-in rm refuses to remove
+// retain.json, so an order that removes it before the rename (sync, rm,
+// mv) fails here too.
+func TestDeployBoxRestoreNeverLeavesNoRetainFile(t *testing.T) {
+	e := newBoxEnv(t)
+	prepRestore(t, e)
+	syncs := filepath.Join(e.sd, "syncs")
+	os.WriteFile(filepath.Join(e.bin, "sync"), []byte("#!/bin/sh\n{ printf 'retain.json='; cat \"$NAUT_STATE/retain.json\" 2>/dev/null || printf MISSING; echo; } >>\"$FAKE_SD/syncs\"\n"), 0o755)
+	standIn(t, e, "rm", `for a; do case $a in */retain.json) echo "rm of retain.json: $*" >>"$FAKE_SD/rm"; exit 1 ;; esac; done
+exec REAL "$@"
+`)
+	if out, code := e.box("restore"); code != 0 {
+		t.Fatalf("restore: exit %d\n%s", code, out)
+	}
+	log, _ := os.ReadFile(syncs)
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if len(lines) < 2 || lines[0] != "retain.json=OLD" || lines[1] != "retain.json=NEW" {
+		t.Errorf("retain.json at each sync during restore: %q, want OLD then NEW", lines)
+	}
+	if strings.Contains(string(log), "MISSING") {
+		t.Errorf("there was a moment with no retain.json: %q", lines)
+	}
+	if rms, _ := os.ReadFile(filepath.Join(e.sd, "rm")); len(rms) != 0 {
+		t.Errorf("restore removed retain.json before the new one took its place: %s", rms)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.state, "retain.json")); string(b) != "NEW" {
+		t.Errorf("retain.json after restore = %q, want NEW", b)
+	}
+	if left, _ := filepath.Glob(filepath.Join(e.state, ".naut-new.*")); len(left) != 0 {
+		t.Errorf("restore left its temp file behind: %q", left)
+	}
+}
+
+// With an mv that has no -T (or refuses it), statewrite falls back to
+// remove-then-rename, which is not atomic, and says so; the restore still
+// lands.
+func TestDeployBoxStatewriteFallbackIsLogged(t *testing.T) {
+	e := newBoxEnv(t)
+	prepRestore(t, e)
+	standIn(t, e, "mv", `for a; do case $a in -*T*) exit 1 ;; esac; done
+exec REAL "$@"
+`)
+	out, code := e.box("restore")
+	if code != 0 {
+		t.Fatalf("restore: exit %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "mv -T failed") {
+		t.Errorf("the non-atomic fallback ran without a word:\n%s", out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.state, "retain.json")); string(b) != "NEW" {
+		t.Errorf("retain.json after the fallback = %q, want NEW", b)
+	}
+}
+
+// A temp file a power cut left behind (older than 10 minutes) is cleared by
+// the next write; a fresh one, which may be a concurrent run's, is not.
+func TestDeployBoxStatewriteClearsStaleTempFiles(t *testing.T) {
+	e := newBoxEnv(t)
+	prepRestore(t, e)
+	stale := filepath.Join(e.state, ".naut-new.11111")
+	fresh := filepath.Join(e.state, ".naut-new.22222")
+	os.WriteFile(stale, []byte("x"), 0o644)
+	os.WriteFile(fresh, []byte("y"), 0o644)
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(stale, old, old)
+	if out, code := e.box("restore"); code != 0 {
+		t.Fatalf("restore: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("the stale temp file is still there")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Error("a fresh temp file (maybe a concurrent run's) was removed")
 	}
 }

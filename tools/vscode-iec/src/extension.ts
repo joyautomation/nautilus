@@ -55,6 +55,7 @@ import { registerDiagramDescriptions } from "./diagramXref";
 import { IS_WEB, registerPlatform } from "./platform";
 import { registerAgentsMd } from "./agentsMd";
 import { runPreviewKey } from "./diagramKeys";
+import { apiFetch, initApiAuth } from "./apiFetch";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -109,6 +110,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Before anything resolves the CLI: the managed install's directory is
   // part of the search.
   initCli(context);
+  // Where the origins the user lets their token go to are remembered.
+  initApiAuth(context);
   // Real-machine features (a test harness writing files, installing the
   // CLI, Logix, compiling user components) stay out of the web build, the
   // browser playground: platform.ts.
@@ -280,7 +283,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // Probe once for immediate feedback; the live-values stream retries
       // on its own either way, so a miss here is a warning, not a failure.
       try {
-        const res = await fetch(url + "/api/state", { signal: AbortSignal.timeout(3000) });
+        const res = await apiFetch(url + "/api/state", { signal: AbortSignal.timeout(3000) });
         if (!res.ok) throw new Error(res.statusText);
         void notifyInfo(`nautilus: connected — following ${url}`);
       } catch {

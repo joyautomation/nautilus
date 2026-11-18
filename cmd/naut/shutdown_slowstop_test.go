@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"io"
 	"log/slog"
 	"net"
@@ -20,6 +19,8 @@ import (
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
 	"github.com/mochi-mqtt/server/v2/packets"
+
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 )
 
 // swallowDeath is a broker hook that never acknowledges an NDEATH: the
@@ -75,7 +76,7 @@ func TestNautRunGivesBackTheHTTPPortBeforeSlowStops(t *testing.T) {
 
 	bin := buildNautCLI(t, t.TempDir(), nil)
 	dir := t.TempDir()
-	apiAddr := freeAddr(t)
+	apiAddr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 	files := map[string]string{
 		"nautilus.yaml": `name: slowstop
 tasks:
@@ -103,9 +104,8 @@ sparkplug:
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	var stderr lockedBuffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = new(bytes.Buffer)
+	var stdout, stderr lockedBuffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -114,13 +114,9 @@ sparkplug:
 	t.Cleanup(func() {
 		cmd.Process.Kill()
 		<-exited
-		broker.Listeners.Close("t", func(string) {})
-		for _, cl := range broker.Clients.GetAll() {
-			if !cl.Closed() {
-				_ = broker.DisconnectClient(cl, packets.ErrServerShuttingDown)
-			}
-		}
+		_ = testmqtt.Close(broker) // not broker.Close: it can deadlock in mochi v2.7.9
 	})
+	apiAddr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {

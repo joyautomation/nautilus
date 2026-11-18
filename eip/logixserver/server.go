@@ -38,6 +38,11 @@ type Server struct {
 	// then be read individually. For driver leaf-mode tests.
 	DenyStructRoots bool
 
+	// failMu guards failing: canonical paths whose reads answer with a
+	// transient error (FailReads), for driver read-quality tests.
+	failMu  sync.Mutex
+	failing map[string]bool
+
 	// frags holds a fragmented write's bytes until the last chunk lands.
 	fragMu sync.Mutex
 	frags  map[string][]byte
@@ -180,6 +185,24 @@ func (s *Server) multipleService(mr cip.MessageRouterRequest) cip.MessageRouterR
 // determines the form: leading ANSI symbol (0x91) is a symbolic read; leading
 // Template class (0x6C) is a Read Template; leading Symbol class (0x6B) is
 // Symbol-Instance-Addressing.
+// FailReads makes reads of path (canonical, e.g. "Speed") answer with a
+// transient error (object state conflict, 0x0C) while on is true; the
+// session stays up. For driver read-quality tests.
+func (s *Server) FailReads(path string, on bool) {
+	s.failMu.Lock()
+	defer s.failMu.Unlock()
+	if s.failing == nil {
+		s.failing = map[string]bool{}
+	}
+	s.failing[strings.ToUpper(path)] = on
+}
+
+func (s *Server) readFails(path string) bool {
+	s.failMu.Lock()
+	defer s.failMu.Unlock()
+	return s.failing[strings.ToUpper(path)]
+}
+
 func (s *Server) readTag(mr cip.MessageRouterRequest) cip.MessageRouterResponse {
 	if len(mr.Path) == 0 {
 		return cip.MRError(mr.Service, cip.StatusPathSegmentError)
@@ -232,6 +255,9 @@ func (s *Server) readByInstance(mr cip.MessageRouterRequest, instance uint32, re
 // values beneath it. Values larger than fragLimit follow the partial-transfer
 // protocol.
 func (s *Server) resolveAndReply(mr cip.MessageRouterRequest, path string) cip.MessageRouterResponse {
+	if s.readFails(path) {
+		return cip.MRError(mr.Service, cip.StatusObjectStateConflict)
+	}
 	// Atomic leaf.
 	if leafType, value, ok := s.store.Resolve(path); ok {
 		out := make([]byte, 0, 12)

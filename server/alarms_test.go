@@ -47,9 +47,9 @@ func do(t *testing.T, s *Server, method, path, body string) *httptest.ResponseRe
 	t.Helper()
 	var r *http.Request
 	if body == "" {
-		r = httptest.NewRequest(method, path, nil)
+		r = httptest.NewRequest(method, "http://localhost"+path, nil)
 	} else {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
+		r = httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
 	}
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, r)
@@ -220,7 +220,7 @@ func TestAckShelveAndUnshelve(t *testing.T) {
 }
 
 // Writes go through authorizeWrite unchanged — the same token rules as a
-// tag write, and reads stay open.
+// tag write, and reads (by a trusted Host) need no token.
 func TestAlarmWritesHonorAuth(t *testing.T) {
 	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
 	eng := newTestAlarms(t, cond)
@@ -242,7 +242,7 @@ func TestAlarmWritesHonorAuth(t *testing.T) {
 		t.Errorf("GET /api/alarms with auth configured = %d, want 200", rec.Code)
 	}
 
-	r := httptest.NewRequest("POST", "/api/alarms/ack", strings.NewReader(`{"all":true,"by":"operator1"}`))
+	r := httptest.NewRequest("POST", "http://localhost/api/alarms/ack", strings.NewReader(`{"all":true,"by":"operator1"}`))
 	r.Header.Set("X-Nautilus-Token", "s3cret")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, r)
