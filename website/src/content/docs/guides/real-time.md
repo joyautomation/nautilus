@@ -258,6 +258,27 @@ report with the machine, kernel, Go version and settings beside the
 numbers. Run it before and after a change on the same box and the two
 reports are your before/after. `-cpu` and `-priority` place the fast task.
 
+**On a controller, carefully.** Real-time load on a controller's cores
+can take the box off the network. On a PLCnext, a 1 ms task at FIFO 40 on
+the core of the vendor's I/O shim and the NIC's receive thread kept it
+unreachable for about 2.4 hours. Before such a run:
+
+- Pin it to a core with no vendor runtime, shim or network thread.
+  nautilus's pre-flight refuses or warns at start, but choose the core
+  yourself.
+- Ask whoever owns the box.
+- Do a 30-second run first, with `ping` to the box running alongside.
+
+jitter guards its own run, too:
+
+- **It stops a run the box can't keep up with.** That's 2 s without a scan
+  of the fast task, a priority withdrawn mid-run, or the run going past
+  1.5 × its duration plus 10 s. It writes an `INVALID` report and exits 3.
+- **If its loops don't end when stopped, it exits.** Ending the process
+  is what takes the load off the box.
+- **A kernel timer SIGKILLs it 20 s after that,** whatever its threads
+  are doing.
+
 ## Harder real-time
 
 A loop that must be tens of microseconds, cycle-exact, or must keep running

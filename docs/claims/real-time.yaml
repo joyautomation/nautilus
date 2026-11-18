@@ -363,3 +363,24 @@ claims:
       controller cross-build; what the Axioline outputs do after the hard
       kill, or after a demotion of a cycle that is stuck, is untried (a
       controlled bench test for James).
+
+  - id: RT-030
+    claim: >-
+      tools/jitter stops a run the box cannot keep up with (no fast-task scan
+      for 2 s, a priority withdrawn mid-run, or past 1.5 × the duration +
+      10 s), marks the report INVALID and exits 3; exits at once when the
+      stopped loops do not end; and a kernel timer armed at start SIGKILLs
+      it 20 s after that deadline whatever its threads are doing.
+    source: "#measuring-it-yourself"
+    tests:
+      - go ./tools/jitter TestGuardStall
+      - go ./tools/jitter TestGuardDemotion
+      - go ./tools/jitter TestGuardDeadline
+      - go ./tools/jitter TestInvalidReportSaysSo
+      - go ./tools/jitter TestKillTimer
+    partial: true
+    note: >-
+      The guard is tested with a stand-in run and stats; its wiring in
+      jitter's main (runGuarded around rt.Run, the kill timer armed) is
+      exercised by a normal run only, not by a starved one.
+
