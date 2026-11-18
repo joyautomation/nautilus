@@ -173,13 +173,17 @@ type Driver struct {
 	classRates  map[string]time.Duration
 	assignments []classAssignment
 
+	// srcMu guards the source set against ReplaceSource (#706): sources,
+	// bySource, enables, plan and manifest. Readers (the scan's read and
+	// write, health, quality, connections) take it shared.
+	srcMu    sync.RWMutex
+	replMu   sync.Mutex // serializes ReplaceSource, start to finish
 	sources  []*source
 	bySource map[string]*source
 	// byName routes writable bindings; enables routes the Enable command
 	// tags (a source's Enable tag is a synthesized OUTPUT name: the runtime
 	// hands its value to WriteOutputs, and the driver parks or wakes the
 	// source instead of writing a register).
-	byName  map[string]outBinding
 	enables map[string][]*source
 
 	inputs  []string // polled bindings + __Online/__Outages companions, sorted
@@ -216,7 +220,12 @@ type Driver struct {
 	errs    atomic.Uint64 // transport errors + exceptions + refused writes
 
 	cancel context.CancelFunc
+	runCtx context.Context // Start's, which every source loop's derives from
 	wg     sync.WaitGroup
+	// lifeMu orders startSource against Stop: no loop is added to wg once
+	// Stop has begun waiting on it.
+	lifeMu  sync.Mutex
+	stopped bool
 }
 
 // outBinding is one writable binding with its source resolved.
@@ -264,6 +273,22 @@ type source struct {
 	// outputs are this source's writable binding names, so WriteOutputs
 	// can queue a source's share of a snapshot under one hold of mu.
 	outputs []string
+	// byName is this source's writable bindings, by tag: the loop encodes
+	// its writes with its own, so a source replaced while its loop winds
+	// down still writes only what it was built with (#706).
+	byName map[string]outBinding
+
+	// cancel stops this source's loop alone; done closes when it has
+	// returned (ReplaceSource). Both are set under the driver's lifeMu,
+	// and stay nil for a source whose loop never started.
+	cancel context.CancelFunc
+	done   chan struct{}
+
+	// baseline (under mu): the source's next share of an output snapshot
+	// is recorded, not sent, like the driver's start-up baseline. Set by
+	// ReplaceSource with ReplaceOptions.HoldOutputs; the next WriteOutputs
+	// clears it, gate open or not (a takeover's push is a command).
+	baseline bool
 
 	// kick wakes the loop: a queued write, an enable flip, a stop.
 	kick chan struct{}
@@ -311,7 +336,6 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		log:        slog.Default(),
 		classRates: map[string]time.Duration{},
 		bySource:   map[string]*source{},
-		byName:     map[string]outBinding{},
 		enables:    map[string][]*source{},
 		baseline:   true,
 	}
@@ -395,26 +419,8 @@ func (d *Driver) buildSources() error {
 	}
 
 	for _, sc := range d.manifest.Sources {
-		cfg := sc
-		if cfg.Timeout <= 0 {
-			cfg.Timeout = defaultTimeout
-		}
-		if cfg.RetryMin <= 0 {
-			cfg.RetryMin = defaultRetryMin
-		}
-		if cfg.RetryMax <= 0 {
-			cfg.RetryMax = defaultRetryMax
-		}
-		s := &source{
-			cfg:      cfg,
-			snapshot: nio.Values{},
-			state:    "connecting",
-			enabled:  true,
-			pending:  map[string]any{},
-			written:  map[string]any{},
-			stuck:    map[string]*stuckWrite{},
-			kick:     make(chan struct{}, 1),
-		}
+		s := newSource(sc)
+		cfg := s.cfg
 		d.sources = append(d.sources, s)
 		d.bySource[cfg.ID] = s
 
@@ -437,9 +443,7 @@ func (d *Driver) buildSources() error {
 	}
 
 	for _, blk := range d.plan.Blocks {
-		s := d.bySource[blk.Source]
-		br := &blockRun{Block: blk, rate: d.classRates[blk.Class]}
-		s.blocks = append(s.blocks, br)
+		d.bySource[blk.Source].addBlock(blk, d.classRates[blk.Class])
 		for _, t := range blk.Bindings {
 			d.inputs = append(d.inputs, t.Name)
 		}
@@ -449,14 +453,8 @@ func (d *Driver) buildSources() error {
 		if !t.Writable {
 			continue
 		}
-		s := d.bySource[t.Source]
-		f, _ := t.format() // Validate (in BuildPlan) already vetted it
-		d.byName[t.Name] = outBinding{src: s, b: t, f: f}
+		d.bySource[t.Source].addOutput(t)
 		d.outputs = append(d.outputs, t.Name)
-		s.outputs = append(s.outputs, t.Name)
-		if t.Rewrite > 0 {
-			s.rewrites = append(s.rewrites, &rewriteRun{name: t.Name, period: t.Rewrite})
-		}
 	}
 	for name := range d.enables {
 		d.outputs = append(d.outputs, name)
@@ -464,6 +462,44 @@ func (d *Driver) buildSources() error {
 	sort.Strings(d.inputs)
 	sort.Strings(d.outputs)
 	return nil
+}
+
+// newSource is one source's runtime state before its blocks and outputs.
+func newSource(cfg Source) *source {
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = defaultTimeout
+	}
+	if cfg.RetryMin <= 0 {
+		cfg.RetryMin = defaultRetryMin
+	}
+	if cfg.RetryMax <= 0 {
+		cfg.RetryMax = defaultRetryMax
+	}
+	return &source{
+		cfg:      cfg,
+		snapshot: nio.Values{},
+		state:    "connecting",
+		enabled:  true,
+		pending:  map[string]any{},
+		written:  map[string]any{},
+		stuck:    map[string]*stuckWrite{},
+		byName:   map[string]outBinding{},
+		kick:     make(chan struct{}, 1),
+	}
+}
+
+func (s *source) addBlock(blk Block, rate time.Duration) {
+	s.blocks = append(s.blocks, &blockRun{Block: blk, rate: rate})
+}
+
+// addOutput adds a writable binding (Validate has vetted its format).
+func (s *source) addOutput(t TagBinding) {
+	f, _ := t.format()
+	s.byName[t.Name] = outBinding{src: s, b: t, f: f}
+	s.outputs = append(s.outputs, t.Name)
+	if t.Rewrite > 0 {
+		s.rewrites = append(s.rewrites, &rewriteRun{name: t.Name, period: t.Rewrite})
+	}
 }
 
 // SetWriteGate installs the write gate WriteOutputs, the rewrite loop and
@@ -574,6 +610,8 @@ func (d *Driver) forgetWritten() {
 	if reopenHook != nil {
 		reopenHook()
 	}
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	for _, s := range d.sources {
 		s.mu.Lock()
 		clear(s.written)
@@ -608,6 +646,8 @@ func (d *Driver) InputNames() []string {
 // format or anything scaled. A source's __Online companion is BOOL and its
 // __Outages companion DINT. "" for a name the driver does not deliver.
 func (d *Driver) InputType(name string) string {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	for _, s := range d.sources {
 		switch name {
 		case s.cfg.OnlineTagName():
@@ -617,23 +657,28 @@ func (d *Driver) InputType(name string) string {
 		}
 	}
 	for _, t := range d.manifest.Tags {
-		if t.Name != name {
-			continue
-		}
-		f, err := t.format()
-		if err != nil {
-			return ""
-		}
-		switch {
-		case f.Kind == "bool" || f.Kind == "bit":
-			return "BOOL"
-		case f.integer() && (t.Scale == 0 || t.Scale == 1) && t.Offset == 0:
-			return "DINT"
-		default:
-			return "REAL"
+		if t.Name == name {
+			return bindingType(t)
 		}
 	}
 	return ""
+}
+
+// bindingType is the IEC type a binding delivers and accepts (see
+// InputType); "" for a format that does not parse.
+func bindingType(t TagBinding) string {
+	f, err := t.format()
+	if err != nil {
+		return ""
+	}
+	switch {
+	case f.Kind == "bool" || f.Kind == "bit":
+		return "BOOL"
+	case f.integer() && (t.Scale == 0 || t.Scale == 1) && t.Offset == 0:
+		return "DINT"
+	default:
+		return "REAL"
+	}
 }
 
 // OutputNames returns the tags the driver accepts writes for: the writable
@@ -646,6 +691,8 @@ func (d *Driver) OutputNames() []string {
 
 // ScanClasses reports the resolved poll groups — for diagnostics and tests.
 func (d *Driver) ScanClasses() map[string][]string {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	out := map[string][]string{}
 	for _, blk := range d.plan.Blocks {
 		for _, t := range blk.Bindings {
@@ -659,24 +706,29 @@ func (d *Driver) ScanClasses() map[string][]string {
 }
 
 // Plan returns the computed block-read plan (for `import --plan` and tests).
-func (d *Driver) Plan() Plan { return d.plan }
+func (d *Driver) Plan() Plan {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
+	return d.plan
+}
 
 // ── lifecycle ────────────────────────────────────────────────────────────
 
 // Start launches one polling loop per source. It returns immediately; use
 // Health to observe connection state.
 func (d *Driver) Start(ctx context.Context) {
-	ctx, d.cancel = context.WithCancel(ctx)
+	d.lifeMu.Lock()
+	d.stopped = false // a driver may be started again after Stop
+	d.lifeMu.Unlock()
+	d.srcMu.Lock()
+	defer d.srcMu.Unlock()
+	d.runCtx, d.cancel = context.WithCancel(ctx)
 	d.wmu.Lock()
 	d.baseline = !d.sawShut.Load() // a standby has none (#606)
 	d.wmu.Unlock()
 	d.started.Store(true)
 	for _, s := range d.sources {
-		d.wg.Add(1)
-		go func(s *source) {
-			defer d.wg.Done()
-			d.run(ctx, s)
-		}(s)
+		d.startSource(s)
 	}
 }
 
@@ -693,8 +745,30 @@ func (d *Driver) DisarmBaseline() {
 // Started reports whether Start has run (io.StartReporter).
 func (d *Driver) Started() bool { return d.started.Load() }
 
+// startSource launches one source's loop under its own cancel, derived
+// from Start's context so Stop still ends it. After Stop it does nothing.
+func (d *Driver) startSource(s *source) {
+	d.lifeMu.Lock()
+	defer d.lifeMu.Unlock()
+	if d.stopped {
+		return
+	}
+	var ctx context.Context
+	ctx, s.cancel = context.WithCancel(d.runCtx)
+	s.done = make(chan struct{})
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer close(s.done)
+		d.run(ctx, s)
+	}()
+}
+
 // Stop tears every source loop down and waits.
 func (d *Driver) Stop() {
+	d.lifeMu.Lock()
+	d.stopped = true
+	d.lifeMu.Unlock()
 	if d.cancel != nil {
 		d.cancel()
 		d.wg.Wait()
@@ -737,6 +811,8 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 	// holds. Our key set only grows (values hold across disconnects), so
 	// equal sizes prove the sets match — the io.Memory trick.
 	if len(dst) != n {
+		d.srcMu.RLock()
+		defer d.srcMu.RUnlock()
 		delivered := make(map[string]bool, n)
 		for _, s := range d.sources {
 			delivered[s.cfg.OnlineTagName()] = true
@@ -759,6 +835,8 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 // snapshotInto fills dst with every delivered value plus the companions and
 // returns how many keys the driver delivered.
 func (d *Driver) snapshotInto(dst nio.Values) int {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	n := 0
 	for _, s := range d.sources {
 		s.mu.Lock()
@@ -800,6 +878,13 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 // registers changed in one snapshot go out as one FC16, never split
 // across two flushes by a poll that ran mid-snapshot (#592).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
+	// The gate first, outside srcMu: a look that finds it reopened forgets
+	// every source's written (forgetWritten), which takes srcMu itself, and
+	// a reader must never re-enter srcMu while ReplaceSource waits for it
+	// (#880 review: a takeover during a replace hung the scan).
+	open := d.gateOpen()
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	kicked := map[*source]bool{}
 	for name, v := range vals {
 		if srcs, ok := d.enables[name]; ok {
@@ -825,30 +910,34 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
-	if d.gateOpen() {
-		for _, s := range d.sources {
-			s.mu.Lock()
-			for _, name := range s.outputs {
-				v, ok := vals[name]
-				if !ok {
-					continue
-				}
-				if baseline && d.byName[name].b.Rewrite <= 0 {
-					// Record, never send. A tag with a command already
-					// queued keeps it: that one WAS asked for.
-					if _, queued := s.pending[name]; !queued {
-						s.written[name] = v
-					}
-				} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
-					// unchanged since the last value we accounted for
-				} else {
-					s.written[name] = v
-					s.pending[name] = v
-					kicked[s] = true
-				}
-			}
+	for _, s := range d.sources {
+		s.mu.Lock()
+		held := s.baseline
+		s.baseline = false
+		if !open {
 			s.mu.Unlock()
+			continue
 		}
+		for _, name := range s.outputs {
+			v, ok := vals[name]
+			if !ok {
+				continue
+			}
+			if (baseline || held) && s.byName[name].b.Rewrite <= 0 {
+				// Record, never send. A tag with a command already
+				// queued keeps it: that one WAS asked for.
+				if _, queued := s.pending[name]; !queued {
+					s.written[name] = v
+				}
+			} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
+				// unchanged since the last value we accounted for
+			} else {
+				s.written[name] = v
+				s.pending[name] = v
+				kicked[s] = true
+			}
+		}
+		s.mu.Unlock()
 	}
 	for s := range kicked {
 		nudge(s.kick)
@@ -1573,7 +1662,7 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, na
 					first = true
 				}
 				st.attempts++
-				if d.byName[n].b.Rewrite > 0 {
+				if s.byName[n].b.Rewrite > 0 {
 					continue // its own re-assert is its retry
 				}
 				st.value, st.retryAt = work[n], retryAt
@@ -1668,7 +1757,7 @@ func (d *Driver) stageWrites(s *source, work map[string]any) ([]regWrite, []coil
 	var coils []coilWrite
 	var bits []bitWrite
 	for name, v := range work {
-		ob := d.byName[name]
+		ob := s.byName[name]
 		t := ob.b
 		if t.Table == TableCoil {
 			on, err := toBool(v)
@@ -1880,4 +1969,8 @@ var (
 // Manifest is the manifest the driver was built from: its sources and
 // bindings, for a caller that serves the same register map in process
 // (virtdev's in-process face reads through the driver's own Plan).
-func (d *Driver) Manifest() Manifest { return d.manifest }
+func (d *Driver) Manifest() Manifest {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
+	return d.manifest
+}
