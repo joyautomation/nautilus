@@ -9,12 +9,15 @@ The docs site's `/verified/runtime/` pages are built from these files
 joined to the `go test -json` output of the last green CI run on `main`,
 so every claim shows the verdict of the tests it names.
 
-Claims never block a PR. CI's `runtime-evidence` job reports, in the PR's
-job summary, any claim that does not check or names a test no job ran, and
-which verdicts changed since `main`. On `main` the same problems open (or
-update) the rolling **claims out of date** issue, and a clean run closes it.
-By hand: `go run ./tools/evidence check`, or
-`NAUTILUS_CLAIMS_CHECK=1 go test ./tools/evidence`.
+**A claim must name tests that exist.** Every PR runs `go run
+./tools/evidence check` (CI's examples job, under the required `ci-ok`), so
+a renamed test or a typo in a claim fails the PR that causes it. The
+claims' *verdicts* never block a PR: CI's `runtime-evidence` job reports, in
+the PR's job summary, any claim whose tests no job ran, and which verdicts
+changed since `main`. On `main` the same problems open (or update) the
+rolling **claims out of date** issue, and a clean run closes it. By hand:
+`go run ./tools/evidence check`, or `NAUTILUS_CLAIMS_CHECK=1 go test
+./tools/evidence`.
 
 **When you change a docs page, update its claims file.** Nothing checks
 that a claim still says what its page says, so a PR that edits a page

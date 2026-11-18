@@ -172,6 +172,12 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: examples/*/hmi/package-lock.json
+      # Every claim in docs/claims names tests that exist (#752): a renamed
+      # test or a typo in a claim fails the PR here, light PRs included (it
+      # takes a second). Only the references gate; the claims' verdicts
+      # stay a report (runtime-evidence).
+      - name: claims name tests that exist (tools/evidence check)
+        run: go run ./tools/evidence check
       # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
       # release, not in git (examples/spatial-rig/hmi/assets.json); naut
       # check holds the scene file to files that exist, so fetch them first.

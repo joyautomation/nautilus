@@ -58,6 +58,8 @@ root (a PLCnext) takes -supervisor cron at install.
   restore   <ssh-target> <file.tgz>     stop, put the retained values back, start
   uninstall <ssh-target> [-purge]       remove the unit and the releases; -purge deletes the
                                         retained values too
+  helper -user <ssh-user> <dir>         write the files that let an SSH user without
+                                        unrestricted sudo deploy (naut deploy helper -h)
 
 install and update:
   -runtime <naut>|vX.Y.Z  the naut the controller is built on. Default: this naut when the box
@@ -82,7 +84,8 @@ install only:
 
 <ssh-target> is anything ssh takes: user@host, or a Host from ~/.ssh/config.
 The user must be root or have sudo without a password (any user that can write
--root in cron mode). NAUT_SSH_OPTS adds ssh options, e.g. "-p 2222 -i ~/.ssh/ipc".
+-root in cron mode), or be allowed by sudoers to run the release helper at
+` + helperPath + ` (naut deploy helper), which naut deploy then uses by itself. NAUT_SSH_OPTS adds ssh options, e.g. "-p 2222 -i ~/.ssh/ipc".
 ssh signs in with keys only (BatchMode), unless a password can come from
 somewhere: NAUT_SSH_ASKPASS=<program> prints it (tools/deploy/askpass-bw.sh
 reads it from Bitwarden), as does SSH_ASKPASS with SSH_ASKPASS_REQUIRE=force,
@@ -103,6 +106,8 @@ func runDeploy(args []string) int {
 	case "help", "-h", "-help", "--help":
 		fmt.Print(deployUsage)
 		return 0
+	case "helper":
+		return runDeployHelper(args[1:])
 	}
 	cmd := args[0]
 	fs := flag.NewFlagSet("deploy "+cmd, flag.ContinueOnError)
@@ -288,7 +293,7 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string) int {
 	if code := b.upload(f, id); code != 0 {
 		return code
 	}
-	if !b.cron { // set by now: the controller's upload discovered the mode
+	if !b.cron && !b.helper { // set by now: the controller's upload discovered the mode; the helper has its own unit
 		if code := b.upload(bytes.NewReader(deployUnit), "nautilus.service"); code != 0 {
 			return code
 		}
@@ -529,7 +534,10 @@ type sshBox struct {
 	// with releases and state under cronRoot.
 	cron     bool
 	cronRoot string
-	known    bool // the mode is known: from install's flags, or discovered
+	// helper mode (#771): the SSH user is not root and may run only the
+	// release helper at helperPath as root (sudoers).
+	helper bool
+	known  bool // the mode is known: from install's flags, or discovered
 }
 
 // checkSupervisor vets install's -supervisor and -root. The root goes into
@@ -580,10 +588,26 @@ func (b *sshBox) discover() error {
 	}
 	b.known = true
 	var out bytes.Buffer
-	if code := b.run(nil, &out, `cat "$HOME/.config/naut-deploy" 2>/dev/null || true`); code != 0 {
+	probe := `cat "$HOME/.config/naut-deploy" 2>/dev/null || true; ` +
+		`if [ "$(id -u)" != 0 ] && [ -x ` + helperPath + ` ]; then echo; echo helper=1; fi`
+	if code := b.run(nil, &out, probe); code != 0 {
 		return fmt.Errorf("could not reach %s (ssh exit %d)", b.target, code)
 	}
-	return b.parseMode(out.String())
+	if err := b.parseMode(out.String()); err != nil {
+		return err
+	}
+	if !b.helper {
+		return nil
+	}
+	// The helper is frozen on the box; this naut's box.sh may have moved on.
+	out.Reset()
+	if code := b.run(nil, &out, "sudo -n "+helperPath+" helper-version"); code != 0 {
+		return fmt.Errorf("%s: %s is there but sudo -n will not run it (exit %d): is the sudoers drop-in installed? (naut deploy helper -h)", b.target, helperPath, code)
+	}
+	if got := strings.TrimSpace(out.String()); got != helperVersion() {
+		return fmt.Errorf("%s: the release helper is version %q, this naut's is %s: install it again from `naut deploy helper` (root on the box)", b.target, got, helperVersion())
+	}
+	return nil
 }
 
 func (b *sshBox) parseMode(text string) error {
@@ -598,7 +622,12 @@ func (b *sshBox) parseMode(text string) error {
 			mode = v
 		case "root":
 			root = v
+		case "helper":
+			b.helper = v == "1"
 		}
+	}
+	if mode != "" {
+		b.helper = false // cron mode needs no root, so no helper
 	}
 	switch mode {
 	case "":
@@ -727,6 +756,9 @@ func (b *sshBox) root(stdout io.Writer, args ...string) int {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
 		return 1
 	}
+	if b.helper {
+		return b.run(nil, stdout, "sudo -n "+helperPath+" "+strings.Join(args, " "))
+	}
 	sh := "sh -s -- " + strings.Join(args, " ")
 	if b.cron {
 		sh = "NAUT_SUPERVISOR=cron NAUT_ROOT=" + b.cronRoot + " " + sh
@@ -744,6 +776,9 @@ func (b *sshBox) upload(r io.Reader, name string) int {
 	if err := b.discover(); err != nil {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
 		return 1
+	}
+	if b.helper {
+		return b.run(r, os.Stdout, "sudo -n "+helperPath+" receive "+name)
 	}
 	in := b.boxRoot() + "/incoming/" + name
 	return b.run(r, os.Stdout, b.priv("mkdir -p "+b.boxRoot()+"/incoming")+" && "+

@@ -124,7 +124,8 @@ naut deploy restore deploy@ipc nautilus-retain-….tgz
 ```
 
 The box needs systemd, `sh`, coreutils and `tar`, and nothing else. The
-SSH user must be root or have `sudo` without a password. ssh is the
+SSH user must be root, have `sudo` without a password, or be allowed one
+command, [the release helper](#with-sudo-for-one-command-only-the-release-helper). ssh is the
 system's, so `~/.ssh/config`, keys and the agent work as usual, and
 `NAUT_SSH_OPTS` adds options (`-p 2222 -i ~/.ssh/ipc`).
 
@@ -182,6 +183,40 @@ a box that does not answer gives up after 10 seconds.
   `Type=simple` without a watchdog instead; this is chosen per release.
 - Everything is `sync`ed before a link moves. If power is lost
   mid-update, the box boots the old release or the whole new one.
+
+### With sudo for one command only: the release helper
+
+A box whose SSH user should not have unrestricted `sudo` can grant it
+one command instead, the way controller vendors' own sudoers drop-ins
+do. `naut deploy helper` writes the three files someone with root
+installs once:
+
+```sh
+naut deploy helper -user deploy ./helper     # naut-deploy-box, nautilus.service, nautilus-deploy
+# then, on the box, as root:
+install -d -m 0755 /usr/local/sbin /usr/local/share/nautilus
+install -m 0755 naut-deploy-box  /usr/local/sbin/naut-deploy-box
+install -m 0644 nautilus.service /usr/local/share/nautilus/nautilus.service
+visudo -cf nautilus-deploy && install -m 0440 nautilus-deploy /etc/sudoers.d/nautilus-deploy
+```
+
+From then on `naut deploy` finds the helper by itself and runs
+`sudo -n /usr/local/sbin/naut-deploy-box <command>` instead of a root
+shell. The helper is the boundary between that user and root, so:
+
+- it pins its paths, mode, `PATH` and umask itself, takes nothing from
+  the environment, and accepts only its own commands and plain release
+  names;
+- the unit is always its root-owned template, whatever is uploaded;
+- `status` does not run the uploaded controller;
+- like every mode, it never reads, writes or `chown`s through a link
+  in `/var/lib/nautilus` (the controller owns that directory and could
+  leave one there), and `restore` reads the backup's two members as
+  data rather than unpacking it.
+
+The helper is the on-box half of the `naut` that wrote it. When a
+newer `naut` changes that half or the unit, `naut deploy` refuses and
+says to install the helper again from `naut deploy helper`.
 
 ### Without systemd or root: cron
 
