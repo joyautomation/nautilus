@@ -256,6 +256,44 @@ func TestWriteGateDrivesStateAndCommands(t *testing.T) {
 	}
 }
 
+// A demoted leader stops reporting its session as connected before its
+// death certificate goes out. Status said Connected (and StateOnlineMs, the
+// session's online timestamp) for a session the broker had already heard go
+// offline, between serve publishing the death and the run loop tearing the
+// session down; TestWriteGateDrivesStateAndCommands read that as the new
+// standby session and published its barrier on the one being dropped
+// ("connection lost before Publish completed"). afterServe holds that
+// window open, so this fails every time without the fix.
+func TestDemotionIsDisconnectedBeforeItsDeathIsSeen(t *testing.T) {
+	afterServe = func() { time.Sleep(400 * time.Millisecond) }
+	t.Cleanup(func() { afterServe = nil }) // after the driver stops (cleanups run last-first)
+
+	_, addr := startBroker(t, "")
+	var leader atomic.Bool
+	leader.Store(true)
+	cfg := testConfig(addr, "h-demote")
+	cfg.NoRebirthOnStart = true
+	w := watchHost(t, addr, "watch-demote", "h-demote")
+	d := startGated(t, cfg, leader.Load)
+	waitUntil(t, "STATE online", func() bool {
+		s := w.states(t)
+		return len(s) == 1 && s[0].Online
+	})
+	session := w.states(t)[0].Timestamp
+
+	leader.Store(false)
+	waitUntil(t, "the demotion death", func() bool { return len(w.states(t)) == 2 })
+	if st := d.Status(); st.Connected && st.StateOnlineMs == session {
+		t.Fatalf("after its death certificate was seen, Status still reports the dropped session "+
+			"as connected and online (StateOnlineMs %d)", st.StateOnlineMs)
+	}
+	// And the standby session that follows is a new one.
+	waitUntil(t, "the standby session", func() bool {
+		st := d.Status()
+		return st.Connected && st.StateOnlineMs != session
+	})
+}
+
 // The single-host guarantee: with no gate (no redundancy: section, so naut
 // run never calls SetWriteGate) the host is its own leader. It is primary
 // from the first connect, its commands go out, its MQTT client ID is the

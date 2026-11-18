@@ -208,6 +208,9 @@ func (d *Driver) run(ctx context.Context) {
 		backoff = backoffMin
 
 		dropped := d.serve(ctx, lost) && ctx.Err() == nil && !d.isStopping()
+		if afterServe != nil {
+			afterServe()
+		}
 
 		d.mu.Lock()
 		d.connected = false
@@ -223,6 +226,11 @@ func (d *Driver) run(ctx context.Context) {
 		cli.Disconnect(250)
 	}
 }
+
+// afterServe, nil outside tests, runs between a session ending (serve
+// returning) and the run loop tearing it down: a test sets it to hold that
+// window open (TestDemotionIsDisconnectedBeforeItsDeathIsSeen).
+var afterServe func()
 
 // serve holds a live session open until the connection drops, the context
 // ends, or leadership changes (which needs a new CONNECT to install — or
@@ -257,6 +265,14 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 			if d.mayPublish() != wasLeader {
 				d.log.Info("host: leadership changed; reconnecting to refresh STATE",
 					"leader", !wasLeader)
+				// The session ends here, on purpose: stop reporting it as
+				// connected BEFORE its death certificate goes out, so nothing
+				// reads Status as this session still connected (and online,
+				// StateOnlineMs) after the broker has heard it go offline. The
+				// run loop's own teardown below comes after the publish.
+				d.mu.Lock()
+				d.connected = false
+				d.mu.Unlock()
 				if wasLeader {
 					d.publishDemotionDeath()
 				}
