@@ -548,7 +548,12 @@ func (d *Driver) publishStateOffline(p publisher, ts int64) {
 		return
 	}
 	if err := p.publish(stateTopic(d.cfg.HostID), 1, true, body); err != nil {
-		d.log.Error("host: publish STATE death", "error", err)
+		if d.deathAbandoned.Load() {
+			// Stop already gave up on it (#942); the will stands in.
+			d.log.Warn("host: publish STATE death after Stop stopped waiting", "error", err)
+		} else {
+			d.log.Error("host: publish STATE death", "error", err)
+		}
 	}
 	if d.cfg.StateForm == StateForm2x || d.cfg.StateForm == StateFormBoth {
 		if err := p.publish(legacyStateTopic(d.cfg.HostID), 1, true, []byte("OFFLINE")); err != nil {

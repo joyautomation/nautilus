@@ -179,12 +179,18 @@ func (d *Driver) Start(ctx context.Context) {
 	go d.run(ctx)
 }
 
-// Stop publishes the STATE death certificate, waits for the token, and only
-// then tears the connection down — the TCK requires the host's own death
-// publish before both clean and unclean teardown, and the broker firing the
-// LWT is explicitly not a substitute (design §2). The DISCONNECT itself
-// happens in run's session cleanup, after the context is cancelled, so the
-// ordering death → DISCONNECT holds.
+// Stop publishes the STATE death certificate and only then tears the
+// connection down: the TCK requires the host's own death publish before
+// both clean and unclean teardown (design §2). The DISCONNECT happens in
+// run's session cleanup, after the context is cancelled, so the death
+// PUBLISH is on the stream before the DISCONNECT either way.
+//
+// Stop waits for the broker to acknowledge the death for at most
+// stopDeathWait (#942). A broker that has not by then is hung; Stop
+// disconnects anyway, so a stop fits a supervisor's budget, and the broker
+// fires the will (the same offline certificate) once it notices the
+// session gone, within its keepalive. On a broker that answers, nothing
+// changes: the death is acknowledged within milliseconds.
 func (d *Driver) Stop() {
 	if d.cancel == nil {
 		return
@@ -200,6 +206,7 @@ func (d *Driver) Stop() {
 	select {
 	case <-died:
 	case <-time.After(stopDeathWait):
+		d.deathAbandoned.Store(true)
 		d.log.Warn("host: the broker did not take the STATE death certificate; disconnecting anyway (it fires the will)",
 			"broker", d.cfg.BrokerURL, "waited", stopDeathWait)
 	}
