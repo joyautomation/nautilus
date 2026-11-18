@@ -5,7 +5,8 @@
 #   tools/tiad/build-fake.sh
 #   TIAD_FAKE_BIN=$PWD/tools/tiad/out/tiad-fake.exe go test ./siemens/tiad/...
 #
-# Needs only mcs (Debian/Ubuntu: mono-mcs; run it with mono-runtime).
+# Needs mcs, mono and the .NET 4.8 reference assemblies that -sdk:4.8 compiles
+# against (Debian/Ubuntu: mono-devel; mono-mcs + mono-runtime lack them).
 #
 # The sources are C# 5, because on the TIA machine install-tiad.ps1 compiles
 # them with the stock .NET Framework csc, which knows nothing newer. Here

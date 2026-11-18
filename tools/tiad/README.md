@@ -48,6 +48,7 @@ logs a header or a body.
 ## Testing
 
 ```
+apt-get install -y mono-devel   # mcs, mono, and the 4.8 reference assemblies
 tools/tiad/build-fake.sh
 TIAD_FAKE_BIN=$PWD/tools/tiad/out/tiad-fake.exe NAUTILUS_REQUIRE_TIAD=1 go test ./siemens/tiad/...
 ```
