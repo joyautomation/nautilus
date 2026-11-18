@@ -280,7 +280,11 @@ the firmware's periodic real-time tasks, and naut's threads sharing the
 shim's core were most of its lateness. Never pin a naut task with
 `priority:` to the shim's CPU: nautilus refuses it at start (the shim's
 FIFO 80 thread is above it) and runs the task unpinned at normal
-priority, and says so on the banner.
+priority, and says so on the banner. That core also carries the NIC's
+receive path: `stmmacNapiRxTsk` at FIFO 1, the eth0 IRQ thread at 50 and
+`stmmacRxTsk` at 95. A real-time task above the NAPI thread there starves
+the network. It happened on the bench: the box was unreachable for hours,
+until the test ended.
 
 To run the shim at `SCHED_FIFO`, the controller's owner gives both
 binaries the `cap_sys_nice` file capability once, as root
