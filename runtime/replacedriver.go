@@ -34,19 +34,56 @@ type replacer interface {
 // gated closed. ctx bounds the wait for the scan in progress: a hung scan
 // does not hang the apply.
 func (r *Runtime) ReplaceDriver(ctx context.Context, name string, d nio.Driver) (nio.Driver, error) {
+	prev, _, err := r.replaceDriver(ctx, name, d, false)
+	return prev, err
+}
+
+// ReplaceDriverObserved is ReplaceDriver, and reports on the returned
+// channel (one value, buffered) the outputs the first push after the swap
+// hands d: its own output tags, as handed. The watch is armed under the
+// same lock as the swap, so no earlier push answers it. It is how a staged
+// apply reports what it actually commanded (#706); what d then sends of it
+// is d's rule (a held baseline, its write gate).
+func (r *Runtime) ReplaceDriverObserved(ctx context.Context, name string, d nio.Driver) (nio.Driver, <-chan nio.Values, error) {
+	return r.replaceDriver(ctx, name, d, true)
+}
+
+// pushWatch asks for the outputs the next successful push hands over.
+type pushWatch struct {
+	names []string
+	ch    chan nio.Values
+}
+
+// deliverPush answers a pushWatch with the outputs just handed over. It runs
+// in the scan, under mainMu.
+func (r *Runtime) deliverPush(out nio.Values) {
+	w := r.pushWatch.Swap(nil)
+	if w == nil {
+		return
+	}
+	got := make(nio.Values, len(w.names))
+	for _, n := range w.names {
+		if v, ok := out[n]; ok {
+			got[n] = v
+		}
+	}
+	w.ch <- got
+}
+
+func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, observe bool) (nio.Driver, <-chan nio.Values, error) {
 	rp, ok := r.driver.(replacer)
 	if !ok {
-		return nil, fmt.Errorf("replace driver %q: the runtime's driver (%T) is not a composite; a live swap needs the drivers composed (io.Multi)", name, r.driver)
+		return nil, nil, fmt.Errorf("replace driver %q: the runtime's driver (%T) is not a composite; a live swap needs the drivers composed (io.Multi)", name, r.driver)
 	}
 	old, ok := rp.Child(name)
 	if !ok {
-		return nil, fmt.Errorf("replace driver %q: no such driver", name)
+		return nil, nil, fmt.Errorf("replace driver %q: no such driver", name)
 	}
 	if err := sameTags(old, d); err != nil {
-		return nil, fmt.Errorf("replace driver %q: %w", name, err)
+		return nil, nil, fmt.Errorf("replace driver %q: %w", name, err)
 	}
 	if err := r.lockMain(ctx); err != nil {
-		return nil, fmt.Errorf("replace driver %q: waiting for the scan in progress: %w", name, err)
+		return nil, nil, fmt.Errorf("replace driver %q: waiting for the scan in progress: %w", name, err)
 	}
 	defer r.mainMu.Unlock()
 	if bd, ok := d.(nio.BaselineDisarmer); ok && !r.holdOnSwap {
@@ -54,11 +91,20 @@ func (r *Runtime) ReplaceDriver(ctx context.Context, name string, d nio.Driver) 
 	}
 	prev, err := rp.Replace(name, d)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	r.bindStatsReaders(d)  // a status driver swapped in reads this runtime too (#850)
 	r.outSent.Store(false) // the next scan hands the new driver every output
-	return prev, nil
+	var pushed chan nio.Values
+	if observe {
+		pushed = make(chan nio.Values, 1)
+		var names []string
+		if o, ok := d.(tagNames); ok {
+			names = o.OutputNames()
+		}
+		r.pushWatch.Store(&pushWatch{names: names, ch: pushed})
+	}
+	return prev, pushed, nil
 }
 
 // lockMain takes mainMu, or gives up when ctx ends.

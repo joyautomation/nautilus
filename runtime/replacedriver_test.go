@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -405,5 +406,40 @@ func TestReplaceDriverBindsAStatsReader(t *testing.T) {
 	}
 	if got := b2.stats().Count; got != 1 {
 		t.Errorf("its Stats read Count %d, want this runtime's 1 scan", got)
+	}
+}
+
+// ReplaceDriverObserved reports the outputs the first push after the swap
+// hands the new driver, and only that push (#706: what an apply actually
+// commanded).
+func TestReplaceDriverObservedReportsTheFirstPush(t *testing.T) {
+	rt, set, _, _, ctx := modbusRig(t, false)
+	s2 := newModbusSlave(t)
+	s2.Unit(1).SetHolding(0, 4)
+	m2 := newModbus(t, s2)
+	set.Gate(m2)
+	m2.Start(ctx)
+	t.Cleanup(m2.Stop)
+	_, pushed, err := rt.ReplaceDriverObserved(ctx, "mb", m2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case v := <-pushed:
+		t.Fatalf("reported %v before any scan", v)
+	default:
+	}
+	rt.Scan()
+	select {
+	case v := <-pushed:
+		if fmt.Sprint(v) != "map[Cmd:5]" {
+			t.Fatalf("first push = %v, want map[Cmd:5]", v)
+		}
+	default:
+		t.Fatal("the first push after the swap was not reported")
+	}
+	rt.Scan()
+	if len(pushed) != 0 {
+		t.Fatal("a later push was reported too")
 	}
 }

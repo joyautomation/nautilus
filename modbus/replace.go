@@ -109,6 +109,7 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding, opts ReplaceOption
 		}
 	}
 	ns.baseline = opts.HoldOutputs
+	ns.observe = opts.Observe
 	old.mu.Lock()
 	ns.enabled = old.enabled
 	ns.outages = old.outages // since the driver started; a replace is not one
@@ -179,6 +180,56 @@ type ReplaceOptions struct {
 	// it, so the device starts from the current commands. It is the
 	// runtime's Options.HoldOutputsOnSwap (#706, decision 1).
 	HoldOutputs bool
+
+	// Observe, when set, is called once with the source's first share of
+	// an output snapshot after the replace: what that share queued to send,
+	// or why it sent nothing. It is how a staged apply reports the commands
+	// the new connection was actually handed (#706), from the rule the
+	// driver itself follows, not a copy of it. It runs on the scan's
+	// goroutine, outside the driver's locks; keep it short.
+	Observe func(FirstShare)
+}
+
+// FirstShare is a replaced source's first share of an output snapshot.
+type FirstShare struct {
+	// Queued are the commands the share queued for the device, by tag.
+	Queued map[string]any
+	// GateClosed: the write gate was closed, so nothing was queued.
+	GateClosed bool
+	// Parked: the source's enable tag is false; the commands wait in the
+	// queue until it is enabled.
+	Parked bool
+}
+
+// HeldAtBaseline reports whether b's command, when it lands in a start-up
+// baseline or a held replace's first share, is only recorded and not sent.
+// A rewrite: keep-alive is always sent: the device depends on it.
+func HeldAtBaseline(b TagBinding) bool { return b.Rewrite <= 0 }
+
+// Sending reports whether a command for source id goes out now: the write
+// gate is open and the source is not parked by its enable tag. why says
+// which stops it. It looks without acting on what it finds (gateOpen acts
+// on a gate transition; the next write does that).
+func (d *Driver) Sending(id string) (ok bool, why string) {
+	d.gateMu.Lock()
+	gate := d.writeGate
+	d.gateMu.Unlock()
+	if gate != nil && !gate() {
+		return false, "the write gate is closed (this replica is not the leader, or its scans are not live)"
+	}
+	d.srcMu.RLock()
+	s := d.bySource[id]
+	d.srcMu.RUnlock()
+	if s == nil {
+		return false, "no source " + id
+	}
+	s.mu.Lock()
+	on := s.enabled
+	s.mu.Unlock()
+	if !on {
+		return false, "parked: its enable tag " + s.cfg.Enable + " is false"
+	}
+	return true, ""
 }
 
 // sameSourceTags refuses a replacement that polls or accepts other tag names

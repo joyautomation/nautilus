@@ -24,6 +24,7 @@ import (
 	uasrv "github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/runtime"
@@ -228,16 +229,23 @@ func TestIOApplyModbusDeviceAddress(t *testing.T) {
 	if len(v.Changes) != 1 || v.Changes[0].Driver != "modbus" || v.Changes[0].Device != "DEV_A" {
 		t.Fatalf("changes = %+v, want DEV_A of driver modbus alone", v.Changes)
 	}
-	if len(v.Notes) != 0 {
-		t.Fatalf("notes = %v, want none: the candidate changes only I/O", v.Notes)
+	if len(v.Notes) != 1 || !strings.Contains(v.Notes[0], "as of this validation") {
+		t.Fatalf("notes = %v, want only that the values can change before the apply", v.Notes)
 	}
 	if got := fmt.Sprint(v.WillCommand); got != "[{A_Cmd 7}]" || v.Held {
 		t.Fatalf("willCommand = %s (held %v), want [{A_Cmd 7}]", got, v.Held)
 	}
 
 	stop := watchGood(r, "B_In", "B_Cmd")
-	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+	res, err := r.io.Apply(r.ctx, c, "tester")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if fmt.Sprint(res.Commanded) != "[{A_Cmd 7}]" {
+		t.Fatalf("commanded = %v, want what the first scan handed DEV_A: [{A_Cmd 7}]", res.Commanded)
+	}
+	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "not checked") {
+		t.Fatalf("notes = %v, want reachability not checked said", res.Notes)
 	}
 	// The new device gets the command willCommand listed, unchanged since
 	// (In is 6 on both): only the push after the swap sends it.
@@ -279,8 +287,12 @@ func TestIOApplyModbusDeviceHoldsOutputs(t *testing.T) {
 	if len(v.Notes) != 1 || !strings.Contains(v.Notes[0], "changes more than its I/O") {
 		t.Fatalf("notes = %v, want the non-I/O change noted", v.Notes)
 	}
-	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+	res, err := r.io.Apply(r.ctx, c, "tester")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(res.Commanded) != 0 {
+		t.Fatalf("held: commanded = %v, want nothing", res.Commanded)
 	}
 	eventually(t, "A_In read from the new device", func() bool { return r.rt.TagQuality("A_In").IsGood() && r.value("A_In") == "6" })
 	time.Sleep(200 * time.Millisecond)
@@ -332,7 +344,7 @@ func TestIOValidateRefuses(t *testing.T) {
 			if v.Valid || !strings.Contains(" "+strings.Join(failed(v), " ")+" ", " "+tc.check+" ") {
 				t.Fatalf("valid %v, failed %v; want %s to fail: %+v", v.Valid, failed(v), tc.check, v.Checks)
 			}
-			if err := r.io.Apply(r.ctx, c, "tester"); err == nil {
+			if _, err := r.io.Apply(r.ctx, c, "tester"); err == nil {
 				t.Fatal("an invalid candidate was applied")
 			}
 			if d := r.io.Differs(); len(d) != 0 {
@@ -356,7 +368,7 @@ func TestIOApplyGuards(t *testing.T) {
 		r.io.applying.Lock()
 		defer r.io.applying.Unlock()
 		errc := make(chan error, 1)
-		go func() { errc <- r.io.Apply(r.ctx, c, "tester") }()
+		go func() { _, err := r.io.Apply(r.ctx, c, "tester"); errc <- err }()
 		select {
 		case err := <-errc:
 			if !errors.Is(err, ErrApplyBusy) {
@@ -373,10 +385,10 @@ func TestIOApplyGuards(t *testing.T) {
 		c2 := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s1), slavePort(s4), "", "")), "upload", "tester")
 		r.io.Validate(c1)
 		r.io.Validate(c2)
-		if err := r.io.Apply(r.ctx, c1, "tester"); err != nil {
+		if _, err := r.io.Apply(r.ctx, c1, "tester"); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.io.Apply(r.ctx, c2, "tester"); !errors.Is(err, ErrIOStale) {
+		if _, err := r.io.Apply(r.ctx, c2, "tester"); !errors.Is(err, ErrIOStale) {
 			t.Fatalf("err = %v, want ErrIOStale", err)
 		}
 	})
@@ -397,7 +409,7 @@ func TestIOApplyGuards(t *testing.T) {
 		if v := r.io.Validate(c); !v.Valid || len(v.Changes) != 2 {
 			t.Fatalf("validate: %+v", v)
 		}
-		if err := r.io.Apply(r.ctx, c, "tester"); err == nil {
+		if _, err := r.io.Apply(r.ctx, c, "tester"); err == nil {
 			t.Fatal("the failed apply reported success")
 		}
 		want := []string{fmt.Sprintf("DEV_A:%d", slavePort(s3)), fmt.Sprintf("DEV_B:%d", slavePort(s4)), fmt.Sprintf("DEV_A:%d", slavePort(s1))}
@@ -472,7 +484,7 @@ func TestIOApplyOPCUADriverSwap(t *testing.T) {
 		t.Fatalf("validate: valid %v changes %+v checks %+v", v.Valid, v.Changes, v.Checks)
 	}
 	stop := watchGood(r, "A_In", "B_In")
-	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+	if _, err := r.io.Apply(r.ctx, c, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "GW_Level from server B", func() bool { return r.value("GW_Level") == "2.5" })
@@ -548,7 +560,7 @@ tags:
 	if !v.Valid || len(v.Changes) != 1 || v.Changes[0].Device != "CONV" {
 		t.Fatalf("validate: valid %v changes %+v checks %+v", v.Valid, v.Changes, v.Checks)
 	}
-	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+	if _, err := r.io.Apply(r.ctx, c, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the second drive's current", amps(33.2, 33.4))
@@ -599,8 +611,12 @@ func TestIOApplyModbusWholeSwap(t *testing.T) {
 	if fmt.Sprint(v.WillCommand) != "[{B_Cmd 8}]" {
 		t.Fatalf("a held whole driver: willCommand %v, want [{B_Cmd 8}]", v.WillCommand)
 	}
-	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+	res, err := r.io.Apply(r.ctx, c, "tester")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if fmt.Sprint(res.Commanded) != "[{B_Cmd 8}]" {
+		t.Fatalf("a held whole driver: commanded %v, want only the keep-alive [{B_Cmd 8}]", res.Commanded)
 	}
 	// Held, the new driver's first snapshot is its baseline: a command it
 	// takes in that snapshot is not sent, so drive two changes.
@@ -624,16 +640,16 @@ func TestIOApplyRollsBackADriverSwap(t *testing.T) {
 	first := withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", ""))
 	c := r.io.Stage(first, "upload", "tester")
 	r.io.Validate(c)
-	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+	if _, err := r.io.Apply(r.ctx, c, "tester"); err != nil {
 		t.Fatal(err)
 	}
 
 	var calls []string
 	real := r.io.swapDriver
-	r.io.swapDriver = func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) error {
+	r.io.swapDriver = func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (nio.Driver, <-chan nio.Values, error) {
 		calls = append(calls, name)
 		if name == "opcua-client" {
-			return errors.New("injected")
+			return nil, nil, errors.New("injected")
 		}
 		return real(ctx, name, fsys, cfg)
 	}
@@ -643,7 +659,7 @@ func TestIOApplyRollsBackADriverSwap(t *testing.T) {
 	if v := r.io.Validate(c); !v.Valid || len(v.Changes) != 2 {
 		t.Fatalf("validate: %+v", v)
 	}
-	if err := r.io.Apply(r.ctx, c, "tester"); err == nil {
+	if _, err := r.io.Apply(r.ctx, c, "tester"); err == nil {
 		t.Fatal("the failed apply reported success")
 	}
 	if fmt.Sprint(calls) != "[modbus opcua-client modbus]" {
@@ -685,5 +701,120 @@ func TestOverlayFS(t *testing.T) {
 	}
 	if _, err := fs.ReadFile(o, "d.yaml"); err == nil {
 		t.Error("a file in neither reads")
+	}
+}
+
+// #960 review probes: a tag moved between devices in a whole-driver swap,
+// and two devices on one endpoint writing one register, are refused.
+func TestIOValidateRefusesReviewProbes(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	pa, pb := slavePort(s1), slavePort(s2)
+	ua := uaServer(t, 1.5)
+	files := ioFiles(pa, pb, ua)
+	r := startIORig(t, files, false)
+
+	moved := strings.Replace(modbusYAML(pa, pb, "", ""),
+		"name: A_Cmd, source: DEV_A,", "name: A_Cmd, source: DEV_B,", 1)
+	cand := withFile(withFile(files, "modbus.yaml", moved), "nautilus.yaml",
+		strings.Replace(string(files["nautilus.yaml"].Data), "scan-rate: 10ms", "scan-rate: 15ms", 1))
+	v := r.io.Validate(r.io.Stage(cand, "upload", "tester"))
+	if v.Valid || !strings.Contains(" "+strings.Join(failed(v), " ")+" ", " fields ") {
+		t.Fatalf("a tag moved in a whole swap: valid %v failed %v", v.Valid, failed(v))
+	}
+
+	v = r.io.Validate(r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(pb, pb, "", "")), "upload", "tester"))
+	if v.Valid || !strings.Contains(strings.Join(failed(v), " "), "outputs") {
+		t.Fatalf("two devices on one endpoint: valid %v failed %v %+v", v.Valid, failed(v), v.Checks)
+	}
+}
+
+// Only addressing and binding change live: every other field is refused
+// by name.
+func TestIOValidateAllowsOnlyAddressing(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	pa, pb := slavePort(s1), slavePort(s2)
+	ua := uaServer(t, 1.5)
+	files := ioFiles(pa, pb, ua)
+	src := modbusYAML(pa, pb, "", "")
+	srcA := mbSource("DEV_A", pa)
+	nau := string(files["nautilus.yaml"].Data)
+	ua0 := string(files["opcua.yaml"].Data)
+	r := startIORig(t, files, false)
+	cases := []struct {
+		name, file, content, field string
+		valid                      bool
+	}{
+		{"host, port, unit id", "modbus.yaml", strings.Replace(src, srcA, strings.Replace(srcA, "unitid: 1", "unitid: 3", 1), 1), "", true},
+		{"a register address", "modbus.yaml", strings.Replace(src, "name: A_In, source: DEV_A, table: holding, address: 0", "name: A_In, source: DEV_A, table: holding, address: 4", 1), "", true},
+		{"an OPC UA node id", "opcua.yaml", strings.Replace(ua0, "s=Level", "s=Level2", 1), "", true},
+		{"word order", "modbus.yaml", strings.Replace(src, srcA, strings.Replace(srcA, "unitid: 1,", "unitid: 1, wordorder: little,", 1), 1), "wordorder", false},
+		{"a timeout", "modbus.yaml", strings.Replace(src, srcA, strings.Replace(srcA, "timeout: 500ms", "timeout: 900ms", 1), 1), "timeout", false},
+		{"a keep-alive added", "modbus.yaml", strings.Replace(src, "address: 10, format: int16, writable: true}", "address: 10, format: int16, writable: true, rewrite: 1s}", 1), "rewrite", false},
+		{"a scale", "modbus.yaml", strings.Replace(src, "name: A_In, source: DEV_A, table: holding, address: 0, format: int16}", "name: A_In, source: DEV_A, table: holding, address: 0, format: int16, scale: 2}", 1), "scale", false},
+		{"an OPC UA security policy", "nautilus.yaml", strings.Replace(nau, "    endpoint: "+ua, "    endpoint: "+ua+"\n    security: Basic256Sha256", 1), "security", false},
+		{"an OPC UA pki dir", "nautilus.yaml", strings.Replace(nau, "    endpoint: "+ua, "    endpoint: "+ua+"\n    pki-dir: pki", 1), "pki-dir", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := r.io.Validate(r.io.Stage(withFile(files, tc.file, tc.content), "upload", "tester"))
+			if tc.valid {
+				if !v.Valid {
+					t.Fatalf("refused: %+v", v.Checks)
+				}
+				return
+			}
+			var detail string
+			for _, c := range v.Checks {
+				if c.Name == "fields" {
+					detail = c.Detail
+				}
+			}
+			if v.Valid || !strings.Contains(detail, tc.field) {
+				t.Fatalf("valid %v, fields check %q; want %s refused by name", v.Valid, detail, tc.field)
+			}
+		})
+	}
+}
+
+// A failed apply whose rollback fails too says so: ErrRollbackFailed,
+// naming what is left, those units unknown in Differs, and a Fault.
+func TestIOApplyRollbackFailure(t *testing.T) {
+	s1, s2, s3, s4 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4), newSlave(t, 7)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	r := startIORig(t, files, false)
+	real := r.io.replaceSource
+	calls := 0
+	r.io.replaceSource = func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
+		calls++
+		if calls == 1 {
+			return real(mb, src, tags, opts) // DEV_A applied
+		}
+		return errors.New("injected") // DEV_B fails, and so does putting DEV_A back
+	}
+	c := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s4), "", "")), "upload", "tester")
+	r.io.Validate(c)
+	_, err := r.io.Apply(r.ctx, c, "tester")
+	if !errors.Is(err, ErrRollbackFailed) || !strings.Contains(err.Error(), "device DEV_A") || strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("err = %v, want ErrRollbackFailed naming device DEV_A", err)
+	}
+	d := r.io.Differs()
+	if len(d) != 1 || d[0].Device != "DEV_A" || d[0].RunningHash != unknownHash {
+		t.Fatalf("differs = %+v, want DEV_A unknown", d)
+	}
+	if !strings.Contains(r.io.Fault(), "DEV_A") {
+		t.Fatalf("fault = %q", r.io.Fault())
+	}
+}
+
+// With the write gate closed, a changed device commands nothing, and
+// willCommand says why.
+func TestIOWillCommandWithTheGateClosed(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	r := startIORig(t, files, false)
+	modbusOf(r.p.Runtime.Driver).SetWriteGate(func() bool { return false })
+	v := r.io.Validate(r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester"))
+	if !v.Valid || len(v.WillCommand) != 0 || !strings.Contains(strings.Join(v.Notes, " "), "gate is closed") {
+		t.Fatalf("valid %v willCommand %v notes %v; want nothing, the gate named", v.Valid, v.WillCommand, v.Notes)
 	}
 }

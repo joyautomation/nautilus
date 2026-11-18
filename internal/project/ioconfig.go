@@ -42,12 +42,13 @@ import (
 	"github.com/joyautomation/nautilus/devbind"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
 // IORuntime is what an apply needs of the running runtime.
 type IORuntime interface {
-	ReplaceDriver(ctx context.Context, name string, d nio.Driver) (nio.Driver, error)
+	ReplaceDriverObserved(ctx context.Context, name string, d nio.Driver) (nio.Driver, <-chan nio.Values, error)
 	Tags() *runtime.Tags
 }
 
@@ -70,8 +71,29 @@ type IOConfig struct {
 	// replaceSource is modbus.(*Driver).ReplaceSource and swapDriver is
 	// (*IOConfig).swap; a test makes either fail.
 	replaceSource func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error
-	swapDriver    func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) error
+	swapDriver    func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (nio.Driver, <-chan nio.Values, error)
+
+	// Gate, when set, is the write gate naut run installs on the drivers:
+	// a driver without a look of its own (the OPC UA client) commands
+	// nothing while it is closed, and willCommand says so.
+	Gate func() bool
+
+	// fault is set when putting back a failed apply failed too: what runs
+	// is then not known (Fault).
+	fault string
 }
+
+// ErrRollbackFailed is an apply that failed and could not put back all it
+// had changed: what runs is no longer known. The error names what is left.
+var ErrRollbackFailed = errors.New("putting back a failed I/O apply failed")
+
+// unknownHash marks a unit whose configuration is not known after a failed
+// rollback: it differs from every manifest and every candidate's base.
+const unknownHash = "unknown"
+
+// firstPushWait bounds how long Apply waits for the first scan after it to
+// hand over its commands.
+const firstPushWait = 2 * time.Second
 
 // swappable are the driver types a whole-driver swap is proven for. The
 // new driver starts before the old one stops: harmless for a poller, but a
@@ -285,6 +307,16 @@ type IOValidation struct {
 	Notes       []string    `json:"notes,omitempty"`
 }
 
+// IOResult is what an apply did.
+type IOResult struct {
+	Changes []IOChange `json:"changes"`
+	// Commanded is what the first scan after the apply handed the changed
+	// devices and drivers and they queued to send, by the driver's own
+	// rule (its write gate, a parked source, a held baseline).
+	Commanded []IOCommand `json:"commanded"`
+	Notes     []string    `json:"notes,omitempty"`
+}
+
 // IOCandidate is a staged I/O configuration.
 type IOCandidate struct {
 	From string // "upload", or the commit it was staged from
@@ -464,28 +496,30 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 			tagp = append(tagp, fmt.Sprintf("driver %s: %v", ch.Driver, err))
 		}
 	}
-	for _, ch := range v.Changes {
-		if ch.Device == "" {
-			continue
-		}
-		k := unitKey(ch.Driver, ch.Device)
-		if a, b := bindingNames(running[k].tags), bindingNames(c.units[k].tags); !slices.Equal(a, b) {
-			tagp = append(tagp, fmt.Sprintf("device %s binds %v, not %v: a tag cannot move between devices live", ch.Device, b, a))
-		}
-	}
 	if len(tagp) > 0 {
 		tagp = append(tagp, "the tag set is fixed while the runtime runs: restart, or activate a program")
 	}
 	check("tags", tagp)
 
 	check("device-type", io.deviceTypeProblems(c))
+	check("fields", io.fieldProblems(c, running))
 	check("outputs", newOutputConflicts(running, c.units))
 
 	if nonIOYAML(c.m) != io.bootYAML {
 		v.Notes = append(v.Notes, "the candidate's manifest changes more than its I/O; only drivers:, devices: and the files they name are applied (activate a program, or deploy, for the rest)")
 	}
 	v.Held = io.hold
-	v.WillCommand = io.willCommand(c, v.Changes)
+	var why []string
+	v.WillCommand, why = io.willCommand(c, v.Changes)
+	v.Notes = append(v.Notes, why...)
+	if len(v.WillCommand) > 0 {
+		v.Notes = append(v.Notes, "willCommand holds the commands as of this validation; the scan may change them before the apply, and the apply reports what the first scan after it actually handed over")
+	}
+	for _, ch := range v.Changes {
+		if ch.Device == "" {
+			v.Notes = append(v.Notes, fmt.Sprintf("driver %s is swapped whole: the new driver connects before the old one disconnects, so a device that allows a single connection may refuse it until the old one has gone", ch.Driver))
+		}
+	}
 	return finish()
 }
 
@@ -501,15 +535,6 @@ func addedText(u ioUnit) string {
 		return fmt.Sprintf("Modbus device %s (driver %s) is new", u.device, u.driver)
 	}
 	return fmt.Sprintf("driver %s is new", u.driver)
-}
-
-func bindingNames(tags []modbus.TagBinding) []string {
-	out := make([]string, 0, len(tags))
-	for _, t := range tags {
-		out = append(out, t.Name+"/"+fmt.Sprint(t.Writable))
-	}
-	sort.Strings(out)
-	return out
 }
 
 // sameTypedTags is runtime.ReplaceDriver's tag check, with the types too.
@@ -582,9 +607,159 @@ func (io *IOConfig) deviceTypeProblems(c *IOCandidate) []string {
 	return out
 }
 
+// What an apply may change (#706 v1): addressing and binding. Every other
+// field is refused by name, so nothing changes live that was not meant to
+// (word order, timeouts, a keep-alive, a scale, a security policy).
+var (
+	liveSource   = fieldSet("Host", "Port", "UnitID")
+	liveModbus   = fieldSet("Table", "Address", "ScanClass")
+	liveOPCUA    = fieldSet("NodeID", "Namespace", "ScanClass")
+	liveRow      = fieldSet("Name", "Endpoint", "UnitID", "Profile", "Points") // profile and points: device-type's
+	liveDriverOf = map[string]map[string]bool{
+		"modbus":       fieldSet("Type", "Name", "Manifest", "ScanRate", "ScanClasses", "TagClasses"),
+		"opcua-client": fieldSet("Type", "Name", "Manifest", "Endpoint", "ScanRate", "ScanClasses", "TagClasses"),
+	}
+)
+
+func fieldSet(names ...string) map[string]bool {
+	out := map[string]bool{}
+	for _, n := range names {
+		out[n] = true
+	}
+	return out
+}
+
+// changedFields names the exported fields of two values of one struct type
+// that differ and allowed does not hold, as a manifest spells them (the
+// yaml key, else the field name in lower case).
+func changedFields(a, b any, allowed map[string]bool) []string {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	var out []string
+	for i := 0; i < va.NumField(); i++ {
+		f := va.Type().Field(i)
+		if !f.IsExported() || allowed[f.Name] {
+			continue
+		}
+		if reflect.DeepEqual(va.Field(i).Interface(), vb.Field(i).Interface()) {
+			continue
+		}
+		name := strings.ToLower(f.Name)
+		if tag, _, _ := strings.Cut(f.Tag.Get("yaml"), ","); tag != "" && tag != "-" {
+			name = tag
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+func keyNames(m map[string]bool) string {
+	var out []string
+	for k := range m {
+		out = append(out, strings.ToLower(k))
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
+}
+
+// fieldProblems refuses every change outside the allow-lists above: on a
+// driver entry, a Modbus source, a Modbus or OPC UA binding (a binding's
+// source among them, so a tag never moves between devices), a devices:
+// row.
+func (io *IOConfig) fieldProblems(c *IOCandidate, running map[string]ioUnit) []string {
+	var out []string
+	refuse := func(what string, fields []string, allowed map[string]bool) {
+		if len(fields) > 0 {
+			out = append(out, fmt.Sprintf("%s: %s change (live, only %s may)", what, strings.Join(fields, ", "), keyNames(allowed)))
+		}
+	}
+	for _, k := range sortedKeys(c.units) {
+		u, r := c.units[k], running[k]
+		switch {
+		case u.device != "":
+			refuse("device "+u.device, changedFields(r.src, u.src, liveSource), liveSource)
+		case liveDriverOf[u.typ] != nil:
+			refuse("driver "+u.driver, changedFields(r.cfg, u.cfg, liveDriverOf[u.typ]), liveDriverOf[u.typ])
+		}
+	}
+	// Modbus bindings, across each driver: a tag that moves to another
+	// device changes its binding's source.
+	bindings := func(units map[string]ioUnit, driver string) map[string]modbus.TagBinding {
+		out := map[string]modbus.TagBinding{}
+		for _, u := range units {
+			if u.driver == driver && u.device != "" {
+				for _, t := range u.tags {
+					out[t.Name+"/"+fmt.Sprint(t.Writable)] = t
+				}
+			}
+		}
+		return out
+	}
+	for _, k := range sortedKeys(c.units) {
+		u := c.units[k]
+		if u.device != "" || u.typ != "modbus" {
+			continue
+		}
+		was, now := bindings(running, u.driver), bindings(c.units, u.driver)
+		for _, n := range sortedKeys(now) {
+			if b, ok := was[n]; ok {
+				refuse("tag "+now[n].Name, changedFields(b, now[n], liveModbus), liveModbus)
+			}
+		}
+	}
+	// OPC UA client bindings, by tag.
+	for _, k := range sortedKeys(c.units) {
+		u := c.units[k]
+		if u.typ != "opcua-client" {
+			continue
+		}
+		was, err1 := uaBindings(running[k])
+		now, err2 := uaBindings(u)
+		if err1 != nil || err2 != nil {
+			continue // schema reports it
+		}
+		for _, n := range sortedKeys(now) {
+			if b, ok := was[n]; ok {
+				refuse("tag "+n, changedFields(b, now[n], liveOPCUA), liveOPCUA)
+			}
+		}
+	}
+	rows := map[string]devbind.Device{}
+	for _, r := range io.bootRows {
+		rows[r.Name] = r
+	}
+	for _, r := range c.m.Devices {
+		if b, ok := rows[r.Name]; ok {
+			refuse("devices: row "+r.Name, changedFields(b, r, liveRow), fieldSet("Endpoint", "UnitID"))
+		}
+	}
+	if len(out) > 0 {
+		out = append(out, "restart to apply the rest")
+	}
+	return out
+}
+
+// uaBindings reads an OPC UA client unit's manifest, by tag.
+func uaBindings(u ioUnit) (map[string]opcua.TagBinding, error) {
+	raw, err := fs.ReadFile(u.fsys, path.Clean(u.cfg.Manifest))
+	if err != nil {
+		return nil, err
+	}
+	m, err := opcua.ParseManifest(raw)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]opcua.TagBinding{}
+	for _, t := range m.Tags {
+		out[t.Name] = t
+	}
+	return out, nil
+}
+
 // newOutputConflicts reports the Modbus outputs the candidate binds twice at
-// one address (by register, or by bit for bit:N) that what runs does not:
-// two tags would command one point. Today's manifest check is by name only.
+// one point of one device (by register, or by bit for bit:N) that what runs
+// does not: two tags would command one point. A device is its endpoint
+// (host, port, unit id), not its source id: two sources on one endpoint
+// write the same registers. Today's manifest check is by name only.
 func newOutputConflicts(running, cand map[string]ioUnit) []string {
 	before := map[string]bool{}
 	for _, c := range outputConflicts(running) {
@@ -599,18 +774,27 @@ func newOutputConflicts(running, cand map[string]ioUnit) []string {
 	return out
 }
 
+func endpointOf(src modbus.Source) string {
+	port := src.Port
+	if port == 0 {
+		port = 502
+	}
+	return fmt.Sprintf("%s:%d unit %d", strings.ToLower(src.Host), port, src.UnitID)
+}
+
 func outputConflicts(units map[string]ioUnit) []string {
 	type claim struct {
-		tag  string
-		mask uint16 // the bits of the word it writes
+		tag, device string
+		mask        uint16 // the bits of the word it writes
 	}
 	var out []string
+	words := map[string][]claim{}
 	for _, k := range sortedKeys(units) {
 		u := units[k]
 		if u.device == "" {
 			continue
 		}
-		words := map[string][]claim{}
+		ep := endpointOf(u.src)
 		for _, t := range u.tags {
 			if !t.Writable {
 				continue
@@ -628,47 +812,61 @@ func outputConflicts(units map[string]ioUnit) []string {
 				mask = 1 << f.Bit
 			}
 			for w := 0; w < n; w++ {
-				at := fmt.Sprintf("%s@%d", t.Table, int(t.Address)+w)
+				at := fmt.Sprintf("%s@%d on %s", t.Table, int(t.Address)+w, ep)
 				for _, c := range words[at] {
 					if c.mask&mask != 0 && c.tag != t.Name {
-						out = append(out, fmt.Sprintf("device %s: outputs %s and %s both write %s", u.device, c.tag, t.Name, at))
+						out = append(out, fmt.Sprintf("outputs %s (device %s) and %s (device %s) both write %s", c.tag, c.device, t.Name, u.device, at))
 					}
 				}
-				words[at] = append(words[at], claim{t.Name, mask})
+				words[at] = append(words[at], claim{t.Name, u.device, mask})
 			}
 		}
 	}
 	return out
 }
 
-// willCommand lists the outputs the first scan after the apply sends to
-// what changes, with the values they hold now.
-func (io *IOConfig) willCommand(c *IOCandidate, changes []IOChange) []IOCommand {
+// willCommand lists the outputs the first scan after the apply would have
+// the changed devices and drivers send, with the values they hold now. It
+// follows the driver's own rule: modbus.HeldAtBaseline under a held swap,
+// and the write gate and a parked source (modbus.Driver.Sending). why says
+// what sends nothing.
+func (io *IOConfig) willCommand(c *IOCandidate, changes []IOChange) (cmds []IOCommand, why []string) {
 	names := map[string]bool{}
+	modbusTags := func(mb *modbus.Driver, u ioUnit) {
+		if mb != nil {
+			if ok, reason := mb.Sending(u.device); !ok {
+				why = append(why, fmt.Sprintf("device %s commands nothing now: %s", u.device, reason))
+				return
+			}
+		}
+		for _, t := range u.tags {
+			if t.Writable && (!io.hold || !modbus.HeldAtBaseline(t)) {
+				names[t.Name] = true
+			}
+		}
+	}
 	for _, ch := range changes {
+		mb := modbusOf(io.currentDriver(ch.Driver))
 		if ch.Device != "" {
-			for _, t := range c.units[unitKey(ch.Driver, ch.Device)].tags {
-				if t.Writable && (!io.hold || t.Rewrite > 0) {
-					names[t.Name] = true
+			modbusTags(mb, c.units[unitKey(ch.Driver, ch.Device)])
+			continue
+		}
+		if c.units[ch.Driver].typ == "modbus" {
+			// The new driver takes the gates and enable tags the old one
+			// answers to: ask the old one.
+			for _, k := range sortedKeys(c.units) {
+				if su := c.units[k]; su.driver == ch.Driver && su.device != "" {
+					modbusTags(mb, su)
 				}
 			}
 			continue
 		}
-		u := c.units[ch.Driver]
-		if u.typ == "modbus" {
-			for _, su := range c.units {
-				if su.driver != ch.Driver || su.device == "" {
-					continue
-				}
-				for _, t := range su.tags {
-					if t.Writable && (!io.hold || t.Rewrite > 0) {
-						names[t.Name] = true
-					}
-				}
-			}
+		if io.Gate != nil && !io.Gate() {
+			why = append(why, fmt.Sprintf("driver %s commands nothing now: the write gate is closed", ch.Driver))
 			continue
 		}
 		if io.hold {
+			why = append(why, fmt.Sprintf("driver %s: held (HoldOutputsOnSwap), its first commands are its baseline and are sent once they change", ch.Driver))
 			continue
 		}
 		if o, ok := c.built[ch.Driver].(tagNames); ok {
@@ -677,12 +875,12 @@ func (io *IOConfig) willCommand(c *IOCandidate, changes []IOChange) []IOCommand 
 			}
 		}
 	}
-	out := make([]IOCommand, 0, len(names))
+	cmds = make([]IOCommand, 0, len(names))
 	for _, n := range sortedNames(keysOf(names)) {
 		val, _ := io.rt.Tags().ReadPath(n)
-		out = append(out, IOCommand{Tag: n, Value: val})
+		cmds = append(cmds, IOCommand{Tag: n, Value: val})
 	}
-	return out
+	return cmds, why
 }
 
 func keysOf(m map[string]bool) []string {
@@ -695,20 +893,26 @@ func keysOf(m map[string]bool) []string {
 
 // Apply applies a valid candidate: each changed Modbus device in the driver
 // that runs, then each changed driver swapped whole. It is all or nothing:
-// a step that fails puts back the steps before it. by is who applies it.
-func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) error {
+// a step that fails puts back the steps before it, and if putting back
+// fails too the error wraps ErrRollbackFailed, names what is left, marks
+// those units unknown (Differs) and sets Fault. by is who applies it.
+//
+// The result's Commanded is what the first scan after the apply handed the
+// changed devices and drivers, waited for up to firstPushWait. Whether a
+// moved device answers is not checked (live probes are #706 PR 4).
+func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IOResult, error) {
 	if !io.applying.TryLock() {
-		return ErrApplyBusy
+		return nil, ErrApplyBusy
 	}
 	defer io.applying.Unlock()
 	c.mu.Lock()
 	val, base := c.val, c.base
 	c.mu.Unlock()
 	if val == nil {
-		return errors.New("validate the candidate before applying it")
+		return nil, errors.New("validate the candidate before applying it")
 	}
 	if !val.Valid {
-		return errors.New("the candidate is not valid; it cannot be applied")
+		return nil, errors.New("the candidate is not valid; it cannot be applied")
 	}
 	io.mu.Lock()
 	stale := len(base) != len(io.running)
@@ -723,55 +927,106 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) error 
 	}
 	io.mu.Unlock()
 	if stale {
-		return ErrIOStale
+		return nil, ErrIOStale
 	}
 
-	var undo []func()
-	rollback := func() {
-		for i := len(undo) - 1; i >= 0; i-- {
-			undo[i]()
-		}
+	type undoStep struct {
+		what string   // "device DEV_A" / "driver opcua-client"
+		keys []string // the units it leaves unknown if it fails
+		run  func() error
 	}
-	opts := modbus.ReplaceOptions{HoldOutputs: io.hold}
+	var undo []undoStep
+	fail := func(ch IOChange, what string, err error) (*IOResult, error) {
+		io.log(ch, c, by, err)
+		var left []string
+		for i := len(undo) - 1; i >= 0; i-- {
+			if uerr := undo[i].run(); uerr != nil {
+				left = append(left, fmt.Sprintf("%s (%v)", undo[i].what, uerr))
+				io.markUnknown(undo[i].keys, by)
+			}
+		}
+		if len(left) == 0 {
+			return nil, fmt.Errorf("%s: %w (nothing was changed)", what, err)
+		}
+		msg := fmt.Sprintf("%s: %v; putting back failed for %s: what runs there is not known; apply a candidate for it, or restart", what, err, strings.Join(left, ", "))
+		io.mu.Lock()
+		io.fault = msg
+		io.mu.Unlock()
+		slog.Error("config.apply: rollback failed", "err", msg)
+		return nil, fmt.Errorf("%w: %s", ErrRollbackFailed, msg)
+	}
+
+	type share struct {
+		what string
+		ch   <-chan modbus.FirstShare
+	}
+	var shares []share
+	type push struct {
+		name string
+		mb   map[string]modbus.TagBinding // a whole Modbus swap's bindings, by tag
+		ch   <-chan nio.Values
+	}
+	var pushes []push
+
 	for _, ch := range val.Changes {
 		if ch.Device == "" {
 			continue
 		}
+		ch := ch
 		k := unitKey(ch.Driver, ch.Device)
+		what := "device " + ch.Device
 		mb := modbusOf(io.currentDriver(ch.Driver))
 		if mb == nil {
-			rollback()
-			return fmt.Errorf("driver %s: no running Modbus driver to apply device %s to", ch.Driver, ch.Device)
+			return fail(ch, what, fmt.Errorf("no running Modbus driver %s", ch.Driver))
 		}
 		next, prev := c.units[k], running[k]
+		got := make(chan modbus.FirstShare, 1)
+		opts := modbus.ReplaceOptions{HoldOutputs: io.hold, Observe: func(s modbus.FirstShare) { got <- s }}
 		if err := io.replaceSource(mb, next.src, next.tags, opts); err != nil {
-			rollback()
-			io.log(ch, c, by, err)
-			return fmt.Errorf("device %s: %w (nothing was changed)", ch.Device, err)
+			return fail(ch, what, err)
 		}
-		undo = append(undo, func() {
-			if err := io.replaceSource(mb, prev.src, prev.tags, opts); err != nil {
-				slog.Error("config.apply: putting a device back failed", "driver", ch.Driver, "device", ch.Device, "err", err)
-			}
-		})
+		shares = append(shares, share{what, got})
+		undo = append(undo, undoStep{what, []string{k}, func() error {
+			return io.replaceSource(mb, prev.src, prev.tags, modbus.ReplaceOptions{HoldOutputs: io.hold})
+		}})
 	}
 	for _, ch := range val.Changes {
 		if ch.Device != "" {
 			continue
 		}
+		ch := ch
+		what := "driver " + ch.Driver
 		prev := running[ch.Driver]
-		if err := io.swapDriver(ctx, ch.Driver, c.fsys, c.configs[ch.Driver]); err != nil {
-			rollback()
-			io.log(ch, c, by, err)
-			return fmt.Errorf("driver %s: %w (nothing was changed)", ch.Driver, err)
+		d, pushed, err := io.swapDriver(ctx, ch.Driver, c.fsys, c.configs[ch.Driver])
+		if err != nil {
+			return fail(ch, what, err)
 		}
-		undo = append(undo, func() {
+		var mbTags map[string]modbus.TagBinding
+		if modbusOf(d) != nil {
+			mbTags = map[string]modbus.TagBinding{}
+			for _, u := range c.units {
+				if u.driver == ch.Driver {
+					for _, t := range u.tags {
+						if t.Writable {
+							mbTags[t.Name] = t
+						}
+					}
+				}
+			}
+		}
+		pushes = append(pushes, push{ch.Driver, mbTags, pushed})
+		var keys []string
+		for k, u := range running {
+			if u.driver == ch.Driver {
+				keys = append(keys, k)
+			}
+		}
+		undo = append(undo, undoStep{what, keys, func() error {
 			uctx, cancel := context.WithTimeout(context.Background(), undoTimeout)
 			defer cancel()
-			if err := io.swapDriver(uctx, ch.Driver, prev.fsys, prev.cfg); err != nil {
-				slog.Error("config.apply: putting a driver back failed", "driver", ch.Driver, "err", err)
-			}
-		})
+			_, _, err := io.swapDriver(uctx, ch.Driver, prev.fsys, prev.cfg)
+			return err
+		}})
 	}
 
 	// What runs is now the candidate, unit for unit: its files are what a
@@ -792,31 +1047,103 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) error 
 	for _, ch := range val.Changes {
 		io.log(ch, c, by, nil)
 	}
-	return nil
+
+	res := &IOResult{Changes: val.Changes, Commanded: []IOCommand{},
+		Notes: []string{"applied; whether each changed device answers was not checked (a device that does not reads Bad quality); probing it first comes with #706 PR 4"}}
+	wait, cancel := context.WithTimeout(ctx, firstPushWait)
+	defer cancel()
+	cmds := map[string]any{}
+	for _, sh := range shares {
+		select {
+		case s := <-sh.ch:
+			switch {
+			case s.GateClosed:
+				res.Notes = append(res.Notes, sh.what+": the write gate was closed, so the first scan after the apply commanded nothing")
+			case s.Parked:
+				res.Notes = append(res.Notes, sh.what+": parked by its enable tag; its commands wait until it is enabled")
+			}
+			for n, v := range s.Queued {
+				cmds[n] = v
+			}
+		case <-wait.Done():
+			res.Notes = append(res.Notes, sh.what+": no scan has handed it its commands yet")
+		}
+	}
+	for _, p := range pushes {
+		select {
+		case vals := <-p.ch:
+			for n, v := range vals {
+				if p.mb != nil && io.hold && modbus.HeldAtBaseline(p.mb[n]) {
+					continue // recorded as the new driver's baseline, not sent
+				}
+				if p.mb == nil && io.hold {
+					continue
+				}
+				cmds[n] = v
+			}
+			if p.mb == nil && io.hold {
+				res.Notes = append(res.Notes, "driver "+p.name+": held, its first commands are its baseline")
+			}
+		case <-wait.Done():
+			res.Notes = append(res.Notes, "driver "+p.name+": no scan has handed it its commands yet")
+		}
+	}
+	for _, n := range sortedNames(keysOf2(cmds)) {
+		res.Commanded = append(res.Commanded, IOCommand{Tag: n, Value: cmds[n]})
+	}
+	return res, nil
+}
+
+func keysOf2(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// markUnknown marks units whose configuration a failed rollback left
+// unknown.
+func (io *IOConfig) markUnknown(keys []string, by string) {
+	io.mu.Lock()
+	defer io.mu.Unlock()
+	for _, k := range keys {
+		u := io.running[k]
+		u.hash, u.from, u.at, u.by = unknownHash, "rollback failed", time.Now(), by
+		io.running[k] = u
+	}
+}
+
+// Fault is what a failed rollback left unknown, "" when nothing has.
+func (io *IOConfig) Fault() string {
+	io.mu.Lock()
+	defer io.mu.Unlock()
+	return io.fault
 }
 
 // swap builds the driver cfg describes, gates and starts it, swaps it in for
-// the one named name and stops that one.
-func (io *IOConfig) swap(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) error {
+// the one named name and stops that one. It returns the new driver and the
+// outputs the first push after the swap hands it.
+func (io *IOConfig) swap(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (nio.Driver, <-chan nio.Values, error) {
 	set, ok := io.p.Runtime.Driver.(*nio.Multi)
 	if !ok {
-		return errors.New("the runtime's driver is not a composite")
+		return nil, nil, errors.New("the runtime's driver is not a composite")
 	}
 	d, err := buildDriver(fsys, cfg)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	set.Gate(d)
 	if s, ok := d.(interface{ Start(context.Context) }); ok {
 		s.Start(context.Background()) // runs until Stop, as naut run starts drivers
 	}
-	prev, err := io.rt.ReplaceDriver(ctx, name, d)
+	prev, pushed, err := io.rt.ReplaceDriverObserved(ctx, name, d)
 	if err != nil {
 		stopDriver(d)
-		return err
+		return nil, nil, err
 	}
 	stopDriver(prev)
-	return nil
+	return d, pushed, nil
 }
 
 func stopDriver(d nio.Driver) {
