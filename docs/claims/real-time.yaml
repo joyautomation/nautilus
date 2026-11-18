@@ -296,3 +296,31 @@ claims:
       TestRTGuardPriorityWatchdog needs CAP_SYS_NICE: it skips under go test
       ./... and runs in CI's setcap'd RT guard step with
       NAUTILUS_REQUIRE_RT=1.
+
+  - id: RT-027
+    claim: >-
+      Once, as a task starts, the runtime refuses to pin it to a CPU at a
+      priority where another program's userspace real-time thread above it
+      is confined (a SCHED_DEADLINE thread counts as above any priority),
+      unless the task sets share-cpu: true: the task runs unpinned at normal
+      priority with the reason in its scan.sched, an error is logged and
+      naut run's banner says REAL-TIME REFUSED (CPU PIN FAILED for a cpu:
+      alone). A higher thread that may float elsewhere, one at or below the
+      priority confined there, an unpinned task that may land beside a
+      confined higher thread, entries it cannot read or a /proc hiding
+      processes, and the kernel's RT throttle off (-1 on any kernel, runtime =
+      period before 6.12; once per process) are warnings; kernel threads, the process's own threads and
+      lower threads that float are not counted.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestPreflightRefusesTheIncidentLayout
+      - go ./runtime TestPreflightWarnings
+      - go ./runtime TestPreflightUnpinnedWarns
+      - go ./runtime TestPreflightSaysWhatItCannotSee
+      - go ./runtime TestPreflightThrottleWarning
+      - go ./runtime TestPreflightThrottleWarnedOnce
+      - go ./runtime TestPreflightCPUText
+      - go ./runtime TestPreflightApplySchedRefuses
+      - go ./internal/project TestShareCPUFromTheManifest
+      - go ./cmd/naut TestSchedBannerSuffixNamesRefusedTasks
+      - go ./cmd/naut TestRunBannerSaysRealTimeWasRefused

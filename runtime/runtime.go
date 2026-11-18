@@ -105,6 +105,10 @@ type Options struct {
 	// Guard bounds the main task while it runs at Priority (prioguard.go);
 	// zero fields take the defaults. Tasks have the same field.
 	Guard PriorityGuard
+	// ShareCPU pins to CPUs even where another program already runs a
+	// real-time thread above Priority, which pre-flight otherwise refuses
+	// (preflight_linux.go). Tasks have the same field.
+	ShareCPU bool
 	// Coordinator gates the scan loop for redundancy: a standby replica
 	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
 	// performs the takeover sequence (reload retained state, reset program
@@ -130,6 +134,7 @@ type Task struct {
 	CPUs     []int
 	Priority int
 	Guard    PriorityGuard // see Options.Guard
+	ShareCPU bool          // see Options.ShareCPU
 }
 
 // TaskStats is one additional task's health, riding inside ScanStats.
@@ -166,15 +171,16 @@ type SchedStats struct {
 
 // taskRun is a compiled Task plus its live scheduling state.
 type taskRun struct {
-	name  string
-	prog  *Program
-	scan  time.Duration
-	dtTag string
-	cpus  []int
-	prio  int
-	guard PriorityGuard // with defaults
-	watch overrunWatch  // the loop's own (prioguard.go)
-	tid   atomic.Int64  // the loop's thread once it holds the priority
+	name     string
+	prog     *Program
+	scan     time.Duration
+	dtTag    string
+	cpus     []int
+	prio     int
+	shareCPU bool          // pin beside a higher-priority real-time thread anyway (preflight_linux.go)
+	guard    PriorityGuard // with defaults
+	watch    overrunWatch  // the loop's own (prioguard.go)
+	tid      atomic.Int64  // the loop's thread once it holds the priority
 
 	mu       sync.Mutex
 	lastScan time.Time
@@ -210,6 +216,7 @@ type Runtime struct {
 	coord       Coordinator
 	cpus        []int // main task thread placement, see Options.CPUs
 	prio        int
+	shareCPU    bool          // see taskRun.shareCPU
 	guard       PriorityGuard // main task, with defaults (prioguard.go)
 	watch       overrunWatch  // main loop's own
 	tid         atomic.Int64  // main loop's thread once it holds the priority
@@ -448,7 +455,7 @@ func New(o Options) (*Runtime, error) {
 		if scan <= 0 {
 			scan = 100 * time.Millisecond
 		}
-		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority, guard: td.Guard.withDefaults()}
+		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority, shareCPU: td.ShareCPU, guard: td.Guard.withDefaults()}
 		tr.watch.limit = tr.guard.Overruns
 		tr.stats.Name = name
 		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard)}
@@ -580,6 +587,7 @@ func New(o Options) (*Runtime, error) {
 	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
 	r.cpus, r.prio = o.CPUs, o.Priority
 	r.guard = o.Guard.withDefaults()
+	r.shareCPU = o.ShareCPU
 	r.watch.limit = r.guard.Overruns
 	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard)}
 	r.stats.IOHealthy = true
@@ -1055,7 +1063,7 @@ func (r *Runtime) Run(ctx context.Context) {
 				tr.late.missed += k
 				tr.mu.Unlock()
 			}, func() {
-				err := applySched(tr.cpus, tr.prio, func(reason string) {
+				err := applySched(tr.cpus, tr.prio, tr.shareCPU, func(reason string) {
 					tr.mu.Lock()
 					tr.stats.Sched.Applied, tr.stats.Sched.Error, tr.stats.Sched.Demoted = false, reason, true
 					tr.mu.Unlock()
@@ -1081,7 +1089,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		r.late.missed += k
 		r.mu.Unlock()
 	}, func() {
-		err := applySched(r.cpus, r.prio, func(reason string) {
+		err := applySched(r.cpus, r.prio, r.shareCPU, func(reason string) {
 			r.mu.Lock()
 			r.stats.Sched.Applied, r.stats.Sched.Error, r.stats.Sched.Demoted = false, reason, true
 			r.mu.Unlock()

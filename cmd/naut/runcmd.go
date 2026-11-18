@@ -421,6 +421,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if el != nil {
 		banner += " — redundancy: " + el.Status().Mode
 	}
+	banner += schedBannerSuffix(settledSched(rt, 500*time.Millisecond))
 	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
 	// READY=1 once a scan has completed or, as a replica, once the elector
 	// has decided this one is a standby, which does not scan.
@@ -1101,4 +1102,58 @@ func embeddedProject() (fs.FS, bool) {
 	}
 	// f stays open for the process lifetime — the zip reads from it lazily.
 	return zr, true
+}
+
+// settledSched is the runtime's stats once every task that asked for a CPU
+// or a priority has been placed or refused (the loops do it as they start),
+// or after wait, whichever is first.
+func settledSched(rt *runtime.Runtime, wait time.Duration) runtime.ScanStats {
+	deadline := time.Now().Add(wait)
+	for {
+		s := rt.Stats()
+		pending := schedPending(s.Sched)
+		for _, t := range s.Tasks {
+			pending = pending || schedPending(t.Sched)
+		}
+		if !pending || time.Now().After(deadline) {
+			return s
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func schedPending(s runtime.SchedStats) bool {
+	return (len(s.CPUs) > 0 || s.Priority > 0) && !s.Applied && s.Error == ""
+}
+
+// schedBannerSuffix says, on the banner, which tasks did not get the CPU or
+// real-time priority they asked for: a refusal is in the log and the task's
+// scan.sched too, but a controller meant to run real-time that silently
+// does not is the kind of wrong to say at start (#836).
+func schedBannerSuffix(s runtime.ScanStats) string {
+	var realtime, pin []string
+	note := func(name string, sc runtime.SchedStats) {
+		switch {
+		case sc.Error == "":
+		case sc.Priority > 0:
+			realtime = append(realtime, name)
+		default: // cpu: alone, no priority asked
+			pin = append(pin, name)
+		}
+	}
+	note(runtime.MainTaskName, s.Sched)
+	for _, t := range s.Tasks {
+		note(t.Name, t.Sched)
+	}
+	out := ""
+	if len(realtime) > 0 {
+		out += " — REAL-TIME REFUSED for " + strings.Join(realtime, ", ")
+	}
+	if len(pin) > 0 {
+		out += " — CPU PIN FAILED for " + strings.Join(pin, ", ")
+	}
+	if out != "" {
+		out += " (see the log)"
+	}
+	return out
 }

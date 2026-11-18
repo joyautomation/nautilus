@@ -84,3 +84,21 @@ func TestPriorityGuardManifestRefusals(t *testing.T) {
 		t.Errorf("the smallest bounds must load: %v", err)
 	}
 }
+
+// share-cpu: reaches the runtime for the main task and for a task.
+func TestShareCPUFromTheManifest(t *testing.T) {
+	p, err := Load(guardProject("    share-cpu: true", ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Runtime.ShareCPU || p.Runtime.Tasks[0].ShareCPU {
+		t.Errorf("main share-cpu %v, task %v; want true, false", p.Runtime.ShareCPU, p.Runtime.Tasks[0].ShareCPU)
+	}
+	p, err = Load(guardProject("", "    share-cpu: true"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Runtime.ShareCPU || !p.Runtime.Tasks[0].ShareCPU {
+		t.Errorf("main share-cpu %v, task %v; want false, true", p.Runtime.ShareCPU, p.Runtime.Tasks[0].ShareCPU)
+	}
+}

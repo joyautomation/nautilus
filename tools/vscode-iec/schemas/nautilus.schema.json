@@ -375,6 +375,10 @@
           "maximum": 99,
           "description": "Run this task's thread under SCHED_FIFO at this priority (Linux). Needs CAP_SYS_NICE (setcap cap_sys_nice+ep on the binary) or an rtprio rlimit; a refused request is logged and shown in the task's stats, and the task runs at normal priority."
         },
+        "share-cpu": {
+          "type": "boolean",
+          "description": "Pin to cpu: even where another program already runs a real-time thread above this task's priority (a vendor runtime or I/O shim, most likely), which is otherwise refused at start, with the task running unpinned at normal priority. Default false."
+        },
         "priority-guard": {
           "type": "object",
           "additionalProperties": false,

@@ -109,6 +109,31 @@ sudo setcap cap_sys_nice+ep ./my-controller     # or run as root, or set an rtpr
 task's row on the dashboard shows `cpu 2 · fifo 50 REFUSED`, and the task
 runs at normal priority — it never pretends.
 
+**Not beside a vendor's real-time thread.** Before a task is pinned to a
+CPU at a priority, the runtime looks at what already runs real-time there.
+It refuses when another program has a real-time thread on that CPU at a
+**higher** priority. That is a vendor runtime or an I/O shim, something
+the box depends on, and putting real-time work beside it starves whatever
+else that core carries. On one controller that took the network down until
+a power cycle. The refusal is loud: an error in the log, a `REAL-TIME
+REFUSED` note on the startup banner, and the reason in the task's
+`scan.sched`. The task runs unpinned at normal priority. Pin it to another
+CPU, or set `share-cpu: true` on the task if you mean it. A real-time
+thread at the same or a lower priority there is a warning, and so is the
+kernel's real-time throttle being off (`sched_rt_runtime_us` -1 on any
+kernel; the whole period only before 6.12, after which the fair server
+makes that the normal setting).
+Kernel threads don't count: every core has some at the top priority. A
+higher thread that may run on other CPUs too (a desktop's `rtkit-daemon`,
+for one) is only a warning. The check is what the refusal describes: a
+thread pinned where yours is going.
+
+The check runs once, as each task starts, and it is best effort. It sees
+what `/proc` shows this process. When `/proc` is mounted with `hidepid`,
+or entries can't be read, it says so in a warning instead of passing them
+as safe. Inside a container's PID namespace it sees only that namespace.
+A real-time thread started after nautilus is not checked.
+
 **A thread that stops yielding is bounded.** Before a task gets
 `SCHED_FIFO` the runtime sets `RLIMIT_RTTIME` on the process: a real-time
 thread may run 200 ms without blocking (sleeping, waiting on I/O). A scan

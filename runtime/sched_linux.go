@@ -32,7 +32,23 @@ import (
 // runs longer than the RLIMIT_RTTIME soft limit without blocking is moved
 // back to normal scheduling, with every other priority thread, and demoted
 // is told why. No priority is granted without that bound (#836).
-func applySched(cpus []int, prio int, demoted func(reason string)) error {
+func applySched(cpus []int, prio int, shareCPU bool, demoted func(reason string)) error {
+	// Pre-flight (preflight_linux.go): what already runs real-time where
+	// this thread is going. A refusal leaves the thread as it was.
+	if prio > 0 {
+		throttleOnce.Do(func() {
+			if w := throttleWarning(procRoot); w != "" {
+				slog.Warn("runtime: real-time pre-flight", "warning", w)
+			}
+		})
+	}
+	warnings, err := preflight(procRoot, os.Getpid(), cpus, prio, shareCPU)
+	for _, w := range warnings {
+		slog.Warn("runtime: real-time pre-flight", "cpus", cpus, "priority", prio, "warning", w)
+	}
+	if err != nil {
+		return err
+	}
 	if len(cpus) > 0 {
 		var mask [16]uint64 // 1024 CPUs
 		for _, c := range cpus {
@@ -68,6 +84,9 @@ func applySched(cpus []int, prio int, demoted func(reason string)) error {
 	}
 	return nil
 }
+
+// throttleOnce: the kernel's throttle is one setting; warn about it once.
+var throttleOnce sync.Once
 
 const (
 	schedOther   = 0
