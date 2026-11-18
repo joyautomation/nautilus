@@ -203,6 +203,9 @@ func (r *Runtime) takeover() {
 	// would answer the POST with 200 and then quietly undo it.
 	if r.coord != nil {
 		r.dropForces("takeover")
+		// READ/WRITE requests the last leadership queued are not this
+		// one's to send.
+		r.tags.comm.newLeadership()
 	}
 	// LoadRetained already restored the store before the API answered
 	// (standalone only): loading it again here would undo a write made
