@@ -39,7 +39,10 @@ import (
 const DefaultURL = "http://127.0.0.1:8190"
 
 // TokenFile is where the agent's installer writes its bearer token, on the
-// agent's machine.
+// agent's machine. Copy it to the client's machine and point
+// NAUTILUS_TIAD_TOKEN_FILE at the copy, or put its contents in
+// NAUTILUS_TIAD_TOKEN. A token is never a command-line flag, because
+// argv is visible to every user on the machine.
 const TokenFile = `%ProgramData%\tiad\tiad.token`
 
 // Error kinds the agent answers with (siemens-ide.md §3.2). Two more come
@@ -68,7 +71,8 @@ type Client struct {
 }
 
 // New builds a client. An empty baseURL falls back to NAUTILUS_TIAD_URL and
-// then to DefaultURL; an empty token to NAUTILUS_TIAD_TOKEN.
+// then to DefaultURL; an empty token to NAUTILUS_TIAD_TOKEN, then to the
+// contents of the file NAUTILUS_TIAD_TOKEN_FILE names.
 func New(baseURL, token string) *Client {
 	if baseURL == "" {
 		baseURL = os.Getenv("NAUTILUS_TIAD_URL")
@@ -78,6 +82,13 @@ func New(baseURL, token string) *Client {
 	}
 	if token == "" {
 		token = os.Getenv("NAUTILUS_TIAD_TOKEN")
+	}
+	if token == "" {
+		if f := os.Getenv("NAUTILUS_TIAD_TOKEN_FILE"); f != "" {
+			if b, err := os.ReadFile(f); err == nil {
+				token = strings.TrimSpace(string(b))
+			}
+		}
 	}
 	return &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),
@@ -114,9 +125,24 @@ type Error struct {
 	Status int             `json:"-"`
 	Events []Event         `json:"-"`
 	Data   json.RawMessage `json:"-"`
+	// Err is the underlying cause of an unreachable error, such as the
+	// context's own error, so errors.Is(err, context.Canceled) works.
+	Err error `json:"-"`
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("tiad: %s: %s", e.Kind, e.Message) }
+
+func (e *Error) Unwrap() error { return e.Err }
+
+// transportError is the Error for a request that got no reply. A call that
+// changes the CPU (Download) and ends this way has an UNKNOWN outcome: the
+// agent may have finished it. Compare before retrying.
+func (c *Client) transportError(ctx context.Context, err error) *Error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
+	return &Error{Kind: KindUnreachable, Message: fmt.Sprintf("%s: %v", c.BaseURL, err), Fatal: true, Err: err}
+}
 
 // Kind returns a tiad error's kind, or "" for any other error.
 func Kind(err error) string {
@@ -183,7 +209,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, &Error{Kind: KindUnreachable, Message: fmt.Sprintf("%s: %v", c.BaseURL, err), Fatal: true}
+		return nil, c.transportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -191,7 +217,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &Error{Kind: KindUnreachable, Message: err.Error(), Fatal: true}
+		return nil, c.transportError(ctx, err)
 	}
 	var env struct {
 		OK     bool            `json:"ok"`
@@ -232,9 +258,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 // unauthorized is the agent's 401 in words: which agent refused, and where
 // the token it wants comes from.
 func (c *Client) unauthorized() *Error {
-	msg := fmt.Sprintf("%s refused the token; check --token or NAUTILUS_TIAD_TOKEN against %s on the agent's machine", c.BaseURL, TokenFile)
+	msg := fmt.Sprintf("%s refused the token; check NAUTILUS_TIAD_TOKEN or NAUTILUS_TIAD_TOKEN_FILE against %s on the agent's machine", c.BaseURL, TokenFile)
 	if c.Token == "" {
-		msg = fmt.Sprintf("%s wants a token and none was sent; set --token or NAUTILUS_TIAD_TOKEN from %s on the agent's machine", c.BaseURL, TokenFile)
+		msg = fmt.Sprintf("%s wants a token and none was sent; set NAUTILUS_TIAD_TOKEN, or NAUTILUS_TIAD_TOKEN_FILE to a copy of %s from the agent's machine", c.BaseURL, TokenFile)
 	}
 	return &Error{Kind: KindUnauthorized, Message: msg, Status: http.StatusUnauthorized, Fatal: true}
 }
@@ -296,18 +322,66 @@ type FileInfo struct {
 }
 
 // CleanPath applies the work-dir sandbox rule every path in a request
-// obeys: relative, forward slashes, no "..", no drive letters. It returns
-// the cleaned path. The client checks it before sending and the agent
-// checks it again.
+// obeys, and returns the cleaned path. The agent's work dir is on Windows,
+// so the rule is Windows-aware: relative, forward slashes, no "..", no
+// drive letters or other ':' (alternate data streams), no control
+// characters or <>"|?*, no segment ending in a dot or a space, and no
+// reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or
+// without an extension). The client checks every path it sends, and the
+// agent checks again.
 func CleanPath(p string) (string, error) {
-	if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, `\`) || strings.Contains(p, ":") {
-		return "", fmt.Errorf("path %q is outside the work dir", p)
+	bad := func(why string) (string, error) {
+		return "", fmt.Errorf("path %q is not allowed in the work dir: %s", p, why)
+	}
+	if p == "" {
+		return bad("empty")
+	}
+	if strings.HasPrefix(p, "/") || strings.Contains(p, `\`) || strings.Contains(p, ":") {
+		return bad("absolute, a backslash or a ':'")
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(`<>"|?*`, r) {
+			return bad("a control character or one of <>\"|?*")
+		}
 	}
 	c := path.Clean(p)
 	if c == "." || c == ".." || strings.HasPrefix(c, "../") {
-		return "", fmt.Errorf("path %q is outside the work dir", p)
+		return bad("outside the work dir")
+	}
+	for _, seg := range strings.Split(c, "/") {
+		if strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+			return bad("a name ending in a dot or a space")
+		}
+		stem := strings.ToUpper(seg)
+		if i := strings.IndexByte(stem, '.'); i >= 0 {
+			stem = stem[:i]
+		}
+		stem = strings.TrimRight(stem, " ")
+		if windowsReserved[stem] {
+			return bad("a Windows device name")
+		}
 	}
 	return c, nil
+}
+
+var windowsReserved = func() map[string]bool {
+	m := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
+	for i := 1; i <= 9; i++ {
+		m[fmt.Sprintf("COM%d", i)] = true
+		m[fmt.Sprintf("LPT%d", i)] = true
+	}
+	return m
+}()
+
+// checkPaths returns a bad_request Error for the first path that breaks
+// the sandbox rule.
+func checkPaths(ps ...string) error {
+	for _, p := range ps {
+		if _, err := CleanPath(p); err != nil {
+			return &Error{Kind: KindBadRequest, Message: err.Error()}
+		}
+	}
+	return nil
 }
 
 func filePath(p string) (string, error) {
@@ -348,7 +422,7 @@ func (c *Client) GetFile(ctx context.Context, path string) ([]byte, error) {
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, &Error{Kind: KindUnreachable, Message: fmt.Sprintf("%s: %v", c.BaseURL, err), Fatal: true}
+		return nil, c.transportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -356,7 +430,7 @@ func (c *Client) GetFile(ctx context.Context, path string) ([]byte, error) {
 	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &Error{Kind: KindUnreachable, Message: err.Error(), Fatal: true}
+		return nil, c.transportError(ctx, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Failures are envelopes; the raw bytes are the success case only.
@@ -381,8 +455,8 @@ func (c *Client) DeleteFile(ctx context.Context, path string) error {
 	return err
 }
 
-// Files lists the agent's work dir.
-func (c *Client) Files(ctx context.Context) ([]FileInfo, error) {
+// ListFiles lists the agent's work dir.
+func (c *Client) ListFiles(ctx context.Context) ([]FileInfo, error) {
 	var out struct {
 		Files []FileInfo `json:"files"`
 	}
@@ -401,6 +475,9 @@ type GSDInstall struct {
 // InstallGSD installs a GSDML file, already put in the work dir, into the
 // hardware catalogue. Installing the same file twice is not an error.
 func (c *Client) InstallGSD(ctx context.Context, path string) (GSDInstall, error) {
+	if err := checkPaths(path); err != nil {
+		return GSDInstall{}, err
+	}
 	var r GSDInstall
 	_, err := c.doJSON(ctx, http.MethodPost, "/v1/gsd/install", map[string]string{"path": path}, &r)
 	return r, err
@@ -434,6 +511,9 @@ func (c *Client) CreateProject(ctx context.Context, name string, st Station, sec
 
 // Open opens a project or project archive in the work dir.
 func (c *Client) Open(ctx context.Context, path string) (*Session, error) {
+	if err := checkPaths(path); err != nil {
+		return nil, err
+	}
 	var s Session
 	if _, err := c.doJSON(ctx, http.MethodPost, "/v1/sessions", map[string]string{"path": path}, &s); err != nil {
 		return nil, err
@@ -518,6 +598,9 @@ type SoftwareResult struct {
 }
 
 func (s *Session) Software(ctx context.Context, req SoftwareRequest) (SoftwareResult, error) {
+	if err := checkPaths(append(append([]string{}, req.Sources...), req.TagTables...)...); err != nil {
+		return SoftwareResult{}, err
+	}
 	var r SoftwareResult
 	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("software"), req, &r)
 	return r, err
@@ -549,6 +632,10 @@ func (s *Session) Compile(ctx context.Context, hardware, software bool) (Compile
 
 // Download loads the project into the CPU at req.Address. See Resolve for
 // how questions are answered; run a dry run first to see them.
+//
+// An error of kind unreachable (the agent did not answer, or ctx was
+// cancelled) leaves the outcome UNKNOWN: the agent may have loaded the
+// CPU. Run Compare before retrying, never retry blindly.
 func (s *Session) Download(ctx context.Context, req DownloadRequest) (DownloadResult, error) {
 	if err := req.Validate(); err != nil {
 		return DownloadResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
@@ -592,6 +679,9 @@ type ExportResult struct {
 }
 
 func (s *Session) Export(ctx context.Context, req ExportRequest) (ExportResult, error) {
+	if err := checkPaths(req.Dir); err != nil {
+		return ExportResult{}, err
+	}
 	var r ExportResult
 	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("export"), req, &r)
 	return r, err

@@ -31,6 +31,8 @@ func TestResolve(t *testing.T) {
 		{"stop unanswered", []Question{stop}, Decisions{}, false, "stop-cpu", ""},
 		{"stop yes", []Question{stop}, Decisions{StopCPU: Yes()}, false, "", ""},
 		{"stop no", []Question{stop}, Decisions{StopCPU: No()}, false, "", "stop-cpu"},
+		{"start-after no is stay in STOP", []Question{{ID: QuestionStartAfter}}, Decisions{StartAfter: No()}, false, "", ""},
+		{"start-after unanswered", []Question{{ID: QuestionStartAfter}}, Decisions{}, false, "start-after", ""},
 		{"reinit all agreed, any case", []Question{reinit}, Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, "", ""},
 		{"reinit partly agreed", []Question{reinit}, Decisions{Reinitialize: []string{"Tags"}}, false, "reinitialize", ""},
 		{"reinit unanswered", []Question{reinit}, Decisions{}, false, "reinitialize", ""},

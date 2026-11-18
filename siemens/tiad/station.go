@@ -3,6 +3,7 @@ package tiad
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -140,8 +141,10 @@ func (s Station) Validate() error {
 
 	slots := map[int]bool{}
 	for i, m := range s.Modules {
-		if m.Slot < 1 {
-			bad("modules[%d].slot %d: slots start at 1", i, m.Slot)
+		// On an ET 200SP and an S7-1500 the CPU itself is slot 1 (an
+		// S7-1500 power supply can be slot 0) (verify on the S2a upload).
+		if m.Slot < 0 || m.Slot == 1 {
+			bad("modules[%d].slot %d: slot 1 is the CPU's own; modules go in slot 2 and up", i, m.Slot)
 		}
 		if slots[m.Slot] {
 			bad("modules: slot %d twice", m.Slot)
@@ -262,13 +265,32 @@ func checkStationName(n string) error {
 			}
 		}
 	}
-	if net.ParseIP(n) != nil {
-		return fmt.Errorf("%q has the form of an IP address", n)
+	if ipShaped(n) {
+		return fmt.Errorf("%q has the form n.n.n.n (n = 0-999), which PROFINET forbids", n)
 	}
-	if strings.HasPrefix(n, "port-") && len(n) >= 8 && isDigits(n[5:8]) {
-		return fmt.Errorf("%q starts with port-NNN, which PROFINET reserves", n)
+	if reservedPort.MatchString(strings.Split(n, ".")[0]) {
+		return fmt.Errorf("%q: a first label of the form port-xyz or port-xyz-abcde is reserved by PROFINET", n)
 	}
 	return nil
+}
+
+// reservedPort is the first label PROFINET reserves for port names:
+// port-xyz or port-xyz-abcde, with digits.
+var reservedPort = regexp.MustCompile(`^port-[0-9]{3}(-[0-9]{5})?$`)
+
+// ipShaped reports the form n.n.n.n with each n one to three digits, which
+// is broader than a valid IPv4 address (300.1.1.1 and 01.2.3.4 count).
+func ipShaped(n string) bool {
+	labels := strings.Split(n, ".")
+	if len(labels) != 4 {
+		return false
+	}
+	for _, l := range labels {
+		if len(l) < 1 || len(l) > 3 || !isDigits(l) {
+			return false
+		}
+	}
+	return true
 }
 
 func isDigits(s string) bool {

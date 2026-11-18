@@ -2,6 +2,7 @@ package tiadtest_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -114,6 +115,8 @@ func TestProfinetBenchFlow(t *testing.T) {
 	if err != nil || !dr.DryRun || dr.Downloaded || len(dr.Questions) != 2 {
 		t.Fatalf("dry run: %+v %v", dr, err)
 	}
+	// Models the provisional contract: that a dry run loads nothing is
+	// what tiad aims for, unproven against Openness until S2 (§3.5).
 	if len(f.Downloads()) != 0 {
 		t.Fatal("a dry run must not download")
 	}
@@ -214,6 +217,51 @@ func TestDownloadRules(t *testing.T) {
 	if len(f.Downloads()) != 1 {
 		t.Fatalf("downloads = %d, want 1 (refusals load nothing)", len(f.Downloads()))
 	}
+
+	// "Load and stay in STOP" is a decision, not a refusal.
+	f.PreDownload = func(tiad.DownloadRequest) []tiad.Question {
+		return []tiad.Question{{ID: tiad.QuestionStopCPU}, {ID: tiad.QuestionStartAfter}}
+	}
+	stay := base
+	stay.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
+	if r, err := s.Download(ctx, stay); err != nil || !r.Downloaded || r.State != "STOP" {
+		t.Fatalf("load and stay in STOP: %+v %v", r, err)
+	}
+}
+
+func TestCancelledContextKeepsItsError(t *testing.T) {
+	f := tiadtest.New()
+	_, c := f.Serve(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.Health(ctx)
+	if !errors.Is(err, context.Canceled) || tiad.Kind(err) != tiad.KindUnreachable {
+		t.Fatalf("cancelled: %v (errors.Is canceled = %v)", err, errors.Is(err, context.Canceled))
+	}
+}
+
+func TestEveryPathIsCheckedBeforeSending(t *testing.T) {
+	ctx := context.Background()
+	f := tiadtest.New()
+	_, c := f.Serve(t)
+	if _, err := c.InstallGSD(ctx, "../GSDML-x.xml"); tiad.Kind(err) != tiad.KindBadRequest {
+		t.Fatalf("InstallGSD: %v", err)
+	}
+	if _, err := c.Open(ctx, "C:/p.ap21"); tiad.Kind(err) != tiad.KindBadRequest {
+		t.Fatalf("Open: %v", err)
+	}
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.InstallGSD(ctx, "gsd/"+gsdml)
+	s, err := c.CreateProject(ctx, "p", station(), secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "g", Sources: []string{"aux.scl"}}); tiad.Kind(err) != tiad.KindBadRequest {
+		t.Fatalf("Software: %v", err)
+	}
+	if _, err := s.Export(ctx, tiad.ExportRequest{Dir: "out.", Blocks: "scl"}); tiad.Kind(err) != tiad.KindBadRequest {
+		t.Fatalf("Export: %v", err)
+	}
 }
 
 func TestAgentRefusals(t *testing.T) {
@@ -227,7 +275,7 @@ func TestAgentRefusals(t *testing.T) {
 		t.Fatalf("wrong token: %v", err)
 	}
 
-	for _, p := range []string{"../x", "a/../../x", "C:/x", `a\b`} {
+	for _, p := range []string{"../x", "a/../../x", "C:/x", `a\b`, "NUL", "a/con.txt", "Com1.scl", "x.", "dir /x", "a\x00b", "a|b", "a?b", "file.scl:stream"} {
 		if _, err := c.PutFile(ctx, p, nil); tiad.Kind(err) != tiad.KindBadRequest {
 			t.Errorf("PutFile(%q) = %v, want bad_request", p, err)
 		}

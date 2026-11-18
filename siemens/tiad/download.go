@@ -93,7 +93,11 @@ func Resolve(qs []Question, d Decisions, haveProtection bool) (unanswered, decli
 		case QuestionOverwrite:
 			sortAnswer(q, d.Overwrite, &unanswered, &declined)
 		case QuestionStartAfter:
-			sortAnswer(q, d.StartAfter, &unanswered, &declined)
+			// Either answer is a decision: no means load and stay in
+			// STOP, which is a legitimate choice, not a refusal.
+			if d.StartAfter == nil {
+				unanswered = append(unanswered, q)
+			}
 		case QuestionReinitialize:
 			// A reset nobody named cannot be agreed to: without objects
 			// the question is never answered.

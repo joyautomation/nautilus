@@ -592,7 +592,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			"the project's CPU is at %s, not %s: one station spec per CPU", s.station.CPU.Address, req.Address)
 	}
 	if !s.compiled {
-		return nil, fail(http.StatusConflict, tiad.KindOperationFailed, "the project changed since the last full compile; compile hardware and software first")
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "the project changed since the last full compile; compile hardware and software first")
 	}
 	var qs []tiad.Question
 	if f.PreDownload != nil {
@@ -601,6 +601,9 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if qs == nil {
 		qs = []tiad.Question{}
 	}
+	// A dry run loading nothing is the contract tiad aims for. Whether
+	// Openness can list the checks and cancel with nothing loaded is
+	// provisional until S2 (siemens-ide.md §3.5); the fake models the aim.
 	if req.DryRun {
 		return tiad.DownloadResult{DryRun: true, Questions: qs}, nil
 	}
