@@ -1159,7 +1159,7 @@ func schedBannerSuffix(s runtime.ScanStats) string {
 	// few cores (#830); an operator who set it, or a box with cores to
 	// spare, sees nothing here.
 	if s.Procs.RaisedFrom > 0 {
-		out += fmt.Sprintf(" — GOMAXPROCS %d (raised from %d for a task at a priority)", s.Procs.Value, s.Procs.RaisedFrom)
+		out += fmt.Sprintf(" — GOMAXPROCS %d (raised from %d: a task requests a real-time priority)", s.Procs.Value, s.Procs.RaisedFrom)
 	}
 	return out
 }

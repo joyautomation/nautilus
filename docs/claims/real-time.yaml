@@ -386,17 +386,22 @@ claims:
 
   - id: RT-031
     claim: >-
-      When a task has a priority, GOMAXPROCS is not set in the environment
+      When a task requests a priority, GOMAXPROCS is not set in the
+      environment (as a positive whole number), no cgroup CPU limit applies
       and the box has at most 4 cores, the runtime raises GOMAXPROCS to the
-      cores plus one per task at a priority plus one, at most twice the
-      cores plus two, before its loops start; the banner says so and
-      GET /api/state reports it as scan.gomaxprocs. A GOMAXPROCS in the
-      environment always wins.
+      cores plus one per task requesting a priority plus one, at most twice
+      the cores plus two, before its loops start; the banner says so and
+      GET /api/state reports it as scan.gomaxprocs. Under a CPU limit it
+      keeps Go's value and logs why; a GOMAXPROCS in the environment always
+      wins.
     source: "#priority-and-pinning"
     tests:
       - go ./runtime TestProcsForRule
       - go ./runtime TestRunRaisesGOMAXPROCSForATaskAtPriority
       - go ./runtime TestGOMAXPROCSLeftAlone
+      - go ./runtime TestGOMAXPROCSNotRaisedUnderACPULimit
+      - go ./runtime TestOperatorGOMAXPROCSParsedLikeGo
+      - go ./runtime TestCgroupCPUQuota
       - go ./runtime TestProcsStatsJSON
       - go ./cmd/naut TestSchedBannerSuffixReportsARaisedGOMAXPROCS
     partial: true

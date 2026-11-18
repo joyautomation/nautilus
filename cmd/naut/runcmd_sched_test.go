@@ -39,7 +39,7 @@ func TestSchedBannerSuffixNamesRefusedTasks(t *testing.T) {
 func TestSchedBannerSuffixReportsARaisedGOMAXPROCS(t *testing.T) {
 	s := runtime.ScanStats{Sched: runtime.SchedStats{Priority: 80, Applied: true},
 		Procs: runtime.ProcsStats{Value: 4, RaisedFrom: 2, Reason: "…"}}
-	if got, want := schedBannerSuffix(s), " — GOMAXPROCS 4 (raised from 2 for a task at a priority)"; got != want {
+	if got, want := schedBannerSuffix(s), " — GOMAXPROCS 4 (raised from 2: a task requests a real-time priority)"; got != want {
 		t.Errorf("banner suffix %q, want %q", got, want)
 	}
 	s.Procs = runtime.ProcsStats{Value: 2, Reason: "GOMAXPROCS set in the environment"}
