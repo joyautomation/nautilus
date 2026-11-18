@@ -154,6 +154,15 @@ touch hardware, and a project with `driver: eip` is fully testable on a laptop w
 controller on the network. `role: input` tags are fed from `given`; loopback behavior is
 identical to `naut run` with the default memory driver, because it *is* that driver.
 
+**Unless the file asks for the virtual devices.** A file with `devices: true` runs
+against the project's virtual devices (`virtual-devices.yaml`,
+`docs/design/virtual-devices.md`) instead of the stub: still no socket, but the
+project's own drivers are answered in process through each device's register map or
+node ids, and the devices' simulators and process model step on the same virtual
+clock. A `given` on an input a device delivers is an error there (the device
+delivers it); a step's `plant:` writes the process instead, and a request a device
+refuses (exception 02, a node it does not serve) fails the test.
+
 ### 4.4 Assertions and REAL tolerance
 
 Per tag, the expectation is either a bare scalar or a matcher object:

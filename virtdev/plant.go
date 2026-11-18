@@ -17,6 +17,15 @@ import (
 // MainTask is the plant task that runs the simulators and owns the stores.
 const MainTask = "devices"
 
+// DtTag is the plant tag the main task's scan-to-scan seconds land in. A
+// simulator that declares VAR_INPUT Dt : REAL is handed it, so a ramp or a
+// timer it integrates by hand follows the clock it runs on, virtual or not.
+const DtTag = "Plant_Dt"
+
+// ModelDtTag is the process model task's scan-to-scan seconds, for a model
+// that integrates (a level from a flow).
+const ModelDtTag = "Model_Dt"
+
 // ModelTask is the plant task that runs the process model.
 const ModelTask = "model"
 
@@ -107,11 +116,22 @@ func NewPlant(s *Set) (*Plant, error) {
 			seenLib[key] = true
 			libs = append(libs, src)
 		}
-		hooks, err := wireSimulator(d, prof, src, &decls, &body)
+		hooks, shared, err := wireSimulator(d, prof, src, &decls, &body)
 		if err != nil {
 			return nil, fmt.Errorf("device %s: simulator %s: %w", d.Name, prof.Simulator.Block, err)
 		}
 		p.options.Tags = append(p.options.Tags, hooks...)
+		if len(shared) > 0 && stor == nil {
+			return nil, fmt.Errorf("device %s: a VAR_IN_OUT point needs a register store; an OPC UA device's writable point is its server's to write", d.Name)
+		}
+		for _, pt := range shared {
+			tag := d.Name + "_" + pt.Name + sharedSuffix
+			v, _ := pointInit(d, pt)
+			def := runtime.Output(tag, runtime.Init(v), runtime.Desc(d.Name+": "+pt.Name+" as the device leaves it"))
+			def.Type = pt.Type
+			p.options.Tags = append(p.options.Tags, def)
+			p.driver.outs[tag] = binding{tag: tag, st: stor, pt: pt}
+		}
 		for key := range d.Init {
 			if _, ok := prof.Point(key); ok {
 				continue
@@ -139,8 +159,14 @@ func NewPlant(s *Set) (*Plant, error) {
 	}
 	p.options.Program = main.String()
 	p.options.Scan = scan
+	p.options.DtTag = DtTag
+	p.options.Tags = append(p.options.Tags, runtime.State(DtTag, scan.Seconds(), runtime.Desc("seconds since the simulators' last scan")))
 	p.options.Libraries = libs
 	p.options.Driver = p.driver
+	// Every output every scan: a shared point's register may have been
+	// written by the controller since, and the device's value must land
+	// over it even when the simulator's own value has not moved.
+	p.options.AlwaysWriteOutputs = true
 	if m := s.Model; m != nil && m.Program != "" {
 		raw, err := os.ReadFile(filepath.Join(s.Dir, m.Program))
 		if err != nil {
@@ -151,8 +177,9 @@ func NewPlant(s *Set) (*Plant, error) {
 			ms = 100 * time.Millisecond
 		}
 		p.options.Tasks = append(p.options.Tasks, runtime.Task{
-			Name: ModelTask, Program: string(raw), Libraries: libs, Scan: ms,
+			Name: ModelTask, Program: string(raw), Libraries: libs, Scan: ms, DtTag: ModelDtTag,
 		})
+		p.options.Tags = append(p.options.Tags, runtime.State(ModelDtTag, ms.Seconds(), runtime.Desc("seconds since the process model's last scan")))
 	}
 	return p, nil
 }
@@ -170,10 +197,10 @@ func (p *Plant) Program() string { return p.options.Program }
 // call: inputs from the device's tags, outputs back to them. VAR_INPUTs
 // and VAR_OUTPUTs named like no point are hooks, returned as state tags
 // <Device>_<Var> the process model reads or writes.
-func wireSimulator(d Instance, prof *Profile, src string, decls, body *strings.Builder) ([]runtime.TagDef, error) {
+func wireSimulator(d Instance, prof *Profile, src string, decls, body *strings.Builder) (hooks []runtime.TagDef, shared []Point, err error) {
 	prog, err := st.Parse(src)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var fb *st.FunctionBlockDecl
 	for _, f := range prog.FBDecls {
@@ -182,29 +209,47 @@ func wireSimulator(d Instance, prof *Profile, src string, decls, body *strings.B
 		}
 	}
 	if fb == nil {
-		return nil, fmt.Errorf("no FUNCTION_BLOCK %s in %s", prof.Simulator.Block, prof.Simulator.Source)
+		return nil, nil, fmt.Errorf("no FUNCTION_BLOCK %s in %s", prof.Simulator.Block, prof.Simulator.Source)
 	}
 	inst := d.Name
 	fmt.Fprintf(decls, "  %s : %s;\n", inst, fb.Name)
-	var args, outs []string
-	var hooks []runtime.TagDef
+	var args, pre, outs []string
 	for _, vb := range fb.VarBlocks {
-		if vb.Kind != "VAR_INPUT" && vb.Kind != "VAR_OUTPUT" {
+		if vb.Kind != "VAR_INPUT" && vb.Kind != "VAR_OUTPUT" && vb.Kind != "VAR_IN_OUT" {
 			continue
 		}
 		for _, v := range vb.Variables {
+			if vb.Kind == "VAR_INPUT" && strings.EqualFold(v.Name, "Dt") {
+				args = append(args, fmt.Sprintf("%s := %s", v.Name, DtTag))
+				continue
+			}
 			tag := d.Name + "_" + v.Name
 			pt, isPoint := prof.Point(v.Name)
 			if isPoint {
 				tag = d.Name + "_" + pt.Name
 			}
-			if vb.Kind == "VAR_INPUT" {
+			switch vb.Kind {
+			case "VAR_INPUT":
 				args = append(args, fmt.Sprintf("%s := %s", v.Name, tag))
-			} else {
+			case "VAR_OUTPUT":
 				if isPoint && pt.Writable {
-					return nil, fmt.Errorf("VAR_OUTPUT %s: %s is the controller's to write", v.Name, pt.Name)
+					return nil, nil, fmt.Errorf("VAR_OUTPUT %s: %s is the controller's to write; declare it VAR_IN_OUT for a point both sides write", v.Name, pt.Name)
 				}
 				outs = append(outs, fmt.Sprintf("%s := %s.%s;", tag, inst, v.Name))
+			case "VAR_IN_OUT":
+				// A point both sides write (a loop's %Out: the controller's
+				// in manual, the device's in auto): the simulator gets what
+				// the register holds and the register gets what it leaves.
+				if !isPoint || !pt.Writable {
+					return nil, nil, fmt.Errorf("VAR_IN_OUT %s: only a writable point can be shared with the controller", v.Name)
+				}
+				local := inst + "_" + pt.Name + "_io"
+				fmt.Fprintf(decls, "  %s : %s;\n", local, v.Datatype)
+				pre = append(pre, fmt.Sprintf("%s := %s;", local, tag))
+				args = append(args, fmt.Sprintf("%s := %s", v.Name, local))
+				outs = append(outs, fmt.Sprintf("%s := %s;", tag+sharedSuffix, local))
+				shared = append(shared, pt)
+				continue
 			}
 			if isPoint {
 				continue
@@ -218,12 +263,19 @@ func wireSimulator(d Instance, prof *Profile, src string, decls, body *strings.B
 			hooks = append(hooks, def)
 		}
 	}
+	for _, p := range pre {
+		body.WriteString(p + "\n")
+	}
 	fmt.Fprintf(body, "%s(%s);\n", inst, strings.Join(args, ", "))
 	for _, o := range outs {
 		body.WriteString(o + "\n")
 	}
-	return hooks, nil
+	return hooks, shared, nil
 }
+
+// sharedSuffix names the plant output a shared point's simulator value
+// goes back to the register through: <Device>_<Point>__dev.
+const sharedSuffix = "__dev"
 
 // pointInit is a point's power-up value: the instance's init, else the
 // profile's, else zero of its type.

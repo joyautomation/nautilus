@@ -1,0 +1,8 @@
+# The bin-fill project's field devices, as virtual devices.
+devices:
+  - { name: CONV, profile: abb-acs355-fmbt21,  endpoint: 10.77.1.101, init: { RampS: 2.0, NominalAmps: 12.0 } }
+  - { name: RB1,  profile: asi-275m,           endpoint: 10.77.1.102 }
+  - { name: IOLM, profile: pepperl-fuchs-ice3, endpoint: 10.77.1.103 }
+model:
+  program: devices/plant.st
+  scan: 100ms
