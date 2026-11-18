@@ -19,8 +19,13 @@
 #                       PR or not; a Go-only PR leaves them out (the
 #                       CLI-discovery e2e still runs on Linux: it drives naut).
 #   e2e-all=true|false  the CLI-discovery e2e runs on macOS and Windows too,
-#                       not Linux only: whatever sets extension does, except
-#                       .github/. A .github/ path sets it only when the e2e's
+#                       not Linux only: when what that e2e reads changed,
+#                       tools/vscode-iec/ and the hmi/ and hmi-3d/ kits its
+#                       webview-ui links. Not the example diagrams or the
+#                       lift station's components: they set extension for
+#                       the gesture harness and component tests, and the
+#                       e2e writes its own fixtures (#916). A .github/ path
+#                       sets it only when the e2e's
 #                       definition changed: the vscode-iec-e2e job, the
 #                       changes job (it builds the e2e's OS list) or the
 #                       workflow's top-level keys (on, env, concurrency…).
@@ -81,8 +86,8 @@ while IFS= read -r path; do
     .github/*)
       extension=true
       [ "$e2eall" = true ] || e2e_unchanged || e2eall=true ;;
-    examples/*.ld|examples/*.fbd|examples/*.sfc) extension=true; e2eall=true ;;
-    examples/lift-station/hmi/src/lib/*) extension=true; e2eall=true ;;
+    examples/*.ld|examples/*.fbd|examples/*.sfc) extension=true ;;
+    examples/lift-station/hmi/src/lib/*) extension=true ;;
   esac
   case "$path" in
     examples/*/hmi/*.st|examples/*/hmi/*.ld|examples/*/hmi/*.fbd|examples/*/hmi/*.sfc)

@@ -33,7 +33,7 @@ check "$(full '' false)" website/src/content/docs/getting-started.md
 check "$(full '' false)" docs/claims/getting-started.yaml
 check "$(full '' false)" docs/structure-warnings.md
 check "$(full '' false)" docs/design/diagram.png
-check "$(full '' false true)" examples/lift-station/hmi/lib/motor.ld
+check "$(full '' false true false)" examples/lift-station/hmi/lib/motor.ld
 check "$(full '' false)" examples/lift-station/nautilus.yaml
 check "$(full '' false)" examples/batch-skid/screens/line.mimic.json
 check "$(full '' false)" README.md
@@ -48,10 +48,17 @@ check "$(full '' false true)" tools/vscode-iec/package.json cmd/naut/main.go
 check "$(full '' false)" cmd/naut/main.go internal/lsp/server.go
 # What the extension's tests read outside its folder: every example diagram
 # (gesture harness layout fixtures) and the lift station's own components.
-check "$(full '' false true)" examples/new-project/main.ld
-check "$(full '' false true)" examples/batch-skid/dosing.fbd examples/batch-skid/phases.sfc
-printf -v want 'full=false\nexamples=examples/lift-station\nhmibuild=true\nextension=true\ne2e-all=true'
+# The CLI-discovery e2e reads none of them (it writes its own fixtures), so
+# they leave its macOS and Windows legs out (#916)...
+check "$(full '' false true false)" examples/new-project/main.ld
+check "$(full '' false true false)" examples/batch-skid/dosing.fbd examples/batch-skid/phases.sfc
+printf -v want 'full=false\nexamples=examples/lift-station\nhmibuild=true\nextension=true\ne2e-all=false'
 check "$want" examples/lift-station/hmi/src/lib/Rain.svelte
+# ...unless what the e2e does read changed alongside, in either order.
+check "$(full '' false true)" examples/new-project/main.ld tools/vscode-iec/src/e2e/suite.ts
+check "$(full '' false true)" hmi/src/lib/Tank.svelte examples/batch-skid/dosing.fbd
+printf -v want 'full=true\nexamples=examples/lift-station\nhmibuild=true\nextension=true\ne2e-all=true'
+check "$want" examples/lift-station/hmi/src/lib/Rain.svelte hmi-3d/src/lib/Scene.svelte
 check "$(light examples/lift-station true)" examples/lift-station/hmi/src/routes/+page.svelte
 # Nothing changed (or the diff failed): full, extension included.
 check "$(full '' false true)"
