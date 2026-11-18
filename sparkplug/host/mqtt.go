@@ -753,8 +753,8 @@ func (d *Driver) flushWrites() {
 	work := d.pending
 	d.pending = map[string]any{}
 	d.wmu.Unlock()
-	if hook := testHookAfterSwap; hook != nil {
-		hook()
+	if hook := testHookAfterSwap.Load(); hook != nil {
+		(*hook)()
 	}
 
 	byTopic := map[string][]sparkplug.Metric{}
@@ -1175,7 +1175,7 @@ func (d *Driver) flushForgets() {
 
 // testHookAfterSwap, when set (by tests), runs in flushWrites right after
 // it takes the pending commands, before they are parked or published.
-var testHookAfterSwap func()
+var testHookAfterSwap atomic.Pointer[func()]
 
 // flushAdopts applies the member-output baselines the state machine queued
 // while it held d.mu: the live value of a member IS what the site holds, so a

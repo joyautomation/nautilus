@@ -7,9 +7,13 @@ package host
 // has withdrawn.
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // The write gate: a leader commands 11; demoted, the program moves the
@@ -135,8 +139,9 @@ func TestInFlightCommandIsFollowedByTheProgramsValue(t *testing.T) {
 	waitUntil(t, "the 11 command", func() bool { return len(w.commands(t)) == 1 })
 
 	var once sync.Once
-	testHookAfterSwap = func() { once.Do(func() { writeSpeed(t, host, 11) }) }
-	t.Cleanup(func() { testHookAfterSwap = nil })
+	hook := func() { once.Do(func() { writeSpeed(t, host, 11) }) }
+	testHookAfterSwap.Store(&hook)
+	t.Cleanup(func() { testHookAfterSwap.Store(nil) })
 	writeSpeed(t, host, 22)
 	waitUntil(t, "the program's 11 after the in-flight 22", func() bool {
 		c := w.commands(t)
@@ -220,5 +225,57 @@ func TestRequeueSkipsASupersededCommand(t *testing.T) {
 	d.requeueLocked([]string{name}, work)
 	if !sameValue(d.pending[name], newer) {
 		t.Fatalf("pending = %v, want the newer 33 kept", d.pending[name])
+	}
+}
+
+// NaN is a value like any other here: written once, it is sent once.
+// irEqual used NaN != NaN, so a NaN marked written was owed again and
+// re-sent every CommandInterval forever, and one for a dark site was
+// re-owed instead of parked.
+func TestNaNIsTheSameAsNaN(t *testing.T) {
+	nan := ir.RealVal(math.NaN())
+	if !irEqual(nan, nan) {
+		t.Fatal("irEqual(NaN, NaN) = false: a NaN command would be owed forever")
+	}
+	if irEqual(nan, ir.RealVal(1)) || irEqual(ir.RealVal(1), nan) {
+		t.Fatal("NaN equals 1")
+	}
+	s := ir.Value{Kind: ir.TypeStruct, Fld: []ir.Value{ir.RealVal(1), nan}} // irEqual compares members
+	if !irEqual(s, s) {
+		t.Fatal("a struct with a NaN member does not equal itself")
+	}
+
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	d.log = quietLogger() // queueOffline logs what it parks
+	d.initWriteMapsLocked()
+	const name = "W6_PLC1_Pump_SpeedSP"
+	v := d.canonWrite(name, math.NaN())
+	d.lastOut[name] = v
+	d.queueOffline(map[string]map[string]any{"W6": {name: v}})
+	if _, parked := d.queued["W6"][name]; !parked {
+		t.Fatal("a NaN for a dark site was not parked")
+	}
+	if p, owed := d.pending[name]; owed {
+		t.Fatalf("a NaN for a dark site is owed again: pending %v", p)
+	}
+}
+
+func TestNaNCommandIsSentOnce(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = closeBroker(srv) })
+	w := watchHost(t, addr, "watch-nan", "h-nan")
+	host := startHostDriver(t, testManifest(), testConfig(addr, "h-nan"))
+	waitConnected(t, host)
+	edge := edgePublisher(t, addr, "edge-nan")
+	birthW6AndPLC1(t, host, edge, 1)
+	baselineScan(t, host)
+
+	writeSpeed(t, host, math.NaN())
+	waitUntil(t, "the NaN command", func() bool { return len(w.commands(t)) == 1 })
+	// Many coalesce windows (testConfig: 20 ms), with no further write.
+	time.Sleep(15 * testConfig(addr, "h-nan").CommandInterval) // a negative check: nothing more may go out
+	barrier(t, host, w)
+	if c := w.commands(t); len(c) != 1 {
+		t.Fatalf("%d commands for one NaN write, want 1", len(c))
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"time"
 
@@ -549,7 +550,11 @@ func irEqual(a, b ir.Value) bool {
 	case ir.TypeBool:
 		return a.B == b.B
 	case ir.TypeReal:
-		return a.F == b.F
+		// NaN is the same value as NaN here: a command is "the same" when
+		// sending it again would change nothing. Without this a NaN marked
+		// written was owed again, and re-sent every CommandInterval
+		// forever (#940).
+		return a.F == b.F || (math.IsNaN(a.F) && math.IsNaN(b.F))
 	case ir.TypeInt, ir.TypeTime:
 		return a.I == b.I
 	case ir.TypeString:
