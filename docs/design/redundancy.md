@@ -102,11 +102,47 @@ redundancy:
   promises not to grant to anyone else for `lease`, timed from when the voter **received** the
   request.
 - **Renewal** is the same request at the same term, every `lease/4`.
+- **Campaigning.** A standby looks every `lease/4`. It campaigns on its first look after the
+  lease it last saw renewed has expired by its own clock, plus ρ.
 - **The leader's own clock.** The leader times its lease from when it **sent** the request,
   shortened by a clock-rate margin ρ (1%). Its lease therefore ends before any voter's promise
   does.
-- **Clocks.** Every timing uses local monotonic durations. Wall-clock times are never compared
-  across hosts.
+- **Clocks.** Every timing uses local durations. Wall-clock times are never compared across
+  hosts. Leases are timed on `CLOCK_BOOTTIME`, which keeps counting through a host suspend,
+  unlike `CLOCK_MONOTONIC`.
+- **The clock assumption.** The argument holds only while each voter's clock advances at real
+  rate within ρ, **including while its process isn't running**.
+  - **Where it breaks:** the leader's clock stops or slows without bound when a VM is paused,
+    snapshotted or live-migrated, when a hypervisor deschedules the guest for long, or when the
+    host suspends and the hypervisor stops the guest's boot clock.
+    - The leader then resumes believing its lease is still valid, and it writes.
+    - A stopped clock on the witness or on the standby is safe: they grant or campaign later,
+      not earlier.
+  - **What follows:** controllers in VMs that can be paused or migrated are **not supported for
+    the pair**, and the guide says so. Bare metal and containers are supported. The witness may
+    run in any VM.
+  - **The tests:** they include a stopped leader clock (test plan F22b). It is an
+    expected-failure case that measures the breach, not one that hides it.
+- **One-way partitions and the back-off.** A leader that can send but not receive keeps the
+  voters' promises alive with renewals it never hears answered, so nobody else can be elected.
+  A leader whose lease has lapsed without a confirmed majority therefore **sends nothing to the
+  voters for one full lease** before it campaigns again. The voters' promises run out and a
+  reachable controller can win.
+- **The witness incarnation.** The witness draws a random incarnation id when it first starts
+  and keeps it in its state file. A and B record, in their own fsynced state, the incarnation
+  they accept.
+  - **Why it matters.** It covers a witness that runs twice: an old pod on a partitioned node
+    and its rescheduled copy, a force-deleted pod, or a copied VM. With the A–B link also cut,
+    A and B could each win a majority with a different copy.
+  - **The rule.** A controller ignores grants from any other incarnation. It adopts a new one
+    only when the other controller concurs over the A–B link, which happens at commissioning or
+    after a witness rebuild. Both controllers therefore always agree on which witness counts,
+    and that witness's promise goes to one of them.
+  - **The cost.** A rebuilt witness can't be adopted while one controller is down. That is
+    already a two-fault case (witness disk and a controller), so the survivor behaves as in §7.
+  - **On an HA cluster** the witness must be a StatefulSet with a persistent volume, never a
+    Deployment: Kubernetes won't start a second copy of a StatefulSet pod while it can't
+    confirm that the first is gone. The incarnation check covers a force-delete.
 - **The term is the fencing token.** It goes on every stream frame and every proxied API call,
   and receivers refuse an older term. Field devices can't check a token: a Modbus relay board
   knows no terms. **At the field, safety rests on timing**: the old leader's gate has closed
@@ -150,6 +186,49 @@ A candidate that was behind the recorded mark when the old leader last renewed s
 election. It takes over **cold** and raises an alarm naming how stale its state was (§9, answer
 4).
 
+### 3.4 Writes leave in time, on every output path
+
+A gate that is open "when read" does not stop a write that leaves after the lease has expired.
+Between the check and the send there can be a pause: a GC, a preemption, a SIGSTOP. Bytes may
+also already be sitting in the kernel's send buffer. Every output path must therefore follow
+three rules:
+
+1. **Check before each send.** The gate is read immediately before every send: one request,
+   one datagram or one frame. It is never read once per batch.
+2. **A send deadline.** The gate also reports `remaining()`, the time left on this replica's
+   lease. Each send runs with a deadline of `remaining() − d_net`. `d_net` is an assumed
+   one-way delivery bound for the plant network, 50 ms by default and set in the manifest. A
+   send whose deadline has already passed is not started.
+3. **Fencing closes sockets.** When the gate closes, every field socket with a write in flight
+   or queued is closed with `SO_LINGER` 0. The close sends a reset and discards whatever was
+   still in the kernel's send buffer.
+
+**The residual risk, stated.** A freeze that lands between the last deadline check and the
+send system call, or bytes already in a NIC queue or a switch, can reach a device up to
+`d_net` plus the freeze late. No user-space rule removes that window. The device's own comm
+watchdog and the hardwired safety chain cover it (#725, "deliberately not built"). The test
+plan measures it with a pause hook in exactly that spot.
+
+**Every output path, and how it is gated:**
+
+| Path | Gate today | Needed for the pair |
+|---|---|---|
+| Modbus TCP | before each write (`modbus/driver.go`) | send deadline; RST on fence |
+| EtherNet/IP | before each write (`eip/driver.go`) | send deadline; RST on fence |
+| OPC UA client | in `WriteOutputs` and its flush | check before each write; deadline |
+| OptoMMP | looked at per scan, datagram and stream check | check before each datagram; deadline |
+| Redfish, SNMP, Prometheus (`hw/base.go`) | **once per batch** (`flushWrites`) | check before each command; deadline |
+| READ/WRITE channels (#699) | **none**: fixed in #797 (#796) | deadline |
+| Sparkplug host NCMD/DCMD | gated (#325) | check before each publish |
+| Sparkplug edge | **none** (#798): every replica publishes | only the leader holds the session; NDEATH on step-down |
+| PROFINET device (#790) | gate look every 200 ms | check before each RT, DCP and LLDP frame (test plan F33) |
+| OPC UA server Write service | refused on a standby | unchanged |
+| HTTP API writes | proxied to the leader, or refused (503) | unchanged |
+| Alarm notifiers (mail, chat) | run from scans, so leader only | unchanged |
+| Floating IP | (new) | §8 |
+
+The test plan's I3 oracle checks every row.
+
 ## 4. The state stream and hot takeover
 
 ### 4.1 Contents and transport
@@ -167,18 +246,46 @@ own file, on the 2 s cadence the leader uses today.
 
 ### 4.2 Hot takeover
 
-A hot takeover happens when the image is current (within a bound set as a multiple of the
-stream interval) and the build hash matches. The new leader then:
+**Image age** is judged by the standby, on its own clock: the time from the moment the last
+frame arrived to the moment it wins the election. It is not the in-sync mark, which says only
+that the standby was keeping up when the old leader last renewed.
 
-- **continues from the image** instead of calling `ResetFrame`;
-- advances timers by the time measured locally since the image arrived;
-- still drops forces, as today: the standby never saw them;
-- still sends the full output set once (#600/#606);
-- waits for live inputs as #786 defines, then scans.
+**The isolated leader.** A leader cut off from both peers (F12) goes on scanning and writing
+until its lease ends, but none of its frames arrive. A standby that was in sync therefore wins
+with an image about `lease + campaign delay` old.
 
-**What can repeat.** The image can trail the leader, so the new leader re-runs at most
-`N scans + link delay` of logic, against fresh inputs. An edge-triggered action inside that
-window can happen once more. The guide says so.
+**The bound.** A hot takeover happens when the image age is at most `hot-max-age` and the build
+hash matches.
+
+- `hot-max-age` defaults to `lease + lease/4 + 2 × stream interval`, so a crash, a kill or an
+  isolation of the leader all stay hot.
+- A project that would rather restart than re-run up to a lease of logic sets it lower. The
+  isolation case then becomes cold.
+
+**The new leader, in order:**
+
+1. continues from the image instead of calling `ResetFrame`, and advances timers by the image
+   age;
+2. drops forces, as today: the standby never saw them;
+3. waits for live inputs, as #786 defines;
+4. runs its first scan;
+5. sends the full output set once (#600/#606). Outputs are held until then (`io/io.go`).
+
+**If the #786 wait gives up**, the takeover stays hot: frames are kept, inputs that are not
+live carry Bad quality, and "took over without live inputs" is alarmed. Giving up never turns
+a hot takeover into a cold one.
+
+**The re-run window.** It is the image age: up to `hot-max-age`, not a few scans. Within it:
+
+- **Actions can repeat.** The new leader may perform an action the old leader already
+  performed, such as an SFC step's entry actions or an edge-triggered command.
+- **Events can be lost.** An input pulse that came and went inside the window is never seen,
+  so a counter can end short by the pulses in the window.
+- **Operator writes can be lost silently.** A setpoint the old leader acknowledged through the
+  API but had not yet streamed is gone on failover. On a crash that is up to one stream
+  interval; on an isolation, up to a lease. The guide says so. Acks and shelves are not
+  affected: they go through `oplog` (§1). Moving setpoint writes through `oplog` too is left to
+  #709, whose entries already go that way.
 
 ### 4.3 Cold takeover
 
@@ -188,6 +295,8 @@ field) when:
 - there is no image;
 - the image is older than the bound;
 - the standby was behind the in-sync mark (§3.3);
+- a cold takeover after a long spell out of sync reloads the standby's own retain file, so
+  setpoints go back to what it last received. The alarm names how far back that is;
 - the **build hash differs**. A rolling update through `tools/deploy` is therefore a cold
   handover, and the guide says so.
 
@@ -198,7 +307,7 @@ only**. The guide gains a section for the pair, and the Kubernetes text stays.
 
 | Driver | Standby default | Why |
 |---|---|---|
-| Modbus TCP, OPC UA client | polls read-only | A second session costs nothing. Inputs are live at takeover, and the I/O-health handover (§3.2) can compare both sides. |
+| Modbus TCP, OPC UA client | polls read-only | A second session is usually cheap. Inputs are live at takeover, and the I/O-health handover (§3.2) can compare both sides. A device that caps its connections (many Modbus gateways take only a few) is set to no session in its profile (#717). |
 | OptoMMP | polls, or no session with a unit watchdog | Already the rule (#618, #626). |
 | EtherNet/IP, IO-Link masters | no session | Connection budgets are tight, and some masters take only one client. |
 | PROFINET device (`profinet-device`, #790) | silent: no socket, no DCP answers, no LLDP | Only the leader is the station on the wire. The PLC's outputs are stale on a standby until its AR is re-established with the new leader. |
@@ -210,8 +319,21 @@ time spent waiting for inputs counts in the takeover time.
 
 Takeover time is published as a formula and measured, never promised as a single number:
 
-> `T ≈ time left on the old lease (≤ lease) + one vote round + inputs-ready wait
-> (≈0 when the standby polls; session connect + first read when it does not) + one scan`
+> `T ≈ L_rem + ρ·lease + C + (RTT + f) + W_r + I + S + O`
+
+| Term | Meaning |
+|---|---|
+| `L_rem` | time left on the old lease at the fault, from 0 to `lease`; 0 after an orderly `Release` |
+| `ρ·lease` | the clock-rate margin |
+| `C` | the standby's campaign delay: up to `lease/4` (§3.1) |
+| `RTT + f` | one vote round, including each voter's fsync |
+| `W_r` | up to one lease more, if a voter has just restarted and is waiting out its timer (§3.1) |
+| `I` | the inputs wait, up to #786's cap: about 0 when the standby polls, a session connect and first read when it does not. When a frozen old leader still holds a device's **only** session, it lasts until that device's own session timeout, and may hit the cap. |
+| `S` | one scan |
+| `O` | the full output set going out |
+
+**An I/O-health handover** (§3.2) waits for its hold-off (3 × lease) first, then hands over by
+`Release`, so `L_rem` is 0.
 
 **When nautilus is a PROFINET device**, the IO controller (the PLC) re-establishes its AR with
 the new leader, and that sets the inputs-ready wait:
@@ -274,27 +396,46 @@ elected a leader". **Anything it writes may contend with a real leader.**
 **The override is the only path to two writers.** It is taken when an engineer asserts
 something that is not true. The record exists for that case.
 
-### 7.1 Audit record, shaped to move into #709
+### 7.1 Audit records, in #709's shape
 
-The record is fsynced to a local append-only JSONL journal **before the gate opens**. It is
-copied to the peers once quorum returns.
+Every redundancy event is written as a #709 entry. The fields are `ts`, `user`, `source`,
+`action`, `target`, `before`, `after` and `result`. Redundancy-specific facts go in `detail`.
 
 ```json
-{"id":"<ulid>","ts":"<rfc3339>","kind":"redundancy.override.start",
- "actor":{"name":"<user>","via":"cli|api","auth":"token"},
- "pair":"<project>","node":"a","reason":"<free text>",
- "attest":"peer b confirmed powered off",
- "context":{"term":12,"lastHeard":{"b":"41m","witness":"39m"},"inSync":false},
- "expires":"<rfc3339>"}
+{"id":"<ulid>","ts":"<rfc3339>","user":"<user>|system","source":"cli|api|system",
+ "action":"redundancy.override.start","target":"<project>/a",
+ "before":{"quorum":false,"gate":"closed","term":12},
+ "after":{"gate":"open","term":12,"takeover":"cold","expires":"<rfc3339>"},
+ "result":"ok",
+ "detail":{"reason":"<free text>","attest":"peer b confirmed powered off",
+           "lastHeard":{"b":"41m","witness":"39m"},"imageAge":null}}
 ```
 
-The `kind` values are `redundancy.override.start`, `.renew`, `.end` (a peer was heard),
-`.expire` and `.revoke`.
+**The actions recorded:**
+
+| Kind of event | Actions |
+|---|---|
+| Override | `redundancy.override.start`, `.renew`, `.end` (a peer was heard), `.expire`, `.revoke` |
+| Takeover | `redundancy.takeover`, with hot or cold, the image age and both terms |
+| Handover | `redundancy.handover`, with the reason: orderly or I/O health |
+| Quorum | `redundancy.quorum.lost` and `.regained` |
+| Witness | `redundancy.witness.incarnation`, when one is adopted |
+| Stale takeover | `redundancy.stale`, a cold takeover with its staleness |
+
+**Where records go.** With quorum, a record goes through `oplog`, as #709 specifies. Without
+quorum, which is the override's whole case, it is fsynced to a local append-only JSONL journal
+first: **before the gate opens**, for an override. It is appended to `oplog` once quorum
+returns.
+
+**Crash and replay rules:**
 
 - A crash after the fsync and before the gate opens leaves a record of an override that never
   ran. That is the safe direction.
 - A torn final line is dropped, as `oplog` does.
-- When #709 lands, the journal becomes one of its sources, and `actor` becomes a #708 identity.
+- Each record's `id` makes replay idempotent.
+
+**Until #708 and #709 land**, `user` is the token's name and the journal stands alone. When
+#709 lands, the journal becomes one of its sources unchanged.
 
 ## 8. Clients (#716, planned on that issue)
 
@@ -367,7 +508,9 @@ Each step is its own PR, "Part of #725":
    partition matrix. No runtime wiring yet.
 3. `naut witness`, the manifest section and the `naut run` wiring, with **cold** takeover only.
    This is today's behaviour, without Kubernetes. `oplog` runs on the three peers, with the
-   witness as the third. The container harness arrives here.
+   witness as the third. Every output path meets §3.4: a check before each send, a deadline,
+   RST on fence. That includes `hw/base.go`'s per-batch check. The container harness arrives
+   here.
 4. The state stream and hot takeover, with stale or mismatched images falling back to cold.
 5. Lone-survivor mode, the override and its audit journal.
 6. #716: the clients and the floating IP.
