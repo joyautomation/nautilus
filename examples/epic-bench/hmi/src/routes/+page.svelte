@@ -9,6 +9,7 @@
 	import Epic, { BOUNDS, BOUNDS_CORE, type Channel } from '$lib/Epic.svelte';
 	import Panel, { type Row } from '$lib/Panel.svelte';
 	import { fitCamera } from '$lib/fit';
+	import { driverLabel } from '$lib/driver';
 	import { whileVisible } from '$lib/live';
 
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream' });
@@ -37,7 +38,7 @@
 	const ms = (v: number | undefined, digits: number) => (typeof v === 'number' ? v.toFixed(digits) : '—');
 
 	let rows = $derived<Row[]>([
-		{ label: 'Driver', value: driver ? `${driver.kind} ${driver.state}` : '—', tone: driver && driver.state !== 'connected' ? 'crit' : undefined },
+		{ label: 'Driver', value: driverLabel(driver, !!rt.frame), tone: driver && driver.state !== 'connected' ? 'crit' : undefined },
 		{ label: 'I/O online', value: tags.EPIC__Online === true ? 'yes' : tags.EPIC__Online === false ? 'no' : '—', tone: tags.EPIC__Online === false ? 'crit' : undefined },
 		{ label: 'Outages', value: count('EPIC__Outages') },
 		{ label: 'Watchdog trips', value: count('EPIC__WatchdogTrips') },

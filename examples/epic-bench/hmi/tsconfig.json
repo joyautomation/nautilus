@@ -4,6 +4,9 @@
 		"strict": true,
 		"moduleResolution": "bundler",
 		"resolveJsonModule": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		// src/lib/*.test.ts import their subject as ./x.ts, as Node's type
+		// stripping (npm test) needs; nothing is emitted, so this is safe.
+		"allowImportingTsExtensions": true
 	}
 }
