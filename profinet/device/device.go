@@ -80,14 +80,23 @@ type Identity struct {
 	SWRevision  [3]byte
 }
 
-// Config is everything New needs. Port and RPC are owned by the device
-// from New on and closed by Run when it returns.
+// Config is everything New needs. Port, RPC and every socket ListenRPC
+// opens are owned by the device and closed by Run when it returns.
 type Config struct {
 	Identity
 	Subslots []Subslot // user slots (≥ 1); slot 0 is the DAP and implicit
 
 	Port transport.Port // raw Ethernet: DCP, RT, RTA, LLDP
-	RPC  net.PacketConn // UDP for DCE/RPC (34964 in the field)
+	// DCE/RPC (UDP 34964 in the field): exactly one of RPC and ListenRPC.
+	// RPC is one socket, open from the start (tests). ListenRPC opens the
+	// socket on the station address once a controller sets it over DCP
+	// (an address the interface holds), and again if it changes; until then
+	// the device has no RPC socket at all. Bound to that one address, RPC
+	// is not exposed on the host's other networks, and every reply and
+	// CControl leaves from the address the controller talks to, a floating
+	// one included.
+	RPC       net.PacketConn
+	ListenRPC func(ip net.IP) (net.PacketConn, error)
 
 	// ControllerCMPort is the controller's DCE/RPC port, where the device
 	// sends its CControl(ApplicationReady). 0 means 34964.
@@ -135,7 +144,10 @@ type Device struct {
 	station string
 	// suite is the IP suite a DCP Set gave the device, nil until one is
 	// accepted (its address is one the interface holds).
-	suite    *ipSuite
+	suite *ipSuite
+	// rpcAt tells rpcServe the station address to listen on (ListenRPC);
+	// one slot, the latest wins.
+	rpcAt    chan net.IP
 	snapInfo snapInfo
 
 	counters counters
@@ -185,8 +197,8 @@ func (s State) String() string {
 
 // New validates cfg and builds a device. It does not touch the network.
 func New(cfg Config) (*Device, error) {
-	if cfg.Port == nil || cfg.RPC == nil {
-		return nil, errors.New("profinet device: Port and RPC are required")
+	if cfg.Port == nil || (cfg.RPC == nil) == (cfg.ListenRPC == nil) {
+		return nil, errors.New("profinet device: Port and exactly one of RPC and ListenRPC are required")
 	}
 	if err := ValidStationName(cfg.Station); err != nil {
 		return nil, fmt.Errorf("profinet device: %w", err)
@@ -218,7 +230,9 @@ func New(cfg Config) (*Device, error) {
 		outGood: map[Addr]bool{},
 		station: cfg.Station,
 		boot:    uint32(time.Now().Unix()),
+		rpcAt:   make(chan net.IP, 1),
 	}
+
 	for _, s := range dapSubslots() {
 		d.subs[s.Addr] = &s
 	}
@@ -356,13 +370,12 @@ func (d *Device) Run(ctx context.Context) error {
 	d.mu.Unlock()
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); d.rpcLoop(ctx) }()
+	go func() { defer wg.Done(); d.rpcServe(ctx) }()
 	go func() { defer wg.Done(); d.lldpLoop(ctx) }()
 	err := d.frameLoop(ctx)
 	cancel()
 	d.cfg.Port.Close()
-	d.cfg.RPC.Close()
-	wg.Wait()
+	wg.Wait() // rpcServe closes its sockets on the way out
 	d.mu.Lock()
 	if d.ar != nil {
 		d.endAR(d.ar, "stopped")

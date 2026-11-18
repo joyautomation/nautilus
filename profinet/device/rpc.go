@@ -44,11 +44,69 @@ func (c *replyCache) put(k replyKey, pkt []byte) {
 	c.pkts[k] = pkt
 }
 
-func (d *Device) rpcLoop(ctx context.Context) {
+// rpcServe runs the DCE/RPC side until ctx ends: on the one RPC socket,
+// or (ListenRPC) on a socket bound to the station address, reopened when
+// the address changes and closed when it is cleared.
+func (d *Device) rpcServe(ctx context.Context) {
+	if d.cfg.RPC != nil {
+		go func() { <-ctx.Done(); d.cfg.RPC.Close() }() // wakes the read
+		d.rpcLoop(ctx, d.cfg.RPC)
+		return
+	}
+	var (
+		conn net.PacketConn
+		done chan struct{}
+		at   net.IP
+	)
+	stop := func() {
+		if conn != nil {
+			conn.Close()
+			<-done
+			conn = nil
+		}
+	}
+	defer stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ip := <-d.rpcAt:
+			if ip.Equal(at) && conn != nil {
+				continue
+			}
+			stop()
+			at = ip
+			if ip == nil {
+				continue
+			}
+			c, err := d.cfg.ListenRPC(ip)
+			if err != nil {
+				d.mu.Lock()
+				d.snapInfo.lastEvent = fmt.Sprintf("DCE/RPC on %s: %v", ip, err)
+				d.mu.Unlock()
+				d.log.Warn("profinet device: DCE/RPC listen", "address", ip, "error", err)
+				continue
+			}
+			conn, done = c, make(chan struct{})
+			go func(c net.PacketConn, done chan struct{}) { defer close(done); d.rpcLoop(ctx, c) }(c, done)
+		}
+	}
+}
+
+// listenAt asks rpcServe for the station address (d.mu held).
+func (d *Device) listenAt(ip net.IP) {
+	select {
+	case <-d.rpcAt:
+	default:
+	}
+	d.rpcAt <- ip
+}
+
+func (d *Device) rpcLoop(ctx context.Context, conn net.PacketConn) {
 	var cache replyCache
 	buf := make([]byte, 65536)
 	for {
-		n, from, err := d.cfg.RPC.ReadFrom(buf)
+		n, from, err := conn.ReadFrom(buf)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
@@ -60,7 +118,7 @@ func (d *Device) rpcLoop(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		d.serveRPC(buf[:n], udp, &cache)
+		d.serveRPC(conn, buf[:n], udp, &cache)
 	}
 }
 
@@ -68,7 +126,7 @@ func (d *Device) rpcLoop(ctx context.Context) {
 // logged and dropped, never the process. The parsers are fuzzed; this is
 // defence in depth for the code between them and the reply. The device
 // lock is taken with defer (pnio), so a panic does not leave it held.
-func (d *Device) serveRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
+func (d *Device) serveRPC(conn net.PacketConn, pkt []byte, from *net.UDPAddr, cache *replyCache) {
 	defer func() {
 		if r := recover(); r != nil {
 			d.log.Error("profinet device: RPC request dropped after a panic", "from", from, "panic", r)
@@ -77,13 +135,13 @@ func (d *Device) serveRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
 			d.mu.Unlock()
 		}
 	}()
-	d.handleRPC(pkt, from, cache)
+	d.handleRPC(conn, pkt, from, cache)
 }
 
 // handleRPC serves one datagram. Requests are handled one at a time in
 // arrival order: a controller's Connect, Write, Read and Control are
 // sequential, and the order is what makes the AR's state right.
-func (d *Device) handleRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
+func (d *Device) handleRPC(conn net.PacketConn, pkt []byte, from *net.UDPAddr, cache *replyCache) {
 	h, err := wire.ParseRPCHeader(pkt)
 	if err != nil || h.RPCVersion != wire.RPCVersionCL || h.PacketType != wire.RPCPTypeRequest {
 		return
@@ -104,7 +162,7 @@ func (d *Device) handleRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
 	}
 	key := replyKey{h.ActivityUUID, h.SequenceNum, h.OpNum}
 	if resp := cache.get(key); resp != nil {
-		d.cfg.RPC.WriteTo(resp, from)
+		conn.WriteTo(resp, from)
 		return
 	}
 	var out []byte
@@ -114,7 +172,7 @@ func (d *Device) handleRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
 		out, after = d.pnio(h, body, from)
 		if out != nil {
 			cache.put(key, out)
-			d.cfg.RPC.WriteTo(out, from)
+			conn.WriteTo(out, from)
 		}
 		if after != nil {
 			go after()
@@ -124,7 +182,7 @@ func (d *Device) handleRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
 		out = d.epm(h, body)
 	}
 	if out != nil {
-		d.cfg.RPC.WriteTo(out, from)
+		conn.WriteTo(out, from)
 	}
 }
 
@@ -206,7 +264,15 @@ func (d *Device) sendAppReady(a *ar) error {
 		InterfaceHint: 0xFFFF, ActivityHint: 0xFFFF, FragmentLen: uint16(len(body)),
 	}
 	pkt := append(hdr.Marshal(), body...)
-	sock, err := net.ListenUDP("udp4", nil)
+	// From the station address, as the replies are: the controller
+	// expects the CControl from the address it connected to.
+	var laddr *net.UDPAddr
+	d.mu.Lock()
+	if d.suite != nil {
+		laddr = &net.UDPAddr{IP: d.suite.ip}
+	}
+	d.mu.Unlock()
+	sock, err := net.ListenUDP("udp4", laddr)
 	if err != nil {
 		return err
 	}

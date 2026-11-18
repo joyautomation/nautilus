@@ -3,8 +3,10 @@ package device
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -399,5 +401,76 @@ func TestNewValidates(t *testing.T) {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// ListenRPC (the field mode): no DCE/RPC socket until a controller sets
+// the station address, then one bound to exactly that address, moved when
+// the address changes. So RPC is not open on the host's other networks,
+// and replies leave from the address the controller talks to (review on
+// #738).
+func TestRPCListensOnTheStationAddress(t *testing.T) {
+	hub := transport.NewHub()
+	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: loIP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	probe.Close()
+	var mu sync.Mutex
+	var bound []string
+	station := net.IPv4(127, 0, 0, 2) // not the loopback default source
+	ctrl := newController(t, hub, ctrlMAC, &net.UDPAddr{IP: station, Port: port})
+	defer ctrl.close()
+	dev, err := New(Config{
+		Identity: Identity{Station: "dev-1", VendorName: "nautilus", VendorID: 0x1234, DeviceID: 0x0001, OrderNumber: "NAUT-PN"},
+		Subslots: layout,
+		Port: hub.Port(devMAC, transport.Options{
+			EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr},
+		}),
+		ListenRPC: func(ip net.IP) (net.PacketConn, error) {
+			c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: ip, Port: port})
+			if err == nil {
+				mu.Lock()
+				bound = append(bound, c.LocalAddr().String())
+				mu.Unlock()
+			}
+			return c, err
+		},
+		ControllerCMPort: ctrl.cm.LocalAddr().(*net.UDPAddr).Port,
+		InterfaceAddrs:   func() []net.IP { return []net.IP{net.IPv4(127, 0, 0, 2), loIP} },
+		MinWatchdog:      60 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { dev.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	got := func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), bound...) }
+
+	time.Sleep(50 * time.Millisecond)
+	if b := got(); len(b) != 0 {
+		t.Fatalf("RPC open before any address was set: %v", b)
+	}
+	if code := ctrl.setIP(loIP); code != dcpOK {
+		t.Fatalf("set IP: %d", code)
+	}
+	eventually(t, "bound to .1", func() bool { b := got(); return len(b) == 1 })
+	if code := ctrl.setIP(station); code != dcpOK {
+		t.Fatalf("set IP: %d", code)
+	}
+	eventually(t, "moved to .2", func() bool { b := got(); return len(b) == 2 })
+	want := []string{fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("127.0.0.2:%d", port)}
+	if b := got(); b[0] != want[0] || b[1] != want[1] {
+		t.Fatalf("bound %v, want %v", b, want)
+	}
+	// The controller connects to the station address and the AR runs.
+	ctrl.connect(t, layout, false)
+	ctrl.prmEnd(t)
+	eventually(t, "ApplicationReady", func() bool { return ctrl.appReadySeen() })
+	if from := ctrl.lastCControlFrom(); !from.Equal(station) {
+		t.Fatalf("CControl from %v, want the station address %v", from, station)
 	}
 }

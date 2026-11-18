@@ -44,6 +44,7 @@ type testController struct {
 	props    uint32 // ARProperties; 0 = 0x11 (legacy start-up)
 	activity uint16 // CMInitiatorActivityTimeout (100 ms units); 0 = 100
 	noOutput bool   // leave the output IOCR out of the Connect
+	cmFrom   net.IP // source of the last CControl
 
 	sawARServer bool
 	ctx         context.Context
@@ -126,6 +127,7 @@ func (c *testController) cmLoop() {
 		}
 		c.mu.Lock()
 		c.appReady = ctl.ARUUID == c.arUUID
+		c.cmFrom = from.IP
 		c.mu.Unlock()
 		ctl.Command = wire.ControlCmdDone
 		body := wire.MarshalPNIOResponseBody(wire.PNIOStatusOK, wire.MarshalIODControl(wire.BlockTypeAppRdyBlockRes, ctl), argsMax, false)
@@ -515,6 +517,12 @@ func (c *testController) write(t *testing.T, ws []wire.Write) wire.PNIOStatus {
 
 func dd(dir, n uint16) wire.SubmoduleDataDesc {
 	return wire.SubmoduleDataDesc{DataDirection: dir, DataLength: n, LengthIOCS: 1, LengthIOPS: 1}
+}
+
+func (c *testController) lastCControlFrom() net.IP {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cmFrom
 }
 
 func (c *testController) activityTimeout() uint16 {

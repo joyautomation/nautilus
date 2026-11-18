@@ -138,10 +138,12 @@ func (d *Device) setIP(data []byte) uint8 {
 	}
 	if ip.Equal(net.IPv4zero) {
 		d.suite = nil // "reset to no address": nothing to apply either
+		d.listenAt(nil)
 		return dcpOK
 	}
 	if d.holds(ip) {
 		d.suite = &ipSuite{ip: ip.To4(), mask: mask.To4(), gw: gw.To4()}
+		d.listenAt(d.suite.ip)
 		return dcpOK
 	}
 	d.counters.setIPRefused++
