@@ -25,6 +25,8 @@ const devMapL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Parameter Name="stsCode" TagType="Base" DataType="SINT" Usage="Output" Radix="Decimal" Required="false" Visible="true" ExternalAccess="Read Only"/>
 <Parameter Name="cmdGo" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="false" Visible="true" ExternalAccess="Read/Write"/>
 <Parameter Name="stsEcho" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="true" ExternalAccess="Read Only"/>
+<Parameter Name="tmr" TagType="Base" DataType="TIMER" Usage="InOut" Required="true" Visible="true" Constant="false"/>
+<Parameter Name="stsDone" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="true" ExternalAccess="Read Only"/>
 </Parameters>
 <LocalTags/>
 <Routines>
@@ -33,19 +35,24 @@ const devMapL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Rung Number="0" Type="N"><Text><![CDATA[XIC(modIn.Data[2].2)OTE(stsRun);]]></Text></Rung>
 <Rung Number="1" Type="N"><Text><![CDATA[CPS(modIn.Data[0],stsCode,1);]]></Text></Rung>
 <Rung Number="2" Type="N"><Text><![CDATA[XIC(cmdGo)OTE(stsEcho);]]></Text></Rung>
+<Rung Number="3" Type="N"><Text><![CDATA[XIC(cmdGo)TON(tmr,?,?);]]></Text></Rung>
+<Rung Number="4" Type="N"><Text><![CDATA[XIC(tmr.DN)OTE(stsDone);]]></Text></Rung>
 </RLLContent>
 </Routine>
 </Routines>
 </AddOnInstructionDefinition>
 </AddOnInstructionDefinitions>
-<Tags/>
+<Tags>
+<Tag Name="DM1" TagType="Base" DataType="DevMap" Constant="false" ExternalAccess="Read/Write"/>
+<Tag Name="T1" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write"/>
+</Tags>
 <Programs>
 <Program Name="Main" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">
 <Tags/>
 <Routines>
 <Routine Name="MainRoutine" Type="RLL">
 <RLLContent>
-<Rung Number="0" Type="N"><Text><![CDATA[NOP();]]></Text></Rung>
+<Rung Number="0" Type="N"><Text><![CDATA[DevMap(DM1,Dev1:I,T1);]]></Text></Rung>
 </RLLContent>
 </Routine>
 </Routines>
@@ -76,7 +83,7 @@ func TestLogixImportRefusesRungsOnAModuleDefinedParameter(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("import: exit %d\n%s", code, out)
 	}
-	if !strings.Contains(out, "modIn: parameter type _0001:DeviceX_1234ABCD:I:0 is module-defined (a device's I/O structure), which the import does not carry, so it is left out, and so is every rung that names it") {
+	if !strings.Contains(out, "modIn: parameter type _0001:DeviceX_1234ABCD:I:0 is module-defined (a device's I/O structure), which the import does not carry, so it is left out, and so is every rung that names it; declare a STRUCT for the device's data and rewrite them against it") {
 		t.Errorf("the import does not explain the parameter:\n%s", out)
 	}
 	body, err := os.ReadFile(filepath.Join(proj, "lib", "DevMap.ld"))
@@ -89,10 +96,21 @@ func TestLogixImportRefusesRungsOnAModuleDefinedParameter(t *testing.T) {
 		"// not imported (type: " + why + "): XIC(modIn.Data[2].2)OTE(stsRun);",
 		"// not imported (type: modIn.Data[0]: type _0001:DeviceX_1234ABCD:I:0 is module-defined",
 		"cmdGo ( stsEcho )",
+		// A TIMER parameter is a block, not a missing type: carried.
+		"cmdGo tmr:TON(",
+		"tmr.Q ( stsDone )",
 	} {
 		if !strings.Contains(ld, want) {
 			t.Errorf("lib/DevMap.ld lacks %q:\n%s", want, ld)
 		}
+	}
+	// The call names the parameter that stops it.
+	main, err := os.ReadFile(filepath.Join(proj, "Main.ld"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(main), "DevMap(DM1,Dev1:I,T1): parameter modIn: type _0001:DeviceX_1234ABCD:I:0 is module-defined") {
+		t.Errorf("the call's refusal does not name the parameter:\n%s", main)
 	}
 	if out, code := capture(t, func() int { return runCheck([]string{proj}) }); code != 0 {
 		t.Errorf("naut check on the import: exit %d\n%s", code, out)

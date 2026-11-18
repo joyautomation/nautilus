@@ -357,7 +357,15 @@ func (im *importer) importAOI(a *l5x.AddOnInstruction) {
 		}
 		typ, ok := im.typeText(pr.DataType, dimText(pr.Dimension))
 		if !ok {
-			im.proj.note(owner, -1, "type", pr.Name+": parameter "+typeMissing(pr.DataType)+", so it is left out, and so is every rung that names it")
+			text := pr.Name + ": parameter " + typeMissing(pr.DataType)
+			switch {
+			case !moduleDefined(pr.DataType):
+			case logic != nil && logic.Type == "ST":
+				text += ", so it is left out; the ST routine is carried as written and still names it, which naut check reports"
+			default:
+				text += ", so it is left out, and so is every rung that names it; " + moduleAdvice
+			}
+			im.proj.note(owner, -1, "type", text)
 			continue
 		}
 		sec := map[string]string{"Input": "VAR_INPUT", "Output": "VAR_OUTPUT", "InOut": "VAR_IN_OUT"}[pr.Usage]
@@ -380,11 +388,20 @@ func (im *importer) importAOI(a *l5x.AddOnInstruction) {
 // structure, which the export keeps with the module, not in DataTypes) is
 // not carried; anything else is simply not declared.
 func typeMissing(dtype string) string {
-	if strings.Contains(dtype, ":") {
+	if moduleDefined(dtype) {
 		return "type " + dtype + " is module-defined (a device's I/O structure), which the import does not carry"
 	}
 	return "type " + dtype + " has no nautilus declaration"
 }
+
+// moduleDefined reports a module-defined type: _0001:Device_1234ABCD:I:0,
+// AB:ETHERNET_MODULE_SINT_120Bytes:O:0. Its layout lives with the module,
+// never in DataTypes. (A TIMER or COUNTER parameter is a block, declared
+// its own way, and is not one.)
+func moduleDefined(dtype string) bool { return strings.Contains(dtype, ":") }
+
+// moduleAdvice says what to do about rungs on a module-defined type.
+const moduleAdvice = "declare a STRUCT for the device's data and rewrite them against it"
 
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
@@ -517,7 +534,7 @@ func (im *importer) declareFound(sc *scope, p *pou, f *found, blockType string) 
 		// declaration: then the interface left it out, and a rung naming
 		// it would not compile (#776).
 		_, ok := im.typeText(f.param.DataType, dimText(f.param.Dimension))
-		return ok
+		return ok || !moduleDefined(f.param.DataType)
 	}
 	if up == "MESSAGE" {
 		// A MESSAGE is a READ or WRITE instance, by its MessageType.

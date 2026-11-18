@@ -1458,6 +1458,11 @@ func (rt *routine) aoiCall(in *l5x.Instr) (text, powerOut string, err *refusal) 
 			params = append(params, p)
 		}
 	}
+	for _, p := range params {
+		if _, ok := rt.im.typeText(p.DataType, dimText(p.Dimension)); !ok && moduleDefined(p.DataType) {
+			return "", "", refuse("type", "%s(%s): parameter %s: %s; %s", a.Name, strings.Join(in.Args, ","), p.Name, typeMissing(p.DataType), moduleAdvice)
+		}
+	}
 	if len(in.Args)-1 != len(params) {
 		return "", "", refuse("AOI", "%s(%s): %d operands for %d parameters", a.Name, strings.Join(in.Args, ","), len(in.Args)-1, len(params))
 	}
