@@ -1,0 +1,556 @@
+//go:build !js
+
+package project
+
+// A live I/O apply (#706 PR 3a) against real Modbus slaves and OPC UA
+// servers, with the scan running: a Modbus device moved to another address
+// while the other device stays Good, an OPC UA driver swapped whole, every
+// refusal, and the three apply guards.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/gopcua/opcua/id"
+	uasrv "github.com/gopcua/opcua/server"
+	"github.com/gopcua/opcua/ua"
+
+	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/modbus/slave"
+	"github.com/joyautomation/nautilus/runtime"
+)
+
+func newSlave(t *testing.T, in uint16) *slave.Server {
+	t.Helper()
+	srv := slave.NewServer("", nil)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	srv.Unit(1).SetHolding(0, in)
+	return srv
+}
+
+func slavePort(srv *slave.Server) int {
+	_, port, _ := net.SplitHostPort(srv.Addr())
+	p, _ := strconv.Atoi(port)
+	return p
+}
+
+// mbSource is one source of the fixture's Modbus manifest, In on holding 0
+// and Cmd (:= In + 1) on holding 10.
+func mbSource(id string, port int) string {
+	return fmt.Sprintf("  - {id: %s, host: 127.0.0.1, port: %d, unitid: 1, timeout: 500ms, retrymin: 20ms, retrymax: 80ms}\n", id, port)
+}
+
+func mbTags(id, prefix string) string {
+	return fmt.Sprintf("  - {name: %s_In, source: %s, table: holding, address: 0, format: int16}\n", prefix, id) +
+		fmt.Sprintf("  - {name: %s_Cmd, source: %s, table: holding, address: 10, format: int16, writable: true}\n", prefix, id)
+}
+
+// ioFiles is a project polling DEV_A (A_In, A_Cmd) on portA and DEV_B on
+// portB; uaEndpoint, when set, adds an OPC UA driver delivering GW_Level.
+func ioFiles(portA, portB int, uaEndpoint string) fstest.MapFS {
+	manifest := `name: io
+tasks:
+  - program: main.st
+    scan: 5ms
+tags:
+  - { name: A_In, role: input, type: DINT }
+  - { name: A_Cmd, role: output, type: DINT }
+  - { name: B_In, role: input, type: DINT }
+  - { name: B_Cmd, role: output, type: DINT }
+`
+	if uaEndpoint != "" {
+		manifest += "  - { name: GW_Level, role: input, type: LREAL }\n"
+		manifest += fmt.Sprintf(`drivers:
+  - type: modbus
+    manifest: modbus.yaml
+    scan-rate: 10ms
+  - type: opcua-client
+    endpoint: %s
+    manifest: opcua.yaml
+    scan-rate: 20ms
+`, uaEndpoint)
+	} else {
+		manifest += `driver:
+  type: modbus
+  manifest: modbus.yaml
+  scan-rate: 10ms
+`
+	}
+	return fstest.MapFS{
+		"nautilus.yaml": &fstest.MapFile{Data: []byte(manifest)},
+		"main.st": &fstest.MapFile{Data: []byte(`PROGRAM Main
+VAR_EXTERNAL A_In : DINT; A_Cmd : DINT; B_In : DINT; B_Cmd : DINT; END_VAR
+A_Cmd := A_In + 1;
+B_Cmd := B_In + 1;
+END_PROGRAM
+`)},
+		"modbus.yaml": &fstest.MapFile{Data: []byte("sources:\n" + mbSource("DEV_A", portA) + mbSource("DEV_B", portB) +
+			"tags:\n" + mbTags("DEV_A", "A") + mbTags("DEV_B", "B"))},
+		"opcua.yaml": &fstest.MapFile{Data: []byte(`namespaces: ["http://opcfoundation.org/UA/", "urn:io:test"]
+tags:
+  - {name: GW_Level, nodeid: "ns=1;s=Level", namespace: "urn:io:test", type: Double}
+`)},
+	}
+}
+
+// withFile is files with one file replaced.
+func withFile(files fstest.MapFS, name, content string) fstest.MapFS {
+	out := fstest.MapFS{}
+	for k, v := range files {
+		out[k] = v
+	}
+	out[name] = &fstest.MapFile{Data: []byte(content)}
+	return out
+}
+
+func modbusYAML(portA, portB int, extraSources, extraTags string) string {
+	return "sources:\n" + mbSource("DEV_A", portA) + mbSource("DEV_B", portB) + extraSources +
+		"tags:\n" + mbTags("DEV_A", "A") + mbTags("DEV_B", "B") + extraTags
+}
+
+type ioRig struct {
+	p   *Project
+	rt  *runtime.Runtime
+	io  *IOConfig
+	ctx context.Context
+}
+
+// startIORig loads files, starts its drivers and its scan, and builds the
+// IOConfig over them, as naut run will.
+func startIORig(t *testing.T, files fstest.MapFS, hold bool) *ioRig {
+	t.Helper()
+	p, err := Load(files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Runtime.HoldOutputsOnSwap = hold
+	rt, err := runtime.New(p.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if s, ok := p.Runtime.Driver.(interface{ Start(context.Context) }); ok {
+		s.Start(ctx)
+	}
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		if s, ok := p.Runtime.Driver.(interface{ Stop() }); ok {
+			s.Stop()
+		}
+	})
+	io, err := NewIOConfig(p, rt, files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &ioRig{p: p, rt: rt, io: io, ctx: ctx}
+}
+
+func (r *ioRig) value(name string) string {
+	v, _ := r.rt.Tags().ReadPath(name)
+	return fmt.Sprint(v)
+}
+
+// watchGood records any moment one of names is not Good, until stopped.
+func watchGood(r *ioRig, names ...string) (stop func() []string) {
+	var mu sync.Mutex
+	var bad []string
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-quit:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			for _, n := range names {
+				if q := r.rt.TagQuality(n); !q.IsGood() {
+					mu.Lock()
+					bad = append(bad, fmt.Sprintf("%s %v", n, q))
+					mu.Unlock()
+				}
+			}
+		}
+	}()
+	return func() []string {
+		close(quit)
+		<-done
+		mu.Lock()
+		defer mu.Unlock()
+		return bad
+	}
+}
+
+func failed(v *IOValidation) []string {
+	var out []string
+	for _, c := range v.Checks {
+		if !c.OK {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
+// A Modbus device moved to another address: applied in the running driver,
+// the other device Good throughout, the new device sent the current
+// command (decision 1), and the drift reported.
+func TestIOApplyModbusDeviceAddress(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 6)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	r := startIORig(t, files, false)
+	// The first command is the start-up baseline, never sent: drive a change.
+	eventually(t, "DEV_A and DEV_B polled", func() bool { return r.value("A_In") == "4" && r.value("B_In") == "7" })
+	s1.Unit(1).SetHolding(0, 6)
+	eventually(t, "A_Cmd on DEV_A", func() bool { return s1.Unit(1).Holding(10) == 7 })
+
+	cand := withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", ""))
+	c := r.io.Stage(cand, "upload", "tester")
+	v := r.io.Validate(c)
+	if !v.Valid {
+		t.Fatalf("validate: %+v", v.Checks)
+	}
+	if len(v.Changes) != 1 || v.Changes[0].Driver != "modbus" || v.Changes[0].Device != "DEV_A" {
+		t.Fatalf("changes = %+v, want DEV_A of driver modbus alone", v.Changes)
+	}
+	if len(v.Notes) != 0 {
+		t.Fatalf("notes = %v, want none: the candidate changes only I/O", v.Notes)
+	}
+	if got := fmt.Sprint(v.WillCommand); got != "[{A_Cmd 7}]" || v.Held {
+		t.Fatalf("willCommand = %s (held %v), want [{A_Cmd 7}]", got, v.Held)
+	}
+
+	stop := watchGood(r, "B_In", "B_Cmd")
+	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	// The new device gets the command willCommand listed, unchanged since
+	// (In is 6 on both): only the push after the swap sends it.
+	eventually(t, "A_Cmd 7 on the new device", func() bool { return s3.Unit(1).Holding(10) == 7 })
+	s3.Unit(1).SetHolding(0, 9)
+	eventually(t, "A_In from the new device", func() bool { return r.value("A_In") == "9" && s3.Unit(1).Holding(10) == 10 })
+	if bad := stop(); len(bad) > 0 {
+		t.Fatalf("DEV_B's tags left Good during the apply: %v", bad[:min(5, len(bad))])
+	}
+	if s1.Unit(1).Holding(10) != 7 {
+		t.Fatalf("the old device was written after the apply: Cmd %d", s1.Unit(1).Holding(10))
+	}
+
+	d := r.io.Differs()
+	if len(d) != 1 || d[0].Device != "DEV_A" || d[0].AppliedFrom != "upload" || d[0].By != "tester" || d[0].At.IsZero() {
+		t.Fatalf("differs = %+v, want DEV_A applied from upload by tester", d)
+	}
+}
+
+// Under HoldOutputsOnSwap the moved device is not sent the current command
+// until it changes, and willCommand says so.
+func TestIOApplyModbusDeviceHoldsOutputs(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 6)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	r := startIORig(t, files, true)
+	eventually(t, "DEV_A polled", func() bool { return r.value("A_In") == "4" })
+	s1.Unit(1).SetHolding(0, 6)
+	eventually(t, "A_Cmd on DEV_A", func() bool { return s1.Unit(1).Holding(10) == 7 })
+
+	// The commit also changes a tag; that is noted, not applied.
+	cand := withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", ""))
+	cand = withFile(cand, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data),
+		"{ name: B_In, role: input, type: DINT }", "{ name: B_In, role: input, type: DINT, desc: inlet }", 1))
+	c := r.io.Stage(cand, "abc123", "tester")
+	v := r.io.Validate(c)
+	if !v.Valid || !v.Held || len(v.WillCommand) != 0 {
+		t.Fatalf("validate: valid %v held %v willCommand %v, want valid, held, none", v.Valid, v.Held, v.WillCommand)
+	}
+	if len(v.Notes) != 1 || !strings.Contains(v.Notes[0], "changes more than its I/O") {
+		t.Fatalf("notes = %v, want the non-I/O change noted", v.Notes)
+	}
+	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "A_In read from the new device", func() bool { return r.rt.TagQuality("A_In").IsGood() && r.value("A_In") == "6" })
+	time.Sleep(200 * time.Millisecond)
+	if got := s3.Unit(1).Holding(10); got != 0 {
+		t.Fatalf("held: the new device got Cmd %d before it changed", got)
+	}
+	s3.Unit(1).SetHolding(0, 9)
+	eventually(t, "the changed command", func() bool { return s3.Unit(1).Holding(10) == 10 })
+	if d := r.io.Differs(); len(d) != 1 || d[0].AppliedFrom != "abc123" {
+		t.Fatalf("differs = %+v, want DEV_A from abc123", d)
+	}
+}
+
+// Every refusal leaves what runs untouched, and Apply refuses an invalid
+// candidate.
+func TestIOValidateRefuses(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	pa, pb := slavePort(s1), slavePort(s2)
+	files := ioFiles(pa, pb, "")
+	cases := []struct {
+		name, check string
+		files       fstest.MapFS
+		redundant   bool
+	}{
+		{"broken manifest", "schema", withFile(files, "modbus.yaml", "sources: [\n"), false},
+		{"a new device", "topology", withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pb), "")), false},
+		{"a new tag", "tags", withFile(files, "modbus.yaml", modbusYAML(pa, pb, "",
+			"  - {name: A_More, source: DEV_A, table: holding, address: 3, format: int16}\n")), false},
+		{"a retyped tag", "tags", withFile(files, "modbus.yaml", strings.Replace(modbusYAML(pa, pb, "", ""),
+			"name: A_In, source: DEV_A, table: holding, address: 0, format: int16", "name: A_In, source: DEV_A, table: holding, address: 0, format: float32", 1)), false},
+		{"an output bound twice", "outputs", withFile(files, "modbus.yaml", strings.Replace(modbusYAML(pa, pb, "", ""),
+			"name: A_In, source: DEV_A, table: holding, address: 0, format: int16", "name: A_In, source: DEV_A, table: holding, address: 10, format: int16, writable: true", 1)), false},
+		{"a driver setting on a lone driver", "composite", withFile(files, "nautilus.yaml",
+			strings.Replace(string(files["nautilus.yaml"].Data), "scan-rate: 10ms", "scan-rate: 20ms", 1)), false},
+		{"nothing changed", "changes", files, false},
+		{"a redundant project", "redundancy", withFile(files, "modbus.yaml", modbusYAML(pb, pa, "", "")), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := startIORig(t, files, false)
+			if tc.redundant {
+				r.p.Redundancy = &RedundancyConfig{}
+			}
+			c := r.io.Stage(tc.files, "upload", "tester")
+			v := r.io.Validate(c)
+			if v.Valid || !strings.Contains(" "+strings.Join(failed(v), " ")+" ", " "+tc.check+" ") {
+				t.Fatalf("valid %v, failed %v; want %s to fail: %+v", v.Valid, failed(v), tc.check, v.Checks)
+			}
+			if err := r.io.Apply(r.ctx, c, "tester"); err == nil {
+				t.Fatal("an invalid candidate was applied")
+			}
+			if d := r.io.Differs(); len(d) != 0 {
+				t.Fatalf("a refused candidate changed what runs: %+v", d)
+			}
+		})
+	}
+}
+
+// One apply at a time; a candidate validated against what no longer runs
+// is refused; a multi-device apply that fails part way puts back what it
+// already applied.
+func TestIOApplyGuards(t *testing.T) {
+	s1, s2, s3, s4 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4), newSlave(t, 7)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+
+	t.Run("busy", func(t *testing.T) {
+		r := startIORig(t, files, false)
+		c := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester")
+		r.io.Validate(c)
+		r.io.applying.Lock()
+		defer r.io.applying.Unlock()
+		errc := make(chan error, 1)
+		go func() { errc <- r.io.Apply(r.ctx, c, "tester") }()
+		select {
+		case err := <-errc:
+			if !errors.Is(err, ErrApplyBusy) {
+				t.Fatalf("err = %v, want ErrApplyBusy", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("an apply waited for the one in progress instead of refusing")
+		}
+	})
+
+	t.Run("stale", func(t *testing.T) {
+		r := startIORig(t, files, false)
+		c1 := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester")
+		c2 := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s1), slavePort(s4), "", "")), "upload", "tester")
+		r.io.Validate(c1)
+		r.io.Validate(c2)
+		if err := r.io.Apply(r.ctx, c1, "tester"); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.io.Apply(r.ctx, c2, "tester"); !errors.Is(err, ErrIOStale) {
+			t.Fatalf("err = %v, want ErrIOStale", err)
+		}
+	})
+
+	t.Run("all or nothing", func(t *testing.T) {
+		r := startIORig(t, files, false)
+		eventually(t, "DEV_A polled", func() bool { return r.value("A_In") == "4" })
+		var calls []string
+		real := r.io.replaceSource
+		r.io.replaceSource = func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
+			calls = append(calls, fmt.Sprintf("%s:%d", src.ID, src.Port))
+			if src.ID == "DEV_B" {
+				return errors.New("injected")
+			}
+			return real(mb, src, tags, opts)
+		}
+		c := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s4), "", "")), "upload", "tester")
+		if v := r.io.Validate(c); !v.Valid || len(v.Changes) != 2 {
+			t.Fatalf("validate: %+v", v)
+		}
+		if err := r.io.Apply(r.ctx, c, "tester"); err == nil {
+			t.Fatal("the failed apply reported success")
+		}
+		want := []string{fmt.Sprintf("DEV_A:%d", slavePort(s3)), fmt.Sprintf("DEV_B:%d", slavePort(s4)), fmt.Sprintf("DEV_A:%d", slavePort(s1))}
+		if fmt.Sprint(calls) != fmt.Sprint(want) {
+			t.Fatalf("replaces = %v, want %v (DEV_A put back)", calls, want)
+		}
+		s1.Unit(1).SetHolding(0, 11)
+		eventually(t, "DEV_A back on its old address", func() bool { return r.value("A_In") == "11" })
+		if d := r.io.Differs(); len(d) != 0 {
+			t.Fatalf("a failed apply changed what runs: %+v", d)
+		}
+	})
+}
+
+// uaServer serves Level (a Double) under urn:io:test.
+func uaServer(t *testing.T, level float64) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	srv := uasrv.New(
+		uasrv.EnableSecurity("None", ua.MessageSecurityModeNone),
+		uasrv.EnableAuthMode(ua.UserTokenTypeAnonymous),
+		uasrv.EndPoint("127.0.0.1", port),
+	)
+	ns := uasrv.NewNodeNameSpace(srv, "urn:io:test")
+	plant := ns.AddNode(uasrv.NewFolderNode(ua.NewStringNodeID(ns.ID(), "Plant"), "Plant"))
+	srv.Node(uasrv.ObjectsFolder).AddRef(plant, id.Organizes, true)
+	n := ns.AddNewVariableStringNode("Level", level)
+	_ = n.SetAttribute(ua.AttributeIDDataType, uasrv.DataValueFromValue(ua.NewNumericNodeID(0, id.Double)))
+	plant.AddRef(n, id.HasComponent, true)
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	return fmt.Sprintf("opc.tcp://127.0.0.1:%d", port)
+}
+
+// An OPC UA driver moved to another server is swapped whole between scans;
+// the Modbus devices stay Good, and its status row and Sparkplug health
+// follow the driver that runs, not the stopped one.
+func TestIOApplyOPCUADriverSwap(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	uaA, uaB := uaServer(t, 1.5), uaServer(t, 2.5)
+	files := ioFiles(slavePort(s1), slavePort(s2), uaA)
+	r := startIORig(t, files, false)
+	eventually(t, "GW_Level from server A", func() bool { return r.value("GW_Level") == "1.5" })
+	eventually(t, "DEV_A and DEV_B", func() bool { return r.value("A_In") == "4" && r.value("B_In") == "7" })
+	devs, err := sparkplugDevicesLive(r.p.drivers, r.p.currentDriver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uaHealth func() bool
+	for _, d := range devs {
+		if d.ID == "opcua-client" {
+			uaHealth = d.Health
+		}
+	}
+	if uaHealth == nil {
+		t.Fatalf("no Sparkplug device for the OPC UA driver in %v", devs)
+	}
+
+	status := r.p.DriverStatus(nil, nil) // built at start, as naut run does
+
+	cand := withFile(files, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), uaA, uaB, 1))
+	c := r.io.Stage(cand, "upload", "tester")
+	v := r.io.Validate(c)
+	if !v.Valid || len(v.Changes) != 1 || v.Changes[0].Driver != "opcua-client" || v.Changes[0].Device != "" {
+		t.Fatalf("validate: valid %v changes %+v checks %+v", v.Valid, v.Changes, v.Checks)
+	}
+	stop := watchGood(r, "A_In", "B_In")
+	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "GW_Level from server B", func() bool { return r.value("GW_Level") == "2.5" })
+	if bad := stop(); len(bad) > 0 {
+		t.Fatalf("the Modbus devices left Good during the OPC UA swap: %v", bad[:min(5, len(bad))])
+	}
+	var row string
+	for _, s := range status() {
+		if s.Kind == "opcua-client" {
+			row = s.Detail
+		}
+	}
+	if !strings.Contains(row, uaB) {
+		t.Fatalf("/api/drivers row shows %q, want the new endpoint %s", row, uaB)
+	}
+	eventually(t, "Sparkplug health of the new driver", uaHealth)
+}
+
+// driverConfigs names drivers exactly as buildDrivers does.
+func TestDriverConfigsMirrorBuildDrivers(t *testing.T) {
+	for _, files := range []fstest.MapFS{ioFiles(1502, 1503, ""), ioFiles(1502, 1503, "opc.tcp://127.0.0.1:4840")} {
+		m, err := ReadManifest(files, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfgs, err := driverConfigs(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, named, err := buildDrivers(files, *m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfgs) != len(named) {
+			t.Fatalf("%d configs, %d drivers", len(cfgs), len(named))
+		}
+		for i := range cfgs {
+			if cfgs[i].Name != named[i].Name {
+				t.Fatalf("config %d is %q, driver %q", i, cfgs[i].Name, named[i].Name)
+			}
+		}
+	}
+}
+
+// A devices: row (the device library, #717) is the unit of a per-device
+// apply: a new endpoint applies through the driver carrying devices, and
+// the struct tag reads the new drive. Changing its points, which changes
+// its struct, is refused.
+func TestIOApplyDeviceRow(t *testing.T) {
+	d1, d2 := newSlave(t, 0), newSlave(t, 0)
+	d1.Unit(1).SetHolding(103, 125) // 12.5 A
+	d2.Unit(1).SetHolding(103, 333) // 33.3 A
+	manifest := func(addr, points string) string {
+		return `name: d
+tasks: [{ program: main.st, scan: 5ms }]
+drivers: [{ type: modbus, scan-rate: 10ms }]
+devices:
+  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: "` + addr + `"` + points + ` }
+tags:
+  - { name: Amps, role: state, type: REAL }
+`
+	}
+	program := "PROGRAM Main\nAmps := CONV.Current;\nEND_PROGRAM\n"
+	files := devicesProject(t, manifest(d1.Addr(), ""), program)
+	r := startIORig(t, files, false)
+	amps := func(lo, hi float64) func() bool {
+		return func() bool { a := r.rt.Tags().Real("Amps"); return a > lo && a < hi }
+	}
+	eventually(t, "the first drive's current", amps(12.4, 12.6))
+
+	c := r.io.Stage(devicesProject(t, manifest(d2.Addr(), ""), program), "upload", "tester")
+	v := r.io.Validate(c)
+	if !v.Valid || len(v.Changes) != 1 || v.Changes[0].Device != "CONV" {
+		t.Fatalf("validate: valid %v changes %+v checks %+v", v.Valid, v.Changes, v.Checks)
+	}
+	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the second drive's current", amps(33.2, 33.4))
+
+	c = r.io.Stage(devicesProject(t, manifest(d2.Addr(), `, points: ["Current"]`), program), "upload", "tester")
+	if v := r.io.Validate(c); v.Valid || !strings.Contains(strings.Join(failed(v), " "), "device-type") {
+		t.Fatalf("a points change: valid %v, failed %v; want device-type to fail", v.Valid, failed(v))
+	}
+}
