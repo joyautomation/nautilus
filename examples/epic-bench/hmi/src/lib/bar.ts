@@ -20,6 +20,45 @@ export const BAR_WIRING = {
 	knob: { tag: 'EPIC_M3_AI00', min: 0, max: 10, step: 0.1, unit: 'V' }
 } as const;
 
+/**
+ * Where the bar's parts sit on it (scene units): its x, its plate's bottom
+ * and top, and each part's height, top to bottom: top button, bottom
+ * button, knob, connector.
+ */
+export const BAR = { x: 222, y0: 8, y1: 134, parts: [112, 84, 54, 24] } as const;
+
+export type BarButton = (typeof BAR_WIRING.buttons)[number] & { y: number };
+
+/**
+ * The buttons as the 3D screen draws them, top first: each with its height
+ * on the bar and its wiring. Epic.svelte draws, hits and writes through
+ * these alone, so a button's place and its tags can't come apart there.
+ */
+export const BAR_BUTTONS: readonly BarButton[] = BAR_WIRING.buttons.map((b, i) => ({ ...b, y: BAR.parts[i] }));
+
+type Read = (tag: string) => unknown;
+
+/** In while its input is on, or while held (before the frame shows it). */
+export function buttonIn(b: BarButton, held: boolean, read: Read): boolean {
+	return held || read(b.tag) === true;
+}
+
+/** Its ring: lit by the tag it is wired to (its own input, or an output). */
+export function ringLit(b: BarButton, read: Read): boolean {
+	return read(b.ring.tag) === true;
+}
+
+/** A press: the write to send, and whether the button is now held until let go. */
+export function press(b: BarButton, read: Read): { tag: string; value: boolean; hold: boolean } {
+	return { tag: b.tag, value: onPress(b.kind, read(b.tag)), hold: onRelease(b.kind) !== null };
+}
+
+/** Letting go: the write to send, or null when there is none. */
+export function release(b: BarButton): { tag: string; value: boolean } | null {
+	const v = onRelease(b.kind);
+	return v === null ? null : { tag: b.tag, value: v };
+}
+
 /** The knob's travel: a potentiometer's 300°, centred on 12 o'clock. */
 export const KNOB_SWEEP = (300 / 180) * Math.PI;
 

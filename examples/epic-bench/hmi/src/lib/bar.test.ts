@@ -1,7 +1,7 @@
 // node --test --experimental-strip-types src/lib/bar.test.ts (npm test)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BAR_WIRING, KNOB_SWEEP, knobAngle, knobValueAt, onPress, onRelease, simulated } from './bar.ts';
+import { BAR, BAR_BUTTONS, BAR_WIRING, KNOB_SWEEP, buttonIn, knobAngle, knobValueAt, onPress, onRelease, press, release, ringLit, simulated } from './bar.ts';
 
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -61,4 +61,36 @@ test('the load panel mapping: top latching on DI0, bottom momentary on DI1 with 
 		]
 	);
 	assert.match(BAR_WIRING.knob.tag, /^EPIC_M3_AI\d\d$/);
+});
+
+test('the drawn buttons: the top one is DI0 latching, the bottom one DI1 momentary, each at its own height on the bar', () => {
+	assert.deepEqual(
+		BAR_BUTTONS.map((b) => [b.tag, b.kind]),
+		[
+			['EPIC_M0_DI00', 'latching'],
+			['EPIC_M0_DI01', 'momentary']
+		]
+	);
+	assert.ok(BAR_BUTTONS[0].y > BAR_BUTTONS[1].y, 'the first button is drawn above the second');
+	assert.equal(BAR_BUTTONS[0].y, BAR.parts[0]);
+	assert.equal(BAR_BUTTONS[1].y, BAR.parts[1]);
+	assert.ok(BAR_BUTTONS[1].y > BAR.parts[2], 'both buttons sit above the knob');
+});
+
+test('each drawn button reads, lights and writes its own tags', () => {
+	const tags = (on: string[]) => (tag: string) => on.includes(tag);
+	const [top, bottom] = BAR_BUTTONS;
+	// The top button is in while DI0 is on; the bottom one's ring follows DO0, not DI1.
+	assert.equal(buttonIn(top, false, tags(['EPIC_M0_DI00'])), true);
+	assert.equal(buttonIn(top, false, tags(['EPIC_M0_DI01'])), false);
+	assert.equal(buttonIn(bottom, false, tags(['EPIC_M0_DI01'])), true);
+	assert.equal(buttonIn(bottom, true, tags([])), true); // held, before the frame shows it
+	assert.equal(ringLit(top, tags(['EPIC_M0_DI00'])), true);
+	assert.equal(ringLit(bottom, tags(['EPIC_M1_DO00'])), true);
+	assert.equal(ringLit(bottom, tags(['EPIC_M0_DI01', 'EPIC_M0_DI00'])), false);
+	// A press writes the button's own input; only the momentary one is held, and letting go writes it off.
+	assert.deepEqual(press(top, tags(['EPIC_M0_DI00'])), { tag: 'EPIC_M0_DI00', value: false, hold: false });
+	assert.deepEqual(press(bottom, tags([])), { tag: 'EPIC_M0_DI01', value: true, hold: true });
+	assert.equal(release(top), null);
+	assert.deepEqual(release(bottom), { tag: 'EPIC_M0_DI01', value: false });
 });

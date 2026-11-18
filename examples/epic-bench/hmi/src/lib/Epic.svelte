@@ -93,7 +93,7 @@
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
 	import type { Ink, Paint } from './print';
-	import { BAR_WIRING, knobAngle, knobValueAt, onPress, onRelease } from './bar';
+	import { BAR, BAR_BUTTONS, BAR_WIRING, buttonIn, knobAngle, knobValueAt, press, release, ringLit } from './bar';
 
 	let {
 		hovered = null,
@@ -259,7 +259,6 @@
 	const deskY = (z: number) => PLATE.y0 - (z - PLATE.z0) * Math.tan(TILT);
 	const onDesk = (x: number, z: number): [number, number, number] => [x, deskY(z) + 3, z];
 	const cable = (pts: [number, number, number][], r: number) => new TubeGeometry(new CatmullRomCurve3(pts.map((p) => new Vector3(...p))), 48, r, 8);
-	const BAR = { x: 222, y0: 8, y1: 134, parts: [112, 84, 54, 24] };
 	const CABLES = [
 		// Ethernet, from under the processor
 		{ color: '#1d4fb8', g: cable([[34, 2, 90], [33, -30, 98], [26, -80, 128], onDesk(-10, 175), onDesk(-110, 215), onDesk(-230, 235)], 2.4) },
@@ -293,10 +292,9 @@
 		const v = num(KNOB.tag);
 		return v === null ? KNOB_AS_DRAWN : knobAngle(v);
 	});
-	/** In while its input is on (or while held, before the frame shows it). */
-	const pressed = (i: number) => !!write && (held === i || on(BAR_WIRING.buttons[i].tag));
-	/** Its ring: lit by the tag it is wired to (its own input, or an output). */
-	const ringLit = (i: number) => !!write && on(BAR_WIRING.buttons[i].ring.tag);
+	/** In while its input is on (or while held); its ring lit by its wired tag (bar.ts). */
+	const pressed = (i: number) => !!write && buttonIn(BAR_BUTTONS[i], held === i, raw);
+	const lit = (i: number) => !!write && ringLit(BAR_BUTTONS[i], raw);
 	const ray = new Raycaster();
 	const ndc = new Vector2();
 	function aim(e: PointerEvent) {
@@ -355,10 +353,11 @@
 				else turning = num(KNOB.tag) ?? KNOB.min;
 			} else {
 				const i = buttonHits.indexOf(hit.object as Mesh);
-				const b = BAR_WIRING.buttons[i];
+				const b = BAR_BUTTONS[i];
 				if (b) {
-					write(b.tag, onPress(b.kind, raw(b.tag)));
-					if (onRelease(b.kind) !== null) held = i;
+					const p = press(b, raw);
+					write(p.tag, p.value);
+					if (p.hold) held = i;
 				}
 			}
 		};
@@ -369,9 +368,8 @@
 		};
 		const up = () => {
 			if (held !== null) {
-				const b = BAR_WIRING.buttons[held];
-				const v = onRelease(b.kind);
-				if (v !== null) write(b.tag, v);
+				const r = release(BAR_BUTTONS[held]);
+				if (r) write(r.tag, r.value);
 				held = null;
 			}
 			if (turning !== null && settle === undefined) {
@@ -503,9 +501,7 @@
 		<RoundedBoxGeometry args={[32, BAR.y1 - BAR.y0, 3]} radius={1} />
 		<T.MeshStandardMaterial color={ALU} roughness={0.35} metalness={0.75} />
 	</T.Mesh>
-	{#each BAR.parts.slice(0, 2) as y, i}
-		{@const tag = BAR_WIRING.buttons[i].tag}
-		{@const kind = BAR_WIRING.buttons[i].kind}
+	{#each BAR_BUTTONS as { y, tag, kind, ring }, i}
 		<T.Mesh position={[BAR.x, y, 17.6]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[8, 8.6, 1.6, 28]} />
 			<T.MeshStandardMaterial color="#c3c7cb" roughness={0.25} metalness={0.9} />
@@ -519,7 +515,7 @@
 			<!-- its LED ring, lit by the tag it is wired to (bar.ts) -->
 			<T.Mesh position={[BAR.x, y, 18.5]}>
 				<T.TorusGeometry args={[6.4, 0.7, 8, 32]} />
-				<T.MeshBasicMaterial color={ringLit(i) ? BAR_WIRING.buttons[i].ring.color : '#3a3d40'} toneMapped={false} />
+				<T.MeshBasicMaterial color={lit(i) ? ring.color : '#3a3d40'} toneMapped={false} />
 			</T.Mesh>
 			<T.Mesh
 				bind:ref={buttonHits[i]}
