@@ -959,24 +959,39 @@ func branchOrder(legs [][]l5x.Term) string {
 // hoisted after the boxes re-reads it on its own rung, after they ran.
 // (A later leg's own conditions are read after the earlier legs in Logix
 // too, so they are not a hazard.)
+//
+// One write is harmless: a leg that is nothing but OTE(X) sets X to the
+// prefix's own value P, and when the prefix reads X only through XIC
+// (normally open) it is monotone in X, so reading it again gives P again
+// (f = f(0) OR (X AND f(1)), and f(0) implies f(1)). That is the seal-in
+// beside a timer, [XIC(Start) ,XIC(Run) XIO(Stop)][OTE(Run) ,TON(t)].
 func conditionWrites(before []l5x.Term, legs [][]l5x.Term) string {
-	reads := map[string]bool{}
+	reads, negated := map[string]bool{}, map[string]bool{}
 	walkTerms(before, func(in *l5x.Instr) {
 		m := strings.ToUpper(in.Mnemonic)
 		if m == "XIC" || m == "XIO" || compareFn[m] != "" || m == "CMP" || m == "LIM" {
 			for _, a := range in.Args {
-				reads[strings.ToLower(baseOf(strings.TrimSpace(a)))] = true
+				k := strings.ToLower(baseOf(strings.TrimSpace(a)))
+				reads[k] = true
+				if m != "XIC" {
+					negated[k] = true
+				}
 			}
 		}
 	})
 	var hit string
 	for _, leg := range legs {
+		plainCoil := len(leg) == 1 && leg[0].Instr != nil && strings.EqualFold(leg[0].Instr.Mnemonic, "OTE")
 		walkTerms(leg, func(in *l5x.Instr) {
 			d := boxDest(in)
 			if d == "" && isCoil(in) && len(in.Args) == 1 {
 				d = strings.TrimSpace(in.Args[0])
 			}
-			if d != "" && hit == "" && reads[strings.ToLower(baseOf(d))] {
+			k := strings.ToLower(baseOf(d))
+			if plainCoil && !negated[k] && !strings.ContainsAny(d, ".[") {
+				return // X := P, read back only through XIC: P again
+			}
+			if d != "" && hit == "" && reads[k] {
 				hit = d
 			}
 		})

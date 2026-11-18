@@ -59,6 +59,18 @@ const branchOrderL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Tag Name="C5" TagType="Base" DataType="COUNTER" Constant="false" ExternalAccess="Read/Write">
 <Data Format="Decorated"><Structure DataType="COUNTER"><DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="100"/><DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/><DataValueMember Name="DN" DataType="BOOL" Value="0"/></Structure></Data>
 </Tag>
+<Tag Name="St" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Run2" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Stp" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="T9" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated"><Structure DataType="TIMER"><DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="1000"/><DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/><DataValueMember Name="DN" DataType="BOOL" Value="0"/></Structure></Data>
+</Tag>
 </Tags>
 <Programs>
 <Program Name="Main" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">
@@ -72,6 +84,7 @@ const branchOrderL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Rung Number="3" Type="N"><Text><![CDATA[XIC(go)[MOV(C3.ACC,A) ,CTU(C3,?,?) ,MOV(C3.ACC,B) ];]]></Text></Rung>
 <Rung Number="4" Type="N"><Text><![CDATA[XIC(go)XIO(Run)[MOV(5,Lim2) OTL(Run) ,CTU(C4,?,?) ];]]></Text></Rung>
 <Rung Number="5" Type="N"><Text><![CDATA[XIC(go)[ONS(Os5)MOV(1,Y) ,CTU(C5,?,?) ];]]></Text></Rung>
+<Rung Number="6" Type="N"><Text><![CDATA[[XIC(St) ,XIC(Run2) ]XIO(Stp)[OTE(Run2) ,TON(T9,?,?) ];]]></Text></Rung>
 </RLLContent>
 </Routine>
 </Routines>
@@ -117,6 +130,9 @@ func TestLogixImportKeepsBranchLegOrder(t *testing.T) {
 		"// not imported (branch-order: data boxes both before and after a timer, counter or message in one branch",
 		"// not imported (branch-order: a leg writes Run, which the rung's condition ahead of the branch reads",
 		"{ Lim := 5 }",
+		// A seal-in beside a timer re-reads its own coil harmlessly (the
+		// condition is monotone in it): carried, not refused.
+		"T9:TON(",
 	} {
 		if !strings.Contains(ld, want) {
 			t.Errorf("Main.ld lacks %q:\n%s", want, ld)
