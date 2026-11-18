@@ -190,11 +190,16 @@ copies `logixd`, the Logix agent:
   | Variable | Default | Purpose |
   |---|---|---|
   | `TIAD_ADDR` | `http://127.0.0.1:8190` | Listen address |
-  | `TIAD_TOKEN` | — | Bearer token. Required off loopback |
+  | `TIAD_TOKEN` | — | Bearer token, or `TIAD_TOKEN_FILE` naming a file that holds it. Required: the agent refuses to start without one, on loopback too, since any process or browser on the machine reaches loopback |
   | `TIAD_WORKDIR` | `C:\tiad-work` | Every path in a request is relative to this |
   | `TIAD_TARGETS` | — | The only CPU addresses tiad will go online to or download to |
   | `TIAD_PGPC_INTERFACE` | — | The NIC TIA uses to reach the CPUs |
 
+- **No browser ever calls tiad.** A request that carries an `Origin`
+  header is refused (403), whatever token it has. A JSON body must be
+  `Content-Type: application/json` and a file `application/octet-stream`
+  (415 otherwise), because a browser sends `text/plain` across origins
+  without asking first.
 - **Client side:**
   - naut finds tiad through `NAUTILUS_TIAD_URL`, then `--agent`, then the
     manifest's `target.siemens.agent`.
@@ -218,8 +223,8 @@ the session is gone.
 
 | `error.kind` | HTTP | Meaning |
 |---|---|---|
-| `bad_request` | 400 | Malformed body, or a path outside the work dir |
-| `unauthorized` | 401 | Missing or wrong token |
+| `bad_request` | 400 | Malformed body, or a path outside the work dir. 415: the wrong `Content-Type`. 413: a body over the cap |
+| `unauthorized` | 401 | Missing or wrong token. 403: the request carries an `Origin` header (a browser) |
 | `unreachable` | — | Client-side: no reply (agent down, or the context was cancelled; the cause unwraps). After a download, the outcome is **unknown**, so compare before retrying |
 | `not_found` | 404 | No such session or file |
 | `busy` | 409 | The project has a writer |
