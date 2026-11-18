@@ -341,3 +341,20 @@ claims:
       The test builds naut-launch with the machine's cc and reads the limit
       its controller sees in /proc/self/limits; the stricter-limit cases need
       prlimit (util-linux).
+
+  - id: RT-029
+    claim: >-
+      The PLCnext shim (nautilus_io) sets RLIMIT_RTTIME before it takes
+      SCHED_FIFO and does not take it if the limit cannot be set; on SIGXCPU
+      it moves its cycle back to normal scheduling instead of dying, and a
+      stricter limit in force is kept.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./rt/plcnext-io/ctest TestRTGuardShim
+    partial: true
+    note: >-
+      The test drives the shim's guard (rt/plcnext-io/rtguard.h) through a C
+      harness built with the machine's cc; the spinning-FIFO case runs in
+      CI's setcap'd RT guard step with NAUTILUS_REQUIRE_RT=1. The shim's
+      own use of it (nautilus_io.c, which needs the firmware) is checked by
+      the controller cross-build only, not run.

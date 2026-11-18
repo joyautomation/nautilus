@@ -207,6 +207,16 @@ Without it both run best-effort and say so (the page's `NIO_ST_FIFO`,
 the log's `refused`, naut's `scan.sched`). naut needs it only for a
 task with `priority:`; the bench's scan task is at 40 once it is set.
 
+**The cycle is bounded** (`rtguard.h`, #836). Before it takes
+`SCHED_FIFO` the shim sets `RLIMIT_RTTIME`. A cycle that runs 200 ms
+without sleeping (it sleeps every 1 ms when healthy) gets `SIGXCPU`. The
+shim then moves itself back to normal priority and says so in the log
+(`SCHED_FIFO withdrawn`), and the page's `NIO_ST_FIFO` drops, until a
+restart. If the limit can't be set, the shim doesn't take FIFO at all.
+At 500 ms the kernel kills it, as a backstop. That ends the PLCnext
+runtime's session with it: the firmware restarts it, and the output
+watchdog holds the outputs at zero meanwhile.
+
 The shim asks for priority 80 — over the firmware's interrupt threads
 (50), under `T_Cyclic100` (82), its network receive task (95) and the
 ESM (97–98); the FIFO table above is why not 50. A `nautilus_io.prio`

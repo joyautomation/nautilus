@@ -39,6 +39,7 @@
 
 #define _GNU_SOURCE
 #include "nautilus_io_shm.h"
+#include "rtguard.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -57,6 +58,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <linux/limits.h>
+
+// A cycle may run this long without sleeping before SIGXCPU (rtguard.h).
+#define RT_LIMIT_MS 200
 
 #ifndef NAUTILUS_IO_VERSION
 #define NAUTILUS_IO_VERSION "dev" // build.sh stamps the release version
@@ -387,10 +391,15 @@ int main(int argc, char **argv) {
         else logln("%s: want a priority 1..96; using %d", priopath, prio);
         fclose(pf);
     }
+    // Bounded first (rtguard.h, #836): a cycle that runs RT_LIMIT_MS without
+    // sleeping is moved back to normal scheduling instead of owning the
+    // core, the firmware's and the network's work on it included.
     bool fifo = false;
-    struct sched_param sp = { .sched_priority = prio };
-    if (sched_setscheduler(0, SCHED_FIFO, &sp) == 0) { fifo = true; logln("SCHED_FIFO priority %d", prio); }
-    else logln("SCHED_FIFO %d refused (%s); running best-effort", prio, strerror(errno));
+    int bound_err = 0;
+    int fe = rtg_take_fifo(prio, RT_LIMIT_MS, &bound_err);
+    if (fe == 0) { fifo = true; logln("SCHED_FIFO priority %d, bounded at %d ms without sleeping (RLIMIT_RTTIME)", prio, RT_LIMIT_MS); }
+    else if (bound_err) logln("SCHED_FIFO %d not taken: RLIMIT_RTTIME could not be set (%s), and nothing would stop a runaway cycle; running best-effort", prio, strerror(fe));
+    else logln("SCHED_FIFO %d refused (%s); running best-effort", prio, strerror(fe));
     // nautilus_io.cpu beside the binary pins the cycle to one CPU, away from
     // naut and from whichever core takes the network's receive work. Unlike
     // the priority this needs no capability: a thread may pin itself.
@@ -443,6 +452,10 @@ int main(int argc, char **argv) {
         // A PLC that is not started (Stop, Reset, Unload in progress) may be
         // tearing the frames down; the cycle keeps time and stamps the page
         // but touches nothing of the firmware's.
+        if (fifo && rtg_demoted) {
+            fifo = false; // the page's FIFO bit drops with it
+            logln("SCHED_FIFO withdrawn: the cycle ran %d ms without sleeping (RLIMIT_RTTIME); normal priority until restart", RT_LIMIT_MS);
+        }
         int st = plc_state;
         bool plc = st == PlcOperation_StartCold || st == PlcOperation_StartWarm || st == PlcOperation_StartHot;
         uint32_t status = NIO_ST_FRAMES | (fifo ? NIO_ST_FIFO : 0) | (plc ? NIO_ST_PLC : 0);
