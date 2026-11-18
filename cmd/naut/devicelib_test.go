@@ -286,6 +286,14 @@ func TestDevicesAddWriterStaysInDir(t *testing.T) {
 	if err := createInDir(dst, "abb-drives.st", []byte("x")); err != nil {
 		t.Errorf("createInDir(abb-drives.st): %v", err)
 	}
+	// A link planted after add looked (a race) is not followed either.
+	symlink(t, filepath.Join(root, "planted.st"), filepath.Join(dst, "late.st"))
+	if err := createInDir(dst, "late.st", []byte("x")); err == nil {
+		t.Error("createInDir wrote through a dangling symlink")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "planted.st")); err == nil {
+		t.Error("createInDir created the symlink's target outside profiles/")
+	}
 }
 
 // A symlink planted in profiles/, or profiles/ itself a symlink, never
