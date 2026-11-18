@@ -18,7 +18,7 @@ import (
 	"github.com/joyautomation/nautilus/opcua"
 )
 
-const binFill = "testdata/bin-fill"
+const binFill = "../examples/bin-fill"
 
 func fixtureDrivers(t *testing.T, mopts []modbus.Option, endpoint string) (*modbus.Driver, *opcua.Driver) {
 	t.Helper()
