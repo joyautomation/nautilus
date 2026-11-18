@@ -109,6 +109,20 @@ sudo setcap cap_sys_nice+ep ./my-controller     # or run as root, or set an rtpr
 task's row on the dashboard shows `cpu 2 · fifo 50 REFUSED`, and the task
 runs at normal priority — it never pretends.
 
+**A runaway is bounded.** Before a task gets `SCHED_FIFO` the runtime
+sets `RLIMIT_RTTIME` on the process: a real-time thread may run 200 ms
+without blocking (sleeping, waiting on I/O). A scan takes far less, and
+the task sleeps between scans. A thread that passes the limit gets
+`SIGXCPU`, and the runtime then moves every task with `priority:` back to
+normal scheduling. It logs an error, and each task's `scan.sched` shows
+`applied: false` with the reason, until the controller restarts. Past
+2.5 × the limit the kernel kills the process, in case that did not
+happen. So a stuck loop cannot starve the core's other work: the
+kernel's own threads, the network, a vendor runtime sharing the core.
+`NAUTILUS_RT_LIMIT_MS` changes the limit (10 ms or more). A stricter
+limit already in place, from a launcher for instance, is kept. A task
+that cannot be bounded is not given the priority.
+
 **`cpu:` alone makes things worse.** Pinned, a task can no longer move off
 a core something else just landed on, and at normal priority it has no
 claim to go first: measured, p99 went from 55 µs to 300–400 µs. Set `cpu:`
