@@ -61,6 +61,14 @@ func startServer(t *testing.T, port int) *testServer {
 // and another namespace holding the same index and node ids.
 func startServerWith(t *testing.T, port int, nsURI string, speed float64, opts ...server.Option) *testServer {
 	t.Helper()
+	return startServerHooked(t, port, nsURI, speed, nil, opts...)
+}
+
+// startServerHooked is startServerWith with before run on the server just
+// before Start: gopcua registers its service handlers in Start and keeps
+// one registered earlier, so a test can replace a service there.
+func startServerHooked(t *testing.T, port int, nsURI string, speed float64, before func(*server.Server), opts ...server.Option) *testServer {
+	t.Helper()
 	if len(opts) == 0 {
 		opts = []server.Option{server.EnableSecurity("None", ua.MessageSecurityModeNone)}
 	}
@@ -87,6 +95,9 @@ func startServerWith(t *testing.T, port int, nsURI string, speed float64, opts .
 	add("Run", true, id.Boolean, rd)
 	add("Name", "pump-1", id.String, rd)
 	add("Setpoint", 0.0, id.Double, rw)
+	if before != nil {
+		before(srv)
+	}
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatalf("start server: %v", err)
 	}

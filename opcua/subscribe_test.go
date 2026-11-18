@@ -7,6 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopcua/opcua/id"
+	"github.com/gopcua/opcua/server"
+	"github.com/gopcua/opcua/ua"
+	"github.com/gopcua/opcua/uasc"
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -223,5 +227,107 @@ func TestSubscribeRefreshReads(t *testing.T) {
 	waitFor(t, "two refresh reads", func() bool { return d.Health().Reads >= primed+2 })
 	if refreshEvery(50*time.Millisecond, defaultRefreshFloor) != 30*time.Second || refreshEvery(10*time.Second, defaultRefreshFloor) != 100*time.Second {
 		t.Error("refreshEvery: want max(30 s, ten periods)")
+	}
+}
+
+// subscribedHooked is a subscribed driver against gopcua's server with
+// one service replaced (see startServerHooked).
+func subscribedHooked(t *testing.T, before func(*server.Server), extra ...Option) (*testServer, *Driver) {
+	t.Helper()
+	ts := startServerHooked(t, freePort(t), "urn:nautilus:test", 12.5, before)
+	d, err := New(ts.url, manifest(2), fastOpts(subscribed(extra...)...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts, d
+}
+
+func startHooked(t *testing.T, d *Driver) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	t.Cleanup(func() { cancel(); d.Stop() })
+}
+
+// A monitored item the server refuses leaves its tag Bad for the whole
+// session: the refresh reads that still answer for the node must not
+// turn it Good, since it is no longer followed between them.
+func TestSubscribeRefusedItemStaysBad(t *testing.T) {
+	var srv *server.Server
+	_, d := subscribedHooked(t, func(s *server.Server) {
+		srv = s
+		s.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary,
+			func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
+				resp, err := srv.MonitoredItemService.CreateMonitoredItems(sc, r, reqID)
+				if out, ok := resp.(*ua.CreateMonitoredItemsResponse); ok && err == nil {
+					for i, item := range r.(*ua.CreateMonitoredItemsRequest).ItemsToCreate {
+						if item.ItemToMonitor.NodeID.StringID() == "Speed" {
+							out.Results[i].StatusCode = ua.StatusBadTooManyMonitoredItems
+						}
+					}
+				}
+				return resp, err
+			})
+	})
+	d.refreshFloor = 300 * time.Millisecond
+	startHooked(t, d)
+	settled(t, d)
+	reads := d.Health().Reads
+	waitFor(t, "two refresh reads", func() bool { return d.Health().Reads >= reads+2 })
+	q := d.Quality()
+	if q["Speed"] != nio.Bad {
+		t.Errorf("Speed (monitored item refused) quality %v after refresh reads, want bad", q["Speed"])
+	}
+	if len(q) != 1 {
+		t.Errorf("quality = %v, want only Speed bad", q)
+	}
+}
+
+// Bad_TooManyOperations is a service fault, and gopcua closes its client on
+// one: the session is lost. The halved per-call limit is kept for the next
+// session, so the driver settles instead of reconnecting forever.
+func TestSubscribeTooManyOperationsIsKept(t *testing.T) {
+	var srv *server.Server
+	_, d := subscribedHooked(t, func(s *server.Server) {
+		srv = s
+		s.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary,
+			func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
+				if len(r.(*ua.CreateMonitoredItemsRequest).ItemsToCreate) > 2 {
+					return nil, ua.StatusBadTooManyOperations
+				}
+				return srv.MonitoredItemService.CreateMonitoredItems(sc, r, reqID)
+			})
+	})
+	startHooked(t, d)
+	settled(t, d)
+	if c := d.itemCap.Load(); c < 1 || c > 2 {
+		t.Errorf("learned item cap %d, want 1 or 2", c)
+	}
+	retries := d.Health().Retries
+	time.Sleep(3 * time.Second)
+	if h := d.Health(); h.Retries != retries || !d.Online() || h.Subscriptions != 1 {
+		t.Errorf("not settled after learning the cap: %d more retries, online %v, %+v", h.Retries-retries, d.Online(), h)
+	}
+}
+
+// A server that answers the priming read but refuses to subscribe gets a
+// session (and a full read) per step of the backoff ladder, not one every
+// minimum retry delay.
+func TestSubscribeRefusedSubscriptionBacksOff(t *testing.T) {
+	_, d := subscribedHooked(t, func(s *server.Server) {
+		s.RegisterHandler(id.CreateSubscriptionRequest_Encoding_DefaultBinary,
+			func(*uasc.SecureChannel, ua.Request, uint32) (ua.Response, error) {
+				return nil, ua.StatusBadTooManySubscriptions
+			})
+	}, WithRetry(50*time.Millisecond, 5*time.Second))
+	startHooked(t, d)
+	time.Sleep(3 * time.Second)
+	// 50+100+200+400+800 ms of waiting fits five sessions in 3 s, plus
+	// their dials; at a flat 50 ms it would be dozens.
+	if h := d.Health(); h.Reads > 8 {
+		t.Errorf("%d priming reads in 3 s: the backoff did not climb (%+v)", h.Reads, h)
+	}
+	if d.Online() {
+		t.Error("online with no subscription")
 	}
 }

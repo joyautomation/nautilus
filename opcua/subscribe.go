@@ -263,6 +263,7 @@ func (d *Driver) subscribe(ctx context.Context, sess *Session) (*subSession, err
 			cancel()
 			if errors.Is(err, ua.StatusBadTooManyOperations) && limit > 1 {
 				limit = max(limit/2, 1)
+				d.itemCap.Store(int64(limit)) // the fault closes this session; the next one starts here
 				d.mu.Lock()
 				d.server.maxItems = limit
 				d.mu.Unlock()
@@ -284,7 +285,7 @@ func (d *Driver) subscribe(ctx context.Context, sess *Session) (*subSession, err
 				if !b.bad {
 					d.lastErr = fmt.Errorf("tag %s: monitored item refused: %v", b.Name, r.StatusCode)
 				}
-				b.bad = true
+				b.bad, b.notMonitored = true, true
 				d.log.Warn("opcua-client: monitored item refused; tag reads Bad", "driver", d.name, "tag", b.Name, "status", r.StatusCode)
 			}
 			d.mu.Unlock()

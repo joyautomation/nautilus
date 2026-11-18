@@ -221,6 +221,11 @@ type Driver struct {
 	// probeByRead: the server refused SetPublishingMode once, so every
 	// subscribed session on this driver is probed with a Read (subscribe.go).
 	probeByRead atomic.Bool
+	// itemCap: the most monitored items per call the server took, once it
+	// refused more with Bad_TooManyOperations (0: none learned). Kept
+	// across sessions: that refusal is a service fault, which closes
+	// gopcua's client, so the session it was learned on is gone.
+	itemCap atomic.Int64
 
 	kick   chan struct{}
 	cancel context.CancelFunc
@@ -261,6 +266,10 @@ type binding struct {
 	// neither read nor written until a connect finds the URI again —
 	// reading the stale index could return another namespace's node.
 	missing bool
+	// notMonitored: the server refused this binding's monitored item on
+	// THIS session (read-mode: subscribe). It stays Bad: a refresh read
+	// answering Good must not hide that it is no longer followed.
+	notMonitored bool
 }
 
 // scanClass is one poll group and its schedule, owned by the session loop.
@@ -818,8 +827,11 @@ func (d *Driver) run(ctx context.Context) {
 		// not read Good meanwhile.
 		// The state row goes down with __Online, not after Close.
 		d.mu.Lock()
+		// The ladder resets once the session was of use: a read answered
+		// (poll), or the subscriptions made (subscribe; a server that
+		// answers the priming read but refuses to subscribe climbs it).
+		answered := d.answered && (d.readMode != ReadModeSubscribe || d.primed)
 		d.online, d.primed = false, false
-		answered := d.answered
 		d.mu.Unlock()
 		if ctx.Err() == nil {
 			d.setState("error", nil)
@@ -879,12 +891,15 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 	}
 	limit(0, &info.maxNodes)
 	limit(1, &info.maxItems)
+	if c := int(d.itemCap.Load()); c > 0 && c < info.maxItems {
+		info.maxItems = c
+	}
 
 	d.mu.Lock()
 	remapped := 0
 	missing := 0
 	for _, b := range d.bindings {
-		b.bad, b.answered, b.missing = false, false, false
+		b.bad, b.answered, b.missing, b.notMonitored = false, false, false, false
 		if b.Namespace == "" {
 			continue
 		}
@@ -1104,6 +1119,10 @@ func (d *Driver) pollClass(ctx context.Context, sess *Session, c *scanClass) boo
 // Caller holds d.mu.
 func (d *Driver) apply(b *binding, dv *ua.DataValue) {
 	b.answered = true
+	if b.notMonitored {
+		b.bad = true
+		return
+	}
 	if dv == nil || !good(dv.Status) {
 		if !b.bad && dv != nil {
 			d.lastErr = fmt.Errorf("tag %s: %v", b.Name, dv.Status)
