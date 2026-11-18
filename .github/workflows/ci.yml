@@ -75,7 +75,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.25'}
+        with: {go-version: '1.25', cache: false}
+      # Its own build cache (#752): setup-go's is keyed on go.sum alone, so
+      # whichever job saved first after a go.sum change owns it, and this
+      # job rebuilt nearly all of nautilus every run. Main saves one a day
+      # (about 220 MB compressed); a PR restores the newest and never
+      # saves. Tests still all run: -count=1 keeps cached results out.
+      - id: day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gocache
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          restore-keys: |
+            go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-test-${{ runner.os }}-
       - run: go vet ./...
       # -json and the coverage profile are kept as runtime evidence (the
       # runtime-evidence job joins them to docs/claims); `evidence cat`
@@ -87,7 +104,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          go test -json -count=1 -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
       # The browser playground (playground/, cmd/naut-wasm): GOOS=js swaps
       # internal/project's drivers for simulated ones, so a change that
@@ -104,6 +121,14 @@ jobs:
       # from a cold cache); the numbers are not kept.
       - name: benchmarks compile and run (1 iteration)
         run: go test -run '^$' -bench . -benchtime 1x ./...
+      - name: Save the Go build cache (main, once a day)
+        if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -232,12 +257,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.25'}
+        with: {go-version: '1.25', cache: false}
+      # Its own build cache (#752): setup-go's is keyed on go.sum alone, so
+      # whichever job saved first after a go.sum change owns it, and this
+      # job rebuilt nearly all of nautilus every run. Main saves one a day
+      # (about 570 MB compressed); a PR restores the newest and never
+      # saves. Tests still all run: -count=1 keeps cached results out.
+      - id: day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gocache
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          restore-keys: |
+            go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-cross-${{ runner.os }}-
       - name: TestReleaseTargetsBuildWithoutCgo
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json ./cmd/naut -run '^TestReleaseTargetsBuildWithoutCgo$' -v -timeout 20m | tee evidence/crossbuild.json | go run ./tools/evidence cat
+          go test -json -count=1 ./cmd/naut -run '^TestReleaseTargetsBuildWithoutCgo$' -v -timeout 20m | tee evidence/crossbuild.json | go run ./tools/evidence cat
+      - name: Save the Go build cache (main, once a day)
+        if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -605,8 +655,11 @@ jobs:
       # The PLCnext in-process tier is C, built by the release job with the
       # same script; compiling it here (warnings are errors) keeps a break
       # from surfacing first at tag time.
+      # use-cache off: it saved a new 18 MB cache on every run (one C file
+      # to build), about 200 entries that crowded the repo's 10 GB cache
+      # limit and evicted the ones that matter (#752).
       - uses: mlugg/setup-zig@v2
-        with: {version: 0.17.0}
+        with: {version: 0.17.0, use-cache: false}
       - name: Build nautilus_io (PLCnext, ARMv7)
         run: rt/plcnext-io/build.sh
   postgres:
