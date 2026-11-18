@@ -17,7 +17,7 @@ import (
 // accepted, and listening beyond loopback says so loudly at startup.
 func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 	bin := buildNautCLI(t, t.TempDir(), nil)
-	start := func(addr string) (*lockedBuffer, func()) {
+	start := func(addr string, env ...string) (*lockedBuffer, func()) {
 		dir := t.TempDir()
 		files := map[string]string{
 			"nautilus.yaml": "name: rebind\ntasks:\n  - program: main.st\n    scan: 20ms\ntags:\n  - { name: SP, role: setpoint, init: 0 }\nserver:\n  addr: \"" + addr + "\"\n",
@@ -35,6 +35,7 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 				cmd.Env = append(cmd.Env, kv)
 			}
 		}
+		cmd.Env = append(cmd.Env, env...)
 		stderr := &lockedBuffer{}
 		cmd.Stderr = stderr
 		cmd.Stdout = new(bytes.Buffer)
@@ -88,6 +89,19 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 	if strings.Contains(stderr.String(), "WARNING: the tag API listens on") {
 		t.Errorf("loopback listen warned:\n%s", stderr.String())
 	}
+
+	// A name the operator lists in NAUTILUS_ALLOWED_HOSTS writes; another
+	// name still does not.
+	addr3 := freeAddr(t)
+	_, port3, _ := net.SplitHostPort(addr3)
+	_, stop = start(addr3, "NAUTILUS_ALLOWED_HOSTS=epic1.plant.lan")
+	if got := post(port3, "epic1.plant.lan:"+port3, "http://epic1.plant.lan:"+port3); got != http.StatusNoContent {
+		t.Errorf("allowed name write: %d, want 204", got)
+	}
+	if got := post(port3, "other.plant.lan:"+port3, "http://other.plant.lan:"+port3); got != http.StatusForbidden {
+		t.Errorf("unlisted name write: %d, want 403", got)
+	}
+	stop()
 
 	// Every interface, no token: it still starts (deployed controllers do
 	// this), and says what that exposes.

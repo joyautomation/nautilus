@@ -209,7 +209,7 @@ func TestWriteAuthRefusesARebindableHost(t *testing.T) {
 		srv.Handler().ServeHTTP(rec, req)
 		return rec.Code
 	}
-	open := New(newTestRuntime(t), Options{AllowedHosts: []string{"EPIC1.plant.lan"}})
+	open := New(newTestRuntime(t), Options{AllowedHosts: []string{"EPIC1.plant.lan", "hmi.local:8086", "panel.lan."}})
 	for _, tc := range []struct {
 		what, host, origin string
 		want               int
@@ -223,6 +223,8 @@ func TestWriteAuthRefusesARebindableHost(t *testing.T) {
 		{"IPv6 loopback", "[::1]:8080", "http://[::1]:8080", 204},
 		{"a LAN address", "192.168.82.10:8080", "http://192.168.82.10:8080", 204},
 		{"a configured name (case-insensitive)", "epic1.PLANT.lan:8080", "http://epic1.PLANT.lan:8080", 204},
+		{"a configured name given with a port", "hmi.local:8080", "http://hmi.local:8080", 204},
+		{"a configured name given with a root dot", "panel.lan:8080", "http://panel.lan:8080", 204},
 		{"no Origin (not a browser)", "evil.example:8080", "", 204},
 	} {
 		if got := post(open, tc.host, tc.origin, ""); got != tc.want {

@@ -114,7 +114,11 @@ list in `NAUTILUS_ALLOWED_HOSTS` (comma-separated, no port):
 NAUTILUS_ALLOWED_HOSTS=epic1.plant.lan naut run .
 ```
 
-Any other name is a `403` that says which of the two settings to use. A
+Any other name is a `403` that says which of the two settings to use. That
+includes a controller reached by its DNS or mDNS name (`epic1.local`) and
+a reverse proxy that passes the browser's host through: `tailscale serve`
+keeps the `*.ts.net` name, nginx with `proxy_set_header Host $host` keeps
+its public name. List the name, or set a token. A
 client that sends no `Origin` (`curl`, a script, the VS Code extension) is
 unaffected. When `naut run` listens beyond this machine (`server.addr:
 ":8080"` or `0.0.0.0`) with no token, it starts and prints a warning:

@@ -510,7 +510,10 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	}
 	if len(opts) > 0 {
 		for _, h := range opts[0].AllowedHosts {
-			if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			// "epic1.plant.lan:8086" or "epic1.plant.lan." name the same
+			// host a request's Host does without its port or root dot.
+			h = strings.TrimSuffix(strings.ToLower(hostOnly(strings.TrimSpace(h))), ".")
+			if h != "" {
 				s.allowHosts[h] = true
 			}
 		}
