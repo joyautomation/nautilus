@@ -332,7 +332,7 @@ func (p *Profile) validate() error {
 		if pt.Doc != "" {
 			id, _, _ := strings.Cut(pt.Doc, " ")
 			if !docs[id] {
-				return fmt.Errorf("point %s: doc %q cites no document in docs:", pt.Name, id)
+				return fmt.Errorf("point %s: doc %q is not the id of a document under docs", pt.Name, id)
 			}
 		} else if !pt.Unverified {
 			return fmt.Errorf("point %s: cite a document (doc:) or mark it unverified: true", pt.Name)
