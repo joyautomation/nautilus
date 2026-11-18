@@ -1180,18 +1180,3 @@ func (d *Driver) onlineDevices(edge string) (map[string]bool, bool) {
 	}
 	return nil, false
 }
-
-// nodeOnline reports whether an edge node has birthed and not died. An unknown
-// node — one we have never heard from — is offline, which is exactly the case
-// the dark-site queue exists for: a host that starts before its fleet can
-// still be commanded, and the commands land as the sites birth.
-func (d *Driver) nodeOnline(edge string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for k, ns := range d.nodes {
-		if k.EdgeNode == edge {
-			return ns != nil && ns.online
-		}
-	}
-	return false
-}
