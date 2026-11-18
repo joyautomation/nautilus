@@ -1234,7 +1234,7 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 		return "", refuse("block-type", "%s is a %s, not a timer or counter", f.name, f.dtype)
 	}
 	if !rt.im.declareFound(rt.sc, rt.p, f, "") {
-		return "", refuse("type", "%s: type %s has no nautilus declaration", f.name, f.dtype)
+		return "", refuse("type", "%s: %s", f.name, typeMissing(f.dtype))
 	}
 	out, err := rt.accessors(rest)
 	if err != nil {
@@ -1294,7 +1294,7 @@ func (rt *routine) accessors(rest string) (string, *refusal) {
 					return "", f.alias
 				}
 				if !rt.im.declareFound(rt.sc, rt.p, f, "") {
-					return "", refuse("type", "%s: type %s has no nautilus declaration", f.name, f.dtype)
+					return "", refuse("type", "%s: %s", f.name, typeMissing(f.dtype))
 				}
 				idx = f.name
 			}
@@ -1456,6 +1456,11 @@ func (rt *routine) aoiCall(in *l5x.Instr) (text, powerOut string, err *refusal) 
 		}
 		if p.Usage == "Input" || p.Usage == "InOut" {
 			params = append(params, p)
+		}
+	}
+	for _, p := range params {
+		if _, ok := rt.im.typeText(p.DataType, dimText(p.Dimension)); !ok && moduleDefined(p.DataType) {
+			return "", "", refuse("type", "%s(%s): parameter %s: %s; %s", a.Name, strings.Join(in.Args, ","), p.Name, typeMissing(p.DataType), moduleAdvice)
 		}
 	}
 	if len(in.Args)-1 != len(params) {

@@ -426,7 +426,10 @@ type tagDef struct {
 	DataType string // BOOL SINT INT DINT REAL LREAL TIMER COUNTER
 	Dim      int    // 0 scalar, n = Dimensions="n"
 	Value    string // scalar initial value in Logix spelling ("0", "85.0"); "" = zero
-	Preset   int64  // TIMER.PRE / COUNTER.PRE
+	// Elems are an array's initial values in Logix spelling, from index
+	// 0; an element past the end is zero.
+	Elems  []string
+	Preset int64 // TIMER.PRE / COUNTER.PRE
 	// Presets holds per-element presets for an array of timers or counters
 	// (Dim > 0), keyed by index; elements not present preset to 0.
 	Presets map[int]int64
@@ -617,12 +620,32 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		return
 	}
 	init := v.Init
+	var elems []any
 	if init == "" && external {
 		if iv, _, ok := ir.Lookup(lw.opts.Inits, v.Name); ok && iv != nil {
-			init = fmt.Sprint(iv)
+			if list, isList := iv.([]any); isList && dim > 0 {
+				elems = list // an array's manifest init: its elements
+			} else {
+				init = fmt.Sprint(iv)
+			}
 		}
 	}
 	switch {
+	case scalarTypes[u] != "" && elems != nil:
+		if len(elems) > dim {
+			lw.diag(ruleInit, v.Line, "", "%s: %d initial values for an array of %d", v.Name, len(elems), dim)
+			return
+		}
+		vals := make([]string, len(elems))
+		for i, e := range elems {
+			val, ok := literal(u, fmt.Sprint(e))
+			if !ok {
+				lw.diag(ruleInit, v.Line, "", "%s[%d]: initial value %q is not a literal the Logix tag can carry", v.Name, i, fmt.Sprint(e))
+				return
+			}
+			vals[i] = val
+		}
+		lw.addTag(tagDef{Name: v.Name, DataType: scalarTypes[u], Dim: dim, Elems: vals, Scope: scope, Line: v.Line})
 	case scalarTypes[u] != "":
 		val, ok := literal(u, init)
 		if !ok {

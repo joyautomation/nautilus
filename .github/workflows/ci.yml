@@ -23,8 +23,15 @@ jobs:
   # the checks that apply to it: naut check + naut test on the example
   # projects it touched, the HMI 3D and playground builds, version-sync and
   # the docs-claims drift warning. Anything else, and every push to main,
-  # runs everything. A skipped job reports "skipped", which branch
-  # protection counts as passing.
+  # runs everything. Separately, the VS Code extension's jobs (compile/test,
+  # gesture harness) run only when the extension, what it bundles or what
+  # its tests read changes (ci-scope.sh's extension list), or .github/; a
+  # PR without that runs the CLI-discovery e2e on Linux only, its macOS and
+  # Windows legs left out of the matrix (absent, not "skipped": were they
+  # ever made required checks, they would wait at "expected"). A skipped
+  # job reports "skipped", which branch protection counts as passing.
+  # Every gate below fails closed: a job is left out only on an explicit
+  # "false", never on a missing or garbled output.
   changes:
     name: Changes — full suite or light
     runs-on: ubuntu-latest
@@ -32,6 +39,11 @@ jobs:
       full: ${{ steps.scope.outputs.full }}
       examples: ${{ steps.scope.outputs.examples }}
       hmibuild: ${{ steps.scope.outputs.hmibuild }}
+      extension: ${{ steps.scope.outputs.extension }}
+      # The CLI-discovery e2e's OS legs: all three when the extension
+      # changed; Linux only otherwise (it drives a naut built from the PR,
+      # so a Go change still runs it, without the macOS/Windows queues).
+      e2e-os: ${{ steps.scope.outputs.extension != 'false' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]' }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 2} # a PR's merge commit: HEAD^1 is the base
@@ -41,16 +53,23 @@ jobs:
         id: scope
         env:
           EVENT: ${{ github.event_name }}
+        shell: bash
         run: |
+          set -euo pipefail
+          out=
           if [ "$EVENT" = pull_request ] && changed=$(git diff --name-only HEAD^1 HEAD); then
             printf '%s\n' "$changed"
-            printf '%s\n' "$changed" | .github/scripts/ci-scope.sh | tee -a "$GITHUB_OUTPUT"
-          else
-            echo "full=true" | tee -a "$GITHUB_OUTPUT"
+            out=$(printf '%s\n' "$changed" | .github/scripts/ci-scope.sh) || out=
           fi
+          # Fail closed: a push, no diff, or a script that failed or printed
+          # no verdict runs everything.
+          if ! grep -qxE 'full=(true|false)' <<<"$out" || ! grep -qxE 'extension=(true|false)' <<<"$out"; then
+            out=$'full=true\nextension=true'
+          fi
+          printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
   go:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Go — vet, test, build
     runs-on: ubuntu-latest
     steps:
@@ -102,7 +121,7 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     env:
-      FULL: ${{ needs.changes.outputs.full }}
+      FULL: ${{ needs.changes.outputs.full != 'false' }}
       EXAMPLES: ${{ needs.changes.outputs.examples }}
     steps:
       - uses: actions/checkout@v4
@@ -207,7 +226,7 @@ jobs:
   # Its own job so it runs beside go test, not inside it; the go job skips it.
   go-crossbuild:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Go — release targets cross-compile
     runs-on: ubuntu-latest
     steps:
@@ -231,7 +250,7 @@ jobs:
   # open file above all, so they are tested on Windows, not assumed.
   go-windows:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Go — Windows file semantics
     runs-on: windows-latest
     steps:
@@ -241,7 +260,7 @@ jobs:
       - run: go test ./oplog/ ./alarm/
   sparkplug-tck:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Sparkplug B — TCK conformance
     runs-on: ubuntu-latest
     steps:
@@ -302,7 +321,7 @@ jobs:
         working-directory: examples/lift-station/hmi
   hmi-packs:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     # naut builds HMIs from a committed pack of the packages it carries
     # (internal/hmibuild): this rebuilds it from the kits in this tree and
     # the pins in packs/package.json, and fails when the committed one
@@ -325,7 +344,7 @@ jobs:
 
   vscode-iec:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.extension != 'false'
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest
     defaults:
@@ -408,7 +427,7 @@ jobs:
   # the production bundles: mimic, FBD, LD, SFC). ubuntu-latest ships Chrome.
   vscode-iec-gestures:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.extension != 'false'
     name: VS Code extension — webview gesture harness
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -459,12 +478,12 @@ jobs:
   # CLI still activate and say how to fix it. See src/e2e/run.ts.
   vscode-iec-e2e:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: VS Code extension — CLI discovery e2e (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.e2e-os) }}
     runs-on: ${{ matrix.os }}
     # A hung VS Code otherwise holds the runner for the 6-hour default.
     timeout-minutes: 15
@@ -562,7 +581,7 @@ jobs:
 
   release-config:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Release config — goreleaser check
     runs-on: ubuntu-latest
     steps:
@@ -578,7 +597,7 @@ jobs:
         run: rt/plcnext-io/build.sh
   postgres:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     # The historian's Postgres store and the alarm journal's Postgres table
     # skip unless NAUTILUS_TEST_DATABASE_URL is set; here they run against a
     # real Postgres, so the docs' Postgres claims have evidence.
@@ -612,7 +631,7 @@ jobs:
 
   modbus-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Modbus TCP — foreign stack (pymodbus)
     runs-on: ubuntu-latest
     steps:
@@ -657,7 +676,7 @@ jobs:
           retention-days: 14
   opcua-foreign:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: OPC UA — foreign stack (asyncua)
     runs-on: ubuntu-latest
     steps:
@@ -689,7 +708,7 @@ jobs:
           retention-days: 14
   opcua-client-matrix:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: OPC UA client — server matrix (open62541, Milo; poll + subscribe)
     runs-on: ubuntu-latest
     steps:
@@ -717,7 +736,7 @@ jobs:
           retention-days: 14
   snmp-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: SNMP — foreign stack (snmpsim)
     runs-on: ubuntu-latest
     steps:
@@ -755,7 +774,7 @@ jobs:
           retention-days: 14
   redfish-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Redfish — foreign stack (DMTF mockup server)
     runs-on: ubuntu-latest
     steps:
@@ -783,7 +802,7 @@ jobs:
           retention-days: 14
   prom-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Prometheus — foreign stack (node_exporter)
     runs-on: ubuntu-latest
     steps:
@@ -814,7 +833,7 @@ jobs:
           retention-days: 14
   blackbox-gate:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     # The independent tester's checks (tools/blackbox, docs/design/blackbox.md):
     # scripts a foreign client wrote against the public docs and the specs,
     # imported verbatim and run against naut built from this PR. One subtest
@@ -872,7 +891,7 @@ jobs:
     # which a clean run closes.
     name: Runtime evidence — claims × test results
     needs: [changes, go, examples, go-crossbuild, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:

@@ -199,7 +199,7 @@ conveyor or trips a drive.
 `naut check` knows the file too: the process model and project-local
 simulators are compiled as the plant, not as controller programs.
 
-The worked example is `virtdev/testdata/bin-fill`: an ACS355 conveyor
+The worked example is `examples/bin-fill`: an ACS355 conveyor
 drive, an ASI-275M gate, a P+F master with the high-level and plug
 switches, a process model in `devices/plant.st`, and `fill_test.yaml`. The
 Go tests in `cmd/naut/devices_test.go` run it, and run copies with a wrong

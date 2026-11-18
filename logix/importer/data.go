@@ -2,6 +2,7 @@ package importer
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/l5x"
@@ -106,8 +107,221 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 	if err != nil {
 		return "", err
 	}
+	if conv := rt.storeConversion(m, args, target, t); conv != "" {
+		value = conv + "(" + value + ")"
+		if strings.HasPrefix(conv, "REAL_TO_") || strings.HasPrefix(conv, "LREAL_TO_") {
+			rt.realStoreNote()
+		}
+	}
 	rt.markWritten(target)
 	return "{ " + t + " := " + value + " }", nil
+}
+
+// storeConversion is the IEC conversion a data box's store makes, or ""
+// when it makes none nautilus would not make too (#777). A Logix box
+// converts as it stores: a REAL result into an integer rounds, halves to
+// even (REAL_TO_INT); an integer result into a narrower integer keeps the
+// low bits (DINT_TO_INT, which wraps). nautilus refuses the first as a
+// bare assignment and does not narrow the second, so the import writes the
+// conversion; the writer folds it back into the box. The result's type is
+// REAL when an operand is, else the widest operand that names a tag (an
+// integer literal is read at the destination's width).
+func (rt *routine) storeConversion(m string, args []string, target, rendered string) string {
+	var srcs []string
+	switch m {
+	case "MOVE", "MOV", "NEG", "ABS":
+		srcs = args[:1]
+	case "ADD", "SUB", "MUL", "DIV", "MOD":
+		srcs = args[:2]
+	case "CPT":
+		// The expression's operands: tags and literals, as they appear.
+		e, err := ld.ParseExpr(args[1])
+		if err != nil {
+			return ""
+		}
+		srcs = exprOperands(e)
+		for _, a := range srcs {
+			if rt.operandType(a) == "TIME" {
+				return "" // a timer's ACC in arithmetic: left as it is
+			}
+		}
+	default:
+		return ""
+	}
+	dst := rt.operandType(target)
+	if dst == "TIME" {
+		// A timer's PRE that a TON/TOF runs on is written through its
+		// DINT preset variable (t_PRE); any other timer member stays the
+		// TIME it is (.PT, .ET), which a TIME source needs no conversion
+		// into.
+		up := strings.ToUpper(rendered)
+		if strings.HasSuffix(up, ".PT") || strings.HasSuffix(up, ".ET") {
+			return ""
+		}
+		dst = "DINT"
+	}
+	if intWidth[dst] == 0 {
+		return ""
+	}
+	from := ""
+	for _, a := range srcs {
+		t := rt.operandType(a)
+		if t == "" && numLit.MatchString(a) && !fitsInt(a, dst) {
+			// An integer literal the destination cannot hold is a DINT:
+			// MOV(70000,i) keeps the low 16 bits on the controller.
+			t = "DINT"
+		}
+		switch {
+		case t == "TIME":
+			// A timer's ACC or PRE: DINT milliseconds in Logix, a TIME in
+			// nautilus, which no integer takes without the conversion.
+			if len(srcs) > 1 {
+				return ""
+			}
+			return "TIME_TO_" + dst
+		case t == "LREAL" || from == "LREAL":
+			from = "LREAL"
+		case t == "REAL" || from == "REAL":
+			from = "REAL"
+		case intWidth[t] > intWidth[from]:
+			from = t
+		}
+	}
+	if from == "REAL" || from == "LREAL" || intWidth[from] > intWidth[dst] {
+		return from + "_TO_" + dst
+	}
+	return ""
+}
+
+// realStoreNote says, once per import, where a REAL stored into an
+// integer still differs: out of the integer's range, the controller keeps
+// the low bits of the rounded value, and nautilus faults the scan.
+func (rt *routine) realStoreNote() {
+	if rt.im.realNoted {
+		return
+	}
+	rt.im.realNoted = true
+	rt.im.proj.note("", -1, "conversion", "a REAL stored into an integer comes across as REAL_TO_<type> (it rounds halves to even, as the controller does); a value out of the integer's range faults the nautilus scan, where the controller stores the low bits of the result")
+}
+
+// exprOperands lists an expression's tag references and literals, in
+// their Logix spelling.
+func exprOperands(e ld.Expr) []string {
+	var out []string
+	var walk func(ld.Expr)
+	walk = func(e ld.Expr) {
+		switch x := e.(type) {
+		case *ld.Lit:
+			out = append(out, x.Text)
+		case *ld.Ref:
+			out = append(out, x.Text)
+		case *ld.Call:
+			for _, a := range x.Args {
+				walk(a)
+			}
+		case *ld.Unary:
+			walk(x.X)
+		case *ld.Binary:
+			walk(x.L)
+			walk(x.R)
+		}
+	}
+	walk(e)
+	return out
+}
+
+// fitsInt reports an integer literal that a dst integer holds as is
+// (true for anything it cannot read, which then stays as written).
+func fitsInt(lit, dst string) bool {
+	n, ok := parseIntLit(lit)
+	if !ok {
+		return true
+	}
+	w := intWidth[dst]
+	if w == 0 || w >= 64 {
+		return true
+	}
+	lo, hi := -(int64(1) << (w - 1)), int64(1)<<(w-1)-1
+	return n >= lo && n <= hi
+}
+
+// parseIntLit reads a decimal or base#digits integer literal.
+func parseIntLit(s string) (int64, bool) {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "_", "")
+	base := 10
+	if i := strings.Index(s, "#"); i > 0 {
+		b, err := strconv.Atoi(s[:i])
+		if err != nil {
+			return 0, false
+		}
+		base, s = b, s[i+1:]
+	}
+	n, err := strconv.ParseInt(s, base, 64)
+	return n, err == nil
+}
+
+// intWidth is a Logix integer type's width, for which way a store narrows.
+var intWidth = map[string]int{"SINT": 8, "INT": 16, "DINT": 32, "LINT": 64}
+
+// operandType is the Logix elementary type an operand reads as: a
+// literal's (REAL when it has a point or an exponent, "" for an integer,
+// which takes the width it is stored at), or the type a tag reference
+// reaches through its indexes, members and bits (a timer's ACC or PRE is
+// TIME, as nautilus holds it). "" when it is not an elementary value or
+// cannot be told.
+func (rt *routine) operandType(a string) string {
+	a = strings.TrimSpace(a)
+	if numLit.MatchString(a) {
+		if !strings.Contains(a, "#") && strings.ContainsAny(a, ".eE") {
+			return "REAL"
+		}
+		return ""
+	}
+	f := rt.sc.lookup(baseOf(a))
+	if f == nil || f.alias != nil {
+		return ""
+	}
+	dtype, dims, rest := f.dtype, f.dims, a[len(baseOf(a)):]
+	for rest != "" {
+		switch rest[0] {
+		case '[':
+			j := strings.IndexByte(rest, ']')
+			if j < 0 || dims == "" {
+				return ""
+			}
+			dims, rest = "", rest[j+1:]
+		case '.':
+			j := 1
+			for j < len(rest) && rest[j] != '.' && rest[j] != '[' {
+				j++
+			}
+			name := rest[1:j]
+			rest = rest[j:]
+			if name != "" && name[0] >= '0' && name[0] <= '9' {
+				dtype, dims = "BOOL", "" // a bit of an integer
+				continue
+			}
+			if strings.EqualFold(dtype, "TIMER") && (strings.EqualFold(name, "ACC") || strings.EqualFold(name, "PRE")) {
+				dtype, dims = "TIME", "" // ET and PT in nautilus
+				continue
+			}
+			dt, dm, ok := rt.im.memberType(dtype, name)
+			if !ok {
+				return ""
+			}
+			dtype, dims = dt, dm
+		default:
+			return ""
+		}
+	}
+	if dims != "" {
+		return ""
+	}
+	up := strings.ToUpper(dtype)
+	if up == "REAL" || up == "LREAL" || up == "TIME" || intWidth[up] > 0 {
+		return up
+	}
+	return ""
 }
 
 // exprOperand renders one instruction operand: a literal as is, a
