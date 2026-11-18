@@ -51,8 +51,8 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
        1. writer: project → SCL sources (.scl/.db/.udt) + tag table XML + station spec
        2. tiad: create/open project, apply station, import sources, compile
           (messages mapped back to nautilus lines)
-       3. tiad: download dry run → "software only, stays in RUN" or
-          "needs STOP / reinitialises DB X"; the second needs an explicit yes
+       3. tiad: download dry run (provisional, §3.5) → "software only, stays in RUN"
+          or "needs STOP / reinitialises DB X"; the second needs an explicit yes
        4. tiad: download, start; online compare (project == CPU)
                 │
                 ▼
@@ -69,7 +69,7 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
 | Live values, write, RUN/STOP, diagnostics | **Maps** via the Web API (§4) |
 | Ladder overlay | **Maps** for named operands, since values arrive by name. Power flow inside a rung is shown only if the writer keeps it in statics (an option, at a memory cost) |
 | HMI, alarms, history, Sparkplug publish | **Maps**: `naut siemens serve` hosts them against the CPU's values |
-| Download of a change | **Partly.** Changed blocks load in RUN. An interface change reinitialises a DB unless it has a memory reserve *(verify)*, so the writer reserves memory on generated DBs and the dry run names any DB that would be reinitialised. There is no warm reload with state migration |
+| Download of a change | **Partly.** Changed blocks load in RUN. An interface change reinitialises a DB unless it has a memory reserve *(verify)*, so the writer reserves memory on generated DBs and the download's checks name any DB that would be reinitialised (through the dry run once S2 proves it, §3.5). There is no warm reload with state migration |
 | Force | **No direct mapping** (D4). The Web API writes but does not force, and Siemens' own force is I/O-only and a TIA online function. Until D4, `/api/forces` answers 501 as the Logix facade does. A write is never called a force |
 | SFC | Not in the first writer subset. v1.x: an SCL state machine with step flags and step timers in statics, so the SFC view shows active steps live |
 | Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) | **Do not map**: they run in `naut`. `naut check --target siemens` refuses them. The CPU's I/O comes from its local modules and its PROFINET devices |
@@ -179,9 +179,13 @@ copies `logixd`, the Logix agent:
   | `TIAD_TARGETS` | — | The only CPU addresses tiad will go online to or download to |
   | `TIAD_PGPC_INTERFACE` | — | The NIC TIA uses to reach the CPUs |
 
-- **Client side:** naut finds tiad through `NAUTILUS_TIAD_URL` and
-  `NAUTILUS_TIAD_TOKEN`, then `--agent` and `--token`, then the manifest's
-  `target.siemens.agent`. The token never goes in the manifest.
+- **Client side:**
+  - naut finds tiad through `NAUTILUS_TIAD_URL`, then `--agent`, then the
+    manifest's `target.siemens.agent`.
+  - The token comes from `NAUTILUS_TIAD_TOKEN`, or from the file
+    `NAUTILUS_TIAD_TOKEN_FILE` names (a copy of the agent's token file).
+  - The token is never a command-line flag, since argv is visible to every
+    user on the machine, and never in the manifest.
 
 ### 3.2 Envelope, sessions, errors
 
@@ -200,6 +204,7 @@ the session is gone.
 |---|---|---|
 | `bad_request` | 400 | Malformed body, or a path outside the work dir |
 | `unauthorized` | 401 | Missing or wrong token |
+| `unreachable` | — | Client-side: no reply (agent down, or the context was cancelled; the cause unwraps). After a download, the outcome is **unknown**, so compare before retrying |
 | `not_found` | 404 | No such session or file |
 | `busy` | 409 | The project has a writer |
 | `gate` | 412 | A probe gate failed (TIA, group, licence). The message names it |
@@ -207,7 +212,7 @@ the session is gone.
 | `decision_required` | 409 | A download question has no answer in the request. `data.questions` lists them |
 | `declined` | 409 | A download question was answered no. `data.questions` lists them, and nothing is loaded |
 | `compile_failed` | 422 | Compile errors. `data` is the compile result |
-| `operation_failed` | 500 | Openness threw. The message carries its text |
+| `operation_failed` | 500 | Openness threw (the message carries its text), or a download was asked of a project not fully compiled since its last change |
 
 ### 3.3 The station spec
 
@@ -223,7 +228,7 @@ own environment in `secrets` (§3.4).
     "profinetName": "plc_1"
   },
   "webServer": { "enabled": true, "users": [ { "name": "naut", "rights": ["read", "write", "mode"] } ] },
-  "modules": [ { "slot": 1, "order": "6ES7 131-6BH01-0BA0", "firmware": "V2.0", "inputStart": 0 } ],
+  "modules": [ { "slot": 2, "order": "6ES7 131-6BH01-0BA0", "firmware": "V2.0", "inputStart": 0 } ],
   "profinet": {
     "updateTime": "16ms",
     "devices": [ {
@@ -240,6 +245,13 @@ own environment in `secrets` (§3.4).
 The rules for applying a spec:
 
 - **Device names are always explicit.** Automatic name generation is off.
+  Names follow the PROFINET rules:
+  - lowercase DNS-style labels;
+  - at most 240 characters;
+  - no n.n.n.n form (n = 0-999);
+  - no first label of the form `port-xyz` or `port-xyz-abcde`.
+- **Slot 1 is the CPU's own.** Local modules go in slot 2 and up
+  *(verify on the S2a upload)*.
 - **The update time is at least 16 ms.**
 - **Modules are found by their GSDML module ID.** I/O starts are optional,
   and TIA assigns any that are left out.
@@ -274,6 +286,17 @@ licence manager *(verify that this is possible)*.
 | `GET /v1/probe` | → `{usable, gates: [{name, ok, detail}]}`. Gates: `tia`, `openness-group`, `openness-allowlist`, `licence` (detail e.g. "trial, 12 days left"), `workdir`. Always 200 |
 | `PUT /v1/files/{path}` | raw bytes → `{path, size}` |
 | `GET /v1/files/{path}` | → raw bytes. `GET /v1/files` lists the work dir: `{files: [{path, size}]}` |
+
+Every path in a request obeys one sandbox rule (`tiad.CleanPath`):
+
+- relative, with forward slashes;
+- no `..`, no drive letter or other `:`;
+- no control characters or `<>"|?*`;
+- no segment ending in a dot or a space;
+- no Windows device name (`CON`, `NUL`, `COM1`, …, with or without an
+  extension).
+
+The client checks each path and the agent checks again.
 | `DELETE /v1/files/{path}` | → `{}` |
 | `POST /v1/gsd/install` | `{path}` → `{path, alreadyInstalled}` (P1) |
 | `POST /v1/projects` | `{name, station, secrets}` → `{session, project}`. A fresh project built from the spec |
@@ -319,8 +342,8 @@ must show that a cancelled download loads nothing. Until S2, the dry run
 and the question IDs are the contract tiad aims for, not a measured
 behaviour.
 
-- **A dry run** runs TIA's pre-download checks and returns them as
-  `questions`. The `id` is one of:
+- **A dry run** (provisional, see above) runs TIA's pre-download checks
+  and returns them as `questions`. The `id` is one of:
   - `stop-cpu`
   - `reinitialize` (`objects` lists the DBs)
   - `overwrite`
@@ -342,7 +365,9 @@ behaviour.
   through a download. On the bench the address is already set.
 - **The project must be fully compiled** (hardware and software) since its
   last change.
-- **An answer of no** fails the call with `declined`. Nothing is loaded.
+- **An answer of no** to `stop-cpu`, `overwrite` or `certificate` fails
+  the call with `declined`, and nothing is loaded. `start-after: false` is
+  a decision, not a refusal: load and stay in STOP.
 - **`announced`** must be true for a real download. It records that the
   shared-CPU rule was followed (tell naut-lead first). It is a convention,
   not a safety.
@@ -368,11 +393,25 @@ controller names its devices from the hardware config.
 ### 3.7 Licence
 
 Openness comes with STEP 7, and Professional is needed for the S7-1500
-*(verify)*. The trial runs for 21 days from first start and is bound to the
-machine's hardware ID. Clones are never used to restart it. After it ends,
-`probe` fails the `licence` gate and every call that needs TIA fails with
-`gate`. Code is written before the trial starts, and the trial is spent on
-runs (D1).
+*(verify)*. D1: we run on the trial licence, and the TIA VM is recreated
+from the golden image for testing, so every clone starts with its own
+fresh trial. The golden image never starts TIA, so no trial time is baked
+into it. On a clone, the trial starts at the first call that starts TIA
+(§3.4). Whether that start needs one GUI acknowledgement is an S2b
+question. If a clone's trial ends, `probe` fails the `licence` gate and
+every call that needs TIA fails with `gate`.
+
+**Redone on every clone.** Nothing survives one, by design:
+
+- the tiad install and its token. The token file is new, so clients
+  re-read it.
+- the Openness allowlist entry;
+- GSDML installs (`gsd/install`);
+- the work dir and every project in it (rebuilt from the repo per deploy);
+- the TIA licence state (a fresh trial).
+
+**Kept outside the clone:** everything in git, meaning sources, the
+station spec and an adopted project's archive.
 
 ## 4. Online plane
 
@@ -446,9 +485,12 @@ Copied from [logix-authoring.md](logix-authoring.md) §5 and §7a.
 | `tools/tiad` | The C# agent and its installer |
 | `cmd/naut/siemens*.go` | `naut siemens agent probe`, `deploy`, `serve` |
 
-`siemens/*` follows the driver rule on the map: it never imports `runtime`,
-`server` or `internal/project`. The exception is `siemens/facade`, which is
-an application layer, as `logix/facade` is.
+`siemens/*` follows the driver rule on the map, enforced by
+`internal/contextmap`: `siemens/tiad`, `siemens/webapi`, `siemens/writer`
+and `siemens/importer` never import `runtime`, `server`, `alarm`,
+`acceptance`, `internal/project`, `internal/lsp` or the CLI. The exception
+is `siemens/facade`, which is an application layer, as `logix/facade` is.
+The CLI hands the writer what it needs from the manifest.
 
 ## 7. Order
 

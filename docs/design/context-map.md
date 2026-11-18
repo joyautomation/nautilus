@@ -83,6 +83,9 @@ break one changes this section first and says why.
 - Field and IT drivers and `sparkplug/host` never import `runtime`,
   `server`, `alarm`, `acceptance`, `internal/project`, `internal/lsp` or
   the CLI.
+- The Siemens target's `siemens/tiad`, `siemens/webapi`, `siemens/writer`
+  and `siemens/importer` keep the same distance. Only `siemens/facade`
+  composes the runtime side.
 - The operator surface never imports a protocol package, the Logix or
   Siemens target, or the manifest.
 - `virtdev` is imported only by the CLI and Verification: virtual
