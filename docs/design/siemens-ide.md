@@ -90,9 +90,10 @@ Native LAD (SimaticML FlgNet) is D3.
 | I/O-bound tags | PLC tag table, `%I`/`%Q` addresses from the station spec |
 | UDT | PLC data type (`.udt`) |
 | User FB / function | FB / FC |
-| TON TOF TP R_TRIG F_TRIG CTU CTD CTUD SR RS | The IEC instructions of the same names as multi-instances; the members already match (`.Q` `.ET` `.CV`) |
-| Elementary types, arrays, structs | Direct. DT becomes one of DTL or LDT, chosen and documented |
-| `VAR RETAIN` | Retentive members |
+| TON TOF TP R_TRIG F_TRIG CTU CTD CTUD | The IEC instructions of the same names as multi-instances; the members already match (`.Q` `.ET` `.CV`) |
+| SR RS | Written inline as set/reset logic on a static, since they are believed to be LAD/FBD boxes that SCL cannot call *(verify)* |
+| Elementary types, arrays, structs | Direct. DT becomes one of DT, LDT or DTL, chosen and documented *(verify each on FW 3.1)* |
+| `VAR RETAIN` | Retentive members *(verify the SCL source syntax for per-member retain)* |
 | `dialect: siemens` (reserved) | Siemens-semantics blocks, only where no IEC form exists |
 
 The rules:
@@ -211,7 +212,8 @@ The rules for applying a spec:
   is not in the spec is removed. That is how naut-profinet's
   module-difference test removes a module.
 - **Every device's GSDML must already be installed** (`gsd/install`).
-- **Every web user needs a password** in `secrets.webUsers`.
+- **Every web user needs a password** in `secrets.webUsers`. Its rights are
+  any of `read`, `write`, `mode` (change RUN/STOP) and `diagnostics`.
 - **I-device transfer areas come later**, as `iDevice:` (P6).
 
 **Where a PROFINET device's entry comes from.** In `nautilus.yaml`, a
@@ -224,6 +226,12 @@ could drift, and drift is exactly the module difference the PROFINET tests
 create on purpose. tiad itself only ever sees the explicit form.
 
 ### 3.4 Calls
+
+Which calls start TIA: `health`, `probe` and the file calls never do,
+so they cost no trial time on a fresh clone. Every other call starts the
+headless TIA process if it is not already running. `probe`'s `licence`
+gate has to read the licence state without starting TIA, through the
+licence manager *(verify that this is possible)*.
 
 | Call | Body → data |
 |---|---|
@@ -243,7 +251,7 @@ create on purpose. tiad itself only ever sees the explicit form.
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}]}`. An online compare |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
-| `POST /v1/sessions/{id}/upload` | → `{}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus |
+| `POST /v1/sessions/{id}/upload` | → `{}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus *(verify Openness supports it)* |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}` |
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>"}`.
@@ -266,7 +274,15 @@ Request:
 }
 ```
 
-Response: `{dryRun, downloaded, questions: [{id, message, detail}], state}`.
+Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state}`.
+
+**The dry run is provisional.** Openness is believed to answer TIA's
+pre-download checks through a callback inside the real download call,
+not in a separate pass *(verify in S2)*. If so, tiad's dry run is a
+download whose callback records every check and then cancels it, and S2
+must show that a cancelled download loads nothing. Until S2, the dry run
+and the question IDs are the contract tiad aims for, not a measured
+behaviour.
 
 - **A dry run** runs TIA's pre-download checks and returns them as
   `questions`. The `id` is one of:
@@ -286,7 +302,9 @@ Response: `{dryRun, downloaded, questions: [{id, message, detail}], state}`.
     cannot be answered by accident.
 - **`address`** must be in `TIAD_TARGETS`, or the call fails with
   `target_refused`. It must also equal the station's `cpu.address`
-  (one station spec per CPU).
+  (one station spec per CPU). In v1 this rules out a first download to a
+  CPU that still sits at another address, and changing a CPU's address
+  through a download. On the bench the address is already set.
 - **The project must be fully compiled** (hardware and software) since its
   last change.
 - **An answer of no** fails the call with `declined`. Nothing is loaded.
@@ -412,6 +430,10 @@ an application layer, as `logix/facade` is.
 - **S1, bench, read-only, needs the maintainer's OK:** `Api.Version`,
   `Api.GetMethods`.
 - **S2, image plus trial:**
+  - does the trial start headless on a clone's first TIA start, or does
+    it need one GUI acknowledgement (D1)?
+  - can a download's pre-download checks be listed and the download
+    cancelled with nothing loaded (the dry run, §3.5)?
   - two exports, diffed;
   - SCL import → compile → dry run → download → compare, after telling
     naut-lead;
@@ -421,7 +443,7 @@ an application layer, as `logix/facade` is.
 
 | | Decision | Proposal |
 |---|---|---|
-| D1 | Trial for the spikes, or buy STEP 7 Professional now (get a quote)? | Trial for S1/S2; decide at S2's go/no-go |
+| D1 | Trial for the spikes, or buy STEP 7 Professional now (get a quote)? If starting the trial needs one GUI acknowledgement on the clone, is that a one-time step the maintainer does? | Trial for S1/S2; decide at S2's go/no-go |
 | D2 | SIMATIC AX? | Not now. It covers the S7-1500 only, is sales-gated and still needs TIA for hardware |
 | D3 | How far LAD goes | SCL in v1; native LAD only if a site needs TIA-side ladder |
 | D4 | Force | (a) none, writes only; (b) an opt-in generated override layer for I/O-bound tags (inputs before the scan, outputs after it), shown in nautilus, but the CPU's FORCE LED stays dark; (c) Siemens' force through Openness, if it can activate one *(verify, unlikely)*. Proposal: (a) now, (b) after the loop works |
