@@ -14,6 +14,7 @@ import (
 	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/optommp/optommptest"
 	"github.com/joyautomation/nautilus/plcnext"
+	"github.com/joyautomation/nautilus/plcnext/plcnexttest"
 )
 
 // #861 G2: an optommp or PLCnext driver is one connection, so its Sparkplug
@@ -145,4 +146,51 @@ func TestPLCnextSparkplugDeviceIsDeadWithoutItsController(t *testing.T) {
 	if devs[0].Health() {
 		t.Error("healthy with no controller to talk to")
 	}
+}
+
+// With a controller (plcnexttest's): the device births once the driver's
+// BusConductor handshake brings the inputs Good, dies on a stopped
+// Axioline bus (a live socket, stale bytes) and when the controller goes,
+// and births again each time it comes back.
+func TestPLCnextSparkplugDeviceLivesAndDiesWithItsController(t *testing.T) {
+	raw, err := os.ReadFile("../../examples/plcnext-bench/plcnext_manifest.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := plcnext.ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	axc := plcnexttest.New()
+	m.Transport, m.Socket = plcnext.TransportGRPC, axc.Listen(t)
+	drv, err := plcnext.New(m, plcnext.WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	devs, err := sparkplugDevices([]nio.NamedDriver{{Name: "axc", Driver: drv}})
+	if err != nil || len(devs) != 1 {
+		t.Fatalf("devices %+v, %v: want one, the driver", devs, err)
+	}
+	dev := devs[0]
+	if dev.Health == nil {
+		t.Fatal("the plcnext device has no health: it would never send DDEATH")
+	}
+	if dev.Health() {
+		t.Error("healthy before the driver has connected")
+	}
+	drv.Start(context.Background())
+	defer drv.Stop()
+	waitHealth(t, "the device to read healthy once the bus runs", 5*time.Second, dev.Health)
+
+	axc.SetRun(false)
+	waitHealth(t, "the device to read unhealthy on a stopped bus", 5*time.Second, func() bool { return !dev.Health() })
+	axc.SetRun(true)
+	waitHealth(t, "the device to read healthy once the bus runs again", 5*time.Second, dev.Health)
+
+	axc.Drop()
+	waitHealth(t, "the device to read unhealthy once the controller is gone", 5*time.Second, func() bool { return !dev.Health() })
+	// A gRPC client redials by itself: restore only once the session ended.
+	waitHealth(t, "the driver's session to end", 5*time.Second, func() bool { return !drv.Health().Connected })
+	axc.Restore()
+	waitHealth(t, "the device to read healthy again once the controller is back", 10*time.Second, dev.Health)
 }
