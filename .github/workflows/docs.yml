@@ -96,6 +96,7 @@ jobs:
             playground/app/package-lock.json
             examples/lift-station/hmi/package-lock.json
             examples/plcnext-bench/hmi/package-lock.json
+            examples/epic-bench/hmi/package-lock.json
       - name: Fetch verified clips
         if: steps.gate.outputs.go == 'true'
         working-directory: website
