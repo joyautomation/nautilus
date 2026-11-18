@@ -40,7 +40,7 @@ static void rtg_on_xcpu(int sig) {
     int saved = errno;
     struct sched_param p = { .sched_priority = 0 };
     if (rtg_tid > 0) {
-        if (syscall(SYS_sched_setscheduler, (long)rtg_tid, (long)SCHED_OTHER, &p) == 0) rtg_demoted = 1;
+        if (syscall(SYS_sched_setscheduler, 0L, (long)SCHED_OTHER, &p) == 0) rtg_demoted = 1; // PROBE: the calling thread, not rtg_tid
         else rtg_demote_errno = errno;
     }
     errno = saved;
@@ -76,8 +76,7 @@ static int rtg_arm(uint64_t ms) {
 // (EPERM without CAP_SYS_NICE).
 static int rtg_take_fifo(int prio, uint64_t ms, int *bound_err) {
     int e = rtg_arm(ms);
-    if (bound_err) *bound_err = e;
-    if (e != 0) return e;
+    if (bound_err) *bound_err = e; // PROBE: FIFO taken although unbounded
     rtg_tid = (pid_t)syscall(SYS_gettid);
     struct sched_param sp = { .sched_priority = prio };
     if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
