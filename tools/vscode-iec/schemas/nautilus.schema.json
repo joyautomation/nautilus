@@ -174,7 +174,7 @@
         "object",
         "null"
       ],
-      "description": "A controller this project is DEPLOYED to instead of being run by the nautilus runtime. With a target set, `naut check` also runs that target's rules. Experimental: docs/design/logix-authoring.md.",
+      "description": "A controller this project is DEPLOYED to instead of being run by the nautilus runtime. With a target set, `naut check` also runs that target's rules. One kind at a time. Experimental: docs/design/logix-authoring.md, docs/design/siemens-ide.md.",
       "additionalProperties": false,
       "properties": {
         "logix": {
@@ -292,6 +292,9 @@
               }
             }
           }
+        },
+        "siemens": {
+          "$ref": "#/definitions/siemens-target"
         }
       }
     }
@@ -1285,6 +1288,249 @@
         "enable": {
           "type": "string",
           "description": "A BOOL that must be true, else Suppressed."
+        }
+      }
+    },
+    "siemens-target": {
+      "type": "object",
+      "description": "A Siemens S7-1500 CPU as the deploy target: the writer emits SCL, tiad (the TIA Portal Openness agent) compiles and downloads, and the PLC Web API carries live values. The tiad token is never here: NAUTILUS_TIAD_TOKEN or NAUTILUS_TIAD_TOKEN_FILE.",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "tiad URL. NAUTILUS_TIAD_URL overrides it."
+        },
+        "group": {
+          "type": "string",
+          "description": "Block group nautilus owns in the TIA project (default nautilus)."
+        },
+        "station": {
+          "$ref": "#/definitions/siemens-station"
+        },
+        "online": {
+          "$ref": "#/definitions/siemens-online"
+        }
+      }
+    },
+    "siemens-station": {
+      "type": "object",
+      "description": "The CPU's whole hardware config. One CPU has exactly one station spec: a download replaces the whole config.",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "$ref": "#/definitions/siemens-cpu"
+        },
+        "web-server": {
+          "$ref": "#/definitions/siemens-web-server"
+        },
+        "modules": {
+          "type": "array",
+          "description": "Local modules next to the CPU. Slot 1 is the CPU's own.",
+          "items": {
+            "$ref": "#/definitions/siemens-module"
+          }
+        },
+        "profinet": {
+          "$ref": "#/definitions/siemens-profinet"
+        }
+      }
+    },
+    "siemens-cpu": {
+      "type": "object",
+      "description": "The controller. In a repo, use a documentation address (192.0.2.x).",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Device name in the TIA project, e.g. PLC_1."
+        },
+        "order": {
+          "type": "string",
+          "description": "Order number, e.g. 6ES7 510-1DK03-0AB0."
+        },
+        "firmware": {
+          "type": "string",
+          "description": "Firmware, e.g. V3.1."
+        },
+        "address": {
+          "type": "string",
+          "description": "IPv4 address of the PROFINET interface."
+        },
+        "subnet-mask": {
+          "type": "string",
+          "description": "IPv4 subnet mask."
+        },
+        "router": {
+          "type": "string",
+          "description": "IPv4 router, if any."
+        },
+        "profinet-name": {
+          "type": "string",
+          "description": "The CPU's PROFINET name of station: lowercase, explicit."
+        }
+      }
+    },
+    "siemens-web-server": {
+      "type": "object",
+      "description": "Turns on the CPU's web server, which carries the Web API. Passwords are never here.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Activate the web server."
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/siemens-web-user"
+          }
+        }
+      }
+    },
+    "siemens-web-user": {
+      "type": "object",
+      "description": "A web server user.",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "User name."
+        },
+        "rights": {
+          "type": "array",
+          "description": "Rights.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "mode",
+              "diagnostics"
+            ]
+          }
+        }
+      }
+    },
+    "siemens-module": {
+      "type": "object",
+      "description": "A local module.",
+      "additionalProperties": false,
+      "properties": {
+        "slot": {
+          "type": "integer",
+          "description": "Slot, 2 and up."
+        },
+        "order": {
+          "type": "string",
+          "description": "Order number."
+        },
+        "firmware": {
+          "type": "string",
+          "description": "Firmware version."
+        },
+        "input-start": {
+          "type": "integer",
+          "description": "First %I byte; TIA assigns it when absent."
+        },
+        "output-start": {
+          "type": "integer",
+          "description": "First %Q byte; TIA assigns it when absent."
+        }
+      }
+    },
+    "siemens-profinet": {
+      "type": "object",
+      "description": "The CPU's PROFINET IO system.",
+      "additionalProperties": false,
+      "properties": {
+        "update-time": {
+          "type": "string",
+          "description": "Default update time for devices, at least 16ms."
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/siemens-device"
+          }
+        }
+      }
+    },
+    "siemens-device": {
+      "type": "object",
+      "description": "An IO device: explicit (gsdml, dap, name, address, modules) or a reference to a nautilus PROFINET device's manifest (profinet-manifest + address).",
+      "additionalProperties": false,
+      "properties": {
+        "profinet-manifest": {
+          "type": "string",
+          "description": "Path to a nautilus PROFINET device manifest; the deploy expands it."
+        },
+        "gsdml": {
+          "type": "string",
+          "description": "GSDML file name, installed through tiad."
+        },
+        "dap": {
+          "type": "string",
+          "description": "Device access point ID in the GSDML."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of station: lowercase, explicit."
+        },
+        "address": {
+          "type": "string",
+          "description": "IPv4 address."
+        },
+        "update-time": {
+          "type": "string",
+          "description": "Update time, at least 16ms."
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/siemens-device-module"
+          }
+        }
+      }
+    },
+    "siemens-device-module": {
+      "type": "object",
+      "description": "A GSDML module placed by its module ID.",
+      "additionalProperties": false,
+      "properties": {
+        "slot": {
+          "type": "integer",
+          "description": "Slot."
+        },
+        "subslot": {
+          "type": "integer",
+          "description": "Subslot, 1 and up."
+        },
+        "module": {
+          "type": "string",
+          "description": "GSDML module ID."
+        },
+        "input-start": {
+          "type": "integer",
+          "description": "First %I byte."
+        },
+        "output-start": {
+          "type": "integer",
+          "description": "First %Q byte."
+        }
+      }
+    },
+    "siemens-online": {
+      "type": "object",
+      "description": "The Web API connection for live values. The password is never here: NAUTILUS_SIEMENS_PASSWORD.",
+      "additionalProperties": false,
+      "properties": {
+        "user": {
+          "type": "string",
+          "description": "Web server user to log in as."
+        },
+        "cert-sha256": {
+          "type": "string",
+          "description": "SHA-256 of the CPU's certificate, to pin it (CPUs ship self-signed certificates)."
         }
       }
     }

@@ -478,6 +478,7 @@ Copied from [logix-authoring.md](logix-authoring.md) §5 and §7a.
 
 | Package | Role |
 |---|---|
+| `siemens/station` | The manifest form of a station spec and every station rule, stdlib only, so `internal/project` holds it without importing the agent client. `naut check` reports its problems; loading never fails on them |
 | `siemens/tiad` | Go client for tiad: the station spec and its validation, the download rule (`Resolve`), the sandbox rule (`CleanPath`). `tiadtest` is an in-memory fake agent that enforces §3.2–§3.5 and is the executable half of this contract |
 | `siemens/webapi` | Go Web API client |
 | `siemens/writer` | nautilus → SCL, tag tables, station spec |
