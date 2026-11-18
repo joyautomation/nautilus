@@ -70,6 +70,8 @@ type Profile struct {
 	dir string
 	// src is where it came from, for error messages.
 	src string
+	// file is a project profile's path; "" for a built-in one.
+	file string
 }
 
 // Doc is one public document a profile cites.

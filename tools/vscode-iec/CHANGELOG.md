@@ -13,6 +13,10 @@ of a ladder branch (its ✕) needs a naut newer than 0.21.0, whose
 
 ### Added
 
+- **Test files: `devices: true` and `plant:`.** The schema knows the keys a
+  test file uses to run against a project's virtual devices
+  (`virtual-devices.yaml`, naut newer than 0.21.0): `devices: true` at the
+  top, `plant:` in a step to make the process plug or trip.
 - **Mimic editor: `SetpointGroup` in the palette.** The kit's setpoint
   panel, with sample props; it reads live values.
 

@@ -212,3 +212,44 @@ func (d Instance) modbusEndpoint(p *Profile) (string, error) {
 	}
 	return net.JoinHostPort(host, port), nil
 }
+
+// Files are every project file the virtual devices are made of:
+// virtual-devices.yaml, the process model, and the project's own profiles
+// with their simulators. They are test fixtures, so `naut build` leaves
+// them out of a controller, as it leaves out the *_test.yaml suites.
+func (s *Set) Files() []string {
+	out := []string{filepath.Join(s.Dir, FileName)}
+	out = append(out, s.SourceFiles()...)
+	seen := map[string]bool{}
+	for _, d := range s.Devices {
+		if p := s.Profile(d.Name); p != nil && p.file != "" && !seen[p.file] {
+			seen[p.file] = true
+			out = append(out, p.file)
+		}
+	}
+	return out
+}
+
+// SourceFiles are the ST files the set compiles into its plant that live in
+// the project: the process model and any project-local simulator. They are
+// the plant's, not the controller's, so a check of the controller's
+// programs skips them and compiles the plant instead (NewPlant).
+func (s *Set) SourceFiles() []string {
+	var out []string
+	if s.Model != nil && s.Model.Program != "" {
+		out = append(out, filepath.Join(s.Dir, s.Model.Program))
+	}
+	seen := map[string]bool{}
+	for _, d := range s.Devices {
+		p := s.Profile(d.Name)
+		if p == nil || p.dir == "" || p.Simulator == nil {
+			continue
+		}
+		f := filepath.Join(p.dir, p.Simulator.Source)
+		if !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	return out
+}

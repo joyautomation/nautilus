@@ -33,7 +33,13 @@ type Suite struct {
 	Tolerance float64 `yaml:"tolerance"`
 	// Suspend names tasks frozen in every test in the file.
 	Suspend []string `yaml:"suspend"`
-	Tests   []*Test  `yaml:"tests"`
+	// Devices runs every test in the file against the project's virtual
+	// devices (virtual-devices.yaml) instead of the memory stub: the project's own
+	// drivers are answered by the devices in process, through their
+	// register maps and node ids, while the devices' simulators and the
+	// process model step on the same virtual clock. No socket either way.
+	Devices bool    `yaml:"devices"`
+	Tests   []*Test `yaml:"tests"`
 
 	Path string `yaml:"-"` // for diagnostics
 }
@@ -96,6 +102,12 @@ type Step struct {
 	// the logic. Unforce names the addresses to release, or is `all`.
 	Force   map[string]any `yaml:"force"`
 	Unforce *UnforceList   `yaml:"unforce"`
+
+	// Plant writes the virtual devices' plant tags (<Device>_<Point>, a
+	// simulator hook, the process model's) before the step's time is
+	// spent: how a sequence test makes the process do something the model
+	// would not on its own (a plug, a trip). Needs `devices: true`.
+	Plant map[string]any `yaml:"plant"`
 
 	Line int `yaml:"-"`
 	// AlarmsLine is the line of the `alarms:` key, where a failed alarm

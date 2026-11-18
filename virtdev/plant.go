@@ -17,6 +17,15 @@ import (
 // MainTask is the plant task that runs the simulators and owns the stores.
 const MainTask = "devices"
 
+// DtTag is the plant tag the main task's scan-to-scan seconds land in. A
+// simulator that declares VAR_INPUT Dt : REAL is handed it, so a ramp or a
+// timer it integrates by hand follows the clock it runs on, virtual or not.
+const DtTag = "Plant_Dt"
+
+// ModelDtTag is the process model task's scan-to-scan seconds, for a model
+// that integrates (a level from a flow).
+const ModelDtTag = "Model_Dt"
+
 // ModelTask is the plant task that runs the process model.
 const ModelTask = "model"
 
@@ -139,6 +148,8 @@ func NewPlant(s *Set) (*Plant, error) {
 	}
 	p.options.Program = main.String()
 	p.options.Scan = scan
+	p.options.DtTag = DtTag
+	p.options.Tags = append(p.options.Tags, runtime.State(DtTag, scan.Seconds(), runtime.Desc("seconds since the simulators' last scan")))
 	p.options.Libraries = libs
 	p.options.Driver = p.driver
 	if m := s.Model; m != nil && m.Program != "" {
@@ -151,8 +162,9 @@ func NewPlant(s *Set) (*Plant, error) {
 			ms = 100 * time.Millisecond
 		}
 		p.options.Tasks = append(p.options.Tasks, runtime.Task{
-			Name: ModelTask, Program: string(raw), Libraries: libs, Scan: ms,
+			Name: ModelTask, Program: string(raw), Libraries: libs, Scan: ms, DtTag: ModelDtTag,
 		})
+		p.options.Tags = append(p.options.Tags, runtime.State(ModelDtTag, ms.Seconds(), runtime.Desc("seconds since the process model's last scan")))
 	}
 	return p, nil
 }
@@ -193,6 +205,10 @@ func wireSimulator(d Instance, prof *Profile, src string, decls, body *strings.B
 			continue
 		}
 		for _, v := range vb.Variables {
+			if vb.Kind == "VAR_INPUT" && strings.EqualFold(v.Name, "Dt") {
+				args = append(args, fmt.Sprintf("%s := %s", v.Name, DtTag))
+				continue
+			}
 			tag := d.Name + "_" + v.Name
 			pt, isPoint := prof.Point(v.Name)
 			if isPoint {
