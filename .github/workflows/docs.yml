@@ -116,19 +116,6 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         with:
           go-version-file: go.mod
-          cache: false
-      # The Go build cache ci.yml's go job keeps (main saves it once a day;
-      # it holds the wasm and naut builds this needs). Read only, here.
-      - uses: actions/cache/restore@v4
-        if: steps.gate.outputs.go == 'true'
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-
-          restore-keys: |
-            go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-
-            go-test-${{ runner.os }}-
       - name: Build the playground
         if: steps.gate.outputs.go == 'true'
         run: ./playground/scripts/build.sh
