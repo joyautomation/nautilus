@@ -31,10 +31,18 @@ server:
   # absent. Serves it at "/"; the built-in dashboard moves to "/_nautilus/".
   hmi: hmi/build
 
-driver:
-  type: plcnext
-  manifest: plcnext_manifest.yaml
-  scan-rate: 50ms
+drivers:
+  - type: plcnext
+    manifest: plcnext_manifest.yaml
+    scan-rate: 50ms
+  # The runtime's own health as tags (tags/health.yaml), so an alarm sees
+  # the bench task lose its priority or fault (#850).
+  - name: health
+    type: runtime
+    tags:
+      - { name: Bench__Demoted,  task: main, status: demoted }
+      - { name: Bench__Faulting, task: main, status: faulting }
+      - { name: Bench__Late,     task: main, status: late }
 
 tasks:
   - program: bench.st
@@ -49,4 +57,10 @@ tasks:
 tag-files:
   - tags/plcnext.yaml   # the I/O, generated from plcnext_manifest.yaml
   - tags/bench.yaml     # the program's own: heartbeat, outage hold
+  - tags/health.yaml    # the runtime's own health (the health driver)
+
+alarms:
+  defs:
+    - { id: BenchDemoted,  tag: Bench__Demoted,  name: "Bench task lost its real-time priority (until restart)", priority: high, class: equipment }
+    - { id: BenchFaulting, tag: Bench__Faulting, name: "Bench task logic fault", priority: high, on-delay: 1s, class: equipment }
 

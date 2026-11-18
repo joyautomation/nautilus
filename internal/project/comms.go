@@ -43,6 +43,8 @@ import (
 //	                          there is no link to be down
 //	memory           local    faults the scan (unchanged): a loopback
 //	                          has no source to wait for
+//	runtime          local    never undelivered: every status reads
+//	                          false / 0 until the first poll
 //
 // optommp can reach a chassis over the LAN as well as from the processor
 // itself, but its job is the controller's own I/O modules and it is

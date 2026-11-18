@@ -198,7 +198,55 @@ lateness. To see a demotion:
 - the task's `sched` in `GET /api/state` (`scan.sched` for the main
   task, `scan.tasks[].sched` for the others) shows `demoted: true` and the
   reason, beside the `guard` it ran under;
-- the log has an error.
+- the log has an error;
+- a `type: runtime` status driver, if the project has one, sets a tag an
+  alarm can watch (below).
+
+**Alarm on the runtime's own health.** A `type: runtime` driver delivers
+a task's health as ordinary input tags, so an alarm, the historian or
+Sparkplug sees it:
+
+```yaml
+drivers:
+  - name: plc
+    type: plcnext
+    manifest: plcnext_manifest.yaml
+  - name: health
+    type: runtime
+    scan-rate: 1s            # how often it reads the runtime's stats (default 1s)
+    tags:
+      - {name: Main__Demoted,     task: main, status: demoted}      # BOOL: priority withdrawn, until restart
+      - {name: Main__Faulting,    task: main, status: faulting}     # BOOL: the last scan raised a logic error
+      - {name: Main__LogicErrors, task: main, status: logic-errors} # UDINT, since start
+      - {name: Fast__Late,        task: fast, status: late}         # UDINT: scans that woke late
+      - {name: Fast__Overruns,    task: fast, status: overruns}     # UDINT: scans longer than the period
+```
+
+Declare each tag `role: input` with that type. `task:` is `main` or a
+task's name (an unnamed task's is its program's file name without the
+extension); `naut check` refuses one the project does not have. Every
+status reads false / 0 until the first poll, so a scan never waits on it.
+Alone, as the project's only `driver:`, it keeps the memory loopback a
+project with no driver has, so a simulation can use it too. `tags:` on
+any other driver type is refused.
+
+Things to know:
+
+- **Sparkplug.** In a `drivers:` list it is a Sparkplug device like any
+  other driver (named by its `name:`), its statuses its metrics. It has
+  no link of its own to lose, so it is born with the node and never sends
+  DDEATH.
+- **A failing driver beside it freezes it.** The runtime reads a
+  `drivers:` list as one read, and a driver whose read returns an error
+  fails the whole read: the runtime keeps last-known values, these
+  included, until that driver reads again. Most drivers report a lost link
+  as quality and keep reading, so this is the exception, but while it
+  lasts these tags do not move.
+- **Redundancy.** A standby does not scan, so these tags move only on the
+  controller that leads: each reports its own runtime while it leads. A
+  standby's own health is in its dashboard and `/api/stats`, not in tags.
+  As with every input on a standby, what it serves (the OPC UA server, the
+  live stream) is the last value it read, marked Stale (#924).
 
 Loosen the bounds per task where a task legitimately runs long now and
 then:

@@ -6,8 +6,10 @@
 package opcua
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"reflect"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
+	"github.com/gopcua/opcua/uasc"
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -718,4 +721,100 @@ func TestStandbyFirstPushCommands(t *testing.T) {
 	open.Store(true)
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
 	waitFor(t, "the takeover push commands", func() bool { return ts.get(t, "Setpoint") == 9.0 })
+}
+
+// A demotion in the middle of a batch stops the rest of it (G1c, #861):
+// the gate is looked at before every chunk, not once per batch. Here the
+// server closes the gate while it handles the first chunk (one write per
+// chunk), so no second chunk may arrive; the dropped commands are
+// forgotten and asked for again, as when the whole batch is dropped.
+func TestWriteGateClosingMidBatchStopsTheRest(t *testing.T) {
+	var open atomic.Bool
+	open.Store(true)
+	var writeCalls atomic.Int64
+	ts := startServerHooked(t, freePort(t), "urn:nautilus:test", 12.5, func(s *server.Server) {
+		s.RegisterHandler(id.WriteRequest_Encoding_DefaultBinary,
+			func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+				req := r.(*ua.WriteRequest)
+				writeCalls.Add(1)
+				open.Store(false) // demoted while this chunk is on the wire
+				res := make([]ua.StatusCode, len(req.NodesToWrite))
+				return &ua.WriteResponse{
+					ResponseHeader: &ua.ResponseHeader{ // as gopcua's server fills one in
+						Timestamp:          time.Now(),
+						RequestHandle:      req.RequestHeader.RequestHandle,
+						ServiceDiagnostics: &ua.DiagnosticInfo{},
+						StringTable:        []string{},
+						AdditionalHeader:   ua.NewExtensionObject(nil),
+					},
+					Results:         res,
+					DiagnosticInfos: []*ua.DiagnosticInfo{},
+				}, nil
+			})
+	})
+	m := manifest(2)
+	for _, n := range []string{"SetA", "SetB"} {
+		m.Tags = append(m.Tags, TagBinding{Name: n, NodeID: "ns=2;s=Setpoint", Namespace: "urn:nautilus:test", Type: "Double", Writable: true})
+	}
+	logs := &lockedBuffer{}
+	d := startDriver(t, ts.url, m, WithMaxNodes(1),
+		WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	d.SetWriteGate(open.Load)
+	waitFor(t, "online", d.Online)
+
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0, "SetA": 0.0, "SetB": 0.0}) // baseline
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 1.0, "SetA": 2.0, "SetB": 3.0})
+	waitFor(t, "the first chunk", func() bool { return writeCalls.Load() >= 1 })
+	time.Sleep(500 * time.Millisecond) // time for further chunks, were they sent
+	if n := writeCalls.Load(); n != 1 {
+		t.Errorf("%d write requests reached the server; the gate closed during the first, so only it may", n)
+	}
+	if h := d.Health(); h.Writes != 1 {
+		t.Errorf("health counts %d writes, want 1", h.Writes)
+	}
+	if !d.OutputsWanted() {
+		t.Error("the commands dropped mid-batch must be asked for again")
+	}
+	// The log says the batch was cut short, how much went out, and which
+	// tags did not, so an operator can tell what reached the PLC. Map
+	// order decides which tag went first; the other two were dropped.
+	var line string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, "mid-batch") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no mid-batch log line; got:\n%s", logs.String())
+	}
+	if !strings.Contains(line, "sent=1") || !strings.Contains(line, "dropped=2") {
+		t.Errorf("log line should give sent=1 dropped=2: %s", line)
+	}
+	named := 0
+	for _, n := range []string{"Setpoint", "SetA", "SetB"} {
+		if strings.Contains(line, n) {
+			named++
+		}
+	}
+	if named != 2 {
+		t.Errorf("log line names %d of the tags, want the 2 dropped: %s", named, line)
+	}
+}
+
+// lockedBuffer is a log sink the driver's goroutines and the test can share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

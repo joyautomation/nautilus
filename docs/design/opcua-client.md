@@ -2,10 +2,10 @@
 
 Status: **built** — `opcua/` (manifest, client, driver, status, browse,
 `codegen/`), `naut opcua import|browse|tags`, project wiring and schema.
-Verified against gopcua's in-process server, and in CI against open62541
-and Eclipse Milo in containers (§6, the server matrix of #704). Not yet run
-against a production server; the first intended target is an Ignition
-gateway's OPC UA server.
+Verified against gopcua's in-process server; in CI against open62541,
+Eclipse Milo and the virtual IO-Link masters; and in a private lab against
+Ignition 8.3 and CODESYS Control Win V3 (§6, the server matrix of #704).
+Not yet run against Ignition 8.1, Kepware or a PLC's embedded server.
 
 The driver type is `opcua-client`, not `opcua`, so it cannot be mistaken
 for the `opcua:` server section; the CLI stays `naut opcua`, a tool
@@ -224,8 +224,29 @@ same port. They are reached anonymously on None, as a site reaches a
 master in its default setup. A master with nothing writable runs the read
 scenarios only.
 
-Still to run: the UA-.NETStandard reference server, Prosys, a CODESYS
-Control runtime and Ignition 8.1.
+Lab profiles (`lab: true`) are servers that do not fit in a CI container:
+Ignition 8.3 and CODESYS Control Win V3 (the soft PLC of a Windows VM with
+the CODESYS IDE). The lab and the test file that adds their profiles are
+private: the lab's tooling relies on vendor internals that stay out of a
+public repository. That file sets `lab: true`, a `start` func returning a
+`serverHandle` (restart, freeze, trust), `credentials`, and where needed
+`nsURIPrefix` (a per-install namespace URI) and `writes` (a value the
+server cannot hold), and is dropped into a copy of this package to run;
+this file carries only those hooks. CODESYS keeps its stock security;
+Ignition keeps its secure policies and user source, with None and
+anonymous read added. The driver signs in as a user over Basic256Sha256 /
+SignAndEncrypt. The guide's Lab results table is the public record of
+each run. `NAUTILUS_OPCUA_MATRIX=all` is what CI runs; `lab` selects the
+lab set.
+
+The lab found a client bug: every generated certificate had the subject
+`CN=nautilus` and no Authority Key Identifier, and of several such
+certificates trusted by the CODESYS runtime only one was ever accepted.
+Each new certificate now has its own subject and an AKI naming its own key
+(`cert.go`, #773); existing ones are kept.
+
+Still to run: the UA-.NETStandard reference server, Prosys and Ignition
+8.1.
 
 ## 7. Manifest, schema, project wiring
 

@@ -4,11 +4,12 @@ description: Poll an OPC UA server (an Ignition gateway, a PLC's embedded server
 ---
 
 :::caution[Preview]
-Tested against gopcua's in-process server, open62541 and Eclipse Milo
-(see [Servers it has been run against](#servers-it-has-been-run-against)),
-each over `Basic256Sha256 / SignAndEncrypt`. It has not yet been run against
-Ignition, Kepware or a PLC's embedded server. Try it against your server
-before you depend on it.
+Tested against gopcua's in-process server, open62541, Eclipse Milo,
+Ignition 8.3 and CODESYS Control Win V3 (see
+[Servers it has been run against](#servers-it-has-been-run-against)), each
+over `Basic256Sha256 / SignAndEncrypt`, and against virtual IO-Link
+masters. It has not yet been run against Ignition 8.1, Kepware or a PLC's
+own embedded server. Try it against your server before you depend on it.
 :::
 
 A `driver: {type: opcua-client}` section makes nautilus an OPC UA **client**: it
@@ -166,8 +167,10 @@ an unchanged value is not a command; a command made while the session is
 down goes out on reconnect (the last value per tag); a write the server
 refuses on a healthy session is dropped and reported, not retried forever.
 Under `redundancy:` only the leader writes, and leadership is checked
-again when queued commands go out: a replica that lost it during an outage
-drops what it queued. When the write gate reopens, every output goes out
+again when queued commands go out, and before each chunk of a large batch:
+a replica that lost it during an outage drops what it queued, and one
+demoted while a batch is going out sends no more of it, and logs how many
+writes went out and the names of the tags it dropped. When the write gate reopens, every output goes out
 once more with the program's value, changed or not, since another
 replica may have written the nodes in between, and a replica that started
 as a standby has no start-up baseline, so its first push as leader
@@ -225,17 +228,22 @@ address you can reach.
 
 ## Servers it has been run against
 
-Every server below runs in CI (`opcua/matrix_test.go`) through the same
-scenarios (the virtual IO-Link masters of `naut devices`, nautilus's own
-server at the node ids the real masters use, through the read ones where a
-master has nothing writable): import of a folder of one variable per scalar type (twice,
-byte-identical), typed reads of every type, a value that changes on its
-own, an unknown node read Bad while the rest stay Good, a write of every
+Every server below runs through the same scenarios (`opcua/matrix_test.go`).
+open62541, Milo and the virtual IO-Link masters of `naut devices`
+(nautilus's own server at the node ids the real masters use, through the
+read scenarios where a master has nothing writable) run in every CI build.
+Ignition and CODESYS run in a lab of ours, with the same test; their
+results are in [Lab results](#lab-results). The scenarios are: import of a folder of one variable per scalar type (twice,
+byte-identical), typed reads of every type the server is tested with
+(the matrix's 13 scalar types; the IO-Link masters only the types their
+process data has, and Ignition seven, as [Lab results](#lab-results)
+says), a value that
+changes on its own, an unknown node read Bad while the rest stay Good, a write of every
 type read back, a write to a read-only node refused without dropping the
 session, a binding whose namespace index is wrong read by its URI, and two
 outages twice each: a restart (the server closes the connection) and a
-blackhole (the container is paused, so the link goes silent as it does
-when a device loses power). Through both outages `__Online` falls, the
+blackhole (the server is frozen, so the link goes silent as it does when
+a device loses power). Through both outages `__Online` falls, the
 values hold as Stale, and the session comes back on its own with no
 growth in goroutines.
 
@@ -244,19 +252,79 @@ growth in goroutines.
 | open62541 v1.4.22 (a fixture server built against the release) | Basic256Sha256 / SignAndEncrypt | Namespace 1 is the server's own application URI; a server's variables start at namespace 2. A write to a read-only node is refused with `Bad_NotWritable`. |
 | Eclipse Milo 1.1.1 (its demo server 1.0.3) | Basic256Sha256 / SignAndEncrypt, once trusted | Refuses an untrusted client certificate by closing the connection and files it under `security/rejected`; moving it to `security/pki/trusted/certs` lets the next retry in, with no restart. Namespace 1's URI carries a per-install UUID, so a reinstalled server renumbers it. A write to a read-only node is refused with `Bad_UserAccessDenied`, not `Bad_NotWritable`. It advertises its own idea of its address (port 4840 inside the container); the driver dials the mapped port it was given. The demo address space includes a 25,000-node folder, so import with `--root`. |
 | Virtual IO-Link masters: Pepperl+Fuchs ICE3, SICK SIG300, ifm AL1590 | None, anonymous (a master's default setup) | Node ids as the real masters serve them: strings with spaces (`ns=1;s=IOLM/Port 1/Attached Device/PDO Valid`), numeric ids four to a port (SICK, `ns=3;i=8012`), and the ifm's process data as hex text under the master's configured name. Only the P+F's PDO nodes take writes; the SICK and ifm run the read scenarios. A write to a read-only node is refused with `Bad_NotWritable`. |
+| Ignition 8.3.10 (trial), its Generic Simulator device | Basic256Sha256 / SignAndEncrypt as a user from its `opcua-module` user source, once trusted | Out of the box the OPC UA server binds to `localhost` only, offers Basic256Sha256 / SignAndEncrypt alone and refuses anonymous sessions. Anonymous may browse and read once allowed; writes need a user. Refuses an untrusted client certificate by closing the connection and quarantines it; trusting it lets the next retry in, with no restart. Closes new connections from an address that opens them faster than about one a second (a bare EOF, often on GetEndpoints); the driver's retry ladder starts at 1 s and stays clear of it. Namespace 1's URI carries a per-install UUID. A write to a read-only node is refused with `Bad_UserAccessDenied`. A restart takes about 20 s to come back. Seven types: those the Generic Simulator has writable. |
+| CODESYS Control Win V3 x64 3.5.22 (demo mode), a GVL of every scalar type | Basic256Sha256 / SignAndEncrypt as a runtime user, once trusted | See [Reading a CODESYS runtime](#reading-a-codesys-runtime). With user management on (the default), anonymous sessions are refused outright. The OPC UA server offers only None until it has a certificate of its own. Quarantines an untrusted client certificate (bare EOF); one moved to its trusted folder took effect after a runtime restart. Of several trusted client certificates sharing one subject it accepted only one, which is why each nautilus certificate now has its own subject. A `STRING` written over OPC UA takes ASCII only: anything else is refused with `Bad_OutOfRange` (use `WSTRING`). `LDT` is DateTime. A write to a read-only node is refused with `Bad_NotWritable`. |
 
 Both read modes run every scenario. How quickly the driver notices: a
 restart closes the connection, so `__Online` falls within a scan when
 polling and within a second when subscribed; a blackhole is silent, so it
 falls after one request timeout (5 s by default), plus up to a second when
 subscribed. Once the server answers again the driver is back within one
-retry step of the backoff ladder. Both servers granted a 200 ms publishing
-interval as asked and support `SetPublishingMode`, which the driver uses
-to check a subscribed session. A value that sits still for several
-keep-alives and then changes once arrives as a notification on both.
+retry step of the backoff ladder. Subscribed, every server above supported
+`SetPublishingMode`, which the driver uses to check a subscribed session
+(checked); the publishing interval each one revised the requested 200 ms
+to is logged, not checked. The quiet check (a value that sits still for
+five seconds, then changes once, must arrive as a notification with no
+read) runs on every server with a writable Int32 or UInt32 node, so not
+on the SICK and ifm masters, which have nothing writable.
+
+### Lab results
+
+Ignition and CODESYS run in a lab of ours rather than in CI, with the same
+`opcua/matrix_test.go` scenarios. Run 2026-11-18 on nautilus commit
+`73693ecf` (the first commit of PR #844; its later commits change only
+this guide), each check in poll and subscribe mode
+(quiet is subscribe only). The hooks these servers use are in
+`opcua/matrix_test.go`, but the profiles that fill them (addresses, users,
+certificates, the lab's start scripts) are a private lab configuration
+not in this repository: `NAUTILUS_OPCUA_MATRIX=lab` on its own fails with
+"names no server", so the table cannot be reproduced from the repository
+alone.
+
+| Server | Session | Types | import | reads | writes | remap | quiet | restart | blackhole |
+|---|---|---|---|---|---|---|---|---|---|
+| Ignition 8.3.10 (trial), Generic Simulator device | Basic256Sha256 / SignAndEncrypt, user | 7 of 13: Boolean, Int16, Int32, Int64, Float, Double, String (the simulator's writable ones) | pass | pass / pass | pass / pass | pass / pass | pass | pass / pass | pass / pass |
+| CODESYS Control Win V3 x64 3.5.22.40 (demo mode) | Basic256Sha256 / SignAndEncrypt, runtime user | all 13 of the matrix | pass | pass / pass | pass / pass | pass / pass | pass | pass / pass | pass / pass |
 
 ## Reading an Ignition gateway
 
-Enable the OPC UA server (*Config > OPC UA > Server Settings*), bind it to
-an address the controller can reach, and turn on **Expose Tag Providers**.
-Every provider then browses under `Devices`. Not yet run against a gateway.
+In *Connections > OPC > OPC UA Server Settings* (8.3), change three
+things:
+
+- **Bind Addresses**: set an address the controller can reach. The
+  default is `localhost`.
+- **Expose Tag Providers**: turn it on to read tags as well as devices.
+- **User**: give the driver a user from the user source the server
+  authenticates against (`opcua-module` by default) and set `username:`.
+  Anonymous access is off by default; in the lab, once allowed, it could
+  browse and read but writes needed a user.
+
+Devices browse under namespace 1, for example
+`ns=1;s=[Sim]_Meta:Writeable/WriteableInteger1`. Exposed tags browse
+under `urn:inductiveautomation:ignition:opcua:tags`. The first secured
+connect is refused until the client certificate is trusted under
+*Connections > OPC > Security*, on the *Server* tab's quarantined list.
+Run in the lab against 8.3 (see [Lab results](#lab-results)); 8.1 is not
+run yet.
+
+## Reading a CODESYS runtime
+
+The runtime serves only the variables its application's **Symbol
+Configuration** exports, with *Support OPC UA features* on. A GVL that
+nothing references is left out of the build: give it
+`{attribute 'linkalways'}`. Variables browse under
+`DeviceSet/<device>/Resources/Application/GlobalVars`, with node ids such as
+`ns=4;s=|var|CODESYS Control Win V3 x64.Application.GVL_Scalar.diInt32` in
+namespace `CODESYSSPV3/3S/IecVarAccess`.
+
+With the runtime's user management on (the default), anonymous OPC UA
+sessions are refused. Sign in with a runtime user: `username:` with
+`security-mode: SignAndEncrypt`. The OPC UA server offers only None until
+it has a certificate. Make one in the *Security Screen*, or with
+`cert-genselfsigned <n>` in the PLC shell, where `n` is `CmpOPCUAServer`'s
+number in `cert-getapplist`. Then restart the runtime. The runtime files
+the driver's certificate in `.pki/quarantine` on its first connect. Trust it in
+the Security Screen, or move it to `.pki/trusted/cert` and restart the
+runtime (a certificate moved there took effect only after a restart). Run in the lab against
+CODESYS Control Win V3 x64 3.5.22.
+

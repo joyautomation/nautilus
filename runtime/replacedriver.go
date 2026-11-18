@@ -56,6 +56,7 @@ func (r *Runtime) ReplaceDriver(ctx context.Context, name string, d nio.Driver) 
 	if err != nil {
 		return nil, err
 	}
+	r.bindStatsReaders(d)  // a status driver swapped in reads this runtime too (#850)
 	r.outSent.Store(false) // the next scan hands the new driver every output
 	return prev, nil
 }

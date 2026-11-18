@@ -92,8 +92,15 @@ func (r *Runtime) LoadRetained() {
 // before any logic runs. With no coordinator and no retain store it is a
 // single nil check — existing compositions pay nothing.
 func (r *Runtime) gate() bool {
+	ok, _ := r.gateEdge()
+	return ok
+}
+
+// gateEdge is gate, plus the count of gate edges (see unfresh) as of this
+// answer: the main scan sets fresh only if no edge came after its own gate.
+func (r *Runtime) gateEdge() (bool, uint64) {
 	if r.coord == nil && r.retainStore == nil {
-		return true
+		return true, 0
 	}
 	lead := r.coord == nil || r.coord.IsLeader()
 	r.leadMu.Lock()
@@ -107,7 +114,8 @@ func (r *Runtime) gate() bool {
 	if !lead {
 		r.readySince = time.Time{}
 	} else if (!r.leading || termed != nil && termed.Term() != r.ledTerm) && !r.inputsReady() {
-		return false
+		r.unfresh() // nothing scans: the tags are frozen
+		return false, r.edges
 	}
 	switch {
 	case lead && !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm:
@@ -118,11 +126,15 @@ func (r *Runtime) gate() bool {
 		// The drivers get the whole output set on this scan, as after any
 		// gap in what was sent.
 		r.outSent.Store(false)
+		// No unfresh: the step-down before this resume cleared fresh and
+		// counted an edge, so a main read that began under the leadership
+		// before it cannot set fresh either.
 		r.leading = true
 	case lead && (!r.leading || termed != nil && termed.Term() != r.ledTerm):
 		// Leadership from standby, or a new term this replica never saw
 		// the gate close for (lost and regained between two scans): another
 		// replica may have led meanwhile.
+		r.unfresh() // until this leadership's first read
 		r.takeover()
 		r.leading = true
 		if termed != nil {
@@ -134,8 +146,17 @@ func (r *Runtime) gate() bool {
 			r.dropForces("lost leadership")
 		}
 		r.leading = false
+		r.unfresh()
 	}
-	return lead
+	return lead, r.edges
+}
+
+// unfresh marks the scan-fed tags not current and counts a gate edge, so a
+// main scan whose read began before it cannot mark them current when the
+// read lands (see Scan). Called under leadMu.
+func (r *Runtime) unfresh() {
+	r.fresh.Store(false)
+	r.edges++
 }
 
 // DefaultTakeoverInputsWait is how long a takeover waits for live inputs
@@ -203,6 +224,9 @@ func (r *Runtime) takeover() {
 	// would answer the POST with 200 and then quietly undo it.
 	if r.coord != nil {
 		r.dropForces("takeover")
+		// READ/WRITE requests the last leadership queued are not this
+		// one's to send.
+		r.tags.comm.newLeadership()
 	}
 	// LoadRetained already restored the store before the API answered
 	// (standalone only): loading it again here would undo a write made

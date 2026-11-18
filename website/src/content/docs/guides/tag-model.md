@@ -187,6 +187,7 @@ last (or initial) value, and the logic checks the connection's fault bit.
 | `profinet-device` | reads its `init:`, or the zero of its type | `<driver name>__Online` (`profinet_device__Online`) |
 | `plcnext`, `optommp` (local I/O) | faults the scan, as before | `<id>__Online` |
 | `replay`, `memory` | faults the scan, as before | — |
+| `runtime` (the runtime's own health) | never undelivered: false / 0 until the first poll | — |
 
 The decision is per tag, by the driver that delivers it, so a `drivers:`
 list that mixes a Modbus skid with a controller's own I/O seeds only the
@@ -717,7 +718,8 @@ never answered is not a property of the number — it comes from the driver,
 and it travels beside the tags rather than inside them.
 
 A driver may implement `io.QualityReporter`; the runtime adds its own
-derivation (a driver-bound input whose last read failed is stale); and the
+derivation (a driver-bound input whose last read failed is stale, and on a
+redundant pair's standby everything a scan refreshes is stale); and the
 server puts the non-`good` entries on `/api/state` and every stream frame
 as a `quality` map. An absent name means `good`, so a healthy plant pays
 nothing for it. The full model — the four values, where each comes from,

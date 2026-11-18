@@ -198,6 +198,16 @@ shim's watchdog dropped the frame) the mirrored outputs stay off until
 `lib/io_hold.st`. That is tested in virtual time only, not yet on the
 controller.
 
+The runtime watches itself too: a `type: runtime` driver named `health`
+delivers the bench task's own health as tags (`tags/health.yaml`):
+`Bench__Demoted` (its real-time priority withdrawn, until a restart),
+`Bench__Faulting` (its last scan raised a logic error) and `Bench__Late`
+(late scans since start). Two alarms watch the BOOLs, in both builds; in
+`sim.yaml` the same driver stands alone and keeps the memory loopback. A
+demotion is not tried on the controller: it needs real-time load, and
+real-time load on a bench controller needs its own safeguards (see #836),
+so it isn't run here.
+
 ## The 3D screen
 
 `hmi/` is a small SvelteKit page that draws the station as it stands on

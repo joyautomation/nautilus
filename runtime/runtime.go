@@ -157,6 +157,9 @@ type TaskStats struct {
 	LastMs      float64 `json:"lastMs"`
 	LogicErrors uint64  `json:"logicErrors"`
 	LastError   string  `json:"lastError,omitempty"`
+	// Faulting: the task's last scan raised a logic error (a fault episode
+	// is open; it closes on the first clean scan).
+	Faulting bool `json:"faulting,omitempty"`
 	// Lateness is this task's wake-up timing — see Lateness.
 	Lateness Lateness `json:"lateness"`
 	// Sched is what was asked of the OS scheduler for this task's thread
@@ -278,6 +281,20 @@ type Runtime struct {
 	// takeover sequence when this replica becomes leader. See retain.go.
 	leadMu  sync.Mutex
 	leading bool
+	// fresh is whether this replica's scan-fed tags are current (see
+	// Runtime.standby): set by the main scan once its input read has come
+	// back, cleared by gate on every leadership edge and every scan it
+	// refuses. Not a mirror of leading: a takeover sets leading before
+	// its first read, a held takeover on a new term leaves leading set,
+	// and an additional task's gate can take over before the main task has
+	// read anything. Atomic, so Quality never waits on leadMu, which a
+	// takeover holds through a retain-store load.
+	fresh atomic.Bool
+	// edges counts gate edges (unfresh), under leadMu: a main scan sets
+	// fresh only if the count is unchanged since its own gate passed, so an
+	// additional task's gate that steps down or holds a takeover while the
+	// main read is in flight is not overwritten when that read lands.
+	edges uint64
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
 	// readyWait how long a takeover waits for it, and readySince when the
 	// pending takeover began waiting (zero when none is). See inputsReady.
@@ -407,6 +424,9 @@ type ScanStats struct {
 	IOErrors    uint64 `json:"ioErrors"`
 	LogicErrors uint64 `json:"logicErrors"`
 	LastError   string `json:"lastError,omitempty"` // message of the last main-task fault
+	// Faulting: the main task's last scan raised a LOGIC error (its program
+	// failed; an I/O fault is IOHealthy). It closes on the first clean scan.
+	Faulting bool `json:"faulting,omitempty"`
 	// DivZero counts divisions (and MODs) by zero evaluated by any task
 	// since start. The VM yields 0 and the scan keeps running, so this is
 	// the only trace a bad divisor leaves — the Logix S:V of nautilus.
@@ -523,6 +543,13 @@ func New(o Options) (*Runtime, error) {
 	}
 	if len(o.Channels) > 0 {
 		tags.comm = newCommHub(o.Channels)
+		if o.Coordinator != nil {
+			var term func() uint64
+			if t, ok := o.Coordinator.(Termed); ok {
+				term = t.Term
+			}
+			tags.comm.setGate(o.Coordinator.IsLeader, term)
+		}
 	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
 	// Set before any scan or goroutine can observe it, so the store's NowMs
@@ -1054,6 +1081,8 @@ func (r *Runtime) Run(ctx context.Context) {
 		saved = make(chan []byte, 1)
 		go func() { saved <- r.retainSaver(ctx) }()
 	}
+	// Before the first scan: a status driver reads this runtime's health.
+	r.bindStatsReaders(r.driver)
 	// Liveness watches the loops from here on; see liveness.go.
 	r.live.state.Store(runRunning)
 	defer r.live.state.Store(runStopped)
@@ -1331,6 +1360,7 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 		tr.stats.LastError = msg
 	}
 	ev := tr.fault.observe(msg, t1)
+	tr.stats.Faulting = tr.fault.faulting
 	tr.mu.Unlock()
 	// After the unlock: Stats() takes tr.mu, and a log sink may be slow;
 	// the demotion's callback takes tr.mu too.
@@ -1350,7 +1380,8 @@ func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
 // scanAt is Scan with the slot the scan was due at (zero when the caller
 // is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanAt(due time.Time) {
-	if !r.gate() {
+	ok, edge := r.gateEdge()
+	if !ok {
 		return
 	}
 	t0 := time.Now()
@@ -1394,6 +1425,20 @@ func (r *Runtime) scanAt(due time.Time) {
 			// write at all — see Tags' "Write generations".
 			r.tags.setMany(r.inputs, in)
 		}
+	}
+	// The read is back (or there is no driver to read): from here on the
+	// tags are this leadership's, and quality is the drivers' again, unless
+	// a gate edge (another task's gate) came after this scan's own gate.
+	// One atomic load per scan on a steady leader; leadMu only while fresh
+	// is false. A failed read sets it too: the inputs are Stale through
+	// readOK, and what the program writes this scan is current, as on a
+	// standalone controller.
+	if r.coord != nil && !r.fresh.Load() {
+		r.leadMu.Lock()
+		if r.edges == edge {
+			r.fresh.Store(true)
+		}
+		r.leadMu.Unlock()
 	}
 	if r.dtTag != "" {
 		r.tags.SetReal(r.dtTag, dt)
@@ -1484,6 +1529,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 	r.recordScanLocked(t0, t1, t2, t3, periodS, first, ioMsg, logicMsg, lateUs)
 	ioEv := r.ioFault.observe(ioMsg, t3)
 	logicEv := r.logicFault.observe(logicMsg, t3)
+	r.stats.Faulting = r.logicFault.faulting
 	r.mu.Unlock()
 	r.logFault(MainTaskName, "I/O", ioEv)
 	r.logFault(MainTaskName, "logic", logicEv)

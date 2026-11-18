@@ -34,7 +34,9 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 		want string
 	}{
 		{"no token on loopback", []string{wd, "TIAD_ADDR=http://127.0.0.1:0"}, "token is required"},
-		{"no token off loopback", []string{wd, "TIAD_ADDR=http://0.0.0.0:0"}, "token is required"},
+		{"no token off loopback", []string{wd, "TIAD_ADDR=http://192.0.2.1:0"}, "token is required"},
+		{"every interface", []string{wd, tok, "TIAD_ADDR=http://0.0.0.0:0"}, "one IPv4 address"},
+		{"a name", []string{wd, tok, "TIAD_ADDR=http://localhost:0"}, "one IPv4 address"},
 		{"a blank token", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TOKEN=  "}, "token is required"},
 		{"an empty token file", []string{wd, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_TOKEN_FILE=" + emptyFile(t)}, "is empty"},
 		{"any address", []string{wd, tok, "TIAD_ADDR=http://*:0"}, "TIAD_ADDR"},
@@ -53,6 +55,8 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 		{"idle not a duration", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_SESSION_IDLE=60"}, "TIAD_SESSION_IDLE"},
 		{"idle too short", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_SESSION_IDLE=1us"}, "TIAD_SESSION_IDLE"},
 		{"file cap zero", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=0"}, "TIAD_MAX_FILE_BYTES"},
+		{"no-TIA switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_NO_TIA=true"}, "TIAD_NO_TIA must be 1 or unset"},
+		{"stdin switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_EXIT_ON_STDIN=yes"}, "TIAD_EXIT_ON_STDIN must be 1 or unset"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

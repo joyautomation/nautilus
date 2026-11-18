@@ -330,6 +330,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
+      # The Windows-only files (the real tiad host on a TIA Portal machine,
+      # tiadtest/real_windows_test.go, #929) never compile on this runner,
+      # nor in go-windows (it tests only file semantics): vet type-checks
+      # them, tests included, for windows.
+      - name: vet the Windows-only tiad files (GOOS=windows)
+        run: GOOS=windows go vet ./siemens/tiad/...
       # mono-devel, not mono-mcs + mono-runtime: build-fake.sh compiles with
       # -sdk:4.8 and references System.Web.Extensions.dll, and only
       # mono-devel carries the .NET 4.8 reference assemblies (verified in a
@@ -657,6 +663,9 @@ jobs:
   playground:
     name: Playground — full build, docs and share images
     runs-on: ubuntu-latest
+    # About 4 min on main; a hung Chrome must not hold a runner and the
+    # required check for GitHub's 6-hour default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -666,6 +675,15 @@ jobs:
       - name: share links (keep.js)
         run: node --test playground/app/keep.test.js
       - run: ./playground/scripts/build.sh
+      # The built playground in a real headless Chrome (#906, #833): every
+      # example reaches "nautilus: live" (#891's offline bug), and YAML files
+      # get their schemas. No Chrome fails the job; the tests never skip.
+      # The live test allows 300 s (Chrome can take 90 s to start on a slow
+      # runner), well inside the job's 30 min.
+      - name: Chrome for the browser tests
+        run: .github/scripts/require-chrome.test.sh && .github/scripts/require-chrome.sh
+      - name: playground browser tests
+        run: GESTURE_NO_SANDBOX=1 node --test playground/app/*.browser.test.mjs
       - name: docs image
         run: docker build -f website/Dockerfile -t nautilus-docs:ci .
       - name: share image

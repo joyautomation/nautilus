@@ -297,7 +297,8 @@ claims:
     claim: >-
       A driver implementing io.QualityReporter is authoritative: whatever it
       reports about a tag stands, including over the runtime's derived
-      staleness; io.Memory implements it.
+      staleness, except a good on a standby (STR-039); io.Memory implements
+      it.
     source: "#where-it-comes-from"
     tests:
       - go ./runtime TestQualityFromDriverWins
@@ -336,9 +337,11 @@ claims:
     tests:
       - go ./server TestMetaAdvertisesQualityAndDeltas
       - go ./runtime TestReportsQuality
+      - go ./runtime TestReportsQualityWithCoordinator
     note: >-
-      /api/meta reports quality true on a driver-bound controller and false on
-      a driverless one with no inputs.
+      /api/meta reports quality true on a driver-bound controller and on any
+      replica with a Coordinator, and false on a standalone driverless one
+      with no inputs.
 
   - id: STR-037
     claim: >-
@@ -358,3 +361,35 @@ claims:
     source: "#from-the-hmi-kit"
     tests: []
     note: Client-side TypeScript behaviour with its own non-Go tests (hmi/src/lib/delta.ts); not in the Go or naut test results.
+
+  - id: STR-039
+    claim: >-
+      On a redundant pair's standby, every tag a scan refreshes (driver-bound
+      inputs, every tag a program writes, the measured-dt tags) is stale, over
+      a driver's good but not over its non-good; a setpoint the logic only
+      reads is not marked. It stays so until the first scan of its own
+      leadership has finished its input read (a failed read too: its inputs
+      are then stale through the failed read, as on a standalone controller):
+      a takeover held for live inputs (a new term too), one whose read is in
+      flight, one an additional task opened, a main read that another task's
+      gate overtook by stepping down or holding a takeover,
+      and a leader whose lease has passed on before its next scan. Then
+      quality is the drivers' again.
+    source: "#where-it-comes-from"
+    tests:
+      - go ./runtime TestQualityStandbyIsStale
+      - go ./runtime TestQualityStandbyFromStart
+      - go ./runtime TestQualityStandbyKeepsDriverVerdict
+      - go ./runtime TestTagQualityStandbyOverridesDriverGood
+      - go ./runtime TestQualityStaleWhileTakeoverWaitsForInputs
+      - go ./runtime TestQualityStaleWhileNewTermTakeoverWaitsForInputs
+      - go ./runtime TestQualityStaleUntilTheTakeoverReadLands
+      - go ./runtime TestQualityStaleWhileANewTermReadIsInFlight
+      - go ./runtime TestQualityStaleWhenATaskOpensTheTakeover
+      - go ./runtime TestQualityStaleWhenLeadReturnsBeforeAnyScan
+      - go ./runtime TestQualityStaleOnceLeaseIsGoneBeforeTheNextScan
+      - go ./runtime TestQualityGoodAfterSameTermResume
+      - go ./runtime TestQualityStandbyMatchesTheStoredSpelling
+      - go ./runtime TestQualityStandbyFollowsOnlineEdits
+      - go ./runtime TestQualityStaleWhenAStepDownRacesTheMainRead
+      - go ./runtime TestQualityStaleWhenAHeldTakeoverRacesTheMainRead

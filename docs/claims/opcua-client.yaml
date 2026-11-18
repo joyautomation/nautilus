@@ -13,8 +13,10 @@ claims:
       - go ./opcua TestForeignServerMatrix/open62541/reads/poll
       - go ./opcua TestForeignServerMatrix/milo/reads/poll
     note: >-
-      Against gopcua's in-process server, open62541 and Eclipse Milo; not
-      yet run against Ignition, Kepware or a PLC's embedded server.
+      Against gopcua's in-process server, open62541, Eclipse Milo and the
+      virtual IO-Link masters in CI; Ignition 8.3 and CODESYS Control Win V3
+      in a private lab (results in the guide's Lab results table). Not yet
+      run against Ignition 8.1, Kepware or a PLC's embedded server.
 
   - id: UAC-002
     claim: >-
@@ -200,7 +202,8 @@ claims:
       not a command; a command made while the session is down goes out on
       reconnect; a closed write gate holds commands back, including commands
       queued during an outage when the gate has closed by the time the
-      session returns; once the gate reopens, every output goes out once
+      session returns, and the rest of a batch once the gate closes while
+      it goes out in chunks; once the gate reopens, every output goes out once
       more with the program's value, changed or not, and a driver that has
       seen the gate closed (a standby) has no start-up baseline, so its
       first push commands.
@@ -211,6 +214,7 @@ claims:
       - go ./opcua TestReconnectAndStale
       - go ./opcua TestWriteGate
       - go ./opcua TestQueuedWriteRechecksTheGate
+      - go ./opcua TestWriteGateClosingMidBatchStopsTheRest
       - go ./opcua TestRegainedGateSendsTheUnchangedValueAgain
       - go ./opcua TestStandbyFirstPushCommands
       - go ./cmd/naut TestNautOPCUAClientImportAndRun
@@ -296,6 +300,10 @@ claims:
       - go ./opcua TestForeignServerMatrix/milo/reads/poll
       - go ./opcua TestForeignServerMatrix/milo/writes/poll
       - go ./opcua TestForeignServerMatrix/milo/remap/poll
+    note: >-
+      The same scenarios run against Ignition 8.3 and CODESYS Control Win V3
+      as a signed-in user in a private lab; its results are in the guide's
+      Lab results table, not in CI's evidence.
 
   - id: UAC-023
     claim: >-

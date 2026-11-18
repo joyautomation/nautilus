@@ -7,10 +7,12 @@ a CPU's project. The contract is `docs/design/siemens-ide.md` §3. The Go client
 is `siemens/tiad`, and `siemens/tiad/tiadtest` holds an in-memory fake and the
 contract suite.
 
-**Status:** the core, which serves every call up to compile (health, probe,
-files, GSDML install, projects, sessions, station, software, compile), and
-`tiad-fake`. Download, compare, export, upload and save follow, then the TIA
-side (`tiad.Openness`) and `install-tiad.ps1`. The plan is on #789.
+**Status:** the core serves every call (health, probe, files, GSDML install,
+projects, sessions, station, software, compile, download, compare, export,
+upload, save). `tiad.exe`, the agent with its Windows host, and
+`install-tiad.ps1` are tested on a TIA machine without starting TIA. The TIA
+side (`tiad.Openness`) follows: it is first exercised at the first TIA start.
+The plan is on #789.
 
 ## How a TIA call runs
 
@@ -28,8 +30,11 @@ with TIA's text, and the thread carries on.
 | Path | What |
 |---|---|
 | `core/` | `tiad-core.dll`: HTTP, the envelope, the token, the work-dir sandbox, the agent's calls. It references nothing of Siemens's |
+| `host/` | `tiad.exe`: the core with the Windows host. It reads the machine gates and loads `tiad.Openness.dll` from beside itself on the first TIA call |
 | `fake/` | `tiad-fake.exe`: the core with a scripted host instead of TIA, for tests only. `install-tiad.ps1` never builds it |
-| `build-fake.sh` | Builds `out/tiad-core.dll` and `out/tiad-fake.exe` with Mono's `mcs` |
+| `install-tiad.ps1` | Builds `tiad.exe` on the TIA machine with its stock `csc` and installs it (below) |
+| `check-install.ps1` | Checks an install's security properties on the TIA machine (below) |
+| `build-fake.sh` | Builds `out/tiad-core.dll` and `out/tiad-fake.exe` with Mono's `mcs`, and `out/tiad.exe` only to hold the host to C# 5 |
 
 ## C# 5, no project file
 
@@ -56,6 +61,64 @@ From the environment only; nothing in a request changes it.
 | `TIAD_WORKDIR` | `C:\tiad-work` | Required off Windows |
 | `TIAD_TARGETS` | none | The only CPU addresses tiad goes online or downloads to. Strict dotted quads |
 | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes sessions unused this long (a Go duration) |
+| `TIAD_NO_TIA` | unset | `1` fails the `tia` gate, so no call can start TIA (or a trial clock) |
+| `TIAD_EXIT_ON_STDIN` | unset | `1` ends the agent when its stdin closes (the test harness sets it). Off by default: a scheduled task's stdin may be closed from the start |
+
+## Gates
+
+`probe` reports five gates, each `ok`, `failed` or `unknown`. A failed gate
+(or a state the agent does not know) stops every TIA call with 412 `gate`.
+An unknown one is reported but blocks nothing. `ok` in the JSON is true only
+in state `ok`. The host computes them without starting TIA (`core/Machine.cs`,
+a pure evaluator over the machine's facts):
+
+| Gate | Check |
+|---|---|
+| `tia` | Openness V21 is registered in HKLM (64-bit view), and its net48 `Siemens.Engineering.Base.dll` and `.Step7.dll` exist. Failed with `TIAD_NO_TIA=1` |
+| `openness-group` | The process token holds "Siemens TIA Openness". A member added after logon must log off and on |
+| `openness-allowlist` | The Openness allowlist entry TIA requires: an entry under `HKLM\Software\Siemens\Automation\Openness\AllowList\tiad.exe` whose `Path` names this exe (case-insensitive), whose `DateModified` is its last write time (UTC, `yyyy/MM/dd HH:mm:ss.fff`) and whose `FileHash` is its SHA-256 (base64). Every rebuild needs a new entry; the installer writes it |
+| `licence` | `unknown`: not readable until TIA's first start, which creates the trial |
+| `workdir` | The work dir is writable |
+
+## Installing on a TIA machine
+
+Copy `tools/tiad` to the machine and run, in an elevated Windows PowerShell:
+
+```
+.\install-tiad.ps1 -NoTia            # installed, but TIA cannot start
+.\install-tiad.ps1 -Targets 192.0.2.10
+.\install-tiad.ps1 -Uninstall
+```
+
+It checks for TIA V21 and the compiler, adds the account to the Openness
+group, builds `tiad-core.dll` and `tiad.exe` into `C:\Program Files\tiad`,
+writes the allowlist entry for that build, and writes the token to
+`%ProgramData%\tiad\tiad.token` (the agent reads it through
+`TIAD_TOKEN_FILE`). It then registers an interactive scheduled task at
+logon (someone must be logged in at the console) and checks the agent, on
+the address it listens on, with health and probe; neither starts TIA. Logs
+go to `%ProgramData%\tiad`.
+
+**The agent runs elevated**, so nothing under it may be writable by another
+local account:
+- The install dir, `%ProgramData%\tiad`, the token and the work dir are
+  owned by Administrators, with Administrators and SYSTEM the only entries
+  and inheritance off.
+- The directory is locked before the token is written into it.
+- A token file Administrators do not own is replaced, never reused.
+- A directory another account made, or one holding a link, a junction or
+  another account's file, makes the install refuse.
+
+`-Listen` takes one IPv4 address: loopback (the default), or this
+machine's own address on a trusted network such as a tailnet. Never
+`0.0.0.0`; the agent refuses that in `TIAD_ADDR` too. A non-loopback
+address gets one firewall rule for that address and port. Every reinstall
+and uninstall removes all of that install's rules first, whatever port they
+were for.
+
+`check-install.ps1` checks all of this on a TIA machine. It reinstalls with
+`-NoTia` several times (TIA never starts) and exits with the number of
+failed checks.
 
 A request with an `Origin` header (a browser) is refused with 403, whatever
 its token. A JSON body must be `application/json` and a file
@@ -88,6 +151,16 @@ The rules exist twice, in Go (`siemens/tiad`, `siemens/station`) and in C#
 (`RefusedPaths`, `UncleanURLs`, `AcceptedPaths`). A change to a rule changes
 both copies and the table.
 
+On the TIA machine, the real agent runs the part of the contract that never
+needs TIA (`ContractNoTIA`), plus its real gates, all with `TIAD_NO_TIA=1`
+and a tripwire that fails if TIA Portal runs before or after a test:
+
+```
+GOOS=windows go test -c -o tiadtest.exe ./siemens/tiad/tiadtest
+# on the machine, after install-tiad.ps1:
+$env:TIAD_BIN = 'C:\Program Files\tiad\tiad.exe'; .\tiadtest.exe -test.run RealAgent -test.v
+```
+
 `tiad-fake` answers control calls the real agent never has
 (`fake/FakeMain.cs`):
 
@@ -95,6 +168,7 @@ both copies and the table.
 |---|---|
 | `PUT /fake/gates` | The machine gates probe reports. The work-dir gate stays real |
 | `PUT /fake/script` | What compile returns, and `ITia` calls that are slow or fail the way TIA fails |
+| `PUT /fake/machine` | A scripted machine (registry values, files, the exe's path, time and hash, the group). Probe then runs the real gate evaluator over it |
 | `GET /fake/calls` | Every `ITia` call so far, with its thread. `start` is when TIA would start |
 
 Its `ITia` keeps projects in memory and answers what the Go fake answers. Like

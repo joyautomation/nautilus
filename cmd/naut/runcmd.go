@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/vcs"
@@ -940,6 +942,11 @@ func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string]
 			return nil
 		}
 		if abs, err := filepath.Abs(p); err == nil && fixtures[abs] {
+			return nil
+		}
+		// A vendored profile ships (the project loads its devices from it);
+		// the simulator beside it is a test fixture and does not.
+		if strings.HasPrefix(rel, devprofile.ProjectDir+"/") && path.Ext(rel) != ".yaml" {
 			return nil
 		}
 		raw, err := os.ReadFile(p)

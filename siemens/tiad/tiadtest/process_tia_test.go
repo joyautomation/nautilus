@@ -62,7 +62,7 @@ func TestAgentStartsTIAOnlyWhenNeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Refused before TIA: a failing gate, and a bad request.
-	p.SetGates(t, []tiad.Gate{{Name: "licence", OK: false}})
+	p.SetGates(t, []tiad.Gate{{Name: "licence", State: tiad.GateFailed}})
 	if _, err := c.Open(ctx, "projects/p/p.ap21"); tiad.Kind(err) != tiad.KindGate {
 		t.Fatalf("open with a failed gate: %v", err)
 	}

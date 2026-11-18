@@ -1329,6 +1329,12 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 			if b.v == nil {
 				continue
 			}
+			// An integer loop has integer bounds (IEC 61131-3): a REAL
+			// end of 3.0 read as an integer is 0, so the loop silently
+			// never ran (#893). storeRule judges integer stores only.
+			if err := forOperandRule(sym.typ, b.v, b.src); err != nil {
+				return nil, errNode(b.src, fmt.Errorf("FOR %s %s: %w", n.Variable, b.what, err))
+			}
 			if _, err := storeRule(sym.typ, b.v, b.src); err != nil {
 				return nil, errNode(b.src, fmt.Errorf("FOR %s %s: %w", n.Variable, b.what, err))
 			}
@@ -1748,6 +1754,48 @@ func storeRule(t *ir.Type, value ir.Expr, src Expression) (*ir.Wrap, error) {
 		return nil, nil // an implicit widening: it fits
 	}
 	return ir.NewWrap(t), nil
+}
+
+// forOperandRule refuses a FOR start, end or step that is not an integer,
+// naming the conversion to write into the loop variable's type t. A value
+// of no known type is left to the VM, as before.
+func forOperandRule(t *ir.Type, v ir.Expr, src Expression) error {
+	vt := v.ExprType()
+	if vt == nil || vt.IsInteger() {
+		return nil
+	}
+	from := vt.Name
+	switch {
+	case vt.Enum != nil:
+		from = vt.Enum.Name
+	case vt.Kind == ir.TypeReal && from != "LREAL":
+		from = "REAL"
+	case from == "" && vt.Struct != nil && vt.Struct.Name != "":
+		from = vt.Struct.Name
+	case from == "":
+		from = vt.Kind.String()
+	}
+	if from == "" || from == "VOID" {
+		return nil
+	}
+	to := t.Name
+	if to == "" {
+		to = "DINT"
+	}
+	what, arg := "the value", "…"
+	if id, ok := src.(*IdentExpr); ok {
+		what, arg = id.Name, id.Name
+	}
+	msg := fmt.Sprintf("%s is %s, and a FOR's bounds and step are integers like its variable", what, from)
+	// Name the conversion only when there is one (there is no
+	// STRUCT_TO_DINT).
+	if conv := from + "_TO_" + to; vt.Enum != nil {
+		// An enumeration converts with the generic TO_ form only.
+		msg += fmt.Sprintf("; write TO_%s(%s)", to, arg)
+	} else if ir.IsConversion(conv) {
+		msg += fmt.Sprintf("; write %s(%s)", conv, arg)
+	}
+	return errors.New(msg)
 }
 
 // realRule is IEC 61131-3's table for a store into a REAL or an LREAL

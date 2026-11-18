@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/devbind"
 	"gopkg.in/yaml.v3"
 )
 
@@ -118,6 +119,7 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		{"a task", goKeys(TaskConfig{}), schemaKeys(s.Definitions["task"].Properties)},
 		{"a tag", goKeys(TagConfig{}), schemaKeys(s.Definitions["tag"].Properties)},
 		{"the driver", goKeys(DriverConfig{}), schemaKeys(s.Definitions["driver"].Properties)},
+		{"a device", goKeys(devbind.Device{}), schemaKeys(s.Definitions["device"].Properties)},
 		{"sparkplug", goKeys(SparkplugConfig{}), schemaKeys(s.Definitions["sparkplug"].Properties)},
 		{"opcua", goKeys(OPCUAConfig{}), schemaKeys(s.Definitions["opcua"].Properties)},
 		{"an rbe class", goKeys(RBEConfig{}), schemaKeys(s.Definitions["rbe"].Properties)},

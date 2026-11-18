@@ -83,18 +83,60 @@ func (g goFake) Loaded(testing.TB) []Loaded {
 }
 
 // Contract runs the agent's HTTP contract (docs/design/siemens-ide.md §3)
-// against the agents start makes.
+// against the agents start makes, which must be scriptable (a fake).
 func Contract(t *testing.T, start Starter) {
-	t.Run("Health", func(t *testing.T) { contractHealth(t, start) })
+	ContractNoTIA(t, start)
 	t.Run("Probe", func(t *testing.T) { contractProbe(t, start) })
+	t.Run("GateStates", func(t *testing.T) { contractGateStates(t, start) })
+	contractTIA(t, start)
+	contractDownload(t, start)
+}
+
+// ContractNoTIA is the part of the contract that never needs TIA and
+// scripts nothing: health, the token, the browser and content-type
+// refusals, the files and the path rules. It runs against the real agent
+// on a TIA machine before TIA may start (the trial clock), as well as
+// against the fakes.
+func ContractNoTIA(t *testing.T, start Starter) {
+	t.Run("Health", func(t *testing.T) { contractHealth(t, start) })
 	t.Run("Token", func(t *testing.T) { contractToken(t, start) })
 	t.Run("NoBrowser", func(t *testing.T) { contractNoBrowser(t, start) })
 	t.Run("ContentType", func(t *testing.T) { contractContentType(t, start) })
 	t.Run("Files", func(t *testing.T) { contractFiles(t, start) })
 	t.Run("PathsRefused", func(t *testing.T) { contractPathsRefused(t, start) })
 	t.Run("PathsAccepted", func(t *testing.T) { contractPathsAccepted(t, start) })
-	contractTIA(t, start)
-	contractDownload(t, start)
+}
+
+// GateOrder is the gates probe reports, in order.
+const GateOrder = "tia,openness-group,openness-allowlist,licence,workdir"
+
+// CheckGateShape fails t unless p reports exactly the gates in GateOrder,
+// each in a known state with OK true exactly in state ok, and Usable
+// exactly when no gate blocks. It scripts nothing, so it holds for the
+// real agent too.
+func CheckGateShape(t testing.TB, p tiad.Probe) {
+	t.Helper()
+	if got := gateNames(p.Gates); got != GateOrder {
+		t.Fatalf("probe gates %s, want %s", got, GateOrder)
+	}
+	blocked := false
+	for _, g := range p.Gates {
+		switch g.State {
+		case tiad.GateOK, tiad.GateFailed, tiad.GateUnknown:
+		default:
+			t.Errorf("gate %s: state %q, want ok, failed or unknown", g.Name, g.State)
+		}
+		if g.OK != (g.State == tiad.GateOK) {
+			t.Errorf("gate %s: ok %v in state %q", g.Name, g.OK, g.State)
+		}
+		if g.State != tiad.GateOK && g.Detail == "" {
+			t.Errorf("gate %s: state %q without a detail", g.Name, g.State)
+		}
+		blocked = blocked || g.Blocks()
+	}
+	if p.Usable == blocked {
+		t.Errorf("probe usable %v, but a gate blocks: %v", p.Usable, blocked)
+	}
 }
 
 var ctx = context.Background()
@@ -126,25 +168,25 @@ func contractProbe(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const all = "tia,openness-group,openness-allowlist,licence,workdir"
-	if !p.Usable || gateNames(p.Gates) != all {
-		t.Fatalf("probe = %+v, want usable with gates %s", p, all)
+	CheckGateShape(t, p)
+	if !p.Usable {
+		t.Fatalf("probe = %+v, want usable", p)
 	}
 	for _, g := range p.Gates {
-		if !g.OK {
-			t.Errorf("gate %s failed: %s", g.Name, g.Detail)
+		if g.State != tiad.GateOK {
+			t.Errorf("gate %s is %s: %s", g.Name, g.State, g.Detail)
 		}
 	}
 
 	// A failed gate is a successful probe that says "not usable".
-	a.SetGates(t, []tiad.Gate{{Name: "licence", OK: false, Detail: "trial expired"}})
+	a.SetGates(t, []tiad.Gate{{Name: "licence", State: tiad.GateFailed, Detail: "trial expired"}})
 	p, err = c.Probe(ctx)
 	if err != nil {
 		t.Fatalf("probe with a failed gate: %v", err)
 	}
 	failed := false
 	for _, g := range p.Gates {
-		failed = failed || g.Name == "licence" && !g.OK && g.Detail == "trial expired"
+		failed = failed || g.Name == "licence" && !g.OK && g.State == tiad.GateFailed && g.Detail == "trial expired"
 	}
 	if p.Usable || !failed {
 		t.Fatalf("probe with a failed licence gate = %+v", p)
@@ -158,6 +200,63 @@ func contractProbe(t *testing.T, start Starter) {
 	}
 	if _, err := c.ListFiles(ctx); err != nil {
 		t.Fatalf("list with a failed gate: %v", err)
+	}
+}
+
+// contractGateStates: an unknown gate (the licence before TIA's first
+// start) is reported, is not OK, and blocks nothing; a state the agent
+// does not know blocks, as a failed one does.
+func contractGateStates(t *testing.T, start Starter) {
+	a := start(t, Config{})
+	c := a.Client()
+	if _, err := c.PutFile(ctx, "gsd/"+benchGSDML, []byte("<ISO15745Profile/>")); err != nil {
+		t.Fatal(err)
+	}
+	licence := func(p tiad.Probe) tiad.Gate {
+		for _, g := range p.Gates {
+			if g.Name == "licence" {
+				return g
+			}
+		}
+		t.Fatalf("probe has no licence gate: %+v", p)
+		return tiad.Gate{}
+	}
+
+	// ok in the JSON is derived from the state, in the fakes as in the
+	// agent: scripting a state is enough.
+	a.SetGates(t, []tiad.Gate{{Name: "licence", State: tiad.GateOK, Detail: "licensed"}})
+	p, err := c.Probe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := licence(p); !g.OK || !p.Usable {
+		t.Fatalf("licence ok: probe = %+v, want the gate ok and usable", p)
+	}
+
+	const why = "not readable until TIA's first start"
+	a.SetGates(t, []tiad.Gate{{Name: "licence", State: tiad.GateUnknown, Detail: why}})
+	p, err = c.Probe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := licence(p); g.State != tiad.GateUnknown || g.OK || g.Detail != why || !p.Usable {
+		t.Fatalf("unknown licence: probe = %+v, want the gate unknown, not ok, and usable", p)
+	}
+	if _, err := c.InstallGSD(ctx, "gsd/"+benchGSDML); err != nil {
+		t.Fatalf("a TIA call with an unknown gate: %v, want it to run", err)
+	}
+
+	a.SetGates(t, []tiad.Gate{{Name: "licence", State: "bogus", Detail: "a state from a newer agent"}})
+	if p, err = c.Probe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if g := licence(p); g.OK || p.Usable {
+		t.Fatalf("unknown state: probe = %+v, want not usable", p)
+	}
+	_, err = c.InstallGSD(ctx, "gsd/"+benchGSDML)
+	var te *tiad.Error
+	if !errorsAs(err, &te) || te.Kind != tiad.KindGate || !strings.Contains(te.Message, "licence") {
+		t.Fatalf("a TIA call with a gate in an unknown state: %v, want 412 gate", err)
 	}
 }
 
@@ -376,16 +475,32 @@ func escapePath(p string) string {
 	return strings.Join(parts, "/")
 }
 
+// hasControl reports whether p holds an ASCII control character.
+func hasControl(p string) bool {
+	return strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f })
+}
+
 func contractPathsRefused(t *testing.T, start Starter) {
 	c := start(t, Config{}).Client()
 	for _, p := range RefusedPaths {
 		u := "/v1/files/" + escapePath(p)
 		for _, method := range []string{"PUT", "GET", "DELETE"} {
 			status, b := raw(t, c, method, u, []byte("x"))
-			if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest {
+			kind := envelopeKind(b)
+			// Windows's HTTP stack (http.sys) refuses a control character
+			// in a URL itself, with its own 400, before the agent sees the
+			// request. Refused all the same, so only there is a 400 that
+			// is not the agent's envelope accepted.
+			if status == http.StatusBadRequest && kind == "" && hasControl(p) {
+				continue
+			}
+			if status != http.StatusBadRequest || kind != tiad.KindBadRequest {
 				t.Errorf("%s %q = HTTP %d %s, want 400 bad_request", method, p, status, b)
 			}
 		}
+	}
+	if fs := files(t, c); len(fs) != 0 {
+		t.Errorf("refused paths wrote %v", fs)
 	}
 	for _, u := range UncleanURLs {
 		for _, method := range []string{"PUT", "GET", "DELETE"} {

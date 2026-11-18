@@ -132,7 +132,7 @@ notes: what is simplified and what is not modelled
 - The **simulator** is an ST FUNCTION_BLOCK beside the profile. ST because
   it reuses the compiler, `naut check` and virtual time, and because it is
   what an agent will write when profiles are generated from a manual.
-- Built-in profiles ship in naut (`virtdev/profiles/`); a project's own
+- Built-in profiles ship in naut (`devprofile/profiles/`; the format moved to the device library, docs/design/device-library.md); a project's own
   profile is a path ending in `.yaml`.
 
 ## 4. A project's devices: `virtual-devices.yaml`

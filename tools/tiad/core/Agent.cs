@@ -8,19 +8,45 @@ using System.IO;
 
 namespace Tiad
 {
-    // Gate is one prerequisite probe reports.
+    // Gate is one prerequisite probe reports, in one of three states:
+    //   ok       checked, and it holds;
+    //   failed   checked, and it does not: every TIA call answers 412 gate;
+    //   unknown  not readable yet (the licence before TIA's first start):
+    //            reported honestly, but it blocks nothing.
     public sealed class Gate
     {
+        public const string StateOk = "ok", StateFailed = "failed", StateUnknown = "unknown";
+
         public string Name;
-        public bool Ok;
+        public string State = StateFailed;
         public string Detail = "";
         public string Remedy = "";
+
+        // Ok is true only for a gate that was checked and holds.
+        public bool Ok
+        {
+            get { return State == StateOk; }
+        }
+
+        // Blocks reports whether this gate stops TIA calls. Any state but
+        // ok and unknown blocks, so a state this code does not know fails
+        // closed.
+        public bool Blocks
+        {
+            get { return State != StateOk && State != StateUnknown; }
+        }
+
+        public static bool KnownState(string s)
+        {
+            return s == StateOk || s == StateFailed || s == StateUnknown;
+        }
 
         public Obj ToJson()
         {
             var o = new Obj();
             o["name"] = Name;
             o["ok"] = Ok;
+            o["state"] = State;
             o["detail"] = Detail;
             if (Remedy != "") o["remedy"] = Remedy;
             return o;
@@ -111,7 +137,7 @@ namespace Tiad
                 string probe = Path.Combine(work.Root, ".tiad-probe-" + Guid.NewGuid().ToString("N"));
                 File.WriteAllBytes(probe, new byte[0]);
                 File.Delete(probe);
-                g.Ok = true;
+                g.State = Gate.StateOk;
             }
             catch (Exception e)
             {
@@ -128,7 +154,7 @@ namespace Tiad
             var list = new List<object>();
             foreach (var g in gates)
             {
-                usable = usable && g.Ok;
+                usable = usable && !g.Blocks;
                 list.Add(g.ToJson());
             }
             var o = new Obj();

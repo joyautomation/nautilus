@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -486,5 +487,131 @@ END_PROGRAM`
 	}
 	if got := rt.UnknownChannels(); len(got) != 1 || got[0] != "remote2" {
 		t.Fatalf("UnknownChannels = %v, want [remote2]", got)
+	}
+}
+
+// A write a leader queued must not leave once its gate has closed: a
+// standby (or the next leader) may be writing the same peer by then.
+func TestQueuedWriteDroppedWhenGateCloses(t *testing.T) {
+	f := newFakeChannel()
+	h := newCommHub([]Channel{{Name: "peer", Channel: f}})
+	var leading atomicBool
+	leading.set(true)
+	h.setGate(leading.get, nil)
+	defer h.close()
+
+	t1, st := h.PostWrite("peer", "A", ir.IntVal(1), "DINT")
+	if st != ir.CommOK {
+		t.Fatalf("post 1: %d", st)
+	}
+	t2, st := h.PostWrite("peer", "B", ir.IntVal(2), "DINT")
+	if st != ir.CommOK {
+		t.Fatalf("post 2: %d", st)
+	}
+	<-f.started // write 1 is in flight, write 2 is queued
+	leading.set(false)
+	f.answer <- fakeAnswer{}
+
+	waitPoll(t, h, t1)
+	res := waitPoll(t, h, t2)
+	if res.Status != ir.CommLost {
+		t.Fatalf("queued write after the gate closed: status %d, want CommLost", res.Status)
+	}
+	if n := f.count(); n != 1 {
+		t.Fatalf("peer saw %d writes, want 1 (the one in flight before the gate closed)", n)
+	}
+}
+
+// A write queued under one leadership must not leave under the next, even
+// with the gate open again: it was computed by a leadership that is over.
+func TestQueuedWriteDroppedAcrossTakeover(t *testing.T) {
+	f := newFakeChannel()
+	h := newCommHub([]Channel{{Name: "peer", Channel: f}})
+	h.setGate(func() bool { return true }, nil)
+	defer h.close()
+
+	t1, _ := h.PostWrite("peer", "A", ir.IntVal(1), "DINT")
+	t2, _ := h.PostWrite("peer", "B", ir.IntVal(2), "DINT")
+	<-f.started
+	h.newLeadership()
+	f.answer <- fakeAnswer{}
+	waitPoll(t, h, t1)
+	if res := waitPoll(t, h, t2); res.Status != ir.CommLost {
+		t.Fatalf("write from the last leadership: status %d, want CommLost", res.Status)
+	}
+	if n := f.count(); n != 1 {
+		t.Fatalf("peer saw %d writes, want 1", n)
+	}
+	// Reads are not gated: they change nothing on the peer.
+	t3, _ := h.PostRead("peer", "C", ir.IntVal(0), "DINT")
+	<-f.started
+	f.answer <- fakeAnswer{val: ir.IntVal(7)}
+	if res := waitPoll(t, h, t3); res.Status != ir.CommOK {
+		t.Fatalf("read: status %d", res.Status)
+	}
+}
+
+type atomicBool struct {
+	mu sync.Mutex
+	v  bool
+}
+
+func (b *atomicBool) set(v bool) { b.mu.Lock(); b.v = v; b.mu.Unlock() }
+func (b *atomicBool) get() bool  { b.mu.Lock(); defer b.mu.Unlock(); return b.v }
+
+func waitPoll(t *testing.T, h *commHub, ticket int64) ir.CommResult {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if res, done := h.Poll(ticket); done {
+			return res
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("ticket %d never finished", ticket)
+	return ir.CommResult{}
+}
+
+// The gate is read before the term (#797 review). This gate stands in for
+// a freeze longer than a lease while it is being read: the lease is lost
+// and won back in a new term, and the gate it reports is that new term's,
+// open. A write posted in the old term must not go out under it. Read in
+// the other order, the term check passes before the term moves and the
+// write is sent.
+func TestWriteChecksGateBeforeTerm(t *testing.T) {
+	ch := newFakeChannel()
+	h := newCommHub([]Channel{{Name: "peer", Channel: ch}})
+	defer h.close()
+	var term atomic.Uint64
+	term.Store(1)
+	h.setGate(func() bool {
+		term.Store(2) // lost and regained while the gate was being read
+		return true
+	}, term.Load)
+	tk, st := h.PostWrite("peer", "X", ir.IntVal(1), "")
+	if st != ir.CommOK {
+		t.Fatalf("PostWrite status = %d", st)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		res, done := h.Poll(tk)
+		if done {
+			if res.Status != ir.CommLost {
+				t.Errorf("old-term write finished with %d, want lost (%d)", res.Status, ir.CommLost)
+			}
+			break
+		}
+		select {
+		case <-ch.started:
+			t.Fatal("a write posted in term 1 was sent under term 2's open gate")
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the write never finished")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := ch.count(); n != 0 {
+		t.Errorf("channel saw %d requests, want none", n)
 	}
 }

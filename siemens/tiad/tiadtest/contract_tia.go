@@ -683,7 +683,7 @@ func contractGates(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.SetGates(t, []tiad.Gate{{Name: "licence", OK: false, Detail: "trial expired"}})
+	a.SetGates(t, []tiad.Gate{{Name: "licence", State: tiad.GateFailed, Detail: "trial expired"}})
 	calls := []struct {
 		name string
 		do   func() error
@@ -749,7 +749,7 @@ func contractPrecedence(t *testing.T, start Starter) {
 	}
 	for _, tc := range cases {
 		if tc.gateFails {
-			a.SetGates(t, []tiad.Gate{{Name: "licence", OK: false, Detail: "trial expired"}})
+			a.SetGates(t, []tiad.Gate{{Name: "licence", State: tiad.GateFailed, Detail: "trial expired"}})
 		}
 		status, b := rawJSON(t, c, tc.method, tc.path, tc.body)
 		if tc.gateFails {
@@ -760,7 +760,7 @@ func contractPrecedence(t *testing.T, start Starter) {
 		}
 	}
 	// The token comes before everything, a failing gate included.
-	a.SetGates(t, []tiad.Gate{{Name: "licence", OK: false}})
+	a.SetGates(t, []tiad.Gate{{Name: "licence", State: tiad.GateFailed}})
 	h := http.Header{"Content-Type": {"application/json"}}
 	if status, b := rawWith(t, c, "POST", "/v1/projects", h, []byte("{")); status != http.StatusUnauthorized {
 		t.Errorf("no token with a failed gate = HTTP %d %s, want 401", status, b)

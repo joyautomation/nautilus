@@ -306,16 +306,36 @@ func (c *Client) Health(ctx context.Context) (Health, error) {
 	return h, err
 }
 
+// Gate states (siemens-ide.md §3.4).
+const (
+	// GateOK: checked, and it holds.
+	GateOK = "ok"
+	// GateFailed: checked, and it does not. Every TIA call fails with
+	// KindGate.
+	GateFailed = "failed"
+	// GateUnknown: not readable yet, such as the licence before TIA's
+	// first start. Reported, but it blocks nothing.
+	GateUnknown = "unknown"
+)
+
 // Gate is one prerequisite check: "tia", "openness-group",
-// "openness-allowlist", "licence", "workdir".
+// "openness-allowlist", "licence", "workdir". OK is true only in state
+// GateOK: an unknown gate is not OK, and does not block either.
 type Gate struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
+	State  string `json:"state"`
 	Detail string `json:"detail"`
 	Remedy string `json:"remedy,omitempty"`
 }
 
-// Probe is the agent's answer to "can TIA be driven right now".
+// Blocks reports whether the gate stops TIA calls. Every state but
+// GateOK and GateUnknown blocks, so a state this client does not know,
+// or none, fails closed.
+func (g Gate) Blocks() bool { return g.State != GateOK && g.State != GateUnknown }
+
+// Probe is the agent's answer to "can TIA be driven right now". Usable
+// means no gate blocks; a gate may still be unknown.
 type Probe struct {
 	Usable bool   `json:"usable"`
 	Gates  []Gate `json:"gates"`

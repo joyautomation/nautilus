@@ -22,6 +22,9 @@ import (
 // Unknown driver types (a Go-tier io.Driver, which never comes through the
 // manifest loader) are not.
 func commsDriver(d nio.Driver) bool {
+	if u, ok := d.(interface{ Unwrap() nio.Driver }); ok {
+		return commsDriver(u.Unwrap())
+	}
 	switch d.(type) {
 	case *modbus.Driver, *eip.Driver, *sphost.Driver, *opcua.Driver,
 		*snmp.Driver, *redfish.Driver, *prom.Driver, *profinet.DeviceDriver:
