@@ -38,7 +38,7 @@ static void rtg_on_xcpu(int sig) {
     (void)sig;
     int saved = errno;
     struct sched_param p = { .sched_priority = 0 };
-    if (rtg_tid > 0) syscall(SYS_sched_setscheduler, (long)rtg_tid, (long)SCHED_OTHER, &p);
+    (void)p; // PROBE: no demotion
     rtg_demoted = 1;
     errno = saved;
 }
