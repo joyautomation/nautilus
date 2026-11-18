@@ -5,6 +5,14 @@
 // and every text token clears AA's 4.5:1 on each of them, since naut check
 // warns of a screen's text under it.
 //
+// The state tokens (--good, --warn, --serious, --crit) are measured on the
+// same grounds at both bars: 3:1 as a fill, outline or indicator, and 4.5:1
+// as text, since the kit also draws them as text (a danger button, an error
+// line). The pairs that fall short today are listed below as known (#927).
+// The list is a ratchet: a listed pair that starts to pass fails the test
+// until its entry is removed, and an unlisted pair that falls short fails
+// at once.
+//
 //	npm test
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from './harness.js';
@@ -32,6 +40,32 @@ function contrast(a: string, b: string): number {
 	return (hi + 0.05) / (lo + 0.05);
 }
 
+const STATE = ['--good', '--warn', '--serious', '--crit'] as const;
+const GROUNDS = ['--surface', '--bg', '--surface-2'] as const;
+
+// State-token pairs below the bar today, as "<theme> <token> <ground>"
+// (#927). The HMI kit's owner fixes the colours; this test only measures.
+const SHORT_AS_TEXT = new Set([
+	'dark --crit --bg',
+	'dark --crit --surface',
+	'dark --crit --surface-2',
+	'light --good --bg',
+	'light --good --surface-2',
+	'light --warn --bg',
+	'light --warn --surface',
+	'light --warn --surface-2',
+	'light --serious --bg',
+	'light --serious --surface',
+	'light --serious --surface-2'
+]);
+const SHORT_AS_NONTEXT = new Set(['light --warn --surface-2']);
+
+const BARS: [number, string, Set<string>][] = [
+	[3, 'a fill or outline', SHORT_AS_NONTEXT],
+	[4.5, 'text', SHORT_AS_TEXT]
+];
+const measured = new Set<string>();
+
 for (const [name, selector] of [
 	['dark', '[data-theme=\'dark\'] {'],
 	['light', '[data-theme=\'light\'] {']
@@ -53,5 +87,30 @@ for (const [name, selector] of [
 		it('--axis stays fainter than --edge (it is a chart axis, not an outline)', () => {
 			expect(contrast(t['--axis'], t['--surface']) < contrast(t['--edge'], t['--surface'])).toBe(true);
 		});
+		for (const state of STATE) {
+			for (const ground of GROUNDS) {
+				for (const [bar, use, known] of BARS) {
+					const key = `${name} ${state} ${ground}`;
+					const ratio = contrast(t[state], t[ground]);
+					measured.add(`${bar} ${key}`);
+					if (known.has(key)) {
+						it(`${state} as ${use} on ${ground} is below ${bar}:1 (${ratio.toFixed(2)}), known #927: drop the entry once it passes`, () => {
+							expect(ratio < bar).toBe(true);
+						});
+					} else {
+						it(`${state} as ${use} is at least ${bar}:1 on ${ground} (${ratio.toFixed(2)})`, () => {
+							expect(ratio >= bar).toBe(true);
+						});
+					}
+				}
+			}
+		}
 	});
 }
+
+describe('palette known shortfalls', () => {
+	it('name only pairs the test measures', () => {
+		const stale = BARS.flatMap(([bar, , known]) => [...known].map((k) => `${bar} ${k}`)).filter((k) => !measured.has(k));
+		expect(stale).toEqual([]);
+	});
+});
