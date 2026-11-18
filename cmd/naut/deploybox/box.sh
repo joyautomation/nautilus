@@ -17,6 +17,15 @@ STATE=${NAUT_STATE:-/var/lib/nautilus}
 UNIT=nautilus.service
 UNITDIR=${NAUT_UNITDIR:-/etc/systemd/system} # set only by deploy_box_test.go
 KEEP=3 # releases kept besides current and previous
+# Helper mode (#771): this script installed as a root-owned file that the
+# SSH user may run as root through sudo and nothing else. `naut deploy
+# helper` writes it with a prologue that pins every setting above, so none
+# comes from the caller. The caller may still upload a controller of their
+# own, so in this mode nothing it sends, and nothing a controller leaves in
+# STATE, may steer root: see okid, receive, the unit from UNITSRC, status,
+# and stateread/statewrite (used in every mode).
+HELPER=${NAUT_HELPER:-}
+UNITSRC=${NAUT_UNITSRC:-}
 say() { echo "$*" >&2; }
 fail() { echo "naut deploy (on box): $*" >&2; exit 1; }
 case $SUPERVISOR in
@@ -29,6 +38,73 @@ cron)
 	;;
 *) fail "unknown supervisor $SUPERVISOR" ;;
 esac
+# Under systemd STATE is itself a link (DynamicUser: /var/lib/nautilus ->
+# private/nautilus, made by systemd and root's). Resolved once, so every
+# path below is inside the real directory; links inside it are refused.
+# STATE_PATH keeps the path as given, so uninstall -purge removes the link
+# as well as the directory.
+STATE_PATH=$STATE
+if [ -d "$STATE" ]; then STATE=$(cd "$STATE" && pwd -P); fi
+if [ -n "$HELPER" ]; then
+	[ "$SUPERVISOR" = systemd ] || fail "the helper runs the systemd mode only"
+	[ -f "$UNITSRC" ] || fail "no unit template at $UNITSRC (install it with the helper)"
+fi
+
+# okid <name>: a release id the box may make a path of: letters, digits and
+# . _ + - only, not starting with . or -, and none of the names deploy
+# keeps for itself in incoming/.
+okid() {
+	case $1 in
+	'' | .* | -* | *.part | nautilus.service | restore.tgz) return 1 ;;
+	*[!A-Za-z0-9._+-]*) return 1 ;;
+	esac
+}
+
+# stateread <name> <copy>: STATE/<name> copied to <copy>, outside STATE,
+# without following a link. Under systemd, STATE belongs to the user the
+# controller runs as (the unit's DynamicUser StateDirectory), so a
+# controller can leave a link, or a hard link to a file it cannot read,
+# there; root must never read through one. The copy keeps its owner, and
+# must be a regular file owned by STATE's owner (a hard link to a root
+# file is owned by root). In cron mode the controller already is the user
+# running this, so there is nothing to guard and a plain copy does.
+# Returns 1 when there is no such file.
+stateread() {
+	[ -e "$STATE/$1" ] || [ -L "$STATE/$1" ] || return 1
+	rm -f "$2"
+	if [ "$SUPERVISOR" = cron ]; then
+		cp "$STATE/$1" "$2"
+		return
+	fi
+	cp -P --preserve=ownership "$STATE/$1" "$2"
+	if [ -L "$2" ] || [ ! -f "$2" ] || [ "$(stat -c %u "$2")" != "$(stat -c %u "$STATE/.")" ]; then
+		rm -f "$2"
+		fail "$STATE/$1 is not a regular file of the controller's own; refusing to read it as root"
+	fi
+	# Checked: now root's own copy, which the controller can neither read
+	# nor change (it kept the controller's owner only for the check).
+	chown -h "$(id -u):$(id -g)" "$2"
+	chmod 600 "$2"
+}
+
+# statewrite <file> <name>: <file> becomes STATE/<name>, owned by STATE's
+# owner. Only with the controller stopped (nothing then runs as that
+# user): the old name goes first, link or not, and is never followed.
+statewrite() {
+	rm -f "$STATE/$2"
+	cp "$1" "$STATE/$2"
+	chown -h "$(stat -c %u:%g "$STATE/.")" "$STATE/$2"
+}
+
+# statebackups: STATE/backups, a real directory (a controller could have
+# left a link to somewhere else in its place; harmless but refused in cron
+# mode too).
+statebackups() {
+	if [ -L "$STATE/backups" ] || { [ -e "$STATE/backups" ] && [ ! -d "$STATE/backups" ]; }; then
+		fail "$STATE/backups is not a directory; refusing"
+	fi
+	mkdir -p "$STATE/backups"
+}
 
 # setlink <link> <release id>: point a link at a release, atomically where
 # mv -T exists.
@@ -49,11 +125,14 @@ writeunit() {
 		return
 	fi
 	tmp=$UNITDIR/$UNIT.new
+	# The helper's unit is its root-owned template, never an upload.
+	src=$ROOT/nautilus.service.in
+	[ -n "$HELPER" ] && src=$UNITSRC
 	if grep -q 'WATCHDOG''=1' "$ROOT/current/controller"; then
-		cp "$ROOT/nautilus.service.in" "$tmp"
+		cp "$src" "$tmp"
 	else
 		sed -e 's/^Type=notify/Type=simple/' -e '/^NotifyAccess=/d' -e '/^WatchdogSec=/d' \
-			"$ROOT/nautilus.service.in" >"$tmp"
+			"$src" >"$tmp"
 		say "note: this release does not notify systemd; running it as Type=simple without a watchdog"
 	fi
 	if cmp -s "$tmp" "$UNITDIR/$UNIT"; then
@@ -237,7 +316,9 @@ place() {
 		mv "$ROOT/incoming/$1" "$ROOT/releases/$1/controller"
 	fi
 	[ -x "$ROOT/releases/$1/controller" ] || fail "release $1 is not on the box"
-	if [ -f "$ROOT/incoming/nautilus.service" ]; then
+	if [ -n "$HELPER" ]; then
+		rm -f "$ROOT/incoming/nautilus.service"
+	elif [ -f "$ROOT/incoming/nautilus.service" ]; then
 		mv "$ROOT/incoming/nautilus.service" "$ROOT/nautilus.service.in"
 	fi
 	# On disk before any link points at it: power lost just after an
@@ -259,14 +340,18 @@ prune() { # sh has no locals: names of its own, so the caller's cur and prev sta
 }
 
 # snapshot <release>: a copy of the retained values before an update,
-# newest 10 kept. snap names it, empty when there were none. Taken with the
-# controller stopped, after its last save on the way out.
+# newest 10 kept in STATE/backups. snap is set when there were values; the
+# copy unsnapshot puts back is root's own, ROOT/snapshot.json, since the
+# release being tried runs as STATE's owner and could change the one in
+# STATE/backups. Taken with the controller stopped, after its last save on
+# the way out.
 snapshot() {
 	snap=
-	[ -f "$STATE/retain.json" ] || return 0
-	mkdir -p "$STATE/backups"
-	snap=$STATE/backups/retain-$(date +%Y%m%dT%H%M%S)-$1.json
-	cp "$STATE/retain.json" "$snap"
+	rm -f "$ROOT/snapshot.json"
+	stateread retain.json "$ROOT/snapshot.json" || return 0
+	snap=retain-$(date +%Y%m%dT%H%M%S)-$1.json
+	statebackups
+	statewrite "$ROOT/snapshot.json" "backups/$snap"
 	ls -1t "$STATE/backups"/retain-*.json | tail -n +11 | while read -r f; do rm -f "$f"; done
 }
 
@@ -277,8 +362,7 @@ unsnapshot() {
 	sv_stop 2>/dev/null || true
 	rm -f "$STATE/retain.json.tmp"
 	if [ -n "$snap" ]; then
-		cp "$snap" "$STATE/retain.json"
-		chown "$(stat -c %u:%g "$STATE/")" "$STATE/retain.json"
+		statewrite "$ROOT/snapshot.json" retain.json
 	else
 		rm -f "$STATE/retain.json"
 	fi
@@ -286,6 +370,17 @@ unsnapshot() {
 
 cmd=$1
 shift
+# The helper checks its arguments itself: only known commands, each with
+# its own count, and ids okid allows.
+if [ -n "$HELPER" ]; then
+	case $cmd in
+	install | update) [ $# -eq 1 ] && okid "$1" ;;
+	receive) [ $# -eq 1 ] && { okid "$1" || [ "$1" = restore.tgz ]; } ;;
+	rollback | status | backup | restore | helper-version) [ $# -eq 0 ] ;;
+	uninstall) [ $# -eq 0 ] || { [ $# -eq 1 ] && [ "$1" = -purge ]; } ;;
+	*) false ;;
+	esac || fail "refused: $cmd $*"
+fi
 case $cmd in
 install | update | rollback | restore | uninstall) hold ;;
 esac
@@ -353,6 +448,8 @@ update)
 		exit 3
 	fi
 	place "$id"
+	# Refused while the old release still runs, not after it is stopped.
+	if [ -d "$STATE" ]; then statebackups; fi
 	sv_stop
 	snapshot "$cur"
 	setlink previous "$cur"
@@ -392,7 +489,11 @@ rollback)
 status)
 	cur=$(target current)
 	[ -n "$cur" ] || fail "nothing installed"
-	echo "current:  $cur ($(NAUTILUS_CLI=1 "$ROOT/current/controller" version 2>/dev/null || echo '?'))"
+	if [ -n "$HELPER" ]; then
+		echo "current:  $cur" # root does not run an uploaded controller
+	else
+		echo "current:  $cur ($(NAUTILUS_CLI=1 "$ROOT/current/controller" version 2>/dev/null || echo '?'))"
+	fi
 	echo "previous: $(target previous)"
 	echo "releases: $(ls -1t "$ROOT/releases" | tr '\n' ' ')"
 	if [ "$SUPERVISOR" = cron ]; then
@@ -404,9 +505,8 @@ status)
 	fi
 	;;
 backup)
-	[ -f "$STATE/retain.json" ] || fail "no $STATE/retain.json yet (does the project have a retain: block?)"
 	tmp=$(mktemp -d)
-	cp "$STATE/retain.json" "$tmp/retain.json"
+	stateread retain.json "$tmp/retain.json" || { rm -rf "$tmp"; fail "no $STATE/retain.json yet (does the project have a retain: block?)"; }
 	target current >"$tmp/release"
 	tar -C "$tmp" -czf - retain.json release
 	rm -rf "$tmp"
@@ -415,15 +515,17 @@ restore)
 	f=$ROOT/incoming/restore.tgz
 	[ -f "$f" ] || fail "no backup uploaded"
 	tmp=$(mktemp -d)
-	tar -C "$tmp" -xzf "$f"
-	[ -s "$tmp/retain.json" ] || fail "the backup holds no retain.json"
-	from=$(cat "$tmp/release" 2>/dev/null || echo '?')
+	# The two members' contents only, to stdout: nothing in the archive
+	# becomes a file, a link or a path on the box.
+	tar -xzOf "$f" retain.json >"$tmp/retain.json" 2>/dev/null || true
+	[ -s "$tmp/retain.json" ] || { rm -rf "$tmp" "$f"; fail "the backup holds no retain.json"; }
+	from=$(tar -xzOf "$f" release 2>/dev/null | head -c 200 | tr -d '\n' || true)
+	okid "$from" || from='?'
 	[ "$from" = "$(target current)" ] || say "note: the backup was taken on release $from; current is $(target current)"
 	# Stopped first: the controller saves every 2 s and once more on
 	# its way out, and either would overwrite the restored file.
 	sv_stop
-	cp "$tmp/retain.json" "$STATE/retain.json"
-	chown "$(stat -c %u:%g "$STATE/")" "$STATE/retain.json"
+	statewrite "$tmp/retain.json" retain.json
 	rm -f "$STATE/retain.json.tmp"
 	rm -rf "$tmp" "$f"
 	if restart; then
@@ -443,6 +545,7 @@ uninstall)
 		rm -f "$HOME/.config/naut-deploy"
 		if [ "${1:-}" = -purge ]; then
 			rm -rf "$STATE"
+			if [ -L "$STATE_PATH" ]; then rm -f "$STATE_PATH"; fi
 			say "uninstalled; retained values deleted"
 		else
 			say "uninstalled; retained values kept in $STATE"
@@ -454,11 +557,27 @@ uninstall)
 	systemctl daemon-reload
 	rm -rf "$ROOT"
 	if [ "${1:-}" = -purge ]; then
-		rm -rf "$STATE" /var/lib/private/nautilus
+		rm -rf "$STATE"
+		# DynamicUser's own directory even when its link was already gone,
+		# for the real layout only (a test's STATE must not reach it).
+		if [ "$STATE_PATH" = /var/lib/nautilus ]; then rm -rf /var/lib/private/nautilus; fi
+		# The path as given, when it was a link to STATE (DynamicUser's
+		# /var/lib/nautilus): not left pointing at nothing.
+		if [ -L "$STATE_PATH" ]; then rm -f "$STATE_PATH"; fi
 		say "uninstalled; retained values deleted"
 	else
 		say "uninstalled; retained values kept in $STATE"
 	fi
+	;;
+receive)
+	# The helper's upload: stdin into ROOT/incoming/<name>, whole or not at
+	# all. The name was checked above.
+	mkdir -p "$ROOT/incoming"
+	cat >"$ROOT/incoming/$1.part"
+	mv -f "$ROOT/incoming/$1.part" "$ROOT/incoming/$1"
+	;;
+helper-version)
+	echo "${NAUT_HELPER_VERSION:-}"
 	;;
 *) fail "unknown command $cmd" ;;
 esac

@@ -40,6 +40,7 @@ esac
 type boxEnv struct {
 	t                *testing.T
 	root, state, sd  string
+	bin, units       string
 	env              []string
 	good, good2, bad string
 }
@@ -56,6 +57,7 @@ func newBoxEnv(t *testing.T) *boxEnv {
 	e := &boxEnv{t: t, root: filepath.Join(dir, "opt"), state: filepath.Join(dir, "state"), sd: filepath.Join(dir, "sd")}
 	bin := filepath.Join(dir, "bin")
 	units := filepath.Join(dir, "units")
+	e.bin, e.units = bin, units
 	for _, d := range []string{e.root, e.state, e.sd, bin, units} {
 		os.MkdirAll(d, 0o755)
 	}
