@@ -42,8 +42,9 @@ import (
 	nio "github.com/joyautomation/nautilus/io"
 )
 
-// link sits between a driver and its fake. A TCP driver uses tcpLink; a
-// driver on another transport supplies its own.
+// link sits between a driver and its fake. A driver on a stream socket
+// uses relayLink (newTCPLink, newUnixLink); a driver on another transport
+// supplies its own.
 type link interface {
 	// cut closes every connection and refuses new ones; heal accepts
 	// again.
