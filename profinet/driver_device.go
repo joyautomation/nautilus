@@ -38,6 +38,13 @@ import (
 // program's first push. (The runtime hands a driver every output on each
 // push, and Load refuses a manifest binding to the PLC that the project
 // does not declare, so one push is the whole image.)
+//
+// One replica of a redundant set (WithDeviceReplica, which Load sets under
+// `redundancy:`) reads the gate as leadership instead: the device runs only
+// while this replica leads. A standby holds no socket, so it answers no DCP
+// and sends no LLDP; two replicas never claim one station name. On
+// takeover the PLC's AR to the old leader times out, and the PLC finds the
+// name again at the new leader's MAC and connects.
 type DeviceDriver struct {
 	m       DeviceManifest
 	log     *slog.Logger
@@ -48,8 +55,10 @@ type DeviceDriver struct {
 	inBind  []Binding // PLC → nautilus
 	outBind map[string]Binding
 	retry   [2]time.Duration
+	replica bool
 
 	mu        sync.Mutex
+	stopDev   context.CancelFunc // ends the running device (a replica losing the lead)
 	dev       *device.Device
 	img       map[device.Addr][]byte // nautilus outputs, per subslot
 	last      map[string]any
@@ -117,6 +126,13 @@ func WithDeviceControllerPort(p int) DeviceOption { return func(d *DeviceDriver)
 func WithDeviceRetry(lo, hi time.Duration) DeviceOption {
 	return func(d *DeviceDriver) { d.retry = [2]time.Duration{lo, hi} }
 }
+
+// WithDeviceReplica makes the driver one replica of a redundant set: the
+// gate is leadership, and a standby says nothing on the network.
+func WithDeviceReplica() DeviceOption { return func(d *DeviceDriver) { d.replica = true } }
+
+// Replica reports whether the driver is one replica of a redundant set.
+func (d *DeviceDriver) Replica() bool { return d.replica }
 
 // NewDevice validates the manifest and builds the driver. It does not
 // touch the network.
@@ -240,6 +256,16 @@ func (d *DeviceDriver) run(ctx context.Context) {
 	defer close(d.done)
 	wait := d.retry[0]
 	for ctx.Err() == nil {
+		if d.replica && !d.leading() {
+			d.standby()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(gateLook):
+			}
+			wait = d.retry[0]
+			continue
+		}
 		o, err := d.open(d.m.Interface)
 		if err != nil {
 			d.setState("error", err.Error())
@@ -255,6 +281,7 @@ func (d *DeviceDriver) run(ctx context.Context) {
 		dev, err := device.New(device.Config{
 			Identity: d.m.Identity(), Subslots: d.m.Subslots(), Port: o.Port, RPC: o.RPC, ListenRPC: o.ListenRPC,
 			InterfaceAddrs: o.Addrs, MinWatchdog: d.minWD, ControllerCMPort: d.cmPort, Log: d.log,
+			MaySend: d.maySend(),
 		})
 		if err != nil { // the manifest was validated; this is a bug
 			o.Port.Close()
@@ -264,22 +291,37 @@ func (d *DeviceDriver) run(ctx context.Context) {
 			d.setState("error", err.Error())
 			return
 		}
+		devCtx, stop := context.WithCancel(ctx)
 		d.mu.Lock()
 		for a, b := range d.img {
 			dev.SetInput(a, b)
 		}
 		dev.SetInputsValid(d.valid)
 		d.dev = dev
+		d.stopDev = stop
 		d.lastErr = ""
 		d.mu.Unlock()
 		d.setState("running", "")
 		start := time.Now()
-		err = dev.Run(ctx)
+		// A replica that lost the lead between the look above and now
+		// stops at once: gateOpen cancels only a device it can see.
+		if d.replica && d.gateShut.Load() {
+			stop()
+		}
+		err = dev.Run(devCtx)
+		stop()
+		d.mu.Lock()
+		d.stopDev = nil
+		d.mu.Unlock()
 		if time.Since(start) > d.retry[1] {
 			wait = d.retry[0] // it ran a good while: start the backoff over
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if d.replica && devCtx.Err() != nil {
+			d.log.Info("profinet-device: no longer the leader; the device is silent")
+			continue // the loop's top parks it as a standby
 		}
 		d.setState("error", fmt.Sprintf("device stopped: %v", err))
 		select {
@@ -289,6 +331,56 @@ func (d *DeviceDriver) run(ctx context.Context) {
 		}
 		wait = min(wait*2, d.retry[1])
 	}
+}
+
+// gateLook is how often the gate is looked at between scans, and how
+// often a standby replica checks whether it leads.
+const gateLook = 200 * time.Millisecond
+
+// leading reports whether a replica holds the lead. Without a gate it
+// does not: `naut run` installs leadership before Start, and a replica
+// must never answer for the station on a guess.
+func (d *DeviceDriver) leading() bool {
+	d.gateMu.Lock()
+	g := d.gate
+	d.gateMu.Unlock()
+	return g != nil && d.gateOpen()
+}
+
+// maySend is the device's per-send check: nil (always) unless the driver
+// is a replica, then the raw leadership gate, read before every frame.
+// It takes no driver lock, since the device calls it from its own send
+// paths. The 200 ms look only stops the device; this is what keeps a
+// leader frozen past its lease from sending a single frame on resume.
+//
+// Two limits:
+//   - It relies on the gate being time-fenced: cluster mode's IsLeader
+//     compares the clock with the lease, so it turns false by itself when
+//     the lease runs out. A future pair mode must keep that property.
+//   - Check and send are not atomic. A sending goroutine that passed the
+//     check just before the lease ran out can still put one frame on the
+//     wire. Closing that needs a margin in the elector's fence (the new
+//     leader takes over a little after the old lease ends); noted for the
+//     redundancy work (#787).
+func (d *DeviceDriver) maySend() func() bool {
+	if !d.replica {
+		return nil
+	}
+	return func() bool {
+		d.gateMu.Lock()
+		g := d.gate
+		d.gateMu.Unlock()
+		return g != nil && g()
+	}
+}
+
+// standby parks a replica: no device, so inputs read Stale, and the
+// status row says why it is silent.
+func (d *DeviceDriver) standby() {
+	d.mu.Lock()
+	d.dev = nil
+	d.mu.Unlock()
+	d.setState("standby", "")
 }
 
 func (d *DeviceDriver) setState(state, lastErr string) {
@@ -451,7 +543,13 @@ func (d *DeviceDriver) gateOpen() bool {
 			d.gateShut.Store(true)
 			d.pushed = false
 			d.updateValid()
-			d.log.Info("profinet-device: write gate closed; the PLC sees our data as invalid")
+			if d.replica {
+				if d.stopDev != nil {
+					d.stopDev() // a standby holds no socket
+				}
+			} else {
+				d.log.Info("profinet-device: write gate closed; the PLC sees our data as invalid")
+			}
 		} else {
 			d.gateShut.Store(false)
 			d.wanted.Store(true)
@@ -465,7 +563,7 @@ func (d *DeviceDriver) gateOpen() bool {
 // watchGate looks at the gate between scans, so a hung scan (which calls
 // nothing) still turns the data invalid.
 func (d *DeviceDriver) watchGate(ctx context.Context) {
-	t := time.NewTicker(200 * time.Millisecond)
+	t := time.NewTicker(gateLook)
 	defer t.Stop()
 	for {
 		select {
@@ -490,7 +588,7 @@ var (
 // DeviceHealth is the status row's content.
 type DeviceHealth struct {
 	Interface, Station string
-	State              string // starting | error | running
+	State              string // starting | error | running | standby
 	AR                 string // idle | startup | data
 	Controller         string
 	ControllerState    string // run | stop | invalid

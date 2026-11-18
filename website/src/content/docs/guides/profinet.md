@@ -125,11 +125,40 @@ in three cases:
 The PLC sees invalid data rather than zeros or a frozen value, and
 handles it as it would a faulty module.
 
+## Redundancy
+
+`naut check` still refuses PROFINET together with `redundancy:`. On
+takeover the new leader must already hold the station's address, and
+`redundancy:` cannot name and check that floating address yet. What
+follows is how it will behave once it can.
+
+Under `redundancy:`, only the leader is a PROFINET device. Every frame
+it sends first checks that its lease is still current, so a leader that
+was frozen past its lease sends nothing when it resumes. A standby
+holds no socket on the interface. It answers no DCP and sends no LLDP,
+so two replicas never answer for one station name. Its input tags read
+Stale and keep their last value, and its status row says `standby`.
+
+On takeover:
+1. The old leader goes silent, and the PLC's connection to it times
+   out.
+2. The PLC looks for the station name again and finds it at the new
+   leader's MAC address.
+3. The PLC connects, and the data turns valid with the new leader's
+   first full push.
+
+The PLC also assigns the station's IP address again. nautilus accepts
+that only when the new leader's interface already holds the address
+(see above), and two hosts cannot hold one address on one network at
+once. So for now, have the station's address move with the leader
+(a floating address managed outside nautilus). Hand-over against a real
+PLC, including how long the PLC takes to reconnect, has **not been
+measured yet**.
+
 ## What it does not do yet
 
-- Run with `redundancy:`. It is refused at load, because a standby has
-  to go silent on the PROFINET network and the hand-over is still being
-  designed.
+- Run with `redundancy:`: refused until the floating station address can
+  be named and checked (see above); the hand-over is not measured yet.
 - Be a PROFINET **controller** that drives devices. That comes next.
 - IRT, MRP, system redundancy, PROFIsafe, more than one AR, alarms raised
   to the PLC, strings or arrays.

@@ -290,6 +290,9 @@ func (d *Device) sendAppReady(a *ar) error {
 	buf := make([]byte, 4096)
 	// The datagram may be lost; resend a few times within the window.
 	for try := 0; try < 3; try++ {
+		if !d.maySend() {
+			return ErrNotSending
+		}
 		if _, err := sock.WriteToUDP(pkt, dst); err != nil {
 			return err
 		}

@@ -61,7 +61,8 @@ type Controller struct {
 	outIOPS     map[device.Addr]uint8
 	outDS       uint8
 	sending     bool
-	dcp         chan *wire.DCPFrame
+	dcp         chan dcpReply
+	dcpFrom     net.HardwareAddr // who answered the last DCP request
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
@@ -82,7 +83,7 @@ func NewController(hub *transport.Hub, mac, devMAC net.HardwareAddr, devRPC *net
 	c := &Controller{
 		cli: cli, cm: cm, devRPC: devRPC, devMAC: devMAC,
 		port: hub.Port(mac, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}}),
-		dcp:  make(chan *wire.DCPFrame, 8), ctx: ctx, cancel: cancel,
+		dcp:  make(chan dcpReply, 8), ctx: ctx, cancel: cancel,
 		outputs: map[device.Addr][]byte{}, outIOPS: map[device.Addr]uint8{},
 	}
 	go c.recvLoop()
@@ -115,7 +116,7 @@ func (c *Controller) recvLoop() {
 		if id >= wire.FrameIDDCPHello && id <= wire.FrameIDDCPIdentResp {
 			if d, err := wire.ParseDCPFrame(f.Payload); err == nil {
 				select {
-				case c.dcp <- d:
+				case c.dcp <- dcpReply{d, f.Src}:
 				default:
 				}
 			}
@@ -282,10 +283,29 @@ func (c *Controller) dcpRequest(f *wire.DCPFrame, dst net.HardwareAddr) *wire.DC
 	c.port.Send(dst, wire.EtherTypePNIO, wire.MarshalDCPFrame(f))
 	select {
 	case r := <-c.dcp:
-		return r
+		c.mu.Lock()
+		c.dcpFrom = r.src
+		c.mu.Unlock()
+		return r.f
 	case <-time.After(300 * time.Millisecond):
+		c.mu.Lock()
+		c.dcpFrom = nil
+		c.mu.Unlock()
 		return nil
 	}
+}
+
+type dcpReply struct {
+	f   *wire.DCPFrame
+	src net.HardwareAddr
+}
+
+// Responder is the MAC address that answered the last DCP request (Identify,
+// SetIP, SetName), nil when none did.
+func (c *Controller) Responder() net.HardwareAddr {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dcpFrom
 }
 
 // Identify asks for name and returns what the answering device reports

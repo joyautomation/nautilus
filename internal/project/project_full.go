@@ -40,11 +40,15 @@ import (
 // checkNetworkSections validates the server sections that open sockets,
 // offline, so naut check reports them before anything listens.
 func checkNetworkSections(m Manifest) error {
+	// A replica set's standby is silent on the PROFINET network (#790), but
+	// on takeover the PLC re-assigns the station address, which the new
+	// leader must already hold: the floating address has to be in place
+	// first. Until `redundancy:` can name it and check it (#787 step 6),
+	// the combination is refused.
 	if m.Redundancy != nil {
-		configs := append([]DriverConfig{m.Driver}, m.Drivers...)
-		for _, d := range configs {
+		for _, d := range append([]DriverConfig{m.Driver}, m.Drivers...) {
 			if strings.HasPrefix(strings.ToLower(d.Type), "profinet") {
-				return fmt.Errorf("driver %s with redundancy: is not supported yet: a standby must go silent on the PROFINET network, and how it hands over is an open question (docs/design/profinet.md §8.1)", d.Type)
+				return fmt.Errorf("driver %s with redundancy: is not supported yet: a takeover needs the station's floating IP address on the new leader, and redundancy: cannot name and check one yet (#787 step 6)", d.Type)
 			}
 		}
 	}
@@ -609,6 +613,24 @@ func platformNotices(Manifest) []string { return nil }
 // the device's data valid, the PLC would read its zero bytes as a good
 // value. Other drivers bind catalogs freely; this one's bindings ARE the
 // PLC's input image.
+// markReplicas tells the drivers that read the write gate as leadership
+// that they are one replica of a redundant set. A PROFINET device must
+// then go silent as a standby, not just mark its data invalid: two
+// replicas cannot both answer for one station name.
+func markReplicas(d nio.Driver, redundant bool) {
+	if !redundant {
+		return
+	}
+	switch drv := d.(type) {
+	case *nio.Multi:
+		for _, c := range drv.Children() {
+			markReplicas(c.Driver, redundant)
+		}
+	case *profinet.DeviceDriver:
+		drv.Apply(profinet.WithDeviceReplica())
+	}
+}
+
 func checkDriverOutputs(defs []runtime.TagDef, d nio.Driver) error {
 	declared := map[string]bool{}
 	for _, t := range defs {

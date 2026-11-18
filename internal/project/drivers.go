@@ -902,6 +902,9 @@ func profinetDeviceStatus(h profinet.DeviceHealth) server.DriverStatus {
 	switch {
 	case h.State == "error":
 		s.State, s.Message = "error", "Not on the network: "+h.LastError
+	case h.State == "standby":
+		// A redundant standby is silent on purpose: no socket, no DCP.
+		s.State, s.Message = "waiting", "Standby: silent on the network; the leader is the device"
 	case h.State != "running":
 		s.State, s.Message = "connecting", "Opening the interface"
 	case h.AR == "data" && h.ControllerState == "run" && h.Diff == 0 && h.InputsValid:

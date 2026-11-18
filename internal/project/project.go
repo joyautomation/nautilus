@@ -918,6 +918,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if err := checkDriverOutputs(opts.Tags, opts.Driver); err != nil {
 		return nil, err
 	}
+	markReplicas(opts.Driver, m.Redundancy != nil)
 	if err := checkNetworkSections(m); err != nil {
 		return nil, err
 	}

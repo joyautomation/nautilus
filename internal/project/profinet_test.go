@@ -77,12 +77,26 @@ func TestLoadProfinetDevice(t *testing.T) {
 	}
 }
 
-// Redundancy needs a standby that goes silent on the PROFINET network;
-// until that is designed, the combination is refused at load.
-func TestProfinetRefusesRedundancy(t *testing.T) {
+// Under redundancy: Load still refuses PROFINET, until the floating
+// station address can be named and checked (#787 step 6). The replica
+// marking is in place for when it lands: a marked driver's standby goes
+// silent on the network instead of only marking its data invalid.
+func TestProfinetDeviceUnderRedundancy(t *testing.T) {
 	_, err := Load(profinetProject("redundancy:\n  lease: pn-lease\n"), "")
-	if err == nil || !strings.Contains(err.Error(), "redundancy") || !strings.Contains(err.Error(), "profinet") {
-		t.Fatalf("got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "floating IP") {
+		t.Fatalf("got %v, want the floating-IP refusal", err)
+	}
+	p, err := Load(profinetProject(""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv := p.Runtime.Driver.(*profinet.DeviceDriver)
+	if drv.Replica() {
+		t.Fatal("profinet-device without redundancy: is a replica")
+	}
+	markReplicas(drv, true)
+	if !drv.Replica() {
+		t.Fatal("markReplicas did not mark the driver")
 	}
 }
 
@@ -222,4 +236,13 @@ END_PROGRAM`)}
 		_, iops, _, _ := plc.LastInput(sub)
 		return iops == wire.IOxSGood
 	})
+}
+
+// A standby replica is silent on purpose; its row says so instead of
+// "opening the interface".
+func TestProfinetDeviceStandbyStatus(t *testing.T) {
+	s := profinetDeviceStatus(profinet.DeviceHealth{Station: "pn-1", Interface: "eth1", State: "standby", AR: "idle"})
+	if s.State != "waiting" || !strings.Contains(s.Message, "Standby") {
+		t.Fatalf("got %+v", s)
+	}
 }
