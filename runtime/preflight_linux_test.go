@@ -3,11 +3,15 @@
 package runtime
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -27,6 +31,11 @@ func fakeProc(t *testing.T, rtRuntime, rtPeriod string, threads ...fakeThread) s
 	os.MkdirAll(filepath.Join(root, "sys/kernel"), 0o755)
 	os.WriteFile(filepath.Join(root, "sys/kernel/sched_rt_runtime_us"), []byte(rtRuntime+"\n"), 0o644)
 	os.WriteFile(filepath.Join(root, "sys/kernel/sched_rt_period_us"), []byte(rtPeriod+"\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "sys/kernel/osrelease"), []byte("5.4.193-rt74\n"), 0o644)
+	// This process may run on CPUs 0-1, like the bench controller.
+	os.MkdirAll(filepath.Join(root, "self"), 0o755)
+	os.WriteFile(filepath.Join(root, "self/status"), []byte("Cpus_allowed_list:\t0-1\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "self/mountinfo"), []byte("29 34 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw\n"), 0o644)
 	for _, th := range threads {
 		dir := filepath.Join(root, fmt.Sprint(th.pid), "task", fmt.Sprint(th.tid))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -53,8 +62,8 @@ func fakeProc(t *testing.T, rtRuntime, rtPeriod string, threads ...fakeThread) s
 
 const self = 4242
 
-// The incident's exact layout: a vendor I/O shim at SCHED_FIFO 80 allowed
-// only on CPU 1, and a task asking for priority 40 pinned to CPU 1. Refused,
+// The incident's exact layout: a vendor I/O shim at SCHED_FIFO 80 confined
+// to CPU 1, and a task asking for priority 40 pinned to CPU 1. Refused,
 // naming the shim, unless the task says share-cpu: true.
 func TestPreflightRefusesTheIncidentLayout(t *testing.T) {
 	root := fakeProc(t, "950000", "1000000",
@@ -62,54 +71,151 @@ func TestPreflightRefusesTheIncidentLayout(t *testing.T) {
 		fakeThread{pid: 900, tid: 900, comm: "nautilus_io", prio: 0, policy: 0, cpusAllowedFor: "0-1"},
 	)
 	warn, err := preflight(root, self, []int{1}, 40, false)
-	if err == nil || !strings.Contains(err.Error(), "refused") || !strings.Contains(err.Error(), "nautilus_io (pid 900, thread 901) at real-time priority 80") {
+	if err == nil || !strings.Contains(err.Error(), "refused") || !strings.Contains(err.Error(), "nautilus_io (pid 900, thread 901) at real-time priority 80 on cpu 1") {
 		t.Fatalf("the incident layout: got err %v (warnings %q), want a refusal naming the shim", err, warn)
 	}
 	warn, err = preflight(root, self, []int{1}, 40, true)
 	if err != nil || len(warn) != 1 || !strings.Contains(warn[0], "share-cpu") {
 		t.Fatalf("share-cpu: true: got err %v, warnings %q; want it allowed with a warning", err, warn)
 	}
-	if _, err := preflight(root, self, []int{0}, 40, false); err != nil {
-		t.Fatalf("the other CPU: %v", err)
+	if w, err := preflight(root, self, []int{0}, 40, false); err != nil || len(w) != 0 {
+		t.Fatalf("the other CPU: %v %q", err, w)
+	}
+	// A higher thread confined to CPUs 1-2, a request pinned to both: refused.
+	root = fakeProc(t, "950000", "1000000",
+		fakeThread{pid: 910, tid: 911, comm: "vendor", prio: 90, policy: 1, cpusAllowedFor: "1-2"})
+	if _, err := preflight(root, self, []int{1, 2}, 40, false); err == nil {
+		t.Fatal("a higher thread confined to the requested CPUs must be refused")
+	}
+	// SCHED_DEADLINE outranks any FIFO priority.
+	root = fakeProc(t, "950000", "1000000",
+		fakeThread{pid: 920, tid: 921, comm: "dl", prio: 0, policy: 6, cpusAllowedFor: "1"})
+	if _, err := preflight(root, self, []int{1}, 99, false); err == nil || !strings.Contains(err.Error(), "SCHED_DEADLINE") {
+		t.Fatalf("a SCHED_DEADLINE thread confined to the CPU: %v, want refused", err)
 	}
 }
 
-// What is not refused: kernel threads (migration/N is FIFO 99 on every
-// CPU), this process's own threads, normal-priority threads, a request
-// without a priority or without a pin; a real-time thread at or below the
-// request's priority is a warning.
-func TestPreflightWhatIsNotRefused(t *testing.T) {
+// What is warned about, not refused: a higher thread that may float to
+// other CPUs (rtkit-daemon's RR 99 on every CPU of a desktop), one at the
+// same or a lower priority confined to the requested CPU. Nothing at all
+// for a lower one that floats (PipeWire's audio threads), kernel threads,
+// this process's own, normal-priority threads, a request without a priority.
+func TestPreflightWarnings(t *testing.T) {
 	root := fakeProc(t, "950000", "1000000",
 		fakeThread{pid: 12, tid: 12, comm: "migration/1", flags: pfKThread, prio: 99, policy: 1, cpusAllowedFor: "1"},
 		fakeThread{pid: self, tid: self + 1, comm: "naut", prio: 90, policy: 1, cpusAllowedFor: "1"},
 		fakeThread{pid: 700, tid: 700, comm: "sshd", prio: 0, policy: 0, cpusAllowedFor: "0-1"},
-		fakeThread{pid: 800, tid: 801, comm: "lower) rt (x", prio: 20, policy: 2, cpusAllowedFor: "0-3"},
+		fakeThread{pid: 750, tid: 751, comm: "rtkit-daemon", prio: 99, policy: 2, cpusAllowedFor: "0-31"},
+		fakeThread{pid: 760, tid: 761, comm: "twin", prio: 40, policy: 1, cpusAllowedFor: "1"},
+		fakeThread{pid: 800, tid: 801, comm: "lower) rt (x", prio: 20, policy: 2, cpusAllowedFor: "1"},
+		fakeThread{pid: 850, tid: 851, comm: "AudioIPC", prio: 10, policy: 1, cpusAllowedFor: "0-31"},
 	)
 	warn, err := preflight(root, self, []int{1}, 40, false)
 	if err != nil {
 		t.Fatalf("refused: %v", err)
 	}
-	if len(warn) != 1 || !strings.Contains(warn[0], "lower) rt (x (pid 800, thread 801) at real-time priority 20") {
-		t.Fatalf("warnings %q, want one for the lower-priority real-time thread (comm parsed past its ')')", warn)
+	want := []string{
+		"rtkit-daemon (pid 750, thread 751) at real-time priority 99 on cpu 0-31, a real-time thread of another program above this task's priority 40 that can move elsewhere",
+		"twin (pid 760, thread 761) at real-time priority 40 on cpu 1, at or below",
+		"lower) rt (x (pid 800, thread 801) at real-time priority 20 on cpu 1, at or below",
+	}
+	if len(warn) != len(want) {
+		t.Fatalf("warnings %q, want %d", warn, len(want))
+	}
+	for i, w := range want {
+		if !strings.Contains(warn[i], w) {
+			t.Errorf("warning %d: %q, want it to say %q", i, warn[i], w)
+		}
 	}
 	if w, err := preflight(root, self, []int{1}, 0, false); err != nil || w != nil {
 		t.Fatalf("no priority: %v %q", err, w)
 	}
-	if w, err := preflight(root, self, nil, 40, false); err != nil || len(w) != 0 {
-		t.Fatalf("unpinned: %v %q", err, w)
+}
+
+// A task with a priority and no cpu: may run on any of the process's CPUs:
+// a higher thread confined to one of them is a warning (never a refusal).
+func TestPreflightUnpinnedWarns(t *testing.T) {
+	root := fakeProc(t, "950000", "1000000",
+		fakeThread{pid: 900, tid: 901, comm: "nautilus_io", prio: 80, policy: 1, cpusAllowedFor: "1"})
+	warn, err := preflight(root, self, nil, 40, false)
+	if err != nil || len(warn) != 1 || !strings.Contains(warn[0], "no cpu:, so it may run beside nautilus_io") {
+		t.Fatalf("unpinned beside a confined higher thread: err %v, warnings %q", err, warn)
+	}
+	for _, cpus := range []string{"5", "0-1"} { // not ours; floats over all of ours
+		root = fakeProc(t, "950000", "1000000",
+			fakeThread{pid: 900, tid: 901, comm: "elsewhere", prio: 80, policy: 1, cpusAllowedFor: cpus})
+		if warn, err := preflight(root, self, nil, 40, false); err != nil || len(warn) != 0 {
+			t.Fatalf("a higher thread on cpu %s, this process on 0-1: %v %q", cpus, err, warn)
+		}
+	}
+}
+
+// What the scan cannot see is said: entries it may not read, and a /proc
+// that hides other processes. A thread that exits mid-scan is not.
+func TestPreflightSaysWhatItCannotSee(t *testing.T) {
+	root := fakeProc(t, "950000", "1000000",
+		fakeThread{pid: 900, tid: 901, comm: "nautilus_io", prio: 80, policy: 1, cpusAllowedFor: "1"})
+	// Gone mid-scan: its directory is there, its stat is not.
+	os.MkdirAll(filepath.Join(root, "950", "task", "951"), 0o755)
+	if w, err := preflight(root, self, []int{0}, 40, false); err != nil || len(w) != 0 {
+		t.Fatalf("a vanished thread must be skipped quietly: %v %q", err, w)
+	}
+	if os.Geteuid() != 0 {
+		os.Chmod(filepath.Join(root, "900", "task", "901", "stat"), 0)
+		w, _ := preflight(root, self, []int{0}, 40, false)
+		if len(w) != 1 || !strings.Contains(w[0], "1 entries could not be read") {
+			t.Fatalf("an unreadable entry: warnings %q, want it said", w)
+		}
+		os.Chmod(filepath.Join(root, "900", "task", "901", "stat"), 0o644)
+	}
+	os.WriteFile(filepath.Join(root, "self/mountinfo"), []byte("29 34 0:26 / /proc rw,nosuid - proc proc rw,hidepid=invisible\n"), 0o644)
+	w, _ := preflight(root, self, []int{0}, 40, false)
+	if len(w) != 1 || !strings.Contains(w[0], "hidepid=invisible") {
+		t.Fatalf("/proc with hidepid: warnings %q, want it said", w)
+	}
+	if hiddenProc(fakeProc(t, "950000", "1000000")) != "" {
+		t.Fatal("a plain /proc reported as hiding")
 	}
 }
 
 // The kernel's real-time throttle off (-1, or the whole period) is warned
-// about; on, it is not.
+// about before 6.12; from 6.12 the fair server reserves normal tasks their
+// share regardless.
 func TestPreflightThrottleWarning(t *testing.T) {
 	for _, c := range []struct {
-		runtime, period string
-		warn            bool
-	}{{"950000", "1000000", false}, {"-1", "1000000", true}, {"1000000", "1000000", true}} {
-		w, _ := preflight(fakeProc(t, c.runtime, c.period), self, nil, 40, false)
-		if got := len(w) == 1 && strings.Contains(w[0], "throttle is off"); got != c.warn {
-			t.Errorf("sched_rt_runtime_us %s / period %s: warnings %q, want throttle warning %v", c.runtime, c.period, w, c.warn)
+		runtime, period, release string
+		warn                     bool
+	}{
+		{"950000", "1000000", "5.4.193-rt74", false},
+		{"-1", "1000000", "5.4.193-rt74", true},
+		{"1000000", "1000000", "6.1.0", true},
+		{"1000000", "1000000", "7.2.6-76070206-generic", false},
+		{"-1", "1000000", "6.12.0", false},
+	} {
+		root := fakeProc(t, c.runtime, c.period)
+		os.WriteFile(filepath.Join(root, "sys/kernel/osrelease"), []byte(c.release+"\n"), 0o644)
+		if got := strings.Contains(throttleWarning(root), "throttle is off"); got != c.warn {
+			t.Errorf("sched_rt_runtime_us %s / period %s on %s: warn %v, want %v", c.runtime, c.period, c.release, got, c.warn)
+		}
+	}
+}
+
+func TestPreflightCPUText(t *testing.T) {
+	for in, want := range map[string]string{"0-31": "0-31", "1": "1", "0,2-3": "0,2-3", "3,1,2": "1-3"} {
+		var cpus []int
+		for _, part := range strings.Split(in, ",") {
+			lo, hi, r := strings.Cut(part, "-")
+			a, _ := strconv.Atoi(lo)
+			b := a
+			if r {
+				b, _ = strconv.Atoi(hi)
+			}
+			for c := a; c <= b; c++ {
+				cpus = append(cpus, c)
+			}
+		}
+		if got := cpuText(cpus); got != want {
+			t.Errorf("cpuText(%v) = %q, want %q", cpus, got, want)
 		}
 	}
 }
@@ -131,5 +237,27 @@ func TestPreflightApplySchedRefuses(t *testing.T) {
 	}
 	if after := affinityOfThisThread(t); fmt.Sprint(after) != fmt.Sprint(before) {
 		t.Fatalf("a refused request still pinned the thread: %v → %v", before, after)
+	}
+}
+
+// The kernel's throttle is one setting for the whole box: warned about
+// once per process, not once per task.
+func TestPreflightThrottleWarnedOnce(t *testing.T) {
+	old, oldLog := procRoot, slog.Default()
+	procRoot = fakeProc(t, "-1", "1000000")
+	throttleOnce = sync.Once{}
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer func() { procRoot = old; slog.SetDefault(oldLog); throttleOnce = sync.Once{} }()
+	for range 3 {
+		func() {
+			goruntime.LockOSThread()
+			defer goruntime.UnlockOSThread()
+			_ = applySched(nil, 1, false, nil)
+			releaseSched()
+		}()
+	}
+	if n := strings.Count(buf.String(), "throttle is off"); n != 1 {
+		t.Fatalf("throttle warned %d times over three tasks, want once:\n%s", n, buf.String())
 	}
 }

@@ -35,6 +35,13 @@ import (
 func applySched(cpus []int, prio int, shareCPU bool, demoted func(reason string)) error {
 	// Pre-flight (preflight_linux.go): what already runs real-time where
 	// this thread is going. A refusal leaves the thread as it was.
+	if prio > 0 {
+		throttleOnce.Do(func() {
+			if w := throttleWarning(procRoot); w != "" {
+				slog.Warn("runtime: real-time pre-flight", "warning", w)
+			}
+		})
+	}
 	warnings, err := preflight(procRoot, os.Getpid(), cpus, prio, shareCPU)
 	for _, w := range warnings {
 		slog.Warn("runtime: real-time pre-flight", "cpus", cpus, "priority", prio, "warning", w)
@@ -77,6 +84,9 @@ func applySched(cpus []int, prio int, shareCPU bool, demoted func(reason string)
 	}
 	return nil
 }
+
+// throttleOnce: the kernel's throttle is one setting; warn about it once.
+var throttleOnce sync.Once
 
 const (
 	schedOther   = 0

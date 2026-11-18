@@ -3,79 +3,106 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
-// Pre-flight for a real-time request (#836): before a task is pinned to a
-// CPU at SCHED_FIFO, look at what already runs real-time there.
+// Pre-flight for a real-time request (#836): before a task's thread is
+// raised to SCHED_FIFO, look at what already runs real-time where it is
+// going. Once, as each loop starts; best effort.
 //
 // A PLCnext lost its network for good when a test task at FIFO 40 was
 // pinned to the core the vendor I/O shim ran on at FIFO 80: lower priority
 // than the shim, higher than the kernel and firmware work that core also
-// carried. So a CPU that already carries a userspace real-time thread of
-// another process at a HIGHER priority than the request is refused: that
-// thread is a vendor runtime, a shim, something the box depends on, and
-// putting our real-time work beside it is the incident's exact setup. The
-// task runs unpinned at normal priority with the reason in its scan.sched,
-// unless its manifest says share-cpu: true. One at the same or a lower
-// priority is a warning. Kernel threads are left out: migration/N runs at
-// FIFO 99 on every CPU, and IRQ threads are the kernel's to place.
+// carried. So a request pinned to CPUs where another program's userspace
+// real-time thread above it is CONFINED (its affinity lies within those
+// CPUs: a vendor runtime or shim pinned to its core) is refused: the task
+// runs unpinned at normal priority with the reason in its scan.sched,
+// unless its manifest says share-cpu: true. A higher thread that may float
+// elsewhere too (rtkit-daemon's RR 99, allowed on every CPU of a desktop)
+// is a warning, as is one at the same or a lower priority, and, for a task
+// with a priority but no cpu:, a confined higher thread on a CPU the
+// process may run on. SCHED_DEADLINE threads count as above any FIFO.
+// Kernel threads are left out: migration/N runs at FIFO 99 on every CPU,
+// and IRQ threads are the kernel's to place.
 //
-// It also warns when the kernel's real-time throttle is off
-// (sched_rt_runtime_us -1, or the whole period): then nothing at all stops
-// a real-time thread that never sleeps from owning its core.
+// What it cannot see is said, not passed as safe: a /proc mounted with
+// hidepid or subset, or entries it may not read. Inside a PID namespace it
+// sees only that namespace (the docs say so).
 
 // procRoot is /proc; tests point it at a fake tree.
 var procRoot = "/proc"
 
-const pfKThread = 0x00200000 // PF_KTHREAD in /proc/<pid>/stat's flags
+const (
+	pfKThread     = 0x00200000 // PF_KTHREAD in /proc/<pid>/stat's flags
+	schedRR       = 2
+	schedDeadline = 6
+	deadlinePrio  = 100 // a SCHED_DEADLINE thread outranks every FIFO/RR priority
+)
 
 // rtThread is one real-time thread pre-flight found.
 type rtThread struct {
 	pid, tid int
 	comm     string
-	prio     int
+	prio     int // deadlinePrio for SCHED_DEADLINE
 	cpus     []int
 }
 
-// preflight checks a request to pin to cpus at prio. It returns warnings to
-// log and, unless shareCPU, an error when a CPU of cpus carries a userspace
-// real-time thread of another process above prio.
+func (th rtThread) String() string {
+	p := "real-time priority " + strconv.Itoa(th.prio)
+	if th.prio == deadlinePrio {
+		p = "SCHED_DEADLINE"
+	}
+	return fmt.Sprintf("%s (pid %d, thread %d) at %s on cpu %s", th.comm, th.pid, th.tid, p, cpuText(th.cpus))
+}
+
+// preflight checks a request to run at prio, pinned to cpus or (none) on
+// the process's own CPUs. It returns warnings to log and, unless shareCPU,
+// an error when cpus are where another program's higher real-time thread
+// is confined.
 func preflight(root string, self int, cpus []int, prio int, shareCPU bool) (warnings []string, refuse error) {
 	if prio <= 0 {
 		return nil, nil
 	}
-	if w := throttleWarning(root); w != "" {
-		warnings = append(warnings, w)
+	threads, blind := rtThreads(root, self)
+	if blind != "" {
+		warnings = append(warnings, blind)
 	}
-	if len(cpus) == 0 {
-		return warnings, nil
+	pinned := len(cpus) > 0
+	where := cpus
+	if !pinned {
+		where = processCPUs(root)
 	}
-	want := map[int]bool{}
-	for _, c := range cpus {
-		want[c] = true
-	}
+	in := setOf(where)
 	var above []string
-	for _, th := range rtThreads(root, self) {
-		shared := false
-		for _, c := range th.cpus {
-			if want[c] {
-				shared = true
-				break
-			}
-		}
-		if !shared {
+	for _, th := range threads {
+		if !overlaps(th.cpus, in) {
 			continue
 		}
-		what := fmt.Sprintf("%s (pid %d, thread %d) at real-time priority %d on cpu %s", th.comm, th.pid, th.tid, th.prio, cpuText(th.cpus))
-		if th.prio > prio {
-			above = append(above, what)
-		} else {
-			warnings = append(warnings, "cpu "+cpuText(cpus)+" already runs "+what+", at or below this task's priority "+strconv.Itoa(prio)+": they will take turns")
+		switch {
+		case pinned:
+			confined := subset(th.cpus, in) // it runs only where we are going
+			switch {
+			case th.prio > prio && confined:
+				above = append(above, th.String())
+			case th.prio > prio:
+				warnings = append(warnings, fmt.Sprintf("cpu %s may also run %s, a real-time thread of another program above this task's priority %d that can move elsewhere too", cpuText(cpus), th, prio))
+			case confined:
+				warnings = append(warnings, fmt.Sprintf("cpu %s already runs %s, at or below this task's priority %d: they will take turns", cpuText(cpus), th, prio))
+			}
+			// A lower thread that may run anywhere is no concern.
+		case th.prio > prio && subset(th.cpus, in) && len(setOf(th.cpus)) < len(in):
+			// Unpinned: a higher thread pinned to some of our CPUs (a shim
+			// on its core) is where this task may land; one that floats
+			// over all of them is everyone's neighbour already.
+			warnings = append(warnings, fmt.Sprintf("this task has priority %d and no cpu:, so it may run beside %s, a real-time thread of another program above it; pin it to another CPU", prio, th))
 		}
 	}
 	if len(above) == 0 {
@@ -84,12 +111,18 @@ func preflight(root string, self int, cpus []int, prio int, shareCPU bool) (warn
 	if shareCPU {
 		return append(warnings, "share-cpu: pinning to cpu "+cpuText(cpus)+" beside "+strings.Join(above, "; ")), nil
 	}
-	return warnings, fmt.Errorf("pin to cpu %s at priority %d: refused, that CPU already runs %s, a real-time thread of another program above this task (a vendor runtime or I/O shim, most likely); real-time work beside it can starve what that core also carries. Pin to another CPU, or set share-cpu: true on the task to do it anyway; the task is running unpinned at normal priority",
+	return warnings, fmt.Errorf("pin to cpu %s at priority %d: refused, that CPU is where %s, a real-time thread of another program above this task, is pinned (a vendor runtime or I/O shim, most likely); real-time work beside it can starve what that core also carries. Pin to another CPU, or set share-cpu: true on the task to do it anyway; the task is running unpinned at normal priority",
 		cpuText(cpus), prio, strings.Join(above, "; "))
 }
 
-// throttleWarning is a warning when the kernel's real-time throttle is off.
+// throttleWarning is a warning when nothing in the kernel keeps a
+// real-time thread that never sleeps from owning its core: sched_rt_runtime_us
+// -1 or the whole period, on a kernel before 6.12. From 6.12 the fair
+// server reserves normal tasks their share whatever that sysctl says.
 func throttleWarning(root string) string {
+	if v, err := os.ReadFile(filepath.Join(root, "sys/kernel/osrelease")); err == nil && kernelAtLeast(string(v), 6, 12) {
+		return ""
+	}
 	rt, err1 := readInt(filepath.Join(root, "sys/kernel/sched_rt_runtime_us"))
 	period, err2 := readInt(filepath.Join(root, "sys/kernel/sched_rt_period_us"))
 	if err1 != nil {
@@ -101,70 +134,161 @@ func throttleWarning(root string) string {
 	return ""
 }
 
-// rtThreads lists the userspace SCHED_FIFO and SCHED_RR threads of other
-// processes. Unreadable entries (a thread that exited, another user's
-// process) are skipped: pre-flight is best effort, never a reason to fail.
-func rtThreads(root string, self int) []rtThread {
-	pids, _ := os.ReadDir(root)
-	var out []rtThread
+func kernelAtLeast(release string, major, minor int) bool {
+	parts := strings.SplitN(strings.TrimSpace(release), ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(strings.TrimFunc(parts[1], func(r rune) bool { return r < '0' || r > '9' }))
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return ma > major || ma == major && mi >= minor
+}
+
+// rtThreads lists the userspace SCHED_FIFO, SCHED_RR and SCHED_DEADLINE
+// threads of other processes. A thread that exited meanwhile is skipped
+// quietly; anything it may not read, or a /proc that hides processes, comes
+// back as blind: the scan cannot vouch for what it did not see.
+func rtThreads(root string, self int) (out []rtThread, blind string) {
+	var reasons []string
+	if opt := hiddenProc(root); opt != "" {
+		reasons = append(reasons, "/proc is mounted with "+opt+", which hides other programs' processes")
+	}
+	pids, err := os.ReadDir(root)
+	if err != nil {
+		return nil, "could not list " + root + " (" + err.Error() + "): no other program's real-time threads were checked"
+	}
+	denied := 0
 	for _, p := range pids {
 		pid, err := strconv.Atoi(p.Name())
 		if err != nil || pid == self {
 			continue
 		}
-		tids, _ := os.ReadDir(filepath.Join(root, p.Name(), "task"))
+		tids, err := os.ReadDir(filepath.Join(root, p.Name(), "task"))
+		if err != nil {
+			denied += countDenied(err)
+			continue
+		}
 		for _, t := range tids {
 			tid, err := strconv.Atoi(t.Name())
 			if err != nil {
 				continue
 			}
 			dir := filepath.Join(root, p.Name(), "task", t.Name())
-			comm, flags, prio, policy, ok := parseStat(dir)
-			if !ok || flags&pfKThread != 0 || (policy != 1 && policy != 2) || prio <= 0 {
+			comm, flags, prio, policy, err := parseStat(dir)
+			if err != nil {
+				denied += countDenied(err)
 				continue
 			}
-			cpus, ok := allowedCPUs(dir)
-			if !ok {
+			if flags&pfKThread != 0 {
+				continue
+			}
+			switch {
+			case policy == schedDeadline:
+				prio = deadlinePrio
+			case (policy == schedFIFO || policy == schedRR) && prio > 0:
+			default:
+				continue
+			}
+			cpus, err := allowedCPUs(dir)
+			if err != nil {
+				denied += countDenied(err)
 				continue
 			}
 			out = append(out, rtThread{pid: pid, tid: tid, comm: comm, prio: prio, cpus: cpus})
 		}
 	}
-	return out
+	if denied > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d entries could not be read (permission)", denied))
+	}
+	if len(reasons) > 0 {
+		blind = "the real-time pre-flight could not see every program: " + strings.Join(reasons, "; ") + "; a vendor's real-time thread there would not be found"
+	}
+	return out, blind
+}
+
+// countDenied is 1 for an error that hides a thread from us (permission),
+// 0 for one that only means it is gone (ENOENT, ESRCH).
+func countDenied(err error) int {
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return 1
+	}
+	return 0
+}
+
+// hiddenProc is the option /proc is mounted with that hides processes
+// (hidepid=1|2|invisible|noaccess, subset=pid), from /proc/self/mountinfo.
+func hiddenProc(root string) string {
+	b, err := os.ReadFile(filepath.Join(root, "self/mountinfo"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 5 || f[4] != "/proc" {
+			continue
+		}
+		sep := -1
+		for i, x := range f {
+			if x == "-" {
+				sep = i
+			}
+		}
+		if sep < 0 || sep+3 >= len(f) || f[sep+1] != "proc" {
+			continue
+		}
+		for _, o := range strings.Split(f[sep+3], ",") {
+			if o == "subset=pid" || (strings.HasPrefix(o, "hidepid=") && o != "hidepid=0" && o != "hidepid=off") {
+				return o
+			}
+		}
+	}
+	return ""
+}
+
+// processCPUs is the CPUs this process may run on.
+func processCPUs(root string) []int {
+	cpus, err := allowedCPUs(filepath.Join(root, "self"))
+	if err != nil {
+		return nil
+	}
+	return cpus
 }
 
 // parseStat reads comm, flags (field 9), rt_priority (40) and policy (41)
 // from a stat file. comm is in parentheses and may hold spaces and ')', so
 // the fields after it are split from the LAST ')'.
-func parseStat(dir string) (comm string, flags uint64, prio, policy int, ok bool) {
+func parseStat(dir string) (comm string, flags uint64, prio, policy int, err error) {
 	b, err := os.ReadFile(filepath.Join(dir, "stat"))
 	if err != nil {
-		return "", 0, 0, 0, false
+		return "", 0, 0, 0, err
 	}
 	s := string(b)
 	open, close := strings.IndexByte(s, '('), strings.LastIndexByte(s, ')')
 	if open < 0 || close < open {
-		return "", 0, 0, 0, false
+		return "", 0, 0, 0, errors.New("unparsable stat")
 	}
 	comm = s[open+1 : close]
 	f := strings.Fields(s[close+1:]) // f[0] is field 3 (state)
 	if len(f) < 39 {
-		return "", 0, 0, 0, false
+		return "", 0, 0, 0, errors.New("short stat")
 	}
 	flags, err1 := strconv.ParseUint(f[9-3], 10, 64)
 	prio, err2 := strconv.Atoi(f[40-3])
 	policy, err3 := strconv.Atoi(f[41-3])
 	if err1 != nil || err2 != nil || err3 != nil {
-		return "", 0, 0, 0, false
+		return "", 0, 0, 0, errors.New("unparsable stat")
 	}
-	return comm, flags, prio, policy, true
+	return comm, flags, prio, policy, nil
 }
 
 // allowedCPUs reads Cpus_allowed_list ("0-1,3") from a status file.
-func allowedCPUs(dir string) ([]int, bool) {
+func allowedCPUs(dir string) ([]int, error) {
 	b, err := os.ReadFile(filepath.Join(dir, "status"))
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		v, found := strings.CutPrefix(line, "Cpus_allowed_list:")
@@ -176,21 +300,21 @@ func allowedCPUs(dir string) ([]int, bool) {
 			lo, hi, isRange := strings.Cut(part, "-")
 			a, err := strconv.Atoi(lo)
 			if err != nil {
-				return nil, false
+				return nil, err
 			}
 			b := a
 			if isRange {
 				if b, err = strconv.Atoi(hi); err != nil {
-					return nil, false
+					return nil, err
 				}
 			}
 			for c := a; c <= b; c++ {
 				cpus = append(cpus, c)
 			}
 		}
-		return cpus, true
+		return cpus, nil
 	}
-	return nil, false
+	return nil, errors.New("no Cpus_allowed_list")
 }
 
 func readInt(path string) (int, error) {
@@ -201,10 +325,52 @@ func readInt(path string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
-func cpuText(cpus []int) string {
-	s := make([]string, len(cpus))
-	for i, c := range cpus {
-		s[i] = strconv.Itoa(c)
+func setOf(cpus []int) map[int]bool {
+	m := make(map[int]bool, len(cpus))
+	for _, c := range cpus {
+		m[c] = true
 	}
-	return strings.Join(s, ",")
+	return m
+}
+
+func overlaps(cpus []int, in map[int]bool) bool {
+	for _, c := range cpus {
+		if in[c] {
+			return true
+		}
+	}
+	return false
+}
+
+// subset: every CPU of cpus is in in (and there is at least one).
+func subset(cpus []int, in map[int]bool) bool {
+	if len(cpus) == 0 {
+		return false
+	}
+	for _, c := range cpus {
+		if !in[c] {
+			return false
+		}
+	}
+	return true
+}
+
+// cpuText prints a CPU list as ranges: 0-31, 1, 0,2-3.
+func cpuText(cpus []int) string {
+	c := append([]int(nil), cpus...)
+	sort.Ints(c)
+	var parts []string
+	for i := 0; i < len(c); {
+		j := i
+		for j+1 < len(c) && c[j+1] == c[j]+1 {
+			j++
+		}
+		if j > i {
+			parts = append(parts, strconv.Itoa(c[i])+"-"+strconv.Itoa(c[j]))
+		} else {
+			parts = append(parts, strconv.Itoa(c[i]))
+		}
+		i = j + 1
+	}
+	return strings.Join(parts, ",")
 }

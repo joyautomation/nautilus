@@ -1131,17 +1131,29 @@ func schedPending(s runtime.SchedStats) bool {
 // scan.sched too, but a controller meant to run real-time that silently
 // does not is the kind of wrong to say at start (#836).
 func schedBannerSuffix(s runtime.ScanStats) string {
-	var refused []string
-	if s.Sched.Error != "" {
-		refused = append(refused, runtime.MainTaskName)
-	}
-	for _, t := range s.Tasks {
-		if t.Sched.Error != "" {
-			refused = append(refused, t.Name)
+	var realtime, pin []string
+	note := func(name string, sc runtime.SchedStats) {
+		switch {
+		case sc.Error == "":
+		case sc.Priority > 0:
+			realtime = append(realtime, name)
+		default: // cpu: alone, no priority asked
+			pin = append(pin, name)
 		}
 	}
-	if len(refused) == 0 {
-		return ""
+	note(runtime.MainTaskName, s.Sched)
+	for _, t := range s.Tasks {
+		note(t.Name, t.Sched)
 	}
-	return " — REAL-TIME REFUSED for " + strings.Join(refused, ", ") + " (see the log)"
+	out := ""
+	if len(realtime) > 0 {
+		out += " — REAL-TIME REFUSED for " + strings.Join(realtime, ", ")
+	}
+	if len(pin) > 0 {
+		out += " — CPU PIN FAILED for " + strings.Join(pin, ", ")
+	}
+	if out != "" {
+		out += " (see the log)"
+	}
+	return out
 }

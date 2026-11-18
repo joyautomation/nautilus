@@ -20,6 +20,12 @@ func TestSchedBannerSuffixNamesRefusedTasks(t *testing.T) {
 	if got, want := schedBannerSuffix(s), " — REAL-TIME REFUSED for main, slow (see the log)"; got != want {
 		t.Errorf("banner suffix %q, want %q", got, want)
 	}
+	// A cpu: alone that could not be applied is a pin failure, not a
+	// real-time refusal.
+	s.Tasks = append(s.Tasks, runtime.TaskStats{Name: "pinned", Sched: runtime.SchedStats{CPUs: []int{9}, Error: "pin to cpu 9: invalid argument"}})
+	if got, want := schedBannerSuffix(s), " — REAL-TIME REFUSED for main, slow — CPU PIN FAILED for pinned (see the log)"; got != want {
+		t.Errorf("banner suffix %q, want %q", got, want)
+	}
 	if got := schedBannerSuffix(runtime.ScanStats{Sched: runtime.SchedStats{Priority: 40, Applied: true}}); got != "" {
 		t.Errorf("all granted: %q, want nothing", got)
 	}
