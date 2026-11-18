@@ -4,10 +4,11 @@ description: Poll an OPC UA server (an Ignition gateway, a PLC's embedded server
 ---
 
 :::caution[Preview]
-Tested against gopcua's in-process server only (including a
-`Basic256Sha256 / SignAndEncrypt` session). It has not yet been run against
-Ignition, Kepware, node-opcua or a PLC's embedded server. Try it against
-your server before you depend on it.
+Tested against gopcua's in-process server, open62541 and Eclipse Milo
+(see [Servers it has been run against](#servers-it-has-been-run-against)),
+each over `Basic256Sha256 / SignAndEncrypt`. It has not yet been run against
+Ignition, Kepware or a PLC's embedded server. Try it against your server
+before you depend on it.
 :::
 
 A `driver: {type: opcua-client}` section makes nautilus an OPC UA **client**: it
@@ -148,8 +149,10 @@ another nautilus controller: `naut opcua trust <thumbprint>` there, see
 [Approving a client](/guides/opcua-server/#approving-a-client)). A nautilus
 server offers secure endpoints too, so a client left on the default picks
 one of them, and its first connection is refused until that server trusts
-its certificate. Set `security: None` only where an unsecured, read-only
-link is what you want. The
+its certificate. Some servers refuse a certificate they do not trust by
+closing the connection mid-handshake, with no status code; the driver's
+error then says so and names the certificate file to trust. Set
+`security: None` only where an unsecured, read-only link is what you want. The
 password for `username:` is never in the manifest: set
 `NAUTILUS_OPCUA_PASSWORD`.
 
@@ -172,6 +175,31 @@ sending credentials in the clear. Pin `security-mode: Sign` or
 The driver dials the `endpoint:` you wrote even when the server advertises
 a different address, so a server behind NAT or a VPN is reachable at the
 address you can reach.
+
+## Servers it has been run against
+
+Every server below runs in CI (`opcua/matrix_test.go`) through the same
+scenarios: import of a folder of one variable per scalar type (twice,
+byte-identical), typed reads of every type, a value that changes on its
+own, an unknown node read Bad while the rest stay Good, a write of every
+type read back, a write to a read-only node refused without dropping the
+session, a binding whose namespace index is wrong read by its URI, and two
+outages twice each: a restart (the server closes the connection) and a
+blackhole (the container is paused, so the link goes silent as it does
+when a device loses power). Through both outages `__Online` falls, the
+values hold as Stale, and the session comes back on its own with no
+growth in goroutines.
+
+| Server | Session | What to know |
+|---|---|---|
+| open62541 v1.4.22 (a fixture server built against the release) | Basic256Sha256 / SignAndEncrypt | Namespace 1 is the server's own application URI; a server's variables start at namespace 2. A write to a read-only node is refused with `Bad_NotWritable`. |
+| Eclipse Milo 1.1.1 (its demo server 1.0.3) | Basic256Sha256 / SignAndEncrypt, once trusted | Refuses an untrusted client certificate by closing the connection and files it under `security/rejected`; moving it to `security/pki/trusted/certs` lets the next retry in, with no restart. Namespace 1's URI carries a per-install UUID, so a reinstalled server renumbers it. A write to a read-only node is refused with `Bad_UserAccessDenied`, not `Bad_NotWritable`. It advertises its own idea of its address (port 4840 inside the container); the driver dials the mapped port it was given. The demo address space includes a 25,000-node folder, so import with `--root`. |
+
+How quickly the driver notices: a restart closes the connection, so the
+next read fails at once and `__Online` falls within a scan; a blackhole is
+silent, so it falls after one request timeout (5 s by default). Once the
+server answers again the driver is back within one retry step of the
+backoff ladder.
 
 ## Reading an Ignition gateway
 
