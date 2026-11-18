@@ -435,5 +435,7 @@ The screen is served from naut's own server over the project's runtime
 without scanning it: no driver starts, no write reaches anything, and
 every tag shows its initial value. `NAUT_BROWSER` names the browser to
 use (`NAUT_BROWSER=none`, or `naut check -render=false`, skips it).
+`naut check` waits up to two minutes for the browser to start;
+`NAUT_BROWSER_START_TIMEOUT` (`5m`, `90s`) changes that on a slow machine.
 Without a browser, `naut check` says the screen wasn't rendered and
 carries on.
