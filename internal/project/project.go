@@ -849,12 +849,12 @@ func composeTags(fsys fs.FS, m *Manifest, manifestName string) error {
 			return err
 		}
 	}
-	if m.devices != nil {
+	for _, dt := range m.devices.TagsByDevice() {
 		var tags []TagConfig
-		for _, t := range m.devices.Tags() {
+		for _, t := range dt.Tags {
 			tags = append(tags, TagConfig{Name: t.Name, Role: t.Role, Type: t.Type, Unit: t.Unit, Desc: t.Desc})
 		}
-		if err := add(tags, "devices:"); err != nil {
+		if err := add(tags, "devices: "+dt.Device); err != nil {
 			return err
 		}
 	}

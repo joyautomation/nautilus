@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -224,7 +225,7 @@ devices: [{ name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }]
 	for name, tc := range map[string]struct{ manifest, want string }{
 		"not vendored": {`devices: [{ name: CONV, profile: abb-acs580-fmbt21, endpoint: 10.0.0.9 }]`, "naut devices add abb-acs580-fmbt21"},
 		"collision": {"devices: [{ name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }]\ntags: [{ name: CONV_ControlWord, role: output, type: WORD }]",
-			`tag "CONV_ControlWord" is declared in both devices: and nautilus.yaml`},
+			`tag "CONV_ControlWord" is declared in both devices: CONV and nautilus.yaml`},
 		"two drivers": {"drivers: [{ type: modbus, name: a }, { type: modbus, name: b }]\ndevices: [{ name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }]",
 			"more than one modbus driver"},
 		"point typo":        {`devices: [{ name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9, points: [StatusWrod] }]`, `"StatusWrod" matches no point`},
@@ -246,5 +247,45 @@ func eventually(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("never: %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The driver carrying devices is the Modbus driver to everything that asks:
+// it has the Modbus status row, and the device's struct tag is a comms
+// input (it reads its init until the device first answers, then holds).
+func TestDeviceDriverIsTheModbusDriver(t *testing.T) {
+	fsys := devicesProject(t, `name: d
+tasks: [{ program: main.st }]
+devices: [{ name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }]
+`, "PROGRAM Main\nEND_PROGRAM\n")
+	proj, err := Load(fsys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := driverStatusFuncs(proj.Runtime.Driver)
+	if len(rows) != 1 || rows[0]().Kind != modbusStatus(modbus.Health{}).Kind {
+		t.Fatalf("status rows %d, want the one Modbus row", len(rows))
+	}
+	if !commsDriver(proj.Runtime.Driver) {
+		t.Error("the driver carrying devices is not a comms driver")
+	}
+	for _, td := range proj.Runtime.Tags {
+		if td.Name == "CONV" && !td.Comms {
+			t.Error("the device's struct tag is not marked as a comms input")
+		}
+	}
+}
+
+// Two devices whose tags collide are named, each by its device.
+func TestDeviceTagClashNamesBothDevices(t *testing.T) {
+	fsys := devicesProject(t, `name: d
+tasks: [{ program: main.st }]
+devices:
+  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }
+  - { name: CONV_ControlWord, profile: abb-acs355-fmbt21, endpoint: 10.0.0.10 }
+`, "PROGRAM Main\nEND_PROGRAM\n")
+	_, err := Load(fsys, "")
+	if err == nil || !strings.Contains(err.Error(), "declared in both devices: CONV and devices: CONV_ControlWord") {
+		t.Errorf("clash: %v", err)
 	}
 }

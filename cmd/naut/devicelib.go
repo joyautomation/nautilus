@@ -45,6 +45,9 @@ func runDevicesAdd(args []string, w io.Writer) int {
 }
 
 func addProfile(dir, id, from string, w io.Writer) error {
+	if !devprofile.IsID(id) {
+		return fmt.Errorf("%q is not a profile id (letters, digits, '-', '_', '.'; no directories)", id)
+	}
 	if _, err := os.Stat(filepath.Join(dir, project.ManifestName)); err != nil {
 		return fmt.Errorf("%s is not a project (no %s)", dir, project.ManifestName)
 	}
@@ -83,13 +86,21 @@ func addProfile(dir, id, from string, w io.Writer) error {
 
 	dst := filepath.Join(dir, devprofile.ProjectDir)
 	if _, err := os.Stat(filepath.Join(dst, id+".yaml")); err == nil {
-		return fmt.Errorf("%s is already in %s/ (it is the project's pinned copy; naut devices update shows what changed)", id, devprofile.ProjectDir)
+		return fmt.Errorf("%s is already in %s/: that copy is the project's pin, and add never replaces it (to take a newer one, compare the two and replace the file yourself; naut devices update will do that)", id, devprofile.ProjectDir)
 	}
 	// A simulator two profiles share (abb-drives.st) may already be there;
 	// it must be the same file, not a different one of the same name.
 	for name, data := range files {
 		if have, err := os.ReadFile(filepath.Join(dst, name)); err == nil && !bytes.Equal(have, data) {
 			return fmt.Errorf("%s/%s is already there and differs from %s's", devprofile.ProjectDir, name, id)
+		}
+	}
+	// Every file lands in profiles/ itself: ParseProfile refuses an id or
+	// a simulator source with a directory in it, and this is the check
+	// that holds whatever a source file says.
+	for name := range files {
+		if err := insideDir(dst, name); err != nil {
+			return err
 		}
 	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
@@ -174,4 +185,14 @@ func runDevicesRender(args []string, w io.Writer) int {
 	tw.Flush()
 	fmt.Fprintf(w, "\n%s.<point> bindings are the struct's members (read back); %s_<point> are the command tags.\n", "<device>", "<device>")
 	return 0
+}
+
+// insideDir checks that name, joined to dir, names a file directly in dir.
+func insideDir(dir, name string) error {
+	target := filepath.Join(dir, name)
+	rel, err := filepath.Rel(dir, target)
+	if err != nil || filepath.IsAbs(name) || rel != filepath.Base(target) || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("%q would be written outside %s/", name, devprofile.ProjectDir)
+	}
+	return nil
 }

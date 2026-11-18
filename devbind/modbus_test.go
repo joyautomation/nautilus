@@ -4,6 +4,7 @@ package devbind
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,5 +80,24 @@ func TestWrappedReadInputsIntoSteadyState(t *testing.T) {
 		if len(k) > 5 && k[:5] == "CONV." {
 			t.Errorf("member %s leaked into the delivery", k)
 		}
+	}
+}
+
+// The devices' sources and bindings join the project's own manifest; one
+// the project already has is an error, not a silent second binding.
+func TestMergeModbusCollisions(t *testing.T) {
+	s, err := Resolve(vendored(t, "abb-acs355-fmbt21"), []Device{{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "h"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.MergeModbus(modbus.Manifest{Sources: []modbus.Source{{ID: "RIO", Host: "h"}}, Tags: []modbus.TagBinding{{Name: "Level", Source: "RIO", Table: "holding"}}})
+	if err != nil || len(ok.Sources) != 2 || ok.Tags[0].Name != "Level" {
+		t.Fatalf("a manifest beside the devices: %v %+v", err, ok)
+	}
+	if _, err := s.MergeModbus(modbus.Manifest{Sources: []modbus.Source{{ID: "CONV", Host: "h"}}}); err == nil || !strings.Contains(err.Error(), "already has a source CONV") {
+		t.Errorf("a source the device also is: %v", err)
+	}
+	if _, err := s.MergeModbus(modbus.Manifest{Sources: []modbus.Source{{ID: "RIO", Host: "h"}}, Tags: []modbus.TagBinding{{Name: "CONV_ControlWord", Source: "RIO", Table: "holding"}}}); err == nil || !strings.Contains(err.Error(), "already binds CONV_ControlWord") {
+		t.Errorf("a binding a device command also is: %v", err)
 	}
 }

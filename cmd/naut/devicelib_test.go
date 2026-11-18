@@ -219,3 +219,63 @@ func TestDevicesWithVirtualDevicesRefused(t *testing.T) {
 		t.Errorf("NewInProcess: %v", err)
 	}
 }
+
+// add --from never writes outside profiles/: an id or a simulator source
+// with a directory in it (both reproduced in review) is refused, and
+// nothing lands anywhere.
+func TestDevicesAddStaysInProfiles(t *testing.T) {
+	base := strings.Replace(string(mustRead(t, "../../devprofile/profiles/asi-275m.yaml")), "simulator:", "#simulator:", 1)
+	for name, tc := range map[string]struct{ id, file, yaml string }{
+		"simulator source": {"evil", "evil.yaml", strings.Replace(base, "profile: asi-275m", "profile: evil\nsimulator: { block: ASI_275M_SIM, source: ../evil_injected.st }", 1)},
+		"profile id":       {"../escaped", "escaped.yaml", strings.Replace(base, "profile: asi-275m", "profile: ../escaped\nudt: ESC", 1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := libProject(t, libProgram)
+			team := t.TempDir()
+			for _, f := range []string{tc.file, "evil_injected.st"} {
+				if err := os.WriteFile(filepath.Join(team, f), []byte(tc.yaml), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := os.ReadDir(dir)
+			if err := addProfile(filepath.Join(dir), tc.id, team, io.Discard); err == nil {
+				t.Fatal("added")
+			}
+			after, _ := os.ReadDir(dir)
+			if len(after) != len(before) {
+				t.Errorf("files appeared in the project: %d -> %d", len(before), len(after))
+			}
+			if _, err := os.Stat(filepath.Join(dir, devprofileDir)); err == nil {
+				t.Error("profiles/ was created for a refused add")
+			}
+		})
+	}
+	for _, name := range []string{"../x.st", "/abs.st", "sub/x.st", ".."} {
+		if insideDir("/p/profiles", name) == nil {
+			t.Errorf("insideDir(%q): no error", name)
+		}
+	}
+	if err := insideDir("/p/profiles", "abb-drives.st"); err != nil {
+		t.Errorf("insideDir(abb-drives.st): %v", err)
+	}
+}
+
+const devprofileDir = "profiles"
+
+// A point the row does not select is not a member: reading it fails check
+// instead of reading zero, Good, forever.
+func TestDevicesUnselectedPointIsNotAMember(t *testing.T) {
+	dir := libProject(t, "PROGRAM Main\nTripped := CONV.StatusWord.3;\nCONV_ControlWord := CONV.Actual1;\nEND_PROGRAM\n")
+	raw := strings.Replace(string(mustRead(t, filepath.Join(dir, "nautilus.yaml"))), "desc: Conveyor drive", "desc: Conveyor drive, points: [ControlWord, StatusWord]", 1)
+	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := addProfile(dir, "abb-acs355-fmbt21", "", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var code int
+	out := captureStdout(t, func() int { code = runCheck([]string{dir}); return code })
+	if code == 0 || !strings.Contains(out, `"Actual1" not found on ABB_ACS355_FMBT21`) {
+		t.Errorf("reading an unselected point: exit %d\n%s", code, out)
+	}
+}

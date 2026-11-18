@@ -563,9 +563,11 @@ func dialectLibraries(fsys fs.FS) ([]dialect.Library, error) {
 	var m struct {
 		Dialect string `yaml:"dialect"`
 		Devices []struct {
-			Profile string `yaml:"profile"`
+			Profile string   `yaml:"profile"`
+			Points  []string `yaml:"points"`
 		} `yaml:"devices"`
 	}
+
 	if err := yaml.Unmarshal(raw, &m); err != nil {
 		return nil, nil
 	}
@@ -575,18 +577,20 @@ func dialectLibraries(fsys fs.FS) ([]dialect.Library, error) {
 			return nil, err
 		}
 	}
-	var profiles []*devprofile.Profile
-	seen := map[string]bool{}
+	var structs []devprofile.Struct
 	for _, d := range m.Devices {
-		if d.Profile == "" || seen[d.Profile] {
+		if !devprofile.IsID(d.Profile) {
 			continue
 		}
-		seen[d.Profile] = true
-		if p, err := devprofile.ReadProject(fsys, d.Profile); err == nil {
-			profiles = append(profiles, p)
+		p, err := devprofile.ReadProject(fsys, d.Profile)
+		if err != nil {
+			continue
+		}
+		if pts, err := p.Select(d.Points); err == nil {
+			structs = append(structs, devprofile.Struct{Name: p.TypeName(), Points: pts})
 		}
 	}
-	if src := devprofile.TypesST(profiles); src != "" {
+	if src := devprofile.TypesST(structs); src != "" {
 		out = append(out, dialect.Library{Path: devprofile.TypesPath, ST: src})
 	}
 	return out, nil

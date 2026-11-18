@@ -24,21 +24,41 @@ func (s *Set) TypesST() (string, error) {
 // input) and a command tag (an output) per selected writable point.
 func (s *Set) Tags() []tagfile.Tag {
 	var out []tagfile.Tag
+	for _, dt := range s.TagsByDevice() {
+		out = append(out, dt.Tags...)
+	}
+	return out
+}
+
+// DeviceTags are one device's tags.
+type DeviceTags struct {
+	Device string
+	Tags   []tagfile.Tag
+}
+
+// TagsByDevice is Tags, grouped by the device that declares them.
+func (s *Set) TagsByDevice() []DeviceTags {
+	if s == nil {
+		return nil
+	}
+	var out []DeviceTags
 	for _, d := range s.devices {
 		desc := d.Desc
 		if desc == "" {
 			desc = d.prof.Title
 		}
-		out = append(out, tagfile.Tag{Name: d.Name, Role: "input", Type: d.prof.TypeName(), Desc: desc})
+		dt := DeviceTags{Device: d.Name}
+		dt.Tags = append(dt.Tags, tagfile.Tag{Name: d.Name, Role: "input", Type: d.prof.TypeName(), Desc: desc})
 		for _, pt := range d.points {
 			if !pt.Writable {
 				continue
 			}
-			out = append(out, tagfile.Tag{
+			dt.Tags = append(dt.Tags, tagfile.Tag{
 				Name: CommandTag(d.Name, pt.Name), Role: "output", Type: strings.ToUpper(pt.Type),
 				Unit: pt.Unit, Desc: joinDesc(d.Name, pt.Desc),
 			})
 		}
+		out = append(out, dt)
 	}
 	return out
 }
@@ -55,19 +75,16 @@ type assembler struct {
 	dev     string
 	def     *ir.StructDef
 	members []string // internal names, index-parallel to def.Fields
-	sel     []bool   // polled: a member not selected stays zero
 	last    ir.Value // the last value delivered; Kind 0 before any
 	boxed   any      // last, boxed once: a map[string]any entry costs an allocation per box
 }
 
 func newAssembler(d *device) *assembler {
-	p := d.prof
-	a := &assembler{dev: d.Name, def: &ir.StructDef{Name: p.TypeName(), FieldIndex: map[string]int{}}}
-	for i, pt := range p.Points {
+	a := &assembler{dev: d.Name, def: &ir.StructDef{Name: d.prof.TypeName(), FieldIndex: map[string]int{}}}
+	for i, pt := range d.points {
 		a.def.Fields = append(a.def.Fields, ir.StructField{Name: pt.Name, Type: irType(pt.Type)})
 		a.def.FieldIndex[pt.Name] = i
 		a.members = append(a.members, memberName(d.Name, pt.Name))
-		a.sel = append(a.sel, d.sel[pt.Name])
 	}
 	return a
 }
@@ -214,10 +231,7 @@ func rollup(asm []*assembler, member map[string]int, in map[string]nio.Quality) 
 	}
 	for _, a := range asm {
 		polled, notConn, stale, bad := 0, 0, false, false
-		for i, m := range a.members {
-			if !a.sel[i] {
-				continue
-			}
+		for _, m := range a.members {
 			polled++
 			switch in[m] {
 			case nio.NotConnected:

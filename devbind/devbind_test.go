@@ -73,8 +73,9 @@ func TestModbusManifest(t *testing.T) {
 	}
 }
 
-// The type keeps every point whatever a row selects, compiles, and the
-// tags are the struct plus a command per selected writable point.
+// The type holds the selected points only (a member nobody polls would read
+// zero under Good quality forever), compiles, and the tags are the struct
+// plus a command per selected writable point.
 func TestTypesAndTags(t *testing.T) {
 	s, err := Resolve(vendored(t, "abb-acs355-fmbt21"), []Device{
 		{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "h", Points: []string{"ControlWord", "Status*"}},
@@ -86,12 +87,17 @@ func TestTypesAndTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Parse(src + "\nPROGRAM P\nVAR d : ABB_ACS355_FMBT21; END_VAR\nd.Current := 1.5;\nEND_PROGRAM\n"); err != nil {
+	if _, err := st.Parse(src + "\nPROGRAM P\nVAR d : ABB_ACS355_FMBT21; END_VAR\nd.ControlWord := 1;\nEND_PROGRAM\n"); err != nil {
 		t.Fatalf("types do not parse: %v\n%s", err, src)
 	}
-	for _, m := range []string{"ControlWord : WORD", "Reference1 : INT", "Current : REAL"} {
+	for _, m := range []string{"ControlWord : WORD", "StatusWord : WORD"} {
 		if !strings.Contains(src, m) {
 			t.Errorf("type lacks %q:\n%s", m, src)
+		}
+	}
+	for _, m := range []string{"Reference1", "Current"} {
+		if strings.Contains(src, m) {
+			t.Errorf("type has %s, which the row does not select:\n%s", m, src)
 		}
 	}
 	var tags []string
@@ -121,7 +127,7 @@ func TestResolveSharedType(t *testing.T) {
 	}
 	// The same name over different points is a mistake.
 	fsys["profiles/other-drive.yaml"] = &fstest.MapFile{Data: []byte(shared(strings.Replace(same, "name: Actual2,", "name: Actual9,", 1)))}
-	if _, err := Resolve(fsys, rows); err == nil || !strings.Contains(err.Error(), "both declare type ABB_CLASSIC") {
+	if _, err := Resolve(fsys, rows); err == nil || !strings.Contains(err.Error(), "both of type ABB_CLASSIC, member 6 differs") {
 		t.Errorf("different members under one udt: %v", err)
 	}
 }
@@ -204,8 +210,6 @@ func TestRollup(t *testing.T) {
 		{map[string]nio.Quality{"CONV.Current": nio.NotConnected}, nio.Bad, true},
 		{map[string]nio.Quality{"CONV.Current": nio.Bad}, nio.Bad, true},
 		{map[string]nio.Quality{"CONV.Current": nio.Stale, "CONV.StatusWord": nio.Stale}, nio.Stale, true},
-		// a point the row did not select is not polled and says nothing
-		{map[string]nio.Quality{"CONV.Actual1": nio.NotConnected}, nio.Good, false},
 	} {
 		in := map[string]nio.Quality{"OTHER": nio.Stale}
 		for k, v := range tc.in {
@@ -224,5 +228,35 @@ func TestRollup(t *testing.T) {
 				t.Errorf("%v: member %s leaked", tc.in, k)
 			}
 		}
+	}
+}
+
+// Two devices of one type select the same points; a udt: may not hide a
+// standard name or share a device's; ids and simulator sources are names.
+func TestResolveTypeRules(t *testing.T) {
+	fsys := vendored(t, "abb-acs355-fmbt21")
+	rows := []Device{
+		{Name: "A", Profile: "abb-acs355-fmbt21", Endpoint: "h", Points: []string{"StatusWord"}},
+		{Name: "B", Profile: "abb-acs355-fmbt21", Endpoint: "h", Points: []string{"StatusWord", "Current"}},
+	}
+	if _, err := Resolve(fsys, rows); err == nil || !strings.Contains(err.Error(), "select the same points") {
+		t.Errorf("one type, two selections: %v", err)
+	}
+	rows[1].Points = []string{"Status*"}
+	if _, err := Resolve(fsys, rows); err != nil {
+		t.Errorf("one type, the same selection by another glob: %v", err)
+	}
+	withUDT := func(udt string) fstest.MapFS {
+		raw := strings.Replace(string(builtin(t, "abb-acs355-fmbt21")), "version:", "udt: "+udt+"\nversion:", 1)
+		return fstest.MapFS{"profiles/abb-acs355-fmbt21.yaml": {Data: []byte(raw)}}
+	}
+	for udt, want := range map[string]string{"TON": "standard function block", "WORD": "elementary type", "conv": "has the name of a device type"} {
+		_, err := Resolve(withUDT(udt), []Device{{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "h"}})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("udt: %s: %v, want %q", udt, err, want)
+		}
+	}
+	if _, err := Resolve(fsys, []Device{{Name: "C", Profile: "../profiles/abb-acs355-fmbt21", Endpoint: "h"}}); err == nil || !strings.Contains(err.Error(), "not a profile id") {
+		t.Errorf("a path for a profile id: %v", err)
 	}
 }

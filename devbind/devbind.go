@@ -17,12 +17,13 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
-	"path"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/devprofile"
+	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // Device is one row of a project's devices: list.
@@ -36,7 +37,7 @@ type Device struct {
 	// UnitID is the Modbus unit id; nil takes the profile's.
 	UnitID *int `yaml:"unit-id"`
 	// Points selects the points to poll and expose, as globs over point
-	// names; empty selects all. The struct type keeps every point.
+	// names; empty selects all. The struct has the selected points only.
 	Points []string `yaml:"points"`
 	// Params sets the profile's params:.
 	Params map[string]string `yaml:"params"`
@@ -47,16 +48,16 @@ type Device struct {
 // Set is a project's devices, resolved against its vendored profiles.
 type Set struct {
 	devices []*device
-	// types are the profiles in use, one per type name, by name.
-	types []*devprofile.Profile
+	// types are the device types in use, one per name, by name.
+	types []devprofile.Struct
 }
 
 type device struct {
 	Device
 	prof *devprofile.Profile
-	// points are the selected points, in profile order.
+	// points are the selected points, in profile order: the struct's
+	// members.
 	points []devprofile.Point
-	sel    map[string]bool
 }
 
 // Resolve checks rows against the profiles vendored in fsys (profiles/).
@@ -64,7 +65,11 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 	s := &Set{}
 	names := map[string]string{}
 	profiles := map[string]*devprofile.Profile{}
-	byType := map[string]*devprofile.Profile{}
+	type typed struct {
+		st  devprofile.Struct
+		dev string // the first device of the type
+	}
+	byType := map[string]*typed{}
 	for i, r := range rows {
 		where := fmt.Sprintf("devices[%d]", i)
 		if r.Name != "" {
@@ -80,6 +85,9 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 		if r.Profile == "" {
 			return nil, fmt.Errorf("%s: profile is required", where)
 		}
+		if !devprofile.IsID(r.Profile) {
+			return nil, fmt.Errorf("%s: profile %q is not a profile id (letters, digits, '-', '_', '.')", where, r.Profile)
+		}
 		p := profiles[r.Profile]
 		if p == nil {
 			var err error
@@ -90,27 +98,49 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 				}
 				return nil, fmt.Errorf("%s: %w", where, err)
 			}
+			if err := reservedType(p.TypeName()); err != nil {
+				return nil, fmt.Errorf("profile %s: %w", p.ID, err)
+			}
 			profiles[r.Profile] = p
 		}
 		if p.Protocol != devprofile.ProtoModbus {
 			return nil, fmt.Errorf("%s: profile %s speaks %s; only Modbus devices are supported so far", where, p.ID, p.Protocol)
 		}
-		if prev := byType[p.TypeName()]; prev != nil && prev != p {
-			if err := sameMembers(prev, p); err != nil {
-				return nil, fmt.Errorf("profiles %s and %s both declare type %s, %w", prev.ID, p.ID, p.TypeName(), err)
-			}
-		} else if prev == nil {
-			byType[p.TypeName()] = p
-			s.types = append(s.types, p)
-		}
-		d := &device{Device: r, prof: p, sel: map[string]bool{}}
+		d := &device{Device: r, prof: p}
 		if err := d.check(where); err != nil {
 			return nil, err
 		}
+		st := devprofile.Struct{Name: p.TypeName(), Points: d.points}
+		if prev := byType[strings.ToLower(st.Name)]; prev != nil {
+			if err := sameMembers(prev.st, st); err != nil {
+				return nil, fmt.Errorf("devices %s and %s are both of type %s, %w: select the same points, or give one profile its own udt:", prev.dev, r.Name, st.Name, err)
+			}
+		} else {
+			byType[strings.ToLower(st.Name)] = &typed{st: st, dev: r.Name}
+			s.types = append(s.types, st)
+		}
 		s.devices = append(s.devices, d)
 	}
-	sort.Slice(s.types, func(i, j int) bool { return s.types[i].TypeName() < s.types[j].TypeName() })
+	for _, st := range s.types {
+		if dev, ok := names[strings.ToLower(st.Name)]; ok {
+			return nil, fmt.Errorf("device %s has the name of a device type (%s): a tag and a type may not share a name", dev, st.Name)
+		}
+	}
+	sort.Slice(s.types, func(i, j int) bool { return s.types[i].Name < s.types[j].Name })
 	return s, nil
+}
+
+// reservedType refuses a type name the language already means: an
+// elementary type (WORD) or a standard block (TON). Declaring one would
+// shadow it, and the errors that follow would not say why.
+func reservedType(name string) error {
+	if _, ok := ir.FBs[strings.ToUpper(name)]; ok {
+		return fmt.Errorf("udt: %s is a standard function block's name", name)
+	}
+	if _, err := st.ResolveTypeName(name, nil); err == nil {
+		return fmt.Errorf("udt: %s is an IEC elementary type's name", name)
+	}
+	return nil
 }
 
 // check validates a row against its profile and selects its points.
@@ -130,42 +160,24 @@ func (d *device) check(where string) error {
 			return fmt.Errorf("%s: profile %s has no param %q", where, p.ID, k)
 		}
 	}
-	for _, g := range d.Points {
-		if _, err := path.Match(strings.ToLower(g), ""); err != nil {
-			return fmt.Errorf("%s: points: %q: %w", where, g, err)
-		}
+	pts, err := p.Select(d.Points)
+	if err != nil {
+		return fmt.Errorf("%s: %w", where, err)
 	}
-	matched := make([]bool, len(d.Points))
-	for _, pt := range p.Points {
-		take := len(d.Points) == 0
-		for i, g := range d.Points {
-			if ok, _ := path.Match(strings.ToLower(g), strings.ToLower(pt.Name)); ok {
-				take, matched[i] = true, true
-			}
-		}
-		if take {
-			d.points = append(d.points, pt)
-			d.sel[pt.Name] = true
-		}
-	}
-	for i, ok := range matched {
-		if !ok {
-			return fmt.Errorf("%s: points: %q matches no point of %s (naut devices show %s lists them)", where, d.Points[i], p.ID, p.ID)
-		}
-	}
+	d.points = pts
 	return nil
 }
 
-// sameMembers reports how two profiles sharing a type name differ, nil
-// when their points are the same names and types in the same order.
-func sameMembers(a, b *devprofile.Profile) error {
+// sameMembers reports how two structs sharing a type name differ, nil
+// when their members are the same names and types in the same order.
+func sameMembers(a, b devprofile.Struct) error {
 	if len(a.Points) != len(b.Points) {
-		return fmt.Errorf("with %d and %d points", len(a.Points), len(b.Points))
+		return fmt.Errorf("with %d and %d members", len(a.Points), len(b.Points))
 	}
 	for i := range a.Points {
 		pa, pb := a.Points[i], b.Points[i]
 		if !strings.EqualFold(pa.Name, pb.Name) || !strings.EqualFold(pa.Type, pb.Type) {
-			return fmt.Errorf("point %d differs (%s %s, %s %s)", i+1, pa.Name, pa.Type, pb.Name, pb.Type)
+			return fmt.Errorf("member %d differs (%s %s, %s %s)", i+1, pa.Name, pa.Type, pb.Name, pb.Type)
 		}
 	}
 	return nil

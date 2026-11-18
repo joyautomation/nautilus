@@ -340,7 +340,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Globs over point names: poll and expose only these. The struct type keeps every point. Default: all."
+          "description": "Globs over point names: the points this device polls and has as members of its struct (default: all). Devices of one type select the same points."
         },
         "params": {
           "type": "object",

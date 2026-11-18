@@ -221,6 +221,18 @@ func ParseProfile(data []byte, src string) (*Profile, error) {
 // device names.
 func IsIdent(s string) bool { return identRE.MatchString(s) }
 
+// idRE is a profile id: what profiles/<id>.yaml is named after.
+var idRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// IsFileName reports whether s is a plain file name: no directory, no
+// "..", not absolute. A profile's simulator sits beside it.
+func IsFileName(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\:`) && !strings.Contains(s, "..")
+}
+
+// IsID reports whether s may be a profile id.
+func IsID(s string) bool { return idRE.MatchString(s) && !strings.Contains(s, "..") }
+
 var identRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // expand replaces every repeated row with its copies.
@@ -317,6 +329,9 @@ func (p *Profile) validate() error {
 	if p.ID == "" {
 		return fmt.Errorf("profile: an id is required")
 	}
+	if !IsID(p.ID) {
+		return fmt.Errorf("profile: id %q must be letters, digits, '-', '_' and '.' (it names profiles/<id>.yaml)", p.ID)
+	}
 	if !IsIdent(p.TypeName()) {
 		return fmt.Errorf("udt: %q is not an IEC identifier", p.TypeName())
 	}
@@ -370,6 +385,9 @@ func (p *Profile) validate() error {
 	}
 	if s := p.Simulator; s != nil && (s.Block == "" || s.Source == "") {
 		return fmt.Errorf("simulator: block and source are both required")
+	}
+	if s := p.Simulator; s != nil && !IsFileName(s.Source) {
+		return fmt.Errorf("simulator: source %q must be a file name beside the profile, with no directory", s.Source)
 	}
 	return nil
 }
