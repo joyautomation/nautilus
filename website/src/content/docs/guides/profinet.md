@@ -79,9 +79,13 @@ sudo setcap cap_net_raw+ep "$(command -v naut)"
 ```
 
 Without it the project still loads, checks and runs. The driver's status
-row says what is missing and the driver keeps retrying. The connection
-setup (DCE/RPC) uses UDP 34964 on the host's IP stack, so the interface
-needs an address on the PROFINET subnet.
+row says what is missing and the driver keeps retrying.
+
+The connection setup (DCE/RPC) uses UDP 34964 on the host's IP stack, so
+the interface needs an address on the PROFINET subnet. The port is opened
+only on the station's own address, once the PLC has assigned it. It is
+never open on all of the host's networks, and replies always come from
+the address the PLC talks to.
 
 **nautilus never changes the host's network settings.** A PLC assigns its
 devices' IP addresses over DCP, and DCP has no authentication.
@@ -107,7 +111,10 @@ The input tags (the PLC's outputs) carry quality:
 | Bad | The PLC is in STOP, its status for the subslot is bad, or the module differs from the layout. |
 | Stale | The connection ended: the PLC stopped sending, released it, or the cable is out. |
 
-The last good value is held through Bad and Stale.
+The last good value is held through Bad and Stale. When the connection
+ends, the input tags go Stale with their last good value and
+`profinet_device__Online` goes false. They read Good again only once a
+new connection delivers fresh data.
 
 The data nautilus provides is marked **invalid** to the PLC (IOPS bad)
 in three cases:

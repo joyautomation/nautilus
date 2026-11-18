@@ -10,9 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -151,10 +149,6 @@ func ParseDeviceManifest(data []byte) (DeviceManifest, error) {
 	return m, nil
 }
 
-// stationName is a PROFINET NameOfStation: DNS-like labels of lowercase
-// letters, digits and hyphens, at most 240 characters.
-var stationName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
-
 // Validate checks the manifest offline; every finding is reported at
 // once. It also resolves each binding's format.
 func (m *DeviceManifest) Validate() error {
@@ -163,8 +157,8 @@ func (m *DeviceManifest) Validate() error {
 	if m.Interface == "" {
 		bad("interface is required (the NIC on the PROFINET network)")
 	}
-	if len(m.Station) > 240 || !stationName.MatchString(m.Station) || strings.HasPrefix(m.Station, "port-") {
-		bad("station %q: want lowercase letters, digits and hyphens in dot-separated labels (and not port-…)", m.Station)
+	if err := device.ValidStationName(m.Station); err != nil {
+		bad("%v", err) // the rule a DCP Set Name is held to as well
 	}
 	if m.VendorID == 0 || m.DeviceID == 0 {
 		bad("vendor-id and device-id are required (what the GSDML and DCP say this device is)")

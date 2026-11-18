@@ -100,3 +100,24 @@ func TestFilename(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// The GSDML claims nothing the engine does not do (review on #738): no
+// Device Access AR (the engine refuses an AR without IOCRs), no SNMP, so
+// conformance class A, and no netload class beyond the lowest.
+func TestGenerateClaimsOnlyWhatTheEngineDoes(t *testing.T) {
+	b, err := Generate(sample())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{`DeviceAccessSupported="false"`, `ConformanceClass="A"`, `NetloadClass="I"`, `SupportedProtocols="LLDP"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for _, not := range []string{`SNMP`, `NumberOfDeviceAccessAR`} {
+		if strings.Contains(s, not) {
+			t.Errorf("claims %s", not)
+		}
+	}
+}

@@ -156,9 +156,11 @@ END_PROGRAM`)}
 	gate.Store(true)
 	drv.SetWriteGate(gate.Load)
 	drv.Apply(
-		profinet.WithDeviceOpener(func(string) (transport.Port, net.PacketConn, func() []net.IP, error) {
-			return hub.Port(devMAC, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr}}),
-				rpc, func() []net.IP { return []net.IP{pntest.Loopback} }, nil
+		profinet.WithDeviceOpener(func(string) (profinet.Opened, error) {
+			return profinet.Opened{
+				Port: hub.Port(devMAC, transport.Options{EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr}}),
+				RPC:  rpc, Addrs: func() []net.IP { return []net.IP{pntest.Loopback} },
+			}, nil
 		}),
 		profinet.WithDeviceControllerPort(plc.CMPort()))
 
