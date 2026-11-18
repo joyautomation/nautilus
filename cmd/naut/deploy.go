@@ -641,24 +641,31 @@ var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 // terminal, where ssh asks on /dev/tty. With ControlMaster it is asked once
 // per command. Some controllers need it: a PLCnext's sshd refuses keys for
 // admin, whose home is group writable (#768).
+//
+// When a password may be asked, ssh asks once per connection
+// (NumberOfPasswordPrompts=1): a wrong answer is one failed login, not
+// three, on a controller that locks an account out.
 func sshAuth() (opts, env []string) {
+	password := []string{"-o", "NumberOfPasswordPrompts=1"}
 	if p := os.Getenv("NAUT_SSH_ASKPASS"); p != "" {
-		return nil, []string{"SSH_ASKPASS=" + p, "SSH_ASKPASS_REQUIRE=force"}
+		return password, []string{"SSH_ASKPASS=" + p, "SSH_ASKPASS_REQUIRE=force"}
 	}
 	if os.Getenv("SSH_ASKPASS") != "" {
 		switch os.Getenv("SSH_ASKPASS_REQUIRE") {
 		case "force", "prefer":
-			return nil, nil
+			return password, nil
 		}
 	}
 	if stdinIsTerminal() {
-		return nil, nil
+		return password, nil
 	}
 	return []string{"-o", "BatchMode=yes"}, nil
 }
 
 func newSSHBox(target string) (*sshBox, error) {
 	opts, env := sshAuth()
+	// A box that is off the network fails in 10 s, not the TCP default.
+	opts = append(opts, "-o", "ConnectTimeout=10")
 	b := &sshBox{target: target, opts: opts, env: env}
 	if goruntime.GOOS != "windows" {
 		d, err := os.MkdirTemp("", "naut-ssh")

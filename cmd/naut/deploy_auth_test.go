@@ -41,6 +41,11 @@ func TestDeploySSHAuth(t *testing.T) {
 			if got := slices.Contains(opts, "BatchMode=yes"); got != c.batch {
 				t.Errorf("BatchMode=yes: %v, want %v (opts %q)", got, c.batch, opts)
 			}
+			// A password, when one may be asked, is asked once: a wrong
+			// askpass answer must not be three failed logins.
+			if got := slices.Contains(opts, "NumberOfPasswordPrompts=1"); got == c.batch {
+				t.Errorf("NumberOfPasswordPrompts=1: %v with BatchMode %v (opts %q)", got, c.batch, opts)
+			}
 			if !slices.Equal(env, c.env) {
 				t.Errorf("env %q, want %q", env, c.env)
 			}
@@ -76,6 +81,11 @@ printf '%s %s\n' "$SSH_ASKPASS" "$SSH_ASKPASS_REQUIRE" >>"$LOG/env"
 	env, _ := os.ReadFile(filepath.Join(log, "env"))
 	if strings.Contains(string(args), "BatchMode") {
 		t.Errorf("ssh must not run in BatchMode when a password can come from askpass:\n%s", args)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(args)), "\n") {
+		if !strings.Contains(line, "NumberOfPasswordPrompts=1") || !strings.Contains(line, "ConnectTimeout=10") {
+			t.Errorf("every ssh call asks for a password once and gives up connecting after 10 s: %q", line)
+		}
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(env)), "\n") {
 		if line != "/usr/local/bin/askpass-bw.sh force" {

@@ -143,12 +143,22 @@ func TestDeployBoxCronMode(t *testing.T) {
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 )
 
 func main() {
+	// SLOW_STOP=<s>: take that long to stop after TERM, as a controller
+	// saving its state on the way out does.
+	if d := os.Getenv("SLOW_STOP"); d != "" {
+		n, _ := strconv.Atoi(d)
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGTERM)
+		go func() { <-c; time.Sleep(time.Duration(n) * time.Second); os.Exit(0) }()
+	}
 	// Not dumpable, like a controller naut-launch gave a capability: its
 	// /proc/<pid>/exe is unreadable, even to its owner.
 	syscall.RawSyscall(syscall.SYS_PRCTL, 4 /* PR_SET_DUMPABLE */, 0, 0)
@@ -199,7 +209,7 @@ esac
 		if ee, ok := err.(*exec.ExitError); ok {
 			code = ee.ExitCode()
 		} else if err != nil {
-			t.Fatal(err)
+			return err.Error(), -1 // not t.Fatal: box also runs on another goroutine
 		}
 		return out.String(), code
 	}
@@ -323,12 +333,64 @@ esac
 		t.Errorf("status (exit %d):\n%s", code, out)
 	}
 
+	// An update whose old controller takes 2 s to stop, with a status read
+	// and keepalive ticks meanwhile: the update's hold must stand until the
+	// update ends, and cron must start nothing of its own.
+	os.WriteFile(filepath.Join(root, "env"), []byte("X=from-env\nSLOW_STOP=2\n"), 0o644)
+	if out, code := box("update", "r2"); code != 0 { // restarts with SLOW_STOP
+		t.Fatalf("update to r2: exit %d\n%s", code, out)
+	}
+	cronStarts := func() int { return strings.Count(logText(), " for cron at ") }
+	cron0 := cronStarts()
+	holds := func() int { h, _ := filepath.Glob(filepath.Join(root, "hold.*")); return len(h) }
+	incoming("r3", sleeperBytes)
+	done := make(chan struct{})
+	var upOut string
+	var upCode int
+	go func() { upOut, upCode = box("update", "r3"); close(done) }()
+	for i := 0; holds() == 0; i++ {
+		if i > 100 {
+			t.Fatal("the update never took its hold")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond) // into its stop of the old controller
+	if out, code := box("status"); code != 0 {
+		t.Fatalf("status during the update: exit %d\n%s", code, out)
+	}
+	select {
+	case <-done:
+		t.Fatal("the update ended before the status read finished: the test proves nothing")
+	default:
+	}
+	if holds() == 0 {
+		t.Fatal("a status read during an update lifted the update's hold")
+	}
+	for ticking := true; ticking; {
+		exec.Command(keep).Run() // a cron tick
+		select {
+		case <-done:
+			ticking = false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if upCode != 0 {
+		t.Fatalf("update to r3: exit %d\n%s", upCode, upOut)
+	}
+	if n := cronStarts() - cron0; n != 0 {
+		t.Errorf("cron started %d controller(s) during the update; log:\n%s", n, logText())
+	}
+	last := pid()
+	if !alive(last) || link("current") != "r3" || holds() != 0 {
+		t.Errorf("after the update r3 should run with no hold left: alive %v, current %q, holds %d", alive(last), link("current"), holds())
+	}
+
 	// uninstall: only what deploy made; naut-launch and root stay
 	os.WriteFile(filepath.Join(root, "naut-launch"), []byte("x"), 0o755)
 	if out, code := box("uninstall", "-purge"); code != 0 {
 		t.Fatalf("uninstall: exit %d\n%s", code, out)
 	}
-	if alive(before) {
+	if alive(before) || alive(last) {
 		t.Error("uninstall must stop the controller")
 	}
 	if cron, _ := os.ReadFile(tab); strings.Contains(string(cron), "naut deploy") {

@@ -118,7 +118,9 @@ run=$ROOT/current/controller
 pin=
 if [ -f "$ROOT/cpu" ] && command -v taskset >/dev/null; then pin="taskset -c $(cat "$ROOT/cpu")"; fi
 if [ -f "$ROOT/env" ]; then set -a; . "$ROOT/env"; set +a; fi
-echo "naut keepalive: starting $(basename "$(readlink "$ROOT/current")") at $(date)" >>"$log"
+how=cron
+[ "${1:-}" = start ] && how="naut deploy"
+echo "naut keepalive: starting $(basename "$(readlink "$ROOT/current")") for $how at $(date)" >>"$log"
 setsid nohup $pin "$run" </dev/null >>"$log" 2>&1 &
 echo $! >"$STATE/nautilus.pid"
 EOF
