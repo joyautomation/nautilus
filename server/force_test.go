@@ -145,7 +145,7 @@ func TestForceAuth(t *testing.T) {
 	if rec := call(t, tok, "GET", "/api/forces", ""); rec.Code != 200 {
 		t.Errorf("GET /api/forces = %d", rec.Code)
 	}
-	if rec := call(t, srv, "OPTIONS", "/api/forces/Level", ""); !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "DELETE") {
+	if rec := call(t, srv, "OPTIONS", "/api/forces/Level", "", func(r *http.Request) { r.Header.Set("Origin", "http://localhost:5173") }); !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "DELETE") {
 		t.Error("CORS preflight does not allow DELETE")
 	}
 }
