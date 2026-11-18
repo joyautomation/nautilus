@@ -1768,6 +1768,8 @@ func forOperandRule(t *ir.Type, v ir.Expr, src Expression) error {
 	switch {
 	case vt.Kind == ir.TypeReal && from != "LREAL":
 		from = "REAL"
+	case from == "" && vt.Struct != nil && vt.Struct.Name != "":
+		from = vt.Struct.Name
 	case from == "":
 		from = vt.Kind.String()
 	}
@@ -1782,8 +1784,13 @@ func forOperandRule(t *ir.Type, v ir.Expr, src Expression) error {
 	if id, ok := src.(*IdentExpr); ok {
 		what, arg = id.Name, id.Name
 	}
-	return fmt.Errorf("%s is %s, and a FOR's bounds and step are integers like its variable; write %s_TO_%s(%s)",
-		what, from, from, to, arg)
+	msg := fmt.Sprintf("%s is %s, and a FOR's bounds and step are integers like its variable", what, from)
+	// Name the conversion only when there is one (there is no
+	// STRUCT_TO_DINT).
+	if conv := from + "_TO_" + to; ir.IsConversion(conv) {
+		msg += fmt.Sprintf("; write %s(%s)", conv, arg)
+	}
+	return errors.New(msg)
 }
 
 // realRule is IEC 61131-3's table for a store into a REAL or an LREAL
