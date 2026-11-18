@@ -2,9 +2,13 @@ package retain
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"time"
 )
 
 // fileStore retains State in a JSON file. Save writes a sibling ".tmp"
@@ -27,8 +31,8 @@ type fsys interface {
 	Rename(oldpath, newpath string) error
 	// SyncDir makes a rename in dir durable. Best effort: a directory
 	// cannot be synced on every platform (Windows), and its journal covers
-	// the rename there.
-	SyncDir(dir string)
+	// the rename there; Save logs a failure anywhere else.
+	SyncDir(dir string) error
 }
 
 type syncFile interface {
@@ -43,29 +47,45 @@ func (osFS) Create(name string) (syncFile, error) {
 	return os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 }
 func (osFS) Rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }
-func (osFS) SyncDir(dir string) {
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
+func (osFS) SyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
 	}
+	defer d.Close()
+	return d.Sync()
 }
 
 func (f *fileStore) Kind() string { return "file" }
 
 // Load reads State from disk. A missing file means nothing has been
-// retained yet, not a failure, so it returns a zero State and a nil error;
-// only a real I/O error (permissions) or a corrupt file (bad JSON) is
-// reported. A ".tmp" left by an interrupted Save is never read.
+// retained yet, not a failure, so it returns a zero State and a nil error.
+// A file that cannot be read or parsed is moved aside first, to
+// <path>.corrupt-<UTC time>, and the error says where: the runtime then
+// starts from the tags' initial values, and its first save must not
+// destroy the evidence. A ".tmp" left by an interrupted Save is never read.
 func (f *fileStore) Load() (State, error) {
-	var s State
 	b, err := os.ReadFile(f.path)
 	if os.IsNotExist(err) {
-		return s, nil
+		return State{}, nil
 	}
-	if err != nil {
-		return s, err
+	if err == nil {
+		var s State
+		if err = json.Unmarshal(b, &s); err == nil {
+			return s, nil
+		}
 	}
-	return s, json.Unmarshal(b, &s)
+	return State{}, f.keepAside(err)
+}
+
+// keepAside renames the unusable file out of Save's way and says where it
+// went in the error it returns.
+func (f *fileStore) keepAside(cause error) error {
+	aside := f.path + ".corrupt-" + time.Now().UTC().Format("20060102T150405.000Z")
+	if err := os.Rename(f.path, aside); err != nil {
+		return fmt.Errorf("%s: %w (and it could not be kept aside: %v)", f.path, cause, err)
+	}
+	return fmt.Errorf("%s: %w; kept as %s", f.path, cause, aside)
 }
 
 func (f *fileStore) Save(s State) error {
@@ -97,7 +117,12 @@ func (f *fileStore) Save(s State) error {
 	if err := fs.Rename(tmp, f.path); err != nil {
 		return err
 	}
-	// And the rename itself is on disk before Save reports success.
-	fs.SyncDir(filepath.Dir(f.path))
+	// And the rename itself is on disk before Save reports success. Best
+	// effort: Windows cannot sync a directory; anywhere else a failure is
+	// logged, since the rename may not survive a power cut.
+	if err := fs.SyncDir(filepath.Dir(f.path)); err != nil && goruntime.GOOS != "windows" {
+		slog.Warn("retain: the directory could not be synced after a save; a power cut may undo it",
+			"path", f.path, "error", err)
+	}
 	return nil
 }

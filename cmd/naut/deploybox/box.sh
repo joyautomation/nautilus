@@ -95,12 +95,23 @@ stateread() {
 # link in its place without following it (-T: not into a directory a
 # link points at).
 statewrite() {
-	sw=$(dirname "$STATE/$2")/.naut-new.$$
+	swd=$(dirname "$STATE/$2")
+	sw=$swd/.naut-new.$$
+	# A run cut off by a power loss leaves its temp file; clear those (not
+	# a concurrent run's, which is fresh).
+	find "$swd" -maxdepth 1 -name '.naut-new.*' -mmin +10 -exec rm -f {} + 2>/dev/null || true
 	rm -f "$sw"
 	cp "$1" "$sw"
 	chown -h "$(stat -c %u:%g "$STATE/.")" "$sw"
 	sync
-	mv -fT "$sw" "$STATE/$2" 2>/dev/null || { rm -f "$STATE/$2"; mv -f "$sw" "$STATE/$2"; }
+	if ! mv -fT "$sw" "$STATE/$2" 2>/dev/null; then
+		# An mv without -T (or one refusing a link to a directory there):
+		# remove, then rename. Not atomic: a power cut between the two
+		# leaves no file, so say it happened.
+		say "note: mv -T failed for $STATE/$2; replaced it by removing and renaming (not atomic)"
+		rm -f "$STATE/$2"
+		mv -f "$sw" "$STATE/$2"
+	fi
 	sync
 }
 

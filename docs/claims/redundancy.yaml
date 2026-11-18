@@ -572,15 +572,20 @@ claims:
       The file store writes retain.json whole under another name, syncs it,
       renames it over the old one and syncs the directory, so a save cut
       short leaves the old file loadable, never an empty or half-written
-      one.
+      one; a file that cannot be read is moved aside to
+      retain.json.corrupt-<time> and the error logged, and the first save
+      after it does not overwrite it.
     source: "#retained-state"
     tests:
       - go ./retain TestFileStoreSaveSyncsBeforeAndAfterTheRename
       - go ./retain TestFileStoreInterruptedSaveKeepsTheOldFile
+      - go ./retain TestFileStoreLoadKeepsAnUnusableFileAside
+      - go ./runtime TestRetainLoadFailureIsLoggedAndTheFileKept
     partial: true
     note: >-
       The order of the calls is asserted through an injected file-system
       seam, and a cut at each step (create, write, sync, close, rename) is
       simulated by failing that call; a real power cut on a device is not
       part of the test. The directory sync is best effort, as on Windows it
-      cannot be done.
+      cannot be done. The guarantee is the file system's too: it holds on
+      a journaling file system (ext4, overlayfs), not on FAT.

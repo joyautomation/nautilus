@@ -2,8 +2,10 @@ package retain
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 )
@@ -44,7 +46,7 @@ func (r *recFS) Rename(o, n string) error {
 	return os.Rename(o, n)
 }
 
-func (r *recFS) SyncDir(dir string) { _ = r.step("syncdir") }
+func (r *recFS) SyncDir(dir string) error { return r.step("syncdir") }
 
 type recFile struct {
 	f    syncFile
@@ -126,5 +128,54 @@ func TestFileStoreInterruptedSaveKeepsTheOldFile(t *testing.T) {
 				t.Errorf("after a cut at %s and a good save: %v", step, got.Tags)
 			}
 		})
+	}
+}
+
+// A retain.json that cannot be parsed is moved aside before Load returns,
+// and the error names where: the runtime starts from initial values and
+// saves, and that save must not destroy the evidence.
+func TestFileStoreLoadKeepsAnUnusableFileAside(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "retain.json")
+	os.WriteFile(path, []byte("broken"), 0o644)
+	store := &fileStore{path: path}
+	_, err := store.Load()
+	if err == nil {
+		t.Fatal("Load of a corrupt file returned no error")
+	}
+	aside, _ := filepath.Glob(path + ".corrupt-*")
+	if len(aside) != 1 {
+		t.Fatalf("want one retain.json.corrupt-* file, got %q", aside)
+	}
+	if !strings.Contains(err.Error(), filepath.Base(aside[0])) {
+		t.Errorf("the error should say where the file went: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("the corrupt file is still in Save's way")
+	}
+	if err := store.Save(State{Tags: map[string]any{"SP": 1.5}}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(aside[0]); string(b) != "broken" {
+		t.Errorf("the kept file = %q after a save, want the corrupt original", b)
+	}
+}
+
+// A directory sync that fails is logged (it is not an error: the data is
+// written and renamed, only its durability across a power cut is in doubt).
+func TestFileStoreSaveLogsAFailedDirSync(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("a directory cannot be synced on Windows; nothing is logged there")
+	}
+	var buf strings.Builder
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	store := &fileStore{path: filepath.Join(t.TempDir(), "retain.json"), fs: &recFS{failAt: "syncdir"}}
+	if err := store.Save(State{Tags: map[string]any{"SP": 1.5}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !strings.Contains(buf.String(), "could not be synced") {
+		t.Errorf("a failed directory sync was not logged: %q", buf.String())
 	}
 }
