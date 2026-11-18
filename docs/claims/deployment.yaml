@@ -181,5 +181,6 @@ claims:
       controller while down) is proven by
       tools/deploy/check.sh, run by hand against an Ubuntu 24.04 systemd
       container as a sudo user, 2026-11-17, under Type=simple and
-      Type=notify; not yet on ARM64 hardware. The CD workflow has not run
-      in GitHub Actions.
+      Type=notify; and on a Toradex Verdin AM62 (ARM64) running Torizon
+      OS 7.8.0, 2026-11-17, under Type=notify with an ARM64 runtime built
+      on amd64. The CD workflow has not run in GitHub Actions.
