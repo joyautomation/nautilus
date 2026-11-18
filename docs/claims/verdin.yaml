@@ -128,15 +128,15 @@ claims:
   - id: VDN-009
     claim: >-
       On the bench Verdin, a software (warm) reboot reached the first good
-      scan 35.6–37.3 s after the reboot command, as seen from another
+      scan 35.1–37.3 s after the reboot command, as seen from another
       machine; naut took 1.2–2.2 s from its start to its first scan, after
       waiting for network-online.target.
     source: "#from-power-on-to-the-first-good-scan"
     tests: []
     note: >-
       Measured with tools/deploy/boottime.py and tools/deploy/boot-probe,
-      three reboots, 2026-11-18 (docs/design/verdin-bench.md). A cold
-      power-on was not measured.
+      five reboots (the last two with GOMAXPROCS=4), 2026-11-18
+      (docs/design/verdin-bench.md). A cold power-on was not measured.
   - id: VDN-010
     claim: >-
       On the two-core module, GOMAXPROCS=4 lets a SCHED_FIFO task run on
@@ -151,3 +151,16 @@ claims:
       a row (docs/design/verdin-bench.md). The env file reaching the
       controller was checked in /proc/<pid>/environ after a reboot. Not
       measured in a container.
+  - id: VDN-011
+    claim: >-
+      A module that shipped with only the Toradex Easy Installer can get
+      plain Torizon OS (no containers pre-provisioned) through a custom
+      feed whose image_list.json names the plain image's image.json.
+    source: "#a-module-that-shipped-with-only-the-installer"
+    tests: []
+    note: >-
+      Done once by hand on the bench unit, 2026-11-17: Easy Installer
+      6.7.0 over VNC, a one-entry feed served from another machine on the
+      network pointing at Toradex's torizon-docker image for the AM62,
+      7.8.0+build.78. Not repeatable in CI, and the image URL changes with
+      each Torizon release.

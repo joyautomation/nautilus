@@ -6,9 +6,8 @@ description: Run nautilus on a Toradex Verdin ARM64 module under Torizon OS — 
 :::caution[Experimental]
 Verified on one bench unit: a Verdin AM62 Dual 1GB (two Cortex-A53 cores
 at 1.25 GHz) on a carrier board, running Torizon OS 7.8.0 (kernel 6.6,
-`PREEMPT`, not `PREEMPT_RT`; systemd 255; Docker 25). Other Verdin modules
-(iMX8M Plus, iMX8M Mini, AM62 Quad) run the same `linux_arm64` binary but
-have not been tried. Nothing here makes nautilus a safety controller; read
+`PREEMPT`, not `PREEMPT_RT`; systemd 255; Docker 25). Other ARM64 Verdin
+modules may run the same `linux_arm64` binary; none has been tried. Nothing here makes nautilus a safety controller; read
 [What it does not do yet](#what-it-does-not-do-yet) first.
 :::
 
@@ -36,7 +35,8 @@ nautilus drivers.
 A new module may boot the **Toradex Easy Installer** instead of an OS.
 Its debug console (the carrier's USB debug port, 115200 baud) has a root
 shell where `ip addr show` gives its address, and its interface is
-reachable over VNC (port 5900) or a display. Two things are worth knowing:
+reachable over VNC (port 5900) or a display. This was done once, by
+hand, on the bench unit; two things are worth knowing:
 
 - Its default feed offers **Torizon OS Easy Pairing**: Torizon OS plus a
   container that shows a code for pairing with Torizon Cloud. For a box
@@ -59,6 +59,12 @@ printf 'torizon ALL=(ALL) NOPASSWD: ALL\n' > /tmp/90-naut-deploy
 sudo visudo -cf /tmp/90-naut-deploy && \
   sudo install -m 0440 /tmp/90-naut-deploy /etc/sudoers.d/90-naut-deploy
 ```
+
+That rule is broad: `torizon` can then run anything as root without a
+password. `naut deploy` needs root on the box, so anything narrower must
+still let it run its on-box script; a scoped helper mode for exactly that
+is being added (#771). Remove the drop-in when the box no longer takes
+deploys.
 
 ## Install, update and roll back
 
@@ -142,8 +148,9 @@ What the numbers say about this module and kernel:
   quiet box the 1 ms task's p99 drops from 408 µs to 172 µs, and it
   misses 101 slots in 300,000. It is still a stock `PREEMPT` kernel on a
   1.25 GHz A53: the tail reaches milliseconds, against the desktop's
-  20 µs p99 and 0.3 ms worst case. With `GOMAXPROCS=4` (below) a quiet
-  box gets close to it, but a worst case of about 12 ms remains. Plan on
+  20 µs p99 and 0.3 ms worst case. With `GOMAXPROCS=4` (below), a quiet
+  box with the full mix reaches p99 96 µs and p99.9 188 µs, but its worst
+  case, 11.6 ms, is far from the desktop's 0.3 ms. Plan on
   10 ms tasks or longer, or 1 ms only where an occasional late scan is
   acceptable.
 - **The `performance` governor helps under load.** With both cores busy,
@@ -165,10 +172,18 @@ What the numbers say about this module and kernel:
   | 2 (the default) | loaded | 93.8 % | 1.44 ms | 14.1 ms | 133 ms |
   | 4 | loaded | 97.5 % | 440 µs | 4.74 ms | 145 ms |
 
-  Under the unit, put it in `/etc/nautilus/env` (one line,
-  `GOMAXPROCS=4`); in a container, `-e GOMAXPROCS=4` (measured under
-  the unit only). Under full load the
-  worst case stays above 100 ms: the collector's pauses (up to 25 ms) and
+  Under the unit, the unit reads `/etc/nautilus/env`
+  (`EnvironmentFile=-/etc/nautilus/env`; the `-` makes the file
+  optional). Create it as root and restart:
+
+  ```sh
+  sudo mkdir -p /etc/nautilus
+  printf 'GOMAXPROCS=4\n' | sudo tee /etc/nautilus/env >/dev/null
+  sudo systemctl restart nautilus
+  ```
+
+  In a container, `-e GOMAXPROCS=4` should do the same; only the unit was
+  measured. Under full load the worst case stays above 100 ms: the collector's pauses (up to 25 ms) and
   the runtime's own threads at normal priority are starved by the busy
   loops.
 - **Two cores is little headroom.** Fully loaded, a task without
@@ -208,25 +223,27 @@ docker run -d --name nautilus --restart unless-stopped \
   does not do it for a non-root user (Docker adds the capability to the
   bounding set, not the ambient one); the runtime logs the refusal and
   runs the task at normal priority.
-- **Update and roll back by tag.** Stop with `docker stop` (`SIGTERM`, so
-  the controller makes its last retained save), then run the other tag:
-  `docker stop -t 15 nautilus && docker rm nautilus`, then the `docker
-  run` line with `plant:2`, or `plant:1` to go back. Retained values stay
-  on the volume: a setpoint written under `:1` was there under `:2` and
-  again under `:1`. `docker rm -f` kills without the last save.
+- **Update and roll back by tag.** Stop with `docker stop -t 15 nautilus
+  && docker rm nautilus`, then run the `docker run` line with `plant:2`,
+  or `plant:1` to go back. Retained values stay on the volume: a setpoint
+  written under `:1` was there under `:2` and again under `:1`. `docker
+  stop` sends `SIGTERM`, on which the controller makes its last retained
+  save, while `docker rm -f` kills it without that save; that difference
+  is expected from how the controller stops, not measured in a
+  container.
 - **It comes back after a reboot** through the restart policy, with its
   retained values.
 
-What the container path gives up, measured against the systemd path on
-the same unit:
+What the container path gives up against the systemd path:
 
-- **No hang detection.** Docker restarts a container that exits, not one
-  whose scan hangs; the systemd unit's watchdog restarts a hung scan, and
-  `naut deploy update` rolls back a release whose first scan never
-  finishes.
-- **A slower start.** Docker itself became active about 36 s after the
-  kernel started, so the first good scan came 48–52 s after a reboot
-  command, against 36–37 s for the service.
+- **No hang detection (expected; not staged in a container).** Docker
+  restarts a container that exits, not one whose scan hangs. The systemd
+  unit's watchdog restarts a hung scan (seen under a test unit, not on
+  the Verdin), and `naut deploy update` rolls back a release whose first
+  scan never finishes (seen on the Verdin).
+- **A slower start (measured).** Docker itself became active about 36 s
+  after the kernel started, so the first good scan came 48–52 s after a
+  reboot command, against 35–37 s for the service.
 
 Use the service unless the box's other software is managed as containers
 and nautilus should be too.
@@ -254,14 +271,17 @@ boot.
   when its first scan has completed.
 
 **How long it takes.** Measured with `tools/deploy/boottime.py` and the
-`tools/deploy/boot-probe` project, three software reboots of the bench
-unit. These are **warm** boots: the module stayed powered.
+`tools/deploy/boot-probe` project, five software reboots of the bench
+unit, the last two with `GOMAXPROCS=4`. These are **warm** boots: the
+module stayed powered.
 
 | | reboot command → first good scan (seen from another machine) | kernel start → naut started | kernel start → first scan |
 |---|---|---|---|
 | warm reboot 1 | 36.6 s | 20.0 s | 21.2 s |
 | warm reboot 2 | 35.6 s | 21.0 s | 22.4 s |
 | warm reboot 3 | 37.3 s | 22.2 s | 24.4 s |
+| warm reboot 4 (`GOMAXPROCS=4`) | 35.1 s | 20.6 s | 22.0 s |
+| warm reboot 5 (`GOMAXPROCS=4`) | 36.9 s | 21.6 s | 23.5 s |
 
 - naut itself takes **1.2–2.2 s** from start to its first scan.
 - Most of the wait is before it starts. The unit waits for
