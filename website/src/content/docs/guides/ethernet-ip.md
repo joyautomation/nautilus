@@ -439,8 +439,12 @@ takes a second project file if you want one for logic-only runs
   no tag database is not addressable through it, and generic
   class/instance/attribute messaging — which `eip/cip` can encode — is not
   exposed as a binding.
-- **Implicit (Class 1) cyclic I/O.** Not implemented: an I/O assembly
-  connection is not a thing a manifest can declare.
+- **Implicit (Class 1) cyclic I/O.** Not supported: an I/O assembly
+  connection is not a thing a manifest can declare, so nautilus cannot act
+  as an EtherNet/IP adapter that a PLC scanner owns. An earlier, never-wired
+  Class 1 originator and producer were removed; they can be recovered from
+  commit `7a394383` (`eip/cip/class1.go`, `eip/cip/class1_originator.go`)
+  if that work is picked up.
 - **PCCC / SLC / PLC-5 and Micro800.** There is no PCCC encapsulation in the
   tree at all.
 - **Multi-dimensional arrays.** A one-dimensional array tag binds as a whole;
