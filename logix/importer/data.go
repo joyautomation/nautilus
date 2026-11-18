@@ -48,11 +48,11 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 		if err := need(3); err != nil {
 			return "", err
 		}
-		a, err := rt.exprOperand(args[0])
+		a, err := rt.arithOperand(args[0])
 		if err != nil {
 			return "", err
 		}
-		b, err := rt.exprOperand(args[1])
+		b, err := rt.arithOperand(args[1])
 		if err != nil {
 			return "", err
 		}
@@ -140,22 +140,28 @@ func (rt *routine) storeConversion(m string, args []string, target, rendered str
 			return ""
 		}
 		srcs = exprOperands(e)
-		for _, a := range srcs {
-			if rt.operandType(a) == "TIME" {
-				return "" // a timer's ACC in arithmetic: left as it is
-			}
-		}
 	default:
 		return ""
 	}
 	dst := rt.operandType(target)
 	if dst == "TIME" {
 		// A timer's PRE that a TON/TOF runs on is written through its
-		// DINT preset variable (t_PRE); any other timer member stays the
-		// TIME it is (.PT, .ET), which a TIME source needs no conversion
-		// into.
+		// DINT preset variable (t_PRE). Any other timer member stays the
+		// TIME it is (.PT, .ET): a TIME source goes in as it is, and an
+		// integer, Logix's milliseconds, through <INT>_TO_TIME (#793).
 		up := strings.ToUpper(rendered)
 		if strings.HasSuffix(up, ".PT") || strings.HasSuffix(up, ".ET") {
+			if len(srcs) != 1 || m == "CPT" {
+				return ""
+			}
+			switch t := rt.operandType(srcs[0]); {
+			case t == "TIME":
+				return ""
+			case intWidth[t] > 0:
+				return t + "_TO_TIME"
+			case t == "" && numLit.MatchString(srcs[0]) && !strings.ContainsAny(srcs[0], ".eE"):
+				return "DINT_TO_TIME"
+			}
 			return ""
 		}
 		dst = "DINT"
@@ -172,12 +178,15 @@ func (rt *routine) storeConversion(m string, args []string, target, rendered str
 			t = "DINT"
 		}
 		switch {
+		case t == "TIME" && (len(srcs) > 1 || m == "CPT"):
+			// In arithmetic a timer's ACC or PRE is already its DINT of
+			// milliseconds (arithOperand, #793).
+			if intWidth["DINT"] > intWidth[from] {
+				from = "DINT"
+			}
 		case t == "TIME":
 			// A timer's ACC or PRE: DINT milliseconds in Logix, a TIME in
 			// nautilus, which no integer takes without the conversion.
-			if len(srcs) > 1 {
-				return ""
-			}
 			return "TIME_TO_" + dst
 		case t == "LREAL" || from == "LREAL":
 			from = "LREAL"
@@ -324,6 +333,25 @@ func (rt *routine) operandType(a string) string {
 	return ""
 }
 
+// arithOperand is an arithmetic operand: a timer's ACC or PRE reads as
+// the DINT of milliseconds Logix holds, TIME_TO_DINT(t.ET), since a TIME
+// does not mix with an integer (#793). The writer reads it back as the
+// member.
+func (rt *routine) arithOperand(a string) (string, *refusal) {
+	r, err := rt.exprOperand(a)
+	if err == nil && timeMember(rt.operandType(a), r) {
+		return "TIME_TO_DINT(" + r + ")", nil
+	}
+	return r, err
+}
+
+// timeMember reports a rendered timer member that is a TIME (.ET, .PT);
+// a timer's PRE written through its DINT preset variable is not one.
+func timeMember(typ, rendered string) bool {
+	up := strings.ToUpper(rendered)
+	return typ == "TIME" && (strings.HasSuffix(up, ".ET") || strings.HasSuffix(up, ".PT"))
+}
+
 // exprOperand renders one instruction operand: a literal as is, a
 // reference rewritten.
 func (rt *routine) exprOperand(a string) (string, *refusal) {
@@ -362,6 +390,9 @@ func (rt *routine) iecExpr(e ld.Expr) (ld.Expr, *refusal) {
 		ref, err := rt.ref(x.Text, "")
 		if err != nil {
 			return nil, err
+		}
+		if timeMember(rt.operandType(x.Text), ref) {
+			return &ld.Call{Name: "TIME_TO_DINT", Args: []ld.Expr{&ld.Ref{Text: ref}}}, nil
 		}
 		return &ld.Ref{Text: ref}, nil
 	case *ld.Unary:
