@@ -1,8 +1,6 @@
 package testmqtt
 
 import (
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -10,12 +8,11 @@ import (
 	mqttsrv "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
-	"github.com/mochi-mqtt/server/v2/packets"
 )
 
 func broker(t *testing.T, serialize bool) (string, *HoldTeardown) {
 	t.Helper()
-	srv := mqttsrv.New(&mqttsrv.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	srv := mqttsrv.New(&mqttsrv.Options{Logger: quiet()})
 	if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -33,16 +30,7 @@ func broker(t *testing.T, serialize bool) (string, *HoldTeardown) {
 		t.Fatal(err)
 	}
 	go func() { _ = srv.Serve() }()
-	t.Cleanup(func() {
-		// No srv.Close: it can deadlock in v2.7.9 (sparkplug/host's
-		// closeBroker); closing the listener with a no-op sweep is enough here.
-		srv.Listeners.Close("t", func(string) {})
-		for _, cl := range srv.Clients.GetAll() {
-			if !cl.Closed() {
-				_ = srv.DisconnectClient(cl, packets.ErrServerShuttingDown)
-			}
-		}
-	})
+	t.Cleanup(func() { _ = Close(srv) })
 	return tcp.Address(), slow
 }
 

@@ -19,8 +19,8 @@ import (
 	mqttsrv "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
-	"github.com/mochi-mqtt/server/v2/packets"
 
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug"
 )
@@ -97,26 +97,7 @@ func TestSparkplugManifestClassesReachTheNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _ = srv.Serve() }()
-	t.Cleanup(func() {
-		// mochi v2.7.9's Close can deadlock on a disconnecting client
-		// (see sparkplug/host/mqtt_test.go closeBroker); take the listener's
-		// own sweep out of it.
-		srv.Listeners.Close("t", func(string) {})
-		done := make(chan struct{})
-		go func() { _ = srv.Close(); close(done) }()
-		for {
-			for _, cl := range srv.Clients.GetAll() {
-				if !cl.Closed() {
-					_ = srv.DisconnectClient(cl, packets.ErrServerShuttingDown)
-				}
-			}
-			select {
-			case <-done:
-				return
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
-	})
+	t.Cleanup(func() { _ = testmqtt.Close(srv) }) // not srv.Close: it can deadlock in mochi v2.7.9
 	url := "tcp://" + tcp.Address()
 
 	obs := &wireObserver{}

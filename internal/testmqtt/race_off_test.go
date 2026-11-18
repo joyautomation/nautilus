@@ -1,5 +1,5 @@
 //go:build !race
 
-package host
+package testmqtt
 
 const raceEnabled = false

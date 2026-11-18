@@ -410,12 +410,12 @@ jobs:
         run: NAUTILUS_TCK=1 go test -json ./sparkplug/host/ -run TestTCKHostConformance -v -timeout 120s | tee evidence/tck-host.json | go run ./tools/evidence cat
       # The in-process test broker (mochi-mqtt v2.7.9) can deadlock in its own
       # Close when a client disconnects at that moment; the tests close it
-      # through closeBroker instead. The window only opens wide enough to hit
+      # through testmqtt.Close instead. The window only opens wide enough to hit
       # under the race detector, so the churn test that proves closeBroker
       # never hangs runs here with -race (it hangs mochi's Close within a few
       # hundred of its 1000 rounds).
-      - name: sparkplug/host test broker teardown under client churn (-race)
-        run: go test -race -cpu 4 -count=1 -run '^TestCloseBrokerUnderClientChurn$' ./sparkplug/host
+      - name: test broker teardown under client churn (-race)
+        run: go test -race -cpu 4 -count=1 -run '^TestCloseUnderClientChurn$' ./internal/testmqtt
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
