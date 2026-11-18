@@ -1,0 +1,16 @@
+# Boot probe for the bench Verdin (#721): the API on every interface so a
+# poller on another machine sees the first scan; the task at SCHED_FIFO 80
+# on CPU 1, to check priority: is honoured under nautilus.service.
+name: boot-probe
+retain: {}
+tasks:
+  - program: main.st
+    scan: 10ms
+    priority: 80
+    cpu: 1
+tags:
+  - { name: Release, role: state, type: DINT, init: 0 }
+  - { name: SP, role: setpoint, type: REAL, init: 1.5 }
+  - { name: Scans, role: state, type: DINT, init: 0 }
+server:
+  addr: "0.0.0.0:18090"

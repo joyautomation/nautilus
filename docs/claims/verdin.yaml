@@ -1,0 +1,166 @@
+page: website/src/content/docs/guides/verdin.md
+title: Toradex Verdin
+prefix: VDN
+claims:
+  - id: VDN-001
+    claim: >-
+      naut deploy builds a Verdin's controller on another machine: it asks
+      the box its architecture and builds on naut's own linux_arm64
+      release, checked against the release's checksums.txt.
+    source: "#install-update-and-roll-back"
+    tests:
+      - go ./cmd/naut TestDeployFetchesItsOwnReleaseForTheBox
+      - go ./cmd/naut TestDeployUpdateBuildsForTheBox
+      - go ./cmd/naut TestDeployRefusesARuntimeThatFailsItsChecksum
+      - go ./cmd/naut TestBuildOnAnotherRuntime
+    partial: true
+    note: >-
+      The tests use a stand-in ssh and release server and a hand-made ELF
+      header for the runtime. The real path, a release fetched from
+      GitHub, built on and run on the bench Verdin AM62, was exercised by
+      hand (2026-11-17/18), not in CI.
+  - id: VDN-002
+    claim: >-
+      On the bench Verdin AM62 on Torizon OS, install, update and rollback
+      work, and an update that does not start, or whose first scan hangs,
+      rolls itself back with exit 3, keeping the retained values.
+    source: "#install-update-and-roll-back"
+    tests:
+      - go ./cmd/naut TestDeployBoxFailedInstallLeavesNothing
+      - go ./cmd/naut TestDeployBoxFailedUpdateRestoresRetain
+      - go ./cmd/naut TestDeployBoxRedeployWhileDown
+      - go ./cmd/naut TestDeployUpdateExitStatusIsTheBoxs
+    partial: true
+    note: >-
+      The Go tests run the on-box script against a stand-in systemctl.
+      On the Verdin itself, tools/deploy/check.sh passed every step under
+      Type=notify (2026-11-17 and twice on 2026-11-18): build + install
+      12.5 s, build + update 7.8 s, rollback 4.5 s, a hung first scan
+      rolled back in 73 s. That run is by hand, not in CI.
+  - id: VDN-003
+    claim: >-
+      On Torizon OS, nothing naut deploy writes is under the read-only
+      /usr: /opt is /var/rootdirs/opt, and /var/lib and
+      /etc/systemd/system are writable.
+    source: "#install-update-and-roll-back"
+    tests: []
+    note: >-
+      Observed on the bench unit (mount, ls -l /opt). Surviving a Torizon
+      OS update follows from OSTree keeping /var and merging /etc; an OS
+      update with nautilus installed was not done.
+  - id: VDN-004
+    claim: >-
+      Under the unit naut deploy installs, a task's priority: and cpu:
+      are honoured: its thread runs at SCHED_FIFO at that priority on that
+      core.
+    source: "#real-time-on-the-am62"
+    tests:
+      - go ./runtime TestApplySchedAffinity
+      - go ./runtime TestRunReportsSched
+    partial: true
+    note: >-
+      The tests cover pinning and how a placement is reported; a granted
+      SCHED_FIFO is never asserted in CI (RT-017). On the bench Verdin,
+      tools/deploy/boot-probe with priority 80 and cpu 1 ran its task
+      thread at FF 80 on CPU 1 (ps -L), with no refusal in the journal.
+  - id: VDN-005
+    claim: >-
+      On the bench Verdin AM62 (stock PREEMPT kernel), a 1 ms task at
+      SCHED_FIFO 80 pinned to a core ran 99.97 % of its slots on a quiet
+      box, with p99 lateness 172 µs and a worst case of 11.6 ms; the other
+      rows of the page's tables are as measured.
+    source: "#real-time-on-the-am62"
+    tests: []
+    note: >-
+      Measured with tools/jitter on the bench unit, 2026-11-18, 5 minutes
+      a row; conditions and every report are in
+      docs/design/verdin-bench.md. Not repeatable in CI.
+  - id: VDN-006
+    claim: >-
+      In a container, --ulimit rtprio lets a non-root controller holding
+      no capabilities run a task at SCHED_FIFO; --cap-add SYS_NICE alone
+      does not, and the runtime logs the refusal and runs the task at
+      normal priority.
+    source: "#in-a-container"
+    tests:
+      - go ./runtime TestApplySchedFIFORefusalIsExplicit
+    partial: true
+    note: >-
+      The test asserts the refusal names the fixes (CAP_SYS_NICE and an
+      rtprio rlimit). Both container behaviours were observed on the bench
+      Verdin (Docker 25, distroless nonroot image): CapEff 0 with the task
+      at FF 80 under --ulimit rtprio=80, and the logged refusal under
+      --cap-add SYS_NICE alone.
+  - id: VDN-007
+    claim: >-
+      With the container recipe, retained values on the volume survive an
+      update and a rollback by image tag and a reboot, and the container
+      comes back after a reboot through its restart policy; Docker does
+      not restart a container whose scan hangs.
+    source: "#in-a-container"
+    tests: []
+    note: >-
+      Observed on the bench Verdin, 2026-11-18: a setpoint written under
+      :1 was there under :2, under :1 again, and after two reboots. Hang
+      detection is the systemd unit's watchdog (DEP-013); no container
+      hang was staged.
+  - id: VDN-008
+    claim: >-
+      At start, retained values load before the first scan; an output
+      with init: is written on the first scan, while a typed output
+      without one is not written to its driver until something writes
+      it; without redundancy the first scan does not wait for a driver's
+      inputs to be live; under the Type=notify unit, systemd counts the
+      service started when its first scan has completed.
+    source: "#from-power-on-to-the-first-good-scan"
+    tests:
+      - go ./runtime TestRetainedValueLoadsBeforeFirstScan
+      - go ./runtime TestLoadRetainedBeforeRunKeepsAnEarlyWrite
+      - go ./runtime TestTypedOutputZeroIsNotPushedUntilWritten
+      - go ./runtime TestNoCoordinatorDoesNotWaitForInputs
+      - go ./cmd/naut TestNautRunSystemdNotify
+    partial: true
+    note: >-
+      Each clause has a runtime-level test. The page's further clause,
+      that retained values load before the tag API answers, is ordered in
+      naut run (LoadRetained before the server starts) and not asserted by
+      a test of the HTTP API.
+  - id: VDN-009
+    claim: >-
+      On the bench Verdin, a software (warm) reboot reached the first good
+      scan 35.1–37.3 s after the reboot command, as seen from another
+      machine; naut took 1.2–2.2 s from its start to its first scan, after
+      waiting for network-online.target.
+    source: "#from-power-on-to-the-first-good-scan"
+    tests: []
+    note: >-
+      Measured with tools/deploy/boottime.py and tools/deploy/boot-probe,
+      five reboots (the last two with GOMAXPROCS=4), 2026-11-18
+      (docs/design/verdin-bench.md). A cold power-on was not measured.
+  - id: VDN-010
+    claim: >-
+      On the two-core module, GOMAXPROCS=4 lets a SCHED_FIFO task run on
+      time beside a long scan: with the full mix on a quiet box, the 1 ms
+      task at FIFO 80 ran 99.92 % of its slots with p99.9 188 µs, against
+      95.8 % and 9.22 ms at the default of 2; set in /etc/nautilus/env, it
+      reaches the controller under the unit.
+    source: "#real-time-on-the-am62"
+    tests: []
+    note: >-
+      Measured with tools/jitter on the bench unit, 2026-11-18, 3 minutes
+      a row (docs/design/verdin-bench.md). The env file reaching the
+      controller was checked in /proc/<pid>/environ after a reboot. Not
+      measured in a container.
+  - id: VDN-011
+    claim: >-
+      A module that shipped with only the Toradex Easy Installer can get
+      plain Torizon OS (no containers pre-provisioned) through a custom
+      feed whose image_list.json names the plain image's image.json.
+    source: "#a-module-that-shipped-with-only-the-installer"
+    tests: []
+    note: >-
+      Done once by hand on the bench unit, 2026-11-17: Easy Installer
+      6.7.0 over VNC, a one-entry feed served from another machine on the
+      network pointing at Toradex's torizon-docker image for the AM62,
+      7.8.0+build.78. Not repeatable in CI, and the image URL changes with
+      each Torizon release.
