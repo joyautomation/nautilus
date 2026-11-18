@@ -15,3 +15,6 @@ func applySched(cpus []int, prio int, _ func(string)) error {
 }
 
 func releaseSched() {}
+
+func currentTid() int            { return 0 }
+func demoteTid(int, string) bool { return false }

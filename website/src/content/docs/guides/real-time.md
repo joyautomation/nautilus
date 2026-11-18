@@ -126,9 +126,8 @@ What this limit does **not** catch:
 - **An endless loop in your program.** That is the likeliest runaway, and
   this limit does not stop it. Go preempts the task about every 10 ms and
   parks its thread for a few microseconds, which resets the count, while
-  the core stays all but full. The runtime's own priority watchdog
-  (#836) is what catches that case. Until it is in your version, a
-  `priority:` task with a loop that never ends can starve its core.
+  the core stays all but full. The runtime's own priority watchdog,
+  next, is what catches that case.
 - **A core with `nohz_full`.** The count advances once per scheduler tick,
   and the kernel stops the tick on a core whose only runnable thread is
   this one. There the 200 ms limit can take tens of seconds to trip.
@@ -138,6 +137,27 @@ What this limit does **not** catch:
   it, and the outcome is the hard limit's kill instead. Under
   `naut deploy` the service restarts, and on a PLCnext the shim's output
   watchdog drives the outputs safe meanwhile.
+
+**The runtime watches its own priority tasks too.** A task at `priority:`
+that overruns its period 50 times in a row, or whose one scan runs for
+more than 20 periods, loses the priority the same way: back to normal
+scheduling until a restart, logged, and shown in its `scan.sched`. The
+second check runs while the scan is still going, so a scan that never
+ends is caught too. The kernel limit cannot catch one that keeps getting
+preempted. Only that task is demoted. Change the bounds per task:
+
+```yaml
+tasks:
+  - program: fast.st
+    scan: 1ms
+    priority: 40
+    priority-guard:
+      overruns: 100       # scans in a row over the period (default 50)
+      scan-multiple: 10   # one scan longer than this many periods (default 20, at least 2)
+```
+`NAUTILUS_RT_LIMIT_MS` changes the limit (10 ms or more). A stricter
+limit already in place, from a launcher for instance, is kept. A task
+that cannot be bounded is not given the priority.
 
 **`cpu:` alone makes things worse.** Pinned, a task can no longer move off
 a core something else just landed on, and at normal priority it has no

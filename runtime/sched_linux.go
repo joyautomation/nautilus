@@ -195,3 +195,26 @@ func releaseSched() {
 		}
 	}
 }
+
+func currentTid() int { return syscall.Gettid() }
+
+// demoteTid moves one registered real-time thread to SCHED_OTHER and tells
+// its task why (the priority guard's path, prioguard.go). False when tid
+// holds no priority of ours: never granted, or already demoted.
+func demoteTid(tid int, reason string) bool {
+	if tid == 0 {
+		return false
+	}
+	rtGuard.mu.Lock()
+	told, ok := rtGuard.threads[tid]
+	delete(rtGuard.threads, tid)
+	rtGuard.mu.Unlock()
+	if !ok {
+		return false
+	}
+	setOther(tid)
+	if told != nil {
+		told(reason)
+	}
+	return true
+}

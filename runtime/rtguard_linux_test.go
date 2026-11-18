@@ -226,3 +226,97 @@ func TestRTGuardSetOtherReportsFailure(t *testing.T) {
 		t.Fatalf("setOther on this (normal) thread: %v", err)
 	}
 }
+
+// demoteTid (the priority guard's path) moves one registered thread, tells
+// its task, and leaves the others; a second call finds nothing.
+func TestRTGuardDemoteOneThread(t *testing.T) {
+	if err := armRTGuard(); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	defer close(release)
+	tids := make(chan int, 2)
+	for range 2 {
+		go func() {
+			goruntime.LockOSThread()
+			defer goruntime.UnlockOSThread()
+			tids <- syscall.Gettid()
+			<-release
+		}()
+	}
+	a, b := <-tids, <-tids
+	var toldA, toldB atomic.Bool
+	rtGuard.mu.Lock()
+	rtGuard.threads[a] = func(string) { toldA.Store(true) }
+	rtGuard.threads[b] = func(string) { toldB.Store(true) }
+	rtGuard.mu.Unlock()
+	defer func() { rtGuard.mu.Lock(); delete(rtGuard.threads, b); rtGuard.mu.Unlock() }()
+	if !demoteTid(a, "test") || !toldA.Load() {
+		t.Fatal("demoteTid did not demote and tell the registered thread")
+	}
+	if toldB.Load() {
+		t.Fatal("demoteTid touched another thread")
+	}
+	if demoteTid(a, "test") || demoteTid(0, "test") {
+		t.Fatal("a thread demoted already, or none, must report false")
+	}
+}
+
+// The priority guard against real SCHED_FIFO (CI's setcap'd step): a main
+// task that overruns its period every scan loses the priority after its
+// guard's count; a task whose one scan runs far past its period loses it
+// while that scan is still running. Each thread must be back at
+// SCHED_OTHER, not only reported so.
+func TestRTGuardPriorityWatchdog(t *testing.T) {
+	// Main: a loop the VM runs for milliseconds, far over its 1 ms period.
+	// Stuck: one scan of hundreds of milliseconds, far past 4 × 5 ms, but
+	// short enough that Run returns soon after the test cancels it.
+	const busy = "FOR i := 1 TO 300000 DO x := x + 1; END_FOR;"
+	r, err := New(Options{
+		Program:  "PROGRAM Main\nVAR x : DINT; i : DINT; END_VAR\n" + busy + "\nEND_PROGRAM",
+		Scan:     time.Millisecond,
+		Priority: 1,
+		Guard:    PriorityGuard{Overruns: 5},
+		Tasks: []Task{{Name: "stuck", Scan: 5 * time.Millisecond, Priority: 1,
+			Guard:   PriorityGuard{ScanMultiple: 4},
+			Program: "PROGRAM Stuck\nVAR y : DINT; j : DINT; END_VAR\nFOR j := 1 TO 5000000 DO y := y + 1; END_FOR;\nEND_PROGRAM"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	// Did the priority take at all? Without CAP_SYS_NICE it is refused and
+	// there is nothing to guard.
+	time.Sleep(30 * time.Millisecond)
+	if s := r.Stats(); !s.Sched.Applied && !strings.Contains(s.Sched.Error, "priority guard") {
+		msg := "no SCHED_FIFO here (needs CAP_SYS_NICE): " + s.Sched.Error
+		if os.Getenv("NAUTILUS_REQUIRE_RT") == "1" {
+			t.Fatal("NAUTILUS_REQUIRE_RT=1 but " + msg)
+		}
+		t.Skip(msg)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var s ScanStats
+	for time.Now().Before(deadline) {
+		s = r.Stats()
+		if !s.Sched.Applied && !s.Tasks[0].Sched.Applied {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s.Sched.Applied || !strings.Contains(s.Sched.Error, "5 scans in a row overran") {
+		t.Errorf("main task: %+v, want demoted for 5 overruns in a row", s.Sched)
+	}
+	if st := s.Tasks[0].Sched; st.Applied || !strings.Contains(st.Error, "has run for more than") {
+		t.Errorf("stuck task: %+v, want demoted while its scan ran", st)
+	}
+	for name, tid := range map[string]int64{"main": r.tid.Load(), "stuck": r.tasks[0].tid.Load()} {
+		if policy, _, _ := syscall.RawSyscall(syscall.SYS_SCHED_GETSCHEDULER, uintptr(tid), 0, 0); policy != schedOther {
+			t.Errorf("%s task thread %d: policy %d after the demotion, want SCHED_OTHER", name, tid, policy)
+		}
+	}
+}
