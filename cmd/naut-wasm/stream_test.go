@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall/js"
 	"testing"
 	"time"
 )
@@ -38,11 +39,12 @@ func sealin(t *testing.T) string {
 }
 
 // stream opens /api/stream and returns a channel of its chunks, closed when
-// the stream ends.
+// the stream ends. A path alone, as every caller sends it (client.js,
+// engine.ts through the bridge).
 func stream(t *testing.T) (<-chan string, func()) {
 	t.Helper()
 	ch := make(chan string, 64)
-	cancel := openStream("http://"+playgroundHost+"/api/stream", func(s string) {
+	cancel := openStream("/api/stream", func(s string) {
 		select {
 		case ch <- s:
 		default:
@@ -128,5 +130,32 @@ func TestPlaygroundHostMatchesTheExtension(t *testing.T) {
 	}
 	if want := `PLAYGROUND_URL = "http://` + playgroundHost + `"`; !strings.Contains(string(src), want) {
 		t.Errorf("engine.ts lacks %s", want)
+	}
+}
+
+// #819: a request the extension hands in (engine.ts sends the path alone,
+// through the bridge to jsHandle) passes the controller's Host guard. When
+// it was addressed to httptest's example.com, every one was a 403 and the
+// live playground showed "nautilus: offline" for every example.
+func TestHandleAnswersWhatTheExtensionSends(t *testing.T) {
+	if _, err := load(sealin(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	status := make(chan int, 1)
+	then := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		status <- args[0].Get("status").Int()
+		return nil
+	})
+	defer then.Release()
+	headers := js.ValueOf(map[string]any{"accept": "application/json"})
+	jsHandle(js.Null(), []js.Value{js.ValueOf("GET"), js.ValueOf("/api/state"), headers, js.Null()}).(js.Value).Call("then", then)
+	select {
+	case got := <-status:
+		if got != 200 {
+			t.Fatalf("GET /api/state as the extension sends it (its connect check): status %d, want 200", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no answer")
 	}
 }
