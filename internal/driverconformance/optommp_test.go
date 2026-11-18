@@ -75,11 +75,11 @@ func init() {
 					return nil
 				},
 				polls: func() uint64 { return d.Health().Reads },
-				link:  l,
+				// The input's quality bit in the packed mask: that one
+				// channel reads Bad while the link stays up.
+				failRead: func() { dev.SetChannelBad(in.Slot, in.Channel, true) },
+				link:     l,
 			}
-		},
-		unsupported: map[string]string{
-			"C3": "optommptest has no exported way to make one channel read bad (a NaN analog, the channel's quality bit, a slot fault); needs a fake hook from optommp's owner",
 		},
 	})
 }
