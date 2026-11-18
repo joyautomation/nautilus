@@ -31,7 +31,8 @@ const (
 	BlockTypeIM2                    uint16 = 0x0022
 	BlockTypeIM3                    uint16 = 0x0023
 	BlockTypeIM4                    uint16 = 0x0024
-	BlockTypeARRPCBlockReq          uint16 = 0x0114 // IODControlReq variant — PrmEnd from controller (and as IODControl carrier)
+	BlockTypeIODReleaseReq          uint16 = 0x0114 // IODReleaseBlockReq: Release (controller → device)
+	BlockTypeIODReleaseRes          uint16 = 0x8114 // IODReleaseBlockRes
 	BlockTypeAppRdyBlockReq         uint16 = 0x0112 // CControl(AppReady) request from device → controller
 	BlockTypeAppRdyBlockRes         uint16 = 0x8112 // CControl(AppReady) response from controller → device
 	BlockTypeIOXBlockReq            uint16 = 0x0001 // AlarmNotification high
@@ -168,8 +169,8 @@ func ParseARBlockReq(data []byte) (*ARBlockReq, error) {
 	ar.ARProperties = binary.BigEndian.Uint32(data[42:46])
 	ar.CMInitiatorActivityTimeout = binary.BigEndian.Uint16(data[46:48])
 	ar.CMInitiatorUDPRTPort = binary.BigEndian.Uint16(data[48:50])
-	nameLen := binary.BigEndian.Uint16(data[50:52])
-	if int(52+nameLen) > len(data) {
+	nameLen := int(binary.BigEndian.Uint16(data[50:52])) // int first: 52+0xFFFF must not wrap
+	if 52+nameLen > len(data) {
 		return nil, fmt.Errorf("ARBlockReq station name length %d exceeds data", nameLen)
 	}
 	ar.CMInitiatorStationName = string(data[52 : 52+nameLen])
