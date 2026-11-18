@@ -1193,8 +1193,9 @@ type metaResponse struct {
 	// look like an error.
 	Alarms bool `json:"alarms"`
 	// Quality says this controller can report per-tag data quality: it runs
-	// a driver that implements io.QualityReporter, or simply has
-	// driver-bound inputs the runtime can mark Stale on a read failure.
+	// a driver that implements io.QualityReporter, has driver-bound inputs
+	// the runtime can mark Stale on a read failure, or is a redundant
+	// replica, whose standby marks every scan-fed tag Stale.
 	// The capability flag matters more here than anywhere else in this
 	// response, because the FALSE case is invisible: an empty `quality` map
 	// looks exactly like a healthy plant, and an HMI that cannot tell the

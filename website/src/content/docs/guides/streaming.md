@@ -299,7 +299,7 @@ Two rules keep it affordable on a 10,000-tag controller:
 
 ### Where it comes from
 
-Two sources, in this order.
+Two sources, in this order, and one rule for a redundant pair's standby.
 
 **The driver**, when it implements `io.QualityReporter`:
 
@@ -313,7 +313,8 @@ type QualityReporter interface {
 
 It is the only thing that actually knows. A Sparkplug host driver knows
 which edge node died and which has never birthed; an EtherNet/IP driver
-knows which connection dropped. Whatever it says about a tag stands.
+knows which connection dropped. Whatever it says about a tag stands, with
+one exception: on a standby its `good` does not (below).
 Implementing it is never required — a driver that reports nothing behaves
 exactly as it did before quality existed. `io.Memory` implements it
 (`SetQuality`) so a simulation or a test can exercise the whole path
@@ -326,6 +327,20 @@ what `stale` means, and it is a fact the runtime holds whether or not the
 driver reports anything. A plain `io.Memory` or a hand-written driver gets
 honest staleness for free.
 
+**On a standby**, the replica of a redundant pair that is not scanning,
+everything a scan refreshes is frozen: the driver-bound inputs, every tag a
+program writes, and the measured-dt tags. All of them are `stale`, as
+values held over from its last scan as leader. A driver's non-`good`
+verdict still stands, being more specific. Its `good` does not, because the
+value it vouches for has not reached the tag store. A setpoint the logic
+only reads is the operator's value, not a reading, and keeps its quality.
+The replica counts as a standby until the first scan of its own leadership
+has read its inputs. That covers a takeover still waiting for live inputs,
+one whose first read is in flight, and a leader whose lease has already
+passed on before its next scan. Then quality is the drivers' again. The
+Sparkplug edge publishes no quality, and an ungated standby edge still
+publishes its values (#798).
+
 A failed output **write** deliberately does not do this. An actuator
 refusing a command says nothing about how old the readings are, and marking
 every input stale over it would put a bad-quality badge on every screen in
@@ -334,7 +349,9 @@ the plant every time one valve sulked.
 ### The capability flag
 
 `GET /api/meta` reports `"quality": true` when this controller can report
-quality at all. Check it before rendering a quality indicator, because the
+quality at all: its driver reports quality, it has driver-bound inputs, or
+it is one of a redundant pair (a standby marks its tags `stale` with no
+driver at all). Check it before rendering a quality indicator, because the
 false case is **invisible**: an empty `quality` map looks exactly like a
 healthy plant, and a screen that cannot tell the two apart paints a
 confident green badge on a controller that has no idea. `/api/meta` also

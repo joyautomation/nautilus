@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,9 +39,9 @@ type standbyFlag struct{ lead atomic.Bool }
 
 func (f *standbyFlag) IsLeader() bool { return f.lead.Load() }
 
-func newStandbyRuntime(t *testing.T, drv nio.Driver, coord runtime.Coordinator) *runtime.Runtime {
+func newStandbyRuntime(t *testing.T, drv nio.Driver, coord runtime.Coordinator, more ...func(*runtime.Options)) *runtime.Runtime {
 	t.Helper()
-	rt, err := runtime.New(runtime.Options{
+	o := runtime.Options{
 		Program:     standbyQualityProgram,
 		Driver:      drv,
 		Inputs:      []string{"Level", "Flow"},
@@ -51,7 +52,11 @@ func newStandbyRuntime(t *testing.T, drv nio.Driver, coord runtime.Coordinator) 
 		// A takeover waits for live inputs only when the driver says;
 		// keep the wait long so a test that holds it is not racing it.
 		TakeoverInputsWait: time.Minute,
-	})
+	}
+	for _, f := range more {
+		f(&o)
+	}
+	rt, err := runtime.New(o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,4 +261,205 @@ func TestQualityStandbyMatchesTheStoredSpelling(t *testing.T) {
 			t.Errorf("TagQuality(%s) = %v, want stale", name, got)
 		}
 	}
+}
+
+// gatedDriver is a Memory driver whose readiness (io.InputsReadier) and
+// reads a test controls: a read can be held until the test releases it.
+type gatedDriver struct {
+	*nio.Memory
+	ready   atomic.Bool
+	mu      sync.Mutex
+	hold    chan struct{} // non-nil: the next read waits on it
+	entered chan struct{} // signalled when a held read starts
+}
+
+func newGatedDriver() *gatedDriver {
+	d := &gatedDriver{Memory: nio.NewMemory(), entered: make(chan struct{}, 1)}
+	d.ready.Store(true)
+	return d
+}
+
+func (d *gatedDriver) InputsReady() bool { return d.ready.Load() }
+
+func (d *gatedDriver) wait() {
+	d.mu.Lock()
+	h := d.hold
+	d.mu.Unlock()
+	if h != nil {
+		d.entered <- struct{}{}
+		<-h
+	}
+}
+
+func (d *gatedDriver) ReadInputs() (nio.Values, error) { d.wait(); return d.Memory.ReadInputs() }
+func (d *gatedDriver) ReadInputsInto(dst nio.Values) error {
+	d.wait()
+	return d.Memory.ReadInputsInto(dst)
+}
+
+// A takeover on a NEW term held for live inputs (#626): this replica led
+// term 1, the lease moved on and came back as term 2 between two scans,
+// and the drivers' inputs are not live. The gate refuses, nothing scans,
+// and the values are as frozen as a standby's, although the coordinator
+// says this replica leads and it never saw its gate close.
+func TestQualityStaleWhileNewTermTakeoverWaitsForInputs(t *testing.T) {
+	drv := newGatedDriver()
+	coord := &termFlag{}
+	coord.term.Store(1)
+	coord.lead.Store(true)
+	rt := newStandbyRuntime(t, drv, coord)
+	rt.Scan()
+	if q := rt.Quality(); len(q) != 0 {
+		t.Fatalf("leader in term 1 reported %v", q)
+	}
+	drv.ready.Store(false)
+	coord.term.Store(2)
+	rt.Scan() // holds: a new term, inputs not live
+	assertStandby(t, rt, nil)
+}
+
+// A takeover's first read has not come back yet. The gate has opened,
+// but the tags still hold what this replica read when it last led, and
+// the read-OK flag still says that old read worked. They stay Stale until
+// the main scan's read lands.
+func TestQualityStaleUntilTheTakeoverReadLands(t *testing.T) {
+	drv := newGatedDriver()
+	coord := &standbyFlag{}
+	coord.lead.Store(true)
+	rt := newStandbyRuntime(t, drv, coord)
+	rt.Scan() // leads, reads OK
+	coord.lead.Store(false)
+	rt.Scan() // steps down
+
+	release := make(chan struct{})
+	drv.mu.Lock()
+	drv.hold = release
+	drv.mu.Unlock()
+	coord.lead.Store(true)
+	done := make(chan struct{})
+	go func() { rt.Scan(); close(done) }()
+	<-drv.entered // the takeover ran; its first read is in flight
+	assertStandby(t, rt, nil)
+
+	drv.mu.Lock()
+	drv.hold = nil
+	drv.mu.Unlock()
+	close(release)
+	<-done
+	if q := rt.Quality(); len(q) != 0 {
+		t.Errorf("after the takeover's read landed quality = %v, want nothing", q)
+	}
+}
+
+// An additional task's scan can be the one whose gate performs the
+// takeover. It reads no inputs (the main task owns the field), so the
+// tags stay Stale until the main scan has read.
+func TestQualityStaleWhenATaskOpensTheTakeover(t *testing.T) {
+	coord := &standbyFlag{}
+	coord.lead.Store(true)
+	rt := newStandbyRuntime(t, nio.NewMemory(), coord, func(o *runtime.Options) {
+		o.Tasks = []runtime.Task{{Name: "t", Program: `PROGRAM T
+VAR_EXTERNAL TaskOut : REAL; END_VAR
+TaskOut := TaskOut + 1.0;
+END_PROGRAM
+`}}
+		o.Seed["TaskOut"] = 0.0
+	})
+	rt.Scan()
+	if err := rt.ScanTask("t"); err != nil {
+		t.Fatal(err)
+	}
+	coord.lead.Store(false)
+	rt.Scan()
+	coord.lead.Store(true)
+	if err := rt.ScanTask("t"); err != nil { // this gate takes over
+		t.Fatal(err)
+	}
+	assertStandby(t, rt, nil)
+	rt.Scan()
+	if q := rt.Quality(); len(q) != 0 {
+		t.Errorf("after the main scan read quality = %v, want nothing", q)
+	}
+}
+
+// Stepped down, then the coordinator says this replica leads again, but no
+// scan has run since: nothing has been read, so the tags are still the
+// frozen ones.
+func TestQualityStaleWhenLeadReturnsBeforeAnyScan(t *testing.T) {
+	coord := &standbyFlag{}
+	coord.lead.Store(true)
+	rt := newStandbyRuntime(t, nio.NewMemory(), coord)
+	rt.Scan()
+	coord.lead.Store(false)
+	rt.Scan() // steps down
+	coord.lead.Store(true)
+	assertStandby(t, rt, nil) // no scan yet
+}
+
+// A new term won while this replica was leading (lost and regained between
+// two scans), inputs live: the gate takes over at once, and until that
+// scan's read lands the tags are the previous term's.
+func TestQualityStaleWhileANewTermReadIsInFlight(t *testing.T) {
+	drv := newGatedDriver()
+	coord := &termFlag{}
+	coord.term.Store(1)
+	coord.lead.Store(true)
+	rt := newStandbyRuntime(t, drv, coord)
+	rt.Scan()
+	release := make(chan struct{})
+	drv.mu.Lock()
+	drv.hold = release
+	drv.mu.Unlock()
+	coord.term.Store(2)
+	done := make(chan struct{})
+	go func() { rt.Scan(); close(done) }()
+	<-drv.entered
+	assertStandby(t, rt, nil)
+	drv.mu.Lock()
+	drv.hold = nil
+	drv.mu.Unlock()
+	close(release)
+	<-done
+	if q := rt.Quality(); len(q) != 0 {
+		t.Errorf("after the new term's read landed quality = %v, want nothing", q)
+	}
+}
+
+// An online edit changes which tags the program writes, and a rollback
+// changes them back: the standby's Stale set follows the running program,
+// not the one it booted with.
+func TestQualityStandbyFollowsOnlineEdits(t *testing.T) {
+	rt := newStandbyRuntime(t, nio.NewMemory(), &standbyFlag{})
+	p := rt.TaskProgram("main")
+	edited := `PROGRAM Q
+VAR_EXTERNAL
+  Level : REAL;
+  Flow : REAL;
+  SP : REAL;
+  Calc : REAL;
+  Out : REAL;
+END_VAR
+SP := Level;
+Out := Flow;
+END_PROGRAM
+`
+	check := func(when string, stale, notReported string) {
+		t.Helper()
+		q := rt.Quality()
+		if q[stale] != nio.Stale {
+			t.Errorf("%s: Quality()[%s] = %v, want stale (all: %v)", when, stale, q[stale], q)
+		}
+		if _, said := q[notReported]; said {
+			t.Errorf("%s: %s, which the running program doesn't write, was reported: %v", when, notReported, q)
+		}
+	}
+	check("as booted", "Calc", "SP")
+	if _, err := p.SwapWarm(edited); err != nil {
+		t.Fatal(err)
+	}
+	check("after the edit", "SP", "Calc")
+	if _, err := p.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	check("after the rollback", "Calc", "SP")
 }

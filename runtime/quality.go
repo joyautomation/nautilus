@@ -132,13 +132,15 @@ func (r *Runtime) ReportsQuality() bool {
 }
 
 // standby reports whether this replica's scan-fed tags are frozen: it has
-// a Coordinator, and either has not taken over (still standing by, or a
-// takeover holding for live inputs, #626) or its coordinator says another
+// a Coordinator, and either no scan of the current leadership has read
+// its inputs yet (still standing by; a takeover holding for live inputs,
+// #626, on a new term too; a takeover whose first read is in flight; one
+// an additional task's gate opened), or its coordinator says another
 // replica leads now, which a leader whose scans have stalled has not yet
 // acted on. Two atomic reads, so a leader's Quality stays as cheap as a
 // standalone's.
 func (r *Runtime) standby() bool {
-	return r.coord != nil && (!r.led.Load() || !r.coord.IsLeader())
+	return r.coord != nil && (!r.fresh.Load() || !r.coord.IsLeader())
 }
 
 // scanFed calls fn with the stored name of every tag a scan refreshes: the

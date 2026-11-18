@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/stproject"
@@ -52,13 +53,11 @@ type Program struct {
 	exts    []string
 	extsFor *ir.Program
 
-	// written is, by ir.NameKey, every global this program writes
-	// (GlobalUses().Written), derived from prog on first use and again
-	// after a swap replaces it (writtenFor is the prog it belongs to). A
-	// standby's Quality asks for it a few times a second, and walking the
-	// IR each time would be a cost for nothing.
-	written    map[string]bool
-	writtenFor *ir.Program
+	// written is, by ir.NameKey, every global prog writes
+	// (GlobalUses().Written), built whenever prog is set (Swap, SwapWarm,
+	// Rollback). Atomic and outside mu: Quality reads it from the server's
+	// goroutine, and mu is held through every scan's logic.
+	written atomic.Pointer[map[string]bool]
 
 	// opts is the compile context every (re)compile of this program uses:
 	// the project's tags, visible without a VAR_EXTERNAL (see TagScope).
@@ -187,8 +186,10 @@ func (p *Program) Check(src string) error {
 func (p *Program) Swap(src string) error {
 	prog, err := lowerSource(src, p.opts)
 	if err == nil {
+		written := writtenOf(prog)
 		p.mu.Lock()
 		p.prog, p.frame = prog, ir.NewFrame(prog)
+		p.written.Store(written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
 		p.ran = false
 		p.mu.Unlock()
@@ -260,10 +261,12 @@ type SwapReport struct {
 func (p *Program) SwapWarm(src string) (SwapReport, error) {
 	prog, err := lowerSource(src, p.opts)
 	if err == nil {
+		written := writtenOf(prog)
 		p.mu.Lock()
 		frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)
 		p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
 		p.prog, p.frame = prog, frame
+		p.written.Store(written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
 		p.mu.Unlock()
 		return SwapReport{Hash: sourceHash(src), Resets: resets}, nil
@@ -284,6 +287,7 @@ func (p *Program) Rollback() (SwapReport, error) {
 		return SwapReport{}, errors.New("runtime: nothing to roll back")
 	}
 	p.source, p.prog, p.frame = p.prevSource, p.prevProg, p.prevFrame
+	p.written.Store(writtenOf(p.prog))
 	p.prevSource, p.prevProg, p.prevFrame = "", nil, nil
 	p.compiledAt, p.scans, p.lastErr = time.Now(), 0, ""
 	return SwapReport{Hash: sourceHash(p.source)}, nil
@@ -413,23 +417,24 @@ func (p *Program) GlobalUses() ir.GlobalUse {
 	return p.prog.GlobalUses()
 }
 
-// writtenKeys returns the ir.NameKey of every global this program writes,
-// cached per compiled program (see written). The map is replaced, never
-// changed, after it is returned: the caller reads it and must not write.
+// writtenKeys returns the ir.NameKey of every global this program writes
+// (see written). No lock: it never waits on a running scan. The map is
+// replaced, never changed: the caller reads it and must not write.
 func (p *Program) writtenKeys() map[string]bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.prog == nil {
-		return nil
+	if w := p.written.Load(); w != nil {
+		return *w
 	}
-	if p.writtenFor != p.prog {
-		w := map[string]bool{}
-		for name := range p.prog.GlobalUses().Written {
-			w[ir.NameKey(name)] = true
-		}
-		p.written, p.writtenFor = w, p.prog
+	return nil
+}
+
+// writtenOf builds the written set for prog: an IR walk, paid once per
+// compile, swap or rollback rather than on every Quality call.
+func writtenOf(prog *ir.Program) *map[string]bool {
+	w := map[string]bool{}
+	for name := range prog.GlobalUses().Written {
+		w[ir.NameKey(name)] = true
 	}
-	return p.written
+	return &w
 }
 
 // ReadBeforeWrite lists the globals one scan of this program can read

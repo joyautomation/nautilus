@@ -718,7 +718,8 @@ never answered is not a property of the number — it comes from the driver,
 and it travels beside the tags rather than inside them.
 
 A driver may implement `io.QualityReporter`; the runtime adds its own
-derivation (a driver-bound input whose last read failed is stale); and the
+derivation (a driver-bound input whose last read failed is stale, and on a
+redundant pair's standby everything a scan refreshes is stale); and the
 server puts the non-`good` entries on `/api/state` and every stream frame
 as a `quality` map. An absent name means `good`, so a healthy plant pays
 nothing for it. The full model — the four values, where each comes from,
