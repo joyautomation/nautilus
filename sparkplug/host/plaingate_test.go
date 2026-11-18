@@ -63,10 +63,64 @@ func TestPlainGateHoldsCommandsAndKeepsState(t *testing.T) {
 	// The scans resume: the latest held command goes out on its own.
 	live.Store(true)
 	waitUntil(t, "the held command after the gate reopened", func() bool { return len(w.commands(t)) == 2 })
-	if c := w.commands(t); c[1] != 33.0 {
+	barrier(t, d, w)
+	if c := w.commands(t); len(c) != 2 || c[1] != 33.0 {
 		t.Fatalf("commands = %v, want the latest held 33 after 11", c)
 	}
 	if s := w.states(t); len(s) != 1 {
 		t.Fatalf("STATE certificates = %+v after the gate reopened, want only the first", s)
 	}
+}
+
+// startPlain starts a host with naut run's liveness gate, live, and births
+// W6; it returns the host, its watcher and the gate.
+func startPlain(t *testing.T, id string) (*Driver, *stateLog, *atomic.Bool) {
+	t.Helper()
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = closeBroker(srv) })
+	cfg := testConfig(addr, id)
+	cfg.NoRebirthOnStart = true
+	w := watchHost(t, addr, "watch-"+id, id)
+	d, err := New(testManifest(), cfg, WithLogger(quietLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := new(atomic.Bool)
+	live.Store(true)
+	nio.SetPlainGate(d, live.Load)
+	d.Start(context.Background())
+	t.Cleanup(d.Stop)
+	waitConnected(t, d)
+	edge := edgePublisher(t, addr, "edge-"+id)
+	publishPayload(t, edge, "spBv1.0/G/NBIRTH/W6", nbirth(1))
+	waitForValue(t, d, "W6__Online", func(v any) bool { return v == true })
+	baselineScan(t, d)
+	return d, w, live
+}
+
+// A gate closed for less than leaderPoll still releases what it held: the
+// host used to compare two samples a second apart, saw no change, and kept
+// the command until the next write, birth or reconnect.
+func TestPlainGateShortClosureReleasesItsCommand(t *testing.T) {
+	d, w, live := startPlain(t, "h-plain-short")
+	live.Store(false)
+	writeSpeed(t, d, 22)
+	time.Sleep(250 * time.Millisecond) // well under leaderPoll
+	live.Store(true)
+	waitUntil(t, "the command held by a 250 ms closure", func() bool { return len(w.commands(t)) == 1 })
+	if c := w.commands(t); c[0] != 22.0 {
+		t.Fatalf("commands = %v, want [22]", c)
+	}
+}
+
+// A plain gate holds tag commands only: an operator's __Rebirth is a
+// rebirth request, and a primary host still sends it.
+func TestPlainGateLetsARebirthRequestThrough(t *testing.T) {
+	d, _, live := startPlain(t, "h-plain-rebirth")
+	before := d.Status().Rebirths
+	live.Store(false)
+	if err := d.WriteOutputs(map[string]any{"W6__Rebirth": true}); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the rebirth request with the gate closed", func() bool { return d.Status().Rebirths > before })
 }

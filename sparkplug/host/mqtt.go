@@ -274,7 +274,6 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 	d.mu.Lock()
 	wasLeader := d.sessionPrimary
 	d.mu.Unlock()
-	couldCommand := d.commandsAllowed()
 	t := time.NewTicker(leaderPoll)
 	defer t.Stop()
 	for {
@@ -285,13 +284,13 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 			d.log.Warn("host: connection lost", "broker", d.cfg.BrokerURL)
 			return true
 		case <-t.C:
-			// A plain write gate that reopened releases the commands it
-			// held (#943); nothing else would kick the writer.
-			if can := d.commandsAllowed(); can != couldCommand {
-				couldCommand = can
-				if can {
-					d.kickWriter()
-				}
+			// Commands held by a plain write gate go out once it is open
+			// again (#943); nothing else would kick the writer. Looked at
+			// on every tick, not on a change between two ticks: a gate
+			// closed for less than leaderPoll would otherwise hold its
+			// command until the next write, birth or reconnect.
+			if d.commandsAllowed() && d.hasPending() {
+				d.kickWriter()
 			}
 			if d.mayPublish() != wasLeader {
 				d.log.Info("host: leadership changed; reconnecting to refresh STATE",
@@ -775,7 +774,13 @@ func (d *Driver) flushWrites() {
 		return
 	}
 	if !d.commandsAllowed() {
-		return // a standby, or a closed plain gate: stay queued (#943)
+		// A standby, or a closed plain gate: stay queued (#943). A plain
+		// gate holds tag commands only: a __Rebirth is a rebirth request,
+		// which the leader may still send.
+		if d.isLeader() {
+			d.flushRebirthTags()
+		}
+		return
 	}
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
@@ -1179,6 +1184,13 @@ func (d *Driver) queuedDepths() map[string]int {
 		}
 	}
 	return out
+}
+
+// hasPending reports whether any command is queued.
+func (d *Driver) hasPending() bool {
+	d.wmu.Lock()
+	defer d.wmu.Unlock()
+	return len(d.pending) > 0
 }
 
 // flushForgets drains forgetQ: the host can no longer vouch for what the
