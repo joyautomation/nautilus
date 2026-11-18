@@ -45,10 +45,18 @@ func checkNetworkSections(m Manifest) error {
 	// leader must already hold: the floating address has to be in place
 	// first. Until `redundancy:` can name it and check it (#787 step 6),
 	// the combination is refused.
+	//
+	// The plcnext driver flushes its output image from its own loop, every
+	// scan on the shm route (the write is the shim's watchdog heartbeat),
+	// with no leadership check: a standby would drive the controller's
+	// outputs. Refused until PLCnext under redundancy is designed (#710).
 	if m.Redundancy != nil {
 		for _, d := range append([]DriverConfig{m.Driver}, m.Drivers...) {
-			if strings.HasPrefix(strings.ToLower(d.Type), "profinet") {
+			switch t := strings.ToLower(d.Type); {
+			case strings.HasPrefix(t, "profinet"):
 				return fmt.Errorf("driver %s with redundancy: is not supported yet: a takeover needs the station's floating IP address on the new leader, and redundancy: cannot name and check one yet (#787 step 6)", d.Type)
+			case t == "plcnext":
+				return fmt.Errorf("driver plcnext with redundancy: is not supported yet: the driver writes the controller's output image from its own loop, with no leadership check, so a standby would drive the outputs; PLCnext under redundancy is #710")
 			}
 		}
 	}
