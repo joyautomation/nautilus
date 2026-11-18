@@ -134,6 +134,16 @@ or entries can't be read, it says so in a warning instead of passing them
 as safe. Inside a container's PID namespace it sees only that namespace.
 A real-time thread started after nautilus is not checked.
 
+**Not above the network's own threads.** Kernel threads otherwise don't
+count, with one exception: the kernel's network threads. A NIC's IRQ
+thread (`irq/31-eth0`), its NAPI receive thread, or the CPU's
+`ksoftirqd/N` may be confined to the CPU a task is pinned to, at a lower
+priority than the task. Then the start-up log warns, naming each one:
+while the task runs, that CPU's network work waits. On a PLCnext the NIC's
+NAPI receive thread runs at FIFO 1 on the same core as the I/O shim. A
+FIFO 40 test task pinned there kept the box off the network for hours.
+Pin real-time tasks to a CPU that carries no network work.
+
 **A thread that stops yielding is bounded.** Before a task gets
 `SCHED_FIFO` the runtime sets `RLIMIT_RTTIME` on the process: a real-time
 thread may run 200 ms without blocking (sleeping, waiting on I/O). A scan

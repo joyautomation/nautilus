@@ -310,7 +310,9 @@ claims:
       confined higher thread, entries it cannot read or a /proc hiding
       processes, and the kernel's RT throttle off (-1 on any kernel, runtime =
       period before 6.12; once per process) are warnings; kernel threads, the process's own threads and
-      lower threads that float are not counted.
+      lower threads that float are not counted, except that a kernel
+      network thread (a NIC's IRQ or NAPI thread, ksoftirqd/N) confined to
+      the pinned CPU below the task's priority is a warning naming it.
     source: "#priority-and-pinning"
     tests:
       - go ./runtime TestPreflightRefusesTheIncidentLayout
@@ -319,6 +321,7 @@ claims:
       - go ./runtime TestPreflightSaysWhatItCannotSee
       - go ./runtime TestPreflightThrottleWarning
       - go ./runtime TestPreflightThrottleWarnedOnce
+      - go ./runtime TestPreflightWarnsAboutNetworkThreadsBelow
       - go ./runtime TestPreflightCPUText
       - go ./runtime TestPreflightApplySchedRefuses
       - go ./internal/project TestShareCPUFromTheManifest

@@ -57,8 +57,11 @@ type rtThread struct {
 
 func (th rtThread) String() string {
 	p := "real-time priority " + strconv.Itoa(th.prio)
-	if th.prio == deadlinePrio {
+	switch th.prio {
+	case deadlinePrio:
 		p = "SCHED_DEADLINE"
+	case 0:
+		p = "normal priority"
 	}
 	return fmt.Sprintf("%s (pid %d, thread %d) at %s on cpu %s", th.comm, th.pid, th.tid, p, cpuText(th.cpus))
 }
@@ -71,11 +74,22 @@ func preflight(root string, self int, cpus []int, prio int, shareCPU bool) (warn
 	if prio <= 0 {
 		return nil, nil
 	}
-	threads, blind := rtThreads(root, self)
+	threads, net, blind := rtThreads(root, self)
 	if blind != "" {
 		warnings = append(warnings, blind)
 	}
 	pinned := len(cpus) > 0
+	// The kernel's network threads confined to the CPUs this task is pinned
+	// to, below its priority: the task can starve them. On the PLCnext the
+	// NIC's NAPI receive thread runs at FIFO 1 on the shim's core, and a
+	// FIFO 40 test task there left the box off the network for hours (#836).
+	if pinned {
+		for _, th := range net {
+			if subset(th.cpus, setOf(cpus)) && th.prio < prio {
+				warnings = append(warnings, fmt.Sprintf("cpu %s carries the kernel's network thread %s, below this task's priority %d: while the task runs, network traffic on this box waits (receive can stall altogether). Pin the task to a CPU without network work", cpuText(cpus), th, prio))
+			}
+		}
+	}
 	where := cpus
 	if !pinned {
 		where = processCPUs(root)
@@ -153,14 +167,14 @@ func kernelAtLeast(release string, major, minor int) bool {
 // threads of other processes. A thread that exited meanwhile is skipped
 // quietly; anything it may not read, or a /proc that hides processes, comes
 // back as blind: the scan cannot vouch for what it did not see.
-func rtThreads(root string, self int) (out []rtThread, blind string) {
+func rtThreads(root string, self int) (out, net []rtThread, blind string) {
 	var reasons []string
 	if opt := hiddenProc(root); opt != "" {
 		reasons = append(reasons, "/proc is mounted with "+opt+", which hides other programs' processes")
 	}
 	pids, err := os.ReadDir(root)
 	if err != nil {
-		return nil, "could not list " + root + " (" + err.Error() + "): no other program's real-time threads were checked"
+		return nil, nil, "could not list " + root + " (" + err.Error() + "): no other program's real-time threads were checked"
 	}
 	denied := 0
 	for _, p := range pids {
@@ -185,6 +199,14 @@ func rtThreads(root string, self int) (out []rtThread, blind string) {
 				continue
 			}
 			if flags&pfKThread != 0 {
+				// Kernel threads are the kernel's to place, except that
+				// a network one below us on our CPU is worth a warning.
+				if netKThread(comm) {
+					// rt_priority is 0 for a normal-priority thread.
+					if cpus, err := allowedCPUs(dir); err == nil {
+						net = append(net, rtThread{pid: pid, tid: tid, comm: comm, prio: prio, cpus: cpus})
+					}
+				}
 				continue
 			}
 			switch {
@@ -208,7 +230,17 @@ func rtThreads(root string, self int) (out []rtThread, blind string) {
 	if len(reasons) > 0 {
 		blind = "the real-time pre-flight could not see every program: " + strings.Join(reasons, "; ") + "; a vendor's real-time thread there would not be found"
 	}
-	return out, blind
+	return out, net, blind
+}
+
+// netKThread: a kernel thread doing network work: an Ethernet NIC's IRQ
+// thread (irq/31-eth0), a NAPI poll thread (stmmacNapiRxTsk, napi/eth0-…),
+// or a CPU's softirq thread (ksoftirqd/N).
+func netKThread(comm string) bool {
+	c := strings.ToLower(comm)
+	return strings.HasPrefix(c, "irq/") && strings.Contains(c, "-eth") ||
+		strings.Contains(c, "napi") ||
+		strings.HasPrefix(c, "ksoftirqd/")
 }
 
 // countDenied is 1 for an error that hides a thread from us (permission),
