@@ -14,8 +14,21 @@ on:
   # the new clips.
   workflow_dispatch:
 
+# Deploys go out one at a time, newest last (#752). Without this, two merges
+# a few seconds apart deployed at once and the older one could finish second:
+# on 2026-11-17 the site ran a commit behind main for 20 minutes. A deploy
+# in progress always finishes; a newer one waiting replaces an older one
+# still waiting. A PR's build is only cancelled by that PR's next push.
+concurrency:
+  group: docs-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # A PR's check that the site builds. On main the deploy job's image build
+  # runs the same npm ci && npm run build (website/Dockerfile), so this job
+  # would only hold the deploy up by a minute.
   build:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,7 +55,6 @@ jobs:
   # until the DIGITALOCEAN_ACCESS_TOKEN secret exists in this repo.
   deploy:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -68,12 +80,22 @@ jobs:
       # The image build has no token, so fetch the proof-page clips here; the
       # Dockerfile copies the generated website/public/verified and
       # website/src/data/verified.json in. Soft: no script / no green run is fine.
+      # The npm download cache covers every package the playground build
+      # installs (playground/scripts/build.sh and app.sh), not only the site.
       - uses: actions/setup-node@v4
         if: steps.gate.outputs.go == 'true'
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: |
+            website/package-lock.json
+            hmi/package-lock.json
+            hmi-3d/package-lock.json
+            tools/vscode-iec/package-lock.json
+            tools/vscode-iec/webview-ui/package-lock.json
+            playground/app/package-lock.json
+            examples/lift-station/hmi/package-lock.json
+            examples/plcnext-bench/hmi/package-lock.json
       - name: Fetch verified clips
         if: steps.gate.outputs.go == 'true'
         working-directory: website
