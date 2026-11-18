@@ -3,7 +3,9 @@ package webapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -33,7 +35,7 @@ func cpu(t *testing.T) (*webapitest.Server, *webapi.Client, *clock) {
 	s.Vars[`"Tags".Run`] = &webapitest.Var{Datatype: "bool", Value: false}
 	s.Vars[`"Tags".Count`] = &webapitest.Var{Datatype: "dint", Value: 7, ReadOnly: true}
 	url, pin := s.Start(t)
-	c, err := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin})
+	c, err := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin, Now: clk.now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,22 +108,47 @@ func TestExpiredTokenLogsInAgainOnce(t *testing.T) {
 	}
 }
 
-func TestPermissionDeniedIsNotRetriedForever(t *testing.T) {
+func TestGenuineDenialKeepsTheToken(t *testing.T) {
 	ctx := context.Background()
-	s, _, _ := cpu(t)
+	s, _, clk := cpu(t)
 	url, pin := s.Start(t)
-	v, _ := webapi.New(url, webapi.Options{User: "viewer", Password: "pw", CertSHA256: pin})
-	before := s.Calls
-	err := v.Write(ctx, `"Tags".Run`, true)
-	if webapi.Code(err) != webapi.CodePermissionDenied {
-		t.Fatalf("viewer write: %v", err)
-	}
-	// login, write (denied), login again, write (denied): no loop.
-	if n := s.Calls - before; n != 4 {
-		t.Fatalf("calls = %d, want 4", n)
+	v, _ := webapi.New(url, webapi.Options{User: "viewer", Password: "pw", CertSHA256: pin, Now: clk.now})
+	for range 3 {
+		if err := v.Write(ctx, `"Tags".Run`, true); webapi.Code(err) != webapi.CodePermissionDenied {
+			t.Fatalf("viewer write: %v", err)
+		}
 	}
 	if err := v.RequestOperatingMode(ctx, webapi.ModeStop); webapi.Code(err) != webapi.CodePermissionDenied {
 		t.Fatalf("viewer stop: %v", err)
+	}
+	// Denials are not expiry: one session, still usable.
+	if n := s.Sessions(); n != 1 {
+		t.Fatalf("sessions = %d after four denials, want 1", n)
+	}
+	if _, err := v.Read(ctx, `"Tags".Level`); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.Sessions(); n != 1 {
+		t.Fatalf("sessions = %d, want 1", n)
+	}
+}
+
+func TestConcurrentFirstCallsShareOneLogin(t *testing.T) {
+	ctx := context.Background()
+	s, c, _ := cpu(t)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Read(ctx, `"Tags".Level`); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := s.Sessions(); n != 1 {
+		t.Fatalf("sessions = %d, want 1", n)
 	}
 }
 
@@ -130,8 +157,15 @@ func TestLoginFailures(t *testing.T) {
 	s, _, _ := cpu(t)
 	url, pin := s.Start(t)
 	bad, _ := webapi.New(url, webapi.Options{User: "naut", Password: "wrong", CertSHA256: pin})
+	before := s.Calls
 	if err := bad.Login(ctx); webapi.Code(err) != webapi.CodeLoginFailed {
 		t.Fatalf("wrong password: %v", err)
+	}
+	if _, err := bad.Read(ctx, `"Tags".Level`); webapi.Code(err) != webapi.CodeLoginFailed {
+		t.Fatalf("read with a wrong password: %v", err)
+	}
+	if n := s.Calls - before; n != 2 {
+		t.Fatalf("calls = %d, want 2 (one failed login each, no loop)", n)
 	}
 	none, _ := webapi.New(url, webapi.Options{CertSHA256: pin})
 	if _, err := none.Read(ctx, `"Tags".Level`); err == nil || !strings.Contains(err.Error(), "no user") {
@@ -163,9 +197,13 @@ func TestPinnedCertificate(t *testing.T) {
 	if _, err := c.Version(ctx); err == nil || !strings.Contains(err.Error(), "does not match the pinned") {
 		t.Fatalf("wrong pin: %v", err)
 	}
-	unpinned, _ := webapi.New(url, webapi.Options{})
-	if _, err := unpinned.Version(ctx); err == nil {
-		t.Fatal("a self-signed CPU must not be trusted without a pin")
+	if _, err := webapi.New(url, webapi.Options{}); err == nil || !strings.Contains(err.Error(), "no way to trust") {
+		t.Fatalf("no pin and no CA must be refused: %v", err)
+	}
+	for _, u := range []string{"http://192.0.2.10", "HTTP://192.0.2.10", "ftp://x"} {
+		if _, err := webapi.New(u, webapi.Options{CertSHA256: pin}); err == nil || !strings.Contains(err.Error(), "only https") {
+			t.Errorf("New(%q) = %v, want only-https", u, err)
+		}
 	}
 	got, err := webapi.CertificateSHA256(ctx, strings.TrimPrefix(url, "https://"))
 	if err != nil || got != pin {
@@ -178,7 +216,7 @@ func TestPinnedCertificate(t *testing.T) {
 
 func TestReadManySplitsUnderTheBodyLimit(t *testing.T) {
 	ctx := context.Background()
-	s, _, _ := cpu(t)
+	s, _, clk := cpu(t)
 	var vars []string
 	for i := range 600 {
 		sym := fmt.Sprintf(`"Tags".V%03d`, i)
@@ -188,7 +226,7 @@ func TestReadManySplitsUnderTheBodyLimit(t *testing.T) {
 	vars = append(vars, `"Tags".Missing`)
 	s.MaxBody = 8 * 1024
 	url, pin := s.Start(t)
-	c, _ := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin, MaxBody: 8 * 1024})
+	c, _ := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin, MaxBody: 8 * 1024, Now: clk.now})
 	before := s.Requests
 	rs, err := c.ReadMany(ctx, vars)
 	if err != nil {
@@ -208,6 +246,86 @@ func TestReadManySplitsUnderTheBodyLimit(t *testing.T) {
 	}
 	if n := s.Requests - before; n < 3 || n > 12 {
 		t.Fatalf("requests = %d: batching should split 601 reads into a handful", n)
+	}
+}
+
+func TestWriteManySendsNothingWhenAValueCannotBeEncoded(t *testing.T) {
+	ctx := context.Background()
+	s, c, _ := cpu(t)
+	before := s.Calls
+	_, err := c.WriteMany(ctx, []webapi.Write{{`"Tags".Run`, true}, {`"Tags".Level`, math.NaN()}})
+	if err == nil || !strings.Contains(err.Error(), "nothing was written") {
+		t.Fatalf("NaN: %v", err)
+	}
+	if s.Calls != before || s.Value(`"Tags".Run`) != false {
+		t.Fatal("a bad value must stop the whole batch before anything is sent")
+	}
+}
+
+func TestWriteManyReportsWhatWasSentWhenARequestFails(t *testing.T) {
+	ctx := context.Background()
+	s, _, clk := cpu(t)
+	var ws []webapi.Write
+	for i := range 300 {
+		sym := fmt.Sprintf(`"Tags".W%03d`, i)
+		s.Vars[sym] = &webapitest.Var{Datatype: "int", Value: 0}
+		ws = append(ws, webapi.Write{Var: sym, Value: i})
+	}
+	s.MaxBody = 4 * 1024
+	url, pin := s.Start(t)
+	c, _ := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin, MaxBody: 4 * 1024, Now: clk.now})
+	if _, err := c.Read(ctx, `"Tags".Level`); err != nil { // log in first
+		t.Fatal(err)
+	}
+	s.FailAfter = s.Requests + 1 // the first write request lands, the second is lost
+	rs, err := c.WriteMany(ctx, ws)
+	if err == nil || len(rs) != len(ws) {
+		t.Fatalf("want every result and an error: %d %v", len(rs), err)
+	}
+	var landed, unknown, notSent int
+	for _, r := range rs {
+		switch {
+		case r.Err == nil:
+			landed++
+		case errors.Is(r.Err, webapi.ErrUnknown):
+			unknown++
+		case errors.Is(r.Err, webapi.ErrNotSent):
+			notSent++
+		default:
+			t.Fatalf("%s: %v", r.Var, r.Err)
+		}
+	}
+	if landed == 0 || unknown == 0 || notSent == 0 || landed+unknown+notSent != len(ws) {
+		t.Fatalf("landed %d unknown %d not sent %d", landed, unknown, notSent)
+	}
+	if got := s.Value(rs[landed-1].Var); got != float64(landed-1) {
+		t.Fatalf("last landed write: %v", got)
+	}
+}
+
+func TestFakeRefusesWrongTypes(t *testing.T) {
+	ctx := context.Background()
+	s, c, _ := cpu(t)
+	s.Vars[`"Tags".Name`] = &webapitest.Var{Datatype: "string", Value: "", MaxLength: 4}
+	s.Vars[`"Tags".Small`] = &webapitest.Var{Datatype: "sint", Value: 0}
+	s.Vars[`"Tags".T`] = &webapitest.Var{Datatype: "time", Value: 0}
+	for _, w := range []webapi.Write{
+		{`"Tags".Level`, "high"},
+		{`"Tags".Run`, 1},
+		{`"Tags".Small`, 200},
+		{`"Tags".Small`, 1.5},
+		{`"Tags".Name`, "toolong"},
+		{`"Tags".T`, 1000},
+	} {
+		if err := c.Write(ctx, w.Var, w.Value); webapi.Code(err) != webapi.CodeInvalidParams {
+			t.Errorf("write %s = %v: %v, want invalid params", w.Var, w.Value, err)
+		}
+	}
+	if err := c.Write(ctx, `"Tags".Name`, "abcd"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Write(ctx, `"Tags".Small`, -128); err != nil {
+		t.Fatal(err)
 	}
 }
 

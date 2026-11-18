@@ -3,6 +3,7 @@ package webapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -65,22 +66,29 @@ type Result struct {
 	Err   error
 }
 
+// ErrNotSent marks a Result whose call was never sent, because an earlier
+// bulk request failed. ErrUnknown marks one whose bulk request got no
+// reply: it may or may not have reached the CPU.
+var (
+	ErrNotSent = errors.New("webapi: not sent: an earlier bulk request failed")
+	ErrUnknown = errors.New("webapi: outcome unknown: the bulk request got no reply")
+)
+
 // ReadMany reads many variables in as few bulk requests as the body limit
-// allows. A failing variable fails only its own Result.
+// allows. A failing variable fails only its own Result. If a bulk request
+// itself fails, ReadMany still returns every Result (ErrUnknown for that
+// request's calls, ErrNotSent for later ones) along with the error.
 func (c *Client) ReadMany(ctx context.Context, vars []string) ([]Result, error) {
 	calls := make([]Call, len(vars))
 	for i, v := range vars {
 		calls[i] = Call{Method: "PlcProgram.Read", Params: map[string]string{"var": v}}
 	}
 	replies, err := c.chunked(ctx, calls)
-	if err != nil {
-		return nil, err
-	}
 	out := make([]Result, len(vars))
 	for i, r := range replies {
 		out[i] = Result{Var: vars[i], Value: r.Result, Err: r.Err}
 	}
-	return out, nil
+	return out, err
 }
 
 // Write is one variable and value for WriteMany.
@@ -89,17 +97,20 @@ type Write struct {
 	Value any
 }
 
-// WriteMany writes many variables, batched like ReadMany. The writes of
-// one batch are not atomic: each Result says whether its own write landed.
+// WriteMany writes many variables, batched like ReadMany. Every value is
+// checked to encode before anything is sent, so a bad value (a NaN) sends
+// nothing. The writes are not atomic: each Result says whether its own
+// write landed, and after a failed bulk request the Results say which
+// writes were never sent (ErrNotSent) and which are unknown (ErrUnknown).
 func (c *Client) WriteMany(ctx context.Context, ws []Write) ([]Result, error) {
 	calls := make([]Call, len(ws))
 	for i, w := range ws {
+		if _, err := json.Marshal(w.Value); err != nil {
+			return nil, fmt.Errorf("webapi: %s: value %v cannot be sent: %w; nothing was written", w.Var, w.Value, err)
+		}
 		calls[i] = Call{Method: "PlcProgram.Write", Params: map[string]any{"var": w.Var, "value": w.Value}}
 	}
 	replies, err := c.chunked(ctx, calls)
-	if err != nil {
-		return nil, err
-	}
 	out := make([]Result, len(ws))
 	for i, r := range replies {
 		out[i] = Result{Var: ws[i].Var, Err: r.Err}
@@ -107,45 +118,52 @@ func (c *Client) WriteMany(ctx context.Context, ws []Write) ([]Result, error) {
 			out[i].Err = fmt.Errorf("webapi: PlcProgram.Write %s: the CPU answered %s", ws[i].Var, r.Result)
 		}
 	}
-	return out, nil
+	return out, err
 }
 
-// chunked splits calls into bulk requests under MaxBody and MaxBatch.
+// chunked splits calls into bulk requests under MaxBody and MaxBatch. It
+// always returns one Reply per call. When a bulk request fails, its calls
+// get ErrUnknown, later calls ErrNotSent, and the error is returned too.
 func (c *Client) chunked(ctx context.Context, calls []Call) ([]Reply, error) {
-	out := make([]Reply, 0, len(calls))
+	out := make([]Reply, len(calls))
 	// Envelope overhead per call: {"jsonrpc":"2.0","method":"","params":,"id":NNNNNNN},
 	const perCall = 64
-	start, size := 0, 2
-	flush := func(end int) error {
-		if end == start {
-			return nil
-		}
-		rs, err := c.Do(ctx, calls[start:end]...)
-		if err != nil {
-			return err
-		}
-		out = append(out, rs...)
-		start, size = end, 2
-		return nil
-	}
+	var bounds []int // end index of each chunk
+	size := 2
+	start := 0
 	for i, cl := range calls {
 		p, err := json.Marshal(cl.Params)
 		if err != nil {
-			return nil, fmt.Errorf("webapi: encoding %s: %w", cl.Method, err)
+			return nil, fmt.Errorf("webapi: encoding %s: %w; nothing was sent", cl.Method, err)
 		}
 		n := len(cl.Method) + len(p) + perCall
 		if n+2 > c.opt.MaxBody {
-			return nil, fmt.Errorf("webapi: one %s call is %d bytes, over the %d-byte limit", cl.Method, n, c.opt.MaxBody)
+			return nil, fmt.Errorf("webapi: one %s call is %d bytes, over the %d-byte limit; nothing was sent", cl.Method, n, c.opt.MaxBody)
 		}
 		if size+n > c.opt.MaxBody || i-start >= c.opt.MaxBatch {
-			if err := flush(i); err != nil {
-				return nil, err
-			}
+			bounds = append(bounds, i)
+			start, size = i, 2
 		}
 		size += n
 	}
-	if err := flush(len(calls)); err != nil {
-		return nil, err
+	bounds = append(bounds, len(calls))
+	start = 0
+	for _, end := range bounds {
+		if end == start {
+			continue
+		}
+		rs, err := c.Do(ctx, calls[start:end]...)
+		if err != nil {
+			for i := start; i < end; i++ {
+				out[i].Err = fmt.Errorf("%w: %v", ErrUnknown, err)
+			}
+			for i := end; i < len(calls); i++ {
+				out[i].Err = ErrNotSent
+			}
+			return out, err
+		}
+		copy(out[start:end], rs)
+		start = end
 	}
 	return out, nil
 }

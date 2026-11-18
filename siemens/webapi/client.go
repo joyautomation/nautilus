@@ -17,8 +17,9 @@
 //     their batches to stay under it.
 //
 // Unverified until the bench CPU's web server is on (S2b): that an expired
-// token answers PermissionDenied (this client logs in again once and
-// retries), and the exact JSON shape of values that are not elementary.
+// token answers PermissionDenied (this client logs in again only when the
+// expiry is proven; see Do), and the JSON encoding of values beyond
+// numbers, booleans and strings (TIME, DTL, arrays).
 package webapi
 
 import (
@@ -58,19 +59,33 @@ type Options struct {
 	// a certificate from a plant CA).
 	RootCAs *x509.CertPool
 	// Timeout bounds each HTTP request. Default 10 s.
-	Timeout  time.Duration
+	Timeout time.Duration
+	// IdleTimeout is how long the CPU keeps a token without an
+	// authenticated call. Default 120 s (Web Server function manual).
+	IdleTimeout time.Duration
+	// Now is the clock; default time.Now. Tests set it.
+	Now      func() time.Time
 	MaxBody  int // default DefaultMaxBody
 	MaxBatch int // default DefaultMaxBatch
 }
 
 // Client talks to one CPU. It is safe for concurrent use.
 type Client struct {
-	url    string
-	opt    Options
-	http   *http.Client
-	mu     sync.Mutex
-	token  string
-	nextID int
+	url  string
+	opt  Options
+	http *http.Client
+	// loginMu makes login single-flight: concurrent first calls share one
+	// login, so they take one of the CPU's few session slots, not many.
+	loginMu sync.Mutex
+	// lastAuth is when an authenticated call last succeeded, and pingID
+	// the CPU's ping ID at login: together they prove a token expired
+	// (idle too long, or the CPU restarted) rather than merely lacking a
+	// permission.
+	lastAuth time.Time
+	pingID   string
+	mu       sync.Mutex
+	token    string
+	nextID   int
 }
 
 // New builds a client for the CPU at host ("192.0.2.10" or "host:443").
@@ -80,6 +95,18 @@ func New(host string, opt Options) (*Client, error) {
 	base := host
 	if !strings.Contains(host, "://") {
 		base = "https://" + host
+	}
+	if !strings.HasPrefix(strings.ToLower(base), "https://") {
+		return nil, fmt.Errorf("webapi: %q: only https is allowed, since Api.Login sends the password", host)
+	}
+	if opt.CertSHA256 == "" && opt.RootCAs == nil {
+		return nil, errors.New("webapi: no way to trust the CPU: set CertSHA256 (pin its certificate; CertificateSHA256 fetches it) or RootCAs")
+	}
+	if opt.IdleTimeout == 0 {
+		opt.IdleTimeout = 120 * time.Second
+	}
+	if opt.Now == nil {
+		opt.Now = time.Now
 	}
 	if opt.Timeout == 0 {
 		opt.Timeout = 10 * time.Second
@@ -252,8 +279,12 @@ func (c *Client) batch(ctx context.Context, calls []Call, token string) ([]Reply
 }
 
 // Do sends calls authenticated, logging in first if needed. When every
-// reply says PermissionDenied and the client had a token, the token is
-// assumed expired: it logs in again once and repeats the calls.
+// reply says PermissionDenied, the token is only treated as expired when
+// that is proven: no authenticated call has succeeded for most of the
+// idle timeout, or the CPU's ping ID changed (it restarted). Then the old
+// token is logged out (best effort), a new one is made once, and the calls
+// are repeated. A genuine permission denial is returned as it is, without
+// a new login.
 func (c *Client) Do(ctx context.Context, calls ...Call) ([]Reply, error) {
 	if len(calls) == 0 {
 		return nil, nil
@@ -263,14 +294,48 @@ func (c *Client) Do(ctx context.Context, calls ...Call) ([]Reply, error) {
 		return nil, err
 	}
 	out, err := c.batch(ctx, calls, token)
-	if err != nil || !allDenied(out) {
-		return out, err
+	if err != nil {
+		return nil, err
+	}
+	if !allDenied(out) {
+		c.touch(token)
+		return out, nil
+	}
+	if !c.expired(ctx) {
+		return out, nil
 	}
 	c.dropToken(token)
+	_, _ = c.batch(ctx, []Call{{Method: "Api.Logout"}}, token)
 	if token, err = c.ensureToken(ctx); err != nil {
 		return nil, err
 	}
-	return c.batch(ctx, calls, token)
+	out, err = c.batch(ctx, calls, token)
+	if err == nil && !allDenied(out) {
+		c.touch(token)
+	}
+	return out, err
+}
+
+// expired reports whether the current token is proven dead: idle for at
+// least 5/6 of the idle timeout, or the CPU restarted since login.
+func (c *Client) expired(ctx context.Context) bool {
+	c.mu.Lock()
+	idle := c.opt.Now().Sub(c.lastAuth)
+	ping := c.pingID
+	c.mu.Unlock()
+	if idle >= c.opt.IdleTimeout*5/6 {
+		return true
+	}
+	now, err := c.Ping(ctx)
+	return err == nil && ping != "" && now != ping
+}
+
+func (c *Client) touch(token string) {
+	c.mu.Lock()
+	if c.token == token {
+		c.lastAuth = c.opt.Now()
+	}
+	c.mu.Unlock()
 }
 
 func allDenied(rs []Reply) bool {
@@ -322,6 +387,15 @@ func (c *Client) ensureToken(ctx context.Context) (string, error) {
 	if tok != "" {
 		return tok, nil
 	}
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
+	// Another caller may have logged in while this one waited.
+	c.mu.Lock()
+	tok = c.token
+	c.mu.Unlock()
+	if tok != "" {
+		return tok, nil
+	}
 	return c.login(ctx)
 }
 
@@ -336,7 +410,7 @@ func (c *Client) dropToken(tok string) {
 // Login authenticates with the configured user. Calls log in on their own;
 // Login is for checking credentials up front.
 func (c *Client) Login(ctx context.Context) error {
-	_, err := c.login(ctx)
+	_, err := c.ensureToken(ctx)
 	return err
 }
 
@@ -357,8 +431,11 @@ func (c *Client) login(ctx context.Context) (string, error) {
 	if res.Token == "" {
 		return "", errors.New("webapi: Api.Login returned no token")
 	}
+	ping, _ := c.Ping(ctx) // to recognise a CPU restart later
 	c.mu.Lock()
 	c.token = res.Token
+	c.lastAuth = c.opt.Now()
+	c.pingID = ping
 	c.mu.Unlock()
 	return res.Token, nil
 }

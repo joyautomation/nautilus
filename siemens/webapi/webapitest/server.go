@@ -5,9 +5,20 @@
 // until a real CPU's web server is on.
 //
 // It models what the Siemens documentation and Siemens' .NET client say.
-// Where the real CPU is not yet measured (the code an expired token
-// answers, the reply to an oversized body) it makes a choice and says so;
-// bench runs correct it.
+// Where the real CPU is not yet measured it makes a choice and says so;
+// bench runs (S2b) correct it. Unmeasured choices:
+//
+//   - an expired token answers PermissionDenied (2);
+//   - an oversized body is answered with HTTP 413;
+//   - a write of the wrong type or out of range answers InvalidParams
+//     (-32602).
+//
+// Values: BOOL takes a JSON boolean; the integer types (SINT…ULINT, BYTE…
+// LWORD) take a whole number in the type's range; REAL and LREAL any
+// number; STRING and WSTRING a string no longer than MaxLength (default
+// 254); CHAR a one-character string. NOT modelled, and refused on write
+// as unsupported: TIME, LTIME, DATE, TOD, DT, LDT, DTL, arrays as a whole
+// and structs. Their JSON encoding on a real CPU is unverified until S2b.
 package webapitest
 
 import (
@@ -34,9 +45,10 @@ type User struct {
 // Var is one variable in the fake CPU's symbol table, keyed by its full
 // symbol (`"Tags".Level`). Value is what a read returns.
 type Var struct {
-	Datatype string // "bool", "int", "real", "struct", …
-	Value    any
-	ReadOnly bool
+	Datatype  string // "bool", "int", "real", "string", "struct", …
+	Value     any
+	ReadOnly  bool
+	MaxLength int // STRING/WSTRING; default 254
 }
 
 // Server is one fake CPU.
@@ -59,11 +71,15 @@ type Server struct {
 	MaxSessions int
 	// Now is the clock; default time.Now.
 	Now func() time.Time
+	// FailAfter, when > 0, answers HTTP 503 to every request after the
+	// FailAfter-th, to test what a caller does when a bulk request is lost.
+	FailAfter int
 
 	mu       sync.Mutex
 	tokens   map[string]*session
 	nextTok  int
 	pingID   string
+	pingGen  int
 	Requests int // HTTP requests served, for asserting batching
 	Calls    int // JSON-RPC calls served
 }
@@ -138,7 +154,8 @@ func (s *Server) defaults() {
 		s.MaxSessions = 50
 	}
 	if s.pingID == "" {
-		s.pingID = fmt.Sprintf("ping-%d", s.now().UnixNano())
+		s.pingGen++
+		s.pingID = fmt.Sprintf("ping-%d", s.pingGen)
 	}
 }
 
@@ -180,6 +197,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	s.defaults()
 	s.Requests++
+	if s.FailAfter > 0 && s.Requests > s.FailAfter {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, int64(s.MaxBody)+1))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -346,12 +367,11 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 		if v.ReadOnly {
 			return fail(205, "Address is read-only")
 		}
-		if v.Datatype == "bool" {
-			if _, isBool := p.Value.(bool); !isBool {
-				return fail(-32602, "Invalid params")
-			}
+		val, msg := coerce(v, p.Value)
+		if msg != "" {
+			return fail(-32602, "Invalid params: "+msg)
 		}
-		v.Value = p.Value
+		v.Value = val
 		return ok(true)
 	case "PlcProgram.Browse":
 		if !can("read_value") {
@@ -425,4 +445,55 @@ func (s *Server) browse(resp rpcResp, v, mode string) rpcResp {
 	}
 	resp.Result = out
 	return resp
+}
+
+var intRange = map[string][2]float64{
+	"sint": {-128, 127}, "int": {-32768, 32767}, "dint": {-2147483648, 2147483647},
+	"lint":  {-9223372036854775808, 9223372036854775807},
+	"usint": {0, 255}, "uint": {0, 65535}, "udint": {0, 4294967295}, "ulint": {0, 18446744073709551615},
+	"byte": {0, 255}, "word": {0, 65535}, "dword": {0, 4294967295}, "lword": {0, 18446744073709551615},
+}
+
+// coerce checks a written JSON value against the variable's type and
+// returns the value to store, or why it is refused.
+func coerce(v *Var, x any) (any, string) {
+	t := strings.ToLower(v.Datatype)
+	switch t {
+	case "bool":
+		if b, ok := x.(bool); ok {
+			return b, ""
+		}
+		return nil, "BOOL takes true or false"
+	case "real", "lreal":
+		if f, ok := x.(float64); ok {
+			return f, ""
+		}
+		return nil, strings.ToUpper(t) + " takes a number"
+	case "string", "wstring":
+		str, ok := x.(string)
+		if !ok {
+			return nil, strings.ToUpper(t) + " takes a string"
+		}
+		max := v.MaxLength
+		if max == 0 {
+			max = 254
+		}
+		if len([]rune(str)) > max {
+			return nil, fmt.Sprintf("%s is at most %d characters", strings.ToUpper(t), max)
+		}
+		return str, ""
+	case "char", "wchar":
+		if str, ok := x.(string); ok && len([]rune(str)) == 1 {
+			return str, ""
+		}
+		return nil, "CHAR takes a one-character string"
+	}
+	if r, ok := intRange[t]; ok {
+		f, isNum := x.(float64)
+		if !isNum || f != float64(int64(f)) && t != "ulint" && t != "lword" || f < r[0] || f > r[1] {
+			return nil, fmt.Sprintf("%s takes a whole number from %.0f to %.0f", strings.ToUpper(t), r[0], r[1])
+		}
+		return f, ""
+	}
+	return nil, "the fake does not model writing " + strings.ToUpper(t) + " (encoding unverified until S2b)"
 }
