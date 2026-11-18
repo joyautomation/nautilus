@@ -121,6 +121,46 @@ func (s *Server) Sessions() int {
 	return len(s.tokens)
 }
 
+// Set changes a variable's value while the server runs, as the CPU's
+// program would. The exported maps are for setup before Start; while the
+// server runs, change things only through these methods.
+func (s *Server) Set(sym string, v any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if x, ok := s.Vars[sym]; ok {
+		x.Value = v
+	}
+}
+
+// Put adds or replaces a variable while the server runs; nil removes it.
+func (s *Server) Put(sym string, v *Var) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v == nil {
+		delete(s.Vars, sym)
+		return
+	}
+	s.Vars[sym] = v
+}
+
+// SetUser adds or replaces a user while the server runs.
+func (s *Server) SetUser(name string, u User) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Users[name] = u
+}
+
+// StopAnswering makes every later request fail with HTTP 503, as a CPU
+// that dropped off the network would.
+func (s *Server) StopAnswering() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.FailAfter = s.Requests
+	if s.FailAfter == 0 {
+		s.FailAfter = -1
+	}
+}
+
 // Value returns a variable's current value.
 func (s *Server) Value(sym string) any {
 	s.mu.Lock()
@@ -198,7 +238,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	s.defaults()
 	s.Requests++
-	if s.FailAfter > 0 && s.Requests > s.FailAfter {
+	if s.FailAfter < 0 || s.FailAfter > 0 && s.Requests > s.FailAfter {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
