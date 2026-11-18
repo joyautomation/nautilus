@@ -91,9 +91,17 @@ export interface ConfigView {
 }
 
 /** tokenPlan for the nautilus settings in effect: the one place the
- * nautilus.token setting is read. */
-export function planFromConfig(cfg: ConfigView, approved: readonly string[], target?: string): TokenPlan {
+ * nautilus.token setting is read.
+ *
+ * remote is a remote window (dev container, SSH, WSL: vscode.env.remoteName
+ * set). There the "user" scope of runtimeUrl is not only the user's: Dev
+ * Containers merges a repository's devcontainer.json settings into the
+ * remote user settings. So in a remote window only the default URL counts
+ * as the user's own, and any other origin needs the one-time approval. */
+export function planFromConfig(cfg: ConfigView, approved: readonly string[], target?: string, remote = false): TokenPlan {
   const token = cfg.get("token", "");
   const url = cfg.get("runtimeUrl", "http://localhost:8080");
-  return tokenPlan(token, cfg.inspect("token") ?? {}, url, cfg.inspect("runtimeUrl") ?? {}, approved, target);
+  const urlScopes = { ...(cfg.inspect("runtimeUrl") ?? {}) };
+  if (remote) delete urlScopes.globalValue;
+  return tokenPlan(token, cfg.inspect("token") ?? {}, url, urlScopes, approved, target);
 }

@@ -28,7 +28,7 @@ export function apiToken(target?: string): string {
     get: (key: string, defaultValue: string) => cfg.get<string>(key, defaultValue),
     inspect: (key: string) => cfg.inspect<string>(key),
   };
-  const plan = planFromConfig(view, approved(), target);
+  const plan = planFromConfig(view, approved(), target, vscode.env.remoteName !== undefined);
   if (plan.ask) void askOnce(plan.ask);
   return plan.token;
 }

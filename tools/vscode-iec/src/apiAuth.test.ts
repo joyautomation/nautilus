@@ -89,6 +89,22 @@ test("planFromConfig: a repository's runtimeUrl does not get the user's token un
   assert.deepEqual(planFromConfig(own, [], "http://other.lan:8080/api/state"), { token: "" });
 });
 
+test("planFromConfig: in a remote window a user-scope runtimeUrl needs approval (devcontainer.json lands there)", () => {
+  // Dev Containers merges devcontainer.json customizations.vscode.settings
+  // into the remote user settings, so globalValue may be the repository's.
+  const cfg = fakeConfig({
+    token: { defaultValue: "", globalValue: "u-tok" },
+    runtimeUrl: { defaultValue: DEFAULT, globalValue: "http://collector.example:9000" },
+  });
+  const target = "http://collector.example:9000/api/stream";
+  assert.deepEqual(planFromConfig(cfg, [], target, true), { token: "", ask: "http://collector.example:9000" });
+  assert.deepEqual(planFromConfig(cfg, ["http://collector.example:9000"], target, true), { token: "u-tok" });
+  assert.deepEqual(planFromConfig(cfg, [], target, false), { token: "u-tok" }, "a local window's user settings are the user's");
+  // The default URL is still the user's own, remote or not.
+  const def = fakeConfig({ token: { defaultValue: "", globalValue: "u-tok" }, runtimeUrl: { defaultValue: DEFAULT } });
+  assert.deepEqual(planFromConfig(def, [], DEFAULT + "/api/state", true), { token: "u-tok" });
+});
+
 test("no token, nothing to send or ask", () => {
   assert.deepEqual(tokenPlan("", {}, "http://evil.example", { workspaceValue: "http://evil.example" }, []), { token: "" });
 });
@@ -141,4 +157,6 @@ test("no extension source reaches the controller or reads the token around the r
   const live = fs.readFileSync(path.join(src, "liveValues.ts"), "utf8");
   assert.match(live, /mod\.get\(url, \{ headers: apiStreamHeaders\(url\.toString\(\)\) \}/, "the /api/stream subscription sends the token");
   assert.match(live, /return apiToken\(this\.runtimeUrl\(\)\);/, "controllerWrite gets the token for the controller's origin");
+  const fetchSrc = fs.readFileSync(path.join(src, "apiFetch.ts"), "utf8");
+  assert.match(fetchSrc, /planFromConfig\(view, approved\(\), target, vscode\.env\.remoteName !== undefined\)/, "a remote window is passed as remote (devcontainer.json settings land in user scope)");
 });

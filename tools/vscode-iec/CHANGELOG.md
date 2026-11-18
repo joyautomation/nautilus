@@ -18,9 +18,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 - **A workspace can't send your token elsewhere.** The token goes only to
   `nautilus.runtimeUrl`. A token from your user settings goes to a
   `runtimeUrl` that a workspace's settings chose only after you answer
-  *Send it to …* once for that address (remembered). In an untrusted
-  workspace, its own `nautilus.runtimeUrl` and `nautilus.token` are
-  ignored (restricted settings).
+  *Send it to …* once for that address (remembered). In a remote window
+  (dev container, SSH, WSL), where a repository's `devcontainer.json` can
+  set user-scope settings, any `runtimeUrl` but the default needs that
+  approval. In an untrusted workspace, its own `nautilus.runtimeUrl` and
+  `nautilus.token` are ignored (restricted settings).
 
 ## [0.21.1] - 2026-11-17
 
