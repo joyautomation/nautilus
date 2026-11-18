@@ -22,7 +22,7 @@ func TestAuditVerifyCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	head := j.Head()
+	head, _ := j.Head()
 	j.Close()
 	var code int
 	out := captureStdout(t, func() int { code = runAudit([]string{"verify", dir}); return code })

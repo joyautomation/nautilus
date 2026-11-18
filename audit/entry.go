@@ -21,6 +21,12 @@ type Entry struct {
 	// ID is a ULID: unique, sortable by time, and the replay key when an
 	// entry is copied (to Postgres, or through oplog).
 	ID string `json:"id"`
+	// Seq numbers this controller's entries 1, 2, 3, … across files,
+	// restarts and pruning. The file journal sets it; with the chain it
+	// lets an anchor (a seq and a hash kept elsewhere) show that lines
+	// were cut from the end. Like Prev it is per controller, not carried
+	// when an entry is replicated.
+	Seq uint64 `json:"seq,omitempty"`
 	// TS is when the action was decided, UTC.
 	TS time.Time `json:"ts"`
 	// User is the principal: "anonymous", "token", "token:<name>",

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -35,26 +37,38 @@ const (
 )
 
 // FileJournal is the durable journal: JSONL files in one directory, named
-// audit-YYYYMMDD[-N].jsonl by UTC day (N counts size rotations), every line
-// chained to the one before it. Safe for concurrent use.
+// audit-YYYYMMDD[-N].jsonl (N counts size rotations), every line chained to
+// the one before it and numbered by Seq. A file's day is the UTC day it was
+// opened on, never earlier than the file before it, so name order is write
+// order even when entries arrive out of time order or the clock steps back.
+// Safe for concurrent use.
+//
+// Record holds the journal's lock across the write and the fsync, so a
+// stalled fsync stalls every writer behind it; coalescing and the failure
+// policy belong to the caller (the server's recording seam).
 type FileJournal struct {
 	dir  string
 	opts FileOptions
-	// sync makes a write durable; a test replaces it to count calls.
-	sync func(*os.File) error
+	// write and sync make an entry durable; a test replaces them to fail.
+	write func(*os.File, []byte) (int, error)
+	sync  func(*os.File) error
 
-	mu   sync.Mutex
-	f    *os.File
-	name string // current file's base name
-	day  string // its UTC day, YYYYMMDD
-	size int64
-	head string // "sha256:<hex>" of the last line written, "" before the first
+	mu     sync.Mutex
+	f      *os.File
+	name   string // current file's base name
+	day    string // its day, YYYYMMDD
+	size   int64  // bytes of complete lines in it
+	head   string // "sha256:<hex>" of the last line written, "" before the first
+	seq    uint64 // Seq of the last line written
+	broken error  // set when a failed write could not be undone: refuse until reopened
 }
 
 // OpenFile opens (creating) the journal in dir and continues its chain from
 // the newest file's last complete line. A torn final line (bytes after the
-// last newline, from a crash mid-write) is dropped; a complete line is
-// never removed, whatever it holds, so Verify can report it.
+// last newline, from a crash mid-write) is cut off and the cut is recorded
+// as an audit.tail_dropped entry with the bytes' length and hash; a
+// complete line is never removed, whatever it holds, so Verify can report
+// it.
 func OpenFile(dir string, opts FileOptions) (*FileJournal, error) {
 	if opts.MaxSize <= 0 {
 		opts.MaxSize = defaultMaxSize
@@ -68,7 +82,7 @@ func OpenFile(dir string, opts FileOptions) (*FileJournal, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	j := &FileJournal{dir: dir, opts: opts, sync: (*os.File).Sync}
+	j := &FileJournal{dir: dir, opts: opts, write: (*os.File).Write, sync: (*os.File).Sync}
 	files, err := listFiles(dir)
 	if err != nil {
 		return nil, err
@@ -86,80 +100,163 @@ func OpenFile(dir string, opts FileOptions) (*FileJournal, error) {
 		f.Close()
 		return nil, err
 	}
+	var torn []byte
 	if good := bytes.LastIndexByte(data, '\n') + 1; good < len(data) {
+		torn = append([]byte(nil), data[good:]...)
 		if err := f.Truncate(int64(good)); err != nil {
 			f.Close()
 			return nil, err
 		}
 		data = data[:good]
 	}
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+	if _, err := f.Seek(int64(len(data)), io.SeekStart); err != nil {
 		f.Close()
 		return nil, err
 	}
-	j.f, j.name, j.size = f, last, int64(len(data))
-	j.day = dayOf(last)
-	if len(data) > 0 {
-		lines := bytes.Split(bytes.TrimSuffix(data, []byte{'\n'}), []byte{'\n'})
-		j.head = lineHash(lines[len(lines)-1])
-	} else {
-		// An empty newest file: the chain continues from the file before.
-		head, err := lastHashBefore(dir, files, len(files)-1)
-		if err != nil {
-			f.Close()
+	j.f, j.name, j.size, j.day = f, last, int64(len(data)), dayOf(last)
+	j.head, j.seq, err = lastLine(dir, files, len(files)-1, data)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if torn != nil {
+		sum := sha256.Sum256(torn)
+		if _, err := j.Record(Entry{User: "system", Source: SourceSystem, Action: "audit.tail_dropped",
+			Target: last, Result: ResultOK, Detail: map[string]any{
+				"bytes": len(torn), "sha256": hex.EncodeToString(sum[:]),
+			}}); err != nil {
+			j.Close()
 			return nil, err
 		}
-		j.head = head
 	}
 	return j, nil
 }
 
-// lastHashBefore is the hash of the last line of the newest non-empty file
-// before files[i], or "".
-func lastHashBefore(dir string, files []string, i int) (string, error) {
-	for k := i - 1; k >= 0; k-- {
-		data, err := os.ReadFile(filepath.Join(dir, files[k]))
-		if err != nil {
-			return "", err
+// lastLine is the chain hash and Seq of the last complete line of
+// files[i] (whose complete-line bytes are data) or, when it is empty, of
+// the newest non-empty file before it; "" and 0 when there is none. A last
+// line that is not an entry still gives its hash, so the chain goes on and
+// Verify reports the damage; its Seq reads as 0.
+func lastLine(dir string, files []string, i int, data []byte) (string, uint64, error) {
+	for k := i; k >= 0; k-- {
+		if k != i {
+			d, err := os.ReadFile(filepath.Join(dir, files[k]))
+			if err != nil {
+				return "", 0, err
+			}
+			data = d[:bytes.LastIndexByte(d, '\n')+1]
 		}
-		data = bytes.TrimSuffix(data[:bytes.LastIndexByte(data, '\n')+1], []byte{'\n'})
-		if len(data) > 0 {
-			lines := bytes.Split(data, []byte{'\n'})
-			return lineHash(lines[len(lines)-1]), nil
+		data = bytes.TrimSuffix(data, []byte{'\n'})
+		if len(data) == 0 {
+			continue
 		}
+		line := data[bytes.LastIndexByte(data, '\n')+1:]
+		var e Entry
+		json.Unmarshal(line, &e)
+		return lineHash(line), e.Seq, nil
 	}
-	return "", nil
+	return "", 0, nil
 }
 
-// Record appends e, chained to the line before, and returns once it is on
-// disk.
+// Record appends e, numbered and chained to the line before, and returns
+// once it is on disk. If the write or the fsync fails, the file is cut
+// back to its last complete line, so a failed entry never leaves a line
+// the next one would chain past; if even that fails, the journal refuses
+// every Record until it is reopened.
 func (j *FileJournal) Record(e Entry) (Entry, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.broken != nil {
+		return e, j.broken
+	}
 	e = fill(e, j.opts.Now())
 	if err := j.rotate(e.TS); err != nil {
 		return e, err
 	}
+	e.Seq = j.seq + 1
 	e.Prev = j.head
+	e.Before, e.After = jsonSafe(e.Before), jsonSafe(e.After)
+	if e.Detail != nil {
+		e.Detail = jsonSafe(e.Detail).(map[string]any)
+	}
 	line, err := json.Marshal(e)
 	if err != nil {
 		return e, err
 	}
-	if _, err := j.f.Write(append(line, '\n')); err != nil {
-		return e, err
+	_, err = j.write(j.f, append(line, '\n'))
+	if err == nil {
+		err = j.sync(j.f)
 	}
-	if err := j.sync(j.f); err != nil {
+	if err != nil {
+		if uerr := j.undo(); uerr != nil {
+			j.broken = fmt.Errorf("audit: the journal is unusable until reopened: an entry failed (%v) and could not be cut back (%v)", err, uerr)
+		}
 		return e, err
 	}
 	j.size += int64(len(line)) + 1
 	j.head = lineHash(line)
+	j.seq = e.Seq
 	return e, nil
 }
 
-// rotate opens a new file when the day has changed, the current file is
-// full, or there is none yet. Called with mu held.
+// undo cuts the current file back to its last complete line after a
+// failed write. Called with mu held.
+func (j *FileJournal) undo() error {
+	if err := j.f.Truncate(j.size); err != nil {
+		return err
+	}
+	if _, err := j.f.Seek(j.size, io.SeekStart); err != nil {
+		return err
+	}
+	return j.sync(j.f)
+}
+
+// jsonSafe returns v with every NaN and ±Inf float, at any depth in maps
+// and slices, as the strings "NaN", "+Inf" and "-Inf", so a REAL that holds
+// one can still be journalled. Everything else is returned as is.
+func jsonSafe(v any) any {
+	switch x := v.(type) {
+	case float64:
+		return safeFloat(x, v)
+	case float32:
+		return safeFloat(float64(x), v)
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = jsonSafe(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = jsonSafe(e)
+		}
+		return out
+	}
+	return v
+}
+
+func safeFloat(f float64, v any) any {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "+Inf"
+	case math.IsInf(f, -1):
+		return "-Inf"
+	}
+	return v
+}
+
+// rotate opens a new file when the day has moved on, the current file is
+// full, or there is none yet. A file's day never goes back: an entry
+// stamped earlier than the current file's day (out of order, or after the
+// clock stepped back) goes in the current file. Called with mu held.
 func (j *FileJournal) rotate(ts time.Time) error {
 	day := ts.UTC().Format("20060102")
+	if day < j.day {
+		day = j.day
+	}
 	if j.f != nil && day == j.day && j.size < j.opts.MaxSize {
 		return nil
 	}
@@ -173,12 +270,13 @@ func (j *FileJournal) rotate(ts time.Time) error {
 		}
 		name = nextName(name, day)
 	}
-	f, err := os.OpenFile(filepath.Join(j.dir, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(filepath.Join(j.dir, name), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
 	if err := j.syncDir(); err != nil {
 		f.Close()
+		os.Remove(filepath.Join(j.dir, name))
 		return err
 	}
 	if j.f != nil {
@@ -188,8 +286,12 @@ func (j *FileJournal) rotate(ts time.Time) error {
 	return nil
 }
 
-// syncDir makes a new file's directory entry durable.
+// syncDir makes a new file's directory entry durable. Windows cannot sync
+// a directory (as retain/file.go notes), so there it is skipped.
 func (j *FileJournal) syncDir() error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	d, err := os.Open(j.dir)
 	if err != nil {
 		return err
@@ -208,12 +310,12 @@ func nextName(cur, day string) string {
 	return fmt.Sprintf("%s%s-%d%s", filePrefix, day, n+1, fileSuffix)
 }
 
-// Head is the hash of the last line written: the anchor a copy elsewhere
-// can be compared against.
-func (j *FileJournal) Head() string {
+// Head is the hash and Seq of the last line written: the anchor a copy
+// kept elsewhere is compared against.
+func (j *FileJournal) Head() (string, uint64) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.head
+	return j.head, j.seq
 }
 
 // Close closes the current file.
@@ -230,8 +332,8 @@ func (j *FileJournal) Close() error {
 
 // Prune removes files whose day is older than Keep, never the current one,
 // and records each removal as an "audit.prune" entry carrying the removed
-// file's last line hash, so Verify knows the chain legitimately begins
-// there. It returns the files removed.
+// file's last line hash and Seq, so Verify knows the chain legitimately
+// begins there. It returns the files removed.
 func (j *FileJournal) Prune() ([]string, error) {
 	if j.opts.Keep < 0 {
 		return nil, nil
@@ -249,14 +351,18 @@ func (j *FileJournal) Prune() ([]string, error) {
 		if name == current || dayOf(name) >= cutoff {
 			continue
 		}
-		last, err := lastHashBefore(j.dir, files, i+1)
+		data, err := os.ReadFile(filepath.Join(j.dir, name))
+		if err != nil {
+			return removed, err
+		}
+		last, seq, err := lastLine(j.dir, files, i, data[:bytes.LastIndexByte(data, '\n')+1])
 		if err != nil {
 			return removed, err
 		}
 		// Record first: a crash between the two leaves a record of a
 		// removal that did not happen, the safe direction.
 		if _, err := j.Record(Entry{User: "system", Source: SourceSystem, Action: "audit.prune",
-			Target: name, Result: ResultOK, Detail: map[string]any{"last": last}}); err != nil {
+			Target: name, Result: ResultOK, Detail: map[string]any{"last": last, "seq": seq}}); err != nil {
 			return removed, err
 		}
 		if err := os.Remove(filepath.Join(j.dir, name)); err != nil {

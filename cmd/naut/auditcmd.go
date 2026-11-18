@@ -20,8 +20,11 @@ entry count and the head hash, and exits 1 at the first break, naming the
 file and line: a line edited, removed, inserted or moved, or a file
 missing.
 
-It cannot see lines removed from the very end. Compare the head it prints
-with one kept elsewhere (the Postgres copy, the peer) for that.
+On its own it cannot see the last lines cut off, or the whole journal
+rewritten with the chain recomputed, which anyone who can write the files
+can do. Compare the head seq and hash it prints with an anchor kept where
+the controller's service user cannot rewrite it (the Postgres copy, the
+peer) for that.
 `
 
 func runAudit(args []string) int {
@@ -64,7 +67,10 @@ func auditVerify(dir string) int {
 		fmt.Printf("BROKEN at %v\n%d entries in %d files checked before the break\n", r.Break, r.Entries, r.Files)
 		return 1
 	}
-	fmt.Printf("ok: %d entries in %d files, chain intact\nhead %s\n", r.Entries, r.Files, r.Head)
+	fmt.Printf("ok: %d entries in %d files, chain intact\nhead seq %d %s\n", r.Entries, r.Files, r.HeadSeq, r.Head)
+	for _, d := range r.TailDrops {
+		fmt.Printf("note: %d bytes of a partial last line were cut from %s on reopen (recorded at %s): a crash mid-write, or a removed newline\n", d.Bytes, d.File, d.At)
+	}
 	if r.Start != "" {
 		fmt.Printf("starts after a pruned file: %s\n", r.Start)
 	}

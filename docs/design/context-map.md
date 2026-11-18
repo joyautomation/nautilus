@@ -75,7 +75,8 @@ break one changes this section first and says why.
 ### 2.1 Direction
 
 - Substrates (`io`, `lang/ir`, `hist`, `oplog`, `audit`) import no other nautilus
-  package. `retain` imports only `internal/k8sapi`.
+  package. `audit` imports only the standard library, not even a third-party
+  module. `retain` imports only `internal/k8sapi`.
 - Languages import only each other and the tag-file shared kernel.
 - Runtime imports only Languages, `io`, `retain`, `internal/stproject`.
   It never knows a driver, the server, alarms or the manifest.

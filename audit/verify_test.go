@@ -23,7 +23,7 @@ func journal(t *testing.T) (string, string) {
 	for _, target := range []string{"D", "E", "F"} {
 		write(t, j, "tag.write", target)
 	}
-	head := j.Head()
+	head, _ := j.Head()
 	j.Close()
 	return dir, head
 }
@@ -131,7 +131,7 @@ func TestVerifyAcceptsAStartOnlyWhereAPruneRecordsIt(t *testing.T) {
 	dir, _ := journal(t)
 	os.Remove(filepath.Join(dir, day1))
 	r, _ := Verify(dir)
-	if r.OK() || !strings.Contains(r.Break.Reason, "audit.prune") {
-		t.Fatalf("an unrecorded start: %v, want a break naming audit.prune", r.Break)
+	if r.OK() || !strings.Contains(r.Break.Reason, "no audit.prune entry records it") {
+		t.Fatalf("an unrecorded start: %v, want the break that says no audit.prune records it", r.Break)
 	}
 }

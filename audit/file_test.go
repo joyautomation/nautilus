@@ -86,8 +86,9 @@ func TestRecordChainsEachLineToTheOneBefore(t *testing.T) {
 		t.Errorf("second prev %q, want the hash of the first line", b.Prev)
 	}
 	r := mustVerify(t, dir)
-	if r.Entries != 2 || r.Head != lineHash([]byte(ls[1])) || j.Head() != r.Head {
-		t.Errorf("report %+v, journal head %q", r, j.Head())
+	head, seq := j.Head()
+	if r.Entries != 2 || r.Head != lineHash([]byte(ls[1])) || head != r.Head || seq != 2 || r.HeadSeq != 2 || a.Seq != 1 || b.Seq != 2 {
+		t.Errorf("report %+v, journal head %q seq %d, entry seqs %d %d", r, head, seq, a.Seq, b.Seq)
 	}
 }
 
@@ -107,9 +108,10 @@ func TestReopenContinuesTheChain(t *testing.T) {
 	mustVerify(t, dir)
 }
 
-// A crash mid-write leaves bytes after the last newline. OpenFile drops
-// exactly those, never a complete line, and chains on from the last one.
-func TestOpenDropsOnlyATornTail(t *testing.T) {
+// A crash mid-write leaves bytes after the last newline. OpenFile cuts
+// exactly those, never a complete line, records the cut (length and hash)
+// as the next entry, and chains on.
+func TestOpenCutsATornTailAndRecordsIt(t *testing.T) {
 	dir := t.TempDir()
 	c := &clock{t0()}
 	j := open(t, dir, c, FileOptions{})
@@ -127,13 +129,47 @@ func TestOpenDropsOnlyATornTail(t *testing.T) {
 	j2 := open(t, dir, c, FileOptions{})
 	e := write(t, j2, "tag.write", "C")
 	ls := lines(t, dir)
-	if len(ls) != 3 || strings.Contains(strings.Join(ls, "\n"), "01TORN") {
+	if len(ls) != 4 || strings.Contains(strings.Join(ls, "\n"), "01TORN") {
 		t.Fatalf("lines after reopen:\n%s", strings.Join(ls, "\n"))
 	}
-	if e.Prev != lineHash([]byte(ls[1])) {
-		t.Errorf("prev %q, want the hash of the last complete line", e.Prev)
+	var drop Entry
+	json.Unmarshal([]byte(ls[2]), &drop)
+	if drop.Action != "audit.tail_dropped" || drop.Detail["bytes"] != float64(26) || drop.Prev != lineHash([]byte(ls[1])) {
+		t.Errorf("third line %s, want the recorded cut of 26 bytes chained to B", ls[2])
 	}
-	mustVerify(t, dir)
+	if e.Prev != lineHash([]byte(ls[2])) || e.Seq != 4 {
+		t.Errorf("C: prev %q seq %d, want chained to the cut record, seq 4", e.Prev, e.Seq)
+	}
+	r := mustVerify(t, dir)
+	if len(r.TailDrops) != 1 || r.TailDrops[0].Bytes != 26 {
+		t.Errorf("verify tail drops %+v, want the one cut of 26 bytes", r.TailDrops)
+	}
+}
+
+// Removing the last newline turns the last whole entry into a "torn tail".
+// OpenFile still cuts it, but the cut is on the record, and verify lists it,
+// so the entry does not vanish without a trace.
+func TestARemovedLastNewlineIsOnTheRecord(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{t0()}
+	j := open(t, dir, c, FileOptions{})
+	write(t, j, "tag.write", "A")
+	gone := write(t, j, "force.set", "Pump1")
+	j.Close()
+	files, _ := listFiles(dir)
+	p := filepath.Join(dir, files[0])
+	data, _ := os.ReadFile(p)
+	os.WriteFile(p, data[:len(data)-1], 0o600)
+	j2 := open(t, dir, c, FileOptions{})
+	j2.Close()
+	r := mustVerify(t, dir)
+	if len(r.TailDrops) != 1 {
+		t.Fatalf("tail drops %+v, want the removed entry's cut recorded", r.TailDrops)
+	}
+	line, _ := json.Marshal(gone)
+	if r.TailDrops[0].Bytes != len(line) {
+		t.Errorf("cut %d bytes, want the whole entry's %d", r.TailDrops[0].Bytes, len(line))
+	}
 }
 
 // Every entry is synced to disk before Record returns.
