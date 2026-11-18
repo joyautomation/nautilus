@@ -175,7 +175,7 @@ func ParseSites(data []byte) ([]SiteSpec, error) {
 		return nil, fmt.Errorf("codegen: sites file: %w", err)
 	}
 	if len(f.Sites) == 0 {
-		return nil, fmt.Errorf("codegen: sites file declares no sites:")
+		return nil, fmt.Errorf("codegen: sites file declares no sites")
 	}
 	out := make([]SiteSpec, 0, len(f.Sites))
 	for i, s := range f.Sites {
