@@ -106,7 +106,11 @@ func (c *Client) WriteMany(ctx context.Context, ws []Write) ([]Result, error) {
 	calls := make([]Call, len(ws))
 	for i, w := range ws {
 		if _, err := json.Marshal(w.Value); err != nil {
-			return nil, fmt.Errorf("webapi: %s: value %v cannot be sent: %w; nothing was written", w.Var, w.Value, err)
+			out := make([]Result, len(ws))
+			for j := range ws {
+				out[j] = Result{Var: ws[j].Var, Err: ErrNotSent}
+			}
+			return out, fmt.Errorf("webapi: %s: value %v cannot be sent: %w; nothing was written", w.Var, w.Value, err)
 		}
 		calls[i] = Call{Method: "PlcProgram.Write", Params: map[string]any{"var": w.Var, "value": w.Value}}
 	}
@@ -134,11 +138,11 @@ func (c *Client) chunked(ctx context.Context, calls []Call) ([]Reply, error) {
 	for i, cl := range calls {
 		p, err := json.Marshal(cl.Params)
 		if err != nil {
-			return nil, fmt.Errorf("webapi: encoding %s: %w; nothing was sent", cl.Method, err)
+			return notSent(out), fmt.Errorf("webapi: encoding %s: %w; nothing was sent", cl.Method, err)
 		}
 		n := len(cl.Method) + len(p) + perCall
 		if n+2 > c.opt.MaxBody {
-			return nil, fmt.Errorf("webapi: one %s call is %d bytes, over the %d-byte limit; nothing was sent", cl.Method, n, c.opt.MaxBody)
+			return notSent(out), fmt.Errorf("webapi: one %s call is %d bytes, over the %d-byte limit; nothing was sent", cl.Method, n, c.opt.MaxBody)
 		}
 		if size+n > c.opt.MaxBody || i-start >= c.opt.MaxBatch {
 			bounds = append(bounds, i)
@@ -166,6 +170,14 @@ func (c *Client) chunked(ctx context.Context, calls []Call) ([]Reply, error) {
 		start = end
 	}
 	return out, nil
+}
+
+// notSent marks every reply ErrNotSent.
+func notSent(rs []Reply) []Reply {
+	for i := range rs {
+		rs[i] = Reply{Err: ErrNotSent}
+	}
+	return rs
 }
 
 // Operating modes as the CPU spells them.

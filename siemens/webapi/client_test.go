@@ -2,12 +2,17 @@ package webapi_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -253,9 +258,12 @@ func TestWriteManySendsNothingWhenAValueCannotBeEncoded(t *testing.T) {
 	ctx := context.Background()
 	s, c, _ := cpu(t)
 	before := s.Calls
-	_, err := c.WriteMany(ctx, []webapi.Write{{`"Tags".Run`, true}, {`"Tags".Level`, math.NaN()}})
+	rs, err := c.WriteMany(ctx, []webapi.Write{{`"Tags".Run`, true}, {`"Tags".Level`, math.NaN()}})
 	if err == nil || !strings.Contains(err.Error(), "nothing was written") {
 		t.Fatalf("NaN: %v", err)
+	}
+	if len(rs) != 2 || rs[0].Var != `"Tags".Run` || !errors.Is(rs[0].Err, webapi.ErrNotSent) || !errors.Is(rs[1].Err, webapi.ErrNotSent) {
+		t.Fatalf("every result must say not sent: %+v", rs)
 	}
 	if s.Calls != before || s.Value(`"Tags".Run`) != false {
 		t.Fatal("a bad value must stop the whole batch before anything is sent")
@@ -377,4 +385,82 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+func TestOversizedCallMarksEveryResultNotSent(t *testing.T) {
+	ctx := context.Background()
+	s, c, _ := cpu(t)
+	before := s.Calls
+	long := strings.Repeat("x", 70*1024)
+	rs, err := c.WriteMany(ctx, []webapi.Write{{`"Tags".Run`, true}, {`"Tags".Name`, long}})
+	if err == nil || len(rs) != 2 {
+		t.Fatalf("want an error and two results: %v %d", err, len(rs))
+	}
+	for _, r := range rs {
+		if r.Var == "" || !errors.Is(r.Err, webapi.ErrNotSent) {
+			t.Fatalf("result %+v: want its Var and ErrNotSent", r)
+		}
+	}
+	if s.Calls != before {
+		t.Fatal("nothing may be sent")
+	}
+	rr, err := c.ReadMany(ctx, []string{`"Tags".Run`, `"` + long + `"`})
+	if err == nil || len(rr) != 2 || rr[0].Var != `"Tags".Run` || !errors.Is(rr[1].Err, webapi.ErrNotSent) {
+		t.Fatalf("ReadMany: %v %+v", err, rr)
+	}
+}
+
+// TestRedirectIsNeverFollowed: a 307 from the CPU's address would re-send
+// Api.Login's body, the password, to wherever it points.
+func TestRedirectIsNeverFollowed(t *testing.T) {
+	ctx := context.Background()
+	var leaked atomic.Bool
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked.Store(true) }))
+	defer plain.Close()
+	redir := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/api/jsonrpc", http.StatusTemporaryRedirect)
+	}))
+	defer redir.Close()
+	sum := sha256.Sum256(redir.Certificate().Raw)
+	c, err := webapi.New(redir.URL, webapi.Options{User: "naut", Password: "pw", CertSHA256: hex.EncodeToString(sum[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Login(ctx); err == nil {
+		t.Fatal("a redirect must not be a successful login")
+	}
+	if leaked.Load() {
+		t.Fatal("the login was re-sent to the redirect target")
+	}
+}
+
+// TestCallInFlightDuringReloginRetriesWithTheNewToken: a call that was sent
+// on the old token while another call logged in again must not report a
+// PermissionDenied that belongs to the old token.
+func TestCallInFlightDuringReloginRetriesWithTheNewToken(t *testing.T) {
+	ctx := context.Background()
+	s, c, clk := cpu(t)
+	if _, err := c.Read(ctx, `"Tags".Level`); err != nil {
+		t.Fatal(err)
+	}
+	clk.add(121 * time.Second) // the token expires
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Read(ctx, `"Tags".Level`); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("read during re-login: %v", err)
+	}
+	if n := s.Sessions(); n > 2 {
+		t.Fatalf("sessions = %d", n)
+	}
 }

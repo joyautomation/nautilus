@@ -142,6 +142,11 @@ func New(host string, opt Options) (*Client, error) {
 		http: &http.Client{
 			Timeout:   opt.Timeout,
 			Transport: &http.Transport{TLSClientConfig: tlsCfg, MaxIdleConnsPerHost: 2},
+			// Never follow a redirect: a 307 would re-send the request
+			// body, and Api.Login's body is the password, to wherever
+			// the redirect points (even plain http). A CPU has no reason
+			// to redirect /api/jsonrpc.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil
 }
@@ -268,7 +273,7 @@ func (c *Client) batch(ctx context.Context, calls []Call, token string) ([]Reply
 		r, ok := byID[rq.ID]
 		switch {
 		case !ok:
-			out[i].Err = fmt.Errorf("webapi: %s: no reply in the bulk response", rq.Method)
+			out[i].Err = fmt.Errorf("%w: %s: no reply in the bulk response", ErrUnknown, rq.Method)
 		case r.Error != nil:
 			out[i].Err = &Error{Code: r.Error.Code, Message: r.Error.Message, Method: rq.Method}
 		default:
@@ -300,6 +305,19 @@ func (c *Client) Do(ctx context.Context, calls ...Call) ([]Reply, error) {
 	if !allDenied(out) {
 		c.touch(token)
 		return out, nil
+	}
+	// Another call re-logged in while this one was in flight on the old
+	// token: the denial belongs to the old token, so try once more with
+	// the current one.
+	c.mu.Lock()
+	current := c.token
+	c.mu.Unlock()
+	if current != "" && current != token {
+		out, err = c.batch(ctx, calls, current)
+		if err == nil && !allDenied(out) {
+			c.touch(current)
+		}
+		return out, err
 	}
 	if !c.expired(ctx) {
 		return out, nil
