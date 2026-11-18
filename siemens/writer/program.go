@@ -313,7 +313,6 @@ func (pw *progWriter) ident(name string, line int) string {
 	return name
 }
 
-
 // store prints the value of an assignment to a target of type tt the way
 // nautilus stores it: integer arithmetic at 64 bits, wrapped to the
 // target's width; a 64-bit int (a counter's CV) wrapped likewise.
