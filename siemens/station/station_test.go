@@ -11,11 +11,18 @@ func TestCheckAgentURL(t *testing.T) {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"tiad", "ftp://h", "http://", "https://u:secret@h", "https://token@h"} {
+	// Every bad input carries "s3cret": no error may contain it, whatever
+	// shape the mistake takes.
+	for _, bad := range []string{
+		"tiad-s3cret", "ftp://u:s3cret@h", "http://", "https://u:s3cret@h", "https://s3cret@h",
+		"admin:s3cret@10.0.0.5:8080", "http//u:s3cret@h", "u:s3cret@h", "//u:s3cret@h:8190",
+		"http://h:8190/?token=s3cret", "https://u:s3cret@h/?token=s3cret", "http://h/#s3cret", "http://h/?",
+		"http://h:s3cret", "http:s3cret@h", "mailto:s3cret@h",
+	} {
 		err := CheckAgentURL(bad)
 		if err == nil {
 			t.Errorf("%s: want an error", bad)
-		} else if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "token@") {
+		} else if strings.Contains(err.Error(), "s3cret") {
 			t.Errorf("%s: the error echoes the credential: %v", bad, err)
 		}
 	}

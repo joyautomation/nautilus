@@ -310,22 +310,25 @@ func ipShaped(labels []string) bool {
 	return true
 }
 
-// CheckAgentURL requires an http or https URL with a host and no user
-// info: the agent's token is never in a manifest, and neither is any other
-// credential.
+// CheckAgentURL requires an http or https URL with a host, and nothing
+// that could carry a credential: no user info, no query, no fragment. The
+// agent's token is never in a manifest, and neither is any other secret.
+//
+// The error NEVER echoes the value: a mistyped URL can carry a password in
+// a place the parser does not recognise as one (admin:s3cret@host without
+// a scheme, http//u:s3cret@h). At most it names scheme://host of a URL that
+// parsed cleanly.
 func CheckAgentURL(s string) error {
 	u, err := url.Parse(s)
-	if err != nil {
-		// url's own error quotes the input, which may hold a secret.
-		return fmt.Errorf("is not an http(s) URL with a host")
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
+		return fmt.Errorf("is not an http(s) URL with a host (e.g. http://127.0.0.1:8190)")
 	}
+	safe := u.Scheme + "://" + u.Host
 	if u.User != nil {
-		// Never echo the user info: it is the secret being refused.
-		u.User = nil
-		return fmt.Errorf("carries user info (%s with the credentials removed); credentials never go in the manifest (set NAUTILUS_TIAD_TOKEN)", u)
+		return fmt.Errorf("carries user info (%s…); credentials never go in the manifest (set NAUTILUS_TIAD_TOKEN)", safe)
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("%q is not an http(s) URL with a host", s)
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("has a query or fragment (%s…); the agent URL takes neither, and credentials never go in the manifest (set NAUTILUS_TIAD_TOKEN)", safe)
 	}
 	return nil
 }
