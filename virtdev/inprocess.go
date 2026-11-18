@@ -66,9 +66,13 @@ type mbFace struct {
 	baselined bool
 	written   map[string]any
 	plan      modbus.Plan
-	sources   map[string]*mbSource // by source id
-	outs      map[string]modbus.TagBinding
-	enables   map[string][]*mbSource
+	// assemble, for a driver carrying nautilus.yaml's devices:, turns the
+	// members a read delivers into each device's struct: the adapter's
+	// own code (devbind), so a test proves what ships.
+	assemble func(nio.Values)
+	sources  map[string]*mbSource // by source id
+	outs     map[string]modbus.TagBinding
+	enables  map[string][]*mbSource
 }
 
 type mbSource struct {
@@ -122,8 +126,11 @@ func NewInProcess(s *Set, clock runtime.Clock, drivers []nio.NamedDriver) (*InPr
 			}
 			ip.ua = append(ip.ua, f)
 		case interface{ Unwrap() nio.Driver }:
-			// a driver carrying nautilus.yaml's devices: (devbind)
-			return nil, fmt.Errorf("driver %s carries devices: declared in the manifest; virtual devices are built from virtual-devices.yaml's own rows only (devices: rows as virtual devices come next, docs/design/device-library.md §8)", nd.Name)
+			f, err := ip.bindDevices(d)
+			if err != nil {
+				return nil, fmt.Errorf("driver %s: %w", nd.Name, err)
+			}
+			ip.mb = append(ip.mb, f)
 		case runtime.StatsReader:
 			// The runtime's own health, not a device's: kept as it is.
 			ip.status = append(ip.status, nd.Driver)
@@ -166,6 +173,24 @@ func (ip *InProcess) bindModbus(d *modbus.Driver) (*mbFace, error) {
 			f.outs[t.Name] = t
 		}
 	}
+	return f, nil
+}
+
+// bindDevices binds a driver that carries the project's devices: (the
+// device library's adapter around a Modbus driver): the Modbus driver
+// underneath is bound as any other, and its reads are delivered through a
+// fresh copy of the adapter's input side.
+func (ip *InProcess) bindDevices(d interface{ Unwrap() nio.Driver }) (*mbFace, error) {
+	asm, ok := d.(interface{ NewAssembly() func(nio.Values) })
+	inner, isMB := d.Unwrap().(*modbus.Driver)
+	if !ok || !isMB {
+		return nil, fmt.Errorf("%T: virtual devices answer the devices: of a modbus driver only", d)
+	}
+	f, err := ip.bindModbus(inner)
+	if err != nil {
+		return nil, err
+	}
+	f.assemble = asm.NewAssembly()
 	return f, nil
 }
 
@@ -353,6 +378,9 @@ func (ip *InProcess) readModbus(f *mbFace, out nio.Values) {
 	for _, ms := range f.sources {
 		out[ms.src.OnlineTagName()] = ms.online
 		out[ms.src.OutagesTagName()] = int64(0)
+	}
+	if f.assemble != nil {
+		f.assemble(out)
 	}
 }
 

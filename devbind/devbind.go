@@ -197,6 +197,18 @@ func (s *Set) Profiles() []*devprofile.Profile {
 	return out
 }
 
+// Rows are the set's devices: rows, in declaration order.
+func (s *Set) Rows() []Device {
+	if s == nil {
+		return nil
+	}
+	out := make([]Device, len(s.devices))
+	for i, d := range s.devices {
+		out[i] = d.Device
+	}
+	return out
+}
+
 // Len is how many devices the set has.
 func (s *Set) Len() int {
 	if s == nil {
