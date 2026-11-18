@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -70,27 +71,28 @@ D_Port5_Pin4 := TRUE;`,
 
 func init() { matrixServers = append(matrixServers, virtualServers...) }
 
-// virtualServer is a virtdev run behind a relay on a fixed port: a restart
-// stops the run and starts it again on the same listen address, a
-// blackhole silences the relay.
+// virtualServer is a virtdev run behind a relay, whose listener the test
+// holds for its whole life, so the driver's endpoint never changes. A
+// restart stops the run and starts it again on a fresh ephemeral port
+// (nothing is re-bound, so no other process can take the port meanwhile)
+// and points the relay at it; a blackhole silences the relay.
 type virtualServer struct {
-	set    *virtdev.Set
-	run    *virtdev.Running
-	listen string
-	relay  *relay
+	set   *virtdev.Set
+	run   *virtdev.Running
+	relay *relay
 }
 
 func startVirtual(t *testing.T, s matrixServer) *virtualServer {
 	t.Helper()
 	dir := t.TempDir()
-	listen := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	files := map[string]string{
+		// No listen: the device takes an ephemeral loopback port.
 		"virtual-devices.yaml": fmt.Sprintf(`devices:
-  - { name: D, profile: %s, endpoint: 10.1.1.21, listen: "%s" }
+  - { name: D, profile: %s, endpoint: 10.1.1.21 }
 model:
   program: plant.st
   scan: 100ms
-`, s.virtual, listen),
+`, s.virtual),
 		"plant.st": fmt.Sprintf("PROGRAM Plant\nVAR\n%s\nEND_VAR\n%s\nEND_PROGRAM\n", s.modelVars, s.model),
 	}
 	for name, body := range files {
@@ -102,9 +104,8 @@ model:
 	if err != nil {
 		t.Fatalf("virtual devices: %v", err)
 	}
-	v := &virtualServer{set: set, listen: listen}
+	v := &virtualServer{set: set, relay: startRelay(t)}
 	v.start(t)
-	v.relay = startRelay(t, listen)
 	t.Cleanup(func() {
 		v.relay.close()
 		if v.run != nil {
@@ -120,7 +121,13 @@ func (v *virtualServer) start(t *testing.T) {
 	if err != nil {
 		t.Fatalf("virtual devices: %v", err)
 	}
+	if len(run.Endpoints) != 1 || run.Endpoints[0].Listen == "" {
+		run.Stop()
+		t.Fatalf("virtual devices: want one listening device, got %+v", run.Endpoints)
+	}
 	v.run = run
+	// Listen is the server's URL, opc.tcp://host:port.
+	v.relay.setTarget(strings.TrimPrefix(run.Endpoints[0].Listen, "opc.tcp://"))
 }
 
 func (v *virtualServer) url() string { return "opc.tcp://" + v.relay.addr() }
@@ -129,6 +136,7 @@ func (v *virtualServer) url() string { return "opc.tcp://" + v.relay.addr() }
 // with its power-up values.
 func (v *virtualServer) restart(t *testing.T) func() {
 	t.Helper()
+	v.relay.setTarget("") // down: new connections are refused
 	v.run.Stop()
 	v.run = nil
 	return func() { v.start(t) }
@@ -150,13 +158,13 @@ type relay struct {
 	conns  []net.Conn
 }
 
-func startRelay(t *testing.T, target string) *relay {
+func startRelay(t *testing.T) *relay {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &relay{ln: ln, target: target}
+	r := &relay{ln: ln}
 	r.cond = sync.NewCond(&r.mu)
 	go r.accept()
 	return r
@@ -170,7 +178,14 @@ func (r *relay) accept() {
 		if err != nil {
 			return
 		}
-		up, err := net.Dial("tcp", r.target)
+		r.mu.Lock()
+		target := r.target
+		r.mu.Unlock()
+		if target == "" {
+			c.Close()
+			continue
+		}
+		up, err := net.Dial("tcp", target)
 		if err != nil {
 			c.Close() // the device is down: refused, as a closed port is
 			continue
@@ -203,6 +218,13 @@ func (r *relay) pipe(src, dst net.Conn) {
 			return
 		}
 	}
+}
+
+// setTarget points new connections at addr ("" refuses them).
+func (r *relay) setTarget(addr string) {
+	r.mu.Lock()
+	r.target = addr
+	r.mu.Unlock()
 }
 
 func (r *relay) setPaused(p bool) {

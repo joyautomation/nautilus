@@ -825,17 +825,20 @@ jobs:
     if: needs.changes.outputs.full != 'false'
     name: OPC UA client — server matrix (open62541, Milo, IO-Link masters; poll + subscribe)
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # the test's own limit is 10 min; a run takes about 6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
-      # The client driver against other people's servers, in containers
-      # the test starts itself (opcua/matrix_test.go): import, typed reads,
+      # The client driver against servers the test starts itself
+      # (opcua/matrix_test.go), in both read modes: import, typed reads,
       # writes, namespace remap, and recovery from a restart and from a
-      # blackhole (docker pause). open62541 is built by the test from a
-      # tagged release (opcua/testdata/matrix/open62541, tagged by the
-      # directory's content); Milo's image is pinned by digest in the
-      # profile.
+      # blackhole. open62541 and Milo run in containers (a blackhole is a
+      # docker pause); open62541 is built by the test from a tagged release
+      # (opcua/testdata/matrix/open62541, tagged by the directory's
+      # content), Milo's image is pinned by digest. The IO-Link master
+      # simulators run in process (opcua/matrix_virtual_test.go), behind a
+      # relay that goes silent for a blackhole.
       - name: Server matrix
         shell: bash
         run: |

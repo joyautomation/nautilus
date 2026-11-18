@@ -408,9 +408,10 @@ claims:
   - id: UAC-034
     claim: >-
       Against the virtual IO-Link masters (Pepperl+Fuchs ICE3, SICK SIG300,
-      ifm AL1590) at the node ids the real masters serve, anonymously on the
-      None endpoint, the driver reads every master's points typed, follows a
-      value that changes, writes the P+F's process data out, and recovers
+      ifm AL1590), anonymously on the None endpoint, the driver reads a
+      sample of each master's points at the node ids the real master serves
+      (one to three per master: each node id style and type), typed, follows
+      a value that changes, writes the P+F's process data out, and recovers
       from a restart and a blackhole.
     source: "#servers-it-has-been-run-against"
     tests:
