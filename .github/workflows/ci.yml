@@ -445,6 +445,38 @@ jobs:
           path: evidence/
           retention-days: 14
 
+  # staticcheck, as a REPORT (#752; James, 2026-11-18): the findings go to the
+  # job summary and are routed to the sessions that own the code; it becomes
+  # a gate once it stays clean. continue-on-error is what keeps it out of the
+  # required ci-ok (ci-ok.sh leaves a continue-on-error job unjudged): a
+  # finding never blocks a merge. A staticcheck that crashes, rather than
+  # finding something, still fails this job, visibly. Pinned: 2026.1 (v0.7.0),
+  # the newest that runs on Go 1.25 (v0.8 needs Go 1.26).
+  staticcheck:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Static analysis — staticcheck (report, not a gate)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - name: staticcheck 2026.1 (v0.7.0)
+        shell: bash
+        run: |
+          set +e
+          go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -f json ./... > "$RUNNER_TEMP/staticcheck.jsonl"
+          code=$?
+          set -e
+          # 0: clean; 1: findings (reported, not a failure); anything else, or
+          # no JSON at all, means staticcheck itself did not run through.
+          if [ "$code" -gt 1 ] || ! jq -se . "$RUNNER_TEMP/staticcheck.jsonl" >/dev/null; then
+            echo "::error::staticcheck did not run through (exit $code)"
+            exit 1
+          fi
+          .github/scripts/staticcheck-summary.sh "$RUNNER_TEMP/staticcheck.jsonl" >> "$GITHUB_STEP_SUMMARY"
+          echo "$(jq -s length "$RUNNER_TEMP/staticcheck.jsonl") finding(s): see the job summary"
   # Packages a native Windows service depends on (argonaut's second site
   # runs on Windows Server): file semantics differ there, a rename over an
   # open file above all, so they are tested on Windows, not assumed.
