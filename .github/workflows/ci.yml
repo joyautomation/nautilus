@@ -336,6 +336,25 @@ jobs:
         with: {go-version: '1.25'}
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: NAUTILUS_PROFINET_VETH=1 go test -count=1 -run 'TestPacketVeth|TestOpenWithoutCapability' -v ./profinet/transport/
+  profinet-fuzz:
+    name: PROFINET — fuzz the wire parsers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      # Every parser of bytes from the wire or a UDP datagram has a Fuzz
+      # target (profinet/wire/fuzz_test.go); none may panic. A count, not a
+      # duration: a time budget can end with "context deadline exceeded"
+      # while a worker is busy, failing the job with no crasher found.
+      - shell: bash
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          for f in $(go test -list '^Fuzz' ./profinet/wire/ | grep '^Fuzz'); do
+            echo "== $f"
+            go test ./profinet/wire/ -run '^$' -fuzz "^$f\$" -fuzztime 1000000x
+          done
   sparkplug-tck:
     needs: changes
     if: needs.changes.outputs.full != 'false'
