@@ -74,7 +74,7 @@ func (rt *routine) copyInstr(in *l5x.Instr) (string, *refusal) {
 		return "", refuse(m, "a copy of %s structures", strings.ToUpper(dst.elem))
 	}
 	if _, ok := rt.im.typeText(dst.elem, ""); !ok {
-		return "", refuse("type", "%s: type %s has no nautilus declaration", in.Args[1], dst.elem)
+		return "", refuse("type", "%s: %s", in.Args[1], typeMissing(dst.elem))
 	}
 	pragma := func(n int) string {
 		if n == 1 {
@@ -225,6 +225,9 @@ func (rt *routine) copyOperand(m, a string) (copyOp, *refusal) {
 			}
 			dt, dm, ok := rt.im.memberType(dtype, name)
 			if !ok {
+				if _, known := rt.im.typeText(dtype, ""); !known && !strings.EqualFold(dtype, "TIMER") && !strings.EqualFold(dtype, "COUNTER") {
+					return copyOp{}, refuse("type", "%s: %s", a, typeMissing(dtype))
+				}
 				return copyOp{}, refuse("type", "%s: %s has no member %s", a, dtype, name)
 			}
 			path += "." + name
