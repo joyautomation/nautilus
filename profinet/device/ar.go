@@ -297,7 +297,7 @@ func allocFrameID(rtClass uint32, used map[uint16]bool) uint16 {
 // release ends the AR the request names (d.mu held).
 func (d *Device) release(blocks []wire.PNIOBlock) ([]byte, wire.PNIOStatus) {
 	for _, b := range blocks {
-		if b.Type != wire.BlockTypeIODControlReq && b.Type != wire.BlockTypeARRPCBlockReq {
+		if b.Type != wire.BlockTypeIODControlReq && b.Type != wire.BlockTypeIODReleaseReq {
 			continue
 		}
 		c, err := wire.ParseIODControl(b.Data)
@@ -316,7 +316,7 @@ func (d *Device) control(blocks []wire.PNIOBlock) ([]byte, wire.PNIOStatus, func
 	var resp []byte
 	var after func()
 	for _, b := range blocks {
-		if b.Type != wire.BlockTypeIODControlReq && b.Type != wire.BlockTypeARRPCBlockReq {
+		if b.Type != wire.BlockTypeIODControlReq && b.Type != wire.BlockTypeIODReleaseReq {
 			continue
 		}
 		c, err := wire.ParseIODControl(b.Data)
