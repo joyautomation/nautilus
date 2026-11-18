@@ -231,6 +231,10 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string) int {
 	} else {
 		id = cleanID(id)
 	}
+	if err := checkReleaseID(id); err != nil {
+		fmt.Fprintln(os.Stderr, "naut deploy:", err)
+		return 2
+	}
 	f, err := os.Open(ctl)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
@@ -257,6 +261,18 @@ func releaseID(name, rev, sum string) string {
 		id += "-" + cleanID(rev)
 	}
 	return id + "-" + sum[:8]
+}
+
+// checkReleaseID refuses an id that is empty (-id "..." cleans to nothing)
+// or that would collide with the other files deploy puts in incoming/.
+func checkReleaseID(id string) error {
+	switch {
+	case id == "":
+		return errors.New("-id: empty once cleaned to letters, digits and . _ + -")
+	case id == "nautilus.service", id == "restore.tgz", strings.HasSuffix(id, ".part"):
+		return fmt.Errorf("-id %s: that name is reserved", id)
+	}
+	return nil
 }
 
 // cleanID keeps an id to characters that need no quoting in a remote shell

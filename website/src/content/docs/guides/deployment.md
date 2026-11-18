@@ -132,8 +132,11 @@ system's, so `~/.ssh/config`, keys and the agent work as usual, and
   downloads its own release for that architecture and checks it against
   the release's `checksums.txt`. A box like the machine it runs on uses
   naut itself. `-runtime vX.Y.Z` or `-runtime <naut>` overrides it.
-  Builds are reproducible, so the same project on the same naut version
-  is the same controller, whether a person deploys it or CD does.
+  Builds are reproducible: the same project on the same naut release
+  binary is the same controller, whether a person deploys it or CD does.
+  A naut from `go install` is a different binary from the release, so for
+  a box like its own machine it builds a different controller. Pass
+  `-runtime vX.Y.Z` to match CD.
 - **Releases.** Each release is
   `/opt/nautilus/releases/<project>-<git describe>-<sha256:8>`, for
   example `plant-v1.4.0-3f2a91bc`. `current` and `previous` link to two
@@ -143,10 +146,16 @@ system's, so `~/.ssh/config`, keys and the agent work as usual, and
   release that will not start, one that exits within 3 s, and, under
   `Type=notify`, one whose first scan never finishes. The last waits for
   the 60 s start timeout. In each case `update` puts both links back,
-  restarts the release before it, and exits 3.
+  puts back the retained values the failed release may have saved over,
+  restarts the release before it, and exits 3. An `install` that does not
+  start leaves nothing installed, so it can simply run again. Updating to
+  the release that is already current is a no-op while it runs, and
+  starts it if it is down. A retried CD job therefore cannot pass while
+  the controller is stopped.
 - **Retained values stay where they are.** They live in
   `/var/lib/nautilus`, outside every release, so update and rollback keep
-  them. A copy is taken before each update. `restore` stops the controller
+  them. A copy is taken before each update, with the controller stopped,
+  and is what a rolled-back update puts back. `restore` stops the controller
   first, because it saves every 2 s and once more on its way out.
 - **The unit.** `Type=notify` with `WatchdogSec=10s` and the start limit
   above. It runs as a dynamic user holding only `CAP_SYS_NICE` (for
@@ -187,8 +196,12 @@ jobs:
         run: |
           case $(uname -m) in aarch64) a=arm64 ;; *) a=amd64 ;; esac
           v=$NAUT_VERSION
-          curl -fsSL -o "$RUNNER_TEMP/naut.tar.gz" "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_$a.tar.gz"
-          tar xzf "$RUNNER_TEMP/naut.tar.gz" -C "$RUNNER_TEMP" naut
+          f=nautilus_${v#v}_linux_$a.tar.gz
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/joyautomation/nautilus/releases/download/$v/$f"
+          curl -fsSLO "https://github.com/joyautomation/nautilus/releases/download/$v/checksums.txt"
+          grep " $f\$" checksums.txt | sha256sum -c -
+          tar xzf "$f" naut
           echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
       - run: naut check . && naut test .
       - name: deploy
@@ -204,7 +217,7 @@ jobs:
 ```
 
 A person deploying by hand from a clean checkout of the same tag, with
-the same naut version, gets the same release: the build embeds the
+the same naut release, gets the same release: the build embeds the
 project directory, so an untracked file in it changes the controller. Going back is `naut deploy rollback`
 from either.
 

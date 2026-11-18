@@ -103,14 +103,25 @@ sed -i -e "s/THIS_RELEASE : DINT := 1;/THIS_RELEASE : DINT := 3;/" \
 	-e 's/^Scans := Scans + 1;$/Scans := Scans + 1;\nFOR i := 1 TO 1000000 DO\n  FOR j := 1 TO 1000000 DO\n    Scans := Scans + 1;\n  END_FOR;\nEND_FOR;/' \
 	-e 's/^VAR CONSTANT$/VAR\n  i, j : DINT;\nEND_VAR\nVAR CONSTANT/' \
 	"$work/r3/main.st"
-# And one that is not a controller at all.
-printf '#!/bin/sh\necho "this release never starts" >&2\nexit 3\n' >"$work/release-broken"
+# And one that is not a controller at all. Before it dies it saves over the
+# retained values (it runs in their directory), as a release that fails
+# after its first save would: a rollback must put them back.
+printf '#!/bin/sh\necho "this release never starts" >&2\necho broken >retain.json\nexit 3\n' >"$work/release-broken"
 chmod +x "$work/release-broken"
 pass "releases 1, 2, a hung one and a broken one"
 
+step "an install that does not start leaves nothing installed"
+installed=yes
+set +e
+dep install "$target" -controller "$work/release-broken"
+rc=$?
+set -e
+[ $rc != 0 ] || fail "install of a broken release exited 0"
+if dep status "$target" >/dev/null 2>&1; then fail "a failed install left a release installed"; fi
+pass "the install failed (exit $rc) and nothing is installed"
+
 step "install release 1"
 t=$(now)
-installed=yes
 dep install "$target" "${build_args[@]}" "$work/r1" || fail "install failed"
 pass "build + install took $(since "$t")"
 A=$(current)
@@ -134,6 +145,12 @@ expect "the setpoint survived the update" SP 42.5
 step "the same release again is a no-op"
 dep update "$target" "${build_args[@]}" "$work/r2"
 links "$B" "$A"
+
+step "the same release again, with the controller down, starts it"
+ssh -S "$sock" "$target" 'if [ "$(id -u)" = 0 ]; then systemctl stop nautilus.service; else sudo -n systemctl stop nautilus.service; fi'
+dep update "$target" "${build_args[@]}" "$work/r2" || fail "redeploying the current release while it was down failed"
+links "$B" "$A"
+expect "release 2 runs again" Release 2
 
 step "roll back"
 t=$(now)
@@ -160,7 +177,7 @@ set -e
 pass "the update failed (exit 3)"
 links "$A" "$B"
 expect "release 1 still runs" Release 1
-expect "the setpoint is untouched" SP 42.5
+expect "the retained setpoint was put back" SP 42.5
 
 if [ "$unit" = Type=notify ]; then
 	step "an update whose first scan hangs rolls itself back (Type=notify)"

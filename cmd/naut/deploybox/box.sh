@@ -5,7 +5,9 @@
 # Messages go to stderr; stdout is reserved for data (a backup's tar).
 set -eu
 # Where releases and retained values live. The defaults are the systemd
-# layout; a caller may set others (deploy.go's deployRoot is ROOT's default).
+# layout (deploy.go's deployRoot is ROOT's default). Setting them is for a
+# mode without systemd (#768): nautilus.service and uninstall -purge keep
+# the systemd paths.
 ROOT=${NAUT_ROOT:-/opt/nautilus}
 STATE=${NAUT_STATE:-/var/lib/nautilus}
 UNIT=nautilus.service
@@ -93,11 +95,30 @@ prune() { # sh has no locals: names of its own, so the caller's cur and prev sta
 	done
 }
 
-snapshot() { # a copy of the retained values before an update, newest 10 kept
+# snapshot <release>: a copy of the retained values before an update,
+# newest 10 kept. snap names it, empty when there were none. Taken with the
+# controller stopped, after its last save on the way out.
+snapshot() {
+	snap=
 	[ -f "$STATE/retain.json" ] || return 0
 	mkdir -p "$STATE/backups"
-	cp "$STATE/retain.json" "$STATE/backups/retain-$(date +%Y%m%dT%H%M%S)-$1.json"
+	snap=$STATE/backups/retain-$(date +%Y%m%dT%H%M%S)-$1.json
+	cp "$STATE/retain.json" "$snap"
 	ls -1t "$STATE/backups"/retain-*.json | tail -n +11 | while read -r f; do rm -f "$f"; done
+}
+
+# unsnapshot: put the retained values back as snapshot found them. A
+# release that failed may have saved over them before it died; it is
+# stopped first, since systemd keeps restarting it.
+unsnapshot() {
+	systemctl stop "$UNIT" 2>/dev/null || true
+	rm -f "$STATE/retain.json.tmp"
+	if [ -n "$snap" ]; then
+		cp "$snap" "$STATE/retain.json"
+		chown "$(stat -c %u:%g "$STATE/")" "$STATE/retain.json"
+	else
+		rm -f "$STATE/retain.json"
+	fi
 }
 
 cmd=$1
@@ -108,6 +129,7 @@ install)
 	[ -z "$(target current)" ] || fail "already installed (current is $(target current)); use update"
 	command -v systemctl >/dev/null || fail "no systemctl: this box does not run systemd"
 	place "$id"
+	snapshot install # retained values kept from an earlier install, if any
 	setlink current "$id"
 	writeunit
 	sync
@@ -116,7 +138,12 @@ install)
 		say "installed $id; nautilus.service is running"
 	else
 		why
-		fail "$id did not start"
+		# Leave nothing installed, so install can simply run again, and
+		# the retained values as they were.
+		unsnapshot
+		systemctl disable -q "$UNIT" 2>/dev/null || true
+		rm -f "$ROOT/current"
+		fail "$id did not start; nothing is installed (the release stays under releases/)"
 	fi
 	;;
 update)
@@ -126,10 +153,29 @@ update)
 	[ -n "$cur" ] || fail "nothing installed; use install"
 	if [ "$id" = "$cur" ]; then
 		rm -f "$ROOT/incoming/$id"
-		say "$id is already current"
-		exit 0
+		if systemctl is-active -q "$UNIT"; then
+			say "$id is already current and running"
+			exit 0
+		fi
+		# A retried deploy must not pass while the controller is down.
+		say "$id is already current but not running; starting it"
+		if restart; then
+			say "started $id"
+			exit 0
+		fi
+		why
+		[ -n "$prev" ] || fail "$id did not start, and there is no previous release to go back to"
+		say "$id did not start; going back to $prev"
+		setlink current "$prev"
+		setlink previous "$id"
+		writeunit
+		sync
+		restart || { why; fail "$prev did not start either"; }
+		say "rolled back to $prev"
+		exit 3
 	fi
 	place "$id"
+	systemctl stop "$UNIT"
 	snapshot "$cur"
 	setlink previous "$cur"
 	setlink current "$id"
@@ -141,7 +187,8 @@ update)
 		exit 0
 	fi
 	why
-	say "$id did not start; going back to $cur"
+	say "$id did not start; going back to $cur, with the retained values as they were"
+	unsnapshot
 	setlink current "$cur"
 	if [ -n "$prev" ]; then setlink previous "$prev"; else rm -f "$ROOT/previous"; fi
 	writeunit

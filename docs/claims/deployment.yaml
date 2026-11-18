@@ -169,11 +169,16 @@ claims:
       - go ./cmd/naut TestDeployDevBuildNeedsARuntimeForAnotherArch
       - go ./cmd/naut TestReleaseID
       - go ./cmd/naut TestDeployBoxDoesNotMatchItself
+      - go ./cmd/naut TestDeployRootMatchesBox
+      - go ./cmd/naut TestDeployRefusesReservedIDs
+      - go ./cmd/naut TestDeployRefusesUnquotableArgs
     partial: true
     note: >-
       The tests use a stand-in ssh and release server. The box's half
-      (links, rollback on a failed or hung start, retained values kept,
-      backup and restore, the no-op redeploy) is proven by
+      (links, rollback on a failed or hung start with the retained values
+      put back, a failed install leaving nothing installed, backup and
+      restore, the redeploy that is a no-op while running and starts the
+      controller while down) is proven by
       tools/deploy/check.sh, run by hand against an Ubuntu 24.04 systemd
       container as a sudo user, 2026-11-17, under Type=simple and
       Type=notify; not yet on ARM64 hardware. The CD workflow has not run

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -258,5 +259,44 @@ func TestDeployBoxDoesNotMatchItself(t *testing.T) {
 func TestDeployRootMatchesBox(t *testing.T) {
 	if !strings.Contains(deployBoxSh, "ROOT=${NAUT_ROOT:-"+deployRoot+"}\n") {
 		t.Errorf("box.sh's default ROOT is not deployRoot (%s)", deployRoot)
+	}
+}
+
+// An -id that cleans to nothing, or that names one of the other files
+// deploy uploads, is refused before anything reaches the box.
+func TestDeployRefusesReservedIDs(t *testing.T) {
+	log := fakeSSH(t, "x86_64", 0)
+	ctl := filepath.Join(t.TempDir(), "ctl")
+	os.WriteFile(ctl, []byte("x"), 0o755)
+	for _, id := range []string{"...", "nautilus.service", "restore.tgz", "plant.part"} {
+		if code := runDeploy([]string{"update", "-controller", ctl, "-id", id, "root@ipc"}); code != 2 {
+			t.Errorf("-id %q: exit %d, want 2", id, code)
+		}
+	}
+	if calls := sshCalls(t, log); len(calls) != 0 {
+		t.Errorf("nothing should reach the box, got %+v", calls)
+	}
+}
+
+// root and upload refuse an argument that would need quoting in the
+// remote shell, without calling ssh.
+func TestDeployRefusesUnquotableArgs(t *testing.T) {
+	log := fakeSSH(t, "x86_64", 0)
+	b, err := newSSHBox("root@ipc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	if code := b.root(io.Discard, "update", "a b"); code != 2 {
+		t.Errorf("root with a space: exit %d, want 2", code)
+	}
+	if code := b.root(io.Discard, "update", ""); code != 2 {
+		t.Errorf("root with an empty arg: exit %d, want 2", code)
+	}
+	if code := b.upload(strings.NewReader("x"), "x;reboot"); code != 2 {
+		t.Errorf("upload with a ;: exit %d, want 2", code)
+	}
+	if calls := sshCalls(t, log); len(calls) != 0 {
+		t.Errorf("nothing should reach the box, got %+v", calls)
 	}
 }
