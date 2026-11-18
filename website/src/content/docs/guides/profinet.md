@@ -157,7 +157,8 @@ measured yet**.
 
 ## What it does not do yet
 
-- A measured, bench-proven redundant hand-over (see above).
+- Run with `redundancy:`: refused until the floating station address can
+  be named and checked (see above); the hand-over is not measured yet.
 - Be a PROFINET **controller** that drives devices. That comes next.
 - IRT, MRP, system redundancy, PROFIsafe, more than one AR, alarms raised
   to the PLC, strings or arrays.
