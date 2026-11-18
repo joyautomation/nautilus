@@ -83,3 +83,17 @@ export function tokenPlan(
   if (origin && approved.includes(origin)) return { token };
   return { token: "", ask: origin || url };
 }
+
+/** The parts of a WorkspaceConfiguration ("nautilus") the rule reads. */
+export interface ConfigView {
+  get(key: string, defaultValue: string): string;
+  inspect(key: string): SettingScopes | undefined;
+}
+
+/** tokenPlan for the nautilus settings in effect: the one place the
+ * nautilus.token setting is read. */
+export function planFromConfig(cfg: ConfigView, approved: readonly string[], target?: string): TokenPlan {
+  const token = cfg.get("token", "");
+  const url = cfg.get("runtimeUrl", "http://localhost:8080");
+  return tokenPlan(token, cfg.inspect("token") ?? {}, url, cfg.inspect("runtimeUrl") ?? {}, approved, target);
+}

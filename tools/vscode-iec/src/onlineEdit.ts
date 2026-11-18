@@ -37,7 +37,7 @@ import {
   splitProgram,
 } from "./programSync";
 import { declaredBlockNames, referencesAnyBlock } from "./composeCli";
-import { apiFetch, apiToken } from "./apiFetch";
+import { apiFetch } from "./apiFetch";
 
 /** One entry in the GET /api/program directory — every program in the
  * resource, source omitted. */
@@ -162,13 +162,11 @@ export class OnlineEdit implements vscode.Disposable {
     return vscode.workspace.getConfiguration("nautilus").get<boolean>("confirmControllerWrites", true);
   }
 
-  /** Headers for a write request: JSON plus the bearer token when the
-   * controller requires one (nautilus.token), so online edits reach a
-   * token-gated controller on the network. */
+  /** Headers for a write request: JSON. apiFetch adds the bearer token
+   * (nautilus.token, by its rule) so online edits reach a token-gated
+   * controller on the network. */
   private writeHeaders(): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const token = apiToken();
-    if (token) headers["Authorization"] = "Bearer " + token;
     return headers;
   }
 

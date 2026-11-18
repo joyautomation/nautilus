@@ -2,7 +2,7 @@ import { test } from "node:test";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { tokenHeaders, tokenPlan, withToken } from "./apiAuth";
+import { ConfigView, planFromConfig, SettingScopes, tokenHeaders, tokenPlan, withToken } from "./apiAuth";
 
 // #819: a controller with a token answers a name it does not trust only
 // when the request carries the token, reads included; and the token must
@@ -67,6 +67,28 @@ test("the token goes only to the configured controller's origin", () => {
   assert.equal(tokenPlan("u-tok", userToken, mine, scopes, [], "http://evil.example/api/state").token, "");
 });
 
+// The binding apiFetch uses: the settings in effect and where they came
+// from, as VS Code reports them.
+function fakeConfig(scopes: Record<string, SettingScopes>): ConfigView {
+  const effective = (s: SettingScopes | undefined) => s?.workspaceFolderValue ?? s?.workspaceValue ?? s?.globalValue ?? s?.defaultValue;
+  return {
+    get: (key, def) => effective(scopes[key]) ?? def,
+    inspect: (key) => scopes[key],
+  };
+}
+
+test("planFromConfig: a repository's runtimeUrl does not get the user's token unasked", () => {
+  const cfg = fakeConfig({
+    token: { defaultValue: "", globalValue: "u-tok" },
+    runtimeUrl: { defaultValue: DEFAULT, workspaceValue: "http://collector.example:9000" },
+  });
+  assert.deepEqual(planFromConfig(cfg, [], "http://collector.example:9000/api/stream"), { token: "", ask: "http://collector.example:9000" });
+  assert.deepEqual(planFromConfig(cfg, ["http://collector.example:9000"], "http://collector.example:9000/api/stream"), { token: "u-tok" });
+  const own = fakeConfig({ token: { defaultValue: "", globalValue: "u-tok" }, runtimeUrl: { defaultValue: DEFAULT, globalValue: "http://plc.lan:8080" } });
+  assert.deepEqual(planFromConfig(own, [], "http://plc.lan:8080/api/state"), { token: "u-tok" });
+  assert.deepEqual(planFromConfig(own, [], "http://other.lan:8080/api/state"), { token: "" });
+});
+
 test("no token, nothing to send or ask", () => {
   assert.deepEqual(tokenPlan("", {}, "http://evil.example", { workspaceValue: "http://evil.example" }, []), { token: "" });
 });
@@ -91,24 +113,32 @@ function sources(dir: string): string[] {
   });
 }
 
-test("no extension source reaches the controller or reads the token around apiFetch", () => {
+test("no extension source reaches the controller or reads the token around the rule", () => {
   const src = path.join(__dirname, "..", "src");
   const bare: string[] = [];
   const tokenReads: string[] = [];
+  const authHeaders: string[] = [];
   for (const file of sources(src)) {
     const rel = path.relative(src, file);
     const lines = fs.readFileSync(file, "utf8").split("\n");
     lines.forEach((l, i) => {
       if (/^\s*(\*|\/\/|\/\*)/.test(l)) return; // a comment line
       const code = l.replace(/\/\/.*$/, "");
+      const at = `${rel}:${i + 1}: ${l.trim()}`;
       // A call of the global fetch; web/engine.ts's own `async fetch(`
       // method definition and `.fetch(` calls are not.
-      if (rel !== "apiFetch.ts" && /(?<![\w.])fetch\(/.test(code) && !/\basync fetch\(/.test(code)) bare.push(`${rel}:${i + 1}: ${l.trim()}`);
-      if (rel !== "apiFetch.ts" && /get<string>\("token"/.test(code)) tokenReads.push(`${rel}:${i + 1}: ${l.trim()}`);
+      if (rel !== "apiFetch.ts" && /(?<![\w.])fetch\(/.test(code) && !/\basync fetch\(/.test(code)) bare.push(at);
+      // Only planFromConfig (apiAuth.ts) reads the setting.
+      if (rel !== "apiAuth.ts" && /\bget(<string>)?\(\s*"token"/.test(code)) tokenReads.push(at);
+      // Only withToken/tokenHeaders and controllerWrite (handed the gated
+      // token) build the header.
+      if (rel !== "apiAuth.ts" && rel !== "forces.ts" && /\bAuthorization\b/.test(code)) authHeaders.push(at);
     });
   }
   assert.deepEqual(bare, [], "call apiFetch (apiFetch.ts), which sends nautilus.token by its rule");
-  assert.deepEqual(tokenReads, [], "read the token with apiToken() (apiFetch.ts), which applies the rule");
+  assert.deepEqual(tokenReads, [], "read the token with apiToken() (apiFetch.ts → planFromConfig), which applies the rule");
+  assert.deepEqual(authHeaders, [], "let apiFetch add the token; a hand-built header bypasses the rule");
   const live = fs.readFileSync(path.join(src, "liveValues.ts"), "utf8");
   assert.match(live, /mod\.get\(url, \{ headers: apiStreamHeaders\(url\.toString\(\)\) \}/, "the /api/stream subscription sends the token");
+  assert.match(live, /return apiToken\(this\.runtimeUrl\(\)\);/, "controllerWrite gets the token for the controller's origin");
 });

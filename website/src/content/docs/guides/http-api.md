@@ -138,9 +138,11 @@ browsers, scripts and the CLI alike. That includes a controller reached
 by its DNS or mDNS name (`epic1.local`), a Kubernetes Service name, and a
 reverse proxy that passes the browser's host through: `tailscale serve`
 keeps the `*.ts.net` name, nginx with `proxy_set_header Host $host` keeps
-its public name. List the name, or send the token. A script, the
-historian (`NAUTILUS_TOKEN` in its environment) and the VS Code extension
-(`nautilus.token`) can send it; a browser loading the dashboard or an HMI
+its public name. List the name, or send the token. A script can send it,
+and so do `naut historian`, `naut pull --host` and the SNMP and Redfish
+agents' `serve --from` (each from `NAUTILUS_TOKEN` in its environment), and
+the VS Code extension (`nautilus.token`, only to `nautilus.runtimeUrl`; see
+its setting); a browser loading the dashboard or an HMI
 screen, and a live stream (`EventSource`), cannot send a header, so a
 screen reached by a name needs that name listed, token or not. A CORS
 preflight (`OPTIONS` with `Access-Control-Request-Method`) carries no

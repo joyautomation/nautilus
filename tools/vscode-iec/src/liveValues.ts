@@ -371,8 +371,6 @@ export class LiveValues implements vscode.Disposable {
   /** POST /api/tags, and say how it went. */
   private async postValue(name: string, value: number | boolean | string, shown: string): Promise<void> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const token = apiToken();
-    if (token) headers["Authorization"] = "Bearer " + token;
     try {
       const res = await apiFetch(this.runtimeUrl() + "/api/tags", {
         method: "POST",
@@ -396,8 +394,10 @@ export class LiveValues implements vscode.Disposable {
     return vscode.workspace.getConfiguration("nautilus").get<boolean>("confirmControllerWrites", true);
   }
 
+  /** The token for controllerWrite (forces, SFC): the gated one, for
+   * the controller's own origin only. */
   private token(): string {
-    return apiToken();
+    return apiToken(this.runtimeUrl());
   }
 
   /** One controller write; reports a refusal or an unreachable controller

@@ -1,9 +1,9 @@
 // fetch() to the controller with nautilus.token attached when the rule in
 // apiAuth.ts allows it. It calls the global fetch at call time, so the
 // playground build's rerouted fetch (web/engine.ts patchFetch) still sees
-// every request. This is the only module that reads nautilus.token.
+// every request. The token is read only through planFromConfig.
 import * as vscode from "vscode";
-import { tokenHeaders, tokenPlan, withToken } from "./apiAuth";
+import { planFromConfig, tokenHeaders, withToken } from "./apiAuth";
 
 const APPROVED_KEY = "nautilus.tokenOrigins";
 let state: vscode.Memento | undefined;
@@ -24,9 +24,11 @@ function approved(): string[] {
  * the token never goes anywhere else. */
 export function apiToken(target?: string): string {
   const cfg = vscode.workspace.getConfiguration("nautilus");
-  const token = cfg.get<string>("token", "");
-  const url = cfg.get<string>("runtimeUrl", "http://localhost:8080");
-  const plan = tokenPlan(token, cfg.inspect<string>("token") ?? {}, url, cfg.inspect<string>("runtimeUrl") ?? {}, approved(), target);
+  const view = {
+    get: (key: string, defaultValue: string) => cfg.get<string>(key, defaultValue),
+    inspect: (key: string) => cfg.inspect<string>(key),
+  };
+  const plan = planFromConfig(view, approved(), target);
   if (plan.ask) void askOnce(plan.ask);
   return plan.token;
 }
