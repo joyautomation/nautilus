@@ -80,6 +80,7 @@ namespace Tiad
             r.Add("GET", "/v1/files/{path...}", GetFile);
             r.Add("DELETE", "/v1/files/{path...}", DeleteFile);
             RegisterTia(r);
+            RegisterDownload(r);
         }
 
         object Health(Call c)

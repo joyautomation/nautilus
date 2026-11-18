@@ -22,6 +22,12 @@ namespace Tiad
         public const string Declined = "declined";
         public const string CompileFailed = "compile_failed";
         public const string OperationFailed = "operation_failed";
+        // NotCompiled refuses a download of a project changed since its
+        // last full compile. Nothing reached TIA.
+        public const string NotCompiled = "not_compiled";
+        // OutcomeUnknown: a download may have loaded the CPU, or not. The
+        // only next step is a compare.
+        public const string OutcomeUnknown = "outcome_unknown";
     }
 
     // TiadException is a failure that becomes an error envelope: its HTTP

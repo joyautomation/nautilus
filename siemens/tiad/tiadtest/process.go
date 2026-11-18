@@ -40,8 +40,18 @@ type Process struct {
 // returns, and calls that are slow or that fail the way TIA fails.
 type Script struct {
 	CompileResult *tiad.CompileResult `json:"compileResult,omitempty"`
-	Delays        []ScriptedCall      `json:"delays,omitempty"`
-	Failures      []ScriptedCall      `json:"failures,omitempty"`
+	Questions     []tiad.Question     `json:"questions,omitempty"`
+	// LoadDespiteCancel makes the fake TIA load even when the agent
+	// cancels: a misbehaving TIA, to prove the agent reports it.
+	LoadDespiteCancel bool `json:"loadDespiteCancel,omitempty"`
+	// DecideCalls is how often the fake calls decide (nil: once, as the
+	// ITia contract says; 0 or 2 break it).
+	DecideCalls *int `json:"decideCalls,omitempty"`
+	// FailAfterDecide makes the fake fail the way TIA fails after decide
+	// answered.
+	FailAfterDecide string         `json:"failAfterDecide,omitempty"`
+	Delays          []ScriptedCall `json:"delays,omitempty"`
+	Failures        []ScriptedCall `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).
@@ -207,6 +217,34 @@ func (p *Process) SetCompileResult(t testing.TB, r tiad.CompileResult) {
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)
+}
+
+// SetQuestions scripts TIA's pre-download checks for every download.
+func (p *Process) SetQuestions(t testing.TB, qs []tiad.Question) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.Questions = qs
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// Loaded lists every download tiad-fake loaded.
+func (p *Process) Loaded(t testing.TB) []Loaded {
+	t.Helper()
+	var out struct {
+		Downloads []struct {
+			Address            string `json:"address"`
+			Hardware, Software bool
+			State              string `json:"state"`
+		} `json:"downloads"`
+	}
+	p.controlInto(t, http.MethodGet, "/fake/downloads", nil, &out)
+	var l []Loaded
+	for _, d := range out.Downloads {
+		l = append(l, Loaded{Address: d.Address, Hardware: d.Hardware, Software: d.Software, State: d.State})
+	}
+	return l
 }
 
 // SetScript replaces tiad-fake's whole script.

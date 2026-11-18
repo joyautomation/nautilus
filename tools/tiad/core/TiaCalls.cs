@@ -45,6 +45,7 @@ namespace Tiad
                         try
                         {
                             Close(s);
+                            sessions.ReleaseCpus(s);
                             Log.Line("closed idle session {0} ({1})", s.Id, s.Project);
                         }
                         catch (Exception e)
@@ -267,6 +268,7 @@ namespace Tiad
                         throw;
                     }
                     s.Station = st;
+                    s.Address = st.Cpu.Address;
                     return h;
                 });
             }
@@ -333,6 +335,7 @@ namespace Tiad
                 sessions.Restore(s);
                 throw;
             }
+            sessions.ReleaseCpus(s);
             return new Obj();
         }
 
@@ -358,6 +361,7 @@ namespace Tiad
                     s.Station = null;
                     List<string> ch = t.ApplyStation(s.Handle, prev, st, sec);
                     s.Station = st;
+                    s.Address = st.Cpu.Address;
                     if (ch.Count == 0) s.Compiled = was;
                     return ch;
                 });

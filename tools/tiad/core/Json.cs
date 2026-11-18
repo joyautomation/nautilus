@@ -186,12 +186,19 @@ namespace Tiad
                     i++;
                     return null;
                 }
+                // A key twice is refused: parsers disagree on which one
+                // wins, and "stopCpu": false, "stopCpu": true must never
+                // mean yes. Keys compare decoded, escapes and all.
+                var keys = new HashSet<string>(StringComparer.Ordinal);
                 while (true)
                 {
                     Ws(s, ref i);
                     if (i >= s.Length || s[i] != '"') return At(i, "want a string key");
-                    string e = Str(s, ref i);
+                    int keyAt = i;
+                    var key = new StringBuilder();
+                    string e = Str(s, ref i, key);
                     if (e != null) return e;
+                    if (!keys.Add(key.ToString())) return At(keyAt, "duplicate key " + Json.Quote(key.ToString()));
                     Ws(s, ref i);
                     if (i >= s.Length || s[i] != ':') return At(i, "want ':'");
                     i++;
@@ -238,7 +245,7 @@ namespace Tiad
                     return At(i, "want ',' or ']'");
                 }
             }
-            if (c == '"') return Str(s, ref i);
+            if (c == '"') return Str(s, ref i, null);
             if (c == '-' || c >= '0' && c <= '9') return Num(s, ref i);
             foreach (string lit in new[] { "true", "false", "null" })
             {
@@ -251,7 +258,8 @@ namespace Tiad
             return At(i, "invalid character");
         }
 
-        static string Str(string s, ref int i)
+        // Str checks a string and, when value is not null, decodes it there.
+        static string Str(string s, ref int i, StringBuilder value)
         {
             i++; // the opening quote
             while (i < s.Length)
@@ -274,11 +282,17 @@ namespace Tiad
                         {
                             if (i + k >= s.Length || Uri.IsHexDigit(s[i + k]) == false) return At(i, "a bad \\u escape");
                         }
+                        if (value != null) value.Append((char)Convert.ToInt32(s.Substring(i + 1, 4), 16));
                         i += 5;
                         continue;
                     }
-                    if ("\"\\/bfnrt".IndexOf(e) < 0) return At(i, "a bad escape");
+                    int x = "\"\\/bfnrt".IndexOf(e);
+                    if (x < 0) return At(i, "a bad escape");
+                    if (value != null) value.Append("\"\\/\b\f\n\r\t"[x]);
+                    i++;
+                    continue;
                 }
+                if (value != null) value.Append(c);
                 i++;
             }
             return "unexpected end of JSON input in a string";

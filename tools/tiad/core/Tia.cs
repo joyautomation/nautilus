@@ -145,6 +145,32 @@ namespace Tiad
         SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune);
 
         CompileResult Compile(object project, bool hardware, bool software);
+
+        // Download loads the project into the CPU at address, never at
+        // any address of the project's own. It calls decide EXACTLY ONCE,
+        // with every pre-download check TIA asks as questions (an empty
+        // list when TIA asks nothing), BEFORE anything is loaded. decide
+        // returns null to cancel, and then nothing may be loaded; or one
+        // Answer per question, in order, to apply exactly as given. A dry
+        // run is a download whose decide always returns null. secrets
+        // carries the protection password a password question needs.
+        DownloadOutcome Download(object project, string address, bool hardware, bool software,
+            Secrets secrets, Func<List<Question>, List<Answer>> decide);
+
+        // Compare compares the project with the CPU at address and fills
+        // differences; it returns whether they are equal.
+        bool Compare(object project, string address, List<Difference> differences);
+
+        // Export writes what o asks for under dir and returns the full
+        // paths it wrote.
+        List<string> Export(object project, string dir, ExportOptions o);
+
+        // Upload loads the CPU at address into the project.
+        void Upload(object project, string address);
+
+        // Save saves the project, or writes a project archive, and returns
+        // its full path.
+        string Save(object project, bool archive);
     }
 
     // TiaThread runs work items one at a time on one STA thread.

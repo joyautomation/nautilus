@@ -15,6 +15,11 @@
 //   GET /fake/calls   {"calls": [{call, thread, sta}]}
 //       every ITia call so far, with the thread it ran on. "start" is
 //       the moment the ITia was made, which is when TIA would start.
+//   GET /fake/downloads {"downloads": [{address, hardware, software, state}]}
+//       every download that loaded the CPU. Secrets are never recorded.
+//
+// PUT /fake/script also takes "questions": [{id, message, detail,
+// objects}], TIA's pre-download checks for every download.
 //
 // It exits when its standard input closes, so a test that dies leaves no
 // process behind.
@@ -84,7 +89,82 @@ namespace Tiad.Fake
         CompileResult compile = new CompileResult();
         Dictionary<string, int> delays = new Dictionary<string, int>(StringComparer.Ordinal);
         Dictionary<string, string> failures = new Dictionary<string, string>(StringComparer.Ordinal);
+        List<Question> questions = new List<Question>();
+        bool loadDespiteCancel;
+        int decideCalls = 1;
+        string failAfterDecide = "";
+
+        // DecideCalls is how many times Download calls decide (1, as the
+        // ITia contract says; 0 or 2 for an ITia that breaks it).
+        public int DecideCalls
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return decideCalls;
+                }
+            }
+        }
+
+        // FailAfterDecide, when set, makes Download fail the way TIA fails
+        // after decide has answered.
+        public string FailAfterDecide
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return failAfterDecide;
+                }
+            }
+        }
+
+        // LoadDespiteCancel makes Download load even when decide says no:
+        // a TIA that ignores the cancel, to prove the agent says so.
+        public bool LoadDespiteCancel
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return loadDespiteCancel;
+                }
+            }
+        }
         readonly List<object> calls = new List<object>();
+        readonly List<object> downloads = new List<object>();
+
+        public List<Question> Questions
+        {
+            get
+            {
+                lock (mu)
+                {
+                    var l = new List<Question>();
+                    foreach (var q in questions) l.Add(q.Copy());
+                    return l;
+                }
+            }
+        }
+
+        public void Loaded(Obj download)
+        {
+            lock (mu)
+            {
+                downloads.Add(download);
+            }
+        }
+
+        public object Downloads(Call c)
+        {
+            var o = new Obj();
+            lock (mu)
+            {
+                o["downloads"] = downloads.ToArray();
+            }
+            return o;
+        }
 
         // Enter records an ITia call, then waits or fails as scripted.
         public void Enter(string call)
@@ -136,12 +216,24 @@ namespace Tiad.Fake
             foreach (var x in r.Children("delays")) d[x.Str("call")] = x.Int("ms");
             var f = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var x in r.Children("failures")) f[x.Str("call")] = x.Str("message");
+            bool despite = r.Bool("loadDespiteCancel");
+            int? calls = r.OptInt("decideCalls");
+            string after = r.Str("failAfterDecide");
+            var qs = new List<Question>();
+            foreach (var x in r.Children("questions"))
+            {
+                qs.Add(new Question { Id = x.Str("id"), Message = x.Str("message"), Detail = x.Str("detail"), Objects = x.Strs("objects") });
+            }
             r.Done();
             lock (mu)
             {
                 compile = res;
                 delays = d;
                 failures = f;
+                questions = qs;
+                loadDespiteCancel = despite;
+                decideCalls = calls.HasValue ? calls.Value : 1;
+                failAfterDecide = after;
             }
             return new Obj();
         }
@@ -159,7 +251,11 @@ namespace Tiad.Fake
 
     sealed class FakeProject
     {
+        public string Full = "";
+        public Station Station;
         public List<Block> Blocks = new List<Block>();
+        // Changed is true until a download loads the project as it is.
+        public bool Changed = true;
     }
 
     // FakeTia is ITia without TIA: it keeps projects in memory and answers
@@ -168,6 +264,8 @@ namespace Tiad.Fake
     {
         readonly Script script;
         readonly HashSet<string> gsd = new HashSet<string>(StringComparer.Ordinal);
+        // loaded is what each CPU holds: the project last downloaded to it.
+        readonly Dictionary<string, FakeProject> loaded = new Dictionary<string, FakeProject>(StringComparer.Ordinal);
 
         public FakeTia(Script script)
         {
@@ -196,13 +294,13 @@ namespace Tiad.Fake
                 throw new TiaException("The project directory " + Path.GetDirectoryName(fullPath) + " is not empty");
             }
             File.WriteAllText(fullPath, "fake TIA project");
-            return new FakeProject();
+            return new FakeProject { Full = fullPath };
         }
 
         public object OpenProject(string fullPath)
         {
             script.Enter("OpenProject");
-            return new FakeProject();
+            return new FakeProject { Full = fullPath };
         }
 
         public void CloseProject(object project)
@@ -213,13 +311,18 @@ namespace Tiad.Fake
         public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets)
         {
             script.Enter("ApplyStation");
-            return StationChanges(previous, next);
+            var p = (FakeProject)project;
+            List<string> changes = StationChanges(previous, next);
+            p.Station = next;
+            if (changes.Count > 0) p.Changed = true;
+            return changes;
         }
 
         public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)
         {
             script.Enter("ImportSoftware");
             var p = (FakeProject)project;
+            p.Changed = true;
             var res = new SoftwareResult();
             var made = new List<Block>();
             foreach (var src in sources)
@@ -260,6 +363,84 @@ namespace Tiad.Fake
         {
             script.Enter("Compile");
             return script.Compile;
+        }
+
+        public DownloadOutcome Download(object project, string address, bool hardware, bool software,
+            Secrets secrets, Func<List<Question>, List<Answer>> decide)
+        {
+            script.Enter("Download");
+            var p = (FakeProject)project;
+            var outcome = new DownloadOutcome { Questions = script.Questions };
+            List<Answer> answers = null;
+            for (int i = 0; i < script.DecideCalls; i++) answers = decide(outcome.Questions);
+            if (script.FailAfterDecide != "") throw new TiaException(script.FailAfterDecide);
+            if (answers == null && !(script.LoadDespiteCancel || script.DecideCalls == 0)) return outcome;
+            // TIA stops the CPU to load it when it asks to; it starts it
+            // again only when start-after is answered yes.
+            outcome.State = "RUN";
+            bool stops = false, starts = false;
+            foreach (var a in answers ?? new List<Answer>())
+            {
+                if (a.Question.Id == QuestionIds.StopCpu && a.Yes) stops = true;
+                if (a.Question.Id == QuestionIds.StartAfter && a.Yes) starts = true;
+            }
+            if (stops && !starts) outcome.State = "STOP";
+            var rec = new Obj();
+            rec["address"] = address;
+            rec["hardware"] = hardware;
+            rec["software"] = software;
+            rec["state"] = outcome.State;
+            script.Loaded(rec);
+            loaded[address] = p;
+            p.Changed = false;
+            outcome.Loaded = true;
+            return outcome;
+        }
+
+        public bool Compare(object project, string address, List<Difference> differences)
+        {
+            script.Enter("Compare");
+            var p = (FakeProject)project;
+            FakeProject there;
+            if (loaded.TryGetValue(address, out there) && there == p && !p.Changed) return true;
+            differences.Add(new Difference { Object = p.Station == null ? "" : p.Station.Cpu.Name, State = "different" });
+            return false;
+        }
+
+        public List<string> Export(object project, string dir, ExportOptions o)
+        {
+            script.Enter("Export");
+            var p = (FakeProject)project;
+            var outp = new List<string>();
+            Action<string, string> put = delegate(string name, string body)
+            {
+                string f = Path.Combine(dir, name);
+                File.WriteAllText(f, body);
+                outp.Add(f);
+            };
+            if (o.Blocks != "")
+            {
+                foreach (var b in p.Blocks) put(b.Name + "." + o.Blocks, "// fake export of " + b.Kind + " \"" + b.Name + "\"\n");
+            }
+            if (o.TagTables) put("tagtables.xml", "<!-- fake tag tables -->\n");
+            if (o.Hardware) put("station.json", Json.Write(p.Station.ToJson()));
+            if (o.Gsdml) put("GSDML-V2.4-fake-" + p.Station.Cpu.Name + ".xml", "<!-- fake I-device GSDML -->\n");
+            return outp;
+        }
+
+        public void Upload(object project, string address)
+        {
+            script.Enter("Upload");
+            ((FakeProject)project).Changed = true;
+        }
+
+        public string Save(object project, bool archive)
+        {
+            script.Enter("Save");
+            var p = (FakeProject)project;
+            string f = archive ? Path.ChangeExtension(p.Full, ".zap21") : p.Full;
+            File.WriteAllText(f, "fake TIA project");
+            return f;
         }
 
         static readonly string[] Heads = { "ORGANIZATION_BLOCK", "FUNCTION_BLOCK", "FUNCTION", "DATA_BLOCK", "TYPE" };
@@ -379,6 +560,7 @@ namespace Tiad.Fake
             router.Add("PUT", "/fake/gates", host.SetGates);
             router.Add("PUT", "/fake/script", script.Set);
             router.Add("GET", "/fake/calls", script.Calls);
+            router.Add("GET", "/fake/downloads", script.Downloads);
 
             var server = new Server(cfg, router);
             server.Start();

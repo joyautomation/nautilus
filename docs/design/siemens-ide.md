@@ -229,13 +229,15 @@ the session is gone.
 | `unauthorized` | 401 | Missing or wrong token. 403: the request carries an `Origin` header (a browser) |
 | `unreachable` | — | Client-side: no reply (agent down, or the context was cancelled; the cause unwraps). After a download, the outcome is **unknown**, so compare before retrying |
 | `not_found` | 404 | No such session or file |
-| `busy` | 409 | The project has a writer |
+| `busy` | 409 | The project has a writer, the session has a call in flight, or the CPU belongs to another session's project |
 | `gate` | 412 | A probe gate failed (TIA, group, licence). The message names it |
 | `target_refused` | 403 | The CPU address is not in `TIAD_TARGETS` |
 | `decision_required` | 409 | A download question has no answer in the request. `data.questions` lists them |
 | `declined` | 409 | A download question was answered no. `data.questions` lists them, and nothing is loaded |
 | `compile_failed` | 422 | Compile errors. `data` is the compile result |
-| `operation_failed` | 500 | Openness threw (the message carries its text), or a download was asked of a project not fully compiled since its last change |
+| `not_compiled` | 409 | A download of a project not fully compiled since its last change. Nothing reached TIA |
+| `operation_failed` | 500 | Openness threw (the message carries its text) |
+| `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once the download was decided, or TIA's side broke the decide contract. Not fatal: compare on the same session before anything else. The client's `OutcomeUnknown` covers this and `unreachable` |
 
 ### 3.3 The station spec
 
@@ -368,7 +370,24 @@ not in a separate pass *(verify in S2)*. If so, tiad's dry run is a
 download whose callback records every check and then cancels it, and S2
 must show that a cancelled download loads nothing. Until S2, the dry run
 and the question IDs are the contract tiad aims for, not a measured
-behaviour.
+behaviour. So, until then:
+
+- **A dry run must be announced too** (`announced: true`): it reaches
+  the CPU.
+- **Its response says `provisional: true`.**
+- **TIA's side calls decide exactly once, before anything loads, even
+  when TIA asks nothing**, so a dry run without questions still cancels.
+  decide returns one resolved answer per question (or cancels), and TIA's
+  side applies those answers as given; it never derives one itself.
+- **Anything that leaves the CPU in doubt answers `outcome_unknown`**:
+  TIA failing once the download was decided (a cancel included, since
+  "a cancel loads nothing" is what S2 must prove), a load tiad did not
+  approve, decide called zero times or twice. Never success, never a
+  plain refusal. The session stays open for the compare.
+- **Every download is audited**: one log line with the address, the
+  question IDs asked (never TIA's text), the decisions (request-supplied
+  names quoted), whether a protection password was set (never its
+  value) and the outcome, refusals included.
 
 - **A dry run** (provisional, see above) runs TIA's pre-download checks
   and returns them as `questions`. The `id` is one of:
@@ -392,7 +411,15 @@ behaviour.
   CPU that still sits at another address, and changing a CPU's address
   through a download. On the bench the address is already set.
 - **The project must be fully compiled** (hardware and software) since its
-  last change.
+  last change (`not_compiled` otherwise). A change that fails part-way
+  counts as a change.
+- **One project per CPU.** The first download from a session, a dry run
+  included, claims the CPU for that session until it is closed (a broken
+  session keeps the claim). Another session's download to that CPU is
+  `busy`.
+- **An upload replaces the project with the CPU's program**: the
+  project no longer matches its spec, so a download needs a spec applied
+  and a compile again. Compare and export still know the CPU.
 - **An answer of no** to `stop-cpu`, `overwrite` or `certificate` fails
   the call with `declined`, and nothing is loaded. `start-after: false` is
   a decision, not a refusal: load and stay in STOP.

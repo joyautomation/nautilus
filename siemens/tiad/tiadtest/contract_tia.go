@@ -445,6 +445,8 @@ func contractStrictJSON(t *testing.T, start Starter) {
 		"a raw tab in a string":  {`"pw"`, "\"p\tw\""},
 		"a bad escape":           {`"pw"`, `"p\qw"`},
 		"a single-quoted string": {`"pw"`, `'pw'`},
+		"a key twice":            {`"slot":2`, `"slot":1,"slot":2`},
+		"a key twice, escaped":   {`"slot":2`, `"slot":1,"sl\u006ft":2`},
 	}
 	for name, sub := range syntax {
 		if !strings.Contains(string(valid), sub[0]) {

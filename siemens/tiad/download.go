@@ -51,8 +51,9 @@ type DownloadRequest struct {
 	DryRun    bool      `json:"dryRun"`
 	Decisions Decisions `json:"decisions"`
 	// Announced records that the people sharing the CPU were told first.
-	// It must be true for a real download. It is a convention, not a
-	// safety.
+	// It must be true for every download, a dry run included: a dry run
+	// reaches the CPU, and that its cancel loads nothing is provisional
+	// until S2. It is a convention, not a safety.
 	Announced bool     `json:"announced"`
 	Secrets   *Secrets `json:"secrets,omitempty"`
 }
@@ -60,10 +61,13 @@ type DownloadRequest struct {
 // DownloadResult is a download's outcome. After a dry run, Questions are
 // what a real download must answer.
 type DownloadResult struct {
-	DryRun     bool       `json:"dryRun"`
-	Downloaded bool       `json:"downloaded"`
-	Questions  []Question `json:"questions"`
-	State      string     `json:"state,omitempty"` // "RUN" | "STOP" | "" (unknown)
+	DryRun     bool `json:"dryRun"`
+	Downloaded bool `json:"downloaded"`
+	// Provisional marks a dry run: that a cancelled download loads
+	// nothing is unproven until S2 (siemens-ide.md §3.5).
+	Provisional bool       `json:"provisional,omitempty"`
+	Questions   []Question `json:"questions"`
+	State       string     `json:"state,omitempty"` // "RUN" | "STOP" | "" (unknown)
 }
 
 // Validate checks the request's own shape.
@@ -74,8 +78,8 @@ func (r DownloadRequest) Validate() error {
 	if !r.Hardware && !r.Software {
 		return fmt.Errorf("download: neither hardware nor software selected")
 	}
-	if !r.DryRun && !r.Announced {
-		return fmt.Errorf("download: a real download must be announced first (announced: true)")
+	if !r.Announced {
+		return fmt.Errorf("download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing")
 	}
 	return nil
 }
