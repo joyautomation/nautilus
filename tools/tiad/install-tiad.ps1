@@ -38,6 +38,8 @@
 [CmdletBinding()]
 param(
     [int]    $Port       = 8190,
+    # One IPv4 address: loopback, or this machine's address on a trusted
+    # network such as a tailnet. Never 0.0.0.0.
     [string] $Listen     = '127.0.0.1',
     [string] $InstallDir = 'C:\Program Files\tiad',
     [string] $WorkDir    = 'C:\tiad-work',
@@ -64,6 +66,81 @@ $AllowListKey = 'SOFTWARE\Siemens\Automation\Openness\AllowList'
 $ExeName      = 'tiad.exe'
 $CfgDir       = Join-Path $env:ProgramData 'tiad'
 $TokenFile    = Join-Path $CfgDir "$TaskName.token"
+$FwGroup      = "tiad $TaskName"
+
+# The agent runs elevated, so everything it runs, reads or works in is
+# writable by Administrators and SYSTEM only: otherwise any local user could
+# swap a file under it. Accounts go by SID, never by (localized) name.
+$SidAdmins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+$SidSystem = New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'
+$SidUser   = [Security.Principal.WindowsIdentity]::GetCurrent().User
+
+function OwnerSid ($path) { (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]) }
+
+function IsReparse ($path) {
+    ([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -ne 0
+}
+
+# Trusted owners: Administrators, SYSTEM, and the account running this (an
+# elevated administrator, which owns what its earlier installs made).
+function Trusted ($sid) { $sid -eq $SidAdmins -or $sid -eq $SidSystem -or $sid -eq $SidUser }
+
+# Lock makes Administrators the owner, and Administrators and SYSTEM the
+# only entries, with inheritance from the parent off.
+function Lock ($path, [switch] $Dir) {
+    if ($Dir) {
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    } else {
+        $acl = New-Object Security.AccessControl.FileSecurity
+        $inherit = [Security.AccessControl.InheritanceFlags]::None
+    }
+    $acl.SetOwner($SidAdmins)
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in $SidAdmins, $SidSystem) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', $inherit, 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $path -AclObject $acl
+}
+
+# Assert-Tree refuses a tree that holds a link or junction, or anything
+# another account owns. It never follows a link.
+function Assert-Tree ($root) {
+    $todo = New-Object System.Collections.Stack
+    $todo.Push($root)
+    while ($todo.Count -gt 0) {
+        $d = $todo.Pop()
+        foreach ($e in [IO.Directory]::EnumerateFileSystemEntries($d)) {
+            if (IsReparse $e) { Die "$e is a link or junction: remove it, then re-run" }
+            if (-not (Trusted (OwnerSid $e))) { Die "$e is owned by another account: remove it, then re-run" }
+            if ([IO.Directory]::Exists($e)) { $todo.Push($e) }
+        }
+    }
+}
+
+# Secure-Dir makes path a directory that only Administrators and SYSTEM can
+# change. It refuses one that is a link or that another account made, and
+# checks what is inside once nobody else can add to it.
+function Secure-Dir ($path) {
+    if (Test-Path -LiteralPath $path) {
+        if (IsReparse $path) { Die "$path is a link or junction: remove it, then re-run" }
+        if (-not [IO.Directory]::Exists($path)) { Die "$path is not a directory" }
+        if (-not (Trusted (OwnerSid $path))) { Die "$path was made by another account: remove it, then re-run" }
+    } else {
+        [void][IO.Directory]::CreateDirectory($path)
+    }
+    Lock $path -Dir
+    Assert-Tree $path
+}
+
+# Remove-Firewall removes every firewall rule of this install, whatever
+# port it was made for (and, for the default task, 0.1.0's rule names).
+function Remove-Firewall {
+    $rules = @(Get-NetFirewallRule -Group $FwGroup -EA SilentlyContinue)
+    if ($TaskName -eq 'tiad') { $rules += @(Get-NetFirewallRule -DisplayName 'tiad (*)' -EA SilentlyContinue) }
+    foreach ($r in $rules) { Remove-NetFirewallRule -Name $r.Name }
+    return $rules.Count
+}
 
 # HKLM in the 64-bit view, where TIA writes and reads its keys, whichever
 # PowerShell runs this.
@@ -132,10 +209,8 @@ if ($Uninstall) {
     }
     Remove-AllowEntry
     Ok "Openness allowlist entry removed"
-    if (Get-NetFirewallRule -DisplayName "tiad ($Port)" -EA SilentlyContinue) {
-        Remove-NetFirewallRule -DisplayName "tiad ($Port)"
-        Ok "firewall rule removed"
-    }
+    $n = Remove-Firewall
+    if ($n -gt 0) { Ok "$n firewall rule(s) removed" }
     if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force; Ok "$InstallDir removed" }
     # The token grants downloads to a CPU: never leave it behind.
     if (Test-Path $TokenFile) { Remove-Item $TokenFile -Force; Ok "token removed" }
@@ -148,6 +223,18 @@ Assert-Admin
 
 # ------------------------------------------------------------ 1. preflight
 Write-Host "1. Preflight"
+$ip = $null
+if (-not [Net.IPAddress]::TryParse($Listen, [ref] $ip) -or $ip.AddressFamily -ne 'InterNetwork' -or $ip.ToString() -ne $Listen) {
+    Die "-Listen must be one IPv4 address (127.0.0.1, or this machine's address on a trusted network such as a tailnet), not '$Listen'"
+}
+if ($ip.Equals([Net.IPAddress]::Any)) {
+    Die "-Listen 0.0.0.0 listens on every interface: give the one address to listen on"
+}
+$loopback = [Net.IPAddress]::IsLoopback($ip)
+if (-not $loopback -and -not (Get-NetIPAddress -AddressFamily IPv4 -IPAddress $Listen -EA SilentlyContinue)) {
+    Die "-Listen $Listen is not an address of this machine"
+}
+Ok "listening on $Listen"
 $v = RegValue $OpennessKey 'PortalVersion'
 if ($v -ne 'V21') { Die "TIA Portal V21 with Openness is not registered (HKLM\$OpennessKey PortalVersion: '$v')" }
 $base = RegValue $PublicApiKey 'Siemens.Engineering.Base'
@@ -178,7 +265,8 @@ if ($member) {
 # ---------------------------------------------------------------- 2. build
 Write-Host "`n2. Build"
 if (-not (Stop-Tiad)) { Warn "port $Port is still held after stopping the old agent; continuing" }
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+# The task runs what is here elevated: lock it before building into it.
+Secure-Dir $InstallDir
 $common = @('/nologo', '/langversion:5', '/warnaserror+', '/r:System.Web.Extensions.dll', '/r:System.Xml.dll')
 $core = Join-Path $InstallDir 'tiad-core.dll'
 $exe  = Join-Path $InstallDir $ExeName
@@ -208,27 +296,34 @@ Ok "HKLM\$AllowListKey\$ExeName\$TaskName names this build"
 
 # ---------------------------------------------------------------- 4. token
 Write-Host "`n4. Token"
-New-Item -ItemType Directory -Force -Path $CfgDir | Out-Null
-if (Test-Path $TokenFile) {
+# The directory is locked before the token is written into it, so the token
+# is never readable by anyone else, not even for a moment.
+Secure-Dir $CfgDir
+if (Test-Path -LiteralPath $TokenFile) {
+    # A token this script wrote is owned by Administrators. Any other owner
+    # means someone else put it there, perhaps knowing it: never reuse it.
+    $o = OwnerSid $TokenFile
+    if ((IsReparse $TokenFile) -or -not ($o -eq $SidAdmins -or $o -eq $SidSystem)) {
+        Remove-Item -LiteralPath $TokenFile -Force
+        Warn "replaced a token file that Administrators did not own"
+    }
+}
+if (Test-Path -LiteralPath $TokenFile) {
     Ok "reusing the existing token"
 } else {
     $b = New-Object byte[] 32
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
-    Set-Content -Path $TokenFile -Value (($b | ForEach-Object { $_.ToString('x2') }) -join '') -NoNewline -Encoding ascii
+    [IO.File]::WriteAllText($TokenFile, (($b | ForEach-Object { $_.ToString('x2') }) -join ''), [Text.Encoding]::ASCII)
     Ok "generated a new token"
 }
-# Administrators, and the account the task runs as: a bearer token for an
-# agent that can download to a CPU.
-$acl = Get-Acl $TokenFile
-$acl.SetAccessRuleProtection($true, $false)
-$acl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', 'Allow')))
-$acl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($user, 'Read', 'Allow')))
-Set-Acl $TokenFile $acl
-Ok "token at $TokenFile (administrators and $user)"
+Lock $TokenFile
+Ok "token at $TokenFile (Administrators and SYSTEM only; the agent runs elevated)"
 
 # --------------------------------------------------------------- 5. runner
 Write-Host "`n5. Scheduled task"
-New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+# The elevated agent writes projects here: nobody else may plant a file or
+# a junction in it.
+Secure-Dir $WorkDir
 $bat = Join-Path $InstallDir 'run-tiad.bat'
 $noTiaLine = if ($NoTia) { 'set TIAD_NO_TIA=1' } else { 'set TIAD_NO_TIA=' }
 @"
@@ -260,30 +355,36 @@ Ok "task '$TaskName' registered (interactive, at logon, as $user; $mode)"
 
 # ------------------------------------------------------------- 6. firewall
 Write-Host "`n6. Firewall"
-if ($Listen -eq '127.0.0.1') {
+# Every rule of this install goes first, whatever port it was made for, so a
+# reinstall on loopback leaves nothing open.
+$n = Remove-Firewall
+if ($n -gt 0) { Say "removed $n earlier firewall rule(s)" }
+if ($loopback) {
     Say "loopback only: no firewall rule"
 } else {
-    if (Get-NetFirewallRule -DisplayName "tiad ($Port)" -EA SilentlyContinue) { Remove-NetFirewallRule -DisplayName "tiad ($Port)" }
-    New-NetFirewallRule -DisplayName "tiad ($Port)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port -Profile Private,Domain | Out-Null
-    Warn "opened TCP $Port (Private, Domain). This agent can DOWNLOAD to a CPU: keep it off untrusted networks"
+    New-NetFirewallRule -DisplayName "tiad $TaskName ($Port)" -Group $FwGroup -Direction Inbound -Action Allow -Protocol TCP `
+        -LocalAddress $Listen -LocalPort $Port -Profile Private,Domain | Out-Null
+    Warn "opened TCP ${Listen}:$Port (Private, Domain). This agent can DOWNLOAD to a CPU: keep it off untrusted networks"
 }
 
 # --------------------------------------------------------------- 7. verify
 Write-Host "`n7. Verify (health and probe only: neither starts TIA)"
 Start-ScheduledTask -TaskName $TaskName
-$hdr = @{ Authorization = "Bearer $((Get-Content $TokenFile -Raw).Trim())" }
+$hdr = @{ Authorization = "Bearer $((Get-Content -LiteralPath $TokenFile -Raw).Trim())" }
+# The address it listens on: on a tailnet address, 127.0.0.1 never answers.
+$agent = "http://${Listen}:$Port"
 $up = $false
 foreach ($i in 1..20) {
     Start-Sleep -Seconds 1
-    try { $h = Invoke-RestMethod "http://127.0.0.1:$Port/v1/health" -Headers $hdr -TimeoutSec 5; $up = $true; break } catch { }
+    try { $h = Invoke-RestMethod "$agent/v1/health" -Headers $hdr -TimeoutSec 5; $up = $true; break } catch { }
 }
 if (-not $up) {
-    Warn "tiad did not answer on port $Port. Is someone logged in at the console? An interactive task starts only then."
+    Warn "tiad did not answer on $agent. Is someone logged in at the console? An interactive task starts only then."
     Say  "logs: $CfgDir\$TaskName.out.log and $CfgDir\$TaskName.err.log"
     exit 1
 }
-Ok "tiad $($h.data.version) answering on port $Port (TIA $($h.data.tia), Openness $($h.data.openness))"
-$probe = Invoke-RestMethod "http://127.0.0.1:$Port/v1/probe" -Headers $hdr -TimeoutSec 30
+Ok "tiad $($h.data.version) answering on $agent (TIA $($h.data.tia), Openness $($h.data.openness))"
+$probe = Invoke-RestMethod "$agent/v1/probe" -Headers $hdr -TimeoutSec 30
 foreach ($g in $probe.data.gates) {
     $line = "$($g.name) [$($g.state)]: $($g.detail)"
     if ($g.state -eq 'ok') { Ok $line } else { Warn $line; if ($g.remedy) { Say "         $($g.remedy)" } }
@@ -292,6 +393,6 @@ if ($probe.data.usable) { Ok "usable" } else { Warn "not usable yet: see the gat
 
 Write-Host ""
 Write-Host "Done. Point naut at it:" -ForegroundColor Green
-Write-Host "    NAUTILUS_TIAD_URL=http://<this machine>:$Port"
+Write-Host "    NAUTILUS_TIAD_URL=$agent"
 Write-Host "    NAUTILUS_TIAD_TOKEN_FILE=<a copy of $TokenFile>"
 Write-Host ""

@@ -33,6 +33,7 @@ with TIA's text, and the thread carries on.
 | `host/` | `tiad.exe`: the core with the Windows host. It reads the machine gates and loads `tiad.Openness.dll` from beside itself on the first TIA call |
 | `fake/` | `tiad-fake.exe`: the core with a scripted host instead of TIA, for tests only. `install-tiad.ps1` never builds it |
 | `install-tiad.ps1` | Builds `tiad.exe` on the TIA machine with its stock `csc` and installs it (below) |
+| `check-install.ps1` | Checks an install's security properties on the TIA machine (below) |
 | `build-fake.sh` | Builds `out/tiad-core.dll` and `out/tiad-fake.exe` with Mono's `mcs`, and `out/tiad.exe` only to hold the host to C# 5 |
 
 ## C# 5, no project file
@@ -92,11 +93,32 @@ Copy `tools/tiad` to the machine and run, in an elevated Windows PowerShell:
 It checks for TIA V21 and the compiler, adds the account to the Openness
 group, builds `tiad-core.dll` and `tiad.exe` into `C:\Program Files\tiad`,
 writes the allowlist entry for that build, and writes the token to
-`%ProgramData%\tiad\tiad.token` (Administrators and the account only;
-the agent reads it through `TIAD_TOKEN_FILE`). It then registers an
-interactive scheduled task at logon (someone must be logged in at the
-console) and checks the agent with health and probe, neither of which
-starts TIA. Logs go to `%ProgramData%\tiad`.
+`%ProgramData%\tiad\tiad.token` (the agent reads it through
+`TIAD_TOKEN_FILE`). It then registers an interactive scheduled task at
+logon (someone must be logged in at the console) and checks the agent, on
+the address it listens on, with health and probe; neither starts TIA. Logs
+go to `%ProgramData%\tiad`.
+
+**The agent runs elevated**, so nothing under it may be writable by another
+local account:
+- The install dir, `%ProgramData%\tiad`, the token and the work dir are
+  owned by Administrators, with Administrators and SYSTEM the only entries
+  and inheritance off.
+- The directory is locked before the token is written into it.
+- A token file Administrators do not own is replaced, never reused.
+- A directory another account made, or one holding a link, a junction or
+  another account's file, makes the install refuse.
+
+`-Listen` takes one IPv4 address: loopback (the default), or this
+machine's own address on a trusted network such as a tailnet. Never
+`0.0.0.0`; the agent refuses that in `TIAD_ADDR` too. A non-loopback
+address gets one firewall rule for that address and port. Every reinstall
+and uninstall removes all of that install's rules first, whatever port they
+were for.
+
+`check-install.ps1` checks all of this on a TIA machine. It reinstalls with
+`-NoTia` several times (TIA never starts) and exits with the number of
+failed checks.
 
 A request with an `Origin` header (a browser) is refused with 403, whatever
 its token. A JSON body must be `application/json` and a file

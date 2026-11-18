@@ -95,6 +95,13 @@ namespace Tiad
             {
                 throw new ConfigException("TIAD_ADDR must be http://host:port (e.g. " + DefaultAddr + ")");
             }
+            // One IPv4 address: loopback, or the machine's address on a
+            // trusted network (a tailnet). Never 0.0.0.0, which is every
+            // interface, and never a name, which could resolve to anything.
+            if (!Ip.IsIPv4(u.Host) || u.Host == "0.0.0.0")
+            {
+                throw new ConfigException("TIAD_ADDR must name one IPv4 address to listen on (e.g. " + DefaultAddr + "), not " + Json.Quote(u.Host));
+            }
             c.Host = u.Host;
             c.Port = u.Port;
             c.Loopback = u.IsLoopback;
