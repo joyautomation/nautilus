@@ -166,8 +166,9 @@ an unchanged value is not a command; a command made while the session is
 down goes out on reconnect (the last value per tag); a write the server
 refuses on a healthy session is dropped and reported, not retried forever.
 Under `redundancy:` only the leader writes, and leadership is checked
-again when queued commands go out: a replica that lost it during an outage
-drops what it queued. When the write gate reopens, every output goes out
+again when queued commands go out, and before each chunk of a large batch:
+a replica that lost it during an outage drops what it queued, and one
+demoted while a batch is going out sends no more of it. When the write gate reopens, every output goes out
 once more with the program's value, changed or not, since another
 replica may have written the nodes in between, and a replica that started
 as a standby has no start-up baseline, so its first push as leader
