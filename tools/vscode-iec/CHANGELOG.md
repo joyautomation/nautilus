@@ -9,7 +9,20 @@ Works with naut 0.21.0, and is the one to use with naut 0.22.0: a 0.22.0
 controller with a token, reached by a DNS name, answers only requests that
 carry the token, and this release sends it on every request (below).
 
+### Added
+
+- **The `nautilus.yaml` schema knows naut 0.22.0's new keys.** A
+  `type: runtime` driver with its `tags:` (`task:`, and a `status:` of
+  `demoted`, `faulting`, `logic-errors`, `late` or `overruns`), a task's
+  `priority-guard: rt-limit:`, and the update times a Siemens IO system
+  allows for a `profinet-manifest` device (16 ms to 512 ms, powers of two).
+
 ### Fixed
+
+- **Enter indents after `IF … THEN`, and `END_IF` outdents again.** The
+  indentation rules were written with `(?i)`, which JavaScript's RegExp
+  rejects, so VS Code dropped both, on the desktop as well as in the
+  playground. They now use `{ pattern, flags: "i" }` (#903).
 
 - **The token goes with every request to the controller, and only
   there.** With `nautilus.token` set, live values, the tag table, online
