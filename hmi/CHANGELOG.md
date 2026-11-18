@@ -1,5 +1,23 @@
 # Changelog — @joyautomation/nautilus-hmi
 
+## Unreleased
+
+### Changed
+
+- **`Quality` gains `'substituted'`** (#707): a value an operator put in
+  place of a bad sensor's, which the logic runs on. A new `ValueStatus`
+  `substituted` draws it in `--q-substituted` with the badge `SUBST`,
+  degraded and not commandable; precedence is notPublished > bad >
+  substituted > simulated > stale > good. `StateChip` and `EquipmentCard`
+  (a dotted border) know it. A `switch` over `Quality` in your own code
+  needs the new case.
+
+### Fixed
+
+- **An unknown quality token is drawn as bad, never good.** `valueStatus`
+  used to fall through to `good` for a token it did not know, so a newer
+  controller's quality reached the screen as trustworthy and commandable.
+
 ## 0.10.0 — 2026-11-18 (minor: no breaking API changes; visual defaults change: grey liquid, single-line ISA-101 pipes, a darker light-theme `--s1`)
 
 ### Added

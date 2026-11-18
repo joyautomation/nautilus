@@ -25,7 +25,7 @@ import type { Quality } from './types.js';
  * "the source is down" and "the source says this is wrong" call for the same
  * response — do not trust the number, do not command on it.
  */
-export type ValueStatus = 'good' | 'stale' | 'bad' | 'notPublished' | 'simulated';
+export type ValueStatus = 'good' | 'stale' | 'bad' | 'notPublished' | 'substituted' | 'simulated';
 
 export interface StatusMeta {
 	/** The word shown on the badge. Colour is never the only cue. */
@@ -77,6 +77,13 @@ export const STATUS_META: Record<ValueStatus, StatusMeta> = {
 		degraded: true,
 		writable: false
 	},
+	substituted: {
+		label: 'Subst',
+		description: 'Substituted: an operator put this value in place of the sensor\'s; the logic runs on it, and it is not the plant\'s reading',
+		token: 'var(--q-substituted)',
+		degraded: true,
+		writable: false
+	},
 	simulated: {
 		label: 'Sim',
 		description: 'Simulated — substituted upstream of alarming, not the plant',
@@ -100,7 +107,12 @@ export interface StatusInput {
  *
  * Precedence — **absence beats wrongness beats substitution beats age**:
  *
- *   notPublished > bad > simulated > stale > good
+ *   notPublished > bad > substituted > simulated > stale > good
+ *
+ * `substituted` is the controller's own word (#707): an operator replaced a
+ * bad sensor's value, so the number is not the plant's. A quality token this
+ * kit does not know is `bad`, never `good`: a value the controller cannot be
+ * shown to vouch for is not drawn as trustworthy.
  *
  * `simulated` outranks `stale` deliberately: a simulated value is being
  * refreshed by the simulator, so "stale" would be the less true of the two
@@ -111,7 +123,8 @@ export interface StatusInput {
 export function valueStatus(input: StatusInput): ValueStatus {
 	if (input.present === false) return 'notPublished';
 	const q = input.quality ?? 'good';
-	if (q === 'bad' || q === 'notConnected') return 'bad';
+	if (q !== 'good' && q !== 'stale' && q !== 'substituted') return 'bad'; // bad, notConnected, or unknown
+	if (q === 'substituted') return 'substituted';
 	if (input.simulated) return 'simulated';
 	if (q === 'stale') return 'stale';
 	return 'good';

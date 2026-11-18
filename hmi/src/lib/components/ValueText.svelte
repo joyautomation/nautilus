@@ -11,6 +11,7 @@
 	//
 	//   not published  →  `—` in --q-notpublished, badge "NO DATA"
 	//   bad            →  the value greyed, in --q-bad, badge "BAD"
+	//   substituted    →  the value in --q-substituted, badge "SUBST"
 	//   simulated      →  the value in --q-simulated, badge "SIM"
 	//   stale          →  the value in --q-stale, badge "STALE 12m"
 	//   good           →  the value, in --ink, no badge at all

@@ -49,7 +49,8 @@
 		stale: 'var(--q-stale)',
 		bad: 'var(--q-bad)',
 		notPublished: 'var(--q-notpublished)',
-		simulated: 'var(--q-simulated)'
+		simulated: 'var(--q-simulated)',
+		substituted: 'var(--q-substituted)'
 	};
 
 	const color = $derived(COLORS[kind] ?? 'var(--muted)');

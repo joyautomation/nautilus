@@ -2,7 +2,7 @@ package io
 
 import "testing"
 
-// The tokens are wire format: the HMI kit's Quality union type is these four
+// The tokens are wire format: the HMI kit's Quality union type is these five
 // strings, so a rename here is a breaking change to every screen.
 func TestQualityTokensAreStableWireFormat(t *testing.T) {
 	want := map[Quality]string{
@@ -10,6 +10,7 @@ func TestQualityTokensAreStableWireFormat(t *testing.T) {
 		Stale:        "stale",
 		Bad:          "bad",
 		NotConnected: "notConnected",
+		Substituted:  "substituted",
 	}
 	for q, s := range want {
 		if got := q.String(); got != s {
@@ -20,13 +21,14 @@ func TestQualityTokensAreStableWireFormat(t *testing.T) {
 			t.Errorf("ParseQuality(%q) = %v,%v want %v,true", s, back, ok, q)
 		}
 	}
-	if q, ok := ParseQuality("uncertain"); ok || q != Good {
-		t.Errorf("ParseQuality(unknown) = %v,%v want good,false", q, ok)
+	if q, ok := ParseQuality("uncertain"); ok || q != Bad {
+		t.Errorf("ParseQuality(unknown) = %v,%v want bad,false", q, ok)
 	}
-	// An unmodelled value must never render as anything a client would
-	// trust less than it should — unknown reads as good, same as absent.
-	if got := Quality(200).String(); got != "good" {
-		t.Errorf("out-of-range quality = %q, want good", got)
+	// An unmodelled value must never render as something a client would
+	// trust: unknown reads as bad, not good (#707; it used to read good,
+	// which let a quality added without a token pass as trustworthy).
+	if got := Quality(200).String(); got != "bad" {
+		t.Errorf("out-of-range quality = %q, want bad", got)
 	}
 }
 
@@ -34,7 +36,7 @@ func TestQualityIsGood(t *testing.T) {
 	if !Good.IsGood() {
 		t.Error("Good.IsGood() = false")
 	}
-	for _, q := range []Quality{Stale, Bad, NotConnected} {
+	for _, q := range []Quality{Stale, Bad, NotConnected, Substituted} {
 		if q.IsGood() {
 			t.Errorf("%v.IsGood() = true", q)
 		}
