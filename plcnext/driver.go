@@ -106,6 +106,13 @@ type Driver struct {
 	lastErr    atomic.Value  // string
 	rttUs      atomic.Int64
 
+	// The write gate (gate.go): closed, nothing leaves the driver.
+	gateMu     sync.Mutex
+	writeGate  func() bool
+	gateShut   atomic.Bool // the last look found it closed
+	wanted     atomic.Bool // OutputsWanted: every output, after a reopen
+	gatedFlush bool        // under mu: a flush was withheld since the last write
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -202,15 +209,24 @@ func (d *Driver) run(ctx context.Context) {
 func (d *Driver) session(ctx context.Context) error {
 	st := BusState{Configured: true, Running: true}
 	var im image
+	conduct := false // BusConductor still to be conducted: the gate was closed
+	var conductOn dataAccess
 	if d.m.Transport == TransportGRPC || d.m.BusConductor != "" {
 		c, err := d.dial(ctx)
 		if err != nil {
 			return err
 		}
 		defer c.Close()
-		if st, err = conductBus(ctx, c, d.m.BusConductor, d.m.RunPort); err != nil {
+		// BusConductor's configure/start are commands: with the write gate
+		// closed, only look at the bus, and conduct it once the gate opens.
+		bc := d.m.BusConductor
+		if !d.gateOpen() {
+			bc, conduct = "", d.m.BusConductor != ""
+		}
+		if st, err = conductBus(ctx, c, bc, d.m.RunPort); err != nil {
 			return err
 		}
+		conductOn = c
 		im = grpcImage{c: c, m: &d.m}
 	}
 	if d.m.Transport == TransportShm {
@@ -238,6 +254,16 @@ func (d *Driver) session(ctx context.Context) error {
 	for {
 		if err := d.poll(ctx, im); err != nil {
 			return err
+		}
+		if conduct && d.gateOpen() {
+			st, err := conductBus(ctx, conductOn, d.m.BusConductor, d.m.RunPort)
+			if err != nil {
+				return err
+			}
+			conduct = false
+			d.configured.Store(st.Configured)
+			d.running.Store(st.Running)
+			d.log.Info("plcnext: write gate open: bus conducted", "bus_running", st.Running)
 		}
 		select {
 		case <-ctx.Done():
@@ -500,6 +526,7 @@ func (*shmImage) everyScan() bool { return true }
 // poll reads the input span (and the RUN bit) once and flushes the output
 // span — when it changed, or every scan on a route that wants that.
 func (d *Driver) poll(ctx context.Context, im image) error {
+	open := d.gateOpen()
 	t0 := time.Now()
 	r, err := im.read(ctx, d.inLen)
 	if err != nil {
@@ -548,16 +575,28 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 			d.wdSeen = wd
 			if wd {
 				d.trips.Add(1)
-				d.log.Warn("plcnext: the shim drove the output frame to zero: this driver's outputs were older than its watchdog",
-					"watchdog_ms", s.st.WatchdogMs)
+				if d.gatedFlush {
+					d.log.Info("plcnext: the write gate is closed, so the shim drove the output frame to zero (its watchdog)",
+						"watchdog_ms", s.st.WatchdogMs)
+				} else {
+					d.log.Warn("plcnext: the shim drove the output frame to zero: this driver's outputs were older than its watchdog",
+						"watchdog_ms", s.st.WatchdogMs)
+				}
 			}
 		}
 	}
 	var flush []byte
-	if d.outDirty || im.everyScan() {
+	switch {
+	case !open:
+		// Closed: nothing leaves, the shm heartbeat included, so the
+		// shim's watchdog takes the frame to zero; over gRPC the outputs
+		// hold. What changed meanwhile stays in d.out for the reopen.
+		d.gatedFlush = true
+	case d.outDirty || im.everyScan():
 		flush = append([]byte(nil), d.out...)
 		d.outDirty = false
 	}
+	gated := d.gatedFlush
 	d.mu.Unlock()
 
 	if flush != nil {
@@ -568,7 +607,12 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 			return err
 		}
 		d.writes.Add(1)
-		if s, ok := im.(*shmImage); ok && s.late > 0 {
+		if gated {
+			// The gap since the last write was the gate's, not a stall.
+			d.mu.Lock()
+			d.gatedFlush = false
+			d.mu.Unlock()
+		} else if s, ok := im.(*shmImage); ok && s.late > 0 {
 			// This driver stalled between writes (a read taken before
 			// the stall shows no watchdog bit, so this is how it learns).
 			d.mu.Lock()
@@ -693,6 +737,9 @@ type Health struct {
 	// deliver (whether or not the manifest has any).
 	Online                 bool
 	Outages, WatchdogTrips uint64
+	// GateClosed: the write gate is closed and nothing is written (gate.go).
+	// On gRPC the controller's outputs hold, with no safe state.
+	GateClosed bool
 }
 
 // ShimHealth is rt/plcnext-io/nautilus_io's cycle as it reports it.
@@ -716,6 +763,7 @@ func (d *Driver) Health() Health {
 		Reads: d.reads.Load(), Writes: d.writes.Load(), Errors: d.errs.Load(),
 		RTTus: d.rttUs.Load(), LastError: d.lastErr.Load().(string), Tags: len(d.m.Tags),
 		Online: d.online.Load(), Outages: d.outages.Load(), WatchdogTrips: d.trips.Load(),
+		GateClosed: d.gateShut.Load(),
 	}
 	if d.m.Transport == TransportShm {
 		h.Shm = d.m.Shm

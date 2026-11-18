@@ -382,6 +382,28 @@ start: with it on, every redeploy that outlasts the shim's 1 s watchdog
 holds until acknowledged), and its `naut test` suite covers the hold,
 the acknowledge, the restart case and the hold switched off.
 
+## When the scans stop: the write gate
+
+`naut run` keeps a write gate on the driver, open while the program's
+scans are live. It closes on a scan that hangs, or a task starved past
+its slot. Closed, the driver writes nothing to the controller, and what
+the outputs then do depends on the transport:
+
+- **shm:** the page isn't written, its heartbeat included. The shim's
+  output watchdog (`output-watchdog`, 1 s by default) drives the output
+  frame to **zero**. That's a safe state, provided zero is safe for your
+  outputs.
+- **gRPC:** the output span isn't written, and the outputs **hold their
+  last values**. This route has no output watchdog. The driver logs the
+  closed gate as an error and its status row says "outputs held (no safe
+  state on this route)". nautilus won't invent output values to send.
+- **BusConductor:** a connection made while the gate is closed only reads
+  the bus. It configures and starts it once the gate opens.
+
+When the gate opens again, the whole output frame is written on the next
+poll. **For production with outputs, use the shm transport.** It's the
+one with a safe state when the program stops.
+
 ## Start on boot
 
 The controller has no systemd, and `admin` cannot write `/etc/init.d`

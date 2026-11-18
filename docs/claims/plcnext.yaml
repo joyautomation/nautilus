@@ -247,3 +247,18 @@ claims:
       The example's program in virtual time, with the status tags given by
       the test rather than delivered by the driver. The driver side is
       PLX-015 and PLX-016.
+
+  - id: PLX-018
+    claim: >-
+      With naut run's write gate closed (a hung or starved scan) the plcnext
+      driver writes nothing: over shm no page write, so the shim's output
+      watchdog drives the frame to zero; over gRPC no output span, so the
+      outputs hold, which it logs as an error and its status shows as
+      outputs held with no safe state; a connection made while closed does
+      not configure or start the bus. Reopened, it conducts the bus, writes
+      the whole frame and asks for every output.
+    source: "#when-the-scans-stop-the-write-gate"
+    tests:
+      - go ./plcnext TestWriteGateGRPC
+      - go ./plcnext TestWriteGateShm
+      - go ./internal/project TestPlcnextStatusShowsTheClosedGate
