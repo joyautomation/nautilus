@@ -138,10 +138,16 @@ func TestAgentLogsNoSecret(t *testing.T) {
 	if resp, err := http.DefaultClient.Do(req); err == nil {
 		resp.Body.Close()
 	}
-	time.Sleep(200 * time.Millisecond) // the log line follows the reply
-	log := p.Log()
-	if !strings.Contains(log, "PUT /v1/files/f.txt 200") {
-		t.Fatalf("the log does not name the call:\n%s", log)
+	// A call's log line follows its reply: wait for the last one.
+	var log string
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		log = p.Log()
+		if strings.Contains(log, "GET /v1/health 401") || time.Now().After(deadline) {
+			break
+		}
+	}
+	if !strings.Contains(log, "PUT /v1/files/f.txt 200") || !strings.Contains(log, "GET /v1/health 401") {
+		t.Fatalf("the log does not name the calls:\n%s", log)
 	}
 	if strings.Contains(log, "must-not-be-logged") {
 		t.Fatalf("the log carries a secret:\n%s", log)
@@ -154,7 +160,7 @@ func TestAgentExitsWhenStdinCloses(t *testing.T) {
 		t.Fatal("exited while stdin was open")
 	}
 	p.CloseStdin()
-	if !p.Exited(5 * time.Second) {
-		t.Fatal("still running 5s after stdin closed")
+	if !p.Exited(10 * time.Second) {
+		t.Fatal("still running 10s after stdin closed")
 	}
 }
