@@ -24,11 +24,19 @@ import (
 // (TestPrimaryHostOfflineDisconnectEndsTheSession, runs 44237035250,
 // 44202630486, 44147322368).
 //
-// OnConnect runs before the takeover and before the new client is added, so
-// it waits there while the ID still belongs to a session that has closed
-// and will be deleted (a clean one), up to Wait (default 2 s). A live
-// session with the ID is a real takeover and is not held up; neither is a
-// persistent one, which mochi never deletes.
+// mochi's own takeover of a LIVE same-ID session races the same way: it
+// disconnects the old session, unsubscribes it, and only then marks it
+// taken over, so the old session's teardown can pass its IsTakenOver check
+// in between and delete the new client after it is added (#828's CI run,
+// TestSameIDSessionSurvivesATakeoverRace).
+//
+// So OnConnect, which runs before the takeover and before the new client
+// is added, never lets a takeover of a clean session happen: while the ID
+// belongs to a session mochi will delete, it ends that session itself (if
+// it is still live) and waits until its teardown has removed it from the
+// map, up to Wait (default 2 s). Only then does the new client go on, with
+// no session to take over. A persistent session, which mochi never
+// deletes, is left to mochi's takeover.
 type SameIDSerializer struct {
 	mqttsrv.HookBase
 	Server *mqttsrv.Server
@@ -41,8 +49,7 @@ func (h *SameIDSerializer) ID() string { return "same-id-serializer" }
 // Provides implements mqttsrv.Hook: OnConnect only.
 func (h *SameIDSerializer) Provides(b byte) bool { return b == mqttsrv.OnConnect }
 
-// OnConnect waits while cl's ID belongs to an ended session still being torn
-// down.
+// OnConnect ends, and waits out, a clean session that still holds cl's ID.
 func (h *SameIDSerializer) OnConnect(cl *mqttsrv.Client, _ packets.Packet) error {
 	wait := h.Wait
 	if wait == 0 {
@@ -51,8 +58,11 @@ func (h *SameIDSerializer) OnConnect(cl *mqttsrv.Client, _ packets.Packet) error
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		old, ok := h.Server.Clients.Get(cl.ID)
-		if !ok || old == cl || !old.Closed() || !expires(old) {
+		if !ok || old == cl || !expires(old) {
 			return nil
+		}
+		if !old.Closed() {
+			_ = h.Server.DisconnectClient(old, packets.ErrSessionTakenOver)
 		}
 		time.Sleep(time.Millisecond)
 	}
