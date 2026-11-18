@@ -146,6 +146,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -158,6 +159,11 @@ func main() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGTERM)
 		go func() { <-c; time.Sleep(time.Duration(n) * time.Second); os.Exit(0) }()
+	}
+	// Released as "late": start, then die 1.5 s in, as a release that
+	// fails just after its start check does.
+	if self, _ := filepath.EvalSymlinks(os.Args[0]); strings.Contains(self, "/releases/late/") {
+		go func() { time.Sleep(1500 * time.Millisecond); os.Exit(1) }()
 	}
 	// Not dumpable, like a controller naut-launch gave a capability: its
 	// /proc/<pid>/exe is unreadable, even to its owner.
@@ -194,14 +200,19 @@ case $1 in
 *) exit 2 ;;
 esac
 `), 0o755)
+	writeSleepStandIn(t, bin)
 	os.WriteFile(filepath.Join(root, "env"), []byte("X=from-env\n"), 0o644)
 
+	var settle string // FAKE_SETTLE for the next box runs (see writeSleepStandIn)
 	box := func(args ...string) (string, int) {
 		t.Helper()
 		c := exec.Command("sh", append([]string{"-s", "--"}, args...)...)
 		c.Stdin = strings.NewReader(deployBoxSh)
 		c.Env = append(os.Environ(), "NAUT_SUPERVISOR=cron", "NAUT_ROOT="+root, "HOME="+home,
 			"FAKE_CRONTAB="+tab, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		if settle != "" {
+			c.Env = append(c.Env, "FAKE_SETTLE="+settle)
+		}
 		var out bytes.Buffer
 		c.Stdout, c.Stderr = &out, &out
 		err := c.Run()
@@ -282,6 +293,20 @@ esac
 	}
 	if p := pid(); !alive(p) || link("current") != "r2" || link("previous") != "r1" {
 		t.Fatalf("after the failed update r2 should run, current r2, previous r1: alive %v, %q %q", alive(p), link("current"), link("previous"))
+	}
+
+	// an update that starts and dies a moment later: the settle wait
+	// catches it (it dies 1.5 s in, after the 1 s first look, inside a 2 s
+	// settle); back to r2, exit 3
+	incoming("late", sleeperBytes)
+	settle = "2"
+	out, code := box("update", "late")
+	settle = ""
+	if code != 3 {
+		t.Fatalf("a release that dies after starting must roll back with exit 3, got %d\n%s", code, out)
+	}
+	if p := pid(); !alive(p) || link("current") != "r2" || link("previous") != "r1" {
+		t.Fatalf("after the late death r2 should run, current r2, previous r1: alive %v, %q %q", alive(p), link("current"), link("previous"))
 	}
 
 	// rollback
