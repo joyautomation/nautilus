@@ -56,6 +56,7 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 		if err != nil {
 			return "", err
 		}
+		a, b = rt.realOperand(args[0], a, args[1:2]), rt.realOperand(args[1], b, args[0:1])
 		op := map[string]string{"ADD": "+", "SUB": "-", "MUL": "*", "DIV": "/", "MOD": "MOD", "XPY": "**"}[m]
 		target, value = args[2], a+" "+op+" "+b
 	case "NEG":
@@ -92,7 +93,18 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 		if err := need(2); err != nil {
 			return "", err
 		}
+		// A CPT with a real in it is computed in REAL on Logix: its DINT
+		// operands convert (iecExpr, #782).
+		if e, perr := ld.ParseExpr(args[1]); perr == nil {
+			for _, o := range exprOperands(e) {
+				ot := rt.operandType(o)
+				if ot == "REAL" || ot == "LREAL" || ot == "" && numLit.MatchString(o) && !strings.Contains(o, "#") && strings.ContainsAny(o, ".eE") {
+					rt.realExpr = true
+				}
+			}
+		}
 		v, err := rt.logixExpr(args[1])
+		rt.realExpr = false
 		if err != nil {
 			return "", err
 		}
@@ -400,6 +412,30 @@ func timeMember(typ, rendered string) bool {
 	return typ == "TIME" && (strings.HasSuffix(up, ".ET") || strings.HasSuffix(up, ".PT"))
 }
 
+// realOperand is an arithmetic operand beside a real one (#782): Logix
+// computes the box in REAL, converting a DINT or LINT operand as it goes,
+// where nautilus refuses to mix one into a REAL implicitly (IEC's table);
+// so the import writes the conversion, which the writer folds back. others
+// are the box's other operands.
+func (rt *routine) realOperand(a, rendered string, others []string) string {
+	t := rt.operandType(a)
+	if t == "TIME" && strings.HasPrefix(rendered, "TIME_TO_DINT(") {
+		t = "TIME" // a timer's milliseconds (arithOperand): TIME_TO_REAL
+	} else if t != "DINT" && t != "LINT" {
+		return rendered
+	}
+	for _, o := range others {
+		ot := rt.operandType(o)
+		if ot == "REAL" || ot == "LREAL" || ot == "" && numLit.MatchString(o) && !strings.Contains(o, "#") && strings.ContainsAny(o, ".eE") {
+			if t == "TIME" {
+				return "TIME_TO_REAL(" + strings.TrimSuffix(strings.TrimPrefix(rendered, "TIME_TO_DINT("), ")") + ")"
+			}
+			return t + "_TO_REAL(" + rendered + ")"
+		}
+	}
+	return rendered
+}
+
 // exprOperand renders one instruction operand: a literal as is, a
 // reference rewritten.
 func (rt *routine) exprOperand(a string) (string, *refusal) {
@@ -441,6 +477,10 @@ func (rt *routine) iecExpr(e ld.Expr) (ld.Expr, *refusal) {
 		}
 		if timeMember(rt.operandType(x.Text), ref) {
 			return &ld.Call{Name: "TIME_TO_DINT", Args: []ld.Expr{&ld.Ref{Text: ref}}}, nil
+		}
+		if t := rt.operandType(x.Text); rt.realExpr && (t == "DINT" || t == "LINT") {
+			// Beside a real in a CPT: Logix computes it in REAL (#782).
+			return &ld.Call{Name: t + "_TO_REAL", Args: []ld.Expr{&ld.Ref{Text: ref}}}, nil
 		}
 		return &ld.Ref{Text: ref}, nil
 	case *ld.Unary:

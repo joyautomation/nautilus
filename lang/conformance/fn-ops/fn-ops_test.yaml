@@ -94,9 +94,9 @@ tests:
       - given: { A: true, X: -42, R: 2.75, S: 'pump 1' }
         scans: 1
         expect: { st_MOVEB: true, fbd_MOVEB: true, st_MOVEI: -42, fbd_MOVEI: -42, st_MOVER: 2.75, fbd_MOVER: 2.75, st_MOVES: 'pump 1', fbd_MOVES: 'pump 1' }
-      - given: { A: false, X: 1099511627776, R: -0.125, S: '' }
+      - given: { A: false, X: -32768, R: -0.125, S: '' } # an INT's edge (a copy keeps its width, #782)
         scans: 1
-        expect: { st_MOVEB: false, fbd_MOVEB: false, st_MOVEI: 1099511627776, fbd_MOVEI: 1099511627776, st_MOVER: -0.125, fbd_MOVER: -0.125, st_MOVES: '', fbd_MOVES: '' }
+        expect: { st_MOVEB: false, fbd_MOVEB: false, st_MOVEI: -32768, fbd_MOVEI: -32768, st_MOVER: -0.125, fbd_MOVER: -0.125, st_MOVES: '', fbd_MOVES: '' }
 
   - name: GT GE LT LE EQ NE on INT return BOOL - below, equal, above
     steps:

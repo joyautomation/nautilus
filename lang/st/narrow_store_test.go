@@ -103,3 +103,38 @@ func TestIntegerStoreWrapsToTheTargetWidth(t *testing.T) {
 		}
 	}
 }
+
+// #782: a negation and an ABS can leave their operand's range (-(-32768)
+// is 32768); the store cuts them like any result. And a same-type copy of
+// a value from outside the program's stores (a force at 70000 in an INT)
+// is cut on its next assignment.
+func TestNegationAbsAndCopiesWrap(t *testing.T) {
+	for _, tc := range []struct {
+		decl, body string
+		x          int64
+		want       int64
+	}{
+		{"x : INT; out : INT;", "out := -x;", -32768, -32768},
+		{"x : INT; out : INT;", "out := ABS(x);", -32768, -32768},
+		{"x : UINT; out : UINT;", "out := -x;", 1, 65535},
+		{"x : DINT; out : DINT;", "out := ABS(x);", -2147483648, -2147483648},
+		{"x : INT; out : INT;", "out := x;", 70000, 4464},
+	} {
+		src := "PROGRAM P\nVAR_EXTERNAL " + tc.decl + " END_VAR\n" + tc.body + "\nEND_PROGRAM"
+		if got := runOne(t, src, map[string]ir.Value{"x": ir.IntVal(tc.x)}, "out"); got != tc.want {
+			t.Errorf("%s with x = %d: out = %d, want %d", tc.body, tc.x, got, tc.want)
+		}
+	}
+}
+
+// #782: an input stores too. -i and ABS(i) of an INT at -32768 bound to an
+// INT input keep the input's width (-32768), which FB_Pass hands on into a
+// DINT output unchanged; unwrapped, the input would hold 32768.
+func TestNegationAndAbsWrapAtAnInput(t *testing.T) {
+	for _, body := range []string{"fb(x := -i); out := fb.y;", "fb(x := ABS(i)); out := fb.y;"} {
+		src := narrowDecls + "PROGRAM P\nVAR_EXTERNAL i : INT; out : DINT; END_VAR\nVAR fb : FB_Pass; END_VAR\n" + body + "\nEND_PROGRAM"
+		if got := runOne(t, src, map[string]ir.Value{"i": ir.IntVal(-32768)}, "out"); got != -32768 {
+			t.Errorf("%s with i = -32768: out = %d, want -32768", body, got)
+		}
+	}
+}

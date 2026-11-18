@@ -17,10 +17,11 @@ import (
 //
 // The rules (docs/functions.md "Type conversions" is the user-facing copy):
 //
-//   - The argument is first taken as a value of the source type: an integer
-//     variable holds a 64-bit value at run time and does not wrap on
-//     arithmetic (st-int-width), so `UINT_TO_STRING(u)` with u at -1 reads
-//     it as the UINT it would be on a PLC, 65535.
+//   - The argument is first taken as a value of the source type: arithmetic
+//     is computed in 64 bits and only a store cuts it to a width (#782), and
+//     a value from outside a program (a force) may hold more than its
+//     width, so `UINT_TO_STRING(u)` with u at -1 reads it as the UINT it
+//     would be on a PLC, 65535.
 //   - Integer and bit-string NARROWING WRAPS: the result keeps the target's
 //     low bits, read signed or unsigned as the target is (DINT_TO_INT(70000)
 //     = 4464, INT_TO_USINT(-1) = 255, BYTE_TO_SINT(255) = -1). Codesys

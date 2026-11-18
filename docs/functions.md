@@ -300,7 +300,8 @@ details, `type:` forms and `init:` forms (TIME members, arrays).
   (pinned in `fn-ops`), and `d1 + d2 > 0` is true there.
 - **A value from outside a program's stores lands as written.** A driver's
   input, a force, a test's `given:` and a value retained from before #782
-  are not cut to the width; the program's next store of them is. A write
+  are not cut to the width; the program's next assignment of them is
+  (`out := x` with `x` forced to 70000 stores 4464 into an INT). A write
   from an operator or an OPC UA client is refused when it does not fit
   (`SetFieldTypedStrict`).
 - **Signed with unsigned widens** to the narrowest signed type that holds

@@ -987,6 +987,9 @@ func (l *lowerer) constValue(e Expression, t *ir.Type) (ir.Value, error) {
 		return ir.Value{}, err
 	}
 	if t != nil {
+		if err := realRule(t, x); err != nil {
+			return ir.Value{}, errNode(e, fmt.Errorf("initial value: %w", err))
+		}
 		x = coerce(x, t)
 		if !assignable(t, x.ExprType()) {
 			return ir.Value{}, errNode(e, fmt.Errorf("cannot initialise a %s with a %s", t, x.ExprType()))
@@ -1544,6 +1547,14 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		if err != nil {
 			return nil, fmt.Errorf("FB %s arg %q: %w", def.Name, na.Name, err)
 		}
+		// A standard block's numeric pins are generic (ANY_REAL, ANY_INT:
+		// a PID's PV takes a REAL or an LREAL); a user block's input is a
+		// declared variable, and storing into it follows the table (#782).
+		if !builtinFB(def) {
+			if err := realRule(def.Inputs[idx].Type, v); err != nil {
+				return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: %w", def.Name, na.Name, err))
+			}
+		}
 		v = coerce(v, def.Inputs[idx].Type)
 		if !assignable(def.Inputs[idx].Type, v.ExprType()) && (def.Inputs[idx].Type.Enum != nil || v.ExprType().Enum != nil) {
 			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
@@ -1583,7 +1594,11 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		// out => o stores the output into o: the same rule as o := fb.out
 		// (#782). The output already holds its own type's width.
 		if ot := def.OutputType(idx); ot != nil {
-			if _, err := storeRule(target.ExprType(), &ir.Lit{T: ot}, nil); err != nil {
+			err := realRule(target.ExprType(), &ir.Lit{T: ot})
+			if err == nil {
+				_, err = storeRule(target.ExprType(), &ir.Lit{T: ot}, nil)
+			}
+			if err != nil {
 				return nil, errName(ob.Pos, ob.Name, fmt.Errorf("FB %s output %s => %s: %w", def.Name, ob.Name, exprShort(ob.Target), err))
 			}
 		}
@@ -1677,6 +1692,12 @@ func (l *lowerer) lowerAssign(a *AssignStmt) (ir.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, isLit := value.(*ir.Lit); wrap == nil && !isLit {
+		// A same-type copy is cut too: a value from outside the program's
+		// own stores (a force, a driver) may hold more than its width, and
+		// the next assignment of it keeps the width (#782). Inline, a mask.
+		wrap = ir.NewWrap(target.ExprType())
+	}
 	return &ir.Assign{Target: target, Value: value, Wrap: wrap}, nil
 }
 
@@ -1756,6 +1777,13 @@ func realRule(t *ir.Type, v ir.Expr) error {
 		return nil
 	}
 	return fmt.Errorf("cannot assign %s to %s implicitly; write %s_TO_%s(…)", from, to, from, to)
+}
+
+// builtinFB reports a standard function block (TON, CTU, PID, ...), whose
+// definition is the one registered in ir.FBs.
+func builtinFB(def *ir.FBDef) bool {
+	d, _, ok := ir.Lookup(ir.FBs, def.Name)
+	return ok && d == def
 }
 
 // storeInput is storeRule for a value bound to an FB or FUNCTION input:
@@ -1896,6 +1924,14 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 			return nil, err
 		}
 		resultT = t
+	case resultT != nil && resultT.Kind == ir.TypeReal && resultT.Name == "" && !ir.IsConversion(sig.Name):
+		// SQRT, SIN, EXPT, ...: an LREAL argument (or a DINT one) gives an
+		// LREAL, so the result keeps its width into a store (#782).
+		t, err := ir.RealResult(argTypes)
+		if err != nil {
+			return nil, errNode(srcArgs[0], fmt.Errorf("function %s: %w", sig.Name, err))
+		}
+		resultT = t
 	}
 	for i, p := range sig.Params {
 		if p == nil || i >= len(args) {
@@ -1938,6 +1974,9 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION %s arg %s: %w", def.Name, na.Name, err)
 			}
+			if err := realRule(def.Inputs[idx].Type, v); err != nil {
+				return nil, errNode(na.Value, fmt.Errorf("FUNCTION %s arg %s: %w", def.Name, na.Name, err))
+			}
 			v = coerce(v, def.Inputs[idx].Type)
 			if !assignable(def.Inputs[idx].Type, v.ExprType()) {
 				return nil, errNode(na.Value, fmt.Errorf("FUNCTION %s arg %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
@@ -1961,6 +2000,9 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			v, err := l.lowerExprHint(a, def.Inputs[i].Type)
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION %s arg %d: %w", def.Name, i+1, err)
+			}
+			if err := realRule(def.Inputs[i].Type, v); err != nil {
+				return nil, errNode(a, fmt.Errorf("FUNCTION %s arg %d: %w", def.Name, i+1, err))
 			}
 			v = coerce(v, def.Inputs[i].Type)
 			if !assignable(def.Inputs[i].Type, v.ExprType()) {
@@ -2164,7 +2206,9 @@ func (l *lowerer) lowerUnary(u *UnaryExpr) (ir.Expr, error) {
 		if !x.ExprType().IsNumeric() {
 			return nil, errNode(u.Operand, fmt.Errorf("unary - on non-numeric %s", x.ExprType()))
 		}
-		return &ir.UnOp{Op: ir.OpNeg, X: x, T: x.ExprType()}, nil
+		// Computed: -x of an INT at -32768 is 32768, which its store cuts
+		// back to the INT's width (#782).
+		return &ir.UnOp{Op: ir.OpNeg, X: x, T: ir.Computed(x.ExprType())}, nil
 	case "NOT":
 		// Logical on BOOL, bitwise complement (of the 64-bit value) on INT.
 		switch {
@@ -2235,7 +2279,7 @@ func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 			return nil, fmt.Errorf("arithmetic requires numeric operands")
 		}
 		if lt.Kind == ir.TypeReal || rt.Kind == ir.TypeReal {
-			return ir.RealT, nil
+			return ir.RealResult([]*ir.Type{lt, rt})
 		}
 		if lt.Kind == ir.TypeTime && rt.Kind == ir.TypeTime {
 			return ir.TimeT, nil

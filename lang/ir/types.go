@@ -1,6 +1,9 @@
 package ir
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // TypeKind identifies the runtime representation of a value.
 type TypeKind uint8
@@ -234,6 +237,47 @@ func ImplicitRealConversion(from, to string) bool {
 		}
 	}
 	return false
+}
+
+// RealResult is the type of a computation that involves a real (#782,
+// IEC 61131-3's table): LREAL when an operand is an LREAL, or an integer a
+// REAL's mantissa cannot hold every value of (DINT, UDINT: they go into an
+// LREAL implicitly); else REAL. An operand that converts implicitly into
+// neither (LINT, ULINT, a bit string) is an error naming the conversion,
+// rather than a REAL that hides it.
+func RealResult(ts []*Type) (*Type, error) {
+	lreal := false
+	for _, t := range ts {
+		switch {
+		case t == nil:
+		case t.Kind == TypeReal && t.Name == "LREAL":
+			lreal = true
+		case t.Kind == TypeInt && t.Enum == nil && t.Name != "":
+			switch {
+			case ImplicitRealConversion(t.Name, "REAL"):
+			case ImplicitRealConversion(t.Name, "LREAL"):
+				lreal = true
+			default:
+				return nil, fmt.Errorf("%s does not convert implicitly to REAL or LREAL; write %s_TO_LREAL(…)", t.Name, t.Name)
+			}
+		}
+	}
+	if lreal {
+		return lrealT, nil
+	}
+	return RealT, nil
+}
+
+// Computed is the computed twin of a declared integer type: the type of
+// a result (a negation, an ABS) that may need the width cut when it is
+// stored (#782). Any other type is returned as it is.
+func Computed(t *Type) *Type {
+	if t != nil && t.Kind == TypeInt && t.Enum == nil && t.Name != "" {
+		if c, ok := exprIntTypes[t.Name]; ok {
+			return c
+		}
+	}
+	return t
 }
 
 // intClass sorts the declared integer names into the three families the

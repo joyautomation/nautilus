@@ -75,7 +75,7 @@ func SetFieldTyped(val Value, t *Type, path []string, v any, sofar string) (Valu
 // a test's given:, a force): a program's own stores keep their declared
 // width (#782), so what it retained fits, but a value saved before that
 // rule, or one a test or a force sets on purpose, lands as written, and
-// the program's next store of it is cut to the width.
+// the program's next assignment of it is cut to the width.
 func SetFieldTypedStrict(val Value, t *Type, path []string, v any, sofar string) (Value, error) {
 	return setFieldTyped(val, t, path, v, sofar, true)
 }

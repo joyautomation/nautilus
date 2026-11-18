@@ -82,6 +82,9 @@ func commonType(name string, ts []*Type) (*Type, error) {
 		// Integers: the arithmetic common type, computed, so a selected
 		// value is stored at its target's width like any result (#782): a
 		// ladder assignment is SEL(power, old, new).
+		if ts[0].Kind == TypeReal {
+			return RealResult(ts)
+		}
 		if ts[0].Kind == TypeInt && ts[0].Enum == nil {
 			t := ts[0]
 			for _, u := range ts[1:] {
