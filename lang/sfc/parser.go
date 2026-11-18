@@ -202,7 +202,7 @@ func (p *bodyParser) parseStepAttrs(step *Step) error {
 			continue
 		}
 		if len(part) < 3 || part[0].Type != TokenIdent || part[1].Type != TokenAssign {
-			return fmt.Errorf("sfc: line %d: step %q: a step attribute is NAME := value, e.g. STEP %s (MAXTIME := T#30S):", part[0].Line, step.Name, step.Name)
+			return fmt.Errorf("sfc: line %d: step %q: a step attribute is NAME := value, e.g. STEP %s (MAXTIME := T#30S)", part[0].Line, step.Name, step.Name)
 		}
 		val := strings.TrimSpace(p.src[part[2].Offset:p.tokEnd(part[len(part)-1])])
 		step.Attrs = append(step.Attrs, StepAttr{

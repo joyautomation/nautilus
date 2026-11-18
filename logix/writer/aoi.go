@@ -2,7 +2,6 @@ package writer
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/fbcatalog"
@@ -375,8 +374,6 @@ func powerPins(params []aoiParam) (in, out string) {
 	}
 	return in, out
 }
-
-var pinBindRe = regexp.MustCompile(`(?i)(^|[,(\s])([A-Za-z_][A-Za-z0-9_]*)\s*(:=|=>)`)
 
 // aoiCall lowers a ladder call of a user block: a helper rung for the
 // condition when the block takes power, the instruction with its

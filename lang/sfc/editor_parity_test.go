@@ -8,7 +8,6 @@ import (
 // The SFC editor parity batch (issues #76, #180, #181, #186): the edit ops
 // behind the chart's keyboard/name/reorder/vars gestures.
 
-
 // #186: "+ action" is drawn under the last row, so an association posted
 // without an index lands LAST — typed in order, read back in order.
 func TestOpAddAssocAppendsWithoutIndex(t *testing.T) {
@@ -144,6 +143,9 @@ func TestOpDeclareVarConstantAndInit(t *testing.T) {
 	out, m = applyOp(t, out, EditOp{Type: "declareVar", Name: "ST_FILL", VarType: "INT", Init: "1", Section: "VAR CONSTANT"})
 	if !strings.Contains(out, "    tMaxFill : TIME := T#60S;\n    ST_FILL : INT := 1;\nEND_VAR") {
 		t.Fatalf("second constant:\n%s", out)
+	}
+	if v := m.Vars[len(m.Vars)-1]; v.Name != "ST_FILL" || v.Section != "VAR CONSTANT" || v.Init != "1" || v.Type != "INT" {
+		t.Fatalf("ST_FILL = %+v", v)
 	}
 	// A plain VAR with an initial value goes to VAR, not the constants.
 	out, m = applyOp(t, out, EditOp{Type: "declareVar", Name: "Count", VarType: "INT", Init: "5", Section: "VAR"})
