@@ -19,11 +19,12 @@ fix.
 
 ## How to report
 
-1. **Preferred:** use **Report a vulnerability** on the repository's
-   [Security tab](https://github.com/joyautomation/nautilus/security).
-   The report stays private between you and the maintainers.
-2. **If you can't use GitHub:** email **joyja@joyautomation.com** with
-   "nautilus security" in the subject.
+Email **joyja@joyautomation.com** with "nautilus security" in the
+subject.
+
+Once private vulnerability reporting is enabled for this repository, you
+can also use **Report a vulnerability** on its
+[Security tab](https://github.com/joyautomation/nautilus/security).
 
 Please do not open a public issue, discussion or PR about a
 vulnerability until a fix has been released.

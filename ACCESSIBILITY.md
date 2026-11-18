@@ -40,7 +40,8 @@ operators use this most, so it gets the most detail here.
 - Alarm priority is shown by shape, glyph and an urgency word as well as
   colour. Alarm state always has a text label.
 - In the ISA-101 look, pumps and valves show their state by fill (solid
-  or hollow), not by hue. The running pump's impeller also spins.
+  or hollow), not by hue. A running pump's impeller also turns, except
+  under reduced motion.
 - Pumps and valves carry an accessible label (`role="img"`) with their
   live state: a pump says running or stopped, and a valve gives its
   percent open.
@@ -70,7 +71,7 @@ operators use this most, so it gets the most detail here.
 **Touch**
 
 - On a touch screen (`pointer: coarse`), buttons, toggles, menus and
-  navigation get a 44 px minimum size.
+  navigation get a 44 px minimum height.
 
 ## Known gaps
 
