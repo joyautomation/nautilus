@@ -3,7 +3,11 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.21.2] - 2026-11-18
+
+Works with naut 0.21.0, and is the one to use with naut 0.22.0: a 0.22.0
+controller with a token, reached by a DNS name, answers only requests that
+carry the token, and this release sends it on every request (below).
 
 ### Fixed
 

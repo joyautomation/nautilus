@@ -1,6 +1,6 @@
 # Changelog — @joyautomation/nautilus-hmi
 
-## Unreleased
+## 0.10.0 — 2026-11-18 (minor: additive, no breaking changes)
 
 ### Added
 

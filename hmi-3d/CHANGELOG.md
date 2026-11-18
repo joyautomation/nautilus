@@ -1,6 +1,6 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
-## Unreleased
+## 0.4.0 — 2026-11-18 (minor: a dark paper look; flowing pipes drawn as moving dashes)
 
 **Added.** A dark paper look: under a dark theme (read off the theme's
 `--bg`), `paper` is the same drawing inverted, a near-black sheet with dark
