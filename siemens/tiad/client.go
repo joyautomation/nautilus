@@ -58,6 +58,14 @@ const (
 	KindDeclined         = "declined"
 	KindCompileFailed    = "compile_failed"
 	KindOperationFailed  = "operation_failed"
+	// KindNotCompiled refuses a download of a project changed since its
+	// last full compile; nothing reached TIA.
+	KindNotCompiled = "not_compiled"
+	// KindOutcomeUnknown: a download may have loaded the CPU, or not
+	// (TIA failed once the download was decided, or TIA's side broke the
+	// contract). The session stays open; compare on it before anything
+	// else.
+	KindOutcomeUnknown = "outcome_unknown"
 
 	KindUnreachable = "unreachable"
 	KindBadReply    = "bad_reply"
@@ -151,6 +159,15 @@ func Kind(err error) string {
 		return e.Kind
 	}
 	return ""
+}
+
+// OutcomeUnknown reports whether err leaves a CPU's state in doubt: the
+// agent said outcome_unknown, or never answered (unreachable). After a
+// download, either means compare before anything else; never retry
+// blindly.
+func OutcomeUnknown(err error) bool {
+	k := Kind(err)
+	return k == KindOutcomeUnknown || k == KindUnreachable
 }
 
 // IsFatal reports whether err is a tiad error that ended the session.
@@ -651,11 +668,15 @@ func (s *Session) Compile(ctx context.Context, hardware, software bool) (Compile
 }
 
 // Download loads the project into the CPU at req.Address. See Resolve for
-// how questions are answered; run a dry run first to see them.
+// how questions are answered. A dry run lists the questions and cancels;
+// it reaches the CPU too, so it must be announced like a real download,
+// and that it loads nothing is provisional until S2 proves it
+// (siemens-ide.md §3.5; the result says Provisional).
 //
-// An error of kind unreachable (the agent did not answer, or ctx was
-// cancelled) leaves the outcome UNKNOWN: the agent may have loaded the
-// CPU. Run Compare before retrying, never retry blindly.
+// When OutcomeUnknown(err) (the agent did not answer, ctx was cancelled,
+// or the agent answered outcome_unknown), the CPU may or may not be
+// loaded. Run Compare on the same session before anything else, never
+// retry blindly.
 func (s *Session) Download(ctx context.Context, req DownloadRequest) (DownloadResult, error) {
 	if err := req.Validate(); err != nil {
 		return DownloadResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}

@@ -146,13 +146,16 @@ namespace Tiad
 
         CompileResult Compile(object project, bool hardware, bool software);
 
-        // Download loads the project into the CPU at address. TIA's
-        // pre-download checks go to decide, as questions, before anything
-        // is loaded. decide returns true to answer them from decisions
-        // and load, or false to cancel, and then nothing is loaded. A dry
-        // run is a download whose decide always says false.
+        // Download loads the project into the CPU at address, never at
+        // any address of the project's own. It calls decide EXACTLY ONCE,
+        // with every pre-download check TIA asks as questions (an empty
+        // list when TIA asks nothing), BEFORE anything is loaded. decide
+        // returns null to cancel, and then nothing may be loaded; or one
+        // Answer per question, in order, to apply exactly as given. A dry
+        // run is a download whose decide always returns null. secrets
+        // carries the protection password a password question needs.
         DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Decisions decisions, Secrets secrets, Func<List<Question>, bool> decide);
+            Secrets secrets, Func<List<Question>, List<Answer>> decide);
 
         // Compare compares the project with the CPU at address and fills
         // differences; it returns whether they are equal.

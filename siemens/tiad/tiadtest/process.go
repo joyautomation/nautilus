@@ -43,9 +43,15 @@ type Script struct {
 	Questions     []tiad.Question     `json:"questions,omitempty"`
 	// LoadDespiteCancel makes the fake TIA load even when the agent
 	// cancels: a misbehaving TIA, to prove the agent reports it.
-	LoadDespiteCancel bool           `json:"loadDespiteCancel,omitempty"`
-	Delays            []ScriptedCall `json:"delays,omitempty"`
-	Failures          []ScriptedCall `json:"failures,omitempty"`
+	LoadDespiteCancel bool `json:"loadDespiteCancel,omitempty"`
+	// DecideCalls is how often the fake calls decide (nil: once, as the
+	// ITia contract says; 0 or 2 break it).
+	DecideCalls *int `json:"decideCalls,omitempty"`
+	// FailAfterDecide makes the fake fail the way TIA fails after decide
+	// answered.
+	FailAfterDecide string         `json:"failAfterDecide,omitempty"`
+	Delays          []ScriptedCall `json:"delays,omitempty"`
+	Failures        []ScriptedCall `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).

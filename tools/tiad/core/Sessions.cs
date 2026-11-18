@@ -15,7 +15,12 @@ namespace Tiad
         public string Project = "";     // request form, relative to the work dir
         public string ProjectFull = "";
         public object Handle;           // ITia's project; null while opening
-        public Station Station;         // the station last applied, or null
+        public Station Station;         // the spec the project matches, or null
+        // Address is the CPU the project belongs to, from the last spec
+        // applied. It outlives Station: after an upload the project no
+        // longer matches its spec, but compare and export still know the
+        // CPU.
+        public string Address = "";
         public bool Compiled;           // fully compiled since the last change
         public bool Closed;
         // Broken is set when closing the project failed: TIA may still
@@ -33,7 +38,63 @@ namespace Tiad
     {
         readonly object mu = new object();
         readonly Dictionary<string, Session> byId = new Dictionary<string, Session>(StringComparer.Ordinal);
+        // cpus maps a CPU address to the session that claimed it with a
+        // download. One CPU, one project: the claim holds until that
+        // session is closed (a broken session keeps it).
+        readonly Dictionary<string, Session> cpus = new Dictionary<string, Session>(StringComparer.Ordinal);
         int next;
+
+        // ClaimCpu claims address for s, atomically, or refuses (busy)
+        // when another session holds it.
+        public void ClaimCpu(Session s, string address)
+        {
+            lock (mu)
+            {
+                Session holder;
+                if (cpus.TryGetValue(address, out holder) && holder != s)
+                {
+                    throw new TiadException(409, Kinds.Busy, "CPU " + address + " belongs to session " + holder.Id + " (" + holder.Project + "): one CPU, one project; close that session first");
+                }
+                cpus[address] = s;
+            }
+        }
+
+        // ReleaseCpus drops every claim s holds, once it is closed.
+        public void ReleaseCpus(Session s)
+        {
+            lock (mu)
+            {
+                var drop = new List<string>();
+                foreach (var kv in cpus)
+                {
+                    if (kv.Value == s) drop.Add(kv.Key);
+                }
+                foreach (var a in drop) cpus.Remove(a);
+            }
+        }
+
+        // ProjectDirHolding returns the open session whose project directory
+        // holds dir (request form), or null. A project at the work dir's
+        // root claims no directory.
+        public Session ProjectDirHolding(string dir)
+        {
+            string d = dir.TrimEnd('/') + "/";
+            lock (mu)
+            {
+                foreach (var s in byId.Values)
+                {
+                    string own = s.Guard;
+                    if (own == "")
+                    {
+                        int slash = s.Project.LastIndexOf('/');
+                        if (slash < 0) continue;
+                        own = s.Project.Substring(0, slash + 1);
+                    }
+                    if (d.StartsWith(own, ProjectCmp)) return s;
+                }
+            }
+            return null;
+        }
 
         // The work dir is on Windows, where projects/P/P.ap21 and
         // projects/p/p.ap21 are one file: one project, one writer.

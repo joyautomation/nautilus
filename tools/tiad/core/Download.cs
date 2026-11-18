@@ -95,18 +95,46 @@ namespace Tiad
         }
 
         // Validate is tiad.DownloadRequest.Validate: the request's own
-        // shape, with Go's messages.
+        // shape, with Go's messages. A dry run must be announced too: it
+        // reaches the CPU, and that a cancelled download loads nothing is
+        // provisional until S2 proves it (section 3.5).
         public string Validate()
         {
             if (!Ip.IsIPv4(Address)) return "download: address " + Json.Quote(Address) + " is not an IPv4 address";
             if (!Hardware && !Software) return "download: neither hardware nor software selected";
-            if (!DryRun && !Announced) return "download: a real download must be announced first (announced: true)";
+            if (!Announced) return "download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing";
             return null;
         }
     }
 
+    // Answer is the agent's resolved answer to one question: Yes means do
+    // what the question asks (stop the CPU, reinitialize the DBs it names,
+    // overwrite, trust the certificate, use the protection password, start
+    // the CPU after loading). The only question that can be answered no
+    // and still load is start-after: no means stay in STOP.
+    public sealed class Answer
+    {
+        public Question Question;
+        public bool Yes;
+    }
+
     public static class DownloadRule
     {
+        // Answers turns approved decisions into one answer per question,
+        // in order, so TIA's side never derives an answer itself. Call it
+        // only when Resolve left nothing unanswered or declined.
+        public static List<Answer> Answers(List<Question> qs, Decisions d)
+        {
+            var outp = new List<Answer>();
+            foreach (var q in qs)
+            {
+                bool yes = true;
+                if (q.Id == QuestionIds.StartAfter) yes = d.StartAfter.HasValue && d.StartAfter.Value;
+                outp.Add(new Answer { Question = q.Copy(), Yes = yes });
+            }
+            return outp;
+        }
+
         // Resolve applies the download rule: every question is answered
         // only from d. It fills the questions with no answer and the ones
         // answered no; a download goes ahead only when both are empty.

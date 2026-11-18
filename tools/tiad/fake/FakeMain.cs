@@ -91,6 +91,34 @@ namespace Tiad.Fake
         Dictionary<string, string> failures = new Dictionary<string, string>(StringComparer.Ordinal);
         List<Question> questions = new List<Question>();
         bool loadDespiteCancel;
+        int decideCalls = 1;
+        string failAfterDecide = "";
+
+        // DecideCalls is how many times Download calls decide (1, as the
+        // ITia contract says; 0 or 2 for an ITia that breaks it).
+        public int DecideCalls
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return decideCalls;
+                }
+            }
+        }
+
+        // FailAfterDecide, when set, makes Download fail the way TIA fails
+        // after decide has answered.
+        public string FailAfterDecide
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return failAfterDecide;
+                }
+            }
+        }
 
         // LoadDespiteCancel makes Download load even when decide says no:
         // a TIA that ignores the cancel, to prove the agent says so.
@@ -189,6 +217,8 @@ namespace Tiad.Fake
             var f = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var x in r.Children("failures")) f[x.Str("call")] = x.Str("message");
             bool despite = r.Bool("loadDespiteCancel");
+            int? calls = r.OptInt("decideCalls");
+            string after = r.Str("failAfterDecide");
             var qs = new List<Question>();
             foreach (var x in r.Children("questions"))
             {
@@ -202,6 +232,8 @@ namespace Tiad.Fake
                 failures = f;
                 questions = qs;
                 loadDespiteCancel = despite;
+                decideCalls = calls.HasValue ? calls.Value : 1;
+                failAfterDecide = after;
             }
             return new Obj();
         }
@@ -334,17 +366,25 @@ namespace Tiad.Fake
         }
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Decisions decisions, Secrets secrets, Func<List<Question>, bool> decide)
+            Secrets secrets, Func<List<Question>, List<Answer>> decide)
         {
             script.Enter("Download");
             var p = (FakeProject)project;
             var outcome = new DownloadOutcome { Questions = script.Questions };
-            if (!decide(outcome.Questions) && !script.LoadDespiteCancel) return outcome;
+            List<Answer> answers = null;
+            for (int i = 0; i < script.DecideCalls; i++) answers = decide(outcome.Questions);
+            if (script.FailAfterDecide != "") throw new TiaException(script.FailAfterDecide);
+            if (answers == null && !(script.LoadDespiteCancel || script.DecideCalls == 0)) return outcome;
+            // TIA stops the CPU to load it when it asks to; it starts it
+            // again only when start-after is answered yes.
             outcome.State = "RUN";
-            foreach (var q in outcome.Questions)
+            bool stops = false, starts = false;
+            foreach (var a in answers ?? new List<Answer>())
             {
-                if (q.Id == QuestionIds.StopCpu && !(decisions.StartAfter.HasValue && decisions.StartAfter.Value)) outcome.State = "STOP";
+                if (a.Question.Id == QuestionIds.StopCpu && a.Yes) stops = true;
+                if (a.Question.Id == QuestionIds.StartAfter && a.Yes) starts = true;
             }
+            if (stops && !starts) outcome.State = "STOP";
             var rec = new Obj();
             rec["address"] = address;
             rec["hardware"] = hardware;

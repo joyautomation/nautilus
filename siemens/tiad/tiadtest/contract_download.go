@@ -67,6 +67,8 @@ func contractDownload(t *testing.T, start Starter) {
 	t.Run("DownloadPrecedence", func(t *testing.T) { contractDownloadPrecedence(t, start) })
 	t.Run("Compare", func(t *testing.T) { contractCompare(t, start) })
 	t.Run("ExportUploadSave", func(t *testing.T) { contractExportUploadSave(t, start) })
+	t.Run("S2aSequence", func(t *testing.T) { contractS2aSequence(t, start) })
+	t.Run("OneCPUOneProject", func(t *testing.T) { contractOneCPU(t, start) })
 }
 
 // compiledBench is an agent with the bench project created, its program
@@ -112,9 +114,9 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: &tiad.Secrets{Protection: "protection-must-not-be-recorded"}}
 
 	dry := req
-	dry.DryRun, dry.Announced, dry.Decisions = true, false, tiad.Decisions{}
+	dry.DryRun, dry.Decisions = true, tiad.Decisions{}
 	dr, err := s.Download(ctx, dry)
-	if err != nil || !dr.DryRun || dr.Downloaded || questionIDs(dr.Questions) != "stop-cpu,start-after" || dr.Questions[0].Message != "The CPU must stop" {
+	if err != nil || !dr.DryRun || !dr.Provisional || dr.Downloaded || questionIDs(dr.Questions) != "stop-cpu,start-after" || dr.Questions[0].Message != "The CPU must stop" {
 		t.Fatalf("dry run: %+v %v", dr, err)
 	}
 	if l := a.Loaded(t); len(l) != 0 {
@@ -144,7 +146,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if cmp, _ := s.Compare(ctx); cmp.Equal {
 		t.Fatal("compare is equal after a station change")
 	}
-	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "compile") {
+	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindNotCompiled {
 		t.Fatalf("download after a change, before compiling: %v", err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
@@ -171,7 +173,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if _, err := s.Compile(ctx, false, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindOperationFailed {
+	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindNotCompiled {
 		t.Fatalf("download after a software-only compile: %v", err)
 	}
 }
@@ -278,7 +280,8 @@ func contractDownloadRequest(t *testing.T, start Starter) {
 		body any
 		want string
 	}{
-		{"not announced", map[string]any{"address": benchCPU, "software": true}, "must be announced"},
+		{"not announced", map[string]any{"address": benchCPU, "software": true}, "announce it first"},
+		{"a dry run not announced", map[string]any{"address": benchCPU, "software": true, "dryRun": true}, "announce it first"},
 		{"nothing selected", map[string]any{"address": benchCPU, "announced": true}, "neither hardware nor software"},
 		{"no address", map[string]any{"software": true, "announced": true}, "not an IPv4 address"},
 		{"a name for an address", map[string]any{"address": "plc-1", "software": true, "announced": true}, "not an IPv4 address"},
@@ -287,6 +290,10 @@ func contractDownloadRequest(t *testing.T, start Starter) {
 		{"a decision as a string", map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": "yes"}}, ""},
 		{"an unknown decision", map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCPU": true}}, "unknown field"},
 		{"an unknown field", map[string]any{"address": benchCPU, "software": true, "announced": true, "force": true}, "unknown field"},
+		// A key twice must never be read as its last (or first) value.
+		{"a decision twice", `{"address":"192.0.2.10","software":true,"announced":true,"decisions":{"stopCpu":false,"stopCpu":true}}`, "duplicate key"},
+		{"a decision twice, escaped", `{"address":"192.0.2.10","software":true,"announced":true,"decisions":{"stopCpu":false,"stopCp\u0075":true}}`, "duplicate key"},
+		{"announced twice", `{"address":"192.0.2.10","software":true,"announced":false,"announced":true}`, "duplicate key"},
 	}
 	for _, rc := range refused {
 		status, b := rawJSON(t, c, "POST", path, rc.body)
@@ -294,13 +301,9 @@ func contractDownloadRequest(t *testing.T, start Starter) {
 			t.Errorf("%s: HTTP %d %s, want 400 %q", rc.name, status, b, rc.want)
 		}
 	}
-	// A dry run needs no announcement, and null decisions are no answers.
+	// Null decisions are no answers.
 	a.SetQuestions(t, []tiad.Question{qStop})
-	status, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "dryRun": true})
-	if status != http.StatusOK {
-		t.Fatalf("an unannounced dry run: HTTP %d %s", status, b)
-	}
-	status, b = rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": nil}})
+	status, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": nil}})
 	if status != http.StatusConflict || envelopeKind(b) != tiad.KindDecisionRequired {
 		t.Fatalf("a null decision: HTTP %d %s, want decision_required", status, b)
 	}
@@ -333,7 +336,7 @@ func contractDownloadPrecedence(t *testing.T, start Starter) {
 		t.Fatal(err)
 	}
 	check("the station before the compile", req(otherCPU, true), 400, tiad.KindBadRequest, "one station spec per CPU")
-	check("the compile before the questions", req(benchCPU, true), 500, tiad.KindOperationFailed, "compile")
+	check("the compile before the questions", req(benchCPU, true), 409, tiad.KindNotCompiled, "compile")
 	if l := a.Loaded(t); len(l) != 0 {
 		t.Fatalf("refusals loaded %+v", l)
 	}
@@ -408,11 +411,21 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 			t.Errorf("export to %q: HTTP %d %s", p, status, b)
 		}
 	}
+	// An export never writes into an open project's directory.
+	for _, dir := range []string{"projects/bench", "projects/bench/sub", "PROJECTS/Bench/x"} {
+		if _, err := s.Export(ctx, tiad.ExportRequest{Dir: dir, Hardware: true}); tiad.Kind(err) != tiad.KindBusy {
+			t.Errorf("export to %s while bench is open: %v, want busy", dir, err)
+		}
+	}
+	if _, err := c.GetFile(ctx, "projects/bench/station.json"); tiad.Kind(err) != tiad.KindNotFound {
+		t.Fatalf("an export wrote into the open project's directory: %v", err)
+	}
 	if err := s.Upload(ctx); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindOperationFailed {
-		t.Fatalf("download after an upload changed the project, before compiling: %v", err)
+	// After an upload the project no longer matches its spec.
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
+		t.Fatalf("download after an upload: %v", err)
 	}
 	if p, err := s.Save(ctx, false); err != nil || p != "projects/bench/bench.ap21" {
 		t.Fatalf("save: %q %v", p, err)
@@ -422,5 +435,102 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 	}
 	if _, err := c.GetFile(ctx, "projects/bench/bench.zap21"); err != nil {
 		t.Fatalf("the archive is not in the work dir: %v", err)
+	}
+}
+
+// contractS2aSequence walks S2a, read-only towards the CPU: a project
+// for the CPU, an upload from it, the hardware exported twice (the two
+// exports must be equal), a compare. After the upload the project no
+// longer matches the spec, so a download needs a spec and a compile
+// again.
+func contractS2aSequence(t *testing.T, start Starter) {
+	a := start(t, Config{Targets: []string{benchCPU}})
+	c := a.Client()
+	installGSD(t, c)
+	s, err := c.CreateProject(ctx, "s2a", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Upload(ctx); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	var exports [2][]byte
+	for i := range exports {
+		dir := []string{"export/1", "export/2"}[i]
+		ex, err := s.Export(ctx, tiad.ExportRequest{Dir: dir, Blocks: "scl", TagTables: true, Hardware: true})
+		if err != nil {
+			t.Fatalf("export %d after the upload: %v", i+1, err)
+		}
+		for _, f := range ex.Files {
+			if strings.HasSuffix(f, "/station.json") {
+				exports[i], _ = c.GetFile(ctx, f)
+			}
+		}
+	}
+	if len(exports[0]) == 0 || string(exports[0]) != string(exports[1]) {
+		t.Fatalf("the two hardware exports differ or are missing:\n%s\n%s", exports[0], exports[1])
+	}
+	if _, err := s.Compare(ctx); err != nil {
+		t.Fatalf("compare after the upload: %v", err)
+	}
+	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true}
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
+		t.Fatalf("download straight after the upload: %v", err)
+	}
+	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindNotCompiled {
+		t.Fatalf("download after the spec, before a compile: %v", err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, dl); err != nil {
+		t.Fatalf("download after spec and compile: %v", err)
+	}
+}
+
+// contractOneCPU: two projects for one CPU. The first download claims the
+// CPU for its session (a dry run too); the other is refused until that
+// session is closed.
+func contractOneCPU(t *testing.T, start Starter) {
+	a := start(t, Config{Targets: []string{benchCPU}})
+	c := a.Client()
+	installGSD(t, c)
+	mk := func(name string) *tiad.Session {
+		t.Helper()
+		s, err := c.CreateProject(ctx, name, BenchStation(), BenchSecrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Compile(ctx, true, true); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	one, two := mk("one"), mk("two")
+	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}
+	dry := dl
+	dry.DryRun = true
+	if _, err := one.Download(ctx, dry); err != nil {
+		t.Fatalf("the first project's dry run: %v", err)
+	}
+	for _, r := range []tiad.DownloadRequest{dry, dl} {
+		if _, err := two.Download(ctx, r); tiad.Kind(err) != tiad.KindBusy {
+			t.Fatalf("the second project's download (dry %v) to a claimed CPU: %v, want busy", r.DryRun, err)
+		}
+	}
+	if _, err := one.Download(ctx, dl); err != nil {
+		t.Fatalf("the claiming project's download: %v", err)
+	}
+	if n := len(a.Loaded(t)); n != 1 {
+		t.Fatalf("loaded %d times, want 1", n)
+	}
+	if err := one.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := two.Download(ctx, dl); err != nil {
+		t.Fatalf("the second project once the first is closed: %v", err)
 	}
 }
