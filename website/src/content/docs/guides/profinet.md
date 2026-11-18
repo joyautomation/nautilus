@@ -127,6 +127,11 @@ handles it as it would a faulty module.
 
 ## Redundancy
 
+`naut check` still refuses PROFINET together with `redundancy:`. On
+takeover the new leader must already hold the station's address, and
+`redundancy:` cannot name and check that floating address yet. What
+follows is how it will behave once it can.
+
 Under `redundancy:`, only the leader is a PROFINET device. Every frame
 it sends first checks that its lease is still current, so a leader that
 was frozen past its lease sends nothing when it resumes. A standby
