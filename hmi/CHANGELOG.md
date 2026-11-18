@@ -1,6 +1,6 @@
 # Changelog — @joyautomation/nautilus-hmi
 
-## 0.10.0 — 2026-11-18 (minor: additive, no breaking changes)
+## 0.10.0 — 2026-11-18 (minor: no breaking API changes; visual defaults change: grey liquid, single-line ISA-101 pipes, a darker light-theme `--s1`)
 
 ### Added
 
