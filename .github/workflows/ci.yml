@@ -307,7 +307,8 @@ jobs:
   # went unnoticed because no job ran -race on it. Every package runs here
   # except the three slowest under -race (about 680 s of the module's 1300 s
   # locally): opcua, opcua/server and cmd/naut, which the go job still runs
-  # without it. Among what runs: the test brokers' churn test (1000 rounds
+  # without it and race-nightly.yml runs under -race with the whole module
+  # every night (not a PR gate; it files what it finds). Among what runs: the test brokers' churn test (1000 rounds
   # under -race, the window where mochi's own Close deadlocks) and every
   # concurrency-heavy package (runtime, leader, server, io, sparkplug),
   # the real-time guard's thread-table tests among them (#870, #872).
