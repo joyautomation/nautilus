@@ -313,6 +313,36 @@ jobs:
           name: evidence-examples
           path: evidence/
           retention-days: 14
+  # The TIA Openness agent's contract (siemens/tiad): tiad's C# core under
+  # Mono with a scripted host instead of TIA (tools/tiad/build-fake.sh →
+  # tiad-fake.exe), and the Go contract suite against it. The suite skips
+  # without TIAD_FAKE_BIN; NAUTILUS_REQUIRE_TIAD=1 makes that a failure here,
+  # so a build that silently stopped producing the fake can't pass. The plain
+  # go job leaves the flag unset and skips. TIAD_BIN (the real agent, on the
+  # TIA image) is never set here.
+  siemens-tiad:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Siemens tiad — contract suite on Mono (tiad-fake)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      # mono-devel, not mono-mcs + mono-runtime: build-fake.sh compiles with
+      # -sdk:4.8 and references System.Web.Extensions.dll, and only
+      # mono-devel carries the .NET 4.8 reference assemblies (verified in a
+      # clean ubuntu:24.04: the smaller pair fails with CS8001).
+      - name: Mono (mono-devel)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mono-devel
+      - name: build tiad-fake
+        run: tools/tiad/build-fake.sh
+      - name: contract suite against tiad-fake (must run, not skip)
+        env:
+          NAUTILUS_REQUIRE_TIAD: '1'
+        run: TIAD_FAKE_BIN="$PWD/tools/tiad/out/tiad-fake.exe" go test -count=1 -v ./siemens/tiad/...
   # The race detector over the module (#752): a data race in runtime (#870)
   # went unnoticed because no job ran -race on it. Every package runs here
   # except the three slowest under -race (about 680 s of the module's 1300 s
@@ -1284,7 +1314,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, go, go-race, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
+    needs: [changes, go, go-race, siemens-tiad, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
