@@ -286,6 +286,10 @@ func (c *rungCtx) storeConversion(a ld.Assignment) (ld.Expr, bool) {
 		// Into a timer's ET or PT: the box moves milliseconds into ACC or
 		// PRE (#793).
 		return call.Args[0], true
+	case (to == "REAL" || to == "LREAL") && isConvInt(from) && from != "TIME" && (at == from || at == anyInt):
+		// An integer into a REAL: the box converts as it stores (#782;
+		// a REAL is 32 bits on the controller, as ever).
+		return call.Args[0], true
 	}
 	return nil, false
 }

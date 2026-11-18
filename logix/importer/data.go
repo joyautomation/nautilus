@@ -176,6 +176,25 @@ func (rt *routine) storeConversion(m string, args []string, target, rendered str
 		}
 		dst = "DINT"
 	}
+	if dst == "REAL" {
+		// IEC 61131-3's table takes an integer into a REAL implicitly
+		// only up to 16 bits (REAL's mantissa); a box storing a DINT or a
+		// LINT into one writes the conversion (#782).
+		name, w := "", 0
+		for _, a := range srcs {
+			t := rt.operandType(a)
+			if t == "REAL" || t == "LREAL" || t == "TIME" {
+				return ""
+			}
+			if intWidth[t] > w {
+				name, w = t, intWidth[t]
+			}
+		}
+		if name == "DINT" || name == "LINT" {
+			return name + "_TO_REAL"
+		}
+		return ""
+	}
 	if intWidth[dst] == 0 {
 		return ""
 	}

@@ -216,6 +216,26 @@ func ImplicitConversion(from, to string) bool {
 // IsBitString reports a bit-string type name (BYTE, WORD, DWORD, LWORD).
 func IsBitString(name string) bool { c, _ := intClass(name); return c == 'b' }
 
+// realFrom is IEC 61131-3's table (Figure 11) into REAL and LREAL: the
+// integers whose every value the type's mantissa holds, and REAL into
+// LREAL. LREAL into REAL, DINT into REAL and the 64-bit integers into
+// either need a conversion function.
+var realFrom = map[string][]string{
+	"REAL":  {"SINT", "INT", "USINT", "UINT"},
+	"LREAL": {"SINT", "INT", "DINT", "USINT", "UINT", "UDINT", "REAL"},
+}
+
+// ImplicitRealConversion reports whether a value of type from goes into a
+// REAL or an LREAL (to) without a conversion function.
+func ImplicitRealConversion(from, to string) bool {
+	for _, f := range realFrom[to] {
+		if f == from {
+			return true
+		}
+	}
+	return false
+}
+
 // intClass sorts the declared integer names into the three families the
 // common-type rule ranks within: signed (SINT..LINT), unsigned
 // (USINT..ULINT) and bit strings (BYTE..LWORD).

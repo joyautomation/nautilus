@@ -879,8 +879,12 @@ func resolveScalar(name string) (*ir.Type, error) {
 		// One int64 at run time, but the declared name stays on the type so
 		// a diagnostic says DINT, and w.%X31 knows a DINT has 32 bits.
 		return ir.IntNamed(strings.ToUpper(name)), nil
-	case "REAL", "LREAL":
+	case "REAL":
 		return ir.RealT, nil
+	case "LREAL":
+		// The same float64 as REAL, named so an LREAL into a REAL and an
+		// integer into either follow IEC's table (#782).
+		return ir.LRealT(), nil
 	case "TIME", "LTIME":
 		return ir.TimeT, nil
 	case "STRING", "WSTRING", "CHAR", "WCHAR":
@@ -1662,6 +1666,9 @@ func (l *lowerer) lowerAssign(a *AssignStmt) (ir.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := realRule(target.ExprType(), value); err != nil {
+		return nil, err
+	}
 	value = coerce(value, target.ExprType())
 	if !assignable(target.ExprType(), value.ExprType()) {
 		return nil, fmt.Errorf("cannot assign %s to %s", value.ExprType(), target.ExprType())
@@ -1720,6 +1727,35 @@ func storeRule(t *ir.Type, value ir.Expr, src Expression) (*ir.Wrap, error) {
 		return nil, nil // an implicit widening: it fits
 	}
 	return ir.NewWrap(t), nil
+}
+
+// realRule is IEC 61131-3's table for a store into a REAL or an LREAL
+// (#782, held for James's call): an integer goes into a REAL only when
+// REAL's 24-bit mantissa holds it (SINT, INT, USINT, UINT), into an LREAL
+// up to the 32-bit types, and an LREAL never into a REAL; anything else
+// names the conversion to write. A value with no declared width (a
+// literal, an untyped result) converts as before.
+func realRule(t *ir.Type, v ir.Expr) error {
+	vt := v.ExprType()
+	if t == nil || vt == nil || t.Kind != ir.TypeReal {
+		return nil
+	}
+	to := "REAL"
+	if t.Name == "LREAL" {
+		to = "LREAL"
+	}
+	from := vt.Name
+	if vt.Kind == ir.TypeReal {
+		if from != "LREAL" {
+			from = "REAL"
+		}
+	} else if !vt.IsInteger() || vt.Enum != nil || from == "" {
+		return nil
+	}
+	if from == to || ir.ImplicitRealConversion(from, to) {
+		return nil
+	}
+	return fmt.Errorf("cannot assign %s to %s implicitly; write %s_TO_%s(…)", from, to, from, to)
 }
 
 // storeInput is storeRule for a value bound to an FB or FUNCTION input:

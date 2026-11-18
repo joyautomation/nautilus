@@ -27,7 +27,7 @@ LD
     { dc := a / b + c }
 
   RUNG viatag (* the quotient into a DINT tag, then into a REAL *)
-    { q := a / b; rq := q }
+    { q := a / b; rq := DINT_TO_REAL(q) }
 
   RUNG real (* a REAL divided by an integer is a REAL division on both *)
     { rr := x / b }

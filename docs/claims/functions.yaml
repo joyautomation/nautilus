@@ -1099,6 +1099,7 @@ claims:
       over the first operand's declared width: a WORD rotates over 16 bits.
     source: "#bit-operations"
     tests:
+      - go ./lang/st TestIntegerStoreWrapsToTheTargetWidth
       - go ./lang/conformance TestConformance/st-int-width/shifts act on the operand's 16 bits, and an INT reads bit 15 as the sign
       - go ./lang/conformance TestConformance/st-int-width/ROL and ROR rotate over the declared 16 bits
       - go ./lang/st TestBuiltinBitOps

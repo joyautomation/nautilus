@@ -196,6 +196,7 @@ claims:
       - go ./lang/conformance TestConformance/st-bitwise/an INT's 16 bits - bit 15 is the sign
       - go ./lang/st TestImplicitConversionsFollowTheIECTable
       - go ./lang/ld TestLadderStoreFollowsTheIntegerRules
+      - go ./lang/st TestRealStoresFollowTheIECTable
       - go ./lang/st TestIntegerStoreWrapsToTheTargetWidth
 
   - id: ST-017

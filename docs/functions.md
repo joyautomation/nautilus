@@ -286,7 +286,10 @@ details, `type:` forms and `init:` forms (TIME members, arrays).
   signed, the unsigned or the bit-string family and wider, or an unsigned
   type into a wider signed one; never signed into unsigned, and never
   between a bit string and an integer (`d := w` with `w : WORD` needs
-  `WORD_TO_DINT(w)`). The same rule holds at every place a program stores
+  `WORD_TO_DINT(w)`). Into a REAL only an integer whose every value its
+  24-bit mantissa holds goes implicitly (SINT, INT, USINT, UINT); into an
+  LREAL, up to the 32-bit types; an LREAL never goes into a REAL (`r := d`
+  with `d : DINT` needs `DINT_TO_REAL(d)`). The same rule holds at every place a program stores
   a value: an assignment, an FB or FUNCTION input, an `=>` output binding,
   a `FOR` variable's bounds, a declaration's initial value. Store into a
   `LINT` to keep a total that outgrows 32 bits.

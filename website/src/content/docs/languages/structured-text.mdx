@@ -140,8 +140,10 @@ that outgrows 32 bits belongs in a `LINT`. Arithmetic itself is computed in
 within the signed, unsigned or bit-string family and wider, or unsigned
 into a wider signed type. Anything else is a compile error that names the
 conversion to write: `i := d` with `d : DINT` needs `DINT_TO_INT(d)` (which
-wraps), `d := w` with `w : WORD` needs `WORD_TO_DINT(w)`, and a literal the
-type cannot hold is refused. Mixing signed and unsigned widens to a signed type that holds both
+wraps), `d := w` with `w : WORD` needs `WORD_TO_DINT(w)`, `r := d` into a
+`REAL` needs `DINT_TO_REAL(d)` (a REAL holds an integer exactly only up to
+16 bits; an `LREAL` takes a DINT), `r := lr` needs `LREAL_TO_REAL(lr)`, and
+a literal the type cannot hold is refused. Mixing signed and unsigned widens to a signed type that holds both
 (`INT + UINT` is a `DINT`) rather than being refused. `TIME` counts
 milliseconds.
 

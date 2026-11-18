@@ -589,3 +589,6 @@ func parseIntInto(name string, t convType, s string) (Value, error) {
 	}
 	return IntVal(int64(mag)), nil
 }
+
+// LRealT is the declared LREAL type: the float64 every REAL is, named.
+func LRealT() *Type { return lrealT }
