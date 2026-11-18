@@ -39,7 +39,15 @@ import (
 // replaced and reads NotConnected. Probing it first, and putting the old
 // configuration back when the new one does not come up, is the staged
 // apply's job (#706 PR 3/4).
-func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
+//
+// After a replace on a started driver, the source's first share of an
+// output snapshot is sent (the default) or, with opts.HoldOutputs, only
+// recorded as its baseline, as the runtime's Options.HoldOutputsOnSwap
+// does for a whole driver: pass that one switch here.
+//
+// On a stopped driver the replacement is recorded and its loop starts with
+// the next Start; replacing it again before then is fine.
+func (d *Driver) ReplaceSource(src Source, tags []TagBinding, opts ReplaceOptions) error {
 	d.replMu.Lock()
 	defer d.replMu.Unlock()
 	d.srcMu.RLock()
@@ -100,6 +108,7 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
 			ns.addOutput(t)
 		}
 	}
+	ns.baseline = opts.HoldOutputs
 	old.mu.Lock()
 	ns.enabled = old.enabled
 	ns.outages = old.outages // since the driver started; a replace is not one
@@ -145,13 +154,31 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
 	d.srcMu.Unlock()
 
 	if started {
-		old.cancel()
-		<-old.done // its request in flight is done or timed out
+		// Only a loop that ran is cancelled and waited for: a source
+		// recorded after Stop (startSource did nothing) has no cancel and
+		// no done, and waiting on its nil done would block forever.
+		d.lifeMu.Lock()
+		cancel, done := old.cancel, old.done
+		d.lifeMu.Unlock()
+		if done != nil {
+			cancel()
+			<-done // its request in flight is done or timed out
+		}
 		d.startSource(ns)
 	}
 	d.wanted.Store(true) // the new connection starts from the current commands
 	d.log.Info("modbus: source replaced", "source", src.ID, "addr", src.Addr(), "unit", src.UnitID, "bindings", len(eff))
 	return nil
+}
+
+// ReplaceOptions are ReplaceSource's choices.
+type ReplaceOptions struct {
+	// HoldOutputs records the source's first share of an output snapshot
+	// after the replace as its baseline instead of sending it: the new
+	// connection writes once a command changes. False (the default) sends
+	// it, so the device starts from the current commands. It is the
+	// runtime's Options.HoldOutputsOnSwap (#706, decision 1).
+	HoldOutputs bool
 }
 
 // sameSourceTags refuses a replacement that polls or accepts other tag names

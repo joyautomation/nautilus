@@ -279,9 +279,16 @@ type source struct {
 	byName map[string]outBinding
 
 	// cancel stops this source's loop alone; done closes when it has
-	// returned (ReplaceSource).
+	// returned (ReplaceSource). Both are set under the driver's lifeMu,
+	// and stay nil for a source whose loop never started.
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// baseline (under mu): the source's next share of an output snapshot
+	// is recorded, not sent, like the driver's start-up baseline. Set by
+	// ReplaceSource with ReplaceOptions.HoldOutputs; the next WriteOutputs
+	// clears it, gate open or not (a takeover's push is a command).
+	baseline bool
 
 	// kick wakes the loop: a queued write, an enable flip, a stop.
 	kick chan struct{}
@@ -903,30 +910,34 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
-	if open {
-		for _, s := range d.sources {
-			s.mu.Lock()
-			for _, name := range s.outputs {
-				v, ok := vals[name]
-				if !ok {
-					continue
-				}
-				if baseline && s.byName[name].b.Rewrite <= 0 {
-					// Record, never send. A tag with a command already
-					// queued keeps it: that one WAS asked for.
-					if _, queued := s.pending[name]; !queued {
-						s.written[name] = v
-					}
-				} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
-					// unchanged since the last value we accounted for
-				} else {
-					s.written[name] = v
-					s.pending[name] = v
-					kicked[s] = true
-				}
-			}
+	for _, s := range d.sources {
+		s.mu.Lock()
+		held := s.baseline
+		s.baseline = false
+		if !open {
 			s.mu.Unlock()
+			continue
 		}
+		for _, name := range s.outputs {
+			v, ok := vals[name]
+			if !ok {
+				continue
+			}
+			if (baseline || held) && s.byName[name].b.Rewrite <= 0 {
+				// Record, never send. A tag with a command already
+				// queued keeps it: that one WAS asked for.
+				if _, queued := s.pending[name]; !queued {
+					s.written[name] = v
+				}
+			} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
+				// unchanged since the last value we accounted for
+			} else {
+				s.written[name] = v
+				s.pending[name] = v
+				kicked[s] = true
+			}
+		}
+		s.mu.Unlock()
 	}
 	for s := range kicked {
 		nudge(s.kick)

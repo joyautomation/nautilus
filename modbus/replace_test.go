@@ -124,7 +124,7 @@ func TestReplaceSourceMovesOneDevice(t *testing.T) {
 		}
 	}()
 	b2 := fastSource("B", ss.b2.Addr())
-	if err := d.ReplaceSource(b2, newBTags()); err != nil {
+	if err := d.ReplaceSource(b2, newBTags(), ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "B_V from the new device's register 5", func() bool {
@@ -153,7 +153,7 @@ func TestReplaceSourceMovesOneDevice(t *testing.T) {
 func TestReplaceSourceStopsTheOldLoop(t *testing.T) {
 	c := &addrCounter{}
 	d, ss := twoDevices(t, c)
-	if err := d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags()); err != nil {
+	if err := d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags(), ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -194,7 +194,7 @@ func TestReplaceSourceRefuses(t *testing.T) {
 		{"an undefined scan class", b2, []TagBinding{{Name: "B_V", Source: "B", Table: TableHolding, Address: 5, Format: "uint16", ScanClass: "turbo"}, newBTags()[1]}, "turbo"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if err := d.ReplaceSource(c.src, c.tags); err == nil || !strings.Contains(err.Error(), c.want) {
+			if err := d.ReplaceSource(c.src, c.tags, ReplaceOptions{}); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("ReplaceSource: %v, want %q", err, c.want)
 			}
 			if h := d.Health(); h.Sources[1].Addr != ss.b.Addr() {
@@ -224,7 +224,7 @@ func TestReplaceSourceBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags()); err != nil {
+	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags(), ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	startDriver(t, d)
@@ -265,7 +265,7 @@ func TestReplaceSourceUnderConcurrentUse(t *testing.T) {
 		if i%2 == 1 {
 			tags[0].Address = 0
 		}
-		if err := d.ReplaceSource(fastSource("B", addrs[i%2]), tags); err != nil {
+		if err := d.ReplaceSource(fastSource("B", addrs[i%2]), tags, ReplaceOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -284,7 +284,7 @@ func TestReplaceSourceOldLoopKeepsItsBindings(t *testing.T) {
 	d.srcMu.RUnlock()
 	tags := newBTags()
 	tags[1].Address = 12
-	if err := d.ReplaceSource(fastSource("B", ss.b2.Addr()), tags); err != nil {
+	if err := d.ReplaceSource(fastSource("B", ss.b2.Addr()), tags, ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	d.srcMu.RLock()
@@ -323,7 +323,7 @@ func TestReplaceSourceKeepsAParkedDeviceParked(t *testing.T) {
 	waitFor(t, "B parked", func() bool { return d.Health().Sources[1].State == "parked" })
 	nb := fastSource("B", b2.Addr())
 	nb.Enable = "B_Enable"
-	if err := d.ReplaceSource(nb, newBTags()); err != nil {
+	if err := d.ReplaceSource(nb, newBTags(), ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -346,7 +346,7 @@ func TestReplaceSourceDuringATakeoverDoesNotHang(t *testing.T) {
 	replaced := make(chan error, 1)
 	reopenHook = func() {
 		once.Do(func() {
-			go func() { replaced <- d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags()) }()
+			go func() { replaced <- d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags(), ReplaceOptions{}) }()
 			time.Sleep(50 * time.Millisecond) // the replace now waits for the lock, if anything holds it
 		})
 	}
@@ -445,7 +445,7 @@ func TestReplaceSourceBreaksBeforeMaking(t *testing.T) {
 	d.WriteOutputs(nio.Values{"B_Cmd": uint16(4)}) // a command queued on the old device
 	tags := newBTags()
 	tags[1].Address = 12
-	if err := d.ReplaceSource(fastSource("B", b2.Addr()), tags); err != nil {
+	if err := d.ReplaceSource(fastSource("B", b2.Addr()), tags, ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the new device dialled", func() bool { tl.mu.Lock(); defer tl.mu.Unlock(); _, ok := tl.dialed[b2.Addr()]; return ok })
@@ -487,7 +487,7 @@ func TestReplaceSourceCarriesOutages(t *testing.T) {
 	waitFor(t, "B online", func() bool { v, _ := d.ReadInputs(); return v["B__Online"] == true })
 	b.Stop()
 	waitFor(t, "one outage of B", func() bool { v, _ := d.ReadInputs(); return v["B__Outages"] == int64(1) })
-	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags()); err != nil {
+	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags(), ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "B online on the new device", func() bool { v, _ := d.ReadInputs(); return v["B__Online"] == true })
@@ -509,7 +509,7 @@ func TestReplaceSourceRefusesARetype(t *testing.T) {
 		{"DINT to BOOL", TagBinding{Name: "B_V", Source: "B", Table: TableCoil, Address: 5}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if err := d.ReplaceSource(b2, []TagBinding{c.b, newBTags()[1]}); err == nil || !strings.Contains(err.Error(), "type cannot change") {
+			if err := d.ReplaceSource(b2, []TagBinding{c.b, newBTags()[1]}, ReplaceOptions{}); err == nil || !strings.Contains(err.Error(), "type cannot change") {
 				t.Errorf("ReplaceSource: %v, want a refused retype", err)
 			}
 		})
@@ -537,7 +537,7 @@ func TestReplaceSourceLeavesTheCallersManifestAndRespectsStop(t *testing.T) {
 	defer cancel()
 	d.Start(ctx)
 	d.Stop()
-	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags()); err != nil {
+	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags(), ReplaceOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if m.Sources[1].Port != fastSource("B", b.Addr()).Port {
@@ -547,4 +547,102 @@ func TestReplaceSourceLeavesTheCallersManifestAndRespectsStop(t *testing.T) {
 	if n := c.count(b2.Addr()); n != 0 {
 		t.Errorf("after Stop a replace started a loop: %d requests to the new device", n)
 	}
+}
+
+// A driver stopped mid-apply may be replaced again (a rollback or a retry):
+// the replacement recorded after Stop has no loop, so the second replace
+// must neither cancel a nil func nor wait on a nil done (#880 review: it
+// panicked). The next Start polls the last replacement.
+func TestReplaceSourceTwiceAfterStop(t *testing.T) {
+	a, b, b2, b3 := newSlave(t), newSlave(t), newSlave(t), newSlave(t)
+	b3.Unit(1).SetHolding(5, 55)
+	d, err := New(Manifest{
+		Sources: []Source{fastSource("A", a.Addr()), fastSource("B", b.Addr())},
+		Tags: []TagBinding{
+			{Name: "A_V", Source: "A", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_V", Source: "B", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_Cmd", Source: "B", Table: TableHolding, Address: 10, Format: "uint16", Writable: true},
+		},
+	}, WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+	d.Stop()
+	replaced := make(chan error, 1)
+	go func() {
+		if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags(), ReplaceOptions{}); err != nil {
+			replaced <- err
+			return
+		}
+		replaced <- d.ReplaceSource(fastSource("B", b3.Addr()), newBTags(), ReplaceOptions{})
+	}()
+	select {
+	case err := <-replaced:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second replace after Stop hung (waiting on a loop that never started)")
+	}
+	d.Start(ctx)
+	t.Cleanup(d.Stop)
+	waitFor(t, "B_V from the last replacement after a restart", func() bool {
+		v, _ := d.ReadInputs()
+		return v["B_V"] == int64(55)
+	})
+}
+
+// ReplaceOptions.HoldOutputs (the runtime's HoldOutputsOnSwap): the
+// driver still asks for the outputs, but the replaced source records that
+// snapshot as its baseline and writes only once a command changes. The
+// other source's outputs are not held. Without it (the default), the
+// current command is sent: TestReplaceSourceMovesOneDevice.
+func TestReplaceSourceHoldOutputs(t *testing.T) {
+	d, ss := twoDevices(t, nil)
+	if err := d.WriteOutputs(nio.Values{"B_Cmd": uint16(7)}); err != nil { // the baseline snapshot
+		t.Fatal(err)
+	}
+	d.OutputsWanted()
+	if err := d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags(), ReplaceOptions{HoldOutputs: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !d.OutputsWanted() {
+		t.Fatal("a held replace should still ask for the outputs (to record them)")
+	}
+	if err := d.WriteOutputs(nio.Values{"B_Cmd": uint16(7)}); err != nil {
+		t.Fatal(err)
+	}
+	u := ss.b2.Unit(1)
+	waitFor(t, "B_V from the new device", func() bool {
+		v, _ := d.ReadInputs()
+		return v["B_V"] == int64(33)
+	})
+	time.Sleep(100 * time.Millisecond) // several polls: a queued write would have gone by now
+	if got := u.Holding(10); got != 0 {
+		t.Fatalf("held: the new device got the unchanged command %d", got)
+	}
+	if err := d.WriteOutputs(nio.Values{"B_Cmd": uint16(8)}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a changed command on the new device", func() bool { return u.Holding(10) == 8 })
+}
+
+// A held replace on a standby: the snapshots it sees while the gate is
+// closed use up the hold, so the takeover's push is a command and reaches
+// the new device (a takeover must never start from a swallowed push).
+func TestReplaceSourceHeldOnAStandbyStillPushesAtTakeover(t *testing.T) {
+	d, ss := twoDevices(t, nil)
+	var open atomic.Bool
+	d.SetWriteGate(open.Load)
+	if err := d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags(), ReplaceOptions{HoldOutputs: true}); err != nil {
+		t.Fatal(err)
+	}
+	d.WriteOutputs(nio.Values{"B_Cmd": uint16(7)}) // standby: dropped
+	open.Store(true)                               // the takeover
+	d.WriteOutputs(nio.Values{"B_Cmd": uint16(7)}) // its push: the first snapshot with the gate open
+	u := ss.b2.Unit(1)
+	waitFor(t, "the current command on the new device after the takeover", func() bool { return u.Holding(10) == 7 })
 }
