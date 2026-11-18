@@ -82,6 +82,7 @@ type Server struct {
 	pingGen  int
 	Requests int // HTTP requests served, for asserting batching
 	Calls    int // JSON-RPC calls served
+	Logins   int // successful Api.Login calls
 }
 
 type session struct {
@@ -284,6 +285,7 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 		s.nextTok++
 		t := fmt.Sprintf("tok%04d-%s", s.nextTok, strings.Repeat("x", 19))
 		s.tokens[t] = &session{user: p.User, lastUsed: s.now()}
+		s.Logins++
 		return ok(map[string]string{"token": t})
 	}
 

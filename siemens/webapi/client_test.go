@@ -127,7 +127,10 @@ func TestGenuineDenialKeepsTheToken(t *testing.T) {
 	if err := v.RequestOperatingMode(ctx, webapi.ModeStop); webapi.Code(err) != webapi.CodePermissionDenied {
 		t.Fatalf("viewer stop: %v", err)
 	}
-	// Denials are not expiry: one session, still usable.
+	// Denials are not expiry: one login, one session, still usable.
+	if s.Logins != 1 {
+		t.Fatalf("logins = %d after four denials, want 1 (a denial must not abandon the token)", s.Logins)
+	}
 	if n := s.Sessions(); n != 1 {
 		t.Fatalf("sessions = %d after four denials, want 1", n)
 	}
@@ -506,5 +509,84 @@ func TestMissingBulkReplyIsUnknown(t *testing.T) {
 	}
 	if !errors.Is(rs[2].Err, webapi.ErrUnknown) {
 		t.Fatalf("the unanswered call: %v, want ErrUnknown", rs[2].Err)
+	}
+}
+
+// TestDenialOnAReplacedTokenRetries makes the race deterministic: while
+// a read is in flight on token A, the client logs in again (token B) and
+// the CPU answers the read on A with PermissionDenied. The denial belongs
+// to the old token, so the client retries once on B and succeeds.
+func TestDenialOnAReplacedTokenRetries(t *testing.T) {
+	ctx := context.Background()
+	var (
+		mu     sync.Mutex
+		tokens = map[string]bool{}
+		next   int
+		c      *webapi.Client
+		raced  bool
+	)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var q map[string]any
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &q)
+		tok := r.Header.Get("X-Auth-Token")
+		reply := func(res any, code int) {
+			out := map[string]any{"jsonrpc": "2.0", "id": q["id"]}
+			if code != 0 {
+				out["error"] = map[string]any{"code": code, "message": "x"}
+			} else {
+				out["result"] = res
+			}
+			json.NewEncoder(w).Encode(out)
+		}
+		switch q["method"] {
+		case "Api.Login":
+			mu.Lock()
+			next++
+			t := fmt.Sprintf("tok%d", next)
+			tokens[t] = true
+			mu.Unlock()
+			reply(map[string]string{"token": t}, 0)
+		case "Api.Logout":
+			mu.Lock()
+			delete(tokens, tok)
+			mu.Unlock()
+			reply(true, 0)
+		case "Api.Ping":
+			reply("same-boot", 0)
+		case "PlcProgram.Read":
+			mu.Lock()
+			first := !raced
+			raced = true
+			mu.Unlock()
+			if first {
+				// Another caller re-logs in while this read is in flight.
+				if err := c.Logout(ctx); err != nil {
+					t.Error(err)
+				}
+				if err := c.Login(ctx); err != nil {
+					t.Error(err)
+				}
+			}
+			mu.Lock()
+			valid := tokens[tok]
+			mu.Unlock()
+			if !valid {
+				reply(nil, webapi.CodePermissionDenied)
+				return
+			}
+			reply(42, 0)
+		}
+	}))
+	defer srv.Close()
+	sum := sha256.Sum256(srv.Certificate().Raw)
+	var err error
+	c, err = webapi.New(srv.URL, webapi.Options{User: "naut", Password: "pw", CertSHA256: hex.EncodeToString(sum[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := c.Read(ctx, `"Tags".A`)
+	if err != nil || string(v) != "42" {
+		t.Fatalf("read across a re-login: %s %v", v, err)
 	}
 }
