@@ -390,11 +390,19 @@ scp naut-launch admin@<controller>:/opt/plcnext/apps/nautilus/
 ssh admin@<controller> 'chmod 755 /opt/plcnext/apps/nautilus/naut-launch; echo 0 > /opt/plcnext/apps/nautilus/cpu'
 ```
 
-Then, from the project, with an SSH key for admin:
+Then, from the project. The controller's sshd refuses keys for admin
+(its home is group writable), so `naut deploy` signs in with the
+password: typed at the terminal, once per command, or from a password
+manager through an askpass program, such as
+`tools/deploy/askpass-bw.sh` for Bitwarden:
 
 ```sh
 naut deploy install admin@<controller> -supervisor cron -root /opt/plcnext/apps/nautilus
 naut deploy update admin@<controller>      # every later release; rollback, status, backup as usual
+
+# unattended, the password from a Bitwarden item (the vault already unlocked)
+export NAUT_SSH_ASKPASS=tools/deploy/askpass-bw.sh NAUT_BW_ITEM=<item>
+naut deploy update admin@<controller>
 ```
 
 The controller is built for `linux/armv7` on the matching naut release.

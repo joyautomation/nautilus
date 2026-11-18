@@ -22,6 +22,7 @@ import (
 
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
+	"golang.org/x/term"
 )
 
 // naut deploy puts a controller on a Linux box with systemd over SSH (#721),
@@ -82,6 +83,10 @@ install only:
 <ssh-target> is anything ssh takes: user@host, or a Host from ~/.ssh/config.
 The user must be root or have sudo without a password (any user that can write
 -root in cron mode). NAUT_SSH_OPTS adds ssh options, e.g. "-p 2222 -i ~/.ssh/ipc".
+ssh signs in with keys only (BatchMode), unless a password can come from
+somewhere: NAUT_SSH_ASKPASS=<program> prints it (tools/deploy/askpass-bw.sh
+reads it from Bitwarden), as does SSH_ASKPASS with SSH_ASKPASS_REQUIRE=force,
+or a person at a terminal types it, once per command.
 
 On the box:
   /opt/nautilus/releases/<id>/controller   one per release (the newest 3 besides current and previous)
@@ -509,6 +514,7 @@ type sshBox struct {
 	target string
 	ctlDir string
 	opts   []string
+	env    []string // added to ssh's environment (SSH_ASKPASS)
 	// cron mode (#768): no systemd and no root; box.sh runs as the SSH user
 	// with releases and state under cronRoot.
 	cron     bool
@@ -614,8 +620,36 @@ func (b *sshBox) priv(cmd string) string {
 	return asRoot(cmd)
 }
 
+// stdinIsTerminal is a variable so tests can stand in for a person.
+var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
+// sshAuth decides how ssh may authenticate. Keys alone (BatchMode=yes) is
+// the default, so CD never hangs at a prompt. A password is allowed when a
+// program can supply it: NAUT_SSH_ASKPASS names one (e.g.
+// tools/deploy/askpass-bw.sh, from Bitwarden), or the standard SSH_ASKPASS
+// with SSH_ASKPASS_REQUIRE=force|prefer is set; or when a person is at a
+// terminal, where ssh asks on /dev/tty. With ControlMaster it is asked once
+// per command. Some controllers need it: a PLCnext's sshd refuses keys for
+// admin, whose home is group writable (#768).
+func sshAuth() (opts, env []string) {
+	if p := os.Getenv("NAUT_SSH_ASKPASS"); p != "" {
+		return nil, []string{"SSH_ASKPASS=" + p, "SSH_ASKPASS_REQUIRE=force"}
+	}
+	if os.Getenv("SSH_ASKPASS") != "" {
+		switch os.Getenv("SSH_ASKPASS_REQUIRE") {
+		case "force", "prefer":
+			return nil, nil
+		}
+	}
+	if stdinIsTerminal() {
+		return nil, nil
+	}
+	return []string{"-o", "BatchMode=yes"}, nil
+}
+
 func newSSHBox(target string) (*sshBox, error) {
-	b := &sshBox{target: target, opts: []string{"-o", "BatchMode=yes"}}
+	opts, env := sshAuth()
+	b := &sshBox{target: target, opts: opts, env: env}
 	if goruntime.GOOS != "windows" {
 		d, err := os.MkdirTemp("", "naut-ssh")
 		if err != nil {
@@ -641,6 +675,9 @@ func (b *sshBox) close() {
 func (b *sshBox) run(stdin io.Reader, stdout io.Writer, remote string) int {
 	c := exec.Command("ssh", append(append([]string{}, b.opts...), b.target, remote)...)
 	c.Stdin, c.Stdout, c.Stderr = stdin, stdout, os.Stderr
+	if len(b.env) > 0 {
+		c.Env = append(os.Environ(), b.env...)
+	}
 	err := c.Run()
 	var ee *exec.ExitError
 	switch {

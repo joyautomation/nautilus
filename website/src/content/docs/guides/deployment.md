@@ -126,7 +126,14 @@ naut deploy restore deploy@ipc nautilus-retain-….tgz
 The box needs systemd, `sh`, coreutils and `tar`, and nothing else. The
 SSH user must be root or have `sudo` without a password. ssh is the
 system's, so `~/.ssh/config`, keys and the agent work as usual, and
-`NAUT_SSH_OPTS` adds options (`-p 2222 -i ~/.ssh/ipc`).
+`NAUT_SSH_OPTS` adds options (`-p 2222 -i ~/.ssh/ipc`). It signs in
+with keys only (`BatchMode`), so CD fails fast rather than waiting at
+a prompt, unless a password can come from somewhere: a person at a
+terminal types it, once per command, or `NAUT_SSH_ASKPASS` names a
+program that prints it (`tools/deploy/askpass-bw.sh` reads it from a
+Bitwarden item named by `NAUT_BW_ITEM`, from an already unlocked vault,
+and answers nothing but a password prompt). The standard `SSH_ASKPASS`
+with `SSH_ASKPASS_REQUIRE=force` works too.
 
 - **What it builds on.** For a box of another architecture, naut
   downloads its own release for that architecture and checks it against

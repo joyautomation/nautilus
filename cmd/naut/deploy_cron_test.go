@@ -90,8 +90,9 @@ func TestDeploySupervisorFlags(t *testing.T) {
 // box.sh's cron mode on this machine, end to end: install, update, an
 // update that does not start (rolled back, exit 3), rollback, the hold the
 // keepalive respects, status, uninstall. crontab is a fake on PATH; the
-// controller is a small Go program, since box.sh knows its controller by
-// /proc/<pid>/exe.
+// controller is a small Go program that makes itself non-dumpable, as a
+// controller started through naut-launch is, so box.sh must know it without
+// reading /proc/<pid>/exe.
 func TestDeployBoxCronMode(t *testing.T) {
 	if goruntime.GOOS != "linux" {
 		t.Skip("box.sh's cron mode reads /proc")
@@ -112,10 +113,14 @@ func TestDeployBoxCronMode(t *testing.T) {
 import (
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 )
 
 func main() {
+	// Not dumpable, like a controller naut-launch gave a capability: its
+	// /proc/<pid>/exe is unreadable, even to its owner.
+	syscall.RawSyscall(syscall.SYS_PRCTL, 4 /* PR_SET_DUMPABLE */, 0, 0)
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Println("sleeper")
 		return
@@ -179,10 +184,6 @@ esac
 		return p
 	}
 	alive := func(p int) bool { return p > 0 && syscall.Kill(p, 0) == nil }
-	release := func(p int) string {
-		exe, _ := os.Readlink("/proc/" + strconv.Itoa(p) + "/exe")
-		return filepath.Base(filepath.Dir(exe))
-	}
 	link := func(name string) string {
 		l, _ := os.Readlink(filepath.Join(root, name))
 		return filepath.Base(l)
@@ -200,8 +201,11 @@ esac
 		t.Fatalf("install: exit %d\n%s", code, out)
 	}
 	p1 := pid()
-	if !alive(p1) || release(p1) != "r1" {
-		t.Fatalf("after install r1 should run, pid %d release %q", p1, release(p1))
+	if !alive(p1) || link("current") != "r1" {
+		t.Fatalf("after install r1 should run, pid %d current %q", p1, link("current"))
+	}
+	if _, err := os.Readlink("/proc/" + strconv.Itoa(p1) + "/exe"); err == nil {
+		t.Fatal("the stand-in controller should not be dumpable; the test proves nothing otherwise")
 	}
 	if cron, _ := os.ReadFile(tab); strings.Count(string(cron), "/keepalive.sh # naut deploy") != 2 {
 		t.Errorf("crontab should start the keepalive at boot and every minute:\n%s", cron)
@@ -223,8 +227,8 @@ esac
 		t.Fatalf("update: exit %d\n%s", code, out)
 	}
 	p2 := pid()
-	if alive(p1) || !alive(p2) || release(p2) != "r2" || link("previous") != "r1" {
-		t.Fatalf("after update r2 should run alone, previous r1: old alive %v, new %d (%q), previous %q", alive(p1), p2, release(p2), link("previous"))
+	if alive(p1) || !alive(p2) || p2 == p1 || link("current") != "r2" || link("previous") != "r1" {
+		t.Fatalf("after update r2 should run alone, previous r1: old alive %v, new %d, current %q, previous %q", alive(p1), p2, link("current"), link("previous"))
 	}
 
 	// an update that does not start: back to r2, exit 3
@@ -232,21 +236,22 @@ esac
 	if out, code := box("update", "bad"); code != 3 {
 		t.Fatalf("a release that exits must roll back with exit 3, got %d\n%s", code, out)
 	}
-	if p := pid(); !alive(p) || release(p) != "r2" || link("current") != "r2" || link("previous") != "r1" {
-		t.Fatalf("after the failed update r2 should run, current r2, previous r1: %q %q %q", release(p), link("current"), link("previous"))
+	if p := pid(); !alive(p) || link("current") != "r2" || link("previous") != "r1" {
+		t.Fatalf("after the failed update r2 should run, current r2, previous r1: alive %v, %q %q", alive(p), link("current"), link("previous"))
 	}
 
 	// rollback
 	if out, code := box("rollback"); code != 0 {
 		t.Fatalf("rollback: exit %d\n%s", code, out)
 	}
-	if p := pid(); !alive(p) || release(p) != "r1" || link("previous") != "r2" {
-		t.Fatalf("after rollback r1 should run, previous r2: %q %q", release(p), link("previous"))
+	if p := pid(); !alive(p) || link("current") != "r1" || link("previous") != "r2" {
+		t.Fatalf("after rollback r1 should run, previous r2: alive %v, %q %q", alive(p), link("current"), link("previous"))
 	}
 
 	// the keepalive: restarts a dead controller, but not under a hold
 	keep := filepath.Join(root, "keepalive.sh")
 	p := pid()
+	before0 := p
 	syscall.Kill(p, syscall.SIGKILL)
 	waitGone(t, p)
 	os.WriteFile(filepath.Join(root, "hold"), nil, 0o644)
@@ -261,7 +266,7 @@ esac
 		t.Fatalf("keepalive: %v\n%s", err, out)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if p := pid(); !alive(p) || release(p) != "r1" {
+	if p := pid(); !alive(p) || p == before0 {
 		t.Fatal("the keepalive should restart the current release")
 	}
 	before := pid()

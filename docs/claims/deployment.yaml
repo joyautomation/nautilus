@@ -204,6 +204,9 @@ claims:
       - go ./cmd/naut TestDeployCronModeIsDiscovered
       - go ./cmd/naut TestDeploySupervisorFlags
       - go ./cmd/naut TestDeployBoxCronMode
+      - go ./cmd/naut TestDeploySSHAuth
+      - go ./cmd/naut TestDeployAskpassReachesSSH
+      - go ./cmd/naut TestDeployAskpassBitwarden
     partial: true
     note: >-
       TestDeployBoxCronMode runs box.sh's cron mode on the test machine
@@ -215,6 +218,8 @@ claims:
       cron 25 s later, and uninstall -purge leaving the root, naut-launch
       and the user's other crontab lines; every start went through
       naut-launch at SCHED_FIFO 40 pinned to CPU 0, on a v0.21.0 armv7
-      runtime. ssh went through a wrapper that supplied admin's password:
-      the controller's sshd refuses keys for admin (its home is group
-      writable), and naut deploy runs ssh with BatchMode=yes.
+      runtime. The controller's sshd refuses keys for admin (its home is
+      group writable), so the same steps ran again signed in with the
+      password through NAUT_SSH_ASKPASS=tools/deploy/askpass-bw.sh from a
+      Bitwarden item, and with neither askpass nor a terminal naut deploy
+      failed in under a second rather than waiting at a prompt.
