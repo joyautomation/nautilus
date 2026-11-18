@@ -416,7 +416,43 @@ changed manifest.
    it read-only.
 6. **The witness only follows the leader its votes name.** Replication from any other source
    is refused, a stale term included.
-7. **Every case runs** in T2 (the simulated disk and network), and cases 1–5 also run in T3.
+
+**Substitute values (#707)** go through `oplog` as operator intent: `substitute`, `unsubstitute`
+and `suback` entries, the last two naming the substitute's entry by `seq`. Cases 7–10 are the
+requirements agreed on #707. They join the run in #707's oplog PR, which builds the kinds.
+
+7. **A new leader's first scan sees every committed substitute.**
+   - Setup: partition A from B (F8); substitute a bad input on A, committed by A and the
+     witness; kill A.
+   - B's takeover catches up `oplog` and applies the substitute **before its first scan**,
+     in the same step as the retain load. The `oplog` copy wins over B's retained one.
+   - The first scan's input value is the substitute: checked on the scan, not after it.
+   - If catch-up fails within its bounded wait, B keeps its retained substitutes and raises
+     the alarm flag. A substitute is never dropped silently.
+   - Mutation: catch-up deferred to the first `oplog` write (today's lazy `leaderCatchUp`).
+     Case 7 must go red.
+8. **Only the leader expires a substitute, and the expiry is an entry.**
+   - At the end of the granted duration the leader appends `unsubstitute` (`by: system`,
+     `reason: expired`). The standby never expires one on its own.
+   - A takeover evaluates expiry once.
+   - A substitute that expired on the old leader just before a takeover is not revived.
+9. **A wall-clock step neither ends nor extends a substitute** (F23-style).
+   - Step the leader's clock ±1 h mid-substitute, then repeat on the standby before a
+     takeover.
+   - The substitute ends at its granted duration, timed on `CLOCK_BOOTTIME` from when the
+     leader applied it or took over. The wall-clock `until` is display only.
+   - Mutation: expiry taken from the wall-clock `until`. Case 9 must go red.
+10. **Expiry doesn't wait for quorum.**
+    - With no quorum, starting or stopping a substitute is refused like any operator write
+      (case 5).
+    - On the override path a substitute still ends on time: the expiry is journalled locally
+      and reconciled at the heal (design §7, PR 5's open question).
+    - A late or merged `unsubstitute` naming an older entry's `seq` does not end a newer
+      substitute of the same tag.
+    - Mutation: expiry gated on an `oplog` commit. Case 10 must go red.
+
+11. **Every case runs** in T2 (the simulated disk and network). Cases 1–5 and 7–10 also run
+    in T3.
 
 ### 8.2 Peer traffic and the Host rule (design §6.1)
 
