@@ -1,0 +1,232 @@
+package devbind
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/joyautomation/nautilus/devprofile"
+	nio "github.com/joyautomation/nautilus/io"
+
+	"github.com/joyautomation/nautilus/internal/tagfile"
+	"github.com/joyautomation/nautilus/lang/ir"
+)
+
+// TypesST is the ST the project compiles for its devices' types
+// (devprofile.TypesST over the profiles in use); "" with no devices.
+func (s *Set) TypesST() (string, error) {
+	if s.Len() == 0 {
+		return "", nil
+	}
+	return devprofile.TypesST(s.types), nil
+}
+
+// Tags are the tags the devices declare: each device's struct tag (an
+// input) and a command tag (an output) per selected writable point.
+func (s *Set) Tags() []tagfile.Tag {
+	var out []tagfile.Tag
+	for _, d := range s.devices {
+		desc := d.Desc
+		if desc == "" {
+			desc = d.prof.Title
+		}
+		out = append(out, tagfile.Tag{Name: d.Name, Role: "input", Type: d.prof.TypeName(), Desc: desc})
+		for _, pt := range d.points {
+			if !pt.Writable {
+				continue
+			}
+			out = append(out, tagfile.Tag{
+				Name: CommandTag(d.Name, pt.Name), Role: "output", Type: strings.ToUpper(pt.Type),
+				Unit: pt.Unit, Desc: joinDesc(d.Name, pt.Desc),
+			})
+		}
+	}
+	return out
+}
+
+func joinDesc(dev, desc string) string {
+	if desc == "" {
+		return dev
+	}
+	return dev + ": " + desc
+}
+
+// assembler builds a device's struct value from its members' deliveries.
+type assembler struct {
+	dev     string
+	def     *ir.StructDef
+	members []string // internal names, index-parallel to def.Fields
+	sel     []bool   // polled: a member not selected stays zero
+	last    ir.Value // the last value delivered; Kind 0 before any
+}
+
+func newAssembler(d *device) *assembler {
+	p := d.prof
+	a := &assembler{dev: d.Name, def: &ir.StructDef{Name: p.TypeName(), FieldIndex: map[string]int{}}}
+	for i, pt := range p.Points {
+		a.def.Fields = append(a.def.Fields, ir.StructField{Name: pt.Name, Type: irType(pt.Type)})
+		a.def.FieldIndex[pt.Name] = i
+		a.members = append(a.members, memberName(d.Name, pt.Name))
+		a.sel = append(a.sel, d.sel[pt.Name])
+	}
+	return a
+}
+
+// take moves the device's members out of vals and, once any member has
+// been delivered, puts the struct in under the device's name. A member
+// that is not in vals keeps its last value.
+func (a *assembler) take(vals map[string]any) {
+	var next ir.Value
+	changed := false
+	for i, m := range a.members {
+		v, ok := vals[m]
+		if !ok {
+			continue
+		}
+		delete(vals, m)
+		iv, ok := toIR(v, a.def.Fields[i].Type)
+		if !ok {
+			continue
+		}
+		if next.Kind == 0 {
+			next = a.base()
+		}
+		if !sameScalar(next.Fld[i], iv) {
+			next.Fld[i] = iv
+			changed = true
+		}
+	}
+	switch {
+	case next.Kind == 0 && a.last.Kind == 0:
+		return // nothing delivered yet: absent, NotConnected
+	case changed || a.last.Kind == 0:
+		a.last = next
+	}
+	vals[a.dev] = a.last
+}
+
+// base is a fresh copy of the last value, or the zero struct.
+func (a *assembler) base() ir.Value {
+	if a.last.Kind != 0 {
+		v := a.last
+		v.Fld = append([]ir.Value(nil), a.last.Fld...)
+		return v
+	}
+	v := ir.Value{Kind: ir.TypeStruct, Struct: a.def, Fld: make([]ir.Value, len(a.def.Fields))}
+	for i, f := range a.def.Fields {
+		v.Fld[i] = ir.Zero(f.Type)
+	}
+	return v
+}
+
+func irType(iec string) *ir.Type {
+	switch strings.ToUpper(iec) {
+	case "BOOL":
+		return ir.BoolT
+	case "REAL", "LREAL":
+		return ir.RealT
+	case "STRING":
+		return ir.StringT
+	}
+	if t := ir.IntNamed(strings.ToUpper(iec)); t != nil {
+		return t
+	}
+	panic(fmt.Sprintf("devbind: point type %s", iec))
+}
+
+// toIR converts a driver's plain value to the member's kind.
+func toIR(v any, t *ir.Type) (ir.Value, bool) {
+	switch t.Kind {
+	case ir.TypeBool:
+		switch x := v.(type) {
+		case bool:
+			return ir.BoolVal(x), true
+		case int64:
+			return ir.BoolVal(x != 0), true
+		}
+	case ir.TypeInt:
+		switch x := v.(type) {
+		case int64:
+			return ir.IntVal(x), true
+		case float64:
+			return ir.IntVal(int64(x)), true
+		case bool:
+			if x {
+				return ir.IntVal(1), true
+			}
+			return ir.IntVal(0), true
+		}
+	case ir.TypeReal:
+		switch x := v.(type) {
+		case float64:
+			return ir.RealVal(x), true
+		case int64:
+			return ir.RealVal(float64(x)), true
+		}
+	case ir.TypeString:
+		if x, ok := v.(string); ok {
+			return ir.StringVal(x), true
+		}
+	}
+	return ir.Value{}, false
+}
+
+func sameScalar(a, b ir.Value) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
+	switch a.Kind {
+	case ir.TypeBool:
+		return a.B == b.B
+	case ir.TypeReal:
+		return a.F == b.F || (a.F != a.F && b.F != b.F)
+	case ir.TypeString:
+		return a.S == b.S
+	}
+	return a.I == b.I
+}
+
+// rollup turns a driver's per-binding quality into per-device quality: a
+// device is NotConnected while none of its polled members has arrived,
+// Bad if any polled member is Bad or still missing while others arrived,
+// else Stale if any is. Bindings that are not members pass through.
+func rollup(asm []*assembler, member map[string]int, in map[string]nio.Quality) map[string]nio.Quality {
+	var out map[string]nio.Quality
+	mark := func(name string, q nio.Quality) {
+		if out == nil {
+			out = map[string]nio.Quality{}
+		}
+		out[name] = q
+	}
+	for name, q := range in {
+		if _, ok := member[name]; !ok {
+			mark(name, q)
+		}
+	}
+	for _, a := range asm {
+		polled, notConn, stale, bad := 0, 0, false, false
+		for i, m := range a.members {
+			if !a.sel[i] {
+				continue
+			}
+			polled++
+			switch in[m] {
+			case nio.NotConnected:
+				notConn++
+			case nio.Stale:
+				stale = true
+			case nio.Bad:
+				bad = true
+			}
+		}
+		switch {
+		case polled == 0:
+		case notConn == polled:
+			mark(a.dev, nio.NotConnected)
+		case bad || notConn > 0:
+			mark(a.dev, nio.Bad)
+		case stale:
+			mark(a.dev, nio.Stale)
+		}
+	}
+	return out
+}

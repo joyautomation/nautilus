@@ -3,6 +3,16 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`nautilus.yaml`: `devices:`.** The schema knows a project's devices
+  declared by profile (naut newer than 0.21.0): `name`, `profile`,
+  `endpoint`, `unit-id`, `points`, `params`, `desc`, with hovers that
+  say what each row derives (a struct tag of the profile's type and a
+  command tag per writable point).
+
 ## [0.21.1] - 2026-11-17
 
 Works with naut 0.20.0: Toggle Bit and the diagram live actions use the

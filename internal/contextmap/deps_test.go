@@ -55,8 +55,8 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug/host"},
-			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd"},
-			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side",
+			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd", "devbind", "devprofile"},
+			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side, nor knows the device library above it",
 		},
 		{
 			from: []string{"siemens/tiad", "siemens/webapi", "siemens/writer", "siemens/importer"},
@@ -72,6 +72,11 @@ func rules(u universe) []rule {
 			from: []string{"devprofile"},
 			to:   u.allBut(),
 			why:  "the device profile format is a published language: the manifest, virtual devices and the CLI read it, and it reads none of them",
+		},
+		{
+			from: []string{"devbind"},
+			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "virtdev", "cmd"},
+			why:  "devbind derives a device row's type, tags and driver manifests; the manifest composes it, so it never reaches into the runtime side",
 		},
 		{
 			from: u.allBut("cmd", "virtdev"),

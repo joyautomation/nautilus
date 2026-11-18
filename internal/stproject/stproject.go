@@ -30,13 +30,15 @@ package stproject
 
 import (
 	"fmt"
-	"github.com/joyautomation/nautilus/internal/dialect"
-	"gopkg.in/yaml.v3"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/joyautomation/nautilus/devprofile"
+	"github.com/joyautomation/nautilus/internal/dialect"
+	"gopkg.in/yaml.v3"
 
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ld"
@@ -547,10 +549,12 @@ func IsLibrary(src string) bool {
 	return prog.TopKeyword != "PROGRAM" && len(prog.Statements) == 0
 }
 
-// dialectLibraries reads `dialect:` from the project's nautilus.yaml (the
-// one key, leniently: the manifest's own loader validates the rest) and
-// returns that dialect's embedded block library. No manifest, or none
-// named: nothing.
+// dialectLibraries reads `dialect:` and `devices:` from the project's
+// nautilus.yaml (those keys, leniently: the manifest's own loader validates
+// the rest) and returns the dialect's embedded block library and the struct
+// types of the profiles the devices use (docs/design/device-library.md
+// §3.2), read from profiles/. No manifest, or neither key: nothing. A
+// profile that is missing or broken is skipped here; the loader names it.
 func dialectLibraries(fsys fs.FS) ([]dialect.Library, error) {
 	raw, err := fs.ReadFile(fsys, "nautilus.yaml")
 	if err != nil {
@@ -558,12 +562,32 @@ func dialectLibraries(fsys fs.FS) ([]dialect.Library, error) {
 	}
 	var m struct {
 		Dialect string `yaml:"dialect"`
+		Devices []struct {
+			Profile string `yaml:"profile"`
+		} `yaml:"devices"`
 	}
 	if err := yaml.Unmarshal(raw, &m); err != nil {
 		return nil, nil
 	}
-	if m.Dialect == "" {
-		return nil, nil
+	var out []dialect.Library
+	if m.Dialect != "" {
+		if out, err = dialect.Sources(m.Dialect); err != nil {
+			return nil, err
+		}
 	}
-	return dialect.Sources(m.Dialect)
+	var profiles []*devprofile.Profile
+	seen := map[string]bool{}
+	for _, d := range m.Devices {
+		if d.Profile == "" || seen[d.Profile] {
+			continue
+		}
+		seen[d.Profile] = true
+		if p, err := devprofile.ReadProject(fsys, d.Profile); err == nil {
+			profiles = append(profiles, p)
+		}
+	}
+	if src := devprofile.TypesST(profiles); src != "" {
+		out = append(out, dialect.Library{Path: devprofile.TypesPath, ST: src})
+	}
+	return out, nil
 }
