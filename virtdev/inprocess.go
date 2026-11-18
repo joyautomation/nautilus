@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/devprofile"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/modbus"
@@ -163,7 +164,7 @@ func (ip *InProcess) bindModbus(d *modbus.Driver) (*mbFace, error) {
 func (ip *InProcess) modbusDevice(addr string, unit uint8) (string, bool) {
 	for _, d := range ip.set.Devices {
 		p := ip.set.Profile(d.Name)
-		if p.Protocol != ProtoModbus {
+		if p.Protocol != devprofile.ProtoModbus {
 			continue
 		}
 		if ep, _ := d.modbusEndpoint(p); ep == addr && d.Unit(p) == unit {
@@ -178,7 +179,7 @@ func (ip *InProcess) bindOPCUA(d *opcua.Driver) (*uaFace, error) {
 	for i := range ip.set.Devices {
 		dv := &ip.set.Devices[i]
 		p := ip.set.Profile(dv.Name)
-		if p.Protocol != ProtoOPCUA {
+		if p.Protocol != devprofile.ProtoOPCUA {
 			continue
 		}
 		if ep, _ := opcuaEndpoint(*dv, p); ep != "" && sameEndpoint(ep, d.Endpoint()) {

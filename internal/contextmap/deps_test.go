@@ -64,6 +64,11 @@ func rules(u universe) []rule {
 			why:  "the operator surface serves a runtime and alarms; it knows no protocol and is composed by the manifest, not the reverse",
 		},
 		{
+			from: []string{"devprofile"},
+			to:   u.allBut(),
+			why:  "the device profile format is a published language: the manifest, virtual devices and the CLI read it, and it reads none of them",
+		},
+		{
 			from: u.allBut("cmd", "virtdev"),
 			to:   []string{"virtdev"},
 			why:  "virtual devices are a test and commissioning context; only the CLI and verification compose them",

@@ -1,4 +1,4 @@
-package virtdev
+package devprofile
 
 import (
 	"embed"
@@ -85,8 +85,16 @@ func ResolveProfile(dir, ref string) (*Profile, error) {
 	return p, nil
 }
 
-// simulatorSource reads a profile's simulator ST.
-func (p *Profile) simulatorSource() (string, error) {
+// Dir is the directory a project's own profile was read from; "" for a
+// built-in one.
+func (p *Profile) Dir() string { return p.dir }
+
+// File is the file a project's own profile was read from; "" for a
+// built-in one.
+func (p *Profile) File() string { return p.file }
+
+// SimulatorSource reads a profile's simulator ST.
+func (p *Profile) SimulatorSource() (string, error) {
 	s := p.Simulator
 	if p.dir == "" {
 		raw, err := fs.ReadFile(builtin, path.Join("profiles", s.Source))

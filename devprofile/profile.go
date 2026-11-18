@@ -1,17 +1,13 @@
-// Package virtdev runs virtual field devices: stand-ins that speak the real
-// device's protocol, address space or register map, so a project's tests and
-// commissioning practice run against its real configuration with no hardware
-// (docs/design/virtual-devices.md).
+// Package devprofile is the device profile format and library: a device
+// type described once (who makes it, the documents it was built from, its
+// points in the spellings the driver manifests already use, and optionally
+// a simulator, an ST FUNCTION_BLOCK that gives it behaviour), for a project
+// to declare devices by and for virtdev to simulate them from
+// (docs/design/device-library.md, docs/design/virtual-devices.md §3).
 //
-// A device type is a Profile (this file): who makes it, the documents it was
-// built from, its points (one row per register or node, in the spellings the
-// driver manifests already use) and optionally a simulator, an ST
-// FUNCTION_BLOCK that gives it behaviour. A project lists instances in
-// virtual-devices.yaml (devices.go). The instances' simulators and the project's
-// process model run in one plant runtime (plant.go) over a store per device;
-// the store is served on a socket (the wire face) or read in process by a
-// test in virtual time.
-package virtdev
+// The built-in profiles ship in naut (profiles/); a project's own is a file
+// ending in .yaml.
+package devprofile
 
 import (
 	"bytes"
@@ -203,6 +199,10 @@ func ParseProfile(data []byte, src string) (*Profile, error) {
 	return &p, nil
 }
 
+// IsIdent reports whether s is an IEC identifier, the rule for point and
+// device names.
+func IsIdent(s string) bool { return identRE.MatchString(s) }
+
 var identRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // expand replaces every repeated row with its copies.
@@ -225,7 +225,7 @@ func (p *Profile) expand() error {
 		}
 		stride := pt.Stride
 		if stride == 0 {
-			stride = pointWords(pt)
+			stride = pt.Words()
 		}
 		for i := range pt.Repeat {
 			n := strconv.Itoa(from + i)
@@ -419,9 +419,9 @@ func (p *Profile) validateModbus(pt *Point) error {
 	return nil
 }
 
-// pointWords is how many addresses one value of the row occupies, the
-// default stride of a repeated row.
-func pointWords(pt Point) int {
+// Words is how many addresses one value of the row occupies (registers, or
+// 1 for a bit), the default stride of a repeated row.
+func (pt Point) Words() int {
 	f := pt.Format
 	if f == "" {
 		f = iecTypes[strings.ToUpper(pt.Type)]

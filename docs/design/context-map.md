@@ -58,7 +58,8 @@ into another's.
 | **HMI 2D** | `hmi` (npm) | mimic, component, port, catalog, realtime, trend, quality, alarms view. | the operator | Consumes Operator surface over HTTP/SSE; no Go |
 | **HMI 3D** | `hmi-3d` (npm) `internal/scene` | scene, kind, node, pipe, port, look, assembly. `internal/scene` is the offline half (`naut check`, `naut scene init`). | the operator, Authoring | Consumes Operator surface. **Open edge:** argonaut's `parts` format is a second model of the same things; §2.4 |
 | **Tag file** | `internal/tagfile` | one row: name, role, type, init, unit, desc, alias. | every codegen, `lang/l5x` | **Shared kernel.** The one format every importer renders and the manifest reads |
-| **Virtual devices** | `virtdev` | device profile, point, simulator, process model, plant, wire face. A profile's point rows reuse the driver manifests' column names. | CLI, Verification | Serves a device's store through the protocol packages' servers (`modbus/slave`); hosts its simulators and process model in a plant `runtime`. A test-time context: only the CLI and Verification import it, and it imports no manifest |
+| **Device library** | `devprofile` | device profile, point, doc (provenance), simulator source, built-in profile, vendored profile. A profile's point rows reuse the driver manifests' column names. | Manifest, Virtual devices, CLI | **Published language.** One file per device type, read by the manifest (a project's `devices:`) and by virtual devices alike. A leaf: it imports no other nautilus package, so every reader can import it |
+| **Virtual devices** | `virtdev` | instance, simulator, process model, plant, wire face, in-process face. | CLI, Verification | Serves a device's store through the protocol packages' servers (`modbus/slave`, `opcua/server`); hosts its simulators and process model in a plant `runtime`. A test-time context: only the CLI and Verification import it, and it imports no manifest |
 
 Two packages are substrates rather than contexts and import nothing of
 ours: `lang/ir` (types and values) and `io` (the driver seam and `Quality`).
@@ -84,6 +85,9 @@ break one changes this section first and says why.
   the CLI.
 - The operator surface never imports a protocol package, the Logix target,
   or the manifest.
+- `devprofile` imports no other nautilus package: the profile format is
+  read by the manifest, virtual devices and the CLI, and depends on none
+  of them.
 - `virtdev` is imported only by the CLI and Verification: virtual
   devices are a test and commissioning context, never part of a running
   controller.
@@ -154,7 +158,8 @@ Legitimate per-context meanings, so nobody "deduplicates" them:
 |---|---|
 | **Tag** | Runtime: a cell in the store (`TagDef`, `Tags`, `TagMeta`). Manifest: its YAML form (`TagConfig`). Tag file: one generated row (`tagfile.Tag`). Field/IT drivers: a binding from a tag to an address (`TagBinding`, `snmp.Tag`, `redfish.Tag`, `prom.Tag`, `replay.Tag`). Logix: a controller symbol (`l5x.Tag`, `cip.TagSegment`). Logix emulator: the served surface (`TagSpec`, `TagSurfaceSpec`, `TagConfig`, `TagStore`) |
 | **Node** | ST and SFC: an AST node. FBD: a netlist node. Sparkplug edge: this edge node. Sparkplug host: its view of a remote edge node. Oplog: one replica. Scene: one placed thing |
-| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Virtual devices: an instance in `devices.yaml` (`virtdev.Instance`); its type is a **device profile** (`virtdev.Profile`) |
+| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Device library: a device *type* is a **device profile** (`devprofile.Profile`); a project's instance of one is a **device**. Virtual devices: an instance in `virtual-devices.yaml` (`virtdev.Instance`). Note `devices.yaml` is the Modbus device map, not a list of devices |
+| **Profile** | Device library: a device type (`devprofile.Profile`). SNMP: a walk-to-UDT expansion in Go (`snmp/profiles`, `naut snmp import --profile`). HMI 3D: a chassis profile. Say "device profile" when more than one is in play |
 | **Program** | IEC: a POU scheduled by a task, everywhere in nautilus. Logix: a container of routines. The writer translates; "program" never means the Logix thing outside `logix/` |
 | **Quality** | One meaning, `io.Quality`, in every context. Keep it that way |
 | **Component** | HMI 2D: a mimic symbol (`*.component.json` + `.svelte`). HMI 3D uses **kind** (`*.kind.json`) for the same role on purpose, so the two are never confused |
