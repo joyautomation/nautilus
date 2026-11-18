@@ -222,6 +222,12 @@ built and shipped beside `nautilus_io`) carries it instead. It raises
 `CAP_SYS_NICE` into its inheritable and ambient sets and execs
 `current/controller` beside it, with its own arguments and pid, so
 whatever release `current` points at runs with that one capability.
+First it sets `RLIMIT_RTTIME` (200 ms of real-time CPU without blocking,
+then `SIGXCPU`; at 500 ms, `SIGKILL`; `NAUTILUS_RT_LIMIT_MS` changes it,
+and a stricter limit already in force is kept). Limits survive the exec,
+so whatever it starts is bounded, including a program that sets no limit
+of its own, such as `tools/jitter`. naut sets the same limit itself, and
+demotes instead of dying.
 
 Install it once, as admin, in the directory that holds `current`:
 
