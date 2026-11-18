@@ -1766,6 +1766,8 @@ func forOperandRule(t *ir.Type, v ir.Expr, src Expression) error {
 	}
 	from := vt.Name
 	switch {
+	case vt.Enum != nil:
+		from = vt.Enum.Name
 	case vt.Kind == ir.TypeReal && from != "LREAL":
 		from = "REAL"
 	case from == "" && vt.Struct != nil && vt.Struct.Name != "":
@@ -1787,7 +1789,10 @@ func forOperandRule(t *ir.Type, v ir.Expr, src Expression) error {
 	msg := fmt.Sprintf("%s is %s, and a FOR's bounds and step are integers like its variable", what, from)
 	// Name the conversion only when there is one (there is no
 	// STRUCT_TO_DINT).
-	if conv := from + "_TO_" + to; ir.IsConversion(conv) {
+	if conv := from + "_TO_" + to; vt.Enum != nil {
+		// An enumeration converts with the generic TO_ form only.
+		msg += fmt.Sprintf("; write TO_%s(%s)", to, arg)
+	} else if ir.IsConversion(conv) {
 		msg += fmt.Sprintf("; write %s(%s)", conv, arg)
 	}
 	return errors.New(msg)
