@@ -56,8 +56,31 @@ Following from them:
   declined: reuse across projects is a folder under version control).
   Built-in profiles ship in naut and are the usual source for `add`; a
   team's own profiles are a directory `add` can copy from just as well.
-- **The profile's `version:`** is the copy's own revision. `update`
-  compares it with the source's and shows both.
+- **The profile's `version:`** is the copy's own revision. It is not
+  used at load; `update` reports it.
+
+**What `naut devices update` compares.** It compares what a profile
+*produces*, never YAML text: the struct type (members, their types and
+order), the tags (struct and command tags), the driver bindings
+(table, address, format, scale, offset, word and byte order, unit id;
+for OPC UA the node id and namespace), the derived points and the
+alarms. For each vendored profile it reports:
+
+- **the copy against the source:** what would change in the project if the
+  source replaced the copy;
+- **a hand-edited copy:** the copy produces something no released version
+  of the source produces. `update` names those rows and does not
+  overwrite them without `--yes`;
+- **a changed profile with no new `version:`:** the source's output
+  differs from the copy's at the same version number. That is reported
+  as a fault of the source, so a team bumps the version;
+- **a shared simulator file** (`abb-drives.st` serves three ABB profiles):
+  it is replaced only when every profile vendored with it moves to the
+  same source, else `update` refuses and names the profiles;
+- **a removed or retyped member still in use:** `update` runs the
+  project's check with the new copy and refuses while a program reads a
+  member the new profile no longer has (or has with another type),
+  naming the program and line.
 
 ## 2. A project's devices
 
@@ -72,7 +95,10 @@ A `devices:` row has:
 | `points` | globs over point names: poll and expose only these (an 8-port master need not poll 8 ports); default all |
 | `params` | values for the profile's `params:` (an ifm master's location) |
 | `desc` | one line for the tag and the faceplate |
-| driver keys | `scan-rate`, `timeout`, `security`… passed to the driver the device lands on |
+
+A row has no driver keys. A Modbus device polls at the scan rate and scan
+classes of the project's Modbus driver (`drivers:`, one is added if there
+is none), which is where those keys are written.
 
 A project names a point its own way with the existing `alias:` (`BinHigh`
 aliases `IOLM.Port1_SioInput`), not a new rename key.
@@ -97,12 +123,16 @@ files decode to. No change to `modbus/` or `opcua/`.
 
 ### 3.2 Tags and the struct type
 
-The profile's type is a `STRUCT` with one member per point, named as the
-point, of the point's IEC type. Its name is the profile's `udt:` key, or
-the id upper-cased with `-` as `_` (`ABB_ACS355_FMBT21`). Two profiles
-whose points are the same (the ACS550 and ACS355 Classic layouts) may
-declare one `udt:`. Two vendored profiles declaring one name with
-different members is an error.
+The device's type is a `STRUCT` with one member per **selected** point
+(all points without `points:`), named as the point, of the point's IEC
+type, in profile order. A point the row does not select is not a member,
+so a program cannot read a value that is never polled. Its name is the
+profile's `udt:` key, or the id upper-cased with `-` as `_`
+(`ABB_ACS355_FMBT21`). Devices of one type must select the same points;
+two profiles whose selected points are the same (the ACS550 and ACS355
+Classic layouts) may declare one `udt:`, and one name over different
+members is an error. A `udt:` may not be a standard type or block name
+(`TON`, `WORD`) or a device's name.
 
 - `CONV : ABB_ACS355_FMBT21`, role input. Every selected point is a member
   and reads back the device.
@@ -123,6 +153,17 @@ makes the tags work without driver changes:
 
 The adapter is the device library's, composed by `internal/project` the
 way other drivers are.
+
+**Quality and write gating.** Quality is reported per device, not per
+member: the struct tag is NotConnected until a polled member arrives, Bad
+if any polled member is Bad or has never arrived while others have, else
+Stale if any is, else Good. One bad register therefore greys the whole
+device, which is what an operator should see: part of the device's data is
+not to be trusted. Writes are gated per driver, as today: the Modbus
+driver's write gate (redundancy, a faulted scan) holds every command tag
+of every device on it. A command tag no program has written is never
+pushed, so a device's unused commands never reach it, not even on a
+standby's takeover.
 
 ### 3.3 Derived points
 
@@ -225,7 +266,7 @@ naut does not call a model. Instead:
 | Command | Does |
 |---|---|
 | `naut devices add <profile> [--from dir]` | copy a profile (and its simulator) into `profiles/` |
-| `naut devices update [<profile>] [--from dir]` | show the diff against the source; replace with `--yes` |
+| `naut devices update [<profile>] [--from dir]` | compare what the copy and the source produce (§1); replace with `--yes` |
 | `naut devices render [dir]` | print what each row derives: bindings, the type, tags, alarms |
 | `naut devices lint <profile>` | §5 |
 | `naut devices profiles`, `show`, `up`, `check` | as in #712 |
