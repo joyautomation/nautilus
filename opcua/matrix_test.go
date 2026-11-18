@@ -19,10 +19,19 @@
 // and the goroutine count is flat across the reconnects.
 //
 // The test starts the containers itself (docker on PATH). It is skipped
-// unless NAUTILUS_OPCUA_MATRIX names the servers to run ("all", or a
-// comma list of profile names). Images are pinned by digest; open62541 is
-// built from opcua/testdata/matrix/open62541 at a tagged release. Server
-// quirks found here are recorded in the guide (guides/opcua-client.md).
+// unless NAUTILUS_OPCUA_MATRIX names the servers to run: "all" (the
+// container and virtual profiles, what CI runs), "lab" (lab profiles), or
+// a comma list of profile names. Images are pinned by digest; open62541 is
+// built from opcua/testdata/matrix/open62541 at a tagged release.
+//
+// Lab profiles are servers that do not fit in a CI container (Ignition,
+// CODESYS). They run on a private lab box; the test file that adds them
+// (lab: true, a start func, credentials) lives with the lab, not here, and
+// is dropped into a copy of this package to run. This file carries only
+// the hooks; the results are in the guide's Lab results table.
+//
+// Server quirks found here are recorded in the guide
+// (guides/opcua-client.md).
 package opcua_test
 
 import (
@@ -59,8 +68,10 @@ type matrixServer struct {
 	build string
 	// path is the endpoint URL's path ("/milo"); the port is mapped.
 	path string
-	// nsURI is the namespace every test node lives in.
-	nsURI string
+	// nsURI is the namespace every test node lives in. nsURIPrefix, set
+	// instead, is for a server whose URI carries a per-install id: the URI
+	// is found in the server's namespace array at the start of the run.
+	nsURI, nsURIPrefix string
 	// scalarRoot is the folder holding scalars (browsed by the import;
 	// empty skips the import).
 	scalarRoot string
@@ -68,6 +79,9 @@ type matrixServer struct {
 	// matrixTypes); scalars maps each to its node.
 	types   []string
 	scalars map[string]string
+	// writes overrides a type's write value where the server cannot hold
+	// the default one.
+	writes map[string]any
 	// changing is a variable whose value changes on its own, faster than
 	// once a second, and its type.
 	changing, changingType string
@@ -75,7 +89,7 @@ type matrixServer struct {
 	readOnly, readOnlyType string
 	// trust makes the server trust the client certificate in pki, once a
 	// secured connect has been refused (nil: the server accepts any).
-	trust func(t *testing.T, h serverHandle)
+	trust func(t *testing.T, h serverHandle, pki string)
 	// startup bounds how long the server takes to answer after a start.
 	startup time.Duration
 	// security pins the policy and mode ("None": an anonymous session on
@@ -89,6 +103,15 @@ type matrixServer struct {
 	// readOnlyDevice: a server with nothing writable; the writes and quiet
 	// scenarios are skipped and the import does not expect writability.
 	readOnlyDevice bool
+	// lab: a server outside this repository's reach, added by a test file
+	// the repository does not hold. Left out of "all", selected by "lab"
+	// or its name.
+	lab bool
+	// start, when set, brings the server up instead of a container.
+	start func(t *testing.T, s matrixServer) serverHandle
+	// credentials, when set, signs in with that user (UserName token)
+	// rather than anonymously.
+	credentials func(t *testing.T) (user, pass string)
 }
 
 // quietType is the writable integer scalar the quiet scenario writes from a
@@ -141,7 +164,7 @@ var matrixServers = []matrixServer{
 		// Milo refuses an unknown client certificate by closing the
 		// connection (the client sees EOF, not a status) and files it
 		// under security/rejected; trusting it is moving it to trusted.
-		trust: func(t *testing.T, h serverHandle) {
+		trust: func(t *testing.T, h serverHandle, _ string) {
 			h.(*container).exec(t, "sh", "-c", "mv /app/data/security/rejected/*.der /app/data/security/pki/trusted/certs/")
 		},
 		startup: 60 * time.Second,
@@ -198,10 +221,10 @@ func TestForeignServerMatrix(t *testing.T) {
 	}
 	ran := 0
 	for _, s := range matrixServers {
-		if !selected["all"] && !selected[s.name] {
+		if !selected[s.name] && !(selected["all"] && !s.lab) && !(selected["lab"] && s.lab) {
 			continue
 		}
-		if _, err := exec.LookPath("docker"); err != nil && s.virtual == "" {
+		if _, err := exec.LookPath("docker"); err != nil && s.virtual == "" && s.start == nil {
 			t.Fatalf("NAUTILUS_OPCUA_MATRIX selects %s but docker is not on PATH: %v", s.name, err)
 		}
 		ran++
@@ -222,9 +245,12 @@ func serverNames() []string {
 
 func runMatrix(t *testing.T, s matrixServer) {
 	var h serverHandle
-	if s.virtual != "" {
+	switch {
+	case s.start != nil:
+		h = s.start(t, s)
+	case s.virtual != "":
 		h = startVirtual(t, s)
-	} else {
+	default:
 		h = startContainer(t, s)
 	}
 	url := h.url()
@@ -238,7 +264,15 @@ func runMatrix(t *testing.T, s matrixServer) {
 		conn.Security = opcua.Security{Policy: s.security, Mode: s.security}
 		sec = []opcua.Option{opcua.WithSecurity(s.security, s.security)}
 	}
-	waitServing(t, s, h, url, conn)
+	if s.credentials != nil {
+		user, pass := s.credentials(t)
+		conn.Username, conn.Password = user, pass
+		sec = append(sec, opcua.WithAuth(user, pass))
+	}
+	waitServing(t, s, h, url, conn, pki)
+	if s.nsURIPrefix != "" {
+		s.nsURI = findNamespace(t, url, conn, s.nsURIPrefix)
+	}
 
 	if s.scalarRoot != "" {
 		t.Run("import", func(t *testing.T) { matrixImport(t, s, url, conn) })
@@ -272,10 +306,7 @@ func runMatrix(t *testing.T, s matrixServer) {
 func matrixImport(t *testing.T, s matrixServer, url string, conn opcua.Connect) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	sess, err := opcua.Dial(ctx, url, conn)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
+	sess := dialRetry(t, ctx, url, conn)
 	defer sess.Close()
 	root, err := ua.ParseNodeID(s.scalarRoot)
 	if err != nil {
@@ -385,7 +416,7 @@ func matrixWrites(t *testing.T, s matrixServer, url string, opts []opcua.Option)
 	// rule), so the Boolean is flipped from whatever the server holds.
 	cmd := nio.Values{}
 	for _, typ := range s.typeList() {
-		cmd["S_"+typ] = writeFor(typ)
+		cmd["S_"+typ] = s.writeValue(typ)
 	}
 	if b, ok := baseline["S_Boolean"].(bool); ok {
 		cmd["S_Boolean"] = !b
@@ -393,15 +424,24 @@ func matrixWrites(t *testing.T, s matrixServer, url string, opts []opcua.Option)
 	if err := d.WriteOutputs(cmd); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "every write read back", 15*time.Second, func() bool {
+	var differ []string
+	deadline := time.Now().Add(15 * time.Second)
+	for {
 		v := readAll(t, d)
+		differ = differ[:0]
 		for name, want := range cmd {
 			if !sameValue(v[name], want) {
-				return false
+				differ = append(differ, fmt.Sprintf("%s = %#v, wrote %#v", name, v[name], want))
 			}
 		}
-		return true
-	})
+		if len(differ) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("writes not read back after 15s (lastError %q): %v", d.Health().LastError, differ)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if h := d.Health(); h.Writes != uint64(len(cmd)) {
 		t.Errorf("health counts %d writes, want %d (one per changed value)", h.Writes, len(cmd))
 	}
@@ -437,10 +477,7 @@ func matrixQuiet(t *testing.T, s matrixServer, url string, conn opcua.Connect, o
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	sess, err := opcua.Dial(ctx, url, conn)
-	if err != nil {
-		t.Fatalf("writer session: %v", err)
-	}
+	sess := dialRetry(t, ctx, url, conn)
 	defer sess.Close()
 	next := int64(1234567)
 	if before == next {
@@ -554,6 +591,14 @@ func nsPrefix(nodeID string) string {
 		return nodeID[:i]
 	}
 	return ""
+}
+
+// writeValue is what the writes scenario writes to the type's scalar.
+func (s matrixServer) writeValue(typ string) any {
+	if v, ok := s.writes[typ]; ok {
+		return v
+	}
+	return writeFor(typ)
 }
 
 func writeFor(typ string) any {
@@ -748,7 +793,7 @@ func freePort(t *testing.T) int {
 // waitServing waits for the server to answer GetEndpoints, then for a
 // secured session — running the server's trust step when it refuses the
 // first one.
-func waitServing(t *testing.T, s matrixServer, h serverHandle, url string, conn opcua.Connect) {
+func waitServing(t *testing.T, s matrixServer, h serverHandle, url string, conn opcua.Connect, pki string) {
 	t.Helper()
 	deadline := time.Now().Add(s.startup)
 	for {
@@ -785,8 +830,8 @@ func waitServing(t *testing.T, s matrixServer, h serverHandle, url string, conn 
 	if !strings.Contains(err.Error(), "trust") {
 		t.Errorf("the refusal does not tell the user to trust the client certificate: %v", err)
 	}
-	s.trust(t, h)
-	deadline = time.Now().Add(20 * time.Second)
+	s.trust(t, h, pki)
+	deadline = time.Now().Add(time.Minute) // a runtime may restart to read its trust list
 	for {
 		if err = dial(); err == nil {
 			return
@@ -796,4 +841,45 @@ func waitServing(t *testing.T, s matrixServer, h serverHandle, url string, conn 
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// dialRetry dials until ctx ends. Ignition (Milo) closes new connections
+// from an address that opens them faster than about one a second (a bare
+// EOF, often on GetEndpoints); the test's own sessions come in bursts, the
+// driver's retry ladder does not.
+func dialRetry(t *testing.T, ctx context.Context, url string, conn opcua.Connect) *opcua.Session {
+	t.Helper()
+	for {
+		sess, err := opcua.Dial(ctx, url, conn)
+		if err == nil {
+			return sess
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("dial: %v", err)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// findNamespace returns the server's namespace URI that starts with
+// prefix (one whose URI carries a per-install id).
+func findNamespace(t *testing.T, url string, conn opcua.Connect, prefix string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	sess := dialRetry(t, ctx, url, conn)
+	defer sess.Close()
+	ns, err := sess.Client.NamespaceArray(ctx)
+	if err != nil {
+		t.Fatalf("namespace array: %v", err)
+	}
+	for _, u := range ns {
+		if strings.HasPrefix(u, prefix) {
+			t.Logf("namespace %s", u)
+			return u
+		}
+	}
+	t.Fatalf("no namespace starting %q in %v", prefix, ns)
+	return ""
 }
