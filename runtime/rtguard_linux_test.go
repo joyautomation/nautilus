@@ -276,7 +276,9 @@ func TestRTGuardPriorityWatchdog(t *testing.T) {
 		Program:  "PROGRAM Main\nVAR x : DINT; i : DINT; END_VAR\n" + busy + "\nEND_PROGRAM",
 		Scan:     time.Millisecond,
 		Priority: 1,
-		Guard:    PriorityGuard{Overruns: 5},
+		// Overruns only: a runner's VM speed varies, and a scan past 20 ×
+		// the period would trip the in-flight check first (it did, on CI).
+		Guard: PriorityGuard{Overruns: 5, ScanMultiple: 1e6},
 		Tasks: []Task{{Name: "stuck", Scan: 5 * time.Millisecond, Priority: 1,
 			Guard:   PriorityGuard{ScanMultiple: 4},
 			Program: "PROGRAM Stuck\nVAR y : DINT; j : DINT; END_VAR\nFOR j := 1 TO 5000000 DO y := y + 1; END_FOR;\nEND_PROGRAM"}},
