@@ -226,9 +226,9 @@ Open **http://localhost:8080** for the built-in live dashboard, or
 `GET /api/state` for the raw tag snapshot. Setpoints are click-to-set right
 in the tag table (BOOLs get a toggle); inputs and outputs are not editable,
 because the driver rewrites one before every scan and the logic rewrites the
-other after. Reads are open; set `NAUTILUS_TOKEN=<secret>` to require a token
-on writes. Without one, nautilus answers only requests addressed to
-`localhost`, an IP address, or a name in `NAUTILUS_ALLOWED_HOSTS`.
+other after. Set `NAUTILUS_TOKEN=<secret>` to require a token on writes.
+nautilus answers only requests addressed to `localhost`, an IP address, or
+a name in `NAUTILUS_ALLOWED_HOSTS`, unless the request carries the token.
 
 **4. Develop in VS Code**
 
@@ -558,9 +558,11 @@ scaffolded controller binds loopback by default; set `NAUTILUS_ADDR=0.0.0.0:8080
 to expose the tag API to other machines, and point the editor at it with the
 `nautilus.runtimeUrl` setting (`naut pull` takes `--host`). Exposing the
 API on the network also exposes its write surface, so set `NAUTILUS_TOKEN` on
-the controller and the matching `nautilus.token` in the editor — reads and
-`naut pull` stay open, but tag writes and online edits then require the
-token.
+the controller and the matching `nautilus.token` in the editor. Tag writes
+and online edits then require the token. Reads and `naut pull` need it only
+when they reach the controller by a name that isn't `localhost`, an IP
+address or in its `NAUTILUS_ALLOWED_HOSTS`; the editor and `naut pull` (from
+`NAUTILUS_TOKEN` in its environment) send it.
 
 **Forcing.** A tag can be held at a value against the field and the logic —
 the PLC force table — from the editor (**Force…**, an **F** on every forced

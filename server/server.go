@@ -42,8 +42,9 @@
 // whoever holds the lease, since its own tag store is stale. See
 // proxyStandby.
 //
-// Security is progressive. Reads are always open (LAN dashboards, editor
-// live values). Writes are same-origin-only by default — enough to stop a
+// Security is progressive. Every request must be addressed to a host no
+// page can rebind (localhost, an IP, an allowed name) or carry the token
+// (GuardHost). Writes are same-origin-only by default — enough to stop a
 // random browser page from actuating outputs, with zero configuration.
 // Set Options.AuthToken to require a token on writes (and allow authorized
 // cross-origin writers); see authorizeWrite.
@@ -229,18 +230,19 @@ type Options struct {
 	// allowed only from same-origin browser pages and non-browser clients
 	// (see authorizeWrite). When set, a tag write must present the token in
 	// an "Authorization: Bearer <token>" or "X-Nautilus-Token: <token>"
-	// header, which also permits authorized cross-origin writers. Reads are
-	// never gated — dashboards and editor live values stay open on the LAN.
+	// header, which also permits authorized cross-origin writers. Any
+	// request, read or write, by a host name not in AllowedHosts (nor
+	// localhost or an IP) needs the token too (GuardHost).
 	AuthToken string
 
-	// AllowedHosts are host names (no port) a browser page may write from
-	// when no AuthToken is set, besides localhost and an IP address
-	// (#811): a name an operator really uses for this controller, such as
-	// "epic1.plant.lan". Without a token, a browser write whose Host is any
-	// other name is refused, because a page on an attacker's domain can
-	// rebind that name to this machine (DNS rebinding) and its Origin then
-	// matches its Host. NAUTILUS_ALLOWED_HOSTS adds to it in every
-	// embedder (New reads it).
+	// AllowedHosts are host names (no port) the server answers by without
+	// the token, besides localhost and an IP address (#811, #819): a name
+	// an operator really uses for this controller, such as
+	// "epic1.plant.lan". A request by any other name is refused unless it
+	// carries the token, because a page on an attacker's domain can rebind
+	// that name to this machine (DNS rebinding) and is then same-origin
+	// with it. NAUTILUS_ALLOWED_HOSTS adds to it in every embedder (New
+	// reads it).
 	AllowedHosts []string
 
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
@@ -854,16 +856,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		// without the CORS header) to another.
 		w.Header().Add("Vary", "Origin")
 		if r.Method == http.MethodOptions {
-			if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "") {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				// Every method a route below answers: PUT is the online-edit
-				// push (PUT /api/program), DELETE the per-tag unforce.
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-				// The auth headers, so an authorized cross-origin writer's
-				// preflight succeeds; Content-Type for JSON bodies.
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
-			}
-			w.WriteHeader(http.StatusNoContent)
+			s.answerPreflight(w, r)
 			return
 		}
 		if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "" && tokenMatches(r, s.authToken)) {
@@ -873,19 +866,50 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// GuardHost answers, with no token configured, only a request addressed to
-// a Host no page can rebind (#819): localhost, an IP address or an allowed
-// name, the rule #811 applies to writes. A page on an attacker's domain
-// rebound to this machine is same-origin with it, so CORS does not stop
-// it reading; this does, for every route: the API, the live stream, the
-// dashboard and the HMI. A facade that serves routes of its own wraps its
-// handler in it too. With a token configured, reads stay ungated as
-// documented and writes need the token.
+// answerPreflight answers an OPTIONS request: 204, no body, and for a
+// trusted origin (any origin when a token is configured) the methods and
+// headers a cross-origin page may use. It never reaches a route.
+func (s *Server) answerPreflight(w http.ResponseWriter, r *http.Request) {
+	if origin := r.Header.Get("Origin"); origin != "" && (s.corsOrigin(r, origin) || s.authToken != "") {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		// Every method a route below answers: PUT is the online-edit
+		// push (PUT /api/program), DELETE the per-tag unforce.
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		// The auth headers, so an authorized cross-origin writer's
+		// preflight succeeds; Content-Type for JSON bodies.
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// GuardHost answers only a request addressed to a Host no page can rebind
+// (localhost, an IP address or an allowed name, the rule #811 applies to
+// writes), or, when a token is configured, one that carries it (#819). A
+// page on an attacker's domain rebound to this machine is same-origin with
+// it, so CORS does not stop it reading; this does, for every route: the
+// API, the live stream, the dashboard and the HMI. A page load and an
+// EventSource cannot send a header, so a dashboard reached by a name needs
+// that name allowed, token or not. A facade that serves routes of its own
+// wraps its handler in it too.
 func (s *Server) GuardHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.authToken == "" && !s.trustedHost(r.Host) {
+		trusted := s.trustedHost(r.Host)
+		// A browser's CORS preflight never carries the token, so on a token
+		// server a genuine one is answered here (204, no data) and never
+		// passed to a route of the handler this wraps; the request it asks
+		// about still needs the token.
+		if !trusted && s.authToken != "" && r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			w.Header().Add("Vary", "Origin")
-			http.Error(w, fmt.Sprintf("this controller answers %q only with an auth token: without one it is reached by localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS (a page on another site could rebind %q to it); add the name to NAUTILUS_ALLOWED_HOSTS, or set NAUTILUS_TOKEN", r.Host, hostOnly(r.Host)), http.StatusForbidden)
+			s.answerPreflight(w, r)
+			return
+		}
+		if !trusted && !(s.authToken != "" && tokenMatches(r, s.authToken)) {
+			w.Header().Add("Vary", "Origin")
+			how := "add the name to NAUTILUS_ALLOWED_HOSTS, or set NAUTILUS_TOKEN"
+			if s.authToken != "" {
+				how = "send the auth token, or add the name to NAUTILUS_ALLOWED_HOSTS (a browser page or a live stream cannot send the token)"
+			}
+			http.Error(w, fmt.Sprintf("this controller answers %q only with an auth token: it is reached without one by localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS (a page on another site could rebind %q to it); %s", r.Host, hostOnly(r.Host), how), http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1135,6 +1159,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	proxy.Director = func(req *http.Request) {
 		orig(req)
 		req.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
+		// The controller's token is for the controller; the historian
+		// is another service and never sees it.
+		req.Header.Del("Authorization")
+		req.Header.Del("X-Nautilus-Token")
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, "historian unavailable: "+err.Error(), http.StatusBadGateway)
@@ -1300,7 +1328,7 @@ func (s *Server) trustedHost(host string) bool {
 }
 
 // EnvAllowedHosts is NAUTILUS_ALLOWED_HOSTS: host names, comma-separated,
-// the server answers by without a token besides localhost and an IP.
+// the server answers by without the token besides localhost and an IP.
 func EnvAllowedHosts() []string {
 	var out []string
 	for _, h := range strings.Split(os.Getenv("NAUTILUS_ALLOWED_HOSTS"), ",") {
@@ -1325,8 +1353,10 @@ func hostOnly(host string) string {
 func tokenMatches(r *http.Request, token string) bool {
 	got := r.Header.Get("X-Nautilus-Token")
 	if got == "" {
-		if a := r.Header.Get("Authorization"); strings.HasPrefix(a, "Bearer ") {
-			got = strings.TrimPrefix(a, "Bearer ")
+		// The scheme is case-insensitive (RFC 9110 §11.1): "bearer x"
+		// is the same credential as "Bearer x".
+		if scheme, cred, ok := strings.Cut(r.Header.Get("Authorization"), " "); ok && strings.EqualFold(scheme, "Bearer") {
+			got = strings.TrimSpace(cred)
 		}
 	}
 	return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1

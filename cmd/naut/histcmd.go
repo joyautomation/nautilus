@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/hist"
+	"github.com/joyautomation/nautilus/internal/apiclient"
 )
 
 const historianUsage = `naut historian — archive a controller's tags into Postgres
@@ -57,7 +58,11 @@ Usage:
 Flags:
   -addr         Listen address for the historian's own HTTP API (default :9100)
   -source       Controller base URL to poll, e.g. http://plc:8080
-                (env NAUTILUS_SOURCE_URL). Required.
+                (env NAUTILUS_SOURCE_URL). Required. The controller must
+                answer that name: list it in the controller's
+                NAUTILUS_ALLOWED_HOSTS, or use its IP, or, if the
+                controller has a token, set the same NAUTILUS_TOKEN here
+                (the poll sends it).
   -db           Postgres DSN (env DATABASE_URL). Required.
   -retention    How long to keep samples before pruning (default 168h)
   -interval     Poll/collect interval (default 1s)
@@ -332,7 +337,7 @@ func (l *refusalLog) report(source string, status int, body string) {
 	l.status, l.last = status, time.Now()
 	hint := ""
 	if status == http.StatusForbidden {
-		hint = "; if the controller runs without a token, add the name in -source to NAUTILUS_ALLOWED_HOSTS on the controller (or point -source at its IP), or give both a token"
+		hint = "; add the name in -source to NAUTILUS_ALLOWED_HOSTS on the controller, or point -source at its IP, or set the controller's NAUTILUS_TOKEN here too"
 	}
 	fmt.Fprintf(os.Stderr, "naut historian: %s/api/state answered %d, so nothing is archived: %s%s\n", source, status, body, hint)
 }
@@ -350,7 +355,14 @@ func (l *refusalLog) report(source string, status int, body string) {
 // it (network + JSON decode latency), which is acceptable for trend
 // charts but worth knowing if sub-second alignment ever matters.
 func collectOnce(hc *http.Client, sink hist.Sink, source string, patterns, excludes []string, filter *changeFilter, deadband float64, minInterval time.Duration) {
-	resp, err := hc.Get(source + "/api/state")
+	req, err := http.NewRequest("GET", source+"/api/state", nil)
+	if err != nil {
+		return
+	}
+	// A controller with a token answers a name it does not trust only
+	// with the token (#819), so the poll carries NAUTILUS_TOKEN when set.
+	apiclient.Authorize(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		// Source momentarily unreachable — e.g. mid-failover, where the
 		// standby proxy means the Service answers again in seconds. Skip

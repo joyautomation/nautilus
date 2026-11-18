@@ -9,7 +9,7 @@ package server
 //	POST /api/alarms/shelve    {"id":…, "until"|"seconds":…, "by":…}
 //	POST /api/alarms/unshelve  {"id":…, "by":…}
 //
-// Reads are ungated like every other read; writes go through authorizeWrite
+// Reads follow the Host rule of every other read (GuardHost); writes go through authorizeWrite
 // unchanged — same Bearer/X-Nautilus-Token rules, same same-origin base
 // layer, same proxyStandby forwarding as a tag write, because an ack made
 // against a standby has to reach the replica that is actually scanning.

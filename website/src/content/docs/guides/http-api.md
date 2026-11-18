@@ -88,10 +88,10 @@ where marked `…`.
 
 ## Authentication
 
-With a token configured, reads are not gated: every `GET` answers without
-credentials. Without a token, every request, read or write, is answered
-only when addressed to a host no other site can take over (below). Every
-endpoint that changes something is a **write**:
+Every request, read or write, is answered only when it is addressed to a
+host no other site can take over, or, with a token configured, when it
+carries the token (below). Every endpoint that changes something is a
+**write**:
 
 | Write endpoints |
 | --- |
@@ -119,26 +119,35 @@ cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILU
 
 That is a `403`.
 
-Without a token, a request must also be addressed to a host no other site
-can take over: a read, a write, the live stream, the dashboard and the
-HMI alike. A page on an attacker's domain can point that name at your
+**Every request must be addressed to a host no other site can take
+over:** a read, a write, the live stream, the dashboard and the HMI alike,
+token or not. A page on an attacker's domain can point that name at your
 controller (DNS rebinding); it is then same-origin with your controller,
 its `Host` and `Origin` are both the attacker's name, and no CORS rule
-applies. So without a token nautilus answers only a request addressed to
-`localhost` (or a `*.localhost` name), to an IP address (`127.0.0.1`,
-`192.168.1.20`), or to a name you list in `NAUTILUS_ALLOWED_HOSTS`
-(comma-separated, no port):
+applies. So nautilus answers only a request addressed to `localhost` (or
+a `*.localhost` name), to an IP address (`127.0.0.1`, `192.168.1.20`), or
+to a name you list in `NAUTILUS_ALLOWED_HOSTS` (comma-separated, no port),
+unless a token is configured and the request carries it:
 
 ```sh
 NAUTILUS_ALLOWED_HOSTS=epic1.plant.lan naut run .
 ```
 
-Any other name is a `403` that says which of the two settings to use, for
+Any other name without the token is a `403` that says what to set, for
 browsers, scripts and the CLI alike. That includes a controller reached
-by its DNS or mDNS name (`epic1.local`) and a reverse proxy that passes
-the browser's host through: `tailscale serve` keeps the `*.ts.net` name,
-nginx with `proxy_set_header Host $host` keeps its public name. List the
-name, or set a token. When `naut run` listens beyond this machine
+by its DNS or mDNS name (`epic1.local`), a Kubernetes Service name, and a
+reverse proxy that passes the browser's host through: `tailscale serve`
+keeps the `*.ts.net` name, nginx with `proxy_set_header Host $host` keeps
+its public name. List the name, or send the token. A script can send it,
+and so do `naut historian`, `naut pull --host` and the SNMP and Redfish
+agents' `serve --from` (each from `NAUTILUS_TOKEN` in its environment), and
+the VS Code extension (`nautilus.token`, only to `nautilus.runtimeUrl`; see
+its setting); a browser loading the dashboard or an HMI
+screen, and a live stream (`EventSource`), cannot send a header, so a
+screen reached by a name needs that name listed, token or not. A CORS
+preflight (`OPTIONS` with `Access-Control-Request-Method`) carries no
+token, so on a token controller it is answered (`204`, no data); the
+request it precedes still needs the token. When `naut run` listens beyond this machine
 (`server.addr: ":8080"` or `0.0.0.0`) with no token, it starts and prints
 a warning: anything that reaches the port can write.
 
@@ -155,7 +164,9 @@ curl -X POST localhost:8080/api/tags -H 'X-Nautilus-Token: s3cret' \
   -d '{"name": "StartLevel", "value": 72}'
 ```
 
-Both answer `204`. A missing or wrong token is a `401`:
+Both answer `204`. A missing or wrong token is a `401` when the request
+is addressed to a trusted host, and a `403` by any other name (the Host
+rule above):
 
 ```text
 missing or invalid auth token
@@ -507,6 +518,7 @@ That check comes first, so a forced input answers "forced", not "input".
 | `401` | A token is set and the request has none, or the wrong one | `missing or invalid auth token` |
 | `403` | No token is set and a browser page on another origin wrote | `cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILUS_TOKEN)` |
 | `403` | No token is set and a browser page wrote by a host name that is not localhost, an IP address or in `NAUTILUS_ALLOWED_HOSTS` | `a browser write addressed to "plc.lan:8080" is refused without an auth token: …` |
+| `403` | Any request (read or write) by a host name that is not localhost, an IP address or in `NAUTILUS_ALLOWED_HOSTS`, without the token | `this controller answers "plc.lan:8080" only with an auth token: …` |
 | `409` | The address, a member of it, or the tag that contains it is forced | `tag Level is forced — change the force value or remove the force first` |
 | `422` | The wrong kind of value for a **whole** tag: a boolean to a `REAL`, a fraction to an `INT`, a string to anything but a `STRING`, an enumeration or a `TIME`, a malformed `TIME` literal, `null` | `tag StartLevel: want REAL, got a boolean` |
 
@@ -751,7 +763,8 @@ or `kind`), and a `limit` above 100,000 returns at most 100,000 events.
 ## Programs
 
 The running program source, warm edits and rollbacks, and the project's
-commit history. Reading is always open. The three writes need
+commit history. Reading needs only the Host rule (or the token) of
+[Authentication](#authentication). The three writes need
 `server.online-edits: true` and the write authorization. See
 [Online edits](/guides/online-edits/) and
 [Program history](/guides/program-history/).

@@ -347,3 +347,22 @@ func TestCollectOnceSaysWhenTheControllerRefuses(t *testing.T) {
 		t.Errorf("archived %d inserts from a refused poll", got)
 	}
 }
+
+// #819: a controller with a token answers a name it does not trust only
+// with the token, so the poll carries NAUTILUS_TOKEN when it is set, and
+// nothing when it is not.
+func TestCollectOnceSendsTheToken(t *testing.T) {
+	var got []string
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Authorization"))
+		w.Write([]byte(`{"tags":{"pv":1}}`))
+	}))
+	defer src.Close()
+	t.Setenv("NAUTILUS_TOKEN", "s3cret")
+	collectOnce(src.Client(), &fakeSink{}, src.URL, nil, nil, nil, 0, 0)
+	t.Setenv("NAUTILUS_TOKEN", "")
+	collectOnce(src.Client(), &fakeSink{}, src.URL, nil, nil, nil, 0, 0)
+	if len(got) != 2 || got[0] != "Bearer s3cret" || got[1] != "" {
+		t.Errorf("Authorization on the polls = %q, want [\"Bearer s3cret\" \"\"]", got)
+	}
+}

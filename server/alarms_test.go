@@ -220,7 +220,7 @@ func TestAckShelveAndUnshelve(t *testing.T) {
 }
 
 // Writes go through authorizeWrite unchanged — the same token rules as a
-// tag write, and reads stay open.
+// tag write, and reads (by a trusted Host) need no token.
 func TestAlarmWritesHonorAuth(t *testing.T) {
 	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
 	eng := newTestAlarms(t, cond)
