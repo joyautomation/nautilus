@@ -212,7 +212,7 @@ func driveProject(t *testing.T) string {
 	write("nautilus.yaml", `name: drive
 tasks: [{ program: main.st }]
 devices:
-  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.11 }
+  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.11, unit-id: 3 }
 tags:
   - { name: Start, role: state, type: BOOL }
   - { name: Speed, role: state, type: INT }
@@ -312,19 +312,25 @@ func TestDevicesVirtualDeviceIsTheVendoredCopy(t *testing.T) {
 }
 
 // naut check compiles the plant of a project whose only virtual devices
-// are its devices: rows: a vendored simulator that does not compile fails
-// check, as one in virtual-devices.yaml would.
+// are its devices: rows: a vendored profile whose simulator block is not
+// in its source fails check, as one in virtual-devices.yaml would. (The
+// source on its own still compiles: only the plant shows the mistake.)
 func TestCheckCompilesTheRowsPlant(t *testing.T) {
 	dir := driveProject(t)
 	if code := runCheck([]string{dir}); code != 0 {
 		t.Fatalf("naut check exited %d", code)
 	}
-	sim := filepath.Join(dir, "profiles", "abb-drives.st")
-	if err := os.WriteFile(sim, append(mustRead(t, sim), []byte("\nFUNCTION_BLOCK Broken\n  x := ;\nEND_FUNCTION_BLOCK\n")...), 0o644); err != nil {
+	pf := filepath.Join(dir, "profiles", "abb-acs355-fmbt21.yaml")
+	raw := mustRead(t, pf)
+	wrong := bytes.Replace(raw, []byte("block: ABB_DRIVES_SIM,"), []byte("block: ABB_DRIVES_SIMX,"), 1)
+	if bytes.Equal(wrong, raw) {
+		t.Fatal("the fixture edit did not apply")
+	}
+	if err := os.WriteFile(pf, wrong, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if code := runCheck([]string{dir}); code == 0 {
-		t.Fatal("naut check passed a vendored simulator that does not compile")
+		t.Fatal("naut check passed a vendored profile whose simulator block does not exist")
 	}
 }
 
@@ -363,17 +369,27 @@ tests:
 
 // naut build ships the vendored profile a devices: row needs (the
 // controller derives the device from it at load) even though the row is a
-// virtual device too; the simulator, a test fixture, stays behind.
+// virtual device too; the simulator and the process model, test fixtures,
+// stay behind.
 func TestBuildShipsVendoredProfileOfAVirtualDevice(t *testing.T) {
 	dir := driveProject(t)
-	if err := os.WriteFile(filepath.Join(dir, virtdev.FileName), []byte("devices:\n  - { name: CONV, init: { Actual2: 0 } }\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, virtdev.FileName), []byte("devices:\n  - { name: CONV, init: { Actual2: 0 } }\nmodel: { program: plant/process.st }\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "plant"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plant", "process.st"), []byte("PROGRAM Process\nCONV_Running := CONV_Running;\nEND_PROGRAM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runDevicesCheck([]string{dir}); code != 0 {
+		t.Fatalf("naut devices check exited %d", code)
 	}
 	names, zr := buildArchive(t, dir)
 	if !names["profiles/abb-acs355-fmbt21.yaml"] {
 		t.Errorf("the vendored profile did not ship: %v", names)
 	}
-	for _, f := range []string{"profiles/abb-drives.st", virtdev.FileName, "main_test.yaml"} {
+	for _, f := range []string{"profiles/abb-drives.st", virtdev.FileName, "main_test.yaml", "plant/process.st"} {
 		if names[f] {
 			t.Errorf("the fixture %s shipped in the controller", f)
 		}
