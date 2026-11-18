@@ -279,3 +279,130 @@ func TestAgentKeepsSecretsOut(t *testing.T) {
 		return nil
 	})
 }
+
+// TestAgentTakesOneCallPerSession: while a call is in flight on a
+// session, another call on it is refused (busy), so the session's state
+// only ever changes in call order. Other sessions are not held up beyond
+// waiting their turn on the TIA thread, and a close is always taken.
+func TestAgentTakesOneCallPerSession(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+	c := p.Client()
+	installBench(t, c)
+	s, err := c.CreateProject(ctx, "p", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := c.CreateProject(ctx, "q", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Delays: []tiadtest.ScriptedCall{{Call: "Compile", MS: 2000}}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Compile(ctx, true, true)
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); !strings.HasSuffix(callNames(p.Calls(t)), "Compile"); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the compile never reached TIA")
+		}
+	}
+	busy := map[string]func() error{
+		"software": func() error { _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "g"}); return err },
+		"station": func() error {
+			_, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets)
+			return err
+		},
+		"compile": func() error { _, err := s.Compile(ctx, true, true); return err },
+	}
+	for name, call := range busy {
+		if err := call(); tiad.Kind(err) != tiad.KindBusy {
+			t.Errorf("%s on a session with a call in flight: %v, want busy", name, err)
+		}
+	}
+	if _, err := q.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); err != nil {
+		t.Errorf("a call on another session: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "g"}); err != nil {
+		t.Fatalf("the session after its call: %v", err)
+	}
+	// A close is taken even with a call in flight; it runs after it.
+	go func() {
+		_, err := q.Compile(ctx, true, true)
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); countCalls(p.Calls(t), "Compile") < 2; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the second compile never reached TIA")
+		}
+	}
+	if err := q.Close(ctx); err != nil {
+		t.Fatalf("close with a call in flight: %v", err)
+	}
+	<-done
+}
+
+// TestAgentKeepsASessionItCouldNotClose: when TIA fails to close a
+// project, the session stays, broken, and can be closed again.
+func TestAgentKeepsASessionItCouldNotClose(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+	c := p.Client()
+	installBench(t, c)
+	s, err := c.CreateProject(ctx, "p", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "CloseProject", Message: "The project is locked"}}})
+	if err := s.Close(ctx); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("a failing close: %v", err)
+	}
+	if ss, _ := c.Sessions(ctx); len(ss) != 1 {
+		t.Fatalf("the session went away although TIA still holds the project: %+v", ss)
+	}
+	if _, err := s.Compile(ctx, true, true); tiad.Kind(err) != tiad.KindOperationFailed || !tiad.IsFatal(err) || !strings.Contains(err.Error(), "broken") {
+		t.Fatalf("a call on a broken session: %v", err)
+	}
+	if _, err := c.Open(ctx, s.Project); tiad.Kind(err) != tiad.KindBusy {
+		t.Fatalf("open the project of a broken session: %v", err)
+	}
+	p.SetScript(t, tiadtest.Script{})
+	if err := s.Close(ctx); err != nil {
+		t.Fatalf("closing again: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "CloseProject"); n != 2 {
+		t.Fatalf("TIA was asked to close the project %d times, want 2 (the retry must reach TIA)", n)
+	}
+	if ss, _ := c.Sessions(ctx); len(ss) != 0 {
+		t.Fatalf("sessions after the second close: %+v", ss)
+	}
+}
+
+// TestAgentNeverHandsTIAABadGSDML: a GSDML with a DOCTYPE never reaches
+// TIA's importer.
+func TestAgentNeverHandsTIAABadGSDML(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+	c := p.Client()
+	const g = "gsd/GSDML-V2.4-Bad-20261118.xml"
+	if _, err := c.PutFile(ctx, g, []byte(`<!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><x>&e;</x>`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.InstallGSD(ctx, g); tiad.Kind(err) != tiad.KindBadRequest {
+		t.Fatalf("install: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "InstallGsd"); n != 0 {
+		t.Fatalf("TIA's importer got the file %d times", n)
+	}
+}
+
+func countCalls(cs []tiadtest.TiaCall, name string) int {
+	n := 0
+	for _, c := range cs {
+		if c.Call == name {
+			n++
+		}
+	}
+	return n
+}

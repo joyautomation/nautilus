@@ -19,13 +19,21 @@ mkdir -p "$out"
 
 # The stock csc on the TIA machine reads a source without a BOM in the
 # system code page, so any non-ASCII character must be a \u escape.
-if LC_ALL=C grep -nP '[^\x00-\x7F]' "$here"/core/*.cs "$here"/fake/*.cs; then
+# A plain bracket of the bytes 0x80-0xff, in the C locale: no grep -P.
+set +e
+LC_ALL=C grep -n "$(printf '[\200-\377]')" "$here"/core/*.cs "$here"/fake/*.cs
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
   echo "build-fake.sh: non-ASCII characters in C# sources (use \\uXXXX escapes)" >&2
+  exit 1
+elif [ "$rc" -gt 1 ]; then
+  echo "build-fake.sh: the non-ASCII check failed (grep exit $rc)" >&2
   exit 1
 fi
 
 mcs="${MCS:-mcs}"
-common=(-langversion:5 -sdk:4.8 -warnaserror+ -nologo -debug -r:System.Web.Extensions.dll)
+common=(-langversion:5 -sdk:4.8 -warnaserror+ -nologo -debug -r:System.Web.Extensions.dll -r:System.Xml.dll)
 
 "$mcs" "${common[@]}" -target:library -out:"$out/tiad-core.dll" "$here"/core/*.cs
 "$mcs" "${common[@]}" -target:exe -out:"$out/tiad-fake.exe" -r:"$out/tiad-core.dll" "$here"/fake/*.cs

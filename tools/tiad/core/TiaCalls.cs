@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Xml;
 
 namespace Tiad
 {
@@ -48,6 +49,7 @@ namespace Tiad
                         }
                         catch (Exception e)
                         {
+                            sessions.Restore(s);
                             Log.Line("closing idle session {0}: {1}", s.Id, e.Message);
                         }
                     }
@@ -94,8 +96,8 @@ namespace Tiad
             {
                 if (!s.Closed)
                 {
-                    s.Closed = true;
                     t.CloseProject(s.Handle);
+                    s.Closed = true;
                 }
                 return null;
             });
@@ -135,11 +137,40 @@ namespace Tiad
             {
                 throw TiadException.BadRequest("{0} is not named like a GSDML file (GSDML-*.xml)", name);
             }
+            CheckGsdml(full, name);
             bool already = OnTia(delegate(ITia t) { return t.InstallGsd(full); });
             var o = new Obj();
             o["path"] = work.Rel(full);
             o["alreadyInstalled"] = already;
             return o;
+        }
+
+        // CheckGsdml reads a GSDML file before TIA's importer ever parses
+        // it: it must be well-formed XML (which has a root element) without
+        // a DOCTYPE, so no external entity (XXE) or entity expansion
+        // reaches TIA.
+        static void CheckGsdml(string full, string name)
+        {
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                IgnoreComments = true,
+            };
+            try
+            {
+                using (var f = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var r = XmlReader.Create(f, settings))
+                {
+                    while (r.Read())
+                    {
+                    }
+                }
+            }
+            catch (XmlException e)
+            {
+                throw TiadException.BadRequest("{0} is not well-formed XML without a DOCTYPE (line {1}): tiad never hands TIA a DOCTYPE", name, e.LineNumber);
+            }
         }
 
         // CheckProjectName is tiad.CheckProjectName: one path segment that
@@ -215,7 +246,9 @@ namespace Tiad
             CheckStation(st, sec);
             string project = "projects/" + name + "/" + name + ".ap21";
             string full = work.Resolve(project);
-            Session s = sessions.Reserve(project, full);
+            // The session owns projects/<name>/: it is replaced only while
+            // nothing in it is open, and nothing in it opens while it is.
+            Session s = sessions.Reserve(project, full, "projects/" + name + "/");
             try
             {
                 s.Handle = OnTia(delegate(ITia t)
@@ -233,6 +266,7 @@ namespace Tiad
                         t.CloseProject(h);
                         throw;
                     }
+                    s.Station = st;
                     return h;
                 });
             }
@@ -241,7 +275,6 @@ namespace Tiad
                 sessions.Drop(s);
                 throw;
             }
-            s.Station = st;
             sessions.End(s);
             return SessionJson(s);
         }
@@ -254,7 +287,7 @@ namespace Tiad
             r.Done();
             string full = work.Resolve(path);
             if (!File.Exists(full)) throw TiadException.NotFound("no project {0}", Paths.CleanPath(path));
-            Session s = sessions.Reserve(work.Rel(full), full);
+            Session s = sessions.Reserve(work.Rel(full), full, "");
             try
             {
                 s.Handle = OnTia(delegate(ITia t) { return t.OpenProject(full); });
@@ -283,11 +316,23 @@ namespace Tiad
             return outp;
         }
 
+        // CloseSession closes even a session with a call in flight: the
+        // close waits on the TIA thread behind that call, and anything
+        // queued after it finds the session gone. A close that fails keeps
+        // the session, broken, so it can be closed again.
         object CloseSession(Call c)
         {
-            Session s = sessions.Begin(c.Var("id"));
-            sessions.End(s);
-            if (sessions.Remove(s)) Close(s);
+            Session s = sessions.Find(c.Var("id"));
+            if (!sessions.Remove(s)) return new Obj();
+            try
+            {
+                Close(s);
+            }
+            catch
+            {
+                sessions.Restore(s);
+                throw;
+            }
             return new Obj();
         }
 
@@ -301,10 +346,21 @@ namespace Tiad
                 Secrets sec = Secrets.Read(r.Child("secrets"));
                 r.Done();
                 CheckStation(st, sec);
-                Station prev = s.Station;
-                List<string> changes = OnSession(s, delegate(ITia t) { return t.ApplyStation(s.Handle, prev, st, sec); });
-                s.Station = st;
-                if (changes.Count > 0) s.Compiled = false;
+                // The session's state changes only on the TIA thread, in
+                // call order. Until TIA has applied the spec, the project
+                // is neither compiled nor described by any spec, so a
+                // failure part-way leaves nothing downloadable.
+                List<string> changes = OnSession(s, delegate(ITia t)
+                {
+                    bool was = s.Compiled;
+                    Station prev = s.Station;
+                    s.Compiled = false;
+                    s.Station = null;
+                    List<string> ch = t.ApplyStation(s.Handle, prev, st, sec);
+                    s.Station = st;
+                    if (ch.Count == 0) s.Compiled = was;
+                    return ch;
+                });
                 var o = new Obj();
                 o["changes"] = changes.ToArray();
                 return o;
@@ -327,8 +383,11 @@ namespace Tiad
                 foreach (string p in srcs) sources.Add(new SourceFile { Path = Paths.CleanPath(p), FullPath = ExistingFile(p) });
                 var tagTables = new List<SourceFile>();
                 foreach (string p in tables) tagTables.Add(new SourceFile { Path = Paths.CleanPath(p), FullPath = ExistingFile(p) });
-                SoftwareResult res = OnSession(s, delegate(ITia t) { return t.ImportSoftware(s.Handle, group, sources, tagTables, prune); });
-                s.Compiled = false;
+                SoftwareResult res = OnSession(s, delegate(ITia t)
+                {
+                    s.Compiled = false;
+                    return t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
+                });
                 return res.ToJson();
             });
         }
@@ -343,14 +402,28 @@ namespace Tiad
                 bool sw = r.Bool("software");
                 r.Done();
                 if (!hw && !sw) throw TiadException.BadRequest("neither hardware nor software selected");
-                CompileResult res = OnSession(s, delegate(ITia t) { return t.Compile(s.Handle, hw, sw); });
+                CompileResult res = OnSession(s, delegate(ITia t)
+                {
+                    CompileResult cr;
+                    try
+                    {
+                        cr = t.Compile(s.Handle, hw, sw);
+                    }
+                    catch
+                    {
+                        s.Compiled = false;
+                        throw;
+                    }
+                    // Only a full compile without errors makes the
+                    // project downloadable.
+                    if (cr.Errors > 0) s.Compiled = false;
+                    else if (hw && sw) s.Compiled = true;
+                    return cr;
+                });
                 if (res.Errors > 0)
                 {
-                    s.Compiled = false;
                     throw new TiadException(422, Kinds.CompileFailed, res.Errors + " errors", res.ToJson(), false);
                 }
-                // Only a full compile makes the project downloadable.
-                if (hw && sw) s.Compiled = true;
                 return res.ToJson();
             });
         }

@@ -66,7 +66,20 @@ var StationCases = []struct {
 	{"device name too long", func(s *tiad.Station) {
 		s.Profinet.Devices[0].Name = strings.Repeat(strings.Repeat("a", 60)+".", 4) + "a"
 	}, "is longer than 240 characters"},
-	{"device name unicode digit", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev١" }, "only lowercase letters"},
+	{"device name unicode digit", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev١" }, `"dev١": only lowercase letters`},
+	// The quoting is Go's %q, escapes and all.
+	{"device name tab", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev\tice" }, `"dev\tice": only lowercase letters`},
+	{"device name newline", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev\nice" }, `"dev\nice": only lowercase letters`},
+	{"device name bell", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev\aice" }, `"dev\aice": only lowercase letters`},
+	{"device name unit separator", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev\x1fice" }, `"dev\x1fice": only lowercase letters`},
+	{"device name soft hyphen", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev\u00adice" }, `"dev\u00adice": only lowercase letters`},
+	{"device name quote", func(s *tiad.Station) { s.Profinet.Devices[0].Name = `dev"ice` }, `"dev\"ice": only lowercase letters`},
+	// A character both Unicode tables know (6.1). Go's tables are newer
+	// than .NET Framework's (and Mono's older still), so a character
+	// assigned later prints raw from Go and escaped from the agent: only
+	// the quoting of an already refused name differs.
+	{"device name emoji", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev😀" }, `"dev😀": only lowercase letters`},
+	{"device name private use", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "dev\ue000" }, `"dev\ue000": only lowercase letters`},
 	{"device name dup of cpu", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "plc-1" }, `profinet.devices[0].name "plc-1" is already used in this station`},
 	{"device address dup of cpu", func(s *tiad.Station) { s.Profinet.Devices[0].Address = benchCPU }, "profinet.devices[0].address 192.0.2.10 is already used in this station"},
 	{"device address", func(s *tiad.Station) { s.Profinet.Devices[0].Address = "1.2" }, `profinet.devices[0].address "1.2" is not an IPv4 address`},
@@ -193,6 +206,32 @@ func contractGSDML(t *testing.T, start Starter) {
 	if _, err := c.InstallGSD(ctx, "gsd/device.xml"); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "GSDML-*.xml") {
 		t.Fatalf("a file not named GSDML-*.xml: %v", err)
 	}
+	// TIA's importer never sees a DOCTYPE (no XXE, no entity expansion),
+	// or anything that is not well-formed XML.
+	refused := map[string]string{
+		"doctype":         `<?xml version="1.0"?><!DOCTYPE ISO15745Profile><ISO15745Profile/>`,
+		"external entity": `<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><x>&e;</x>`,
+		"entity bomb":     `<!DOCTYPE x [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><x>&b;</x>`,
+		"not xml":         "x",
+		"empty":           "",
+		"unclosed":        "<ISO15745Profile>",
+	}
+	for name, body := range refused {
+		p := "gsd/GSDML-V2.4-Bad-" + strings.ReplaceAll(name, " ", "-") + ".xml"
+		if _, err := c.PutFile(ctx, p, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.InstallGSD(ctx, p); tiad.Kind(err) != tiad.KindBadRequest {
+			t.Errorf("GSDML %s: %v, want bad_request", name, err)
+		}
+	}
+	ok := "gsd/GSDML-V2.4-Good-20261118.xml"
+	if _, err := c.PutFile(ctx, ok, []byte("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- a comment -->\n<ISO15745Profile xmlns=\"http://www.profibus.com/GSDML/2003/11/DeviceProfile\"><a/></ISO15745Profile>\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.InstallGSD(ctx, ok); err != nil {
+		t.Errorf("a well-formed GSDML: %v", err)
+	}
 	// The sandbox rule holds for a path in a body as in a URL, and there
 	// every agent answers 400 itself.
 	for _, p := range append(append([]string{}, RefusedPaths...), "../x", "a/../../x", "/abs/x") {
@@ -244,6 +283,39 @@ func contractProjects(t *testing.T, start Starter) {
 	if err != nil || s2.ID == s.ID {
 		t.Fatalf("re-create: %+v %v", s2, err)
 	}
+
+	// A created project owns projects/<name>/: it is not created again
+	// while anything in that directory is open, and nothing in it opens
+	// while it is.
+	if _, err := c.PutFile(ctx, "projects/foo/other.ap21", []byte("another project")); err != nil {
+		t.Fatal(err)
+	}
+	other, err := c.Open(ctx, "projects/foo/other.ap21")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"foo", "FOO"} {
+		if _, err := c.CreateProject(ctx, name, BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBusy {
+			t.Errorf("create %q while projects/foo/other.ap21 is open: %v, want busy", name, err)
+		}
+	}
+	if b, err := c.GetFile(ctx, "projects/foo/other.ap21"); err != nil || len(b) == 0 {
+		t.Fatalf("the open project was removed: %q %v", b, err)
+	}
+	if err := other.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	foo, err := c.CreateProject(ctx, "foo", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatalf("create foo once nothing in it is open: %v", err)
+	}
+	if _, err := c.PutFile(ctx, "projects/foo/other.ap21", []byte("another project")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Open(ctx, "projects/foo/other.ap21"); tiad.Kind(err) != tiad.KindBusy {
+		t.Fatalf("open inside a created project's directory: %v, want busy", err)
+	}
+	_ = foo.Close(ctx)
 }
 
 func contractProjectNames(t *testing.T, start Starter) {
@@ -320,6 +392,17 @@ func contractStrictJSON(t *testing.T, start Starter) {
 		"unknown top field":     body(func(_, r map[string]any) { r["extra"] = 1 }),
 		"unknown station field": body(func(st, _ map[string]any) { st["extra"] = 1 }),
 		"unknown cpu field":     body(func(st, _ map[string]any) { st["cpu"].(map[string]any)["extra"] = 1 }),
+		// Go's encoding/json would match these case-insensitively; the
+		// agent matches exactly, so a misspelt field is never taken.
+		"a key in the wrong case": body(func(st, _ map[string]any) {
+			cpu := st["cpu"].(map[string]any)
+			cpu["subnetmask"] = cpu["subnetMask"]
+			delete(cpu, "subnetMask")
+		}),
+		"a top key in the wrong case": body(func(st, r map[string]any) {
+			r["Station"] = st
+			delete(r, "station")
+		}),
 		"unknown module field": body(func(st, _ map[string]any) {
 			st["modules"].([]any)[0].(map[string]any)["slott"] = 2
 		}),
@@ -341,6 +424,36 @@ func contractStrictJSON(t *testing.T, start Starter) {
 		"body cut short":       `{"station":`,
 		"body not json":        "station=1",
 	}
+	// What a lenient parser (JavaScriptSerializer) would take and Go never
+	// does. Each one is the valid body, wrong only in its syntax.
+	valid, _ := json.Marshal(body(func(_, _ map[string]any) {}))
+	if status, rb := rawJSON(t, c, "PUT", path, string(valid)); status != http.StatusOK {
+		t.Fatalf("the valid body: HTTP %d %s", status, rb)
+	}
+	syntax := map[string][2]string{
+		"single quotes":          {`"secrets"`, `'secrets'`},
+		"a bare key":             {`"secrets"`, `secrets`},
+		"a trailing comma":       {`"slot":2}`, `"slot":2,}`},
+		"a comment":              {`"slot":2`, `"slot":/* two */2`},
+		"NaN":                    {`"inputStart":0`, `"inputStart":NaN`},
+		"a leading zero":         {`"slot":2`, `"slot":02`},
+		"hex":                    {`"slot":2`, `"slot":0x2`},
+		"a plus sign":            {`"slot":2`, `"slot":+2`},
+		"a trailing point":       {`"slot":2`, `"slot":2.`},
+		"a bare point":           {`"inputStart":0`, `"inputStart":.0`},
+		"undefined":              {`"inputStart":0`, `"inputStart":undefined`},
+		"a raw tab in a string":  {`"pw"`, "\"p\tw\""},
+		"a bad escape":           {`"pw"`, `"p\qw"`},
+		"a single-quoted string": {`"pw"`, `'pw'`},
+	}
+	for name, sub := range syntax {
+		if !strings.Contains(string(valid), sub[0]) {
+			t.Fatalf("%s: %q is not in the valid body %s", name, sub[0], valid)
+		}
+		b := strings.Replace(string(valid), sub[0], sub[1], 1)
+		refused[name] = b
+	}
+	refused["two documents"] = string(valid) + " {}"
 	for name, b := range refused {
 		if status, rb := rawJSON(t, c, "PUT", path, b); status != http.StatusBadRequest || envelopeKind(rb) != tiad.KindBadRequest {
 			t.Errorf("%s: HTTP %d %s, want 400 bad_request", name, status, rb)
