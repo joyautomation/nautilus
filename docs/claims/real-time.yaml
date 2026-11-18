@@ -272,3 +272,21 @@ claims:
       go test ./..., and CI runs it in the go job with the test binary given
       the capability by setcap and NAUTILUS_REQUIRE_RT=1, so there a
       missing capability fails rather than skips.
+
+  - id: RT-026
+    claim: >-
+      A task at priority: that overruns its period a set number of scans in
+      a row (default 50), or whose one scan runs for more than a set multiple
+      of its period (default 20, checked while the scan runs), is moved to
+      normal scheduling, alone, with the reason in its scan.sched;
+      priority-guard: sets both per task.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestPriorityGuardOverrunWatch
+      - go ./runtime TestPriorityGuardStuckScan
+      - go ./runtime TestRTGuardDemoteOneThread
+      - go ./runtime TestRTGuardPriorityWatchdog
+    note: >-
+      TestRTGuardPriorityWatchdog needs CAP_SYS_NICE: it skips under go test
+      ./... and runs in CI's setcap'd RT guard step with
+      NAUTILUS_REQUIRE_RT=1.

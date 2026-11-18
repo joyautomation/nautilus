@@ -372,6 +372,31 @@ type TaskConfig struct {
 	// that cpu: 0 is a request and an absent key is not.
 	CPU      *int `yaml:"cpu"`
 	Priority int  `yaml:"priority"`
+	// PriorityGuard bounds the task while it runs at Priority: past either
+	// bound it loses the priority until a restart (runtime/prioguard.go).
+	PriorityGuard *PriorityGuardConfig `yaml:"priority-guard"`
+}
+
+// PriorityGuardConfig is a task's priority-guard: block. Zero takes the
+// default (overruns 50, scan-multiple 20).
+type PriorityGuardConfig struct {
+	Overruns     int     `yaml:"overruns"`      // scans in a row longer than the period
+	ScanMultiple float64 `yaml:"scan-multiple"` // one scan longer than this many periods
+}
+
+// guard checks a task's priority-guard: block and converts it.
+func (t TaskConfig) guard() (runtime.PriorityGuard, error) {
+	g := t.PriorityGuard
+	if g == nil {
+		return runtime.PriorityGuard{}, nil
+	}
+	if g.Overruns < 0 {
+		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: overruns %d: a count of scans, 1 or more (or leave it out for %d)", t.Program, g.Overruns, runtime.DefaultGuardOverruns)
+	}
+	if g.ScanMultiple != 0 && g.ScanMultiple < 2 {
+		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: scan-multiple %g: 2 or more, or ordinary jitter would trip it (or leave it out for %g)", t.Program, g.ScanMultiple, runtime.DefaultGuardScanMultiple)
+	}
+	return runtime.PriorityGuard{Overruns: g.Overruns, ScanMultiple: g.ScanMultiple}, nil
 }
 
 // TagConfig declares one tag by role — the manifest form of runtime.TagDef.
@@ -879,8 +904,15 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	opts.DtTag = main.DtTag
 	opts.LateThreshold = time.Duration(main.LateThreshold)
 	opts.CPUs, opts.Priority = cpuList(main.CPU), main.Priority
+	if opts.Guard, err = main.guard(); err != nil {
+		return nil, err
+	}
 	for _, t := range m.Tasks[1:] {
 		src, err := readProgram(t)
+		if err != nil {
+			return nil, err
+		}
+		g, err := t.guard()
 		if err != nil {
 			return nil, err
 		}
@@ -899,6 +931,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			LateThreshold: time.Duration(t.LateThreshold),
 			CPUs:          cpuList(t.CPU),
 			Priority:      t.Priority,
+			Guard:         g,
 		})
 	}
 

@@ -123,6 +123,24 @@ the core. Any blocking resets the count, Go's own preemption included (it
 parks a task's thread for a moment about every 10 ms). A scan that merely
 runs long therefore shows as lateness and missed slots, not as a demotion.
 The limit is for a thread that has stopped giving the core back at all.
+
+**The runtime watches its own priority tasks too.** A task at `priority:`
+that overruns its period 50 times in a row, or whose one scan runs for
+more than 20 periods, loses the priority the same way: back to normal
+scheduling until a restart, logged, and shown in its `scan.sched`. The
+second check runs while the scan is still going, so a scan that never
+ends is caught too. The kernel limit cannot catch one that keeps getting
+preempted. Only that task is demoted. Change the bounds per task:
+
+```yaml
+tasks:
+  - program: fast.st
+    scan: 1ms
+    priority: 40
+    priority-guard:
+      overruns: 100       # scans in a row over the period (default 50)
+      scan-multiple: 10   # one scan longer than this many periods (default 20, at least 2)
+```
 `NAUTILUS_RT_LIMIT_MS` changes the limit (10 ms or more). A stricter
 limit already in place, from a launcher for instance, is kept. A task
 that cannot be bounded is not given the priority.
