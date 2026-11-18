@@ -2,7 +2,7 @@
 #
 # nautilus.yaml is the build that runs ON the AXC F 2152 and drives its
 # Axioline modules (in the playground, where this file is nautilus.yaml,
-# that one is controller.yaml). This one swaps the plcnext driver for memory and the
+# that one is controller.yaml). This one swaps the plcnext driver for the memory loopback and the
 # generated I/O tags for tags/sim.yaml, where every input is a setpoint
 # you write in place of the board: S1..S4 are DI_00..DI_03, SliderV is the
 # slider (board.st puts it on AI_00), and AXC__Online false is an outage. The nautilus playground
@@ -19,9 +19,16 @@ server:
   # from these tags as they are from the controller's.
   hmi: hmi/build
 
+# The runtime's own health as tags (tags/health.yaml), as on the
+# controller. Alone as the driver it keeps the memory loopback that stands
+# in for the board here.
 driver:
-  type: memory
-  scan-rate: 50ms
+  name: health
+  type: runtime
+  tags:
+    - { name: Bench__Demoted,  task: main, status: demoted }
+    - { name: Bench__Faulting, task: main, status: faulting }
+    - { name: Bench__Late,     task: main, status: late }
 
 tasks:
   - program: bench.st
@@ -34,3 +41,9 @@ tasks:
 tag-files:
   - tags/sim.yaml
   - tags/bench.yaml
+  - tags/health.yaml
+
+alarms:
+  defs:
+    - { id: BenchDemoted,  tag: Bench__Demoted,  name: "Bench task lost its real-time priority (until restart)", priority: high, class: equipment }
+    - { id: BenchFaulting, tag: Bench__Faulting, name: "Bench task logic fault", priority: high, on-delay: 1s, class: equipment }
