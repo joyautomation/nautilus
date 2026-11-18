@@ -89,10 +89,14 @@ if [ "${1:-}" != start ] && [ -e "$ROOT/hold" ] && [ -z "$(find "$ROOT/hold" -mm
 	exit 0
 fi
 [ -x "$ROOT/current/controller" ] || exit 0
+# Running is the pid file's process with one of ROOT's releases as its
+# argv[0] (naut-launch passes the resolved path). Not /proc/<pid>/exe: a
+# controller that gained a capability is not dumpable, and its exe link is
+# unreadable even to its owner.
 real=$(cd "$ROOT" && pwd -P)
 if [ -f "$STATE/nautilus.pid" ]; then
-	case $(readlink "/proc/$(cat "$STATE/nautilus.pid")/exe" 2>/dev/null) in
-	"$real"/releases/*) exit 0 ;;
+	case $(tr '\0' '\n' 2>/dev/null <"/proc/$(cat "$STATE/nautilus.pid")/cmdline" | head -n 1) in
+	"$real"/releases/*/controller | "$ROOT"/current/controller) exit 0 ;;
 	esac
 fi
 mkdir -p "$STATE"
@@ -113,12 +117,14 @@ EOF
 }
 
 # cronpid (cron mode): the controller's pid when one of ROOT's releases is
-# running under the keepalive's pid file, else nothing.
+# running under the keepalive's pid file, else nothing. Known by argv[0],
+# as in the keepalive: /proc/<pid>/exe is unreadable once naut-launch has
+# given the controller a capability.
 cronpid() {
 	[ -f "$STATE/nautilus.pid" ] || return 0
 	p=$(cat "$STATE/nautilus.pid")
-	case $(readlink "/proc/$p/exe" 2>/dev/null) in
-	"$(cd "$ROOT" && pwd -P)"/releases/*) echo "$p" ;;
+	case $(tr '\0' '\n' 2>/dev/null <"/proc/$p/cmdline" | head -n 1) in
+	"$(cd "$ROOT" && pwd -P)"/releases/*/controller | "$ROOT"/current/controller) echo "$p" ;;
 	esac
 }
 

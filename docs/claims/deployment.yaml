@@ -207,6 +207,14 @@ claims:
     partial: true
     note: >-
       TestDeployBoxCronMode runs box.sh's cron mode on the test machine
-      with a stand-in crontab and controller. A run against a PLCnext
-      (no systemd, admin's allowlisted sudo) through naut-launch is the
-      bench check still to come.
+      with a stand-in crontab and controller. On a PLCnext AXC F 2152
+      (sysvinit, admin with an allowlisted sudo), 2026-11-17, by hand:
+      install, update, an update to a release that exits (rolled back,
+      exit 3), rollback, backup, restore, a retained setpoint kept across
+      restore and update, a controller killed with SIGKILL restarted by
+      cron 25 s later, and uninstall -purge leaving the root, naut-launch
+      and the user's other crontab lines; every start went through
+      naut-launch at SCHED_FIFO 40 pinned to CPU 0, on a v0.21.0 armv7
+      runtime. ssh went through a wrapper that supplied admin's password:
+      the controller's sshd refuses keys for admin (its home is group
+      writable), and naut deploy runs ssh with BatchMode=yes.
