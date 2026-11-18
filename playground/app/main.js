@@ -471,7 +471,7 @@ async function main() {
 		// own ./schemas/... (extension-file://).
 		served('./extension/', (m, url) => {
 			m.browser = './out/web/extension.js';
-			for (const s of m.contributes.yamlValidation) s.url = url(s.url.replace(/^\.\//, ''));
+			for (const s of m.contributes.yamlValidation ?? []) s.url = url(s.url.replace(/^\.\//, ''));
 		}),
 		// Red Hat's YAML extension (scripts/app.sh): completion, hover and
 		// validation from the nautilus extension's yamlValidation schemas.
