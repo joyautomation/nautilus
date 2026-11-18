@@ -57,6 +57,10 @@ Import flags:
                  Add N writable scratchpad tags of that kind from element 0
                  (<id>_SP_B0, _I0, _F0): the registers a PAC Control
                  strategy or groov View on the same unit shares
+  --scratch-bits-in N, --scratch-ints-in N, --scratch-floats-in N
+                 Add N read-only scratchpad tags of that kind right after
+                 the writable ones: values another client writes for the
+                 program to read. One writer per element
   --custom-area  Map every word a scan needs into the processor's custom
                  data area, so a scan is one read (rewrites its pointers)
   --stream D     Have the processor push inputs over UDP every D instead of
@@ -144,6 +148,9 @@ func runOptommpImport(args []string) int {
 	sBits := fs.Int("scratch-bits", 0, "writable scratchpad bit tags to add")
 	sInts := fs.Int("scratch-ints", 0, "writable scratchpad integer tags to add")
 	sFloats := fs.Int("scratch-floats", 0, "writable scratchpad float tags to add")
+	sBitsIn := fs.Int("scratch-bits-in", 0, "read-only scratchpad bit tags to add after the writable ones")
+	sIntsIn := fs.Int("scratch-ints-in", 0, "read-only scratchpad integer tags to add after the writable ones")
+	sFloatsIn := fs.Int("scratch-floats-in", 0, "read-only scratchpad float tags to add after the writable ones")
 	customArea := fs.Bool("custom-area", false, "fetch through the processor's custom data area")
 	stream := fs.Duration("stream", 0, "stream interval (0: poll)")
 	watchdog := fs.String("watchdog", "", "I/O unit communication watchdog (0s: off; empty: leave alone)")
@@ -186,6 +193,7 @@ func runOptommpImport(args []string) int {
 			ID: *id, Host: dialHost, Port: *port, ScanRate: *scanRate,
 			Latches: *latches, Quality: *quality,
 			ScratchBits: *sBits, ScratchInts: *sInts, ScratchFloats: *sFloats,
+			ScratchBitsIn: *sBitsIn, ScratchIntsIn: *sIntsIn, ScratchFloatsIn: *sFloatsIn,
 			CustomArea: *customArea, Stream: *stream,
 		}
 		if *watchdog != "" {

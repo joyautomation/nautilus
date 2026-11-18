@@ -8,6 +8,16 @@
 #   hmibuild=true|false examples/lift-station/hmi changed: run
 #                       internal/hmibuild's TestBuildsTheLiftStationApp,
 #                       the one Go test that builds an example's HMI
+#   extension=true|false the VS Code extension, what it bundles or what its
+#                       tests read changed: tools/vscode-iec/, the hmi/ and
+#                       hmi-3d/ kits it links (file:), every example diagram
+#                       (the gesture harness wants a committed layout
+#                       fixture per tracked examples/**/*.ld|fbd|sfc), the
+#                       lift station's own components (componentCompiler
+#                       and userComponentBuild tests compile them), or
+#                       .github/. The extension's own jobs need it, light
+#                       PR or not; a Go-only PR leaves them out (the
+#                       CLI-discovery e2e still runs on Linux: it drives naut).
 #
 # The light list is paths no Go test, embed or naut binary reads, found by
 # grepping the tests and by changing one file per area with a warm test
@@ -29,6 +39,7 @@ set -u
 full=false
 any=false
 hmibuild=false
+extension=false
 roots=()
 add_root() {
   local r
@@ -38,6 +49,11 @@ add_root() {
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   any=true
+  case "$path" in
+    tools/vscode-iec/*|hmi/*|hmi-3d/*|.github/*) extension=true ;;
+    examples/*.ld|examples/*.fbd|examples/*.sfc) extension=true ;;
+    examples/lift-station/hmi/src/lib/*) extension=true ;;
+  esac
   case "$path" in
     examples/*/hmi/*.st|examples/*/hmi/*.ld|examples/*/hmi/*.fbd|examples/*/hmi/*.sfc)
       full=true ;;
@@ -58,7 +74,8 @@ while IFS= read -r path; do
       full=true ;;
   esac
 done
-[ "$any" = true ] || full=true
+if [ "$any" != true ]; then full=true; extension=true; fi
 echo "full=$full"
 echo "examples=${roots[*]+"${roots[*]}"}"
 echo "hmibuild=$hmibuild"
+echo "extension=$extension"

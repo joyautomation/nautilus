@@ -125,7 +125,7 @@ claims:
     claim: >-
       Each scan class is one batched Read on its own timer, chunked to the
       server's MaxNodesPerRead and halved on Bad_TooManyOperations.
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestReadsAndQuality
     partial: true
@@ -137,7 +137,7 @@ claims:
       have been read, false while the server is unreachable, and named after
       the driver (opcua_client__Online unnamed, opcua-client-2 as
       opcua_client_2__Online).
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestReadsAndQuality
       - go ./opcua TestReconnectAndStale
@@ -150,7 +150,7 @@ claims:
     claim: >-
       A node the server refuses is Bad while the rest of its class keeps
       delivering; Uncertain statuses count as not good.
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestBadNodeIsBadNotFatal
     partial: true
@@ -161,7 +161,7 @@ claims:
       A transport failure reconnects with backoff while values hold with
       Stale quality and __Online false; after a reconnect each value stays
       Stale until the new session has read it, then is Good.
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestReconnectAndStale
       - go ./opcua TestCarriedOverValueIsStaleUntilReadOnTheNewSession
@@ -175,7 +175,7 @@ claims:
       scanning while the server is down; the type follows the binding
       (Boolean BOOL, up to Int32 DINT, UInt32/Int64/UInt64/DateTime LINT,
       Float REAL, Double LREAL, String STRING).
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./internal/project TestOPCUAClientServerDownReadsInitOrZero
       - go ./internal/project TestOPCUAClientDriverIsACommsDriver
@@ -320,7 +320,78 @@ claims:
     tests:
       - go ./opcua TestForeignServerMatrix/milo
 
-  - id: UAC-031
+  - id: UAC-025
+    claim: >-
+      With read-mode: subscribe each scan class is one subscription and
+      values arrive as data change notifications, with no polling after the
+      one Read per class that primes a new session; __Online, quality, the
+      Bad node and the writes behave as when polling.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeFollowsChangesWithoutPolling
+      - go ./opcua TestSubscribeBadNodeIsBadNotFatal
+      - go ./opcua TestSubscribeSeveralClasses
+      - go ./opcua TestForeignServerMatrix/open62541/reads/subscribe
+      - go ./opcua TestForeignServerMatrix/open62541/writes/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/reads/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/writes/subscribe
+
+  - id: UAC-026
+    claim: >-
+      A subscribed driver notices a server that restarted or went silent,
+      on servers with and without SetPublishingMode: __Online falls, values
+      hold as Stale, and once the server is back the session is primed and
+      subscribed afresh and changes arrive again.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeReconnectAndStale
+      - go ./opcua TestForeignServerMatrix/open62541/restart/subscribe
+      - go ./opcua TestForeignServerMatrix/open62541/blackhole/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/restart/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/blackhole/subscribe
+
+  - id: UAC-027
+    claim: >-
+      read-mode accepts poll and subscribe and anything else fails naut
+      check.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestReadModeIsChecked
+      - go ./cmd/naut TestCheckOPCUAClientDriver
+
+  - id: UAC-028
+    claim: >-
+      A subscribed value that sits still across several keep-alives and
+      then changes once is delivered as a notification.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeQuietValueStillArrives
+      - go ./opcua TestSubscriptionParams
+      - go ./opcua TestForeignServerMatrix/open62541/quiet/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/quiet/subscribe
+
+  - id: UAC-029
+    claim: >-
+      Each subscribed class is also read in full every 30 s, or every ten of
+      its periods for a slower class.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeRefreshReads
+
+  - id: UAC-032
+    claim: >-
+      Subscribed, a node the server will not monitor reads Bad for the
+      whole session, refresh reads included; a Bad_TooManyOperations
+      refusal halves the monitored items per call and the smaller size is
+      kept for later sessions; and a server that refuses to subscribe gets
+      sessions on the climbing retry ladder, not one every minimum delay.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeRefusedItemStaysBad
+      - go ./opcua TestSubscribeTooManyOperationsIsKept
+      - go ./opcua TestSubscribeRefusedSubscriptionBacksOff
+
+  - id: UAC-034
     claim: >-
       Against the virtual IO-Link masters (Pepperl+Fuchs ICE3, SICK SIG300,
       ifm AL1590) at the node ids the real masters serve, anonymously on the

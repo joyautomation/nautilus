@@ -418,12 +418,14 @@ func (p *Project) Reasons() []string {
 }
 
 type importer struct {
-	file  *l5x.File
-	opts  Options
-	proj  *Project
-	aois  map[string]*l5x.AddOnInstruction
-	ctrl  map[string]*l5x.Tag
-	types map[string]bool
+	// realNoted: the REAL-to-integer store note is given (once).
+	realNoted bool
+	file      *l5x.File
+	opts      Options
+	proj      *Project
+	aois      map[string]*l5x.AddOnInstruction
+	ctrl      map[string]*l5x.Tag
+	types     map[string]bool
 	// written collects controller tags the imported logic drives, for
 	// the tag file's roles.
 	written map[string]bool

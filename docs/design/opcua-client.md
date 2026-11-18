@@ -77,17 +77,70 @@ d.Start(ctx); defer d.Stop()
 resolves scan classes, so `naut check` and `naut build` pass in CI with no
 server in sight. The connection is `Start`'s job.
 
-**Polled, not subscribed.** Each scan class is one batched `Read` on its
+**Polled by default.** Each scan class is one batched `Read` on its
 timer, chunked to the server's advertised `MaxNodesPerRead` (and halved on
 `Bad_TooManyOperations`). For the hundreds of tags a gateway exposes that is
-a few kilobytes a second. Subscriptions are the protocol's own change
-notification and would cut it further for very large sites; they are left
-out of the first cut because the polled path has no reconnect-era state to
-get wrong.
+a few kilobytes a second.
+
+**Subscribed on request** (`read-mode: subscribe`, `subscribe.go`, #704).
+Each scan class is one subscription, publishing interval = the class rate,
+one monitored item per binding (sampling = the class rate, queue 1,
+discard oldest, no deadband yet), created in chunks of the server's
+`MaxMonitoredItemsPerCall`. Everything else is the polled mode's on
+purpose, so the two cannot drift:
+
+- **Fresh per session.** Subscriptions are created on every new session;
+  nothing is transferred or republished. The ladder, the writes and the
+  gate are shared code.
+- **Primed by a Read.** A new session reads every class once before
+  subscribing, so `primed`, `__Online` and the §4 table are unchanged; the
+  initial notification each item sends repeats a delivered value.
+- **One apply.** A notification's DataValue goes through the same code as
+  a Read result (Bad on a non-good status or a non-scalar).
+- **Liveness is the driver's.** gopcua v0.9.1 pauses its publish loop on a
+  transport error and never hands keep-alives to the subscriber, so a
+  driver that only listened would hold Good values through an outage.
+  Once a second the driver sends `SetPublishingMode(true)` on its own
+  subscription ids: a dead transport fails it, a subscription the server
+  dropped answers `Bad_SubscriptionIdInvalid`. A bad StatusChangeNotification
+  or an error on the notification channel also ends the session.
+- **gopcua stops on any service fault.** Every response whose ServiceResult
+  is not Good reaches the client's monitor, which (AutoReconnect off) marks
+  the client closed and ends the publish loop while the secure channel
+  stays open: reads keep working, notifications silently stop. The probe
+  therefore also checks the client's state and ends the session when it
+  is not Connected. A server without SetPublishingMode
+  (`Bad_ServiceUnsupported`, gopcua's own server) is exactly such a fault:
+  that first session is given up and the driver probes every later one
+  with a Read of ServerStatus/State, which a server never faults.
+- **Keep-alive inside the Publish deadline.** gopcua abandons a Publish
+  after max(keep-alive window, request timeout) and drops a late answer.
+  A keep-alive window equal to that deadline makes a quiet subscription
+  race its own keep-alive and lose the change that wins the race. So the
+  window is at most half the request timeout, and the publishing interval
+  is the class rate but at most a quarter of the timeout: a 60 s class is
+  sampled every 60 s and published every 1.25 s (5 s timeout). Lifetime is
+  about 60 s, never under three keep-alives, so a subscription orphaned by
+  a client that lost its link is gone in a minute.
+- **Refresh reads bound the rest.** Each class is also read in full every
+  30 s, or every ten of its periods if slower, so a notification lost
+  without the session failing, whatever lost it, leaves a wrong Good
+  value for at most that long rather than until the value next changes.
+- **A refusal fails loudly.** A refused subscription is a failed session
+  on the ladder, never a silent fallback to polling; a refused monitored
+  item makes its binding Bad for the session (`notMonitored`: a refresh
+  read answering Good does not lift it). `Bad_TooManyOperations` on
+  CreateMonitoredItems is a service fault, which closes gopcua's client,
+  so the halved per-call limit is kept on the driver (`itemCap`) for the
+  next session, as `probeByRead` is. The status card shows the mode, the count of
+  notifications and each class's publishing interval as the server
+  revised it.
 
 **Reconnect is ours.** gopcua's `AutoReconnect` is off. A transport error
 closes the session and the driver dials again on a 1 s → 60 s ladder that
-resets only once the server has answered a read — modbus's rule. The quality
+resets only once the server has answered a read — modbus's rule — and,
+subscribed, only once the session got its subscriptions, so a server that
+answers the priming read but refuses to subscribe climbs the ladder. The quality
 verdicts ride on that state, so the driver that owns the ladder owns them.
 
 ## 3. Namespaces
@@ -252,7 +305,8 @@ communications driver delivers it yet.
 3. **Arrays and structures** are skipped at import. Ignition exposes UDTs as
    folders of scalars, so this costs nothing there; a server that publishes
    structured values needs a second cut (ExtensionObject registration).
-4. **Subscriptions** when a site has enough tags to justify them (§2).
+4. **Subscriptions**: built (§2). Not yet: deadband filters, and
+   TransferSubscriptions across a session break.
 5. **A native client** behind the same package if the dependency ever
    becomes a problem — the test suite is the spec for it.
 6. **Server certificate trust.** gopcua v0.9.1 has no trust list, and the

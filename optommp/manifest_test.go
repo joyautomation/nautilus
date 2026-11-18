@@ -181,3 +181,49 @@ func TestBindingIECType(t *testing.T) {
 		}
 	}
 }
+
+// Read-only Scratch Pad elements follow the writable ones of their kind,
+// are not outputs, and say who writes them.
+func TestManifestReadOnlyScratchpad(t *testing.T) {
+	dev := newBenchDevice()
+	o := ManifestOptions{ID: "EPIC", Host: "192.0.2.10", ScratchFloats: 1, ScratchFloatsIn: 2, ScratchIntsIn: 1}
+	m := benchManifest(t, dev, o)
+	cmd := ManifestCommand(o)
+	if cmd != "naut optommp import --host 192.0.2.10 --scratch-floats 1 --scratch-ints-in 1 --scratch-floats-in 2" {
+		t.Errorf("command: %s", cmd)
+	}
+	raw := string(ManifestYAML(m, cmd))
+	for _, want := range []string{
+		`  - { name: EPIC_SP_F0, point: scratch-float, index: 0, writable: true }`,
+		`  - { name: EPIC_SP_F1, point: scratch-float, index: 1 }`,
+		`  - { name: EPIC_SP_F2, point: scratch-float, index: 2 }`,
+		`  - { name: EPIC_SP_I0, point: scratch-int, index: 0 }`,
+	} {
+		if !strings.Contains(raw, want+"\n") {
+			t.Errorf("manifest lacks\n%s\n%s", want, raw)
+		}
+	}
+	back, err := ParseManifest([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(back.OutputNames()); !strings.Contains(got, "EPIC_SP_F0") || strings.Contains(got, "EPIC_SP_F1") || strings.Contains(got, "EPIC_SP_I0") {
+		t.Errorf("outputs: %s", got)
+	}
+	tags, err := ManifestTagsYAML(back, cmd, "tags/optommp.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `- { name: EPIC_SP_F1, role: input, type: REAL, desc: "scratchpad float 1, read-only (another client writes it)" }`; !strings.Contains(string(tags), want) {
+		t.Errorf("tags lack\n%s\n%s", want, tags)
+	}
+
+	o.ScratchFloats, o.ScratchFloatsIn = ScratchFloats, 1
+	ch, err := Scan(dialFake(t, dev))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GenerateManifest(ch, o); err == nil {
+		t.Error("more scratchpad floats than the unit has: no error")
+	}
+}
