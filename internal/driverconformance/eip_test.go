@@ -17,6 +17,7 @@ import (
 func init() {
 	register(subject{
 		name: "eip",
+		gate: dropAndAsk,
 		// Stop waits out a hung request's 10 s socket deadline: cancelling
 		// the driver's context does not end it.
 		expect: map[string]string{"C6": "#932"},
