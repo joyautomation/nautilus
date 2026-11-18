@@ -4,8 +4,9 @@
 part of the parity epic #725. Status: **in progress.** The format, the plant,
 the Modbus wire face and `naut devices` (PR 1); the OPC UA wire face and
 three makers' IO-Link masters (PR 2); ABB drives, the in-process face in
-`naut test` and a sequence test (PR 3) are built. The burner, the OPC 30120
-base profile and `naut run --devices` follow (§7).
+`naut test` and a sequence test (PR 3); the burner's temperature
+controller (PR 4) are built. The OPC 30120 base profile and `naut run
+--devices` follow (§7).
 
 ## 0. Why
 
@@ -121,6 +122,13 @@ notes: what is simplified and what is not modelled
 - A Modbus device answers like the hardware: an address no point covers,
   or a write to a read-only one, gets exception 02 (`modbus.open: true`
   turns that off for a device whose documents do not say).
+- A point **both sides write** (a loop's %Out: the controller's in manual,
+  the device's in auto) is a writable point the simulator declares
+  `VAR_IN_OUT`: each scan it gets what the register holds, and the register
+  gets what it leaves, so a controller's write lands and the device's own
+  value replaces it unless the simulator keeps it. Modbus devices only.
+- A simulator's `VAR_INPUT Dt : REAL` gets the plant's scan seconds; the
+  process model task has `Model_Dt`.
 - The **simulator** is an ST FUNCTION_BLOCK beside the profile. ST because
   it reuses the compiler, `naut check` and virtual time, and because it is
   what an agent will write when profiles are generated from a manual.
@@ -239,6 +247,20 @@ profile (IOLinkMasterType and friends, from the companion NodeSet) is the
 next step: gopcua's NodeSet import does not remap namespace indices, so it
 needs an importer that does.
 
+## 5b. The burner controller
+
+The reference plant's burner is fired by a temperature controller on
+Modbus, a Future Design Controls MCT4; flame supervision (prepurge,
+ignition, flame proving, lockout) is a separate burner manager that is not
+on the controller's network. So the virtual "burner controller" is
+`fdc-mct4`: the MCT4's Modbus TCP map from its public manual (MCT4 4.3 User
+Manual Rev. G, App. A.1, pp. 164-177), loop 1 as a PI loop over a
+first-order thermal model that heats only while the burner manager reports
+a flame (hook `FlameOn`). %Out is a shared point (VAR_IN_OUT): written by
+the controller in manual, by the loop in auto. A sensor break reads error
+code 39 and drops the output. Loops 2-3, the limit, alarms, events,
+autotune and automatic programs are not modelled (profile notes).
+
 ## 6. Not built here
 
 - **AI generation** of a profile and its simulator from a manual, register
@@ -261,5 +283,7 @@ needs an importer that does.
 3. ABB drives (ACS550 + RETA-01 and ACS355 + FMBT-21 Classic, ACS580 +
    FMBT-21 Enhanced), the in-process face in `naut test`, `plant:`, the
    bin-fill sequence test.
-4. A burner controller over Modbus; the OPC 30120 base profile; `naut run
-   --devices` (needs a driver-endpoint override at project load).
+4. The burner's temperature controller (`fdc-mct4`), with shared points.
+5. The OPC 30120 base profile; `naut run --devices` (needs a
+   driver-endpoint override at project load); the language server knowing
+   the plant's tags.

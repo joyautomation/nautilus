@@ -1,0 +1,47 @@
+profile: fdc-mct4
+title: Future Design Controls MCT4 temperature controller (a burner's firing loop), Modbus TCP
+maker: Future Design Controls
+model: MCT4 4.3
+version: 1
+docs:
+  - id: mct4
+    title: "MCT4 4.3 User Manual, Appendix A.1 Modbus Communications"
+    code: Rev. G
+    url: https://cdn.shopify.com/s/files/1/1467/2928/files/MCT4_4.3_User_Manual_RevG.pdf
+protocol: modbus
+modbus:
+  port: 502          # mct4 p. 164: "Port Number = 502"; the unit id is the MCT4's Modbus address
+  unit-id: 1
+points:
+  - { name: OfflineBusy,     type: UINT, table: holding, address: 0,  desc: "System Offline/Busy: 0 online, 1 program download", doc: "mct4 p. 171 register 0, *B1 p. 173" }
+  - { name: AlarmReset,      type: UINT, table: holding, address: 1,  writable: true, desc: "Alarm Reset (0-1)", doc: "mct4 p. 171 register 1" }
+  - { name: ProgramOutOfSync, type: UINT, table: holding, address: 2, desc: "Automatic Program Out of Sync Alarm", doc: "mct4 p. 171 register 2" }
+  - { name: LoopCommAlarm,   type: WORD, table: holding, address: 3,  desc: "Loop Communication Alarm Status (bit 0 loop 1)", doc: "mct4 p. 171 register 3, *B2 p. 173" }
+  - { name: LoopErrorStatus, type: WORD, table: holding, address: 4,  desc: "Loop Control Error Status (bit 0 loop 1)", doc: "mct4 p. 171 register 4, *B3 p. 173" }
+  - { name: AlarmStatus1,    type: WORD, table: holding, address: 5,  desc: "Process Alarm Status, alarms 1-16", doc: "mct4 p. 171 register 5, *B4 p. 174" }
+  - { name: AlarmStatus2,    type: WORD, table: holding, address: 6,  desc: "Process Alarm Status, alarms 17-19", doc: "mct4 p. 171 register 6, *B4 p. 174" }
+  - { name: ManualOverride,  type: WORD, table: holding, address: 9,  writable: true, desc: "Control Loop Manual Override (bit 0 loop 1 manual)", doc: "mct4 p. 171 register 9, *B5 p. 174" }
+  - { name: AutotuneActivation, type: WORD, table: holding, address: 10, writable: true, desc: "Control Loop Autotune Activation (not modelled)", doc: "mct4 p. 171 register 10, *B6 p. 174" }
+  - { name: SystemEvents,    type: WORD, table: holding, address: 12, writable: true, desc: "System Events 1-16 (OEM-defined)", doc: "mct4 p. 171 register 12, *B7 p. 175" }
+  - { name: Loop1PV,         type: INT,  table: holding, address: 35, desc: "Loop 1 Process Variable (implied decimals per input configuration)", doc: "mct4 p. 171 register 35, *C1 p. 177" }
+  - { name: Loop1SP,         type: INT,  table: holding, address: 36, writable: true, desc: "Loop 1 Setpoint (implied decimals per input configuration)", doc: "mct4 p. 171 register 36" }
+  - { name: Loop1Out,        type: REAL, table: holding, address: 37, format: int16, scale: 0.01, writable: true, unit: "%",
+      desc: "Loop 1 Percent Output, -100.00 to 100.00; written in manual", doc: "mct4 p. 171 register 37, *B5 p. 174" }
+  - { name: Loop1Status,     type: WORD, table: holding, address: 38, desc: "Loop 1 Operational Status", doc: "mct4 p. 171 register 38, *B10 p. 176" }
+  - { name: Loop1Error,      type: UINT, table: holding, address: 39, desc: "Loop 1 Error Code (0 none, 39 sensor break)", doc: "mct4 p. 172 register 39, *B11 p. 176" }
+  - { name: HMIVersion,      type: UINT, table: holding, address: 50, desc: "HMI Software Version", doc: "mct4 p. 172 register 50" }
+  - { name: Alarm1SP,        type: INT,  table: holding, address: 51, writable: true, desc: "Alarm 1 Setpoint", doc: "mct4 p. 172 register 51, *B13 p. 177" }
+  - { name: Alarm2SP,        type: INT,  table: holding, address: 52, writable: true, desc: "Alarm 2 Setpoint", doc: "mct4 p. 172 register 52, *B13 p. 177" }
+  - { name: Input1Units,     type: UINT, table: holding, address: 71, init: 1, desc: "Input 1 Units (0 C, 1 F, 2 process)", doc: "mct4 p. 172 register 71, *B14 p. 177" }
+simulator: { block: MCT4_SIM, source: fdc-mct4.st }
+notes: |
+  Loop 1 only: a PI loop over a first-order thermal model. Heat goes in only
+  while the burner manager reports a flame (hook FlameOn: the MCT4 controls
+  temperature; flame supervision is the burner manager's, which is not on this
+  link). %Out (register 37) is the controller's to write in manual and the
+  loop's in auto: the simulator shares it (VAR_IN_OUT). Implied decimals are
+  0 here (Input 1 in whole degrees F). Not modelled: loops 2 and 3, the limit,
+  monitor points, alarms (status reads 0), events (stored, no effect), autotune,
+  automatic programs (registers 13-30 and the program registers answer
+  exception 02 here). The manual warns not to write unlisted registers;
+  a real MCT4's answer to one is not documented.
