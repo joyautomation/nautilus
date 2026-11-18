@@ -233,7 +233,8 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 - **What `verify` checks against an anchor:**
   - the line with that `seq` exists, and its hash matches;
   - the head's `seq` is at least the anchor's.
-  - So cutting lines off the end, deleting files, forging a prune record or rewriting the chain is caught back to the last anchor. Only what happened after it, at most one interval, rests on the file alone.
+  - So cutting lines off the end, or rewriting lines the anchor covers, is caught back to the last anchor. Only what happened after it, at most one interval, rests on the file alone.
+- **What a head anchor does not catch: a forged prune.** Deleting the oldest files and appending one correctly chained `audit.prune` line naming their last hash and `seq` leaves a journal whose chain, `seq` and head all move forward as an honest prune's do. Neither `seq` nor a head anchor tells it from a real prune. **Only an off-box copy of the entries themselves catches it:** the Postgres sink's rows, or the peer's replica through `oplog`. Those still hold the deleted entries, so `verify --anchor` against that copy compares the journal entry by entry, not just at its head. Without such a copy, a pruned-away past is only as good as the controller's word.
 - **On the command line:** `naut audit verify --anchor <source>` reads anchors from Postgres or a file.
 
 **What is audited:** every action that changes something, exactly one entry each, accepted **and refused**.
