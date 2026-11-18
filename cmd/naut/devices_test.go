@@ -15,7 +15,7 @@ import (
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
-const binFill = "../../virtdev/testdata/bin-fill"
+const binFill = "../../examples/bin-fill"
 
 // copyFixture copies the bin-fill project into a temp dir, applying edits
 // (file -> old -> new) on the way.
