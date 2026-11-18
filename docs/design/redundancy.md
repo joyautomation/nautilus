@@ -236,6 +236,7 @@ plan measures it with a pause hook in exactly that spot.
 | OPC UA server Write service | refused on a standby | unchanged |
 | HTTP API writes | proxied to the leader, or refused (503) | unchanged |
 | Alarm notifiers (mail, chat) | run from scans, so leader only | unchanged |
+| PLCnext (`plcnext`, `project_full.go`) | **none**: flushes its output image from its own loop | **refused under `redundancy:` for now**, by load and `naut check` (#832). Its `poll()` flushes every scan on the shm route, because that write is the shim's watchdog heartbeat, and on change over gRPC. Gating it is later work. |
 | Floating IP | (new) | §8 |
 
 The test plan's I3 oracle checks every row.
@@ -268,18 +269,29 @@ with an image about `lease + campaign delay` old.
 **The bound.** A hot takeover happens when the image age is at most `hot-max-age` and the build
 hash matches.
 
-- `hot-max-age` defaults to `lease + lease/4 + 2 × stream interval`, so a crash, a kill or an
-  isolation of the leader all stay hot.
-- A project that would rather restart than re-run up to a lease of logic sets it lower. The
-  isolation case then becomes cold.
+- **The worst image age at the election** is the sum of these terms (§4.5):
+  - the old lease, `lease`;
+  - the clock-rate margin, `ρ·lease`;
+  - the campaign delay, `lease/4`;
+  - one vote round with fsync, `RTT + f`;
+  - a just-restarted voter's wait, `W_r ≤ lease`;
+  - stream jitter.
+- `hot-max-age` defaults to `3 × lease + 2 × stream interval`. While `RTT + f` stays under half
+  a lease, that covers every one of those terms, the restarted voter included. A crash, a kill
+  or an isolation of the leader therefore stays hot.
+- **When the vote round runs slower,** an isolation can land past the default and go cold. It
+  goes cold with the alarm, never hot on a stale image. The test plan's F21 and F24 measure
+  that edge.
+- **Setting it lower.** A project that would rather restart than re-run up to that much logic
+  sets `hot-max-age` lower. The isolation case then becomes cold.
 
 **The new leader, in order:**
 
-1. continues from the image instead of calling `ResetFrame`, and advances timers by the image
-   age;
+1. keeps the image's frames instead of calling `ResetFrame`;
 2. drops forces, as today: the standby never saw them;
 3. waits for live inputs, as #786 defines;
-4. runs its first scan;
+4. runs its first scan. Its timers advance by the **time since the image arrived, up to this
+   scan**: the image age plus the inputs wait, measured on the standby's clock;
 5. sends the full output set once (#600/#606). Outputs are held until then (`io/io.go`).
 
 **If the #786 wait gives up**, the takeover stays hot: frames are kept, inputs that are not
@@ -322,8 +334,14 @@ only**. The guide gains a section for the pair, and the Kubernetes text stays.
 | OptoMMP | polls, or no session with a unit watchdog | Already the rule (#618, #626). |
 | EtherNet/IP, IO-Link masters | no session | Connection budgets are tight, and some masters take only one client. |
 | PROFINET device (`profinet-device`, #790) | silent: no socket, no DCP answers, no LLDP | Only the leader is the station on the wire. The PLC's outputs are stale on a standby until its AR is re-established with the new leader. |
+| Redfish, SNMP, Prometheus (`hw/base.go`) | polls read-only; sends no command | They are IT devices that take many readers. Commands go only from the leader, checked before each one (§3.4). |
+| Sparkplug host | asks for nothing: no STATE online, no NCMD or DCMD | Only the leader is the primary host (#325). Its sites stay offline on the standby. |
+| Sparkplug edge | holds no session | One publisher per edge node ID (#798). The leader births on takeover, and publishes NDEATH on step-down. |
+| READ/WRITE channels | no scans, so nothing is posted | A queue left from an earlier leadership is dropped when its turn comes (#796, #797). |
+| PLCnext | — | Refused under `redundancy:` for now (§3.4, #832). |
 
-A manifest can override any default, except the PROFINET device, which is always silent. The
+A manifest can override the polling defaults for field drivers, except the PROFINET device,
+which is always silent. The rows after it are fixed rules. The
 time spent waiting for inputs counts in the takeover time.
 
 ### 4.5 Takeover time
