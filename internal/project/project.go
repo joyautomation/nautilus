@@ -376,6 +376,10 @@ type TaskConfig struct {
 	// PriorityGuard bounds the task while it runs at Priority: past either
 	// bound it loses the priority until a restart (runtime/prioguard.go).
 	PriorityGuard *PriorityGuardConfig `yaml:"priority-guard"`
+	// ShareCPU pins to cpu: even where another program already runs a
+	// real-time thread above priority:, which is otherwise refused at start
+	// (a vendor runtime or I/O shim's core; runtime/preflight_linux.go).
+	ShareCPU bool `yaml:"share-cpu"`
 }
 
 // PriorityGuardConfig is a task's priority-guard: block. Zero takes the
@@ -916,6 +920,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if opts.Guard, err = main.guard(); err != nil {
 		return nil, err
 	}
+	opts.ShareCPU = main.ShareCPU
 	for _, t := range m.Tasks[1:] {
 		src, err := readProgram(t)
 		if err != nil {
@@ -941,6 +946,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			CPUs:          cpuList(t.CPU),
 			Priority:      t.Priority,
 			Guard:         g,
+			ShareCPU:      t.ShareCPU,
 		})
 	}
 

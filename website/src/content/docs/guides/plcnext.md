@@ -277,7 +277,10 @@ holds the Linux capability to ask for `SCHED_FIFO`, and the processes it
 starts do not inherit it. Pin the shim to CPU 1 (`echo 1 >
 io/nautilus_io.cpu` beside the binary) and naut to CPU 0: CPU 0 carries
 the firmware's periodic real-time tasks, and naut's threads sharing the
-shim's core were most of its lateness.
+shim's core were most of its lateness. Never pin a naut task with
+`priority:` to the shim's CPU: nautilus refuses it at start (the shim's
+FIFO 80 thread is above it) and runs the task unpinned at normal
+priority, and says so on the banner.
 
 To run the shim at `SCHED_FIFO`, the controller's owner gives both
 binaries the `cap_sys_nice` file capability once, as root

@@ -146,7 +146,7 @@ func spinAtFIFO() {
 		if os.Getenv("NAUT_RTGUARD_FORCE_NOFIFO") == "1" {
 			err = fmt.Errorf("forced by the test")
 		} else {
-			err = applySched(nil, 1, func(string) { demoted.Store(true) })
+			err = applySched(nil, 1, false, func(string) { demoted.Store(true) })
 		}
 		if err != nil {
 			fmt.Println("NOFIFO:", err)
