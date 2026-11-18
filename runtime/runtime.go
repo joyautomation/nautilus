@@ -523,6 +523,9 @@ func New(o Options) (*Runtime, error) {
 	}
 	if len(o.Channels) > 0 {
 		tags.comm = newCommHub(o.Channels)
+		if o.Coordinator != nil {
+			tags.comm.setGate(o.Coordinator.IsLeader)
+		}
 	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
 	// Set before any scan or goroutine can observe it, so the store's NowMs

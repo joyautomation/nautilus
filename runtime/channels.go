@@ -82,8 +82,16 @@ type commHub struct {
 	inflight map[int64]struct{}
 	finished map[int64]finishedReq
 
+	// gate is the runtime's write gate (Coordinator.IsLeader), nil when
+	// uncoordinated. gen counts leaderships: takeover bumps it. A write
+	// leaves only while the gate is open and under the leadership that
+	// posted it, so a replica that stepped down never drains its queue
+	// onto a peer the next leader is writing (see do).
+	gate func() bool
+	gen  atomic.Uint64
+
 	stop     chan struct{}
-	stopped  bool // under mu: a post after close is refused
+	stopped  bool            // under mu: a post after close is refused
 	base     context.Context // cancelled by close, so no request outlives it
 	cancel   context.CancelFunc
 	stopOnce sync.Once
@@ -99,6 +107,7 @@ type commWorker struct {
 
 type commReq struct {
 	ticket   int64
+	gen      uint64 // the leadership that posted it (commHub.gen)
 	write    bool
 	variable string
 	val      ir.Value
@@ -133,6 +142,22 @@ func newCommHub(chs []Channel) *commHub {
 		h.byName[ir.NameKey(c.Name)] = w
 	}
 	return h
+}
+
+// setGate makes every write wait on gate: false drops it as lost. Call
+// before the first post.
+func (h *commHub) setGate(gate func() bool) {
+	if h != nil {
+		h.gate = gate
+	}
+}
+
+// newLeadership marks a takeover: writes posted before it are dropped as
+// lost instead of sent, since the leadership that computed them is over.
+func (h *commHub) newLeadership() {
+	if h != nil {
+		h.gen.Add(1)
+	}
 }
 
 func (h *commHub) start() {
@@ -181,13 +206,21 @@ func (h *commHub) serve(w *commWorker) {
 		case <-h.stop:
 			return
 		case req := <-w.q:
-			h.finish(req.ticket, w.do(h.base, req))
+			h.finish(req.ticket, h.do(w, req))
 		}
 	}
 }
 
-func (w *commWorker) do(base context.Context, req commReq) ir.CommResult {
-	ctx, cancel := context.WithTimeout(base, w.timeout)
+// do runs one request on w's channel. A write is checked against the gate
+// and the leadership right before it is sent, not when it was posted: a
+// queued write may wait seconds behind another, and by then this replica
+// may have stepped down. Reads are not gated; they change nothing on the
+// peer.
+func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
+	if req.write && (req.gen != h.gen.Load() || h.gate != nil && !h.gate()) {
+		return ir.CommResult{Status: ir.CommLost}
+	}
+	ctx, cancel := context.WithTimeout(h.base, w.timeout)
 	defer cancel()
 	if req.write {
 		return ir.CommResult{Status: commStatus(w.ch.Write(ctx, req.variable, req.val, req.elem))}
@@ -230,7 +263,7 @@ func (h *commHub) post(channel string, write bool, variable string, v ir.Value, 
 	}
 	ticket := h.next.Add(1)
 	select {
-	case w.q <- commReq{ticket: ticket, write: write, variable: variable, val: v, elem: elem}:
+	case w.q <- commReq{ticket: ticket, gen: h.gen.Load(), write: write, variable: variable, val: v, elem: elem}:
 		h.inflight[ticket] = struct{}{}
 		return ticket, ir.CommOK
 	default:
