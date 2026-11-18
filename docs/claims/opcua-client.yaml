@@ -319,3 +319,16 @@ claims:
     source: "#security"
     tests:
       - go ./opcua TestForeignServerMatrix/milo
+
+  - id: UAC-031
+    claim: >-
+      Against the virtual IO-Link masters (Pepperl+Fuchs ICE3, SICK SIG300,
+      ifm AL1590) at the node ids the real masters serve, anonymously on the
+      None endpoint, the driver reads every master's points typed, follows a
+      value that changes, writes the P+F's process data out, and recovers
+      from a restart and a blackhole.
+    source: "#servers-it-has-been-run-against"
+    tests:
+      - go ./opcua TestForeignServerMatrix/iolink-pf
+      - go ./opcua TestForeignServerMatrix/iolink-sick
+      - go ./opcua TestForeignServerMatrix/iolink-ifm

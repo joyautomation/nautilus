@@ -163,8 +163,16 @@ Milo is its demo server pinned by digest, trusted the way a site would
 (the refused certificate moved from `rejected` to `trusted`). Each
 server's quirks are in the guide.
 
+Virtual profiles (`virtual:`, `opcua/matrix_virtual_test.go`) are the
+IO-Link masters of #712: virtdev serves each at the real master's node ids
+over a small plant model, in process (no docker), behind a relay that a
+blackhole silences; a restart stops the run and starts it again on the
+same port. They are reached anonymously on None, as a site reaches a
+master in its default setup. A master with nothing writable runs the read
+scenarios only.
+
 Still to run: the UA-.NETStandard reference server, Prosys, a CODESYS
-Control runtime, Ignition 8.1, and the IO-Link master simulator (#712).
+Control runtime and Ignition 8.1.
 
 ## 7. Manifest, schema, project wiring
 

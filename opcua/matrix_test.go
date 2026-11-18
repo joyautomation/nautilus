@@ -59,9 +59,12 @@ type matrixServer struct {
 	path string
 	// nsURI is the namespace every test node lives in.
 	nsURI string
-	// scalarRoot is the folder holding scalars (browsed by the import).
+	// scalarRoot is the folder holding scalars (browsed by the import;
+	// empty skips the import).
 	scalarRoot string
-	// scalars maps each built-in type to a writable variable of it.
+	// types are the matrix types the server has a scalar of (nil: all of
+	// matrixTypes); scalars maps each to its node.
+	types   []string
 	scalars map[string]string
 	// changing is a variable whose value changes on its own, faster than
 	// once a second, and its type.
@@ -70,9 +73,32 @@ type matrixServer struct {
 	readOnly, readOnlyType string
 	// trust makes the server trust the client certificate in pki, once a
 	// secured connect has been refused (nil: the server accepts any).
-	trust func(t *testing.T, c *container)
+	trust func(t *testing.T, h serverHandle)
 	// startup bounds how long the server takes to answer after a start.
 	startup time.Duration
+	// security pins the policy and mode ("None": an anonymous session on
+	// the None endpoint, as a site reaches an IO-Link master); empty takes
+	// the strongest the server offers.
+	security string
+	// virtual names a virtdev profile served in process
+	// (matrix_virtual_test.go), with model (and modelVars) as its plant
+	// program, the device named D.
+	virtual, model, modelVars string
+	// readOnlyDevice: a server with nothing writable; the writes scenario
+	// is skipped and the import does not expect writability.
+	readOnlyDevice bool
+}
+
+// typeList is the matrix types this server is tested with.
+func (s matrixServer) typeList() []string {
+	if s.types != nil {
+		return s.types
+	}
+	var out []string
+	for _, mt := range matrixTypes {
+		out = append(out, mt.typ)
+	}
+	return out
 }
 
 var matrixServers = []matrixServer{
@@ -99,8 +125,8 @@ var matrixServers = []matrixServer{
 		// Milo refuses an unknown client certificate by closing the
 		// connection (the client sees EOF, not a status) and files it
 		// under security/rejected; trusting it is moving it to trusted.
-		trust: func(t *testing.T, c *container) {
-			c.exec(t, "sh", "-c", "mv /app/data/security/rejected/*.der /app/data/security/pki/trusted/certs/")
+		trust: func(t *testing.T, h serverHandle) {
+			h.(*container).exec(t, "sh", "-c", "mv /app/data/security/rejected/*.der /app/data/security/pki/trusted/certs/")
 		},
 		startup: 60 * time.Second,
 	},
@@ -147,10 +173,7 @@ var matrixModes = []struct {
 func TestForeignServerMatrix(t *testing.T) {
 	want := os.Getenv("NAUTILUS_OPCUA_MATRIX")
 	if want == "" {
-		t.Skip("set NAUTILUS_OPCUA_MATRIX=all (or a comma list of servers) to run the OPC UA client matrix; needs docker")
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Fatalf("NAUTILUS_OPCUA_MATRIX is set but docker is not on PATH: %v", err)
+		t.Skip("set NAUTILUS_OPCUA_MATRIX=all (or a comma list of servers) to run the OPC UA client matrix; the container servers need docker")
 	}
 	selected := map[string]bool{}
 	for s := range strings.SplitSeq(want, ",") {
@@ -160,6 +183,9 @@ func TestForeignServerMatrix(t *testing.T) {
 	for _, s := range matrixServers {
 		if !selected["all"] && !selected[s.name] {
 			continue
+		}
+		if _, err := exec.LookPath("docker"); err != nil && s.virtual == "" {
+			t.Fatalf("NAUTILUS_OPCUA_MATRIX selects %s but docker is not on PATH: %v", s.name, err)
 		}
 		ran++
 		t.Run(s.name, func(t *testing.T) { runMatrix(t, s) })
@@ -178,28 +204,45 @@ func serverNames() []string {
 }
 
 func runMatrix(t *testing.T, s matrixServer) {
-	c := startContainer(t, s)
-	url := fmt.Sprintf("opc.tcp://127.0.0.1:%d%s", c.port, s.path)
+	var h serverHandle
+	if s.virtual != "" {
+		h = startVirtual(t, s)
+	} else {
+		h = startContainer(t, s)
+	}
+	url := h.url()
 	// One PKI directory for every session to this server: the client
 	// certificate the server was told to trust, and the server's pinned
 	// thumbprint, must be the same ones across scenarios — as on a site.
 	pki := t.TempDir()
 	conn := opcua.Connect{PKIDir: pki, Timeout: 5 * time.Second}
-	waitServing(t, s, c, url, conn)
+	var sec []opcua.Option
+	if s.security != "" {
+		conn.Security = opcua.Security{Policy: s.security, Mode: s.security}
+		sec = []opcua.Option{opcua.WithSecurity(s.security, s.security)}
+	}
+	waitServing(t, s, h, url, conn)
 
-	t.Run("import", func(t *testing.T) { matrixImport(t, s, url, conn) })
+	if s.scalarRoot != "" {
+		t.Run("import", func(t *testing.T) { matrixImport(t, s, url, conn) })
+	}
 	for _, mode := range matrixModes {
-		opts := append([]opcua.Option{opcua.WithPKIDir(pki)}, mode.opts...)
+		opts := append(append([]opcua.Option{opcua.WithPKIDir(pki)}, sec...), mode.opts...)
 		t.Run("reads/"+mode.name, func(t *testing.T) { matrixReads(t, s, url, opts) })
-		t.Run("writes/"+mode.name, func(t *testing.T) { matrixWrites(t, s, url, opts) })
+		if !s.readOnlyDevice {
+			t.Run("writes/"+mode.name, func(t *testing.T) { matrixWrites(t, s, url, opts) })
+		}
 		t.Run("remap/"+mode.name, func(t *testing.T) { matrixRemap(t, s, url, opts) })
 		t.Run("restart/"+mode.name, func(t *testing.T) {
-			matrixOutage(t, s, url, opts, "restart", func() { c.docker(t, "restart", "-t", "1", c.name) }, nil)
+			var done func()
+			matrixOutage(t, s, url, opts, "restart",
+				func() { done = h.restart(t) },
+				func() { done() })
 		})
 		t.Run("blackhole/"+mode.name, func(t *testing.T) {
 			matrixOutage(t, s, url, opts, "blackhole",
-				func() { c.docker(t, "pause", c.name) },
-				func() { c.docker(t, "unpause", c.name) })
+				func() { h.pause(t) },
+				func() { h.unpause(t) })
 		})
 	}
 }
@@ -242,17 +285,17 @@ func matrixImport(t *testing.T, s matrixServer, url string, conn opcua.Connect) 
 	for _, b := range out.Manifest.Tags {
 		byNode[b.NodeID] = b
 	}
-	for _, mt := range matrixTypes {
-		b, ok := byNode[s.scalars[mt.typ]]
+	for _, typ := range s.typeList() {
+		b, ok := byNode[s.scalars[typ]]
 		switch {
 		case !ok:
-			t.Errorf("%s (%s) not imported; skipped: %v", mt.typ, s.scalars[mt.typ], out.Skipped)
-		case b.Type != mt.typ:
-			t.Errorf("%s imported as type %q", s.scalars[mt.typ], b.Type)
-		case !b.Writable:
-			t.Errorf("%s imported read-only; the server says it is writable", s.scalars[mt.typ])
+			t.Errorf("%s (%s) not imported; skipped: %v", typ, s.scalars[typ], out.Skipped)
+		case b.Type != typ:
+			t.Errorf("%s imported as type %q", s.scalars[typ], b.Type)
+		case !b.Writable && !s.readOnlyDevice:
+			t.Errorf("%s imported read-only; the server says it is writable", s.scalars[typ])
 		case b.Namespace != s.nsURI:
-			t.Errorf("%s imported with namespace %q, want %q", s.scalars[mt.typ], b.Namespace, s.nsURI)
+			t.Errorf("%s imported with namespace %q, want %q", s.scalars[typ], b.Namespace, s.nsURI)
 		}
 	}
 	t.Logf("%s: %d bindings, %d skipped, namespaces %v", s.name, len(out.Manifest.Tags), len(out.Skipped), out.Manifest.Namespaces)
@@ -266,13 +309,13 @@ func matrixReads(t *testing.T, s matrixServer, url string, opts []opcua.Option) 
 
 	v := readAll(t, d)
 	q := d.Quality()
-	for _, mt := range matrixTypes {
-		name := "S_" + mt.typ
+	for _, typ := range s.typeList() {
+		name, like := "S_"+typ, writeFor(typ)
 		if q[name] != nio.Good {
 			t.Errorf("%s quality %v, want good", name, q[name])
 		}
-		if !typedLike(v[name], mt.write) {
-			t.Errorf("%s = %#v (%T), want the Go type of %T", name, v[name], v[name], mt.write)
+		if !typedLike(v[name], like) {
+			t.Errorf("%s = %#v (%T), want the Go type of %T", name, v[name], v[name], like)
 		}
 	}
 	if q["Missing"] != nio.Bad {
@@ -302,8 +345,8 @@ func matrixWrites(t *testing.T, s matrixServer, url string, opts []opcua.Option)
 	// A value equal to the baseline is not a command (the driver's change
 	// rule), so the Boolean is flipped from whatever the server holds.
 	cmd := nio.Values{}
-	for _, mt := range matrixTypes {
-		cmd["S_"+mt.typ] = mt.write
+	for _, typ := range s.typeList() {
+		cmd["S_"+typ] = writeFor(typ)
 	}
 	if b, ok := baseline["S_Boolean"].(bool); ok {
 		cmd["S_Boolean"] = !b
@@ -371,7 +414,7 @@ func matrixOutage(t *testing.T, s matrixServer, url string, opts []opcua.Option,
 		if v := readAll(t, d); v[d.OnlineTagName()] != false {
 			t.Errorf("%s: __Online = %v while offline", kind, v[d.OnlineTagName()])
 		}
-		if q := d.Quality()["S_Int32"]; q != nio.Stale {
+		if q := d.Quality()["S_"+s.typeList()[0]]; q != nio.Stale {
 			t.Errorf("%s: a delivered value's quality while down is %v, want stale", kind, q)
 		}
 		if up != nil {
@@ -380,7 +423,7 @@ func matrixOutage(t *testing.T, s matrixServer, url string, opts []opcua.Option,
 		}
 		waitUntil(t, kind+": __Online to return", s.startup+30*time.Second, d.Online)
 		back := time.Since(t0)
-		if q := d.Quality()["S_Int32"]; q != nio.Good {
+		if q := d.Quality()["S_"+s.typeList()[0]]; q != nio.Good {
 			t.Errorf("%s: quality after recovery %v, want good", kind, q)
 		}
 		waitUntil(t, kind+": the changing node to move again", 10*time.Second, func() bool {
@@ -402,13 +445,13 @@ func matrixOutage(t *testing.T, s matrixServer, url string, opts []opcua.Option,
 // write is attempted and the server must refuse it).
 func (s matrixServer) manifest() opcua.Manifest {
 	m := opcua.Manifest{Namespaces: []string{"http://opcfoundation.org/UA/"}}
-	for _, mt := range matrixTypes {
-		m.Tags = append(m.Tags, opcua.TagBinding{Name: "S_" + mt.typ, NodeID: s.scalars[mt.typ], Namespace: s.nsURI, Type: mt.typ, Writable: true})
+	for _, typ := range s.typeList() {
+		m.Tags = append(m.Tags, opcua.TagBinding{Name: "S_" + typ, NodeID: s.scalars[typ], Namespace: s.nsURI, Type: typ, Writable: true})
 	}
-	m.Tags = append(m.Tags,
-		opcua.TagBinding{Name: "Changing", NodeID: s.changing, Namespace: s.nsURI, Type: s.changingType},
-		opcua.TagBinding{Name: "ReadOnly", NodeID: s.readOnly, Namespace: s.nsURI, Type: s.readOnlyType, Writable: true},
-	)
+	m.Tags = append(m.Tags, opcua.TagBinding{Name: "Changing", NodeID: s.changing, Namespace: s.nsURI, Type: s.changingType})
+	if s.readOnly != "" {
+		m.Tags = append(m.Tags, opcua.TagBinding{Name: "ReadOnly", NodeID: s.readOnly, Namespace: s.nsURI, Type: s.readOnlyType, Writable: true})
+	}
 	return m
 }
 
@@ -499,10 +542,31 @@ func waitUntil(t *testing.T, what string, limit time.Duration, cond func() bool)
 
 // ── containers ───────────────────────────────────────────────────────────
 
-type container struct {
-	name string
-	port int
+// serverHandle is a running matrix server the scenarios can take away and
+// bring back.
+type serverHandle interface {
+	url() string
+	// restart begins a clean restart and returns a func that finishes it
+	// (it may still be starting to serve).
+	restart(t *testing.T) func()
+	pause(t *testing.T)
+	unpause(t *testing.T)
 }
+
+type container struct {
+	name, path string
+	port       int
+}
+
+func (c *container) url() string { return fmt.Sprintf("opc.tcp://127.0.0.1:%d%s", c.port, c.path) }
+
+func (c *container) restart(t *testing.T) func() {
+	c.docker(t, "restart", "-t", "1", c.name)
+	return func() {}
+}
+
+func (c *container) pause(t *testing.T)   { c.docker(t, "pause", c.name) }
+func (c *container) unpause(t *testing.T) { c.docker(t, "unpause", c.name) }
 
 func startContainer(t *testing.T, s matrixServer) *container {
 	t.Helper()
@@ -519,7 +583,7 @@ func startContainer(t *testing.T, s matrixServer) *container {
 	// A fixed host port, not an ephemeral one: docker may hand out a new
 	// ephemeral port on restart, and the driver must reconnect to the
 	// endpoint it was configured with.
-	c := &container{name: fmt.Sprintf("nautilus-matrix-%s-%d", s.name, os.Getpid()), port: freePort(t)}
+	c := &container{name: fmt.Sprintf("nautilus-matrix-%s-%d", s.name, os.Getpid()), path: s.path, port: freePort(t)}
 	c.docker(t, "rm", "-f", c.name)
 	c.docker(t, "run", "-d", "--name", c.name, "-p", fmt.Sprintf("127.0.0.1:%d:4840", c.port), s.image)
 	t.Cleanup(func() {
@@ -565,7 +629,7 @@ func freePort(t *testing.T) int {
 // waitServing waits for the server to answer GetEndpoints, then for a
 // secured session — running the server's trust step when it refuses the
 // first one.
-func waitServing(t *testing.T, s matrixServer, c *container, url string, conn opcua.Connect) {
+func waitServing(t *testing.T, s matrixServer, h serverHandle, url string, conn opcua.Connect) {
 	t.Helper()
 	deadline := time.Now().Add(s.startup)
 	for {
@@ -602,7 +666,7 @@ func waitServing(t *testing.T, s matrixServer, c *container, url string, conn op
 	if !strings.Contains(err.Error(), "trust") {
 		t.Errorf("the refusal does not tell the user to trust the client certificate: %v", err)
 	}
-	s.trust(t, c)
+	s.trust(t, h)
 	deadline = time.Now().Add(20 * time.Second)
 	for {
 		if err = dial(); err == nil {

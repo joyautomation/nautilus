@@ -690,7 +690,7 @@ jobs:
   opcua-client-matrix:
     needs: changes
     if: needs.changes.outputs.full == 'true'
-    name: OPC UA client — server matrix (open62541, Milo)
+    name: OPC UA client — server matrix (open62541, Milo, IO-Link masters)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
