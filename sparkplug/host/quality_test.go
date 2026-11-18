@@ -241,3 +241,53 @@ func TestQualityNullThenDeathIsStale(t *testing.T) {
 		t.Fatalf("W6_Well_Level quality after a rebirth with a value = %v, want Good", d.Quality()["W6_Well_Level"])
 	}
 }
+
+// TestQualityNullTemplateMemberIsBad — a template member that arrives null
+// makes the whole struct tag Bad, its last members held; a partial update
+// that omits that member leaves it Bad; the member's real value clears it.
+func TestQualityNullTemplateMemberIsBad(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+
+	nullSpeed := sparkplug.Metric{Name: "Speed", Datatype: spb.DataType_Double, IsNull: true}
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(2, motorInstance("Pump1", boolean("Run", true), nullSpeed))))
+	if q := d.Quality(); len(q) != 1 || q["W6_Pump1"] != nio.Bad {
+		t.Fatalf("Quality() after Pump1.Speed arrived null = %v, want {W6_Pump1: Bad}", q)
+	}
+
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(3, motorInstance("Pump1", boolean("Run", false)))))
+	if q := d.Quality(); q["W6_Pump1"] != nio.Bad {
+		t.Fatalf("W6_Pump1 quality after an update without Speed = %v, want still Bad", q["W6_Pump1"])
+	}
+
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(4, motorInstance("Pump1", dbl("Speed", 60)))))
+	if q := d.Quality(); len(q) != 0 {
+		t.Fatalf("Quality() after a real Pump1.Speed = %v, want all Good", q)
+	}
+}
+
+// TestQualityNullDeviceMetricIsBad — the device path: DDATA null on a live
+// device reads Bad.
+func TestQualityNullDeviceMetricIsBad(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+	d.handleMessage("spBv1.0/G/DDATA/W6/PLC1", enc(t, data(2,
+		sparkplug.Metric{Name: "Pump/Run", Datatype: spb.DataType_Boolean, IsNull: true})))
+	if q := d.Quality(); len(q) != 1 || q["W6_PLC1_Pump_Run"] != nio.Bad {
+		t.Fatalf("Quality() after PLC1's Pump/Run arrived null = %v, want {W6_PLC1_Pump_Run: Bad}", q)
+	}
+}
+
+// TestQualityRebirthCarryingNullIsBad — a rebirth that carries a metric
+// null after it had a value: the value is held and reads Bad.
+func TestQualityRebirthCarryingNullIsBad(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+	d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(2, nullDbl("Well/Level"))))
+	if q := d.Quality(); q["W6_Well_Level"] != nio.Bad {
+		t.Fatalf("W6_Well_Level quality after a rebirth carrying it null = %v, want Bad", q["W6_Well_Level"])
+	}
+	if v := level(d); v != 12.5 {
+		t.Fatalf("W6_Well_Level = %v, want the last value 12.5 held", v)
+	}
+}

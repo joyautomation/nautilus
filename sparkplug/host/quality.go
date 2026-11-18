@@ -50,9 +50,10 @@ import nio "github.com/joyautomation/nautilus/io"
 //     died (DDEATH) while the node itself stayed up → Stale. The value is
 //     real, it is just old.
 //   - a value exists and its source is online, but the metric's latest
-//     message carried it is_null (the edge has no value for it: its own
-//     read failed) → Bad, the last value held, until a real value arrives
-//     (#941). A failed read on a live link, as for modbus and eip.
+//     message carried it is_null, or carried one of its template members
+//     null (the edge has no value for it: its own read failed) → Bad, the
+//     last value held, until a real value arrives for each (#941). A
+//     failed read on a live link, as for modbus and eip.
 //   - a value exists and its source is online → Good (omitted).
 //
 // Built under d.mu from the state state.go already maintains — no extra
@@ -105,7 +106,7 @@ func (d *Driver) bindingQualityLocked(b Binding) (nio.Quality, bool) {
 			return nio.Stale, true // DDEATH on just this device
 		}
 	}
-	if d.nulled[b.Name] {
+	if len(d.nulled[b.Name]) > 0 {
 		// The source is live and said it has no value for this metric:
 		// the last value is held, and it is not a reading (#941).
 		return nio.Bad, true
