@@ -182,9 +182,10 @@ only**. The guide gains a section for the pair, and the Kubernetes text stays.
 | Modbus TCP, OPC UA client | polls read-only | A second session costs nothing. Inputs are live at takeover, and the I/O-health handover (§3.2) can compare both sides. |
 | OptoMMP | polls, or no session with a unit watchdog | Already the rule (#618, #626). |
 | EtherNet/IP, IO-Link masters | no session | Connection budgets are tight, and some masters take only one client. |
+| PROFINET device (`profinet-device`, #790) | silent: no socket, no DCP answers, no LLDP | Only the leader is the station on the wire. The PLC's outputs are stale on a standby until its AR is re-established with the new leader. |
 
-A manifest can override any default. The time spent waiting for inputs counts in the takeover
-time.
+A manifest can override any default, except the PROFINET device, which is always silent. The
+time spent waiting for inputs counts in the takeover time.
 
 ### 4.5 Takeover time
 
@@ -192,6 +193,17 @@ Takeover time is published as a formula and measured, never promised as a single
 
 > `T ≈ time left on the old lease (≤ lease) + one vote round + inputs-ready wait
 > (≈0 when the standby polls; session connect + first read when it does not) + one scan`
+
+**When nautilus is a PROFINET device**, the IO controller (the PLC) re-establishes its AR with
+the new leader, and that sets the inputs-ready wait:
+
+> `T_pn ≈ time left on the old lease + the PLC's next connect attempt after the new leader
+> opens its sockets + DCP identify and set IP + connect, parameterise and the first valid
+> cycle`
+
+The PLC sees the old station go silent at once, through its AR watchdog. Its reconnect
+attempts then run on its own retry interval, so the phase of that interval matters, and it is
+measured rather than assumed.
 
 The test plan defines exactly how it is measured (§4 there).
 
@@ -272,14 +284,27 @@ The `kind` values are `redundancy.override.start`, `.renew`, `.end` (a peer was 
 - **OPC UA server.** Non-transparent redundancy: ServerUriArray, RedundancySupport and
   ServiceLevel. The leader reports 200 or more. The standby reports less when it is in sync,
   and 1 when it is not.
-- **Optional floating IP.** A new leader adds the address only after its gate opens, and sends
-  gratuitous ARP.
+- **Floating IP.** It is optional for clients. **It is required for a PROFINET device**
+  (#790): on takeover the PLC re-assigns the station's IP, and the device accepts that only
+  when the new leader's interface already holds the address. Because of that, `naut check`
+  refuses `profinet-device` under `redundancy:` when no floating IP is set.
+  - **Order on takeover:** the gate opens, then the address is added and gratuitous ARP is sent,
+    then the PROFINET sockets open. The station never answers DCP without the address in place.
+  - A new leader adds the address only after its gate opens, and sends gratuitous ARP.
   - **Orderly handover.** A leader that steps down in an orderly way (SIGTERM, I/O handover,
     a lost lease noticed on its own tick) drops the address before it releases.
-  - **Kill, hang or pause.** The kernel still holds the address after a SIGKILL, a hang or a
-    SIGSTOP. Both boxes can then answer ARP for a while: until systemd's watchdog (#733)
-    restarts the process, `ExecStopPost` removes the address, or the paused process resumes
-    and drops it.
+  - **How long the old box keeps the address**, by fault:
+    - **SIGKILL or a crash:** systemd runs `ExecStopPost` as soon as the process exits, which
+      takes milliseconds.
+    - **A hung scan:** the elector still runs, so it drops the address as it steps down
+      (#621).
+    - **The whole process frozen** (SIGSTOP, a stalled kernel): the address stays until the
+      process resumes and drops it, or systemd's watchdog (#733) kills it.
+
+    Only that last case leaves the kernel answering ARP from two boxes for long.
+  - **PROFINET can't shrug that overlap off.** A PLC that sees an address conflict may delay
+    or refuse the AR. A frozen old leader therefore lengthens `T_pn`, and the test plan
+    measures that case on its own.
   - **Why that is tolerable.** This is a client-routing overlap, not a second writer. Field
     writes are fenced by the gate. The fenced box's API refuses writes, and the new leader's
     gratuitous ARP moves the clients over.

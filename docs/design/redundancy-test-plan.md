@@ -46,6 +46,7 @@ pair adds no behaviour to it.
 |---|---|---|---|---|
 | **I1** | **At most one writer, ever.** No two gates are open at the same instant. | global virtual time | Gate transitions are logged with `CLOCK_MONOTONIC`. Containers on one host share the kernel clock, so the logs merge onto one timeline. | the field recorder (I2), the authority here |
 | **I2** | **The device sees one writer at a time.** After a write from B, no write from A arrives until A leads again in a later term. | simulated device | recorder | recorder |
+| **I2-PN** | **One PROFINET station on the wire.** At no instant do two MACs answer DCP for the station name or send RT frames for it. The PLC logs no duplicate name or duplicate address. | simulated segment | the segment tap | the tap, plus the PLC's diagnostic buffer |
 | **I3** | No write leaves a driver through a closed gate. Keep-alives count. | driver hook | recorder + gate log | recorder + gate log |
 | **I4** | Terms only rise at every voter. No two controllers ever lead in the same term. | voter state | voter files, `/api/cluster` | same |
 | **I5** | **A sequence never continues from a stale image.** A hot takeover happens only on a current image with a matching build hash. Everything else is cold, with the alarm. | stream state | takeover log + alarm | same |
@@ -66,6 +67,14 @@ The recorder is the arbiter for I2, I3 and I9 in T3 and T4.
 - **Plant behaviour.** Where a test needs plant behaviour behind the recorder (a tank that
   fills, a counter that counts), it uses `virtdev`'s plant model through its public API. A
   write-log hook inside `virtdev` itself would be requested from its owners, not added here.
+- **PROFINET.** For a PROFINET device under redundancy (#790), the "device" being recorded is
+  the IO controller.
+  - **The controller.** T3 runs the PROFINET package's controller side (#723), or the simulated
+    segment of #790's tests until that exists, on a Linux bridge between the containers. T4 uses
+    the bench PLC.
+  - **The tap.** A tap on the segment logs every DCP answer, every LLDP frame and every RT frame
+    for the station, with its source MAC.
+  - **ARP.** The tap logs ARP replies for the station's address.
 - **Device watchdogs.** The recorder also models a comm watchdog: no write for X ms makes its
   outputs go to hold-last or fail-safe, per configuration. That lets the lone-survivor
   behaviour be asserted at the device.
@@ -139,6 +148,7 @@ clock in T4.
 | `t_out` | **the first write from the new leader reaches the recorder** |
 | `t_gap_start` | the last write from the old leader reaches the recorder |
 | `t_hmi`, `t_ua` | the first fresh value at the HMI client and at the OPC UA client after the takeover |
+| `t_pn_dcp`, `t_pn_ar`, `t_pn_valid` | PROFINET: the new leader's first DCP answer, its AR established, and the first cycle with valid data both ways (taken from the tap) |
 
 ### 4.2 What gets published
 
@@ -146,6 +156,10 @@ clock in T4.
 - **Output gap** `= t_out − t_gap_start`. This is what a device's watchdog sees, so it is what
   sets a safe watchdog time.
 - **Client recovery**: `t_hmi − t0` and `t_ua − t0`.
+- **PROFINET re-establishment**: `t_pn_valid − t0`, reported as a separate figure with its
+  breakdown: lease, the PLC's retry phase, DCP, connect, first valid cycle. It is part of the
+  takeover time for any project with a PROFINET device, and the guide publishes it on its own
+  line with the PLC's AR watchdog and update-time settings.
 - The breakdown (detect, fence, elect, inputs, first scan) for each case.
 
 ### 4.3 Method
@@ -204,6 +218,9 @@ T4 where only hardware can.
 | F28 | I/O lost on both, and I/O flapping | as F27 | No handover ping-pong. Alarm. | ✓ | ✓ | |
 | F29 | Stream link only cut (dedicated cable) | nftables / cable pull | Votes continue over the plant network, and the standby is marked out of sync. | ✓ | ✓ | ✓ |
 | F30 | Misconfiguration: peer lists differ, two processes claim `a`, wrong token, one witness with two pairs of one name | start | Refused at start with a message that names the conflict. | ✓ | ✓ | |
+| F32 | **PROFINET device handover** (#790): F1, F3, F4, F6 and F12 on a project with `profinet-device` and the floating IP | as those rows, plus the segment tap | One station at a time (I2-PN). The address moves before the new leader's first DCP answer. `t_pn_*` is measured. | ✓ | ✓ | ✓ (bench PLC, two hosts on the bench LAN) |
+| F33 | **PROFINET with the old leader frozen**: SIGSTOP for longer than the lease, then SIGCONT | `kill -STOP/-CONT` | While frozen, the old box still holds the address, so the address-conflict effect on `T_pn` is measured. **After SIGCONT, the old leader sends no RT, DCP or LLDP frame at all**: its sender must read the gate before sending, not only on its next 200 ms look. | ✓ | ✓ | ✓ |
+| F34 | PROFINET under redundancy **without** a floating IP | `naut check` / load | Refused, with a message that names the floating IP. | | ✓ | |
 | F31 | Hostile or broken messages: a replayed old grant, an old-term stream frame, a corrupted frame, a wrong build hash | T2/T1 injection | Refused. A frame that fails its checksum triggers a full resync. | ✓ | | |
 
 ## 6. The state stream (I5, I10)
@@ -338,7 +355,9 @@ Each case runs during F1, F3, F4, F12 and F27 in T3. F1 and F12 also run in T4.
 
 **Sparkplug**
 
-5. **Sparkplug edge** (when configured): at most one birth holder on the broker at every
+5. **PROFINET IO controller.** The controller follows the station to the new leader:
+   F32–F34, with `t_pn_*` reported beside `t_hmi` and `t_ua`.
+6. **Sparkplug edge** (when configured): at most one birth holder on the broker at every
    instant, with the same assertion as `edge-collector.md` §5.4.
 
 ## 10. Soak and chaos
@@ -368,5 +387,5 @@ then the override. It runs as a test, so it can't silently regress.
 | 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3, F4, F8, F10, F12, F13, F15–F19 and F30. The PR-3 mutation caught. Kubernetes `leader` tests unchanged. |
 | 4 stream + hot takeover | §6 in T2 and T3. I5 and I10 in the nightly run. §7 rolling update in T3. The PR-4 mutations caught, and the stream half of F31. |
 | 5 survivor + override | §8 in full. F16 and F17 with the device-watchdog assertion. The PR-5 mutations caught. |
-| 6 clients (#716) | §9 in T3. |
-| 7 bench | §4 percentiles in T4. The T4 rows of §5. The 72 h soak. Then the guide's numbers are published. |
+| 6 clients (#716) | §9 in T3, including F32–F34 for PROFINET. |
+| 7 bench | §4 percentiles in T4, including `T_pn` against the bench PLC. The T4 rows of §5. The 72 h soak. Then the guide's numbers are published. |
