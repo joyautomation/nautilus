@@ -96,6 +96,11 @@ func BuiltinFile(name string) ([]byte, error) {
 // profiles/<id>.yaml with their simulators beside them.
 const ProjectDir = "profiles"
 
+// ProjectFile is where a project vendors profile id, relative to the
+// project: the copy its devices: rows derive from, and the one their
+// virtual devices simulate.
+func ProjectFile(id string) string { return path.Join(ProjectDir, id+".yaml") }
+
 // ReadFS reads a vendored profile, file being a path in fsys.
 func ReadFS(fsys fs.FS, file string) (*Profile, error) {
 	raw, err := fs.ReadFile(fsys, file)
@@ -113,7 +118,7 @@ func ReadFS(fsys fs.FS, file string) (*Profile, error) {
 // ReadProject reads the profile a project vendored as id: profiles/<id>.yaml
 // in fsys, which must declare that id.
 func ReadProject(fsys fs.FS, id string) (*Profile, error) {
-	p, err := ReadFS(fsys, path.Join(ProjectDir, id+".yaml"))
+	p, err := ReadFS(fsys, ProjectFile(id))
 	if err != nil {
 		return nil, err
 	}

@@ -103,6 +103,24 @@ func (s *Set) WrapModbus(d *modbus.Driver) *ModbusDriver {
 	return w
 }
 
+// NewAssembly is a fresh copy of the adapter's input side: a func that
+// moves the devices' members out of a delivery and puts each device's
+// struct in under its name, as ReadInputs does. It shares no state with
+// the driver's own, so the in-process face of virtual devices (one per
+// test) delivers through the same code without one test's values leaking
+// into the next.
+func (w *ModbusDriver) NewAssembly() func(nio.Values) {
+	asm := make([]*assembler, len(w.asm))
+	for i, a := range w.asm {
+		asm[i] = &assembler{dev: a.dev, def: a.def, members: a.members}
+	}
+	return func(vals nio.Values) {
+		for _, a := range asm {
+			a.take(vals)
+		}
+	}
+}
+
 // Unwrap is the Modbus driver underneath.
 func (w *ModbusDriver) Unwrap() nio.Driver { return w.Driver }
 

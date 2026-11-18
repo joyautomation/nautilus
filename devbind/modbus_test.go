@@ -83,6 +83,54 @@ func TestWrappedReadInputsIntoSteadyState(t *testing.T) {
 	}
 }
 
+// Each NewAssembly is the adapter's input side afresh: it builds the
+// struct from members as the driver's own does, and keeps no state with
+// another assembly or with the driver, so one test's values (the
+// in-process face makes one per test) never show up in the next.
+func TestNewAssemblyIsFresh(t *testing.T) {
+	s, err := Resolve(vendored(t, "abb-acs355-fmbt21"), []Device{{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "10.0.0.11"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm, err := s.MergeModbus(modbus.Manifest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, err := modbus.New(mm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := s.WrapModbus(md)
+
+	first := w.NewAssembly()
+	vals := nio.Values{"CONV.StatusWord": int64(0x237), "CONV.Actual1": int64(1234)}
+	first(vals)
+	v, ok := vals["CONV"].(ir.Value)
+	if !ok {
+		t.Fatalf("no struct delivered: %v", vals)
+	}
+	if got := v.Fld[v.Struct.FieldIndex["Actual1"]].I; got != 1234 {
+		t.Errorf("CONV.Actual1 = %d, want 1234", got)
+	}
+	if _, ok := vals["CONV.Actual1"]; ok {
+		t.Error("a member stayed in the delivery")
+	}
+
+	// A second assembly has seen nothing: no member, no struct.
+	second := w.NewAssembly()
+	empty := nio.Values{}
+	second(empty)
+	if _, ok := empty["CONV"]; ok {
+		t.Errorf("a fresh assembly delivered the first one's values: %v", empty)
+	}
+	// Nor has the driver's own adapter.
+	own := nio.Values{}
+	w.assemble(own)
+	if _, ok := own["CONV"]; ok {
+		t.Errorf("the driver's adapter delivered an assembly's values: %v", own)
+	}
+}
+
 // The devices' sources and bindings join the project's own manifest; one
 // the project already has is an error, not a silent second binding.
 func TestMergeModbusCollisions(t *testing.T) {

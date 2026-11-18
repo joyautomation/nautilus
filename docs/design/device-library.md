@@ -221,10 +221,17 @@ that gap. #714's asset pages can take the same data.
 
 ### 3.6 Virtual devices
 
-A project with `devices:` gets virtual devices from the same rows.
-`virtual-devices.yaml` keeps only the process model and simulation-only
-keys (`listen`, `init`) by device name. A project without `devices:` keeps
-working as #712 left it.
+A project with `devices:` gets virtual devices from the same rows, with or
+without `virtual-devices.yaml`. Each simulates the vendored copy (the one
+the controller derives from) and the whole device, whatever `points:`
+selects. `virtual-devices.yaml` keeps the process model, devices the
+manifest does not declare, and the simulation-only keys (`listen`, `init`)
+of a declared device by name; repeating a row's `profile`, `endpoint`,
+`unit-id` or `params` there is an error. `naut test`'s in-process face
+delivers a device through a fresh copy of the adapter's own input side, so
+a sequence test proves the adapter that ships. `naut build` ships the
+vendored profiles and leaves the simulators and the model behind. A
+project without `devices:` keeps working as #712 left it.
 
 ## 4. Not a tautology
 

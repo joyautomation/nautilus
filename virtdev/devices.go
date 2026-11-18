@@ -32,6 +32,9 @@ type Set struct {
 	Dir string `yaml:"-"`
 	// profiles holds each instance's resolved profile, by instance name.
 	profiles map[string]*devprofile.Profile
+	// declared names (lower case) the instances that come from the
+	// project's devices: rows (Compose).
+	declared map[string]bool
 }
 
 // Instance is one virtual device. The entry's shape is the one a project
@@ -81,29 +84,119 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 }
 
 // LoadSet reads virtual-devices.yaml from dir and resolves every profile.
-func LoadSet(dir string) (*Set, error) {
-	file := filepath.Join(dir, FileName)
-	raw, err := os.ReadFile(file)
-	if err != nil {
+func LoadSet(dir string) (*Set, error) { return Compose(dir, nil) }
+
+// ManifestName is the project manifest that declares a project's real
+// devices (devices:); virtdev never reads it, the CLI hands its rows over.
+const ManifestName = "nautilus.yaml"
+
+// Compose builds a project's virtual devices: one per device the project
+// declares in nautilus.yaml's devices: (declared, handed over by the CLI:
+// virtual devices import no manifest), plus virtual-devices.yaml's own
+// when the file is there.
+//
+// A declared device simulates the profile the project vendored
+// (profiles/<id>.yaml, the pin), whatever its row's points: select: the
+// virtual device is the whole device. Its Profile is the profile id. An
+// entry in virtual-devices.yaml that names a declared device adds only
+// what a simulation needs (listen, init); every other entry is a virtual
+// device of its own, as before.
+//
+// With neither declared devices nor the file, the error is the file's
+// os.ErrNotExist.
+func Compose(dir string, declared []Instance) (*Set, error) {
+	s := &Set{}
+	raw, err := os.ReadFile(filepath.Join(dir, FileName))
+	switch {
+	case err == nil:
+		if s, err = decodeSet(raw, len(declared) > 0); err != nil {
+			return nil, fmt.Errorf("%s: %w", FileName, err)
+		}
+	case errors.Is(err, os.ErrNotExist) && len(declared) > 0:
+	default:
 		return nil, err
 	}
-	return ParseSet(raw, dir)
+	s.Dir = dir
+	if err := s.overlay(declared); err != nil {
+		return nil, err
+	}
+	if err := s.resolve(); err != nil {
+		if len(declared) > 0 {
+			return nil, fmt.Errorf("virtual devices: %w", err)
+		}
+		return nil, fmt.Errorf("%s: %w", FileName, err)
+	}
+	return s, nil
+}
+
+// overlay puts the declared devices first, each with what its entry in
+// virtual-devices.yaml (if any) adds.
+func (s *Set) overlay(declared []Instance) error {
+	if len(declared) == 0 {
+		return nil
+	}
+	s.declared = map[string]bool{}
+	devs := make([]Instance, len(declared))
+	at := map[string]int{}
+	for i, d := range declared {
+		if !devprofile.IsID(d.Profile) {
+			return fmt.Errorf("%s: device %s: profile %q is not a profile id", ManifestName, d.Name, d.Profile)
+		}
+		d.Profile = devprofile.ProjectFile(d.Profile)
+		d.Listen, d.Init = "", nil
+		devs[i] = d
+		at[strings.ToLower(d.Name)] = i
+		s.declared[strings.ToLower(d.Name)] = true
+	}
+	added := map[string]bool{}
+	var own []Instance
+	for _, e := range s.Devices {
+		k := strings.ToLower(e.Name)
+		i, ok := at[k]
+		if !ok {
+			own = append(own, e)
+			continue
+		}
+		if e.Profile != "" || e.Endpoint != "" || e.UnitID != nil || e.Params != nil {
+			return fmt.Errorf("%s: device %s is declared in %s's devices:, which says what it is and where; here it may set only listen and init", FileName, e.Name, ManifestName)
+		}
+		if added[k] {
+			return fmt.Errorf("%s: device %s: listed twice", FileName, e.Name)
+		}
+		added[k] = true
+		devs[i].Listen, devs[i].Init = e.Listen, e.Init
+	}
+	s.Devices = append(devs, own...)
+	return nil
 }
 
 // ParseSet decodes a virtual-devices.yaml whose relative paths resolve against dir.
 func ParseSet(data []byte, dir string) (*Set, error) {
-	var s Set
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&s); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("%s: no devices", FileName)
-		}
+	s, err := decodeSet(data, false)
+	if err != nil {
 		return nil, fmt.Errorf("%s: %w", FileName, err)
 	}
 	s.Dir = dir
 	if err := s.resolve(); err != nil {
 		return nil, fmt.Errorf("%s: %w", FileName, err)
+	}
+	return s, nil
+}
+
+// decodeSet decodes virtual-devices.yaml; an empty file is one with no
+// entries, an error unless emptyOK (the project declares devices).
+func decodeSet(data []byte, emptyOK bool) (*Set, error) {
+	var s Set
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&s); err != nil {
+		if errors.Is(err, io.EOF) {
+			if emptyOK {
+				return &s, nil
+			}
+			return nil, fmt.Errorf("no devices")
+		}
+		return nil, err
 	}
 	return &s, nil
 }
@@ -221,7 +314,14 @@ func (d Instance) modbusEndpoint(p *devprofile.Profile) (string, error) {
 func (s *Set) Files() []string {
 	out := []string{filepath.Join(s.Dir, FileName)}
 	out = append(out, s.SourceFiles()...)
+	// A profile a declared device uses is the project's, not a fixture:
+	// the controller derives the device from it at load.
 	seen := map[string]bool{}
+	for _, d := range s.Devices {
+		if p := s.Profile(d.Name); p != nil && s.declared[strings.ToLower(d.Name)] {
+			seen[p.File()] = true
+		}
+	}
 	for _, d := range s.Devices {
 		if p := s.Profile(d.Name); p != nil && p.File() != "" && !seen[p.File()] {
 			seen[p.File()] = true

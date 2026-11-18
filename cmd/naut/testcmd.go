@@ -6,10 +6,10 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 
 	"context"
@@ -144,12 +144,10 @@ func runTest(args []string) int {
 	// The project's virtual devices, when it has any: a suite with
 	// `devices: true` runs against them, in process and in virtual time.
 	runOpts := []acceptance.Option{acceptance.WithAlarms(proj.AlarmEngine)}
-	if _, err := os.Stat(filepath.Join(dir, virtdev.FileName)); err == nil && !*list {
-		set, err := virtdev.LoadSet(dir)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "naut test:", err)
-			return 1
-		}
+	if set, err := composeVirtualDevices(dir, proj.Devices()); err != nil && !errors.Is(err, os.ErrNotExist) && !*list {
+		fmt.Fprintln(os.Stderr, "naut test:", err)
+		return 1
+	} else if err == nil && !*list {
 		drivers := proj.Drivers()
 		runOpts = append(runOpts, acceptance.WithDevices(func(clk runtime.Clock) (acceptance.DeviceDriver, error) {
 			return virtdev.NewInProcess(set, clk, drivers)

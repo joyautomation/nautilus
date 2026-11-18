@@ -155,7 +155,7 @@ controller on the network. `role: input` tags are fed from `given`; loopback beh
 identical to `naut run` with the default memory driver, because it *is* that driver.
 
 **Unless the file asks for the virtual devices.** A file with `devices: true` runs
-against the project's virtual devices (`virtual-devices.yaml`,
+against the project's virtual devices (its `devices:` rows and `virtual-devices.yaml`,
 `docs/design/virtual-devices.md`) instead of the stub: still no socket, but the
 project's own drivers are answered in process through each device's register map or
 node ids, and the devices' simulators and process model step on the same virtual
