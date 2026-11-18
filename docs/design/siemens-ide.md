@@ -84,13 +84,13 @@ Native LAD (SimaticML FlgNet) is D3.
 | nautilus | SCL / TIA |
 |---|---|
 | Program | FB with an instance DB, called from its task's OB |
-| Task with `interval:` | Cyclic interrupt OB (OB30+) at that cycle |
-| Continuous task | OB1 |
+| The task (`scan:`) | Cyclic interrupt OB30 at that cycle, 1 ms to 60 s. **One task in v1**: nautilus copies shared tags in at a task's scan start and commits them at its end, while cyclic interrupt OBs preempt each other and touch the tags DB in place. Copy-in/copy-out for several tasks is its own later item. nautilus has no free-running task, so there is no OB1 |
 | Manifest tags | Global DB `"Tags"` (optimized). Members are visible and writable to Web API/HMI/OPC UA *(verify the attribute spelling in SCL source)* |
 | I/O-bound tags | PLC tag table, `%I`/`%Q` addresses from the station spec |
 | UDT | PLC data type (`.udt`) |
 | User FB / function | FB / FC |
-| TON TOF TP R_TRIG F_TRIG CTU CTD CTUD | The IEC instructions of the same names as multi-instances; the members already match (`.Q` `.ET` `.CV`) |
+| TON TOF TP R_TRIG F_TRIG | The IEC instructions as multi-instances (`TON_TIME`, …); the members already match (`.Q` `.ET`) |
+| CTU CTD CTUD | `CTU_LINT` etc.: nautilus's counter value is its 64-bit int and keeps counting past 32767 |
 | SR RS | Written inline as set/reset logic on a static, since they are believed to be LAD/FBD boxes that SCL cannot call *(verify)* |
 | Elementary types, arrays, structs | Direct. DT becomes one of DT, LDT or DTL, chosen and documented *(verify each on FW 3.1)* |
 | `VAR RETAIN` | Retentive members *(verify the SCL source syntax for per-member retain)* |
@@ -98,9 +98,25 @@ Native LAD (SimaticML FlgNet) is D3.
 
 The rules:
 
-- A semantic difference is either written exactly or refused at check
-  time. It is never a warning. Examples: integer ÷0, overflow (the #782
-  wrap rule), string defaults, TIME resolution, the first scan.
+- **Compute what nautilus computes, or refuse.** A semantic difference is
+  either written exactly or refused at check time; it is never a warning.
+  nautilus's own lowering runs first, so what nautilus cannot run is
+  refused before anything else.
+- **Integer arithmetic** is 64-bit in nautilus, wrapped only at the store
+  (#800). The writer widens every narrow operand to LINT and wraps
+  explicitly at the store. Where it cannot (an FB input, a function
+  argument, a CASE selector, a REAL target), integer arithmetic is refused.
+- **Refused in the first subset:** division by anything but a non-zero
+  constant (nautilus gives 0 and counts it; the CPU's answer is not pinned
+  down), TRUNC (LINT in nautilus, DINT in TIA), LTIME (milliseconds in
+  nautilus, nanoseconds in TIA), TIME arithmetic (64-bit against 32-bit
+  milliseconds), bitwise operators, STRING (TIA's holds 254 characters, a
+  nautilus STRING has no length), arrays, UDTs, enums, user POUs and SR/RS.
+- **Known divergence, documented rather than refused:** a REAL → integer
+  conversion out of range faults the scan in nautilus, while the CPU sets
+  ENO FALSE and carries on.
+- Temps have no start value in TIA. nautilus re-sets a temp to its init on
+  every scan (#203), so the body starts by assigning each one.
 - Generated state lives in DB members (FB statics), never in temps, so the
   Web API can read it.
 - Diagnostics use the Logix writer's shape, `Diag{Rule, Line, Message}`, and

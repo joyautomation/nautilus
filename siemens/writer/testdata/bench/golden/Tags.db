@@ -1,0 +1,20 @@
+DATA_BLOCK "Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      Command : UINT;
+      Done : BOOL;
+      Echo : UINT;
+      Fault : BOOL;
+      Heartbeat : UINT;
+      Reset : BOOL;
+      Running : BOOL;
+      Start : BOOL;
+   END_VAR
+   VAR RETAIN
+      Level : REAL := 12.5;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK
