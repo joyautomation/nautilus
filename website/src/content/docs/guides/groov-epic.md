@@ -100,6 +100,12 @@ OptoMMP, not yet the others. Each element has one writer:
 - **Opto's software writes it** (`writable: false`, `--scratch-floats-in`
   and its siblings): an input tag, good whatever it holds.
 
+A handshake, where one side sets a value and the other acknowledges it,
+needs one element each way. nautilus never puts a value back after
+another writer changes it (the tag just reads bad), so an acknowledge
+written into nautilus's own element would leave it bad instead of
+completing the exchange.
+
 ```sh
 naut optommp import --host <epic> --scratch-floats 2 --scratch-floats-in 2
 ```
@@ -521,6 +527,58 @@ systemd stops it with SIGTERM, which is a clean stop: a stream or custom
 area is put back. `AmbientCapabilities` lets `priority:` work (next
 section) and survives replacing the binary, which a `setcap` on the file
 does not.
+
+## From power-on to the first write
+
+What the outputs do while nautilus is not yet, or no longer, writing
+them, measured on the bench unit (2026-11-17, `epic-bench` with
+`watchdog: 1s`; in groov Manage DO7 has watchdog value on, DO11 off). An
+observer on another machine read the output states every 2.5 s, no
+faster, so it did not feed the watchdog itself, beside the processor's
+boot journal.
+
+| | reboot, nautilus enabled (3 runs) | I/O server restarted alone (3 runs) |
+|---|---|---|
+| I/O server answering | 30–31 s after the kernel | 11 s after the restart |
+| nautilus connected | 32–33 s after the kernel (systemd starts it once the I/O server is up) | 0.4–0.9 s after the server answers (2 runs with the retry below; 4.2 s before it) |
+| power-up clear | not asked for | asked for, and sent |
+| outputs at the first read after the server answered | all off, DO7 and DO11 included (read 0.9–1.7 s after it, before nautilus's first write) | back at their commands (after nautilus's rewrite) |
+
+What was seen:
+
+- **The watchdog time is stored on the unit.** It survives a reboot and
+  arms itself: with nautilus disabled and no client connecting at all,
+  DO7 was at its watchdog value a minute after the processor came up.
+- **A clean stop trips it.** On each of the three reboots, DO7 was at
+  its watchdog value within seconds of systemd stopping nautilus.
+- **On a reboot, the I/O server starts with every output off**, DO7
+  included, at least until 1.7 s after it answers.
+- **After an I/O server restart** the processor asks for a power-up
+  clear, the driver sends it, logs that the watchdog may have tripped,
+  and rewrites every commanded output. When the manifest's host is this
+  machine (`127.0.0.1`, `localhost` or the processor's own address) the
+  driver redials every second at most, so it follows the server within
+  a second; to another host the retry backs off up to 30 s.
+- **The first scans fault** with `undefined tag` until the driver has
+  delivered its first read (2 to 5 scans, under 0.5 s, on the bench).
+  No output is written while the scan faults.
+
+What was not seen, and is likely:
+
+- **At boot**, about 2 s pass between the I/O server answering and
+  nautilus's first write, longer than a 1 s watchdog. An output with a
+  watchdog value probably goes to it briefly at every boot before
+  nautilus writes it back. Reads every 2.5 s cannot show that, and
+  reading faster would itself feed the watchdog.
+- **During an I/O server restart** the outputs cannot be read at all.
+  Most likely they go to their watchdog values, as on any other gap
+  (the driver counts one), or off, as at boot.
+- **While the processor itself is down** (about 60 s of a reboot), and
+  through a real power cut. Watch the module LEDs for those.
+
+So give each output, in groov Manage, the watchdog value you want it to
+have whenever nautilus is not writing it: after a stop, during a
+restart, at boot, and if nautilus never starts.
 
 ## Timing on the processor's real-time kernel
 

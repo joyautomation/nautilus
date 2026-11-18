@@ -74,6 +74,14 @@ import (
 const (
 	defaultRetryMin = time.Second
 	defaultRetryMax = 30 * time.Second
+	// localRetryMin / localRetryMax are the reconnect backoff when the
+	// processor is this machine (nautilus on the EPIC itself, dialing
+	// loopback or its own address): a refused connect costs nothing there,
+	// and the I/O server restarting (groov Manage does it on some
+	// configuration changes) should be followed within a second, not after
+	// a backoff that has grown to 8 s by the time it answers.
+	localRetryMin = 250 * time.Millisecond
+	localRetryMax = time.Second
 	// chassisEvery is how often the module types and channel-present mask
 	// are re-read: groov modules are hot-swappable.
 	chassisEvery = 5 * time.Second
@@ -148,6 +156,7 @@ type Driver struct {
 	m        Manifest
 	scanRate time.Duration
 	retryMin time.Duration
+	retryMax time.Duration
 	chassis  time.Duration // chassis re-check interval
 	log      *slog.Logger
 	dial     func(ctx context.Context) (net.Conn, error)
@@ -244,6 +253,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		m:          m,
 		scanRate:   time.Duration(m.ScanRate),
 		retryMin:   defaultRetryMin,
+		retryMax:   defaultRetryMax,
 		chassis:    chassisEvery,
 		log:        slog.Default(),
 		outputs:    map[string]Binding{},
@@ -260,6 +270,9 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	}
 	d.lastErr.Store("")
 	d.schedErr.Store("")
+	if isLocalHost(m.Host) {
+		d.retryMin, d.retryMax = localRetryMin, localRetryMax
+	}
 	for _, o := range opts {
 		o(d)
 	}
@@ -358,7 +371,8 @@ func (d *Driver) OutputNames() []string { return d.m.OutputNames() }
 // second while connected, and on every connect attempt. A gate that closes
 // and reopens between two looks is not seen: one shorter than about a
 // second (or the scan, when faster) while connected, or than the
-// reconnect backoff (up to 30 s) while the processor is away.
+// reconnect backoff (up to 30 s, or 1 s to a processor on this machine)
+// while the processor is away.
 func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Lock()
 	d.writeGate = gate
@@ -486,6 +500,11 @@ func (d *Driver) run(ctx context.Context) {
 		}
 	}
 	backoff := d.retryMin
+	// lastLogged is the session error last logged at Warn: the same error
+	// again (a processor that stays away, the committed loopback manifest
+	// run off the EPIC) is logged at Debug until a session polls or the
+	// error changes, not once a second.
+	lastLogged := ""
 	for {
 		// A look (see SetWriteGate), on every connect attempt; Health
 		// reports a standby's mode before its first session too.
@@ -530,17 +549,23 @@ func (d *Driver) run(ctx context.Context) {
 		d.setOnline(false)
 		if polled {
 			backoff = d.retryMin
+			lastLogged = ""
 		}
 		if err != nil {
 			d.fail(err)
-			d.log.Warn("optommp: session ended", "host", d.m.Host, "err", err, "retry", backoff)
+			if msg := err.Error(); msg != lastLogged {
+				d.log.Warn("optommp: session ended", "host", d.m.Host, "err", err, "retry", backoff)
+				lastLogged = msg
+			} else {
+				d.log.Debug("optommp: session ended again", "host", d.m.Host, "err", err, "retry", backoff)
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(backoff):
 		}
-		backoff = min(backoff*2, defaultRetryMax)
+		backoff = min(backoff*2, d.retryMax)
 	}
 }
 
@@ -1635,6 +1660,33 @@ func sameScalar(a, b any) bool {
 	case int:
 		y, ok := b.(int)
 		return ok && x == y
+	}
+	return false
+}
+
+// isLocalHost reports whether host names this machine: "localhost", a
+// loopback address, or an address on one of its interfaces (a project on
+// the EPIC whose manifest dials the EPIC's own LAN address). A name other
+// than localhost is not resolved: New never touches the network.
+func isLocalHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.Equal(ip) {
+			return true
+		}
 	}
 	return false
 }
