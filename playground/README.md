@@ -10,6 +10,7 @@ both.
 
     ./scripts/build.sh          # -> dist/: naut.wasm, wasm_exec.js, worker.js, memfs.js, client.js, sw.js, app/, hmi/
     python3 -m http.server -d .. 8765   # then open /playground/dev/test.html
+    node --test playground/app/live.browser.test.mjs   # after build.sh: examples reach "nautilus: live" in headless Chrome
 
 ## What is different from `naut run`
 
