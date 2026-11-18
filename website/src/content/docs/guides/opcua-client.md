@@ -232,8 +232,11 @@ open62541, Milo and the virtual IO-Link masters of `naut devices`
 read scenarios where a master has nothing writable) run in every CI build.
 Ignition and CODESYS run in a lab of ours, with the same test; their
 results are in [Lab results](#lab-results). The scenarios are: import of a folder of one variable per scalar type (twice,
-byte-identical), typed reads of every type, a value that changes on its
-own, an unknown node read Bad while the rest stay Good, a write of every
+byte-identical), typed reads of every type the server is tested with
+(the matrix's 13 scalar types; the IO-Link masters only the types their
+process data has, and Ignition seven, as [Lab results](#lab-results)
+says), a value that
+changes on its own, an unknown node read Bad while the rest stay Good, a write of every
 type read back, a write to a read-only node refused without dropping the
 session, a binding whose namespace index is wrong read by its URI, and two
 outages twice each: a restart (the server closes the connection) and a
@@ -255,21 +258,31 @@ restart closes the connection, so `__Online` falls within a scan when
 polling and within a second when subscribed; a blackhole is silent, so it
 falls after one request timeout (5 s by default), plus up to a second when
 subscribed. Once the server answers again the driver is back within one
-retry step of the backoff ladder. Every server granted a 200 ms publishing
-interval as asked and supports `SetPublishingMode`, which the driver uses
-to check a subscribed session. A value that sits still for several
-keep-alives and then changes once arrives as a notification on each.
+retry step of the backoff ladder. Subscribed, every server above supported
+`SetPublishingMode`, which the driver uses to check a subscribed session
+(checked); the publishing interval each one revised the requested 200 ms
+to is logged, not checked. The quiet check (a value that sits still for
+five seconds, then changes once, must arrive as a notification with no
+read) runs on every server with a writable Int32 or UInt32 node, so not
+on the SICK and ifm masters, which have nothing writable.
 
 ### Lab results
 
 Ignition and CODESYS run in a lab of ours rather than in CI, with the same
-`opcua/matrix_test.go` scenarios. Run 2026-11-18, each check in poll and subscribe mode (quiet is
-subscribe only):
+`opcua/matrix_test.go` scenarios. Run 2026-11-18 on nautilus commit
+`73693ecf` (the first commit of PR #844; its later commits change only
+this guide), each check in poll and subscribe mode
+(quiet is subscribe only). The hooks these servers use are in
+`opcua/matrix_test.go`, but the profiles that fill them (addresses, users,
+certificates, the lab's start scripts) are a private lab configuration
+not in this repository: `NAUTILUS_OPCUA_MATRIX=lab` on its own fails with
+"names no server", so the table cannot be reproduced from the repository
+alone.
 
-| Server | Session | import | reads | writes | remap | quiet | restart | blackhole |
-|---|---|---|---|---|---|---|---|---|
-| Ignition 8.3.10 (trial), Generic Simulator device | Basic256Sha256 / SignAndEncrypt, user | pass | pass / pass | pass / pass | pass / pass | pass | pass / pass | pass / pass |
-| CODESYS Control Win V3 x64 3.5.22.40 (demo mode) | Basic256Sha256 / SignAndEncrypt, runtime user | pass | pass / pass | pass / pass | pass / pass | pass | pass / pass | pass / pass |
+| Server | Session | Types | import | reads | writes | remap | quiet | restart | blackhole |
+|---|---|---|---|---|---|---|---|---|---|
+| Ignition 8.3.10 (trial), Generic Simulator device | Basic256Sha256 / SignAndEncrypt, user | 7 of 13: Boolean, Int16, Int32, Int64, Float, Double, String (the simulator's writable ones) | pass | pass / pass | pass / pass | pass / pass | pass | pass / pass | pass / pass |
+| CODESYS Control Win V3 x64 3.5.22.40 (demo mode) | Basic256Sha256 / SignAndEncrypt, runtime user | all 13 of the matrix | pass | pass / pass | pass / pass | pass / pass | pass | pass / pass | pass / pass |
 
 ## Reading an Ignition gateway
 
@@ -281,7 +294,8 @@ things:
 - **Expose Tag Providers**: turn it on to read tags as well as devices.
 - **User**: give the driver a user from the user source the server
   authenticates against (`opcua-module` by default) and set `username:`.
-  Anonymous access is off by default and can never write.
+  Anonymous access is off by default; in the lab, once allowed, it could
+  browse and read but writes needed a user.
 
 Devices browse under namespace 1, for example
 `ns=1;s=[Sim]_Meta:Writeable/WriteableInteger1`. Exposed tags browse
