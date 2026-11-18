@@ -2,11 +2,15 @@ package runtime_test
 
 import (
 	"context"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -55,7 +59,7 @@ func TestReplaceDriverSwapsBetweenScans(t *testing.T) {
 	b.mu.Unlock()
 
 	b2 := swapDriver([]string{"B_In"}, []string{"B_Out"}, nio.Values{"B_In": 3.0})
-	old, err := rt.ReplaceDriver("b", b2)
+	old, err := rt.ReplaceDriver(context.Background(), "b", b2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +111,7 @@ func TestReplaceDriverRefuses(t *testing.T) {
 		{"no such driver", "c", swapDriver([]string{"B_In"}, []string{"B_Out"}, nil), "no such driver"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := rt.ReplaceDriver(c.child, c.d); err == nil || !strings.Contains(err.Error(), c.want) {
+			if _, err := rt.ReplaceDriver(context.Background(), c.child, c.d); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("ReplaceDriver: %v, want %q", err, c.want)
 			}
 		})
@@ -124,7 +128,7 @@ func TestReplaceDriverRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lone.ReplaceDriver("b", swapDriver(nil, nil, nil)); err == nil || !strings.Contains(err.Error(), "not a composite") {
+	if _, err := lone.ReplaceDriver(context.Background(), "b", swapDriver(nil, nil, nil)); err == nil || !strings.Contains(err.Error(), "not a composite") {
 		t.Errorf("a lone driver: %v, want a refusal naming the composite", err)
 	}
 }
@@ -139,7 +143,7 @@ func TestReplaceDriverWhileRunning(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	before := rt.Stats().Count
 	for i := 0; i < 20; i++ {
-		if _, err := rt.ReplaceDriver("b", swapDriver([]string{"B_In"}, []string{"B_Out"}, nio.Values{"B_In": float64(i)})); err != nil {
+		if _, err := rt.ReplaceDriver(context.Background(), "b", swapDriver([]string{"B_In"}, []string{"B_Out"}, nio.Values{"B_In": float64(i)})); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -197,7 +201,7 @@ func TestReplaceDriverWaitsForTheScanInProgress(t *testing.T) {
 	b2 := swapDriver([]string{"B_In"}, []string{"B_Out"}, nio.Values{"B_In": 3.0})
 	swapped := make(chan struct{})
 	go func() {
-		if _, err := rt.ReplaceDriver("b", b2); err != nil {
+		if _, err := rt.ReplaceDriver(context.Background(), "b", b2); err != nil {
 			t.Error(err)
 		}
 		close(swapped)
@@ -214,5 +218,160 @@ func TestReplaceDriverWaitsForTheScanInProgress(t *testing.T) {
 	b2.mu.Unlock()
 	if oldGot != 6.0 || newWrites != 0 {
 		t.Errorf("the scan read from the old driver but wrote B_Out=%v to it and %d times to the new one: the swap landed inside the scan", oldGot, newWrites)
+	}
+}
+
+// modbusRig is a runtime over a set of one real Modbus driver (Cmd := In +
+// 1 on holding 10, In on holding 0) and the slave it polls.
+func modbusRig(t *testing.T, hold bool) (*runtime.Runtime, *nio.Multi, *modbus.Driver, *slave.Server, context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s1 := newModbusSlave(t)
+	s1.Unit(1).SetHolding(0, 4)
+	m1 := newModbus(t, s1)
+	m1.Start(ctx)
+	t.Cleanup(m1.Stop)
+	set, err := nio.NewMulti(nio.NamedDriver{Name: "mb", Driver: m1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Main\nVAR_EXTERNAL In : DINT; Cmd : DINT; END_VAR\nCmd := In + 1;\nEND_PROGRAM",
+		Driver:  set,
+		Tags: []runtime.TagDef{runtime.Input("In", runtime.Init(int64(0))), runtime.Output("Cmd", runtime.Init(int64(0))),
+			runtime.Input("DEV__Online", runtime.Init(false)), runtime.Input("DEV__Outages", runtime.Init(int64(0)))},
+		HoldOutputsOnSwap: hold,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitScan(t, rt, func() bool { v, _ := rt.Tags().ReadGlobal("In"); return v.I == 4 })
+	return rt, set, m1, s1, ctx
+}
+
+func newModbusSlave(t *testing.T) *slave.Server {
+	t.Helper()
+	srv := slave.NewServer("", nil)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	return srv
+}
+
+func newModbus(t *testing.T, srv *slave.Server) *modbus.Driver {
+	t.Helper()
+	host, port, _ := net.SplitHostPort(srv.Addr())
+	p, _ := strconv.Atoi(port)
+	d, err := modbus.New(modbus.Manifest{
+		Sources: []modbus.Source{{ID: "DEV", Host: host, Port: p, UnitID: 1, Timeout: 500 * time.Millisecond, RetryMin: 20 * time.Millisecond, RetryMax: 80 * time.Millisecond}},
+		Tags: []modbus.TagBinding{
+			{Name: "In", Source: "DEV", Table: modbus.TableHolding, Address: 0, Format: "uint16"},
+			{Name: "Cmd", Source: "DEV", Table: modbus.TableHolding, Address: 10, Format: "uint16", Writable: true},
+		},
+	}, modbus.WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// waitScan scans until cond holds.
+func waitScan(t *testing.T, rt *runtime.Runtime, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rt.Scan()
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out")
+}
+
+// swapIn gates and starts a new Modbus driver on srv and swaps it in.
+func swapIn(t *testing.T, rt *runtime.Runtime, set *nio.Multi, ctx context.Context, srv *slave.Server) *modbus.Driver {
+	t.Helper()
+	m2 := newModbus(t, srv)
+	set.Gate(m2)
+	m2.Start(ctx)
+	t.Cleanup(m2.Stop)
+	if _, err := rt.ReplaceDriver(ctx, "mb", m2); err != nil {
+		t.Fatal(err)
+	}
+	return m2
+}
+
+// With a real Modbus driver (its start-up baseline armed by Start), the
+// new device gets the CURRENT command on the scans after the swap; the
+// push is not swallowed as the baseline (#706, #879 review).
+func TestReplaceDriverRealModbusGetsTheCurrentCommand(t *testing.T) {
+	rt, set, _, _, ctx := modbusRig(t, false)
+	s2 := newModbusSlave(t)
+	s2.Unit(1).SetHolding(0, 4) // same In on the new device: Cmd stays 5, unchanged
+	swapIn(t, rt, set, ctx, s2)
+	waitScan(t, rt, func() bool { return s2.Unit(1).Holding(10) == 5 })
+}
+
+// HoldOutputsOnSwap: the push is the new driver's baseline; the device gets
+// a command only once it changes.
+func TestReplaceDriverHoldOutputsOnSwap(t *testing.T) {
+	rt, set, _, _, ctx := modbusRig(t, true)
+	s2 := newModbusSlave(t)
+	s2.Unit(1).SetHolding(0, 4)
+	swapIn(t, rt, set, ctx, s2)
+	for i := 0; i < 20; i++ {
+		rt.Scan()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if v := s2.Unit(1).Holding(10); v != 0 {
+		t.Fatalf("held: the new device got Cmd %d before it changed", v)
+	}
+	s2.Unit(1).SetHolding(0, 8) // In changes, so Cmd changes to 9
+	waitScan(t, rt, func() bool { return s2.Unit(1).Holding(10) == 9 })
+}
+
+// The old Modbus driver, gated closed by the swap, sends nothing more to
+// its device, even when handed a new command before it is stopped.
+func TestReplaceDriverOldRealModbusWritesNothingMore(t *testing.T) {
+	rt, set, m1, s1, ctx := modbusRig(t, false)
+	before := s1.Unit(1).Holding(10)
+	s2 := newModbusSlave(t)
+	s2.Unit(1).SetHolding(0, 4)
+	swapIn(t, rt, set, ctx, s2)
+	m1.WriteOutputs(nio.Values{"Cmd": int64(77)})
+	time.Sleep(150 * time.Millisecond)
+	if v := s1.Unit(1).Holding(10); v != before {
+		t.Errorf("the old device got Cmd %d after the swap (was %d)", v, before)
+	}
+}
+
+// A hung scan does not hang the apply: the wait for it ends with ctx.
+func TestReplaceDriverGivesUpOnAHungScan(t *testing.T) {
+	a := swapDriver([]string{"A_In"}, []string{"A_Out"}, nio.Values{"A_In": 1.0})
+	b := &blockingDriver{askingDriver: swapDriver([]string{"B_In"}, []string{"B_Out"}, nio.Values{"B_In": 3.0}),
+		entered: make(chan struct{}), release: make(chan struct{})}
+	m, _ := nio.NewMulti(nio.NamedDriver{Name: "a", Driver: a}, nio.NamedDriver{Name: "b", Driver: b})
+	rt, err := runtime.New(runtime.Options{Program: swapProgram, Driver: m,
+		Tags: []runtime.TagDef{runtime.Input("A_In", runtime.Init(0.0)), runtime.Input("B_In", runtime.Init(0.0)),
+			runtime.Output("A_Out", runtime.Init(0.0)), runtime.Output("B_Out", runtime.Init(0.0))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := b.entered
+	go rt.Scan()
+	<-entered
+	defer close(b.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = rt.ReplaceDriver(ctx, "b", swapDriver([]string{"B_In"}, []string{"B_Out"}, nil))
+	if err == nil || !strings.Contains(err.Error(), "deadline") {
+		t.Errorf("ReplaceDriver during a hung scan: %v, want the context's deadline", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("it waited %v", time.Since(start))
 	}
 }

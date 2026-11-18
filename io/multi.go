@@ -4,9 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 )
+
+// BaselineDisarmer is a driver whose first write after Start records the
+// outputs rather than sending them (a start-up baseline: the world at t=0
+// is not a command), and that can be told not to: a driver swapped in live
+// (#706) can then start from the current commands.
+type BaselineDisarmer interface{ DisarmBaseline() }
+
+// StartReporter says whether Start has run. A driver that has not been
+// started cannot be read (Modbus and OPC UA error), so Replace refuses one.
+type StartReporter interface{ Started() bool }
+
+// closedGate is the gate a child replaced out of a set gets: whatever it
+// still holds queued, it must not write any more.
+func closedGate() bool { return false }
 
 // NamedDriver is one member of a multi-driver set: the Driver itself plus
 // the name status rows and error messages know it by ("modbus", "eip-2").
@@ -133,16 +148,42 @@ func (m *Multi) Child(name string) (Driver, bool) {
 	return nil, false
 }
 
+// Gate installs on d the write gates installed on the set so far, as
+// Replace will: call it before starting a replacement, so it never runs,
+// and never arms a leader's baseline on a standby, ungated.
+func (m *Multi) Gate(d Driver) {
+	m.set.RLock()
+	defer m.set.RUnlock()
+	for _, g := range m.gates {
+		g(d)
+	}
+}
+
+// sameDriver reports whether a and b are the same driver value, without
+// panicking on a type that cannot be compared.
+func sameDriver(a, b Driver) bool {
+	ta := reflect.TypeOf(a)
+	if ta != reflect.TypeOf(b) || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
 // Replace puts d in place of the child named name and returns the child it
 // replaced (#706: an I/O configuration applied live). The same checks as
 // NewMulti apply: d is not nil and declares its tags, and none of them is
 // owned by another child. Routing, the cached OutputsRequesters and the
-// write gates installed so far follow the new child; the rest of the set
-// is untouched. Start d before, and Stop the old child after, outside any
-// lock a scan holds: Replace itself only swaps.
+// write gates installed so far follow the new child, and the old child is
+// gated closed, so it writes nothing more while it winds down; the rest of
+// the set is untouched. Gate and Start d before (an unstarted d is refused,
+// as is the current child itself), and Stop the old child after, outside
+// any lock a scan holds: Replace itself only swaps.
 func (m *Multi) Replace(name string, d Driver) (Driver, error) {
 	if d == nil {
 		return nil, fmt.Errorf("multi-driver: the replacement for %q is nil", name)
+	}
+	if sr, ok := d.(StartReporter); ok && !sr.Started() {
+		return nil, fmt.Errorf("multi-driver: the replacement for %q has not been started; start it (gated with Gate) first, or every input of the set reads stale", name)
 	}
 	owner, ok := d.(tagOwner)
 	if !ok {
@@ -158,6 +199,9 @@ func (m *Multi) Replace(name string, d Driver) (Driver, error) {
 	}
 	if at < 0 {
 		return nil, fmt.Errorf("multi-driver: no driver named %q to replace", name)
+	}
+	if sameDriver(m.children[at].Driver, d) {
+		return nil, fmt.Errorf("multi-driver: %q is already that driver; replacing it with itself would hand it back as the old one to stop", name)
 	}
 	in, out := map[string]int{}, map[string]int{}
 	for tag, i := range m.inOwner {
@@ -186,6 +230,11 @@ func (m *Multi) Replace(name string, d Driver) (Driver, error) {
 		g(d)
 	}
 	old := m.children[at].Driver
+	// The old child writes nothing more, whatever it holds queued (a write
+	// held across a disconnect, a rewrite: keep-alive) until it is stopped.
+	if g, ok := old.(interface{ SetWriteGate(func() bool) }); ok {
+		g.SetWriteGate(closedGate)
+	}
 	m.children[at].Driver = d
 	m.inOwner, m.outOwner = in, out
 	m.askers = m.askers[:0]

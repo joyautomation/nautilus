@@ -220,3 +220,69 @@ func TestMultiReplaceUnderConcurrentUse(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// startedChild reports whether it was started (io.StartReporter).
+type startedChild struct {
+	named
+	started bool
+}
+
+func (s startedChild) Started() bool { return s.started }
+
+// The child Replace takes out is gated closed, whatever the set's gates:
+// it writes nothing more while it winds down (a write held across a
+// disconnect, a keep-alive).
+func TestMultiReplaceGatesTheOldChildClosed(t *testing.T) {
+	var gB, gB2 func() bool
+	var sent []string
+	b := gated{named: named{Memory: NewMemory(), outs: []string{"B_Out"}}, gate: &gB, sent: &sent}
+	m, err := NewMulti(NamedDriver{"b", b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2 := gated{named: named{Memory: NewMemory(), outs: []string{"B_Out"}}, gate: &gB2, sent: &sent}
+	if _, err := m.Replace("b", b2); err != nil {
+		t.Fatal(err)
+	}
+	if gB == nil || gB() {
+		t.Fatal("the replaced child's gate is not closed")
+	}
+	b.WriteOutputs(Values{"B_Out": 1.0})
+	if len(sent) != 0 {
+		t.Errorf("the replaced child still wrote %v", sent)
+	}
+}
+
+// Refused: a replacement that has not been started (it would fail the
+// whole set's read), and the current child itself (Replace would hand it
+// back as the old one to stop).
+func TestMultiReplaceRefusesUnstartedOrSelf(t *testing.T) {
+	b := &startedChild{named: named{Memory: NewMemory(), ins: []string{"B_In"}}, started: true}
+	m, err := NewMulti(NamedDriver{"b", b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Replace("b", &startedChild{named: named{Memory: NewMemory(), ins: []string{"B_In"}}}); err == nil || !strings.Contains(err.Error(), "not been started") {
+		t.Errorf("an unstarted replacement: %v", err)
+	}
+	if _, err := m.Replace("b", b); err == nil || !strings.Contains(err.Error(), "itself") {
+		t.Errorf("the current child: %v", err)
+	}
+}
+
+// Gate puts the set's gates on a driver before it starts, so a standby's
+// replacement never runs ungated.
+func TestMultiGateBeforeStart(t *testing.T) {
+	var gA, gNew func() bool
+	var sent []string
+	a := gated{named: named{Memory: NewMemory(), outs: []string{"A_Out"}}, gate: &gA, sent: &sent}
+	m, err := NewMulti(NamedDriver{"a", a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetWriteGate(func() bool { return false })
+	m.Gate(gated{named: named{Memory: NewMemory(), outs: []string{"A_Out"}}, gate: &gNew, sent: &sent})
+	if gNew == nil || gNew() {
+		t.Error("Gate did not install the set's (closed) gate")
+	}
+}

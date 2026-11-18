@@ -87,6 +87,12 @@ type Options struct {
 	// watchdog that must be re-armed, or a bus whose outputs decay without
 	// a rewrite.
 	AlwaysWriteOutputs bool
+	// HoldOutputsOnSwap keeps a driver swapped in live (ReplaceDriver,
+	// #706) from writing the current outputs until they change: its
+	// start-up baseline records them. Off (the default) disarms the new
+	// driver's baseline, so it starts from the current commands. A single
+	// switch while the choice is open (#706, James's decision 1).
+	HoldOutputsOnSwap bool
 	// TakeoverInputsWait bounds how long a redundancy takeover waits for a
 	// driver that is an io.InputsReadier to report live inputs before it
 	// runs on what the driver holds (0: DefaultTakeoverInputsWait). Only
@@ -245,6 +251,7 @@ type Runtime struct {
 	// the same stamp knows the driver already holds exactly these values.
 	// Atomic because takeover() clears outSent from outside mainMu.
 	alwaysWrite bool
+	holdOnSwap  bool
 	outGen      atomic.Uint64
 	outSent     atomic.Bool
 	// asker is the driver as an io.OutputsRequester, nil when it is not
@@ -572,7 +579,7 @@ func New(o Options) (*Runtime, error) {
 		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
 		clock: o.Clock, loopSleep: o.LoopSleep, types: types, tasks: tasks,
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
-		alwaysWrite: o.AlwaysWriteOutputs, untypedComms: untyped,
+		alwaysWrite: o.AlwaysWriteOutputs, holdOnSwap: o.HoldOutputsOnSwap, untypedComms: untyped,
 	}
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a

@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
 )
@@ -20,15 +22,18 @@ type replacer interface {
 //
 // The runtime's tags are fixed at New, so d must deliver and accept exactly
 // the tags the old driver did: a binding or address may change, the tag set
-// may not. The swap holds mainMu, so no scan sees half of it; the scan after
-// it pushes every output once, so the new driver starts from the current
-// commands rather than waiting for them to change.
+// may not. The swap holds mainMu, so no scan sees half of it. The scan after
+// it pushes every output once; unless Options.HoldOutputsOnSwap, d's
+// start-up baseline is disarmed first (io.BaselineDisarmer), so that push
+// is sent: the device starts from the current commands. Held, the push is
+// d's baseline and it writes once an output changes.
 //
-// The caller starts d before (a Modbus or OPC UA driver reads as not
-// connected until it is, and an unstarted one fails the whole read) and
-// stops the returned driver after, neither under a lock a scan holds. Write
-// gates already installed on the composite follow d by themselves.
-func (r *Runtime) ReplaceDriver(name string, d nio.Driver) (nio.Driver, error) {
+// The caller gates d with the composite's gates (io.Multi.Gate) and starts
+// it before (an unstarted driver is refused), and stops the returned driver
+// after, outside any lock a scan holds; the returned driver is already
+// gated closed. ctx bounds the wait for the scan in progress: a hung scan
+// does not hang the apply.
+func (r *Runtime) ReplaceDriver(ctx context.Context, name string, d nio.Driver) (nio.Driver, error) {
 	rp, ok := r.driver.(replacer)
 	if !ok {
 		return nil, fmt.Errorf("replace driver %q: the runtime's driver (%T) is not a composite; a live swap needs the drivers composed (io.Multi)", name, r.driver)
@@ -40,14 +45,31 @@ func (r *Runtime) ReplaceDriver(name string, d nio.Driver) (nio.Driver, error) {
 	if err := sameTags(old, d); err != nil {
 		return nil, fmt.Errorf("replace driver %q: %w", name, err)
 	}
-	r.mainMu.Lock()
+	if err := r.lockMain(ctx); err != nil {
+		return nil, fmt.Errorf("replace driver %q: waiting for the scan in progress: %w", name, err)
+	}
 	defer r.mainMu.Unlock()
+	if bd, ok := d.(nio.BaselineDisarmer); ok && !r.holdOnSwap {
+		bd.DisarmBaseline()
+	}
 	prev, err := rp.Replace(name, d)
 	if err != nil {
 		return nil, err
 	}
 	r.outSent.Store(false) // the next scan hands the new driver every output
 	return prev, nil
+}
+
+// lockMain takes mainMu, or gives up when ctx ends.
+func (r *Runtime) lockMain(ctx context.Context) error {
+	for !r.mainMu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
 }
 
 // tagNames is what a driver declares it owns (io.Multi requires it).
