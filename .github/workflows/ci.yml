@@ -49,6 +49,8 @@ jobs:
         with: {fetch-depth: 2} # a PR's merge commit: HEAD^1 is the base
       - name: the scope rules pass their own table test
         run: .github/scripts/ci-scope.test.sh
+      - name: the ci-ok gate passes its own table test
+        run: .github/scripts/ci-ok.test.sh
       - name: scope
         id: scope
         env:
@@ -1083,3 +1085,97 @@ jobs:
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label claims-audit --body-file "$body"
           fi
+
+  # Client names must not enter this repository: it is PUBLIC (#752 moved
+  # this here from sourcing.yml, so ci-ok gates it).
+  #
+  # The denylist is a regex kept OUT of the repository -- a list of client
+  # names committed to a public repo is the thing it exists to prevent. Set
+  # it as a SECRET, not a variable:
+  #
+  #     gh secret set SOURCING_DENYLIST --body '<name>|<name>|<name>'
+  #
+  # A secret specifically, because repository VARIABLES are passed to
+  # workflows run from forked pull requests, and anyone may fork a public
+  # repo. Secrets are not. On a fork PR the value is empty, the job says so
+  # and passes, so forks still build -- and the denylist never leaves this
+  # organisation. It runs on every PR, light ones too: it is cheap and it is
+  # the public-repo guard.
+  sourcing:
+    name: No client identifiers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tracked files
+        env:
+          DENY: ${{ secrets.SOURCING_DENYLIST }}
+        run: |
+          if [ -z "$DENY" ]; then
+            echo "::notice::SOURCING_DENYLIST unset (or a fork PR) - nothing to check."
+            exit 0
+          fi
+          # Never print the pattern or the matching text: this log is public,
+          # and a violation report that quotes the line leaks the very name
+          # the check exists to keep out. File and line number only.
+          hits=0
+          while IFS= read -r f; do
+            case "$f" in
+              *node_modules/*|*package-lock.json) continue ;;
+            esac
+            [ -f "$f" ] || continue
+            lines=$(grep -nEi "$DENY" -- "$f" 2>/dev/null | cut -d: -f1 | tr '\n' ',' | sed 's/,$//') || true
+            if [ -n "$lines" ]; then
+              echo "::error file=$f::client identifier present (line(s): $lines)"
+              hits=$((hits + 1))
+            fi
+          done < <(git ls-files)
+          if [ "$hits" -gt 0 ]; then
+            echo "$hits file(s) carry a denylisted identifier. The text is not printed here on purpose."
+            exit 1
+          fi
+          echo "clean"
+
+  # The L5X reader's tests, plus the corpus sweep when a corpus is set
+  # (moved here from logix.yml by #752, so ci-ok gates it; logix.yml keeps
+  # the self-hosted, opt-in SDK job). The development corpus is ~60 real
+  # exports, most of it client work that cannot live in the repo: a runner
+  # that has it mounted sweeps it; one that does not skips, and says so.
+  l5x-reader:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: L5X reader — unit + corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - name: Unit tests
+        run: go test ./lang/l5x/... ./logix/... ./cmd/naut/ -run 'Logix|L5X|Ladder|Types|Tags|Normalize|ParseRung|Parse|Client|Import|Download|Convert|Session|XPath|Event' -v
+      - name: Corpus sweep
+        if: vars.NAUTILUS_L5X_CORPUS != ''
+        env:
+          NAUTILUS_L5X_CORPUS: ${{ vars.NAUTILUS_L5X_CORPUS }}
+        run: go test ./lang/l5x/ -run TestCorpus -v
+
+  # The one required status check on main (#752). Branch protection can't
+  # require the path-scoped jobs themselves (a skipped matrix leg never
+  # reports, and would wait at "expected"), so this always runs, after every
+  # other job, and passes only when each passed or was skipped because the
+  # scope said so: .github/scripts/ci-ok.sh reads this workflow to tell. A
+  # failed or cancelled job, a failed scope job, or a job left out of these
+  # needs fails it. runtime-evidence is informational (continue-on-error)
+  # and not waited on. A new job goes in this list; ci-ok.test.sh (run by
+  # the changes job) fails until it does.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, go, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: every job passed, or was skipped by the scope
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: printf '%s' "$NEEDS" | .github/scripts/ci-ok.sh .github/workflows/ci.yml
