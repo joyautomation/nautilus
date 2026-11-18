@@ -2,13 +2,14 @@ package runtime
 
 import (
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // Quality reports, per tag, how much its value is worth believing — the
 // non-Good entries only, so a healthy controller answers with nil and the
 // whole feature costs a 10,000-tag plant nothing.
 //
-// Two sources, in this order:
+// Two sources, in this order, and one rule for a redundant replica:
 //
 //  1. The DRIVER, when it implements io.QualityReporter. It is the only
 //     thing that actually knows: a Sparkplug host driver knows which edge
@@ -22,6 +23,16 @@ import (
 //     all. It is why a plain Memory or a hand-written driver still gets
 //     honest staleness for free, and why a controller that has not
 //     completed a scan does not present its seed values as field readings.
+//
+// A STANDBY (a Coordinator, and this replica is not the one scanning; see
+// standby) does not scan, so everything a scan refreshes is frozen at its
+// last scan as leader, or at its seeds: the driver-bound inputs, every
+// global a program writes, and the measured-dt tags. All of them are
+// Stale (#924). A driver's non-Good verdict still stands, being more
+// specific; its Good does not, because what it vouches for has not
+// reached the tag store. A setpoint the logic only reads is the
+// operator's value, not a reading, and keeps its quality. The first scan
+// after a takeover restores the sources above.
 //
 // Called on demand — by the server's broadcast tick and by GET /api/state,
 // a few times a second — never from the scan loop, so quality costs the
@@ -45,6 +56,16 @@ func (r *Runtime) Quality() map[string]nio.Quality {
 			}
 			out[name] = q
 		}
+	}
+	if r.standby() {
+		r.scanFed(func(name string) {
+			if out == nil {
+				out = make(map[string]nio.Quality)
+			}
+			if _, said := out[name]; !said {
+				out[name] = nio.Stale
+			}
+		})
 	}
 	if !r.readOK.Load() && len(r.inputs) > 0 {
 		if out == nil {
@@ -74,10 +95,15 @@ func (r *Runtime) TagQuality(name string) nio.Quality {
 			break
 		}
 	}
+	standby := r.standby()
 	if qr, ok := r.driver.(nio.QualityReporter); ok {
-		if q, said := qr.Quality()[root]; said {
+		// On a standby the driver's Good does not stand (see Quality).
+		if q, said := qr.Quality()[root]; said && (q != nio.Good || !standby) {
 			return q
 		}
+	}
+	if standby && r.isScanFed(root) {
+		return nio.Stale
 	}
 	if !r.readOK.Load() {
 		for _, in := range r.inputs {
@@ -95,9 +121,79 @@ func (r *Runtime) TagQuality(name string) nio.Quality {
 // backs /api/meta's capability flag, so an HMI can tell "everything is
 // good" apart from "this controller has no idea", and render a quality
 // indicator only where one means something.
+//
+// A replica with a Coordinator always can: as a standby it marks every
+// scan-fed tag Stale, driver or none (see Quality).
 func (r *Runtime) ReportsQuality() bool {
 	if _, ok := r.driver.(nio.QualityReporter); ok {
 		return true
 	}
-	return len(r.inputs) > 0
+	return r.coord != nil || len(r.inputs) > 0
+}
+
+// standby reports whether this replica's scan-fed tags are frozen: it has
+// a Coordinator, and either no scan of the current leadership has read
+// its inputs yet (still standing by; a takeover holding for live inputs,
+// #626, on a new term too; a takeover whose first read is in flight; one
+// an additional task's gate opened), or its coordinator says another
+// replica leads now, which a leader whose scans have stalled has not yet
+// acted on. Two atomic reads, so a leader's Quality stays as cheap as a
+// standalone's.
+func (r *Runtime) standby() bool {
+	return r.coord != nil && (!r.fresh.Load() || !r.coord.IsLeader())
+}
+
+// scanFed calls fn with the stored name of every tag a scan refreshes: the
+// driver-bound inputs, every global a program in any task writes, and the
+// measured-dt tags. A name may come more than once.
+func (r *Runtime) scanFed(fn func(name string)) {
+	for _, name := range r.inputs {
+		fn(name)
+	}
+	r.forEachProgram(func(p *Program) {
+		for key := range p.writtenKeys() {
+			if name, ok := r.tags.Canonical(key); ok {
+				fn(name)
+			}
+		}
+	})
+	if r.dtTag != "" {
+		fn(r.dtTag)
+	}
+	for _, tr := range r.tasks {
+		if tr.dtTag != "" {
+			fn(tr.dtTag)
+		}
+	}
+}
+
+// isScanFed is scanFed for one root tag name, without building the set.
+func (r *Runtime) isScanFed(root string) bool {
+	if r.dtTag != "" && ir.SameName(root, r.dtTag) {
+		return true
+	}
+	for _, name := range r.inputs {
+		if ir.SameName(name, root) {
+			return true
+		}
+	}
+	for _, tr := range r.tasks {
+		if tr.dtTag != "" && ir.SameName(tr.dtTag, root) {
+			return true
+		}
+	}
+	key, fed := ir.NameKey(root), false
+	r.forEachProgram(func(p *Program) {
+		fed = fed || p.writtenKeys()[key]
+	})
+	return fed
+}
+
+// forEachProgram calls fn with the main task's program, then each
+// additional task's.
+func (r *Runtime) forEachProgram(fn func(*Program)) {
+	fn(r.prog)
+	for _, tr := range r.tasks {
+		fn(tr.prog)
+	}
 }

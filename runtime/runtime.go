@@ -281,6 +281,15 @@ type Runtime struct {
 	// takeover sequence when this replica becomes leader. See retain.go.
 	leadMu  sync.Mutex
 	leading bool
+	// fresh is whether this replica's scan-fed tags are current (see
+	// Runtime.standby): set by the main scan once its input read has come
+	// back, cleared by gate on every leadership edge and every scan it
+	// refuses. Not a mirror of leading: a takeover sets leading before
+	// its first read, a held takeover on a new term leaves leading set,
+	// and an additional task's gate can take over before the main task has
+	// read anything. Atomic, so Quality never waits on leadMu, which a
+	// takeover holds through a retain-store load.
+	fresh atomic.Bool
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
 	// readyWait how long a takeover waits for it, and readySince when the
 	// pending takeover began waiting (zero when none is). See inputsReady.
@@ -1410,6 +1419,12 @@ func (r *Runtime) scanAt(due time.Time) {
 			// write at all — see Tags' "Write generations".
 			r.tags.setMany(r.inputs, in)
 		}
+	}
+	// The read is back (or there is no driver to read): from here on the
+	// tags are this leadership's, and quality is the drivers' again. One
+	// atomic load per scan on a steady leader.
+	if r.coord != nil && !r.fresh.Load() {
+		r.fresh.Store(true)
 	}
 	if r.dtTag != "" {
 		r.tags.SetReal(r.dtTag, dt)
