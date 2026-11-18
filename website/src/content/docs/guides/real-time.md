@@ -189,7 +189,8 @@ and writes. It now takes its turn with everything else, so expect more
 lateness. To see a demotion:
 
 - the dashboard's task row shows `fifo 40 DEMOTED (overrun)`;
-- the task's `scan.sched` in `/api/stats` shows `demoted: true` and the
+- the task's `sched` in `GET /api/state` (`scan.sched` for the main
+  task, `scan.tasks[].sched` for the others) shows `demoted: true` and the
   reason, beside the `guard` it ran under;
 - the log has an error.
 
@@ -210,6 +211,31 @@ tasks:
 a core something else just landed on, and at normal priority it has no
 claim to go first: measured, p99 went from 55 µs to 300–400 µs. Set `cpu:`
 only together with `priority:`, or on a core the kernel keeps empty.
+
+**On a box with few cores, the runtime raises `GOMAXPROCS`.** Go runs
+code on `GOMAXPROCS` slots, which default to the number of cores. A task
+waking at `SCHED_FIFO` still needs a free slot, and on a two-core box a
+long scan in another task and the garbage collector can hold both, so the
+task waits for Go's own preemption (around 10 ms), whatever its priority.
+When a task has `priority:`, `GOMAXPROCS` is not set in the environment,
+no CPU limit applies and the box has at most 4 cores, the runtime sets it
+to the cores plus one for each task requesting a priority plus one, at
+most twice the cores plus two.
+That's 4 on a two-core box with one such task. On a two-core ARM module
+this took a 1 ms task at FIFO 80, beside a task running 20 ms of logic,
+from 95.8 % of its slots run and 9.22 ms late at p99.9 to 99.92 % and
+188 µs (the [Verdin guide](/guides/verdin/#real-time-on-the-am62) has
+the table). The banner says when it was raised, and `GET /api/state`
+reports it as `scan.gomaxprocs`, with the reason when it was kept.
+
+- **A CPU limit keeps the default.** Under a cgroup CPU quota (`docker run
+  --cpus`, a systemd `CPUQuota=`), more Ps than the quota allows would be
+  throttled, which means spikes. So the runtime leaves the value Go chose
+  (it already follows the quota) and logs why.
+- **A `GOMAXPROCS` in the environment always wins**, when it is a positive
+  whole number, the same test Go applies. Setting it also turns off Go's
+  own automatic updates of `GOMAXPROCS` when the cgroup limit changes, and
+  so does the runtime's raise.
 
 Mind the kernel's real-time throttle: by default `SCHED_FIFO` tasks get
 95 % of every second (`/proc/sys/kernel/sched_rt_runtime_us`). A task that

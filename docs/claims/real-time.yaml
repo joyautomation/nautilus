@@ -384,3 +384,33 @@ claims:
       jitter's main (runGuarded around rt.Run, the kill timer armed) is
       exercised by a normal run only, not by a starved one.
 
+  - id: RT-031
+    claim: >-
+      When a task requests a priority, GOMAXPROCS is not set in the
+      environment (as a positive whole number), no cgroup CPU limit applies
+      and the box has at most 4 cores, the runtime raises GOMAXPROCS to the
+      cores plus one per task requesting a priority plus one, at most twice
+      the cores plus two, before its loops start; the banner says so and
+      GET /api/state reports it as scan.gomaxprocs. Under a CPU limit it
+      keeps Go's value and logs why; a GOMAXPROCS in the environment always
+      wins.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestProcsForRule
+      - go ./runtime TestRunRaisesGOMAXPROCSForATaskAtPriority
+      - go ./runtime TestGOMAXPROCSLeftAlone
+      - go ./runtime TestGOMAXPROCSNotRaisedUnderACPULimit
+      - go ./runtime TestOperatorGOMAXPROCSParsedLikeGo
+      - go ./runtime TestCgroupCPUQuota
+      - go ./runtime TestProcsStatsJSON
+      - go ./cmd/naut TestSchedBannerSuffixReportsARaisedGOMAXPROCS
+    partial: true
+    note: >-
+      The rule and its application are tested through seams for the
+      process-wide setting and the environment, not by changing the test
+      process's GOMAXPROCS. The gain it buys (a 1 ms task at FIFO 80 beside
+      a long scan: 95.8 % of slots and p99.9 9.22 ms at 2, 99.92 % and
+      188 µs at 4) was measured on a two-core Verdin AM62 by setting
+      GOMAXPROCS by hand (docs/design/verdin-bench.md); the automatic
+      raise has not been measured on that box.
+

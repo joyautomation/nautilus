@@ -33,3 +33,17 @@ func TestSchedBannerSuffixNamesRefusedTasks(t *testing.T) {
 		t.Error("schedPending: asked and not yet answered is pending; answered or not asked is not")
 	}
 }
+
+// A GOMAXPROCS the runtime raised for a task at a priority (#830) is on the
+// banner; one it left alone is not.
+func TestSchedBannerSuffixReportsARaisedGOMAXPROCS(t *testing.T) {
+	s := runtime.ScanStats{Sched: runtime.SchedStats{Priority: 80, Applied: true},
+		Procs: runtime.ProcsStats{Value: 4, RaisedFrom: 2, Reason: "…"}}
+	if got, want := schedBannerSuffix(s), " — GOMAXPROCS 4 (raised from 2: a task requests a real-time priority)"; got != want {
+		t.Errorf("banner suffix %q, want %q", got, want)
+	}
+	s.Procs = runtime.ProcsStats{Value: 2, Reason: "GOMAXPROCS set in the environment"}
+	if got := schedBannerSuffix(s); got != "" {
+		t.Errorf("not raised: %q, want nothing", got)
+	}
+}

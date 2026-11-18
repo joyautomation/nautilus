@@ -294,6 +294,9 @@ type Runtime struct {
 	// (scanview.go), so tasks never wait on one another.
 	mainMu sync.Mutex
 
+	// procsOnce applies the GOMAXPROCS rule once, at the first Run.
+	procsOnce sync.Once
+
 	// obsMu guards onScan/obsNext independently of mainMu: OnScan may be
 	// called (registration or cancel) from any goroutine at any time,
 	// including while a scan is in flight. mainMu still serializes the
@@ -376,6 +379,9 @@ type ScanStats struct {
 	Lateness Lateness `json:"lateness"`
 	// Sched is the main task's thread placement — see SchedStats.
 	Sched SchedStats `json:"sched"`
+	// Procs is GOMAXPROCS as the loops run, and whether the runtime raised
+	// it for a task at a priority on a box with few cores (gomaxprocs.go).
+	Procs ProcsStats `json:"gomaxprocs"`
 
 	// Retain-store failures surface here the way I/O failures do: a save
 	// that keeps erroring is invisible exactly until the restart that
@@ -1033,6 +1039,9 @@ func (r *Runtime) ProgramByPOU(pou string) (*Program, string) {
 // the saver's last tick; only a hard kill can lose up to saveInterval
 // (nautilus#531).
 func (r *Runtime) Run(ctx context.Context) {
+	// Before any loop takes its thread: a task at a priority must find a
+	// free P when it wakes (gomaxprocs.go).
+	r.tuneProcs()
 	var saved chan []byte
 	if r.retainStore != nil {
 		saved = make(chan []byte, 1)
