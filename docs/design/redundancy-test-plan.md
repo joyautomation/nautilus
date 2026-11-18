@@ -416,7 +416,58 @@ changed manifest.
    it read-only.
 6. **The witness only follows the leader its votes name.** Replication from any other source
    is refused, a stale term included.
-7. **Every case runs** in T2 (the simulated disk and network), and cases 1–5 also run in T3.
+
+**Substitute values (#707)** go through `oplog` as operator intent: `substitute`, `unsubstitute`
+and `suback` entries, the last two naming the substitute's entry by `seq`. Cases 7–10 are the
+requirements agreed on #707. They join the run in #707's oplog PR, which builds the kinds.
+
+7. **A new leader's first scan sees every committed substitute.**
+   - Setup: partition A from B (F8); substitute a bad input on A, committed by A and the
+     witness; kill A.
+   - B's takeover catches up `oplog` and applies the substitute **before its first scan**,
+     in the same step as the retain load. The `oplog` copy wins over B's retained one.
+   - The first scan's input value is the substitute: checked on the scan, not after it.
+   - If catch-up fails within its bounded wait, B keeps its retained substitutes and raises
+     the alarm flag. A substitute is never dropped silently.
+   - Mutation: catch-up deferred to the first `oplog` write (today's lazy `leaderCatchUp`).
+     Case 7 must go red.
+8. **Only the leader expires a substitute, and the expiry is an entry.**
+   - At the end of the granted duration the leader appends `unsubstitute` (`by: system`,
+     `reason: expired`). The standby never expires one on its own.
+   - A takeover evaluates expiry once, as in case 9.
+   - A substitute that expired on the old leader just before a takeover is not revived.
+9. **How a leader times a substitute, and a wall-clock step** (F23-style).
+   - **The leader that applies it** times the granted duration on `CLOCK_BOOTTIME`, from
+     when it applied it.
+   - **A new leader** computes the remainder **once, at takeover**, from the entry's
+     wall-clock `until` on its own clock: `until − now`. NTP-level skew between the pair
+     (seconds) is accepted. Then it times that remainder on `CLOCK_BOOTTIME`. A takeover
+     never restarts the full duration.
+   - **A remainder outside its bounds** means the new leader's wall clock was stepped: below
+     zero, the substitute has expired. Above the granted duration plus the skew bound, it is
+     capped at the granted duration and raises the alarm.
+   - **A single controller across a restart** works the same way: the remainder comes from
+     `until`, so downtime counts toward the duration.
+   - Steps: step the leader's clock ±1 h mid-substitute; it still ends at its granted time.
+     Then step the standby's clock before a takeover. Set 1 h ahead, the remainder
+     shrinks by 1 h: it ends early, at worst at once, with the usual expiry audit and
+     `__Substitute_Expired` pulse. Set 1 h behind, the remainder grows past the granted
+     duration: it is capped there, and the alarm is raised.
+   - **Repeated takeovers inside one substitute:** take over A→B→A→B at intervals shorter than
+     the granted duration. The substitute still ends at its granted time, ± the skew.
+   - Mutations: expiry taken from the wall-clock `until` on a steady leader (a step then
+     moves it), and a takeover restarting the full duration. Both turn case 9 red.
+10. **Expiry doesn't wait for quorum.**
+    - With no quorum, starting or stopping a substitute is refused like any operator write
+      (case 5).
+    - On the override path a substitute still ends on time: the expiry is journalled locally
+      and reconciled at the heal (design §7, PR 5's open question).
+    - A late or merged `unsubstitute` naming an older entry's `seq` does not end a newer
+      substitute of the same tag.
+    - Mutation: expiry gated on an `oplog` commit. Case 10 must go red.
+
+11. **Every case runs** in T2 (the simulated disk and network). Cases 1–5 and 7–10 also run
+    in T3.
 
 ### 8.2 Peer traffic and the Host rule (design §6.1)
 
