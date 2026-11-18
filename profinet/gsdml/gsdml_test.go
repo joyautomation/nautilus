@@ -121,3 +121,31 @@ func TestGenerateClaimsOnlyWhatTheEngineDoes(t *testing.T) {
 		}
 	}
 }
+
+// DAPID and ModuleID are what a station spec names the device and its
+// modules by, so they must be what Generate writes, and they are pinned:
+// a PLC project stores them, so a change would break every configured
+// station on its next GSDML import.
+func TestExportedIDs(t *testing.T) {
+	if DAPID != "IDD_1" || ModuleID(3) != "IDM_Mod3" {
+		t.Fatalf("IDs changed: %q %q; PLC projects that use them would break", DAPID, ModuleID(3))
+	}
+	d := Device{
+		Identity: device.Identity{Station: "naut-1", VendorName: "nautilus", VendorID: 0x1234, DeviceID: 1, OrderNumber: "N", HWRevision: 1},
+		Subslots: []device.Subslot{
+			{Addr: device.Addr{Slot: 1, Subslot: 1}, ModuleIdent: 0x101, SubmoduleIdent: 1, InputLen: 4},
+			{Addr: device.Addr{Slot: 3, Subslot: 1}, ModuleIdent: 0x103, SubmoduleIdent: 1, OutputLen: 2},
+		},
+		MinCycle: 8 * time.Millisecond,
+	}
+	b, err := Generate(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{`DeviceAccessPointItem ID="` + DAPID + `"`, `ModuleItem ID="` + ModuleID(1) + `"`, `ModuleItem ID="` + ModuleID(3) + `"`, `ModuleItemTarget="` + ModuleID(3) + `" AllowedInSlots="3"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("GSDML lacks %s", want)
+		}
+	}
+}
