@@ -13,8 +13,10 @@ claims:
       - go ./opcua TestForeignServerMatrix/open62541/reads/poll
       - go ./opcua TestForeignServerMatrix/milo/reads/poll
     note: >-
-      Against gopcua's in-process server, open62541 and Eclipse Milo; not
-      yet run against Ignition, Kepware or a PLC's embedded server.
+      Against gopcua's in-process server, open62541, Eclipse Milo and the
+      virtual IO-Link masters in CI; Ignition 8.3 and CODESYS Control Win V3
+      in a private lab (results in the guide's Lab results table). Not yet
+      run against Ignition 8.1, Kepware or a PLC's embedded server.
 
   - id: UAC-002
     claim: >-
@@ -296,6 +298,10 @@ claims:
       - go ./opcua TestForeignServerMatrix/milo/reads/poll
       - go ./opcua TestForeignServerMatrix/milo/writes/poll
       - go ./opcua TestForeignServerMatrix/milo/remap/poll
+    note: >-
+      The same scenarios run against Ignition 8.3 and CODESYS Control Win V3
+      as a signed-in user in a private lab; its results are in the guide's
+      Lab results table, not in CI's evidence.
 
   - id: UAC-023
     claim: >-
