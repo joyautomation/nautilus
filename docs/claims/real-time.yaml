@@ -311,7 +311,7 @@ claims:
       processes, and the kernel's RT throttle off (-1 on any kernel, runtime =
       period before 6.12; once per process) are warnings; kernel threads, the process's own threads and
       lower threads that float are not counted, except that a kernel
-      network thread (a NIC's IRQ or NAPI thread, ksoftirqd/N) confined to
+      network thread (a NIC's IRQ or NAPI thread; not ksoftirqd/N) confined to
       the pinned CPU below the task's priority is a warning naming it.
     source: "#priority-and-pinning"
     tests:

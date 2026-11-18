@@ -264,10 +264,11 @@ func TestPreflightThrottleWarnedOnce(t *testing.T) {
 
 // The PLCnext's network layout on the shim's core, as read off the bench
 // after the incident (#836): the NIC's NAPI receive thread at SCHED_FIFO 1
-// and ksoftirqd/1 (normal) confined to CPU 1, its IRQ thread at FIFO 50 and
-// stmmacRxTsk at FIFO 95 there too. A task pinned to CPU 1 at priority 40
-// is warned, naming the two network threads below it; the ones above it,
-// the same threads floating, and another CPU, are not.
+// confined to CPU 1, its IRQ thread at FIFO 50 and stmmacRxTsk at FIFO 95
+// there too, and ksoftirqd/1. A task pinned to CPU 1 at priority 40 is
+// warned, naming the NAPI thread below it; not the ones above it, not a
+// floating napi thread, not another CPU, and not ksoftirqd/N, which every
+// CPU has.
 func TestPreflightWarnsAboutNetworkThreadsBelow(t *testing.T) {
 	root := fakeProc(t, "950000", "1000000",
 		fakeThread{pid: 730, tid: 730, comm: "stmmacNapiRxTsk", flags: pfKThread, prio: 1, policy: 1, cpusAllowedFor: "1"},
@@ -286,15 +287,13 @@ func TestPreflightWarnsAboutNetworkThreadsBelow(t *testing.T) {
 			net = append(net, w)
 		}
 	}
-	if len(net) != 2 ||
-		!strings.Contains(net[0], "ksoftirqd/1 (pid 20, thread 20) at normal priority on cpu 1") ||
-		!strings.Contains(net[1], "stmmacNapiRxTsk (pid 730, thread 730) at real-time priority 1 on cpu 1") {
-		t.Fatalf("network warnings %q, want ksoftirqd/1 and stmmacNapiRxTsk named", net)
+	if len(net) != 1 || !strings.Contains(net[0], "stmmacNapiRxTsk (pid 730, thread 730) at real-time priority 1 on cpu 1") {
+		t.Fatalf("network warnings %q, want exactly stmmacNapiRxTsk named", net)
 	}
 	if w, err := preflight(root, self, []int{0}, 40, false); err != nil || len(w) != 0 {
 		t.Fatalf("CPU 0, where no network thread is confined: %v %q", err, w)
 	}
-	if !netKThread("irq/31-eth0") || !netKThread("napi/eth0-8193") || !netKThread("ksoftirqd/3") || netKThread("migration/1") || netKThread("stmmac_wq") {
+	if !netKThread("irq/31-eth0") || !netKThread("napi/eth0-8193") || netKThread("ksoftirqd/3") || netKThread("migration/1") || netKThread("stmmac_wq") {
 		t.Error("netKThread classifies network kernel threads by name")
 	}
 }

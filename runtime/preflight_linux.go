@@ -233,14 +233,15 @@ func rtThreads(root string, self int) (out, net []rtThread, blind string) {
 	return out, net, blind
 }
 
-// netKThread: a kernel thread doing network work: an Ethernet NIC's IRQ
-// thread (irq/31-eth0), a NAPI poll thread (stmmacNapiRxTsk, napi/eth0-…),
-// or a CPU's softirq thread (ksoftirqd/N).
+// netKThread: a kernel thread doing a NIC's work: an Ethernet IRQ thread
+// (irq/31-eth0) or a NAPI poll thread (stmmacNapiRxTsk, napi/eth0-…).
+// ksoftirqd/N is not counted: it is on every CPU of every box, so a pinned
+// real-time task always outranks one, and a warning on every start would be
+// ignored, the real one with it. The real-time guide says so instead.
 func netKThread(comm string) bool {
 	c := strings.ToLower(comm)
 	return strings.HasPrefix(c, "irq/") && strings.Contains(c, "-eth") ||
-		strings.Contains(c, "napi") ||
-		strings.HasPrefix(c, "ksoftirqd/")
+		strings.Contains(c, "napi")
 }
 
 // countDenied is 1 for an error that hides a thread from us (permission),
