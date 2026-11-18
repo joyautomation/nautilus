@@ -398,7 +398,6 @@ type PriorityGuardConfig struct {
 const (
 	maxGuardOverruns     = 100000
 	maxGuardScanMultiple = 10000
-	maxGuardRTLimit      = 10 * time.Second
 )
 
 // guard checks a task's priority-guard: block and converts it.
@@ -415,8 +414,11 @@ func (t TaskConfig) guard() (runtime.PriorityGuard, error) {
 		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: scan-multiple %g: from 2 (below that, ordinary jitter would trip it) to %d (or leave it out for %g)", t.Program, m, maxGuardScanMultiple, runtime.DefaultGuardScanMultiple)
 	}
 	if d := time.Duration(g.RTLimit); d != 0 {
-		if d < runtime.MinRTLimit || d > maxGuardRTLimit {
-			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit %s: from %s (shorter, an ordinary page fault would demote the task) to %s (or leave it out for %s)", t.Program, d, runtime.MinRTLimit, maxGuardRTLimit, runtime.DefaultRTLimit)
+		if d < runtime.MinRTLimit {
+			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit %s: at least %s (shorter, an ordinary page fault would demote the task)", t.Program, d, runtime.MinRTLimit)
+		}
+		if d > runtime.DefaultRTLimit {
+			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit %s: at most %s: rt-limit only tightens the default bound, never loosens it (NAUTILUS_RT_LIMIT_MS on the service does that)", t.Program, d, runtime.DefaultRTLimit)
 		}
 		if t.Priority <= 0 {
 			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit bounds a task at a priority, and this task has no priority:", t.Program)

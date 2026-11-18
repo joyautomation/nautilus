@@ -119,13 +119,15 @@ func TestPriorityGuardRTLimitFromTheManifest(t *testing.T) {
 	}
 }
 
-// rt-limit is refused outside 10ms..10s, and on a task with no priority
-// (it bounds only a real-time thread).
+// rt-limit is refused outside 10ms..200ms (it only tightens the default:
+// a larger value would do nothing), and on a task with no priority (it
+// bounds only a real-time thread).
 func TestPriorityGuardRTLimitRefusals(t *testing.T) {
 	for _, c := range []struct{ guard, want string }{
-		{"    priority-guard: {rt-limit: 5ms}", "rt-limit 5ms: from 10ms"},
-		{"    priority-guard: {rt-limit: 11s}", "rt-limit 11s: from 10ms"},
-		{"    priority-guard: {rt-limit: -20ms}", "rt-limit -20ms"},
+		{"    priority-guard: {rt-limit: 5ms}", "rt-limit 5ms: at least 10ms"},
+		{"    priority-guard: {rt-limit: 201ms}", "rt-limit 201ms: at most 200ms: rt-limit only tightens"},
+		{"    priority-guard: {rt-limit: 11s}", "rt-limit 11s: at most 200ms"},
+		{"    priority-guard: {rt-limit: -20ms}", "rt-limit -20ms: at least 10ms"},
 	} {
 		if _, err := Load(guardProject("", c.guard), ""); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: got %v, want a refusal naming %q", c.guard, err, c.want)
