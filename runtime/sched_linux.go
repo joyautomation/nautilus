@@ -145,7 +145,13 @@ func rtLimits(cur syscall.Rlimit, soft time.Duration) syscall.Rlimit {
 // armRTGuard sets the limit and the SIGXCPU handler, once per process.
 func armRTGuard() error {
 	rtGuard.once.Do(func() {
-		rtGuard.threads = map[int]func(string){}
+		// Under mu: a loop on another thread may be releasing or
+		// registering already (#870).
+		rtGuard.mu.Lock()
+		if rtGuard.threads == nil {
+			rtGuard.threads = map[int]func(string){}
+		}
+		rtGuard.mu.Unlock()
 		var cur syscall.Rlimit
 		if err := syscall.Getrlimit(rlimitRTTime, &cur); err != nil {
 			rtGuard.err = fmt.Errorf("RLIMIT_RTTIME: %w", err)

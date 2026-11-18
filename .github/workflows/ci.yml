@@ -444,6 +444,11 @@ jobs:
       # hundred of its 1000 rounds).
       - name: test broker teardown under client churn (-race)
         run: go test -race -cpu 4 -count=1 -run '^TestCloseUnderClientChurn$' ./internal/testmqtt
+      # The real-time guard's thread table is touched from every loop's own
+      # thread (arm, register, release, demote); a lock missed there shows
+      # only under the race detector (#870), so its tests run here with -race.
+      - name: real-time guard and scheduling (-race)
+        run: go test -race -count=1 -run 'RTGuard|TestRunReportsSched|TestApplySched' ./runtime
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:

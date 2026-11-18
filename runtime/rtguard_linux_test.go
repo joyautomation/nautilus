@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -321,4 +322,25 @@ func TestRTGuardPriorityWatchdog(t *testing.T) {
 			t.Errorf("%s task thread %d: policy %d after the demotion, want SCHED_OTHER", name, tid, policy)
 		}
 	}
+}
+
+// #870: arming the guard (its first call, from one loop's thread) and a
+// loop releasing its thread (another loop's) must not race on the thread
+// table. From a fresh guard, one goroutine arms it while another releases;
+// the two touch rtGuard.threads with no other synchronisation between
+// them, so under -race an unlocked write in armRTGuard's once.Do is
+// reported every run, whichever goes first. (Without -race the test
+// passes either way; CI runs it with -race.)
+func TestRTGuardArmAndReleaseDoNotRace(t *testing.T) {
+	rtGuard.mu.Lock()
+	rtGuard.threads = nil
+	rtGuard.mu.Unlock()
+	rtGuard.once = sync.Once{} // fresh, as at process start
+	t.Cleanup(func() { _ = armRTGuard() })
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _ = armRTGuard() }()
+	go func() { defer wg.Done(); releaseSched() }()
+	wg.Wait()
 }
