@@ -95,6 +95,10 @@ Usage:
                           state and the process image, on the controller),
                           import (a manifest from the bus's device list)
                           and tags (the tag file for a plcnext manifest).
+  naut profinet <cmd> PROFINET IO device tools (offline): gsdml (the
+                          GSDML file the PLC's engineering tool imports)
+                          and tags (the tag file), both from the
+                          profinet_device.yaml the driver serves.
   naut snmp <cmd>     SNMP tools: import | browse | serve | tags (switches, PDUs, UPSes)
   naut redfish <cmd>  Redfish tools: import | browse | serve | tags (server BMCs)
   naut prometheus <cmd>  node_exporter tools: import | browse | serve | tags (hosts)
@@ -174,6 +178,8 @@ func main() {
 		os.Exit(runOptommp(os.Args[2:]))
 	case "plcnext":
 		os.Exit(runPlcnext(os.Args[2:]))
+	case "profinet":
+		os.Exit(runProfinet(os.Args[2:]))
 	case "snmp":
 		os.Exit(runSnmp(os.Args[2:]))
 	case "redfish":

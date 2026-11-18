@@ -1,4 +1,4 @@
-package device
+package device_test
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	. "github.com/joyautomation/nautilus/profinet/device"
+	"github.com/joyautomation/nautilus/profinet/pntest"
 	"github.com/joyautomation/nautilus/profinet/transport"
 	"github.com/joyautomation/nautilus/profinet/wire"
 )
@@ -18,7 +20,7 @@ var (
 	devMAC  = net.HardwareAddr{0x02, 0, 0, 0, 0xDE, 0x01}
 	ctrlMAC = net.HardwareAddr{0x02, 0, 0, 0, 0xC0, 0x01}
 	ctrl2   = net.HardwareAddr{0x02, 0, 0, 0, 0xC0, 0x02}
-	loIP    = net.IPv4(127, 0, 0, 1)
+	loIP    = pntest.Loopback
 )
 
 // layout is the device under test: slot 1 in/out, slot 2 input only.
@@ -31,7 +33,8 @@ type rig struct {
 	t    *testing.T
 	hub  *transport.Hub
 	dev  *Device
-	ctrl *testController
+	ctrl tctl
+	rpc  *net.UDPAddr
 	stop func()
 }
 
@@ -42,7 +45,10 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctrl := newController(t, hub, ctrlMAC, devRPC.LocalAddr().(*net.UDPAddr))
+	ctrl, err := pntest.NewController(hub, ctrlMAC, devMAC, devRPC.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
 	dev, err := New(Config{
 		Identity: Identity{Station: "dev-1", VendorName: "nautilus", VendorID: 0x1234, DeviceID: 0x0001, OrderNumber: "NAUT-PN"},
 		Subslots: layout,
@@ -50,7 +56,7 @@ func newRig(t *testing.T) *rig {
 			EtherTypes: []uint16{wire.EtherTypePNIO}, Multicast: []net.HardwareAddr{wire.DCPMulticastAddr},
 		}),
 		RPC:              devRPC,
-		ControllerCMPort: ctrl.cm.LocalAddr().(*net.UDPAddr).Port,
+		ControllerCMPort: ctrl.CMPort(),
 		// Two addresses, the one the controller sets second: a bench NIC
 		// often holds several.
 		InterfaceAddrs: func() []net.IP { return []net.IP{net.IPv4(127, 0, 0, 2), loIP} },
@@ -62,8 +68,8 @@ func newRig(t *testing.T) *rig {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { dev.Run(ctx); close(done) }()
-	r := &rig{t: t, hub: hub, dev: dev, ctrl: ctrl}
-	r.stop = func() { cancel(); <-done; ctrl.close() }
+	r := &rig{t: t, hub: hub, dev: dev, ctrl: tctl{ctrl, t}, rpc: devRPC.LocalAddr().(*net.UDPAddr)}
+	r.stop = func() { cancel(); <-done; ctrl.Close() }
 	t.Cleanup(r.stop)
 	return r
 }
@@ -77,15 +83,6 @@ func eventually(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-}
-
-// expectedFor is what a controller configured with layout expects.
-func expectedFor(subs []Subslot) []wire.IOSubmodule {
-	io := []wire.IOSubmodule{{Slot: 0, Subslot: 1}, {Slot: 0, Subslot: InterfaceSubslot}, {Slot: 0, Subslot: PortSubslot}}
-	for _, s := range subs {
-		io = append(io, wire.IOSubmodule{Slot: s.Slot, Subslot: s.Subslot, InputLen: s.InputLen, OutputLen: s.OutputLen})
-	}
-	return io
 }
 
 func TestIdentifyAndStartup(t *testing.T) {
@@ -166,8 +163,12 @@ func TestIdentifyAndStartup(t *testing.T) {
 func TestOneARAtATime(t *testing.T) {
 	r := newRig(t)
 	r.ctrl.connect(t, layout, false)
-	other := newController(t, r.hub, ctrl2, r.ctrl.devRPC)
-	defer other.close()
+	o, err := pntest.NewController(r.hub, ctrl2, devMAC, r.rpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	other := tctl{o, t}
 	if st := other.connectStatus(t, layout); st.IsOK() || st.ErrorCode1 != 0x40 || st.ErrorCode2 != 0x04 {
 		t.Fatalf("second controller: %+v, want out of AR resources", st)
 	}
@@ -223,7 +224,7 @@ func TestModuleDiff(t *testing.T) {
 func TestDCPSetNeverTouchesTheHost(t *testing.T) {
 	r := newRig(t)
 	c := r.ctrl
-	if code := c.setIP(net.IPv4(192, 0, 2, 9)); code != dcpNotSet {
+	if code := c.setIP(net.IPv4(192, 0, 2, 9)); code != 0x03 {
 		t.Fatalf("foreign IP: code %d", code)
 	}
 	if s := r.dev.Snapshot(); s.SetIPRefused != 1 {
@@ -232,13 +233,13 @@ func TestDCPSetNeverTouchesTheHost(t *testing.T) {
 	if _, ip := c.identify("dev-1"); !ip.Equal(net.IPv4zero) {
 		t.Fatalf("advertises %v after a refused Set", ip)
 	}
-	if code := c.setIP(loIP); code != dcpOK {
+	if code := c.setIP(loIP); code != 0x00 {
 		t.Fatalf("interface IP: code %d", code)
 	}
 	if _, ip := c.identify("dev-1"); !ip.Equal(loIP) {
 		t.Fatalf("advertises %v, want the interface's", ip)
 	}
-	if code := c.setName("renamed"); code != dcpOK {
+	if code := c.setName("renamed"); code != 0x00 {
 		t.Fatalf("set name: %d", code)
 	}
 	if n, _ := c.identify("renamed"); n != "renamed" {
@@ -250,7 +251,7 @@ func TestDCPSetNeverTouchesTheHost(t *testing.T) {
 	// A name that breaks NameOfStation is refused and changes nothing; one
 	// over 511 bytes would not even fit LLDP's 9-bit TLV length.
 	for _, bad := range []string{"Bad_Name", strings.Repeat("a", 600), "port-001"} {
-		if code := c.setName(bad); code != dcpNotSet {
+		if code := c.setName(bad); code != 0x03 { // not set
 			t.Fatalf("set name %.20q: code %d, want refused", bad, code)
 		}
 	}
@@ -286,10 +287,14 @@ func TestReARForgetsOmittedSubslot(t *testing.T) {
 // lock the real PLC out.
 func TestStartupTimeoutFreesTheAR(t *testing.T) {
 	r := newRig(t)
-	r.ctrl.activity = 3 // 300 ms
+	r.ctrl.Activity = 3 // 300 ms
 	r.ctrl.connect(t, layout, false)
-	other := newController(t, r.hub, ctrl2, r.ctrl.devRPC)
-	defer other.close()
+	o, err := pntest.NewController(r.hub, ctrl2, devMAC, r.rpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	other := tctl{o, t}
 	if st := other.connectStatus(t, layout); st.IsOK() {
 		t.Fatal("second controller admitted while the first is in start-up")
 	}
@@ -303,7 +308,7 @@ func TestStartupTimeoutFreesTheAR(t *testing.T) {
 // watchdog.
 func TestConnectNeedsOutputIOCR(t *testing.T) {
 	r := newRig(t)
-	r.ctrl.noOutput = true
+	r.ctrl.NoOutputIOCR = true
 	if st := r.ctrl.connectStatus(t, layout); st.IsOK() || st.ErrorCode1 != 0x02 {
 		t.Fatalf("connect without an output IOCR: %+v", st)
 	}
@@ -353,9 +358,9 @@ func TestReleaseAndWrite(t *testing.T) {
 func TestAdvancedStartup(t *testing.T) {
 	r := newRig(t)
 	c := r.ctrl
-	c.props = 0x11 | startupModeBit
+	c.Props = 0x11 | 1<<30 // Advanced Startup
 	c.connect(t, layout, false)
-	if !c.sawARServer {
+	if !c.SawARServer() {
 		t.Fatal("no ARServerBlockRes in an Advanced Startup Connect response")
 	}
 	eventually(t, "input frames before PrmEnd", func() bool {
@@ -420,8 +425,12 @@ func TestRPCListensOnTheStationAddress(t *testing.T) {
 	var mu sync.Mutex
 	var bound []string
 	station := net.IPv4(127, 0, 0, 2) // not the loopback default source
-	ctrl := newController(t, hub, ctrlMAC, &net.UDPAddr{IP: station, Port: port})
-	defer ctrl.close()
+	pc, err := pntest.NewController(hub, ctrlMAC, devMAC, &net.UDPAddr{IP: station, Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	ctrl := tctl{pc, t}
 	dev, err := New(Config{
 		Identity: Identity{Station: "dev-1", VendorName: "nautilus", VendorID: 0x1234, DeviceID: 0x0001, OrderNumber: "NAUT-PN"},
 		Subslots: layout,
@@ -437,7 +446,7 @@ func TestRPCListensOnTheStationAddress(t *testing.T) {
 			}
 			return c, err
 		},
-		ControllerCMPort: ctrl.cm.LocalAddr().(*net.UDPAddr).Port,
+		ControllerCMPort: ctrl.CMPort(),
 		InterfaceAddrs:   func() []net.IP { return []net.IP{net.IPv4(127, 0, 0, 2), loIP} },
 		MinWatchdog:      60 * time.Millisecond,
 	})
@@ -454,11 +463,11 @@ func TestRPCListensOnTheStationAddress(t *testing.T) {
 	if b := got(); len(b) != 0 {
 		t.Fatalf("RPC open before any address was set: %v", b)
 	}
-	if code := ctrl.setIP(loIP); code != dcpOK {
+	if code := ctrl.setIP(loIP); code != 0x00 {
 		t.Fatalf("set IP: %d", code)
 	}
 	eventually(t, "bound to .1", func() bool { b := got(); return len(b) == 1 })
-	if code := ctrl.setIP(station); code != dcpOK {
+	if code := ctrl.setIP(station); code != 0x00 {
 		t.Fatalf("set IP: %d", code)
 	}
 	eventually(t, "moved to .2", func() bool { b := got(); return len(b) == 2 })
@@ -480,7 +489,7 @@ func TestRPCListensOnTheStationAddress(t *testing.T) {
 	ctrl.connect(t, layout, false)
 	ctrl.prmEnd(t)
 	eventually(t, "ApplicationReady", func() bool { return ctrl.appReadySeen() })
-	if from := ctrl.lastCControlFrom(); !from.Equal(station) {
+	if from := ctrl.CControlFrom(); !from.Equal(station) {
 		t.Fatalf("CControl from %v, want the station address %v", from, station)
 	}
 }
@@ -512,9 +521,7 @@ func TestDamagedOutputFramesAreDropped(t *testing.T) {
 	c.startOutputs(map[Addr][]byte{{1, 1}: {0xAA, 0xAA}}, wire.DataStatusRunNormal)
 	eventually(t, "outputs", func() bool { return bytes.Equal(r.dev.Snapshot().Outputs[Addr{1, 1}], []byte{0xAA, 0xAA}) })
 
-	c.mu.Lock()
-	c.badXfer = true
-	c.mu.Unlock()
+	c.DamageOutputs(true)
 	c.setOutputs(map[Addr][]byte{{1, 1}: {0xBB, 0xBB}}, wire.DataStatusRunNormal)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -541,9 +548,7 @@ func TestFrozenCycleCounterDoesNotFeedTheWatchdog(t *testing.T) {
 	c.prmEnd(t)
 	c.startOutputs(map[Addr][]byte{{1, 1}: {0xAA, 0xAA}}, wire.DataStatusRunNormal)
 	eventually(t, "outputs", func() bool { return r.dev.Snapshot().OutputGood[Addr{1, 1}] })
-	c.mu.Lock()
-	c.frozen = true
-	c.mu.Unlock()
+	c.FreezeCycleCounter(true)
 	eventually(t, "watchdog on a frozen counter", func() bool { s := r.dev.Snapshot(); return s.Aborts == 1 && s.State == StateIdle })
 }
 
@@ -551,14 +556,13 @@ func TestFrozenCycleCounterDoesNotFeedTheWatchdog(t *testing.T) {
 // the device lock is released, so the next request is served.
 func TestRPCPanicIsContained(t *testing.T) {
 	r := newRig(t)
-	hook := func(op uint16) {
+	SetRPCTestHook(func(op uint16) {
 		if op == wire.RPCOpWrite {
 			panic("injected")
 		}
-	}
-	rpcTestHook.Store(&hook)
-	defer rpcTestHook.Store(nil)
-	r.ctrl.fire(wire.RPCOpWrite, nil)
+	})
+	defer SetRPCTestHook(nil)
+	r.ctrl.Fire(wire.RPCOpWrite, nil)
 	eventually(t, "event", func() bool { return strings.Contains(r.dev.Snapshot().LastEvent, "dropped") })
 	done := make(chan struct{})
 	go func() { defer close(done); r.ctrl.connect(t, layout, false) }()

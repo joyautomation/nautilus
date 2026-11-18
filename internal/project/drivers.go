@@ -14,6 +14,7 @@ import (
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
+	"github.com/joyautomation/nautilus/profinet"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/replay"
@@ -73,6 +74,8 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 		return []func() server.DriverStatus{func() server.DriverStatus { return opcuaClientStatus(drv.Health()) }}
 	case *replay.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return replayStatus(drv.Health()) }}
+	case *profinet.DeviceDriver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return profinetDeviceStatus(drv.Health()) }}
 	case *nio.Multi:
 		var out []func() server.DriverStatus
 		for _, c := range drv.Children() {
@@ -886,6 +889,56 @@ func replayStatus(h replay.Health) server.DriverStatus {
 		s.Metrics = append(s.Metrics,
 			server.DriverMetric{Label: "at", Value: float64(h.AtS), Text: time.Unix(h.AtS, 0).UTC().Format("2006-01-02 15:04Z"), Volatile: true},
 			server.DriverMetric{Label: "loops", Value: float64(h.Loops), Volatile: true})
+	}
+	return s
+}
+
+// profinetDeviceStatus is nautilus as a PROFINET IO device: whether a PLC
+// holds an AR and exchanges data, whether it is in run, and whether the
+// data we provide is valid (the write gate and the program's first push).
+func profinetDeviceStatus(h profinet.DeviceHealth) server.DriverStatus {
+	s := server.DriverStatus{Kind: "profinet-device", Name: h.Station, LastError: h.LastError, SinceMs: h.SinceMs}
+	s.Detail = fmt.Sprintf("station %s on %s", h.Station, h.Interface)
+	switch {
+	case h.State == "error":
+		s.State, s.Message = "error", "Not on the network: "+h.LastError
+	case h.State != "running":
+		s.State, s.Message = "connecting", "Opening the interface"
+	case h.AR == "data" && h.ControllerState == "run" && h.Diff == 0 && h.InputsValid:
+		s.State, s.Message = "connected", fmt.Sprintf("Exchanging data with %s (run)", h.Controller)
+	case h.AR == "data":
+		why := []string{}
+		if h.ControllerState != "run" {
+			why = append(why, "the controller is in "+h.ControllerState)
+		}
+		if h.Diff > 0 {
+			why = append(why, fmt.Sprintf("%d module(s) differ from the layout", h.Diff))
+		}
+		if !h.InputsValid {
+			why = append(why, "our data is marked invalid (write gate closed, or no full push yet)")
+		}
+		s.State, s.Message = "degraded", fmt.Sprintf("AR with %s: %s", h.Controller, strings.Join(why, "; "))
+	case h.AR == "startup":
+		s.State, s.Message = "connecting", fmt.Sprintf("AR with %s starting up", h.Controller)
+	default:
+		s.State, s.Message = "waiting", "Waiting for a PLC to connect"
+	}
+	// Only refusals and aborts are errors; "AR from …" is news, not one.
+	if ev := h.LastEvent; s.LastError == "" && (strings.Contains(ev, "refused") || strings.Contains(ev, "stopped") || strings.Contains(ev, "aborted") || strings.Contains(ev, "fragmented")) {
+		s.LastError = ev
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(h.Tags)},
+		{Label: "bad", Value: float64(h.BadTags)},
+		{Label: "ARs", Value: float64(h.ARs)},
+		{Label: "aborts", Value: float64(h.Aborts)},
+		{Label: "frames", Value: float64(h.OutputFrames), Volatile: true},
+	}
+	if h.RefusedARs > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "refused ARs", Value: float64(h.RefusedARs)})
+	}
+	if h.SetIPRefused > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "refused Set IP", Value: float64(h.SetIPRefused)})
 	}
 	return s
 }
