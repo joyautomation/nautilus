@@ -370,7 +370,12 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		// detected once rather than every scan from here on.
 		d.lastOut[name] = cv
 		if prev, ok := d.remote[name]; ok && sameValue(prev, cv) {
-			continue // the node already holds it
+			// The node already holds it, so nothing is owed: a command
+			// still queued for this tag (held by a closed gate or a lost
+			// session, or parked for a dark site) is superseded and must
+			// not go out later (#940).
+			d.withdrawLocked(name)
+			continue
 		}
 		if prev, ok := d.pending[name]; ok && sameValue(prev, cv) {
 			continue
@@ -383,6 +388,31 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		d.kickWriter()
 	}
 	return nil
+}
+
+// withdrawLocked drops every command still queued for name: pending, and
+// parked for its node. Caller holds wmu.
+func (d *Driver) withdrawLocked(name string) {
+	delete(d.pending, name)
+	if b, ok := d.byName[name]; ok {
+		delete(d.queued[b.Node], name)
+	}
+}
+
+// requeueLocked puts back the commands a failed publish took out of
+// pending, so they go out after the next connect: each one unless a newer
+// value is pending, or the program has moved the tag since (lastOut no
+// longer holds it), which supersedes it (#940). Caller holds wmu.
+func (d *Driver) requeueLocked(names []string, work map[string]any) {
+	for _, n := range names {
+		if _, exists := d.pending[n]; exists {
+			continue
+		}
+		if lo, ok := d.lastOut[n]; ok && !sameValue(lo, work[n]) {
+			continue
+		}
+		d.pending[n] = work[n]
+	}
 }
 
 // initWriteMapsLocked allocates the three write maps on first use. New fills

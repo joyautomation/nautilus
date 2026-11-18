@@ -884,11 +884,7 @@ func (d *Driver) flushWrites() {
 			d.log.Warn("host: command publish failed", "topic", topic, "error", err)
 			// Requeue so the values go out after the next connect.
 			d.wmu.Lock()
-			for _, n := range names[topic] {
-				if _, exists := d.pending[n]; !exists {
-					d.pending[n] = work[n]
-				}
-			}
+			d.requeueLocked(names[topic], work)
 			d.wmu.Unlock()
 			continue
 		}
