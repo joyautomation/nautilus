@@ -5,7 +5,7 @@ VERSION : 0.1
       count : INT;
       pulse : R_TRIG;
       dwell : TON_TIME;
-      batches : CTU_INT;
+      batches : CTU_LINT;
       state : INT := 0;
       avg : REAL;
    END_VAR
@@ -17,14 +17,15 @@ VERSION : 0.1
    END_VAR
 
 BEGIN
-	"Tags".Heartbeat := "Tags".Heartbeat + 1;
+	#i := 0;
+	"Tags".Heartbeat := LINT_TO_UINT(((UINT_TO_LINT("Tags".Heartbeat) + 1) MOD LINT#65536 + LINT#65536) MOD LINT#65536);
 	"Tags".Echo := "Tags".Command;
 	#pulse(CLK := "Tags".Start);
 	#dwell(IN := "Tags".Running AND NOT "Tags".Fault, PT := T#2s);
 	#batches(CU := #pulse.Q, R := "Tags".Reset, PV := 10, Q => "Tags".Done);
 	IF #dwell.Q THEN
-		#count := #count + 1;
-		#total := #total + INT_TO_DINT(#count);
+		#count := LINT_TO_INT((((INT_TO_LINT(#count) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+		#total := LINT_TO_DINT((((DINT_TO_LINT(#total) + DINT_TO_LINT(INT_TO_DINT(#count))) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	ELSIF "Tags".Fault THEN
 		#count := 0;
 	ELSE
@@ -36,7 +37,7 @@ BEGIN
 				#state := 1;
 			END_IF;
 		1, 2:
-			#state := #state + 1;
+			#state := LINT_TO_INT((((INT_TO_LINT(#state) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 		3..5:
 			#state := 0;
 		ELSE

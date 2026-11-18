@@ -2,6 +2,7 @@ package writer
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,16 +84,34 @@ func TestGolden(t *testing.T) {
 	}
 }
 
-func TestContinuousTaskIsOB1(t *testing.T) {
-	out, diags, err := Write(Input{
-		Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR x : INT; END_VAR\nx := x + 1;\nEND_PROGRAM\n"}},
-		Tasks:    []Task{{Name: "free", Program: "P"}},
-	})
-	if err != nil || len(diags) > 0 {
-		t.Fatal(err, diags)
+func TestTaskRules(t *testing.T) {
+	prog := []Program{{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"}}
+	for _, c := range []struct {
+		name  string
+		tasks []Task
+		want  string
+	}{
+		{"no interval", []Task{{Name: "main", Program: "P"}}, "no interval"},
+		{"over 60 s", []Task{{Name: "main", Program: "P", Interval: 61 * time.Second}}, "60 s"},
+		{"sub-millisecond", []Task{{Name: "main", Program: "P", Interval: 1500 * time.Microsecond}}, "whole number"},
+		{"two tasks", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: 2 * time.Second}}, "2 tasks"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, diags, err := Write(Input{Programs: prog, Tasks: c.tasks})
+			if err != nil || len(diags) == 0 || !strings.Contains(fmt.Sprint(diags), c.want) {
+				t.Fatalf("want %q, got %v %v", c.want, diags, err)
+			}
+		})
 	}
-	if out.OBs[0].Number != 1 || out.OBs[0].Cycle != 0 {
-		t.Fatalf("OBs: %+v", out.OBs)
+}
+
+func TestBlockNamesDoNotCollide(t *testing.T) {
+	_, diags, err := Write(Input{
+		Programs: []Program{{Path: "p.st", Source: "PROGRAM Tags\nVAR x : REAL; END_VAR\nx := 1.0;\nEND_PROGRAM\n"}},
+		Globals:  []Global{{Name: "Level", Type: "REAL"}},
+	})
+	if err != nil || len(diags) != 1 || diags[0].Rule != "siemens/name" {
+		t.Fatalf("%v %v", diags, err)
 	}
 }
 
@@ -106,21 +125,37 @@ func TestRefusals(t *testing.T) {
 		{"division by a variable", "a, b : INT;", "a := a / b;", "siemens/division", 3},
 		{"division by zero constant", "a : INT;", "a := a / 0;", "siemens/division", 3},
 		{"mod by a variable", "a, b : INT;", "a := a MOD b;", "siemens/division", 3},
-		{"bare string", "s : STRING;", "", "siemens/type", 2},
+		{"string", "s : STRING;", "", "siemens/type", 2},
 		{"array", "a : ARRAY[1..3] OF INT;", "", "siemens/type", 2},
 		{"sr", "f : SR;", "", "siemens/type", 2},
 		{"overloaded conversion", "a : INT; r : REAL;", "r := TO_REAL(a);", "siemens/conversion", 3},
-		{"unknown function", "a : INT;", "a := FOO(a);", "siemens/function", 3},
-		{"unknown name", "a : INT;", "a := Nope;", "siemens/name", 3},
-		{"positional instance args", "t : TON; b : BOOL;", "t(b, T#1s);", "siemens/call", 3},
-		{"instance in temp", "", "", "siemens/var", 0},
-		{"enum literal", "a : INT;", "a := Mode#Run;", "siemens/enum", 3},
+		{"unknown function (nautilus refuses first)", "a : INT;", "a := FOO(a);", "siemens/nautilus", 3},
+		{"unknown name (nautilus refuses first)", "a : INT;", "a := Nope;", "siemens/nautilus", 3},
+		{"truncated real", "r : REAL; l : LINT;", "l := TRUNC(r);", "siemens/function", 3},
+		{"ltime", "t : LTIME;", "", "siemens/type", 2},
+		{"time arithmetic", "a, b : TIME;", "a := a + b;", "siemens/time", 3},
+		{"bitwise and", "a, b : WORD;", "a := a AND b;", "siemens/operator", 3},
+		{"int arithmetic into an FB input", "t : TON; n : INT; b : BOOL;", "t(IN := b, PT := INT_TO_TIME(n + 1));", "siemens/int-width", 3},
+		{"int arithmetic as a CASE selector", "n : INT;", "CASE n + 1 OF 1: n := 0; END_CASE;", "siemens/int-width", 3},
+		{"int arithmetic stored into a REAL", "n : INT; r : REAL;", "r := n + 1;", "siemens/int-width", 3},
+		{"counter CV bound to an INT", "c : CTU; n : INT; b : BOOL;", "c(CU := b, PV := 5, CV => n);", "siemens/int-width", 3},
+		{"sqrt of an int", "n : INT; r : REAL;", "r := SQRT(n);", "siemens/function", 3},
+		{"zero divisor written 0.0e0", "r : REAL;", "r := r / 0.0e0;", "siemens/division", 3},
+		{"zero divisor written 16#0", "a : INT;", "a := a / 16#0;", "siemens/division", 3},
+		{"instance as an input", "", "", "siemens/var", 0},
+		{"positional instance args (nautilus refuses first)", "t : TON; b : BOOL;", "t(b, T#1s);", "siemens/nautilus", 3},
+		{"instance in temp", "", "", "siemens/nautilus", 0},
+		{"enum literal (nautilus refuses first)", "a : INT;", "a := Mode#Run;", "siemens/nautilus", 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			src := "PROGRAM P\nVAR " + c.decls + " END_VAR\n" + c.body + "\nEND_PROGRAM\n"
 			if c.name == "instance in temp" {
 				src = "PROGRAM P\nVAR_TEMP t : TON; END_VAR\nEND_PROGRAM\n"
+				c.line = 2
+			}
+			if c.name == "instance as an input" {
+				src = "PROGRAM P\nVAR_INPUT t : TON; END_VAR\nEND_PROGRAM\n"
 				c.line = 2
 			}
 			out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}})
@@ -146,7 +181,7 @@ func TestDivisionByAConstantIsWritten(t *testing.T) {
 		t.Fatal(err, diags)
 	}
 	fb := string(out.Files[0].Data)
-	for _, want := range []string{"#a := #a / 2;", "#r := #r / 2.5;", "#a := #a MOD 3;"} {
+	for _, want := range []string{"((INT_TO_LINT(#a) / 2) + LINT#32768)", "#r := #r / 2.5;", "((INT_TO_LINT(#a) MOD 3) + LINT#32768)"} {
 		if !strings.Contains(fb, want) {
 			t.Errorf("missing %q in\n%s", want, fb)
 		}
@@ -154,8 +189,8 @@ func TestDivisionByAConstantIsWritten(t *testing.T) {
 }
 
 func TestPrecedenceKeepsMeaning(t *testing.T) {
-	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a, b, c : INT; x, y, z : BOOL; END_VAR\n" +
-		"a := (a - b) - c;\na := a - (b - c);\na := (a + b) * c;\nx := (x OR y) AND z;\nx := NOT (x AND y);\nEND_PROGRAM\n"}}})
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a, b, c : REAL; x, y, z : BOOL; END_VAR\n" +
+		"a := (a - b) - c;\na := a - (b - c);\na := (a + b) * c;\nx := (x OR y) AND z;\nx := NOT (x AND y);\na := EXPT(-a, 2.0);\nEND_PROGRAM\n"}}})
 	if err != nil || len(diags) > 0 {
 		t.Fatal(err, diags)
 	}
@@ -166,11 +201,109 @@ func TestPrecedenceKeepsMeaning(t *testing.T) {
 		"#a := (#a + #b) * #c;",
 		"#x := (#x OR #y) AND #z;",
 		"#x := NOT (#x AND #y);",
+		// SCL binds ** tighter than unary minus: (-a)², not -(a²).
+		"#a := ((-#a) ** 2.0);",
 	} {
 		if !strings.Contains(fb, want) {
 			t.Errorf("missing %q in\n%s", want, fb)
 		}
 	}
+}
+
+// TestIntegerArithmeticIsWidenedAndWrapped: nautilus computes integer
+// arithmetic at 64 bits and wraps at the store; the SCL does the same.
+func TestIntegerArithmeticIsWidenedAndWrapped(t *testing.T) {
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a, b : INT; u : UINT; l : LINT; c : CTU; ok : BOOL; END_VAR\n" +
+		"a := a + b;\nu := u - 1;\nl := l * 2;\nok := a + b > 30000;\na := c.CV;\na := 16#FF;\nEND_PROGRAM\n"}}})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	fb := string(out.Files[0].Data)
+	for _, want := range []string{
+		"#a := LINT_TO_INT((((INT_TO_LINT(#a) + INT_TO_LINT(#b)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);",
+		"#u := LINT_TO_UINT(((UINT_TO_LINT(#u) - 1) MOD LINT#65536 + LINT#65536) MOD LINT#65536);",
+		"#l := #l * 2;",
+		"#ok := INT_TO_LINT(#a) + INT_TO_LINT(#b) > 30000;",
+		"#a := LINT_TO_INT((((#c.CV) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);",
+		"#a := 16#FF;",
+		"c : CTU_LINT;",
+	} {
+		if !strings.Contains(fb, want) {
+			t.Errorf("missing %q in\n%s", want, fb)
+		}
+	}
+}
+
+func TestTempsAreSetEveryScan(t *testing.T) {
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR x : INT; END_VAR\nVAR_TEMP k : INT := 5; f : BOOL; END_VAR\nx := k;\nEND_PROGRAM\n"}}})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	fb := string(out.Files[0].Data)
+	for _, want := range []string{"      k : INT;\n", "\t#k := 5;\n\t#f := FALSE;\n\t#x := #k;"} {
+		if !strings.Contains(fb, want) {
+			t.Errorf("missing %q in\n%s", want, fb)
+		}
+	}
+	if strings.Contains(fb, "k : INT := 5") {
+		t.Error("a temp has no start value in TIA")
+	}
+	if _, ok := out.Symbol("P.k"); ok {
+		t.Error("a temp is not readable over the Web API")
+	}
+	if _, ok := out.Symbol("P.x"); !ok {
+		t.Error("a static is")
+	}
+}
+
+func TestStringLiteralsAreEscaped(t *testing.T) {
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR c : CHAR; END_VAR\nc := '$'';\nEND_PROGRAM\n"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) > 0 {
+		t.Skipf("CHAR is not runnable by nautilus here: %v", diags)
+	}
+	if fb := string(out.Files[0].Data); !strings.Contains(fb, "'$''") {
+		t.Errorf("quote not escaped:\n%s", fb)
+	}
+}
+
+func TestSymbolAnswersOnlyForWhatExists(t *testing.T) {
+	out, diags, err := Write(Input{
+		Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; t : TON; END_VAR\nx := Level;\nEND_PROGRAM\n"}},
+		Globals:  []Global{{Name: "Level", Type: "REAL"}},
+		Tasks:    []Task{{Name: "main", Program: "P", Interval: time.Second}},
+	})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	for _, p := range []string{"Level", "P.x", "p.t.Q"} {
+		if _, ok := out.Symbol(p); !ok {
+			t.Errorf("Symbol(%q) should resolve", p)
+		}
+	}
+	for _, p := range []string{"Nope", "P.nope", "Q.x"} {
+		if s, ok := out.Symbol(p); ok {
+			t.Errorf("Symbol(%q) = %q, want no answer", p, s)
+		}
+	}
+}
+
+// TestLadderDiagnosticPointsAtTheLadderLine: a refusal in a ladder file
+// names the ladder's own line, not the ST it was lowered to.
+func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
+	src := "PROGRAM L\nVAR\n    Run : BOOL;\n    Stop : BOOL;\n    Name : STRING;\nEND_VAR\nLD\n  RUNG r\n    /Stop ( Run )\nEND_LD\nEND_PROGRAM\n"
+	_, diags, err := Write(Input{Programs: []Program{{Path: "l.ld", Source: src}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range diags {
+		if d.Rule == "siemens/type" && d.Line == 5 && d.Path == "l.ld" {
+			return
+		}
+	}
+	t.Fatalf("want siemens/type on l.ld:5, got %v", diags)
 }
 
 func TestGlobalTypeRefusedInTheTagsDB(t *testing.T) {

@@ -2,9 +2,9 @@ package writer
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -17,8 +17,14 @@ type progWriter struct {
 	w      *writer
 	path   string
 	locals map[string]local
-	b      strings.Builder
 	fb     []byte
+	// wide is set while printing integer arithmetic that nautilus
+	// computes at 64 bits (types.go).
+	wide bool
+	// statics are the program's static variables (VAR, VAR RETAIN,
+	// VAR_INPUT/OUTPUT), which the Web API can read; temps are not.
+	statics map[string]bool
+	temps   []st.VarDecl
 }
 
 // elementary maps the IEC elementary types the subset writes. SCL spells
@@ -36,26 +42,27 @@ var elementary = map[string]bool{
 // takes the bare IEC name).
 var instances = map[string]string{
 	"TON": "TON_TIME", "TOF": "TOF_TIME", "TP": "TP_TIME",
-	"CTU": "CTU_INT", "CTD": "CTD_INT", "CTUD": "CTUD_INT",
+	// nautilus's counter value is its 64-bit int and keeps counting past
+	// 32767; CTU_INT would stop there. CTU_LINT matches (verify in S2b
+	// that it saturates only at the LINT maximum).
+	"CTU": "CTU_LINT", "CTD": "CTD_LINT", "CTUD": "CTUD_LINT",
 	"R_TRIG": "R_TRIG", "F_TRIG": "F_TRIG",
 }
-
-var stringLen = regexp.MustCompile(`^(W?STRING)\s*[\[(]\s*(\d+)\s*[\])]$`)
 
 // sclType maps a declared type to its SCL spelling, or says why not.
 func sclType(t string) (string, string) {
 	u := strings.ToUpper(strings.TrimSpace(t))
-	if elementary[u] {
+	if elementary[u] && u != "LTIME" {
 		if u == "TIME_OF_DAY" {
 			return "TOD", ""
 		}
 		return u, ""
 	}
-	if m := stringLen.FindStringSubmatch(u); m != nil {
-		return fmt.Sprintf("%s[%s]", m[1], m[2]), ""
+	if strings.HasPrefix(u, "STRING") || strings.HasPrefix(u, "WSTRING") {
+		return "", "STRING is not in the first subset (TIA's STRING holds at most 254 characters; a nautilus STRING has no such length)"
 	}
-	if u == "STRING" || u == "WSTRING" {
-		return "", "give a STRING a length (STRING[n]): nautilus and TIA default to different lengths"
+	if u == "LTIME" {
+		return "", "LTIME is not in the first subset (nautilus's LTIME is milliseconds, TIA's nanoseconds)"
 	}
 	if u == "DT" || u == "DATE_AND_TIME" || u == "LDT" || u == "DTL" {
 		return "", u + " is not in the first subset (which of DT, LDT and DTL it maps to is still to be decided)"
@@ -70,8 +77,25 @@ func sclType(t string) (string, string) {
 }
 
 func (w *writer) program(path string, prog *st.Program) *progWriter {
-	pw := &progWriter{w: w, path: path, locals: map[string]local{}}
+	pw := &progWriter{w: w, path: path, locals: map[string]local{}, statics: map[string]bool{}}
 	before := len(w.diags)
+
+	// nautilus's own lowering first: what nautilus cannot run is not
+	// written for the CPU either.
+	globals := map[string]*ir.Type{}
+	for _, g := range w.globals {
+		if t := st.DatatypeToIRType(g.Type); t != nil {
+			globals[g.Name] = t
+		}
+	}
+	if _, err := st.LowerWithOpts(prog, st.LowerOpts{ImplicitGlobals: globals}); err != nil {
+		line := 0
+		if le, ok := st.AsLowerError(err); ok {
+			line = le.Pos.Line
+		}
+		pw.diag("siemens/nautilus", line, "nautilus refuses this program: "+err.Error())
+		return nil
+	}
 	if len(prog.FBDecls) > 0 || len(prog.FuncDecls) > 0 {
 		pw.diag("siemens/user-pou", 1, "user FUNCTION and FUNCTION_BLOCK declarations are not in the first subset")
 	}
@@ -109,8 +133,8 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 			u := strings.ToUpper(strings.TrimSpace(v.Datatype))
 			var typ string
 			if inst, ok := instances[u]; ok {
-				if kind == "VAR_TEMP" {
-					pw.diag("siemens/var", v.Pos.Line, fmt.Sprintf("%s: a %s instance must be a static (VAR), not a temp", v.Name, u))
+				if kind != "VAR" {
+					pw.diag("siemens/var", v.Pos.Line, fmt.Sprintf("%s: a %s instance must be a static (VAR), not in %s", v.Name, u, kind))
 					continue
 				}
 				typ = inst
@@ -124,6 +148,19 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 			}
 			pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
 			line := fmt.Sprintf("      %s : %s", v.Name, typ)
+			if kind == "VAR_TEMP" {
+				// TIA has no start values for temps, and nautilus resets a
+				// temp to its init on every scan (#203): the body starts
+				// with an assignment for each instead.
+				if _, ok := zero(u); !ok {
+					pw.diag("siemens/var", v.Pos.Line, fmt.Sprintf("%s: a %s temp is not in the first subset", v.Name, u))
+					continue
+				}
+				pw.temps = append(pw.temps, v)
+				lines = append(lines, line+";")
+				continue
+			}
+			pw.statics[strings.ToLower(v.Name)] = true
 			if v.Initial != nil {
 				if _, isInst := instances[u]; isInst {
 					pw.diag("siemens/init", v.Pos.Line, fmt.Sprintf("%s: an instance initializer is not in the first subset", v.Name))
@@ -142,6 +179,13 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 	}
 
 	var body strings.Builder
+	for _, v := range pw.temps {
+		init, _ := zero(strings.ToUpper(strings.TrimSpace(v.Datatype)))
+		if v.Initial != nil {
+			init = pw.expr(v.Initial, 0)
+		}
+		fmt.Fprintf(&body, "\t#%s := %s;\n", v.Name, init)
+	}
 	pw.stmts(&body, prog.Statements, 1)
 	if len(w.diags) > before {
 		return nil
@@ -182,13 +226,14 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	in := indent(d)
 	switch s := s.(type) {
 	case *st.AssignStmt:
-		target := s.Target
+		target, tt := s.Target, ""
 		if s.TargetExpr != nil {
-			target = pw.expr(s.TargetExpr, 0)
+			target, tt = pw.expr(s.TargetExpr, 0), pw.typ(s.TargetExpr)
 		} else {
+			tt = pw.typ(&st.IdentExpr{Name: s.Target, Pos: s.Pos})
 			target = pw.ident(target, s.Pos.Line)
 		}
-		fmt.Fprintf(b, "%s%s := %s;\n", in, target, pw.expr(s.Value, 0))
+		fmt.Fprintf(b, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
 	case *st.IfStmt:
 		fmt.Fprintf(b, "%sIF %s THEN\n", in, pw.expr(s.Condition, 0))
 		pw.stmts(b, s.Then, d+1)
@@ -266,4 +311,26 @@ func (pw *progWriter) ident(name string, line int) string {
 	}
 	pw.diag("siemens/name", line, fmt.Sprintf("%s is neither a variable of the program nor a manifest tag", name))
 	return name
+}
+
+
+// store prints the value of an assignment to a target of type tt the way
+// nautilus stores it: integer arithmetic at 64 bits, wrapped to the
+// target's width; a 64-bit int (a counter's CV) wrapped likewise.
+func (pw *progWriter) store(v st.Expression, tt string, line int) string {
+	vt := pw.typ(v)
+	switch {
+	case vt == tWide:
+		if !isInt(tt) || tt == "ULINT" {
+			pw.diag("siemens/int-width", line, fmt.Sprintf("integer arithmetic stored into a %s: convert it explicitly (…_TO_…)", orUnknown(tt)))
+			return ""
+		}
+		pw.wide = true
+		s := pw.expr(v, 0)
+		pw.wide = false
+		return wrap(s, tt)
+	case vt == "LINT" && narrow(tt):
+		return wrap(pw.expr(v, 0), tt)
+	}
+	return pw.expr(v, 0)
 }

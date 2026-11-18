@@ -4,12 +4,25 @@
 // that calls its program, and the manifest's tags one global DB. tiad
 // imports the files, generates the blocks and compiles them.
 //
+// The rule is "compute what nautilus computes, or refuse". Integer
+// arithmetic is the main case: nautilus evaluates it at 64 bits and wraps
+// only at the store, so the writer widens every operand to LINT and wraps
+// explicitly at the store (types.go), and refuses integer arithmetic
+// anywhere it cannot do that (an FB input, a function argument, a CASE
+// selector). nautilus's own lowering runs first, so what nautilus cannot
+// run is refused before anything else.
+//
 // This is the first subset. What it does not write yet it refuses with a
-// rule-tagged diagnostic, never a guess: user FUNCTIONs and
-// FUNCTION_BLOCKs, UDTs and enums, STRING without a length, SR/RS, the
-// overloaded TO_* conversions, integer division by a non-constant
-// divisor (nautilus gives 0 and counts it; the CPU's answer is not yet
-// pinned down), and every builtin outside the table in expr.go.
+// rule-tagged diagnostic, never a guess: more than one task, user
+// FUNCTIONs and FUNCTION_BLOCKs, UDTs and enums, arrays, STRING, LTIME,
+// TIME arithmetic, bitwise operators, SR/RS, TRUNC, the overloaded TO_*
+// conversions, division by anything but a non-zero constant (nautilus
+// gives 0 and counts it; the CPU's answer is not pinned down), and every
+// builtin outside the table in expr.go.
+//
+// Known divergence, documented rather than refused: a REAL → integer
+// conversion out of range faults the scan in nautilus, while the CPU sets
+// ENO FALSE and carries on.
 //
 // Comments in the nautilus source are not carried into the SCL: nautilus
 // is where the program is read and edited.
@@ -57,7 +70,9 @@ type Global struct {
 	Retain bool
 }
 
-// Task schedules one program. Interval 0 means continuous (OB1).
+// Task schedules one program at Interval. nautilus has no free-running
+// task (a manifest without scan: gets the default), so Interval must be
+// set; the CLI passes the manifest's effective scan.
 type Task struct {
 	Name     string
 	Program  string // the PROGRAM's name
@@ -95,28 +110,34 @@ type Output struct {
 	// its instance DB (`"Main_DB"`), and "" to the global DB (`"Tags"`).
 	// Symbol uses it to turn a nautilus tag path into a Web API symbol.
 	Roots map[string]string
+	// names are the readable names under each root, lower-cased: the
+	// manifest tags under "", a program's statics under its name.
+	names map[string]map[string]bool
 }
 
 // Symbol maps a nautilus tag path to the Web API symbol of the same value:
 // a manifest tag "Level" to `"Tags".Level`, a program variable
 // "Main.count" to `"Main_DB".count`.
+//
+// It answers only for what the CPU holds where the Web API can read it: a
+// manifest tag, or a program's static (not a temp), and members below
+// them.
 func (o Output) Symbol(path string) (string, bool) {
 	if head, rest, ok := strings.Cut(path, "."); ok {
-		if root, ok := o.lookupRoot(head); ok {
-			return root + "." + rest, true
+		for k, root := range o.Roots {
+			if k == "" || !strings.EqualFold(k, head) {
+				continue
+			}
+			v, _, _ := strings.Cut(rest, ".")
+			if o.names[strings.ToLower(k)][strings.ToLower(v)] {
+				return root + "." + rest, true
+			}
+			return "", false
 		}
 	}
-	if root, ok := o.Roots[""]; ok {
+	v, _, _ := strings.Cut(path, ".")
+	if root, ok := o.Roots[""]; ok && o.names[""][strings.ToLower(v)] {
 		return root + "." + path, true
-	}
-	return "", false
-}
-
-func (o Output) lookupRoot(name string) (string, bool) {
-	for k, v := range o.Roots {
-		if k != "" && strings.EqualFold(k, name) {
-			return v, true
-		}
 	}
 	return "", false
 }
@@ -144,7 +165,22 @@ func Write(in Input) (Output, []Diag, error) {
 	for _, g := range in.Globals {
 		w.globals[strings.ToLower(g.Name)] = g
 	}
-	out := Output{Roots: map[string]string{"": quote(tagsDB)}}
+	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]bool{"": {}}}
+	for _, g := range in.Globals {
+		out.names[""][strings.ToLower(g.Name)] = true
+	}
+	// Every block name, lower-cased (TIA's are case-insensitive): a
+	// program named Tags would make an FB and a DB both "Tags".
+	blocks := map[string]string{strings.ToLower(tagsDB): "the tags DB"}
+	claim := func(name, what string) bool {
+		k := strings.ToLower(name)
+		if other, taken := blocks[k]; taken {
+			w.diag("siemens/name", "", 0, fmt.Sprintf("block %q (%s) collides with %s", name, what, other))
+			return false
+		}
+		blocks[k] = what
+		return true
+	}
 
 	progs := map[string]bool{}
 	for _, p := range in.Programs {
@@ -168,33 +204,47 @@ func Write(in Input) (Output, []Diag, error) {
 		if pw == nil {
 			continue
 		}
+		if !claim(prog.Name, "program "+prog.Name) || !claim(prog.Name+"_DB", "the instance DB of "+prog.Name) {
+			continue
+		}
 		progs[strings.ToLower(prog.Name)] = true
+		out.names[strings.ToLower(prog.Name)] = pw.statics
 		out.Files = append(out.Files,
 			File{Path: prog.Name + ".scl", Data: pw.fb},
 			File{Path: prog.Name + "_DB.db", Data: instanceDB(prog.Name)})
 		out.Roots[prog.Name] = quote(prog.Name + "_DB")
 	}
 
-	nextOB := 30
-	for _, t := range in.Tasks {
+	// One task in v1. nautilus copies shared tags in at a task's scan
+	// start and commits them at its end, while cyclic interrupt OBs
+	// preempt each other and touch the tags DB in place: with two tasks
+	// the CPU would see a different data model. Copy-in/copy-out comes
+	// later, as its own item.
+	if len(in.Tasks) > 1 {
+		w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("%d tasks: the first subset writes one (nautilus's per-task copy of shared tags has no SCL form yet)", len(in.Tasks)))
+	}
+	for i, t := range in.Tasks {
+		if i > 0 {
+			break
+		}
 		if !progs[strings.ToLower(t.Program)] {
-			w.diag("siemens/task", "", 0, fmt.Sprintf("task %s runs program %s, which was not written", t.Name, t.Program))
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which was not written", t.Name, t.Program))
 			continue
 		}
-		ob := OB{Name: "OB_" + t.Name}
-		if t.Interval == 0 {
-			ob.Number = 1
-		} else {
-			if nextOB > 38 {
-				w.diag("siemens/task", "", 0, fmt.Sprintf("task %s: more than nine timed tasks (cyclic interrupt OB30-OB38)", t.Name))
-				continue
-			}
-			if t.Interval < time.Millisecond || t.Interval%time.Millisecond != 0 {
-				w.diag("siemens/task", "", 0, fmt.Sprintf("task %s: interval %s is not a whole number of milliseconds of at least 1 ms", t.Name, t.Interval))
-				continue
-			}
-			ob.Number, ob.Cycle = nextOB, t.Interval
-			nextOB++
+		switch {
+		case t.Interval <= 0:
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s has no interval; nautilus has no free-running task", t.Name))
+			continue
+		case t.Interval%time.Millisecond != 0:
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: interval %s is not a whole number of milliseconds", t.Name, t.Interval))
+			continue
+		case t.Interval > 60*time.Second:
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: interval %s is over the 60 s an S7-1500 cyclic interrupt allows", t.Name, t.Interval))
+			continue
+		}
+		ob := OB{Name: "OB_" + t.Name, Number: 30, Cycle: t.Interval}
+		if !claim(ob.Name, "the OB of task "+t.Name) {
+			continue
 		}
 		out.OBs = append(out.OBs, ob)
 		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: obSource(ob, t.Program)})
@@ -242,11 +292,7 @@ func instanceDB(prog string) []byte {
 func obSource(ob OB, prog string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "ORGANIZATION_BLOCK %s\n", quote(ob.Name))
-	if ob.Number == 1 {
-		b.WriteString("TITLE = \"Program cycle\"\n")
-	} else {
-		fmt.Fprintf(&b, "TITLE = \"Cyclic interrupt, %s\"\n", ob.Cycle)
-	}
+	fmt.Fprintf(&b, "TITLE = \"Cyclic interrupt, %s\"\n", ob.Cycle)
 	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
 	b.WriteString("VERSION : 0.1\n")
 	b.WriteString("\nBEGIN\n")
