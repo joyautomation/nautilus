@@ -114,7 +114,7 @@ func TestRTGuardStopsASpinningFIFOThread(t *testing.T) {
 			t.Fatal("NAUTILUS_REQUIRE_RT=1 but " + msg)
 		}
 		t.Skip(msg)
-	case strings.Contains(text, "DEMOTED"):
+	case strings.Contains(text, "DEMOTED") && err == nil:
 		t.Log(strings.TrimSpace(text))
 	case ctx.Err() != nil:
 		t.Fatalf("the spinning FIFO thread was never stopped:\n%s", text)
@@ -152,6 +152,11 @@ func spinAtFIFO() {
 				fmt.Println("NOT STOPPED after 3 s")
 				os.Exit(1)
 			}
+		}
+		// Told is not enough: the thread itself must have left SCHED_FIFO.
+		if policy, _, _ := syscall.RawSyscall(syscall.SYS_SCHED_GETSCHEDULER, 0, 0, 0); policy != schedOther {
+			fmt.Println("STILL FIFO after the demotion: policy", policy)
+			os.Exit(1)
 		}
 		fmt.Println("DEMOTED after", time.Since(start).Round(time.Millisecond))
 		close(done)
