@@ -102,7 +102,7 @@ positions (`logix-target.md` §6.4).
 | `TOF` | `TOF`, TIMER tag | same rewrite; check the IEC/Logix reset behaviour difference in the harness |
 | `c:CTU(PV := n)` | `CTU(c,n,0)`, COUNTER tag | `c.Q`→`c.DN`, `c.CV`→`c.ACC`; IEC `R` → `RES(c)` rung |
 | BOOL, SINT, INT, DINT, REAL, LREAL | same | width from the declaration (AST), not the IR |
-| `TIME` | DINT milliseconds | only where it feeds a timer preset; elsewhere rejected in v1 |
+| `TIME` | DINT milliseconds | a variable only where it feeds a timer preset; a timer's `t.ET`/`t.PT` as a number is `TIME_TO_DINT(t.ET)` ↔ `t.ACC`/`t.PRE` in a box or a CPT, and `{ t.ET := DINT_TO_TIME(v) }` ↔ `MOV(v,t.ACC)` for a timer no block runs (#793); a write to a timer a TON/TOF runs is refused on import |
 | global (`VAR_EXTERNAL`) | controller tag | |
 | a manifest tag a program names undeclared (#177/#210) | controller tag, typed from the manifest | ladder and ST (#248); uses resolved on the compiler's AST (`logix/writer/uses.go`) |
 | enumeration type and its members | `DINT`; a member is its value | Logix has no enumerated type; the names do not reach the controller, and an import brings the tag back as `DINT` (`logix/writer/enum.go`) |

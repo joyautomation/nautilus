@@ -95,7 +95,7 @@ func Import(f *l5x.File, opts Options) (*Project, error) {
 	im := &importer{file: f, opts: opts, proj: p, aois: map[string]*l5x.AddOnInstruction{}, ctrl: map[string]*l5x.Tag{},
 		moved: map[string]bool{}, external: map[string]bool{},
 		msgs: map[*l5x.Tag]*msgInfo{}, chanByKey: map[string]string{}, msgExtras: map[string]msgExtra{},
-		extraOwner: map[string]*l5x.Tag{}}
+		extraOwner: map[string]*l5x.Tag{}, timerRun: timersRun(f)}
 	for _, a := range c.AOIs {
 		im.aois[strings.ToLower(a.Name)] = a
 	}
@@ -239,6 +239,45 @@ func Import(f *l5x.File, opts Options) (*Project, error) {
 		return p.Notes[i].Rung < p.Notes[j].Rung
 	})
 	return p, nil
+}
+
+// timersRun is the set of timers a TON, TOF or RTO runs anywhere in the
+// export, in a program's ladder or an Add-On Instruction's, lower-cased.
+func timersRun(f *l5x.File) map[string]bool {
+	run := map[string]bool{}
+	visit := func(r *l5x.Routine) {
+		if r.Type != "RLL" {
+			return
+		}
+		for _, rg := range r.Rungs {
+			terms, err := l5x.ParseRung(rg.Text)
+			if err != nil {
+				continue
+			}
+			walkTerms(terms, func(in *l5x.Instr) {
+				switch strings.ToUpper(in.Mnemonic) {
+				case "TON", "TOF", "RTO":
+					if len(in.Args) > 0 {
+						run[strings.ToLower(baseOf(strings.TrimSpace(in.Args[0])))] = true
+					}
+				}
+			})
+		}
+	}
+	if f.Controller == nil {
+		return run
+	}
+	for _, p := range f.Controller.Programs {
+		for _, r := range p.Routines {
+			visit(r)
+		}
+	}
+	for _, a := range f.Controller.AOIs {
+		for _, r := range a.Routines {
+			visit(r)
+		}
+	}
+	return run
 }
 
 // tagType is the type: a controller tag's tag-file entry needs so that a
@@ -420,12 +459,16 @@ func (p *Project) Reasons() []string {
 type importer struct {
 	// realNoted: the REAL-to-integer store note is given (once).
 	realNoted bool
-	file      *l5x.File
-	opts      Options
-	proj      *Project
-	aois      map[string]*l5x.AddOnInstruction
-	ctrl      map[string]*l5x.Tag
-	types     map[string]bool
+	// timerRun names every timer a TON, TOF or RTO runs anywhere in the
+	// export, lower-cased (#793): a write to its ACC or PRE has no
+	// nautilus form.
+	timerRun map[string]bool
+	file     *l5x.File
+	opts     Options
+	proj     *Project
+	aois     map[string]*l5x.AddOnInstruction
+	ctrl     map[string]*l5x.Tag
+	types    map[string]bool
 	// written collects controller tags the imported logic drives, for
 	// the tag file's roles.
 	written map[string]bool
