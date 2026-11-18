@@ -32,12 +32,14 @@ func TestHarnessGateModes(t *testing.T) {
 		{"hold and deliver, sampled", holdAndDeliver, holdsLatest, true, ""},
 		{"hold and deliver, replays the backlog, sampled", holdAndDeliver, replaysBacklog, true, "must never be sent"},
 		{"hold and deliver, resends while closed", holdAndDeliver, resendsWhileClosed, false, "while the write gate was closed"},
+		{"hold and deliver, sends a superseded command late", holdAndDeliver, skipsSupersededSlowly, false, "must never be sent"},
 		{"a rebaselining driver declared holdAndDeliver", holdAndDeliver, rebaselines, false, "held while the gate was closed"},
 		{"drop and rebaseline", dropAndRebaseline, rebaselines, false, ""},
 		{"drop and rebaseline, sampled", dropAndRebaseline, rebaselines, true, ""},
 		{"drop and rebaseline, sends while closed", dropAndRebaseline, ignoresGate, false, "while the write gate was closed"},
 		{"drop and rebaseline, replays the held command", dropAndRebaseline, holdsLatest, false, "no replay"},
 		{"drop and rebaseline, replays the held command, sampled", dropAndRebaseline, holdsLatest, true, "no replay"},
+		{"drop and rebaseline, replays late", dropAndRebaseline, holdsLatestSlowly, false, "no replay"},
 		{"drop and rebaseline, commands on reopen", dropAndRebaseline, commandsOnReopen, false, "no replay"},
 		{"a holding driver declared dropAndAsk", dropAndAsk, holdsLatest, false, "OutputsWanted after the gate reopened"},
 	} {
@@ -67,7 +69,20 @@ const (
 	resendsWhileClosed                      // holdsLatest, but sends the device's value again while closed
 	rebaselines                             // dropAndRebaseline done right
 	commandsOnReopen                        // drops while closed, then sends the first push after reopening
+	// skipsSupersededSlowly holds, but a push of the value the device
+	// already holds leaves an older queued command in place, and the
+	// driver acts on a reopened gate only after slowReopen: a stale
+	// command, sent late.
+	skipsSupersededSlowly
+	// holdsLatestSlowly holds the latest command pushed while closed and
+	// sends it, then anything pushed since, once it acts on a reopened
+	// gate after slowReopen: a replay that comes late.
+	holdsLatestSlowly
 )
+
+// slowReopen is how long skipsSupersededSlowly takes to act on a reopened
+// gate.
+const slowReopen = 300 * time.Millisecond
 
 // stubDriver has one output whose device value is device. A poll loop
 // sends what is owed, one command per poll, when the gate lets it.
@@ -76,10 +91,11 @@ type stubDriver struct {
 	mu     sync.Mutex
 	gate   func() bool
 	device any
-	last   any   // the last value pushed
-	queue  []any // commands owed, oldest first
-	closed bool  // the poll loop last found the gate closed
-	rebase bool  // the next push is a baseline
+	last   any       // the last value pushed
+	queue  []any     // commands owed, oldest first
+	closed bool      // the poll loop last found the gate closed
+	rebase bool      // the next push is a baseline
+	opened time.Time // when the poll loop last found the gate open again
 	wanted bool
 	polls  uint64
 	sent   []any // every value the device received
@@ -115,9 +131,15 @@ func (d *stubDriver) WriteOutputs(v nio.Values) error {
 	}
 	d.last = x
 	switch {
+	case open && d.b == holdsLatestSlowly:
+		d.queue = append(d.queue, x)
 	case open:
 		d.queue = []any{x}
-	case d.b == holdsLatest, d.b == resendsWhileClosed:
+	case d.b == skipsSupersededSlowly:
+		if x != d.device {
+			d.queue = []any{x}
+		}
+	case d.b == holdsLatest, d.b == resendsWhileClosed, d.b == holdsLatestSlowly:
 		d.queue = []any{x}
 	case d.b == holdsOldest:
 		if len(d.queue) == 0 {
@@ -154,6 +176,7 @@ func (d *stubDriver) poll() {
 	}
 	if d.closed {
 		d.closed = false
+		d.opened = time.Now()
 		if d.b == dropsAndAsks {
 			d.wanted = true
 			d.last = nil // forget: the next push is a command
@@ -161,6 +184,9 @@ func (d *stubDriver) poll() {
 		if d.b == dropsSilently {
 			d.last = nil
 		}
+	}
+	if (d.b == skipsSupersededSlowly || d.b == holdsLatestSlowly) && time.Since(d.opened) < slowReopen {
+		return
 	}
 	if len(d.queue) > 0 {
 		d.device, d.queue = d.queue[0], d.queue[1:]

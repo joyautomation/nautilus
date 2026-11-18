@@ -571,9 +571,13 @@ func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func(
 		push(a)
 		wait(t, 5*time.Second, fmt.Sprintf("%s = %v at the device after the gate reopened", r.out, a), func() bool { return r.field() == a })
 	case holdAndDeliver:
+		reopened := time.Now()
 		setGate(true)
 		wait(t, 5*time.Second, fmt.Sprintf("%s = %v, held while the gate was closed, at the device after it reopened (no further push)", r.out, a),
 			func() bool { return r.field() == a })
+		// How long the driver took to act on the reopened gate (a
+		// Sparkplug host rebuilds its session first, a second or more).
+		lag := time.Since(reopened)
 		// Latest wins: close the gate again and push b, then a, which the
 		// device already holds. Nothing is owed. b went stale the moment a
 		// was pushed, and must never reach the device: not while the gate
@@ -582,6 +586,12 @@ func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func(
 		w := watch()
 		setGate(true)
 		settle(t, r, 5)
+		// Nothing is owed, so nothing marks the moment the driver has
+		// acted on the reopened gate: wait twice as long as it took the
+		// first time, so a stale command sent that late is still seen.
+		until := time.Now().Add(lag)
+		wait(t, 2*lag+5*time.Second, fmt.Sprintf("%s after the gate reopened (twice the first reopen's %s)", 2*lag, lag),
+			func() bool { return time.Now().After(until) })
 		got := w()
 		for _, v := range got {
 			if v != a {
@@ -603,9 +613,31 @@ func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func(
 		if got := w(); len(got) > 0 {
 			t.Fatalf("%s reached the device as %v after the gate reopened: %v, pushed while it was closed, is a baseline there and must not be sent (no replay)", r.out, got, a)
 		}
-		// The next change goes out.
+		// The next change goes out. With the sent history, also see that
+		// the driver acts on the reopened gate (b goes out) before the
+		// value pushed while closed is pushed again as a command, and that
+		// a was not replayed meanwhile, however late.
+		var mark int
+		if r.sent != nil {
+			mark = len(r.sent())
+		}
 		push(b)
 		settle(t, r, 3)
+		if r.sent != nil {
+			wait(t, 5*time.Second, fmt.Sprintf("%s = %v sent: the next change after the baseline", r.out, b), func() bool {
+				for _, v := range r.sent()[mark:] {
+					if v == b {
+						return true
+					}
+				}
+				return false
+			})
+			for _, v := range r.sent()[mark:] {
+				if v == a {
+					t.Fatalf("%s: %v reached the device after the gate reopened (sent %v) before anything commanded it: %v was pushed while the gate was closed, so it must not be sent (no replay)", r.out, a, r.sent()[mark:], a)
+				}
+			}
+		}
 		push(a)
 		wait(t, 5*time.Second, fmt.Sprintf("%s = %v at the device: a change after the baseline goes out", r.out, a), func() bool { return r.field() == a })
 	default:
