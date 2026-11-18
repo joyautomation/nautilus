@@ -117,6 +117,9 @@ func StartProcess(t testing.TB, bin string, cfg Config, env ...string) *Process 
 		"TIAD_WORKDIR=" + p.WorkDir,
 		"TIAD_TOKEN=" + cfg.Token,
 		"TIAD_TARGETS=" + strings.Join(cfg.Targets, ","),
+		// The real agent exits when its stdin closes only when asked:
+		// under a scheduled task stdin may be closed from the start.
+		"TIAD_EXIT_ON_STDIN=1",
 	}, env...)...)
 	p.cmd.Stderr = logWriter{p}
 	stdout, err := p.cmd.StdoutPipe()
@@ -254,6 +257,51 @@ func (p *Process) SetScript(t testing.TB, s Script) {
 	p.script = s
 	p.mu.Unlock()
 	p.control(t, http.MethodPut, "/fake/script", s)
+}
+
+// Machine is a scripted machine for tiad-fake (PUT /fake/machine): probe
+// then runs the agent's real gate evaluator over it instead of reporting
+// scripted gates. Registry keys are under HKLM, 64-bit view.
+type Machine struct {
+	NoTIA    bool       `json:"noTia,omitempty"`
+	Registry []RegValue `json:"registry,omitempty"`
+	SubKeys  []RegKey   `json:"subkeys,omitempty"`
+	Files    []string   `json:"files,omitempty"`
+	ExePath  string     `json:"exePath"`
+	// ExeModified is the executable's last write time, sent in UTC with
+	// 100 ns precision, as Windows keeps it.
+	ExeModified time.Time `json:"-"`
+	ExeSHA256   []byte    `json:"exeSha256"`
+	// Group is "member", "not-in-token" or "missing".
+	Group string `json:"group"`
+}
+
+// RegValue is one registry string value.
+type RegValue struct {
+	Key   string `json:"key"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// RegKey is a registry key and its subkey names.
+type RegKey struct {
+	Key   string   `json:"key"`
+	Names []string `json:"names"`
+}
+
+// MarshalJSON adds exeModified in .NET's round-trip form.
+func (m Machine) MarshalJSON() ([]byte, error) {
+	type plain Machine
+	return json.Marshal(struct {
+		plain
+		ExeModified string `json:"exeModified"`
+	}{plain(m), m.ExeModified.UTC().Format("2006-01-02T15:04:05.0000000Z")})
+}
+
+// SetMachine scripts tiad-fake's machine (PUT /fake/machine).
+func (p *Process) SetMachine(t testing.TB, m Machine) {
+	t.Helper()
+	p.control(t, http.MethodPut, "/fake/machine", m)
 }
 
 // Calls lists every ITia call tiad-fake made so far.

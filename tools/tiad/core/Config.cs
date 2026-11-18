@@ -53,6 +53,27 @@ namespace Tiad
         // reaper closes it (TIAD_SESSION_IDLE, a Go duration).
         public TimeSpan SessionIdle = TimeSpan.FromHours(1);
 
+        // NoTia (TIAD_NO_TIA=1) fails the tia gate, so no call can start
+        // TIA: the agent is installed and testable before the trial clock
+        // may start.
+        public bool NoTia;
+
+        // ExitOnStdin (TIAD_EXIT_ON_STDIN=1) ends the agent when its
+        // standard input closes, so a test that dies leaves no process. Off
+        // by default: under a scheduled task stdin may be closed from the
+        // start.
+        public bool ExitOnStdin;
+
+        // Flag reads a switch that is "1" or unset; anything else is a
+        // mistake worth refusing to start over.
+        static bool Flag(string name)
+        {
+            string v = Env(name);
+            if (v == "") return false;
+            if (v == "1") return true;
+            throw new ConfigException(name + " must be 1 or unset");
+        }
+
         static string Env(string name)
         {
             return Environment.GetEnvironmentVariable(name) ?? "";
@@ -123,6 +144,9 @@ namespace Tiad
                 }
                 c.SessionIdle = TimeSpan.FromTicks(ns / 100);
             }
+
+            c.NoTia = Flag("TIAD_NO_TIA");
+            c.ExitOnStdin = Flag("TIAD_EXIT_ON_STDIN");
 
             foreach (string t in Env("TIAD_TARGETS").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))
             {

@@ -66,7 +66,7 @@ namespace Tiad
         {
             foreach (var g in Gates())
             {
-                if (!g.Ok) throw new TiadException(412, Kinds.Gate, "gate " + g.Name + ": " + g.Detail);
+                if (g.Blocks) throw new TiadException(412, Kinds.Gate, "gate " + g.Name + ": " + g.Detail);
             }
         }
 

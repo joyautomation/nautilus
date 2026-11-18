@@ -183,8 +183,10 @@ copies `logixd`, the Logix agent:
   `Siemens.Engineering.dll` exists only where TIA is installed and is never
   redistributed. The installer:
   - adds the account to the "Siemens TIA Openness" group;
-  - writes the Openness allowlist entry for tiad's executable, so no
-    consent dialog appears *(verify)*.
+  - writes the Openness allowlist entry for tiad's executable after every
+    build. The entry repeats what TIA V21's loader checks: path, last write
+    time and SHA-256 under `HKLM\Software\Siemens\Automation\Openness\AllowList`.
+    That no consent dialog then appears is verified at the first TIA start.
 - **Agent-side config, never in requests:**
 
   | Variable | Default | Purpose |
@@ -196,6 +198,7 @@ copies `logixd`, the Logix agent:
   | `TIAD_PGPC_INTERFACE` | — | The NIC TIA uses to reach the CPUs |
   | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes a session unused this long (a Go duration). The clock starts when a call ends; a session with a call in flight is never closed |
   | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
+  | `TIAD_NO_TIA` | — | `1` fails the `tia` gate, so no call can start TIA. tiad is installed and tested this way before a clone's trial may start |
 
 - **No browser ever calls tiad.** A request that carries an `Origin`
   header is refused (403), whatever token it has. A JSON body must be
@@ -306,14 +309,21 @@ create on purpose. tiad itself only ever sees the explicit form.
 
 Which calls start TIA: `health`, `probe` and the file calls never do,
 so they cost no trial time on a fresh clone. Every other call starts the
-headless TIA process if it is not already running. `probe`'s `licence`
-gate has to read the licence state without starting TIA, through the
-licence manager *(verify that this is possible)*.
+headless TIA process if it is not already running.
+
+Each gate is `ok`, `failed` or `unknown`. A failed gate, or a state the
+agent or client does not know, stops every TIA call with `gate`. An
+unknown gate is reported honestly but blocks nothing. The `licence` gate
+is `unknown` ("not readable until TIA's first start"): no headless licence
+query was found, and the trial is created at the first start. The TIA side
+latches it `failed` when a TIA start reports a licence error and `ok` once
+TIA starts licensed. S2a compares the licence manager's and ProgramData's
+state across the first start, to find a read that works before it.
 
 | Call | Body → data |
 |---|---|
 | `GET /v1/health` | → `{version, tia, openness, sessions, targets}` |
-| `GET /v1/probe` | → `{usable, gates: [{name, ok, detail}]}`. Gates: `tia`, `openness-group`, `openness-allowlist`, `licence` (detail e.g. "trial, 12 days left"), `workdir`. Always 200 |
+| `GET /v1/probe` | → `{usable, gates: [{name, ok, state, detail, remedy}]}`. Gates: `tia`, `openness-group`, `openness-allowlist`, `licence`, `workdir`. `usable`: no gate blocks. Always 200 |
 | `PUT /v1/files/{path}` | raw bytes → `{path, size}` |
 | `GET /v1/files/{path}` | → raw bytes. `GET /v1/files` lists the work dir: `{files: [{path, size}]}` |
 
@@ -453,8 +463,9 @@ from the golden image for testing, so every clone starts with its own
 fresh trial. The golden image never starts TIA, so no trial time is baked
 into it. On a clone, the trial starts at the first call that starts TIA
 (§3.4). Whether that start needs one GUI acknowledgement is an S2b
-question. If a clone's trial ends, `probe` fails the `licence` gate and
-every call that needs TIA fails with `gate`.
+question. Until TIA's first start the `licence` gate is `unknown`. If a
+clone's trial ends, `probe` fails the `licence` gate and every call that
+needs TIA fails with `gate`.
 
 **Redone on every clone.** Nothing survives one, by design:
 
