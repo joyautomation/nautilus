@@ -324,3 +324,17 @@ claims:
       - go ./internal/project TestShareCPUFromTheManifest
       - go ./cmd/naut TestSchedBannerSuffixNamesRefusedTasks
       - go ./cmd/naut TestRunBannerSaysRealTimeWasRefused
+
+  - id: RT-028
+    claim: >-
+      naut-launch sets RLIMIT_RTTIME (200 ms soft, 2.5 × hard,
+      NAUTILUS_RT_LIMIT_MS to change it) before it execs the controller, so
+      whatever it starts is bounded; a stricter soft or hard limit already
+      in force is kept.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./rt/plcnext-io/ctest TestNautLaunchBoundsRealTime
+    note: >-
+      The test builds naut-launch with the machine's cc and reads the limit
+      its controller sees in /proc/self/limits; the stricter-limit cases need
+      prlimit (util-linux).
