@@ -20,11 +20,13 @@ import (
 // begins and one as it ends, so an odd count means a scan is in progress.
 // Liveness keeps, per loop, the count it saw last and the caller's time it
 // first saw it. A loop whose count is odd and unchanged for longer than its
-// bound is stuck. A loop between scans is never stuck, however long its
-// period: it is sleeping to its next slot, and a 10 s task that idles for
-// 9.99 s is healthy. So the bound depends on how long a scan may take, not
-// on how long a task may go without one, and a slow task cannot push it
-// past the lease.
+// bound is stuck: a scan that does not end. A loop between scans is
+// sleeping to its next slot, and a 10 s task that idles for 9.99 s is
+// healthy; but one whose count is even and unchanged for longer than its
+// period plus its bound has missed that slot by more than the bound: it is
+// starved, not sleeping (a higher-priority thread on its core, a priority
+// inversion; #858), and is stuck too. Either way the bound is capped by
+// max, so a starved leader is flagged within max of its missed slot.
 //
 // All timing is in the caller's clock (the now it passes): the runtime
 // stamps nothing, so the elector's lease arithmetic and this check cannot
@@ -128,10 +130,20 @@ func (r *Runtime) Liveness(now time.Time, max time.Duration) error {
 			l.seen, l.seenAt = v, now
 			continue
 		}
+		b := StallBound(l.period, max)
 		if v&1 == 0 {
-			continue // between scans, sleeping to its next slot
+			// Between scans: sleeping to its next slot, which is at most a
+			// period after the count last moved. Unchanged for longer than
+			// that plus the bound means the slot is overdue by more than
+			// the bound: the loop is starved, not sleeping (#858). A slow
+			// task waiting for a slot still to come is not overdue, and a
+			// standby's gated ticks move the count like any scan.
+			if now.Sub(l.seenAt) > l.period+b {
+				stuck = append(stuck, fmt.Sprintf("task %s: its next scan is overdue by more than %s", l.name, b))
+			}
+			continue
 		}
-		if b := StallBound(l.period, max); now.Sub(l.seenAt) > b {
+		if now.Sub(l.seenAt) > b {
 			// No running duration in the text: the elector logs a change
 			// of answer, and this one must read the same every tick.
 			stuck = append(stuck, fmt.Sprintf("task %s: a scan has not finished within %s", l.name, b))

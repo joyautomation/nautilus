@@ -125,8 +125,13 @@ never computes.
   hung (logic that never returns, a driver call that blocks) hands over
   too. A scan counts as hung once one scan has been in progress for
   longer than twice its task's period, at least 1 s and at most 2 s,
-  whatever the period: a task that runs every 10 s is fine between its
-  scans, and a fast task that overruns now and then is not hung. A hung
+  whatever the period: a fast task that overruns now and then is not
+  hung. A task that is **starved** between scans counts too: its next
+  slot comes due and it doesn't run (a higher-priority thread on its
+  core, say). It is flagged once that slot is overdue by the same bound.
+  A task that runs every 10 s is fine between its scans until its slot
+  is due. A standby's scans gate out but still tick on schedule, so a
+  healthy standby is never starved. A hung
   leader stops renewing and closes its own gate (its drivers stop
   writing) on its first tick more than 2 s after its last renew, without
   waiting on the Lease API, so a call to it that fails or hangs cannot
@@ -289,8 +294,10 @@ few lines.
 
 `elector.SetHealth(rt.Liveness)` makes the lease need live scans, as
 `naut run` does; call it before `elector.Run`. `rt.Liveness(now, max)` is
-nil while the runtime's scans are completing, else an error naming the
-stuck task, so another election scheme can ask it too.
+nil while the runtime's scans are completing and starting on schedule,
+else an error naming the stuck or starved task, so another election
+scheme can ask it too. The same verdict drives the systemd watchdog
+heartbeat and, standalone, the local gate.
 
 `rt.Run(ctx)` returns after the last scan and, with a retain store, the
 last save. Wait for it to return before the process exits, or the writes

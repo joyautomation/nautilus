@@ -235,6 +235,13 @@ type replica struct {
 
 func newReplica(t *testing.T, e *Elector, scan time.Duration, tasks ...runtime.Task) *replica {
 	t.Helper()
+	return newReplicaSleeping(t, e, scan, nil, tasks...)
+}
+
+// newReplicaSleeping is newReplica with the runtime's loops sleeping
+// through sleep (runtime.Options.LoopSleep), so a test can starve one.
+func newReplicaSleeping(t *testing.T, e *Elector, scan time.Duration, sleep func(string, context.Context, time.Time) bool, tasks ...runtime.Task) *replica {
+	t.Helper()
 	drv := &hangDriver{}
 	rt, err := runtime.New(runtime.Options{
 		// n is a plain VAR: a takeover resets it, so Out falling behind the
@@ -251,6 +258,7 @@ END_PROGRAM`,
 		Scan:        scan,
 		Tasks:       tasks,
 		Coordinator: e,
+		LoopSleep:   sleep,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -508,13 +516,16 @@ func TestASlowScanKeepsTheLease(t *testing.T) {
 }
 
 // A task whose period is longer than the lease does not make the lease
-// flap: between its scans it sleeps, and a sleeping task is live.
+// flap: between its scans it sleeps to a slot still to come, and a
+// sleeping task is live. (The window stays inside the slow task's period:
+// the test's time runs ahead of the loops', and past its slot plus its
+// bound a task that has not scanned is starved, #858.)
 func TestASlowTaskDoesNotFlapTheLease(t *testing.T) {
 	srv, _ := newFakeServer(t)
 	a := newReplica(t, newTestElector(t, srv, "pod-a", "10.0.0.1:8080"), 5*time.Millisecond, runtime.Task{
 		Name:    "reports",
 		Program: `PROGRAM Reports VAR n : DINT; END_VAR n := n + 1; END_PROGRAM`,
-		Scan:    10 * time.Second, // ten leases
+		Scan:    time.Minute, // sixty leases
 	})
 	b := newReplica(t, newTestElector(t, srv, "pod-b", "10.0.0.2:8080"), time.Hour)
 	t0 := time.Now()
@@ -523,7 +534,7 @@ func TestASlowTaskDoesNotFlapTheLease(t *testing.T) {
 	a.run(t)
 	b.run(t)
 	now := t0
-	for i := 0; i < 60; i++ { // 15 s: one and a half of the slow task's periods
+	for i := 0; i < 60; i++ { // 15 s: fifteen leases, a quarter of its period
 		a.progress(t)
 		now = now.Add(testTick)
 		a.el.tick(now)
@@ -743,5 +754,131 @@ func TestNewLocalIsOpenFromTheStart(t *testing.T) {
 	e.standaloneTick(time.Now().Add(time.Hour))
 	if !e.IsLeader() || e.Term() != 1 {
 		t.Fatalf("lead=%v term=%d after a live tick", e.IsLeader(), e.Term())
+	}
+}
+
+// loopStarver starves one task's loop between scans on demand: its sleep
+// to the next slot blocks, as a task does that never gets the CPU (#858).
+type loopStarver struct {
+	task   string
+	starve atomic.Bool
+	free   chan struct{}
+	once   sync.Once
+}
+
+func newLoopStarver(task string) *loopStarver {
+	return &loopStarver{task: task, free: make(chan struct{})}
+}
+
+func (s *loopStarver) release() { s.starve.Store(false); s.once.Do(func() { close(s.free) }) }
+
+func (s *loopStarver) sleep(task string, ctx context.Context, until time.Time) bool {
+	if task == s.task && s.starve.Load() {
+		select {
+		case <-s.free:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	select {
+	case <-time.After(time.Until(until)):
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// starvedLeader sets up pod-a leading with a 10 ms task starved between
+// scans (its main task keeps scanning), and pod-b a healthy standby.
+func starvedLeader(t *testing.T) (a, b *replica, st *loopStarver, t0 time.Time) {
+	t.Helper()
+	srv, _ := newFakeServer(t)
+	st = newLoopStarver("fast")
+	fast := runtime.Task{Name: "fast", Scan: 10 * time.Millisecond, Program: `PROGRAM Fast VAR n : DINT; END_VAR n := n + 1; END_PROGRAM`}
+	a = newReplicaSleeping(t, newTestElector(t, srv, "pod-a", "10.0.0.1:8080"), 10*time.Millisecond, st.sleep, fast)
+	b = newReplica(t, newTestElector(t, srv, "pod-b", "10.0.0.2:8080"), time.Hour)
+	t0 = time.Now()
+	a.el.tick(t0)
+	b.el.tick(t0)
+	if !a.el.IsLeader() || b.el.IsLeader() {
+		t.Fatalf("setup: a=%v b=%v", a.el.IsLeader(), b.el.IsLeader())
+	}
+	a.run(t, st.release)
+	b.run(t)
+	for a.rt.Stats().Tasks[0].Count < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	st.starve.Store(true)
+	time.Sleep(30 * time.Millisecond) // into its next sleep
+	return a, b, st, t0
+}
+
+// A leader with a task starved between scans (it never reaches its next
+// slot; the main task scans on) stops renewing and the standby takes over,
+// within the slot overdue by its bound plus a lease and a few ticks, and
+// the two never lead at once (#858; #787 F6b builds on this).
+func TestAStarvedLeaderHandsOverToTheStandby(t *testing.T) {
+	a, b, _, t0 := starvedLeader(t)
+	const lease = time.Second
+	bound := runtime.StallBound(10*time.Millisecond, lease/2) // 250 ms
+	limit := testTick + 10*time.Millisecond + bound + testTick + lease + testTick
+	took := time.Duration(0)
+	for now := t0.Add(testTick); now.Sub(t0) <= 3*time.Second; now = now.Add(testTick) {
+		time.Sleep(15 * time.Millisecond) // the main task ticks (scans, or gates out once a standby)
+		a.el.tick(now)
+		b.el.tick(now)
+		if a.el.IsLeader() && b.el.IsLeader() {
+			t.Fatalf("at +%s both replicas lead", now.Sub(t0))
+		}
+		if b.el.IsLeader() && took == 0 {
+			took = now.Sub(t0)
+		}
+	}
+	if took == 0 {
+		t.Fatal("the standby never took over from a leader whose task is starved between scans")
+	}
+	if took > limit {
+		t.Fatalf("the standby took over %s after the starvation, want within %s", took, limit)
+	}
+	if a.el.IsLeader() {
+		t.Fatal("the starved replica still leads")
+	}
+}
+
+// A replica with a task still starved does not take the lease back when
+// the leader that replaced it dies; released, it contends as before.
+func TestAStarvedReplicaDoesNotTakeTheLease(t *testing.T) {
+	a, b, st, t0 := starvedLeader(t)
+	now := t0
+	for i := 0; i < 16 && !b.el.IsLeader(); i++ {
+		time.Sleep(15 * time.Millisecond)
+		now = now.Add(testTick)
+		a.el.tick(now)
+		b.el.tick(now)
+	}
+	if !b.el.IsLeader() {
+		t.Fatal("setup: the standby never took over from the starved leader")
+	}
+	for i := 0; i < 12; i++ { // pod-b dies: its lease lapses
+		now = now.Add(testTick)
+		a.el.tick(now)
+		if a.el.IsLeader() {
+			t.Fatalf("a replica whose task is still starved took the lease %s after the other stopped renewing", time.Duration(i+1)*testTick)
+		}
+	}
+	st.release()
+	// A standby now: its scans gate out, so wait for liveness itself, which
+	// a gated tick satisfies.
+	deadline := time.Now().Add(5 * time.Second)
+	for a.rt.Liveness(now, time.Second/2) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the released task never ran again")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	now = now.Add(testTick)
+	a.el.tick(now)
+	if !a.el.IsLeader() {
+		t.Fatal("once its task runs again the replica takes the lapsed lease")
 	}
 }

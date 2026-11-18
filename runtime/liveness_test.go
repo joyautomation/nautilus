@@ -150,10 +150,10 @@ func TestLivenessAScanHungInADriverReadIsStuck(t *testing.T) {
 	}
 }
 
-// A task whose period is longer than the lease is live between its scans,
-// however long since the last one: it is sleeping to its next slot. Its
-// bound is capped at max, so a hung scan of it is still caught well inside
-// the lease.
+// A task whose period is longer than the lease is live between its scans
+// for its period and its bound: it is sleeping to a slot still to come.
+// Its bound is capped at max, so a hung scan of it is still caught well
+// inside the lease, and so is its slot once missed (#858).
 func TestLivenessASlowTaskIsLiveBetweenScans(t *testing.T) {
 	const max = 2 * time.Second
 	if b := runtime.StallBound(10*time.Second, max); b != max {
@@ -174,14 +174,135 @@ func TestLivenessASlowTaskIsLiveBetweenScans(t *testing.T) {
 	startRun(t, rt)
 	waitScans(t, rt, 1)
 	t0 := time.Now()
-	for i := range 10 {
+	// In the caller's time, up to its period plus its bound (12 s): the
+	// slot it sleeps to is not due before then. (The test's own time runs
+	// far ahead of the loop's, so past that it would read as overdue.)
+	for _, at := range []time.Duration{0, 3 * time.Second, 7 * time.Second, 11 * time.Second, 12 * time.Second} {
 		// The main task completes a scan between two looks, so only the
 		// slow task's sleep is on trial.
 		waitScans(t, rt, rt.Stats().Count+2)
-		if err := rt.Liveness(t0.Add(time.Duration(i)*7*time.Second), max); err != nil {
-			t.Fatalf("at +%ds: %v", i*7, err)
+		if err := rt.Liveness(t0.Add(at), max); err != nil {
+			t.Fatalf("at +%s: %v", at, err)
 		}
 	}
+}
+
+// starver starves one loop between scans on demand: its sleep to the next
+// slot blocks until released, as a task does that never gets the CPU
+// (#858). Every other sleep is the wall clock's.
+type starver struct {
+	task    string
+	starve  atomic.Bool
+	release chan struct{}
+}
+
+func newStarver(task string) *starver { return &starver{task: task, release: make(chan struct{})} }
+
+func (s *starver) sleep(task string, ctx context.Context, until time.Time) bool {
+	if task == s.task && s.starve.Load() {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	select {
+	case <-time.After(time.Until(until)):
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// A loop starved between scans (its next slot passes and it does not run)
+// is not live once the slot is overdue by more than its bound: its count
+// stays even and unchanged for longer than its period plus its bound. The
+// error names the task and reads the same on every look. Released, it is
+// live again.
+func TestLivenessALoopStarvedBetweenScansIsStuck(t *testing.T) {
+	const max = 2 * time.Second
+	const period = 10 * time.Millisecond
+	st := newStarver("fast")
+	rt, err := runtime.New(runtime.Options{
+		Program:   countProgram,
+		Outputs:   []string{"Out"},
+		Seed:      nio.Values{"Out": int64(0)},
+		Scan:      period,
+		LoopSleep: st.sleep,
+		Tasks: []runtime.Task{{Name: "fast", Scan: period,
+			Program: `PROGRAM Fast VAR n : DINT; END_VAR n := n + 1; END_PROGRAM`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startRun(t, rt, func() {
+		if st.starve.Swap(false) {
+			close(st.release)
+		}
+	})
+	fastScans := func() uint64 { return rt.Stats().Tasks[0].Count }
+	for fastScans() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	st.starve.Store(true)
+	// Let it finish the scan it may be in and reach its next sleep.
+	n := fastScans()
+	time.Sleep(50 * time.Millisecond)
+	if fastScans() > n+1 {
+		t.Fatal("the starved loop kept scanning")
+	}
+
+	bound := runtime.StallBound(period, max)
+	t0 := time.Now()
+	// Each look follows a main-task scan, so only the starved loop is on
+	// trial: the test's time runs ahead of the loops'.
+	look := func(at time.Duration) error {
+		waitScans(t, rt, rt.Stats().Count+2)
+		return rt.Liveness(t0.Add(at), max)
+	}
+	if err := look(0); err != nil {
+		t.Fatalf("first look: %v", err)
+	}
+	if err := look(period + bound); err != nil {
+		t.Fatalf("starved for its period plus its bound, exactly: %v", err)
+	}
+	first := look(period + bound + time.Millisecond)
+	if first == nil || !strings.Contains(first.Error(), "task fast: its next scan is overdue") {
+		t.Fatalf("a loop starved past its slot and its bound: %v, want it stuck, naming the task", first)
+	}
+	if again := look(period + bound + time.Second); again == nil || again.Error() != first.Error() {
+		t.Fatalf("the answer must read the same on every look: %v, then %v", first, again)
+	}
+
+	st.starve.Store(false)
+	close(st.release)
+	m := fastScans()
+	for fastScans() < m+2 {
+		time.Sleep(time.Millisecond)
+	}
+	if err := look(time.Hour); err != nil {
+		t.Fatalf("released and scanning again, but Liveness says %v", err)
+	}
+}
+
+// A standby's loops tick on schedule with every scan gated out: they are
+// live, never starved, or a healthy standby could never take the lease.
+func TestLivenessAGatedStandbyIsNotStarved(t *testing.T) {
+	const max = 2 * time.Second
+	coord := &leadFlag{} // never the leader: every scan gates out
+	rt := newHangRuntime(t, nil, coord, 10*time.Millisecond)
+	startRun(t, rt)
+	if rt.Stats().Count != 0 {
+		t.Fatal("a standby ran a scan")
+	}
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for now := time.Now(); now.Before(deadline); now = time.Now() {
+		if err := rt.Liveness(now, max); err != nil {
+			t.Fatalf("a standby ticking on schedule reads as %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Past a 10 ms loop's period plus its bound (1.01 s) in real time.
 }
 
 // Before Run, Liveness answers live for a start-up grace from its first
