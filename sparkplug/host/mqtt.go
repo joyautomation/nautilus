@@ -111,9 +111,21 @@ func (d *Driver) isLeader() bool {
 		return false
 	}
 	d.gateMu.Lock()
-	g := d.writeGate
+	g, plain := d.writeGate, d.plainGate
 	d.gateMu.Unlock()
-	return g == nil || g()
+	return g == nil || plain || g()
+}
+
+// commandsAllowed reports whether tag commands (NCMD/DCMD) may leave the
+// driver now: mayPublish, and a plain write gate (#943) open.
+func (d *Driver) commandsAllowed() bool {
+	if !d.mayPublish() {
+		return false
+	}
+	d.gateMu.Lock()
+	g, plain := d.writeGate, d.plainGate
+	d.gateMu.Unlock()
+	return !plain || g == nil || g()
 }
 
 // replicated reports whether this host is one replica of a redundant set —
@@ -126,7 +138,7 @@ func (d *Driver) replicated() bool {
 	}
 	d.gateMu.Lock()
 	defer d.gateMu.Unlock()
-	return d.writeGate != nil
+	return d.writeGate != nil && !d.plainGate
 }
 
 // clientID is the MQTT client ID for the next CONNECT: the configured one,
@@ -262,6 +274,7 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 	d.mu.Lock()
 	wasLeader := d.sessionPrimary
 	d.mu.Unlock()
+	couldCommand := d.commandsAllowed()
 	t := time.NewTicker(leaderPoll)
 	defer t.Stop()
 	for {
@@ -272,6 +285,14 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 			d.log.Warn("host: connection lost", "broker", d.cfg.BrokerURL)
 			return true
 		case <-t.C:
+			// A plain write gate that reopened releases the commands it
+			// held (#943); nothing else would kick the writer.
+			if can := d.commandsAllowed(); can != couldCommand {
+				couldCommand = can
+				if can {
+					d.kickWriter()
+				}
+			}
 			if d.mayPublish() != wasLeader {
 				d.log.Info("host: leadership changed; reconnecting to refresh STATE",
 					"leader", !wasLeader)
@@ -582,8 +603,8 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 	if p == nil {
 		return fmt.Errorf("host: not connected")
 	}
-	if !d.mayPublish() {
-		return fmt.Errorf("host: not the publishing host (primary=%v, leader=%v)",
+	if !d.commandsAllowed() {
+		return fmt.Errorf("host: commands not allowed now (primary=%v, leader=%v, or the write gate is closed)",
 			d.cfg.Primary, d.isLeader())
 	}
 	body, err := sparkplug.Payload{
@@ -753,8 +774,8 @@ func (d *Driver) flushWrites() {
 		}
 		return
 	}
-	if !d.mayPublish() {
-		return // a standby: stay queued until promoted
+	if !d.commandsAllowed() {
+		return // a standby, or a closed plain gate: stay queued (#943)
 	}
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
