@@ -121,8 +121,15 @@ scratchpad float 0 held the ICTD reading (23.0 °C).
 `hmi/` is a small SvelteKit page that draws the bench unit as it stands
 on the desk: the GRV-EPIC-PR1 with its screen on, the four modules in
 slot order on the GRV-EPIC-CHS4, the clear acrylic stand it leans back
-on, and the small bar of buttons beside it (drawn, not bound to
-anything). The bodies are the four small models in `hmi/static/models`,
+on, and the small bar beside it: two toggle buttons with LED rings and
+a knob. On the simulated build (`sim.yaml`, the playground) the bar
+works: click a button to latch its input on or off, and drag around the
+knob to turn it. The wiring is in `hmi/src/lib/bar.ts` and is provisional
+until checked on the bench: buttons on DI00 and DI01, their rings on DO0
+and DO1 (which `bench.st` drives from them), the knob on the voltage
+input slot 3 channel 0, 0 to 10 V. On the processor the bar stays as
+drawn and the screen writes nothing. The bar sits to the right of the
+chassis; orbit the view to reach it. The bodies are the four small models in `hmi/static/models`,
 simplified from Opto 22's published CAD (its README says how); the
 stand, the bar and everything live are drawn by the page. Each discrete channel's lamp is its number on the cover,
 which glows white when the channel is on: the 24 inputs, and the 12

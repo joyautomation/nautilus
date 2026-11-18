@@ -83,24 +83,31 @@
 </script>
 
 <script lang="ts">
-	import { T } from '@threlte/core';
+	import { T, useThrelte } from '@threlte/core';
 	import { RoundedBoxGeometry } from '@threlte/extras';
 	import { getContext, onMount } from 'svelte';
 	import { base } from '$app/paths';
-	import { AdditiveBlending, CanvasTexture, CatmullRomCurve3, Mesh, MeshStandardMaterial, TubeGeometry, Vector3, type BufferGeometry } from 'three';
+	import { AdditiveBlending, CanvasTexture, CatmullRomCurve3, Mesh, MeshStandardMaterial, Plane, Raycaster, TubeGeometry, Vector2, Vector3, type BufferGeometry } from 'three';
 	import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 	import { SCENE, type SceneContext } from '@joyautomation/nautilus-hmi-3d';
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
 	import type { Ink, Paint } from './print';
+	import { BAR_WIRING, knobAngle, knobValueAt, toggled } from './bar';
 
 	let {
 		hovered = null,
-		onhover
+		onhover,
+		write
 	}: {
 		/** The channel under the pointer, to mark its row. */
 		hovered?: string | null;
 		onhover?: (ch: Channel | null) => void;
+		/** Given, the bar's toggle buttons click and its knob turns: the
+		 *  simulated build (sim.yaml), whose inputs are tags. On the
+		 *  controller they are the modules', so the page leaves this out
+		 *  and the bar stays as drawn. Wiring: ./bar.ts (provisional). */
+		write?: (tag: string, value: boolean | number) => void;
 	} = $props();
 
 	// The frame's tags and their quality come from the scene this model is
@@ -264,6 +271,118 @@
 		color,
 		g: cable([[167, 12 + i * 1.6, 6], [185, 14 + i * 1.6, 2], [BAR.x - 22, 20 + i * 1.6, 2], [BAR.x - 14, 22 + i * 1.6, 4]], 0.7)
 	}));
+
+	// Pressing and turning, on the simulated build only (`write` given), as
+	// plcnext-bench does (#748). The view's OrbitControls would take a drag
+	// on the knob as an orbit, so a press is caught on the window before the
+	// canvas sees it: on a button or the knob the bar has it and the camera
+	// never does; anywhere else it goes on to the controls. Our own raycast,
+	// not the hover state, so a touch (no hover first) works too.
+	const KNOB = BAR_WIRING.knob;
+	/** The knob drawn as on the desk, before the bar was bound: pointing to half past four. */
+	const KNOB_AS_DRAWN = (3 * Math.PI) / 4;
+	const { camera, renderer } = useThrelte();
+	let turning = $state<number | null>(null);
+	let buttonHits = $state<(Mesh | undefined)[]>([]);
+	let knobHit = $state<Mesh>();
+	let knobAt = $derived.by(() => {
+		if (!write) return KNOB_AS_DRAWN;
+		if (turning !== null) return knobAngle(turning);
+		const v = num(KNOB.tag);
+		return v === null ? KNOB_AS_DRAWN : knobAngle(v);
+	});
+	/** A latching button stays in while its input is on. */
+	const pressed = (i: number) => !!write && on(BAR_WIRING.buttons[i]);
+	const ringLit = (i: number) => !!write && on(BAR_WIRING.rings[i]);
+	const ray = new Raycaster();
+	const ndc = new Vector2();
+	function aim(e: PointerEvent) {
+		const r = renderer.domElement.getBoundingClientRect();
+		ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+		ray.setFromCamera(ndc, camera.current);
+	}
+	/** The knob's value with the pointer where it is, from the one it had. */
+	function knobFrom(e: PointerEvent, prev: number): number | null {
+		const m = knobHit;
+		if (!m?.parent) return null;
+		aim(e);
+		m.updateWorldMatrix(true, false);
+		const normal = new Vector3(0, 0, 1).transformDirection(m.matrixWorld);
+		const at = new Vector3().setFromMatrixPosition(m.matrixWorld);
+		const hit = ray.ray.intersectPlane(new Plane().setFromNormalAndCoplanarPoint(normal, at), new Vector3());
+		if (!hit) return null;
+		const p = m.parent.worldToLocal(hit);
+		return knobValueAt(p.x - BAR.x, p.y - BAR.parts[2], prev);
+	}
+	// At most one write per 60 ms while turning, and only a changed value.
+	let sent: number | null = null;
+	let pending: number | null = null;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let settle: ReturnType<typeof setTimeout> | undefined;
+	function flush() {
+		timer = undefined;
+		if (pending === null) return;
+		write?.(KNOB.tag, pending);
+		sent = pending;
+		pending = null;
+		timer = setTimeout(flush, 60);
+	}
+	function turnTo(v: number) {
+		turning = v;
+		if (v === sent && pending === null) return;
+		pending = v;
+		if (!timer) flush();
+	}
+	$effect(() => {
+		if (!write) return;
+		const canvas = renderer.domElement;
+		const down = (e: PointerEvent) => {
+			if (e.target !== canvas || e.button !== 0) return;
+			aim(e);
+			const targets = [...buttonHits, knobHit].filter((m): m is Mesh => !!m);
+			const hit = ray.intersectObjects(targets, false)[0];
+			if (!hit) return;
+			e.stopPropagation();
+			e.preventDefault();
+			clearTimeout(settle);
+			settle = undefined;
+			if (hit.object === knobHit) {
+				const v = knobFrom(e, num(KNOB.tag) ?? KNOB.min);
+				if (v !== null) turnTo(v);
+				else turning = num(KNOB.tag) ?? KNOB.min;
+			} else {
+				const tag = BAR_WIRING.buttons[buttonHits.indexOf(hit.object as Mesh)];
+				if (tag) write(tag, toggled(raw(tag)));
+			}
+		};
+		const move = (e: PointerEvent) => {
+			if (turning === null || settle !== undefined) return;
+			const v = knobFrom(e, turning);
+			if (v !== null) turnTo(v);
+		};
+		const up = () => {
+			if (turning !== null && settle === undefined) {
+				clearTimeout(timer);
+				flush();
+				// Hold the pointer where it was let go until the tag has caught up.
+				settle = setTimeout(() => {
+					turning = null;
+					settle = undefined;
+				}, 400);
+			}
+		};
+		window.addEventListener('pointerdown', down, true);
+		window.addEventListener('pointermove', move, true);
+		window.addEventListener('pointerup', up, true);
+		window.addEventListener('pointercancel', up, true);
+		return () => {
+			window.removeEventListener('pointerdown', down, true);
+			window.removeEventListener('pointermove', move, true);
+			window.removeEventListener('pointerup', up, true);
+			window.removeEventListener('pointercancel', up, true);
+		};
+	});
+	const cursor = (c: string) => write && (renderer.domElement.style.cursor = c);
 </script>
 
 <T.Group scale={S} position={[-CX * S, -CY * S, 0]}>
@@ -361,7 +480,8 @@
 	{/each}
 
 	<!-- the bar beside the chassis: two pushbuttons, a knob and a connector on an
-	     aluminium plate. Not bound to any tag: what it is wired to is not known here. -->
+	     aluminium plate. Bound on the simulated build only (`write`), to the
+	     provisional wiring in ./bar.ts; on the controller it stays as drawn. -->
 	<T.Mesh position={[BAR.x, (BAR.y0 + BAR.y1) / 2, 6]}>
 		<RoundedBoxGeometry args={[26, BAR.y1 - BAR.y0 - 8, 16]} radius={2} />
 		<T.MeshStandardMaterial color="#8d9297" roughness={0.45} metalness={0.6} />
@@ -370,24 +490,69 @@
 		<RoundedBoxGeometry args={[32, BAR.y1 - BAR.y0, 3]} radius={1} />
 		<T.MeshStandardMaterial color={ALU} roughness={0.35} metalness={0.75} />
 	</T.Mesh>
-	{#each BAR.parts.slice(0, 2) as y}
+	{#each BAR.parts.slice(0, 2) as y, i}
+		{@const tag = BAR_WIRING.buttons[i]}
 		<T.Mesh position={[BAR.x, y, 17.6]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[8, 8.6, 1.6, 28]} />
 			<T.MeshStandardMaterial color="#c3c7cb" roughness={0.25} metalness={0.9} />
 		</T.Mesh>
-		<T.Mesh position={[BAR.x, y, 18.4]} rotation={[Math.PI / 2, 0, 0]}>
+		<!-- the plunger: in while the button is latched on -->
+		<T.Mesh position={[BAR.x, y, pressed(i) ? 17.2 : 18.4]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[5, 5, 1.6, 28]} />
-			<T.MeshStandardMaterial color="#9ea3a8" roughness={0.3} metalness={0.9} />
+			<T.MeshStandardMaterial color={pressed(i) ? '#7d8287' : '#9ea3a8'} roughness={0.3} metalness={0.9} />
 		</T.Mesh>
+		{#if write}
+			<!-- its LED ring, lit by the output it is wired to -->
+			<T.Mesh position={[BAR.x, y, 18.5]}>
+				<T.TorusGeometry args={[6.4, 0.7, 8, 32]} />
+				<T.MeshBasicMaterial color={ringLit(i) ? '#ff3b30' : '#3a3d40'} toneMapped={false} />
+			</T.Mesh>
+			<T.Mesh
+				bind:ref={buttonHits[i]}
+				position={[BAR.x, y, 26]}
+				onpointerenter={() => {
+					cursor('pointer');
+					onhover?.({ tag, text: () => (on(tag) ? 'on' : 'off') + ' · click to toggle' });
+				}}
+				onpointerleave={() => {
+					cursor('');
+					onhover?.(null);
+				}}
+			>
+				<T.PlaneGeometry args={[24, 24]} />
+				<T.MeshBasicMaterial transparent opacity={0} depthWrite={false} />
+			</T.Mesh>
+		{/if}
 	{/each}
 	<T.Mesh position={[BAR.x, BAR.parts[2], 23]} rotation={[Math.PI / 2, 0, 0]}>
 		<T.CylinderGeometry args={[8, 8.4, 12, 28]} />
 		<T.MeshStandardMaterial color="#b9bdc1" roughness={0.3} metalness={0.85} />
 	</T.Mesh>
-	<T.Mesh position={[BAR.x + 3.6, BAR.parts[2] - 3.6, 29.1]} rotation={[0, 0, Math.PI / 4]}>
-		<T.PlaneGeometry args={[0.9, 6]} />
-		<T.MeshBasicMaterial color="#1a1b1c" toneMapped={false} />
-	</T.Mesh>
+	<!-- its pointer line, clockwise from 12 o'clock by knobAt -->
+	<T.Group position={[BAR.x, BAR.parts[2], 29.1]} rotation={[0, 0, -knobAt]}>
+		<T.Mesh position={[0, 5.1, 0]}>
+			<T.PlaneGeometry args={[0.9, 6]} />
+			<T.MeshBasicMaterial color="#1a1b1c" toneMapped={false} />
+		</T.Mesh>
+	</T.Group>
+	{#if write}
+		<!-- the simulated build's grip on the knob -->
+		<T.Mesh
+			bind:ref={knobHit}
+			position={[BAR.x, BAR.parts[2], 30]}
+			onpointerenter={() => {
+				cursor('grab');
+				onhover?.({ tag: KNOB.tag, text: () => `${num(KNOB.tag)?.toFixed(1) ?? '—'} ${KNOB.unit} · drag around to turn` });
+			}}
+			onpointerleave={() => {
+				cursor('');
+				onhover?.(null);
+			}}
+		>
+			<T.PlaneGeometry args={[26, 26]} />
+			<T.MeshBasicMaterial transparent opacity={0} depthWrite={false} />
+		</T.Mesh>
+	{/if}
 	<T.Mesh position={[BAR.x, BAR.parts[3], 22]} rotation={[Math.PI / 2, 0, 0]}>
 		<T.CylinderGeometry args={[6.4, 7.4, 12, 12]} />
 		<T.MeshStandardMaterial color="#c3c7cb" roughness={0.25} metalness={0.9} />
