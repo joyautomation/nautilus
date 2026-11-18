@@ -89,11 +89,19 @@ stateread() {
 
 # statewrite <file> <name>: <file> becomes STATE/<name>, owned by STATE's
 # owner. Only with the controller stopped (nothing then runs as that
-# user): the old name goes first, link or not, and is never followed.
+# user). Written whole under a fresh name beside it, synced, then renamed
+# over the old one and synced again (#842): a power cut leaves the old
+# file or the new one, never none or half of one. The rename replaces a
+# link in its place without following it (-T: not into a directory a
+# link points at).
 statewrite() {
-	rm -f "$STATE/$2"
-	cp "$1" "$STATE/$2"
-	chown -h "$(stat -c %u:%g "$STATE/.")" "$STATE/$2"
+	sw=$(dirname "$STATE/$2")/.naut-new.$$
+	rm -f "$sw"
+	cp "$1" "$sw"
+	chown -h "$(stat -c %u:%g "$STATE/.")" "$sw"
+	sync
+	mv -fT "$sw" "$STATE/$2" 2>/dev/null || { rm -f "$STATE/$2"; mv -f "$sw" "$STATE/$2"; }
+	sync
 }
 
 # statebackups: STATE/backups, a real directory (a controller could have

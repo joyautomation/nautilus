@@ -41,6 +41,7 @@ case $last in
 "uname -sm") echo "Linux $FAKE_UNAME_M" ;;
 *naut-deploy*) printf '%b' "${FAKE_MODE:-}" ;;
 *"sh -s -- update "*) exit $FAKE_UPDATE_EXIT ;;
+*"sh -s -- backup"*) printf 'BACKUP-TGZ' ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
@@ -342,5 +343,31 @@ func TestDeployRefusesUnquotableArgs(t *testing.T) {
 	}
 	if calls := sshCalls(t, log); len(calls) != 0 {
 		t.Errorf("nothing should reach the box, got %+v", calls)
+	}
+}
+
+// naut deploy backup syncs the file before it takes its name (#842): at
+// the sync the whole backup is in the .part file and the final name does
+// not exist yet, so a crash leaves no empty backup behind.
+func TestDeployBackupIsSyncedBeforeItsRename(t *testing.T) {
+	fakeSSH(t, "x86_64", 0)
+	out := filepath.Join(t.TempDir(), "b.tgz")
+	var at []string
+	saved := syncBackup
+	t.Cleanup(func() { syncBackup = saved })
+	syncBackup = func(f *os.File) error {
+		part, _ := os.ReadFile(out + ".part")
+		_, err := os.Stat(out)
+		at = append(at, fmt.Sprintf("part=%s final-exists=%v", part, err == nil))
+		return f.Sync()
+	}
+	if code := runDeploy([]string{"backup", "root@ipc", "-o", out}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if len(at) != 1 || at[0] != "part=BACKUP-TGZ final-exists=false" {
+		t.Errorf("at the sync: %q, want the whole backup in .part and no final file yet", at)
+	}
+	if b, _ := os.ReadFile(out); string(b) != "BACKUP-TGZ" {
+		t.Errorf("backup = %q", b)
 	}
 }

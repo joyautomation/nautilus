@@ -213,3 +213,46 @@ func TestDeployBoxRedeployWhileDown(t *testing.T) {
 		t.Errorf("after it: current %q, running %v; want one, running", e.link("current"), e.running())
 	}
 }
+
+// A restore writes retain.json whole under another name, syncs, renames
+// it over the old one and syncs again (#842): at no point is there no
+// retain.json, or half of one, for a power cut to leave behind. A stand-in
+// sync records what retain.json holds each time it is called: the old
+// values at the first sync, the new ones at the second.
+func TestDeployBoxRestoreNeverLeavesNoRetainFile(t *testing.T) {
+	e := newBoxEnv(t)
+	if out, code := e.deploy("install", "good", e.good); code != 0 {
+		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	syncs := filepath.Join(e.sd, "syncs")
+	os.WriteFile(filepath.Join(e.bin, "sync"), []byte("#!/bin/sh\n{ printf 'retain.json='; cat \"$NAUT_STATE/retain.json\" 2>/dev/null || printf MISSING; echo; } >>\"$FAKE_SD/syncs\"\n"), 0o755)
+	os.WriteFile(filepath.Join(e.state, "retain.json"), []byte("OLD"), 0o644)
+
+	// The backup to restore: retain.json NEW, taken on release good.
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "retain.json"), []byte("NEW"), 0o644)
+	os.WriteFile(filepath.Join(src, "release"), []byte("good"), 0o644)
+	tgz := filepath.Join(e.root, "incoming", "restore.tgz")
+	os.MkdirAll(filepath.Dir(tgz), 0o755)
+	if out, err := exec.Command("tar", "-C", src, "-czf", tgz, "retain.json", "release").CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+	os.Remove(syncs)
+	if out, code := e.box("restore"); code != 0 {
+		t.Fatalf("restore: exit %d\n%s", code, out)
+	}
+	log, _ := os.ReadFile(syncs)
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if len(lines) < 2 || lines[0] != "retain.json=OLD" || lines[1] != "retain.json=NEW" {
+		t.Errorf("retain.json at each sync during restore: %q, want OLD then NEW", lines)
+	}
+	if strings.Contains(string(log), "MISSING") {
+		t.Errorf("there was a moment with no retain.json: %q", lines)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.state, "retain.json")); string(b) != "NEW" {
+		t.Errorf("retain.json after restore = %q, want NEW", b)
+	}
+	if left, _ := filepath.Glob(filepath.Join(e.state, ".naut-new.*")); len(left) != 0 {
+		t.Errorf("restore left its temp file behind: %q", left)
+	}
+}

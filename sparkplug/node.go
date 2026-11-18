@@ -688,13 +688,19 @@ func (n *Node) saveBdSeq(v uint64) {
 	if n.cfg.BdSeqFile == "" {
 		return
 	}
+	// Synced before the rename and the directory after (#842): a power
+	// cut must leave the old bdSeq or the new one, never an empty file,
+	// which would restart the sequence and confuse a host's death matching.
 	tmp := n.cfg.BdSeqFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strconv.FormatUint(v, 10)), 0o644); err != nil {
+	if err := writeSynced(tmp, []byte(strconv.FormatUint(v, 10))); err != nil {
 		n.log.Warn("sparkplug: bdSeq save", "error", err)
 		return
 	}
-	_ = os.Rename(tmp, n.cfg.BdSeqFile)
-	_ = filepath.Clean(n.cfg.BdSeqFile)
+	if err := os.Rename(tmp, n.cfg.BdSeqFile); err != nil {
+		n.log.Warn("sparkplug: bdSeq save", "error", err)
+		return
+	}
+	syncDir(filepath.Dir(n.cfg.BdSeqFile))
 }
 
 // deathPayload builds the NDEATH payload for the current bdSeq.
