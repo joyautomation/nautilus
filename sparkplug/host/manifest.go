@@ -137,15 +137,6 @@ func (m Manifest) typeIndex() map[string]TypeDef {
 	return idx
 }
 
-// nodeIndex resolves manifest nodes by edge_node_id.
-func (m Manifest) nodeIndex() map[string]Node {
-	idx := make(map[string]Node, len(m.Nodes))
-	for _, n := range m.Nodes {
-		idx[n.EdgeNode] = n
-	}
-	return idx
-}
-
 // Bindings returns the metric bindings in a deterministic order — by nautilus
 // tag name, then by their Sparkplug address. Generators and the driver's own
 // indexes both walk this, so a regenerated tag file diffs against the last one

@@ -33,7 +33,7 @@ func TestOnlineEditsRefusalNamesTheManifestKey(t *testing.T) {
 			t.Fatal(err)
 		}
 		rec := httptest.NewRecorder()
-		server.New(rt, proj.Server).Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/program",
+		server.New(rt, proj.Server).Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "http://localhost/api/program",
 			bytes.NewBufferString(`{"source": "PROGRAM Main\nOut := 2.0;\nEND_PROGRAM\n"}`)))
 		return rec
 	}

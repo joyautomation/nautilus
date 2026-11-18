@@ -53,6 +53,7 @@ import {
 } from "./tagTypes";
 import { activeDiagramTag, diagramHasFocus } from "./diagramSelection";
 import { noTagMessage, tagOf, toggleBitDecision, type TagArg } from "./liveActions";
+import { apiFetch, apiStreamHeaders, apiToken } from "./apiFetch";
 
 type Frame = {
   ts: number;
@@ -370,10 +371,8 @@ export class LiveValues implements vscode.Disposable {
   /** POST /api/tags, and say how it went. */
   private async postValue(name: string, value: number | boolean | string, shown: string): Promise<void> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
-    if (token) headers["Authorization"] = "Bearer " + token;
     try {
-      const res = await fetch(this.runtimeUrl() + "/api/tags", {
+      const res = await apiFetch(this.runtimeUrl() + "/api/tags", {
         method: "POST",
         headers,
         body: JSON.stringify({ name, value }),
@@ -395,8 +394,10 @@ export class LiveValues implements vscode.Disposable {
     return vscode.workspace.getConfiguration("nautilus").get<boolean>("confirmControllerWrites", true);
   }
 
+  /** The token for controllerWrite (forces, SFC): the gated one, for
+   * the controller's own origin only. */
   private token(): string {
-    return vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
+    return apiToken(this.runtimeUrl());
   }
 
   /** One controller write; reports a refusal or an unreachable controller
@@ -613,7 +614,7 @@ export class LiveValues implements vscode.Disposable {
     let buffer = "";
     const since = Date.now();
 
-    const req = mod.get(url, (res) => {
+    const req = mod.get(url, { headers: apiStreamHeaders(url.toString()) }, (res) => {
       if (res.statusCode !== 200) {
         res.resume();
         this.scheduleReconnect();
@@ -656,7 +657,7 @@ export class LiveValues implements vscode.Disposable {
   private async fetchMeta(): Promise<void> {
     this.metaAt = Date.now();
     try {
-      const res = await fetch(this.runtimeUrl() + "/api/meta", { signal: AbortSignal.timeout(3000) });
+      const res = await apiFetch(this.runtimeUrl() + "/api/meta", { signal: AbortSignal.timeout(3000) });
       if (!res.ok) return;
       this.types = flattenMetaTypes(await res.json());
       this.metaNames = this.lastTags.length + this.lastLocals.length;

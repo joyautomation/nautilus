@@ -548,23 +548,3 @@ func first(s []string, n int) []string {
 	}
 	return s
 }
-
-// controllerTagL5X builds the smallest importable L5X that declares one
-// controller-scoped tag. The SDK has no "create a tag" call — every
-// structural change is an L5X you construct and import — so this is the
-// normal way to get anything into a project.
-func controllerTagL5X(name, dataType, value string) string {
-	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<RSLogix5000Content SchemaRevision="1.0" TargetName="%[1]s" TargetType="Tag" ContainsContext="true" ExportOptions="References NoRawData L5KData DecoratedData Context">
-<Controller Use="Context" Name="Smoke">
-<Tags Use="Context">
-<Tag Use="Target" Name="%[1]s" TagType="Base" DataType="%[2]s" Radix="Float" Constant="false" ExternalAccess="Read/Write">
-<Data Format="Decorated">
-<DataValue DataType="%[2]s" Radix="Float" Value="%[3]s"/>
-</Data>
-</Tag>
-</Tags>
-</Controller>
-</RSLogix5000Content>
-`, name, dataType, value)
-}

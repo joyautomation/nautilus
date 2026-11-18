@@ -13,6 +13,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"golang.org/x/term"
+
+	"github.com/joyautomation/nautilus/internal/lsp"
 )
 
 //go:embed templates
@@ -44,6 +46,11 @@ type scaffold struct {
 	VSCode bool // .vscode extension recommendation + runtime URL
 	Git    bool // git init
 	Deploy bool // Dockerfile + k8s manifests + CD workflow (manifest tier)
+	// DeploySSH: a CD workflow that runs naut deploy on a box over SSH
+	// (manifest tier, #721). NautVersion pins the naut it builds on: this
+	// naut's release version, or empty for a development build.
+	DeploySSH   bool
+	NautVersion string
 
 	// Replace, if set, adds a filesystem `replace` directive pointing the
 	// nautilus dependency at a local checkout. For contributors testing
@@ -83,9 +90,13 @@ func (s *scaffold) settle() {
 		s.Language = "st"
 	}
 	// Deploy is a manifest-tier feature: the Dockerfile wraps the binary
-	// `naut build` emits, which the Go tier doesn't use.
+	// `naut build` emits, which the Go tier doesn't use. (DeploySSH is too;
+	// its one gate is the file table in write.)
 	if !s.NoGo() {
 		s.Deploy = false
+	}
+	if s.NautVersion == "" && isReleaseVersion(lsp.Version) {
+		s.NautVersion = "v" + strings.TrimPrefix(lsp.Version, "v")
 	}
 }
 
@@ -133,6 +144,7 @@ func parseNew(args []string, tty bool) (sc scaffold, form bool, code int) {
 	noGo := fs.Bool("no-go", false, "same as --template minimal (superseded by --template)")
 	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting (a name and --template already skip the prompts)")
 	deploy := fs.Bool("deploy", false, "add Dockerfile, k8s manifests, and a CD workflow (manifest templates)")
+	deploySSH := fs.Bool("deploy-ssh", false, "add a CD workflow that runs naut deploy on a box over SSH (manifest templates)")
 	replace := fs.String("replace", "", "path to a local nautilus checkout; adds a filesystem replace directive so the project builds against it (for contributors, pre-publish)")
 	if err := fs.Parse(args); err != nil {
 		return scaffold{}, false, 2
@@ -151,7 +163,7 @@ func parseNew(args []string, tty bool) (sc scaffold, form bool, code int) {
 	sc = scaffold{
 		Name:   name,
 		Module: *module,
-		CI:     true, VSCode: true, Git: true, Deploy: *deploy,
+		CI:     true, VSCode: true, Git: true, Deploy: *deploy, DeploySSH: *deploySSH,
 		Language: strings.ToLower(strings.TrimSpace(*language)),
 		Template: strings.ToLower(strings.TrimSpace(*tmpl)),
 	}
@@ -285,6 +297,9 @@ func prompt(sc *scaffold) error {
 	if sc.Deploy {
 		features = append(features, "deploy")
 	}
+	if sc.DeploySSH {
+		features = append(features, "deploy-ssh")
+	}
 	featureSelect := huh.NewMultiSelect[string]().
 		Title("Features").
 		Description("deploy applies to manifest templates (the Dockerfile wraps `naut build`)").
@@ -294,6 +309,7 @@ func prompt(sc *scaffold) error {
 			huh.NewOption("VS Code setup (extension recommendation, live values)", "vscode").Selected(true),
 			huh.NewOption("git init", "git").Selected(true),
 			huh.NewOption("Kubernetes deploy (Dockerfile, manifests, CD workflow)", "deploy"),
+			huh.NewOption("Deploy to a box over SSH (naut deploy, CD workflow)", "deploy-ssh"),
 		).
 		Value(&features)
 
@@ -344,6 +360,7 @@ func prompt(sc *scaffold) error {
 		return false
 	}
 	sc.CI, sc.VSCode, sc.Git, sc.Deploy = has("ci"), has("vscode"), has("git"), has("deploy")
+	sc.DeploySSH = has("deploy-ssh")
 	return nil
 }
 
@@ -392,6 +409,9 @@ func write(sc *scaffold) error {
 		{"Dockerfile.tmpl", "Dockerfile", sc.Deploy && sc.NoGo()},
 		{"deploy_k8s.yaml.tmpl", "deploy/k8s.yaml", sc.Deploy && sc.NoGo()},
 		{"deploy.yml.tmpl", ".github/workflows/deploy.yml", sc.Deploy && sc.NoGo()},
+		// The SSH flavour (#721): a tag runs naut deploy update on a runner
+		// that reaches the box. Its own file, so both can be chosen.
+		{"deploy_ssh.yml.tmpl", ".github/workflows/deploy-ssh.yml", sc.DeploySSH && sc.NoGo()},
 
 		// Guidance for AI coding agents (Codex, Claude Code, Cursor, …):
 		// how to structure LD/FBD/SFC text so the computed diagrams read

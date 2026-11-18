@@ -13,12 +13,17 @@ package tiadtest
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"path"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -31,7 +36,9 @@ import (
 // Fake is one fake agent. Set the exported fields before serving; read
 // what happened through the accessor methods.
 type Fake struct {
-	// Token, when set, is the bearer token every request must carry.
+	// Token is the bearer token every request must carry. New sets a
+	// random one; the agent never runs without a token, and neither does
+	// the fake (an empty Token refuses every request).
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
@@ -45,7 +52,7 @@ type Fake struct {
 	CompileResult tiad.CompileResult
 	// CompareResult, when set, is what compare returns. Otherwise the
 	// project equals the CPU exactly when this session's project is the
-	// last one downloaded to the station's CPU.
+	// last one downloaded to the station's CPU and has not changed since.
 	CompareResult *tiad.CompareResult
 
 	mu        sync.Mutex
@@ -55,15 +62,23 @@ type Fake struct {
 	next      int
 	downloads []Download
 	loaded    map[string]string // CPU address → session that last downloaded
+	claims    map[string]string // CPU address → the session that claimed it (one project per CPU)
 	mux       *http.ServeMux
 	once      sync.Once
 }
 
 type session struct {
 	id, project string
-	station     *tiad.Station
-	blocks      []tiad.Block
-	compiled    bool
+	// guard is the directory a created project owns, "projects/<name>/".
+	guard    string
+	station  *tiad.Station
+	blocks   []tiad.Block
+	compiled bool
+	// changed is true until a download loads the project as it is.
+	changed bool
+	// uploaded is true after an upload: the project no longer matches
+	// its spec until one is applied again.
+	uploaded bool
 }
 
 // Download records one real download. Secrets are never recorded.
@@ -73,8 +88,17 @@ type Download struct {
 	State   string
 }
 
-// New returns an empty fake.
-func New() *Fake { return &Fake{} }
+// New returns an empty fake with a random token.
+func New() *Fake { return &Fake{Token: RandomToken()} }
+
+// RandomToken is a fresh bearer token.
+func RandomToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
 
 // Serve starts the fake on a loopback port, closed when the test ends, and
 // returns a client for it.
@@ -83,6 +107,30 @@ func (f *Fake) Serve(t testing.TB) (*httptest.Server, *tiad.Client) {
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return srv, tiad.New(srv.URL, f.Token)
+}
+
+// SetGates replaces what probe reports while the fake is serving. Nil
+// means every gate passes.
+func (f *Fake) SetGates(gates []tiad.Gate) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Gates = append([]tiad.Gate(nil), gates...)
+}
+
+// SetCompileResult replaces what compile returns while the fake is
+// serving.
+func (f *Fake) SetCompileResult(r tiad.CompileResult) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.CompileResult = r
+}
+
+// SetQuestions makes every download ask qs while the fake is serving.
+func (f *Fake) SetQuestions(qs []tiad.Question) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	qs = append([]tiad.Question(nil), qs...)
+	f.PreDownload = func(tiad.DownloadRequest) []tiad.Question { return append([]tiad.Question(nil), qs...) }
 }
 
 // Downloads returns every real download so far.
@@ -143,6 +191,7 @@ func (f *Fake) init() {
 		f.gsd = map[string]bool{}
 		f.sessions = map[string]*session{}
 		f.loaded = map[string]string{}
+		f.claims = map[string]string{}
 		m := http.NewServeMux()
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
 		m.HandleFunc("GET /v1/probe", f.wrap(f.probe, false))
@@ -170,7 +219,12 @@ func (f *Fake) init() {
 // ServeHTTP makes the fake an http.Handler.
 func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.init()
-	if f.Token != "" && r.Header.Get("Authorization") != "Bearer "+f.Token {
+	// No browser ever calls the agent.
+	if r.Header.Get("Origin") != "" {
+		reply(w, nil, fail(http.StatusForbidden, tiad.KindUnauthorized, "a request with an Origin header (a browser) is refused"))
+		return
+	}
+	if f.Token == "" || r.Header.Get("Authorization") != "Bearer "+f.Token {
 		reply(w, nil, fail(http.StatusUnauthorized, tiad.KindUnauthorized, "missing or wrong token"))
 		return
 	}
@@ -210,13 +264,144 @@ func reply(w http.ResponseWriter, data any, fl *failure) {
 	_ = json.NewEncoder(w).Encode(env)
 }
 
+// contentType refuses a body of any other media type.
+func contentType(r *http.Request, want string) *failure {
+	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if !strings.EqualFold(ct, want) {
+		return fail(http.StatusUnsupportedMediaType, tiad.KindBadRequest, "Content-Type must be %s", want)
+	}
+	return nil
+}
+
 func decode(r *http.Request, v any) *failure {
-	dec := json.NewDecoder(r.Body)
+	if fl := contentType(r, "application/json"); fl != nil {
+		return fl
+	}
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: %v", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: %v", err)
 	}
+	// Decode reads one value and leaves the rest: a body is one document.
+	if _, err := dec.Token(); err != io.EOF {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: invalid character after the top-level value")
+	}
+	// encoding/json matches field names case-insensitively, so
+	// "stopCPU" would answer stopCpu. The agent matches exactly, and so
+	// must the fake: a misspelt decision is never an answer.
+	// A key twice is refused: "stopCpu": false, "stopCpu": true must
+	// never mean yes, whichever one a parser keeps.
+	if err := duplicateKey(b); err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: %v", err)
+	}
+	var raw any
+	_ = json.Unmarshal(b, &raw)
+	if err := exactKeys(raw, reflect.TypeOf(v), ""); err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: json: %v", err)
+	}
 	return nil
+}
+
+// duplicateKey returns an error for the first object key that appears
+// twice in one object, compared decoded.
+func duplicateKey(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	type frame struct {
+		object  bool
+		wantKey bool
+		keys    map[string]bool
+	}
+	var stack []*frame
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil // the decode proper reports syntax errors
+		}
+		var top *frame
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		if top != nil && top.object && top.wantKey {
+			if k, ok := tok.(string); ok {
+				if top.keys[k] {
+					return fmt.Errorf("duplicate key %q", k)
+				}
+				top.keys[k] = true
+				top.wantKey = false
+				continue
+			}
+		}
+		switch tok {
+		case json.Delim('{'):
+			stack = append(stack, &frame{object: true, wantKey: true, keys: map[string]bool{}})
+			continue
+		case json.Delim('['):
+			stack = append(stack, &frame{})
+			continue
+		case json.Delim('}'), json.Delim(']'):
+			stack = stack[:len(stack)-1]
+		}
+		// A value ended: the enclosing object wants its next key.
+		if len(stack) > 0 && stack[len(stack)-1].object {
+			stack[len(stack)-1].wantKey = true
+		}
+	}
+}
+
+// exactKeys checks that every object key in raw is exactly a JSON field
+// name of t, at every depth.
+func exactKeys(raw any, t reflect.Type, at string) error {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch v := raw.(type) {
+	case map[string]any:
+		switch t.Kind() {
+		case reflect.Map:
+			for k, x := range v {
+				if err := exactKeys(x, t.Elem(), at+k+"."); err != nil {
+					return err
+				}
+			}
+		case reflect.Struct:
+			for k, x := range v {
+				f, ok := fieldByTag(t, k)
+				if !ok {
+					return fmt.Errorf("unknown field %q", at+k)
+				}
+				if err := exactKeys(x, f.Type, at+k+"."); err != nil {
+					return err
+				}
+			}
+		}
+	case []any:
+		if t.Kind() == reflect.Slice {
+			for _, x := range v {
+				if err := exactKeys(x, t.Elem(), at); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func fieldByTag(t reflect.Type, name string) (reflect.StructField, bool) {
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		if tag == "" {
+			tag = f.Name
+		}
+		if tag == name {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // cleanPath enforces the work-dir sandbox with the client's own rule.
@@ -258,6 +443,9 @@ func (f *Fake) listFiles(*http.Request) (any, *failure) {
 }
 
 func (f *Fake) putFile(r *http.Request) (any, *failure) {
+	if fl := contentType(r, "application/octet-stream"); fl != nil {
+		return nil, fl
+	}
 	p, fl := cleanPath(r.PathValue("path"))
 	if fl != nil {
 		return nil, fl
@@ -317,9 +505,62 @@ func (f *Fake) installGSD(r *http.Request) (any, *failure) {
 	if !strings.HasPrefix(strings.ToUpper(name), "GSDML-") || !strings.HasSuffix(strings.ToLower(name), ".xml") {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s is not named like a GSDML file (GSDML-*.xml)", name)
 	}
+	if fl := checkGSDML(name, f.files[p]); fl != nil {
+		return nil, fl
+	}
 	already := f.gsd[name]
 	f.gsd[name] = true
 	return tiad.GSDInstall{Path: p, AlreadyInstalled: already}, nil
+}
+
+// projectDirHolding returns the open session whose project directory holds
+// dir: a created project's guard, an opened project's own directory. A
+// project at the work dir's root holds none.
+func (f *Fake) projectDirHolding(dir string) *session {
+	d := strings.TrimSuffix(dir, "/") + "/"
+	for _, s := range f.sessions {
+		own := s.guard
+		if own == "" {
+			i := strings.LastIndex(s.project, "/")
+			if i < 0 {
+				continue
+			}
+			own = s.project[:i+1]
+		}
+		if len(d) >= len(own) && strings.EqualFold(d[:len(own)], own) {
+			return s
+		}
+	}
+	return nil
+}
+
+// checkGSDML is the agent's guard before TIA parses a GSDML file: well-
+// formed XML with a root element and no DOCTYPE, so no external entity
+// reaches TIA's importer.
+func checkGSDML(name string, b []byte) *failure {
+	dec := xml.NewDecoder(bytes.NewReader(b))
+	root := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s is not well-formed XML without a DOCTYPE: tiad never hands TIA a DOCTYPE", name)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			root = true
+		case xml.Directive:
+			if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(string(t))), "DOCTYPE") {
+				return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s is not well-formed XML without a DOCTYPE: tiad never hands TIA a DOCTYPE", name)
+			}
+		}
+	}
+	if !root {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s has no root element", name)
+	}
+	return nil
 }
 
 // checkStation applies the agent-side station rules: the spec's own,
@@ -347,14 +588,23 @@ func (f *Fake) checkStation(st tiad.Station, sec tiad.Secrets) *failure {
 
 func (f *Fake) newSession(project string) *session {
 	f.next++
-	s := &session{id: fmt.Sprintf("s%d", f.next), project: project}
+	s := &session{id: fmt.Sprintf("s%d", f.next), project: project, changed: true}
 	f.sessions[s.id] = s
 	return s
 }
 
-func (f *Fake) projectOpen(project string) bool {
+// projectOpen compares paths case-insensitively: the work dir is on
+// Windows, where projects/P/P.ap21 and projects/p/p.ap21 are one file. A
+// created project owns its directory (guard): nothing in it opens while
+// it is open, and it is not created again while anything in it is open.
+func (f *Fake) projectOpen(project, guard string) bool {
+	hasPrefix := func(s, prefix string) bool {
+		return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+	}
 	for _, s := range f.sessions {
-		if s.project == project {
+		if strings.EqualFold(s.project, project) ||
+			guard != "" && hasPrefix(s.project, guard) ||
+			s.guard != "" && hasPrefix(project, s.guard) {
 			return true
 		}
 	}
@@ -377,10 +627,12 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	project := "projects/" + req.Name + "/" + req.Name + ".ap21"
-	if f.projectOpen(project) {
-		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s is already open", project)
+	guard := "projects/" + req.Name + "/"
+	if f.projectOpen(project, guard) {
+		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s, or something in %s, is open", project, guard)
 	}
 	s := f.newSession(project)
+	s.guard = guard
 	st := req.Station
 	s.station = &st
 	f.files[project] = []byte("fake TIA project")
@@ -401,7 +653,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 	if _, ok := f.files[p]; !ok {
 		return nil, fail(http.StatusNotFound, tiad.KindNotFound, "no project %s", p)
 	}
-	if f.projectOpen(p) {
+	if f.projectOpen(p, "") {
 		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s is already open", p)
 	}
 	s := f.newSession(p)
@@ -431,6 +683,11 @@ func (f *Fake) closeSession(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	delete(f.sessions, s.id)
+	for addr, id := range f.claims {
+		if id == s.id {
+			delete(f.claims, addr)
+		}
+	}
 	return struct{}{}, nil
 }
 
@@ -452,8 +709,10 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	changes := StationChanges(s.station, req.Station)
 	st := req.Station
 	s.station = &st
+	s.uploaded = false
 	if len(changes) > 0 {
 		s.compiled = false
+		s.changed = true
 	}
 	return tiad.StationResult{Changes: changes}, nil
 }
@@ -522,6 +781,7 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	}
 	sort.Slice(s.blocks, func(i, j int) bool { return s.blocks[i].Name < s.blocks[j].Name })
 	s.compiled = false
+	s.changed = true
 	res.Blocks = append([]tiad.Block{}, s.blocks...)
 	return res, nil
 }
@@ -584,7 +844,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, req.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", req.Address)
 	}
-	if s.station == nil {
+	if s.station == nil || s.uploaded {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "the project has no station spec")
 	}
 	if s.station.CPU.Address != req.Address {
@@ -592,8 +852,14 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			"the project's CPU is at %s, not %s: one station spec per CPU", s.station.CPU.Address, req.Address)
 	}
 	if !s.compiled {
-		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "the project changed since the last full compile; compile hardware and software first")
+		return nil, fail(http.StatusConflict, tiad.KindNotCompiled, "the project changed since the last full compile; compile hardware and software first")
 	}
+	// One project per CPU: the first download claims the CPU for its
+	// session, dry runs included, until that session is closed.
+	if holder, ok := f.claims[req.Address]; ok && holder != s.id {
+		return nil, fail(http.StatusConflict, tiad.KindBusy, "CPU %s belongs to session %s: one CPU, one project; close that session first", req.Address, holder)
+	}
+	f.claims[req.Address] = s.id
 	var qs []tiad.Question
 	if f.PreDownload != nil {
 		qs = f.PreDownload(req)
@@ -605,7 +871,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	// Openness can list the checks and cancel with nothing loaded is
 	// provisional until S2 (siemens-ide.md §3.5); the fake models the aim.
 	if req.DryRun {
-		return tiad.DownloadResult{DryRun: true, Questions: qs}, nil
+		return tiad.DownloadResult{DryRun: true, Provisional: true, Questions: qs}, nil
 	}
 	haveProtection := req.Secrets != nil && req.Secrets.Protection != ""
 	unanswered, declined := tiad.Resolve(qs, req.Decisions, haveProtection)
@@ -633,12 +899,16 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	rec.Secrets = nil
 	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
 	f.loaded[req.Address] = s.id
+	s.changed = false
 	return tiad.DownloadResult{Downloaded: true, Questions: qs, State: state}, nil
 }
 
 func (f *Fake) compare(r *http.Request) (any, *failure) {
 	s, fl := f.session(r)
 	if fl != nil {
+		return nil, fl
+	}
+	if fl := decode(r, &struct{}{}); fl != nil {
 		return nil, fl
 	}
 	if f.CompareResult != nil {
@@ -650,7 +920,7 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, s.station.CPU.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", s.station.CPU.Address)
 	}
-	if f.loaded[s.station.CPU.Address] == s.id && s.compiled {
+	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
 		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}}, nil
 	}
 	return tiad.CompareResult{Differences: []tiad.Difference{{Object: s.station.CPU.Name, State: "different"}}}, nil
@@ -668,6 +938,10 @@ func (f *Fake) export(r *http.Request) (any, *failure) {
 	dir, fl := cleanPath(req.Dir)
 	if fl != nil {
 		return nil, fl
+	}
+	// An export never writes into an open project's directory.
+	if holder := f.projectDirHolding(dir); holder != nil {
+		return nil, fail(http.StatusConflict, tiad.KindBusy, "%s is inside the directory of the open project %s", dir, holder.project)
 	}
 	var out []string
 	put := func(name string, b []byte) {
@@ -710,9 +984,15 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if fl := decode(r, &struct{}{}); fl != nil {
+		return nil, fl
+	}
 	if s.station == nil || !contains(f.Targets, s.station.CPU.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "the project's CPU is not in TIAD_TARGETS")
 	}
+	s.compiled = false
+	s.changed = true
+	s.uploaded = true
 	return struct{}{}, nil
 }
 

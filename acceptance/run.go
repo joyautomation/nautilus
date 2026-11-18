@@ -55,12 +55,11 @@ type Failure struct {
 // "what did it actually do", which is the only question worth asking when
 // a settling or delay assertion fails.
 type TraceTag struct {
-	Name    string    `json:"name"`
-	Unit    string    `json:"unit,omitempty"`
-	Desc    string    `json:"desc,omitempty"`
-	At      []float64 `json:"atMs"`
-	Values  []string  `json:"values"`
-	stepped bool
+	Name   string    `json:"name"`
+	Unit   string    `json:"unit,omitempty"`
+	Desc   string    `json:"desc,omitempty"`
+	At     []float64 `json:"atMs"`
+	Values []string  `json:"values"`
 }
 
 // TB is the slice of *testing.T the Go tier needs. Kept as an interface so

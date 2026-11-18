@@ -480,37 +480,6 @@ func TestCorpus(t *testing.T) {
 	}
 }
 
-// detailOf reduces a note to the shape that caused it: a timer member
-// name, a bit index, the first instruction after a one-shot.
-func detailOf(n Note) string {
-	t := n.Text
-	switch n.Reason {
-	case "member":
-		for _, m := range []string{".TT", ".EN", ".CU", ".OV", ".UN", ".CD", ".DN", ".ACC", ".PRE"} {
-			if strings.Contains(t, m) {
-				return m
-			}
-		}
-	case "bit":
-		return "bit"
-	case "ONS":
-		if i := strings.Index(t, "ONS("); i >= 0 {
-			rest := t[i:]
-			if j := strings.Index(rest, ")"); j >= 0 && j+1 < len(rest) {
-				after := rest[j+1:]
-				if k := strings.Index(after, "("); k > 0 {
-					return "then " + after[:k]
-				}
-				return "then end"
-			}
-		}
-	}
-	if len(t) > 30 {
-		t = t[:30]
-	}
-	return t
-}
-
 func at(s []string, i int) string {
 	if i < len(s) {
 		return s[i]

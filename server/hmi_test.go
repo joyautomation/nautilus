@@ -23,7 +23,7 @@ func TestUnmatchedAPIPathIs404(t *testing.T) {
 			h := New(newTestRuntime(t), opts).Handler()
 			for _, p := range []string{"/api/nope", "/api/nope/deeper", "/api/", "/api/tags"} {
 				rec := httptest.NewRecorder()
-				h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+				h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+p, nil))
 				if rec.Code != 404 {
 					t.Errorf("GET %s = %d, want 404", p, rec.Code)
 				}
@@ -45,7 +45,7 @@ func TestHMISPAFallbackSurvivesAPI404(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 	for _, p := range []string{"/apis", "/api-docs", "/tanks/api/x"} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+p, nil))
 		if rec.Code != 200 || rec.Body.String() != "<html>hmi shell</html>" {
 			t.Errorf("GET %s = %d %q, want the SPA fallback", p, rec.Code, rec.Body.String())
 		}
@@ -70,7 +70,7 @@ func testHMI() fstest.MapFS {
 func TestHMIServesStaticFile(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/favicon.png", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/favicon.png", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /favicon.png = %d, want 200", rec.Code)
 	}
@@ -85,7 +85,7 @@ func TestHMIServesStaticFile(t *testing.T) {
 func TestHMIOwnAssetsServed(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/assets/index.js", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/assets/index.js", nil))
 	if rec.Code != 200 || rec.Body.String() != "console.log('hmi')" {
 		t.Fatalf("GET /assets/index.js = %d %q", rec.Code, rec.Body.String())
 	}
@@ -98,7 +98,7 @@ func TestHMISPAFallback(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 	for _, p := range []string{"/", "/dashboard", "/tanks/101/trend"} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+p, nil))
 		if rec.Code != 200 {
 			t.Fatalf("GET %s = %d, want 200 (SPA fallback)", p, rec.Code)
 		}
@@ -113,7 +113,7 @@ func TestHMISPAFallback(t *testing.T) {
 func TestHMINestedRealFileWins(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/tanks/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/tanks/", nil))
 	if rec.Code != 200 || rec.Body.String() != "<html>nested route file</html>" {
 		t.Fatalf("GET /tanks/ = %d %q, want the nested index.html", rec.Code, rec.Body.String())
 	}
@@ -124,7 +124,7 @@ func TestHMINestedRealFileWins(t *testing.T) {
 func TestHMIDoesNotShadowAPI(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /api/state = %d, want 200", rec.Code)
 	}
@@ -140,7 +140,7 @@ func TestHMIMovesBuiltinDashboardToNautilusPrefix(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_nautilus/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/_nautilus/", nil))
 	if rec.Code != 200 || rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Fatalf("GET /_nautilus/ = %d %q, want the built-in dashboard", rec.Code, rec.Header().Get("Content-Type"))
 	}
@@ -149,7 +149,7 @@ func TestHMIMovesBuiltinDashboardToNautilusPrefix(t *testing.T) {
 	}
 
 	rec2 := httptest.NewRecorder()
-	h.ServeHTTP(rec2, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec2, httptest.NewRequest("GET", "http://localhost/", nil))
 	if rec2.Body.String() != "<html>hmi shell</html>" {
 		t.Fatal("GET / must serve the HMI, not the built-in dashboard, once server.hmi is set")
 	}
@@ -161,7 +161,7 @@ func TestHMIMovesBuiltinDashboardToNautilusPrefix(t *testing.T) {
 func TestHMIBuiltinAssetsMoveWithDashboard(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_nautilus/assets/logo.svg", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/_nautilus/assets/logo.svg", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /_nautilus/assets/logo.svg = %d, want 200 (the embedded dashboard asset)", rec.Code)
 	}
@@ -190,7 +190,7 @@ func (f noSeekFile) Close() error               { return f.inner.Close() }
 func TestHMINonSeekableFS(t *testing.T) {
 	h := New(newTestRuntime(t), Options{HMI: noSeekFS{testHMI()}}).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/tanks/101", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/tanks/101", nil))
 	if rec.Code != 200 {
 		t.Fatalf("deep link on non-seekable FS = %d, want 200", rec.Code)
 	}
@@ -218,7 +218,7 @@ func TestHMIETagFollowsRebuild(t *testing.T) {
 
 	get := func(p string) (string, int) {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+p, nil))
 		return rec.Header().Get("Etag"), rec.Code
 	}
 	first, _ := get("/models/pump.glb")
@@ -231,7 +231,7 @@ func TestHMIETagFollowsRebuild(t *testing.T) {
 	if second == first {
 		t.Fatalf("ETag %s unchanged after the file was rebuilt", first)
 	}
-	req := httptest.NewRequest("GET", "/models/pump.glb", nil)
+	req := httptest.NewRequest("GET", "http://localhost/models/pump.glb", nil)
 	req.Header.Set("If-None-Match", first)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -256,7 +256,7 @@ func TestHMICachePolicy(t *testing.T) {
 	// Last-Modified — the hash is the only validator.
 	for _, p := range []string{"/", "/tanks/101"} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+p, nil))
 		if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
 			t.Fatalf("%s Cache-Control = %q, want no-cache", p, cc)
 		}
@@ -270,9 +270,9 @@ func TestHMICachePolicy(t *testing.T) {
 
 	// A correct ETag revalidates to 304…
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/", nil))
 	etag := rec.Header().Get("Etag")
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "http://localhost/", nil)
 	req.Header.Set("If-None-Match", etag)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -282,7 +282,7 @@ func TestHMICachePolicy(t *testing.T) {
 
 	// …but If-Modified-Since alone — what a tab cached before the redeploy
 	// sends — must NOT 304: the mod time is not a validator here.
-	req = httptest.NewRequest("GET", "/", nil)
+	req = httptest.NewRequest("GET", "http://localhost/", nil)
 	req.Header.Set("If-Modified-Since", "Fri, 30 Nov 1979 00:00:00 GMT")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -292,7 +292,7 @@ func TestHMICachePolicy(t *testing.T) {
 
 	// Content-hashed files are immutable for a year.
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_app/immutable/entry/app.test.js", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/_app/immutable/entry/app.test.js", nil))
 	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
 		t.Fatalf("immutable asset Cache-Control = %q", cc)
 	}

@@ -1,0 +1,85 @@
+# Continuous deployment to a box over SSH (naut deploy): a tag that passes
+# check + test is built for the box's architecture, swapped in, and
+# restarted; if it does not start, the box goes back to the release before
+# it and this job fails. Rolling back by hand is `naut deploy rollback`.
+#
+# Set up once, in the repository's settings:
+#   - a self-hosted runner that reaches the box over SSH (plant boxes are
+#     rarely reachable from GitHub's hosted runners), labelled `plant`;
+#   - variable DEPLOY_TARGET: the box, as ssh takes it (deploy@10.0.0.20);
+#   - secret DEPLOY_SSH_KEY: a private key the box accepts for that user
+#     (root, or sudo without a password);
+#   - secret DEPLOY_KNOWN_HOSTS: the box's host key line (ssh-keyscan);
+#   - environment "plant" with required reviewers: every deploy waits for
+#     one of them to approve it.
+# GitHub's hosted runners cannot reach a plant LAN: use a self-hosted
+# runner on the plant network, or add a step that joins a tailnet or VPN.
+# Only a tag on the default branch deploys; a tag pushed on any other
+# branch fails the job before anything is built.
+# The box needs systemd, sh, coreutils and tar; nothing else is installed.
+name: deploy
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time. A newer tag queued behind a running deploy replaces
+# an older one still waiting: the box goes to the newest tag, not to each.
+concurrency: deploy
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, plant]
+    environment: plant # its required reviewers approve each deploy
+    env:
+      # The naut every build uses; change it in a commit. A person deploying
+      # by hand from a clean checkout with the same naut release builds the
+      # same controller.
+      NAUT_VERSION: {{if .NautVersion}}{{.NautVersion}}{{else}}vX.Y.Z # set to a naut release (naut version){{end}}
+      NAUT_RELEASES: https://github.com/joyautomation/nautilus/releases/download
+      TARGET: ${{"{{"}} vars.DEPLOY_TARGET {{"}}"}}
+      DEFAULT_BRANCH: ${{"{{"}} github.event.repository.default_branch {{"}}"}}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # git describe names the release by its tag
+          persist-credentials: false
+      - name: the tag is on the default branch
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "$GITHUB_REF_NAME ($GITHUB_SHA) is not on $DEFAULT_BRANCH: not deploying" >&2
+            exit 1
+          fi
+      - name: install naut
+        # Outside the checkout: naut build embeds the project directory, and
+        # a naut binary left in it would ship inside the controller.
+        run: |
+          case $NAUT_VERSION in v[0-9]*) ;; *) echo "set NAUT_VERSION to a naut release" >&2; exit 1 ;; esac
+          [ -n "$TARGET" ] || { echo "set the repository variable DEPLOY_TARGET" >&2; exit 1; }
+          case $(uname -m) in aarch64 | arm64) a=arm64 ;; armv7*) a=armv7 ;; *) a=amd64 ;; esac
+          v=$NAUT_VERSION
+          f=nautilus_${v#v}_linux_$a.tar.gz
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$NAUT_RELEASES/$v/$f"
+          curl -fsSLO "$NAUT_RELEASES/$v/checksums.txt"
+          grep " $f\$" checksums.txt | sha256sum -c -
+          tar xzf "$f" naut
+          echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
+      - run: naut check . && naut test .
+      - name: deploy
+        env:
+          SSH_KEY: ${{"{{"}} secrets.DEPLOY_SSH_KEY {{"}}"}}
+          KNOWN_HOSTS: ${{"{{"}} secrets.DEPLOY_KNOWN_HOSTS {{"}}"}}
+        # NAUT_SSH_OPTS is split on spaces: RUNNER_TEMP must not contain one
+        # (it does not on GitHub's runners or a default self-hosted one).
+        # Only this key and this host key count, whatever the runner's own
+        # ssh_config says.
+        run: |
+          trap 'rm -f "$RUNNER_TEMP/key" "$RUNNER_TEMP/known_hosts"' EXIT
+          (umask 077; printf '%s\n' "$SSH_KEY" >"$RUNNER_TEMP/key")
+          printf '%s\n' "$KNOWN_HOSTS" >"$RUNNER_TEMP/known_hosts"
+          export NAUT_SSH_OPTS="-i $RUNNER_TEMP/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o GlobalKnownHostsFile=/dev/null"
+          naut deploy update "$TARGET"

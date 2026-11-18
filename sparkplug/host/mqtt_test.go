@@ -27,7 +27,8 @@ import (
 	mqttsrv "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
-	"github.com/mochi-mqtt/server/v2/packets"
+
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -77,6 +78,12 @@ func newBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
 	if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatalf("auth hook: %v", err)
 	}
+	// The host reconnects with the same client ID on a leadership change;
+	// mochi v2.7.9 can drop the new session if the old one is still being
+	// torn down (testmqtt.SameIDSerializer).
+	if err := srv.AddHook(&testmqtt.SameIDSerializer{Server: srv}, nil); err != nil {
+		t.Fatalf("same-id hook: %v", err)
+	}
 	tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: addr})
 	if err := srv.AddListener(tcp); err != nil {
 		t.Fatalf("listen: %v", err)
@@ -85,61 +92,10 @@ func newBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
 	return srv, tcp.Address()
 }
 
-// closeBroker stops a startBroker broker. Use it instead of srv.Close, which
-// can deadlock in mochi-mqtt v2.7.9 (mochi-mqtt/server#488, unfixed
-// upstream): Close's client sweep, Clients.GetByListener, read-locks the
-// client map and then read-locks it again through Len, so a client
-// disconnecting at that moment (Clients.Delete, a writer queued between the
-// two) blocks both forever. CI hung ten minutes on exactly that.
-//
-// TCP.Close runs its client sweep only the first time a listener closes, so
-// closing it here with a no-op sweep takes GetByListener out of srv.Close
-// entirely. The clients are disconnected from GetAll's copy instead (one
-// read lock), repeatedly while srv.Close waits for their goroutines, which
-// also catches one accepted just before the listener shut.
-//
-// It is idempotent: startBroker registers it as a cleanup, and a test that
-// takes the broker down mid-run (broker loss) closes it again harmlessly;
-// mochi's own Close panics on a second call.
-func closeBroker(srv *mqttsrv.Server) error {
-	brokersMu.Lock()
-	once, ok := brokerClose[srv]
-	if !ok {
-		once = new(closeOnce)
-		brokerClose[srv] = once
-	}
-	brokersMu.Unlock()
-	once.Do(func() { once.err = closeBrokerNow(srv) })
-	return once.err
-}
-
-type closeOnce struct {
-	sync.Once
-	err error
-}
-
-var (
-	brokersMu   sync.Mutex
-	brokerClose = map[*mqttsrv.Server]*closeOnce{}
-)
-
-func closeBrokerNow(srv *mqttsrv.Server) error {
-	srv.Listeners.Close("t", func(string) {})
-	done := make(chan error, 1)
-	go func() { done <- srv.Close() }()
-	for {
-		for _, cl := range srv.Clients.GetAll() {
-			if !cl.Closed() {
-				_ = srv.DisconnectClient(cl, packets.ErrServerShuttingDown)
-			}
-		}
-		select {
-		case err := <-done:
-			return err
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
-}
+// closeBroker stops a startBroker broker: testmqtt.Close, which avoids
+// mochi v2.7.9's Close deadlock and is idempotent (startBroker registers it
+// as a cleanup; a broker-loss test may close the broker earlier too).
+func closeBroker(srv *mqttsrv.Server) error { return testmqtt.Close(srv) }
 
 func brokerURL(addr string) string { return "tcp://" + addr }
 

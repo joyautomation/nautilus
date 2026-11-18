@@ -1,7 +1,5 @@
 package ir
 
-import "fmt"
-
 // FBs holds every built-in function block the IR knows about. The
 // lowering pass consults it when a VAR declaration names an FB type
 // that isn't a user UDT.
@@ -334,14 +332,4 @@ func registerLatches() {
 			return nil
 		},
 	})
-}
-
-// fbSlotByName returns the slot index for a named FB input/output/internal.
-// Used by lowering to translate `t1(IN := …)` into an InputBinding.
-func fbSlotByName(def *FBDef, name string) (int, error) {
-	idx, ok := def.SlotOf(name)
-	if !ok {
-		return 0, fmt.Errorf("FB %s has no field %q", def.Name, name)
-	}
-	return idx, nil
 }

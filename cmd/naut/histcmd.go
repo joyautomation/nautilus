@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -26,6 +27,8 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/hist"
+	"github.com/joyautomation/nautilus/internal/apiclient"
+	"github.com/joyautomation/nautilus/server"
 )
 
 const historianUsage = `naut historian — archive a controller's tags into Postgres
@@ -54,9 +57,17 @@ Usage:
   naut historian -source <url> -db <dsn> [flags]
 
 Flags:
-  -addr         Listen address for the historian's own HTTP API (default :9100)
+  -addr         Listen address for the historian's own HTTP API (default :9100).
+                It answers localhost, an IP address or a name in
+                NAUTILUS_ALLOWED_HOSTS, or a request carrying NAUTILUS_TOKEN;
+                a controller's server.historian URL names it, so list that
+                name (e.g. "historian") unless the URL is by IP.
   -source       Controller base URL to poll, e.g. http://plc:8080
-                (env NAUTILUS_SOURCE_URL). Required.
+                (env NAUTILUS_SOURCE_URL). Required. The controller must
+                answer that name: list it in the controller's
+                NAUTILUS_ALLOWED_HOSTS, or use its IP, or, if the
+                controller has a token, set the same NAUTILUS_TOKEN here
+                (the poll sends it).
   -db           Postgres DSN (env DATABASE_URL). Required.
   -retention    How long to keep samples before pruning (default 168h)
   -interval     Poll/collect interval (default 1s)
@@ -156,7 +167,7 @@ func runHistorian(args []string) int {
 
 	srv := &historianServer{store: store}
 	fmt.Fprintf(os.Stderr, "naut historian: serving history on %s\n", *addr)
-	if err := http.ListenAndServe(*addr, srv.handler()); err != nil {
+	if err := http.ListenAndServe(*addr, srv.guarded()); err != nil {
 		fmt.Fprintln(os.Stderr, "naut historian:", err)
 		return 1
 	}
@@ -311,6 +322,31 @@ func runCollector(ctx context.Context, sink hist.Sink, source string, patterns, 
 	}
 }
 
+// sourceRefused says, on stderr, that the controller answered a poll with
+// an error: at once when the status changes, then at most once a minute,
+// so a one-second interval does not flood the log.
+var sourceRefused refusalLog
+
+type refusalLog struct {
+	mu     sync.Mutex
+	status int
+	last   time.Time
+}
+
+func (l *refusalLog) report(source string, status int, body string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if status == l.status && time.Since(l.last) < time.Minute {
+		return
+	}
+	l.status, l.last = status, time.Now()
+	hint := ""
+	if status == http.StatusForbidden {
+		hint = "; add the name in -source to NAUTILUS_ALLOWED_HOSTS on the controller, or point -source at its IP, or set the controller's NAUTILUS_TOKEN here too"
+	}
+	fmt.Fprintf(os.Stderr, "naut historian: %s/api/state answered %d, so nothing is archived: %s%s\n", source, status, body, hint)
+}
+
 // collectOnce performs one poll-and-archive step. Split out from
 // runCollector so a test can drive it directly against an httptest server
 // and a fake Sink without a ticker in the way. filter may be nil (or a
@@ -324,7 +360,14 @@ func runCollector(ctx context.Context, sink hist.Sink, source string, patterns, 
 // it (network + JSON decode latency), which is acceptable for trend
 // charts but worth knowing if sub-second alignment ever matters.
 func collectOnce(hc *http.Client, sink hist.Sink, source string, patterns, excludes []string, filter *changeFilter, deadband float64, minInterval time.Duration) {
-	resp, err := hc.Get(source + "/api/state")
+	req, err := http.NewRequest("GET", source+"/api/state", nil)
+	if err != nil {
+		return
+	}
+	// A controller with a token answers a name it does not trust only
+	// with the token (#819), so the poll carries NAUTILUS_TOKEN when set.
+	apiclient.Authorize(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		// Source momentarily unreachable — e.g. mid-failover, where the
 		// standby proxy means the Service answers again in seconds. Skip
@@ -332,6 +375,13 @@ func collectOnce(hc *http.Client, sink hist.Sink, source string, patterns, exclu
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		// A controller that refuses (403: reached by a name it does not
+		// trust, #819) or fails must not leave the history silently blank.
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		sourceRefused.report(source, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return
+	}
 	var frame frameTagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&frame); err != nil {
 		return
@@ -375,6 +425,15 @@ type histStore interface {
 var _ histStore = (*hist.Store)(nil)
 
 type historianServer struct{ store histStore }
+
+// guarded is the handler under the controller's Host rule (#831): the
+// archive is answered by localhost, an IP address or a name in
+// NAUTILUS_ALLOWED_HOSTS, or to a request carrying NAUTILUS_TOKEN (the
+// token the poll sends), so a page on another site cannot rebind a name
+// to the historian and read it.
+func (s *historianServer) guarded() http.Handler {
+	return server.NewHostGuard("historian", os.Getenv("NAUTILUS_TOKEN")).Wrap(s.handler())
+}
 
 func (s *historianServer) handler() http.Handler {
 	mux := http.NewServeMux()

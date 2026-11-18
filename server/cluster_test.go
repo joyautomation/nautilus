@@ -32,7 +32,7 @@ func TestClusterEndpointReportsStatus(t *testing.T) {
 	}}})
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/cluster", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/cluster", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -54,7 +54,7 @@ func TestClusterEndpointReportsStatus(t *testing.T) {
 func TestClusterEndpointNilCluster(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/cluster", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/cluster", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -96,7 +96,7 @@ func TestStandbyProxiesToLeader(t *testing.T) {
 	}}})
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 
 	if !hit {
 		t.Fatal("standby answered /api/state locally instead of proxying to the leader")
@@ -127,7 +127,7 @@ func TestStandbyAnswersClusterAndIndexLocally(t *testing.T) {
 	h := srv.Handler()
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/cluster", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/cluster", nil))
 	if rec.Code != 200 {
 		t.Fatalf("/api/cluster status = %d", rec.Code)
 	}
@@ -140,7 +140,7 @@ func TestStandbyAnswersClusterAndIndexLocally(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET / status = %d", rec.Code)
 	}
@@ -164,7 +164,7 @@ func TestStandbyWithNoLeaderServesLocally(t *testing.T) {
 	}}})
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 	}
@@ -190,7 +190,7 @@ func TestLeaderNeverProxies(t *testing.T) {
 	}}})
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -221,13 +221,13 @@ func TestGateClosedLeaseHolderDoesNotProxyToItself(t *testing.T) {
 	h := srv.Handler()
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /api/state = %d, want 200 from the local store: %s", rec.Code, rec.Body)
 	}
 
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/forces", strings.NewReader(`{"name":"Level","value":1}`)))
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/forces", strings.NewReader(`{"name":"Level","value":1}`)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("POST /api/forces = %d, want 503: %s", rec.Code, rec.Body)
 	}

@@ -188,3 +188,40 @@ func TestEtherTypeFilterShape(t *testing.T) {
 		t.Error("drop/accept order")
 	}
 }
+
+// The kernel filter is exactly the program it was before the move from the
+// deprecated syscall.AttachLsf to unix.SetsockoptSockFprog (staticcheck
+// SA1019, #881): same instructions, same jumps, for one and two EtherTypes.
+func TestEtherTypeFilterGolden(t *testing.T) {
+	type ins struct {
+		code   uint16
+		jt, jf uint8
+		k      uint32
+	}
+	for _, c := range []struct {
+		types []uint16
+		want  []ins
+	}{
+		{[]uint16{0x8892}, []ins{
+			{0x28, 0, 0, 0xc}, {0x15, 4, 0, 0x8892}, {0x15, 0, 2, 0x8100}, {0x28, 0, 0, 0x10},
+			{0x15, 1, 0, 0x8892}, {0x06, 0, 0, 0x0}, {0x06, 0, 0, 0x40000},
+		}},
+		{[]uint16{0x8892, 0x88CC}, []ins{
+			{0x28, 0, 0, 0xc}, {0x15, 6, 0, 0x8892}, {0x15, 5, 0, 0x88cc}, {0x15, 0, 3, 0x8100},
+			{0x28, 0, 0, 0x10}, {0x15, 2, 0, 0x8892}, {0x15, 1, 0, 0x88cc}, {0x06, 0, 0, 0x0},
+			{0x06, 0, 0, 0x40000},
+		}},
+	} {
+		got := etherTypeFilter(c.types)
+		if len(got) != len(c.want) {
+			t.Fatalf("%x: %d instructions, want %d", c.types, len(got), len(c.want))
+		}
+		for i, w := range c.want {
+			g := got[i]
+			if g.Code != w.code || g.Jt != w.jt || g.Jf != w.jf || g.K != w.k {
+				t.Errorf("%x: instruction %d = {%#x %d %d %#x}, want {%#x %d %d %#x}",
+					c.types, i, g.Code, g.Jt, g.Jf, g.K, w.code, w.jt, w.jf, w.k)
+			}
+		}
+	}
+}

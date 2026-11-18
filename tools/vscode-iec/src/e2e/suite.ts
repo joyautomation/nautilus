@@ -10,6 +10,7 @@ import * as vscode from "vscode";
 import { cliVersion, managedCliPath, resolveCliNow } from "../cli";
 import { nautCompose } from "../compose";
 import { fbdGraph } from "../fbdPreview";
+import { apiFetch } from "../apiFetch";
 
 const FBD = "PROGRAM Main\nVAR\n  a : BOOL;\n  b : BOOL;\nEND_VAR\nb := a;\nEND_PROGRAM\n";
 
@@ -72,7 +73,7 @@ async function downloadWithLadderLibrary(cli: string, folder: vscode.Uri): Promi
     const boot = await step("controller up", 60_000, async () => {
       for (;;) {
         try {
-          const res = await fetch(url + "/api/program");
+          const res = await apiFetch(url + "/api/program");
           if (res.ok) return (await res.json()) as { hash: string; dirty: boolean };
         } catch {
           /* not listening yet */
@@ -87,7 +88,7 @@ async function downloadWithLadderLibrary(cli: string, folder: vscode.Uri): Promi
     const editor = await vscode.window.showTextDocument(doc);
     await editor.edit((e) => e.insert(new vscode.Position(1, 0), "  (* edited online *)\n"));
     await step("download", 30_000, () => vscode.commands.executeCommand("nautilus.program.download"));
-    const after = (await (await fetch(url + "/api/program")).json()) as { source: string; dirty: boolean; language: string };
+    const after = (await (await apiFetch(url + "/api/program")).json()) as { source: string; dirty: boolean; language: string };
     assert.equal(after.dirty, true, "the controller took the download");
     assert.equal(after.language, "ld");
     assert.equal(after.source, composed.ok.prelude + doc.getText(), "it runs the composed prelude + the edited buffer");

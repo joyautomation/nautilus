@@ -51,7 +51,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -342,7 +341,6 @@ type tckEdgeNode struct {
 	seq   uint64
 	bdSeq int64
 
-	mu       sync.Mutex
 	rebirths chan struct{}
 }
 

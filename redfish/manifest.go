@@ -363,6 +363,7 @@ func checkResource(r string) error {
 	case !strings.HasPrefix(r, "/redfish/v1"):
 		return fmt.Errorf("%q must start with /redfish/v1", r)
 	case strings.ContainsAny(r, "#?"):
+		//lint:ignore ST1005 the message ends with the manifest key it points at (path:)
 		return fmt.Errorf("%q: a resource has no fragment or query — select inside it with path:", r)
 	case strings.HasSuffix(r, "/") && r != "/redfish/v1/":
 		return fmt.Errorf("%q: no trailing slash", r)

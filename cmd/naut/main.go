@@ -121,6 +121,8 @@ Usage:
                           What "Download Program to Controller" sends.
   naut historian      Archive a controller's tags into Postgres and
                           serve downsampled history (-source, -db).
+  naut audit verify   Check the runtime audit journal's hash chain
+                          (default dir: audit).
   naut fbd graph <f>  Emit a .fbd file's diagram render model as JSON
                           (used by the VS Code FBD preview).
   naut sfc check <f>  Parse a .sfc file and run its structural checks
@@ -203,6 +205,8 @@ func main() {
 		os.Exit(runCompose(os.Args[2:]))
 	case "historian":
 		os.Exit(runHistorian(os.Args[2:]))
+	case "audit":
+		os.Exit(runAudit(os.Args[2:]))
 	case "fbd":
 		os.Exit(runFBD(os.Args[2:]))
 	case "ld":

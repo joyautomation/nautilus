@@ -58,6 +58,14 @@ const (
 	KindDeclined         = "declined"
 	KindCompileFailed    = "compile_failed"
 	KindOperationFailed  = "operation_failed"
+	// KindNotCompiled refuses a download of a project changed since its
+	// last full compile; nothing reached TIA.
+	KindNotCompiled = "not_compiled"
+	// KindOutcomeUnknown: a download may have loaded the CPU, or not
+	// (TIA failed once the download was decided, or TIA's side broke the
+	// contract). The session stays open; compare on it before anything
+	// else.
+	KindOutcomeUnknown = "outcome_unknown"
 
 	KindUnreachable = "unreachable"
 	KindBadReply    = "bad_reply"
@@ -151,6 +159,15 @@ func Kind(err error) string {
 		return e.Kind
 	}
 	return ""
+}
+
+// OutcomeUnknown reports whether err leaves a CPU's state in doubt: the
+// agent said outcome_unknown, or never answered (unreachable). After a
+// download, either means compare before anything else; never retry
+// blindly.
+func OutcomeUnknown(err error) bool {
+	k := Kind(err)
+	return k == KindOutcomeUnknown || k == KindUnreachable
 }
 
 // IsFatal reports whether err is a tiad error that ended the session.
@@ -326,8 +343,8 @@ type FileInfo struct {
 // so the rule is Windows-aware: relative, forward slashes, no "..", no
 // drive letters or other ':' (alternate data streams), no control
 // characters or <>"|?*, no segment ending in a dot or a space, and no
-// reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or
-// without an extension). The client checks every path it sends, and the
+// reserved device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9, COM¹²³,
+// LPT¹²³, with or without an extension). The client checks every path it sends, and the
 // agent checks again.
 func CleanPath(p string) (string, error) {
 	bad := func(why string) (string, error) {
@@ -364,11 +381,14 @@ func CleanPath(p string) (string, error) {
 	return c, nil
 }
 
+// windowsReserved are the device names Windows reserves in every
+// directory: CON, PRN, AUX, NUL, and COM and LPT followed by a digit 0-9
+// or a superscript ¹, ² or ³.
 var windowsReserved = func() map[string]bool {
 	m := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
-	for i := 1; i <= 9; i++ {
-		m[fmt.Sprintf("COM%d", i)] = true
-		m[fmt.Sprintf("LPT%d", i)] = true
+	for _, d := range []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³"} {
+		m["COM"+d] = true
+		m["LPT"+d] = true
 	}
 	return m
 }()
@@ -648,11 +668,15 @@ func (s *Session) Compile(ctx context.Context, hardware, software bool) (Compile
 }
 
 // Download loads the project into the CPU at req.Address. See Resolve for
-// how questions are answered; run a dry run first to see them.
+// how questions are answered. A dry run lists the questions and cancels;
+// it reaches the CPU too, so it must be announced like a real download,
+// and that it loads nothing is provisional until S2 proves it
+// (siemens-ide.md §3.5; the result says Provisional).
 //
-// An error of kind unreachable (the agent did not answer, or ctx was
-// cancelled) leaves the outcome UNKNOWN: the agent may have loaded the
-// CPU. Run Compare before retrying, never retry blindly.
+// When OutcomeUnknown(err) (the agent did not answer, ctx was cancelled,
+// or the agent answered outcome_unknown), the CPU may or may not be
+// loaded. Run Compare on the same session before anything else, never
+// retry blindly.
 func (s *Session) Download(ctx context.Context, req DownloadRequest) (DownloadResult, error) {
 	if err := req.Validate(); err != nil {
 		return DownloadResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}

@@ -31,7 +31,7 @@ func doJSON(t *testing.T, h http.Handler, method, path string, body any) (*httpt
 			t.Fatal(err)
 		}
 	}
-	req := httptest.NewRequest(method, path, &buf)
+	req := httptest.NewRequest(method, "http://localhost"+path, &buf)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	out := map[string]any{}

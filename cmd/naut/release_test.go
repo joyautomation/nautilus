@@ -154,6 +154,7 @@ func TestReleaseTargetsBuildWithoutCgo(t *testing.T) {
 				name += "v" + b.Goarm[0]
 			}
 			t.Run(name, func(t *testing.T) {
+				t.Parallel()
 				buildNautCLI(t, t.TempDir(), env)
 			})
 		}

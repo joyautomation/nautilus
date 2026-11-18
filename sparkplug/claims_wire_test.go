@@ -26,42 +26,37 @@ import (
 	mqttsrv "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
-	"github.com/mochi-mqtt/server/v2/packets"
+
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 )
 
 // testBroker is an in-process broker on a plain TCP listener; it returns the
 // address.
-func testBroker(t *testing.T) string {
+// testBroker starts an in-process broker for the package's tests, with any
+// extra hooks (testmqtt.HoldTeardown) after its own. It serializes a client
+// ID's sessions (testmqtt.SameIDSerializer): mochi v2.7.9 can otherwise drop
+// a node's reconnected session from its client map, and the node never
+// hears its primary host again.
+func testBroker(t *testing.T, hooks ...mqttsrv.Hook) string {
 	t.Helper()
 	srv := mqttsrv.New(&mqttsrv.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatal(err)
+	}
+	if err := srv.AddHook(&testmqtt.SameIDSerializer{Server: srv}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hooks {
+		if err := srv.AddHook(h, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	tcp := listeners.NewTCP(listeners.Config{ID: "plain", Address: "127.0.0.1:0"})
 	if err := srv.AddListener(tcp); err != nil {
 		t.Fatal(err)
 	}
 	go func() { _ = srv.Serve() }()
-	t.Cleanup(func() {
-		// mochi v2.7.9's Close can deadlock on a disconnecting client
-		// (see sparkplug/host/mqtt_test.go closeBroker): take the listeners'
-		// own client sweep out of it.
-		srv.Listeners.Close("plain", func(string) {})
-		done := make(chan struct{})
-		go func() { _ = srv.Close(); close(done) }()
-		for {
-			for _, cl := range srv.Clients.GetAll() {
-				if !cl.Closed() {
-					_ = srv.DisconnectClient(cl, packets.ErrServerShuttingDown)
-				}
-			}
-			select {
-			case <-done:
-				return
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
-	})
+	t.Cleanup(func() { _ = testmqtt.Close(srv) }) // not srv.Close: it can deadlock in mochi v2.7.9
 	return tcp.Address()
 }
 
@@ -217,24 +212,7 @@ func TestEdgeNodeConnectsOverTLS(t *testing.T) {
 		}
 	}
 	go func() { _ = srv.Serve() }()
-	t.Cleanup(func() {
-		srv.Listeners.Close("plain", func(string) {})
-		srv.Listeners.Close("tls", func(string) {})
-		done := make(chan struct{})
-		go func() { _ = srv.Close(); close(done) }()
-		for {
-			for _, cl := range srv.Clients.GetAll() {
-				if !cl.Closed() {
-					_ = srv.DisconnectClient(cl, packets.ErrServerShuttingDown)
-				}
-			}
-			select {
-			case <-done:
-				return
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
-	})
+	t.Cleanup(func() { _ = testmqtt.Close(srv) }) // not srv.Close: it can deadlock in mochi v2.7.9
 
 	watch := watchBirths(t, plain.Address())
 	n := startNode(t, "ssl://"+secure.Address(), "")

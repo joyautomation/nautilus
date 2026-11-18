@@ -19,8 +19,8 @@ IEC program that drives it.
 ## How the files got here
 
 ```sh
-naut optommp browse --host 192.168.82.243   # what the processor reports: modules, channel types, live values
-naut optommp import --host 192.168.82.243 --scan-rate 20ms --scratch-floats 1
+naut optommp browse --host <epic>   # what the processor reports: modules, channel types, live values
+naut optommp import --host <epic> --manifest-host 127.0.0.1 --scan-rate 20ms --scratch-floats 1
                                             # → optommp_manifest.yaml + tags/optommp.yaml
 ```
 
@@ -48,8 +48,48 @@ the module is doing, not only what was asked.
 ```sh
 naut check .     # validate offline — no EPIC needed
 naut test  .     # the acceptance suite in virtual time (epic-bench_test.yaml)
-naut run   .     # poll the EPIC for real: dashboard + tag API on http://localhost:8086
+naut run   .     # on the EPIC: dashboard + tag API on http://localhost:8086
 ```
+
+The manifest dials `127.0.0.1`, as the project runs on the processor
+([On the EPIC itself](#on-the-epic-itself)). To run it from a laptop
+against the EPIC over the network instead, point `host:` at the EPIC,
+on your copy only:
+
+```sh
+sed -i 's/^host: 127.0.0.1$/host: <epic>/' optommp_manifest.yaml   # <epic>: the processor's address
+naut run .
+git checkout optommp_manifest.yaml                                  # back to loopback before you commit
+```
+
+or re-import with `--host <epic>` and no `--manifest-host`, which
+writes the address into both generated files. Either way the dashboard
+is on the laptop, and the program and its outputs then depend on the
+network between the two.
+
+## Without the EPIC
+
+`sim.yaml` is the same program with the `memory` driver: the chassis's
+inputs are tags you write, with the import's names (`tags/sim.yaml`).
+The four field wires on the bench, DO3→DI6, DO4→DI8, DO5→DI10 and
+DO6→DI12, are `board.st`, so `EPIC_M0_DI03` on lights DO3, then DI6, DO6
+and DI12, as on the desk. `EPIC_M2_AI00` is the ICTD probe (°C),
+`EPIC_M3_AI00` the voltage input, and `EPIC__Online` false is an outage.
+
+**Unwired channels differ.** Only ICTD channel 0 is wired on the bench;
+the other eleven read NaN there, so their tags are Bad and the 3D screen
+shows them as unwired. A simulated tag starts at its `init:` and a tag
+file cannot spell NaN, so here those eleven read 0 °C with good
+quality. Don't read a 0 on them as a measurement, and write a value to
+one if a test needs it.
+
+```sh
+naut test -m sim.yaml .     # the same suite
+naut run  -m sim.yaml .     # dashboard + tag API + the 3D screen on http://localhost:8086
+```
+
+Nothing about OptoMMP or its timing is simulated. The nautilus
+playground runs this build, its 3D screen included.
 
 `bench.st` mirrors the first eleven inputs to the first eleven outputs,
 puts a 1 Hz heartbeat on output 11 (`BlinkPeriodS` is an operator
@@ -81,8 +121,17 @@ scratchpad float 0 held the ICTD reading (23.0 °C).
 `hmi/` is a small SvelteKit page that draws the bench unit as it stands
 on the desk: the GRV-EPIC-PR1 with its screen on, the four modules in
 slot order on the GRV-EPIC-CHS4, the clear acrylic stand it leans back
-on, and the small bar of buttons beside it (drawn, not bound to
-anything). The bodies are the four small models in `hmi/static/models`,
+on, and the small bar beside it: the load panel's two push buttons and
+its knob. On the simulated build (`sim.yaml`, the playground) the bar
+works. The top button latches (DI0; a click turns it on or off) and lights
+while it is in. The bottom one is momentary (DI1; hold to press) and its
+blue LED ring is DO0, an output the program drives. `bench.st` mirrors
+DI0 to DO0, so latching the top button lights the bottom one's ring.
+Drag around the knob to turn it: the panel's potentiometer, on the
+voltage input slot 3 channel 0 (0 to 10 V here). The wiring is in
+`hmi/src/lib/bar.ts`, from the I/O mapping of this unit's load panel.
+On the processor the bar stays as drawn and the screen writes nothing. The bar sits to the right of the chassis; orbit the view to
+reach it. The bodies are the four small models in `hmi/static/models`,
 simplified from Opto 22's published CAD (its README says how); the
 stand, the bar and everything live are drawn by the page. Each discrete channel's lamp is its number on the cover,
 which glows white when the channel is on: the 24 inputs, and the 12
@@ -99,7 +148,7 @@ connections to a controller across all its tabs), nothing written.
 cd hmi
 npm install
 npm run build                                          # → hmi/build, which server.hmi serves at /
-CONTROLLER_URL=http://192.168.82.243:8086 npm run dev  # or work on it against a running controller
+CONTROLLER_URL=http://<epic>:8086 npm run dev  # or work on it against a running controller
 ```
 
 The model is plain Threlte (`hmi/src/lib/Epic.svelte`) placed inside
@@ -120,9 +169,9 @@ static ARM build of `naut` runs unchanged:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags='-s -w' -o naut-arm ./cmd/naut
-scp naut-arm <shell-user>@192.168.82.243:nautilus/naut
-scp -r examples/epic-bench <shell-user>@192.168.82.243:nautilus/
-ssh <shell-user>@192.168.82.243 'cd nautilus/epic-bench && ../naut run .'
+scp naut-arm <shell-user>@<epic>:nautilus/naut
+scp -r examples/epic-bench <shell-user>@<epic>:nautilus/
+ssh <shell-user>@<epic> 'cd nautilus/epic-bench && ../naut run .'
 ```
 
 Shell access needs Opto 22's free **GROOV-LIC-SHELL** license (groov
@@ -132,9 +181,9 @@ account, not the groov Manage admin. The shell user has sudo with a
 password; nothing here needs it.
 
 Verified 2026-10-24 on the bench, `naut run` on the EPIC with the
-OptoMMP driver dialing the processor's own address (the manifest's
-`192.168.82.243`; `--manifest-host 127.0.0.1` writes loopback, which
-costs the same per request), the EPIC's own stack (PAC Control engine,
+OptoMMP driver dialing the processor's own LAN address (the committed
+manifest now dials loopback, `--manifest-host 127.0.0.1`, which costs
+the same per request), the EPIC's own stack (PAC Control engine,
 groov View, Node-RED) still running beside it. DO11 read off the processor
 from the laptop every 100 ms went `0011111000001111100000111111000001111100`;
 zero driver errors in any run. One minute per row, CPU and RSS of the

@@ -37,7 +37,7 @@ func TestNautRunOPCUAReportsTheCLIVersion(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	apiAddr := freeAddr(t)
+	apiAddr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(`name: ident
 tasks:
   - program: main.st
@@ -86,6 +86,7 @@ opcua:
 		cmd.Process.Kill()
 		<-exited
 	})
+	apiAddr = apiAddrFromBanner(t, stdout, exited, stderr)
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if resp, err := http.Get("http://" + apiAddr + "/api/state"); err == nil {

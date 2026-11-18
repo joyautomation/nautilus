@@ -30,7 +30,7 @@ func TestProjectConstantIsNotATag(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	server.New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	server.New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /api/state = %d", rec.Code)
 	}
@@ -46,7 +46,7 @@ func TestProjectConstantIsNotATag(t *testing.T) {
 	// tag, so the name is undeclared (#329). It is a 400 naming the constant,
 	// no stray tag appears, and the program still reads 90.
 	rec = httptest.NewRecorder()
-	server.New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader(`{"name": "MaxLevel", "value": 5}`)))
+	server.New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", strings.NewReader(`{"name": "MaxLevel", "value": 5}`)))
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "undefined tag MaxLevel") || !strings.Contains(rec.Body.String(), "CONSTANT") {
 		t.Errorf("POST /api/tags to a constant: status %d, body %q; want a 400 naming MaxLevel and the CONSTANT", rec.Code, rec.Body)
 	}

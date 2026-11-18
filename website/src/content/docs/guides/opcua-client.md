@@ -226,7 +226,9 @@ address you can reach.
 ## Servers it has been run against
 
 Every server below runs in CI (`opcua/matrix_test.go`) through the same
-scenarios: import of a folder of one variable per scalar type (twice,
+scenarios (the virtual IO-Link masters of `naut devices`, nautilus's own
+server at the node ids the real masters use, through the read ones where a
+master has nothing writable): import of a folder of one variable per scalar type (twice,
 byte-identical), typed reads of every type, a value that changes on its
 own, an unknown node read Bad while the rest stay Good, a write of every
 type read back, a write to a read-only node refused without dropping the
@@ -241,6 +243,7 @@ growth in goroutines.
 |---|---|---|
 | open62541 v1.4.22 (a fixture server built against the release) | Basic256Sha256 / SignAndEncrypt | Namespace 1 is the server's own application URI; a server's variables start at namespace 2. A write to a read-only node is refused with `Bad_NotWritable`. |
 | Eclipse Milo 1.1.1 (its demo server 1.0.3) | Basic256Sha256 / SignAndEncrypt, once trusted | Refuses an untrusted client certificate by closing the connection and files it under `security/rejected`; moving it to `security/pki/trusted/certs` lets the next retry in, with no restart. Namespace 1's URI carries a per-install UUID, so a reinstalled server renumbers it. A write to a read-only node is refused with `Bad_UserAccessDenied`, not `Bad_NotWritable`. It advertises its own idea of its address (port 4840 inside the container); the driver dials the mapped port it was given. The demo address space includes a 25,000-node folder, so import with `--root`. |
+| Virtual IO-Link masters: Pepperl+Fuchs ICE3, SICK SIG300, ifm AL1590 | None, anonymous (a master's default setup) | Node ids as the real masters serve them: strings with spaces (`ns=1;s=IOLM/Port 1/Attached Device/PDO Valid`), numeric ids four to a port (SICK, `ns=3;i=8012`), and the ifm's process data as hex text under the master's configured name. Only the P+F's PDO nodes take writes; the SICK and ifm run the read scenarios. A write to a read-only node is refused with `Bad_NotWritable`. |
 
 Both read modes run every scenario. How quickly the driver notices: a
 restart closes the connection, so `__Online` falls within a scan when

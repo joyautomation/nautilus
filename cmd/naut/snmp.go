@@ -104,7 +104,8 @@ Serve flags:
                serves recordings, not secrets)
   --ramp       Move every non-zero ifHCInOctets/ifHCOutOctets counter at a
                few Mb/s, so InBps/OutBps read live on a bench
-  --from       A plant controller's URL: serve its tags (polls /api/state)
+  --from       A plant controller's URL: serve its tags (polls /api/state,
+               sending NAUTILUS_TOKEN when set)
   --manifest   The snmp_manifest.yaml the monitoring project polls with
                (required with --from: the bindings, read backwards)
   --source     The manifest source this agent is (default: the only one);

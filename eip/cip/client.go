@@ -13,9 +13,8 @@ import (
 	"time"
 )
 
-// Client is an EtherNet/IP originator: it speaks TCP to a target device,
-// runs RegisterSession + Forward_Open, and (for Class 1) drives an O→T
-// producer and consumes T→O frames over the shared UDP port via Class1Mux.
+// Client is an EtherNet/IP originator: it speaks TCP to a target device
+// and runs RegisterSession + Forward_Open.
 //
 // One Client per target IP. Concurrent Forward_Open calls on the same
 // session are not supported — wrap with a mutex if you need them.
@@ -221,8 +220,6 @@ func decodeMRResponse(b []byte) (MessageRouterResponse, error) {
 //	0x2C cfg    logical conn pt  = configuration assembly
 //	0x2C oToT   logical conn pt  = O→T (output) assembly
 //	0x2C tToO   logical conn pt  = T→O (input) assembly
-//
-// Caller is responsible for building the path with BuildConnectionPath helper.
 func (c *Client) ForwardOpenOriginator(ctx context.Context, req ForwardOpenRequest, path []byte) (ForwardOpenResponse, error) {
 	// Connection-Manager request: wrap the Forward_Open service body and
 	// address it at class 6 / instance 1.
@@ -265,32 +262,4 @@ func (c *Client) ForwardCloseOriginator(ctx context.Context, connSerial, vendor 
 		return fmt.Errorf("forward_close: status 0x%02x", mr.GeneralStatus)
 	}
 	return nil
-}
-
-// BuildConnectionPath builds the EPATH that Forward_Open uses to identify
-// the configuration + O→T + T→O assembly instances on the target. cfg=0
-// omits the configuration segment (rare; some drives require it, set to the
-// EDS-declared ConfigInst).
-func BuildConnectionPath(cfg, oToT, tToO uint16) []byte {
-	// Class 0x04 (Assembly), instance 1 anchor for the connection points.
-	// Most drives accept just three connection-point segments without the
-	// class/instance anchor; we include both forms via testing if needed.
-	p := []byte{
-		0x20, byte(ClassAssembly), // logical class 0x04
-		0x24, 0x01, // logical instance 1
-	}
-	if cfg != 0 {
-		p = append(p, connPointSegment(cfg)...)
-	}
-	p = append(p, connPointSegment(oToT)...)
-	p = append(p, connPointSegment(tToO)...)
-	return p
-}
-
-func connPointSegment(cp uint16) []byte {
-	if cp <= 0xFF {
-		return []byte{0x2C, byte(cp)} // 8-bit connection point
-	}
-	// 16-bit conn point: type byte + pad + LE u16.
-	return []byte{0x2D, 0x00, byte(cp & 0xFF), byte(cp >> 8)}
 }

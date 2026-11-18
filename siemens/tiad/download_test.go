@@ -67,9 +67,14 @@ func TestDownloadRequestValidate(t *testing.T) {
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	dry := DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true}
+	dry := DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
 	if err := dry.Validate(); err != nil {
-		t.Fatalf("a dry run needs no announcement: %v", err)
+		t.Fatalf("an announced dry run: %v", err)
+	}
+	// Until S2 proves a cancel loads nothing, a dry run reaches the CPU
+	// and is announced like a download.
+	if err := (DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true}).Validate(); err == nil || !strings.Contains(err.Error(), "announce it first") {
+		t.Fatalf("an unannounced dry run: %v", err)
 	}
 	for name, r := range map[string]DownloadRequest{
 		"not announced": {Address: "192.0.2.10", Software: true},

@@ -415,6 +415,7 @@ func (b Binding) validateLocator(f hw.Field) error {
 			}
 			sel, ok := b.From[v]
 			if !ok {
+				//lint:ignore ST1005 the message ends with the manifest key it points at (from:)
 				return fmt.Errorf("expr %q names %q, which has no entry in from:", b.Expr, v)
 			}
 			if sel.Metric == "" {

@@ -452,7 +452,6 @@ func (g *gen) levelBodyActions() []string {
 func (g *gen) isLevel(q string) bool {
 	return q == "N" || q == "S" || q == "R" || IsTimedQualifier(q)
 }
-func (g *gen) isPulse(q string) bool { return q == "P" || q == "P1" || q == "P0" }
 
 // riseEdge / fallEdge render a step's rising / falling edge signal.
 func (g *gen) riseEdge(name string) string {

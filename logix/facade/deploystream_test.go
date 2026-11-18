@@ -220,10 +220,9 @@ func TestDeployStreamUpfrontRefusals(t *testing.T) {
 // streamReader reads POST /api/logix/deploy's answer one line at a time,
 // so a test can see what has arrived while the deploy is still running.
 type streamReader struct {
-	t    *testing.T
-	res  *http.Response
-	sc   *bufio.Scanner
-	done chan struct{}
+	t   *testing.T
+	res *http.Response
+	sc  *bufio.Scanner
 }
 
 func openDeploy(t *testing.T, url string, body map[string]any) *streamReader {

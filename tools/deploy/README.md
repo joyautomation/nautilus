@@ -50,3 +50,19 @@ password to ssh's stdout and nowhere else, and refuses every prompt that is
 not a password prompt, so an unknown host key's yes/no is never answered
 with it: make the host key known first (connect once by hand, or
 `ssh-keyscan`).
+
+## Boot time
+
+```sh
+naut deploy install root@ipc tools/deploy/boot-probe
+tools/deploy/boottime.py root@ipc -n 3
+naut deploy uninstall root@ipc -purge
+```
+
+`boot-probe` is a project whose tag API listens on every interface and
+whose `Scans` counter is not retained, with its task at `priority: 80` on
+`cpu: 1`. `boottime.py` reboots the box over SSH and times, from this
+machine's clock, when SSH and the tag API come back and when `Scans > 0`
+(the first good scan). It also reports the box's own times for
+`nautilus.service`'s start and its first scan, from kernel start. A
+software reboot is a warm boot; a cold power-on needs a power cycle.

@@ -84,7 +84,7 @@ func TestTypesRenderAndCompile(t *testing.T) {
 }
 
 func TestStructDefIdentity(t *testing.T) {
-	if StructDef("SwitchPort") != StructDef("SwitchPort") {
+	if a, b := StructDef("SwitchPort"), StructDef("SwitchPort"); a != b {
 		t.Fatal("StructDef must return one pointer per type")
 	}
 	if StructDef("Nope") != nil {

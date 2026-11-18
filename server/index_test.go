@@ -78,7 +78,7 @@ func TestDashboardAssetsResolve(t *testing.T) {
 		for _, ref := range refs {
 			url := c.base + ref
 			rec := httptest.NewRecorder()
-			c.h.ServeHTTP(rec, httptest.NewRequest("GET", url, nil))
+			c.h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+url, nil))
 			if rec.Code != 200 {
 				t.Errorf("GET %s = %d, want 200", url, rec.Code)
 				continue
@@ -103,7 +103,7 @@ func TestUnknownAssetNotFound(t *testing.T) {
 	h := New(newTestRuntime(t)).Handler()
 	for _, p := range []string{"/assets/nope.svg", "/assets/../server.go", "/assets/"} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+p, nil))
 		if rec.Code == 200 {
 			t.Errorf("GET %s = 200, want a 404 or a redirect", p)
 		}

@@ -182,7 +182,8 @@ full path (`which naut`), or launch VS Code from a terminal with `code .`.
   `naut check` (through `go run`), `go test`, and `go build` instead. Add
   `--deploy` to `naut new`
   for a Dockerfile, a redundant-pair Kubernetes manifest, and the workflow
-  that ships a merged commit to the controller.
+  that ships a merged commit to the controller, or `--deploy-ssh` for a
+  workflow that deploys each tag to a box over SSH with `naut deploy`.
 
 To do all of that once, on a small program of your own, follow
 [Your first program](/guides/first-program/): a sump pump with a

@@ -7,6 +7,7 @@
 import * as vscode from "vscode";
 import { LiveValues } from "./liveValues";
 import { notifyError, notifyInfo } from "./testHooks";
+import { apiFetch } from "./apiFetch";
 
 /** What the diagram's data-vscode-context carries for a step/transition. */
 type DiagramContext = {
@@ -47,7 +48,7 @@ async function activePou(): Promise<string | undefined> {
 
 async function charts(): Promise<Chart[] | undefined> {
   try {
-    const res = await fetch(runtimeUrl() + "/api/sfc");
+    const res = await apiFetch(runtimeUrl() + "/api/sfc");
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return ((await res.json()) as { charts: Chart[] }).charts;
   } catch (e) {

@@ -37,7 +37,7 @@ TYPE Pump : STRUCT State : Mode; Hz : REAL; END_STRUCT; END_TYPE
 	}
 	srv := New(rt)
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
 	}
