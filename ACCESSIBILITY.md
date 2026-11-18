@@ -77,9 +77,13 @@ operators use this most, so it gets the most detail here.
 
 - **No automated accessibility testing.** There's no axe or similar check
   in CI; only the palette contrast is tested.
-- **State colours are not in the contrast test.** `--good`, `--warn`,
-  `--serious` and `--crit` aren't checked, though the operator-screens
-  guide says they meet AA.
+- **State colours fall short of AA in places (#927).** The
+  operator-screens guide says they meet AA, but they don't everywhere:
+  - As a fill or outline (3:1), every pair passes except light `--warn`
+    on `--surface-2` (2.9:1).
+  - As text (4.5:1), 11 of the 24 theme and background pairs fail. The
+    kit does draw state colours as text, for example a danger button's
+    label in `--crit`, which is 3.3 to 4.1:1 in the dark theme.
 - **No high-contrast mode.** There's no `forced-colors` or
   `prefers-contrast` support.
 - **Equipment state relies on fill and motion, not text drawn on the
