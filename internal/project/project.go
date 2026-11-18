@@ -728,9 +728,6 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	if _, err := m.Check.Structure(); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if err := m.Target.validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
-	}
 	if err := composeTags(fsys, &m, name); err != nil {
 		return nil, err
 	}

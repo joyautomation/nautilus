@@ -513,6 +513,16 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		}
 	}
 
+	// A deploy target's own section (target.siemens's station spec, its
+	// agent URL): loading is lenient so the editor keeps every tag while
+	// a station is half typed, and the problems are errors here.
+	if raw, rerr := project.ReadManifest(os.DirFS(dir), manifestName); rerr == nil {
+		for _, p := range raw.Target.Problems() {
+			errs++
+			fmt.Printf("%s: error: %s\n", loc.file, p)
+		}
+	}
+
 	// The first task's name: key is a footgun, not a choice: Load (like
 	// Sources, for a warm swap) assigns the first task runtime.MainTaskName
 	// unconditionally, so a manifest author who names it — e.g. expecting
