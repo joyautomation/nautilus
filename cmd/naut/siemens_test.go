@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +11,8 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/siemens/facade"
+	"github.com/joyautomation/nautilus/siemens/webapi"
+	"github.com/joyautomation/nautilus/siemens/webapi/webapitest"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -27,7 +32,7 @@ func TestSiemensServeRefusesWhatWouldBeUnsafe(t *testing.T) {
 		{"no pin", "192.0.2.10", "naut", "", pw, "naut siemens cert --host 192.0.2.10"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := resolveSiemensServe(c.host, c.user, c.pin, none, nil, time.Second, ":0", c.getenv)
+			_, err := resolveSiemensServe(c.host, c.user, c.pin, none, nil, time.Second, "127.0.0.1:0", c.getenv)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want …%s…", err, c.want)
 			}
@@ -50,7 +55,7 @@ target:
 	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	c, err := resolveSiemensServe("", "", "", dir, nil, time.Second, ":0", pw)
+	c, err := resolveSiemensServe("", "", "", dir, nil, time.Second, "127.0.0.1:0", pw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +66,7 @@ target:
 		t.Fatalf("default roots: %+v", c.roots)
 	}
 	// Flags win over the project.
-	c, err = resolveSiemensServe("192.0.2.99", "other", "cd", dir, []facade.Root{{DB: "Main_DB", Prefix: "Main"}}, time.Second, ":0", pw)
+	c, err = resolveSiemensServe("192.0.2.99", "other", "cd", dir, []facade.Root{{DB: "Main_DB", Prefix: "Main"}}, time.Second, "127.0.0.1:0", pw)
 	if err != nil || c.host != "192.0.2.99" || c.user != "other" || c.pin != "cd" || c.roots[0].Prefix != "Main" {
 		t.Fatalf("%+v %v", c, err)
 	}
@@ -81,5 +86,82 @@ func TestParseRoot(t *testing.T) {
 		if _, err := parseRoot(bad); err == nil {
 			t.Errorf("parseRoot(%q): want an error", bad)
 		}
+	}
+}
+
+func TestSiemensServeListensOnLoopbackUnlessThereIsAToken(t *testing.T) {
+	fs, _ := newSiemensServeFlags()
+	if def := fs.Lookup("listen").DefValue; !isLoopback(def) {
+		t.Fatalf("the default --listen %q is not loopback", def)
+	}
+	none := t.TempDir()
+	for _, l := range []string{":8080", "0.0.0.0:8080", "[::]:8080", "192.0.2.5:8080"} {
+		if _, err := resolveSiemensServe("192.0.2.10", "naut", "ab", none, nil, time.Second, l, pw); err == nil || !strings.Contains(err.Error(), "NAUTILUS_TOKEN") {
+			t.Errorf("--listen %s without a token: %v", l, err)
+		}
+		withToken := env(map[string]string{"NAUTILUS_SIEMENS_PASSWORD": "pw", "NAUTILUS_TOKEN": "t"})
+		if _, err := resolveSiemensServe("192.0.2.10", "naut", "ab", none, nil, time.Second, l, withToken); err != nil {
+			t.Errorf("--listen %s with a token: %v", l, err)
+		}
+	}
+	for _, l := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
+		if !isLoopback(l) {
+			t.Errorf("%s is loopback", l)
+		}
+	}
+}
+
+func TestSiemensFacadeOptionsCarryTheToken(t *testing.T) {
+	o := siemensFacadeOptions(siemensServeConfig{token: "secret-token", host: "h"}, nil)
+	if o.Server.AuthToken != "secret-token" {
+		t.Fatalf("the API's bearer token was dropped: %q", o.Server.AuthToken)
+	}
+}
+
+// TestSiemensServeLogsOut: a stopped serve, or one that fails after its
+// first browse, leaves no Web API session on the CPU.
+func TestSiemensServeLogsOut(t *testing.T) {
+	s := webapitest.New()
+	s.Users["naut"] = webapitest.User{Password: "pw", Permissions: []string{"read_value"}}
+	s.Vars[`"Tags"`] = &webapitest.Var{Datatype: "struct"}
+	s.Vars[`"Tags".Level`] = &webapitest.Var{Datatype: "real", Value: 1.0}
+	url, pin := s.Start(t)
+	newClient := func() *webapi.Client {
+		c, err := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	cfg := siemensServeConfig{host: url, listen: "127.0.0.1:0", poll: 10 * time.Millisecond, roots: []facade.Root{{DB: "Tags"}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan string, 1)
+	done := make(chan int, 1)
+	go func() { done <- serveSiemens(ctx, cfg, newClient(), io.Discard, io.Discard, ready) }()
+	addr := <-ready
+	res, err := http.Get("http://" + addr + "/api/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if s.Sessions() != 1 {
+		t.Fatalf("sessions while serving = %d", s.Sessions())
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if n := s.Sessions(); n != 0 {
+		t.Fatalf("sessions after stop = %d, want 0 (logged out)", n)
+	}
+
+	bad := cfg
+	bad.roots = []facade.Root{{DB: "Nope"}}
+	if code := serveSiemens(context.Background(), bad, newClient(), io.Discard, io.Discard, nil); code != 1 {
+		t.Fatalf("a failed browse: exit %d", code)
+	}
+	if n := s.Sessions(); n != 0 {
+		t.Fatalf("sessions after a failed start = %d, want 0", n)
 	}
 }

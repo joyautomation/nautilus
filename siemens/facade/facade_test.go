@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/siemens/webapi"
 	"github.com/joyautomation/nautilus/siemens/webapi/webapitest"
 )
@@ -71,18 +72,26 @@ func start(t *testing.T) (*webapitest.Server, *Facade, string) {
 
 func state(t *testing.T, base string) map[string]any {
 	t.Helper()
+	tags, _ := stateQ(t, base)
+	return tags
+}
+
+// stateQ returns /api/state's values and its non-Good qualities.
+func stateQ(t *testing.T, base string) (map[string]any, map[string]string) {
+	t.Helper()
 	res, err := http.Get(base + "/api/state")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
 	var st struct {
-		Tags map[string]any `json:"tags"`
+		Tags    map[string]any    `json:"tags"`
+		Quality map[string]string `json:"quality"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
-	return st.Tags
+	return st.Tags, st.Quality
 }
 
 func post(t *testing.T, base, path, body string) (int, string) {
@@ -223,8 +232,8 @@ func TestProgramEndpointsSayWhereTheProgramIs(t *testing.T) {
 	}
 	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "naut siemens deploy") {
-		t.Fatalf("PUT /api/program: %d %s, want 403 naming naut siemens deploy", res.StatusCode, b)
+	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "Siemens CPU") || !strings.Contains(string(b), "#789") {
+		t.Fatalf("PUT /api/program: %d %s, want the facade's 403", res.StatusCode, b)
 	}
 }
 
@@ -246,12 +255,21 @@ func TestDriverStatus(t *testing.T) {
 	s.Put(`"Main_DB".count`, &webapitest.Var{Datatype: "int", Value: 4})
 	waitFor(t, "connected again", func() bool { return f.driverStatus()[0].State == "connected" })
 
-	s.SetUser("naut", webapitest.User{Password: "pw", Permissions: []string{"read_value"}})
-	if code, _ := post(t, base, "/api/tags", `{"name":"Level","value":1.0}`); code != http.StatusBadRequest {
-		t.Fatalf("a denied write: %d", code)
+	// A write the CPU failed (busy, not a refusal) is a 502 and degrades
+	// the status until a write succeeds again.
+	s.FailWrites(webapi.CodeSystemIsBusy)
+	if code, _ := post(t, base, "/api/tags", `{"name":"Level","value":1.0}`); code != http.StatusBadGateway {
+		t.Fatalf("a write the CPU failed: %d, want 502", code)
 	}
 	if st := f.driverStatus()[0]; st.State != "degraded" || !strings.Contains(st.LastError, "write") {
 		t.Fatalf("after a failed write: %+v", st)
+	}
+	s.FailWrites(0)
+	if code, _ := post(t, base, "/api/tags", `{"name":"Level","value":2.0}`); code != http.StatusNoContent {
+		t.Fatalf("write after the CPU recovered: %d", code)
+	}
+	if st := f.driverStatus()[0]; st.State != "connected" {
+		t.Fatalf("a good write clears the degradation: %+v", st)
 	}
 
 	s.StopAnswering()
@@ -290,10 +308,134 @@ func TestConvertWrite(t *testing.T) {
 		{"LINT", 1e15, int64(1e15), false}, {"LINT", 1e17, nil, true}, {"ULINT", -1.0, nil, true},
 		{"DINT", 1.5, nil, true},
 		{"REAL", math.NaN(), nil, true}, {"LREAL", math.Inf(1), nil, true},
+		{"REAL", 1e39, nil, true}, {"REAL", -1e39, nil, true}, {"LREAL", 1e39, 1e39, false},
 	} {
 		got, err := convertWrite(c.typ, c.in)
 		if c.bad != (err != nil) || (!c.bad && got != c.want) {
 			t.Errorf("convertWrite(%s, %v) = %v %v", c.typ, c.in, got, err)
 		}
+	}
+}
+
+// TestQualityFollowsTheReads: a tag whose read fails keeps its last value
+// and is Bad; when the CPU cannot be reached every held value is Stale.
+// The quality is what the API says, not just the status message.
+func TestQualityFollowsTheReads(t *testing.T) {
+	s, _, base := start(t)
+	waitFor(t, "all good", func() bool {
+		tags, q := stateQ(t, base)
+		return tags["Main.count"] != nil && len(q) == 0
+	})
+	s.Put(`"Main_DB".count`, nil)
+	waitFor(t, "Main.count bad", func() bool { _, q := stateQ(t, base); return q["Main.count"] == "bad" })
+	tags, q := stateQ(t, base)
+	if tags["Main.count"] != float64(4) {
+		t.Fatalf("a failed read must hold the last value: %v", tags["Main.count"])
+	}
+	if q["Level"] != "" {
+		t.Fatalf("the other tags stay good: %v", q)
+	}
+	s.Put(`"Main_DB".count`, &webapitest.Var{Datatype: "int", Value: 6})
+	waitFor(t, "good again", func() bool {
+		tags, q := stateQ(t, base)
+		return tags["Main.count"] == float64(6) && q["Main.count"] == ""
+	})
+	s.StopAnswering()
+	waitFor(t, "all stale", func() bool {
+		_, q := stateQ(t, base)
+		return q["Level"] == "stale" && q["Main.count"] == "stale"
+	})
+}
+
+func TestNeverReadIsNotConnected(t *testing.T) {
+	_, c := cpu(t)
+	d := NewDriver(c, []Binding{
+		{Name: "Level", Symbol: `"Tags".Level`, Type: "REAL"},
+		{Name: "Gone", Symbol: `"Tags".Gone`, Type: "INT"},
+	}, time.Second)
+	if q := d.Quality(); q["Level"] != nio.NotConnected || q["Gone"] != nio.NotConnected {
+		t.Fatalf("before any read: %v", q)
+	}
+	d.PollOnce(context.Background())
+	if q := d.Quality(); q["Gone"] != nio.NotConnected || q["Level"] != nio.Good && len(q) != 1 {
+		t.Fatalf("after a read: %v", q)
+	}
+	if _, said := d.Quality()["Level"]; said {
+		t.Fatal("a good tag is not reported")
+	}
+}
+
+// TestFailedPollsBackOff: a CPU that refuses the login (it restarted with
+// other users, say) is not asked again on every poll.
+func TestFailedPollsBackOff(t *testing.T) {
+	s := webapitest.New()
+	s.Users["naut"] = webapitest.User{Password: "pw", Permissions: []string{"read_value"}}
+	s.Vars[`"Tags"`] = &webapitest.Var{Datatype: "struct"}
+	s.Vars[`"Tags".Level`] = &webapitest.Var{Datatype: "real", Value: 1.0}
+	url, pin := s.Start(t)
+	c, err := webapi.New(url, webapi.Options{User: "naut", Password: "wrong", CertSHA256: pin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDriver(c, []Binding{{Name: "Level", Symbol: `"Tags".Level`, Type: "REAL"}}, 2*time.Millisecond)
+	d.BackoffMin, d.BackoffMax = 20*time.Millisecond, 80*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	d.Run(ctx)
+	// Without backoff: ~250 polls, each a login. With it: 20, 40, 80, 80, …
+	if n := s.LoginAttempts(); n < 3 || n > 12 {
+		t.Fatalf("login attempts in 500 ms = %d, want a handful (backed off)", n)
+	}
+	// And the backoff resets once the CPU answers again.
+	s.SetUser("naut", webapitest.User{Password: "wrong", Permissions: []string{"read_value"}})
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel2()
+	d.Run(ctx2)
+	if v, err := d.ReadInputs(); err != nil || v["Level"] != 1.0 {
+		t.Fatalf("after the CPU accepts the login: %v %v", v, err)
+	}
+}
+
+// TestRefusedWriteDoesNotDegrade: a write the caller got wrong is a 400,
+// not a sign that the write path is failing.
+func TestRefusedWriteDoesNotDegrade(t *testing.T) {
+	_, f, base := start(t)
+	waitFor(t, "connected", func() bool { return f.driverStatus()[0].State == "connected" })
+	if code, _ := post(t, base, "/api/tags", `{"name":"Total","value":1}`); code != http.StatusBadRequest {
+		t.Fatalf("read-only write: %d", code)
+	}
+	if st := f.driverStatus()[0]; st.State != "connected" {
+		t.Fatalf("a caller's mistake degraded the driver: %+v", st)
+	}
+}
+
+// TestBackoffRestartsAfterARecovery: the wait after a failed poll doubles,
+// and a successful poll resets it, so the next failure waits the minimum
+// again rather than the last (long) backoff.
+func TestBackoffRestartsAfterARecovery(t *testing.T) {
+	s, c := cpu(t)
+	d := NewDriver(c, []Binding{{Name: "Level", Symbol: `"Tags".Level`, Type: "REAL"}}, time.Second)
+	d.BackoffMin, d.BackoffMax = time.Second, 8*time.Second
+	now := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	d.now = func() time.Time { return now }
+	refuse := func() {
+		s.SetUser("naut", webapitest.User{Password: "changed", Permissions: []string{"read_value"}})
+		s.Expire() // the CPU restarted: the client must log in again, and cannot
+	}
+	refuse()
+	d.PollOnce(context.Background())
+	d.PollOnce(context.Background())
+	if d.backoff != 2*time.Second {
+		t.Fatalf("after two failures backoff = %s, want 2s", d.backoff)
+	}
+	s.SetUser("naut", webapitest.User{Password: "pw", Permissions: []string{"read_value"}})
+	d.PollOnce(context.Background())
+	if !d.due() {
+		t.Fatal("a successful poll must clear the wait")
+	}
+	refuse()
+	d.PollOnce(context.Background())
+	if d.backoff != time.Second || d.nextTry != now.Add(time.Second) {
+		t.Fatalf("the first failure after a recovery waits %s (until %s), want the 1s minimum", d.backoff, d.nextTry)
 	}
 }

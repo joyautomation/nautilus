@@ -181,7 +181,7 @@ const (
 	msgNoSource = "this is a Siemens CPU: the program it runs was generated from the nautilus project " +
 		"and downloaded through TIA Portal; open the project's sources instead"
 	msgNoEdit = "this is a Siemens CPU, which nautilus does not warm-swap: change the nautilus " +
-		"sources and download them (naut siemens deploy)"
+		"sources and download them through the Siemens target (the deploy command is not built yet; see issue #789)"
 )
 
 func programGone(w http.ResponseWriter, _ *http.Request) {
@@ -225,11 +225,13 @@ func (f *Facade) write(name string, value any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err != nil {
-		f.lastErr = fmt.Sprintf("write %s: %v", b.Symbol, err)
 		switch webapi.Code(err) {
 		case webapi.CodeAddressIsReadOnly, webapi.CodeInvalidParams, webapi.CodeAddressDoesNotExist, webapi.CodePermissionDenied:
+			// The caller asked for something the CPU will never do: a
+			// 400, and not a sign the write path is failing.
 			return badRequest(fmt.Sprintf("%s: %v", name, err))
 		}
+		f.lastErr = fmt.Sprintf("write %s: %v", b.Symbol, err)
 		return err
 	}
 	f.lastErr = ""

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -70,19 +71,39 @@ Flags:
   --cert-sha256  The CPU certificate's SHA-256, to pin it (default:
                  target.siemens.online.cert-sha256). Get it with
                  naut siemens cert --host <cpu> and compare it with the CPU's.
-  --root         A data block to serve, DB or DB=Prefix; repeatable. Default
-                 Tags (the global tags DB, as plain names). Main_DB=Main
-                 serves program Main's variables as Main.<name>.
+  --root         A data block to serve, DB or DB=Prefix; repeatable. A DB's
+                 members are served as plain names, or as Prefix.<name> with
+                 a prefix. Default Tags (the global tags DB).
   --poll         Poll period (default 250ms)
-  --listen       API address (default 127.0.0.1:8080)
+  --listen       API address (default 127.0.0.1:8080). Anything but
+                 loopback needs NAUTILUS_TOKEN set: a write here changes a
+                 running PLC.
   --project      A nautilus project directory with a target: siemens section,
                  for the defaults above (default: the current directory, if
                  it has one)
 
 Writes are open to non-browser clients and same-origin pages, like
-` + "`naut run`" + `. Set NAUTILUS_TOKEN to require a bearer token, and do,
-before listening anywhere but loopback: a write here changes a running PLC.
+` + "`naut run`" + `. NAUTILUS_TOKEN requires a bearer token; serve refuses to
+listen anywhere but loopback without one.
 `
+
+// defaultSiemensListen is loopback: a write through serve changes a
+// running PLC.
+const defaultSiemensListen = "127.0.0.1:8080"
+
+// isLoopback reports whether a listen address only accepts local
+// connections. ":8080", "0.0.0.0:8080" and a LAN address do not.
+func isLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil || host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // rootList is the repeatable --root flag.
 type rootList []facade.Root
@@ -111,6 +132,7 @@ func parseRoot(v string) (facade.Root, error) {
 // siemensServeConfig is what serve needs, after flags and the project.
 type siemensServeConfig struct {
 	host, user, pin, password string
+	token                     string // NAUTILUS_TOKEN, for the API
 	roots                     []facade.Root
 	poll                      time.Duration
 	listen                    string
@@ -121,7 +143,7 @@ type siemensServeConfig struct {
 func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root, poll time.Duration, listen string,
 	getenv func(string) string) (siemensServeConfig, error) {
 	c := siemensServeConfig{host: host, user: user, pin: pin, roots: roots, poll: poll, listen: listen,
-		password: getenv("NAUTILUS_SIEMENS_PASSWORD")}
+		password: getenv("NAUTILUS_SIEMENS_PASSWORD"), token: getenv("NAUTILUS_TOKEN")}
 	if projectDir != "" {
 		m, err := project.ReadManifest(os.DirFS(projectDir), "")
 		switch {
@@ -151,6 +173,8 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		return c, errors.New("set NAUTILUS_SIEMENS_PASSWORD to the web user's password (it is never a flag)")
 	case c.pin == "":
 		return c, fmt.Errorf("--cert-sha256 is required to trust the CPU's self-signed certificate: run naut siemens cert --host %s and compare it with the CPU's", c.host)
+	case !isLoopback(c.listen) && c.token == "":
+		return c, fmt.Errorf("--listen %s accepts connections from other machines: set NAUTILUS_TOKEN first, since a write here changes a running PLC", c.listen)
 	}
 	if len(c.roots) == 0 {
 		c.roots = []facade.Root{{DB: "Tags"}}
@@ -158,20 +182,35 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 	return c, nil
 }
 
-func runSiemensServe(args []string) int {
+// siemensServeFlags are serve's flags, built in one place so a test can
+// read their defaults.
+type siemensServeFlags struct {
+	host, user, pin, listen, project *string
+	roots                            rootList
+	poll                             *time.Duration
+}
+
+func newSiemensServeFlags() (*flag.FlagSet, *siemensServeFlags) {
 	fs := flag.NewFlagSet("siemens serve", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, siemensServeUsage) }
-	host := fs.String("host", "", "CPU address")
-	user := fs.String("user", "", "web server user")
-	pin := fs.String("cert-sha256", "", "CPU certificate SHA-256")
-	var roots rootList
-	fs.Var(&roots, "root", "data block to serve (DB or DB=Prefix), repeatable")
-	poll := fs.Duration("poll", 250*time.Millisecond, "poll period")
-	listen := fs.String("listen", "127.0.0.1:8080", "API address")
-	projectDir := fs.String("project", ".", "nautilus project directory")
+	f := &siemensServeFlags{
+		host:    fs.String("host", "", "CPU address"),
+		user:    fs.String("user", "", "web server user"),
+		pin:     fs.String("cert-sha256", "", "CPU certificate SHA-256"),
+		poll:    fs.Duration("poll", 250*time.Millisecond, "poll period"),
+		listen:  fs.String("listen", defaultSiemensListen, "API address"),
+		project: fs.String("project", ".", "nautilus project directory"),
+	}
+	fs.Var(&f.roots, "root", "data block to serve (DB or DB=Prefix), repeatable")
+	return fs, f
+}
+
+func runSiemensServe(args []string) int {
+	fs, fl := newSiemensServeFlags()
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	host, user, pin, listen, projectDir, poll, roots := fl.host, fl.user, fl.pin, fl.listen, fl.project, fl.poll, fl.roots
 	cfg, err := resolveSiemensServe(*host, *user, *pin, *projectDir, roots, *poll, *listen, os.Getenv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut siemens serve:", err)
@@ -182,44 +221,70 @@ func runSiemensServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut siemens serve:", err)
 		return 2
 	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Fprintf(os.Stderr, "browsing %s...\n", cfg.host)
-	bctx, cancel := context.WithTimeout(ctx, time.Minute)
-	f, err := facade.New(bctx, facade.Options{
+	return serveSiemens(ctx, cfg, client, os.Stdout, os.Stderr, nil)
+}
+
+// siemensFacadeOptions is the facade's configuration for cfg.
+func siemensFacadeOptions(cfg siemensServeConfig, client *webapi.Client) facade.Options {
+	return facade.Options{
 		Client: client,
 		Host:   cfg.host,
 		Roots:  cfg.roots,
 		Poll:   cfg.poll,
-		Server: server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")},
-	})
+		Server: server.Options{AuthToken: cfg.token},
+	}
+}
+
+// serveSiemens runs the facade until ctx ends. Whatever happens after the
+// first browse, the Web API session is logged out before it returns, so a
+// stopped serve never holds one of the CPU's few session slots. ready, when
+// set, receives the API's address once it listens.
+func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Client, stdout, stderr io.Writer, ready chan<- string) int {
+	defer func() {
+		lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := client.Logout(lctx); err != nil {
+			fmt.Fprintln(stderr, "naut siemens serve: logout:", err)
+		}
+	}()
+	fmt.Fprintf(stderr, "browsing %s...\n", cfg.host)
+	bctx, cancel := context.WithTimeout(ctx, time.Minute)
+	f, err := facade.New(bctx, siemensFacadeOptions(cfg, client))
 	cancel()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "naut siemens serve:", err)
+		fmt.Fprintln(stderr, "naut siemens serve:", err)
 		return 1
 	}
 	for _, s := range f.Skipped() {
-		fmt.Fprintln(os.Stderr, "  skipped", s)
+		fmt.Fprintln(stderr, "  skipped", s)
 	}
 	ln, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "naut siemens serve:", err)
+		fmt.Fprintln(stderr, "naut siemens serve:", err)
 		return 1
 	}
-	go f.Run(ctx)
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+	go f.Run(runCtx)
 	srv := &http.Server{Handler: f.Handler()}
-	go func() {
-		<-ctx.Done()
-		_ = srv.Close()
-		_ = client.Logout(context.Background())
-	}()
-	fmt.Printf("nautilus · Siemens %s — %d tags on http://%s — Ctrl+C to stop\n",
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
+	fmt.Fprintf(stdout, "nautilus · Siemens %s — %d tags on http://%s — Ctrl+C to stop\n",
 		cfg.host, len(f.Bindings()), displayAddr(ln.Addr()))
-	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
-		fmt.Fprintln(os.Stderr, "naut siemens serve:", err)
-		return 1
+	if ready != nil {
+		ready <- ln.Addr().String()
 	}
+	select {
+	case err := <-served:
+		fmt.Fprintln(stderr, "naut siemens serve:", err)
+		return 1
+	case <-ctx.Done():
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(sctx)
 	return 0
 }
 

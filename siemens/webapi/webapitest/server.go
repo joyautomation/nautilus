@@ -83,6 +83,9 @@ type Server struct {
 	Requests int // HTTP requests served, for asserting batching
 	Calls    int // JSON-RPC calls served
 	Logins   int // successful Api.Login calls
+
+	loginAttempts int
+	writeError    int // when set, every PlcProgram.Write answers this code
 }
 
 type session struct {
@@ -159,6 +162,21 @@ func (s *Server) StopAnswering() {
 	if s.FailAfter == 0 {
 		s.FailAfter = -1
 	}
+}
+
+// FailWrites makes every later PlcProgram.Write answer the CPU error code
+// (webapi.CodeSystemIsBusy, say); 0 clears it.
+func (s *Server) FailWrites(code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeError = code
+}
+
+// LoginAttempts counts every Api.Login, successful or not.
+func (s *Server) LoginAttempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loginAttempts
 }
 
 // Value returns a variable's current value.
@@ -302,6 +320,7 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 		}
 		return ok(out)
 	case "Api.Login":
+		s.loginAttempts++
 		var p struct {
 			User     string `json:"user"`
 			Password string `json:"password"`
@@ -394,6 +413,9 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 	case "PlcProgram.Write":
 		if !can("write_value") {
 			return fail(2, "Permission denied")
+		}
+		if s.writeError != 0 {
+			return fail(s.writeError, "write failed")
 		}
 		var p struct {
 			Var   string `json:"var"`

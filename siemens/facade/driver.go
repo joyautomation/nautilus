@@ -142,6 +142,9 @@ func convertWrite(t string, v any) (any, error) {
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return nil, fmt.Errorf("%s cannot be sent NaN or infinity over the Web API", t)
 		}
+		if t == "REAL" && math.Abs(f) > math.MaxFloat32 {
+			return nil, fmt.Errorf("%v is outside REAL (a 32-bit float, at most %g)", v, math.MaxFloat32)
+		}
 		return f, nil
 	}
 	f, ok := number(v)
@@ -179,26 +182,44 @@ func number(v any) (float64, bool) {
 
 // ── the driver ──────────────────────────────────────────────────────────
 
-// Driver polls the bound symbols into a snapshot the runtime reads. It
-// implements io.Driver; the runtime's outputs are empty, so WriteOutputs
-// has nothing to do (writes go through the facade's TagWriter).
+// Driver polls the bound symbols into the values the runtime reads. It
+// implements io.Driver and io.QualityReporter; the runtime's outputs are
+// empty, so WriteOutputs has nothing to do (writes go through the
+// facade's TagWriter).
+//
+// Values are held: a tag whose read fails keeps its last value, and its
+// quality says why it is no longer current. A failed poll (the CPU
+// unreachable, the login refused) is retried with an exponential backoff,
+// so a CPU that restarted or changed its users is not asked for a login
+// on every poll.
 type Driver struct {
 	c    *webapi.Client
 	bs   []Binding
 	poll time.Duration
+	// BackoffMin and BackoffMax bound the wait after a failed poll.
+	// Defaults: one poll period (at least 1 s), and 30 s.
+	BackoffMin, BackoffMax time.Duration
+	now                    func() time.Time
 
 	mu        sync.Mutex
-	snapshot  nio.Values
-	connected bool
+	values    nio.Values      // last good value per tag
+	failing   map[string]bool // tags whose last read failed
+	connected bool            // the last poll reached the CPU
+	readOnce  bool
 	lastErr   string
 	since     time.Time
-	failing   int
-	readOnce  bool
+	backoff   time.Duration
+	nextTry   time.Time
 }
 
 // NewDriver builds a driver over the bindings; Run starts it.
 func NewDriver(c *webapi.Client, bs []Binding, poll time.Duration) *Driver {
-	return &Driver{c: c, bs: bs, poll: poll, snapshot: nio.Values{}, since: time.Now()}
+	min := poll
+	if min < time.Second {
+		min = time.Second
+	}
+	return &Driver{c: c, bs: bs, poll: poll, BackoffMin: min, BackoffMax: 30 * time.Second,
+		now: time.Now, values: nio.Values{}, failing: map[string]bool{}, since: time.Now()}
 }
 
 // Run polls until ctx ends.
@@ -206,13 +227,22 @@ func (d *Driver) Run(ctx context.Context) {
 	t := time.NewTicker(d.poll)
 	defer t.Stop()
 	for {
-		d.PollOnce(ctx)
+		if d.due() {
+			d.PollOnce(ctx)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
 	}
+}
+
+// due reports whether the backoff after a failed poll has run out.
+func (d *Driver) due() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.now().Before(d.nextTry)
 }
 
 // PollOnce reads every bound symbol once.
@@ -226,49 +256,59 @@ func (d *Driver) PollOnce(ctx context.Context) {
 	defer d.mu.Unlock()
 	if err != nil {
 		if d.connected || d.lastErr == "" {
-			d.since = time.Now()
+			d.since = d.now()
 		}
 		d.connected = false
 		d.lastErr = err.Error()
+		switch {
+		case d.backoff == 0:
+			d.backoff = d.BackoffMin
+		case d.backoff < d.BackoffMax:
+			d.backoff *= 2
+		}
+		if d.backoff > d.BackoffMax {
+			d.backoff = d.BackoffMax
+		}
+		d.nextTry = d.now().Add(d.backoff)
 		return
 	}
 	if !d.connected {
-		d.since = time.Now()
+		d.since = d.now()
 	}
 	d.connected, d.lastErr, d.readOnce = true, "", true
-	fresh := make(nio.Values, len(rs))
-	failing := 0
+	d.backoff, d.nextTry = 0, time.Time{}
 	for i, r := range rs {
+		name := d.bs[i].Name
 		if r.Err != nil {
-			failing++
+			d.failing[name] = true
 			d.lastErr = fmt.Sprintf("read %s: %v", d.bs[i].Symbol, r.Err)
-			continue // absent this delivery: the runtime keeps the last value
+			continue // the last value is held; Quality says it is Bad
 		}
 		v, err := decode(d.bs[i].Type, r.Value)
 		if err != nil {
-			failing++
+			d.failing[name] = true
 			d.lastErr = fmt.Sprintf("read %s: %v", d.bs[i].Symbol, err)
 			continue
 		}
-		fresh[d.bs[i].Name] = v
+		delete(d.failing, name)
+		d.values[name] = v
 	}
-	d.failing = failing
-	d.snapshot = fresh
 }
 
-// ReadInputs returns the last snapshot, or an error until the first poll
-// has succeeded or while the CPU is unreachable.
+// ReadInputs returns the held values, or an error until the first poll has
+// reached the CPU. After that it never fails: Quality says which values
+// are no longer current, and why.
 func (d *Driver) ReadInputs() (nio.Values, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if !d.connected {
+	if !d.readOnce {
 		if d.lastErr != "" {
 			return nil, errors.New(d.lastErr)
 		}
 		return nil, errors.New("siemens: not read yet")
 	}
-	out := make(nio.Values, len(d.snapshot))
-	for k, v := range d.snapshot {
+	out := make(nio.Values, len(d.values))
+	for k, v := range d.values {
 		out[k] = v
 	}
 	return out, nil
@@ -276,6 +316,36 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 
 // WriteOutputs has nothing to write: the CPU runs the program.
 func (d *Driver) WriteOutputs(nio.Values) error { return nil }
+
+// Quality reports the non-Good tags (io.QualityReporter): NotConnected for
+// a tag never read, Bad for one whose last read failed, Stale for every
+// held value while the CPU cannot be reached.
+func (d *Driver) Quality() map[string]nio.Quality {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out map[string]nio.Quality
+	for _, b := range d.bs {
+		_, held := d.values[b.Name]
+		var q nio.Quality
+		switch {
+		case !held:
+			q = nio.NotConnected
+		case !d.connected:
+			q = nio.Stale
+		case d.failing[b.Name]:
+			q = nio.Bad
+		default:
+			continue
+		}
+		if out == nil {
+			out = map[string]nio.Quality{}
+		}
+		out[b.Name] = q
+	}
+	return out
+}
+
+var _ nio.QualityReporter = (*Driver)(nil)
 
 // Health is the driver's state for the status panel.
 type Health struct {
@@ -290,6 +360,6 @@ type Health struct {
 func (d *Driver) Health() Health {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return Health{Connected: d.connected, Tags: len(d.bs), Failing: d.failing, LastError: d.lastErr,
+	return Health{Connected: d.connected, Tags: len(d.bs), Failing: len(d.failing), LastError: d.lastErr,
 		SinceMs: d.since.UnixMilli()}
 }
