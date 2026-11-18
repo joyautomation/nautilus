@@ -133,12 +133,17 @@ END_VAR
 Elementary types are `BOOL`; the integer kinds `SINT`, `USINT`, `INT`, `UINT`,
 `DINT`, `UDINT`, `LINT`, `ULINT`, `BYTE`, `WORD`, `DWORD`, `LWORD`; `REAL` and
 `LREAL`; `TIME` and `LTIME`; `STRING`, `WSTRING`, `CHAR`, and `WCHAR`. `WSTRING`, `CHAR` and `WCHAR`
-are accepted as declarations but are held as `STRING`. Integer
-kinds share one 64-bit representation, so a declared width documents intent
-without narrowing: arithmetic does not wrap (an `INT` at 32767 plus 1 is
-32768), by design, so a counter or totaliser never turns silently wrong. A
-conversion such as `TO_INT` wraps to its target when you want the PLC
-behaviour. Mixing signed and unsigned widens to a signed type that holds both
+are accepted as declarations but are held as `STRING`. A store keeps its
+type's width, as on a PLC: an `INT` at 32767 plus 1 is -32768, and a total
+that outgrows 32 bits belongs in a `LINT`. Arithmetic itself is computed in
+64 bits until it is stored. An implicit conversion follows the IEC table:
+within the signed, unsigned or bit-string family and wider, or unsigned
+into a wider signed type. Anything else is a compile error that names the
+conversion to write: `i := d` with `d : DINT` needs `DINT_TO_INT(d)` (which
+wraps), `d := w` with `w : WORD` needs `WORD_TO_DINT(w)`, `r := d` into a
+`REAL` needs `DINT_TO_REAL(d)` (a REAL holds an integer exactly only up to
+16 bits; an `LREAL` takes a DINT), `r := lr` needs `LREAL_TO_REAL(lr)`, and
+a literal the type cannot hold is refused. Mixing signed and unsigned widens to a signed type that holds both
 (`INT + UINT` is a `DINT`) rather than being refused. `TIME` counts
 milliseconds.
 

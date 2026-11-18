@@ -114,9 +114,9 @@ is the house style. What matters here:
 
 Where the implementation deliberately departs from the standard (the
 documented ones live in `lang/ir/builtins_std.go` and `docs/functions.md`:
-every INT width is int64 and arithmetic never wraps — a conversion does,
-`st-conversions-matrix` — ROL/ROR rotate over 64 bits, string positions
-clamp), the corpus **pins the deviation as a test** — a
+an expression is computed in 64 bits until a store or a conversion cuts
+it to the declared width — `st-int-width`, `st-conversions-matrix` — SHR
+zero-fills an INT as Codesys does, string positions clamp), the corpus **pins the deviation as a test** — a
 feature whose suite asserts the actual, documented behaviour, with a
 comment at the top of the `*_test.yaml` saying which decision it pins and
 where it is written down. The point is that the deviation is a decision,

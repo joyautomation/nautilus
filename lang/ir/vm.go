@@ -141,6 +141,9 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 		if err != nil {
 			return err
 		}
+		if n.Wrap != nil && v.Kind == TypeInt {
+			v.I = n.Wrap.Apply(v.I)
+		}
 		return writeLValue(ctx, n.Target, v)
 
 	case *If:

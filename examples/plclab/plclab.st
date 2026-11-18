@@ -33,7 +33,7 @@ END_VAR
 
 (* PLC-Lab's input bytes into the image *)
 FOR a := 0 TO 9 DO
-    n := PlcLabConnector.AreaInputs[a].CntBytes;
+    n := WORD_TO_DINT(PlcLabConnector.AreaInputs[a].CntBytes);
     IF n = 0 THEN
         EXIT;
     END_IF;
@@ -68,7 +68,7 @@ qb[0].%X3 := FullLamp;    (* Q0.3 *)
    scan lands only the Outputs bytes assigned here, so an input byte or an
    area entry PLC-Lab writes while the scan runs is never put back. *)
 FOR a := 0 TO 9 DO
-    n := PlcLabConnector.AreaOutputs[a].CntBytes;
+    n := WORD_TO_DINT(PlcLabConnector.AreaOutputs[a].CntBytes);
     IF n = 0 THEN
         EXIT;
     END_IF;

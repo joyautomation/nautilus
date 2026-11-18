@@ -3,14 +3,14 @@ VAR_EXTERNAL
     Alarms    : DINT;
     st_Bit3   : BOOL;
     st_Bit3L  : BOOL;   (* the same bit, Logix spelling *)
-    st_Byte1  : INT;
+    st_Byte1  : BYTE;
     st_Packed : WORD;
     Small     : LINT;
     Wide      : LINT;
-    st_HiByte : LINT;
-    st_HiWord : LINT;
-    st_Dw0    : LINT;
-    st_L0     : LINT;
+    st_HiByte : BYTE;
+    st_HiWord : WORD;
+    st_Dw0    : DWORD;
+    st_L0     : LWORD;
     st_Mix    : LINT;
 END_VAR
 st_Bit3 := Alarms.%X3;

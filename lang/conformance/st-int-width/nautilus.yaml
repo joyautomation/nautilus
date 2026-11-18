@@ -1,4 +1,4 @@
-# st-int-width — every integer kind is int64: no wrap at declared widths, 64-bit ROL/ROR.
+# st-int-width — a store keeps its declared integer width (#782); shifts and rotates act on it.
 # ST only. Outputs carry the st_ prefix like every corpus feature.
 #
 #   go test ./lang/conformance/ -run 'TestConformance/st-int-width'

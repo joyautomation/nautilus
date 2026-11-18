@@ -323,6 +323,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if tok := os.Getenv("NAUTILUS_TOKEN"); tok != "" {
 		sopts.AuthToken = tok
 	}
+	sopts.AllowedHosts = append(sopts.AllowedHosts, allowedHosts()...)
 	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
 		sopts.HistorianURL = h
 	}
@@ -375,6 +376,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	} else {
 		apiUp = true
 		apiLn = ln
+		if sopts.AuthToken == "" && !loopbackListen(addr) {
+			fmt.Fprintf(os.Stderr, openListenWarning, addr)
+		}
 		// The HTTP port is the first thing shutdown gives back: it is
 		// closed as soon as the stop arrives (below), before the wait for
 		// the last scan and the deferred stops above (OPC UA sessions, the
@@ -1039,6 +1043,9 @@ this file.
 Environment:
   NAUTILUS_ADDR            listen address, overriding server.addr in the manifest
   NAUTILUS_TOKEN           bearer token the tag API and dashboard require
+  NAUTILUS_ALLOWED_HOSTS   host names (comma-separated) a browser page may
+                           write from without a token, besides localhost
+                           and an IP address
   NAUTILUS_HISTORIAN_URL   historian the dashboard queries for trends
   NAUTILUS_CLI=1           run the naut command line instead of the controller
 

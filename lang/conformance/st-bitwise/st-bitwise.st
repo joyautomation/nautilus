@@ -1,5 +1,6 @@
 PROGRAM BitwiseSt
-(* AND, OR, XOR and NOT as operators on INT: bitwise over 64 bits. *)
+(* AND, OR, XOR and NOT as operators on INT: bitwise, two's complement,
+   stored into the INT's 16 bits. *)
 VAR_EXTERNAL
     X, Y : INT;
     st_AND, st_OR, st_XOR, st_NOT : INT;

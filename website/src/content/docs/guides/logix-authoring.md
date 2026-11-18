@@ -504,8 +504,8 @@ and the `resets`. The answer is a stream of JSON lines (`progress` events, then
 - **The numbers are the controller's.** A REAL is 32 bits on the
   controller and 64 in nautilus, so compare REALs with `near`. A REAL out
   of range for the integer it is stored into wraps silently on the
-  controller, where nautilus faults the scan. nautilus does not wrap an
-  integer at its declared width; the controller does.
+  controller, where nautilus faults the scan. An integer store wraps at its
+  declared width on both.
 - **The hardware configuration comes from Logix Designer.** The writer
   carries an exported `<Modules>` section; it does not create a module from
   a description (catalog number and slot) yet, so a new module is added in

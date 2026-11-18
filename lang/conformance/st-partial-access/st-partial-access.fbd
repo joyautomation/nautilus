@@ -2,14 +2,14 @@ PROGRAM PartFbd
 VAR_EXTERNAL
     Alarms     : DINT;
     fbd_Bit3   : BOOL;
-    fbd_Byte1  : INT;
+    fbd_Byte1  : BYTE;
     fbd_Packed : WORD;
     Small      : LINT;
     Wide       : LINT;
-    fbd_HiByte : LINT;
-    fbd_HiWord : LINT;
-    fbd_Dw0    : LINT;
-    fbd_L0     : LINT;
+    fbd_HiByte : BYTE;
+    fbd_HiWord : WORD;
+    fbd_Dw0    : DWORD;
+    fbd_L0     : LWORD;
     fbd_Mix    : LINT;
 END_VAR
 FBD

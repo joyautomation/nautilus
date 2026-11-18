@@ -23,10 +23,12 @@ type parsed struct {
 // routine is the per-routine lowering state: the folds found in the
 // pre-pass and the output.
 type routine struct {
-	im    *importer
-	sc    *scope
-	p     *pou
-	rungs []*parsed
+	// realExpr: the CPT being lowered computes in REAL (#782).
+	realExpr bool
+	im       *importer
+	sc       *scope
+	p        *pou
+	rungs    []*parsed
 	// edges maps a one-shot's output tag to the edge contact it folds to
 	// (+Name / -Name); the helper rung itself is dropped.
 	edges map[string]string

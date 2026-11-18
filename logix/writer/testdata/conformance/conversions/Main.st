@@ -118,7 +118,7 @@ rR7 := xr + arr[DINT_TO_SINT(xk)];
 rD11 := xa / 2;
 rR8 := DINT_TO_REAL(rD11);
 (* a user block's input is a store into the parameter *)
-pr1(x := xa, y => rR10);
+pr1(x := DINT_TO_REAL(xa), y => rR10); (* IEC: a DINT into a REAL input is explicit, #782 *)
 pr2(x := DINT_TO_REAL(xd), y => rR11);
 pd1(x := REAL_TO_DINT(xr), y => rD12);
 END_PROGRAM
