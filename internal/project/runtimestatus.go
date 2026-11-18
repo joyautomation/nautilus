@@ -350,9 +350,11 @@ func (s *statusOverMemory) ReadInputsInto(dst nio.Values) error {
 	return s.status.ReadInputsInto(dst)
 }
 
+// Quality merges the loopback's into a fresh map: Memory's is nil until
+// something has set a quality.
 func (s *statusOverMemory) Quality() map[string]nio.Quality {
-	q := s.Memory.Quality()
-	for k, v := range s.status.Quality() {
+	q := s.status.Quality()
+	for k, v := range s.Memory.Quality() {
 		q[k] = v
 	}
 	return q
