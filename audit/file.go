@@ -47,8 +47,8 @@ const (
 // policy belong to the caller (the server's recording seam).
 type FileJournal struct {
 	unlock func() // releases the directory's lock (OpenFile)
-	dir  string
-	opts FileOptions
+	dir    string
+	opts   FileOptions
 	// write and sync make an entry durable; a test replaces them to fail.
 	write func(*os.File, []byte) (int, error)
 	sync  func(*os.File) error
