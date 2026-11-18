@@ -37,6 +37,29 @@ stop) if alive; then kill "$(cat "$pidf")"; sleep 0.2; fi; rm -f "$pidf" ;;
 esac
 `
 
+// writeSleepStandIn puts a sleep first on a test PATH: box.sh's settle
+// wait after a (re)start (started's `sleep 3`) takes $FAKE_SETTLE seconds,
+// half a second unless a test sets it; every other sleep is the real one.
+// box.sh itself is unchanged (a knob in it would change the helper's
+// version and give root a setting only tests use). #895.
+func writeSleepStandIn(t *testing.T, bin string) {
+	t.Helper()
+	if n := strings.Count(deployBoxSh, "\tsleep 3\n"); n != 2 {
+		t.Fatalf("box.sh has %d settle waits spelled `sleep 3`, the stand-in expects 2: update writeSleepStandIn", n)
+	}
+	real, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep on PATH")
+	}
+	if strings.ContainsAny(real, "'\n") {
+		t.Skipf("sleep at an unquotable path %q", real)
+	}
+	script := "#!/bin/sh\nif [ \"$#\" = 1 ] && [ \"$1\" = 3 ]; then exec '" + real + "' \"${FAKE_SETTLE:-0.5}\"; fi\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "sleep"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type boxEnv struct {
 	t                *testing.T
 	root, state, sd  string
@@ -48,7 +71,7 @@ type boxEnv struct {
 func newBoxEnv(t *testing.T) *boxEnv {
 	t.Helper()
 	if testing.Short() {
-		t.Skip("runs box.sh with its 3 s start checks")
+		t.Skip("runs box.sh with its start checks")
 	}
 	if goruntime.GOOS != "linux" {
 		t.Skip("box.sh needs a Linux shell and coreutils")
@@ -62,6 +85,7 @@ func newBoxEnv(t *testing.T) *boxEnv {
 		os.MkdirAll(d, 0o755)
 	}
 	os.WriteFile(filepath.Join(bin, "systemctl"), []byte(fakeSystemctl), 0o755)
+	writeSleepStandIn(t, bin)
 	os.WriteFile(filepath.Join(bin, "journalctl"), []byte("#!/bin/sh\ncat \"$FAKE_SD/log\" 2>/dev/null\n"), 0o755)
 	os.WriteFile(filepath.Join(e.root, "nautilus.service.in"), deployUnit, 0o644)
 	e.env = append(os.Environ(),
@@ -176,6 +200,25 @@ func TestDeployBoxFailedUpdateRestoresRetain(t *testing.T) {
 	}
 	if r := strings.TrimSpace(e.retain()); r != kept {
 		t.Errorf("retained values after the rollback: %q, want %q, the old release's last save", r, kept)
+	}
+}
+
+// A release that passes the start check and dies a moment later is caught
+// by the settle wait: the update rolls back (exit 3). Here it dies 1.5 s
+// in, 1 s after the stand-in systemctl's own 0.5 s check, and 2 s before a
+// 3 s settle ends: margins a loaded runner cannot wobble.
+func TestDeployBoxUpdateCatchesALateDeath(t *testing.T) {
+	e := newBoxEnv(t)
+	if out, code := e.deploy("install", "good", e.good); code != 0 {
+		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	e.env = append(e.env, "FAKE_SETTLE=3")
+	out, code := e.deploy("update", "late", "#!/bin/sh\nsleep 1.5\nexit 3\n")
+	if code != 3 {
+		t.Fatalf("update to a release that dies 1.5 s after starting: exit %d, want 3\n%s", code, out)
+	}
+	if e.link("current") != "good" || !e.running() {
+		t.Errorf("after the rollback: current %q, running %v; want good, running", e.link("current"), e.running())
 	}
 }
 
