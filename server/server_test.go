@@ -274,6 +274,8 @@ func TestCORSAllowsOnlyOriginsThatCannotBeAnotherSite(t *testing.T) {
 		{"a sandboxed frame", "GET", "/api/state", "localhost:8080", "null", false},
 		{"a website preflighting a write", "OPTIONS", "/api/tags", "localhost:8080", "https://evil.example", false},
 		{"a rebound name", "GET", "/api/state", "evil.example:8080", "http://evil.example:3000", false},
+		{"a name that starts with localhost", "GET", "/api/state", "localhost:8080", "http://localhost.evil.com", false},
+		{"a name that resolves to loopback", "GET", "/api/state", "localhost:8080", "http://127.0.0.1.nip.io", false},
 		{"a dev server on this machine", "GET", "/api/state", "localhost:8080", "http://localhost:5173", true},
 		{"a dev server by 127.0.0.1", "GET", "/api/state", "192.168.1.10:8080", "http://127.0.0.1:5173", true},
 		{"the controller's own address, another port", "GET", "/api/state", "192.168.1.10:8080", "http://192.168.1.10:3000", true},
@@ -288,6 +290,11 @@ func TestCORSAllowsOnlyOriginsThatCannotBeAnotherSite(t *testing.T) {
 		if rec.Header().Get("Vary") != "Origin" {
 			t.Errorf("%s: Vary %q, want Origin", tc.what, rec.Header().Get("Vary"))
 		}
+	}
+	// Vary: Origin is sent with or without an Origin, so a cache keeps
+	// one origin's answer from another.
+	if v := get(open, "GET", "/api/state", "localhost:8080", "", "").Header().Get("Vary"); v != "Origin" {
+		t.Errorf("no-Origin request: Vary %q, want Origin", v)
 	}
 	// With a token configured: a request carrying it may read from any
 	// origin (the authorized cross-origin client), and its preflight is

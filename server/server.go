@@ -841,9 +841,9 @@ func (s *Server) awaitLeaderChange(ctx context.Context, old string) (addr string
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Add("Vary", "Origin")
-		}
+		// Always: a cache must not hand one origin's answer (with or
+		// without the CORS header) to another.
+		w.Header().Add("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "") {
 				w.Header().Set("Access-Control-Allow-Origin", origin)

@@ -79,7 +79,12 @@ where marked `…`.
   Authorization, X-Nautilus-Token`. Whether a page can write is decided by
   the next section. A screen served by the controller itself, the HMI dev
   servers (their proxy presents the controller's origin), scripts and the
-  VS Code extension need none of this.
+  VS Code extension need none of this. A screen served from another host
+  must be at a name in `NAUTILUS_ALLOWED_HOSTS` to show live values: the
+  live stream (`GET /api/stream`) is an `EventSource`, which cannot send a
+  header, so the token cannot open it across origins. A token lets that
+  screen's own `fetch` reads and writes through, not its stream. (There is
+  deliberately no token in the query string: URLs end up in logs.)
 
 ## Authentication
 
