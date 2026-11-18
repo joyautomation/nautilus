@@ -37,6 +37,7 @@ import {
   splitProgram,
 } from "./programSync";
 import { declaredBlockNames, referencesAnyBlock } from "./composeCli";
+import { apiFetch } from "./apiFetch";
 
 /** One entry in the GET /api/program directory — every program in the
  * resource, source omitted. */
@@ -177,12 +178,12 @@ export class OnlineEdit implements vscode.Disposable {
   private async fetchInfo(pou?: string): Promise<ProgramInfo | undefined> {
     try {
       if (pou) {
-        const res = await fetch(this.runtimeUrl() + "/api/program?pou=" + encodeURIComponent(pou));
+        const res = await apiFetch(this.runtimeUrl() + "/api/program?pou=" + encodeURIComponent(pou));
         if (res.ok) return (await res.json()) as ProgramInfo;
         if (res.status !== 404) return undefined;
         // 404: no program by that name — fall through to main.
       }
-      const res = await fetch(this.runtimeUrl() + "/api/program");
+      const res = await apiFetch(this.runtimeUrl() + "/api/program");
       if (!res.ok) return undefined;
       return (await res.json()) as ProgramInfo;
     } catch {
@@ -439,7 +440,7 @@ export class OnlineEdit implements vscode.Disposable {
       if (pick !== "Download") return;
     }
     try {
-      const res = await fetch(this.runtimeUrl() + "/api/program", {
+      const res = await apiFetch(this.runtimeUrl() + "/api/program", {
         method: "PUT",
         headers: this.writeHeaders(),
         body: JSON.stringify({ source: composed.source, baseHash: info.hash }),
@@ -476,7 +477,7 @@ export class OnlineEdit implements vscode.Disposable {
   }
 
   private async put(source: string): Promise<void> {
-    const res = await fetch(this.runtimeUrl() + "/api/program", {
+    const res = await apiFetch(this.runtimeUrl() + "/api/program", {
       method: "PUT",
       headers: this.writeHeaders(),
       body: JSON.stringify({ source }),
@@ -713,7 +714,7 @@ export class OnlineEdit implements vscode.Disposable {
     }
     const query = program?.pou ? "?pou=" + encodeURIComponent(program.pou) : "";
     try {
-      const res = await fetch(this.runtimeUrl() + "/api/program/rollback" + query, { method: "POST", headers: this.writeHeaders() });
+      const res = await apiFetch(this.runtimeUrl() + "/api/program/rollback" + query, { method: "POST", headers: this.writeHeaders() });
       const body = (await res.json()) as { hash?: string; error?: string };
       if (res.ok) {
         void notifyInfo(`nautilus: rolled back to ${body.hash}`);

@@ -24,4 +24,4 @@ func loopbackListen(addr string) bool {
 // machine with no token (#811): every client on the network can write
 // tags, and a browser by any address but localhost, an IP or an allowed
 // name is refused.
-const openListenWarning = "WARNING: the tag API listens on %s with no NAUTILUS_TOKEN: any client that reaches it can write tags and drive outputs. Set NAUTILUS_TOKEN to require a token; without one, only requests to localhost, an IP address or a name in NAUTILUS_ALLOWED_HOSTS are answered.\n"
+const openListenWarning = "WARNING: the tag API listens on %s with no NAUTILUS_TOKEN: any client that reaches it can write tags and drive outputs. Set NAUTILUS_TOKEN to require a token. Only requests to localhost, an IP address or a name in NAUTILUS_ALLOWED_HOSTS are answered, unless they carry the token.\n"

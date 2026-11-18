@@ -357,10 +357,56 @@ func TestGuardHostRefusesEveryRouteOnARebindableHost(t *testing.T) {
 	if srec.Code != http.StatusForbidden {
 		t.Errorf("the stream by a rebound name: %d, want 403", srec.Code)
 	}
-	// With a token configured, reads stay ungated, as documented.
+	// With a token configured, a request by a name no page can rebind is
+	// answered without it, as before; by any other name it needs the
+	// token, so a rebound page cannot read a token controller either.
 	locked := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
-	if got := get(locked, "GET", "evil.example:8080", "/api/state"); got != http.StatusOK {
-		t.Errorf("a read on a token controller: %d, want 200", got)
+	for _, path := range []string{"/api/state", "/api/program", "/"} {
+		if got := get(locked, "GET", "evil.example:8080", path); got != http.StatusForbidden {
+			t.Errorf("GET %s on a token controller by a rebound name: %d, want 403", path, got)
+		}
+		if got := get(locked, "GET", "192.168.82.10:8080", path); got == http.StatusForbidden {
+			t.Errorf("GET %s on a token controller by IP: 403, want it answered", path)
+		}
+	}
+	tokReq := httptest.NewRequest("GET", "http://hmi.example/api/state", nil)
+	tokReq.Host = "hmi.example:8080"
+	tokReq.Header.Set("Authorization", "Bearer s3cret")
+	tokRec := httptest.NewRecorder()
+	locked.Handler().ServeHTTP(tokRec, tokReq)
+	if tokRec.Code != http.StatusOK {
+		t.Errorf("a read with the token by any name: %d, want 200", tokRec.Code)
+	}
+	// A cross-origin page holding the token is still served by name: its
+	// preflight carries no token, so it is answered (204, no data), and the
+	// request it precedes carries the token.
+	pre := httptest.NewRequest("OPTIONS", "http://hmi.example/api/tags", nil)
+	pre.Host = "hmi.example:8080"
+	pre.Header.Set("Origin", "https://ops.example")
+	pre.Header.Set("Access-Control-Request-Method", "POST")
+	pre.Header.Set("Access-Control-Request-Headers", "authorization")
+	preRec := httptest.NewRecorder()
+	locked.Handler().ServeHTTP(preRec, pre)
+	if preRec.Code != http.StatusNoContent || preRec.Header().Get("Access-Control-Allow-Origin") != "https://ops.example" || preRec.Body.Len() != 0 {
+		t.Errorf("a preflight on a token controller by name: %d, ACAO %q, %d bytes; want 204 echoing the origin, no body",
+			preRec.Code, preRec.Header().Get("Access-Control-Allow-Origin"), preRec.Body.Len())
+	}
+	// Without a token configured, the same preflight by a rebound name is
+	// refused like every other request.
+	pre2 := pre.Clone(pre.Context())
+	tokenless := New(newTestRuntime(t))
+	openRec := httptest.NewRecorder()
+	tokenless.Handler().ServeHTTP(openRec, pre2)
+	if openRec.Code != http.StatusForbidden {
+		t.Errorf("a preflight on a token-less controller by a rebound name: %d, want 403", openRec.Code)
+	}
+	// A bare OPTIONS (no preflight header) is no exemption.
+	bare := httptest.NewRequest("OPTIONS", "http://hmi.example/api/state", nil)
+	bare.Host = "hmi.example:8080"
+	bareRec := httptest.NewRecorder()
+	locked.Handler().ServeHTTP(bareRec, bare)
+	if bareRec.Code != http.StatusForbidden {
+		t.Errorf("a bare OPTIONS on a token controller by name: %d, want 403", bareRec.Code)
 	}
 }
 
@@ -388,7 +434,7 @@ func TestNewReadsAllowedHostsFromTheEnvironment(t *testing.T) {
 func TestWriteAuthToken(t *testing.T) {
 	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
 	post := func(setup func(*http.Request)) int {
-		req := httptest.NewRequest("POST", "http://plc.local/api/tags",
+		req := httptest.NewRequest("POST", "http://192.168.1.10/api/tags",
 			bytes.NewBufferString(`{"name":"SP","value":70}`))
 		if setup != nil {
 			setup(req)

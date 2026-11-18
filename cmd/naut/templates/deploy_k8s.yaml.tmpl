@@ -72,10 +72,11 @@ spec:
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: POD_IP
               valueFrom: {fieldRef: {fieldPath: status.podIP}}
-            # The names the Service gives the controller. Without a token,
-            # nautilus answers only localhost, an IP address or a name
-            # listed here (#819), so anything that reaches it through the
-            # Service (a historian, a dashboard, another pod) needs these.
+            # The names the Service gives the controller. nautilus answers
+            # only localhost, an IP address or a name listed here unless a
+            # request carries the token (#819), so anything that reaches it
+            # through the Service (a dashboard, a historian, another pod)
+            # needs these.
             # The probes use the pod IP. A cluster domain other than
             # cluster.local goes in the last entry.
             - name: POD_NAMESPACE

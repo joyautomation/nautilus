@@ -3,6 +3,19 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The token goes with every request to the controller.** With
+  `nautilus.token` set, live values, the tag table, online edit, the FBD
+  preview, SFC commands, the mimic editor and the page preview now send it
+  on reads and on the live stream, not only on writes. A controller with a
+  token answers a name it doesn't trust (anything but `localhost`, an IP,
+  or a name in its `NAUTILUS_ALLOWED_HOSTS`) only when the request carries
+  the token (#819), so a `nautilus.runtimeUrl` by DNS name would otherwise
+  get 403 on every read.
+
 ## [0.21.1] - 2026-11-17
 
 Works with naut 0.20.0: Toggle Bit and the diagram live actions use the

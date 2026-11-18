@@ -226,9 +226,9 @@ Open **http://localhost:8080** for the built-in live dashboard, or
 `GET /api/state` for the raw tag snapshot. Setpoints are click-to-set right
 in the tag table (BOOLs get a toggle); inputs and outputs are not editable,
 because the driver rewrites one before every scan and the logic rewrites the
-other after. Reads are open; set `NAUTILUS_TOKEN=<secret>` to require a token
-on writes. Without one, nautilus answers only requests addressed to
-`localhost`, an IP address, or a name in `NAUTILUS_ALLOWED_HOSTS`.
+other after. Set `NAUTILUS_TOKEN=<secret>` to require a token on writes.
+nautilus answers only requests addressed to `localhost`, an IP address, or
+a name in `NAUTILUS_ALLOWED_HOSTS`, unless the request carries the token.
 
 **4. Develop in VS Code**
 

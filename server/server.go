@@ -233,14 +233,14 @@ type Options struct {
 	// never gated — dashboards and editor live values stay open on the LAN.
 	AuthToken string
 
-	// AllowedHosts are host names (no port) a browser page may write from
-	// when no AuthToken is set, besides localhost and an IP address
-	// (#811): a name an operator really uses for this controller, such as
-	// "epic1.plant.lan". Without a token, a browser write whose Host is any
-	// other name is refused, because a page on an attacker's domain can
-	// rebind that name to this machine (DNS rebinding) and its Origin then
-	// matches its Host. NAUTILUS_ALLOWED_HOSTS adds to it in every
-	// embedder (New reads it).
+	// AllowedHosts are host names (no port) the server answers by without
+	// the token, besides localhost and an IP address (#811, #819): a name
+	// an operator really uses for this controller, such as
+	// "epic1.plant.lan". A request by any other name is refused unless it
+	// carries the token, because a page on an attacker's domain can rebind
+	// that name to this machine (DNS rebinding) and is then same-origin
+	// with it. NAUTILUS_ALLOWED_HOSTS adds to it in every embedder (New
+	// reads it).
 	AllowedHosts []string
 
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
@@ -873,19 +873,28 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// GuardHost answers, with no token configured, only a request addressed to
-// a Host no page can rebind (#819): localhost, an IP address or an allowed
-// name, the rule #811 applies to writes. A page on an attacker's domain
-// rebound to this machine is same-origin with it, so CORS does not stop
-// it reading; this does, for every route: the API, the live stream, the
-// dashboard and the HMI. A facade that serves routes of its own wraps its
-// handler in it too. With a token configured, reads stay ungated as
-// documented and writes need the token.
+// GuardHost answers only a request addressed to a Host no page can rebind
+// (localhost, an IP address or an allowed name, the rule #811 applies to
+// writes), or, when a token is configured, one that carries it (#819). A
+// page on an attacker's domain rebound to this machine is same-origin with
+// it, so CORS does not stop it reading; this does, for every route: the
+// API, the live stream, the dashboard and the HMI. A page load and an
+// EventSource cannot send a header, so a dashboard reached by a name needs
+// that name allowed, token or not. A facade that serves routes of its own
+// wraps its handler in it too.
 func (s *Server) GuardHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.authToken == "" && !s.trustedHost(r.Host) {
+		// A browser's CORS preflight never carries the token, so on a token
+		// server a genuine one goes on to withCORS, which answers it with no
+		// data; the request it asks about still needs the token here.
+		preflight := r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
+		if !s.trustedHost(r.Host) && !(s.authToken != "" && (preflight || tokenMatches(r, s.authToken))) {
 			w.Header().Add("Vary", "Origin")
-			http.Error(w, fmt.Sprintf("this controller answers %q only with an auth token: without one it is reached by localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS (a page on another site could rebind %q to it); add the name to NAUTILUS_ALLOWED_HOSTS, or set NAUTILUS_TOKEN", r.Host, hostOnly(r.Host)), http.StatusForbidden)
+			how := "add the name to NAUTILUS_ALLOWED_HOSTS, or set NAUTILUS_TOKEN"
+			if s.authToken != "" {
+				how = "send the auth token, or add the name to NAUTILUS_ALLOWED_HOSTS (a browser page or a live stream cannot send the token)"
+			}
+			http.Error(w, fmt.Sprintf("this controller answers %q only with an auth token: it is reached without one by localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS (a page on another site could rebind %q to it); %s", r.Host, hostOnly(r.Host), how), http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1300,7 +1309,7 @@ func (s *Server) trustedHost(host string) bool {
 }
 
 // EnvAllowedHosts is NAUTILUS_ALLOWED_HOSTS: host names, comma-separated,
-// the server answers by without a token besides localhost and an IP.
+// the server answers by without the token besides localhost and an IP.
 func EnvAllowedHosts() []string {
 	var out []string
 	for _, h := range strings.Split(os.Getenv("NAUTILUS_ALLOWED_HOSTS"), ",") {

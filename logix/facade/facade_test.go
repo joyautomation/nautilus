@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/joyautomation/nautilus/server"
 	"io"
 	"net"
 	"net/http"
@@ -318,5 +319,45 @@ func TestFacadeRefusesARebindableHost(t *testing.T) {
 		if ip.StatusCode == http.StatusForbidden {
 			t.Errorf("GET %s by IP = 403", path)
 		}
+	}
+}
+
+// #819: a token controller is no softer. A rebound name without the token
+// does not get the program source; with the token, or by IP, it does.
+func TestFacadeWithATokenRefusesARebindableHostWithoutIt(t *testing.T) {
+	port, _ := startController(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f, err := New(ctx, Options{Host: "127.0.0.1", Port: port, Poll: 30 * time.Millisecond, Server: server.Options{AuthToken: "s3cret"}})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { f.Run(ctx); close(done) }()
+	api := httptest.NewServer(f.Handler())
+	t.Cleanup(func() { api.Close(); cancel(); <-done })
+	do := func(host, token string) int {
+		req, _ := http.NewRequest("GET", api.URL+"/api/program", nil)
+		if host != "" {
+			req.Host = host
+		}
+		if token != "" {
+			req.Header.Set("X-Nautilus-Token", token)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if got := do("evil.example:8080", ""); got != http.StatusForbidden {
+		t.Errorf("rebound, no token: %d, want 403", got)
+	}
+	if got := do("evil.example:8080", "s3cret"); got == http.StatusForbidden {
+		t.Errorf("rebound, with the token: 403")
+	}
+	if got := do("", ""); got == http.StatusForbidden {
+		t.Errorf("by IP, no token: 403")
 	}
 }

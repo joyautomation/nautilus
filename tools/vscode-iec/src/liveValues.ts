@@ -53,6 +53,7 @@ import {
 } from "./tagTypes";
 import { activeDiagramTag, diagramHasFocus } from "./diagramSelection";
 import { noTagMessage, tagOf, toggleBitDecision, type TagArg } from "./liveActions";
+import { apiFetch, apiStreamHeaders } from "./apiFetch";
 
 type Frame = {
   ts: number;
@@ -373,7 +374,7 @@ export class LiveValues implements vscode.Disposable {
     const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
     if (token) headers["Authorization"] = "Bearer " + token;
     try {
-      const res = await fetch(this.runtimeUrl() + "/api/tags", {
+      const res = await apiFetch(this.runtimeUrl() + "/api/tags", {
         method: "POST",
         headers,
         body: JSON.stringify({ name, value }),
@@ -613,7 +614,7 @@ export class LiveValues implements vscode.Disposable {
     let buffer = "";
     const since = Date.now();
 
-    const req = mod.get(url, (res) => {
+    const req = mod.get(url, { headers: apiStreamHeaders() }, (res) => {
       if (res.statusCode !== 200) {
         res.resume();
         this.scheduleReconnect();
@@ -656,7 +657,7 @@ export class LiveValues implements vscode.Disposable {
   private async fetchMeta(): Promise<void> {
     this.metaAt = Date.now();
     try {
-      const res = await fetch(this.runtimeUrl() + "/api/meta", { signal: AbortSignal.timeout(3000) });
+      const res = await apiFetch(this.runtimeUrl() + "/api/meta", { signal: AbortSignal.timeout(3000) });
       if (!res.ok) return;
       this.types = flattenMetaTypes(await res.json());
       this.metaNames = this.lastTags.length + this.lastLocals.length;
