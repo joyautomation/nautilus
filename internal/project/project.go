@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -384,17 +385,25 @@ type PriorityGuardConfig struct {
 	ScanMultiple float64 `yaml:"scan-multiple"` // one scan longer than this many periods
 }
 
+// The priority-guard bounds a manifest may set: generous, but finite, so a
+// guard cannot be switched off by a huge number.
+const (
+	maxGuardOverruns     = 100000
+	maxGuardScanMultiple = 10000
+)
+
 // guard checks a task's priority-guard: block and converts it.
 func (t TaskConfig) guard() (runtime.PriorityGuard, error) {
 	g := t.PriorityGuard
 	if g == nil {
 		return runtime.PriorityGuard{}, nil
 	}
-	if g.Overruns < 0 {
-		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: overruns %d: a count of scans, 1 or more (or leave it out for %d)", t.Program, g.Overruns, runtime.DefaultGuardOverruns)
+	if g.Overruns < 0 || g.Overruns > maxGuardOverruns {
+		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: overruns %d: a count of scans from 1 to %d (or leave it out for %d)", t.Program, g.Overruns, maxGuardOverruns, runtime.DefaultGuardOverruns)
 	}
-	if g.ScanMultiple != 0 && g.ScanMultiple < 2 {
-		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: scan-multiple %g: 2 or more, or ordinary jitter would trip it (or leave it out for %g)", t.Program, g.ScanMultiple, runtime.DefaultGuardScanMultiple)
+	// NaN fails every comparison, so it is named; Inf fails the cap.
+	if m := g.ScanMultiple; m != 0 && (math.IsNaN(m) || m < 2 || m > maxGuardScanMultiple) {
+		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: scan-multiple %g: from 2 (below that, ordinary jitter would trip it) to %d (or leave it out for %g)", t.Program, m, maxGuardScanMultiple, runtime.DefaultGuardScanMultiple)
 	}
 	return runtime.PriorityGuard{Overruns: g.Overruns, ScanMultiple: g.ScanMultiple}, nil
 }

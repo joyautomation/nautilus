@@ -310,10 +310,10 @@ func TestRTGuardPriorityWatchdog(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if s.Sched.Applied || !strings.Contains(s.Sched.Error, "5 scans in a row overran") {
+	if s.Sched.Applied || !s.Sched.Demoted || !strings.Contains(s.Sched.Error, "5 scans in a row overran") {
 		t.Errorf("main task: %+v, want demoted for 5 overruns in a row", s.Sched)
 	}
-	if st := s.Tasks[0].Sched; st.Applied || !strings.Contains(st.Error, "has run for more than") {
+	if st := s.Tasks[0].Sched; st.Applied || !st.Demoted || !strings.Contains(st.Error, "has run for more than") {
 		t.Errorf("stuck task: %+v, want demoted while its scan ran", st)
 	}
 	for name, tid := range map[string]int64{"main": r.tid.Load(), "stuck": r.tasks[0].tid.Load()} {

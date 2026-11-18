@@ -139,8 +139,12 @@ export interface SchedStats {
 	/** SCHED_FIFO priority (Linux), 1–99; absent = normal. */
 	priority?: number;
 	applied: boolean;
-	/** The OS's refusal, when a request was not granted. */
+	/** The OS's refusal, or why a granted priority was withdrawn. */
 	error?: string;
+	/** Granted, then withdrawn (the priority guard, or the kernel's CPU limit). */
+	demoted?: boolean;
+	/** The priority guard's bounds, for a task at a priority. */
+	guard?: { overruns: number; scanMultiple: number };
 }
 
 /**

@@ -156,6 +156,12 @@ type SchedStats struct {
 	Priority int    `json:"priority,omitempty"`
 	Applied  bool   `json:"applied"`
 	Error    string `json:"error,omitempty"`
+	// Demoted: the priority was granted and later withdrawn (the priority
+	// guard or the kernel's RLIMIT_RTTIME); Error says why. A refusal at
+	// start leaves it false.
+	Demoted bool `json:"demoted,omitempty"`
+	// Guard is the bound a task at a priority runs under (prioguard.go).
+	Guard *PriorityGuard `json:"guard,omitempty"`
 }
 
 // taskRun is a compiled Task plus its live scheduling state.
@@ -445,7 +451,7 @@ func New(o Options) (*Runtime, error) {
 		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority, guard: td.Guard.withDefaults()}
 		tr.watch.limit = tr.guard.Overruns
 		tr.stats.Name = name
-		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority}
+		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard)}
 		tr.stats.TargetMs = scan.Seconds() * 1000
 		lt := td.LateThreshold
 		if lt <= 0 {
@@ -575,7 +581,7 @@ func New(o Options) (*Runtime, error) {
 	r.cpus, r.prio = o.CPUs, o.Priority
 	r.guard = o.Guard.withDefaults()
 	r.watch.limit = r.guard.Overruns
-	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority}
+	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard)}
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -1031,7 +1037,9 @@ func (r *Runtime) Run(ctx context.Context) {
 			guarded = append(guarded, r.guardLoop(r.live.loops[i+1], tr.scan, tr.guard, &tr.tid))
 		}
 	}
-	go monitorPriority(ctx, guarded)
+	if len(guarded) > 0 {
+		go monitorPriority(ctx, guarded, demoteTid)
+	}
 	var loops sync.WaitGroup
 	for i, tr := range r.tasks {
 		loops.Add(1)
@@ -1049,7 +1057,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			}, func() {
 				err := applySched(tr.cpus, tr.prio, func(reason string) {
 					tr.mu.Lock()
-					tr.stats.Sched.Applied, tr.stats.Sched.Error = false, reason
+					tr.stats.Sched.Applied, tr.stats.Sched.Error, tr.stats.Sched.Demoted = false, reason, true
 					tr.mu.Unlock()
 				})
 				if err == nil && tr.prio > 0 {
@@ -1057,6 +1065,7 @@ func (r *Runtime) Run(ctx context.Context) {
 				}
 				tr.mu.Lock()
 				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
+				tr.stats.Sched.Guard = guardStat(tr.prio, tr.guard)
 				tr.mu.Unlock()
 				logSched(tr.name, tr.cpus, tr.prio, err)
 			})
@@ -1074,7 +1083,7 @@ func (r *Runtime) Run(ctx context.Context) {
 	}, func() {
 		err := applySched(r.cpus, r.prio, func(reason string) {
 			r.mu.Lock()
-			r.stats.Sched.Applied, r.stats.Sched.Error = false, reason
+			r.stats.Sched.Applied, r.stats.Sched.Error, r.stats.Sched.Demoted = false, reason, true
 			r.mu.Unlock()
 		})
 		if err == nil && r.prio > 0 {
@@ -1082,6 +1091,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		}
 		r.mu.Lock()
 		r.stats.Sched = schedResult(r.cpus, r.prio, err)
+		r.stats.Sched.Guard = guardStat(r.prio, r.guard)
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
@@ -1106,11 +1116,15 @@ func (r *Runtime) Run(ctx context.Context) {
 
 // guardLoop is the priority monitor's view of one loop (prioguard.go).
 func (r *Runtime) guardLoop(l *loopLive, period time.Duration, g PriorityGuard, tid *atomic.Int64) *guarded {
-	return &guarded{
-		live:   l,
-		bound:  time.Duration(g.ScanMultiple * float64(period)),
-		demote: func(reason string) bool { return demoteTid(int(tid.Load()), reason) },
+	return &guarded{live: l, bound: guardBound(period, g.ScanMultiple), tid: tid, held: holdsPriority}
+}
+
+// guardStat is the guard shown in a task's stats: only with a priority.
+func guardStat(prio int, g PriorityGuard) *PriorityGuard {
+	if prio <= 0 {
+		return nil
 	}
+	return &g
 }
 
 // schedResult is the SchedStats for a placement request and its outcome.

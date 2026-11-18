@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,14 +32,35 @@ import (
 // PriorityGuard bounds a task that runs at a priority. Zero fields take the
 // defaults.
 type PriorityGuard struct {
-	Overruns     int     // scans in a row longer than the period; default 50
-	ScanMultiple float64 // one scan longer than this many periods; default 20
+	Overruns     int     `json:"overruns"`     // scans in a row longer than the period; default 50
+	ScanMultiple float64 `json:"scanMultiple"` // one scan longer than this many periods; default 20
 }
 
 const (
 	DefaultGuardOverruns     = 50
 	DefaultGuardScanMultiple = 20.0
+	// MinGuardBound is the shortest a scan may run before the in-flight
+	// check demotes it, whatever the period: one stall of a few tens of
+	// milliseconds (a page fault, VM steal, a slow observer) is not a
+	// runaway, and a demotion lasts until restart.
+	MinGuardBound = 50 * time.Millisecond
+	// maxGuardBound caps the in-flight bound, so a huge or non-finite
+	// multiple cannot overflow into a negative duration.
+	maxGuardBound = time.Hour
 )
+
+// guardBound is the in-flight bound for a period: multiple × period, no
+// less than MinGuardBound and no more than an hour.
+func guardBound(period time.Duration, multiple float64) time.Duration {
+	b := multiple * float64(period)
+	if math.IsNaN(b) || b > float64(maxGuardBound) {
+		return maxGuardBound
+	}
+	if b < float64(MinGuardBound) {
+		return MinGuardBound
+	}
+	return time.Duration(b)
+}
 
 func (g PriorityGuard) withDefaults() PriorityGuard {
 	if g.Overruns <= 0 {
@@ -75,11 +98,13 @@ func (w *overrunWatch) observe(scan, period time.Duration) string {
 }
 
 // guarded is one loop the monitor watches: its edge counter (liveness.go),
-// the bound on one scan, and how to demote its thread.
+// the bound on one scan, its thread, and whether that thread still holds
+// a priority of ours.
 type guarded struct {
 	live   *loopLive
 	bound  time.Duration
-	demote func(reason string) bool // false when its thread holds no priority
+	tid    *atomic.Int64
+	held   func(tid int) bool // the registry: still at real-time priority
 	seen   uint64
 	seenAt time.Time
 	done   bool
@@ -87,12 +112,18 @@ type guarded struct {
 
 // check returns the reason to demote the loop at now, once, or "": a scan
 // in progress (odd edge count) that has not ended for longer than the
-// bound, measured from the first check that saw it, as Liveness does.
+// bound, measured from the first check that saw it, as Liveness does. A
+// loop whose thread holds no priority once it has started (refused, not
+// Linux, or demoted already by another path) is done: nothing to guard.
 func (g *guarded) check(now time.Time) string {
 	if g.done {
 		return ""
 	}
 	v := g.live.edges.Load()
+	if v > 0 && !g.held(int(g.tid.Load())) { // its setup has run (runLoop)
+		g.done = true
+		return ""
+	}
 	if v != g.seen || g.seenAt.IsZero() {
 		g.seen, g.seenAt = v, now
 		return ""
@@ -104,9 +135,11 @@ func (g *guarded) check(now time.Time) string {
 	return ""
 }
 
-// monitorPriority checks the guarded loops until ctx ends, at a tenth of
-// the shortest bound (no faster than 1 ms, no slower than 100 ms).
-func monitorPriority(ctx context.Context, loops []*guarded) {
+// monitorPriority checks the guarded loops until ctx ends or none is left
+// to guard, at a tenth of the shortest bound (no faster than 1 ms, no
+// slower than 100 ms). demote moves a thread, returning false when it held
+// no priority of ours.
+func monitorPriority(ctx context.Context, loops []*guarded, demote func(tid int, reason string) bool) {
 	if len(loops) == 0 {
 		return
 	}
@@ -126,10 +159,17 @@ func monitorPriority(ctx context.Context, loops []*guarded) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
+			left := 0
 			for _, g := range loops {
-				if reason := g.check(now); reason != "" && g.demote(reason) {
+				if reason := g.check(now); reason != "" && demote(int(g.tid.Load()), reason) {
 					slog.Error("runtime: real-time priority withdrawn", "task", g.live.name, "reason", reason)
 				}
+				if !g.done {
+					left++
+				}
+			}
+			if left == 0 {
+				return
 			}
 		}
 	}

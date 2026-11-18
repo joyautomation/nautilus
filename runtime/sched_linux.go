@@ -212,9 +212,23 @@ func demoteTid(tid int, reason string) bool {
 	if !ok {
 		return false
 	}
-	setOther(tid)
+	if err := setOther(tid); err != nil {
+		slog.Error("runtime: could not move a real-time thread to normal scheduling", "tid", tid, "error", err)
+	}
 	if told != nil {
 		told(reason)
 	}
 	return true
+}
+
+// holdsPriority: tid is a thread this process moved to real-time priority
+// and has not demoted.
+func holdsPriority(tid int) bool {
+	if tid == 0 {
+		return false
+	}
+	rtGuard.mu.Lock()
+	defer rtGuard.mu.Unlock()
+	_, ok := rtGuard.threads[tid]
+	return ok
 }

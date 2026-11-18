@@ -278,8 +278,9 @@ claims:
     claim: >-
       A task at priority: that overruns its period a set number of scans in
       a row (default 50), or whose one scan runs for more than a set multiple
-      of its period (default 20, checked while the scan runs), is moved to
-      normal scheduling, alone, with the reason in its scan.sched;
+      of its period (default 20, never under 50 ms, checked while the scan
+      runs), is moved to normal scheduling, alone, with demoted and the
+      reason in its scan.sched;
       priority-guard: sets both per task.
     source: "#priority-and-pinning"
     tests:
@@ -287,6 +288,10 @@ claims:
       - go ./runtime TestPriorityGuardStuckScan
       - go ./runtime TestRTGuardDemoteOneThread
       - go ./runtime TestRTGuardPriorityWatchdog
+      - go ./runtime TestPriorityGuardBound
+      - go ./runtime TestPriorityGuardMonitorStops
+      - go ./internal/project TestPriorityGuardFromTheManifest
+      - go ./internal/project TestPriorityGuardManifestRefusals
     note: >-
       TestRTGuardPriorityWatchdog needs CAP_SYS_NICE: it skips under go test
       ./... and runs in CI's setcap'd RT guard step with
