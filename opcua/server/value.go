@@ -137,17 +137,16 @@ func children(m member) []member {
 
 // compositeArray says whether an array's elements are themselves structs,
 // FBs or arrays — which OPC UA cannot carry as one array Variant, so the
-// array is exposed as an Object with one child per element instead.
+// array is exposed as an Object with one child per element instead. An
+// IEC array is homogeneous, so its first element decides; an empty one is
+// not composite.
 func compositeArray(v ir.Value) bool {
-	if v.Kind != ir.TypeArray {
+	if v.Kind != ir.TypeArray || len(v.Arr) == 0 {
 		return false
 	}
-	for _, e := range v.Arr {
-		switch e.Kind {
-		case ir.TypeStruct, ir.TypeFB, ir.TypeArray:
-			return true
-		}
-		return false
+	switch v.Arr[0].Kind {
+	case ir.TypeStruct, ir.TypeFB, ir.TypeArray:
+		return true
 	}
 	return false
 }
