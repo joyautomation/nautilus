@@ -126,9 +126,8 @@ What this limit does **not** catch:
 - **An endless loop in your program.** That is the likeliest runaway, and
   this limit does not stop it. Go preempts the task about every 10 ms and
   parks its thread for a few microseconds, which resets the count, while
-  the core stays all but full. The runtime's own priority watchdog
-  (#836) is what catches that case. Until it is in your version, a
-  `priority:` task with a loop that never ends can starve its core.
+  the core stays all but full. The runtime's priority watchdog, below,
+  catches that case.
 - **A core with `nohz_full`.** The count advances once per scheduler tick,
   and the kernel stops the tick on a core whose only runnable thread is
   this one. There the 200 ms limit can take tens of seconds to trip.
@@ -138,6 +137,36 @@ What this limit does **not** catch:
   it, and the outcome is the hard limit's kill instead. Under
   `naut deploy` the service restarts, and on a PLCnext the shim's output
   watchdog drives the outputs safe meanwhile.
+
+**The runtime watches its own priority tasks too.** A task at `priority:`
+loses the priority the same way in two cases. One is overrunning its
+period 50 times in a row. The other is a single scan running for more than
+20 periods, and never less than 50 ms, so that one stall of a few tens of
+milliseconds is not mistaken for a runaway. The second check runs while
+the scan is still going, so it catches a scan that never ends, which the
+kernel limit misses when the scan keeps getting preempted. Only that task
+is demoted, and it stays demoted until a restart. Its scan carries on at
+normal priority: it still uses CPU and the main task still reads, runs
+and writes. It now takes its turn with everything else, so expect more
+lateness. To see a demotion:
+
+- the dashboard's task row shows `fifo 40 DEMOTED (overrun)`;
+- the task's `scan.sched` in `/api/stats` shows `demoted: true` and the
+  reason, beside the `guard` it ran under;
+- the log has an error.
+
+Loosen the bounds per task where a task legitimately runs long now and
+then:
+
+```yaml
+tasks:
+  - program: fast.st
+    scan: 1ms
+    priority: 40
+    priority-guard:
+      overruns: 200       # scans in a row over the period (default 50, at most 100000)
+      scan-multiple: 100  # one scan longer than this many periods (default 20, from 2 to 10000)
+```
 
 **`cpu:` alone makes things worse.** Pinned, a task can no longer move off
 a core something else just landed on, and at normal priority it has no

@@ -102,6 +102,9 @@ type Options struct {
 	// pinned core is actually quiet.
 	CPUs     []int
 	Priority int
+	// Guard bounds the main task while it runs at Priority (prioguard.go);
+	// zero fields take the defaults. Tasks have the same field.
+	Guard PriorityGuard
 	// Coordinator gates the scan loop for redundancy: a standby replica
 	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
 	// performs the takeover sequence (reload retained state, reset program
@@ -126,6 +129,7 @@ type Task struct {
 	// CPUs and Priority pin this task's thread — see Options.CPUs.
 	CPUs     []int
 	Priority int
+	Guard    PriorityGuard // see Options.Guard
 }
 
 // TaskStats is one additional task's health, riding inside ScanStats.
@@ -152,6 +156,12 @@ type SchedStats struct {
 	Priority int    `json:"priority,omitempty"`
 	Applied  bool   `json:"applied"`
 	Error    string `json:"error,omitempty"`
+	// Demoted: the priority was granted and later withdrawn (the priority
+	// guard or the kernel's RLIMIT_RTTIME); Error says why. A refusal at
+	// start leaves it false.
+	Demoted bool `json:"demoted,omitempty"`
+	// Guard is the bound a task at a priority runs under (prioguard.go).
+	Guard *PriorityGuard `json:"guard,omitempty"`
 }
 
 // taskRun is a compiled Task plus its live scheduling state.
@@ -162,6 +172,9 @@ type taskRun struct {
 	dtTag string
 	cpus  []int
 	prio  int
+	guard PriorityGuard // with defaults
+	watch overrunWatch  // the loop's own (prioguard.go)
+	tid   atomic.Int64  // the loop's thread once it holds the priority
 
 	mu       sync.Mutex
 	lastScan time.Time
@@ -197,6 +210,9 @@ type Runtime struct {
 	coord       Coordinator
 	cpus        []int // main task thread placement, see Options.CPUs
 	prio        int
+	guard       PriorityGuard // main task, with defaults (prioguard.go)
+	watch       overrunWatch  // main loop's own
+	tid         atomic.Int64  // main loop's thread once it holds the priority
 
 	// retainSkipped remembers which retained tags retainState has already
 	// logged as unretainable (see retainable), so the 2-second saver names
@@ -432,9 +448,10 @@ func New(o Options) (*Runtime, error) {
 		if scan <= 0 {
 			scan = 100 * time.Millisecond
 		}
-		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority}
+		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority, guard: td.Guard.withDefaults()}
+		tr.watch.limit = tr.guard.Overruns
 		tr.stats.Name = name
-		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority}
+		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard)}
 		tr.stats.TargetMs = scan.Seconds() * 1000
 		lt := td.LateThreshold
 		if lt <= 0 {
@@ -562,7 +579,9 @@ func New(o Options) (*Runtime, error) {
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
 	r.cpus, r.prio = o.CPUs, o.Priority
-	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority}
+	r.guard = o.Guard.withDefaults()
+	r.watch.limit = r.guard.Overruns
+	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard)}
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -1009,6 +1028,18 @@ func (r *Runtime) Run(ctx context.Context) {
 	if r.tags.comm != nil {
 		defer r.tags.comm.close()
 	}
+	var guarded []*guarded
+	if r.prio > 0 {
+		guarded = append(guarded, r.guardLoop(r.live.loops[0], r.scan, r.guard, &r.tid))
+	}
+	for i, tr := range r.tasks {
+		if tr.prio > 0 {
+			guarded = append(guarded, r.guardLoop(r.live.loops[i+1], tr.scan, tr.guard, &tr.tid))
+		}
+	}
+	if len(guarded) > 0 {
+		go monitorPriority(ctx, guarded, demoteTid)
+	}
 	var loops sync.WaitGroup
 	for i, tr := range r.tasks {
 		loops.Add(1)
@@ -1026,11 +1057,15 @@ func (r *Runtime) Run(ctx context.Context) {
 			}, func() {
 				err := applySched(tr.cpus, tr.prio, func(reason string) {
 					tr.mu.Lock()
-					tr.stats.Sched.Applied, tr.stats.Sched.Error = false, reason
+					tr.stats.Sched.Applied, tr.stats.Sched.Error, tr.stats.Sched.Demoted = false, reason, true
 					tr.mu.Unlock()
 				})
+				if err == nil && tr.prio > 0 {
+					tr.tid.Store(int64(currentTid()))
+				}
 				tr.mu.Lock()
 				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
+				tr.stats.Sched.Guard = guardStat(tr.prio, tr.guard)
 				tr.mu.Unlock()
 				logSched(tr.name, tr.cpus, tr.prio, err)
 			})
@@ -1048,11 +1083,15 @@ func (r *Runtime) Run(ctx context.Context) {
 	}, func() {
 		err := applySched(r.cpus, r.prio, func(reason string) {
 			r.mu.Lock()
-			r.stats.Sched.Applied, r.stats.Sched.Error = false, reason
+			r.stats.Sched.Applied, r.stats.Sched.Error, r.stats.Sched.Demoted = false, reason, true
 			r.mu.Unlock()
 		})
+		if err == nil && r.prio > 0 {
+			r.tid.Store(int64(currentTid()))
+		}
 		r.mu.Lock()
 		r.stats.Sched = schedResult(r.cpus, r.prio, err)
+		r.stats.Sched.Guard = guardStat(r.prio, r.guard)
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
@@ -1073,6 +1112,19 @@ func (r *Runtime) Run(ctx context.Context) {
 				"store", r.retainStore.Kind(), "error", why)
 		}
 	}
+}
+
+// guardLoop is the priority monitor's view of one loop (prioguard.go).
+func (r *Runtime) guardLoop(l *loopLive, period time.Duration, g PriorityGuard, tid *atomic.Int64) *guarded {
+	return &guarded{live: l, bound: guardBound(period, g.ScanMultiple), tid: tid, held: holdsPriority}
+}
+
+// guardStat is the guard shown in a task's stats: only with a priority.
+func guardStat(prio int, g PriorityGuard) *PriorityGuard {
+	if prio <= 0 {
+		return nil
+	}
+	return &g
 }
 
 // schedResult is the SchedStats for a placement request and its outcome.
@@ -1206,14 +1258,22 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	if !first {
 		tr.late.record(lateUs(t0, due, dt, tr.scan), execS > tr.scan.Seconds())
 	}
+	var guardWhy string
+	if tr.prio > 0 && !due.IsZero() {
+		guardWhy = tr.watch.observe(t1.Sub(t0), tr.scan)
+	}
 	if err != nil {
 		tr.stats.LogicErrors++
 		tr.stats.LastError = msg
 	}
 	ev := tr.fault.observe(msg, t1)
 	tr.mu.Unlock()
-	// After the unlock: Stats() takes tr.mu, and a log sink may be slow.
+	// After the unlock: Stats() takes tr.mu, and a log sink may be slow;
+	// the demotion's callback takes tr.mu too.
 	r.logFault(tr.name, "logic", ev)
+	if guardWhy != "" && demoteTid(int(tr.tid.Load()), guardWhy) {
+		slog.Error("runtime: real-time priority withdrawn", "task", tr.name, "reason", guardWhy)
+	}
 }
 
 // Scan executes one full cycle: read inputs, run the program, write outputs.
@@ -1331,6 +1391,11 @@ func (r *Runtime) scanAt(due time.Time) {
 	r.fireOnScan()
 
 	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr, lateUs(t0, due, dt, r.scan))
+	if r.prio > 0 && !due.IsZero() && !first {
+		if why := r.watch.observe(t3.Sub(t0), r.scan); why != "" && demoteTid(int(r.tid.Load()), why) {
+			slog.Error("runtime: real-time priority withdrawn", "task", MainTaskName, "reason", why)
+		}
+	}
 }
 
 // lateUs is one lateness sample: the scan's start against its slot when
