@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Open binds a port to the named interface: an AF_PACKET socket that
@@ -44,7 +46,9 @@ func Open(ifname string, opt Options) (Port, error) {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("profinet transport: %s on %s: %w", what, ifname, err)
 	}
-	if err := syscall.AttachLsf(fd, etherTypeFilter(opt.EtherTypes)); err != nil {
+	filter := etherTypeFilter(opt.EtherTypes)
+	if err := unix.SetsockoptSockFprog(fd, unix.SOL_SOCKET, unix.SO_ATTACH_FILTER,
+		&unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}); err != nil {
 		return fail("attach filter", err)
 	}
 	if err := syscall.Bind(fd, &syscall.SockaddrLinklayer{Protocol: htons(syscall.ETH_P_ALL), Ifindex: ifi.Index}); err != nil {
@@ -157,11 +161,11 @@ func parseFrame(b []byte) (Frame, bool) {
 // etherTypeFilter accepts a frame whose EtherType, or whose 802.1Q
 // inner EtherType, is one of types; it drops everything else in the
 // kernel.
-func etherTypeFilter(types []uint16) []syscall.SockFilter {
+func etherTypeFilter(types []uint16) []unix.SockFilter {
 	const (
-		ldh  = syscall.BPF_LD | syscall.BPF_H | syscall.BPF_ABS
-		jeq  = syscall.BPF_JMP | syscall.BPF_JEQ | syscall.BPF_K
-		ret  = syscall.BPF_RET | syscall.BPF_K
+		ldh  = unix.BPF_LD | unix.BPF_H | unix.BPF_ABS
+		jeq  = unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K
+		ret  = unix.BPF_RET | unix.BPF_K
 		keep = 0x40000
 	)
 	n := len(types)
@@ -175,9 +179,9 @@ func etherTypeFilter(types []uint16) []syscall.SockFilter {
 	//   2n+4    ret keep   (ACCEPT)
 	drop := 2*n + 3
 	accept := drop + 1
-	var p []syscall.SockFilter
+	var p []unix.SockFilter
 	add := func(code uint16, jt, jf int, k uint32) {
-		p = append(p, syscall.SockFilter{Code: code, Jt: uint8(jt), Jf: uint8(jf), K: k})
+		p = append(p, unix.SockFilter{Code: code, Jt: uint8(jt), Jf: uint8(jf), K: k})
 	}
 	at := func() int { return len(p) }
 	add(ldh, 0, 0, 12)
