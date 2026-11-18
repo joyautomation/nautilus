@@ -86,7 +86,7 @@
 	import { T } from '@threlte/core';
 	import { RoundedBoxGeometry } from '@threlte/extras';
 	import { getContext, onMount } from 'svelte';
-	import { asset } from '$app/paths';
+	import { base } from '$app/paths';
 	import { AdditiveBlending, CanvasTexture, CatmullRomCurve3, Mesh, MeshStandardMaterial, TubeGeometry, Vector3, type BufferGeometry } from 'three';
 	import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 	import { SCENE, type SceneContext } from '@joyautomation/nautilus-hmi-3d';
@@ -125,7 +125,7 @@
 	onMount(() => {
 		const loader = new GLTFLoader();
 		for (const name of PARTS)
-			loader.load(asset(`/models/${name}.glb`), (gltf) => {
+			loader.load(`${base}/models/${name}.glb`, (gltf) => {
 				gltf.scene.traverse((o) => {
 					if (o instanceof Mesh) bodies[name] = o.geometry;
 				});

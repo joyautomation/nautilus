@@ -37,7 +37,10 @@
 	const ms = (v: number | undefined, digits: number) => (typeof v === 'number' ? v.toFixed(digits) : '—');
 
 	let rows = $derived<Row[]>([
-		{ label: 'Driver', value: driver ? `${driver.kind} ${driver.state}` : '—', tone: driver && driver.state !== 'connected' ? 'crit' : undefined },
+		// No driver in a frame that has arrived is the simulated build
+		// (sim.yaml, the playground): memory is no field driver, so it
+		// sends no driver row.
+		{ label: 'Driver', value: driver ? `${driver.kind} ${driver.state}` : rt.frame ? 'none (simulated)' : '—', tone: driver && driver.state !== 'connected' ? 'crit' : undefined },
 		{ label: 'I/O online', value: tags.EPIC__Online === true ? 'yes' : tags.EPIC__Online === false ? 'no' : '—', tone: tags.EPIC__Online === false ? 'crit' : undefined },
 		{ label: 'Outages', value: count('EPIC__Outages') },
 		{ label: 'Watchdog trips', value: count('EPIC__WatchdogTrips') },
