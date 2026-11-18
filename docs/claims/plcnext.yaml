@@ -252,13 +252,18 @@ claims:
     claim: >-
       With naut run's write gate closed (a hung or starved scan) the plcnext
       driver writes nothing: over shm no page write, so the shim's output
-      watchdog drives the frame to zero; over gRPC no output span, so the
-      outputs hold, which it logs as an error and its status shows as
-      outputs held with no safe state; a connection made while closed does
-      not configure or start the bus. Reopened, it conducts the bus, writes
-      the whole frame and asks for every output.
+      watchdog drives the frame to zero, not counted as a watchdog trip;
+      over gRPC, or shm with output-watchdog 0, the outputs hold, which it
+      logs as an error and its status shows as outputs held with no safe
+      state. The gate is looked at before each BusConductor request, and a
+      handshake cut short finishes once the gate opens, before any output.
+      Reopened, it asks for every output and writes nothing until the
+      runtime's push, then the whole frame.
     source: "#when-the-scans-stop-the-write-gate"
     tests:
       - go ./plcnext TestWriteGateGRPC
       - go ./plcnext TestWriteGateShm
+      - go ./plcnext TestWriteGateShmWithoutWatchdog
+      - go ./plcnext TestWriteGateClosesMidHandshake
+      - go ./plcnext TestPollHoldsOutputsUntilConducted
       - go ./internal/project TestPlcnextStatusShowsTheClosedGate

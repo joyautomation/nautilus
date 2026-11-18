@@ -335,7 +335,8 @@ protocol driver's input, which reads as zero until delivered (see [Inputs
 from a device that is
 down](/guides/tag-model/#inputs-from-a-device-that-is-down)). `__Outages` (DINT) counts the times it went false.
 `__WatchdogTrips` (DINT) counts the times the output frame went to zero
-without the driver choosing it: naut stalled for longer than
+without the driver choosing it (a closed [write
+gate](#when-the-scans-stop-the-write-gate) is the driver's choice): naut stalled for longer than
 `output-watchdog` between two writes to the page, the shim reported its
 watchdog had fired, or the shim restarted. A naut killed and restarted
 by the keepalive finds the shim's watchdog bit set by its predecessor's
@@ -392,17 +393,23 @@ the outputs then do depends on the transport:
 - **shm:** the page isn't written, its heartbeat included. The shim's
   output watchdog (`output-watchdog`, 1 s by default) drives the output
   frame to **zero**. That's a safe state, provided zero is safe for your
-  outputs.
-- **gRPC:** the output span isn't written, and the outputs **hold their
-  last values**. This route has no output watchdog. The driver logs the
-  closed gate as an error and its status row says "outputs held (no safe
-  state on this route)". nautilus won't invent output values to send.
-- **BusConductor:** a connection made while the gate is closed only reads
-  the bus. It configures and starts it once the gate opens.
+  outputs. The driver chose it, so it doesn't count in `__WatchdogTrips`.
+- **gRPC, or shm with `output-watchdog: 0`:** nothing is written, and the
+  outputs **hold their last values**. Nothing on these routes takes them
+  to a safe state, and nautilus won't invent output values to send. The
+  hold shows in three places only: an error in the log, `GateHolds` in the
+  driver's health, and the status row ("outputs held (no safe state…)").
+  No status binding reports it, and the outputs carry no quality.
+- **BusConductor:** the gate is looked at before each request the
+  handshake writes. Once it's closed, the bus is only read, and the rest
+  of the handshake runs, before any output, once the gate opens.
 
-When the gate opens again, the whole output frame is written on the next
-poll. **For production with outputs, use the shm transport.** It's the
-one with a safe state when the program stops.
+The gate is looked at once per poll, just before the write, so a gate that
+closes after that look still lets that one write out. When the gate opens
+again, nothing is written until the program's next scan hands the driver
+its outputs, and then the whole frame goes out. **For production with
+outputs, use the shm transport with its output watchdog on.** It's the
+only route with a safe state when the program stops.
 
 ## Start on boot
 
