@@ -95,7 +95,9 @@ func Resolve(qs []Question, d Decisions, haveProtection bool) (unanswered, decli
 		case QuestionStartAfter:
 			sortAnswer(q, d.StartAfter, &unanswered, &declined)
 		case QuestionReinitialize:
-			if missing := notCovered(q.Objects, d.Reinitialize); len(d.Reinitialize) == 0 {
+			// A reset nobody named cannot be agreed to: without objects
+			// the question is never answered.
+			if missing := notCovered(q.Objects, d.Reinitialize); len(d.Reinitialize) == 0 || len(q.Objects) == 0 {
 				unanswered = append(unanswered, q)
 			} else if len(missing) > 0 {
 				q.Message = fmt.Sprintf("%s (not agreed: %s)", q.Message, strings.Join(missing, ", "))

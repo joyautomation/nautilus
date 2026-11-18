@@ -34,6 +34,7 @@ func TestResolve(t *testing.T) {
 		{"reinit all agreed, any case", []Question{reinit}, Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, "", ""},
 		{"reinit partly agreed", []Question{reinit}, Decisions{Reinitialize: []string{"Tags"}}, false, "reinitialize", ""},
 		{"reinit unanswered", []Question{reinit}, Decisions{}, false, "reinitialize", ""},
+		{"reinit naming nothing is never answered", []Question{{ID: QuestionReinitialize}}, Decisions{Reinitialize: []string{"Tags"}}, false, "reinitialize", ""},
 		{"cert matches", []Question{cert}, Decisions{TrustCertificate: "ab12"}, false, "", ""},
 		{"cert differs", []Question{cert}, Decisions{TrustCertificate: "FFFF"}, false, "", "certificate"},
 		{"password from secret", []Question{pw}, Decisions{}, true, "", ""},
