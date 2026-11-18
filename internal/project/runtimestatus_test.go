@@ -307,7 +307,8 @@ func TestRuntimeStatusLoneQuality(t *testing.T) {
 		t.Errorf("rt.Quality after a scan: %v, want Main__Faulting Good", q)
 	}
 	d.SetQuality("Break", nio.Bad)
+	d.SetQuality("Main__Faulting", nio.Bad) // a clash: the status driver's own quality wins
 	if q := d.Quality(); q["Break"] != nio.Bad || q["Main__Faulting"] != nio.Good {
-		t.Errorf("after a loopback quality: %v, want Break Bad beside Main__Faulting Good", q)
+		t.Errorf("after loopback qualities: %v, want Break Bad beside Main__Faulting Good", q)
 	}
 }
