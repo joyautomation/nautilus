@@ -84,6 +84,18 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 	if got := post(port, "localhost:"+port, "http://localhost:"+port); got != http.StatusNoContent {
 		t.Errorf("localhost write: %d, want 204", got)
 	}
+	// #819: a rebound page reads same-origin, with no Origin header: the
+	// program source must not come back.
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:"+port+"/api/program", nil)
+	req.Host = "evil.example:" + port
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("rebound GET /api/program: %d, want 403", resp.StatusCode)
+	}
 	stop()
 	if strings.Contains(stderr.String(), "WARNING: the tag API listens on") {
 		t.Errorf("loopback listen warned:\n%s", stderr.String())

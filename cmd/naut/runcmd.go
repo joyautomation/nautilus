@@ -1062,8 +1062,8 @@ this file.
 Environment:
   NAUTILUS_ADDR            listen address, overriding server.addr in the manifest
   NAUTILUS_TOKEN           bearer token the tag API and dashboard require
-  NAUTILUS_ALLOWED_HOSTS   host names (comma-separated) a browser page may
-                           write from without a token, besides localhost
+  NAUTILUS_ALLOWED_HOSTS   host names (comma-separated) the controller
+                           answers by without a token, besides localhost
                            and an IP address
   NAUTILUS_HISTORIAN_URL   historian the dashboard queries for trends
   NAUTILUS_CLI=1           run the naut command line instead of the controller

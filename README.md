@@ -227,7 +227,7 @@ Open **http://localhost:8080** for the built-in live dashboard, or
 in the tag table (BOOLs get a toggle); inputs and outputs are not editable,
 because the driver rewrites one before every scan and the logic rewrites the
 other after. Reads are open; set `NAUTILUS_TOKEN=<secret>` to require a token
-on writes. Without one, a browser page writes only when opened by
+on writes. Without one, nautilus answers only requests addressed to
 `localhost`, an IP address, or a name in `NAUTILUS_ALLOWED_HOSTS`.
 
 **4. Develop in VS Code**

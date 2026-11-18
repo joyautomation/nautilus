@@ -45,7 +45,7 @@ func newTestRuntime(t *testing.T) *runtime.Runtime {
 func TestStateSnapshot(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
@@ -68,7 +68,7 @@ func TestWriteTag(t *testing.T) {
 
 	body := bytes.NewBufferString(`{"name": "SP", "value": 80.0}`)
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", body))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", body))
 	if rec.Code != 204 {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 	}
@@ -77,7 +77,7 @@ func TestWriteTag(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader("{}")))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", strings.NewReader("{}")))
 	if rec.Code != 400 {
 		t.Errorf("empty name accepted: %d", rec.Code)
 	}
@@ -90,7 +90,7 @@ func TestWriteTag(t *testing.T) {
 		{"Bias", `{"name": "Bias", "value": 2.5}`},
 	} {
 		rec = httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", bytes.NewBufferString(c.body)))
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", bytes.NewBufferString(c.body)))
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "undefined tag "+c.name) {
 			t.Errorf("write to undeclared %s: status %d, body %q; want 400 naming it", c.name, rec.Code, rec.Body)
 		}
@@ -101,7 +101,7 @@ func TestWriteTag(t *testing.T) {
 	// A value the declared tag can't store is still rejected, not silently
 	// accepted with a 204 that wrote nothing.
 	rec = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", bytes.NewBufferString(`{"name": "SP", "value": "AUTO"}`)))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", bytes.NewBufferString(`{"name": "SP", "value": "AUTO"}`)))
 	if rec.Code != 422 {
 		t.Errorf("string value to a REAL tag: status = %d, want 422", rec.Code)
 	}
@@ -109,7 +109,7 @@ func TestWriteTag(t *testing.T) {
 	// with the reason, and neither the dotted name nor its root appears.
 	rec = httptest.NewRecorder()
 	body = bytes.NewBufferString(`{"name": "Nope.Speed", "value": 1.0}`)
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", body))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", body))
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Nope") {
 		t.Errorf("member write under an unknown tag: status %d, body %q; want 400 naming it", rec.Code, rec.Body)
 	}
@@ -225,7 +225,7 @@ func TestWriteAuthRefusesARebindableHost(t *testing.T) {
 		{"a configured name (case-insensitive)", "epic1.PLANT.lan:8080", "http://epic1.PLANT.lan:8080", 204},
 		{"a configured name given with a port", "hmi.local:8080", "http://hmi.local:8080", 204},
 		{"a configured name given with a root dot", "panel.lan:8080", "http://panel.lan:8080", 204},
-		{"no Origin (not a browser)", "evil.example:8080", "", 204},
+		{"no Origin (not a browser), by IP", "192.168.82.10:8080", "", 204},
 	} {
 		if got := post(open, tc.host, tc.origin, ""); got != tc.want {
 			t.Errorf("%s (Host %s, Origin %q): %d, want %d", tc.what, tc.host, tc.origin, got, tc.want)
@@ -312,6 +312,58 @@ func TestCORSAllowsOnlyOriginsThatCannotBeAnotherSite(t *testing.T) {
 	}
 }
 
+// #819: without a token the server answers only requests addressed to a
+// Host no page can rebind, reads included: a rebound page is same-origin
+// with the rebound name, sends no Origin on a GET, and CORS never applies,
+// so the Host is the one thing that tells it apart.
+func TestGuardHostRefusesEveryRouteOnARebindableHost(t *testing.T) {
+	get := func(srv *Server, method, host, path string) int {
+		req := httptest.NewRequest(method, "http://"+host+path, nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	open := New(newTestRuntime(t), Options{OnlineEdits: true, AllowedHosts: []string{"epic1.plant.lan"}})
+	withHMI := New(newTestRuntime(t), Options{HMI: testHMI()})
+	for _, path := range []string{"/api/state", "/api/program", "/api/meta", "/api/alarms", "/api/history", "/api/forces", "/api/drivers", "/"} {
+		if got := get(open, "GET", "evil.example:8080", path); got != http.StatusForbidden {
+			t.Errorf("GET %s by a rebound name: %d, want 403", path, got)
+		}
+		for _, host := range []string{"localhost:8080", "192.168.82.10:8080", "epic1.plant.lan:8080"} {
+			if got := get(open, "GET", host, path); got == http.StatusForbidden {
+				t.Errorf("GET %s by %s: 403, want it answered", path, host)
+			}
+		}
+	}
+	if got := get(open, "POST", "evil.example:8080", "/api/tags"); got != http.StatusForbidden {
+		t.Errorf("a no-Origin POST by a rebound name: %d, want 403", got)
+	}
+	// The HMI and its assets.
+	if got := get(withHMI, "GET", "evil.example:8080", "/"); got != http.StatusForbidden {
+		t.Errorf("the HMI by a rebound name: %d, want 403", got)
+	}
+	if got := get(withHMI, "GET", "localhost:8080", "/"); got != http.StatusOK {
+		t.Errorf("the HMI on localhost: %d, want 200", got)
+	}
+	// The live stream refuses before it starts streaming (bounded, so an
+	// unguarded stream fails the test instead of hanging it).
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sreq := httptest.NewRequest("GET", "http://evil.example:8080/api/stream", nil).WithContext(ctx)
+	sreq.Host = "evil.example:8080"
+	srec := httptest.NewRecorder()
+	open.Handler().ServeHTTP(srec, sreq)
+	if srec.Code != http.StatusForbidden {
+		t.Errorf("the stream by a rebound name: %d, want 403", srec.Code)
+	}
+	// With a token configured, reads stay ungated, as documented.
+	locked := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	if got := get(locked, "GET", "evil.example:8080", "/api/state"); got != http.StatusOK {
+		t.Errorf("a read on a token controller: %d, want 200", got)
+	}
+}
+
 func TestWriteAuthToken(t *testing.T) {
 	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
 	post := func(setup func(*http.Request)) int {
@@ -350,7 +402,7 @@ func TestLandingPage(t *testing.T) {
 
 	// "/" serves the dashboard.
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET / status = %d", rec.Code)
 	}
@@ -363,7 +415,7 @@ func TestLandingPage(t *testing.T) {
 
 	// An unknown path still 404s (the catch-all only serves exactly "/").
 	rec = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/nope", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/nope", nil))
 	if rec.Code != 404 {
 		t.Errorf("GET /nope status = %d, want 404", rec.Code)
 	}
@@ -372,7 +424,7 @@ func TestLandingPage(t *testing.T) {
 func TestCORSPreflight(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("OPTIONS", "/api/tags", nil)
+	req := httptest.NewRequest("OPTIONS", "http://localhost/api/tags", nil)
 	req.Header.Set("Origin", "http://localhost:5173") // a dev server on this machine
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
@@ -383,7 +435,7 @@ func TestCORSPreflight(t *testing.T) {
 func TestFrameCarriesScanDiagnostics(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	var f Frame
 	if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil {
 		t.Fatal(err)
@@ -418,7 +470,7 @@ func TestMetaEndpoint(t *testing.T) {
 	}
 	srv := New(rt)
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
 	}

@@ -56,7 +56,7 @@ var _ histStore = (*fakeHistStore)(nil)
 func TestHandleAggRequiresTags(t *testing.T) {
 	fake := &fakeHistStore{}
 	srv := &historianServer{store: fake}
-	req := httptest.NewRequest(http.MethodGet, "/history/agg?fn=avg", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/agg?fn=avg", nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -69,7 +69,7 @@ func TestHandleAggRequiresTags(t *testing.T) {
 func TestHandleAggRequiresFn(t *testing.T) {
 	fake := &fakeHistStore{}
 	srv := &historianServer{store: fake}
-	req := httptest.NewRequest(http.MethodGet, "/history/agg?tags=a,b", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/agg?tags=a,b", nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -82,7 +82,7 @@ func TestHandleAggRequiresFn(t *testing.T) {
 func TestHandleAggRejectsBadBucket(t *testing.T) {
 	fake := &fakeHistStore{}
 	srv := &historianServer{store: fake}
-	req := httptest.NewRequest(http.MethodGet, "/history/agg?tags=a&fn=avg&bucket=not-a-duration", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/agg?tags=a&fn=avg&bucket=not-a-duration", nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -108,7 +108,7 @@ func TestHandleAggParsesQueryIntoAggQuery(t *testing.T) {
 
 	url := "/history/agg?tags=RES1.LIT,RES2.LIT&fn=max&bucket=1h&from=" +
 		strconv.FormatInt(from.UnixMilli(), 10) + "&to=" + strconv.FormatInt(to.UnixMilli(), 10)
-	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost"+url, nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 
@@ -154,7 +154,7 @@ func TestHandleAggParsesQueryIntoAggQuery(t *testing.T) {
 func TestHandleAggPropagatesStoreError(t *testing.T) {
 	fake := &fakeHistStore{aggErr: errors.New("boom")}
 	srv := &historianServer{store: fake}
-	req := httptest.NewRequest(http.MethodGet, "/history/agg?tags=a&fn=avg", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/agg?tags=a&fn=avg", nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
@@ -167,7 +167,7 @@ func TestHandleAggPropagatesStoreError(t *testing.T) {
 func TestHandleAtRequiresTags(t *testing.T) {
 	fake := &fakeHistStore{}
 	srv := &historianServer{store: fake}
-	req := httptest.NewRequest(http.MethodGet, "/history/at", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/at", nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -187,7 +187,7 @@ func TestHandleAtParsesQueryAndReturnsSnapshot(t *testing.T) {
 	}
 	srv := &historianServer{store: fake}
 
-	req := httptest.NewRequest(http.MethodGet, "/history/at?tags=RES1.LIT&at="+strconv.FormatInt(at.UnixMilli(), 10), nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/at?tags=RES1.LIT&at="+strconv.FormatInt(at.UnixMilli(), 10), nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 
@@ -217,7 +217,7 @@ func TestHandleAtParsesQueryAndReturnsSnapshot(t *testing.T) {
 func TestHandleAtPropagatesStoreError(t *testing.T) {
 	fake := &fakeHistStore{snapErr: errors.New("boom")}
 	srv := &historianServer{store: fake}
-	req := httptest.NewRequest(http.MethodGet, "/history/at?tags=a", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/at?tags=a", nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
@@ -232,14 +232,14 @@ func TestExistingRoutesUnaffectedByStoreInterface(t *testing.T) {
 	fake := &fakeHistStore{}
 	srv := &historianServer{store: fake}
 
-	req := httptest.NewRequest(http.MethodGet, "/history/span", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/history/span", nil)
 	w := httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("/history/span status = %d, want 200", w.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/history?tags=a", nil)
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/history?tags=a", nil)
 	w = httptest.NewRecorder()
 	srv.handler().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

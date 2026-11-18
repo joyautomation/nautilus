@@ -293,3 +293,30 @@ func TestDriverStatusInTheFrame(t *testing.T) {
 		return len(ds) == 1 && ds[0].State == "connected" && strings.Contains(ds[0].Detail, "Logix facade")
 	})
 }
+
+// #819: the facade's own routes keep the server's Host rule. With no
+// token, a request addressed to a rebound name is refused before the
+// program endpoint or the tag routes answer it; by IP it is answered.
+func TestFacadeRefusesARebindableHost(t *testing.T) {
+	base, _, _ := startFacade(t)
+	for _, path := range []string{"/api/program", "/api/state"} {
+		req, _ := http.NewRequest("GET", base+path, nil)
+		req.Host = "evil.example:8080"
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusForbidden {
+			t.Errorf("GET %s by a rebound name = %d, want 403", path, res.StatusCode)
+		}
+		ip, err := http.Get(base + path) // base is 127.0.0.1:<port>
+		if err != nil {
+			t.Fatal(err)
+		}
+		ip.Body.Close()
+		if ip.StatusCode == http.StatusForbidden {
+			t.Errorf("GET %s by IP = 403", path)
+		}
+	}
+}

@@ -646,7 +646,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /assets/", handleAsset)
 		mux.HandleFunc("GET /", s.handleIndex)
 	}
-	return s.withCORS(s.proxyStandby(apiNotFound(mux)))
+	return s.GuardHost(s.withCORS(s.proxyStandby(apiNotFound(mux))))
 }
 
 // apiNotFound makes every /api/ path no API route matches a JSON 404,
@@ -859,6 +859,25 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "" && tokenMatches(r, s.authToken)) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// GuardHost answers, with no token configured, only a request addressed to
+// a Host no page can rebind (#819): localhost, an IP address or an allowed
+// name, the rule #811 applies to writes. A page on an attacker's domain
+// rebound to this machine is same-origin with it, so CORS does not stop
+// it reading; this does, for every route: the API, the live stream, the
+// dashboard and the HMI. A facade that serves routes of its own wraps its
+// handler in it too. With a token configured, reads stay ungated as
+// documented and writes need the token.
+func (s *Server) GuardHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.authToken == "" && !s.trustedHost(r.Host) {
+			w.Header().Add("Vary", "Origin")
+			http.Error(w, fmt.Sprintf("this controller answers %q only with an auth token: without one it is reached by localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS (a page on another site could rebind %q to it); add the name to NAUTILUS_ALLOWED_HOSTS, or set NAUTILUS_TOKEN", r.Host, hostOnly(r.Host)), http.StatusForbidden)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
