@@ -195,9 +195,7 @@ func (d *Driver) pollLeaves(ctx context.Context, sess *session, bindings []TagBi
 			d.tagError(b, err)
 			continue
 		}
-		d.mu.Lock()
-		d.snapshot[b.Name] = v
-		d.mu.Unlock()
+		d.publish(b.Name, v)
 	}
 	return true
 }
