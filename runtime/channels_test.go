@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -569,4 +570,48 @@ func waitPoll(t *testing.T, h *commHub, ticket int64) ir.CommResult {
 	}
 	t.Fatalf("ticket %d never finished", ticket)
 	return ir.CommResult{}
+}
+
+// The gate is read before the term (#797 review). This gate stands in for
+// a freeze longer than a lease while it is being read: the lease is lost
+// and won back in a new term, and the gate it reports is that new term's,
+// open. A write posted in the old term must not go out under it. Read in
+// the other order, the term check passes before the term moves and the
+// write is sent.
+func TestWriteChecksGateBeforeTerm(t *testing.T) {
+	ch := newFakeChannel()
+	h := newCommHub([]Channel{{Name: "peer", Channel: ch}})
+	defer h.close()
+	var term atomic.Uint64
+	term.Store(1)
+	h.setGate(func() bool {
+		term.Store(2) // lost and regained while the gate was being read
+		return true
+	}, term.Load)
+	tk, st := h.PostWrite("peer", "X", ir.IntVal(1), "")
+	if st != ir.CommOK {
+		t.Fatalf("PostWrite status = %d", st)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		res, done := h.Poll(tk)
+		if done {
+			if res.Status != ir.CommLost {
+				t.Errorf("old-term write finished with %d, want lost (%d)", res.Status, ir.CommLost)
+			}
+			break
+		}
+		select {
+		case <-ch.started:
+			t.Fatal("a write posted in term 1 was sent under term 2's open gate")
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the write never finished")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := ch.count(); n != 0 {
+		t.Errorf("channel saw %d requests, want none", n)
+	}
 }

@@ -232,9 +232,22 @@ func (h *commHub) serve(w *commWorker) {
 // queued write may wait seconds behind another, and by then this replica
 // may have stepped down. Reads are not gated; they change nothing on the
 // peer.
+//
+// The GATE is read before the TERM, and the order matters. Read the other
+// way, a freeze longer than a lease between the two reads (the term still
+// the one that posted, then the lease lost and won back in a new term)
+// finds an open gate that belongs to the new term, and an old term's write
+// goes out under it. In this order an open gate followed by an unchanged
+// term pins the gate to the posting term: the term only grows, the write
+// was stamped before the gate was read, and it is still the same after.
 func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
-	if req.write && (req.lead != h.leadership() || h.gate != nil && !h.gate()) {
-		return ir.CommResult{Status: ir.CommLost}
+	if req.write {
+		if h.gate != nil && !h.gate() {
+			return ir.CommResult{Status: ir.CommLost}
+		}
+		if req.lead != h.leadership() {
+			return ir.CommResult{Status: ir.CommLost}
+		}
 	}
 	ctx, cancel := context.WithTimeout(h.base, w.timeout)
 	defer cancel()
