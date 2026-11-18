@@ -59,9 +59,13 @@ bumpless, and the measured takeover time is published instead.
 
   While both controllers are up, every committed entry is on at least one of them.
 
-  **The only loss takes three faults in a row.** First, B is down while A and the witness
-  commit an ack. Then the witness loses its disk. Then A dies before B or the rebuilt witness
-  has copied the ack. The guide states that bound.
+  **Three faults in a row stop the pair; only the override loses an ack.** First, B is down
+  while A and the witness commit an ack. Then the witness loses its disk. Then A dies before B
+  or the rebuilt witness has copied the ack. B and the rebuilt witness can't adopt its new
+  incarnation without A (§3.1), so B stays fenced with no quorum, and the ack is still on A's
+  disk: when A returns, nothing is lost. The ack is lost only if an engineer runs B on the
+  override (§7) instead of waiting for A. The guide states that bound, and the override's record
+  names it.
 - **`naut run` under systemd** comes from #733. Install, update and rollback come from
   `tools/deploy` (#741). The pair uses both and duplicates neither.
 - **Waiting for live inputs** before the first scan after a start or a takeover is #786. That
@@ -455,13 +459,33 @@ elected a leader". **Anything it writes may contend with a real leader.**
 - the engineer asserts that the other controller is **powered off or isolated**, and the
   record says so in those words;
 - it lasts a limited time (default 8 h) and can be renewed;
-- it **ends the moment any peer or the witness is heard**. The controller then goes through a
-  normal election, and a controller whose state is current wins it;
+- it **ends the moment the other controller or the adopted witness is heard** (a rebuilt
+  witness that isn't adopted yet doesn't count, §3.1). The controller then goes through a
+  normal election (§3.1). The vote doesn't compare state: whoever wins takes over hot or cold
+  by §4's rule, so a winner with a stale image takes over cold, with the alarm (§9, decision 4);
 - it does not survive a restart;
 - it opens the gate with a hot or cold takeover, by §4's rule.
 
+**The override's term.** No majority granted it one, so the override claims the next term on
+its own: its last-seen term + 1, marked as an override term in the journal (below), on stream
+frames and on proxied calls. When the override ends, the controller reports that term to the
+voters before it campaigns, so they promise only higher terms, and the next election lands above
+it.
+
 **The override is the only path to two writers.** It is taken when an engineer asserts
-something that is not true. The record exists for that case.
+something that is not true. The record exists for that case. If the other side was in fact
+alive with a majority, it may have elected the same term: that breaks I4 (test plan §2) as well
+as I1, and only in this case.
+
+**Open questions for PR 5**, recorded here so they're decided before the override ships:
+- **Whose operator intent survives the heal.** Acks and shelves made under the override and on
+  the other side's majority diverge. The candidate rule: the majority side's `oplog` wins, and
+  the override side's entries are kept in the journal and listed for the engineer, not
+  replayed.
+- **Whether an override term needs a separate token space** (e.g. term plus an override bit)
+  so receivers can tell it from a majority-granted term of the same number. The candidate
+  answer is no: the override is the documented two-writer case, and receivers refuse it as soon
+  as a majority term above it is heard.
 
 ### 7.1 Audit records, in #709's shape
 
@@ -472,7 +496,7 @@ Every redundancy event is written as a #709 entry. The fields are `ts`, `user`, 
 {"id":"<ulid>","ts":"<rfc3339>","user":"<user>|system","source":"cli|api|system",
  "action":"redundancy.override.start","target":"<project>/a",
  "before":{"quorum":false,"gate":"closed","term":12},
- "after":{"gate":"open","term":12,"takeover":"cold","expires":"<rfc3339>"},
+ "after":{"gate":"open","term":13,"override":true,"takeover":"cold","expires":"<rfc3339>"},
  "result":"ok",
  "detail":{"reason":"<free text>","attest":"peer b confirmed powered off",
            "lastHeard":{"b":"41m","witness":"39m"},"imageAge":null}}
@@ -517,7 +541,6 @@ returns.
   refuses `profinet-device` under `redundancy:` when no floating IP is set.
   - **Order on takeover:** the gate opens, then the address is added and gratuitous ARP is sent,
     then the PROFINET sockets open. The station never answers DCP without the address in place.
-  - A new leader adds the address only after its gate opens, and sends gratuitous ARP.
   - **Orderly handover.** A leader that steps down in an orderly way (SIGTERM, I/O handover,
     a lost lease noticed on its own tick) drops the address before it releases.
   - **How long the old box keeps the address**, by fault:
@@ -544,9 +567,11 @@ Settled with the maintainer, 2026-11-17:
 1. **Witness: a third box, at whatever layer the site has.**
    - When the controllers serve the HMI themselves, it runs on a small third box.
    - When a dedicated SCADA/historian box exists, it runs there.
-   - That box may sit on an HA cluster. There the witness runs as a pod, and a reschedule that
-     loses its state file costs one lease of waiting (§3.1). A persistent volume avoids the
-     wait.
+   - That box may sit on an HA cluster. There the witness runs as a pod. A reschedule that
+     loses its state file comes back as a new incarnation: it grants nothing for one lease, and
+     counts once both controllers have adopted it over the A–B link (§3.1). Until then the pair
+     runs on its two controllers alone, so a controller fault in that window stops control. A
+     persistent volume avoids all of this, which is why the StatefulSet needs one.
    - In every case, the witness must not share a single point of failure with one controller,
      such as a switch or a power feed.
 2. **Lone survivor: as §7.**
@@ -579,7 +604,8 @@ Each step is its own PR, "Part of #725":
    RST on fence. That includes `hw/base.go`'s per-batch check. The container harness arrives
    here.
 4. The state stream and hot takeover, with stale or mismatched images falling back to cold.
-5. Lone-survivor mode, the override and its audit journal.
+5. Degraded modes: the I/O-health handover (§3.2), lone-survivor mode, the override and its
+   audit journal.
 6. #716: the clients and the floating IP.
 7. The demo in containers. Then the bench run on two ARM64 controllers and a witness, and the
    published takeover time.

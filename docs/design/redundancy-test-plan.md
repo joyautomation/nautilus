@@ -124,9 +124,11 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the in-sync mark is not persisted | design §3.3 | 4 |
 | a stream frame of an older term is applied | I5 | 4 |
 | hot takeover with no image-age check | I5 | 4 |
+| hot takeover on an image with a different build hash | I5 | 4 |
 | the gate is checked once per batch, not before each send (as `hw/base.go` does today) | design §3.4 | 3 |
 | a send with no deadline | design §3.4 | 3 |
 | no fence margin (the gate closes at lease expiry) | design §3.4 | 3 |
+| sockets closed with FIN, not RST, on fence | design §3.4, RST on fence | 3 |
 | the peer listener trusts a Host instead of requiring the peer token | design §6.1 | 3 |
 | the standby's proxy drops or rewrites the client's Host or token | design §6.1 | 3 |
 | no back-off after a lease lapses unconfirmed | design §3.1, one-way partitions | 2 |
@@ -154,8 +156,9 @@ Each case sweeps pauses of 0.1, 0.5, 1 and 2 × lease, in T2 and T3:
   margin covers them (design §3.4). This is the case that proves the margin.
 - **At point 3, with pauses longer than `m_fence`,** the stated residual: at most **one frame
   per sending goroutine** can reach the device late, by no more than the pause minus the
-  margin. The case is an expected one: it measures both the count and the lateness, and it is
-  excluded from I1 by name.
+  margin. The case is an expected one: it measures both the count and the lateness. A late
+  frame breaks I1, I2 and I3 alike, so it is excluded from those three by name, and only for the
+  measured count and lateness.
 
 ### 3.5 The same proofs on real processes (T3, T4)
 
@@ -227,7 +230,7 @@ T4 where only hardware can.
 | F4 | Orderly stop (SIGTERM, `systemctl stop`) | signal | The leader releases its lease, and the standby takes over before a lease would expire. | ✓ | ✓ | ✓ |
 | F5 | **Process pause** (SIGSTOP) for 0.25, 0.5, 1, 1.5 and 3 × lease | `kill -STOP/-CONT` | Below the fence: it resumes the same term, with no takeover. Above it: it fences, and on CONT it writes nothing (apart from the residual of design §3.4, which F35 measures) and comes back as standby. Sockets are closed with RST. | ✓ | ✓ | ✓ |
 | F6 | Hung scan (logic that never returns; a blocking driver call) | the existing nested-loop trigger | #621: the gate closes at lease/2, then takeover. A hung standby does not campaign. | ✓ | ✓ | |
-| F6b | **Leader starved between scans** (#858): its scan loop gets no CPU after a scan ends, while the elector's goroutine still runs | T2: the loop's ticks stop. T3: a `quorumtest` hook that blocks the loop between `end()` and the next `begin()`, plus a real case: the task pinned with `cpu:` and a SCHED_FIFO hog on the same core | `Liveness` flags it within `B = StallBound(period, lease/2)`. The elector stops renewing, and the gate closes within `B + lease/4 + lease/2` of the **first missed slot** (a slow task isn't late before its slot comes due). B takes over after the lease, with no overlap (I1). Rerun with the standby starved, which doesn't campaign, and with a healthy standby ticking but not scanning, which still acquires. | ✓ | ✓ | ✓ (FIFO hog) |
+| F6b | **Leader starved between scans** (#858): its scan loop gets no CPU after a scan ends, while the elector's goroutine still runs | T2: the loop's ticks stop. T3: a `quorumtest` hook that blocks the loop between `end()` and the next `begin()`, plus a real case: the task pinned with `cpu:` and a SCHED_FIFO hog on the same core | `Liveness` flags it within `B = StallBound(period, lease/2)`. The elector stops renewing, and the gate closes within `B + lease/4 + lease/2` of the **first missed slot** (a slow task isn't late before its slot comes due). B takes over after the lease, with no overlap (I1). Rerun with the standby starved, which doesn't campaign, and with a healthy standby ticking but not scanning, which still acquires. | ✓ | ✓ | ✓ (FIFO hog: only with the #836 safeguards in place and the maintainer's explicit OK, never pinned to a vendor runtime's core; no RT load runs on a bench controller otherwise) |
 | F7 | Starved elector (CPU throttled to 1–5%) | cgroup `cpu.max` | The gate is judged when read, so it closes on time. I1 holds. | ✓ | ✓ | |
 | F8 | **Partition A–B**, both directions | nftables | W renews the leader. The stream stops, and the standby is marked out of sync. | ✓ | ✓ | ✓ (cable pull) |
 | F9 | One-way cuts: A→B, B→A, **leader→voters only** (it can send but not receive) and voters→leader only | nftables, one direction | A–B one way: as F8, no flapping. A leader that can send but not receive fences at the end of its lease, backs off for one lease (design §3.1), and B is elected. A leader that can receive but not send fences, and B is elected. | ✓ | ✓ | |
@@ -236,7 +239,7 @@ T4 where only hardware can.
 | F12 | **Leader isolated from B and W** | nftables | The leader fences at the end of its lease. B+W elect B, which takes over hot or cold. When it is healed, A returns as standby, writes nothing, and resyncs. | ✓ | ✓ | ✓ |
 | F13 | Witness down | stop it | No change. Alarm: "one more failure stops control". | ✓ | ✓ | ✓ |
 | F14 | Witness restart, state file kept | restart | No change. | ✓ | ✓ | ✓ |
-| F15 | Witness restart **without** its state file (HA-cluster reschedule) | wipe the file and restart; T3 also runs it as a pod on a kind cluster | It grants nothing for one lease, and no double grant happens. It re-copies the whole `oplog` from the leader, and no committed ack is lost while both controllers are up (§8.1). | ✓ | ✓ | |
+| F15 | Witness restart **without** its state file (HA-cluster reschedule) | wipe the file and restart; T3 also runs it as a pod on a kind cluster | It comes back as a new incarnation and grants nothing for one lease, and no double grant happens. It counts only after A and B adopt it together over the A–B link (design §3.1). It re-copies the whole `oplog` from the leader, and no committed ack is lost while both controllers are up (§8.1). Rerun with one controller down: the rebuilt witness is not adopted, and the survivor behaves as F16 or F17. | ✓ | ✓ | |
 | F15b | **Two witness copies at once**: the old pod on a partitioned node and its rescheduled copy, or a force-deleted pod, with the A–B link cut | T2: two incarnations. T3: kind, a StatefulSet with the node's network cut, then a force-delete. | I1 holds. Neither controller accepts the new incarnation without the other's concurrence (design §3.1). Kubernetes starts no second StatefulSet pod until the node is confirmed gone. | ✓ | ✓ | |
 | F16 | Witness + standby down | stop both | With one voter of three left, the leader has no majority, so it fences at the end of its lease. The no-quorum alarm is raised, and the device watchdogs act. | ✓ | ✓ | ✓ |
 | F17 | Witness + leader down | stop both | The standby has no majority: it stays standby, raises no-quorum, and offers the override. | ✓ | ✓ | ✓ |
@@ -245,7 +248,7 @@ T4 where only hardware can.
 | F20 | **Flapping links**: each link toggled with periods of lease/4, lease/2, lease and 2 × lease, at 50% duty, for 5 min | nftables loop; netem loss 1–30% | I1 holds. Takeovers stay within the I7 bound, and the hold-off stops ping-pong. | ✓ | ✓ | ✓ (scripted switch port, if the switch allows) |
 | F21 | Latency and jitter: 1 ms to lease/2 delay, with ±50% jitter and reordering | tc netem | I1 holds. Delay near lease/2 may cost renewals: that is measured and the guide gets a minimum lease per link latency. | ✓ | ✓ | |
 | F22 | **Clock-rate skew**: ±0.1%, ±0.5%, ±1% (= ρ) between any two voters | T2: per-node clock rate. T3: a `quorumtest` build tag that scales the elector's monotonic clock (containers share one kernel clock). | I1 holds up to ρ. At 2× ρ, T2 shows where the margin breaks, and the guide states the limit. | ✓ | ✓ | |
-| F22b | **Stopped leader clock**: a VM paused or live-migrated, a host suspend | T2: the leader's clock frozen while others run. T3: `incus pause` of a VM leader for 0.5–3 × lease, and a guest suspend. | **Host suspend:** safe, because leases run on `CLOCK_BOOTTIME`. **VM pause:** an expected I1 breach, measured. The guide lists pausable or migratable VMs as unsupported for controllers (design §3.1). The case is excluded from I1 by name. | ✓ | ✓ | |
+| F22b | **Stopped leader clock**: a VM paused or live-migrated, a host suspend | T2: the leader's clock frozen while others run. T3: `incus pause` of a VM leader for 0.5–3 × lease, and a guest suspend. | **Host suspend:** safe, because leases run on `CLOCK_BOOTTIME`. **VM pause:** an expected I1 breach, measured. The guide lists pausable or migratable VMs as unsupported for controllers (design §3.1). The resumed leader writes, so the case is excluded from I1, I2 and I3 by name. | ✓ | ✓ | |
 | F23 | Wall-clock steps: ±1 h jumps, NTP slewing | T3: the pair in two incus VMs, `date -s` in one. T4: `date -s` on one box. | No effect: only monotonic durations are used. The VMs share no monotonic clock, so the recorder (I2) arbitrates I1 here. | ✓ | ✓ | ✓ |
 | F24 | **Slow disk**: fsync at 10 ms, 100 ms, lease/2 and over lease, on the voter state, retain and the journal | T2: simulated disk. T3: a dm-delay device in the rig VM. | A voter whose fsync has not finished has not answered, so the grant is late but never early. A slow retain save does not stall the scan. | ✓ | ✓ | |
 | F25 | Disk full, EIO | T3: a size-limited tmpfs; T2: injected | A voter that cannot persist does not grant. Alarm. The leader's fate follows from the votes. | ✓ | ✓ | |
@@ -258,7 +261,7 @@ T4 where only hardware can.
 | F32 | **PROFINET device handover** (#790): F1, F3, F4, F6 and F12 on a project with `profinet-device` and the floating IP | as those rows, plus the segment tap | One station at a time (I2-PN). The address moves before the new leader's first DCP answer. `t_pn_*` is measured. | ✓ | ✓ | ✓ (bench PLC, two hosts on the bench LAN) |
 | F33 | **PROFINET with the old leader frozen**: SIGSTOP for longer than the lease, then SIGCONT | `kill -STOP/-CONT` | While frozen, the old box still holds the address, so the address-conflict effect on `T_pn` is measured. **After SIGCONT, the old leader sends no RT, DCP or LLDP frame at all**: its sender must read the gate before sending, not only on its next 200 ms look. | ✓ | ✓ | ✓ |
 | F34 | PROFINET under redundancy **without** a floating IP | `naut check` / load | Refused, with a message that names the floating IP. | | ✓ | |
-| F34b | PLCnext under `redundancy:` | load / `naut check` | Refused for now, with a message saying why (design §3.4); `TestPlcnextRefusedUnderRedundancy` (#832) covers it until the driver is gated. | ✓ | | |
+| F34b | PLCnext under `redundancy:` | T1 unit test: load / `naut check` | Refused for now, with a message saying why (design §3.4); `TestPlcnextRefusedUnderRedundancy` (#832) covers it until the driver is gated. A T1 test, so no tier is ticked. | | | |
 | F35 | **A pause between the check and the send** on every output path | the §3.4 hook | As §3.4: no late send at points 1 and 2, and the residual measured at point 3. | ✓ | ✓ | |
 | F36 | A single-client device still held by a frozen old leader | SIGSTOP the leader while it holds the only session | The new leader's inputs wait lasts until the device's session timeout, or the #786 cap. If the wait gives up, the takeover stays hot, with Bad-quality inputs and the alarm (design §4.2). | ✓ | ✓ | |
 
@@ -383,8 +386,9 @@ changed manifest.
     the only path to two writers.
     - The test **expects** I1 to break for the time until the partition heals.
     - It measures that window and asserts that the override ends the moment the peer is heard.
-    - The guide states the window. The case is excluded from the I1 oracle by name, and nowhere
-      else.
+    - The guide states the window. Two writers break I1, I2 and I3, and the override's own
+      term can equal the one the other side elected, which breaks I4 (design §7). The case is
+      excluded from those four oracles by name, and from no other.
 
 ### 8.1 Operator intent through `oplog`, with the witness as third peer
 
@@ -395,11 +399,15 @@ changed manifest.
 3. **Witness rebuilt from scratch** (wiped disk, or a pod rescheduled without a volume):
    - it re-copies the whole log from the leader;
    - with both controllers up, nothing committed is lost;
-   - its election state follows F15.
-4. **The three-fault loss, measured and documented.** B is down while A and the witness commit,
-   then the witness loses its disk, then A dies before anyone has copied the entry. The test
-   **expects** that ack to be lost, asserts it is the only case that loses one, and the guide
-   states it.
+   - its election state follows F15, adoption by both controllers included.
+4. **Three faults in a row, then the override.** B is down while A and the witness commit,
+   then the witness loses its disk, then A dies before anyone has copied the entry.
+   - B and the rebuilt witness can't adopt its incarnation without A (design §3.1): B stays
+     fenced with no quorum, and nothing is lost yet.
+   - A returns: the ack is still there, and B copies it.
+   - Rerun with the override on B instead of waiting for A. The test **expects** the ack to be
+     lost there, asserts it is the only path that loses one, and checks that the override's
+     record and the guide both state it.
 5. **Lone survivor.** An ack or shelve is refused with a "no quorum" error, and the HMI shows
    it read-only.
 6. **The witness only follows the leader its votes name.** Replication from any other source
@@ -472,6 +480,7 @@ Each case runs during F1, F3, F4, F12 and F27 in T3. F1 and F12 also run in T4.
 
 5. **PROFINET IO controller.** The controller follows the station to the new leader:
    F32–F34, with `t_pn_*` reported beside `t_hmi` and `t_ua`.
+
 **Sparkplug**
 
 6. **Sparkplug edge** (when configured; #798): at most one birth holder on the broker at every
@@ -504,8 +513,8 @@ then the override. It runs as a test, so it can't silently regress.
 | PR | Must pass before merge |
 |---|---|
 | 2 `quorum` + sim | T1. T2 matrix + 2,000 seeds. The PR-2 mutations caught (§3.3). F9, F15b, F22, F22b, F24–F26 and the vote half of F31 in T2. |
-| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3–F5, F6b, F8–F10, F12, F13, F15–F19, F30, F35 and F36, and §8.2. Every output path in design §3.4 meets its rules (I3, §3.4). §8.1. The PR-3 mutations caught. Kubernetes `leader` tests unchanged. |
+| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3–F5, F6b, F8–F10, F12, F13, F15–F20, F30, F35 and F36, and §8.2. Every output path in design §3.4 meets its rules (I3, §3.4). §8.1. The PR-3 mutations caught. Kubernetes `leader` tests unchanged. |
 | 4 stream + hot takeover | §6 in T2 and T3. I5 and I10 in the nightly run. §7 rolling update in T3. The PR-4 mutations caught, and the stream half of F31. |
-| 5 survivor + override | §8 in full. F16 and F17 with the device-watchdog assertion. The PR-5 mutations caught. |
+| 5 degraded modes | §8 in full. F16 and F17 with the device-watchdog assertion. F27 and F28 (the I/O-health handover). The PR-5 mutations caught. |
 | 6 clients (#716) | §9 in T3, including F32–F34 for PROFINET. |
 | 7 bench | §4 percentiles in T4, including `T_pn` against the bench PLC. The T4 rows of §5. The 72 h soak. Then the guide's numbers are published. |
