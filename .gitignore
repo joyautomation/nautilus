@@ -29,6 +29,7 @@ tools/vscode-iec/.vscode-test/
 # working directory): one machine's record of who changed what. Matched by
 # file name, since audit/ here is also the package.
 audit-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*.jsonl
+.audit.lock
 
 # Locally built binaries
 /nautilus

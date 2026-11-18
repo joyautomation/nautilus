@@ -209,7 +209,7 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 
 **Flooding:** an unauthenticated client could force an fsynced entry per refused request. Refusals are coalesced per (source address, action): the first few in a minute are written in full, the rest as one `refused ×n` summary entry. Accepted actions are never coalesced.
 
-**Retention:** `audit.keep` (default 365 days) and `audit.max-size`, for small flash. Pruning the oldest file writes an `audit.prune` entry carrying the pruned file's last hash and `seq`, so `verify` knows where the chain legitimately begins.
+**Retention:** `audit.keep-days` (default 365; a manifest duration would read "8760h") and `audit.max-size`, for small flash (`max-size` is not built yet; #894). Pruning the oldest file writes an `audit.prune` entry carrying the pruned file's last hash and `seq`, so `verify` knows where the chain legitimately begins.
 
 **Tamper evidence.** Proposed always on, since it is cheap; that is question 8 (§6).
 - Each line carries `prev`, the SHA-256 of the previous line's bytes, and `seq`. A rotated file's first line chains to the last line of the file before it.

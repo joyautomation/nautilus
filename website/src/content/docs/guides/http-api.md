@@ -215,6 +215,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/io/staged/{id}/apply`](#live-io-configuration) | Apply it while the scan runs |
 | `GET` | [`/api/io/staged/{id}`](#live-io-configuration) | One candidate's state |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
+| `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 
 Outside `/api/`, `GET /` is the built-in dashboard and `/assets/…` its logo
 and fonts. With `server.hmi` set, your HMI build takes `/` and the
@@ -966,6 +967,47 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 | `500` | An apply failed and putting it back failed too; `config.fault` names what is left |
 | `503` | No live I/O configuration on this server (an embedded Go server) |
 | `401`, `403` | Authorization |
+
+## Audit journal
+
+Every request to a route above that changes something (`POST /api/tags`,
+the force, SFC, alarm and program routes) leaves **exactly one** audit
+entry, accepted or refused, and is answered only once the entry is
+recorded. `naut run` writes the entries to a hash-chained journal on disk
+(the manifest's `audit:` section, default `./audit`), which
+`naut audit verify` checks.
+
+Each entry has:
+- `user`: `token` when the request carried the auth token, else `anonymous`.
+- `source`: `X-Nautilus-Client` (`hmi`, `ide`, `cli` or `api`) when the client sends it, else `hmi` for a browser and `api` for anything else.
+- `action` (`tag.write`, `force.set`, `alarm.ack`, `program.edit`, …), `target`, and `before` and `after` values.
+- `result`: `ok`, `refused` (with `detail.reason`) or `error`.
+- `from`: the client's address.
+
+An online edit is journalled as program hashes, never the source. Refusals
+from one address are coalesced: five a minute in full, then one entry
+counting the rest (`detail.coalesced`). A write body over 16 MiB is refused
+with `413`.
+
+### `GET /api/audit`
+
+The last 1000 entries, newest first:
+
+```json
+{"entries": [{"id": "01J…", "seq": 42, "ts": "2026-11-18T14:02:11.204Z",
+  "user": "token", "source": "hmi", "action": "tag.write", "target": "SP",
+  "before": 65, "after": 70, "result": "ok", "from": "192.0.2.22:51334",
+  "prev": "sha256:…"}], "truncated": false}
+```
+
+Query parameters filter it: `from` and `to` (epoch ms or RFC 3339),
+`user`, `action`, `target` and `result` (exact, ignoring case), and
+`limit` (default 100). `truncated` is true when more entries matched.
+
+| Status | When |
+| --- | --- |
+| `401` | An auth token is set and the request does not carry it: the entries say who did what from where |
+| `400` | A bad `from`, `to` or `limit` |
 
 ## Historian proxy
 

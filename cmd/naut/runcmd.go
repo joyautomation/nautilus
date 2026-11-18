@@ -372,12 +372,20 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// The audit journal (#709): every write through the tag API, accepted
 	// or refused, fsynced before it is answered. If it cannot be opened the
 	// controller still runs, with the entries kept in memory only.
-	if j := openAudit(proj, os.Stderr); j != nil {
-		defer j.Close()
+	j := openAudit(proj, os.Stderr)
+	if j != nil {
 		sopts.Audit = j
 		go pruneAudit(ctx, j, os.Stderr)
 	}
 	srv := server.New(rt, sopts)
+	if j != nil {
+		// What the seam still owes (open refusal windows, entries kept
+		// through a failure) is written before the journal closes.
+		defer func() {
+			srv.FlushAudit()
+			j.Close()
+		}()
+	}
 	go srv.Run(ctx)
 
 	apiUp := false
@@ -1002,7 +1010,7 @@ func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string]
 		}
 		// The audit journal `naut run` keeps (./audit by default) is this
 		// machine's record, never part of the program.
-		if audit.IsJournalFile(d.Name()) {
+		if audit.IsJournalFile(d.Name()) || d.Name() == audit.LockName {
 			return nil
 		}
 		raw, err := os.ReadFile(p)

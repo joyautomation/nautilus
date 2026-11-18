@@ -46,6 +46,7 @@ const (
 // stalled fsync stalls every writer behind it; coalescing and the failure
 // policy belong to the caller (the server's recording seam).
 type FileJournal struct {
+	unlock func() // releases the directory's lock (OpenFile)
 	dir  string
 	opts FileOptions
 	// write and sync make an entry durable; a test replaces them to fail.
@@ -68,7 +69,31 @@ type FileJournal struct {
 // as an audit.tail_dropped entry with the bytes' length and hash; a
 // complete line is never removed, whatever it holds, so Verify can report
 // it.
+//
+// The directory is locked for as long as the journal is open (on Linux,
+// the BSDs and macOS), so a second process that opens it, such as a second
+// `naut run` in the same working directory, is refused rather than
+// interleaving its own chain with this one's.
 func OpenFile(dir string, opts FileOptions) (*FileJournal, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	j, err := openFile(dir, opts)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	j.mu.Lock()
+	j.unlock = unlock
+	j.mu.Unlock()
+	return j, nil
+}
+
+func openFile(dir string, opts FileOptions) (*FileJournal, error) {
 	if opts.MaxSize <= 0 {
 		opts.MaxSize = defaultMaxSize
 	}
@@ -77,9 +102,6 @@ func OpenFile(dir string, opts FileOptions) (*FileJournal, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
 	}
 	j := &FileJournal{dir: dir, opts: opts, write: (*os.File).Write, sync: (*os.File).Sync}
 	files, err := listFiles(dir)
@@ -280,11 +302,15 @@ func (j *FileJournal) Head() (string, uint64) {
 func (j *FileJournal) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.f == nil {
-		return nil
+	var err error
+	if j.f != nil {
+		err = j.f.Close()
+		j.f = nil
 	}
-	err := j.f.Close()
-	j.f = nil
+	if j.unlock != nil {
+		j.unlock()
+		j.unlock = nil
+	}
 	return err
 }
 

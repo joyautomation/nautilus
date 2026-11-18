@@ -579,7 +579,7 @@ func (s *Server) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.audit.tick()
+			s.audit.flush()
 			return
 		case <-t.C:
 			s.broadcast()

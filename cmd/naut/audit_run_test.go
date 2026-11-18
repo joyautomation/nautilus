@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -75,9 +77,15 @@ func TestNautRunJournalsWrites(t *testing.T) {
 			}
 			// Answered, so already on disk: no waiting.
 			jdir := filepath.Join(dir, c.dir)
-			ents, err := os.ReadDir(jdir)
-			if err != nil || len(ents) != 1 || !audit.IsJournalFile(ents[0].Name()) {
-				t.Fatalf("journal dir %s: %v %v; stderr:\n%s", jdir, ents, err, stderr.String())
+			all, err := os.ReadDir(jdir)
+			var ents []os.DirEntry
+			for _, e := range all {
+				if audit.IsJournalFile(e.Name()) {
+					ents = append(ents, e)
+				}
+			}
+			if err != nil || len(ents) != 1 {
+				t.Fatalf("journal dir %s: %v %v; stderr:\n%s", jdir, all, err, stderr.String())
 			}
 			b, _ := os.ReadFile(filepath.Join(jdir, ents[0].Name()))
 			if l := string(b); !strings.Contains(l, `"action":"tag.write"`) || !strings.Contains(l, `"target":"SP"`) ||
@@ -86,6 +94,33 @@ func TestNautRunJournalsWrites(t *testing.T) {
 			}
 			if r, err := audit.Verify(jdir); err != nil || !r.OK() || r.Entries != 1 {
 				t.Fatalf("verify: %+v %v", r, err)
+			}
+			if goruntime.GOOS == "windows" {
+				return // SIGTERM
+			}
+			// A burst of refusals, then a stop: the open window's summary is
+			// written before the journal closes.
+			for i := 0; i < 8; i++ {
+				resp, err := http.Post("http://"+api+"/api/tags", "application/json", strings.NewReader(`{"name":"Nope","value":1}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+			}
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-exited:
+			case <-time.After(20 * time.Second):
+				t.Fatalf("naut run did not stop; stderr:\n%s", stderr.String())
+			}
+			b, _ = os.ReadFile(filepath.Join(jdir, ents[0].Name()))
+			if n := strings.Count(string(b), `"result":"refused"`); n != 6 || !strings.Contains(string(b), `"coalesced":3`) {
+				t.Fatalf("after the stop, %d refused lines, want 5 in full and the ×3 summary:\n%s", n, b)
+			}
+			if r, err := audit.Verify(jdir); err != nil || !r.OK() || r.Entries != 7 {
+				t.Fatalf("verify after the stop: %+v %v", r, err)
 			}
 		})
 	}

@@ -45,6 +45,11 @@ const (
 	// sent (a Host header, a tag name).
 	reasonMax = 512
 	byMax     = 128
+	// maxWriteBody caps a write request's body, which the seam reads
+	// before the handler authorizes it: a client without the token must not
+	// make the controller hold an arbitrarily large body. The largest real
+	// body is an online edit's source.
+	maxWriteBody = 16 << 20
 )
 
 // auditUpkeep is how often Server.Run calls the auditor's tick.
@@ -125,6 +130,18 @@ func (a *auditor) tick() {
 	defer a.mu.Unlock()
 	a.retryLocked()
 	a.sweepLocked(a.now(), true)
+}
+
+// flush writes everything owed now: the kept entries, and a summary for
+// every refusal window still open, however young. Called on shutdown,
+// before the journal is closed.
+func (a *auditor) flush() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.retryLocked()
+	for k, w := range a.windows {
+		a.closeLocked(k, w)
+	}
 }
 
 // writeLocked puts e in the journal, after any entries still owed to it,
@@ -251,6 +268,12 @@ func (a *auditor) closeLocked(k refusalKey, w *refusals) {
 	a.writeLocked(s)
 }
 
+// FlushAudit writes what the audit seam still owes the journal: entries
+// kept while it could not be written, and the summary of every open
+// refusal window. Call it on shutdown, before closing the journal
+// (Server.Run does too, when its context ends).
+func (s *Server) FlushAudit() { s.audit.flush() }
+
 // audited wraps a write route's handler: it reads the target, runs the
 // handler into a buffer, records one entry from the outcome, and only then
 // answers the client, so an action is never answered before it is
@@ -258,17 +281,25 @@ func (a *auditor) closeLocked(k refusalKey, w *refusals) {
 func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
+		tooLarge := false
 		if r.Body != nil {
-			body, _ = io.ReadAll(r.Body)
+			body, _ = io.ReadAll(io.LimitReader(r.Body, maxWriteBody+1))
 			r.Body.Close()
+			if tooLarge = len(body) > maxWriteBody; tooLarge {
+				body = nil
+			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		var t auditTarget
-		if tf != nil {
+		if tf != nil && !tooLarge {
 			t = tf(r, body)
 		}
 		buf := &bufferedResponse{header: w.Header()}
-		h(buf, r)
+		if tooLarge {
+			http.Error(buf, "request body over "+strconv.Itoa(maxWriteBody>>20)+" MiB", http.StatusRequestEntityTooLarge)
+		} else {
+			h(buf, r)
+		}
 		status := buf.status
 		if status == 0 {
 			status = http.StatusOK

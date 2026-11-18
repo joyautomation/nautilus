@@ -303,6 +303,7 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		// what on this machine, never part of the program.
 		"audit/audit-20261118.jsonl":     `{"id":"01J","user":"anonymous"}`,
 		"var/log/audit-20261119-1.jsonl": `{"id":"01K","user":"anonymous"}`,
+		"audit/.audit.lock":              "",
 	}
 	for name, body := range files {
 		p := filepath.Join(proj, filepath.FromSlash(name))
@@ -345,7 +346,7 @@ func TestEmitBinarySkipsDependencyTrees(t *testing.T) {
 		t.Error("the hmi build output must still be embedded")
 	}
 	for name := range names {
-		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "pki/") || strings.HasPrefix(name, "certs/") || strings.HasSuffix(name, "key.pem") || strings.HasSuffix(name, ".jsonl") {
+		if strings.Contains(name, "node_modules") || strings.HasPrefix(name, "vendor/") || strings.HasPrefix(name, "pki/") || strings.HasPrefix(name, "certs/") || strings.HasSuffix(name, "key.pem") || strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".audit.lock") {
 			t.Errorf("archive contains %q, which should have been skipped", name)
 		}
 	}

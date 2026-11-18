@@ -525,11 +525,17 @@ func TestNonFiniteBeforeIsJournalled(t *testing.T) {
 
 func mustOnlyFile(t *testing.T, dir string) string {
 	t.Helper()
-	es, err := os.ReadDir(dir)
-	if err != nil || len(es) != 1 {
-		t.Fatalf("journal dir: %v %v", es, err)
+	all, err := os.ReadDir(dir)
+	var es []string
+	for _, e := range all {
+		if audit.IsJournalFile(e.Name()) {
+			es = append(es, e.Name())
+		}
 	}
-	return es[0].Name()
+	if err != nil || len(es) != 1 {
+		t.Fatalf("journal dir: %v %v", all, err)
+	}
+	return es[0]
 }
 
 // GET /api/audit serves the recent entries newest first, filtered, and
@@ -634,4 +640,39 @@ func TestRunWritesTheSummaryAfterSilence(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("no summary after the window closed: %+v", srv.audit.ring.Recent())
+}
+
+// A write body is capped before the handler authorizes it: past the cap
+// the request is refused (413), journalled once, and its body never held.
+func TestWriteBodyIsCapped(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	big := `{"name":"SP","value":"` + strings.Repeat("x", maxWriteBody) + `"}`
+	rec := call(t, srv, "POST", "/api/tags", big)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a body over the cap = %d, want 413", rec.Code)
+	}
+	es := srv.audit.ring.Recent()
+	if len(es) != 1 || es[0].Result != audit.ResultRefused || es[0].Action != "tag.write" || es[0].Detail["status"] != http.StatusRequestEntityTooLarge {
+		t.Fatalf("entries = %+v, want one refused tag.write", es)
+	}
+	// Under the cap, the handler still decides.
+	if rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":1}`, func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer s3cret")
+	}); rec.Code != http.StatusNoContent {
+		t.Fatalf("a small write = %d", rec.Code)
+	}
+}
+
+// On shutdown the seam writes a summary for a refusal window that is
+// still open, however young, so a burst just before a stop is not lost.
+func TestFlushAuditClosesOpenWindows(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	for i := 0; i < refuseFull+3; i++ {
+		call(t, srv, "POST", "/api/tags", `{"name":"Level","value":1}`)
+	}
+	srv.FlushAudit()
+	es := srv.audit.ring.Recent()
+	if len(es) != refuseFull+1 || es[0].Detail["coalesced"] != 3 {
+		t.Fatalf("after FlushAudit: %+v, want the refused ×3 summary", es)
+	}
 }
