@@ -83,6 +83,9 @@ type Server struct {
 	Requests int // HTTP requests served, for asserting batching
 	Calls    int // JSON-RPC calls served
 	Logins   int // successful Api.Login calls
+
+	loginAttempts int
+	writeError    int // when set, every PlcProgram.Write answers this code
 }
 
 type session struct {
@@ -119,6 +122,61 @@ func (s *Server) Sessions() int {
 	defer s.mu.Unlock()
 	s.reap()
 	return len(s.tokens)
+}
+
+// Set changes a variable's value while the server runs, as the CPU's
+// program would. The exported maps are for setup before Start; while the
+// server runs, change things only through these methods.
+func (s *Server) Set(sym string, v any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if x, ok := s.Vars[sym]; ok {
+		x.Value = v
+	}
+}
+
+// Put adds or replaces a variable while the server runs; nil removes it.
+func (s *Server) Put(sym string, v *Var) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v == nil {
+		delete(s.Vars, sym)
+		return
+	}
+	s.Vars[sym] = v
+}
+
+// SetUser adds or replaces a user while the server runs.
+func (s *Server) SetUser(name string, u User) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Users[name] = u
+}
+
+// StopAnswering makes every later request fail with HTTP 503, as a CPU
+// that dropped off the network would.
+func (s *Server) StopAnswering() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.FailAfter = s.Requests
+	if s.FailAfter == 0 {
+		s.FailAfter = -1
+	}
+}
+
+// FailWrites makes every later PlcProgram.Write answer the CPU error code
+// (webapi.CodeSystemIsBusy, say); 0 clears it.
+func (s *Server) FailWrites(code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeError = code
+}
+
+// LoginAttempts counts every Api.Login, successful or not.
+func (s *Server) LoginAttempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loginAttempts
 }
 
 // Value returns a variable's current value.
@@ -198,7 +256,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	s.defaults()
 	s.Requests++
-	if s.FailAfter > 0 && s.Requests > s.FailAfter {
+	if s.FailAfter < 0 || s.FailAfter > 0 && s.Requests > s.FailAfter {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -262,6 +320,7 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 		}
 		return ok(out)
 	case "Api.Login":
+		s.loginAttempts++
 		var p struct {
 			User     string `json:"user"`
 			Password string `json:"password"`
@@ -354,6 +413,9 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 	case "PlcProgram.Write":
 		if !can("write_value") {
 			return fail(2, "Permission denied")
+		}
+		if s.writeError != 0 {
+			return fail(s.writeError, "write failed")
 		}
 		var p struct {
 			Var   string `json:"var"`

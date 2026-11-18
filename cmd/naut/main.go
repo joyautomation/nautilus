@@ -67,6 +67,9 @@ Usage:
                           is detectable, info; with a logixd agent, build,
                           drift and online edits. Experimental: write and
                           deploy a nautilus program to a Logix controller.
+  naut siemens <cmd>  Siemens S7-1500 (experimental): serve a running CPU on
+                          the runtime API over the PLC Web API; cert prints
+                          the CPU certificate's SHA-256 to pin.
   naut sparkplug <cmd> Sparkplug B host tools: import (listen to a group
                           and generate types + manifest + tag file), browse,
                           and tags (re-derive the tag file, no broker).
@@ -166,6 +169,8 @@ func main() {
 		os.Exit(runEIP(os.Args[2:]))
 	case "logix":
 		os.Exit(runLogix(os.Args[2:]))
+	case "siemens":
+		os.Exit(runSiemens(os.Args[2:]))
 	case "sparkplug":
 		os.Exit(runSparkplug(os.Args[2:]))
 	case "modbus":
