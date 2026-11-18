@@ -78,10 +78,6 @@ func init() {
 				link:  l,
 			}
 		},
-		// optommp reads any installed gate as "one replica of a redundant
-		// set", so it is not io.PlainGated and naut run's plain gate does
-		// not reach it (#861 G1b).
-		expect: map[string]string{"C5": "#865"},
 		unsupported: map[string]string{
 			"C3": "optommptest has no exported way to make one channel read bad (a NaN analog, the channel's quality bit, a slot fault); needs a fake hook from optommp's owner",
 		},
