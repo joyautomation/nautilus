@@ -4,85 +4,75 @@
 #
 #   ci-ok.sh <workflow.yml>   with the gate job's `toJSON(needs)` on stdin
 #
-# It reads the workflow itself, so a job added later is judged by the same
+# It reads the workflow with a real YAML parser (yq, on every GitHub-hosted
+# Ubuntu runner) and judges in jq, so a job added later is judged by the same
 # rules without touching this script:
 #
 #   - `changes` (the scope) must have succeeded, or nothing counts.
 #   - success passes; failure, cancelled or anything else fails.
-#   - skipped passes only when the job's own `if:` names a scope gate
-#     (outputs.full or outputs.extension) and the scope said "false" for it.
-#     Gates combine with && (a job behind both is skipped when either says
-#     false); a job with any other `if:`, or none, must never be skipped.
+#   - skipped passes only when the job's `if:` is, or &&-contains, the exact
+#     scope gate `needs.changes.outputs.full != 'false'` (or the same for
+#     `extension`) and the scope said "false" for it. An `if:` with `||`, any
+#     other `if:`, or none, must never be skipped.
 #   - a job missing from the gate's needs fails ("add it to ci-ok's needs").
-#   - a job marked continue-on-error at job level is informational (the
-#     runtime evidence) and is not judged; the gate itself is left out.
+#   - a job with `continue-on-error: true` (the literal, at job level) is
+#     informational (the runtime evidence) and is not judged; the gate itself
+#     is left out.
 #
 # Fails closed: a scope output that is missing or not exactly "false" counts
 # as true, so a skip it can't vouch for fails.
+#
+# Inherent limit: on pull_request a PR runs its OWN ci.yml and this script,
+# so a PR that edits .github/ could make its own ci-ok green. The mitigation
+# is review: every .github/ change is reviewed before it merges (and runs the
+# full suite: ci-scope.sh never makes .github/ light).
 set -euo pipefail
 workflow=$1
 self=${CI_OK_JOB:-ci-ok}
+command -v yq >/dev/null || { echo "ci-ok: yq not found (it ships on GitHub's Ubuntu runners)"; exit 1; }
 needs=$(cat)
-jq -e 'type == "object"' >/dev/null <<<"$needs" || { echo "ci-ok: needs is not a JSON object"; exit 1; }
+jq -e 'type == "object"' >/dev/null 2>&1 <<<"$needs" || { echo "ci-ok: needs is not a JSON object"; exit 1; }
+jobs=$(yq -o=json '.jobs' "$workflow") || { echo "ci-ok: $workflow does not parse"; exit 1; }
+jq -e 'type == "object" and length > 0' >/dev/null 2>&1 <<<"$jobs" || { echo "ci-ok: found no jobs in $workflow"; exit 1; }
 
-# id <TAB> job-level if <TAB> job-level continue-on-error, for every job.
-jobs() {
-  local in_jobs=0 id="" cond="" coe=false line
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [[ $line =~ ^jobs:[[:space:]]*$ ]]; then in_jobs=1; continue; fi
-    [ $in_jobs = 1 ] || continue
-    if [[ $line =~ ^[^[:space:]#] ]]; then break; fi
-    if [[ $line =~ ^\ \ ([A-Za-z0-9_-]+):[[:space:]]*$ ]]; then
-      [ -z "$id" ] || printf '%s\t%s\t%s\n' "$id" "$cond" "$coe"
-      id=${BASH_REMATCH[1]} cond="" coe=false
-    elif [[ $line =~ ^\ \ \ \ if:[[:space:]]*(.*)$ ]]; then
-      cond=${BASH_REMATCH[1]}
-    elif [[ $line =~ ^\ \ \ \ continue-on-error:[[:space:]]*true ]]; then
-      coe=true
-    fi
-  done <"$workflow"
-  [ -z "$id" ] || printf '%s\t%s\t%s\n' "$id" "$cond" "$coe"
-}
+verdict=$(jq -r --argjson needs "$needs" --arg self "$self" '
+  def gate($o): "needs.changes.outputs.\($o) != '"'"'false'"'"'";
+  # An if: as its &&-terms, whitespace normalised; null when it has ||
+  # (a skip under an OR cannot be pinned on the scope).
+  def terms:
+    tostring
+    | gsub("^\\s*\\$\\{\\{\\s*|\\s*\\}\\}\\s*$"; "")
+    | if test("\\|\\|") then null
+      else [split("&&")[] | gsub("^\\s+|\\s+$"; "") | gsub("\\s+"; " ")] end;
+  def has_gate($t; $o): $t != null and any($t[]; . == gate($o));
 
-result() { jq -r --arg j "$1" 'if has($j) then .[$j].result else "missing" end' <<<"$needs"; }
-scope() { jq -r --arg o "$1" '.changes.outputs[$o] // ""' <<<"$needs"; }
-
-fail=0
-bad() { echo "✗ $1"; fail=1; }
-
-scope_result=$(result changes)
-if [ "$scope_result" != success ]; then
-  bad "changes: $scope_result (the scope job must succeed; without it no skip can be trusted)"
+  ($needs.changes.result // "missing") as $scope
+  | ($needs.changes.outputs.full // "") as $full
+  | ($needs.changes.outputs.extension // "") as $ext
+  | [ if $scope == "success"
+      then {ok: true, msg: "✓ changes (scope: full=\($full) extension=\($ext))"}
+      else {ok: false, msg: "✗ changes: \($scope) (the scope job must succeed; without it no skip can be trusted)"} end ]
+  + [ to_entries[]
+      | select(.key != $self and .key != "changes")
+      | .key as $id | .value as $job
+      | if ($job | type) != "object" then {ok: false, msg: "✗ \($id): not a job mapping"}
+        elif $job["continue-on-error"] == true then {ok: true, msg: "· \($id): informational (continue-on-error), not judged"}
+        else ($needs[$id].result // "missing") as $r
+          | if $r == "success" then {ok: true, msg: "✓ \($id)"}
+            elif $r == "skipped" then
+              (if $job | has("if") then $job.if | terms else [] end) as $t
+              | if has_gate($t; "full") and $full == "false" then {ok: true, msg: "✓ \($id): skipped (scope: full=false)"}
+                elif has_gate($t; "extension") and $ext == "false" then {ok: true, msg: "✓ \($id): skipped (scope: extension=false)"}
+                else {ok: false, msg: "✗ \($id): skipped, but the scope did not skip it (if: \($job.if // "none"))"} end
+            elif $r == "missing" then {ok: false, msg: "✗ \($id): not among ci-ok'"'"'s needs: add it there"}
+            else {ok: false, msg: "✗ \($id): \($r)"} end
+        end ]
+  | (.[].msg), (if all(.ok) then "PASS" else "FAIL" end)
+' <<<"$jobs")
+printf '%s\n' "$verdict" | sed '$d'
+if [ "$(printf '%s\n' "$verdict" | tail -n1)" = PASS ]; then
+  echo "ci-ok: every job passed or was skipped by the scope"
+else
+  echo "ci-ok: failed"
+  exit 1
 fi
-full=$(scope full)
-extension=$(scope extension)
-echo "scope: full=${full:-?} extension=${extension:-?}"
-
-n=0
-while IFS=$'\t' read -r id cond coe; do
-  [ "$id" != "$self" ] && [ "$id" != changes ] || continue # judged above
-  n=$((n + 1))
-  if [ "$coe" = true ]; then
-    echo "· $id: informational (continue-on-error), not judged"
-    continue
-  fi
-  r=$(result "$id")
-  case $r in
-    success) echo "✓ $id" ;;
-    skipped)
-      if [[ $cond == *outputs.full* && $full == false ]]; then
-        echo "✓ $id: skipped (scope: full=false)"
-      elif [[ $cond == *outputs.extension* && $extension == false ]]; then
-        echo "✓ $id: skipped (scope: extension=false)"
-      else
-        bad "$id: skipped, but the scope did not skip it (if: ${cond:-none})"
-      fi
-      ;;
-    missing) bad "$id: not among ci-ok's needs: add it there" ;;
-    *) bad "$id: $r" ;;
-  esac
-done < <(jobs)
-
-[ $n -gt 0 ] || bad "found no jobs in $workflow"
-if [ $fail = 0 ]; then echo "ci-ok: every job passed or was skipped by the scope"; fi
-exit $fail
