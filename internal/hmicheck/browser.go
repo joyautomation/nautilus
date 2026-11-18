@@ -96,7 +96,32 @@ type message struct {
 
 var listening = regexp.MustCompile(`DevTools listening on (ws://\S+)`)
 
+// StartTimeoutEnv overrides how long launch waits for the browser to start
+// (a Go duration: "3m", "90s"). A loaded CI runner under -race, or a slow
+// industrial PC, can take well over 20 s to bring up a fresh profile.
+const StartTimeoutEnv = "NAUT_BROWSER_START_TIMEOUT"
+
+// DefaultStartTimeout is launch's wait without StartTimeoutEnv.
+const DefaultStartTimeout = 120 * time.Second
+
+// startTimeout is StartTimeoutEnv's duration, or DefaultStartTimeout.
+func startTimeout() (time.Duration, error) {
+	v := os.Getenv(StartTimeoutEnv)
+	if v == "" {
+		return DefaultStartTimeout, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s=%q is not a duration such as 3m or 90s", StartTimeoutEnv, v)
+	}
+	return d, nil
+}
+
 func launch(ctx context.Context, path string) (*browser, error) {
+	wait, err := startTimeout()
+	if err != nil {
+		return nil, err
+	}
 	profile, err := os.MkdirTemp("", "naut-render-")
 	if err != nil {
 		return nil, err
@@ -139,9 +164,9 @@ func launch(ctx context.Context, path string) (*browser, error) {
 			return nil, errors.New("the browser exited before it was ready")
 		}
 		url = u
-	case <-time.After(20 * time.Second):
+	case <-time.After(wait):
 		b.close()
-		return nil, errors.New("the browser didn't start in 20 s")
+		return nil, fmt.Errorf("the browser didn't start in %s (set %s, e.g. %s=5m, to wait longer)", wait, StartTimeoutEnv, StartTimeoutEnv)
 	case <-ctx.Done():
 		b.close()
 		return nil, ctx.Err()
