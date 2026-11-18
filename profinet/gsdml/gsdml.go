@@ -33,6 +33,16 @@ func Generate(d Device) ([]byte, error) {
 	return append([]byte(xml.Header), append(out, '\n')...), nil
 }
 
+// DAPID is the ID of the one device access point in every GSDML that
+// Generate writes. An engineering tool, or tiad's station spec, names the
+// device by it.
+const DAPID = "IDD_1"
+
+// ModuleID is the GSDML module ID that Generate writes for the module in
+// slot. Each slot of the manifest is one module, and its subslots are fixed
+// in it.
+func ModuleID(slot uint16) string { return fmt.Sprintf("IDM_Mod%d", slot) }
+
 // Filename is the conventional name, GSDML-V2.35-<vendor>-<device>-<date>.xml.
 func Filename(d Device, date time.Time) string {
 	return fmt.Sprintf("GSDML-V2.35-%s-%s-%s.xml", sanitize(d.VendorName), sanitize(d.Station), date.Format("20060102"))
@@ -292,7 +302,7 @@ func build(d Device) gsdmlISO15745Profile {
 	var refs []gsdmlModuleItemRef
 	for _, sl := range slots {
 		maxSlot = max(maxSlot, int(sl.num))
-		modID := fmt.Sprintf("IDM_Mod%d", sl.num)
+		modID := ModuleID(sl.num)
 		nameID, infoID := fmt.Sprintf("IDT_NAME_Mod%d", sl.num), fmt.Sprintf("IDT_INFO_Mod%d", sl.num)
 		addText(nameID, fmt.Sprintf("Slot %d", sl.num))
 		addText(infoID, fmt.Sprintf("Module in slot %d", sl.num))
@@ -341,7 +351,7 @@ func build(d Device) gsdmlISO15745Profile {
 	}
 	p.ProfileBody.DeviceFunction.Family = gsdmlFamily{MainFamily: "I/O", ProductFamily: "Gateway"}
 	dap := gsdmlDAPItem{
-		ID: "IDD_1", PNIO_Version: "V2.4", PhysicalSlots: fmt.Sprintf("0..%d", maxSlot),
+		ID: DAPID, PNIO_Version: "V2.4", PhysicalSlots: fmt.Sprintf("0..%d", maxSlot),
 		ModuleIdentNumber: fmt.Sprintf("0x%08X", device.DAPModuleIdent), MinDeviceInterval: fmt.Sprintf("%d", minInterval),
 		DNS_CompatibleName: d.Station, FixedInSlots: "0", ObjectUUID_LocalIndex: "1",
 		// Claim only what the engine does: it refuses an AR without IOCRs,
