@@ -67,9 +67,20 @@ type IOConfig struct {
 	boot     map[string]ioUnit
 	running  map[string]ioUnit
 
-	// replaceSource is modbus.(*Driver).ReplaceSource; a test makes it fail.
+	// replaceSource is modbus.(*Driver).ReplaceSource and swapDriver is
+	// (*IOConfig).swap; a test makes either fail.
 	replaceSource func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error
+	swapDriver    func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) error
 }
+
+// swappable are the driver types a whole-driver swap is proven for. The
+// new driver starts before the old one stops: harmless for a poller, but a
+// Sparkplug host would end the old session's STATE after the new one
+// declared it, and two PROFINET devices would answer for one station name.
+var swappable = map[string]bool{"modbus": true, "opcua-client": true}
+
+// undoTimeout bounds putting a driver back after a failed apply.
+const undoTimeout = 10 * time.Second
 
 // ErrApplyBusy refuses an apply while another runs.
 var ErrApplyBusy = errors.New("another I/O apply is in progress; try again when it is done")
@@ -94,13 +105,15 @@ func NewIOConfig(p *Project, rt IORuntime, fsys fs.FS, manifest string) (*IOConf
 	for k, u := range units {
 		running[k] = u
 	}
-	return &IOConfig{
+	io := &IOConfig{
 		p: p, rt: rt, manifest: manifest, hold: p.Runtime.HoldOutputsOnSwap,
 		bootYAML: nonIOYAML(m), bootRows: m.Devices, bootST: types, boot: units, running: running,
 		replaceSource: func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
 			return mb.ReplaceSource(src, tags, opts)
 		},
-	}, nil
+	}
+	io.swapDriver = io.swap
+	return io, nil
 }
 
 // ioUnit is one thing an apply replaces: a whole driver, or one source of a
@@ -283,13 +296,17 @@ type IOCandidate struct {
 	configs map[string]DriverConfig
 	units   map[string]ioUnit
 	built   map[string]nio.Driver // its drivers, built, never started
-	changes []IOChange
-	val     *IOValidation
-	base    map[string]string // the running hashes it was validated against
+	mu      sync.Mutex            // guards val and base: Validate and Apply may race
+	val     *IOValidation         // the last Validate's
+	base    map[string]string     // the running hashes it was validated against
 }
 
 // Validation is the last Validate's result, nil before one.
-func (c *IOCandidate) Validation() *IOValidation { return c.val }
+func (c *IOCandidate) Validation() *IOValidation {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.val
+}
 
 // Stage reads a candidate I/O configuration from fsys: a commit's file
 // snapshot, or the running project's files with uploads laid over them
@@ -350,11 +367,13 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 		for _, ck := range v.Checks {
 			v.Valid = v.Valid && ck.OK
 		}
-		c.val = v
-		c.base = map[string]string{}
+		base := map[string]string{}
 		for k, u := range running {
-			c.base[k] = u.hash
+			base[k] = u.hash
 		}
+		c.mu.Lock()
+		c.val, c.base = v, base
+		c.mu.Unlock()
 		return v
 	}
 
@@ -424,6 +443,13 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 		}
 	}
 	check("composite", comp)
+	var kinds []string
+	for _, ch := range v.Changes {
+		if t := c.units[ch.Driver].typ; ch.Device == "" && !swappable[t] {
+			kinds = append(kinds, fmt.Sprintf("driver %s (type %s) is not swapped live yet (modbus and opcua-client are): restart to apply it", ch.Driver, t))
+		}
+	}
+	check("swappable", kinds)
 
 	// Tags: each changed driver delivers and accepts what it did, typed as
 	// it was; a changed device keeps its own bindings.
@@ -589,9 +615,13 @@ func outputConflicts(units map[string]ioUnit) []string {
 			if !t.Writable {
 				continue
 			}
-			f, err := modbus.ParseFormat(t.Format)
+			format := t.Format
+			if format == "" && (t.Table == modbus.TableCoil || t.Table == modbus.TableDiscrete) {
+				format = "bool" // the driver's default for a bit table
+			}
+			f, err := modbus.ParseFormat(format)
 			if err != nil {
-				continue
+				continue // the manifest check reports it
 			}
 			n, mask := f.Words(), uint16(0xffff)
 			if f.Kind == "bit" {
@@ -671,16 +701,19 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) error 
 		return ErrApplyBusy
 	}
 	defer io.applying.Unlock()
-	if c.val == nil {
+	c.mu.Lock()
+	val, base := c.val, c.base
+	c.mu.Unlock()
+	if val == nil {
 		return errors.New("validate the candidate before applying it")
 	}
-	if !c.val.Valid {
+	if !val.Valid {
 		return errors.New("the candidate is not valid; it cannot be applied")
 	}
 	io.mu.Lock()
-	stale := len(c.base) != len(io.running)
+	stale := len(base) != len(io.running)
 	for k, u := range io.running {
-		if c.base[k] != u.hash {
+		if base[k] != u.hash {
 			stale = true
 		}
 	}
@@ -700,7 +733,7 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) error 
 		}
 	}
 	opts := modbus.ReplaceOptions{HoldOutputs: io.hold}
-	for _, ch := range c.val.Changes {
+	for _, ch := range val.Changes {
 		if ch.Device == "" {
 			continue
 		}
@@ -722,35 +755,41 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) error 
 			}
 		})
 	}
-	for _, ch := range c.val.Changes {
+	for _, ch := range val.Changes {
 		if ch.Device != "" {
 			continue
 		}
 		prev := running[ch.Driver]
-		if err := io.swap(ctx, ch.Driver, c.fsys, c.configs[ch.Driver]); err != nil {
+		if err := io.swapDriver(ctx, ch.Driver, c.fsys, c.configs[ch.Driver]); err != nil {
 			rollback()
 			io.log(ch, c, by, err)
 			return fmt.Errorf("driver %s: %w (nothing was changed)", ch.Driver, err)
 		}
 		undo = append(undo, func() {
-			if err := io.swap(context.Background(), ch.Driver, prev.fsys, prev.cfg); err != nil {
+			uctx, cancel := context.WithTimeout(context.Background(), undoTimeout)
+			defer cancel()
+			if err := io.swapDriver(uctx, ch.Driver, prev.fsys, prev.cfg); err != nil {
 				slog.Error("config.apply: putting a driver back failed", "driver", ch.Driver, "err", err)
 			}
 		})
 	}
 
+	// What runs is now the candidate, unit for unit: its files are what a
+	// later swap rebuilds a driver from (or puts one back from), so even a
+	// unit whose hash did not change takes the candidate's. Only a changed
+	// unit takes this apply's origin.
 	at := time.Now()
 	io.mu.Lock()
-	for _, ch := range c.val.Changes {
-		for k, u := range c.units {
-			if u.driver == ch.Driver && (ch.Device == "" || u.device == ch.Device) {
-				u.from, u.at, u.by = c.From, at, by
-				io.running[k] = u
-			}
+	for k, u := range c.units {
+		if prev := io.running[k]; u.hash == prev.hash {
+			u.from, u.at, u.by = prev.from, prev.at, prev.by
+		} else {
+			u.from, u.at, u.by = c.From, at, by
 		}
+		io.running[k] = u
 	}
 	io.mu.Unlock()
-	for _, ch := range c.val.Changes {
+	for _, ch := range val.Changes {
 		io.log(ch, c, by, nil)
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"strconv"
 	"strings"
@@ -314,6 +315,9 @@ func TestIOValidateRefuses(t *testing.T) {
 			"name: A_In, source: DEV_A, table: holding, address: 0, format: int16", "name: A_In, source: DEV_A, table: holding, address: 10, format: int16, writable: true", 1)), false},
 		{"a driver setting on a lone driver", "composite", withFile(files, "nautilus.yaml",
 			strings.Replace(string(files["nautilus.yaml"].Data), "scan-rate: 10ms", "scan-rate: 20ms", 1)), false},
+		{"two coils at one address", "outputs", withFile(files, "modbus.yaml", modbusYAML(pa, pb, "",
+			"  - {name: A_C1, source: DEV_A, table: coil, address: 2, writable: true}\n"+
+				"  - {name: A_C2, source: DEV_A, table: coil, address: 2, writable: true}\n")), false},
 		{"nothing changed", "changes", files, false},
 		{"a redundant project", "redundancy", withFile(files, "modbus.yaml", modbusYAML(pb, pa, "", "")), true},
 	}
@@ -552,5 +556,134 @@ tags:
 	c = r.io.Stage(devicesProject(t, manifest(d2.Addr(), `, points: ["Current"]`), program), "upload", "tester")
 	if v := r.io.Validate(c); v.Valid || !strings.Contains(strings.Join(failed(v), " "), "device-type") {
 		t.Fatalf("a points change: valid %v, failed %v; want device-type to fail", v.Valid, failed(v))
+	}
+}
+
+// A Modbus driver's own settings swap it whole, inside the composite: its
+// devices keep reading, and under HoldOutputsOnSwap willCommand lists only
+// the rewrite: keep-alives, for a whole driver and for one device.
+func TestIOApplyModbusWholeSwap(t *testing.T) {
+	s1, s2, s4 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 7)
+	ua := uaServer(t, 1.5)
+	files := ioFiles(slavePort(s1), slavePort(s2), ua)
+	rewrite := func(y string) string {
+		return strings.Replace(y, "name: B_Cmd, source: DEV_B, table: holding, address: 10, format: int16, writable: true",
+			"name: B_Cmd, source: DEV_B, table: holding, address: 10, format: int16, writable: true, rewrite: 500ms", 1)
+	}
+	files = withFile(files, "modbus.yaml", rewrite(modbusYAML(slavePort(s1), slavePort(s2), "", "")))
+	r := startIORig(t, files, true)
+	eventually(t, "DEV_A and DEV_B", func() bool { return r.value("A_In") == "4" && r.value("B_In") == "7" })
+
+	// One device, held: only its keep-alive.
+	c := r.io.Stage(withFile(files, "modbus.yaml", rewrite(modbusYAML(slavePort(s1), slavePort(s4), "", ""))), "upload", "tester")
+	if v := r.io.Validate(c); !v.Valid || fmt.Sprint(v.WillCommand) != "[{B_Cmd 8}]" {
+		t.Fatalf("a held device: valid %v willCommand %v, want [{B_Cmd 8}]", v.Valid, v.WillCommand)
+	}
+
+	devs, err := sparkplugDevicesLive(r.p.drivers, r.p.currentDriver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devA func() bool
+	for _, d := range devs {
+		if d.ID == "DEV_A" {
+			devA = d.Health
+		}
+	}
+	cand := withFile(files, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), "scan-rate: 10ms", "scan-rate: 15ms", 1))
+	c = r.io.Stage(cand, "upload", "tester")
+	v := r.io.Validate(c)
+	if !v.Valid || len(v.Changes) != 1 || v.Changes[0].Driver != "modbus" || v.Changes[0].Device != "" {
+		t.Fatalf("validate: valid %v changes %+v checks %+v", v.Valid, v.Changes, v.Checks)
+	}
+	if fmt.Sprint(v.WillCommand) != "[{B_Cmd 8}]" {
+		t.Fatalf("a held whole driver: willCommand %v, want [{B_Cmd 8}]", v.WillCommand)
+	}
+	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	// Held, the new driver's first snapshot is its baseline: a command it
+	// takes in that snapshot is not sent, so drive two changes.
+	s1.Unit(1).SetHolding(0, 12)
+	eventually(t, "DEV_A read by the new driver", func() bool { return r.value("A_In") == "12" })
+	s1.Unit(1).SetHolding(0, 20)
+	eventually(t, "DEV_A commanded by the new driver", func() bool { return s1.Unit(1).Holding(10) == 21 })
+	time.Sleep(100 * time.Millisecond) // the old driver, stopped, reports its sources down
+	eventually(t, "DEV_A's Sparkplug health from the new driver", devA)
+}
+
+// A whole-driver swap that fails puts back the swaps before it, from what
+// runs (an earlier device apply included), not from the boot manifest.
+func TestIOApplyRollsBackADriverSwap(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4)
+	uaA, uaB := uaServer(t, 1.5), uaServer(t, 2.5)
+	files := ioFiles(slavePort(s1), slavePort(s2), uaA)
+	r := startIORig(t, files, false)
+	eventually(t, "polled", func() bool { return r.value("A_In") == "4" && r.value("GW_Level") == "1.5" })
+
+	first := withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", ""))
+	c := r.io.Stage(first, "upload", "tester")
+	r.io.Validate(c)
+	if err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls []string
+	real := r.io.swapDriver
+	r.io.swapDriver = func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) error {
+		calls = append(calls, name)
+		if name == "opcua-client" {
+			return errors.New("injected")
+		}
+		return real(ctx, name, fsys, cfg)
+	}
+	second := withFile(first, "nautilus.yaml", strings.Replace(strings.Replace(string(files["nautilus.yaml"].Data),
+		"scan-rate: 10ms", "scan-rate: 15ms", 1), uaA, uaB, 1))
+	c = r.io.Stage(second, "upload", "tester")
+	if v := r.io.Validate(c); !v.Valid || len(v.Changes) != 2 {
+		t.Fatalf("validate: %+v", v)
+	}
+	if err := r.io.Apply(r.ctx, c, "tester"); err == nil {
+		t.Fatal("the failed apply reported success")
+	}
+	if fmt.Sprint(calls) != "[modbus opcua-client modbus]" {
+		t.Fatalf("swaps = %v, want modbus, the failing opcua-client, modbus put back", calls)
+	}
+	s3.Unit(1).SetHolding(0, 21)
+	eventually(t, "DEV_A still on the address the first apply gave it", func() bool { return r.value("A_In") == "21" })
+	if d := r.io.Differs(); len(d) != 1 || d[0].Device != "DEV_A" {
+		t.Fatalf("differs = %+v, want DEV_A alone", d)
+	}
+}
+
+// Only Modbus and OPC UA client drivers swap whole; another type is
+// refused with a restart.
+func TestIOValidateRefusesAnUnprovenDriverSwap(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	base := strings.Replace(string(files["nautilus.yaml"].Data), "driver:\n  type: modbus\n  manifest: modbus.yaml\n  scan-rate: 10ms\n",
+		"drivers:\n  - { type: modbus, manifest: modbus.yaml, scan-rate: 10ms }\n  - { type: eip, host: '127.0.0.1:1', manifest: e.yaml }\n", 1)
+	files = withFile(withFile(files, "nautilus.yaml", base), "e.yaml", "tags:\n  - { name: E1, device: E1, type: REAL }\n")
+	r := startIORig(t, files, false)
+	c := r.io.Stage(withFile(files, "nautilus.yaml", strings.Replace(base, "127.0.0.1:1", "127.0.0.1:2", 1)), "upload", "tester")
+	v := r.io.Validate(c)
+	if v.Valid || strings.Join(failed(v), " ") != "swappable" {
+		t.Fatalf("valid %v, failed %v; want swappable alone to fail", v.Valid, failed(v))
+	}
+}
+
+// An upload replaces the project's file of the same path; the rest read
+// through.
+func TestOverlayFS(t *testing.T) {
+	base := fstest.MapFS{"a.yaml": {Data: []byte("a")}, "dir/b.yaml": {Data: []byte("b")}}
+	o := OverlayFS(base, map[string][]byte{"./dir/b.yaml": []byte("B"), "c.yaml": []byte("C")})
+	for name, want := range map[string]string{"a.yaml": "a", "dir/b.yaml": "B", "c.yaml": "C"} {
+		got, err := fs.ReadFile(o, name)
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	if _, err := fs.ReadFile(o, "d.yaml"); err == nil {
+		t.Error("a file in neither reads")
 	}
 }
