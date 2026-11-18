@@ -184,13 +184,20 @@ claims:
 
   - id: ST-016
     claim: >-
-      All integer kinds share one 64-bit representation, so a declared width
-      documents intent without narrowing (INT does not wrap at 16 bits, DINT
-      not at 32).
+      A store keeps its type's width (INT wraps at 16 bits, DINT at 32, UINT
+      at 0..65535), and an implicit conversion follows IEC 61131-3's table
+      (Figure 11): any other, or a constant out of the type's range, is a
+      compile error that names the conversion to write, at an assignment,
+      an FB or FUNCTION input, an output binding, a FOR bound and a
+      declaration's initial value.
     source: "#declarations"
     tests:
       - go ./lang/conformance TestConformance/st-int-width
-      - go ./lang/conformance TestConformance/st-bitwise/bits above 32 survive - the width is 64 bits
+      - go ./lang/conformance TestConformance/st-bitwise/an INT's 16 bits - bit 15 is the sign
+      - go ./lang/st TestImplicitConversionsFollowTheIECTable
+      - go ./lang/ld TestLadderStoreFollowsTheIntegerRules
+      - go ./lang/st TestRealStoresFollowTheIECTable
+      - go ./lang/st TestIntegerStoreWrapsToTheTargetWidth
 
   - id: ST-017
     claim: TIME counts milliseconds.

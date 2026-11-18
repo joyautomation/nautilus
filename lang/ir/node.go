@@ -21,6 +21,28 @@ type LValue interface {
 type Assign struct {
 	Target LValue
 	Value  Expr
+	// Wrap, when set, is the declared integer width the stored value is
+	// cut to (#782): its low bits, read signed or unsigned as the target's
+	// type is. Inline in the VM, so a wrapped store costs a mask, not a
+	// call.
+	Wrap *Wrap
+}
+
+// Wrap is a declared integer width a store keeps: Bits (8, 16, 32) and
+// whether the type is signed. NewWrap builds one from a type.
+type Wrap struct {
+	Bits   uint8
+	Signed bool
+}
+
+// Apply cuts v to the width.
+func (w *Wrap) Apply(v int64) int64 {
+	mask := uint64(1)<<w.Bits - 1
+	u := uint64(v) & mask
+	if w.Signed && u&(uint64(1)<<(w.Bits-1)) != 0 {
+		return int64(u | ^mask)
+	}
+	return int64(u)
 }
 
 func (*Assign) stmtNode() {}
