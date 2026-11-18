@@ -12,7 +12,8 @@ import (
 )
 
 // plcnext on its gRPC transport against plcnexttest's controller, on the
-// bench project's manifest. The input is DI_00, the output DO_00 (bit 0 of
+// bench project's manifest (examples/plcnext-bench/plcnext_manifest.yaml:
+// the row reads its DI_00 and DO_00, so a change to that layout shows here). The input is DI_00, the output DO_00 (bit 0 of
 // output byte 0), read back from the fake's output image. A failed read on
 // a live link is a stopped Axioline bus: the firmware answers, the bytes
 // are stale. This row is NOT the shm transport: there a closed gate stops
