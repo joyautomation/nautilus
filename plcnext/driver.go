@@ -571,6 +571,13 @@ func (d *Driver) poll(ctx context.Context, im image, unconducted bool) error {
 	if r.held {
 		d.held.Add(1)
 	}
+	if unconducted && d.m.RunPort == "" && r.running {
+		// No RUN bit to read, and START_IO_REQ is still to be sent (the
+		// write gate deferred it): the bus was not started, so this is a
+		// stopped bus, as a RUN bit reading false would say (#874).
+		r.running, r.q = false, nio.Bad
+		r.why, r.cause = "the Axioline bus is not started yet: the write gate is closed", "unstarted"
+	}
 	d.running.Store(r.running)
 
 	d.mu.Lock()

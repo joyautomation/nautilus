@@ -412,6 +412,36 @@ func TestDriverWithoutBusConductorAndMissingPort(t *testing.T) {
 	}
 }
 
+// run-port: none survives New, which fills the defaults again: the RUN bit
+// is never read, so a bus whose RUN port reads false (or is not there)
+// still delivers Good inputs (#874).
+func TestRunPortNoneSurvivesNew(t *testing.T) {
+	f := newFakeGDS() // its RUN port reads false: a check would make the inputs Bad
+	addr := serve(t, f)
+	m, err := ParseManifest([]byte("bus-conductor: \"\"\nrun-port: none\ntags:\n  - {name: DI_00, dir: in, offset: 0, format: bit:0}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(m, WithScanRate(10*time.Millisecond), WithDialer(func(ctx context.Context) (dataAccess, error) { return Dial(ctx, addr) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.m.RunPort != "" {
+		t.Fatalf("after New the driver reads RUN port %q, want none", d.m.RunPort)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+	deadline := time.Now().Add(3 * time.Second)
+	for d.Quality()["DI_00"] != nio.Good {
+		if time.Now().After(deadline) {
+			t.Fatalf("inputs %v with run-port: none, want Good (health %+v)", d.Quality()["DI_00"], d.Health())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A reconnect to a bus that is already configured and running must not
 // re-request either: no CONFIG_REQ edge, no START_IO_REQ edge.
 func TestHandshakeIsIdempotent(t *testing.T) {

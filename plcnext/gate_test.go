@@ -215,6 +215,9 @@ func TestWriteGateClosesMidHandshake(t *testing.T) {
 			if h.Running || h.Modules != 4 {
 				t.Fatalf("deferred handshake: Running=%v Modules=%d, want the bus as read (stopped, 4 modules)", h.Running, h.Modules)
 			}
+			if q := d.Quality()["DI_00"]; c.runNone && q != nio.Bad {
+				t.Fatalf("no RUN port, START_IO_REQ deferred: inputs %v, want Bad (the bus was not started)", q)
+			}
 			if want := c.closeAfter == "CONFIG_REQ=true"; h.Configured != want {
 				t.Fatalf("deferred handshake: Configured=%v, want %v as read", h.Configured, want)
 			}
