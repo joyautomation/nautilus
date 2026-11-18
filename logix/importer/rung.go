@@ -532,6 +532,8 @@ var coilMode = map[string]string{"OTE": "", "OTL": "S", "OTU": "R"}
 // cannot say in one rung.
 func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusal) {
 	var out [][]string
+	// after: block rungs that run after the rung's own output (#778).
+	var after [][]string
 	parts := append([]string(nil), prefix...)
 	// dirty: conditions added since the last output leg was emitted. A
 	// rung that ends dirty has conditions driving nothing.
@@ -616,6 +618,19 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 			legs, hoisted, err := rt.hoistBlocks(t.Legs, parts)
 			if err != nil {
 				return nil, err
+			}
+			// Logix runs the legs top to bottom. The block rungs go ahead
+			// of the rung that keeps the legs' data boxes, which is right
+			// when the boxes come after the blocks; when every box comes
+			// first and the branch ends the rung, they go after it, so a
+			// box reading the block's state reads it before the block
+			// runs, as on the controller (#778).
+			if last && len(hoisted) > 0 && boxesBeforeBlocks(t.Legs) {
+				if w := conditionWrites(terms[:i], t.Legs); w != "" {
+					return nil, refuse("branch-order", "a data box on an earlier leg writes %s, which a condition of the timer or counter on a later leg reads; split the rung so each runs in the order Logix runs it", w)
+				}
+				after = append(after, hoisted...)
+				hoisted = nil
 			}
 			out = append(out, hoisted...)
 			if allEmpty(legs) {
@@ -869,7 +884,79 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 	// Conditions left after the last output leg (a timer hoisted out of a
 	// branch, a coil mid-rung with a trailing contact) drive nothing in
 	// Logix either; they are dropped.
-	return out, nil
+	return append(out, after...), nil
+}
+
+// hoistable are the instructions hoistBlocks gives a rung of their own.
+var hoistable = map[string]bool{"TON": true, "TOF": true, "CTU": true, "MSG": true}
+
+// boxesBeforeBlocks reports a branch whose data boxes all come before its
+// first timer, counter or message, in Logix's order (leg by leg, top to
+// bottom), with at least one of each.
+func boxesBeforeBlocks(legs [][]l5x.Term) bool {
+	block, box, boxAfter := false, false, false
+	for _, leg := range legs {
+		walkTerms(leg, func(in *l5x.Instr) {
+			m := strings.ToUpper(in.Mnemonic)
+			switch {
+			case hoistable[m]:
+				block = true
+			case assignInstr[m] || m == "COP" || m == "CPS":
+				box = true
+				if block {
+					boxAfter = true
+				}
+			}
+		})
+	}
+	return block && box && !boxAfter
+}
+
+// conditionWrites names a tag a data box in legs writes that a condition
+// reads, in the rung's terms before the branch or in the legs themselves;
+// "" when none. Hoisted after the boxes, a block's rung reads its
+// conditions after they ran, where Logix read them before.
+func conditionWrites(before []l5x.Term, legs [][]l5x.Term) string {
+	reads := map[string]bool{}
+	readOf := func(in *l5x.Instr) {
+		m := strings.ToUpper(in.Mnemonic)
+		if m == "XIC" || m == "XIO" || compareFn[m] != "" || m == "CMP" || m == "LIM" {
+			for _, a := range in.Args {
+				reads[strings.ToLower(baseOf(strings.TrimSpace(a)))] = true
+			}
+		}
+	}
+	walkTerms(before, readOf)
+	for _, leg := range legs {
+		walkTerms(leg, readOf)
+	}
+	var hit string
+	for _, leg := range legs {
+		walkTerms(leg, func(in *l5x.Instr) {
+			if d := boxDest(in); d != "" && hit == "" && reads[strings.ToLower(baseOf(d))] {
+				hit = d
+			}
+		})
+	}
+	return hit
+}
+
+// boxDest is the operand a data box writes, or "".
+func boxDest(in *l5x.Instr) string {
+	m := strings.ToUpper(in.Mnemonic)
+	at := -1
+	switch m {
+	case "MOV", "MOVE", "NEG", "ABS", "SQR", "COP", "CPS":
+		at = 1
+	case "ADD", "SUB", "MUL", "DIV", "MOD", "XPY":
+		at = 2
+	case "CPT", "CLR":
+		at = 0
+	}
+	if at < 0 || at >= len(in.Args) {
+		return ""
+	}
+	return strings.TrimSpace(in.Args[at])
 }
 
 // assignInstr are the data instructions with an assignment form.
