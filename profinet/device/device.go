@@ -100,8 +100,45 @@ type Config struct {
 	MinWatchdog time.Duration
 	// LLDPEvery is the LLDP announcement period; 0 means 5 s.
 	LLDPEvery time.Duration
-	Log       *slog.Logger
+	// MaySend, when set, is read before every frame and datagram the
+	// device sends (RT, DCP, LLDP, RTA, DCE/RPC); false drops it. A
+	// redundant replica passes its leadership here, a time comparison
+	// against its lease, so a leader frozen past its lease sends nothing
+	// when it resumes, not even before anything has told it to stop.
+	MaySend func() bool
+	Log     *slog.Logger
 }
+
+// ErrNotSending is what a send returns while Config.MaySend says no.
+var ErrNotSending = errors.New("profinet device: not sending (MaySend is false)")
+
+// gatedPort and gatedConn read MaySend before each send.
+type gatedPort struct {
+	transport.Port
+	may func() bool
+}
+
+func (p gatedPort) Send(dst net.HardwareAddr, etherType uint16, payload []byte) error {
+	if !p.may() {
+		return ErrNotSending
+	}
+	return p.Port.Send(dst, etherType, payload)
+}
+
+type gatedConn struct {
+	net.PacketConn
+	may func() bool
+}
+
+func (c gatedConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if !c.may() {
+		return 0, ErrNotSending
+	}
+	return c.PacketConn.WriteTo(b, addr)
+}
+
+// maySend reports whether the device may send now.
+func (d *Device) maySend() bool { return d.cfg.MaySend == nil || d.cfg.MaySend() }
 
 // Device is one running IO device. Use New, then Run.
 type Device struct {
@@ -193,6 +230,10 @@ func New(cfg Config) (*Device, error) {
 	}
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
+	}
+	if cfg.MaySend != nil {
+		cfg.Port = gatedPort{cfg.Port, cfg.MaySend}
+		cfg.RPC = gatedConn{cfg.RPC, cfg.MaySend}
 	}
 	d := &Device{
 		cfg:     cfg,

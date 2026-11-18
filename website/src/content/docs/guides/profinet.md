@@ -120,7 +120,9 @@ handles it as it would a faulty module.
 
 ## Redundancy
 
-Under `redundancy:`, only the leader is a PROFINET device. A standby
+Under `redundancy:`, only the leader is a PROFINET device. Every frame
+it sends first checks that its lease is still current, so a leader that
+was frozen past its lease sends nothing when it resumes. A standby
 holds no socket on the interface. It answers no DCP and sends no LLDP,
 so two replicas never answer for one station name. Its input tags read
 Stale and keep their last value, and its status row says `standby`.

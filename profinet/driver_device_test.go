@@ -393,3 +393,67 @@ func TestDeviceDriverReplicaHandOver(t *testing.T) {
 	a.gate.Store(true)
 	waitFor(t, "A answers again", func() bool { return bytes.Equal(answers(), macA) })
 }
+
+// A leader frozen past its lease (#787 F33: SIGSTOP, SIGCONT) must not
+// send one more frame on resume, though the 200 ms look has not stopped
+// the device yet. Here the lease simply runs out while the device keeps
+// running: harsher than a real freeze, where the sender stops too. The
+// gate is what `naut run` installs, a time comparison against the lease;
+// every send reads it.
+func TestDeviceDriverReplicaLeaseExpiredSendsNothing(t *testing.T) {
+	hub := transport.NewHub()
+	macA := net.HardwareAddr{0x02, 0, 0, 0, 0xDE, 0x0A}
+	a := newReplica(t, hub, macA)
+	var leaseEnd atomic.Int64 // unix nanos
+	isLeader := func() bool { return time.Now().UnixNano() < leaseEnd.Load() }
+	a.drv.SetWriteGate(isLeader)
+	ctrl, err := pntest.NewController(hub, ctrlMAC, macA, a.rpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	a.drv.Apply(WithDeviceControllerPort(ctrl.CMPort()))
+	// Leadership starts only now: Apply must not race the device's start.
+	stopRenew := make(chan struct{})
+	renewed := make(chan struct{})
+	go func() { // the elector renewing a 100 ms lease, until it freezes
+		defer close(renewed)
+		for {
+			leaseEnd.Store(time.Now().Add(100 * time.Millisecond).UnixNano())
+			select {
+			case <-stopRenew:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}()
+
+	waitFor(t, "A answers", func() bool { name, _ := ctrl.Identify("naut-1"); return name != "" })
+	if st, _, err := ctrl.Connect(a.drv.m.Subslots(), false); err != nil || !st.IsOK() {
+		t.Fatalf("connect %v %v", st, err)
+	}
+	if err := ctrl.PrmEnd(); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.StartOutputs(map[device.Addr][]byte{sub11: {0x08, 0xFF, 0xFE}}, wire.DataStatusRunNormal)
+	a.drv.WriteOutputs(nio.Values{"Level": 1.5, "Running": true, "Count": int64(7)})
+	waitFor(t, "cyclic data from A", func() bool { _, iops, _, _ := ctrl.LastInput(sub11); return iops == wire.IOxSGood })
+
+	var late atomic.Int64
+	var lateAt atomic.Int64
+	const slack = 10 * time.Millisecond // a send already past its check
+	hub.Tap(func(f transport.Frame) {
+		if bytes.Equal(f.Src, macA) && time.Now().UnixNano() > leaseEnd.Load()+int64(slack) {
+			late.Add(1)
+			lateAt.CompareAndSwap(0, time.Now().UnixNano())
+		}
+	})
+	close(stopRenew) // frozen: nothing renews, nothing tells the driver
+	<-renewed
+	expiry := time.Unix(0, leaseEnd.Load())
+	time.Sleep(time.Until(expiry) + 400*time.Millisecond) // well past one 200 ms look
+	if n := late.Load(); n != 0 {
+		t.Fatalf("%d frames from A after its lease expired (first %v after expiry)", n, time.Duration(lateAt.Load()-expiry.UnixNano()))
+	}
+	waitFor(t, "A standby", func() bool { return a.drv.Health().State == "standby" })
+}

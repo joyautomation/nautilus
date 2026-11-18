@@ -267,6 +267,7 @@ func (d *DeviceDriver) run(ctx context.Context) {
 		dev, err := device.New(device.Config{
 			Identity: d.m.Identity(), Subslots: d.m.Subslots(), Port: port, RPC: rpc,
 			InterfaceAddrs: addrs, MinWatchdog: d.minWD, ControllerCMPort: d.cmPort, Log: d.log,
+			MaySend: d.maySend(),
 		})
 		if err != nil { // the manifest was validated; this is a bug
 			port.Close()
@@ -328,6 +329,23 @@ func (d *DeviceDriver) leading() bool {
 	g := d.gate
 	d.gateMu.Unlock()
 	return g != nil && d.gateOpen()
+}
+
+// maySend is the device's per-send check: nil (always) unless the driver
+// is a replica, then the raw leadership gate, read before every frame.
+// It takes no driver lock, since the device calls it from its own send
+// paths. The 200 ms look only stops the device; this is what keeps a
+// leader frozen past its lease from sending a single frame on resume.
+func (d *DeviceDriver) maySend() func() bool {
+	if !d.replica {
+		return nil
+	}
+	return func() bool {
+		d.gateMu.Lock()
+		g := d.gate
+		d.gateMu.Unlock()
+		return g != nil && g()
+	}
 }
 
 // standby parks a replica: no device, so inputs read Stale, and the
