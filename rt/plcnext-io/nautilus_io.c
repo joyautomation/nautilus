@@ -39,6 +39,7 @@
 
 #define _GNU_SOURCE
 #include "nautilus_io_shm.h"
+#include "rtguard.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -57,6 +58,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <linux/limits.h>
+
+// A cycle may run this long without sleeping before SIGXCPU (rtguard.h).
+#define RT_LIMIT_MS 200
 
 #ifndef NAUTILUS_IO_VERSION
 #define NAUTILUS_IO_VERSION "dev" // build.sh stamps the release version
@@ -387,10 +391,15 @@ int main(int argc, char **argv) {
         else logln("%s: want a priority 1..96; using %d", priopath, prio);
         fclose(pf);
     }
+    // Bounded first (rtguard.h, #836): a cycle that runs RT_LIMIT_MS without
+    // sleeping is moved back to normal scheduling instead of owning the
+    // core, the firmware's and the network's work on it included.
     bool fifo = false;
-    struct sched_param sp = { .sched_priority = prio };
-    if (sched_setscheduler(0, SCHED_FIFO, &sp) == 0) { fifo = true; logln("SCHED_FIFO priority %d", prio); }
-    else logln("SCHED_FIFO %d refused (%s); running best-effort", prio, strerror(errno));
+    int bound_err = 0;
+    int fe = rtg_take_fifo(prio, RT_LIMIT_MS, &bound_err);
+    if (fe == 0) { fifo = true; logln("SCHED_FIFO priority %d, bounded at %d ms without sleeping (RLIMIT_RTTIME)", prio, RT_LIMIT_MS); }
+    else if (bound_err) logln("SCHED_FIFO %d not taken: RLIMIT_RTTIME could not be set (%s), and nothing would stop a runaway cycle; running best-effort", prio, strerror(fe));
+    else logln("SCHED_FIFO %d refused (%s); running best-effort", prio, strerror(fe));
     // nautilus_io.cpu beside the binary pins the cycle to one CPU, away from
     // naut and from whichever core takes the network's receive work. Unlike
     // the priority this needs no capability: a thread may pin itself.
@@ -423,11 +432,14 @@ int main(int argc, char **argv) {
     unsigned char inbuf[NIO_FRAME_LEN] = {0}, frame_out[NIO_FRAME_LEN] = {0};
     unsigned char last_in[8] = {0}, last_out[8] = {0};
     int changes = 0;          // change lines logged; capped, the 10 s line carries on
-    bool was_run = false, was_wd = false, was_owned = false;
+    bool was_run = false, was_wd = false, was_owned = false, demote_err_logged = false;
     char hi[24], ho[24];
     for (; !stopping; cycles++) {
         ts_add(&next, CYCLE_NS);
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+        // EINTR (a signal: SIGXCPU's handler, for one) is not restarted
+        // even with SA_RESTART: sleep the rest of the way to the slot.
+        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL) == EINTR) {
+        }
         clock_gettime(CLOCK_MONOTONIC, &now);
         long l = ts_diff_us(&now, &next);
         if (l < 0) l = 0;
@@ -439,6 +451,16 @@ int main(int argc, char **argv) {
         hist[b]++;
         uint64_t t0 = ts_ns(&now);
         if (!pg && cycles % 1000 == 999) page_open((uint32_t)CYCLE_NS, LATE_US);
+
+        // The guard (rtguard.h) moved this thread off SCHED_FIFO, or tried.
+        if (fifo && rtg_demoted) {
+            fifo = false; // the page's FIFO bit drops with it
+            logln("SCHED_FIFO withdrawn: the cycle ran %d ms without sleeping (RLIMIT_RTTIME); normal priority until restart", RT_LIMIT_MS);
+        }
+        if (rtg_demote_errno && !demote_err_logged) {
+            demote_err_logged = true;
+            logln("SIGXCPU: the cycle ran %d ms without sleeping, and could not leave SCHED_FIFO (%s); the kernel kills this process at %d ms", RT_LIMIT_MS, strerror(rtg_demote_errno), RT_LIMIT_MS * 5 / 2);
+        }
 
         // A PLC that is not started (Stop, Reset, Unload in progress) may be
         // tearing the frames down; the cycle keeps time and stamps the page
