@@ -22,4 +22,4 @@ tests:
       - { given: { X: 255, Y: 255 }, scans: 1, expect: { st_XY: 0 } }    # x ^ x
       - { given: { X: 123, Y: 0 }, scans: 1, expect: { st_XY: 123 } }    # identity
       - { given: { X: -1, Y: 5 }, scans: 1, expect: { st_XY: -6 } }      # -1 is all ones: complement of 5
-      - { given: { X: 1099511627776, Y: 1 }, scans: 1, expect: { st_XY: 1099511627777 } } # bit 40 and bit 0
+      - { given: { X: -32768, Y: 1 }, scans: 1, expect: { st_XY: -32767 } } # bit 15 and bit 0

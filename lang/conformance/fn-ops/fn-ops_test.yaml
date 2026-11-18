@@ -61,7 +61,7 @@ tests:
   # never wraps (st-int-width pins that deviation), and a conversion of the
   # expression reads every bit (FN-099), then fits the target the way
   # DINT_TO_INT(70000) = 4464 does.
-  - name: DINT + DINT keeps its value past INT's range; a conversion of it wraps only to the target
+  - name: DINT + DINT keeps its value past INT's range; a DINT store wraps at 32 bits, a conversion to its target
     steps:
       - given: { D1: 40000, D2: 40000 }
         scans: 1
@@ -71,7 +71,7 @@ tests:
         expect: { st_ADDD: -80000, fbd_ADDD: -80000, st_ADDDEQ: false, fbd_ADDDEQ: false, st_ADDDINT: -14464, fbd_ADDDINT: -14464, st_ADDDLINT: -80000, fbd_ADDDLINT: -80000 }
       - given: { D1: 2000000000, D2: 2000000000 }
         scans: 1
-        expect: { st_ADDD: 4000000000, fbd_ADDD: 4000000000, st_ADDDLINT: 4000000000, fbd_ADDDLINT: 4000000000, st_ADDDINT: 10240, fbd_ADDDINT: 10240 }
+        expect: { st_ADDD: -294967296, fbd_ADDD: -294967296, st_ADDDLINT: 4000000000, fbd_ADDDLINT: 4000000000, st_ADDDINT: 10240, fbd_ADDDINT: 10240 }
 
   - name: DIV of two integers is the quotient, MOD the remainder
     steps:

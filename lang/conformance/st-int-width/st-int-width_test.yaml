@@ -1,46 +1,40 @@
-# PINS A DEVIATION (decision 4 in randd/handoffs/TEST-PLAN-HANDOFF.md §8;
-# docs/functions.md "Types" and "Bit operations"; header of
-# lang/ir/builtins_std.go). INT, DINT, UINT, UDINT and WORD all share one
-# int64 runtime representation, and declared widths are not tracked. So:
-#   - nothing wraps at 16 or 32 bits, and an unsigned kind goes negative;
-#   - SHL/SHR/ROL/ROR act on the full 64 bits (SHR is a logical, zero-fill
-#     shift of the 64-bit pattern).
-# The standard (and Codesys, Logix, TIA) wrap INT at 16 bits, DINT at 32,
-# UINT at 0..65535, and rotate a WORD over 16 bits. A PLC program imported
-# from one of them that depends on wrap-around or on a 16-bit rotate
-# behaves differently here. This is a decision, not an accident: changing
-# it means editing this pin on purpose.
+# Integer widths as IEC 61131-3 has them (#782, James 2026-11-17: refuse +
+# wrap). Arithmetic is computed in 64 bits and never wraps on its own
+# (#326); a store into a declared integer keeps its low bits, read signed
+# or unsigned as the type is, so INT wraps at 16 bits, DINT at 32, UINT at
+# 0..65535. Shifts and rotates act on the first operand's declared width
+# (ROL of a WORD rotates over 16 bits). This replaces the earlier pin of a
+# 64-bit deviation (decision 4 in randd/handoffs/TEST-PLAN-HANDOFF.md §8).
 tests:
-  - name: INT does not wrap at 16 bits
+  - name: INT wraps at 16 bits
     steps:
-      - { given: { I16: 32767 },  scans: 1, expect: { st_I16: 32768 } }  # IEC INT would be -32768
+      - { given: { I16: 32767 },  scans: 1, expect: { st_I16: -32768 } }
       - { given: { I16: -32768 }, scans: 1, expect: { st_I16: -32767 } }
-      - { given: { I16: 100000 }, scans: 1, expect: { st_I16: 100001 } } # not even representable in 16 bits
 
-  - name: DINT does not wrap at 32 bits
+  - name: DINT wraps at 32 bits
     steps:
-      - { given: { D32: 2147483647 }, scans: 1, expect: { st_D32: 2147483648 } } # IEC DINT would be -2147483648
-      - { given: { D32: 100000 },     scans: 1, expect: { st_Mul: 10000000000 } } # 1e5 * 1e5 overflows 32 bits
+      - { given: { D32: 2147483647 }, scans: 1, expect: { st_D32: -2147483648 } }
+      - { given: { D32: 100000 },     scans: 1, expect: { st_Mul: 1410065408 } } # 1e10 keeps its low 32 bits
 
-  - name: UINT and WORD have no ceiling and UINT has no floor
+  - name: UINT and WORD wrap at 0..65535
     steps:
-      - { given: { U16: 0 },     scans: 1, expect: { st_U16: -1 } }    # IEC UINT would be 65535
+      - { given: { U16: 0 },     scans: 1, expect: { st_U16: 65535 } }
       - { given: { U16: 5 },     scans: 1, expect: { st_U16: 4 } }
-      - { given: { W16: 65535 }, scans: 1, expect: { st_W16: 65536 } } # IEC WORD would be 0
+      - { given: { W16: 65535 }, scans: 1, expect: { st_W16: 0 } }
 
-  - name: shifts act on 64 bits
+  - name: shifts act on the operand's 16 bits, and an INT reads bit 15 as the sign
     steps:
-      - { given: { W16: 1, N: 40 },     scans: 1, expect: { st_Shl: 1099511627776 } } # 16-bit WORD would be 0
-      - { given: { W16: 65535, N: 4 },  scans: 1, expect: { st_Shl: 1048560 } }      # not truncated to 16 bits
-      - { given: { W16: 1, N: 64 },     scans: 1, expect: { st_Shl: 0 } }            # shifted entirely out
+      - { given: { W16: 1, N: 40 },     scans: 1, expect: { st_Shl: 0 } }      # shifted past 16 bits
+      - { given: { W16: 65535, N: 4 },  scans: 1, expect: { st_Shl: -16 } }    # 16#FFF0 into an INT
+      - { given: { W16: 1, N: 64 },     scans: 1, expect: { st_Shl: 0 } }
       - { given: { I16: 256, N: 4 },    scans: 1, expect: { st_Shr: 16 } }
-      - { given: { I16: -1, N: 60 },    scans: 1, expect: { st_Shr: 15 } }           # zero-fill over 64 bits, not arithmetic
+      - { given: { I16: -1, N: 4 },     scans: 1, expect: { st_Shr: 4095 } }   # zero-fill over 16 bits
 
-  - name: ROL and ROR rotate over 64 bits, not the declared 16
+  - name: ROL and ROR rotate over the declared 16 bits
     steps:
-      - { given: { W16: 32768, N: 1 }, scans: 1, expect: { st_Rol: 65536 } }          # 16-bit WORD would be 1
-      - { given: { W16: 1, N: 1 },     scans: 1, expect: { st_Ror: -9223372036854775808 } } # 16-bit WORD would be 32768
-      - { given: { W16: 1, N: 63 },    scans: 1, expect: { st_Rol: -9223372036854775808 } }
-      - { given: { W16: 1, N: 64 },    scans: 1, expect: { st_Rol: 1, st_Ror: 1 } }  # a full turn is the identity
-      - { given: { W16: 6, N: 65 },    scans: 1, expect: { st_Rol: 12, st_Ror: 3 } } # the count is taken mod 64
-      - { given: { W16: -1, N: 5 },    scans: 1, expect: { st_Rol: -1, st_Ror: -1 } } # all ones rotate to all ones
+      - { given: { W16: 32768, N: 1 }, scans: 1, expect: { st_Rol: 1 } }
+      - { given: { W16: 1, N: 1 },     scans: 1, expect: { st_Ror: -32768 } }  # 16#8000 into an INT
+      - { given: { W16: 1, N: 15 },    scans: 1, expect: { st_Rol: -32768 } }
+      - { given: { W16: 1, N: 16 },    scans: 1, expect: { st_Rol: 1, st_Ror: 1 } }  # a full turn is the identity
+      - { given: { W16: 6, N: 17 },    scans: 1, expect: { st_Rol: 12, st_Ror: 3 } } # the count is taken mod 16
+      - { given: { W16: 65535, N: 5 }, scans: 1, expect: { st_Rol: -1, st_Ror: -1 } } # all ones rotate to all ones

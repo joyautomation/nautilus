@@ -1625,7 +1625,54 @@ func (l *lowerer) lowerAssign(a *AssignStmt) (ir.Stmt, error) {
 	if !assignable(target.ExprType(), value.ExprType()) {
 		return nil, fmt.Errorf("cannot assign %s to %s", value.ExprType(), target.ExprType())
 	}
+	value, err = narrowStore(target.ExprType(), value, a.Value)
+	if err != nil {
+		return nil, err
+	}
 	return &ir.Assign{Target: target, Value: value}, nil
+}
+
+// narrowStore applies the integer store rules (#782) to a value assigned
+// to a target of type t. IEC 61131-3 converts implicitly only when
+// widening, so a value of a declared width wider than t's is refused
+// (write DINT_TO_INT, which wraps), and so is an integer literal t cannot
+// hold. What is left stores wrapped to t's width: arithmetic never wraps
+// (#326), so INT + INT = 60000 would otherwise sit in an INT, where a PLC
+// holds -5536.
+func narrowStore(t *ir.Type, value ir.Expr, src Expression) (ir.Expr, error) {
+	lo, hi, ok := ir.IntRange(t.Name)
+	vt := value.ExprType()
+	if !ok || t.Kind != ir.TypeInt || t.Enum != nil || vt == nil || !vt.IsInteger() || vt.Enum != nil {
+		return value, nil
+	}
+	if vt.Name == "" {
+		// A literal, negated or not: in range, or refused.
+		if c, err := evalConstInt(src); err == nil {
+			if c < lo || c > hi {
+				return nil, fmt.Errorf("cannot assign %d to %s: it holds %d..%d; write a value in range, or %s(%d) to keep the low bits", c, t.Name, lo, hi, convName(vt, t), c)
+			}
+			return value, nil
+		}
+	}
+	if _, isLit := value.(*ir.Lit); isLit {
+		return value, nil
+	}
+	if vt.Name != "" && vt.BitWidth() > t.BitWidth() {
+		return nil, fmt.Errorf("cannot assign %s to %s: an implicit conversion only widens; write %s_TO_%s(…), which keeps the low bits", vt.Name, t.Name, vt.Name, t.Name)
+	}
+	if vt.Name == t.Name && !vt.Computed {
+		return value, nil // a declared value of the target's own type
+	}
+	return ir.StoreWrap(value, t), nil
+}
+
+// convName is the conversion a refusal suggests: DINT_TO_INT, or TO_INT
+// for an untyped value.
+func convName(vt, t *ir.Type) string {
+	if vt.Name == "" {
+		return "TO_" + t.Name
+	}
+	return vt.Name + "_TO_" + t.Name
 }
 
 // ─── Expression lowering ──────────────────────────────────────────────────

@@ -463,6 +463,40 @@ func fitInt(v int64, t convType) int64 {
 	return int64(u)
 }
 
+// IntRange is the value range of the integer type declared as name
+// (SINT is -128..127, UINT 0..65535); ok is false for any other name and
+// for the 64-bit types, whose range is the VM's own.
+func IntRange(name string) (lo, hi int64, ok bool) {
+	t, found := convTypeNamed(name)
+	if !found || t.class != ccInt || t.width == 0 || t.width >= 64 {
+		return 0, 0, false
+	}
+	if t.signed {
+		return -(int64(1) << (t.width - 1)), int64(1)<<(t.width-1) - 1, true
+	}
+	return 0, int64(1)<<t.width - 1, true
+}
+
+// StoreWrap wraps x, an integer about to be stored into a variable of
+// type t, to t's width: the low bits, read signed or unsigned as t is, as
+// DINT_TO_INT does (#782). A PLC stores INT + INT = 60000 into an INT as
+// -5536; integer arithmetic itself never wraps (#326), so the store does.
+// x is returned as is when t is not an integer narrower than 64 bits.
+func StoreWrap(x Expr, t *Type) Expr {
+	if t == nil || t.Kind != TypeInt || t.Enum != nil {
+		return x
+	}
+	ct, ok := convTypeNamed(t.Name)
+	if !ok || ct.class != ccInt || ct.width == 0 || ct.width >= 64 {
+		return x
+	}
+	return &Call{Name: "TO_" + t.Name, Args: []Expr{x}, T: t, Fn: func(args []Value) (Value, error) {
+		v := args[0]
+		v.I = fitInt(v.I, ct)
+		return v, nil
+	}}
+}
+
 // intRange is t's value range as float64 bounds [lo, hiExcl).
 func intRange(t convType) (lo, hiExcl float64) {
 	if t.signed {

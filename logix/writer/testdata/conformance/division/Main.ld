@@ -21,7 +21,7 @@ VAR_EXTERNAL
 END_VAR
 LD
   RUNG div (* DIV into a DINT and an INT *)
-    { dq := a / b; iq := a / 2 }
+    { dq := a / b; iq := DINT_TO_INT(a / 2) }
 
   RUNG cpt (* CPT into a DINT *)
     { dc := a / b + c }

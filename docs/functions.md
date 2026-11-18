@@ -272,13 +272,18 @@ details, `type:` forms and `init:` forms (TIME members, arrays).
   are float64. The declared name is kept on the type, so a diagnostic
   says `DINT` or `WORD` for a variable declared that way, and
   [partial access](#bit-operations) knows a `DINT` has 32 bits.
-- **Arithmetic does not wrap at the declared width.** This is deliberate:
-  an `INT` holding 32767 plus 1 is 32768, not -32768 as on a PLC. A silent
-  wrap turns a totaliser or a counter into a wrong number with no fault,
-  and every seam on the tag bus carries the full value anyway. The width
-  is applied where you ask for it: a conversion (`TO_INT`, `DINT_TO_INT`)
-  wraps to the target, as on Codesys. A program that relies on a counter
-  rolling over should convert or `MOD` explicitly.
+- **A store wraps at the declared width; an implicit conversion only
+  widens** ([#782](https://github.com/joyautomation/nautilus/issues/782)).
+  Arithmetic is computed in 64 bits and never wraps on its own, so
+  `d1 + d2` keeps every bit while it is an expression. Storing it into a
+  declared integer keeps that type's low bits, read signed or unsigned as
+  the type is: an `INT` holding 32767 plus 1 is -32768, a `UINT` at 0
+  minus 1 is 65535, as on a PLC. An assignment that would narrow a
+  declared width (`i := d` with `d : DINT`), or store a literal the type
+  cannot hold (`i := 70000`), is a compile error that names the
+  conversion to write (`DINT_TO_INT(d)`, which wraps), as IEC 61131-3
+  converts implicitly only when widening. Store into a `LINT` to keep a
+  total that outgrows 32 bits.
 - **Signed with unsigned widens** to the narrowest signed type that holds
   both (`INT + UINT` is a `DINT`), as the
   [common type](#operators) rules below say, rather than being refused as
@@ -413,7 +418,7 @@ means the block accepts 2+ inputs (the `+` pin in the FBD editor).
 
 | Name | Arguments | Result | Behavior |
 | --- | --- | --- | --- |
-| `AND`, `OR`, `XOR` | n-ary BOOL (or INT for bitwise) | same | logical on BOOL; bitwise on INT, over all 64 bits (`-8 AND 6` = 0) |
+| `AND`, `OR`, `XOR` | n-ary BOOL (or INT for bitwise) | same | logical on BOOL; bitwise on INT, two's complement (`-8 AND 6` = 0); the result stores into its target's width |
 | `NOT` | 1 BOOL/INT | same | negation on BOOL; bitwise complement on INT (`NOT 0` = -1, `NOT 12` = -13) |
 | `ADD` | n-ary numeric | common type | sum |
 | `SUB` | 2 numeric | common type | difference |
@@ -441,8 +446,8 @@ to without loss, the standard's implicit widening:
 
 The type is what a diagnostic names (`s := d1 + d2` into a STRING says
 "cannot assign DINT to STRING"). It does not cut the value: arithmetic
-never wraps (see [Types](#types)), and `TO_<type>` of an expression reads
-every bit, so `TO_INT(d1 + d2)` with both at 40000 is 14464, the same as
+never wraps until it is stored (see [Types](#types)), and `TO_<type>` of
+an expression reads every bit, so `TO_INT(d1 + d2)` with both at 40000 is 14464, the same as
 `DINT_TO_INT(80000)`. An integer with a REAL is a REAL.
 
 The comparison row is the ladder-relevant one: those six are the
@@ -513,10 +518,10 @@ and words 0..1, so `d.%X32` or `w.16` on a `WORD` is a compile error that
 names the type. Ladder contacts and coils and FBD wires take every form
 (`Alarms.%X3`). Pinned in `lang/conformance/st-partial-access`.
 
-Caveat: the runtime's integers are 64-bit, so rotates and arithmetic
-operate over 64 bits — a `WORD` you think of as 16 bits rotates as a 64-bit
-value. Only partial access, diagnostics and the [conversions](#type-conversions)
-use the declared width.
+Shifts and rotates act on the first operand's declared width (#782): `ROL`
+of a `WORD` at 16#8000 by 1 is 1, and `SHL` past 16 bits leaves 0. An
+operand of no declared width (a literal, an arithmetic result) is shifted
+over 64 bits.
 
 ### Strings
 
@@ -587,8 +592,8 @@ That is 294 `X_TO_Y` functions, plus:
   16#FFFF. This is what Codesys documents ("the high bytes are lost") and
   what TIA writes (TIA also drops ENO); the standard calls the
   integer↔bit-string ones a binary transfer. Saturating would match none of
-  them. Arithmetic still never wraps (see [Types](#types)); a conversion is
-  the one place the declared width cuts.
+  them. Arithmetic never wraps until it is stored (see [Types](#types)); a
+  conversion and a store are where the declared width cuts.
 - **The argument is read as its own type first.** A variable keeps a 64-bit
   value at run time, so `UINT_TO_DINT(u)` with `u` at -1 sees the UINT a PLC
   would hold, 65535. Pass a `DINT` to `INT_TO_REAL` and it is read as an
