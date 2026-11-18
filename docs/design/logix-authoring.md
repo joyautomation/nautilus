@@ -471,7 +471,7 @@ it. Tested against a fake agent and the in-repo emulator.
 
 **On the controller (2026-10-03, James created it):** Echo 5580 v38 in
 slot 0, bound to the VM's Tailscale address; comm path
-`AB_ETH-1\100.93.56.45\Backplane\0`, found by probing slots over
+`AB_ETH-1\192.0.2.21\Backplane\0`, found by probing slots over
 EtherNet/IP and reading FT Linx's driver list (no device had been browsed;
 the path resolves anyway). An upload from a never-downloaded controller
 fails with `RxE_NOT_FOUND`; deploy now reads that as "first download".
@@ -1412,8 +1412,15 @@ an array index count as computations of their own. Two divergences stay,
 as they do for every value: a REAL is 32 bits on the controller and 64 in
 nautilus, and a REAL with no value in the target faults the nautilus scan
 where the controller rounds it and stores the result's low bits (below).
-Ladder is unchanged:
-`{ y := X_TO_Y(v) }` was and is refused by `logix/data-op`
+In ladder (#777), `{ y := X_TO_Y(v) }` with the conversion as the whole
+right-hand side, into a tag of type Y, is the box's own store: REAL → SINT/
+INT/DINT (the store rounds halves to even, verified below), DINT/INT →
+INT/SINT and a timer's TIME → SINT/INT/DINT (the store keeps the low
+bits: Logix's documented integer conversion, not yet run on a
+controller). The box is written as it would be for `{ y := v }`. The
+import writes exactly these conversions for a MOV, an arithmetic box or
+a CPT that narrows, so a brownfield rung round-trips. Any other
+conversion in a ladder assignment is still refused by `logix/data-op`
 (`logix/operand` in a compare).
 
 **Verified on Echo** (v38, 1756-L85E emulation, 2026-10-14, #297): the
@@ -2442,7 +2449,7 @@ Z: (client work).
 - This is a proof of concept with kill criteria (§7a). Check the SDK licence
   terms during Phase A, and at the end of each phase measure every criterion
   and log it in §7b before asking James whether to continue.
-- Echo: `ssh echo1` (10.154.92.210; CIP on :44818 when Tailscale refuses).
+- Echo: `ssh echo1` (192.0.2.20; CIP on :44818 when Tailscale refuses).
   Fast Startup is off; restart with `incus restart echo-vm --timeout 300`.
   Don't change the controller's mode without asking James.
 

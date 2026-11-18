@@ -794,8 +794,20 @@ func decodedValue(dec *xml.Decoder, se xml.StartElement) (any, error) {
 		}
 		return nil, nil
 	case "Array", "ArrayMember":
+		// An element of an array of atomics carries only its Value; its
+		// type and radix are the array's (a BOOL[32]'s set bit is TRUE,
+		// not the number 1).
+		elemType, elemRadix := attr(se, "DataType"), attr(se, "Radix")
 		var elems []any
 		err := walk(dec, func(se xml.StartElement) error {
+			if se.Name.Local == "Element" && attr(se, "Value") != "" && attr(se, "DataType") == "" {
+				radix := attr(se, "Radix")
+				if radix == "" {
+					radix = elemRadix
+				}
+				elems = append(elems, scalarValue(elemType, radix, attr(se, "Value")))
+				return skip(dec)
+			}
 			v, err := decodedValue(dec, se)
 			if err != nil {
 				return err

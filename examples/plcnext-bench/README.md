@@ -102,19 +102,30 @@ says so; `naut plcnext tags` derives `tags/plcnext.yaml` from it.
 import plcnext_devices.yaml --transport shm` generates the same modules
 and bindings from it (a test in `plcnext/` holds the two equal).
 
+## Without the controller
+
+`sim.yaml` is the same program with the `memory` driver: the inputs are
+tags you write (`DI_00`..`DI_03` are the board's pushbuttons S1..S4,
+`SliderV` is the 0–10 V slider, which `board.st` puts on `AI_00`,
+`SupplyMissing` reads `0x8020` on the analog element, and `AXC__Online` false is an
+outage). `naut run -m sim.yaml .` on a laptop, `naut test -m sim.yaml .`
+for the same suite. Nothing about the bus or its timing is simulated.
+
 ## Deploy, from nothing
 
 ```sh
+PLC=192.0.2.10   # the controller's address (this one is a documentation placeholder)
+
 # 1. BusConductor as its own project, from upstream, with this example's three edited files on top
 git clone https://github.com/PLCnext/BusConductor /tmp/bc
 mkdir -p /tmp/bcp && cp -r /tmp/bc/generic_axioline/. /tmp/bc/no_engineer/. /tmp/bcp/
 cp controller/PCWE.gds.config   /tmp/bcp/Plc/Gds/        # the two Axioline connectors
 cp controller/pcwe.plm.config   /tmp/bcp/Plc/Plm/        # library path inside this project dir
 cp controller/PCWE.opcua.config /tmp/bcp/Services/OpcUA/ # GdsPortsToProvide=All (optional: lets an OPC UA client see the GDS)
-tar czf BusConductor-project.tgz -C /tmp/bcp . && scp BusConductor-project.tgz admin@192.168.82.216:/opt/plcnext/
+tar czf BusConductor-project.tgz -C /tmp/bcp . && scp BusConductor-project.tgz admin@$PLC:/opt/plcnext/
 
 # 2. on the controller: install it, point `current` at it, restart the runtime (~1 min)
-ssh admin@192.168.82.216
+ssh admin@$PLC
 mkdir -p /opt/plcnext/projects/BusConductor
 tar xzf /opt/plcnext/BusConductor-project.tgz -C /opt/plcnext/projects/BusConductor
 cd /opt/plcnext/projects && rm current && ln -s BusConductor current
@@ -122,14 +133,14 @@ sudo /etc/init.d/plcnext restart
 
 # 3. nautilus
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags='-s -w' -o naut-arm ./cmd/naut
-scp naut-arm admin@192.168.82.216:/opt/plcnext/apps/nautilus/naut
-scp -r examples/plcnext-bench admin@192.168.82.216:/opt/plcnext/apps/nautilus/
-ssh admin@192.168.82.216 'cd /opt/plcnext/apps/nautilus && ./naut plcnext browse'   # CONFIGURED=true NUM_MODULES=4 RUN=true + both images
+scp naut-arm admin@$PLC:/opt/plcnext/apps/nautilus/naut
+scp -r examples/plcnext-bench admin@$PLC:/opt/plcnext/apps/nautilus/
+ssh admin@$PLC 'cd /opt/plcnext/apps/nautilus && ./naut plcnext browse'   # CONFIGURED=true NUM_MODULES=4 RUN=true + both images
 # 4. the shim (transport: shm) — build, deploy and recovery in rt/plcnext-io/README.md;
 #    before its restart, pin the shim to CPU 1 and naut to CPU 0 (its README's lateness table says why)
-ssh admin@192.168.82.216 'cd /opt/plcnext/apps/nautilus && echo 1 > io/nautilus_io.cpu && echo 0 > naut.cpu'
-ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/naut plcnext shm            # status 0x0f: PLC started, frames, RUN
-ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh   # dashboard + tag API on :8080
+ssh admin@$PLC 'cd /opt/plcnext/apps/nautilus && echo 1 > io/nautilus_io.cpu && echo 0 > naut.cpu'
+ssh admin@$PLC /opt/plcnext/apps/nautilus/naut plcnext shm            # status 0x0f: PLC started, frames, RUN
+ssh admin@$PLC /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh   # dashboard + tag API on :8080
 ```
 
 **Surviving a reboot.** The controller has no systemd and `admin`
@@ -139,7 +150,7 @@ starts `naut run` for this project unless it is already running (pid in
 `naut.pid`, log in `naut-run.log`, one 1 MB generation kept), so
 
 ```sh
-ssh admin@192.168.82.216 'printf "@reboot %s\n* * * * * %s\n" \
+ssh admin@$PLC 'printf "@reboot %s\n* * * * * %s\n" \
   /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh \
   /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh | crontab -'
 ```
@@ -186,6 +197,48 @@ shim's watchdog dropped the frame) the mirrored outputs stay off until
 `AXC__Outages` and `AXC__WatchdogTrips` go into the `IoHold` block in
 `lib/io_hold.st`. That is tested in virtual time only, not yet on the
 controller.
+
+## The 3D screen
+
+`hmi/` is a small SvelteKit page that draws the station as it stands on
+the desk: the starter kit's black board leaning back in its two feet,
+the DIN rail, the feed-through terminals, the AXC F 2152 and the four
+Smart Elements in their backplane, two over two (slots 1 and 2 down the
+left column, 3 and 4 down the right: DO16 over DI16, the cover over the
+AI4 U, as on the bench), and on the board the four pushbuttons and
+the 0 to 10 V slider. Each of the DO16's and DI16's sixteen lamps is lit
+from its tag (lamp 01 is `DO_00`, the heartbeat is lamp 16). The
+pushbuttons are momentary, labelled S4 at the top to S1 at the bottom,
+and are inputs 04 to 01: the bottom one follows `DI_00`, the top one
+`DI_03`, each sitting in with a lit collar while it is held. The slider's knob
+follows `AI_00` (0 to 30000 counts taken as 0 to 10 V); while the AI4 U
+reports `0x8020` the knob is parked grey at 0 V, the tag under the
+element reads "supply missing" and the element's E lamp is red. A side
+panel has the driver's status and the scan times. Hovering a channel or
+a button names its tag. It only reads: one `/api/stream`, held only while
+the tab is showing (a browser allows six connections to a controller
+across all its tabs), nothing written.
+
+```sh
+cd hmi
+npm install
+npm run build                                          # → hmi/build; do this before `naut build`, which embeds it
+CONTROLLER_URL=http://$PLC:8080 npm run dev  # or work on it against the controller
+```
+
+The model is plain Threlte (`hmi/src/lib/Axc.svelte`) placed inside
+`SceneView` from `@joyautomation/nautilus-hmi-3d`. It is not a
+`*.scene.json`, so `naut check` does not hold its tag names to the
+project. The board's size and lean are measured off a capture of the
+bench, and the faces and positions follow photographs of it. The wiring
+is in `hmi/src/lib/wiring.ts`: each wire's two terminals and its path.
+`node hmi/tools/check-wiring.mjs` checks, without drawing anything, that
+every end is seated in its terminal and that no wire passes through a
+housing, the rail, the board, a foot or the desk. Of the
+controller's own lamps, RUN is lit while frames arrive and D from the
+driver's status, as are the backplane's; the rest are drawn dark. In a
+tall window the board runs off the sides so the station, the buttons
+and the slider stay large.
 
 ## Timing, honestly
 

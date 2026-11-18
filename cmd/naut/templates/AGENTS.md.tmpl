@@ -372,15 +372,25 @@ naut builds the operator screen from the project itself, with no npm, and
   a 1920×1080 screen under naut's bar. naut's pages fit the whole drawing
   to the window, so a taller canvas is drawn smaller, never cut off; in an
   app, `<Mimic fit="contain">` does the same.
-- Lay the pipes out so an operator can follow each one by eye. Put a
-  header on the side of the equipment its lines leave from (lines leaving
-  the top run to headers above, lines leaving the bottom to headers
-  below), nearest first in the order the drops reach them, so no drop
-  crosses more than two headers to reach its own. Every drop still runs to
-  its header: an `OffPage` connector is for a line that goes on to another
-  screen, never a way round a crossing. A pipe that ends on another joins
-  it, and the screen dots the tee; one that crosses is drawn broken under
-  it.
+- Draw every pipe by what it connects and let the screen route it:
+  `"routing": "auto"`, with `from` and `to` each a port
+  (`{"equip": "XV101", "port": "bottom"}`) or another pipe it tees into
+  (`{"pipe": "AIR_HDR"}`), and no points. The screen draws it square,
+  clear of equipment and labels, with the fewest bends and crossings; it
+  dots each tee, and a pipe that crosses is drawn broken under the other.
+  A header is a pipe too: route it between the equipment or `OffPage`
+  connectors at its ends, and run each drop to it with
+  `{"pipe": "AIR_HDR"}` (in a unit, `"from": {"equip": "XV{n}04", "port":
+  "top"}, "to": {"pipe": "AIR_HDR"}`). Points on a routed pipe are
+  waypoints it passes through; add one only to steer a line.
+- Lay the pipes out so an operator can follow each one by eye, and leave
+  each line a lane. Put a header on the side of the equipment its lines
+  leave from (lines leaving the top run to headers above, lines leaving
+  the bottom to headers below), nearest first in the order the drops reach
+  them, so no drop crosses more than two headers to reach its own, and
+  keep labels off the way between a port and its header. Every drop still
+  runs to its header: an `OffPage` connector is for a line that goes on to
+  another screen, never a way round a crossing.
 - Name every valve, instrument and machine on the drawing as an operator
   says it, beside its symbol: Pump 1, Pump 2, Wetwell 101, Check Valve 1,
   Flow, Level, High Switch, Low Switch, Inlet Valve. ISA tag numbers

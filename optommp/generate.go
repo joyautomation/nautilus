@@ -41,8 +41,13 @@ type ManifestOptions struct {
 	// Quality adds a _Quality tag (the processor's code) for every analog channel.
 	Quality bool
 	// ScratchBits / ScratchInts / ScratchFloats add that many writable
-	// scratchpad tags from element 0.
+	// scratchpad tags from element 0: values nautilus publishes.
 	ScratchBits, ScratchInts, ScratchFloats int
+	// ScratchBitsIn / ScratchIntsIn / ScratchFloatsIn add that many
+	// read-only scratchpad tags right after the writable ones of their
+	// kind: values another client (a PAC Control strategy, groov Manage's
+	// API, Node-RED) writes for nautilus to read. One writer per element.
+	ScratchBitsIn, ScratchIntsIn, ScratchFloatsIn int
 	// CustomArea, Stream and Watchdog are copied into the manifest
 	// (Manifest documents them); Watchdog nil leaves the unit's alone.
 	CustomArea bool
@@ -112,14 +117,14 @@ func GenerateManifest(ch Chassis, o ManifestOptions) (Manifest, error) {
 			}
 		}
 	}
-	scratch := func(n int, letter, point string) {
-		for i := 0; i < n; i++ {
-			m.Tags = append(m.Tags, Binding{Name: fmt.Sprintf("%s_SP_%s%d", o.ID, letter, i), Point: point, Index: i, Writable: true})
+	scratch := func(out, in int, letter, point string) {
+		for i := 0; i < out+in; i++ {
+			m.Tags = append(m.Tags, Binding{Name: fmt.Sprintf("%s_SP_%s%d", o.ID, letter, i), Point: point, Index: i, Writable: i < out})
 		}
 	}
-	scratch(o.ScratchBits, "B", PointScratchBit)
-	scratch(o.ScratchInts, "I", PointScratchInt)
-	scratch(o.ScratchFloats, "F", PointScratchFloat)
+	scratch(o.ScratchBits, o.ScratchBitsIn, "B", PointScratchBit)
+	scratch(o.ScratchInts, o.ScratchIntsIn, "I", PointScratchInt)
+	scratch(o.ScratchFloats, o.ScratchFloatsIn, "F", PointScratchFloat)
 
 	if len(m.Tags) == 0 {
 		return Manifest{}, fmt.Errorf("optommp: the chassis reports no configured I/O channel")
@@ -258,6 +263,12 @@ func ManifestTagsYAML(m Manifest, command, tagsPath string) ([]byte, error) {
 		case PointWatchdogTrips:
 			t.Desc = "times the unit's watchdog may have driven outputs to their watchdog values (driver status)"
 		}
+		switch b.Point {
+		case PointScratchBit, PointScratchInt, PointScratchFloat:
+			if !b.Writable {
+				t.Desc += ", read-only (another client writes it)"
+			}
+		}
 		if b.Desc != "" {
 			t.Desc = b.Desc + " — " + t.Desc
 		}
@@ -304,6 +315,15 @@ func ManifestCommand(o ManifestOptions) string {
 	}
 	if o.ScratchFloats > 0 {
 		fmt.Fprintf(&b, " --scratch-floats %d", o.ScratchFloats)
+	}
+	if o.ScratchBitsIn > 0 {
+		fmt.Fprintf(&b, " --scratch-bits-in %d", o.ScratchBitsIn)
+	}
+	if o.ScratchIntsIn > 0 {
+		fmt.Fprintf(&b, " --scratch-ints-in %d", o.ScratchIntsIn)
+	}
+	if o.ScratchFloatsIn > 0 {
+		fmt.Fprintf(&b, " --scratch-floats-in %d", o.ScratchFloatsIn)
 	}
 	if o.CustomArea && o.Stream == 0 {
 		b.WriteString(" --custom-area")

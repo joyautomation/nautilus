@@ -23,6 +23,30 @@ the firmware starts beside its own (the [in-process
 tier](#faster-the-in-process-tier)). PLCnext Engineer is never opened, and
 no IEC program of Phoenix Contact's runs.
 
+## Without the controller
+
+The program, its tests and its screens do not need the hardware. The
+bench example carries a second manifest, `sim.yaml`, with the same
+program and the plcnext driver swapped for `memory`. Its inputs are tags
+you write in place of the board and the bus:
+
+```sh
+cd examples/plcnext-bench
+naut test -m sim.yaml .     # the acceptance suite, in virtual time
+naut run  -m sim.yaml .     # dashboard + tag API on http://localhost:8080
+```
+
+| Write | Stands in for |
+| --- | --- |
+| `DI_00` … `DI_03` | the board's pushbuttons S1 … S4 (momentary: set it back to `false`) |
+| `SliderV` (0 … 10) | the 0–10 V slider; `board.st` puts it on `AI_00` as 0 … 30000 counts |
+| `SupplyMissing` | the analog element without its supply: every channel reads `0x8020` |
+| `AXC__Online`, `AXC__Outages` | the driver's status, so an outage and the outputs' hold can be tried |
+
+What it cannot stand in for is the controller side: the Axioline timing,
+the in-process tier and the real-time numbers below were all measured on
+the bench unit.
+
 ## What you need
 
 - A PLCnext controller with its Axioline modules on the local bus, and

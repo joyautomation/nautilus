@@ -44,7 +44,9 @@ Usage:
                           responses assert exactly (-run re, -v, -json).
   naut build [dir]    Emit a self-contained controller binary from a
                           manifest project (-o name). Ships like any compiled
-                          program; no Go toolchain involved.
+                          program; no Go toolchain involved. -runtime <naut>
+                          builds on another naut binary: a release's
+                          linux_arm64 naut makes an ARM64 controller.
 
                           run, test, and build take -m <manifest> to load one
                           other than nautilus.yaml. That is how one project
@@ -72,6 +74,10 @@ Usage:
                           manifest + tag file for the opcua driver),
                           browse (print its variables), tags (re-derive
                           the tag file, no server).
+  naut devices <cmd>  Virtual field devices (devices.yaml): up (serve each
+                          on the real device's protocol and register map,
+                          with simulators and a process model), check,
+                          profiles, show.
   naut scene <cmd>    3D HMI scene tools: init (generate a starter
                           *.scene.json from the manifest's struct tags —
                           one node per UDT tag a kind can draw, laid out
@@ -160,6 +166,8 @@ func main() {
 		os.Exit(runModbus(os.Args[2:]))
 	case "opcua":
 		os.Exit(runOPCUA(os.Args[2:]))
+	case "devices":
+		os.Exit(runDevices(os.Args[2:]))
 	case "optommp":
 		os.Exit(runOptommp(os.Args[2:]))
 	case "plcnext":

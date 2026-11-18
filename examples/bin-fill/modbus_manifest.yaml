@@ -1,0 +1,11 @@
+sources:
+  - { id: CONV, host: 10.77.1.101, port: 502, unitid: 1 }
+  - { id: RB1,  host: 10.77.1.102, port: 502, unitid: 1 }
+tags:
+  - { name: Conv_CW,    source: CONV, table: holding, address: 0,   format: uint16, writable: true }
+  - { name: Conv_Ref,   source: CONV, table: holding, address: 1,   format: int16,  writable: true }
+  - { name: Conv_SW,    source: CONV, table: holding, address: 3,   format: uint16 }
+  - { name: Conv_Speed, source: CONV, table: holding, address: 4,   format: int16 }
+  - { name: Conv_Amps,  source: CONV, table: holding, address: 103, format: uint16, scale: 0.1 }
+  - { name: RB_Out,     source: RB1,  table: holding, address: 199, format: uint16, writable: true }
+  - { name: RB_In,      source: RB1,  table: holding, address: 99,  format: uint16 }

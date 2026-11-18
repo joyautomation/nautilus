@@ -1,0 +1,13 @@
+# The project tools/deploy/check.sh deploys: two releases of it differ
+# only in the THIS_RELEASE constant, so the check can tell which one runs.
+name: deploy-check
+retain: {}
+tasks:
+  - program: main.st
+    scan: 10ms
+tags:
+  - { name: Release, role: state, type: DINT, init: 0 }
+  - { name: SP, role: setpoint, type: REAL, init: 1.5 }
+  - { name: Scans, role: state, type: DINT, init: 0 }
+server:
+  addr: "127.0.0.1:18090"

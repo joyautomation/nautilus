@@ -1,0 +1,35 @@
+profile: abb-acs580-fmbt21
+title: ABB ACS580 with FMBT-21, Modbus/TCP, ABB Drives profile Enhanced
+maker: ABB
+model: ACS580 + FMBT-21
+version: 1
+docs:
+  - id: fena
+    title: "FENA-01/-11/-21 Ethernet adapter module user's manual: Modbus/TCP, ABB Drives profile (the Classic and Enhanced register maps FMBT-21 and RETA-01 present)"
+    code: 3AUA0000093568 Rev E
+    url: https://library.e.abb.com/public/d6a31af1808043ba8ef53980031041ea/EN_FENA01_11_21_UM_E_A4.pdf
+  - id: measured
+    title: "A deployed controller's program writes 400001-400002 and reads 400051-400053 and parameter 01.07 at 400107 (motor current, tenths of an ampere) on an ACS580 with FMBT-21 in the Enhanced layout; validated in the field 2026-10."
+protocol: modbus
+modbus:
+  port: 502
+  unit-id: 1
+points:
+  - { name: ControlWord, type: WORD, table: holding, address: 0, writable: true, desc: "ABB Drives profile control word", doc: "fena pp. 91-93, register (4)00001 p. 104" }
+  - { name: Reference1,  type: INT,  table: holding, address: 1, writable: true, desc: "Reference 1, +-20000 = +-100 % speed scaling", doc: "fena pp. 96-97, register (4)00002 p. 104" }
+  - { name: Reference2,  type: INT,  table: holding, address: 2, writable: true, desc: "Reference 2, +-10000 = +-100 %", doc: "fena p. 97, register (4)00003 p. 104" }
+  - { name: "DataOut{n}", type: WORD, repeat: 12, table: holding, address: 3, writable: true, desc: "DATA OUT {n} (unused here)", doc: "fena registers (4)00004-(4)00015 p. 104" }
+  - { name: StatusWord,  type: WORD, table: holding, address: 50, desc: "ABB Drives profile status word", doc: "fena pp. 93-94, register (4)00051 p. 104" }
+  - { name: Actual1,     type: INT,  table: holding, address: 51, desc: "Actual 1, speed, +-20000 = +-100 %", doc: "fena p. 97, register (4)00052 p. 104" }
+  - { name: Actual2,     type: INT,  table: holding, address: 52, desc: "Actual 2 (drive-parameter dependent; 0 here)", doc: "fena register (4)00053 p. 104" }
+  - { name: "DataIn{n}", type: WORD, repeat: 12, table: holding, address: 53, desc: "DATA IN {n} (reads 0 here)", doc: "fena registers (4)00054-(4)00065 pp. 104-105" }
+  - { name: Current,     type: REAL, table: holding, address: 106, format: uint16, scale: 0.1, unit: A,
+      desc: "Parameter 01.07, motor current", doc: "measured 400107; parameter address (4)00000 + 100 x group + index, fena p. 105" }
+simulator: { block: ABB_DRIVES_SIM, source: abb-drives.st }
+notes: |
+  The Enhanced layout: status, actual 1 and actual 2 at 400051-400053, DATA
+  OUT 1-12 at 400004-400015 and DATA IN 1-12 at 400054-400065. A client that
+  reads 400004 for the status word (the Classic layout) gets DATA OUT 1, which
+  reads 0, the symptom of a layout mismatch on the real drive too. Parameters
+  other than the motor current are not mapped. ALARM, ABOVE_LIMIT and
+  FBA_ERROR stay 0; Actual 2 reads 0; always in remote.
