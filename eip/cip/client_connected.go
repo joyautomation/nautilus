@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // SendUnitData sends a connected explicit (Class 3) message on an established
@@ -39,18 +38,13 @@ func (c *Client) SendUnitData(ctx context.Context, connID uint32, seq uint16, se
 		return MessageRouterResponse{}, errors.New("cip client: not connected")
 	}
 	hdr := EncapHeader{Command: CmdSendUnitData, SessionHandle: c.sessHdl}
-	deadline := time.Now().Add(10 * time.Second)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = c.tcp.SetWriteDeadline(deadline)
+	defer arm(ctx, c.tcp)()
 	if _, err := c.tcp.Write(EncodeFrame(hdr, body)); err != nil {
-		return MessageRouterResponse{}, err
+		return MessageRouterResponse{}, cancelled(ctx, err)
 	}
-	_ = c.tcp.SetReadDeadline(deadline)
 	rhdr, payload, err := c.readFrame()
 	if err != nil {
-		return MessageRouterResponse{}, err
+		return MessageRouterResponse{}, cancelled(ctx, err)
 	}
 	if rhdr.Status != EncapStatusSuccess {
 		return MessageRouterResponse{}, fmt.Errorf("encap status 0x%x", rhdr.Status)
