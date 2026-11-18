@@ -391,7 +391,7 @@ The test plan defines exactly how it is measured (§4 there).
 | A (leader) | B+W elect B once A's lease has expired. The takeover is hot if B is in sync, cold with an alarm if not. |
 | The A–B link only | W keeps renewing A, so nothing changes. The stream stops, and B is marked out of sync. |
 | A cut from both B and W | A fences when its lease ends. B+W elect B after that. |
-| The leader starved between scans (#858) | Its elector still runs, but `Liveness` flags the overdue loop within `B ≤ lease/2`. The elector stops renewing at its next tick, and the gate closes half a lease after the last renew: within `B + lease/4 + lease/2` of the starvation's start. B is elected once the lease lapses. The last renew is at most a tick before detection, so B can't win until `lease/4` after the gate has closed: the two never overlap. A starved standby doesn't campaign. |
+| The leader starved between scans (#858) | Its elector still runs, but `Liveness` flags the overdue loop within `B ≤ lease/2`. The elector stops renewing at its next tick, and the gate closes half a lease after the last renew: within `B + lease/4 + lease/2` of the first missed slot. A slow task isn't late before its slot comes due, so a 10 s task is caught about 12 s after its last scan. B is elected once the lease lapses. The last renew is at most a tick before detection, so B can't win until `lease/4` after the gate has closed: the two never overlap. A starved standby doesn't campaign. |
 | Witness plus one controller | The lone survivor (§7). |
 | Everything starts at once | A+B, or either controller with W, forms a majority and elects. One controller alone at power-up **does not start writing** without the override. |
 
