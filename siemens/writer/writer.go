@@ -111,7 +111,8 @@ type Output struct {
 	// Symbol uses it to turn a nautilus tag path into a Web API symbol.
 	Roots map[string]string
 	// names are the readable names under each root, lower-cased: the
-	// manifest tags under "", a program's statics under its name.
+	// manifest tags under "", a program's statics under its name. The
+	// value says whether the name has members (an FB instance).
 	names map[string]map[string]bool
 }
 
@@ -128,16 +129,19 @@ func (o Output) Symbol(path string) (string, bool) {
 			if k == "" || !strings.EqualFold(k, head) {
 				continue
 			}
-			v, _, _ := strings.Cut(rest, ".")
-			if o.names[strings.ToLower(k)][strings.ToLower(v)] {
-				return root + "." + rest, true
+			v, member, deep := strings.Cut(rest, ".")
+			hasMembers, known := o.names[strings.ToLower(k)][strings.ToLower(v)]
+			if !known || deep && (!hasMembers || strings.Contains(member, ".")) {
+				return "", false
 			}
-			return "", false
+			return root + "." + rest, true
 		}
 	}
-	v, _, _ := strings.Cut(path, ".")
-	if root, ok := o.Roots[""]; ok && o.names[""][strings.ToLower(v)] {
-		return root + "." + path, true
+	// Tags are scalars in the first subset: no member path below one.
+	if root, ok := o.Roots[""]; ok && !strings.Contains(path, ".") {
+		if _, known := o.names[""][strings.ToLower(path)]; known {
+			return root + "." + path, true
+		}
 	}
 	return "", false
 }
@@ -167,7 +171,7 @@ func Write(in Input) (Output, []Diag, error) {
 	}
 	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]bool{"": {}}}
 	for _, g := range in.Globals {
-		out.names[""][strings.ToLower(g.Name)] = true
+		out.names[""][strings.ToLower(g.Name)] = false
 	}
 	// Every block name, lower-cased (TIA's are case-insensitive): a
 	// program named Tags would make an FB and a DB both "Tags".

@@ -336,3 +336,117 @@ func TestLadderIsWrittenThroughST(t *testing.T) {
 		}
 	}
 }
+
+// TestStoresThatChangeWidthOrSignednessWrap: nautilus wraps an integer
+// store into a type that cannot hold it (#800: -1 into a UINT is 65535);
+// an exact widening is written plain.
+func TestStoresThatChangeWidthOrSignednessWrap(t *testing.T) {
+	src := "PROGRAM P\nVAR a : INT; u : UINT; d : DINT; s : SINT; END_VAR\n" +
+		"u := INT_TO_UINT(a);\nd := INT_TO_DINT(a);\ns := DINT_TO_SINT(d);\nd := a;\nEND_PROGRAM\n"
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	fb := string(out.Files[0].Data)
+	for _, want := range []string{
+		"#u := LINT_TO_UINT(((INT_TO_LINT(#a)) MOD LINT#65536 + LINT#65536) MOD LINT#65536);",
+		"#d := INT_TO_DINT(#a);",
+		"#s := LINT_TO_SINT((((DINT_TO_LINT(#d)) + LINT#128) MOD LINT#256 + LINT#256) MOD LINT#256 - LINT#128);",
+		"#d := #a;",
+	} {
+		if !strings.Contains(fb, want) {
+			t.Errorf("missing %q in\n%s", want, fb)
+		}
+	}
+	if strings.Contains(fb, "INT_TO_UINT(#a)") {
+		t.Error("an out-of-range INT_TO_UINT is the CPU's guess; the writer must wrap")
+	}
+}
+
+// TestImplicitStoreThatChangesSignedness covers the bare store the review
+// found (u := a): written with nautilus's wrap, or refused by nautilus's
+// own lowering once #800's table is in.
+func TestImplicitStoreThatChangesSignedness(t *testing.T) {
+	src := "PROGRAM P\nVAR a : INT; u : UINT; END_VAR\nu := a;\nEND_PROGRAM\n"
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) > 0 {
+		if diags[0].Rule != "siemens/nautilus" {
+			t.Fatalf("%v", diags)
+		}
+		return
+	}
+	if fb := string(out.Files[0].Data); !strings.Contains(fb, "#u := LINT_TO_UINT(((INT_TO_LINT(#a)) MOD LINT#65536") {
+		t.Errorf("bare signedness change:\n%s", fb)
+	}
+}
+
+func TestLiteralOutOfRangeIsRefused(t *testing.T) {
+	_, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR u : USINT; END_VAR\nu := 300;\nEND_PROGRAM\n"}}})
+	if err != nil || len(diags) == 0 {
+		t.Fatalf("u := 300 into a USINT must be refused (by the writer or by nautilus): %v %v", diags, err)
+	}
+}
+
+func TestTimeLiterals(t *testing.T) {
+	for raw, want := range map[string]string{"5s": "T#5s", "1h30m": "T#1h30m", "250ms": "T#250ms", "-2s": "T#-2s", "24d": "T#24d"} {
+		if got, why := timeLit(raw); why != "" || got != want {
+			t.Errorf("timeLit(%q) = %q %q, want %q", raw, got, why, want)
+		}
+	}
+	for _, raw := range []string{"1500us", "3ns", "1.5s", "25d", "x"} {
+		if _, why := timeLit(raw); why == "" {
+			t.Errorf("timeLit(%q): want a refusal", raw)
+		}
+	}
+	// TIME#5s is a typed literal around a time literal: written once.
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR d : TIME; END_VAR\nd := TIME#5s;\nd := LT#1500us;\nEND_PROGRAM\n"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) != 1 || diags[0].Rule != "siemens/time" || diags[0].Line != 4 {
+		t.Fatalf("want one siemens/time on line 4 (LT#1500us), got %v %v", diags, out.Files)
+	}
+}
+
+func TestHoldsMatchesGoConversions(t *testing.T) {
+	samples := []int64{-1 << 40, -2147483649, -2147483648, -32769, -32768, -129, -128, -1, 0, 1, 127, 128, 255, 256,
+		32767, 32768, 65535, 65536, 2147483647, 2147483648, 4294967295, 4294967296, 1 << 40}
+	for from := range intWidth {
+		for to := range intWidth {
+			if from == "ULINT" || to == "ULINT" {
+				continue
+			}
+			lossless := true
+			for _, v := range samples {
+				if inRange(v, from) && !inRange(v, to) {
+					lossless = false
+				}
+			}
+			if holds(to, from) != lossless {
+				t.Errorf("holds(%s, %s) = %v, samples say %v", to, from, holds(to, from), lossless)
+			}
+		}
+	}
+}
+
+func TestSymbolRefusesMembersOfScalars(t *testing.T) {
+	out, diags, err := Write(Input{
+		Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; t : TON; END_VAR\nx := Level;\nEND_PROGRAM\n"}},
+		Globals:  []Global{{Name: "Level", Type: "REAL"}},
+		Tasks:    []Task{{Name: "main", Program: "P", Interval: time.Second}},
+	})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	for _, p := range []string{"P.x.y", "Level.x", "P.t.Q.z"} {
+		if s, ok := out.Symbol(p); ok {
+			t.Errorf("Symbol(%q) = %q, want no answer", p, s)
+		}
+	}
+	if s, ok := out.Symbol("P.t.ET"); !ok || s != `"P_DB".t.ET` {
+		t.Errorf("Symbol(P.t.ET) = %q %v", s, ok)
+	}
+}

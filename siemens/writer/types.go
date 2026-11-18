@@ -2,6 +2,7 @@ package writer
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/st"
@@ -199,4 +200,89 @@ func zero(t string) (string, bool) {
 		return "T#0ms", true
 	}
 	return "", false
+}
+
+// intConstant evaluates an integer literal, or the negation of one.
+func intConstant(e st.Expression) (int64, bool) {
+	neg := false
+	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
+		neg, e = true, u.Operand
+	}
+	n, ok := e.(*st.NumberLit)
+	if !ok {
+		return 0, false
+	}
+	base := n.Base
+	if base == 0 {
+		base = 10
+	}
+	v, err := strconv.ParseInt(strings.ReplaceAll(n.Value, "_", ""), base, 64)
+	if err != nil {
+		return 0, false
+	}
+	if neg {
+		v = -v
+	}
+	return v, true
+}
+
+// inRange reports whether n fits the integer type t.
+func inRange(n int64, t string) bool {
+	w := intWidth[t]
+	if w.bits == 64 {
+		return w.signed || n >= 0
+	}
+	if w.signed {
+		h := int64(1) << (w.bits - 1)
+		return n >= -h && n < h
+	}
+	return n >= 0 && n < int64(1)<<w.bits
+}
+
+// timeLit prints a time literal for TIA's TIME, which is a 32-bit count of
+// milliseconds, or says why it cannot be written exactly: a sub-millisecond
+// unit (an LTIME literal such as LT#1500us lexes the same as a TIME one,
+// so this is also what refuses it) or a value beyond the 32-bit range.
+func timeLit(raw string) (string, string) {
+	r := strings.TrimSpace(raw)
+	body := strings.TrimPrefix(r, "-")
+	for i := 0; i < len(body); {
+		j := i
+		for j < len(body) && body[j] >= '0' && body[j] <= '9' {
+			j++
+		}
+		k := j
+		for k < len(body) && (body[k] < '0' || body[k] > '9') {
+			k++
+		}
+		unit := strings.ToLower(strings.TrimRight(body[j:k], "_"))
+		switch {
+		case j == i:
+			return "", fmt.Sprintf("time literal %s: only whole d, h, m, s and ms are written exactly", raw)
+		case unit == "d" || unit == "h" || unit == "m" || unit == "s" || unit == "ms":
+		default:
+			return "", fmt.Sprintf("time literal %s: only whole d, h, m, s and ms are written exactly (TIA's TIME counts milliseconds; an LTIME literal is not in the first subset)", raw)
+		}
+		i = k
+	}
+	if ms := int64(st.ParseTimeMs(body)); ms > 2147483647 {
+		return "", fmt.Sprintf("time literal %s is beyond TIA's TIME range (about 24.8 days)", raw)
+	}
+	return "T#" + r, ""
+}
+
+// holds reports whether every value of integer type from is a value of
+// integer type to: then a conversion between them is exact and needs no
+// wrap.
+func holds(to, from string) bool {
+	t, f := intWidth[to], intWidth[from]
+	switch {
+	case t.signed && f.signed:
+		return t.bits >= f.bits
+	case t.signed && !f.signed:
+		return t.bits > f.bits
+	case !t.signed && !f.signed:
+		return t.bits >= f.bits
+	}
+	return false
 }

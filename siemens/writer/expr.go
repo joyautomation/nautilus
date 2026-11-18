@@ -54,9 +54,12 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 	case *st.StringLit:
 		return st.QuoteString(e.Value)
 	case *st.TimeLit:
-		return "T#" + e.Raw
+		return pw.timeLit(e.Raw, e.Pos.Line)
 	case *st.TypedLit:
 		u := strings.ToUpper(e.TypeName)
+		if t, ok := e.Inner.(*st.TimeLit); ok && u == "TIME" {
+			return pw.timeLit(t.Raw, e.Pos.Line)
+		}
 		if u == "LTIME" {
 			pw.diag("siemens/ltime", e.Pos.Line, "LTIME is not in the first subset (nautilus's LTIME is milliseconds, TIA's nanoseconds)")
 			return ""
@@ -86,6 +89,14 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 	}
 	pw.diag("siemens/expression", lineAt(e), fmt.Sprintf("expression %T is not in the first subset", e))
 	return ""
+}
+
+func (pw *progWriter) timeLit(raw string, line int) string {
+	s, why := timeLit(raw)
+	if why != "" {
+		pw.diag("siemens/time", line, why)
+	}
+	return s
 }
 
 // widen wraps a narrow integer operand in a conversion to LINT, in wide
@@ -342,6 +353,19 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			if len(args) != 1 {
 				pw.diag("siemens/call", line, fmt.Sprintf("%s takes one argument", name))
 				return ""
+			}
+			// Between integer types nautilus wraps (#800); the CPU's
+			// answer for an out-of-range INT_TO_UINT is not pinned down,
+			// so the writer wraps explicitly instead.
+			if isInt(from) && isInt(to) {
+				if from == "ULINT" || to == "ULINT" {
+					pw.diag("siemens/int-width", line, name+" is not in the first subset")
+					return ""
+				}
+				if holds(to, from) {
+					return name + "(" + args[0] + ")"
+				}
+				return wrap(toLINT(from, args[0]), to)
 			}
 			return name + "(" + args[0] + ")"
 		}

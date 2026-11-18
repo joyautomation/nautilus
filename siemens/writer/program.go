@@ -160,7 +160,8 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 				lines = append(lines, line+";")
 				continue
 			}
-			pw.statics[strings.ToLower(v.Name)] = true
+			_, isInst := instances[u]
+			pw.statics[strings.ToLower(v.Name)] = isInst
 			if v.Initial != nil {
 				if _, isInst := instances[u]; isInst {
 					pw.diag("siemens/init", v.Pos.Line, fmt.Sprintf("%s: an instance initializer is not in the first subset", v.Name))
@@ -314,8 +315,9 @@ func (pw *progWriter) ident(name string, line int) string {
 }
 
 // store prints the value of an assignment to a target of type tt the way
-// nautilus stores it: integer arithmetic at 64 bits, wrapped to the
-// target's width; a 64-bit int (a counter's CV) wrapped likewise.
+// nautilus stores it (#800): integer arithmetic at 64 bits, and any
+// integer whose width or signedness differs from the target's, wrapped to
+// the target (-1 stored into a UINT is 65535).
 func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 	vt := pw.typ(v)
 	switch {
@@ -328,8 +330,28 @@ func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 		s := pw.expr(v, 0)
 		pw.wide = false
 		return wrap(s, tt)
-	case vt == "LINT" && narrow(tt):
-		return wrap(pw.expr(v, 0), tt)
+	case isInt(vt) && isInt(tt) && vt != tt:
+		if vt == "ULINT" || tt == "ULINT" {
+			pw.diag("siemens/int-width", line, "a store between ULINT and another integer type is not in the first subset")
+			return ""
+		}
+		if holds(tt, vt) {
+			return pw.expr(v, 0) // exact: TIA converts a widening store implicitly
+		}
+		return wrap(toLINT(vt, pw.expr(v, 0)), tt)
+	case vt == tAnyInt && isInt(tt):
+		if n, ok := intConstant(v); ok && !inRange(n, tt) {
+			pw.diag("siemens/int-width", line, fmt.Sprintf("%d does not fit a %s", n, tt))
+			return ""
+		}
 	}
 	return pw.expr(v, 0)
+}
+
+// toLINT widens an integer expression of type t to LINT.
+func toLINT(t, s string) string {
+	if t == "LINT" {
+		return s
+	}
+	return t + "_TO_LINT(" + s + ")"
 }
