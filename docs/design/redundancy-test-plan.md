@@ -119,6 +119,8 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the leader times its lease from the reply, not the request | design §3.1 | 2 |
 | the gate is judged on the elector's tick, not when it is read | design §3.2 | 3 |
 | a new leader applies alarm state before its `oplog` catch-up | design §1, `oplog` | 3 |
+| `Liveness` ignores a loop between scans (the behaviour before #858) | design §3.2, starvation | 3 |
+| a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |
 | the in-sync mark is not persisted | design §3.3 | 4 |
 | a stream frame of an older term is applied | I5 | 4 |
 | hot takeover with no image-age check | I5 | 4 |
@@ -225,6 +227,7 @@ T4 where only hardware can.
 | F4 | Orderly stop (SIGTERM, `systemctl stop`) | signal | The leader releases its lease, and the standby takes over before a lease would expire. | ✓ | ✓ | ✓ |
 | F5 | **Process pause** (SIGSTOP) for 0.25, 0.5, 1, 1.5 and 3 × lease | `kill -STOP/-CONT` | Below the fence: it resumes the same term, with no takeover. Above it: it fences, and on CONT it writes nothing (apart from the residual of design §3.4, which F35 measures) and comes back as standby. Sockets are closed with RST. | ✓ | ✓ | ✓ |
 | F6 | Hung scan (logic that never returns; a blocking driver call) | the existing nested-loop trigger | #621: the gate closes at lease/2, then takeover. A hung standby does not campaign. | ✓ | ✓ | |
+| F6b | **Leader starved between scans** (#858): its scan loop gets no CPU after a scan ends, while the elector's goroutine still runs | T2: the loop's ticks stop. T3: a `quorumtest` hook that blocks the loop between `end()` and the next `begin()`, plus a real case: the task pinned with `cpu:` and a SCHED_FIFO hog on the same core | `Liveness` flags it within `B = StallBound(period, lease/2)`. The elector stops renewing, and the gate closes within `B + lease/4 + lease/2` of the start. B takes over after the lease, with no overlap (I1). Rerun with the standby starved, which doesn't campaign, and with a healthy standby ticking but not scanning, which still acquires. | ✓ | ✓ | ✓ (FIFO hog) |
 | F7 | Starved elector (CPU throttled to 1–5%) | cgroup `cpu.max` | The gate is judged when read, so it closes on time. I1 holds. | ✓ | ✓ | |
 | F8 | **Partition A–B**, both directions | nftables | W renews the leader. The stream stops, and the standby is marked out of sync. | ✓ | ✓ | ✓ (cable pull) |
 | F9 | One-way cuts: A→B, B→A, **leader→voters only** (it can send but not receive) and voters→leader only | nftables, one direction | A–B one way: as F8, no flapping. A leader that can send but not receive fences at the end of its lease, backs off for one lease (design §3.1), and B is elected. A leader that can receive but not send fences, and B is elected. | ✓ | ✓ | |
@@ -501,7 +504,7 @@ then the override. It runs as a test, so it can't silently regress.
 | PR | Must pass before merge |
 |---|---|
 | 2 `quorum` + sim | T1. T2 matrix + 2,000 seeds. The PR-2 mutations caught (§3.3). F9, F15b, F22, F22b, F24–F26 and the vote half of F31 in T2. |
-| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3–F5, F8–F10, F12, F13, F15–F19, F30, F35 and F36, and §8.2. Every output path in design §3.4 meets its rules (I3, §3.4). §8.1. The PR-3 mutations caught. Kubernetes `leader` tests unchanged. |
+| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3–F5, F6b, F8–F10, F12, F13, F15–F19, F30, F35 and F36, and §8.2. Every output path in design §3.4 meets its rules (I3, §3.4). §8.1. The PR-3 mutations caught. Kubernetes `leader` tests unchanged. |
 | 4 stream + hot takeover | §6 in T2 and T3. I5 and I10 in the nightly run. §7 rolling update in T3. The PR-4 mutations caught, and the stream half of F31. |
 | 5 survivor + override | §8 in full. F16 and F17 with the device-watchdog assertion. The PR-5 mutations caught. |
 | 6 clients (#716) | §9 in T3, including F32–F34 for PROFINET. |
