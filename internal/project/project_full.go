@@ -48,7 +48,7 @@ func checkNetworkSections(m Manifest) error {
 	if m.Redundancy != nil {
 		for _, d := range append([]DriverConfig{m.Driver}, m.Drivers...) {
 			if strings.HasPrefix(strings.ToLower(d.Type), "profinet") {
-				return fmt.Errorf("driver %s with redundancy: is not supported yet: a takeover needs the station's floating IP address on the new leader, and redundancy: cannot name and check one yet (#787)", d.Type)
+				return fmt.Errorf("driver %s with redundancy: is not supported yet: a takeover needs the station's floating IP address on the new leader, and redundancy: cannot name and check one yet (#787 step 6)", d.Type)
 			}
 		}
 	}
