@@ -55,7 +55,7 @@ import { registerDiagramDescriptions } from "./diagramXref";
 import { IS_WEB, registerPlatform } from "./platform";
 import { registerAgentsMd } from "./agentsMd";
 import { runPreviewKey } from "./diagramKeys";
-import { apiFetch } from "./apiFetch";
+import { apiFetch, initApiAuth } from "./apiFetch";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -110,6 +110,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Before anything resolves the CLI: the managed install's directory is
   // part of the search.
   initCli(context);
+  // Where the origins the user lets their token go to are remembered.
+  initApiAuth(context);
   // Real-machine features (a test harness writing files, installing the
   // CLI, Logix, compiling user components) stay out of the web build, the
   // browser playground: platform.ts.

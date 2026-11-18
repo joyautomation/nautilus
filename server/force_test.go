@@ -141,7 +141,7 @@ func TestForceAuth(t *testing.T) {
 	}); rec.Code != 200 {
 		t.Errorf("token force = %d, want 200", rec.Code)
 	}
-	// Reads stay open.
+	// Reads by a trusted Host need no token.
 	if rec := call(t, tok, "GET", "/api/forces", ""); rec.Code != 200 {
 		t.Errorf("GET /api/forces = %d", rec.Code)
 	}

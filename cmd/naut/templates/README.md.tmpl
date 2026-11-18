@@ -42,7 +42,10 @@ go run .      # scan loop + tag API on http://localhost:8080
 | `GET /api/stream` | the same frame over SSE, 4 Hz |
 | `POST /api/tags` | `{"name": "TempSP", "value": 65}` |
 
-Reads are open. Writes are same-origin-only by default (a random web page
+The controller answers requests addressed to `localhost`, an IP address or
+a name in `NAUTILUS_ALLOWED_HOSTS` (a page on another site could take over
+any other name). Writes are same-origin-only by default (a random web page
 can't actuate your outputs); run with `NAUTILUS_TOKEN=<secret>` to require
-`Authorization: Bearer <secret>` on writes instead — which also lets an
-authorized dashboard on another host write.
+`Authorization: Bearer <secret>` on writes instead, which also lets an
+authorized dashboard on another host write and lets a client that sends the
+token reach the controller by any name.

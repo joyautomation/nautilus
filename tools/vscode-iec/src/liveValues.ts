@@ -53,7 +53,7 @@ import {
 } from "./tagTypes";
 import { activeDiagramTag, diagramHasFocus } from "./diagramSelection";
 import { noTagMessage, tagOf, toggleBitDecision, type TagArg } from "./liveActions";
-import { apiFetch, apiStreamHeaders } from "./apiFetch";
+import { apiFetch, apiStreamHeaders, apiToken } from "./apiFetch";
 
 type Frame = {
   ts: number;
@@ -371,7 +371,7 @@ export class LiveValues implements vscode.Disposable {
   /** POST /api/tags, and say how it went. */
   private async postValue(name: string, value: number | boolean | string, shown: string): Promise<void> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
+    const token = apiToken();
     if (token) headers["Authorization"] = "Bearer " + token;
     try {
       const res = await apiFetch(this.runtimeUrl() + "/api/tags", {
@@ -397,7 +397,7 @@ export class LiveValues implements vscode.Disposable {
   }
 
   private token(): string {
-    return vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
+    return apiToken();
   }
 
   /** One controller write; reports a refusal or an unreachable controller
@@ -614,7 +614,7 @@ export class LiveValues implements vscode.Disposable {
     let buffer = "";
     const since = Date.now();
 
-    const req = mod.get(url, { headers: apiStreamHeaders() }, (res) => {
+    const req = mod.get(url, { headers: apiStreamHeaders(url.toString()) }, (res) => {
       if (res.statusCode !== 200) {
         res.resume();
         this.scheduleReconnect();

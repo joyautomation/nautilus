@@ -37,7 +37,7 @@ import {
   splitProgram,
 } from "./programSync";
 import { declaredBlockNames, referencesAnyBlock } from "./composeCli";
-import { apiFetch } from "./apiFetch";
+import { apiFetch, apiToken } from "./apiFetch";
 
 /** One entry in the GET /api/program directory — every program in the
  * resource, source omitted. */
@@ -167,7 +167,7 @@ export class OnlineEdit implements vscode.Disposable {
    * token-gated controller on the network. */
   private writeHeaders(): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
+    const token = apiToken();
     if (token) headers["Authorization"] = "Bearer " + token;
     return headers;
   }

@@ -35,7 +35,7 @@ import {
   shellLine,
   SHOW_OUTPUT,
 } from "./logixDeployLogic";
-import { apiFetch } from "./apiFetch";
+import { apiFetch, apiToken } from "./apiFetch";
 
 const CONTEXT_KEY = "nautilus.logixTarget";
 const IEC_FILE = /\.(st|ld|fbd|sfc)$/i;
@@ -49,7 +49,7 @@ function runtimeUrl(): string {
 
 function writeHeaders(): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
+  const token = apiToken();
   if (token) headers["Authorization"] = "Bearer " + token;
   return headers;
 }

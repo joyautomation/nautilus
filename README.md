@@ -558,9 +558,11 @@ scaffolded controller binds loopback by default; set `NAUTILUS_ADDR=0.0.0.0:8080
 to expose the tag API to other machines, and point the editor at it with the
 `nautilus.runtimeUrl` setting (`naut pull` takes `--host`). Exposing the
 API on the network also exposes its write surface, so set `NAUTILUS_TOKEN` on
-the controller and the matching `nautilus.token` in the editor — reads and
-`naut pull` stay open, but tag writes and online edits then require the
-token.
+the controller and the matching `nautilus.token` in the editor. Tag writes
+and online edits then require the token. Reads and `naut pull` need it only
+when they reach the controller by a name that isn't `localhost`, an IP
+address or in its `NAUTILUS_ALLOWED_HOSTS`; the editor and `naut pull` (from
+`NAUTILUS_TOKEN` in its environment) send it.
 
 **Forcing.** A tag can be held at a value against the field and the logic —
 the PLC force table — from the editor (**Force…**, an **F** on every forced

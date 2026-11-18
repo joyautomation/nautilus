@@ -807,7 +807,7 @@
         "nautilus.runtimeUrl": {
           "type": "string",
           "default": "http://localhost:8080",
-          "description": "Base URL of a running nautilus controller's tag API. Inline live values subscribe to <url>/api/stream."
+          "description": "Base URL of a running nautilus controller's tag API. Inline live values subscribe to <url>/api/stream. Ignored from an untrusted workspace's settings."
         },
         "nautilus.agentsMd.offer": {
           "type": "boolean",
@@ -822,7 +822,7 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token — reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token of a controller started with `NAUTILUS_TOKEN` (the same value). Every write needs it, and so does every request, reads and the live stream included, to a controller reached by a host name it doesn't trust (anything but `localhost`, an IP address or a name in its `NAUTILUS_ALLOWED_HOSTS`). The extension sends it only to `nautilus.runtimeUrl`. A token from your user settings goes to a `runtimeUrl` from a workspace's settings only after you say yes to that address once. In an untrusted workspace, the workspace's own `runtimeUrl` and `token` are ignored. Don't commit a token to a repository's `.vscode/settings.json`."
         },
         "nautilus.diagram.showDescriptions": {
           "type": "boolean",
@@ -1115,7 +1115,11 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Rendering user-authored Svelte components inside the mimic editor and the component preview compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces — the built-in kit components and placeholder chips still work fully."
+      "description": "Rendering user-authored Svelte components inside the mimic editor and the component preview compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces — the built-in kit components and placeholder chips still work fully. An untrusted workspace's own nautilus.runtimeUrl and nautilus.token are ignored, so it cannot point the extension, and your token, at a controller of its choosing.",
+      "restrictedConfigurations": [
+        "nautilus.runtimeUrl",
+        "nautilus.token"
+      ]
     }
   },
   "scripts": {

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/hist"
+	"github.com/joyautomation/nautilus/internal/apiclient"
 )
 
 const historianUsage = `naut historian — archive a controller's tags into Postgres
@@ -360,9 +361,7 @@ func collectOnce(hc *http.Client, sink hist.Sink, source string, patterns, exclu
 	}
 	// A controller with a token answers a name it does not trust only
 	// with the token (#819), so the poll carries NAUTILUS_TOKEN when set.
-	if tok := os.Getenv("NAUTILUS_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	apiclient.Authorize(req)
 	resp, err := hc.Do(req)
 	if err != nil {
 		// Source momentarily unreachable — e.g. mid-failover, where the

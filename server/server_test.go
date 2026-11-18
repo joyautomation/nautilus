@@ -585,3 +585,79 @@ func TestCORSPreflightAllowsEveryMethodTheAPIServes(t *testing.T) {
 		}
 	}
 }
+
+// #819 review: the controller's token is for the controller. The
+// /api/history proxy does not pass it on to the historian, another service.
+func TestHistoryProxyDoesNotForwardTheToken(t *testing.T) {
+	var auth, xtok, path string
+	hist := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, xtok, path = r.Header.Get("Authorization"), r.Header.Get("X-Nautilus-Token"), r.URL.Path
+		w.Write([]byte(`{}`))
+	}))
+	defer hist.Close()
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret", HistorianURL: hist.URL})
+	for _, h := range []string{"Authorization", "X-Nautilus-Token"} {
+		req := httptest.NewRequest("GET", "http://plc.lan/api/history/span", nil)
+		req.Host = "plc.lan:8080" // by name, so the token is what lets it in
+		if h == "Authorization" {
+			req.Header.Set(h, "Bearer s3cret")
+		} else {
+			req.Header.Set(h, "s3cret")
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || path != "/history/span" {
+			t.Fatalf("%s: proxied %d to %q, want 200 to /history/span", h, rec.Code, path)
+		}
+		if auth != "" || xtok != "" {
+			t.Errorf("%s: the historian saw Authorization %q, X-Nautilus-Token %q; want neither", h, auth, xtok)
+		}
+	}
+}
+
+// #819 review: GuardHost answers a preflight itself, so a route of the
+// handler it wraps that takes any method (an embedder's) never sees one
+// it was not authorized for.
+func TestGuardHostAnswersAPreflightItself(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	reached := false
+	h := srv.GuardHost(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.Write([]byte("secret data"))
+	}))
+	req := httptest.NewRequest("OPTIONS", "http://hmi.example/anything", nil)
+	req.Host = "hmi.example:8080"
+	req.Header.Set("Origin", "https://ops.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if reached || rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Errorf("preflight by name: reached the handler %v, %d, %q; want 204 from the guard, no body", reached, rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://ops.example" {
+		t.Errorf("preflight by name: ACAO %q, want the origin (a token server allows any)", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+// #819 review: the Authorization scheme is case-insensitive.
+func TestTokenSchemeIsCaseInsensitive(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	for _, a := range []string{"Bearer s3cret", "bearer s3cret", "BEARER s3cret"} {
+		req := httptest.NewRequest("GET", "http://plc.lan/api/state", nil)
+		req.Host = "plc.lan:8080"
+		req.Header.Set("Authorization", a)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Authorization %q by name: %d, want 200", a, rec.Code)
+		}
+	}
+	req := httptest.NewRequest("GET", "http://plc.lan/api/state", nil)
+	req.Host = "plc.lan:8080"
+	req.Header.Set("Authorization", "Basic s3cret")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Authorization Basic by name: %d, want 403", rec.Code)
+	}
+}
