@@ -50,7 +50,7 @@ bumpless, and the measured takeover time is published instead.
   - **No quorum, no operator writes.** A lone survivor has no majority, so its operator writes
     are refused. This matches the read-only HMI in §7.
 - **The witness can be rebuilt from scratch.** A witness that comes back with an empty disk
-  loses nothing the pair needs:
+  loses no committed entry while both controllers are up:
   - **Its votes:** it grants nothing for one lease (§3.1).
   - **Its in-sync mark:** it counts as unknown until the leader's next renewal records it
     again (§3.3).
@@ -59,13 +59,14 @@ bumpless, and the measured takeover time is published instead.
 
   While both controllers are up, every committed entry is on at least one of them.
 
-  **Three faults in a row stop the pair; only the override loses an ack.** First, B is down
-  while A and the witness commit an ack. Then the witness loses its disk. Then A dies before B
-  or the rebuilt witness has copied the ack. B and the rebuilt witness can't adopt its new
-  incarnation without A (§3.1), so B stays fenced with no quorum, and the ack is still on A's
-  disk: when A returns, nothing is lost. The ack is lost only if an engineer runs B on the
-  override (§7) instead of waiting for A. The guide states that bound, and the override's record
-  names it.
+  **Two faults stop the pair; only the override can lose an ack.** First, B is down while A and
+  the witness commit an ack. Then the witness loses its disk. The rebuilt witness can't be
+  adopted without B (§3.1), so A has no majority and fences: control stops at the second fault.
+  If A then dies before anyone has copied the ack, B and the rebuilt witness can't adopt it
+  without A either, so B stays fenced with no quorum, and the ack is still on A's disk: when A
+  returns, nothing is lost. The ack can be lost only if an engineer runs B on the override (§7)
+  instead of waiting for A; whether it is depends on PR 5's rule for whose `oplog` survives the
+  heal (§7). The guide states that bound, and the override's record names it.
 - **`naut run` under systemd** comes from #733. Install, update and rollback come from
   `tools/deploy` (#741). The pair uses both and duplicates neither.
 - **Waiting for live inputs** before the first scan after a start or a takeover is #786. That
@@ -589,7 +590,9 @@ Settled with the maintainer, 2026-11-17:
 
 6. **`oplog`: the witness joins as the third peer**, so that an operator ack survives a
    failover. The condition is that the witness can be rebuilt from scratch: a lost witness
-   disk loses nothing the pair needs (§1).
+   disk loses no committed entry while both controllers are up. With one controller already
+   down it stops control until that controller returns, and only the override can then lose an
+   ack (§1).
 
 ## 10. Order of work
 

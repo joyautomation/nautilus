@@ -248,7 +248,7 @@ T4 where only hardware can.
 | F20 | **Flapping links**: each link toggled with periods of lease/4, lease/2, lease and 2 × lease, at 50% duty, for 5 min | nftables loop; netem loss 1–30% | I1 holds. Takeovers stay within the I7 bound, and the hold-off stops ping-pong. | ✓ | ✓ | ✓ (scripted switch port, if the switch allows) |
 | F21 | Latency and jitter: 1 ms to lease/2 delay, with ±50% jitter and reordering | tc netem | I1 holds. Delay near lease/2 may cost renewals: that is measured and the guide gets a minimum lease per link latency. | ✓ | ✓ | |
 | F22 | **Clock-rate skew**: ±0.1%, ±0.5%, ±1% (= ρ) between any two voters | T2: per-node clock rate. T3: a `quorumtest` build tag that scales the elector's monotonic clock (containers share one kernel clock). | I1 holds up to ρ. At 2× ρ, T2 shows where the margin breaks, and the guide states the limit. | ✓ | ✓ | |
-| F22b | **Stopped leader clock**: a VM paused or live-migrated, a host suspend | T2: the leader's clock frozen while others run. T3: `incus pause` of a VM leader for 0.5–3 × lease, and a guest suspend. | **Host suspend:** safe, because leases run on `CLOCK_BOOTTIME`. **VM pause:** an expected I1 breach, measured. The guide lists pausable or migratable VMs as unsupported for controllers (design §3.1). The resumed leader writes, so the case is excluded from I1, I2 and I3 by name. | ✓ | ✓ | |
+| F22b | **Stopped leader clock**: a VM paused or live-migrated, a host suspend | T2: the leader's clock frozen while others run. T3: `incus pause` of a VM leader for 0.5–3 × lease, and a guest suspend. | **Host suspend:** safe, because leases run on `CLOCK_BOOTTIME`. **VM pause:** an expected I1 breach, measured. The guide lists pausable or migratable VMs as unsupported for controllers (design §3.1). The resumed leader writes, so the case is excluded from I1, I2, I2-PN and I3 by name. | ✓ | ✓ | |
 | F23 | Wall-clock steps: ±1 h jumps, NTP slewing | T3: the pair in two incus VMs, `date -s` in one. T4: `date -s` on one box. | No effect: only monotonic durations are used. The VMs share no monotonic clock, so the recorder (I2) arbitrates I1 here. | ✓ | ✓ | ✓ |
 | F24 | **Slow disk**: fsync at 10 ms, 100 ms, lease/2 and over lease, on the voter state, retain and the journal | T2: simulated disk. T3: a dm-delay device in the rig VM. | A voter whose fsync has not finished has not answered, so the grant is late but never early. A slow retain save does not stall the scan. | ✓ | ✓ | |
 | F25 | Disk full, EIO | T3: a size-limited tmpfs; T2: injected | A voter that cannot persist does not grant. Alarm. The leader's fate follows from the votes. | ✓ | ✓ | |
@@ -354,8 +354,8 @@ changed manifest.
    - the takeover is hot or cold by the usual rule.
 4. **Expiry:** the gate closes at `expires`. The `.expire` record is written. Renewal extends
    it, with a `.renew` record.
-5. **A peer is heard** (the witness or the other controller comes back): the override ends at
-   once with an `.end` record, a normal election follows, and there is one writer afterwards.
+5. **A peer is heard** (the other controller, or the adopted witness, comes back; a rebuilt
+   witness not yet adopted doesn't count, design §7): the override ends at once with an `.end` record, a normal election follows, and there is one writer afterwards.
 6. A restart ends the override. It is not resumed.
 
 **Crash ordering**
@@ -386,9 +386,10 @@ changed manifest.
     the only path to two writers.
     - The test **expects** I1 to break for the time until the partition heals.
     - It measures that window and asserts that the override ends the moment the peer is heard.
-    - The guide states the window. Two writers break I1, I2 and I3, and the override's own
-      term can equal the one the other side elected, which breaks I4 (design §7). The case is
-      excluded from those four oracles by name, and from no other.
+    - The guide states the window. Two writers break I1, I2, I2-PN (on a PROFINET station)
+      and I3, and the override's own term can equal the one the other side elected, which
+      breaks I4 (design §7). The case is excluded from those five oracles by name, and from no
+      other.
 
 ### 8.1 Operator intent through `oplog`, with the witness as third peer
 
@@ -400,14 +401,17 @@ changed manifest.
    - it re-copies the whole log from the leader;
    - with both controllers up, nothing committed is lost;
    - its election state follows F15, adoption by both controllers included.
-4. **Three faults in a row, then the override.** B is down while A and the witness commit,
-   then the witness loses its disk, then A dies before anyone has copied the entry.
-   - B and the rebuilt witness can't adopt its incarnation without A (design §3.1): B stays
-     fenced with no quorum, and nothing is lost yet.
+4. **Two faults stop the pair, then the override.** B is down while A and the witness commit,
+   then the witness loses its disk.
+   - The rebuilt witness can't be adopted without B (design §3.1): A has no majority and
+     fences, with the no-quorum alarm. Nothing is lost.
+   - A then dies before anyone has copied the entry. B and the rebuilt witness can't adopt
+     its incarnation without A: B stays fenced with no quorum, and nothing is lost yet.
    - A returns: the ack is still there, and B copies it.
-   - Rerun with the override on B instead of waiting for A. The test **expects** the ack to be
-     lost there, asserts it is the only path that loses one, and checks that the override's
-     record and the guide both state it.
+   - Rerun with the override on B instead of waiting for A. The ack **may be lost**, per PR 5's
+     rule for whose `oplog` survives the heal (design §7). The test asserts that rule's
+     outcome, that this is the only path that can lose an ack, and that the override's record
+     and the guide both state it.
 5. **Lone survivor.** An ack or shelve is refused with a "no quorum" error, and the HMI shows
    it read-only.
 6. **The witness only follows the leader its votes name.** Replication from any other source
