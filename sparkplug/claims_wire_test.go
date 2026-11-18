@@ -23,6 +23,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 	mqttsrv "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
@@ -31,11 +32,24 @@ import (
 
 // testBroker is an in-process broker on a plain TCP listener; it returns the
 // address.
-func testBroker(t *testing.T) string {
+// testBroker starts an in-process broker for the package's tests, with any
+// extra hooks (testmqtt.HoldTeardown) after its own. It serializes a client
+// ID's sessions (testmqtt.SameIDSerializer): mochi v2.7.9 can otherwise drop
+// a node's reconnected session from its client map, and the node never
+// hears its primary host again.
+func testBroker(t *testing.T, hooks ...mqttsrv.Hook) string {
 	t.Helper()
 	srv := mqttsrv.New(&mqttsrv.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatal(err)
+	}
+	if err := srv.AddHook(&testmqtt.SameIDSerializer{Server: srv}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hooks {
+		if err := srv.AddHook(h, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	tcp := listeners.NewTCP(listeners.Config{ID: "plain", Address: "127.0.0.1:0"})
 	if err := srv.AddListener(tcp); err != nil {

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 	mqttsrv "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
@@ -76,6 +77,12 @@ func newBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
 	srv := mqttsrv.New(&mqttsrv.Options{Logger: quietLogger()})
 	if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatalf("auth hook: %v", err)
+	}
+	// The host reconnects with the same client ID on a leadership change;
+	// mochi v2.7.9 can drop the new session if the old one is still being
+	// torn down (testmqtt.SameIDSerializer).
+	if err := srv.AddHook(&testmqtt.SameIDSerializer{Server: srv}, nil); err != nil {
+		t.Fatalf("same-id hook: %v", err)
 	}
 	tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: addr})
 	if err := srv.AddListener(tcp); err != nil {
