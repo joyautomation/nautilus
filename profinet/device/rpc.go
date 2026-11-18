@@ -60,8 +60,24 @@ func (d *Device) rpcLoop(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		d.handleRPC(buf[:n], udp, &cache)
+		d.serveRPC(buf[:n], udp, &cache)
 	}
+}
+
+// serveRPC is handleRPC behind a recover: a datagram that trips a bug is
+// logged and dropped, never the process. The parsers are fuzzed; this is
+// defence in depth for the code between them and the reply. The device
+// lock is taken with defer (pnio), so a panic does not leave it held.
+func (d *Device) serveRPC(pkt []byte, from *net.UDPAddr, cache *replyCache) {
+	defer func() {
+		if r := recover(); r != nil {
+			d.log.Error("profinet device: RPC request dropped after a panic", "from", from, "panic", r)
+			d.mu.Lock()
+			d.snapInfo.lastEvent = fmt.Sprintf("an RPC request from %s was dropped: internal error (%v)", from, r)
+			d.mu.Unlock()
+		}
+	}()
+	d.handleRPC(pkt, from, cache)
 }
 
 // handleRPC serves one datagram. Requests are handled one at a time in
@@ -126,23 +142,28 @@ func (d *Device) pnio(h *wire.RPCHeader, body []byte, from *net.UDPAddr) ([]byte
 		after  func()
 	)
 	blocks := func() []wire.PNIOBlock { b, _ := wire.ParsePNIOBlocks(args); return b }
-	d.mu.Lock()
-	switch h.OpNum {
-	case wire.RPCOpConnect:
-		resp, status = d.connect(blocks(), from)
-	case wire.RPCOpRelease:
-		resp, status = d.release(blocks())
-	case wire.RPCOpRead, wire.RPCOpReadImplicit:
-		resp, status = d.read(blocks())
-	case wire.RPCOpWrite:
-		resp, status = d.write(args)
-	case wire.RPCOpControl:
-		resp, status, after = d.control(blocks())
-	default:
-		d.mu.Unlock()
+	known := func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock() // released on a panic too (serveRPC recovers)
+		switch h.OpNum {
+		case wire.RPCOpConnect:
+			resp, status = d.connect(blocks(), from)
+		case wire.RPCOpRelease:
+			resp, status = d.release(blocks())
+		case wire.RPCOpRead, wire.RPCOpReadImplicit:
+			resp, status = d.read(blocks())
+		case wire.RPCOpWrite:
+			resp, status = d.write(args)
+		case wire.RPCOpControl:
+			resp, status, after = d.control(blocks())
+		default:
+			return false
+		}
+		return true
+	}()
+	if !known {
 		return nil, nil
 	}
-	d.mu.Unlock()
 	return d.response(h, status, resp, argsMax), after
 }
 

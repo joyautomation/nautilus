@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,8 +154,10 @@ func TestIdentifyAndStartup(t *testing.T) {
 		s := r.dev.Snapshot()
 		return s.State == StateIdle && s.Aborts == 1
 	})
-	if s := r.dev.Snapshot(); !bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0xAB, 0xCD}) {
-		t.Fatalf("last outputs not held: % x", s.Outputs[Addr{1, 1}])
+	// The image forgets the ended AR's outputs (the driver holds its own
+	// last good value as Stale): nothing reads as good with old bytes.
+	if s := r.dev.Snapshot(); !bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0, 0}) || s.OutputGood[Addr{1, 1}] {
+		t.Fatalf("outputs after the AR ended: % x good=%v", s.Outputs[Addr{1, 1}], s.OutputGood[Addr{1, 1}])
 	}
 }
 
@@ -241,6 +244,66 @@ func TestDCPSetNeverTouchesTheHost(t *testing.T) {
 	}
 	if s := r.dev.Snapshot(); s.Station != "renamed" || s.NameSets != 1 {
 		t.Fatalf("snapshot %+v", s)
+	}
+	// A name that breaks NameOfStation is refused and changes nothing; one
+	// over 511 bytes would not even fit LLDP's 9-bit TLV length.
+	for _, bad := range []string{"Bad_Name", strings.Repeat("a", 600), "port-001"} {
+		if code := c.setName(bad); code != dcpNotSet {
+			t.Fatalf("set name %.20q: code %d, want refused", bad, code)
+		}
+	}
+	if s := r.dev.Snapshot(); s.Station != "renamed" || s.NameSets != 1 {
+		t.Fatalf("after refused names: %+v", s)
+	}
+}
+
+// A new AR that leaves a subslot out must not inherit the last AR's good
+// status and bytes for it (review on #732: the driver read those as Good
+// with frozen data).
+func TestReARForgetsOmittedSubslot(t *testing.T) {
+	r := newRig(t)
+	c := r.ctrl
+	c.connect(t, layout, false)
+	c.prmEnd(t)
+	c.startOutputs(map[Addr][]byte{{1, 1}: {0xAB, 0xCD}}, wire.DataStatusRunNormal)
+	eventually(t, "outputs", func() bool { return r.dev.Snapshot().OutputGood[Addr{1, 1}] })
+
+	c.stopOutputs()
+	c.connect(t, layout[1:], false) // same controller, slot 1 left out
+	c.prmEnd(t)
+	c.startOutputs(map[Addr][]byte{}, wire.DataStatusRunNormal)
+	eventually(t, "DATA again", func() bool { s := r.dev.Snapshot(); return s.State == StateData && s.Fresh })
+	time.Sleep(50 * time.Millisecond)
+	if s := r.dev.Snapshot(); s.OutputGood[Addr{1, 1}] || !bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0, 0}) {
+		t.Fatalf("slot 1 after a re-AR without it: good=%v % x", s.OutputGood[Addr{1, 1}], s.Outputs[Addr{1, 1}])
+	}
+}
+
+// A Connect that never reaches PrmEnd ends after the controller's
+// CMInitiatorActivityTimeout, so it cannot hold the one AR for good and
+// lock the real PLC out.
+func TestStartupTimeoutFreesTheAR(t *testing.T) {
+	r := newRig(t)
+	r.ctrl.activity = 3 // 300 ms
+	r.ctrl.connect(t, layout, false)
+	other := newController(t, r.hub, ctrl2, r.ctrl.devRPC)
+	defer other.close()
+	if st := other.connectStatus(t, layout); st.IsOK() {
+		t.Fatal("second controller admitted while the first is in start-up")
+	}
+	eventually(t, "start-up timeout", func() bool { s := r.dev.Snapshot(); return s.State == StateIdle && s.Aborts == 1 })
+	if st := other.connectStatus(t, layout); !st.IsOK() {
+		t.Fatalf("after the timeout: %+v", st)
+	}
+}
+
+// Both IOCRs are required: without the output IOCR the AR would have no
+// watchdog.
+func TestConnectNeedsOutputIOCR(t *testing.T) {
+	r := newRig(t)
+	r.ctrl.noOutput = true
+	if st := r.ctrl.connectStatus(t, layout); st.IsOK() || st.ErrorCode1 != 0x02 {
+		t.Fatalf("connect without an output IOCR: %+v", st)
 	}
 }
 

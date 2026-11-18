@@ -42,6 +42,8 @@ type testController struct {
 	sending  bool
 	dcp      chan *wire.DCPFrame
 	props    uint32 // ARProperties; 0 = 0x11 (legacy start-up)
+	activity uint16 // CMInitiatorActivityTimeout (100 ms units); 0 = 100
+	noOutput bool   // leave the output IOCR out of the Connect
 
 	sawARServer bool
 	ctx         context.Context
@@ -339,7 +341,7 @@ func (c *testController) connectArgs(subs []Subslot) []byte {
 	}
 	args := wire.MarshalARBlockReq(&wire.ARBlockReq{
 		ARType: 1, ARUUID: c.arUUID, SessionKey: c.session, CMInitiatorMAC: c.port.MAC(),
-		CMInitiatorObjUUID: randUUID(), ARProperties: c.arProps(), CMInitiatorActivityTimeout: 100,
+		CMInitiatorObjUUID: randUUID(), ARProperties: c.arProps(), CMInitiatorActivityTimeout: c.activityTimeout(),
 		CMInitiatorUDPRTPort: wire.ProfinetRTUDPPort, CMInitiatorStationName: "ctrl",
 	})
 	c.mu.Unlock()
@@ -351,7 +353,9 @@ func (c *testController) connectArgs(subs []Subslot) []byte {
 		})
 	}
 	args = append(args, iocr(wire.IOCRTypeInput, 1, 0xC001, in)...)
-	args = append(args, iocr(wire.IOCRTypeOutput, 2, 0xFFFF, out)...)
+	if !c.noOutput {
+		args = append(args, iocr(wire.IOCRTypeOutput, 2, 0xFFFF, out)...)
+	}
 	args = append(args, wire.MarshalAlarmCRBlockReq(&wire.AlarmCRBlockReq{AlarmCRType: 1, LT: wire.EtherTypePNIO, RTATimeoutFactor: 1, RTARetries: 3, LocalAlarmRef: 7, MaxAlarmDataLen: 200})...)
 	exp := &wire.ExpectedSubmoduleReq{}
 	mods := map[uint16]*wire.ExpectedModule{}
@@ -459,8 +463,12 @@ func (c *testController) release(t *testing.T) {
 	c.mu.Lock()
 	ctl := wire.IODControl{ARUUID: c.arUUID, SessionKey: c.session, Command: wire.ControlCmdRelease}
 	c.mu.Unlock()
-	if st, _ := c.call(t, wire.RPCOpRelease, wire.MarshalIODControl(wire.BlockTypeIODControlReq, ctl), false); !st.IsOK() {
+	st, blocks := c.call(t, wire.RPCOpRelease, wire.MarshalIODControl(wire.BlockTypeIODReleaseReq, ctl), false)
+	if !st.IsOK() {
 		t.Fatalf("release %+v", st)
+	}
+	if len(blocks) != 1 || blocks[0].Type != wire.BlockTypeIODReleaseRes {
+		t.Fatalf("release reply blocks %+v, want one IODReleaseBlockRes (0x8114)", blocks)
 	}
 }
 
@@ -507,6 +515,13 @@ func (c *testController) write(t *testing.T, ws []wire.Write) wire.PNIOStatus {
 
 func dd(dir, n uint16) wire.SubmoduleDataDesc {
 	return wire.SubmoduleDataDesc{DataDirection: dir, DataLength: n, LengthIOCS: 1, LengthIOPS: 1}
+}
+
+func (c *testController) activityTimeout() uint16 {
+	if c.activity == 0 {
+		return 100
+	}
+	return c.activity
 }
 
 func (c *testController) arProps() uint32 {

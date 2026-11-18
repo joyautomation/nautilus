@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,6 +105,19 @@ type Config struct {
 	Log       *slog.Logger
 }
 
+// stationNameRE is a PROFINET NameOfStation: DNS-like labels of lowercase
+// letters, digits and hyphens, at most 240 characters, not port-xyz.
+var stationNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// ValidStationName checks a NameOfStation: the manifest's station, and a
+// name a controller sets over DCP.
+func ValidStationName(name string) error {
+	if len(name) > 240 || !stationNameRE.MatchString(name) || strings.HasPrefix(name, "port-") {
+		return fmt.Errorf("station %q: want lowercase letters, digits and hyphens in dot-separated labels, at most 240 characters (and not port-…)", name)
+	}
+	return nil
+}
+
 // Device is one running IO device. Use New, then Run.
 type Device struct {
 	cfg  Config
@@ -173,8 +188,8 @@ func New(cfg Config) (*Device, error) {
 	if cfg.Port == nil || cfg.RPC == nil {
 		return nil, errors.New("profinet device: Port and RPC are required")
 	}
-	if cfg.Station == "" {
-		return nil, errors.New("profinet device: station name is required")
+	if err := ValidStationName(cfg.Station); err != nil {
+		return nil, fmt.Errorf("profinet device: %w", err)
 	}
 	if len(cfg.Subslots) == 0 {
 		return nil, errors.New("profinet device: no subslots")

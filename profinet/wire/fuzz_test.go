@@ -117,3 +117,37 @@ func TestParseIOCRBlockReqTruncated(t *testing.T) {
 		t.Fatalf("complete empty API refused: %v", err)
 	}
 }
+
+// The request/response parsers of pnio_req.go (#732).
+
+func FuzzParseIODControl(f *testing.F) {
+	seedBytes(f, MarshalIODControl(BlockTypeIODControlReq, IODControl{Command: ControlCmdPrmEnd})[6:])
+	f.Fuzz(func(t *testing.T, b []byte) { ParseIODControl(b) })
+}
+
+func FuzzParseRecordHeader(f *testing.F) {
+	seedBytes(f)
+	f.Fuzz(func(t *testing.T, b []byte) { ParseRecordHeader(b) })
+}
+
+func FuzzParseModuleDiff(f *testing.F) {
+	seedBytes(f)
+	f.Fuzz(func(t *testing.T, b []byte) { ParseModuleDiff(b) })
+}
+
+func FuzzParseWriteArgs(f *testing.F) {
+	seedBytes(f)
+	f.Fuzz(func(t *testing.T, b []byte) { ParseWriteArgs(b) })
+}
+
+func FuzzParsePNIORequestArgs(f *testing.F) {
+	f.Add([]byte{}, false)
+	f.Add(make([]byte, 20), true)
+	f.Fuzz(func(t *testing.T, b []byte, le bool) { ParsePNIORequestArgs(b, le) })
+}
+
+func FuzzParsePNIOResponseBody(f *testing.F) {
+	f.Add([]byte{}, false)
+	f.Add(make([]byte, 24), true)
+	f.Fuzz(func(t *testing.T, b []byte, le bool) { ParsePNIOResponseBody(b, le) })
+}
