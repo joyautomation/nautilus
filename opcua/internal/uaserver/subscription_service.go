@@ -465,12 +465,14 @@ type Subscription struct {
 
 // Fence returns once any publish response this subscription is composing
 // has been sent. A service that changes what an item reports
-// (SetMonitoringMode, DeleteMonitoredItems) calls it after the change and
-// before it answers, so nothing checked against the old state reaches the
-// client after the answer. It waits on at most one send.
+// (SetMonitoringMode, DeleteMonitoredItems in opcua/server) calls it after
+// the change and before it answers, so nothing checked against the old
+// state reaches the client after the answer. It waits on at most one send.
+// The empty critical section is the barrier itself (TestFenceWaitsForAPublish).
 func (s *Subscription) Fence() {
 	s.publishMu.Lock()
-	s.publishMu.Unlock() //nolint:staticcheck // an empty critical section is the point
+	//lint:ignore SA2001 a barrier: wait out a publish that holds publishMu
+	s.publishMu.Unlock() //nolint:staticcheck // same, for golangci-lint
 }
 
 func NewSubscription() *Subscription {
