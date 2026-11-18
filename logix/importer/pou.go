@@ -589,6 +589,9 @@ func (im *importer) declareFound(sc *scope, p *pou, f *found, blockType string) 
 		d.Comment = ""
 	} else if f.tag != nil {
 		d.Init = initText(f.tag.Value, up)
+		if list, ok := f.tag.Value.([]any); ok && !allZero(list) {
+			im.proj.note(sc.owner, -1, "init", d.Name+": a program's array starts at zero in nautilus; the export's values for it are not carried")
+		}
 	}
 	p.declare(d)
 	return true
