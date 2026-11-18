@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/virtdev"
 )
@@ -222,24 +223,35 @@ func TestDevicesWithVirtualDevicesRefused(t *testing.T) {
 
 // add --from never writes outside profiles/: an id or a simulator source
 // with a directory in it (both reproduced in review) is refused, and
-// nothing lands anywhere.
+// nothing lands anywhere. The fixtures sit where "../" lands from the team
+// folder, so each name would really resolve to a file.
 func TestDevicesAddStaysInProfiles(t *testing.T) {
 	base := strings.Replace(string(mustRead(t, "../../devprofile/profiles/asi-275m.yaml")), "simulator:", "#simulator:", 1)
-	for name, tc := range map[string]struct{ id, file, yaml string }{
-		"simulator source": {"evil", "evil.yaml", strings.Replace(base, "profile: asi-275m", "profile: evil\nsimulator: { block: ASI_275M_SIM, source: ../evil_injected.st }", 1)},
-		"profile id":       {"../escaped", "escaped.yaml", strings.Replace(base, "profile: asi-275m", "profile: ../escaped\nudt: ESC", 1)},
+	for name, tc := range map[string]struct{ id, file, yaml, want string }{
+		// the parser's guard (devprofile's own tests pin it alone)
+		"simulator source": {"evil", "team/evil.yaml", strings.Replace(base, "profile: asi-275m", "profile: evil\nsimulator: { block: ASI_275M_SIM, source: ../evil_injected.st }", 1), "must be a file name beside the profile"},
+		// add's own guard, before it reads anything
+		"profile id": {"../escaped", "escaped.yaml", strings.Replace(base, "profile: asi-275m", "profile: ../escaped\nudt: ESC", 1), "is not a profile id"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := libProject(t, libProgram)
-			team := t.TempDir()
-			for _, f := range []string{tc.file, "evil_injected.st"} {
-				if err := os.WriteFile(filepath.Join(team, f), []byte(tc.yaml), 0o644); err != nil {
+			root := t.TempDir()
+			dir := filepath.Join(root, "proj")
+			if err := os.Rename(libProject(t, libProgram), dir); err != nil {
+				t.Fatal(err)
+			}
+			team := filepath.Join(root, "team")
+			if err := os.Mkdir(team, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for f, body := range map[string]string{tc.file: tc.yaml, "evil_injected.st": "PROGRAM X\nEND_PROGRAM\n"} {
+				if err := os.WriteFile(filepath.Join(root, f), []byte(body), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
 			before, _ := os.ReadDir(dir)
-			if err := addProfile(filepath.Join(dir), tc.id, team, io.Discard); err == nil {
-				t.Fatal("added")
+			err := addProfile(dir, tc.id, team, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("add: %v, want an error saying %q", err, tc.want)
 			}
 			after, _ := os.ReadDir(dir)
 			if len(after) != len(before) {
@@ -250,13 +262,112 @@ func TestDevicesAddStaysInProfiles(t *testing.T) {
 			}
 		})
 	}
-	for _, name := range []string{"../x.st", "/abs.st", "sub/x.st", ".."} {
-		if insideDir("/p/profiles", name) == nil {
-			t.Errorf("insideDir(%q): no error", name)
+}
+
+// Whatever name reaches the writer, it writes only a plain file name in
+// profiles/ itself: the last guard, behind the parser's and add's.
+func TestDevicesAddWriterStaysInDir(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "profiles")
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"../x.st", "sub/x.st", "..", "/abs.st"} {
+		if _, err := existingCopy(dst, name, []byte("x")); err == nil {
+			t.Errorf("existingCopy(%q): no error", name)
+		}
+		if err := createInDir(dst, name, []byte("x")); err == nil {
+			t.Errorf("createInDir(%q): no error", name)
 		}
 	}
-	if err := insideDir("/p/profiles", "abb-drives.st"); err != nil {
-		t.Errorf("insideDir(abb-drives.st): %v", err)
+	if _, err := os.Stat(filepath.Join(root, "x.st")); err == nil {
+		t.Error("createInDir wrote ../x.st")
+	}
+	if err := createInDir(dst, "abb-drives.st", []byte("x")); err != nil {
+		t.Errorf("createInDir(abb-drives.st): %v", err)
+	}
+}
+
+// A symlink planted in profiles/, or profiles/ itself a symlink, never
+// carries add's copy outside the project (reproduced in review): add
+// refuses, and nothing appears where the link points.
+func TestDevicesAddRefusesSymlinks(t *testing.T) {
+	builtinSim, err := devprofile.BuiltinFile("abb-drives.st")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		plant func(t *testing.T, dir, outside string)
+		want  string
+	}{
+		"dangling simulator link": {func(t *testing.T, dir, outside string) {
+			mkdir(t, filepath.Join(dir, devprofileDir))
+			symlink(t, filepath.Join(outside, "planted.st"), filepath.Join(dir, devprofileDir, "abb-drives.st"))
+		}, "is a symlink"},
+		"simulator link to an identical file": {func(t *testing.T, dir, outside string) {
+			if err := os.WriteFile(filepath.Join(outside, "planted.st"), builtinSim, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			mkdir(t, filepath.Join(dir, devprofileDir))
+			symlink(t, filepath.Join(outside, "planted.st"), filepath.Join(dir, devprofileDir, "abb-drives.st"))
+		}, "is a symlink"},
+		"dangling profile link": {func(t *testing.T, dir, outside string) {
+			mkdir(t, filepath.Join(dir, devprofileDir))
+			symlink(t, filepath.Join(outside, "planted.yaml"), filepath.Join(dir, devprofileDir, "abb-acs355-fmbt21.yaml"))
+		}, "already in profiles/"},
+		"profiles is a link": {func(t *testing.T, dir, outside string) {
+			symlink(t, outside, filepath.Join(dir, devprofileDir))
+		}, "not a folder"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := libProject(t, libProgram)
+			outside := t.TempDir()
+			tc.plant(t, dir, outside)
+			before, _ := os.ReadDir(outside)
+			err := addProfile(dir, "abb-acs355-fmbt21", "", io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("add: %v, want an error saying %q", err, tc.want)
+			}
+			after, _ := os.ReadDir(outside)
+			if len(after) != len(before) {
+				t.Errorf("add wrote through the link: %d -> %d files outside the project", len(before), len(after))
+			}
+		})
+	}
+}
+
+func mkdir(t *testing.T, p string) {
+	t.Helper()
+	if err := os.Mkdir(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func symlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+}
+
+// Flags may follow the profile, as the brief writes the command.
+func TestDevicesAddFlagAfterProfile(t *testing.T) {
+	dir := libProject(t, libProgram)
+	team := t.TempDir()
+	if err := os.WriteFile(filepath.Join(team, "asi-275m.yaml"), mustRead(t, "../../devprofile/profiles/asi-275m.yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(team, "asi-275m.st"), mustRead(t, "../../devprofile/profiles/asi-275m.st"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(team, "asi-275m.yaml"), append(mustRead(t, filepath.Join(team, "asi-275m.yaml")), []byte("# the team's copy\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runDevicesAdd([]string{"asi-275m", dir, "--from", team}, io.Discard); code != 0 {
+		t.Fatalf("add <profile> <dir> --from team: exit %d", code)
+	}
+	if !bytes.HasSuffix(mustRead(t, filepath.Join(dir, devprofileDir, "asi-275m.yaml")), []byte("# the team's copy\n")) {
+		t.Error("--from after the profile was ignored: the built-in copy was vendored")
 	}
 }
 

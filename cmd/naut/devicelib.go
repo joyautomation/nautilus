@@ -25,17 +25,26 @@ import (
 // team's own profiles, a folder under git). The copy is the project's pin.
 func runDevicesAdd(args []string, w io.Writer) int {
 	fl := flag.NewFlagSet("devices add", flag.ContinueOnError)
-	from := fl.String("from", "", "copy from this folder of profiles instead of the built-in library")
-	if err := fl.Parse(args); err != nil {
+	from := fl.String("from", "", "copy from this folder of profiles instead of the built-in library (symlinks in it are followed, as cp does)")
+	// Flags may come before or after the profile (add <profile> --from dir).
+	var pos []string
+	for rest := args; ; {
+		if err := fl.Parse(rest); err != nil {
+			return 2
+		}
+		if fl.NArg() == 0 {
+			break
+		}
+		pos = append(pos, fl.Arg(0))
+		rest = fl.Args()[1:]
+	}
+	if len(pos) < 1 || len(pos) > 2 {
+		fmt.Fprint(os.Stderr, "usage: naut devices add <profile> [project-dir] [--from dir]\n")
 		return 2
 	}
-	if fl.NArg() < 1 || fl.NArg() > 2 {
-		fmt.Fprint(os.Stderr, "usage: naut devices add [--from dir] <profile> [project-dir]\n")
-		return 2
-	}
-	id, dir := fl.Arg(0), "."
-	if fl.NArg() == 2 {
-		dir = fl.Arg(1)
+	id, dir := pos[0], "."
+	if len(pos) == 2 {
+		dir = pos[1]
 	}
 	if err := addProfile(dir, id, *from, w); err != nil {
 		fmt.Fprintln(os.Stderr, "naut devices add:", err)
@@ -85,34 +94,38 @@ func addProfile(dir, id, from string, w io.Writer) error {
 	}
 
 	dst := filepath.Join(dir, devprofile.ProjectDir)
-	if _, err := os.Stat(filepath.Join(dst, id+".yaml")); err == nil {
-		return fmt.Errorf("%s is already in %s/: that copy is the project's pin, and add never replaces it (to take a newer one, compare the two and replace the file yourself; naut devices update will do that)", id, devprofile.ProjectDir)
-	}
-	// A simulator two profiles share (abb-drives.st) may already be there;
-	// it must be the same file, not a different one of the same name.
-	for name, data := range files {
-		if have, err := os.ReadFile(filepath.Join(dst, name)); err == nil && !bytes.Equal(have, data) {
-			return fmt.Errorf("%s/%s is already there and differs from %s's", devprofile.ProjectDir, name, id)
-		}
-	}
-	// Every file lands in profiles/ itself: ParseProfile refuses an id or
-	// a simulator source with a directory in it, and this is the check
-	// that holds whatever a source file says.
-	for name := range files {
-		if err := insideDir(dst, name); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
+	// profiles/ must be the project's own folder: a symlink there would
+	// send the copy wherever it points.
+	if fi, err := os.Lstat(dst); err == nil && !fi.IsDir() {
+		return fmt.Errorf("%s/ is not a folder (a symlink?): add writes only into the project's own %s/", devprofile.ProjectDir, devprofile.ProjectDir)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	if _, err := os.Lstat(filepath.Join(dst, id+".yaml")); err == nil {
+		return fmt.Errorf("%s is already in %s/: that copy is the project's pin, and add never replaces it (to take a newer one, compare the two and replace the file yourself; naut devices update will do that)", id, devprofile.ProjectDir)
+	}
+	// Check every destination before writing any. A simulator two profiles
+	// share (abb-drives.st) may already be there; it must be the same
+	// regular file, not a different one or a symlink.
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	var write []string
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(dst, name), files[name], 0o644); err != nil {
+		switch same, err := existingCopy(dst, name, files[name]); {
+		case err != nil:
+			return err
+		case !same:
+			write = append(write, name)
+		}
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	for _, name := range write {
+		if err := createInDir(dst, name, files[name]); err != nil {
 			return err
 		}
 		fmt.Fprintf(w, "added %s\n", filepath.ToSlash(filepath.Join(devprofile.ProjectDir, name)))
@@ -187,12 +200,47 @@ func runDevicesRender(args []string, w io.Writer) int {
 	return 0
 }
 
-// insideDir checks that name, joined to dir, names a file directly in dir.
-func insideDir(dir, name string) error {
-	target := filepath.Join(dir, name)
-	rel, err := filepath.Rel(dir, target)
-	if err != nil || filepath.IsAbs(name) || rel != filepath.Base(target) || strings.HasPrefix(rel, "..") {
+// existingCopy reports whether dir/name is already a regular file holding
+// data. It refuses a name that is not a plain file name (whatever a source
+// file says, the copy lands in dir itself), a symlink (dangling or not: a
+// write through it would land outside dir), and a different file.
+func existingCopy(dir, name string, data []byte) (bool, error) {
+	if !devprofile.IsFileName(name) {
+		return false, fmt.Errorf("%q would be written outside %s/", name, devprofile.ProjectDir)
+	}
+	fi, err := os.Lstat(filepath.Join(dir, name))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, err
+	case !fi.Mode().IsRegular():
+		return false, fmt.Errorf("%s/%s is a symlink or not a regular file: add writes only regular files in %s/", devprofile.ProjectDir, name, devprofile.ProjectDir)
+	}
+	have, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(have, data) {
+		return false, fmt.Errorf("%s/%s is already there and differs", devprofile.ProjectDir, name)
+	}
+	return true, nil
+}
+
+// createInDir creates dir/name, which must not exist yet. O_EXCL fails on
+// any existing path, a symlink included (dangling or not), so a symlink
+// planted after existingCopy looked is not followed either.
+func createInDir(dir, name string, data []byte) error {
+	if !devprofile.IsFileName(name) {
 		return fmt.Errorf("%q would be written outside %s/", name, devprofile.ProjectDir)
 	}
-	return nil
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
