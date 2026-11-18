@@ -3,6 +3,7 @@ package virtdev
 import (
 	"fmt"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
 )
@@ -12,8 +13,8 @@ import (
 // reads what the controller wrote from it and writes what the device shows
 // into it; the wire face serves it.
 type store interface {
-	get(pt Point) (any, error)
-	put(pt Point, v any) error
+	get(pt devprofile.Point) (any, error)
+	put(pt devprofile.Point, v any) error
 }
 
 // modbusStore is a device's Modbus unit, read and written through the
@@ -24,26 +25,26 @@ type modbusStore struct {
 	wordOrder, byteOrder string
 }
 
-func newModbusStore(p *Profile) *modbusStore {
+func newModbusStore(p *devprofile.Profile) *modbusStore {
 	u := slave.NewUnit()
 	spec := p.Modbus
 	if !spec.Open {
 		for _, pt := range p.Points {
-			u.Define(pt.Table, pt.Address, uint16(pointWords(pt)), pt.Writable)
+			u.Define(pt.Table, pt.Address, uint16(pt.Words()), pt.Writable)
 		}
 	}
 	return &modbusStore{unit: u, wordOrder: spec.WordOrder, byteOrder: spec.ByteOrder}
 }
 
-func (s *modbusStore) get(pt Point) (any, error) {
+func (s *modbusStore) get(pt devprofile.Point) (any, error) {
 	return GetBinding(s.unit, s.binding(pt), s.wordOrder, s.byteOrder)
 }
 
-func (s *modbusStore) put(pt Point, v any) error {
+func (s *modbusStore) put(pt devprofile.Point, v any) error {
 	return PutBinding(s.unit, s.binding(pt), s.wordOrder, s.byteOrder, v)
 }
 
-func (s *modbusStore) binding(pt Point) modbus.TagBinding {
+func (s *modbusStore) binding(pt devprofile.Point) modbus.TagBinding {
 	return modbus.TagBinding{
 		Name: pt.Name, Table: pt.Table, Address: pt.Address,
 		Format: pt.Format, Scale: pt.Scale, Offset: pt.Offset, Writable: pt.Writable,

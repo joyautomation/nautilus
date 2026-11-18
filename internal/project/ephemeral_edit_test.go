@@ -38,7 +38,7 @@ func TestOnlineEditDoesNotSurviveARestart(t *testing.T) {
 	if got := readReal(t, rt, "Out"); got != 1 {
 		t.Fatalf("embedded program: Out = %v, want 1", got)
 	}
-	req := httptest.NewRequest("PUT", "/api/program",
+	req := httptest.NewRequest("PUT", "http://localhost/api/program",
 		bytes.NewBufferString(`{"source": "PROGRAM Main\nOut := 2.0;\nEND_PROGRAM\n"}`))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

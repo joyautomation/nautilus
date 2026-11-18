@@ -66,7 +66,14 @@ retain:
   saves once more after the last scan, so what was written before the stop
   is kept. It waits up to 5 seconds for that save, and logs it when the
   save fails or does not finish in time. A hard kill can lose at most 2
-  seconds of operator input.
+  seconds of operator input. The file store writes the new file whole
+  under another name, syncs it to disk, renames it over the old one and
+  syncs the directory, so on a journaling file system (ext4, the overlay
+  file systems controllers boot from) a power cut leaves the old file or
+  the new one, never an empty or half-written one. FAT, on some SD cards,
+  makes no such promise. A file that cannot be read is moved aside to
+  `retain.json.corrupt-<time>`, the error is logged, and the tags start
+  from their initial values.
 - **Load order:** retained values are applied before the first scan and
   win over the manifest's `init:` seeds — what the operator set last
   outlives what the project file said first. A single controller applies
@@ -118,8 +125,13 @@ never computes.
   hung (logic that never returns, a driver call that blocks) hands over
   too. A scan counts as hung once one scan has been in progress for
   longer than twice its task's period, at least 1 s and at most 2 s,
-  whatever the period: a task that runs every 10 s is fine between its
-  scans, and a fast task that overruns now and then is not hung. A hung
+  whatever the period: a fast task that overruns now and then is not
+  hung. A task that is **starved** between scans counts too: its next
+  slot comes due and it doesn't run (a higher-priority thread on its
+  core, say). It is flagged once that slot is overdue by the same bound.
+  A task that runs every 10 s is fine between its scans until its slot
+  is due. A standby's scans gate out but still tick on schedule, so a
+  healthy standby is never starved. A hung
   leader stops renewing and closes its own gate (its drivers stop
   writing) on its first tick more than 2 s after its last renew, without
   waiting on the Lease API, so a call to it that fails or hangs cannot
@@ -171,6 +183,19 @@ never computes.
   the hours it spent standing by. Process state is deliberately **not**
   replicated — configuration travels through the retain store, process
   state re-derives from the field.
+- **A `READ`/`WRITE` channel write leaves only from the leadership that
+  posted it.** Each channel sends its requests one at a time, so a write
+  can wait seconds behind another. It is checked against the write gate
+  and the leadership (the lease's term) at the moment it is sent, not
+  when it was posted:
+  - if its turn comes while the gate is closed, it is dropped;
+  - if it was posted in an earlier term, it is dropped, even with the
+    gate open again: another replica may have led in between;
+  - if the gate closed and reopened in the same term (a stalled scan that
+    resumed, with nobody else leading), a write still waiting is sent.
+
+  A dropped write ends with `ERROR` and `STATUS` -6 (lost), as on a
+  restart. Reads are not gated.
 - **A replica that takes over from standby sends every output once**
   through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers,
   with the program's value, changed or not: the runtime hands the
@@ -220,8 +245,16 @@ never computes.
 - **The HTTP API follows the leader.** Every replica serves the
   dashboard, and a standby reverse-proxies API traffic to the leader
   (the leader's address rides inside the Lease), so a Service in front
-  of the replicas just works. `GET /api/cluster` reports each replica's
-  own view — mode, leader, transitions.
+  of the replicas works. The replicas answer only `localhost`, an IP
+  address or a name in `NAUTILUS_ALLOWED_HOSTS` unless a request carries
+  the token, so the
+  Service's names go in that list: a deployment from `naut new --deploy`
+  sets `NAUTILUS_ALLOWED_HOSTS` to `name`, `name.<namespace>`,
+  `name.<namespace>.svc` and `name.<namespace>.svc.cluster.local`
+  (change the last for another cluster domain). The standby keeps the
+  request's Host when it proxies, so the leader checks the same name.
+  `GET /api/cluster` reports each replica's own view — mode, leader,
+  transitions.
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 
@@ -231,6 +264,11 @@ env:
     valueFrom: {fieldRef: {fieldPath: metadata.name}}
   - name: POD_IP
     valueFrom: {fieldRef: {fieldPath: status.podIP}}
+  # The Service's names, answered without the token (#819):
+  - name: POD_NAMESPACE
+    valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+  - name: NAUTILUS_ALLOWED_HOSTS
+    value: "water-scada,water-scada.$(POD_NAMESPACE),water-scada.$(POD_NAMESPACE).svc,water-scada.$(POD_NAMESPACE).svc.cluster.local"
 ```
 
 ## RBAC
@@ -269,8 +307,10 @@ few lines.
 
 `elector.SetHealth(rt.Liveness)` makes the lease need live scans, as
 `naut run` does; call it before `elector.Run`. `rt.Liveness(now, max)` is
-nil while the runtime's scans are completing, else an error naming the
-stuck task, so another election scheme can ask it too.
+nil while the runtime's scans are completing and starting on schedule,
+else an error naming the stuck or starved task, so another election
+scheme can ask it too. The same verdict drives the systemd watchdog
+heartbeat and, standalone, the local gate.
 
 `rt.Run(ctx)` returns after the last scan and, with a retain store, the
 last save. Wait for it to return before the process exits, or the writes

@@ -82,7 +82,7 @@ func (r *Runtime) LoadRetained() {
 		return
 	}
 	if err := r.loadRetained(); err != nil {
-		r.noteRetainError(err)
+		r.retainLoadFailed(err)
 	}
 	r.retainPreloaded = true
 }
@@ -203,6 +203,9 @@ func (r *Runtime) takeover() {
 	// would answer the POST with 200 and then quietly undo it.
 	if r.coord != nil {
 		r.dropForces("takeover")
+		// READ/WRITE requests the last leadership queued are not this
+		// one's to send.
+		r.tags.comm.newLeadership()
 	}
 	// LoadRetained already restored the store before the API answered
 	// (standalone only): loading it again here would undo a write made
@@ -211,7 +214,7 @@ func (r *Runtime) takeover() {
 		r.retainPreloaded = false
 	} else if r.retainStore != nil {
 		if err := r.loadRetained(); err != nil {
-			r.noteRetainError(err)
+			r.retainLoadFailed(err)
 		}
 	}
 	r.prog.ResetFrame()
@@ -621,6 +624,16 @@ func retainable(v ir.Value) bool {
 
 // noteRetainError folds a store failure into the diagnostics the dashboard
 // already shows, the same way I/O errors surface.
+// retainLoadFailed reports a retain store that could not be loaded: the
+// tags start from their initial values, which an operator must hear about
+// at once, not find later as a counter. (The file store has already moved
+// the unusable file aside, so the first save does not overwrite it.)
+func (r *Runtime) retainLoadFailed(err error) {
+	slog.Error("runtime: retained values could not be loaded; the tags start from their initial values",
+		"store", r.retainStore.Kind(), "error", err)
+	r.noteRetainError(err)
+}
+
 func (r *Runtime) noteRetainError(err error) {
 	r.mu.Lock()
 	r.stats.RetainErrors++

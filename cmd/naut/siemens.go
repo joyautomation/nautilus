@@ -268,7 +268,10 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	go f.Run(runCtx)
-	srv := &http.Server{Handler: f.Handler()}
+	// Requests carry runCtx (derived from ctx), so stopping serve ends the
+	// open /api/stream connections (VS Code keeps one) instead of Shutdown
+	// waiting them out.
+	srv := &http.Server{Handler: f.Handler(), BaseContext: func(net.Listener) context.Context { return runCtx }}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	fmt.Fprintf(stdout, "nautilus · Siemens %s — %d tags on http://%s — Ctrl+C to stop\n",

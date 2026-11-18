@@ -68,7 +68,7 @@ func newUDTRuntime(t *testing.T) *runtime.Runtime {
 func postTag(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", bytes.NewBufferString(body)))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", bytes.NewBufferString(body)))
 	return rec
 }
 
@@ -190,7 +190,7 @@ END_PROGRAM`,
 	}
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/forces", bytes.NewBufferString(`{"name": "Level", "value": 42.5}`)))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/forces", bytes.NewBufferString(`{"name": "Level", "value": 42.5}`)))
 	if rec.Code != 200 {
 		t.Fatalf("force on an input = %d, body %s", rec.Code, rec.Body)
 	}
@@ -263,7 +263,7 @@ func TestWriteMemberHonorsAuth(t *testing.T) {
 func TestMetaAdvertisesMemberWrites(t *testing.T) {
 	srv := New(newUDTRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
 	var meta struct {
 		MemberWrites bool     `json:"memberWrites"`
 		Inputs       []string `json:"inputs"`

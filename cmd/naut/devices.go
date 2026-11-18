@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/virtdev"
 )
@@ -156,7 +157,7 @@ func runDevicesProfiles(args []string, w io.Writer) int {
 		fmt.Fprint(os.Stderr, devicesUsage)
 		return 2
 	}
-	ps, err := virtdev.Builtin()
+	ps, err := devprofile.Builtin()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut devices profiles:", err)
 		return 1
@@ -176,7 +177,7 @@ func runDevicesShow(args []string, w io.Writer) int {
 		return 2
 	}
 	wd, _ := os.Getwd()
-	p, err := virtdev.ResolveProfile(wd, args[0])
+	p, err := devprofile.ResolveProfile(wd, args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut devices show:", err)
 		return 1
@@ -198,7 +199,7 @@ func runDevicesShow(args []string, w io.Writer) int {
 			fmt.Fprintf(w, "param {%s} default %q\n", k, v)
 		}
 	}
-	if m := p.Modbus; m != nil && p.Protocol == virtdev.ProtoModbus {
+	if m := p.Modbus; m != nil && p.Protocol == devprofile.ProtoModbus {
 		port := m.Port
 		if port == 0 {
 			port = 502

@@ -36,11 +36,13 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <linux/capability.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -111,6 +113,45 @@ static int pass_sys_nice(void) {
 	return 1;
 }
 
+#ifndef RLIMIT_RTTIME
+#define RLIMIT_RTTIME 15
+#endif
+
+// bound_rt sets RLIMIT_RTTIME before the exec, as the nautilus runtime does
+// before a task gets SCHED_FIFO (#836): a real-time thread of anything this
+// starts may run 200 ms of CPU without blocking (NAUTILUS_RT_LIMIT_MS, 10 to
+// 60000, changes it), then gets SIGXCPU; at 2.5 times that, SIGKILL. The
+// cap and the 64-bit arithmetic matter on the controller: armv7's long and
+// rlim_t are 32 bits, and a large value would wrap into a tiny limit. Limits
+// survive exec, so this bounds programs that set no limit of their own
+// (tools/jitter, a C program); a stricter limit already in force is kept,
+// and naut's own is the same or stricter. A failure is said, not fatal: the
+// launcher's job is to start the controller.
+static void bound_rt(void) {
+	uint64_t ms = 200;
+	const char *v = getenv("NAUTILUS_RT_LIMIT_MS");
+	if (v && *v) {
+		char *end;
+		errno = 0;
+		long n = strtol(v, &end, 10);
+		if (errno == 0 && *end == '\0' && n >= 10 && n <= 60000) {
+			ms = (uint64_t)n;
+		} else {
+			say("NAUTILUS_RT_LIMIT_MS is not a whole number of milliseconds from 10 to 60000; using 200", v);
+		}
+	}
+	// At most 150 000 000 µs: fits a 32-bit rlim_t.
+	struct rlimit cur, want = {(rlim_t)(ms * 1000), (rlim_t)(ms * 2500)};
+	if (getrlimit(RLIMIT_RTTIME, &cur) == 0) {
+		if (cur.rlim_cur < want.rlim_cur) want.rlim_cur = cur.rlim_cur;
+		if (cur.rlim_max < want.rlim_max) want.rlim_max = cur.rlim_max;
+		if (want.rlim_cur > want.rlim_max) want.rlim_cur = want.rlim_max;
+	}
+	if (setrlimit(RLIMIT_RTTIME, &want) != 0) {
+		say("RLIMIT_RTTIME not set; a runaway real-time thread is bounded only by the controller's own guards", strerror(errno));
+	}
+}
+
 int main(int argc, char **argv) {
 	// execve allows an empty argv; then argv[0] is the NULL terminator and
 	// overwriting it below would turn the environment into arguments.
@@ -161,6 +202,7 @@ int main(int argc, char **argv) {
 	unsetenv("LD_PRELOAD");
 	unsetenv("LD_LIBRARY_PATH");
 	unsetenv("LD_AUDIT");
+	bound_rt();
 	pass_sys_nice();
 	argv[0] = real;
 	execv(real, argv);

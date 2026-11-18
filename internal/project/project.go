@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -372,6 +373,58 @@ type TaskConfig struct {
 	// that cpu: 0 is a request and an absent key is not.
 	CPU      *int `yaml:"cpu"`
 	Priority int  `yaml:"priority"`
+	// PriorityGuard bounds the task while it runs at Priority: past either
+	// bound it loses the priority until a restart (runtime/prioguard.go).
+	PriorityGuard *PriorityGuardConfig `yaml:"priority-guard"`
+	// ShareCPU pins to cpu: even where another program already runs a
+	// real-time thread above priority:, which is otherwise refused at start
+	// (a vendor runtime or I/O shim's core; runtime/preflight_linux.go).
+	ShareCPU bool `yaml:"share-cpu"`
+}
+
+// PriorityGuardConfig is a task's priority-guard: block. Zero takes the
+// default (overruns 50, scan-multiple 20).
+type PriorityGuardConfig struct {
+	Overruns     int     `yaml:"overruns"`      // scans in a row longer than the period
+	ScanMultiple float64 `yaml:"scan-multiple"` // one scan longer than this many periods
+	// RTLimit tightens the kernel's bound (RLIMIT_RTTIME) on a real-time
+	// thread running without blocking; one per process, the strictest
+	// asked for wins (runtime.PriorityGuard.RTLimit, #907).
+	RTLimit Duration `yaml:"rt-limit"`
+}
+
+// The priority-guard bounds a manifest may set: generous, but finite, so a
+// guard cannot be switched off by a huge number.
+const (
+	maxGuardOverruns     = 100000
+	maxGuardScanMultiple = 10000
+)
+
+// guard checks a task's priority-guard: block and converts it.
+func (t TaskConfig) guard() (runtime.PriorityGuard, error) {
+	g := t.PriorityGuard
+	if g == nil {
+		return runtime.PriorityGuard{}, nil
+	}
+	if g.Overruns < 0 || g.Overruns > maxGuardOverruns {
+		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: overruns %d: a count of scans from 1 to %d (or leave it out for %d)", t.Program, g.Overruns, maxGuardOverruns, runtime.DefaultGuardOverruns)
+	}
+	// NaN fails every comparison, so it is named; Inf fails the cap.
+	if m := g.ScanMultiple; m != 0 && (math.IsNaN(m) || m < 2 || m > maxGuardScanMultiple) {
+		return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: scan-multiple %g: from 2 (below that, ordinary jitter would trip it) to %d (or leave it out for %g)", t.Program, m, maxGuardScanMultiple, runtime.DefaultGuardScanMultiple)
+	}
+	if d := time.Duration(g.RTLimit); d != 0 {
+		if d < runtime.MinRTLimit {
+			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit %s: at least %s (shorter, an ordinary page fault would demote the task)", t.Program, d, runtime.MinRTLimit)
+		}
+		if d > runtime.DefaultRTLimit {
+			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit %s: at most %s: rt-limit only tightens the default bound, never loosens it (NAUTILUS_RT_LIMIT_MS on the service does that)", t.Program, d, runtime.DefaultRTLimit)
+		}
+		if t.Priority <= 0 {
+			return runtime.PriorityGuard{}, fmt.Errorf("task %s: priority-guard: rt-limit bounds a task at a priority, and this task has no priority:", t.Program)
+		}
+	}
+	return runtime.PriorityGuard{Overruns: g.Overruns, ScanMultiple: g.ScanMultiple, RTLimit: time.Duration(g.RTLimit)}, nil
 }
 
 // TagConfig declares one tag by role — the manifest form of runtime.TagDef.
@@ -490,6 +543,10 @@ type DriverConfig struct {
 	// scan class per tick) or subscribe (one subscription per scan class,
 	// notified on change). Both keep the same quality and reconnect rules.
 	ReadMode string `yaml:"read-mode"`
+
+	// Tags binds a `type: runtime` status driver's inputs to the
+	// runtime's own health (runtimestatus.go, #850).
+	Tags []RuntimeStatusConfig `yaml:"tags"`
 }
 
 // ChannelConfig is one entry of channels:. Type cip is a Logix controller
@@ -879,8 +936,16 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	opts.DtTag = main.DtTag
 	opts.LateThreshold = time.Duration(main.LateThreshold)
 	opts.CPUs, opts.Priority = cpuList(main.CPU), main.Priority
+	if opts.Guard, err = main.guard(); err != nil {
+		return nil, err
+	}
+	opts.ShareCPU = main.ShareCPU
 	for _, t := range m.Tasks[1:] {
 		src, err := readProgram(t)
+		if err != nil {
+			return nil, err
+		}
+		g, err := t.guard()
 		if err != nil {
 			return nil, err
 		}
@@ -899,6 +964,8 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			LateThreshold: time.Duration(t.LateThreshold),
 			CPUs:          cpuList(t.CPU),
 			Priority:      t.Priority,
+			Guard:         g,
+			ShareCPU:      t.ShareCPU,
 		})
 	}
 
@@ -909,6 +976,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	opts.Meta = applyTagMeta(opts.Tags, m.TagMeta)
 	var drivers []nio.NamedDriver
 	if opts.Driver, drivers, err = buildDrivers(fsys, m); err != nil {
+		return nil, err
+	}
+	if opts.Driver, err = pairRuntimeStatus(opts.Driver, taskNames(opts)); err != nil {
 		return nil, err
 	}
 	// Protocol inputs read as their init (or zero) until first delivered;

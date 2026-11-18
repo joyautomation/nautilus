@@ -422,10 +422,13 @@ func TestDriverLogsARepeatedSessionErrorOnce(t *testing.T) {
 	drv.retryMin = 5 * time.Millisecond
 	drv.Start(context.Background())
 	defer drv.Stop()
+	// Wait on Health, not on the dialer: an attempt is counted in Health
+	// (and its warning, if any, logged) only after its dial returns, so
+	// the dialer's own count runs ahead by one while a dial is in flight.
 	deadline := time.Now().Add(3 * time.Second)
-	for tries.Load() < 5 {
+	for drv.Health().Errors < 5 {
 		if time.Now().After(deadline) {
-			t.Fatalf("only %d dial attempts", tries.Load())
+			t.Fatalf("health counts %d errors after %d dial attempts, want every attempt", drv.Health().Errors, tries.Load())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -433,10 +436,7 @@ func TestDriverLogsARepeatedSessionErrorOnce(t *testing.T) {
 	out := buf.String()
 	mu.Unlock()
 	if n := strings.Count(out, "session ended"); n != 1 {
-		t.Errorf("%d warnings for %d identical failures, want 1:\n%s", n, tries.Load(), out)
-	}
-	if h := drv.Health(); h.Errors < 5 {
-		t.Errorf("health counts %d errors, want every attempt (≥ 5)", h.Errors)
+		t.Errorf("%d warnings for %d identical failures, want 1:\n%s", n, drv.Health().Errors, out)
 	}
 }
 

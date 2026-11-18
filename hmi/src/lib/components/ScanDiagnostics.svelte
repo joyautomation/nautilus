@@ -6,7 +6,8 @@
 	import Sparkline from './Sparkline.svelte';
 	import Histogram from './Histogram.svelte';
 	import StatusPill from './StatusPill.svelte';
-	import type { ScanStats, SchedStats } from '../types.js';
+	import type { ScanStats } from '../types.js';
+	import { schedPlacement, schedVerdict } from '../sched.js';
 
 	let { scan }: { scan: ScanStats } = $props();
 
@@ -20,13 +21,9 @@
 	let late = $derived(scan.lateness);
 	let latePct = $derived(late && scan.count ? (100 * late.late) / scan.count : 0);
 	// Thread placement, when asked for: "cpu 3 · fifo 50", flagged when
-	// the OS refused it (the task is then running unpinned).
-	const sched = (s: SchedStats | undefined) => {
-		if (!s || (!s.cpus?.length && !s.priority)) return '';
-		return [s.cpus?.length ? 'cpu ' + s.cpus.join(',') : '', s.priority ? 'fifo ' + s.priority : '']
-			.filter(Boolean)
-			.join(' · ');
-	};
+	// the OS refused it (REFUSED: running unpinned at normal priority) or
+	// the priority was withdrawn mid-run (DEMOTED, by the priority guard).
+	const sched = schedPlacement;
 
 	// Phase widths as fractions of the last scan (logic is µs — usually a sliver).
 	let phases = $derived.by(() => {
@@ -131,7 +128,7 @@
 						<td
 							>main{#if sched(scan.sched)}
 								<small class:bad={!!scan.sched?.error} title={scan.sched?.error}
-									>{sched(scan.sched)}{scan.sched?.error ? ' REFUSED' : ''}</small
+									>{sched(scan.sched)}{schedVerdict(scan.sched) ? ' ' + schedVerdict(scan.sched) : ''}</small
 								>{/if}</td
 						>
 						<td class="num">{fmt(scan.targetMs, 0)} ms</td>
@@ -148,7 +145,7 @@
 							<td
 								>{t.name}{#if sched(t.sched)}
 									<small class:bad={!!t.sched?.error} title={t.sched?.error}
-										>{sched(t.sched)}{t.sched?.error ? ' REFUSED' : ''}</small
+										>{sched(t.sched)}{schedVerdict(t.sched) ? ' ' + schedVerdict(t.sched) : ''}</small
 									>{/if}</td
 							>
 							<td class="num">{fmt(t.targetMs, 0)} ms</td>

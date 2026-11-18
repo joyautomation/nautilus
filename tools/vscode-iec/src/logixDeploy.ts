@@ -35,6 +35,7 @@ import {
   shellLine,
   SHOW_OUTPUT,
 } from "./logixDeployLogic";
+import { apiFetch } from "./apiFetch";
 
 const CONTEXT_KEY = "nautilus.logixTarget";
 const IEC_FILE = /\.(st|ld|fbd|sfc)$/i;
@@ -48,8 +49,6 @@ function runtimeUrl(): string {
 
 function writeHeaders(): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
-  if (token) headers["Authorization"] = "Bearer " + token;
   return headers;
 }
 
@@ -114,7 +113,7 @@ export class LogixDeploy implements vscode.Disposable {
     const START = "Start naut logix serve";
     let res: Awaited<ReturnType<typeof fetch>>;
     try {
-      res = await fetch(url + "/api/program", { signal: AbortSignal.timeout(5000) });
+      res = await apiFetch(url + "/api/program", { signal: AbortSignal.timeout(5000) });
     } catch {
       const pick = await notifyError(
         `nautilus: nothing answers at ${url} — ${action} goes through \`naut logix serve --project\`, which also serves the live values`,
@@ -201,7 +200,7 @@ export class LogixDeploy implements vscode.Disposable {
       final = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: `nautilus: ${what} → ${name}` },
         async (progress) => {
-          const res = await fetch(runtimeUrl() + "/api/logix/deploy", {
+          const res = await apiFetch(runtimeUrl() + "/api/logix/deploy", {
             method: "POST",
             headers: writeHeaders(),
             body: JSON.stringify({ mode, source: prog.programBody, ...extra }),

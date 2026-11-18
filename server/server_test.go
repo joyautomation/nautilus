@@ -45,7 +45,7 @@ func newTestRuntime(t *testing.T) *runtime.Runtime {
 func TestStateSnapshot(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
@@ -68,7 +68,7 @@ func TestWriteTag(t *testing.T) {
 
 	body := bytes.NewBufferString(`{"name": "SP", "value": 80.0}`)
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", body))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", body))
 	if rec.Code != 204 {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 	}
@@ -77,7 +77,7 @@ func TestWriteTag(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader("{}")))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", strings.NewReader("{}")))
 	if rec.Code != 400 {
 		t.Errorf("empty name accepted: %d", rec.Code)
 	}
@@ -90,7 +90,7 @@ func TestWriteTag(t *testing.T) {
 		{"Bias", `{"name": "Bias", "value": 2.5}`},
 	} {
 		rec = httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", bytes.NewBufferString(c.body)))
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", bytes.NewBufferString(c.body)))
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "undefined tag "+c.name) {
 			t.Errorf("write to undeclared %s: status %d, body %q; want 400 naming it", c.name, rec.Code, rec.Body)
 		}
@@ -101,7 +101,7 @@ func TestWriteTag(t *testing.T) {
 	// A value the declared tag can't store is still rejected, not silently
 	// accepted with a 204 that wrote nothing.
 	rec = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", bytes.NewBufferString(`{"name": "SP", "value": "AUTO"}`)))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", bytes.NewBufferString(`{"name": "SP", "value": "AUTO"}`)))
 	if rec.Code != 422 {
 		t.Errorf("string value to a REAL tag: status = %d, want 422", rec.Code)
 	}
@@ -109,7 +109,7 @@ func TestWriteTag(t *testing.T) {
 	// with the reason, and neither the dotted name nor its root appears.
 	rec = httptest.NewRecorder()
 	body = bytes.NewBufferString(`{"name": "Nope.Speed", "value": 1.0}`)
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", body))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", body))
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Nope") {
 		t.Errorf("member write under an unknown tag: status %d, body %q; want 400 naming it", rec.Code, rec.Body)
 	}
@@ -225,7 +225,7 @@ func TestWriteAuthRefusesARebindableHost(t *testing.T) {
 		{"a configured name (case-insensitive)", "epic1.PLANT.lan:8080", "http://epic1.PLANT.lan:8080", 204},
 		{"a configured name given with a port", "hmi.local:8080", "http://hmi.local:8080", 204},
 		{"a configured name given with a root dot", "panel.lan:8080", "http://panel.lan:8080", 204},
-		{"no Origin (not a browser)", "evil.example:8080", "", 204},
+		{"no Origin (not a browser), by IP", "192.168.82.10:8080", "", 204},
 	} {
 		if got := post(open, tc.host, tc.origin, ""); got != tc.want {
 			t.Errorf("%s (Host %s, Origin %q): %d, want %d", tc.what, tc.host, tc.origin, got, tc.want)
@@ -312,10 +312,129 @@ func TestCORSAllowsOnlyOriginsThatCannotBeAnotherSite(t *testing.T) {
 	}
 }
 
+// #819: without a token the server answers only requests addressed to a
+// Host no page can rebind, reads included: a rebound page is same-origin
+// with the rebound name, sends no Origin on a GET, and CORS never applies,
+// so the Host is the one thing that tells it apart.
+func TestGuardHostRefusesEveryRouteOnARebindableHost(t *testing.T) {
+	get := func(srv *Server, method, host, path string) int {
+		req := httptest.NewRequest(method, "http://"+host+path, nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	open := New(newTestRuntime(t), Options{OnlineEdits: true, AllowedHosts: []string{"epic1.plant.lan"}})
+	withHMI := New(newTestRuntime(t), Options{HMI: testHMI()})
+	for _, path := range []string{"/api/state", "/api/program", "/api/meta", "/api/alarms", "/api/history", "/api/forces", "/api/drivers", "/"} {
+		if got := get(open, "GET", "evil.example:8080", path); got != http.StatusForbidden {
+			t.Errorf("GET %s by a rebound name: %d, want 403", path, got)
+		}
+		for _, host := range []string{"localhost:8080", "192.168.82.10:8080", "epic1.plant.lan:8080"} {
+			if got := get(open, "GET", host, path); got == http.StatusForbidden {
+				t.Errorf("GET %s by %s: 403, want it answered", path, host)
+			}
+		}
+	}
+	if got := get(open, "POST", "evil.example:8080", "/api/tags"); got != http.StatusForbidden {
+		t.Errorf("a no-Origin POST by a rebound name: %d, want 403", got)
+	}
+	// The HMI and its assets.
+	if got := get(withHMI, "GET", "evil.example:8080", "/"); got != http.StatusForbidden {
+		t.Errorf("the HMI by a rebound name: %d, want 403", got)
+	}
+	if got := get(withHMI, "GET", "localhost:8080", "/"); got != http.StatusOK {
+		t.Errorf("the HMI on localhost: %d, want 200", got)
+	}
+	// The live stream refuses before it starts streaming (bounded, so an
+	// unguarded stream fails the test instead of hanging it).
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sreq := httptest.NewRequest("GET", "http://evil.example:8080/api/stream", nil).WithContext(ctx)
+	sreq.Host = "evil.example:8080"
+	srec := httptest.NewRecorder()
+	open.Handler().ServeHTTP(srec, sreq)
+	if srec.Code != http.StatusForbidden {
+		t.Errorf("the stream by a rebound name: %d, want 403", srec.Code)
+	}
+	// With a token configured, a request by a name no page can rebind is
+	// answered without it, as before; by any other name it needs the
+	// token, so a rebound page cannot read a token controller either.
+	locked := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	for _, path := range []string{"/api/state", "/api/program", "/"} {
+		if got := get(locked, "GET", "evil.example:8080", path); got != http.StatusForbidden {
+			t.Errorf("GET %s on a token controller by a rebound name: %d, want 403", path, got)
+		}
+		if got := get(locked, "GET", "192.168.82.10:8080", path); got == http.StatusForbidden {
+			t.Errorf("GET %s on a token controller by IP: 403, want it answered", path)
+		}
+	}
+	tokReq := httptest.NewRequest("GET", "http://hmi.example/api/state", nil)
+	tokReq.Host = "hmi.example:8080"
+	tokReq.Header.Set("Authorization", "Bearer s3cret")
+	tokRec := httptest.NewRecorder()
+	locked.Handler().ServeHTTP(tokRec, tokReq)
+	if tokRec.Code != http.StatusOK {
+		t.Errorf("a read with the token by any name: %d, want 200", tokRec.Code)
+	}
+	// A cross-origin page holding the token is still served by name: its
+	// preflight carries no token, so it is answered (204, no data), and the
+	// request it precedes carries the token.
+	pre := httptest.NewRequest("OPTIONS", "http://hmi.example/api/tags", nil)
+	pre.Host = "hmi.example:8080"
+	pre.Header.Set("Origin", "https://ops.example")
+	pre.Header.Set("Access-Control-Request-Method", "POST")
+	pre.Header.Set("Access-Control-Request-Headers", "authorization")
+	preRec := httptest.NewRecorder()
+	locked.Handler().ServeHTTP(preRec, pre)
+	if preRec.Code != http.StatusNoContent || preRec.Header().Get("Access-Control-Allow-Origin") != "https://ops.example" || preRec.Body.Len() != 0 {
+		t.Errorf("a preflight on a token controller by name: %d, ACAO %q, %d bytes; want 204 echoing the origin, no body",
+			preRec.Code, preRec.Header().Get("Access-Control-Allow-Origin"), preRec.Body.Len())
+	}
+	// Without a token configured, the same preflight by a rebound name is
+	// refused like every other request.
+	pre2 := pre.Clone(pre.Context())
+	tokenless := New(newTestRuntime(t))
+	openRec := httptest.NewRecorder()
+	tokenless.Handler().ServeHTTP(openRec, pre2)
+	if openRec.Code != http.StatusForbidden {
+		t.Errorf("a preflight on a token-less controller by a rebound name: %d, want 403", openRec.Code)
+	}
+	// A bare OPTIONS (no preflight header) is no exemption.
+	bare := httptest.NewRequest("OPTIONS", "http://hmi.example/api/state", nil)
+	bare.Host = "hmi.example:8080"
+	bareRec := httptest.NewRecorder()
+	locked.Handler().ServeHTTP(bareRec, bare)
+	if bareRec.Code != http.StatusForbidden {
+		t.Errorf("a bare OPTIONS on a token controller by name: %d, want 403", bareRec.Code)
+	}
+}
+
+// #819: New reads NAUTILUS_ALLOWED_HOSTS itself, so every embedder (naut
+// run, the serve commands, an SDK program calling server.New) honours the
+// setting its 403 names; and a request Host's root dot is dropped as a
+// configured name's is.
+func TestNewReadsAllowedHostsFromTheEnvironment(t *testing.T) {
+	t.Setenv("NAUTILUS_ALLOWED_HOSTS", " epic1.plant.lan, ,hmi.local:8086 ,ok.example. ")
+	srv := New(newTestRuntime(t)) // no Options: an SDK program's default
+	for host, want := range map[string]int{
+		"epic1.plant.lan:8080": 200, "hmi.local:8080": 200, "ok.example:8080": 200,
+		"ok.example.:8080": 200, "epic1.plant.lan.:8080": 200, "other.plant.lan:8080": 403,
+	} {
+		req := httptest.NewRequest("GET", "http://"+host+"/api/state", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET by %s: %d, want %d", host, rec.Code, want)
+		}
+	}
+}
+
 func TestWriteAuthToken(t *testing.T) {
 	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
 	post := func(setup func(*http.Request)) int {
-		req := httptest.NewRequest("POST", "http://plc.local/api/tags",
+		req := httptest.NewRequest("POST", "http://192.168.1.10/api/tags",
 			bytes.NewBufferString(`{"name":"SP","value":70}`))
 		if setup != nil {
 			setup(req)
@@ -350,7 +469,7 @@ func TestLandingPage(t *testing.T) {
 
 	// "/" serves the dashboard.
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET / status = %d", rec.Code)
 	}
@@ -363,7 +482,7 @@ func TestLandingPage(t *testing.T) {
 
 	// An unknown path still 404s (the catch-all only serves exactly "/").
 	rec = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/nope", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/nope", nil))
 	if rec.Code != 404 {
 		t.Errorf("GET /nope status = %d, want 404", rec.Code)
 	}
@@ -372,7 +491,7 @@ func TestLandingPage(t *testing.T) {
 func TestCORSPreflight(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("OPTIONS", "/api/tags", nil)
+	req := httptest.NewRequest("OPTIONS", "http://localhost/api/tags", nil)
 	req.Header.Set("Origin", "http://localhost:5173") // a dev server on this machine
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
@@ -383,7 +502,7 @@ func TestCORSPreflight(t *testing.T) {
 func TestFrameCarriesScanDiagnostics(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	var f Frame
 	if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil {
 		t.Fatal(err)
@@ -418,7 +537,7 @@ func TestMetaEndpoint(t *testing.T) {
 	}
 	srv := New(rt)
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -464,5 +583,86 @@ func TestCORSPreflightAllowsEveryMethodTheAPIServes(t *testing.T) {
 		if !ok {
 			t.Errorf("preflight for %s %s allows %q, not %s", tc.method, tc.path, rec.Header().Get("Access-Control-Allow-Methods"), tc.method)
 		}
+	}
+}
+
+// #819 review: the controller's token is for the controller. The
+// /api/history proxy does not pass it on to the historian, another service.
+func TestHistoryProxyDoesNotForwardTheToken(t *testing.T) {
+	var auth, xtok, path, host string
+	hist := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, xtok, path, host = r.Header.Get("Authorization"), r.Header.Get("X-Nautilus-Token"), r.URL.Path, r.Host
+		w.Write([]byte(`{}`))
+	}))
+	defer hist.Close()
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret", HistorianURL: hist.URL})
+	for _, h := range []string{"Authorization", "X-Nautilus-Token"} {
+		req := httptest.NewRequest("GET", "http://plc.lan/api/history/span", nil)
+		req.Host = "plc.lan:8080" // by name, so the token is what lets it in
+		if h == "Authorization" {
+			req.Header.Set(h, "Bearer s3cret")
+		} else {
+			req.Header.Set(h, "s3cret")
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || path != "/history/span" {
+			t.Fatalf("%s: proxied %d to %q, want 200 to /history/span", h, rec.Code, path)
+		}
+		if auth != "" || xtok != "" {
+			t.Errorf("%s: the historian saw Authorization %q, X-Nautilus-Token %q; want neither", h, auth, xtok)
+		}
+		// #831: addressed to the historian by its own name, not the
+		// controller's ("plc.lan"), which the historian need not allow.
+		if want := strings.TrimPrefix(hist.URL, "http://"); host != want {
+			t.Errorf("%s: the historian saw Host %q, want %q", h, host, want)
+		}
+	}
+}
+
+// #819 review: GuardHost answers a preflight itself, so a route of the
+// handler it wraps that takes any method (an embedder's) never sees one
+// it was not authorized for.
+func TestGuardHostAnswersAPreflightItself(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	reached := false
+	h := srv.GuardHost(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.Write([]byte("secret data"))
+	}))
+	req := httptest.NewRequest("OPTIONS", "http://hmi.example/anything", nil)
+	req.Host = "hmi.example:8080"
+	req.Header.Set("Origin", "https://ops.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if reached || rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Errorf("preflight by name: reached the handler %v, %d, %q; want 204 from the guard, no body", reached, rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://ops.example" {
+		t.Errorf("preflight by name: ACAO %q, want the origin (a token server allows any)", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+// #819 review: the Authorization scheme is case-insensitive.
+func TestTokenSchemeIsCaseInsensitive(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	for _, a := range []string{"Bearer s3cret", "bearer s3cret", "BEARER s3cret"} {
+		req := httptest.NewRequest("GET", "http://plc.lan/api/state", nil)
+		req.Host = "plc.lan:8080"
+		req.Header.Set("Authorization", a)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Authorization %q by name: %d, want 200", a, rec.Code)
+		}
+	}
+	req := httptest.NewRequest("GET", "http://plc.lan/api/state", nil)
+	req.Host = "plc.lan:8080"
+	req.Header.Set("Authorization", "Basic s3cret")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Authorization Basic by name: %d, want 403", rec.Code)
 	}
 }

@@ -162,6 +162,7 @@ func scalarFromInit(t *Type, v any, path string) (Value, error) {
 		return Value{}, fmt.Errorf("%s: want TIME (T#3s, 3s, or milliseconds), got %s", path, describeKind(v))
 	default:
 		// FB — an instance is program state, never a tag's member.
+		//lint:ignore ST1005 the message ends with the manifest key it points at (init:)
 		return Value{}, fmt.Errorf("%s: %s members cannot be seeded by init:", path, t.String())
 	}
 }

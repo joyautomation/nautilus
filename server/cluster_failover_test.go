@@ -66,7 +66,7 @@ func TestStandbyReplaysARefusedForwardToTheNewLeader(t *testing.T) {
 		c.set(leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-2", LeaderAddr: standbyAddr(next)})
 	}()
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader(`{"name":"SP","value":5}`)))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", strings.NewReader(`{"name":"SP","value":5}`)))
 	if rec.Code != http.StatusNoContent || got != `POST /api/tags {"name":"SP","value":5}` {
 		t.Fatalf("status %d, new leader saw %q; want 204 and the original request", rec.Code, got)
 	}
@@ -84,7 +84,7 @@ func TestStandbyThatTakesOverAnswersLocally(t *testing.T) {
 		c.set(leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-1", IsLeader: true})
 	}()
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tags"`) {
 		t.Fatalf("status %d body %.200s; want this replica's own /api/state", rec.Code, rec.Body)
 	}
@@ -97,7 +97,7 @@ func TestStandbyRefusedForwardWithNoNewLeaderIs502(t *testing.T) {
 	c := &movingCluster{st: leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: deadAddr(t)}}
 	srv := New(newTestRuntime(t), Options{Cluster: c})
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status %d, want 502", rec.Code)
 	}
@@ -123,7 +123,7 @@ func TestStandbyDoesNotReplayAnAbandonedRequest(t *testing.T) {
 	}()
 	start := time.Now()
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader(`{"name":"SP","value":5}`)).WithContext(ctx))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", strings.NewReader(`{"name":"SP","value":5}`)).WithContext(ctx))
 	if d := time.Since(start); d > 300*time.Millisecond+150*time.Millisecond {
 		t.Errorf("the handler waited %v; it should stop when the client leaves", d)
 	}

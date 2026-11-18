@@ -739,6 +739,13 @@ func plcnextStatus(h plcnext.Health) server.DriverStatus {
 	if h.Shim != nil && h.Shim.Watchdog {
 		s.State, s.Message = "error", "The shim's output watchdog lapsed: outputs are driven to zero"
 	}
+	// The write gate (a hung or starved scan, #858): nothing is written.
+	switch {
+	case h.GateHolds:
+		s.State, s.Message = "error", "Write gate closed: outputs held (no safe state: no output watchdog on this route)"
+	case h.GateClosed:
+		s.State, s.Message = "error", "Write gate closed: nothing is written; the shim's watchdog drives the outputs to zero"
+	}
 	s.Metrics = []server.DriverMetric{
 		{Label: "tags", Value: float64(h.Tags)},
 		{Label: "reads", Value: float64(h.Reads), Volatile: true},

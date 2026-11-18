@@ -56,6 +56,12 @@ type Options struct {
 	// for the IEC timers' NowMs — the two clocks a program can observe. Nil
 	// in production; tests inject a virtual one. See clock.go.
 	Clock Clock
+	// LoopSleep, when set, replaces a loop's sleep to its next slot: it is
+	// called with the task's name (MainTaskName for the main task) and
+	// returns false when ctx ended the wait, as the platform sleep does.
+	// Nil in production (the wall clock, at no cost); tests use it to
+	// starve one loop between scans (#858).
+	LoopSleep func(task string, ctx context.Context, until time.Time) bool
 	// Retain persists operator state across power cycles — retained tag
 	// values and online-edited program sources. See the retain package for
 	// the file and ConfigMap stores. Loaded before the first scan, saved on
@@ -81,6 +87,12 @@ type Options struct {
 	// watchdog that must be re-armed, or a bus whose outputs decay without
 	// a rewrite.
 	AlwaysWriteOutputs bool
+	// HoldOutputsOnSwap keeps a driver swapped in live (ReplaceDriver,
+	// #706) from writing the current outputs until they change: its
+	// start-up baseline records them. Off (the default) disarms the new
+	// driver's baseline, so it starts from the current commands. A single
+	// switch while the choice is open (#706, James's decision 1).
+	HoldOutputsOnSwap bool
 	// TakeoverInputsWait bounds how long a redundancy takeover waits for a
 	// driver that is an io.InputsReadier to report live inputs before it
 	// runs on what the driver holds (0: DefaultTakeoverInputsWait). Only
@@ -102,6 +114,13 @@ type Options struct {
 	// pinned core is actually quiet.
 	CPUs     []int
 	Priority int
+	// Guard bounds the main task while it runs at Priority (prioguard.go);
+	// zero fields take the defaults. Tasks have the same field.
+	Guard PriorityGuard
+	// ShareCPU pins to CPUs even where another program already runs a
+	// real-time thread above Priority, which pre-flight otherwise refuses
+	// (preflight_linux.go). Tasks have the same field.
+	ShareCPU bool
 	// Coordinator gates the scan loop for redundancy: a standby replica
 	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
 	// performs the takeover sequence (reload retained state, reset program
@@ -126,6 +145,8 @@ type Task struct {
 	// CPUs and Priority pin this task's thread — see Options.CPUs.
 	CPUs     []int
 	Priority int
+	Guard    PriorityGuard // see Options.Guard
+	ShareCPU bool          // see Options.ShareCPU
 }
 
 // TaskStats is one additional task's health, riding inside ScanStats.
@@ -136,6 +157,9 @@ type TaskStats struct {
 	LastMs      float64 `json:"lastMs"`
 	LogicErrors uint64  `json:"logicErrors"`
 	LastError   string  `json:"lastError,omitempty"`
+	// Faulting: the task's last scan raised a logic error (a fault episode
+	// is open; it closes on the first clean scan).
+	Faulting bool `json:"faulting,omitempty"`
 	// Lateness is this task's wake-up timing — see Lateness.
 	Lateness Lateness `json:"lateness"`
 	// Sched is what was asked of the OS scheduler for this task's thread
@@ -152,16 +176,26 @@ type SchedStats struct {
 	Priority int    `json:"priority,omitempty"`
 	Applied  bool   `json:"applied"`
 	Error    string `json:"error,omitempty"`
+	// Demoted: the priority was granted and later withdrawn (the priority
+	// guard or the kernel's RLIMIT_RTTIME); Error says why. A refusal at
+	// start leaves it false.
+	Demoted bool `json:"demoted,omitempty"`
+	// Guard is the bound a task at a priority runs under (prioguard.go).
+	Guard *PriorityGuard `json:"guard,omitempty"`
 }
 
 // taskRun is a compiled Task plus its live scheduling state.
 type taskRun struct {
-	name  string
-	prog  *Program
-	scan  time.Duration
-	dtTag string
-	cpus  []int
-	prio  int
+	name     string
+	prog     *Program
+	scan     time.Duration
+	dtTag    string
+	cpus     []int
+	prio     int
+	shareCPU bool          // pin beside a higher-priority real-time thread anyway (preflight_linux.go)
+	guard    PriorityGuard // with defaults
+	watch    overrunWatch  // the loop's own (prioguard.go)
+	tid      atomic.Int64  // the loop's thread once it holds the priority
 
 	mu       sync.Mutex
 	lastScan time.Time
@@ -191,12 +225,18 @@ type Runtime struct {
 	types   map[string]*ir.Type
 	tasks   []*taskRun
 	clock   Clock // nil = wall clock; see clock.go
+	// loopSleep is Options.LoopSleep: nil sleeps on the wall clock.
+	loopSleep func(task string, ctx context.Context, until time.Time) bool
 
 	retainStore retain.Store
 	retainTags  []string
 	coord       Coordinator
 	cpus        []int // main task thread placement, see Options.CPUs
 	prio        int
+	shareCPU    bool          // see taskRun.shareCPU
+	guard       PriorityGuard // main task, with defaults (prioguard.go)
+	watch       overrunWatch  // main loop's own
+	tid         atomic.Int64  // main loop's thread once it holds the priority
 
 	// retainSkipped remembers which retained tags retainState has already
 	// logged as unretainable (see retainable), so the 2-second saver names
@@ -214,6 +254,7 @@ type Runtime struct {
 	// the same stamp knows the driver already holds exactly these values.
 	// Atomic because takeover() clears outSent from outside mainMu.
 	alwaysWrite bool
+	holdOnSwap  bool
 	outGen      atomic.Uint64
 	outSent     atomic.Bool
 	// asker is the driver as an io.OutputsRequester, nil when it is not
@@ -262,6 +303,9 @@ type Runtime struct {
 	// tasks do not take it: each Program.Run isolates its own scan
 	// (scanview.go), so tasks never wait on one another.
 	mainMu sync.Mutex
+
+	// procsOnce applies the GOMAXPROCS rule once, at the first Run.
+	procsOnce sync.Once
 
 	// obsMu guards onScan/obsNext independently of mainMu: OnScan may be
 	// called (registration or cancel) from any goroutine at any time,
@@ -345,6 +389,9 @@ type ScanStats struct {
 	Lateness Lateness `json:"lateness"`
 	// Sched is the main task's thread placement — see SchedStats.
 	Sched SchedStats `json:"sched"`
+	// Procs is GOMAXPROCS as the loops run, and whether the runtime raised
+	// it for a task at a priority on a box with few cores (gomaxprocs.go).
+	Procs ProcsStats `json:"gomaxprocs"`
 
 	// Retain-store failures surface here the way I/O failures do: a save
 	// that keeps erroring is invisible exactly until the restart that
@@ -363,6 +410,9 @@ type ScanStats struct {
 	IOErrors    uint64 `json:"ioErrors"`
 	LogicErrors uint64 `json:"logicErrors"`
 	LastError   string `json:"lastError,omitempty"` // message of the last main-task fault
+	// Faulting: the main task's last scan raised a LOGIC error (its program
+	// failed; an I/O fault is IOHealthy). It closes on the first clean scan.
+	Faulting bool `json:"faulting,omitempty"`
 	// DivZero counts divisions (and MODs) by zero evaluated by any task
 	// since start. The VM yields 0 and the scan keeps running, so this is
 	// the only trace a bad divisor leaves — the Logix S:V of nautilus.
@@ -432,9 +482,10 @@ func New(o Options) (*Runtime, error) {
 		if scan <= 0 {
 			scan = 100 * time.Millisecond
 		}
-		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority}
+		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority, shareCPU: td.ShareCPU, guard: td.Guard.withDefaults()}
+		tr.watch.limit = tr.guard.Overruns
 		tr.stats.Name = name
-		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority}
+		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority, Guard: guardStat(td.Priority, tr.guard, 0)}
 		tr.stats.TargetMs = scan.Seconds() * 1000
 		lt := td.LateThreshold
 		if lt <= 0 {
@@ -478,6 +529,13 @@ func New(o Options) (*Runtime, error) {
 	}
 	if len(o.Channels) > 0 {
 		tags.comm = newCommHub(o.Channels)
+		if o.Coordinator != nil {
+			var term func() uint64
+			if t, ok := o.Coordinator.(Termed); ok {
+				term = t.Term
+			}
+			tags.comm.setGate(o.Coordinator.IsLeader, term)
+		}
 	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
 	// Set before any scan or goroutine can observe it, so the store's NowMs
@@ -538,9 +596,9 @@ func New(o Options) (*Runtime, error) {
 	r := &Runtime{
 		prog: prog, tags: tags, driver: o.Driver, scan: o.Scan,
 		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
-		clock: o.Clock, types: types, tasks: tasks,
+		clock: o.Clock, loopSleep: o.LoopSleep, types: types, tasks: tasks,
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
-		alwaysWrite: o.AlwaysWriteOutputs, untypedComms: untyped,
+		alwaysWrite: o.AlwaysWriteOutputs, holdOnSwap: o.HoldOutputsOnSwap, untypedComms: untyped,
 	}
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a
@@ -562,7 +620,10 @@ func New(o Options) (*Runtime, error) {
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
 	r.cpus, r.prio = o.CPUs, o.Priority
-	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority}
+	r.guard = o.Guard.withDefaults()
+	r.shareCPU = o.ShareCPU
+	r.watch.limit = r.guard.Overruns
+	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority, Guard: guardStat(o.Priority, r.guard, 0)}
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -998,16 +1059,42 @@ func (r *Runtime) ProgramByPOU(pou string) (*Program, string) {
 // the saver's last tick; only a hard kill can lose up to saveInterval
 // (nautilus#531).
 func (r *Runtime) Run(ctx context.Context) {
+	// Before any loop takes its thread: a task at a priority must find a
+	// free P when it wakes (gomaxprocs.go).
+	r.tuneProcs()
 	var saved chan []byte
 	if r.retainStore != nil {
 		saved = make(chan []byte, 1)
 		go func() { saved <- r.retainSaver(ctx) }()
 	}
+	// Before the first scan: a status driver reads this runtime's health.
+	r.bindStatsReaders(r.driver)
 	// Liveness watches the loops from here on; see liveness.go.
 	r.live.state.Store(runRunning)
 	defer r.live.state.Store(runStopped)
 	if r.tags.comm != nil {
 		defer r.tags.comm.close()
+	}
+	var guarded []*guarded
+	var rtLimit time.Duration // the strictest RTLimit asked for (prioguard.go)
+	ask := func(g PriorityGuard) {
+		if g.RTLimit > 0 && (rtLimit == 0 || g.RTLimit < rtLimit) {
+			rtLimit = g.RTLimit
+		}
+	}
+	if r.prio > 0 {
+		guarded = append(guarded, r.guardLoop(r.live.loops[0], r.scan, r.guard, &r.tid))
+		ask(r.guard)
+	}
+	for i, tr := range r.tasks {
+		if tr.prio > 0 {
+			guarded = append(guarded, r.guardLoop(r.live.loops[i+1], tr.scan, tr.guard, &tr.tid))
+			ask(tr.guard)
+		}
+	}
+	requestRTLimit(rtLimit) // before any loop takes its priority
+	if len(guarded) > 0 {
+		go monitorPriority(ctx, guarded, demoteTid)
 	}
 	var loops sync.WaitGroup
 	for i, tr := range r.tasks {
@@ -1015,7 +1102,8 @@ func (r *Runtime) Run(ctx context.Context) {
 		live := r.live.loops[i+1]
 		go func(tr *taskRun) {
 			defer loops.Done()
-			runLoop(ctx, tr.scan, func(due time.Time) {
+			defer live.exited.Store(true)
+			runLoop(ctx, tr.scan, r.loopClockFor(tr.name), func(due time.Time) {
 				live.begin()
 				r.scanTaskAt(tr, due)
 				live.end()
@@ -1024,16 +1112,24 @@ func (r *Runtime) Run(ctx context.Context) {
 				tr.late.missed += k
 				tr.mu.Unlock()
 			}, func() {
-				err := applySched(tr.cpus, tr.prio)
+				err := applySched(tr.cpus, tr.prio, tr.shareCPU, func(reason string) {
+					tr.mu.Lock()
+					tr.stats.Sched.Applied, tr.stats.Sched.Error, tr.stats.Sched.Demoted = false, reason, true
+					tr.mu.Unlock()
+				})
+				if err == nil && tr.prio > 0 {
+					tr.tid.Store(int64(currentTid()))
+				}
 				tr.mu.Lock()
 				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
+				tr.stats.Sched.Guard = guardStat(tr.prio, tr.guard, rtLimitInForce())
 				tr.mu.Unlock()
 				logSched(tr.name, tr.cpus, tr.prio, err)
 			})
 		}(tr)
 	}
 	mainLive := r.live.loops[0]
-	runLoop(ctx, r.scan, func(due time.Time) {
+	runLoop(ctx, r.scan, r.loopClockFor(MainTaskName), func(due time.Time) {
 		mainLive.begin()
 		r.scanAt(due)
 		mainLive.end()
@@ -1042,12 +1138,21 @@ func (r *Runtime) Run(ctx context.Context) {
 		r.late.missed += k
 		r.mu.Unlock()
 	}, func() {
-		err := applySched(r.cpus, r.prio)
+		err := applySched(r.cpus, r.prio, r.shareCPU, func(reason string) {
+			r.mu.Lock()
+			r.stats.Sched.Applied, r.stats.Sched.Error, r.stats.Sched.Demoted = false, reason, true
+			r.mu.Unlock()
+		})
+		if err == nil && r.prio > 0 {
+			r.tid.Store(int64(currentTid()))
+		}
 		r.mu.Lock()
 		r.stats.Sched = schedResult(r.cpus, r.prio, err)
+		r.stats.Sched.Guard = guardStat(r.prio, r.guard, rtLimitInForce())
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
+	mainLive.exited.Store(true)
 	loops.Wait()
 	if saved != nil {
 		r.mu.Lock()
@@ -1065,6 +1170,21 @@ func (r *Runtime) Run(ctx context.Context) {
 				"store", r.retainStore.Kind(), "error", why)
 		}
 	}
+}
+
+// guardLoop is the priority monitor's view of one loop (prioguard.go).
+func (r *Runtime) guardLoop(l *loopLive, period time.Duration, g PriorityGuard, tid *atomic.Int64) *guarded {
+	return &guarded{live: l, bound: guardBound(period, g.ScanMultiple), tid: tid, held: holdsPriority}
+}
+
+// guardStat is the guard shown in a task's stats: only with a priority,
+// with the kernel bound in force (rtLimit, 0 before Run: omitted).
+func guardStat(prio int, g PriorityGuard, rtLimit time.Duration) *PriorityGuard {
+	if prio <= 0 {
+		return nil
+	}
+	g.RTLimitMs = float64(rtLimit) / float64(time.Millisecond)
+	return &g
 }
 
 // schedResult is the SchedStats for a placement request and its outcome.
@@ -1104,12 +1224,32 @@ func logSched(task string, cpus []int, prio int, err error) {
 // arriving one wake-up latency after the PREVIOUS tick rather than on the
 // schedule: the schedule drifted ~65 µs a tick and 4–6 % of ticks were
 // dropped on an idle desktop. See docs/design/realtime.md, finding F1.
-func runLoop(ctx context.Context, period time.Duration, scan func(due time.Time), missed func(uint64), setup func()) {
+func runLoop(ctx context.Context, period time.Duration, clk loopClock, scan func(due time.Time), missed func(uint64), setup func()) {
 	defer loopThread()()
 	if setup != nil {
 		setup() // on the locked thread: affinity and priority stick to it
+		defer releaseSched()
 	}
-	runSchedule(ctx, period, wallLoopClock{}, scan, missed)
+	runSchedule(ctx, period, clk, scan, missed)
+}
+
+// loopClockFor is a loop's clock: the wall clock, with Options.LoopSleep in
+// place of its sleep when set.
+func (r *Runtime) loopClockFor(task string) loopClock {
+	if r.loopSleep == nil {
+		return wallLoopClock{}
+	}
+	return hookLoopClock{task: task, sleep: r.loopSleep}
+}
+
+type hookLoopClock struct {
+	task  string
+	sleep func(string, context.Context, time.Time) bool
+}
+
+func (hookLoopClock) Now() time.Time { return time.Now() }
+func (h hookLoopClock) SleepUntil(ctx context.Context, deadline time.Time) bool {
+	return h.sleep(h.task, ctx, deadline)
 }
 
 // loopClock is the time runSchedule keeps its schedule against: the wall
@@ -1197,14 +1337,23 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	if !first {
 		tr.late.record(lateUs(t0, due, dt, tr.scan), execS > tr.scan.Seconds())
 	}
+	var guardWhy string
+	if tr.prio > 0 && !due.IsZero() {
+		guardWhy = tr.watch.observe(t1.Sub(t0), tr.scan)
+	}
 	if err != nil {
 		tr.stats.LogicErrors++
 		tr.stats.LastError = msg
 	}
 	ev := tr.fault.observe(msg, t1)
+	tr.stats.Faulting = tr.fault.faulting
 	tr.mu.Unlock()
-	// After the unlock: Stats() takes tr.mu, and a log sink may be slow.
+	// After the unlock: Stats() takes tr.mu, and a log sink may be slow;
+	// the demotion's callback takes tr.mu too.
 	r.logFault(tr.name, "logic", ev)
+	if guardWhy != "" && demoteTid(int(tr.tid.Load()), guardWhy) {
+		slog.Error("runtime: real-time priority withdrawn", "task", tr.name, "reason", guardWhy)
+	}
 }
 
 // Scan executes one full cycle: read inputs, run the program, write outputs.
@@ -1322,6 +1471,11 @@ func (r *Runtime) scanAt(due time.Time) {
 	r.fireOnScan()
 
 	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr, lateUs(t0, due, dt, r.scan))
+	if r.prio > 0 && !due.IsZero() && !first {
+		if why := r.watch.observe(t3.Sub(t0), r.scan); why != "" && demoteTid(int(r.tid.Load()), why) {
+			slog.Error("runtime: real-time priority withdrawn", "task", MainTaskName, "reason", why)
+		}
+	}
 }
 
 // lateUs is one lateness sample: the scan's start against its slot when
@@ -1346,6 +1500,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 	r.recordScanLocked(t0, t1, t2, t3, periodS, first, ioMsg, logicMsg, lateUs)
 	ioEv := r.ioFault.observe(ioMsg, t3)
 	logicEv := r.logicFault.observe(logicMsg, t3)
+	r.stats.Faulting = r.logicFault.faulting
 	r.mu.Unlock()
 	r.logFault(MainTaskName, "I/O", ioEv)
 	r.logFault(MainTaskName, "logic", logicEv)

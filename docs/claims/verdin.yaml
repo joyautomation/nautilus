@@ -150,7 +150,9 @@ claims:
       Measured with tools/jitter on the bench unit, 2026-11-18, 3 minutes
       a row (docs/design/verdin-bench.md). The env file reaching the
       controller was checked in /proc/<pid>/environ after a reboot. Not
-      measured in a container.
+      measured in a container. The runtime now raises it by itself for a
+      task at a priority (RT-031); that automatic raise was not measured
+      on the bench (no RT load since the hold).
   - id: VDN-011
     claim: >-
       A module that shipped with only the Toradex Easy Installer can get

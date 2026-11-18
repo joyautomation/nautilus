@@ -89,11 +89,30 @@ stateread() {
 
 # statewrite <file> <name>: <file> becomes STATE/<name>, owned by STATE's
 # owner. Only with the controller stopped (nothing then runs as that
-# user): the old name goes first, link or not, and is never followed.
+# user). Written whole under a fresh name beside it, synced, then renamed
+# over the old one and synced again (#842): a power cut leaves the old
+# file or the new one, never none or half of one. The rename replaces a
+# link in its place without following it (-T: not into a directory a
+# link points at).
 statewrite() {
-	rm -f "$STATE/$2"
-	cp "$1" "$STATE/$2"
-	chown -h "$(stat -c %u:%g "$STATE/.")" "$STATE/$2"
+	swd=$(dirname "$STATE/$2")
+	sw=$swd/.naut-new.$$
+	# A run cut off by a power loss leaves its temp file; clear those (not
+	# a concurrent run's, which is fresh).
+	find "$swd" -maxdepth 1 -name '.naut-new.*' -mmin +10 -exec rm -f {} + 2>/dev/null || true
+	rm -f "$sw"
+	cp "$1" "$sw"
+	chown -h "$(stat -c %u:%g "$STATE/.")" "$sw"
+	sync
+	if ! mv -fT "$sw" "$STATE/$2" 2>/dev/null; then
+		# An mv without -T (or one refusing a link to a directory there):
+		# remove, then rename. Not atomic: a power cut between the two
+		# leaves no file, so say it happened.
+		say "note: mv -T failed for $STATE/$2; replaced it by removing and renaming (not atomic)"
+		rm -f "$STATE/$2"
+		mv -f "$sw" "$STATE/$2"
+	fi
+	sync
 }
 
 # statebackups: STATE/backups, a real directory (a controller could have

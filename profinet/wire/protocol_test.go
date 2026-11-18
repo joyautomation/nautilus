@@ -2,10 +2,7 @@ package wire
 
 import (
 	"encoding/binary"
-	"log/slog"
-	"net"
 	"testing"
-	"time"
 )
 
 // --- RPC Header tests ---
@@ -409,83 +406,4 @@ func TestMarshalIODControlRes(t *testing.T) {
 	if blocks[0].Type != BlockTypeIODControlRes {
 		t.Errorf("type: got 0x%04X, want 0x%04X", blocks[0].Type, BlockTypeIODControlRes)
 	}
-}
-
-// --- Helpers ---
-
-func buildTestARBlockData(arUUID [16]byte, arType, sessionKey uint16, mac net.HardwareAddr, stationName string) []byte {
-	nameLen := len(stationName)
-	data := make([]byte, 52+nameLen)
-	binary.BigEndian.PutUint16(data[0:2], arType)
-	copy(data[2:18], arUUID[:])
-	binary.BigEndian.PutUint16(data[18:20], sessionKey)
-	copy(data[20:26], mac)
-	// CMInitiatorObjUUID at 26:42 (zeros ok)
-	binary.BigEndian.PutUint32(data[42:46], 0x00000001) // ARProperties
-	binary.BigEndian.PutUint16(data[46:48], 100)        // ActivityTimeout
-	binary.BigEndian.PutUint16(data[48:50], 34964)      // UDPRTPort
-	binary.BigEndian.PutUint16(data[50:52], uint16(nameLen))
-	copy(data[52:], []byte(stationName))
-	return data
-}
-
-func buildTestIOCRBlockData(iocrType, iocrRef uint16, dataLen uint16, frameID uint16) []byte {
-	data := make([]byte, 40) // minimum IOCR block
-	binary.BigEndian.PutUint16(data[0:2], iocrType)
-	binary.BigEndian.PutUint16(data[2:4], iocrRef)
-	binary.BigEndian.PutUint16(data[4:6], 0x8892)      // LT = PROFINET
-	binary.BigEndian.PutUint32(data[6:10], 0x00000001) // Properties = RT Class 1
-	binary.BigEndian.PutUint16(data[10:12], dataLen)
-	binary.BigEndian.PutUint16(data[12:14], frameID)
-	binary.BigEndian.PutUint16(data[14:16], 32)         // SendClockFactor
-	binary.BigEndian.PutUint16(data[16:18], 1)          // ReductionRatio
-	binary.BigEndian.PutUint16(data[18:20], 1)          // Phase
-	binary.BigEndian.PutUint16(data[20:22], 0)          // Sequence
-	binary.BigEndian.PutUint32(data[22:26], 0xFFFFFFFF) // FrameSendOffset
-	binary.BigEndian.PutUint16(data[26:28], 10)         // WatchdogFactor
-	binary.BigEndian.PutUint16(data[28:30], 3)          // DataHoldFactor
-	binary.BigEndian.PutUint16(data[30:32], 0)          // IOCRTagHeader
-	// MulticastMAC at 32:38 (zeros)
-	binary.BigEndian.PutUint16(data[38:40], 0) // NumberOfAPIs
-	return data
-}
-
-func buildTestAlarmCRData() []byte {
-	data := make([]byte, 18)
-	binary.BigEndian.PutUint16(data[0:2], 0x0001)   // AlarmCRType
-	binary.BigEndian.PutUint16(data[2:4], 0x8892)   // LT
-	binary.BigEndian.PutUint32(data[4:8], 0)        // Properties
-	binary.BigEndian.PutUint16(data[8:10], 10)      // RTATimeoutFactor
-	binary.BigEndian.PutUint16(data[10:12], 3)      // RTARetries
-	binary.BigEndian.PutUint16(data[12:14], 0x0001) // LocalAlarmRef
-	binary.BigEndian.PutUint16(data[14:16], 200)    // MaxAlarmDataLen
-	binary.BigEndian.PutUint16(data[16:18], 0)      // TagHeaderH
-	return data
-}
-
-func noopLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(devNull{}, nil))
-}
-
-type devNull struct{}
-
-func (devNull) Write(p []byte) (int, error) { return len(p), nil }
-
-func makeTimeout(seconds int) <-chan struct{} {
-	ch := make(chan struct{})
-	go func() {
-		<-makeTimer(seconds)
-		close(ch)
-	}()
-	return ch
-}
-
-func makeTimer(seconds int) <-chan struct{} {
-	ch := make(chan struct{})
-	go func() {
-		t := time.NewTimer(time.Duration(seconds) * time.Second)
-		<-t.C
-		close(ch)
-	}()
-	return ch
 }

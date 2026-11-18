@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/plcnext/plcnexttest"
+
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -101,16 +103,16 @@ func TestChannelSpellingSameOnTheWire(t *testing.T) {
 
 	run := func(m Manifest) (nio.Values, []byte, string) {
 		m.Transport = TransportGRPC // the fake is the data-access service
-		f := newFakeGDS()
-		addr := serve(t, f)
+		f := plcnexttest.New()
+		addr := SocketTarget(f.Listen(t))
 		d, err := New(m, WithScanRate(10*time.Millisecond), WithDialer(func(ctx context.Context) (dataAccess, error) {
 			return Dial(ctx, addr)
 		}))
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.setInput(2, 0x05) // DI16 channels 01 and 03
-		f.setInput(3, 0x80) // … and 16
+		f.SetInput(2, 0x05) // DI16 channels 01 and 03
+		f.SetInput(3, 0x80) // … and 16
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		d.Start(ctx)
@@ -122,21 +124,21 @@ func TestChannelSpellingSameOnTheWire(t *testing.T) {
 		var in nio.Values
 		for {
 			in, _ = d.ReadInputs()
-			if in["DI_00"] == true && f.output(0) != 0 && f.output(1) != 0 {
+			if in["DI_00"] == true && f.Output(0) != 0 && f.Output(1) != 0 {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("never exchanged: %v, out % x", in, []byte{f.output(0), f.output(1)})
+				t.Fatalf("never exchanged: %v, out % x", in, []byte{f.Output(0), f.Output(1)})
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
 		var image []string
-		for _, w := range strings.Fields(f.wrote()) {
+		for _, w := range strings.Fields(wrote(f)) {
 			if strings.HasPrefix(w, DefaultOutputs+"[") {
 				image = append(image, w)
 			}
 		}
-		return in, []byte{f.output(0), f.output(1), f.output(2), f.output(3)}, strings.Join(image, " ")
+		return in, []byte{f.Output(0), f.Output(1), f.Output(2), f.Output(3)}, strings.Join(image, " ")
 	}
 	inNew, outNew, wNew := run(nu)
 	inOld, outOld, wOld := run(old)

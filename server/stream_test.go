@@ -385,7 +385,7 @@ func TestFilteredDeltaStream(t *testing.T) {
 func TestStateTagFilter(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state?tags=Lev*,Out", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state?tags=Lev*,Out", nil))
 	if rec.Code != 200 {
 		t.Fatalf("status %d", rec.Code)
 	}
@@ -415,7 +415,7 @@ func TestBadTagPatternIsRejected(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	for _, path := range []string{"/api/state?tags=[bad", "/api/stream?tags=[bad"} {
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+path, nil))
 		if rec.Code != 400 {
 			t.Errorf("%s → %d, want 400", path, rec.Code)
 		}
@@ -470,7 +470,7 @@ func TestFlagParsing(t *testing.T) {
 		"/x?delta=false": false,
 	}
 	for url, want := range cases {
-		q := httptest.NewRequest("GET", url, nil).URL.Query()
+		q := httptest.NewRequest("GET", "http://localhost"+url, nil).URL.Query()
 		if got := flag(q, "delta"); got != want {
 			t.Errorf("flag(%s) = %v, want %v", url, got, want)
 		}
@@ -499,7 +499,7 @@ func newQualityServer(t *testing.T) (*Server, *runtime.Runtime, *nio.Memory) {
 func TestFrameOmitsQualityWhenEverythingIsGood(t *testing.T) {
 	srv, _, _ := newQualityServer(t)
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	if strings.Contains(rec.Body.String(), `"quality"`) {
 		t.Errorf("a healthy frame carries a quality field: %s", rec.Body.String())
 	}
@@ -512,7 +512,7 @@ func TestFrameCarriesQuality(t *testing.T) {
 	rt.Scan()
 
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state", nil))
 	var f Frame
 	if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil {
 		t.Fatal(err)
@@ -542,7 +542,7 @@ func TestQualityIsFiltered(t *testing.T) {
 	get := func(query string) Frame {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state"+query, nil))
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/state"+query, nil))
 		var f Frame
 		if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil {
 			t.Fatal(err)
@@ -618,7 +618,7 @@ func TestDeltaFrameCarriesQuality(t *testing.T) {
 func TestMetaAdvertisesQualityAndDeltas(t *testing.T) {
 	srv, _, _ := newQualityServer(t)
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
 	var m metaResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func TestMetaAdvertisesQualityAndDeltas(t *testing.T) {
 	}
 	rt.Scan()
 	rec = httptest.NewRecorder()
-	New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	New(rt).Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
 	var off metaResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &off); err != nil {
 		t.Fatal(err)

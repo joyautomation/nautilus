@@ -50,7 +50,7 @@ into another's.
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
 | **Alarms** | `alarm` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier. | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point |
-| **Operator surface** | `server` `oplog` `hist` | tag API, snapshot, SSE stream, write, program history, operator intent, sink. | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
+| **Operator surface** | `server` `oplog` `hist`, and `audit` `auth` (planned, [identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain. | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
 | **Manifest** | `internal/project` `internal/dialect` `cmd/naut` | `nautilus.yaml` nouns: tags, tasks, drivers, alarms, scene, dialect. | nothing; it is the composition root | Every context's manifest form lives here (`project.TagConfig` ↔ `runtime.TagDef`). It is the only package allowed to import everything |
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
 | **Authoring** | `internal/lsp` `tools/vscode-iec` | diagnostics, hover, completion, diagram editor, live values, component preview, kind editor. | the person | Reads the Manifest and Languages; the only non-CLI importer of `internal/project` |
@@ -59,11 +59,12 @@ into another's.
 | **HMI 2D** | `hmi` (npm) | mimic, component, port, catalog, realtime, trend, quality, alarms view. | the operator | Consumes Operator surface over HTTP/SSE; no Go |
 | **HMI 3D** | `hmi-3d` (npm) `internal/scene` | scene, kind, node, pipe, port, look, assembly. `internal/scene` is the offline half (`naut check`, `naut scene init`). | the operator, Authoring | Consumes Operator surface. **Open edge:** argonaut's `parts` format is a second model of the same things; §2.4 |
 | **Tag file** | `internal/tagfile` | one row: name, role, type, init, unit, desc, alias. | every codegen, `lang/l5x` | **Shared kernel.** The one format every importer renders and the manifest reads |
-| **Virtual devices** | `virtdev` | device profile, point, simulator, process model, plant, wire face. A profile's point rows reuse the driver manifests' column names. | CLI, Verification | Serves a device's store through the protocol packages' servers (`modbus/slave`); hosts its simulators and process model in a plant `runtime`. A test-time context: only the CLI and Verification import it, and it imports no manifest |
+| **Device library** | `devprofile` | device profile, point, doc (provenance), simulator source, built-in profile, vendored profile. A profile's point rows reuse the driver manifests' column names. | Manifest, Virtual devices, CLI | **Published language.** One file per device type, read by the manifest (a project's `devices:`) and by virtual devices alike. A leaf: it imports no other nautilus package, so every reader can import it |
+| **Virtual devices** | `virtdev` | instance, simulator, process model, plant, wire face, in-process face. | CLI, Verification | Serves a device's store through the protocol packages' servers (`modbus/slave`, `opcua/server`); hosts its simulators and process model in a plant `runtime`. A test-time context: only the CLI and Verification import it, and it imports no manifest |
 
 Two packages are substrates rather than contexts and import nothing of
 ours: `lang/ir` (types and values) and `io` (the driver seam and `Quality`).
-`hist` and `oplog` are seams in the same sense. They are what DDD calls a
+`hist`, `oplog` and `audit` (the runtime audit journal, #709) are seams in the same sense. They are what DDD calls a
 *published language*: small, stable, and the price of changing one is paid
 by every context.
 
@@ -74,8 +75,9 @@ break one changes this section first and says why.
 
 ### 2.1 Direction
 
-- Substrates (`io`, `lang/ir`, `hist`, `oplog`) import no other nautilus
-  package. `retain` imports only `internal/k8sapi`.
+- Substrates (`io`, `lang/ir`, `hist`, `oplog`, `audit`) import no other nautilus
+  package. `audit` imports only the standard library, not even a third-party
+  module. `retain` imports only `internal/k8sapi`.
 - Languages import only each other and the tag-file shared kernel.
 - Runtime imports only Languages, `io`, `retain`, `internal/stproject`.
   It never knows a driver, the server, alarms or the manifest.
@@ -88,11 +90,19 @@ break one changes this section first and says why.
   composes the runtime side.
 - The operator surface never imports a protocol package, the Logix or
   Siemens target, or the manifest.
+- `devprofile` imports no other nautilus package: the profile format is
+  read by the manifest, virtual devices and the CLI, and depends on none
+  of them.
 - `virtdev` is imported only by the CLI and Verification: virtual
   devices are a test and commissioning context, never part of a running
   controller.
 - `internal/project` is imported only by the CLI and the LSP. Nothing
   imports the CLI.
+- A driver's test fake (`optommp/optommptest`, `plcnext/plcnexttest`)
+  and `internal/testmqtt` are imported only by test files: nothing shipped
+  carries a fake device or broker. Each package checks this itself
+  (`TestOnlyTestsImport…`, by `go list` over the module), not
+  `internal/contextmap`.
 
 Verification packages, `examples/`, `testdata/` and `tools/` compose freely
 and are excluded from the check. Test files may import anything.
@@ -158,7 +168,8 @@ Legitimate per-context meanings, so nobody "deduplicates" them:
 |---|---|
 | **Tag** | Runtime: a cell in the store (`TagDef`, `Tags`, `TagMeta`). Manifest: its YAML form (`TagConfig`). Tag file: one generated row (`tagfile.Tag`). Field/IT drivers: a binding from a tag to an address (`TagBinding`, `snmp.Tag`, `redfish.Tag`, `prom.Tag`, `replay.Tag`). Logix: a controller symbol (`l5x.Tag`, `cip.TagSegment`). Logix emulator: the served surface (`TagSpec`, `TagSurfaceSpec`, `TagConfig`, `TagStore`) |
 | **Node** | ST and SFC: an AST node. FBD: a netlist node. Sparkplug edge: this edge node. Sparkplug host: its view of a remote edge node. Oplog: one replica. Scene: one placed thing |
-| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Virtual devices: an instance in `devices.yaml` (`virtdev.Instance`); its type is a **device profile** (`virtdev.Profile`). Siemens target: a PROFINET IO device placed in a CPU's station spec (`tiad.Device`), always with an explicit name of station |
+| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Device library: a device *type* is a **device profile** (`devprofile.Profile`); a project's instance of one is a **device**. Virtual devices: an instance in `virtual-devices.yaml` (`virtdev.Instance`). Siemens target: a PROFINET IO device placed in a CPU's station spec (`tiad.Device`), always with an explicit name of station. Note `devices.yaml` is the Modbus device map, not a list of devices |
+| **Profile** | Device library: a device type (`devprofile.Profile`). SNMP: a walk-to-UDT expansion in Go (`snmp/profiles`, `naut snmp import --profile`). HMI 3D: a chassis profile. Say "device profile" when more than one is in play |
 | **Program** | IEC: a POU scheduled by a task, everywhere in nautilus. Logix: a container of routines. The writer translates; "program" never means the Logix thing outside `logix/` |
 | **Quality** | One meaning, `io.Quality`, in every context. Keep it that way |
 | **Component** | HMI 2D: a mimic symbol (`*.component.json` + `.svelte`). HMI 3D uses **kind** (`*.kind.json`) for the same role on purpose, so the two are never confused |

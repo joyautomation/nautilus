@@ -26,6 +26,7 @@ import {
   pageUrl,
   nautilusProjectAbove,
 } from "./pagePreviewLogic";
+import { apiFetch } from "./apiFetch";
 
 type DevServer = { port: number; terminal: vscode.Terminal };
 
@@ -76,7 +77,7 @@ async function controllerUp(url: string): Promise<boolean> {
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 2000);
-    const res = await fetch(`${url.replace(/\/$/, "")}/api/state`, { signal: ctl.signal });
+    const res = await apiFetch(`${url.replace(/\/$/, "")}/api/state`, { signal: ctl.signal });
     clearTimeout(t);
     return res.ok;
   } catch {

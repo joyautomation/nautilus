@@ -250,3 +250,167 @@ claims:
     source: "#measuring-it-yourself"
     tests: []
     note: No test for the jitter tool.
+
+  - id: RT-025
+    claim: >-
+      Before a task gets SCHED_FIFO the runtime sets RLIMIT_RTTIME (200 ms
+      soft, 2.5 × hard, NAUTILUS_RT_LIMIT_MS to change it, a stricter limit
+      kept); a real-time thread that runs past the soft limit without
+      blocking gets SIGXCPU and every priority task is moved to normal
+      scheduling with the reason in its scan.sched; a loop that ends gives
+      its thread back at normal priority.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestRTGuardLimits
+      - go ./runtime TestRTGuardSetsTheLimit
+      - go ./runtime TestRTGuardSIGXCPUDemotes
+      - go ./runtime TestRTGuardStopsASpinningFIFOThread
+      - go ./runtime TestRTGuardRequireFlag
+      - go ./runtime TestRTGuardLoopEndReleasesItsThread
+      - go ./runtime TestRTGuardSetOtherReportsFailure
+    note: >-
+      TestRTGuardStopsASpinningFIFOThread needs CAP_SYS_NICE: it skips under
+      go test ./..., and CI runs it in the go job with the test binary given
+      the capability by setcap and NAUTILUS_REQUIRE_RT=1, so there a
+      missing capability fails rather than skips.
+
+  - id: RT-026
+    claim: >-
+      A task at priority: that overruns its period a set number of scans in
+      a row (default 50), or whose one scan runs for more than a set multiple
+      of its period (default 20, never under 50 ms, checked while the scan
+      runs), is moved to normal scheduling, alone, with demoted and the
+      reason in its scan.sched;
+      priority-guard: sets both per task.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestPriorityGuardOverrunWatch
+      - go ./runtime TestPriorityGuardStuckScan
+      - go ./runtime TestRTGuardDemoteOneThread
+      - go ./runtime TestRTGuardPriorityWatchdog
+      - go ./runtime TestPriorityGuardBound
+      - go ./runtime TestPriorityGuardMonitorStops
+      - go ./internal/project TestPriorityGuardFromTheManifest
+      - go ./internal/project TestPriorityGuardManifestRefusals
+    note: >-
+      TestRTGuardPriorityWatchdog needs CAP_SYS_NICE: it skips under go test
+      ./... and runs in CI's setcap'd RT guard step with
+      NAUTILUS_REQUIRE_RT=1.
+
+  - id: RT-027
+    claim: >-
+      Once, as a task starts, the runtime refuses to pin it to a CPU at a
+      priority where another program's userspace real-time thread above it
+      is confined (a SCHED_DEADLINE thread counts as above any priority),
+      unless the task sets share-cpu: true: the task runs unpinned at normal
+      priority with the reason in its scan.sched, an error is logged and
+      naut run's banner says REAL-TIME REFUSED (CPU PIN FAILED for a cpu:
+      alone). A higher thread that may float elsewhere, one at or below the
+      priority confined there, an unpinned task that may land beside a
+      confined higher thread, entries it cannot read or a /proc hiding
+      processes, and the kernel's RT throttle off (-1 on any kernel, runtime =
+      period before 6.12; once per process) are warnings; kernel threads, the process's own threads and
+      lower threads that float are not counted, except that a kernel
+      network thread (a NIC's IRQ or NAPI thread; not ksoftirqd/N) confined to
+      the pinned CPU below the task's priority is a warning naming it.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestPreflightRefusesTheIncidentLayout
+      - go ./runtime TestPreflightWarnings
+      - go ./runtime TestPreflightUnpinnedWarns
+      - go ./runtime TestPreflightSaysWhatItCannotSee
+      - go ./runtime TestPreflightThrottleWarning
+      - go ./runtime TestPreflightThrottleWarnedOnce
+      - go ./runtime TestPreflightWarnsAboutNetworkThreadsBelow
+      - go ./runtime TestPreflightCPUText
+      - go ./runtime TestPreflightApplySchedRefuses
+      - go ./internal/project TestShareCPUFromTheManifest
+      - go ./cmd/naut TestSchedBannerSuffixNamesRefusedTasks
+      - go ./cmd/naut TestRunBannerSaysRealTimeWasRefused
+
+  - id: RT-028
+    claim: >-
+      naut-launch sets RLIMIT_RTTIME (200 ms soft, 2.5 × hard,
+      NAUTILUS_RT_LIMIT_MS to change it) before it execs the controller, so
+      whatever it starts is bounded; a stricter soft or hard limit already
+      in force is kept.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./rt/plcnext-io/ctest TestNautLaunchBoundsRealTime
+    note: >-
+      The test builds naut-launch with the machine's cc and reads the limit
+      its controller sees in /proc/self/limits; the stricter-limit cases need
+      prlimit (util-linux).
+
+  - id: RT-029
+    claim: >-
+      The PLCnext shim (nautilus_io) sets RLIMIT_RTTIME before it takes
+      SCHED_FIFO and does not take it if the limit cannot be set; on SIGXCPU
+      it moves its cycle back to normal scheduling instead of dying, and a
+      stricter limit in force is kept.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./rt/plcnext-io/ctest TestRTGuardShim
+    partial: true
+    note: >-
+      The test drives the shim's guard (rt/plcnext-io/rtguard.h) through a C
+      harness built with the machine's cc. The spinning-FIFO case (a thread
+      that blocks SIGXCPU, so the handler demotes it by tid from another
+      thread), SIGXCPU from FIFO and the no-bound-no-FIFO case need
+      CAP_SYS_NICE and run in CI's setcap'd RT guard step with
+      NAUTILUS_REQUIRE_RT=1. Gaps: the shim's own call site and its cycle's
+      reaction (nautilus_io.c needs the firmware) are checked only by the
+      controller cross-build; what the Axioline outputs do after the hard
+      kill, or after a demotion of a cycle that is stuck, is untried (a
+      controlled bench test for James).
+
+  - id: RT-030
+    claim: >-
+      tools/jitter stops a run the box cannot keep up with (no fast-task scan
+      for 2 s, a priority withdrawn mid-run, or past 1.5 × the duration +
+      10 s), marks the report INVALID and exits 3; exits at once when the
+      stopped loops do not end; and a kernel timer armed at start SIGKILLs
+      it 20 s after that deadline whatever its threads are doing.
+    source: "#measuring-it-yourself"
+    tests:
+      - go ./tools/jitter TestGuardStall
+      - go ./tools/jitter TestGuardDemotion
+      - go ./tools/jitter TestGuardDeadline
+      - go ./tools/jitter TestInvalidReportSaysSo
+      - go ./tools/jitter TestKillTimer
+    partial: true
+    note: >-
+      The guard is tested with a stand-in run and stats; its wiring in
+      jitter's main (runGuarded around rt.Run, the kill timer armed) is
+      exercised by a normal run only, not by a starved one.
+
+  - id: RT-031
+    claim: >-
+      When a task requests a priority, GOMAXPROCS is not set in the
+      environment (as a positive whole number), no cgroup CPU limit applies
+      and the box has at most 4 cores, the runtime raises GOMAXPROCS to the
+      cores plus one per task requesting a priority plus one, at most twice
+      the cores plus two, before its loops start; the banner says so and
+      GET /api/state reports it as scan.gomaxprocs. Under a CPU limit it
+      keeps Go's value and logs why; a GOMAXPROCS in the environment always
+      wins.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestProcsForRule
+      - go ./runtime TestRunRaisesGOMAXPROCSForATaskAtPriority
+      - go ./runtime TestGOMAXPROCSLeftAlone
+      - go ./runtime TestGOMAXPROCSNotRaisedUnderACPULimit
+      - go ./runtime TestOperatorGOMAXPROCSParsedLikeGo
+      - go ./runtime TestCgroupCPUQuota
+      - go ./runtime TestProcsStatsJSON
+      - go ./cmd/naut TestSchedBannerSuffixReportsARaisedGOMAXPROCS
+    partial: true
+    note: >-
+      The rule and its application are tested through seams for the
+      process-wide setting and the environment, not by changing the test
+      process's GOMAXPROCS. The gain it buys (a 1 ms task at FIFO 80 beside
+      a long scan: 95.8 % of slots and p99.9 9.22 ms at 2, 99.92 % and
+      188 µs at 4) was measured on a two-core Verdin AM62 by setting
+      GOMAXPROCS by hand (docs/design/verdin-bench.md); the automatic
+      raise has not been measured on that box.
+

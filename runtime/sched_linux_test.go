@@ -39,16 +39,16 @@ func TestApplySchedAffinity(t *testing.T) {
 		t.Skip("only one CPU allowed; nothing to pin to")
 	}
 	target := allowed[len(allowed)-1]
-	if err := applySched([]int{target}, 0); err != nil {
+	if err := applySched([]int{target}, 0, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := affinityOfThisThread(t); len(got) != 1 || got[0] != target {
 		t.Errorf("affinity after pin = %v, want [%d]", got, target)
 	}
-	if err := applySched(allowed, 0); err != nil { // put it back
+	if err := applySched(allowed, 0, false, nil); err != nil { // put it back
 		t.Fatal(err)
 	}
-	if err := applySched([]int{100000}, 0); err == nil {
+	if err := applySched([]int{100000}, 0, false, nil); err == nil {
 		t.Error("pinning to a non-existent CPU did not fail")
 	}
 }
@@ -58,7 +58,7 @@ func TestApplySchedAffinity(t *testing.T) {
 func TestApplySchedFIFORefusalIsExplicit(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	err := applySched(nil, 50)
+	err := applySched(nil, 50, false, nil)
 	if err == nil {
 		t.Skip("SCHED_FIFO was granted here (root or rtprio rlimit)")
 	}
@@ -67,7 +67,7 @@ func TestApplySchedFIFORefusalIsExplicit(t *testing.T) {
 			t.Errorf("refusal %q does not mention %q", err, want)
 		}
 	}
-	if err := applySched(nil, 100); err == nil || !strings.Contains(err.Error(), "1–99") {
+	if err := applySched(nil, 100, false, nil); err == nil || !strings.Contains(err.Error(), "1–99") {
 		t.Errorf("priority 100: %v", err)
 	}
 }

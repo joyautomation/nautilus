@@ -92,7 +92,7 @@ func TestSparkplugManifestClassesReachTheNode(t *testing.T) {
 	if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatal(err)
 	}
-	tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: "127.0.0.1:0"})
+	tcp := testmqtt.NewTCP(srv, listeners.Config{ID: "t", Address: "127.0.0.1:0"})
 	if err := srv.AddListener(tcp); err != nil {
 		t.Fatal(err)
 	}

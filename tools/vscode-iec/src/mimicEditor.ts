@@ -17,6 +17,7 @@ import { applyMimicOp, parseMimic, type MimicOp } from "./mimicOps";
 import { ComponentIndex, writeComponentPortsEdit } from "./mimicComponents";
 import { paletteCustomComponents, type Port } from "./mimicComponentIndex";
 import { BUILTIN_COMPONENTS, userComponentScriptTag, type UserComponentManager } from "./userComponents";
+import { apiFetch } from "./apiFetch";
 
 /** Mirror of webview-ui/src/mimic/mimicState.svelte.ts's ManifestOp. */
 type ManifestOp = { type: "setComponentPorts"; component: string; ports: Port[] | null };
@@ -92,7 +93,7 @@ export function reopenAsText(uri: vscode.Uri): void {
 export async function fetchTags(): Promise<Record<string, unknown> | null> {
   const url = vscode.workspace.getConfiguration("nautilus").get<string>("runtimeUrl", "http://localhost:8080");
   try {
-    const resp = await fetch(`${url}/api/state`, { signal: AbortSignal.timeout(1500) });
+    const resp = await apiFetch(`${url}/api/state`, { signal: AbortSignal.timeout(1500) });
     if (!resp.ok) return null;
     const state = (await resp.json()) as { tags?: Record<string, unknown> };
     return state.tags ?? {};
@@ -110,10 +111,8 @@ export async function writeTag(name: string, value: unknown): Promise<string | n
   const cfg = vscode.workspace.getConfiguration("nautilus");
   const url = cfg.get<string>("runtimeUrl", "http://localhost:8080");
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = cfg.get<string>("token", "");
-  if (token) headers["Authorization"] = "Bearer " + token;
   try {
-    const resp = await fetch(`${url}/api/tags`, {
+    const resp = await apiFetch(`${url}/api/tags`, {
       method: "POST",
       headers,
       body: JSON.stringify({ name, value }),

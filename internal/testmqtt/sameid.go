@@ -70,11 +70,14 @@ func (h *SameIDSerializer) OnConnect(cl *mqttsrv.Client, _ packets.Packet) error
 }
 
 // expires reports whether mochi deletes this client's session when it ends:
-// the same test as its attachClient.
+// the same test as its attachClient. It reads only the three fields mochi
+// sets at connect, before the client is in the map. Copying the whole
+// Properties would race with mochi's own writes to it while the session
+// ends (its Will, server.go's attachClient): -race caught exactly that.
 func expires(cl *mqttsrv.Client) bool {
-	p := cl.Properties
-	return (p.ProtocolVersion == 5 && p.Props.SessionExpiryInterval == 0) ||
-		(p.ProtocolVersion < 5 && p.Clean)
+	v := cl.Properties.ProtocolVersion
+	return (v == 5 && cl.Properties.Props.SessionExpiryInterval == 0) ||
+		(v < 5 && cl.Properties.Clean)
 }
 
 // HoldTeardown holds the first ending session of client ClientID inside its

@@ -96,7 +96,7 @@ func TestRunLoopStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runLoop(ctx, time.Hour, func(time.Time) { t.Error("scan ran") }, func(uint64) {}, nil)
+		runLoop(ctx, time.Hour, wallLoopClock{}, func(time.Time) { t.Error("scan ran") }, func(uint64) {}, nil)
 		close(done)
 	}()
 	cancel()
@@ -117,7 +117,7 @@ func TestRunLoopOverrunningStopsOnCancel(t *testing.T) {
 	scans := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go func() {
-		runLoop(ctx, time.Millisecond, func(time.Time) {
+		runLoop(ctx, time.Millisecond, wallLoopClock{}, func(time.Time) {
 			select {
 			case scans <- struct{}{}:
 			default:

@@ -51,7 +51,7 @@ func testBroker(t *testing.T, hooks ...mqttsrv.Hook) string {
 			t.Fatal(err)
 		}
 	}
-	tcp := listeners.NewTCP(listeners.Config{ID: "plain", Address: "127.0.0.1:0"})
+	tcp := testmqtt.NewTCP(srv, listeners.Config{ID: "plain", Address: "127.0.0.1:0"})
 	if err := srv.AddListener(tcp); err != nil {
 		t.Fatal(err)
 	}
@@ -204,9 +204,9 @@ func TestEdgeNodeConnectsOverTLS(t *testing.T) {
 	if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatal(err)
 	}
-	plain := listeners.NewTCP(listeners.Config{ID: "plain", Address: "127.0.0.1:0"})
-	secure := listeners.NewTCP(listeners.Config{ID: "tls", Address: "127.0.0.1:0", TLSConfig: cfg})
-	for _, l := range []*listeners.TCP{plain, secure} {
+	plain := testmqtt.NewTCP(srv, listeners.Config{ID: "plain", Address: "127.0.0.1:0"})
+	secure := testmqtt.NewTCP(srv, listeners.Config{ID: "tls", Address: "127.0.0.1:0", TLSConfig: cfg})
+	for _, l := range []*testmqtt.TCP{plain, secure} {
 		if err := srv.AddListener(l); err != nil {
 			t.Fatal(err)
 		}

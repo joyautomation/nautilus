@@ -51,6 +51,8 @@ func (d *Driver) Health() Health {
 		Writes: d.writes.Load(),
 		Errors: d.errs.Load(),
 	}
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	for _, s := range d.sources {
 		s.mu.Lock()
 		row := SourceHealth{
@@ -101,6 +103,8 @@ func (d *Driver) Quality() map[string]nio.Quality {
 		}
 		out[name] = q
 	}
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	for _, s := range d.sources {
 		s.mu.Lock()
 		for _, br := range s.blocks {
@@ -145,6 +149,8 @@ func notANumber(v any) bool {
 // Connections lists each source and the tags it delivers — its polled
 // bindings and its __Online and __Outages companions (io.ConnectionReporter).
 func (d *Driver) Connections() []nio.Connection {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
 	out := make([]nio.Connection, 0, len(d.sources))
 	for _, s := range d.sources {
 		seen := map[string]bool{s.cfg.OnlineTagName(): true, s.cfg.OutagesTagName(): true}
@@ -161,7 +167,9 @@ func (d *Driver) Connections() []nio.Connection {
 // ConnectionUp reports whether the source is online — the same verdict its
 // __Online companion delivers.
 func (d *Driver) ConnectionUp(id string) bool {
+	d.srcMu.RLock()
 	s, ok := d.bySource[id]
+	d.srcMu.RUnlock()
 	if !ok {
 		return false
 	}

@@ -302,8 +302,8 @@ type Driver struct {
 	rebirthQ []nodeKey
 	// adoptQ accumulates member-output baseline adoptions raised while mu is
 	// held. It exists for the same reason rebirthQ does — the write maps are
-	// under wmu, and flushWrites already takes wmu before d.mu (nodeOnline),
-	// so taking wmu under d.mu would invert the order. flushAdopts drains it
+	// under wmu, and the lock order is wmu before d.mu, so taking wmu under
+	// d.mu would invert it. flushAdopts drains it
 	// with neither lock held and then takes wmu alone.
 	adoptQ []adoption
 	// degraded is set when the discovery policy is DiscoveryStrict and an

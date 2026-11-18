@@ -81,12 +81,11 @@ type cmp struct {
 	problems []string
 
 	// per source rung
-	cur     []ld.Element // the got rung's condition elements being matched
-	idx     int
-	outs    []string // helper edge outputs, in element order
-	resets  []string // RES rungs expected after, as "ref|inst"
-	seen    map[string]int
-	genTags map[string]bool
+	cur    []ld.Element // the got rung's condition elements being matched
+	idx    int
+	outs   []string // helper edge outputs, in element order
+	resets []string // RES rungs expected after, as "ref|inst"
+	seen   map[string]int
 	// legHead mirrors the writer's: set while inside the legs of a branch
 	// that takes power from the rail.
 	legHead bool

@@ -462,8 +462,7 @@ type lowerer struct {
 	// returnSlot, when >= 0, marks the slot the bare function-name
 	// identifier should bind to inside a FUNCTION body so `Name := value`
 	// assigns the return value rather than failing as undeclared.
-	returnSlot     int
-	returnSlotName string
+	returnSlot int
 
 	// fileConsts are the constants every POU of the composed source sees:
 	// its VAR_GLOBAL CONSTANT blocks (#176). consts is this POU's view:
@@ -1082,6 +1081,7 @@ func (l *lowerer) collectVars() error {
 			}
 			if kind == ir.VarGlobal {
 				if want, spelled, ok := ir.Lookup(l.tagTypes, vd.Name); ok && want != nil && !ir.SameShape(t, want) {
+					//lint:ignore ST1005 the message ends with the manifest key it points at (type:)
 					return errAt(vd.Pos, fmt.Errorf("%s %s : %s disagrees with the tag %s, whose type is %s — "+
 						"a tag has one type; change this declaration or the tag's type:", vb.Kind, vd.Name, t, spelled, want))
 				}

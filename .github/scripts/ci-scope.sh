@@ -18,6 +18,24 @@
 #                       .github/. The extension's own jobs need it, light
 #                       PR or not; a Go-only PR leaves them out (the
 #                       CLI-discovery e2e still runs on Linux: it drives naut).
+#   e2e-all=true|false  the CLI-discovery e2e runs on macOS and Windows too,
+#                       not Linux only: when what that e2e reads changed,
+#                       tools/vscode-iec/ and the hmi/ and hmi-3d/ kits its
+#                       webview-ui links. Not the example diagrams or the
+#                       lift station's components: they set extension for
+#                       the gesture harness and component tests, and the
+#                       e2e writes its own fixtures (#916). A .github/ path
+#                       sets it only when the e2e's
+#                       definition changed: the vscode-iec-e2e job, the
+#                       changes job (it builds the e2e's OS list) or the
+#                       workflow's top-level keys (on, env, concurrency…).
+#                       Those legs wait longest for a runner (and GitHub
+#                       sometimes never gives one); every push to main runs
+#                       all three regardless. To compare, set CI_SCOPE_BASE_CI
+#                       to the base's ci.yml (CI_SCOPE_HEAD_CI defaults to
+#                       .github/workflows/ci.yml). Fails closed: no base, yq
+#                       missing or a file that does not parse counts as
+#                       changed.
 #
 # The light list is paths no Go test, embed or naut binary reads, found by
 # grepping the tests and by changing one file per area with a warm test
@@ -40,7 +58,21 @@ full=false
 any=false
 hmibuild=false
 extension=false
+e2eall=false
 roots=()
+# e2e_unchanged: the e2e's definition is the same at the base and the head,
+# compared parsed (so comments and layout do not count).
+e2e_unchanged() {
+  local base=${CI_SCOPE_BASE_CI:-} head=${CI_SCOPE_HEAD_CI:-.github/workflows/ci.yml} q a b
+  [ -n "$base" ] && [ -f "$base" ] && [ -f "$head" ] && command -v yq >/dev/null || return 1
+  # with_entries, not del(.jobs): yq's del empties .jobs for the rest of the
+  # expression too, and the comparison would see only the top-level keys.
+  q='{"top": with_entries(select(.key != "jobs")), "changes": .jobs.changes, "e2e": .jobs["vscode-iec-e2e"]}'
+  a=$(yq -o=json "$q" "$base" 2>/dev/null) && b=$(yq -o=json "$q" "$head" 2>/dev/null) || return 1
+  # A head without the e2e job is a change worth all three legs, never a pass.
+  [ "$(yq -o=json '.jobs["vscode-iec-e2e"] | type' "$head" 2>/dev/null)" = '"!!map"' ] || return 1
+  [ "$a" = "$b" ]
+}
 add_root() {
   local r
   for r in "${roots[@]+"${roots[@]}"}"; do [ "$r" = "$1" ] && return; done
@@ -50,7 +82,10 @@ while IFS= read -r path; do
   [ -n "$path" ] || continue
   any=true
   case "$path" in
-    tools/vscode-iec/*|hmi/*|hmi-3d/*|.github/*) extension=true ;;
+    tools/vscode-iec/*|hmi/*|hmi-3d/*) extension=true; e2eall=true ;;
+    .github/*)
+      extension=true
+      [ "$e2eall" = true ] || e2e_unchanged || e2eall=true ;;
     examples/*.ld|examples/*.fbd|examples/*.sfc) extension=true ;;
     examples/lift-station/hmi/src/lib/*) extension=true ;;
   esac
@@ -74,8 +109,9 @@ while IFS= read -r path; do
       full=true ;;
   esac
 done
-if [ "$any" != true ]; then full=true; extension=true; fi
+if [ "$any" != true ]; then full=true; extension=true; e2eall=true; fi
 echo "full=$full"
 echo "examples=${roots[*]+"${roots[*]}"}"
 echo "hmibuild=$hmibuild"
 echo "extension=$extension"
+echo "e2e-all=$e2eall"

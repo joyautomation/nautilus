@@ -25,6 +25,7 @@ import { applyDiagramKey, isDiagramKeyMessage, registerPreviewKeys, serialQueue,
 import { handleDiagramLiveMessage } from "./diagramSelection";
 import { gateWebview } from "./webviewReady";
 import { findReferencesFromDiagram, isXrefMessage, onProjectTagsChange, postDescriptions } from "./diagramXref";
+import { apiFetch } from "./apiFetch";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
 export type FbdModel = {
@@ -699,11 +700,11 @@ export async function fetchControllerProgram(localSrc: string): Promise<ProgramI
   const pou = /^\s*PROGRAM\s+([A-Za-z_][A-Za-z0-9_]*)/m.exec(localSrc)?.[1];
   try {
     if (pou) {
-      const res = await fetch(url + "/api/program?pou=" + encodeURIComponent(pou));
+      const res = await apiFetch(url + "/api/program?pou=" + encodeURIComponent(pou));
       if (res.ok) return (await res.json()) as ProgramInfo;
       if (res.status !== 404) throw new Error(res.statusText);
     }
-    const res = await fetch(url + "/api/program");
+    const res = await apiFetch(url + "/api/program");
     if (!res.ok) throw new Error(res.statusText);
     return (await res.json()) as ProgramInfo;
   } catch {

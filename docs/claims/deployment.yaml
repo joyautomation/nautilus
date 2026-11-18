@@ -142,12 +142,14 @@ claims:
     claim: >-
       Under a Type=notify systemd unit the controller sends READY=1 after
       its first completed scan, a WATCHDOG=1 heartbeat at half of
-      WatchdogSec while its scans are live, none once a scan hangs (with a
-      "scans not live" status line), and STOPPING=1 on an orderly stop.
+      WatchdogSec while its scans are live, none once a scan hangs or a task
+      is starved past its slot (with a "scans not live" status line), and
+      STOPPING=1 on an orderly stop.
     source: "#without-a-cluster-systemd"
     tests:
       - go ./cmd/naut TestNautRunSystemdNotify
       - go ./cmd/naut TestLiveWatch
+      - go ./cmd/naut TestSystemdHeartbeatStopsForAStarvedTask
     partial: true
     note: >-
       Against a stand-in notification socket, not systemd. systemd killing
@@ -250,3 +252,31 @@ claims:
       enough to see a link followed or a file outside read or written; the
       helper has not yet run as root on a real box through a sudoers
       drop-in (the groov EPIC, #771, is first).
+  - id: DEP-017
+    claim: >-
+      naut new --deploy-ssh writes .github/workflows/deploy-ssh.yml on a
+      manifest project: on a v* tag whose commit is on the default branch,
+      in the plant environment, with a read-only token, a pinned checkout
+      that keeps no credentials and one deploy at a time, it installs the
+      pinned naut release (the scaffolding naut's version) into the
+      runner's temp directory, checked against checksums.txt, runs naut
+      check and naut test, and runs naut deploy update on the repository
+      variable DEPLOY_TARGET, accepting only the given key and host key,
+      both removed after; an unpinned naut, an empty DEPLOY_TARGET or a
+      tag off the default branch fails the job, and so does an update the
+      box rolled back.
+    source: "#through-cd"
+    tests:
+      - go ./cmd/naut TestDeploySSHWorkflowRenders
+      - go ./cmd/naut TestNewDeploySSHFlag
+      - go ./cmd/naut TestDeploySSHPinsTheScaffoldingNaut
+      - go ./cmd/naut TestDeploySSHInstallStep
+      - go ./cmd/naut TestDeploySSHDeployStep
+      - go ./cmd/naut TestDeploySSHTagMustBeOnTheDefaultBranch
+    partial: true
+    note: >-
+      The install and deploy steps' shell is run by the tests, against a
+      stand-in release server and a stand-in naut; the workflow itself has
+      not run in GitHub Actions, and the steps skip where curl,
+      sha256sum or bash are missing. Each guarantee was mutation-checked:
+      removing it turns its test red.

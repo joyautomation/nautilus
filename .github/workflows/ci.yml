@@ -25,10 +25,15 @@ jobs:
   # the docs-claims drift warning. Anything else, and every push to main,
   # runs everything. Separately, the VS Code extension's jobs (compile/test,
   # gesture harness) run only when the extension, what it bundles or what
-  # its tests read changes (ci-scope.sh's extension list), or .github/; a
-  # PR without that runs the CLI-discovery e2e on Linux only, its macOS and
-  # Windows legs left out of the matrix (absent, not "skipped": were they
-  # ever made required checks, they would wait at "expected"). A skipped
+  # its tests read changes (ci-scope.sh's extension list), or .github/. The
+  # CLI-discovery e2e's macOS and Windows legs run only when what that e2e
+  # reads changes (tools/vscode-iec/, hmi/, hmi-3d/; not the example
+  # diagrams or components, #916) or a .github/ change touches the e2e's own
+  # definition (ci-scope.sh's e2e-all): those legs wait longest for a runner,
+  # and every push to main runs all three anyway. A PR without them runs the
+  # e2e on Linux only, the other legs left out of the matrix (absent, not
+  # "skipped": were they ever made required checks, they would wait at
+  # "expected"). A skipped
   # job reports "skipped", which branch protection counts as passing.
   # Every gate below fails closed: a job is left out only on an explicit
   # "false", never on a missing or garbled output.
@@ -40,10 +45,11 @@ jobs:
       examples: ${{ steps.scope.outputs.examples }}
       hmibuild: ${{ steps.scope.outputs.hmibuild }}
       extension: ${{ steps.scope.outputs.extension }}
-      # The CLI-discovery e2e's OS legs: all three when the extension
-      # changed; Linux only otherwise (it drives a naut built from the PR,
-      # so a Go change still runs it, without the macOS/Windows queues).
-      e2e-os: ${{ steps.scope.outputs.extension != 'false' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]' }}
+      # The CLI-discovery e2e's OS legs: all three when what it reads or its
+      # own definition changed (e2e-all); Linux only otherwise (it
+      # drives a naut built from the PR, so a Go change still runs it,
+      # without the macOS/Windows queues).
+      e2e-os: ${{ steps.scope.outputs.e2e-all != 'false' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]' }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 2} # a PR's merge commit: HEAD^1 is the base
@@ -61,12 +67,17 @@ jobs:
           out=
           if [ "$EVENT" = pull_request ] && changed=$(git diff --name-only HEAD^1 HEAD); then
             printf '%s\n' "$changed"
-            out=$(printf '%s\n' "$changed" | .github/scripts/ci-scope.sh) || out=
+            # The base's ci.yml, for e2e-all's comparison (none: it counts
+            # as changed).
+            base_ci="$RUNNER_TEMP/base-ci.yml"
+            git show HEAD^1:.github/workflows/ci.yml >"$base_ci" 2>/dev/null || base_ci=
+            out=$(printf '%s\n' "$changed" | CI_SCOPE_BASE_CI="$base_ci" .github/scripts/ci-scope.sh) || out=
           fi
           # Fail closed: a push, no diff, or a script that failed or printed
           # no verdict runs everything.
-          if ! grep -qxE 'full=(true|false)' <<<"$out" || ! grep -qxE 'extension=(true|false)' <<<"$out"; then
-            out=$'full=true\nextension=true'
+          if ! grep -qxE 'full=(true|false)' <<<"$out" || ! grep -qxE 'extension=(true|false)' <<<"$out" \
+            || ! grep -qxE 'e2e-all=(true|false)' <<<"$out"; then
+            out=$'full=true\nextension=true\ne2e-all=true'
           fi
           printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
   go:
@@ -114,6 +125,26 @@ jobs:
         run: |
           mkdir -p evidence
           go test -json -count=1 -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+      # The real-time guard (#836) against a real SCHED_FIFO thread: the
+      # runtime's test binary (and the PLCnext shim's guard harness) gets
+      # CAP_SYS_NICE with setcap, and a thread spinning at FIFO 1 must be
+      # demoted by RLIMIT_RTTIME. It cannot wedge
+      # the runner: the limit's hard half SIGKILLs the spinner after 125 ms
+      # and the test gives up after 5 s. NAUTILUS_REQUIRE_RT=1 makes a missing
+      # capability fail instead of skip, so a setcap that silently did not
+      # take cannot pass here (go test ./... above still skips it).
+      - name: runtime RT guard (real SCHED_FIFO, CAP_SYS_NICE via setcap)
+        env: {NAUTILUS_REQUIRE_RT: '1'}
+        run: |
+          go test -c -o "$RUNNER_TEMP/rt.test" ./runtime
+          sudo setcap cap_sys_nice+ep "$RUNNER_TEMP/rt.test"
+          "$RUNNER_TEMP/rt.test" -test.run '^TestRTGuard' -test.v -test.count=1
+          # The PLCnext shim's guard (rt/plcnext-io/rtguard.h): its harness
+          # gets the capability from this binary as an ambient one. Run from
+          # the package directory: the harness's source path is relative.
+          go test -c -o "$RUNNER_TEMP/rtc.test" ./rt/plcnext-io/ctest
+          sudo setcap cap_sys_nice+ep "$RUNNER_TEMP/rtc.test"
+          (cd rt/plcnext-io/ctest && "$RUNNER_TEMP/rtc.test" -test.run '^TestRTGuard' -test.v -test.count=1)
       - run: go build ./...
       # The browser playground (playground/, cmd/naut-wasm): GOOS=js swaps
       # internal/project's drivers for simulated ones, so a change that
@@ -283,6 +314,88 @@ jobs:
           name: evidence-examples
           path: evidence/
           retention-days: 14
+  # The TIA Openness agent's contract (siemens/tiad): tiad's C# core under
+  # Mono with a scripted host instead of TIA (tools/tiad/build-fake.sh →
+  # tiad-fake.exe), and the Go contract suite against it. The suite skips
+  # without TIAD_FAKE_BIN; NAUTILUS_REQUIRE_TIAD=1 makes that a failure here,
+  # so a build that silently stopped producing the fake can't pass. The plain
+  # go job leaves the flag unset and skips. TIAD_BIN (the real agent, on the
+  # TIA image) is never set here.
+  siemens-tiad:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Siemens tiad — contract suite on Mono (tiad-fake)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      # The Windows-only files (the real tiad host on a TIA Portal machine,
+      # tiadtest/real_windows_test.go, #929) never compile on this runner,
+      # nor in go-windows (it tests only file semantics): vet type-checks
+      # them, tests included, for windows.
+      - name: vet the Windows-only tiad files (GOOS=windows)
+        run: GOOS=windows go vet ./siemens/tiad/...
+      # mono-devel, not mono-mcs + mono-runtime: build-fake.sh compiles with
+      # -sdk:4.8 and references System.Web.Extensions.dll, and only
+      # mono-devel carries the .NET 4.8 reference assemblies (verified in a
+      # clean ubuntu:24.04: the smaller pair fails with CS8001).
+      - name: Mono (mono-devel)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mono-devel
+      - name: build tiad-fake
+        run: tools/tiad/build-fake.sh
+      - name: contract suite against tiad-fake (must run, not skip)
+        env:
+          NAUTILUS_REQUIRE_TIAD: '1'
+        run: TIAD_FAKE_BIN="$PWD/tools/tiad/out/tiad-fake.exe" go test -count=1 -v ./siemens/tiad/...
+  # The race detector over the module (#752): a data race in runtime (#870)
+  # went unnoticed because no job ran -race on it. Every package runs here
+  # except the three slowest under -race (about 680 s of the module's 1300 s
+  # locally): opcua, opcua/server and cmd/naut, which the go job still runs
+  # without it and race-nightly.yml runs under -race with the whole module
+  # every night (not a PR gate; it files what it finds). Among what runs: the test brokers' churn test (1000 rounds
+  # under -race, the window where mochi's own Close deadlocks) and every
+  # concurrency-heavy package (runtime, leader, server, io, sparkplug),
+  # the real-time guard's thread-table tests among them (#870, #872).
+  go-race:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Go — race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25', cache: false}
+      # Its own build cache: -race builds every package apart from the go
+      # job's. Main saves one a day; a PR restores the newest.
+      - id: key
+        run: |
+          echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gocache
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-
+      - name: go test -race (every package but opcua, opcua/server, cmd/naut)
+        run: |
+          pkgs=$(go list ./... | grep -vxE 'github.com/joyautomation/nautilus/(opcua|opcua/server|cmd/naut)')
+          go test -race -count=1 $pkgs
+      - name: Save the Go build cache (main, once a day)
+        if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
   # The release build's promise (macOS, Linux and Windows, amd64 and arm64,
   # Linux ARMv7, CGO off): seven cross-compiles of the CLI, about 4 minutes.
   # Its own job so it runs beside go test, not inside it; the go job skips it.
@@ -339,6 +452,38 @@ jobs:
           path: evidence/
           retention-days: 14
 
+  # staticcheck, as a REPORT (#752; James, 2026-11-18): the findings go to the
+  # job summary and are routed to the sessions that own the code; it becomes
+  # a gate once it stays clean. continue-on-error is what keeps it out of the
+  # required ci-ok (ci-ok.sh leaves a continue-on-error job unjudged): a
+  # finding never blocks a merge. A staticcheck that crashes, rather than
+  # finding something, still fails this job, visibly. Pinned: 2026.1 (v0.7.0),
+  # the newest that runs on Go 1.25 (v0.8 needs Go 1.26).
+  staticcheck:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Static analysis — staticcheck (report, not a gate)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - name: staticcheck 2026.1 (v0.7.0)
+        shell: bash
+        run: |
+          set +e
+          go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -f json ./... > "$RUNNER_TEMP/staticcheck.jsonl"
+          code=$?
+          set -e
+          # 0: clean; 1: findings (reported, not a failure); anything else, or
+          # no JSON at all, means staticcheck itself did not run through.
+          if [ "$code" -gt 1 ] || ! jq -se . "$RUNNER_TEMP/staticcheck.jsonl" >/dev/null; then
+            echo "::error::staticcheck did not run through (exit $code)"
+            exit 1
+          fi
+          .github/scripts/staticcheck-summary.sh "$RUNNER_TEMP/staticcheck.jsonl" >> "$GITHUB_STEP_SUMMARY"
+          echo "$(jq -s length "$RUNNER_TEMP/staticcheck.jsonl") finding(s): see the job summary"
   # Packages a native Windows service depends on (argonaut's second site
   # runs on Windows Server): file semantics differ there, a rename over an
   # open file above all, so they are tested on Windows, not assumed.
@@ -351,7 +496,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
-      - run: go test ./oplog/ ./alarm/
+      # retain: the retained values' file store renames over the old file
+      # and keeps a corrupt one aside (#842).
+      - run: go test ./oplog/ ./alarm/ ./retain/ ./audit/
   # PROFINET's raw-Ethernet transport (AF_PACKET) on a veth pair. The test
   # runs itself as root of a new user + network namespace, so it needs no
   # privilege and touches no host interface; ubuntu-latest restricts
@@ -414,14 +561,6 @@ jobs:
       - name: Host-application profile
         shell: bash
         run: NAUTILUS_TCK=1 go test -json ./sparkplug/host/ -run TestTCKHostConformance -v -timeout 120s | tee evidence/tck-host.json | go run ./tools/evidence cat
-      # The in-process test broker (mochi-mqtt v2.7.9) can deadlock in its own
-      # Close when a client disconnects at that moment; the tests close it
-      # through testmqtt.Close instead. The window only opens wide enough to hit
-      # under the race detector, so the churn test that proves closeBroker
-      # never hangs runs here with -race (it hangs mochi's Close within a few
-      # hundred of its 1000 rounds).
-      - name: test broker teardown under client churn (-race)
-        run: go test -race -cpu 4 -count=1 -run '^TestCloseUnderClientChurn$' ./internal/testmqtt
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -1214,7 +1353,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, go, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
+    needs: [changes, go, go-race, siemens-tiad, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

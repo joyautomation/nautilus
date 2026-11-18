@@ -94,9 +94,10 @@ RestartSec=2
   command instead of reporting success.
 - **A hung scan is restarted.** While the scans complete, the controller
   sends systemd a heartbeat at half of `WatchdogSec`. It stops when a
-  scan stops finishing, judged by the same check that closes the
-  [write gate](/guides/redundancy/#redundancy), about 2 to 4 s into the
-  hang. systemd then kills the process (`SIGABRT`, so the journal holds
+  scan stops finishing, or when a task stops starting its scans on
+  schedule (starved: its slot overdue, a higher-priority thread on its
+  core, say). Both are judged by the same check that closes the
+  [write gate](/guides/redundancy/#redundancy), about 2 to 4 s in. systemd then kills the process (`SIGABRT`, so the journal holds
   every goroutine's stack) and `Restart=` starts it again.
   `systemctl status` shows why, in its status line: `scans not live: …`.
 - **How long to set.** At least 8 s; naut warns below that, where a
@@ -252,57 +253,46 @@ the crontab lines and what deploy made, and leaves the root and
 
 A deployment repository holds the project and pins the naut version
 that builds it. A tag runs `naut deploy update` on a runner that can
-reach the box. Plant boxes are rarely reachable from GitHub's hosted
-runners, so that is a self-hosted runner on the plant network:
+reach the box. **GitHub's hosted runners cannot reach a plant LAN**: run a
+self-hosted runner on the plant network, or add a step that joins the
+runner to a tailnet or VPN that reaches the box.
 
-```yaml
-# .github/workflows/deploy.yml
-name: deploy
-on:
-  push:
-    tags: ["v*"]
-concurrency: deploy # one at a time
-jobs:
-  deploy:
-    runs-on: [self-hosted, plant] # a runner that reaches the box over SSH
-    environment: plant # optional: a reviewer approves each deploy
-    env:
-      NAUT_VERSION: v0.23.0 # the naut every build uses; change it in a commit
-      TARGET: deploy@10.0.0.20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # git describe names the release by its tag
-      - name: install naut
-        # Outside the checkout: naut build embeds the project directory,
-        # and a naut binary left in it would ship inside the controller.
-        run: |
-          case $(uname -m) in aarch64) a=arm64 ;; *) a=amd64 ;; esac
-          v=$NAUT_VERSION
-          f=nautilus_${v#v}_linux_$a.tar.gz
-          cd "$RUNNER_TEMP"
-          curl -fsSLO "https://github.com/joyautomation/nautilus/releases/download/$v/$f"
-          curl -fsSLO "https://github.com/joyautomation/nautilus/releases/download/$v/checksums.txt"
-          grep " $f\$" checksums.txt | sha256sum -c -
-          tar xzf "$f" naut
-          echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
-      - run: naut check . && naut test .
-      - name: deploy
-        env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          trap 'rm -f "$RUNNER_TEMP/key"' EXIT
-          (umask 077; printf '%s\n' "$SSH_KEY" >"$RUNNER_TEMP/key")
-          printf '%s\n' "$KNOWN_HOSTS" >"$RUNNER_TEMP/known_hosts"
-          export NAUT_SSH_OPTS="-i $RUNNER_TEMP/key -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
-          naut deploy update "$TARGET"
-```
+`naut new <name> --deploy-ssh` writes the workflow,
+`.github/workflows/deploy-ssh.yml`. For a repository that already
+exists, scaffold a throwaway project with the flag and copy the file
+across. On every `v*` tag it:
+
+- fails unless the tag's commit is on the default branch, so a tag pushed
+  on an unmerged branch never deploys, and waits for a required reviewer
+  of the `plant` environment to approve;
+- installs the pinned naut release for the runner's architecture into
+  the runner's temp directory (never the checkout, which `naut build`
+  would embed in the controller), checked against the release's
+  `checksums.txt`. `NAUT_VERSION` is the naut that scaffolded it; a
+  development naut leaves a placeholder that fails the job until it is
+  set;
+- runs `naut check` and `naut test`;
+- writes the SSH key to a file only the runner's user can read, and the
+  box's host key to its own known-hosts file, both removed when the step
+  ends, and runs `naut deploy update` on the box named by the repository
+  variable `DEPLOY_TARGET`. ssh accepts only that key and that host key,
+  whatever the runner's own ssh configuration says. An update the box
+  rolled back fails the job.
+
+The job's token can only read the repository (`permissions: contents:
+read`), `actions/checkout` is pinned to a commit and leaves no
+credentials in the checkout, and one deploy runs at a time: a newer tag
+queued behind a running deploy replaces an older one still waiting.
+
+Its header lists what to set up once: the runner's `plant` label, the
+`DEPLOY_TARGET` variable, the `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS`
+secrets, and the `plant` environment with its required reviewers. No
+address or key goes in the repository.
 
 A person deploying by hand from a clean checkout of the same tag, with
 the same naut release, gets the same release: the build embeds the
-project directory, so an untracked file in it changes the controller. Going back is `naut deploy rollback`
-from either.
+project directory, so an untracked file in it changes the controller.
+Going back is `naut deploy rollback` from either.
 
 `tools/deploy/check.sh <ssh-target>` proves all of this against a real
 box. It installs, updates, rolls back, backs up and restores, deploys a

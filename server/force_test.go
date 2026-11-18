@@ -21,7 +21,7 @@ func call(t *testing.T, srv *Server, method, path, body string, mod ...func(*htt
 	} else {
 		rd = &bytes.Buffer{}
 	}
-	req := httptest.NewRequest(method, path, rd)
+	req := httptest.NewRequest(method, "http://localhost"+path, rd)
 	for _, m := range mod {
 		m(req)
 	}
@@ -141,7 +141,7 @@ func TestForceAuth(t *testing.T) {
 	}); rec.Code != 200 {
 		t.Errorf("token force = %d, want 200", rec.Code)
 	}
-	// Reads stay open.
+	// Reads by a trusted Host need no token.
 	if rec := call(t, tok, "GET", "/api/forces", ""); rec.Code != 200 {
 		t.Errorf("GET /api/forces = %d", rec.Code)
 	}

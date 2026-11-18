@@ -333,31 +333,6 @@ func findSample(scrape prom.Scrape, name string, labels map[string]string) (prom
 	return prom.Sample{}, false
 }
 
-func minMetric(scrape prom.Scrape, name string, labels map[string]string) (float64, bool) {
-	var v float64
-	found := false
-	for _, s := range scrape.Samples {
-		if s.Name != name {
-			continue
-		}
-		ok := true
-		for k, want := range labels {
-			if s.Labels[k] != want {
-				ok = false
-				break
-			}
-		}
-		if !ok {
-			continue
-		}
-		if !found || s.Value < v {
-			v = s.Value
-		}
-		found = true
-	}
-	return v, found
-}
-
 // ── naming ───────────────────────────────────────────────────────────────
 
 // sanitize turns a human sensor label into a tag-name-safe segment:

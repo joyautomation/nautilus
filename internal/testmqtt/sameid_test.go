@@ -27,7 +27,7 @@ func broker(t *testing.T, serialize bool) (string, *HoldTeardown) {
 			t.Fatal(err)
 		}
 	}
-	tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: "127.0.0.1:0"})
+	tcp := NewTCP(srv, listeners.Config{ID: "t", Address: "127.0.0.1:0"})
 	if err := srv.AddListener(tcp); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestSameIDSessionSurvivesATakeoverRace(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: "127.0.0.1:0"})
+		tcp := NewTCP(srv, listeners.Config{ID: "t", Address: "127.0.0.1:0"})
 		if err := srv.AddListener(tcp); err != nil {
 			t.Fatal(err)
 		}
