@@ -21,7 +21,7 @@ func call(t *testing.T, srv *Server, method, path, body string, mod ...func(*htt
 	} else {
 		rd = &bytes.Buffer{}
 	}
-	req := httptest.NewRequest(method, path, rd)
+	req := httptest.NewRequest(method, "http://localhost"+path, rd)
 	for _, m := range mod {
 		m(req)
 	}

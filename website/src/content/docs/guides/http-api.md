@@ -88,7 +88,9 @@ where marked `…`.
 
 ## Authentication
 
-Reads are never gated: every `GET` answers without credentials. Every
+With a token configured, reads are not gated: every `GET` answers without
+credentials. Without a token, every request, read or write, is answered
+only when addressed to a host no other site can take over (below). Every
 endpoint that changes something is a **write**:
 
 | Write endpoints |
@@ -117,27 +119,28 @@ cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILU
 
 That is a `403`.
 
-A same-origin browser write must also be addressed to a host no other site
-can take over. A page on an attacker's domain can point that name at your
-controller (DNS rebinding); its `Host` and `Origin` are then both the
-attacker's name, and they match. So without a token a browser write is
-trusted only when the page was opened by `localhost` (or a `*.localhost`
-name), by an IP address (`127.0.0.1`, `192.168.1.20`), or by a name you
-list in `NAUTILUS_ALLOWED_HOSTS` (comma-separated, no port):
+Without a token, a request must also be addressed to a host no other site
+can take over: a read, a write, the live stream, the dashboard and the
+HMI alike. A page on an attacker's domain can point that name at your
+controller (DNS rebinding); it is then same-origin with your controller,
+its `Host` and `Origin` are both the attacker's name, and no CORS rule
+applies. So without a token nautilus answers only a request addressed to
+`localhost` (or a `*.localhost` name), to an IP address (`127.0.0.1`,
+`192.168.1.20`), or to a name you list in `NAUTILUS_ALLOWED_HOSTS`
+(comma-separated, no port):
 
 ```sh
 NAUTILUS_ALLOWED_HOSTS=epic1.plant.lan naut run .
 ```
 
-Any other name is a `403` that says which of the two settings to use. That
-includes a controller reached by its DNS or mDNS name (`epic1.local`) and
-a reverse proxy that passes the browser's host through: `tailscale serve`
-keeps the `*.ts.net` name, nginx with `proxy_set_header Host $host` keeps
-its public name. List the name, or set a token. A
-client that sends no `Origin` (`curl`, a script, the VS Code extension) is
-unaffected. When `naut run` listens beyond this machine (`server.addr:
-":8080"` or `0.0.0.0`) with no token, it starts and prints a warning:
-anything that reaches the port can write.
+Any other name is a `403` that says which of the two settings to use, for
+browsers, scripts and the CLI alike. That includes a controller reached
+by its DNS or mDNS name (`epic1.local`) and a reverse proxy that passes
+the browser's host through: `tailscale serve` keeps the `*.ts.net` name,
+nginx with `proxy_set_header Host $host` keeps its public name. List the
+name, or set a token. When `naut run` listens beyond this machine
+(`server.addr: ":8080"` or `0.0.0.0`) with no token, it starts and prints
+a warning: anything that reaches the port can write.
 
 **With a token.** Start the controller with `NAUTILUS_TOKEN` set. The
 token is never written in `nautilus.yaml`. Every write must then carry it

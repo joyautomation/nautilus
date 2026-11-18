@@ -173,7 +173,8 @@ func (f *Facade) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/program", programLocked)
 	mux.HandleFunc("POST /api/program/rollback", programLocked)
 	mux.HandleFunc("POST /api/program/activate", programLocked)
-	return mux
+	// The facade's own routes keep the server's Host rule (#819).
+	return f.srv.GuardHost(mux)
 }
 
 // The messages are what the extension shows.

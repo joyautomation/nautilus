@@ -84,6 +84,18 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 	if got := post(port, "localhost:"+port, "http://localhost:"+port); got != http.StatusNoContent {
 		t.Errorf("localhost write: %d, want 204", got)
 	}
+	// #819: a rebound page reads same-origin, with no Origin header: the
+	// program source must not come back.
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:"+port+"/api/program", nil)
+	req.Host = "evil.example:" + port
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("rebound GET /api/program: %d, want 403", resp.StatusCode)
+	}
 	stop()
 	if strings.Contains(stderr.String(), "WARNING: the tag API listens on") {
 		t.Errorf("loopback listen warned:\n%s", stderr.String())
@@ -173,7 +185,7 @@ func TestNautRunCORSServesOnlyTrustedOrigins(t *testing.T) {
 }
 
 // #811: the listen policy's pieces.
-func TestLoopbackListenAndAllowedHosts(t *testing.T) {
+func TestLoopbackListen(t *testing.T) {
 	for addr, want := range map[string]bool{
 		"localhost:8080": true, "127.0.0.1:8080": true, "127.9.9.9:1": true, "[::1]:8080": true,
 		":8080": false, "0.0.0.0:8080": false, "192.168.1.5:8080": false, "plc.local:8080": false,
@@ -182,10 +194,7 @@ func TestLoopbackListenAndAllowedHosts(t *testing.T) {
 			t.Errorf("loopbackListen(%q) = %v, want %v", addr, got, want)
 		}
 	}
-	t.Setenv("NAUTILUS_ALLOWED_HOSTS", " epic1.plant.lan, ,hmi.local ")
-	if got := strings.Join(allowedHosts(), "|"); got != "epic1.plant.lan|hmi.local" {
-		t.Errorf("allowedHosts() = %q", got)
-	}
+
 }
 
 // #811: `naut logix serve` writes to a running PLC, so beyond loopback it

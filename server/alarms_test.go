@@ -47,9 +47,9 @@ func do(t *testing.T, s *Server, method, path, body string) *httptest.ResponseRe
 	t.Helper()
 	var r *http.Request
 	if body == "" {
-		r = httptest.NewRequest(method, path, nil)
+		r = httptest.NewRequest(method, "http://localhost"+path, nil)
 	} else {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
+		r = httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
 	}
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, r)
@@ -242,7 +242,7 @@ func TestAlarmWritesHonorAuth(t *testing.T) {
 		t.Errorf("GET /api/alarms with auth configured = %d, want 200", rec.Code)
 	}
 
-	r := httptest.NewRequest("POST", "/api/alarms/ack", strings.NewReader(`{"all":true,"by":"operator1"}`))
+	r := httptest.NewRequest("POST", "http://localhost/api/alarms/ack", strings.NewReader(`{"all":true,"by":"operator1"}`))
 	r.Header.Set("X-Nautilus-Token", "s3cret")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, r)

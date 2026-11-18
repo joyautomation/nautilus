@@ -150,7 +150,7 @@ func runLogixServe(args []string) int {
 		Tags:    splitPatterns(*tags),
 		Poll:    *poll,
 		Meta:    meta,
-		Server:  server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN"), AllowedHosts: allowedHosts()},
+		Server:  server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")},
 		Program: plane,
 	})
 	cancel()

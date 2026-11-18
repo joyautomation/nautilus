@@ -164,6 +164,11 @@ func load(root string) ([]string, error) {
 	}
 	sopts := proj.Server
 	sopts.HMI = nil
+	// The extension's web build addresses this controller as
+	// PLAYGROUND_URL (tools/vscode-iec/src/web/engine.ts), and every
+	// request is handed in by function call, never over a network, so no
+	// page can rebind the name: the server answers it (#819).
+	sopts.AllowedHosts = append(sopts.AllowedHosts, playgroundHost)
 	if alarms != nil {
 		rt.SetAlarms(alarms.Engine)
 		sopts.Alarms = alarms.Engine
@@ -203,6 +208,11 @@ func jsStats(js.Value, []js.Value) any {
 	b, _ := json.Marshal(r.rt.Stats())
 	return js.Global().Get("JSON").Call("parse", string(b))
 }
+
+// playgroundHost is the host of PLAYGROUND_URL in the extension's web build
+// (tools/vscode-iec/src/web/engine.ts): the URL every request to this
+// controller is addressed to.
+const playgroundHost = "playground.nautilus"
 
 // ---- the tag API -----------------------------------------------------------
 

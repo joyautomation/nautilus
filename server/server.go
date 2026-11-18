@@ -69,6 +69,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -238,7 +239,8 @@ type Options struct {
 	// "epic1.plant.lan". Without a token, a browser write whose Host is any
 	// other name is refused, because a page on an attacker's domain can
 	// rebind that name to this machine (DNS rebinding) and its Origin then
-	// matches its Host. NAUTILUS_ALLOWED_HOSTS sets it from the CLI.
+	// matches its Host. NAUTILUS_ALLOWED_HOSTS adds to it in every
+	// embedder (New reads it).
 	AllowedHosts []string
 
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
@@ -508,15 +510,22 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		onlineEdits: onlineEdits,
 		clients:     map[*client]struct{}{},
 	}
+	var configured []string
 	if len(opts) > 0 {
-		for _, h := range opts[0].AllowedHosts {
-			// "epic1.plant.lan:8086" or "epic1.plant.lan." name the same
-			// host a request's Host does without its port or root dot.
-			h = strings.TrimSuffix(strings.ToLower(hostOnly(strings.TrimSpace(h))), ".")
-			if h != "" {
-				s.allowHosts[h] = true
-			}
+		configured = opts[0].AllowedHosts
+	}
+	// NAUTILUS_ALLOWED_HOSTS applies to every embedder (naut run, the
+	// serve commands, an SDK program), so the setting a 403 names always
+	// takes effect.
+	// An entry's port and root dot are dropped, as a request Host's are
+	// ("epic1.plant.lan:8086", "epic1.plant.lan.").
+	for _, h := range append(append([]string(nil), configured...), EnvAllowedHosts()...) {
+		h = strings.TrimSuffix(strings.ToLower(hostOnly(strings.TrimSpace(h))), ".")
+		if h != "" {
+			s.allowHosts[h] = true
 		}
+	}
+	if len(opts) > 0 {
 		s.drivers = opts[0].Drivers
 		s.cluster = opts[0].Cluster
 		s.historian = opts[0].HistorianURL
@@ -646,7 +655,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /assets/", handleAsset)
 		mux.HandleFunc("GET /", s.handleIndex)
 	}
-	return s.withCORS(s.proxyStandby(apiNotFound(mux)))
+	return s.GuardHost(s.withCORS(s.proxyStandby(apiNotFound(mux))))
 }
 
 // apiNotFound makes every /api/ path no API route matches a JSON 404,
@@ -859,6 +868,25 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "" && tokenMatches(r, s.authToken)) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// GuardHost answers, with no token configured, only a request addressed to
+// a Host no page can rebind (#819): localhost, an IP address or an allowed
+// name, the rule #811 applies to writes. A page on an attacker's domain
+// rebound to this machine is same-origin with it, so CORS does not stop
+// it reading; this does, for every route: the API, the live stream, the
+// dashboard and the HMI. A facade that serves routes of its own wraps its
+// handler in it too. With a token configured, reads stay ungated as
+// documented and writes need the token.
+func (s *Server) GuardHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.authToken == "" && !s.trustedHost(r.Host) {
+			w.Header().Add("Vary", "Origin")
+			http.Error(w, fmt.Sprintf("this controller answers %q only with an auth token: without one it is reached by localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS (a page on another site could rebind %q to it); add the name to NAUTILUS_ALLOWED_HOSTS, or set NAUTILUS_TOKEN", r.Host, hostOnly(r.Host)), http.StatusForbidden)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -1261,7 +1289,7 @@ func (s *Server) authorizeWrite(r *http.Request) (int, string) {
 // literal (a browser sends one only for a page it loaded from that very
 // address), or a name configured in AllowedHosts.
 func (s *Server) trustedHost(host string) bool {
-	h := strings.ToLower(hostOnly(host))
+	h := strings.TrimSuffix(strings.ToLower(hostOnly(host)), ".")
 	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
 		return true
 	}
@@ -1269,6 +1297,18 @@ func (s *Server) trustedHost(host string) bool {
 		return true
 	}
 	return s.allowHosts[h]
+}
+
+// EnvAllowedHosts is NAUTILUS_ALLOWED_HOSTS: host names, comma-separated,
+// the server answers by without a token besides localhost and an IP.
+func EnvAllowedHosts() []string {
+	var out []string
+	for _, h := range strings.Split(os.Getenv("NAUTILUS_ALLOWED_HOSTS"), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // hostOnly strips the port (and an IPv6 address's brackets) from a Host.
