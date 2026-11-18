@@ -2,16 +2,20 @@ package driverconformance
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 )
 
-// tcpLink is the link for a TCP driver: a relay between it and its fake
-// that can cut every connection (and refuse new ones), freeze them (keep
-// them open but forward nothing: a hung device), or heal and thaw again.
-type tcpLink struct {
-	ln     net.Listener
-	target string
+// relayLink is the link for a driver on a stream socket (TCP, or a Unix
+// socket): a relay between it and its fake that can cut every connection
+// (and refuse new ones), freeze them (keep them open but forward nothing:
+// a hung device), or heal and thaw again.
+type relayLink struct {
+	ln      net.Listener
+	network string // the fake's, which the relay dials
+	target  string
 
 	mu       sync.Mutex
 	down     bool
@@ -22,16 +26,39 @@ type tcpLink struct {
 	holds    atomic.Int64
 }
 
-var _ link = (*tcpLink)(nil)
+var _ link = (*relayLink)(nil)
 
-// newTCPLink relays to target; cut starts it down. Its own teardown thaws
-// and cuts it, so nothing stays parked in a relay.
-func newTCPLink(t tb, target string, cut bool) *tcpLink {
+// newTCPLink relays a TCP driver to target on 127.0.0.1; cut starts it
+// down.
+func newTCPLink(t tb, target string, cut bool) *relayLink {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("link: %v", err)
 	}
-	l := &tcpLink{ln: ln, target: target, down: cut, conns: map[net.Conn]bool{}}
+	return newRelayLink(t, ln, "tcp", target, cut)
+}
+
+// newUnixLink relays a driver that dials a Unix socket to the fake's
+// socket at target; cut starts it down. The driver dials path(), in a
+// short temp dir of its own (a socket path is limited to about 108 bytes,
+// which t.TempDir's test-named path can pass).
+func newUnixLink(t tb, target string, cut bool) *relayLink {
+	dir, err := os.MkdirTemp("", "conformance")
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	ln, err := net.Listen("unix", filepath.Join(dir, "link.sock"))
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	return newRelayLink(t, ln, "unix", target, cut)
+}
+
+// newRelayLink relays what ln accepts to target on network. Its own
+// teardown thaws and cuts it, so nothing stays parked in a relay.
+func newRelayLink(t tb, ln net.Listener, network, target string, cut bool) *relayLink {
+	l := &relayLink{ln: ln, network: network, target: target, down: cut, conns: map[net.Conn]bool{}}
 	go l.accept()
 	t.Cleanup(func() {
 		ln.Close()
@@ -41,13 +68,16 @@ func newTCPLink(t tb, target string, cut bool) *tcpLink {
 	return l
 }
 
-// port is where the driver dials, on 127.0.0.1.
-func (l *tcpLink) port() int { return l.ln.Addr().(*net.TCPAddr).Port }
+// port is where a TCP driver dials, on 127.0.0.1.
+func (l *relayLink) port() int { return l.ln.Addr().(*net.TCPAddr).Port }
 
-func (l *tcpLink) refused() int64 { return l.refusals.Load() }
-func (l *tcpLink) held() int64    { return l.holds.Load() }
+// path is the socket a Unix-socket driver dials.
+func (l *relayLink) path() string { return l.ln.Addr().String() }
 
-func (l *tcpLink) accept() {
+func (l *relayLink) refused() int64 { return l.refusals.Load() }
+func (l *relayLink) held() int64    { return l.holds.Load() }
+
+func (l *relayLink) accept() {
 	for {
 		c, err := l.ln.Accept()
 		if err != nil {
@@ -65,8 +95,8 @@ func (l *tcpLink) accept() {
 	}
 }
 
-func (l *tcpLink) relay(c net.Conn) {
-	u, err := net.Dial("tcp", l.target)
+func (l *relayLink) relay(c net.Conn) {
+	u, err := net.Dial(l.network, l.target)
 	if err != nil {
 		c.Close()
 		return
@@ -86,7 +116,7 @@ func (l *tcpLink) relay(c net.Conn) {
 
 // pipe copies src to dst until either closes, holding what it read while
 // the link is frozen.
-func (l *tcpLink) pipe(dst, src net.Conn) {
+func (l *relayLink) pipe(dst, src net.Conn) {
 	defer dst.Close()
 	defer src.Close()
 	buf := make([]byte, 32<<10)
@@ -110,7 +140,7 @@ func (l *tcpLink) pipe(dst, src net.Conn) {
 	}
 }
 
-func (l *tcpLink) cut() {
+func (l *relayLink) cut() {
 	l.mu.Lock()
 	l.down = true
 	for c := range l.conns {
@@ -120,13 +150,13 @@ func (l *tcpLink) cut() {
 	l.mu.Unlock()
 }
 
-func (l *tcpLink) heal() {
+func (l *relayLink) heal() {
 	l.mu.Lock()
 	l.down = false
 	l.mu.Unlock()
 }
 
-func (l *tcpLink) freeze() {
+func (l *relayLink) freeze() {
 	l.mu.Lock()
 	if !l.frozen {
 		l.frozen = true
@@ -135,7 +165,7 @@ func (l *tcpLink) freeze() {
 	l.mu.Unlock()
 }
 
-func (l *tcpLink) thaw() {
+func (l *relayLink) thaw() {
 	l.mu.Lock()
 	if l.frozen {
 		l.frozen = false
