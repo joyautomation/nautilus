@@ -113,6 +113,17 @@ func TestExportedIDs(t *testing.T) {
 		MinCycle: 8 * time.Millisecond,
 	}
 	b, err := Generate(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{`DeviceAccessPointItem ID="` + DAPID + `"`, `ModuleItem ID="` + ModuleID(1) + `"`, `ModuleItem ID="` + ModuleID(3) + `"`, `ModuleItemTarget="` + ModuleID(3) + `" AllowedInSlots="3"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("GSDML lacks %s", want)
+		}
+	}
+}
+
 // The GSDML claims nothing the engine does not do (review on #738): no
 // Device Access AR (the engine refuses an AR without IOCRs), no SNMP, so
 // conformance class A, and no netload class beyond the lowest.
@@ -122,9 +133,6 @@ func TestGenerateClaimsOnlyWhatTheEngineDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, want := range []string{`DeviceAccessPointItem ID="` + DAPID + `"`, `ModuleItem ID="` + ModuleID(1) + `"`, `ModuleItem ID="` + ModuleID(3) + `"`, `ModuleItemTarget="` + ModuleID(3) + `" AllowedInSlots="3"`} {
-		if !strings.Contains(s, want) {
-			t.Errorf("GSDML lacks %s", want)
 	for _, want := range []string{`DeviceAccessSupported="false"`, `ConformanceClass="A"`, `NetloadClass="I"`, `SupportedProtocols="LLDP"`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s", want)
