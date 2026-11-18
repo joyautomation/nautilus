@@ -337,6 +337,9 @@ func TestReplaceDriverHoldOutputsOnSwap(t *testing.T) {
 // its device, even when handed a new command before it is stopped.
 func TestReplaceDriverOldRealModbusWritesNothingMore(t *testing.T) {
 	rt, set, m1, s1, ctx := modbusRig(t, false)
+	// The command of the scans before the swap (In 4, Cmd 5) lands first:
+	// a write queued, or in flight, before the swap may finish after it.
+	waitScan(t, rt, func() bool { return s1.Unit(1).Holding(10) == 5 })
 	before := s1.Unit(1).Holding(10)
 	s2 := newModbusSlave(t)
 	s2.Unit(1).SetHolding(0, 4)
