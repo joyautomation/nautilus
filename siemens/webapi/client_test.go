@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -462,5 +463,48 @@ func TestCallInFlightDuringReloginRetriesWithTheNewToken(t *testing.T) {
 	}
 	if n := s.Sessions(); n > 2 {
 		t.Fatalf("sessions = %d", n)
+	}
+}
+
+// TestMissingBulkReplyIsUnknown: a bulk response that leaves out one
+// call's reply makes that call's outcome unknown, not a success and not
+// a plain failure.
+func TestMissingBulkReplyIsUnknown(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqs []map[string]any
+		body, _ := io.ReadAll(r.Body)
+		if json.Unmarshal(body, &reqs) != nil { // a single call: the login
+			var one map[string]any
+			json.Unmarshal(body, &one)
+			res := any("ping")
+			if one["method"] == "Api.Login" {
+				res = map[string]string{"token": "t"}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": one["id"], "result": res})
+			return
+		}
+		// Answer every call but the last.
+		var out []map[string]any
+		for _, q := range reqs[:len(reqs)-1] {
+			out = append(out, map[string]any{"jsonrpc": "2.0", "id": q["id"], "result": true})
+		}
+		json.NewEncoder(w).Encode(out)
+	}))
+	defer srv.Close()
+	sum := sha256.Sum256(srv.Certificate().Raw)
+	c, err := webapi.New(srv.URL, webapi.Options{User: "naut", Password: "pw", CertSHA256: hex.EncodeToString(sum[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := c.WriteMany(ctx, []webapi.Write{{`"Tags".A`, 1}, {`"Tags".B`, 2}, {`"Tags".C`, 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs[0].Err != nil || rs[1].Err != nil {
+		t.Fatalf("answered calls: %+v", rs[:2])
+	}
+	if !errors.Is(rs[2].Err, webapi.ErrUnknown) {
+		t.Fatalf("the unanswered call: %v, want ErrUnknown", rs[2].Err)
 	}
 }
