@@ -259,7 +259,9 @@ driver takes it:
 While the gate is held, the configuration the driver set on the unit (its
 custom area, its stream and its watchdog time) stays there: with no
 session, nothing puts it back. In particular a stream stays on, and the
-unit keeps sending its datagrams to a port nautilus is not reading. A
+unit keeps sending its datagrams to a port nautilus is not reading; on
+the bench unit that did not feed its watchdog, which tripped as it does
+when polling. A
 clean stop of `naut run` restores the configuration as usual, gate open
 or closed.
 

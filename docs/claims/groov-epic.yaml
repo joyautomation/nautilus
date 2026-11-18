@@ -548,12 +548,13 @@ claims:
       - go ./optommp TestPlainGateWithoutWatchdogReadsOnAndWritesNothing
       - go ./optommp TestPlainGateStopRestoresWhileClosed
       - go ./optommp TestSetWriteGateAloneIsStillARedundancyLease
-    partial: true
     note: >-
-      Against the in-process fake, which trips its watchdog when no request
-      arrives for the watchdog time. Still to run on the bench unit (#865),
-      as a hung scan in a task at normal priority: the trip itself, and
-      that the stream the driver leaves configured on the unit while the
-      gate is held (unit-to-nautilus datagrams) does not feed the unit's
-      watchdog. If it does, the driver must stop the stream when the gate
-      closes.
+      The tests run against the in-process fake, which trips its watchdog
+      when no request arrives for the watchdog time. On the bench unit
+      (2026-11-18, issue #865) a 30 s hang in a normal-priority task, with
+      `watchdog: 1s`, closed the gate about 5 s in, and an observer reading
+      the unit every 3 s saw the outputs at their watchdog values from the
+      first sample after it until the scans resumed, both polling and
+      streaming. While held, the unit kept streaming (about 50 datagrams a
+      second at 20 ms), so the stream does not feed its watchdog. Not
+      repeatable in CI.
