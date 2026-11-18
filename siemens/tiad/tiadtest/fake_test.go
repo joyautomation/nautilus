@@ -1,8 +1,11 @@
 package tiadtest_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -237,6 +240,35 @@ func TestCancelledContextKeepsItsError(t *testing.T) {
 	_, err := c.Health(ctx)
 	if !errors.Is(err, context.Canceled) || tiad.Kind(err) != tiad.KindUnreachable {
 		t.Fatalf("cancelled: %v (errors.Is canceled = %v)", err, errors.Is(err, context.Canceled))
+	}
+}
+
+func TestProjectNameIsOneSafeSegment(t *testing.T) {
+	ctx := context.Background()
+	f := tiadtest.New()
+	srv, c := f.Serve(t)
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.InstallGSD(ctx, "gsd/"+gsdml)
+	bad := []string{"", "CON", "nul.txt", "x.", "a\x01b", "..", "a/b", "a/../b", `a\b`, "c:x"}
+	for _, n := range bad {
+		if _, err := c.CreateProject(ctx, n, station(), secrets); tiad.Kind(err) != tiad.KindBadRequest {
+			t.Errorf("client CreateProject(%q) = %v, want bad_request", n, err)
+		}
+	}
+	// The agent refuses them too, for a client that skips the check.
+	for _, n := range bad {
+		body, _ := json.Marshal(map[string]any{"name": n, "station": station(), "secrets": secrets})
+		resp, err := http.Post(srv.URL+"/v1/projects", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("agent POST /v1/projects name %q = HTTP %d, want 400", n, resp.StatusCode)
+		}
+	}
+	if _, err := c.CreateProject(ctx, "bench-1", station(), secrets); err != nil {
+		t.Fatalf("a plain name: %v", err)
 	}
 }
 

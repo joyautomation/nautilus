@@ -370,8 +370,8 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
-	if req.Name == "" || strings.ContainsAny(req.Name, `/\:`) {
-		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "project name %q is empty or has a path separator", req.Name)
+	if err := tiad.CheckProjectName(req.Name); err != nil {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
 	}
 	if fl := f.checkStation(req.Station, req.Secrets); fl != nil {
 		return nil, fl

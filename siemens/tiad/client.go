@@ -373,6 +373,20 @@ var windowsReserved = func() map[string]bool {
 	return m
 }()
 
+// CheckProjectName applies the sandbox rule to a project name, which
+// becomes the directory and file projects/<name>/<name>.ap21: one path
+// segment that CleanPath accepts.
+func CheckProjectName(name string) error {
+	c, err := CleanPath(name)
+	if err != nil {
+		return fmt.Errorf("project name: %w", err)
+	}
+	if c != name || strings.Contains(name, "/") {
+		return fmt.Errorf("project name %q must be a single path segment", name)
+	}
+	return nil
+}
+
 // checkPaths returns a bad_request Error for the first path that breaks
 // the sandbox rule.
 func checkPaths(ps ...string) error {
@@ -497,6 +511,9 @@ type Session struct {
 // CreateProject builds a fresh project from a station spec and opens it.
 // The station is validated here first, so a bad spec never reaches TIA.
 func (c *Client) CreateProject(ctx context.Context, name string, st Station, sec Secrets) (*Session, error) {
+	if err := CheckProjectName(name); err != nil {
+		return nil, &Error{Kind: KindBadRequest, Message: err.Error()}
+	}
 	if err := st.Validate(); err != nil {
 		return nil, &Error{Kind: KindBadRequest, Message: err.Error()}
 	}
