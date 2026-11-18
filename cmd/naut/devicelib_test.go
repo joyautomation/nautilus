@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/virtdev"
 )
 
 // libProject writes a project that declares a drive by profile; the
@@ -183,5 +185,37 @@ func TestBuildShipsVendoredProfiles(t *testing.T) {
 	}
 	if _, err := project.Load(zr, ""); err != nil {
 		t.Errorf("the built controller's project does not load: %v", err)
+	}
+}
+
+// Until virtual devices are built from devices: rows, a suite that asks
+// for virtual devices in a project that declares devices: is refused by
+// name, not run with inputs that never arrive.
+func TestDevicesWithVirtualDevicesRefused(t *testing.T) {
+	dir := libProject(t, libProgram)
+	if err := addProfile(dir, "abb-acs355-fmbt21", "", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"virtual-devices.yaml": "devices: [{ name: SIM, profile: asi-275m, endpoint: 10.0.0.12 }]\n",
+		"main_test.yaml":       "devices: true\ntests:\n  - name: t\n    steps:\n      - advance: 1s\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code := runTest([]string{dir}); code == 0 {
+		t.Fatal("naut test passed a devices: project against virtual devices it cannot build yet")
+	}
+	proj, err := project.Load(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := virtdev.LoadSet(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := virtdev.NewInProcess(set, acceptance.NewClock(), proj.Drivers()); err == nil || !strings.Contains(err.Error(), "carries devices: declared in the manifest") {
+		t.Errorf("NewInProcess: %v", err)
 	}
 }

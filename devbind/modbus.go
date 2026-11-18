@@ -118,6 +118,11 @@ func (w *ModbusDriver) ReadInputs() (nio.Values, error) {
 
 // ReadInputsInto is ReadInputs into the runtime's map (io.BatchReader).
 func (w *ModbusDriver) ReadInputsInto(dst nio.Values) error {
+	// The driver keeps dst to exactly its own keys and takes a slower
+	// path when it finds others: hand it the map without the devices.
+	for _, a := range w.asm {
+		delete(dst, a.dev)
+	}
 	if err := w.Driver.ReadInputsInto(dst); err != nil {
 		return err
 	}

@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // Every built-in profile parses, validates and carries its file's id.
@@ -75,5 +77,30 @@ func TestProfileErrors(t *testing.T) {
 	}
 	if _, err := ParseProfile([]byte("profile: x\nprotocol: canbus\n"), "x.yaml"); err == nil {
 		t.Error("unknown protocol: no error")
+	}
+}
+
+// Every built-in profile's struct type compiles: a point named like an IEC
+// keyword would otherwise surface as "unknown type" in a user's project.
+func TestBuiltinTypesCompile(t *testing.T) {
+	ps, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		src := TypesST([]*Profile{p}) + "PROGRAM P\nVAR d : " + p.TypeName() + "; END_VAR\nEND_PROGRAM\n"
+		prog, err := st.Parse(src)
+		if err != nil {
+			t.Errorf("%s: %v\n%s", p.ID, err, src)
+			continue
+		}
+		types, err := st.Types(prog)
+		if err != nil || types[p.TypeName()] == nil {
+			t.Errorf("%s: type %s: %v", p.ID, p.TypeName(), err)
+			continue
+		}
+		if _, err := st.Lower(prog); err != nil {
+			t.Errorf("%s: %v", p.ID, err)
+		}
 	}
 }

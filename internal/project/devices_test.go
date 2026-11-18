@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -130,6 +131,78 @@ END_PROGRAM
 		v, _ := rt.Tags().ReadGlobal("CONV")
 		return v.Kind == ir.TypeStruct && v.Fld[v.Struct.FieldIndex["ControlWord"]].I == int64(drive.Holding(0))
 	})
+}
+
+// A command tag no program writes never reaches the device: not at start,
+// and not when a standby whose gate was closed from boot takes over (the
+// driver then has no baseline and its first push commands everything it
+// is handed, #606). The runtime holds an output nothing has written out
+// of every push, which is why naut check does not warn about a device's
+// unwritten commands.
+func TestUnwrittenCommandNeverReachesTheDevice(t *testing.T) {
+	srv := slave.NewServer("", nil)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	drive := srv.Unit(1)
+	drive.SetHolding(2, 777) // Reference2: the program never writes it
+	fsys := devicesProject(t, `name: d
+tasks: [{ program: main.st, scan: 20ms }]
+drivers: [{ type: modbus, scan-rate: 20ms }]
+devices:
+  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: "`+srv.Addr()+`" }
+`, "PROGRAM Main\nCONV_ControlWord := 16#0476;\nEND_PROGRAM\n")
+	proj, err := Load(fsys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var open atomic.Bool // a standby: the gate is closed from boot
+	drv := proj.Runtime.Driver
+	drv.(interface{ SetWriteGate(func() bool) }).SetWriteGate(open.Load)
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	drv.(interface{ Start(context.Context) }).Start(ctx)
+	go func() { rt.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		drv.(interface{ Stop() }).Stop()
+	})
+	eventually(t, "the standby reads the drive", func() bool {
+		v, err := rt.Tags().ReadGlobal("CONV")
+		return err == nil && v.Kind == ir.TypeStruct
+	})
+	// Several scans with the gate closed: the runtime has pushed its
+	// outputs and the driver has refused them, as a standby's does.
+	time.Sleep(200 * time.Millisecond)
+	open.Store(true) // takeover
+	eventually(t, "the written command lands after the takeover", func() bool { return drive.Holding(0) == 0x0476 })
+	time.Sleep(200 * time.Millisecond) // several scans and pushes more
+	if got := drive.Holding(2); got != 777 {
+		t.Fatalf("Reference2, which no program writes, was commanded to %d on takeover", got)
+	}
+}
+
+// A project loaded with another manifest (-m field.yaml) gets that
+// manifest's device types, not nautilus.yaml's.
+func TestDevicesInAnotherManifest(t *testing.T) {
+	fsys := devicesProject(t, "name: bench\ntasks: [{ program: main.st }]\n", "PROGRAM Main\nIF CONV.StatusWord.3 THEN CONV_ControlWord := 16#0080; END_IF;\nEND_PROGRAM\n")
+	fsys["field.yaml"] = &fstest.MapFile{Data: []byte(`name: field
+tasks: [{ program: main.st }]
+devices: [{ name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }]
+`)}
+	proj, err := Load(fsys, "field.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.New(proj.Runtime); err != nil {
+		t.Fatalf("field.yaml's devices do not compile: %v", err)
+	}
 }
 
 // A project without a Modbus driver gets one for its devices; a row whose

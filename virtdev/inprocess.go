@@ -118,6 +118,9 @@ func NewInProcess(s *Set, clock runtime.Clock, drivers []nio.NamedDriver) (*InPr
 				return nil, fmt.Errorf("driver %s: %w", nd.Name, err)
 			}
 			ip.ua = append(ip.ua, f)
+		case interface{ Unwrap() nio.Driver }:
+			// a driver carrying nautilus.yaml's devices: (devbind)
+			return nil, fmt.Errorf("driver %s carries devices: declared in the manifest; virtual devices are built from virtual-devices.yaml's own rows only (devices: rows as virtual devices come next, docs/design/device-library.md §8)", nd.Name)
 		default:
 			return nil, fmt.Errorf("driver %s (%T): virtual devices answer modbus and opcua-client drivers only", nd.Name, nd.Driver)
 		}

@@ -57,6 +57,7 @@ type assembler struct {
 	members []string // internal names, index-parallel to def.Fields
 	sel     []bool   // polled: a member not selected stays zero
 	last    ir.Value // the last value delivered; Kind 0 before any
+	boxed   any      // last, boxed once: a map[string]any entry costs an allocation per box
 }
 
 func newAssembler(d *device) *assembler {
@@ -73,10 +74,10 @@ func newAssembler(d *device) *assembler {
 
 // take moves the device's members out of vals and, once any member has
 // been delivered, puts the struct in under the device's name. A member
-// that is not in vals keeps its last value.
+// that is not in vals keeps its last value. A delivery that changes
+// nothing hands back the same value without copying: this runs every scan.
 func (a *assembler) take(vals map[string]any) {
-	var next ir.Value
-	changed := false
+	var next ir.Value // a copy, made at the first member that differs
 	for i, m := range a.members {
 		v, ok := vals[m]
 		if !ok {
@@ -87,21 +88,30 @@ func (a *assembler) take(vals map[string]any) {
 		if !ok {
 			continue
 		}
+		cur := a.cur(i)
 		if next.Kind == 0 {
+			if a.last.Kind != 0 && sameScalar(cur, iv) {
+				continue
+			}
 			next = a.base()
 		}
-		if !sameScalar(next.Fld[i], iv) {
-			next.Fld[i] = iv
-			changed = true
-		}
+		next.Fld[i] = iv
 	}
-	switch {
-	case next.Kind == 0 && a.last.Kind == 0:
+	if next.Kind != 0 {
+		a.last, a.boxed = next, next
+	}
+	if a.last.Kind == 0 {
 		return // nothing delivered yet: absent, NotConnected
-	case changed || a.last.Kind == 0:
-		a.last = next
 	}
-	vals[a.dev] = a.last
+	vals[a.dev] = a.boxed
+}
+
+// cur is member i's current value: the last delivered, or zero.
+func (a *assembler) cur(i int) ir.Value {
+	if a.last.Kind != 0 {
+		return a.last.Fld[i]
+	}
+	return ir.Zero(a.def.Fields[i].Type)
 }
 
 // base is a fresh copy of the last value, or the zero struct.

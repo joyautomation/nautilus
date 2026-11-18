@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/devbind"
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
 
 	"gopkg.in/yaml.v3"
@@ -883,6 +884,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	libFiles = withDeviceTypes(libFiles, m.devices)
 	libs := make([]string, len(libFiles))
 	for i, l := range libFiles {
 		libs[i] = l.ST
@@ -1502,6 +1504,22 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		return nil, nil, fmt.Errorf("drivers: %w", err)
 	}
 	return multi, named, nil
+}
+
+// withDeviceTypes makes the composed device types this manifest's:
+// stproject composes nautilus.yaml's devices:, and a project loaded with
+// another manifest (-m field.yaml) declares its own.
+func withDeviceTypes(libs []stproject.Library, set *devbind.Set) []stproject.Library {
+	out := make([]stproject.Library, 0, len(libs)+1)
+	for _, l := range libs {
+		if l.Path != devprofile.TypesPath {
+			out = append(out, l)
+		}
+	}
+	if src, _ := set.TypesST(); src != "" {
+		out = append(out, stproject.Library{Path: devprofile.TypesPath, ST: src})
+	}
+	return out
 }
 
 // withDevices hands the project's devices to its Modbus driver, adding one
