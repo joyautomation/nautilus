@@ -365,6 +365,11 @@ func TestDeployK8sAllowsTheServiceNames(t *testing.T) {
 			t.Errorf("deploy/k8s.yaml lacks %q", want)
 		}
 	}
+	// Kubernetes expands $(POD_NAMESPACE) only from a variable defined
+	// earlier in the list; after it, the value stays literal.
+	if ns, hosts := strings.Index(k8s, "- name: POD_NAMESPACE"), strings.Index(k8s, "- name: NAUTILUS_ALLOWED_HOSTS"); ns < 0 || hosts < 0 || ns > hosts {
+		t.Errorf("POD_NAMESPACE (at %d) must come before NAUTILUS_ALLOWED_HOSTS (at %d) in the env list", ns, hosts)
+	}
 	// It still parses as the YAML documents it was.
 	dec := yaml.NewDecoder(strings.NewReader(k8s))
 	for {
