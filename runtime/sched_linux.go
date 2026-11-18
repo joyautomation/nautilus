@@ -141,8 +141,11 @@ func armRTGuard() error {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGXCPU)
 		go func() {
+			// The signal does not say which limit it was for: RLIMIT_RTTIME
+			// (ours) or RLIMIT_CPU (someone's ulimit -t). Either way the
+			// process is past a CPU bound, and the real-time threads go.
 			for range c {
-				demoteAll(fmt.Sprintf("a real-time task thread ran %s without blocking (RLIMIT_RTTIME, NAUTILUS_RT_LIMIT_MS); every task with priority: now runs at normal priority until restart", rtGuard.soft))
+				demoteAll(fmt.Sprintf("SIGXCPU: a CPU-time limit was passed (most likely RLIMIT_RTTIME: a real-time task thread ran %s without blocking; NAUTILUS_RT_LIMIT_MS); every task with priority: now runs at normal priority until restart", rtGuard.soft))
 			}
 		}()
 	})
@@ -160,16 +163,21 @@ func demoteAll(reason string) {
 	}
 	slog.Error("runtime: real-time priority withdrawn", "reason", reason, "threads", len(threads))
 	for tid, told := range threads {
-		setOther(tid)
+		if err := setOther(tid); err != nil {
+			slog.Error("runtime: could not move a real-time thread to normal scheduling", "tid", tid, "error", err)
+		}
 		if told != nil {
 			told(reason)
 		}
 	}
 }
 
-func setOther(tid int) {
+func setOther(tid int) error {
 	param := struct{ prio int32 }{0}
-	_, _, _ = syscall.RawSyscall(syscall.SYS_SCHED_SETSCHEDULER, uintptr(tid), schedOther, uintptr(unsafe.Pointer(&param)))
+	if _, _, errno := syscall.RawSyscall(syscall.SYS_SCHED_SETSCHEDULER, uintptr(tid), schedOther, uintptr(unsafe.Pointer(&param))); errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 // releaseSched undoes a priority on the calling thread before its loop
@@ -182,6 +190,8 @@ func releaseSched() {
 	delete(rtGuard.threads, tid)
 	rtGuard.mu.Unlock()
 	if ok {
-		setOther(tid)
+		if err := setOther(tid); err != nil {
+			slog.Error("runtime: a loop ended but its thread could not leave real-time scheduling", "tid", tid, "error", err)
+		}
 	}
 }

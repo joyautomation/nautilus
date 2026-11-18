@@ -215,3 +215,14 @@ func TestRTGuardLoopEndReleasesItsThread(t *testing.T) {
 		t.Fatal("the loop ended with its thread still registered at real-time priority")
 	}
 }
+
+// setOther reports a failure (it is logged by its callers) instead of
+// letting the stats say "applied: false" over a thread still at FIFO.
+func TestRTGuardSetOtherReportsFailure(t *testing.T) {
+	if err := setOther(1 << 30); err == nil { // no such thread
+		t.Fatal("setOther on a thread that does not exist reported success")
+	}
+	if err := setOther(syscall.Gettid()); err != nil {
+		t.Fatalf("setOther on this (normal) thread: %v", err)
+	}
+}

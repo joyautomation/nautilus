@@ -267,6 +267,7 @@ claims:
       - go ./runtime TestRTGuardStopsASpinningFIFOThread
       - go ./runtime TestRTGuardRequireFlag
       - go ./runtime TestRTGuardLoopEndReleasesItsThread
+      - go ./runtime TestRTGuardSetOtherReportsFailure
     note: >-
       TestRTGuardStopsASpinningFIFOThread needs CAP_SYS_NICE: it skips under
       go test ./..., and CI runs it in the go job with the test binary given
