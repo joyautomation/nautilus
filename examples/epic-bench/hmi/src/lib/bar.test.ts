@@ -1,7 +1,7 @@
 // node --test --experimental-strip-types src/lib/bar.test.ts (npm test)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BAR_WIRING, KNOB_SWEEP, knobAngle, knobValueAt, simulated, toggled } from './bar.ts';
+import { BAR_WIRING, KNOB_SWEEP, knobAngle, knobValueAt, onPress, onRelease, simulated } from './bar.ts';
 
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -39,15 +39,26 @@ test('only a frame with no field driver is the simulated build', () => {
 	assert.equal(simulated({ drivers: [{ kind: 'optommp', state: 'connected' }] }), false);
 });
 
-test('a toggle button flips: a click turns an off input on and an on input off', () => {
-	assert.equal(toggled(false), true);
-	assert.equal(toggled(true), false);
-	assert.equal(toggled(undefined), true); // no value yet: the first click turns it on
+test('the latching button flips on each press and writes nothing on release', () => {
+	assert.equal(onPress('latching', false), true);
+	assert.equal(onPress('latching', true), false);
+	assert.equal(onPress('latching', undefined), true); // no value yet: the first press latches it on
+	assert.equal(onRelease('latching'), null);
 });
 
-test('the buttons and the knob name input tags, the rings output tags, one ring per button', () => {
-	for (const t of BAR_WIRING.buttons) assert.match(t, /^EPIC_M0_DI\d\d$/);
-	for (const t of BAR_WIRING.rings) assert.match(t, /^EPIC_M1_DO\d\d$/);
-	assert.equal(BAR_WIRING.rings.length, BAR_WIRING.buttons.length);
+test('the momentary button is on while held and off when let go, whatever it was', () => {
+	assert.equal(onPress('momentary', false), true);
+	assert.equal(onPress('momentary', true), true);
+	assert.equal(onRelease('momentary'), false);
+});
+
+test('the load panel mapping: top latching on DI0, bottom momentary on DI1 with its blue ring on DO0', () => {
+	assert.deepEqual(
+		BAR_WIRING.buttons.map((b) => [b.tag, b.kind, b.ring.tag]),
+		[
+			['EPIC_M0_DI00', 'latching', 'EPIC_M0_DI00'],
+			['EPIC_M0_DI01', 'momentary', 'EPIC_M1_DO00']
+		]
+	);
 	assert.match(BAR_WIRING.knob.tag, /^EPIC_M3_AI\d\d$/);
 });

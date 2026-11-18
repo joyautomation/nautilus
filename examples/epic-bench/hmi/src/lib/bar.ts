@@ -3,18 +3,21 @@
 // playground). On the controller the inputs belong to the modules and the
 // screen writes nothing.
 //
-// PROVISIONAL WIRING (#837), to confirm on the bench unit. The buttons are
-// latching (toggle) pushbuttons with an LED ring, most likely on DI00 and
-// DI01; their rings are taken to be on DO0 and DO1, which bench.st drives
-// from DI00 and DI01, so a ring lights when its button is in. The knob is
-// most likely the potentiometer on the voltage input slot 3 channel 0 (it
-// read 8.4 V, then 7.9 V, while the other 23 channels sit at 0 V). Change
-// it here once the bench shows otherwise.
+// WIRING (#837), from Opto 22's I/O mapping for the load panel and James:
+// the top push button latches, on DI0, and lights while it is in; the
+// bottom one is momentary, on DI1, and its blue LED ring is an output,
+// DO0, which the program drives (bench.st mirrors DI0 to DO0, so latching
+// the top button lights the bottom one's ring). The knob is the panel's
+// potentiometer; on this bench it reads on the voltage input slot 3
+// channel 0 (8.4 V, then 7.9 V, with the other 23 channels at 0 V); the
+// panel's mapping names a universal I/O module this bench does not have.
+export type ButtonKind = 'latching' | 'momentary';
 export const BAR_WIRING = {
-	/** Top button, then bottom. */
-	buttons: ['EPIC_M0_DI00', 'EPIC_M0_DI01'],
-	/** Each button's LED ring. */
-	rings: ['EPIC_M1_DO00', 'EPIC_M1_DO01'],
+	/** Top button, then bottom; ring: the tag that lights it, and its colour. */
+	buttons: [
+		{ tag: 'EPIC_M0_DI00', kind: 'latching' as ButtonKind, ring: { tag: 'EPIC_M0_DI00', color: '#ff3b30' } },
+		{ tag: 'EPIC_M0_DI01', kind: 'momentary' as ButtonKind, ring: { tag: 'EPIC_M1_DO00', color: '#2f7bff' } }
+	],
 	knob: { tag: 'EPIC_M3_AI00', min: 0, max: 10, step: 0.1, unit: 'V' }
 } as const;
 
@@ -49,9 +52,14 @@ export function knobValueAt(
 	return Math.round(v / k.step) * k.step;
 }
 
-/** A toggle button's next state when clicked: in if it was out, out if in. */
-export function toggled(current: unknown): boolean {
-	return current !== true;
+/** What a press writes: a latching button flips its input, a momentary one turns it on. */
+export function onPress(kind: ButtonKind, current: unknown): boolean {
+	return kind === 'latching' ? current !== true : true;
+}
+
+/** What letting go writes: a momentary button turns its input off; a latching one writes nothing (null). */
+export function onRelease(kind: ButtonKind): boolean | null {
+	return kind === 'momentary' ? false : null;
 }
 
 /** The simulated build: a frame has arrived and no field driver is in it. */

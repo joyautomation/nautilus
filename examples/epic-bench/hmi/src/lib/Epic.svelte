@@ -93,7 +93,7 @@
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
 	import type { Ink, Paint } from './print';
-	import { BAR_WIRING, knobAngle, knobValueAt, toggled } from './bar';
+	import { BAR_WIRING, knobAngle, knobValueAt, onPress, onRelease } from './bar';
 
 	let {
 		hovered = null,
@@ -103,7 +103,7 @@
 		/** The channel under the pointer, to mark its row. */
 		hovered?: string | null;
 		onhover?: (ch: Channel | null) => void;
-		/** Given, the bar's toggle buttons click and its knob turns: the
+		/** Given, the bar's buttons press and its knob turns: the
 		 *  simulated build (sim.yaml), whose inputs are tags. On the
 		 *  controller they are the modules', so the page leaves this out
 		 *  and the bar stays as drawn. Wiring: ./bar.ts (provisional). */
@@ -282,6 +282,8 @@
 	/** The knob drawn as on the desk, before the bar was bound: pointing to half past four. */
 	const KNOB_AS_DRAWN = (3 * Math.PI) / 4;
 	const { camera, renderer } = useThrelte();
+	/** The momentary button being held, if any. */
+	let held = $state<number | null>(null);
 	let turning = $state<number | null>(null);
 	let buttonHits = $state<(Mesh | undefined)[]>([]);
 	let knobHit = $state<Mesh>();
@@ -291,9 +293,10 @@
 		const v = num(KNOB.tag);
 		return v === null ? KNOB_AS_DRAWN : knobAngle(v);
 	});
-	/** A latching button stays in while its input is on. */
-	const pressed = (i: number) => !!write && on(BAR_WIRING.buttons[i]);
-	const ringLit = (i: number) => !!write && on(BAR_WIRING.rings[i]);
+	/** In while its input is on (or while held, before the frame shows it). */
+	const pressed = (i: number) => !!write && (held === i || on(BAR_WIRING.buttons[i].tag));
+	/** Its ring: lit by the tag it is wired to (its own input, or an output). */
+	const ringLit = (i: number) => !!write && on(BAR_WIRING.buttons[i].ring.tag);
 	const ray = new Raycaster();
 	const ndc = new Vector2();
 	function aim(e: PointerEvent) {
@@ -351,8 +354,12 @@
 				if (v !== null) turnTo(v);
 				else turning = num(KNOB.tag) ?? KNOB.min;
 			} else {
-				const tag = BAR_WIRING.buttons[buttonHits.indexOf(hit.object as Mesh)];
-				if (tag) write(tag, toggled(raw(tag)));
+				const i = buttonHits.indexOf(hit.object as Mesh);
+				const b = BAR_WIRING.buttons[i];
+				if (b) {
+					write(b.tag, onPress(b.kind, raw(b.tag)));
+					if (onRelease(b.kind) !== null) held = i;
+				}
 			}
 		};
 		const move = (e: PointerEvent) => {
@@ -361,6 +368,12 @@
 			if (v !== null) turnTo(v);
 		};
 		const up = () => {
+			if (held !== null) {
+				const b = BAR_WIRING.buttons[held];
+				const v = onRelease(b.kind);
+				if (v !== null) write(b.tag, v);
+				held = null;
+			}
 			if (turning !== null && settle === undefined) {
 				clearTimeout(timer);
 				flush();
@@ -491,28 +504,29 @@
 		<T.MeshStandardMaterial color={ALU} roughness={0.35} metalness={0.75} />
 	</T.Mesh>
 	{#each BAR.parts.slice(0, 2) as y, i}
-		{@const tag = BAR_WIRING.buttons[i]}
+		{@const tag = BAR_WIRING.buttons[i].tag}
+		{@const kind = BAR_WIRING.buttons[i].kind}
 		<T.Mesh position={[BAR.x, y, 17.6]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[8, 8.6, 1.6, 28]} />
 			<T.MeshStandardMaterial color="#c3c7cb" roughness={0.25} metalness={0.9} />
 		</T.Mesh>
-		<!-- the plunger: in while the button is latched on -->
+		<!-- the plunger: in while its input is on -->
 		<T.Mesh position={[BAR.x, y, pressed(i) ? 17.2 : 18.4]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[5, 5, 1.6, 28]} />
 			<T.MeshStandardMaterial color={pressed(i) ? '#7d8287' : '#9ea3a8'} roughness={0.3} metalness={0.9} />
 		</T.Mesh>
 		{#if write}
-			<!-- its LED ring, lit by the output it is wired to -->
+			<!-- its LED ring, lit by the tag it is wired to (bar.ts) -->
 			<T.Mesh position={[BAR.x, y, 18.5]}>
 				<T.TorusGeometry args={[6.4, 0.7, 8, 32]} />
-				<T.MeshBasicMaterial color={ringLit(i) ? '#ff3b30' : '#3a3d40'} toneMapped={false} />
+				<T.MeshBasicMaterial color={ringLit(i) ? BAR_WIRING.buttons[i].ring.color : '#3a3d40'} toneMapped={false} />
 			</T.Mesh>
 			<T.Mesh
 				bind:ref={buttonHits[i]}
 				position={[BAR.x, y, 26]}
 				onpointerenter={() => {
 					cursor('pointer');
-					onhover?.({ tag, text: () => (on(tag) ? 'on' : 'off') + ' · click to toggle' });
+					onhover?.({ tag, text: () => (on(tag) ? 'on' : 'off') + (kind === 'latching' ? ' · click to latch on or off' : ' · hold to press') });
 				}}
 				onpointerleave={() => {
 					cursor('');
