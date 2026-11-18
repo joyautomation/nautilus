@@ -589,9 +589,9 @@ func TestCORSPreflightAllowsEveryMethodTheAPIServes(t *testing.T) {
 // #819 review: the controller's token is for the controller. The
 // /api/history proxy does not pass it on to the historian, another service.
 func TestHistoryProxyDoesNotForwardTheToken(t *testing.T) {
-	var auth, xtok, path string
+	var auth, xtok, path, host string
 	hist := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth, xtok, path = r.Header.Get("Authorization"), r.Header.Get("X-Nautilus-Token"), r.URL.Path
+		auth, xtok, path, host = r.Header.Get("Authorization"), r.Header.Get("X-Nautilus-Token"), r.URL.Path, r.Host
 		w.Write([]byte(`{}`))
 	}))
 	defer hist.Close()
@@ -611,6 +611,11 @@ func TestHistoryProxyDoesNotForwardTheToken(t *testing.T) {
 		}
 		if auth != "" || xtok != "" {
 			t.Errorf("%s: the historian saw Authorization %q, X-Nautilus-Token %q; want neither", h, auth, xtok)
+		}
+		// #831: addressed to the historian by its own name, not the
+		// controller's ("plc.lan"), which the historian need not allow.
+		if want := strings.TrimPrefix(hist.URL, "http://"); host != want {
+			t.Errorf("%s: the historian saw Host %q, want %q", h, host, want)
 		}
 	}
 }
