@@ -368,8 +368,11 @@ claims:
       inputs, every tag a program writes, the measured-dt tags) is stale, over
       a driver's good but not over its non-good; a setpoint the logic only
       reads is not marked. It stays so until the first scan of its own
-      leadership has read its inputs: a takeover held for live inputs (a new
-      term too), one whose read is in flight, one an additional task opened,
+      leadership has finished its input read (a failed read too: its inputs
+      are then stale through the failed read, as on a standalone controller):
+      a takeover held for live inputs (a new term too), one whose read is in
+      flight, one an additional task opened, a main read that another task's
+      gate overtook by stepping down or holding a takeover,
       and a leader whose lease has passed on before its next scan. Then
       quality is the drivers' again.
     source: "#where-it-comes-from"
@@ -388,3 +391,5 @@ claims:
       - go ./runtime TestQualityGoodAfterSameTermResume
       - go ./runtime TestQualityStandbyMatchesTheStoredSpelling
       - go ./runtime TestQualityStandbyFollowsOnlineEdits
+      - go ./runtime TestQualityStaleWhenAStepDownRacesTheMainRead
+      - go ./runtime TestQualityStaleWhenAHeldTakeoverRacesTheMainRead
