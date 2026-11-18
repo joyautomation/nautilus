@@ -263,7 +263,7 @@ keep-alives and then changes once arrives as a notification on each.
 ### Lab results
 
 Ignition and CODESYS run in a lab of ours rather than in CI, with the same
-`opcua/matrix_test.go` scenarios. Run 2026-11-17, each check in poll and subscribe mode (quiet is
+`opcua/matrix_test.go` scenarios. Run 2026-11-18, each check in poll and subscribe mode (quiet is
 subscribe only):
 
 | Server | Session | import | reads | writes | remap | quiet | restart | blackhole |
