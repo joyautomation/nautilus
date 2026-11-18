@@ -306,6 +306,11 @@ type Driver struct {
 	// d.mu would invert it. flushAdopts drains it
 	// with neither lock held and then takes wmu alone.
 	adoptQ []adoption
+	// forgetQ accumulates the nodes and devices whose site may no longer
+	// hold what the host last sent them (a death, a broker loss, a birth),
+	// raised while mu is held; flushForgets drains it under wmu alone and
+	// forgets their remote values (#940).
+	forgetQ []forgetSite
 	// degraded is set when the discovery policy is DiscoveryStrict and an
 	// unmanifested metric has been seen. /api/drivers reports "degraded".
 	degraded bool
@@ -631,4 +636,11 @@ type Discovered struct {
 	Datatype                        string
 	Count                           int
 	YAML                            string
+}
+
+// forgetSite names a node (all its devices, all true) or one device whose
+// remote values the host can no longer vouch for.
+type forgetSite struct {
+	node, device string
+	all          bool
 }

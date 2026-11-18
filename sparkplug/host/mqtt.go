@@ -191,6 +191,7 @@ func (d *Driver) run(ctx context.Context) {
 				d.mu.Lock()
 				d.brokerLostLocked()
 				d.mu.Unlock()
+				d.flushForgets()
 			}
 			d.log.Warn("host: connect failed", "broker", d.cfg.BrokerURL, "error", err, "retryIn", backoff)
 			select {
@@ -222,6 +223,7 @@ func (d *Driver) run(ctx context.Context) {
 			d.brokerLostLocked()
 		}
 		d.mu.Unlock()
+		d.flushForgets()
 		// Death-before-DISCONNECT: Stop publishes the certificate and only
 		// then cancels, so by the time we get here the wire is already clear.
 		cli.Disconnect(250)
@@ -751,6 +753,9 @@ func (d *Driver) flushWrites() {
 	work := d.pending
 	d.pending = map[string]any{}
 	d.wmu.Unlock()
+	if hook := testHookAfterSwap; hook != nil {
+		hook()
+	}
 
 	byTopic := map[string][]sparkplug.Metric{}
 	names := map[string][]string{}
@@ -940,8 +945,25 @@ func setTemplateMember(root *sparkplug.Template, mo memberOut, leaf sparkplug.Me
 func (d *Driver) markWritten(name string, v any) {
 	d.wmu.Lock()
 	d.initWriteMapsLocked()
-	d.lastOut[name] = v
 	d.remote[name] = v
+	kick := false
+	if lo, ok := d.lastOut[name]; ok && !sameValue(lo, v) {
+		// The program moved the tag while this command was in flight
+		// (#940): v reached the site, but the program wants lo. Keep lo
+		// as the program's value and owe it, unless a newer one is
+		// pending already.
+		if _, newer := d.pending[name]; !newer {
+			d.pending[name] = lo
+			kick = true
+		}
+	} else {
+		d.lastOut[name] = v
+	}
+	defer func() {
+		if kick {
+			d.kickWriter()
+		}
+	}()
 	// A command that went out supersedes one parked for the same tag. A
 	// newer write to a dark device is parked in its place instead, so this
 	// is a safety net for a write that raced the device's birth.
@@ -998,6 +1020,12 @@ func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
 	var dropped uint64
 	var full []string
 	var parked uint64
+	requeued := false
+	defer func() {
+		if requeued {
+			d.kickWriter()
+		}
+	}()
 
 	d.wmu.Lock()
 	if d.queued == nil {
@@ -1010,6 +1038,18 @@ func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
 			d.queued[node] = q
 		}
 		for name, v := range tags {
+			if lo, ok := d.lastOut[name]; ok && !sameValue(lo, v) {
+				// Superseded while this flush was in flight (#940): park
+				// nothing for it. The program's value is owed instead,
+				// unless it is pending already or the site holds it.
+				_, newer := d.pending[name]
+				held, known := d.remote[name]
+				if !newer && !(known && sameValue(held, lo)) {
+					d.pending[name] = lo
+					requeued = true
+				}
+				continue
+			}
 			if _, replacing := q[name]; !replacing && len(q) >= maxQueuedPerNode {
 				dropped++
 				full = append(full, name)
@@ -1108,6 +1148,34 @@ func (d *Driver) queuedDepths() map[string]int {
 	}
 	return out
 }
+
+// flushForgets drains forgetQ: the host can no longer vouch for what the
+// sites it names hold, so their outputs' remote values go. A command the
+// program then writes is owed again, even one equal to what the host last
+// sent: a site that died or reborn may hold anything (#940). It runs with
+// neither lock held, like flushAdopts.
+func (d *Driver) flushForgets() {
+	d.mu.Lock()
+	q := d.forgetQ
+	d.forgetQ = nil
+	d.mu.Unlock()
+	if len(q) == 0 {
+		return
+	}
+	d.wmu.Lock()
+	for _, f := range q {
+		for name, b := range d.byName {
+			if b.Node == f.node && (f.all || b.Device == f.device) {
+				delete(d.remote, name)
+			}
+		}
+	}
+	d.wmu.Unlock()
+}
+
+// testHookAfterSwap, when set (by tests), runs in flushWrites right after
+// it takes the pending commands, before they are parked or published.
+var testHookAfterSwap func()
 
 // flushAdopts applies the member-output baselines the state machine queued
 // while it held d.mu: the live value of a member IS what the site holds, so a

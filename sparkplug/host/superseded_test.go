@@ -7,6 +7,7 @@ package host
 // has withdrawn.
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -51,8 +52,9 @@ func TestSupersededWhileGatedNeverGoesOut(t *testing.T) {
 
 // A dark site: the program commands 11 (the site takes it); the node dies;
 // the program moves the setpoint to 33, which is parked, and back to 11.
-// When the site comes back nothing more goes out. It used to send the
-// parked 33 at the DBIRTH.
+// When the site comes back the program's 11 goes out again (a reborn site
+// may hold anything, so the host no longer vouches for its 11), and never
+// the withdrawn 33. It used to send the parked 33 at the DBIRTH.
 func TestSupersededParkedCommandNeverGoesOut(t *testing.T) {
 	srv, addr := startBroker(t, "")
 	t.Cleanup(func() { _ = closeBroker(srv) })
@@ -78,8 +80,117 @@ func TestSupersededParkedCommandNeverGoesOut(t *testing.T) {
 	// pending and waits for everything the driver sent.
 	waitQueuedOnW6(t, host, 0)
 	barrier(t, host, w)
-	if c := w.commands(t); len(c) != 1 {
-		t.Fatalf("commands = %v, want only the first 11: the parked 33 was withdrawn before the site came back", c)
+	if c := w.commands(t); len(c) != 2 || c[1] != 11.0 {
+		t.Fatalf("commands = %v, want [11 11]: the program's 11 again at the rebirth, never the withdrawn 33", c)
+	}
+}
+
+// A site that comes back holding something else gets the program's value
+// (#940): 11 sent, NDEATH, 33 parked, the program back to 11, and the DBIRTH
+// reports 50. The host used to keep vouching for the 11 it sent before the
+// death, withdraw the revert, and leave the device at 50.
+func TestRebornSiteGetsTheProgramsValue(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = closeBroker(srv) })
+	w := watchHost(t, addr, "watch-reborn", "h-reborn")
+	host := startHostDriver(t, testManifest(), testConfig(addr, "h-reborn"))
+	waitConnected(t, host)
+	edge := edgePublisher(t, addr, "edge-reborn")
+	birthW6AndPLC1(t, host, edge, 1)
+	baselineScan(t, host)
+	writeSpeed(t, host, 11)
+	waitUntil(t, "the 11 command", func() bool { return len(w.commands(t)) == 1 })
+
+	publishPayload(t, edge, "spBv1.0/G/NDEATH/W6", ndeath(1))
+	waitForValue(t, host, "W6__Online", func(v any) bool { return v == false })
+	writeSpeed(t, host, 33)
+	waitQueuedOnW6(t, host, 1)
+	writeSpeed(t, host, 11)
+
+	publishPayload(t, edge, "spBv1.0/G/NBIRTH/W6", nbirth(2, dbl("Well/Level", 4.2)))
+	publishPayload(t, edge, "spBv1.0/G/DBIRTH/W6/PLC1", data(1, boolean("Pump/Run", true), dbl("Pump/SpeedSP", 50)))
+	waitForValue(t, host, "W6_PLC1__Online", func(v any) bool { return v == true })
+	waitQueuedOnW6(t, host, 0)
+	barrier(t, host, w)
+	if c := w.commands(t); len(c) != 2 || c[1] != 11.0 {
+		t.Fatalf("commands = %v, want [11 11]: the reborn PLC1 reports 50 and the program wants 11", c)
+	}
+}
+
+// A command in flight when the program moves the tag back (#940): the
+// flush has taken 22 out of pending when the program writes 11, which the
+// site holds, so there is nothing to withdraw; 22 goes out. The site then
+// holds 22 while the program wants 11, so 11 must follow. markWritten used
+// to record 22 as the program's value too, and 11 never went.
+func TestInFlightCommandIsFollowedByTheProgramsValue(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = closeBroker(srv) })
+	w := watchHost(t, addr, "watch-inflight", "h-inflight")
+	host := startHostDriver(t, testManifest(), testConfig(addr, "h-inflight"))
+	waitConnected(t, host)
+	edge := edgePublisher(t, addr, "edge-inflight")
+	birthW6AndPLC1(t, host, edge, 1)
+	baselineScan(t, host)
+	writeSpeed(t, host, 11)
+	waitUntil(t, "the 11 command", func() bool { return len(w.commands(t)) == 1 })
+
+	var once sync.Once
+	testHookAfterSwap = func() { once.Do(func() { writeSpeed(t, host, 11) }) }
+	t.Cleanup(func() { testHookAfterSwap = nil })
+	writeSpeed(t, host, 22)
+	waitUntil(t, "the program's 11 after the in-flight 22", func() bool {
+		c := w.commands(t)
+		return len(c) == 3
+	})
+	barrier(t, host, w)
+	if c := w.commands(t); len(c) != 3 || c[1] != 22.0 || c[2] != 11.0 {
+		t.Fatalf("commands = %v, want [11 22 11]: 22 was in flight, then the program's 11", c)
+	}
+}
+
+// Parking a command superseded while its flush was in flight parks
+// nothing, and owes the program's value unless the site holds it.
+func TestParkSkipsASupersededCommand(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	d.initWriteMapsLocked()
+	const name = "W6_PLC1_Pump_SpeedSP"
+	v22, v11 := d.canonWrite(name, 22.0), d.canonWrite(name, 11.0)
+
+	d.lastOut[name] = v11
+	d.queueOffline(map[string]map[string]any{"W6": {name: v22}})
+	if q := d.queued["W6"][name]; q != nil {
+		t.Fatalf("parked %v: 22 was superseded by 11", q)
+	}
+	if !sameValue(d.pending[name], v11) {
+		t.Fatalf("pending = %v, want the program's 11 owed", d.pending[name])
+	}
+
+	delete(d.pending, name)
+	d.remote[name] = v11 // the site holds it: nothing is owed
+	d.queueOffline(map[string]map[string]any{"W6": {name: v22}})
+	if _, owed := d.pending[name]; owed || d.queued["W6"][name] != nil {
+		t.Fatalf("pending %v, parked %v: the site holds the program's 11", d.pending[name], d.queued["W6"][name])
+	}
+}
+
+// A revert to what the site holds withdraws a command parked for a dark
+// site, not only a pending one.
+func TestRevertWithdrawsAParkedCommand(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	d.initWriteMapsLocked()
+	const name = "W6_PLC1_Pump_SpeedSP"
+	d.armBaseline()
+	if err := d.WriteOutputs(map[string]any{name: 0.0}); err != nil { // baseline
+		t.Fatal(err)
+	}
+	d.remote[name] = d.canonWrite(name, 11.0)
+	d.lastOut[name] = d.canonWrite(name, 33.0)
+	d.queued = map[string]map[string]any{"W6": {name: d.canonWrite(name, 33.0)}}
+	if err := d.WriteOutputs(map[string]any{name: 11.0}); err != nil {
+		t.Fatal(err)
+	}
+	if v, parked := d.queued["W6"][name]; parked {
+		t.Fatalf("still parked: %v; the program went back to the 11 the site holds", v)
 	}
 }
 
