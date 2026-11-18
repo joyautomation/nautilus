@@ -42,7 +42,7 @@ func sealin(t *testing.T) string {
 func stream(t *testing.T) (<-chan string, func()) {
 	t.Helper()
 	ch := make(chan string, 64)
-	cancel := openStream("/api/stream", func(s string) {
+	cancel := openStream("http://"+playgroundHost+"/api/stream", func(s string) {
 		select {
 		case ch <- s:
 		default:
@@ -116,4 +116,17 @@ func TestStreamWithNothingRunningEndsAtOnce(t *testing.T) {
 	ch, cancel := stream(t)
 	defer cancel()
 	ends(t, ch, time.Second)
+}
+
+// #819: the controller answers the name the extension's web build sends
+// every request to; if the two drift apart, every playground request is a
+// 403.
+func TestPlaygroundHostMatchesTheExtension(t *testing.T) {
+	src, err := os.ReadFile("../../tools/vscode-iec/src/web/engine.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `PLAYGROUND_URL = "http://` + playgroundHost + `"`; !strings.Contains(string(src), want) {
+		t.Errorf("engine.ts lacks %s", want)
+	}
 }
