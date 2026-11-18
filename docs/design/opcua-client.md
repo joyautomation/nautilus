@@ -128,13 +128,19 @@ purpose, so the two cannot drift:
   value for at most that long rather than until the value next changes.
 - **A refusal fails loudly.** A refused subscription is a failed session
   on the ladder, never a silent fallback to polling; a refused monitored
-  item makes its binding Bad. The status card shows the mode, the count of
+  item makes its binding Bad for the session (`notMonitored`: a refresh
+  read answering Good does not lift it). `Bad_TooManyOperations` on
+  CreateMonitoredItems is a service fault, which closes gopcua's client,
+  so the halved per-call limit is kept on the driver (`itemCap`) for the
+  next session, as `probeByRead` is. The status card shows the mode, the count of
   notifications and each class's publishing interval as the server
   revised it.
 
 **Reconnect is ours.** gopcua's `AutoReconnect` is off. A transport error
 closes the session and the driver dials again on a 1 s → 60 s ladder that
-resets only once the server has answered a read — modbus's rule. The quality
+resets only once the server has answered a read — modbus's rule — and,
+subscribed, only once the session got its subscriptions, so a server that
+answers the priming read but refuses to subscribe climbs the ladder. The quality
 verdicts ride on that state, so the driver that owns the ladder owns them.
 
 ## 3. Namespaces

@@ -22,7 +22,7 @@ file, the way `naut eip import` and `naut modbus import` do.
 ```yaml
 driver:
   type: opcua-client
-  endpoint: opc.tcp://10.0.0.5:4840
+  endpoint: opc.tcp://192.0.2.10:4840
   security: Basic256Sha256        # default: the strongest the server offers
   security-mode: SignAndEncrypt   # default: the strongest mode of that policy
   username: nautilus              # password from NAUTILUS_OPCUA_PASSWORD
@@ -49,7 +49,7 @@ each with its own `name:`.
 ## Generating the manifest: `naut opcua import`
 
 ```sh
-naut opcua import --endpoint opc.tcp://10.0.0.5:4840 \
+naut opcua import --endpoint opc.tcp://192.0.2.10:4840 \
   --root 'ns=2;s=[default]' --prefix GW_ --writable 'GW_*_SP'
 ```
 
@@ -106,7 +106,7 @@ simpler path, and the right one for a handful of tags.
 ```yaml
 driver:
   type: opcua-client
-  endpoint: opc.tcp://10.0.0.5:4840
+  endpoint: opc.tcp://192.0.2.10:4840
   manifest: opcua_manifest.yaml
   read-mode: subscribe     # poll (default) | subscribe
   scan-rate: 200ms         # the default class's publishing interval
@@ -126,8 +126,12 @@ created fresh on every new session. A server may publish slower than the
 class asks; the driver logs it and the status card shows the interval the
 server granted. If the server refuses a subscription the session fails
 and is retried with backoff, and the error says why: the driver never
-falls back to polling on its own. A node the server will not monitor
-reads **Bad**.
+falls back to polling on its own; the retry delay climbs until a
+session subscribes. A node the server will not monitor reads **Bad** for
+the whole session, refresh reads included, since nothing follows it in
+between. If the server refuses a call creating too many monitored items
+at once (`Bad_TooManyOperations`), the driver halves the batch and keeps
+the smaller size for later sessions.
 
 - `<name>__Online` (BOOL) is true once the session is up and every scan
   class has been read on it, false otherwise. Its name follows the driver's

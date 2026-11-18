@@ -377,3 +377,16 @@ claims:
     source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestSubscribeRefreshReads
+
+  - id: UAC-032
+    claim: >-
+      Subscribed, a node the server will not monitor reads Bad for the
+      whole session, refresh reads included; a Bad_TooManyOperations
+      refusal halves the monitored items per call and the smaller size is
+      kept for later sessions; and a server that refuses to subscribe gets
+      sessions on the climbing retry ladder, not one every minimum delay.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeRefusedItemStaysBad
+      - go ./opcua TestSubscribeTooManyOperationsIsKept
+      - go ./opcua TestSubscribeRefusedSubscriptionBacksOff

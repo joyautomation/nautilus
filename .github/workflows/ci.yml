@@ -699,11 +699,10 @@ jobs:
       # The client driver against other people's servers, in containers
       # the test starts itself (opcua/matrix_test.go): import, typed reads,
       # writes, namespace remap, and recovery from a restart and from a
-      # blackhole (docker pause). open62541 is built from a tagged release
-      # (opcua/testdata/matrix/open62541); Milo's image is pinned by digest
-      # in the profile.
-      - name: Build the open62541 fixture
-        run: docker build -t nautilus-test/open62541:v1.4.22 opcua/testdata/matrix/open62541
+      # blackhole (docker pause). open62541 is built by the test from a
+      # tagged release (opcua/testdata/matrix/open62541, tagged by the
+      # directory's content); Milo's image is pinned by digest in the
+      # profile.
       - name: Server matrix
         shell: bash
         run: |

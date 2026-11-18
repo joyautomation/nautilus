@@ -97,7 +97,7 @@ func TestCheckOPCUAClientDriver(t *testing.T) {
 		"bad policy":         "  endpoint: opc.tcp://192.0.2.1:4840\n  security: Basic256Sha265\n",
 		"bad mode":           "  endpoint: opc.tcp://192.0.2.1:4840\n  security-mode: Encrypt\n",
 		"username over None": "  endpoint: opc.tcp://192.0.2.1:4840\n  security: None\n  username: op\n",
-		"bad read-mode":      "  endpoint: opc.tcp://192.0.2.1:4840\n  read-mode: push\n",
+		"bad read-mode":      "  endpoint: opc.tcp://192.0.2.1:4840\n  security: None\n  read-mode: push\n",
 	} {
 		out, code := checkIn(t, map[string]string{
 			"nautilus.yaml":       driver(extra),
@@ -106,6 +106,9 @@ func TestCheckOPCUAClientDriver(t *testing.T) {
 		})
 		if code == 0 {
 			t.Errorf("%s: check passed:\n%s", name, out)
+		}
+		if name == "bad read-mode" && !strings.Contains(out, "read-mode") {
+			t.Errorf("%s: failed, but not over read-mode:\n%s", name, out)
 		}
 	}
 }

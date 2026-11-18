@@ -28,6 +28,8 @@ package opcua_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -579,6 +581,9 @@ type container struct {
 func startContainer(t *testing.T, s matrixServer) *container {
 	t.Helper()
 	if s.build != "" {
+		// Tagged by the build directory's content, so an edited fixture
+		// is built afresh rather than an older image reused.
+		s.image += "-" + dirHash(t, s.build)
 		if err := exec.Command("docker", "image", "inspect", s.image).Run(); err != nil {
 			t.Logf("building %s from %s", s.image, s.build)
 			dir, _ := filepath.Abs(s.build)
@@ -602,6 +607,28 @@ func startContainer(t *testing.T, s matrixServer) *container {
 		_ = exec.Command("docker", "rm", "-f", c.name).Run()
 	})
 	return c
+}
+
+// dirHash is a short hash of every file under dir (names and contents).
+func dirHash(t *testing.T, dir string) string {
+	t.Helper()
+	h := sha256.New()
+	err := filepath.WalkDir(dir, func(p string, e os.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s %d\n", filepath.ToSlash(p), len(b))
+		h.Write(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("hash %s: %v", dir, err)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 func (c *container) docker(t *testing.T, args ...string) {
