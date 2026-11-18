@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/plcnext/plcnexttest"
+
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -65,8 +67,8 @@ func allOutputs(do00, do15 bool) nio.Values {
 // writes its frame as it stands; one it has pushed to writes nothing until
 // the runtime answers OutputsWanted, then the whole frame (#863).
 func TestWriteGateGRPC(t *testing.T) {
-	f := newFakeGDS()
-	addr := serve(t, f)
+	f := plcnexttest.New()
+	addr := SocketTarget(f.Listen(t))
 	m, err := ParseManifest([]byte(benchManifest))
 	if err != nil {
 		t.Fatal(err)
@@ -85,12 +87,12 @@ func TestWriteGateGRPC(t *testing.T) {
 	defer cancel()
 	d.Start(ctx)
 	defer d.Stop()
-	spans := func() int { return strings.Count(f.wrote(), DefaultOutputs) }
+	spans := func() int { return strings.Count(wrote(f), DefaultOutputs) }
 
 	// Closed from the start: the bus is only read.
 	waitFor(t, "never connected", func() bool { return d.Health().Connected })
 	time.Sleep(50 * time.Millisecond)
-	if w := f.wrote(); w != "" {
+	if w := wrote(f); w != "" {
 		t.Fatalf("with the gate closed the driver wrote %q", w)
 	}
 	if h := d.Health(); !h.GateClosed || !h.GateHolds {
@@ -103,9 +105,9 @@ func TestWriteGateGRPC(t *testing.T) {
 	// Opened, never pushed to: conducted, then the frame as it stands.
 	open.Store(true)
 	waitFor(t, "gate open, but the bus was not conducted and the frame written", func() bool {
-		return strings.Contains(f.wrote(), "START_IO_REQ=true") && spans() > 0
+		return strings.Contains(wrote(f), "START_IO_REQ=true") && spans() > 0
 	})
-	if w := f.wrote(); strings.Index(w, DefaultOutputs) < strings.Index(w, "START_IO_REQ=true") {
+	if w := wrote(f); strings.Index(w, DefaultOutputs) < strings.Index(w, "START_IO_REQ=true") {
 		t.Fatalf("an output went out before the bus was conducted: %q", w)
 	}
 	if !d.OutputsWanted() || d.OutputsWanted() {
@@ -128,7 +130,7 @@ func TestWriteGateGRPC(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if spans() != n {
-		t.Fatalf("with the gate closed the output span went out: %q", f.wrote())
+		t.Fatalf("with the gate closed the output span went out: %q", wrote(f))
 	}
 
 	// Reopened: nothing until the runtime's push, then the whole frame.
@@ -136,7 +138,7 @@ func TestWriteGateGRPC(t *testing.T) {
 	waitFor(t, "the gate never showed open", func() bool { return !d.Health().GateClosed })
 	time.Sleep(50 * time.Millisecond)
 	if spans() != n {
-		t.Fatalf("reopened: the previous term's frame went out before the runtime's push: %q", f.wrote())
+		t.Fatalf("reopened: the previous term's frame went out before the runtime's push: %q", wrote(f))
 	}
 	if !d.OutputsWanted() {
 		t.Fatal("a reopened gate must ask for every output")
@@ -165,8 +167,8 @@ func TestWriteGateClosesMidHandshake(t *testing.T) {
 		{name: "closes again on reopen", closeAfter: "CONFIG_REQ=false", never: "CONFIG_REQ=true", again: "CONFIG_REQ=true"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			f := newFakeGDS()
-			addr := serve(t, f)
+			f := plcnexttest.New()
+			addr := SocketTarget(f.Listen(t))
 			man := benchManifest
 			if c.runNone {
 				man = "run-port: none\n" + man
@@ -185,13 +187,13 @@ func TestWriteGateClosesMidHandshake(t *testing.T) {
 			d.SetWriteGate(func() bool {
 				switch phase.Load() {
 				case 0:
-					if strings.Contains(f.wrote(), c.closeAfter) {
+					if strings.Contains(wrote(f), c.closeAfter) {
 						phase.CompareAndSwap(0, 1)
 						return false
 					}
 					return true
 				case 2:
-					if c.again != "" && strings.Contains(f.wrote(), c.again) {
+					if c.again != "" && strings.Contains(wrote(f), c.again) {
 						phase.CompareAndSwap(2, 3)
 						return false
 					}
@@ -208,7 +210,7 @@ func TestWriteGateClosesMidHandshake(t *testing.T) {
 
 			waitFor(t, "never connected", func() bool { return d.Health().Connected })
 			time.Sleep(100 * time.Millisecond)
-			if w := f.wrote(); strings.Contains(w, c.never) {
+			if w := wrote(f); strings.Contains(w, c.never) {
 				t.Fatalf("the gate closed after %s, but %s went out: %q", c.closeAfter, c.never, w)
 			}
 			h := d.Health()
@@ -222,20 +224,18 @@ func TestWriteGateClosesMidHandshake(t *testing.T) {
 				t.Fatalf("deferred handshake: Configured=%v, want %v as read", h.Configured, want)
 			}
 
-			f.mu.Lock()
-			f.nums["BcComponent1/BusConductor.NUM_MODULES"] = 5 // a module added meanwhile
-			f.mu.Unlock()
+			f.SetModules(5) // a module added meanwhile
 			phase.Store(2)
 			if c.again != "" {
 				waitFor(t, "the gate never closed again", func() bool { return phase.Load() == 3 })
 				time.Sleep(100 * time.Millisecond)
-				if w := f.wrote(); strings.Contains(w, "START_IO_REQ") {
+				if w := wrote(f); strings.Contains(w, "START_IO_REQ") {
 					t.Fatalf("closed again after %s, but START_IO_REQ went out: %q", c.again, w)
 				}
 				phase.Store(4)
 			}
 			waitFor(t, "gate open, but the handshake was not finished", func() bool {
-				return strings.Contains(f.wrote(), "START_IO_REQ=true") && d.Health().Running
+				return strings.Contains(wrote(f), "START_IO_REQ=true") && d.Health().Running
 			})
 			if n := d.Health().Modules; n != 5 {
 				t.Fatalf("after the handshake Modules=%d, want the 5 read then", n)

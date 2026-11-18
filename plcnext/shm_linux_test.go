@@ -15,6 +15,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/joyautomation/nautilus/plcnext/plcnexttest"
+
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -171,8 +173,8 @@ func eventuallyWithin(t *testing.T, d time.Duration, what string, cond func() bo
 func TestDriverOverShm(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nautilus-plcnext-io")
 	shim := startFakeShim(t, path)
-	f := newFakeGDS()
-	addr := serve(t, f)
+	f := plcnexttest.New()
+	addr := SocketTarget(f.Listen(t))
 	m, err := ParseManifest([]byte("transport: shm\nshm: " + path + "\noutput-watchdog: 250ms\n" + benchManifest))
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +203,7 @@ func TestDriverOverShm(t *testing.T) {
 		t.Errorf("quality %v", q)
 	}
 	// The handshake went over gRPC, the image did not.
-	if w := f.wrote(); !strings.Contains(w, "START_IO_REQ=true") || strings.Contains(w, DefaultOutputs) {
+	if w := wrote(f); !strings.Contains(w, "START_IO_REQ=true") || strings.Contains(w, DefaultOutputs) {
 		t.Errorf("gRPC writes %q: want the handshake and no image", w)
 	}
 	h := d.Health()
@@ -270,14 +272,11 @@ func TestDriverOverShm(t *testing.T) {
 
 	// A shim that restarted (the runtime did) ends the session, so the
 	// BusConductor handshake runs again on a fresh connection.
-	f.mu.Lock()
-	f.writes = nil
-	f.bools["configured"], f.bools[DefaultRunPort] = false, false
-	f.bools["BcComponent1/BusConductor.CONFIG_REQ"], f.bools["BcComponent1/BusConductor.START_IO_REQ"] = false, false
-	f.mu.Unlock()
+	n := len(f.Writes())
+	f.Restart()
 	shim.restart()
 	eventuallyWithin(t, 10*time.Second, "a shim restart never re-ran the handshake", func() bool {
-		return strings.Contains(f.wrote(), "START_IO_REQ=true") && d.Quality()["DI_00"] == nio.Good
+		return strings.Contains(strings.Join(f.Writes()[n:], " "), "START_IO_REQ=true") && d.Quality()["DI_00"] == nio.Good
 	})
 
 	// The driver stopping is the shim's watchdog: its outputs stop being
