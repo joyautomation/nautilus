@@ -673,6 +673,10 @@ func sparkplugStatus(st sparkplug.Status) server.DriverStatus {
 			Text:  agoText(st.LastPubMs),
 		})
 	}
+	if st.DeviceDeathDelayMs > 0 {
+		d := time.Duration(st.DeviceDeathDelayMs) * time.Millisecond
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "DDEATH held", Value: d.Seconds(), Text: d.String()})
+	}
 	if sf := st.StoreForward; sf != nil {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "buffered", Value: float64(sf.Buffered), Text: fmt.Sprintf("%d / %d", sf.Buffered, sf.Max)})
 		if sf.Buffered > 0 && s.State == "connected" {

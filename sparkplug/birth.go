@@ -89,6 +89,7 @@ func (n *Node) birth() error {
 	for _, d := range n.devices {
 		healthy := n.deviceReadyLocked(d, func(name string) bool { _, ok := snap[name]; return ok }, time.Now())
 		n.devHealth[d.ID] = healthy
+		delete(n.devDownSince, d.ID) // a new birth decides afresh
 		if !healthy {
 			continue
 		}

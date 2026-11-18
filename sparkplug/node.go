@@ -42,7 +42,14 @@ type Config struct {
 	// the session; HostOfflineDisconnect ends it, as Sparkplug 3.0 has it.
 	// Ignored without a PrimaryHostID.
 	PrimaryHostOffline HostOfflineAction
-	Log                *slog.Logger
+	// DeviceDeathDelay is how long a born device must stay unhealthy
+	// before its DDEATH. One that recovers inside it sends nothing: no
+	// DDEATH, no DBIRTH, one continuous device life. Zero (the default)
+	// sends DDEATH on the first unhealthy tick. Sparkplug carries no tag
+	// quality, so while a death is held the device's metrics just stop
+	// changing: to a host it looks alive and quiet. Births are not delayed.
+	DeviceDeathDelay time.Duration
+	Log              *slog.Logger
 }
 
 // Device is a Sparkplug device behind this edge node — one io.Driver's worth
@@ -93,6 +100,9 @@ type Node struct {
 	rbeState  map[string]*rbeState
 	known     map[string]bool // metric names present in the last birth
 	devHealth map[string]bool
+	// devDownSince: when each born device was first seen unhealthy, while
+	// its DDEATH waits out Config.DeviceDeathDelay.
+	devDownSince map[string]time.Time
 	// devPartialSince: when each healthy device with only some of its tags
 	// in the store started waiting for the rest (deviceReadyLocked).
 	devPartialSince map[string]time.Time
@@ -221,6 +231,7 @@ func New(rt *runtime.Runtime, cfg Config, opts ...Option) (*Node, error) {
 		rbeState:        map[string]*rbeState{},
 		known:           map[string]bool{},
 		devHealth:       map[string]bool{},
+		devDownSince:    map[string]time.Time{},
 		devPartialSince: map[string]time.Time{},
 		tagOwner:        map[string]string{},
 
@@ -758,6 +769,10 @@ type Status struct {
 	// run: not writable, or addressed to a device the tag is not on.
 	CommandsRefused uint64 `json:"commandsRefused"`
 
+	// DeviceDeathDelayMs is Config.DeviceDeathDelay: how long a device's
+	// DDEATH is held (0 = at once).
+	DeviceDeathDelayMs int64 `json:"deviceDeathDelayMs,omitempty"`
+
 	StoreForward *StoreForwardStatus `json:"storeForward,omitempty"`
 	Devices      []DeviceStatus      `json:"devices,omitempty"`
 }
@@ -798,6 +813,7 @@ func (n *Node) Status() Status {
 		LastPubMs:       n.lastPubMs,
 		CommandsRefused: n.cmdRefused,
 	}
+	s.DeviceDeathDelayMs = n.cfg.DeviceDeathDelay.Milliseconds()
 	if n.sf != nil {
 		s.StoreForward = &StoreForwardStatus{Buffered: n.sf.len(), Max: n.sf.max}
 	}

@@ -329,9 +329,23 @@ func (n *Node) collectChanged(snap map[string]runtime.Sample, now time.Time, own
 // Caller holds n.mu.
 func (n *Node) deviceHealthLocked(snap map[string]runtime.Sample) []func(*Node) {
 	var events []func(*Node)
+	now := time.Now()
 	for _, d := range n.devices {
-		healthy := n.deviceReadyLocked(d, func(name string) bool { _, ok := snap[name]; return ok }, time.Now())
+		healthy := n.deviceReadyLocked(d, func(name string) bool { _, ok := snap[name]; return ok }, now)
 		was := n.devHealth[d.ID]
+		if was && !healthy && n.cfg.DeviceDeathDelay > 0 {
+			// A born device turned unhealthy: its DDEATH waits out the
+			// delay, and a recovery inside it is no event at all.
+			since, pending := n.devDownSince[d.ID]
+			if !pending {
+				n.devDownSince[d.ID] = now
+				continue
+			}
+			if now.Sub(since) < n.cfg.DeviceDeathDelay {
+				continue
+			}
+		}
+		delete(n.devDownSince, d.ID)
 		if healthy == was {
 			continue
 		}

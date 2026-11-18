@@ -1021,6 +1021,10 @@
           "type": "string",
           "description": "Journal the store-forward buffer to this file so a restart, upgrade or crash during an outage does not lose it: the next start loads it and replays it, marked historical, after its first birth. Relative to the working directory. Omit to buffer in memory only (the default). Needs store-forward."
         },
+        "device-death-delay": {
+          "$ref": "#/definitions/duration",
+          "description": "Hold a device's DDEATH until its connection has been unhealthy this long (0 to 1m); one that recovers inside it sends no DDEATH and no DBIRTH. Default 0: DDEATH on the first unhealthy tick. Sparkplug carries no tag quality, so while a death is held the device looks alive and quiet to every host. 1-5s suits a link known to blip."
+        },
         "flatten-udts": {
           "type": "boolean",
           "default": false,

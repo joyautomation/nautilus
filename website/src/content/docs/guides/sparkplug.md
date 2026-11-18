@@ -138,6 +138,30 @@ publishes at node level. Two connections with one id would share a topic,
 so that is a load error naming both; give a driver a `name:` to choose
 its id.
 
+**A link that blips.** By default a device dies on the first publish tick
+its connection is unhealthy, and is born again on the first healthy one,
+so one failed poll costs every host a DDEATH and a DBIRTH.
+`device-death-delay` holds the DDEATH instead:
+
+```yaml
+sparkplug:
+  broker: tcp://broker:1883
+  group-id: Plant
+  device-death-delay: 2s   # 0 (the default) to 1m
+```
+
+A device that recovers inside the delay sends nothing: no DDEATH, no
+DBIRTH, one continuous life. One still unhealthy past it dies on the next
+tick, so the DDEATH comes at most one publish interval after the delay.
+Births are never delayed. **The trade:** Sparkplug carries no tag quality,
+so while a death is held the device's metrics simply stop changing, and to
+every host the device looks alive and quiet. A real loss is announced the
+delay late. 1–5 s suits a link known to blip; leave it at 0 where a host
+must know at once. A rebirth (NBIRTH) decides every device afresh, so a
+device unhealthy at that moment is left out of it, held or not.
+The node's row on the dashboard (and in `/api/drivers`) shows it as
+"DDEATH held".
+
 ## Writes
 
 The node is **read-only by default**: an NCMD/DCMD that writes a tag is
