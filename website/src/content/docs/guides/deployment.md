@@ -252,14 +252,18 @@ the crontab lines and what deploy made, and leaves the root and
 
 A deployment repository holds the project and pins the naut version
 that builds it. A tag runs `naut deploy update` on a runner that can
-reach the box. Plant boxes are rarely reachable from GitHub's hosted
-runners, so that is a self-hosted runner on the plant network.
+reach the box. **GitHub's hosted runners cannot reach a plant LAN**: run a
+self-hosted runner on the plant network, or add a step that joins the
+runner to a tailnet or VPN that reaches the box.
 
 `naut new <name> --deploy-ssh` writes the workflow,
 `.github/workflows/deploy-ssh.yml`. For a repository that already
 exists, scaffold a throwaway project with the flag and copy the file
 across. On every `v*` tag it:
 
+- fails unless the tag's commit is on the default branch, so a tag pushed
+  on an unmerged branch never deploys, and waits for a required reviewer
+  of the `plant` environment to approve;
 - installs the pinned naut release for the runner's architecture into
   the runner's temp directory (never the checkout, which `naut build`
   would embed in the controller), checked against the release's
@@ -267,14 +271,22 @@ across. On every `v*` tag it:
   development naut leaves a placeholder that fails the job until it is
   set;
 - runs `naut check` and `naut test`;
-- writes the SSH key to a file only the runner's user can read, removed
-  when the step ends, and runs `naut deploy update` on the box named by
-  the repository variable `DEPLOY_TARGET`. An update the box rolled back
-  fails the job.
+- writes the SSH key to a file only the runner's user can read, and the
+  box's host key to its own known-hosts file, both removed when the step
+  ends, and runs `naut deploy update` on the box named by the repository
+  variable `DEPLOY_TARGET`. ssh accepts only that key and that host key,
+  whatever the runner's own ssh configuration says. An update the box
+  rolled back fails the job.
+
+The job's token can only read the repository (`permissions: contents:
+read`), `actions/checkout` is pinned to a commit and leaves no
+credentials in the checkout, and one deploy runs at a time: a newer tag
+queued behind a running deploy replaces an older one still waiting.
 
 Its header lists what to set up once: the runner's `plant` label, the
-`DEPLOY_TARGET` variable, and the `DEPLOY_SSH_KEY` and
-`DEPLOY_KNOWN_HOSTS` secrets. No address or key goes in the repository.
+`DEPLOY_TARGET` variable, the `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS`
+secrets, and the `plant` environment with its required reviewers. No
+address or key goes in the repository.
 
 A person deploying by hand from a clean checkout of the same tag, with
 the same naut release, gets the same release: the build embeds the

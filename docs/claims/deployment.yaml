@@ -253,13 +253,16 @@ claims:
   - id: DEP-017
     claim: >-
       naut new --deploy-ssh writes .github/workflows/deploy-ssh.yml on a
-      manifest project: on a v* tag it installs the pinned naut release
-      (the scaffolding naut's version) into the runner's temp directory,
-      checked against checksums.txt, runs naut check and naut test, and
-      runs naut deploy update on the repository variable DEPLOY_TARGET,
-      with the key readable only by the runner's user and removed after;
-      an unpinned naut or an empty DEPLOY_TARGET fails the job, and so
-      does an update the box rolled back.
+      manifest project: on a v* tag whose commit is on the default branch,
+      in the plant environment, with a read-only token, a pinned checkout
+      that keeps no credentials and one deploy at a time, it installs the
+      pinned naut release (the scaffolding naut's version) into the
+      runner's temp directory, checked against checksums.txt, runs naut
+      check and naut test, and runs naut deploy update on the repository
+      variable DEPLOY_TARGET, accepting only the given key and host key,
+      both removed after; an unpinned naut, an empty DEPLOY_TARGET or a
+      tag off the default branch fails the job, and so does an update the
+      box rolled back.
     source: "#through-cd"
     tests:
       - go ./cmd/naut TestDeploySSHWorkflowRenders
@@ -267,6 +270,7 @@ claims:
       - go ./cmd/naut TestDeploySSHPinsTheScaffoldingNaut
       - go ./cmd/naut TestDeploySSHInstallStep
       - go ./cmd/naut TestDeploySSHDeployStep
+      - go ./cmd/naut TestDeploySSHTagMustBeOnTheDefaultBranch
     partial: true
     note: >-
       The install and deploy steps' shell is run by the tests, against a

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strings"
 	"testing"
@@ -33,10 +34,15 @@ func scaffoldDeploySSH(t *testing.T, sc scaffold) string {
 }
 
 type ghWorkflow struct {
-	Jobs map[string]struct {
-		Env   map[string]string `yaml:"env"`
-		Steps []struct {
+	Permissions map[string]string `yaml:"permissions"`
+	Concurrency string            `yaml:"concurrency"`
+	Jobs        map[string]struct {
+		Environment string            `yaml:"environment"`
+		Env         map[string]string `yaml:"env"`
+		Steps       []struct {
 			Name string            `yaml:"name"`
+			Uses string            `yaml:"uses"`
+			With map[string]any    `yaml:"with"`
 			Run  string            `yaml:"run"`
 			Env  map[string]string `yaml:"env"`
 		} `yaml:"steps"`
@@ -94,6 +100,28 @@ func TestDeploySSHWorkflowRenders(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("deploy-ssh.yml is missing %q", want)
 		}
+	}
+	// The job's token can only read the repository; a deploy needs nothing
+	// more from GitHub.
+	if len(w.Permissions) != 1 || w.Permissions["contents"] != "read" {
+		t.Errorf("permissions = %v, want only contents: read", w.Permissions)
+	}
+	// One deploy at a time (a newer queued tag replaces an older pending one).
+	if w.Concurrency != "deploy" {
+		t.Errorf("concurrency = %q, want deploy", w.Concurrency)
+	}
+	// The environment whose required reviewers approve each deploy.
+	if w.Jobs["deploy"].Environment != "plant" {
+		t.Errorf("environment = %q, want plant", w.Jobs["deploy"].Environment)
+	}
+	// checkout pinned to a commit, and no token left in the checkout for
+	// later steps to find.
+	co := w.Jobs["deploy"].Steps[0]
+	if !regexp.MustCompile(`^actions/checkout@[0-9a-f]{40}$`).MatchString(co.Uses) {
+		t.Errorf("checkout is %q, want actions/checkout pinned to a commit SHA", co.Uses)
+	}
+	if co.With["persist-credentials"] != false {
+		t.Errorf("checkout persist-credentials = %v, want false", co.With["persist-credentials"])
 	}
 	readme, _ := os.ReadFile(filepath.Join(proj, "README.md"))
 	if !strings.Contains(string(readme), "## Deploy to a box over SSH") || !strings.Contains(string(readme), "naut v9.8.7") {
@@ -243,7 +271,7 @@ exit ` + map[int]string{0: "0", 3: "3"}[exit] + "\n"
 		seen, _ := os.ReadFile(filepath.Join(tmp, "seen"))
 		for _, want := range []string{
 			"args: deploy update deploy@box",
-			"opts: -i " + tmp + "/key -o UserKnownHostsFile=" + tmp + "/known_hosts",
+			"opts: -i " + tmp + "/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=" + tmp + "/known_hosts -o GlobalKnownHostsFile=/dev/null",
 			"mode: -rw-------", "key: PRIVATE-KEY", "hosts: box ssh-ed25519 AAAA",
 		} {
 			if !strings.Contains(string(seen), want) {
@@ -252,6 +280,9 @@ exit ` + map[int]string{0: "0", 3: "3"}[exit] + "\n"
 		}
 		if _, err := os.Stat(filepath.Join(tmp, "key")); err == nil {
 			t.Errorf("exit %d: the key is still on the runner after the step", exit)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "known_hosts")); err == nil {
+			t.Errorf("exit %d: known_hosts is still on the runner after the step", exit)
 		}
 	}
 }
@@ -270,5 +301,51 @@ func TestDeploySSHPinsTheScaffoldingNaut(t *testing.T) {
 	proj = scaffoldDeploySSH(t, scaffold{Name: "pin-dev", Program: "PinDev", Template: tmplMinimal, DeploySSH: true})
 	if _, w := readWorkflow(t, proj); !strings.HasPrefix(w.Jobs["deploy"].Env["NAUT_VERSION"], "vX.Y.Z") {
 		t.Errorf("a dev naut should leave the placeholder, got %q", w.Jobs["deploy"].Env["NAUT_VERSION"])
+	}
+}
+
+// Only a tag on the default branch deploys: the step fails for a commit
+// that is not an ancestor of origin/<default branch>, as a tag pushed on
+// an unmerged branch is, and passes for the branch's head and an older
+// commit on it.
+func TestDeploySSHTagMustBeOnTheDefaultBranch(t *testing.T) {
+	needTools(t, "bash", "git")
+	proj := scaffoldDeploySSH(t, scaffold{Name: "tag-proj", Program: "TagProj", Template: tmplMinimal, DeploySSH: true, NautVersion: "v9.8.7"})
+	_, w := readWorkflow(t, proj)
+	script := w.step(t, "the tag is on the default branch")
+
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		c := exec.Command("git", args...)
+		c.Dir = repo
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "one")
+	older := git("rev-parse", "HEAD")
+	git("commit", "-q", "--allow-empty", "-m", "two")
+	head := git("rev-parse", "HEAD")
+	git("checkout", "-q", "-b", "unmerged")
+	git("commit", "-q", "--allow-empty", "-m", "side")
+	side := git("rev-parse", "HEAD")
+	git("update-ref", "refs/remotes/origin/main", head) // what checkout's full fetch leaves
+
+	for _, c := range []struct {
+		name, sha string
+		ok        bool
+	}{{"main's head", head, true}, {"an older commit on main", older, true}, {"a tag on an unmerged branch", side, false}} {
+		out, err := runStep(t, script, repo, "GITHUB_SHA="+c.sha, "GITHUB_REF_NAME=v1.0.0", "DEFAULT_BRANCH=main")
+		if (err == nil) != c.ok {
+			t.Errorf("%s: step error %v, want ok=%v\n%s", c.name, err, c.ok, out)
+		}
+		if !c.ok && !strings.Contains(out, "is not on main") {
+			t.Errorf("%s: the refusal should say why:\n%s", c.name, out)
+		}
 	}
 }
