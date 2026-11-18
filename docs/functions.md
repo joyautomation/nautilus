@@ -155,7 +155,9 @@ SUB, MUL, DIV, ABS) or, for anything else, a CPT; see
 
 Reading FB outputs: any instance output is addressable as `inst.Pin`
 anywhere in the program that declares the instance — `GE(t2.ET, T#2S)` as
-a contact, `t2.Q` as an operand, in any rung. To capture an output **into a
+a contact, `t2.Q` as an operand, in any rung. Rungs run top to bottom, so
+a rung above the one that calls `t2` reads the value `t2` had at the end
+of the previous scan, and a rung below reads this scan's, as on any PLC. To capture an output **into a
 variable** at the call site, use the standard's output binding:
 `t2:TON(PT := T#5S, ET => Elapsed)` — the one way ladder stores a
 non-BOOL (coils only assign BOOL). `=>` works in ST and FBD calls too.

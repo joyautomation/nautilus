@@ -129,7 +129,10 @@ Coils assign BOOL only. To store a timer's elapsed time or a counter's
 value, use the standard's output binding at the call site, `Run =>
 P101_RunCmd` above. Any instance output is also readable as `inst.Pin`
 anywhere, including as a contact: `m101.FailToRun` reads the same way a
-plain BOOL tag would, without needing a `=>` capture first.
+plain BOOL tag would, without needing a `=>` capture first. Rungs run top
+to bottom, so a rung above the one that calls `m101` reads what `m101`
+had at the end of the previous scan, and a rung below reads this scan's,
+as on any PLC.
 
 Edge contacts and edge coils are unnamed in the text. The compiler derives
 a stable instance name from the rung name, the tag, and the position among
