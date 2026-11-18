@@ -211,6 +211,22 @@ a core something else just landed on, and at normal priority it has no
 claim to go first: measured, p99 went from 55 µs to 300–400 µs. Set `cpu:`
 only together with `priority:`, or on a core the kernel keeps empty.
 
+**On a box with few cores, the runtime raises `GOMAXPROCS`.** Go runs
+code on `GOMAXPROCS` slots, which default to the number of cores. A task
+waking at `SCHED_FIFO` still needs a free slot, and on a two-core box a
+long scan in another task and the garbage collector can hold both, so the
+task waits for Go's own preemption (around 10 ms), whatever its priority.
+When a task has `priority:`, `GOMAXPROCS` is not set in the environment
+and the box has at most 4 cores, the runtime sets it to the cores plus one
+for each task at a priority plus one, at most twice the cores plus two.
+That's 4 on a two-core box with one such task. On a two-core ARM module
+this took a 1 ms task at FIFO 80, beside a task running 20 ms of logic,
+from 95.8 % of its slots run and 9.22 ms late at p99.9 to 99.92 % and
+188 µs (the [Verdin guide](/guides/verdin/#real-time-on-the-am62) has
+the table). The banner says when it was raised, and `GET /api/state`
+reports it as `scan.gomaxprocs`. A `GOMAXPROCS` in the environment always
+wins.
+
 Mind the kernel's real-time throttle: by default `SCHED_FIFO` tasks get
 95 % of every second (`/proc/sys/kernel/sched_rt_runtime_us`). A task that
 overruns its period continuously is throttled, and that shows as missed

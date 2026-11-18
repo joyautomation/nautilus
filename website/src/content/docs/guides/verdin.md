@@ -158,7 +158,9 @@ What the numbers say about this module and kernel:
   from 9.98 ms to 1.41 ms. It is set at runtime
   (`/sys/devices/system/cpu/cpufreq/policy0/scaling_governor`) and does
   not survive a reboot by itself.
-- **Set `GOMAXPROCS=4` on a two-core module.** Go runs code on as many
+- **`GOMAXPROCS=4` on a two-core module, which the runtime now sets
+  itself** when a task has `priority:` (see the
+  [real-time guide](/guides/real-time/#priority-and-pinning)). Go runs code on as many
   scheduler slots as there are cores, two here. A task's thread waking at
   `SCHED_FIFO` still needs a free slot before it runs, and a long scan in
   another task, or the garbage collector, can hold both. With the full
@@ -172,9 +174,11 @@ What the numbers say about this module and kernel:
   | 2 (the default) | loaded | 93.8 % | 1.44 ms | 14.1 ms | 133 ms |
   | 4 | loaded | 97.5 % | 440 µs | 4.74 ms | 145 ms |
 
-  Under the unit, the unit reads `/etc/nautilus/env`
-  (`EnvironmentFile=-/etc/nautilus/env`; the `-` makes the file
-  optional). Create it as root and restart:
+  The runtime raises it only when nothing set `GOMAXPROCS`. Set it
+  yourself to fix a value regardless of the tasks' priorities, or to
+  choose another. Under the unit, the unit reads
+  `/etc/nautilus/env` (`EnvironmentFile=-/etc/nautilus/env`; the `-` makes
+  the file optional). Create it as root and restart:
 
   ```sh
   sudo mkdir -p /etc/nautilus
@@ -182,8 +186,8 @@ What the numbers say about this module and kernel:
   sudo systemctl restart nautilus
   ```
 
-  In a container, `-e GOMAXPROCS=4` should do the same; only the unit was
-  measured. Under full load the worst case stays above 100 ms: the collector's pauses (up to 25 ms) and
+  In a container, `-e GOMAXPROCS=…` should do the same; only the unit
+  was measured. Under full load the worst case stays above 100 ms: the collector's pauses (up to 25 ms) and
   the runtime's own threads at normal priority are starved by the busy
   loops.
 - **Two cores is little headroom.** Fully loaded, a task without
