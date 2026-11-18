@@ -14,8 +14,8 @@ type StatsReader interface {
 }
 
 // bindStatsReaders hands Stats to every StatsReader in d, an io.Multi's
-// children included. Run calls it before the first scan; a driver swapped
-// into a running set goes through it too.
+// children included. Run calls it before the first scan, and ReplaceDriver
+// for a driver swapped into a running set.
 func (r *Runtime) bindStatsReaders(d nio.Driver) {
 	switch x := d.(type) {
 	case nil:
