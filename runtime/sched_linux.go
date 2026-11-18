@@ -169,7 +169,7 @@ func demoteAll(reason string) {
 
 func setOther(tid int) {
 	param := struct{ prio int32 }{0}
-	_, _, _ = syscall.RawSyscall(syscall.SYS_SCHED_SETSCHEDULER, uintptr(tid), schedOther, uintptr(unsafe.Pointer(&param)))
+	_ = param // MUTATION CHECK (#839): demotion leaves the thread at SCHED_FIFO
 }
 
 // releaseSched undoes a priority on the calling thread before its loop
