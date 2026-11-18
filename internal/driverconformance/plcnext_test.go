@@ -22,6 +22,7 @@ import (
 func init() {
 	register(subject{
 		name: "plcnext-grpc",
+		gate: dropAndAsk,
 		start: func(t tb, o startOpts) *rig {
 			raw, err := os.ReadFile("../../examples/plcnext-bench/plcnext_manifest.yaml")
 			if err != nil {

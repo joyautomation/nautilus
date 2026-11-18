@@ -16,6 +16,7 @@ import (
 func init() {
 	register(subject{
 		name: "modbus",
+		gate: dropAndAsk,
 		start: func(t tb, o startOpts) *rig {
 			srv := slave.NewServer("", slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err := srv.Start(); err != nil {

@@ -20,11 +20,19 @@
 //	   same as C5, for a driver that reads any gate as "one replica of a
 //	   redundant set"
 //
+// C5 and C8 hold for either of two designs, which each subject declares
+// (gate): drop the commands pushed while the gate is closed and ask for
+// every output when it reopens (dropAndAsk), or hold the latest one and
+// send it on reopen (holdAndDeliver), never a superseded one.
+//
 // A driver that does not keep a contract is listed in expect with the
 // issue that tracks the gap. Its row still runs: it must keep failing, and
 // once it passes the suite fails until the mark is removed, so a mark
 // cannot go stale. A contract the driver's fake cannot exercise is listed
-// in unsupported with the reason, and skipped.
+// in unsupported with the reason, and skipped. A contract that cannot
+// apply to the driver at all (it has no outputs; it has no device once
+// loaded) is listed in byDesign with the reason, and skipped. A missing
+// safety behaviour is never byDesign: it is an expect with its issue.
 //
 // Survey: #861.
 package driverconformance
@@ -73,6 +81,11 @@ type rig struct {
 	// value the device is acting on. A driver whose closed gate still
 	// sends frames marked invalid reports the last valid value.
 	field func() any
+	// sent, optional, is every value of out the device has received, in
+	// order. With it the holdAndDeliver check sees every command; without
+	// it the check samples field and can miss one that is overwritten
+	// within a poll.
+	sent func() []any
 	// polls counts the driver's completed reads (a Health counter), so a
 	// "nothing happened" check waits for real polls instead of a sleep.
 	polls func() uint64
@@ -103,7 +116,29 @@ type subject struct {
 	expect map[string]string
 	// unsupported maps a contract to why the fake cannot exercise it.
 	unsupported map[string]string
+	// byDesign maps a contract to why it cannot apply to this driver.
+	byDesign map[string]string
+	// gate is how the driver treats a command pushed while its write gate
+	// is closed (C5, C8). Required unless both are skipped.
+	gate gateMode
 }
+
+// gateMode is a driver's design for commands pushed while its write gate
+// is closed. Both keep C5 and C8; the suite checks each by its own rules.
+type gateMode int
+
+const (
+	gateUnset gateMode = iota
+	// dropAndAsk: nothing pushed while closed is kept; when the gate
+	// reopens the driver asks for every output (io.OutputsRequester), and
+	// the next push goes out. modbus, eip, optommp, plcnext.
+	dropAndAsk
+	// holdAndDeliver: the driver keeps the latest command pushed while
+	// closed and sends it when the gate reopens, with no further push. A
+	// command superseded while the gate was closed is never sent: a stale
+	// command delivered on reopen is the danger this design carries.
+	holdAndDeliver
+)
 
 var subjects []subject
 
@@ -139,6 +174,9 @@ func TestDriverContracts(t *testing.T) {
 					if why, ok := s.unsupported[c.id]; ok {
 						t.Skipf("%s: not exercisable through the fake: %s", c.what, why)
 					}
+					if why, ok := s.byDesign[c.id]; ok {
+						t.Skipf("%s: does not apply to this driver: %s", c.what, why)
+					}
 					failed, msgs := record(t, func(r tb) { c.run(r, s) })
 					issue, expected := s.expect[c.id]
 					errMsg, logMsg := verdict(c, issue, expected, failed, msgs)
@@ -157,8 +195,9 @@ func TestDriverContracts(t *testing.T) {
 var issueRef = regexp.MustCompile(`^#[0-9]+$`)
 
 // validate checks a subject's marks: every key a known contract, every
-// expected failure citing an issue, every unsupported contract giving a
-// reason, no contract both expected and unsupported.
+// expected failure citing an issue, every unsupported or byDesign contract
+// giving a reason, no contract carrying two marks, and a gate mode
+// declared unless C5 and C8 are both skipped.
 func validate(s subject, cs []contract) []string {
 	known := map[string]bool{}
 	for _, c := range cs {
@@ -172,17 +211,41 @@ func validate(s subject, cs []contract) []string {
 		if !issueRef.MatchString(s.expect[k]) {
 			errs = append(errs, fmt.Sprintf("expect[%s] = %q: an expected failure cites the issue tracking it, as #123", k, s.expect[k]))
 		}
-		if _, both := s.unsupported[k]; both {
-			errs = append(errs, fmt.Sprintf("%s is both expected to fail and unsupported", k))
+	}
+	for _, m := range []struct {
+		name  string
+		marks map[string]string
+	}{{"unsupported", s.unsupported}, {"byDesign", s.byDesign}} {
+		for _, k := range sortedKeys(m.marks) {
+			if !known[k] {
+				errs = append(errs, fmt.Sprintf("%s names unknown contract %q", m.name, k))
+			}
+			if strings.TrimSpace(m.marks[k]) == "" {
+				errs = append(errs, fmt.Sprintf("%s[%s] gives no reason", m.name, k))
+			}
 		}
 	}
-	for _, k := range sortedKeys(s.unsupported) {
-		if !known[k] {
-			errs = append(errs, fmt.Sprintf("unsupported names unknown contract %q", k))
+	for _, c := range cs {
+		var on []string
+		for _, m := range []struct {
+			name  string
+			marks map[string]string
+		}{{"expect", s.expect}, {"unsupported", s.unsupported}, {"byDesign", s.byDesign}} {
+			if _, ok := m.marks[c.id]; ok {
+				on = append(on, m.name)
+			}
 		}
-		if strings.TrimSpace(s.unsupported[k]) == "" {
-			errs = append(errs, fmt.Sprintf("unsupported[%s] gives no reason", k))
+		if len(on) > 1 {
+			errs = append(errs, fmt.Sprintf("%s carries more than one mark: %s", c.id, strings.Join(on, ", ")))
 		}
+	}
+	skipped := func(id string) bool {
+		_, u := s.unsupported[id]
+		_, b := s.byDesign[id]
+		return u || b
+	}
+	if s.gate == gateUnset && !(skipped("C5") && skipped("C8")) {
+		errs = append(errs, "no gate mode: declare gate dropAndAsk or holdAndDeliver (C5, C8)")
 	}
 	return errs
 }
@@ -418,8 +481,10 @@ func c8(t tb, s subject) {
 
 // gateFlow is C5 and C8: start the driver with a gate installed by
 // install, check it took (took), then close the gate, push a change, see
-// nothing arrive, reopen it, see the driver ask for every output and the
-// next push arrive.
+// nothing arrive, and reopen it. Then, by the subject's gate mode: see the
+// driver ask for every output and the next push arrive (dropAndAsk), or
+// see the held command arrive with no push, and a command superseded
+// while the gate was closed never arrive (holdAndDeliver).
 func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func()) {
 	var mu sync.Mutex
 	open := true
@@ -449,14 +514,89 @@ func gateFlow(t tb, s subject, install func(nio.Driver, func() bool), took func(
 		t.Fatalf("%s reached the device as %v while the write gate was closed", r.out, got)
 	}
 
-	setGate(true)
-	req, ok := r.drv.(nio.OutputsRequester)
-	if !ok {
-		t.Fatalf("the gate dropped a command and the driver cannot ask for it again (no io.OutputsRequester)")
+	switch s.gate {
+	case dropAndAsk:
+		setGate(true)
+		req, ok := r.drv.(nio.OutputsRequester)
+		if !ok {
+			t.Fatalf("the gate dropped a command and the driver cannot ask for it again (no io.OutputsRequester)")
+		}
+		wait(t, 5*time.Second, "OutputsWanted after the gate reopened", req.OutputsWanted)
+		push(a)
+		wait(t, 5*time.Second, fmt.Sprintf("%s = %v at the device after the gate reopened", r.out, a), func() bool { return r.field() == a })
+	case holdAndDeliver:
+		setGate(true)
+		wait(t, 5*time.Second, fmt.Sprintf("%s = %v, held while the gate was closed, at the device after it reopened (no further push)", r.out, a),
+			func() bool { return r.field() == a })
+		// Latest wins: close the gate again and push b, then a, which the
+		// device already holds. Nothing is owed. b went stale the moment a
+		// was pushed, and must never reach the device: not while the gate
+		// is closed, not when it reopens.
+		setGate(false)
+		settle(t, r, 2)
+		var mark int
+		if r.sent != nil {
+			mark = len(r.sent())
+		}
+		seen := sample(r.field)
+		push(b)
+		push(a)
+		settle(t, r, 3)
+		setGate(true)
+		settle(t, r, 5)
+		got := seen()
+		if r.sent != nil {
+			got = r.sent()[mark:]
+		}
+		for _, v := range got {
+			if v != a {
+				t.Fatalf("%s at the device went through %v; want only %v: %v was pushed while the gate was closed and superseded by %v before it reopened, so it must never be sent",
+					r.out, got, a, b, a)
+			}
+		}
+	default:
+		t.Fatalf("the subject declares no gate mode")
 	}
-	wait(t, 5*time.Second, "OutputsWanted after the gate reopened", req.OutputsWanted)
-	push(a)
-	wait(t, 5*time.Second, fmt.Sprintf("%s = %v at the device after the gate reopened", r.out, a), func() bool { return r.field() == a })
+}
+
+// sample reads field every millisecond until the returned func is called,
+// and returns the distinct values it saw, in the order first seen.
+func sample(field func() any) (stop func() []any) {
+	var mu sync.Mutex
+	var seen []any
+	note := func() {
+		v := field()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, s := range seen {
+			if s == v {
+				return
+			}
+		}
+		seen = append(seen, v)
+	}
+	note()
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(time.Millisecond):
+				note()
+			}
+		}
+	}()
+	return func() []any {
+		close(done)
+		<-finished
+		note()
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]any(nil), seen...)
+	}
 }
 
 func c6(t tb, s subject) {

@@ -18,6 +18,7 @@ import (
 func init() {
 	register(subject{
 		name: "optommp",
+		gate: dropAndAsk,
 		start: func(t tb, o startOpts) *rig {
 			dev := optommptest.NewBench()
 			probe := func() optommp.Chassis {
