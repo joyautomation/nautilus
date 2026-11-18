@@ -175,6 +175,23 @@ func Import(f *l5x.File, opts Options) (*Project, error) {
 			if t.Type == "" {
 				t.Type = im.tagType(src, t.Init)
 			}
+			// A typed array starts at the export's values. Without an
+			// init: it would never be seeded (a typed input no driver
+			// delivers is not), so the first rung reading it would fault
+			// the scan "undefined tag" on every scan (#774).
+			if t.Init == nil && strings.HasPrefix(t.Type, "ARRAY") {
+				var lost bool
+				t.Init, lost = arrayInit(src.Value, src.DataType)
+				if lost {
+					p.note("", -1, "init", t.Name+": starts at zero in nautilus; the export's values for it ("+logixTypeOf(src)+") are not carried")
+				}
+			}
+			// A structure starts at the export's values, member arrays
+			// included; one the export gives no values for still starts,
+			// at zero, so a read of it never faults "undefined tag".
+			if t.Init == nil && t.Type != "" && !strings.HasPrefix(t.Type, "ARRAY") && im.types[t.Type] {
+				t.Init = map[string]any{}
+			}
 			if why := im.notWritten(src, t); why != "" && !im.external[k] {
 				p.note("", -1, "tag", t.Name+" ("+logixTypeOf(src)+"): "+why)
 			}
@@ -257,6 +274,88 @@ func (im *importer) tagType(t *l5x.Tag, init any) string {
 	return typ
 }
 
+// arrayInit is an array tag's init: its elements as the export holds
+// them, trimmed after the last non-zero one (the loader pads a short list
+// with zeros, so an all-zero array is the one-word []). Each element must
+// be a value of the array's elementary type; when one is not (an array of
+// structures, a SINT array the export spells as characters) the array
+// starts at zero, and lost reports that the export had values for it.
+func arrayInit(v any, dtype string) (init []any, lost bool) {
+	list, _ := v.([]any)
+	out := make([]any, len(list))
+	last := -1
+	for i, e := range list {
+		x, ok := elemValue(e, strings.ToUpper(dtype))
+		if !ok {
+			return []any{}, !allZero(list)
+		}
+		out[i] = x
+		if !isZero(x) {
+			last = i
+		}
+	}
+	return out[:last+1], false
+}
+
+// elemValue is e as a value of the elementary type dtype, or false.
+func elemValue(e any, dtype string) (any, bool) {
+	switch dtype {
+	case "BOOL":
+		switch x := e.(type) {
+		case bool:
+			return x, true
+		case int64:
+			return x != 0, true
+		}
+	case "REAL", "LREAL":
+		switch x := e.(type) {
+		case float64:
+			return x, true
+		case int64:
+			return float64(x), true
+		}
+	case "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT":
+		if x, ok := e.(int64); ok {
+			return x, true
+		}
+	}
+	return nil, false
+}
+
+func isZero(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return !x
+	case int64:
+		return x == 0
+	case float64:
+		return x == 0
+	case string:
+		return x == ""
+	case nil:
+		return true
+	case map[string]any:
+		for _, m := range x {
+			if !isZero(m) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		return allZero(x)
+	}
+	return false
+}
+
+func allZero(list []any) bool {
+	for _, e := range list {
+		if !isZero(e) {
+			return false
+		}
+	}
+	return true
+}
+
 // notWritten says why a write-back cannot create a controller tag no
 // routine names, or "" when it can: one with no nautilus type stays in
 // the tag file untyped, as documentation; one whose type nautilus has
@@ -319,12 +418,14 @@ func (p *Project) Reasons() []string {
 }
 
 type importer struct {
-	file  *l5x.File
-	opts  Options
-	proj  *Project
-	aois  map[string]*l5x.AddOnInstruction
-	ctrl  map[string]*l5x.Tag
-	types map[string]bool
+	// realNoted: the REAL-to-integer store note is given (once).
+	realNoted bool
+	file      *l5x.File
+	opts      Options
+	proj      *Project
+	aois      map[string]*l5x.AddOnInstruction
+	ctrl      map[string]*l5x.Tag
+	types     map[string]bool
 	// written collects controller tags the imported logic drives, for
 	// the tag file's roles.
 	written map[string]bool

@@ -46,7 +46,7 @@ into another's.
 |---|---|---|---|---|
 | **Languages** | `lang/st` `lang/ld` `lang/fbd` `lang/sfc` `lang/ir` `lang/fbcatalog` `lang/stgen` `internal/stproject` | IEC 61131-3: POU, program, function block, task, retain, rung, network, step, transition. `lang/ir` is the substrate every other context shares for types and values. | Runtime, Authoring, Logix target, every codegen | `lang/l5x` turns a Logix export into ladder and ST (an importer, see Logix target) |
 | **Runtime** | `runtime` `io` `retain` `leader` | scan, task, tag store, quality, generation, lateness, force, retained, coordinator. `io.Driver` is the published seam; `io.Quality` the one quality enum. | Operator surface, Sparkplug edge, Verification, Logix facade | Manifest tags become `runtime.TagDef` in `internal/project` |
-| **Field drivers** | `modbus/…` `eip/…` (`cip`, `logix`, `codegen`) `optommp/…` `plcnext/…` `sparkplug/host/…` `replay` (and the pending `opcua` client) | each protocol's own: register, coil, holding; CIP path, symbol, UDT; metric, NBIRTH. | nothing above the seam | **Anti-corruption layer.** The protocol's names stop at the package. What crosses is `io.Driver` upward and `internal/tagfile.Tag` into the tag file. |
+| **Field drivers** | `modbus/…` `eip/…` (`cip`, `logix`, `codegen`) `optommp/…` `plcnext/…` `profinet/…` `sparkplug/host/…` `replay` (and the pending `opcua` client) | each protocol's own: register, coil, holding; CIP path, symbol, UDT; AR, IOCR, IOPS, station name; metric, NBIRTH. | nothing above the seam | **Anti-corruption layer.** The protocol's names stop at the package. What crosses is `io.Driver` upward and `internal/tagfile.Tag` into the tag file. |
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
 | **Alarms** | `alarm` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier. | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point |
@@ -55,6 +55,7 @@ into another's.
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
 | **Authoring** | `internal/lsp` `tools/vscode-iec` | diagnostics, hover, completion, diagram editor, live values, component preview, kind editor. | the person | Reads the Manifest and Languages; the only non-CLI importer of `internal/project` |
 | **Logix target** | `logix/writer` `logix/importer` `logix/deploy` `logix/logixd` `logix/facade` `lang/l5x` `eip/logixserver` | Rockwell's: L5X, controller, routine, rung, AOI, alias tag, download. | nothing | **Anti-corruption layer, both directions.** Writer and importer are the only places vendor spellings may appear (see *Language stays vendor-neutral*). `logix/facade` is an application layer for `naut logix serve`, so it may import Runtime and Operator surface |
+| **Siemens target** | `siemens/tiad` `siemens/webapi` `siemens/writer` `siemens/importer` `siemens/facade` (planned, [siemens-ide.md](siemens-ide.md)) | Siemens': OB, FB, DB, SCL, tag table, station, GSDML device, download, online compare. | nothing | **Anti-corruption layer, both directions**, like the Logix target. Writer, agent client and importer are the only places Siemens spellings may appear. `siemens/facade` is an application layer for `naut siemens serve` and may import Runtime and Operator surface |
 | **HMI 2D** | `hmi` (npm) | mimic, component, port, catalog, realtime, trend, quality, alarms view. | the operator | Consumes Operator surface over HTTP/SSE; no Go |
 | **HMI 3D** | `hmi-3d` (npm) `internal/scene` | scene, kind, node, pipe, port, look, assembly. `internal/scene` is the offline half (`naut check`, `naut scene init`). | the operator, Authoring | Consumes Operator surface. **Open edge:** argonaut's `parts` format is a second model of the same things; §2.4 |
 | **Tag file** | `internal/tagfile` | one row: name, role, type, init, unit, desc, alias. | every codegen, `lang/l5x` | **Shared kernel.** The one format every importer renders and the manifest reads |
@@ -83,8 +84,11 @@ break one changes this section first and says why.
 - Field and IT drivers and `sparkplug/host` never import `runtime`,
   `server`, `alarm`, `acceptance`, `internal/project`, `internal/lsp` or
   the CLI.
-- The operator surface never imports a protocol package, the Logix target,
-  or the manifest.
+- The Siemens target's `siemens/tiad`, `siemens/webapi`, `siemens/writer`
+  and `siemens/importer` keep the same distance. Only `siemens/facade`
+  composes the runtime side.
+- The operator surface never imports a protocol package, the Logix or
+  Siemens target, or the manifest.
 - `devprofile` imports no other nautilus package: the profile format is
   read by the manifest, virtual devices and the CLI, and depends on none
   of them.
@@ -158,7 +162,7 @@ Legitimate per-context meanings, so nobody "deduplicates" them:
 |---|---|
 | **Tag** | Runtime: a cell in the store (`TagDef`, `Tags`, `TagMeta`). Manifest: its YAML form (`TagConfig`). Tag file: one generated row (`tagfile.Tag`). Field/IT drivers: a binding from a tag to an address (`TagBinding`, `snmp.Tag`, `redfish.Tag`, `prom.Tag`, `replay.Tag`). Logix: a controller symbol (`l5x.Tag`, `cip.TagSegment`). Logix emulator: the served surface (`TagSpec`, `TagSurfaceSpec`, `TagConfig`, `TagStore`) |
 | **Node** | ST and SFC: an AST node. FBD: a netlist node. Sparkplug edge: this edge node. Sparkplug host: its view of a remote edge node. Oplog: one replica. Scene: one placed thing |
-| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Device library: a device *type* is a **device profile** (`devprofile.Profile`); a project's instance of one is a **device**. Virtual devices: an instance in `virtual-devices.yaml` (`virtdev.Instance`). Note `devices.yaml` is the Modbus device map, not a list of devices |
+| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Device library: a device *type* is a **device profile** (`devprofile.Profile`); a project's instance of one is a **device**. Virtual devices: an instance in `virtual-devices.yaml` (`virtdev.Instance`). Siemens target: a PROFINET IO device placed in a CPU's station spec (`tiad.Device`), always with an explicit name of station. Note `devices.yaml` is the Modbus device map, not a list of devices |
 | **Profile** | Device library: a device type (`devprofile.Profile`). SNMP: a walk-to-UDT expansion in Go (`snmp/profiles`, `naut snmp import --profile`). HMI 3D: a chassis profile. Say "device profile" when more than one is in play |
 | **Program** | IEC: a POU scheduled by a task, everywhere in nautilus. Logix: a container of routines. The writer translates; "program" never means the Logix thing outside `logix/` |
 | **Quality** | One meaning, `io.Quality`, in every context. Keep it that way |

@@ -500,3 +500,20 @@ claims:
       A 10 ms wait against a 150 ms dial: the scans before the unit is
       read run on DI03 seeded FALSE, and the first DO00 command is still
       on. A sibling driver's outputs are not held past the wait.
+  - id: EPIC-037
+    claim: >-
+      `naut optommp import --scratch-bits-in/-ints-in/-floats-in N` binds N
+      read-only Scratch Pad elements after the writable ones of their kind,
+      as input tags; a writable element that another client has written
+      over reads bad until it holds the program's command again, and a
+      read-only one reads good whatever it holds.
+    source: "#sharing-values-with-optos-software"
+    tests:
+      - go ./optommp TestManifestReadOnlyScratchpad
+      - go ./optommp TestDriverScratchpadSecondWriterIsBad
+    partial: true
+    note: >-
+      Against the in-process fake. That a value written through groov
+      Manage's REST API reaches the tag, and one nautilus writes reads back
+      through it, is the env-gated TestLiveScratchpadSharedWithGroovManage
+      (NAUT_OPTOMMP_LIVE + NAUT_GROOV_API_KEY), not yet run on the bench.

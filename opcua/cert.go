@@ -61,16 +61,33 @@ func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err err
 	}
 	// SubjectKeyIdentifier per RFC 5280 method 1 — some servers insist.
 	ski := sha1.Sum(x509.MarshalPKCS1PublicKey(&key.PublicKey))
+	// A subject of its own, and an AuthorityKeyIdentifier naming its own
+	// key. A CODESYS runtime trusting several certificates that shared one
+	// subject (and had no AKI) accepted only one of them: trusting a second
+	// nautilus client broke the first. For a self-signed certificate Go
+	// takes the AKI from the template.
+	cn := "nautilus"
+	if hostname != "" {
+		cn += "@" + hostname
+	}
+	if len(cn) > 64 { // ub-common-name (RFC 5280)
+		cn = cn[:64]
+	}
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "nautilus", Organization: []string{"Joy Automation"}},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().AddDate(10, 0, 0),
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{"Joy Automation"},
+			SerialNumber: fmt.Sprintf("%032x", serial)[:16],
+		},
+		NotBefore: time.Now().Add(-time.Hour),
+		NotAfter:  time.Now().AddDate(10, 0, 0),
 		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageContentCommitment |
 			x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		SubjectKeyId:          ski[:],
+		AuthorityKeyId:        ski[:],
 		DNSNames:              dns,
 		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
 		URIs:                  []*url.URL{uri},
