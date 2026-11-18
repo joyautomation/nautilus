@@ -680,6 +680,19 @@ func (d *Driver) Start(ctx context.Context) {
 	}
 }
 
+// DisarmBaseline makes the next WriteOutputs a command rather than the
+// start-up baseline (io.BaselineDisarmer): a driver swapped into a running
+// set (#706) starts from the current commands. Call it after Start, which
+// arms the baseline.
+func (d *Driver) DisarmBaseline() {
+	d.wmu.Lock()
+	d.baseline = false
+	d.wmu.Unlock()
+}
+
+// Started reports whether Start has run (io.StartReporter).
+func (d *Driver) Started() bool { return d.started.Load() }
+
 // Stop tears every source loop down and waits.
 func (d *Driver) Stop() {
 	if d.cancel != nil {
