@@ -328,6 +328,8 @@ jobs:
   # unprivileged user namespaces through AppArmor, so this job lifts that
   # for its own run and makes a skip a failure.
   profinet-veth:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
     name: PROFINET — raw Ethernet on a veth pair
     runs-on: ubuntu-latest
     steps:
@@ -337,6 +339,8 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: NAUTILUS_PROFINET_VETH=1 go test -count=1 -run 'TestPacketVeth|TestOpenWithoutCapability' -v ./profinet/transport/
   profinet-fuzz:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
     name: PROFINET — fuzz the wire parsers
     runs-on: ubuntu-latest
     steps:
