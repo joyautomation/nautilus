@@ -170,7 +170,7 @@ func TestLogixImportTimerMembersInArithmetic(t *testing.T) {
 	for _, want := range []string{
 		"{ Remain := TIME_TO_DINT(T1.PT) - TIME_TO_DINT(T1.ET) }",
 		"{ RemI := DINT_TO_INT(TIME_TO_DINT(T1.PT) - TIME_TO_DINT(T1.ET)) }",
-		"{ Secs := TIME_TO_DINT(T1.ET) * 0.001 }",
+		"{ Secs := TIME_TO_REAL(T1.ET) * 0.001 }", // milliseconds beside a REAL (#782)
 		"{ Half := TIME_TO_DINT(T1.ET) / 2 }",
 		// Milliseconds into a timer's ACC or PRE (#793, the mirror case).
 		"{ T2.ET := DINT_TO_TIME(Ms) }",
