@@ -250,3 +250,26 @@ claims:
     source: "#measuring-it-yourself"
     tests: []
     note: No test for the jitter tool.
+
+  - id: RT-025
+    claim: >-
+      Before a task gets SCHED_FIFO the runtime sets RLIMIT_RTTIME (200 ms
+      soft, 2.5 × hard, NAUTILUS_RT_LIMIT_MS to change it, a stricter limit
+      kept); a real-time thread that runs past the soft limit without
+      blocking gets SIGXCPU and every priority task is moved to normal
+      scheduling with the reason in its scan.sched; a loop that ends gives
+      its thread back at normal priority.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestRTGuardLimits
+      - go ./runtime TestRTGuardSetsTheLimit
+      - go ./runtime TestRTGuardSIGXCPUDemotes
+      - go ./runtime TestRTGuardStopsASpinningFIFOThread
+      - go ./runtime TestRTGuardRequireFlag
+      - go ./runtime TestRTGuardLoopEndReleasesItsThread
+      - go ./runtime TestRTGuardSetOtherReportsFailure
+    note: >-
+      TestRTGuardStopsASpinningFIFOThread needs CAP_SYS_NICE: it skips under
+      go test ./..., and CI runs it in the go job with the test binary given
+      the capability by setcap and NAUTILUS_REQUIRE_RT=1, so there a
+      missing capability fails rather than skips.

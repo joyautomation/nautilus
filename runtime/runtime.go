@@ -1024,7 +1024,11 @@ func (r *Runtime) Run(ctx context.Context) {
 				tr.late.missed += k
 				tr.mu.Unlock()
 			}, func() {
-				err := applySched(tr.cpus, tr.prio)
+				err := applySched(tr.cpus, tr.prio, func(reason string) {
+					tr.mu.Lock()
+					tr.stats.Sched.Applied, tr.stats.Sched.Error = false, reason
+					tr.mu.Unlock()
+				})
 				tr.mu.Lock()
 				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
 				tr.mu.Unlock()
@@ -1042,7 +1046,11 @@ func (r *Runtime) Run(ctx context.Context) {
 		r.late.missed += k
 		r.mu.Unlock()
 	}, func() {
-		err := applySched(r.cpus, r.prio)
+		err := applySched(r.cpus, r.prio, func(reason string) {
+			r.mu.Lock()
+			r.stats.Sched.Applied, r.stats.Sched.Error = false, reason
+			r.mu.Unlock()
+		})
 		r.mu.Lock()
 		r.stats.Sched = schedResult(r.cpus, r.prio, err)
 		r.mu.Unlock()
@@ -1108,6 +1116,7 @@ func runLoop(ctx context.Context, period time.Duration, scan func(due time.Time)
 	defer loopThread()()
 	if setup != nil {
 		setup() // on the locked thread: affinity and priority stick to it
+		defer releaseSched()
 	}
 	runSchedule(ctx, period, wallLoopClock{}, scan, missed)
 }

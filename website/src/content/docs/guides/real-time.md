@@ -109,6 +109,36 @@ sudo setcap cap_sys_nice+ep ./my-controller     # or run as root, or set an rtpr
 task's row on the dashboard shows `cpu 2 · fifo 50 REFUSED`, and the task
 runs at normal priority — it never pretends.
 
+**A thread that stops yielding is bounded.** Before a task gets
+`SCHED_FIFO` the runtime sets `RLIMIT_RTTIME` on the process: a real-time
+thread may run 200 ms without blocking (sleeping, waiting on I/O). A scan
+takes far less, and the task sleeps between scans. A thread that passes
+the limit gets `SIGXCPU`, and the runtime then moves every task with
+`priority:` back to normal scheduling. It logs an error, and each task's
+`scan.sched` shows `applied: false` with the reason, until the controller
+restarts. Past 2.5 × the limit the kernel kills the process, in case that
+did not happen. `NAUTILUS_RT_LIMIT_MS` changes the limit (10 ms or more).
+A stricter limit already in place, from a launcher for instance, is kept.
+A task that cannot be bounded is not given the priority.
+
+What this limit does **not** catch:
+
+- **An endless loop in your program.** That is the likeliest runaway, and
+  this limit does not stop it. Go preempts the task about every 10 ms and
+  parks its thread for a few microseconds, which resets the count, while
+  the core stays all but full. The runtime's own priority watchdog
+  (#836) is what catches that case. Until it is in your version, a
+  `priority:` task with a loop that never ends can starve its core.
+- **A core with `nohz_full`.** The count advances once per scheduler tick,
+  and the kernel stops the tick on a core whose only runnable thread is
+  this one. There the 200 ms limit can take tens of seconds to trip.
+- **A process with no spare Go processor.** The demotion runs on a Go
+  goroutine. With `GOMAXPROCS=1`, or while the garbage collector's
+  stop-the-world waits on a thread that cannot be preempted, nothing runs
+  it, and the outcome is the hard limit's kill instead. Under
+  `naut deploy` the service restarts, and on a PLCnext the shim's output
+  watchdog drives the outputs safe meanwhile.
+
 **`cpu:` alone makes things worse.** Pinned, a task can no longer move off
 a core something else just landed on, and at normal priority it has no
 claim to go first: measured, p99 went from 55 µs to 300–400 µs. Set `cpu:`

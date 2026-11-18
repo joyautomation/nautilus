@@ -114,6 +114,19 @@ jobs:
         run: |
           mkdir -p evidence
           go test -json -count=1 -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+      # The real-time guard (#836) against a real SCHED_FIFO thread: the
+      # runtime's test binary gets CAP_SYS_NICE with setcap, and a thread
+      # spinning at FIFO 1 must be demoted by RLIMIT_RTTIME. It cannot wedge
+      # the runner: the limit's hard half SIGKILLs the spinner after 125 ms
+      # and the test gives up after 5 s. NAUTILUS_REQUIRE_RT=1 makes a missing
+      # capability fail instead of skip, so a setcap that silently did not
+      # take cannot pass here (go test ./... above still skips it).
+      - name: runtime RT guard (real SCHED_FIFO, CAP_SYS_NICE via setcap)
+        env: {NAUTILUS_REQUIRE_RT: '1'}
+        run: |
+          go test -c -o "$RUNNER_TEMP/rt.test" ./runtime
+          sudo setcap cap_sys_nice+ep "$RUNNER_TEMP/rt.test"
+          "$RUNNER_TEMP/rt.test" -test.run '^TestRTGuard' -test.v -test.count=1
       - run: go build ./...
       # The browser playground (playground/, cmd/naut-wasm): GOOS=js swaps
       # internal/project's drivers for simulated ones, so a change that
