@@ -101,3 +101,19 @@ func FuzzParseFormat(f *testing.F) {
 	f.Add("")
 	f.Fuzz(func(t *testing.T, s string) { ParseFormat(s) })
 }
+
+// An IOCR block that declares more data objects than it carries is an
+// error, not a silently shorter layout (review nit on #727).
+func TestParseIOCRBlockReqTruncated(t *testing.T) {
+	b := make([]byte, 40+6+6)
+	binary.BigEndian.PutUint16(b[38:40], 1) // one API
+	binary.BigEndian.PutUint16(b[44:46], 3) // claims 3 data objects, carries 1
+	if _, err := ParseIOCRBlockReq(b); err == nil {
+		t.Fatal("truncated IOCR block accepted")
+	}
+	ok := make([]byte, 40+6+2)
+	binary.BigEndian.PutUint16(ok[38:40], 1) // one API, no objects, no IOCS
+	if _, err := ParseIOCRBlockReq(ok); err != nil {
+		t.Fatalf("complete empty API refused: %v", err)
+	}
+}

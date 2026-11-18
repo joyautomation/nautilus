@@ -243,14 +243,17 @@ func ParseIOCRBlockReq(data []byte) (*IOCRBlockReq, error) {
 	iocr.IOCRMulticastMAC = net.HardwareAddr(make([]byte, 6))
 	copy(iocr.IOCRMulticastMAC, data[32:38])
 	if len(data) < 40 {
-		return iocr, nil
+		return iocr, nil // no API section at all
+	}
+	short := func(what string, i int) error {
+		return fmt.Errorf("IOCRBlockReq truncated in API %d's %s (%d bytes)", i, what, len(data))
 	}
 	iocr.NumberOfAPIs = binary.BigEndian.Uint16(data[38:40])
 
 	offset := 40
 	for i := 0; i < int(iocr.NumberOfAPIs); i++ {
 		if offset+6 > len(data) {
-			break
+			return nil, short("header", i)
 		}
 		entry := IOCRAPIEntry{
 			API: binary.BigEndian.Uint32(data[offset : offset+4]),
@@ -260,7 +263,7 @@ func ParseIOCRBlockReq(data []byte) (*IOCRBlockReq, error) {
 
 		for j := 0; j < int(numDataObjects); j++ {
 			if offset+6 > len(data) {
-				break
+				return nil, short("IODataObjects", i)
 			}
 			obj := IOCRDataObject{
 				SlotNumber:    binary.BigEndian.Uint16(data[offset : offset+2]),
@@ -272,14 +275,14 @@ func ParseIOCRBlockReq(data []byte) (*IOCRBlockReq, error) {
 		}
 
 		if offset+2 > len(data) {
-			break
+			return nil, short("IOCS count", i)
 		}
 		numIOCS := binary.BigEndian.Uint16(data[offset : offset+2])
 		offset += 2
 
 		for j := 0; j < int(numIOCS); j++ {
 			if offset+6 > len(data) {
-				break
+				return nil, short("IOCS", i)
 			}
 			cs := IOCRIOxS{
 				SlotNumber:    binary.BigEndian.Uint16(data[offset : offset+2]),
