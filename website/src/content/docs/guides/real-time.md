@@ -246,7 +246,7 @@ Things to know:
   controller that leads: each reports its own runtime while it leads. A
   standby's own health is in its dashboard and `/api/stats`, not in tags.
   As with every input on a standby, what it serves (the OPC UA server, the
-  live stream) is the last value it read, still marked Good.
+  live stream) is the last value it read, marked Stale (#924).
 
 Loosen the bounds per task where a task legitimately runs long now and
 then:
