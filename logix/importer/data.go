@@ -107,7 +107,7 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 	if err != nil {
 		return "", err
 	}
-	if conv := rt.storeConversion(m, args, target); conv != "" {
+	if conv := rt.storeConversion(m, args, target, t); conv != "" {
 		value = conv + "(" + value + ")"
 		if strings.HasPrefix(conv, "REAL_TO_") || strings.HasPrefix(conv, "LREAL_TO_") {
 			rt.realStoreNote()
@@ -126,7 +126,7 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 // conversion; the writer folds it back into the box. The result's type is
 // REAL when an operand is, else the widest operand that names a tag (an
 // integer literal is read at the destination's width).
-func (rt *routine) storeConversion(m string, args []string, target string) string {
+func (rt *routine) storeConversion(m string, args []string, target, rendered string) string {
 	var srcs []string
 	switch m {
 	case "MOVE", "MOV", "NEG", "ABS":
@@ -150,7 +150,15 @@ func (rt *routine) storeConversion(m string, args []string, target string) strin
 	}
 	dst := rt.operandType(target)
 	if dst == "TIME" {
-		dst = "DINT" // a timer's PRE as a destination: its DINT preset variable
+		// A timer's PRE that a TON/TOF runs on is written through its
+		// DINT preset variable (t_PRE); any other timer member stays the
+		// TIME it is (.PT, .ET), which a TIME source needs no conversion
+		// into.
+		up := strings.ToUpper(rendered)
+		if strings.HasSuffix(up, ".PT") || strings.HasSuffix(up, ".ET") {
+			return ""
+		}
+		dst = "DINT"
 	}
 	if intWidth[dst] == 0 {
 		return ""
