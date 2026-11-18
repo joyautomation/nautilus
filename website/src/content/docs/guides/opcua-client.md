@@ -193,6 +193,16 @@ error then says so and names the certificate file to trust. Set
 password for `username:` is never in the manifest: set
 `NAUTILUS_OPCUA_PASSWORD`.
 
+Each generated certificate has a subject of its own
+(`CN=nautilus@<host>` plus a random serial number) and an Authority Key
+Identifier naming its own key. On a CODESYS runtime, of several trusted
+client certificates that shared one subject, only one was accepted:
+trusting the second broke the first. Earlier releases gave every
+certificate the subject `CN=nautilus`, and an existing certificate is kept
+as it is. If two such certificates must both be trusted by such a server,
+delete `cert.pem` and `key.pem` from one `pki-dir`. The next start makes a
+new pair, which the server has to trust once.
+
 **The server's certificate is pinned on first use.** The certificate a
 server offers arrives unauthenticated, so the first secured session records
 its SHA-256 thumbprint in `pki-dir/trusted-servers/<host>_<port>.sha256`,
