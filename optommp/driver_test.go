@@ -2,10 +2,12 @@ package optommp
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -325,5 +327,77 @@ func TestDriverQualityCodes(t *testing.T) {
 	}
 	if h := drv.Health(); h.Requests != 3 {
 		t.Errorf("with quality codes: %d requests, want 3", h.Requests)
+	}
+}
+
+// A processor on this machine is redialled within a second: its I/O
+// server restarting is followed at once, not after a grown backoff.
+func TestDriverLocalProcessorRetriesFast(t *testing.T) {
+	local := []string{"127.0.0.1", "localhost", "::1"}
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() != nil {
+				local = append(local, n.IP.String()) // the machine's own LAN address
+				break
+			}
+		}
+	}
+	for _, host := range local {
+		if !isLocalHost(host) {
+			t.Errorf("%s: not seen as this machine", host)
+		}
+	}
+	for _, host := range []string{"192.0.2.10", "epic.example", "2001:db8::1"} {
+		if isLocalHost(host) {
+			t.Errorf("%s: seen as this machine", host)
+		}
+	}
+
+	dev := newBenchDevice()
+	m := benchManifest(t, dev, ManifestOptions{})
+	m.Host = "127.0.0.1"
+	var mu sync.Mutex
+	var tries []time.Time
+	refuse := 4
+	drv, err := New(m, WithScanRate(20*time.Millisecond), WithDialer(func(ctx context.Context) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		tries = append(tries, time.Now())
+		if len(tries) <= refuse {
+			return nil, errors.New("connection refused")
+		}
+		a, b := net.Pipe()
+		go dev.Serve(b)
+		return a, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drv.retryMax != localRetryMax {
+		t.Fatalf("retry max %s for a local processor, want %s", drv.retryMax, localRetryMax)
+	}
+	drv.Start(context.Background())
+	defer drv.Stop()
+	deadline := time.Now().Add(5 * time.Second) // 250 ms + 500 ms + 1 s + 1 s of refusals
+	for drv.Health().Reads == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("not connected 5 s after the refusals began")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 1; i < len(tries); i++ {
+		if gap := tries[i].Sub(tries[i-1]); gap > localRetryMax+300*time.Millisecond {
+			t.Errorf("redial %d after %s, want at most about %s", i, gap, localRetryMax)
+		}
+	}
+
+	far, err := New(benchManifest(t, dev, ManifestOptions{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if far.retryMin != defaultRetryMin || far.retryMax != defaultRetryMax {
+		t.Errorf("remote processor backoff %s..%s, want %s..%s", far.retryMin, far.retryMax, defaultRetryMin, defaultRetryMax)
 	}
 }

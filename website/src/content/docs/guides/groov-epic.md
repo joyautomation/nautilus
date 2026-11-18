@@ -522,6 +522,48 @@ area is put back. `AmbientCapabilities` lets `priority:` work (next
 section) and survives replacing the binary, which a `setcap` on the file
 does not.
 
+## From power-on to the first write
+
+What the outputs do while nautilus is not yet, or no longer, writing
+them, measured on the bench unit (2026-11-17, `epic-bench` with
+`watchdog: 1s`; in groov Manage DO7 has watchdog value on, DO11 off). An
+observer on another machine read the output states every 2.5 s, no
+faster, so it did not feed the watchdog itself, beside the processor's
+boot journal.
+
+| | reboot, nautilus enabled (3 runs) | I/O server restarted alone (2 runs) |
+|---|---|---|
+| I/O server answering | 30–31 s after the kernel | 11 s after the restart |
+| nautilus connected | 32–33 s after the kernel (systemd starts it once the I/O server is up) | 0.4–0.9 s after the server answers |
+| power-up clear | not asked for | asked for, and sent |
+| outputs at the first read after it | all off; DO7 and DO11 included | back at their commands |
+
+- **The watchdog time is stored on the unit.** It survives a reboot and
+  arms itself at boot: with nautilus disabled, no client connecting at
+  all, DO7 was at its watchdog value a minute after the processor came
+  up. So every output that has a watchdog value goes to it whenever
+  nothing has talked to the unit for longer than the watchdog: after
+  nautilus stops (it did, within seconds, on every clean stop before a
+  reboot), while the I/O server restarts, and at boot if nautilus does
+  not start. Give each output the watchdog value you want it to have
+  when nautilus is not running.
+- **On a reboot, the I/O server starts with every output off.** The
+  first read after it answered showed all twelve off, DO7 included,
+  about 2 s before nautilus's first write.
+- **After an I/O server restart** the processor asks for a power-up
+  clear, the driver sends it, logs that the watchdog may have tripped,
+  and rewrites every commanded output. When the manifest's host is this
+  machine (`127.0.0.1`, `localhost` or the processor's own address) the
+  driver retries every second at most, so it follows the server within
+  a second; to another host the retry backs off up to 30 s.
+- **The first scans fault** with `undefined tag` until the driver has
+  delivered its first read (3 to 5 scans, under 0.5 s, on the bench).
+  No output is written while the scan faults.
+
+Not observable over the network: the outputs while the processor itself
+is down (about 60 s of a reboot), and a real power cut. Watch the module
+LEDs for those.
+
 ## Timing on the processor's real-time kernel
 
 The EPIC runs a `PREEMPT_RT` kernel (`5.15.91-rt57` on firmware

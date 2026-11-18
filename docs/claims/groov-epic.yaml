@@ -517,3 +517,17 @@ claims:
       Manage's REST API reaches the tag, and one nautilus writes reads back
       through it, is the env-gated TestLiveScratchpadSharedWithGroovManage
       (NAUT_OPTOMMP_LIVE + NAUT_GROOV_API_KEY), not yet run on the bench.
+  - id: EPIC-038
+    claim: >-
+      When the manifest's host is this machine (127.0.0.1, localhost or one
+      of its own addresses) the driver redials every second at most, so it
+      follows the I/O server within a second of it answering again; to any
+      other host the backoff grows to 30 s.
+    source: "#from-power-on-to-the-first-write"
+    tests:
+      - go ./optommp TestDriverLocalProcessorRetriesFast
+    note: >-
+      The table and the watchdog behaviour above it are bench measurements
+      (2026-11-17, three reboots, three I/O server restarts; the first restart
+      ran before this retry, reconnecting 4.2 s after the server), written up
+      on issue #767. Not repeatable in CI.
