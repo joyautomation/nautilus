@@ -284,3 +284,31 @@ func TestRuntimeStatusIsASparkplugDevice(t *testing.T) {
 		t.Errorf("device %+v, want ID health, tags A,B, no health gate", d)
 	}
 }
+
+// A lone status driver's Quality, read before anything set a loopback
+// quality (Memory's is nil then), and through the runtime as /api/state
+// reads it: the status tags are Good, a loopback quality set later shows
+// too, and nothing panics.
+func TestRuntimeStatusLoneQuality(t *testing.T) {
+	p, err := Load(statusProject(statusDrivers), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Runtime.Driver.(*statusOverMemory)
+	if q := d.Quality(); q["Main__Faulting"] != nio.Good {
+		t.Fatalf("Quality %v, want Main__Faulting Good", q)
+	}
+	rt, err := runtime.New(p.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan() // before a read the runtime calls every input Stale
+	if q := rt.Quality(); q["Main__Faulting"] != nio.Good {
+		t.Errorf("rt.Quality after a scan: %v, want Main__Faulting Good", q)
+	}
+	d.SetQuality("Break", nio.Bad)
+	d.SetQuality("Main__Faulting", nio.Bad) // a clash: the status driver's own quality wins
+	if q := d.Quality(); q["Break"] != nio.Bad || q["Main__Faulting"] != nio.Good {
+		t.Errorf("after loopback qualities: %v, want Break Bad beside Main__Faulting Good", q)
+	}
+}
