@@ -190,8 +190,8 @@ Ok "built $exe (C# 5, stock csc)"
 
 # ------------------------------------------------------ 3. Openness allowlist
 Write-Host "`n3. Openness allowlist"
-# What TIA V21's loader compares: the full path (case-insensitive), the
-# last write time in UTC to the millisecond, and the SHA-256, in base64.
+# The Openness allowlist entry TIA requires: the full path, the last write
+# time in UTC to the millisecond, and the SHA-256 hash, in base64.
 $fi = Get-Item $exe
 $stamp = $fi.LastWriteTimeUtc.ToString('yyyy/MM/dd HH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture)
 $sha = [Security.Cryptography.SHA256]::Create()

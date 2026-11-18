@@ -75,7 +75,7 @@ a pure evaluator over the machine's facts):
 |---|---|
 | `tia` | Openness V21 is registered in HKLM (64-bit view), and its net48 `Siemens.Engineering.Base.dll` and `.Step7.dll` exist. Failed with `TIAD_NO_TIA=1` |
 | `openness-group` | The process token holds "Siemens TIA Openness". A member added after logon must log off and on |
-| `openness-allowlist` | The check TIA V21's loader makes: an entry under `HKLM\Software\Siemens\Automation\Openness\AllowList\tiad.exe` whose `Path` names this exe (case-insensitive), whose `DateModified` is its last write time (UTC, `yyyy/MM/dd HH:mm:ss.fff`) and whose `FileHash` is its SHA-256 (base64). Every rebuild needs a new entry; the installer writes it |
+| `openness-allowlist` | The Openness allowlist entry TIA requires: an entry under `HKLM\Software\Siemens\Automation\Openness\AllowList\tiad.exe` whose `Path` names this exe (case-insensitive), whose `DateModified` is its last write time (UTC, `yyyy/MM/dd HH:mm:ss.fff`) and whose `FileHash` is its SHA-256 (base64). Every rebuild needs a new entry; the installer writes it |
 | `licence` | `unknown`: not readable until TIA's first start, which creates the trial |
 | `workdir` | The work dir is writable |
 

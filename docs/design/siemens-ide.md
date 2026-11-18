@@ -184,8 +184,8 @@ copies `logixd`, the Logix agent:
   redistributed. The installer:
   - adds the account to the "Siemens TIA Openness" group;
   - writes the Openness allowlist entry for tiad's executable after every
-    build. The entry repeats what TIA V21's loader checks: path, last write
-    time and SHA-256 under `HKLM\Software\Siemens\Automation\Openness\AllowList`.
+    build: the Openness allowlist entry TIA requires (path, timestamp and
+    SHA-256 hash of the exe) under `HKLM\Software\Siemens\Automation\Openness\AllowList`.
     That no consent dialog then appears is verified at the first TIA start.
 - **Agent-side config, never in requests:**
 

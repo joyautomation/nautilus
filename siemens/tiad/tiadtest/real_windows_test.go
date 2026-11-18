@@ -223,3 +223,28 @@ func TestRealAgentStdin(t *testing.T) {
 		t.Fatal("with TIAD_EXIT_ON_STDIN=1 the agent outlived its stdin")
 	}
 }
+
+// TestRealAgentWithoutOpennessFailsClosed: with the tia gate open, a TIA
+// call reaches the loader, and without tiad.Openness.dll beside tiad.exe
+// it fails, naming the assembly, instead of starting anything. It skips
+// once the assembly is installed: then the same call would start TIA.
+func TestRealAgentWithoutOpennessFailsClosed(t *testing.T) {
+	bin := realBin(t)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(bin), "tiad.Openness.dll")); err == nil {
+		t.Skip("tiad.Openness.dll is installed: this call would start TIA")
+	}
+	c := startReal(t, bin, true).Client()
+	const g = "GSDML-V2.4-Example-Device-20261117.xml"
+	if _, err := c.PutFile(ctx, "gsd/"+g, []byte("<ISO15745Profile/>")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.InstallGSD(ctx, "gsd/"+g)
+	var te *tiad.Error
+	if !errors.As(err, &te) || te.Kind != tiad.KindOperationFailed || !strings.Contains(te.Message, "tiad.Openness.dll is not installed") {
+		t.Fatalf("a TIA call without tiad.Openness.dll: %v, want operation_failed naming it", err)
+	}
+	// The agent stays up, and the next call fails the same way.
+	if _, err := c.InstallGSD(ctx, "gsd/"+g); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("second TIA call: %v, want operation_failed again", err)
+	}
+}

@@ -52,9 +52,9 @@ namespace Tiad
         public const string PublicApiKey = OpennessKey + @"\PublicAPI\21.0.0.0\net48";
         public const string PortalVersion = "V21";
 
-        // The Openness allowlist, as TIA V21's loader reads it: one key per
-        // executable file name, holding any number of entries, each with
-        // the full Path, the file's DateModified and its FileHash.
+        // The Openness allowlist TIA requires: one key per executable file
+        // name, holding any number of entries, each with the full Path, the
+        // file's DateModified and its FileHash.
         public const string AllowListKey = @"Software\Siemens\Automation\Openness\AllowList";
         public const string DateFormat = "yyyy/MM/dd HH:mm:ss.fff";
 
@@ -151,14 +151,14 @@ namespace Tiad
         }
 
         // Stamp is a file time as the allowlist holds it: UTC, truncated
-        // to the millisecond, as TIA's loader truncates it.
+        // to the millisecond, as the allowlist's DateModified holds it.
         public static DateTime Stamp(DateTime utc)
         {
             return new DateTime(utc.Year, utc.Month, utc.Day, utc.Hour, utc.Minute, utc.Second, utc.Millisecond);
         }
 
-        // AllowListGate repeats the check TIA V21's loader makes before it
-        // lets an application use Openness without asking: an entry whose
+        // AllowListGate checks the Openness allowlist entry TIA requires
+        // before it lets an application use Openness without asking: an entry whose
         // Path names this executable (directory and file name, compared
         // case-insensitively), whose DateModified is its last write time
         // and whose FileHash is its SHA-256. Whether that is all TIA needs
@@ -210,7 +210,7 @@ namespace Tiad
         }
 
         // SamePath compares the directory and the file name, ignoring case,
-        // as TIA's loader does.
+        // as the allowlist entry is matched.
         static bool SamePath(string a, string b)
         {
             return string.Equals(Dir(a), Dir(b), StringComparison.OrdinalIgnoreCase) &&
