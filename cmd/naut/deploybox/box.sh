@@ -26,12 +26,6 @@ cron)
 	# its state sits under ROOT, which that user can write.
 	[ -n "${NAUT_ROOT:-}" ] || fail "cron mode needs NAUT_ROOT"
 	STATE=${NAUT_STATE:-$ROOT/state}
-	# While this script stops a controller and moves links, the keepalive
-	# must not start the old release; one older than 10 minutes is a
-	# deploy that never finished, and the keepalive ignores it.
-	mkdir -p "$ROOT"
-	touch "$ROOT/hold"
-	trap 'rm -f "$ROOT/hold"' EXIT
 	;;
 *) fail "unknown supervisor $SUPERVISOR" ;;
 esac
@@ -70,6 +64,20 @@ writeunit() {
 	fi
 }
 
+# hold (cron mode): while this run stops a controller, moves links and
+# starts the next one, the keepalive must not start a release of its own.
+# Each run has its own file, removed when it exits, so a status read in the
+# middle of an update cannot lift the update's hold; the keepalive waits
+# while any is fresh, and ignores one older than 10 minutes (a deploy cut
+# off, by a power loss say). Taken only by the commands that stop or start.
+hold() {
+	[ "$SUPERVISOR" = cron ] || return 0
+	mkdir -p "$ROOT"
+	HOLD=$ROOT/hold.$$
+	touch "$HOLD"
+	trap 'rm -f "$HOLD"' EXIT
+}
+
 # writekeepalive (cron mode): the script the crontab runs, @reboot and
 # every minute. It starts the current release unless it is running: through
 # naut-launch when that sits in ROOT (rt/plcnext-io: it carries the
@@ -85,8 +93,10 @@ ROOT='$ROOT'
 STATE='$STATE'
 EOF
 	cat >>"$ROOT/keepalive.sh.new" <<'EOF'
-if [ "${1:-}" != start ] && [ -e "$ROOT/hold" ] && [ -z "$(find "$ROOT/hold" -mmin +10 2>/dev/null)" ]; then
-	exit 0
+if [ "${1:-}" != start ]; then
+	for h in "$ROOT"/hold.*; do
+		if [ -e "$h" ] && [ -z "$(find "$h" -mmin +10 2>/dev/null)" ]; then exit 0; fi
+	done
 fi
 [ -x "$ROOT/current/controller" ] || exit 0
 # Running is the pid file's process with one of ROOT's releases as its
@@ -152,7 +162,8 @@ sv_stop() {
 		sleep 1
 		n=$((n + 1))
 	done
-	kill -9 "$p" 2>/dev/null || true
+	# Only if it is still there: a pid freed a moment ago may be reused.
+	if kill -0 "$p" 2>/dev/null; then kill -9 "$p" 2>/dev/null || true; fi
 	rm -f "$STATE/nautilus.pid"
 }
 
@@ -273,6 +284,9 @@ unsnapshot() {
 
 cmd=$1
 shift
+case $cmd in
+install | update | rollback | restore | uninstall) hold ;;
+esac
 case $cmd in
 install)
 	id=$1

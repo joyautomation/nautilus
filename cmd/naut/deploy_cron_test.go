@@ -22,10 +22,10 @@ func TestDeployCronInstallRunsAsTheUser(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	calls := sshCalls(t, log)
-	if len(calls) != 3 || calls[0].cmd != "uname -sm" {
-		t.Fatalf("want 3 ssh calls (uname, controller, install), got %d: %+v", len(calls), calls)
+	if len(calls) != 4 || !strings.Contains(calls[0].cmd, ".config/naut-deploy") || calls[1].cmd != "uname -sm" {
+		t.Fatalf("want 4 ssh calls (mode, uname, controller, install), got %d: %+v", len(calls), calls)
 	}
-	calls = calls[1:]
+	calls = calls[2:]
 	for _, c := range calls {
 		if strings.Contains(c.cmd, "sudo") {
 			t.Errorf("cron mode must not use sudo: %q", c.cmd)
@@ -59,6 +59,36 @@ func TestDeployCronModeIsDiscovered(t *testing.T) {
 	t.Setenv("FAKE_MODE", `supervisor=cron\nroot=/opt/x;reboot\n`)
 	if code := runDeploy([]string{"status", "admin@plc"}); code == 0 {
 		t.Error("a root with ; in it must be refused")
+	}
+}
+
+// install with a mode that disagrees with the one the box remembers is
+// refused before anything is uploaded: a systemd install beside a cron one
+// would run two controllers, and a second cron root would orphan the first.
+func TestDeployInstallRefusesAnotherMode(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		ok   bool
+	}{
+		{[]string{"-supervisor", "systemd"}, false},
+		{[]string{"-supervisor", "cron", "-root", "/opt/b"}, false},
+		{[]string{"-supervisor", "cron", "-root", "/opt/a/"}, true}, // the same root
+	} {
+		log := fakeSSH(t, goMachine(), 0)
+		t.Setenv("FAKE_MODE", `supervisor=cron\nroot=/opt/a\n`)
+		code := runDeploy(append([]string{"install", "admin@plc"}, append(c.args, deployProject(t))...))
+		uploads := 0
+		for _, call := range sshCalls(t, log) {
+			if strings.Contains(call.cmd, "/incoming/") {
+				uploads++
+			}
+		}
+		if c.ok && code != 0 {
+			t.Errorf("%q on the remembered mode: exit %d", c.args, code)
+		}
+		if !c.ok && (code != 2 || uploads != 0) {
+			t.Errorf("%q on a box in cron mode under /opt/a: exit %d, %d uploads; want 2 and none", c.args, code, uploads)
+		}
 	}
 }
 
@@ -113,6 +143,7 @@ func TestDeployBoxCronMode(t *testing.T) {
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -126,7 +157,8 @@ func main() {
 		return
 	}
 	wd, _ := os.Getwd()
-	fmt.Println("sleeper up in", wd, "X="+os.Getenv("X"))
+	holds, _ := filepath.Glob("../hold.*") // run in state/, under the root
+	fmt.Println("sleeper up in", wd, "X="+os.Getenv("X"), "holds="+fmt.Sprint(len(holds)))
 	time.Sleep(time.Hour)
 }
 `), 0o644)
@@ -213,12 +245,14 @@ esac
 	if mode, _ := os.ReadFile(filepath.Join(home, ".config", "naut-deploy")); string(mode) != "supervisor=cron\nroot="+root+"\n" {
 		t.Errorf("~/.config/naut-deploy: %q", mode)
 	}
-	if _, err := os.Stat(filepath.Join(root, "hold")); err == nil {
-		t.Error("the hold must go when box.sh ends")
+	if h, _ := filepath.Glob(filepath.Join(root, "hold.*")); len(h) != 0 {
+		t.Errorf("the hold must go when box.sh ends: %q", h)
 	}
 	logText := func() string { b, _ := os.ReadFile(filepath.Join(root, "state", "nautilus.log")); return string(b) }
-	if !strings.Contains(logText(), "sleeper up in "+filepath.Join(root, "state")+" X=from-env") {
-		t.Errorf("the controller runs in state/ with env's variables; log:\n%s", logText())
+	// box.sh starts the release while it still holds, so a keepalive tick
+	// in that moment cannot start a second one.
+	if !strings.Contains(logText(), "sleeper up in "+filepath.Join(root, "state")+" X=from-env holds=1") {
+		t.Errorf("the controller runs in state/ with env's variables, started under box.sh's hold; log:\n%s", logText())
 	}
 
 	// update
@@ -254,14 +288,23 @@ esac
 	before0 := p
 	syscall.Kill(p, syscall.SIGKILL)
 	waitGone(t, p)
-	os.WriteFile(filepath.Join(root, "hold"), nil, 0o644)
+	// Another run's hold (an update mid-way, say): a status read meanwhile
+	// must leave it, and the keepalive must wait for it.
+	other := filepath.Join(root, "hold.99999")
+	os.WriteFile(other, nil, 0o644)
+	if out, code := box("status"); code != 0 {
+		t.Fatalf("status: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal("status must not lift another run's hold")
+	}
 	if out, err := exec.Command(keep).CombinedOutput(); err != nil {
 		t.Fatalf("keepalive: %v\n%s", err, out)
 	}
 	if alive(pid()) {
 		t.Fatal("the keepalive must not start a controller while a deploy holds it")
 	}
-	os.Remove(filepath.Join(root, "hold"))
+	os.Remove(other)
 	if out, err := exec.Command(keep).CombinedOutput(); err != nil {
 		t.Fatalf("keepalive: %v\n%s", err, out)
 	}

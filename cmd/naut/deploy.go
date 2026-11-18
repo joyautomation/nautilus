@@ -161,10 +161,20 @@ func runDeploy(args []string) int {
 		return 1
 	}
 	defer b.close()
-	if supervisor == "cron" {
-		b.cron, b.cronRoot, b.known = true, filepath.Clean(root), true
-	} else if supervisor == "systemd" {
-		b.known = true
+	if supervisor != "" {
+		// An explicit mode must agree with the one the box remembers:
+		// a systemd install beside a cron one would run two controllers.
+		if err := b.discover(); err != nil {
+			fmt.Fprintln(os.Stderr, "naut deploy:", err)
+			return 1
+		}
+		if b.cron && (supervisor != "cron" || b.cronRoot != filepath.Clean(root)) {
+			fmt.Fprintf(os.Stderr, "naut deploy: %s already runs nautilus in cron mode under %s (~/.config/naut-deploy); uninstall that first\n", b.target, b.cronRoot)
+			return 2
+		}
+		if supervisor == "cron" {
+			b.cron, b.cronRoot = true, filepath.Clean(root)
+		}
 	}
 
 	switch cmd {

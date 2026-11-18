@@ -186,9 +186,12 @@ naut deploy update admin@plc         # the box remembers cron mode and the root
 
 Nothing runs under `sudo`. The layout is the same under `-root`
 (`releases/`, `current`, `previous`), with retained values and the log
-in `state/` and optional variables in `env`. Two lines in that user's
-crontab, at boot and every minute, run `keepalive.sh`, which starts
-`current` unless it is already running. Update, rollback, backup and
+in `state/` and optional variables in `env`. `env` is read by `sh`, not
+systemd, so it is shell syntax: quote a value with spaces
+(`NAUTILUS_TOKEN='a b'`). Two lines in that user's crontab run
+`keepalive.sh`: every minute, which is what keeps it running, and at
+boot, which only makes the first start sooner (some crons ignore
+`@reboot`). It starts `current` unless it is already running. Update, rollback, backup and
 restore work as above. An update that does not start, or exits within
 3 s, rolls back and exits 3; as under `Type=simple`, a first scan that
 hangs is not caught. A crash is restarted within a minute rather than
