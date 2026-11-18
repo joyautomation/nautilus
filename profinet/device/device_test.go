@@ -474,3 +474,20 @@ func TestRPCListensOnTheStationAddress(t *testing.T) {
 		t.Fatalf("CControl from %v, want the station address %v", from, station)
 	}
 }
+
+// The start-up limit follows CMInitiatorActivityTimeout within its range
+// (1-1000, i.e. up to 100 s) and is clamped above it: 0xFFFF would let a
+// half-open Connect hold the one AR for almost two hours (re-check on #732).
+func TestStartupTimeoutRange(t *testing.T) {
+	for _, c := range []struct {
+		factor uint16
+		want   time.Duration
+	}{
+		{0, 30 * time.Second}, {1, 100 * time.Millisecond}, {3, 300 * time.Millisecond},
+		{1000, 100 * time.Second}, {1001, 100 * time.Second}, {0xFFFF, 100 * time.Second},
+	} {
+		if got := StartupTimeout(c.factor); got != c.want {
+			t.Errorf("factor %d: %v, want %v", c.factor, got, c.want)
+		}
+	}
+}
