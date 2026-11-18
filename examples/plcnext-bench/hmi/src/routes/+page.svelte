@@ -140,3 +140,5 @@
 		color: var(--ink-2, #c3c2b7);
 	}
 </style>
+
+<div class="ci-ok red proof: deliberately unclosed, not for merge">
