@@ -331,3 +331,220 @@ func TestReplaceSourceKeepsAParkedDeviceParked(t *testing.T) {
 		t.Errorf("the replaced device is %s, want still parked", st)
 	}
 }
+
+// #880 review: the write gate reopening (a takeover) while a replace waits
+// for the source lock must not hang the scan's WriteOutputs. reopenHook
+// widens the window: it starts the replace from inside the gate's look,
+// where the old code held the source lock and re-entered it.
+func TestReplaceSourceDuringATakeoverDoesNotHang(t *testing.T) {
+	d, ss := twoDevices(t, nil)
+	var open atomic.Bool
+	d.SetWriteGate(open.Load)
+	d.WriteOutputs(nio.Values{"B_Cmd": uint16(1)}) // a look that finds it closed
+	open.Store(true)                               // the takeover
+	var once sync.Once
+	replaced := make(chan error, 1)
+	reopenHook = func() {
+		once.Do(func() {
+			go func() { replaced <- d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags()) }()
+			time.Sleep(50 * time.Millisecond) // the replace now waits for the lock, if anything holds it
+		})
+	}
+	t.Cleanup(func() { reopenHook = nil })
+	wrote := make(chan struct{})
+	go func() { d.WriteOutputs(nio.Values{"B_Cmd": uint16(2)}); close(wrote) }()
+	select {
+	case <-wrote:
+	case <-time.After(3 * time.Second):
+		t.Fatal("WriteOutputs hung: the gate reopened while a replace waited for the source lock")
+	}
+	select {
+	case err := <-replaced:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the replace hung")
+	}
+}
+
+// timeline records, per address, when a connection was dialled, when it
+// last wrote, and when it closed.
+type timeline struct {
+	mu                 sync.Mutex
+	dialed, lastW, cls map[string]time.Time
+	frames             map[string][]frameRec
+}
+
+type tlConn struct {
+	net.Conn
+	tl   *timeline
+	addr string
+}
+
+func (c tlConn) Write(b []byte) (int, error) {
+	c.tl.mu.Lock()
+	c.tl.lastW[c.addr] = time.Now()
+	if len(b) >= 12 {
+		c.tl.frames[c.addr] = append(c.tl.frames[c.addr], frameRec{fc: b[7], addr: uint16(b[8])<<8 | uint16(b[9])})
+	}
+	c.tl.mu.Unlock()
+	return c.Conn.Write(b)
+}
+
+func (c tlConn) Close() error {
+	c.tl.mu.Lock()
+	c.tl.cls[c.addr] = time.Now()
+	c.tl.mu.Unlock()
+	return c.Conn.Close()
+}
+
+func (tl *timeline) dial(ctx context.Context, addr string) (net.Conn, error) {
+	var nd net.Dialer
+	nc, err := nd.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	tl.mu.Lock()
+	if _, ok := tl.dialed[addr]; !ok {
+		tl.dialed[addr] = time.Now()
+	}
+	tl.mu.Unlock()
+	return tlConn{Conn: nc, tl: tl, addr: addr}, nil
+}
+
+func newTimeline() *timeline {
+	return &timeline{dialed: map[string]time.Time{}, lastW: map[string]time.Time{}, cls: map[string]time.Time{}, frames: map[string][]frameRec{}}
+}
+
+// Break before make: with the old device slow (a request in flight at the
+// replace), the new device is dialled only after the old connection has
+// sent its last request and closed, and the old device never gets the new
+// register address (B_Cmd moved from 10 to 12) from the winding-down loop.
+func TestReplaceSourceBreaksBeforeMaking(t *testing.T) {
+	tl := newTimeline()
+	a, b, b2 := newSlave(t), newSlave(t), newSlave(t)
+	for _, srv := range []*slave.Server{a, b, b2} {
+		srv.Unit(1).SetHolding(0, 1) // unit 1 answers
+	}
+	b.SetLatency(150 * time.Millisecond)
+	d, err := New(Manifest{
+		Sources: []Source{fastSource("A", a.Addr()), fastSource("B", b.Addr())},
+		Tags: []TagBinding{
+			{Name: "A_V", Source: "A", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_V", Source: "B", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_Cmd", Source: "B", Table: TableHolding, Address: 10, Format: "uint16", Writable: true},
+		},
+	}, WithScanRate(10*time.Millisecond), WithDialer(tl.dial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "B online", func() bool { v, _ := d.ReadInputs(); return v["B__Online"] == true })
+	d.WriteOutputs(nio.Values{"B_Cmd": uint16(3)}) // baseline
+	d.WriteOutputs(nio.Values{"B_Cmd": uint16(4)}) // a command queued on the old device
+	tags := newBTags()
+	tags[1].Address = 12
+	if err := d.ReplaceSource(fastSource("B", b2.Addr()), tags); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the new device dialled", func() bool { tl.mu.Lock(); defer tl.mu.Unlock(); _, ok := tl.dialed[b2.Addr()]; return ok })
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	newDial := tl.dialed[b2.Addr()]
+	if c, ok := tl.cls[b.Addr()]; !ok || newDial.Before(c) {
+		t.Errorf("the new device was dialled (%v) before the old connection closed (%v, closed: %v)", newDial, c, ok)
+	}
+	if w := tl.lastW[b.Addr()]; newDial.Before(w) {
+		t.Errorf("the old device was still being written (%v) after the new one was dialled (%v)", w, newDial)
+	}
+	for _, f := range tl.frames[b.Addr()] {
+		if f.addr == 12 {
+			t.Errorf("the old device got a request at the new address 12: %+v", f)
+		}
+	}
+}
+
+// __Outages counts since the driver started: a replace is not an outage,
+// and the count carries over.
+func TestReplaceSourceCarriesOutages(t *testing.T) {
+	a, b, b2 := newSlave(t), newSlave(t), newSlave(t)
+	for _, srv := range []*slave.Server{a, b, b2} {
+		srv.Unit(1).SetHolding(0, 1) // unit 1 answers
+	}
+	d, err := New(Manifest{
+		Sources: []Source{fastSource("A", a.Addr()), fastSource("B", b.Addr())},
+		Tags: []TagBinding{
+			{Name: "A_V", Source: "A", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_V", Source: "B", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_Cmd", Source: "B", Table: TableHolding, Address: 10, Format: "uint16", Writable: true},
+		},
+	}, WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	waitFor(t, "B online", func() bool { v, _ := d.ReadInputs(); return v["B__Online"] == true })
+	b.Stop()
+	waitFor(t, "one outage of B", func() bool { v, _ := d.ReadInputs(); return v["B__Outages"] == int64(1) })
+	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "B online on the new device", func() bool { v, _ := d.ReadInputs(); return v["B__Online"] == true })
+	if v, _ := d.ReadInputs(); v["B__Outages"] != int64(1) {
+		t.Errorf("B__Outages = %v after the replace, want the 1 it had", v["B__Outages"])
+	}
+}
+
+// A tag's type (DINT, REAL, BOOL) cannot change live: the runtime fixed it.
+func TestReplaceSourceRefusesARetype(t *testing.T) {
+	d, ss := twoDevices(t, nil)
+	b2 := fastSource("B", ss.b2.Addr())
+	for _, c := range []struct {
+		name string
+		b    TagBinding
+	}{
+		{"DINT to REAL by format", TagBinding{Name: "B_V", Source: "B", Table: TableHolding, Address: 5, Format: "float32"}},
+		{"DINT to REAL by scale", TagBinding{Name: "B_V", Source: "B", Table: TableHolding, Address: 5, Format: "uint16", Scale: 0.1}},
+		{"DINT to BOOL", TagBinding{Name: "B_V", Source: "B", Table: TableCoil, Address: 5}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := d.ReplaceSource(b2, []TagBinding{c.b, newBTags()[1]}); err == nil || !strings.Contains(err.Error(), "type cannot change") {
+				t.Errorf("ReplaceSource: %v, want a refused retype", err)
+			}
+		})
+	}
+}
+
+// The manifest a caller handed New is not written through by a replace,
+// and after Stop a replace starts no loop.
+func TestReplaceSourceLeavesTheCallersManifestAndRespectsStop(t *testing.T) {
+	a, b, b2 := newSlave(t), newSlave(t), newSlave(t)
+	m := Manifest{
+		Sources: []Source{fastSource("A", a.Addr()), fastSource("B", b.Addr())},
+		Tags: []TagBinding{
+			{Name: "A_V", Source: "A", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_V", Source: "B", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_Cmd", Source: "B", Table: TableHolding, Address: 10, Format: "uint16", Writable: true},
+		},
+	}
+	c := &addrCounter{}
+	d, err := New(m, WithScanRate(10*time.Millisecond), WithDialer(c.dial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+	d.Stop()
+	if err := d.ReplaceSource(fastSource("B", b2.Addr()), newBTags()); err != nil {
+		t.Fatal(err)
+	}
+	if m.Sources[1].Port != fastSource("B", b.Addr()).Port {
+		t.Error("the replace wrote into the caller's manifest")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := c.count(b2.Addr()); n != 0 {
+		t.Errorf("after Stop a replace started a loop: %d requests to the new device", n)
+	}
+}

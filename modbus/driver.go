@@ -222,6 +222,10 @@ type Driver struct {
 	cancel context.CancelFunc
 	runCtx context.Context // Start's, which every source loop's derives from
 	wg     sync.WaitGroup
+	// lifeMu orders startSource against Stop: no loop is added to wg once
+	// Stop has begun waiting on it.
+	lifeMu  sync.Mutex
+	stopped bool
 }
 
 // outBinding is one writable binding with its source resolved.
@@ -646,23 +650,28 @@ func (d *Driver) InputType(name string) string {
 		}
 	}
 	for _, t := range d.manifest.Tags {
-		if t.Name != name {
-			continue
-		}
-		f, err := t.format()
-		if err != nil {
-			return ""
-		}
-		switch {
-		case f.Kind == "bool" || f.Kind == "bit":
-			return "BOOL"
-		case f.integer() && (t.Scale == 0 || t.Scale == 1) && t.Offset == 0:
-			return "DINT"
-		default:
-			return "REAL"
+		if t.Name == name {
+			return bindingType(t)
 		}
 	}
 	return ""
+}
+
+// bindingType is the IEC type a binding delivers and accepts (see
+// InputType); "" for a format that does not parse.
+func bindingType(t TagBinding) string {
+	f, err := t.format()
+	if err != nil {
+		return ""
+	}
+	switch {
+	case f.Kind == "bool" || f.Kind == "bit":
+		return "BOOL"
+	case f.integer() && (t.Scale == 0 || t.Scale == 1) && t.Offset == 0:
+		return "DINT"
+	default:
+		return "REAL"
+	}
 }
 
 // OutputNames returns the tags the driver accepts writes for: the writable
@@ -727,8 +736,13 @@ func (d *Driver) DisarmBaseline() {
 func (d *Driver) Started() bool { return d.started.Load() }
 
 // startSource launches one source's loop under its own cancel, derived
-// from Start's context so Stop still ends it.
+// from Start's context so Stop still ends it. After Stop it does nothing.
 func (d *Driver) startSource(s *source) {
+	d.lifeMu.Lock()
+	defer d.lifeMu.Unlock()
+	if d.stopped {
+		return
+	}
 	var ctx context.Context
 	ctx, s.cancel = context.WithCancel(d.runCtx)
 	s.done = make(chan struct{})
@@ -742,6 +756,9 @@ func (d *Driver) startSource(s *source) {
 
 // Stop tears every source loop down and waits.
 func (d *Driver) Stop() {
+	d.lifeMu.Lock()
+	d.stopped = true
+	d.lifeMu.Unlock()
 	if d.cancel != nil {
 		d.cancel()
 		d.wg.Wait()
@@ -851,6 +868,11 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 // registers changed in one snapshot go out as one FC16, never split
 // across two flushes by a poll that ran mid-snapshot (#592).
 func (d *Driver) WriteOutputs(vals nio.Values) error {
+	// The gate first, outside srcMu: a look that finds it reopened forgets
+	// every source's written (forgetWritten), which takes srcMu itself, and
+	// a reader must never re-enter srcMu while ReplaceSource waits for it
+	// (#880 review: a takeover during a replace hung the scan).
+	open := d.gateOpen()
 	d.srcMu.RLock()
 	defer d.srcMu.RUnlock()
 	kicked := map[*source]bool{}
@@ -878,7 +900,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
-	if d.gateOpen() {
+	if open {
 		for _, s := range d.sources {
 			s.mu.Lock()
 			for _, name := range s.outputs {
@@ -1933,4 +1955,8 @@ var (
 // Manifest is the manifest the driver was built from: its sources and
 // bindings, for a caller that serves the same register map in process
 // (virtdev's in-process face reads through the driver's own Plan).
-func (d *Driver) Manifest() Manifest { return d.manifest }
+func (d *Driver) Manifest() Manifest {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
+	return d.manifest
+}

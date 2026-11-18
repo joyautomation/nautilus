@@ -19,14 +19,26 @@ import (
 // own before anything changes; a refusal leaves the running source as it
 // was.
 //
-// On a started driver the new source's loop is started, the source set is
-// swapped under the source lock, and only then is the old loop cancelled and
-// waited for: its own bindings stay with it, so it never writes the new
-// addresses to the old device. The new source's tags read NotConnected
-// until its first poll, the other sources' tags are untouched, and the
-// driver asks the runtime for the outputs (OutputsWanted), so the new
-// connection starts from the current commands. A parked source stays
-// parked.
+// BREAK BEFORE MAKE. The source set is swapped under the source lock, then
+// the old loop is cancelled and waited for (its request in flight done or
+// timed out), and only then does the new source's loop start and the
+// driver ask for the outputs (OutputsWanted): the two never talk to a
+// device at once, a single-connection device sees the old connection close
+// before the new one dials, and the old loop, winding down with its own
+// bindings, never writes the new addresses. Nothing waits while holding
+// the source lock. The new source's tags read NotConnected until its first
+// poll; the other sources' tags are untouched; the new connection starts
+// from the current commands. A parked source stays parked, and __Outages
+// carries over (it counts since the driver started; a replace is not an
+// outage).
+//
+// The type each tag delivers and accepts (DINT, REAL, BOOL; see InputType)
+// cannot change either: the runtime fixed it at start.
+//
+// A new address that does not answer is not refused here: the source is
+// replaced and reads NotConnected. Probing it first, and putting the old
+// configuration back when the new one does not come up, is the staged
+// apply's job (#706 PR 3/4).
 func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
 	d.replMu.Lock()
 	defer d.replMu.Unlock()
@@ -75,6 +87,9 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
 	if err := sameSourceTags(src.ID, oldPlan, oldTags, plan, eff); err != nil {
 		return fmt.Errorf("modbus: replace source %q: %w", src.ID, err)
 	}
+	if err := sameTypes(oldTags, eff); err != nil {
+		return fmt.Errorf("modbus: replace source %q: %w", src.ID, err)
+	}
 
 	ns := newSource(src)
 	for _, b := range plan.Blocks {
@@ -87,13 +102,11 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
 	}
 	old.mu.Lock()
 	ns.enabled = old.enabled
+	ns.outages = old.outages // since the driver started; a replace is not one
 	old.mu.Unlock()
 
 	d.srcMu.Lock()
 	started := d.started.Load()
-	if started {
-		d.startSource(ns)
-	}
 	for i, s := range d.sources {
 		if s == old {
 			d.sources[i] = ns
@@ -114,11 +127,14 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
 		}
 	}
 	d.plan.Blocks = append(blocks, plan.Blocks...)
-	for i, s := range d.manifest.Sources {
+	// Copies: the manifest's slices may still be the caller's (New).
+	srcs := slices.Clone(d.manifest.Sources)
+	for i, s := range srcs {
 		if s.ID == src.ID {
-			d.manifest.Sources[i] = src
+			srcs[i] = src
 		}
 	}
+	d.manifest.Sources = srcs
 	keep := make([]TagBinding, 0, len(d.manifest.Tags))
 	for _, t := range d.manifest.Tags {
 		if t.Source != src.ID {
@@ -128,11 +144,12 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding) error {
 	d.manifest.Tags = append(keep, eff...)
 	d.srcMu.Unlock()
 
-	d.wanted.Store(true) // the new connection starts from the current commands
 	if started {
 		old.cancel()
-		<-old.done
+		<-old.done // its request in flight is done or timed out
+		d.startSource(ns)
 	}
+	d.wanted.Store(true) // the new connection starts from the current commands
 	d.log.Info("modbus: source replaced", "source", src.ID, "addr", src.Addr(), "unit", src.UnitID, "bindings", len(eff))
 	return nil
 }
@@ -169,6 +186,22 @@ func sameSourceTags(id string, oldPlan Plan, oldTags []TagBinding, newPlan Plan,
 	}
 	if a, b := writable(oldTags), writable(newTags); !slices.Equal(a, b) {
 		return fmt.Errorf("it would accept writes for %v instead of %v: the tags a device accepts cannot change live (restart instead)", b, a)
+	}
+	return nil
+}
+
+// sameTypes refuses a replacement that changes the IEC type a tag
+// delivers or accepts (DINT, REAL, BOOL): the runtime fixed each tag's
+// type at start.
+func sameTypes(oldTags, newTags []TagBinding) error {
+	was := map[string]string{}
+	for _, t := range oldTags {
+		was[t.Name] = bindingType(t)
+	}
+	for _, t := range newTags {
+		if w, ok := was[t.Name]; ok && w != bindingType(t) {
+			return fmt.Errorf("binding %q would deliver %s instead of %s: a tag's type cannot change live (restart instead)", t.Name, bindingType(t), w)
+		}
 	}
 	return nil
 }
