@@ -1072,6 +1072,10 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 	for _, p := range pushes {
 		select {
 		case vals := <-p.ch:
+			if p.mb == nil && io.Gate != nil && !io.Gate() {
+				res.Notes = append(res.Notes, "driver "+p.name+": the write gate is closed, so the first scan after the apply commanded nothing")
+				continue
+			}
 			for n, v := range vals {
 				if p.mb != nil && io.hold && modbus.HeldAtBaseline(p.mb[n]) {
 					continue // recorded as the new driver's baseline, not sent
