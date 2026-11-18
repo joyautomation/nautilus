@@ -45,6 +45,8 @@ type testController struct {
 	activity uint16 // CMInitiatorActivityTimeout (100 ms units); 0 = 100
 	noOutput bool   // leave the output IOCR out of the Connect
 	cmFrom   net.IP // source of the last CControl
+	badXfer  bool   // send output frames with TransferStatus != 0
+	frozen   bool   // repeat the same CycleCounter
 
 	sawARServer bool
 	ctx         context.Context
@@ -167,8 +169,13 @@ func (c *testController) sendLoop() {
 		for _, s := range c.out.API.IOCSs {
 			csdu[s.FrameOffset] = wire.IOxSGood
 		}
-		cycle += 64
+		if !c.frozen {
+			cycle += 64
+		}
 		frame = wire.AppendCyclic(frame[:0], c.outFrame, csdu, cycle, c.outDS)
+		if c.badXfer {
+			frame[len(frame)-1] = 0x01 // TransferStatus: damaged
+		}
 		c.mu.Unlock()
 		c.port.Send(devMAC, wire.EtherTypePNIO, frame)
 	}
@@ -537,4 +544,20 @@ func (c *testController) arProps() uint32 {
 		return 0x11
 	}
 	return c.props
+}
+
+// fire sends a request and does not wait for an answer (one that is
+// expected to get none).
+func (c *testController) fire(op uint16, args []byte) {
+	body := wire.MarshalPNIORequestBody(args, 4096, false)
+	c.mu.Lock()
+	c.seq++
+	h := &wire.RPCHeader{
+		RPCVersion: wire.RPCVersionCL, PacketType: wire.RPCPTypeRequest, Flags1: wire.RPCFlagLastFrag | wire.RPCFlagIdempotent,
+		ObjectUUID: wire.UUIDPNIOObjectBase, InterfaceUUID: wire.UUIDPNIOInterface, ActivityUUID: randUUID(),
+		InterfaceVersion: 1, SequenceNum: c.seq, OpNum: op, InterfaceHint: 0xFFFF, ActivityHint: 0xFFFF,
+		FragmentLen: uint16(len(body)),
+	}
+	c.mu.Unlock()
+	c.cli.WriteToUDP(append(h.Marshal(), body...), c.devRPC)
 }

@@ -466,6 +466,16 @@ func TestRPCListensOnTheStationAddress(t *testing.T) {
 	if b := got(); b[0] != want[0] || b[1] != want[1] {
 		t.Fatalf("bound %v, want %v", b, want)
 	}
+	// The old address's socket is closed before the new one opens: its
+	// port is free again.
+	eventually(t, ".1 released", func() bool {
+		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: loIP, Port: port})
+		if err != nil {
+			return false
+		}
+		c.Close()
+		return true
+	})
 	// The controller connects to the station address and the AR runs.
 	ctrl.connect(t, layout, false)
 	ctrl.prmEnd(t)
@@ -489,5 +499,72 @@ func TestStartupTimeoutRange(t *testing.T) {
 		if got := StartupTimeout(c.factor); got != c.want {
 			t.Errorf("factor %d: %v, want %v", c.factor, got, c.want)
 		}
+	}
+}
+
+// Output frames whose TransferStatus marks them damaged carry nothing:
+// their data never reaches the image, and they do not keep the AR alive.
+func TestDamagedOutputFramesAreDropped(t *testing.T) {
+	r := newRig(t)
+	c := r.ctrl
+	c.connect(t, layout, false)
+	c.prmEnd(t)
+	c.startOutputs(map[Addr][]byte{{1, 1}: {0xAA, 0xAA}}, wire.DataStatusRunNormal)
+	eventually(t, "outputs", func() bool { return bytes.Equal(r.dev.Snapshot().Outputs[Addr{1, 1}], []byte{0xAA, 0xAA}) })
+
+	c.mu.Lock()
+	c.badXfer = true
+	c.mu.Unlock()
+	c.setOutputs(map[Addr][]byte{{1, 1}: {0xBB, 0xBB}}, wire.DataStatusRunNormal)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		s := r.dev.Snapshot()
+		if bytes.Equal(s.Outputs[Addr{1, 1}], []byte{0xBB, 0xBB}) {
+			t.Fatal("a damaged frame's data reached the image")
+		}
+		if s.Aborts == 1 {
+			break // only damaged frames: the watchdog ended the AR
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("damaged frames kept the AR alive: %+v", s)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// A controller that keeps sending the same CycleCounter is sending
+// nothing new: the watchdog still ends the AR.
+func TestFrozenCycleCounterDoesNotFeedTheWatchdog(t *testing.T) {
+	r := newRig(t)
+	c := r.ctrl
+	c.connect(t, layout, false)
+	c.prmEnd(t)
+	c.startOutputs(map[Addr][]byte{{1, 1}: {0xAA, 0xAA}}, wire.DataStatusRunNormal)
+	eventually(t, "outputs", func() bool { return r.dev.Snapshot().OutputGood[Addr{1, 1}] })
+	c.mu.Lock()
+	c.frozen = true
+	c.mu.Unlock()
+	eventually(t, "watchdog on a frozen counter", func() bool { s := r.dev.Snapshot(); return s.Aborts == 1 && s.State == StateIdle })
+}
+
+// A request that trips a bug is dropped with an event, not the process;
+// the device lock is released, so the next request is served.
+func TestRPCPanicIsContained(t *testing.T) {
+	r := newRig(t)
+	hook := func(op uint16) {
+		if op == wire.RPCOpWrite {
+			panic("injected")
+		}
+	}
+	rpcTestHook.Store(&hook)
+	defer rpcTestHook.Store(nil)
+	r.ctrl.fire(wire.RPCOpWrite, nil)
+	eventually(t, "event", func() bool { return strings.Contains(r.dev.Snapshot().LastEvent, "dropped") })
+	done := make(chan struct{})
+	go func() { defer close(done); r.ctrl.connect(t, layout, false) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no Connect after the panic: the device lock is still held")
 	}
 }
