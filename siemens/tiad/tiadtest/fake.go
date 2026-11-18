@@ -43,7 +43,9 @@ type Fake struct {
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
 	// Gates are what probe reports. Empty means every gate passes. Any
-	// failing gate makes every TIA call fail with kind "gate".
+	// gate that blocks (tiad.Gate.Blocks: failed, or a state it does not
+	// know) makes every TIA call fail with kind "gate"; an unknown one
+	// does not. Set them with SetGates, which derives OK from State.
 	Gates []tiad.Gate
 	// PreDownload scripts TIA's pre-download checks. Nil means none.
 	PreDownload func(tiad.DownloadRequest) []tiad.Question
@@ -110,11 +112,15 @@ func (f *Fake) Serve(t testing.TB) (*httptest.Server, *tiad.Client) {
 }
 
 // SetGates replaces what probe reports while the fake is serving. Nil
-// means every gate passes.
+// means every gate passes. OK is derived from State, as the agent derives
+// it: true only in state ok.
 func (f *Fake) SetGates(gates []tiad.Gate) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Gates = append([]tiad.Gate(nil), gates...)
+	for i := range f.Gates {
+		f.Gates[i].OK = f.Gates[i].State == tiad.GateOK
+	}
 }
 
 // SetCompileResult replaces what compile returns while the fake is
@@ -237,7 +243,7 @@ func (f *Fake) wrap(h handler, needsTIA bool) http.HandlerFunc {
 		defer f.mu.Unlock()
 		if needsTIA {
 			for _, g := range f.Gates {
-				if !g.OK {
+				if g.Blocks() {
 					reply(w, nil, fail(http.StatusPreconditionFailed, tiad.KindGate, "gate %s: %s", g.Name, g.Detail))
 					return
 				}
@@ -423,12 +429,12 @@ func (f *Fake) probe(*http.Request) (any, *failure) {
 	gates := f.Gates
 	if len(gates) == 0 {
 		for _, n := range []string{"tia", "openness-group", "openness-allowlist", "licence", "workdir"} {
-			gates = append(gates, tiad.Gate{Name: n, OK: true})
+			gates = append(gates, tiad.Gate{Name: n, OK: true, State: tiad.GateOK})
 		}
 	}
 	usable := true
 	for _, g := range gates {
-		usable = usable && g.OK
+		usable = usable && !g.Blocks()
 	}
 	return tiad.Probe{Usable: usable, Gates: gates}, nil
 }

@@ -6,8 +6,13 @@
 // Beyond the agent's own calls it answers control calls that the real
 // agent never has:
 //
-//   PUT /fake/gates   {"gates": [{name, ok, detail, remedy}]}
+//   PUT /fake/gates   {"gates": [{name, state, ok, detail, remedy}]}
 //       the machine gates probe reports (the work dir gate stays real).
+//       state is ok, failed or unknown; "bogus" tests a state the agent
+//       does not know. ok is ignored: it is derived from state.
+//   PUT /fake/machine {...}
+//       a scripted machine (ScriptedMachine) instead: probe runs the real
+//       gate evaluator, MachineGates, over it. PUT /fake/gates drops it.
 //   PUT /fake/script  {"compileResult": {...}, "delays": [{call, ms}],
 //                      "failures": [{call, message}]}
 //       what compile returns, and ITia calls that are slow or that fail
@@ -36,29 +41,50 @@ namespace Tiad.Fake
     {
         readonly object mu = new object();
         List<Gate> gates = Defaults();
+        // machine, when scripted, replaces the scripted gates: probe then
+        // runs the real gate evaluator (MachineGates) over it.
+        ScriptedMachine machine;
 
         static List<Gate> Defaults()
         {
             var gs = new List<Gate>();
             foreach (string n in new[] { "tia", "openness-group", "openness-allowlist", "licence" })
             {
-                gs.Add(new Gate { Name = n, Ok = true, Detail = "fake" });
+                gs.Add(new Gate { Name = n, State = Gate.StateOk, Detail = "fake" });
             }
             return gs;
         }
 
         public string TiaVersion
         {
-            get { return "V21"; }
+            get
+            {
+                var m = Machine();
+                return m == null ? "V21" : MachineGates.TiaVersion(m);
+            }
         }
 
         public string OpennessVersion
         {
-            get { return "V21"; }
+            get
+            {
+                var m = Machine();
+                return m == null ? "V21" : MachineGates.OpennessVersion(m);
+            }
+        }
+
+        ScriptedMachine Machine()
+        {
+            lock (mu)
+            {
+                return machine;
+            }
         }
 
         public List<Gate> Gates()
         {
+            var m = Machine();
+            if (m != null) return MachineGates.Evaluate(m, m.NoTia);
             lock (mu)
             {
                 return new List<Gate>(gates);
@@ -71,14 +97,127 @@ namespace Tiad.Fake
             var gs = new List<Gate>();
             foreach (var g in r.Children("gates"))
             {
-                gs.Add(new Gate { Name = g.Str("name"), Ok = g.Bool("ok"), Detail = g.Str("detail"), Remedy = g.Str("remedy") });
+                string state = g.Str("state");
+                // ok is derived from state, as the agent derives it.
+                g.OptBool("ok");
+                if (!Gate.KnownState(state) && state != "bogus")
+                {
+                    throw TiadException.BadRequest("gate state {0}: want ok, failed or unknown (or bogus, to test an unknown state)", Json.Quote(state));
+                }
+                gs.Add(new Gate { Name = g.Str("name"), State = state, Detail = g.Str("detail"), Remedy = g.Str("remedy") });
             }
             r.Done();
             lock (mu)
             {
                 gates = gs.Count == 0 ? Defaults() : gs;
+                machine = null;
             }
             return new Obj();
+        }
+
+        public object SetMachine(Call c)
+        {
+            var m = ScriptedMachine.Read(c.Json());
+            lock (mu)
+            {
+                machine = m;
+            }
+            return new Obj();
+        }
+    }
+
+    // ScriptedMachine is an IMachine from PUT /fake/machine:
+    //   {"noTia": bool,
+    //    "registry": [{key, name, value}], "subkeys": [{key, names}],
+    //    "files": [path], "exePath": path,
+    //    "exeModified": "2026-11-18T12:00:00.1234567Z" (UTC, round trip),
+    //    "exeSha256": base64, "group": "member" | "not-in-token" | "missing"}
+    sealed class ScriptedMachine : IMachine
+    {
+        public bool NoTia;
+        readonly Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, List<string>> subkeys = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        readonly HashSet<string> files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string exePath = "";
+        DateTime exeModified;
+        byte[] exeSha256 = new byte[0];
+        GroupState group;
+
+        public static ScriptedMachine Read(Reader r)
+        {
+            var m = new ScriptedMachine();
+            m.NoTia = r.Bool("noTia");
+            foreach (var v in r.Children("registry"))
+            {
+                m.values[v.Str("key") + "|" + v.Str("name")] = v.Str("value");
+            }
+            foreach (var k in r.Children("subkeys"))
+            {
+                m.subkeys[k.Str("key")] = k.Strs("names");
+            }
+            foreach (string f in r.Strs("files")) m.files.Add(f);
+            m.exePath = r.Str("exePath");
+            string mod = r.Str("exeModified");
+            if (mod != "" && !DateTime.TryParseExact(mod, "o", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out m.exeModified))
+            {
+                throw TiadException.BadRequest("exeModified {0}: want a round-trip UTC time", Json.Quote(mod));
+            }
+            if (m.exeModified.Kind != DateTimeKind.Utc && mod != "") throw TiadException.BadRequest("exeModified: want UTC (Z)");
+            try
+            {
+                m.exeSha256 = Convert.FromBase64String(r.Str("exeSha256"));
+            }
+            catch (FormatException)
+            {
+                throw TiadException.BadRequest("exeSha256: want base64");
+            }
+            switch (r.Str("group"))
+            {
+                case "member": m.group = GroupState.Member; break;
+                case "not-in-token": m.group = GroupState.NotInToken; break;
+                case "missing": m.group = GroupState.NoSuchGroup; break;
+                default: throw TiadException.BadRequest("group: want member, not-in-token or missing");
+            }
+            r.Done();
+            return m;
+        }
+
+        public string RegString(string key, string name)
+        {
+            string v;
+            return values.TryGetValue(key + "|" + name, out v) ? v : null;
+        }
+
+        public List<string> RegSubKeys(string key)
+        {
+            List<string> v;
+            return subkeys.TryGetValue(key, out v) ? new List<string>(v) : null;
+        }
+
+        public bool FileExists(string path)
+        {
+            return files.Contains(path);
+        }
+
+        public string ExePath
+        {
+            get { return exePath; }
+        }
+
+        public DateTime ExeLastWriteUtc
+        {
+            get { return exeModified; }
+        }
+
+        public byte[] ExeSha256
+        {
+            get { return exeSha256; }
+        }
+
+        public GroupState OpennessGroup()
+        {
+            return group;
         }
     }
 
@@ -558,6 +697,7 @@ namespace Tiad.Fake
             var router = new Router();
             agent.Register(router);
             router.Add("PUT", "/fake/gates", host.SetGates);
+            router.Add("PUT", "/fake/machine", host.SetMachine);
             router.Add("PUT", "/fake/script", script.Set);
             router.Add("GET", "/fake/calls", script.Calls);
             router.Add("GET", "/fake/downloads", script.Downloads);

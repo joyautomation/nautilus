@@ -200,7 +200,6 @@ namespace Tiad
                     probe.Stop();
                 }
                 string host = cfg.Host;
-                if (host == "0.0.0.0" || host == "*") host = "+";
                 var l = new HttpListener();
                 l.Prefixes.Add("http://" + host + ":" + port + "/");
                 try
@@ -215,7 +214,7 @@ namespace Tiad
                     continue;
                 }
                 listener = l;
-                Url = "http://" + (host == "+" ? "0.0.0.0" : cfg.Host) + ":" + port;
+                Url = "http://" + host + ":" + port;
                 Console.Out.WriteLine("tiad: listening on " + Url);
                 Console.Out.Flush();
                 return;

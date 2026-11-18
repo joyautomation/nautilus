@@ -21,7 +21,7 @@ mkdir -p "$out"
 # system code page, so any non-ASCII character must be a \u escape.
 # A plain bracket of the bytes 0x80-0xff, in the C locale: no grep -P.
 set +e
-LC_ALL=C grep -n "$(printf '[\200-\377]')" "$here"/core/*.cs "$here"/fake/*.cs
+LC_ALL=C grep -n "$(printf '[\200-\377]')" "$here"/core/*.cs "$here"/fake/*.cs "$here"/host/*.cs
 rc=$?
 set -e
 if [ "$rc" -eq 0 ]; then
@@ -37,5 +37,9 @@ common=(-langversion:5 -sdk:4.8 -warnaserror+ -nologo -debug -r:System.Web.Exten
 
 "$mcs" "${common[@]}" -target:library -out:"$out/tiad-core.dll" "$here"/core/*.cs
 "$mcs" "${common[@]}" -target:exe -out:"$out/tiad-fake.exe" -r:"$out/tiad-core.dll" "$here"/fake/*.cs
+# tiad.exe, the real agent, only to hold its sources to C# 5 and
+# -warnaserror here too: it runs on Windows only (install-tiad.ps1 builds
+# it there with the stock csc).
+"$mcs" "${common[@]}" -target:exe -out:"$out/tiad.exe" -r:"$out/tiad-core.dll" "$here"/host/*.cs
 
-echo "built $out/tiad-fake.exe"
+echo "built $out/tiad-fake.exe (and $out/tiad.exe, Windows only)"
