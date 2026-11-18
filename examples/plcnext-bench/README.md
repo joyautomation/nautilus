@@ -204,8 +204,9 @@ delivers the bench task's own health as tags (`tags/health.yaml`):
 `Bench__Faulting` (its last scan raised a logic error) and `Bench__Late`
 (late scans since start). Two alarms watch the BOOLs, in both builds; in
 `sim.yaml` the same driver stands alone and keeps the memory loopback. A
-demotion is not tried on the controller: it needs real-time load, which
-needs James's OK for that run.
+demotion is not tried on the controller: it needs real-time load, and
+real-time load on a bench controller needs its own safeguards (see #836),
+so it isn't run here.
 
 ## The 3D screen
 
