@@ -376,6 +376,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	} else {
 		apiUp = true
 		apiLn = ln
+		// Name the port actually bound: with server.addr ":0" (or
+		// "127.0.0.1:0") the banner and the warnings below would otherwise
+		// say port 0, and nothing could find the tag API.
+		addr = boundAddr(addr, ln)
 		if sopts.AuthToken == "" && !loopbackListen(addr) {
 			fmt.Fprintf(os.Stderr, openListenWarning, addr)
 		}
@@ -482,6 +486,21 @@ func startAlarms(proj *project.Project, rt *runtime.Runtime) (*project.Alarms, e
 // Ctrl+C, so it isn't a convenient thing to unit test directly) so this
 // decision — the same one `naut build` makes about its own warning — has
 // a testable entry point of its own.
+// boundAddr is the configured address with the port the listener actually
+// got: the host stays as written ("", "0.0.0.0", "localhost"), so the banner
+// reads like the manifest, and only a port 0 changes.
+func boundAddr(configured string, ln net.Listener) string {
+	host, _, err := net.SplitHostPort(configured)
+	if err != nil {
+		return ln.Addr().String()
+	}
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		return configured
+	}
+	return net.JoinHostPort(host, port)
+}
+
 func hmiBannerSuffix(proj *project.Project, addr, built string, stderr io.Writer) string {
 	switch {
 	case built != "":

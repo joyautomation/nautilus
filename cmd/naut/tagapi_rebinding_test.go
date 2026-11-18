@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"net"
 	"net/http"
 	"os"
@@ -17,7 +16,9 @@ import (
 // accepted, and listening beyond loopback says so loudly at startup.
 func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 	bin := buildNautCLI(t, t.TempDir(), nil)
-	start := func(addr string, env ...string) (*lockedBuffer, func()) {
+	// start runs naut on addr (port 0: the banner names the port it bound,
+	// nautrun_addr_test.go) and returns its stderr, a stop, and that port.
+	start := func(addr string, env ...string) (*lockedBuffer, func(), string) {
 		dir := t.TempDir()
 		files := map[string]string{
 			"nautilus.yaml": "name: rebind\ntasks:\n  - program: main.st\n    scan: 20ms\ntags:\n  - { name: SP, role: setpoint, init: 0 }\nserver:\n  addr: \"" + addr + "\"\n",
@@ -37,14 +38,14 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 		}
 		cmd.Env = append(cmd.Env, env...)
 		stderr := &lockedBuffer{}
-		cmd.Stderr = stderr
-		cmd.Stdout = new(bytes.Buffer)
+		stdout := &lockedBuffer{}
+		cmd.Stdout, cmd.Stderr = stdout, stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
 		exited := make(chan struct{})
 		go func() { cmd.Wait(); close(exited) }()
-		_, port, _ := net.SplitHostPort(addr)
+		_, port, _ := net.SplitHostPort(apiAddrFromBanner(t, stdout.String, exited, stderr.String))
 		deadline := time.Now().Add(30 * time.Second)
 		for {
 			if resp, err := http.Get("http://127.0.0.1:" + port + "/api/state"); err == nil {
@@ -61,7 +62,7 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		return stderr, func() { cmd.Process.Kill(); <-exited }
+		return stderr, func() { cmd.Process.Kill(); <-exited }, port
 	}
 	post := func(port, host, origin string) int {
 		req, _ := http.NewRequest("POST", "http://127.0.0.1:"+port+"/api/tags", strings.NewReader(`{"name":"SP","value":42}`))
@@ -76,9 +77,7 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 	}
 
 	// Loopback: quiet, and a rebound page cannot write.
-	addr := freeAddr(t)
-	_, port, _ := net.SplitHostPort(addr)
-	stderr, stop := start(addr)
+	stderr, stop, port := start("127.0.0.1:0")
 	if got := post(port, "evil.example:"+port, "http://evil.example:"+port); got != http.StatusForbidden {
 		t.Errorf("rebound Host write: %d, want 403", got)
 	}
@@ -92,9 +91,7 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 
 	// A name the operator lists in NAUTILUS_ALLOWED_HOSTS writes; another
 	// name still does not.
-	addr3 := freeAddr(t)
-	_, port3, _ := net.SplitHostPort(addr3)
-	_, stop = start(addr3, "NAUTILUS_ALLOWED_HOSTS=epic1.plant.lan")
+	_, stop, port3 := start("127.0.0.1:0", "NAUTILUS_ALLOWED_HOSTS=epic1.plant.lan")
 	if got := post(port3, "epic1.plant.lan:"+port3, "http://epic1.plant.lan:"+port3); got != http.StatusNoContent {
 		t.Errorf("allowed name write: %d, want 204", got)
 	}
@@ -105,8 +102,7 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 
 	// Every interface, no token: it still starts (deployed controllers do
 	// this), and says what that exposes.
-	_, port2, _ := net.SplitHostPort(freeAddr(t))
-	stderr, stop = start("0.0.0.0:" + port2)
+	stderr, stop, port2 := start("0.0.0.0:0")
 	stop()
 	if !strings.Contains(stderr.String(), "WARNING: the tag API listens on 0.0.0.0:"+port2+" with no NAUTILUS_TOKEN") {
 		t.Errorf("an open listen without a token did not warn:\n%s", stderr.String())

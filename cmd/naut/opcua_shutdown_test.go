@@ -40,7 +40,8 @@ func TestNautRunShutdownWithOPCUASessionIsPrompt(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			apiAddr, opcAddr := freeAddr(t), freeAddr(t)
+			// Port 0 for both: the banner names what was bound (nautrun_addr_test.go).
+			apiAddr, opcAddr := "127.0.0.1:0", "127.0.0.1:0"
 			files := map[string]string{
 				"nautilus.yaml": `name: stopper
 tasks:
@@ -67,8 +68,8 @@ opcua:
 					cmd.Env = append(cmd.Env, kv)
 				}
 			}
-			var stderr lockedBuffer
-			cmd.Stderr = &stderr
+			var stdout, stderr lockedBuffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -78,6 +79,8 @@ opcua:
 				cmd.Process.Kill()
 				<-exited
 			})
+			apiAddr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
+			opcAddr = strings.TrimPrefix(opcuaURL(t, stdout.String, exited, stderr.String), "opc.tcp://")
 			deadline := time.Now().Add(30 * time.Second)
 			for {
 				if resp, err := http.Get("http://" + apiAddr + "/api/state"); err == nil {

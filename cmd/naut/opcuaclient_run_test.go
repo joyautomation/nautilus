@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -33,7 +32,7 @@ func TestNautOPCUAClientImportAndRun(t *testing.T) {
 	srv := startForeignOPCUA(t)
 	bin := buildNautCLI(t, t.TempDir(), nil)
 	dir := t.TempDir()
-	apiAddr := freeAddr(t)
+	apiAddr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 
 	naut := func(args ...string) (string, string, int) {
 		t.Helper()
@@ -136,8 +135,8 @@ END_PROGRAM
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	var stderr strings.Builder
-	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	var stdout, stderr lockedBuffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +146,7 @@ END_PROGRAM
 		cmd.Process.Kill()
 		<-exited
 	})
+	apiAddr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 	state := func() map[string]any {
 		resp, err := http.Get("http://" + apiAddr + "/api/state")
 		if err != nil {

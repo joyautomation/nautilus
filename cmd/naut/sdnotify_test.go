@@ -130,7 +130,7 @@ func TestNautRunSystemdNotify(t *testing.T) {
 
 	start := func(t *testing.T, sock *notifySocket) (*exec.Cmd, string, chan struct{}) {
 		dir := t.TempDir()
-		addr := freeAddr(t)
+		addr := "127.0.0.1:0" // the banner names the port (nautrun_addr_test.go)
 		files := map[string]string{
 			"nautilus.yaml": `name: sdnotify
 tasks:
@@ -176,8 +176,8 @@ END_PROGRAM
 		// WatchdogSec=1s: a heartbeat every 500 ms. Shorter than
 		// minWatchdog, so naut warns; it keeps the test short.
 		cmd.Env = append(cmd.Env, "NOTIFY_SOCKET="+sock.path, "WATCHDOG_USEC=1000000")
-		stderr := &lockedBuffer{}
-		cmd.Stderr = stderr
+		stdout, stderr := &lockedBuffer{}, &lockedBuffer{}
+		cmd.Stdout, cmd.Stderr = stdout, stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -190,6 +190,7 @@ END_PROGRAM
 				t.Logf("stderr:\n%s", stderr.String())
 			}
 		})
+		addr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 		return cmd, addr, exited
 	}
 
