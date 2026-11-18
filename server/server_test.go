@@ -166,7 +166,7 @@ func TestStreamDeliversFrames(t *testing.T) {
 func TestWriteAuthBaseLayer(t *testing.T) {
 	srv := New(newTestRuntime(t)) // no token → same-origin-only writes
 	post := func(setup func(*http.Request)) int {
-		req := httptest.NewRequest("POST", "http://plc.local/api/tags",
+		req := httptest.NewRequest("POST", "http://192.168.1.10/api/tags",
 			bytes.NewBufferString(`{"name":"SP","value":70}`))
 		if setup != nil {
 			setup(req)
@@ -180,13 +180,68 @@ func TestWriteAuthBaseLayer(t *testing.T) {
 	if code := post(nil); code != 204 {
 		t.Errorf("no-Origin write = %d, want 204", code)
 	}
-	// Same-origin browser page: allowed.
-	if code := post(func(r *http.Request) { r.Header.Set("Origin", "http://plc.local") }); code != 204 {
+	// Same-origin browser page (by the controller's address): allowed.
+	if code := post(func(r *http.Request) { r.Header.Set("Origin", "http://192.168.1.10") }); code != 204 {
 		t.Errorf("same-origin write = %d, want 204", code)
 	}
 	// Cross-origin drive-by: refused.
 	if code := post(func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }); code != 403 {
 		t.Errorf("cross-origin write = %d, want 403", code)
+	}
+}
+
+// #811: without a token, a browser write is trusted only when addressed to
+// a Host no page can rebind. A page on an attacker's domain, rebound to this
+// machine, sends Host and Origin both as that domain: they match, so the
+// same-origin rule alone let it write.
+func TestWriteAuthRefusesARebindableHost(t *testing.T) {
+	post := func(srv *Server, host, origin, token string) int {
+		req := httptest.NewRequest("POST", "http://"+host+"/api/tags",
+			bytes.NewBufferString(`{"name":"SP","value":70}`))
+		req.Host = host
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if token != "" {
+			req.Header.Set("X-Nautilus-Token", token)
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	open := New(newTestRuntime(t), Options{AllowedHosts: []string{"EPIC1.plant.lan"}})
+	for _, tc := range []struct {
+		what, host, origin string
+		want               int
+	}{
+		{"rebound name, matching Origin", "evil.example:8080", "http://evil.example:8080", 403},
+		{"unconfigured LAN name", "plc.local:8080", "http://plc.local:8080", 403},
+		{"mismatched Origin", "localhost:8080", "http://evil.example:8080", 403},
+		{"loopback name", "localhost:8080", "http://localhost:8080", 204},
+		{"a *.localhost name", "app.localhost:8080", "http://app.localhost:8080", 204},
+		{"loopback address", "127.0.0.1:8080", "http://127.0.0.1:8080", 204},
+		{"IPv6 loopback", "[::1]:8080", "http://[::1]:8080", 204},
+		{"a LAN address", "192.168.82.10:8080", "http://192.168.82.10:8080", 204},
+		{"a configured name (case-insensitive)", "epic1.PLANT.lan:8080", "http://epic1.PLANT.lan:8080", 204},
+		{"no Origin (not a browser)", "evil.example:8080", "", 204},
+	} {
+		if got := post(open, tc.host, tc.origin, ""); got != tc.want {
+			t.Errorf("%s (Host %s, Origin %q): %d, want %d", tc.what, tc.host, tc.origin, got, tc.want)
+		}
+	}
+	// A valid token authorizes the write whatever the Host.
+	locked := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	if got := post(locked, "evil.example:8080", "http://evil.example:8080", "s3cret"); got != 204 {
+		t.Errorf("rebound name with the token: %d, want 204", got)
+	}
+	// Every state-changing route shares the rule: a force from a rebound
+	// page is refused too.
+	req := httptest.NewRequest("POST", "http://evil.example:8080/api/forces", bytes.NewBufferString(`{"name":"SP","value":1}`))
+	req.Header.Set("Origin", "http://evil.example:8080")
+	rec := httptest.NewRecorder()
+	open.Handler().ServeHTTP(rec, req)
+	if rec.Code != 403 {
+		t.Errorf("rebound force: %d, want 403", rec.Code)
 	}
 }
 

@@ -102,6 +102,24 @@ cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILU
 
 That is a `403`.
 
+A same-origin browser write must also be addressed to a host no other site
+can take over. A page on an attacker's domain can point that name at your
+controller (DNS rebinding); its `Host` and `Origin` are then both the
+attacker's name, and they match. So without a token a browser write is
+trusted only when the page was opened by `localhost` (or a `*.localhost`
+name), by an IP address (`127.0.0.1`, `192.168.1.20`), or by a name you
+list in `NAUTILUS_ALLOWED_HOSTS` (comma-separated, no port):
+
+```sh
+NAUTILUS_ALLOWED_HOSTS=epic1.plant.lan naut run .
+```
+
+Any other name is a `403` that says which of the two settings to use. A
+client that sends no `Origin` (`curl`, a script, the VS Code extension) is
+unaffected. When `naut run` listens beyond this machine (`server.addr:
+":8080"` or `0.0.0.0`) with no token, it starts and prints a warning:
+anything that reaches the port can write.
+
 **With a token.** Start the controller with `NAUTILUS_TOKEN` set. The
 token is never written in `nautilus.yaml`. Every write must then carry it
 in one of two headers:
@@ -467,6 +485,7 @@ That check comes first, so a forced input answers "forced", not "input".
 | `400` | The wrong kind of value for a **member**, or for an enumerated tag | `tag P101.Enable: want BOOL, got a number` |
 | `401` | A token is set and the request has none, or the wrong one | `missing or invalid auth token` |
 | `403` | No token is set and a browser page on another origin wrote | `cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILUS_TOKEN)` |
+| `403` | No token is set and a browser page wrote by a host name that is not localhost, an IP address or in `NAUTILUS_ALLOWED_HOSTS` | `a browser write addressed to "plc.lan:8080" is refused without an auth token: …` |
 | `409` | The address, a member of it, or the tag that contains it is forced | `tag Level is forced — change the force value or remove the force first` |
 | `422` | The wrong kind of value for a **whole** tag: a boolean to a `REAL`, a fraction to an `INT`, a string to anything but a `STRING`, an enumeration or a `TIME`, a malformed `TIME` literal, `null` | `tag StartLevel: want REAL, got a boolean` |
 

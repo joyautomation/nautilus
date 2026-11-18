@@ -212,10 +212,11 @@ holds its licence session. EtherNet/IP reads many tags per request, every
 250 ms, and keeps working when the licence doesn't. `logixd` stays the path
 for project work: build, download, online edits.
 
-This needs no Studio 5000, licence or Windows machine. Writes are open to
-anything that can reach the port, just as with `naut run`. Before listening
-anywhere but loopback, set `NAUTILUS_TOKEN`: a write here changes a running
-PLC.
+This needs no Studio 5000, licence or Windows machine. It listens on
+`localhost:8080`; writes are open to anything on this machine, just as with
+`naut run`. A write here changes a running PLC, so a `--listen` beyond
+loopback (`:8080`, a LAN address) is refused unless `NAUTILUS_TOKEN` is
+set.
 
 ## Half two: driving a project — the `logixd` agent
 
