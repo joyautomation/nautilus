@@ -6,49 +6,48 @@ import (
 	"sync/atomic"
 )
 
-// link is a TCP relay between a driver and its fake that the suite can
-// cut (close every connection and refuse new ones), freeze (keep the
-// connections open but forward nothing, a hung device) or leave up. It is
-// what lets one contract break the link the same way for every TCP driver.
-type link struct {
+// tcpLink is the link for a TCP driver: a relay between it and its fake
+// that can cut every connection (and refuse new ones), freeze them (keep
+// them open but forward nothing: a hung device), or heal and thaw again.
+type tcpLink struct {
 	ln     net.Listener
 	target string
 
-	mu      sync.Mutex
-	down    bool
-	frozen  bool
-	conns   map[net.Conn]bool
-	thaw    chan struct{}
-	refusal atomic.Int64
+	mu       sync.Mutex
+	down     bool
+	frozen   bool
+	conns    map[net.Conn]bool
+	thawed   chan struct{}
+	refusals atomic.Int64
+	holds    atomic.Int64
 }
 
-func newLink(t tb, target string, cut bool) *link {
+var _ link = (*tcpLink)(nil)
+
+// newTCPLink relays to target; cut starts it down. Its own teardown thaws
+// and cuts it, so nothing stays parked in a relay.
+func newTCPLink(t tb, target string, cut bool) *tcpLink {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("link: %v", err)
 	}
-	l := &link{ln: ln, target: target, down: cut, conns: map[net.Conn]bool{}, thaw: make(chan struct{})}
+	l := &tcpLink{ln: ln, target: target, down: cut, conns: map[net.Conn]bool{}}
 	go l.accept()
 	t.Cleanup(func() {
 		ln.Close()
+		l.thaw()
 		l.cut()
-		l.mu.Lock()
-		if l.frozen {
-			l.frozen = false
-			close(l.thaw)
-		}
-		l.mu.Unlock()
 	})
 	return l
 }
 
 // port is where the driver dials, on 127.0.0.1.
-func (l *link) port() int { return l.ln.Addr().(*net.TCPAddr).Port }
+func (l *tcpLink) port() int { return l.ln.Addr().(*net.TCPAddr).Port }
 
-// refused counts the dials refused while the link was cut.
-func (l *link) refused() int64 { return l.refusal.Load() }
+func (l *tcpLink) refused() int64 { return l.refusals.Load() }
+func (l *tcpLink) held() int64    { return l.holds.Load() }
 
-func (l *link) accept() {
+func (l *tcpLink) accept() {
 	for {
 		c, err := l.ln.Accept()
 		if err != nil {
@@ -58,7 +57,7 @@ func (l *link) accept() {
 		down := l.down
 		l.mu.Unlock()
 		if down {
-			l.refusal.Add(1)
+			l.refusals.Add(1)
 			c.Close()
 			continue
 		}
@@ -66,7 +65,7 @@ func (l *link) accept() {
 	}
 }
 
-func (l *link) relay(c net.Conn) {
+func (l *tcpLink) relay(c net.Conn) {
 	u, err := net.Dial("tcp", l.target)
 	if err != nil {
 		c.Close()
@@ -85,8 +84,9 @@ func (l *link) relay(c net.Conn) {
 	l.pipe(c, u)
 }
 
-// pipe copies src to dst until either closes, holding while frozen.
-func (l *link) pipe(dst, src net.Conn) {
+// pipe copies src to dst until either closes, holding what it read while
+// the link is frozen.
+func (l *tcpLink) pipe(dst, src net.Conn) {
 	defer dst.Close()
 	defer src.Close()
 	buf := make([]byte, 32<<10)
@@ -94,11 +94,11 @@ func (l *link) pipe(dst, src net.Conn) {
 		n, err := src.Read(buf)
 		if n > 0 {
 			l.mu.Lock()
-			thaw := l.thaw
-			frozen := l.frozen
+			frozen, thawed := l.frozen, l.thawed
 			l.mu.Unlock()
 			if frozen {
-				<-thaw
+				l.holds.Add(1)
+				<-thawed
 			}
 			if _, werr := dst.Write(buf[:n]); werr != nil {
 				return
@@ -110,8 +110,7 @@ func (l *link) pipe(dst, src net.Conn) {
 	}
 }
 
-// cut closes every relayed connection and refuses new ones.
-func (l *link) cut() {
+func (l *tcpLink) cut() {
 	l.mu.Lock()
 	l.down = true
 	for c := range l.conns {
@@ -121,12 +120,26 @@ func (l *link) cut() {
 	l.mu.Unlock()
 }
 
-// freeze stops forwarding without closing anything: the device has hung.
-func (l *link) freeze() {
+func (l *tcpLink) heal() {
+	l.mu.Lock()
+	l.down = false
+	l.mu.Unlock()
+}
+
+func (l *tcpLink) freeze() {
 	l.mu.Lock()
 	if !l.frozen {
 		l.frozen = true
-		l.thaw = make(chan struct{})
+		l.thawed = make(chan struct{})
+	}
+	l.mu.Unlock()
+}
+
+func (l *tcpLink) thaw() {
+	l.mu.Lock()
+	if l.frozen {
+		l.frozen = false
+		close(l.thawed)
 	}
 	l.mu.Unlock()
 }

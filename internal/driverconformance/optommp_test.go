@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/joyautomation/nautilus/optommp"
@@ -17,7 +18,7 @@ import (
 func init() {
 	register(subject{
 		name: "optommp",
-		start: func(t tb, cut bool, gate func() bool) *rig {
+		start: func(t tb, o startOpts) *rig {
 			dev := optommptest.NewBench()
 			probe := func() optommp.Chassis {
 				a, b := net.Pipe()
@@ -49,18 +50,18 @@ func init() {
 				return nil
 			}
 
-			l := newLink(t, "127.0.0.1:"+itoa(dev.Listen(t)), cut)
+			l := newTCPLink(t, "127.0.0.1:"+strconv.Itoa(dev.Listen(t)), o.cut)
 			m.Host, m.Port = "127.0.0.1", l.port()
 			d, err := optommp.New(m, optommp.WithScanRate(5*time.Millisecond), optommp.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
 			if err != nil {
 				t.Fatalf("optommp.New: %v", err)
 			}
-			if gate != nil {
-				d.SetWriteGate(gate)
+			if o.install != nil {
+				o.install(d)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			d.Start(ctx)
-			t.Cleanup(func() { cancel(); d.Stop() })
+			stopOnCleanup(t, cancel, d.Stop)
 			slot, chn := out.Slot, out.Channel
 			return &rig{
 				drv: d, in: in.Name, out: out.Name,
@@ -77,12 +78,12 @@ func init() {
 				link:  l,
 			}
 		},
+		// optommp reads any installed gate as "one replica of a redundant
+		// set", so it is not io.PlainGated and naut run's plain gate does
+		// not reach it (#861 G1b).
+		expect: map[string]string{"C5": "#865"},
 		unsupported: map[string]string{
 			"C3": "optommptest has no exported way to make one channel read bad (a NaN analog, the channel's quality bit, a slot fault); needs a fake hook from optommp's owner",
 		},
 	})
-}
-
-func itoa(n int) string {
-	return (&net.TCPAddr{Port: n}).String()[1:]
 }

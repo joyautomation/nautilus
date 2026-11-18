@@ -16,7 +16,7 @@ import (
 func init() {
 	register(subject{
 		name: "modbus",
-		start: func(t tb, cut bool, gate func() bool) *rig {
+		start: func(t tb, o startOpts) *rig {
 			srv := slave.NewServer("", slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err := srv.Start(); err != nil {
 				t.Fatalf("slave: %v", err)
@@ -25,7 +25,7 @@ func init() {
 			u := srv.Unit(1)
 			u.SetInput(0, 42)
 
-			l := newLink(t, srv.Addr(), cut)
+			l := newTCPLink(t, srv.Addr(), o.cut)
 			m := modbus.Manifest{
 				Sources: []modbus.Source{{
 					ID: "DEV", Host: "127.0.0.1", Port: l.port(), UnitID: 1,
@@ -42,12 +42,12 @@ func init() {
 			if err != nil {
 				t.Fatalf("modbus.New: %v", err)
 			}
-			if gate != nil {
-				d.SetWriteGate(gate)
+			if o.install != nil {
+				o.install(d)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			d.Start(ctx)
-			t.Cleanup(func() { cancel(); d.Stop() })
+			stopOnCleanup(t, cancel, d.Stop)
 			return &rig{
 				drv: d, in: "In", out: "Out",
 				outVals:  [2]any{float64(11), float64(22)},
