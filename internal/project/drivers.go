@@ -53,6 +53,10 @@ func (p *Project) DriverStatus(node *sparkplug.Node, opc *opcuaserver.Server) fu
 // /api/drivers (already a list) needs no new shape. The memory loopback
 // reports nothing, exactly as before.
 func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
+	if u, ok := d.(interface{ Unwrap() nio.Driver }); ok {
+		// a driver carrying devices (devbind) reports as the driver it is
+		return driverStatusFuncs(u.Unwrap())
+	}
 	switch drv := d.(type) {
 	case *eip.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return eipStatus(drv.Health()) }}

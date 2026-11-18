@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"regexp"
 	"strconv"
 	"strings"
@@ -39,6 +40,10 @@ type Profile struct {
 	// Version is the profile's own revision, bumped when its points or
 	// simulator change meaning.
 	Version int `yaml:"version"`
+	// UDT names the struct type a project's device of this profile is
+	// (docs/design/device-library.md §3.2). Profiles whose points are the
+	// same may share one. Default: TypeName's spelling of the id.
+	UDT string `yaml:"udt"`
 	// Docs are the public documents the profile was built from. A point
 	// cites one by ID.
 	Docs []Doc `yaml:"docs"`
@@ -68,6 +73,19 @@ type Profile struct {
 	src string
 	// file is a project profile's path; "" for a built-in one.
 	file string
+	// fsys is the file system a vendored profile was read from (ReadFS);
+	// dir and file are then paths in it.
+	fsys fs.FS
+}
+
+// TypeName is the struct type a device of this profile is: the profile's
+// udt:, or its id upper-cased with '-' and '.' as '_'
+// ("abb-acs355-fmbt21" is ABB_ACS355_FMBT21).
+func (p *Profile) TypeName() string {
+	if p.UDT != "" {
+		return p.UDT
+	}
+	return strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(p.ID))
 }
 
 // Doc is one public document a profile cites.
@@ -203,6 +221,18 @@ func ParseProfile(data []byte, src string) (*Profile, error) {
 // device names.
 func IsIdent(s string) bool { return identRE.MatchString(s) }
 
+// idRE is a profile id: what profiles/<id>.yaml is named after.
+var idRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// IsFileName reports whether s is a plain file name: no directory, no
+// "..", not absolute. A profile's simulator sits beside it.
+func IsFileName(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\:`) && !strings.Contains(s, "..")
+}
+
+// IsID reports whether s may be a profile id.
+func IsID(s string) bool { return idRE.MatchString(s) && !strings.Contains(s, "..") }
+
 var identRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // expand replaces every repeated row with its copies.
@@ -299,6 +329,12 @@ func (p *Profile) validate() error {
 	if p.ID == "" {
 		return fmt.Errorf("profile: an id is required")
 	}
+	if !IsID(p.ID) {
+		return fmt.Errorf("profile: id %q must be letters, digits, '-', '_' and '.' (it names profiles/<id>.yaml)", p.ID)
+	}
+	if !IsIdent(p.TypeName()) {
+		return fmt.Errorf("udt: %q is not an IEC identifier", p.TypeName())
+	}
 	switch p.Protocol {
 	case ProtoModbus:
 		if p.Modbus == nil {
@@ -349,6 +385,9 @@ func (p *Profile) validate() error {
 	}
 	if s := p.Simulator; s != nil && (s.Block == "" || s.Source == "") {
 		return fmt.Errorf("simulator: block and source are both required")
+	}
+	if s := p.Simulator; s != nil && !IsFileName(s.Source) {
+		return fmt.Errorf("simulator: source %q must be a file name beside the profile, with no directory", s.Source)
 	}
 	return nil
 }

@@ -64,6 +64,13 @@
       "minItems": 1,
       "description": "Several field drivers on one scan \u2014 e.g. an EtherNet/IP poll plus a Sparkplug feed. Each entry is the same shape as driver:, plus an optional name to tell status rows apart. A tag may be owned by exactly one driver; a duplicate is a load-time error naming both. One entry behaves exactly like driver:. Do not set driver: as well."
     },
+    "devices": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/device"
+      },
+      "description": "Field devices declared by profile (the device library). Each row derives, at load, one struct tag typed by its profile (its members read back the device), a command tag <name>_<point> per writable point, and its driver bindings. The profile must be vendored in profiles/ (naut devices add <profile>). Modbus devices join the project's Modbus driver; one is added if there is none."
+    },
     "channels": {
       "type": "array",
       "items": {
@@ -300,6 +307,54 @@
     }
   },
   "definitions": {
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "profile",
+        "endpoint"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "The device's tag name: a struct tag of the profile's type. Command tags are <name>_<point>; the driver's companions are <name>__Online and <name>__Outages."
+        },
+        "profile": {
+          "type": "string",
+          "description": "A profile id vendored in profiles/<id>.yaml (naut devices add <id>; naut devices profiles lists the built-in ones)."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Where the device answers: a Modbus host[:port]. The port defaults to the profile's, then 502."
+        },
+        "unit-id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "The Modbus unit id; defaults to the profile's."
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Globs over point names: the points this device polls and has as members of its struct (default: all). Devices of one type select the same points."
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Values for the profile's params:."
+        },
+        "desc": {
+          "type": "string",
+          "description": "One line for the device's tags."
+        }
+      }
+    },
     "duration": {
       "type": "string",
       "pattern": "^([-+]?0|[-+]?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))+)$",

@@ -373,18 +373,28 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		// check` and `build` pass with no device in sight, the same split
 		// eip and sparkplug-host make. The config keys are eip's, reused
 		// wholesale: manifest, scan-rate, scan-classes, tag-classes.
-		if d.Manifest == "" {
+		if d.Manifest == "" && d.devices == nil {
 			return nil, fmt.Errorf("driver modbus: manifest (the imported modbus_manifest.yaml) is required")
 		}
-		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
-		if err != nil {
-			return nil, fmt.Errorf("driver modbus: %w", err)
+		var mm modbus.Manifest
+		if d.Manifest != "" {
+			raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+			if err != nil {
+				return nil, fmt.Errorf("driver modbus: %w", err)
+			}
+			// ParseManifest decodes with KnownFields semantics, so a typo is an
+			// error rather than a silently dropped binding.
+			if mm, err = modbus.ParseManifest(raw); err != nil {
+				return nil, fmt.Errorf("driver modbus: %s: %w", d.Manifest, err)
+			}
 		}
-		// ParseManifest decodes with KnownFields semantics, so a typo is an
-		// error rather than a silently dropped binding.
-		mm, err := modbus.ParseManifest(raw)
-		if err != nil {
-			return nil, fmt.Errorf("driver modbus: %s: %w", d.Manifest, err)
+		if d.devices != nil {
+			// The project's devices: (device-library.md §3.1), merged into
+			// the same driver so they share its scan and its status row.
+			var err error
+			if mm, err = d.devices.MergeModbus(mm); err != nil {
+				return nil, fmt.Errorf("driver modbus: %w", err)
+			}
 		}
 		opts := []modbus.Option{modbus.WithLogger(slog.Default().With("driver", "modbus"))}
 		if d.ScanRate != 0 {
@@ -396,7 +406,11 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		for class, patterns := range d.TagClasses {
 			opts = append(opts, modbus.WithTagClass(class, patterns...))
 		}
-		return modbus.New(mm, opts...)
+		md, err := modbus.New(mm, opts...)
+		if err != nil || d.devices == nil {
+			return md, err
+		}
+		return d.devices.WrapModbus(md), nil
 	case "snmp", "redfish", "prometheus":
 		// The IT-hardware drivers (brief docs/design/it-drivers.md): a
 		// switch, a PDU or a UPS over SNMP, a server BMC over Redfish, a

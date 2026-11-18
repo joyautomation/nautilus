@@ -85,6 +85,44 @@ func ResolveProfile(dir, ref string) (*Profile, error) {
 	return p, nil
 }
 
+// BuiltinFile reads one file of the built-in library by its name in
+// profiles/ ("asi-275m.yaml", "abb-drives.st"): what `naut devices add`
+// copies into a project.
+func BuiltinFile(name string) ([]byte, error) {
+	return fs.ReadFile(builtin, path.Join("profiles", name))
+}
+
+// ProjectDir is the folder a project's vendored profiles live in,
+// profiles/<id>.yaml with their simulators beside them.
+const ProjectDir = "profiles"
+
+// ReadFS reads a vendored profile, file being a path in fsys.
+func ReadFS(fsys fs.FS, file string) (*Profile, error) {
+	raw, err := fs.ReadFile(fsys, file)
+	if err != nil {
+		return nil, err
+	}
+	p, err := ParseProfile(raw, file)
+	if err != nil {
+		return nil, err
+	}
+	p.fsys, p.dir, p.file = fsys, path.Dir(file), file
+	return p, nil
+}
+
+// ReadProject reads the profile a project vendored as id: profiles/<id>.yaml
+// in fsys, which must declare that id.
+func ReadProject(fsys fs.FS, id string) (*Profile, error) {
+	p, err := ReadFS(fsys, path.Join(ProjectDir, id+".yaml"))
+	if err != nil {
+		return nil, err
+	}
+	if p.ID != id {
+		return nil, fmt.Errorf("%s declares profile %q", p.file, p.ID)
+	}
+	return p, nil
+}
+
 // Dir is the directory a project's own profile was read from; "" for a
 // built-in one.
 func (p *Profile) Dir() string { return p.dir }
@@ -96,6 +134,10 @@ func (p *Profile) File() string { return p.file }
 // SimulatorSource reads a profile's simulator ST.
 func (p *Profile) SimulatorSource() (string, error) {
 	s := p.Simulator
+	if p.fsys != nil {
+		raw, err := fs.ReadFile(p.fsys, path.Join(p.dir, s.Source))
+		return string(raw), err
+	}
 	if p.dir == "" {
 		raw, err := fs.ReadFile(builtin, path.Join("profiles", s.Source))
 		return string(raw), err

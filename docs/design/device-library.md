@@ -3,8 +3,7 @@
 **Context:** Device library (`devprofile`), see the context map. Issue
 #717, part of the parity epic #725. Builds on the profile format from
 virtual devices (#712, `docs/design/virtual-devices.md` §3). Status:
-**in progress.** PR 1 moves the format into its own package; the rest is
-§8.
+**in progress**, §8.
 
 ## 0. Why
 
@@ -141,8 +140,10 @@ members is an error. A `udt:` may not be a standard type or block name
   point.
 - The drivers' `__Online` and `__Outages` companions stay as they are.
 
-An **adapter** between the drivers and the runtime makes this work
-without driver changes:
+The types are composed by `internal/stproject` beside the dialect's
+block library (`nautilus.yaml#devices`), so every tool that compiles the
+project knows them. An **adapter** between the drivers and the runtime
+makes the tags work without driver changes:
 
 - **Inputs:** the drivers bind each point under an internal flat name.
   The adapter assembles the struct value from those names and delivers it
@@ -284,13 +285,18 @@ or the process model.
 
 1. This brief. The profile format and built-in library move from `virtdev`
    to `devprofile` (a leaf package, context map row and rule). No
-   behaviour change.
-2. `devices:` for Modbus devices, plus the work every device type needs:
-   - the struct type, command tags and the adapter;
+   behaviour change. (#805)
+2. `devices:` for Modbus devices:
+   - `devbind`: the struct type, the tags, the driver manifest, and the
+     adapter that delivers a device as one struct;
+   - `internal/stproject` composes the device types, so `naut check`,
+     `run`, `build`, `test` and the LSP all know them;
    - `naut devices add` and `render`;
-   - `naut check` and the LSP;
-   - the manifest JSON schema, and virtual devices read from the rows.
-3. OPC UA devices.
-4. Derived points, alarms, faceplates (and struct members in mimic
+   - the manifest JSON schema;
+   - `naut build` ships `profiles/*.yaml` but not the simulators.
+3. Virtual devices from the `devices:` rows: the plant, the wire face and
+   the in-process face, with the struct adapter in `naut test`.
+4. OPC UA devices.
+5. Derived points, alarms, faceplates (and struct members in mimic
    `bind`).
-5. `update` and `lint`, the AGENTS.md section, and an example.
+6. `update` and `lint`, the AGENTS.md section, and an example.

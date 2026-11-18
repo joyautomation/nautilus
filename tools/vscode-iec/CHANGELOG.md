@@ -5,6 +5,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **`nautilus.yaml`: `devices:`.** The schema knows a project's devices
+  declared by profile (naut newer than 0.21.0): `name`, `profile`,
+  `endpoint`, `unit-id`, `points`, `params`, `desc`, with hovers that
+  say what each row derives (a struct tag of the profile's type and a
+  command tag per writable point).
+
 ### Fixed
 
 - **The token goes with every request to the controller, and only

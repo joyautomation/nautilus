@@ -18,9 +18,15 @@ import (
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
-const devicesUsage = `naut devices — virtual field devices for a project
+const devicesUsage = `naut devices — a project's field devices, by profile, and their virtual twins
 
 Usage:
+  naut devices add [--from dir] <profile> [project-dir]
+                                 copy a profile (and its simulator) into the
+                                 project's profiles/ folder: the project's pinned
+                                 copy, which devices: rows refer to
+  naut devices render [dir]      print what nautilus.yaml's devices: derive at load:
+                                 the struct types, the tags, the driver bindings
   naut devices up [dir]          start every device in virtual-devices.yaml on its wire
                                  face and run the simulators and process model
                                  until ctrl-c
@@ -29,6 +35,15 @@ Usage:
   naut devices profiles          list the built-in device profiles
   naut devices show <profile>    print a profile's points (a built-in id, or a
                                  path to a project's own .yaml)
+
+A project declares its devices in nautilus.yaml:
+
+  devices:
+    - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.11 }
+
+CONV is then one struct tag of the profile's type (CONV.StatusWord reads the
+drive back) plus a command tag per writable point (CONV_ControlWord). See
+docs/design/device-library.md.
 
 A virtual device speaks the real device's protocol and register map, built
 from public documentation. A project lists its devices in virtual-devices.yaml:
@@ -51,6 +66,10 @@ func runDevices(args []string) int {
 		return 2
 	}
 	switch args[0] {
+	case "add":
+		return runDevicesAdd(args[1:], os.Stdout)
+	case "render":
+		return runDevicesRender(args[1:], os.Stdout)
 	case "up":
 		return runDevicesUp(args[1:])
 	case "check":

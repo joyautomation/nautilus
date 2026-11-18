@@ -709,6 +709,14 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		if d.Role == runtime.RoleInput {
 			continue
 		}
+		// A device's command tag that no program writes is not shipped
+		// either: the driver records its first push as the baseline and
+		// sends only changes, so an unwritten command never reaches the
+		// device. A profile offers every writable point; a project uses
+		// some (device-library.md §3.2).
+		if proj.Devices().IsCommand(d.Name) {
+			continue
+		}
 		warns++
 		fmt.Printf("%s: warning: %s declares %s %q, which no program binds — "+
 			"dead, or a stale generated entry\n",

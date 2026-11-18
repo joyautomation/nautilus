@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/devbind"
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
 
 	"gopkg.in/yaml.v3"
@@ -68,7 +70,13 @@ type Manifest struct {
 	// plus an MQTT feed on the same controller. Each entry is the same
 	// shape as driver:, plus an optional name; setting both driver: and
 	// drivers: is an error. One entry behaves exactly like driver:.
-	Drivers   []DriverConfig   `yaml:"drivers"`
+	Drivers []DriverConfig `yaml:"drivers"`
+	// Devices declares field devices by profile (docs/design/device-library.md):
+	// each row derives a struct tag typed by its vendored profile, a command
+	// tag per writable point and its driver bindings, at load.
+	Devices []devbind.Device `yaml:"devices"`
+	// devices is Devices resolved against profiles/ (ReadManifest).
+	devices   *devbind.Set     `yaml:"-"`
 	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
 	OPCUA     *OPCUAConfig     `yaml:"opcua"`
 	// Channels are the communication channels the programs' READ and
@@ -544,6 +552,10 @@ type DriverConfig struct {
 	// notified on change). Both keep the same quality and reconnect rules.
 	ReadMode string `yaml:"read-mode"`
 
+	// devices are the project's devices this driver carries (Load sets
+	// it on the Modbus driver); not a manifest key.
+	devices *devbind.Set `yaml:"-"`
+
 	// Tags binds a `type: runtime` status driver's inputs to the
 	// runtime's own health (runtimestatus.go, #850).
 	Tags []RuntimeStatusConfig `yaml:"tags"`
@@ -627,6 +639,7 @@ type Project struct {
 	Server    server.Options
 	sparkplug *SparkplugConfig
 	drivers   []nio.NamedDriver // the configured drivers, named; nil for the implicit memory loopback
+	devices   *devbind.Set      // devices: resolved; nil when none
 
 	// Notices are what the platform changed about the project to run it:
 	// in the browser playground, the field drivers it simulated and the
@@ -686,6 +699,10 @@ type Project struct {
 // them in process, with virtual devices, resolves its bindings from. Nil
 // for the implicit memory loopback.
 func (p *Project) Drivers() []nio.NamedDriver { return p.drivers }
+
+// Devices is the project's devices: resolved against profiles/; nil when
+// it declares none.
+func (p *Project) Devices() *devbind.Set { return p.devices }
 
 func (p *Project) RetainNames() (configMap, file string) {
 	configMap, file = p.Name+"-retain", "retain.json"
@@ -789,6 +806,13 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	if _, err := m.Check.Structure(); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	if len(m.Devices) > 0 {
+		set, err := devbind.Resolve(fsys, m.Devices)
+		if err != nil {
+			return nil, fmt.Errorf("%s: devices: %w", name, err)
+		}
+		m.devices = set
+	}
 	if err := composeTags(fsys, &m, name); err != nil {
 		return nil, err
 	}
@@ -797,6 +821,10 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	}
 	return &m, nil
 }
+
+// DeviceSet is the manifest's devices: resolved against profiles/; nil
+// when it declares none.
+func (m *Manifest) DeviceSet() *devbind.Set { return m.devices }
 
 // projectPath keeps a manifest-referenced file inside the project. The
 // deployable artifact is the directory (or the archive built from it), so a
@@ -878,6 +906,15 @@ func composeTags(fsys fs.FS, m *Manifest, manifestName string) error {
 			return err
 		}
 	}
+	for _, dt := range m.devices.TagsByDevice() {
+		var tags []TagConfig
+		for _, t := range dt.Tags {
+			tags = append(tags, TagConfig{Name: t.Name, Role: t.Role, Type: t.Type, Unit: t.Unit, Desc: t.Desc})
+		}
+		if err := add(tags, "devices: "+dt.Device); err != nil {
+			return err
+		}
+	}
 	if err := add(m.Tags, manifestName); err != nil {
 		return err
 	}
@@ -905,6 +942,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	libFiles = withDeviceTypes(libFiles, m.devices)
 	libs := make([]string, len(libFiles))
 	for i, l := range libFiles {
 		libs[i] = l.ST
@@ -1093,6 +1131,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		},
 		sparkplug:  m.Sparkplug,
 		drivers:    drivers,
+		devices:    m.devices,
 		OPCUA:      m.OPCUA,
 		Retain:     m.Retain,
 		Redundancy: m.Redundancy,
@@ -1501,6 +1540,12 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		}
 		configs = []DriverConfig{m.Driver}
 	}
+	if m.devices.Len() > 0 {
+		var err error
+		if configs, err = withDevices(configs, m.devices); err != nil {
+			return nil, nil, err
+		}
+	}
 	names := driverNames(configs)
 	switch len(configs) {
 	case 0:
@@ -1534,6 +1579,43 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		return nil, nil, fmt.Errorf("drivers: %w", err)
 	}
 	return multi, named, nil
+}
+
+// withDeviceTypes makes the composed device types this manifest's:
+// stproject composes nautilus.yaml's devices:, and a project loaded with
+// another manifest (-m field.yaml) declares its own.
+func withDeviceTypes(libs []stproject.Library, set *devbind.Set) []stproject.Library {
+	out := make([]stproject.Library, 0, len(libs)+1)
+	for _, l := range libs {
+		if l.Path != devprofile.TypesPath {
+			out = append(out, l)
+		}
+	}
+	if src, _ := set.TypesST(); src != "" {
+		out = append(out, stproject.Library{Path: devprofile.TypesPath, ST: src})
+	}
+	return out
+}
+
+// withDevices hands the project's devices to its Modbus driver, adding one
+// when the project declares none. The configs are copied, not changed.
+func withDevices(configs []DriverConfig, set *devbind.Set) ([]DriverConfig, error) {
+	out := append([]DriverConfig(nil), configs...)
+	at := -1
+	for i, c := range out {
+		if strings.EqualFold(c.Type, "modbus") {
+			if at >= 0 {
+				return nil, fmt.Errorf("devices: the project has more than one modbus driver; devices go to one, so keep one")
+			}
+			at = i
+		}
+	}
+	if at < 0 {
+		out = append(out, DriverConfig{Type: "modbus"})
+		at = len(out) - 1
+	}
+	out[at].devices = set
+	return out, nil
 }
 
 // driverNames resolves each configured driver's name: its name: when it has

@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // Every built-in profile parses, validates and carries its file's id.
@@ -75,5 +77,50 @@ func TestProfileErrors(t *testing.T) {
 	}
 	if _, err := ParseProfile([]byte("profile: x\nprotocol: canbus\n"), "x.yaml"); err == nil {
 		t.Error("unknown protocol: no error")
+	}
+}
+
+// Every built-in profile's struct type compiles: a point named like an IEC
+// keyword would otherwise surface as "unknown type" in a user's project.
+func TestBuiltinTypesCompile(t *testing.T) {
+	ps, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		src := TypesST([]Struct{{Name: p.TypeName(), Points: p.Points}}) + "PROGRAM P\nVAR d : " + p.TypeName() + "; END_VAR\nEND_PROGRAM\n"
+		prog, err := st.Parse(src)
+		if err != nil {
+			t.Errorf("%s: %v\n%s", p.ID, err, src)
+			continue
+		}
+		types, err := st.Types(prog)
+		if err != nil || types[p.TypeName()] == nil {
+			t.Errorf("%s: type %s: %v", p.ID, p.TypeName(), err)
+			continue
+		}
+		if _, err := st.Lower(prog); err != nil {
+			t.Errorf("%s: %v", p.ID, err)
+		}
+	}
+}
+
+// A profile id names profiles/<id>.yaml and a simulator source sits beside
+// the profile: neither may carry a directory, so a vendored profile cannot
+// write or read outside profiles/.
+func TestProfileIDAndSimulatorAreNames(t *testing.T) {
+	body := "protocol: modbus\ndocs: [{ id: d }]\npoints:\n  - { name: A, type: WORD, table: holding, address: 0, doc: d }\n"
+	for _, id := range []string{"../escaped", "a/b", "/abs", "..", ".hidden", `a\b`} {
+		if _, err := ParseProfile([]byte("profile: \""+id+"\"\nudt: X\n"+body), "x.yaml"); err == nil {
+			t.Errorf("id %q: no error", id)
+		}
+	}
+	for _, src := range []string{"../evil_injected.st", "sub/x.st", "/etc/x.st", "..", `c:\x.st`} {
+		if _, err := ParseProfile([]byte("profile: x\n"+body+"simulator: { block: B, source: \""+src+"\" }\n"), "x.yaml"); err == nil {
+			t.Errorf("simulator source %q: no error", src)
+		}
+	}
+	if _, err := ParseProfile([]byte("profile: abb-acs355.v2\n"+body+"simulator: { block: B, source: abb-drives.st }\n"), "x.yaml"); err != nil {
+		t.Errorf("a plain id and source: %v", err)
 	}
 }

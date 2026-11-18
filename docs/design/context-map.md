@@ -59,7 +59,7 @@ into another's.
 | **HMI 2D** | `hmi` (npm) | mimic, component, port, catalog, realtime, trend, quality, alarms view. | the operator | Consumes Operator surface over HTTP/SSE; no Go |
 | **HMI 3D** | `hmi-3d` (npm) `internal/scene` | scene, kind, node, pipe, port, look, assembly. `internal/scene` is the offline half (`naut check`, `naut scene init`). | the operator, Authoring | Consumes Operator surface. **Open edge:** argonaut's `parts` format is a second model of the same things; §2.4 |
 | **Tag file** | `internal/tagfile` | one row: name, role, type, init, unit, desc, alias. | every codegen, `lang/l5x` | **Shared kernel.** The one format every importer renders and the manifest reads |
-| **Device library** | `devprofile` | device profile, point, doc (provenance), simulator source, built-in profile, vendored profile. A profile's point rows reuse the driver manifests' column names. | Manifest, Virtual devices, CLI | **Published language.** One file per device type, read by the manifest (a project's `devices:`) and by virtual devices alike. A leaf: it imports no other nautilus package, so every reader can import it |
+| **Device library** | `devprofile` `devbind` | device profile, point, doc (provenance), simulator source, built-in profile, vendored profile; device (a `devices:` row), device type, command tag, member. A profile's point rows reuse the driver manifests' column names. | Manifest, Languages (`internal/stproject` composes the device types), Virtual devices, CLI | **Published language** (`devprofile`, a leaf: one file per device type). `devbind` derives what a row means (the type, the tags, the drivers' manifests) and adapts a driver so a device arrives as one struct; the drivers themselves never learn of it |
 | **Virtual devices** | `virtdev` | instance, simulator, process model, plant, wire face, in-process face. | CLI, Verification | Serves a device's store through the protocol packages' servers (`modbus/slave`, `opcua/server`); hosts its simulators and process model in a plant `runtime`. A test-time context: only the CLI and Verification import it, and it imports no manifest |
 
 Two packages are substrates rather than contexts and import nothing of
@@ -93,6 +93,9 @@ break one changes this section first and says why.
 - `devprofile` imports no other nautilus package: the profile format is
   read by the manifest, virtual devices and the CLI, and depends on none
   of them.
+- `devbind` never imports `runtime`, `server`, `alarm`, `acceptance`,
+  `internal/project`, `virtdev` or the CLI: the manifest composes it.
+  Field drivers never import `devbind` or `devprofile`.
 - `virtdev` is imported only by the CLI and Verification: virtual
   devices are a test and commissioning context, never part of a running
   controller.
