@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,8 @@ import (
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Scaffold both variants into a temp dir and sanity-check the tree: the
@@ -329,4 +333,47 @@ func TestNewNameAndTemplateSkipTheForm(t *testing.T) {
 func quietlyParse(f func() (scaffold, bool, int)) (sc scaffold, form bool, code int) {
 	quietly(func() int { sc, form, code = f(); return 0 })
 	return
+}
+
+// #819: a generated Kubernetes deployment lists the names its Service gives
+// the controller in NAUTILUS_ALLOWED_HOSTS, so anything that reaches it by
+// the Service (a historian, a dashboard) keeps working without a token;
+// the probes use the pod IP.
+func TestDeployK8sAllowsTheServiceNames(t *testing.T) {
+	dir := t.TempDir()
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+	sc := scaffold{Name: "pump-ctl", Program: "PumpCtl", Template: tmplDemo, Deploy: true}
+	if err := write(&sc); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "pump-ctl", "deploy", "k8s.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k8s := string(raw)
+	for _, want := range []string{
+		"name: NAUTILUS_ALLOWED_HOSTS",
+		`value: "pump-ctl,pump-ctl.$(POD_NAMESPACE),pump-ctl.$(POD_NAMESPACE).svc,pump-ctl.$(POD_NAMESPACE).svc.cluster.local"`,
+		"fieldPath: metadata.namespace",
+		"kind: Service\nmetadata:\n  name: pump-ctl",
+	} {
+		if !strings.Contains(k8s, want) {
+			t.Errorf("deploy/k8s.yaml lacks %q", want)
+		}
+	}
+	// It still parses as the YAML documents it was.
+	dec := yaml.NewDecoder(strings.NewReader(k8s))
+	for {
+		var doc map[string]any
+		if err := dec.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatalf("deploy/k8s.yaml does not parse: %v", err)
+		}
+	}
 }

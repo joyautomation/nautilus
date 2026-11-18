@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -311,6 +312,31 @@ func runCollector(ctx context.Context, sink hist.Sink, source string, patterns, 
 	}
 }
 
+// sourceRefused says, on stderr, that the controller answered a poll with
+// an error: at once when the status changes, then at most once a minute,
+// so a one-second interval does not flood the log.
+var sourceRefused refusalLog
+
+type refusalLog struct {
+	mu     sync.Mutex
+	status int
+	last   time.Time
+}
+
+func (l *refusalLog) report(source string, status int, body string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if status == l.status && time.Since(l.last) < time.Minute {
+		return
+	}
+	l.status, l.last = status, time.Now()
+	hint := ""
+	if status == http.StatusForbidden {
+		hint = "; if the controller runs without a token, add the name in -source to NAUTILUS_ALLOWED_HOSTS on the controller (or point -source at its IP), or give both a token"
+	}
+	fmt.Fprintf(os.Stderr, "naut historian: %s/api/state answered %d, so nothing is archived: %s%s\n", source, status, body, hint)
+}
+
 // collectOnce performs one poll-and-archive step. Split out from
 // runCollector so a test can drive it directly against an httptest server
 // and a fake Sink without a ticker in the way. filter may be nil (or a
@@ -332,6 +358,13 @@ func collectOnce(hc *http.Client, sink hist.Sink, source string, patterns, exclu
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		// A controller that refuses (403: reached by a name it does not
+		// trust, #819) or fails must not leave the history silently blank.
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		sourceRefused.report(source, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return
+	}
 	var frame frameTagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&frame); err != nil {
 		return

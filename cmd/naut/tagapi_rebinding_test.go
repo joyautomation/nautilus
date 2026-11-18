@@ -185,7 +185,7 @@ func TestNautRunCORSServesOnlyTrustedOrigins(t *testing.T) {
 }
 
 // #811: the listen policy's pieces.
-func TestLoopbackListenAndAllowedHosts(t *testing.T) {
+func TestLoopbackListen(t *testing.T) {
 	for addr, want := range map[string]bool{
 		"localhost:8080": true, "127.0.0.1:8080": true, "127.9.9.9:1": true, "[::1]:8080": true,
 		":8080": false, "0.0.0.0:8080": false, "192.168.1.5:8080": false, "plc.local:8080": false,
@@ -194,10 +194,7 @@ func TestLoopbackListenAndAllowedHosts(t *testing.T) {
 			t.Errorf("loopbackListen(%q) = %v, want %v", addr, got, want)
 		}
 	}
-	t.Setenv("NAUTILUS_ALLOWED_HOSTS", " epic1.plant.lan, ,hmi.local ")
-	if got := strings.Join(allowedHosts(), "|"); got != "epic1.plant.lan|hmi.local" {
-		t.Errorf("allowedHosts() = %q", got)
-	}
+
 }
 
 // #811: `naut logix serve` writes to a running PLC, so beyond loopback it

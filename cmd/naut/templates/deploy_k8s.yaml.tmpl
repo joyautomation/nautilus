@@ -72,6 +72,16 @@ spec:
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: POD_IP
               valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            # The names the Service gives the controller. Without a token,
+            # nautilus answers only localhost, an IP address or a name
+            # listed here (#819), so anything that reaches it through the
+            # Service (a historian, a dashboard, another pod) needs these.
+            # The probes use the pod IP. A cluster domain other than
+            # cluster.local goes in the last entry.
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: NAUTILUS_ALLOWED_HOSTS
+              value: "{{.Name}},{{.Name}}.$(POD_NAMESPACE),{{.Name}}.$(POD_NAMESPACE).svc,{{.Name}}.$(POD_NAMESPACE).svc.cluster.local"
           readinessProbe:
             # /api/cluster answers locally on every replica, leader or
             # standby — a standby must stay Ready to serve the dashboard

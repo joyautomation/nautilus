@@ -69,6 +69,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -238,7 +239,8 @@ type Options struct {
 	// "epic1.plant.lan". Without a token, a browser write whose Host is any
 	// other name is refused, because a page on an attacker's domain can
 	// rebind that name to this machine (DNS rebinding) and its Origin then
-	// matches its Host. NAUTILUS_ALLOWED_HOSTS sets it from the CLI.
+	// matches its Host. NAUTILUS_ALLOWED_HOSTS adds to it in every
+	// embedder (New reads it).
 	AllowedHosts []string
 
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
@@ -508,15 +510,22 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		onlineEdits: onlineEdits,
 		clients:     map[*client]struct{}{},
 	}
+	var configured []string
 	if len(opts) > 0 {
-		for _, h := range opts[0].AllowedHosts {
-			// "epic1.plant.lan:8086" or "epic1.plant.lan." name the same
-			// host a request's Host does without its port or root dot.
-			h = strings.TrimSuffix(strings.ToLower(hostOnly(strings.TrimSpace(h))), ".")
-			if h != "" {
-				s.allowHosts[h] = true
-			}
+		configured = opts[0].AllowedHosts
+	}
+	// NAUTILUS_ALLOWED_HOSTS applies to every embedder (naut run, the
+	// serve commands, an SDK program), so the setting a 403 names always
+	// takes effect.
+	// An entry's port and root dot are dropped, as a request Host's are
+	// ("epic1.plant.lan:8086", "epic1.plant.lan.").
+	for _, h := range append(append([]string(nil), configured...), EnvAllowedHosts()...) {
+		h = strings.TrimSuffix(strings.ToLower(hostOnly(strings.TrimSpace(h))), ".")
+		if h != "" {
+			s.allowHosts[h] = true
 		}
+	}
+	if len(opts) > 0 {
 		s.drivers = opts[0].Drivers
 		s.cluster = opts[0].Cluster
 		s.historian = opts[0].HistorianURL
@@ -1280,7 +1289,7 @@ func (s *Server) authorizeWrite(r *http.Request) (int, string) {
 // literal (a browser sends one only for a page it loaded from that very
 // address), or a name configured in AllowedHosts.
 func (s *Server) trustedHost(host string) bool {
-	h := strings.ToLower(hostOnly(host))
+	h := strings.TrimSuffix(strings.ToLower(hostOnly(host)), ".")
 	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
 		return true
 	}
@@ -1288,6 +1297,18 @@ func (s *Server) trustedHost(host string) bool {
 		return true
 	}
 	return s.allowHosts[h]
+}
+
+// EnvAllowedHosts is NAUTILUS_ALLOWED_HOSTS: host names, comma-separated,
+// the server answers by without a token besides localhost and an IP.
+func EnvAllowedHosts() []string {
+	var out []string
+	for _, h := range strings.Split(os.Getenv("NAUTILUS_ALLOWED_HOSTS"), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // hostOnly strips the port (and an IPv6 address's brackets) from a Host.

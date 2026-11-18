@@ -220,8 +220,15 @@ never computes.
 - **The HTTP API follows the leader.** Every replica serves the
   dashboard, and a standby reverse-proxies API traffic to the leader
   (the leader's address rides inside the Lease), so a Service in front
-  of the replicas just works. `GET /api/cluster` reports each replica's
-  own view — mode, leader, transitions.
+  of the replicas works. Without a token, the replicas answer only
+  `localhost`, an IP address or a name in `NAUTILUS_ALLOWED_HOSTS`, so the
+  Service's names go in that list: a deployment from `naut new --deploy`
+  sets `NAUTILUS_ALLOWED_HOSTS` to `name`, `name.<namespace>`,
+  `name.<namespace>.svc` and `name.<namespace>.svc.cluster.local`
+  (change the last for another cluster domain). The standby keeps the
+  request's Host when it proxies, so the leader checks the same name.
+  `GET /api/cluster` reports each replica's own view — mode, leader,
+  transitions.
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 
@@ -231,6 +238,11 @@ env:
     valueFrom: {fieldRef: {fieldPath: metadata.name}}
   - name: POD_IP
     valueFrom: {fieldRef: {fieldPath: status.podIP}}
+  # The Service's names, answered without a token (#819):
+  - name: POD_NAMESPACE
+    valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+  - name: NAUTILUS_ALLOWED_HOSTS
+    value: "water-scada,water-scada.$(POD_NAMESPACE),water-scada.$(POD_NAMESPACE).svc,water-scada.$(POD_NAMESPACE).svc.cluster.local"
 ```
 
 ## RBAC

@@ -2,7 +2,6 @@ package main
 
 import (
 	"net"
-	"os"
 	"strings"
 )
 
@@ -19,18 +18,6 @@ func loopbackListen(addr string) bool {
 	}
 	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
-}
-
-// allowedHosts is NAUTILUS_ALLOWED_HOSTS: host names, comma-separated, a
-// browser page may write from when no token is set (#811).
-func allowedHosts() []string {
-	var out []string
-	for _, h := range strings.Split(os.Getenv("NAUTILUS_ALLOWED_HOSTS"), ",") {
-		if h = strings.TrimSpace(h); h != "" {
-			out = append(out, h)
-		}
-	}
-	return out
 }
 
 // openListenWarning is what naut run says when it listens beyond this

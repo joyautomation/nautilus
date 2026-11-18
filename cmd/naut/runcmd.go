@@ -323,7 +323,6 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if tok := os.Getenv("NAUTILUS_TOKEN"); tok != "" {
 		sopts.AuthToken = tok
 	}
-	sopts.AllowedHosts = append(sopts.AllowedHosts, allowedHosts()...)
 	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
 		sopts.HistorianURL = h
 	}

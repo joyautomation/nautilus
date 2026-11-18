@@ -364,6 +364,27 @@ func TestGuardHostRefusesEveryRouteOnARebindableHost(t *testing.T) {
 	}
 }
 
+// #819: New reads NAUTILUS_ALLOWED_HOSTS itself, so every embedder (naut
+// run, the serve commands, an SDK program calling server.New) honours the
+// setting its 403 names; and a request Host's root dot is dropped as a
+// configured name's is.
+func TestNewReadsAllowedHostsFromTheEnvironment(t *testing.T) {
+	t.Setenv("NAUTILUS_ALLOWED_HOSTS", " epic1.plant.lan, ,hmi.local:8086 ,ok.example. ")
+	srv := New(newTestRuntime(t)) // no Options: an SDK program's default
+	for host, want := range map[string]int{
+		"epic1.plant.lan:8080": 200, "hmi.local:8080": 200, "ok.example:8080": 200,
+		"ok.example.:8080": 200, "epic1.plant.lan.:8080": 200, "other.plant.lan:8080": 403,
+	} {
+		req := httptest.NewRequest("GET", "http://"+host+"/api/state", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET by %s: %d, want %d", host, rec.Code, want)
+		}
+	}
+}
+
 func TestWriteAuthToken(t *testing.T) {
 	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
 	post := func(setup func(*http.Request)) int {

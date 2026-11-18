@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -318,5 +319,31 @@ func TestChangeFilterPerTagIndependent(t *testing.T) {
 	}
 	if _, ok := got["b"]; ok {
 		t.Fatalf("unchanged tag 'b' recorded early: %v", got)
+	}
+}
+
+// #819: a controller that refuses the poll (403: reached by a name it does
+// not trust) must not leave the history silently blank: the historian
+// says what came back and what to set, once, not every interval.
+func TestCollectOnceSaysWhenTheControllerRefuses(t *testing.T) {
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `this controller answers "plc:8080" only with an auth token`, http.StatusForbidden)
+	}))
+	defer src.Close()
+	sourceRefused = refusalLog{}
+	sink := &fakeSink{}
+	out, _ := captureStderr(t, func() int {
+		collectOnce(src.Client(), sink, src.URL, nil, nil, nil, 0, 0)
+		collectOnce(src.Client(), sink, src.URL, nil, nil, nil, 0, 0) // same status: quiet
+		return 0
+	})
+	if n := strings.Count(out, "/api/state answered 403"); n != 1 {
+		t.Errorf("reported %d times, want once:\n%s", n, out)
+	}
+	if !strings.Contains(out, "NAUTILUS_ALLOWED_HOSTS") || !strings.Contains(out, "only with an auth token") {
+		t.Errorf("the report does not say what to set:\n%s", out)
+	}
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("archived %d inserts from a refused poll", got)
 	}
 }
