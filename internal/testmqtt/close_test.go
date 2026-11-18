@@ -178,7 +178,7 @@ func TestCloseUnderClientChurn(t *testing.T) {
 		if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
 			t.Fatal(err)
 		}
-		tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: "127.0.0.1:0"})
+		tcp := NewTCP(srv, listeners.Config{ID: "t", Address: "127.0.0.1:0"})
 		if err := srv.AddListener(tcp); err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +216,7 @@ func TestCloseUnderClientChurn(t *testing.T) {
 // Close is idempotent: a second call returns at once instead of panicking.
 func TestCloseTwice(t *testing.T) {
 	srv := mqttsrv.New(&mqttsrv.Options{Logger: quiet()})
-	tcp := listeners.NewTCP(listeners.Config{ID: "t", Address: "127.0.0.1:0"})
+	tcp := NewTCP(srv, listeners.Config{ID: "t", Address: "127.0.0.1:0"})
 	if err := srv.AddListener(tcp); err != nil {
 		t.Fatal(err)
 	}
