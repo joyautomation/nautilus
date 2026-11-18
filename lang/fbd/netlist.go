@@ -368,11 +368,14 @@ func (p *netParser) item(nl *netlist) error {
 				return err
 			}
 			lhs = p.span(lhsAt)
-			nl.nodes = append(nl.nodes, node{isCall: true, inst: text, args: args, line: line, lhs: lhs})
+			nl.nodes = append(nl.nodes, node{isCall: true, inst: text, args: args, line: line, lhs: lhs, net: nl.curNet()})
 			if p.at(st.TokenSemicolon) {
 				p.next()
 			}
 			nl.nodes[len(nl.nodes)-1].span = p.span(lhsAt)
+			// It is a statement of the network it is in, like any call
+			// (#783: it ran in network 0, out of rung order).
+			nl.networks[nl.curNet()].stmts++
 			return nil
 		}
 		if !p.at(st.TokenAssign) {
