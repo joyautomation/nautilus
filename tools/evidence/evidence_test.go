@@ -8,10 +8,10 @@ import (
 )
 
 // TestClaimsCheck holds the real inventory to the source tree. It is
-// opt-in (NAUTILUS_CLAIMS_CHECK=1): claims never block a functional PR.
-// CI's runtime-evidence job runs the same check, reports it on PRs and
-// keeps a rolling issue on main; `go run ./tools/evidence check` runs it
-// by hand.
+// opt-in here (NAUTILUS_CLAIMS_CHECK=1); CI gates every PR on the same
+// check with `go run ./tools/evidence check` (the examples job, under the
+// required ci-ok), so a dangling claim fails its PR. The claims' verdicts
+// stay a report: runtime-evidence.
 func TestClaimsCheck(t *testing.T) {
 	if os.Getenv("NAUTILUS_CLAIMS_CHECK") == "" {
 		t.Skip("set NAUTILUS_CLAIMS_CHECK=1 (or run `go run ./tools/evidence check`)")
