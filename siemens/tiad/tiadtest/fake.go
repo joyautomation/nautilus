@@ -52,7 +52,7 @@ type Fake struct {
 	CompileResult tiad.CompileResult
 	// CompareResult, when set, is what compare returns. Otherwise the
 	// project equals the CPU exactly when this session's project is the
-	// last one downloaded to the station's CPU.
+	// last one downloaded to the station's CPU and has not changed since.
 	CompareResult *tiad.CompareResult
 
 	mu        sync.Mutex
@@ -73,6 +73,8 @@ type session struct {
 	station  *tiad.Station
 	blocks   []tiad.Block
 	compiled bool
+	// changed is true until a download loads the project as it is.
+	changed bool
 }
 
 // Download records one real download. Secrets are never recorded.
@@ -117,6 +119,14 @@ func (f *Fake) SetCompileResult(r tiad.CompileResult) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.CompileResult = r
+}
+
+// SetQuestions makes every download ask qs while the fake is serving.
+func (f *Fake) SetQuestions(qs []tiad.Question) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	qs = append([]tiad.Question(nil), qs...)
+	f.PreDownload = func(tiad.DownloadRequest) []tiad.Question { return append([]tiad.Question(nil), qs...) }
 }
 
 // Downloads returns every real download so far.
@@ -501,7 +511,7 @@ func (f *Fake) checkStation(st tiad.Station, sec tiad.Secrets) *failure {
 
 func (f *Fake) newSession(project string) *session {
 	f.next++
-	s := &session{id: fmt.Sprintf("s%d", f.next), project: project}
+	s := &session{id: fmt.Sprintf("s%d", f.next), project: project, changed: true}
 	f.sessions[s.id] = s
 	return s
 }
@@ -619,6 +629,7 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	s.station = &st
 	if len(changes) > 0 {
 		s.compiled = false
+		s.changed = true
 	}
 	return tiad.StationResult{Changes: changes}, nil
 }
@@ -687,6 +698,7 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	}
 	sort.Slice(s.blocks, func(i, j int) bool { return s.blocks[i].Name < s.blocks[j].Name })
 	s.compiled = false
+	s.changed = true
 	res.Blocks = append([]tiad.Block{}, s.blocks...)
 	return res, nil
 }
@@ -798,12 +810,16 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	rec.Secrets = nil
 	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
 	f.loaded[req.Address] = s.id
+	s.changed = false
 	return tiad.DownloadResult{Downloaded: true, Questions: qs, State: state}, nil
 }
 
 func (f *Fake) compare(r *http.Request) (any, *failure) {
 	s, fl := f.session(r)
 	if fl != nil {
+		return nil, fl
+	}
+	if fl := decode(r, &struct{}{}); fl != nil {
 		return nil, fl
 	}
 	if f.CompareResult != nil {
@@ -815,7 +831,7 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, s.station.CPU.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", s.station.CPU.Address)
 	}
-	if f.loaded[s.station.CPU.Address] == s.id && s.compiled {
+	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
 		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}}, nil
 	}
 	return tiad.CompareResult{Differences: []tiad.Difference{{Object: s.station.CPU.Name, State: "different"}}}, nil
@@ -875,9 +891,14 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if fl := decode(r, &struct{}{}); fl != nil {
+		return nil, fl
+	}
 	if s.station == nil || !contains(f.Targets, s.station.CPU.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "the project's CPU is not in TIAD_TARGETS")
 	}
+	s.compiled = false
+	s.changed = true
 	return struct{}{}, nil
 }
 

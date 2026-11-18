@@ -397,6 +397,22 @@ func TestAgentNeverHandsTIAABadGSDML(t *testing.T) {
 	}
 }
 
+// downloadReady is tiad-fake with the bench project compiled.
+func downloadReady(t *testing.T, env ...string) (*tiadtest.Process, *tiad.Session) {
+	t.Helper()
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{Targets: []string{"192.0.2.10", "192.0.2.99"}}, env...)
+	c := p.Client()
+	installBench(t, c)
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	return p, s
+}
+
 func countCalls(cs []tiadtest.TiaCall, name string) int {
 	n := 0
 	for _, c := range cs {
@@ -405,4 +421,187 @@ func countCalls(cs []tiadtest.TiaCall, name string) int {
 		}
 	}
 	return n
+}
+
+// TestAgentRefusesDownloadsBeforeTIA: every refusal the agent can make
+// itself is made before TIA hears of the download.
+func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
+	p, s := downloadReady(t)
+	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU}})
+	refused := []tiad.DownloadRequest{
+		{Address: "192.0.2.77", Software: true, Announced: true}, // not a target
+		{Address: "192.0.2.99", Software: true, Announced: true}, // not the station's CPU
+	}
+	for _, r := range refused {
+		if _, err := s.Download(ctx, r); err == nil {
+			t.Fatalf("%+v was not refused", r)
+		}
+	}
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(tiad.DeviceModule{Slot: 1, Subslot: 1, Module: "M"}), tiadtest.BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("not compiled: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "Download"); n != 0 {
+		t.Fatalf("TIA heard of %d refused downloads", n)
+	}
+	// A dry run and an unanswered download reach TIA and load nothing.
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindDecisionRequired {
+		t.Fatalf("unanswered: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "Download"); n != 2 {
+		t.Fatalf("TIA heard of %d downloads, want 2", n)
+	}
+	if l := p.Loaded(t); len(l) != 0 {
+		t.Fatalf("loaded %+v", l)
+	}
+}
+
+// TestAgentReportsALoadItCancelled: a TIA that loads although the agent
+// cancelled is a fatal failure, never a success.
+func TestAgentReportsALoadItCancelled(t *testing.T) {
+	p, s := downloadReady(t)
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionStopCPU}}, LoadDespiteCancel: true})
+	for _, r := range []tiad.DownloadRequest{
+		{Address: "192.0.2.10", Software: true, DryRun: true},
+		{Address: "192.0.2.10", Software: true, Announced: true},
+		{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.No()}},
+	} {
+		_, err := s.Download(ctx, r)
+		if tiad.Kind(err) != tiad.KindOperationFailed || !tiad.IsFatal(err) || !strings.Contains(err.Error(), "although tiad cancelled") {
+			t.Errorf("%+v with a TIA that ignores the cancel: %v", r, err)
+		}
+	}
+}
+
+// TestAgentKeepsTheProtectionPasswordOut: the CPU's protection password
+// goes to TIA and nowhere else.
+func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
+	p, s := downloadReady(t)
+	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionPassword}})
+	sec := &tiad.Secrets{Protection: "protection-must-not-leak"}
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Secrets: sec}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Secrets: sec}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Save(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if strings.Contains(p.Log(), "must-not-leak") {
+		t.Fatalf("the log carries the password:\n%s", p.Log())
+	}
+	_ = filepath.WalkDir(p.WorkDir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if b, _ := os.ReadFile(path); strings.Contains(string(b), "must-not-leak") {
+				t.Errorf("%s carries the password", path)
+			}
+		}
+		return nil
+	})
+}
+
+// TestAgentForgetsACompileWhenAChangeFails: a change that fails part-way
+// in TIA leaves the project not downloadable, so a half-applied station
+// or half-imported program never reaches the CPU on the strength of an
+// earlier compile.
+func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
+	p, s := downloadReady(t)
+	dl := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true}
+	fail := func(call string) {
+		t.Helper()
+		p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: call, Message: call + " failed part-way"}}})
+	}
+	ok := func() {
+		t.Helper()
+		p.SetScript(t, tiadtest.Script{})
+	}
+	notDownloadable := func(why, want string) {
+		t.Helper()
+		_, err := s.Download(ctx, dl)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: download = %v, want a refusal naming %q", why, err, want)
+		}
+	}
+	if _, err := s.Download(ctx, dl); err != nil {
+		t.Fatalf("the compiled project: %v", err)
+	}
+
+	// A software import that fails.
+	fail("ImportSoftware")
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus"}); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("import: %v", err)
+	}
+	ok()
+	notDownloadable("after a failed import", "compile")
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// A station that fails to apply: not compiled, and not described by
+	// any spec until one applies.
+	fail("ApplyStation")
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(tiad.DeviceModule{Slot: 1, Subslot: 1, Module: "M"}), tiadtest.BenchSecrets); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("apply: %v", err)
+	}
+	ok()
+	notDownloadable("after a failed apply", "no station spec")
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	notDownloadable("after a failed apply, compiled", "no station spec")
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	notDownloadable("after a station change", "compile")
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, dl); err != nil {
+		t.Fatalf("after a good apply and compile: %v", err)
+	}
+
+	// Applying the same spec changes nothing and keeps the compile.
+	if r, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); err != nil || len(r.Changes) != 0 {
+		t.Fatalf("the same spec again: %+v %v", r, err)
+	}
+	if _, err := s.Download(ctx, dl); err != nil {
+		t.Fatalf("after applying the same spec: %v", err)
+	}
+
+	// A compile that TIA fails, and one with errors, forget the last good
+	// compile.
+	fail("Compile")
+	if _, err := s.Compile(ctx, true, true); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("compile: %v", err)
+	}
+	ok()
+	notDownloadable("after a failed compile", "compile")
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetCompileResult(t, tiad.CompileResult{Result: "error", Errors: 1})
+	if _, err := s.Compile(ctx, true, true); tiad.Kind(err) != tiad.KindCompileFailed {
+		t.Fatalf("compile with errors: %v", err)
+	}
+	notDownloadable("after a compile with errors", "compile")
+
+	// An upload replaces the program: compile again first.
+	p.SetScript(t, tiadtest.Script{})
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Upload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	notDownloadable("after an upload", "compile")
 }

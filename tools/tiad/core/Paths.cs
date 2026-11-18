@@ -213,6 +213,18 @@ namespace Tiad
             return full;
         }
 
+        // RelInside is the request form of a path TIA's side handed back,
+        // which must be inside the work dir.
+        public string RelInside(string full)
+        {
+            string f = Path.GetFullPath(full);
+            if (!f.StartsWith(Root + Path.DirectorySeparatorChar, Cmp))
+            {
+                throw new TiadException(500, Kinds.OperationFailed, "TIA wrote outside the work dir");
+            }
+            return Rel(f);
+        }
+
         // Rel is the request form of a full path inside the work dir.
         public string Rel(string full)
         {

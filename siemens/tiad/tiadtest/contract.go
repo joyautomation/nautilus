@@ -28,6 +28,17 @@ type Target interface {
 	// SetCompileResult scripts what compile returns. Zero means success;
 	// a result with errors makes compile fail with compile_failed.
 	SetCompileResult(t testing.TB, r tiad.CompileResult)
+	// SetQuestions scripts TIA's pre-download checks for every download.
+	SetQuestions(t testing.TB, qs []tiad.Question)
+	// Loaded lists every download that loaded the CPU.
+	Loaded(t testing.TB) []Loaded
+}
+
+// Loaded is one download that loaded a CPU.
+type Loaded struct {
+	Address            string
+	Hardware, Software bool
+	State              string
 }
 
 // Config is the agent-side configuration a Target starts with: what the
@@ -62,6 +73,14 @@ func (g goFake) SetGates(_ testing.TB, gates []tiad.Gate) { g.f.SetGates(gates) 
 func (g goFake) SetCompileResult(_ testing.TB, r tiad.CompileResult) {
 	g.f.SetCompileResult(r)
 }
+func (g goFake) SetQuestions(_ testing.TB, qs []tiad.Question) { g.f.SetQuestions(qs) }
+func (g goFake) Loaded(testing.TB) []Loaded {
+	var out []Loaded
+	for _, d := range g.f.Downloads() {
+		out = append(out, Loaded{Address: d.Request.Address, Hardware: d.Request.Hardware, Software: d.Request.Software, State: d.State})
+	}
+	return out
+}
 
 // Contract runs the agent's HTTP contract (docs/design/siemens-ide.md §3)
 // against the agents start makes.
@@ -75,6 +94,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("PathsRefused", func(t *testing.T) { contractPathsRefused(t, start) })
 	t.Run("PathsAccepted", func(t *testing.T) { contractPathsAccepted(t, start) })
 	contractTIA(t, start)
+	contractDownload(t, start)
 }
 
 var ctx = context.Background()
