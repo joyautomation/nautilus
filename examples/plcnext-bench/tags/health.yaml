@@ -1,0 +1,6 @@
+# The runtime's own health (#850), delivered by the `type: runtime` driver
+# named health in both builds (nautilus.yaml on the controller, sim.yaml
+# anywhere). The alarms in both builds watch the two BOOLs.
+- { name: Bench__Demoted,  role: input, type: BOOL,  desc: "The bench task lost its real-time priority (priority guard or RLIMIT_RTTIME), until a restart" }
+- { name: Bench__Faulting, role: input, type: BOOL,  desc: "The bench task's last scan raised a logic error" }
+- { name: Bench__Late,     role: input, type: UDINT, desc: "Bench task scans that woke later than the late threshold, since start" }
