@@ -439,9 +439,8 @@ takes a second project file if you want one for logic-only runs
   no tag database is not addressable through it, and generic
   class/instance/attribute messaging — which `eip/cip` can encode — is not
   exposed as a binding.
-- **Implicit (Class 1) cyclic I/O.** `eip/cip` carries a Class 1
-  producer/consumer and an originator, but nothing in the driver wires them:
-  an I/O assembly connection is not a thing a manifest can declare.
+- **Implicit (Class 1) cyclic I/O.** Not implemented: an I/O assembly
+  connection is not a thing a manifest can declare.
 - **PCCC / SLC / PLC-5 and Micro800.** There is no PCCC encapsulation in the
   tree at all.
 - **Multi-dimensional arrays.** A one-dimensional array tag binds as a whole;
