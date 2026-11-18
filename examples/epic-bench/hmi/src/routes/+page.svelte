@@ -10,6 +10,7 @@
 	import Panel, { type Row } from '$lib/Panel.svelte';
 	import { fitCamera } from '$lib/fit';
 	import { driverLabel } from '$lib/driver';
+	import { simulated } from '$lib/bar';
 	import { whileVisible } from '$lib/live';
 
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream' });
@@ -50,6 +51,12 @@
 		{ label: 'Bench voltage', value: n('BenchVoltsV', 2), unit: 'V' }
 	]);
 
+	// The simulated build (sim.yaml, the playground) takes the chassis's
+	// inputs as tags, so the bar's buttons press and its knob turns. A write
+	// the server refuses changes nothing on screen.
+	const write = (name: string, value: boolean | number) =>
+		void fetch('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, value }) }).catch(() => {});
+
 	onMount(() => {
 		// One stream, and only while this tab is showing (src/lib/live.ts).
 		const live = whileVisible(rt);
@@ -71,7 +78,7 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="stage" bind:this={stage} onpointermove={(e) => (pointer = { x: e.clientX, y: e.clientY })}>
 		<SceneView {rt} {camera} inspector={false}>
-			<Epic hovered={hover?.tag ?? null} onhover={(ch) => (hover = ch)} />
+			<Epic hovered={hover?.tag ?? null} onhover={(ch) => (hover = ch)} write={simulated(rt.frame) ? write : undefined} />
 			{#snippet hud()}
 				<ConnectionBadge state={rt.connected ? 'connected' : 'offline'} label="epic-bench" size="sm" />
 			{/snippet}
