@@ -486,7 +486,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		}
 		return optommp.New(m, opts...)
 	case "opcua-client":
-		// The OPC UA client: one server, polled per scan class (brief
+		// The OPC UA client: one server, polled or subscribed per scan class (brief
 		// docs/design/opcua-client.md). opcua.New NEVER dials — it
 		// validates the manifest and parses every node id offline, the same
 		// split eip, modbus and sparkplug-host make.
@@ -517,6 +517,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opcua.WithOnlineTag(onlineTagFor(d.Name, "opcua-client")),
 			opcua.WithSecurity(d.Security, d.SecurityMode),
 			opcua.WithPKIDir(d.PKIDir),
+			opcua.WithReadMode(d.ReadMode),
 		}
 		if d.Username != "" {
 			opts = append(opts, opcua.WithAuth(d.Username, os.Getenv("NAUTILUS_OPCUA_PASSWORD")))

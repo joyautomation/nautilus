@@ -1,11 +1,11 @@
-# nautilus controller, installed by tools/deploy/naut-release.sh.
+# nautilus controller, installed by `naut deploy`.
 #
 # The binary is whatever /opt/nautilus/current points at (a `naut build`
 # controller); update and rollback move that link and restart this unit.
 # Retained values live in /var/lib/nautilus, outside every release, so
 # both keep them.
 #
-# naut-release.sh writes Type=simple and drops WatchdogSec= when the
+# naut deploy writes Type=simple and drops WatchdogSec= when the
 # release predates systemd notification (it never sends READY=1).
 
 [Unit]
