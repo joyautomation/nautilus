@@ -500,14 +500,6 @@ func MarshalARServerBlockRes(stationName string) []byte {
 	return MarshalPNIOBlock(BlockTypeARServerBlockRes, 1, 0, body)
 }
 
-// MarshalModuleDiffBlock creates a Module Diff Block indicating no differences.
-func MarshalModuleDiffBlock(numAPIs uint16) []byte {
-	payload := make([]byte, 2)
-	binary.BigEndian.PutUint16(payload[0:2], numAPIs)
-	// For "no difference", we just report 0 APIs or empty diff
-	return MarshalPNIOBlock(BlockTypeModuleDiffBlock, 1, 0, payload)
-}
-
 // MarshalIODControlRes creates an IODControl response block.
 //
 // Wire layout (per PROFINET spec / p-net pf_put_control):
