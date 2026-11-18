@@ -1484,7 +1484,7 @@
       "properties": {
         "update-time": {
           "type": "string",
-          "description": "Default update time for devices, at least 16ms."
+          "description": "Default update time for devices, at least 16ms. A nautilus device (profinet-manifest) takes only 16ms, 32ms, 64ms, 128ms, 256ms or 512ms (powers of two at a 1ms send clock), not below its min-cycle; with none set, the deploy rounds up to the first of those at or above min-cycle."
         },
         "devices": {
           "type": "array",
@@ -1521,7 +1521,7 @@
         },
         "update-time": {
           "type": "string",
-          "description": "Update time, at least 16ms."
+          "description": "Update time, at least 16ms. For a profinet-manifest device: 16ms, 32ms, 64ms, 128ms, 256ms or 512ms, not below its min-cycle; when absent (here and on the IO system), the deploy rounds up to the first of those at or above min-cycle."
         },
         "modules": {
           "type": "array",
