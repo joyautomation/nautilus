@@ -19,6 +19,8 @@ import (
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
 	"github.com/mochi-mqtt/server/v2/packets"
+
+	"github.com/joyautomation/nautilus/internal/testmqtt"
 )
 
 // swallowDeath is a broker hook that never acknowledges an NDEATH: the
@@ -112,12 +114,7 @@ sparkplug:
 	t.Cleanup(func() {
 		cmd.Process.Kill()
 		<-exited
-		broker.Listeners.Close("t", func(string) {})
-		for _, cl := range broker.Clients.GetAll() {
-			if !cl.Closed() {
-				_ = broker.DisconnectClient(cl, packets.ErrServerShuttingDown)
-			}
-		}
+		_ = testmqtt.Close(broker) // not broker.Close: it can deadlock in mochi v2.7.9
 	})
 	apiAddr = apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 
