@@ -166,9 +166,27 @@ func arm(ctx context.Context, conn net.Conn) (disarm func()) {
 		deadline = d
 	}
 	_ = conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
-	return func() { stop() }
+	fired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(fired)
+		if testHookCancelFired != nil {
+			testHookCancelFired()
+		}
+		_ = conn.SetDeadline(time.Now())
+	})
+	return func() {
+		if !stop() {
+			// The cancel came as the request finished: let its
+			// SetDeadline(now) land before returning, or it could land on
+			// the next request on this connection and fail it.
+			<-fired
+		}
+	}
 }
+
+// testHookCancelFired, when set (by tests), runs in arm's cancel callback
+// before it sets the deadline.
+var testHookCancelFired func()
 
 // cancelled says why a request failed when its context ended it: the
 // cancel, not the deadline it was given.

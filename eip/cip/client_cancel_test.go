@@ -18,6 +18,18 @@ import (
 // answers the rest: a device that hung.
 func stubDevice(t *testing.T, answer int, delay time.Duration) (host string, port int) {
 	t.Helper()
+	delays := make([]time.Duration, answer)
+	for i := range delays {
+		delays[i] = delay
+	}
+	return stubDeviceDelays(t, delays...)
+}
+
+// stubDeviceDelays answers request i after delays[i], and never answers
+// the ones past the end.
+func stubDeviceDelays(t *testing.T, delays ...time.Duration) (host string, port int) {
+	t.Helper()
+	answer := len(delays)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +56,7 @@ func stubDevice(t *testing.T, answer int, delay time.Duration) (host string, por
 			if n >= answer {
 				continue // hung: read, never answer
 			}
-			time.Sleep(delay)
+			time.Sleep(delays[n])
 			reply := EncapHeader{Command: h.Command, SessionHandle: 0x1234, Status: EncapStatusSuccess}
 			var body []byte
 			if h.Command == CmdSendRRData {
@@ -131,5 +143,32 @@ func TestFinishedRequestIsDisarmed(t *testing.T) {
 	time.AfterFunc(50*time.Millisecond, cancelFirst)
 	if _, err := c.SendRRData(context.Background(), 0x01, []byte{0x20, 0x01, 0x24, 0x01}, nil); err != nil {
 		t.Fatalf("a request on a fresh context failed when an earlier one's context was cancelled: %v", err)
+	}
+}
+
+// A cancel that comes as a request finishes has its SetDeadline(now) land
+// before the request returns, never on the next request on the connection.
+// The hook holds the cancel callback, so the order is forced: request A is
+// cancelled while it waits, its answer arrives while the callback is held,
+// and request B starts only once A has returned.
+func TestLateCancelDoesNotHitTheNextRequest(t *testing.T) {
+	host, port := stubDeviceDelays(t, 0, 50*time.Millisecond, 200*time.Millisecond)
+	c := NewClient(host, port, nil)
+	t.Cleanup(func() { c.Close() })
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	testHookCancelFired = func() { <-release }
+	t.Cleanup(func() { testHookCancelFired = nil })
+
+	a, cancelA := context.WithCancel(context.Background())
+	time.AfterFunc(10*time.Millisecond, cancelA)                    // A's callback starts, and is held
+	time.AfterFunc(100*time.Millisecond, func() { close(release) }) // after A's answer (50 ms)
+	if _, err := c.SendRRData(a, 0x01, []byte{0x20, 0x01, 0x24, 0x01}, nil); err != nil {
+		t.Fatalf("request A: %v (its answer came before the held cancel took effect)", err)
+	}
+	if _, err := c.SendRRData(context.Background(), 0x01, []byte{0x20, 0x01, 0x24, 0x01}, nil); err != nil {
+		t.Fatalf("request B on a fresh context failed: %v: request A's late cancel landed on it", err)
 	}
 }
