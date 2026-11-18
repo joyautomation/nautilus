@@ -203,9 +203,9 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
   - **The chain is per controller.** `prev` chains each controller's own file in its own write order. It isn't part of the replicated entry, whose identity is `id`. Two files that hold the same entries in a different order both verify.
 
 **When the journal can't be written** (disk full, read-only filesystem), the action and the entry must not part ways silently.
-- Proposed: elevated actions (force, edit, activate, deploy, config, users, override) are **refused** (503, "audit journal unwritable").
-- Operator actions (write, ack, sfc) are **allowed, and an "audit journal unwritable" system alarm is raised**, so a full disk can't stop an operator running the plant. A failed entry leaves nothing in the file (it is cut back), so the server's recording seam keeps it in the ring and records it again, with the same `id`, when the file can be written.
-- This is question 5 (§6).
+- **Decided** (question 5, §6, 2026-11-18): elevated actions (force, edit, activate, deploy, config, users, override, and #707's substitutes) are **refused** (503, "audit journal cannot be written").
+- Operator actions (write, ack, shelve, sfc) are **allowed, and an "audit journal cannot be written" system alarm is raised**, so a full disk can't stop an operator running the plant. A failed entry leaves nothing in the file (it is cut back), so the server's recording seam keeps it in the ring and records it again, with the same `id`, when the file can be written.
+- Built in #894 for today's routes (forces, program edit, rollback and activate): the system alarm `nautilus.audit-journal` (when the project has alarms) and an `audit` card on the drivers block. The action that first finds the journal broken has already been applied; elevated actions are refused from the next one.
 
 **Flooding:** an unauthenticated client could force an fsynced entry per refused request. Refusals are coalesced per (source address, action): the first few in a minute are written in full, the rest as one `refused ×n` summary entry. Accepted actions are never coalesced.
 

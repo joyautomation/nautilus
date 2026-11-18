@@ -60,6 +60,16 @@ const (
 	refusedValueMax = 4 << 10
 )
 
+// elevatedActions are refused while the journal cannot be written (#709,
+// design §6 question 5, decided 2026-11-18): forces and program changes
+// must never happen unrecorded. Operator actions (tag writes, alarm
+// acknowledgement and shelving, SFC commands) are still allowed, kept in
+// memory and written once the journal recovers.
+var elevatedActions = map[string]bool{
+	"force.set": true, "force.clear": true, "force.clear-all": true,
+	"program.edit": true, "program.rollback": true, "program.activate": true,
+}
+
 // auditUpkeep is how often Server.Run calls the auditor's tick.
 var auditUpkeep = 5 * time.Second
 
@@ -175,22 +185,33 @@ func (a *auditor) upkeep(ctx context.Context) {
 	}
 }
 
+// down reports a journal that could not be opened or cannot be written:
+// elevated actions are refused, and the system alarm is up.
+func (a *auditor) down() bool {
+	return a.unavailable != "" || a.health.Load() != nil
+}
+
+// AuditJournalDown reports whether the audit journal could not be opened
+// or cannot be written. While it is, elevated actions (forces, program
+// edits) are refused; naut run raises the system alarm from it.
+func (s *Server) AuditJournalDown() bool { return s.audit.down() }
+
 // status is the journal's card on the drivers block, shown only while
 // something is wrong with it: it could not be opened, or it cannot be
-// written. Either way actions are allowed (the interim policy until #709's
-// question 5 is answered), so this card is how an operator learns that
-// they are not being journalled to disk.
+// written. Either way elevated actions are refused and operator actions
+// are allowed, journalled in memory only: this card (and naut run's
+// system alarm) is how an operator learns why.
 func (a *auditor) status() *DriverStatus {
 	h := a.health.Load()
 	switch {
 	case a.unavailable != "":
 		return &DriverStatus{Kind: "audit", Name: "audit journal", State: "error",
-			Message: "the audit journal could not be opened: actions are allowed and journalled in memory only (the last " +
+			Message: "the audit journal could not be opened: forces and program changes are refused; operator actions are allowed and journalled in memory only (the last " +
 				strconv.Itoa(auditRing) + ", lost on restart)",
 			LastError: a.unavailable}
 	case h != nil:
 		return &DriverStatus{Kind: "audit", Name: "audit journal", State: "error",
-			Message: "the audit journal cannot be written: actions are allowed, and their entries are kept in memory until it can be",
+			Message: "the audit journal cannot be written: forces and program changes are refused until it can be; operator actions are allowed, and their entries are kept in memory until then",
 			SinceMs: h.since.UnixMilli(), LastError: h.err,
 			Metrics: []DriverMetric{
 				{Label: "waiting", Value: float64(h.pending), Volatile: true},
@@ -213,9 +234,10 @@ func (a *auditor) flush() {
 }
 
 // writeLocked puts e in the journal, after any entries still owed to it,
-// and in the ring. When the journal fails the action is still allowed
-// (the interim policy until design §6 question 5 is answered): the
-// failure is logged and e is kept, to be written with the same id later.
+// and in the ring. When the journal fails, the action this entry records
+// has already happened: the failure is logged and e is kept, to be
+// written with the same id later; from then on elevated actions are
+// refused (elevatedActions) until the journal catches up.
 func (a *auditor) writeLocked(e audit.Entry) {
 	got := e
 	if a.retryLocked() {
@@ -398,6 +420,14 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var t auditTarget
 	if a.tf != nil {
 		t = a.tf(r, body)
+	}
+	if elevatedActions[a.action] && a.s.audit.down() {
+		a.answer(w, r, t, func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "the audit journal cannot be written, so " + a.action + " is refused until it can be (operator actions are still allowed)",
+			})
+		})
+		return
 	}
 	a.answer(w, r, t, a.h)
 }

@@ -473,9 +473,9 @@ func (f *flaky) Record(e audit.Entry) (audit.Entry, error) {
 	return e, nil
 }
 
-// While the journal cannot be written the action is still allowed (the
-// interim policy until design §6 Q5), the entry is in the ring, and it is
-// written, with the same id and in order, once the journal recovers.
+// While the journal cannot be written an operator action is still allowed
+// (design §6 Q5), the entry is in the ring, and it is written, with the
+// same id and in order, once the journal recovers.
 func TestJournalFailureAllowsTheActionAndCatchesUp(t *testing.T) {
 	logs := captureLog(t)
 	j := &flaky{down: true}
@@ -841,8 +841,8 @@ func auditCard(t *testing.T, srv *Server) *DriverStatus {
 	return nil
 }
 
-// While actions are allowed without being journalled to disk (provisional,
-// #709 question 5), the drivers block says so: a journal that could not be
+// While operator actions are journalled in memory only and elevated ones
+// are refused (#709, design §6 question 5), the drivers block says so: a journal that could not be
 // opened, or one that cannot be written, until it catches up.
 func TestJournalTroubleIsOnTheDriversBlock(t *testing.T) {
 	if c := auditCard(t, New(newTestRuntime(t))); c != nil {
@@ -978,5 +978,76 @@ func TestAuditUpkeepDoesNotStallTheFrames(t *testing.T) {
 	}
 	if frames < 3 {
 		t.Fatalf("%d frames while the journal was catching up, want 3 (%v)", frames, sc.Err())
+	}
+}
+
+// While the journal cannot be written (or could not be opened), elevated
+// actions are refused and never applied, and operator actions still go
+// through (#709, design §6 question 5). The refusal is journalled, with its
+// target; a request without the credential is refused for that first.
+func TestJournalDownRefusesElevatedActions(t *testing.T) {
+	captureLog(t)
+	j := &flaky{down: true}
+	srv := auditServer(t, Options{Audit: j})
+	if srv.AuditJournalDown() {
+		t.Fatal("down before any write failed")
+	}
+	// The write that finds the journal broken has already happened.
+	if rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("operator write = %d", rec.Code)
+	}
+	if !srv.AuditJournalDown() {
+		t.Fatal("not down after a failed write")
+	}
+	elevated := []struct{ method, path, body string }{
+		{"POST", "/api/forces", `{"name":"SP","value":12}`},
+		{"POST", "/api/forces/clear", ""},
+		{"DELETE", "/api/forces/SP", ""},
+		{"PUT", "/api/program", `{"source":"` + strings.ReplaceAll(editedProgram, "\n", `\n`) + `"}`},
+		{"POST", "/api/program/rollback", ""},
+		{"POST", "/api/program/activate", `{"sha":"abc"}`},
+	}
+	for _, c := range elevated {
+		rec := call(t, srv, c.method, c.path, c.body)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "audit journal cannot be written") {
+			t.Errorf("%s %s while the journal is down = %d %s, want 503", c.method, c.path, rec.Code, rec.Body)
+		}
+	}
+	if fv := srv.rt.Tags().ForcedValues(); len(fv) != 0 {
+		t.Errorf("a refused force was applied: %v", fv)
+	}
+	es := srv.audit.ring.Recent()
+	if e := es[len(elevated)-1]; e.Action != "force.set" || e.Target != "SP" || e.Detail["status"] != http.StatusServiceUnavailable {
+		t.Errorf("the refused force's entry: %+v", e)
+	}
+	for _, c := range []struct{ method, path, body string }{
+		{"POST", "/api/tags", `{"name":"SP","value":71}`},
+		{"POST", "/api/alarms/ack", `{"ids":["HiTemp"]}`},
+	} {
+		if rec := call(t, srv, c.method, c.path, c.body); rec.Code >= 300 {
+			t.Errorf("operator action %s while the journal is down = %d %s", c.path, rec.Code, rec.Body)
+		}
+	}
+	// Recovered: forces are allowed again.
+	j.mu.Lock()
+	j.down = false
+	j.mu.Unlock()
+	srv.audit.tick()
+	if rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":12}`); rec.Code != http.StatusOK {
+		t.Errorf("force after recovery = %d %s", rec.Code, rec.Body)
+	}
+
+	// A journal that could not be opened: down for the process's life.
+	off := auditServer(t, Options{AuditUnavailable: errors.New("audit: locked")})
+	if rec := call(t, off, "POST", "/api/forces", `{"name":"SP","value":12}`); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("force with no journal = %d", rec.Code)
+	}
+	if rec := call(t, off, "POST", "/api/tags", `{"name":"SP","value":1}`); rec.Code != http.StatusNoContent {
+		t.Errorf("operator write with no journal = %d", rec.Code)
+	}
+	// Without the credential, the refusal is for that.
+	tok := auditServer(t, Options{AuthToken: "s3cret", AuditUnavailable: errors.New("audit: locked")})
+	if rec := call(t, tok, "POST", "/api/forces", `{"name":"SP","value":12}`); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unauthorized force with no journal = %d", rec.Code)
 	}
 }

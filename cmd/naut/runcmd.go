@@ -29,10 +29,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/lsp"
@@ -235,7 +237,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		gate.SetHealth(watch.wrap(rt.Liveness))
 	}
 
-	alarms, err := startAlarms(proj, rt)
+	// The audit journal's system alarm reads the server, which is built
+	// after the alarms (it serves them): srvRef is set once it exists.
+	var srvRef atomic.Pointer[server.Server]
+	alarms, err := startAlarms(proj, rt, auditAlarm(&srvRef))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
 		return 1
@@ -371,9 +376,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	// The audit journal (#709): every write through the tag API, accepted
 	// or refused, fsynced before it is answered. If it cannot be opened the
-	// controller still runs, with the entries kept in memory only and an
-	// error card on the drivers block: provisional, until #709's question 5
-	// decides whether it should refuse instead.
+	// controller still runs: forces and program changes are refused,
+	// operator actions are journalled in memory only, and the drivers block
+	// and the system alarm say so (#709, design §6 question 5).
 	j, err := openAudit(proj, os.Stderr)
 	sopts.AuditUnavailable = err
 	if j != nil {
@@ -381,6 +386,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		go pruneAudit(ctx, j, os.Stderr)
 	}
 	srv := server.New(rt, sopts)
+	srvRef.Store(srv)
 	if j != nil {
 		// What the seam still owes (open refusal windows, entries kept
 		// through a failure) is written before the journal closes.
@@ -500,14 +506,36 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 // TimeoutStopSec=10, Kubernetes' 30 s grace period, systemd's default 90 s.
 const runStopTimeout = 5 * time.Second
 
+// AuditAlarmID is the system alarm raised while the audit journal could
+// not be opened or cannot be written (#709, design §6 question 5).
+const AuditAlarmID = "nautilus.audit-journal"
+
+// auditAlarm is the audit journal's system alarm, read from the server
+// srv will hold. Unshelvable and acknowledged: while it is up, forces and
+// program changes are refused and actions are journalled in memory only.
+func auditAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: AuditAlarmID, Tag: "__nautilus.audit-journal-down",
+			Name:     "Audit journal cannot be written: forces and program changes are refused",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: func() bool {
+			s := srv.Load()
+			return s != nil && s.AuditJournalDown()
+		},
+	}
+}
+
 // startAlarms builds the project's alarm engine over rt, before the scan
 // loop starts: the engine registers itself on the runtime's post-scan
 // hook, and SetAlarms hands it to the retain saver, so the first takeover
 // restores the acknowledgements the last leader saved rather than
 // re-annunciating them. Nil when the project has no alarms. Split out of
 // runProject, which blocks on Ctrl+C, so the wiring has a test.
-func startAlarms(proj *project.Project, rt *runtime.Runtime) (*project.Alarms, error) {
-	alarms, err := proj.NewAlarms(rt)
+func startAlarms(proj *project.Project, rt *runtime.Runtime, sys ...project.SystemAlarm) (*project.Alarms, error) {
+	alarms, err := proj.NewAlarms(rt, sys...)
 	if err != nil || alarms == nil {
 		return nil, err
 	}

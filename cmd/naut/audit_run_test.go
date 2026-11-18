@@ -27,15 +27,16 @@ func TestNautRunJournalsWrites(t *testing.T) {
 		{"default", "", "audit"},
 		{"audit.path", "audit:\n  path: var/journal\n  keep-days: 30\n", filepath.Join("var", "journal")},
 		// A path that cannot be a directory: the controller runs, with the
-		// journal in memory only, said on stderr and on the drivers block
-		// (provisional, #709 question 5).
-		{"unopenable", "audit:\n  path: main.st\n", ""},
+		// journal in memory only, said on stderr and on the drivers block;
+		// it refuses a force and raises the system alarm beside the
+		// project's own (#709, design §6 question 5).
+		{"unopenable", "audit:\n  path: main.st\nalarms:\n  defs:\n    - { id: Trip, tag: Trip }\n", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			files := map[string]string{
 				"nautilus.yaml": "name: journalled\ntasks:\n  - program: main.st\n    scan: 20ms\n" +
-					"tags:\n  - { name: SP, role: setpoint, type: REAL, init: 1 }\n" +
+					"tags:\n  - { name: SP, role: setpoint, type: REAL, init: 1 }\n  - { name: Trip, role: setpoint, type: BOOL, init: false }\n" +
 					"server:\n  addr: \"127.0.0.1:0\"\n" + c.section,
 				"main.st": "PROGRAM Main\nVAR_EXTERNAL\n SP : REAL;\nEND_VAR\nEND_PROGRAM\n",
 			}
@@ -92,6 +93,30 @@ func TestNautRunJournalsWrites(t *testing.T) {
 				resp.Body.Close()
 				if !strings.Contains(string(b), `"kind":"audit"`) || !strings.Contains(string(b), "memory only") {
 					t.Errorf("/api/drivers = %s, want the audit journal's error card", b)
+				}
+				resp, err = http.Post("http://"+api+"/api/forces", "application/json", strings.NewReader(`{"name":"SP","value":3}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusServiceUnavailable {
+					t.Errorf("force with no journal = %d, want 503", resp.StatusCode)
+				}
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					resp, err := http.Get("http://" + api + "/api/alarms")
+					if err != nil {
+						t.Fatal(err)
+					}
+					b, _ := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					if strings.Contains(string(b), `"id":"`+AuditAlarmID+`"`) {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("/api/alarms = %s, want the audit journal's system alarm", b)
+					}
+					time.Sleep(50 * time.Millisecond)
 				}
 				return
 			}

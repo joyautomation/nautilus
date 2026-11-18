@@ -997,30 +997,42 @@ journalled by the leader that applies it; one a standby answers itself
 (`503` while it holds the lease with its scans stalled, `502` when the
 leader cannot be reached) is journalled by the standby.
 
-:::caution[Provisional]
-These answer questions still open in the design
-(`docs/design/identity-audit.md` §6) and may change:
+### When the journal cannot be written
 
-- **A journal that cannot be written does not stop the controller.**
-  If the journal fails, the action is still carried out, an error is
-  logged, and the entry is kept in memory (up to 10,000; past that the
-  oldest are counted in an `audit.dropped` entry) and written, with
-  its id, once the disk recovers. If `naut run` cannot open the journal
-  (an unwritable `audit.path`, or another `naut run` already using it),
-  the controller runs with the entries in memory only (the last 1000,
-  lost on restart). Either way an `audit` card with state `error` appears
-  on the drivers block (`GET /api/drivers`, `/api/state`, the live
-  stream), until the journal recovers or the controller restarts. Refusing
-  elevated actions (forces, program edits) while the journal is down is
-  the alternative under consideration (question 5).
-- **`GET /api/audit` is open when no auth token is set**, as every read
-  is. Its entries carry client addresses (question 1).
-:::
+A force or a program change must never happen unrecorded, so while the
+journal cannot be written, or `naut run` could not open it (an unwritable
+`audit.path`, or another `naut run` already using it):
+
+- **Elevated actions are refused** with `503`: forces (set, clear, clear
+  all) and program edits, rollbacks and activations. The refusal is
+  journalled, in memory.
+- **Operator actions are allowed**: tag writes, alarm acknowledgement and
+  shelving, SFC commands. Their entries are kept in memory (up to 10,000;
+  past that the oldest are counted in an `audit.dropped` entry) and written,
+  with their ids, once the journal recovers. A journal that could not be
+  opened keeps only the last 1000, lost on restart.
+- **It is shown:** an error is logged, an `audit` card with state `error`
+  appears on the drivers block (`GET /api/drivers`, `/api/state`, the live
+  stream), and, when the project has alarms, the system alarm
+  `nautilus.audit-journal` (high priority, not shelvable) is raised. Both
+  clear when the journal recovers; one that could not be opened needs a
+  restart.
+
+The action that first finds the journal broken has already been carried
+out (see the limits below); elevated actions are refused from the next one.
+
 
 Known limits:
 
 - The action takes effect before its entry is written: a crash
-  between the two leaves an applied action without an entry.
+  between the two leaves an applied action without an entry, and a write
+  that fails leaves one entry in memory only until the journal recovers.
+- A write a standby forwarded, which the leader applied before the
+  connection failed, has two entries: `ok` on the leader and a `502` on the
+  standby.
+- `GET /api/audit` is open when no auth token is set, as every read is
+  today. With users and roles (#708) it needs a signed-in principal with
+  the `audit` permission.
 - The program routes `naut logix serve` answers itself (`PUT /api/program`,
   which edits the Logix project, and `POST /api/logix/deploy`) are not
   journalled yet, nor are the refusals of the program routes on a Siemens
@@ -1043,7 +1055,7 @@ Query parameters filter it: `from` and `to` (epoch ms or RFC 3339),
 
 | Status | When |
 | --- | --- |
-| `401` | An auth token is set and the request does not carry it: the entries say who did what from where. With no token set, it is open, like every read (provisional, see above) |
+| `401` | An auth token is set and the request does not carry it: the entries say who did what from where. With no token set it is open, like every read, until users and roles (#708) |
 | `400` | A bad `from`, `to` or `limit` |
 
 ## Historian proxy
