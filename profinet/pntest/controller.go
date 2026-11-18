@@ -42,6 +42,8 @@ type Controller struct {
 	NoOutputIOCR bool
 
 	cmFrom      net.IP // source of the last CControl
+	badXfer     bool   // output frames carry TransferStatus != 0
+	frozen      bool   // output frames repeat one CycleCounter
 	mu          sync.Mutex
 	arUUID      [16]byte
 	session     uint16
@@ -193,8 +195,13 @@ func (c *Controller) sendLoop() {
 		for _, s := range c.out.API.IOCSs {
 			csdu[s.FrameOffset] = wire.IOxSGood
 		}
-		cycle += 64
+		if !c.frozen {
+			cycle += 64
+		}
 		frame = wire.AppendCyclic(frame[:0], c.outFrame, csdu, cycle, c.outDS)
+		if c.badXfer {
+			frame[len(frame)-1] = 0x01 // TransferStatus: damaged in transit
+		}
 		c.mu.Unlock()
 		c.port.Send(c.devMAC, wire.EtherTypePNIO, frame)
 	}
@@ -329,6 +336,29 @@ func (c *Controller) SetName(name string) (uint8, error) {
 // call sends one PNIO request and returns the response status and blocks.
 // twice sends the datagram twice (a retransmission) and checks that both
 // answers are the same.
+// DamageOutputs makes the output frames carry TransferStatus != 0 (or
+// clean again).
+func (c *Controller) DamageOutputs(on bool) { c.mu.Lock(); c.badXfer = on; c.mu.Unlock() }
+
+// FreezeCycleCounter makes the output frames repeat one CycleCounter.
+func (c *Controller) FreezeCycleCounter(on bool) { c.mu.Lock(); c.frozen = on; c.mu.Unlock() }
+
+// Fire sends a PNIO request and does not wait for an answer (for a
+// request that is expected to get none).
+func (c *Controller) Fire(op uint16, args []byte) {
+	body := wire.MarshalPNIORequestBody(args, 4096, false)
+	c.mu.Lock()
+	c.seq++
+	h := &wire.RPCHeader{
+		RPCVersion: wire.RPCVersionCL, PacketType: wire.RPCPTypeRequest, Flags1: wire.RPCFlagLastFrag | wire.RPCFlagIdempotent,
+		ObjectUUID: wire.UUIDPNIOObjectBase, InterfaceUUID: wire.UUIDPNIOInterface, ActivityUUID: randUUID(),
+		InterfaceVersion: 1, SequenceNum: c.seq, OpNum: op, InterfaceHint: 0xFFFF, ActivityHint: 0xFFFF,
+		FragmentLen: uint16(len(body)),
+	}
+	c.mu.Unlock()
+	c.cli.WriteToUDP(append(h.Marshal(), body...), c.devRPC)
+}
+
 func (c *Controller) call(op uint16, args []byte, twice bool) (wire.PNIOStatus, []wire.PNIOBlock, error) {
 	body := wire.MarshalPNIORequestBody(args, 4096, false)
 	c.mu.Lock()
