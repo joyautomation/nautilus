@@ -290,20 +290,38 @@ func TestSymbolAnswersOnlyForWhatExists(t *testing.T) {
 	}
 }
 
-// TestLadderDiagnosticPointsAtTheLadderLine: a refusal in a ladder file
-// names the ladder's own line, not the ST it was lowered to.
+// TestLadderDiagnosticPointsAtTheLadderLine: a refusal inside a rung
+// names the ladder's own line, which differs from the line of the ST it
+// was lowered to.
 func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
-	src := "PROGRAM L\nVAR\n    Run : BOOL;\n    Stop : BOOL;\n    Name : STRING;\nEND_VAR\nLD\n  RUNG r\n    /Stop ( Run )\nEND_LD\nEND_PROGRAM\n"
+	src := "PROGRAM L\nVAR\n    a : REAL;\n    b : REAL;\n    Run : BOOL;\n    Out : BOOL;\nEND_VAR\nLD\n  RUNG first\n    Run ( Out )\n\n  // a note above the rung\n  RUNG ratio\n    GT(DIV(a, b), 1.0) ( Run )\nEND_LD\nEND_PROGRAM\n"
 	_, diags, err := Write(Input{Programs: []Program{{Path: "l.ld", Source: src}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range diags {
-		if d.Rule == "siemens/type" && d.Line == 5 && d.Path == "l.ld" {
-			return
+	stSrc, _, err := toST(Program{Path: "l.ld", Source: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stLine := 0
+	for i, l := range strings.Split(stSrc, "\n") {
+		if strings.Contains(l, "/ b") || strings.Contains(l, "DIV(") {
+			stLine = i + 1
 		}
 	}
-	t.Fatalf("want siemens/type on l.ld:5, got %v", diags)
+	for _, d := range diags {
+		if d.Rule != "siemens/division" {
+			continue
+		}
+		if d.Path != "l.ld" || (d.Line != 13 && d.Line != 14) {
+			t.Fatalf("want the refusal on rung ratio (l.ld:13-14), got %v", d)
+		}
+		if stLine == d.Line {
+			t.Fatalf("the ST division is also on line %d, so this test cannot tell a mapped line from an unmapped one", stLine)
+		}
+		return
+	}
+	t.Fatalf("want siemens/division, got %v", diags)
 }
 
 func TestGlobalTypeRefusedInTheTagsDB(t *testing.T) {
@@ -408,6 +426,13 @@ func TestTimeLiterals(t *testing.T) {
 	}
 	if len(diags) != 1 || diags[0].Rule != "siemens/time" || diags[0].Line != 4 {
 		t.Fatalf("want one siemens/time on line 4 (LT#1500us), got %v %v", diags, out.Files)
+	}
+	ok, _, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR d : TIME; END_VAR\nd := TIME#5s;\nEND_PROGRAM\n"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fb := string(ok.Files[0].Data); !strings.Contains(fb, "#d := T#5s;") || strings.Contains(fb, "TIME#T#") {
+		t.Errorf("TIME#5s:\n%s", fb)
 	}
 }
 

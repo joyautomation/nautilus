@@ -8,16 +8,16 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
-// precedence of the binary operators, IEC 61131-3 Table 71. SCL agrees
-// except for unary minus against **, which every ** operand is
-// parenthesised for.
+// precedence of the binary operators, IEC 61131-3 Table 71. nautilus's
+// parser has no ** operator (EXPT is the function); SCL binds ** tighter
+// than unary minus, so EXPT's operands are parenthesised where it is
+// written (call).
 var precedence = map[string]int{
 	"OR": 1, "XOR": 2, "AND": 3, "&": 3,
 	"=": 4, "<>": 4,
 	"<": 5, ">": 5, "<=": 5, ">=": 5,
 	"+": 6, "-": 6,
 	"*": 7, "/": 7, "MOD": 7,
-	"**": 8,
 }
 
 const unaryPrec = 9
@@ -57,9 +57,6 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 		return pw.timeLit(e.Raw, e.Pos.Line)
 	case *st.TypedLit:
 		u := strings.ToUpper(e.TypeName)
-		if t, ok := e.Inner.(*st.TimeLit); ok && u == "TIME" {
-			return pw.timeLit(t.Raw, e.Pos.Line)
-		}
 		if u == "LTIME" {
 			pw.diag("siemens/ltime", e.Pos.Line, "LTIME is not in the first subset (nautilus's LTIME is milliseconds, TIA's nanoseconds)")
 			return ""
@@ -191,11 +188,6 @@ func (pw *progWriter) binary(e *st.BinaryExpr, parent int) string {
 		if pw.typ(e) == tWide && !pw.wide {
 			pw.wideRefused(e.Pos.Line)
 			return ""
-		}
-		if op == "**" {
-			// SCL binds ** tighter than unary minus: parenthesise any
-			// operand that is not a plain primary.
-			return paren(pw.expr(e.Left, unaryPrec+1)+" ** "+pw.expr(e.Right, unaryPrec+1), p, parent)
 		}
 	}
 	return paren(pw.expr(e.Left, p)+" "+op+" "+pw.expr(e.Right, p+1), p, parent)
