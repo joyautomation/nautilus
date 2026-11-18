@@ -78,12 +78,20 @@ const firstOutputGrace = 10 * time.Second
 // defaultStartupTimeout when it sends 0. Without it, a Connect that never
 // goes on (a tool, a crashed supervisor) would hold the one AR for good
 // and every other controller would get "out of AR resources".
+// A factor above maxStartupFactor (the spec's range ends at 1000, 100 s) is
+// clamped: 0xFFFF would otherwise let a half-open Connect hold the AR for
+// 1 h 49 min.
 func startupTimeout(factor uint16) time.Duration {
-	if factor == 0 {
+	switch {
+	case factor == 0:
 		return defaultStartupTimeout
+	case factor > maxStartupFactor:
+		factor = maxStartupFactor
 	}
 	return time.Duration(factor) * 100 * time.Millisecond
 }
+
+const maxStartupFactor = 1000
 
 const defaultStartupTimeout = 30 * time.Second
 
