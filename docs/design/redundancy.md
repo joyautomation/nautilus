@@ -85,8 +85,11 @@ redundancy:
 - **Misconfiguration is refused at start, never resolved quietly.** A peer list that differs
   between A and B is refused. So are two processes that both claim to be `a`: each process
   carries a random instance id, and the voters see two different ids under one name.
-- **Peer calls carry a shared token**, compared in constant time as `oplog` does. Mutual TLS
-  can follow #708.
+- **Peer calls carry a peer token** (`NAUTILUS_PEER_TOKEN`), compared in constant time as
+  `oplog` does. It is a separate secret from the client token `NAUTILUS_TOKEN`, so a client
+  that can write tags can't cast a vote. `naut run` refuses to start a pair member or a witness
+  without one, and `tools/deploy` installs it on all three boxes. Mutual TLS can follow #708.
+  How peer traffic meets the server's Host rule is §6.1.
 
 ## 3. Election and self-fencing
 
@@ -397,6 +400,37 @@ The test plan defines exactly how it is measured (§4 there).
   votes as a second path beside the plant network.
 - **The witness's state** is a small file, fsynced per grant.
 - **One witness can serve several pairs.** It keeps state per pair, keyed by the project name.
+
+### 6.1 Peer traffic and the Host rule (#826, #846)
+
+The tag API now answers a request only when it is addressed to a trusted Host (`localhost`, an
+IP, or a name in `NAUTILUS_ALLOWED_HOSTS`), or when it carries the token. The pair must work
+when its members address each other by DNS name, so peer traffic is kept apart from that rule:
+
+- **A peer listener of its own.** Votes, the state stream, `oplog` replication and audit-journal
+  copies run on the peer port that `peers:` and `witness:` name (§2). They are **not** mounted
+  behind `server.Handler`, and that includes `oplog`, which isn't mounted anywhere yet. The
+  witness runs only this listener.
+- **The token, every time.** Every peer request carries `NAUTILUS_PEER_TOKEN`, and the peer
+  listener answers nothing without it, whatever the Host. Peers can therefore be addressed by
+  name, by IP or through a floating address, with nothing to add to `NAUTILUS_ALLOWED_HOSTS`.
+  A DNS-rebound browser page can't supply the token, so the listener needs no Host check of its
+  own. It is never a browser surface: no CORS, and no static files.
+- **The standby's proxy to the leader** (`/api/*` forwarded, as today) passes through the
+  client's own Host and token header. The leader applies the same rule the standby would have.
+  To a client the pair is **one controller**, so A and B share one `NAUTILUS_TOKEN` and one
+  `NAUTILUS_ALLOWED_HOSTS`. `tools/deploy` installs both on both boxes. At the peer handshake
+  each side compares an HMAC of its client token, keyed with the peer token, and raises
+  "client token differs between A and B" when they don't match. The handshake never sends the
+  client token itself.
+- **Clients that follow the leader (#716).** `/api/cluster` advertises each controller's API
+  address, and a browser HMI that follows it can't send a token.
+  - **What has to be trusted.** Each advertised name must be in `NAUTILUS_ALLOWED_HOSTS` on
+    both controllers, or advertised as an IP or the floating address.
+  - **The warning.** At start, `naut run` warns about any advertised peer name that its own
+    `NAUTILUS_ALLOWED_HOSTS` doesn't list, and names the variable.
+  - **Other clients.** OPC UA clients aren't affected: the rule is HTTP-only. Scripts and
+    `naut` subcommands send `NAUTILUS_TOKEN`, as #846 already makes them.
 
 ## 7. Lone survivor and the engineer override
 

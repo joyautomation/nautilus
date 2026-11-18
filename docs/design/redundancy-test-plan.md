@@ -125,6 +125,8 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the gate is checked once per batch, not before each send (as `hw/base.go` does today) | design §3.4 | 3 |
 | a send with no deadline | design §3.4 | 3 |
 | no fence margin (the gate closes at lease expiry) | design §3.4 | 3 |
+| the peer listener trusts a Host instead of requiring the peer token | design §6.1 | 3 |
+| the standby's proxy drops or rewrites the client's Host or token | design §6.1 | 3 |
 | no back-off after a lease lapses unconfirmed | design §3.1, one-way partitions | 2 |
 | grants accepted from any witness incarnation | design §3.1, the witness incarnation | 2 |
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
@@ -401,6 +403,38 @@ changed manifest.
    is refused, a stale term included.
 7. **Every case runs** in T2 (the simulated disk and network), and cases 1–5 also run in T3.
 
+### 8.2 Peer traffic and the Host rule (design §6.1)
+
+Each case runs in T1 against the handlers and in T3 between containers, with every peer
+addressed **by DNS name**: names that are not in any `NAUTILUS_ALLOWED_HOSTS`.
+
+1. **The peer listener requires the peer token.**
+   - A request without it gets 401/403, by name, by IP and on localhost alike, so a trusted
+     Host never stands in for the token.
+   - A request with the **client** token instead is refused.
+   - With the peer token it is answered, by name or by IP.
+2. **Peers by name, nothing allowed.** Votes, the stream, `oplog` replication and journal
+   copies all work between peers addressed by name, with `NAUTILUS_ALLOWED_HOSTS` empty. This
+   is F1 and F12, rerun this way.
+3. **No peer route behind the tag API.** `server.Handler` serves no vote, stream or `oplog`
+   path. A request for one gets 404, token or not.
+4. **The standby's proxy** keeps the client's Host and token header:
+   - by IP: answered by the leader;
+   - by a name in both controllers' `NAUTILUS_ALLOWED_HOSTS`: answered by the leader;
+   - by an untrusted name with the client token: answered;
+   - by an untrusted name without it: refused, 403.
+
+   The leader and the standby give the same answer in every case.
+5. **Client token mismatch.** A and B with different `NAUTILUS_TOKEN` values raise "client
+   token differs between A and B" at the handshake. The handshake's bytes never contain either
+   token, which the test checks with a tap on the peer port.
+6. **Advertised names.** `naut run` warns about an advertised peer name its
+   `NAUTILUS_ALLOWED_HOSTS` doesn't list. A browser HMI following `/api/cluster` to that name
+   gets 403. With the name listed, or with the controllers advertised by IP or the floating
+   address, it follows (§9).
+7. **Starting without a peer token.** A pair member or a witness without `NAUTILUS_PEER_TOKEN`
+   is refused at start. This joins F30.
+
 ## 9. Clients follow the active controller (#716)
 
 Each case runs during F1, F3, F4, F12 and F27 in T3. F1 and F12 also run in T4.
@@ -467,7 +501,7 @@ then the override. It runs as a test, so it can't silently regress.
 | PR | Must pass before merge |
 |---|---|
 | 2 `quorum` + sim | T1. T2 matrix + 2,000 seeds. The PR-2 mutations caught (§3.3). F9, F15b, F22, F22b, F24–F26 and the vote half of F31 in T2. |
-| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3–F5, F8–F10, F12, F13, F15–F19, F30, F35 and F36. Every output path in design §3.4 meets its rules (I3, §3.4). §8.1. The PR-3 mutations caught. Kubernetes `leader` tests unchanged. |
+| 3 witness + wiring (cold) | The above, plus the T3 smoke subset: F1, F3–F5, F8–F10, F12, F13, F15–F19, F30, F35 and F36, and §8.2. Every output path in design §3.4 meets its rules (I3, §3.4). §8.1. The PR-3 mutations caught. Kubernetes `leader` tests unchanged. |
 | 4 stream + hot takeover | §6 in T2 and T3. I5 and I10 in the nightly run. §7 rolling update in T3. The PR-4 mutations caught, and the stream half of F31. |
 | 5 survivor + override | §8 in full. F16 and F17 with the device-watchdog assertion. The PR-5 mutations caught. |
 | 6 clients (#716) | §9 in T3, including F32–F34 for PROFINET. |
