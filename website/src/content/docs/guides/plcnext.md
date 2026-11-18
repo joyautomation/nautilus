@@ -429,6 +429,11 @@ controller answered ssh.
 
 ## What it does not do yet
 
+- **Redundancy.** A project with a `plcnext` driver and a `redundancy:`
+  section is refused at load (`naut check` says so). The driver writes
+  the output image from its own loop, every scan on the shm route,
+  without asking whether this replica leads, so a standby would drive the
+  outputs. PLCnext under redundancy is #710.
 - **Per-channel quality.** The driver has one quality for the whole
   image: the bus `RUN` bit. False makes every input `bad`.
 - **The status tags on the controller.** `__Online`, `__Outages` and
