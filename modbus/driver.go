@@ -710,6 +710,9 @@ func (d *Driver) Plan() Plan {
 // Start launches one polling loop per source. It returns immediately; use
 // Health to observe connection state.
 func (d *Driver) Start(ctx context.Context) {
+	d.lifeMu.Lock()
+	d.stopped = false // a driver may be started again after Stop
+	d.lifeMu.Unlock()
 	d.srcMu.Lock()
 	defer d.srcMu.Unlock()
 	d.runCtx, d.cancel = context.WithCancel(ctx)
