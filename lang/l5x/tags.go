@@ -65,8 +65,10 @@ func Tags(f *File, opts TagsOptions) ([]tagfile.Tag, error) {
 			}
 		}
 		tag := tagfile.Tag{Name: name, Role: "input", Desc: t.Description, Alias: t.AliasFor}
-		// An array's shape comes from the driver that delivers it; a tag
-		// file has no syntax for one, so it stays untyped and unseeded.
+		// An array's shape comes from the driver that delivers it from
+		// the live controller, so here it stays untyped and unseeded. The
+		// project import (logix/importer) types it and seeds it from the
+		// export's values, since nothing delivers it there.
 		if t.Dimensions == "" {
 			if _, elem := elementary[strings.ToUpper(t.DataType)]; !elem && t.DataType != "" {
 				typeName := ident(t.DataType)

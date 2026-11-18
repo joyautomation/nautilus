@@ -175,6 +175,13 @@ func Import(f *l5x.File, opts Options) (*Project, error) {
 			if t.Type == "" {
 				t.Type = im.tagType(src, t.Init)
 			}
+			// A typed array starts at the export's values. Without an
+			// init: it would never be seeded (a typed input no driver
+			// delivers is not), so the first rung reading it would fault
+			// the scan "undefined tag" on every scan (#774).
+			if t.Init == nil && strings.HasPrefix(t.Type, "ARRAY") {
+				t.Init = arrayInit(src.Value)
+			}
 			if why := im.notWritten(src, t); why != "" && !im.external[k] {
 				p.note("", -1, "tag", t.Name+" ("+logixTypeOf(src)+"): "+why)
 			}
@@ -255,6 +262,39 @@ func (im *importer) tagType(t *l5x.Tag, init any) string {
 		}
 	}
 	return typ
+}
+
+// arrayInit is an array tag's init: its elements as the export holds
+// them, trimmed after the last non-zero one (the loader pads a short list
+// with zeros, so an all-zero array is the one-word []). An element that is
+// not a plain value (a structure) is not carried: the array starts at
+// zero, which is what the tag needs to exist.
+func arrayInit(v any) []any {
+	list, _ := v.([]any)
+	last := -1
+	for i, e := range list {
+		switch x := e.(type) {
+		case bool:
+			if x {
+				last = i
+			}
+		case int64:
+			if x != 0 {
+				last = i
+			}
+		case float64:
+			if x != 0 {
+				last = i
+			}
+		case string:
+			if x != "" {
+				last = i
+			}
+		default:
+			return []any{}
+		}
+	}
+	return append([]any{}, list[:last+1]...)
 }
 
 // notWritten says why a write-back cannot create a controller tag no

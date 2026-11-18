@@ -331,7 +331,7 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 		case t.Dim > 0:
 			w(`<Array DataType="%s" Dimensions="%d" Radix="%s">`, t.DataType, t.Dim, radix)
 			for i := 0; i < t.Dim; i++ {
-				w(`<Element Index="[%d]" Value="%s"/>`, i, zeroOf(t.DataType))
+				w(`<Element Index="[%d]" Value="%s"/>`, i, t.elem(i))
 			}
 			w(`</Array>`)
 		default:
@@ -361,6 +361,14 @@ func zeroOf(dt string) string {
 	default:
 		return "0"
 	}
+}
+
+// elem is an array element's initial value in Logix spelling.
+func (t tagDef) elem(i int) string {
+	if i < len(t.Elems) && t.Elems[i] != "" {
+		return t.Elems[i]
+	}
+	return zeroOf(t.DataType)
 }
 
 func decoratedValue(t tagDef) string {
@@ -404,7 +412,15 @@ func l5kValue(t tagDef) string {
 	}
 	elems := make([]string, t.Dim)
 	for i := range elems {
-		elems[i] = l5kZero(t.DataType)
+		switch {
+		case i >= len(t.Elems) || t.Elems[i] == "":
+			elems[i] = l5kZero(t.DataType)
+		case t.DataType == "REAL" || t.DataType == "LREAL":
+			f, _ := strconv.ParseFloat(t.Elems[i], 64)
+			elems[i] = l5kReal(f)
+		default:
+			elems[i] = t.Elems[i]
+		}
 	}
 	return "[" + strings.Join(elems, ",") + "]"
 }
