@@ -231,9 +231,10 @@ both PROFINET behaviours. A standby device must go silent on the network
 the leader's station name. So in this wave:
 - both drivers are **plain-gated**: the gate controls the frame contents
   above, and the hung-scan protection works in every project;
-- `naut check` **refuses `profinet-device` and `profinet-controller`
-  together with `redundancy:`** and names §8.1. The standby behaviour
-  of §4.5 lands with James's answer, as its own PR.
+- under `redundancy:`, Load marks `profinet-device` a **replica**
+  (`WithDeviceReplica`, #790): its gate is leadership, and a standby goes
+  silent (§4.5) instead of marking its data invalid. The controller gets
+  the same treatment when it lands.
 
 ### 4.3 Controller
 
@@ -320,14 +321,22 @@ segment can send a Set.
   OptoMMP's passive-standby pattern). The AR setup time is measured on the
   bench and published, never promised.
 - **Device.** Two replicas cannot both answer DCP for one station name.
-  The proposal:
+  James chose (2026-11-17), at least to begin with:
   - only the leader runs the device;
   - the standby has no socket open;
   - on takeover, the PLC's AR to the old leader times out;
   - the PLC re-identifies the name, at a new MAC, and reconnects.
 
-  This depends on the PLC's behaviour and **needs measuring on the bench
-  PLC before it ships** (open question §8).
+  Built in #790. Two things stay open:
+  - **The station IP.** The PLC re-assigns the station's IP on takeover,
+    and the device accepts that only when the new leader's interface
+    already holds the address (§4.4). Two hosts cannot hold one address
+    at once, so for now the address has to move with the leader.
+  - **Takeover time.** It depends on the PLC and is **measured on the
+    bench PLC, never promised**.
+
+  Siemens' own system redundancy (S2/R1) is worth a look once the simple
+  case works.
 
 ### 4.6 Privileges and ports
 
@@ -428,9 +437,8 @@ the bench start-up fails, bisect over these first:
 
 ## 8. Open questions (for James)
 
-1. **Device under redundancy (§4.5).** Is "leader runs the device, standby
-   silent, the PLC re-identifies" acceptable, given the takeover time is
-   measured on the bench PLC?
+1. ~~**Device under redundancy (§4.5).**~~ Answered 2026-11-17: the
+   standby stays silent, at least to begin with (#790).
 2. **GSDML identity.** Which VendorID and DeviceID the generated GSDML
    carries.
 3. **Bench.** The PLC model and firmware, its network, the host and NIC
