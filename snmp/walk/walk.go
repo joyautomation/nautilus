@@ -569,6 +569,7 @@ func (p *pending) decode() (vb Varbind, skip bool, err error) {
 		if err == nil && len(b) == 4 {
 			vb.Str = net.IP(b).String()
 		} else if err == nil {
+			//lint:ignore ST1005 "Network Address" is the type name snmpwalk prints
 			err = fmt.Errorf("Network Address %q", val)
 		}
 	case "Counter32":
