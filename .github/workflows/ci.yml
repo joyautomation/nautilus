@@ -25,10 +25,14 @@ jobs:
   # the docs-claims drift warning. Anything else, and every push to main,
   # runs everything. Separately, the VS Code extension's jobs (compile/test,
   # gesture harness) run only when the extension, what it bundles or what
-  # its tests read changes (ci-scope.sh's extension list), or .github/; a
-  # PR without that runs the CLI-discovery e2e on Linux only, its macOS and
-  # Windows legs left out of the matrix (absent, not "skipped": were they
-  # ever made required checks, they would wait at "expected"). A skipped
+  # its tests read changes (ci-scope.sh's extension list), or .github/. The
+  # CLI-discovery e2e's macOS and Windows legs run on the same list, except
+  # that a .github/ change counts only when it changes the e2e's own
+  # definition (ci-scope.sh's e2e-all): those legs wait longest for a runner,
+  # and every push to main runs all three anyway. A PR without them runs the
+  # e2e on Linux only, the other legs left out of the matrix (absent, not
+  # "skipped": were they ever made required checks, they would wait at
+  # "expected"). A skipped
   # job reports "skipped", which branch protection counts as passing.
   # Every gate below fails closed: a job is left out only on an explicit
   # "false", never on a missing or garbled output.
@@ -40,10 +44,11 @@ jobs:
       examples: ${{ steps.scope.outputs.examples }}
       hmibuild: ${{ steps.scope.outputs.hmibuild }}
       extension: ${{ steps.scope.outputs.extension }}
-      # The CLI-discovery e2e's OS legs: all three when the extension
-      # changed; Linux only otherwise (it drives a naut built from the PR,
-      # so a Go change still runs it, without the macOS/Windows queues).
-      e2e-os: ${{ steps.scope.outputs.extension != 'false' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]' }}
+      # The CLI-discovery e2e's OS legs: all three when the extension or the
+      # e2e's own definition changed (e2e-all); Linux only otherwise (it
+      # drives a naut built from the PR, so a Go change still runs it,
+      # without the macOS/Windows queues).
+      e2e-os: ${{ steps.scope.outputs.e2e-all != 'false' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]' }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 2} # a PR's merge commit: HEAD^1 is the base
@@ -61,12 +66,17 @@ jobs:
           out=
           if [ "$EVENT" = pull_request ] && changed=$(git diff --name-only HEAD^1 HEAD); then
             printf '%s\n' "$changed"
-            out=$(printf '%s\n' "$changed" | .github/scripts/ci-scope.sh) || out=
+            # The base's ci.yml, for e2e-all's comparison (none: it counts
+            # as changed).
+            base_ci="$RUNNER_TEMP/base-ci.yml"
+            git show HEAD^1:.github/workflows/ci.yml >"$base_ci" 2>/dev/null || base_ci=
+            out=$(printf '%s\n' "$changed" | CI_SCOPE_BASE_CI="$base_ci" .github/scripts/ci-scope.sh) || out=
           fi
           # Fail closed: a push, no diff, or a script that failed or printed
           # no verdict runs everything.
-          if ! grep -qxE 'full=(true|false)' <<<"$out" || ! grep -qxE 'extension=(true|false)' <<<"$out"; then
-            out=$'full=true\nextension=true'
+          if ! grep -qxE 'full=(true|false)' <<<"$out" || ! grep -qxE 'extension=(true|false)' <<<"$out" \
+            || ! grep -qxE 'e2e-all=(true|false)' <<<"$out"; then
+            out=$'full=true\nextension=true\ne2e-all=true'
           fi
           printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
   go:
@@ -303,6 +313,36 @@ jobs:
           name: evidence-examples
           path: evidence/
           retention-days: 14
+  # The TIA Openness agent's contract (siemens/tiad): tiad's C# core under
+  # Mono with a scripted host instead of TIA (tools/tiad/build-fake.sh →
+  # tiad-fake.exe), and the Go contract suite against it. The suite skips
+  # without TIAD_FAKE_BIN; NAUTILUS_REQUIRE_TIAD=1 makes that a failure here,
+  # so a build that silently stopped producing the fake can't pass. The plain
+  # go job leaves the flag unset and skips. TIAD_BIN (the real agent, on the
+  # TIA image) is never set here.
+  siemens-tiad:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Siemens tiad — contract suite on Mono (tiad-fake)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      # mono-devel, not mono-mcs + mono-runtime: build-fake.sh compiles with
+      # -sdk:4.8 and references System.Web.Extensions.dll, and only
+      # mono-devel carries the .NET 4.8 reference assemblies (verified in a
+      # clean ubuntu:24.04: the smaller pair fails with CS8001).
+      - name: Mono (mono-devel)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mono-devel
+      - name: build tiad-fake
+        run: tools/tiad/build-fake.sh
+      - name: contract suite against tiad-fake (must run, not skip)
+        env:
+          NAUTILUS_REQUIRE_TIAD: '1'
+        run: TIAD_FAKE_BIN="$PWD/tools/tiad/out/tiad-fake.exe" go test -count=1 -v ./siemens/tiad/...
   # The race detector over the module (#752): a data race in runtime (#870)
   # went unnoticed because no job ran -race on it. Every package runs here
   # except the three slowest under -race (about 680 s of the module's 1300 s
@@ -1274,7 +1314,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, go, go-race, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
+    needs: [changes, go, go-race, siemens-tiad, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -216,13 +216,25 @@ const playgroundHost = "playground.nautilus"
 
 // ---- the tag API -----------------------------------------------------------
 
+// newRequest is a request handed in by function call (handle, stream). Its
+// callers (the extension's engine.ts, the page's client.js, sw.js for the
+// dashboard and HMI views) pass a path alone, and httptest would address
+// it to example.com, which the Host guard refuses (#819): every request
+// was a 403 and the playground stayed offline. Each one is addressed to
+// the controller's playground name, as engine.ts's PLAYGROUND_URL is.
+func newRequest(ctx context.Context, method, url string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, url, body).WithContext(ctx)
+	req.Host = playgroundHost
+	return req
+}
+
 func request(ctx context.Context, args []js.Value) *http.Request {
 	method, url := args[0].String(), args[1].String()
 	var body io.Reader
 	if len(args) > 3 && args[3].Type() == js.TypeString {
 		body = strings.NewReader(args[3].String())
 	}
-	req := httptest.NewRequest(method, url, body).WithContext(ctx)
+	req := newRequest(ctx, method, url, body)
 	if len(args) > 2 && args[2].Type() == js.TypeObject {
 		keys := js.Global().Get("Object").Call("keys", args[2])
 		for i := 0; i < keys.Length(); i++ {
@@ -314,7 +326,7 @@ func jsStream(_ js.Value, args []js.Value) any {
 // run. Ended, the client reconnects to the new controller at once.
 func openStream(url string, emit func(string), end func()) (cancel func()) {
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest("GET", url, nil).WithContext(ctx)
+	req := newRequest(ctx, "GET", url, nil)
 	go func() {
 		defer end()
 		r := current()

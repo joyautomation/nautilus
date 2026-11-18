@@ -326,8 +326,8 @@ type FileInfo struct {
 // so the rule is Windows-aware: relative, forward slashes, no "..", no
 // drive letters or other ':' (alternate data streams), no control
 // characters or <>"|?*, no segment ending in a dot or a space, and no
-// reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or
-// without an extension). The client checks every path it sends, and the
+// reserved device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9, COM¹²³,
+// LPT¹²³, with or without an extension). The client checks every path it sends, and the
 // agent checks again.
 func CleanPath(p string) (string, error) {
 	bad := func(why string) (string, error) {
@@ -364,11 +364,14 @@ func CleanPath(p string) (string, error) {
 	return c, nil
 }
 
+// windowsReserved are the device names Windows reserves in every
+// directory: CON, PRN, AUX, NUL, and COM and LPT followed by a digit 0-9
+// or a superscript ¹, ² or ³.
 var windowsReserved = func() map[string]bool {
 	m := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
-	for i := 1; i <= 9; i++ {
-		m[fmt.Sprintf("COM%d", i)] = true
-		m[fmt.Sprintf("LPT%d", i)] = true
+	for _, d := range []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³"} {
+		m["COM"+d] = true
+		m["LPT"+d] = true
 	}
 	return m
 }()

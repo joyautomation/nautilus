@@ -69,6 +69,16 @@ the device answers the connection with a module difference. The status
 row then says which modules differ, and their data is marked invalid
 both ways.
 
+**Update time.** The GSDML offers RT_CLASS_1 at a 1 ms send clock with
+reduction ratios 1, 2, 4 … 512, so the update times an engineering tool
+can set are 1, 2, 4 … 512 ms, and never below `min-cycle`. When nautilus
+configures a Siemens CPU itself (a `profinet-manifest:` device in the
+CPU's station, `target: siemens`), it also keeps to 16 ms or more, so the
+allowed times are 16, 32, 64, 128, 256 and 512 ms. Any other time is
+refused at deploy. With no update time set, the deploy picks the first
+of those at or above `min-cycle` (`min-cycle: 20ms` gives 32 ms) and
+writes it explicitly, so TIA never picks a faster one.
+
 ## Privileges and the network
 
 PROFINET runs on raw Ethernet, so the process needs `CAP_NET_RAW`:
