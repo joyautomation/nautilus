@@ -274,9 +274,15 @@ An operator picks a light or a dark theme, so colour a component from the
 kit's tokens rather than hex: text in `var(--ink)`, `var(--ink-2)` or
 `var(--muted)`; grounds in `var(--bg)`, `var(--surface)` and
 `var(--surface-2)`; outlines in `var(--edge)`; state in `var(--good)`,
-`var(--warn)` and `var(--crit)`. Each holds AA contrast on each ground in
-both themes. A hex chosen for one theme is unreadable in the other, which
-`naut check` reports.
+`var(--warn)` and `var(--crit)`. In both themes, the text tokens hold AA
+text contrast (4.5:1) and `--edge` holds AA non-text contrast (3:1) on
+every ground. The state tokens meet 3:1 as indicators (a fill, an outline,
+a lamp), except light `--warn` on `--surface-2`. As text, they fall below
+4.5:1 in places, so keep state-coloured text short and pair it with a
+word or a shape
+([#927](https://github.com/joyautomation/nautilus/issues/927)). The kit's
+palette test checks all of these. A hex chosen for one theme is
+unreadable in the other, which `naut check` reports.
 
 A `{Name}.component.json` beside the component gives it pipe ports and
 its examples: the props for each state it draws, by name.
