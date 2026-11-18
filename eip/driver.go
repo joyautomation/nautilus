@@ -49,8 +49,12 @@ type Driver struct {
 	// (internal words like TIMER.Control). They read as zero.
 	deadLeaves map[string]map[string]bool
 
-	mu        sync.Mutex
-	snapshot  nio.Values // latest polled values (nautilus tag name -> value)
+	mu       sync.Mutex
+	snapshot nio.Values // latest polled values (nautilus tag name -> value)
+	// failed holds the tags whose last read failed on a live session: their
+	// snapshot value is the last good one, and Quality says Bad until a
+	// read succeeds again (publish clears it).
+	failed    map[string]bool
 	connected bool
 	// primed is set once every scan class has completed a poll on the
 	// current connection, and cleared when the connection changes. The
@@ -466,11 +470,15 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 
 // Quality reports, per tag, the non-Good verdicts (io.QualityReporter): a
 // binding never delivered is NotConnected, and one delivered while the
-// controller is not connected now is Stale — its last value, held. The
-// companion is the driver's own truth and always Good. Before this the
-// runtime could only infer staleness from a failed read, which this driver
-// stopped reporting once it had delivered anything: a controller that had
-// dropped read Good on every tag it had ever polled.
+// controller is not connected now is Stale — its last value, held. A tag
+// whose last read failed while the session stayed up is Bad, its last good
+// value held, until a read succeeds (modbus's rule for a failed block on a
+// live connection). The companion is the driver's own truth and always
+// Good. Before this the runtime could only infer staleness from a failed
+// read, which this driver stopped reporting once it had delivered
+// anything: a controller that had dropped read Good on every tag it had
+// ever polled, and a tag that failed to read on a live session (#862)
+// kept its old value as Good.
 func (d *Driver) Quality() map[string]nio.Quality {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -484,6 +492,8 @@ func (d *Driver) Quality() map[string]nio.Quality {
 				q = nio.NotConnected
 			case !d.connected:
 				q = nio.Stale
+			case d.failed[b.Name]:
+				q = nio.Bad
 			default:
 				continue
 			}
@@ -954,12 +964,26 @@ func (d *Driver) storeRaw(sess *session, b TagBinding, raw logix.RawTag) {
 		d.tagError(b, err)
 		return
 	}
+	d.publish(b.Name, v)
+}
+
+// publish stores a good read and clears the tag's failed mark.
+func (d *Driver) publish(name string, v any) {
 	d.mu.Lock()
-	d.snapshot[b.Name] = v
+	d.snapshot[name] = v
+	delete(d.failed, name)
 	d.mu.Unlock()
 }
 
+// tagError records a failed read: the tag keeps its last good value and
+// reads Bad until the next good read (see Quality).
 func (d *Driver) tagError(b TagBinding, err error) {
+	d.mu.Lock()
+	if d.failed == nil {
+		d.failed = map[string]bool{}
+	}
+	d.failed[b.Name] = true
+	d.mu.Unlock()
 	d.setErr(fmt.Errorf("%s (%s): %w", b.Name, b.Device, err))
 	d.log.Warn("eip: tag read failed", "tag", b.Name, "device", b.Device, "error", err)
 }
