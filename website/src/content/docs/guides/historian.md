@@ -120,6 +120,18 @@ server:
 History answers on **any** replica, leader or standby: the archive lives
 in Postgres, not the tag store.
 
+The historian's own API follows the controller's Host rule: it answers a
+request addressed to `localhost`, an IP address or a name in the
+historian's `NAUTILUS_ALLOWED_HOSTS`, or one that carries the historian's
+`NAUTILUS_TOKEN` (the token its poll sends). Any other name gets `403`, so
+a page on another site can't point a name at the historian (DNS
+rebinding) and read the archive. The controller's proxy addresses the
+historian by the name in `server.historian` and doesn't pass the
+controller's token on, so with `server.historian: http://historian:9100`
+the historian needs `NAUTILUS_ALLOWED_HOSTS=historian` (a URL by IP or
+`localhost` needs nothing). In Kubernetes, list the historian Service's
+names as the controller's deployment lists its own.
+
 ## Aggregates
 
 A compliance or daily report needs summary numbers, not raw rows — a

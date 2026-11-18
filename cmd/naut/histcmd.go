@@ -28,6 +28,7 @@ import (
 
 	"github.com/joyautomation/nautilus/hist"
 	"github.com/joyautomation/nautilus/internal/apiclient"
+	"github.com/joyautomation/nautilus/server"
 )
 
 const historianUsage = `naut historian — archive a controller's tags into Postgres
@@ -56,7 +57,11 @@ Usage:
   naut historian -source <url> -db <dsn> [flags]
 
 Flags:
-  -addr         Listen address for the historian's own HTTP API (default :9100)
+  -addr         Listen address for the historian's own HTTP API (default :9100).
+                It answers localhost, an IP address or a name in
+                NAUTILUS_ALLOWED_HOSTS, or a request carrying NAUTILUS_TOKEN;
+                a controller's server.historian URL names it, so list that
+                name (e.g. "historian") unless the URL is by IP.
   -source       Controller base URL to poll, e.g. http://plc:8080
                 (env NAUTILUS_SOURCE_URL). Required. The controller must
                 answer that name: list it in the controller's
@@ -162,7 +167,7 @@ func runHistorian(args []string) int {
 
 	srv := &historianServer{store: store}
 	fmt.Fprintf(os.Stderr, "naut historian: serving history on %s\n", *addr)
-	if err := http.ListenAndServe(*addr, srv.handler()); err != nil {
+	if err := http.ListenAndServe(*addr, srv.guarded()); err != nil {
 		fmt.Fprintln(os.Stderr, "naut historian:", err)
 		return 1
 	}
@@ -420,6 +425,15 @@ type histStore interface {
 var _ histStore = (*hist.Store)(nil)
 
 type historianServer struct{ store histStore }
+
+// guarded is the handler under the controller's Host rule (#831): the
+// archive is answered by localhost, an IP address or a name in
+// NAUTILUS_ALLOWED_HOSTS, or to a request carrying NAUTILUS_TOKEN (the
+// token the poll sends), so a page on another site cannot rebind a name
+// to the historian and read it.
+func (s *historianServer) guarded() http.Handler {
+	return server.NewHostGuard("historian", os.Getenv("NAUTILUS_TOKEN")).Wrap(s.handler())
+}
 
 func (s *historianServer) handler() http.Handler {
 	mux := http.NewServeMux()

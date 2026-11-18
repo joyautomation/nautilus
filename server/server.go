@@ -519,14 +519,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	// NAUTILUS_ALLOWED_HOSTS applies to every embedder (naut run, the
 	// serve commands, an SDK program), so the setting a 403 names always
 	// takes effect.
-	// An entry's port and root dot are dropped, as a request Host's are
-	// ("epic1.plant.lan:8086", "epic1.plant.lan.").
-	for _, h := range append(append([]string(nil), configured...), EnvAllowedHosts()...) {
-		h = strings.TrimSuffix(strings.ToLower(hostOnly(strings.TrimSpace(h))), ".")
-		if h != "" {
-			s.allowHosts[h] = true
-		}
-	}
+	s.allowHosts = allowedHostSet(configured)
 	if len(opts) > 0 {
 		s.drivers = opts[0].Drivers
 		s.cluster = opts[0].Cluster
@@ -904,12 +897,7 @@ func (s *Server) GuardHost(next http.Handler) http.Handler {
 			return
 		}
 		if !trusted && !(s.authToken != "" && tokenMatches(r, s.authToken)) {
-			w.Header().Add("Vary", "Origin")
-			how := "add the name to NAUTILUS_ALLOWED_HOSTS, or set NAUTILUS_TOKEN"
-			if s.authToken != "" {
-				how = "send the auth token, or add the name to NAUTILUS_ALLOWED_HOSTS (a browser page or a live stream cannot send the token)"
-			}
-			http.Error(w, fmt.Sprintf("this controller answers %q only with an auth token: it is reached without one by localhost, an IP address, or a name in NAUTILUS_ALLOWED_HOSTS (a page on another site could rebind %q to it); %s", r.Host, hostOnly(r.Host), how), http.StatusForbidden)
+			refuseHost(w, r, "controller", s.authToken != "")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1159,6 +1147,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	proxy.Director = func(req *http.Request) {
 		orig(req)
 		req.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
+		// Addressed to the historian by the name it was configured as,
+		// not the controller's: the historian answers by its own Host
+		// rule (#831), and the controller's names are not its.
+		req.Host = target.Host
 		// The controller's token is for the controller; the historian
 		// is another service and never sees it.
 		req.Header.Del("Authorization")
@@ -1317,14 +1309,7 @@ func (s *Server) authorizeWrite(r *http.Request) (int, string) {
 // literal (a browser sends one only for a page it loaded from that very
 // address), or a name configured in AllowedHosts.
 func (s *Server) trustedHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(hostOnly(host)), ".")
-	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
-		return true
-	}
-	if net.ParseIP(h) != nil {
-		return true
-	}
-	return s.allowHosts[h]
+	return hostTrusted(s.allowHosts, host)
 }
 
 // EnvAllowedHosts is NAUTILUS_ALLOWED_HOSTS: host names, comma-separated,
