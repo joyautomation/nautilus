@@ -74,6 +74,19 @@ var (
 	_ inputTyper          = (*runtimeStatus)(nil)
 )
 
+// statusTagsOnlyOnRuntime refuses tags: on any other driver: the key is
+// the status driver's, and another driver would silently ignore it.
+func statusTagsOnlyOnRuntime(d DriverConfig) error {
+	if len(d.Tags) > 0 && !strings.EqualFold(d.Type, "runtime") {
+		t := d.Type
+		if t == "" {
+			t = "memory"
+		}
+		return fmt.Errorf("driver %s: tags: binds a type: runtime status driver's inputs; a %s driver's tags come from its manifest or the tag files", t, t)
+	}
+	return nil
+}
+
 func newRuntimeStatus(d DriverConfig) (*runtimeStatus, error) {
 	if len(d.Tags) == 0 {
 		return nil, fmt.Errorf("driver runtime: tags: is empty: bind at least one {name, task, status}")
@@ -243,13 +256,20 @@ func statusValues(binds []RuntimeStatusConfig, s runtime.ScanStats) (nio.Values,
 }
 
 func (r *runtimeStatus) ReadInputs() (nio.Values, error) {
+	out := make(nio.Values, len(r.binds))
+	return out, r.ReadInputsInto(out)
+}
+
+// ReadInputsInto is the scan's read with no allocation (io.BatchReader):
+// every binding is always delivered, so dst never holds a stale key of
+// ours to delete.
+func (r *runtimeStatus) ReadInputsInto(dst nio.Values) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(nio.Values, len(r.vals))
 	for k, v := range r.vals {
-		out[k] = v
+		dst[k] = v
 	}
-	return out, nil
+	return nil
 }
 
 func (r *runtimeStatus) WriteOutputs(vals nio.Values) error {
@@ -318,27 +338,16 @@ type statusOverMemory struct {
 }
 
 func (s *statusOverMemory) ReadInputs() (nio.Values, error) {
-	out, err := s.Memory.ReadInputs()
-	if err != nil {
-		return nil, err
-	}
-	st, _ := s.status.ReadInputs()
-	for k, v := range st {
-		out[k] = v
-	}
-	return out, nil
+	out := nio.Values{}
+	return out, s.ReadInputsInto(out)
 }
 
 // ReadInputsInto shadows Memory's, so the status inputs are not skipped.
 func (s *statusOverMemory) ReadInputsInto(dst nio.Values) error {
-	v, err := s.ReadInputs()
-	if err != nil {
+	if err := s.Memory.ReadInputsInto(dst); err != nil {
 		return err
 	}
-	for k, x := range v {
-		dst[k] = x
-	}
-	return nil
+	return s.status.ReadInputsInto(dst)
 }
 
 func (s *statusOverMemory) Quality() map[string]nio.Quality {

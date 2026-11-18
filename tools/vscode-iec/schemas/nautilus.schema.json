@@ -673,7 +673,7 @@
         "tags": {
           "type": "array",
           "minItems": 1,
-          "description": "runtime: binds input tags to the runtime's own health, so alarms and the historian can see it. Polled every scan-rate (default 1s); every status reads false / 0 until the first poll. A standby never scans, so these tags move only on the replica that leads. List it beside the project's I/O driver, never alone.",
+          "description": "runtime: binds input tags to the runtime's own health, so alarms and the historian can see it. Polled every scan-rate (default 1s); every status reads false / 0 until the first poll. A standby never scans, so these tags move only on the replica that leads. Beside field drivers under drivers:, or alone as driver:, where it keeps the memory loopback a project with no driver has. Any other driver type refuses tags:.",
           "items": {
             "type": "object",
             "additionalProperties": false,

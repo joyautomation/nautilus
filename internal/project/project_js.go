@@ -55,6 +55,9 @@ var errOffline = errors.New("channels do not reach a peer in the browser")
 func buildChannel(ChannelConfig) (runtime.ChannelIO, error) { return offlineChannel{}, nil }
 
 func buildDriver(_ fs.FS, d DriverConfig) (nio.Driver, error) {
+	if err := statusTagsOnlyOnRuntime(d); err != nil {
+		return nil, err
+	}
 	switch strings.ToLower(d.Type) {
 	case "", "memory":
 		return nio.NewMemory(), nil

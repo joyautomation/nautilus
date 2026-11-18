@@ -257,6 +257,9 @@ func buildChannel(c ChannelConfig) (runtime.ChannelIO, error) {
 }
 
 func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
+	if err := statusTagsOnlyOnRuntime(d); err != nil {
+		return nil, err
+	}
 	switch strings.ToLower(d.Type) {
 	case "", "memory":
 		// Loopback for bring-up: inputs read back whatever was written,

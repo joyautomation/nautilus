@@ -47,6 +47,9 @@ type InProcess struct {
 	mb  []*mbFace
 	ua  []*uaFace
 	ins []string
+	// status: the project's runtime status drivers (runtime.StatsReader,
+	// #850). No device answers them; they deliver their own values.
+	status []nio.Driver
 
 	mu     sync.Mutex
 	faults []string
@@ -117,6 +120,9 @@ func NewInProcess(s *Set, clock runtime.Clock, drivers []nio.NamedDriver) (*InPr
 				return nil, fmt.Errorf("driver %s: %w", nd.Name, err)
 			}
 			ip.ua = append(ip.ua, f)
+		case runtime.StatsReader:
+			// The runtime's own health, not a device's: kept as it is.
+			ip.status = append(ip.status, nd.Driver)
 		default:
 			return nil, fmt.Errorf("driver %s (%T): virtual devices answer modbus and opcua-client drivers only", nd.Name, nd.Driver)
 		}
@@ -300,6 +306,15 @@ func (ip *InProcess) ReadInputs() (nio.Values, error) {
 	}
 	for _, f := range ip.ua {
 		ip.readOPCUA(f, out)
+	}
+	for _, d := range ip.status {
+		v, err := d.ReadInputs()
+		if err != nil {
+			return nil, err
+		}
+		for k, x := range v {
+			out[k] = x
+		}
 	}
 	return out, nil
 }

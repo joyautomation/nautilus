@@ -257,3 +257,30 @@ func TestRuntimeStatusThroughRun(t *testing.T) {
 	tags.SetBool("BreakFast", false)
 	waitFor(t, "Fast__Faulting FALSE once its scans are clean", func() bool { return !tags.Bool("Fast__Faulting") })
 }
+
+// tags: belongs to the status driver: on another driver it is refused,
+// not silently ignored.
+func TestRuntimeStatusTagsOnAnotherDriverRefused(t *testing.T) {
+	memory := strings.Replace(statusDrivers, "type: runtime", "type: memory", 1)
+	if _, err := Load(statusProject(memory), ""); err == nil || !strings.Contains(err.Error(), "driver memory: tags: binds a type: runtime") {
+		t.Errorf("tags: on a memory driver: %v", err)
+	}
+}
+
+// A status driver in the drivers list is a Sparkplug device like any
+// driver with inputs: its status tags are published as its metrics, and it
+// has no health of its own (the runtime is its source), so it is born with
+// the node.
+func TestRuntimeStatusIsASparkplugDevice(t *testing.T) {
+	rs, err := newRuntimeStatus(DriverConfig{Type: "runtime", Tags: statusBinds("A main demoted", "B main late")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devs, err := sparkplugDevices([]nio.NamedDriver{{Name: "health", Driver: rs}})
+	if err != nil || len(devs) != 1 {
+		t.Fatalf("devices %+v, %v: want one", devs, err)
+	}
+	if d := devs[0]; d.ID != "health" || strings.Join(d.Tags, ",") != "A,B" || d.Health != nil {
+		t.Errorf("device %+v, want ID health, tags A,B, no health gate", d)
+	}
+}
