@@ -47,6 +47,10 @@ Usage:
                           program; no Go toolchain involved. -runtime <naut>
                           builds on another naut binary: a release's
                           linux_arm64 naut makes an ARM64 controller.
+  naut deploy <cmd> <ssh-target>
+                      Install, update (rolled back if it does not start),
+                          roll back, back up or restore a controller on a
+                          Linux box with systemd, over SSH (naut deploy help).
 
                           run, test, and build take -m <manifest> to load one
                           other than nautilus.yaml. That is how one project
@@ -144,6 +148,8 @@ func main() {
 		os.Exit(runRun(os.Args[2:]))
 	case "build":
 		os.Exit(runBuild(os.Args[2:]))
+	case "deploy":
+		os.Exit(runDeploy(os.Args[2:]))
 	case "hmi":
 		os.Exit(runHMI(os.Args[2:]))
 	case "test":
