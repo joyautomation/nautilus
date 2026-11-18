@@ -104,7 +104,13 @@ func TestRTGuardStopsASpinningFIFOThread(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRTGuardStopsASpinningFIFOThread$", "-test.count=1")
-	cmd.Env = append(os.Environ(), "NAUT_RTGUARD_CHILD=1", "NAUTILUS_RT_LIMIT_MS=50")
+	// asyncpreemptoff: Go preempts a spinning goroutine about every 10 ms,
+	// and a locked thread then waits on a futex for a moment, which resets
+	// RLIMIT_RTTIME's count; without it the limit trips only when a
+	// preemption happens to miss (seconds, measured). The child's spin has
+	// no calls, so with it the thread runs flat out at FIFO, as a runaway in
+	// code Go cannot preempt would.
+	cmd.Env = append(os.Environ(), "NAUT_RTGUARD_CHILD=1", "NAUTILUS_RT_LIMIT_MS=50", "GODEBUG=asyncpreemptoff=1")
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	switch {
@@ -128,8 +134,9 @@ func TestRTGuardStopsASpinningFIFOThread(t *testing.T) {
 	}
 }
 
-// spinAtFIFO is the child: one locked thread at SCHED_FIFO 1 spinning
-// without a blocking call until it is demoted, or 3 s.
+// spinAtFIFO is the child: one locked thread at SCHED_FIFO 1 spinning,
+// with no calls and so no preemption point, until it is demoted. The parent
+// bounds it at 5 s; the hard limit, at 125 ms.
 func spinAtFIFO() {
 	var demoted atomic.Bool
 	done := make(chan struct{})
@@ -148,10 +155,6 @@ func spinAtFIFO() {
 		}
 		start := time.Now()
 		for !demoted.Load() {
-			if time.Since(start) > 3*time.Second {
-				fmt.Println("NOT STOPPED after 3 s")
-				os.Exit(1)
-			}
 		}
 		// Told is not enough: the thread itself must have left SCHED_FIFO.
 		if policy, _, _ := syscall.RawSyscall(syscall.SYS_SCHED_GETSCHEDULER, 0, 0, 0); policy != schedOther {

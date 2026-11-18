@@ -117,8 +117,12 @@ the task sleeps between scans. A thread that passes the limit gets
 normal scheduling. It logs an error, and each task's `scan.sched` shows
 `applied: false` with the reason, until the controller restarts. Past
 2.5 × the limit the kernel kills the process, in case that did not
-happen. So a stuck loop cannot starve the core's other work: the
-kernel's own threads, the network, a vendor runtime sharing the core.
+happen. So a thread that stops yielding cannot starve the core's other
+work: the kernel's own threads, the network, a vendor runtime sharing
+the core. Any blocking resets the count, Go's own preemption included (it
+parks a task's thread for a moment about every 10 ms). A scan that merely
+runs long therefore shows as lateness and missed slots, not as a demotion.
+The limit is for a thread that has stopped giving the core back at all.
 `NAUTILUS_RT_LIMIT_MS` changes the limit (10 ms or more). A stricter
 limit already in place, from a launcher for instance, is kept. A task
 that cannot be bounded is not given the priority.
