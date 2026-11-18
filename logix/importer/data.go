@@ -111,7 +111,10 @@ func (rt *routine) dataInstr(in *l5x.Instr) (string, *refusal) {
 		// nautilus's TON/TOF computes ET, and takes PT from its call, every
 		// scan: a write to either would be lost (#793). Logix lets a rung
 		// set ACC or PRE of a running timer.
-		return "", refuse("timer", "%s: written while a TON/TOF runs %s; nautilus's timer sets ET and PT itself every scan, so the write would be lost; give the preset through the call (PT :=), or rewrite the timing", target, baseOf(target))
+		if strings.HasSuffix(strings.ToUpper(t), ".ET") {
+			return "", refuse("timer", "%s: written while a TON/TOF runs %s; a nautilus timer has no settable elapsed time (ET counts from IN alone), so the write would be lost; to restart it, drop its IN for a scan; to carry time across a stop, keep it in a TIME or DINT variable of your own and compare that", target, baseOf(target))
+		}
+		return "", refuse("timer", "%s: written while a TON/TOF runs %s; nautilus's timer takes PT from its call every scan, so the write would be lost; give the preset through the call (PT := a variable the logic sets)", target, baseOf(target))
 	}
 	if conv := rt.storeConversion(m, args, target, t); conv != "" {
 		value = conv + "(" + value + ")"

@@ -14,6 +14,31 @@ const timerArithL5X = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="38.01" TargetName="Mini" TargetType="Controller" ContainsContext="false" ExportDate="(pinned)">
 <Controller Name="Mini" ProcessorType="1756-L85E" MajorRev="38" MinorRev="11">
 <DataTypes/>
+<AddOnInstructionDefinitions>
+<AddOnInstructionDefinition Name="Hold" Revision="1.0" ExecutePrescan="false" ExecutePostscan="false" ExecuteEnableInFalse="false">
+<Parameters>
+<Parameter Name="EnableIn" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only"/>
+<Parameter Name="EnableOut" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only"/>
+<Parameter Name="Go" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write"/>
+<Parameter Name="Sv" TagType="Base" DataType="DINT" Usage="Input" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write"/>
+<Parameter Name="Done" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="true" ExternalAccess="Read Only"/>
+</Parameters>
+<LocalTags>
+<LocalTag Name="Tl" DataType="TIMER" ExternalAccess="None">
+<DefaultData Format="Decorated"><Structure DataType="TIMER"><DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="5000"/><DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/><DataValueMember Name="DN" DataType="BOOL" Value="0"/></Structure></DefaultData>
+</LocalTag>
+</LocalTags>
+<Routines>
+<Routine Name="Logic" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N"><Text><![CDATA[XIC(Go)TON(Tl,?,?);]]></Text></Rung>
+<Rung Number="1" Type="N"><Text><![CDATA[XIO(Go)MOV(Sv,Tl.ACC);]]></Text></Rung>
+<Rung Number="2" Type="N"><Text><![CDATA[XIC(Tl.DN)OTE(Done);]]></Text></Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</AddOnInstructionDefinition>
+</AddOnInstructionDefinitions>
 <Tags>
 <Tag Name="go" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
 <Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="1"/></Data>
@@ -158,11 +183,21 @@ func TestLogixImportTimerMembersInArithmetic(t *testing.T) {
 		// A preset the logic writes goes through its DINT preset variable.
 		"{ D4 := T4_PRE }",
 		// A write to a timer a TON runs would be lost: refused.
-		"// not imported (timer: T1.ACC: written while a TON/TOF runs T1",
+		"// not imported (timer: T1.ACC: written while a TON/TOF runs T1; a nautilus timer has no settable elapsed time",
 	} {
 		if !strings.Contains(ld, want) {
 			t.Errorf("Main.ld lacks %q:\n%s", want, ld)
 		}
+	}
+	// An Add-On Instruction's own local timer, run by the AOI's own TON:
+	// the corpus's commonest shape (a saved value MOVed into ACC behind an
+	// XIO). Refused with the reason, never carried as a lost write.
+	hold, err := os.ReadFile(filepath.Join(proj, "lib", "Hold.ld"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hold), "// not imported (timer: Tl.ACC: written while a TON/TOF runs Tl; a nautilus timer has no settable elapsed time") {
+		t.Errorf("a write to an AOI's running local timer is not refused:\n%s", hold)
 	}
 	other, err := os.ReadFile(filepath.Join(proj, "Other.ld"))
 	if err != nil {
