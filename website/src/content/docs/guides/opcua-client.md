@@ -4,10 +4,11 @@ description: Poll an OPC UA server (an Ignition gateway, a PLC's embedded server
 ---
 
 :::caution[Preview]
-Tested against gopcua's in-process server only (including a
-`Basic256Sha256 / SignAndEncrypt` session). It has not yet been run against
-Ignition, Kepware, node-opcua or a PLC's embedded server. Try it against
-your server before you depend on it.
+Tested against gopcua's in-process server, open62541 and Eclipse Milo
+(see [Servers it has been run against](#servers-it-has-been-run-against)),
+each over `Basic256Sha256 / SignAndEncrypt`. It has not yet been run against
+Ignition, Kepware or a PLC's embedded server. Try it against your server
+before you depend on it.
 :::
 
 A `driver: {type: opcua-client}` section makes nautilus an OPC UA **client**: it
@@ -21,7 +22,7 @@ file, the way `naut eip import` and `naut modbus import` do.
 ```yaml
 driver:
   type: opcua-client
-  endpoint: opc.tcp://10.0.0.5:4840
+  endpoint: opc.tcp://192.0.2.10:4840
   security: Basic256Sha256        # default: the strongest the server offers
   security-mode: SignAndEncrypt   # default: the strongest mode of that policy
   username: nautilus              # password from NAUTILUS_OPCUA_PASSWORD
@@ -48,7 +49,7 @@ each with its own `name:`.
 ## Generating the manifest: `naut opcua import`
 
 ```sh
-naut opcua import --endpoint opc.tcp://10.0.0.5:4840 \
+naut opcua import --endpoint opc.tcp://192.0.2.10:4840 \
   --root 'ns=2;s=[default]' --prefix GW_ --writable 'GW_*_SP'
 ```
 
@@ -89,11 +90,48 @@ not read or written at all (its old index may now belong to another
 namespace with a node of the same id), and the log says why. It reads
 again once a connect finds the URI.
 
-## Polling, quality and `__Online`
+## Polling or subscribing, quality and `__Online`
 
-Each scan class is one batched Read on its own timer, chunked to the
-server's advertised `MaxNodesPerRead` (halved if the server answers
-`Bad_TooManyOperations`). Subscriptions are not used.
+By default each scan class is one batched Read on its own timer, chunked
+to the server's advertised `MaxNodesPerRead` (halved if the server answers
+`Bad_TooManyOperations`).
+
+With `read-mode: subscribe` each scan class is instead one OPC UA
+subscription: its publishing interval is the class rate, and the server
+sends a value only when it changes. That cuts traffic and server load when
+most values sit still, which is most of a plant most of the time. Use it
+when a server has many tags or many clients. Polling is the
+simpler path, and the right one for a handful of tags.
+
+```yaml
+driver:
+  type: opcua-client
+  endpoint: opc.tcp://192.0.2.10:4840
+  manifest: opcua_manifest.yaml
+  read-mode: subscribe     # poll (default) | subscribe
+  scan-rate: 200ms         # the default class's publishing interval
+```
+
+Everything below holds in both modes. A subscribed session is first read
+once per class, so `__Online` and quality mean the same thing; then it is
+checked once a second, because a subscription on its own does not tell a
+client that its server has gone. A restart is noticed within that second,
+a server that goes silent after one request timeout. Each class is also
+read in full every 30 s (every ten periods for a slower class), so a
+notification lost on the way costs at most that long. A class slower
+than a quarter of the request timeout is still sampled at its own rate;
+the server just publishes more often than that, so its keep-alive stays
+well inside the timeout. Subscriptions are
+created fresh on every new session. A server may publish slower than the
+class asks; the driver logs it and the status card shows the interval the
+server granted. If the server refuses a subscription the session fails
+and is retried with backoff, and the error says why: the driver never
+falls back to polling on its own; the retry delay climbs until a
+session subscribes. A node the server will not monitor reads **Bad** for
+the whole session, refresh reads included, since nothing follows it in
+between. If the server refuses a call creating too many monitored items
+at once (`Bad_TooManyOperations`), the driver halves the batch and keeps
+the smaller size for later sessions.
 
 - `<name>__Online` (BOOL) is true once the session is up and every scan
   class has been read on it, false otherwise. Its name follows the driver's
@@ -148,8 +186,10 @@ another nautilus controller: `naut opcua trust <thumbprint>` there, see
 [Approving a client](/guides/opcua-server/#approving-a-client)). A nautilus
 server offers secure endpoints too, so a client left on the default picks
 one of them, and its first connection is refused until that server trusts
-its certificate. Set `security: None` only where an unsecured, read-only
-link is what you want. The
+its certificate. Some servers refuse a certificate they do not trust by
+closing the connection mid-handshake, with no status code; the driver's
+error then says so and names the certificate file to trust. Set
+`security: None` only where an unsecured, read-only link is what you want. The
 password for `username:` is never in the manifest: set
 `NAUTILUS_OPCUA_PASSWORD`.
 
@@ -182,6 +222,35 @@ sending credentials in the clear. Pin `security-mode: Sign` or
 The driver dials the `endpoint:` you wrote even when the server advertises
 a different address, so a server behind NAT or a VPN is reachable at the
 address you can reach.
+
+## Servers it has been run against
+
+Every server below runs in CI (`opcua/matrix_test.go`) through the same
+scenarios: import of a folder of one variable per scalar type (twice,
+byte-identical), typed reads of every type, a value that changes on its
+own, an unknown node read Bad while the rest stay Good, a write of every
+type read back, a write to a read-only node refused without dropping the
+session, a binding whose namespace index is wrong read by its URI, and two
+outages twice each: a restart (the server closes the connection) and a
+blackhole (the container is paused, so the link goes silent as it does
+when a device loses power). Through both outages `__Online` falls, the
+values hold as Stale, and the session comes back on its own with no
+growth in goroutines.
+
+| Server | Session | What to know |
+|---|---|---|
+| open62541 v1.4.22 (a fixture server built against the release) | Basic256Sha256 / SignAndEncrypt | Namespace 1 is the server's own application URI; a server's variables start at namespace 2. A write to a read-only node is refused with `Bad_NotWritable`. |
+| Eclipse Milo 1.1.1 (its demo server 1.0.3) | Basic256Sha256 / SignAndEncrypt, once trusted | Refuses an untrusted client certificate by closing the connection and files it under `security/rejected`; moving it to `security/pki/trusted/certs` lets the next retry in, with no restart. Namespace 1's URI carries a per-install UUID, so a reinstalled server renumbers it. A write to a read-only node is refused with `Bad_UserAccessDenied`, not `Bad_NotWritable`. It advertises its own idea of its address (port 4840 inside the container); the driver dials the mapped port it was given. The demo address space includes a 25,000-node folder, so import with `--root`. |
+
+Both read modes run every scenario. How quickly the driver notices: a
+restart closes the connection, so `__Online` falls within a scan when
+polling and within a second when subscribed; a blackhole is silent, so it
+falls after one request timeout (5 s by default), plus up to a second when
+subscribed. Once the server answers again the driver is back within one
+retry step of the backoff ladder. Both servers granted a 200 ms publishing
+interval as asked and support `SetPublishingMode`, which the driver uses
+to check a subscribed session. A value that sits still for several
+keep-alives and then changes once arrives as a notification on both.
 
 ## Reading an Ignition gateway
 

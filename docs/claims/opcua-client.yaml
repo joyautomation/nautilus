@@ -10,9 +10,11 @@ claims:
     tests:
       - go ./cmd/naut TestNautOPCUAClientImportAndRun
       - go ./opcua TestReadsAndQuality
+      - go ./opcua TestForeignServerMatrix/open62541/reads/poll
+      - go ./opcua TestForeignServerMatrix/milo/reads/poll
     note: >-
-      Against gopcua's in-process server only; not yet run against
-      Ignition, Kepware, node-opcua or a PLC's embedded server.
+      Against gopcua's in-process server, open62541 and Eclipse Milo; not
+      yet run against Ignition, Kepware or a PLC's embedded server.
 
   - id: UAC-002
     claim: >-
@@ -123,7 +125,7 @@ claims:
     claim: >-
       Each scan class is one batched Read on its own timer, chunked to the
       server's MaxNodesPerRead and halved on Bad_TooManyOperations.
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestReadsAndQuality
     partial: true
@@ -135,7 +137,7 @@ claims:
       have been read, false while the server is unreachable, and named after
       the driver (opcua_client__Online unnamed, opcua-client-2 as
       opcua_client_2__Online).
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestReadsAndQuality
       - go ./opcua TestReconnectAndStale
@@ -148,7 +150,7 @@ claims:
     claim: >-
       A node the server refuses is Bad while the rest of its class keeps
       delivering; Uncertain statuses count as not good.
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestBadNodeIsBadNotFatal
     partial: true
@@ -159,7 +161,7 @@ claims:
       A transport failure reconnects with backoff while values hold with
       Stale quality and __Online false; after a reconnect each value stays
       Stale until the new session has read it, then is Good.
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./opcua TestReconnectAndStale
       - go ./opcua TestCarriedOverValueIsStaleUntilReadOnTheNewSession
@@ -173,7 +175,7 @@ claims:
       scanning while the server is down; the type follows the binding
       (Boolean BOOL, up to Int32 DINT, UInt32/Int64/UInt64/DateTime LINT,
       Float REAL, Double LREAL, String STRING).
-    source: "#polling-quality-and-__online"
+    source: "#polling-or-subscribing-quality-and-__online"
     tests:
       - go ./internal/project TestOPCUAClientServerDownReadsInitOrZero
       - go ./internal/project TestOPCUAClientDriverIsACommsDriver
@@ -269,10 +271,127 @@ claims:
       The driver dials the endpoint: written even when the server
       advertises a different address.
     source: "#security"
-    tests: []
-    note: The test server advertises the address it is dialled on.
+    tests:
+      - go ./opcua TestForeignServerMatrix/milo/reads/poll
+      - go ./opcua TestForeignServerMatrix/open62541/reads/poll
+    note: >-
+      In the matrix each server runs in a container that advertises port
+      4840 while the driver dials the mapped host port.
 
-  - id: UAC-030
+  - id: UAC-022
+    claim: >-
+      Against open62541 and Eclipse Milo over Basic256Sha256 /
+      SignAndEncrypt, the driver imports a folder byte-identically on
+      re-run, reads and writes every scalar type, reads an unknown node Bad
+      without dropping the session, refuses a write to a read-only node
+      without dropping it, and reads a binding whose namespace index is
+      wrong by its namespace URI.
+    source: "#servers-it-has-been-run-against"
+    tests:
+      - go ./opcua TestForeignServerMatrix/open62541/import
+      - go ./opcua TestForeignServerMatrix/open62541/reads/poll
+      - go ./opcua TestForeignServerMatrix/open62541/writes/poll
+      - go ./opcua TestForeignServerMatrix/open62541/remap/poll
+      - go ./opcua TestForeignServerMatrix/milo/import
+      - go ./opcua TestForeignServerMatrix/milo/reads/poll
+      - go ./opcua TestForeignServerMatrix/milo/writes/poll
+      - go ./opcua TestForeignServerMatrix/milo/remap/poll
+
+  - id: UAC-023
+    claim: >-
+      When the server restarts or goes silent (a paused container, as on a
+      power loss), __Online falls, delivered values hold as Stale, and the
+      session comes back on its own once the server answers, with no growth
+      in goroutines across repeated outages.
+    source: "#servers-it-has-been-run-against"
+    tests:
+      - go ./opcua TestForeignServerMatrix/open62541/restart/poll
+      - go ./opcua TestForeignServerMatrix/open62541/blackhole/poll
+      - go ./opcua TestForeignServerMatrix/milo/restart/poll
+      - go ./opcua TestForeignServerMatrix/milo/blackhole/poll
+
+  - id: UAC-024
+    claim: >-
+      A server that refuses an untrusted client certificate by closing the
+      connection mid-handshake gets an error that says so and names the
+      certificate file to trust, and once the server trusts it the next
+      retry connects with no restart.
+    source: "#security"
+    tests:
+      - go ./opcua TestForeignServerMatrix/milo
+
+  - id: UAC-025
+    claim: >-
+      With read-mode: subscribe each scan class is one subscription and
+      values arrive as data change notifications, with no polling after the
+      one Read per class that primes a new session; __Online, quality, the
+      Bad node and the writes behave as when polling.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeFollowsChangesWithoutPolling
+      - go ./opcua TestSubscribeBadNodeIsBadNotFatal
+      - go ./opcua TestSubscribeSeveralClasses
+      - go ./opcua TestForeignServerMatrix/open62541/reads/subscribe
+      - go ./opcua TestForeignServerMatrix/open62541/writes/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/reads/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/writes/subscribe
+
+  - id: UAC-026
+    claim: >-
+      A subscribed driver notices a server that restarted or went silent,
+      on servers with and without SetPublishingMode: __Online falls, values
+      hold as Stale, and once the server is back the session is primed and
+      subscribed afresh and changes arrive again.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeReconnectAndStale
+      - go ./opcua TestForeignServerMatrix/open62541/restart/subscribe
+      - go ./opcua TestForeignServerMatrix/open62541/blackhole/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/restart/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/blackhole/subscribe
+
+  - id: UAC-027
+    claim: >-
+      read-mode accepts poll and subscribe and anything else fails naut
+      check.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestReadModeIsChecked
+      - go ./cmd/naut TestCheckOPCUAClientDriver
+
+  - id: UAC-028
+    claim: >-
+      A subscribed value that sits still across several keep-alives and
+      then changes once is delivered as a notification.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeQuietValueStillArrives
+      - go ./opcua TestSubscriptionParams
+      - go ./opcua TestForeignServerMatrix/open62541/quiet/subscribe
+      - go ./opcua TestForeignServerMatrix/milo/quiet/subscribe
+
+  - id: UAC-029
+    claim: >-
+      Each subscribed class is also read in full every 30 s, or every ten of
+      its periods for a slower class.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeRefreshReads
+
+  - id: UAC-032
+    claim: >-
+      Subscribed, a node the server will not monitor reads Bad for the
+      whole session, refresh reads included; a Bad_TooManyOperations
+      refusal halves the monitored items per call and the smaller size is
+      kept for later sessions; and a server that refuses to subscribe gets
+      sessions on the climbing retry ladder, not one every minimum delay.
+    source: "#polling-or-subscribing-quality-and-__online"
+    tests:
+      - go ./opcua TestSubscribeRefusedItemStaysBad
+      - go ./opcua TestSubscribeTooManyOperationsIsKept
+      - go ./opcua TestSubscribeRefusedSubscriptionBacksOff
+
+  - id: UAC-033
     claim: >-
       Each generated client certificate has a subject of its own and an
       Authority Key Identifier naming its own key, so two nautilus clients'

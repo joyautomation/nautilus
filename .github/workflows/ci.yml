@@ -23,8 +23,15 @@ jobs:
   # the checks that apply to it: naut check + naut test on the example
   # projects it touched, the HMI 3D and playground builds, version-sync and
   # the docs-claims drift warning. Anything else, and every push to main,
-  # runs everything. A skipped job reports "skipped", which branch
-  # protection counts as passing.
+  # runs everything. Separately, the VS Code extension's jobs (compile/test,
+  # gesture harness) run only when the extension, what it bundles or what
+  # its tests read changes (ci-scope.sh's extension list), or .github/; a
+  # PR without that runs the CLI-discovery e2e on Linux only, its macOS and
+  # Windows legs left out of the matrix (absent, not "skipped": were they
+  # ever made required checks, they would wait at "expected"). A skipped
+  # job reports "skipped", which branch protection counts as passing.
+  # Every gate below fails closed: a job is left out only on an explicit
+  # "false", never on a missing or garbled output.
   changes:
     name: Changes — full suite or light
     runs-on: ubuntu-latest
@@ -32,6 +39,11 @@ jobs:
       full: ${{ steps.scope.outputs.full }}
       examples: ${{ steps.scope.outputs.examples }}
       hmibuild: ${{ steps.scope.outputs.hmibuild }}
+      extension: ${{ steps.scope.outputs.extension }}
+      # The CLI-discovery e2e's OS legs: all three when the extension
+      # changed; Linux only otherwise (it drives a naut built from the PR,
+      # so a Go change still runs it, without the macOS/Windows queues).
+      e2e-os: ${{ steps.scope.outputs.extension != 'false' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]' }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 2} # a PR's merge commit: HEAD^1 is the base
@@ -41,22 +53,46 @@ jobs:
         id: scope
         env:
           EVENT: ${{ github.event_name }}
+        shell: bash
         run: |
+          set -euo pipefail
+          out=
           if [ "$EVENT" = pull_request ] && changed=$(git diff --name-only HEAD^1 HEAD); then
             printf '%s\n' "$changed"
-            printf '%s\n' "$changed" | .github/scripts/ci-scope.sh | tee -a "$GITHUB_OUTPUT"
-          else
-            echo "full=true" | tee -a "$GITHUB_OUTPUT"
+            out=$(printf '%s\n' "$changed" | .github/scripts/ci-scope.sh) || out=
           fi
+          # Fail closed: a push, no diff, or a script that failed or printed
+          # no verdict runs everything.
+          if ! grep -qxE 'full=(true|false)' <<<"$out" || ! grep -qxE 'extension=(true|false)' <<<"$out"; then
+            out=$'full=true\nextension=true'
+          fi
+          printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
   go:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Go — vet, test, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.25'}
+        with: {go-version: '1.25', cache: false}
+      # Its own build cache (#752): setup-go's is keyed on go.sum alone, so
+      # whichever job saved first after a go.sum change owns it, and this
+      # job rebuilt nearly all of nautilus every run. Main saves one a day
+      # (about 220 MB compressed); a PR restores the newest and never
+      # saves. Tests still all run: -count=1 keeps cached results out.
+      - id: day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gocache
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          restore-keys: |
+            go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-test-${{ runner.os }}-
       - run: go vet ./...
       # -json and the coverage profile are kept as runtime evidence (the
       # runtime-evidence job joins them to docs/claims); `evidence cat`
@@ -68,7 +104,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          go test -json -count=1 -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
       # The browser playground (playground/, cmd/naut-wasm): GOOS=js swaps
       # internal/project's drivers for simulated ones, so a change that
@@ -85,6 +121,14 @@ jobs:
       # from a cold cache); the numbers are not kept.
       - name: benchmarks compile and run (1 iteration)
         run: go test -run '^$' -bench . -benchtime 1x ./...
+      - name: Save the Go build cache (main, once a day)
+        if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -102,7 +146,7 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     env:
-      FULL: ${{ needs.changes.outputs.full }}
+      FULL: ${{ needs.changes.outputs.full != 'false' }}
       EXAMPLES: ${{ needs.changes.outputs.examples }}
     steps:
       - uses: actions/checkout@v4
@@ -207,18 +251,43 @@ jobs:
   # Its own job so it runs beside go test, not inside it; the go job skips it.
   go-crossbuild:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Go — release targets cross-compile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.25'}
+        with: {go-version: '1.25', cache: false}
+      # Its own build cache (#752): setup-go's is keyed on go.sum alone, so
+      # whichever job saved first after a go.sum change owns it, and this
+      # job rebuilt nearly all of nautilus every run. Main saves one a day
+      # (about 570 MB compressed); a PR restores the newest and never
+      # saves. Tests still all run: -count=1 keeps cached results out.
+      - id: day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gocache
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
+          restore-keys: |
+            go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-cross-${{ runner.os }}-
       - name: TestReleaseTargetsBuildWithoutCgo
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json ./cmd/naut -run '^TestReleaseTargetsBuildWithoutCgo$' -v -timeout 20m | tee evidence/crossbuild.json | go run ./tools/evidence cat
+          go test -json -count=1 ./cmd/naut -run '^TestReleaseTargetsBuildWithoutCgo$' -v -timeout 20m | tee evidence/crossbuild.json | go run ./tools/evidence cat
+      - name: Save the Go build cache (main, once a day)
+        if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ steps.day.outputs.day }}
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
@@ -231,7 +300,7 @@ jobs:
   # open file above all, so they are tested on Windows, not assumed.
   go-windows:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Go — Windows file semantics
     runs-on: windows-latest
     steps:
@@ -239,9 +308,23 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
       - run: go test ./oplog/ ./alarm/
+  # PROFINET's raw-Ethernet transport (AF_PACKET) on a veth pair. The test
+  # runs itself as root of a new user + network namespace, so it needs no
+  # privilege and touches no host interface; ubuntu-latest restricts
+  # unprivileged user namespaces through AppArmor, so this job lifts that
+  # for its own run and makes a skip a failure.
+  profinet-veth:
+    name: PROFINET — raw Ethernet on a veth pair
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: NAUTILUS_PROFINET_VETH=1 go test -count=1 -run 'TestPacketVeth|TestOpenWithoutCapability' -v ./profinet/transport/
   sparkplug-tck:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Sparkplug B — TCK conformance
     runs-on: ubuntu-latest
     steps:
@@ -302,7 +385,7 @@ jobs:
         working-directory: examples/lift-station/hmi
   hmi-packs:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     # naut builds HMIs from a committed pack of the packages it carries
     # (internal/hmibuild): this rebuilds it from the kits in this tree and
     # the pins in packs/package.json, and fails when the committed one
@@ -325,7 +408,7 @@ jobs:
 
   vscode-iec:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.extension != 'false'
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest
     defaults:
@@ -408,7 +491,7 @@ jobs:
   # the production bundles: mimic, FBD, LD, SFC). ubuntu-latest ships Chrome.
   vscode-iec-gestures:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.extension != 'false'
     name: VS Code extension — webview gesture harness
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -459,12 +542,12 @@ jobs:
   # CLI still activate and say how to fix it. See src/e2e/run.ts.
   vscode-iec-e2e:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: VS Code extension — CLI discovery e2e (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.e2e-os) }}
     runs-on: ${{ matrix.os }}
     # A hung VS Code otherwise holds the runner for the 6-hour default.
     timeout-minutes: 15
@@ -562,7 +645,7 @@ jobs:
 
   release-config:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Release config — goreleaser check
     runs-on: ubuntu-latest
     steps:
@@ -572,13 +655,16 @@ jobs:
       # The PLCnext in-process tier is C, built by the release job with the
       # same script; compiling it here (warnings are errors) keeps a break
       # from surfacing first at tag time.
+      # use-cache off: it saved a new 18 MB cache on every run (one C file
+      # to build), about 200 entries that crowded the repo's 10 GB cache
+      # limit and evicted the ones that matter (#752).
       - uses: mlugg/setup-zig@v2
-        with: {version: 0.17.0}
+        with: {version: 0.17.0, use-cache: false}
       - name: Build nautilus_io (PLCnext, ARMv7)
         run: rt/plcnext-io/build.sh
   postgres:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     # The historian's Postgres store and the alarm journal's Postgres table
     # skip unless NAUTILUS_TEST_DATABASE_URL is set; here they run against a
     # real Postgres, so the docs' Postgres claims have evidence.
@@ -612,7 +698,7 @@ jobs:
 
   modbus-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Modbus TCP — foreign stack (pymodbus)
     runs-on: ubuntu-latest
     steps:
@@ -657,7 +743,7 @@ jobs:
           retention-days: 14
   opcua-foreign:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: OPC UA — foreign stack (asyncua)
     runs-on: ubuntu-latest
     steps:
@@ -687,9 +773,37 @@ jobs:
           name: evidence-opcua
           path: evidence/
           retention-days: 14
+  opcua-client-matrix:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: OPC UA client — server matrix (open62541, Milo; poll + subscribe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      # The client driver against other people's servers, in containers
+      # the test starts itself (opcua/matrix_test.go): import, typed reads,
+      # writes, namespace remap, and recovery from a restart and from a
+      # blackhole (docker pause). open62541 is built by the test from a
+      # tagged release (opcua/testdata/matrix/open62541, tagged by the
+      # directory's content); Milo's image is pinned by digest in the
+      # profile.
+      - name: Server matrix
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_OPCUA_MATRIX=all \
+            go test -json ./opcua/ -run TestForeignServerMatrix -v -timeout 600s | tee evidence/opcua-client-matrix.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-opcua-client-matrix
+          path: evidence/
+          retention-days: 14
   snmp-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: SNMP — foreign stack (snmpsim)
     runs-on: ubuntu-latest
     steps:
@@ -727,7 +841,7 @@ jobs:
           retention-days: 14
   redfish-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Redfish — foreign stack (DMTF mockup server)
     runs-on: ubuntu-latest
     steps:
@@ -755,7 +869,7 @@ jobs:
           retention-days: 14
   prom-sim:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     name: Prometheus — foreign stack (node_exporter)
     runs-on: ubuntu-latest
     steps:
@@ -786,7 +900,7 @@ jobs:
           retention-days: 14
   blackbox-gate:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    if: needs.changes.outputs.full != 'false'
     # The independent tester's checks (tools/blackbox, docs/design/blackbox.md):
     # scripts a foreign client wrote against the public docs and the specs,
     # imported verbatim and run against naut built from this PR. One subtest
@@ -843,8 +957,8 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [changes, go, examples, go-crossbuild, sparkplug-tck, modbus-sim, opcua-foreign, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
-    if: needs.changes.outputs.full == 'true'
+    needs: [changes, go, examples, go-crossbuild, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    if: needs.changes.outputs.full != 'false'
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:

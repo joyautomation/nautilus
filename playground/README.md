@@ -101,6 +101,15 @@ The examples carry their HMI sources (lift-station's `hmi/`) for this. Open
 HMI still shows the HMI built with the playground, so it does not follow
 edits to components.
 
+YAML files get completion, hover and validation from the schemas the
+extension declares (`nautilus.yaml`, `*_test.yaml`, `tags/`, `alarms/`,
+`sites/`), as on the desktop: `scripts/app.sh` fetches the web build of
+Red Hat's YAML extension (pinned, sha256-checked) into `dist/app/yaml-extension/`,
+and it loads when a YAML file first opens (about 350 KB gzipped). In a
+browser its server reads schemas over http(s) only, so `app/main.js` gives
+it the extension's schemas by their URLs here. Its telemetry and the
+schemastore.org catalog are off.
+
 The app also gives the workbench a file search over the project
 (`app/fileSearch.js`): without it `workspace.findFiles` ignored its glob,
 and the extension's component index and test discovery found wrong files.

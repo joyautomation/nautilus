@@ -72,6 +72,7 @@ func ResolveProfile(dir, ref string) (*Profile, error) {
 			return nil, err
 		}
 		p.dir = filepath.Dir(file)
+		p.file = file
 		return p, nil
 	}
 	p, err := loadBuiltin(ref)
