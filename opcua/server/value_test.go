@@ -453,6 +453,12 @@ func TestStatusOfEveryQuality(t *testing.T) {
 		if (st == ua.StatusGood) != (q == nio.Good) {
 			t.Errorf("%s -> %v", q, st)
 		}
+		// Plain StatusBad is reserved for a quality this build does not
+		// know: a known one with no case of its own would land there and
+		// pass the Good check above unnoticed.
+		if st == ua.StatusBad {
+			t.Errorf("%s -> plain StatusBad: give it its own status code", q)
+		}
 	}
 	if st := statusOf(nio.Substituted); st != ua.StatusUncertainSubstituteValue {
 		t.Errorf("substituted -> %v, want Uncertain_SubstituteValue", st)

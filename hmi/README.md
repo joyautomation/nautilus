@@ -114,8 +114,8 @@ detects a tag's *absence* but a published-yet-stale value looked exactly like a
 live one:
 
 ```ts
-rt.isGood('RTU9_ZONE15_LIT_001'); // false when stale / bad / never-connected
-rt.quality('AI_001.LVL.HSP'); // 'good' | 'stale' | 'bad' | 'notConnected'
+rt.isGood('RTU9_ZONE15_LIT_001'); // false when stale / bad / never-connected / substituted
+rt.quality('AI_001.LVL.HSP'); // 'good' | 'stale' | 'bad' | 'notConnected' | 'substituted'
 ```
 
 `quality()` resolves a dotted member path to its root tag — a UDT arrives from
@@ -359,9 +359,10 @@ the kit that renders a number an operator reads, and the one place that qualifie
 | status | precedence | what is drawn |
 | --- | --- | --- |
 | not published (`present={false}`) | 1st | `—` in `--q-notpublished`, badge `NO DATA` |
-| `bad` / `notConnected` | 2nd | the value in `--q-bad`, badge `BAD` |
-| `simulated` | 3rd | the value in `--q-simulated`, badge `SIM` |
-| `stale` | 4th | the value in `--q-stale`, badge `STALE 12m` (from `ageMs`) |
+| `bad` / `notConnected` / a quality the kit does not know | 2nd | the value in `--q-bad`, badge `BAD` |
+| `substituted` | 3rd | the value in `--q-substituted`, badge `SUBST`: an operator replaced a bad sensor's value |
+| `simulated` | 4th | the value in `--q-simulated`, badge `SIM` |
+| `stale` | 5th | the value in `--q-stale`, badge `STALE 12m` (from `ageMs`) |
 | `good` | — | the value in `--ink`, no badge at all |
 
 The value is **never blanked** for stale or bad: it is what the plant last was, and an operator

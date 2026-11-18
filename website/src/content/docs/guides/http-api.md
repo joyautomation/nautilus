@@ -246,7 +246,7 @@ curl -s 'localhost:8080/api/state?tags=P101,Level'
 | `locals` | when the program has `VAR` state | Program locals, read-only. Not narrowed by `tags=` |
 | `scan` | always | Scan timing and error counters. See [Scan timing and real-time](/guides/real-time/) |
 | `drivers` | when a driver reports status | The same list as [`/api/drivers`](#get-apidrivers) |
-| `quality` | when any tag is not good | Tag name → `stale`, `bad` or `notConnected`. Absent means every tag is good. See [quality](/guides/tag-model/#what-a-value-is-worth-quality) |
+| `quality` | when any tag is not good | Tag name → `stale`, `bad`, `notConnected` or `substituted`. Absent means every tag is good. See [quality](/guides/tag-model/#what-a-value-is-worth-quality) |
 | `alarms` | when the project has `alarms:` | Counts only. See [Alarms](/guides/alarms/#the-api) |
 | `forces` | while anything is forced | Forced address → forced value |
 

@@ -267,6 +267,17 @@ func TestResolveTypeRules(t *testing.T) {
 func TestRollupSubstitutedAndUnknown(t *testing.T) {
 	asm := []*assembler{{dev: "P1", members: []string{"a", "b"}}}
 	member := map[string]int{"a": 0, "b": 1}
+	// Every quality, on one member beside a Good one: the device is Good
+	// only when the member is, and a known quality never becomes Good.
+	for _, q := range nio.AllQualities() {
+		got, ok := rollup(asm, member, map[string]nio.Quality{"a": q, "b": nio.Good})["P1"]
+		if !ok {
+			got = nio.Good
+		}
+		if (got == nio.Good) != (q == nio.Good) {
+			t.Errorf("a member %s beside a good one: device %s", q, got)
+		}
+	}
 	for _, c := range []struct {
 		in   map[string]nio.Quality
 		want nio.Quality
