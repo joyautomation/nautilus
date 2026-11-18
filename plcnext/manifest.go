@@ -104,9 +104,12 @@ type Manifest struct {
 	Outputs string `yaml:"outputs"`
 	// RunPort is the controller's own "the local bus is exchanging
 	// process data" diagnostic (default DefaultRunPort); it is read with
-	// every scan and a stopped bus makes every input Bad. Empty disables
-	// the check.
+	// every scan and a stopped bus makes every input Bad. "none" in the
+	// manifest disables the check (RunPort is then empty).
 	RunPort string `yaml:"run-port"`
+	// noRunPort remembers "none", so filling the defaults again (New does,
+	// after ParseManifest) keeps the check off (#874).
+	noRunPort bool
 	// ByteOrder is how multi-byte values sit in the arrays: "big"
 	// (default; Axioline process data is Motorola order) or "little".
 	ByteOrder string `yaml:"byte-order"`
@@ -272,9 +275,11 @@ func (m *Manifest) fillDefaults() {
 	}
 	switch m.RunPort {
 	case "":
-		m.RunPort = DefaultRunPort
+		if !m.noRunPort {
+			m.RunPort = DefaultRunPort
+		}
 	case "none":
-		m.RunPort = ""
+		m.RunPort, m.noRunPort = "", true
 	}
 }
 
