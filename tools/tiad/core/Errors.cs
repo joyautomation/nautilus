@@ -1,4 +1,4 @@
-// Errors.cs: the failures tiad answers with (docs/design/siemens-ide.md §3.2).
+// Errors.cs: the failures tiad answers with (docs/design/siemens-ide.md section 3.2).
 //
 // C# 5 only: this source is compiled on the TIA machine by the stock
 // .NET Framework csc, which knows nothing newer. No string interpolation,

@@ -16,12 +16,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"net/http/httptest"
 	"path"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -66,9 +68,11 @@ type Fake struct {
 
 type session struct {
 	id, project string
-	station     *tiad.Station
-	blocks      []tiad.Block
-	compiled    bool
+	// guard is the directory a created project owns, "projects/<name>/".
+	guard    string
+	station  *tiad.Station
+	blocks   []tiad.Block
+	compiled bool
 }
 
 // Download records one real download. Secrets are never recorded.
@@ -105,6 +109,14 @@ func (f *Fake) SetGates(gates []tiad.Gate) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Gates = append([]tiad.Gate(nil), gates...)
+}
+
+// SetCompileResult replaces what compile returns while the fake is
+// serving.
+func (f *Fake) SetCompileResult(r tiad.CompileResult) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.CompileResult = r
 }
 
 // Downloads returns every real download so far.
@@ -250,12 +262,80 @@ func decode(r *http.Request, v any) *failure {
 	if fl := contentType(r, "application/json"); fl != nil {
 		return fl
 	}
-	dec := json.NewDecoder(r.Body)
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: %v", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: %v", err)
 	}
+	// Decode reads one value and leaves the rest: a body is one document.
+	if _, err := dec.Token(); err != io.EOF {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: invalid character after the top-level value")
+	}
+	// encoding/json matches field names case-insensitively, so
+	// "stopCPU" would answer stopCpu. The agent matches exactly, and so
+	// must the fake: a misspelt decision is never an answer.
+	var raw any
+	_ = json.Unmarshal(b, &raw)
+	if err := exactKeys(raw, reflect.TypeOf(v), ""); err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "body: json: %v", err)
+	}
 	return nil
+}
+
+// exactKeys checks that every object key in raw is exactly a JSON field
+// name of t, at every depth.
+func exactKeys(raw any, t reflect.Type, at string) error {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch v := raw.(type) {
+	case map[string]any:
+		switch t.Kind() {
+		case reflect.Map:
+			for k, x := range v {
+				if err := exactKeys(x, t.Elem(), at+k+"."); err != nil {
+					return err
+				}
+			}
+		case reflect.Struct:
+			for k, x := range v {
+				f, ok := fieldByTag(t, k)
+				if !ok {
+					return fmt.Errorf("unknown field %q", at+k)
+				}
+				if err := exactKeys(x, f.Type, at+k+"."); err != nil {
+					return err
+				}
+			}
+		}
+	case []any:
+		if t.Kind() == reflect.Slice {
+			for _, x := range v {
+				if err := exactKeys(x, t.Elem(), at); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func fieldByTag(t reflect.Type, name string) (reflect.StructField, bool) {
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		if tag == "" {
+			tag = f.Name
+		}
+		if tag == name {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // cleanPath enforces the work-dir sandbox with the client's own rule.
@@ -359,9 +439,41 @@ func (f *Fake) installGSD(r *http.Request) (any, *failure) {
 	if !strings.HasPrefix(strings.ToUpper(name), "GSDML-") || !strings.HasSuffix(strings.ToLower(name), ".xml") {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s is not named like a GSDML file (GSDML-*.xml)", name)
 	}
+	if fl := checkGSDML(name, f.files[p]); fl != nil {
+		return nil, fl
+	}
 	already := f.gsd[name]
 	f.gsd[name] = true
 	return tiad.GSDInstall{Path: p, AlreadyInstalled: already}, nil
+}
+
+// checkGSDML is the agent's guard before TIA parses a GSDML file: well-
+// formed XML with a root element and no DOCTYPE, so no external entity
+// reaches TIA's importer.
+func checkGSDML(name string, b []byte) *failure {
+	dec := xml.NewDecoder(bytes.NewReader(b))
+	root := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s is not well-formed XML without a DOCTYPE: tiad never hands TIA a DOCTYPE", name)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			root = true
+		case xml.Directive:
+			if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(string(t))), "DOCTYPE") {
+				return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s is not well-formed XML without a DOCTYPE: tiad never hands TIA a DOCTYPE", name)
+			}
+		}
+	}
+	if !root {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s has no root element", name)
+	}
+	return nil
 }
 
 // checkStation applies the agent-side station rules: the spec's own,
@@ -394,9 +506,18 @@ func (f *Fake) newSession(project string) *session {
 	return s
 }
 
-func (f *Fake) projectOpen(project string) bool {
+// projectOpen compares paths case-insensitively: the work dir is on
+// Windows, where projects/P/P.ap21 and projects/p/p.ap21 are one file. A
+// created project owns its directory (guard): nothing in it opens while
+// it is open, and it is not created again while anything in it is open.
+func (f *Fake) projectOpen(project, guard string) bool {
+	hasPrefix := func(s, prefix string) bool {
+		return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+	}
 	for _, s := range f.sessions {
-		if s.project == project {
+		if strings.EqualFold(s.project, project) ||
+			guard != "" && hasPrefix(s.project, guard) ||
+			s.guard != "" && hasPrefix(project, s.guard) {
 			return true
 		}
 	}
@@ -419,10 +540,12 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	project := "projects/" + req.Name + "/" + req.Name + ".ap21"
-	if f.projectOpen(project) {
-		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s is already open", project)
+	guard := "projects/" + req.Name + "/"
+	if f.projectOpen(project, guard) {
+		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s, or something in %s, is open", project, guard)
 	}
 	s := f.newSession(project)
+	s.guard = guard
 	st := req.Station
 	s.station = &st
 	f.files[project] = []byte("fake TIA project")
@@ -443,7 +566,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 	if _, ok := f.files[p]; !ok {
 		return nil, fail(http.StatusNotFound, tiad.KindNotFound, "no project %s", p)
 	}
-	if f.projectOpen(p) {
+	if f.projectOpen(p, "") {
 		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s is already open", p)
 	}
 	s := f.newSession(p)

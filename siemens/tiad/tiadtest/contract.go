@@ -25,6 +25,9 @@ type Target interface {
 	// SetGates scripts the machine gates probe reports (tia,
 	// openness-group, openness-allowlist, licence). Nil means all pass.
 	SetGates(t testing.TB, gates []tiad.Gate)
+	// SetCompileResult scripts what compile returns. Zero means success;
+	// a result with errors makes compile fail with compile_failed.
+	SetCompileResult(t testing.TB, r tiad.CompileResult)
 }
 
 // Config is the agent-side configuration a Target starts with: what the
@@ -56,6 +59,9 @@ type goFake struct {
 
 func (g goFake) Client() *tiad.Client                     { return g.c }
 func (g goFake) SetGates(_ testing.TB, gates []tiad.Gate) { g.f.SetGates(gates) }
+func (g goFake) SetCompileResult(_ testing.TB, r tiad.CompileResult) {
+	g.f.SetCompileResult(r)
+}
 
 // Contract runs the agent's HTTP contract (docs/design/siemens-ide.md §3)
 // against the agents start makes.
@@ -68,6 +74,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Files", func(t *testing.T) { contractFiles(t, start) })
 	t.Run("PathsRefused", func(t *testing.T) { contractPathsRefused(t, start) })
 	t.Run("PathsAccepted", func(t *testing.T) { contractPathsAccepted(t, start) })
+	contractTIA(t, start)
 }
 
 var ctx = context.Background()

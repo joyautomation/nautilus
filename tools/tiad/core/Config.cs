@@ -1,5 +1,5 @@
 // Config.cs: the agent's own configuration, from its environment only
-// (siemens-ide.md §3.1). Nothing a request carries changes it.
+// (siemens-ide.md section 3.1). Nothing a request carries changes it.
 
 using System;
 using System.Collections.Generic;
@@ -48,6 +48,10 @@ namespace Tiad
 
         // MaxFileBytes caps one uploaded file (TIAD_MAX_FILE_BYTES).
         public long MaxFileBytes = 1L << 30;
+
+        // SessionIdle is how long a session may sit unused before the
+        // reaper closes it (TIAD_SESSION_IDLE, a Go duration).
+        public TimeSpan SessionIdle = TimeSpan.FromHours(1);
 
         static string Env(string name)
         {
@@ -107,6 +111,17 @@ namespace Tiad
             if (max != "" && (!long.TryParse(max, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out c.MaxFileBytes) || c.MaxFileBytes < 1))
             {
                 throw new ConfigException("TIAD_MAX_FILE_BYTES must be a positive number of bytes");
+            }
+
+            string idle = Env("TIAD_SESSION_IDLE");
+            if (idle != "")
+            {
+                long ns;
+                if (!GoDuration.TryParse(idle, out ns) || ns < 1000000L)
+                {
+                    throw new ConfigException("TIAD_SESSION_IDLE must be a duration of at least 1ms (e.g. 1h)");
+                }
+                c.SessionIdle = TimeSpan.FromTicks(ns / 100);
             }
 
             foreach (string t in Env("TIAD_TARGETS").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))

@@ -176,7 +176,7 @@ func TestDownloadRules(t *testing.T) {
 		}
 	}
 	_, c := f.Serve(t)
-	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("<ISO15745Profile/>"))
 	c.InstallGSD(ctx, "gsd/"+gsdml)
 	s, err := c.CreateProject(ctx, "rules", station(), secrets)
 	if err != nil {
@@ -247,7 +247,7 @@ func TestProjectNameIsOneSafeSegment(t *testing.T) {
 	ctx := context.Background()
 	f := tiadtest.New()
 	srv, c := f.Serve(t)
-	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("<ISO15745Profile/>"))
 	c.InstallGSD(ctx, "gsd/"+gsdml)
 	bad := []string{"", "CON", "nul.txt", "x.", "a\x01b", "..", "a/b", "a/../b", `a\b`, "c:x"}
 	for _, n := range bad {
@@ -285,7 +285,7 @@ func TestEveryPathIsCheckedBeforeSending(t *testing.T) {
 	if _, err := c.Open(ctx, "C:/p.ap21"); tiad.Kind(err) != tiad.KindBadRequest {
 		t.Fatalf("Open: %v", err)
 	}
-	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("<ISO15745Profile/>"))
 	c.InstallGSD(ctx, "gsd/"+gsdml)
 	s, err := c.CreateProject(ctx, "p", station(), secrets)
 	if err != nil {
@@ -321,7 +321,7 @@ func TestAgentRefusals(t *testing.T) {
 		t.Fatalf("uninstalled GSDML: %v", err)
 	}
 	// Web user without a password.
-	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("<ISO15745Profile/>"))
 	c.InstallGSD(ctx, "gsd/"+gsdml)
 	if _, err := c.CreateProject(ctx, "p", station(), tiad.Secrets{}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no password") {
 		t.Fatalf("missing web password: %v", err)
@@ -363,7 +363,7 @@ func TestCompileFailedCarriesResult(t *testing.T) {
 	f.CompileResult = tiad.CompileResult{Result: "error", Errors: 1,
 		Messages: []tiad.CompileMessage{{Object: "PLC_1/Program blocks/Main", Severity: "error", Text: "Tag #x not defined"}}}
 	_, c := f.Serve(t)
-	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("<ISO15745Profile/>"))
 	c.InstallGSD(ctx, "gsd/"+gsdml)
 	s, err := c.CreateProject(ctx, "p", station(), secrets)
 	if err != nil {
@@ -390,7 +390,7 @@ func TestFilesAndExport(t *testing.T) {
 	if _, err := c.GetFile(ctx, "nope"); tiad.Kind(err) != tiad.KindNotFound {
 		t.Fatalf("missing file: %v", err)
 	}
-	c.PutFile(ctx, "gsd/"+gsdml, []byte("x"))
+	c.PutFile(ctx, "gsd/"+gsdml, []byte("<ISO15745Profile/>"))
 	c.InstallGSD(ctx, "gsd/"+gsdml)
 	s, err := c.CreateProject(ctx, "p", station(), secrets)
 	if err != nil {

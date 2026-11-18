@@ -1,4 +1,4 @@
-// Agent.cs: the calls that never start TIA (siemens-ide.md §3.4): health,
+// Agent.cs: the calls that never start TIA (siemens-ide.md section 3.4): health,
 // probe and the work-dir files. They cost no trial time on a fresh clone,
 // so nothing here may reach TIA or load an Openness assembly.
 
@@ -43,7 +43,7 @@ namespace Tiad
         List<Gate> Gates();
     }
 
-    public sealed class Agent
+    public sealed partial class Agent
     {
         public const string Version = "0.1.0";
 
@@ -52,13 +52,18 @@ namespace Tiad
         readonly WorkDir work;
         readonly string version;
 
-        public Agent(Config cfg, IHost host, string versionSuffix)
+        // makeTia makes the TIA side. It is called once, on the TIA thread,
+        // by the first call that needs TIA, never before: health, probe and
+        // the files never start TIA.
+        public Agent(Config cfg, IHost host, Func<ITia> makeTia, string versionSuffix)
         {
             this.cfg = cfg;
             this.host = host;
+            this.makeTia = makeTia;
             Directory.CreateDirectory(cfg.WorkDir);
             work = new WorkDir(cfg.WorkDir);
             version = Version + versionSuffix;
+            StartReaper(cfg.SessionIdle);
         }
 
         public WorkDir Work
@@ -74,6 +79,7 @@ namespace Tiad
             r.Add("PUT", "/v1/files/{path...}", PutFile);
             r.Add("GET", "/v1/files/{path...}", GetFile);
             r.Add("DELETE", "/v1/files/{path...}", DeleteFile);
+            RegisterTia(r);
         }
 
         object Health(Call c)
@@ -82,7 +88,7 @@ namespace Tiad
             o["version"] = version;
             o["tia"] = host.TiaVersion;
             o["openness"] = host.OpennessVersion;
-            o["sessions"] = 0;
+            o["sessions"] = sessions.Count;
             o["targets"] = cfg.Targets.ToArray();
             return o;
         }
