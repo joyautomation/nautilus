@@ -103,6 +103,12 @@ break one changes this section first and says why.
 Verification packages, `examples/`, `testdata/` and `tools/` compose freely
 and are excluded from the check. Test files may import anything.
 
+One exception for what users copy: `examples/` and the `naut new` templates
+(`cmd/naut/templates`) import only the stable Go API, `io`, `runtime`,
+`server` and `acceptance` (CONTRIBUTING.md, "Go API"), so no scaffold
+teaches a dependency on an internal package
+(`TestSDKSourcesImportOnlyTheStableAPI`).
+
 ### 2.2 Anti-corruption layers
 
 A driver or writer package owns its protocol's names and nothing above it
