@@ -93,7 +93,7 @@
 	import Led from './Led.svelte';
 	import Print from './Print.svelte';
 	import type { Ink, Paint } from './print';
-	import { BAR, BAR_BUTTONS, BAR_WIRING, buttonIn, knobAngle, knobValueAt, press, release, ringLit } from './bar';
+	import { BAR, BAR_BUTTONS, BAR_WIRING, type BarButton, buttonIn, knobAngle, knobValueAt, press, release, ringLit } from './bar';
 
 	let {
 		hovered = null,
@@ -282,7 +282,7 @@
 	const KNOB_AS_DRAWN = (3 * Math.PI) / 4;
 	const { camera, renderer } = useThrelte();
 	/** The momentary button being held, if any. */
-	let held = $state<number | null>(null);
+	let held = $state.raw<BarButton | null>(null); // raw: compared by identity with BAR_BUTTONS
 	let turning = $state<number | null>(null);
 	let buttonHits = $state<(Mesh | undefined)[]>([]);
 	let knobHit = $state<Mesh>();
@@ -293,8 +293,8 @@
 		return v === null ? KNOB_AS_DRAWN : knobAngle(v);
 	});
 	/** In while its input is on (or while held); its ring lit by its wired tag (bar.ts). */
-	const pressed = (i: number) => !!write && buttonIn(BAR_BUTTONS[i], held === i, raw);
-	const lit = (i: number) => !!write && ringLit(BAR_BUTTONS[i], raw);
+	const pressed = (b: BarButton) => !!write && buttonIn(b, held === b, raw);
+	const lit = (b: BarButton) => !!write && ringLit(b, raw);
 	const ray = new Raycaster();
 	const ndc = new Vector2();
 	function aim(e: PointerEvent) {
@@ -357,7 +357,7 @@
 				if (b) {
 					const p = press(b, raw);
 					write(p.tag, p.value);
-					if (p.hold) held = i;
+					if (p.hold) held = b;
 				}
 			}
 		};
@@ -368,7 +368,7 @@
 		};
 		const up = () => {
 			if (held !== null) {
-				const r = release(BAR_BUTTONS[held]);
+				const r = release(held);
 				if (r) write(r.tag, r.value);
 				held = null;
 			}
@@ -501,21 +501,22 @@
 		<RoundedBoxGeometry args={[32, BAR.y1 - BAR.y0, 3]} radius={1} />
 		<T.MeshStandardMaterial color={ALU} roughness={0.35} metalness={0.75} />
 	</T.Mesh>
-	{#each BAR_BUTTONS as { y, tag, kind, ring }, i}
+	{#each BAR_BUTTONS as b, i}
+		{@const { y, tag, kind, ring } = b}
 		<T.Mesh position={[BAR.x, y, 17.6]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[8, 8.6, 1.6, 28]} />
 			<T.MeshStandardMaterial color="#c3c7cb" roughness={0.25} metalness={0.9} />
 		</T.Mesh>
 		<!-- the plunger: in while its input is on -->
-		<T.Mesh position={[BAR.x, y, pressed(i) ? 17.2 : 18.4]} rotation={[Math.PI / 2, 0, 0]}>
+		<T.Mesh position={[BAR.x, y, pressed(b) ? 17.2 : 18.4]} rotation={[Math.PI / 2, 0, 0]}>
 			<T.CylinderGeometry args={[5, 5, 1.6, 28]} />
-			<T.MeshStandardMaterial color={pressed(i) ? '#7d8287' : '#9ea3a8'} roughness={0.3} metalness={0.9} />
+			<T.MeshStandardMaterial color={pressed(b) ? '#7d8287' : '#9ea3a8'} roughness={0.3} metalness={0.9} />
 		</T.Mesh>
 		{#if write}
 			<!-- its LED ring, lit by the tag it is wired to (bar.ts) -->
 			<T.Mesh position={[BAR.x, y, 18.5]}>
 				<T.TorusGeometry args={[6.4, 0.7, 8, 32]} />
-				<T.MeshBasicMaterial color={lit(i) ? ring.color : '#3a3d40'} toneMapped={false} />
+				<T.MeshBasicMaterial color={lit(b) ? ring.color : '#3a3d40'} toneMapped={false} />
 			</T.Mesh>
 			<T.Mesh
 				bind:ref={buttonHits[i]}
