@@ -128,6 +128,24 @@ SSH user must be root or have `sudo` without a password. ssh is the
 system's, so `~/.ssh/config`, keys and the agent work as usual, and
 `NAUT_SSH_OPTS` adds options (`-p 2222 -i ~/.ssh/ipc`).
 
+Where a password can come from decides how ssh signs in:
+
+- **A person at a terminal** gets ssh's own prompts on any box: the
+  password, when keys do not get in, and an unknown host key's yes/no.
+- **No terminal (CD)** signs in with keys only (`BatchMode`), so a job
+  fails in seconds instead of waiting at a prompt nobody will answer.
+- **`NAUT_SSH_ASKPASS=<program>`** lets an unattended run use a password:
+  the program prints it. `tools/deploy/askpass-bw.sh` reads it from a
+  Bitwarden item named by `NAUT_BW_ITEM`, from an already unlocked vault,
+  and answers nothing but a password prompt, so make the host key known
+  first. The standard `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force`
+  works too.
+
+Whenever a password can be asked, ssh asks once per connection, so a
+wrong answer is one failed login, not three, on a box that locks an
+account out. Each command asks once (one connection serves it all), and
+a box that does not answer gives up after 10 seconds.
+
 - **What it builds on.** For a box of another architecture, naut
   downloads its own release for that architecture and checks it against
   the release's `checksums.txt`. A box like the machine it runs on uses
@@ -164,6 +182,36 @@ system's, so `~/.ssh/config`, keys and the agent work as usual, and
   `Type=simple` without a watchdog instead; this is chosen per release.
 - Everything is `sync`ed before a link moves. If power is lost
   mid-update, the box boots the old release or the whole new one.
+
+### Without systemd or root: cron
+
+Some controllers run Linux without systemd and give their SSH user no
+root: a PLCnext has sysvinit, and `admin` has only an allowlisted
+`sudo`. Install once with `-supervisor cron` and a directory that user
+can write:
+
+```sh
+naut deploy install admin@plc -supervisor cron -root /opt/plcnext/apps/nautilus
+naut deploy update admin@plc         # the box remembers cron mode and the root
+```
+
+Nothing runs under `sudo`. The layout is the same under `-root`
+(`releases/`, `current`, `previous`), with retained values and the log
+in `state/` and optional variables in `env`. `env` is read by `sh`, not
+systemd, so it is shell syntax: quote a value with spaces
+(`NAUTILUS_TOKEN='a b'`). Two lines in that user's crontab run
+`keepalive.sh`: every minute, which is what keeps it running, and at
+boot, which only makes the first start sooner (some crons ignore
+`@reboot`). It starts `current` unless it is already running. Update, rollback, backup and
+restore work as above. An update that does not start, or exits within
+3 s, rolls back and exits 3; as under `Type=simple`, a first scan that
+hangs is not caught. A crash is restarted within a minute rather than
+2 s. If `naut-launch` (from the PLCnext I/O release) sits in the root,
+the keepalive starts the controller through it, so `priority:` keeps
+working across updates without root (see the
+[PLCnext guide](/guides/plcnext/#start-on-boot)). Uninstall removes
+the crontab lines and what deploy made, and leaves the root and
+`naut-launch`.
 
 ### Through CD
 

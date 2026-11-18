@@ -31,3 +31,22 @@ setpoint survived.
 
 It refuses a box that already has a nautilus install. When it fails midway,
 it prints the command that removes its own.
+
+## askpass-bw.sh
+
+`naut deploy` signs in with keys only unless a password can come from
+somewhere (the deployment guide, *To a box over SSH*). For a box whose sshd
+refuses keys, such as a PLCnext's `admin`, `askpass-bw.sh` supplies the
+password from a Bitwarden item, unattended:
+
+```sh
+export NAUT_SSH_ASKPASS=tools/deploy/askpass-bw.sh NAUT_BW_ITEM=<item name or id>
+export NAUT_BW_SESSION_FILE=<file holding the session key>   # or BW_SESSION
+naut deploy update admin@plc
+```
+
+It never unlocks the vault or prompts (`bw --nointeraction`), prints the
+password to ssh's stdout and nowhere else, and refuses every prompt that is
+not a password prompt, so an unknown host key's yes/no is never answered
+with it: make the host key known first (connect once by hand, or
+`ssh-keyscan`).

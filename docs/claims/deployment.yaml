@@ -189,3 +189,37 @@ claims:
       Type=notify; and on a Toradex Verdin AM62 (ARM64) running Torizon
       OS 7.8.0, 2026-11-17, under Type=notify with an ARM64 runtime built
       on amd64. The CD workflow has not run in GitHub Actions.
+  - id: DEP-015
+    claim: >-
+      naut deploy install -supervisor cron -root <dir> runs as the SSH user
+      with no sudo, starts the controller from a keepalive in that user's
+      crontab (at boot and every minute), and the box remembers the mode
+      for later commands. Under it, update, an update that does not start
+      (rolled back, exit 3), rollback, status and uninstall work, the
+      keepalive restarts a dead controller but not while a deploy holds it,
+      and uninstall leaves the root and naut-launch.
+    source: "#without-systemd-or-root-cron"
+    tests:
+      - go ./cmd/naut TestDeployCronInstallRunsAsTheUser
+      - go ./cmd/naut TestDeployCronModeIsDiscovered
+      - go ./cmd/naut TestDeploySupervisorFlags
+      - go ./cmd/naut TestDeployBoxCronMode
+      - go ./cmd/naut TestDeploySSHAuth
+      - go ./cmd/naut TestDeployAskpassReachesSSH
+      - go ./cmd/naut TestDeployAskpassBitwarden
+    partial: true
+    note: >-
+      TestDeployBoxCronMode runs box.sh's cron mode on the test machine
+      with a stand-in crontab and controller. On a PLCnext AXC F 2152
+      (sysvinit, admin with an allowlisted sudo), 2026-11-17, by hand:
+      install, update, an update to a release that exits (rolled back,
+      exit 3), rollback, backup, restore, a retained setpoint kept across
+      restore and update, a controller killed with SIGKILL restarted by
+      cron 25 s later, and uninstall -purge leaving the root, naut-launch
+      and the user's other crontab lines; every start went through
+      naut-launch at SCHED_FIFO 40 pinned to CPU 0, on a v0.21.0 armv7
+      runtime. The controller's sshd refuses keys for admin (its home is
+      group writable), so the same steps ran again signed in with the
+      password through NAUT_SSH_ASKPASS=tools/deploy/askpass-bw.sh from a
+      Bitwarden item, and with neither askpass nor a terminal naut deploy
+      failed in under a second rather than waiting at a prompt.

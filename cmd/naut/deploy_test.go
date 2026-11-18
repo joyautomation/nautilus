@@ -39,6 +39,7 @@ printf '%s' "$last" >"$FAKE_SSH_LOG/$n.cmd"
 cat >"$FAKE_SSH_LOG/$n.in"
 case $last in
 "uname -sm") echo "Linux $FAKE_UNAME_M" ;;
+*naut-deploy*) printf '%b' "${FAKE_MODE:-}" ;;
 *"sh -s -- update "*) exit $FAKE_UPDATE_EXIT ;;
 esac
 `
@@ -133,12 +134,16 @@ func TestDeployUpdateBuildsForTheBox(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	calls := sshCalls(t, log)
-	if len(calls) != 4 {
-		t.Fatalf("want 4 ssh calls (uname, controller, unit, update), got %d: %+v", len(calls), calls)
+	if len(calls) != 5 {
+		t.Fatalf("want 5 ssh calls (uname, mode, controller, unit, update), got %d: %+v", len(calls), calls)
 	}
 	if calls[0].cmd != "uname -sm" {
 		t.Errorf("first call should ask the box its architecture: %q", calls[0].cmd)
 	}
+	if !strings.Contains(calls[1].cmd, ".config/naut-deploy") {
+		t.Errorf("second call should ask the box its mode (#768): %q", calls[1].cmd)
+	}
+	calls = calls[1:]
 	ctl := calls[1].in
 	if !strings.HasPrefix(ctl, string(runner)) {
 		t.Errorf("the controller was not built on the fetched arm64 naut")
