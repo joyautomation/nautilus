@@ -94,9 +94,10 @@ RestartSec=2
   command instead of reporting success.
 - **A hung scan is restarted.** While the scans complete, the controller
   sends systemd a heartbeat at half of `WatchdogSec`. It stops when a
-  scan stops finishing, judged by the same check that closes the
-  [write gate](/guides/redundancy/#redundancy), about 2 to 4 s into the
-  hang. systemd then kills the process (`SIGABRT`, so the journal holds
+  scan stops finishing, or when a task stops starting its scans on
+  schedule (starved: its slot overdue, a higher-priority thread on its
+  core, say). Both are judged by the same check that closes the
+  [write gate](/guides/redundancy/#redundancy), about 2 to 4 s in. systemd then kills the process (`SIGABRT`, so the journal holds
   every goroutine's stack) and `Restart=` starts it again.
   `systemctl status` shows why, in its status line: `scans not live: …`.
 - **How long to set.** At least 8 s; naut warns below that, where a

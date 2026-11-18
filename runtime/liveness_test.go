@@ -150,10 +150,10 @@ func TestLivenessAScanHungInADriverReadIsStuck(t *testing.T) {
 	}
 }
 
-// A task whose period is longer than the lease is live between its scans,
-// however long since the last one: it is sleeping to its next slot. Its
-// bound is capped at max, so a hung scan of it is still caught well inside
-// the lease.
+// A task whose period is longer than the lease is live between its scans
+// for its period and its bound: it is sleeping to a slot still to come.
+// Its bound is capped at max, so a hung scan of it is still caught well
+// inside the lease, and so is its slot once missed (#858).
 func TestLivenessASlowTaskIsLiveBetweenScans(t *testing.T) {
 	const max = 2 * time.Second
 	if b := runtime.StallBound(10*time.Second, max); b != max {
@@ -174,13 +174,163 @@ func TestLivenessASlowTaskIsLiveBetweenScans(t *testing.T) {
 	startRun(t, rt)
 	waitScans(t, rt, 1)
 	t0 := time.Now()
-	for i := range 10 {
+	// In the caller's time, up to its period plus its bound (12 s): the
+	// slot it sleeps to is not due before then. (The test's own time runs
+	// far ahead of the loop's, so past that it would read as overdue.)
+	for _, at := range []time.Duration{0, 3 * time.Second, 7 * time.Second, 11 * time.Second, 12 * time.Second} {
 		// The main task completes a scan between two looks, so only the
 		// slow task's sleep is on trial.
 		waitScans(t, rt, rt.Stats().Count+2)
-		if err := rt.Liveness(t0.Add(time.Duration(i)*7*time.Second), max); err != nil {
-			t.Fatalf("at +%ds: %v", i*7, err)
+		if err := rt.Liveness(t0.Add(at), max); err != nil {
+			t.Fatalf("at +%s: %v", at, err)
 		}
+	}
+}
+
+// starver starves one loop between scans on demand: its sleep to the next
+// slot blocks until released, as a task does that never gets the CPU
+// (#858). Every other sleep is the wall clock's.
+type starver struct {
+	task       string
+	starve     atomic.Bool
+	release    chan struct{}
+	parked     chan struct{} // closed once the loop is blocked in its sleep
+	parkedOnce sync.Once
+}
+
+func newStarver(task string) *starver {
+	return &starver{task: task, release: make(chan struct{}), parked: make(chan struct{})}
+}
+
+func (s *starver) sleep(task string, ctx context.Context, until time.Time) bool {
+	if task == s.task && s.starve.Load() {
+		s.parkedOnce.Do(func() { close(s.parked) })
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	select {
+	case <-time.After(time.Until(until)):
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// A loop starved between scans (its next slot passes and it does not run)
+// is not live once the slot is overdue by more than its bound: its count
+// stays even and unchanged for longer than its period plus its bound. The
+// error names the task and reads the same on every look. Released, it is
+// live again.
+func TestLivenessALoopStarvedBetweenScansIsStuck(t *testing.T) {
+	const max = 2 * time.Second
+	const period = 10 * time.Millisecond
+	st := newStarver("fast")
+	rt, err := runtime.New(runtime.Options{
+		Program:   countProgram,
+		Outputs:   []string{"Out"},
+		Seed:      nio.Values{"Out": int64(0)},
+		Scan:      period,
+		LoopSleep: st.sleep,
+		Tasks: []runtime.Task{{Name: "fast", Scan: period,
+			Program: `PROGRAM Fast VAR n : DINT; END_VAR n := n + 1; END_PROGRAM`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startRun(t, rt, func() {
+		if st.starve.Swap(false) {
+			close(st.release)
+		}
+	})
+	fastScans := func() uint64 { return rt.Stats().Tasks[0].Count }
+	for fastScans() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	st.starve.Store(true)
+	waitClosed(t, st.parked, "the loop to park in its sleep")
+	n := fastScans()
+	time.Sleep(30 * time.Millisecond)
+	if fastScans() != n {
+		t.Fatal("the starved loop kept scanning")
+	}
+
+	bound := runtime.StallBound(period, max)
+	t0 := time.Now()
+	// Each look follows a main-task scan, so only the starved loop is on
+	// trial: the test's time runs ahead of the loops'.
+	look := func(at time.Duration) error {
+		waitScans(t, rt, rt.Stats().Count+2)
+		return rt.Liveness(t0.Add(at), max)
+	}
+	if err := look(0); err != nil {
+		t.Fatalf("first look: %v", err)
+	}
+	if err := look(period + bound); err != nil {
+		t.Fatalf("starved for its period plus its bound, exactly: %v", err)
+	}
+	first := look(period + bound + time.Millisecond)
+	if first == nil || !strings.Contains(first.Error(), "task fast: its next scan is overdue") {
+		t.Fatalf("a loop starved past its slot and its bound: %v, want it stuck, naming the task", first)
+	}
+	if again := look(period + bound + time.Second); again == nil || again.Error() != first.Error() {
+		t.Fatalf("the answer must read the same on every look: %v, then %v", first, again)
+	}
+
+	st.starve.Store(false)
+	close(st.release)
+	m := fastScans()
+	for fastScans() < m+2 {
+		time.Sleep(time.Millisecond)
+	}
+	if err := look(time.Hour); err != nil {
+		t.Fatalf("released and scanning again, but Liveness says %v", err)
+	}
+}
+
+// A standby's loops tick on schedule with every scan gated out: they are
+// live, never starved, or a healthy standby could never take the lease.
+// And the rule does apply to a standby: one whose loop really is starved
+// reads as starved, and so does not campaign.
+func TestLivenessAGatedStandbyIsNotStarved(t *testing.T) {
+	const max = 2 * time.Second
+	coord := &leadFlag{} // never the leader: every scan gates out
+	st := newStarver(runtime.MainTaskName)
+	rt, err := runtime.New(runtime.Options{
+		Program:     countProgram,
+		Outputs:     []string{"Out"},
+		Seed:        nio.Values{"Out": int64(0)},
+		Scan:        10 * time.Millisecond,
+		Coordinator: coord,
+		LoopSleep:   st.sleep,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startRun(t, rt, func() {
+		if st.starve.Swap(false) {
+			close(st.release)
+		}
+	})
+	deadline := time.Now().Add(1500 * time.Millisecond) // past 10 ms + 1 s in real time
+	for now := time.Now(); now.Before(deadline); now = time.Now() {
+		if err := rt.Liveness(now, max); err != nil {
+			t.Fatalf("a standby ticking on schedule reads as %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if rt.Stats().Count != 0 {
+		t.Fatal("a standby ran a scan")
+	}
+
+	st.starve.Store(true)
+	waitClosed(t, st.parked, "the standby's loop to park in its sleep")
+	t0 := time.Now()
+	rt.Liveness(t0, max)
+	if err := rt.Liveness(t0.Add(2*time.Second), max); err == nil || !strings.Contains(err.Error(), "task main: its next scan is overdue") {
+		t.Fatalf("a standby starved between ticks: %v, want it read as starved", err)
 	}
 }
 
@@ -391,5 +541,74 @@ func TestANewTermAfterTheGateClosedIsATakeover(t *testing.T) {
 	}
 	if n := store.loads.Load(); n != 2 {
 		t.Fatalf("%d retained loads, want 2: the new term did not reload what the other leader saved", n)
+	}
+}
+
+// slowStore is a retain store whose Save takes a while (a ConfigMap over a
+// slow API, say): it holds Run's orderly stop open. started is signalled
+// at the first Save.
+type slowStore struct {
+	delay   time.Duration
+	started chan struct{}
+	once    sync.Once
+	saves   atomic.Int64
+}
+
+func (s *slowStore) Load() (retain.State, error) { return retain.State{}, nil }
+func (s *slowStore) Save(retain.State) error {
+	s.once.Do(func() { close(s.started) })
+	time.Sleep(s.delay)
+	s.saves.Add(1)
+	return nil
+}
+func (s *slowStore) Kind() string { return "slow" }
+
+// An orderly stop that takes a while (the saver's in-flight tick, the final
+// retained save) is not a loop starved between scans: the loops have
+// returned with frozen counts on purpose. Liveness stays live through it
+// and reports the stop once Run returns, and the final save is made.
+func TestLivenessAnOrderlyStopIsNotStarved(t *testing.T) {
+	store := &slowStore{delay: 1500 * time.Millisecond, started: make(chan struct{})}
+	rt, err := runtime.New(runtime.Options{
+		Program:    countProgram,
+		Outputs:    []string{"Out"},
+		Seed:       nio.Values{"Out": int64(0)},
+		Scan:       10 * time.Millisecond,
+		Retain:     store,
+		RetainTags: []string{"Out"},
+		Tasks: []runtime.Task{{Name: "fast", Scan: 10 * time.Millisecond,
+			Program: `PROGRAM Fast VAR n : DINT; END_VAR n := n + 1; END_PROGRAM`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitClosed(t, store.started, "the saver's first save") // ~2 s in
+	// A few more scans, so the final save has something new to write, then
+	// stop mid-save: the stop takes ~3 s.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	const max = 2 * time.Second
+	t0 := time.Now()
+	for i := 1; ; i++ {
+		select {
+		case <-done:
+			if err := rt.Liveness(t0.Add(time.Duration(i)*time.Hour), max); !errors.Is(err, runtime.ErrStopped) {
+				t.Fatalf("after Run returned: %v, want the orderly stop", err)
+			}
+			if n := store.saves.Load(); n < 2 {
+				t.Fatalf("%d saves, want the in-flight one and the final one", n)
+			}
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+		// The test's time runs an hour per look: frozen counts would read
+		// overdue at once.
+		if err := rt.Liveness(t0.Add(time.Duration(i)*time.Hour), max); err != nil {
+			t.Fatalf("during the orderly stop: %v", err)
+		}
 	}
 }

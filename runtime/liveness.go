@@ -20,11 +20,13 @@ import (
 // begins and one as it ends, so an odd count means a scan is in progress.
 // Liveness keeps, per loop, the count it saw last and the caller's time it
 // first saw it. A loop whose count is odd and unchanged for longer than its
-// bound is stuck. A loop between scans is never stuck, however long its
-// period: it is sleeping to its next slot, and a 10 s task that idles for
-// 9.99 s is healthy. So the bound depends on how long a scan may take, not
-// on how long a task may go without one, and a slow task cannot push it
-// past the lease.
+// bound is stuck: a scan that does not end. A loop between scans is
+// sleeping to its next slot, and a 10 s task that idles for 9.99 s is
+// healthy; but one whose count is even and unchanged for longer than its
+// period plus its bound has missed that slot by more than the bound: it is
+// starved, not sleeping (a higher-priority thread on its core, a priority
+// inversion; #858), and is stuck too. Either way the bound is capped by
+// max, so a starved leader is flagged within max of its missed slot.
 //
 // All timing is in the caller's clock (the now it passes): the runtime
 // stamps nothing, so the elector's lease arithmetic and this check cannot
@@ -37,6 +39,12 @@ type loopLive struct {
 	name   string
 	period time.Duration
 	edges  atomic.Uint64
+	// exited: the loop returned (Run's context ended). Its count stays
+	// even and frozen from then on, which is an orderly stop, not a loop
+	// starved between scans: Run itself is still finishing (the saver's
+	// last tick, the final retained save), and the elector keeps ticking
+	// through that on purpose (#531).
+	exited atomic.Bool
 
 	seen   uint64
 	seenAt time.Time
@@ -70,8 +78,9 @@ type liveness struct {
 }
 
 // StallBound is how long one scan of a task with this period may be in
-// progress before Liveness calls it stuck: twice the period, at least half
-// of max and at most max. Twice the period is an overrun of a whole slot;
+// progress before Liveness calls it stuck, and how far past its slot a loop
+// between scans may be before it counts as starved (#858): twice the
+// period, at least half of max and at most max. Twice the period is an overrun of a whole slot;
 // the floor keeps a fast task that overruns now and then (a 10 ms task
 // whose read takes 40 ms) from looking hung; the cap keeps a slow task's
 // bound under the lease, whatever its period. The elector passes max as
@@ -94,11 +103,15 @@ func StallBound(period, max time.Duration) time.Duration {
 // does not hold a lease for longer than that.
 func startGrace(max time.Duration) time.Duration { return 4 * max }
 
-// Liveness reports whether Run's scans are completing at now: nil when
-// they are, else an error naming every stuck task. A loop is stuck when
-// one scan has been in progress for longer than StallBound(period, max),
-// measured from the first call that saw it in that scan (so the measure
-// runs up to one call interval short; the elector calls once a tick).
+// Liveness reports whether Run's scans are completing, and starting on
+// schedule, at now: nil when they are, else an error naming every stuck
+// task. A loop is stuck when one scan has been in progress for longer than
+// StallBound(period, max), or, between scans, when its next slot is
+// overdue by more than that bound (starved, #858), each measured from the
+// first call that saw its count (so up to one call interval short; the
+// elector calls once a tick). A loop that has returned (an orderly stop
+// still finishing) is neither. Not in a browser tab, whose throttled
+// timers miss slots by design (overdue_js.go).
 // Before Run has started, Liveness answers nil for a start-up grace of
 // 4·max from its first call, then an error; after Run has returned, an
 // error. It watches Run's loops only: a runtime driven by Scan from a
@@ -123,15 +136,28 @@ func (r *Runtime) Liveness(now time.Time, max time.Duration) error {
 	}
 	var stuck []string
 	for _, l := range lv.loops {
+		if l.exited.Load() {
+			continue // stopping, not stuck
+		}
 		v := l.edges.Load()
 		if v != l.seen || l.seenAt.IsZero() {
 			l.seen, l.seenAt = v, now
 			continue
 		}
+		b := StallBound(l.period, max)
 		if v&1 == 0 {
-			continue // between scans, sleeping to its next slot
+			// Between scans: sleeping to its next slot, which is at most a
+			// period after the count last moved. Unchanged for longer than
+			// that plus the bound means the slot is overdue by more than
+			// the bound: the loop is starved, not sleeping (#858). A slow
+			// task waiting for a slot still to come is not overdue, and a
+			// standby's gated ticks move the count like any scan.
+			if checkOverdue && now.Sub(l.seenAt) > l.period+b {
+				stuck = append(stuck, fmt.Sprintf("task %s: its next scan is overdue by more than %s", l.name, b))
+			}
+			continue
 		}
-		if b := StallBound(l.period, max); now.Sub(l.seenAt) > b {
+		if now.Sub(l.seenAt) > b {
 			// No running duration in the text: the elector logs a change
 			// of answer, and this one must read the same every tick.
 			stuck = append(stuck, fmt.Sprintf("task %s: a scan has not finished within %s", l.name, b))

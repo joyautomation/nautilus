@@ -199,7 +199,7 @@ func TestRTGuardLoopEndReleasesItsThread(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runLoop(ctx, time.Millisecond, func(time.Time) { cancel() }, func(uint64) {}, func() {
+		runLoop(ctx, time.Millisecond, wallLoopClock{}, func(time.Time) { cancel() }, func(uint64) {}, func() {
 			tid = syscall.Gettid()
 			rtGuard.mu.Lock()
 			rtGuard.threads[tid] = nil

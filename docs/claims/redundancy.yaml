@@ -238,8 +238,11 @@ claims:
       tick. A hung scan that returns after the lease is gone writes no
       outputs. A scan that is slow for a second or two and then completes
       keeps the lease, and a task whose period is longer than the lease is
-      live between its scans. Each change is logged once, naming the stuck
-      task; an orderly stop is logged at info.
+      live between its scans until its slot is due. A leader with a task
+      starved between scans (its slot overdue by more than the same bound)
+      hands over the same way, a starved replica does not take the lease,
+      and a standby's gated ticks keep it live. Each change is logged once,
+      naming the stuck task; an orderly stop is logged at info.
     source: "#redundancy"
     tests:
       - go ./leader TestAHungLeaderHandsOverToTheStandby
@@ -254,15 +257,24 @@ claims:
       - go ./runtime TestLivenessAScanHungInADriverReadIsStuck
       - go ./runtime TestLivenessASlowTaskIsLiveBetweenScans
       - go ./runtime TestAScanThatLostLeadershipWhileHungWritesNothing
+      - go ./leader TestAStarvedLeaderHandsOverToTheStandby
+      - go ./leader TestAStarvedReplicaDoesNotTakeTheLease
+      - go ./runtime TestLivenessALoopStarvedBetweenScansIsStuck
+      - go ./runtime TestLivenessAGatedStandbyIsNotStarved
+      - go ./cmd/naut TestSystemdHeartbeatStopsForAStarvedTask
+      - go ./runtime TestLivenessAnOrderlyStopIsNotStarved
+      - go ./leader TestASlowOrderlyStopKeepsTheLeaseForTheFinalSave
     partial: true
     note: >-
       The leader tests run two electors against the fake Lease API with a
       1 s lease and explicit times, and a real runtime whose driver read
       blocks; the 4 s lease and the 1 to 2 s bounds of production are the
       same arithmetic scaled, not asserted at that size (RED-017). The slow
-      task's 10 s period is not run through a whole scan of it: the test
-      shows a slow task sleeping between scans is live, and the runtime test
-      that its bound is capped at half the lease. That naut run wires the
+      task is not run through a whole scan of it: the leader test uses a
+      1-minute task over 15 s (the tests' time runs ahead of the loops'), and
+      the runtime test shows a 10 s task live up to its period plus its
+      bound and its bound capped at half the lease. Starvation is simulated
+      with runtime.Options.LoopSleep blocking one task's sleep to its slot. That naut run wires the
       runtime's liveness into the elector (cmd/naut/runcmd.go) is not
       tested. The late-tick fence is asserted on the wall clock with a
       100 ms and a 400 ms lease.

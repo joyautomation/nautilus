@@ -56,6 +56,12 @@ type Options struct {
 	// for the IEC timers' NowMs — the two clocks a program can observe. Nil
 	// in production; tests inject a virtual one. See clock.go.
 	Clock Clock
+	// LoopSleep, when set, replaces a loop's sleep to its next slot: it is
+	// called with the task's name (MainTaskName for the main task) and
+	// returns false when ctx ended the wait, as the platform sleep does.
+	// Nil in production (the wall clock, at no cost); tests use it to
+	// starve one loop between scans (#858).
+	LoopSleep func(task string, ctx context.Context, until time.Time) bool
 	// Retain persists operator state across power cycles — retained tag
 	// values and online-edited program sources. See the retain package for
 	// the file and ConfigMap stores. Loaded before the first scan, saved on
@@ -210,6 +216,8 @@ type Runtime struct {
 	types   map[string]*ir.Type
 	tasks   []*taskRun
 	clock   Clock // nil = wall clock; see clock.go
+	// loopSleep is Options.LoopSleep: nil sleeps on the wall clock.
+	loopSleep func(task string, ctx context.Context, until time.Time) bool
 
 	retainStore retain.Store
 	retainTags  []string
@@ -562,7 +570,7 @@ func New(o Options) (*Runtime, error) {
 	r := &Runtime{
 		prog: prog, tags: tags, driver: o.Driver, scan: o.Scan,
 		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
-		clock: o.Clock, types: types, tasks: tasks,
+		clock: o.Clock, loopSleep: o.LoopSleep, types: types, tasks: tasks,
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
 		alwaysWrite: o.AlwaysWriteOutputs, untypedComms: untyped,
 	}
@@ -1054,7 +1062,8 @@ func (r *Runtime) Run(ctx context.Context) {
 		live := r.live.loops[i+1]
 		go func(tr *taskRun) {
 			defer loops.Done()
-			runLoop(ctx, tr.scan, func(due time.Time) {
+			defer live.exited.Store(true)
+			runLoop(ctx, tr.scan, r.loopClockFor(tr.name), func(due time.Time) {
 				live.begin()
 				r.scanTaskAt(tr, due)
 				live.end()
@@ -1080,7 +1089,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		}(tr)
 	}
 	mainLive := r.live.loops[0]
-	runLoop(ctx, r.scan, func(due time.Time) {
+	runLoop(ctx, r.scan, r.loopClockFor(MainTaskName), func(due time.Time) {
 		mainLive.begin()
 		r.scanAt(due)
 		mainLive.end()
@@ -1103,6 +1112,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		r.mu.Unlock()
 		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
+	mainLive.exited.Store(true)
 	loops.Wait()
 	if saved != nil {
 		r.mu.Lock()
@@ -1172,13 +1182,32 @@ func logSched(task string, cpus []int, prio int, err error) {
 // arriving one wake-up latency after the PREVIOUS tick rather than on the
 // schedule: the schedule drifted ~65 µs a tick and 4–6 % of ticks were
 // dropped on an idle desktop. See docs/design/realtime.md, finding F1.
-func runLoop(ctx context.Context, period time.Duration, scan func(due time.Time), missed func(uint64), setup func()) {
+func runLoop(ctx context.Context, period time.Duration, clk loopClock, scan func(due time.Time), missed func(uint64), setup func()) {
 	defer loopThread()()
 	if setup != nil {
 		setup() // on the locked thread: affinity and priority stick to it
 		defer releaseSched()
 	}
-	runSchedule(ctx, period, wallLoopClock{}, scan, missed)
+	runSchedule(ctx, period, clk, scan, missed)
+}
+
+// loopClockFor is a loop's clock: the wall clock, with Options.LoopSleep in
+// place of its sleep when set.
+func (r *Runtime) loopClockFor(task string) loopClock {
+	if r.loopSleep == nil {
+		return wallLoopClock{}
+	}
+	return hookLoopClock{task: task, sleep: r.loopSleep}
+}
+
+type hookLoopClock struct {
+	task  string
+	sleep func(string, context.Context, time.Time) bool
+}
+
+func (hookLoopClock) Now() time.Time { return time.Now() }
+func (h hookLoopClock) SleepUntil(ctx context.Context, deadline time.Time) bool {
+	return h.sleep(h.task, ctx, deadline)
 }
 
 // loopClock is the time runSchedule keeps its schedule against: the wall
