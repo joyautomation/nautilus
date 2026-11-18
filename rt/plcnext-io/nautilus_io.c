@@ -432,11 +432,14 @@ int main(int argc, char **argv) {
     unsigned char inbuf[NIO_FRAME_LEN] = {0}, frame_out[NIO_FRAME_LEN] = {0};
     unsigned char last_in[8] = {0}, last_out[8] = {0};
     int changes = 0;          // change lines logged; capped, the 10 s line carries on
-    bool was_run = false, was_wd = false, was_owned = false;
+    bool was_run = false, was_wd = false, was_owned = false, demote_err_logged = false;
     char hi[24], ho[24];
     for (; !stopping; cycles++) {
         ts_add(&next, CYCLE_NS);
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+        // EINTR (a signal: SIGXCPU's handler, for one) is not restarted
+        // even with SA_RESTART: sleep the rest of the way to the slot.
+        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL) == EINTR) {
+        }
         clock_gettime(CLOCK_MONOTONIC, &now);
         long l = ts_diff_us(&now, &next);
         if (l < 0) l = 0;
@@ -449,13 +452,19 @@ int main(int argc, char **argv) {
         uint64_t t0 = ts_ns(&now);
         if (!pg && cycles % 1000 == 999) page_open((uint32_t)CYCLE_NS, LATE_US);
 
-        // A PLC that is not started (Stop, Reset, Unload in progress) may be
-        // tearing the frames down; the cycle keeps time and stamps the page
-        // but touches nothing of the firmware's.
+        // The guard (rtguard.h) moved this thread off SCHED_FIFO, or tried.
         if (fifo && rtg_demoted) {
             fifo = false; // the page's FIFO bit drops with it
             logln("SCHED_FIFO withdrawn: the cycle ran %d ms without sleeping (RLIMIT_RTTIME); normal priority until restart", RT_LIMIT_MS);
         }
+        if (rtg_demote_errno && !demote_err_logged) {
+            demote_err_logged = true;
+            logln("SIGXCPU: the cycle ran %d ms without sleeping, and could not leave SCHED_FIFO (%s); the kernel kills this process at %d ms", RT_LIMIT_MS, strerror(rtg_demote_errno), RT_LIMIT_MS * 5 / 2);
+        }
+
+        // A PLC that is not started (Stop, Reset, Unload in progress) may be
+        // tearing the frames down; the cycle keeps time and stamps the page
+        // but touches nothing of the firmware's.
         int st = plc_state;
         bool plc = st == PlcOperation_StartCold || st == PlcOperation_StartWarm || st == PlcOperation_StartHot;
         uint32_t status = NIO_ST_FRAMES | (fifo ? NIO_ST_FIFO : 0) | (plc ? NIO_ST_PLC : 0);

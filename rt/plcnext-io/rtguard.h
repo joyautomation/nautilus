@@ -29,8 +29,9 @@
 #define RLIMIT_RTTIME 15
 #endif
 
-static volatile pid_t rtg_tid;              // the thread SIGXCPU demotes
-static volatile sig_atomic_t rtg_demoted;   // set once it has been
+static volatile pid_t rtg_tid;                 // the thread SIGXCPU demotes
+static volatile sig_atomic_t rtg_demoted;      // set once it has been
+static volatile sig_atomic_t rtg_demote_errno; // why it could not be, else 0
 
 // On SIGXCPU: the guarded thread to SCHED_OTHER, by its tid (the signal may
 // land on any thread of the process). A bare syscall: async-signal-safe.
@@ -38,14 +39,20 @@ static void rtg_on_xcpu(int sig) {
     (void)sig;
     int saved = errno;
     struct sched_param p = { .sched_priority = 0 };
-    if (rtg_tid > 0) syscall(SYS_sched_setscheduler, (long)rtg_tid, (long)SCHED_OTHER, &p);
-    rtg_demoted = 1;
+    if (rtg_tid > 0) {
+        if (syscall(SYS_sched_setscheduler, (long)rtg_tid, (long)SCHED_OTHER, &p) == 0) rtg_demoted = 1;
+        else rtg_demote_errno = errno;
+    }
     errno = saved;
 }
 
 // rtg_arm sets RLIMIT_RTTIME to ms (hard 2.5 times; a stricter limit in
 // force is kept) and the SIGXCPU handler. 0, or the errno that stopped it.
 static int rtg_arm(uint64_t ms) {
+#ifdef RTG_TEST_FAIL_ARM
+    (void)ms; // the test harness: the bound cannot be set
+    return EPERM;
+#endif
     struct rlimit cur, want = { (rlim_t)(ms * 1000), (rlim_t)(ms * 2500) };
     if (getrlimit(RLIMIT_RTTIME, &cur) == 0) {
         if (cur.rlim_cur < want.rlim_cur) want.rlim_cur = cur.rlim_cur;

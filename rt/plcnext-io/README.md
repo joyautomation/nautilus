@@ -209,10 +209,22 @@ task with `priority:`; the bench's scan task is at 40 once it is set.
 
 **The cycle is bounded** (`rtguard.h`, #836). Before it takes
 `SCHED_FIFO` the shim sets `RLIMIT_RTTIME`. A cycle that runs 200 ms
-without sleeping (it sleeps every 1 ms when healthy) gets `SIGXCPU`. The
-shim then moves itself back to normal priority and says so in the log
-(`SCHED_FIFO withdrawn`), and the page's `NIO_ST_FIFO` drops, until a
-restart. If the limit can't be set, the shim doesn't take FIFO at all.
+without sleeping (it sleeps every 1 ms when healthy) gets `SIGXCPU`, and
+the handler moves the cycle thread back to normal priority until a
+restart. That frees the core either way. What follows depends on whether
+the cycle comes round again:
+
+- **A cycle that was merely slow comes round.** It logs `SCHED_FIFO
+  withdrawn`, the page's `NIO_ST_FIFO` drops, and it carries on at normal
+  priority.
+- **A cycle that is stuck doesn't** (inside the firmware's
+  `BeginWrite`, say). Nothing is logged, the bit never drops, and the
+  output watchdog never runs, because it runs on that same thread. The
+  output frame keeps its last values. The 500 ms kill never comes either:
+  the limit stops counting once the thread is no longer real-time. Only
+  naut sees it, when the page's cycle stamp goes stale for 100 ms.
+
+If the limit can't be set, the shim doesn't take FIFO at all.
 At 500 ms the kernel kills it, as a backstop. What the firmware then does
 with its ACF process, and what the output frame holds once the shim is
 gone, has not been tried on the bench. The shim's own output watchdog
