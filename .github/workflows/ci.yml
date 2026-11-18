@@ -258,6 +258,20 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
       - run: go test ./oplog/ ./alarm/
+  # PROFINET's raw-Ethernet transport (AF_PACKET) on a veth pair. The test
+  # runs itself as root of a new user + network namespace, so it needs no
+  # privilege and touches no host interface; ubuntu-latest restricts
+  # unprivileged user namespaces through AppArmor, so this job lifts that
+  # for its own run and makes a skip a failure.
+  profinet-veth:
+    name: PROFINET — raw Ethernet on a veth pair
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: NAUTILUS_PROFINET_VETH=1 go test -count=1 -run 'TestPacketVeth|TestOpenWithoutCapability' -v ./profinet/transport/
   sparkplug-tck:
     needs: changes
     if: needs.changes.outputs.full != 'false'
