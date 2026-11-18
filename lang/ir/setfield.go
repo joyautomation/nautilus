@@ -71,10 +71,11 @@ func SetFieldTyped(val Value, t *Type, path []string, v any, sofar string) (Valu
 // must be within its declared width (a 64-bit unsigned or bit-string type
 // takes any 64-bit pattern, as the VM holds one), a REAL takes no NaN or
 // infinity, and an enumeration takes only a member's name or value. The
-// lenient form stays for what restores or replays state the program
-// produced (a retained value, a test's given:, a force), because the VM
-// does not wrap a declared INT that a program counts past 32767, and such
-// a value must survive a restart as it was.
+// lenient form stays for what restores or replays state (a retained value,
+// a test's given:, a force): a program's own stores keep their declared
+// width (#782), so what it retained fits, but a value saved before that
+// rule, or one a test or a force sets on purpose, lands as written, and
+// the program's next store of it is cut to the width.
 func SetFieldTypedStrict(val Value, t *Type, path []string, v any, sofar string) (Value, error) {
 	return setFieldTyped(val, t, path, v, sofar, true)
 }

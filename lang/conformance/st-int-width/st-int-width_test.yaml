@@ -22,19 +22,19 @@ tests:
       - { given: { U16: 5 },     scans: 1, expect: { st_U16: 4 } }
       - { given: { W16: 65535 }, scans: 1, expect: { st_W16: 0 } }
 
-  - name: shifts act on the operand's 16 bits, and an INT reads bit 15 as the sign
+  - name: shifts act on the operand's 16 bits
     steps:
       - { given: { W16: 1, N: 40 },     scans: 1, expect: { st_Shl: 0 } }      # shifted past 16 bits
-      - { given: { W16: 65535, N: 4 },  scans: 1, expect: { st_Shl: -16 } }    # 16#FFF0 into an INT
+      - { given: { W16: 65535, N: 4 },  scans: 1, expect: { st_Shl: 65520 } }  # 16#FFF0
       - { given: { W16: 1, N: 64 },     scans: 1, expect: { st_Shl: 0 } }
       - { given: { I16: 256, N: 4 },    scans: 1, expect: { st_Shr: 16 } }
-      - { given: { I16: -1, N: 4 },     scans: 1, expect: { st_Shr: 4095 } }   # zero-fill over 16 bits
+      - { given: { I16: -1, N: 4 },     scans: 1, expect: { st_Shr: 4095 } }   # zero-fill over 16 bits, as Codesys (TIA fills an INT with its sign)
 
   - name: ROL and ROR rotate over the declared 16 bits
     steps:
       - { given: { W16: 32768, N: 1 }, scans: 1, expect: { st_Rol: 1 } }
-      - { given: { W16: 1, N: 1 },     scans: 1, expect: { st_Ror: -32768 } }  # 16#8000 into an INT
-      - { given: { W16: 1, N: 15 },    scans: 1, expect: { st_Rol: -32768 } }
+      - { given: { W16: 1, N: 1 },     scans: 1, expect: { st_Ror: 32768 } }   # 16#8000
+      - { given: { W16: 1, N: 15 },    scans: 1, expect: { st_Rol: 32768 } }
       - { given: { W16: 1, N: 16 },    scans: 1, expect: { st_Rol: 1, st_Ror: 1 } }  # a full turn is the identity
       - { given: { W16: 6, N: 17 },    scans: 1, expect: { st_Rol: 12, st_Ror: 3 } } # the count is taken mod 16
-      - { given: { W16: 65535, N: 5 }, scans: 1, expect: { st_Rol: -1, st_Ror: -1 } } # all ones rotate to all ones
+      - { given: { W16: 65535, N: 5 }, scans: 1, expect: { st_Rol: 65535, st_Ror: 65535 } } # all ones rotate to all ones

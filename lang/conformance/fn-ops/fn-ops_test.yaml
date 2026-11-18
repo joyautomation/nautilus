@@ -57,9 +57,10 @@ tests:
         expect: { st_ADDR: -2.75, fbd_ADDR: -2.75, st_MULR: -0.75, fbd_MULR: -0.75, st_SUBR: -3.25, fbd_SUBR: -3.25 }
 
   # #326: D1 + D2 is typed DINT, the operands' common width (the type is
-  # pinned in arith_width_test.go). Typing it does not wrap it: arithmetic
-  # never wraps (st-int-width pins that deviation), and a conversion of the
-  # expression reads every bit (FN-099), then fits the target the way
+  # pinned in arith_width_test.go). The expression is computed in 64 bits
+  # (a PLC computes it in DINT); storing it into a DINT keeps 32 bits
+  # (#782, st-int-width), and a conversion of the expression reads every
+  # bit (FN-099), then fits the target the way
   # DINT_TO_INT(70000) = 4464 does.
   - name: DINT + DINT keeps its value past INT's range; a DINT store wraps at 32 bits, a conversion to its target
     steps:

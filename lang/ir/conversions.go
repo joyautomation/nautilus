@@ -477,22 +477,31 @@ func IntRange(name string) (lo, hi int64, ok bool) {
 	return 0, int64(1)<<t.width - 1, true
 }
 
-// StoreWrap wraps x, an integer about to be stored into a variable of
-// type t, to t's width: the low bits, read signed or unsigned as t is, as
-// DINT_TO_INT does (#782). A PLC stores INT + INT = 60000 into an INT as
-// -5536; integer arithmetic itself never wraps (#326), so the store does.
-// x is returned as is when t is not an integer narrower than 64 bits.
-func StoreWrap(x Expr, t *Type) Expr {
+// NewWrap is the width a store into t keeps (#782): nil when t is not a
+// declared integer narrower than 64 bits (a LINT, an enumeration, the
+// canonical INT of an expression take any value the VM holds).
+func NewWrap(t *Type) *Wrap {
 	if t == nil || t.Kind != TypeInt || t.Enum != nil {
-		return x
+		return nil
 	}
 	ct, ok := convTypeNamed(t.Name)
 	if !ok || ct.class != ccInt || ct.width == 0 || ct.width >= 64 {
+		return nil
+	}
+	return &Wrap{Bits: uint8(ct.width), Signed: ct.signed}
+}
+
+// StoreWrap wraps x, an integer about to be stored into a variable of
+// type t outside an Assign (an FB or function input), to t's width, as
+// Assign.Wrap does. x is returned as is when t has no width to keep.
+func StoreWrap(x Expr, t *Type) Expr {
+	w := NewWrap(t)
+	if w == nil {
 		return x
 	}
 	return &Call{Name: "TO_" + t.Name, Args: []Expr{x}, T: t, Fn: func(args []Value) (Value, error) {
 		v := args[0]
-		v.I = fitInt(v.I, ct)
+		v.I = w.Apply(v.I)
 		return v, nil
 	}}
 }

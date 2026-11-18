@@ -548,8 +548,9 @@ claims:
   # ── Types ───────────────────────────────────────────────────────────
   - id: FN-039
     claim: >-
-      Integer kinds share one 64-bit runtime representation, so arithmetic
-      on INT, DINT, UINT or WORD never wraps at the declared width.
+      Integer arithmetic is computed in 64 bits; a store into a declared
+      INT, DINT, UINT or WORD keeps that type's width (INT + INT = 60000
+      stores -5536), and an implicit conversion follows IEC 61131-3's table.
     source: "#types"
     tests:
       - go ./lang/conformance TestConformance/st-int-width

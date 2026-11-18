@@ -179,6 +179,43 @@ func (t *Type) SignBit() int {
 	return 0
 }
 
+// implicitTo is IEC 61131-3 ed. 3's implicit conversions among the
+// integers and bit strings (Figure 11, as reproduced in PLCnext Engineer's
+// reference): the types each one widens to without a conversion function.
+// Within the signed, the unsigned and the bit-string family a narrower
+// type goes into a wider one, and an unsigned type into a wider signed
+// one; nothing goes from signed to unsigned, or between the bit strings
+// and the integers.
+var implicitTo = map[string][]string{
+	"SINT":  {"INT", "DINT", "LINT"},
+	"INT":   {"DINT", "LINT"},
+	"DINT":  {"LINT"},
+	"USINT": {"UINT", "UDINT", "ULINT", "INT", "DINT", "LINT"},
+	"UINT":  {"UDINT", "ULINT", "DINT", "LINT"},
+	"UDINT": {"ULINT", "LINT"},
+	"BYTE":  {"WORD", "DWORD", "LWORD"},
+	"WORD":  {"DWORD", "LWORD"},
+	"DWORD": {"LWORD"},
+}
+
+// ImplicitConversion reports whether a value of the integer or bit-string
+// type from goes into a variable of type to without a conversion function
+// (IEC 61131-3 Figure 11): the same type, or a widening the figure allows.
+func ImplicitConversion(from, to string) bool {
+	if from == to {
+		return true
+	}
+	for _, t := range implicitTo[from] {
+		if t == to {
+			return true
+		}
+	}
+	return false
+}
+
+// IsBitString reports a bit-string type name (BYTE, WORD, DWORD, LWORD).
+func IsBitString(name string) bool { c, _ := intClass(name); return c == 'b' }
+
 // intClass sorts the declared integer names into the three families the
 // common-type rule ranks within: signed (SINT..LINT), unsigned
 // (USINT..ULINT) and bit strings (BYTE..LWORD).
@@ -443,6 +480,15 @@ func (d *FBDef) IsInput(i int) bool { return i >= 0 && i < len(d.Inputs) }
 // IsOutput reports whether slot index i is a VAR_OUTPUT pin.
 func (d *FBDef) IsOutput(i int) bool {
 	return i >= len(d.Inputs) && i < len(d.Inputs)+len(d.Outputs)
+}
+
+// OutputType is the declared type of output slot i, or nil when i is not
+// an output.
+func (d *FBDef) OutputType(i int) *Type {
+	if !d.IsOutput(i) {
+		return nil
+	}
+	return d.Outputs[i-len(d.Inputs)].Type
 }
 
 // IsInOut reports whether slot index i is a VAR_IN_OUT pin.

@@ -227,7 +227,17 @@ func numericResultOfArgs(name string) func([]*Type) (*Type, error) {
 		if allTime {
 			return TimeT, nil
 		}
-		return IntT, nil
+		// Integers: the arithmetic common type (CommonInt), so MAX(i, d)
+		// is a computed DINT and a store of it into an INT is refused, as
+		// i + d is (#782).
+		t := ts[0]
+		for _, u := range ts[1:] {
+			t = CommonInt(t, u)
+		}
+		if t.Name != "" && !t.Computed {
+			t = exprIntTypes[t.Name]
+		}
+		return t, nil
 	}
 }
 

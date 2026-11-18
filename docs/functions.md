@@ -282,8 +282,24 @@ details, `type:` forms and `init:` forms (TIME members, arrays).
   declared width (`i := d` with `d : DINT`), or store a literal the type
   cannot hold (`i := 70000`), is a compile error that names the
   conversion to write (`DINT_TO_INT(d)`, which wraps), as IEC 61131-3
-  converts implicitly only when widening. Store into a `LINT` to keep a
-  total that outgrows 32 bits.
+  converts implicitly only as its table (Figure 11) allows: within the
+  signed, the unsigned or the bit-string family and wider, or an unsigned
+  type into a wider signed one; never signed into unsigned, and never
+  between a bit string and an integer (`d := w` with `w : WORD` needs
+  `WORD_TO_DINT(w)`). The same rule holds at every place a program stores
+  a value: an assignment, an FB or FUNCTION input, an `=>` output binding,
+  a `FOR` variable's bounds, a declaration's initial value. Store into a
+  `LINT` to keep a total that outgrows 32 bits.
+- **One deviation stays: an expression is computed in 64 bits.** A PLC
+  computes `d1 + d2` of two DINTs in 32 bits, so the sum is already cut
+  when it is compared or converted; nautilus keeps every bit until the
+  store, so `TO_LINT(d1 + d2)` with both at 2000000000 is 4000000000
+  (pinned in `fn-ops`), and `d1 + d2 > 0` is true there.
+- **A value from outside a program's stores lands as written.** A driver's
+  input, a force, a test's `given:` and a value retained from before #782
+  are not cut to the width; the program's next store of them is. A write
+  from an operator or an OPC UA client is refused when it does not fit
+  (`SetFieldTypedStrict`).
 - **Signed with unsigned widens** to the narrowest signed type that holds
   both (`INT + UINT` is a `DINT`), as the
   [common type](#operators) rules below say, rather than being refused as
@@ -519,9 +535,11 @@ names the type. Ladder contacts and coils and FBD wires take every form
 (`Alarms.%X3`). Pinned in `lang/conformance/st-partial-access`.
 
 Shifts and rotates act on the first operand's declared width (#782): `ROL`
-of a `WORD` at 16#8000 by 1 is 1, and `SHL` past 16 bits leaves 0. An
-operand of no declared width (a literal, an arithmetic result) is shifted
-over 64 bits.
+of a `WORD` at 16#8000 by 1 is 1, `SHL` past 16 bits leaves 0, and
+`ROL(BYTE#1, 9)` is 2. A computed operand keeps its type (`w AND 16#FFFF`
+is a WORD); one with no declared width (a plain literal) is shifted over
+64 bits. `SHR` zero-fills, on an `INT` too, as Codesys does (TIA fills an
+INT with its sign).
 
 ### Strings
 

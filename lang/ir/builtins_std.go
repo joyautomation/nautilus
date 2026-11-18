@@ -79,6 +79,19 @@ func commonType(name string, ts []*Type) (*Type, error) {
 		}
 	}
 	if same {
+		// Integers: the arithmetic common type, computed, so a selected
+		// value is stored at its target's width like any result (#782): a
+		// ladder assignment is SEL(power, old, new).
+		if ts[0].Kind == TypeInt && ts[0].Enum == nil {
+			t := ts[0]
+			for _, u := range ts[1:] {
+				if u.Enum != nil {
+					return ts[0], nil
+				}
+				t = CommonInt(t, u)
+			}
+			return t, nil
+		}
 		return ts[0], nil
 	}
 	allNumeric := true
@@ -110,7 +123,7 @@ func registerBitBuiltins() {
 					return Value{}, fmt.Errorf("%s shift count %d is negative", name, n)
 				}
 				u := fn(uint64(args[0].I)&mask, uint(n), w) & mask
-				if w < 64 && u&(uint64(1)<<(w-1)) != 0 && !unsignedWidth(args, w) {
+				if w < 64 && u&(uint64(1)<<(w-1)) != 0 {
 					u |= ^mask // a signed type's sign, from its top bit
 				}
 				return IntVal(int64(u)), nil
@@ -126,7 +139,7 @@ func registerBitBuiltins() {
 					return nil, nil, fmt.Errorf("%s takes an integer and a count", name)
 				}
 				t := ts[0]
-				if t.Computed || t.Name == "" || t.Enum != nil {
+				if t.Name == "" || t.Enum != nil {
 					return IntT, run(64), nil
 				}
 				w := uint(t.BitWidth())
@@ -165,10 +178,6 @@ func registerBitBuiltins() {
 		return v>>n | v<<(w-n)
 	})
 }
-
-// unsignedWidth is false: a signed operand reads its top bit as the sign.
-// (runUnsigned is the unsigned and bit-string form.)
-func unsignedWidth([]Value, uint) bool { return false }
 
 // runUnsigned is a shift over w bits whose result stays unsigned (a WORD,
 // a UINT).
