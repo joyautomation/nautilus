@@ -279,6 +279,37 @@ Each renders the refusal on the control rather than swallowing it, and each take
 `readonlyReason` (or `disabled` + `disabledReason`) for a point the runtime will not accept — a
 faceplate that silently fails to command is worse than one that says it cannot.
 
+## IO-Link device parameters
+
+`PortParameters` is the screen for the parameters of the device on an IO-Link
+port (`/api/iolink/{port}/params`, [the IO-Link
+guide](https://nautilus.joyautomation.com/guides/io-link/)): what its IODD says
+each parameter is (access, allowed range, named values), what it holds, and a
+confirmed write.
+
+```svelte
+<ConfirmDialog />
+<PortParameters port="LEVEL1" client={new PortParamClient({ token })} />
+```
+
+It is thin on purpose: `PortParamClient` carries the contract, and you can use
+it without the panel.
+
+- A **read says which device answered**: the answer carries the port's
+  identity, and a value from a device that is not the one expected (or from a
+  master that has not reported its ids) is marked, never shown as the device's.
+- A **refused write changed nothing**: a 409 (the device on the port is not
+  the one expected) or a 422 (the IODD forbids the value) says why, in
+  `failureText`.
+- A write whose **outcome is uncertain** — the controller says so (the device
+  on the port changed during it), any 5xx, or the connection lost after the
+  request was sent — is neither a failure nor a success. `PortParamClient`
+  answers `kind: 'uncertain'`, `failureText` says the outcome is not known and
+  to read the parameter back, and the panel reads it back itself. It is never
+  retried for you.
+- A second call while one is in flight for the port is a 429 (`kind: 'busy'`:
+  nothing was sent, try again); a write needs the controller's write credential.
+
 ## Substitute values
 
 A substituted value is one an operator holds in place of a sensor's, for a

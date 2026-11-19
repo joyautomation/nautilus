@@ -65,6 +65,8 @@ export type ParamFailure =
 	| 'invalid'
 	| 'notFound'
 	| 'forbidden'
+	/** Another ISDU call is in flight for the port; nothing was sent: try again. */
+	| 'busy'
 	/** The outcome is not known: the parameter may or may not have been written. */
 	| 'uncertain'
 	/** A read that did not get an answer (a write that did not is 'uncertain'). */
@@ -105,6 +107,7 @@ export function classify(status: number, body: string, outcomeHeader: string | n
 	}
 	if (outcome === 'unknown') return { kind: write ? 'uncertain' : 'failed', message };
 	if (status === 401 || status === 403) return { kind: 'forbidden', message };
+	if (status === 429) return { kind: 'busy', message };
 	if (status === 404) return { kind: 'notFound', message };
 	if (status === 409) return { kind: 'refused', message };
 	if (status === 422 || status === 400) return { kind: 'invalid', message };
@@ -246,6 +249,8 @@ export function failureText(kind: ParamFailure, message: string): string {
 			return `Not permitted: ${message}`;
 		case 'notFound':
 			return `Not found: ${message}`;
+		case 'busy':
+			return 'Another parameter call is in flight for this port, and nothing was sent. Try again in a moment.';
 		case 'unreachable':
 			return 'The controller is unreachable.';
 	}

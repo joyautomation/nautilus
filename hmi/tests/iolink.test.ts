@@ -83,6 +83,8 @@ describe('failures', () => {
 		expect(classify(401, 'unauthorized', null, true).kind).toBe('forbidden');
 		expect(classify(403, 'no', null, true).kind).toBe('forbidden');
 		expect(classify(400, 'expected {"value"}', null, true).kind).toBe('invalid');
+		expect(classify(429, '{"error":"busy: an ISDU call is in flight; retry"}', null, true).kind).toBe('busy');
+		expect(failureText('busy', 'x').includes('nothing was sent')).toBe(true);
 	});
 	it('an uncertain write is its own kind, from the body, the header, any 5xx and a lost connection', async () => {
 		const body = classify(502, '{"error":"changed during the write","outcome":"unknown"}', null, true);
