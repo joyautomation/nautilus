@@ -401,20 +401,28 @@ behaviour. So, until then:
   (plus `start-after` when none asks it, so starting the CPU is decided
   before loading and applied in the after-download callback), then writes
   each configuration's resolved answer in its own callback, `NoAction`
-  included. A list it cannot read, a configuration missing from it or
-  asked twice, or an answer it cannot write cancels the download. The
+  included. A configuration counts as answered only once its write
+  succeeded; a list it cannot read, a configuration missing from it or
+  asked twice, or a write that fails cancels the download, and the cancel
+  stands even if TIA swallows the exception. After loading, start-after
+  is always written (`NoAction` unless decided), never left to TIA's
+  default. Before TIA starts, every selection tiad may write is checked
+  against this Openness's own enum types. Once TIA's download call is
+  entered, any failure answers `outcome_unknown`. The
   `certificate` question's fingerprint is not read yet, so a trust decision
   cannot match it: a TLS check refuses until S2b. All of this is pure code
   in `tools/tiad/core/TiaRules.cs`, unit-tested without TIA.
 - **The gap: a download TIA asks nothing about.** With no pre-download
   callback, `tiad.Openness` has nothing to cancel from, so "decide even
-  when TIA asks nothing" cannot hold: such a download, a dry run too,
-  loads, and the agent answers `outcome_unknown` (decide ran zero times).
-  The first question for S2b is whether TIA always asks at least one
-  check. No dry run before that is answered.
+  when TIA asks nothing" cannot hold: such a download loads, and the agent
+  answers `outcome_unknown` (decide ran zero times). So **the agent
+  refuses every dry run** (400, before TIA hears of it, no CPU claimed)
+  while its TIA side says it cannot promise the cancel (`ITia.CanDryRun`):
+  `tiad.Openness` says so until S2b shows TIA always asks at least one
+  check. The fakes still model the dry run the contract aims for.
 - **Start-after is always asked.** A real download needs a `startAfter`
   decision, or it answers `decision_required`, even when TIA would not stop
-  the CPU.
+  the CPU. Both fakes ask it the same way.
 - **Every download is audited**: one log line with the address, the
   question IDs asked (never TIA's text), the decisions (request-supplied
   names quoted), whether a protection password was set (never its

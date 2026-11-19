@@ -146,6 +146,32 @@ namespace Tiad
                     return null;
             }
         }
+
+        // Answered are the configuration types For can answer.
+        public static readonly string[] Answered =
+        {
+            "StopModules", "StartModules", "OverwriteSystemData", "DataBlockReinitialization",
+            "DataBlockReinitializationOrKeepActualValues", "ModuleReadAccessPassword",
+            "ModuleWriteAccessPassword", "TlsVerificationConfiguration",
+        };
+
+        // Selections are every (configuration type, selection) tiad may
+        // write: For's selections, and start-after's NoAction, which an
+        // after-download callback gets when nothing decided it.
+        public static List<KeyValuePair<string, string>> Selections()
+        {
+            var l = new List<KeyValuePair<string, string>>();
+            foreach (string t in Answered)
+            {
+                foreach (bool yes in new[] { true, false })
+                {
+                    Setting s = For(t, yes);
+                    if (s == null || s.Kind != Setting.Select) continue;
+                    l.Add(new KeyValuePair<string, string>(t, s.Value));
+                }
+            }
+            return l;
+        }
     }
 
     // Pending is one configuration TIA has pending before a download: Key
@@ -176,6 +202,19 @@ namespace Tiad
     {
         public bool Loaded, Declined;
         public string Failure; // null unless the download failed
+        // InDoubt marks a failure once TIA's download call was entered:
+        // the CPU may or may not be loaded (outcome_unknown).
+        public bool InDoubt;
+    }
+
+    // Step is one answer to write into one TIA configuration. The glue
+    // writes Setting, then reports Wrote; a write that fails is reported
+    // with Fail. Index is the decided configuration's, or -1 for a write
+    // no decision covers (start-after's NoAction after an undecided load).
+    public sealed class Step
+    {
+        public Setting Setting;
+        public int Index = -1;
     }
 
     // DownloadDecider keeps ITia.Download's promise over Openness's
@@ -248,8 +287,9 @@ namespace Tiad
         // Next answers TIA's callback for the configuration key. list reads
         // every configuration pending: it runs once, at the first callback,
         // and returns null when TIA's side cannot list them. Next returns
-        // the setting to write, or throws a DownloadCancel.
-        public Setting Next(object key, string type, string message, Func<List<Pending>> list)
+        // the step to write, or throws a DownloadCancel. A configuration
+        // counts as answered only once its write is reported (Wrote).
+        public Step Next(object key, string type, string message, Func<List<Pending>> list)
         {
             if (Cancelled != null) throw Cancelled;
             if (pending == null) Decide(key, type, message, list);
@@ -259,8 +299,23 @@ namespace Tiad
                 throw Cancel("TIA asked " + Name(new Pending { Type = type, Message = message }) + " after the decision, which did not cover it", false);
             }
             if (applied[i]) throw Cancel("TIA asked " + Name(pending[i]) + " twice", false);
-            applied[i] = true;
-            return settings[i];
+            return new Step { Setting = settings[i], Index = i };
+        }
+
+        // Wrote reports that step's setting is written into TIA's
+        // configuration.
+        public void Wrote(Step step)
+        {
+            if (step.Index >= 0) applied[step.Index] = true;
+        }
+
+        // Fail reports that writing an answer failed: the download is
+        // cancelled, so a configuration never keeps TIA's default unseen.
+        // It returns the cancel to throw.
+        public DownloadCancel Fail(string why)
+        {
+            if (Cancelled == null) Cancelled = new DownloadCancel(why, false);
+            return Cancelled;
         }
 
         void Decide(object key, string type, string message, Func<List<Pending>> list)
@@ -332,31 +387,41 @@ namespace Tiad
 
         // After answers TIA's after-download callback for a configuration
         // of type: the decided answer to the same configuration when it is
-        // still unapplied, else null, and TIA's own setting stands (it
-        // cannot change what was loaded). Only an approved download gets
-        // here.
-        public Setting After(string type)
+        // still unapplied. Starting the CPU is never left to TIA's default:
+        // with no such answer (asked already, or a load nobody approved),
+        // start-after is written NoAction, so the CPU stays as it is. For
+        // any other configuration, null: TIA's own setting stands, since it
+        // cannot change what was loaded.
+        public Step After(string type)
         {
-            if (!Approved) return null;
-            for (int i = 0; i < pending.Count; i++)
+            if (Approved)
             {
-                if (!applied[i] && pending[i].Type == type)
+                for (int i = 0; i < pending.Count; i++)
                 {
-                    applied[i] = true;
-                    return settings[i];
+                    if (!applied[i] && pending[i].Type == type) return new Step { Setting = settings[i], Index = i };
                 }
             }
+            if (type == StartAfterType) return new Step { Setting = Setting.Choose("NoAction") };
             return null;
         }
 
-        // Finish reads how TIA's download call ended: state is its result's
-        // state when it returned (null when it threw), messages its
-        // result's messages, error what it threw. A cancel TIA swallowed,
-        // a failed state, or a decided configuration TIA never asked about
-        // is a failure. A download TIA ran without one callback is loaded
+        // Finish reads how TIA's download call ended: entered is whether
+        // TIA's download call was made at all, state its result's state
+        // when it returned (null when it threw), messages its result's
+        // messages, error what was thrown. A cancel TIA swallowed, a
+        // failed state, or a decided configuration TIA never asked about
+        // is a failure, and any failure once the call was entered is in
+        // doubt. A download TIA ran without one callback is loaded
         // undecided: the agent reports that as outcome_unknown (decide ran
         // zero times), never as a refusal.
-        public DownloadEnd Finish(string state, string messages, Exception error)
+        public DownloadEnd Finish(bool entered, string state, string messages, Exception error)
+        {
+            DownloadEnd end = Ended(state, messages, error);
+            end.InDoubt = entered && end.Failure != null;
+            return end;
+        }
+
+        DownloadEnd Ended(string state, string messages, Exception error)
         {
             var end = new DownloadEnd();
             if (error != null)

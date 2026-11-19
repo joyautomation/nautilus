@@ -21,12 +21,21 @@ namespace Tiad
     // with TIA's own text (siemens-ide.md section 3.2).
     public sealed class TiaException : Exception
     {
+        // InDoubt marks a failure inside a download TIA had begun: the CPU
+        // may or may not be loaded, so the agent answers outcome_unknown.
+        public readonly bool InDoubt;
+
         public TiaException(string message) : base(message)
         {
         }
 
         public TiaException(string message, Exception inner) : base(message, inner)
         {
+        }
+
+        public TiaException(string message, Exception inner, bool inDoubt) : base(message, inner)
+        {
+            InDoubt = inDoubt;
         }
     }
 
@@ -119,6 +128,11 @@ namespace Tiad
     // handle the implementation made. Every call runs on the TIA thread.
     public interface ITia
     {
+        // CanDryRun reports whether a dry run is safe: whether this side
+        // can always cancel a download before anything loads. The agent
+        // refuses a dry run, before calling Download, when it cannot.
+        bool CanDryRun { get; }
+
         // GsdInstalled reports whether a GSDML file of that name is in the
         // hardware catalogue.
         bool GsdInstalled(string fileName);
@@ -233,6 +247,10 @@ namespace Tiad
                 done.WaitOne();
             }
             if (err is TiadException) throw (TiadException)err;
+            if (err is TiaException && ((TiaException)err).InDoubt)
+            {
+                throw new TiadException(500, Kinds.OutcomeUnknown, "TIA: " + err.Message + "; the CPU may or may not be loaded: compare before anything else", null, false);
+            }
             if (err is TiaException) throw new TiadException(500, Kinds.OperationFailed, "TIA: " + err.Message);
             if (err != null)
             {

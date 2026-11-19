@@ -109,6 +109,13 @@ namespace Tiad
                 throw new TiadException(403, Kinds.TargetRefused, req.Address + " is not in TIAD_TARGETS");
             }
             if (s.Station == null) throw TiadException.BadRequest("the project has no station spec");
+            // A dry run is a download cancelled before anything loads. A TIA
+            // side that cannot promise that cancel (tiad.Openness, until S2b
+            // shows TIA always asks before it loads) gets none.
+            if (req.DryRun && !OnSession(s, delegate(ITia t) { return t.CanDryRun; }))
+            {
+                throw TiadException.BadRequest("{0}", "dry runs are refused: this agent's TIA side cannot promise a dry run loads nothing until S2b proves TIA always asks before it loads (siemens-ide.md section 3.5); nothing was sent to the CPU");
+            }
             if (s.Station.Cpu.Address != req.Address)
             {
                 throw TiadException.BadRequest("the project's CPU is at {0}, not {1}: one station spec per CPU", s.Station.Cpu.Address, req.Address);
@@ -150,6 +157,9 @@ namespace Tiad
             }
             catch (TiadException e)
             {
+                // An outcome_unknown from TIA's side (its download had begun
+                // when it failed) passes through as it is.
+                if (askedQs != null) asked = Ids(askedQs);
                 // TIA failed once the download was decided. Whether a
                 // cancel loads nothing is unproven, so from there on a
                 // failure leaves the CPU in doubt.

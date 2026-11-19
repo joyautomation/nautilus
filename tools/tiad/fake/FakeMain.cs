@@ -240,6 +240,34 @@ namespace Tiad.Fake
         bool loadDespiteCancel;
         int decideCalls = 1;
         string failAfterDecide = "";
+        string failInDoubt = "";
+        bool noDryRun;
+
+        // NoDryRun makes the fake's TIA side one that cannot promise a dry
+        // run loads nothing, as tiad.Openness cannot until S2b.
+        public bool NoDryRun
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return noDryRun;
+                }
+            }
+        }
+
+        // FailInDoubt, when set, makes Download fail the way TIA fails
+        // inside a download it had begun, before any question.
+        public string FailInDoubt
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return failInDoubt;
+                }
+            }
+        }
 
         // DecideCalls is how many times Download calls decide (1, as the
         // ITia contract says; 0 or 2 for an ITia that breaks it).
@@ -366,6 +394,8 @@ namespace Tiad.Fake
             bool despite = r.Bool("loadDespiteCancel");
             int? calls = r.OptInt("decideCalls");
             string after = r.Str("failAfterDecide");
+            string inDoubt = r.Str("failInDoubt");
+            bool noDry = r.Bool("noDryRun");
             var qs = new List<Question>();
             foreach (var x in r.Children("questions"))
             {
@@ -381,6 +411,8 @@ namespace Tiad.Fake
                 loadDespiteCancel = despite;
                 decideCalls = calls.HasValue ? calls.Value : 1;
                 failAfterDecide = after;
+                failInDoubt = inDoubt;
+                noDryRun = noDry;
             }
             return new Obj();
         }
@@ -418,6 +450,11 @@ namespace Tiad.Fake
         {
             this.script = script;
             script.Enter("start");
+        }
+
+        public bool CanDryRun
+        {
+            get { return !script.NoDryRun; }
         }
 
         public bool GsdInstalled(string fileName)
@@ -517,7 +554,16 @@ namespace Tiad.Fake
         {
             script.Enter("Download");
             var p = (FakeProject)project;
+            if (script.FailInDoubt != "") throw new TiaException(script.FailInDoubt, null, true);
             var outcome = new DownloadOutcome { Questions = script.Questions };
+            // As tiad.Openness does: whether the CPU starts after loading is
+            // always decided before loading.
+            bool startAsked = false;
+            foreach (var q in outcome.Questions)
+            {
+                if (q.Id == QuestionIds.StartAfter) startAsked = true;
+            }
+            if (!startAsked) outcome.Questions.Add(new Question { Id = QuestionIds.StartAfter, Message = "start the CPU after loading", Detail = DownloadDecider.StartAfterType });
             List<Answer> answers = null;
             for (int i = 0; i < script.DecideCalls; i++) answers = decide(outcome.Questions);
             if (script.FailAfterDecide != "") throw new TiaException(script.FailAfterDecide);

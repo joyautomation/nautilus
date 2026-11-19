@@ -68,6 +68,9 @@ namespace Tiad.Openness
         public OpennessTia()
         {
             pcInterface = Environment.GetEnvironmentVariable("TIAD_PC_INTERFACE") ?? "";
+            // Before TIA starts: every selection tiad may write must exist
+            // in this Openness, since enum names are strings to the compiler.
+            CheckSelections();
             try
             {
                 portal = new TiaPortal(TiaPortalMode.WithoutUserInterface);
@@ -76,6 +79,47 @@ namespace Tiad.Openness
             {
                 throw new TiaException(Message(e), e);
             }
+        }
+
+        // The namespaces a configuration type tiad answers may live in.
+        static readonly string[] ConfigurationNamespaces =
+        {
+            "Siemens.Engineering.Download.Configurations.",
+            "Siemens.Engineering.Online.Configurations.",
+        };
+
+        // CheckSelections refuses to start TIA when a selection tiad may
+        // write is not one this Openness defines: a configuration type
+        // that is missing, has no CurrentSelection enum, or lacks the value.
+        static void CheckSelections()
+        {
+            var missing = new List<string>();
+            System.Reflection.Assembly asm = typeof(DownloadConfiguration).Assembly;
+            foreach (KeyValuePair<string, string> w in DownloadChecks.Selections())
+            {
+                Type t = null;
+                foreach (string ns in ConfigurationNamespaces)
+                {
+                    t = asm.GetType(ns + w.Key, false);
+                    if (t != null) break;
+                }
+                var prop = t == null ? null : t.GetProperty("CurrentSelection");
+                if (prop == null || !prop.PropertyType.IsEnum || !Enum.IsDefined(prop.PropertyType, w.Value))
+                {
+                    missing.Add(w.Key + "." + w.Value);
+                }
+            }
+            if (missing.Count > 0)
+            {
+                throw new TiaException("tiad.Openness does not match this Openness (missing selections: " + string.Join(", ", missing.ToArray()) + "), so it does not start TIA");
+            }
+        }
+
+        public bool CanDryRun
+        {
+            // Not until S2b shows TIA always asks before it loads: with no
+            // pre-download callback there is nothing to cancel from.
+            get { return false; }
         }
 
         // Message is an Openness exception's text, with its inner ones.
@@ -443,6 +487,7 @@ namespace Tiad.Openness
             var decider = new DownloadDecider(decide);
             DownloadResult r = null;
             Exception error = null;
+            bool entered = false;
             try
             {
                 HwDevice d = StationOf(p);
@@ -450,20 +495,23 @@ namespace Tiad.Openness
                 DownloadProvider dp = CpuOf(d).GetService<DownloadProvider>();
                 ConfigurationPcInterface pc = PcInterface(dp.Configuration);
                 ConfigurationTargetInterface target = TargetInterface(pc);
+                // Provisional until S2b: the address on the target
+                // interface, for Download's address overload.
                 ConfigurationAddress at = target.Addresses.Create(address);
                 DownloadOptions options = DownloadOptions.None;
                 if (hardware) options |= DownloadOptions.Hardware;
                 if (software) options |= DownloadOptions.Software;
+                entered = true;
                 r = dp.Download(target, at,
                     delegate(DownloadConfiguration c)
                     {
-                        Setting s = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
-                        Apply(c, s, secrets);
+                        Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
+                        Write(decider, c, st, secrets);
                     },
                     delegate(DownloadConfiguration c)
                     {
-                        Setting s = decider.After(c.GetType().Name);
-                        if (s != null) Apply(c, s, secrets);
+                        Step st = decider.After(c.GetType().Name);
+                        if (st != null) Write(decider, c, st, secrets);
                         else Log.Line("download: after loading, TIA reports {0}: {1}", c.GetType().Name, c.Message ?? "");
                     },
                     options);
@@ -473,9 +521,25 @@ namespace Tiad.Openness
                 error = e;
             }
             // How it ended is decided in core (DownloadDecider.Finish).
-            DownloadEnd end = decider.Finish(r == null ? null : r.State.ToString(), r == null ? "" : DownloadMessages(r.Messages), error);
-            if (end.Failure != null) throw new TiaException(end.Failure, error);
+            DownloadEnd end = decider.Finish(entered, r == null ? null : r.State.ToString(), r == null ? "" : DownloadMessages(r.Messages), error);
+            if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
             return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
+        }
+
+        // Write writes one step into a configuration and reports it. A
+        // write that fails cancels the download, even if TIA swallows the
+        // exception: the decider keeps the cancel.
+        static void Write(DownloadDecider decider, DownloadConfiguration c, Step st, Secrets secrets)
+        {
+            try
+            {
+                Apply(c, st.Setting, secrets);
+            }
+            catch (Exception e)
+            {
+                throw decider.Fail("writing " + st.Setting + " into " + c.GetType().Name + " failed: " + Message(e));
+            }
+            decider.Wrote(st);
         }
 
         // Pending lists every configuration pending with c, from c's parent.
@@ -505,7 +569,7 @@ namespace Tiad.Openness
             if (s.Kind == Setting.Password)
             {
                 var pw = c as DownloadPasswordConfiguration;
-                if (pw == null || secrets.Protection == "") throw new DownloadCancel("no protection password for " + c.GetType().Name, false);
+                if (pw == null || secrets.Protection == "") throw new TiaException("no protection password for " + c.GetType().Name);
                 using (var ss = new SecureString())
                 {
                     foreach (char ch in secrets.Protection) ss.AppendChar(ch);
@@ -515,7 +579,7 @@ namespace Tiad.Openness
                 return;
             }
             var prop = c.GetType().GetProperty("CurrentSelection");
-            if (prop == null || !prop.PropertyType.IsEnum) throw new DownloadCancel(c.GetType().Name + " has no selection to set", false);
+            if (prop == null || !prop.PropertyType.IsEnum) throw new TiaException(c.GetType().Name + " has no selection to set");
             prop.SetValue(c, Enum.Parse(prop.PropertyType, s.Value), null);
         }
 
@@ -669,6 +733,8 @@ namespace Tiad.Openness
                 Project p = Of(project).Project;
                 StationUploadProvider sup = p.GetService<StationUploadProvider>();
                 ConfigurationPcInterface pc = PcInterface(sup.Configuration);
+                // As the Openness manual's station upload does: the address
+                // on the PC interface (no station, so no target interface).
                 ConfigurationAddress at = pc.Addresses.Create(address);
                 foreach (HwDevice d in new List<HwDevice>(p.Devices)) d.Delete();
                 string asked = null;
@@ -686,6 +752,8 @@ namespace Tiad.Openness
                     if (asked != null) throw new TiaException("upload asked " + asked + ", which tiad does not answer; nothing was uploaded", e);
                     throw;
                 }
+                // A refusal TIA swallowed is still a refusal.
+                if (asked != null) throw new TiaException("upload asked " + asked + ", which tiad does not answer; TIA went on anyway");
                 string state = r.State.ToString();
                 if (!TiaNames.DownloadLoaded(state)) throw new TiaException("TIA's upload ended " + state);
                 if (StationOf(p) == null) throw new TiaException("the upload brought no CPU into the project");

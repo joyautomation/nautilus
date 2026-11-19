@@ -476,7 +476,7 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	no := real
 	no.Decisions = tiad.Decisions{StopCPU: tiad.No()}
 	yes := real
-	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes()}
+	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
 	stop := []tiad.Question{{ID: tiad.QuestionStopCPU}}
 	cases := []struct {
 		name   string
@@ -492,6 +492,9 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 		{"fails after an approval", tiadtest.Script{Questions: stop, FailAfterDecide: "The connection to the CPU was lost"}, yes},
 		{"fails after a cancel", tiadtest.Script{Questions: stop, FailAfterDecide: "The connection to the CPU was lost"}, real},
 		{"fails after a dry run", tiadtest.Script{FailAfterDecide: "The connection to the CPU was lost"}, dry},
+		// TIA's side says its download had begun, though nothing was
+		// decided yet (it threw before asking, or a cancel was swallowed).
+		{"fails in doubt before asking", tiadtest.Script{FailInDoubt: "TIA went on after tiad cancelled the download"}, yes},
 	}
 	for _, tc := range cases {
 		p.SetScript(t, tc.script)
@@ -513,12 +516,13 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 }
 
 // TestAgentDecidesEveryDryRun: decide runs exactly once even when TIA
-// asks nothing, so a dry run with no questions still cancels.
+// asks nothing, so a dry run with no questions still cancels; start-after
+// is asked all the same.
 func TestAgentDecidesEveryDryRun(t *testing.T) {
 	p, s := downloadReady(t)
 	r, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
-	if err != nil || !r.DryRun || !r.Provisional || r.Downloaded || len(r.Questions) != 0 {
-		t.Fatalf("a dry run with no questions: %+v %v", r, err)
+	if err != nil || !r.DryRun || !r.Provisional || r.Downloaded || len(r.Questions) != 1 || r.Questions[0].ID != tiad.QuestionStartAfter {
+		t.Fatalf("a dry run TIA asks nothing about: %+v %v", r, err)
 	}
 	if l := p.Loaded(t); len(l) != 0 {
 		t.Fatalf("a dry run with no questions loaded %+v", l)
@@ -546,7 +550,7 @@ func TestAgentGivesOneCPUToOneProject(t *testing.T) {
 	errs := make(chan error, 2)
 	for _, s := range ss {
 		go func(s *tiad.Session) {
-			_, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true})
+			_, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 			errs <- err
 		}(s)
 	}
@@ -586,7 +590,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "TIA text\nmust not be logged"}, {ID: tiad.QuestionPassword}})
 	req := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Reinitialize: []string{"evil\naudit download forged"}},
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No(), Reinitialize: []string{"evil\naudit download forged"}},
 		Secrets:   &tiad.Secrets{Protection: "audit-must-not-leak"}}
 	if _, err := s.Download(ctx, req); err != nil {
 		t.Fatal(err)
@@ -598,8 +602,8 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 			line = l
 		}
 	}
-	for _, want := range []string{"address=\"192.0.2.10\"", "dryRun=False", "announced=True", "stopCpu=yes", "startAfter=unanswered",
-		"protection=set", `asked=["stop-cpu","password"]`, `reinitialize=["evil\naudit download forged"]`} {
+	for _, want := range []string{"address=\"192.0.2.10\"", "dryRun=False", "announced=True", "stopCpu=yes", "startAfter=no",
+		"protection=set", `asked=["stop-cpu","password","start-after"]`, `reinitialize=["evil\naudit download forged"]`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the audit line lacks %s:\n%s", want, line)
 		}
@@ -622,7 +626,7 @@ func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionPassword}})
 	sec := &tiad.Secrets{Protection: "protection-must-not-leak"}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Secrets: sec}); err != nil {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Secrets: sec, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true, Secrets: sec}); err != nil {
@@ -652,7 +656,7 @@ func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
 // earlier compile.
 func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 	p, s := downloadReady(t)
-	dl := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true}
+	dl := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	fail := func(call string) {
 		t.Helper()
 		p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: call, Message: call + " failed part-way"}}})
@@ -747,3 +751,22 @@ func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 }
 
 func intp(i int) *int { return &i }
+
+// TestAgentRefusesADryRunTIACannotCancel: a TIA side that cannot promise a
+// dry run loads nothing (tiad.Openness until S2b) gets no dry run: it is
+// refused before ITia.Download, so nothing reaches the CPU, and no CPU is
+// claimed. A real download still goes ahead.
+func TestAgentRefusesADryRunTIACannotCancel(t *testing.T) {
+	p, s := downloadReady(t)
+	p.SetScript(t, tiadtest.Script{NoDryRun: true})
+	_, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
+	if tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "dry runs are refused") || !strings.Contains(err.Error(), "nothing was sent to the CPU") {
+		t.Fatalf("a dry run TIA cannot cancel: %v, want bad_request: dry runs are refused", err)
+	}
+	if n := countCalls(p.Calls(t), "Download"); n != 0 {
+		t.Fatalf("TIA heard of %d refused dry runs", n)
+	}
+	if r, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); err != nil || !r.Downloaded {
+		t.Fatalf("a real download: %+v %v", r, err)
+	}
+}

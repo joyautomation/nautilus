@@ -59,12 +59,18 @@ Mono:
   own callback, `NoAction` included. Whether to start the CPU afterwards is
   asked before loading too. It cancels (throws from the callback) on a list
   it cannot read, a configuration missing from the list or asked twice, an
-  answer it cannot apply, or a no. A failure once decided answers
-  `outcome_unknown`, and so do a cancel TIA swallowed and a download TIA
-  made without a single callback (nothing to cancel from: a dry run would
-  load). How a download ended is decided in core too
-  (`DownloadDecider.Finish`). Provisional until S2b proves that TIA always
-  asks, the list, and that a cancel loads nothing.
+  answer it cannot apply, a write that fails, or a no. A configuration is
+  answered only once its write succeeded. After loading, start-after is
+  always written, `NoAction` unless decided. Once TIA's download call is
+  entered, any failure answers `outcome_unknown`, and so does a download
+  TIA made without a single callback. How a download ended is decided in
+  core too (`DownloadDecider.Finish`). Before TIA starts, every selection
+  tiad may write is checked against this Openness's enum types.
+- **No dry runs yet.** With no pre-download callback there is nothing to
+  cancel from, so a dry run could load. `ITia.CanDryRun` is false for
+  `tiad.Openness`, and the agent refuses every dry run before TIA hears of
+  it, until S2b proves TIA always asks, the list, and that a cancel loads
+  nothing.
 - **Names are checked, not guessed.** The CPU's attributes (address, subnet
   mask, router, PROFINET name, generated names off) are checked against
   `GetAttributeInfos` before each is set; a missing one fails, naming the
