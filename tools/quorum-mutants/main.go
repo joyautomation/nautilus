@@ -68,6 +68,7 @@ var table = []mutation{
 	{"peer_from_any_adopt", []string{"TestLateAdoptToAnEarlierBootIsNotThePeer"}},
 	{"bump_cuts_quiet", []string{"TestGenBumpKeepsTheRestartQuiet"}},
 	{"quiet_reply_unheard", []string{"TestQuietReplyIsHeardNotCounted", "TestTargetedOneWayLeaderSkewed"}},
+	{"stale_pending_kept", []string{"TestBothUncommissionedFollowTheNewest"}},
 }
 
 // event is one line of `go test -json`.

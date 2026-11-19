@@ -350,10 +350,14 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 			return nil, nil
 		}
 		// Both uncommissioned (first commissioning, or both files lost):
-		// propose the incarnation that answered last.
-		if st.Incarnation == 0 && st.PendingGen == 0 {
-			if inc := a.newest(); inc != 0 {
-				return a.propose(max(m.Gen, m.Pending, st.Gen)+1, inc)
+		// propose the incarnation that answered last, and propose again,
+		// above both, when it is no longer the one pending. Two proposals
+		// can each be refused by the other side (an incarnation it never
+		// heard, a lower generation), and only a change of what answers
+		// (a stray gone, the real witness back) can end that.
+		if st.Incarnation == 0 {
+			if inc := a.newest(); inc != 0 && (st.PendingGen == 0 || (inc != st.PendingInc && !mut("stale_pending_kept"))) {
+				return a.propose(max(m.Gen, m.Pending, st.Gen, st.PendingGen)+1, inc)
 			}
 		}
 	}

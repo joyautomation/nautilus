@@ -34,6 +34,9 @@ type Record struct {
 	// Adoptions are the durable witness-incarnation adoptions (EventAdopted)
 	// and Proposals the proposals made, by controller, in order.
 	Adoptions, Proposals []AdoptRec
+	// StaleProposals are proposals delivered below the receiver's adopted
+	// generation, of another incarnation (a late or earlier-boot one).
+	StaleProposals []AdoptRec
 	// TwoIncarnations counts the "two witness copies" events.
 	TwoIncarnations int
 
@@ -164,7 +167,7 @@ type voterStart struct {
 	boot     int
 	at       time.Duration
 	readable bool
-	inc      uint64 // a witness's incarnation at this start
+	inc      uint64 // a witness's incarnation, or a controller's adopted one, at this start
 }
 
 type faultEdge struct {
@@ -216,8 +219,8 @@ func (r *Record) lostFile() bool {
 // operator (§7). Two shapes:
 //
 //   - a controller lost its file, and before it re-commissioned (its next
-//     durable adoption), an incarnation its peer counted in that window
-//     died for good (the witness wiped, or an adopted second copy gone): it
+//     durable adoption), an incarnation its peer had committed (durably
+//     adopted) in that window died for good (the witness wiped, or an adopted second copy gone): it
 //     can only re-adopt what its peer counts, after hearing it, and the
 //     terms it led on the dead one are known to nobody;
 //   - both controllers lost their files, their windows overlapping, and the
@@ -249,7 +252,7 @@ func (r *Record) TwoOfThreeLost() bool {
 	}
 	for _, w := range ws {
 		peer := peerOf(w.node)
-		for _, inc := range r.countedIn(peer, w.from, w.to) {
+		for _, inc := range r.committedIn(peer, w.from, w.to) {
 			if r.death(inc) < w.to {
 				return true
 			}
@@ -272,18 +275,33 @@ func (r *Record) TwoOfThreeLost() bool {
 	return false
 }
 
-// countedIn returns the incarnations controller a counted (quiet period or
-// not) at some time in [from, to).
-func (r *Record) countedIn(a Addr, from, to time.Duration) []uint64 {
-	var incs []uint64
-	snaps := r.counts[a]
-	for i, s := range snaps {
-		end := to
-		if i+1 < len(snaps) {
-			end = snaps[i+1].at
+// committedIn returns the incarnations controller a had durably adopted
+// (from its file at a start, or by an adoption) at some time in [from, to).
+func (r *Record) committedIn(a Addr, from, to time.Duration) []uint64 {
+	type ev struct {
+		at  time.Duration
+		inc uint64
+	}
+	var evs []ev
+	for _, s := range r.starts {
+		if s.node == a {
+			evs = append(evs, ev{s.at, s.inc})
 		}
-		if s.inc != 0 && s.at < to && end > from && !slices.Contains(incs, s.inc) {
-			incs = append(incs, s.inc)
+	}
+	for _, ad := range r.Adoptions {
+		if ad.Node == a {
+			evs = append(evs, ev{ad.At, ad.Inc})
+		}
+	}
+	sort.SliceStable(evs, func(i, j int) bool { return evs[i].at < evs[j].at })
+	var incs []uint64
+	for i, e := range evs {
+		end := to
+		if i+1 < len(evs) {
+			end = evs[i+1].at
+		}
+		if e.inc != 0 && e.at < to && end > from && !slices.Contains(incs, e.inc) {
+			incs = append(incs, e.inc)
 		}
 	}
 	return incs
@@ -448,6 +466,13 @@ type Checks struct {
 	// Zero SteadyTo skips the steady-state check.
 	SteadyFrom, SteadyTo time.Duration
 	SteadyVoters         []Addr
+	// SettleAdoptions, when non-zero, is how long after HealAt the pair may
+	// still adopt (the switch hold-off, design §3.1: a copy that answered
+	// one controller may have made the pair switch, and the switch back
+	// waits up to 32 leases). Steady state is then judged from a quiet
+	// period and a lease after the last adoption, and an adoption later
+	// than HealAt + SettleAdoptions is a violation ("settle").
+	SettleAdoptions time.Duration
 }
 
 // Check runs every oracle over r.
@@ -490,6 +515,13 @@ func Check(r *Record, c Checks) []Violation {
 		for _, v := range checkI7(gates, c.MaxTakeovers, c.HealAt+c.Bound) {
 			add(v)
 		}
+	}
+	if c.SettleAdoptions > 0 && len(r.Adoptions) > 0 {
+		last := r.Adoptions[len(r.Adoptions)-1].At
+		if last > c.HealAt+c.SettleAdoptions {
+			add(Violation{"settle", last, fmt.Sprintf("an adoption %v after the last heal: the switch hold-off allows %v", last-c.HealAt, c.SettleAdoptions)})
+		}
+		c.SteadyFrom = max(c.SteadyFrom, last+2*r.lease)
 	}
 	if c.SteadyTo > c.SteadyFrom {
 		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, c.SteadyVoters) {

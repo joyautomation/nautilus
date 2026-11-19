@@ -41,6 +41,7 @@ var Mutations = []string{
 	"peer_from_any_adopt",    // an Adopt to an earlier boot of this controller says the peer is up
 	"bump_cuts_quiet",        // a generation bump that keeps the incarnation ends a quiet period still owed
 	"quiet_reply_unheard",    // a reply in the quiet period doesn't count as heard: a restart backs off two leases
+	"stale_pending_kept",     // both uncommissioned, a proposal of an incarnation no longer answering is kept
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

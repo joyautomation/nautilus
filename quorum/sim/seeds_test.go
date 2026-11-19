@@ -130,7 +130,26 @@ func randomRun(seed uint64, p profile) Options {
 	}
 	h := healAt(o)
 	o.Until = h + bound + 6*lease
+	if switches(o) {
+		o.Until += holdCap + 2*lease // room to come back after the longest hold-off
+	}
 	return o
+}
+
+// holdCap is the longest switch hold-off (design §3.1: 32 leases) plus a
+// look and a handshake: after the last heal the pair has come back to the
+// real witness, adopted, by then.
+const holdCap = 32*lease + lease
+
+// switches reports whether o can make the pair switch witness copies: a
+// second copy runs and some controller's link to W is mirrored to it.
+func switches(o Options) bool {
+	for _, f := range o.Faults {
+		if f.Kind == Mirror && f.Node == W2 {
+			return true
+		}
+	}
+	return false
 }
 
 // maxSoleLoss is the documented loss rule (test plan F20): I7 is claimed
@@ -195,6 +214,9 @@ func checksFor(o Options) Checks {
 	voters := []Addr{A, B, W}
 	c := Checks{HealAt: h, Bound: bound, MaxTakeovers: faults,
 		SteadyFrom: h + bound + 2*lease, SteadyTo: o.Until, SteadyVoters: voters}
+	if switches(o) {
+		c.SettleAdoptions = holdCap
+	}
 	for _, f := range o.Faults {
 		if f.Kind == Freeze {
 			c.Exclude = []string{"I1", "I2", "lease"} // F22b: an expected breach

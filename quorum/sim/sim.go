@@ -254,10 +254,11 @@ type World struct {
 	witnessInc uint64 // the incarnation A and B were commissioned with
 
 	// link state, per directed link
-	cut    [nNodes][nNodes]int
+	cut    [nNodes][nNodes][]int64 // active cuts: the frame kinds each drops (0: all)
 	delay  [nNodes][nNodes][]time.Duration // active extra-delay faults
 	loss   [nNodes][nNodes][]int           // active loss faults, percent
 	dup    [nNodes][nNodes][]time.Duration // active duplicate faults: the copy's extra delay bound
+	replay [nNodes][nNodes][]time.Duration // active replay faults: a copy exactly this much later
 	mirror [nNodes][nNodes][]Addr          // active mirrors: a copy also goes to these
 
 	rec  Record
@@ -429,7 +430,7 @@ func (w *World) start(n *node) {
 		w.tracef("%v start (witness, readable=%v, inc=%d)", n.addr, readable, v.State().Incarnation)
 	} else {
 		n.voter = quorum.NewVoter(id, w.o.Lease, st, now)
-		w.rec.voterStart(n.addr, n.boot, w.now, readable, 0)
+		w.rec.voterStart(n.addr, n.boot, w.now, readable, st.Incarnation)
 	}
 	if !isController(n.addr) {
 		if n.addr != W && n.addr != W2 {
@@ -569,9 +570,11 @@ func (w *World) send(from, to Addr, b []byte) {
 }
 
 func (w *World) sendOne(from, to Addr, b []byte) {
-	if w.cut[from][to] > 0 {
-		w.tracef("%v→%v dropped (cut)", from, to)
-		return
+	for _, m := range w.cut[from][to] {
+		if m == 0 || len(b) > 1 && m&(1<<b[1]) != 0 {
+			w.tracef("%v→%v dropped (cut)", from, to)
+			return
+		}
 	}
 	if p := maxInt(w.loss[from][to]); p > 0 && w.net.IntN(100) < p {
 		w.tracef("%v→%v lost", from, to)
@@ -586,6 +589,9 @@ func (w *World) sendOne(from, to Addr, b []byte) {
 		d += time.Duration(w.net.Int64N(int64(w.o.Jitter) + 1))
 	}
 	w.push(&event{at: w.now + d, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+	for _, r := range w.replay[from][to] {
+		w.push(&event{at: w.now + d + r, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+	}
 	if bound := maxDur(w.dup[from][to]); bound > 0 {
 		extra := time.Duration(w.net.Int64N(int64(bound) + 1))
 		w.push(&event{at: w.now + d + extra, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
@@ -624,6 +630,11 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 			return
 		}
 		w.tracef("%v hears %v: %v gen=%d inc=%d floor=%d pending=%d fresh=%v", n.addr, from, m.Kind, m.Gen, m.Incarnation, m.Floor, m.Pending, m.Echo == n.nonce)
+		if st := n.voter.State(); m.Kind == quorum.Propose && m.Gen != 0 && m.Gen < st.Gen && m.Incarnation != st.Incarnation {
+			// A late proposal of another incarnation, below what this
+			// controller adopted since: the generations must refuse it.
+			w.rec.StaleProposals = append(w.rec.StaleProposals, AdoptRec{Node: n.addr, At: w.now, Gen: m.Gen, Inc: m.Incarnation})
+		}
 		p, msgs := n.adopt.OnAdopt(now, m)
 		if p != nil {
 			w.persist(n, p)
