@@ -371,6 +371,10 @@
           "type": "string",
           "description": "One line for the device's tags."
         },
+        "driver": {
+          "type": "string",
+          "description": "An OPC UA device's connection: the name of an opcua-client section of drivers: with no endpoint or manifest (a template), whose security, security-mode, pki-dir, username, read-mode and scan-rate the device's own driver takes. Several devices may share one. Without it the device connects with security None, anonymous, and naut check says so. Not on a Modbus device."
+        },
         "validate": {
           "enum": ["live", "static"],
           "description": "How a live I/O configuration change checks this device: live probes it on a connection of its own, static checks the configuration only. Overrides the driver's validate:. Default: static when the profile documents modbus max-connections of 2 or fewer, else live. live on a profile documenting max-connections 1 is an error."
@@ -859,9 +863,22 @@
             ]
           },
           "then": {
-            "required": [
-              "endpoint",
-              "manifest"
+            "anyOf": [
+              {
+                "required": [
+                  "endpoint",
+                  "manifest"
+                ]
+              },
+              {
+                "description": "A connection template: an opcua-client section a devices: row names in driver:, with neither an endpoint (the row's) nor a manifest (derived from the profile).",
+                "not": {
+                  "anyOf": [
+                    { "required": ["endpoint"] },
+                    { "required": ["manifest"] }
+                  ]
+                }
+              }
             ]
           }
         },

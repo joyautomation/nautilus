@@ -199,7 +199,20 @@ func runDevicesRender(args []string, w io.Writer) int {
 		tw.Flush()
 	}
 	for _, od := range set.OPCUADevices() {
-		fmt.Fprintf(w, "\n# opcua %s (driver %s, %s)\n\n", od.Name, od.Name, od.Endpoint)
+		conn := "security None, anonymous"
+		if od.Driver != "" {
+			conn = "connects as drivers: section " + od.Driver + " says"
+			for _, c := range m.Drivers {
+				if strings.EqualFold(c.Name, od.Driver) {
+					sec := c.Security
+					if sec == "" {
+						sec = "strongest offered"
+					}
+					conn = fmt.Sprintf("security %s from drivers: section %s", strings.TrimSpace(sec+" "+c.SecurityMode), c.Name)
+				}
+			}
+		}
+		fmt.Fprintf(w, "\n# opcua %s (driver %s, %s, %s)\n\n", od.Name, od.Name, od.Endpoint, conn)
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "BINDING\tACCESS\tTYPE\tNODE ID\tNAMESPACE")
 		for _, b := range od.Manifest.Tags {

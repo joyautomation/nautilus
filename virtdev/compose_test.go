@@ -111,10 +111,10 @@ func TestComposeOverlay(t *testing.T) {
 
 func TestComposeErrors(t *testing.T) {
 	for _, tc := range []struct{ name, file, want string }{
-		{"profile repeated", "devices: [{ name: CONV, profile: abb-acs355-fmbt21 }]\n", "may set only listen and init"},
-		{"endpoint repeated", "devices: [{ name: CONV, endpoint: 10.0.0.99 }]\n", "may set only listen and init"},
-		{"unit id repeated", "devices: [{ name: CONV, unit-id: 2 }]\n", "may set only listen and init"},
-		{"params repeated", "devices: [{ name: CONV, params: {} }]\n", "may set only listen and init"},
+		{"profile repeated", "devices: [{ name: CONV, profile: abb-acs355-fmbt21 }]\n", "may set only listen, init and opcua"},
+		{"endpoint repeated", "devices: [{ name: CONV, endpoint: 10.0.0.99 }]\n", "may set only listen, init and opcua"},
+		{"unit id repeated", "devices: [{ name: CONV, unit-id: 2 }]\n", "may set only listen, init and opcua"},
+		{"params repeated", "devices: [{ name: CONV, params: {} }]\n", "may set only listen, init and opcua"},
 		{"listed twice", "devices: [{ name: CONV, init: {} }, { name: CONV, listen: ':1' }]\n", "listed twice"},
 		{"same endpoint as a declared device", "devices: [{ name: OTHER, profile: abb-acs355-fmbt21, endpoint: 10.0.0.11 }]\n", "both answer at 10.0.0.11:502"},
 	} {
@@ -236,5 +236,25 @@ func TestInProcessRefusesAnUnknownDevicesDriver(t *testing.T) {
 				t.Errorf("NewInProcess: %v", err)
 			}
 		})
+	}
+}
+
+// opcua: is an OPC UA device's simulation-only key: a declared device takes
+// it from virtual-devices.yaml beside listen and init, and its wire face
+// serves with that certificate store; a Modbus device has none.
+func TestComposeOPCUAKeys(t *testing.T) {
+	dir := vendored(t, "pepperl-fuchs-ice3")
+	writeSet(t, dir, "devices:\n  - { name: PF1, opcua: { pki: server-pki } }\n")
+	s, err := Compose(dir, []Instance{{Name: "PF1", Profile: "pepperl-fuchs-ice3", Endpoint: "10.0.0.21"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opcuaPKI(s, s.Devices[0]); got != filepath.Join(dir, "server-pki") {
+		t.Errorf("pki %q, want the project's server-pki", got)
+	}
+	dir = vendored(t, "abb-acs355-fmbt21")
+	writeSet(t, dir, "devices:\n  - { name: CONV, opcua: { pki: server-pki } }\n")
+	if _, err := Compose(dir, []Instance{conv()}); err == nil || !strings.Contains(err.Error(), "opcua: is an OPC UA device's") {
+		t.Errorf("opcua: on a Modbus device: %v", err)
 	}
 }

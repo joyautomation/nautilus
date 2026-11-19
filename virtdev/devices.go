@@ -61,6 +61,18 @@ type Instance struct {
 	// Params sets the profile's params ({location} in an ifm master's
 	// node ids).
 	Params map[string]string `yaml:"params"`
+	// OPCUA is an OPC UA device's simulation-only server settings.
+	OPCUA *InstanceOPCUA `yaml:"opcua"`
+}
+
+// InstanceOPCUA is how an OPC UA virtual device's wire face serves.
+type InstanceOPCUA struct {
+	// PKI is a certificate store (relative to the project) with which the
+	// wire face also offers the secure endpoints, SignAndEncrypt, to a
+	// trusted client certificate, as a device configured secure does: a
+	// project's row that connects through a secured driver: section is
+	// tested against it. Empty serves None alone, as the profiles document.
+	PKI string `yaml:"pki"`
 }
 
 // Model is the process model: an ST PROGRAM, run as its own task in the
@@ -143,7 +155,7 @@ func (s *Set) overlay(declared []Instance) error {
 			return fmt.Errorf("%s: device %s: profile %q is not a profile id", ManifestName, d.Name, d.Profile)
 		}
 		d.Profile = devprofile.ProjectFile(d.Profile)
-		d.Listen, d.Init = "", nil
+		d.Listen, d.Init, d.OPCUA = "", nil, nil
 		devs[i] = d
 		at[strings.ToLower(d.Name)] = i
 		s.declared[strings.ToLower(d.Name)] = true
@@ -158,13 +170,13 @@ func (s *Set) overlay(declared []Instance) error {
 			continue
 		}
 		if e.Profile != "" || e.Endpoint != "" || e.UnitID != nil || e.Params != nil {
-			return fmt.Errorf("%s: device %s is declared in %s's devices:, which says what it is and where; here it may set only listen and init", FileName, e.Name, ManifestName)
+			return fmt.Errorf("%s: device %s is declared in %s's devices:, which says what it is and where; here it may set only listen, init and opcua", FileName, e.Name, ManifestName)
 		}
 		if added[k] {
 			return fmt.Errorf("%s: device %s: listed twice", FileName, e.Name)
 		}
 		added[k] = true
-		devs[i].Listen, devs[i].Init = e.Listen, e.Init
+		devs[i].Listen, devs[i].Init, devs[i].OPCUA = e.Listen, e.Init, e.OPCUA
 	}
 	s.Devices = append(devs, own...)
 	return nil
@@ -237,6 +249,9 @@ func (s *Set) resolve() error {
 			if _, ok := p.Point(name); !ok && p.Simulator == nil {
 				return fmt.Errorf("device %s: init: %s is not a point of %s", d.Name, name, p.ID)
 			}
+		}
+		if d.OPCUA != nil && p.Protocol != devprofile.ProtoOPCUA {
+			return fmt.Errorf("device %s: opcua: is an OPC UA device's; profile %s speaks %s", d.Name, p.ID, p.Protocol)
 		}
 		if p.Protocol == devprofile.ProtoOPCUA {
 			ep, err := opcuaEndpoint(*d, p)
