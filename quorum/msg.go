@@ -15,11 +15,15 @@ type NodeID string
 // within the boot. A voter echoes both in its Reply, with the requester as
 // To, and a candidate counts a grant only toward the request it answers:
 // never one meant for the other controller, nor one from an earlier boot.
+// Renewal marks a request sent by a leading candidate to renew its lease:
+// a standby's voter notes it even when it refuses it, so the standby
+// doesn't campaign under a live leader (Voter.LeaderSeen).
 type Request struct {
-	From  NodeID
-	Term  uint64
-	Nonce uint64
-	ID    uint64
+	From    NodeID
+	Term    uint64
+	Nonce   uint64
+	ID      uint64
+	Renewal bool
 }
 
 // Reply answers one Request. Promised is the highest term the voter has
@@ -72,7 +76,15 @@ func (r Request) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.Term)
 	b = binary.BigEndian.AppendUint64(b, r.Nonce)
 	b = binary.BigEndian.AppendUint64(b, r.ID)
+	b = append(b, boolByte(r.Renewal))
 	return sealCRC(b), nil
+}
+
+func boolByte(v bool) byte {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 // MarshalBinary encodes r like Request.MarshalBinary.
@@ -83,11 +95,7 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.Term)
 	b = binary.BigEndian.AppendUint64(b, r.Nonce)
 	b = binary.BigEndian.AppendUint64(b, r.ID)
-	g := byte(0)
-	if r.Granted {
-		g = 1
-	}
-	b = append(b, g)
+	b = append(b, boolByte(r.Granted))
 	b = binary.BigEndian.AppendUint64(b, r.Promised)
 	b = binary.BigEndian.AppendUint64(b, r.Incarnation)
 	return sealCRC(b), nil
@@ -117,6 +125,18 @@ func (r *reader) u64() uint64 {
 	v := binary.BigEndian.Uint64(r.b)
 	r.b = r.b[8:]
 	return v
+}
+
+// boolean reads a byte that must be 0 or 1.
+func (r *reader) boolean() bool {
+	switch r.byte1() {
+	case 0:
+		return false
+	case 1:
+		return true
+	}
+	r.bad = true
+	return false
 }
 
 func (r *reader) str() string {
@@ -156,6 +176,7 @@ func (r *Request) UnmarshalBinary(b []byte) error {
 		return ErrKind
 	}
 	v := Request{From: NodeID(rd.str()), Term: rd.u64(), Nonce: rd.u64(), ID: rd.u64()}
+	v.Renewal = rd.boolean()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}
@@ -173,13 +194,7 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 		return ErrKind
 	}
 	v := Reply{From: NodeID(rd.str()), To: NodeID(rd.str()), Term: rd.u64(), Nonce: rd.u64(), ID: rd.u64()}
-	switch rd.byte1() {
-	case 0:
-	case 1:
-		v.Granted = true
-	default:
-		rd.bad = true
-	}
+	v.Granted = rd.boolean()
 	v.Promised, v.Incarnation = rd.u64(), rd.u64()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt

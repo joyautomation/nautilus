@@ -30,6 +30,12 @@ type Voter struct {
 	// isWitness: this voter is the witness, and stamps its incarnation on
 	// every reply. Set by NewWitness.
 	isWitness bool
+
+	// renewalFrom renewed a lease through this voter last, granted or
+	// not, and renewalUntil is one lease after it arrived. In memory only:
+	// a restarted voter's candidate learns it again from the next renewal.
+	renewalFrom  NodeID
+	renewalUntil Instant
 }
 
 type heldGrant struct {
@@ -77,12 +83,35 @@ func (v *Voter) PromiseUntil() (term uint64, to NodeID, until Instant) {
 	return v.st.Promised, v.st.GrantedTo, v.promiseUntil
 }
 
+// LeaderSeen returns the other candidate this node last saw holding a
+// lease, and until when on this node's clock: the later of the promise
+// this voter gave it and one lease after the last renewal it sent here,
+// granted or refused (a voter in its restart wait, or still promised to
+// its own candidate, refuses a live leader's renewals but sees them). A
+// standby's candidate campaigns only once that has run out
+// (Candidate.Tick), so it doesn't campaign under a live leader. ("", 0)
+// when it has seen none.
+func (v *Voter) LeaderSeen() (NodeID, Instant) {
+	var from NodeID
+	var until Instant
+	if v.st.GrantedTo != "" && v.st.GrantedTo != v.self {
+		from, until = v.st.GrantedTo, v.promiseUntil
+	}
+	if v.renewalFrom != "" && v.renewalUntil > until {
+		from, until = v.renewalFrom, v.renewalUntil
+	}
+	return from, until
+}
+
 // Handle answers r, received at now. A refusal comes back at once. A grant
 // that changes the persisted state comes back as a Persist, and the grant
 // itself only from Persisted. A renewal that changes nothing durable is
 // answered at once, unless an earlier change is still unconfirmed.
 func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	refuse := []Reply{v.reply(r, false)}
+	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
+		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
+	}
 	if now < v.waitUntil || r.Term < v.st.Promised {
 		return nil, refuse
 	}
