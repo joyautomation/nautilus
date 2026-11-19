@@ -110,7 +110,7 @@ iolink:
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
   status: "Port{n}_Status"
-  # isdu: comes with PR 5
+  # isdu: { mode: opc-30120, object: ..., read: ..., write: ..., data: bytes, doc: ... }   # §7
 ```
 
 | Key | Meaning |
@@ -124,7 +124,7 @@ iolink:
 | `pd-valid` | a BOOL point that says the master holds valid process data in (optional) |
 | `vendor-id`, `device-id` | integer points holding the attached device's identity (optional, see §6) |
 | `status` | a point holding the port's mode or connection status (optional) |
-| `isdu` | (PR 5) `methods` (vendor OPC UA methods, their node ids as templates under it), `opc-30120` (the IO-Link companion specification's objects), or `none`; until then the key is refused as unknown |
+| `isdu` | optional: `{ mode, object, read, write, data, max-octets, doc | unverified }`. `mode` is `opc-30120` (the IO-Link companion specification's `ReadISDU`/`WriteISDU` on the port device's object, a Byte[]) or `methods` (the master's own, e.g. the ifm's, a hex text); `object`, `read` and `write` are node id templates with `{n}` (and the profile's `{params}`); `data` is `bytes` or `hex`; `max-octets` bounds one call (the ifm's 64 hex digits are 32 octets; default 232); one of `doc` and `unverified` is required. Absent: the master offers none, and `naut devices show` says so |
 
 Every template is expanded for `n` = 1..`ports`, and `devprofile` checks
 that each expansion names a point the profile has, with a type its key
@@ -437,8 +437,15 @@ A virtual master serves raw process data and identity from its
 simulator, as #712's masters do now. A port device has no simulator of
 its own in the first pass. The process model writes the port's raw
 image (bytes, a U32 or hex) through the master's simulator. ISDU answers
-(PR 5) come from the IODD's variables and defaults, served by the
-virtual master's method handlers (virtdev's code, naut-virtdev's review).
+come from the IODD's variables and defaults, served by the virtual
+master's method handlers: a `ports:` entry on the virtual instance
+(`{ 1: { iodd: level.xml } }`, the file in `iodd/`) makes the master serve
+`ReadISDU` and `WriteISDU` for that port where the profile's `isdu:` puts
+them. Parameters start at the IODD's defaults (zeros where it has none); a
+write is checked as a device would check it (access rights, length, range)
+and refused with the IO-Link ErrorType, and a read answers what was last
+written. The ErrorType values are from memory of the interface
+specification and unverified: a simulator's, not a device's.
 
 ## 10. Not a tautology
 

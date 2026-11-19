@@ -119,12 +119,19 @@ func TestMappedByteStringWire(t *testing.T) {
 
 func bytesFixture(t *testing.T, tags []runtime.TagDef, nodes []MappedNode, writable ...string) (*runtime.Runtime, *opcua.Client) {
 	t.Helper()
+	return bytesFixtureWith(t, true, tags, nodes, writable...)
+}
+
+// bytesFixtureWith is bytesFixture with the anonymous session a writer or not
+// (opcua.anonymous-writes).
+func bytesFixtureWith(t *testing.T, anonymousWrites bool, tags []runtime.TagDef, nodes []MappedNode, writable ...string) (*runtime.Runtime, *opcua.Client) {
+	t.Helper()
 	rt, err := runtime.New(runtime.Options{Program: "PROGRAM Main\nEND_PROGRAM\n", Driver: nio.NewMemory(), Scan: 20 * time.Millisecond, Tags: tags})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s, err := New(rt, Options{Endpoint: "localhost:0", Name: "virtual", Sweep: 20 * time.Millisecond,
-		Mapped: &Mapped{Namespaces: []string{"urn:test:bytes"}, Nodes: nodes}, Writable: writable, AnonymousWrites: true})
+		Mapped: &Mapped{Namespaces: []string{"urn:test:bytes"}, Nodes: nodes}, Writable: writable, AnonymousWrites: anonymousWrites})
 	if err != nil {
 		t.Fatal(err)
 	}

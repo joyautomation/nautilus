@@ -97,7 +97,7 @@ func TestIOLinkBlock(t *testing.T) {
 		{"pd-valid not BOOL", `pd-valid: "P{n}_Valid"`, `pd-valid: "P{n}_In"`, "pd-valid: point P1_In is UDINT"},
 		{"vendor without device", `  device-id: "P{n}_Device"` + "\n", "", "vendor-id and device-id go together"},
 		{"device id in 16 bits", `device-id: "P{n}_Device"`, `device-id: "P{n}_Vendor"`, "device-id: point P1_Vendor is UINT"},
-		{"unknown key", "ports: 2", "ports: 2\n  isdu: none", "field isdu not found"},
+		{"unknown key", "ports: 2", "ports: 2\n  isdo: none", "field isdo not found"},
 		// The form is a claim of its own: cited, or marked unverified.
 		{"pd-in form uncited", in, `{ point: "P{n}_In", form: u32 }`, "pd-in: cite a document for the form (doc:) or mark it unverified: true"},
 		{"pd-out form uncited", out, `{ point: "P{n}_Out", form: u32 }`, "pd-out: cite a document for the form"},
@@ -110,5 +110,77 @@ func TestIOLinkBlock(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
+	}
+}
+
+// An isdu: block names the method node ids with a {n} and a citation, in a
+// namespace the profile has; the mode and data form agree, and a length is
+// bounded.
+func TestISDUBlock(t *testing.T) {
+	const pre = "  ports: 2\n  pd-in: { point: \"P{n}_In\", form: u32, doc: \"man p. 1\" }\n  isdu: "
+	good := `{ mode: opc-30120, object: "ns=1;s=P{n}", read: "ns=1;s=P{n}/R", write: "ns=1;s=P{n}/W", data: bytes, doc: "man p. 3" }`
+	p, err := ParseProfile([]byte(iolinkProfile(pre+good)), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.IOLink.ISDU == nil || p.IOLink.ISDU.Octets() != MaxISDUOctets || p.IOLink.ISDU.Mode != ISDUOPC30120 {
+		t.Errorf("isdu: %+v", p.IOLink.ISDU)
+	}
+	// A master's own methods in hex, limited, with no write method, unverified.
+	own := `{ mode: methods, object: "ns=1;s=P{n}", read: "ns=1;s=P{n}/R", data: hex, max-octets: 32, unverified: true }`
+	q, err := ParseProfile([]byte(iolinkProfile(pre+own)), "test")
+	if err != nil || q.IOLink.ISDU.Octets() != 32 || q.IOLink.ISDU.Write != "" {
+		t.Fatalf("methods: %v %+v", err, q.IOLink.ISDU)
+	}
+	for _, c := range []struct{ name, old, new, want string }{
+		{"no mode", "mode: opc-30120, ", "", "isdu: mode is required"},
+		{"unknown mode", "mode: opc-30120", "mode: rest", `mode "rest" is not`},
+		{"no data", "data: bytes, ", "", "isdu: data is required"},
+		{"unknown data", "data: bytes", "data: base64", `data "base64" is not`},
+		{"opc-30120 in hex", "data: bytes", "data: hex", "carries a value as a Byte[]"},
+		{"too long", `doc: "man p. 3"`, `max-octets: 233, doc: "man p. 3"`, "max-octets 233 is not 1-232"},
+		{"no object", `object: "ns=1;s=P{n}", `, "", "object and read are required"},
+		{"no {n}", `read: "ns=1;s=P{n}/R"`, `read: "ns=1;s=P/R"`, "read \"ns=1;s=P/R\" has no {n}"},
+		{"namespace the profile lacks", `write: "ns=1;s=P{n}/W"`, `write: "ns=7;s=P{n}/W"`, "write:"},
+		{"uncited", `, doc: "man p. 3"`, "", "cite a document"},
+		{"cites no document", `doc: "man p. 3"`, `doc: "other p. 3"`, `doc "other" is not the id`},
+	} {
+		if !strings.Contains(good, c.old) {
+			t.Fatalf("%s: the block has no %q", c.name, c.old)
+		}
+		_, err := ParseProfile([]byte(iolinkProfile(pre+strings.Replace(good, c.old, c.new, 1))), "test")
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+}
+
+// "No ISDU" is a statement, not an omission: mode none needs a note and takes
+// nothing else, and does not count as offering ISDU.
+func TestISDUNone(t *testing.T) {
+	const pre = "  ports: 2\n  pd-in: { point: \"P{n}_In\", form: u32, doc: \"man p. 1\" }\n  isdu: "
+	p, err := ParseProfile([]byte(iolinkProfile(pre+`{ mode: none, note: "the manual's methods are not read yet" }`)), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.IOLink.ISDU.Offers() || p.IOLink.ISDU.Note == "" {
+		t.Errorf("isdu: %+v", p.IOLink.ISDU)
+	}
+	var none *ISDUSpec
+	if none.Offers() {
+		t.Error("a missing isdu: offers ISDU")
+	}
+	for name, body := range map[string]string{
+		"no note":             `{ mode: none }`,
+		"a blank note":        `{ mode: none, note: "  " }`,
+		"a note and a method": `{ mode: none, note: "x", read: "ns=1;s=P{n}/R" }`,
+		"a note and a doc":    `{ mode: none, note: "x", doc: "man p. 3" }`,
+	} {
+		if _, err := ParseProfile([]byte(iolinkProfile(pre+body)), "test"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if pf, _ := loadBuiltin("pepperl-fuchs-ice3"); pf.IOLink.ISDU == nil || pf.IOLink.ISDU.Mode != ISDUNone {
+		t.Errorf("the P+F profile says nothing about ISDU, or not none: %+v", pf.IOLink.ISDU)
 	}
 }

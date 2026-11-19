@@ -159,8 +159,8 @@ func registerServices(srv *opcserver.Server, ns *namespace) {
 	srv.RegisterHandler(id.TranslateBrowsePathsToNodeIDsRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return translateBrowsePaths(srv, r)
 	})
-	srv.RegisterHandler(id.CallRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
-		return callMethods(srv, ns, r)
+	srv.RegisterHandler(id.CallRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return callMethods(srv, ns, sc, r)
 	})
 	srv.RegisterHandler(id.CreateSubscriptionRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 		return createSubscription(srv, ns, sc, r, reqID)

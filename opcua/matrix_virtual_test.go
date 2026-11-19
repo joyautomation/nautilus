@@ -19,6 +19,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/devbind"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/iolink"
@@ -91,14 +92,30 @@ type virtualServer struct {
 func startVirtual(t *testing.T, s matrixServer) *virtualServer {
 	t.Helper()
 	dir := t.TempDir()
+	ports := ""
+	if s.ports != "" {
+		ports = ", ports: " + s.ports
+	}
+	for name, src := range s.ioddFiles {
+		raw, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "iodd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "iodd", name), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	files := map[string]string{
 		// No listen: the device takes an ephemeral loopback port.
 		"virtual-devices.yaml": fmt.Sprintf(`devices:
-  - { name: D, profile: %s, endpoint: 10.1.1.21 }
+  - { name: D, profile: %s, endpoint: 10.1.1.21%s }
 model:
   program: plant.st
   scan: 100ms
-`, s.virtual),
+`, s.virtual, ports),
 		"plant.st": fmt.Sprintf("PROGRAM Plant\nVAR\n%s\nEND_VAR\n%s\nEND_PROGRAM\n", s.modelVars, s.model),
 	}
 	for name, body := range files {
@@ -389,5 +406,131 @@ D_Port1_PdiValid := TRUE;`,
 	})
 	if q := w.Quality()["LEVEL1"]; q != nio.Bad {
 		t.Errorf("the swapped port's quality %v, want Bad", q)
+	}
+}
+
+// ISDU end to end (#705 PR 5a): a virtual SICK master answers ReadISDU and
+// WriteISDU for the level sensor on its port 1 from the sensor's IODD, over
+// the wire, to a master row with that port device. The default is the IODD's,
+// a write is read back, a write the IODD forbids is refused (by the client's
+// checks, and by the master for what the device would refuse), and once the
+// sensor is swapped a write is refused naming the state while a read still
+// works and says which device is there.
+func TestISDUThroughAVirtualMaster(t *testing.T) {
+	const levelFile = "acme-level100-20261118-IODD1.1.xml"
+	levelPath := "../iolink/iodd/testdata/" + levelFile
+	v := startVirtual(t, matrixServer{
+		virtual:   "sick-sig300",
+		ports:     "{ 1: { iodd: " + levelFile + " } }",
+		ioddFiles: map[string]string{levelFile: levelPath},
+		modelVars: "n : INT;",
+		// The sensor is swapped for another model after 100 scans (10 s).
+		model: `n := n + 1;
+D_Port1_PdiBytes := 'fe0dffd1';
+D_Port1_VendorID := 65261;
+D_Port1_DeviceID := 1048577;
+IF n > 100 THEN D_Port1_DeviceID := 1048999; END_IF;`,
+	})
+	prof, err := os.ReadFile("../devprofile/profiles/sick-sig300.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	level, err := os.ReadFile(levelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := devbind.Resolve(fstest.MapFS{
+		"profiles/sick-sig300.yaml": {Data: prof},
+		"iodd/" + levelFile:         {Data: level},
+	}, []devbind.Device{{Name: "M", Profile: "sick-sig300", Endpoint: "h", Points: []string{"Port1_*"},
+		Ports: map[int]devbind.Port{1: {Name: "LEVEL1", IODD: levelFile}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	od := set.OPCUADevices()[0]
+	d, err := opcua.New(v.url(), od.Manifest, opcua.WithName("M"), opcua.WithOnlineTag("M__Online"),
+		opcua.WithScanRate(100*time.Millisecond), opcua.WithTimeout(2*time.Second), opcua.WithSecurity("None", "None"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := set.WrapOPCUA("M", d, "None", "None")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	t.Cleanup(func() { cancel(); d.Stop() })
+	identity := func() int64 {
+		vals, _ := w.ReadInputs()
+		if n, ok := vals["LEVEL1__Identity"].(int64); ok {
+			return n
+		}
+		return -1 // nothing from the master yet
+	}
+	waitUntil(t, "the right device on the port", 30*time.Second, func() bool { return identity() == int64(iolink.Ok) || identity() == int64(iolink.AwaitingRearm) })
+
+	res, err := w.ISDURead(ctx, "LEVEL1", "V_Setpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Value != uint64(100) || res.Index != 64 || res.Identity != iolink.Ok {
+		t.Errorf("the default setpoint %+v, want the IODD's 100 with the identity Ok", res)
+	}
+	if res, err := w.ISDURead(ctx, "LEVEL1", "V_VendorName"); err != nil || res.Value != "Acme" {
+		t.Errorf("vendor name %+v, %v, want the IODD's Acme", res, err)
+	}
+	if res, err := w.ISDUWrite(ctx, "LEVEL1", "V_Setpoint", uint64(500)); err != nil || res.Value != uint64(500) {
+		t.Fatalf("write: %+v, %v", res, err)
+	}
+	if res, err := w.ISDURead(ctx, "LEVEL1", "V_Setpoint"); err != nil || res.Value != uint64(500) {
+		t.Errorf("read back %+v, %v, want 500", res, err)
+	}
+	// The client refuses before sending what the IODD forbids.
+	if _, err := w.ISDUWrite(ctx, "LEVEL1", "V_Setpoint", uint64(2000)); err == nil || !strings.Contains(err.Error(), "range") {
+		t.Errorf("a value outside the IODD's range: %v", err)
+	}
+	if _, err := w.ISDUWrite(ctx, "LEVEL1", "V_SerialNumber", "X"); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Errorf("a write to a read-only variable: %v", err)
+	}
+	// What a device refuses, the master answers with the device's ErrorType:
+	// a raw call writes to a read-only variable (index 21) and an index the
+	// device does not have (999).
+	obj := opcua.NodeRef{NodeID: "ns=3;s=SIG300/Port 1/Device"}
+	meth := opcua.NodeRef{NodeID: "ns=3;s=SIG300/Port 1/Device/WriteISDU"}
+	idx, _ := ua.NewVariant(uint16(21))
+	bad, _ := ua.NewVariant(uint16(999))
+	sub, _ := ua.NewVariant(uint8(0))
+	data, _ := ua.NewVariant(ua.ByteArray(make([]byte, 16)))
+	for name, c := range map[string]struct {
+		index *ua.Variant
+		want  uint16
+	}{"read-only": {idx, 0x8023}, "no such index": {bad, 0x8011}} {
+		out, err := d.Call(ctx, obj, meth, c.index, sub, data)
+		if err != nil || len(out) != 2 || out[0].Value() != c.want || out[1].Value() != int32(-3) {
+			t.Errorf("%s: %v %v, want ErrorType 0x%04X and Status -3", name, out, err, c.want)
+		}
+	}
+	// The device's own range check, which the client's pre-check hides: a raw
+	// call writes 2000 (outside 0..1000) to the setpoint, and the master
+	// answers the device's ErrorType (0x8030 value out of range), Status -3.
+	idx64, _ := ua.NewVariant(uint16(64))
+	over, _ := ua.NewVariant(ua.ByteArray{0x07, 0xD0})
+	if out, err := d.Call(ctx, obj, meth, idx64, sub, over); err != nil || len(out) != 2 || out[0].Value() != uint16(0x8030) || out[1].Value() != int32(-3) {
+		t.Errorf("a value outside the IODD's range, written raw: %v %v, want ErrorType 0x8030 and Status -3", out, err)
+	}
+	if res, _ := w.ISDURead(ctx, "LEVEL1", "V_Setpoint"); res.Value != uint64(500) {
+		t.Errorf("the device accepted what it refused: setpoint %v", res.Value)
+	}
+	// The sensor is swapped: a read still works and says so, a write is
+	// refused by the master's own gate, naming the state.
+	waitUntil(t, "the swapped device", 40*time.Second, func() bool { return identity() == int64(iolink.WrongDevice) })
+	if res, err := w.ISDURead(ctx, "LEVEL1", "V_Setpoint"); err != nil || res.Value != uint64(500) || res.Identity != iolink.WrongDevice {
+		t.Errorf("a read after the swap %+v, %v: want 500 with WrongDevice flagged", res, err)
+	}
+	if _, err := w.ISDUWrite(ctx, "LEVEL1", "V_Setpoint", uint64(600)); err == nil || !strings.Contains(err.Error(), "WrongDevice") {
+		t.Errorf("a write after the swap: %v, want a refusal naming WrongDevice", err)
+	}
+	if res, _ := w.ISDURead(ctx, "LEVEL1", "V_Setpoint"); res.Value != uint64(500) {
+		t.Errorf("the refused write changed the parameter: %v", res.Value)
 	}
 }

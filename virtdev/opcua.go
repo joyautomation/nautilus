@@ -84,6 +84,11 @@ func (s *Set) Mapped(d Instance) (m *uaserver.Mapped, writable []string, err err
 			writable = append(writable, tag)
 		}
 	}
+	extra, err := s.isduNodes(d, p, subst, ensure)
+	if err != nil {
+		return nil, nil, err
+	}
+	m.Nodes = append(m.Nodes, extra...)
 	return m, writable, nil
 }
 
@@ -131,7 +136,7 @@ func startOPCUA(ctx context.Context, rt *runtime.Runtime, s *Set, d Instance, lo
 		Writable: writable,
 		// A virtual device takes writes the way the real ones do in their
 		// default setup: anonymously, on the None endpoint.
-		AnonymousWrites: len(writable) > 0,
+		AnonymousWrites: len(writable) > 0 || s.hasISDUWrite(d),
 		PKI:             opcuaPKI(s, d),
 		Logger:          log,
 	})

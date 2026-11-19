@@ -2,7 +2,7 @@ profile: ifm-al1590
 title: ifm AL1590 8-port IO-Link master, OPC UA server
 maker: ifm electronic
 model: AL1590
-version: 3
+version: 4
 docs:
   - id: al1427
     title: "AL1427 IO-Link master with EtherNet/IP interface, operating instructions, §5.6 OPC UA server and §10.4.3 address space (11/2025), the ifm OPC UA tree the AL1590's follows"
@@ -36,6 +36,19 @@ iolink:                # docs/design/iolink.md §3
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
   status: "Port{n}_Status"
+  # ISDU: the AL1427 manual's ReadISDU/WriteISDU methods (pp. 165-170), whose
+  # data is a HEX STRING of at most 64 characters (32 octets): a longer
+  # parameter cannot be read or written through this master. Where the
+  # methods sit in an AL1590's tree was not measured (UNVERIFIED).
+  isdu:
+    mode: methods
+    object: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice"
+    read: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/MethodSet/ReadISDU"
+    write: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/MethodSet/WriteISDU"
+    data: hex
+    max-octets: 32
+    unverified: true
+    doc: "al1427 pp. 165-170, ReadISDU and WriteISDU (data as a HEX string, max 64 characters)"
 points:
   - { name: "Port{n}_Pdin", type: STRING, repeat: 8,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdin",
