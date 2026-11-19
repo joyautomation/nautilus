@@ -46,6 +46,9 @@ type Record struct {
 	// uncommissioned controller whose peer's committed incarnation never
 	// answered it), by controller.
 	Recommissions []AdoptRec
+	// ReadoptsOverSwitch counts EventReadoptOverSwitch: a controller took
+	// its uncommissioned peer's re-adoption over its own pending switch.
+	ReadoptsOverSwitch int
 
 	Trace []string
 	Hash  uint64
@@ -230,31 +233,22 @@ func (r *Record) lostFile() bool {
 //     adopted) in that window died for good (the witness wiped, or an adopted second copy gone): it
 //     can only re-adopt what its peer counts, after hearing it, and the
 //     terms it led on the dead one are known to nobody;
-//   - both controllers lost their files, their windows overlapping, and the
-//     adoption that ended one of them was of an incarnation the real witness
-//     never had (a stray copy's).
+//   - both controllers lost their files, their windows overlapping (#710
+//     B2): the witness may have missed terms the pair led on {A, B}, so
+//     even an intact witness's floor can miss them.
 //
-// Both controllers' files lost with the witness intact is NOT this case,
-// nor one controller's file or the witness's alone.
+// One controller's file or the witness's alone is NOT this case. Either
+// way the pair waits for the operator (a Recommission fault ends a
+// window with its adoption).
 func (r *Record) TwoOfThreeLost() bool {
-	dead, stray := r.twoOfThree()
-	return dead || stray
-}
-
-// TwoOfThreeStray reports the second shape of TwoOfThreeLost: both files
-// lost and re-commissioned on a stray's incarnation. Neither controller
-// had anything committed, so the committed-incarnation rule doesn't stop
-// it, and the floor may miss terms only the lost files knew: I2 and I4
-// stay excused there (design §3.1).
-func (r *Record) TwoOfThreeStray() bool {
-	_, stray := r.twoOfThree()
-	return stray
+	dead, both := r.twoOfThree()
+	return dead || both
 }
 
 // twoOfThree reports TwoOfThreeLost's two shapes: dead, a controller's
-// peer's committed incarnation died before it re-commissioned; stray,
-// both files lost and re-commissioned on a stray's incarnation.
-func (r *Record) twoOfThree() (dead, stray bool) {
+// peer's committed incarnation died before it re-commissioned; both, the
+// two controllers uncommissioned at once.
+func (r *Record) twoOfThree() (dead, both bool) {
 	const never = time.Duration(1<<63 - 1)
 	type window struct {
 		node     Addr
@@ -283,21 +277,14 @@ func (r *Record) twoOfThree() (dead, stray bool) {
 			}
 		}
 	}
-	real := map[uint64]bool{}
-	for _, s := range r.starts {
-		if s.node == W {
-			real[s.inc] = true
-		}
-	}
 	for i, x := range ws {
 		for _, y := range ws[i+1:] {
-			if x.node != y.node && x.from < y.to && y.from < x.to &&
-				(x.to != never && !real[x.inc] || y.to != never && !real[y.inc]) {
-				stray = true
+			if x.node != y.node && x.from < y.to && y.from < x.to {
+				both = true
 			}
 		}
 	}
-	return dead, stray
+	return dead, both
 }
 
 // committedIn returns the incarnations controller a had durably adopted
@@ -508,18 +495,12 @@ func Check(r *Record, c Checks) []Violation {
 			vs = append(vs, v)
 		}
 	}
-	if dead, stray := r.twoOfThree(); dead || stray {
+	if r.TwoOfThreeLost() {
 		// The operator's case: nothing re-commissions without a person
-		// (I6, I7, steady). The lost controller waits for the operator
-		// rather than re-commission at a floor that may miss its terms
-		// (the committed-incarnation rule, design §3.1), so I2 and I4
-		// hold, except when both files were lost and a stray re-commissioned
-		// them: the rule has nothing committed to go by there. I1, the
-		// lease and the ledger always hold.
+		// (I6, I7, steady). The lost controllers wait for the operator
+		// rather than re-commission at a floor that may miss their terms
+		// (design §3.1), so I1, I2, I4, the lease and the ledger hold.
 		c.Exclude = append(slices.Clone(c.Exclude), "I6", "I7", "steady")
-		if stray {
-			c.Exclude = append(c.Exclude, "I2", "I4")
-		}
 	}
 	gates := r.Gates()
 	for _, v := range checkI1(gates) {

@@ -80,8 +80,10 @@ func TestReviewStaleProposeFloor(t *testing.T) {
 	now := at(lease)
 	_, probe := a.tick(now)
 	a.a.OnWitness(now, rv(t, w, now, *probe))
-	// The stale duplicate of B's commissioning proposal arrives.
-	stale := Adopt{From: "B", Kind: Propose, Gen: 1, Incarnation: incI, Floor: 10, Nonce: 0xB1, Echo: 0xA0} // to A's earlier boot
+	// The stale duplicate of B's commissioning proposal arrives (made by
+	// the operator: since #710 B2 nothing else commissions a pair, so it
+	// carries Operator, and only its echo of A's earlier boot refuses it).
+	stale := Adopt{From: "B", Kind: Propose, Gen: 1, Incarnation: incI, Floor: 10, Nonce: 0xB1, Echo: 0xA0, Operator: 10} // to A's earlier boot
 	a.recv(now, stale)
 	t.Logf("A state after stale propose: %+v", a.v.State())
 	t5 := now.Add(lease + lease/2)
@@ -93,5 +95,29 @@ func TestReviewStaleProposeFloor(t *testing.T) {
 	a.c.OnReply(t5, rv(t, w, t5, *rq))
 	if a.c.Leading(t5) && a.c.Term() <= 11 {
 		t.Fatalf("A leads at term %d; term 11 was already led by B", a.c.Term())
+	}
+}
+
+// #1016 review (naut-lead), verbatim: both files lost, the real witness intact. Before the loss B led term 11
+// on {A, B} while W was cut (W promised 9). The pair re-commissions on
+// its own at a floor that misses 11.
+func TestReviewBothLostWitnessIntact(t *testing.T) {
+	a := newCtl(t, "A", VoterState{}, 0)
+	b := newCtl(t, "B", VoterState{}, 0)
+	now := at(lease + lease/4)
+	a.hear(now, incI, 9)
+	b.hear(now, incI, 9)
+	qa, _ := a.tick(now)
+	talk(now, a, b, qa)
+	qb, _ := b.tick(now)
+	talk(now, b, a, qb)
+	for range 4 {
+		qa, _ = a.tick(now)
+		talk(now, a, b, qa)
+	}
+	t.Logf("A %+v", a.v.State())
+	t.Logf("B %+v", b.v.State())
+	if a.v.State().Incarnation != 0 && a.v.State().Floor < 11 {
+		t.Errorf("re-commissioned with floor %d: term 10/11 can be led again", a.v.State().Floor)
 	}
 }

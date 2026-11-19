@@ -49,6 +49,10 @@ const (
 	// exactly Value ns later: a deterministic late copy (a named case's
 	// "a message from the peer's earlier boot arrives now").
 	Replay
+	// Recommission is the operator's command on controller Node at At
+	// (Adoption.Recommission): adopt the witness's current incarnation,
+	// with floor Value. For is ignored. The generator never draws it.
+	Recommission
 	nKinds
 )
 
@@ -60,7 +64,7 @@ const (
 )
 
 var kindNames = [nKinds]string{"Cut", "Delay", "Loss", "Duplicate", "Mirror", "Crash", "Wipe",
-	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay"}
+	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission"}
 
 func (k FaultKind) String() string {
 	if k >= 0 && k < nKinds {
@@ -193,6 +197,18 @@ func (w *World) applyFault(i int, on bool) {
 				w.arm(n)
 			}
 		}
+	case Recommission:
+		n := w.nodes[f.Node]
+		if !on || !n.up {
+			return
+		}
+		inc := w.nodes[W].voter.State().Incarnation
+		p, err := n.adopt.Recommission(inc, uint64(f.Value))
+		w.tracef("%v: the operator re-commissions on inc=%d with floor %d: %v", n.addr, inc, f.Value, err)
+		if p != nil {
+			w.persist(n, p)
+		}
+		w.observe(n)
 	case SlowDisk:
 		n := w.nodes[f.Node]
 		n.disk.slow = addOrRemove(n.disk.slow, time.Duration(f.Value), on)

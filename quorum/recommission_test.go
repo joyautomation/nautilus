@@ -268,3 +268,191 @@ func TestKnownGapPendingStray(t *testing.T) {
 		t.Fatalf("the gap is closed (A %+v): flip this test and update design §3.1", st)
 	}
 }
+
+// Both controllers uncommissioned with the real witness intact (#710 B2,
+// the review of #1016): before the loss B led term 11 on {A, B} while W
+// (promised 9) was cut, and both files were lost before a renewal reached
+// W. No surviving voter holds 11. The pair must not re-commission on its
+// own at W's floor 9, or it can lead 10 and 11 again; each raises
+// EventRecommission naming no incarnation (the peer is uncommissioned
+// too). Red under both_lost_recommission.
+func TestBothLostWaitForTheOperator(t *testing.T) {
+	a := newCtl(t, "A", VoterState{}, 0)
+	b := newCtl(t, "B", VoterState{}, 0)
+	for k := range 8 {
+		now := at(lease/2 + lease/2*time.Duration(k))
+		a.hear(now, incI, 9)
+		b.hear(now, incI, 9)
+		qa, _ := a.tick(now)
+		talk(now, a, b, qa)
+		qb, _ := b.tick(now)
+		talk(now, b, a, qb)
+	}
+	for _, x := range []*ctl{a, b} {
+		if st := x.v.State(); st.Incarnation != 0 || st.PendingGen != 0 {
+			t.Fatalf("%v re-commissioned (or proposed) without an operator: %+v", x.self, st)
+		}
+		ev := x.a.Events()
+		if len(ev) != 1 || ev[0] != (Event{Kind: EventRecommission}) {
+			t.Fatalf("%v: want one EventRecommission naming no incarnation, got %+v", x.self, ev)
+		}
+	}
+	// The operator re-commissions one of them, with a floor above 11: the
+	// pair adopts I at that floor, and neither voter grants 11 or 12.
+	p, err := a.a.Recommission(incI, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := at(5 * lease)
+	a.write(now, p)
+	for k := range 4 {
+		tt := now.Add(lease / 2 * time.Duration(k))
+		a.hear(tt, incI, 9)
+		b.hear(tt, incI, 9)
+		qa, _ := a.tick(tt)
+		talk(tt, a, b, qa)
+	}
+	for _, x := range []*ctl{a, b} {
+		if st := x.v.State(); st.Incarnation != incI || st.Floor < 20 {
+			t.Fatalf("%v not on I at the operator's floor: %+v", x.self, st)
+		}
+	}
+	end := now.Add(10 * lease)
+	if grant(t, b.v, end, Request{From: "A", Term: 12, Nonce: 1, ID: 1}) {
+		t.Fatal("B granted a term below the operator's floor")
+	}
+}
+
+// A committed incarnation that has answered never raises the alarm: the
+// controller can re-adopt it (#710 B2, (b)). B pends a switch to J while
+// I, its committed incarnation, still answers A; only B's proposals reach
+// A (A refuses them: a switch), well past a lease. Red under
+// alarm_on_heard.
+func TestHeardCommittedIncarnationRaisesNoAlarm(t *testing.T) {
+	b := newCtl(t, "B", commissioned(1, incI, 9), 0)
+	now := at(2 * lease)
+	b.hear(now, incJ, 0)
+	b.tick(now) // B pends (2, J)
+	a := newCtl(t, "A", VoterState{}, now)
+	a.hear(now, incJ, 0)
+	for range 2 { // the boots are exchanged; A, not hearing I yet, stays put
+		qa, _ := a.tick(now)
+		talk(now, a, b, qa)
+	}
+	for k := range 8 {
+		tt := now.Add(lease / 2 * time.Duration(k))
+		a.hear(tt, incI, 9)
+		rs, _ := b.tick(tt)
+		for _, m := range rs {
+			a.recv(tt, m) // A's answers are lost
+		}
+	}
+	if st := a.v.State(); st.Incarnation != 0 {
+		t.Fatalf("A took B's switch: %+v", st)
+	}
+	for _, e := range a.a.Events() {
+		if e.Kind == EventRecommission {
+			t.Fatalf("an alarm although I answered: %+v", e)
+		}
+	}
+}
+
+// The operator's floor must be above what the controller already knows
+// (#710 B2, (c)): here the witness promised 30, so 30 is refused and 31
+// taken. Red under recommission_any_floor.
+func TestRecommissionFloorAboveTheKnown(t *testing.T) {
+	a := newCtl(t, "A", VoterState{}, 0)
+	a.hear(at(lease), incJ, 30)
+	if _, err := a.a.Recommission(incJ, 30); err != ErrFloorTooLow {
+		t.Fatalf("a floor at the witness's promise: %v", err)
+	}
+	p, err := a.a.Recommission(incJ, 31)
+	if err != nil || p.State.Floor != 31 {
+		t.Fatalf("a floor above it: %+v %v", p, err)
+	}
+}
+
+// The accepted residual is visible (#710 B2, (d)): B, pending its switch
+// to X, takes its uncommissioned peer's re-adoption of I and raises
+// EventReadoptOverSwitch naming both.
+func TestReadoptOverSwitchRaisesAnEvent(t *testing.T) {
+	const incX = incK
+	b := newCtl(t, "B", commissioned(1, incI, 9), 0)
+	now := at(2 * lease)
+	b.hear(now, incX, 9)
+	b.tick(now)
+	b.a.Events()
+	a := newCtl(t, "A", VoterState{}, now)
+	for k := range 4 {
+		tt := now.Add(lease / 4 * time.Duration(k))
+		a.hear(tt, incI, 9)
+		qa, _ := a.tick(tt)
+		talk(tt, a, b, qa)
+	}
+	var got []Event
+	for _, e := range b.a.Events() {
+		if e.Kind == EventReadoptOverSwitch {
+			got = append(got, e)
+		}
+	}
+	if st := b.v.State(); st.Incarnation != incI || len(got) != 1 || got[0].Incarnation != incI || got[0].Other != incX {
+		t.Fatalf("B %+v, events %+v", st, got)
+	}
+}
+
+// Both files lost, the operator re-commissions A, and A restarts with its
+// proposal in flight (lost on the way). The permission is gone with the
+// boot: the re-sent proposal is unmarked, and the uncommissioned B refuses
+// it. The same floor again is refused (A knows it now); one above
+// KnownFloor is taken, and the pending proposal leaves marked: B takes it.
+func TestRecommissionAgainAfterARestart(t *testing.T) {
+	a := newCtl(t, "A", VoterState{}, 0)
+	b := newCtl(t, "B", VoterState{}, 0)
+	round := func(now Instant) {
+		a.hear(now, incI, 9)
+		b.hear(now, incI, 9)
+		qa, _ := a.tick(now)
+		talk(now, a, b, qa)
+		qb, _ := b.tick(now)
+		talk(now, b, a, qb)
+	}
+	now := at(lease)
+	round(now)
+	round(now) // the boots are exchanged
+	p, _ := a.a.Recommission(incI, 20)
+	a.write(now, p)
+	qa, _ := a.tick(now) // A's query; B's State makes A propose
+	for _, m := range qa {
+		for _, r := range b.recv(now, m) {
+			_ = a.recv(now, r) // A's proposal is lost on the way
+		}
+	}
+	if st := a.v.State(); st.PendingInc != incI || st.Floor != 20 {
+		t.Fatalf("A does not pend I at floor 20: %+v", st)
+	}
+	later := now.Add(lease)
+	a = newCtl(t, "A", a.v.State(), later)
+	for k := range 4 {
+		round(later.Add(lease / 4 * time.Duration(k)))
+	}
+	if st := b.v.State(); st.Incarnation != 0 {
+		t.Fatalf("B took an unmarked proposal after A's restart: %+v", st)
+	}
+	if _, err := a.a.Recommission(incI, 20); err != ErrFloorTooLow {
+		t.Fatalf("the same floor again: %v", err)
+	}
+	f := a.a.KnownFloor() + 1
+	p, err := a.a.Recommission(incI, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.write(later, p)
+	for k := range 4 {
+		round(later.Add(lease + lease/4*time.Duration(k)))
+	}
+	for _, x := range []*ctl{a, b} {
+		if st := x.v.State(); st.Incarnation != incI || st.Floor < f {
+			t.Fatalf("%v not on I at the new floor %d: %+v", x.self, f, st)
+		}
+	}
+}
