@@ -60,15 +60,40 @@ const (
 	refusedValueMax = 4 << 10
 )
 
-// elevatedActions are refused while the journal cannot be written (#709,
-// design §6 question 5, decided 2026-11-18): forces and program changes
-// must never happen unrecorded. Operator actions (tag writes, alarm
-// acknowledgement and shelving, SFC commands) are still allowed, kept in
-// memory and written once the journal recovers.
-var elevatedActions = map[string]bool{
-	"force.set": true, "force.clear": true, "force.clear-all": true,
-	"program.edit": true, "program.rollback": true, "program.activate": true,
+// actionClass classes every action the seam journals, for when the journal
+// cannot be written (#709, design §6 question 5, decided 2026-11-18):
+// elevated actions (forces, program changes) must never happen unrecorded
+// and are refused; operator actions (tag writes, alarm acknowledgement
+// and shelving, SFC commands) are still allowed, kept in memory and
+// written once the journal recovers.
+//
+// Classification fails closed: an action missing here is elevated, and
+// TestEveryActionIsClassed fails on it, so a new route is classed on
+// purpose.
+var actionClass = map[string]string{
+	"tag.write":      operator,
+	"alarm.ack":      operator,
+	"alarm.shelve":   operator,
+	"alarm.unshelve": operator,
+	"sfc.step":       operator,
+	"sfc.transition": operator,
+
+	"force.set":        elevated,
+	"force.clear":      elevated,
+	"force.clear-all":  elevated,
+	"program.edit":     elevated,
+	"program.rollback": elevated,
+	"program.activate": elevated,
 }
+
+const (
+	operator = "operator"
+	elevated = "elevated"
+)
+
+// isElevated reports whether action is refused while the journal is down:
+// every action not classed as an operator's.
+func isElevated(action string) bool { return actionClass[action] != operator }
 
 // auditUpkeep is how often Server.Run calls the auditor's tick.
 var auditUpkeep = 5 * time.Second
@@ -237,7 +262,7 @@ func (a *auditor) flush() {
 // and in the ring. When the journal fails, the action this entry records
 // has already happened: the failure is logged and e is kept, to be
 // written with the same id later; from then on elevated actions are
-// refused (elevatedActions) until the journal catches up.
+// refused (isElevated) until the journal catches up.
 func (a *auditor) writeLocked(e audit.Entry) {
 	got := e
 	if a.retryLocked() {
@@ -421,7 +446,7 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if a.tf != nil {
 		t = a.tf(r, body)
 	}
-	if elevatedActions[a.action] && a.s.audit.down() {
+	if isElevated(a.action) && a.s.audit.down() {
 		a.answer(w, r, t, func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error": "the audit journal cannot be written, so " + a.action + " is refused until it can be (operator actions are still allowed)",

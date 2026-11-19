@@ -1004,8 +1004,8 @@ journal cannot be written, or `naut run` could not open it (an unwritable
 `audit.path`, or another `naut run` already using it):
 
 - **Elevated actions are refused** with `503`: forces (set, clear, clear
-  all) and program edits, rollbacks and activations. The refusal is
-  journalled, in memory.
+  all) and program edits, rollbacks and activations, and any action not
+  listed below as an operator's. The refusal is journalled, in memory.
 - **Operator actions are allowed**: tag writes, alarm acknowledgement and
   shelving, SFC commands. Their entries are kept in memory (up to 10,000;
   past that the oldest are counted in an `audit.dropped` entry) and written,

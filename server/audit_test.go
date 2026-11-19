@@ -1051,3 +1051,56 @@ func TestJournalDownRefusesElevatedActions(t *testing.T) {
 		t.Errorf("unauthorized force with no journal = %d", rec.Code)
 	}
 }
+
+// Every action the seam journals is classed operator or elevated, on
+// purpose: an unclassed one (a new route) fails here, and until it is
+// classed it counts as elevated, refused while the journal is down.
+func TestEveryActionIsClassed(t *testing.T) {
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "audited" {
+				return true
+			}
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				t.Errorf("%s: an audited action that is not a string literal cannot be classed", fset.Position(call.Pos()))
+				return true
+			}
+			action, _ := strconv.Unquote(lit.Value)
+			n++
+			if c := actionClass[action]; c != operator && c != elevated {
+				t.Errorf("%s: action %q is not classed: add it to actionClass as operator or elevated (until then it is refused while the journal is down)", fset.Position(call.Pos()), action)
+			}
+			return true
+		})
+	}
+	if n < 12 {
+		t.Fatalf("found %d audited actions, want at least 12", n)
+	}
+	// Fail closed: an action nobody classed is elevated.
+	for _, a := range []string{"config.apply", "substitute.start", ""} {
+		if !isElevated(a) {
+			t.Errorf("unclassed %q is not elevated", a)
+		}
+	}
+	if isElevated("tag.write") || !isElevated("force.set") {
+		t.Error("the classes are swapped")
+	}
+}
