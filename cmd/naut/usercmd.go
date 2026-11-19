@@ -84,16 +84,30 @@ func usersFile(stateDir, name, projectDir string, devFallback bool, getenv func(
 	if err != nil {
 		return "", err
 	}
-	if projectDir != "" {
-		proj, err := filepath.Abs(projectDir)
-		if err != nil {
-			return "", err
-		}
-		if rel, err := filepath.Rel(proj, sd); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("state directory %s is inside the project %s: the users file's hashes must never reach git; set auth.state-dir outside it", sd, proj)
-		}
+	if err := outsideProject(sd, projectDir); err != nil {
+		return "", err
 	}
 	return filepath.Join(sd, users.FileName), nil
+}
+
+// outsideProject refuses a state directory inside projectDir: a deploy
+// replaces the project, and the users file's hashes must never reach git.
+func outsideProject(sd, projectDir string) error {
+	if projectDir == "" {
+		return nil
+	}
+	sd, err := filepath.Abs(sd)
+	if err != nil {
+		return err
+	}
+	proj, err := filepath.Abs(projectDir)
+	if err != nil {
+		return err
+	}
+	if rel, err := filepath.Rel(proj, sd); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("state directory %s is inside the project %s: the users file's hashes must never reach git; set auth.state-dir outside it", sd, proj)
+	}
+	return nil
 }
 
 // runUsers is naut users in a project checkout.
@@ -145,12 +159,7 @@ func usersMain(args []string, load func(dir string) (*project.Manifest, string, 
 		if path, err = usersFile(sd, name, dir, devFallback, getenv); err != nil {
 			return fail(err)
 		}
-	}
-	if err := users.CheckMode(path); err != nil {
-		return fail(err)
-	}
-	f, err := users.Load(path)
-	if err != nil {
+	} else if err := outsideProject(filepath.Dir(path), dir); err != nil {
 		return fail(err)
 	}
 	cmd, rest := fs.Arg(0), fs.Args()[1:]
@@ -168,45 +177,51 @@ func usersMain(args []string, load func(dir string) (*project.Manifest, string, 
 	if n > 0 {
 		name = strings.ToLower(rest[0])
 	}
-	switch cmd {
-	case "list":
+	if cmd == "list" {
+		if err := users.CheckMode(path); err != nil {
+			return fail(err)
+		}
+		f, err := users.Load(path)
+		if err != nil {
+			return fail(err)
+		}
 		listUsers(stdout, path, f, m)
 		return 0
-	case "add", "passwd":
-		pw, err := readPassword(stdin, stderr, name)
-		if err != nil {
-			return fail(err)
-		}
-		if cmd == "add" {
-			err = f.Add(name, pw)
-		} else {
-			err = f.SetPassword(name, pw)
-		}
-		if err != nil {
-			return fail(err)
-		}
-	case "disable", "enable":
-		if err := f.SetDisabled(name, cmd == "disable"); err != nil {
-			return fail(err)
-		}
-	case "token":
-		tok, id, err := f.NewToken(name)
-		if err != nil {
-			return fail(err)
-		}
-		if err := f.Save(path, osUser()); err != nil {
-			return fail(err)
-		}
-		fmt.Fprintf(stderr, "token %s for %s (shown once; naut users revoke %s %s ends it):\n", id, name, name, id)
-		fmt.Fprintln(stdout, tok)
-		return 0
-	case "revoke":
-		if err := f.Revoke(name, rest[1]); err != nil {
+	}
+	// A password is asked for before the file is read: the change is made
+	// under the file's lock (users.Update), never on a copy read before a
+	// prompt another run may have changed the file behind.
+	var pw string
+	if cmd == "add" || cmd == "passwd" {
+		if pw, err = readPassword(stdin, stderr, name); err != nil {
 			return fail(err)
 		}
 	}
-	if err := f.Save(path, osUser()); err != nil {
+	var tok, id string
+	err = users.Update(path, osUser(getenv, os.Geteuid()), func(f *users.File) error {
+		switch cmd {
+		case "add":
+			return f.Add(name, pw)
+		case "passwd":
+			return f.SetPassword(name, pw)
+		case "disable", "enable":
+			return f.SetDisabled(name, cmd == "disable")
+		case "token":
+			var err error
+			tok, id, err = f.NewToken(name)
+			return err
+		case "revoke":
+			return f.Revoke(name, rest[1])
+		}
+		return nil
+	})
+	if err != nil {
 		return fail(err)
+	}
+	if cmd == "token" {
+		fmt.Fprintf(stderr, "token %s for %s (shown once; naut users revoke %s %s ends it):\n", id, name, name, id)
+		fmt.Fprintln(stdout, tok)
+		return 0
 	}
 	fmt.Fprintf(stderr, "%s: %s %s\n", path, cmd, name)
 	if m != nil && cmd == "add" && !manifestNames(m)[name] {
@@ -297,9 +312,10 @@ func readPassword(stdin io.Reader, stderr io.Writer, name string) (string, error
 }
 
 // osUser is who ran naut users, for the journal: the login behind sudo
-// when there is one.
-func osUser() string {
-	if s := os.Getenv("SUDO_USER"); s != "" {
+// when there is one. SUDO_USER is believed only from root (euid 0), where
+// sudo set it: anyone else can put any name in it.
+func osUser(getenv func(string) string, euid int) string {
+	if s := getenv("SUDO_USER"); s != "" && euid == 0 {
 		return s
 	}
 	if u, err := user.Current(); err == nil {

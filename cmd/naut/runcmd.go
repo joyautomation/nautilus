@@ -312,7 +312,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// The audit journal's system alarm reads the server, which is built
 	// after the alarms (it serves them): srvRef is set once it exists.
 	var srvRef atomic.Pointer[server.Server]
-	alarms, err := startAlarms(proj, rt, auditAlarm(&srvRef))
+	sysAlarms := []project.SystemAlarm{auditAlarm(&srvRef)}
+	if proj.Auth != nil && proj.Auth.HasUsers() {
+		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
+	}
+	alarms, err := startAlarms(proj, rt, sysAlarms...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
 		return 1
@@ -679,6 +683,27 @@ func auditAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 		Active: func() bool {
 			s := srv.Load()
 			return s != nil && s.AuditJournalDown()
+		},
+	}
+}
+
+// UsersAlarmID is the system alarm raised while the controller's users
+// file cannot be read (#708): no local user can authenticate.
+const UsersAlarmID = "nautilus.users-file"
+
+// usersAlarm is the users file's system alarm, read from the server srv
+// will hold.
+func usersAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: UsersAlarmID, Tag: "__nautilus.users-file-down",
+			Name:     "Users file cannot be read: no local user can sign in or use a token",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: func() bool {
+			s := srv.Load()
+			return s != nil && s.UsersFileDown()
 		},
 	}
 }

@@ -45,7 +45,9 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 		}
 		// The users file's state directory, so the test never depends
 		// on the runner's systemd environment or home directory.
-		cmd.Env = append(cmd.Env, "STATE_DIRECTORY="+t.TempDir(), "XDG_STATE_HOME=")
+		sd := t.TempDir()
+		os.Chmod(sd, 0o700)
+		cmd.Env = append(cmd.Env, "STATE_DIRECTORY="+sd, "XDG_STATE_HOME=")
 		cmd.Env = append(cmd.Env, env...)
 		stdout, stderr = &lockedBuffer{}, &lockedBuffer{}
 		cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -76,6 +78,7 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 	t.Run("enforced", func(t *testing.T) {
 		// akhan's personal access token, on the box before the start.
 		state := t.TempDir()
+		os.Chmod(state, 0o700)
 		uf := users.New()
 		uf.Add("akhan", "hunter22")
 		pat, _, _ := uf.NewToken("akhan")

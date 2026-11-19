@@ -150,9 +150,19 @@ func (f *File) Save(path, by string) error {
 	if err != nil {
 		return err
 	}
+	return writeAtomic(path, append(b, '\n'))
+}
+
+// writeAtomic writes b to path: a temporary file, mode 0600, owned as
+// keepOwner says, fsynced, renamed over the old one, the directory
+// fsynced. A path that is a symbolic link is refused.
+func writeAtomic(path string, b []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
+	}
+	if st, err := os.Lstat(path); err == nil && st.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link: it must be a plain file", path)
 	}
 	tmp, err := os.CreateTemp(dir, ".users-*.json")
 	if err != nil {
@@ -167,7 +177,7 @@ func (f *File) Save(path, by string) error {
 		tmp.Close()
 		return err
 	}
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
+	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -189,21 +199,67 @@ func (f *File) Save(path, by string) error {
 }
 
 // CheckMode refuses a users file that anyone but its owner may read or
-// write: its hashes are what a password guess is tested against offline.
-// An absent file passes. On Windows, where Go reports every file 0666
-// and access is the ACL's, there is nothing here to check.
+// write (its hashes are what a password guess is tested against
+// offline), one that is a symbolic link, and one in a directory others
+// may write to (they could replace it). An absent file passes the file's
+// checks. On Windows, where Go reports every file 0666 and access is the
+// ACL's, the mode bits say nothing and are not checked.
 func CheckMode(path string) error {
-	st, err := os.Stat(path)
+	if st, err := os.Stat(filepath.Dir(path)); err == nil && othersMayWrite(st.Mode().Perm()) {
+		return fmt.Errorf("%s is mode %04o: other users can replace the users file in it; chmod go-w it", filepath.Dir(path), st.Mode().Perm())
+	}
+	st, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link: the users file must be a plain file", path)
+	}
 	if m := st.Mode().Perm(); othersMayRead(m) {
 		return fmt.Errorf("%s is mode %04o: other users can read the password hashes; chmod 600 it", path, m)
 	}
 	return nil
+}
+
+// LockName is the lock file beside the users file that serializes naut
+// users runs.
+const LockName = ".users.lock"
+
+// lockWait is how long Update waits for another naut users.
+const lockWait = 30 * time.Second
+
+// Update changes the users file at path under its lock: it waits for any
+// other naut users, reads the file, applies fn, and saves it (by records
+// who). A run that waits at a password prompt asks first and takes the
+// lock only for the change, so two runs never save over each other.
+func Update(path, by string, fn func(*File) error) error {
+	unlock, err := lockFile(filepath.Join(filepath.Dir(path), LockName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return err
+			}
+			unlock, err = lockFile(filepath.Join(filepath.Dir(path), LockName))
+		}
+		if err != nil {
+			return err
+		}
+	}
+	defer unlock()
+	if err := CheckMode(path); err != nil {
+		return err
+	}
+	f, err := Load(path)
+	if err != nil {
+		return err
+	}
+	if err := fn(f); err != nil {
+		return err
+	}
+	return f.Save(path, by)
 }
 
 func checkPassword(pw string) error {
@@ -437,6 +493,9 @@ type Change struct {
 	What   string // added, removed, password, disabled, enabled, token issued, token revoked
 	Token  string // the token's id, for a token change
 	Detail string
+	// Stopped marks a change made while the controller was not running,
+	// found against its record of what it last saw (Store.CatchUp).
+	Stopped bool
 }
 
 // Diff is what changed from old to new, sorted by user.

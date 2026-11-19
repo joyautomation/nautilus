@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -67,6 +69,7 @@ func TestUsersFile(t *testing.T) {
 func usersProject(t *testing.T) (dir, state string) {
 	t.Helper()
 	dir, state = t.TempDir(), t.TempDir()
+	os.Chmod(state, 0o700)
 	m := "name: line1\ntasks:\n  - program: main.st\n    scan: 100ms\n" +
 		"auth:\n  state-dir: " + state + "\n  users:\n    akhan: [engineer]\n    jsmith: [operator]\n"
 	os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m), 0o644)
@@ -158,6 +161,7 @@ func TestNautUsers(t *testing.T) {
 func TestOpenUsers(t *testing.T) {
 	cheapHashes(t)
 	state := t.TempDir()
+	os.Chmod(state, 0o700)
 	load := func(block string) *project.Project {
 		p, err := project.Load(fstest.MapFS{
 			"nautilus.yaml": &fstest.MapFile{Data: []byte("name: line1\ntasks:\n  - program: main.st\n    scan: 100ms\nauth:\n  users:\n    akhan: [engineer]\n" + block)},
@@ -199,5 +203,83 @@ func TestOpenUsers(t *testing.T) {
 	}
 	if s, err := openUsers(noUsers, "", func(k string) string { return map[string]string{"INVOCATION_ID": "x"}[k] }); s != nil || err != nil {
 		t.Errorf("no users in the block: %v %v, want neither a store nor an error", s, err)
+	}
+}
+
+// naut-lead's repro on #1041: passwd a waits at its prompt while disable b
+// and revoke b run; when passwd finishes, b stays disabled and its token
+// stays revoked (the password is read before the file, and the change is
+// made under the lock).
+func TestNautUsersPromptDoesNotLoseOtherChanges(t *testing.T) {
+	cheapHashes(t)
+	dir, state := usersProject(t)
+	for _, n := range []string{"akhan", "jsmith"} {
+		if code, _, errs := nautUsers(t, dir, "hunter22\n", "add", n); code != 0 {
+			t.Fatalf("add %s: %s", n, errs)
+		}
+	}
+	_, tok, _ := nautUsers(t, dir, "", "token", "jsmith")
+	tok = strings.TrimSpace(tok)
+	path := filepath.Join(state, users.FileName)
+	f, _ := users.Load(path)
+	id := f.Users["jsmith"].Tokens[0].ID
+
+	pr, pw := io.Pipe()
+	done := make(chan int, 1)
+	go func() {
+		var out, errb bytes.Buffer
+		done <- usersMain([]string{"--project", dir, "passwd", "akhan"}, func(d string) (*project.Manifest, string, error) {
+			m, err := project.ReadManifest(os.DirFS(d), "")
+			return m, d, err
+		}, true, func(string) string { return "" }, pr, &out, &errb)
+	}()
+	time.Sleep(100 * time.Millisecond) // passwd is at its prompt
+	if code, _, errs := nautUsers(t, dir, "", "disable", "jsmith"); code != 0 {
+		t.Fatalf("disable while passwd waits: %s", errs)
+	}
+	if code, _, errs := nautUsers(t, dir, "", "revoke", "jsmith", id); code != 0 {
+		t.Fatalf("revoke while passwd waits: %s", errs)
+	}
+	io.WriteString(pw, "new-password\n")
+	pw.Close()
+	if code := <-done; code != 0 {
+		t.Fatal("passwd failed")
+	}
+	f, _ = users.Load(path)
+	if f.Authenticate("akhan", "new-password") != nil {
+		t.Error("passwd did not change akhan's password")
+	}
+	if _, ok := f.TokenUser(tok); ok || !f.Users["jsmith"].Disabled {
+		t.Error("passwd saved a copy read before its prompt: jsmith is enabled again or the revoked token is back")
+	}
+}
+
+// --file is held to the same rule as the state directory: never inside
+// the project.
+func TestNautUsersFileOutsideTheProject(t *testing.T) {
+	cheapHashes(t)
+	dir, _ := usersProject(t)
+	inside := filepath.Join(dir, "secrets", users.FileName)
+	if code, _, errs := nautUsers(t, dir, "hunter22\n", "--file", inside, "add", "akhan"); code != 1 || !strings.Contains(errs, "inside the project") {
+		t.Errorf("--file inside the project: %d %s", code, errs)
+	}
+	if _, err := os.Stat(inside); err == nil {
+		t.Error("a users file was written inside the project")
+	}
+	outside := filepath.Join(t.TempDir(), "state", users.FileName)
+	if code, _, errs := nautUsers(t, dir, "hunter22\n", "--file", outside, "add", "akhan"); code != 0 {
+		t.Errorf("--file outside the project: %d %s", code, errs)
+	}
+}
+
+// SUDO_USER names who ran naut users only when it runs as root, where
+// sudo set it; anyone else could put any name in it.
+func TestOSUserBelievesSudoOnlyAsRoot(t *testing.T) {
+	env := func(k string) string { return map[string]string{"SUDO_USER": "mallory"}[k] }
+	if got := osUser(env, 0); got != "mallory" {
+		t.Errorf("as root under sudo: %q", got)
+	}
+	if got := osUser(env, 1000); got == "mallory" {
+		t.Errorf("as uid 1000 with SUDO_USER set by hand: %q", got)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -139,6 +140,10 @@ func (s *Server) journalUsersChange(by string, changes []users.Change) {
 		detail := map[string]any{"change": c.What}
 		if c.Token != "" {
 			detail["token"] = c.Token
+		}
+		if c.Stopped {
+			// Found at the start: made while the controller was stopped.
+			detail["while"] = "stopped"
 		}
 		s.audit.record(audit.Entry{
 			User:   who,
@@ -284,3 +289,23 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, meResponse{Auth: true, Me: s.policy.Describe(pr)})
 }
+
+// journalUsersHealth records the users file becoming unreadable (no
+// local user can authenticate until it is fixed; the system alarm
+// nautilus.users-file is up meanwhile) and readable again.
+func (s *Server) journalUsersHealth(err error) {
+	e := audit.Entry{User: "system", Source: audit.SourceSystem, Target: s.users.Path()}
+	if err != nil {
+		slog.Error("users file: no local user can authenticate until it is fixed", "err", err)
+		e.Action, e.Result, e.Detail = "users.unavailable", audit.ResultError, map[string]any{"reason": err.Error()}
+	} else {
+		slog.Info("users file: readable again", "path", s.users.Path())
+		e.Action, e.Result = "users.recovered", audit.ResultOK
+	}
+	s.audit.record(e)
+}
+
+// UsersFileDown reports whether the controller's users file cannot be
+// read: no local user can authenticate (the nautilus.users-file system
+// alarm).
+func (s *Server) UsersFileDown() bool { return s.users != nil && s.users.Err() != nil }

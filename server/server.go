@@ -68,7 +68,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -637,9 +636,9 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		if u := opts[0].Users; u != nil {
 			s.users = u
 			u.OnChange(s.journalUsersChange)
-			u.OnError(func(err error) {
-				slog.Error("users file: no local user can authenticate until it is fixed", "err", err)
-			})
+			u.OnHealth(s.journalUsersHealth)
+			// What changed while the controller was stopped.
+			u.CatchUp()
 		}
 	}
 	if unavailable != nil {

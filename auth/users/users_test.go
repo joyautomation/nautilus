@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cheap makes hashing fast for the tests that do not test its cost; each
@@ -16,6 +17,16 @@ func cheap(t *testing.T) {
 	old := Default
 	Default = Params{Memory: 64, Time: 1, Threads: 1}
 	t.Cleanup(func() { Default = old })
+}
+
+// stateDir is a state directory as a controller's is: 0700.
+func stateDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 
 // A hash is argon2id in PHC form with the default (RFC 9106) parameters,
@@ -202,7 +213,7 @@ func TestSaveLoad(t *testing.T) {
 // and when do not change it; a password, a disabled flag, a token do.
 func TestDigest(t *testing.T) {
 	cheap(t)
-	dir := t.TempDir()
+	dir := stateDir(t)
 	path := filepath.Join(dir, FileName)
 	if d, err := Digest(path); err != nil || d != [32]byte{} {
 		t.Fatalf("an absent file: %x %v", d, err)
@@ -271,7 +282,7 @@ func TestDiff(t *testing.T) {
 // fails closed: an unreadable or group-readable file leaves no users.
 func TestStore(t *testing.T) {
 	cheap(t)
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(stateDir(t), FileName)
 	f := New()
 	f.Add("jsmith", "hunter22")
 	tok, _, _ := f.NewToken("jsmith")
@@ -287,7 +298,14 @@ func TestStore(t *testing.T) {
 			changes = append(changes, by+":"+c.User+" "+c.What)
 		}
 	})
-	s.OnError(func(err error) { errs = append(errs, err) })
+	recovered := 0
+	s.OnHealth(func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			recovered++
+		}
+	})
 	if u, ok := s.TokenUser(tok); !ok || u != "jsmith" {
 		t.Fatal("token at open")
 	}
@@ -328,6 +346,9 @@ func TestStore(t *testing.T) {
 	if len(changes) != before {
 		t.Errorf("recovering from a failure told changes %v: the credentials did not change", changes[before:])
 	}
+	if recovered != 1 {
+		t.Errorf("the recovery is told %d times, want once", recovered)
+	}
 	if runtime.GOOS == "windows" {
 		return // the mode bits say nothing there (CheckMode)
 	}
@@ -344,5 +365,55 @@ func TestStore(t *testing.T) {
 	os.Chmod(path, 0o640)
 	if _, err := Open(path); err == nil {
 		t.Error("Open accepted a group-readable file")
+	}
+}
+
+// Two naut users runs never save over each other: the second waits for
+// the first's lock, then changes the file the first saved.
+func TestUpdateSerializesWriters(t *testing.T) {
+	cheap(t)
+	path := filepath.Join(stateDir(t), FileName)
+	f := New()
+	f.Add("a", "password-a")
+	f.Add("b", "password-b")
+	tok, id, _ := f.NewToken("b")
+	f.Save(path, "opsadmin")
+
+	started, release := make(chan struct{}), make(chan struct{})
+	first, second := make(chan error, 1), make(chan error, 1)
+	go func() {
+		first <- Update(path, "one", func(f *File) error {
+			close(started)
+			<-release
+			return f.SetPassword("a", "new-password")
+		})
+	}()
+	<-started
+	go func() {
+		second <- Update(path, "two", func(f *File) error {
+			if err := f.SetDisabled("b", true); err != nil {
+				return err
+			}
+			return f.Revoke("b", id)
+		})
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("the second writer finished while the first held the file: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	g, _ := Load(path)
+	if g.Authenticate("a", "new-password") != nil {
+		t.Error("the first writer's change is lost")
+	}
+	if _, ok := g.TokenUser(tok); ok || !g.Users["b"].Disabled {
+		t.Error("the second writer's change is lost: b is enabled or its token back")
 	}
 }
