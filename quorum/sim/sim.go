@@ -635,6 +635,10 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 			// controller adopted since: the generations must refuse it.
 			w.rec.StaleProposals = append(w.rec.StaleProposals, AdoptRec{Node: n.addr, At: w.now, Gen: m.Gen, Inc: m.Incarnation})
 		}
+		if m.From == nodeIDs[peerOf(n.addr)] && m.Echo != 0 && m.Echo != n.nonce {
+			// Sent to an earlier boot of this controller.
+			w.rec.EarlierBootAdopts = append(w.rec.EarlierBootAdopts, AdoptRec{Node: n.addr, At: w.now, Gen: m.Gen, Inc: m.Incarnation})
+		}
 		p, msgs := n.adopt.OnAdopt(now, m)
 		if p != nil {
 			w.persist(n, p)

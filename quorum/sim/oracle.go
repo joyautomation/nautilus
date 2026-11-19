@@ -37,6 +37,9 @@ type Record struct {
 	// StaleProposals are proposals delivered below the receiver's adopted
 	// generation, of another incarnation (a late or earlier-boot one).
 	StaleProposals []AdoptRec
+	// EarlierBootAdopts are Adopts from the peer delivered to a controller
+	// whose earlier boot they were sent to (they echo an older nonce).
+	EarlierBootAdopts []AdoptRec
 	// TwoIncarnations counts the "two witness copies" events.
 	TwoIncarnations int
 

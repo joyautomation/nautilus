@@ -42,6 +42,7 @@ var Mutations = []string{
 	"bump_cuts_quiet",        // a generation bump that keeps the incarnation ends a quiet period still owed
 	"quiet_reply_unheard",    // a reply in the quiet period doesn't count as heard: a restart backs off two leases
 	"stale_pending_kept",     // both uncommissioned, a proposal of an incarnation no longer answering is kept
+	"uncommissioned_grants",  // a controller that lost its file grants before it re-commissions (#976)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

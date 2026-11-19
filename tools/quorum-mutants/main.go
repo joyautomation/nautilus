@@ -69,10 +69,11 @@ var table = []mutation{
 		"TestRegression976TwoLostControllerFiles", "TestSeeds"}},
 	{"no_adopt_echo", []string{"TestLostControllerIgnoresAnAckToItsEarlierBoot", "TestReviewStaleProposeFloor"}},
 	{"switch_without_peer", []string{"TestSwitchNeedsThePeer"}},
-	{"peer_from_any_adopt", []string{"TestLateAdoptToAnEarlierBootIsNotThePeer"}},
+	{"peer_from_any_adopt", []string{"TestLateAdoptToAnEarlierBootIsNotThePeer", "TestLateAdoptToAnEarlierBootInTheSim"}},
 	{"bump_cuts_quiet", []string{"TestGenBumpKeepsTheRestartQuiet"}},
 	{"quiet_reply_unheard", []string{"TestQuietReplyIsHeardNotCounted", "TestTargetedOneWayLeaderSkewed"}},
-	{"stale_pending_kept", []string{"TestBothUncommissionedFollowTheNewest"}},
+	{"stale_pending_kept", []string{"TestBothUncommissionedFollowTheNewest", "TestRegressionBothUncommissionedUnstick"}},
+	{"uncommissioned_grants", []string{"TestUncommissionedControllerGrantsNothing", "TestRegression976WitnessUnreachable"}},
 }
 
 // event is one line of `go test -json`.

@@ -245,3 +245,69 @@ func TestFlappingStrayBounded(t *testing.T) {
 	}
 	clean(t, rec, Checks{MaxTakeovers: -1})
 }
+
+// The settle oracle has teeth: the switch case adopts a second time at
+// 24.2 s, four seconds after the heal, so a hold-off allowance shorter
+// than that is a violation, and steady state is judged only from a lease
+// after the last adoption.
+func TestSettleOracle(t *testing.T) {
+	o := switchOnce()
+	rec := Run(o)
+	c := checksFor(o)
+	if c.SettleAdoptions == 0 {
+		t.Fatal("checksFor did not see the switch fault")
+	}
+	if vs := Check(rec, c); len(vs) != 0 {
+		t.Fatalf("within the hold-off cap: %v", vs)
+	}
+	c.SettleAdoptions = time.Second
+	found := false
+	for _, v := range Check(rec, c) {
+		found = found || v.Oracle == "settle"
+	}
+	if !found {
+		t.Fatal("an adoption 4 s after the heal with 1 s allowed: no settle violation")
+	}
+}
+
+// #1008 re-review (b), in the sim: an Adopt sent to an earlier boot of A
+// says nothing about the peer now. The pair adopts the rebuilt witness
+// around 10 s; B's handshake messages to A are replayed 14 s later (B's
+// votes to A are lost meanwhile, so only Adopts are copied). A restarts at
+// 15 s, B dies for good at 19 s, A is cut from W from 16 s, and a second
+// copy answers A from 21.5 s. The late Adopts reach A's new boot at about
+// 24 s. Counted as hearing B, they would let A propose the copy with B
+// dead, after which A counts no witness until B is back. A must propose
+// nothing after B died. Red under peer_from_any_adopt.
+func TestLateAdoptToAnEarlierBootInTheSim(t *testing.T) {
+	o := Options{Seed: 17, Delay: ms, Jitter: ms / 2, Fsync: ms, Until: 40 * sec, Trace: true,
+		Start: [3]time.Duration{0, 4 * sec, 0},
+		Faults: []Fault{
+			{Kind: Wipe, At: 8 * sec, For: 500 * ms, Node: W},
+			{Kind: Cut, At: 9 * sec, For: 3 * sec, From: B, To: A, Value: CutRequests | CutReplies},
+			{Kind: Replay, At: 9 * sec, For: 3 * sec, From: B, To: A, Value: int64(14 * time.Second)},
+			{Kind: Crash, At: 15 * sec, For: 100 * ms, Node: A},
+			{Kind: Cut, At: 16 * sec, From: A, To: W, Both: true},
+			{Kind: Crash, At: 19 * sec, Node: B},
+			{Kind: Start, At: 0, Node: W2},
+			{Kind: Mirror, At: 21500 * ms, From: A, To: W, Node: W2},
+		}}
+	rec := Run(o)
+	defer trace(t, rec)
+	late := false
+	for _, e := range rec.EarlierBootAdopts {
+		late = late || e.Node == A && e.At > 19*sec
+	}
+	if !late {
+		t.Fatalf("no Adopt to A's earlier boot reached A after B died: %+v", rec.EarlierBootAdopts)
+	}
+	for _, p := range rec.Proposals {
+		if p.Node == A && p.At > 19*sec {
+			t.Fatalf("A proposed %d at %v with B dead (it took a late Adopt to its earlier boot as B)", p.Inc, p.At)
+		}
+	}
+	if len(rec.Adoptions) != 2 {
+		t.Fatalf("want the rebuilt witness adopted by both, once: %+v", rec.Adoptions)
+	}
+	clean(t, rec, Checks{MaxTakeovers: -1})
+}

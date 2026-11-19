@@ -167,7 +167,7 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	if now < v.waitUntil || r.Term < v.st.Promised || r.Term == 0 || r.Term <= v.st.Floor {
 		return nil, refuse // a term-0 request is a probe: always refused
 	}
-	if v.commission && v.st.Incarnation == 0 {
+	if v.commission && v.st.Incarnation == 0 && !mut("uncommissioned_grants") {
 		return nil, refuse // uncommissioned: no floor yet, so no grant (#976)
 	}
 	active := now < v.promiseUntil

@@ -166,6 +166,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | an `Adopt` sent to an earlier boot of this controller counts as hearing the peer | design §3.1, boots | 2 (handshake) |
 | a reply in the quiet period isn't counted as heard, so a restart backs off two leases | design §3.1, heard, not counted | 2 (handshake) |
 | both uncommissioned, a proposal of an incarnation no longer answering is kept (the pair waits for ever) | design §3.1, strays | 2 (handshake) |
+| a controller that lost its file grants before it re-commissions (#976) | design §3.1, a controller that lost its state file | 2 (handshake) |
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
@@ -183,9 +184,10 @@ constant false, so the checks cost nothing. `go run ./tools/quorum-mutants` does
 Its own table test checks those verdicts, and that every mutation in `quorum/mut_on.go` has a
 row. All 17 are caught, in about 50 s. The handshake adds eight (`no_quiet`, `no_floor`,
 `count_while_pending`, `no_adopt_gen`, `no_holdoff`, `restart_counts_at_once`, `no_adopt_echo`,
-`switch_without_peer`): T1 catches each in H1, and the sim cases join them in H2. H2 adds four
-more (`bump_cuts_quiet`, `peer_from_any_adopt`, `quiet_reply_unheard`, `stale_pending_kept`),
-for holes found while driving the handshake in the sim.
+`switch_without_peer`): T1 catches each in H1, and the sim cases join them in H2. H2 adds five
+more: four for holes found while driving the handshake in the sim (`bump_cuts_quiet`,
+`peer_from_any_adopt`, `quiet_reply_unheard`, `stale_pending_kept`), and `uncommissioned_grants`,
+#976's own rule, which H1 tested in T1 only.
 
 **The handshake in the simulator (H2).** The sim drives `quorum.Adoption` as PR 3 will:
 `Adopt` over A–B (every link fault applies), witness replies to `OnWitness`, `OnPeer` for every
@@ -212,12 +214,24 @@ state is judged from a lease after its last adoption, which must come within the
 - **The flapping stray:** a copy answering A 4 s in every 8 makes at most three switches in 12
   windows. Red under `no_holdoff`.
 
-The first 200,000-seed run with the handshake failed 42 seeds, none on safety. 36 were switch-fault
-runs whose return to the real witness waited out the hold-off (the settle-aware steady window
-above). 6 were a real liveness hole: both controllers uncommissioned, each pending a proposal the
-other can't take, stuck after the stray was gone (fixed: `stale_pending_kept`). With both fixes the
-200,000 seeds pass (283 s), 777 of them excused as the two-of-three case, and the runner catches
-all 29 mutations (about 3 min).
+The first 200,000-seed run with the handshake failed 42 seeds, none on safety:
+- **36** were switch-fault runs whose return to the real witness waited out the hold-off (the
+  settle-aware steady window above);
+- **3** were a real liveness hole: both controllers uncommissioned, each pending a proposal the
+  other can't take, stuck after the stray was gone. Fixed (`stale_pending_kept`); named in
+  `TestRegressionBothUncommissionedUnstick`;
+- **3** are now excused: the two-of-three rule was widened a second time, to judge the peer's
+  *committed* incarnation (a peer pending a switch counts nothing, yet the lost controller can
+  only re-adopt what it committed, here dead). They are in `TestTwoOfThreeLostTeeth`.
+
+Then the 200,000 seeds pass (283 s), 777 of them excused as the two-of-three case.
+
+Also named: `TestRegression976WitnessUnreachable` (both files lost with the witness cut off: the
+pair re-commissions inside the restart wait when the witness answers, so only this case shows
+#976's own rule, red under `uncommissioned_grants`), `TestLateAdoptToAnEarlierBootInTheSim` (a
+replayed `Adopt` to A's earlier boot after B died; red under `peer_from_any_adopt`) and
+`TestSettleOracle`. Steady state from the last adoption applies to every run where a second copy
+answers through a mirror: the switch fault, and the generator's older stray-copy fault.
 
 **The first 200,000-seed nightly (#998)** failed 20 seeds on main (78d234e8), all liveness or
 steady state, none safety. They are named cases in `quorum/sim/nightly_test.go`, in four classes:
