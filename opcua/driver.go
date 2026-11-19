@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/internal/fence"
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -200,6 +201,15 @@ type Driver struct {
 
 	gateMu    sync.Mutex
 	writeGate func() bool
+	// sendGate is a pair's gate with its send budget and term
+	// (SetSendGate); leaseTerm the term the last open look saw (0: none
+	// yet); reopens counts forgetWritten, so a flush that took its queue
+	// before a reopen sends none of it after (design §3.4).
+	sendGate    nio.SendGate
+	leaseTerm   atomic.Uint64
+	reopens     atomic.Uint64
+	aborts      atomic.Uint64 // fenced writes whose socket was reset in place, after the failure
+	timerAborts atomic.Uint64 // ... and by the timer at the deadline (ArmAbort)
 	// gateShut is true from the first look that finds the gate closed to
 	// the first that finds it open again (see gateOpen); sawShut stays true
 	// once any look has found it closed: this replica has been a standby,
@@ -558,6 +568,27 @@ func (d *Driver) PlainWriteGate() {}
 
 var _ nio.PlainGated = (*Driver)(nil)
 
+// SetSendGate installs a pair's gate with its send budget and term
+// (io.SendGated, design §3.4): read immediately before every write
+// request (each chunk), which runs to the budget as its deadline; one
+// unanswered then has its socket reset in place (Connect.Fence), and the
+// session is dialled again. With it installed, the session's socket is
+// dialled with SO_LINGER 0, so every close of it is a reset.
+func (d *Driver) SetSendGate(g nio.SendGate) {
+	d.gateMu.Lock()
+	d.sendGate = g
+	d.gateMu.Unlock()
+}
+
+var _ nio.SendGated = (*Driver)(nil)
+
+// paired reports whether a pair's send gate is installed.
+func (d *Driver) paired() bool {
+	d.gateMu.Lock()
+	defer d.gateMu.Unlock()
+	return d.sendGate != nil
+}
+
 // gateOpen reports whether commands may leave the driver right now. Every
 // call is also a look at the gate: a look that finds it closed disarms the
 // start-up baseline, and the first that finds it open again forgets every
@@ -565,13 +596,31 @@ var _ nio.PlainGated = (*Driver)(nil)
 // the push that answers sends them all. WriteOutputs, the only reader of
 // written, looks first. Callers do not hold d.mu or d.wmu.
 func (d *Driver) gateOpen() bool {
+	open, _, _ := d.look()
+	return open
+}
+
+// look is gateOpen with the send budget and the lease's term the same
+// read gave (io.SendGate). A look that finds the gate open under another
+// term than the last is a reopen too, closed between two looks or not: the
+// lease was lost and won again (#1040).
+func (d *Driver) look() (bool, time.Duration, uint64) {
 	d.gateMu.Lock()
-	gate := d.writeGate
+	gate, send := d.writeGate, d.sendGate
 	d.gateMu.Unlock()
-	if gate == nil {
-		return true
+	if gate == nil && send == nil {
+		return true, -1, 0
 	}
-	open := gate()
+	open, budget, term := false, time.Duration(-1), uint64(0)
+	if send != nil {
+		open, budget, term = send()
+	} else {
+		open = gate()
+	}
+	if open && term != 0 && d.leaseTerm.Load() == 0 {
+		d.leaseTerm.CompareAndSwap(0, term) // the first term seen: nothing to forget
+	}
+	moved := open && term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")
 	// Steady state is one atomic load. A transition is made under turnMu,
 	// and gateShut is cleared only after the forget, so a second looker
 	// that finds the gate open meanwhile waits for the forget. (Here the
@@ -579,7 +628,7 @@ func (d *Driver) gateOpen() bool {
 	// slipped through would at worst skip an unchanged value that the
 	// push answering wanted then sends, so this mirrors modbus rather than
 	// guarding a hazard of its own.)
-	if shut := d.gateShut.Load(); shut == open {
+	if shut := d.gateShut.Load(); shut == open || moved {
 		d.turnMu.Lock()
 		switch {
 		case !open && !d.gateShut.Load():
@@ -588,22 +637,28 @@ func (d *Driver) gateOpen() bool {
 			d.wmu.Lock()
 			d.baseline = false // a standby has no baseline (#606)
 			d.wmu.Unlock()
-		case open && d.gateShut.Load():
+		case open && (d.gateShut.Load() || term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")):
 			d.forgetWritten()
+			if term != 0 {
+				d.leaseTerm.Store(term)
+			}
 			d.gateShut.Store(false)
 			d.wanted.Store(true)
 			d.log.Info("opcua-client: write gate open again; every output goes out with the next push", "driver", d.name)
 		}
 		d.turnMu.Unlock()
 	}
-	return open
+	return open, budget, term
 }
 
-// forgetWritten empties written: no value is the on-change reference any
-// more, so the next push sends them all.
+// forgetWritten empties written and pending: no value is the on-change
+// reference any more, so the next push sends them all, and no write queued
+// or requeued before the reopen goes out after it (#1040).
 func (d *Driver) forgetWritten() {
+	d.reopens.Add(1)
 	d.mu.Lock()
 	clear(d.written)
+	clear(d.pending)
 	d.mu.Unlock()
 }
 
@@ -812,7 +867,11 @@ func (d *Driver) run(ctx context.Context) {
 	backoff := d.retryMin
 	for ctx.Err() == nil {
 		d.gateOpen() // a look (see SetWriteGate), on every connect attempt
-		sess, err := Dial(ctx, d.endpoint, d.conn)
+		conn := d.conn
+		if d.paired() {
+			conn.Fence = new(fence.Socket) // this session's socket (design §3.4)
+		}
+		sess, err := Dial(ctx, d.endpoint, conn)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -1179,6 +1238,7 @@ func (d *Driver) apply(b *binding, dv *ua.DataValue) {
 // a healthy session: it is dropped (re-queueing would loop forever) and
 // reported.
 func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
+	gen := d.reopens.Load() // before the queue is taken: see the chunk loop
 	d.mu.Lock()
 	if len(d.pending) == 0 {
 		d.mu.Unlock()
@@ -1188,6 +1248,9 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	d.pending = map[string]any{}
 	limit := d.server.maxNodes
 	d.mu.Unlock()
+	if testHookAfterSwap != nil {
+		testHookAfterSwap()
+	}
 	if limit <= 0 {
 		limit = 1
 	}
@@ -1251,7 +1314,17 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	}
 
 	requeue := func(from int) {
+		if testHookBeforeRequeue != nil {
+			testHookBeforeRequeue()
+		}
 		d.mu.Lock()
+		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			// A reopen since this flush took its queue (a lease lost and
+			// won again): the rest is the previous leadership's (#1047
+			// review), never put back.
+			d.mu.Unlock()
+			return
+		}
 		for _, n := range names[from:] {
 			if _, exists := d.pending[n]; !exists {
 				d.pending[n] = work[n]
@@ -1261,22 +1334,50 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	}
 
 	for start := 0; start < len(items); {
-		// And before every chunk after the first: a demotion while a
-		// batch is on the wire stops the rest of it (G1c, #861).
-		if start > 0 && !d.gateOpen() {
-			// Part of the batch already reached the server: say how much,
-			// and name what did not, so an operator can tell what the PLC
-			// got.
+		// The gate is read immediately before every chunk, the first too
+		// (design §3.4): a demotion while a batch is on the wire stops the
+		// rest of it (G1c, #861), and each chunk runs to the gate's send
+		// budget as its deadline.
+		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		if !ok || !fence.Started(deadline, time.Now()) {
+			// Part of the batch may already have reached the server: say
+			// how much, and name what did not, so an operator can tell
+			// what the PLC got.
 			rest := names[start:]
 			forget(rest)
 			d.log.Warn("opcua-client: write gate closed mid-batch; the rest dropped",
 				"driver", d.name, "sent", start, "dropped", len(rest), "tags", rest)
 			return true
 		}
+		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			// A reopen since this flush took its queue (the lease lost and
+			// won again): the rest is the previous leadership's. Forgotten
+			// as written, and the outputs asked for again (#1040).
+			forget(names[start:])
+			d.log.Warn("opcua-client: the gate reopened since this flush began; the rest dropped and the outputs asked for again",
+				"driver", d.name, "dropped", len(names)-start)
+			return true
+		}
 		end := min(start+limit, len(items))
 		wctx, cancel := context.WithTimeout(ctx, d.conn.Timeout)
+		wctx, fcancel := fence.Context(wctx, deadline)
+		stop := fence.ArmAbort(sess.Fence, deadline)
+		fence.BeforeSend()
 		resp, err := sess.Client.Write(wctx, &ua.WriteRequest{NodesToWrite: items[start:end]})
+		if stop() {
+			d.timerAborts.Add(1)
+		}
+		fcancel()
 		cancel()
+		if err != nil && !deadline.IsZero() && sess.Fence != nil {
+			// A fenced write that failed (its deadline passed with it, or
+			// its answer, still out): reset the socket in place so nothing
+			// the kernel holds of it leaves after the lease; the session is
+			// dialled again.
+			if sess.Fence.Abort() {
+				d.aborts.Add(1)
+			}
+		}
 		if err != nil {
 			d.errs.Add(1)
 			if ctx.Err() == nil {
@@ -1304,6 +1405,11 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	}
 	return true
 }
+
+// testHookAfterSwap and testHookBeforeRequeue, when set (by tests), run in
+// flushWrites right after it takes its queue, and right before it puts a
+// failed chunk back.
+var testHookAfterSwap, testHookBeforeRequeue func()
 
 // setState records a state transition with its start time; lastErr is
 // kept when err is nil so the reason survives into the backoff wait.

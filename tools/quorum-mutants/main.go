@@ -173,11 +173,11 @@ var table = []mutation{
 	{"gate_per_batch", []string{"TestGateClosedMidBatchStopsTheRest"}},
 	// #1040 review: a command from an earlier term of the lease.
 	{"old_term_sent", []string{"TestCommandsFromAnEarlierTermAreNotSent"}},
-	{"send_no_deadline", []string{"TestBegin", "TestEachCommandRunsToItsSendDeadline", "TestModbusEachWriteRunsToItsSendDeadline", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestEIPEachRequestRunsToItsSendDeadline", "TestArmResetsAtTheDeadline", "TestModbusResetIsATimerAtTheDeadline", "TestFencedSendUnitDataResetIsATimer"}},
-	{"fence_fin", []string{"TestResetSendsAnRSTAndDropsQueuedBytes", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestFencedSendUnitDataResetsAtItsDeadline", "TestFencedPostResetsAtItsDeadline"}},
+	{"send_no_deadline", []string{"TestBegin", "TestEachCommandRunsToItsSendDeadline", "TestModbusEachWriteRunsToItsSendDeadline", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestEIPEachRequestRunsToItsSendDeadline", "TestArmResetsAtTheDeadline", "TestModbusResetIsATimerAtTheDeadline", "TestFencedSendUnitDataResetIsATimer", "TestOptoMMPFencedWriteResetsAtItsDeadline"}},
+	{"fence_fin", []string{"TestResetSendsAnRSTAndDropsQueuedBytes", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestFencedSendUnitDataResetsAtItsDeadline", "TestFencedPostResetsAtItsDeadline", "TestOptoMMPFencedWriteResetsAtItsDeadline", "TestSocketAbortAndCloseReset", "TestOPCUAFencedWriteResetsItsSession", "TestOptoMMPRTFencedWriteAbortsInPlaceAndClosesOnce"}},
 	// #1040 review: a Modbus write queued or requeued under an earlier
 	// term of the lease.
-	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead"}},
+	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead", "TestOptoMMPTermMoveDropsTheQueue", "TestHeldCommandFromAnEarlierTermIsNotPublished", "TestOPCUAQueuedWriteDoesNotSurviveATermMove", "TestTermMoveSeenByAnotherCallerStopsTheFlush", "TestFailedPublishAfterATermMoveIsNotRequeued", "TestOPCUAFlushRacingAReopenSendsNothing", "TestOPCUAFailedChunkNotRequeuedAfterAReopen"}},
 	// #1040 review: an SNMP SET retransmitted after a lost answer.
 	{"set_retried", []string{"TestSetIsSentOnce"}},
 }
@@ -192,9 +192,9 @@ var rowPkgs = map[string][]string{
 	"reconcile_before_restore": {"./server"},
 	"gate_per_batch":           {"./hw"},
 	"old_term_sent":            {"./hw"},
-	"send_no_deadline":         {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip"},
-	"fence_fin":                {"./internal/fence", "./modbus", "./eip/cip", "./redfish"},
-	"old_term_kept":            {"./modbus"},
+	"send_no_deadline":         {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip", "./optommp"},
+	"fence_fin":                {"./internal/fence", "./modbus", "./eip/cip", "./redfish", "./optommp", "./opcua"},
+	"old_term_kept":            {"./modbus", "./optommp", "./sparkplug/host", "./opcua"},
 	"set_retried":              {"./snmp"},
 }
 

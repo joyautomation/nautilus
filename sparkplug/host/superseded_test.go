@@ -162,7 +162,7 @@ func TestParkSkipsASupersededCommand(t *testing.T) {
 	v22, v11 := d.canonWrite(name, 22.0), d.canonWrite(name, 11.0)
 
 	d.lastOut[name] = v11
-	d.queueOffline(map[string]map[string]any{"W6": {name: v22}})
+	d.queueOffline(map[string]map[string]any{"W6": {name: v22}}, d.termGen.Load())
 	if q := d.queued["W6"][name]; q != nil {
 		t.Fatalf("parked %v: 22 was superseded by 11", q)
 	}
@@ -172,7 +172,7 @@ func TestParkSkipsASupersededCommand(t *testing.T) {
 
 	delete(d.pending, name)
 	d.remote[name] = v11 // the site holds it: nothing is owed
-	d.queueOffline(map[string]map[string]any{"W6": {name: v22}})
+	d.queueOffline(map[string]map[string]any{"W6": {name: v22}}, d.termGen.Load())
 	if _, owed := d.pending[name]; owed || d.queued["W6"][name] != nil {
 		t.Fatalf("pending %v, parked %v: the site holds the program's 11", d.pending[name], d.queued["W6"][name])
 	}
@@ -209,20 +209,20 @@ func TestRequeueSkipsASupersededCommand(t *testing.T) {
 	work := map[string]any{name: d.canonWrite(name, 22.0)}
 
 	d.lastOut[name] = d.canonWrite(name, 11.0) // moved back since
-	d.requeueLocked([]string{name}, work)
+	d.requeueLocked([]string{name}, work, d.termGen.Load())
 	if v, ok := d.pending[name]; ok {
 		t.Fatalf("pending = %v: 22 was superseded by 11 and must not be requeued", v)
 	}
 
 	d.lastOut[name] = work[name] // still wanted
-	d.requeueLocked([]string{name}, work)
+	d.requeueLocked([]string{name}, work, d.termGen.Load())
 	if v, ok := d.pending[name]; !ok || !sameValue(v, work[name]) {
 		t.Fatalf("pending = %v, want the still-wanted 22 requeued", v)
 	}
 
 	newer := d.canonWrite(name, 33.0)
 	d.pending[name] = newer
-	d.requeueLocked([]string{name}, work)
+	d.requeueLocked([]string{name}, work, d.termGen.Load())
 	if !sameValue(d.pending[name], newer) {
 		t.Fatalf("pending = %v, want the newer 33 kept", d.pending[name])
 	}
@@ -251,7 +251,7 @@ func TestNaNIsTheSameAsNaN(t *testing.T) {
 	const name = "W6_PLC1_Pump_SpeedSP"
 	v := d.canonWrite(name, math.NaN())
 	d.lastOut[name] = v
-	d.queueOffline(map[string]map[string]any{"W6": {name: v}})
+	d.queueOffline(map[string]map[string]any{"W6": {name: v}}, d.termGen.Load())
 	if _, parked := d.queued["W6"][name]; !parked {
 		t.Fatal("a NaN for a dark site was not parked")
 	}

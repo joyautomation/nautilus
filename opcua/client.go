@@ -16,12 +16,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/ua"
+	"github.com/gopcua/opcua/uacp"
+
+	"github.com/joyautomation/nautilus/internal/fence"
 )
 
 // Security names the endpoint to use. Policy is one of None Basic128Rsa15
@@ -50,12 +54,19 @@ type Connect struct {
 	Timeout time.Duration
 	// SessionName is what the server shows for this session.
 	SessionName string
+	// Fence, when set, is the session's socket as internal/fence holds it
+	// (a redundant pair, design §3.4): dialled through its Control, so the
+	// socket has SO_LINGER 0 (every close of it is a reset) and a write
+	// past its send deadline can be aborted in place (Session.Fence).
+	Fence *fence.Socket
 }
 
 // Session is a connected client with the endpoint it settled on.
 type Session struct {
 	Client   *opcua.Client
 	Endpoint *ua.EndpointDescription
+	// Fence is Connect.Fence: the session's socket, or nil.
+	Fence *fence.Socket
 }
 
 // Dial discovers, selects, and connects. The endpoint URL given is the one
@@ -93,13 +104,20 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 				c.Username, policyName(ep.SecurityPolicyURI), modeName(ep.SecurityMode))
 		}
 	}
-	opts := []opcua.Option{
+	var opts []opcua.Option
+	if c.Fence != nil {
+		// Before DialTimeout, which sets the timeout on this dialer. No
+		// dual-stack race (FallbackDelay -1): one socket per dial, so the
+		// one Control records is the one in use.
+		opts = append(opts, opcua.Dialer(&uacp.Dialer{Dialer: &net.Dialer{Control: c.Fence.Control, FallbackDelay: -1}, ClientACK: uacp.DefaultClientACK}))
+	}
+	opts = append(opts,
 		opcua.SecurityFromEndpoint(ep, token),
 		opcua.ApplicationURI(c.ApplicationURI),
 		opcua.AutoReconnect(false),
 		opcua.DialTimeout(c.Timeout),
 		opcua.RequestTimeout(c.Timeout),
-	}
+	)
 	if c.SessionName != "" {
 		opts = append(opts, opcua.SessionName(c.SessionName))
 	}
@@ -156,7 +174,7 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 			return nil, fmt.Errorf("pin the server certificate: %w", err)
 		}
 	}
-	return &Session{Client: client, Endpoint: ep}, nil
+	return &Session{Client: client, Endpoint: ep, Fence: c.Fence}, nil
 }
 
 // Close ends the session; errors are not interesting to a caller that is

@@ -599,6 +599,11 @@ func cmdTopic(group, edge, device string) string {
 // publishCommand encodes and sends one coalesced command payload. QoS 0,
 // retain false, OmitSeq — a command carries no sequence number.
 func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error {
+	if hook := testHookPublish.Load(); hook != nil {
+		if err := (*hook)(); err != nil {
+			return err
+		}
+	}
 	p := d.publisher()
 	if p == nil {
 		return fmt.Errorf("host: not connected")
@@ -783,6 +788,10 @@ func (d *Driver) flushWrites() {
 		}
 		return
 	}
+	if d.termMoved() {
+		d.dropEarlierTerm() // nothing held from an earlier leadership goes out
+		return
+	}
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
 		d.wmu.Unlock()
@@ -790,6 +799,7 @@ func (d *Driver) flushWrites() {
 	}
 	work := d.pending
 	d.pending = map[string]any{}
+	gen := d.termGen.Load() // the term generation this work is from
 	d.wmu.Unlock()
 	if hook := testHookAfterSwap.Load(); hook != nil {
 		(*hook)()
@@ -905,7 +915,7 @@ func (d *Driver) flushWrites() {
 	}
 
 	if len(hold) > 0 {
-		drops += d.queueOffline(hold)
+		drops += d.queueOffline(hold, gen)
 		// A node that birthed while this flush was in flight found nothing
 		// to release — it parked here, after the birth had passed. Close
 		// that race rather than making the operator wait for the next
@@ -922,12 +932,21 @@ func (d *Driver) flushWrites() {
 	}
 
 	for topic, metrics := range byTopic {
+		if d.termMoved() {
+			d.dropEarlierTerm()
+		}
+		if d.termGen.Load() != gen && !mut("old_term_kept") {
+			// The lease was lost and won again while this flush ran (seen
+			// here or by another caller, a scan's WriteOutputs): the rest
+			// is the earlier leadership's.
+			return
+		}
 		if err := d.publishCommand(topic, metrics); err != nil {
 			d.setErr(err)
 			d.log.Warn("host: command publish failed", "topic", topic, "error", err)
 			// Requeue so the values go out after the next connect.
 			d.wmu.Lock()
-			d.requeueLocked(names[topic], work)
+			d.requeueLocked(names[topic], work, gen)
 			d.wmu.Unlock()
 			continue
 		}
@@ -1054,7 +1073,7 @@ const maxQueuedPerNode = 256
 // because the node's queue is full. Only the LATEST value per tag survives:
 // an operator who moves a setpoint twice while the site is down commanded it
 // once, to the second value.
-func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
+func (d *Driver) queueOffline(hold map[string]map[string]any, gen uint64) uint64 {
 	var dropped uint64
 	var full []string
 	var parked uint64
@@ -1066,6 +1085,12 @@ func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
 	}()
 
 	d.wmu.Lock()
+	if d.termGen.Load() != gen && !mut("old_term_kept") {
+		// A term move since the flush took this work: none of it parks
+		// (a later birth would publish an earlier leadership's command).
+		d.wmu.Unlock()
+		return 0
+	}
 	if d.queued == nil {
 		d.queued = map[string]map[string]any{}
 	}
@@ -1221,6 +1246,10 @@ func (d *Driver) flushForgets() {
 // testHookAfterSwap, when set (by tests), runs in flushWrites right after
 // it takes the pending commands, before they are parked or published.
 var testHookAfterSwap atomic.Pointer[func()]
+
+// testHookPublish, when set (by tests), runs as publishCommand begins: a
+// non-nil error fails the publish, as a lost broker would.
+var testHookPublish atomic.Pointer[func() error]
 
 // flushAdopts applies the member-output baselines the state machine queued
 // while it held d.mu: the live value of a member IS what the site holds, so a

@@ -19,9 +19,11 @@ package fence
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
@@ -87,13 +89,36 @@ func Fenced(ctx context.Context) bool {
 // Reset closes c with SO_LINGER 0 when it is a TCP socket: the kernel
 // sends a reset and drops what was still in its send buffer, instead of
 // delivering it late after a FIN. Any other conn is closed plainly.
+//
+// A conn that can abort itself in place (Aborter: one read and written
+// with raw syscalls on its own descriptor) is aborted instead, never
+// closed here: closing its descriptor under a thread blocked on it would
+// let that thread's retry reach a reused descriptor (#1047 review); its
+// owner closes it, once.
 func Reset(c net.Conn) error {
 	if c == nil {
+		return nil
+	}
+	if a, ok := c.(Aborter); ok {
+		if mut("fence_fin") {
+			return nil
+		}
+		a.Abort()
 		return nil
 	}
 	Linger0(c)
 	return c.Close()
 }
+
+// Aborter is a conn that resets its own TCP connection in place (an RST,
+// the send queue dropped) without closing its descriptor.
+type Aborter interface {
+	Abort() bool
+}
+
+// AbortFD resets the TCP socket fd in place (Linux: connect AF_UNSPEC),
+// leaving the descriptor open for its owner to close; false elsewhere.
+func AbortFD(fd uintptr) bool { return abortFD(fd) }
 
 // Linger0 sets SO_LINGER 0 on c's TCP socket, so whatever closes it
 // (Reset, or a transport that closes it on its own at a deadline) sends a
@@ -104,7 +129,9 @@ func Linger0(c net.Conn) {
 	if tc == nil || mut("fence_fin") {
 		return
 	}
-	if err := tc.SetLinger(0); err != nil {
+	if err := tc.SetLinger(0); err != nil && !errors.Is(err, net.ErrClosed) {
+		// Already closed (a timer that fired after its owner closed it)
+		// is nothing to report.
 		slog.Warn("fence: SO_LINGER 0 failed; this socket's close is a FIN, so bytes it holds may still leave", "remote", c.RemoteAddr(), "error", err)
 	}
 }
@@ -127,7 +154,24 @@ func LingerDefault(c net.Conn) {
 // caller's own lock) is never hit (#1040 re-review). A zero deadline or a
 // nil conn arms nothing.
 func Arm(c net.Conn, deadline time.Time) (stop func() (fired bool)) {
-	if c == nil || deadline.IsZero() || mut("send_no_deadline") {
+	if c == nil {
+		return func() bool { return false }
+	}
+	return armFunc(deadline, func() { _ = Reset(c) })
+}
+
+// ArmAbort is Arm for a Socket a transport owns (Socket.Abort at the
+// deadline).
+func ArmAbort(s *Socket, deadline time.Time) (stop func() (fired bool)) {
+	if s == nil {
+		return func() bool { return false }
+	}
+	return armFunc(deadline, func() { s.Abort() })
+}
+
+// armFunc runs reset at deadline unless stop came first (see Arm).
+func armFunc(deadline time.Time, reset func()) (stop func() (fired bool)) {
+	if deadline.IsZero() || mut("send_no_deadline") {
 		return func() bool { return false }
 	}
 	var mu sync.Mutex
@@ -139,10 +183,10 @@ func Arm(c net.Conn, deadline time.Time) (stop func() (fired bool)) {
 		mu.Lock()
 		defer mu.Unlock()
 		if done {
-			return // the send finished first: c may already carry the next one
+			return // the send finished first: the conn may already carry the next one
 		}
 		fired = true
-		_ = Reset(c)
+		reset()
 	})
 	return func() bool {
 		t.Stop()
@@ -151,6 +195,50 @@ func Arm(c net.Conn, deadline time.Time) (stop func() (fired bool)) {
 		done = true
 		return fired
 	}
+}
+
+// Socket is a TCP socket a transport dials and owns (a library that hides
+// its net.Conn, as gopcua does): Control, set as the net.Dialer's, records
+// it and sets SO_LINGER 0 on it, so every close of it is a reset; Abort
+// resets it in place. Safe for concurrent use. The zero value is ready.
+type Socket struct {
+	mu sync.Mutex
+	rc syscall.RawConn
+}
+
+// Control is a net.Dialer Control func: it keeps the socket and sets
+// SO_LINGER 0 on it.
+func (s *Socket) Control(_, _ string, c syscall.RawConn) error {
+	s.mu.Lock()
+	s.rc = c
+	s.mu.Unlock()
+	if mut("fence_fin") {
+		return nil
+	}
+	var serr error
+	if err := c.Control(func(fd uintptr) { serr = linger0(fd) }); err != nil {
+		return err
+	}
+	if serr != nil {
+		slog.Warn("fence: SO_LINGER 0 failed at dial; this socket's close is a FIN, so bytes it holds may still leave", "error", serr)
+	}
+	return nil
+}
+
+// Abort resets the socket where it stands: the kernel sends a reset and
+// drops what it still held, and the transport's next read or write fails,
+// without closing the descriptor under it (Linux: connect AF_UNSPEC;
+// elsewhere nothing, and Abort reports false: a pair runs on Linux only).
+func (s *Socket) Abort() bool {
+	s.mu.Lock()
+	rc := s.rc
+	s.mu.Unlock()
+	if rc == nil || mut("fence_fin") {
+		return false
+	}
+	ok := false
+	_ = rc.Control(func(fd uintptr) { ok = abortFD(fd) })
+	return ok
 }
 
 // armFireHook, when a test sets it, runs as an Arm timer fires, before it

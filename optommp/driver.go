@@ -68,6 +68,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -217,6 +218,8 @@ type Driver struct {
 	// wanted is the request OutputsWanted answers.
 	gateMu    sync.Mutex
 	writeGate func() bool
+	sendGate  nio.SendGate  // a pair's gate with its send budget and term (SetSendGate)
+	leaseTerm atomic.Uint64 // the lease's term the last open look saw (0: none yet)
 	// plain: the gate is naut run's liveness gate, not a redundancy lease
 	// (PlainWriteGate, plainNote).
 	plain    atomic.Bool
@@ -381,23 +384,51 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Unlock()
 }
 
+// SetSendGate installs a pair's gate with its send budget and term
+// (io.SendGated, design §3.4): read immediately before every output write,
+// which gets the budget as its deadline (Client.WriteBy).
+func (d *Driver) SetSendGate(g nio.SendGate) {
+	d.gateMu.Lock()
+	d.sendGate = g
+	d.gateMu.Unlock()
+}
+
 // gateOpen reports whether commands may leave the driver right now. Every
 // call is also a look at the gate (see SetWriteGate): the first look that
 // finds it open again after one found it closed forgets every command and
 // asks for the outputs. Callers do not hold mu.
 func (d *Driver) gateOpen() bool {
+	open, _, _ := d.look()
+	return open
+}
+
+// look is gateOpen with the send budget and the lease's term the same read
+// gave (io.SendGate). A look that finds the gate open under another term
+// than the last is a reopen too, closed between two looks or not: the
+// lease was lost and won again, and every command is the previous
+// leadership's (#1040).
+func (d *Driver) look() (bool, time.Duration, uint64) {
 	d.gateMu.Lock()
-	g := d.writeGate
+	g, send := d.writeGate, d.sendGate
 	d.gateMu.Unlock()
-	if g == nil {
-		return true
+	if g == nil && send == nil {
+		return true, -1, 0
 	}
-	open := g()
+	open, budget, term := false, time.Duration(-1), uint64(0)
+	if send != nil {
+		open, budget, term = send()
+	} else {
+		open = g()
+	}
+	if open && term != 0 && d.leaseTerm.Load() == 0 {
+		d.leaseTerm.CompareAndSwap(0, term) // the first term seen: nothing to forget
+	}
+	moved := open && term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")
 	// Steady state is one atomic load. A transition is made under turnMu,
 	// and gateShut is cleared only AFTER the forget: a second looker that
 	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
 	// and so cannot rewrite or diff against the previous term's commands.
-	if shut := d.gateShut.Load(); shut == open {
+	if shut := d.gateShut.Load(); shut == open || moved {
 		d.turnMu.Lock()
 		switch {
 		case !open && !d.gateShut.Load():
@@ -409,8 +440,11 @@ func (d *Driver) gateOpen() bool {
 					d.log.Warn("optommp: the scans are not live; writing no outputs until they are", "host", d.m.Host)
 				}
 			}
-		case open && d.gateShut.Load():
+		case open && (d.gateShut.Load() || term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")):
 			d.forgetCommanded()
+			if term != 0 {
+				d.leaseTerm.Store(term)
+			}
 			if d.skipsStandby() {
 				// A standby that held no session has no live inputs: hold
 				// commands until the runtime has read some, and wake the
@@ -429,7 +463,7 @@ func (d *Driver) gateOpen() bool {
 		}
 		d.turnMu.Unlock()
 	}
-	return open
+	return open, budget, term
 }
 
 // forgetCommanded empties commanded and pending and starts a new term: no
@@ -524,6 +558,7 @@ var (
 	_ nio.InputsReadier                      = (*Driver)(nil)
 	_ nio.OutputsRequester                   = (*Driver)(nil)
 	_ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
+	_ nio.SendGated                          = (*Driver)(nil)
 )
 
 // Start connects and runs the poll loop until ctx ends or Stop is called.
@@ -1328,23 +1363,27 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 		}
 		return names
 	}
-	// goOn looks at the gate before write i: false when the flush stops,
-	// the rest dropped (closed) or already forgotten (reopened).
-	goOn := func(i int) bool {
-		if !d.gateOpen() {
+	// goOn looks at the gate immediately before write i (design §3.4) and
+	// gives its send deadline: false when the flush stops, the rest
+	// dropped (closed, or the budget used up) or already forgotten
+	// (reopened, a new term).
+	goOn := func(i int) (time.Time, bool) {
+		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		if !ok || !fence.Started(deadline, time.Now()) {
 			drop(rest(i))
-			return false
+			return time.Time{}, false
 		}
 		d.mu.Lock()
 		same := d.term == term
 		d.mu.Unlock()
-		return same
+		return deadline, same
 	}
 	for i, w := range writes {
-		if !goOn(i) {
+		deadline, ok := goOn(i)
+		if !ok {
 			return i, nil
 		}
-		if err := c.Write(w.addr, w.data); err != nil {
+		if err := c.WriteBy(w.addr, w.data, deadline); err != nil {
 			// Requeue this write and every one after it, unless a newer
 			// command for the same tag arrived meanwhile, or a reopen
 			// forgot them as the previous term's.

@@ -947,7 +947,7 @@ func TestQueueOfflineIsBoundedPerNode(t *testing.T) {
 	for i := 0; i < maxQueuedPerNode+over; i++ {
 		hold["W6"][fmt.Sprintf("W6_T%04d", i)] = float64(i)
 	}
-	if got := d.queueOffline(hold); got != uint64(over) {
+	if got := d.queueOffline(hold, d.termGen.Load()); got != uint64(over) {
 		t.Errorf("dropped %d, want %d (everything past the bound)", got, over)
 	}
 	if n := len(d.queued["W6"]); n != maxQueuedPerNode {
@@ -964,7 +964,7 @@ func TestQueueOfflineIsBoundedPerNode(t *testing.T) {
 		parked = name
 		break
 	}
-	if got := d.queueOffline(map[string]map[string]any{"W6": {parked: 99.0}}); got != 0 {
+	if got := d.queueOffline(map[string]map[string]any{"W6": {parked: 99.0}}, d.termGen.Load()); got != 0 {
 		t.Errorf("replacing a parked tag dropped %d, want 0", got)
 	}
 	if got := d.queued["W6"][parked]; got != 99.0 {
@@ -972,7 +972,7 @@ func TestQueueOfflineIsBoundedPerNode(t *testing.T) {
 	}
 
 	// The bound is per node: another site has its own budget.
-	if got := d.queueOffline(map[string]map[string]any{"W9": {"W9_A": 1.0}}); got != 0 {
+	if got := d.queueOffline(map[string]map[string]any{"W9": {"W9_A": 1.0}}, d.termGen.Load()); got != 0 {
 		t.Errorf("a different node dropped %d, want 0 — the bound is per node", got)
 	}
 	if n := len(d.queued["W9"]); n != 1 {
