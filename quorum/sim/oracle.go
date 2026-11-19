@@ -31,11 +31,70 @@ type Record struct {
 	// OnReply while a matching request of this boot was open.
 	Hostile []Hostile
 
+	// Adoptions are the durable witness-incarnation adoptions (EventAdopted)
+	// and Proposals the proposals made, by controller, in order.
+	Adoptions, Proposals []AdoptRec
+	// TwoIncarnations counts the "two witness copies" events.
+	TwoIncarnations int
+
 	Trace []string
 	Hash  uint64
 
+	// counts is, per controller, what the protocol says it counts
+	// (countTruth in sim.go), after each change.
+	counts [2][]countSnap
+	// grantIdx finds a ledger grant by (voter, nonce, id, term), to note
+	// when its grantee first received it.
+	grantIdx map[grantKey]int
+
 	ends     []time.Duration // promise end of each Grant, global; built once by Check
 	released []release
+}
+
+// AdoptRec is one adoption (durable) or proposal (made) by a controller.
+type AdoptRec struct {
+	Node     Addr
+	At       time.Duration
+	Gen, Inc uint64
+}
+
+type countSnap struct {
+	at time.Duration
+	countState
+}
+
+type grantKey struct {
+	voter           Addr
+	nonce, id, term uint64
+}
+
+func (r *Record) count(a Addr, at time.Duration, c countState) {
+	r.counts[a] = append(r.counts[a], countSnap{at: at, countState: c})
+}
+
+// countsAt reports whether controller a counted witness incarnation inc at
+// global time t, by the protocol's rules (the quiet period included).
+func (r *Record) countsAt(a Addr, inc uint64, t time.Duration) bool {
+	if a != A && a != B || inc == 0 {
+		return false
+	}
+	snaps := r.counts[a]
+	i := sort.Search(len(snaps), func(i int) bool { return snaps[i].at > t }) - 1
+	if i < 0 || snaps[i].inc != inc {
+		return false
+	}
+	return r.clocks[a].Local(t) >= snaps[i].from
+}
+
+// received notes that grant rep from voter reached controller to at t.
+func (r *Record) received(voter Addr, rep quorum.Reply, to Addr, t time.Duration) {
+	i, ok := r.grantIdx[grantKey{voter, rep.Nonce, rep.ID, rep.Term}]
+	if !ok {
+		return
+	}
+	if g := &r.Grants[i]; g.To == to && g.Recv == 0 {
+		g.Recv = t
+	}
 }
 
 // release is a voter dropping its promise to its own candidate at At (a
@@ -63,8 +122,12 @@ type Grant struct {
 	To       Addr
 	ToID     quorum.NodeID
 	Term     uint64
+	ID       uint64
+	Nonce    uint64
 	Start    time.Duration
 	EndLocal quorum.Instant
+	// Recv is when the grantee first received it (0: never).
+	Recv time.Duration
 }
 
 // DeviceWrite is one write the simulated device received.
@@ -97,6 +160,7 @@ type voterStart struct {
 	boot     int
 	at       time.Duration
 	readable bool
+	inc      uint64 // a witness's incarnation at this start
 }
 
 type faultEdge struct {
@@ -114,10 +178,16 @@ func (r *Record) gate(a Addr, at time.Duration, open bool, end quorum.Instant, t
 	*g = append(*g, s)
 }
 
-func (r *Record) grant(g Grant) { r.Grants = append(r.Grants, g) }
+func (r *Record) grant(g Grant) {
+	if r.grantIdx == nil {
+		r.grantIdx = map[grantKey]int{}
+	}
+	r.grantIdx[grantKey{g.Voter, g.Nonce, g.ID, g.Term}] = len(r.Grants)
+	r.Grants = append(r.Grants, g)
+}
 
-func (r *Record) voterStart(a Addr, boot int, at time.Duration, readable bool) {
-	r.starts = append(r.starts, voterStart{node: a, boot: boot, at: at, readable: readable})
+func (r *Record) voterStart(a Addr, boot int, at time.Duration, readable bool, inc uint64) {
+	r.starts = append(r.starts, voterStart{node: a, boot: boot, at: at, readable: readable, inc: inc})
 }
 
 func (r *Record) faultEvent(at time.Duration, i int, on bool) {
@@ -131,6 +201,55 @@ func (r *Record) lostFile() bool {
 	for _, s := range r.starts {
 		if (s.node == A || s.node == B || s.node == W) && !s.readable {
 			return true
+		}
+	}
+	return false
+}
+
+// twoOfThreeLost reports whether two of the three voters lost their state
+// before either had re-commissioned (design §3.1, the costs): a
+// controller's file and the witness's, each loss inside the other's window
+// from the loss to its recovery; or both controllers' files, recovered on
+// an incarnation the real witness never had (a stray copy's). No surviving
+// majority remembers the terms then, so the pair needs an operator (§7).
+// A controller's loss is recovered by its next durable adoption; the
+// witness's (a new incarnation) by the first durable adoption of it.
+// Both controllers' files lost with the witness intact is NOT this case.
+func (r *Record) twoOfThreeLost() bool {
+	type window struct {
+		node     Addr
+		from, to time.Duration
+	}
+	var ws []window
+	witnessIncs := map[uint64]bool{}
+	for _, s := range r.starts {
+		if s.node == W {
+			witnessIncs[s.inc] = true
+		}
+		if s.readable || s.node > W {
+			continue
+		}
+		to := time.Duration(1<<63 - 1)
+		for _, a := range r.Adoptions {
+			if a.At >= s.at && (s.node == W && a.Inc == s.inc || s.node != W && a.Node == s.node) {
+				to = a.At
+				break
+			}
+		}
+		ws = append(ws, window{s.node, s.at, to})
+	}
+	stray := false
+	for _, a := range r.Adoptions {
+		stray = stray || !witnessIncs[a.Inc]
+	}
+	for i, x := range ws {
+		for _, y := range ws[i+1:] {
+			if x.node == y.node || x.from >= y.to || y.from >= x.to {
+				continue
+			}
+			if x.node == W || y.node == W || stray {
+				return true
+			}
 		}
 	}
 	return false
@@ -196,15 +315,25 @@ func (r *Record) promiseEnd(i int) time.Duration {
 }
 
 // counted reports whether g comes from one of the pair's three voters as
-// the pair counts them: A, B, or W at the commissioned incarnation.
+// its grantee counted them when it received it: A, B, or a witness copy
+// (W, or W2 under the same name) at the incarnation the grantee counted
+// then, past its quiet period (design §3.1). Z never counts.
 func (r *Record) counted(g Grant) bool {
 	switch g.Voter {
 	case A, B:
 		return true
-	case W:
-		return g.Inc == r.witnessInc
+	case W, W2:
+		return g.Recv > 0 && r.countsAt(g.To, g.Inc, g.Recv)
 	}
 	return false
+}
+
+// slot is the voter a grant counts as: both witness copies are "W".
+func slot(a Addr) Addr {
+	if a == W2 {
+		return W
+	}
+	return a
 }
 
 // Violation is one oracle failing.
@@ -242,6 +371,12 @@ func Check(r *Record, c Checks) []Violation {
 			vs = append(vs, v)
 		}
 	}
+	if r.twoOfThreeLost() {
+		// The operator's case: the term floor may miss terms only the two
+		// lost voters knew (I2, I4), and nothing re-commissions without a
+		// person (I6, I7, steady). I1, the lease and the ledger still hold.
+		c.Exclude = append(slices.Clone(c.Exclude), "I2", "I4", "I6", "I7", "steady")
+	}
 	gates := r.Gates()
 	for _, v := range checkI1(gates) {
 		add(v)
@@ -269,16 +404,7 @@ func Check(r *Record, c Checks) []Violation {
 		}
 	}
 	if c.SteadyTo > c.SteadyFrom {
-		voters := c.SteadyVoters
-		if r.lostFile() {
-			// Until the handshake PR, a rebuilt witness (a new incarnation)
-			// isn't adopted, and a controller that lost its file lost the
-			// incarnation it accepts, so the witness can't back it: the
-			// pair runs on A and B alone (#976). The handshake flips this
-			// back, beside TestKnownGap976TwoLostControllerFiles.
-			voters = slices.DeleteFunc(slices.Clone(voters), func(a Addr) bool { return a == W })
-		}
-		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, voters) {
+		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, c.SteadyVoters) {
 			add(v)
 		}
 	}
@@ -324,7 +450,7 @@ func (r *Record) checkSteady(gates []Interval, from, to time.Duration, voters []
 		for {
 			next := cov
 			for i, g := range r.Grants {
-				if g.Voter == v && g.To == holder.Node && (v != W || g.Inc == r.witnessInc) &&
+				if g.Voter == v && g.To == holder.Node && r.counted(g) &&
 					g.Start <= cov && r.promiseEnd(i) > next {
 					next = r.promiseEnd(i)
 				}
@@ -396,8 +522,8 @@ func (r *Record) checkLease(gates []Interval) []Violation {
 			var by [nNodes]bool
 			n := 0
 			for _, s := range spans {
-				if s.from <= p && p < s.to && !by[s.voter] {
-					by[s.voter] = true
+				if s.from <= p && p < s.to && !by[slot(s.voter)] {
+					by[slot(s.voter)] = true
 					n++
 				}
 			}

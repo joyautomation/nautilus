@@ -42,15 +42,16 @@ func TestRegressionTwoVoterLivelock(t *testing.T) {
 	}
 }
 
-// #976, a known gap: two controllers that both lose their state files
-// form a majority without the witness and grant terms below one already
-// led, so the fencing token goes backwards (I2: "B wrote term 2 after term
-// 5"). Seeds 208 and 1458 of the default 2,000, shrunk. The generator now
-// draws at most one lost controller file per schedule; these two must
-// keep failing until the handshake PR re-commissions a controller with an
-// unreadable file (term floor + accepted incarnation). When this test
-// fails because the gap is gone, make the cases a required pass.
-func TestKnownGap976TwoLostControllerFiles(t *testing.T) {
+// #976, closed by the handshake: two controllers that both lost their
+// state files used to form a majority without the witness and grant terms
+// below one already led, so the fencing token went backwards (I2: "B wrote
+// term 2 after term 5"). Seeds 208 and 1458 of the default 2,000 (before
+// the generator could draw two lost controller files), shrunk. Each
+// controller now re-commissions from its peer, or with the witness, at the
+// term floor before it grants or campaigns. The witness stayed intact, so
+// this is not the two-of-three case: every oracle is asserted, and both
+// controllers must have re-adopted the witness.
+func TestRegression976TwoLostControllerFiles(t *testing.T) {
 	for name, o := range map[string]Options{
 		"seed208": {Seed: 208, Delay: 530818, Jitter: 175320, Fsync: 4337184, InPlace: true,
 			Rates: [nNodes]PPM{997866, 1004508, 999726}, Start: [3]time.Duration{581011620, 1369048054, 3402530163}, Until: 41517713503,
@@ -66,17 +67,26 @@ func TestKnownGap976TwoLostControllerFiles(t *testing.T) {
 			}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			regressed := false
-			for _, v := range Check(Run(o), checksFor(o)) {
-				switch v.Oracle {
-				case "I2", "I4":
-					regressed = true
-				default:
-					t.Errorf("an oracle besides the known gap failed: %v", v)
+			rec := Run(o)
+			if rec.twoOfThreeLost() {
+				t.Fatal("judged the two-of-three case: the oracles would be excused")
+			}
+			lost := map[Addr]bool{}
+			for _, s := range rec.starts {
+				if !s.readable {
+					lost[s.node] = true
 				}
 			}
-			if !regressed {
-				t.Fatal("#976 no longer reproduces: if the handshake PR closed it, make these cases a required pass")
+			if !lost[A] || !lost[B] {
+				t.Fatalf("both controllers must lose their files: %v", lost)
+			}
+			for _, a := range []Addr{A, B} {
+				if !rec.countsAt(a, rec.witnessInc, o.Until) {
+					t.Errorf("%v does not count the witness at the end", a)
+				}
+			}
+			for _, v := range Check(rec, checksFor(o)) {
+				t.Error(v)
 			}
 		})
 	}
