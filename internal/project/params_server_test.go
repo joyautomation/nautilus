@@ -75,6 +75,15 @@ func TestParamHookFindsThePortDevice(t *testing.T) {
 	if !found {
 		t.Errorf("V_Setpoint is not in the listing: %+v", list.Params)
 	}
+	named := false
+	for _, p := range list.Params {
+		if p.ID == "V_OutputMode" && len(p.Values) == 2 && p.Values[1].Name == "Auto" {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("V_OutputMode's named values are not in the listing: %+v", list.Params)
+	}
 	if _, ok := h.List("NOPE"); ok {
 		t.Error("a port device no master has was listed")
 	}

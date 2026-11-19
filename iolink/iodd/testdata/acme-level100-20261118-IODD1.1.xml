@@ -60,6 +60,13 @@
           <DatatypeRef datatypeId="DT_Window"/>
           <Name textId="TN_V_Window"/>
         </Variable>
+        <Variable id="V_OutputMode" index="66" accessRights="rw" defaultValue="1">
+          <Datatype xsi:type="UIntegerT" bitLength="8">
+            <SingleValue value="0"><Name textId="TN_ModeOff"/></SingleValue>
+            <SingleValue value="1"><Name textId="TN_ModeAuto"/></SingleValue>
+          </Datatype>
+          <Name textId="TN_V_OutputMode"/>
+        </Variable>
       </VariableCollection>
       <ProcessDataCollection>
         <ProcessData id="PD_Level">
@@ -155,6 +162,7 @@
       <Text id="TN_V_Setpoint" value="Setpoint"/>
       <Text id="TD_V_Setpoint" value="Switch point 1 setpoint"/>
       <Text id="TN_V_Window" value="Window"/>
+      <Text id="TN_V_OutputMode" value="Output mode"/>
       <Text id="TN_PDI_Level" value="Level"/>
       <Text id="TN_PDI_Temp" value="Temperature"/>
       <Text id="TN_PDI_Ready" value="Ready"/>
