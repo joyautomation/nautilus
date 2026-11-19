@@ -174,6 +174,8 @@ var table = []mutation{
 	// #1040 review: a Modbus write queued or requeued under an earlier
 	// term of the lease.
 	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead"}},
+	// #1040 review: an SNMP SET retransmitted after a lost answer.
+	{"set_retried", []string{"TestSetIsSentOnce"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -189,6 +191,7 @@ var rowPkgs = map[string][]string{
 	"send_no_deadline":         {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip"},
 	"fence_fin":                {"./internal/fence", "./modbus", "./eip/cip", "./redfish"},
 	"old_term_kept":            {"./modbus"},
+	"set_retried":              {"./snmp"},
 }
 
 // args are the go test arguments for m.

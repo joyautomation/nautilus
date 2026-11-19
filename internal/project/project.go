@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -729,6 +730,10 @@ type MetaConfig struct {
 // error.
 type DriverConfig struct {
 	Type string `yaml:"type"`
+	// writeTimeoutCap is a redundant pair's send budget (buildDrivers): a
+	// writing source with no timeout of its own gets min(its default,
+	// this), so a default never runs past a write's deadline (design §3.4).
+	writeTimeoutCap time.Duration `yaml:"-"`
 	// Name tells drivers in a drivers: list apart — in status rows, error
 	// messages, and logs. Defaults to the driver's type, deduped as
 	// "eip-2" when a type repeats. On a lone driver: section it names only
@@ -1829,6 +1834,13 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		}
 	}
 	names := driverNames(configs)
+	if m.Redundancy.Pair() {
+		budget := m.Redundancy.SendBudget()
+		configs = slices.Clone(configs)
+		for i := range configs {
+			configs[i].writeTimeoutCap = budget
+		}
+	}
 	switch len(configs) {
 	case 0:
 		// No driver section at all: the memory loopback, as ever.

@@ -127,6 +127,12 @@ func WithTagClass(class string, patterns ...string) Option {
 	}
 }
 
+// WithWriteTimeoutCap caps the request timeout of a source that takes
+// writes and names no timeout of its own at cap: a redundant pair's send
+// budget (design §3.4), so its default never runs past a write's deadline.
+// A timeout the manifest sets is kept (naut check warns when it is longer).
+func WithWriteTimeoutCap(cap time.Duration) Option { return func(d *Driver) { d.writeCap = cap } }
+
 // WithBlockGap sets the block-coalescing gap tolerance in registers/coils:
 // how many unaddressed addresses one read may span to avoid a second
 // round-trip. 0 never bridges a hole — the escape hatch for devices that
@@ -206,6 +212,8 @@ type Driver struct {
 	// that finds the gate reopened while another is still forgetting waits
 	// for the forget instead of reading the previous term's written.
 	turnMu sync.Mutex
+	// writeCap caps a writing source's default timeout (WithWriteTimeoutCap).
+	writeCap time.Duration
 	// leaseTerm is the lease's term the last open look saw (0: none yet,
 	// or no pair). A look that finds the gate open under another term
 	// treats it as a reopen, closed between two looks or not: the lease
@@ -253,8 +261,11 @@ type outBinding struct {
 // the only writer of conn state; mu guards what other goroutines read
 // (snapshot, health) and write (pending, enabled).
 type source struct {
-	cfg    Source
-	blocks []*blockRun
+	cfg Source
+	// explicitTimeout: the manifest set cfg.Timeout (a default one may be
+	// capped by WithWriteTimeoutCap).
+	explicitTimeout bool
+	blocks          []*blockRun
 
 	mu       sync.Mutex
 	snapshot nio.Values // decoded values, held across disconnects
@@ -396,6 +407,13 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	if err := d.buildSources(); err != nil {
 		return nil, err
 	}
+	if d.writeCap > 0 {
+		for _, s := range d.sources {
+			if len(s.byName) > 0 && !s.explicitTimeout {
+				s.cfg.Timeout = min(s.cfg.Timeout, d.writeCap)
+			}
+		}
+	}
 	return d, nil
 }
 
@@ -484,6 +502,7 @@ func (d *Driver) buildSources() error {
 
 // newSource is one source's runtime state before its blocks and outputs.
 func newSource(cfg Source) *source {
+	explicit := cfg.Timeout > 0
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
 	}
@@ -494,15 +513,16 @@ func newSource(cfg Source) *source {
 		cfg.RetryMax = defaultRetryMax
 	}
 	return &source{
-		cfg:      cfg,
-		snapshot: nio.Values{},
-		state:    "connecting",
-		enabled:  true,
-		pending:  map[string]any{},
-		written:  map[string]any{},
-		stuck:    map[string]*stuckWrite{},
-		byName:   map[string]outBinding{},
-		kick:     make(chan struct{}, 1),
+		cfg:             cfg,
+		explicitTimeout: explicit,
+		snapshot:        nio.Values{},
+		state:           "connecting",
+		enabled:         true,
+		pending:         map[string]any{},
+		written:         map[string]any{},
+		stuck:           map[string]*stuckWrite{},
+		byName:          map[string]outBinding{},
+		kick:            make(chan struct{}, 1),
 	}
 }
 
@@ -582,13 +602,24 @@ func (d *Driver) SetSendGate(g nio.SendGate) {
 
 var _ nio.SendGated = (*Driver)(nil)
 
-// WriteTimeouts is each source with a writable binding, with its
-// per-request timeout: naut check compares it with a redundant pair's send
-// budget (design §3.4).
+// RequestTimeout is source id's request timeout as the driver runs it: the
+// manifest's, or the default (capped for a writing source on a pair, see
+// WithWriteTimeoutCap); 0 for an unknown source.
+func (d *Driver) RequestTimeout(id string) time.Duration {
+	if s, ok := d.bySource[id]; ok {
+		return s.cfg.Timeout
+	}
+	return 0
+}
+
+// WriteTimeouts is each source with a writable binding whose manifest sets
+// a request timeout, with that timeout: naut check compares it with a
+// redundant pair's send budget (design §3.4). A default one is capped at
+// the budget instead (WithWriteTimeoutCap).
 func (d *Driver) WriteTimeouts() map[string]time.Duration {
 	out := map[string]time.Duration{}
 	for _, s := range d.sources {
-		if len(s.byName) > 0 {
+		if len(s.byName) > 0 && s.explicitTimeout {
 			out[s.cfg.ID] = s.cfg.Timeout
 		}
 	}

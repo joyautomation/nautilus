@@ -475,6 +475,9 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			return nil, err
 		}
 		opts := []modbus.Option{modbus.WithLogger(slog.Default().With("driver", "modbus"))}
+		if d.writeTimeoutCap > 0 {
+			opts = append(opts, modbus.WithWriteTimeoutCap(d.writeTimeoutCap))
+		}
 		if d.ScanRate != 0 {
 			opts = append(opts, modbus.WithScanRate(time.Duration(d.ScanRate)))
 		}
@@ -513,6 +516,9 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 				return nil, fmt.Errorf("driver snmp: %s: %w", d.Manifest, err)
 			}
 			opts := []snmp.Option{snmp.WithLogger(log)}
+			if d.writeTimeoutCap > 0 {
+				opts = append(opts, snmp.WithWriteTimeoutCap(d.writeTimeoutCap))
+			}
 			if d.ScanRate != 0 {
 				opts = append(opts, snmp.WithScanRate(time.Duration(d.ScanRate)))
 			}
@@ -529,6 +535,9 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 				return nil, fmt.Errorf("driver redfish: %s: %w", d.Manifest, err)
 			}
 			opts := []redfish.Option{redfish.WithLogger(log)}
+			if d.writeTimeoutCap > 0 {
+				opts = append(opts, redfish.WithWriteTimeoutCap(d.writeTimeoutCap))
+			}
 			if d.ScanRate != 0 {
 				opts = append(opts, redfish.WithScanRate(time.Duration(d.ScanRate)))
 			}

@@ -312,19 +312,22 @@ refused).
 **A slow device costs a write.** A write may take as little as three
 quarters of the lease minus `net-delay` (1.45 s at the default 2 s
 lease). A device that answers slower than that has the write abandoned
-and its connection reset, even with the leader healthy: a Modbus or
-EtherNet/IP write is sent again after the reconnect (a Modbus write sets
-a value and EtherNet/IP writes a tag, so a second one does the same). An
+and its connection reset, even with the leader healthy. A Modbus or
+EtherNet/IP write is sent again after the reconnect: a Modbus write sets
+a value and EtherNet/IP writes a tag, so a second one does the same. An
 SNMP or Redfish command is never queued again: the source reports its
 **outcome unknown**, because the device may have carried it out (a slow
 BMC's reset) after nautilus stopped waiting. A Redfish action is never
-retried; an SNMP set is retransmitted within its deadline when the agent
-does not answer (`retries:`, 2 by default), so an action-valued object
-(an outlet reboot) could run twice when only the answer was lost. `naut check` warns for each source that takes writes with a
-request timeout longer than that budget (the drivers' defaults, 3 s for
-Modbus and SNMP and 10 s for Redfish, are). Lower the source's timeout if
-the device answers well within it, or lengthen the lease. EtherNet/IP has
-no timeout setting: the same applies to a controller slower than the
+retried, and an SNMP set goes out once (`retries:` applies to polls
+only), so an action-valued object (an outlet reboot) never runs twice
+because an answer was lost.
+
+On a pair, a source that takes writes and sets no `timeout:` runs with
+its driver's default capped at that budget (Modbus and SNMP default to
+3 s, Redfish to 10 s). A timeout the source sets is kept, and
+`naut check` warns when it is longer than the budget: lower it if the
+device answers well within it, or lengthen the lease. EtherNet/IP has no
+timeout setting, so the same applies to a controller slower than the
 budget. A command queued under one leadership is never sent after the
 controller lost the lease and won it back: it is dropped and the source
 says why.

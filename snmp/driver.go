@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +65,13 @@ func WithTagClass(class string, patterns ...string) Option {
 	}
 }
 
+// WithWriteTimeoutCap caps the request timeout of a source that takes
+// commands and names no timeout of its own at cap: a redundant pair's send
+// budget (design §3.4), so its default never runs past a command's
+// deadline. A timeout the manifest sets is kept (naut check warns when it
+// is longer).
+func WithWriteTimeoutCap(cap time.Duration) Option { return func(d *Driver) { d.writeCap = cap } }
+
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(d *Driver) {
@@ -80,6 +88,10 @@ func WithDialer(dial DialFunc) Option { return func(d *Driver) { d.dial = dial }
 // Driver polls a set of SNMP agents and implements io.Driver,
 // io.BatchReader and io.QualityReporter (through hw.Base).
 type Driver struct {
+	// writeCap caps a writing source's default timeout (WithWriteTimeoutCap);
+	// explicit names the sources whose manifest sets a timeout.
+	writeCap    time.Duration
+	explicit    map[string]bool
 	manifest    Manifest
 	base        *hw.Base
 	log         *slog.Logger
@@ -220,6 +232,14 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		return nil, err
 	}
 	d.base = base
+	d.explicit = map[string]bool{}
+	for id, s := range d.sources {
+		if s.cfg.Timeout > 0 {
+			d.explicit[id] = true
+		} else if d.writeCap > 0 && slices.Contains(base.WriteSources(), id) {
+			s.cfg.Timeout = min(DefaultTimeout, d.writeCap)
+		}
+	}
 
 	// Plan each (source, class) from the classes Base resolved — the one
 	// place the scan-class policy (binding scan-class:, WithTagClass) is
@@ -357,13 +377,14 @@ func (d *Driver) ConnectionUp(id string) bool   { return d.base.ConnectionUp(id)
 // variables, missing credential files, MD5/DES.
 func (d *Driver) Warnings() []string { return d.manifest.Warnings() }
 
-// WriteTimeouts is each source that takes commands, with its per-request
-// timeout: naut check compares it with a redundant pair's send budget
-// (design §3.4).
+// WriteTimeouts is each source that takes commands and whose manifest sets
+// a request timeout, with that timeout: naut check compares it with a
+// redundant pair's send budget (design §3.4). A default one is capped at
+// the budget instead (WithWriteTimeoutCap).
 func (d *Driver) WriteTimeouts() map[string]time.Duration {
 	out := map[string]time.Duration{}
 	for _, id := range d.base.WriteSources() {
-		if s, ok := d.sources[id]; ok {
+		if s, ok := d.sources[id]; ok && d.explicit[id] {
 			out[id] = s.cfg.timeout()
 		}
 	}

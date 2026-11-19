@@ -89,6 +89,7 @@ var Mutations = []string{
 	"gate_per_batch",           // hw: the gate is read once per batch, not before each command (design §3.4)
 	"old_term_sent",            // hw: a command queued under an earlier term is sent after a re-lead (#1040 review)
 	"old_term_kept",            // modbus: a write queued under an earlier term of the lease goes out after a re-lead (#1040 review)
+	"set_retried",              // snmp: a SET is retransmitted after each per-try timeout (#1040 review)
 	"send_no_deadline",         // fence: a send gets no deadline, and one past its budget still starts (design §3.4)
 	"fence_fin",                // fence: a fenced socket is closed with a FIN, not reset (design §3.4)
 }

@@ -135,3 +135,50 @@ func TestPairSendBudget(t *testing.T) {
 		}
 	}
 }
+
+// #1040 review (b): on a pair, a writing source with no timeout of its own
+// runs with min(its default, the send budget), so a default never warns;
+// one the manifest sets is kept, and is what naut check compares. A source
+// that only reads keeps its default, and outside a pair nothing changes.
+func TestPairCapsADefaultWriteTimeout(t *testing.T) {
+	files := func(red string) fstest.MapFS {
+		fs := pairFS(red + "driver:\n  type: modbus\n  manifest: modbus_manifest.yaml\n")
+		fs["modbus_manifest.yaml"] = &fstest.MapFile{Data: []byte("sources:\n" +
+			"  - {id: W, host: 192.0.2.1}\n" +
+			"  - {id: X, host: 192.0.2.2, timeout: 3s}\n" +
+			"  - {id: R, host: 192.0.2.3}\n" +
+			"tags:\n" +
+			"  - {name: SP, source: W, table: holding, address: 0, format: uint16, writable: true}\n" +
+			"  - {name: SP2, source: X, table: holding, address: 0, format: uint16, writable: true}\n" +
+			"  - {name: PV, source: R, table: holding, address: 0, format: uint16}\n")}
+		return fs
+	}
+	type timeouts interface {
+		RequestTimeout(string) time.Duration
+		WriteTimeouts() map[string]time.Duration
+	}
+	p, err := Load(files(pairOK), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Runtime.Driver.(timeouts)
+	if got := d.RequestTimeout("W"); got != 1450*time.Millisecond {
+		t.Errorf("pair, writing source with the default: %s; want the 1.45 s budget", got)
+	}
+	if got := d.RequestTimeout("X"); got != 3*time.Second {
+		t.Errorf("pair, writing source that sets 3s: %s; want it kept", got)
+	}
+	if got := d.RequestTimeout("R"); got != 3*time.Second {
+		t.Errorf("pair, reading source: %s; want its 3 s default", got)
+	}
+	if wt := d.WriteTimeouts(); len(wt) != 1 || wt["X"] != 3*time.Second {
+		t.Errorf("WriteTimeouts %v; want only X's explicit 3s", wt)
+	}
+	p, err = Load(files(""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Runtime.Driver.(timeouts).RequestTimeout("W"); got != 3*time.Second {
+		t.Errorf("no pair: %s; want the 3 s default", got)
+	}
+}
