@@ -109,34 +109,44 @@ func fakeBrowser(t *testing.T, delay time.Duration) string {
 	return path
 }
 
+// lowerHandshakeFloor makes the handshake's floor d for one test, so a
+// "slow" handshake takes a second, not ten.
+func lowerHandshakeFloor(t *testing.T, d time.Duration) {
+	old := handshakeFloor
+	handshakeFloor = d
+	t.Cleanup(func() { handshakeFloor = old })
+}
+
 // A loaded CI runner under -race took 47 s to print its DevTools line and
 // then more than 10 s to answer the handshake (#964). The handshake gets
 // what is left of the start budget, not a fixed 10 s.
 func TestLaunchWaitsForASlowHandshake(t *testing.T) {
 	t.Setenv(StartTimeoutEnv, "")
-	path := fakeBrowser(t, 11*time.Second)
+	lowerHandshakeFloor(t, time.Second)
+	path := fakeBrowser(t, 1100*time.Millisecond)
 	b, err := launch(context.Background(), path)
 	if err != nil {
-		t.Fatalf("a handshake answered in 11 s, within the %s start budget: %v", DefaultStartTimeout, err)
+		t.Fatalf("a handshake answered past the 1 s floor, within the %s start budget: %v", DefaultStartTimeout, err)
 	}
 	b.close()
 }
 
 // A handshake that never comes: the error says the browser didn't answer
-// (after the 10 s floor, the 1 s budget being spent), and names the
+// (after the floor, the 1 s budget being spent), and names the
 // override, like a browser that never starts.
 func TestLaunchNamesTheOverrideWhenTheHandshakeRunsOut(t *testing.T) {
 	t.Setenv(StartTimeoutEnv, "1s")
+	lowerHandshakeFloor(t, time.Second)
 	path := fakeBrowser(t, -1)
 	start := time.Now()
 	_, err := launch(context.Background(), path)
 	if err == nil {
 		t.Fatal("a handshake that never comes: no error")
 	}
-	if !strings.Contains(err.Error(), "didn't answer on DevTools in 10s") || !strings.Contains(err.Error(), StartTimeoutEnv) {
+	if !strings.Contains(err.Error(), "didn't answer on DevTools in 1s") || !strings.Contains(err.Error(), StartTimeoutEnv) {
 		t.Fatalf("error = %q, want it to say the browser didn't answer and name %s", err, StartTimeoutEnv)
 	}
-	if took := time.Since(start); took > 30*time.Second {
+	if took := time.Since(start); took > 10*time.Second {
 		t.Fatalf("gave up after %s", took)
 	}
 }

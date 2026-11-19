@@ -105,6 +105,11 @@ const StartTimeoutEnv = "NAUT_BROWSER_START_TIMEOUT"
 // DefaultStartTimeout is launch's wait without StartTimeoutEnv.
 const DefaultStartTimeout = 120 * time.Second
 
+// handshakeFloor is the least the DevTools handshake gets, however much of
+// the start budget the browser spent printing its DevTools line. A var so a
+// test can lower it.
+var handshakeFloor = 10 * time.Second
+
 // startTimeout is StartTimeoutEnv's duration, or DefaultStartTimeout.
 func startTimeout() (time.Duration, error) {
 	v := os.Getenv(StartTimeoutEnv)
@@ -160,7 +165,7 @@ func launch(ctx context.Context, path string) (*browser, error) {
 	// One budget for the whole start: the browser's DevTools line, then
 	// its websocket handshake, which a loaded machine can be just as slow
 	// to answer (#964: 47 s to the line, then the old fixed 10 s handshake
-	// ran out). Never less than 10 s for the handshake.
+	// ran out). Never less than handshakeFloor for the handshake.
 	deadline := time.Now().Add(wait)
 	tooSlow := func(what string, in time.Duration) error {
 		return fmt.Errorf("the browser didn't %s in %s (set %s, e.g. %s=5m, to wait longer)", what, in.Round(time.Second), StartTimeoutEnv, StartTimeoutEnv)
@@ -180,7 +185,7 @@ func launch(ctx context.Context, path string) (*browser, error) {
 		b.close()
 		return nil, ctx.Err()
 	}
-	handshake := max(time.Until(deadline), 10*time.Second)
+	handshake := max(time.Until(deadline), handshakeFloor)
 	d := websocket.Dialer{HandshakeTimeout: handshake}
 	ws, _, err := d.DialContext(ctx, url, nil)
 	if err != nil {
