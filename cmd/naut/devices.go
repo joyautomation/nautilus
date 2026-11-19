@@ -268,6 +268,9 @@ func runDevicesShow(args []string, w io.Writer) int {
 			src = "UNVERIFIED"
 		}
 		format := pt.Format
+		if pt.Wire != "" {
+			format = "wire " + pt.Wire
+		}
 		if pt.Scale != 0 && pt.Scale != 1 {
 			format += fmt.Sprintf(" ×%g", pt.Scale)
 		}

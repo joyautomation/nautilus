@@ -37,6 +37,7 @@ package server
 
 import (
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -482,6 +483,11 @@ func fromVariant(m member, dv *ua.DataValue) (any, ua.StatusCode, string) {
 			return b, ua.StatusGood, ""
 		}
 		return mismatch()
+	case dt == id.ByteString:
+		if b, ok := x.([]byte); ok {
+			return hex.EncodeToString(b), ua.StatusGood, ""
+		}
+		return mismatch()
 	case dt == id.String:
 		if s, ok := x.(string); ok {
 			return s, ua.StatusGood, ""
@@ -703,6 +709,8 @@ func typeName(dt uint32) string {
 		return "Duration"
 	case id.String:
 		return "String"
+	case id.ByteString:
+		return "ByteString"
 	case id.SByte:
 		return "SByte"
 	case id.Byte:

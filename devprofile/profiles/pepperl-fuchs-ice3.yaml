@@ -2,7 +2,7 @@ profile: pepperl-fuchs-ice3
 title: Pepperl+Fuchs ICE3 8-port IO-Link master, OPC UA server
 maker: Pepperl+Fuchs
 model: ICE3-8IOL
-version: 2
+version: 3
 docs:
   - id: pf
     title: "IO-Link master PROFINET IO (PNIO) and Modbus/TCP User Guide, ICE3-8IOL family, ch. 12 OPC UA Supporting Information (2025-06)"
@@ -17,13 +17,11 @@ opcua:
     - urn:virtual:pepperl-fuchs:iolm    # index 1 per pf §12.2; the URI itself is not published
 iolink:                # docs/design/iolink.md §3: which points hold each port's IO-Link side
   ports: 8
-  # PDI/PDO Data Unsigned32 carry up to 4 octets. Where a shorter image
-  # sits in the U32 is not in pf §12.2: taken as the last big-endian
-  # octets (0x0286 for 02 86), and a U32 whose leading octets are not
-  # zero is refused, so a wrong guess reads Bad. Unverified until a real
-  # ICE3 is read.
-  pd-in:  { point: "Port{n}_PdiU32", form: u32, unverified: true }
-  pd-out: { point: "Port{n}_PdoU32", form: u32, unverified: true }
+  # The Byte String nodes carry the whole image (1 to 32 octets, pf §12.1.1),
+  # so no U32 guess about where a short image sits is needed; the U32 points
+  # stay for a project that reads them.
+  pd-in:  { point: "Port{n}_PdiBytes", form: bytes, doc: "pf §12.2 p. 171" }
+  pd-out: { point: "Port{n}_PdoBytes", form: bytes, doc: "pf §12.2 p. 172" }
   pd-valid: "Port{n}_PdiValid"
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
@@ -50,6 +48,8 @@ points:
   - { name: "Port{n}_PdiBytecount", type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDI Bytecount", path: "IOLM/Port {n}/Attached Device/PDI Bytecount", desc: "Port {n}: PDI size in bytes", doc: "pf §12.2 p. 171" }
   - { name: "Port{n}_PdoBytecount", type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDO Bytecount", path: "IOLM/Port {n}/Attached Device/PDO Bytecount", desc: "Port {n}: PDO size in bytes", doc: "pf §12.2 p. 171" }
   - { name: "Port{n}_PdiU32",      type: UDINT, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDI Data Unsigned32", path: "IOLM/Port {n}/Attached Device/PDI Data Unsigned32", desc: "Port {n}: PDI data as an unsigned 32-bit integer", doc: "pf §12.2 p. 171" }
+  - { name: "Port{n}_PdiBytes",      type: STRING, wire: ByteString, repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDI Data Byte String", path: "IOLM/Port {n}/Attached Device/PDI Data Byte String", desc: "Port {n}: PDI data as a byte string, as hex text (1 to 32 octets)", doc: "pf §12.2 p. 171" }
+  - { name: "Port{n}_PdoBytes",      type: STRING, wire: ByteString, repeat: 8, writable: true, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDO Data Byte String", path: "IOLM/Port {n}/Attached Device/PDO Data Byte String", desc: "Port {n}: PDO data as a byte string, as hex text (1 to 32 octets)", doc: "pf §12.2 p. 172" }
   - { name: "Port{n}_PdiValid",    type: BOOL,  repeat: 8, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDI Valid",     path: "IOLM/Port {n}/Attached Device/PDI Valid",     desc: "Port {n}: PDI data valid", doc: "pf §12.2 p. 172" }
   - { name: "Port{n}_PdoU32",      type: UDINT, repeat: 8, writable: true, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDO Data Unsigned32", path: "IOLM/Port {n}/Attached Device/PDO Data Unsigned32", desc: "Port {n}: PDO data as an unsigned 32-bit integer", doc: "pf §12.2 p. 172" }
   - { name: "Port{n}_PdoValid",    type: BOOL,  repeat: 8, writable: true, node-id: "ns=1;s=IOLM/Port {n}/Attached Device/PDO Valid",     path: "IOLM/Port {n}/Attached Device/PDO Valid",     desc: "Port {n}: PDO data valid flag sent to the device", doc: "pf §12.2 p. 172" }
@@ -57,8 +57,9 @@ notes: |
   Node ids and data types are the manual's table (pf §12.2). The Objects on
   the way (IOLM, IOLM/Port n, IOLM/Port n/Attached Device) are not listed
   there; they are served as ns=1;s=<path>, the scheme the table's ids follow.
-  Not served yet: PDI/PDO Data Byte String and Byte Array (no plant type for
-  them), the Event Queue nodes, IODD-parsed PDI/PDO Fields, and the ISDU
+  PDI/PDO Data Byte String are served (version 3, as ByteString nodes holding
+  hex text); the Byte Array twins (pf §12.2 pp. 171-172) are not, a client
+  reads either the same. Not served yet: the Event Queue nodes, IODD-parsed PDI/PDO Fields, and the ISDU
   methods. A real ICE3 writes PDO only on ports enabled for it (pf §12.1);
-  here every PDO node is writable. Aux Input is R/W in the table with a
+  here every PDO node is writable (the manual's footnote: a port must allow OPC UA clients to write PDO). Aux Input is R/W in the table with a
   condition; here it is the process model's to set.

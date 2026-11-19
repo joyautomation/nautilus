@@ -22,7 +22,7 @@ import (
 // never polled.
 func TestOPCUADevices(t *testing.T) {
 	s, err := Resolve(vendored(t, "ifm-al1590", "pepperl-fuchs-ice3"), []Device{
-		{Name: "MASTER1", Profile: "ifm-al1590", Endpoint: "10.0.0.20", Params: map[string]string{"location": "LINE_A"}, Points: []string{"Port1_*"}},
+		{Name: "MASTER1", Profile: "ifm-al1590", Endpoint: "10.0.0.20", Params: map[string]string{"location": "LINE_A"}, Points: []string{"Port1_Pdin"}},
 		{Name: "PF1", Profile: "pepperl-fuchs-ice3", Endpoint: "opc.tcp://10.0.0.21:4841", Points: []string{"Port2_PdoU32", "Port2_SioInput"}},
 	})
 	if err != nil {
@@ -180,7 +180,12 @@ func TestOPCUADriver(t *testing.T) {
 		tags = append(tags, tg.Name+":"+tg.Role+":"+tg.Type)
 	}
 	// The driver's one companion, as an input; no Modbus __Outages.
-	if want := "MASTER1:input:IFM_AL1590 MASTER1__Online:input:BOOL"; strings.Join(tags, " ") != want {
+	// ...and a command tag per writable point: the AL1590's pdout, 8 ports.
+	want := "MASTER1:input:IFM_AL1590 MASTER1__Online:input:BOOL"
+	for n := 1; n <= 8; n++ {
+		want += fmt.Sprintf(" MASTER1_Port%d_Pdout:output:STRING", n)
+	}
+	if strings.Join(tags, " ") != want {
 		t.Errorf("tags %v, want %s", tags, want)
 	}
 	if od.Security != "None" || od.SecurityMode != "None" {
@@ -235,9 +240,9 @@ func TestResolvePorts(t *testing.T) {
 		}
 	}
 	// A profile with no iolink: block has no IO-Link ports.
-	sick := []Device{{Name: "MASTER1", Profile: "sick-sig300", Endpoint: "h", Ports: map[int]Port{1: {Name: "LEVEL", IODD: "sensor.xml"}}}}
-	if _, err := Resolve(fsys, sick); err == nil || !strings.Contains(err.Error(), "ports: profile sick-sig300 declares no IO-Link ports") {
-		t.Errorf("sick-sig300: %v", err)
+	drive := []Device{{Name: "MASTER1", Profile: "abb-acs355-fmbt21", Endpoint: "h", Ports: map[int]Port{1: {Name: "LEVEL", IODD: "sensor.xml"}}}}
+	if _, err := Resolve(fsys, drive); err == nil || !strings.Contains(err.Error(), "ports: profile abb-acs355-fmbt21 declares no IO-Link ports") {
+		t.Errorf("abb-acs355-fmbt21: %v", err)
 	}
 }
 
@@ -285,4 +290,31 @@ func TestOPCUAPointTypes(t *testing.T) {
 		t.Errorf("the type does not parse: %v\n%s", err, src)
 	}
 	newAssembler(s.devices[0]) // panics on a type it cannot hold
+}
+
+// A point carried as octets on the wire (wire: ByteString / ByteArray) is
+// bound as that type, not as the String its STRING would be: the driver
+// then reads the octets as hex and writes hex back as octets (#705).
+func TestOPCUAWireTypes(t *testing.T) {
+	s, err := Resolve(vendored(t, "pepperl-fuchs-ice3", "sick-sig300"), []Device{
+		{Name: "PF1", Profile: "pepperl-fuchs-ice3", Endpoint: "h", Points: []string{"Port1_PdiBytes", "Port1_PdoBytes", "Port1_Status"}},
+		{Name: "SICK1", Profile: "sick-sig300", Endpoint: "h", Points: []string{"Port1_PdiBytes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, od := range s.OPCUADevices() {
+		for _, b := range od.Manifest.Tags {
+			got[b.Name] = b.Type
+		}
+	}
+	for name, want := range map[string]string{
+		"PF1.Port1_PdiBytes": "ByteString", "PF1.Port1_PdoBytes": "ByteString", "PF1_Port1_PdoBytes": "ByteString",
+		"PF1.Port1_Status": "String", "SICK1.Port1_PdiBytes": "ByteArray",
+	} {
+		if got[name] != want {
+			t.Errorf("%s bound as %q, want %q (bindings %v)", name, got[name], want, got)
+		}
+	}
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/lang/ir"
 	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 )
 
@@ -61,6 +62,10 @@ type MappedNode struct {
 	// Tag is the tag address a Variable reads and writes; empty makes the
 	// node an Object that only organizes others.
 	Tag string
+	// Wire, "ByteString" for a STRING tag that holds octets as lowercase
+	// hex (opcua/bytes.go): the node is served as a ByteString, and a
+	// ByteString written to it is stored as hex. Only a STRING tag takes it.
+	Wire string
 }
 
 // mnode is a MappedNode resolved.
@@ -70,6 +75,7 @@ type mnode struct {
 	name     string
 	desc     string
 	tag      string
+	wire     string
 	children []*mnode
 }
 
@@ -97,7 +103,10 @@ func newMappedTree(m *Mapped) (*mappedTree, error) {
 		if n.Name == "" {
 			return nil, fmt.Errorf("mapped node %s: no name", n.NodeID)
 		}
-		mn := &mnode{nid: nid, name: n.Name, desc: n.Desc, tag: n.Tag}
+		if n.Wire != "" && (n.Wire != "ByteString" || n.Tag == "") {
+			return nil, fmt.Errorf("mapped node %s: wire %q: only a Variable can be a ByteString", n.NodeID, n.Wire)
+		}
+		mn := &mnode{nid: nid, name: n.Name, desc: n.Desc, tag: n.Tag, wire: n.Wire}
 		if n.Parent != "" {
 			pid, err := ua.ParseNodeID(n.Parent)
 			if err != nil {
@@ -191,7 +200,11 @@ func (ns *namespace) mappedVariable(n *mnode) (member, bool) {
 	if n.tag == "" {
 		return member{}, false
 	}
-	return ns.resolveAddr(n.tag)
+	m, ok := ns.resolveAddr(n.tag)
+	if ok && n.wire != "" && m.val.Kind == ir.TypeString {
+		m.wire = n.wire
+	}
+	return m, ok
 }
 
 // mappedRef is the reference to a mapped node from its parent (or from

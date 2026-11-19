@@ -38,7 +38,7 @@ type IOLinkSpec struct {
 type PDCarrier struct {
 	// Point is a point-name template with {n} for the port number.
 	Point string `yaml:"point"`
-	// Form is how the point carries the octets: FormU32 or FormHex.
+	// Form is how the point carries the octets: FormU32, FormHex or FormBytes.
 	Form string `yaml:"form"`
 	// Doc cites where the form (and, for u32, where a short image sits)
 	// is documented or was measured, "<docs id> <where>", as a point's
@@ -57,6 +57,10 @@ const (
 	FormU32 = "u32"
 	// FormHex is text, two hex digits per octet (the ifm AL1590's pdin).
 	FormHex = "hex"
+	// FormBytes is the same hex text over a node that is octets on the
+	// wire: the point is a STRING with wire: ByteString or ByteArray, and
+	// has no length of its own, so any process data length fits.
+	FormBytes = "bytes"
 )
 
 // IOLinkPorts is how many IO-Link ports an IO-Link master profile has: the
@@ -105,18 +109,21 @@ func (p *Profile) validateIOLink() error {
 		key, tmpl string
 		types     map[string]bool
 		writable  *bool
+		wire      bool // the point must be carried as octets on the wire
 	}
 	no, yes := false, true
 	carrier := func(key string, c *PDCarrier, writable *bool) (check, error) {
 		switch c.Form {
 		case FormU32:
-			return check{key, c.Point, u32Types, writable}, nil
+			return check{key, c.Point, u32Types, writable, false}, nil
 		case FormHex:
-			return check{key, c.Point, map[string]bool{"STRING": true}, writable}, nil
+			return check{key, c.Point, map[string]bool{"STRING": true}, writable, false}, nil
+		case FormBytes:
+			return check{key, c.Point, map[string]bool{"STRING": true}, writable, true}, nil
 		case "":
-			return check{}, fmt.Errorf("iolink: %s: form is required (%s or %s)", key, FormU32, FormHex)
+			return check{}, fmt.Errorf("iolink: %s: form is required (%s, %s or %s)", key, FormU32, FormHex, FormBytes)
 		}
-		return check{}, fmt.Errorf("iolink: %s: form %q is not %s or %s", key, c.Form, FormU32, FormHex)
+		return check{}, fmt.Errorf("iolink: %s: form %q is not %s, %s or %s", key, c.Form, FormU32, FormHex, FormBytes)
 	}
 	for _, c := range []struct {
 		key string
@@ -143,10 +150,10 @@ func (p *Profile) validateIOLink() error {
 		checks = append(checks, out)
 	}
 	for _, c := range []check{
-		{"pd-valid", s.PDValid, map[string]bool{"BOOL": true}, &no},
-		{"vendor-id", s.VendorID, vendorIDTypes, &no},
-		{"device-id", s.DeviceID, deviceIDTypes, &no},
-		{"status", s.Status, anyPointType, &no},
+		{"pd-valid", s.PDValid, map[string]bool{"BOOL": true}, &no, false},
+		{"vendor-id", s.VendorID, vendorIDTypes, &no, false},
+		{"device-id", s.DeviceID, deviceIDTypes, &no, false},
+		{"status", s.Status, anyPointType, &no, false},
 	} {
 		if c.tmpl != "" {
 			checks = append(checks, c)
@@ -164,6 +171,9 @@ func (p *Profile) validateIOLink() error {
 			}
 			if c.types != nil && !c.types[pt.Type] {
 				return fmt.Errorf("iolink: %s: point %s is %s, which %s cannot be carried in", c.key, name, pt.Type, c.key)
+			}
+			if c.wire && pt.Wire == "" {
+				return fmt.Errorf("iolink: %s: point %s is not carried as octets: form bytes needs wire: ByteString or ByteArray on it", c.key, name)
 			}
 			if c.writable != nil && pt.Writable != *c.writable {
 				if *c.writable {

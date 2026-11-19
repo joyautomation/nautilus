@@ -6,6 +6,7 @@
 package server
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
@@ -30,6 +31,9 @@ type member struct {
 	// and every Value read goes through resolve; the members Browse lists
 	// (children, roots) are only ever named, never read.
 	absent bool
+	// wire is "ByteString" for a STRING of hex served as octets (a mapped
+	// node's Wire).
+	wire string
 }
 
 // walk resolves segs (ir.PathSegments form: member names and "[n]") below
@@ -171,6 +175,9 @@ func isObject(m member) bool {
 // 64-bit type, which is also what Sparkplug publishes.
 func dataType(m member) uint32 {
 	v, t := m.val, m.typ
+	if m.wire == "ByteString" && v.Kind == ir.TypeString {
+		return id.ByteString
+	}
 	if v.Kind == ir.TypeArray {
 		if len(v.Arr) > 0 {
 			var et *ir.Type
@@ -343,6 +350,13 @@ func variant(m member) (*ua.Variant, error) {
 	if v.Kind != ir.TypeArray {
 		if isObject(m) {
 			return nil, fmt.Errorf("%s is an object, not a variable", m.addr)
+		}
+		if dt == id.ByteString {
+			raw, err := hex.DecodeString(v.S)
+			if err != nil {
+				return nil, fmt.Errorf("%s holds %q, which is not hex text: %w", m.addr, v.S, err)
+			}
+			return ua.NewVariant(raw)
 		}
 		return ua.NewVariant(scalar(v, dt))
 	}

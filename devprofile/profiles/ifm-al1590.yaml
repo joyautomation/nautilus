@@ -2,7 +2,7 @@ profile: ifm-al1590
 title: ifm AL1590 8-port IO-Link master, OPC UA server
 maker: ifm electronic
 model: AL1590
-version: 2
+version: 3
 docs:
   - id: al1427
     title: "AL1427 IO-Link master with EtherNet/IP interface, operating instructions, §5.6 OPC UA server and §10.4.3 address space (11/2025), the ifm OPC UA tree the AL1590's follows"
@@ -28,19 +28,49 @@ opcua:
 iolink:                # docs/design/iolink.md §3
   ports: 8
   # pdin is hex text, two digits per octet (measured: '0286' is 02 86).
-  # No pd-out, ids or status yet: they are not served (see notes), so a
-  # port on this master is not identity-checked.
+  # pdout, the ids and the status are NOT measured: their names follow
+  # pdin's (see notes), so they are unverified until read from a real
+  # AL1590, and a port's identity check stands on them.
   pd-in: { point: "Port{n}_Pdin", form: hex, doc: "measured pdin hex text, '0286' is 0x0286" }
+  pd-out: { point: "Port{n}_Pdout", form: hex, unverified: true }
+  vendor-id: "Port{n}_VendorID"
+  device-id: "Port{n}_DeviceID"
+  status: "Port{n}_Status"
 points:
   - { name: "Port{n}_Pdin", type: STRING, repeat: 8,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdin",
       path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/pdin",
       desc: "Port {n}: IO-Link process data in, as hex text", doc: "measured pdin; tree per al1427 §10.4.3" }
+  - { name: "Port{n}_Pdout", type: STRING, repeat: 8, writable: true,
+      node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdout",
+      path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/pdout",
+      desc: "Port {n}: IO-Link process data out, as hex text", unverified: true }
+  - { name: "Port{n}_VendorID", type: UDINT, repeat: 8,
+      node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/vendorid",
+      path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/vendorid",
+      desc: "Port {n}: attached device vendor id (0: no device)", unverified: true }
+  - { name: "Port{n}_DeviceID", type: UDINT, repeat: 8,
+      node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/deviceid",
+      path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/deviceid",
+      desc: "Port {n}: attached device id (0: no device)", unverified: true }
+  - { name: "Port{n}_Status", type: BYTE, repeat: 8,
+      node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/status",
+      path: "{location}/iolinkmaster/port[{n}]/status",
+      desc: "Port {n}: port status (4 = OPERATE)", unverified: true }
 simulator: { block: IFM_AL1590_SIM, source: ifm-al1590.st }
 notes: |
   The simulator turns a word the process model writes (<Master>_Port<n>_Word)
   into the four hex digits pdin carries; a sensor with other process data
   writes Port<n>_Pdin through its own simulator. The objects on the way are
   served as ns=5;s=<path>, the scheme the measured ids follow (not measured
-  themselves). Not served yet: pdout, pin2/pin4 states, the identification
-  and diagnosis variables of al1427 §12.2, and the methods.
+  themselves).
+
+  pdout, vendorid, deviceid and status (added in version 3) are UNVERIFIED
+  names: only pdin was measured. The AL1427 manual (al1427) documents the
+  same data under other names in an OPC 30120-shaped tree, with no node ids:
+  ProcessDataInput / ProcessDataOutput under iolinkdevice/General (BYTE
+  ARRAY, pdout read-write only when DeviceConfigurationDisabled is false,
+  p. 168), VendorID (UINT16, p. 163) and DeviceID (UINT32, p. 162), and Status
+  (BYTE: 4 = OPERATE, p. 156, 162). Which spelling an AL1590 serves, and
+  whether pdout is a text or an octet node, is to be read from one. Not
+  served yet: pin2/pin4 states, the rest of al1427 §12.2, and the methods.

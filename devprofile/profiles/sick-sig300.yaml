@@ -2,8 +2,11 @@ profile: sick-sig300
 title: SICK SIG300 8-port IO-Link master, OPC UA server
 maker: SICK
 model: SIG300
-version: 1
+version: 2
 docs:
+  - id: opc30120
+    title: "OPC 30120 IO-Link companion specification, NodeSet 1.00.1 (2022-03-24): the type model a SIG300's server is said to follow (datasheets); namespace http://opcfoundation.org/UA/IOLink/"
+    url: https://github.com/OPCFoundation/UA-Nodeset/tree/latest/IOLink
   - id: measured
     title: >-
       The node ids a deployed controller's program reads from SIG300 masters, 2026-10:
@@ -19,12 +22,36 @@ opcua:
     - urn:virtual:sick:ns1     # indices 1 and 2: present on the device, URIs not published
     - urn:virtual:sick:ns2
     - urn:virtual:sick:sig300  # index 3: where the port nodes are
+    - http://opcfoundation.org/UA/IOLink/   # index 4: OPC 30120's namespace (the URI is the standard's; the INDEX is a stand-in)
   object-namespace: 3
+iolink:                # docs/design/iolink.md §3, over OPC 30120's variables (below)
+  ports: 8
+  # 30120 types process data as Byte[] (ProcessDataInput/Output under a
+  # port's Device/ParameterSet), so the point is carried as ByteArray.
+  pd-in:  { point: "Port{n}_PdiBytes", form: bytes, doc: "opc30120 ProcessDataInput (ns=1;i=6027)" }
+  pd-out: { point: "Port{n}_PdoBytes", form: bytes, doc: "opc30120 ProcessDataOutput (ns=1;i=6026)" }
+  vendor-id: "Port{n}_VendorID"
+  device-id: "Port{n}_DeviceID"
+  status: "Port{n}_Status"
 points:
   - { name: "Port{n}_Pin4", type: BOOL, repeat: 8, node-id: "ns=3;i=8012", stride: 4, path: "SIG300/Port {n}/Pin 4",
       desc: "Port {n}: pin 4 (C/Q) digital input", doc: "measured ns=3;i=8008+4n" }
   - { name: "Port{n}_Pin2", type: BOOL, repeat: 8, node-id: "ns=3;i=8011", stride: 4, path: "SIG300/Port {n}/Pin 2",
       desc: "Port {n}: pin 2 digital input", doc: "measured ns=3;i=8007+4n" }
+  # OPC 30120 (opc30120): each port's attached device is the Device object
+  # under Port<n>; the variables below are its, by the NodeSet's names and
+  # types. The node ids and paths are stand-ins like the rows above: the
+  # NodeSet defines types, not a server's instance ids.
+  - { name: "Port{n}_PdiBytes", type: STRING, wire: ByteArray, repeat: 8, node-id: "ns=4;s=SIG300/Port {n}/Device/ProcessDataInput", path: "SIG300/Port {n}/Device/ProcessDataInput",
+      desc: "Port {n}: process data in (Byte[]), as hex text", doc: "opc30120 ProcessDataInput", unverified: true }
+  - { name: "Port{n}_PdoBytes", type: STRING, wire: ByteArray, repeat: 8, writable: true, node-id: "ns=4;s=SIG300/Port {n}/Device/ProcessDataOutput", path: "SIG300/Port {n}/Device/ProcessDataOutput",
+      desc: "Port {n}: process data out (Byte[]), as hex text", doc: "opc30120 ProcessDataOutput", unverified: true }
+  - { name: "Port{n}_VendorID", type: UINT, repeat: 8, node-id: "ns=4;s=SIG300/Port {n}/Device/VendorID", path: "SIG300/Port {n}/Device/VendorID",
+      desc: "Port {n}: attached device vendor id (UInt16)", doc: "opc30120 VendorID (ns=1;i=6004)", unverified: true }
+  - { name: "Port{n}_DeviceID", type: UDINT, repeat: 8, node-id: "ns=4;s=SIG300/Port {n}/Device/DeviceID", path: "SIG300/Port {n}/Device/DeviceID",
+      desc: "Port {n}: attached device id (UInt32)", doc: "opc30120 DeviceID (ns=1;i=6005)", unverified: true }
+  - { name: "Port{n}_Status", type: BYTE, repeat: 8, node-id: "ns=4;s=SIG300/Port {n}/ParameterSet/Status", path: "SIG300/Port {n}/ParameterSet/Status",
+      desc: "Port {n}: port status (Byte enum: 4 = OPERATE)", doc: "opc30120 port Status (ns=1;i=6169)", unverified: true }
 notes: |
   UNVERIFIED: every browse name and path here (SIG300/Port n/Pin 4) and the
   URIs of namespaces 1-3 are stand-ins; only the node ids and their BOOL type
@@ -34,3 +61,9 @@ notes: |
   address space (UaExpert can export one). ns=3;i=8029 (port 5, the id after
   pin 4) was also read as BOOL; what it is was not established, so it is not
   served.
+
+  Version 2 adds OPC 30120's IO-Link variables for each port (process data
+  as Byte[], vendor and device id, status), named and typed as the NodeSet
+  has them (opc30120). It does not say what a SIG300 serves: the node ids
+  and the namespace index (4) are stand-ins, UNVERIFIED like the rest, and
+  the ISDU methods (ReadISDU/WriteISDU) wait for PR 5.
