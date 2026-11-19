@@ -254,7 +254,7 @@ type World struct {
 	witnessInc uint64 // the incarnation A and B were commissioned with
 
 	// link state, per directed link
-	cut    [nNodes][nNodes][]int64 // active cuts: the frame kinds each drops (0: all)
+	cut    [nNodes][nNodes][]int64         // active cuts: the frame kinds each drops (0: all)
 	delay  [nNodes][nNodes][]time.Duration // active extra-delay faults
 	loss   [nNodes][nNodes][]int           // active loss faults, percent
 	dup    [nNodes][nNodes][]time.Duration // active duplicate faults: the copy's extra delay bound
