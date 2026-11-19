@@ -95,6 +95,7 @@ var Mutations = []string{
 	"set_retried",              // snmp: a SET is retransmitted after each per-try timeout (#1040 review)
 	"send_no_deadline",         // fence: a send gets no deadline, and one past its budget still starts (design §3.4)
 	"fence_fin",                // fence: a fenced socket is closed with a FIN, not reset (design §3.4)
+	"fragments_unchecked",      // fence: a send split into requests reads the gate once, not before each (3b-3b-2)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

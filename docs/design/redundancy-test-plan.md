@@ -151,6 +151,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | hot takeover on an image with a different build hash | I5 | 4 |
 | the gate is checked once per batch, not before each send (as `hw/base.go` did) | design §3.4 | 3b-3a (`gate_per_batch`) |
 | a command queued under one term of the lease is sent after the replica lost it and won it again | design §3.4, `io.SendGate` term | 3b-3a (`old_term_sent`, #1040 review) |
+| a send split into requests (Write Tag Fragmented) reads the gate once, not before each request | design §3.4, every request | 3b-3b-2 (`fragments_unchecked`) |
 | a Modbus write queued or requeued under one term is sent after the replica lost the lease and won it again | design §3.4 | 3b-3a (`old_term_kept`, #1040 review) |
 | an SNMP SET is retransmitted after a lost answer, so an action-valued object runs twice | design §3.4, every datagram | 3b-3a (`set_retried`, #1040 review) |
 | a send with no deadline | design §3.4 | 3b-3a (`send_no_deadline`) |

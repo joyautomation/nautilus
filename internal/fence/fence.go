@@ -86,6 +86,46 @@ func Fenced(ctx context.Context) bool {
 	return v
 }
 
+type gateKey struct{}
+
+type gateVal struct {
+	g    nio.SendGate
+	term uint64
+}
+
+// WithGate carries a pair's gate, and the lease's term the send was
+// computed under, on ctx: a transport that splits one send into several
+// requests (Write Tag Fragmented) checks it before each (Check), so a gate
+// that closes, or a lease lost and won again, stops the rest.
+func WithGate(ctx context.Context, g nio.SendGate, term uint64) context.Context {
+	if g == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, gateKey{}, gateVal{g, term})
+}
+
+// ErrGateClosed is Check's answer when the request may not go: the gate
+// is closed, or open under another term than the send's.
+var ErrGateClosed = errors.New("write gate closed (or the lease's term moved) before this request: not sent")
+
+// Check reads the gate WithGate put on ctx, immediately before one request
+// of a send: nil to send it, ErrGateClosed (or ctx's error, past its
+// deadline) not to. A ctx with no gate checks only its deadline.
+func Check(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	v, ok := ctx.Value(gateKey{}).(gateVal)
+	if !ok || mut("fragments_unchecked") {
+		return nil
+	}
+	open, _, term := v.g()
+	if !open || (v.term != 0 && term != v.term) {
+		return ErrGateClosed
+	}
+	return nil
+}
+
 // Reset closes c with SO_LINGER 0 when it is a TCP socket: the kernel
 // sends a reset and drops what was still in its send buffer, instead of
 // delivering it late after a FIN. Any other conn is closed plainly.

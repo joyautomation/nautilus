@@ -60,7 +60,7 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"runtime"},
-			to:   u.allBut("lang", "io", "retain", "internal/stproject"),
+			to:   u.allBut("lang", "io", "retain", "internal/stproject", "internal/fence"),
 			why:  "the runtime hosts programs over the io seam; it never knows a driver, the server, alarms or the manifest",
 		},
 		{

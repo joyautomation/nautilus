@@ -3,6 +3,7 @@ package logix
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -145,6 +146,14 @@ func (c *Controller) sendConnected(ctx context.Context, service uint8, path, dat
 	}
 	c.seq++
 	resp, err := c.cli.SendUnitData(ctx, c.connID, c.seq, service, path, data)
+	if errors.Is(err, cip.ErrNotStarted) {
+		// Refused before sending (its fence): the session is untouched,
+		// so it is kept, with what was learned on it, and the sequence
+		// number unused (#1048 review: a broken session would be dialled
+		// again and every template learned anew, inside one budget).
+		c.seq--
+		return cip.MessageRouterResponse{}, fmt.Errorf("logix: %s: %w", c.host, err)
+	}
 	if err != nil {
 		c.broken = true
 		return cip.MessageRouterResponse{}, fmt.Errorf("logix: %s: %w", c.host, err)

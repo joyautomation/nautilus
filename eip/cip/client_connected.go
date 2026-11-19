@@ -9,6 +9,12 @@ import (
 	"github.com/joyautomation/nautilus/internal/fence"
 )
 
+// ErrNotStarted wraps a request refused before anything was sent (its
+// fence: the send deadline passed, or the pair's gate closed): the
+// connection is untouched, and a caller keeps it rather than dialling
+// again (#1048 review).
+var ErrNotStarted = errors.New("cip: request not started")
+
 // SendUnitData sends a connected explicit (Class 3) message on an established
 // connection and returns the inner MessageRouterResponse. The caller owns the
 // connection ID (from Forward_Open) and the per-connection sequence counter —
@@ -39,8 +45,11 @@ func (c *Client) SendUnitData(ctx context.Context, connID uint32, seq uint16, se
 	if c.tcp == nil {
 		return MessageRouterResponse{}, errors.New("cip client: not connected")
 	}
-	if err := ctx.Err(); err != nil {
-		return MessageRouterResponse{}, err // not started: a fenced send past its deadline
+	if err := fence.Check(ctx); err != nil {
+		// Not started: past its deadline, or the gate closed since the
+		// send began (a fragment). Nothing went out, so the session is
+		// as good as before (ErrNotStarted: the caller keeps it).
+		return MessageRouterResponse{}, fmt.Errorf("%w: %w", ErrNotStarted, err)
 	}
 	hdr := EncapHeader{Command: CmdSendUnitData, SessionHandle: c.sessHdl}
 	defer arm(ctx, c.tcp)()

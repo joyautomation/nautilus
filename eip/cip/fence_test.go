@@ -116,3 +116,49 @@ func TestFencedSendUnitDataResetIsATimer(t *testing.T) {
 		t.Fatalf("the controller side read to %v; want ECONNRESET", err)
 	}
 }
+
+// 3b-3b: a request whose context carries the pair's gate (fence.WithGate:
+// one fragment of a Write Tag Fragmented) reads it before it is sent; with
+// the gate closed, or the lease's term moved, nothing reaches the
+// controller. fragments_unchecked turns it red.
+func TestSendUnitDataChecksTheGateBeforeEachRequest(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		open bool
+		term uint64
+	}{{"gate closed", false, 5}, {"term moved", true, 9}} {
+		t.Run(c.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			got := make(chan int64, 1)
+			go func() {
+				pc, err := ln.Accept()
+				if err != nil {
+					got <- -1
+					return
+				}
+				defer pc.Close()
+				_ = pc.SetReadDeadline(time.Now().Add(time.Second))
+				n, _ := io.Copy(io.Discard, pc)
+				got <- n
+			}()
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cl := &Client{Log: slog.Default(), tcp: conn}
+			gate := func() (bool, time.Duration, uint64) { return c.open, time.Second, c.term }
+			ctx := fence.WithGate(context.Background(), gate, 5) // the write was computed under term 5
+			if _, err := cl.SendUnitData(ctx, 1, 1, 0x4D, []byte{0x91, 0x02, 'S', 'P'}, []byte{0xCA, 0, 1, 0, 0, 0, 0, 0}); !errors.Is(err, fence.ErrGateClosed) {
+				t.Fatalf("SendUnitData: %v; want ErrGateClosed (not sent)", err)
+			}
+			conn.Close()
+			if n := <-got; n != 0 {
+				t.Fatalf("the controller received %d bytes; want nothing", n)
+			}
+		})
+	}
+}

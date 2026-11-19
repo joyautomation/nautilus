@@ -95,7 +95,9 @@ break one changes this section first and says why.
   may use it without learning the vote protocol: the pair's gate reaches a
   driver only as `io.SendGate`.
 - Languages import only each other and the tag-file shared kernel.
-- Runtime imports only Languages, `io`, `retain`, `internal/stproject`.
+- Runtime imports only Languages, `io`, `retain`, `internal/stproject` and `internal/fence`
+  (its READ/WRITE channels' sends run on a fenced context, redundancy design §3.4; fence
+  imports only `io`).
   It never knows a driver, the server, alarms or the manifest.
 - Alarms import only `lang/ir` and `retain`.
 - Field and IT drivers and `sparkplug/host` never import `runtime`,

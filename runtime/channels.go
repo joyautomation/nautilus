@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 )
 
@@ -37,6 +39,9 @@ type ChannelIO interface {
 func commStatus(err error) int {
 	if err == nil {
 		return ir.CommOK
+	}
+	if errors.Is(err, fence.ErrGateClosed) {
+		return ir.CommLost // refused by the pair's gate mid-write, as do() refuses one
 	}
 	var s interface{ CommStatus() int }
 	if errors.As(err, &s) && s.CommStatus() != ir.CommOK {
@@ -91,6 +96,12 @@ type commHub struct {
 	gate func() bool
 	term func() uint64
 	gen  atomic.Uint64
+	// send, when set, is a pair's gate with its send budget and term, read
+	// in one look (design §3.4): a write is checked on it, runs to its
+	// budget as a deadline on a fenced context, and carries it so a
+	// transport that splits one write into requests checks before each
+	// (fence.Check).
+	send nio.SendGate
 
 	stop     chan struct{}
 	stopped  bool            // under mu: a post after close is refused
@@ -152,6 +163,14 @@ func newCommHub(chs []Channel) *commHub {
 func (h *commHub) setGate(gate func() bool, term func() uint64) {
 	if h != nil {
 		h.gate, h.term = gate, term
+	}
+}
+
+// setSendGate installs a pair's send gate (see send). Call before the
+// first post.
+func (h *commHub) setSendGate(g nio.SendGate) {
+	if h != nil {
+		h.send = g
 	}
 }
 
@@ -241,9 +260,23 @@ func (h *commHub) serve(w *commWorker) {
 // term pins the gate to the posting term: the term only grows, the write
 // was stamped before the gate was read, and it is still the same after.
 func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
+	var deadline time.Time
 	if req.write {
-		if h.gate != nil && !h.gate() {
-			return ir.CommResult{Status: ir.CommLost}
+		if h.send != nil {
+			// A pair (design §3.4): gate, budget and term in ONE read, so
+			// they cannot straddle a renewal or a lease lost and won back.
+			dl, term, ok := fence.Begin(h.send, time.Now())
+			if !ok || !fence.Started(dl, time.Now()) {
+				return ir.CommResult{Status: ir.CommLost}
+			}
+			if h.term != nil && term != req.lead {
+				return ir.CommResult{Status: ir.CommLost}
+			}
+			deadline = dl
+		} else {
+			if h.gate != nil && !h.gate() {
+				return ir.CommResult{Status: ir.CommLost}
+			}
 		}
 		if req.lead != h.leadership() {
 			return ir.CommResult{Status: ir.CommLost}
@@ -252,6 +285,12 @@ func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
 	ctx, cancel := context.WithTimeout(h.base, w.timeout)
 	defer cancel()
 	if req.write {
+		if h.send != nil {
+			var fcancel context.CancelFunc
+			ctx, fcancel = fence.Context(ctx, deadline)
+			defer fcancel()
+			ctx = fence.WithGate(ctx, h.send, req.lead)
+		}
 		return ir.CommResult{Status: commStatus(w.ch.Write(ctx, req.variable, req.val, req.elem))}
 	}
 	v, err := w.ch.Read(ctx, req.variable, req.val, req.elem)
