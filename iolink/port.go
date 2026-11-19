@@ -120,6 +120,9 @@ func (g *OutGate) forget() {
 	clear(g.written)
 }
 
+// Drives reports whether the identity now allows the port to be driven.
+func (g *OutGate) Drives() bool { return g.state.Drives() }
+
 // Write records item i's value. It is refused when the identity does not
 // allow driving the port, and when the value does not fit its item (the
 // image is encoded here, so a value that cannot be sent is an error on the

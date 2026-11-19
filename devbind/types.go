@@ -58,13 +58,28 @@ func (s *Set) TagsByDevice() []DeviceTags {
 			dt.Tags = append(dt.Tags, tagfile.Tag{Name: d.Name + "__Outages", Role: "input", Type: "DINT", Desc: d.Name + ": times it stopped answering since start"})
 		}
 		for _, pt := range d.points {
-			if !pt.Writable {
+			// A listed port drives its process data out (and the valid flag)
+			// through the gate: no command tag for the master's own.
+			if !pt.Writable || d.owned(pt.Name) {
 				continue
 			}
 			dt.Tags = append(dt.Tags, tagfile.Tag{
 				Name: CommandTag(d.Name, pt.Name), Role: "output", Type: strings.ToUpper(pt.Type),
 				Unit: pt.Unit, Desc: joinDesc(d.Name, pt.Desc),
 			})
+		}
+		for _, pd := range d.ports {
+			where := fmt.Sprintf("%s port %d: %s", d.Name, pd.Num, pd.dev.IODD.Identity.DeviceName)
+			dt.Tags = append(dt.Tags,
+				tagfile.Tag{Name: pd.Name, Role: "input", Type: pd.dev.TypeName, Desc: where},
+				tagfile.Tag{Name: IdentityTag(pd.Name), Role: "input", Type: "INT", Desc: pd.Name + ": identity check (0 Ok, 1 NoDevice, 2 WrongDevice, 3 Unchecked)"},
+				tagfile.Tag{Name: IdentityFaultTag(pd.Name), Role: "input", Type: "BOOL", Desc: pd.Name + ": wrong or missing device on " + d.Name + " port " + fmt.Sprint(pd.Num)})
+			for _, c := range pd.dev.Commands {
+				dt.Tags = append(dt.Tags, tagfile.Tag{
+					Name: CommandPortTag(pd.Name, c.Name), Role: "output", Type: c.Type,
+					Unit: c.Unit, Desc: joinDesc(pd.Name, c.Desc),
+				})
+			}
 		}
 		out = append(out, dt)
 	}
