@@ -12,8 +12,8 @@ import (
 )
 
 func TestQuorumStatusMapping(t *testing.T) {
-	got := quorumStatus(node.Status{Self: "a", Peer: "b", Leader: "b", Leading: false, Acquisitions: 3})
-	want := Status{Mode: "quorum", Pod: "a", Leader: "b", IsLeader: false, Transitions: 3}
+	got := quorumStatus(node.Status{Self: "a", Peer: "b", Leader: "b", LeaderAddr: "ctl-b:8080", Leading: false, Acquisitions: 3})
+	want := Status{Mode: "quorum", Pod: "a", Leader: "b", LeaderAddr: "ctl-b:8080", IsLeader: false, Transitions: 3}
 	if got != want {
 		t.Fatalf("status %+v, want %+v", got, want)
 	}
@@ -25,7 +25,7 @@ func TestQuorumHealth(t *testing.T) {
 	if !quorum.BootClock {
 		t.Skip("controllers need CLOCK_BOOTTIME")
 	}
-	q, err := NewQuorum(node.Options{Pair: "plant", Self: "a", Peer: "b", PeerAddr: "127.0.0.1:1", WitnessAddr: "127.0.0.1:1",
+	q, err := NewQuorum(node.Options{Cluster: node.NewClusterID(), Self: "a", Peer: "b", PeerAddr: "127.0.0.1:1", WitnessAddr: "127.0.0.1:1",
 		Lease: 800 * time.Millisecond, StatePath: filepath.Join(t.TempDir(), "q.state"), Token: "t"})
 	if err != nil {
 		t.Fatal(err)

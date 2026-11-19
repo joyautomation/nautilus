@@ -50,15 +50,25 @@ var Mutations = []string{
 	"both_lost_recommission",      // both controllers uncommissioned, the pair re-commissions on its own (#976's automatic recovery)
 	"alarm_on_heard",              // an uncommissioned controller alarms although its peer's committed incarnation answered it
 	"recommission_any_floor",      // an operator's floor at or below what the controller knows is taken
+	"restart_wait_current_lease",  // a voter restarted with a shorter lease waits only that one (#1021 review)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.
-	"gate_on_tick",              // the gate is judged on the elector's look, not when it is read
-	"peer_host_trusted",         // the peer listener answers a trusted Host without the peer token
-	"persisted_before_write",    // a write is reported durable before it is on disk
-	"state_in_place",            // the state file is rewritten in place, so a crash tears it
-	"nonce_fixed",               // the boot nonce is the same at every start
-	"lease_unchecked",           // a voter grants a request whose lease outlives its own promise
-	"witness_rebuilds_silently", // the witness draws a new incarnation over a state file it can't read
+	"gate_on_tick",               // the gate is judged on the elector's look, not when it is read
+	"peer_host_trusted",          // the peer listener answers a trusted Host without the peer token
+	"persisted_before_write",     // a write is reported durable before it is on disk
+	"state_in_place",             // the state file is rewritten in place, so a crash tears it
+	"nonce_fixed",                // the boot nonce is the same at every start
+	"lease_unchecked",            // a voter grants a request whose lease outlives its own promise
+	"witness_rebuilds_silently",  // the witness draws a new incarnation over a state file it can't read
+	"controller_lease_unchecked", // a controller's voter grants a request whose lease outlives its own promise
+	"controller_write_ignored",   // a controller's failed state write is reported durable
+	"witness_write_ignored",      // the witness's failed state write is reported durable
+	"gate_ignores_health",        // the gate stays open for unhealthy scans or after Release
+	"controller_unlocked",        // a controller's state file isn't locked to one process
+	"witness_unlocked",           // the witness's state directory isn't locked to one process
+	"no_term_cap",                // the witness takes a vote that jumps the terms
+	"controller_no_term_cap",     // a controller's voter takes a vote that jumps the terms
+	"hello_unbound",              // the client-token MAC binds no names or direction: a reflected question passes
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

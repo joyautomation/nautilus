@@ -68,7 +68,7 @@ func (q *Quorum) Run(ctx context.Context)  { q.n.Run(ctx) }
 func (q *Quorum) Release()                 { q.n.Release() }
 func (q *Quorum) Status() Status           { return quorumStatus(q.n.Status()) }
 func quorumStatus(s node.Status) Status {
-	return Status{Mode: "quorum", Pod: s.Self, Leader: s.Leader, IsLeader: s.Leading, Transitions: s.Acquisitions}
+	return Status{Mode: "quorum", Pod: s.Self, Leader: s.Leader, LeaderAddr: s.LeaderAddr, IsLeader: s.Leading, Transitions: s.Acquisitions}
 }
 
 // SetHealth makes renewing and campaigning depend on h, asked at every

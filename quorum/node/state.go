@@ -57,23 +57,32 @@ func (s *State) Save(st quorum.VoterState) error {
 	if mut("state_in_place") {
 		return s.writeFile(s.Path, b)
 	}
-	if err := s.writeFile(s.tmp(), b); err != nil {
-		_ = os.Remove(s.tmp())
-		return err
-	}
-	if err := os.Rename(s.tmp(), s.Path); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(s.Path))
+	return writeAtomic(s.Path, b, s.write)
 }
 
+// writeAtomic makes b the content of path: written to a temporary file
+// beside it, fsynced, renamed over it, and the directory fsynced. write,
+// when not nil, replaces the write (tests).
+func writeAtomic(path string, b []byte, write func(*os.File, []byte) (int, error)) error {
+	tmp := path + ".tmp"
+	if err := writeFile(tmp, b, write); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+func (s *State) writeFile(path string, b []byte) error { return writeFile(path, b, s.write) }
+
 // writeFile writes b to path from its start, truncating it, and fsyncs it.
-func (s *State) writeFile(path string, b []byte) error {
+func writeFile(path string, b []byte, write func(*os.File, []byte) (int, error)) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	write := s.write
 	if write == nil {
 		write = (*os.File).Write
 	}

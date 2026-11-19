@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -62,16 +64,31 @@ type Witness struct {
 
 type witnessPair struct {
 	name    string
+	members string // "a,b": the two controllers bound to this cluster
 	mu      sync.Mutex
 	v       *quorum.Voter
 	w       *writer
 	waiters map[waitKey]chan quorum.Reply
 	failing string
+	refused map[string]string // the last lease refusal reported per sender
 	log     *slog.Logger
 }
 
-// stateSuffix names a pair's state file in the witness's directory.
-const stateSuffix = ".quorum"
+// stateSuffix names a cluster's state file in the witness's directory;
+// membersSuffix the file binding it to its two controllers.
+const (
+	stateSuffix   = ".quorum"
+	membersSuffix = ".members"
+)
+
+var memberName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,15}$`)
+
+// validMembers reports whether h is a MembersHeader value: two distinct
+// names, sorted.
+func validMembers(h string) bool {
+	x, y, ok := strings.Cut(h, ",")
+	return ok && memberName.MatchString(x) && memberName.MatchString(y) && x < y
+}
 
 // NewWitness opens the witness's state directory. A state file it can't
 // read stops the start, unless Rebuild: then it is moved aside and the
@@ -106,9 +123,13 @@ func NewWitness(o WitnessOptions) (*Witness, error) {
 	if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 		return nil, err
 	}
-	free, err := lock(filepath.Join(o.Dir, ".lock"))
-	if err != nil {
-		return nil, err
+	free := func() {}
+	if !mut("witness_unlocked") {
+		f, err := lock(filepath.Join(o.Dir, ".lock"))
+		if err != nil {
+			return nil, err
+		}
+		free = f
 	}
 	w := &Witness{o: o, log: o.Log, now: now, free: free, pairs: map[string]*witnessPair{}}
 	files, _ := filepath.Glob(filepath.Join(o.Dir, "*"+stateSuffix))
@@ -160,17 +181,18 @@ func (w *Witness) Close() {
 	}
 }
 
-// Handler serves votes for every pair: POST Prefix + pair + "/vote".
+// Handler serves votes for every cluster: POST Prefix + cluster + "/vote".
 // Mount it behind Guard.
 func (w *Witness) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+Prefix+"{pair}/vote", w.serveVote)
+	mux.HandleFunc("POST "+Prefix+"{cluster}/vote", w.serveVote)
 	return mux
 }
 
 // PairStatus is one pair's state at the witness.
 type PairStatus struct {
-	Pair        string
+	Cluster     string
+	Members     string
 	Incarnation uint64
 	Promised    uint64
 	GrantedTo   string
@@ -189,18 +211,26 @@ func (w *Witness) Pairs() []PairStatus {
 		p.mu.Lock()
 		st := p.v.State()
 		p.mu.Unlock()
-		out = append(out, PairStatus{Pair: p.name, Incarnation: st.Incarnation, Promised: st.Promised, GrantedTo: string(st.GrantedTo)})
+		out = append(out, PairStatus{Cluster: p.name, Members: p.members, Incarnation: st.Incarnation, Promised: st.Promised, GrantedTo: string(st.GrantedTo)})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Pair < out[j].Pair })
+	sort.Slice(out, func(i, j int) bool { return out[i].Cluster < out[j].Cluster })
 	return out
 }
 
-// pair returns the named pair's voter, starting it from its state file at
-// its first vote.
-func (w *Witness) pair(name string) (*witnessPair, error) {
+// errMembers: a vote names other members than the cluster is bound to.
+var errMembers = errors.New("this cluster is bound to other controllers")
+
+// pair returns the cluster's voter, starting it from its state file at its
+// first vote. A cluster is bound to its two controllers (members) at its
+// first vote, durably, before its voter exists; a vote naming others is
+// refused (errMembers).
+func (w *Witness) pair(name, members string) (*witnessPair, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if p, ok := w.pairs[name]; ok {
+		if p.members != members {
+			return nil, errMembers
+		}
 		return p, nil
 	}
 	if w.ctx == nil || w.ctx.Err() != nil {
@@ -209,13 +239,25 @@ func (w *Witness) pair(name string) (*witnessPair, error) {
 	if len(w.pairs) >= w.o.MaxPairs {
 		return nil, fmt.Errorf("this witness serves %d pairs already", w.o.MaxPairs)
 	}
+	mpath := filepath.Join(w.o.Dir, name+membersSuffix)
+	switch b, err := os.ReadFile(mpath); {
+	case err == nil && strings.TrimSpace(string(b)) != members:
+		return nil, errMembers
+	case errors.Is(err, fs.ErrNotExist):
+		if err := writeAtomic(mpath, []byte(members+"\n"), nil); err != nil {
+			return nil, err
+		}
+	case err != nil:
+		return nil, err
+	}
 	file := &State{Path: filepath.Join(w.o.Dir, name+stateSuffix), write: w.o.write}
 	st, err := file.Load()
 	if err != nil && !errors.Is(err, ErrNoState) {
 		// Unreadable since the start checked it: never redrawn quietly.
 		return nil, err
 	}
-	p := &witnessPair{name: name, waiters: map[waitKey]chan quorum.Reply{}, log: w.log.With("pair", name)}
+	p := &witnessPair{name: name, members: members, waiters: map[waitKey]chan quorum.Reply{},
+		refused: map[string]string{}, log: w.log.With("cluster", name, "members", members)}
 	v, first := quorum.NewWitness(w.o.Self, w.o.Lease, st, w.now(), w.o.draw)
 	p.v = v
 	p.w = newWriter(file.Save, p.persisted)
@@ -231,7 +273,7 @@ func (w *Witness) pair(name string) (*witnessPair, error) {
 
 func (p *witnessPair) persisted(seq uint64, err error) {
 	p.mu.Lock()
-	for _, r := range p.v.Persisted(seq, err == nil) {
+	for _, r := range p.v.Persisted(seq, err == nil || mut("witness_write_ignored")) {
 		if ch, ok := p.waiters[keyFor(r)]; ok {
 			delete(p.waiters, keyFor(r))
 			ch <- r
@@ -249,17 +291,13 @@ func (p *witnessPair) persisted(seq uint64, err error) {
 }
 
 func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("pair")
-	if !ValidPair(name) {
+	name := r.PathValue("cluster")
+	if !ValidCluster(name) {
 		http.NotFound(rw, r)
 		return
 	}
 	if !w.running.Load() {
 		http.Error(rw, "not running", http.StatusServiceUnavailable)
-		return
-	}
-	if !leaseOK(r, w.o.Lease) {
-		http.Error(rw, fmt.Sprintf("lease missing or longer than this witness's %v", w.o.Lease), http.StatusConflict)
 		return
 	}
 	b, err := readFrame(r)
@@ -268,14 +306,43 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "bad frame", http.StatusBadRequest)
 		return
 	}
-	p, err := w.pair(name)
+	members := r.Header.Get(MembersHeader)
+	if !validMembers(members) || (members != memberPair(req.From, members)) {
+		w.log.Error("witness: refused a vote from outside the pair", "cluster", name, "from", req.From, "members", members)
+		http.Error(rw, "not a member of this pair", http.StatusForbidden)
+		return
+	}
+	p, err := w.pair(name, members)
+	if errors.Is(err, errMembers) {
+		w.log.Error("witness: refused a vote naming other members than the cluster is bound to", "cluster", name, "from", req.From, "members", members)
+		http.Error(rw, err.Error(), http.StatusForbidden)
+		return
+	}
 	if err != nil {
-		w.log.Error("witness: refusing a pair", "pair", name, "err", err)
+		w.log.Error("witness: refusing a cluster", "cluster", name, "err", err)
 		http.Error(rw, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	stated := statedLease(r)
 	p.mu.Lock()
-	persist, replies := p.v.Handle(w.now(), req)
+	now := w.now()
+	if limit := p.v.MaxRequestLease(now); !leaseFits(stated, limit) && !mut("lease_unchecked") {
+		msg := fmt.Sprintf("%s's lease %v is longer than this witness's %v (or missing)", req.From, stated, limit)
+		if p.refused[string(req.From)] != msg {
+			p.refused[string(req.From)] = msg
+			p.log.Error("witness: refused a vote for its lease: the pair's lease is longer than --lease", "detail", msg)
+		}
+		p.mu.Unlock()
+		http.Error(rw, msg, http.StatusConflict)
+		return
+	}
+	if st := p.v.State(); termJump(req.Term, st.Promised, st.Floor) && !mut("no_term_cap") {
+		p.mu.Unlock()
+		p.log.Error("witness: refused a vote that would jump the terms", "from", req.From, "term", req.Term, "promised", st.Promised)
+		http.Error(rw, "term jump", http.StatusConflict)
+		return
+	}
+	persist, replies := p.v.Handle(now, req)
 	var ch chan quorum.Reply
 	if len(replies) == 0 && persist != nil {
 		ch = make(chan quorum.Reply, 1)
@@ -290,4 +357,13 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		}
 		p.mu.Unlock()
 	})
+}
+
+// memberPair returns members when from is one of its two names, else "".
+func memberPair(from quorum.NodeID, members string) string {
+	x, y, _ := strings.Cut(members, ",")
+	if string(from) == x || string(from) == y {
+		return members
+	}
+	return ""
 }

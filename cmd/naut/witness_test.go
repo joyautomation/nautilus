@@ -22,6 +22,8 @@ func witnessEnv(m map[string]string) func(string) string {
 // naut witness refuses to start without a peer token (test plan §8.2 case
 // 7) or a state directory, and over a state file it can't read unless
 // --rebuild.
+const cluster = "0123456789abcdef0123456789abcdef"
+
 func TestWitnessRefusesToStart(t *testing.T) {
 	dir := t.TempDir()
 	var errb bytes.Buffer
@@ -34,7 +36,7 @@ func TestWitnessRefusesToStart(t *testing.T) {
 		t.Fatalf("no state dir: exit %d, %q", code, errb.String())
 	}
 	good, _ := quorum.VoterState{Incarnation: 5}.MarshalBinary()
-	if err := os.WriteFile(filepath.Join(dir, "plant.quorum"), good[:len(good)-2], 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, cluster+".quorum"), good[:len(good)-2], 0o600); err != nil {
 		t.Fatal(err)
 	}
 	errb.Reset()
@@ -64,11 +66,12 @@ func TestWitnessServesVotes(t *testing.T) {
 	}
 	body, _ := quorum.Request{From: "a", Nonce: 3, ID: 1}.MarshalBinary()
 	post := func(token string) *http.Response {
-		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+node.Prefix+"plant/vote", bytes.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+node.Prefix+cluster+"/vote", bytes.NewReader(body))
 		if token != "" {
 			req.Header.Set(node.TokenHeader, token)
 		}
 		req.Header.Set(node.LeaseHeader, strconv.FormatInt(int64(time.Second), 10))
+		req.Header.Set(node.MembersHeader, "a,b")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -86,7 +89,7 @@ func TestWitnessServesVotes(t *testing.T) {
 	if code := <-exited; code != 0 {
 		t.Fatalf("exit %d after stop", code)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "plant.quorum")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, cluster+".quorum")); err != nil {
 		t.Fatalf("no state file for the pair in $STATE_DIRECTORY: %v", err)
 	}
 }

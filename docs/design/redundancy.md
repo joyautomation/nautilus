@@ -674,20 +674,47 @@ when its members address each other by DNS name, so peer traffic is kept apart f
 `quorum` is sans-IO; `quorum/node` drives it on real sockets, files and clocks, under the
 same driver contract as the simulator.
 
-- **Votes are HTTP.** A vote is `POST /quorum/v1/<pair>/vote` with the binary `Request`
+- **Votes are HTTP.** A vote is `POST /quorum/v1/<cluster>/vote` with the binary `Request`
   frame, answered with the `Reply` frame. A handshake message is `POST …/adopt`, answered
   204. The client-token check is `GET …/hello`. Connections are kept alive, and each call has
   a deadline of lease/8. A grant waiting for its voter's fsync is answered when the write
   completes, or not at all.
-- **Two headers on every call.** `X-Nautilus-Cluster` carries the peer token, the header
-  `oplog` already uses, so one check guards the whole peer port. `X-Nautilus-Lease` carries the
-  sender's lease. A voter refuses a request whose lease is longer than its own, because the
-  lease would outlive the promise it rests on. That covers two controllers with different
-  `lease:` values and a witness started with a shorter `--lease` than the pair's. A longer
-  witness lease is safe; it only slows a takeover.
-- **The client-token check** sends HMAC-SHA256, keyed with the peer token, over a fresh
-  challenge and the client token. The client token never leaves the process, and the
-  challenge keeps an old answer from being replayed.
+- **Three headers on every call.**
+  - `X-Nautilus-Cluster` carries the peer token, the header `oplog` already uses, so one check
+    guards the whole peer port.
+  - `X-Nautilus-Members` names the pair's two controllers (below).
+  - `X-Nautilus-Lease` carries the sender's lease. A voter refuses a request whose lease is
+    longer than its own, because the lease would outlive the promise it rests on. That covers
+    two controllers with different `lease:` values, and a witness started with a shorter
+    `--lease` than the pair's. The refusal is logged and raised on both sides
+    (`redundancy.lease-mismatch`), never silent. A longer witness lease is safe; it only slows
+    a takeover.
+- **A change of lease across a restart.** A promise can outlive its process. So the state
+  file records the longest lease a promise may still run under (`VoterState.Lease`). A voter
+  restarted with a shorter lease waits that longer one out before it grants. Until then it
+  still accepts requests stating it, so a live leader's renewals are seen. Its first grant
+  after the wait records its own lease. Without this, a witness rolled from 4 s to 2 s
+  granted B inside A's 4 s lease (#1021 review).
+- **Pairs never share a voter.** The witness keys each pair by a **cluster ID**: 128 random
+  bits drawn when the pair is commissioned (3c), not the project name, so two sites that run
+  one project never meet. At its first vote, a cluster is bound to its two controllers, in a
+  `<cluster>.members` file made durable before its voter exists. A vote from anyone else, or
+  naming other members, is refused.
+- **No term jumps.** A request for a term more than 2^20 above what a voter has promised (or
+  its floor) is refused and logged, so a token holder or a bug can't push a pair's terms to
+  the top of the range. An operator's re-commission floor must stay within 2^19 of the known
+  terms.
+- **The client-token check** sends HMAC-SHA256, keyed with the peer token, over the direction,
+  the asker's and answerer's names, a fresh challenge and the client token.
+  - The client token never leaves the process.
+  - The challenge keeps an old answer from being replayed.
+  - The names and the direction mean an asker's own question, reflected back at it, doesn't
+    pass as its peer's answer. A controller answers only its peer.
+- **The witness's port** cuts off slow clients (read and header timeouts) and serves at most
+  256 connections at once.
+- **`Term`** is the last fencing token the controller led under. It only rises, as the
+  Kubernetes elector's does; the runtime's channels rely on that. The gate (`IsLeader`) is
+  what says whether it leads now.
 - **State files.** Each is written whole to a temporary file, fsynced, renamed over the old
   one, and the directory fsynced. A crash at any instant leaves the old state or the new
   one. An exclusive lock keeps a second process off the same file.
@@ -697,7 +724,8 @@ same driver contract as the simulator.
     re-commission. A manifest or flag override exists. PR 3b wires it and checks that a
     redeploy keeps it.
   - **On the witness,** `naut witness --state <dir>` (default `$STATE_DIRECTORY`) holds one
-    `<pair>.quorum` per pair. A pair with no file gets a new incarnation at its first vote.
+    `<cluster>.quorum` and one `<cluster>.members` per pair. A pair with no file gets a new
+    incarnation at its first vote.
   - **An unreadable file.** A controller with an unreadable file starts uncommissioned and
     keeps the file aside. The witness refuses to start over an unreadable file unless
     `--rebuild` is given: the file is then kept aside and the pair gets a new incarnation.

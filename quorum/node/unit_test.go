@@ -19,6 +19,9 @@ import (
 
 const testToken = "peer-secret-0123456789"
 
+// testCluster is a cluster ID for tests.
+const testCluster = "0123456789abcdef0123456789abcdef"
+
 // fakeClock is a clock a test moves by hand.
 type fakeClock struct{ t atomic.Int64 }
 
@@ -35,7 +38,7 @@ func voteBody(t *testing.T, r quorum.Request) []byte {
 }
 
 func testOptions(t *testing.T, self, peer quorum.NodeID) Options {
-	return Options{Pair: "plant", Self: self, Peer: peer, PeerAddr: "127.0.0.1:1", WitnessAddr: "127.0.0.1:1",
+	return Options{Cluster: testCluster, Self: self, Peer: peer, PeerAddr: "127.0.0.1:1", WitnessAddr: "127.0.0.1:1",
 		Lease: 400 * time.Millisecond, StatePath: filepath.Join(t.TempDir(), "quorum.state"), Token: testToken}
 }
 
@@ -64,7 +67,7 @@ func TestGuardRequiresThePeerToken(t *testing.T) {
 		{"ctl-b:9450", testToken, http.StatusTeapot},
 		{"10.1.2.3:9450", testToken, http.StatusTeapot},
 	} {
-		r := httptest.NewRequest(http.MethodPost, "http://"+c.host+Prefix+"plant/vote", nil)
+		r := httptest.NewRequest(http.MethodPost, "http://"+c.host+Prefix+testCluster+"/vote", nil)
 		if c.token != "" {
 			r.Header.Set(TokenHeader, c.token)
 		}
@@ -98,10 +101,11 @@ func TestVoteLeaseLongerThanThePromiseRefused(t *testing.T) {
 		{strconv.FormatInt(int64(time.Second), 10), http.StatusOK},
 		{strconv.FormatInt(int64(time.Second/2), 10), http.StatusOK},
 	} {
-		r := httptest.NewRequest(http.MethodPost, Prefix+"plant/vote", bytes.NewReader(voteBody(t, quorum.Request{From: "a", Nonce: 5, ID: 1})))
+		r := httptest.NewRequest(http.MethodPost, Prefix+testCluster+"/vote", bytes.NewReader(voteBody(t, quorum.Request{From: "a", Nonce: 5, ID: 1})))
 		if c.lease != "" {
 			r.Header.Set(LeaseHeader, c.lease)
 		}
+		r.Header.Set(MembersHeader, "a,b")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, r)
 		if rec.Code != c.want {
@@ -130,8 +134,8 @@ func TestGateJudgedWhenRead(t *testing.T) {
 		t.Fatal("closed before the lease end")
 	}
 	clk.add(time.Millisecond)
-	if e.IsLeader() || e.Term() != 0 {
-		t.Fatalf("at the lease end, with no look since: IsLeader %v, Term %d; want closed, 0", e.IsLeader(), e.Term())
+	if e.IsLeader() || e.Term() != 7 {
+		t.Fatalf("at the lease end, with no look since: IsLeader %v, Term %d; want closed, and the last term (7) kept", e.IsLeader(), e.Term())
 	}
 }
 
@@ -183,9 +187,9 @@ func TestNewRefuses(t *testing.T) {
 		t.Error("started a pair member without a peer token")
 	}
 	o = testOptions(t, "a", "b")
-	o.Pair = "../etc"
+	o.Cluster = "../etc"
 	if _, err := New(o); err == nil {
-		t.Error("took a pair name that is a path")
+		t.Error("took a cluster ID that is a path")
 	}
 	o = testOptions(t, "a", "a")
 	if _, err := New(o); err == nil {
@@ -253,8 +257,9 @@ func TestGrantLeavesOnlyAfterTheWrite(t *testing.T) {
 	vote := func(req quorum.Request) chan *httptest.ResponseRecorder {
 		out := make(chan *httptest.ResponseRecorder, 1)
 		go func() {
-			r := httptest.NewRequest(http.MethodPost, Prefix+"plant/vote", bytes.NewReader(voteBody(t, req)))
+			r := httptest.NewRequest(http.MethodPost, Prefix+testCluster+"/vote", bytes.NewReader(voteBody(t, req)))
 			r.Header.Set(LeaseHeader, strconv.FormatInt(int64(time.Second), 10))
+			r.Header.Set(MembersHeader, "a,b")
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, r)
 			out <- rec
@@ -295,7 +300,7 @@ func TestGrantLeavesOnlyAfterTheWrite(t *testing.T) {
 func TestWitnessRefusesUnreadableStateWithoutRebuild(t *testing.T) {
 	dir := t.TempDir()
 	good, _ := quorum.VoterState{Incarnation: 77}.MarshalBinary()
-	path := filepath.Join(dir, "plant"+stateSuffix)
+	path := filepath.Join(dir, testCluster+stateSuffix)
 	if err := os.WriteFile(path, good[:len(good)-1], 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +318,7 @@ func TestWitnessRefusesUnreadableStateWithoutRebuild(t *testing.T) {
 	}
 	running(t, w.Run)
 	waitFor(t, time.Second, func() bool { return w.running.Load() })
-	p, err := w.pair("plant")
+	p, err := w.pair(testCluster, "a,b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,12 +338,12 @@ func TestWitnessKeepsItsIncarnation(t *testing.T) {
 		defer w.Close()
 		defer running(t, w.Run)()
 		waitFor(t, time.Second, func() bool { return w.running.Load() })
-		p, err := w.pair("plant")
+		p, err := w.pair(testCluster, "a,b")
 		if err != nil {
 			t.Fatal(err)
 		}
 		waitFor(t, time.Second, func() bool {
-			_, err := (&State{Path: filepath.Join(dir, "plant"+stateSuffix)}).Load()
+			_, err := (&State{Path: filepath.Join(dir, testCluster+stateSuffix)}).Load()
 			return err == nil
 		})
 		return p.v.State().Incarnation

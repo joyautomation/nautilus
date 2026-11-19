@@ -33,9 +33,12 @@ var bootClock = quorum.BootClock
 
 // Options configures a controller's Elector.
 type Options struct {
-	// Pair names the pair at the witness, which keeps state per pair (the
-	// project's name).
-	Pair string
+	// Cluster is the pair's cluster ID (NewClusterID): drawn once, when
+	// the pair is commissioned, and kept in both controllers' state
+	// directories. The witness keeps one voter per cluster, bound to the
+	// pair's two names, so pairs never share one (not even two sites that
+	// run one project).
+	Cluster string
 	// Self and Peer name the two controllers (NAUTILUS_NODE: a or b);
 	// Witness defaults to WitnessID.
 	Self, Peer, Witness quorum.NodeID
@@ -56,14 +59,20 @@ type Options struct {
 	// this process: only an HMAC of it, for the peer to compare (design
 	// §6.1).
 	ClientToken string
+	// SelfAPI and PeerAPI are the two controllers' tag API addresses
+	// (host:port): Status.LeaderAddr names the leader's, for a standby's
+	// proxy and for clients that follow the leader.
+	SelfAPI, PeerAPI string
 	// Log defaults to slog.Default.
 	Log *slog.Logger
 	// OnEvent, when set, gets every Event, in order, from one goroutine.
 	OnEvent func(Event)
 
-	// For tests: the clock (quorum.Now) and the HTTP client.
+	// For tests: the clock (quorum.Now), the HTTP client, and the state
+	// file's write.
 	clock  func() quorum.Instant
 	client *http.Client
+	write  func(*os.File, []byte) (int, error)
 }
 
 // EventKind names an Event. The names follow design §7.1's audit actions.
@@ -89,6 +98,11 @@ const (
 	// error); this voter grants nothing until a write succeeds. Raised
 	// once per failing run, and again with Detail "ok" when it recovers.
 	EventStateWrite EventKind = "redundancy.state-write"
+	// EventLeaseMismatch: a voter refused a vote because its stated lease
+	// is longer than the voter's (Detail says which voter and both
+	// leases). The pair's members (or the witness's --lease) disagree.
+	// Raised on each side once per change.
+	EventLeaseMismatch EventKind = "redundancy.lease-mismatch"
 )
 
 // Event is something the operator should see.
@@ -102,13 +116,15 @@ type Event struct {
 // Status is a snapshot of the elector, for the operator surfaces.
 type Status struct {
 	Self, Peer string
-	// Leading reports the gate (IsLeader); Term is the fencing token, 0
-	// when not leading.
+	// Leading reports the gate (IsLeader); Term is the last fencing token
+	// this controller led under (Elector.Term).
 	Leading bool
 	Term    uint64
 	// Leader is who leads as this controller sees it: itself, the peer
-	// (seen holding a lease), or "".
-	Leader string
+	// (seen holding a lease), or "". LeaderAddr is its tag API address
+	// (Options.SelfAPI or PeerAPI), "" when none leads or it is unset.
+	Leader     string
+	LeaderAddr string
 	// Commissioned: an incarnation adopted. A controller that isn't grants
 	// nothing (a new pair, or a lost file).
 	Commissioned           bool
@@ -164,8 +180,9 @@ type Elector struct {
 	needOp    bool
 	token     ClientToken
 	writeErr  string
-	durable   uint64        // the highest Seq known on disk
-	written   chan struct{} // closed and replaced at every write report
+	mismatch  map[string]string // the last lease-mismatch report per voter, to report each change once
+	durable   uint64            // the highest Seq known on disk
+	written   chan struct{}     // closed and replaced at every write report
 
 	gate    atomic.Pointer[gateState]
 	wake    chan struct{}
@@ -181,8 +198,8 @@ type Elector struct {
 // call into the protocol and read without the lock (IsLeader). The lease
 // end is judged when the gate is READ, not when it was published.
 type gateState struct {
-	epoch uint64         // the fencing token while the lease runs
-	end   quorum.Instant // the lease end, on this node's clock
+	epoch uint64         // the last fencing token led under (only rises)
+	end   quorum.Instant // the lease end, on this node's clock (0: none)
 	open  bool           // healthy, not released, and leading when published
 }
 
@@ -208,8 +225,8 @@ func New(o Options) (*Elector, error) {
 	switch {
 	case o.clock == nil && !bootClock:
 		return nil, errors.New("quorum: a redundant controller needs CLOCK_BOOTTIME (Linux): a lease must keep counting through a host suspend")
-	case !ValidPair(o.Pair):
-		return nil, fmt.Errorf("quorum: pair name %q: letters, digits, '.', '_' and '-' only", o.Pair)
+	case !ValidCluster(o.Cluster):
+		return nil, fmt.Errorf("quorum: cluster ID %q: want 32 lowercase hex digits, drawn at commissioning", o.Cluster)
 	case o.Token == "":
 		return nil, errors.New("quorum: a pair member needs NAUTILUS_PEER_TOKEN")
 	case o.PeerAddr == "" || o.WitnessAddr == "":
@@ -226,15 +243,20 @@ func New(o Options) (*Elector, error) {
 		client = newClient()
 	}
 	e := &Elector{
-		o: o, log: o.Log.With("pair", o.Pair, "node", string(o.Self)), now: now,
-		file: &State{Path: o.StatePath}, call: caller{client: client, token: o.Token, lease: o.Lease},
+		o: o, log: o.Log.With("cluster", o.Cluster, "node", string(o.Self)), now: now,
+		file: &State{Path: o.StatePath, write: o.write},
+		call: caller{client: client, token: o.Token, lease: o.Lease, members: members(o.Self, o.Peer)},
 		peer: baseURL(o.PeerAddr), wit: baseURL(o.WitnessAddr), nonce: drawNonce(),
-		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}),
+		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{},
 		wake: make(chan struct{}, 1), events: make(chan Event, 64), decided: make(chan struct{}),
 	}
-	free, err := lock(o.StatePath + ".lock")
-	if err != nil {
-		return nil, err
+	free := func() {}
+	if !mut("controller_unlocked") {
+		f, err := lock(o.StatePath + ".lock")
+		if err != nil {
+			return nil, err
+		}
+		free = f
 	}
 	st, err := e.file.Load()
 	switch {
@@ -319,18 +341,14 @@ func (e *Elector) IsLeader() bool {
 	return g.open && e.now() < g.end
 }
 
-// Term returns the fencing token while this controller holds a lease (the
-// term it was acquired in, stable across renewals), 0 otherwise. A new
-// lease after any gap has a new term, so the runtime takes over rather
-// than resumes; a gate closed for unhealthy scans and opened again within
-// the same lease keeps it, and the runtime resumes.
-func (e *Elector) Term() uint64 {
-	g := e.gate.Load()
-	if e.now() < g.end {
-		return g.epoch
-	}
-	return 0
-}
+// Term returns the last fencing token this controller led under: the term
+// its current or last lease was acquired in, stable across renewals, 0
+// before it first led. It only rises, as the Lease elector's does (the
+// runtime's channels rely on it). A new lease after any gap has a new
+// term, so the runtime takes over rather than resumes; a gate closed for
+// unhealthy scans and opened again within the same lease keeps it, and
+// the runtime resumes.
+func (e *Elector) Term() uint64 { return e.gate.Load().epoch }
 
 // Decided is closed once this controller leads, or has seen the peer
 // leading.
@@ -488,9 +506,12 @@ func (e *Elector) after(now quorum.Instant) {
 // publish stores the gate. Under mu.
 func (e *Elector) publish(now quorum.Instant) {
 	g := &gateState{}
+	if old := e.gate.Load(); old != nil {
+		g.epoch = old.epoch
+	}
 	if e.c.Leading(now) {
-		g.epoch, g.end = e.c.Term(), e.c.LeaseEnd()
-		g.open = !e.released && !e.unhealthy
+		g.epoch, g.end = max(g.epoch, e.c.Term()), e.c.LeaseEnd()
+		g.open = (!e.released && !e.unhealthy) || mut("gate_ignores_health")
 	}
 	e.gate.Store(g)
 }
@@ -521,7 +542,7 @@ func (e *Elector) emit(ctx context.Context) {
 func (e *Elector) persisted(seq uint64, err error) {
 	e.mu.Lock()
 	now := e.now()
-	replies, msgs := e.a.Persisted(now, seq, err == nil)
+	replies, msgs := e.a.Persisted(now, seq, err == nil || mut("controller_write_ignored"))
 	e.route(now, replies)
 	switch {
 	case err != nil && e.writeErr == "":
@@ -552,7 +573,11 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 	}
 	b, _ := r.MarshalBinary()
 	go func() {
-		body, err := e.call.call(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Pair+"/vote", b)
+		body, err := e.call.call(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
+		var se *statusError
+		if errors.As(err, &se) && se.code == http.StatusConflict {
+			e.mismatched(string(to), se.msg)
+		}
 		if err != nil || body == nil {
 			return
 		}
@@ -584,6 +609,21 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	e.poke()
 }
 
+// mismatched reports a lease refusal between this controller and voter,
+// sent or received: logged and raised once per change of what it says.
+func (e *Elector) mismatched(voter, msg string) {
+	e.mu.Lock()
+	changed := e.mismatch[voter] != msg
+	e.mismatch[voter] = msg
+	if changed {
+		e.event(Event{Kind: EventLeaseMismatch, Detail: msg})
+	}
+	e.mu.Unlock()
+	if changed {
+		e.log.Error("redundancy: a vote was refused for its lease: the pair's leases (or the witness's --lease) disagree", "voter", voter, "detail", msg)
+	}
+}
+
 // adopts sends handshake messages to the peer.
 func (e *Elector) adopts(msgs []quorum.Adopt) {
 	ctx := e.ctx
@@ -593,7 +633,7 @@ func (e *Elector) adopts(msgs []quorum.Adopt) {
 	for _, m := range msgs {
 		b, _ := m.MarshalBinary()
 		go func() {
-			_, _ = e.call.call(ctx, e.o.Lease/8, http.MethodPost, e.peer+Prefix+e.o.Pair+"/adopt", b)
+			_, _ = e.call.call(ctx, e.o.Lease/8, http.MethodPost, e.peer+Prefix+e.o.Cluster+"/adopt", b)
 		}()
 	}
 }
@@ -602,7 +642,7 @@ func (e *Elector) adopts(msgs []quorum.Adopt) {
 // listener behind Guard, never behind the tag API.
 func (e *Elector) Handler() http.Handler {
 	mux := http.NewServeMux()
-	base := Prefix + e.o.Pair
+	base := Prefix + e.o.Cluster
 	mux.HandleFunc("POST "+base+"/vote", e.serveVote)
 	mux.HandleFunc("POST "+base+"/adopt", e.serveAdopt)
 	mux.HandleFunc("GET "+base+"/hello", e.serveHello)
@@ -612,10 +652,6 @@ func (e *Elector) Handler() http.Handler {
 func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	if !e.running.Load() {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
-		return
-	}
-	if !leaseOK(r, e.o.Lease) {
-		http.Error(w, fmt.Sprintf("lease missing or longer than this voter's %v", e.o.Lease), http.StatusConflict)
 		return
 	}
 	b, err := readFrame(r)
@@ -628,8 +664,22 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}
+	stated := statedLease(r)
 	e.mu.Lock()
 	now := e.now()
+	if limit := e.v.MaxRequestLease(now); !leaseFits(stated, limit) && !mut("controller_lease_unchecked") {
+		e.mu.Unlock()
+		msg := fmt.Sprintf("%s's lease %v is longer than this voter's %v (or missing)", req.From, stated, limit)
+		e.mismatched(string(req.From), msg)
+		http.Error(w, msg, http.StatusConflict)
+		return
+	}
+	if st := e.v.State(); termJump(req.Term, st.Promised, st.Floor) && !mut("controller_no_term_cap") {
+		e.mu.Unlock()
+		e.log.Error("redundancy: refused a vote that would jump the terms", "from", req.From, "term", req.Term, "promised", st.Promised)
+		http.Error(w, "term jump", http.StatusConflict)
+		return
+	}
 	e.a.OnPeer(now)
 	e.peerAt, e.peerHeard = now, true
 	e.c.Observe(req.Term)
@@ -712,8 +762,12 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "challenge", http.StatusBadRequest)
 		return
 	}
+	if quorum.NodeID(r.URL.Query().Get("from")) != e.o.Peer {
+		http.Error(w, "not this pair's peer", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.ClientToken)})
+	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken)})
 }
 
 // hello runs the client-token check against the peer: at start and every
@@ -733,7 +787,8 @@ func (e *Elector) hello(ctx context.Context) {
 
 func (e *Elector) checkToken(ctx context.Context) {
 	c := newChallenge()
-	body, err := e.call.call(ctx, max(e.o.Lease, time.Second), http.MethodGet, e.peer+Prefix+e.o.Pair+"/hello?c="+url.QueryEscape(c), nil)
+	q := url.Values{"c": {c}, "from": {string(e.o.Self)}}
+	body, err := e.call.call(ctx, max(e.o.Lease, time.Second), http.MethodGet, e.peer+Prefix+e.o.Cluster+"/hello?"+q.Encode(), nil)
 	if err != nil {
 		return
 	}
@@ -746,7 +801,7 @@ func (e *Elector) checkToken(ctx context.Context) {
 		return
 	}
 	got := TokenDiffers
-	if sameMAC(h.MAC, tokenMAC(e.o.Token, c, e.o.ClientToken)) {
+	if sameMAC(h.MAC, tokenMAC(e.o.Token, c, e.o.Self, e.o.Peer, e.o.ClientToken)) {
 		got = TokenSame
 	}
 	e.mu.Lock()
@@ -772,6 +827,10 @@ func (e *Elector) checkToken(ctx context.Context) {
 // again, above KnownFloor.
 func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
 	e.mu.Lock()
+	if known := e.a.KnownFloor(); floor > known && floor-known > MaxTermJump/2 {
+		e.mu.Unlock()
+		return fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
+	}
 	p, err := e.a.Recommission(inc, floor)
 	if err != nil {
 		known := e.a.KnownFloor()
@@ -838,14 +897,12 @@ func (e *Elector) Status() Status {
 	}
 	g := e.gate.Load()
 	s.Leading = g.open && now < g.end
-	if now < g.end {
-		s.Term = g.epoch
-	}
+	s.Term = g.epoch
 	switch from, until := e.v.LeaderSeen(); {
 	case s.Leading:
-		s.Leader = s.Self
+		s.Leader, s.LeaderAddr = s.Self, e.o.SelfAPI
 	case from == e.o.Peer && now < until:
-		s.Leader = s.Peer
+		s.Leader, s.LeaderAddr = s.Peer, e.o.PeerAPI
 	}
 	if e.witHeard {
 		s.WitnessAge = now.Sub(e.witAt)

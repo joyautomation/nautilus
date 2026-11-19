@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+
+	"github.com/joyautomation/nautilus/quorum"
 )
 
 // ClientToken is what the client-token check (design §6.1) found about
@@ -40,16 +42,23 @@ type helloAnswer struct {
 	MAC  string `json:"mac"`
 }
 
-// tokenMAC is the client-token proof one controller sends the other: an
-// HMAC-SHA256 keyed with the peer token over a fresh challenge and the
-// client token. The client token itself never leaves; the challenge keeps
-// an old answer from being replayed as a new one.
-func tokenMAC(peerToken, challenge, clientToken string) string {
+// tokenMAC is the client-token proof the answerer sends the asker: an
+// HMAC-SHA256 keyed with the peer token over the direction ("answer"),
+// who asks, who answers, a fresh challenge and the answerer's client
+// token. The client token itself never leaves; the challenge keeps an old
+// answer from being replayed, and the names and direction keep an asker's
+// own question, reflected back at it, from passing as its peer's answer
+// (#1021 review).
+func tokenMAC(peerToken, challenge string, asker, answerer quorum.NodeID, clientToken string) string {
 	m := hmac.New(sha256.New, []byte(peerToken))
-	m.Write([]byte("nautilus client token\x00"))
-	m.Write([]byte(challenge))
-	m.Write([]byte{0})
-	m.Write([]byte(clientToken))
+	parts := []string{"nautilus client token answer", string(asker), string(answerer), challenge, clientToken}
+	if mut("hello_unbound") {
+		parts = []string{challenge, clientToken}
+	}
+	for _, part := range parts {
+		m.Write([]byte(part))
+		m.Write([]byte{0})
+	}
 	return hex.EncodeToString(m.Sum(nil))
 }
 

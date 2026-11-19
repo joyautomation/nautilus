@@ -52,12 +52,37 @@ type heldGrant struct {
 // way the voter grants nothing for one full lease. It has lost its
 // promise timer, and any promise it made before the restart has run out
 // by then (design §3.1).
+//
+// The wait is the longer of lease and the lease st says its last promises
+// were made under (VoterState.Lease): a voter restarted with a shorter
+// lease would otherwise grant inside a promise made under the longer one
+// (#1021 review). Until its first grant the state keeps the longer lease,
+// so a write before then (an adoption) doesn't shorten the next restart's
+// wait.
 func NewVoter(self NodeID, lease time.Duration, st VoterState, now Instant) *Voter {
-	wait := now.Add(lease)
+	bound := max(lease, st.Lease)
+	wait := now.Add(bound)
+	if mut("restart_wait_current_lease") {
+		wait = now.Add(lease)
+	}
 	if mut("restart_grants") {
 		wait = now
 	}
+	st.Lease = bound
 	return &Voter{self: self, lease: lease, st: st, waitUntil: wait}
+}
+
+// MaxRequestLease is the longest lease a request may state at now (the
+// driver refuses a longer one before Handle): the voter's own lease, the
+// length of every promise it makes, so no lease outlives a promise it rests
+// on. During the restart wait, when it grants nothing, it is the longer
+// lease the wait covers, so a live leader's renewals are still seen
+// (LeaderSeen) across a change of lease.
+func (v *Voter) MaxRequestLease(now Instant) time.Duration {
+	if now < v.waitUntil {
+		return max(v.lease, v.st.Lease)
+	}
+	return v.lease
 }
 
 // NewWitness starts the witness's voter, like NewVoter. A witness with no
@@ -76,7 +101,7 @@ func NewWitness(self NodeID, lease time.Duration, st VoterState, now Instant, dr
 	for inc == 0 {
 		inc = draw()
 	}
-	v.st = VoterState{Incarnation: inc}
+	v.st = VoterState{Incarnation: inc, Lease: lease}
 	v.dirty++
 	return v, &Persist{Seq: v.dirty, State: v.st}
 }
@@ -179,8 +204,10 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	}
 	// Grant. The promise runs from when the request was RECEIVED.
 	v.promiseUntil = now.Add(v.lease)
-	if r.Term != v.st.Promised || r.From != v.st.GrantedTo {
-		v.st.Promised, v.st.GrantedTo = r.Term, r.From
+	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease {
+		// Past the restart wait every promise made under a longer lease
+		// has run out, so the state now records this voter's own.
+		v.st.Promised, v.st.GrantedTo, v.st.Lease = r.Term, r.From, v.lease
 		v.dirty++
 	}
 	g := v.reply(r, true)

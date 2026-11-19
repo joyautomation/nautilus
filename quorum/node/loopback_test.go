@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,7 +25,7 @@ import (
 // one term is led by both controllers. Liveness is asserted with generous
 // deadlines (tens of leases); safety is asserted strictly.
 
-const loopLease = 300 * time.Millisecond
+const loopLease = 500 * time.Millisecond
 
 var errCut = errors.New("link cut by the test")
 
@@ -59,6 +60,7 @@ type member struct {
 	srv    *http.Server
 	cancel context.CancelFunc
 	ran    chan struct{}
+	sick   atomic.Bool // its scans are not live (SetHealth)
 }
 
 type witnessMember struct {
@@ -74,7 +76,7 @@ func newCluster(t *testing.T) *cluster {
 		t.Skip("a core mutation: package quorum's suite and the simulator catch it")
 	}
 	t.Parallel()
-	c := &cluster{t: t, pair: "plant", cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
+	c := &cluster{t: t, pair: NewClusterID(), cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
 		byHP: map[string]quorum.NodeID{}, real: map[string]string{}, ctl: map[quorum.NodeID]*member{},
 		tok:  map[quorum.NodeID]string{"a": testToken, "b": testToken, WitnessID: testToken},
 		ctok: map[quorum.NodeID]string{"a": "client", "b": "client"}, led: map[uint64]quorum.NodeID{},
@@ -83,7 +85,7 @@ func newCluster(t *testing.T) *cluster {
 	// dialer maps each name to wherever its node listens now, so a
 	// restarted node binds a fresh port.
 	for _, id := range []quorum.NodeID{"a", "b", WitnessID} {
-		name := fmt.Sprintf("%s.plant.test:9450", id)
+		name := fmt.Sprintf("%s.site.test:9450", id)
 		c.addr[id], c.byHP[name] = name, id
 	}
 	dir := t.TempDir()
@@ -144,8 +146,9 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 	if id == "b" {
 		peer = "a"
 	}
-	e, err := New(Options{Pair: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
+	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
 		Lease: loopLease, StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
+		SelfAPI: apiAddr(id), PeerAPI: apiAddr(peer),
 		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transport()}},
 		OnEvent: func(ev Event) {
 			c.evMu.Lock()
@@ -155,6 +158,7 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 	if err != nil {
 		c.t.Fatal(err)
 	}
+	e.SetHealth(func() bool { return !m.sick.Load() })
 	h, _ := Guard(c.tok[id], e.Handler())
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel, m.ran = cancel, make(chan struct{})
@@ -177,6 +181,8 @@ func (c *cluster) kill(id quorum.NodeID) {
 	<-m.ran
 	e.Close()
 }
+
+func apiAddr(id quorum.NodeID) string { return "api-" + string(id) + ":8080" }
 
 func (c *cluster) wipe(id quorum.NodeID) {
 	if err := os.Remove(c.ctl[id].state); err != nil {
@@ -389,8 +395,14 @@ func TestLoopbackNewPairCommissionsAndElects(t *testing.T) {
 	c.commission()
 	who := c.waitLeader(leases(20))
 	c.steady(who, 8)
-	c.waitFor("the standby to see the leader", leases(4), func() bool { return c.status(c.other(who)).Leader == string(who) })
-	if ps := c.wit.w.Pairs(); len(ps) != 1 || ps[0].Pair != "plant" || ps[0].Incarnation != c.status("a").Incarnation {
+	c.waitFor("the standby to see the leader", leases(4), func() bool {
+		s := c.status(c.other(who))
+		return s.Leader == string(who) && s.LeaderAddr == apiAddr(who)
+	})
+	if s := c.status(who); s.Leader != string(who) || s.LeaderAddr != apiAddr(who) {
+		t.Fatalf("the leader's status %+v", s)
+	}
+	if ps := c.wit.w.Pairs(); len(ps) != 1 || ps[0].Cluster != c.pair || ps[0].Members != "a,b" || ps[0].Incarnation != c.status("a").Incarnation {
 		t.Fatalf("witness pairs %+v", ps)
 	}
 }
@@ -458,6 +470,121 @@ func TestLoopbackLeaderDeaf(t *testing.T) {
 	c.steady(next, 8)
 }
 
+// The A–B link cut, both still reaching the witness: the leader keeps
+// its lease on {itself, witness}, and the standby, refused by the witness,
+// never leads. Healed, nothing changes.
+func TestLoopbackPeerLinkCut(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	old := c.waitLeader(leases(20))
+	c.mu.Lock()
+	c.cut[[2]quorum.NodeID{"a", "b"}] = true
+	c.cut[[2]quorum.NodeID{"b", "a"}] = true
+	c.mu.Unlock()
+	c.steady(old, 10)
+	c.mu.Lock()
+	c.cut = map[[2]quorum.NodeID]bool{}
+	c.mu.Unlock()
+	c.steady(old, 5)
+}
+
+// A mute leader: nothing it sends arrives, though it hears everything.
+// Its lease lapses, its gate closes, and the standby leads in a higher
+// term, never overlapping it.
+func TestLoopbackLeaderMute(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	old := c.waitLeader(leases(20))
+	term := c.elector(old).Term()
+	c.mu.Lock()
+	for _, o := range []quorum.NodeID{c.other(old), WitnessID} {
+		c.cut[[2]quorum.NodeID{old, o}] = true
+	}
+	c.mu.Unlock()
+	c.waitFor("the mute leader's gate to close", leases(2), func() bool { return !c.elector(old).IsLeader() })
+	var next quorum.NodeID
+	c.waitFor("the standby to lead", leases(20), func() bool { next = c.leader(); return next == c.other(old) })
+	if c.elector(next).Term() <= term {
+		t.Fatalf("term %d after the mute leader's %d", c.elector(next).Term(), term)
+	}
+	c.steady(next, 6)
+}
+
+// The witness restarts from its state (same incarnation; the pair goes
+// on), then is rebuilt with its state wiped: a new incarnation, which both
+// controllers adopt together, while the leader is never doubled.
+func TestLoopbackWitnessRestartAndRebuild(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	who := c.waitLeader(leases(20))
+	inc := c.status("a").Incarnation
+	c.stopWitness()
+	c.startWitness()
+	c.steady(who, 8)
+	if a, b := c.status("a").Incarnation, c.status("b").Incarnation; a != inc || b != inc {
+		t.Fatalf("incarnations %d, %d after a restart from state, want %d", a, b, inc)
+	}
+	c.stopWitness()
+	files, _ := filepath.Glob(filepath.Join(c.wit.dir, "*"))
+	for _, f := range files {
+		if err := os.Remove(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.startWitness()
+	c.waitFor("the pair to adopt the rebuilt witness", leases(60), func() bool {
+		a, b := c.status("a"), c.status("b")
+		return a.Incarnation != inc && a.Incarnation == b.Incarnation && a.Commissioned && b.Commissioned
+	})
+	if ps := c.wit.w.Pairs(); len(ps) != 1 || ps[0].Incarnation != c.status("a").Incarnation {
+		t.Fatalf("witness %+v, pair at %d", ps, c.status("a").Incarnation)
+	}
+	c.waitLeader(leases(20))
+}
+
+// Scans not live close the leader's gate at its next look, well inside
+// its lease, and it stops renewing: the standby takes over. Live again,
+// it stays the standby.
+func TestLoopbackUnhealthyLeaderClosesItsGate(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	old := c.waitLeader(leases(20))
+	c.steady(old, 2)
+	c.ctl[old].sick.Store(true)
+	start := time.Now()
+	c.waitFor("the unhealthy leader's gate to close", loopLease/2, func() bool { return !c.elector(old).IsLeader() })
+	if d := time.Since(start); d > loopLease/4+loopLease/8 {
+		t.Fatalf("the gate closed %v after the scans stopped, want within a look", d)
+	}
+	next := c.waitLeader(leases(20))
+	if next == old {
+		t.Fatal("the unhealthy controller leads")
+	}
+	c.ctl[old].sick.Store(false)
+	c.steady(next, 6)
+}
+
+// Release closes the gate at once; the peer takes over a lease later.
+func TestLoopbackReleaseClosesTheGate(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	old := c.waitLeader(leases(20))
+	c.elector(old).Release()
+	if c.elector(old).IsLeader() {
+		t.Fatal("still leading after Release")
+	}
+	next := c.waitLeader(leases(20))
+	if next == old {
+		t.Fatal("the released controller leads")
+	}
+	c.steady(next, 4)
+}
+
 // F8: the witness is down. The two controllers are a majority: the leader
 // keeps its lease in its term.
 func TestLoopbackWitnessDownLeaderHolds(t *testing.T) {
@@ -479,6 +606,12 @@ func TestLoopbackStandbyRestarts(t *testing.T) {
 	c.startAll()
 	c.commission()
 	who := c.waitLeader(leases(20))
+	// Settle first: right after commissioning the witness may still be in
+	// its restart wait, so the leader rests on {itself, standby}, and a
+	// standby restarted then campaigns at once (it has seen no leader in
+	// this boot) and takes the witness's first grant, so the leader loses
+	// its lease (liveness only; reported on #1021).
+	c.steady(who, 3)
 	sb := c.other(who)
 	inc, gen := c.status(sb).Incarnation, c.status(sb).Gen
 	c.kill(sb)

@@ -104,8 +104,20 @@ var table = []mutation{
 	{"persisted_before_write", []string{"TestGrantLeavesOnlyAfterTheWrite"}},
 	{"state_in_place", []string{"TestStateCrashMidWriteKeepsTheOld"}},
 	{"nonce_fixed", []string{"TestBootNonceDrawnPerStartNeverPersisted"}},
-	{"lease_unchecked", []string{"TestVoteLeaseLongerThanThePromiseRefused"}},
+	{"lease_unchecked", []string{"TestVoteLeaseLongerThanThePromiseRefused", "TestReviewWitnessShorterLeaseRestart"}},
 	{"witness_rebuilds_silently", []string{"TestWitnessRefusesUnreadableStateWithoutRebuild"}},
+	// The #1021 review: a restart with a shorter lease (core and driver),
+	// and the driver rules no test pinned.
+	{"restart_wait_current_lease", []string{"TestVoterRestartWaitsTheLongerLease", "TestReviewWitnessShorterLeaseRestart"}},
+	{"controller_lease_unchecked", []string{"TestReviewControllerRefusesALongerLease"}},
+	{"controller_write_ignored", []string{"TestReviewControllerFailedWriteSendsNoGrant"}},
+	{"witness_write_ignored", []string{"TestReviewWitnessFailedWriteSendsNoGrant"}},
+	{"gate_ignores_health", []string{"TestLoopbackUnhealthyLeaderClosesItsGate", "TestLoopbackReleaseClosesTheGate"}},
+	{"controller_unlocked", []string{"TestReviewControllerStateLocked"}},
+	{"witness_unlocked", []string{"TestReviewWitnessDirLocked"}},
+	{"no_term_cap", []string{"TestReviewWitnessTermJumpRefused"}},
+	{"controller_no_term_cap", []string{"TestReviewControllerTermJumpRefused"}},
+	{"hello_unbound", []string{"TestReviewHelloReflectedAnswerFails"}},
 }
 
 // event is one line of `go test -json`.

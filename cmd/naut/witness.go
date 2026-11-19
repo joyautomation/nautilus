@@ -20,7 +20,8 @@ import (
 const witnessUsage = `naut witness: the third voter of a redundant controller pair
 (docs/design/redundancy.md). It runs only the peer listener and answers
 votes; it never runs a project. One witness can serve several pairs, each
-keyed by its project name, with one state file per pair.
+keyed by its cluster ID (drawn when the pair is commissioned) and bound to
+its two controllers, with one state file per pair.
 
 Usage: naut witness [flags]
 
@@ -39,6 +40,10 @@ Usage: naut witness [flags]
 NAUTILUS_PEER_TOKEN is required: every peer request must carry it, and
 the witness answers nothing without it.
 `
+
+// witnessMaxConns caps the witness's open connections: each pair keeps a
+// few alive per controller.
+const witnessMaxConns = 256
 
 func runWitness(args []string) int {
 	useConsoleLog()
@@ -101,9 +106,12 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	defer cancel()
 	done := make(chan struct{})
 	go func() { w.Run(wctx); close(done) }()
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 2 * time.Minute}
+	// A vote is one small frame: a slow or idle client is cut off, and at
+	// most witnessMaxConns connections are served at once.
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second,
+		WriteTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 8 << 10}
 	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ln) }()
+	go func() { served <- srv.Serve(node.LimitListener(ln, witnessMaxConns)) }()
 	fmt.Fprintf(stdout, "naut witness — peer port %s — state %s — lease %v — Ctrl+C to stop\n", ln.Addr(), *state, *lease)
 	if ready != nil {
 		ready <- ln.Addr().String()
