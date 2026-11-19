@@ -193,7 +193,7 @@ func Parse(data []byte) (*IODD, error) {
 	for _, xpd := range fn.ProcessData {
 		pd := ProcessData{ID: xpd.ID}
 		if c := xpd.Condition; c != nil {
-			v, err := strconv.ParseInt(strings.TrimSpace(c.Value), 0, 64)
+			v, err := decInt(c.Value)
 			if err != nil {
 				return nil, fmt.Errorf("process data %s: condition value %q is not an integer", xpd.ID, c.Value)
 			}
@@ -257,17 +257,17 @@ type parser struct {
 func (p *parser) text(r xTextRef) string { return p.texts[r.TextID] }
 
 func (p *parser) identity(id *Identity, x *xIdentity) error {
-	v, err := strconv.ParseUint(strings.TrimSpace(x.VendorID), 0, 32)
+	v, err := decUint(x.VendorID)
 	if err != nil || v < 1 || v > 0xFFFF {
 		return fmt.Errorf("DeviceIdentity: vendorId %q is not a vendor id (1..65535)", x.VendorID)
 	}
-	d, err := strconv.ParseUint(strings.TrimSpace(x.DeviceID), 0, 32)
+	d, err := decUint(x.DeviceID)
 	if err != nil || d < 1 || d > 0xFFFFFF {
 		return fmt.Errorf("DeviceIdentity: deviceId %q is not a device id (1..16777215)", x.DeviceID)
 	}
 	id.VendorID, id.DeviceID = uint32(v), uint32(d)
 	for f := range strings.FieldsSeq(x.AdditionalDeviceIDs) {
-		a, err := strconv.ParseUint(f, 0, 32)
+		a, err := decUint(f)
 		if err != nil || a < 1 || a > 0xFFFFFF {
 			return fmt.Errorf("DeviceIdentity: additionalDeviceIds %q is not a device id", f)
 		}
@@ -563,4 +563,16 @@ func optInt(s string) (int, error) {
 		return 0, nil
 	}
 	return strconv.Atoi(strings.TrimSpace(s))
+}
+
+// decUint and decInt read an XML Schema integer: decimal only, an
+// optional sign, leading zeros allowed ("0310" is 310). Never base 0,
+// which would read "0310" as octal 200 and accept 0x… and '_', and so
+// turn a right sensor into a wrong one at the identity check.
+func decUint(s string) (uint64, error) {
+	return strconv.ParseUint(strings.TrimPrefix(strings.TrimSpace(s), "+"), 10, 32)
+}
+
+func decInt(s string) (int64, error) {
+	return strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(s), "+"), 10, 64)
 }

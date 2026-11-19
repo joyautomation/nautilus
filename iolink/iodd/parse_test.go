@@ -86,3 +86,47 @@ func TestCheckRefusesWhatTheCodecCannotDecode(t *testing.T) {
 		})
 	}
 }
+
+// IODD integers are XML Schema decimals: leading zeros are decimal, and
+// 0x… and '_' are not integers at all. Reading them in base 0 would make
+// vendorId="0310" octal 200, a false wrong-device at the identity check.
+func TestParseIntegersAreDecimal(t *testing.T) {
+	base, err := os.ReadFile(filepath.Join("testdata", level))
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := func(pairs ...string) []byte {
+		s := string(base)
+		for i := 0; i < len(pairs); i += 2 {
+			if !strings.Contains(s, pairs[i]) {
+				t.Fatalf("the base IODD has no %q", pairs[i])
+			}
+			s = strings.Replace(s, pairs[i], pairs[i+1], 1)
+		}
+		return []byte(s)
+	}
+	d, err := Parse(edit(`vendorId="65261"`, `vendorId="0310"`, `deviceId="1048577"`, `deviceId="+01048577"`, `additionalDeviceIds="1048578"`, `additionalDeviceIds="010"`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := d.Identity; id.VendorID != 310 || id.DeviceID != 1048577 || len(id.AdditionalDeviceIDs) != 1 || id.AdditionalDeviceIDs[0] != 10 {
+		t.Errorf("identity %d, %d, %v; want 310, 1048577, [10]", id.VendorID, id.DeviceID, id.AdditionalDeviceIDs)
+	}
+	for _, v := range []string{"0x136", "3_10", "0o466", "0b1"} {
+		if _, err := Parse(edit(`vendorId="65261"`, `vendorId="`+v+`"`)); err == nil || !strings.Contains(err.Error(), "vendorId") {
+			t.Errorf("vendorId=%q: %v, want it refused", v, err)
+		}
+	}
+	// A condition value of "010" is ten, so pd-variant 10 selects it.
+	fb, err := os.ReadFile(filepath.Join("testdata", flow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := Parse([]byte(strings.Replace(string(fb), `<Condition variableId="V_PdSelect" value="1"/>`, `<Condition variableId="V_PdSelect" value="010"/>`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pd, err := fd.Layout("10"); err != nil || pd.ID != "PD_Tagged" {
+		t.Errorf("Layout(10) = %v, %v; want PD_Tagged", pd, err)
+	}
+}

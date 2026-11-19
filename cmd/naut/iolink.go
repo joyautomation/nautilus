@@ -85,7 +85,7 @@ func importIODD(dir, src string, w io.Writer) error {
 	if _, err := os.Stat(filepath.Join(dir, project.ManifestName)); err != nil {
 		return fmt.Errorf("%s is not a project (no %s)", dir, project.ManifestName)
 	}
-	data, err := os.ReadFile(src)
+	data, err := readIODD(src)
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func runIOLinkShow(args []string, w io.Writer) int {
 		fmt.Fprint(os.Stderr, "usage: naut iolink show <iodd.xml>\n")
 		return 2
 	}
-	data, err := os.ReadFile(args[0])
+	data, err := readIODD(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut iolink show:", err)
 		return 1
@@ -245,4 +245,16 @@ func showIODD(d *iodd.IODD, w io.Writer) {
 		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\n", idx, v.Access, v.ID, v.Name, v.Type.Name, v.Default)
 	}
 	tw.Flush()
+}
+
+// readIODD reads at most one byte more than an IODD may be, so a huge
+// file (or a device node) is refused by Parse's size check rather than
+// read into memory whole.
+func readIODD(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, iodd.MaxSize+1))
 }

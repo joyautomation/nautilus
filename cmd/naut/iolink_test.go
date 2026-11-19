@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/iolink/iodd"
 )
 
 const ioddTestdata = "../../iolink/iodd/testdata"
@@ -166,5 +168,26 @@ func TestIOLinkShow(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("show lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// A file larger than an IODD may be is read only as far as Parse needs to
+// refuse it, never whole.
+func TestIOLinkReadsAtMostMaxSize(t *testing.T) {
+	big := filepath.Join(t.TempDir(), "huge-IODD1.1.xml")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(iodd.MaxSize + 4096); err != nil { // sparse
+		t.Fatal(err)
+	}
+	f.Close()
+	data, err := readIODD(big)
+	if err != nil || len(data) != iodd.MaxSize+1 {
+		t.Fatalf("readIODD read %d bytes, %v; want %d", len(data), err, iodd.MaxSize+1)
+	}
+	if err := importIODD(ioddProject(t), big, io.Discard); err == nil || !strings.Contains(err.Error(), "larger") {
+		t.Errorf("import of an oversize file: %v", err)
 	}
 }
