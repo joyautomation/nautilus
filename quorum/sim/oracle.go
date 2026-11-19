@@ -72,10 +72,13 @@ type DeviceWrite struct {
 }
 
 // Hostile is a reply that must not count, delivered while it could have.
+// Decisive: a countable grant for the same request was already in, so
+// counting this one would have made a majority.
 type Hostile struct {
-	At  time.Duration
-	To  Addr
-	Why string
+	At       time.Duration
+	To       Addr
+	Why      string
+	Decisive bool
 }
 
 type voterStart struct {
@@ -233,7 +236,7 @@ func Check(r *Record, c Checks) []Violation {
 		add(v)
 	}
 	if c.HealAt > 0 {
-		for _, v := range checkI6(gates, c.HealAt, c.Bound) {
+		for _, v := range checkI6(gates, c.HealAt, c.Bound, r.until) {
 			add(v)
 		}
 	}
@@ -468,15 +471,23 @@ func (r *Record) checkI4(gates []Interval) []Violation {
 	return vs
 }
 
-// I6: a leader exists at heal + bound.
-func checkI6(gates []Interval, heal, bound time.Duration) []Violation {
+// I6: from heal + bound to the end of the run, a leader holds the gate at
+// every instant (no leaderless gap once the bound has passed).
+func checkI6(gates []Interval, heal, bound, until time.Duration) []Violation {
 	at := heal + bound
-	for _, iv := range gates {
-		if iv.From <= at && at < iv.To {
-			return nil
+	for at < until {
+		next := at
+		for _, iv := range gates {
+			if iv.From <= at && at < iv.To {
+				next = max(next, iv.To)
+			}
 		}
+		if next == at {
+			return []Violation{{"I6", at, fmt.Sprintf("no leader at %v, %v after the last heal", at, at-heal)}}
+		}
+		at = next
 	}
-	return []Violation{{"I6", at, fmt.Sprintf("no leader %v after the last heal", bound)}}
+	return nil
 }
 
 // I7: at most maxChanges changes of gate holder after the first election,

@@ -193,14 +193,15 @@ func (w *World) applyFault(i int, on bool) {
 		}
 	case Skew:
 		n := w.nodes[f.Node]
-		if n.freezes > 0 {
-			return // a frozen clock stays frozen; the skew is lost
-		}
+		rate := w.o.Rates[f.Node]
 		if on {
-			n.clock.SetRate(w.now, PPM(f.Value))
-		} else {
-			n.clock.SetRate(w.now, w.o.Rates[f.Node])
+			rate = PPM(f.Value)
 		}
+		if n.freezes > 0 {
+			n.savedRate = rate // the clock stays stopped; it runs at this rate after the thaw
+			return
+		}
+		n.clock.SetRate(w.now, rate)
 		w.arm(n)
 	}
 }

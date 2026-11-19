@@ -159,6 +159,26 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
 
+**Not yet caught by the T2 simulator alone** (measured on #981; each is pinned in T1 by
+`quorum`'s own tests, and 2c adds a targeted sim case for each before its tag joins the
+nightly):
+- a voter answers before its fsync (needs a crash inside a slow fsync, then a same-term
+  request from the other candidate);
+- the lapse back-off, removed or cut to one lease (the unheard-campaign back-off masks it in
+  the matrix);
+- a grant matched by term, not by request id (needs a late grant for an earlier renewal);
+- renewals seen when refused (#973), `Candidate.Observe`, and a retry that moves the look
+  (#979): liveness rules the current schedules don't stress enough to fail.
+
+The sim does catch these (with the cases that go red):
+- no ρ: 32 seeds and the skew test;
+- the lease timed from the reply: 2 seeds and the skew test;
+- a restarted voter granting at once: 23 seeds and named cases;
+- grants from any incarnation: 16 seeds and named cases;
+- a promise of half a lease: 256 matrix cases and 137 seeds;
+- no re-term: 704 matrix cases and 144 seeds;
+- no yield: the livelock regressions and one seed.
+
 A formal model (TLA+ or PlusCal of the vote protocol, checked by TLC) is **optional**. It gets
 decided after PR 2, from what the simulation finds.
 

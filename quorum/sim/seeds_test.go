@@ -164,17 +164,21 @@ func checksFor(o Options) Checks {
 
 // runSeed runs one seed and returns its violations and run hash.
 func runSeed(seed uint64, p profile, trace bool) ([]Violation, *Record, Options) {
+	return runSeedWith(seed, p, trace, checksFor)
+}
+
+func runSeedWith(seed uint64, p profile, trace bool, checks func(Options) Checks) ([]Violation, *Record, Options) {
 	o := randomRun(seed, p)
 	o.Trace = trace
 	rec := Run(o)
-	return Check(rec, checksFor(o)), rec, o
+	return Check(rec, checks(o)), rec, o
 }
 
 // shrink drops faults one at a time while the run still fails on the same
 // oracle, and returns the smallest schedule found (test plan §3.2).
-func shrink(o Options, oracle string) Options {
+func shrink(o Options, oracle string, checks func(Options) Checks) Options {
 	fails := func(o Options) bool {
-		for _, v := range Check(Run(o), checksFor(o)) {
+		for _, v := range Check(Run(o), checks(o)) {
 			if v.Oracle == oracle {
 				return true
 			}
@@ -253,18 +257,37 @@ func reproLine(test string, seed uint64) string {
 	return fmt.Sprintf("QUORUM_SEED=%d go test ./quorum/sim -run '^%s$' -v", seed, test)
 }
 
-// runSeeds runs a seed range of profile p under test, reporting each
+// reporter is the part of *testing.T runSeeds uses, so a test can run the
+// real reporting path and read what it printed.
+type reporter interface {
+	Errorf(format string, args ...any)
+	Logf(format string, args ...any)
+	Fatal(args ...any)
+}
+
+// seedRun is one run of the seed runner: which test's name goes in the
+// reproduce line, the profile, where the contract's environment is read,
+// and the checks.
+type seedRun struct {
+	test   string
+	p      profile
+	env    func(string) string
+	checks func(Options) Checks
+}
+
+// runSeeds runs the seed range the environment names, reporting each
 // failing seed with its one-line reproduce command and shrunk schedule.
-func runSeeds(t *testing.T, test string, p profile) (failing []uint64) {
-	first, last, single, err := seedRange(os.Getenv("QUORUM_SEEDS"), os.Getenv("QUORUM_SEED"))
+func runSeeds(r reporter, run seedRun) (failing []uint64) {
+	first, last, single, err := seedRange(run.env("QUORUM_SEEDS"), run.env("QUORUM_SEED"))
 	if err != nil {
-		t.Fatal(err)
+		r.Fatal(err)
+		return nil
 	}
 	for seed := first; seed <= last; seed++ {
-		vs, rec, o := runSeed(seed, p, single)
+		vs, rec, o := runSeedWith(seed, run.p, single, run.checks)
 		if single {
-			t.Log("schedule: " + o.GoString())
-			t.Log("trace:\n" + strings.Join(rec.Trace, "\n"))
+			r.Logf("schedule: %s", o.GoString())
+			r.Logf("trace:\n%s", strings.Join(rec.Trace, "\n"))
 		}
 		if len(vs) == 0 {
 			continue
@@ -273,20 +296,22 @@ func runSeeds(t *testing.T, test string, p profile) (failing []uint64) {
 		if len(failing) > 5 {
 			continue // the first five are reported in full
 		}
-		min := shrink(o, vs[0].Oracle)
-		t.Errorf("seed %d: %v\n  repro: %s\n  shrunk to %d of %d faults: %#v",
-			seed, vs[0], reproLine(test, seed), len(min.Faults), len(o.Faults), min)
+		min := shrink(o, vs[0].Oracle, run.checks)
+		r.Errorf("seed %d: %v\n  repro: %s\n  shrunk to %d of %d faults: %#v",
+			seed, vs[0], reproLine(run.test, seed), len(min.Faults), len(o.Faults), min)
 	}
 	if len(failing) > 5 {
-		t.Errorf("%d failing seeds in all: %v", len(failing), failing)
+		r.Errorf("%d failing seeds in all: %v", len(failing), failing)
 	}
-	t.Logf("seeds %d–%d: %d failing", first, last, len(failing))
+	r.Logf("seeds %d–%d: %d failing", first, last, len(failing))
 	return failing
 }
 
 // TestSeeds runs the seeded random schedules (test plan §3.2): 2,000 per
 // PR, QUORUM_SEEDS for the nightly 200,000.
-func TestSeeds(t *testing.T) { runSeeds(t, "TestSeeds", profDefault) }
+func TestSeeds(t *testing.T) {
+	runSeeds(t, seedRun{test: "TestSeeds", p: profDefault, env: os.Getenv, checks: checksFor})
+}
 
 // One seed run twice gives the same run, event for event, with or without
 // its trace kept.
@@ -325,17 +350,28 @@ func TestSeedRange(t *testing.T) {
 	}
 }
 
+// strict judges a schedule with every oracle on, F22b's exclusions
+// included.
+func strict(o Options) Checks {
+	c := checksFor(o)
+	c.Exclude = nil
+	return c
+}
+
 // F22b measured as an expected breach over seeds: a frozen controller
 // clock must break I1 in some schedules (the oracle sees it), and every
-// other oracle still holds. The printed reproduce line of a breaching seed
-// reruns exactly that breach (TestReproLine).
+// oracle the breach doesn't excuse (all but I1, I2 and the lease) still
+// holds in every schedule.
 func TestFrozenClockSeeds(t *testing.T) {
 	breaches := 0
 	for seed := uint64(1); seed <= 100; seed++ {
 		o := randomRun(seed, profFreeze)
-		vs := Check(Run(o), Checks{MaxTakeovers: -1})
-		if overlap(vs) {
+		rec := Run(o)
+		if overlap(Check(rec, strict(o))) {
 			breaches++
+		}
+		for _, v := range Check(rec, checksFor(o)) {
+			t.Errorf("seed %d: %v (only I1, I2 and the lease oracle are excused for F22b)", seed, v)
 		}
 	}
 	if breaches == 0 {
@@ -344,30 +380,47 @@ func TestFrozenClockSeeds(t *testing.T) {
 	t.Logf("F22b: %d of 100 schedules with a frozen controller clock broke I1 (expected; pausable VMs unsupported)", breaches)
 }
 
-// The one-line reproduce command names a seed that, run alone through the
-// same path, fails the same way with the same run hash.
-func TestReproLine(t *testing.T) {
-	for seed := uint64(1); seed <= 100; seed++ {
-		o := randomRun(seed, profFreeze)
-		rec := Run(o)
-		vs := Check(rec, Checks{MaxTakeovers: -1})
-		if !overlap(vs) {
-			continue
+// recorder is a reporter that keeps what the runner printed.
+type recorder struct{ errs, logs []string }
+
+func (r *recorder) Errorf(f string, a ...any) { r.errs = append(r.errs, fmt.Sprintf(f, a...)) }
+func (r *recorder) Logf(f string, a ...any)   { r.logs = append(r.logs, fmt.Sprintf(f, a...)) }
+func (r *recorder) Fatal(a ...any)            { r.errs = append(r.errs, fmt.Sprint(a...)) }
+
+func env(kv ...string) func(string) string {
+	return func(k string) string {
+		for i := 0; i+1 < len(kv); i += 2 {
+			if kv[i] == k {
+				return kv[i+1]
+			}
 		}
-		line := reproLine("TestFrozenClockSeeds", seed)
-		m := regexp.MustCompile(`^QUORUM_SEED=(\d+) `).FindStringSubmatch(line)
-		if m == nil {
-			t.Fatalf("line %q names no seed", line)
-		}
-		first, last, single, err := seedRange("", m[1])
-		if err != nil || !single || first != seed || last != seed {
-			t.Fatalf("line %q parsed to %d–%d single=%v err=%v", line, first, last, single, err)
-		}
-		again := Run(randomRun(first, profFreeze))
-		if again.Hash != rec.Hash || fmt.Sprint(Check(again, Checks{MaxTakeovers: -1})) != fmt.Sprint(vs) {
-			t.Fatalf("seed %d did not reproduce", seed)
-		}
-		return
+		return ""
 	}
-	t.Fatal("no breaching seed to reproduce")
+}
+
+var reproRE = regexp.MustCompile(`repro: QUORUM_SEED=(\d+) go test \./quorum/sim -run '\^(\w+)\$' -v`)
+
+// The real runner path, end to end: seeds that fail (a frozen clock judged
+// strictly, so failures exist) are reported with a reproduce line; the
+// environment that line names, run through the same runner, reports that
+// seed alone with the same violation and the same shrunk schedule.
+func TestReproLine(t *testing.T) {
+	run := seedRun{test: "TestSeeds", p: profFreeze, env: env("QUORUM_SEEDS", "1-40"), checks: strict}
+	var batch recorder
+	if failing := runSeeds(&batch, run); len(failing) == 0 || len(batch.errs) == 0 {
+		t.Fatal("no failing seed to reproduce")
+	}
+	m := reproRE.FindStringSubmatch(batch.errs[0])
+	if m == nil || m[2] != run.test {
+		t.Fatalf("the report carries no reproduce line for %s: %q", run.test, batch.errs[0])
+	}
+	run.env = env("QUORUM_SEED", m[1])
+	var again recorder
+	failing := runSeeds(&again, run)
+	if fmt.Sprint(failing) != "["+m[1]+"]" || len(again.errs) != 1 || again.errs[0] != batch.errs[0] {
+		t.Fatalf("QUORUM_SEED=%s reported %v:\n%q\nwant exactly\n%q", m[1], failing, again.errs, batch.errs[0])
+	}
+	if len(again.logs) < 2 || !strings.HasPrefix(again.logs[0], "schedule: Options{Seed: "+m[1]) {
+		t.Fatal("a single seed did not log its schedule and trace")
+	}
 }

@@ -199,6 +199,9 @@ type node struct {
 	cand  *quorum.Candidate
 	nonce uint64
 	sent  []sentReq // this boot's requests, for the hostile-delivery check
+	// legit are the grants this boot's candidate may count, by request:
+	// a hostile grant is decisive when one of these is already in.
+	legit []legitGrant
 
 	// timers: local deadlines, re-armed in global time on a clock change.
 	// tickGen names the one live tick event (it moves earlier when the
@@ -212,6 +215,11 @@ type node struct {
 
 	downs, pauses, freezes int // active crash, pause and freeze faults
 	savedRate              PPM
+}
+
+type legitGrant struct {
+	term, id uint64
+	from     quorum.NodeID
 }
 
 type sentReq struct {
@@ -391,7 +399,7 @@ func (w *World) start(n *node) {
 	n.up, n.deferred = true, nil
 	n.paused = n.pauses > 0 || n.freezes > 0
 	n.boot++
-	n.sent, n.grantEnd = nil, nil
+	n.sent, n.grantEnd, n.legit = nil, nil, nil
 	n.disk.queue, n.disk.busy = nil, false
 	now := w.local(n)
 
@@ -594,7 +602,10 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 
 // noteHostile records a reply a correct candidate must not count, that
 // reached OnReply while this boot had a request of the same (term, id) in
-// its last lease: the must-fail cases assert they were really exercised.
+// its last lease, and whether it was DECISIVE: a grant the candidate may
+// count was already in for that request and it didn't lead yet, so
+// counting the hostile one would have made a majority. The must-fail
+// cases assert a decisive one, so they can't pass vacuously.
 func (w *World) noteHostile(n *node, r quorum.Reply) {
 	if !r.Granted {
 		return
@@ -610,13 +621,25 @@ func (w *World) noteHostile(n *node, r quorum.Reply) {
 	case r.Nonce != n.nonce:
 		why = "earlier boot"
 	default:
+		for _, g := range n.legit {
+			if g.term == r.Term && g.id == r.ID && g.from == r.From {
+				return
+			}
+		}
+		n.legit = append(n.legit, legitGrant{term: r.Term, id: r.ID, from: r.From})
 		return
 	}
 	now := w.local(n)
 	for _, s := range n.sent {
 		if s.term == r.Term && s.id == r.ID && now < s.at.Add(w.o.Lease) {
-			w.rec.Hostile = append(w.rec.Hostile, Hostile{At: w.now, To: n.addr, Why: why})
-			w.tracef("%v receives a hostile grant (%s) matching an open request", n.addr, why)
+			decisive := false
+			for _, g := range n.legit {
+				if g.term == r.Term && g.id == r.ID && g.from != r.From {
+					decisive = !n.cand.Leading(now)
+				}
+			}
+			w.rec.Hostile = append(w.rec.Hostile, Hostile{At: w.now, To: n.addr, Why: why, Decisive: decisive})
+			w.tracef("%v receives a hostile grant (%s) matching an open request (decisive=%v)", n.addr, why, decisive)
 			return
 		}
 	}

@@ -24,17 +24,18 @@ func clean(t *testing.T, rec *Record, c Checks) {
 	}
 }
 
-// hostile asserts the run really delivered a reply of the named kind while
-// a matching request was open, so a must-fail case can't pass because the
-// hostile message never arrived.
+// hostile asserts the run really delivered a DECISIVE reply of the named
+// kind: one that, counted, would have completed a majority for an open
+// request. Otherwise a must-fail case could pass because the hostile grant
+// never mattered (naut-lead's review of #981).
 func hostile(t *testing.T, rec *Record, why string, to Addr) {
 	t.Helper()
 	for _, h := range rec.Hostile {
-		if h.Why == why && h.To == to {
+		if h.Why == why && h.To == to && h.Decisive {
 			return
 		}
 	}
-	t.Fatalf("the case is vacuous: no %q grant reached %v while its request was open (got %v)", why, to, rec.Hostile)
+	t.Fatalf("the case is vacuous: no decisive %q grant reached %v (got %+v)", why, to, rec.Hostile)
 }
 
 func ledBy(rec *Record) map[Addr]bool {
@@ -93,20 +94,28 @@ func TestMustFailPreRestartGrant(t *testing.T) {
 	clean(t, rec, Checks{MaxTakeovers: -1})
 }
 
-// F31: a grant from a voter the pair doesn't know (a name that is not A,
-// B or W) must not count. A's requests to W also reach Z, which answers.
-// Pins the sender check in Candidate.OnReply: without it, A leads on
-// {A, Z} while B leads on {B, W}.
-func TestMustFailUnknownSender(t *testing.T) {
-	o := Options{
-		Seed: 1, Delay: 1 * ms, Fsync: 1 * ms, Until: 12 * sec, Trace: true,
+// strayVoter runs B leading on {B, W} while A, cut from B both ways (so
+// it sees no renewal of B's and campaigns once its own voter's restart
+// wait is over), also reaches the voter at stray through a mirror of its
+// link to W. A's own voter grants A; W refuses (promised to B); the stray
+// grant would be the deciding second one.
+func strayVoter(stray Addr) *Record {
+	return Run(Options{
+		Seed: 1, Delay: 1 * ms, Fsync: 1 * ms, Until: 14 * sec, Trace: true,
 		Start: [3]time.Duration{4000 * ms, 0, 0}, // B leads first
 		Faults: []Fault{
-			{Kind: Start, At: 0, Node: Z},
-			{Kind: Mirror, At: 0, From: A, To: W, Node: Z},
+			{Kind: Start, At: 0, Node: stray},
+			{Kind: Mirror, At: 0, From: A, To: W, Node: stray},
+			{Kind: Cut, At: 0, From: A, To: B, Both: true},
 		},
-	}
-	rec := Run(o)
+	})
+}
+
+// F31: a grant from a voter the pair doesn't know (a name that is not A,
+// B or W) must not count. Pins the sender check in Candidate.OnReply:
+// without it, A leads on {A, Z} while B leads on {B, W}.
+func TestMustFailUnknownSender(t *testing.T) {
+	rec := strayVoter(Z)
 	hostile(t, rec, "unknown sender", A)
 	clean(t, rec, Checks{MaxTakeovers: -1})
 	if l := ledBy(rec); !l[B] || l[A] {
@@ -119,17 +128,12 @@ func TestMustFailUnknownSender(t *testing.T) {
 // count. Pins the incarnation check: without it, A leads on {A, W2} while
 // B leads on {B, W}.
 func TestMustFailSecondWitnessCopy(t *testing.T) {
-	o := Options{
-		Seed: 1, Delay: 1 * ms, Fsync: 1 * ms, Until: 12 * sec, Trace: true,
-		Start: [3]time.Duration{4000 * ms, 0, 0}, // B leads first
-		Faults: []Fault{
-			{Kind: Start, At: 0, Node: W2},
-			{Kind: Mirror, At: 0, From: A, To: W, Node: W2},
-		},
-	}
-	rec := Run(o)
+	rec := strayVoter(W2)
 	hostile(t, rec, "other witness incarnation", A)
 	clean(t, rec, Checks{MaxTakeovers: -1})
+	if l := ledBy(rec); !l[B] || l[A] {
+		t.Fatalf("leaders %v, want B only", l)
+	}
 }
 
 // isolateLeader runs a case where the first leader, A, is cut from B and W
