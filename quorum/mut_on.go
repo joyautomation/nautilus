@@ -57,6 +57,7 @@ var Mutations = []string{
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.
 	"gate_on_tick",               // the gate is judged on the elector's look, not when it is read
+	"no_fence_margin",            // the gate closes at the lease's end, not a fence margin before it (design §3.4)
 	"peer_host_trusted",          // the peer listener answers a trusted Host without the peer token
 	"persisted_before_write",     // a write is reported durable before it is on disk
 	"state_in_place",             // the state file is rewritten in place, so a crash tears it
@@ -85,6 +86,9 @@ var Mutations = []string{
 	"alarm_view_ignored",       // server: a synced takeover restores its own retain, not the log's alarm view
 	"engine_not_reset",         // server: a takeover restores the view over the engine's frozen operator state
 	"reconcile_before_restore", // server: the alarm log is live from the lease on, before the takeover restored it (#1033 CI)
+	"gate_per_batch",           // hw: the gate is read once per batch, not before each command (design §3.4)
+	"send_no_deadline",         // fence: a send gets no deadline, and one past its budget still starts (design §3.4)
+	"fence_fin",                // fence: a fenced socket is closed with a FIN, not reset (design §3.4)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

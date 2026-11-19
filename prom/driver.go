@@ -291,15 +291,19 @@ func (m Manifest) Warnings() []string {
 func (d *Driver) Start(ctx context.Context) { d.base.Start(ctx) }
 func (d *Driver) Stop()                     { d.base.Stop() }
 
-func (d *Driver) ReadInputs() (nio.Values, error)      { return d.base.ReadInputs() }
-func (d *Driver) ReadInputsInto(dst nio.Values) error  { return d.base.ReadInputsInto(dst) }
-func (d *Driver) WriteOutputs(vals nio.Values) error   { return d.base.WriteOutputs(vals) }
-func (d *Driver) Quality() map[string]nio.Quality      { return d.base.Quality() }
-func (d *Driver) InputNames() []string                 { return d.base.InputNames() }
-func (d *Driver) InputType(name string) string         { return d.base.InputType(name) }
-func (d *Driver) OutputNames() []string                { return d.base.OutputNames() }
-func (d *Driver) ScanClasses() map[string][]string     { return d.base.ScanClasses() }
-func (d *Driver) SetWriteGate(gate func() bool)        { d.base.SetWriteGate(gate) }
+func (d *Driver) ReadInputs() (nio.Values, error)     { return d.base.ReadInputs() }
+func (d *Driver) ReadInputsInto(dst nio.Values) error { return d.base.ReadInputsInto(dst) }
+func (d *Driver) WriteOutputs(vals nio.Values) error  { return d.base.WriteOutputs(vals) }
+func (d *Driver) Quality() map[string]nio.Quality     { return d.base.Quality() }
+func (d *Driver) InputNames() []string                { return d.base.InputNames() }
+func (d *Driver) InputType(name string) string        { return d.base.InputType(name) }
+func (d *Driver) OutputNames() []string               { return d.base.OutputNames() }
+func (d *Driver) ScanClasses() map[string][]string    { return d.base.ScanClasses() }
+func (d *Driver) SetWriteGate(gate func() bool)       { d.base.SetWriteGate(gate) }
+
+// SetSendGate installs a pair's gate with its send budget, read before
+// each command (hw.Base.SetSendGate, design §3.4).
+func (d *Driver) SetSendGate(g nio.SendGate)           { d.base.SetSendGate(g) }
 func (d *Driver) StructDefs() map[string]*ir.StructDef { return d.base.StructDefs() }
 func (d *Driver) Health() hw.Health                    { return d.base.Health() }
 

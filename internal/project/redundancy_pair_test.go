@@ -72,6 +72,10 @@ func TestPairSectionRefusals(t *testing.T) {
 		{"a pair without the opt-in", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n", "retained values (setpoints) are not replicated until state streaming"},
 		{"the opt-in without peers", "redundancy:\n  experimental: true\n", "applies to a redundant pair"},
 		{"empty peers", "redundancy:\n  peers: {}\n  witness: wit:9460\n", "peers is empty"},
+		{"a fence margin of a quarter lease", pairOK + "  lease: 2s\n  net-delay: 480ms\n  send-margin: 20ms\n", "under a quarter of the lease"},
+		{"a net delay alone too long for a short lease", pairOK + "  lease: 200ms\n  net-delay: 40ms\n", "under a quarter of the lease"},
+		{"a negative send margin", pairOK + "  send-margin: -5ms\n", "zero or more"},
+		{"a fence margin without peers", "redundancy:\n  net-delay: 50ms\n", "apply to a redundant pair"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := Load(pairFS(c.red), "")
@@ -79,5 +83,34 @@ func TestPairSectionRefusals(t *testing.T) {
 				t.Fatalf("got %v, want an error containing %q", err, c.want)
 			}
 		})
+	}
+}
+
+// The fence margin's parts (design §3.4) load when set under a quarter of
+// the lease; unset, they stay zero (the elector scales its defaults).
+func TestPairFenceMarginLoads(t *testing.T) {
+	p, err := Load(pairFS(pairOK+"  lease: 2s\n  net-delay: 100ms\n  send-margin: 30ms\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := p.Redundancy; time.Duration(r.NetDelay) != 100*time.Millisecond || time.Duration(r.SendMargin) != 30*time.Millisecond {
+		t.Fatalf("net-delay %v send-margin %v", time.Duration(r.NetDelay), time.Duration(r.SendMargin))
+	}
+	if p, err := Load(pairFS(pairOK+"  lease: 200ms\n"), ""); err != nil || p.Redundancy.NetDelay != 0 {
+		t.Fatalf("a short lease with the margin unset: %v", err)
+	}
+}
+
+// #798: a pair can't run a Sparkplug edge node yet (both members would
+// publish as the same edge node), so a pair with sparkplug: is refused at
+// load, naming the issue. The Kubernetes Lease mode is left as it was.
+func TestPairRefusesASparkplugEdge(t *testing.T) {
+	edge := "sparkplug:\n  broker: tcp://broker:1883\n  group-id: plant\n"
+	_, err := Load(pairFS(edge+pairOK), "")
+	if err == nil || !strings.Contains(err.Error(), "#798") {
+		t.Fatalf("a pair with a Sparkplug edge: %v; want refused naming #798", err)
+	}
+	if _, err := Load(pairFS(edge+"redundancy:\n  lease: plant-a\n"), ""); err != nil {
+		t.Fatalf("the Kubernetes Lease mode with a Sparkplug edge: %v; want it loaded as before", err)
 	}
 }

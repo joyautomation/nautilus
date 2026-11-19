@@ -131,13 +131,61 @@ func TestGateJudgedWhenRead(t *testing.T) {
 	if !e.IsLeader() || e.Term() != 7 {
 		t.Fatalf("inside the lease: IsLeader %v, Term %d", e.IsLeader(), e.Term())
 	}
-	clk.add(299 * time.Millisecond)
+	// It closes the fence margin before the lease end (design §3.4).
+	clk.add(300*time.Millisecond - e.Fence() - time.Millisecond)
 	if !e.IsLeader() {
-		t.Fatal("closed before the lease end")
+		t.Fatal("closed before the fence margin")
 	}
 	clk.add(time.Millisecond)
 	if e.IsLeader() || e.Term() != 7 {
-		t.Fatalf("at the lease end, with no look since: IsLeader %v, Term %d; want closed, and the last term (7) kept", e.IsLeader(), e.Term())
+		t.Fatalf("at the fence margin, with no look since: IsLeader %v, Term %d; want closed, and the last term (7) kept", e.IsLeader(), e.Term())
+	}
+}
+
+// Design §3.4: the gate closes a fence margin (net delay plus send margin)
+// BEFORE the lease ends, not at its end, so a send that passed the check
+// still leaves while the lease holds; and SendGate gives, from the same
+// read, the budget a send may take: the lease left minus the net delay.
+func TestGateClosesAFenceMarginBeforeTheLeaseEnd(t *testing.T) {
+	clk := newFakeClock()
+	o := testOptions(t, "a", "b")
+	o.clock = clk.now
+	o.NetDelay, o.SendMargin = 50*time.Millisecond, 20*time.Millisecond
+	e, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	e.gate.Store(&gateState{epoch: 3, end: clk.now().Add(time.Second), open: true})
+	if ok, budget := e.SendGate(); !ok || budget != 950*time.Millisecond {
+		t.Fatalf("1 s left: SendGate %v %s; want open with 950 ms (the lease left minus the 50 ms net delay)", ok, budget)
+	}
+	clk.add(929 * time.Millisecond) // 71 ms left: just over the 70 ms margin
+	if ok, budget := e.SendGate(); !ok || budget != 21*time.Millisecond || !e.Status().Leading {
+		t.Fatalf("71 ms left: SendGate %v %s, Leading %v; want open with 21 ms", ok, budget, e.Status().Leading)
+	}
+	clk.add(time.Millisecond) // 70 ms left: the margin
+	if ok, budget := e.SendGate(); ok || budget != 0 || e.IsLeader() || e.Status().Leading {
+		t.Fatalf("70 ms left: SendGate %v %s, IsLeader %v, Leading %v; want closed a fence margin before the lease end", ok, budget, e.IsLeader(), e.Status().Leading)
+	}
+}
+
+// The margin's parts scale with a short lease and stay under a quarter of
+// any lease; one set beyond that is refused at New.
+func TestFenceDefaultsAndBound(t *testing.T) {
+	for _, c := range []struct{ lease, dn, ms time.Duration }{
+		{2 * time.Second, 50 * time.Millisecond, 20 * time.Millisecond},
+		{200 * time.Millisecond, 25 * time.Millisecond, 12500 * time.Microsecond},
+	} {
+		dn, ms := FenceDefaults(c.lease)
+		if dn != c.dn || ms != c.ms || dn+ms >= c.lease/4 {
+			t.Errorf("FenceDefaults(%s) = %s, %s; want %s, %s, under a quarter of the lease", c.lease, dn, ms, c.dn, c.ms)
+		}
+	}
+	o := testOptions(t, "a", "b")
+	o.Lease, o.NetDelay, o.SendMargin = 2*time.Second, 480*time.Millisecond, 20*time.Millisecond
+	if _, err := New(o); err == nil || !strings.Contains(err.Error(), "fence margin") {
+		t.Fatalf("a 500 ms margin on a 2 s lease: %v; want refused", err)
 	}
 }
 

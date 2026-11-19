@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 )
@@ -185,6 +186,7 @@ type Base struct {
 
 	gateMu    sync.Mutex
 	writeGate func() bool
+	sendGate  nio.SendGate // a pair's gate with its send budget (SetSendGate)
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -578,11 +580,36 @@ func (b *Base) SetWriteGate(gate func() bool) {
 	b.gateMu.Unlock()
 }
 
-func (b *Base) gateOpen() bool {
+// SetSendGate installs a pair's gate with its send budget (design §3.4):
+// read immediately before each command, it is the gate this driver obeys,
+// and each command gets the budget as its deadline.
+func (b *Base) SetSendGate(g nio.SendGate) {
 	b.gateMu.Lock()
-	g := b.writeGate
+	b.sendGate = g
 	b.gateMu.Unlock()
-	return g == nil || g()
+}
+
+// gate is the gate a command checks: the send gate when installed, else
+// the plain gate with no deadline; nil means always open.
+func (b *Base) gate() nio.SendGate {
+	b.gateMu.Lock()
+	defer b.gateMu.Unlock()
+	if b.sendGate != nil {
+		return b.sendGate
+	}
+	if g := b.writeGate; g != nil {
+		return func() (bool, time.Duration) { return g(), -1 }
+	}
+	return nil
+}
+
+func (b *Base) gateOpen() bool {
+	g := b.gate()
+	if g == nil {
+		return true
+	}
+	ok, _ := g()
+	return ok
 }
 
 // Start launches one poll loop per source. Idempotent: a second Start is a
@@ -1059,6 +1086,12 @@ func (b *Base) mergeLocked(s *Source, c *classRun, res Result) {
 // the write gate is open. A refused command is dropped with its error on
 // the row: retrying a Set the device rejected would only repeat the
 // refusal, and a transport failure shows up on the next poll anyway.
+//
+// The gate is read again immediately before EACH command, which runs with
+// the gate's send budget as its deadline (design §3.4): a batch never goes
+// out on one look. When the gate closes partway through, the command it
+// stopped and every one after it are dropped, logged once: never put
+// back, so nothing queued under one leadership leaves after a later one.
 func (b *Base) flushWrites(ctx context.Context, s *Source) {
 	if b.write == nil || !b.gateOpen() {
 		return
@@ -1072,7 +1105,7 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 	s.pending = nil
 	s.mu.Unlock()
 	now := b.now()
-	for _, q := range batch {
+	for i, q := range batch {
 		name := q.name
 		if age := now.Sub(q.at); age > s.cfg.StaleAfter {
 			// Rule 5: too old to be what anyone means now.
@@ -1085,7 +1118,18 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 			continue
 		}
 		w := b.writes[name]
-		err := b.write(ctx, s.cfg.ID, w.decl, q.v)
+		deadline, ok := time.Time{}, true
+		if !mut("gate_per_batch") {
+			deadline, ok = fence.Begin(b.gate(), time.Now())
+		}
+		if !ok || !fence.Started(deadline, time.Now()) {
+			b.dropRest(s, batch[i:])
+			return
+		}
+		wctx, cancel := fence.Context(ctx, deadline)
+		fence.BeforeSend()
+		err := b.write(wctx, s.cfg.ID, w.decl, q.v)
+		cancel()
 		if errors.Is(err, ErrNoWrite) {
 			continue
 		}
@@ -1103,6 +1147,19 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 		s.mu.Unlock()
 		b.writesN.Add(1)
 	}
+}
+
+// dropRest drops the commands a closed gate stopped, the first of rest and
+// every one after it, with one log line and the reason on the row.
+func (b *Base) dropRest(s *Source, rest []queuedWrite) {
+	names := make([]string, len(rest))
+	for i, q := range rest {
+		names[i] = q.name
+	}
+	s.mu.Lock()
+	s.lastWrite = fmt.Errorf("write gate closed: %d queued command(s) dropped (%s); not sent: this controller no longer leads, or its scans are not live", len(names), strings.Join(names, ", "))
+	s.mu.Unlock()
+	b.log.Warn(b.kind+": write gate closed; queued commands dropped", "source", s.cfg.ID, "count", len(names), "tags", names)
 }
 
 func (s *Source) isEnabled() bool {

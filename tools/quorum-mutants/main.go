@@ -163,6 +163,12 @@ var table = []mutation{
 	// restored it. cmd/naut's TestPairAckCarriesWhileTheTakeoverWaits
 	// loses the ack under it too.
 	{"reconcile_before_restore", []string{"TestAlarmLogWaitsForTheRestore"}},
+	// #710 PR 3b-3a, design §3.4: writes leave in time, on every output
+	// path. The four test plan §3.3 rows.
+	{"no_fence_margin", []string{"TestGateClosesAFenceMarginBeforeTheLeaseEnd"}},
+	{"gate_per_batch", []string{"TestGateClosedMidBatchStopsTheRest"}},
+	{"send_no_deadline", []string{"TestBegin", "TestEachCommandRunsToItsSendDeadline", "TestModbusEachWriteRunsToItsSendDeadline", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestEIPEachRequestRunsToItsSendDeadline"}},
+	{"fence_fin", []string{"TestResetSendsAnRSTAndDropsQueuedBytes", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestFencedSendUnitDataResetsAtItsDeadline"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -173,6 +179,9 @@ var rowPkgs = map[string][]string{
 	"alarm_view_ignored":       {"./cmd/naut"},
 	"engine_not_reset":         {"./server"},
 	"reconcile_before_restore": {"./server"},
+	"gate_per_batch":           {"./hw"},
+	"send_no_deadline":         {"./internal/fence", "./hw", "./modbus", "./eip"},
+	"fence_fin":                {"./internal/fence", "./modbus", "./eip/cip"},
 }
 
 // args are the go test arguments for m.

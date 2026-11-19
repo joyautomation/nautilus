@@ -235,6 +235,9 @@ func (m *Multi) Replace(name string, d Driver) (Driver, error) {
 	if g, ok := old.(interface{ SetWriteGate(func() bool) }); ok {
 		g.SetWriteGate(closedGate)
 	}
+	if g, ok := old.(SendGated); ok {
+		g.SetSendGate(ClosedSendGate) // the gate such a driver reads (design §3.4)
+	}
 	m.children[at].Driver = d
 	m.inOwner, m.outOwner = in, out
 	m.askers = m.askers[:0]
@@ -458,6 +461,23 @@ func (m *Multi) SetWriteGate(gate func() bool) {
 	}
 }
 
+// SetSendGate fans a pair's send gate out to every child that checks one
+// before each send (SendGated), as SetWriteGate fans the plain gate out.
+// A child that doesn't keeps the plain gate SetWriteGate gave it.
+func (m *Multi) SetSendGate(gate SendGate) {
+	install := func(d Driver) {
+		if g, ok := d.(SendGated); ok {
+			g.SetSendGate(gate)
+		}
+	}
+	m.set.Lock()
+	defer m.set.Unlock()
+	m.gates = append(m.gates, install)
+	for _, c := range m.children {
+		install(c.Driver)
+	}
+}
+
 // PlainGated is a driver whose write gate is only a gate. Open, it acts
 // exactly as with no gate; closed, it sends nothing of its own (no
 // re-assert, no queued command); reopened, it forgets what it sent and
@@ -521,4 +541,5 @@ var (
 	_ InputsReadier    = (*Multi)(nil)
 
 	_ interface{ SetWriteGate(func() bool) } = (*Multi)(nil)
+	_ SendGated                              = (*Multi)(nil)
 )

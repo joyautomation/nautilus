@@ -149,10 +149,10 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a stream frame of an older term is applied | I5 | 4 |
 | hot takeover with no image-age check | I5 | 4 |
 | hot takeover on an image with a different build hash | I5 | 4 |
-| the gate is checked once per batch, not before each send (as `hw/base.go` does today) | design §3.4 | 3 |
-| a send with no deadline | design §3.4 | 3 |
-| no fence margin (the gate closes at lease expiry) | design §3.4 | 3 |
-| sockets closed with FIN, not RST, on fence | design §3.4, RST on fence | 3 |
+| the gate is checked once per batch, not before each send (as `hw/base.go` did) | design §3.4 | 3b-3a (`gate_per_batch`) |
+| a send with no deadline | design §3.4 | 3b-3a (`send_no_deadline`) |
+| no fence margin (the gate closes at lease expiry) | design §3.4 | 3b-3a (`no_fence_margin`) |
+| sockets closed with FIN, not RST, on fence | design §3.4, RST on fence | 3b-3a (`fence_fin`) |
 | the peer listener trusts a Host instead of requiring the peer token | design §6.1 | 3a (`peer_host_trusted`) |
 | the standby's proxy drops or rewrites the client's Host or token | design §6.1 | 3 |
 | no back-off after a lease lapses unconfirmed | design §3.1, one-way partitions | 2 |
@@ -393,7 +393,10 @@ at three points:
 2. after the deadline is set and before the send;
 3. right before the send system call.
 
-Each case sweeps pauses of 0.1, 0.5, 1 and 2 × lease, in T2 and T3:
+Each case sweeps pauses of 0.1, 0.5, 1 and 2 × lease, in T2 and T3. The hooks live in
+`internal/fence` (`fence.Pause`); T2 runs them on every PR on Modbus over a real socket
+(`TestModbusPauseBetweenCheckAndSend`, from 3b-3a; the other paths with 3b-3b), and a pause
+there is judged against the send's budget, which is what the lease multiples come to:
 
 - **At points 1 and 2,** nothing may leave late (I3).
 - **At point 3, with pauses shorter than `m_fence`,** nothing may leave late either: the fence

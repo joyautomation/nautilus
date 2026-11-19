@@ -127,6 +127,11 @@ jobs:
         run: |
           mkdir -p evidence
           go test -json -count=1 -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+      # Test plan §3.4 (#710 PR 3b-3a): the quorumtest build's pause hooks
+      # between a write's gate check and its send, swept on a real socket
+      # (a few seconds). The tag adds the hooks, so it runs apart from ./...
+      - name: go test -tags quorumtest (pause between check and send)
+        run: go test -count=1 -tags quorumtest -run 'Pause' ./internal/fence/ ./modbus/ ./eip/
       # The real-time guard (#836) against a real SCHED_FIFO thread: the
       # runtime's test binary (and the PLCnext shim's guard harness) gets
       # CAP_SYS_NICE with setcap, and a thread spinning at FIFO 1 must be

@@ -339,6 +339,10 @@ func (d *Driver) ScanClasses() map[string][]string { return d.base.ScanClasses()
 // SetWriteGate installs the leadership gate for commands.
 func (d *Driver) SetWriteGate(gate func() bool) { d.base.SetWriteGate(gate) }
 
+// SetSendGate installs a pair's gate with its send budget, read before
+// each command (hw.Base.SetSendGate, design §3.4).
+func (d *Driver) SetSendGate(g nio.SendGate) { d.base.SetSendGate(g) }
+
 // StructDefs is the contract type set.
 func (d *Driver) StructDefs() map[string]*ir.StructDef { return d.base.StructDefs() }
 

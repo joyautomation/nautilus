@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -205,6 +206,10 @@ type Driver struct {
 	// that finds the gate reopened while another is still forgetting waits
 	// for the forget instead of reading the previous term's written.
 	turnMu sync.Mutex
+	// sendGate is a pair's gate with its send budget (SetSendGate): when
+	// installed it is the gate every look reads, and each request gets the
+	// budget as its deadline (design §3.4).
+	sendGate nio.SendGate
 
 	// baseline is armed by Start: the first WriteOutputs snapshot after it
 	// describes the world, it does not command it (sparkplug-host's rule).
@@ -556,6 +561,18 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Unlock()
 }
 
+// SetSendGate installs a pair's gate with its send budget (io.SendGated,
+// design §3.4): read immediately before every write request, which gets
+// the budget as its deadline; a request still unanswered at its deadline
+// resets the socket (SO_LINGER 0) so nothing queued leaves late.
+func (d *Driver) SetSendGate(g nio.SendGate) {
+	d.gateMu.Lock()
+	d.sendGate = g
+	d.gateMu.Unlock()
+}
+
+var _ nio.SendGated = (*Driver)(nil)
+
 // PlainWriteGate marks this driver's write gate as only a gate
 // (io.PlainGated): open, it acts as with none. naut run gives it one in a
 // project without redundancy too, open while the scans are live (#625).
@@ -571,13 +588,25 @@ var _ nio.PlainGated = (*Driver)(nil)
 // raced the close and recorded a value after it. Callers do not hold any
 // source's mu or wmu.
 func (d *Driver) gateOpen() bool {
+	open, _ := d.look()
+	return open
+}
+
+// look is gateOpen with the send budget the same read of the gate gave
+// (negative: no deadline), for a look made right before a request.
+func (d *Driver) look() (bool, time.Duration) {
 	d.gateMu.Lock()
-	gate := d.writeGate
+	gate, send := d.writeGate, d.sendGate
 	d.gateMu.Unlock()
-	if gate == nil {
-		return true
+	if gate == nil && send == nil {
+		return true, -1
 	}
-	open := gate()
+	open, budget := false, time.Duration(-1)
+	if send != nil {
+		open, budget = send()
+	} else {
+		open = gate()
+	}
 	// Steady state is one atomic load. A transition is made under turnMu,
 	// and gateShut is cleared only AFTER the forget: a second looker that
 	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
@@ -599,7 +628,7 @@ func (d *Driver) gateOpen() bool {
 		}
 		d.turnMu.Unlock()
 	}
-	return open
+	return open, budget
 }
 
 // reopenHook, when a test sets it, runs at the start of forgetWritten: the
@@ -1546,31 +1575,43 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		s.mu.Unlock()
 	}
 
-	// gateClosed drops the write at bi/ri/ci and every one after it when
-	// the gate has closed since the flush began. The flush returns as soon
-	// as it does, so a drop is logged at most once per flush.
-	gateClosed := func(bi, ri, ci int) bool {
-		if d.gateOpen() {
-			return false
+	// send looks at the gate immediately before the request at bi/ri/ci
+	// (design §3.4): open, it returns the request's context, bounded by
+	// the gate's send budget; closed, or with the budget used up, it drops
+	// that write and every one after it, and the flush returns, so a drop
+	// is logged at most once per flush.
+	send := func(bi, ri, ci int) (context.Context, context.CancelFunc, bool) {
+		deadline, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		if !ok || !fence.Started(deadline, time.Now()) {
+			drop(rest(bi, ri, ci))
+			return nil, nil, false
 		}
-		drop(rest(bi, ri, ci))
-		return true
+		wctx, cancel := fence.Context(ctx, deadline)
+		return wctx, cancel, true
 	}
 
 	// bit:N writables read-modify-write their register one at a time — the
 	// other 15 bits belong to the device (or to sibling bindings).
 	for i, bw := range bitWrites {
-		if gateClosed(i, 0, 0) {
+		rctx, cancel, ok := send(i, 0, 0)
+		if !ok {
 			return true
 		}
-		cur, err := readRegisters(ctx, c, s.cfg.UnitID, FCReadHoldingRegisters, bw.addr, 1)
+		cur, err := readRegisters(rctx, c, s.cfg.UnitID, FCReadHoldingRegisters, bw.addr, 1)
+		cancel()
 		if err == nil {
 			// Merge in normalized (big-endian) space, then restore the
 			// source's wire order — wireOrder is its own inverse.
 			w := wireOrder(cur, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
 			w = setBit(w, bw.bit, bw.on)
 			out := wireOrder([]uint16{w}, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
-			err = writeSingleRegister(ctx, c, s.cfg.UnitID, bw.addr, out)
+			// The write is its own send: the gate is looked at again.
+			wctx, cancel, ok := send(i, 0, 0)
+			if !ok {
+				return true
+			}
+			err = writeSingleRegister(wctx, c, s.cfg.UnitID, bw.addr, out)
+			cancel()
 		}
 		if !d.wroteOK(ctx, s, work, bw.names, retryAt, err) {
 			requeue(i, 0, 0)
@@ -1579,30 +1620,34 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	}
 
 	for i, run := range regRuns {
-		if gateClosed(len(bitWrites), i, 0) {
+		wctx, cancel, ok := send(len(bitWrites), i, 0)
+		if !ok {
 			return true
 		}
 		var err error
 		if len(run.values) == 1 {
-			err = writeSingleRegister(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
+			err = writeSingleRegister(wctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
-			err = writeMultipleRegisters(ctx, c, s.cfg.UnitID, run.addr, run.values)
+			err = writeMultipleRegisters(wctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
+		cancel()
 		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
 			requeue(len(bitWrites), i, 0)
 			return false
 		}
 	}
 	for i, run := range coilRuns {
-		if gateClosed(len(bitWrites), len(regRuns), i) {
+		wctx, cancel, ok := send(len(bitWrites), len(regRuns), i)
+		if !ok {
 			return true
 		}
 		var err error
 		if len(run.values) == 1 {
-			err = writeSingleCoil(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
+			err = writeSingleCoil(wctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
-			err = writeMultipleCoils(ctx, c, s.cfg.UnitID, run.addr, run.values)
+			err = writeMultipleCoils(wctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
+		cancel()
 		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
 			requeue(len(bitWrites), len(regRuns), i)
 			return false

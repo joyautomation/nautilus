@@ -176,6 +176,13 @@ func wireRedundancy(proj *project.Project, el runtime.Coordinator) {
 	if g, ok := proj.Runtime.Driver.(interface{ SetWriteGate(func() bool) }); ok {
 		g.SetWriteGate(el.IsLeader)
 	}
+	// A pair's elector also has the send budget (design §3.4): a driver
+	// that checks before each send reads it instead, in one look.
+	if sg, ok := el.(interface{ SendGate() (bool, time.Duration) }); ok {
+		if g, ok := proj.Runtime.Driver.(nio.SendGated); ok {
+			g.SetSendGate(sg.SendGate)
+		}
+	}
 	proj.WriteGate = el.IsLeader
 }
 

@@ -253,6 +253,7 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 	o = node.Options{
 		Cluster: cluster, Self: quorum.NodeID(self), Peer: quorum.NodeID(peer),
 		PeerAddr: r.Peers[peer], WitnessAddr: r.Witness, Lease: r.LeaseTime(),
+		NetDelay: time.Duration(r.NetDelay), SendMargin: time.Duration(r.SendMargin),
 		StatePath: filepath.Join(stateDir, pairStateFile), Token: token,
 		ClientToken: getenv("NAUTILUS_TOKEN"),
 		// Compared at the hello: the section both must agree on, and what

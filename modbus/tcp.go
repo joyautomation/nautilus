@@ -21,6 +21,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/joyautomation/nautilus/internal/fence"
 )
 
 // Modbus function codes the driver speaks. The names are the spec's.
@@ -164,11 +166,25 @@ func appendFrame(dst []byte, txid uint16, unit uint8, fc byte, pdu []byte) []byt
 //     mismatch, timeout) — the connection can no longer be trusted and the
 //     caller must reconnect, because a stray or truncated frame desyncs the
 //     stream permanently on a protocol with no resync marker.
-func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) ([]byte, error) {
+//
+// A fenced request (fence.Context: a write on a redundant pair) runs to
+// its send deadline, and a transport failure resets the socket
+// (fence.Reset, SO_LINGER 0) instead of leaving it to a FIN: what the
+// kernel still holds of the request is discarded, never delivered after
+// the lease (design §3.4).
+func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) (data []byte, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, err // not started: nothing was sent
+	}
+	if c.nc != nil && fence.Fenced(ctx) {
+		defer func() {
+			var exc ExceptionError
+			if err != nil && !errors.As(err, &exc) {
+				fence.Reset(c.nc)
+			}
+		}()
 	}
 	if len(pdu) > maxPDU-1 {
 		return nil, fmt.Errorf("modbus: request PDU too large (%d bytes)", len(pdu)+1)
@@ -190,6 +206,7 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 		}
 	}
 
+	fence.BeforeSend()
 	if _, err := c.rw.Write(appendFrame(nil, txid, unit, fc, pdu)); err != nil {
 		return nil, fmt.Errorf("modbus: write: %w", err)
 	}
