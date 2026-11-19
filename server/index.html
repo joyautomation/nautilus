@@ -380,6 +380,8 @@
       .phlegend .io.bad { color: var(--crit); }
       .phlegend .io.ok { color: var(--good); }
       #io-config { margin-top: 6px; font-weight: 600; color: var(--crit); }
+      #cluster-warn { margin: 0 0 1rem; padding: 0.6rem 0.8rem; border: 1px solid var(--crit); border-radius: 6px; font-weight: 600; color: var(--crit); }
+      #cluster-warn p { margin: 0; }
 
       /* ── field-driver status cards ────────────────────────────────────── */
       .drivers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.7rem; margin-top: 0.75rem; }
@@ -531,6 +533,7 @@
         </div>
       </header>
       <p class="tagline">Your control logic is running. This page is served by the built-in tag API.</p>
+      <div id="cluster-warn" role="alert" style="display:none"></div>
 
       <section>
         <h2>Scan diagnostics</h2>
@@ -699,6 +702,22 @@
       let inputSet = new Set();
       let outputSet = new Set();
       let hasMeta = false;
+      // Standing warnings of the redundancy (GET /api/cluster): a redundant
+      // pair's retained values not replicated yet (#710), for one.
+      function loadClusterWarnings() {
+        fetch("/api/cluster")
+          .then((r) => r.json())
+          .then((st) => {
+            const w = st.warnings ?? [];
+            const el = $("cluster-warn");
+            el.innerHTML = w.map((m) => `<p>Redundancy: ${esc(m)}</p>`).join("");
+            el.style.display = w.length ? "" : "none";
+          })
+          .catch(() => {});
+      }
+      loadClusterWarnings();
+      setInterval(loadClusterWarnings, 30000);
+
       fetch("/api/meta")
         .then((r) => r.json())
         .then((m) => {

@@ -70,6 +70,8 @@ func electorWith(proj *project.Project, addr, dir string, deps pairDeps) (leader
 		if err != nil {
 			return nil, nil, err
 		}
+		// /api/cluster and the dashboard say it until state streaming.
+		m.q.Warn(project.PairRetainNotReplicated)
 		wireRedundancy(proj, m.q)
 		return m.q, m, nil
 	}
@@ -270,6 +272,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// Registered first, so it runs last: the peer listener answers
 		// votes until the election below has stopped and released.
 		defer pair.Close()
+		// Until state streaming (#710 step 4) the opt-in is required
+		// (Load refuses a pair without it), and said out loud.
+		fmt.Fprintln(os.Stderr, "naut run: redundancy: WARNING: experimental pair: "+project.PairRetainNotReplicated)
 		for _, h := range pair.untrustedAPIs(append(server.EnvAllowedHosts(), proj.Server.AllowedHosts...)) {
 			fmt.Fprintf(os.Stderr, "naut run: redundancy: the pair advertises a tag API at %s, which NAUTILUS_ALLOWED_HOSTS does not list: a browser HMI that follows the leader there is refused (403). Add it to NAUTILUS_ALLOWED_HOSTS on both controllers, or name the controllers by IP in redundancy.peers\n", h)
 		}

@@ -271,6 +271,45 @@ env:
     value: "water-scada,water-scada.$(POD_NAMESPACE),water-scada.$(POD_NAMESPACE).svc,water-scada.$(POD_NAMESPACE).svc.cluster.local"
 ```
 
+### A redundant pair without Kubernetes (experimental)
+
+Two controllers and a small third voter, `naut witness`, can elect a
+leader without a cluster. The full operator guide (commissioning,
+re-commissioning by hand, the takeover time) comes with the rest of the
+work (#710). For now the pair is an explicit opt-in:
+
+```yaml
+redundancy:
+  experimental: true      # required for now: see below
+  peers:
+    a: ctl-a:9450         # each controller's peer port
+    b: ctl-b:9450
+  witness: witness-host:9460
+  lease: 2s
+```
+
+:::caution[Retained values are not replicated yet]
+Until state streaming lands, each controller keeps its own retained
+values. A takeover starts from the **new** leader's own retain file, so
+a setpoint the old leader took is lost at failover. A pair without
+`experimental: true` is refused for that reason, and a running pair
+says so at start, in `GET /api/cluster` (`warnings`) and on the
+dashboard. Live I/O applies are refused on a pair.
+:::
+
+Each controller also needs, in its environment (`/etc/nautilus/env`
+under `naut deploy`):
+
+- `NAUTILUS_NODE`: `a` or `b`, which of the two it is;
+- `NAUTILUS_PEER_TOKEN`: the secret every peer and witness request
+  carries, the same on all three boxes;
+- `NAUTILUS_CLUSTER`: the pair's cluster ID, drawn when the pair is
+  commissioned, the same on all three boxes.
+
+The voter state, `quorum.state`, lives in the systemd state directory
+(`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
+Every `naut deploy` step keeps it, and a backup never contains it.
+
 ## RBAC
 
 The service account needs exactly this — no CRDs, no operator:

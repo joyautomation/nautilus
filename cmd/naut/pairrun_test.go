@@ -32,6 +32,7 @@ tasks:
 tags:
   - { name: SP, role: setpoint, init: 0.0 }
 redundancy:
+  experimental: true
   peers:
     a: %s
     b: %s
@@ -414,6 +415,11 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	}
 	if el.Status().Mode != "quorum" {
 		t.Errorf("mode %q, want quorum", el.Status().Mode)
+	}
+	// Until state streaming, the pair says its retained values are not
+	// replicated, wherever its status is shown.
+	if w := el.Status().Warnings; len(w) != 1 || !strings.Contains(w[0], "retained state not replicated") {
+		t.Errorf("status warnings %q, want the retain warning", w)
 	}
 	resp, err := http.Get("http://" + ln.Addr().String() + "/quorum/v1/x/hello")
 	if err != nil {

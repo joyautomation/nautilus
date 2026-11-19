@@ -76,6 +76,7 @@ bumpless, and the measured takeover time is published instead.
 
 ```yaml
 redundancy:
+  experimental: true     # required until the state stream (§4) lands
   peers:                 # the same file on both controllers
     a: ctl-a:9450
     b: ctl-b:9450
@@ -86,6 +87,11 @@ redundancy:
   stream-link: ctl-a-link:9451   # optional dedicated A–B cable (§6)
 ```
 
+- **An explicit opt-in until §4.** Until the state stream (step 4), a pair needs
+  `experimental: true`, and Load refuses one without it, because a takeover starts from the
+  new leader's own retain file and loses a setpoint the old leader took. A running pair says
+  so at start, in `/api/cluster`'s `warnings` and on the dashboard (#1028, naut-lead's call).
+  The key goes when step 4 lands.
 - **Two modes, one section.** `peers:` selects the pair. Without it, `redundancy:` is the
   Kubernetes Lease as before, and `lease:` is the Lease's name. With it, `lease:` is a time
   (200 ms to 1 min), and a name there is refused. `witness:` or `state-dir:` without `peers:`

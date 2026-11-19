@@ -340,7 +340,17 @@ type RedundancyConfig struct {
 	// sets (naut deploy's /var/lib/nautilus). Never the project tree: a
 	// deploy replaces the project.
 	StateDir string `yaml:"state-dir"`
+	// Experimental opts in to a pair before state streaming (#710 step
+	// 4): until then a takeover starts from the new leader's own retained
+	// values, so a setpoint the old leader took is lost. A pair without it
+	// is refused. It goes away when step 4 lands.
+	Experimental bool `yaml:"experimental"`
 }
+
+// PairRetainNotReplicated is what a pair says about its retained values
+// until state streaming (#710 step 4): at start, in /api/cluster and on
+// the dashboard.
+const PairRetainNotReplicated = "retained state not replicated: retained values (setpoints) are not replicated until state streaming (#710 step 4), so a takeover starts from the new leader's own retain and a setpoint the old leader took is lost"
 
 // Pair reports whether the section names a redundant pair (peers:)
 // rather than the Kubernetes Lease.
@@ -383,8 +393,13 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.witness needs peers: (the pair's two controllers, a and b); without peers: the section selects the Kubernetes Lease, which has no witness")
 		case r.StateDir != "":
 			return errors.New("redundancy.state-dir needs peers:; the Kubernetes Lease mode keeps no voter state")
+		case r.Experimental:
+			return errors.New("redundancy.experimental applies to a redundant pair (peers:); the Kubernetes Lease mode is not experimental")
 		}
 		return nil
+	}
+	if !r.Experimental {
+		return errors.New("redundancy.peers: a redundant pair is experimental for now: retained values (setpoints) are not replicated until state streaming: a takeover starts from the new leader's own retain. Set redundancy.experimental: true to run it knowing that")
 	}
 	for name := range r.Peers {
 		if name != "a" && name != "b" {

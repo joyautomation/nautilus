@@ -238,3 +238,31 @@ func TestGateClosedLeaseHolderDoesNotProxyToItself(t *testing.T) {
 		t.Fatalf("the request was forwarded to the replica's own address %d times", n)
 	}
 }
+
+// A standing warning of the redundancy (a pair's retained values not
+// replicated yet, #710) reaches /api/cluster, on the leader and on a
+// standby alike (/api/cluster is never proxied), and the dashboard shows
+// what it carries.
+func TestClusterEndpointCarriesWarnings(t *testing.T) {
+	const warn = "retained state not replicated: test"
+	for _, lead := range []bool{true, false} {
+		srv := New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{
+			Mode: "quorum", Pod: "a", Leader: "b", LeaderAddr: "127.0.0.1:1", IsLeader: lead, Warnings: []string{warn},
+		}}})
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/cluster", nil))
+		var st leader.Status
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Warnings) != 1 || st.Warnings[0] != warn {
+			t.Errorf("leader %v: warnings %q, want %q", lead, st.Warnings, warn)
+		}
+	}
+	page := string(indexHTML)
+	for _, want := range []string{`id="cluster-warn"`, `fetch("/api/cluster")`, `st.warnings`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the dashboard does not show the cluster's warnings: no %s", want)
+		}
+	}
+}
