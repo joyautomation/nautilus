@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"path"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/joyautomation/nautilus/devprofile"
@@ -40,6 +42,36 @@ type portDev struct {
 	cmds map[string]int
 	// rearm is the port's __Rearm tag, "" for a port with no process data out.
 	rearm string
+	// isdu is how the port's parameters are reached; nil when the master
+	// offers none.
+	isdu *isduRefs
+}
+
+// nodeRef is a node id with the namespace URI that decides its index on the
+// live server ("" when the profile only has a placeholder for it).
+type nodeRef struct{ ID, URI string }
+
+// isduRefs are a port's ISDU methods, resolved: the spec, and the node ids
+// of the port device's object and of its ReadISDU and WriteISDU (write is
+// the zero value when the master has none).
+type isduRefs struct {
+	spec                *devprofile.ISDUSpec
+	object, read, write nodeRef
+}
+
+// nodeRef expands a node id template for port n.
+func (d *device) nodeRef(tmpl string, n int) nodeRef {
+	if tmpl == "" {
+		return nodeRef{}
+	}
+	id := strings.ReplaceAll(d.prof.Substitute(tmpl, d.Params), "{n}", strconv.Itoa(n))
+	r := nodeRef{ID: id}
+	if ns := devprofile.NodeNamespace(id); ns > 0 {
+		if uri := d.prof.Namespace(ns); uri != "" && !devprofile.IsPlaceholderNamespace(uri) {
+			r.URI = uri
+		}
+	}
+	return r
 }
 
 // structType is the port device's struct type: one member per process data
@@ -172,6 +204,9 @@ func (d *device) loadPorts(fsys fs.FS, where string) error {
 		for i, m := range dev.Members {
 			pd.def.Fields = append(pd.def.Fields, ir.StructField{Name: m.Name, Type: irType(m.Type)})
 			pd.def.FieldIndex[m.Name] = i
+		}
+		if is := spec.ISDU; is != nil {
+			pd.isdu = &isduRefs{spec: is, object: d.nodeRef(is.Object, k), read: d.nodeRef(is.Read, k), write: d.nodeRef(is.Write, k)}
 		}
 		d.ports = append(d.ports, pd)
 	}
