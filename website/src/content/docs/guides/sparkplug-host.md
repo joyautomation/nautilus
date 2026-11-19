@@ -280,26 +280,26 @@ device is dark after its `DDEATH`, after its node's death, and after a
 node rebirth until its own `DBIRTH`. A device the host has never seen
 birth is not dark: its commands go out with the node's.
 
-### After a site restarts
-
-**After an edge node or device restarts, the host adopts the value it
-reports; the program's held command is not re-sent until it changes.**
-
-If a program holds a setpoint at 11 and the site reboots and births with
-50, the site stays at 50, and the host reads 50 from it. Writing 11 again
-changes nothing, because the program's value didn't change; the next
-different value goes out as usual. A command written *while* the site
-was down is the case above, and is delivered when it comes back. To put a
-value back after a restart, write it again as a change (for example
-through a different value), or drive it from the site's own birth values
-in your program.
-
 `Status` counts both halves: `WriteQueued` is how many commands have been
 parked, `QueuedWrites` how many are waiting *right now* (per site in
 `Status.Nodes[].QueuedWrites`, and as a "queued writes" metric on
 `/api/drivers`), and `WriteDrops` is reserved for commands that will
 never be sent at all — a node no topic addresses, or a site whose queue
 is full.
+
+### After a site restarts
+
+**After an edge node or device restarts, the host adopts the value it
+reports; the program's held command is not re-sent until it changes.**
+
+If a program holds a setpoint at 11 and the site reboots and births with
+50, the site stays at 50. Writing 11 again changes nothing, because the
+program's value didn't change; the next different value goes out as
+usual. A command written *while* the site
+was down is the case above, and is delivered when it comes back. To put a
+value back after a restart, write it again as a change (for example
+through a different value), or drive it from the site's own birth values
+in your program.
 
 ## Writing template members
 
