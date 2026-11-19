@@ -51,7 +51,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	c.tcp = conn
 	c.mu.Unlock()
-	if err := c.registerSession(); err != nil {
+	if err := c.registerSession(ctx); err != nil {
 		_ = conn.Close()
 		c.mu.Lock()
 		c.tcp = nil
@@ -83,17 +83,18 @@ func (c *Client) SessionHandle() uint32 {
 	return c.sessHdl
 }
 
-func (c *Client) registerSession() error {
+func (c *Client) registerSession(ctx context.Context) error {
 	body := make([]byte, 4)
 	binary.LittleEndian.PutUint16(body[0:2], 1) // protocol version
 	binary.LittleEndian.PutUint16(body[2:4], 0) // options
 	hdr := EncapHeader{Command: CmdRegisterSession}
+	defer arm(ctx, c.tcp)()
 	if _, err := c.tcp.Write(EncodeFrame(hdr, body)); err != nil {
-		return err
+		return cancelled(ctx, err)
 	}
 	rhdr, _, err := c.readFrame()
 	if err != nil {
-		return err
+		return cancelled(ctx, err)
 	}
 	if rhdr.Status != EncapStatusSuccess {
 		return fmt.Errorf("register session: status 0x%x", rhdr.Status)
@@ -129,18 +130,13 @@ func (c *Client) sendCommand(ctx context.Context, cmd uint16, data []byte) (Mess
 		SessionHandle: c.sessHdl,
 	}
 	binary.LittleEndian.PutUint64(hdr.SenderContext[:], c.ctxToken)
-	deadline := time.Now().Add(10 * time.Second)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = c.tcp.SetWriteDeadline(deadline)
+	defer arm(ctx, c.tcp)()
 	if _, err := c.tcp.Write(EncodeFrame(hdr, data)); err != nil {
-		return MessageRouterResponse{}, err
+		return MessageRouterResponse{}, cancelled(ctx, err)
 	}
-	_ = c.tcp.SetReadDeadline(deadline)
 	rhdr, payload, err := c.readFrame()
 	if err != nil {
-		return MessageRouterResponse{}, err
+		return MessageRouterResponse{}, cancelled(ctx, err)
 	}
 	if rhdr.Status != EncapStatusSuccess {
 		return MessageRouterResponse{}, fmt.Errorf("encap status 0x%x", rhdr.Status)
@@ -153,6 +149,52 @@ func (c *Client) sendCommand(ctx context.Context, cmd uint16, data []byte) (Mess
 		return MessageRouterResponse{}, fmt.Errorf("unexpected reply CPF: %d items", len(items))
 	}
 	return decodeMRResponse(items[1].Data)
+}
+
+// requestTimeout bounds one request when its context has no sooner
+// deadline.
+const requestTimeout = 10 * time.Second
+
+// arm bounds one request on conn: its context's deadline or requestTimeout,
+// whichever comes first, and it ends the request at once when the context
+// is cancelled (a driver's Stop), rather than leaving a read on a device
+// that stopped answering to run out its deadline (#932). The returned
+// func disarms the cancel; call it when the request is done.
+func arm(ctx context.Context, conn net.Conn) (disarm func()) {
+	deadline := time.Now().Add(requestTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
+	fired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(fired)
+		if testHookCancelFired != nil {
+			testHookCancelFired()
+		}
+		_ = conn.SetDeadline(time.Now())
+	})
+	return func() {
+		if !stop() {
+			// The cancel came as the request finished: let its
+			// SetDeadline(now) land before returning, or it could land on
+			// the next request on this connection and fail it.
+			<-fired
+		}
+	}
+}
+
+// testHookCancelFired, when set (by tests), runs in arm's cancel callback
+// before it sets the deadline.
+var testHookCancelFired func()
+
+// cancelled says why a request failed when its context ended it: the
+// cancel, not the deadline it was given.
+func cancelled(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("%w (%v)", cerr, err)
+	}
+	return err
 }
 
 func (c *Client) readFrame() (EncapHeader, []byte, error) {
