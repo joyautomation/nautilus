@@ -294,6 +294,27 @@ func (m Manifest) safeOnStop() bool {
 	return m.Transport == TransportShm && m.watchdog() > 0
 }
 
+// Warnings are the conditions `naut check` reports without failing. One
+// today: output bindings on a route with no safe state (transport grpc,
+// or shm with output-watchdog: 0). If naut stops, those outputs hold their
+// last values: nothing on the route takes them to a safe state. Measured
+// on an AXC F 2152 for shm with watchdog 0, where the firmware ignored
+// naut's session dropping (#863). For grpc it is inferred from that, not
+// measured. Holding can be the engineered choice, so it is a warning,
+// never an error.
+func (m Manifest) Warnings() []string {
+	if len(m.OutputNames()) == 0 || m.safeOnStop() {
+		return nil
+	}
+	route := "transport grpc"
+	if m.Transport == TransportShm {
+		route = "transport shm with output-watchdog " + m.OutputWatchdog
+	}
+	return []string{fmt.Sprintf("%s: if naut stops, the %d output binding(s) HOLD their last values "+
+		"(nothing on this route takes them to a safe state); "+
+		"for a safe state, use transport shm with output-watchdog > 0", route, len(m.OutputNames()))}
+}
+
 func (m Manifest) watchdog() time.Duration {
 	wd, _ := time.ParseDuration(m.OutputWatchdog)
 	return wd
