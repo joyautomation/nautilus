@@ -6,9 +6,10 @@ import (
 )
 
 // A plcnext manifest whose outputs have no safe state when naut stops gets
-// a warning from check, never an error. The bench showed the firmware does
-// not zero the outputs when naut's session drops (#863): only the shim's
-// output watchdog, on transport shm, does. So transport grpc with an output
+// a warning from check, never an error. On the bench (shm, watchdog 0) the
+// firmware did not zero the outputs when naut's session dropped (#863);
+// grpc is inferred to hold the same way. Only the shim's output watchdog,
+// on transport shm, gives a safe state. So transport grpc with an output
 // binding, or shm with output-watchdog: 0, is warned about. shm with the
 // default 1 s watchdog, and a manifest with no outputs, stay quiet.
 func TestCheckWarnsOnPLCnextOutputsWithoutASafeState(t *testing.T) {
