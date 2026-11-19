@@ -210,8 +210,8 @@ type assemblingStub struct{ wrapStub }
 
 func (assemblingStub) NewAssembly() func(nio.Values) { return func(nio.Values) {} }
 
-// A driver that carries devices is answered only when it is a Modbus
-// driver under the device library's adapter: anything else is refused by
+// A driver that carries devices is answered only when it is a Modbus or
+// OPC UA client driver under the device library's adapter: anything else is refused by
 // name before a scan, not delivered without its structs.
 func TestInProcessRefusesAnUnknownDevicesDriver(t *testing.T) {
 	set, err := LoadSet(binFill)
@@ -232,7 +232,7 @@ func TestInProcessRefusesAnUnknownDevicesDriver(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NewInProcess(set, acceptance.NewClock(), []nio.NamedDriver{{Name: "field", Driver: d}})
-			if err == nil || !strings.Contains(err.Error(), "answer the devices: of a modbus driver only") {
+			if err == nil || !strings.Contains(err.Error(), "answer the devices: of a modbus or opcua-client driver only") {
 				t.Errorf("NewInProcess: %v", err)
 			}
 		})

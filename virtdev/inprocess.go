@@ -88,6 +88,9 @@ type uaFace struct {
 	device string
 	online string
 	nodes  map[string]uaNode // binding name -> what answers it
+	// assemble is the device library's input side when the driver
+	// carries a devices: row (bindDevices); nil otherwise.
+	assemble func(nio.Values)
 }
 
 type uaNode struct {
@@ -126,11 +129,9 @@ func NewInProcess(s *Set, clock runtime.Clock, drivers []nio.NamedDriver) (*InPr
 			}
 			ip.ua = append(ip.ua, f)
 		case interface{ Unwrap() nio.Driver }:
-			f, err := ip.bindDevices(d)
-			if err != nil {
+			if err := ip.bindDevices(d); err != nil {
 				return nil, fmt.Errorf("driver %s: %w", nd.Name, err)
 			}
-			ip.mb = append(ip.mb, f)
 		case runtime.StatsReader:
 			// The runtime's own health, not a device's: kept as it is.
 			ip.status = append(ip.status, nd.Driver)
@@ -177,21 +178,33 @@ func (ip *InProcess) bindModbus(d *modbus.Driver) (*mbFace, error) {
 }
 
 // bindDevices binds a driver that carries the project's devices: (the
-// device library's adapter around a Modbus driver): the Modbus driver
-// underneath is bound as any other, and its reads are delivered through a
-// fresh copy of the adapter's input side.
-func (ip *InProcess) bindDevices(d interface{ Unwrap() nio.Driver }) (*mbFace, error) {
+// device library's adapter around a Modbus driver, or around an OPC UA
+// device's own driver): the driver underneath is bound as any other, and
+// its reads are delivered through a fresh copy of the adapter's input side.
+func (ip *InProcess) bindDevices(d interface{ Unwrap() nio.Driver }) error {
 	asm, ok := d.(interface{ NewAssembly() func(nio.Values) })
-	inner, isMB := d.Unwrap().(*modbus.Driver)
-	if !ok || !isMB {
-		return nil, fmt.Errorf("%T: virtual devices answer the devices: of a modbus driver only", d)
+	if !ok {
+		return fmt.Errorf("%T: virtual devices answer the devices: of a modbus or opcua-client driver only", d)
 	}
-	f, err := ip.bindModbus(inner)
-	if err != nil {
-		return nil, err
+	switch inner := d.Unwrap().(type) {
+	case *modbus.Driver:
+		f, err := ip.bindModbus(inner)
+		if err != nil {
+			return err
+		}
+		f.assemble = asm.NewAssembly()
+		ip.mb = append(ip.mb, f)
+	case *opcua.Driver:
+		f, err := ip.bindOPCUA(inner)
+		if err != nil {
+			return err
+		}
+		f.assemble = asm.NewAssembly()
+		ip.ua = append(ip.ua, f)
+	default:
+		return fmt.Errorf("%T: virtual devices answer the devices: of a modbus or opcua-client driver only", d)
 	}
-	f.assemble = asm.NewAssembly()
-	return f, nil
+	return nil
 }
 
 // modbusDevice finds the Modbus device answering at addr and unit.
@@ -435,6 +448,9 @@ func (ip *InProcess) readOPCUA(f *uaFace, out nio.Values) {
 		out[name] = plainOPCUA(v)
 	}
 	out[f.online] = true
+	if f.assemble != nil {
+		f.assemble(out)
+	}
 }
 
 // plainOPCUA is a value as the opcua driver delivers it: ints as int64,

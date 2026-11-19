@@ -257,8 +257,8 @@ selects. `virtual-devices.yaml` keeps the process model, devices the
 manifest does not declare, and the simulation-only keys (`listen`, `init`)
 of a declared device by name; repeating a row's `profile`, `endpoint`,
 `unit-id` or `params` there is an error. `naut test`'s in-process face
-delivers a device through a fresh copy of the adapter's own input side, so
-a sequence test proves the adapter that ships. `naut build` ships the
+delivers a device, Modbus or OPC UA, through a fresh copy of the adapter's
+own input side, so a sequence test proves the adapter that ships. `naut build` ships the
 vendored profiles and leaves the simulators and the model behind. A
 project without `devices:` keeps working as #712 left it.
 

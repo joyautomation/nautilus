@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -156,5 +157,55 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("never: %s", what)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// An OPC UA devices: row is a virtual device in naut test: the project's
+// own driver for the row is answered in process, the device arriving as
+// its struct and the command tag reaching the plant, where the process
+// model loops the master's output back to its input. A wrong expectation
+// fails.
+func TestDevicesOPCUARowInNautTest(t *testing.T) {
+	dir := t.TempDir()
+	opcuaProject(t, dir, "10.0.0.21")
+	if code := runDevicesAdd([]string{"pepperl-fuchs-ice3", dir}, io.Discard); code != 0 {
+		t.Fatalf("naut devices add exited %d", code)
+	}
+	for name, body := range map[string]string{
+		virtdev.FileName: "model: { program: plant.st }\n",
+		"plant.st":       "PROGRAM Process\nPF1_Port1_PdiU32 := PF1_Port1_PdoU32 + 100;\nEND_PROGRAM\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	suite := func(seen int) string {
+		return `devices: true
+tests:
+  - name: the master's output comes back through the sensor
+    steps:
+      - given: { Cmd: 0 }
+        advance: 1s
+      - given: { Cmd: 7 }
+        advance: 1s
+        expect: { Seen: ` + strconv.Itoa(seen) + `, Up: true }
+`
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main_test.yaml"), []byte(suite(107)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runTest([]string{dir}); code != 0 {
+		t.Fatalf("naut test exited %d", code)
+	}
+	for name, run := range map[string]func([]string) int{"check": runCheck, "devices check": runDevicesCheck} {
+		if code := run([]string{dir}); code != 0 {
+			t.Errorf("naut %s exited %d", name, code)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main_test.yaml"), []byte(suite(999)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runTest([]string{dir}); code == 0 {
+		t.Error("naut test passed a wrong expectation")
 	}
 }
