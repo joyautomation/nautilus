@@ -4,6 +4,7 @@
 import { describe, it, expect } from './harness.js';
 import {
 	SubstituteClient,
+	SubstituteSession,
 	classify,
 	failureText,
 	keptText,
@@ -60,6 +61,7 @@ describe('start — answers', () => {
 		if (r.ok) throw new Error('expected a failure');
 		return r;
 	};
+	const R = { 'X-Nautilus-Outcome': 'refused' };
 	it('503 outcome unknown (header) is unknown: maybe applied, retry the same id', async () => {
 		const { client } = fake([text('whatever', 503, { 'X-Nautilus-Outcome': 'unknown' })]);
 		const r = fail(await client.start('T', 1, 1));
@@ -67,12 +69,17 @@ describe('start — answers', () => {
 		expect(r.maybeApplied).toBe(true);
 		expect(r.retrySameId).toBe(true);
 	});
-	it('503 outcome unknown (text only) is unknown too', async () => {
-		const { client } = fake([text('outcome unknown; re-read GET /api/substitutes', 503)]);
-		expect(fail(await client.start('T', 1, 1)).kind).toBe('unknown');
+	it('ANY failure without the refused header is unknown, whatever its status or text', async () => {
+		for (const [status, body] of [[503, 'no leader'], [503, 'substitute not saved'], [504, 'timeout'], [502, 'bad gateway'], [500, 'boom'], [409, 'x'], [400, 'x']] as const) {
+			const { client } = fake([text(body, status)]);
+			const r = fail(await client.start('T', 1, 1));
+			expect(r.kind).toBe('unknown');
+			expect(r.retrySameId).toBe(true);
+			expect(r.maybeApplied).toBe(true);
+		}
 	});
-	it('503 no leader and 503 not saved are certain: nothing started', async () => {
-		const { client } = fake([text('no leader', 503), text('substitute not saved: store refused', 503)]);
+	it('503 no leader and 503 not saved, WITH the refused header, are certain', async () => {
+		const { client } = fake([text('no leader', 503, R), text('substitute not saved: store refused', 503, R)]);
 		const a = fail(await client.start('T', 1, 1));
 		const b = fail(await client.start('T', 1, 1));
 		expect(a.kind).toBe('noLeader');
@@ -80,8 +87,8 @@ describe('start — answers', () => {
 		expect(a.maybeApplied).toBe(false);
 		expect(b.maybeApplied).toBe(false);
 	});
-	it('409 is a conflict: never retried blind, never "maybe applied"', async () => {
-		const { client } = fake([text('requestId reused with a different request', 409)]);
+	it('409 refused is a conflict: never retried blind, never "maybe applied"', async () => {
+		const { client } = fake([text('requestId reused with a different request', 409, R)]);
 		const r = fail(await client.start('T', 1, 1));
 		expect(r.kind).toBe('conflict');
 		expect(r.retrySameId).toBe(false);
@@ -95,10 +102,72 @@ describe('start — answers', () => {
 		expect(r.retrySameId).toBe(true);
 		expect(failureText(r).includes('may still take effect')).toBe(true);
 	});
-	it('400 and 403 map to invalid and forbidden', () => {
-		expect(classify(400, 'bad', null).kind).toBe('invalid');
-		expect(classify(403, 'operator value not allowed', null).kind).toBe('forbidden');
-		expect(classify(404, 'not active', null).kind).toBe('notFound');
+	it('a stop or ack with an unknown outcome has no requestId to retry: re-read and decide', async () => {
+		const { client } = fake([text('bad gateway', 502), new Error('down')]);
+		const a = fail(await client.stop(1));
+		const b = fail(await client.ack([1]));
+		for (const r of [a, b]) {
+			expect(r.maybeApplied).toBe(true);
+			expect(r.retrySameId).toBe(false);
+		}
+	});
+	it('refused 400, 403, 404 map to invalid, forbidden, notFound', () => {
+		expect(classify(400, 'bad', 'refused').kind).toBe('invalid');
+		expect(classify(403, 'operator value not allowed', 'refused').kind).toBe('forbidden');
+		expect(classify(404, 'not active', 'refused').kind).toBe('notFound');
+		expect(classify(404, 'proxy', null).kind).toBe('unknown');
+	});
+});
+
+describe('SubstituteSession — the start state machine', () => {
+	const U = { 'X-Nautilus-Outcome': 'unknown' };
+	it('an unknown start is retried under the SAME requestId, never a new one', async () => {
+		const { sent, client } = fake([text('x', 504), json({ started: true })]);
+		const s = new SubstituteSession(client);
+		await s.start('T1', 5, 60);
+		expect(s.pending().length).toBe(1);
+		const r = await s.retry('T1');
+		expect(r?.ok).toBe(true);
+		expect(sent[1].body?.requestId).toBe(sent[0].body?.requestId);
+		expect(s.pending().length).toBe(0);
+	});
+	it('a fresh start of a tag with an unknown start pending is blocked and sends nothing', async () => {
+		const { sent, client } = fake([text('x', 503, U)]);
+		const s = new SubstituteSession(client);
+		await s.start('T1', 5, 60);
+		const r = await s.start('t1', 5, 60);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.kind).toBe('pending');
+		expect(sent.length).toBe(1);
+	});
+	it('another tag is not blocked', async () => {
+		const { sent, client } = fake([text('x', 503, U), json({})]);
+		const s = new SubstituteSession(client);
+		await s.start('T1', 5, 60);
+		const r = await s.start('T2', 5, 60);
+		expect(r.ok).toBe(true);
+		expect(sent.length).toBe(2);
+	});
+	it('a definite answer, a dismissal or seeing the entry clears the block', async () => {
+		const { client } = fake([text('x', 503, U), text('requestId reused', 409, { 'X-Nautilus-Outcome': 'refused' }), text('x', 503, U), text('x', 503, U)]);
+		const s = new SubstituteSession(client);
+		await s.start('T1', 5, 60);
+		await s.retry('T1'); // a certain 409 on the retry
+		expect(s.pending().length).toBe(0);
+		await s.start('T1', 5, 60);
+		s.dismiss('T1');
+		expect(s.pending().length).toBe(0);
+		await s.start('T1', 5, 60);
+		const id = s.pending()[0].requestId;
+		s.reconcile([{ id: 9, name: 'T1', value: 5, startMs: 0, untilMs: 0, remainingMs: 0, requestId: id }]);
+		expect(s.pending().length).toBe(0);
+	});
+	it('a fresh action after a certain refusal gets a new requestId', async () => {
+		const { sent, client } = fake([text('no leader', 503, { 'X-Nautilus-Outcome': 'refused' }), json({})]);
+		const s = new SubstituteSession(client);
+		await s.start('T1', 5, 60);
+		await s.start('T1', 5, 60);
+		expect(sent[0].body?.requestId).not.toBe(sent[1].body?.requestId);
 	});
 });
 

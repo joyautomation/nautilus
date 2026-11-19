@@ -152,6 +152,9 @@ func TestSubstituteStartRules(t *testing.T) {
 		if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.want) {
 			t.Errorf("%s: %d %s; want %d containing %q", name, rec.Code, rec.Body, tc.code, tc.want)
 		}
+		if rec.Code >= 400 && rec.Header().Get("X-Nautilus-Outcome") != "refused" {
+			t.Errorf("%s: a refusal must carry X-Nautilus-Outcome: refused", name)
+		}
 	}
 	// The granted time is the rule's max by default, and seconds when given.
 	s := subServer(t, Options{})

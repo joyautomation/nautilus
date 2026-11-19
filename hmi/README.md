@@ -301,16 +301,24 @@ you can use it without the panel.
 - Every user action gets **one `requestId`**, made before the first send and
   reused on every retry (`start(name, value, seconds, requestId)`), so a lost
   answer can never start a second substitute.
-- **503 "outcome unknown"** (the `X-Nautilus-Outcome: unknown` header) is
-  `kind: 'unknown'`, `maybeApplied: true`: it is neither done nor failed. The
-  panel re-reads and says it may still take effect; "Retry same request"
-  resends under the same id. A dropped connection is treated the same.
+- Only an answer carrying `X-Nautilus-Outcome: refused` is **certain** (nothing
+  was started: 400, 403, 404, 409, 503 "no leader", 503 "not saved"). Every
+  other failure is `kind: 'unknown'`, `maybeApplied: true`: the
+  `X-Nautilus-Outcome: unknown` 503, but also a 500, 502, 504 or a 503 from a
+  proxy, and a dropped connection, because any of them can come after the
+  leader applied the change. The panel re-reads and says "not confirmed";
+  "Retry same request" resends under the same id, and a new start of that
+  tag is **blocked** until the pending one is resolved, retried, dismissed or
+  seen in the list. Stop and acknowledge carry no id: after an unknown
+  outcome, re-read and decide.
 - **409** (`conflict`) means another change got there first (or the id was
   reused for a different request): re-read and decide again, never retry blind.
 - **`kept: false`** on a success means it took effect but was not saved (the
   `warning` says what that costs, e.g. it may still be active on the next
   leader): it is shown, not swallowed.
-- 503 "no leader" and 503 "not saved" are certain: nothing was started.
+
+`SubstituteSession` is that start state machine without the DOM (what the panel
+uses, and what is tested).
 
 ## Faceplates, cards and confirmation
 

@@ -117,8 +117,8 @@ export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY
 // Substitute values (#707) — GET/POST/DELETE /api/substitutes. The client owns
 // the contract (requestId per action, unknown outcome, 409, kept:false).
 export { default as SubstitutesPanel } from './components/SubstitutesPanel.svelte';
-export { SubstituteClient, failureText, keptText, formatRemaining, unacked, validateStart } from './substitutes.js';
-export type { SubstituteEntry, SubstituteRule, SubstituteList, SubstituteResult, SubstituteFailure } from './substitutes.js';
+export { SubstituteClient, SubstituteSession, failureText, keptText, formatRemaining, unacked, validateStart } from './substitutes.js';
+export type { SubstituteEntry, SubstituteRule, SubstituteList, SubstituteResult, PendingStart, SubstituteFailure } from './substitutes.js';
 export { default as AlarmSign } from './components/AlarmSign.svelte';
 export type {
 	Priority,

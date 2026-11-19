@@ -10,6 +10,8 @@
 	// `<ConfirmDialog/>` must be mounted once in the app.
 	import {
 		SubstituteClient,
+		SubstituteSession,
+		type PendingStart,
 		failureText,
 		formatRemaining,
 		keptText,
@@ -52,7 +54,9 @@
 	let notice = $state<{ kind: 'ok' | 'warn' | 'error'; text: string } | null>(null);
 	// A start whose outcome is unknown: kept WITH its requestId so a retry is
 	// the same request, never a second substitute.
-	let unknownStart = $state<{ requestId: string; name: string; value: unknown; seconds: number } | null>(null);
+	const session = $derived(new SubstituteSession(client));
+	let pending = $state<PendingStart[]>([]);
+	const blocked = $derived(pending.some((p) => p.name.toLowerCase() === tag.toLowerCase()));
 
 	const rule = $derived(rules.find((r) => r.tag === tag));
 	const waiting = $derived(unacked(subs));
@@ -77,6 +81,8 @@
 		subs = r.substitutes;
 		rules = r.rules;
 		readAt = Date.now();
+		session.reconcile(r.substitutes);
+		pending = session.pending();
 		if (!tag && r.rules.length) tag = r.rules[0].tag;
 	}
 
@@ -100,34 +106,39 @@
 			const w = keptText(r);
 			notice = w ? { kind: 'warn', text: w } : { kind: 'ok', text: okText };
 		} else {
-			notice = { kind: r.kind === 'unknown' || r.kind === 'unreachable' ? 'warn' : 'error', text: failureText(r) };
+			notice = { kind: r.kind === 'unknown' || r.kind === 'unreachable' || r.kind === 'pending' ? 'warn' : 'error', text: failureText(r) };
 		}
 		// Re-read after EVERY answer: for an unknown outcome this is the
 		// operator's only way to see what actually happened.
 		await refresh();
 	}
 
-	async function start(req?: { requestId: string; name: string; value: unknown; seconds: number }) {
-		const name = req?.name ?? tag;
-		const value = req ? req.value : rule?.operatorValue ? parseValue(valueText) : undefined;
-		const secs = req?.seconds ?? seconds;
-		if (!req && startError) {
+	async function start() {
+		const value = rule?.operatorValue ? parseValue(valueText) : undefined;
+		if (startError) {
 			notice = { kind: 'error', text: startError };
 			return;
 		}
 		const ok = await confirm({
-			title: `Substitute ${name}?`,
-			body: `The logic will run on ${value === undefined ? 'the rule\'s value' : String(value)} instead of the sensor's reading for up to ${formatRemaining(secs * 1000)}. It is not the plant's reading.`,
+			title: `Substitute ${tag}?`,
+			body: `The logic will run on ${value === undefined ? "the rule's value" : String(value)} instead of the sensor's reading for up to ${formatRemaining(seconds * 1000)}. It is not the plant's reading.`,
 			confirmLabel: 'Substitute',
 			danger: true
 		});
 		if (!ok) return;
 		busy = true;
-		const requestId = req?.requestId ?? client.newRequestId();
-		const r = await client.start(name, value, secs, requestId);
+		const r = await session.start(tag, value, seconds);
 		busy = false;
-		unknownStart = !r.ok && r.retrySameId ? { requestId, name, value, seconds: secs } : null;
-		await settle(r, `${name} substituted.`);
+		pending = session.pending();
+		await settle(r, `${tag} substituted.`);
+	}
+
+	async function retry(name: string) {
+		busy = true;
+		const r = await session.retry(name);
+		busy = false;
+		pending = session.pending();
+		if (r) await settle(r, `${name} substituted.`);
 	}
 
 	async function stop(s: SubstituteEntry) {
@@ -160,18 +171,18 @@
 		<p class="msg {notice.kind}" role={notice.kind === 'ok' ? 'status' : 'alert'}>{notice.text}</p>
 	{/if}
 
-	{#if unknownStart}
+	{#each pending as p (p.requestId)}
 		<div class="msg warn" role="alert">
 			<span>
-				The start of <b>{unknownStart.name}</b> has an unknown outcome — it may still take effect. Check the list above, then
-				retry (the same request, so it cannot start twice) or dismiss.
+				The start of <b>{p.name}</b> is not confirmed — it may still take effect. Check the list, then retry (the same
+				request, so it cannot start twice) or dismiss. A new start of this tag is blocked until then.
 			</span>
 			<span class="actions">
-				<Button size="sm" disabled={busy} onclick={() => unknownStart && start(unknownStart)}>Retry same request</Button>
-				<Button size="sm" variant="ghost" onclick={() => (unknownStart = null)}>Dismiss</Button>
+				<Button size="sm" disabled={busy} onclick={() => retry(p.name)}>Retry same request</Button>
+				<Button size="sm" variant="ghost" onclick={() => { session.dismiss(p.name); pending = session.pending(); }}>Dismiss</Button>
 			</span>
 		</div>
-	{/if}
+	{/each}
 
 	{#if subs.length}
 		<table>
@@ -223,7 +234,7 @@
 			<label>Seconds{#if maxSeconds(rule)} <span class="q">(max {maxSeconds(rule)})</span>{/if}
 				<input type="number" min="1" max={maxSeconds(rule) || undefined} bind:value={seconds} />
 			</label>
-			<Button type="submit" variant="primary" disabled={busy || !!startError} title={startError ?? ''}>Substitute…</Button>
+			<Button type="submit" variant="primary" disabled={busy || blocked || !!startError} title={blocked ? 'An earlier start of this tag is not confirmed' : (startError ?? '')}>Substitute…</Button>
 			{#if rule?.ackOnStart}<span class="q">Needs acknowledgement after it starts.</span>{/if}
 		</form>
 	{/if}

@@ -58,7 +58,8 @@ export type SubstituteFailure =
 	| 'noLeader' // 503: standby / no leader — nothing was started
 	| 'notSaved' // 503: the retain store refused — nothing was started
 	| 'unknown' // 503 outcome unknown — it MAY still take effect: re-read
-	| 'unreachable'; // network: no answer at all, the same as unknown
+	| 'unreachable' // network: no answer at all, the same as unknown
+	| 'pending'; // not sent: an earlier start of this tag has an unknown outcome
 
 export type SubstituteResult =
 	| {
@@ -105,17 +106,19 @@ function newUuid(): string {
 	return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-/** Map a non-2xx answer to the contract's failure kinds. Exported for tests. */
+/**
+ * Map a non-2xx answer to the contract's failure kinds.
+ *
+ * Only an answer carrying `X-Nautilus-Outcome: refused` is CERTAIN: the
+ * server refused it before changing anything. Everything else is UNKNOWN —
+ * a 503 or 504 from a proxy, a 500, a 502, a 503 without the header — because
+ * it can come after the leader applied the change. Exported for tests.
+ */
 export function classify(status: number, text: string, outcomeHeader: string | null): { kind: SubstituteFailure; message: string } {
 	const message = text.trim() || `request failed (${status})`;
+	if ((outcomeHeader ?? '').toLowerCase() !== 'refused') return { kind: 'unknown', message };
 	const lower = message.toLowerCase();
-	if (status === 503) {
-		if ((outcomeHeader ?? '').toLowerCase() === 'unknown' || lower.includes('outcome unknown')) {
-			return { kind: 'unknown', message };
-		}
-		if (lower.includes('no leader')) return { kind: 'noLeader', message };
-		return { kind: 'notSaved', message };
-	}
+	if (status === 503) return { kind: lower.includes('no leader') ? 'noLeader' : 'notSaved', message };
 	if (status === 409) return { kind: 'conflict', message };
 	if (status === 404) return { kind: 'notFound', message };
 	if (status === 403 || status === 401) return { kind: 'forbidden', message };
@@ -193,7 +196,7 @@ export class SubstituteClient {
 				ok: false,
 				kind: 'unreachable',
 				message: 'controller unreachable — the request may or may not have taken effect',
-				retrySameId: true,
+				retrySameId: requestId !== undefined,
 				maybeApplied: true,
 				requestId
 			};
@@ -214,9 +217,9 @@ export class SubstituteClient {
 			ok: false,
 			kind,
 			message,
-			// Only a lost/unknown answer is retried under the same id. A 409 or
-			// 503-not-started must be re-read and decided again.
-			retrySameId: kind === 'unknown',
+			// Only an unknown START is retried, under the same id. Stop and ack
+			// carry no id: re-read and decide. A 409 or a certain 503 likewise.
+			retrySameId: kind === 'unknown' && requestId !== undefined,
 			maybeApplied: kind === 'unknown',
 			requestId
 		};
@@ -228,7 +231,7 @@ export function failureText(r: Extract<SubstituteResult, { ok: false }>): string
 	switch (r.kind) {
 		case 'unknown':
 		case 'unreachable':
-			return `Outcome unknown — it may still take effect. Re-read the list before trying again. (${r.message})`;
+			return `Not confirmed — it may still take effect. Re-read the list; retry a start only with the same request, or wait. (${r.message})`;
 		case 'conflict':
 			return `Not applied — another change got there first. Re-read and decide again. (${r.message})`;
 		case 'noLeader':
@@ -277,4 +280,73 @@ export function validateStart(rule: SubstituteRule | undefined, value: unknown, 
 	// holds the rule's own value. A rule without it refuses any other value.
 	void value;
 	return null;
+}
+
+/** A start whose outcome is unknown: kept with its requestId. */
+export interface PendingStart {
+	requestId: string;
+	name: string;
+	value: unknown;
+	seconds: number | undefined;
+}
+
+/**
+ * The start state machine, so it can be tested: one requestId per user
+ * action; an unknown outcome is kept under that id and BLOCKS a fresh start
+ * of the same tag (a new id could make two apply); a retry resends the same
+ * id; a definite answer, a dismissal or seeing the entry in a re-read
+ * clears it.
+ */
+export class SubstituteSession {
+	readonly #client: SubstituteClient;
+	readonly #pending = new Map<string, PendingStart>();
+
+	constructor(client: SubstituteClient) {
+		this.#client = client;
+	}
+
+	pending(): PendingStart[] {
+		return [...this.#pending.values()];
+	}
+
+	/** Start afresh: a new requestId, unless this tag has an unknown start pending. */
+	async start(name: string, value: unknown, seconds: number | undefined): Promise<SubstituteResult> {
+		const key = name.toLowerCase();
+		if (this.#pending.has(key)) {
+			return {
+				ok: false,
+				kind: 'pending',
+				message: `an earlier start of ${name} has an unknown outcome: re-read, retry that same request, or dismiss it`,
+				retrySameId: false,
+				maybeApplied: true
+			};
+		}
+		return this.#send({ requestId: this.#client.newRequestId(), name, value, seconds });
+	}
+
+	/** Resend a pending start under ITS requestId. */
+	async retry(name: string): Promise<SubstituteResult | null> {
+		const p = this.#pending.get(name.toLowerCase());
+		return p ? this.#send(p) : null;
+	}
+
+	/** Drop a pending start (the operator has checked the list). */
+	dismiss(name: string): void {
+		this.#pending.delete(name.toLowerCase());
+	}
+
+	/** A re-read that shows the entry means the start did apply: clear it. */
+	reconcile(entries: SubstituteEntry[]): void {
+		for (const e of entries) {
+			for (const [k, p] of this.#pending) if (e.requestId === p.requestId) this.#pending.delete(k);
+		}
+	}
+
+	async #send(p: PendingStart): Promise<SubstituteResult> {
+		const r = await this.#client.start(p.name, p.value, p.seconds, p.requestId);
+		const key = p.name.toLowerCase();
+		if (!r.ok && r.retrySameId) this.#pending.set(key, p);
+		else this.#pending.delete(key);
+		return r;
+	}
 }

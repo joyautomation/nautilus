@@ -148,7 +148,7 @@ func (s *Server) handleSubstitutes(w http.ResponseWriter, r *http.Request) {
 // all: one that fronts a controller it does not run.
 func (s *Server) refuseSubstitute(w http.ResponseWriter) bool {
 	if s.tagWriter != nil {
-		http.Error(w, "this server mirrors a controller it does not run — substitute on that controller", http.StatusNotImplemented)
+		refuse(w, "this server mirrors a controller it does not run — substitute on that controller", http.StatusNotImplemented)
 		return true
 	}
 	return false
@@ -166,7 +166,7 @@ func (s *Server) refuseNotLeading(w http.ResponseWriter) bool {
 	if s.rt.Leading() {
 		return false
 	}
-	http.Error(w, "no leader: this replica is standing by; retry once a leader is elected", http.StatusServiceUnavailable)
+	refuse(w, "no leader: this replica is standing by; retry once a leader is elected", http.StatusServiceUnavailable)
 	return true
 }
 
@@ -174,14 +174,14 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	var req substituteRequest
 	derr := json.NewDecoder(r.Body).Decode(&req)
 	if code, msg := s.authorize(r, PermSubstitute, req.Name); code != 0 {
-		http.Error(w, msg, code)
+		refuse(w, msg, code)
 		return
 	}
 	if s.refuseSubstitute(w) {
 		return
 	}
 	if derr != nil || req.Name == "" {
-		http.Error(w, `expected {"name": ..., "value"?: ..., "seconds"?: ...}`, http.StatusBadRequest)
+		refuse(w, `expected {"name": ..., "value"?: ..., "seconds"?: ...}`, http.StatusBadRequest)
 		return
 	}
 	if s.refuseNotLeading(w) {
@@ -189,13 +189,13 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, ok := s.substituteRule(req.Name)
 	if !ok {
-		http.Error(w, fmt.Sprintf("%s is not substitutable: no substitutes: rule names it", req.Name), http.StatusBadRequest)
+		refuse(w, fmt.Sprintf("%s is not substitutable: no substitutes: rule names it", req.Name), http.StatusBadRequest)
 		return
 	}
 	value := rule.Value
 	if req.Value != nil && fmt.Sprint(req.Value) != fmt.Sprint(rule.Value) {
 		if !rule.OperatorValue {
-			http.Error(w, fmt.Sprintf("the rule for %s substitutes %v and does not let the operator choose another value (operator-value: true)", rule.Tag, rule.Value), http.StatusForbidden)
+			refuse(w, fmt.Sprintf("the rule for %s substitutes %v and does not let the operator choose another value (operator-value: true)", rule.Tag, rule.Value), http.StatusForbidden)
 			return
 		}
 		value = req.Value
@@ -206,13 +206,13 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 		// value overflows the conversion into a misleading "not positive".
 		switch sec := *req.Seconds; {
 		case math.IsNaN(sec):
-			http.Error(w, "seconds is not a number", http.StatusBadRequest)
+			refuse(w, "seconds is not a number", http.StatusBadRequest)
 			return
 		case sec > d.Seconds():
-			http.Error(w, fmt.Sprintf("seconds exceeds the rule's maximum of %s", d), http.StatusBadRequest)
+			refuse(w, fmt.Sprintf("seconds exceeds the rule's maximum of %s", d), http.StatusBadRequest)
 			return
 		case sec < 1:
-			http.Error(w, "seconds must be at least 1", http.StatusBadRequest)
+			refuse(w, "seconds must be at least 1", http.StatusBadRequest)
 			return
 		default:
 			d = time.Duration(sec * float64(time.Second))
@@ -221,7 +221,7 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	if req.RequestID != "" {
 		if e, ok := s.rt.SubstituteByRequest(req.RequestID); ok {
 			if !runtime.SameRequest(e, rule.Tag, value, d) {
-				http.Error(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, e.ID), http.StatusConflict)
+				refuse(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, e.ID), http.StatusConflict)
 				return
 			}
 			// A retry of a start that did start: the same entry, not a second.
@@ -243,7 +243,7 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	e, err := s.rt.SubstituteSaved(ctx, rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart, RequestID: req.RequestID})
 	if err != nil {
 		code, msg := substituteStartRefusal(err)
-		http.Error(w, msg, code)
+		refuse(w, msg, code)
 		return
 	}
 	logAction(r, "substitute: started", "tag", e.Name, "id", e.ID, "for", d)
@@ -259,14 +259,14 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 	id, idErr := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	name, _ := s.substituteByID(id)
 	if code, msg := s.authorize(r, PermSubstitute, name); code != 0 {
-		http.Error(w, msg, code)
+		refuse(w, msg, code)
 		return
 	}
 	if s.refuseSubstitute(w) {
 		return
 	}
 	if idErr != nil {
-		http.Error(w, "the substitute's id is a number", http.StatusBadRequest)
+		refuse(w, "the substitute's id is a number", http.StatusBadRequest)
 		return
 	}
 	if s.refuseNotLeading(w) {
@@ -280,7 +280,7 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	e, ok, kept, serr := s.rt.RestoreSaved(ctx, id, s.principal(r))
 	if !ok {
-		http.Error(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
+		refuse(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
 		return
 	}
 	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID, "kept", kept, "saveError", serr)
@@ -300,14 +300,14 @@ func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 	var req substituteAckRequest
 	derr := json.NewDecoder(r.Body).Decode(&req)
 	if code, msg := s.authorize(r, PermSubstitute, s.substituteNames(req.IDs)); code != 0 {
-		http.Error(w, msg, code)
+		refuse(w, msg, code)
 		return
 	}
 	if s.refuseSubstitute(w) {
 		return
 	}
 	if derr != nil || len(req.IDs) == 0 {
-		http.Error(w, `expected {"ids": [1, 2]}: an empty list acknowledges nothing`, http.StatusBadRequest)
+		refuse(w, `expected {"ids": [1, 2]}: an empty list acknowledges nothing`, http.StatusBadRequest)
 		return
 	}
 	if s.refuseNotLeading(w) {
@@ -321,7 +321,7 @@ func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	acked, kept, serr := s.rt.AckSubstitutesSaved(ctx, req.IDs, s.principal(r))
 	if len(acked) == 0 {
-		http.Error(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
+		refuse(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
 		return
 	}
 	logAction(r, "substitute: acknowledged", "count", len(acked), "kept", kept, "saveError", serr)
@@ -493,4 +493,14 @@ func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
 			Result: audit.ResultOK,
 		})
 	}
+}
+
+// refuse answers a request that was refused BEFORE it could change anything,
+// and says so in a header: only an answer carrying X-Nautilus-Outcome:
+// refused is certain. Any other failure (a 5xx from a proxy, a dropped
+// connection) leaves the outcome unknown to a client, which must then
+// re-read and retry with the same requestId.
+func refuse(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set(outcomeHeader, "refused")
+	http.Error(w, msg, code)
 }
