@@ -1071,9 +1071,11 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
   refuses one. `--dry-run` prints a unified diff and writes nothing;
   `--check` writes nothing and exits non-zero while anything differs. A
   standby is refused: ask the leader, or the service address. `naut pull`
-writes only plain data files that the project's own manifest names as I/O
-files (the manifest, the `manifest:` files of `drivers:`, `profiles/<id>.yaml`
-of `devices:`), never a hidden path, `.git` or a program source, and never
+writes only `.yaml`/`.yml` files that the project's own manifest names as
+I/O files (the manifest, the `manifest:` files of `drivers:`,
+`profiles/<id>.yaml` of `devices:`). A file only the controller's manifest
+names (a driver an apply added) is listed and written only with `--new`.
+It never writes a hidden path, `.git` or a program source, and never
 through a symlink out of the project; it does not trust the controller's
 list of paths. `--force` skips the check that your copy is the booted one
 and replaces your edits without a diff; the paths are printed. **`GET

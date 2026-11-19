@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/apiclient"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/server"
@@ -22,7 +23,7 @@ import (
 // differs in back into dir (#706). Returns 0 in sync or written, 1 drift
 // under --check, 2 failure or a refusal. Nothing is written unless every
 // file can be.
-func pullIO(host string, port int, dir string, check, dry, force bool) int {
+func pullIO(host string, port int, dir string, check, dry, force, allowNew bool) int {
 	fail := func(format string, a ...any) int {
 		fmt.Fprintf(os.Stderr, "naut pull --io: "+format+"\n", a...)
 		return 2
@@ -65,15 +66,25 @@ func pullIO(host string, port int, dir string, check, dry, force bool) int {
 	// trusted: only files this project's own manifest names are written
 	// (never program sources, hidden paths or .git), and every read and
 	// write goes through os.Root, which refuses a symlink out of the project.
-	allowed := ioPullAllowed(dir, st.Files)
-	var disallowed []string
+	local, pulledOnly := ioPullAllowed(dir, st.Files)
+	var disallowed, fresh []string
 	for _, f := range st.Files {
-		if !allowed[f.Path] {
+		switch {
+		case local[f.Path]:
+		case pulledOnly[f.Path]:
+			fresh = append(fresh, f.Path)
+		default:
 			disallowed = append(disallowed, f.Path)
 		}
 	}
 	if len(disallowed) > 0 {
 		return fail("%s offers files this project's manifest does not name as I/O files (only %s, the manifests drivers: name and profiles/<id>.yaml of devices: are pulled; never hidden paths, .git or program sources), so nothing was written: %s", host, project.ManifestName, strings.Join(disallowed, ", "))
+	}
+	if len(fresh) > 0 {
+		fmt.Fprintf(os.Stderr, "naut pull --io: the controller's manifest names files your project's does not: %s\n", strings.Join(fresh, ", "))
+		if !allowNew && !check && !dry {
+			return fail("nothing was written: review them with --dry-run, then pass --new to write them")
+		}
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -176,50 +187,65 @@ func fetchIOFiles(host string, port int) (server.IOFiles, error) {
 	return out, nil
 }
 
-// ioPullAllowed is the project paths a pull may write: the manifest, the
-// manifest files its drivers: name and the profiles its devices: use, as
-// the local manifest and the one being pulled name them, and only plain
-// data files (.yaml, .yml, .json) with no hidden path component. Computed
-// here: the controller's list of paths is never what grants a write.
-func ioPullAllowed(dir string, files []server.IOFile) map[string]bool {
-	names := map[string]bool{project.ManifestName: true}
-	add := func(m *project.Manifest) {
+// ioPullAllowed is the project paths a pull may write, in two sets: local,
+// the manifest and the files this project's own manifest names (its
+// drivers: manifest: files and the profiles/<id>.yaml of its devices:);
+// and pulledOnly, files only the manifest being pulled names (a driver an
+// apply added), which a pull writes only when told (--new). Only YAML data
+// files with no hidden path component qualify, and the controller's list of
+// paths grants nothing: a path it sends that neither manifest names is in
+// neither set.
+func ioPullAllowed(dir string, files []server.IOFile) (local, pulledOnly map[string]bool) {
+	names := func(m *project.Manifest) map[string]bool {
+		out := map[string]bool{}
 		if m == nil {
-			return
+			return out
 		}
 		if m.Driver.Manifest != "" {
-			names[path.Clean(m.Driver.Manifest)] = true
+			out[path.Clean(m.Driver.Manifest)] = true
 		}
 		for _, d := range m.Drivers {
 			if d.Manifest != "" {
-				names[path.Clean(d.Manifest)] = true
+				out[path.Clean(d.Manifest)] = true
 			}
 		}
 		for _, d := range m.Devices {
-			if d.Profile != "" {
-				names["profiles/"+d.Profile+".yaml"] = true
+			// A profile id is a plain name: never a path.
+			if devprofile.IsID(d.Profile) {
+				out["profiles/"+d.Profile+".yaml"] = true
 			}
 		}
+		return out
 	}
 	base := os.DirFS(dir)
+	localNames := map[string]bool{project.ManifestName: true}
 	if m, err := project.ReadManifest(base, ""); err == nil {
-		add(m)
+		for n := range names(m) {
+			localNames[n] = true
+		}
 	}
+	pulledNames := map[string]bool{}
 	for _, f := range files {
 		if f.Path == project.ManifestName {
 			overlay := project.OverlayFS(base, map[string][]byte{project.ManifestName: []byte(f.Running)})
 			if m, err := project.ReadManifest(overlay, ""); err == nil {
-				add(m)
+				for n := range names(m) {
+					pulledNames[n] = true
+				}
 			}
 		}
 	}
-	out := map[string]bool{}
+	local, pulledOnly = map[string]bool{}, map[string]bool{}
 	for _, f := range files {
-		if names[f.Path] && ioPullSafePath(f.Path) {
-			out[f.Path] = true
+		switch {
+		case !ioPullSafePath(f.Path):
+		case localNames[f.Path]:
+			local[f.Path] = true
+		case pulledNames[f.Path]:
+			pulledOnly[f.Path] = true
 		}
 	}
-	return out
+	return local, pulledOnly
 }
 
 // ioPullSafePath: a clean relative slash path inside the project, of a
@@ -234,7 +260,7 @@ func ioPullSafePath(p string) bool {
 		}
 	}
 	switch strings.ToLower(path.Ext(p)) {
-	case ".yaml", ".yml", ".json":
+	case ".yaml", ".yml":
 		return true
 	}
 	return false

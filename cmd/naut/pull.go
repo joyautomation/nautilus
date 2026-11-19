@@ -40,7 +40,7 @@ the leader (or the service address).
 
 Usage:
   naut pull --host <controller> [--dir <project>] [--check] [--io]
-            [--dry-run] [--force]
+            [--dry-run] [--force] [--new]
 
 Flags:
   --host    Controller hostname or IP serving the tag API (required).
@@ -55,6 +55,10 @@ Flags:
   --io      Also pull the live I/O configuration into the project files.
   --dry-run Print what would change as a unified diff and write nothing
             (exit 0). --check keeps its meaning and wins over it.
+  --new     With --io, also write files that only the controller's manifest
+            names (a driver an apply added). They are listed first; without
+            --new such a pull writes nothing. Only .yaml/.yml files are ever
+            written.
   --force   With --io, overwrite a project file you edited locally. It skips
             the one check that your copy is the file the controller booted
             from (it trusts the controller's word for that), so your edits to
@@ -90,6 +94,7 @@ func runPull(args []string) int {
 	withIO := fs.Bool("io", false, "also pull the live I/O configuration")
 	dry := fs.Bool("dry-run", false, "print the changes as a diff, write nothing")
 	force := fs.Bool("force", false, "with --io, overwrite locally edited files")
+	fresh := fs.Bool("new", false, "with --io, also write files only the controller's manifest names")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, pullUsage) }
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -99,13 +104,13 @@ func runPull(args []string) int {
 		return 2
 	}
 
-	if *force && !*withIO {
-		fmt.Fprintln(os.Stderr, "naut pull: --force applies to --io only")
+	if (*force || *fresh) && !*withIO {
+		fmt.Fprintln(os.Stderr, "naut pull: --force and --new apply to --io only")
 		return 2
 	}
 	code := pullPrograms(*host, *port, *dir, *check, *dry)
 	if *withIO {
-		if c := pullIO(*host, *port, *dir, *check, *dry, *force); c == 2 || (c == 1 && code == 0) {
+		if c := pullIO(*host, *port, *dir, *check, *dry, *force, *fresh); c == 2 || (c == 1 && code == 0) {
 			code = c
 		}
 	}

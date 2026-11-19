@@ -69,14 +69,14 @@ func readFile(t *testing.T, dir, name string) string {
 func TestPullIOWritesTheRunningFiles(t *testing.T) {
 	host, port := ioController(t, ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"))
 	dir := projectWith(t, "modbus.yaml", "a: 1\nb: 2\n")
-	if c := pullIO(host, port, dir, false, false, false); c != 0 {
+	if c := pullIO(host, port, dir, false, false, false, false); c != 0 {
 		t.Fatalf("exit %d, want 0", c)
 	}
 	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\nb: 3\n" {
 		t.Fatalf("modbus.yaml = %q, want the running bytes", got)
 	}
 	// Pulled again, it is in sync.
-	if c := pullIO(host, port, dir, true, false, false); c != 0 {
+	if c := pullIO(host, port, dir, true, false, false, false); c != 0 {
 		t.Fatalf("--check after a pull exit %d, want 0", c)
 	}
 }
@@ -84,7 +84,7 @@ func TestPullIOWritesTheRunningFiles(t *testing.T) {
 func TestPullIODryRunWritesNothing(t *testing.T) {
 	host, port := ioController(t, ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"))
 	dir := projectWith(t, "modbus.yaml", "a: 1\nb: 2\n")
-	out := captureStdout(t, func() int { return pullIO(host, port, dir, false, true, false) })
+	out := captureStdout(t, func() int { return pullIO(host, port, dir, false, true, false, false) })
 	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\nb: 2\n" {
 		t.Fatalf("--dry-run wrote %q", got)
 	}
@@ -96,14 +96,14 @@ func TestPullIODryRunWritesNothing(t *testing.T) {
 func TestPullIOCheckExitsNonZero(t *testing.T) {
 	host, port := ioController(t, ioState("a: 1\n", "a: 2\n"))
 	dir := projectWith(t, "modbus.yaml", "a: 1\n")
-	if c := pullIO(host, port, dir, true, false, false); c != 1 {
+	if c := pullIO(host, port, dir, true, false, false, false); c != 1 {
 		t.Fatalf("--check exit %d, want 1", c)
 	}
 	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\n" {
 		t.Fatalf("--check wrote %q", got)
 	}
 	// --check wins over --dry-run.
-	if c := pullIO(host, port, dir, true, true, false); c != 1 {
+	if c := pullIO(host, port, dir, true, true, false, false); c != 1 {
 		t.Fatalf("--check --dry-run exit %d, want 1", c)
 	}
 }
@@ -111,16 +111,16 @@ func TestPullIOCheckExitsNonZero(t *testing.T) {
 func TestPullIORefusesALocallyEditedFile(t *testing.T) {
 	host, port := ioController(t, ioState("a: 1\n", "a: 2\n"))
 	dir := projectWith(t, "modbus.yaml", "a: 1\nmine: true\n")
-	if c := pullIO(host, port, dir, false, false, false); c != 2 {
+	if c := pullIO(host, port, dir, false, false, false, false); c != 2 {
 		t.Fatalf("exit %d, want 2: the local copy is not the booted one", c)
 	}
 	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\nmine: true\n" {
 		t.Fatalf("a refused pull wrote %q", got)
 	}
-	if c := pullIO(host, port, dir, false, true, false); c != 0 {
+	if c := pullIO(host, port, dir, false, true, false, false); c != 0 {
 		t.Fatalf("--dry-run exit %d, want 0 even for a refused file", c)
 	}
-	if c := pullIO(host, port, dir, false, false, true); c != 0 {
+	if c := pullIO(host, port, dir, false, false, true, false); c != 0 {
 		t.Fatalf("--force exit %d, want 0", c)
 	}
 	if got := readFile(t, dir, "modbus.yaml"); got != "a: 2\n" {
@@ -134,7 +134,7 @@ func TestPullIOWritesNothingWhenOneFileIsRefused(t *testing.T) {
 	host, port := ioController(t, st)
 	dir := projectWith(t, "modbus.yaml", "a: 1\n")
 	os.WriteFile(filepath.Join(dir, "profiles/x.yaml"), []byte("edited\n"), 0o644)
-	if c := pullIO(host, port, dir, false, false, false); c != 2 {
+	if c := pullIO(host, port, dir, false, false, false, false); c != 2 {
 		t.Fatalf("exit %d, want 2", c)
 	}
 	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\n" {
@@ -147,7 +147,7 @@ func TestPullIOStandbyRefused(t *testing.T) {
 	st.Leading = false
 	host, port := ioController(t, st)
 	dir := projectWith(t, "modbus.yaml", "a: 1\n")
-	if c := pullIO(host, port, dir, false, false, false); c != 2 {
+	if c := pullIO(host, port, dir, false, false, false, false); c != 2 {
 		t.Fatalf("exit %d, want 2 on a standby", c)
 	}
 	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\n" {
@@ -160,7 +160,7 @@ func TestPullIOWritesANewFileTheManifestNames(t *testing.T) {
 		Files: []server.IOFile{{Path: "profiles/x.yaml", Running: "x\n"}}}
 	host, port := ioController(t, st)
 	dir := projectWith(t, "modbus.yaml", "a: 1\n")
-	if c := pullIO(host, port, dir, false, false, false); c != 0 {
+	if c := pullIO(host, port, dir, false, false, false, false); c != 0 {
 		t.Fatalf("exit %d, want 0: a file the change added", c)
 	}
 	if got := readFile(t, dir, "profiles/x.yaml"); got != "x\n" {
@@ -180,7 +180,7 @@ func TestPullIOWritesOnlyFilesTheManifestNames(t *testing.T) {
 			Files: []server.IOFile{{Path: "modbus.yaml", Running: "ok\n", Booted: sha256hex("a: 1\n")}, {Path: bad, Running: "x"}}}
 		host, port := ioController(t, st)
 		dir := projectWith(t, "modbus.yaml", "a: 1\n")
-		if c := pullIO(host, port, dir, false, false, true); c != 2 {
+		if c := pullIO(host, port, dir, false, false, true, false); c != 2 {
 			t.Fatalf("%q: exit %d, want 2", bad, c)
 		}
 		if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\n" {
@@ -192,27 +192,79 @@ func TestPullIOWritesOnlyFilesTheManifestNames(t *testing.T) {
 	}
 }
 
-// A manifest the controller sends that names a new driver file extends the
-// allow-list by that name, still only for a data file.
-func TestPullIOFollowsThePulledManifestsNames(t *testing.T) {
-	manifest := "name: p\ndrivers:\n  - {type: modbus, manifest: modbus.yaml}\n  - {type: modbus, name: two, manifest: profiles/x.yaml}\n  - {type: modbus, name: three, manifest: extra.yaml}\n  - {type: modbus, name: four, manifest: run.st}\n"
-	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
-		Files: []server.IOFile{{Path: "nautilus.yaml", Running: manifest}, {Path: "extra.yaml", Running: "e\n"}}}
-	host, port := ioController(t, st)
+func pulledManifest(files ...string) string {
+	m := "name: p\ndrivers:\n  - {type: modbus, manifest: modbus.yaml}\n  - {type: modbus, name: two, manifest: profiles/x.yaml}\n"
+	for i, f := range files {
+		m += "  - {type: modbus, name: n" + string(rune('a'+i)) + ", manifest: " + f + "}\n"
+	}
+	return m
+}
+
+// A file only the PULLED manifest names (a driver an apply added) is
+// written only with --new, and is listed first; the local manifest's
+// names need no flag.
+func TestPullIONewFilesNeedNew(t *testing.T) {
 	dir := projectWith(t, "modbus.yaml", "a: 1\n")
-	if c := pullIO(host, port, dir, false, false, true); c != 0 {
-		t.Fatalf("exit %d, want 0", c)
+	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
+		Files: []server.IOFile{{Path: "nautilus.yaml", Running: pulledManifest("extra.yaml"), Booted: sha256hex(readFile(t, dir, "nautilus.yaml"))}, {Path: "extra.yaml", Running: "e\n"}}}
+	host, port := ioController(t, st)
+	if c := pullIO(host, port, dir, false, false, true, false); c != 2 {
+		t.Fatalf("without --new: exit %d, want 2", c)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extra.yaml")); err == nil {
+		t.Fatal("extra.yaml written without --new")
+	}
+	if got := readFile(t, dir, "nautilus.yaml"); strings.Contains(got, "extra.yaml") {
+		t.Fatal("nautilus.yaml written although the pull was refused")
+	}
+	// --dry-run and --check show them and write nothing.
+	if c := pullIO(host, port, dir, false, true, false, false); c != 0 {
+		t.Fatalf("--dry-run exit %d, want 0", c)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extra.yaml")); err == nil {
+		t.Fatal("--dry-run wrote")
+	}
+	if c := pullIO(host, port, dir, false, false, false, true); c != 0 {
+		t.Fatalf("--new exit %d, want 0", c)
 	}
 	if readFile(t, dir, "extra.yaml") != "e\n" {
-		t.Fatal("a file the pulled manifest names was not written")
+		t.Fatal("--new did not write the file the pulled manifest names")
 	}
-	st.Files = append(st.Files, server.IOFile{Path: "run.st", Running: "evil"})
-	host, port = ioController(t, st)
-	if c := pullIO(host, port, dir, false, false, true); c != 2 {
-		t.Fatalf("a program source named by the manifest: exit %d, want 2", c)
+}
+
+// What the pulled manifest names is still only ever a YAML data file in
+// the project: not package.json, not a program source, not a path out.
+func TestPullIONewStillRefusesOtherFiles(t *testing.T) {
+	for _, bad := range []string{"package.json", "hmi/package.json", "docker-compose.yml.sh", "run.st", ".github/workflows/x.yml", "../x.yaml", "sub/../../x.yaml", "data.json"} {
+		st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
+			Files: []server.IOFile{{Path: "nautilus.yaml", Running: pulledManifest(bad)}, {Path: bad, Running: "evil"}}}
+		host, port := ioController(t, st)
+		dir := projectWith(t, "modbus.yaml", "a: 1\n")
+		if c := pullIO(host, port, dir, false, false, true, true); c != 2 {
+			t.Fatalf("%q with --new: exit %d, want 2", bad, c)
+		}
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(bad))); err == nil {
+			t.Fatalf("%q was written", bad)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "run.st")); err == nil {
-		t.Fatal("run.st was written")
+}
+
+// A device's profile id is a name, never a path.
+func TestPullIOProfileIDIsNotAPath(t *testing.T) {
+	for _, id := range []string{"../x", "a/b", "..", "x/../../y"} {
+		m := "name: p\ndrivers:\n  - {type: modbus, manifest: modbus.yaml}\n  - {type: modbus, name: two, manifest: profiles/x.yaml}\ndevices:\n  - {name: d1, profile: " + id + ", endpoint: 127.0.0.1}\n"
+		for _, path := range []string{"profiles/" + id + ".yaml", "x.yaml", "y.yaml"} {
+			st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
+				Files: []server.IOFile{{Path: "nautilus.yaml", Running: m}, {Path: path, Running: "evil"}}}
+			host, port := ioController(t, st)
+			dir := projectWith(t, "modbus.yaml", "a: 1\n")
+			if c := pullIO(host, port, dir, false, false, true, true); c != 2 {
+				t.Fatalf("profile %q file %q: exit %d, want 2", id, path, c)
+			}
+			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(path))); err == nil {
+				t.Fatalf("profile %q wrote %q", id, path)
+			}
+		}
 	}
 }
 
@@ -229,7 +281,7 @@ func TestPullIORefusesASymlinkOutOfTheProject(t *testing.T) {
 	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
 		Files: []server.IOFile{{Path: "profiles/x.yaml", Running: "x\n"}}}
 	host, port := ioController(t, st)
-	if c := pullIO(host, port, dir, false, false, true); c != 2 {
+	if c := pullIO(host, port, dir, false, false, true, false); c != 2 {
 		t.Fatalf("exit %d, want 2", c)
 	}
 	if _, err := os.Stat(filepath.Join(out, "x.yaml")); err == nil {
@@ -250,7 +302,7 @@ func TestPullIOForcePrintsWhatItOverwrites(t *testing.T) {
 	old := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
-	c := pullIO(host, port, dir, false, false, true)
+	c := pullIO(host, port, dir, false, false, true, false)
 	w.Close()
 	os.Stderr = old
 	buf := make([]byte, 4096)
@@ -262,7 +314,7 @@ func TestPullIOForcePrintsWhatItOverwrites(t *testing.T) {
 
 func TestPullIONothingDiffers(t *testing.T) {
 	host, port := ioController(t, server.IOFiles{Leading: true})
-	if c := pullIO(host, port, t.TempDir(), true, false, false); c != 0 {
+	if c := pullIO(host, port, t.TempDir(), true, false, false, false); c != 0 {
 		t.Fatalf("exit %d, want 0 when the controller runs the manifest", c)
 	}
 }
@@ -272,7 +324,7 @@ func TestPullIOConflictRefused(t *testing.T) {
 	st.Conflicts = []string{"modbus.yaml"}
 	host, port := ioController(t, st)
 	dir := projectWith(t, "modbus.yaml", "a: 1\n")
-	if c := pullIO(host, port, dir, false, false, true); c != 2 {
+	if c := pullIO(host, port, dir, false, false, true, false); c != 2 {
 		t.Fatalf("exit %d, want 2", c)
 	}
 }
