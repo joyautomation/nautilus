@@ -99,7 +99,7 @@ func commissioned(gen, inc, promised uint64) VoterState {
 }
 
 func TestAdoptRoundTripAndCorruption(t *testing.T) {
-	m := Adopt{From: "A", Kind: Ack, Gen: 3, Incarnation: 77, Floor: 12, Nonce: 0xA1, Echo: 0xB1, Pending: 4, CommitGen: 3, CommitInc: 77}
+	m := Adopt{From: "A", Kind: Ack, Gen: 3, Incarnation: 77, Floor: 12, Nonce: 0xA1, Echo: 0xB1, Pending: 4, CommitGen: 3, CommitInc: 77, Operator: 1000}
 	b, _ := m.MarshalBinary()
 	var got Adopt
 	if err := got.UnmarshalBinary(b); err != nil || got != m {
@@ -677,42 +677,5 @@ func TestSecondAdoptionInFlightKeepsTheQuiet(t *testing.T) {
 	}
 	if inc, from := b.c.Counting(); inc != incJ || from < now.Add(lease) {
 		t.Fatalf("counts %d from %v, want %d from %v (J's quiet period)", inc, from, incJ, now.Add(lease))
-	}
-}
-
-// Both controllers uncommissioned (both files lost) and each pending its
-// own proposal: A (1, I) from the real witness, B (2, J) from a stray copy
-// only it heard. A can't take J (never heard), B won't take a lower
-// generation. Once the stray is gone and B hears I, B must re-propose I
-// above both, or the pair waits for ever.
-func TestBothUncommissionedFollowTheNewest(t *testing.T) {
-	now := at(lease)
-	a := newCtl(t, "A", VoterState{}, 0)
-	b := newCtl(t, "B", VoterState{}, 0)
-	a.hear(now, incI, 3)
-	b.hear(now, incJ, 0)
-	a.a.peerNonce, b.a.peerNonce = 0xB1, 0xA1 // each knows the other's boot
-	pa := a.a
-	pb := b.a
-	qa, qb := pa.msg(Propose, 0, 0, 0, 0xB1), pb.msg(Propose, 0, 0, 0, 0xA1)
-	talk(now, a, b, []Adopt{qa})
-	talk(now, b, a, []Adopt{qb})
-	if a.v.State().PendingInc != incI || b.v.State().PendingInc != incJ {
-		t.Fatalf("setup: A pends %+v, B pends %+v", a.v.State(), b.v.State())
-	}
-	later := now.Add(2 * lease)
-	b.hear(later, incI, 3) // the stray is gone; B now hears the real witness
-	for k := range 4 {
-		tt := later.Add(lease / 4 * time.Duration(k))
-		ra, _ := a.tick(tt)
-		talk(tt, a, b, ra)
-		rb, _ := b.tick(tt)
-		talk(tt, b, a, rb)
-	}
-	if _, i := adopted(a.v.State()); i != incI {
-		t.Fatalf("A not on I: %+v", a.v.State())
-	}
-	if _, i := adopted(b.v.State()); i != incI {
-		t.Fatalf("B not on I: %+v", b.v.State())
 	}
 }

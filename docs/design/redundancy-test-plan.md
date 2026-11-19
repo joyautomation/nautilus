@@ -122,8 +122,8 @@ to the matrix as a named regression case.
 - **Excluded by name:**
   - F22b, a frozen controller clock, which must breach I1;
   - skew beyond ρ, which must breach I1 at some phase;
-  - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both files lost and re-commissioned on a stray's incarnation. It needs an operator, so I6, I7 and steady state are excused; I1, I2, I4, the lease and the ledger are not, because the lost controller waits for the operator instead of re-commissioning at a floor that may miss its terms (the committed-incarnation rule, design §3.1). In the stray shape (both files lost) I2 and I4 stay excused: neither controller committed anything, so the rule doesn't apply (none of the first 200,000 seeds has that shape). The seed runner logs and counts the case (777 of 200,000, 0.39%), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused. `TestTwoOfThreeWaitsForTheOperator` builds the case with terms the peer never saw, and asserts I2 and I4 in it.
-- **#976 is closed** (H2): two lost controller files with the witness intact are judged in full (`TestRegression976TwoLostControllerFiles`, red under `no_quiet` and `restart_counts_at_once`; the floor's own sim case is `TestFloorCarriesTheUnseenTerm`), and the generator no longer caps lost controller files.
+  - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both controllers uncommissioned at once (#710 B2, witness intact or not). It needs an operator, so I6, I7 and steady state are excused; I1, I2, I4, the lease and the ledger are not, because the lost controllers wait for the operator instead of re-commissioning at a floor that may miss their terms (design §3.1). The seed runner logs and counts the case (990 of 200,000, 0.50%, since B2; 777 before), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused, except those built as the case: `TestTwoOfThreeWaitsForTheOperator`, `TestBothLostWaitForTheOperatorInTheSim` (the #1016 review's shape: red on I2 under `both_lost_recommission`, "B wrote term 7 after term 8"), and the operator cases below. `TestTwoOfThreeWaitsForTheOperator` builds the case with terms the peer never saw, and asserts I2 and I4 in it.
+- **#976 is closed** (H2), and since #710 B2 two lost controller files **wait for the operator** even with the witness intact: the named cases (`TestRegression976TwoLostControllerFiles`, `TestRegressionBothUncommissionedStray`, `TestRegression976WitnessUnreachable`, livelock seed 1653) each run the operator's command (a `Recommission` fault, which the generator never draws) and, through `operatorRecovers`, assert no adoption before it, the alarm on both controllers, every safety oracle, and both counting the witness with a leader at the end. They are red under `both_lost_recommission` (H2's automatic recovery). The floor's own sim case is `TestFloorCarriesTheUnseenTerm`; the generator doesn't cap lost controller files.
 
 ### 3.3 Mutation checks (T2, nightly; required to pass before each milestone)
 
@@ -189,7 +189,8 @@ row. All 17 are caught, in about 50 s. The handshake adds eight (`no_quiet`, `no
 `count_while_pending`, `no_adopt_gen`, `no_holdoff`, `restart_counts_at_once`, `no_adopt_echo`,
 `switch_without_peer`): T1 catches each in H1, and the sim cases join them in H2. H2 adds five
 more: four for holes found while driving the handshake in the sim (`bump_cuts_quiet`,
-`peer_from_any_adopt`, `quiet_reply_unheard`, `stale_pending_kept`), and `uncommissioned_grants`,
+`peer_from_any_adopt`, `quiet_reply_unheard`, `stale_pending_kept`, removed in #710 B2 with the rule it
+pinned), and `uncommissioned_grants`,
 #976's own rule, which H1 tested in T1 only. naut-lead's review of #1014 added three
 (`propose_keeps_commit`, `count_over_pending`, `holdoff_from_boot`). The first two are belt and
 braces, so each alone closes the failed-write split brain and is pinned by a test of its own
@@ -197,7 +198,10 @@ invariant; the scenario tests go red only with both removed. The two-of-three PR
 adds two: `uncommissioned_takes_switch` (a lost controller takes its peer's switch, not only
 its committed incarnation; T1 and `TestTwoOfThreeWaitsForTheOperator`) and
 `proposal_floor_volatile` (a proposal's floor isn't written with it, so a restart re-sends it
-lower; T1 only).
+lower; T1 only). B2 adds three: `both_lost_recommission` (both uncommissioned, the pair
+re-commissions on its own: T1 with the review's case, and the both-lost sim cases),
+`alarm_on_heard` (an incarnation that answered still raises the alarm; T1) and
+`recommission_any_floor` (an operator's floor at or below the known one is taken; T1).
 
 **The handshake in the simulator (H2).** The sim drives `quorum.Adoption` as PR 3 will:
 `Adopt` over A–B (every link fault applies), witness replies to `OnWitness`, `OnPeer` for every
@@ -228,8 +232,8 @@ The first 200,000-seed run with the handshake failed 42 seeds, none on safety:
 - **36** were switch-fault runs whose return to the real witness waited out the hold-off (the
   settle-aware steady window above);
 - **3** were a real liveness hole: both controllers uncommissioned, each pending a proposal the
-  other can't take, stuck after the stray was gone. Fixed (`stale_pending_kept`); named in
-  `TestRegressionBothUncommissionedUnstick`;
+  other can't take, stuck after the stray was gone. Fixed then (`stale_pending_kept`); since
+  #710 B2 the pair waits for the operator instead (`TestRegressionBothUncommissionedStray`);
 - **3** are now excused: the two-of-three rule was widened a second time, to judge the peer's
   *committed* incarnation (a peer pending a switch counts nothing, yet the lost controller can
   only re-adopt what it committed, here dead). They are in `TestTwoOfThreeLostTeeth`.
@@ -251,11 +255,14 @@ promise, so only a lost file brings a term back). The 200,000 seeds pass with th
 (288 s, the same 777 excused). Seed 57197 now also asserts that B never re-commissions after its
 file loss and raises the alarm. The residual the rule leaves (design §3.1: a stray copy adopted
 with its ack lost, then lost with the controller's file) is pinned in T1 as
-`TestKnownGapPendingStray`, which flips when it is closed.
+`TestKnownGapPendingStray`, which flips when it is closed; since B2 the peer that takes such a
+re-adoption raises `EventReadoptOverSwitch` (`TestReadoptOverSwitchRaisesAnEvent`).
+With B2 the 200,000 seeds pass again (267 s): 0 failing, 990 excused (the both-lost runs now
+wait for the operator, so they join the case; I2 and I4 asserted in all of them).
 
-Also named: `TestRegression976WitnessUnreachable` (both files lost with the witness cut off: the
-pair re-commissions inside the restart wait when the witness answers, so only this case shows
-#976's own rule, red under `uncommissioned_grants`), `TestLateAdoptToAnEarlierBootInTheSim` (a
+Also named: `TestRegression976WitnessUnreachable` (both files lost with the witness cut off:
+without #976's own rule the pair elects itself below a term already led; red under
+`uncommissioned_grants`; since B2 it waits for the operator's command), `TestLateAdoptToAnEarlierBootInTheSim` (a
 replayed `Adopt` to A's earlier boot after B died; red under `peer_from_any_adopt`) and
 `TestSettleOracle`. Steady state from the last adoption applies to every run where a second copy
 answers through a mirror: the switch fault, and the generator's older stray-copy fault.

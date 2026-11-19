@@ -356,3 +356,48 @@ func TestTwoOfThreeWaitsForTheOperator(t *testing.T) {
 		t.Error("A raised no re-commission alarm")
 	}
 }
+
+// Both files lost with the witness intact still waits for the operator
+// (#710 B2, the review of #1016). The witness is cut from both
+// controllers from 6 s to 31 s; meanwhile the pair leads on {A, B} alone,
+// and pauses push the term up where the witness never sees it. Then both
+// files are lost (30 s, 30.5 s, back 2 s later) and the cut heals while
+// they are down. The
+// witness's promise is below the terms the pair led: re-commissioning on
+// it, the pair leads one of them again (red under both_lost_recommission,
+// on I2/I4). It must wait instead, alarm on both, and every safety
+// oracle holds; nobody leads again without the operator.
+func TestBothLostWaitForTheOperatorInTheSim(t *testing.T) {
+	o := Options{Seed: 7, Delay: ms, Jitter: ms / 2, Fsync: ms, Until: 90 * sec, Trace: true,
+		Start: [3]time.Duration{0, 2 * sec, 0},
+		Faults: []Fault{
+			{Kind: Cut, At: 6 * sec, For: 25 * sec, From: A, To: W, Both: true},
+			{Kind: Cut, At: 6 * sec, For: 25 * sec, From: B, To: W, Both: true},
+			{Kind: Pause, At: 10 * sec, For: 6 * sec, Node: A},
+			{Kind: Pause, At: 10 * sec, For: 6 * sec, Node: B},
+			{Kind: Pause, At: 20 * sec, For: 6 * sec, Node: A},
+			{Kind: Pause, At: 20 * sec, For: 6 * sec, Node: B},
+			{Kind: Wipe, At: 30 * sec, For: 2 * sec, Node: A},
+			{Kind: Wipe, At: 30*sec + 500*ms, For: 2 * sec, Node: B},
+		}}
+	rec := Run(o)
+	defer trace(t, rec)
+	if _, both := rec.twoOfThree(); !both {
+		t.Fatal("not both controllers uncommissioned at once")
+	}
+	for _, v := range Check(rec, checksFor(o)) {
+		t.Error(v)
+	}
+	for _, a := range rec.Adoptions {
+		if a.At >= 30*sec {
+			t.Errorf("re-commissioned without an operator: %+v", a)
+		}
+	}
+	alarmed := map[Addr]bool{}
+	for _, r := range rec.Recommissions {
+		alarmed[r.Node] = true
+	}
+	if !alarmed[A] || !alarmed[B] {
+		t.Errorf("want the alarm on both, got %v", alarmed)
+	}
+}

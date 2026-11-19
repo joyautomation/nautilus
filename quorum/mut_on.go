@@ -41,13 +41,15 @@ var Mutations = []string{
 	"peer_from_any_adopt",         // an Adopt to an earlier boot of this controller says the peer is up
 	"bump_cuts_quiet",             // a generation bump that keeps the incarnation ends a quiet period still owed
 	"quiet_reply_unheard",         // a reply in the quiet period doesn't count as heard: a restart backs off two leases
-	"stale_pending_kept",          // both uncommissioned, a proposal of an incarnation no longer answering is kept
 	"uncommissioned_grants",       // a controller that lost its file grants before it re-commissions (#976)
 	"propose_keeps_commit",        // a proposal leaves an adoption waiting for its write to count later (#1014 review)
 	"count_over_pending",          // a write counts an adoption while a proposal is pending (#1014 review)
 	"holdoff_from_boot",           // a failed adoption write leaves the hold-off measured from boot (#1014 review)
 	"uncommissioned_takes_switch", // an uncommissioned controller adopts its peer's switch, not only its committed incarnation (two-of-three)
 	"proposal_floor_volatile",     // a proposal's floor isn't durable with it: a restart re-sends it lower
+	"both_lost_recommission",      // both controllers uncommissioned, the pair re-commissions on its own (#976's automatic recovery)
+	"alarm_on_heard",              // an uncommissioned controller alarms although its peer's committed incarnation answered it
+	"recommission_any_floor",      // an operator's floor at or below what the controller knows is taken
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

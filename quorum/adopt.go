@@ -16,14 +16,23 @@ const (
 	// copies of the witness are running: a misconfiguration the operator
 	// must see (design §3.1).
 	EventTwoIncarnations
-	// EventRecommission: this controller is uncommissioned (its file was
-	// lost) and the incarnation its peer committed, (Gen, Incarnation),
-	// has not answered it for a lease since it started. If that witness
-	// is gone for good, this is the two-of-three case: the controller
-	// stays uncommissioned until an operator re-commissions it by hand
-	// with an explicit term floor (Recommission; design §3.1, §7). The
-	// witness may also only be unreachable from here: check before acting.
+	// EventRecommission: this controller is uncommissioned, has been up a
+	// lease, and stays so until an operator re-commissions it by hand with
+	// an explicit term floor (Recommission; design §3.1, §7). Either the
+	// incarnation its peer committed, (Gen, Incarnation), has not answered
+	// it (if that witness is gone for good, this is the two-of-three
+	// case; it may also only be unreachable from here: check before
+	// acting), or Incarnation is 0: the peer is uncommissioned too (both
+	// files lost, or a new pair), and no surviving voter is sure to hold
+	// the terms the pair led.
 	EventRecommission
+	// EventReadoptOverSwitch: this controller, pending a switch to Other,
+	// took its uncommissioned peer's re-adoption of (Gen, Incarnation)
+	// instead. If the peer had adopted Other with its ack lost, led on
+	// it, then lost its file, and Other is gone too, the floor may miss
+	// the terms it led (design §3.1, "The residual"): the operator should
+	// know.
+	EventReadoptOverSwitch
 )
 
 // Event is one thing an Adoption reports (Adoption.Events).
@@ -62,7 +71,9 @@ const maxHoldShift = 5
 //     peer committed (Adopt.CommitInc) knows the terms this controller led
 //     before its file was lost. If that incarnation is gone it stays
 //     uncommissioned (EventRecommission) until an operator re-commissions
-//     it with an explicit term floor (Recommission; design §3.1, §7).
+//     it with an explicit term floor (Recommission; design §3.1, §7). The
+//     same when the peer is uncommissioned too (both files lost, or a new
+//     pair): nothing commissions without the operator.
 //   - A restart owes the quiet period again (NewAdoption).
 //
 // Like Voter and Candidate it does no I/O and is not safe for concurrent
@@ -112,6 +123,7 @@ type Adoption struct {
 	// raised as EventRecommission (raised once each).
 	born    Instant
 	alarmed [2]uint64
+	alarmOn bool // alarmed holds a raised one
 	// allow is the incarnation an operator's Recommission lets this
 	// uncommissioned controller adopt although its peer never committed
 	// it. In memory only: a restart before it is proposed or taken needs
@@ -273,7 +285,16 @@ func (a *Adoption) Tick(now Instant) (*Persist, []Adopt, *Request) {
 func (a *Adoption) msg(k AdoptKind, gen, inc, floor, echo uint64) Adopt {
 	return Adopt{From: a.self, Kind: k, Gen: gen, Incarnation: inc, Floor: floor,
 		Nonce: a.c.cfg.Nonce, Echo: echo, Pending: a.v.st.PendingGen,
-		CommitGen: a.v.st.Gen, CommitInc: a.v.st.Incarnation}
+		CommitGen: a.v.st.Gen, CommitInc: a.v.st.Incarnation, Operator: a.operator(k, inc)}
+}
+
+// operator is the Adopt.Operator of a message: the floor of an operator's
+// Recommission, on a proposal of the incarnation it named.
+func (a *Adoption) operator(k AdoptKind, inc uint64) uint64 {
+	if k != Propose || a.allow == 0 || inc != a.allow || a.v.st.Incarnation != 0 {
+		return 0
+	}
+	return a.v.st.Floor
 }
 
 // propose asks the peer to adopt (gen, inc). Forward only: it stops
@@ -363,18 +384,32 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 		// controller may have led terms on that incarnation that the peer
 		// never saw, and only it knows them: re-commissioned on another,
 		// at the peer's floor, it would vote in them again (the two-of-three
-		// case, design §3.1). A peer that is uncommissioned too has
-		// committed nothing (first commissioning, or both files lost). An
-		// operator's Recommission allows one other incarnation.
-		other := m.CommitInc != 0 && m.Incarnation != m.CommitInc && m.Incarnation != a.allow
-		if st.Incarnation == 0 && (!fresh || !a.heardAt(m.Incarnation) ||
-			(other && !mut("uncommissioned_takes_switch"))) {
-			accept = false
+		// case, design §3.1). From a peer that is uncommissioned too (both
+		// files lost, or a new pair) it takes only a proposal an operator
+		// made (Adopt.Operator, with the operator's floor): no surviving
+		// voter is sure to hold the terms the pair led. An operator's
+		// Recommission here allows the incarnation it named.
+		if st.Incarnation == 0 {
+			var ok bool
+			switch {
+			case a.allow != 0 && m.Incarnation == a.allow:
+				ok = true
+			case m.CommitInc != 0:
+				ok = m.Incarnation == m.CommitInc || mut("uncommissioned_takes_switch")
+			default:
+				ok = m.Operator != 0 || mut("both_lost_recommission")
+			}
+			if !fresh || !a.heardAt(m.Incarnation) || !ok {
+				accept = false
+			}
 		}
 		if !accept {
 			return a.flush(), a.hold(a.msg(State, st.Gen, st.Incarnation, st.Floor, m.Nonce))
 		}
-		p := a.adopt(now, m.Gen, m.Incarnation, m.Floor)
+		if st.Incarnation != 0 && st.PendingGen != 0 && m.CommitInc == 0 && m.Operator == 0 && m.Incarnation != st.PendingInc {
+			a.events = append(a.events, Event{Kind: EventReadoptOverSwitch, Gen: m.Gen, Incarnation: m.Incarnation, Other: st.PendingInc})
+		}
+		p := a.adopt(now, m.Gen, m.Incarnation, max(m.Floor, m.Operator))
 		return p, a.hold(a.msg(Ack, m.Gen, m.Incarnation, a.v.st.Floor, m.Nonce))
 	case Ack:
 		if fresh && st.PendingGen != 0 && m.Gen == st.PendingGen && m.Incarnation == st.PendingInc {
@@ -407,14 +442,16 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 			}
 			return nil, nil
 		}
-		// Both uncommissioned (first commissioning, or both files lost):
-		// propose the incarnation that answered last, and propose again,
-		// above both, when it is no longer the one pending. Two proposals
-		// can each be refused by the other side (an incarnation it never
-		// heard, a lower generation), and only a change of what answers
-		// (a stray gone, the real witness back) can end that.
+		// Both uncommissioned (both files lost, or a new pair): only an
+		// operator's Recommission commissions the pair. This controller
+		// proposes the incarnation it names, once heard, with the
+		// operator's floor; the peer takes it (Adopt.Operator).
 		if st.Incarnation == 0 {
-			if inc := a.newest(); inc != 0 && (st.PendingGen == 0 || (inc != st.PendingInc && !mut("stale_pending_kept"))) {
+			inc := a.allow
+			if mut("both_lost_recommission") {
+				inc = a.newest() // before #710 B2: the one that answered last
+			}
+			if inc != 0 && a.heardAt(inc) && (st.PendingGen == 0 || inc != st.PendingInc) {
 				return a.propose(max(m.Gen, m.Pending, st.Gen, st.PendingGen)+1, inc)
 			}
 		}
@@ -422,16 +459,20 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 	return nil, nil
 }
 
-// alarm raises EventRecommission when the peer's committed incarnation,
-// named in m (sent to this uncommissioned controller's boot), has not
-// answered this controller in the lease since it started: the witness
-// has had time to answer its probe. Once per committed adoption.
+// alarm raises EventRecommission for this uncommissioned controller once
+// it has been up a lease (the witness has had time to answer its probe),
+// on a message m sent to its boot: when the peer's committed incarnation
+// has not answered it, or when the peer is uncommissioned too (m names
+// none). Once per committed adoption the peer names.
 func (a *Adoption) alarm(now Instant, m Adopt) {
 	c := [2]uint64{m.CommitGen, m.CommitInc}
-	if m.CommitInc == 0 || a.heardAt(m.CommitInc) || now < a.born.Add(a.lease) || c == a.alarmed {
+	if now < a.born.Add(a.lease) || (a.alarmOn && c == a.alarmed) {
 		return
 	}
-	a.alarmed = c
+	if m.CommitInc != 0 && a.heardAt(m.CommitInc) && !mut("alarm_on_heard") {
+		return // it can re-adopt it
+	}
+	a.alarmed, a.alarmOn = c, true
 	a.events = append(a.events, Event{Kind: EventRecommission, Gen: m.CommitGen, Incarnation: m.CommitInc})
 }
 
@@ -442,20 +483,29 @@ var ErrCommissioned = errors.New("quorum: controller is commissioned")
 // ErrNoFloor: Recommission was called with incarnation or floor 0.
 var ErrNoFloor = errors.New("quorum: re-commission needs an incarnation and a term floor")
 
-// Recommission is the operator's way out of the two-of-three case (design
-// §7): this controller lost its file and the incarnation its peer
-// committed is gone (EventRecommission), so no surviving voter knows the
-// terms this controller led before the loss. The operator supplies a term
-// floor above every term the pair could have used, and the incarnation to
-// adopt (the rebuilt witness's). The floor is made durable at once (the
-// returned write) and raises what this controller vouches for; the
-// adoption itself is the ordinary handshake, through the peer, which takes
-// the floor with it: this controller adopts inc when the peer proposes it,
-// or proposes it to the peer, once it has heard inc answer. The permission
-// is held in memory: a restart before this controller proposed or took inc
-// needs the command again (a proposal already made goes on: its floor is
-// durable with it). The command and its audit record are the
-// caller's (the runtime, #710 PR 3, audited under #709).
+// ErrFloorTooLow: Recommission was given a floor at or below what the
+// controller already knows was promised: the operator's floor must add a
+// margin above it.
+var ErrFloorTooLow = errors.New("quorum: re-commission floor is not above the terms this controller knows")
+
+// Recommission is the operator's way out when this controller can't
+// re-commission on its own (EventRecommission, design §7): its peer's
+// committed incarnation is gone, or the peer is uncommissioned too. No
+// surviving voter is sure to know the terms the pair led. The operator
+// supplies a term floor above every term the pair could have used (it
+// must be above what this controller knows, floorFor, or ErrFloorTooLow),
+// and the incarnation to adopt (the witness's). The floor is made durable
+// at once (the returned write) and raises what this controller vouches
+// for; the adoption itself is the ordinary handshake, through the peer,
+// which takes the floor with it: this controller adopts inc when the peer
+// proposes it, or proposes it to the peer (marked Adopt.Operator, so an
+// uncommissioned peer takes it too), once it has heard inc answer. Once
+// per pair is enough. The permission is held in memory: after a restart
+// the operator issues the command again, with a floor above KnownFloor
+// (the first floor stays, and the candidate's campaigns may have raised
+// the witness's promise since); a proposal still pending then leaves
+// marked again. The command and its audit record are the caller's (the
+// runtime, #710 PR 3, audited under #709).
 func (a *Adoption) Recommission(inc, floor uint64) (*Persist, error) {
 	if a.v.st.Incarnation != 0 {
 		return nil, ErrCommissioned
@@ -463,11 +513,18 @@ func (a *Adoption) Recommission(inc, floor uint64) (*Persist, error) {
 	if inc == 0 || floor == 0 {
 		return nil, ErrNoFloor
 	}
+	if floor <= a.floorFor() && !mut("recommission_any_floor") {
+		return nil, ErrFloorTooLow
+	}
 	a.allow = inc
 	a.v.st.Floor = max(a.v.st.Floor, floor)
 	a.c.raiseSeen(a.v.st.Floor)
 	return a.v.change(), nil
 }
+
+// KnownFloor is the highest term this controller knows was promised
+// (floorFor): an operator's Recommission floor must be above it.
+func (a *Adoption) KnownFloor() uint64 { return a.floorFor() }
 
 func (a *Adoption) heardAt(inc uint64) bool {
 	_, ok := a.heard[inc]

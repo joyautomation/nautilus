@@ -302,12 +302,18 @@ redundancy:
     - **Probes.** A standby doesn't campaign under a live leader, so it would never hear the
       witness. Until it is commissioned, it sends the witness a term-0 probe each look, which
       is always refused. The refusal carries the incarnation and the promised term.
-    - **Strays.** It never proposes an incarnation of its own while its peer is commissioned, so
-      a stray copy can't move the pair. Only when both are uncommissioned (first commissioning,
-      or both files lost) does a controller propose the incarnation it heard last. It proposes
-      again, above both generations, when that is no longer the one pending: two proposals can
-      each be refused by the other side (an incarnation it never heard, a lower generation),
-      and only a change in what answers (a stray gone, the real witness back) ends that.
+    - **Strays.** It never proposes an incarnation of its own, so a stray copy can't move the
+      pair. Only the operator's command names one (below).
+    - **Both controllers uncommissioned** (both files lost, or a new pair) **wait for the
+      operator** (#710 B2). The witness may be intact and still miss terms: B led term 11 on
+      {A, B} while the witness, promised 9, was cut off, and both files were lost before a
+      renewal reached it. No surviving voter holds 11, so re-commissioning on the witness at
+      floor 9 could lead 10 and 11 again. Neither controller proposes, neither takes the other's
+      proposal unless an operator made it, and both raise **re-commission by hand**
+      (`EventRecommission` naming no incarnation). **This trades away #976's automatic
+      recovery** for a two-disk loss (H2 re-commissioned the pair on the witness by itself) for
+      a pair that never reuses a term. It also means a **new pair is commissioned by the
+      operator**: a fresh install can't be told from two wiped disks.
     - **It gives way.** If its proposal meets one of the peer's at the same or a higher
       generation (a switch the lost controller can't hear), it re-proposes the peer's current
       incarnation above both, and the peer takes that over its own switch. Neither waits on the
@@ -326,7 +332,7 @@ redundancy:
       C, heard, is above every term A led. A switch to a rebuilt witness's J is not: in the
       case where A led on C and C is dead, neither J nor B's floor knows t, and A would grant
       it again (and `oplog` names entries by sequence and term).
-    - **The residual.** A adopted B's switch to X, the ack was lost, A led on X (B, pending,
+    - **The residual** (accepted, naut-lead 2026-11-19). A adopted B's switch to X, the ack was lost, A led on X (B, pending,
       counts nothing), then A's file was lost. If X still answers, A's floor includes X's
       promised term (it counts every incarnation it hears), and refusing X costs liveness only.
       If X died too while C still answers, X was a second copy, and if B has not heard X since
@@ -335,32 +341,30 @@ redundancy:
       misconfiguration (two witness copies). The rule doesn't catch it, and the simulator's
       two-of-three case doesn't name it (X was never committed by B); `TestKnownGapPendingStray`
       pins it. Closing it would make a lost controller wait whenever its peer pends an
-      incarnation it can't hear, at the cost of the give-way path above.
+      incarnation it can't hear, at the cost of the give-way path above. Instead it is made
+      visible: when B takes an uncommissioned peer's re-adoption over its own pending switch it
+      raises `EventReadoptOverSwitch` (`redundancy.witness.readopt-over-switch`), naming both.
     - **If C never answers** it stays uncommissioned, its voter grants nothing, and once it has
       been up a lease it raises **re-commission by hand** (`EventRecommission`, naming C) for
       the operator (§7). The witness may only be unreachable from it, so the alarm says to check
-      that first. Both controllers uncommissioned (first commissioning, or both files lost) is
-      not this case: neither has committed anything.
+      that first. An incarnation that has answered it never raises the alarm: it can re-adopt
+      it.
   - **The costs.**
     - **One controller down:** a rebuilt witness can't be adopted. That is already a two-fault
       case (witness disk and a controller), so the survivor behaves as in §7.
     - **A lost controller file with the witness unreachable:** that controller grants nothing
       until the witness answers. Two faults; the pair behaves as in §7.
     - **Two of the three voters losing their state before either has re-commissioned** (a
-      controller's file and the witness's, or both controllers' with only a stray copy
-      answering): no surviving majority remembers the terms, so the floor can miss terms only
-      those two knew. This needs operator re-commissioning (§7). The simulator names the case
-      (a controller's file lost, and its peer's committed incarnation dying before it
-      re-commissions; or both files lost and re-commissioned on a stray's incarnation) and
-      excuses it against liveness (I6, I7, steady state) only, never I1, the lease or the
-      ledger. Both controllers' files lost with the witness intact (#976) is covered in full.
-      **It reliably waits for an operator** (the committed-incarnation rule above): the lost
-      controller stays uncommissioned and alarms, and the pair elects nothing until the
-      operator re-commissions it by hand (§7). The simulator therefore asserts I2 and I4 in
-      the case too. The stray shape is the exception: with both files lost neither controller
-      has committed anything, so the rule has nothing to hold them to, and they re-commission
-      on what answers. I2 and I4 stay excused there (unmeasured: none of the first 200,000
-      seeds has that shape).
+      controller's file and the witness's, or both controllers' files, witness intact or
+      not): no surviving majority is sure to remember the terms, so a floor taken from the
+      survivors can miss terms only the lost voters knew. **It reliably waits for an
+      operator** (the committed-incarnation rule, and both-uncommissioned waits, above): the
+      lost controllers stay uncommissioned and alarm, and the pair elects nothing until the
+      operator re-commissions it by hand (§7). The simulator names the case (a controller's
+      file lost, and its peer's committed incarnation dying before it re-commissions; or both
+      controllers uncommissioned at once) and excuses it against liveness (I6, I7, steady
+      state) only, never I1, I2, I4, the lease or the ledger. Its named cases run the
+      operator's command (a `Recommission` fault) and assert the pair recovers after it.
   - **On an HA cluster** the witness must be a StatefulSet with a persistent volume, never a
     Deployment: Kubernetes won't start a second copy of a StatefulSet pod while it can't
     confirm that the first is gone. The incarnation check covers a force-delete.
@@ -620,6 +624,8 @@ The test plan defines exactly how it is measured (§4 there).
 | A cut from both B and W | A fences when its lease ends. B+W elect B after that. |
 | The leader starved between scans (#858) | Its elector still runs, but `Liveness` flags the overdue loop within `B ≤ lease/2`. The elector stops renewing at its next tick, and the gate closes half a lease after the last renew: within `B + lease/4 + lease/2` of the first missed slot. A slow task isn't late before its slot comes due, so a 10 s task is caught about 12 s after its last scan. B is elected once the lease lapses. The last renew is at most a tick before detection, so B can't win until `lease/4` after the gate has closed: the two never overlap. A starved standby doesn't campaign. |
 | Witness plus one controller | The lone survivor (§7). |
+| Both controllers' state files (or a new pair) | Neither re-commissions on its own, even with the witness intact: nobody leads, and both raise "re-commission by hand" until the engineer's command (§3.1, §7). |
+| One controller's file plus the witness incarnation its peer committed | The same: it waits for the engineer's command (§7). |
 | Everything starts at once | A+B, or either controller with W, forms a majority and elects. One controller alone at power-up **does not start writing** without the override. |
 
 ## 6. Links
@@ -701,24 +707,35 @@ alive with a majority, it may have elected the same term: that breaks I4 (test p
 as I1, and only in this case.
 
 **Re-commissioning by hand.** When two of the three voters have lost their state before
-either re-commissioned (§3.1, the witness incarnation), no majority remembers which terms were
-led. A controller that lost its file while the incarnation its peer committed died **waits**:
-it stays uncommissioned, its voter grants nothing, and it raises **re-commission by hand**
-(naming the dead incarnation; the witness may only be unreachable from it, so the engineer
-checks that first). The pair elects nobody, and the lone-survivor rules above apply. The
-engineer re-commissions it with an audited command that names the incarnation to adopt (the
-rebuilt witness's) and an **explicit term floor**: one above every term the pair could have
-led. No surviving voter knows the lost controller's last terms, so the floor comes from the
-survivors (the peer's term in `/api/cluster`, the last term in its `oplog`) plus a margin
-far beyond what the plant could have elected while the peer was away, e.g. a million: a term
-costs nothing. The floor is written to the controller's file before anything else happens,
-then the ordinary handshake adopts the incarnation, and the peer takes the floor with it.
-The permission is held in memory: a restart before the controller has proposed or taken
-the incarnation needs the command again (a proposal already made goes on; its floor is durable). The core call is
-`quorum.Adoption.Recommission`; the command, its `redundancy.recommission` record (§7.1) and
-its role come with the runtime wiring (#710 PR 3) and #708/#709. With both files lost and
-only a stray answering, the pair re-commissions on its own (§3.1), so the guide still says:
-check that the devices accept the new leader before trusting the fencing token again.
+either re-commissioned (§3.1, the witness incarnation), no majority is sure to remember which
+terms were led. Two shapes **wait**, the controllers uncommissioned, their voters granting
+nothing, each raising **re-commission by hand**:
+- a controller lost its file while the incarnation its peer committed died (the alarm names
+  that incarnation; the witness may only be unreachable from it, so the engineer checks that
+  first);
+- both controllers lost their files, even with the witness intact (the alarm names no
+  incarnation). **This gives up #976's automatic recovery from a two-disk loss**: the pair
+  stays down until the engineer acts. A **new pair** is in the same state, so commissioning a
+  new install is the same command.
+
+The pair elects nobody, and the lone-survivor rules above apply. The engineer re-commissions
+it with an audited command, on **either** controller (once per pair), that names the
+incarnation to adopt (the witness's) and an **explicit term floor**: one above every term the
+pair could have led. No surviving voter is sure to know the last terms, so the floor comes
+from the survivors (the peer's term in `/api/cluster`, the last term in any `oplog`, the
+witness's promised term) plus a margin far beyond what the plant could have elected while
+the state was being lost, e.g. a million: a term costs nothing. A floor at or below what the
+controller already knows is refused, so the margin is never forgotten. The floor is written to
+the controller's file before anything else happens, then the ordinary handshake adopts the
+incarnation, and the peer takes the floor with it (an uncommissioned peer takes only a
+proposal the operator made). The permission is held in memory: after a restart the engineer
+issues the command again, with a floor above the one the controller now knows (the first
+floor stays, and its campaigns may have raised the witness's promise since); the command shows
+that known floor. The core call is `quorum.Adoption.Recommission`;
+the command, its `redundancy.recommission` record (§7.1) and its role (high-privilege,
+safety-critical) come with the runtime wiring (#710 PR 3) and #708/#709. The guide says:
+the engineer checks that the devices accept the new leader before trusting the fencing token
+again.
 
 **Open questions for PR 5**, recorded here so they're decided before the override ships:
 - **Whose operator intent survives the heal.** Acks and shelves made under the override and on
@@ -753,7 +770,7 @@ Every redundancy event is written as a #709 entry. The fields are `ts`, `user`, 
 | Takeover | `redundancy.takeover`, with hot or cold, the image age and both terms |
 | Handover | `redundancy.handover`, with the reason: orderly or I/O health |
 | Quorum | `redundancy.quorum.lost` and `.regained` |
-| Witness | `redundancy.witness.incarnation`, when one is adopted; `redundancy.witness.copies`, when two incarnations answer within a lease; `redundancy.witness.lost`, when a controller must be re-commissioned by hand; `redundancy.recommission`, the engineer's command, with the floor and the incarnation |
+| Witness | `redundancy.witness.incarnation`, when one is adopted; `redundancy.witness.copies`, when two incarnations answer within a lease; `redundancy.witness.lost`, when a controller must be re-commissioned by hand (the controller, the dead committed generation and incarnation or none, the incarnations heard, the time since boot); `redundancy.recommission`, the engineer's command (the incarnation, the supplied and the effective floor, the dead committed generation and incarnation, the floor's evidence); `redundancy.witness.readopt-over-switch`, a re-adoption taken over a pending switch (the floor may miss terms, §3.1) |
 | Stale takeover | `redundancy.stale`, a cold takeover with its staleness |
 
 **Where records go.** With quorum, a record goes through `oplog`, as #709 specifies. Without

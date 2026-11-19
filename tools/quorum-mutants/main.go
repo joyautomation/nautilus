@@ -59,8 +59,10 @@ var table = []mutation{
 	// The witness-incarnation handshake (#976): T1 since H1, the sim since H2.
 	{"no_quiet", []string{"TestRebuiltWitnessAdopted", "TestQuietPeriodHoldsOffTheNewWitness", "TestLostControllerReadoptsThePeer",
 		"TestReadoptOverPendingOwesTheQuietPeriod", "TestSecondAdoptionInFlightKeepsTheQuiet",
-		"TestMustFailSwitchQuietPeriod", "TestRegression976TwoLostControllerFiles", "TestSeeds"}},
-	{"no_floor", []string{"TestRebuiltWitnessAdopted", "TestLostControllerReadoptsThePeer", "TestFloorCarriesTheUnseenTerm", "TestSeeds"}},
+		"TestMustFailSwitchQuietPeriod", "TestSeeds"}},
+	// Since #710 B2 the random both-lost runs wait for the operator, so
+	// the seeds no longer re-commission on a floor: T1 and the named case.
+	{"no_floor", []string{"TestRebuiltWitnessAdopted", "TestLostControllerReadoptsThePeer", "TestFloorCarriesTheUnseenTerm"}},
 	{"count_while_pending", []string{"TestRebuiltWitnessAdopted", "TestReadoptOverPendingOwesTheQuietPeriod", "TestSeeds"}},
 	{"no_adopt_gen", []string{"TestStaleProposalRefused", "TestConcurrentProposals", "TestLateProposalCannotSplitThePair",
 		"TestLateEarlierBootProposalRefused"}},
@@ -72,7 +74,6 @@ var table = []mutation{
 	{"peer_from_any_adopt", []string{"TestLateAdoptToAnEarlierBootIsNotThePeer", "TestLateAdoptToAnEarlierBootInTheSim"}},
 	{"bump_cuts_quiet", []string{"TestGenBumpKeepsTheRestartQuiet"}},
 	{"quiet_reply_unheard", []string{"TestQuietReplyIsHeardNotCounted", "TestTargetedOneWayLeaderSkewed"}},
-	{"stale_pending_kept", []string{"TestBothUncommissionedFollowTheNewest", "TestRegressionBothUncommissionedUnstick"}},
 	{"uncommissioned_grants", []string{"TestUncommissionedControllerGrantsNothing", "TestRegression976WitnessUnreachable"}},
 	// #1014 review: belt and braces against counting an adoption while a
 	// proposal is pending. Either rule alone closes the failed- and
@@ -88,8 +89,14 @@ var table = []mutation{
 	// lost controller lead a term its peer never saw. So the named sim case
 	// builds one, and TestSeeds is not in the row.
 	{"uncommissioned_takes_switch", []string{"TestUncommissionedRefusesASwitch", "TestUncommissionedAlarmsOnADeadIncarnation",
-		"TestRecommissionByHand", "TestTwoOfThreeWaitsForTheOperator"}},
+		"TestRecommissionByHand", "TestHeardCommittedIncarnationRaisesNoAlarm", "TestTwoOfThreeWaitsForTheOperator"}},
 	{"proposal_floor_volatile", []string{"TestProposalFloorSurvivesARestart"}},
+	// #710 B2: both controllers uncommissioned wait for the operator too.
+	{"both_lost_recommission", []string{"TestBothLostWaitForTheOperator", "TestReviewBothLostWitnessIntact",
+		"TestBothLostWaitForTheOperatorInTheSim", "TestRegression976TwoLostControllerFiles",
+		"TestRegressionBothUncommissionedStray", "TestRegression976WitnessUnreachable"}},
+	{"alarm_on_heard", []string{"TestHeardCommittedIncarnationRaisesNoAlarm"}},
+	{"recommission_any_floor", []string{"TestRecommissionFloorAboveTheKnown"}},
 }
 
 // event is one line of `go test -json`.
