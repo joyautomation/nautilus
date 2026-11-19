@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +91,9 @@ var actionClass = map[string]string{
 	"force.set":        elevated,
 	"program.edit":     elevated,
 	"program.activate": elevated,
+	"config.stage":     elevated,
+	"config.validate":  elevated,
+	"config.apply":     elevated,
 }
 
 const (
@@ -122,6 +126,9 @@ type auditTarget struct {
 	// done, when set, is called after an accepted action; its value
 	// replaces after (what a rollback went back to, say).
 	done func() any
+	// answered, when set, reads after from an accepted action's response
+	// body (the id a stage was given, the state an apply reached).
+	answered func(body []byte) any
 }
 
 // targetFunc reads a request's auditTarget. body is the request body,
@@ -517,6 +524,9 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		if t.done != nil {
 			e.After = t.done()
 		}
+		if t.answered != nil {
+			e.After = t.answered(buf.body.Bytes())
+		}
 	} else {
 		valueCap = refusedValueMax
 		if e.Detail == nil {
@@ -811,6 +821,44 @@ func (s *Server) activateTarget(_ *http.Request, body []byte) auditTarget {
 		t.before = before
 	}
 	return t
+}
+
+// ioStageTarget is a live I/O stage (#706): the commit it is staged from,
+// or "upload" with the driver and the files' names and size (never their
+// contents); after is the id and state the staged candidate was given.
+func ioStageTarget(_ *http.Request, body []byte) auditTarget {
+	var req stageRequest
+	json.Unmarshal(body, &req)
+	t := auditTarget{target: req.Sha, answered: stagedState}
+	if req.Sha == "" {
+		t.target = "upload"
+		names, n := make([]string, 0, len(req.Files)), 0
+		for p, c := range req.Files {
+			names = append(names, p)
+			n += len(c)
+		}
+		sort.Strings(names)
+		t.detail = map[string]any{"driver": capText(req.Driver, byMax), "files": capText(strings.Join(names, ","), reasonMax), "bytes": n}
+	}
+	return t
+}
+
+// ioStagedTarget is a validate or apply of the staged candidate named in
+// the path; after is the state it reached.
+func ioStagedTarget(r *http.Request, _ []byte) auditTarget {
+	return auditTarget{target: r.PathValue("id"), answered: stagedState}
+}
+
+// stagedState reads a staged candidate's id and state from an answer.
+func stagedState(body []byte) any {
+	var st struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	}
+	if json.Unmarshal(body, &st) != nil || st.State == "" {
+		return nil
+	}
+	return map[string]any{"id": st.ID, "state": st.State}
 }
 
 // auditResponse is GET /api/audit.

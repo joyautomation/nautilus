@@ -971,7 +971,7 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 ## Audit journal
 
 Every request to a route above that changes something (`POST /api/tags`,
-the force, SFC, alarm and program routes) leaves **exactly one** audit
+the force, SFC, alarm, program and live I/O routes) leaves **exactly one** audit
 entry, accepted or refused, and is answered only after the entry is
 recorded. `naut run` writes the entries to a hash-chained journal on disk
 (the manifest's `audit:` section, default `./audit`), which
@@ -1004,7 +1004,8 @@ while the journal cannot be written, or `naut run` could not open it (an
 unwritable `audit.path`, or another `naut run` already using it):
 
 - **Elevated actions are refused** with `503`: setting a force, a program
-  edit or activation, and any action not listed below. The refusal is
+  edit or activation, staging, validating or applying a live I/O
+  configuration, and any action not listed below. The refusal is
   journalled, in memory.
 - **Operator actions are allowed**: tag writes, alarm acknowledgement and
   shelving, SFC commands.

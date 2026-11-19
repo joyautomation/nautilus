@@ -304,6 +304,57 @@ func auditRows() []auditRow {
 			server: func(t *testing.T) *Server { return New(newTestRuntime(t), Options{OnlineEdits: true}) },
 			method: "POST", path: "/api/program/activate", body: `{"sha":"cccc"}`,
 			action: "program.activate", target: "cccc", user: "anonymous", source: "api", result: "error"},
+
+		// Live I/O configuration (#706): staged from a commit or an upload,
+		// validated, applied. The upload's contents are never journalled.
+		{name: "io stage from a commit", pattern: "POST /api/io/staged", server: ioSrv,
+			method: "POST", path: "/api/io/staged", body: `{"sha":"abc1234"}`,
+			action: "config.stage", target: "abc1234", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"id": "1", "state": "pending"}},
+		{name: "io stage an upload", pattern: "POST /api/io/staged", server: ioSrv,
+			method: "POST", path: "/api/io/staged", body: `{"driver":"modbus","files":{"modbus.yaml":"secret-ish"}}`,
+			action: "config.stage", target: "upload", user: "anonymous", source: "api", result: "ok",
+			check: func(t *testing.T, e audit.Entry) {
+				if e.Detail["files"] != "modbus.yaml" || e.Detail["bytes"] != 10 || strings.Contains(fmt.Sprint(e), "secret-ish") {
+					t.Errorf("upload entry: %+v", e)
+				}
+			}},
+		{name: "io stage a commit with no snapshot", pattern: "POST /api/io/staged", server: ioSrv,
+			method: "POST", path: "/api/io/staged", body: `{"sha":"deadbee"}`,
+			action: "config.stage", target: "deadbee", user: "anonymous", source: "api", result: "refused"},
+		{name: "io validate", pattern: "POST /api/io/staged/{id}/validate", server: ioSrv, prep: ioStaged(false),
+			method: "POST", path: "/api/io/staged/1/validate",
+			action: "config.validate", target: "1", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"id": "1", "state": "valid"}},
+		{name: "io validate nothing", pattern: "POST /api/io/staged/{id}/validate", server: ioSrv,
+			method: "POST", path: "/api/io/staged/9/validate",
+			action: "config.validate", target: "9", user: "anonymous", source: "api", result: "refused"},
+		{name: "io apply", pattern: "POST /api/io/staged/{id}/apply", server: ioSrv, prep: ioStaged(true),
+			method: "POST", path: "/api/io/staged/1/apply",
+			action: "config.apply", target: "1", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"id": "1", "state": "applied"}},
+		{name: "io apply nothing", pattern: "POST /api/io/staged/{id}/apply", server: ioSrv,
+			method: "POST", path: "/api/io/staged/9/apply",
+			action: "config.apply", target: "9", user: "anonymous", source: "api", result: "refused"},
+	}
+}
+
+func ioSrv(t *testing.T) *Server {
+	return New(newTestRuntime(t), ioOptions(&fakeIO{valid: true, drivers: []string{"modbus"}}, true))
+}
+
+// ioStaged stages candidate 1 (and validates it), outside the seam.
+func ioStaged(validate bool) func(*testing.T, *Server) {
+	return func(t *testing.T, s *Server) {
+		h := s.Handler()
+		if w, _ := doJSON(t, h, "POST", "/api/io/staged", map[string]any{"sha": "abc1234"}); w.Code != http.StatusCreated {
+			t.Fatalf("stage: %d", w.Code)
+		}
+		if validate {
+			if w, _ := doJSON(t, h, "POST", "/api/io/staged/1/validate", nil); w.Code != http.StatusOK {
+				t.Fatalf("validate: %d", w.Code)
+			}
+		}
 	}
 }
 
@@ -1122,5 +1173,25 @@ func TestEveryActionIsClassed(t *testing.T) {
 	}
 	if isElevated("tag.write") || isElevated("force.clear") || !isElevated("force.set") {
 		t.Error("the classes are swapped")
+	}
+}
+
+// Live I/O configuration is elevated: while the journal is down a stage,
+// validate or apply is refused before it reaches the engine.
+func TestJournalDownRefusesIOConfig(t *testing.T) {
+	captureLog(t)
+	f := &fakeIO{valid: true, drivers: []string{"modbus"}}
+	o := ioOptions(f, true)
+	o.Audit = &flaky{down: true}
+	srv := New(newTestRuntime(t), o)
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`) // finds the journal broken
+	for _, p := range []string{"/api/io/staged", "/api/io/staged/1/validate", "/api/io/staged/1/apply"} {
+		rec := call(t, srv, "POST", p, `{"sha":"abc1234"}`)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "audit journal cannot be written") {
+			t.Errorf("POST %s while the journal is down = %d %s", p, rec.Code, rec.Body)
+		}
+	}
+	if len(f.staged) != 0 || f.applied != 0 {
+		t.Errorf("the engine was reached: staged %v, applied %d", f.staged, f.applied)
 	}
 }
