@@ -1048,3 +1048,63 @@ func TestIOHookMapsOutcomes(t *testing.T) {
 		t.Fatalf("differs %v fault %q after a failed rollback", h.Differs(), h.Fault())
 	}
 }
+
+// OPC UA devices: rows (#717, #971) are opcua-client drivers whose manifest
+// is derived from the vendored profile, not a file. A live apply sees that
+// derived manifest (#971 review probes):
+//   - a profile node-id edit alone is a change, applied;
+//   - a profile edit outside the allow-list (a description) is refused by
+//     the per-binding check, with an endpoint change or without one.
+func TestIOApplyOPCUADeviceRows(t *testing.T) {
+	ice3, err := os.ReadFile("../../devprofile/profiles/pepperl-fuchs-ice3.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const manifest = `name: d
+tasks: [{ program: main.st, scan: 20ms }]
+devices:
+  - { name: PF1, profile: pepperl-fuchs-ice3, endpoint: "127.0.0.1:1" }
+  - { name: PF2, profile: pepperl-fuchs-ice3, endpoint: "127.0.0.1:2" }
+`
+	project := func(manifest, profile string) fstest.MapFS {
+		fsys := devicesProject(t, manifest, "PROGRAM Main\nEND_PROGRAM\n")
+		fsys["profiles/pepperl-fuchs-ice3.yaml"] = &fstest.MapFile{Data: []byte(profile)}
+		return fsys
+	}
+	nodeEdit := strings.Replace(string(ice3), `node-id: "ns=1;s=IOLM/Serial"`, `node-id: "ns=1;s=IOLM/SerialNumber"`, 1)
+	descEdit := strings.Replace(string(ice3), `desc: "IO-Link master serial number"`, `desc: "the serial number"`, 1)
+	if nodeEdit == string(ice3) || descEdit == string(ice3) {
+		t.Fatal("the profile edits did not apply; the fixture moved")
+	}
+	files := project(manifest, string(ice3))
+	r := startIORig(t, files, false)
+
+	// A profile node-id edit alone: both devices change, and apply.
+	c := r.io.Stage(project(manifest, nodeEdit), "upload", "tester")
+	v := r.io.Validate(c)
+	if !v.Valid || fmt.Sprint(v.Changes) == "[]" || len(v.Changes) != 2 {
+		t.Fatalf("a profile node-id edit: valid %v changes %+v checks %+v", v.Valid, v.Changes, v.Checks)
+	}
+	if _, err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if d := r.io.Differs(); len(d) != 2 {
+		t.Fatalf("differs = %+v, want PF1 and PF2", d)
+	}
+
+	// A description edit, with an endpoint change and without: refused by
+	// the per-binding check, naming the field.
+	moved := strings.Replace(manifest, `endpoint: "127.0.0.1:1"`, `endpoint: "127.0.0.1:3"`, 1)
+	for _, m := range []string{moved, manifest} {
+		v := r.io.Validate(r.io.Stage(project(m, descEdit), "upload", "tester"))
+		var detail string
+		for _, ck := range v.Checks {
+			if ck.Name == "fields" {
+				detail = ck.Detail
+			}
+		}
+		if v.Valid || !strings.Contains(detail, "desc") || !strings.Contains(detail, "PF1.Serial") {
+			t.Fatalf("a profile desc edit: valid %v, fields %q; want PF1.Serial's desc refused", v.Valid, detail)
+		}
+	}
+}
