@@ -143,8 +143,8 @@ func TestEachActionNeedsExactlyItsPermission(t *testing.T) {
 	}
 }
 
-// state is what a write could change: every tag's value and every force.
-func state(srv *Server) string {
+// writeState is what a write could change: every tag's value and every force.
+func writeState(srv *Server) string {
 	return fmt.Sprint(srv.rt.Tags().All(), srv.rt.Tags().ForcedValues())
 }
 
@@ -157,7 +157,7 @@ func runAs(t *testing.T, row auditRow, tok string) (int, string, string, map[str
 		row.prep(t, srv)
 	}
 	enforce(t, srv)
-	before, n := state(srv), len(srv.audit.ring.Recent())
+	before, n := writeState(srv), len(srv.audit.ring.Recent())
 	rec := call(t, srv, row.method, row.path, row.body, func(r *http.Request) {
 		for k, v := range row.header {
 			r.Header.Set(k, v)
@@ -169,7 +169,7 @@ func runAs(t *testing.T, row auditRow, tok string) (int, string, string, map[str
 	if len(es)-n != 1 {
 		t.Fatalf("%s: %d entries", row.name, len(es)-n)
 	}
-	return rec.Code, es[0].User, es[0].Result, es[0].Detail, state(srv) == before
+	return rec.Code, es[0].User, es[0].Result, es[0].Detail, writeState(srv) == before
 }
 
 // With an auth: block, every write route refuses a principal without its
