@@ -103,6 +103,11 @@ type Tags struct {
 	// the feature. forceRev bumps on every change to the table.
 	forces   map[string]*forceSet
 	forceRev uint64
+	// subs is the substitute table, keyed by ROOT tag (see substitute.go),
+	// with tagVal.substituted beside it as for forces. subRev bumps on
+	// every change to the table.
+	subs   map[string]*subSet
+	subRev uint64
 }
 
 // tagVal is one stored tag: its value and the store generation at which
@@ -116,6 +121,8 @@ type tagVal struct {
 	gen    uint64
 	out    bool // this tag is bound to a driver output; see Tags.outGen
 	forced bool // the tag has an entry in Tags.forces; see force.go
+	// substituted: the tag has an entry in Tags.subs; see substitute.go
+	substituted bool
 	// held: an output seeded at its type's zero (no init:) that nothing has
 	// written yet. The logic and every reader see the zero; readMany, the
 	// driver push, leaves it out until the first write. See Tags.hold.
@@ -181,6 +188,15 @@ func (t *Tags) WriteGlobal(name string, v ir.Value) error {
 func (t *Tags) writeLocked(name string, v ir.Value) bool {
 	if cur, key, ok := t.lookupLocked(name); ok {
 		name = key
+		if cur.substituted {
+			// A substituted input: what the writer delivered becomes its
+			// LIVE value, and the substitutes are laid over it, under any
+			// force (the force's actual is the substituted view). See
+			// substitute.go.
+			ss := t.subs[name]
+			ss.live, ss.wrote = v, true
+			v = ss.apply(v)
+		}
 		if cur.forced {
 			// A forced tag: what the writer asked for becomes the tag's
 			// ACTUAL value, and the forces are laid back over it — see
@@ -663,13 +679,11 @@ func (t *Tags) setPathLocked(path string, v any, strict bool) error {
 }
 
 // writeBase is the value a member write edits: the stored value, or for a
-// forced tag its ACTUAL value — editing the stored one would copy the forced
-// members into what the tag returns to when the force is removed.
+// forced or substituted tag its LIVE value — editing the stored one would
+// copy the forced or substituted members into what the tag returns to when
+// they end.
 func (t *Tags) writeBase(root string, cur *tagVal) ir.Value {
-	if cur.forced {
-		return t.forces[root].actual
-	}
-	return cur.v
+	return t.liveLocked(root, cur)
 }
 
 // setFieldLocked applies one member write to a tag already read under the

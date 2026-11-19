@@ -222,6 +222,11 @@ func (r *Runtime) takeover() {
 	// table was made against this very process (its API answers before the
 	// first scan) by someone still watching it, so it stays — dropping it
 	// would answer the POST with 200 and then quietly undo it.
+	//
+	// Substitutes (substitute.go) are NOT dropped: they are operator intent
+	// meant to run the plant through a bad sensor, and a takeover that put
+	// the bad reading back into the logic is the bump they exist to prevent
+	// (#707).
 	if r.coord != nil {
 		r.dropForces("takeover")
 		// READ/WRITE requests the last leadership queued are not this

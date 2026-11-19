@@ -225,6 +225,10 @@ type Runtime struct {
 	types   map[string]*ir.Type
 	tasks   []*taskRun
 	clock   Clock // nil = wall clock; see clock.go
+	// subMu orders substitute starts and restores (substitute.go); subSeq
+	// is the highest entry ID seen.
+	subMu  sync.Mutex
+	subSeq uint64
 	// loopSleep is Options.LoopSleep: nil sleeps on the wall clock.
 	loopSleep func(task string, ctx context.Context, until time.Time) bool
 

@@ -9,6 +9,14 @@ import (
 // non-Good entries only, so a healthy controller answers with nil and the
 // whole feature costs a 10,000-tag plant nothing.
 //
+// A SUBSTITUTED input (substitute.go, #707) is served at the substitute,
+// so on a leader it reports Substituted, never Good: a whole-tag substitute
+// over anything the sources below say (the value served IS the
+// substitute), a member substitute only over Good (the root's other
+// members are still the delivery, so Bad, NotConnected and Stale outrank
+// it). On a standby nothing is served live, a substitute included: Stale,
+// as below.
+//
 // Two sources, in this order, and one rule for a redundant replica:
 //
 //  1. The DRIVER, when it implements io.QualityReporter. It is the only
@@ -32,7 +40,10 @@ import (
 // specific; its Good does not, because what it vouches for has not
 // reached the tag store. A setpoint the logic only reads is the
 // operator's value, not a reading, and keeps its quality. The first scan
-// after a takeover restores the sources above.
+// after a takeover restores the sources above. A driver's Substituted is
+// not such a verdict: it vouches for a value the standby is not serving,
+// so it reads Stale too. A driver's Bad on a substituted input does stand
+// (Bad, not Stale): the more conservative reading of a sensor known bad.
 //
 // Called on demand — by the server's broadcast tick and by GET /api/state,
 // a few times a second — never from the scan loop, so quality costs the
@@ -57,7 +68,8 @@ func (r *Runtime) Quality() map[string]nio.Quality {
 			out[name] = q
 		}
 	}
-	if r.standby() {
+	standby := r.standby()
+	if standby {
 		r.scanFed(func(name string) {
 			if out == nil {
 				out = make(map[string]nio.Quality)
@@ -66,6 +78,12 @@ func (r *Runtime) Quality() map[string]nio.Quality {
 				out[name] = nio.Stale
 			}
 		})
+		// A driver's Substituted is not a verdict that stands here.
+		for name, q := range out {
+			if q == nio.Substituted {
+				out[name] = nio.Stale
+			}
+		}
 	}
 	if !r.readOK.Load() && len(r.inputs) > 0 {
 		if out == nil {
@@ -76,6 +94,24 @@ func (r *Runtime) Quality() map[string]nio.Quality {
 				out[name] = nio.Stale
 			}
 		}
+	}
+	if !standby {
+		r.tags.eachSubstitutedRoot(func(root string, s subState) {
+			key := root
+			for k := range out {
+				if ir.SameName(k, root) {
+					key = k
+					break
+				}
+			}
+			q, said := out[key]
+			if s == subWhole || !said || q == nio.Good {
+				if out == nil {
+					out = make(map[string]nio.Quality)
+				}
+				out[key] = nio.Substituted
+			}
+		})
 	}
 	return out
 }
@@ -96,9 +132,32 @@ func (r *Runtime) TagQuality(name string) nio.Quality {
 		}
 	}
 	standby := r.standby()
+	q := r.liveQuality(root, standby)
+	if standby {
+		return q
+	}
+	switch r.tags.substitutedRoot(root) {
+	case subWhole:
+		return nio.Substituted
+	case subMember:
+		if q == nio.Good {
+			return nio.Substituted
+		}
+	}
+	return q
+}
+
+// liveQuality is TagQuality for a root tag without this runtime's own
+// substitutes: what the delivery is worth. Substitutes reports it beside
+// each substitute.
+func (r *Runtime) liveQuality(root string, standby bool) nio.Quality {
 	if qr, ok := r.driver.(nio.QualityReporter); ok {
-		// On a standby the driver's Good does not stand (see Quality).
+		// On a standby the driver's Good does not stand (see Quality), and
+		// nor does its Substituted.
 		if q, said := qr.Quality()[root]; said && (q != nio.Good || !standby) {
+			if standby && q == nio.Substituted {
+				return nio.Stale
+			}
 			return q
 		}
 	}
