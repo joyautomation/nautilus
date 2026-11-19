@@ -99,7 +99,7 @@ func commissioned(gen, inc, promised uint64) VoterState {
 }
 
 func TestAdoptRoundTripAndCorruption(t *testing.T) {
-	m := Adopt{From: "A", Kind: Ack, Gen: 3, Incarnation: 77, Floor: 12}
+	m := Adopt{From: "A", Kind: Ack, Gen: 3, Incarnation: 77, Floor: 12, Nonce: 0xA1, Echo: 0xB1, Pending: 4, CommitGen: 3, CommitInc: 77}
 	b, _ := m.MarshalBinary()
 	var got Adopt
 	if err := got.UnmarshalBinary(b); err != nil || got != m {
@@ -475,10 +475,12 @@ func TestTwoIncarnationsReported(t *testing.T) {
 
 // A lost controller doesn't take a proposal either for an incarnation it
 // hasn't heard answer this boot: its floor would miss that witness's
-// promised term. It answers with its State (uncommissioned) instead.
+// promised term. It answers with its State (uncommissioned) instead. (B
+// re-proposes the incarnation it committed, the only kind a lost
+// controller takes.)
 func TestLostControllerAdoptsOnlyAHeardIncarnation(t *testing.T) {
 	a := newCtl(t, "A", VoterState{}, 0)
-	m := Adopt{From: "B", Kind: Propose, Gen: 4, Incarnation: incI, Floor: 3, Echo: 0xA1}
+	m := Adopt{From: "B", Kind: Propose, Gen: 4, Incarnation: incI, Floor: 3, Echo: 0xA1, CommitGen: 3, CommitInc: incI}
 	out := a.recv(at(lease), m)
 	if _, i := adopted(a.v.State()); i != 0 || len(out) != 1 || out[0].Kind != State {
 		t.Fatalf("adopted an unheard incarnation: %+v, out %+v", a.v.State(), out)

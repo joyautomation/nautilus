@@ -42,6 +42,10 @@ type Record struct {
 	EarlierBootAdopts []AdoptRec
 	// TwoIncarnations counts the "two witness copies" events.
 	TwoIncarnations int
+	// Recommissions are the "re-commission by hand" alarms (an
+	// uncommissioned controller whose peer's committed incarnation never
+	// answered it), by controller.
+	Recommissions []AdoptRec
 
 	Trace []string
 	Hash  uint64
@@ -233,6 +237,24 @@ func (r *Record) lostFile() bool {
 // Both controllers' files lost with the witness intact is NOT this case,
 // nor one controller's file or the witness's alone.
 func (r *Record) TwoOfThreeLost() bool {
+	dead, stray := r.twoOfThree()
+	return dead || stray
+}
+
+// TwoOfThreeStray reports the second shape of TwoOfThreeLost: both files
+// lost and re-commissioned on a stray's incarnation. Neither controller
+// had anything committed, so the committed-incarnation rule doesn't stop
+// it, and the floor may miss terms only the lost files knew: I2 and I4
+// stay excused there (design §3.1).
+func (r *Record) TwoOfThreeStray() bool {
+	_, stray := r.twoOfThree()
+	return stray
+}
+
+// twoOfThree reports TwoOfThreeLost's two shapes: dead, a controller's
+// peer's committed incarnation died before it re-commissioned; stray,
+// both files lost and re-commissioned on a stray's incarnation.
+func (r *Record) twoOfThree() (dead, stray bool) {
 	const never = time.Duration(1<<63 - 1)
 	type window struct {
 		node     Addr
@@ -257,7 +279,7 @@ func (r *Record) TwoOfThreeLost() bool {
 		peer := peerOf(w.node)
 		for _, inc := range r.committedIn(peer, w.from, w.to) {
 			if r.death(inc) < w.to {
-				return true
+				dead = true
 			}
 		}
 	}
@@ -271,11 +293,11 @@ func (r *Record) TwoOfThreeLost() bool {
 		for _, y := range ws[i+1:] {
 			if x.node != y.node && x.from < y.to && y.from < x.to &&
 				(x.to != never && !real[x.inc] || y.to != never && !real[y.inc]) {
-				return true
+				stray = true
 			}
 		}
 	}
-	return false
+	return dead, stray
 }
 
 // committedIn returns the incarnations controller a had durably adopted
@@ -486,12 +508,18 @@ func Check(r *Record, c Checks) []Violation {
 			vs = append(vs, v)
 		}
 	}
-	if r.TwoOfThreeLost() {
-		// The operator's case: the term floor may miss terms only the two
-		// lost voters knew (I2, I4), and nothing re-commissions reliably
-		// without a person (I6, I7, steady). I1, the lease and the ledger
-		// still hold.
-		c.Exclude = append(slices.Clone(c.Exclude), "I2", "I4", "I6", "I7", "steady")
+	if dead, stray := r.twoOfThree(); dead || stray {
+		// The operator's case: nothing re-commissions without a person
+		// (I6, I7, steady). The lost controller waits for the operator
+		// rather than re-commission at a floor that may miss its terms
+		// (the committed-incarnation rule, design §3.1), so I2 and I4
+		// hold, except when both files were lost and a stray re-commissioned
+		// them: the rule has nothing committed to go by there. I1, the
+		// lease and the ledger always hold.
+		c.Exclude = append(slices.Clone(c.Exclude), "I6", "I7", "steady")
+		if stray {
+			c.Exclude = append(c.Exclude, "I2", "I4")
+		}
 	}
 	gates := r.Gates()
 	for _, v := range checkI1(gates) {
@@ -706,8 +734,10 @@ func (r *Record) checkI2() []Violation {
 }
 
 // I4: a voter's grants never go down in term, nor give one term to two
-// candidates, while its file stays readable; and no term is led by two
-// controllers.
+// candidates, while its file stays readable; and no term is led twice: by
+// two controllers, or by one before and after a restart of it (a restarted
+// candidate campaigns above its durable promise, so only a lost file
+// could bring a term back: the two-of-three case, design §3.1).
 func (r *Record) checkI4(gates []Interval) []Violation {
 	var vs []Violation
 	for v := Addr(0); v < nNodes; v++ {
@@ -741,13 +771,26 @@ func (r *Record) checkI4(gates []Interval) []Violation {
 			}
 		}
 	}
-	leader := map[uint64]Addr{}
+	type led struct {
+		node Addr
+		to   time.Duration
+	}
+	leader := map[uint64]led{}
 	for _, iv := range gates {
-		if a, ok := leader[iv.Term]; ok && a != iv.Node {
-			vs = append(vs, Violation{"I4", iv.From, fmt.Sprintf("term %d led by %v and by %v", iv.Term, a, iv.Node)})
+		l, ok := leader[iv.Term]
+		if ok && l.node != iv.Node {
+			vs = append(vs, Violation{"I4", iv.From, fmt.Sprintf("term %d led by %v and by %v", iv.Term, l.node, iv.Node)})
 			continue
 		}
-		leader[iv.Term] = iv.Node
+		if ok {
+			for _, s := range r.starts {
+				if s.node == iv.Node && l.to <= s.at && s.at <= iv.From {
+					vs = append(vs, Violation{"I4", iv.From, fmt.Sprintf("term %d led by %v again after its restart at %v", iv.Term, iv.Node, s.at)})
+					break
+				}
+			}
+		}
+		leader[iv.Term] = led{iv.Node, max(l.to, iv.To)}
 	}
 	return vs
 }

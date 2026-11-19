@@ -79,6 +79,10 @@ func (k AdoptKind) String() string {
 // peer's boot it answers or addresses, so a message from before a
 // receiver's restart (a lost file) can't commission it with a stale floor.
 // Pending is the sender's proposal in flight, by generation (0: none).
+// CommitGen and CommitInc are the sender's committed adoption (durably
+// adopted; 0: uncommissioned): an uncommissioned receiver takes only a
+// re-adoption of the incarnation the sender committed, never a switch
+// (design §3.1, the two-of-three case).
 type Adopt struct {
 	From        NodeID
 	Kind        AdoptKind
@@ -88,6 +92,8 @@ type Adopt struct {
 	Nonce       uint64
 	Echo        uint64
 	Pending     uint64
+	CommitGen   uint64
+	CommitInc   uint64
 }
 
 const (
@@ -158,7 +164,7 @@ func (a Adopt) MarshalBinary() ([]byte, error) {
 	b = append(b, byte(a.Kind))
 	b = binary.BigEndian.AppendUint64(b, a.Gen)
 	b = binary.BigEndian.AppendUint64(b, a.Incarnation)
-	for _, v := range []uint64{a.Floor, a.Nonce, a.Echo, a.Pending} {
+	for _, v := range []uint64{a.Floor, a.Nonce, a.Echo, a.Pending, a.CommitGen, a.CommitInc} {
 		b = binary.BigEndian.AppendUint64(b, v)
 	}
 	return sealCRC(b), nil
@@ -279,6 +285,7 @@ func (a *Adopt) UnmarshalBinary(b []byte) error {
 	v := Adopt{From: NodeID(rd.str()), Kind: AdoptKind(rd.byte1())}
 	v.Gen, v.Incarnation, v.Floor = rd.u64(), rd.u64(), rd.u64()
 	v.Nonce, v.Echo, v.Pending = rd.u64(), rd.u64(), rd.u64()
+	v.CommitGen, v.CommitInc = rd.u64(), rd.u64()
 	if rd.bad || len(rd.b) != 0 || v.Kind < Propose || v.Kind > State {
 		return ErrCorrupt
 	}

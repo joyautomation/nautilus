@@ -46,7 +46,8 @@ func TestNightlySlowFsyncWinner(t *testing.T) {
 // Seed 57197 was class 1 too, but B's file is lost (7.1–19.0 s) and the
 // witness wiped (from 18.7 s) before B re-commissions: the two-of-three
 // case, which needs an operator (design §3.1, §7). Its liveness oracles
-// are excused; the safety ones (I1, the lease, the ledger) still hold.
+// are excused; the safety ones (I1, I2, I4, the lease, the ledger) still
+// hold: B waits for the operator rather than re-commission.
 func TestNightlyTwoOfThree(t *testing.T) {
 	nightly(t, []uint64{57197}, func(t *testing.T, o Options) {
 		rec := Run(o)
@@ -55,6 +56,24 @@ func TestNightlyTwoOfThree(t *testing.T) {
 		}
 		for _, v := range Check(rec, checksFor(o)) {
 			t.Error(v)
+		}
+		var lostAt time.Duration
+		for _, s := range rec.starts {
+			if s.node == B && !s.readable {
+				lostAt = s.at
+			}
+		}
+		for _, a := range rec.Adoptions {
+			if a.Node == B && a.At >= lostAt {
+				t.Errorf("B re-commissioned without an operator: %+v", a)
+			}
+		}
+		alarmed := false
+		for _, r := range rec.Recommissions {
+			alarmed = alarmed || r.Node == B
+		}
+		if !alarmed {
+			t.Error("B raised no re-commission alarm")
 		}
 	})
 }

@@ -728,6 +728,9 @@ func (w *World) observe(n *node) {
 		case quorum.EventTwoIncarnations:
 			w.rec.TwoIncarnations++
 			w.tracef("%v hears two witness incarnations: %d and %d", n.addr, e.Incarnation, e.Other)
+		case quorum.EventRecommission:
+			w.rec.Recommissions = append(w.rec.Recommissions, AdoptRec{Node: n.addr, At: w.now, Gen: e.Gen, Inc: e.Incarnation})
+			w.tracef("%v: re-commission by hand: the peer's committed gen=%d inc=%d has not answered", n.addr, e.Gen, e.Incarnation)
 		}
 	}
 }

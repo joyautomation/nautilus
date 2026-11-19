@@ -372,10 +372,10 @@ func runSeeds(r reporter, run seedRun) (failing []uint64) {
 	}
 	r.Logf("seeds %d–%d: %d failing", first, last, len(failing))
 	// The two-of-three case (Record.TwoOfThreeLost) is excused against
-	// I2, I4, I6, I7 and steady state: logged and counted, so a generator
-	// that draws too many of them (losing lost-file liveness coverage)
-	// shows. TestExcusedShare bounds the share.
-	r.Logf("seeds %d–%d: %d in the two-of-three case (liveness and I2/I4 excused): %v", first, last, len(excused), head(excused, 20))
+	// I6, I7 and steady state (and I2, I4 in its stray shape only): logged
+	// and counted, so a generator that draws too many of them (losing
+	// lost-file liveness coverage) shows. TestExcusedShare bounds the share.
+	r.Logf("seeds %d–%d: %d in the two-of-three case (liveness excused): %v", first, last, len(excused), head(excused, 20))
 	return failing
 }
 
