@@ -783,6 +783,10 @@ func (d *Driver) flushWrites() {
 		}
 		return
 	}
+	if d.termMoved() {
+		d.dropEarlierTerm() // nothing held from an earlier leadership goes out
+		return
+	}
 	d.wmu.Lock()
 	if len(d.pending) == 0 {
 		d.wmu.Unlock()
@@ -922,6 +926,12 @@ func (d *Driver) flushWrites() {
 	}
 
 	for topic, metrics := range byTopic {
+		if d.termMoved() {
+			// The lease was lost and won again while this flush ran: the
+			// rest is the earlier leadership's.
+			d.dropEarlierTerm()
+			return
+		}
 		if err := d.publishCommand(topic, metrics); err != nil {
 			d.setErr(err)
 			d.log.Warn("host: command publish failed", "topic", topic, "error", err)

@@ -156,6 +156,10 @@ func (c *fdConn) SetWriteDeadline(t time.Time) error {
 	return syscall.SetsockoptTimeval(c.fd, syscall.SOL_SOCKET, syscall.SO_SNDTIMEO, timeval(t))
 }
 
+// NetConn is the original connection (internal/fence reaches its socket
+// through it to set SO_LINGER 0).
+func (c *fdConn) NetConn() net.Conn { return c.Conn }
+
 func (c *fdConn) Close() error {
 	syscall.Close(c.fd)
 	return c.Conn.Close()

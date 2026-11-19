@@ -247,6 +247,64 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	}
 }
 
+// SetSendGate installs a pair's gate with its term (io.SendGated, design
+// §3.4): commands held across a closed gate (#943), or parked for a dark
+// site, are dropped when this replica finds itself leading under another
+// term than the one they were computed in (it lost the lease and won it
+// again), never published then (termMoved).
+func (d *Driver) SetSendGate(g nio.SendGate) {
+	d.gateMu.Lock()
+	d.sendGate = g
+	d.gateMu.Unlock()
+}
+
+var _ nio.SendGated = (*Driver)(nil)
+
+// termMoved looks at the pair's gate: true when it is open under another
+// term of the lease than the last look saw (the first term seen is only
+// recorded). Without a send gate it is always false.
+func (d *Driver) termMoved() bool {
+	d.gateMu.Lock()
+	g := d.sendGate
+	d.gateMu.Unlock()
+	if g == nil {
+		return false
+	}
+	open, _, term := g()
+	if !open || term == 0 {
+		return false
+	}
+	prev := d.leaseTerm.Load()
+	if prev == 0 {
+		d.leaseTerm.CompareAndSwap(0, term)
+		return false
+	}
+	if prev == term || mut("old_term_kept") {
+		return false
+	}
+	d.leaseTerm.Store(term)
+	return true
+}
+
+// dropEarlierTerm forgets every command held or parked under the earlier
+// term, and what the program last handed over, so the push answering the
+// takeover (the runtime hands every output over) is judged afresh against
+// what the edge reports. Logged once. Takes wmu.
+func (d *Driver) dropEarlierTerm() {
+	d.wmu.Lock()
+	n := len(d.pending)
+	for _, q := range d.queued {
+		n += len(q)
+	}
+	clear(d.pending)
+	clear(d.queued)
+	clear(d.lastOut)
+	d.wmu.Unlock()
+	if n > 0 {
+		d.log.Warn("host: commands from an earlier leadership dropped: this host lost the lease and won it again, and nothing computed under the earlier one is published", "count", n)
+	}
+}
+
 // PlainWriteGate marks the write gate as naut run's liveness gate
 // (io.PlainGated), closed while the scans are hung, in a project without
 // redundancy:. It stops commands (NCMD/DCMD) and nothing else: this host
@@ -377,6 +435,9 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 // is baseline, not an edge, so a __Rebirth held TRUE (or retained) across a
 // restart does not rebirth every site each time the controller starts.
 func (d *Driver) WriteOutputs(vals nio.Values) error {
+	if d.termMoved() {
+		d.dropEarlierTerm()
+	}
 	d.wmu.Lock()
 	d.initWriteMapsLocked()
 	baseline := d.baseline
