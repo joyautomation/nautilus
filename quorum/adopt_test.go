@@ -659,3 +659,21 @@ func TestGenBumpKeepsTheRestartQuiet(t *testing.T) {
 		t.Fatalf("counts %d from %v, want %d from %v (the restart's quiet period)", inc, from, incI, T.Add(lease))
 	}
 }
+
+// Two adoptions before the first one's write lands: (2, J) is new, so it
+// owes the quiet period; (3, J) keeps J. The write that makes both durable
+// must still start J's quiet period then, not count J at once.
+func TestSecondAdoptionInFlightKeepsTheQuiet(t *testing.T) {
+	b := newCtl(t, "B", commissioned(1, incI, 0), 0)
+	now := at(2 * lease)
+	b.hold = true
+	b.recv(now, Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ, Nonce: 0xA1, Echo: 0xB1})
+	b.recv(now, Adopt{From: "A", Kind: Propose, Gen: 3, Incarnation: incJ, Nonce: 0xA1, Echo: 0xB1})
+	b.flush(now, true)
+	if g, i := adopted(b.v.State()); g != 3 || i != incJ {
+		t.Fatalf("not adopted (3, J): %+v", b.v.State())
+	}
+	if inc, from := b.c.Counting(); inc != incJ || from < now.Add(lease) {
+		t.Fatalf("counts %d from %v, want %d from %v (J's quiet period)", inc, from, incJ, now.Add(lease))
+	}
+}

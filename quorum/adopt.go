@@ -107,7 +107,6 @@ type heldAdopt struct {
 type commit struct {
 	need     uint64
 	gen, inc uint64
-	quiet    bool // a new incarnation: count it one lease after the write
 }
 
 // NewAdoption starts the handshake for a controller at now, from the state
@@ -385,12 +384,13 @@ func (a *Adoption) newest() uint64 {
 // incarnation stops the old one counting now, before any Ack leaves.
 func (a *Adoption) adopt(now Instant, gen, inc, peerFloor uint64) *Persist {
 	st := &a.v.st
-	// Quiet for a new incarnation, and for any adoption over a proposal
-	// in flight, the old incarnation re-adopted included: while it was
-	// pending the peer may have adopted the proposed one with its Ack
-	// lost, and may lead on it still (#1008 re-review).
-	quiet := inc != st.Incarnation || (st.PendingGen != 0 && !mut("readopt_skips_quiet"))
-	if inc != st.Incarnation && st.Incarnation != 0 {
+	// A new incarnation stops the old one counting now, before any Ack
+	// leaves. Over a proposal in flight nothing counts already (forward
+	// only), so re-adopting the old incarnation then also waits for its
+	// quiet period (Persisted): the peer may have adopted the proposed one
+	// with its Ack lost, and may lead on it still (#1008 re-review).
+	quiet := inc != st.Incarnation
+	if quiet && st.Incarnation != 0 {
 		a.switches++
 		a.standing = now
 	}
@@ -404,7 +404,7 @@ func (a *Adoption) adopt(now Instant, gen, inc, peerFloor uint64) *Persist {
 		a.c.Count(0, 0)
 	}
 	p := a.v.change()
-	a.commit = &commit{need: p.Seq, gen: gen, inc: inc, quiet: quiet}
+	a.commit = &commit{need: p.Seq, gen: gen, inc: inc}
 	return p
 }
 
@@ -425,15 +425,22 @@ func (a *Adoption) Persisted(now Instant, seq uint64, ok bool) ([]Reply, []Adopt
 	}
 	a.held = keep
 	if ok && a.commit != nil && seq >= a.commit.need {
-		from := now
-		if a.commit.quiet && !mut("no_quiet") {
-			from = now.Add(a.lease)
+		// The incarnation counts one lease after the write, unless this
+		// controller was already counting it (a generation bump that kept
+		// it): then it goes on as before, and a quiet period still owed (a
+		// restart's, NewAdoption) is not cut short. Judged on what the
+		// candidate counts now, not on this adoption alone: an earlier
+		// adoption of a new incarnation still waiting for this same write
+		// stopped the counting, and owes its quiet period here.
+		from := now.Add(a.lease)
+		if inc, f := a.c.Counting(); inc == a.commit.inc {
+			from = max(now, f)
+			if mut("bump_cuts_quiet") {
+				from = now
+			}
 		}
-		// A generation bump that keeps the incarnation owes no quiet period
-		// of its own, but never cuts one short that is still owed (a
-		// restart's, NewAdoption).
-		if inc, f := a.c.Counting(); inc == a.commit.inc && f > from && !mut("bump_cuts_quiet") {
-			from = f
+		if mut("no_quiet") {
+			from = now
 		}
 		a.c.Count(a.commit.inc, from)
 		a.current = now
