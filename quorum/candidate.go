@@ -215,10 +215,13 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	rd.replies[r.From] = true
 	if r.Granted {
 		rd.grants[r.From] = true
-	} else if c.leading && !rd.campaign && r.Promised >= rd.term {
-		// A voter refused our renewal: it promised this term or a later one
-		// elsewhere (a standby's lost campaign). Renew at a higher term
-		// from now on, so it can grant us again once that runs out.
+	} else if c.leading && !rd.campaign && rd.term == c.renewTerm && r.Promised >= rd.term {
+		// A voter refused our renewal at the term we renew at now: it
+		// promised this term or a later one elsewhere (a standby's lost
+		// campaign). Renew at a higher term from now on, so it can grant us
+		// again once that runs out. A refusal of an older round (late, or
+		// a duplicate refused because we re-termed since) changes nothing,
+		// or stragglers would re-term us without end.
 		c.reterm = true
 	}
 	if !r.Granted && !c.leading && len(rd.replies) >= 2 && len(rd.grants) < 2 {

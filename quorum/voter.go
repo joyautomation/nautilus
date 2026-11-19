@@ -77,8 +77,8 @@ func NewWitness(self NodeID, lease time.Duration, st VoterState, now Instant, dr
 func (v *Voter) State() VoterState { return v.st }
 
 // PromiseUntil returns the term promised, to whom, and until when on this
-// node's clock. A candidate on the same node reads it to know when the
-// leader's renewals stopped (Candidate.Tick).
+// node's clock. It is NOT what a candidate waits on: it misses renewals
+// this voter refused. Candidate.Tick takes LeaderSeen.
 func (v *Voter) PromiseUntil() (term uint64, to NodeID, until Instant) {
 	return v.st.Promised, v.st.GrantedTo, v.promiseUntil
 }

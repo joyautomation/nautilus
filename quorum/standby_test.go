@@ -129,7 +129,7 @@ func TestStandbyRejoinsTheLeader(t *testing.T) {
 			p := newPair(t)
 			p.start("A", 0)
 			var lead NodeID
-			var settledTerm uint64
+			var settledTerm, leadTerm uint64
 			for now := Instant(0); now < at(16*time.Second); now += step {
 				tc.run(p, now)
 				if now == at(10*time.Second) {
@@ -150,6 +150,7 @@ func TestStandbyRejoinsTheLeader(t *testing.T) {
 						t.Fatalf("at 9 s the standby's voter is promised to %q, not the leader %s", st.GrantedTo, lead)
 					}
 					settledTerm = p.c[sb].VoteTerm()
+					leadTerm = p.c[lead].VoteTerm()
 				case now > at(3*time.Second) && p.leader(now) != lead:
 					t.Fatalf("leader %s lost its lease at %v (standby's vote term %d)", lead, time.Duration(now),
 						p.c[map[NodeID]NodeID{"A": "B", "B": "A"}[lead]].VoteTerm())
@@ -158,6 +159,10 @@ func TestStandbyRejoinsTheLeader(t *testing.T) {
 			sb := map[NodeID]NodeID{"A": "B", "B": "A"}[lead]
 			if got := p.c[sb].VoteTerm(); got != settledTerm {
 				t.Fatalf("the standby kept campaigning after settling: vote term %d at 9 s, %d at 16 s", settledTerm, got)
+			}
+			// Settled, the leader re-terms no more (the witness stays down).
+			if got := p.c[lead].VoteTerm(); got != leadTerm {
+				t.Fatalf("the leader kept re-terming after settling: vote term %d at 9 s, %d at 16 s", leadTerm, got)
 			}
 		})
 	}
@@ -266,6 +271,9 @@ func TestVoterLeaderSeen(t *testing.T) {
 func TestCandidateRetermsOnRefusedRenewal(t *testing.T) {
 	c := newC(t, cfgA(), 0, 0)
 	r := c.Tick(0, "", 0, true)
+	if r.Renewal {
+		t.Fatal("a campaign went out marked as a renewal: a standby would wait on it")
+	}
 	c.OnReply(at(10*time.Millisecond), granted("A", r, 0))
 	c.OnReply(at(10*time.Millisecond), granted("W", r, 42))
 	r2 := c.Tick(at(500*time.Millisecond), "", 0, true)
@@ -282,7 +290,26 @@ func TestCandidateRetermsOnRefusedRenewal(t *testing.T) {
 	if c.VoteTerm() != 2 || c.Term() != 1 || c.LeaseEnd() != at(2980*time.Millisecond) {
 		t.Fatalf("vote term %d, epoch %d, lease end %v; want 2, 1, 2.98 s", c.VoteTerm(), c.Term(), time.Duration(c.LeaseEnd()))
 	}
-	if r4 := c.Tick(at(1500*time.Millisecond), "", 0, true); r4.Term != 2 {
+	r4 := c.Tick(at(1500*time.Millisecond), "", 0, true)
+	if r4.Term != 2 {
 		t.Fatalf("renewals went back to term %d", r4.Term)
+	}
+	// A refusal for the older round (r2, term 1), late or a duplicate
+	// refused because we re-termed since, changes nothing: renewals stay
+	// at term 2. (Before this rule, stragglers re-termed a leader 103
+	// times a minute under duplication in the simulator.)
+	c.OnReply(at(1600*time.Millisecond), refused("W", r2, 2, 42))
+	r5 := c.Tick(at(2000*time.Millisecond), "", 0, true)
+	if r5.Term != 2 {
+		t.Fatalf("a stale refusal re-termed the leader to %d", r5.Term)
+	}
+	c.OnReply(at(2010*time.Millisecond), granted("A", r5, 0))
+	c.OnReply(at(2010*time.Millisecond), granted("W", r5, 42)) // lease to 3.98 s
+	// A refusal at the current renewal term with a lower promise (a voter
+	// in its restart wait that never heard of term 2) doesn't either.
+	r6 := c.Tick(at(2500*time.Millisecond), "", 0, true)
+	c.OnReply(at(2510*time.Millisecond), refused("B", r6, 1, 0))
+	if r7 := c.Tick(at(3000*time.Millisecond), "", 0, true); r7.Term != 2 {
+		t.Fatalf("a refusal below our term re-termed the leader to %d", r7.Term)
 	}
 }
