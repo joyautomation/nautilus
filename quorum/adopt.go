@@ -429,6 +429,12 @@ func (a *Adoption) Persisted(now Instant, seq uint64, ok bool) ([]Reply, []Adopt
 		if a.commit.quiet && !mut("no_quiet") {
 			from = now.Add(a.lease)
 		}
+		// A generation bump that keeps the incarnation owes no quiet period
+		// of its own, but never cuts one short that is still owed (a
+		// restart's, NewAdoption).
+		if inc, f := a.c.Counting(); inc == a.commit.inc && f > from && !mut("bump_cuts_quiet") {
+			from = f
+		}
 		a.c.Count(a.commit.inc, from)
 		a.current = now
 		a.events = append(a.events, Event{Kind: EventAdopted, Gen: a.commit.gen, Incarnation: a.commit.inc})

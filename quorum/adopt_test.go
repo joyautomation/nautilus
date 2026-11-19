@@ -642,3 +642,20 @@ func TestLateAdoptToAnEarlierBootIsNotThePeer(t *testing.T) {
 		t.Fatalf("an Adopt to this boot: no switch to the peer's boot: %+v", q)
 	}
 }
+
+// A generation bump that keeps the incarnation needs no quiet period of
+// its own, but must not cut short one already owed: B restarted at T owes
+// one lease before it counts I (NewAdoption). A proposal of (2, I) that it
+// adopts at T + lease/4 must leave it counting I only from T + lease.
+func TestGenBumpKeepsTheRestartQuiet(t *testing.T) {
+	T := at(10 * lease)
+	b := newCtl(t, "B", commissioned(1, incI, 0), T)
+	now := T.Add(lease / 4)
+	out := b.recv(now, Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incI, Nonce: 0xA1, Echo: 0xB1})
+	if len(out) != 1 || out[0].Kind != Ack {
+		t.Fatalf("the proposal of (2, I) not acked: %+v", out)
+	}
+	if inc, from := b.c.Counting(); inc != incI || from < T.Add(lease) {
+		t.Fatalf("counts %d from %v, want %d from %v (the restart's quiet period)", inc, from, incI, T.Add(lease))
+	}
+}
