@@ -35,7 +35,7 @@ var livelockCases = map[string]Options{
 func TestRegressionTwoVoterLivelock(t *testing.T) {
 	for name, o := range livelockCases {
 		t.Run(name, func(t *testing.T) {
-			for _, v := range Check(Run(o), checksFor(o)) {
+			for _, v := range judged(t, Run(o), checksFor(o)) {
 				t.Error(v)
 			}
 		})
@@ -68,7 +68,7 @@ func TestRegression976TwoLostControllerFiles(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := Run(o)
-			if rec.twoOfThreeLost() {
+			if rec.TwoOfThreeLost() {
 				t.Fatal("judged the two-of-three case: the oracles would be excused")
 			}
 			lost := map[Addr]bool{}
@@ -85,9 +85,57 @@ func TestRegression976TwoLostControllerFiles(t *testing.T) {
 					t.Errorf("%v does not count the witness at the end", a)
 				}
 			}
-			for _, v := range Check(rec, checksFor(o)) {
+			for _, v := range judged(t, rec, checksFor(o)) {
 				t.Error(v)
 			}
 		})
+	}
+}
+
+// The two-of-three exclusion (Record.TwoOfThreeLost) has teeth: it fires
+// on a controller's file lost with the witness rebuilt before it
+// re-commissions, and on seeds whose pair counted a second copy that went
+// away while a controller was uncommissioned; never on one lost voter
+// alone, nor on the switch fault alone. A case it doesn't excuse is held
+// to every oracle.
+func TestTwoOfThreeLostTeeth(t *testing.T) {
+	base := func(fs ...Fault) Options {
+		return Options{Seed: 11, Delay: ms, Jitter: ms / 2, Fsync: ms, Until: 50 * sec,
+			Start: [3]time.Duration{0, 4 * sec, 0}, Faults: fs}
+	}
+	for _, c := range []struct {
+		name string
+		o    Options
+		want bool
+	}{
+		{"A and W lost", base(Fault{Kind: Wipe, At: 8 * sec, For: 2 * sec, Node: A}, Fault{Kind: Wipe, At: 9 * sec, For: 2 * sec, Node: W}), true},
+		{"A lost alone", base(Fault{Kind: Wipe, At: 8 * sec, For: 2 * sec, Node: A}), false},
+		{"B lost alone", base(Fault{Kind: Wipe, At: 8 * sec, For: 2 * sec, Node: B}), false},
+		{"W rebuilt alone", base(Fault{Kind: Wipe, At: 8 * sec, For: 2 * sec, Node: W}), false},
+		{"A then W, A back first", base(Fault{Kind: Wipe, At: 8 * sec, For: 2 * sec, Node: A}, Fault{Kind: Wipe, At: 20 * sec, For: 2 * sec, Node: W}), false},
+		{"switch fault alone", base(
+			Fault{Kind: Start, At: 0, For: 20 * sec, Node: W2},
+			Fault{Kind: Mirror, At: 8 * sec, For: 12 * sec, From: A, To: W, Node: W2},
+			Fault{Kind: Cut, At: 8 * sec, For: 12 * sec, From: A, To: W, Both: true}), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := Run(c.o)
+			if got := rec.TwoOfThreeLost(); got != c.want {
+				t.Fatalf("TwoOfThreeLost = %v, want %v", got, c.want)
+			}
+			if !c.want {
+				for _, v := range Check(rec, checksFor(c.o)) {
+					t.Error(v)
+				}
+			}
+			if c.name == "switch fault alone" && len(rec.Adoptions) != 4 {
+				t.Errorf("want the pair to switch to the copy and back (4 adoptions), got %+v", rec.Adoptions)
+			}
+		})
+	}
+	for _, seed := range []uint64{686, 966, 1158, 1235, 1272, 1411, 1482, 1492, 1713} {
+		if o := randomRun(seed, profDefault); !Run(o).TwoOfThreeLost() {
+			t.Errorf("seed %d: no longer judged two-of-three", seed)
+		}
 	}
 }

@@ -12,10 +12,21 @@ const (
 	lease = 2 * time.Second
 )
 
+// judged runs every oracle over a named case's run, and fails t if the
+// run is the two-of-three case (Record.TwoOfThreeLost), whose oracles are
+// partly excused: a named case must be judged in full.
+func judged(t *testing.T, rec *Record, c Checks) []Violation {
+	t.Helper()
+	if rec.TwoOfThreeLost() {
+		t.Error("the run is the two-of-three case: its oracles are partly excused, so the case proves less than it says")
+	}
+	return Check(rec, c)
+}
+
 // clean fails t on any violation, with the trace for the first ones.
 func clean(t *testing.T, rec *Record, c Checks) {
 	t.Helper()
-	vs := Check(rec, c)
+	vs := judged(t, rec, c)
 	for _, v := range vs {
 		t.Error(v)
 	}

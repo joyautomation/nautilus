@@ -43,6 +43,9 @@ type Record struct {
 	// counts is, per controller, what the protocol says it counts
 	// (countTruth in sim.go), after each change.
 	counts [2][]countSnap
+	// stops are when each node's process stopped (crashed, or a Start
+	// fault ended).
+	stops [nNodes][]time.Duration
 	// grantIdx finds a ledger grant by (voter, nonce, id, term), to note
 	// when its grantee first received it.
 	grantIdx map[grantKey]int
@@ -65,6 +68,7 @@ type countSnap struct {
 
 type grantKey struct {
 	voter           Addr
+	to              quorum.NodeID
 	nonce, id, term uint64
 }
 
@@ -88,7 +92,7 @@ func (r *Record) countsAt(a Addr, inc uint64, t time.Duration) bool {
 
 // received notes that grant rep from voter reached controller to at t.
 func (r *Record) received(voter Addr, rep quorum.Reply, to Addr, t time.Duration) {
-	i, ok := r.grantIdx[grantKey{voter, rep.Nonce, rep.ID, rep.Term}]
+	i, ok := r.grantIdx[grantKey{voter, rep.To, rep.Nonce, rep.ID, rep.Term}]
 	if !ok {
 		return
 	}
@@ -182,7 +186,7 @@ func (r *Record) grant(g Grant) {
 	if r.grantIdx == nil {
 		r.grantIdx = map[grantKey]int{}
 	}
-	r.grantIdx[grantKey{g.Voter, g.Nonce, g.ID, g.Term}] = len(r.Grants)
+	r.grantIdx[grantKey{g.Voter, g.ToID, g.Nonce, g.ID, g.Term}] = len(r.Grants)
 	r.Grants = append(r.Grants, g)
 }
 
@@ -206,53 +210,136 @@ func (r *Record) lostFile() bool {
 	return false
 }
 
-// twoOfThreeLost reports whether two of the three voters lost their state
-// before either had re-commissioned (design §3.1, the costs): a
-// controller's file and the witness's, each loss inside the other's window
-// from the loss to its recovery; or both controllers' files, recovered on
-// an incarnation the real witness never had (a stray copy's). No surviving
-// majority remembers the terms then, so the pair needs an operator (§7).
-// A controller's loss is recovered by its next durable adoption; the
-// witness's (a new incarnation) by the first durable adoption of it.
-// Both controllers' files lost with the witness intact is NOT this case.
-func (r *Record) twoOfThreeLost() bool {
+// TwoOfThreeLost reports whether the run is design §3.1's two-of-three
+// case: two of the three voters' state lost before either re-commissioned,
+// so no surviving majority remembers the terms and the pair needs an
+// operator (§7). Two shapes:
+//
+//   - a controller lost its file, and before it re-commissioned (its next
+//     durable adoption), an incarnation its peer counted in that window
+//     died for good (the witness wiped, or an adopted second copy gone): it
+//     can only re-adopt what its peer counts, after hearing it, and the
+//     terms it led on the dead one are known to nobody;
+//   - both controllers lost their files, their windows overlapping, and the
+//     adoption that ended one of them was of an incarnation the real witness
+//     never had (a stray copy's).
+//
+// Both controllers' files lost with the witness intact is NOT this case,
+// nor one controller's file or the witness's alone.
+func (r *Record) TwoOfThreeLost() bool {
+	const never = time.Duration(1<<63 - 1)
 	type window struct {
 		node     Addr
 		from, to time.Duration
+		inc      uint64 // the incarnation the ending adoption took
 	}
 	var ws []window
-	witnessIncs := map[uint64]bool{}
 	for _, s := range r.starts {
-		if s.node == W {
-			witnessIncs[s.inc] = true
-		}
-		if s.readable || s.node > W {
+		if s.readable || (s.node != A && s.node != B) {
 			continue
 		}
-		to := time.Duration(1<<63 - 1)
+		w := window{node: s.node, from: s.at, to: never}
 		for _, a := range r.Adoptions {
-			if a.At >= s.at && (s.node == W && a.Inc == s.inc || s.node != W && a.Node == s.node) {
-				to = a.At
+			if a.Node == s.node && a.At >= s.at {
+				w.to, w.inc = a.At, a.Inc
 				break
 			}
 		}
-		ws = append(ws, window{s.node, s.at, to})
+		ws = append(ws, w)
 	}
-	stray := false
-	for _, a := range r.Adoptions {
-		stray = stray || !witnessIncs[a.Inc]
+	for _, w := range ws {
+		peer := peerOf(w.node)
+		for _, inc := range r.countedIn(peer, w.from, w.to) {
+			if r.death(inc) < w.to {
+				return true
+			}
+		}
+	}
+	real := map[uint64]bool{}
+	for _, s := range r.starts {
+		if s.node == W {
+			real[s.inc] = true
+		}
 	}
 	for i, x := range ws {
 		for _, y := range ws[i+1:] {
-			if x.node == y.node || x.from >= y.to || y.from >= x.to {
-				continue
-			}
-			if x.node == W || y.node == W || stray {
+			if x.node != y.node && x.from < y.to && y.from < x.to &&
+				(x.to != never && !real[x.inc] || y.to != never && !real[y.inc]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// countedIn returns the incarnations controller a counted (quiet period or
+// not) at some time in [from, to).
+func (r *Record) countedIn(a Addr, from, to time.Duration) []uint64 {
+	var incs []uint64
+	snaps := r.counts[a]
+	for i, s := range snaps {
+		end := to
+		if i+1 < len(snaps) {
+			end = snaps[i+1].at
+		}
+		if s.inc != 0 && s.at < to && end > from && !slices.Contains(incs, s.inc) {
+			incs = append(incs, s.inc)
+		}
+	}
+	return incs
+}
+
+// death is when witness incarnation inc stopped answering for good: the
+// stop of the node running it after which that node never starts again at
+// it. Never, while it runs at the end.
+func (r *Record) death(inc uint64) time.Duration {
+	const never = time.Duration(1<<63 - 1)
+	for _, n := range []Addr{W, W2} {
+		alive := false
+		var stopped time.Duration
+		for _, e := range r.lifeOf(n) {
+			switch {
+			case e.start && e.inc == inc:
+				alive = true
+			case e.start:
+				if alive {
+					return stopped // restarted at another incarnation: inc is gone
+				}
+			case alive:
+				alive, stopped = false, e.at
+			}
+		}
+		if stopped != 0 && !alive {
+			return stopped
+		}
+	}
+	return never
+}
+
+type lifeEvent struct {
+	at    time.Duration
+	start bool
+	inc   uint64
+}
+
+// lifeOf merges node n's starts and stops in time order.
+func (r *Record) lifeOf(n Addr) []lifeEvent {
+	var ev []lifeEvent
+	for _, s := range r.starts {
+		if s.node == n {
+			ev = append(ev, lifeEvent{at: s.at, start: true, inc: s.inc})
+		}
+	}
+	for _, t := range r.stops[n] {
+		ev = append(ev, lifeEvent{at: t})
+	}
+	sort.SliceStable(ev, func(i, j int) bool {
+		if ev[i].at != ev[j].at {
+			return ev[i].at < ev[j].at
+		}
+		return !ev[i].start && ev[j].start // a stop before a start at one instant
+	})
+	return ev
 }
 
 // Interval is one stretch of a controller's open gate, in global time:
@@ -371,10 +458,11 @@ func Check(r *Record, c Checks) []Violation {
 			vs = append(vs, v)
 		}
 	}
-	if r.twoOfThreeLost() {
+	if r.TwoOfThreeLost() {
 		// The operator's case: the term floor may miss terms only the two
-		// lost voters knew (I2, I4), and nothing re-commissions without a
-		// person (I6, I7, steady). I1, the lease and the ledger still hold.
+		// lost voters knew (I2, I4), and nothing re-commissions reliably
+		// without a person (I6, I7, steady). I1, the lease and the ledger
+		// still hold.
 		c.Exclude = append(slices.Clone(c.Exclude), "I2", "I4", "I6", "I7", "steady")
 	}
 	gates := r.Gates()

@@ -891,6 +891,7 @@ func (w *World) crash(n *node, wipe bool) {
 		n.disk.file = nil
 	}
 	n.up = false
+	w.rec.stops[n.addr] = append(w.rec.stops[n.addr], w.now)
 	n.disk.busy, n.disk.queue = false, nil
 	n.voter, n.cand, n.adopt = nil, nil, nil
 	n.deferred = nil

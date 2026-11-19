@@ -60,13 +60,6 @@ func randomRun(seed uint64, p profile) Options {
 			f.From, f.To = l.y, l.x
 		}
 	}
-	// At most one controller may lose its state file per schedule (a wipe,
-	// or a crash mid-write when the file is rewritten in place): two is
-	// the known gap #976, a named expected failure until the handshake PR.
-	lost := 0
-	loses := func(f Fault) bool {
-		return (f.Node == A || f.Node == B) && (f.Kind == Wipe || (f.Kind == Crash && o.InPlace))
-	}
 	n := 1 + r.IntN(3)
 	for range n {
 		f := Fault{At: dur(6*sec, 6*sec+8*lease), For: dur(lease/10, 10*lease)}
@@ -107,12 +100,22 @@ func randomRun(seed uint64, p profile) Options {
 			o.Faults = append(o.Faults, Fault{Kind: Start, At: f.At, For: f.For, Node: stray})
 			f.Kind, f.From, f.To, f.Node = Mirror, pick(A, B), W, stray
 		}
-		if loses(f) {
-			if lost++; lost > 1 {
-				f.Node = W // a second loss goes to the witness instead
-			}
-		}
 		o.Faults = append(o.Faults, f)
+	}
+	// The switch fault (F15b), drawn from its own stream so every other
+	// fault of a seed stays as it was: a second witness copy, under the
+	// same name and up for hours, that one controller reaches while the
+	// real witness is cut from it. That controller may propose the copy
+	// (design §3.1, when a switch is proposed); the pair must stay safe,
+	// and come back to the real witness once the copy is gone.
+	if sw := rand.New(rand.NewPCG(seed, 0x737769746368)); sw.IntN(8) == 0 {
+		x := []Addr{A, B}[sw.IntN(2)]
+		at := 6*sec + time.Duration(sw.Int64N(int64(8*lease)))
+		d := lease + time.Duration(sw.Int64N(int64(9*lease)))
+		o.Faults = append(o.Faults,
+			Fault{Kind: Start, At: 0, For: at + d, Node: W2},
+			Fault{Kind: Mirror, At: at, For: d, From: x, To: W, Node: W2},
+			Fault{Kind: Cut, At: at, For: d, From: x, To: W, Both: true})
 	}
 	if p == profFreeze {
 		o.Faults = append(o.Faults, Fault{Kind: Freeze, At: dur(6*sec, 6*sec+8*lease), For: dur(lease/2, 3*lease), Node: pick(A, B)})
@@ -321,8 +324,12 @@ func runSeeds(r reporter, run seedRun) (failing []uint64) {
 		r.Fatal(err)
 		return nil
 	}
+	var excused []uint64
 	for seed := first; seed <= last; seed++ {
 		vs, rec, o := runSeedWith(seed, run.p, single, run.checks)
+		if rec.TwoOfThreeLost() {
+			excused = append(excused, seed)
+		}
 		if single {
 			r.Logf("schedule: %s", o.GoString())
 			r.Logf("trace:\n%s", strings.Join(rec.Trace, "\n"))
@@ -342,6 +349,11 @@ func runSeeds(r reporter, run seedRun) (failing []uint64) {
 		r.Errorf("%d failing seeds in all: %v", len(failing), failing)
 	}
 	r.Logf("seeds %d–%d: %d failing", first, last, len(failing))
+	// The two-of-three case (Record.TwoOfThreeLost) is excused against
+	// I2, I4, I6, I7 and steady state: logged and counted, so a generator
+	// that draws too many of them (losing lost-file liveness coverage)
+	// shows. TestExcusedShare bounds the share.
+	r.Logf("seeds %d–%d: %d in the two-of-three case (liveness and I2/I4 excused): %v", first, last, len(excused), head(excused, 20))
 	return failing
 }
 
@@ -460,5 +472,35 @@ func TestReproLine(t *testing.T) {
 	}
 	if len(again.logs) < 2 || !strings.HasPrefix(again.logs[0], "schedule: Options{Seed: "+m[1]) {
 		t.Fatal("a single seed did not log its schedule and trace")
+	}
+}
+
+func head(xs []uint64, n int) []uint64 {
+	if len(xs) > n {
+		return xs[:n]
+	}
+	return xs
+}
+
+// The two-of-three exclusion stays a sliver of the seeds: the default
+// range must keep its lost-file liveness coverage.
+func TestExcusedShare(t *testing.T) {
+	n, lostCtl := 0, 0
+	for seed := uint64(1); seed <= defaultSeeds; seed++ {
+		o := randomRun(seed, profDefault)
+		rec := Run(o)
+		if rec.TwoOfThreeLost() {
+			n++
+		}
+		for _, s := range rec.starts {
+			if !s.readable && (s.node == A || s.node == B) {
+				lostCtl++
+				break
+			}
+		}
+	}
+	t.Logf("%d of %d seeds excused as two-of-three; %d lost a controller file", n, defaultSeeds, lostCtl)
+	if n*100 > defaultSeeds || n*5 > lostCtl {
+		t.Fatalf("%d excused seeds: too many (≤ 1%% of the seeds and ≤ 20%% of the lost-file ones)", n)
 	}
 }
