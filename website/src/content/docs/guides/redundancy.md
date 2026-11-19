@@ -304,13 +304,15 @@ the default 2 s lease. Every write to a device checks leadership just
 before it goes out and must be done within the lease left minus
 `net-delay`; a write still unanswered then has its connection reset, so
 nothing it queued arrives late. Modbus TCP, EtherNet/IP, Redfish, SNMP
-and Prometheus commands, OPC UA client writes and OptoMMP outputs work this
-way now; the rest follow. On a pair the OPC UA client's connection is made
-so that every close of it is a reset, so a server sees a reset, not a
-clean close, whenever the client reconnects. A Sparkplug host publishes a
-command only under the leadership it was computed in, but the broker
-forwards it to the edge on its own timing: the edge's comm watchdog covers
-that last hop.
+and Prometheus commands, OPC UA client writes, OptoMMP outputs and
+READ/WRITE channel writes work this way now; the PROFINET device checks
+leadership before every frame it sends (its raw Ethernet frames have no
+connection to reset); the rest follow. On a pair the OPC UA client's
+connection is made so that every close of it is a reset, so a server sees
+a reset, not a clean close, whenever the client reconnects. A Sparkplug
+host publishes a command only under the leadership it was computed in,
+but the broker forwards it to the edge on its own timing: the edge's comm
+watchdog covers that last hop.
 Leave both keys unset unless the plant network is slow: then set them,
 and keep their sum under a quarter of the lease (a longer one is
 refused).

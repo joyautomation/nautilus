@@ -39,8 +39,8 @@ func (c *Client) SendUnitData(ctx context.Context, connID uint32, seq uint16, se
 	if c.tcp == nil {
 		return MessageRouterResponse{}, errors.New("cip client: not connected")
 	}
-	if err := ctx.Err(); err != nil {
-		return MessageRouterResponse{}, err // not started: a fenced send past its deadline
+	if err := fence.Check(ctx); err != nil {
+		return MessageRouterResponse{}, err // not started: past its deadline, or the gate closed since the send began (a fragment)
 	}
 	hdr := EncapHeader{Command: CmdSendUnitData, SessionHandle: c.sessHdl}
 	defer arm(ctx, c.tcp)()

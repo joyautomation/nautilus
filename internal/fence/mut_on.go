@@ -11,6 +11,8 @@ import "os"
 //     run out still starts;
 //   - fence_fin: a fenced socket is closed with a FIN, so what the kernel
 //     still held is delivered late, instead of reset.
+//   - fragments_unchecked: a send split into several requests (Write Tag
+//     Fragmented) reads the gate once, not before each request.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mut(name string) bool { return name == mutOn }

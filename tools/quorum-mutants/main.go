@@ -177,6 +177,8 @@ var table = []mutation{
 	{"fence_fin", []string{"TestResetSendsAnRSTAndDropsQueuedBytes", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestFencedSendUnitDataResetsAtItsDeadline", "TestFencedPostResetsAtItsDeadline", "TestOptoMMPFencedWriteResetsAtItsDeadline", "TestSocketAbortAndCloseReset", "TestOPCUAFencedWriteResetsItsSession", "TestOptoMMPRTFencedWriteAbortsInPlaceAndClosesOnce"}},
 	// #1040 review: a Modbus write queued or requeued under an earlier
 	// term of the lease.
+	// 3b-3b-2: a fragmented channel write reads the gate before each request.
+	{"fragments_unchecked", []string{"TestPairChannelWriteRunsFencedWithItsGate", "TestSendUnitDataChecksTheGateBeforeEachRequest"}},
 	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead", "TestOptoMMPTermMoveDropsTheQueue", "TestHeldCommandFromAnEarlierTermIsNotPublished", "TestOPCUAQueuedWriteDoesNotSurviveATermMove", "TestTermMoveSeenByAnotherCallerStopsTheFlush", "TestFailedPublishAfterATermMoveIsNotRequeued", "TestOPCUAFlushRacingAReopenSendsNothing", "TestOPCUAFailedChunkNotRequeuedAfterAReopen"}},
 	// #1040 review: an SNMP SET retransmitted after a lost answer.
 	{"set_retried", []string{"TestSetIsSentOnce"}},
@@ -194,6 +196,7 @@ var rowPkgs = map[string][]string{
 	"old_term_sent":            {"./hw"},
 	"send_no_deadline":         {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip", "./optommp"},
 	"fence_fin":                {"./internal/fence", "./modbus", "./eip/cip", "./redfish", "./optommp", "./opcua"},
+	"fragments_unchecked":      {"./runtime", "./eip/cip"},
 	"old_term_kept":            {"./modbus", "./optommp", "./sparkplug/host", "./opcua"},
 	"set_retried":              {"./snmp"},
 }

@@ -353,15 +353,14 @@ func (d *DeviceDriver) leading() bool {
 // paths. The 200 ms look only stops the device; this is what keeps a
 // leader frozen past its lease from sending a single frame on resume.
 //
-// Two limits:
-//   - It relies on the gate being time-fenced: cluster mode's IsLeader
-//     compares the clock with the lease, so it turns false by itself when
-//     the lease runs out. A future pair mode must keep that property.
-//   - Check and send are not atomic. A sending goroutine that passed the
-//     check just before the lease ran out can still put one frame on the
-//     wire. Closing that needs a margin in the elector's fence (the new
-//     leader takes over a little after the old lease ends); noted for the
-//     redundancy work (#787).
+// It relies on the gate being time-fenced: IsLeader compares the clock
+// with the lease (both the Kubernetes Lease and the pair's elector), so it
+// turns false by itself when the lease runs out. Check and send are not
+// atomic: a sending goroutine that passed the check can still put one
+// frame on the wire. A pair's gate closes a fence margin before its lease
+// ends (design §3.4, #710 PR 3b-3a), so that frame still leaves while the
+// lease holds; a freeze longer than the margin between the check and the
+// send is the stated residual, which the device's own watchdog covers.
 func (d *DeviceDriver) maySend() func() bool {
 	if !d.replica {
 		return nil

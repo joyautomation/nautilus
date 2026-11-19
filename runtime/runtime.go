@@ -589,6 +589,13 @@ func New(o Options) (*Runtime, error) {
 				term = t.Term
 			}
 			tags.comm.setGate(o.Coordinator.IsLeader, term)
+			// A pair's elector also gives the send budget and term in one
+			// read (design §3.4): channel writes check that and run fenced.
+			if sg, ok := o.Coordinator.(interface {
+				SendGate() (bool, time.Duration, uint64)
+			}); ok {
+				tags.comm.setSendGate(sg.SendGate)
+			}
 		}
 	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
