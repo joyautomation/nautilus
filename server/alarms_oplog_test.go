@@ -160,3 +160,30 @@ func TestAlarmWriteRefusedWithoutMajority(t *testing.T) {
 		t.Fatalf("a refused ack moved HiTemp to %s", st)
 	}
 }
+
+// Under an auth: block a write through the pair's log is area-checked
+// before it is proposed (#708 with #710): a principal fenced to another
+// area is refused an ack, a shelve and an unshelve, and nothing reaches
+// the log; the administrator's ack is proposed.
+func TestAlarmWritesThroughTheLogCheckTheArea(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	s, eng, _, got := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	eng.Evaluate()
+	enforce(t, s)
+	as := func(tok string) func(*http.Request) {
+		return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+tok) }
+	}
+	for _, c := range []struct{ path, body string }{
+		{"/api/alarms/ack", `{"ids":["HiTemp"],"by":"op"}`},
+		{"/api/alarms/shelve", `{"id":"LoFlow","seconds":600,"by":"op"}`},
+		{"/api/alarms/unshelve", `{"id":"LoFlow","by":"op"}`},
+	} {
+		if rec := call(t, s, "POST", c.path, c.body, as("f-secret")); rec.Code != http.StatusForbidden || len(*got) != 0 {
+			t.Errorf("%s fenced to another area: %d, %d proposed; want 403 and nothing", c.path, rec.Code, len(*got))
+		}
+	}
+	if rec := call(t, s, "POST", "/api/alarms/ack", `{"ids":["HiTemp"],"by":"op"}`, as("admin-secret")); rec.Code != http.StatusOK || len(*got) != 1 {
+		t.Errorf("the administrator's ack: %d, %d proposed", rec.Code, len(*got))
+	}
+}

@@ -26,9 +26,10 @@ type AuthConfig struct {
 	Roles map[string]AuthRole `yaml:"roles"`
 	// Users maps a user to their grants: a role, or {role, areas}.
 	Users map[string][]AuthGrant `yaml:"users"`
-	// ServiceTokens maps a named token to its role; its secret comes from
-	// the environment (NAUTILUS_TOKEN_<NAME>), never the manifest.
-	ServiceTokens map[string]string `yaml:"service-tokens"`
+	// ServiceTokens maps a named token to its role, or to grants as a
+	// user's ({role, areas}); its secret comes from the environment
+	// (NAUTILUS_TOKEN_<NAME>), never the manifest.
+	ServiceTokens map[string]AuthGrants `yaml:"service-tokens"`
 }
 
 // AuthArea is an area: the tags it covers, as patterns ("RCV_*").
@@ -48,6 +49,24 @@ type AuthRole struct {
 type AuthGrant struct {
 	Role  string   `yaml:"role"`
 	Areas []string `yaml:"areas"`
+}
+
+// AuthGrants are a service token's grants: a role's name, or a list of
+// grants as a user's.
+type AuthGrants []AuthGrant
+
+// UnmarshalYAML takes a role's name or a list of grants.
+func (gs *AuthGrants) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		*gs = AuthGrants{{Role: n.Value}}
+		return nil
+	}
+	var list []AuthGrant
+	if err := n.Decode(&list); err != nil {
+		return err
+	}
+	*gs = list
+	return nil
 }
 
 // UnmarshalYAML takes a bare role name or a {role, areas} mapping. It
@@ -102,7 +121,7 @@ func (c *AuthConfig) settings() auth.Settings {
 		Areas:         map[string][]string{},
 		Roles:         map[string]auth.RoleDef{},
 		Users:         map[string][]auth.Grant{},
-		ServiceTokens: c.ServiceTokens,
+		ServiceTokens: map[string][]auth.Grant{},
 	}
 	for name, a := range c.Areas {
 		s.Areas[name] = a.Tags
@@ -110,13 +129,18 @@ func (c *AuthConfig) settings() auth.Settings {
 	for name, r := range c.Roles {
 		s.Roles[name] = auth.RoleDef{Inherits: r.Inherits, Allow: r.Allow, Deny: r.Deny}
 	}
-	for name, gs := range c.Users {
+	grants := func(gs []AuthGrant) []auth.Grant {
+		var out []auth.Grant
 		for _, g := range gs {
-			s.Users[name] = append(s.Users[name], auth.Grant{Role: g.Role, Areas: g.Areas})
+			out = append(out, auth.Grant{Role: g.Role, Areas: g.Areas})
 		}
-		if len(gs) == 0 {
-			s.Users[name] = nil
-		}
+		return out
+	}
+	for name, gs := range c.Users {
+		s.Users[name] = grants(gs)
+	}
+	for name, gs := range c.ServiceTokens {
+		s.ServiceTokens[name] = grants(gs)
 	}
 	return s
 }

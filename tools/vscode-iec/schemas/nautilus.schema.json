@@ -276,9 +276,42 @@
           "propertyNames": {
             "pattern": "^[A-Za-z0-9_]+$"
           },
-          "description": "Named tokens for scripts and services, each with its role. A token's secret comes from NAUTILUS_TOKEN_<NAME>, never the manifest.",
+          "description": "Named tokens for scripts and services: each a role, or grants as a user's ({role, areas}). A token's secret comes from NAUTILUS_TOKEN_<NAME>, never the manifest.",
           "additionalProperties": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "role"
+                      ],
+                      "properties": {
+                        "role": {
+                          "type": "string"
+                        },
+                        "areas": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
       }

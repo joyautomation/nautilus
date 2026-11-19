@@ -213,3 +213,26 @@ func TestSiemensServeEndsOpenStreamsOnStop(t *testing.T) {
 		t.Fatalf("sessions after stop = %d, want 0", n)
 	}
 }
+
+// #708: the project's auth: block reaches the facade's server, service
+// tokens and their secrets included, as under naut run; a service token
+// without NAUTILUS_TOKEN_<NAME> refuses to serve.
+func TestSiemensServeEnforcesTheAuthBlock(t *testing.T) {
+	dir := t.TempDir()
+	m := "name: s7\ntasks:\n  - program: main.st\n    scan: 100ms\nauth:\n  token-role: viewer\n  service-tokens:\n    script: operator\n"
+	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveSiemensServe("192.0.2.10", "naut", "ab", dir, nil, time.Second, "127.0.0.1:0", pw); err == nil || !strings.Contains(err.Error(), "NAUTILUS_TOKEN_SCRIPT") {
+		t.Fatalf("a service token without a secret: %v", err)
+	}
+	c, err := resolveSiemensServe("192.0.2.10", "naut", "ab", dir, nil, time.Second, "127.0.0.1:0",
+		env(map[string]string{"NAUTILUS_SIEMENS_PASSWORD": "pw", "NAUTILUS_TOKEN": "admin", "NAUTILUS_TOKEN_SCRIPT": "s-secret"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := siemensFacadeOptions(c, nil)
+	if o.Server.Auth == nil || o.Server.ServiceTokens["script"] != "s-secret" || o.Server.AuthToken != "admin" {
+		t.Fatalf("the facade's server options: auth %v, service tokens %v", o.Server.Auth != nil, len(o.Server.ServiceTokens))
+	}
+}

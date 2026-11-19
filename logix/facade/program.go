@@ -13,6 +13,7 @@ import (
 
 	"github.com/joyautomation/nautilus/logix/deploy"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 // The program plane: the editor's Download button on a Logix target.
@@ -84,8 +85,10 @@ type ProgramPlane struct {
 }
 
 type programPlane struct {
-	cfg    ProgramPlane
-	auth   func(r *http.Request) (int, string)
+	cfg ProgramPlane
+	// auth is the server's authorization for perm (server.Authorize):
+	// an online edit needs edit, a download deploy (#708).
+	auth   func(r *http.Request, perm string) (int, string)
 	mu     sync.Mutex
 	source string
 	busy   bool
@@ -139,7 +142,7 @@ func (p *programPlane) get(w http.ResponseWriter, _ *http.Request) {
 
 func (p *programPlane) put(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	if code, msg := p.auth(r); code != 0 {
+	if code, msg := p.auth(r, server.PermEdit); code != 0 {
 		writeJSON(w, code, msg)
 		return
 	}
@@ -286,7 +289,7 @@ func errorEvent(err error) map[string]any {
 // its progress streamed as NDJSON.
 func (p *programPlane) deployStream(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	if code, msg := p.auth(r); code != 0 {
+	if code, msg := p.auth(r, server.PermDeploy); code != 0 {
 		writeJSON(w, code, msg)
 		return
 	}

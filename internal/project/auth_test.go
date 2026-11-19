@@ -33,6 +33,7 @@ func TestLoadAuthBlock(t *testing.T) {
     pat: [lead-operator, {role: viewer}]
   service-tokens:
     historian: viewer
+    pit_script: [{role: operator, areas: [receiving]}]
 `), "")
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +55,8 @@ func TestLoadAuthBlock(t *testing.T) {
 		{auth.Anonymous, auth.Read, "", true},
 		{auth.Anonymous, auth.Write, "RCV_FLOW", false},
 		{auth.Service("historian"), auth.Write, "RCV_FLOW", false},
+		{auth.Service("pit_script"), auth.Write, "RCV_FLOW", true},
+		{auth.Service("pit_script"), auth.Write, "OTHER", false},
 	} {
 		if got := p.Auth.Can(c.pr, c.perm, c.target).Allowed; got != c.ok {
 			t.Errorf("%s %s %s = %v, want %v", c.pr, c.perm, c.target, got, c.ok)
@@ -82,6 +85,8 @@ func TestLoadAuthRefuses(t *testing.T) {
 		// F4, F5 through the manifest.
 		{"auth:\n  service-tokens:\n    pit-script: viewer\n", "use letters, digits and '_'"},
 		{"auth:\n  areas:\n    p: {tags: [PUMP_1.Speed]}\n", "names a member"},
+		{"auth:\n  service-tokens:\n    s: [{role: operator, areas: []}]\n", "areas is empty"},
+		{"auth:\n  service-tokens:\n    s: [{role: viewer, role: administrator}]\n", "role is given twice"},
 		{"auth:\n  areas:\n    r: {tags: []}\n", `area "r" names no tags`},
 		{"auth:\n  anonymous: operator\n", `use none or viewer`},
 		{"auth:\n  session: 12h\n", "field session not found"},

@@ -78,6 +78,10 @@ func (s *Server) handleForce(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
 		return
 	}
+	if code, msg := s.authorize(r, PermForce, req.Name); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	if err := s.rt.Tags().Force(req.Name, req.Value); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -95,6 +99,10 @@ func (s *Server) handleUnforce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if code, msg := s.authorize(r, PermForce, name); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	if !s.rt.Tags().Unforce(name) {
 		http.Error(w, fmt.Sprintf("%s is not forced", name), http.StatusNotFound)
 		return
@@ -111,7 +119,33 @@ func (s *Server) handleUnforceAll(w http.ResponseWriter, r *http.Request) {
 	if s.refuseForce(w) {
 		return
 	}
-	n := s.rt.Tags().UnforceAll()
+	// Clearing every force needs force over every tag that is forced: an
+	// engineer in one area clears all of that area's forces, and is refused
+	// when another area's tag is forced too.
+	checked := s.rt.Tags().ForcedValues()
+	for name := range checked {
+		if code, msg := s.authorize(r, PermForce, name); code != 0 {
+			http.Error(w, msg, code)
+			return
+		}
+	}
+	if s.unforceAllChecked != nil {
+		s.unforceAllChecked()
+	}
+	// Under an auth: block only the forces checked above are cleared: one
+	// set meanwhile, perhaps in an area this principal may not force, is
+	// left for its own clear (#1035). Without one there is nothing per tag
+	// to check, and every force goes.
+	var n int
+	if s.policy == nil {
+		n = s.rt.Tags().UnforceAll()
+	} else {
+		for name := range checked {
+			if s.rt.Tags().Unforce(name) {
+				n++
+			}
+		}
+	}
 	logAction(r, "force: cleared all", "removed", n)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"removed": n})

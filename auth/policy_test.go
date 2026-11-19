@@ -23,7 +23,7 @@ var plant = Settings{
 		"pat":    {{Role: "lead-operator", Areas: []string{"roasting"}}, {Role: Viewer}},
 		"nosfc":  {{Role: "no-sfc"}},
 	},
-	ServiceTokens: map[string]string{"historian": Viewer},
+	ServiceTokens: map[string][]Grant{"historian": {{Role: Viewer}}, "pit_script": {{Role: Operator, Areas: []string{"receiving"}}}},
 }
 
 func mustCompile(t *testing.T, c Settings) *Policy {
@@ -78,6 +78,9 @@ func TestCan(t *testing.T) {
 		{Service("HISTORIAN"), Read, "", true, ""},
 		{Service("historian"), Write, "RCV_1", false, "token:historian (viewer) may not write"},
 		{Service("unknown"), Read, "", false, "token:unknown has no role here"},
+		// A service token scoped to an area, like a user.
+		{Service("pit_script"), Write, "PIT_LEVEL", true, ""},
+		{Service("pit_script"), Write, "RST_TEMP", false, "token:pit_script may not write RST_TEMP: it is outside receiving"},
 		// An operator in receiving writes there, by tag, member or index.
 		{User("jsmith"), Write, "RCV_FLOW", true, ""},
 		{User("jsmith"), Write, "rcv_flow.SP", true, ""},
@@ -153,13 +156,16 @@ func TestCompileRefuses(t *testing.T) {
 		{Settings{Users: map[string][]Grant{"u": nil}}, `user "u" has no role`},
 		{Settings{Users: map[string][]Grant{"u": {{Role: "boss"}}}}, `user "u": a grant's role is not a role`},
 		{Settings{Users: map[string][]Grant{"u": {{Role: Operator, Areas: []string{"nowhere"}}}}}, `user "u": no area "nowhere"`},
-		{Settings{ServiceTokens: map[string]string{"h": "reader"}}, `service token "h": its role is not a role`},
+		{Settings{ServiceTokens: map[string][]Grant{"h": {{Role: "reader"}}}}, `service token "h": a grant's role is not a role`},
+		{Settings{ServiceTokens: map[string][]Grant{"h": {{Role: Operator, Areas: []string{"nowhere"}}}}}, `service token "h": no area "nowhere"`},
+		{Settings{ServiceTokens: map[string][]Grant{"h": nil}}, `service token "h" has no role`},
+		{Settings{ServiceTokens: map[string][]Grant{"h": {{Role: Operator, Areas: []string{}}}}}, `areas: [] covers nothing`},
 		// F2: an explicit empty areas list covers nothing; it must not
 		// load as the whole controller.
 		{Settings{Users: map[string][]Grant{"u": {{Role: Operator, Areas: []string{}}}}}, `areas: [] covers nothing`},
 		// F4: a token's name is its secret's variable's name.
-		{Settings{ServiceTokens: map[string]string{"pit-script": Viewer}}, `use letters, digits and '_'`},
-		{Settings{ServiceTokens: map[string]string{"a.b": Viewer}}, `use letters, digits and '_'`},
+		{Settings{ServiceTokens: map[string][]Grant{"pit-script": {{Role: Viewer}}}}, `use letters, digits and '_'`},
+		{Settings{ServiceTokens: map[string][]Grant{"a.b": {{Role: Viewer}}}}, `use letters, digits and '_'`},
 		// F5: an area covers tags; a member pattern could never match.
 		{Settings{Areas: map[string][]string{"a": {"PUMP_1.Speed"}}}, `names a member`},
 		{Settings{Users: map[string][]Grant{"A": {{Role: Viewer}}, "a": {{Role: Viewer}}}}, "declared twice"},
@@ -177,7 +183,7 @@ func TestCompileRefuses(t *testing.T) {
 		{TokenRole: secret},
 		{Roles: map[string]RoleDef{"r": {Inherits: secret}}},
 		{Users: map[string][]Grant{"u": {{Role: secret}}}},
-		{ServiceTokens: map[string]string{"h": secret}},
+		{ServiceTokens: map[string][]Grant{"h": {{Role: secret}}}},
 	} {
 		if _, err := Compile(c); err == nil || strings.Contains(err.Error(), secret) {
 			t.Errorf("Compile(%+v) = %v: refused, without echoing the value", c, err)

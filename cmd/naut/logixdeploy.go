@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/logix/deploy"
@@ -68,6 +69,8 @@ type logixProject struct {
 	host         string
 	slot, port   int
 	agent        string
+	// auth is the manifest's auth: block, compiled; nil without one.
+	auth *auth.Policy
 }
 
 // hardwareError is a target.logix.hardware file that cannot be read.
@@ -154,6 +157,7 @@ func loadLogixProject(dir string) (*logixProject, error) {
 			Language: writer.Language(progPath),
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,
+		auth: m.AuthPolicy(),
 	}, nil
 }
 

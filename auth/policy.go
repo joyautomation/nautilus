@@ -25,9 +25,9 @@ type Settings struct {
 	// Users are the local and OIDC users' grants (credentials are never
 	// here).
 	Users map[string][]Grant
-	// ServiceTokens are named tokens for scripts and services: name to
-	// role. Their secrets are not here either.
-	ServiceTokens map[string]string
+	// ServiceTokens are named tokens for scripts and services, each with
+	// its grants, like a user's. Their secrets are not here either.
+	ServiceTokens map[string][]Grant
 }
 
 // RoleDef is a custom role.
@@ -114,54 +114,55 @@ func Compile(c Settings) (*Policy, error) {
 	}
 	p.token = []Grant{{Role: tokenRole}}
 
-	for name, role := range c.ServiceTokens {
-		key := lower(name)
-		if err := validTokenName(key); err != nil {
-			return nil, err
-		}
-		if _, dup := p.services[key]; dup {
-			return nil, fmt.Errorf("auth: service token %q is declared twice", name)
-		}
-		if p.roles[lower(role)] == nil {
-			return nil, fmt.Errorf("auth: service token %q: its role is not a role: %s", name, p.roleList())
-		}
-		p.services[key] = []Grant{{Role: lower(role)}}
+	if err := p.compileGrants("service token", validTokenName, c.ServiceTokens, p.services); err != nil {
+		return nil, err
 	}
+	userName := func(n string) error { return validName("user", n) }
+	if err := p.compileGrants("user", userName, c.Users, p.users); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
 
-	for name, grants := range c.Users {
+// compileGrants checks and stores each principal's grants: a valid name,
+// declared once, at least one grant, each naming a role and only areas
+// that exist. Errors name the principal, never the refused value (a
+// secret pasted into the wrong field).
+func (p *Policy) compileGrants(what string, valid func(string) error, in, out map[string][]Grant) error {
+	for name, grants := range in {
 		key := lower(name)
-		if err := validName("user", key); err != nil {
-			return nil, err
+		if err := valid(key); err != nil {
+			return err
 		}
-		if _, dup := p.users[key]; dup {
-			return nil, fmt.Errorf("auth: user %q is declared twice", name)
+		if _, dup := out[key]; dup {
+			return fmt.Errorf("auth: %s %q is declared twice", what, name)
 		}
 		if len(grants) == 0 {
-			return nil, fmt.Errorf("auth: user %q has no role", name)
+			return fmt.Errorf("auth: %s %q has no role", what, name)
 		}
-		var out []Grant
+		var gs []Grant
 		for _, g := range grants {
 			role := lower(g.Role)
 			if p.roles[role] == nil {
-				return nil, fmt.Errorf("auth: user %q: a grant's role is not a role: %s", name, p.roleList())
+				return fmt.Errorf("auth: %s %q: a grant's role is not a role: %s", what, name, p.roleList())
 			}
 			if g.Areas != nil && len(g.Areas) == 0 {
 				// No areas is the whole controller; an empty list must not
 				// be, or deleting someone's last area would widen them.
-				return nil, fmt.Errorf("auth: user %q: a grant with areas: [] covers nothing; leave areas out for the whole controller", name)
+				return fmt.Errorf("auth: %s %q: a grant with areas: [] covers nothing; leave areas out for the whole controller", what, name)
 			}
 			ng := Grant{Role: role}
 			for _, a := range g.Areas {
 				if p.areas[lower(a)] == nil {
-					return nil, fmt.Errorf("auth: user %q: no area %q", name, a)
+					return fmt.Errorf("auth: %s %q: no area %q", what, name, a)
 				}
 				ng.Areas = append(ng.Areas, lower(a))
 			}
-			out = append(out, ng)
+			gs = append(gs, ng)
 		}
-		p.users[key] = out
+		out[key] = gs
 	}
-	return p, nil
+	return nil
 }
 
 // compileRoles resolves the custom roles: each inherits a built-in or

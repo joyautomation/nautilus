@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/siemens/facade"
@@ -136,6 +137,11 @@ type siemensServeConfig struct {
 	roots                     []facade.Root
 	poll                      time.Duration
 	listen                    string
+
+	// auth and services are the project's auth: block and its service
+	// tokens' secrets (#708), enforced as under naut run; nil without one.
+	auth     *auth.Policy
+	services map[string]string
 }
 
 // resolveSiemensServe merges flags over the project's target.siemens and
@@ -146,10 +152,19 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		password: getenv("NAUTILUS_SIEMENS_PASSWORD"), token: getenv("NAUTILUS_TOKEN")}
 	if projectDir != "" {
 		m, err := project.ReadManifest(os.DirFS(projectDir), "")
-		switch {
-		case err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no nautilus.yaml"):
+		if err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no nautilus.yaml") {
 			return c, err
-		case err == nil && m.Target != nil && m.Target.Siemens != nil:
+		}
+		if err == nil {
+			// The project's auth: block decides the serve's writes, as
+			// under naut run (#708).
+			sopts := server.Options{AuthToken: c.token}
+			if err := withAuth(&sopts, m.AuthPolicy(), getenv); err != nil {
+				return c, fmt.Errorf("auth: %w", err)
+			}
+			c.auth, c.services = sopts.Auth, sopts.ServiceTokens
+		}
+		if err == nil && m.Target != nil && m.Target.Siemens != nil {
 			t := m.Target.Siemens
 			if c.host == "" {
 				c.host = t.Station.CPU.Address
@@ -221,6 +236,9 @@ func runSiemensServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut siemens serve:", err)
 		return 2
 	}
+	if cfg.auth != nil {
+		fmt.Fprint(os.Stderr, authFacadeNotice)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return serveSiemens(ctx, cfg, client, os.Stdout, os.Stderr, nil)
@@ -233,7 +251,7 @@ func siemensFacadeOptions(cfg siemensServeConfig, client *webapi.Client) facade.
 		Host:   cfg.host,
 		Roots:  cfg.roots,
 		Poll:   cfg.poll,
-		Server: server.Options{AuthToken: cfg.token},
+		Server: server.Options{AuthToken: cfg.token, Auth: cfg.auth, ServiceTokens: cfg.services},
 	}
 }
 
