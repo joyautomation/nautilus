@@ -106,8 +106,10 @@ func Dial(ctx context.Context, endpoint string, c Connect) (*Session, error) {
 	}
 	var opts []opcua.Option
 	if c.Fence != nil {
-		// Before DialTimeout, which sets the timeout on this dialer.
-		opts = append(opts, opcua.Dialer(&uacp.Dialer{Dialer: &net.Dialer{Control: c.Fence.Control}, ClientACK: uacp.DefaultClientACK}))
+		// Before DialTimeout, which sets the timeout on this dialer. No
+		// dual-stack race (FallbackDelay -1): one socket per dial, so the
+		// one Control records is the one in use.
+		opts = append(opts, opcua.Dialer(&uacp.Dialer{Dialer: &net.Dialer{Control: c.Fence.Control, FallbackDelay: -1}, ClientACK: uacp.DefaultClientACK}))
 	}
 	opts = append(opts,
 		opcua.SecurityFromEndpoint(ep, token),

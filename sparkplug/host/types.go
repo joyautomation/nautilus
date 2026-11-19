@@ -421,6 +421,10 @@ type Driver struct {
 	// (termMoved). leaseTerm is the term the last look saw (0: none yet).
 	sendGate  nio.SendGate
 	leaseTerm atomic.Uint64
+	// termGen counts dropEarlierTerm, under wmu: a flush that took its
+	// work before one publishes, requeues and parks none of it after,
+	// whichever caller saw the term move (#1047 review).
+	termGen atomic.Uint64
 	// replicaID tells the replicas of a redundant pair apart on the broker:
 	// they run one manifest, so without it they would share an MQTT client
 	// ID and take each other's sessions over in a loop. Set alongside the

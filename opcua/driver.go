@@ -205,10 +205,11 @@ type Driver struct {
 	// (SetSendGate); leaseTerm the term the last open look saw (0: none
 	// yet); reopens counts forgetWritten, so a flush that took its queue
 	// before a reopen sends none of it after (design §3.4).
-	sendGate  nio.SendGate
-	leaseTerm atomic.Uint64
-	reopens   atomic.Uint64
-	aborts    atomic.Uint64 // fenced writes whose socket was reset in place
+	sendGate    nio.SendGate
+	leaseTerm   atomic.Uint64
+	reopens     atomic.Uint64
+	aborts      atomic.Uint64 // fenced writes whose socket was reset in place, after the failure
+	timerAborts atomic.Uint64 // ... and by the timer at the deadline (ArmAbort)
 	// gateShut is true from the first look that finds the gate closed to
 	// the first that finds it open again (see gateOpen); sawShut stays true
 	// once any look has found it closed: this replica has been a standby,
@@ -1247,6 +1248,9 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	d.pending = map[string]any{}
 	limit := d.server.maxNodes
 	d.mu.Unlock()
+	if testHookAfterSwap != nil {
+		testHookAfterSwap()
+	}
 	if limit <= 0 {
 		limit = 1
 	}
@@ -1310,7 +1314,17 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	}
 
 	requeue := func(from int) {
+		if testHookBeforeRequeue != nil {
+			testHookBeforeRequeue()
+		}
 		d.mu.Lock()
+		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			// A reopen since this flush took its queue (a lease lost and
+			// won again): the rest is the previous leadership's (#1047
+			// review), never put back.
+			d.mu.Unlock()
+			return
+		}
 		for _, n := range names[from:] {
 			if _, exists := d.pending[n]; !exists {
 				d.pending[n] = work[n]
@@ -1350,7 +1364,9 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 		stop := fence.ArmAbort(sess.Fence, deadline)
 		fence.BeforeSend()
 		resp, err := sess.Client.Write(wctx, &ua.WriteRequest{NodesToWrite: items[start:end]})
-		stop()
+		if stop() {
+			d.timerAborts.Add(1)
+		}
 		fcancel()
 		cancel()
 		if err != nil && !deadline.IsZero() && sess.Fence != nil {
@@ -1389,6 +1405,11 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 	}
 	return true
 }
+
+// testHookAfterSwap and testHookBeforeRequeue, when set (by tests), run in
+// flushWrites right after it takes its queue, and right before it puts a
+// failed chunk back.
+var testHookAfterSwap, testHookBeforeRequeue func()
 
 // setState records a state transition with its start time; lastErr is
 // kept when err is nil so the reason survives into the backoff wait.

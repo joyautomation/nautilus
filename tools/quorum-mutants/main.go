@@ -174,10 +174,10 @@ var table = []mutation{
 	// #1040 review: a command from an earlier term of the lease.
 	{"old_term_sent", []string{"TestCommandsFromAnEarlierTermAreNotSent"}},
 	{"send_no_deadline", []string{"TestBegin", "TestEachCommandRunsToItsSendDeadline", "TestModbusEachWriteRunsToItsSendDeadline", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestEIPEachRequestRunsToItsSendDeadline", "TestArmResetsAtTheDeadline", "TestModbusResetIsATimerAtTheDeadline", "TestFencedSendUnitDataResetIsATimer", "TestOptoMMPFencedWriteResetsAtItsDeadline"}},
-	{"fence_fin", []string{"TestResetSendsAnRSTAndDropsQueuedBytes", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestFencedSendUnitDataResetsAtItsDeadline", "TestFencedPostResetsAtItsDeadline", "TestOptoMMPFencedWriteResetsAtItsDeadline", "TestSocketAbortAndCloseReset", "TestOPCUAFencedWriteResetsItsSession"}},
+	{"fence_fin", []string{"TestResetSendsAnRSTAndDropsQueuedBytes", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestFencedSendUnitDataResetsAtItsDeadline", "TestFencedPostResetsAtItsDeadline", "TestOptoMMPFencedWriteResetsAtItsDeadline", "TestSocketAbortAndCloseReset", "TestOPCUAFencedWriteResetsItsSession", "TestOptoMMPRTFencedWriteAbortsInPlaceAndClosesOnce"}},
 	// #1040 review: a Modbus write queued or requeued under an earlier
 	// term of the lease.
-	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead", "TestOptoMMPTermMoveDropsTheQueue", "TestHeldCommandFromAnEarlierTermIsNotPublished", "TestOPCUAQueuedWriteDoesNotSurviveATermMove"}},
+	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead", "TestOptoMMPTermMoveDropsTheQueue", "TestHeldCommandFromAnEarlierTermIsNotPublished", "TestOPCUAQueuedWriteDoesNotSurviveATermMove", "TestTermMoveSeenByAnotherCallerStopsTheFlush", "TestFailedPublishAfterATermMoveIsNotRequeued", "TestOPCUAFlushRacingAReopenSendsNothing", "TestOPCUAFailedChunkNotRequeuedAfterAReopen"}},
 	// #1040 review: an SNMP SET retransmitted after a lost answer.
 	{"set_retried", []string{"TestSetIsSentOnce"}},
 }

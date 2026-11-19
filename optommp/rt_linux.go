@@ -17,9 +17,12 @@ import (
 	"net"
 	"os"
 	goruntime "runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/joyautomation/nautilus/internal/fence"
 )
 
 const (
@@ -95,6 +98,11 @@ func blockingFd(c any) (fd int, ok bool) {
 type fdConn struct {
 	net.Conn // the original: addresses, and closed with this
 	fd       int
+	// mu orders Close and Abort: Close swaps fd to -1 once, so the
+	// descriptor is closed exactly once, and Abort never touches it
+	// after (#1047 review: a second close could hit a reused number).
+	mu     sync.Mutex
+	closed bool
 }
 
 // blockingConn returns c as an fdConn, or c itself when it has no
@@ -160,9 +168,31 @@ func (c *fdConn) SetWriteDeadline(t time.Time) error {
 // through it to set SO_LINGER 0).
 func (c *fdConn) NetConn() net.Conn { return c.Conn }
 
+// Close closes the descriptor once; a second Close does nothing to it.
 func (c *fdConn) Close() error {
-	syscall.Close(c.fd)
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	fd := c.fd
+	c.mu.Unlock()
+	syscall.Close(fd)
 	return c.Conn.Close()
+}
+
+// Abort resets the connection in place (fence.Aborter): an RST, the send
+// queue dropped, the descriptor left open, so a thread blocked on it gets
+// an error rather than a closed (or reused) number. The run loop closes
+// it. Nothing once closed.
+func (c *fdConn) Abort() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	return fence.AbortFD(uintptr(c.fd))
 }
 
 // timeval is a deadline as a socket timeout; zero means none, and one

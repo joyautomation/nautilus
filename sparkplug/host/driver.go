@@ -292,6 +292,7 @@ func (d *Driver) termMoved() bool {
 // what the edge reports. Logged once. Takes wmu.
 func (d *Driver) dropEarlierTerm() {
 	d.wmu.Lock()
+	d.termGen.Add(1)
 	n := len(d.pending)
 	for _, q := range d.queued {
 		n += len(q)
@@ -498,7 +499,13 @@ func (d *Driver) withdrawLocked(name string) {
 // pending, so they go out after the next connect: each one unless a newer
 // value is pending, or the program has moved the tag since (lastOut no
 // longer holds it), which supersedes it (#940). Caller holds wmu.
-func (d *Driver) requeueLocked(names []string, work map[string]any) {
+//
+// gen is the term generation the flush took work under: after a term move
+// since, nothing is put back (it is the earlier leadership's).
+func (d *Driver) requeueLocked(names []string, work map[string]any, gen uint64) {
+	if d.termGen.Load() != gen && !mut("old_term_kept") {
+		return
+	}
 	for _, n := range names {
 		if _, exists := d.pending[n]; exists {
 			continue
