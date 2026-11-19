@@ -376,7 +376,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	// The audit journal (#709): every write through the tag API, accepted
 	// or refused, fsynced before it is answered. If it cannot be opened the
-	// controller still runs: forces and program changes are refused,
+	// controller still runs: setting forces and program edits are refused,
 	// operator actions are journalled in memory only, and the drivers block
 	// and the system alarm say so (#709, design §6 question 5).
 	j, err := openAudit(proj, os.Stderr)
@@ -517,7 +517,7 @@ func auditAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 	return project.SystemAlarm{
 		Def: alarm.Def{
 			ID: AuditAlarmID, Tag: "__nautilus.audit-journal-down",
-			Name:     "Audit journal cannot be written: forces and program changes are refused",
+			Name:     "Audit journal cannot be written: setting forces and program edits are refused",
 			Priority: alarm.High, Class: "system",
 			AckRequired: true, AutoClear: true,
 		},

@@ -62,10 +62,15 @@ const (
 
 // actionClass classes every action the seam journals, for when the journal
 // cannot be written (#709, design §6 question 5, decided 2026-11-18):
-// elevated actions (forces, program changes) must never happen unrecorded
-// and are refused; operator actions (tag writes, alarm acknowledgement
-// and shelving, SFC commands) are still allowed, kept in memory and
-// written once the journal recovers.
+//   - elevated actions (setting a force, a program edit or activation)
+//     must never happen unrecorded, and are refused;
+//   - operator actions (tag writes, alarm acknowledgement and shelving,
+//     SFC commands) are allowed;
+//   - recovery actions (clearing forces, rolling an edit back) are the
+//     ways back to normal, and are allowed too (James, 2026-11-18).
+//
+// An allowed action's entry is kept in memory and written once the journal
+// recovers, and its response carries X-Nautilus-Audit-Journal: down.
 //
 // Classification fails closed: an action missing here is elevated, and
 // TestEveryActionIsClassed fails on it, so a new route is classed on
@@ -78,22 +83,32 @@ var actionClass = map[string]string{
 	"sfc.step":       operator,
 	"sfc.transition": operator,
 
+	"force.clear":      recovery,
+	"force.clear-all":  recovery,
+	"program.rollback": recovery,
+
 	"force.set":        elevated,
-	"force.clear":      elevated,
-	"force.clear-all":  elevated,
 	"program.edit":     elevated,
-	"program.rollback": elevated,
 	"program.activate": elevated,
 }
 
 const (
 	operator = "operator"
+	recovery = "recovery"
 	elevated = "elevated"
+
+	// auditJournalHeader is set to "down" on the response to an action
+	// carried out while the journal cannot be written: its entry is kept
+	// in memory until the journal recovers.
+	auditJournalHeader = "X-Nautilus-Audit-Journal"
 )
 
 // isElevated reports whether action is refused while the journal is down:
-// every action not classed as an operator's.
-func isElevated(action string) bool { return actionClass[action] != operator }
+// every action not classed as an operator's or a recovery.
+func isElevated(action string) bool {
+	c := actionClass[action]
+	return c != operator && c != recovery
+}
 
 // auditUpkeep is how often Server.Run calls the auditor's tick.
 var auditUpkeep = 5 * time.Second
@@ -231,12 +246,12 @@ func (a *auditor) status() *DriverStatus {
 	switch {
 	case a.unavailable != "":
 		return &DriverStatus{Kind: "audit", Name: "audit journal", State: "error",
-			Message: "the audit journal could not be opened: forces and program changes are refused; operator actions are allowed and journalled in memory only (the last " +
+			Message: "the audit journal could not be opened: setting forces and program edits are refused; other actions are allowed and journalled in memory only (the last " +
 				strconv.Itoa(auditRing) + ", lost on restart)",
 			LastError: a.unavailable}
 	case h != nil:
 		return &DriverStatus{Kind: "audit", Name: "audit journal", State: "error",
-			Message: "the audit journal cannot be written: forces and program changes are refused until it can be; operator actions are allowed, and their entries are kept in memory until then",
+			Message: "the audit journal cannot be written: setting forces and program edits are refused until it can be; other actions are allowed, and their entries are kept in memory until then",
 			SinceMs: h.since.UnixMilli(), LastError: h.err,
 			Metrics: []DriverMetric{
 				{Label: "waiting", Value: float64(h.pending), Volatile: true},
@@ -446,13 +461,16 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if a.tf != nil {
 		t = a.tf(r, body)
 	}
-	if isElevated(a.action) && a.s.audit.down() {
-		a.answer(w, r, t, func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "the audit journal cannot be written, so " + a.action + " is refused until it can be (operator actions are still allowed)",
+	if a.s.audit.down() {
+		if isElevated(a.action) {
+			a.answer(w, r, t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error": "the audit journal cannot be written, so " + a.action + " is refused until it can be (operator actions, clearing forces and rolling back are still allowed)",
+				})
 			})
-		})
-		return
+			return
+		}
+		w.Header().Set(auditJournalHeader, "down")
 	}
 	a.answer(w, r, t, a.h)
 }

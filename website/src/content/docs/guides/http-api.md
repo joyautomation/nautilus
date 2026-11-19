@@ -999,18 +999,22 @@ leader cannot be reached) is journalled by the standby.
 
 ### When the journal cannot be written
 
-A force or a program change must never happen unrecorded, so while the
-journal cannot be written, or `naut run` could not open it (an unwritable
-`audit.path`, or another `naut run` already using it):
+Setting a force or changing the program must never happen unrecorded, so
+while the journal cannot be written, or `naut run` could not open it (an
+unwritable `audit.path`, or another `naut run` already using it):
 
-- **Elevated actions are refused** with `503`: forces (set, clear, clear
-  all) and program edits, rollbacks and activations, and any action not
-  listed below as an operator's. The refusal is journalled, in memory.
+- **Elevated actions are refused** with `503`: setting a force, a program
+  edit or activation, and any action not listed below. The refusal is
+  journalled, in memory.
 - **Operator actions are allowed**: tag writes, alarm acknowledgement and
-  shelving, SFC commands. Their entries are kept in memory (up to 10,000;
-  past that the oldest are counted in an `audit.dropped` entry) and written,
-  with their ids, once the journal recovers. A journal that could not be
-  opened keeps only the last 1000, lost on restart.
+  shelving, SFC commands.
+- **The ways back to normal are allowed**: clearing a force or all of
+  them, and rolling a program edit back.
+- An allowed action's response carries `X-Nautilus-Audit-Journal: down`,
+  and its entry is kept in memory (up to 10,000; past that the oldest are
+  counted in an `audit.dropped` entry) and written, with its id, once the
+  journal recovers. A journal that could not be opened keeps only the last
+  1000, lost on restart.
 - **It is shown:** an error is logged, an `audit` card with state `error`
   appears on the drivers block (`GET /api/drivers`, `/api/state`, the live
   stream), and, when the project has alarms, the system alarm

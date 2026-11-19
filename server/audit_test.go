@@ -675,6 +675,14 @@ func TestPreflightAllowsTheClientHeader(t *testing.T) {
 	if h := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(h, "X-Nautilus-Client") {
 		t.Errorf("Access-Control-Allow-Headers = %q", h)
 	}
+	// And the page may read whether its action reached the journal.
+	rec = call(t, srv, "GET", "/api/state", "", func(r *http.Request) {
+		r.Header.Set("Origin", "http://hmi.example")
+		r.Header.Set("Authorization", "Bearer s3cret")
+	})
+	if h := rec.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(h, "X-Nautilus-Audit-Journal") {
+		t.Errorf("Access-Control-Expose-Headers = %q", h)
+	}
 }
 
 // Server.Run writes a closed window's summary on its own, so a burst of
@@ -989,6 +997,7 @@ func TestJournalDownRefusesElevatedActions(t *testing.T) {
 	captureLog(t)
 	j := &flaky{down: true}
 	srv := auditServer(t, Options{Audit: j})
+	edit(editedProgram)(t, srv) // something to roll back
 	if srv.AuditJournalDown() {
 		t.Fatal("down before any write failed")
 	}
@@ -1000,12 +1009,9 @@ func TestJournalDownRefusesElevatedActions(t *testing.T) {
 		t.Fatal("not down after a failed write")
 	}
 	elevated := []struct{ method, path, body string }{
-		{"POST", "/api/forces", `{"name":"SP","value":12}`},
-		{"POST", "/api/forces/clear", ""},
-		{"DELETE", "/api/forces/SP", ""},
 		{"PUT", "/api/program", `{"source":"` + strings.ReplaceAll(editedProgram, "\n", `\n`) + `"}`},
-		{"POST", "/api/program/rollback", ""},
 		{"POST", "/api/program/activate", `{"sha":"abc"}`},
+		{"POST", "/api/forces", `{"name":"SP","value":12}`},
 	}
 	for _, c := range elevated {
 		rec := call(t, srv, c.method, c.path, c.body)
@@ -1017,24 +1023,38 @@ func TestJournalDownRefusesElevatedActions(t *testing.T) {
 		t.Errorf("a refused force was applied: %v", fv)
 	}
 	es := srv.audit.ring.Recent()
-	if e := es[len(elevated)-1]; e.Action != "force.set" || e.Target != "SP" || e.Detail["status"] != http.StatusServiceUnavailable {
+	if e := es[0]; e.Action != "force.set" || e.Target != "SP" || e.Detail["status"] != http.StatusServiceUnavailable {
 		t.Errorf("the refused force's entry: %+v", e)
 	}
-	for _, c := range []struct{ method, path, body string }{
+	// Operator actions, and the ways back to normal (clearing forces,
+	// rolling an edit back), are carried out, and say the journal is down.
+	steps := []struct{ method, path, body string }{
 		{"POST", "/api/tags", `{"name":"SP","value":71}`},
 		{"POST", "/api/alarms/ack", `{"ids":["HiTemp"]}`},
-	} {
-		if rec := call(t, srv, c.method, c.path, c.body); rec.Code >= 300 {
-			t.Errorf("operator action %s while the journal is down = %d %s", c.path, rec.Code, rec.Body)
+		{"DELETE", "/api/forces/SP", ""},
+		{"POST", "/api/forces/clear", ""},
+		{"POST", "/api/program/rollback", ""},
+	}
+	for i, c := range steps {
+		if i == 2 { // forces to clear, set behind the API's back
+			srv.rt.Tags().Force("SP", 9.0)
+			srv.rt.Tags().Force("Level", 1.0)
 		}
+		rec := call(t, srv, c.method, c.path, c.body)
+		if rec.Code >= 300 || rec.Header().Get("X-Nautilus-Audit-Journal") != "down" {
+			t.Errorf("%s %s while the journal is down = %d %q %s, want it done and the header", c.method, c.path, rec.Code, rec.Header().Get("X-Nautilus-Audit-Journal"), rec.Body)
+		}
+	}
+	if fv := srv.rt.Tags().ForcedValues(); len(fv) != 0 {
+		t.Errorf("forces left after clearing: %v", fv)
 	}
 	// Recovered: forces are allowed again.
 	j.mu.Lock()
 	j.down = false
 	j.mu.Unlock()
 	srv.audit.tick()
-	if rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":12}`); rec.Code != http.StatusOK {
-		t.Errorf("force after recovery = %d %s", rec.Code, rec.Body)
+	if rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":12}`); rec.Code != http.StatusOK || rec.Header().Get("X-Nautilus-Audit-Journal") != "" {
+		t.Errorf("force after recovery = %d %s (header %q)", rec.Code, rec.Body, rec.Header().Get("X-Nautilus-Audit-Journal"))
 	}
 
 	// A journal that could not be opened: down for the process's life.
@@ -1085,8 +1105,8 @@ func TestEveryActionIsClassed(t *testing.T) {
 			}
 			action, _ := strconv.Unquote(lit.Value)
 			n++
-			if c := actionClass[action]; c != operator && c != elevated {
-				t.Errorf("%s: action %q is not classed: add it to actionClass as operator or elevated (until then it is refused while the journal is down)", fset.Position(call.Pos()), action)
+			if c := actionClass[action]; c != operator && c != recovery && c != elevated {
+				t.Errorf("%s: action %q is not classed: add it to actionClass as operator, recovery or elevated (until then it is refused while the journal is down)", fset.Position(call.Pos()), action)
 			}
 			return true
 		})
@@ -1100,7 +1120,7 @@ func TestEveryActionIsClassed(t *testing.T) {
 			t.Errorf("unclassed %q is not elevated", a)
 		}
 	}
-	if isElevated("tag.write") || !isElevated("force.set") {
+	if isElevated("tag.write") || isElevated("force.clear") || !isElevated("force.set") {
 		t.Error("the classes are swapped")
 	}
 }

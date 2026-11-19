@@ -930,6 +930,8 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "" && tokenMatches(r, s.authToken)) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			// A page may read whether its action was journalled to disk.
+			w.Header().Set("Access-Control-Expose-Headers", auditJournalHeader)
 		}
 		next.ServeHTTP(w, r)
 	})
