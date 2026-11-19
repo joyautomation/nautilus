@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -220,7 +221,31 @@ func (p *Project) AlarmDefs(rt *runtime.Runtime) ([]alarm.Def, error) {
 	if p.Alarms == nil {
 		return nil, nil
 	}
-	return p.Alarms.alarmConfig().Compose(nil, p.alarmTagInfo(rt))
+	return p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), p.alarmTagInfo(rt))
+}
+
+// deviceAlarmFiles are the alarms the project's devices raise by default
+// (alarms still have to be on: an `alarms:` section). Today: an IO-Link
+// port device's identity fault, high priority, qualified by its master
+// answering so a master that is down does not hold it in alarm. A manifest
+// definition with the same id is a duplicate-id error, as for any two files.
+func (p *Project) deviceAlarmFiles() []alarm.File {
+	var defs []alarm.Def
+	for _, port := range p.devices.Ports() {
+		defs = append(defs, alarm.Def{
+			ID:       devbind.IdentityFaultTag(port.Name),
+			Tag:      devbind.IdentityFaultTag(port.Name),
+			Name:     fmt.Sprintf("%s: wrong or missing device on %s port %d", port.Name, port.Master, port.Num),
+			Priority: alarm.High,
+			Class:    "iolink",
+			Enable:   port.Master + "__Online",
+			Notes:    "The IO-Link identity check: the device on the port is not the one its IODD describes (docs/design/iolink.md §6). Its process data out is held back.",
+		})
+	}
+	if len(defs) == 0 {
+		return nil
+	}
+	return []alarm.File{{Path: "devices:", Defs: defs}}
 }
 
 // alarmTagInfo describes every declared tag to the rule expander: its
@@ -302,7 +327,7 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 		return nil, nil, nil, nil
 	}
 	tags := p.alarmTagInfo(rt)
-	if defs, err = p.Alarms.alarmConfig().Compose(nil, tags); err != nil {
+	if defs, err = p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), tags); err != nil {
 		return nil, nil, nil, err
 	}
 

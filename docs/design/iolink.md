@@ -321,8 +321,16 @@ not safe, and the adapter does these (`iolink.OutGate`):
   back to its own fail-safe values;
 - when the right device is back, **nothing is resent** from what was
   written before or during the break: `pd-out-valid` returns to true, and
-  the image goes out, only after a program writes again. A program that
-  only writes on change must write again after the identity fault clears;
+  the image goes out, only after a program has written every item again.
+  The runtime pushes the whole output set whenever any output changes, so
+  the adapter cannot tell a write from a push: like the driver's own rule
+  (outputs are commands, an unchanged output since start is not one), an
+  item counts as written when its value differs from the last one seen,
+  and the last one seen follows every push, a refused one too. After an
+  identity break a program re-arms the port by changing every item of the
+  image; a program that holds the same values never does, and the port
+  stays quiet. The image is handed to the master one push before the valid
+  flag, so the master holds the new image before it is told it is valid;
 - `Unchecked` (no id points) writes as told, since nothing can be
   compared, and `naut check` says so.
 

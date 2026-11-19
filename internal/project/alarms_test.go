@@ -8,11 +8,14 @@ package project
 // commissioning day.
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -375,5 +378,66 @@ alarms:
 	_, _, warns, _ = proj.CheckAlarms(rt)
 	if len(warns) != 5 {
 		t.Fatalf("without substitutes: every companion is an undeclared tag: %v", warns)
+	}
+}
+
+// An IO-Link port device raises its identity fault by default: high
+// priority, qualified by its master answering, named for the port. A
+// project with no port devices adds none.
+func TestPortDeviceIdentityFaultIsAnAlarm(t *testing.T) {
+	prof, err := os.ReadFile("../../devprofile/profiles/pepperl-fuchs-ice3.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	iodd, err := os.ReadFile("../../iolink/iodd/testdata/acme-level100-20261118-IODD1.1.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys := fstest.MapFS{
+		"profiles/pepperl-fuchs-ice3.yaml":        {Data: prof},
+		"iodd/acme-level100-20261118-IODD1.1.xml": {Data: iodd},
+	}
+	set, err := devbind.Resolve(fsys, []devbind.Device{{
+		Name: "M", Profile: "pepperl-fuchs-ice3", Endpoint: "h",
+		Ports: map[int]devbind.Port{3: {Name: "LEVEL3", IODD: "acme-level100-20261118-IODD1.1.xml"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Project{devices: set}
+	files := p.deviceAlarmFiles()
+	cfg := &alarm.Config{}
+	defs, err := cfg.Compose(files, []alarm.TagInfo{{Name: "LEVEL3__IdentityFault", TypeName: "BOOL"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("defs %+v, want the one identity fault", defs)
+	}
+	d := defs[0]
+	if d.Tag != "LEVEL3__IdentityFault" || d.Priority != alarm.High || d.Enable != "M__Online" || d.Name != "LEVEL3: wrong or missing device on M port 3" {
+		t.Errorf("def %+v", d)
+	}
+	if got := (&Project{}).deviceAlarmFiles(); got != nil {
+		t.Errorf("a project with no devices has device alarms %+v", got)
+	}
+
+	// And it reaches the project's own composition, beside the manifest's.
+	proj, rt := loadAlarms(t, alarmFS(alarmTags+`  - { name: LEVEL3__IdentityFault, role: state, init: false }
+alarms:
+  defs:
+    - { id: intrusion, tag: RTU9_ZONE15_INT_001_YA, name: Intrusion }
+`, nil))
+	proj.devices = set
+	all, err := proj.AlarmDefs(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, d := range all {
+		ids[d.ID] = true
+	}
+	if !ids["intrusion"] || !ids["LEVEL3__IdentityFault"] || len(all) != 2 {
+		t.Errorf("project alarms %v, want the manifest's and the identity fault", ids)
 	}
 }

@@ -96,6 +96,7 @@ func (s *Set) WrapOPCUA(name string, d *opcua.Driver, policy, mode string) (*OPC
 		if len(dev.ports) > 0 {
 			w.ports = newPorts(dev.ports)
 			w.st.inputs = append(w.st.inputs, w.ports.names()...)
+			w.warnings = append(w.warnings, portWarnings(dev.ports)...)
 		}
 		for _, od := range s.OPCUADevices() {
 			if od.Name != name {

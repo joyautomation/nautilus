@@ -53,6 +53,29 @@ func (p *portDev) structType() devprofile.Struct {
 	return st
 }
 
+// PortInfo is what a project needs to know of a port device beyond its
+// tags: which master and port it is, and what the IODD says it is.
+type PortInfo struct {
+	Name   string // the port device's tag
+	Master string
+	Num    int
+	Device string // the IODD's device name
+}
+
+// Ports are the set's port devices, in row then port order.
+func (s *Set) Ports() []PortInfo {
+	if s == nil {
+		return nil
+	}
+	var out []PortInfo
+	for _, d := range s.devices {
+		for _, p := range d.ports {
+			out = append(out, PortInfo{Name: p.Name, Master: d.Name, Num: p.Num, Device: p.dev.IODD.Identity.DeviceName})
+		}
+	}
+	return out
+}
+
 // IdentityTag and IdentityFaultTag are a port device's companion tags.
 func IdentityTag(port string) string      { return port + "__Identity" }
 func IdentityFaultTag(port string) string { return port + "__IdentityFault" }
@@ -192,6 +215,23 @@ func (d *device) owned(point string) bool {
 		}
 	}
 	return false
+}
+
+// portWarnings are what naut check says of ports whose outputs cannot be
+// kept from a wrong device (iolink.md §6.2): a master with no id points
+// cannot tell one device from another, and one with no pd-out-valid keeps
+// sending its last process data out to whatever is on the port.
+func portWarnings(ports []*portDev) []string {
+	var out []string
+	for _, p := range ports {
+		if p.vendorM == "" {
+			out = append(out, fmt.Sprintf("port device %s (%s port %d) is not identity-checked: its master profile has no vendor-id/device-id points, so a wrong device on the port is not seen", p.Name, p.Master, p.Num))
+		}
+		if p.dev.Out != nil && p.outValidC == "" {
+			out = append(out, fmt.Sprintf("port device %s (%s port %d): its master profile has no pd-out-valid, so a wrong device on the port is sent the master's last process data out; only the identity fault says so", p.Name, p.Master, p.Num))
+		}
+	}
+	return out
 }
 
 // ── reading ─────────────────────────────────────────────────────────────

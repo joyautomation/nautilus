@@ -312,3 +312,57 @@ func TestPortDeviceRefusesAValueThatDoesNotFit(t *testing.T) {
 		t.Errorf("the master's driver was handed %d pushes, want 2", len(drv.got))
 	}
 }
+
+// naut check says which ports cannot be kept from a wrong device: a master
+// with no ids cannot tell, and one with no pd-out-valid keeps sending.
+func TestPortWarnings(t *testing.T) {
+	pf := portWarnings(pfMaster(t, nil).devices[0].ports)
+	if len(pf) != 0 {
+		t.Errorf("the P+F has ids and a valid flag, yet: %v", pf)
+	}
+	d := Device{Name: "M", Profile: "ifm-al1590", Endpoint: "h", Ports: map[int]Port{1: {Name: "LEVEL1", IODD: levelFile}}}
+	s, err := Resolve(portFS(t, d.Profile), []Device{d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := portWarnings(s.devices[0].ports)
+	if len(got) != 1 || !strings.Contains(got[0], "no pd-out-valid") || !strings.Contains(got[0], "LEVEL1") {
+		t.Errorf("the ifm has ids but no valid flag: %v", got)
+	}
+}
+
+// A master profile with no id points is Unchecked: its port is warned
+// about, and its outputs are driven as the program says.
+func TestPortWithoutIDsIsUncheckedAndWarned(t *testing.T) {
+	raw := builtin(t, "ifm-al1590")
+	raw = []byte(strings.NewReplacer(`  vendor-id: "Port{n}_VendorID"`+"\n", "", `  device-id: "Port{n}_DeviceID"`+"\n", "").Replace(string(raw)))
+	fsys := fstest.MapFS{"profiles/ifm-al1590.yaml": {Data: raw}}
+	ioddRaw, err := os.ReadFile("../iolink/iodd/testdata/" + levelFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys["iodd/"+levelFile] = &fstest.MapFile{Data: ioddRaw}
+	s, err := Resolve(fsys, []Device{{Name: "M", Profile: "ifm-al1590", Endpoint: "h", Params: map[string]string{"location": "X"}, Ports: map[int]Port{1: {Name: "LEVEL1", IODD: levelFile}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := portWarnings(s.devices[0].ports)
+	if len(w) != 2 || !strings.Contains(w[0], "not identity-checked") {
+		t.Errorf("warnings %v, want the unchecked port named first", w)
+	}
+	ps := newPorts(s.devices[0].ports)
+	v := nio.Values{"M.Port1_Pdin": "FE0DFFD1"}
+	ps.take(v)
+	if v["LEVEL1__Identity"] != int64(iolink.Unchecked) || v["LEVEL1__IdentityFault"] != false {
+		t.Errorf("identity %v fault %v, want Unchecked and no fault", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	}
+	if _, ok := v["LEVEL1"]; !ok {
+		t.Error("an unchecked port's data was not decoded")
+	}
+	drv := &fakeDriver{}
+	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": false, "LEVEL1_Mode": int64(0), "LEVEL1_Lock": false})
+	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true})
+	if got := drv.got[1]["M_Port1_Pdout"]; got != "8B" {
+		t.Errorf("an unchecked port was sent %v, want 8B (driven as told)", got)
+	}
+}
