@@ -203,13 +203,14 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
   - **The chain is per controller.** `prev` chains each controller's own file in its own write order. It isn't part of the replicated entry, whose identity is `id`. Two files that hold the same entries in a different order both verify.
 
 **When the journal can't be written** (disk full, read-only filesystem), the action and the entry must not part ways silently.
-- Proposed: elevated actions (force, edit, activate, deploy, config, users, override) are **refused** (503, "audit journal unwritable").
-- Operator actions (write, ack, sfc) are **allowed, and an "audit journal unwritable" system alarm is raised**, so a full disk can't stop an operator running the plant. A failed entry leaves nothing in the file (it is cut back), so the server's recording seam keeps it in the ring and records it again, with the same `id`, when the file can be written.
-- This is question 5 (§6).
+- **Decided** (question 5, §6, 2026-11-18): elevated actions (force, edit, activate, deploy, config, users, override, and #707's substitutes) are **refused** (503, "audit journal cannot be written").
+- Operator actions (write, ack, shelve, sfc) are **allowed, and an "audit journal cannot be written" system alarm is raised**, so a full disk can't stop an operator running the plant. A failed entry leaves nothing in the file (it is cut back), so the server's recording seam keeps it in the ring and records it again, with the same `id`, when the file can be written.
+- **Exempt as ways back to normal** (James, 2026-11-18): clearing forces and rolling back an edit are allowed while the journal is down; their response carries `X-Nautilus-Audit-Journal: down`.
+- Built in #894 for today's routes (setting a force, program edit and activate refused; every action classed, unclassed ones refused): the system alarm `nautilus.audit-journal` (when the project has alarms) and an `audit` card on the drivers block. The action that first finds the journal broken has already been applied; elevated actions are refused from the next one.
 
 **Flooding:** an unauthenticated client could force an fsynced entry per refused request. Refusals are coalesced per (source address, action): the first few in a minute are written in full, the rest as one `refused ×n` summary entry. Accepted actions are never coalesced.
 
-**Retention:** `audit.keep` (default 365 days) and `audit.max-size`, for small flash. Pruning the oldest file writes an `audit.prune` entry carrying the pruned file's last hash and `seq`, so `verify` knows where the chain legitimately begins.
+**Retention:** `audit.keep-days` (default 365; a manifest duration would read "8760h") and `audit.max-size`, for small flash (`max-size` is not built yet; #894). Pruning the oldest file writes an `audit.prune` entry carrying the pruned file's last hash and `seq`, so `verify` knows where the chain legitimately begins.
 
 **Tamper evidence.** Proposed always on, since it is cheap; that is question 8 (§6).
 - Each line carries `prev`, the SHA-256 of the previous line's bytes, and `seq`. A rotated file's first line chains to the last line of the file before it.

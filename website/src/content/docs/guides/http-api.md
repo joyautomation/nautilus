@@ -215,6 +215,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/io/staged/{id}/apply`](#live-io-configuration) | Apply it while the scan runs |
 | `GET` | [`/api/io/staged/{id}`](#live-io-configuration) | One candidate's state |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
+| `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 
 Outside `/api/`, `GET /` is the built-in dashboard and `/assets/…` its logo
 and fonts. With `server.hmi` set, your HMI build takes `/` and the
@@ -966,6 +967,101 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 | `500` | An apply failed and putting it back failed too; `config.fault` names what is left |
 | `503` | No live I/O configuration on this server (an embedded Go server) |
 | `401`, `403` | Authorization |
+
+## Audit journal
+
+Every request to a route above that changes something (`POST /api/tags`,
+the force, SFC, alarm, program and live I/O routes) leaves **exactly one** audit
+entry, accepted or refused, and is answered only after the entry is
+recorded. `naut run` writes the entries to a hash-chained journal on disk
+(the manifest's `audit:` section, default `./audit`), which
+`naut audit verify` checks.
+
+Each entry has:
+- `user`: `token` when the request carried the auth token, else `anonymous`.
+- `source`: `X-Nautilus-Client` (`hmi`, `ide`, `cli` or `api`) when the client sends it, else `hmi` for a browser and `api` for anything else.
+- `action` (`tag.write`, `force.set`, `alarm.ack`, `program.edit`, …), `target`, and `before` and `after` values.
+- `result`: `ok`, `refused` (with `detail.reason`) or `error`.
+- `from`: the client's IP address.
+
+An online edit is journalled as program hashes, never the source. A
+request refused for want of the token (or from a cross-origin page) is
+journalled without reading its body: who, from where and which action,
+with no target or values. Otherwise the target is capped at 1 KiB, and
+`before` and `after` at 64 KiB of JSON (4 KiB on a refusal); a larger
+value is journalled as `{"truncated": true, "bytes": …, "sha256": …}`.
+Refusals and errors from one address are coalesced: five a minute in full
+per action, then one entry counting the rest (`detail.coalesced`). A write
+body over 16 MiB is refused with `413`. On a redundant pair, a write is
+journalled by the leader that applies it; one a standby answers itself
+(`503` while it holds the lease with its scans stalled, `502` when the
+leader cannot be reached) is journalled by the standby.
+
+### When the journal cannot be written
+
+Setting a force or changing the program must never happen unrecorded, so
+while the journal cannot be written, or `naut run` could not open it (an
+unwritable `audit.path`, or another `naut run` already using it):
+
+- **Elevated actions are refused** with `503`: setting a force, a program
+  edit or activation, staging, validating or applying a live I/O
+  configuration, and any action not listed below. The refusal is
+  journalled, in memory.
+- **Operator actions are allowed**: tag writes, alarm acknowledgement and
+  shelving, SFC commands.
+- **The ways back to normal are allowed**: clearing a force or all of
+  them, and rolling a program edit back.
+- An allowed action's response carries `X-Nautilus-Audit-Journal: down`,
+  and its entry is kept in memory (up to 10,000; past that the oldest are
+  counted in an `audit.dropped` entry) and written, with its id, once the
+  journal recovers. A journal that could not be opened keeps only the last
+  1000, lost on restart.
+- **It is shown:** an error is logged, an `audit` card with state `error`
+  appears on the drivers block (`GET /api/drivers`, `/api/state`, the live
+  stream), and, when the project has alarms, the system alarm
+  `nautilus.audit-journal` (high priority, not shelvable) is raised. Both
+  clear when the journal recovers; one that could not be opened needs a
+  restart.
+
+The action that first finds the journal broken has already been carried
+out (see the limits below); elevated actions are refused from the next one.
+
+
+Known limits:
+
+- The action takes effect before its entry is written: a crash
+  between the two leaves an applied action without an entry, and a write
+  that fails leaves one entry in memory only until the journal recovers.
+- A write a standby forwarded, which the leader applied before the
+  connection failed, has two entries: `ok` on the leader and a `502` on the
+  standby.
+- `GET /api/audit` is open when no auth token is set, as every read is
+  today. With users and roles (#708) it needs a signed-in principal with
+  the `audit` permission.
+- The program routes `naut logix serve` answers itself (`PUT /api/program`,
+  which edits the Logix project, and `POST /api/logix/deploy`) are not
+  journalled yet, nor are the refusals of the program routes on a Siemens
+  facade.
+
+### `GET /api/audit`
+
+The last 1000 entries, newest first:
+
+```json
+{"entries": [{"id": "01J…", "seq": 42, "ts": "2026-11-18T14:02:11.204Z",
+  "user": "token", "source": "hmi", "action": "tag.write", "target": "SP",
+  "before": 65, "after": 70, "result": "ok", "from": "192.0.2.22",
+  "prev": "sha256:…"}], "truncated": false}
+```
+
+Query parameters filter it: `from` and `to` (epoch ms or RFC 3339),
+`user`, `action`, `target` and `result` (exact, ignoring case), and
+`limit` (default 100). `truncated` is true when more entries matched.
+
+| Status | When |
+| --- | --- |
+| `401` | An auth token is set and the request does not carry it: the entries say who did what from where. With no token set it is open, like every read, until users and roles (#708) |
+| `400` | A bad `from`, `to` or `limit` |
 
 ## Historian proxy
 

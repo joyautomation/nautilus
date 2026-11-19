@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,8 +46,9 @@ const (
 // stalled fsync stalls every writer behind it; coalescing and the failure
 // policy belong to the caller (the server's recording seam).
 type FileJournal struct {
-	dir  string
-	opts FileOptions
+	unlock func() // releases the directory's lock (OpenFile)
+	dir    string
+	opts   FileOptions
 	// write and sync make an entry durable; a test replaces them to fail.
 	write func(*os.File, []byte) (int, error)
 	sync  func(*os.File) error
@@ -69,7 +69,31 @@ type FileJournal struct {
 // as an audit.tail_dropped entry with the bytes' length and hash; a
 // complete line is never removed, whatever it holds, so Verify can report
 // it.
+//
+// The directory is locked for as long as the journal is open (on Linux,
+// the BSDs and macOS), so a second process that opens it, such as a second
+// `naut run` in the same working directory, is refused rather than
+// interleaving its own chain with this one's.
 func OpenFile(dir string, opts FileOptions) (*FileJournal, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	j, err := openFile(dir, opts)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	j.mu.Lock()
+	j.unlock = unlock
+	j.mu.Unlock()
+	return j, nil
+}
+
+func openFile(dir string, opts FileOptions) (*FileJournal, error) {
 	if opts.MaxSize <= 0 {
 		opts.MaxSize = defaultMaxSize
 	}
@@ -78,9 +102,6 @@ func OpenFile(dir string, opts FileOptions) (*FileJournal, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
 	}
 	j := &FileJournal{dir: dir, opts: opts, write: (*os.File).Write, sync: (*os.File).Sync}
 	files, err := listFiles(dir)
@@ -175,10 +196,6 @@ func (j *FileJournal) Record(e Entry) (Entry, error) {
 	}
 	e.Seq = j.seq + 1
 	e.Prev = j.head
-	e.Before, e.After = jsonSafe(e.Before), jsonSafe(e.After)
-	if e.Detail != nil {
-		e.Detail = jsonSafe(e.Detail).(map[string]any)
-	}
 	line, err := json.Marshal(e)
 	if err != nil {
 		return e, err
@@ -209,43 +226,6 @@ func (j *FileJournal) undo() error {
 		return err
 	}
 	return j.sync(j.f)
-}
-
-// jsonSafe returns v with every NaN and ±Inf float, at any depth in maps
-// and slices, as the strings "NaN", "+Inf" and "-Inf", so a REAL that holds
-// one can still be journalled. Everything else is returned as is.
-func jsonSafe(v any) any {
-	switch x := v.(type) {
-	case float64:
-		return safeFloat(x, v)
-	case float32:
-		return safeFloat(float64(x), v)
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, e := range x {
-			out[k] = jsonSafe(e)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = jsonSafe(e)
-		}
-		return out
-	}
-	return v
-}
-
-func safeFloat(f float64, v any) any {
-	switch {
-	case math.IsNaN(f):
-		return "NaN"
-	case math.IsInf(f, 1):
-		return "+Inf"
-	case math.IsInf(f, -1):
-		return "-Inf"
-	}
-	return v
 }
 
 // rotate opens a new file when the day has moved on, the current file is
@@ -322,11 +302,15 @@ func (j *FileJournal) Head() (string, uint64) {
 func (j *FileJournal) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.f == nil {
-		return nil
+	var err error
+	if j.f != nil {
+		err = j.f.Close()
+		j.f = nil
 	}
-	err := j.f.Close()
-	j.f = nil
+	if j.unlock != nil {
+		j.unlock()
+		j.unlock = nil
+	}
 	return err
 }
 
@@ -382,12 +366,19 @@ func listFiles(dir string) ([]string, error) {
 	var out []string
 	for _, e := range ents {
 		n := e.Name()
-		if !e.IsDir() && strings.HasPrefix(n, filePrefix) && strings.HasSuffix(n, fileSuffix) && dayOf(n) != "" {
+		if !e.IsDir() && IsJournalFile(n) {
 			out = append(out, n)
 		}
 	}
 	sort.Slice(out, func(a, b int) bool { return fileKey(out[a]) < fileKey(out[b]) })
 	return out, nil
+}
+
+// IsJournalFile reports whether name (a base name) is one of the
+// journal's files, audit-YYYYMMDD[-N].jsonl: what `naut build` leaves out
+// of a built binary, wherever in the project it sits.
+func IsJournalFile(name string) bool {
+	return strings.HasPrefix(name, filePrefix) && strings.HasSuffix(name, fileSuffix) && dayOf(name) != ""
 }
 
 // dayOf is a file name's YYYYMMDD, or "" when it is not a journal file.

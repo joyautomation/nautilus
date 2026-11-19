@@ -23,6 +23,9 @@
 //	GET  /api/sfc      running SFC charts; POST /api/sfc/step and
 //	                   /api/sfc/transition jump or fire once (force.go)
 //	GET  /api/cluster  this replica's redundancy status (leader.Status JSON)
+//	GET  /api/audit    the audit journal's recent entries (server/audit.go):
+//	                   every write route above records one per request,
+//	                   accepted or refused, before it is answered
 //	GET  /assets/…     the dashboard's logo, favicon and brand fonts
 //
 // The Frame shape is deliberately generic (every tag, plus the scan loop's
@@ -77,6 +80,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
@@ -248,6 +252,21 @@ type Options struct {
 	// with it. NAUTILUS_ALLOWED_HOSTS adds to it in every embedder (New
 	// reads it).
 	AllowedHosts []string
+
+	// Audit is the runtime audit journal (#709): every write route records
+	// one entry per request to it, accepted or refused, before the client
+	// is answered (server/audit.go). naut run gives it the file journal
+	// (audit.OpenFile). Nil keeps entries in memory only. Either way the
+	// last 1000 are kept in a ring that GET /api/audit serves.
+	Audit audit.Recorder
+
+	// AuditUnavailable is why the journal the project configures could not
+	// be opened (naut run sets it when audit.OpenFile fails, with Audit
+	// nil). The server then runs with the entries in memory only, and says
+	// so on the drivers block (/api/drivers, /api/state, the live frames)
+	// until it restarts; elevated actions (forces, program changes) are
+	// refused meanwhile (#709, design §6 question 5).
+	AuditUnavailable error
 
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
 	// /api/program/rollback) — PLC-style online edits of the running ST
@@ -457,6 +476,7 @@ type Server struct {
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
 	tagWriter   func(name string, value any) error
+	audit       *auditor
 
 	resync time.Duration
 	diag   time.Duration
@@ -544,6 +564,15 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.shelveTimes = opts[0].AlarmShelveTimes
 		s.tagWriter = opts[0].TagWriter
 	}
+	var rec audit.Recorder
+	var unavailable error
+	if len(opts) > 0 {
+		rec, unavailable = opts[0].Audit, opts[0].AuditUnavailable
+	}
+	s.audit = newAuditor(rec)
+	if unavailable != nil {
+		s.audit.unavailable = unavailable.Error()
+	}
 	if len(s.shelveTimes) == 0 {
 		s.shelveTimes = alarm.DefaultShelveTimes
 	}
@@ -555,6 +584,17 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 func (s *Server) Run(ctx context.Context) {
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
+	// The audit journal's upkeep (entries kept while it could not be
+	// written, the summaries of closed refusal windows) runs beside the
+	// broadcast loop, not in it: a journal catching up fsyncs its backlog,
+	// and the live frames must not wait on the disk. Run returns once it
+	// has flushed.
+	upkept := make(chan struct{})
+	go func() {
+		defer close(upkept)
+		s.audit.upkeep(ctx)
+	}()
+	defer func() { <-upkept }()
 	for {
 		select {
 		case <-ctx.Done():
@@ -608,10 +648,16 @@ func (s *Server) frame(pats []string) Frame {
 // see DriverStatus.AsOfMs, and hashDrivers for why the stamp is excluded
 // from the block's change comparison.
 func (s *Server) driverStatus(now time.Time) []DriverStatus {
-	if s.drivers == nil {
+	var ds []DriverStatus
+	if s.drivers != nil {
+		ds = s.drivers()
+	}
+	if j := s.audit.status(); j != nil {
+		ds = append(ds, *j)
+	}
+	if ds == nil {
 		return nil
 	}
-	ds := s.drivers()
 	ms := now.UnixMilli()
 	for i := range ds {
 		if ds[i].AsOfMs == 0 {
@@ -632,29 +678,30 @@ func (s *Server) Handler() http.Handler {
 	// no alarm engine" a message rather than a bare route-not-found.
 	mux.HandleFunc("GET /api/alarms", s.handleAlarms)
 	mux.HandleFunc("GET /api/alarms/journal", s.handleAlarmJournal)
-	mux.HandleFunc("POST /api/alarms/ack", s.handleAlarmAck)
-	mux.HandleFunc("POST /api/alarms/shelve", s.handleAlarmShelve)
-	mux.HandleFunc("POST /api/alarms/unshelve", s.handleAlarmUnshelve)
+	mux.Handle("POST /api/alarms/ack", s.audited("alarm.ack", ackTarget, s.handleAlarmAck))
+	mux.Handle("POST /api/alarms/shelve", s.audited("alarm.shelve", shelveTarget, s.handleAlarmShelve))
+	mux.Handle("POST /api/alarms/unshelve", s.audited("alarm.unshelve", unshelveTarget, s.handleAlarmUnshelve))
 	mux.HandleFunc("GET /api/stream", s.handleStream)
-	mux.HandleFunc("POST /api/tags", s.handleWriteTag)
+	mux.Handle("POST /api/tags", s.audited("tag.write", s.tagTarget, s.handleWriteTag))
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
-	mux.HandleFunc("PUT /api/program", s.handlePutProgram)
-	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
+	mux.Handle("PUT /api/program", s.audited("program.edit", s.programTarget, s.handlePutProgram))
+	mux.Handle("POST /api/program/rollback", s.audited("program.rollback", s.rollbackTarget, s.handleRollback))
 	mux.HandleFunc("GET /api/program/history", s.handleProgramHistory)
-	mux.HandleFunc("POST /api/program/activate", s.handleActivate)
+	mux.Handle("POST /api/program/activate", s.audited("program.activate", s.activateTarget, s.handleActivate))
 	mux.HandleFunc("GET /api/io", s.handleIO)
-	mux.HandleFunc("POST /api/io/staged", s.handleIOStage)
+	mux.Handle("POST /api/io/staged", s.audited("config.stage", ioStageTarget, s.handleIOStage))
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
-	mux.HandleFunc("POST /api/io/staged/{id}/validate", s.handleIOValidate)
-	mux.HandleFunc("POST /api/io/staged/{id}/apply", s.handleIOApply)
+	mux.Handle("POST /api/io/staged/{id}/validate", s.audited("config.validate", ioStagedTarget, s.handleIOValidate))
+	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioStagedTarget, s.handleIOApply))
 	mux.HandleFunc("GET /api/forces", s.handleForces)
-	mux.HandleFunc("POST /api/forces", s.handleForce)
-	mux.HandleFunc("POST /api/forces/clear", s.handleUnforceAll)
-	mux.HandleFunc("DELETE /api/forces/{name}", s.handleUnforce)
+	mux.Handle("POST /api/forces", s.audited("force.set", s.forceTarget, s.handleForce))
+	mux.Handle("POST /api/forces/clear", s.audited("force.clear-all", s.unforceAllTarget, s.handleUnforceAll))
+	mux.Handle("DELETE /api/forces/{name}", s.audited("force.clear", s.unforceTarget, s.handleUnforce))
 	mux.HandleFunc("GET /api/sfc", s.handleSFC)
-	mux.HandleFunc("POST /api/sfc/step", s.handleSFCStep)
-	mux.HandleFunc("POST /api/sfc/transition", s.handleSFCTransition)
+	mux.Handle("POST /api/sfc/step", s.audited("sfc.step", sfcTarget(true), s.handleSFCStep))
+	mux.Handle("POST /api/sfc/transition", s.audited("sfc.transition", sfcTarget(false), s.handleSFCTransition))
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
+	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -669,7 +716,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /assets/", handleAsset)
 		mux.HandleFunc("GET /", s.handleIndex)
 	}
-	return s.GuardHost(s.withCORS(s.proxyStandby(apiNotFound(mux))))
+	return s.GuardHost(s.withCORS(s.proxyStandby(mux, apiNotFound(mux))))
 }
 
 // apiNotFound makes every /api/ path no API route matches a JSON 404,
@@ -709,7 +756,11 @@ func apiNotFound(mux *http.ServeMux) http.Handler {
 // /api/history*: the archive lives in the historian, not the tag store,
 // so a standby answers it as well as the leader and keeps answering it
 // mid-failover.
-func (s *Server) proxyStandby(mux http.Handler) http.Handler {
+//
+// A write the standby answers itself (the closed-gate 503, a body it
+// cannot read, a leader that failed or never answered: 502) is journalled
+// through the route's audit seam, as the leader journals one it serves.
+func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cluster == nil {
 			mux.ServeHTTP(w, r)
@@ -740,8 +791,10 @@ func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 				mux.ServeHTTP(w, r)
 				return
 			}
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "this replica holds the lease but its write gate is closed (its scans are not completing); try again shortly",
+			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error": "this replica holds the lease but its write gate is closed (its scans are not completing); try again shortly",
+				})
 			})
 			return
 		}
@@ -752,17 +805,19 @@ func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 		if r.Body != nil && r.Body != http.NoBody {
 			b, err := io.ReadAll(io.LimitReader(r.Body, maxReplayBody+1))
 			if err != nil {
-				http.Error(w, "reading request: "+err.Error(), http.StatusBadRequest)
+				auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "reading request: "+err.Error(), http.StatusBadRequest)
+				})
 				return
 			}
 			if len(b) > maxReplayBody {
 				r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(b), r.Body))
-				s.forwardTo(w, r, st.LeaderAddr, mux, nil, false)
+				s.forwardTo(w, r, st.LeaderAddr, routes, mux, nil, false)
 				return
 			}
 			body = b
 		}
-		s.forwardTo(w, r, st.LeaderAddr, mux, body, true)
+		s.forwardTo(w, r, st.LeaderAddr, routes, mux, body, true)
 	})
 }
 
@@ -791,7 +846,7 @@ var failoverWait = 10 * time.Second
 // if this replica is the new leader. Any other failure (the leader took
 // the request and then failed) is a 502, as before; replaying that one
 // could repeat a write.
-func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, mux http.Handler, body []byte, replay bool) {
+func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, routes *http.ServeMux, mux http.Handler, body []byte, replay bool) {
 	if body != nil {
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.ContentLength = int64(len(body))
@@ -812,11 +867,13 @@ func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, 
 					mux.ServeHTTP(w, r)
 					return
 				}
-				s.forwardTo(w, r, next, mux, body, false)
+				s.forwardTo(w, r, next, routes, mux, body, false)
 				return
 			}
 		}
-		http.Error(w, "leader unavailable: "+err.Error(), http.StatusBadGateway)
+		auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "leader unavailable: "+err.Error(), http.StatusBadGateway)
+		})
 	}
 	proxy.ServeHTTP(w, r)
 }
@@ -873,6 +930,8 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "" && tokenMatches(r, s.authToken)) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			// A page may read whether its action was journalled to disk.
+			w.Header().Set("Access-Control-Expose-Headers", auditJournalHeader)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -889,7 +948,7 @@ func (s *Server) answerPreflight(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		// The auth headers, so an authorized cross-origin writer's
 		// preflight succeeds; Content-Type for JSON bodies.
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token, X-Nautilus-Client")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

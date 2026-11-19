@@ -25,6 +25,12 @@ tools/vscode-iec/.vscode-test/
 # .gitignore has it).
 /examples/**/pki/
 
+# The audit journal `naut run` keeps (audit.path, default ./audit in the
+# working directory): one machine's record of who changed what. Matched by
+# file name, since audit/ here is also the package.
+audit-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*.jsonl
+.audit.lock
+
 # Locally built binaries
 /nautilus
 /naut

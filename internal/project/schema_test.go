@@ -698,3 +698,15 @@ alarms:
 		}
 	}
 }
+
+// The audit: section's keys are the loader's.
+func TestSchemaAuditKeys(t *testing.T) {
+	s := loadSchema(t)
+	var node schemaNode
+	if err := json.Unmarshal(s.Properties["audit"], &node); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := goKeys(AuditConfig{}), schemaKeys(node.Properties); !reflect.DeepEqual(got, want) {
+		t.Errorf("audit: the loader accepts %v, the schema declares %v", got, want)
+	}
+}

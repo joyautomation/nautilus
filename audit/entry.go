@@ -82,8 +82,14 @@ type Recorder interface {
 	Record(Entry) (Entry, error)
 }
 
-// fill sets an entry's ID and TS when the caller left them empty.
+// fill sets an entry's ID and TS when the caller left them empty, and
+// makes its values JSON-safe (jsonSafe), so every recorder, the ring
+// included, holds an entry that encodes.
 func fill(e Entry, now time.Time) Entry {
+	e.Before, e.After = jsonSafe(e.Before), jsonSafe(e.After)
+	if e.Detail != nil {
+		e.Detail = jsonSafe(e.Detail).(map[string]any)
+	}
 	if e.TS.IsZero() {
 		e.TS = now
 	}

@@ -412,17 +412,27 @@ func (a *Alarms) Close() error {
 	return errors.Join(errs...)
 }
 
+// SystemAlarm is an alarm nautilus raises itself, beside the manifest's:
+// Def describes it, and Active, read on every evaluation in place of a
+// tag, says whether it is in alarm. Def.Tag names the condition and is
+// never a tag in the store.
+type SystemAlarm struct {
+	Def    alarm.Def
+	Active func() bool
+}
+
 // NewAlarms builds the manifest's alarm engine over a compiled runtime,
 // opens the configured journal sink and notifiers, and registers
 // evaluation on the runtime's post-scan hook. It returns (nil, nil) when
 // the manifest declares no alarms — a project without them behaves
-// exactly as it did before this existed.
+// exactly as it did before this existed. sys are added to the
+// manifest's alarms, when it declares any.
 //
 // This is `naut run`'s call. It opens files and databases, so
 // check/build/LSP use AlarmDefs instead, and the acceptance harness uses
 // AlarmEngine.
-func (p *Project) NewAlarms(rt *runtime.Runtime) (*Alarms, error) {
-	return p.alarms(rt, true, nil)
+func (p *Project) NewAlarms(rt *runtime.Runtime, sys ...SystemAlarm) (*Alarms, error) {
+	return p.alarms(rt, true, nil, sys...)
 }
 
 // AlarmEngine is NewAlarms with nothing durable behind it: the in-memory
@@ -437,13 +447,28 @@ func (p *Project) AlarmEngine(rt *runtime.Runtime) (*alarm.Engine, error) {
 	return a.Engine, nil
 }
 
-func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger) (*Alarms, error) {
+func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sys ...SystemAlarm) (*Alarms, error) {
 	if p.Alarms == nil {
 		return nil, nil
 	}
 	defs, err := p.AlarmDefs(rt)
 	if err != nil {
 		return nil, err
+	}
+	tags := rt.Tags()
+	read := tags.ReadPath
+	if len(sys) > 0 {
+		conds := make(map[string]func() bool, len(sys))
+		for _, a := range sys {
+			defs = append(defs, a.Def)
+			conds[a.Def.Tag] = a.Active
+		}
+		read = func(path string) (any, bool) {
+			if f, ok := conds[path]; ok {
+				return f(), true
+			}
+			return tags.ReadPath(path)
+		}
 	}
 	out := &Alarms{Defs: defs, ShelveTimes: p.Alarms.ShelveDurations()}
 
@@ -466,10 +491,9 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger) (*
 		}
 	}
 
-	tags := rt.Tags()
 	eng, err := alarm.New(alarm.Options{
 		Defs: defs,
-		Read: tags.ReadPath,
+		Read: read,
 		// The runtime's clock, not time.Now: NowMs follows an injected
 		// VirtualClock, so an acceptance test's `advance: 5m` walks an
 		// on-delay exactly rather than never.

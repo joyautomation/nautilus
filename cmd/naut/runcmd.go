@@ -29,10 +29,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -251,7 +254,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		gate.SetHealth(watch.wrap(rt.Liveness))
 	}
 
-	alarms, err := startAlarms(proj, rt)
+	// The audit journal's system alarm reads the server, which is built
+	// after the alarms (it serves them): srvRef is set once it exists.
+	var srvRef atomic.Pointer[server.Server]
+	alarms, err := startAlarms(proj, rt, auditAlarm(&srvRef))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
 		return 1
@@ -385,7 +391,27 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if proj.Server.HMI != nil {
 		sopts.HMI = proj.Server.HMI
 	}
+	// The audit journal (#709): every write through the tag API, accepted
+	// or refused, fsynced before it is answered. If it cannot be opened the
+	// controller still runs: setting forces and program edits are refused,
+	// operator actions are journalled in memory only, and the drivers block
+	// and the system alarm say so (#709, design §6 question 5).
+	j, err := openAudit(proj, os.Stderr)
+	sopts.AuditUnavailable = err
+	if j != nil {
+		sopts.Audit = j
+		go pruneAudit(ctx, j, os.Stderr)
+	}
 	srv := server.New(rt, sopts)
+	srvRef.Store(srv)
+	if j != nil {
+		// What the seam still owes (open refusal windows, entries kept
+		// through a failure) is written before the journal closes.
+		defer func() {
+			srv.FlushAudit()
+			j.Close()
+		}()
+	}
 	go srv.Run(ctx)
 
 	if apiUp {
@@ -516,14 +542,36 @@ func bindAPI(addr, dir string, redundant bool) (net.Listener, string, error) {
 // TimeoutStopSec=10, Kubernetes' 30 s grace period, systemd's default 90 s.
 const runStopTimeout = 5 * time.Second
 
+// AuditAlarmID is the system alarm raised while the audit journal could
+// not be opened or cannot be written (#709, design §6 question 5).
+const AuditAlarmID = "nautilus.audit-journal"
+
+// auditAlarm is the audit journal's system alarm, read from the server
+// srv will hold. Unshelvable and acknowledged: while it is up, forces and
+// program changes are refused and actions are journalled in memory only.
+func auditAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: AuditAlarmID, Tag: "__nautilus.audit-journal-down",
+			Name:     "Audit journal cannot be written: setting forces and program edits are refused",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: func() bool {
+			s := srv.Load()
+			return s != nil && s.AuditJournalDown()
+		},
+	}
+}
+
 // startAlarms builds the project's alarm engine over rt, before the scan
 // loop starts: the engine registers itself on the runtime's post-scan
 // hook, and SetAlarms hands it to the retain saver, so the first takeover
 // restores the acknowledgements the last leader saved rather than
 // re-annunciating them. Nil when the project has no alarms. Split out of
 // runProject, which blocks on Ctrl+C, so the wiring has a test.
-func startAlarms(proj *project.Project, rt *runtime.Runtime) (*project.Alarms, error) {
-	alarms, err := proj.NewAlarms(rt)
+func startAlarms(proj *project.Project, rt *runtime.Runtime, sys ...project.SystemAlarm) (*project.Alarms, error) {
+	alarms, err := proj.NewAlarms(rt, sys...)
 	if err != nil || alarms == nil {
 		return nil, err
 	}
@@ -897,6 +945,37 @@ func embeddedManifest(fsys fs.FS) string {
 	return strings.TrimSpace(string(raw))
 }
 
+// openAudit opens the audit journal the manifest's audit: section places
+// (default ./audit). A failure is reported, not fatal: a read-only working
+// directory must not stop a controller, and the server keeps the entries
+// in memory instead.
+func openAudit(proj *project.Project, stderr io.Writer) (*audit.FileJournal, error) {
+	dir, keep := proj.AuditJournal()
+	j, err := audit.OpenFile(dir, audit.FileOptions{Keep: keep})
+	if err != nil {
+		fmt.Fprintf(stderr, "audit: ERROR: %v: actions are allowed but journalled in memory only, lost on restart (set audit.path in nautilus.yaml to a writable directory)\n", err)
+		return nil, err
+	}
+	return j, nil
+}
+
+// pruneAudit removes journal files older than audit.keep-days, at start
+// and then daily.
+func pruneAudit(ctx context.Context, j *audit.FileJournal, stderr io.Writer) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		if _, err := j.Prune(); err != nil {
+			fmt.Fprintf(stderr, "audit: prune: %v\n", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // embedSkipDirs names project subdirectories that never ship, however large
 // they are on disk: dependency trees a package manager can regenerate, not
 // project sources. This matters more once an hmi/ directory can sit inside
@@ -994,6 +1073,11 @@ func emitBinary(self, dir, out, manifest string, history []byte, hmi map[string]
 		// A vendored profile ships (the project loads its devices from it);
 		// the simulator beside it is a test fixture and does not.
 		if strings.HasPrefix(rel, devprofile.ProjectDir+"/") && path.Ext(rel) != ".yaml" {
+			return nil
+		}
+		// The audit journal `naut run` keeps (./audit by default) is this
+		// machine's record, never part of the program.
+		if audit.IsJournalFile(d.Name()) || d.Name() == audit.LockName {
 			return nil
 		}
 		raw, err := os.ReadFile(p)
