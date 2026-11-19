@@ -176,7 +176,11 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 		PeerAddr: r.Peers[peer], WitnessAddr: r.Witness, Lease: r.LeaseTime(),
 		StatePath: filepath.Join(stateDir, pairStateFile), Token: token,
 		ClientToken: getenv("NAUTILUS_TOKEN"),
-		SelfAPI:     apiOn(r.Peers[self], apiAddr), PeerAPI: apiOn(r.Peers[peer], apiAddr),
+		// Compared at the hello: the section both must agree on, and what
+		// this build does that the peer must too (#1013).
+		Config:  node.ConfigHash(r.Peers["a"], r.Peers["b"], r.Witness),
+		Caps:    []string{node.KeepsLiveIO},
+		SelfAPI: apiOn(r.Peers[self], apiAddr), PeerAPI: apiOn(r.Peers[peer], apiAddr),
 	}
 	return o, net.JoinHostPort("", peerPort), nil
 }
@@ -239,6 +243,20 @@ func apiOn(peerAddr, apiAddr string) string {
 		return ""
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// peersKeepIO is the live I/O apply's mixed-version guard (#1013): ""
+// once the peer has said at the hello that its build keeps a live I/O
+// apply across a takeover, else why the apply must wait.
+func (m *pairMember) peersKeepIO() string {
+	caps, known := m.q.Node().PeerCaps()
+	switch {
+	case !known:
+		return "the peer controller has not answered yet, so whether its build keeps a live I/O apply across a takeover is unknown (#1013): try again once it answers"
+	case !slices.Contains(caps, node.KeepsLiveIO):
+		return "the peer controller runs a build that does not keep a live I/O apply across a takeover (#1013): it would come up on the manifest's addresses and its next save would drop the apply. Finish the upgrade on both controllers, then apply"
+	}
+	return ""
 }
 
 // untrustedAPIs are the tag API addresses the pair advertises (/api/cluster,

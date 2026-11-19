@@ -161,6 +161,11 @@ func (io *IOConfig) keptProblems(c *IOCandidate) []string {
 	case io.p.Redundancy != nil && io.KeepStore == "file":
 		out = append(out, "this redundant project's retain store is a file, which only this replica reads: a standby would come up on the old addresses; deploy the change instead")
 	}
+	if io.p.Redundancy != nil && io.PeersKeepIO != nil {
+		if why := io.PeersKeepIO(); why != "" {
+			out = append(out, why)
+		}
+	}
 	n := 0
 	for p, b := range c.files {
 		n += len(p) + len(b)

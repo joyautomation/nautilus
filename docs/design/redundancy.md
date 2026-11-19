@@ -115,8 +115,20 @@ redundancy:
 - **The tag API addresses** that `/api/cluster` and the standby's proxy use are each
   controller's `peers:` host with this controller's API port: both run one manifest.
 - **Misconfiguration is refused at start, never resolved quietly.** A peer list that differs
-  between A and B is refused (the peer handshake, #710 PR 3b-2). So are two processes that
-  both claim to be `a`, in two layers (#1028 review):
+  between A and B is refused at the peer handshake (#710 PR 3b-2b). Each hello carries a hash of
+  the pair's members (peers and witness) both ways.
+  - **On a mismatch** both controllers raise `redundancy.config-differs`.
+  - **The hold.** While the peer keeps saying so (heard within three hello intervals), a
+    controller that does not lead does not campaign. A leader keeps renewing, so an edited
+    manifest rolled to one box doesn't stop a running plant, and no second leader rises on
+    another view of the members.
+  - **The cost.** If the leader's lease lapses while the mismatched peer is up, nobody leads
+    until the manifests match. A peer that goes quiet holds nothing.
+  - **The lease is not hashed.** The voters already refuse a longer lease (`lease-mismatch`).
+  - **Timing.** The hello runs at start and every 16 leases (at least 5 s).
+
+  Two processes that both claim to be `a` are refused in two layers (#1028 review), and the
+  hello adds a third:
   - **The state file names its owner.** `quorum.state` records the member and the cluster ID
     that wrote it, and a controller refuses to start over a file another member or another
     pair wrote. That catches an env file copied to the wrong box with its own state kept.
@@ -125,6 +137,10 @@ redundancy:
     `a` under any other until that promise has run out, and raises
     `redundancy.duplicate-member`. A real restart of `a` waits out its restart wait first, by
     when the promise is over, so it costs a restart nothing.
+  - **The hello's boot nonce.** Each hello carries the sender's boot nonce. A peer name seen
+    under a nonce it had given up for a newer one (N1, N2, N1) is two processes, and raises
+    `redundancy.duplicate-member`. It needs both processes to reach the controller that
+    checks, so it detects; it doesn't refuse.
   - **The known gap (#1029, blocks lifting `experimental`).** The rule acts only at a voter
     that holds a running promise to the original. A clone brings its own copy of the
     original's voter, so it needs just one more grant. When the original is partitioned from
@@ -664,6 +680,14 @@ Takeover time is published as a formula and measured, never promised as a single
 the replicas that stored it before answering, under the log's sequencing lock, so a holder that
 stalls delays every write by up to the log's call timeout (`lease/2`). It is not in the takeover
 path, and no fix is needed now (#1030 review).
+
+**A named exception: the live I/O re-apply** (#706, #1010, #1013). When the old leader made a
+live I/O apply in its last ~2 s, or at a standalone start, the new leader's first scan waits
+for the kept I/O configuration to be re-applied: up to `DefaultTakeoverIOWait` (10 s) plus
+`ioGrace` (2 s), so 12 s at worst. A standby that followed the store re-applies nothing, so the
+wait is about 0 otherwise. A pair refuses live I/O applies until the state stream (its retain is
+a file), and also while the peer's build doesn't keep them (the hello's `keeps-live-io`,
+#1013). The term matters once step 4 lets a pair keep them.
 
 **An I/O-health handover** (§3.2) waits for its hold-off (3 × lease) first, then hands over by
 `Release`, so `L_rem` is 0.

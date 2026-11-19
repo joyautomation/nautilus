@@ -40,6 +40,13 @@ func (t ClientToken) String() string {
 type helloAnswer struct {
 	Node string `json:"node"`
 	MAC  string `json:"mac"`
+	// The answerer's part of the peer info (peerinfo.go), bound by
+	// InfoMAC. A build before #710 PR 3b-2b sends none: its caps read as
+	// none.
+	Config  string   `json:"config,omitempty"`
+	Nonce   string   `json:"nonce,omitempty"`
+	Caps    []string `json:"caps,omitempty"`
+	InfoMAC string   `json:"infoMac,omitempty"`
 }
 
 // tokenMAC is the client-token proof the answerer sends the asker: an

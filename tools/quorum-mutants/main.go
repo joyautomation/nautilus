@@ -139,6 +139,10 @@ var table = []mutation{
 	// TestPairCopiedEnvWithKeptStateRefused catch them end to end too.
 	{"duplicate_member_granted", []string{"TestVoterRefusesANameUnderAnotherBootNonce"}},
 	{"state_owner_unchecked", []string{"TestStateFileBoundToItsOwner"}},
+	// #710 PR 3b-2b: the hello's peer info (F30). cmd/naut's
+	// TestPairConfigDiffersHoldsCampaigns catches the first end to end.
+	{"config_differs_campaigns", []string{"TestHelloPeerInfo"}},
+	{"hello_duplicate_unseen", []string{"TestHelloPeerInfo"}},
 }
 
 // event is one line of `go test -json`.

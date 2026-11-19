@@ -336,6 +336,18 @@ still happens on time. (Making the witness the log's third copy, so one
 controller down is not enough to stop these writes, is under
 discussion.)
 
+Alarm acknowledgements and shelves do **not** go through that log yet:
+an acknowledgement or a shelve made on the old leader may be lost at a
+failover, and the alarm comes back unacknowledged on the new one. This
+is being built next.
+
+Both controllers must run the same `redundancy:` section. If they don't
+(an edited manifest deployed to one box only), both report it, and the
+one that isn't leading won't take over until they match again; a
+leader keeps leading. A live I/O apply is refused while the other
+controller runs an older build that can't keep it: finish the upgrade on
+both, then apply.
+
 Each controller's tag API must be reachable by the other (a standby
 forwards writes to the leader). The manifest's default address is
 `localhost:8080`, so set `server.addr` (for example `:8080`) or

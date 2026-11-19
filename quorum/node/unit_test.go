@@ -432,3 +432,97 @@ func TestStateFileBoundToItsOwner(t *testing.T) {
 		t.Fatalf("the witness took another pair's state file: %v", err)
 	}
 }
+
+// The hello's peer info (#710 PR 3b-2b, test plan F30). A peer naming
+// another configuration of the pair holds this controller's campaigns
+// (a leader would keep renewing) and raises config-differs; once it
+// matches again the hold lifts. A peer name answering under a boot nonce
+// it had given up for a newer one is two processes; a restart (a new
+// nonce that stays) is not.
+func TestHelloPeerInfo(t *testing.T) {
+	o := testOptions(t, "a", "b")
+	clk := newFakeClock()
+	o.clock = clk.now
+	o.Config = ConfigHash("ctl-a:9450", "ctl-b:9450", "wit:9460")
+	var events []Event
+	var mu sync.Mutex
+	o.OnEvent = func(ev Event) { mu.Lock(); events = append(events, ev); mu.Unlock() }
+	e, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	now := clk.now()
+	if !e.mayCampaign(now) {
+		t.Fatal("held before any hello")
+	}
+	e.heard(peerInfo{Config: ConfigHash("ctl-a:9450", "ctl-b:9450", "other-wit:9460"), Nonce: 1, Caps: []string{KeepsLiveIO}})
+	if !e.Status().ConfigDiffers || e.mayCampaign(now) {
+		t.Fatal("a peer with another witness did not hold this controller's campaigns")
+	}
+	if caps, known := e.PeerCaps(); !known || len(caps) != 1 || caps[0] != KeepsLiveIO {
+		t.Fatalf("peer caps %v %v", caps, known)
+	}
+	// A peer that stops saying so (down, or its link) holds nothing once
+	// three hellos have gone unheard: a lease that lapsed meanwhile can be
+	// won again.
+	e.mu.Lock()
+	e.cfgDiffAt = time.Now().Add(-e.cfgStale())
+	e.mu.Unlock()
+	if !e.mayCampaign(now) {
+		t.Fatal("a mismatch the peer stopped reporting still holds this controller's campaigns")
+	}
+	e.heard(peerInfo{Config: ConfigHash("ctl-a:9450", "ctl-b:9450", "other-wit:9460"), Nonce: 1, Caps: []string{KeepsLiveIO}})
+	if e.mayCampaign(now) {
+		t.Fatal("a fresh report of the mismatch did not hold campaigns again")
+	}
+	e.heard(peerInfo{Config: o.Config, Nonce: 1})
+	if e.Status().ConfigDiffers || !e.mayCampaign(now) {
+		t.Fatal("the hold did not lift once the configuration matched")
+	}
+	if caps, _ := e.PeerCaps(); len(caps) != 0 {
+		t.Fatalf("a hello with no caps left %v", caps)
+	}
+	// Nonces: 1 (above), then a restart to 2, then 2 again: no duplicate.
+	e.heard(peerInfo{Config: o.Config, Nonce: 2})
+	e.heard(peerInfo{Config: o.Config, Nonce: 2})
+	if n := e.Status().HelloDuplicates; n != 0 {
+		t.Fatalf("a restart counted as %d duplicates", n)
+	}
+	e.heard(peerInfo{Config: o.Config, Nonce: 1}) // the old one answers again
+	if n := e.Status().HelloDuplicates; n != 1 {
+		t.Fatalf("nonces 1, 2, 1 counted %d duplicates, want 1", n)
+	}
+	ectx, ecancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	e.emit(ectx) // drains the events queued so far
+	ecancel()
+	mu.Lock()
+	defer mu.Unlock()
+	kinds := map[EventKind]int{}
+	for _, ev := range events {
+		kinds[ev.Kind]++
+	}
+	if kinds[EventConfigDiffers] != 2 || kinds[EventDuplicateMember] != 1 {
+		t.Fatalf("events %v; want config-differs raised and cleared, and one duplicate-member", kinds)
+	}
+}
+
+// The answerer's peer info is bound to the asker's challenge and both
+// names: an answer whose info doesn't match its MAC is ignored.
+func TestHelloInfoBoundByItsMAC(t *testing.T) {
+	pi := peerInfo{Config: "c", Nonce: 7, Caps: []string{KeepsLiveIO}}
+	m := infoMAC(testToken, "challenge-0123456789", "a", "b", pi)
+	if !sameMAC(m, infoMAC(testToken, "challenge-0123456789", "a", "b", pi)) {
+		t.Fatal("the MAC does not verify")
+	}
+	for name, other := range map[string]string{
+		"another challenge": infoMAC(testToken, "challenge-9876543210", "a", "b", pi),
+		"reflected":         infoMAC(testToken, "challenge-0123456789", "b", "a", pi),
+		"other caps":        infoMAC(testToken, "challenge-0123456789", "a", "b", peerInfo{Config: "c", Nonce: 7}),
+		"another token":     infoMAC("other", "challenge-0123456789", "a", "b", pi),
+	} {
+		if sameMAC(m, other) {
+			t.Errorf("%s: the MAC still verifies", name)
+		}
+	}
+}

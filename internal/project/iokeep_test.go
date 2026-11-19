@@ -1168,3 +1168,28 @@ func TestIOFollowActsOnAnEqualSeqWithADifferentState(t *testing.T) {
 		t.Fatalf("differs = %+v, want the store's state followed", d)
 	}
 }
+
+// #1013: a redundant pair where the other replica's build does not keep a
+// live I/O apply across a takeover refuses the apply at validate, naming
+// why; once it does, the apply validates.
+func TestIOKeptRefusesAMixedVersionPair(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	const why = "the peer controller runs a build that does not keep a live I/O apply across a takeover (#1013)"
+	peer := why
+	r := startKeepRig(t, files, keepOpts{store: &memStore{}, redundant: true, prep: func(io *IOConfig) {
+		io.PeersKeepIO = func() string { return peer }
+	}})
+	stage := func() *IOValidation {
+		c := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester")
+		return r.io.Validate(c)
+	}
+	v := stage()
+	if v.Valid || fmt.Sprint(failed(v)) != "[kept]" || !strings.Contains(fmt.Sprint(v), why) {
+		t.Fatalf("a mixed-version pair: failed %v; want kept, naming the peer's build\n%+v", failed(v), v)
+	}
+	peer = ""
+	if v := stage(); !v.Valid {
+		t.Fatalf("both builds keep it: failed %v", failed(v))
+	}
+}
