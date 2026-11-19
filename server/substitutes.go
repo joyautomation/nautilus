@@ -220,6 +220,10 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RequestID != "" {
 		if e, ok := s.rt.SubstituteByRequest(req.RequestID); ok {
+			if !runtime.SameRequest(e, rule.Tag, value, d) {
+				http.Error(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, e.ID), http.StatusConflict)
+				return
+			}
 			// A retry of a start that did start: the same entry, not a second.
 			resp := s.substitutesResponse()
 			v := s.substituteView(e)

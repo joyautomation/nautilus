@@ -126,6 +126,10 @@ func (s *Server) startThroughLog(w http.ResponseWriter, r *http.Request, tag str
 		return
 	}
 	started, ok := s.substituteByIDOrRequest(e.Seq, reqID)
+	if ok && started.ID != e.Seq && !runtime.SameRequest(started, tag, value, d) {
+		http.Error(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, started.ID), http.StatusConflict)
+		return
+	}
 	if !ok {
 		http.Error(w, fmt.Sprintf("entry %d committed but did not start here (see the controller log): re-read GET /api/substitutes", e.Seq), http.StatusConflict)
 		return

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -65,6 +66,35 @@ type IntentLog interface {
 	ProposeExpiry(ctx context.Context, id uint64) error
 }
 
+// RequestIDWindow is how long a client request ID is remembered after
+// the start it carried, on the log's clock: a retry within it is
+// answered with that entry (or refused if it asks for something else);
+// after it, the same ID starts afresh. The longest grant (7 d) plus a day.
+const RequestIDWindow = 8 * 24 * time.Hour
+
+// ErrRequestReused refuses a request ID used again for a different start
+// (another address, value or duration) than the one it first carried.
+var ErrRequestReused = errors.New("requestId reused with a different request")
+
+// reqSeen is a request ID's first applied entry.
+type reqSeen struct {
+	id      uint64
+	fp      string // address, value, granted duration
+	startMs int64  // its start, on the log's (the proposer's) clock
+}
+
+// requestPrint is what makes two starts with one request ID the same
+// request.
+func requestPrint(name string, value any, grantedMs int64) string {
+	return fmt.Sprintf("%s|%v|%d", ir.NameKey(name), value, grantedMs)
+}
+
+// SameRequest reports whether s is the start a request for addr with v
+// for d asks for: a retry with the same request ID must be the same.
+func SameRequest(s Substitution, addr string, v any, d time.Duration) bool {
+	return requestPrint(s.Name, s.Value, s.GrantedMs) == requestPrint(addr, v, d.Milliseconds())
+}
+
 // DefaultTakeoverIntentWait bounds the takeover's wait for the log's
 // catch-up when SetIntentLog is given no wait.
 const DefaultTakeoverIntentWait = 2 * time.Second
@@ -100,12 +130,14 @@ type intentState struct {
 	// guarded by subMu. Kept by ID because an entry may still be waiting
 	// for its input (subPending) when it is marked.
 	unconfirmed map[uint64]bool
-	// reqs is every client request ID the log has applied, with the entry
-	// that carried it first; guarded by subMu. Built from the replicated
-	// log alone (applied in the same order everywhere, and replayed at a
-	// restart), so every replica, and a new leader, applies a request ID
-	// once, even after the entry it started has ended.
-	reqs map[string]uint64
+	// reqs is every client request ID the log has applied (within
+	// RequestIDWindow), with the entry that carried it first; guarded by
+	// subMu. Built from the replicated log alone (applied in the same
+	// order everywhere, and replayed at a restart), and pruned on the
+	// log's own clock (each entry's start), so every replica, and a new
+	// leader, applies a request ID once, even after the entry it started
+	// ended.
+	reqs map[string]reqSeen
 
 	// expiries are expired IDs not yet committed as unsubstitute entries.
 	expMu      sync.Mutex
@@ -199,23 +231,24 @@ func (r *Runtime) ApplySubstitute(e ReplicatedSubstitute) error {
 	t := r.tags
 	t.mu.Lock()
 	var evs []SubstituteEvent
-	if e.RequestID != "" {
-		first, seen := r.intent.reqs[e.RequestID]
-		if !seen {
-			if r.intent.reqs == nil {
-				r.intent.reqs = map[string]uint64{}
-			}
-			r.intent.reqs[e.RequestID] = e.ID
+	start := e.UntilMs - e.GrantedMs
+	for id, seen := range r.intent.reqs { // the log's clock: the same on every replica
+		if seen.startMs < start-RequestIDWindow.Milliseconds() {
+			delete(r.intent.reqs, id)
 		}
-		held := Substitution{ID: first}
-		if seen && first != e.ID {
-			// A retry of a start whose outcome was unknown: the first
-			// entry stands, this one is not applied (on every instance,
-			// since every instance applies the log in the same order).
-			t.mu.Unlock()
-			slog.Info("runtime: substitute start retried; the first entry stands", "requestId", e.RequestID, "id", held.ID, "retry", e.ID)
-			return nil
+	}
+	fp := requestPrint(e.Name, e.Value, e.GrantedMs)
+	if seen, ok := r.intent.reqs[e.RequestID]; e.RequestID != "" && ok && seen.id != e.ID {
+		t.mu.Unlock()
+		if seen.fp != fp {
+			slog.Warn("runtime: substitute start not applied: its requestId was used for a different start", "requestId", e.RequestID, "first", seen.id, "id", e.ID)
+			return fmt.Errorf("substitute entry %d: %w (entry %d)", e.ID, ErrRequestReused, seen.id)
 		}
+		// A retry of a start whose outcome was unknown: the first entry
+		// stands, this one is not applied (on every instance, since every
+		// instance applies the log in the same order).
+		slog.Info("runtime: substitute start retried; the first entry stands", "requestId", e.RequestID, "id", seen.id, "retry", e.ID)
+		return nil
 	}
 	delete(r.intent.unconfirmed, e.ID) // the log delivered it: confirmed
 	if held, ok := t.entryLocked(e.ID); ok {
@@ -249,6 +282,14 @@ func (r *Runtime) ApplySubstitute(e ReplicatedSubstitute) error {
 	}
 	before := len(r.subPending)
 	evs = append(evs, r.installLocked([]retain.SubstituteRetain{re}, now, at)...)
+	if e.RequestID != "" && (len(r.subPending) > before || t.hasIDLocked(e.ID)) {
+		// Recorded only once applied (running, or waiting for its input):
+		// a start refused here leaves its request ID free for a retry.
+		if r.intent.reqs == nil {
+			r.intent.reqs = map[string]reqSeen{}
+		}
+		r.intent.reqs[e.RequestID] = reqSeen{id: e.ID, fp: fp, startMs: start}
+	}
 	if len(r.subPending) == before && t.hasIDLocked(e.ID) {
 		s, _ := t.entryLocked(e.ID)
 		evs = append(evs, SubstituteEvent{Kind: SubstituteEventStart, Entry: s, By: e.By, AtMs: at, Replicated: true})
@@ -412,7 +453,15 @@ func (r *Runtime) markUnconfirmedLocked(at int64) []SubstituteEvent {
 // raised, whatever the retain store held (or whether there is one), and a
 // background catch-up reconciles later. Caller holds leadMu.
 func (r *Runtime) intentAfterTakeover() {
-	if r.intentLog() == nil || r.intent.synced {
+	if r.intentLog() == nil {
+		return
+	}
+	if r.intent.synced {
+		// The log is caught up: whatever an earlier failed catch-up took
+		// from the retain store and the log never confirmed ends now, and
+		// the fault clears (a lease lost before the retry succeeded leaves
+		// such entries behind).
+		r.reconcileAfterSync()
 		return
 	}
 	r.subMu.Lock()
@@ -577,6 +626,12 @@ func (r *Runtime) proposeExpiries() {
 	l := r.intentLog()
 	for {
 		in.expMu.Lock()
+		if r.coord != nil && !r.coord.IsLeader() && len(in.expiries) > 0 {
+			// The lease is gone: the new leader owns expiry, and derives
+			// it from until (its takeover) and records its own.
+			slog.Info("runtime: lease lost; leaving the unrecorded expiries to the new leader", "ids", in.expiries)
+			in.expiries = nil
+		}
 		if len(in.expiries) == 0 {
 			in.expRunning = false
 			in.expMu.Unlock()

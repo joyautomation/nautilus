@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,14 @@ import (
 // log: the takeover's catch-up before the first scan, the fallback when it
 // fails, idempotent apply, and the leader's expiry as an entry.
 
+// atomicLead is a Coordinator safe to read from the runtime's background
+// goroutines (the catch-up retry, the expiry loop) while the test moves it.
+type atomicLead struct{ on atomic.Bool }
+
+func lead(b bool) *atomicLead        { c := &atomicLead{}; c.on.Store(b); return c }
+func (c *atomicLead) IsLeader() bool { return c.on.Load() }
+func (c *atomicLead) set(b bool)     { c.on.Store(b) }
+
 // fakeLog is an IntentLog the test steers.
 type fakeLog struct {
 	mu       sync.Mutex
@@ -24,6 +33,7 @@ type fakeLog struct {
 	syncs    int
 	expErr   error
 	expiries []uint64
+	expTries int
 }
 
 func (f *fakeLog) SyncLeader(ctx context.Context) error {
@@ -50,6 +60,7 @@ func (f *fakeLog) SyncLeader(ctx context.Context) error {
 func (f *fakeLog) ProposeExpiry(_ context.Context, id uint64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.expTries++
 	if f.expErr != nil {
 		return f.expErr
 	}
@@ -91,7 +102,7 @@ func scanUntilLogic(t *testing.T, rt *Runtime) float64 {
 // first scan's logic runs on.
 func TestTakeoverWaitsForTheLogCatchUp(t *testing.T) {
 	clk := noon()
-	coord := &flag{lead: false}
+	coord := lead(false)
 	rt, _ := newRetainSubRig(t, coord, nil, clk)
 	rt.Scan() // standby: never scanned, Mirror at its seed 0
 	release := make(chan struct{})
@@ -102,7 +113,7 @@ func TestTakeoverWaitsForTheLogCatchUp(t *testing.T) {
 		}
 	}
 	rt.SetIntentLog(log, 5*time.Second)
-	coord.lead = true
+	coord.set(true)
 	for i := 0; i < 3; i++ {
 		rt.Scan()
 	}
@@ -125,13 +136,13 @@ func TestTakeoverFallsBackWhenTheCatchUpFails(t *testing.T) {
 			StartMs: clk.Now().UnixMilli(), UntilMs: clk.Now().Add(time.Hour).UnixMilli(), GrantedMs: time.Hour.Milliseconds()}},
 		HighID: 5,
 	}}}
-	coord := &flag{lead: false}
+	coord := lead(false)
 	rt, _ := newRetainSubRig(t, coord, store, clk)
 	rt.Scan()
 	log := &fakeLog{syncErr: errors.New("no majority")}
 	rt.SetIntentLog(log, 50*time.Millisecond)
 	events := collect(rt)
-	coord.lead = true
+	coord.set(true)
 	if m := scanUntilLogic(t, rt); m != 95 {
 		t.Fatalf("first scan on Level %v; want the retained substitute 95", m)
 	}
@@ -164,12 +175,12 @@ func TestUnconfirmedRetainedEntryEndsAfterACatchUp(t *testing.T) {
 			StartMs: clk.Now().UnixMilli(), UntilMs: clk.Now().Add(time.Hour).UnixMilli(), GrantedMs: time.Hour.Milliseconds()}},
 		HighID: 5,
 	}}}
-	coord := &flag{lead: false}
+	coord := lead(false)
 	rt, _ := newRetainSubRig(t, coord, store, clk)
 	rt.Scan()
 	log := &fakeLog{syncErr: errors.New("no majority")}
 	rt.SetIntentLog(log, 50*time.Millisecond)
-	coord.lead = true
+	coord.set(true)
 	scanUntilLogic(t, rt)
 	log.set(func(f *fakeLog) { f.syncErr = nil })
 	waitFor(t, "the unconfirmed entry to end", func() bool { return len(rt.Substitutes()) == 0 })
@@ -187,14 +198,19 @@ func TestSyncedTakeoverIgnoresTheRetainedSet(t *testing.T) {
 			StartMs: clk.Now().UnixMilli(), UntilMs: clk.Now().Add(time.Hour).UnixMilli(), GrantedMs: time.Hour.Milliseconds()}},
 		HighID: 9,
 	}}}
-	coord := &flag{lead: false}
+	coord := lead(false)
 	rt, _ := newRetainSubRig(t, coord, store, clk)
 	rt.Scan()
 	rt.SetIntentLog(&fakeLog{}, time.Second)
-	coord.lead = true
+	rt.tags.setAny("Flow", ir.RealVal(3)) // an input with an init: it exists before any read
+	events := collect(rt)
+	coord.set(true)
 	scanUntilLogic(t, rt)
 	if l := rt.Substitutes(); len(l) != 0 || rt.Tags().Bool(SubstituteFaultTag) {
 		t.Fatalf("%+v; want nothing: the log holds no substitute", l)
+	}
+	if evs := events(); len(evs) != 0 {
+		t.Fatalf("events %+v; a synced takeover never touches the retained set", evs)
 	}
 }
 
@@ -204,7 +220,7 @@ func TestSyncedTakeoverIgnoresTheRetainedSet(t *testing.T) {
 // acknowledges; every event is marked replicated. A standby applies them.
 func TestApplyingLogEntries(t *testing.T) {
 	clk := noon()
-	coord := &flag{lead: false}
+	coord := lead(false)
 	rt, _ := newRetainSubRig(t, coord, nil, clk)
 	rt.Scan()
 	rt.tags.setAny("Level", ir.RealVal(10)) // a standby that has read its inputs
@@ -249,7 +265,7 @@ func TestApplyingLogEntries(t *testing.T) {
 // the expiry, and the record is retried until it is taken.
 func TestLeaderExpiryIsProposedAndNeverWaits(t *testing.T) {
 	clk := noon()
-	coord := &flag{lead: true}
+	coord := lead(true)
 	rt, _ := newRetainSubRig(t, coord, nil, clk)
 	log := &fakeLog{expErr: errors.New("no quorum")}
 	rt.SetIntentLog(log, time.Second)
@@ -277,7 +293,7 @@ func TestLeaderExpiryIsProposedAndNeverWaits(t *testing.T) {
 // fault once the log answers.
 func TestCatchUpFaultWithNothingRetained(t *testing.T) {
 	clk := noon()
-	coord := &flag{lead: false}
+	coord := lead(false)
 	rt, d := newRetainSubRig(t, coord, nil, clk)
 	rt.Scan()
 	log := &fakeLog{syncErr: errors.New("no majority")}
@@ -302,7 +318,7 @@ func TestCatchUpFaultWithNothingRetained(t *testing.T) {
 		})
 	}
 	d.mu.Unlock()
-	coord.lead = true
+	coord.set(true)
 	waitFor(t, "the takeover", func() bool { rt.Scan(); return rt.Tags().Bool(SubstituteFaultTag) })
 	log.set(func(f *fakeLog) { f.syncErr = nil })
 	waitFor(t, "the retry to clear the fault", func() bool { return !rt.Tags().Bool(SubstituteFaultTag) })
@@ -312,7 +328,7 @@ func TestCatchUpFaultWithNothingRetained(t *testing.T) {
 // after the first entry has ended still does not start another.
 func TestRequestIDAppliesOnceEvenAfterTheEntryEnded(t *testing.T) {
 	clk := noon()
-	rt, _ := newRetainSubRig(t, &flag{lead: false}, nil, clk)
+	rt, _ := newRetainSubRig(t, lead(false), nil, clk)
 	rt.Scan()
 	rt.tags.setAny("Level", ir.RealVal(10))
 	a := replicated(clk, 3, "Level", 95, time.Hour)
@@ -328,5 +344,124 @@ func TestRequestIDAppliesOnceEvenAfterTheEntryEnded(t *testing.T) {
 	}
 	if l := rt.Substitutes(); len(l) != 0 {
 		t.Fatalf("%+v; a retry of an ended start started another", l)
+	}
+}
+
+func (r *Runtime) retrying() bool {
+	r.subMu.Lock()
+	defer r.subMu.Unlock()
+	return r.intent.retrying
+}
+
+func (r *Runtime) expiryLoopRunning() bool {
+	r.intent.expMu.Lock()
+	defer r.intent.expMu.Unlock()
+	return r.intent.expRunning
+}
+
+// naut-lead's probe: a failed catch-up installs retained entry 5 (marked);
+// the lease is lost before the background retry succeeds (the retry
+// stops); the next takeover's catch-up succeeds. Entry 5, which the log
+// never committed, must end there and the fault clear, not run on to its
+// until.
+func TestASuccessfulCatchUpReconcilesAnEarlierFallback(t *testing.T) {
+	clk := noon()
+	store := &fakeStore{state: retain.State{Substitutes: &retain.SubstituteState{
+		Entries: []retain.SubstituteRetain{{ID: 5, Name: "Level", Value: 95.0, By: "op",
+			StartMs: clk.Now().UnixMilli(), UntilMs: clk.Now().Add(time.Hour).UnixMilli(), GrantedMs: time.Hour.Milliseconds()}},
+		HighID: 5,
+	}}}
+	coord := lead(false)
+	rt, _ := newRetainSubRig(t, coord, store, clk)
+	rt.Scan()
+	log := &fakeLog{syncErr: errors.New("no majority")}
+	rt.SetIntentLog(log, 20*time.Millisecond)
+	coord.set(true)
+	if m := scanUntilLogic(t, rt); m != 95 {
+		t.Fatalf("first scan on %v; want the retained 95", m)
+	}
+	coord.set(false)
+	rt.Scan()
+	waitFor(t, "the background retry to stop on the lost lease", func() bool { return !rt.retrying() })
+	log.set(func(f *fakeLog) { f.syncErr = nil }) // the log answers, without entry 5
+	coord.set(true)
+	waitFor(t, "the second takeover to reconcile", func() bool {
+		rt.Scan()
+		return len(rt.Substitutes()) == 0
+	})
+	if l := rt.Substitutes(); len(l) != 0 || rt.Tags().Real("Level") != 10 || rt.Tags().Bool(SubstituteFaultTag) {
+		t.Fatalf("%+v, Level %v, fault %v; want entry 5 ended and the fault clear", l, rt.Tags().Real("Level"), rt.Tags().Bool(SubstituteFaultTag))
+	}
+}
+
+// A request ID reused for a different start is refused, not answered with
+// the first entry; one whose first entry was refused at apply stays free;
+// and request IDs are forgotten after RequestIDWindow on the log's clock.
+func TestRequestIDRules(t *testing.T) {
+	clk := noon()
+	rt, _ := newRetainSubRig(t, lead(false), nil, clk)
+	rt.Scan()
+	rt.tags.setAny("Level", ir.RealVal(10))
+	a := replicated(clk, 3, "Level", 95, time.Hour)
+	a.RequestID = "r-1"
+	if err := rt.ApplySubstitute(a); err != nil {
+		t.Fatal(err)
+	}
+	other := replicated(clk, 4, "Level", 96, time.Hour)
+	other.RequestID = "r-1"
+	if err := rt.ApplySubstitute(other); !errors.Is(err, ErrRequestReused) {
+		t.Fatalf("r-1 for 96: %v; want ErrRequestReused", err)
+	}
+	if l := rt.Substitutes(); len(l) != 1 || l[0].ID != 3 || l[0].Value != 95.0 {
+		t.Fatalf("%+v; want entry 3 (95) untouched", l)
+	}
+	bogus := replicated(clk, 5, "Nope", 1, time.Hour)
+	bogus.RequestID = "r-2"
+	_ = rt.ApplySubstitute(bogus) // refused at apply
+	ok := replicated(clk, 6, "Flow", 7, time.Hour)
+	ok.RequestID = "r-2"
+	rt.tags.setAny("Flow", ir.RealVal(3))
+	if err := rt.ApplySubstitute(ok); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := rt.SubstituteByRequest("r-2"); !found {
+		t.Fatal("r-2 did not start: a request ID whose first entry was refused must stay free")
+	}
+	// Nine days on, on the log's clock: r-1 is forgotten.
+	rt.ApplyUnsubstitute(3, "op", "")
+	later := func(id uint64, req string, v float64) ReplicatedSubstitute {
+		start := clk.Now().Add(9 * 24 * time.Hour)
+		return ReplicatedSubstitute{ID: id, Name: "Level", Value: v, By: "op", RequestID: req,
+			UntilMs: start.Add(time.Hour).UnixMilli(), GrantedMs: time.Hour.Milliseconds()}
+	}
+	if err := rt.ApplySubstitute(later(7, "r-1", 97)); err != nil {
+		t.Fatalf("r-1 after the window: %v; want it free again", err)
+	}
+}
+
+// The expiry retry stops when the lease is lost: the new leader owns
+// expiry and records its own.
+func TestExpiryRetryStopsOnLeaseLoss(t *testing.T) {
+	clk := noon()
+	coord := lead(true)
+	rt, _ := newRetainSubRig(t, coord, nil, clk)
+	log := &fakeLog{expErr: errors.New("no quorum")}
+	rt.SetIntentLog(log, time.Second)
+	scanUntilLogic(t, rt)
+	if err := rt.ApplySubstitute(replicated(clk, 4, "Level", 95, time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(2 * time.Minute)
+	rt.Scan()
+	if len(rt.PendingExpiries()) != 1 {
+		t.Fatal("the expiry was not queued")
+	}
+	// After the loop's first (failed) try it sleeps; the lease goes then.
+	waitFor(t, "the first try", func() bool { log.mu.Lock(); defer log.mu.Unlock(); return log.expTries >= 1 })
+	coord.set(false)
+	log.set(func(f *fakeLog) { f.expErr = nil })
+	waitFor(t, "the expiry loop to stop", func() bool { return !rt.expiryLoopRunning() })
+	if p := log.proposed(); len(p) != 0 || len(rt.PendingExpiries()) != 0 {
+		t.Fatalf("proposed %v, pending %v; a replica that lost the lease must leave expiry to the new leader", p, rt.PendingExpiries())
 	}
 }

@@ -273,3 +273,19 @@ func TestARetriedStartIsIdempotentOnOneController(t *testing.T) {
 		t.Fatalf("retry = %d %s; want entry %d again, and one entry", again.Code, again.Body, id)
 	}
 }
+
+// A request ID used again for a different start is refused (409), never
+// answered "started" with the first entry.
+func TestARequestIDReusedForADifferentStartIsRefused(t *testing.T) {
+	s := subServer(t, Options{})
+	if r := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":7,"requestId":"r-5"}`); r.Code != 200 {
+		t.Fatalf("start = %d %s", r.Code, r.Body)
+	}
+	r := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":8,"requestId":"r-5"}`)
+	if r.Code != 409 || !strings.Contains(r.Body.String(), "requestId reused") {
+		t.Fatalf("r-5 for 8 = %d %s; want 409 requestId reused", r.Code, r.Body)
+	}
+	if l := s.rt.Substitutes(); len(l) != 1 || l[0].Value != 7.0 {
+		t.Fatalf("%+v; want the first start alone", l)
+	}
+}
