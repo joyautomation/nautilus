@@ -294,16 +294,6 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintln(os.Stderr, "naut run: compile:", err)
 		return 1
 	}
-	// A pair's operator intent (substitutes) goes through its replicated
-	// log, mounted on the peer listener; a takeover catches it up before
-	// its first scan. Before the election and the scans run.
-	var subLog *server.SubstituteLog
-	if pair != nil {
-		if subLog, err = pair.startLog(rt, 0); err != nil {
-			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
-			return 1
-		}
-	}
 	// The write gate needs live scans, with redundancy or without (#621,
 	// #625). Set before gate.Run below.
 	gate := gateOnLiveScans(proj, el, rt, localGateLease)
@@ -327,6 +317,24 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if alarms != nil {
 		defer alarms.Close()
+	}
+
+	// A pair's operator intent (substitutes, alarm acknowledgements and
+	// shelves) goes through its replicated log, mounted on the peer
+	// listener; a takeover catches it up before its first scan. After the
+	// alarms exist (the log replays its file into them), before the
+	// election and the scans run.
+	var subLog *server.SubstituteLog
+	var alarmLog *server.AlarmLog
+	if pair != nil {
+		var eng *alarm.Engine
+		if alarms != nil {
+			eng = alarms.Engine
+		}
+		if subLog, alarmLog, err = pair.startLog(rt, 0, eng); err != nil {
+			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
+			return 1
+		}
 	}
 
 	// Live I/O configuration (#706): registered before the first scan, so
@@ -452,6 +460,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if subLog != nil {
 		sopts.SubstituteLog = subLog
+	}
+	if alarmLog != nil {
+		sopts.AlarmLog = alarmLog
 	}
 	// Program provenance: a built binary decodes the history its archive
 	// carries; a checkout captures live from git. Lazy (first request pays,

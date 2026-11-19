@@ -138,7 +138,11 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a voter answers before its fsync | design §3.1, fsync before answer | 2 |
 | the leader times its lease from the reply, not the request | design §3.1 | 2 |
 | the gate is judged on the elector's tick, not when it is read | design §3.2 | 3a (`gate_on_tick`) |
-| a new leader applies alarm state before its `oplog` catch-up | design §1, `oplog` | 3 |
+| a new leader applies alarm state before its `oplog` catch-up (as built: a synced takeover restores its own retain instead of the log's alarm view, `alarm_view_ignored`) | design §1, `oplog` | 3b-2c |
+| an acknowledged alarm back to normal proposes no ack-clear, so a takeover pre-acknowledges a new occurrence (`ack_clear_off`) | design §1, occurrences | 3b-2c |
+| a takeover restores the view over a re-leading replica's frozen engine (`engine_not_reset`) | design §1, takeovers reset the engine | 3b-2c (#1033 review) |
+| the alarm log judges the engine from the lease on, before the takeover restored the view: Reconcile clears every carried ack while the takeover waits for inputs (`reconcile_before_restore`) | design §1, takeovers reset the engine | 3b-2c (#1033 CI) |
+| a late substitute start a lapse entry names is carried out (`lapse_ignored`; a runner row since 3b-2c) | design §1 | lapse |
 | `Liveness` ignores a loop between scans (the behaviour before #858) | design §3.2, starvation | 3 |
 | a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |
 | the in-sync mark is not persisted | design §3.3 | 4 |
@@ -177,7 +181,6 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a controller campaigns while its peer's hello names another configuration of the pair | design §2 (F30) | 3b-2b (`config_differs_campaigns`) |
 | two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing | design §2 (F30) | 3b-2b (`hello_duplicate_unseen`) |
 | a controller votes from a state file written on another box (a cloned disk; red in both #1029 shapes end to end) | design §2, #1029 | #1029 layer 1 (`box_unchecked`) |
-| a late substitute start a lapse entry names is carried out (`oplog`, by hand: `QUORUM_MUT=lapse_ignored go test -tags quorum_mut ./oplog`) | design §1, a late start lapses | lapse (#1030 review) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
 | a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |

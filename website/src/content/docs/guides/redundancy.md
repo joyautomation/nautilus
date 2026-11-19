@@ -344,10 +344,33 @@ still happens on time. (Making the witness the log's third copy, so one
 controller down is not enough to stop these writes, is under
 discussion.)
 
-Alarm acknowledgements and shelves do **not** go through that log yet:
-an acknowledgement or a shelve made on the old leader may be lost at a
-failover, and the alarm comes back unacknowledged on the new one. This
-is being built next.
+Alarm acknowledgements and shelves go through the same log. When the
+other controller takes over and could catch the log up (a handover, or
+a fault while the old leader's box still answers), an alarm acknowledged
+before the takeover stays acknowledged, and a shelf stays until its own
+end. An acknowledgement is of an occurrence: once an acknowledged alarm
+leaves that occurrence (it returns to normal, a latched alarm returns
+unacknowledged, its tag goes dark, or it activates anew), the leader
+clears the acknowledgement in the log, so a new occurrence annunciates
+after a takeover. **The window:** if the leader dies after that and
+before the clear is committed, the next leader can still carry the old
+acknowledgement to the new occurrence. With both controllers up that is
+a few tens of milliseconds; while the other controller is down the clear
+waits for it, so the window lasts as long as the outage plus about 2 s.
+An acknowledgement or a shelve made just before a controller died and
+committed more than 60 s later is dropped, not applied to whatever
+occurrence is live by then. While a new leader's takeover is still
+waiting (for its inputs to come live, or for the log to catch up), an
+acknowledgement or a shelve sent to it is refused with "this controller
+is taking over: its alarm state is not restored yet" (503); retry it a
+moment later.
+
+**When the takeover could not catch the log up** (with the log on the two
+controllers only, that is every takeover after the leader died), no
+acknowledgement is carried at all: acknowledged alarms annunciate again
+on the new leader (the safe direction), and the alarm journal says
+"acks not carried: takeover unsynced". Shelves still carry. Starting,
+stopping or acknowledging is refused while the other controller is down.
 
 Both controllers must run the same `redundancy:` section (`peers:` and
 `witness:`). If they don't (an edited manifest deployed to one box

@@ -107,6 +107,11 @@ const (
 	KindAck      = "ack"
 	KindShelve   = "shelve"
 	KindUnshelve = "unshelve"
+	// KindAckClear: the alarm ID's acknowledged occurrence returned to
+	// normal on the leader, so the ack the log holds for it no longer
+	// applies: a takeover must not carry it to a new occurrence (#710 PR
+	// 3b-2c). Proposed by the leader, retried until committed.
+	KindAckClear = "ack-clear"
 
 	// Substitute values (#707): see Entry.
 	KindSubstitute   = "substitute"

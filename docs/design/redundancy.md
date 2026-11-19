@@ -44,7 +44,38 @@ bumpless, and the measured takeover time is published instead.
   survives a failover. The leader sequences. The witness stores the entries (kilobytes a day)
   and follows the leader that its own vote state names.
   - **Where acks come from.** The state stream still carries alarm state for a hot takeover,
-    but the log is where an ack comes from.
+    but the log is where an ack comes from (#710 PR 3b-2c, `server/alarms_oplog.go`).
+    - **The write path.** Ack, shelve and unshelve are validated against the leader's engine,
+      then proposed. "Ack all" becomes the leader's unacknowledged ids.
+    - **Applying.** The leader applies each committed entry to its live engine, which journals
+      it; a standby records it in a replicated view.
+    - **At a takeover,** after the catch-up and before the first scan, the new leader restores
+      the view: acks held for each alarm's first activation, and shelves until their own ends.
+    - **Unsynced takeovers carry no ack** (naut-lead): those alarms re-annunciate and the alarm
+      journal says "acks not carried: takeover unsynced". Shelves carry. In the 2-of-2 interim
+      that is every takeover after the leader died.
+    - **Occurrences: the invariant** (#1033 review). The view holds an ack for an alarm only
+      while the leader's engine has that alarm's current occurrence acknowledged. Four rules
+      keep it:
+      - an ack that would change nothing is refused (409) and never recorded;
+      - every transition out of ack-active on the leader proposes an `ack-clear`: a return to
+        normal, a latched RTN to unack-rtn, a new activation, a suppress. A shelve keeps the
+        ack. Clears are retried until committed and batched;
+      - the leader reconciles the view against its engine at every log tick;
+      - an unsynced takeover clears the view's acks.
+    - **The residual window** is the leader dying between such a transition and the clear's
+      commit: one log round trip plus a scan with the peer up (measured at 20-60 ms on
+      loopback, `TestPairAckDoesNotCarryToANewOccurrence`), up to the peer's outage plus a
+      retry with it down. Acks bound to an activation proper come with #715.
+    - **Every takeover resets the engine.** A replica that led before keeps an engine frozen at
+      its last leadership. Every takeover calls `alarm.Engine.ResetOperatorState` before
+      restoring the view, so an ack of an occurrence that ended, or a shelf undone, while it
+      stood by doesn't survive in it. Entries are applied live while the election's gate is
+      open (from the takeover's start), so one committed during the takeover lands in the
+      engine or in the restored view.
+    - **Late entries lapse.** An ack or a shelve committed more than 60 s after it was proposed
+      lapses (`oplog.KindLapse`, by age, as a late substitute start does): it would act on
+      whatever occurrence is live by then. Unshelves and ack-clears never lapse.
   - **A new leader catches up first.** It catches up the log from the other peers (`oplog`'s
     `leaderCatchUp`) before it applies alarm state or accepts operator writes.
   - **No quorum, no operator writes.** A lone survivor has no majority, so its operator writes

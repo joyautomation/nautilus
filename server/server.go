@@ -263,6 +263,10 @@ type Options struct {
 	// (#707 PR 3b, substitutes_oplog.go). Nil: they apply here and are
 	// saved to the retain store before the answer.
 	SubstituteLog *SubstituteLog
+	// AlarmLog, on a redundant pair, sends alarm acknowledgements, shelves
+	// and unshelves through the replicated log of operator intent (#710
+	// PR 3b-2c, alarms_oplog.go). Nil: they apply here.
+	AlarmLog *AlarmLog
 
 	// Audit is the runtime audit journal (#709): every write route records
 	// one entry per request to it, accepted or refused, before the client
@@ -492,6 +496,7 @@ type Server struct {
 	tagWriter   func(name string, value any) error
 	subRules    []SubstituteRule // Options.Substitutes
 	subLog      *SubstituteLog   // Options.SubstituteLog
+	alarmLog    *AlarmLog        // Options.AlarmLog
 	audit       *auditor
 
 	resync time.Duration
@@ -581,6 +586,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.tagWriter = opts[0].TagWriter
 		s.subRules = opts[0].Substitutes
 		s.subLog = opts[0].SubstituteLog
+		s.alarmLog = opts[0].AlarmLog
 	}
 	var rec audit.Recorder
 	var unavailable error

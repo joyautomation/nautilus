@@ -246,6 +246,10 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
+	if s.alarmLog != nil {
+		s.alarmAckThroughLog(w, r, ids, req.By)
+		return
+	}
 	n, err := s.alarms.Ack(ids, req.By)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -293,6 +297,10 @@ func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
+	if s.alarmLog != nil {
+		s.shelveThroughLog(w, r, req.ID, until, req.By)
+		return
+	}
 	if err := s.alarms.Shelve(req.ID, until, req.By); err != nil {
 		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
@@ -316,6 +324,10 @@ func (s *Server) handleAlarmUnshelve(w http.ResponseWriter, r *http.Request) {
 	var req unshelveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
 		http.Error(w, `expected {"id": "...", "by": "..."}`, http.StatusBadRequest)
+		return
+	}
+	if s.alarmLog != nil {
+		s.shelveThroughLog(w, r, req.ID, time.Time{}, req.By)
 		return
 	}
 	if err := s.alarms.Unshelve(req.ID, req.By); err != nil {

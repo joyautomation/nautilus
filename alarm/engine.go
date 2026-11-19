@@ -84,6 +84,9 @@ type Engine struct {
 
 	notifiers []Notifier
 	notifyCh  chan Event
+	// onEvent, when set (OnEvent), hears every event as it is journalled,
+	// under mu: it must not call back into the engine, and must not block.
+	onEvent   func(Event)
 	notifyWG  sync.WaitGroup
 	dropped   atomic.Uint64
 	closeOnce sync.Once
@@ -283,6 +286,9 @@ func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
 	}
 	if err := e.jrn.Append(ev); err != nil {
 		e.log.Warn("alarm journal append failed", "id", ev.ID, "kind", ev.Kind, "err", err)
+	}
+	if e.onEvent != nil {
+		e.onEvent(ev)
 	}
 	if e.notifyCh != nil {
 		select {
@@ -608,6 +614,29 @@ func (e *Engine) Rename(id, name string) error {
 	return nil
 }
 
+// OnEvent registers fn to hear every event as it is journalled (a
+// redundant pair's leader proposes an ack-clear when an acknowledged alarm
+// returns to normal, #710 PR 3b-2c). fn runs under the engine's lock: it
+// must neither call the engine nor block. Call it before the first
+// Evaluate.
+func (e *Engine) OnEvent(fn func(Event)) {
+	e.mu.Lock()
+	e.onEvent = fn
+	e.mu.Unlock()
+}
+
+// Note journals a system event that belongs to no alarm definition
+// (kind, a name that says what happened), as the engine's own events
+// are: "acks not carried: takeover unsynced", for one.
+func (e *Engine) Note(kind, name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ev := Event{TS: e.now().UnixMilli(), ID: "__nautilus.redundancy", Name: name, Kind: kind, By: "system"}
+	if err := e.jrn.Append(ev); err != nil {
+		e.log.Warn("alarm journal append failed", "kind", kind, "err", err)
+	}
+}
+
 // Journal answers a journal query from whatever sink was configured.
 func (e *Engine) Journal(from, to time.Time, f Filter) ([]Event, error) {
 	return e.jrn.Query(from, to, f)
@@ -638,6 +667,24 @@ func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 		out[in.def.ID] = r
 	}
 	return out
+}
+
+// ResetOperatorState forgets every acknowledgement and shelf, and every
+// alarm's state, as a fresh engine would start: the next Evaluate
+// re-derives each alarm from the field. A redundant pair calls it at
+// every takeover, before RestoreAlarms, because a replica that led before
+// keeps an engine frozen at its last leadership: acks of occurrences that
+// ended since, shelves undone since (#1033 review). Nothing is journalled;
+// Rename's names stay.
+func (e *Engine) ResetOperatorState() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range e.inst {
+		in := &e.inst[i]
+		lent, def := in.lent, in.def
+		*in = instance{def: def, lent: lent}
+	}
+	e.rev++
 }
 
 // RestoreAlarms reapplies retained operator state. Call it once, before the
