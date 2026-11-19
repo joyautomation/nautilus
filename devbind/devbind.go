@@ -46,6 +46,11 @@ type Device struct {
 	Params map[string]string `yaml:"params"`
 	// Desc is one line for the device's tags.
 	Desc string `yaml:"desc"`
+	// Validate is how a live configuration change checks the device
+	// (#706): "live" probes it on a connection of its own, "static" checks
+	// the configuration only; "" leaves it to the driver, then the
+	// profile's default (see Set.Validate).
+	Validate string `yaml:"validate"`
 	// Ports are an IO-Link master's ports, by number: the sensor on each
 	// (#705). Nothing consumes them yet, so a row may name only ports its
 	// profile declares (devprofile.Profile.IOLinkPorts).
@@ -127,6 +132,9 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 			return nil, err
 		}
 		if err := d.checkPorts(fsys, where, names); err != nil {
+			return nil, err
+		}
+		if err := d.checkValidate(where); err != nil {
 			return nil, err
 		}
 		st := devprofile.Struct{Name: p.TypeName(), Points: d.points}
@@ -252,6 +260,61 @@ func portRange(nums []int, n int) error {
 		}
 	}
 	return nil
+}
+
+// Validation modes a row's validate: may name.
+const (
+	ValidateLive   = "live"
+	ValidateStatic = "static"
+)
+
+// checkValidate refuses a validate: that is neither mode, and a live
+// check of a device whose profile documents one connection: the probe's
+// would be the device's only one, and that one is the controller's.
+func (d *device) checkValidate(where string) error {
+	switch d.Validate {
+	case "", ValidateStatic:
+		return nil
+	case ValidateLive:
+		if n := d.maxConnections(); n == 1 {
+			return fmt.Errorf("%s: validate: live, but profile %s documents max-connections 1 (%s): a live check's connection would be the controller's; use validate: static", where, d.prof.ID, d.prof.Modbus.MaxConnectionsDoc)
+		}
+		return nil
+	}
+	return fmt.Errorf("%s: validate: %q is not live or static", where, d.Validate)
+}
+
+// maxConnections is the connection limit the device's profile documents;
+// 0 when it does not.
+func (d *device) maxConnections() int {
+	if m := d.prof.Modbus; m != nil && d.prof.Protocol == devprofile.ProtoModbus {
+		return m.MaxConnections
+	}
+	return 0
+}
+
+// Validate is what decides how a live configuration change checks device
+// name (#706), as facts for the caller to compose, row then driver then
+// default: row is the row's own validate: ("" when it sets none); def is
+// the default, static when the profile documents max-connections of 2 or
+// fewer, else live; why says so in words. ok is false for a name that is
+// not a device of the set.
+func (s *Set) Validate(name string) (row, def, why string, ok bool) {
+	if s == nil {
+		return "", "", "", false
+	}
+	for _, d := range s.devices {
+		if !strings.EqualFold(d.Name, name) {
+			continue
+		}
+		if n := d.maxConnections(); n > 0 && n <= 2 {
+			return d.Validate, ValidateStatic, fmt.Sprintf("profile %s documents max-connections %d (%s)", d.prof.ID, n, d.prof.Modbus.MaxConnectionsDoc), true
+		} else if n > 0 {
+			return d.Validate, ValidateLive, fmt.Sprintf("profile %s documents max-connections %d, room for a check's own", d.prof.ID, n), true
+		}
+		return d.Validate, ValidateLive, fmt.Sprintf("profile %s does not document a connection limit", d.prof.ID), true
+	}
+	return "", "", "", false
 }
 
 // sameMembers reports how two structs sharing a type name differ, nil

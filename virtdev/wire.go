@@ -26,6 +26,10 @@ type Endpoint struct {
 	Listen string
 	// Unit is the Modbus unit id.
 	Unit uint8
+	// MaxConnections is how many connections the wire face serves at
+	// once, the profile's documented limit (the smallest of the devices
+	// sharing a listener); 0 is no limit.
+	MaxConnections int
 }
 
 // Running is a set of virtual devices on their wire faces, with the plant
@@ -37,6 +41,7 @@ type Running struct {
 
 	redirect map[string]string
 	servers  []*slave.Server
+	byDevice map[string]*slave.Server // lower-cased device -> its Modbus listener
 	ua       []*uaserver.Server
 	cancel   context.CancelFunc
 	done     chan struct{}
@@ -67,7 +72,7 @@ func Start(ctx context.Context, s *Set, o StartOptions) (*Running, error) {
 	if err != nil {
 		return nil, fmt.Errorf("plant: %w", err)
 	}
-	r := &Running{Plant: plant, Runtime: rt, redirect: map[string]string{}}
+	r := &Running{Plant: plant, Runtime: rt, redirect: map[string]string{}, byDevice: map[string]*slave.Server{}}
 
 	// Group the Modbus devices onto listeners.
 	type group struct {
@@ -104,6 +109,15 @@ func Start(ctx context.Context, s *Set, o StartOptions) (*Running, error) {
 	}
 	for _, g := range groups {
 		g.srv = slave.NewServer(g.listen, log)
+		// A gateway's connection table is the smallest its devices
+		// document: past it, a connection is refused, as on the device.
+		limit := 0
+		for _, i := range g.devs {
+			if m := s.Profile(s.Devices[i].Name).Modbus; m != nil && m.MaxConnections > 0 && (limit == 0 || m.MaxConnections < limit) {
+				limit = m.MaxConnections
+			}
+		}
+		g.srv.SetMaxConnections(limit)
 		units := map[uint8]string{}
 		for _, i := range g.devs {
 			d := s.Devices[i]
@@ -127,8 +141,9 @@ func Start(ctx context.Context, s *Set, o StartOptions) (*Running, error) {
 			ep, _ := d.modbusEndpoint(p)
 			r.Endpoints = append(r.Endpoints, Endpoint{
 				Device: d.Name, Profile: p.ID, Protocol: p.Protocol,
-				Endpoint: ep, Listen: g.srv.Addr(), Unit: d.Unit(p),
+				Endpoint: ep, Listen: g.srv.Addr(), Unit: d.Unit(p), MaxConnections: limit,
 			})
+			r.byDevice[strings.ToLower(d.Name)] = g.srv
 			if ep != "" {
 				r.redirect[ep] = g.srv.Addr()
 			}
@@ -173,6 +188,16 @@ func Start(ctx context.Context, s *Set, o StartOptions) (*Running, error) {
 func (r *Running) Redirect(addr string) (string, bool) {
 	to, ok := r.redirect[addr]
 	return to, ok
+}
+
+// Refused is how many connections a Modbus device's wire face has closed
+// for want of a slot (its profile's max-connections); 0 for a device
+// without a limit, an OPC UA device, or a name the set does not have.
+func (r *Running) Refused(device string) int {
+	if srv := r.byDevice[strings.ToLower(device)]; srv != nil {
+		return srv.Refused()
+	}
+	return 0
 }
 
 // Stop stops the plant and closes every listener.

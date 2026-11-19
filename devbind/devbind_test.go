@@ -2,6 +2,7 @@ package devbind
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -302,5 +303,75 @@ func TestRollupSubstitutedAndUnknown(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%v: device %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// limited is the ACS355 profile documenting n Modbus connections (0: not
+// documented), vendored.
+func limited(t *testing.T, n int) fstest.MapFS {
+	t.Helper()
+	raw := string(builtin(t, "abb-acs355-fmbt21"))
+	if n > 0 {
+		edited := strings.Replace(raw, "modbus:\n  port: 502\n", "modbus:\n  port: 502\n  max-connections: "+strconv.Itoa(n)+"\n  max-connections-doc: \"fena §7.1\"\n", 1)
+		if edited == raw {
+			t.Fatal("the fixture edit did not apply")
+		}
+		raw = edited
+	}
+	return fstest.MapFS{"profiles/abb-acs355-fmbt21.yaml": {Data: []byte(raw)}}
+}
+
+// validate: is live or static; live on a device documenting one
+// connection is refused (the check's connection would be the
+// controller's), and allowed at two.
+func TestResolveValidate(t *testing.T) {
+	row := func(v string) []Device {
+		return []Device{{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "h", Validate: v}}
+	}
+	for _, tc := range []struct {
+		limit int
+		v     string
+		want  string
+	}{
+		{0, "live", ""}, {0, "static", ""}, {0, "", ""}, {2, "live", ""}, {1, "static", ""}, {1, "", ""},
+		{1, "live", "validate: live, but profile abb-acs355-fmbt21 documents max-connections 1 (fena §7.1)"},
+		{0, "Live", `validate: "Live" is not live or static`},
+	} {
+		_, err := Resolve(limited(t, tc.limit), row(tc.v))
+		if tc.want == "" && err != nil {
+			t.Errorf("limit %d, validate %q: %v", tc.limit, tc.v, err)
+		}
+		if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("limit %d, validate %q: %v, want %q", tc.limit, tc.v, err, tc.want)
+		}
+	}
+}
+
+// The facts a live configuration check composes (#706): the row's own
+// validate:, and the default with its reason, static when the profile
+// documents two connections or fewer.
+func TestSetValidate(t *testing.T) {
+	for _, tc := range []struct {
+		limit         int
+		v             string
+		row, def, why string
+	}{
+		{0, "", "", "live", "profile abb-acs355-fmbt21 does not document a connection limit"},
+		{1, "", "", "static", "profile abb-acs355-fmbt21 documents max-connections 1 (fena §7.1)"},
+		{2, "live", "live", "static", "profile abb-acs355-fmbt21 documents max-connections 2 (fena §7.1)"},
+		{3, "static", "static", "live", "profile abb-acs355-fmbt21 documents max-connections 3, room for a check's own"},
+	} {
+		s, err := Resolve(limited(t, tc.limit), []Device{{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "h", Validate: tc.v}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		row, def, why, ok := s.Validate("conv")
+		if !ok || row != tc.row || def != tc.def || why != tc.why {
+			t.Errorf("limit %d, validate %q: (%q, %q, %q, %v), want (%q, %q, %q)", tc.limit, tc.v, row, def, why, ok, tc.row, tc.def, tc.why)
+		}
+	}
+	s, _ := Resolve(limited(t, 0), []Device{{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "h"}})
+	if _, _, _, ok := s.Validate("OTHER"); ok {
+		t.Error("a device the set does not have")
 	}
 }

@@ -111,6 +111,14 @@ notes: what is simplified and what is not modelled
   `ns=<object-namespace>;s=<path>`. A repeated numeric id advances by
   `stride`. `params:` declares per-instance values a node id refers to as
   `{name}` (an ifm master's location prefix).
+- **`modbus.max-connections: N`** is how many Modbus TCP connections the
+  device documents it accepts at once, cited by `max-connections-doc:`
+  (a `docs:` id and place, required with it, with no `unverified:` way out:
+  a live configuration check's default stands on it, #706). Absent means
+  the documentation does not say. The wire face serves that many clients
+  and accepts and closes the next, counting it (`Running.Refused`;
+  `naut devices up` shows the limit); devices sharing a listener share the
+  smallest limit.
 - `type` is the IEC type; `format` defaults from it (`WORD` → `uint16`,
   `REAL` → `float32`); a scaled point is `REAL` or `LREAL`.
 - `repeat: N` expands a row N times, `{n}` substituted and the address

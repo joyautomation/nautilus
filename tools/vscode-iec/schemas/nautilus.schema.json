@@ -353,6 +353,10 @@
           "type": "string",
           "description": "One line for the device's tags."
         },
+        "validate": {
+          "enum": ["live", "static"],
+          "description": "How a live I/O configuration change checks this device: live probes it on a connection of its own, static checks the configuration only. Overrides the driver's validate:. Default: static when the profile documents modbus max-connections of 2 or fewer, else live. live on a profile documenting max-connections 1 is an error."
+        },
         "ports": {
           "type": "object",
           "propertyNames": { "pattern": "^[0-9]+$" },

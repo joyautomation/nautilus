@@ -95,6 +95,7 @@ A `devices:` row has:
 | `points` | globs over point names: poll and expose only these (an 8-port master need not poll 8 ports); default all |
 | `params` | values for the profile's `params:` (an ifm master's location) |
 | `desc` | one line for the tag and the faceplate |
+| `validate` | `live` or `static`: how a live I/O configuration change checks the device (#706). Overrides the driver's. Default: `static` when the profile documents `modbus.max-connections` of 2 or fewer, else `live`. `live` on a profile documenting one connection is an error, since the check's connection would be the controller's. devbind gives #706 the row's setting, the default and why (`Set.Validate`); #706 applies row, then driver, then default |
 | `ports` | an IO-Link master's ports by number, `{ 2: { name: LEVEL1, iodd: sensor.xml } }` (#705): each port's name shares the devices' one namespace, and its IODD is a file in the project's `iodd/` folder. Only a profile that declares IO-Link ports takes them, and none does until #705 adds the profile's `iolink:` block, so until then a row's `ports:` is refused rather than ignored |
 
 A row has no driver keys. A Modbus device polls at the scan rate and scan
