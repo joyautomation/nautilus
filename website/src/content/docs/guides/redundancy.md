@@ -420,6 +420,21 @@ on the new leader (the safe direction), and the alarm journal says
 "acks not carried: takeover unsynced". Shelves still carry. Starting,
 stopping or acknowledging is refused while the other controller is down.
 
+**One set of credentials on both.** The pair is one controller to its
+clients, so both need the same `NAUTILUS_TOKEN`, the same users file and
+the same tag API certificate. They compare them at every handshake (a
+few seconds apart) and say so in `GET /api/cluster` and on the
+dashboard's banner when they differ; it never stops either from leading.
+`naut deploy` leaves the state directory alone, so it does not copy the
+users file: copy the same `users.json` to both controllers yourself (for
+example with scp, into each one's state directory; each reloads it
+within a second), and never add users separately on each box, since each
+box salts its own password hashes and the same password still makes a
+different file. A certificate renewal shows as a difference for the few
+minutes it takes to reach both. "Could not be verified" means the two
+controllers hold different `NAUTILUS_PEER_TOKEN`s (or something else
+answers in the peer's place), not that the files differ.
+
 Both controllers must run the same `redundancy:` section (`peers:` and
 `witness:`). If they don't (an edited manifest deployed to one box
 only), both report it in `GET /api/cluster` and on the dashboard's

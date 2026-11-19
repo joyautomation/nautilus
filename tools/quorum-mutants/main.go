@@ -143,6 +143,10 @@ var table = []mutation{
 	// TestPairConfigDiffersHoldsCampaigns catches the first end to end.
 	{"config_differs_campaigns", []string{"TestHelloPeerInfo"}},
 	{"hello_duplicate_unseen", []string{"TestHelloPeerInfo"}},
+	// #708: the credential check's MAC must bind the digest.
+	{"creds_unbound", []string{"TestCredentialCheck"}},
+	{"creds_names_unbound", []string{"TestCredMACBindsNamesAndChallenge"}},
+	{"creds_challenge_unbound", []string{"TestCredMACBindsNamesAndChallenge"}},
 	// #1029: a cloned disk votes as the original. cmd/naut's
 	// TestCloneWithTheABLinkDown and TestCloneWithACutFromTheWitness lead
 	// twice under it too.

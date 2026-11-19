@@ -30,6 +30,7 @@ type pairRig struct {
 	apiPort string
 	nodes   map[string]*pairNode
 	pmod    func(n string, p *project.Project) // nil: the project as loaded
+	dmod    func(n string, d *pairDeps)        // nil: the member's deps as built
 }
 
 func newPairRig(t *testing.T) *pairRig {
@@ -41,6 +42,13 @@ func newPairRig(t *testing.T) *pairRig {
 // (at every start, restarts included).
 func newPairRigWith(t *testing.T, pmod func(n string, p *project.Project)) *pairRig {
 	t.Helper()
+	return newPairRigFull(t, pmod, nil)
+}
+
+// newPairRigFull is newPairRigWith with dmod applied to each member's
+// pairDeps too (its credentials, #708).
+func newPairRigFull(t *testing.T, pmod func(n string, p *project.Project), dmod func(n string, d *pairDeps)) *pairRig {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("runs a pair and a witness on loopback for several leases")
 	}
@@ -48,7 +56,7 @@ func newPairRigWith(t *testing.T, pmod func(n string, p *project.Project)) *pair
 		t.Skip("a pair member needs CLOCK_BOOTTIME (Linux)")
 	}
 	r := &pairRig{t: t, host: map[string]string{"a": "127.0.0.1", "b": "127.0.0.2"}, peer: map[string]string{},
-		env: map[string]map[string]string{}, nodes: map[string]*pairNode{}, pmod: pmod}
+		env: map[string]map[string]string{}, nodes: map[string]*pairNode{}, pmod: pmod, dmod: dmod}
 	lnA, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +152,11 @@ func (r *pairRig) start(n string, ln, api net.Listener) *pairNode {
 	if r.pmod != nil {
 		pm = func(p *project.Project) { r.pmod(n, p) }
 	}
-	return startPairNodeFull(r.t, r.files, r.env[n], ln, api, nil, pm)
+	var dm func(*pairDeps)
+	if r.dmod != nil {
+		dm = func(d *pairDeps) { r.dmod(n, d) }
+	}
+	return startPairNodeFull(r.t, r.files, r.env[n], ln, api, dm, pm)
 }
 
 // call sends a request to member n's tag API.
