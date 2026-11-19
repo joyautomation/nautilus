@@ -122,7 +122,7 @@ to the matrix as a named regression case.
 - **Excluded by name:**
   - F22b, a frozen controller clock, which must breach I1;
   - skew beyond ρ, which must breach I1 at some phase;
-  - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both files lost and re-commissioned on a stray's incarnation. It needs an operator, so I2, I4, I6, I7 and steady state are excused; I1, the lease and the ledger are not. The seed runner logs and counts it (736 of 200,000), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused. After the PR that makes the case reliably wait for an operator, I2 and I4 are asserted there too.
+  - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both files lost and re-commissioned on a stray's incarnation. It needs an operator, so I2, I4, I6, I7 and steady state are excused; I1, the lease and the ledger are not. The seed runner logs and counts it (777 of 200,000, 0.39%), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused. After the PR that makes the case reliably wait for an operator, I2 and I4 are asserted there too.
 - **#976 is closed** (H2): two lost controller files with the witness intact are judged in full (`TestRegression976TwoLostControllerFiles`, red under `no_quiet` and `restart_counts_at_once`; the floor's own sim case is `TestFloorCarriesTheUnseenTerm`), and the generator no longer caps lost controller files.
 
 ### 3.3 Mutation checks (T2, nightly; required to pass before each milestone)
@@ -215,7 +215,9 @@ state is judged from a lease after its last adoption, which must come within the
 The first 200,000-seed run with the handshake failed 42 seeds, none on safety. 36 were switch-fault
 runs whose return to the real witness waited out the hold-off (the settle-aware steady window
 above). 6 were a real liveness hole: both controllers uncommissioned, each pending a proposal the
-other can't take, stuck after the stray was gone (fixed: `stale_pending_kept`).
+other can't take, stuck after the stray was gone (fixed: `stale_pending_kept`). With both fixes the
+200,000 seeds pass (283 s), 777 of them excused as the two-of-three case, and the runner catches
+all 29 mutations (about 3 min).
 
 **The first 200,000-seed nightly (#998)** failed 20 seeds on main (78d234e8), all liveness or
 steady state, none safety. They are named cases in `quorum/sim/nightly_test.go`, in four classes:
