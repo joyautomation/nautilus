@@ -220,6 +220,7 @@ func runProbe(tg probeTarget) IOProbe {
 		return nil
 	}
 	everConnected, lastErr := false, ""
+	read := map[string]bool{} // the tags that have read once
 	refused := func() {
 		p.Detail = fmt.Sprintf("the device at %s did not answer a connection of the check's own", tg.addr)
 		if lastErr != "" {
@@ -238,15 +239,17 @@ func runProbe(tg probeTarget) IOProbe {
 			return p
 		}
 		if connected {
+			// Each tag must read once; one that read and went stale since
+			// (a later block's exception upsetting the source) has.
 			q := quality()
-			good := true
+			all := true
 			for _, n := range inputs {
-				if qq, bad := q[n]; bad && !qq.IsGood() {
-					good = false
-					break
+				if qq, bad := q[n]; !bad || qq.IsGood() {
+					read[n] = true
 				}
+				all = all && read[n]
 			}
-			if good {
+			if all {
 				p.OK = true
 				return p
 			}
@@ -255,8 +258,8 @@ func runProbe(tg probeTarget) IOProbe {
 		case <-ctx.Done():
 			q := quality()
 			for _, n := range inputs {
-				if qq, bad := q[n]; bad && !qq.IsGood() {
-					p.Bad = append(p.Bad, fmt.Sprintf("%s (%s)", n, qq))
+				if !read[n] {
+					p.Bad = append(p.Bad, fmt.Sprintf("%s (%s)", n, q[n]))
 				}
 			}
 			sort.Strings(p.Bad)
