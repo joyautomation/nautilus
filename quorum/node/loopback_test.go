@@ -366,7 +366,9 @@ func (c *cluster) commission() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), leases(10))
 	defer cancel()
-	if err := a.Recommission(ctx, a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1); err != nil {
+	// A margin above the known terms, as the operator's command gives:
+	// campaigns move them while the command is typed.
+	if err := a.Recommission(ctx, a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1000); err != nil {
 		c.t.Fatal(err)
 	}
 	c.waitFor("the pair to commission", leases(20), func() bool {

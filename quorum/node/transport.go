@@ -50,7 +50,7 @@ const maxFrame = 4 << 10
 // promised) takes any first term; that, like the cap itself, is liveness
 // only. An operator's re-commission floor stays within half of it
 // (Elector.Recommission).
-const MaxTermJump = 1 << 40
+const MaxTermJump uint64 = 1 << 40
 
 // RefusedHeader says why a voter refused a vote with 409: "lease" (the
 // stated lease is longer than the voter's) or "term-jump" (MaxTermJump).
