@@ -227,8 +227,9 @@ What to do:
   the substitute. Stops and acknowledgements have no deadline: a late
   stop is safe.
 - **Ended at a takeover:** in rare cases a start that had already begun
-  on one controller is lapsed by the next leader (its commit could not
-  be confirmed by the controllers that answered). It is then ended there,
+  on one controller is lapsed by the next leader: its commit could not
+  be confirmed, and the new leader caught it up more than 60 s after it
+  was proposed. It is then ended there,
   journalled as "substitute ended: lapsed at takeover (its commit could
   not be confirmed)", and listed under `lapsed` with `ended: true`. Check
   the plant, and start it again if it is still needed.

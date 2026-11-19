@@ -9,9 +9,7 @@ import "os"
 // tests can show they notice:
 //
 //   - lapse_ignored: a committed KindLapse is not looked at, so a late
-//     substitute start it names is carried out (#1030 review);
-//   - lapse_majority_stored: a leftover stored on a majority (committed) is
-//     named in a KindLapse too.
+//     substitute start it names is carried out (#1030 review).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutOplog(name string) bool { return name == mutOn }

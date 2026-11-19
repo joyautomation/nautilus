@@ -195,10 +195,42 @@ func TestLeftoverStartWithinTheBoundStarts(t *testing.T) {
 	}
 }
 
-// A leftover the catch-up sees stored on a majority was committed (its
-// proposer may have answered 200 and lost only the commit push): it is
-// never lapsed, however old (lapse_majority_stored turns this red).
-func TestLeftoverOnAMajorityNeverLapses(t *testing.T) {
+// The #1032 review's case, a regression test: B's catch-up adopts the
+// stale start, and its leadership ends before it appends its KindLapse.
+// The next leader's catch-up now finds the start on both replicas; it is
+// still lapsed (by age alone: copies prove nothing about a commit).
+func TestAdoptedCopyStillLapses(t *testing.T) {
+	b := newLapseBench(t, 2)
+	ctx := context.Background()
+	b.unknownStart("Level", 1)
+	b.m.set(b.urls[1], 2)
+	b.wait(2 * time.Hour)
+	b.down[0].Store(false)
+	nb := b.node(1)
+	nb.seqMu.Lock()
+	if err := nb.leaderCatchUp(ctx, 2); err != nil { // B adopts the start ...
+		nb.seqMu.Unlock()
+		t.Fatal(err)
+	}
+	nb.seqMu.Unlock()
+	b.m.set(b.urls[0], 3) // ... and loses the lease before its carrier
+	if err := b.node(0).SyncLeader(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.node(0).Heartbeat(ctx)
+	for i, n := range []string{"A", "B"} {
+		if how, _ := b.start(i, "Level"); how != "lapsed" {
+			t.Errorf("%s applied the 2-hour-old unknown start as %q; want lapsed", n, how)
+		}
+	}
+}
+
+// The accepted cost (#1032 review): a start that WAS committed (stored on
+// a majority, answered 200) whose commit push was lost, caught up by a new
+// leader more than the bound later, lapses too: copies can't prove the
+// commit. The replica that started it ends it loudly (the runtime's
+// ApplyLapse); the others record it lapsed.
+func TestCommittedStartCaughtUpLateLapses(t *testing.T) {
 	b := newLapseBench(t, 3)
 	ctx := context.Background()
 	if _, err := b.node(0).Propose(ctx, Entry{Kind: KindAck, IDs: []string{"warm"}}); err != nil {
@@ -217,8 +249,13 @@ func TestLeftoverOnAMajorityNeverLapses(t *testing.T) {
 	if err := b.node(1).SyncLeader(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if how, lapse := b.start(1, "Level"); how != "started" || lapse {
-		t.Fatalf("B applied a start stored on a majority as %q (KindLapse naming it: %v); want started", how, lapse)
+	if how, lapse := b.start(1, "Level"); how != "lapsed" || !lapse {
+		t.Fatalf("B applied it as %q (KindLapse naming it: %v); want lapsed", how, lapse)
+	}
+	b.down[0].Store(false)
+	b.node(1).Heartbeat(ctx)
+	if how, lapse := b.start(0, "Level"); how != "started" || !lapse {
+		t.Fatalf("A: %q, KindLapse naming it %v; want A's start, then the KindLapse that ends it", how, lapse)
 	}
 }
 

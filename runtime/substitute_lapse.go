@@ -58,6 +58,10 @@ type SubstituteLapse struct {
 	AtMs int64 `json:"atMs"`
 	// Ended: the start had begun here, and the lapse ended it.
 	Ended bool `json:"ended,omitempty"`
+	// journalled: the lapse's author has journalled it. A lapse that
+	// missed its majority is followed by another naming the same start
+	// (#1032 review); it is journalled once.
+	journalled bool
 }
 
 // maxLapses bounds the lapses kept for the listing.
@@ -127,7 +131,7 @@ func (r *Runtime) applyLapse(id uint64, by string, journal bool) {
 				delete(r.intent.reqs, k) // never started, as far as the log goes: a retry starts
 			}
 		}
-		r.recordLapseLocked(SubstituteLapse{ID: s.ID, Name: s.Name, Value: s.Value, By: s.By, ProposedMs: s.StartMs, AtMs: at, Ended: true})
+		r.recordLapseLocked(SubstituteLapse{ID: s.ID, Name: s.Name, Value: s.Value, By: s.By, ProposedMs: s.StartMs, AtMs: at, Ended: true, journalled: journal})
 		slog.Warn("runtime: substitute ended: lapsed at takeover (its commit could not be confirmed)", "id", id, "tag", s.Name)
 		evs := []SubstituteEvent{{Kind: SubstituteEventStop, Reason: SubstituteReasonLapsed, Entry: s, By: by, AtMs: at, Replicated: !journal}}
 		r.publishSub(append(evs, faultCleared(s, at)...))
@@ -136,10 +140,11 @@ func (r *Runtime) applyLapse(id uint64, by string, journal bool) {
 	if !journal {
 		return
 	}
-	for _, l := range r.intent.lapses {
-		if l.ID != id {
+	for i, l := range r.intent.lapses {
+		if l.ID != id || l.journalled {
 			continue
 		}
+		r.intent.lapses[i].journalled = true
 		kind := SubstituteEventLapse // never ran here: journalled quietly
 		if l.Ended {
 			kind = SubstituteEventStop // a copy ran here and ApplyLapsedSubstitute ended it: loud
@@ -155,6 +160,7 @@ func (r *Runtime) recordLapseLocked(l SubstituteLapse) {
 	for i, old := range r.intent.lapses {
 		if old.ID == l.ID {
 			if l.Ended || !old.Ended {
+				l.journalled = l.journalled || old.journalled
 				r.intent.lapses[i] = l
 			}
 			return

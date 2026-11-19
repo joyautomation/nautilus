@@ -195,9 +195,9 @@ type Options struct {
 	Now     func() time.Time
 	Log     *slog.Logger
 	// Lapse, when set, picks the entries a new leader names in its
-	// KindLapse: those it commits from an earlier term, stored on fewer
-	// than a majority of the replicas its catch-up heard, for which
-	// Lapse(entry, the leader's now) is true. Nil: nothing lapses.
+	// KindLapse: those it commits from an earlier term for which
+	// Lapse(entry, the leader's now) is true (by age: carrierLocked). Nil:
+	// nothing lapses.
 	Lapse func(e Entry, now time.Time) bool
 }
 
@@ -212,15 +212,11 @@ type Node struct {
 	// and the replication arrive in order.
 	seqMu sync.Mutex
 	// mu guards the state below.
-	mu         sync.Mutex
-	entries    []Entry
-	commit     uint64 // applied up to here
-	term       uint64 // highest term seen
-	syncedTerm uint64 // the term this leader last caught up for
-	// onMajority are the entries past the commit index the last catch-up
-	// saw stored on a majority of the replicas that answered (seq → term):
-	// committed, so never lapsed (KindLapse).
-	onMajority  map[uint64]uint64
+	mu          sync.Mutex
+	entries     []Entry
+	commit      uint64 // applied up to here
+	term        uint64 // highest term seen
+	syncedTerm  uint64 // the term this leader last caught up for
 	file        *os.File
 	lastContact map[string]time.Time
 }
@@ -709,11 +705,6 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	best, bestSelf := own, true
 	commit := own.Commit
 	answered := 1 // this instance
-	type at struct{ seq, term uint64 }
-	stored := map[at]int{}
-	for _, e := range own.Entries {
-		stored[at{e.Seq, e.Term}]++
-	}
 	var errs []string
 	for _, p := range n.o.Peers {
 		if p == n.o.Self {
@@ -730,9 +721,6 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		}
 		answered++
 		commit = max(commit, got.Commit)
-		for _, e := range got.Entries {
-			stored[at{e.Seq, e.Term}]++
-		}
 		if better(got, best) {
 			best, bestSelf = got, false
 		}
@@ -751,29 +739,26 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// The best log a majority answered with holds every committed entry,
 	// so any commit index one of them reported is safe here.
 	n.commitTo(commit)
-	n.onMajority = map[uint64]uint64{}
-	for k, c := range stored {
-		if c >= n.majority() {
-			n.onMajority[k.seq] = k.term
-		}
-	}
 	n.syncedTerm = term
 	return nil
 }
 
 // carrierLocked is what a leader of term sequences to commit the entries
 // an earlier term stored past its commit index: a KindLapse naming those
-// Options.Lapse picks, or a KindNoop. An entry the catch-up saw stored on
-// a majority was committed, and is never named. Caller holds mu.
+// Options.Lapse picks, or a KindNoop.
+//
+// By age alone (#1032 review): how many replicas hold an earlier term's
+// entry proves nothing (Raft §5.4.2: an old-term entry on a majority is
+// not committed), and copies an earlier catch-up adopted would count. The
+// accepted cost: a committed start whose commit push was lost, caught up
+// more than the bound later, lapses too, and a replica that ran it ends it
+// loudly. Caller holds mu.
 func (n *Node) carrierLocked(term uint64) Entry {
 	var refs []uint64
 	if n.o.Lapse != nil {
 		now := n.o.Now()
 		for _, e := range n.afterLocked(n.commit) {
 			if e.Term >= term || e.Kind == KindNoop || e.Kind == KindLapse {
-				continue
-			}
-			if t, ok := n.onMajority[e.Seq]; ok && t == e.Term && !mutOplog("lapse_majority_stored") {
 				continue
 			}
 			if n.o.Lapse(e, now) {

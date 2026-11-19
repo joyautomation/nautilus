@@ -57,6 +57,15 @@ func TestLapsedStartNeverStarts(t *testing.T) {
 		return n
 	}
 	eventually(t, "the lapse journalled", func() bool { return lapses() == 1 }) // events are delivered asynchronously
+	// A lapse that missed its majority is followed by another naming the
+	// same start (#1032 review): journalled once.
+	if _, err := sl.Apply(oplog.Entry{Seq: 45, Term: 3, Kind: oplog.KindLapse, Refs: []uint64{41}, By: "system", Origin: p.urls[0]}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := lapses(); n != 1 {
+		t.Fatalf("a second lapse naming the same start journalled it again: %d entries", n)
+	}
 	// Late stops, acknowledgements and expiries name an entry that is not
 	// active: nothing happens.
 	p.rts[0].ApplyUnsubstitute(41, "op", "")
@@ -116,6 +125,9 @@ func TestLapseEndsAStartedSubstituteLoudly(t *testing.T) {
 		return n
 	}
 	eventually(t, "the lapse's author to journal the end", func() bool { return journal(0) == 1 })
+	if _, err := p.srvs[0].subLog.Apply(oplog.Entry{Seq: 45, Term: 3, Kind: oplog.KindLapse, Refs: []uint64{41}, By: "system", Origin: p.urls[0]}); err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(50 * time.Millisecond) // the other's events, had it any, are delivered by now too
 	if a, b := journal(0), journal(1); a != 1 || b != 0 {
 		t.Fatalf("journalled %d times on the lapse's author and %d on the other; want 1 and 0", a, b)
