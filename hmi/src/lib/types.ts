@@ -254,6 +254,8 @@ export interface DriverStatus {
 	/** Epoch ms the current state began (0/absent = unknown). */
 	sinceMs?: number;
 	lastError?: string;
+	/** This driver runs an I/O configuration applied live that is not the manifest's. */
+	differs?: boolean;
 	metrics?: DriverMetric[];
 	devices?: DriverDevice[];
 	/** Protocol-specific structured fields (born, primaryHost, …). */

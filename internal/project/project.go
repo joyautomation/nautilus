@@ -699,6 +699,10 @@ type Project struct {
 	drivers   []nio.NamedDriver // the configured drivers, named; nil for the implicit memory loopback
 	devices   *devbind.Set      // devices: resolved; nil when none
 
+	// ioDiffers, set by NewIOConfig, says whether a driver runs a live I/O
+	// configuration other than the manifest's (the status row's differs).
+	ioDiffers func(driver string) bool
+
 	// Notices are what the platform changed about the project to run it:
 	// in the browser playground, the field drivers it simulated and the
 	// network servers it left off. Always empty on a real controller.

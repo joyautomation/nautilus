@@ -1260,7 +1260,7 @@
               (dv.detail ? `<span class="dv">${esc(dv.detail)}</span>` : "") + `</div>`).join("") + `</div>`
           : "";
         return `<div class="dcard st-${esc(d.state)}">` +
-          `<div class="dhead"><span class="dname"><span class="dtxt" title="${esc(d.name)}">${esc(d.name)}</span><span class="dkind">${esc(KIND_LABEL[d.kind] ?? d.kind)}</span></span>${badge(d.state)}</div>` +
+          `<div class="dhead"><span class="dname"><span class="dtxt" title="${esc(d.name)}">${esc(d.name)}</span><span class="dkind">${esc(KIND_LABEL[d.kind] ?? d.kind)}</span>${d.differs ? `<span class="dkind" title="This driver runs an I/O configuration applied live that is not the manifest's: naut pull --io brings it back into the project">differs</span>` : ""}</span>${badge(d.state)}</div>` +
           `<div class="ddetail">${esc(d.detail)}</div>` +
           `<div class="dmsg">${esc(d.message)}${uptime(d)}</div>` +
           (d.lastError ? `<div class="derr" title="${esc(d.lastError)}">${esc(d.lastError)}</div>` : "") +

@@ -418,3 +418,33 @@ func ioPost(t *testing.T, h http.Handler, path string, body any, token string) i
 	h.ServeHTTP(w, req)
 	return w.Code
 }
+
+// GET /api/io/files serves what naut pull --io writes: the running bytes
+// per file, who leads, and the conflicts; a controller without the hook
+// says so.
+func TestIOFilesRoute(t *testing.T) {
+	f := &fakeIO{}
+	hook := f.hook()
+	hook.Files = func() IOFiles {
+		return IOFiles{Leading: true, Units: []IODiffer{{Driver: "modbus", Device: "DEV_A"}},
+			Files: []IOFile{{Path: "modbus.yaml", Running: "a: 2\n", Booted: "abc"}}, NonIO: true}
+	}
+	o := ioOptions(f, true)
+	o.IO = hook
+	h := New(newTestRuntime(t), o).Handler()
+	w, body := doJSON(t, h, "GET", "/api/io/files", nil)
+	if w.Code != http.StatusOK || body["leading"] != true || body["nonIO"] != true {
+		t.Fatalf("files: %d %v", w.Code, body)
+	}
+	files, _ := body["files"].([]any)
+	if len(files) != 1 || fmt.Sprint(files[0]) != "map[booted:abc path:modbus.yaml running:a: 2\n]" {
+		t.Fatalf("files = %v", body["files"])
+	}
+	hook.Files = nil
+	if w, _ := doJSON(t, h, "GET", "/api/io/files", nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("without the hook: %d, want 503", w.Code)
+	}
+	if w, _ := doJSON(t, New(newTestRuntime(t), Options{}).Handler(), "GET", "/api/io/files", nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("without live I/O: %d, want 503", w.Code)
+	}
+}

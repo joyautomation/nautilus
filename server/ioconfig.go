@@ -9,6 +9,7 @@ package server
 //	POST /api/io/staged/{id}/apply                                → applied | failed
 //	GET  /api/io/staged/{id}
 //	GET  /api/io                      what runs, against the manifest
+//	GET  /api/io/files                the project files it differs in (naut pull --io)
 //
 // The engine is the project loader's (internal/project.IOConfig), handed in
 // as Options.IO so this package stays free of it. Writes need the same
@@ -60,6 +61,28 @@ type IOHook struct {
 	// (none asked for, one under way, one done).
 	Watch        func() *IOWatch
 	CancelRevert func(by string) (*IOWatch, error)
+	// Files is the project files the running I/O configuration differs in.
+	Files func() IOFiles
+}
+
+// IOFile is one project file the running I/O configuration differs in:
+// what runs, and the hash of the file the controller booted from ("" when
+// the change added the file).
+type IOFile struct {
+	Path    string `json:"path"`
+	Running string `json:"running"`
+	Booted  string `json:"booted,omitempty"`
+}
+
+// IOFiles is GET /api/io/files: what naut pull --io writes back. Leading is
+// false on a standby; Conflicts are paths held with two contents; NonIO
+// says the applied manifest also changes sections that never ran.
+type IOFiles struct {
+	Leading   bool       `json:"leading"`
+	Units     []IODiffer `json:"units"`
+	Files     []IOFile   `json:"files"`
+	Conflicts []string   `json:"conflicts,omitempty"`
+	NonIO     bool       `json:"nonIO,omitempty"`
 }
 
 // IOWatch is the last apply's watch: which changed devices have read,
@@ -232,6 +255,19 @@ func (s *Server) handleIO(w http.ResponseWriter, r *http.Request) {
 		watch = s.io.Watch()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"config": s.ioConfigState(), "running": running, "staged": list, "watch": watch})
+}
+
+// handleIOFiles serves the project files the running I/O configuration
+// differs in, for naut pull --io. Read-only, like GET /api/io.
+func (s *Server) handleIOFiles(w http.ResponseWriter, r *http.Request) {
+	if s.ioUnavailable(w) {
+		return
+	}
+	if s.io.Files == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "this controller cannot list the files of its live I/O configuration"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.io.Files())
 }
 
 // handleIOCancelRevert stops the last apply's pending revert.

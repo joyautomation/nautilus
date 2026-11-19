@@ -126,4 +126,30 @@ func TestPullSingleProgramRenameTolerant(t *testing.T) {
 	}
 }
 
+// --dry-run prints the program diff and writes nothing; the flags reach
+// runPull.
+func TestPullDryRunWritesNothing(t *testing.T) {
+	prog := "PROGRAM Renamed\nVAR_EXTERNAL x : REAL; END_VAR\nx := 1.0;\nEND_PROGRAM\n"
+	rt, err := runtime.New(runtime.Options{Program: prog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.New(rt, server.Options{}).Handler())
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	old := "PROGRAM Old\nVAR_EXTERNAL x : REAL; END_VAR\nx := 2.0;\nEND_PROGRAM\n"
+	dir := writeProject(t, map[string]string{"program.st": old})
+	var out string
+	out = captureStdout(t, func() int {
+		return runPull([]string{"--host", u.Hostname(), "--port", u.Port(), "--dir", dir, "--dry-run"})
+	})
+	raw, _ := os.ReadFile(filepath.Join(dir, "program.st"))
+	if string(raw) != old {
+		t.Fatalf("--dry-run wrote:\n%s", raw)
+	}
+	if !strings.Contains(out, "+PROGRAM Renamed") || !strings.Contains(out, "-PROGRAM Old") {
+		t.Fatalf("--dry-run printed %q, want the diff", out)
+	}
+}
+
 var _ = http.StatusOK

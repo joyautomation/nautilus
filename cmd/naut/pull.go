@@ -31,8 +31,16 @@ and a program with no local counterpart is written to <POU>.st / <POU>.fbd.
 Only program files are rewritten; generated type files (eip_types.st) are
 never touched — those mirror the device, so re-import them instead.
 
+A live I/O configuration (an apply of drivers:, devices: and the files they
+name, not a program edit) that the controller runs instead of its manifest's
+is pulled with --io: the project files it was read from are written back so
+you can review them with git and commit. A file you edited locally since the
+build is refused (named) unless --force. A standby has nothing to pull: ask
+the leader (or the service address).
+
 Usage:
-  naut pull --host <controller> [--dir <project>] [--check]
+  naut pull --host <controller> [--dir <project>] [--check] [--io]
+            [--dry-run] [--force]
 
 Flags:
   --host    Controller hostname or IP serving the tag API (required).
@@ -43,7 +51,11 @@ Flags:
   --dir     Project directory (default ".")
   --check   Report drift and exit non-zero if the controller differs;
             writes nothing. For CI — fail a build when a controller has
-            un-pulled field edits.
+            un-pulled field edits (with --io, or I/O changes).
+  --io      Also pull the live I/O configuration into the project files.
+  --dry-run Print what would change as a unified diff and write nothing
+            (exit 0). --check keeps its meaning and wins over it.
+  --force   With --io, overwrite a project file you edited locally.
 `
 
 // programInfo mirrors the server's GET /api/program response — the selected
@@ -70,6 +82,9 @@ func runPull(args []string) int {
 	port := fs.Int("port", 8080, "tag API port")
 	dir := fs.String("dir", ".", "project directory")
 	check := fs.Bool("check", false, "report drift only, write nothing")
+	withIO := fs.Bool("io", false, "also pull the live I/O configuration")
+	dry := fs.Bool("dry-run", false, "print the changes as a diff, write nothing")
+	force := fs.Bool("force", false, "with --io, overwrite locally edited files")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, pullUsage) }
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -79,13 +94,25 @@ func runPull(args []string) int {
 		return 2
 	}
 
-	root, err := fetchProgram(*host, *port, "")
+	code := pullPrograms(*host, *port, *dir, *check, *dry)
+	if *withIO {
+		if c := pullIO(*host, *port, *dir, *check, *dry, *force); c == 2 || (c == 1 && code == 0) {
+			code = c
+		}
+	}
+	return code
+}
+
+// pullPrograms pulls the controller's program edits (0 in sync or written,
+// 1 drift under --check, 2 failure).
+func pullPrograms(host string, port int, dir string, check, dry bool) int {
+	root, err := fetchProgram(host, port, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut pull:", err)
 		return 2
 	}
 
-	m, err := stproject.ComposeAll(*dir, nil)
+	m, err := stproject.ComposeAll(dir, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut pull:", err)
 		return 2
@@ -103,14 +130,14 @@ func runPull(args []string) int {
 	// file, whatever either is named — renames stay pullable.
 	if len(root.Programs) <= 1 {
 		if len(m.Programs) == 0 {
-			fmt.Fprintf(os.Stderr, "naut pull: no .st or .fbd file with a PROGRAM in %s\n", *dir)
+			fmt.Fprintf(os.Stderr, "naut pull: no .st or .fbd file with a PROGRAM in %s\n", dir)
 			return 2
 		}
 		if len(m.Programs) > 1 {
-			fmt.Fprintf(os.Stderr, "naut pull: multiple program files in %s but the controller runs one program — remove the extras or match their PROGRAM names to the controller's tasks\n", *dir)
+			fmt.Fprintf(os.Stderr, "naut pull: multiple program files in %s but the controller runs one program — remove the extras or match their PROGRAM names to the controller's tasks\n", dir)
 			return 2
 		}
-		return pullOne(root, &m.Programs[0], m.Prelude, *dir, *host, *check)
+		return pullOne(root, &m.Programs[0], m.Prelude, dir, host, check, dry)
 	}
 
 	// Multi-task: pull every program, matched by POU name.
@@ -119,7 +146,7 @@ func runPull(args []string) int {
 	for _, ps := range root.Programs {
 		info := root
 		if ps.Task != root.Task {
-			full, err := fetchProgram(*host, *port, ps.Task)
+			full, err := fetchProgram(host, port, ps.Task)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "naut pull: task %s: %v\n", ps.Task, err)
 				failures++
@@ -139,7 +166,7 @@ func runPull(args []string) int {
 			target = &stproject.ProgramFile{File: ps.POU + ext, POU: ps.POU}
 			fmt.Printf("%s (task %s) has no local file — pulling into %s\n", ps.POU, ps.Task, target.File)
 		}
-		switch pullOne(info, target, m.Prelude, *dir, *host, *check) {
+		switch pullOne(info, target, m.Prelude, dir, host, check, dry) {
 		case 1:
 			drift++
 		case 2:
@@ -155,7 +182,7 @@ func runPull(args []string) int {
 		return 2
 	}
 	if drift > 0 {
-		if *check {
+		if check {
 			fmt.Fprintln(os.Stderr, "run `naut pull` (without --check) to update")
 		}
 		return 1
@@ -165,7 +192,7 @@ func runPull(args []string) int {
 
 // pullOne reconciles one controller program with one workspace file.
 // Returns 0 for in-sync/updated, 1 for drift under --check, 2 for failure.
-func pullOne(info programInfo, target *stproject.ProgramFile, prelude, dir, host string, check bool) int {
+func pullOne(info programInfo, target *stproject.ProgramFile, prelude, dir, host string, check, dry bool) int {
 	program, ok := stproject.SplitProgram(info.Source, prelude)
 	if !ok {
 		// A program composed WITHOUT libraries (a task with none) serves
@@ -190,6 +217,11 @@ func pullOne(info programInfo, target *stproject.ProgramFile, prelude, dir, host
 	if check {
 		fmt.Printf("%s: %s differs from the controller (running %s)\n", host, target.File, info.Hash)
 		return 1
+	}
+	if dry {
+		was, _ := os.ReadFile(filepath.Join(dir, target.File))
+		fmt.Print(unifiedDiff(target.File, target.File+" ("+host+")", string(was), program))
+		return 0
 	}
 	if err := os.WriteFile(filepath.Join(dir, target.File), []byte(program), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "naut pull:", err)

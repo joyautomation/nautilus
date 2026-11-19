@@ -57,6 +57,13 @@
 		<div class="title">
 			<span class="name">{driver.name}</span>
 			<span class="kind" style="--k: {kind.color}">{kind.label}</span>
+			{#if driver.differs}
+				<span
+					class="kind"
+					style="--k: var(--warn)"
+					title="Runs an I/O configuration applied live that is not the manifest's: naut pull --io brings it back into the project">differs</span
+				>
+			{/if}
 		</div>
 		<ConnectionBadge state={driver.state} />
 	</div>

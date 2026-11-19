@@ -407,6 +407,9 @@ type DriverStatus struct {
 	Metrics   []DriverMetric `json:"metrics,omitempty"` // labeled scalar readouts
 	Devices   []DriverDevice `json:"devices,omitempty"` // sub-devices (Sparkplug devices, etc.)
 	Extra     map[string]any `json:"extra,omitempty"`   // protocol-specific structured fields
+	// Differs is set while this driver runs an I/O configuration applied live
+	// that is not the manifest's (#706): the dashboard badges the row.
+	Differs bool `json:"differs,omitempty"`
 
 	// AsOfMs is when this status was OBSERVED, stamped by the server. On a
 	// delta stream the block may be several seconds older than the frame
@@ -700,6 +703,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/program/history", s.handleProgramHistory)
 	mux.Handle("POST /api/program/activate", s.audited("program.activate", s.activateTarget, s.handleActivate))
 	mux.HandleFunc("GET /api/io", s.handleIO)
+	mux.HandleFunc("GET /api/io/files", s.handleIOFiles)
 	mux.Handle("POST /api/io/staged", s.audited("config.stage", ioStageTarget, s.handleIOStage))
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
 	mux.Handle("POST /api/io/staged/{id}/validate", s.audited("config.validate", ioStagedTarget, s.handleIOValidate))
