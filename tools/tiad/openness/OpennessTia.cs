@@ -356,9 +356,30 @@ namespace Tiad.Openness
                 string dir = Path.GetDirectoryName(o.Full);
                 string name = Path.GetFileNameWithoutExtension(o.Full) + ".zap21";
                 string full = Path.Combine(dir, name);
-                if (File.Exists(full)) File.Delete(full);
-                o.Project.Archive(new DirectoryInfo(dir), name, ProjectArchivationMode.Compressed);
-                if (!File.Exists(full)) throw new TiaException("TIA archived the project somewhere other than " + full);
+                // TIA refuses to archive into the project's own directory
+                // ("A project directory that already exists cannot be
+                // saved"), so it archives into a fresh directory of its own,
+                // and the archive is moved beside the project from there.
+                string tmp = Path.Combine(Path.GetTempPath(), "tiad-archive-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(tmp);
+                try
+                {
+                    o.Project.Archive(new DirectoryInfo(tmp), name, ProjectArchivationMode.Compressed);
+                    string made = Path.Combine(tmp, name);
+                    if (!File.Exists(made)) throw new TiaException("TIA archived the project somewhere other than " + made);
+                    if (File.Exists(full)) File.Delete(full);
+                    File.Move(made, full);
+                }
+                finally
+                {
+                    try
+                    {
+                        Directory.Delete(tmp, true);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                }
                 return full;
             });
         }
