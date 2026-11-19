@@ -34,8 +34,10 @@ var bootClock = quorum.BootClock
 // Options configures a controller's Elector.
 type Options struct {
 	// Cluster is the pair's cluster ID (NewClusterID): drawn once, when
-	// the pair is commissioned, and kept in both controllers' state
-	// directories. The witness keeps one voter per cluster, bound to the
+	// the pair is commissioned, and given to both controllers and the
+	// witness as NAUTILUS_CLUSTER, beside the peer token and outside the
+	// state directory, so a wiped state directory still re-adopts from the
+	// peer (#976). The witness keeps one voter per cluster, bound to the
 	// pair's two names, so pairs never share one (not even two sites that
 	// run one project).
 	Cluster string

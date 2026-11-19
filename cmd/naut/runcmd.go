@@ -353,6 +353,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// local gate has no lease: Release does nothing).
 	elCtx, elCancel := context.WithCancel(context.Background())
 	elDone := make(chan struct{})
+	started := time.Now() // the election starts: READY's clock for a pair member
 	go func() { gate.Run(elCtx); close(elDone) }()
 	defer func() {
 		elCancel()
@@ -531,7 +532,6 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// (a new pair waiting to be commissioned, a peer and witness both
 	// away): it is ready after firstDecisionTimeout either way, or systemd
 	// would restart it in a loop, each restart a new restart wait.
-	started := time.Now()
 	go systemdNotify(ctx, sd, watch, func() bool {
 		return replicaReady(rt.Stats().Count > 0, el, pair != nil, time.Since(started))
 	})

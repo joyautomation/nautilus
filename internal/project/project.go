@@ -414,8 +414,10 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return fmt.Errorf("redundancy.lease %s: want between %s and %s", d, minPairLease, maxPairLease)
 		}
 	}
-	if r.StateDir != "" && !filepath.IsAbs(r.StateDir) {
-		return fmt.Errorf("redundancy.state-dir %q: want an absolute path outside the project (the voter state must outlive a deploy)", r.StateDir)
+	// A controller's path, judged the same wherever Load runs (naut check
+	// on a Windows laptop): pair members are Linux-only.
+	if r.StateDir != "" && !strings.HasPrefix(r.StateDir, "/") {
+		return fmt.Errorf("redundancy.state-dir %q: want an absolute path (from /) outside the project (the voter state must outlive a deploy)", r.StateDir)
 	}
 	return nil
 }

@@ -28,7 +28,8 @@ import (
 // What a member needs besides the manifest, from its environment (naut
 // deploy's /etc/nautilus/env):
 //
-//   - NAUTILUS_NODE: a or b, which of the two controllers this one is;
+//   - NAUTILUS_NODE: a or b, which of the two controllers this one is
+//     (set per box);
 //   - NAUTILUS_PEER_TOKEN: the secret every peer request carries;
 //   - NAUTILUS_CLUSTER: the pair's cluster ID, drawn when the pair is
 //     commissioned and installed on both controllers and the witness. It
@@ -112,7 +113,7 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 	switch self {
 	case "a", "b":
 	case "":
-		return o, "", errors.New("NAUTILUS_NODE is not set: a pair member must say which controller it is, a or b as redundancy.peers names them (naut deploy sets it per box)")
+		return o, "", errors.New("NAUTILUS_NODE is not set: a pair member must say which controller it is, a or b as redundancy.peers names them (set it per box, beside NAUTILUS_PEER_TOKEN in /etc/nautilus/env under naut deploy)")
 	default:
 		return o, "", fmt.Errorf("NAUTILUS_NODE=%q: want a or b, as redundancy.peers names the pair's controllers", self)
 	}

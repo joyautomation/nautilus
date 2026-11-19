@@ -18,6 +18,7 @@ import (
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/quorum/node"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 // pairProject is a counting program whose redundancy: names a pair at the
@@ -28,6 +29,8 @@ func pairProject(a, b, w string) fstest.MapFS {
 tasks:
   - program: main.st
     scan: 50ms
+tags:
+  - { name: SP, role: setpoint, init: 0.0 }
 redundancy:
   peers:
     a: %s
@@ -35,7 +38,7 @@ redundancy:
   witness: %s
   lease: 500ms
 `, a, b, w))},
-		"main.st": &fstest.MapFile{Data: []byte("PROGRAM Main\nVAR n : DINT; END_VAR\nn := n + 1;\nEND_PROGRAM\n")},
+		"main.st": &fstest.MapFile{Data: []byte("PROGRAM Main\nVAR_EXTERNAL SP : REAL; END_VAR\nVAR n : DINT; END_VAR\nn := n + 1;\nSP := SP;\nEND_PROGRAM\n")},
 	}
 }
 
@@ -122,7 +125,8 @@ func TestPairMemberOptions(t *testing.T) {
 		t.Errorf("state %s lease %v client token %q", o.StatePath, o.Lease, o.ClientToken)
 	}
 	r.StateDir = "/srv/naut-state"
-	if o, _, _ := pairOptions(r, "0.0.0.0:8080", "", pairEnv(env)); o.StatePath != "/srv/naut-state/quorum.state" {
+	want, _ := filepath.Abs("/srv/naut-state")
+	if o, _, _ := pairOptions(r, "0.0.0.0:8080", "", pairEnv(env)); o.StatePath != filepath.Join(want, pairStateFile) {
 		t.Errorf("state-dir: does not override $STATE_DIRECTORY: %s", o.StatePath)
 	}
 }
@@ -179,9 +183,19 @@ type pairNode struct {
 }
 
 func startPairNode(t *testing.T, files fstest.MapFS, env map[string]string, ln net.Listener) *pairNode {
+	return startPairNodeAPI(t, files, env, ln, nil)
+}
+
+// startPairNodeAPI also serves the tag API on api, as runProject does,
+// when api is not nil.
+func startPairNodeAPI(t *testing.T, files fstest.MapFS, env map[string]string, ln, api net.Listener) *pairNode {
 	t.Helper()
 	proj := loadPair(t, files)
-	m, err := newPairMember(proj.Redundancy, "127.0.0.1:18080", "", pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) { return ln, nil }})
+	apiAddr := "127.0.0.1:18080"
+	if api != nil {
+		apiAddr = api.Addr().String()
+	}
+	m, err := newPairMember(proj.Redundancy, apiAddr, "", pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) { return ln, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,6 +207,14 @@ func startPairNode(t *testing.T, files fstest.MapFS, env map[string]string, ln n
 	gate := gateOnLiveScans(proj, m.q, rt, localGateLease)
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{})}
+	if api != nil {
+		sopts := proj.Server
+		sopts.Cluster = m.q
+		srv := server.New(rt, sopts)
+		hs := &http.Server{Handler: srv.Handler()}
+		go hs.Serve(api)
+		go func() { <-ctx.Done(); hs.Close() }()
+	}
 	go func() {
 		ran := make(chan struct{})
 		go func() { rt.Run(ctx); close(ran) }()
@@ -246,6 +268,17 @@ func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
 		lnA.Close()
 		t.Skip("no 127.0.0.2 on this host:", err)
 	}
+	// Both tag APIs on one port, as two boxes running one manifest have.
+	apiA, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, apiPort, _ := net.SplitHostPort(apiA.Addr().String())
+	apiB, err := net.Listen("tcp", "127.0.0.2:"+apiPort)
+	if err != nil {
+		apiA.Close()
+		t.Skip("127.0.0.2 does not take the same API port:", err)
+	}
 	cluster, token := node.NewClusterID(), "peer-secret"
 	wctx, wstop := context.WithCancel(context.Background())
 	wready, wdone := make(chan string, 1), make(chan int, 1)
@@ -264,7 +297,7 @@ func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
 	env := func(self string) map[string]string {
 		return map[string]string{"NAUTILUS_NODE": self, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
 	}
-	nodes := map[string]*pairNode{"a": startPairNode(t, files, env("a"), lnA), "b": startPairNode(t, files, env("b"), lnB)}
+	nodes := map[string]*pairNode{"a": startPairNodeAPI(t, files, env("a"), lnA, apiA), "b": startPairNodeAPI(t, files, env("b"), lnB, apiB)}
 	a, b := nodes["a"].m.q.Node(), nodes["b"].m.q.Node()
 
 	// A new pair: both hear the witness and wait for the operator.
@@ -294,8 +327,26 @@ func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
 	pairWait(t, "the leader to scan", 5*time.Second, func() bool { return l.rt.Stats().Count > 0 })
 	host := map[string]string{"a": "127.0.0.1", "b": "127.0.0.2"}
 	pairWait(t, "the standby to name the leader's tag API", 5*time.Second, func() bool {
-		return s.m.q.Status().LeaderAddr == host[lead]+":18080"
+		return s.m.q.Status().LeaderAddr == host[lead]+":"+apiPort
 	})
+	// A write to the standby's tag API lands on the leader: the standby's
+	// proxy follows Status.LeaderAddr.
+	resp, err := http.Post("http://"+host[stand]+":"+apiPort+"/api/tags", "application/json", strings.NewReader(`{"name":"SP","value":7.5}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		t.Fatalf("a write to the standby: %d %s", resp.StatusCode, body)
+	}
+	pairWait(t, "the write to reach the leader's store", 5*time.Second, func() bool {
+		v, _ := l.rt.Tags().ReadPath("SP")
+		return fmt.Sprint(v) == "7.5"
+	})
+	if v, _ := s.rt.Tags().ReadPath("SP"); fmt.Sprint(v) == "7.5" {
+		t.Error("the write landed on the standby's own store, not the leader's")
+	}
 	time.Sleep(time.Second) // two leases: the standby still does not scan
 	if n := s.rt.Stats().Count; n != 0 || s.m.q.IsLeader() {
 		t.Fatalf("the standby scanned %d times (leader %v) while %s led", n, s.m.q.IsLeader(), lead)
@@ -389,4 +440,79 @@ func TestPairWarnsAboutUntrustedAdvertisedNames(t *testing.T) {
 	if got := m.untrustedAPIs(nil); len(got) != 0 {
 		t.Errorf("an IP and localhost: %q, want no warning", got)
 	}
+}
+
+// Two processes that both claim to be a (design §2, test plan F30): a
+// commissioned pair runs, and a third box, mis-set to NAUTILUS_NODE=a,
+// starts with the same manifest and environment. Whatever it does, the
+// voters must never let two processes lead at once: each has its own
+// boot nonce, so a grant to one never counts as the other's renewal.
+func TestPairTwoProcessesClaimingANeverBothLead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs three members and a witness on loopback for several leases")
+	}
+	if goruntime.GOOS != "linux" {
+		t.Skip("a pair member needs CLOCK_BOOTTIME (Linux)")
+	}
+	var lns [3]net.Listener
+	for i := range lns {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.%d:0", i+1))
+		if err != nil {
+			for _, l := range lns[:i] {
+				l.Close()
+			}
+			t.Skip("no loopback address 127.0.0.", i+1, ":", err)
+		}
+		lns[i] = ln
+	}
+	cluster, token := node.NewClusterID(), "peer-secret"
+	wctx, wstop := context.WithCancel(context.Background())
+	wready, wdone := make(chan string, 1), make(chan int, 1)
+	go func() {
+		wdone <- witnessMain(wctx, []string{"--listen", "127.0.0.1:0", "--state", t.TempDir(), "--lease", "500ms"},
+			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": token}), io.Discard, io.Discard, wready)
+	}()
+	t.Cleanup(func() { wstop(); <-wdone })
+	wit := <-wready
+	files := pairProject(lns[0].Addr().String(), lns[1].Addr().String(), wit)
+	env := func(self string) map[string]string {
+		return map[string]string{"NAUTILUS_NODE": self, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
+	}
+	a, b := startPairNode(t, files, env("a"), lns[0]), startPairNode(t, files, env("b"), lns[1])
+	ea, eb := a.m.q.Node(), b.m.q.Node()
+	pairWait(t, "both to hear the witness", 10*time.Second, func() bool {
+		return ea.Status().WitnessIncarnation != 0 && eb.Status().WitnessIncarnation != 0
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ea.Recommission(ctx, ea.Status().WitnessIncarnation, max(ea.KnownFloor(), eb.KnownFloor())+1000); err != nil {
+		t.Fatal(err)
+	}
+	pairWait(t, "a leader", 15*time.Second, func() bool { return ea.IsLeader() || eb.IsLeader() })
+	// The case that matters is the real a leading, so the impostor's
+	// requests are under a's name while a's lease runs: b hands over.
+	if eb.IsLeader() {
+		b.m.q.Release()
+	}
+	pairWait(t, "a to lead", 15*time.Second, func() bool { return ea.IsLeader() })
+
+	// The impostor: a third box, also a, with its own empty state.
+	imp := startPairNode(t, files, env("a"), lns[2])
+	ei := imp.m.q.Node()
+	els := []*node.Elector{ea, eb, ei}
+	led := make([]bool, 3)
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		n := 0
+		for i, e := range els {
+			if e.IsLeader() {
+				n++
+				led[i] = true
+			}
+		}
+		if n > 1 {
+			t.Fatalf("two processes lead at once (a %v t%d, b %v t%d, impostor a %v t%d)",
+				ea.IsLeader(), ea.Term(), eb.IsLeader(), eb.Term(), ei.IsLeader(), ei.Term())
+		}
+	}
+	t.Logf("led during the impostor's 10 s: a %v, b %v, impostor %v", led[0], led[1], led[2])
 }
