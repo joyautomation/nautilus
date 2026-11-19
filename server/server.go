@@ -253,6 +253,12 @@ type Options struct {
 	// reads it).
 	AllowedHosts []string
 
+	// Substitutes are the addresses a person may start a substitute value
+	// on (#707), as the manifest's `substitutes:` rules resolved: what
+	// GET /api/substitutes lists and POST /api/substitutes holds a start
+	// to. Empty: no start is accepted (the runtime has none to offer).
+	Substitutes []SubstituteRule
+
 	// Audit is the runtime audit journal (#709): every write route records
 	// one entry per request to it, accepted or refused, before the client
 	// is answered (server/audit.go). naut run gives it the file journal
@@ -476,6 +482,7 @@ type Server struct {
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
 	tagWriter   func(name string, value any) error
+	subRules    []SubstituteRule // Options.Substitutes
 	audit       *auditor
 
 	resync time.Duration
@@ -563,6 +570,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.alarms = opts[0].Alarms
 		s.shelveTimes = opts[0].AlarmShelveTimes
 		s.tagWriter = opts[0].TagWriter
+		s.subRules = opts[0].Substitutes
 	}
 	var rec audit.Recorder
 	var unavailable error
@@ -576,6 +584,9 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	if len(s.shelveTimes) == 0 {
 		s.shelveTimes = alarm.DefaultShelveTimes
 	}
+	// An expiry has no request to journal it: the server hears it from
+	// the runtime and records it (substitute.expire, by system).
+	rt.OnSubstituteEvent(s.auditSubstituteEvent)
 	return s
 }
 
@@ -695,6 +706,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioStagedTarget, s.handleIOApply))
 	mux.Handle("POST /api/io/revert/cancel", s.audited("config.revert.cancel", nil, s.handleIOCancelRevert))
 	mux.HandleFunc("GET /api/forces", s.handleForces)
+	mux.HandleFunc("GET /api/substitutes", s.handleSubstitutes)
+	mux.Handle("POST /api/substitutes", s.audited("substitute.start", s.substituteStartTarget, s.handleSubstituteStart))
+	mux.Handle("DELETE /api/substitutes/{id}", s.audited("substitute.stop", s.substituteStopTarget, s.handleSubstituteStop))
+	mux.Handle("POST /api/substitutes/ack", s.audited("substitute.ack", s.substituteAckTarget, s.handleSubstituteAck))
 	mux.Handle("POST /api/forces", s.audited("force.set", s.forceTarget, s.handleForce))
 	mux.Handle("POST /api/forces/clear", s.audited("force.clear-all", s.unforceAllTarget, s.handleUnforceAll))
 	mux.Handle("DELETE /api/forces/{name}", s.audited("force.clear", s.unforceTarget, s.handleUnforce))

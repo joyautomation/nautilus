@@ -1,0 +1,342 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
+)
+
+// Substitute values (#707): while a sensor is bad, or plausibly wrong, the
+// program runs on a value someone chose, flagged as such everywhere, for a
+// bounded time.
+//
+//	GET    /api/substitutes        the active ones, and the rules that say what may be:
+//	                               {"substitutes": [{id, name, value, live, liveQuality, by, startMs,
+//	                               untilMs, grantedMs, remainingMs, ackOnStart, acked, role, maxMs,
+//	                               operatorValue}], "rules": [{tag, value, maxMs, role, ackOnStart,
+//	                               operatorValue}]}
+//	POST   /api/substitutes        {"name": "LS_1", "value"?: …, "seconds"?: n} — start one. The
+//	                               value is the rule's unless the rule has operator-value: true;
+//	                               seconds defaults to the rule's max and may not exceed it
+//	DELETE /api/substitutes/{id}   end one (404 when no such entry is active)
+//	POST   /api/substitutes/ack    {"ids": [1, 2]} — acknowledge the ones that wait for it
+//
+// Every mutating call is a write: it passes s.authorize (today the write
+// policy of POST /api/tags), and leaves one audit entry through the seam
+// (substitute.start / .stop / .ack, the target the tag). An expiry has no
+// request: the server journals it directly (substitute.expire, by
+// "system"). A start and an acknowledgement are elevated actions, refused
+// while the journal cannot be written; a stop is a way back to normal, and
+// is allowed (recovery, as clearing a force is).
+
+// SubstituteRule is one substitutable address as the server answers for
+// it: what a manifest's `substitutes:` rule resolved to (Options.Substitutes).
+type SubstituteRule struct {
+	// Tag is the substitutable tag, or a member path of one.
+	Tag string `json:"tag"`
+	// Value is the substitute the program runs on.
+	Value any `json:"value"`
+	// MaxMs is the longest grant.
+	MaxMs int64 `json:"maxMs"`
+	// Role is the role allowed to start one (shown now, enforced with
+	// roles, #708).
+	Role          string `json:"role"`
+	AckOnStart    bool   `json:"ackOnStart"`
+	OperatorValue bool   `json:"operatorValue"`
+	// Rule is the index of the manifest rule that decided it.
+	Rule int `json:"rule"`
+}
+
+type substituteRequest struct {
+	Name    string   `json:"name"`
+	Value   any      `json:"value"`
+	Seconds *float64 `json:"seconds"`
+}
+
+type substituteView struct {
+	runtime.Substitution
+	Role          string `json:"role,omitempty"`
+	MaxMs         int64  `json:"maxMs,omitempty"`
+	OperatorValue bool   `json:"operatorValue,omitempty"`
+}
+
+type substitutesResponse struct {
+	Substitutes []substituteView `json:"substitutes"`
+	Rules       []SubstituteRule `json:"rules"`
+	// Started is the entry a POST just began.
+	Started *substituteView `json:"started,omitempty"`
+}
+
+func (s *Server) substituteRule(name string) (SubstituteRule, bool) {
+	for _, r := range s.subRules {
+		if strings.EqualFold(r.Tag, name) {
+			return r, true
+		}
+	}
+	return SubstituteRule{}, false
+}
+
+func (s *Server) substituteView(e runtime.Substitution) substituteView {
+	v := substituteView{Substitution: e}
+	if r, ok := s.substituteRule(e.Name); ok {
+		v.Role, v.MaxMs, v.OperatorValue = r.Role, r.MaxMs, r.OperatorValue
+	}
+	return v
+}
+
+func (s *Server) substitutesResponse() substitutesResponse {
+	resp := substitutesResponse{Substitutes: []substituteView{}, Rules: s.subRules}
+	if resp.Rules == nil {
+		resp.Rules = []SubstituteRule{}
+	}
+	for _, e := range s.rt.Substitutes() {
+		resp.Substitutes = append(resp.Substitutes, s.substituteView(e))
+	}
+	return resp
+}
+
+func (s *Server) handleSubstitutes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.substitutesResponse())
+}
+
+// refuseSubstitute answers when this server cannot hold a substitute at
+// all: one that fronts a controller it does not run.
+func (s *Server) refuseSubstitute(w http.ResponseWriter) bool {
+	if s.tagWriter != nil {
+		http.Error(w, "this server mirrors a controller it does not run — substitute on that controller", http.StatusNotImplemented)
+		return true
+	}
+	return false
+}
+
+func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
+	var req substituteRequest
+	derr := json.NewDecoder(r.Body).Decode(&req)
+	if code, msg := s.authorize(r, PermSubstitute, req.Name); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
+	if s.refuseSubstitute(w) {
+		return
+	}
+	if derr != nil || req.Name == "" {
+		http.Error(w, `expected {"name": ..., "value"?: ..., "seconds"?: ...}`, http.StatusBadRequest)
+		return
+	}
+	rule, ok := s.substituteRule(req.Name)
+	if !ok {
+		http.Error(w, fmt.Sprintf("%s is not substitutable: no substitutes: rule names it", req.Name), http.StatusBadRequest)
+		return
+	}
+	value := rule.Value
+	if req.Value != nil && fmt.Sprint(req.Value) != fmt.Sprint(rule.Value) {
+		if !rule.OperatorValue {
+			http.Error(w, fmt.Sprintf("the rule for %s substitutes %v and does not let the operator choose another value (operator-value: true)", rule.Tag, rule.Value), http.StatusForbidden)
+			return
+		}
+		value = req.Value
+	}
+	d := time.Duration(rule.MaxMs) * time.Millisecond
+	if req.Seconds != nil {
+		// Compared as seconds, before any conversion to a Duration: a huge
+		// value overflows the conversion into a misleading "not positive".
+		switch sec := *req.Seconds; {
+		case math.IsNaN(sec):
+			http.Error(w, "seconds is not a number", http.StatusBadRequest)
+			return
+		case sec > d.Seconds():
+			http.Error(w, fmt.Sprintf("seconds exceeds the rule's maximum of %s", d), http.StatusBadRequest)
+			return
+		case sec < 1:
+			http.Error(w, "seconds must be at least 1", http.StatusBadRequest)
+			return
+		default:
+			d = time.Duration(sec * float64(time.Second))
+		}
+	}
+	e, err := s.rt.Substitute(rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	logAction(r, "substitute: started", "tag", e.Name, "id", e.ID, "for", d)
+	resp := s.substitutesResponse()
+	v := s.substituteView(e)
+	resp.Started = &v
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
+	id, idErr := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	name, _ := s.substituteByID(id)
+	if code, msg := s.authorize(r, PermSubstitute, name); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
+	if s.refuseSubstitute(w) {
+		return
+	}
+	if idErr != nil {
+		http.Error(w, "the substitute's id is a number", http.StatusBadRequest)
+		return
+	}
+	e, ok := s.rt.Restore(id, s.principal(r))
+	if !ok {
+		http.Error(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
+		return
+	}
+	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID)
+	writeJSON(w, http.StatusOK, s.substitutesResponse())
+}
+
+type substituteAckRequest struct {
+	IDs []uint64 `json:"ids"`
+}
+
+func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
+	var req substituteAckRequest
+	derr := json.NewDecoder(r.Body).Decode(&req)
+	if code, msg := s.authorize(r, PermSubstitute, s.substituteNames(req.IDs)); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
+	if s.refuseSubstitute(w) {
+		return
+	}
+	if derr != nil || len(req.IDs) == 0 {
+		http.Error(w, `expected {"ids": [1, 2]}: an empty list acknowledges nothing`, http.StatusBadRequest)
+		return
+	}
+	acked := s.rt.AckSubstitutes(req.IDs, s.principal(r))
+	if len(acked) == 0 {
+		http.Error(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
+		return
+	}
+	logAction(r, "substitute: acknowledged", "count", len(acked))
+	writeJSON(w, http.StatusOK, s.substitutesResponse())
+}
+
+// substituteByID finds the active entry with this ID.
+func (s *Server) substituteByID(id uint64) (string, runtime.Substitution) {
+	for _, e := range s.rt.Substitutes() {
+		if e.ID == id {
+			return e.Name, e
+		}
+	}
+	return "", runtime.Substitution{}
+}
+
+// substituteNames is the tags of the active entries with these IDs,
+// comma-separated, for a target.
+func (s *Server) substituteNames(ids []uint64) string {
+	var names []string
+	for _, id := range ids {
+		if n, _ := s.substituteByID(id); n != "" {
+			names = append(names, n)
+		}
+	}
+	return strings.Join(names, ",")
+}
+
+// The audit targets of the substitute routes.
+
+// substituteLive is what an address is without any substitute: its stored
+// value and quality, or, when it is substituted already, the entry's own
+// record of the live reading (the stored view is the substitute).
+func (s *Server) substituteLive(name string) any {
+	root, _ := ir.SplitAddress(name)
+	value, quality := s.valueOf(name), s.rt.TagQuality(root).String()
+	for _, e := range s.rt.Substitutes() {
+		eroot, _ := ir.SplitAddress(e.Name)
+		if !strings.EqualFold(eroot, root) {
+			continue
+		}
+		quality = e.LiveQuality // the root's quality without its substitutes
+		if strings.EqualFold(e.Name, name) {
+			value = e.Live
+		}
+	}
+	return map[string]any{"value": value, "quality": quality}
+}
+
+func (s *Server) substituteStartTarget(_ *http.Request, body []byte) auditTarget {
+	var req substituteRequest
+	json.Unmarshal(body, &req)
+	t := auditTarget{target: req.Name}
+	rule, ok := s.substituteRule(req.Name)
+	if !ok {
+		return t
+	}
+	t.before = s.substituteLive(req.Name)
+	t.after = req.Value
+	if t.after == nil {
+		t.after = rule.Value
+	}
+	t.detail = map[string]any{"rule": rule.Rule, "role": rule.Role, "ackOnStart": rule.AckOnStart, "maxMs": rule.MaxMs}
+	// Starting an address that already has a substitute ends that entry
+	// and begins a new one: the entry it replaces is named here, since its
+	// end is not a request of its own.
+	for _, e := range s.rt.Substitutes() {
+		if strings.EqualFold(e.Name, req.Name) {
+			t.detail["replaces"] = map[string]any{"id": e.ID, "by": e.By, "value": e.Value, "untilMs": e.UntilMs}
+		}
+	}
+	t.answered = func(body []byte) any {
+		var resp struct {
+			Started *runtime.Substitution `json:"started"`
+		}
+		if json.Unmarshal(body, &resp) != nil || resp.Started == nil {
+			return nil
+		}
+		return map[string]any{"id": resp.Started.ID, "value": resp.Started.Value, "untilMs": resp.Started.UntilMs, "grantedMs": resp.Started.GrantedMs}
+	}
+	return t
+}
+
+func (s *Server) substituteStopTarget(r *http.Request, _ []byte) auditTarget {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil {
+		return auditTarget{}
+	}
+	name, e := s.substituteByID(id)
+	if name == "" {
+		return auditTarget{}
+	}
+	return auditTarget{target: name, before: map[string]any{"id": id, "value": e.Value, "live": e.Live, "liveQuality": e.LiveQuality}}
+}
+
+func (s *Server) substituteAckTarget(_ *http.Request, body []byte) auditTarget {
+	var req substituteAckRequest
+	json.Unmarshal(body, &req)
+	return auditTarget{target: s.substituteNames(req.IDs), detail: map[string]any{"ids": req.IDs}}
+}
+
+// auditSubstituteEvent journals what the runtime did on its own: an expiry
+// has no request, so it is recorded here, by "system", with the value the
+// program ran on and the live value it went back to. A start, stop and
+// acknowledgement are already journalled by the route that made them.
+func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
+	if ev.Kind != runtime.SubstituteEventExpire {
+		return
+	}
+	e := ev.Entry
+	s.audit.record(audit.Entry{
+		TS:     time.UnixMilli(ev.AtMs),
+		User:   ev.By,
+		Source: audit.SourceSystem,
+		Action: "substitute.expire",
+		Target: e.Name,
+		Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
+		After:  map[string]any{"live": e.Live},
+		Detail: map[string]any{"reason": ev.Reason, "grantedMs": e.GrantedMs, "untilMs": e.UntilMs},
+		Result: audit.ResultOK,
+	})
+}

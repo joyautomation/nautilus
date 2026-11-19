@@ -19,6 +19,8 @@ func TestCheckSubstitutes(t *testing.T) {
 	}{
 		{"a good rule", "{match: Level, substitute: 90.0}", 0, "1 substitutable inputs"},
 		{"a value the type cannot hold", `{match: Level, substitute: "high"}`, 1, "substitutes.rules[0]: the substitute for Level"},
+		{"a member path on a scalar tag", "{match: Level.Foo, substitute: 1.0}", 1, "substitutes.rules[0]: the substitute for Level.Foo"},
+		{"a rule shadowed by an earlier glob", "{match: \"Lev*\", substitute: 1.0}\n    - {match: Level, substitute: 2.0}", 1, "shadowed by rules[0]"},
 		{"a rule that matches nothing", "{match: Nope, substitute: 1.0}", 1, `match "Nope" matches no input tag`},
 	} {
 		dir := t.TempDir()

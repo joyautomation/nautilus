@@ -24,6 +24,7 @@ import (
 
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 // Bounds on a substitute's longest grant.
@@ -147,7 +148,7 @@ func resolveSubstitutes(c *SubstitutesConfig, tags []runtime.TagDef) ([]Substitu
 		spec.AckOnStart = pickBool(r.AckOnStart, d.AckOnStart)
 		spec.OperatorValue = pickBool(r.OperatorValue, d.OperatorValue)
 		rootGlob, member, dotted := strings.Cut(r.Match, ".")
-		matched := false
+		matched, decided, shadow := false, 0, -1
 		for _, in := range inputs {
 			if ok, err := path.Match(strings.ToLower(rootGlob), strings.ToLower(in)); err != nil {
 				return nil, fmt.Errorf("%s: match %q: %w", where, r.Match, err)
@@ -161,11 +162,15 @@ func resolveSubstitutes(c *SubstitutesConfig, tags []runtime.TagDef) ([]Substitu
 				s.Addr = in + "." + member
 			}
 			if j, was := taken[strings.ToLower(s.Addr)]; was {
-				_ = j // an earlier rule decided it: the first match wins
+				shadow = j // an earlier rule decided it: the first match wins
 				continue
 			}
 			taken[strings.ToLower(s.Addr)] = i
+			decided++
 			out = append(out, s)
+		}
+		if matched && decided == 0 {
+			return nil, fmt.Errorf("%s: match %q is shadowed by rules[%d]: every input it matches is already decided there, so it would change nothing (put the specific rule first)", where, r.Match, shadow)
 		}
 		if matched {
 			continue
@@ -250,6 +255,16 @@ func (p *Project) AcceptanceSubstitutes() []acceptance.SubstituteRule {
 	for i, s := range p.substitutes {
 		out[i] = acceptance.SubstituteRule{Addr: s.Addr, Value: s.Value, Max: s.Max,
 			AckOnStart: s.AckOnStart, OperatorValue: s.OperatorValue}
+	}
+	return out
+}
+
+// serverSubstitutes is the specs in the form the server answers for.
+func serverSubstitutes(specs []SubstituteSpec) []server.SubstituteRule {
+	var out []server.SubstituteRule
+	for _, s := range specs {
+		out = append(out, server.SubstituteRule{Tag: s.Addr, Value: s.Value, MaxMs: s.Max.Milliseconds(),
+			Role: s.Role, AckOnStart: s.AckOnStart, OperatorValue: s.OperatorValue, Rule: s.Rule})
 	}
 	return out
 }

@@ -442,3 +442,40 @@ func TestProgramMemberWriteKeepsTheSubstituteOutOfLive(t *testing.T) {
 		t.Fatalf("P1.Run = %v; the program's member write was lost", v)
 	}
 }
+
+// A substitute started before the field delivers again still reports what
+// the tag held, the last reading: the journal's "before" and the HMI's
+// "live" need it, and a sensor gone quiet is the case substitutes are for.
+func TestSubstituteReportsTheLastReadingBeforeAnyDelivery(t *testing.T) {
+	rt, d := newSubRig(t, nil)
+	rt.Scan()
+	d.mu.Lock()
+	d.in = nio.Values{"StartPB": false, "StopPB": false} // Level: the field has gone quiet
+	d.mu.Unlock()
+	sub(t, rt, "Level", 95)
+	if l := rt.Substitutes(); len(l) != 1 || l[0].Live != 10.0 {
+		t.Fatalf("Substitutes() = %+v; want Live 10, the last reading", l)
+	}
+}
+
+// CheckSubstituteValue holds an address to its type as a write is, and a
+// member path on a scalar, or on a tag with no declared type, is refused:
+// `naut check` reports it instead of the rule loading and never starting.
+func TestCheckSubstituteValue(t *testing.T) {
+	rt, _ := newSubRig(t, nil)
+	rt.Scan()
+	for _, tc := range []struct {
+		addr string
+		v    any
+		ok   bool
+	}{
+		{"Level", 95.0, true},
+		{"Level", "high", false},
+		{"Level.Foo", 1.0, false},
+		{"Nowhere.Foo", 1.0, false},
+	} {
+		if err := rt.CheckSubstituteValue(tc.addr, tc.v); (err == nil) != tc.ok {
+			t.Errorf("CheckSubstituteValue(%s, %v) = %v; want ok=%v", tc.addr, tc.v, err, tc.ok)
+		}
+	}
+}
