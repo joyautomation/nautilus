@@ -64,6 +64,7 @@ var table = []mutation{
 	{"restart_counts_at_once", []string{"TestRestartOwesTheQuietPeriod", "TestReviewRestartSkipsQuiet"}},
 	{"no_adopt_echo", []string{"TestLostControllerIgnoresAnAckToItsEarlierBoot", "TestReviewStaleProposeFloor"}},
 	{"switch_without_peer", []string{"TestSwitchNeedsThePeer"}},
+	{"readopt_skips_quiet", []string{"TestReadoptOverPendingOwesTheQuietPeriod"}},
 }
 
 // event is one line of `go test -json`.

@@ -38,6 +38,7 @@ var Mutations = []string{
 	"restart_counts_at_once", // a restarted controller counts its adopted incarnation with no quiet period
 	"no_adopt_echo",          // an uncommissioned controller takes an Adopt sent before its restart
 	"switch_without_peer",    // a switch is proposed with the peer unheard (it may be down)
+	"readopt_skips_quiet",    // re-adopting the old incarnation over a pending proposal skips the quiet period
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

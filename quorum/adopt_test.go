@@ -598,3 +598,28 @@ func TestFloorOverEveryIncarnationHeard(t *testing.T) {
 		t.Fatalf("floor %d, want ≥ 20 (the stray's promised term)", f)
 	}
 }
+
+// #1008 re-review (a): A proposed (2, J) and pends. The peer may have
+// adopted J with its Ack lost, and lead on J's witness. A proposal of the
+// OLD incarnation at a higher generation then reaches A: A re-adopts I,
+// which it never stopped holding, but it must still count I only one
+// lease after the write. Counting at once, it could win on {A, W_I} while
+// the peer's lease on W_J runs: a split brain.
+func TestReadoptOverPendingOwesTheQuietPeriod(t *testing.T) {
+	a := newCtl(t, "A", commissioned(1, incI, 0), 0)
+	now := at(lease)
+	a.hear(now, incJ, 0)
+	if q, _ := a.tick(now); len(q) != 1 || a.v.State().PendingGen != 2 {
+		t.Fatalf("no proposal of J: %+v", q)
+	}
+	out := a.recv(now, Adopt{From: "B", Kind: Propose, Gen: 3, Incarnation: incI, Nonce: 0xB1, Echo: 0xA1})
+	if len(out) != 1 || out[0].Kind != Ack {
+		t.Fatalf("the higher proposal of I not acked: %+v", out)
+	}
+	if g, i := adopted(a.v.State()); g != 3 || i != incI || a.v.State().PendingGen != 0 {
+		t.Fatalf("not re-adopted: %+v", a.v.State())
+	}
+	if inc, from := a.c.Counting(); inc != incI || from < now.Add(lease) {
+		t.Fatalf("counts %d from %v, want %d from %v (the quiet period)", inc, from, incI, now.Add(lease))
+	}
+}

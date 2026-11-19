@@ -377,8 +377,12 @@ func (a *Adoption) newest() uint64 {
 // incarnation stops the old one counting now, before any Ack leaves.
 func (a *Adoption) adopt(now Instant, gen, inc, peerFloor uint64) *Persist {
 	st := &a.v.st
-	quiet := inc != st.Incarnation
-	if quiet && st.Incarnation != 0 {
+	// Quiet for a new incarnation, and for any adoption over a proposal
+	// in flight, the old incarnation re-adopted included: while it was
+	// pending the peer may have adopted the proposed one with its Ack
+	// lost, and may lead on it still (#1008 re-review).
+	quiet := inc != st.Incarnation || (st.PendingGen != 0 && !mut("readopt_skips_quiet"))
+	if inc != st.Incarnation && st.Incarnation != 0 {
 		a.switches++
 		a.standing = now
 	}
