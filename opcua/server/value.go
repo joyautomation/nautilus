@@ -6,6 +6,7 @@
 package server
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
@@ -30,6 +31,9 @@ type member struct {
 	// and every Value read goes through resolve; the members Browse lists
 	// (children, roots) are only ever named, never read.
 	absent bool
+	// wire is "ByteString" or "ByteArray" for a STRING of hex served as
+	// octets (a mapped node's Wire).
+	wire string
 }
 
 // walk resolves segs (ir.PathSegments form: member names and "[n]") below
@@ -169,8 +173,24 @@ func isObject(m member) bool {
 // enumeration to Int32 (OPC UA enumerations are Int32-valued), TIME to
 // Duration (a Double of milliseconds). Everything else is the canonical
 // 64-bit type, which is also what Sparkplug publishes.
+// maxBytes is the most octets a ByteString or Byte[] node carries: an
+// IO-Link ISDU value is up to 232 octets and process data up to 32 (the
+// client's opcua.MaxBytes; a test holds the two equal).
+const maxBytes = 232
+
+// isByteArray is a STRING of hex served as Byte[] (ValueRank 1).
+func isByteArray(m member) bool { return m.wire == "ByteArray" && m.val.Kind == ir.TypeString }
+
 func dataType(m member) uint32 {
 	v, t := m.val, m.typ
+	if v.Kind == ir.TypeString {
+		switch m.wire {
+		case "ByteString":
+			return id.ByteString
+		case "ByteArray":
+			return id.Byte
+		}
+	}
 	if v.Kind == ir.TypeArray {
 		if len(v.Arr) > 0 {
 			var et *ir.Type
@@ -343,6 +363,19 @@ func variant(m member) (*ua.Variant, error) {
 	if v.Kind != ir.TypeArray {
 		if isObject(m) {
 			return nil, fmt.Errorf("%s is an object, not a variable", m.addr)
+		}
+		if m.wire != "" && v.Kind == ir.TypeString {
+			raw, err := hex.DecodeString(v.S)
+			if err != nil {
+				return nil, fmt.Errorf("%s holds %q, which is not hex text: %w", m.addr, v.S, err)
+			}
+			if len(raw) > maxBytes {
+				return nil, fmt.Errorf("%s holds %d octets, more than the %d a byte value carries", m.addr, len(raw), maxBytes)
+			}
+			if m.wire == "ByteArray" {
+				return ua.NewVariant(ua.ByteArray(raw))
+			}
+			return ua.NewVariant(raw)
 		}
 		return ua.NewVariant(scalar(v, dt))
 	}

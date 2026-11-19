@@ -76,6 +76,9 @@ func (s *Set) Mapped(d Instance) (m *uaserver.Mapped, writable []string, err err
 		tag := d.Name + "_" + pt.Name
 		m.Nodes = append(m.Nodes, uaserver.MappedNode{
 			NodeID: subst(pt.NodeID), Parent: parent, Name: name, Desc: pt.Desc, Tag: tag,
+			// Octets on the wire, hex in the tag: as a ByteString or Byte[],
+			// as the profile says (opcua/bytes.go).
+			Wire: pt.Wire,
 		})
 		if pt.Writable {
 			writable = append(writable, tag)

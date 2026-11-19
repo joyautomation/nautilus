@@ -45,6 +45,9 @@ func (s *Set) OPCUADevices() []OPCUADevice {
 		for _, pt := range d.points {
 			nid := p.Substitute(pt.NodeID, d.Params)
 			b := opcua.TagBinding{Name: memberName(d.Name, pt.Name), NodeID: nid, Type: opcuaTypes[pt.Type], Desc: pt.Desc}
+			if pt.Wire != "" {
+				b.Type = pt.Wire // STRING hex over octets (profile validation allows only that)
+			}
 			if ns := devprofile.NodeNamespace(nid); ns > 0 {
 				if uri := p.Namespace(ns); uri != "" && !devprofile.IsPlaceholderNamespace(uri) {
 					b.Namespace = uri

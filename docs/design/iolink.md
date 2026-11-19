@@ -101,11 +101,11 @@ Rules, all in `devbind` so there is one copy of each:
 ## 3. The master profile's `iolink:` block
 
 ```yaml
-# pepperl-fuchs-ice3.yaml (added in PR 3)
+# pepperl-fuchs-ice3.yaml
 iolink:
   ports: 8
-  pd-in:  { point: "Port{n}_PdiU32", form: u32, unverified: true }   # §3.1
-  pd-out: { point: "Port{n}_PdoU32", form: u32, unverified: true }
+  pd-in:  { point: "Port{n}_PdiBytes", form: bytes, doc: "pf §12.2 p. 171" }
+  pd-out: { point: "Port{n}_PdoBytes", form: bytes, doc: "pf §12.2 p. 172" }
   pd-valid: "Port{n}_PdiValid"
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
@@ -117,7 +117,7 @@ iolink:
 |---|---|
 | `ports` | how many IO-Link ports the master has |
 | `pd-in.point` | the point holding a port's raw process data in |
-| `pd-in.form` | how that point carries the bytes: `hex` (text, two hex digits per byte, as on the ifm), `u32` (an unsigned 32-bit integer, as the P+F's PDI Data Unsigned32); `bytes` (a ByteString, as is) comes with PR 3b, which gives profiles a byte-string point type |
+| `pd-in.form` | how that point carries the bytes: `hex` (text, two hex digits per byte, as on the ifm), `u32` (an unsigned 32-bit integer, as the P+F's PDI Data Unsigned32); `bytes` (octets on the wire, a ByteString or a Byte[] array: a STRING point with `wire: ByteString` or `wire: ByteArray`, holding the octets as lowercase hex, any length up to 232 octets) |
 | `pd-in.doc`, `pd-in.unverified` | where the form is documented or was measured, as a point's `doc:` (a docs id, then where); or `unverified: true`. One is required: the form is a claim of its own (for `u32`, where a short image sits), and `naut devices show` prints it |
 | `pd-out` | the same for process data out; absent means the master offers no PD out |
 | `pd-valid` | a BOOL point that says the master holds valid process data in (optional) |
@@ -127,17 +127,23 @@ iolink:
 
 Every template is expanded for `n` = 1..`ports`, and `devprofile` checks
 that each expansion names a point the profile has, with a type its key
-can carry (`u32` an integer point, `hex` a STRING, `bytes` an array of
-BYTE or a STRING, ids integers, `pd-valid` a BOOL). The keys are
+can carry (`u32` an integer point, `hex` a STRING, `bytes` a STRING with a `wire:`, ids integers, `pd-valid` a BOOL). The keys are
 kebab-case like the rest of the profile.
 
-What the three masters offer today, and what PR 3 adds:
+What the three masters offer (version 3 of the P+F and ifm profiles, 2 of
+the SICK, PR 3b):
 
 | Master | PD in | PD out | Ids | Status | ISDU | Notes |
 |---|---|---|---|---|---|---|
-| P+F ICE3 | `PdiU32` (u32) | `PdoU32` (u32) | yes | `Status`, `Mode` | none yet | PR 3 adds the PDI/PDO byte strings, so PD longer than 4 bytes can be read |
-| ifm AL1590 | `Pdin` (hex) | none | none | none | none | PR 3 adds pdout and the device's vendor and device id, from the ifm tree the AL1427 manual documents |
-| SICK SIG300 | none | none | none | none | none | pins only, every name a stand-in. PR 3 gives it OPC 30120 points, marked `unverified` until someone exports a real SIG300's address space |
+| P+F ICE3 | `PdiBytes` (bytes, ByteString) | `PdoBytes` (bytes) | yes | `Status`, `Mode` | none yet | pf §12.2 pp. 171-172 document the Byte String nodes, 1 to 32 octets; the U32 points stay for projects that read them. The Byte Array twins are not served |
+| ifm AL1590 | `Pdin` (hex, measured) | `Pdout` (hex, unverified) | `VendorID`, `DeviceID` (unverified) | `Status` (unverified) | none yet | only pdin was measured; the others follow its naming. The AL1427 manual spells them differently (ProcessDataOutput, VendorID, DeviceID) with no node ids |
+| SICK SIG300 | `PdiBytes` (bytes, ByteArray) | `PdoBytes` | yes | `Status` | none yet | OPC 30120's variables (Byte[], UInt16/UInt32 ids, Byte status) named and typed as the NodeSet has them; every node id and the namespace index are stand-ins, `unverified` until a real SIG300's address space is exported |
+
+OPC 30120 types process data and ISDU values as `Byte[]`, not as a
+ByteString, so a profile says which it is with `wire:`; a read accepts
+either, a write sends the declared one. The simulators serve each as
+declared (a Byte[] node has ValueRank 1), and both refuse more than 232
+octets, a read as Bad and a write as Bad_OutOfRange.
 
 ### 3.1 The `u32` form
 

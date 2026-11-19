@@ -193,12 +193,13 @@ func TestIOLinkReadsAtMostMaxSize(t *testing.T) {
 }
 
 // naut devices show prints a master's iolink: block with each carrier's
-// provenance: the u32 alignment on the P+F is a claim no document makes,
-// and a reader must see it is unverified.
+// provenance: a form no document supports shows as UNVERIFIED, and a point
+// carried as octets shows its wire type, so a reader sees both.
 func TestDevicesShowIOLinkProvenance(t *testing.T) {
 	for id, want := range map[string][]string{
-		"pepperl-fuchs-ice3": {"iolink: 8 ports", "pd-in Port{n}_PdiU32 as u32 (form: UNVERIFIED)", "pd-out Port{n}_PdoU32 as u32 (form: UNVERIFIED)", "pd-valid Port{n}_PdiValid", "device-id Port{n}_DeviceID"},
-		"ifm-al1590":         {"iolink: 8 ports", "pd-in Port{n}_Pdin as hex (form: measured pdin hex text, '0286' is 0x0286)"},
+		"pepperl-fuchs-ice3": {"iolink: 8 ports", "pd-in Port{n}_PdiBytes as bytes (form: pf §12.2 p. 171)", "pd-out Port{n}_PdoBytes as bytes (form: pf §12.2 p. 172)", "pd-valid Port{n}_PdiValid", "device-id Port{n}_DeviceID", "wire ByteString"},
+		"ifm-al1590":         {"iolink: 8 ports", "pd-in Port{n}_Pdin as hex (form: measured pdin hex text, '0286' is 0x0286)", "pd-out Port{n}_Pdout as hex (form: UNVERIFIED (al1427 p. 168", "vendor-id Port{n}_VendorID"},
+		"sick-sig300":        {"iolink: 8 ports", "pd-in Port{n}_PdiBytes as bytes (form: opc30120 ProcessDataInput", "wire ByteArray", "UNVERIFIED"},
 	} {
 		var out bytes.Buffer
 		if code := runDevicesShow([]string{id}, &out); code != 0 {
@@ -210,10 +211,5 @@ func TestDevicesShowIOLinkProvenance(t *testing.T) {
 				t.Errorf("%s: show lacks %q:\n%s", id, w, out.String())
 			}
 		}
-	}
-	var out bytes.Buffer
-	runDevicesShow([]string{"sick-sig300"}, &out)
-	if strings.Contains(out.String(), "iolink:") {
-		t.Errorf("sick-sig300 has no iolink: block, yet show prints one:\n%s", out.String())
 	}
 }

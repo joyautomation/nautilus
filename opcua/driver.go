@@ -1142,7 +1142,7 @@ func (d *Driver) apply(b *binding, dv *ua.DataValue) {
 	if dv != nil && substituted(dv.Status) {
 		// Not Bad: the server stands behind the number as a deliberate
 		// stand-in. Keep it and say so (#707); a non-scalar is still Bad.
-		if v, ok := toValue(dv.Value); ok {
+		if v, ok, _ := d.valueOf(b, dv.Value); ok {
 			b.bad, b.subst, b.delivered = false, true, true
 			d.snapshot[b.Name] = v
 			return
@@ -1156,10 +1156,10 @@ func (d *Driver) apply(b *binding, dv *ua.DataValue) {
 		b.bad = true
 		return
 	}
-	v, ok := toValue(dv.Value)
+	v, ok, why := d.valueOf(b, dv.Value)
 	if !ok {
 		if !b.bad {
-			d.lastErr = fmt.Errorf("tag %s: value is not a scalar built-in", b.Name)
+			d.lastErr = fmt.Errorf("tag %s: %w", b.Name, why)
 		}
 		b.bad = true
 		return

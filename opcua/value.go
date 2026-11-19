@@ -81,6 +81,8 @@ func toVariant(typ string, v any) (*ua.Variant, error) {
 			return nil, err
 		}
 		return ua.NewVariant(b)
+	case ByteString, ByteArray:
+		return bytesVariant(typ, v)
 	case "String":
 		switch x := v.(type) {
 		case string:

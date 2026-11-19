@@ -79,11 +79,15 @@ const NoPoll = "none"
 
 // ── types ────────────────────────────────────────────────────────────────
 
-// TypeNames lists the built-in types a binding may declare, in OPC UA's
-// numbering order (the DataType node ids i=1 … i=13).
+// TypeNames lists the types a binding may declare: the thirteen built-in
+// scalars in OPC UA's numbering order (DataType node ids i=1 … i=13), then
+// the two byte types.
 var TypeNames = []string{
 	"Boolean", "SByte", "Byte", "Int16", "UInt16", "Int32", "UInt32",
 	"Int64", "UInt64", "Float", "Double", "String", "DateTime",
+	// The byte types (bytes.go): not scalars a server's import finds, but
+	// ones a device profile binds (IO-Link process data, ISDU).
+	ByteString, ByteArray,
 }
 
 var typeByName = func() map[string]bool {

@@ -192,6 +192,11 @@ type Point struct {
 	// BrowseName.
 	NodeID string `yaml:"node-id"`
 	Path   string `yaml:"path"`
+	// Wire is the OPC UA type a STRING point is carried as when it is not
+	// String: "ByteString" or "ByteArray" (Byte[]). The point holds the
+	// octets as lowercase hex text, so its length varies with the device
+	// and the language side stays vendor-neutral (opcua/bytes.go).
+	Wire string `yaml:"wire"`
 
 	// Modbus columns.
 	Table   string  `yaml:"table"`
@@ -463,6 +468,9 @@ func (p *Profile) validateOPCUA(pt *Point) error {
 	}
 	if pt.Table != "" || pt.Format != "" || pt.Scale != 0 || pt.Offset != 0 {
 		return fmt.Errorf("an OPC UA point has no Modbus columns")
+	}
+	if pt.Wire != "" && ((pt.Wire != "ByteString" && pt.Wire != "ByteArray") || pt.Type != "STRING") {
+		return fmt.Errorf("wire %q: only a STRING point can be carried as ByteString or ByteArray", pt.Wire)
 	}
 	if pt.NodeID == "" || pt.Path == "" {
 		return fmt.Errorf("an OPC UA point needs node-id and path")

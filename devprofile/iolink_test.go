@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuiltinIOLinkPorts(t *testing.T) {
-	for id, want := range map[string]int{"pepperl-fuchs-ice3": 8, "ifm-al1590": 8, "sick-sig300": 0, "abb-acs355-fmbt21": 0} {
+	for id, want := range map[string]int{"pepperl-fuchs-ice3": 8, "ifm-al1590": 8, "sick-sig300": 8, "abb-acs355-fmbt21": 0} {
 		p, err := loadBuiltin(id)
 		if err != nil {
 			t.Fatal(err)
@@ -17,7 +17,7 @@ func TestBuiltinIOLinkPorts(t *testing.T) {
 	}
 	pf, _ := loadBuiltin("pepperl-fuchs-ice3")
 	s := pf.IOLink
-	if s.PDIn.Form != FormU32 || PortPoint(s.PDIn.Point, 3) != "Port3_PdiU32" || PortPoint(s.VendorID, 8) != "Port8_VendorID" || s.PDOut == nil {
+	if s.PDIn.Form != FormBytes || PortPoint(s.PDIn.Point, 3) != "Port3_PdiBytes" || PortPoint(s.VendorID, 8) != "Port8_VendorID" || s.PDOut == nil {
 		t.Errorf("pepperl-fuchs-ice3 iolink: %+v", s)
 	}
 }
@@ -35,6 +35,8 @@ points:
   - { name: "P{n}_In",     type: UDINT,  repeat: 2, node-id: "ns=1;s=P{n}/In", path: "P{n}/In",  unverified: true }
   - { name: "P{n}_Out",    type: UDINT,  repeat: 2, node-id: "ns=1;s=P{n}/Out", path: "P{n}/Out", writable: true, unverified: true }
   - { name: "P{n}_Hex",    type: STRING, repeat: 2, node-id: "ns=1;s=P{n}/Hex", path: "P{n}/Hex", unverified: true }
+  - { name: "P{n}_Oct",    type: STRING, wire: ByteString, repeat: 2, node-id: "ns=1;s=P{n}/Oct", path: "P{n}/Oct", unverified: true }
+  - { name: "P{n}_OctOut", type: STRING, wire: ByteArray, repeat: 2, writable: true, node-id: "ns=1;s=P{n}/OctOut", path: "P{n}/OctOut", unverified: true }
   - { name: "P{n}_Valid",  type: BOOL,   repeat: 2, node-id: "ns=1;s=P{n}/V", path: "P{n}/V",   unverified: true }
   - { name: "P{n}_Vendor", type: UINT,   repeat: 2, node-id: "ns=1;s=P{n}/Ven", path: "P{n}/Ven", unverified: true }
   - { name: "P{n}_Device", type: UDINT,  repeat: 2, node-id: "ns=1;s=P{n}/Dev", path: "P{n}/Dev", unverified: true }
@@ -56,13 +58,28 @@ func TestIOLinkBlock(t *testing.T) {
 	if p.IOLinkPorts() != 2 || p.IOLink.PDIn.Doc != "man p. 1" || !p.IOLink.PDOut.Unverified {
 		t.Errorf("iolink: %+v", p.IOLink)
 	}
+	bytes := strings.NewReplacer(`point: "P{n}_In", form: u32`, `point: "P{n}_Oct", form: bytes`, `point: "P{n}_Out", form: u32`, `point: "P{n}_OctOut", form: bytes`).Replace(ok)
+	if bp, err := ParseProfile([]byte(iolinkProfile(bytes)), "test"); err != nil || bp.IOLink.PDIn.Form != FormBytes {
+		t.Fatalf("bytes carriers: %v", err)
+	}
+	// A wire is for a STRING point, and one of the two byte types.
+	for name, bad := range map[string]string{
+		"wire on a BOOL":  strings.Replace(iolinkProfile(ok), `name: "P{n}_Valid",  type: BOOL,`, `name: "P{n}_Valid",  type: BOOL, wire: ByteString,`, 1),
+		"an unknown wire": strings.Replace(iolinkProfile(ok), `wire: ByteString,`, `wire: Blob,`, 1),
+	} {
+		if _, err := ParseProfile([]byte(bad), "test"); err == nil || !strings.Contains(err.Error(), "only a STRING point can be carried as ByteString or ByteArray") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 	const in, out = `{ point: "P{n}_In", form: u32, doc: "man p. 1" }`, `{ point: "P{n}_Out", form: u32, unverified: true }`
 	for _, c := range []struct{ name, old, new, want string }{
 		{"no ports", "ports: 2", "ports: 0", "ports 0 is not 1-64"},
 		{"more ports than points", "ports: 2", "ports: 3", "port 3's point P3_In is not in the profile"},
 		{"no pd-in", "  pd-in: " + in + "\n", "", "pd-in is required"},
 		{"no form", in, `{ point: "P{n}_In", doc: "man p. 1" }`, "pd-in: form is required"},
-		{"unknown form", in, `{ point: "P{n}_In", form: bytes, doc: "man p. 1" }`, `form "bytes" is not u32 or hex`},
+		{"unknown form", in, `{ point: "P{n}_In", form: base64, doc: "man p. 1" }`, `form "base64" is not u32, hex or bytes`},
+		{"bytes on a point with no wire", in, `{ point: "P{n}_Hex", form: bytes, doc: "man p. 1" }`, "point P1_Hex is not carried as octets: form bytes needs wire"},
+		{"bytes on a UDINT", in, `{ point: "P{n}_In", form: bytes, doc: "man p. 1" }`, "point P1_In is UDINT"},
 		{"no {n}", `point: "P{n}_In"`, `point: "P1_In"`, "has no {n}"},
 		{"u32 on a STRING", in, `{ point: "P{n}_Hex", form: u32, doc: "man p. 1" }`, "point P1_Hex is STRING"},
 		{"hex on a UDINT", in, `{ point: "P{n}_In", form: hex, doc: "man p. 1" }`, "point P1_In is UDINT"},

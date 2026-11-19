@@ -37,6 +37,7 @@ package server
 
 import (
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -467,6 +468,23 @@ func fromVariant(m member, dv *ua.DataValue) (any, ua.StatusCode, string) {
 		return nil, ua.StatusBadWriteNotSupported, "a StatusCode cannot be written"
 	}
 	v := dv.Value
+	if isByteArray(m) {
+		// A Byte[] node takes a one-dimensional array of Byte, stored as hex.
+		var raw []byte
+		switch b := v.Value().(type) {
+		case []byte:
+			raw = b
+		case ua.ByteArray:
+			raw = b
+		}
+		if !v.Has(ua.VariantArrayValues) || v.Type() != ua.TypeIDByte || (raw == nil && v.Value() == nil) {
+			return nil, ua.StatusBadTypeMismatch, fmt.Sprintf("a %s for a Byte[] node", variantName(v))
+		}
+		if len(raw) > maxBytes {
+			return nil, ua.StatusBadOutOfRange, fmt.Sprintf("%d octets: a byte value carries at most %d", len(raw), maxBytes)
+		}
+		return hex.EncodeToString(raw), ua.StatusGood, ""
+	}
 	if v.Has(ua.VariantArrayValues) {
 		return nil, ua.StatusBadWriteNotSupported, "array writes are not supported"
 	}
@@ -480,6 +498,14 @@ func fromVariant(m member, dv *ua.DataValue) (any, ua.StatusCode, string) {
 	case dt == id.Boolean:
 		if b, ok := x.(bool); ok {
 			return b, ua.StatusGood, ""
+		}
+		return mismatch()
+	case dt == id.ByteString:
+		if b, ok := x.([]byte); ok {
+			if len(b) > maxBytes {
+				return nil, ua.StatusBadOutOfRange, fmt.Sprintf("%d octets: a byte value carries at most %d", len(b), maxBytes)
+			}
+			return hex.EncodeToString(b), ua.StatusGood, ""
 		}
 		return mismatch()
 	case dt == id.String:
@@ -703,6 +729,8 @@ func typeName(dt uint32) string {
 		return "Duration"
 	case id.String:
 		return "String"
+	case id.ByteString:
+		return "ByteString"
 	case id.SByte:
 		return "SByte"
 	case id.Byte:
