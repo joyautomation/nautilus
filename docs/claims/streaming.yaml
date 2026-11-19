@@ -279,7 +279,7 @@ claims:
       TAG-048, not this claim.
 
   - id: STR-030
-    claim: The quality wire tokens are good, stale, bad and notConnected.
+    claim: The quality wire tokens are good, stale, bad, notConnected and substituted.
     source: "#per-tag-quality"
     tests:
       - go ./io TestQualityTokensAreStableWireFormat

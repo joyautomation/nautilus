@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -405,5 +406,104 @@ func TestReplaceDriverBindsAStatsReader(t *testing.T) {
 	}
 	if got := b2.stats().Count; got != 1 {
 		t.Errorf("its Stats read Count %d, want this runtime's 1 scan", got)
+	}
+}
+
+// ReplaceDriverObserved reports the outputs the first push after the swap
+// hands the new driver, and only that push (#706: what an apply actually
+// commanded).
+func TestReplaceDriverObservedReportsTheFirstPush(t *testing.T) {
+	rt, set, _, _, ctx := modbusRig(t, false)
+	s2 := newModbusSlave(t)
+	s2.Unit(1).SetHolding(0, 4)
+	m2 := newModbus(t, s2)
+	set.Gate(m2)
+	m2.Start(ctx)
+	t.Cleanup(m2.Stop)
+	_, pushed, err := rt.ReplaceDriverObserved(ctx, "mb", m2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case v := <-pushed:
+		t.Fatalf("reported %v before any scan", v)
+	default:
+	}
+	rt.Scan()
+	select {
+	case v := <-pushed:
+		if fmt.Sprint(v) != "map[Cmd:5]" {
+			t.Fatalf("first push = %v, want map[Cmd:5]", v)
+		}
+	default:
+		t.Fatal("the first push after the swap was not reported")
+	}
+	rt.Scan()
+	if len(pushed) != 0 {
+		t.Fatal("a later push was reported too")
+	}
+}
+
+// Two drivers swapped before the next scan each hear their own first push:
+// one watch per swap, not one for the runtime (#960 re-check).
+func TestReplaceDriverObservedTwoSwapsBeforeAScan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	mk := func(srv *slave.Server, in, cmd string) *modbus.Driver {
+		host, port, _ := net.SplitHostPort(srv.Addr())
+		p, _ := strconv.Atoi(port)
+		d, err := modbus.New(modbus.Manifest{
+			Sources: []modbus.Source{{ID: "D" + in, Host: host, Port: p, UnitID: 1, Timeout: 500 * time.Millisecond, RetryMin: 20 * time.Millisecond, RetryMax: 80 * time.Millisecond}},
+			Tags: []modbus.TagBinding{
+				{Name: in, Source: "D" + in, Table: modbus.TableHolding, Address: 0, Format: "uint16"},
+				{Name: cmd, Source: "D" + in, Table: modbus.TableHolding, Address: 10, Format: "uint16", Writable: true},
+			},
+		}, modbus.WithScanRate(10*time.Millisecond))
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Start(ctx)
+		t.Cleanup(d.Stop)
+		return d
+	}
+	s1, s2 := newModbusSlave(t), newModbusSlave(t)
+	set, err := nio.NewMulti(nio.NamedDriver{Name: "a", Driver: mk(s1, "InA", "CmdA")}, nio.NamedDriver{Name: "b", Driver: mk(s2, "InB", "CmdB")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Main\nVAR_EXTERNAL InA : DINT; CmdA : DINT; InB : DINT; CmdB : DINT; END_VAR\nCmdA := InA + 1;\nCmdB := InB + 2;\nEND_PROGRAM",
+		Driver:  set,
+		Tags: []runtime.TagDef{runtime.Input("InA", runtime.Init(int64(0))), runtime.Output("CmdA", runtime.Init(int64(0))),
+			runtime.Input("InB", runtime.Init(int64(0))), runtime.Output("CmdB", runtime.Init(int64(0)))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	var pushed []<-chan nio.Values
+	for _, sw := range []struct {
+		name    string
+		srv     *slave.Server
+		in, cmd string
+	}{{"a", s1, "InA", "CmdA"}, {"b", s2, "InB", "CmdB"}} {
+		d := mk(sw.srv, sw.in, sw.cmd)
+		set.Gate(d)
+		_, ch, err := rt.ReplaceDriverObserved(ctx, sw.name, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pushed = append(pushed, ch)
+	}
+	rt.Scan()
+	for i, want := range []string{"map[CmdA:1]", "map[CmdB:2]"} {
+		select {
+		case v := <-pushed[i]:
+			if fmt.Sprint(v) != want {
+				t.Errorf("swap %d: first push %v, want %s", i, v, want)
+			}
+		default:
+			t.Errorf("swap %d: its first push was not reported", i)
+		}
 	}
 }

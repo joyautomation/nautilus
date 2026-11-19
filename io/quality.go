@@ -9,10 +9,17 @@ package io
 // plausible reads as live. Quality replaces the guess with a fact the driver
 // already knows.
 //
-// The enum is deliberately four values, not OPC-UA's 256. An operator screen
-// makes exactly four distinctions: trust it, it's old, it's wrong, there's
-// nothing there. Anything finer belongs in a driver's own status detail
+// The enum is deliberately five values, not OPC-UA's 256. An operator screen
+// makes exactly five distinctions: trust it, it's old, it's wrong, there's
+// nothing there, and someone put this value here in place of the field's.
+// Anything finer belongs in a driver's own status detail
 // (server.DriverStatus), not on ten thousand tags.
+//
+// Every mapping of a Quality (to a JSON token, an OPC UA status, a device
+// roll-up, an HMI badge) treats a value it does not know as NOT Good: a
+// sixth value added without updating one of them must never read as
+// trustworthy. AllQualities lists them, and tests in each mapping range
+// over it.
 type Quality uint8
 
 const (
@@ -35,21 +42,32 @@ const (
 	// no last-known value to show, and distinct from Bad because nothing has
 	// failed: it simply has not started.
 	NotConnected
+	// Substituted is a value an operator put in place of the field's while
+	// the sensor is bad or wrong (#707): the program runs on it, and it is
+	// not the plant's reading. OPC UA's Uncertain_SubstituteValue.
+	Substituted
 )
+
+// AllQualities is every Quality, Good first, for the exhaustiveness tests
+// a mapping keeps.
+func AllQualities() []Quality { return []Quality{Good, Stale, Bad, NotConnected, Substituted} }
 
 // String renders a Quality as the token that crosses the HTTP API and lands
 // in the HMI kit's `Quality` union type. Lower-camel so it reads as JSON.
 func (q Quality) String() string {
 	switch q {
+	case Good:
+		return "good"
 	case Stale:
 		return "stale"
 	case Bad:
 		return "bad"
 	case NotConnected:
 		return "notConnected"
-	default:
-		return "good"
+	case Substituted:
+		return "substituted"
 	}
+	return "bad" // a value this build does not know is never "good"
 }
 
 // Good reports whether this quality means the value can be used as-is —
@@ -70,8 +88,10 @@ func ParseQuality(s string) (Quality, bool) {
 		return Bad, true
 	case "notConnected":
 		return NotConnected, true
+	case "substituted":
+		return Substituted, true
 	}
-	return Good, false
+	return Bad, false
 }
 
 // QualityReporter is an optional refinement a Driver may also implement:

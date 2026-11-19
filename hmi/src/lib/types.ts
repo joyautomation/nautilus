@@ -76,7 +76,7 @@ export interface TrendThreshold {
  *   at all. A Sparkplug node that never birthed, an address that never
  *   answered.
  */
-export type Quality = 'good' | 'stale' | 'bad' | 'notConnected';
+export type Quality = 'good' | 'stale' | 'bad' | 'notConnected' | 'substituted';
 
 /** Reserved status roles used by StatusPill and other indicators. */
 export type StatusKind = 'good' | 'warning' | 'serious' | 'critical' | 'off';

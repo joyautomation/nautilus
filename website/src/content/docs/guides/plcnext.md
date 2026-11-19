@@ -411,6 +411,35 @@ its outputs, and then the whole frame goes out. **For production with
 outputs, use the shm transport with its output watchdog on.** It's the
 only route with a safe state when the program stops.
 
+## When naut or the shim dies
+
+Measured on an AXC F 2152 with a DO16 output module (#863):
+
+- **naut killed (or crashed), transport shm, `output-watchdog: 0`:** the
+  firmware does nothing. The PLC stays Running, the bus stays up, and the
+  shim keeps writing naut's last frame, so the outputs **hold**, for as
+  long as naut is down. The firmware doesn't zero them when naut's
+  BusConductor/gRPC session drops.
+- Not measured on the bench:
+  - **Transport grpc:** naut writes the outputs over gRPC itself, and
+    nothing else writes them. That they hold when naut dies is
+    **inferred** from the shm case above, where the firmware showed no
+    reaction to the session dropping.
+  - **The default `output-watchdog: 1s`:** by design, the shim drives the
+    frame to zero one second after naut's last write.
+- **The shim killed:** the firmware treats it as fatal ("Process
+  'NautilusIo' has exited unexpectedly"). Within about 4 s the hardware
+  watchdog reboots the whole controller, and the outputs go off with it.
+  After that reboot the PLC comes up **Ready|Blocked** ("Loading Plc is
+  prevented by 'Arp.System.Watchdog'"): no project, no bus, and the shim
+  idle. It stays that way until someone restarts the runtime
+  (`sudo /etc/init.d/plcnext restart`) or the controller.
+
+`naut check` warns about a manifest whose outputs would hold: transport
+grpc with an output binding, or shm with `output-watchdog: 0`. It's a
+warning and not an error, because holding the last value can be the
+engineered choice for an output. Make sure it is one.
+
 ## Start on boot
 
 The controller has no systemd, and `admin` cannot write `/etc/init.d`

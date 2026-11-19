@@ -260,3 +260,44 @@ func TestResolveTypeRules(t *testing.T) {
 		t.Errorf("a path for a profile id: %v", err)
 	}
 }
+
+// The device roll-up: a substituted member makes the device Substituted
+// (below Bad, above Stale), and a quality this build does not know counts as
+// Bad, never as Good (#707).
+func TestRollupSubstitutedAndUnknown(t *testing.T) {
+	asm := []*assembler{{dev: "P1", members: []string{"a", "b"}}}
+	member := map[string]int{"a": 0, "b": 1}
+	// Every quality, on one member beside a Good one: the device is Good
+	// only when the member is, and a known quality never becomes Good.
+	for _, q := range nio.AllQualities() {
+		got, ok := rollup(asm, member, map[string]nio.Quality{"a": q, "b": nio.Good})["P1"]
+		if !ok {
+			got = nio.Good
+		}
+		if (got == nio.Good) != (q == nio.Good) {
+			t.Errorf("a member %s beside a good one: device %s", q, got)
+		}
+	}
+	for _, c := range []struct {
+		in   map[string]nio.Quality
+		want nio.Quality
+		good bool
+	}{
+		{map[string]nio.Quality{"a": nio.Substituted}, nio.Substituted, false},
+		{map[string]nio.Quality{"a": nio.Substituted, "b": nio.Stale}, nio.Substituted, false},
+		{map[string]nio.Quality{"a": nio.Substituted, "b": nio.Bad}, nio.Bad, false},
+		{map[string]nio.Quality{"a": nio.Quality(len(nio.AllQualities()))}, nio.Bad, false},
+		{map[string]nio.Quality{"a": nio.Good}, nio.Good, true},
+	} {
+		got, ok := rollup(asm, member, c.in)["P1"]
+		if c.good {
+			if ok && got != nio.Good {
+				t.Errorf("%v: device %v, want Good", c.in, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%v: device %v, want %v", c.in, got, c.want)
+		}
+	}
+}

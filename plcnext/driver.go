@@ -797,6 +797,9 @@ type ShimHealth struct {
 	Held                     uint64 // this driver's reads that kept the previous copy: the shim was mid-write every try
 }
 
+// Warnings are the manifest's non-fatal findings, for `naut check`.
+func (d *Driver) Warnings() []string { return d.m.Warnings() }
+
 // Health reports the driver's state for /api/drivers.
 func (d *Driver) Health() Health {
 	h := Health{

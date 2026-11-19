@@ -138,6 +138,32 @@ publishes at node level. Two connections with one id would share a topic,
 so that is a load error naming both; give a driver a `name:` to choose
 its id.
 
+**A link that blips.** By default a device dies on the first publish tick
+its connection is unhealthy, and is born again on the first healthy one,
+so one failed poll costs every host a DDEATH and a DBIRTH.
+`device-death-delay` holds the DDEATH instead:
+
+```yaml
+sparkplug:
+  broker: tcp://broker:1883
+  group-id: Plant
+  device-death-delay: 2s   # 0 (the default) to 1m
+```
+
+A device that recovers inside the delay sends nothing: no DDEATH, no
+DBIRTH, one continuous life. One still unhealthy past it dies on the next
+tick, so the DDEATH comes at most one publish interval after the delay.
+Births are never delayed. **The trade:** nothing is sent for the device
+while its death is held (no DDATA, not even a `max-interval` heartbeat),
+so SCADA shows its last values with no quality and no updates, and a real
+loss is announced the delay late. A change made meanwhile goes out once
+the device recovers. 1–5 s suits a link known to blip; leave it at 0 where a host
+must know at once. A rebirth (NBIRTH) decides every device afresh, so a
+device unhealthy at that moment is left out of it, held or not.
+The node's row on the dashboard (and in `/api/drivers`) shows the delay
+as "DDEATH held", and any device whose death is being held right now
+under "devices held".
+
 ## Writes
 
 The node is **read-only by default**: an NCMD/DCMD that writes a tag is

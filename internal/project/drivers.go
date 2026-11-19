@@ -83,7 +83,23 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 	case *nio.Multi:
 		var out []func() server.DriverStatus
 		for _, c := range drv.Children() {
-			out = append(out, driverStatusFuncs(c.Driver)...)
+			rows := driverStatusFuncs(c.Driver)
+			if len(rows) != 1 {
+				out = append(out, rows...)
+				continue
+			}
+			// The child is looked up on every call, not kept from load: an
+			// I/O configuration applied live (#706) replaces it, and the row
+			// must report the driver that runs, not the one stopped.
+			name, first := c.Name, rows[0]
+			out = append(out, func() server.DriverStatus {
+				if cur, ok := drv.Child(name); ok && !sameDriver(cur, c.Driver) {
+					if now := driverStatusFuncs(cur); len(now) == 1 {
+						return now[0]()
+					}
+				}
+				return first()
+			})
 		}
 		return out
 	}
@@ -672,6 +688,19 @@ func sparkplugStatus(st sparkplug.Status) server.DriverStatus {
 			AtMs:  st.LastPubMs,
 			Text:  agoText(st.LastPubMs),
 		})
+	}
+	if st.DeviceDeathDelayMs > 0 {
+		d := time.Duration(st.DeviceDeathDelayMs) * time.Millisecond
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "DDEATH held", Value: d.Seconds(), Text: d.String()})
+		var held []string
+		for _, dev := range st.Devices {
+			if dev.DeathHeld {
+				held = append(held, dev.ID)
+			}
+		}
+		if len(held) > 0 {
+			s.Metrics = append(s.Metrics, server.DriverMetric{Label: "devices held", Value: float64(len(held)), Text: strings.Join(held, ", ")})
+		}
 	}
 	if sf := st.StoreForward; sf != nil {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "buffered", Value: float64(sf.Buffered), Text: fmt.Sprintf("%d / %d", sf.Buffered, sf.Max)})

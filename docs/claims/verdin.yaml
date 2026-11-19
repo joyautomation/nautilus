@@ -136,7 +136,7 @@ claims:
     note: >-
       Measured with tools/deploy/boottime.py and tools/deploy/boot-probe,
       five reboots (the last two with GOMAXPROCS=4), 2026-11-18
-      (docs/design/verdin-bench.md). A cold power-on was not measured.
+      (docs/design/verdin-bench.md). The cold power-on is VDN-012.
   - id: VDN-010
     claim: >-
       On the two-core module, GOMAXPROCS=4 lets a SCHED_FIFO task run on
@@ -166,3 +166,16 @@ claims:
       network pointing at Toradex's torizon-docker image for the AM62,
       7.8.0+build.78. Not repeatable in CI, and the image URL changes with
       each Torizon release.
+  - id: VDN-012
+    claim: >-
+      On the bench Verdin, a cold power-on reached the first good scan
+      32.5 s after power returned: 12.3 s to kernel start, then naut
+      started at kernel + 19.4 s and scanned at kernel + 20.1 s.
+    source: "#from-power-on-to-the-first-good-scan"
+    tests: []
+    note: >-
+      One sample, 2026-11-18: the supply off for 3.9 s (the module off
+      about 18 s), timed by the carrier's debug USB re-enumerating on the
+      deploying machine and the service's monotonic timestamps; kernel
+      start on that clock is ±0.3 s (docs/design/verdin-bench.md). A
+      second sample would firm it up.

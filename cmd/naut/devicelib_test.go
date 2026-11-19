@@ -3,15 +3,19 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
@@ -156,15 +160,30 @@ func TestBuildShipsVendoredProfiles(t *testing.T) {
 	if err := addProfile(dir, "abb-acs355-fmbt21", "", io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	names, zr := buildArchive(t, dir)
+	if !names["profiles/abb-acs355-fmbt21.yaml"] {
+		t.Errorf("the vendored profile did not ship: %v", names)
+	}
+	if names["profiles/abb-drives.st"] {
+		t.Error("the simulator shipped in the controller")
+	}
+	if _, err := project.Load(zr, ""); err != nil {
+		t.Errorf("the built controller's project does not load: %v", err)
+	}
+}
+
+// buildArchive runs naut build on dir and opens the project it embeds.
+func buildArchive(t *testing.T, dir string, flags ...string) (map[string]bool, *zip.Reader) {
+	t.Helper()
 	out := filepath.Join(t.TempDir(), "ctl")
-	if output, code := buildIn(t, dir, "-o", out); code != 0 {
+	if output, code := buildIn(t, dir, append([]string{"-o", out}, flags...)...); code != 0 {
 		t.Fatalf("build: %d\n%s", code, output)
 	}
 	f, err := os.Open(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	t.Cleanup(func() { f.Close() })
 	st, _ := f.Stat()
 	off, ok := embeddedOffset(f, st.Size())
 	if !ok {
@@ -178,46 +197,343 @@ func TestBuildShipsVendoredProfiles(t *testing.T) {
 	for _, zf := range zr.File {
 		names[zf.Name] = true
 	}
-	if !names["profiles/abb-acs355-fmbt21.yaml"] {
-		t.Errorf("the vendored profile did not ship: %v", names)
-	}
-	if names["profiles/abb-drives.st"] {
-		t.Error("the simulator shipped in the controller")
-	}
-	if _, err := project.Load(zr, ""); err != nil {
-		t.Errorf("the built controller's project does not load: %v", err)
-	}
+	return names, zr
 }
 
-// Until virtual devices are built from devices: rows, a suite that asks
-// for virtual devices in a project that declares devices: is refused by
-// name, not run with inputs that never arrive.
-func TestDevicesWithVirtualDevicesRefused(t *testing.T) {
-	dir := libProject(t, libProgram)
+// driveProject declares a drive by profile, vendors it, and runs it up to
+// a reference: the ABB Drives profile's start sequence (fena pp. 91-94:
+// 16#0476 to READY TO SWITCH ON, 16#047F to OPERATION ENABLED; status bit
+// 2 OPERATION ENABLED, bit 3 TRIPPED). It has no virtual-devices.yaml: the
+// devices: row is the virtual device.
+func driveProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name, s string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("nautilus.yaml", `name: drive
+tasks: [{ program: main.st }]
+devices:
+  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.11, unit-id: 3 }
+tags:
+  - { name: Start, role: state, type: BOOL }
+  - { name: Speed, role: state, type: INT }
+  - { name: Running, role: state, type: BOOL }
+  - { name: Tripped, role: state, type: BOOL }
+  - { name: Amps, role: state, type: REAL }
+`)
+	// The first value written is the driver's start-up baseline, never
+	// sent; the sequence starts from the change after it, as on the wire.
+	write("main.st", `PROGRAM Main
+VAR Up : BOOL; END_VAR
+IF NOT Up THEN
+  CONV_ControlWord := 0;
+  CONV_Reference1 := 0;
+  Up := TRUE;
+ELSIF Start AND CONV.StatusWord.0 THEN
+  CONV_ControlWord := 16#047F;   (* READY TO SWITCH ON reached: run *)
+  CONV_Reference1 := 10000;
+ELSE
+  CONV_ControlWord := 16#0476;   (* OFF1: to READY TO SWITCH ON *)
+  CONV_Reference1 := 10000;
+END_IF;
+Speed := CONV.Actual1;
+Running := CONV.StatusWord.2;
+Tripped := CONV.StatusWord.3;
+Amps := CONV.Current;
+END_PROGRAM
+`)
+	write("main_test.yaml", `devices: true
+tests:
+  - name: the drive runs up to its reference
+    steps:
+      - advance: 1s
+        expect: { Running: false, Speed: 0 }
+      - given: { Start: true }
+        until: 30s
+        expect: { Running: true, Speed: 10000 }
+      # Current, register 103 in 0.1 A (fena p. 103): the drive's model
+      # draws 0.3 x its 10 A nominal x half speed, unloaded, 1.5 A (15 raw).
+      - advance: 1s
+        expect: { Amps: { near: 1.5, tol: 0.01 } }
+  - name: a trip reads back
+    steps:
+      - given: { Start: true }
+        until: 30s
+        expect: { Running: true }
+      - plant: { CONV_Trip: true }
+        advance: 500ms
+        expect: { Tripped: true, Running: false }
+`)
 	if err := addProfile(dir, "abb-acs355-fmbt21", "", io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	return dir
+}
+
+// A project's devices: rows are its virtual devices (brief §3.6): naut
+// test runs a devices: true suite against them with no
+// virtual-devices.yaml, and the program reads each device as its struct
+// and commands it through its command tags; naut check and naut devices
+// check compile the same plant.
+func TestDevicesRowsAreVirtualDevices(t *testing.T) {
+	dir := driveProject(t)
+	if code := runTest([]string{dir}); code != 0 {
+		t.Fatalf("naut test exited %d", code)
+	}
+	if code := runCheck([]string{dir}); code != 0 {
+		t.Fatalf("naut check exited %d", code)
+	}
+	if code := runDevicesCheck([]string{dir}); code != 0 {
+		t.Fatalf("naut devices check exited %d", code)
+	}
+	// The suite is not vacuous: a speed the drive never reaches fails it.
+	suite := mustRead(t, filepath.Join(dir, "main_test.yaml"))
+	if err := os.WriteFile(filepath.Join(dir, "main_test.yaml"), bytes.Replace(suite, []byte("Speed: 10000"), []byte("Speed: 12000"), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runTest([]string{dir}); code == 0 {
+		t.Fatal("naut test passed a speed the drive never reaches")
+	}
+}
+
+// The virtual device simulates the project's vendored copy, the same one
+// the controller derives its bindings from: a copy that swapped Actual 1
+// and Actual 2 still agrees with its virtual device (with the built-in
+// profile the controller's Actual1 would read the drive's Actual 2, 0).
+func TestDevicesVirtualDeviceIsTheVendoredCopy(t *testing.T) {
+	dir := driveProject(t)
+	pf := filepath.Join(dir, "profiles", "abb-acs355-fmbt21.yaml")
+	raw := mustRead(t, pf)
+	moved := bytes.Replace(raw, []byte("type: INT,  table: holding, address: 4,"), []byte("type: INT,  table: holding, address: 9,"), 1)
+	moved = bytes.Replace(moved, []byte("type: INT,  table: holding, address: 5,"), []byte("type: INT,  table: holding, address: 4,"), 1)
+	moved = bytes.Replace(moved, []byte("type: INT,  table: holding, address: 9,"), []byte("type: INT,  table: holding, address: 5,"), 1)
+	if bytes.Equal(moved, raw) || !bytes.Contains(moved, []byte("Actual1,     type: INT,  table: holding, address: 5,")) {
+		t.Fatal("the fixture edit did not apply")
+	}
+	if err := os.WriteFile(pf, moved, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runTest([]string{dir}); code != 0 {
+		t.Fatalf("naut test exited %d", code)
+	}
+}
+
+// naut check compiles the plant of a project whose only virtual devices
+// are its devices: rows: a vendored profile whose simulator block is not
+// in its source fails check, as one in virtual-devices.yaml would. (The
+// source on its own still compiles: only the plant shows the mistake.)
+func TestCheckCompilesTheRowsPlant(t *testing.T) {
+	dir := driveProject(t)
+	if code := runCheck([]string{dir}); code != 0 {
+		t.Fatalf("naut check exited %d", code)
+	}
+	pf := filepath.Join(dir, "profiles", "abb-acs355-fmbt21.yaml")
+	raw := mustRead(t, pf)
+	wrong := bytes.Replace(raw, []byte("block: ABB_DRIVES_SIM,"), []byte("block: ABB_DRIVES_SIMX,"), 1)
+	if bytes.Equal(wrong, raw) {
+		t.Fatal("the fixture edit did not apply")
+	}
+	if err := os.WriteFile(pf, wrong, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runCheck([]string{dir}); code == 0 {
+		t.Fatal("naut check passed a vendored profile whose simulator block does not exist")
+	}
+}
+
+// A manifest that does not read is check's one error: the plant falls
+// back to virtual-devices.yaml's own entries, so the process model is
+// still not checked as one of the controller's programs.
+func TestCheckBrokenManifestKeepsThePlantApart(t *testing.T) {
+	dir := copyFixture(t, nil)
+	mf := filepath.Join(dir, "nautilus.yaml")
+	if err := os.WriteFile(mf, append(mustRead(t, mf), []byte("bogus: 1\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := capture(t, func() int { return runCheck([]string{dir}) })
+	if code == 0 {
+		t.Fatal("naut check passed a manifest that does not read")
+	}
+	if !strings.Contains(out, "1 file(s), 1 with errors") {
+		t.Errorf("want the manifest as check's one error (fill.st, not the plant):\n%s", out)
+	}
+}
+
+// -m picks the manifest the virtual devices are composed from, for test,
+// check and build alike: field.yaml declares a second device (SPARE) that
+// nautilus.yaml does not, and virtual-devices.yaml adds init to it, which
+// only composes against field.yaml (against nautilus.yaml, SPARE would be
+// an entry with no profile). Built with -m, the process model stays behind.
+func TestManifestFlagComposesItsDevices(t *testing.T) {
+	dir := driveProject(t)
+	if err := addProfile(dir, "asi-275m", "", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	base := string(mustRead(t, filepath.Join(dir, "nautilus.yaml")))
+	field := strings.Replace(base, "devices:\n", "devices:\n  - { name: SPARE, profile: asi-275m, endpoint: 10.0.0.12 }\n", 1)
+	if field == base {
+		t.Fatal("the fixture edit did not apply")
+	}
 	for name, body := range map[string]string{
-		"virtual-devices.yaml": "devices: [{ name: SIM, profile: asi-275m, endpoint: 10.0.0.12 }]\n",
-		"main_test.yaml":       "devices: true\ntests:\n  - name: t\n    steps:\n      - advance: 1s\n",
+		"field.yaml":     field,
+		virtdev.FileName: "devices:\n  - { name: SPARE, init: { Input3: true } }\nmodel: { program: process.st }\n",
+		"process.st":     "PROGRAM Process\nCONV_Running := CONV_Running;\nEND_PROGRAM\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if code := runTest([]string{dir}); code == 0 {
-		t.Fatal("naut test passed a devices: project against virtual devices it cannot build yet")
+	for name, run := range map[string]func([]string) int{"test": runTest, "check": runCheck} {
+		if code := run([]string{"-m", "field.yaml", dir}); code != 0 {
+			t.Errorf("naut %s -m field.yaml exited %d", name, code)
+		}
+		if code := run([]string{dir}); code == 0 {
+			t.Errorf("naut %s (nautilus.yaml) passed an entry for a device it does not declare", name)
+		}
 	}
-	proj, err := project.Load(os.DirFS(dir), "")
+	names, _ := buildArchive(t, dir, "-m", "field.yaml")
+	if names["process.st"] {
+		t.Error("the process model shipped in the controller built with -m")
+	}
+	if !names["profiles/abb-acs355-fmbt21.yaml"] || !names["profiles/asi-275m.yaml"] {
+		t.Errorf("the vendored profiles did not ship: %v", names)
+	}
+}
+
+// A devices: row's virtual device is on the wire too (naut devices up): it
+// answers at the row's unit id with the vendored register map, and the
+// project's own driver, built from the same row and wrapped as the
+// controller wraps it, reads the device back as its struct. Powered up
+// with a zero control word, an ABB Drives profile drive is SWITCH-ON
+// INHIBITED with OFF2 and OFF3 active (fena pp. 93-94): status bits 6
+// (SWC ON INHIB), 9 (REMOTE) and 12 (EXT RUN ENABLE), 16#1240.
+func TestDevicesRowOnTheWireFace(t *testing.T) {
+	dir := driveProject(t)
+	set, err := loadVirtualDevices(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := virtdev.LoadSet(dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run, err := virtdev.Start(ctx, set, virtdev.StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := virtdev.NewInProcess(set, acceptance.NewClock(), proj.Drivers()); err == nil || !strings.Contains(err.Error(), "carries devices: declared in the manifest") {
-		t.Errorf("NewInProcess: %v", err)
+	defer run.Stop()
+	if len(run.Endpoints) != 1 {
+		t.Fatalf("endpoints: %+v", run.Endpoints)
+	}
+	ep := run.Endpoints[0]
+	if ep.Device != "CONV" || ep.Endpoint != "10.0.0.11:502" || ep.Unit != 3 {
+		t.Fatalf("endpoint: %+v, want CONV at 10.0.0.11:502 unit 3", ep)
+	}
+
+	m, err := project.ReadManifest(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := m.DeviceSet().Rows()
+	rows[0].Endpoint = ep.Listen // the project's driver, dialling the wire face
+	devs, err := devbind.Resolve(os.DirFS(dir), rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm, err := devs.MergeModbus(modbus.Manifest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, err := modbus.New(mm, modbus.WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := devs.WrapModbus(md)
+	w.Start(ctx)
+	defer w.Stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		vals, err := w.ReadInputs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v, ok := vals["CONV"].(ir.Value); ok {
+			if sw := v.Fld[v.Struct.FieldIndex["StatusWord"]].I; sw == 0x1240 {
+				break
+			} else if time.Now().After(deadline) {
+				t.Fatalf("CONV.StatusWord = 16#%04X, want 16#1240", sw)
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("CONV never arrived: %v", vals)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// virtual-devices.yaml adds what a simulation needs to a declared device
+// (init here) and the process model; every command reads it the same way.
+func TestDevicesRowsWithVirtualDevicesFile(t *testing.T) {
+	dir := driveProject(t)
+	if err := os.WriteFile(filepath.Join(dir, virtdev.FileName), []byte("devices:\n  - { name: CONV, init: { Trip: true } }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main_test.yaml"), []byte(`devices: true
+tests:
+  - name: a drive that powers up tripped never runs
+    steps:
+      - given: { Start: true }
+        advance: 5s
+        expect: { Tripped: true, Running: false }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, run := range map[string]func([]string) int{"test": runTest, "check": runCheck, "devices check": runDevicesCheck} {
+		if code := run([]string{dir}); code != 0 {
+			t.Errorf("naut %s exited %d", name, code)
+		}
+	}
+	// An entry there that says what the device is, again, is refused by each.
+	if err := os.WriteFile(filepath.Join(dir, virtdev.FileName), []byte("devices:\n  - { name: CONV, endpoint: 10.0.0.99 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, run := range map[string]func([]string) int{"test": runTest, "check": runCheck, "devices check": runDevicesCheck} {
+		if code := run([]string{dir}); code == 0 {
+			t.Errorf("naut %s accepted a virtual-devices.yaml entry that repeats a devices: row's endpoint", name)
+		}
+	}
+}
+
+// naut build ships the vendored profile a devices: row needs (the
+// controller derives the device from it at load) even though the row is a
+// virtual device too; the simulator and the process model, test fixtures,
+// stay behind.
+func TestBuildShipsVendoredProfileOfAVirtualDevice(t *testing.T) {
+	dir := driveProject(t)
+	if err := os.WriteFile(filepath.Join(dir, virtdev.FileName), []byte("devices:\n  - { name: CONV, init: { Actual2: 0 } }\nmodel: { program: plant/process.st }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "plant"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plant", "process.st"), []byte("PROGRAM Process\nCONV_Running := CONV_Running;\nEND_PROGRAM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runDevicesCheck([]string{dir}); code != 0 {
+		t.Fatalf("naut devices check exited %d", code)
+	}
+	names, zr := buildArchive(t, dir)
+	if !names["profiles/abb-acs355-fmbt21.yaml"] {
+		t.Errorf("the vendored profile did not ship: %v", names)
+	}
+	for _, f := range []string{"profiles/abb-drives.st", virtdev.FileName, "main_test.yaml", "plant/process.st"} {
+		if names[f] {
+			t.Errorf("the fixture %s shipped in the controller", f)
+		}
+	}
+	if _, err := project.Load(zr, ""); err != nil {
+		t.Errorf("the built controller's project does not load: %v", err)
 	}
 }
 

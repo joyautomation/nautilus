@@ -20,7 +20,7 @@ IEC program that drives it.
 
 ```sh
 naut optommp browse --host <epic>   # what the processor reports: modules, channel types, live values
-naut optommp import --host <epic> --manifest-host 127.0.0.1 --scan-rate 20ms --scratch-floats 1
+naut optommp import --host <epic> --manifest-host 127.0.0.1 --scan-rate 20ms --scratch-floats 1 --watchdog 1s
                                             # → optommp_manifest.yaml + tags/optommp.yaml
 ```
 
@@ -227,9 +227,18 @@ Measured the same way on 2026-10-24 evening, with the processor's
 A clean stop (Ctrl-C, SIGTERM) puts the pointers and the streaming
 configuration back as nautilus found them; a `kill -9` leaves the
 processor streaming to a port nobody reads until nautilus next starts.
-`watchdog: 500ms` sets the I/O unit's communication watchdog — outputs
-given a watchdog value in groov Manage go to it after 500 ms without a
-request; it is not set on this bench.
+`watchdog: 1s` in the manifest (the import's `--watchdog 1s`) sets the
+I/O unit's communication watchdog. An output that has a watchdog value
+in groov Manage goes to that value after 1 s without a request. On this
+bench DO7's watchdog value is on and DO11's is off. Set it on every
+project: it is what puts the outputs in a safe state whenever nautilus
+is not writing them. That covers a stop, a crash, a reboot, and a scan
+that hangs. In the hung-scan case, nautilus drops its session once the
+scans stop completing, so the unit's watchdog acts (measured on this
+bench: DO7 at its watchdog value about 6 s into a hang). Measurements
+are in the [groov EPIC guide](https://nautilus.joyautomation.com/guides/groov-epic/).
+Give each output its watchdog value in groov Manage. With none, the
+output keeps its last state.
 
 That run also found a runtime bug: the EPIC reports every **unwired
 ICTD channel as NaN**, and one NaN tag made `/api/state` answer 200 with

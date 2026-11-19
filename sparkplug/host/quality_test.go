@@ -177,3 +177,117 @@ func TestQualityMissingMetricFromBirth(t *testing.T) {
 		t.Fatalf("Quality() with Site missing from the birth = %v, want {W6_Site: NotConnected}", q)
 	}
 }
+
+// nullDbl is a Double metric the edge publishes as null: it has no value
+// for it (its own read failed).
+func nullDbl(name string) sparkplug.Metric {
+	return sparkplug.Metric{Name: name, Datatype: spb.DataType_Double, IsNull: true}
+}
+
+// TestQualityNullMetricIsBadUntilAValue — a metric that arrives is_null on
+// a live node reads Bad, its last value held, until a real value arrives
+// (#941); its siblings stay Good. It used to stay Good.
+func TestQualityNullMetricIsBadUntilAValue(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(2, nullDbl("Well/Level"))))
+	if q := d.Quality(); len(q) != 1 || q["W6_Well_Level"] != nio.Bad {
+		t.Fatalf("Quality() after Well/Level arrived null = %v, want {W6_Well_Level: Bad}", q)
+	}
+	if v := level(d); v != 12.5 {
+		t.Fatalf("W6_Well_Level = %v, want the last value 12.5 held", v)
+	}
+
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(3, dbl("Well/Level", 13))))
+	if q := d.Quality(); len(q) != 0 {
+		t.Fatalf("Quality() after a real Well/Level = %v, want all Good", q)
+	}
+	if v := level(d); v != 13.0 {
+		t.Fatalf("W6_Well_Level = %v, want 13", v)
+	}
+}
+
+// level is W6_Well_Level as the driver holds it (ReadInputs errors on a
+// driver that was never started).
+func level(d *Driver) any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.values["W6_Well_Level"]
+}
+
+// TestQualityNullFirstIsNotConnected — a metric whose first message is
+// null has delivered nothing: NotConnected, not Bad.
+func TestQualityNullFirstIsNotConnected(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(1, nullDbl("Well/Level"))))
+	if q := d.Quality(); q["W6_Well_Level"] != nio.NotConnected {
+		t.Fatalf("W6_Well_Level quality = %v, want NotConnected (nothing delivered)", q["W6_Well_Level"])
+	}
+}
+
+// TestQualityNullThenDeathIsStale — a dead source is Stale whatever its
+// metrics last said; the rebirth with a real value clears the null.
+func TestQualityNullThenDeathIsStale(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(2, nullDbl("Well/Level"))))
+	d.handleMessage("spBv1.0/G/NDEATH/W6", enc(t, ndeath(1)))
+	if q := d.Quality(); q["W6_Well_Level"] != nio.Stale {
+		t.Fatalf("W6_Well_Level quality after NDEATH = %v, want Stale", q["W6_Well_Level"])
+	}
+	d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(2, dbl("Well/Level", 14))))
+	if _, said := d.Quality()["W6_Well_Level"]; said {
+		t.Fatalf("W6_Well_Level quality after a rebirth with a value = %v, want Good", d.Quality()["W6_Well_Level"])
+	}
+}
+
+// TestQualityNullTemplateMemberIsBad — a template member that arrives null
+// makes the whole struct tag Bad, its last members held; a partial update
+// that omits that member leaves it Bad; the member's real value clears it.
+func TestQualityNullTemplateMemberIsBad(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+
+	nullSpeed := sparkplug.Metric{Name: "Speed", Datatype: spb.DataType_Double, IsNull: true}
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(2, motorInstance("Pump1", boolean("Run", true), nullSpeed))))
+	if q := d.Quality(); len(q) != 1 || q["W6_Pump1"] != nio.Bad {
+		t.Fatalf("Quality() after Pump1.Speed arrived null = %v, want {W6_Pump1: Bad}", q)
+	}
+
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(3, motorInstance("Pump1", boolean("Run", false)))))
+	if q := d.Quality(); q["W6_Pump1"] != nio.Bad {
+		t.Fatalf("W6_Pump1 quality after an update without Speed = %v, want still Bad", q["W6_Pump1"])
+	}
+
+	d.handleMessage("spBv1.0/G/NDATA/W6", enc(t, data(4, motorInstance("Pump1", dbl("Speed", 60)))))
+	if q := d.Quality(); len(q) != 0 {
+		t.Fatalf("Quality() after a real Pump1.Speed = %v, want all Good", q)
+	}
+}
+
+// TestQualityNullDeviceMetricIsBad — the device path: DDATA null on a live
+// device reads Bad.
+func TestQualityNullDeviceMetricIsBad(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+	d.handleMessage("spBv1.0/G/DDATA/W6/PLC1", enc(t, data(2,
+		sparkplug.Metric{Name: "Pump/Run", Datatype: spb.DataType_Boolean, IsNull: true})))
+	if q := d.Quality(); len(q) != 1 || q["W6_PLC1_Pump_Run"] != nio.Bad {
+		t.Fatalf("Quality() after PLC1's Pump/Run arrived null = %v, want {W6_PLC1_Pump_Run: Bad}", q)
+	}
+}
+
+// TestQualityRebirthCarryingNullIsBad — a rebirth that carries a metric
+// null after it had a value: the value is held and reads Bad.
+func TestQualityRebirthCarryingNullIsBad(t *testing.T) {
+	d, _ := newTestDriver(t, testManifest(), Config{})
+	fullBirth(t, d)
+	d.handleMessage("spBv1.0/G/NBIRTH/W6", enc(t, nbirth(2, nullDbl("Well/Level"))))
+	if q := d.Quality(); q["W6_Well_Level"] != nio.Bad {
+		t.Fatalf("W6_Well_Level quality after a rebirth carrying it null = %v, want Bad", q["W6_Well_Level"])
+	}
+	if v := level(d); v != 12.5 {
+		t.Fatalf("W6_Well_Level = %v, want the last value 12.5 held", v)
+	}
+}

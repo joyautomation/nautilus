@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/joyautomation/nautilus/devprofile"
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/virtdev"
 )
@@ -21,16 +22,16 @@ import (
 const devicesUsage = `naut devices — a project's field devices, by profile, and their virtual twins
 
 Usage:
-  naut devices add [--from dir] <profile> [project-dir]
+  naut devices add <profile> [project-dir] [--from dir]
                                  copy a profile (and its simulator) into the
                                  project's profiles/ folder: the project's pinned
                                  copy, which devices: rows refer to
   naut devices render [dir]      print what nautilus.yaml's devices: derive at load:
                                  the struct types, the tags, the driver bindings
-  naut devices up [dir]          start every device in virtual-devices.yaml on its wire
+  naut devices up [dir]          start every virtual device (below) on its wire
                                  face and run the simulators and process model
                                  until ctrl-c
-  naut devices check [dir]       load virtual-devices.yaml, its profiles, simulators and
+  naut devices check [dir]       load the virtual devices, their profiles, simulators and
                                  process model, and compile the plant; no sockets
   naut devices profiles          list the built-in device profiles
   naut devices show <profile>    print a profile's points (a built-in id, or a
@@ -46,9 +47,12 @@ drive back) plus a command tag per writable point (CONV_ControlWord). See
 docs/design/device-library.md.
 
 A virtual device speaks the real device's protocol and register map, built
-from public documentation. A project lists its devices in virtual-devices.yaml:
+from public documentation. Every devices: row in nautilus.yaml is one,
+simulating the project's vendored profile. virtual-devices.yaml adds the rest:
 
   devices:
+    - name: CONV                   # a devices: row: only listen and init here
+      init: { Actual1: 0 }
     - name: RB1                    # IEC identifier; its points are RB1_<Point>
       profile: asi-275m      # built-in id, or profiles/mine.yaml
       endpoint: 192.168.10.21      # what the project's driver dials
@@ -101,10 +105,10 @@ func devicesDir(name string, args []string) (string, bool) {
 }
 
 func loadDeviceSet(cmd, dir string) (*virtdev.Set, bool) {
-	set, err := virtdev.LoadSet(dir)
+	set, err := loadVirtualDevices(dir, "")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "naut devices %s: no %s in %s\n", cmd, virtdev.FileName, dir)
+			fmt.Fprintf(os.Stderr, "naut devices %s: no virtual devices in %s (no devices: in %s, no %s)\n", cmd, dir, project.ManifestName, virtdev.FileName)
 		} else {
 			fmt.Fprintf(os.Stderr, "naut devices %s: %v\n", cmd, err)
 		}

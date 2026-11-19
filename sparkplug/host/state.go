@@ -107,6 +107,7 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 	}
 	d.mu.Unlock()
 	d.flushRebirths()
+	d.flushForgets() // before flushAdopts: a birth's adoptions are newer
 	d.flushAdopts()
 	// A birth is what a command parked for a dark site was waiting for. It
 	// runs after flushAdopts on purpose: the birth's own values are this
@@ -197,6 +198,7 @@ func (d *Driver) nodeLocked(nk nodeKey) *nodeState {
 // to offline until its own DBIRTH, and the birth's metric values applied.
 // Caller holds d.mu.
 func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, all: true})
 	if p.Seq != 0 {
 		// Not fatal — accept it and resynchronise from what we were sent,
 		// rather than deadlocking on a non-conformant edge.
@@ -237,6 +239,7 @@ func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
 // Device aliases join the node's single table — the spec scopes aliases to the
 // edge node including its devices. Caller holds d.mu.
 func (d *Driver) applyDBirthLocked(ns *nodeState, device string, p sparkplug.Payload) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, device: device})
 	dev := ns.device(device)
 	dev.setOnline(true)
 	dev.birthMs = birthTimestamp(p)
@@ -327,6 +330,7 @@ func birthTimestamp(p sparkplug.Payload) int64 {
 // Sparkplug's last value *is* the value, and quality rides on the synthesized
 // __Online companion tags. Caller holds d.mu.
 func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, all: true})
 	bd, ok := bdSeqOf(p.Metrics)
 	if !ok {
 		d.stateLogger().Warn("sparkplug host: NDEATH without bdSeq, ignored",
@@ -368,6 +372,7 @@ func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
 func (d *Driver) brokerLostLocked() {
 	d.sessionDown = true
 	for _, ns := range d.nodes {
+		d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, all: true})
 		ns.stopGap()
 		ns.pending = nil
 		ns.seqPrimed = false
@@ -389,6 +394,7 @@ func (d *Driver) brokerLostLocked() {
 // applyDDeathLocked takes one device offline, keeping its values.
 // Caller holds d.mu.
 func (d *Driver) applyDDeathLocked(ns *nodeState, device string) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, device: device})
 	dev := ns.device(device)
 	dev.setOnline(false)
 	d.syncTagsLocked(ns)
@@ -650,7 +656,10 @@ func isDefinition(m sparkplug.Metric) bool {
 // Caller holds d.mu.
 func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric) {
 	if m.IsNull {
-		return // "no value" — keep whatever we had
+		// "No value": keep the last one, but it is not a reading any
+		// more, so Quality says Bad until a real value arrives (#941).
+		d.markNullLocked(b.Name, "", true)
+		return
 	}
 	if d.values == nil {
 		d.values = nio.Values{}
@@ -681,7 +690,52 @@ func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric
 			"tag", b.Name, "type", b.Type, "member", u)
 	}
 	d.values[b.Name] = plainOrIR(v)
+	d.markNullLocked(b.Name, "", false)
+	if t, ok := m.Value.(*sparkplug.Template); ok && t != nil {
+		// A member that arrived null keeps its last value (a partial
+		// update merges onto the previous struct), and is no reading
+		// either; one omitted keeps its verdict (#941).
+		d.markMemberNullsLocked(b.Name, "", t)
+	}
 	d.adoptMembersLocked(b, v)
+}
+
+// markNullLocked records whether path ("" for the whole metric) of a
+// binding last arrived null. Caller holds d.mu.
+func (d *Driver) markNullLocked(name, path string, null bool) {
+	if null {
+		if d.nulled == nil {
+			d.nulled = map[string]map[string]bool{}
+		}
+		if d.nulled[name] == nil {
+			d.nulled[name] = map[string]bool{}
+		}
+		d.nulled[name][path] = true
+		return
+	}
+	if n := d.nulled[name]; n != nil {
+		delete(n, path)
+		if len(n) == 0 {
+			delete(d.nulled, name)
+		}
+	}
+}
+
+// markMemberNullsLocked walks a template instance's members (nested ones
+// too) and records each one present as null or not. Caller holds d.mu.
+func (d *Driver) markMemberNullsLocked(name, prefix string, t *sparkplug.Template) {
+	for _, mm := range t.Metrics {
+		if mm.Name == "" {
+			continue
+		}
+		path := prefix + mm.Name
+		if nested, ok := mm.Value.(*sparkplug.Template); ok && nested != nil && !mm.IsNull {
+			d.markNullLocked(name, path, false)
+			d.markMemberNullsLocked(name, path+".", nested)
+			continue
+		}
+		d.markNullLocked(name, path, mm.IsNull)
+	}
 }
 
 // adoptMembersLocked queues the live value of every member OUTPUT bound to

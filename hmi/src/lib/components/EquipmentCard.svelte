@@ -306,6 +306,9 @@
 	.eqcard.simulated {
 		border: 2px dashed var(--q-simulated);
 	}
+	.eqcard.substituted {
+		border: 2px dotted var(--q-substituted);
+	}
 	.eqcard.stale {
 		border: 1px solid var(--q-stale);
 	}

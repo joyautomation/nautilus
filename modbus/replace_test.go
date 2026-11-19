@@ -2,6 +2,7 @@ package modbus
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -645,4 +646,94 @@ func TestReplaceSourceHeldOnAStandbyStillPushesAtTakeover(t *testing.T) {
 	d.WriteOutputs(nio.Values{"B_Cmd": uint16(7)}) // its push: the first snapshot with the gate open
 	u := ss.b2.Unit(1)
 	waitFor(t, "the current command on the new device after the takeover", func() bool { return u.Holding(10) == 7 })
+}
+
+// Observe reports a replaced source's first share from the driver's own
+// rule: queued when pushed, nothing (or only keep-alives) when held,
+// nothing with the gate closed, and parked when the enable tag says so.
+// Sending says the same before the replace (#706, #960 review).
+func TestReplaceSourceObservesItsFirstShare(t *testing.T) {
+	d, ss := twoDevices(t, nil)
+	d.WriteOutputs(nio.Values{"B_Cmd": uint16(7)}) // the start-up baseline
+	var open atomic.Bool
+	open.Store(true)
+	d.SetWriteGate(open.Load)
+
+	replace := func(opts ReplaceOptions) chan FirstShare {
+		ch := make(chan FirstShare, 2)
+		opts.Observe = func(s FirstShare) { ch <- s }
+		if err := d.ReplaceSource(fastSource("B", ss.b2.Addr()), newBTags(), opts); err != nil {
+			t.Fatal(err)
+		}
+		return ch
+	}
+	share := func(ch chan FirstShare, vals nio.Values) FirstShare {
+		t.Helper()
+		if err := d.WriteOutputs(vals); err != nil {
+			t.Fatal(err)
+		}
+		d.WriteOutputs(vals) // a second share is not reported
+		select {
+		case s := <-ch:
+			if len(ch) != 0 {
+				t.Fatal("observed twice")
+			}
+			return s
+		default:
+			t.Fatal("the first share was not observed")
+			return FirstShare{}
+		}
+	}
+
+	if ok, why := d.Sending("B"); !ok {
+		t.Fatalf("Sending = false (%s), want true", why)
+	}
+	if s := share(replace(ReplaceOptions{}), nio.Values{"B_Cmd": uint16(7)}); fmt.Sprint(s.Queued) != "map[B_Cmd:7]" || s.GateClosed || s.Parked {
+		t.Fatalf("pushed: %+v, want B_Cmd 7 queued", s)
+	}
+	if s := share(replace(ReplaceOptions{HoldOutputs: true}), nio.Values{"B_Cmd": uint16(7)}); len(s.Queued) != 0 {
+		t.Fatalf("held: %+v, want nothing queued", s)
+	}
+	open.Store(false)
+	if ok, why := d.Sending("B"); ok || !strings.Contains(why, "gate") {
+		t.Fatalf("gate closed: Sending = %v, %q", ok, why)
+	}
+	if s := share(replace(ReplaceOptions{}), nio.Values{"B_Cmd": uint16(7)}); !s.GateClosed || len(s.Queued) != 0 {
+		t.Fatalf("gate closed: %+v, want nothing queued, GateClosed", s)
+	}
+	if HeldAtBaseline(TagBinding{Rewrite: time.Second}) || !HeldAtBaseline(TagBinding{}) {
+		t.Fatal("HeldAtBaseline: a keep-alive is never held, a plain command is")
+	}
+}
+
+// A parked source: Sending says so, and its first share is marked parked.
+func TestReplaceSourceObservesAParkedSource(t *testing.T) {
+	b, b2 := newSlave(t), newSlave(t)
+	bs := fastSource("B", b.Addr())
+	bs.Enable = "B_Enable"
+	d, err := New(Manifest{
+		Sources: []Source{bs},
+		Tags: []TagBinding{
+			{Name: "B_V", Source: "B", Table: TableHolding, Address: 0, Format: "uint16"},
+			{Name: "B_Cmd", Source: "B", Table: TableHolding, Address: 10, Format: "uint16", Writable: true},
+		},
+	}, WithScanRate(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	d.WriteOutputs(nio.Values{"B_Enable": false, "B_Cmd": uint16(1)})
+	if ok, why := d.Sending("B"); ok || !strings.Contains(why, "B_Enable") {
+		t.Fatalf("Sending = %v, %q; want parked by B_Enable", ok, why)
+	}
+	nb := fastSource("B", b2.Addr())
+	nb.Enable = "B_Enable"
+	ch := make(chan FirstShare, 1)
+	if err := d.ReplaceSource(nb, newBTags(), ReplaceOptions{Observe: func(s FirstShare) { ch <- s }}); err != nil {
+		t.Fatal(err)
+	}
+	d.WriteOutputs(nio.Values{"B_Enable": false, "B_Cmd": uint16(2)})
+	if s := <-ch; !s.Parked {
+		t.Fatalf("%+v, want Parked", s)
+	}
 }

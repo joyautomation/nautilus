@@ -95,6 +95,8 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 		PrimaryHostID:   c.PrimaryHost,
 		PublishInterval: time.Duration(c.PublishInterval),
 		BdSeqFile:       c.BdSeqFile,
+
+		DeviceDeathDelay: time.Duration(c.DeviceDeathDelay),
 	}
 	if c.PrimaryHostOffline == "disconnect" { // Load refused anything but buffer/disconnect
 		cfg.PrimaryHostOffline = sparkplug.HostOfflineDisconnect
@@ -126,7 +128,7 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 	for class, patterns := range c.MetricClasses {
 		opts = append(opts, sparkplug.WithMetricClass(class, patterns...))
 	}
-	devices, err := sparkplugDevices(p.drivers)
+	devices, err := sparkplugDevicesLive(p.drivers, p.currentDriver)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +148,13 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 // is no connection and makes no device; its tags, like every tag no
 // connection delivers (program state, outputs), publish at node level.
 func sparkplugDevices(drivers []nio.NamedDriver) ([]sparkplug.Device, error) {
+	return sparkplugDevicesLive(drivers, nil)
+}
+
+// sparkplugDevicesLive is sparkplugDevices with each device's health asked
+// of the driver that runs now (current, by driver name), not the one Load
+// built: an I/O configuration applied live (#706) replaces a driver.
+func sparkplugDevicesLive(drivers []nio.NamedDriver, current func(name string) nio.Driver) ([]sparkplug.Device, error) {
 	var out []sparkplug.Device
 	from := map[string]string{} // device id → where it came from, for a collision
 	add := func(d sparkplug.Device, origin string) error {
@@ -157,24 +166,46 @@ func sparkplugDevices(drivers []nio.NamedDriver) ([]sparkplug.Device, error) {
 		return nil
 	}
 	for _, nd := range drivers {
+		name := nd.Name
 		switch drv := nd.Driver.(type) {
 		case nio.ConnectionReporter:
 			for _, c := range drv.Connections() {
 				id := c.ID
+				health := func() bool { return drv.ConnectionUp(id) }
+				if current != nil {
+					health = func() bool {
+						if cur, ok := current(name).(nio.ConnectionReporter); ok {
+							return cur.ConnectionUp(id)
+						}
+						return drv.ConnectionUp(id)
+					}
+				}
 				err := add(sparkplug.Device{
 					ID:     id,
 					Tags:   c.Inputs,
-					Health: func() bool { return drv.ConnectionUp(id) },
+					Health: health,
 				}, fmt.Sprintf("source %q of driver %q", id, nd.Name))
 				if err != nil {
 					return nil, err
 				}
 			}
 		case interface{ InputNames() []string }:
+			health := driverHealth(nd.Driver)
+			if health != nil && current != nil {
+				built := health
+				health = func() bool {
+					if cur := current(name); cur != nil && !sameDriver(cur, nd.Driver) {
+						if h := driverHealth(cur); h != nil {
+							return h()
+						}
+					}
+					return built()
+				}
+			}
 			err := add(sparkplug.Device{
 				ID:     nd.Name,
 				Tags:   drv.InputNames(),
-				Health: driverHealth(nd.Driver),
+				Health: health,
 			}, fmt.Sprintf("driver %q", nd.Name))
 			if err != nil {
 				return nil, err
@@ -254,6 +285,36 @@ func buildChannel(c ChannelConfig) (runtime.ChannelIO, error) {
 		slot = *c.Slot
 	}
 	return eip.NewChannel(c.Host, slot, c.Port, nil), nil
+}
+
+// modbusManifest is what a modbus driver: entry polls: its manifest file,
+// with the project's devices: merged in. A live I/O apply (ioconfig.go)
+// diffs it source by source.
+func modbusManifest(fsys fs.FS, d DriverConfig) (modbus.Manifest, error) {
+	if d.Manifest == "" && d.devices == nil {
+		return modbus.Manifest{}, fmt.Errorf("driver modbus: manifest (the imported modbus_manifest.yaml) is required")
+	}
+	var mm modbus.Manifest
+	if d.Manifest != "" {
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return mm, fmt.Errorf("driver modbus: %w", err)
+		}
+		// ParseManifest decodes with KnownFields semantics, so a typo is an
+		// error rather than a silently dropped binding.
+		if mm, err = modbus.ParseManifest(raw); err != nil {
+			return mm, fmt.Errorf("driver modbus: %s: %w", d.Manifest, err)
+		}
+	}
+	if d.devices != nil {
+		// The project's devices: (device-library.md §3.1), merged into
+		// the same driver so they share its scan and its status row.
+		var err error
+		if mm, err = d.devices.MergeModbus(mm); err != nil {
+			return mm, fmt.Errorf("driver modbus: %w", err)
+		}
+	}
+	return mm, nil
 }
 
 func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
@@ -373,28 +434,9 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		// check` and `build` pass with no device in sight, the same split
 		// eip and sparkplug-host make. The config keys are eip's, reused
 		// wholesale: manifest, scan-rate, scan-classes, tag-classes.
-		if d.Manifest == "" && d.devices == nil {
-			return nil, fmt.Errorf("driver modbus: manifest (the imported modbus_manifest.yaml) is required")
-		}
-		var mm modbus.Manifest
-		if d.Manifest != "" {
-			raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
-			if err != nil {
-				return nil, fmt.Errorf("driver modbus: %w", err)
-			}
-			// ParseManifest decodes with KnownFields semantics, so a typo is an
-			// error rather than a silently dropped binding.
-			if mm, err = modbus.ParseManifest(raw); err != nil {
-				return nil, fmt.Errorf("driver modbus: %s: %w", d.Manifest, err)
-			}
-		}
-		if d.devices != nil {
-			// The project's devices: (device-library.md §3.1), merged into
-			// the same driver so they share its scan and its status row.
-			var err error
-			if mm, err = d.devices.MergeModbus(mm); err != nil {
-				return nil, fmt.Errorf("driver modbus: %w", err)
-			}
+		mm, err := modbusManifest(fsys, d)
+		if err != nil {
+			return nil, err
 		}
 		opts := []modbus.Option{modbus.WithLogger(slog.Default().With("driver", "modbus"))}
 		if d.ScanRate != 0 {
