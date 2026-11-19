@@ -298,7 +298,10 @@ func runDevicesShow(args []string, w io.Writer) int {
 			}
 			fmt.Fprintf(w, "  %-9s %s as %s  (form: %s)\n", c.key, c.c.Point, c.c.Form, src)
 		}
-		for _, k := range []struct{ key, tmpl string }{{"pd-valid", l.PDValid}, {"vendor-id", l.VendorID}, {"device-id", l.DeviceID}, {"status", l.Status}} {
+		if l.PDOut != nil && l.PDOutValid == "" {
+			fmt.Fprintf(w, "  pd-out-valid: none. With the wrong device on a port this master keeps sending its last process data out to it; only the identity fault (alarm) says so.\n")
+		}
+		for _, k := range []struct{ key, tmpl string }{{"pd-out-valid", l.PDOutValid}, {"pd-valid", l.PDValid}, {"vendor-id", l.VendorID}, {"device-id", l.DeviceID}, {"status", l.Status}} {
 			if k.tmpl != "" {
 				fmt.Fprintf(w, "  %-9s %s\n", k.key, k.tmpl)
 			}

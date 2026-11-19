@@ -22,6 +22,9 @@ iolink:                # docs/design/iolink.md §3: which points hold each port'
   # stay for a project that reads them.
   pd-in:  { point: "Port{n}_PdiBytes", form: bytes, doc: "pf §12.2 p. 171" }
   pd-out: { point: "Port{n}_PdoBytes", form: bytes, doc: "pf §12.2 p. 172" }
+  # PDO Valid (pf §12.1.2: "true when a protocol is controlling the PDO to the
+  # device"): driven false while the device on a port is not the expected one.
+  pd-out-valid: "Port{n}_PdoValid"
   pd-valid: "Port{n}_PdiValid"
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"

@@ -120,6 +120,7 @@ iolink:
 | `pd-in.form` | how that point carries the bytes: `hex` (text, two hex digits per byte, as on the ifm), `u32` (an unsigned 32-bit integer, as the P+F's PDI Data Unsigned32); `bytes` (octets on the wire, a ByteString or a Byte[] array: a STRING point with `wire: ByteString` or `wire: ByteArray`, holding the octets as lowercase hex, any length up to 232 octets) |
 | `pd-in.doc`, `pd-in.unverified` | where the form is documented or was measured, as a point's `doc:` (a docs id, then where); or `unverified: true`. One is required: the form is a claim of its own (for `u32`, where a short image sits), and `naut devices show` prints it |
 | `pd-out` | the same for process data out; absent means the master offers no PD out |
+| `pd-out-valid` | a writable BOOL point that says the master's process data out is valid (the P+F's PDO Valid), with `pd-out` (optional): the adapter drives it false while the device on the port is not the expected one (§6.2) |
 | `pd-valid` | a BOOL point that says the master holds valid process data in (optional) |
 | `vendor-id`, `device-id` | integer points holding the attached device's identity (optional, see §6) |
 | `status` | a point holding the port's mode or connection status (optional) |
@@ -304,6 +305,35 @@ Every port device gets two companion tags, beside the drivers'
 A `WrongDevice` is also logged once per change, naming the port, the
 expected pair and the pair read, so the cause is in the log and not only
 in an alarm's text.
+
+### 6.2 Outputs and a wrong device
+
+A master keeps the last process data out it was given and sends it to
+whatever device is on the port, including a wrong one. So not writing is
+not safe, and the adapter does these (`iolink.OutGate`):
+
+- while the identity is not `Ok` (`NoDevice`, `WrongDevice`), **nothing is
+  written to the port's process data out**, and not zeros either (off is
+  not always safe), and a write to a command tag is refused naming the
+  state;
+- where the profile has `pd-out-valid`, it is driven **false** in those
+  states, so the master stops sending the last image and the device falls
+  back to its own fail-safe values;
+- when the right device is back, **nothing is resent** from what was
+  written before or during the break: `pd-out-valid` returns to true, and
+  the image goes out, only after a program writes again. A program that
+  only writes on change must write again after the identity fault clears;
+- `Unchecked` (no id points) writes as told, since nothing can be
+  compared, and `naut check` says so.
+
+A master profile with no `pd-out-valid` cannot do the second step: a
+wrong device on that port is sent the master's last process data out
+until the identity fault is seen (it is raised as an alarm) and the
+program or an operator stops it. `naut devices show` says so for such a
+profile (today the ifm AL1590 and the SICK SIG300). The identity is
+checked when the ids arrive, so for up to one scan of the id points after
+a swap the new device is sent the old image; IO-Link's own validation
+and backup (a port setting on the master) is what closes that window.
 
 ### 6.1 Quality
 
