@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -156,6 +157,14 @@ func launch(ctx context.Context, path string) (*browser, error) {
 		}
 		close(found)
 	}()
+	// One budget for the whole start: the browser's DevTools line, then
+	// its websocket handshake, which a loaded machine can be just as slow
+	// to answer (#964: 47 s to the line, then the old fixed 10 s handshake
+	// ran out). Never less than 10 s for the handshake.
+	deadline := time.Now().Add(wait)
+	tooSlow := func(what string, in time.Duration) error {
+		return fmt.Errorf("the browser didn't %s in %s (set %s, e.g. %s=5m, to wait longer)", what, in.Round(time.Second), StartTimeoutEnv, StartTimeoutEnv)
+	}
 	var url string
 	select {
 	case u, ok := <-found:
@@ -166,15 +175,20 @@ func launch(ctx context.Context, path string) (*browser, error) {
 		url = u
 	case <-time.After(wait):
 		b.close()
-		return nil, fmt.Errorf("the browser didn't start in %s (set %s, e.g. %s=5m, to wait longer)", wait, StartTimeoutEnv, StartTimeoutEnv)
+		return nil, tooSlow("start", wait)
 	case <-ctx.Done():
 		b.close()
 		return nil, ctx.Err()
 	}
-	d := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	handshake := max(time.Until(deadline), 10*time.Second)
+	d := websocket.Dialer{HandshakeTimeout: handshake}
 	ws, _, err := d.DialContext(ctx, url, nil)
 	if err != nil {
 		b.close()
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() && ctx.Err() == nil {
+			return nil, fmt.Errorf("%w: %v", tooSlow("answer on DevTools", handshake), err)
+		}
 		return nil, err
 	}
 	ws.SetReadLimit(64 << 20)
