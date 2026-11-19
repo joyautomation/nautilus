@@ -4,6 +4,7 @@ package devbind
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -236,5 +237,76 @@ func TestISDUWithoutMethodsOrPort(t *testing.T) {
 	ps = isduPorts(t, "sick-sig300", nil)
 	if _, err := ps.isduRead(context.Background(), &fakeCaller{}, "NOPE", "V_Setpoint"); err == nil || !strings.Contains(err.Error(), `no port device "NOPE"`) {
 		t.Errorf("an unknown port device: %v", err)
+	}
+}
+
+// Each refusal is of a kind the controller's API answers as it should:
+// 404 for what does not exist, 422 for what the IODD forbids, 409 for a port
+// that cannot take it now.
+func TestISDURefusalKinds(t *testing.T) {
+	ps := isduPorts(t, "sick-sig300", nil)
+	ps.take(sickVals(levelVendor, levelDevice+100)) // the wrong device
+	ctx := context.Background()
+	c := &fakeCaller{answer: readOK(t, ua.ByteArray{0x03, 0xE8})}
+	check := func(name string, err error, want error) {
+		t.Helper()
+		if !errors.Is(err, want) {
+			t.Errorf("%s: %v, want a %v", name, err, want)
+		}
+	}
+	_, err := ps.isduRead(ctx, c, "NOPE", "V_Setpoint")
+	check("an unknown port device", err, ErrISDUUnknown)
+	_, err = ps.isduRead(ctx, c, "LEVEL1", "V_Nothing")
+	check("an unknown variable", err, ErrISDUUnknown)
+	_, err = ps.isduRead(ctx, c, "LEVEL1", "V_SystemCommand")
+	check("a read of a write-only variable", err, ErrISDUInvalid)
+	_, err = ps.isduWrite(ctx, c, "LEVEL1", "V_Setpoint", uint64(500))
+	check("a write to the wrong device", err, ErrISDURefused)
+	ps.take(sickVals(levelVendor, levelDevice)) // the right one
+	_, err = ps.isduWrite(ctx, c, "LEVEL1", "V_Setpoint", uint64(2000))
+	check("a value outside the range", err, ErrISDUInvalid)
+	_, err = ps.isduWrite(ctx, c, "LEVEL1", "V_SerialNumber", "x")
+	check("a write to a read-only variable", err, ErrISDUInvalid)
+	_, err = portsOf(t, pfMaster(t, nil)).isduRead(ctx, c, "LEVEL1", "V_Setpoint")
+	check("a master with no isdu:", err, ErrISDURefused)
+}
+
+// A port device's parameters are listed from its IODD with no traffic: the
+// ids, indexes, access, types, ranges and defaults, a record by its items,
+// and whether the master can carry each in one call.
+func TestISDUParamsListing(t *testing.T) {
+	fsys := portFS(t, "ifm-al1590")
+	s, err := Resolve(fsys, []Device{{Name: "M", Profile: "ifm-al1590", Endpoint: "h", Params: map[string]string{"location": "X"},
+		Ports: map[int]Port{1: {Name: "LEVEL1", IODD: levelFile}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &OPCUADriver{ports: newPorts(s.devices[0].ports)}
+	list, master, ok := w.ISDUParams("level1")
+	if !ok || master != "M" {
+		t.Fatalf("listing: %v %q", ok, master)
+	}
+	by := map[string]ISDUParamInfo{}
+	for _, p := range list {
+		by[p.Ref] = p
+	}
+	sp := by["64"]
+	if sp.ID != "V_Setpoint" || sp.Access != "rw" || sp.Octets != 2 || len(sp.Range) != 1 || sp.Range[0] != "0..1000" || sp.Default != "100" || !sp.Carried {
+		t.Errorf("setpoint %+v", sp)
+	}
+	if vn := by["16"]; vn.Octets != 64 || vn.Carried {
+		t.Errorf("vendor name %+v: 64 octets do not fit the ifm's 32", vn)
+	}
+	if _, whole := by["65"]; whole {
+		t.Error("a record is listed whole")
+	}
+	if it := by["65.2"]; it.ID != "V_Window.Upper" && !strings.HasPrefix(it.ID, "V_Window.") {
+		t.Errorf("a record item %+v", it)
+	}
+	if _, _, ok := w.ISDUParams("NOPE"); ok {
+		t.Error("a port device the master does not have was listed")
+	}
+	if _, _, ok := (&OPCUADriver{}).ISDUParams("LEVEL1"); ok {
+		t.Error("a device with no ports listed parameters")
 	}
 }

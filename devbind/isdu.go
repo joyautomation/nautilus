@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gopcua/opcua/ua"
@@ -21,6 +22,22 @@ import (
 // through the master's own session. The IODD says what the parameter is (its
 // index, type, range and access rights), the profile's isdu: block where the
 // methods are and how a value travels.
+
+// The kinds of refusal an ISDU request meets before or instead of reaching
+// the device, for a caller (the controller's API) to answer each as it
+// should. Anything else is the master's or the device's own failure.
+var (
+	// ErrISDUUnknown: no such port device on the master, or no such
+	// variable or item in its IODD.
+	ErrISDUUnknown = errors.New("unknown port device or parameter")
+	// ErrISDUInvalid: the request is not one the IODD allows (a value
+	// outside its range or that does not fit, a read-only variable).
+	ErrISDUInvalid = errors.New("not allowed by the IODD")
+	// ErrISDURefused: the port is not in a state to take it (a write while
+	// the identity is not Ok, or before it has been checked), or its master
+	// cannot carry it.
+	ErrISDURefused = errors.New("refused")
+)
 
 // Caller is what ISDU needs of a driver: the method call (*opcua.Driver).
 type Caller interface {
@@ -54,7 +71,7 @@ func (ps *ports) find(name string) (*portIn, error) {
 	for _, p := range ps.in {
 		names = append(names, p.Name)
 	}
-	return nil, fmt.Errorf("no port device %q on this master (have %s)", name, strings.Join(names, ", "))
+	return nil, fmt.Errorf("%w: no port device %q on this master (have %s)", ErrISDUUnknown, name, strings.Join(names, ", "))
 }
 
 // identity is the port's identity check: the state (the check's, not
@@ -92,14 +109,14 @@ func (ps *ports) isduParam(port, ref string) (*portIn, *iolink.Param, error) {
 		return nil, nil, err
 	}
 	if p.isdu == nil {
-		return nil, nil, fmt.Errorf("port device %s: master %s offers no ISDU (its profile has no isdu:)", p.Name, p.Master)
+		return nil, nil, fmt.Errorf("%w: port device %s: master %s offers no ISDU (its profile has no isdu:)", ErrISDURefused, p.Name, p.Master)
 	}
 	prm, err := iolink.FindParam(p.dev.IODD, ref)
 	if err != nil {
-		return nil, nil, fmt.Errorf("port device %s: %w", p.Name, err)
+		return nil, nil, fmt.Errorf("%w: port device %s: %w", ErrISDUUnknown, p.Name, err)
 	}
 	if lim := p.isdu.spec.Octets(); prm.Octets() > lim {
-		return nil, nil, fmt.Errorf("port device %s: %s is %d octets and master %s carries at most %d in one ISDU call", p.Name, prm.Variable.ID, prm.Octets(), p.Master, lim)
+		return nil, nil, fmt.Errorf("%w: port device %s: %s is %d octets and master %s carries at most %d in one ISDU call", ErrISDURefused, p.Name, prm.Variable.ID, prm.Octets(), p.Master, lim)
 	}
 	return p, prm, nil
 }
@@ -110,7 +127,7 @@ func (ps *ports) isduRead(ctx context.Context, c Caller, port, ref string) (ISDU
 		return ISDUResult{}, err
 	}
 	if !prm.CanRead() {
-		return ISDUResult{}, fmt.Errorf("port device %s: %s is write-only", p.Name, prm.Variable.ID)
+		return ISDUResult{}, fmt.Errorf("%w: port device %s: %s is write-only", ErrISDUInvalid, p.Name, prm.Variable.ID)
 	}
 	st, checked := ps.identity(p)
 	res := ISDUResult{Variable: prm.Variable.ID, Index: prm.Index(), Subindex: prm.Subindex, Identity: st, Checked: checked}
@@ -134,15 +151,15 @@ func (ps *ports) isduWrite(ctx context.Context, c Caller, port, ref string, v an
 	res := ISDUResult{Variable: prm.Variable.ID, Index: prm.Index(), Subindex: prm.Subindex, Identity: st, Checked: checked}
 	switch {
 	case !checked:
-		return res, fmt.Errorf("port device %s: refused: the identity of the device on %s port %d has not been checked yet (the master has not delivered its ids)", p.Name, p.Master, p.Num)
+		return res, fmt.Errorf("%w: port device %s: the identity of the device on %s port %d has not been checked yet (the master has not delivered its ids)", ErrISDURefused, p.Name, p.Master, p.Num)
 	case !st.Drives():
-		return res, fmt.Errorf("port device %s: refused: the device on %s port %d is not the one expected (%s): a parameter would reach the wrong device", p.Name, p.Master, p.Num, st)
+		return res, fmt.Errorf("%w: port device %s: the device on %s port %d is not the one expected (%s): a parameter would reach the wrong device", ErrISDURefused, p.Name, p.Master, p.Num, st)
 	case p.isdu.spec.Write == "":
-		return res, fmt.Errorf("port device %s: master %s cannot write parameters (its isdu: has no write method)", p.Name, p.Master)
+		return res, fmt.Errorf("%w: port device %s: master %s cannot write parameters (its isdu: has no write method)", ErrISDURefused, p.Name, p.Master)
 	}
 	raw, err := prm.Encode(v)
 	if err != nil {
-		return res, fmt.Errorf("port device %s: %w", p.Name, err)
+		return res, fmt.Errorf("%w: port device %s: %w", ErrISDUInvalid, p.Name, err)
 	}
 	if _, err := callISDU(ctx, c, p.isdu, p.isdu.write, prm, raw); err != nil {
 		return res, fmt.Errorf("port device %s: write %s: %w", p.Name, prm.Variable.ID, err)
@@ -245,4 +262,72 @@ func octetsOf(v *ua.Variant) ([]byte, error) {
 		return b, nil
 	}
 	return nil, fmt.Errorf("the master answered a %T, not octets", v.Value())
+}
+
+// ISDUParamInfo is one parameter of a port device's IODD, for a listing.
+type ISDUParamInfo struct {
+	// ID and Name are the variable's; Index its ISDU index.
+	ID    string
+	Name  string
+	Index int
+	// Ref is what ISDURead and ISDUWrite take for it (an item of a record
+	// is listed on its own, "ID.Name").
+	Ref string
+	// Type is the IODD's type name (UIntegerT); Unit the symbol where known.
+	Type string
+	// Access is "ro", "wo" or "rw".
+	Access string
+	// Octets is the value's length on the wire; Range the IODD's allowed
+	// ranges ("0..1000") and Default its default, where it has them.
+	Octets  int
+	Range   []string
+	Default string
+	// Carried says the master can carry it in one call (Octets within its
+	// limit) and the codec can decode it.
+	Carried bool
+}
+
+// ISDUParams lists a port device's parameters from its IODD, with no
+// traffic to the device; ok is false for a port device this master does
+// not have. A record variable is listed by its items.
+func (w *OPCUADriver) ISDUParams(port string) (params []ISDUParamInfo, master string, ok bool) {
+	if w.ports == nil {
+		return nil, "", false
+	}
+	p, err := w.ports.find(port)
+	if err != nil {
+		return nil, "", false
+	}
+	limit := 0
+	if p.isdu != nil {
+		limit = p.isdu.spec.Octets()
+	}
+	for _, v := range p.dev.IODD.Variables {
+		refs := []string{strconv.Itoa(v.Index)}
+		if len(v.Items) > 0 {
+			refs = refs[:0]
+			for _, it := range v.Items {
+				refs = append(refs, fmt.Sprintf("%d.%d", v.Index, it.Subindex))
+			}
+		}
+		for _, ref := range refs {
+			prm, err := iolink.FindParam(p.dev.IODD, ref)
+			info := ISDUParamInfo{ID: v.ID, Name: v.Name, Index: v.Index, Ref: ref, Access: v.Access, Default: v.Default}
+			if err != nil {
+				params = append(params, info) // listed, not carried
+				continue
+			}
+			t := prm.Type()
+			info.Type, info.Octets = t.Name, prm.Octets()
+			if prm.Item != nil {
+				info.ID, info.Name = v.ID+"."+prm.Item.Name, v.Name+" / "+prm.Item.Name
+			}
+			for _, r := range t.Ranges {
+				info.Range = append(info.Range, r.Lower+".."+r.Upper)
+			}
+			info.Carried = p.isdu != nil && info.Octets <= limit
+			params = append(params, info)
+		}
+	}
+	return params, p.Master, true
 }
